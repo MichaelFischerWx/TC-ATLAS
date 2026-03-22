@@ -69,6 +69,9 @@
         .topbar-nav { display: flex; gap: 6px; list-style: none; align-items: center; }
         .topbar-nav a { color: var(--slate); text-decoration: none; font-weight: 500; font-size: 0.8rem; padding: 6px 12px; border-radius: 6px; transition: all 0.2s; }
         .topbar-nav a:hover { color: var(--text); background: rgba(255,255,255,0.06); }
+        .topbar-nav a.nav-active { color: var(--text); background: rgba(46,125,255,0.15); }
+        .nav-short { display: none; }
+        .nav-full { display: inline; }
 
         /* ── Hero section ────────────────────────────────── */
         .hero {
@@ -275,6 +278,8 @@
             .topbar-inner { padding: 0 16px; }
             .content-section { padding: 3rem 16px; }
             .section-title { font-size: 1.4rem; }
+            .nav-full { display: none !important; }
+            .nav-short { display: inline !important; }
         }
         @media (max-width: 520px) {
             .platform-grid { grid-template-columns: 1fr; }
