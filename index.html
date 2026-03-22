@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <!-- Google Analytics (GA4) -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-EFM8GFFKLK"></script>
+    <script>
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){dataLayer.push(arguments);}
+        gtag('js', new Date());
+        gtag('config', 'G-EFM8GFFKLK');
+    </script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="TC-ATLAS: Tropical Cyclone Analysis Tool for Live and Archived Structure. A multi-source platform for exploring tropical cyclone vortex structure with radar, satellite, and environmental data.">
+    <meta name="keywords" content="tropical cyclone, hurricane, radar, TC-ATLAS, TC-RADAR, airborne Doppler, vortex structure, NOAA, HRD, satellite, microwave, IBTrACS">
+    <meta name="author" content="Dr. Michael Fischer, University of Miami">
+
+    <!-- Open Graph / Social Sharing -->
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="TC-ATLAS — Tropical Cyclone Analysis Tool for Live and Archived Structure">
+    <meta property="og:description" content="A multi-source platform for exploring tropical cyclone vortex structure with airborne radar, satellite imagery, and environmental diagnostics.">
+    <meta property="og:url" content="https://michaelfischerwx.github.io/TC-ATLAS/">
+    <meta property="og:image" content="https://michaelfischerwx.github.io/TC-RADAR/images/og-preview.png">
+    <meta property="og:site_name" content="TC-ATLAS">
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="TC-ATLAS — Tropical Cyclone Analysis Tool for Live and Archived Structure">
+    <meta name="twitter:description" content="A multi-source platform for exploring tropical cyclone vortex structure with airborne radar, satellite imagery, and environmental diagnostics.">
+    <meta name="twitter:image" content="https://michaelfischerwx.github.io/TC-RADAR/images/og-preview.png">
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/png" href="../TC-RADAR/tc-atlas-icon.png">
+
+    <title>TC-ATLAS — Tropical Cyclone Analysis Tool for Live and Archived Structure</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+    <style>
+        :root {
+            --navy: #0c1d3d;
+            --navy-mid: #142a52;
+            --navy-light: #1b3a6b;
+            --blue: #2e7dff;
+            --blue-light: #5a9cff;
+            --blue-glow: rgba(46, 125, 255, 0.25);
+            --cyan: #00d4ff;
+            --slate: #8b9ec2;
+            --text: #e2e8f0;
+            --text-dim: #94a3b8;
+            --surface: #0f2140;
+            --surface-raised: #162d54;
+            --border: rgba(255,255,255,0.08);
+            --border-light: rgba(255,255,255,0.12);
+            --radius: 8px;
+            --radius-lg: 12px;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html { scroll-behavior: smooth; }
+        body { font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; line-height: 1.6; color: var(--text); background: var(--navy); }
+
+        /* ── Top bar ─────────────────────────────────────── */
+        .topbar { background: var(--navy); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 1000; backdrop-filter: blur(12px); }
+        .topbar-inner { max-width: 1200px; margin: 0 auto; padding: 0 24px; display: flex; align-items: center; justify-content: space-between; height: 52px; }
+        .topbar-brand { display: flex; align-items: center; gap: 14px; }
+        .topbar-icon { width: 28px; height: 28px; border-radius: 4px; }
+        .topbar-logo { font-size: 1.35rem; font-weight: 700; letter-spacing: -0.02em; white-space: nowrap; background: linear-gradient(135deg, var(--blue) 0%, var(--cyan) 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+        .topbar-nav { display: flex; gap: 6px; list-style: none; align-items: center; }
+        .topbar-nav a { color: var(--slate); text-decoration: none; font-weight: 500; font-size: 0.8rem; padding: 6px 12px; border-radius: 6px; transition: all 0.2s; }
+        .topbar-nav a:hover { color: var(--text); background: rgba(255,255,255,0.06); }
+
+        /* ── Hero section ────────────────────────────────── */
+        .hero {
+            min-height: calc(100vh - 52px);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            padding: 4rem 24px;
+            position: relative;
+            overflow: hidden;
+        }
+        .hero::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(ellipse at 50% 40%, rgba(46, 125, 255, 0.08) 0%, transparent 60%),
+                        radial-gradient(ellipse at 30% 70%, rgba(0, 212, 255, 0.05) 0%, transparent 50%);
+            pointer-events: none;
+        }
+        .hero-icon {
+            width: 72px;
+            height: 72px;
+            border-radius: 16px;
+            margin-bottom: 2rem;
+            filter: drop-shadow(0 0 30px rgba(0, 212, 255, 0.3));
+        }
+        .hero-title {
+            font-size: 3.5rem;
+            font-weight: 700;
+            letter-spacing: -0.03em;
+            margin-bottom: 0.75rem;
+            background: linear-gradient(135deg, var(--text) 0%, var(--blue-light) 50%, var(--cyan) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .hero-subtitle {
+            font-size: 1.15rem;
+            color: var(--slate);
+            max-width: 650px;
+            margin: 0 auto 1rem auto;
+            font-style: italic;
+        }
+        .hero-desc {
+            font-size: 1.05rem;
+            color: var(--text-dim);
+            max-width: 700px;
+            margin: 0 auto 3rem auto;
+            line-height: 1.8;
+        }
+
+        /* ── Platform cards ──────────────────────────────── */
+        .platform-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 1.5rem;
+            max-width: 1200px;
+            width: 100%;
+            margin: 0 auto;
+            position: relative;
+            z-index: 1;
+        }
+        .platform-card {
+            background: var(--surface-raised);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 2rem 1.5rem 1.75rem 1.5rem;
+            text-decoration: none;
+            transition: transform 0.3s, border-color 0.3s, box-shadow 0.3s;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+            overflow: hidden;
+        }
+        .platform-card:hover {
+            transform: translateY(-4px);
+            border-color: var(--blue);
+            box-shadow: 0 12px 40px rgba(46, 125, 255, 0.15);
+        }
+        .platform-card::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+        }
+        .card-radar::after { background: linear-gradient(90deg, var(--blue), var(--cyan)); }
+        .card-realtime::after { background: linear-gradient(90deg, #f59e0b, #ef4444); }
+        .card-global::after { background: linear-gradient(90deg, #10b981, #06b6d4); }
+        .card-composites::after { background: linear-gradient(90deg, #a855f7, #ec4899); }
+
+        .card-icon {
+            font-size: 2.25rem;
+            margin-bottom: 1rem;
+        }
+        .card-title {
+            font-size: 1.2rem;
+            font-weight: 700;
+            color: var(--text);
+            margin-bottom: 0.5rem;
+        }
+        .card-desc {
+            font-size: 0.82rem;
+            color: var(--slate);
+            line-height: 1.65;
+            flex: 1;
+        }
+        .card-stats {
+            display: flex;
+            gap: 1.5rem;
+            margin-top: 1.5rem;
+            padding-top: 1rem;
+            border-top: 1px solid var(--border);
+        }
+        .card-stat-val {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+            font-weight: 700;
+            color: var(--cyan);
+        }
+        .card-stat-label {
+            font-size: 0.65rem;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .card-arrow {
+            position: absolute;
+            bottom: 2rem;
+            right: 2rem;
+            font-size: 1.25rem;
+            color: var(--blue);
+            opacity: 0;
+            transform: translateX(-8px);
+            transition: opacity 0.3s, transform 0.3s;
+        }
+        .platform-card:hover .card-arrow {
+            opacity: 1;
+            transform: translateX(0);
+        }
+
+        /* ── Content sections ────────────────────────────── */
+        .content-section { max-width: 1100px; margin: 0 auto; padding: 5rem 24px; }
+        .section-bg { background: var(--surface); }
+        .section-title { font-size: 1.8rem; font-weight: 700; color: var(--text); margin-bottom: 1.5rem; text-align: center; letter-spacing: -0.02em; }
+        .section-title .accent { color: var(--cyan); }
+        .section-desc { text-align: center; max-width: 700px; margin: 0 auto 2.5rem auto; font-size: 1rem; color: var(--slate); line-height: 1.8; }
+
+        /* ── Data source grid ────────────────────────────── */
+        .source-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1.25rem;
+            margin-top: 2rem;
+        }
+        .source-card {
+            background: var(--navy-mid);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 1.5rem;
+        }
+        .source-card h4 {
+            color: #fdba74;
+            margin-bottom: 0.5rem;
+            font-size: 0.95rem;
+        }
+        .source-card p {
+            color: var(--slate);
+            font-size: 0.85rem;
+            line-height: 1.6;
+        }
+        .source-card a {
+            color: var(--blue-light);
+            text-decoration: none;
+        }
+        .source-card a:hover {
+            text-decoration: underline;
+        }
+
+        /* ── Contact section ─────────────────────────────── */
+        .contact-section { background: linear-gradient(135deg, var(--navy-light) 0%, var(--blue) 100%); text-align: center; padding: 4rem 24px; color: white; }
+        .contact-section .section-title { color: white; }
+        .contact-info { max-width: 500px; margin: 2rem auto; background: rgba(255,255,255,0.08); padding: 2rem; border-radius: var(--radius-lg); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.12); }
+        .contact-info a { color: var(--cyan); }
+
+        /* ── Footer ──────────────────────────────────────── */
+        footer { text-align: center; padding: 2rem; font-size: 0.75rem; color: var(--text-dim); border-top: 1px solid var(--border); }
+        footer a { color: var(--blue-light); text-decoration: none; }
+        footer a:hover { text-decoration: underline; }
+
+        /* ── Responsive ──────────────────────────────────── */
+        @media (max-width: 1100px) {
+            .platform-grid { grid-template-columns: repeat(2, 1fr); }
+        }
+        @media (max-width: 768px) {
+            .hero-title { font-size: 2.2rem; }
+            .hero-desc { font-size: 0.95rem; }
+            .topbar-inner { padding: 0 16px; }
+            .content-section { padding: 3rem 16px; }
+            .section-title { font-size: 1.4rem; }
+        }
+        @media (max-width: 520px) {
+            .platform-grid { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <header class="topbar" role="banner">
+        <div class="topbar-inner">
+            <div class="topbar-brand">
+                <img src="../TC-RADAR/tc-atlas-icon.png" alt="TC-ATLAS" class="topbar-icon" width="28" height="28">
+                <div class="topbar-logo" role="heading" aria-level="1">TC-ATLAS</div>
+            </div>
+            <nav aria-label="Main navigation">
+                <ul class="topbar-nav">
+                    <li><a href="#tools">Explore</a></li>
+                    <li><a href="#data-sources">Data</a></li>
+                    <li><a href="#about">About</a></li>
+                    <li><a href="#contact">Contact</a></li>
+                </ul>
+            </nav>
+        </div>
+    </header>
+
+    <!-- ── Hero ──────────────────────────────────────────── -->
+    <section class="hero">
+        <img src="../TC-RADAR/tc-atlas-icon.png" alt="" class="hero-icon" aria-hidden="true">
+        <h1 class="hero-title">TC-ATLAS</h1>
+        <p class="hero-subtitle">Tropical Cyclone Analysis Tool for Live and Archived Structure</p>
+        <p class="hero-desc">A multi-source platform for exploring tropical cyclone vortex structure. TC-ATLAS brings together airborne Doppler radar, passive microwave and infrared satellite imagery, ERA5 environmental diagnostics, dropsonde profiles, and flight-level observations into one unified interactive tool.</p>
+
+        <!-- ── Platform cards ────────────────────────────── -->
+        <div class="platform-grid" id="tools">
+            <a href="../TC-RADAR/" class="platform-card card-radar">
+                <div class="card-icon">&#127744;</div>
+                <div class="card-title">TC-RADAR Archive</div>
+                <div class="card-desc">Explore 1,500+ post-processed airborne Doppler radar analyses with interactive 3D wind fields, cross-sections, azimuthal means, and multi-variable visualization spanning 1997&ndash;2024.</div>
+                <div class="card-stats">
+                    <div><div class="card-stat-val">1,510</div><div class="card-stat-label">Analyses</div></div>
+                    <div><div class="card-stat-val">91</div><div class="card-stat-label">Storms</div></div>
+                    <div><div class="card-stat-val">1997&ndash;2024</div><div class="card-stat-label">Coverage</div></div>
+                </div>
+                <span class="card-arrow">&rarr;</span>
+            </a>
+
+            <a href="../TC-RADAR/#rt" class="platform-card card-realtime" onclick="sessionStorage.setItem('openRT','1')">
+                <div class="card-icon">&#128225;</div>
+                <div class="card-title">Real-Time TDR</div>
+                <div class="card-desc">Monitor active hurricane reconnaissance missions with live tail Doppler radar visualizations, flight-level data, dropsonde profiles, and SHIPS environmental diagnostics.</div>
+                <div class="card-stats">
+                    <div><div class="card-stat-val">Live</div><div class="card-stat-label">Missions</div></div>
+                    <div><div class="card-stat-val">P-3 &amp; G-IV</div><div class="card-stat-label">Aircraft</div></div>
+                </div>
+                <span class="card-arrow">&rarr;</span>
+            </a>
+
+            <a href="../TC-RADAR/global_archive.html" class="platform-card card-global">
+                <div class="card-icon">&#127758;</div>
+                <div class="card-title">Global Archive</div>
+                <div class="card-desc">Browse the complete IBTrACS tropical cyclone record from 1842 to present with satellite imagery, intensity timelines, climatology, and multi-storm comparison tools.</div>
+                <div class="card-stats">
+                    <div><div class="card-stat-val">14,000+</div><div class="card-stat-label">Storms</div></div>
+                    <div><div class="card-stat-val">7</div><div class="card-stat-label">Basins</div></div>
+                    <div><div class="card-stat-val">1842&ndash;2025</div><div class="card-stat-label">Coverage</div></div>
+                </div>
+                <span class="card-arrow">&rarr;</span>
+            </a>
+
+            <a href="../TC-RADAR/#composites" class="platform-card card-composites" onclick="sessionStorage.setItem('openComposites','1')">
+                <div class="card-icon">&#128202;</div>
+                <div class="card-title">Composites</div>
+                <div class="card-desc">Build custom composite analyses from the TC-RADAR database. Filter by intensity, shear, tilt, motion, and more to reveal systematic structural patterns across tropical cyclones.</div>
+                <div class="card-stats">
+                    <div><div class="card-stat-val">12+</div><div class="card-stat-label">Variables</div></div>
+                    <div><div class="card-stat-val">Flexible</div><div class="card-stat-label">Filters</div></div>
+                </div>
+                <span class="card-arrow">&rarr;</span>
+            </a>
+        </div>
+    </section>
+
+    <!-- ── Data Sources ──────────────────────────────────── -->
+    <section id="data-sources" class="section-bg">
+        <div class="content-section">
+            <h2 class="section-title">Integrated <span class="accent">Data Sources</span></h2>
+            <p class="section-desc">TC-ATLAS unifies observations from multiple platforms and agencies into a single interactive environment.</p>
+            <div class="source-grid">
+                <div class="source-card">
+                    <h4>Airborne Doppler Radar</h4>
+                    <p>Post-processed NOAA P-3 tail Doppler radar analyses providing full 3D wind fields, reflectivity, and derived vortex diagnostics via the <a href="../TC-RADAR/">TC-RADAR database</a>.</p>
+                </div>
+                <div class="source-card">
+                    <h4>Passive Microwave Satellite</h4>
+                    <p>Multi-sensor microwave imagery from the <a href="https://rammb-data.cira.colostate.edu/tcprimed/" target="_blank" rel="noopener">TC-PRIMED</a> dataset, revealing precipitation structure and convective organization.</p>
+                </div>
+                <div class="source-card">
+                    <h4>Infrared Satellite</h4>
+                    <p>Geostationary IR brightness temperatures from GridSat-B1, MergIR, and real-time GOES ABI Band 13 imagery for cloud-top structure.</p>
+                </div>
+                <div class="source-card">
+                    <h4>Environmental Diagnostics</h4>
+                    <p>ERA5 reanalysis and operational SHIPS model parameters providing vertical wind shear, SST, moisture, and other environmental context.</p>
+                </div>
+                <div class="source-card">
+                    <h4>In-situ Observations</h4>
+                    <p>Flight-level data and GPS dropsonde profiles from NOAA reconnaissance missions via the <a href="https://seb.omao.noaa.gov/" target="_blank" rel="noopener">SEB archives</a>.</p>
+                </div>
+                <div class="source-card">
+                    <h4>Best-Track Records</h4>
+                    <p>Storm tracks, intensity, and classification from <a href="https://www.ncei.noaa.gov/products/international-best-track-archive" target="_blank" rel="noopener">IBTrACS v04</a> for comprehensive historical context across all ocean basins.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ── About ─────────────────────────────────────────── -->
+    <section id="about">
+        <div class="content-section">
+            <h2 class="section-title">About <span class="accent">TC-ATLAS</span></h2>
+            <p class="section-desc">TC-ATLAS was developed by Dr. Michael Fischer at the University of Miami to enable researchers to conduct storm-to-storm comparisons and climatological analyses of tropical cyclone vortex and convective characteristics across all stages of the lifecycle. The platform is built around the <a href="../TC-RADAR/" style="color:var(--cyan);">TC-RADAR database</a>, developed in collaboration with NOAA's Hurricane Research Division, and continues to expand with new data sources and capabilities.</p>
+        </div>
+    </section>
+
+    <!-- ── Contact ───────────────────────────────────────── -->
+    <section class="contact-section" id="contact">
+        <h2 class="section-title" style="color:white;">Get in Touch</h2>
+        <p style="font-size:1.1rem;margin-bottom:2rem;opacity:0.9;">Questions about TC-ATLAS? Contact the developer.</p>
+        <div class="contact-info">
+            <p style="font-size:1.15rem;margin-bottom:0.75rem;"><strong>Dr. Michael Fischer</strong></p>
+            <p style="opacity:0.85;">TC-ATLAS Developer &middot; University of Miami</p>
+            <p style="margin-top:1rem;"><a href="mailto:mike.fischer@miami.edu" style="font-size:1rem;">mike.fischer@miami.edu</a></p>
+        </div>
+    </section>
+
+    <footer>
+        <div>Created by Michael S. Fischer &middot; University of Miami</div>
+        <div style="margin-top:6px;">Built with assistance from <a href="https://claude.ai" target="_blank" rel="noopener">Claude</a> (Anthropic)</div>
+    </footer>
+</body>
+</html>
