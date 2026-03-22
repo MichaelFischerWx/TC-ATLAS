@@ -2,7 +2,7 @@
 ir_monitor_api.py — Real-Time IR Monitor API Endpoints
 ========================================================
 Provides endpoints for the Real-Time IR Monitor page:
-  - GET /active-storms     — List all active TCs (NHC ATCF A-deck)
+  - GET /active-storms     — List all active TCs worldwide
   - GET /storm/{id}/ir     — Fetch IR animation frames for a storm
   - GET /storm/{id}/metadata — Storm metadata + intensity history
 
@@ -10,8 +10,8 @@ How to integrate (in tc_radar_api.py):
     from ir_monitor_api import router as ir_monitor_router
     app.include_router(ir_monitor_router, prefix="/ir-monitor")
 
-Phase 1 covers Atlantic + East Pacific (NHC ATCF only).
-Phase 2 will add JTWC for WPAC/IO/SHEM.
+Covers Atlantic + East Pacific (NHC ATCF), Western Pacific,
+Indian Ocean, and Southern Hemisphere (JTWC B-deck).
 """
 
 import gc
@@ -56,6 +56,16 @@ router = APIRouter(tags=["IR Monitor"])
 # NHC ATCF A-deck sources
 NHC_ATCF_BASE = "https://ftp.nhc.noaa.gov/atcf/aid_public"
 NHC_BDECK_BASE = "https://ftp.nhc.noaa.gov/atcf/btk"
+
+# JTWC B-deck sources (order of preference)
+# Reference: tropycal's realtime.py __read_btk_jtwc()
+JTWC_SOURCES = [
+    ("ssd",  "https://www.ssd.noaa.gov/PS/TROP/DATA/ATCF/JTWC"),
+    ("ucar", "https://hurricanes.ral.ucar.edu/repository/data/bdecks_open"),
+]
+
+# Basins already covered by NHC (skip in JTWC scan)
+_NHC_BASINS = {"EP", "CP", "AL"}
 
 # Cache settings
 _STORM_CACHE_TTL = 600          # 10 minutes
@@ -144,6 +154,128 @@ def _list_nhc_active_storms() -> list:
     return sorted(storm_ids)
 
 
+def _list_jtwc_active_storms() -> list:
+    """
+    Discover active storms from JTWC B-deck directory listings.
+    Returns list of tuples: (atcf_id, bdeck_url).
+
+    Uses NOAA SSD (flat directory) as primary, UCAR as fallback.
+    Skips EP/CP/AL storms (already covered by NHC).
+    """
+    year = _dt.now(timezone.utc).year
+
+    for source_name, base_url in JTWC_SOURCES:
+        if source_name == "ucar":
+            listing_url = f"{base_url}/{year}/"
+        else:
+            listing_url = f"{base_url}/"
+
+        text = _http_get(listing_url, timeout=15)
+        if not text:
+            print(f"[IR Monitor] JTWC {source_name} listing failed, trying next source")
+            continue
+
+        # Match B-deck files: b{basin}{number}{year}.dat
+        # Basin codes: io, sh, wp, ep, cp (from tropycal pattern)
+        pattern = re.compile(
+            rf'b((?:io|sh|wp|ep|cp)\d{{2}}{year})\.dat',
+            re.IGNORECASE,
+        )
+
+        storms = []
+        seen = set()
+        for m in pattern.finditer(text):
+            storm_id = m.group(1).upper()
+            basin_code = storm_id[:2]
+
+            # Skip NHC basins
+            if basin_code in _NHC_BASINS:
+                continue
+
+            if storm_id in seen:
+                continue
+            seen.add(storm_id)
+
+            bdeck_url = f"{base_url}/b{storm_id.lower()}.dat"
+            storms.append((storm_id, bdeck_url))
+
+        # For SH storms that straddle year boundary (Nov→Apr),
+        # also check previous year if we're in Jan-Jun
+        if _dt.now(timezone.utc).month <= 6:
+            prev_year = year - 1
+            if source_name == "ucar":
+                prev_url = f"{base_url}/{prev_year}/"
+                prev_text = _http_get(prev_url, timeout=10)
+            else:
+                prev_text = text  # SSD flat listing already has all years
+
+            if prev_text:
+                prev_pattern = re.compile(
+                    rf'b(sh\d{{2}}{prev_year})\.dat',
+                    re.IGNORECASE,
+                )
+                for m in prev_pattern.finditer(prev_text):
+                    storm_id = m.group(1).upper()
+                    if storm_id not in seen:
+                        seen.add(storm_id)
+                        bdeck_url = f"{base_url}/b{storm_id.lower()}.dat"
+                        storms.append((storm_id, bdeck_url))
+
+        if storms:
+            print(f"[IR Monitor] JTWC {source_name}: found {len(storms)} storms: "
+                  f"{[s[0] for s in storms]}")
+            return storms
+
+        print(f"[IR Monitor] JTWC {source_name}: no active storms found")
+
+    return []
+
+
+def _fetch_jtwc_bdeck(atcf_id: str, bdeck_url: Optional[str] = None) -> list:
+    """
+    Fetch and parse a JTWC B-deck file.
+    If bdeck_url is provided, use it directly. Otherwise try each JTWC source.
+    Returns list of parsed records sorted by datetime.
+    """
+    urls_to_try = []
+    if bdeck_url:
+        urls_to_try.append(bdeck_url)
+    else:
+        for source_name, base_url in JTWC_SOURCES:
+            urls_to_try.append(f"{base_url}/b{atcf_id.lower()}.dat")
+
+    for url in urls_to_try:
+        text = _http_get(url, timeout=15)
+        if not text:
+            continue
+
+        records = []
+        for line in text.strip().split("\n"):
+            rec = _parse_adeck_line(line)  # same CSV format as A-deck
+            if rec:
+                records.append(rec)
+
+        if records:
+            records.sort(key=lambda r: r["datetime"])
+            return records
+
+    return []
+
+
+def _extract_storm_name(text: str) -> Optional[str]:
+    """
+    Try to extract the storm name from a B-deck file.
+    ATCF B-deck extended format has the name in column 27 (0-indexed).
+    """
+    for line in text.strip().split("\n"):
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) > 27 and parts[27].strip():
+            name = parts[27].strip().upper()
+            if name and name not in ("", "UNNAMED", "NONAME"):
+                return name.title()
+    return None
+
+
 def _parse_adeck_line(line: str) -> Optional[dict]:
     """
     Parse a single A-deck CSV line.
@@ -220,21 +352,24 @@ def _fetch_adeck(atcf_id: str) -> list:
 def _fetch_bdeck(atcf_id: str) -> list:
     """
     Fetch and parse the B-deck (best track) file.
+    Tries NHC first, then JTWC sources.
     Returns list of parsed records sorted by datetime.
     """
+    # Try NHC B-deck
     url = f"{NHC_BDECK_BASE}/b{atcf_id}.dat"
     text = _http_get(url)
-    if not text:
-        return []
+    if text:
+        records = []
+        for line in text.strip().split("\n"):
+            rec = _parse_adeck_line(line)
+            if rec:
+                records.append(rec)
+        if records:
+            records.sort(key=lambda r: r["datetime"])
+            return records
 
-    records = []
-    for line in text.strip().split("\n"):
-        rec = _parse_adeck_line(line)  # same CSV format
-        if rec:
-            records.append(rec)
-
-    records.sort(key=lambda r: r["datetime"])
-    return records
+    # Fall back to JTWC B-deck
+    return _fetch_jtwc_bdeck(atcf_id)
 
 
 def _get_latest_position(records: list) -> Optional[dict]:
@@ -257,9 +392,11 @@ def _get_latest_position(records: list) -> Optional[dict]:
     return t0_records[-1]
 
 
-def _build_storm_entry(atcf_id: str, records: list) -> Optional[dict]:
+def _build_storm_entry(atcf_id: str, records: list,
+                       name: Optional[str] = None,
+                       source: str = "NHC") -> Optional[dict]:
     """
-    Build a storm entry dict from A-deck records.
+    Build a storm entry dict from A-deck or B-deck records.
     Returns None if no valid position found.
     """
     latest = _get_latest_position(records)
@@ -272,15 +409,12 @@ def _build_storm_entry(atcf_id: str, records: list) -> Optional[dict]:
     vmax = latest["vmax_kt"]
     cat = _classify_wind(vmax)
 
-    # Try to get storm name from ATCF ID
-    # (A-deck doesn't include names; we'd need the storm name table)
-    # For now, use the ATCF ID as placeholder — the metadata endpoint
-    # can provide the real name from the NHC product.
-    name = atcf_id.upper()
+    # Use provided name, or fall back to ATCF ID
+    display_name = name if name else atcf_id.upper()
 
     return {
         "atcf_id": atcf_id.upper(),
-        "name": name,
+        "name": display_name,
         "basin": basin,
         "lat": latest["lat"],
         "lon": latest["lon"],
@@ -293,6 +427,7 @@ def _build_storm_entry(atcf_id: str, records: list) -> Optional[dict]:
         "satellite": satellite_name_from_bucket(
             select_goes_sat(latest["lon"], latest["datetime"])[0]
         ),
+        "source": source,
         "has_recon": False,  # TODO: cross-ref with Real-Time TDR
     }
 
@@ -303,32 +438,64 @@ def _build_storm_entry(atcf_id: str, records: list) -> Optional[dict]:
 
 def _poll_active_storms():
     """
-    Poll NHC ATCF for all active storms and update the cache.
+    Poll NHC + JTWC for all active storms worldwide and update the cache.
     This runs in the request thread (with TTL gating) or a background thread.
     """
     global _last_poll_time
-
-    storm_ids = _list_nhc_active_storms()
+    now = _dt.now(timezone.utc)
     storms = []
+    seen_ids = set()
 
-    for sid in storm_ids:
+    # ── NHC storms (ATL + EPAC) ──
+    nhc_ids = _list_nhc_active_storms()
+    for sid in nhc_ids:
         records = _fetch_adeck(sid)
         if not records:
             continue
-
-        # Only include if the latest fix is within 24 hours
         latest = _get_latest_position(records)
         if not latest:
             continue
-        age = _dt.now(timezone.utc) - latest["datetime"]
+        age = now - latest["datetime"]
         if age > timedelta(hours=24):
             continue
-
-        entry = _build_storm_entry(sid, records)
+        entry = _build_storm_entry(sid, records, source="NHC")
         if entry:
             storms.append(entry)
+            seen_ids.add(sid.upper())
 
-    # Count by basin
+    print(f"[IR Monitor] NHC: {len(nhc_ids)} A-deck files → {len(storms)} active storms")
+
+    # ── JTWC storms (WPAC, IO, SHEM) ──
+    jtwc_storms = _list_jtwc_active_storms()
+    jtwc_count = 0
+    for storm_id, bdeck_url in jtwc_storms:
+        if storm_id in seen_ids:
+            continue
+
+        records = _fetch_jtwc_bdeck(storm_id, bdeck_url)
+        if not records:
+            continue
+
+        latest = _get_latest_position(records)
+        if not latest:
+            continue
+        age = now - latest["datetime"]
+        if age > timedelta(hours=48):  # JTWC B-decks update less frequently
+            continue
+
+        # Try to extract storm name from the raw B-deck text
+        raw_text = _http_get(bdeck_url, timeout=10)
+        name = _extract_storm_name(raw_text) if raw_text else None
+
+        entry = _build_storm_entry(storm_id, records, name=name, source="JTWC")
+        if entry:
+            storms.append(entry)
+            seen_ids.add(storm_id)
+            jtwc_count += 1
+
+    print(f"[IR Monitor] JTWC: {len(jtwc_storms)} B-deck files → {jtwc_count} active storms")
+
+    # ── Update cache ──
     count_by_basin: dict = {}
     for s in storms:
         b = s["basin"]
@@ -336,13 +503,12 @@ def _poll_active_storms():
 
     with _active_storms_lock:
         _active_storms_cache["storms"] = storms
-        _active_storms_cache["updated_utc"] = _dt.now(timezone.utc).strftime(
-            "%Y-%m-%dT%H:%M:%SZ"
-        )
+        _active_storms_cache["updated_utc"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
         _active_storms_cache["count_by_basin"] = count_by_basin
 
     _last_poll_time = time.time()
-    print(f"[IR Monitor] Polled {len(storm_ids)} ATCF files → {len(storms)} active storms")
+    total = len(storms)
+    print(f"[IR Monitor] Total: {total} active storms worldwide — {count_by_basin}")
 
 
 def _ensure_fresh_cache():
@@ -362,8 +528,8 @@ def _ensure_fresh_cache():
 @router.get("/active-storms")
 def get_active_storms():
     """
-    Return all currently active tropical cyclones.
-    Data sourced from NHC ATCF A-deck files (ATL + EPAC).
+    Return all currently active tropical cyclones worldwide.
+    Data sourced from NHC ATCF A-deck (ATL + EPAC) and JTWC B-deck (WPAC, IO, SHEM).
     Results are cached for 10 minutes.
     """
     _ensure_fresh_cache()
@@ -390,8 +556,9 @@ def get_storm_ir(
     interval_min: int = Query(30, ge=10, le=60, description="Minutes between frames"),
 ):
     """
-    Fetch storm-centered IR animation frames from GOES.
+    Fetch storm-centered IR animation frames from geostationary satellite.
     Returns array of base64-encoded PNG frames with timestamps.
+    Automatically selects GOES-East/West or Himawari based on storm longitude.
     """
     # Find the storm in the active list
     _ensure_fresh_cache()
