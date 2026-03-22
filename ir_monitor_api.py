@@ -196,7 +196,11 @@ def _list_jtwc_active_storms() -> list:
                 continue
             seen.add(storm_id)
 
-            bdeck_url = f"{base_url}/b{storm_id.lower()}.dat"
+            # UCAR organises files by year subdirectory; SSD is flat
+            if source_name == "ucar":
+                bdeck_url = f"{base_url}/{year}/b{storm_id.lower()}.dat"
+            else:
+                bdeck_url = f"{base_url}/b{storm_id.lower()}.dat"
             storms.append((storm_id, bdeck_url))
 
         # For SH storms that straddle year boundary (Nov→Apr),
@@ -218,7 +222,10 @@ def _list_jtwc_active_storms() -> list:
                     storm_id = m.group(1).upper()
                     if storm_id not in seen:
                         seen.add(storm_id)
-                        bdeck_url = f"{base_url}/b{storm_id.lower()}.dat"
+                        if source_name == "ucar":
+                            bdeck_url = f"{base_url}/{prev_year}/b{storm_id.lower()}.dat"
+                        else:
+                            bdeck_url = f"{base_url}/b{storm_id.lower()}.dat"
                         storms.append((storm_id, bdeck_url))
 
         if storms:
@@ -241,8 +248,13 @@ def _fetch_jtwc_bdeck(atcf_id: str, bdeck_url: Optional[str] = None) -> list:
     if bdeck_url:
         urls_to_try.append(bdeck_url)
     else:
+        # Extract year from ATCF ID (last 4 chars)
+        year_str = atcf_id[-4:]
         for source_name, base_url in JTWC_SOURCES:
-            urls_to_try.append(f"{base_url}/b{atcf_id.lower()}.dat")
+            if source_name == "ucar":
+                urls_to_try.append(f"{base_url}/{year_str}/b{atcf_id.lower()}.dat")
+            else:
+                urls_to_try.append(f"{base_url}/b{atcf_id.lower()}.dat")
 
     for url in urls_to_try:
         text = _http_get(url, timeout=15)
@@ -474,13 +486,16 @@ def _poll_active_storms():
 
         records = _fetch_jtwc_bdeck(storm_id, bdeck_url)
         if not records:
+            print(f"[IR Monitor] JTWC {storm_id}: no B-deck records from {bdeck_url}")
             continue
 
         latest = _get_latest_position(records)
         if not latest:
+            print(f"[IR Monitor] JTWC {storm_id}: no tau=0 position in {len(records)} records")
             continue
         age = now - latest["datetime"]
         if age > timedelta(hours=48):  # JTWC B-decks update less frequently
+            print(f"[IR Monitor] JTWC {storm_id}: stale — last fix {latest['datetime']} ({age} ago)")
             continue
 
         # Try to extract storm name from the raw B-deck text
@@ -543,7 +558,7 @@ def get_active_storms():
 
     return JSONResponse(
         content=data,
-        headers={"Cache-Control": "public, max-age=300"},
+        headers={"Cache-Control": "public, max-age=120"},
     )
 
 
