@@ -7797,6 +7797,9 @@ app.include_router(realtime_router, prefix="/realtime")
 from global_archive_api import router as global_router
 app.include_router(global_router, prefix="/global")
 
+from ir_monitor_api import router as ir_monitor_router
+app.include_router(ir_monitor_router, prefix="/ir-monitor")
+
 try:
     from microwave_api import router as microwave_router, start_index_build as _mw_start
     app.include_router(microwave_router, prefix="/microwave")

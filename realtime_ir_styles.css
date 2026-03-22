@@ -1,0 +1,491 @@
+/* ═══════════════════════════════════════════════════════════════
+   Real-Time IR Monitor — Page-Specific Styles
+   Shared base styles (topbar, fonts, CSS vars) from tc_radar_styles.css
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Version badge override ──────────────────────────────────── */
+.ir-version {
+    background: linear-gradient(135deg, #ef4444 0%, #f59e0b 100%) !important;
+    -webkit-background-clip: text !important;
+    -webkit-text-fill-color: transparent !important;
+    background-clip: text !important;
+}
+
+/* ── Map ─────────────────────────────────────────────────────── */
+.ir-map {
+    position: absolute;
+    top: 52px;    /* below topbar */
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 1;
+}
+
+/* ── Status bar ──────────────────────────────────────────────── */
+.ir-status-bar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 28px;
+    background: rgba(12, 29, 61, 0.92);
+    backdrop-filter: blur(8px);
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 16px;
+    font-size: 0.72rem;
+    color: #8b9ec2;
+    z-index: 800;
+    font-family: 'JetBrains Mono', monospace;
+}
+.ir-last-update {
+    color: #64748b;
+}
+
+/* ── Loading overlay ─────────────────────────────────────────── */
+.ir-loader {
+    position: absolute;
+    top: 52px;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(12, 29, 61, 0.85);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 600;
+}
+.ir-loader-spinner {
+    width: 44px;
+    height: 44px;
+    border: 3px solid rgba(46, 125, 255, 0.2);
+    border-top-color: #2e7dff;
+    border-radius: 50%;
+    animation: ir-spin 0.8s linear infinite;
+    margin-bottom: 14px;
+}
+@keyframes ir-spin {
+    to { transform: rotate(360deg); }
+}
+.ir-loader-text {
+    color: #8b9ec2;
+    font-size: 0.85rem;
+    font-family: 'DM Sans', sans-serif;
+}
+
+/* ── No storms message ───────────────────────────────────────── */
+.ir-no-storms {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+    z-index: 500;
+    padding: 2rem;
+}
+.ir-no-storms-icon {
+    font-size: 3rem;
+    margin-bottom: 1rem;
+}
+.ir-no-storms-title {
+    font-size: 1.3rem;
+    font-weight: 700;
+    color: #e2e8f0;
+    margin-bottom: 0.5rem;
+}
+.ir-no-storms-desc {
+    font-size: 0.85rem;
+    color: #8b9ec2;
+    max-width: 400px;
+    line-height: 1.6;
+}
+
+/* ── Legend ───────────────────────────────────────────────────── */
+.ir-legend {
+    position: fixed;
+    bottom: 40px;
+    right: 12px;
+    background: rgba(15, 33, 64, 0.92);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    padding: 10px 14px;
+    z-index: 700;
+    font-family: 'DM Sans', sans-serif;
+}
+.ir-legend h4 {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: #e2e8f0;
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.ir-legend-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.72rem;
+    color: #8b9ec2;
+    padding: 2px 0;
+}
+.ir-legend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+/* ── Storm marker popups ─────────────────────────────────────── */
+.ir-popup {
+    font-family: 'DM Sans', sans-serif;
+}
+.ir-popup-name {
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: #e2e8f0;
+    margin-bottom: 4px;
+}
+.ir-popup-meta {
+    font-size: 0.78rem;
+    color: #8b9ec2;
+    line-height: 1.5;
+}
+.ir-popup-meta strong {
+    color: #e2e8f0;
+}
+.ir-popup-btn {
+    display: inline-block;
+    margin-top: 8px;
+    background: linear-gradient(135deg, #2e7dff, #00d4ff);
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    padding: 5px 16px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: 'DM Sans', sans-serif;
+    transition: opacity 0.2s;
+}
+.ir-popup-btn:hover {
+    opacity: 0.85;
+}
+
+/* ── Custom storm markers ────────────────────────────────────── */
+.ir-storm-marker {
+    border-radius: 50%;
+    border: 2px solid rgba(255, 255, 255, 0.6);
+    box-shadow: 0 0 8px rgba(0, 0, 0, 0.5);
+    transition: transform 0.2s;
+}
+.ir-storm-marker:hover {
+    transform: scale(1.25);
+    z-index: 1000 !important;
+}
+
+/* ── Pulsing marker animation for active storms ──────────────── */
+.ir-storm-marker::after {
+    content: '';
+    position: absolute;
+    top: -4px;
+    left: -4px;
+    right: -4px;
+    bottom: -4px;
+    border-radius: 50%;
+    border: 2px solid currentColor;
+    opacity: 0;
+    animation: ir-pulse 2s ease-out infinite;
+}
+@keyframes ir-pulse {
+    0%   { transform: scale(1);   opacity: 0.6; }
+    100% { transform: scale(1.8); opacity: 0; }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Storm Detail View
+   ═══════════════════════════════════════════════════════════════ */
+
+.ir-detail {
+    position: absolute;
+    top: 52px;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: var(--navy, #0c1d3d);
+    z-index: 500;
+    overflow: hidden;
+}
+
+/* ── Detail header ───────────────────────────────────────────── */
+.ir-detail-header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 20px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(15, 33, 64, 0.95);
+}
+.ir-back-btn {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #8b9ec2;
+    font-size: 0.8rem;
+    font-weight: 500;
+    padding: 6px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-family: 'DM Sans', sans-serif;
+    transition: all 0.2s;
+    white-space: nowrap;
+}
+.ir-back-btn:hover {
+    color: #e2e8f0;
+    background: rgba(255, 255, 255, 0.1);
+}
+.ir-detail-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.ir-detail-name {
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: #e2e8f0;
+}
+.ir-detail-id {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.78rem;
+    color: #64748b;
+}
+.ir-detail-cat {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.8rem;
+    font-weight: 700;
+    padding: 2px 10px;
+    border-radius: 4px;
+    color: #fff;
+}
+
+/* ── Detail body: two-panel layout ───────────────────────────── */
+.ir-detail-body {
+    display: flex;
+    height: calc(100% - 48px);
+    overflow: hidden;
+}
+.ir-detail-left {
+    flex: 3;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid rgba(255, 255, 255, 0.06);
+    min-width: 0;
+}
+.ir-detail-right {
+    flex: 2;
+    overflow-y: auto;
+    padding: 16px 20px;
+    min-width: 280px;
+}
+
+/* ── IR image container ──────────────────────────────────────── */
+.ir-image-container {
+    flex: 1;
+    position: relative;
+    background: #080e1a;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 0;
+    overflow: hidden;
+}
+.ir-canvas {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+}
+.ir-overlay-info {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    display: flex;
+    gap: 12px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    color: rgba(255, 255, 255, 0.7);
+    background: rgba(0, 0, 0, 0.5);
+    padding: 4px 10px;
+    border-radius: 4px;
+}
+
+/* ── Animation controls ──────────────────────────────────────── */
+.ir-anim-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    background: rgba(15, 33, 64, 0.95);
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.ir-anim-btn {
+    width: 32px;
+    height: 32px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.04);
+    color: #8b9ec2;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.75rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+}
+.ir-anim-btn:hover {
+    color: #e2e8f0;
+    background: rgba(255, 255, 255, 0.08);
+}
+.ir-anim-play {
+    background: rgba(46, 125, 255, 0.15);
+    border-color: rgba(46, 125, 255, 0.3);
+    color: #2e7dff;
+}
+.ir-anim-slider {
+    flex: 1;
+    height: 4px;
+    -webkit-appearance: none;
+    appearance: none;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 2px;
+    outline: none;
+}
+.ir-anim-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #2e7dff;
+    cursor: pointer;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+}
+.ir-anim-counter {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    color: #64748b;
+    min-width: 50px;
+    text-align: right;
+}
+
+/* ── Info sections (right panel) ─────────────────────────────── */
+.ir-info-section {
+    margin-bottom: 20px;
+}
+.ir-info-heading {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 10px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.ir-info-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.ir-info-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.ir-info-label {
+    font-size: 0.78rem;
+    color: #8b9ec2;
+}
+.ir-info-value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: #e2e8f0;
+}
+
+/* ── Intensity chart ─────────────────────────────────────────── */
+.ir-intensity-chart {
+    width: 100%;
+    height: 200px;
+    background: rgba(0, 0, 0, 0.15);
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+/* ── Recon cross-reference ───────────────────────────────────── */
+.ir-recon-info {
+    font-size: 0.82rem;
+    color: #8b9ec2;
+    line-height: 1.6;
+}
+.ir-recon-info a {
+    color: #00d4ff;
+    text-decoration: none;
+}
+.ir-recon-info a:hover {
+    text-decoration: underline;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Responsive
+   ═══════════════════════════════════════════════════════════════ */
+
+@media (max-width: 900px) {
+    .ir-detail-body {
+        flex-direction: column;
+    }
+    .ir-detail-left {
+        flex: none;
+        height: 50%;
+        border-right: none;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    }
+    .ir-detail-right {
+        flex: 1;
+        min-width: 0;
+    }
+}
+
+@media (max-width: 600px) {
+    .ir-legend {
+        bottom: 36px;
+        right: 8px;
+        padding: 8px 10px;
+    }
+    .ir-legend h4 {
+        font-size: 0.65rem;
+    }
+    .ir-legend-row {
+        font-size: 0.65rem;
+    }
+}
+
+/* ── Leaflet popup override for dark theme ───────────────────── */
+.leaflet-popup-content-wrapper {
+    background: rgba(15, 33, 64, 0.96) !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    border-radius: 8px !important;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4) !important;
+}
+.leaflet-popup-tip {
+    background: rgba(15, 33, 64, 0.96) !important;
+}
+.leaflet-popup-content {
+    margin: 10px 14px !important;
+}
+.leaflet-popup-close-button {
+    color: #8b9ec2 !important;
+}
+.leaflet-popup-close-button:hover {
+    color: #e2e8f0 !important;
+}

@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <!-- Google Analytics (GA4) -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-EFM8GFFKLK"></script>
+    <script>
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){dataLayer.push(arguments);}
+        gtag('js', new Date());
+        gtag('config', 'G-EFM8GFFKLK');
+    </script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Real-Time IR Monitor — Track active tropical cyclones worldwide with live GOES-16/18 infrared satellite imagery, intensity data, and forecast tracks.">
+    <meta name="keywords" content="tropical cyclone, hurricane, typhoon, infrared, satellite, GOES, real-time, monitoring, IR imagery">
+    <meta name="author" content="Dr. Michael Fischer, University of Miami / NOAA HRD">
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="Real-Time IR Monitor — TC-ATLAS">
+    <meta property="og:description" content="Track active tropical cyclones worldwide with live infrared satellite imagery and intensity data.">
+    <meta property="og:url" content="https://michaelfischerwx.github.io/TC-ATLAS/realtime_ir.html">
+    <meta property="og:site_name" content="TC-ATLAS">
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/png" href="tc-atlas-icon.png">
+
+    <title>Real-Time IR Monitor — TC-ATLAS</title>
+
+    <!-- Leaflet -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+    <!-- Styles -->
+    <link rel="stylesheet" href="tc_radar_styles.css">
+    <link rel="stylesheet" href="realtime_ir_styles.css">
+</head>
+<body>
+    <a href="#ir-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
+
+    <!-- ── Topbar ─────────────────────────────────────────────── -->
+    <header class="topbar" role="banner">
+        <div class="topbar-inner">
+            <div class="topbar-brand">
+                <img src="tc-atlas-icon.png" alt="TC-ATLAS" class="topbar-icon" width="28" height="28">
+                <div class="topbar-logo" role="heading" aria-level="1">TC-ATLAS</div>
+                <div class="topbar-divider"></div>
+                <div class="topbar-subtitle">Real-Time IR Monitor</div>
+            </div>
+            <div class="topbar-stats">
+                <div class="topbar-stat">
+                    <span class="topbar-stat-val" id="stat-active">&mdash;</span>
+                    <span class="topbar-stat-label">Active</span>
+                </div>
+                <div class="topbar-stat">
+                    <span class="topbar-stat-val" id="stat-atl">&mdash;</span>
+                    <span class="topbar-stat-label">ATL</span>
+                </div>
+                <div class="topbar-stat">
+                    <span class="topbar-stat-val" id="stat-epac">&mdash;</span>
+                    <span class="topbar-stat-label">EPAC</span>
+                </div>
+                <div class="topbar-stat">
+                    <span class="topbar-stat-val" id="stat-wpac">&mdash;</span>
+                    <span class="topbar-stat-label">WPAC</span>
+                </div>
+                <span class="topbar-version ir-version">GOES IR</span>
+            </div>
+            <nav aria-label="Main navigation">
+                <ul class="topbar-nav">
+                    <li><a href="index.html" role="button">Home</a></li>
+                    <li><a href="explorer.html" role="button"><span class="nav-full">TC-RADAR</span><span class="nav-short">Radar</span></a></li>
+                    <li><a href="explorer.html?tab=realtime" role="button"><span class="nav-full">Real-Time TDR</span><span class="nav-short">RT TDR</span></a></li>
+                    <li><a href="realtime_ir.html" role="button" class="nav-active"><span class="nav-full">Real-Time IR</span><span class="nav-short">RT IR</span></a></li>
+                    <li><a href="global_archive.html" role="button"><span class="nav-full">Global Archive</span><span class="nav-short">Global</span></a></li>
+                    <li><a href="explorer.html?tab=composites" role="button"><span class="nav-full">Composites</span><span class="nav-short">Comp.</span></a></li>
+                    <li><a href="explorer.html#about" role="button">About</a></li>
+                </ul>
+            </nav>
+        </div>
+    </header>
+
+    <!-- ── Map View ───────────────────────────────────────────── -->
+    <section id="ir-main" role="main" aria-label="Real-Time IR Monitor">
+
+        <!-- Map container -->
+        <div id="ir-map" class="ir-map"></div>
+
+        <!-- Status bar (bottom) -->
+        <div id="ir-status-bar" class="ir-status-bar">
+            <span id="ir-status-text">Connecting&hellip;</span>
+            <span id="ir-last-update" class="ir-last-update"></span>
+        </div>
+
+        <!-- Loading overlay -->
+        <div id="ir-loader" class="ir-loader">
+            <div class="ir-loader-spinner"></div>
+            <div class="ir-loader-text">Loading active storms&hellip;</div>
+        </div>
+
+        <!-- No-storms message (hidden by default) -->
+        <div id="ir-no-storms" class="ir-no-storms" style="display:none;">
+            <div class="ir-no-storms-icon">&#x1F30A;</div>
+            <div class="ir-no-storms-title">No Active Tropical Cyclones</div>
+            <div class="ir-no-storms-desc">There are currently no active tropical cyclones being monitored. The page will automatically refresh every 10 minutes.</div>
+        </div>
+
+    </section>
+
+    <!-- ── Storm Detail View (hidden by default) ──────────────── -->
+    <section id="ir-detail" class="ir-detail" style="display:none;" aria-label="Storm detail">
+        <div class="ir-detail-header">
+            <button id="ir-back-btn" class="ir-back-btn" aria-label="Back to all storms">&larr; All Storms</button>
+            <div class="ir-detail-title">
+                <span id="ir-detail-name" class="ir-detail-name"></span>
+                <span id="ir-detail-id" class="ir-detail-id"></span>
+                <span id="ir-detail-cat" class="ir-detail-cat"></span>
+            </div>
+        </div>
+        <div class="ir-detail-body">
+            <!-- Left: IR imagery panel -->
+            <div class="ir-detail-left">
+                <div id="ir-image-container" class="ir-image-container">
+                    <div id="ir-image-loader" class="ir-loader" style="display:none;">
+                        <div class="ir-loader-spinner"></div>
+                        <div class="ir-loader-text">Fetching IR imagery&hellip;</div>
+                    </div>
+                    <canvas id="ir-canvas" class="ir-canvas"></canvas>
+                    <div id="ir-overlay-info" class="ir-overlay-info">
+                        <span id="ir-frame-time"></span>
+                        <span id="ir-satellite-label"></span>
+                    </div>
+                </div>
+                <!-- Animation controls -->
+                <div class="ir-anim-controls">
+                    <button id="ir-anim-prev" class="ir-anim-btn" title="Previous frame">&#9664;</button>
+                    <button id="ir-anim-play" class="ir-anim-btn ir-anim-play" title="Play/Pause">&#9654;</button>
+                    <button id="ir-anim-next" class="ir-anim-btn" title="Next frame">&#9654;</button>
+                    <input id="ir-anim-slider" type="range" min="0" max="0" value="0" class="ir-anim-slider">
+                    <span id="ir-anim-counter" class="ir-anim-counter">0 / 0</span>
+                </div>
+            </div>
+
+            <!-- Right: info & diagnostics panel -->
+            <div class="ir-detail-right">
+                <!-- Current storm info -->
+                <div class="ir-info-section">
+                    <h3 class="ir-info-heading">Storm Info</h3>
+                    <div class="ir-info-grid" id="ir-info-grid">
+                        <div class="ir-info-row"><span class="ir-info-label">Basin</span><span class="ir-info-value" id="ir-info-basin">&mdash;</span></div>
+                        <div class="ir-info-row"><span class="ir-info-label">Position</span><span class="ir-info-value" id="ir-info-position">&mdash;</span></div>
+                        <div class="ir-info-row"><span class="ir-info-label">Motion</span><span class="ir-info-value" id="ir-info-motion">&mdash;</span></div>
+                        <div class="ir-info-row"><span class="ir-info-label">MSLP</span><span class="ir-info-value" id="ir-info-mslp">&mdash;</span></div>
+                        <div class="ir-info-row"><span class="ir-info-label">Vmax</span><span class="ir-info-value" id="ir-info-vmax">&mdash;</span></div>
+                        <div class="ir-info-row"><span class="ir-info-label">Last Fix</span><span class="ir-info-value" id="ir-info-lastfix">&mdash;</span></div>
+                    </div>
+                </div>
+
+                <!-- Intensity timeline -->
+                <div class="ir-info-section">
+                    <h3 class="ir-info-heading">Intensity History</h3>
+                    <div id="ir-intensity-chart" class="ir-intensity-chart"></div>
+                </div>
+
+                <!-- Recon cross-reference -->
+                <div class="ir-info-section" id="ir-recon-section" style="display:none;">
+                    <h3 class="ir-info-heading">Reconnaissance</h3>
+                    <div id="ir-recon-info" class="ir-recon-info"></div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ── Legend (on map view) ────────────────────────────────── -->
+    <div id="ir-legend" class="ir-legend">
+        <h4>Intensity (Saffir-Simpson)</h4>
+        <div class="ir-legend-row"><span class="ir-legend-dot" style="background:#60a5fa;"></span> TD (&lt;34 kt)</div>
+        <div class="ir-legend-row"><span class="ir-legend-dot" style="background:#34d399;"></span> TS (34&ndash;63 kt)</div>
+        <div class="ir-legend-row"><span class="ir-legend-dot" style="background:#fbbf24;"></span> Cat 1 (64&ndash;82 kt)</div>
+        <div class="ir-legend-row"><span class="ir-legend-dot" style="background:#fb923c;"></span> Cat 2 (83&ndash;95 kt)</div>
+        <div class="ir-legend-row"><span class="ir-legend-dot" style="background:#f87171;"></span> Cat 3 (96&ndash;112 kt)</div>
+        <div class="ir-legend-row"><span class="ir-legend-dot" style="background:#ef4444;"></span> Cat 4 (113&ndash;136 kt)</div>
+        <div class="ir-legend-row"><span class="ir-legend-dot" style="background:#dc2626;"></span> Cat 5 (137+ kt)</div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <script src="realtime_ir.js"></script>
+</body>
+</html>

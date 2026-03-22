@@ -1,0 +1,344 @@
+"""
+satellite_ir.py — Shared Geostationary Satellite IR Module
+============================================================
+Provides GOES-16/18/19 (and future Himawari-9) IR imagery access,
+subsetting, and rendering for the Real-Time IR Monitor and Real-Time
+TDR modules.
+
+This module is imported by ir_monitor_api.py and can eventually
+replace the duplicate GOES code in realtime_tdr_api.py.
+
+Dependencies: s3fs, pyproj, xarray, numpy, Pillow
+All are lazy-imported so the module won't crash if they're missing.
+"""
+
+import base64
+import gc
+import io
+import re
+from collections import OrderedDict
+from datetime import datetime as _dt, timedelta, timezone
+from typing import Optional
+
+import numpy as np
+
+# ---------------------------------------------------------------------------
+# Lazy imports (same pattern as realtime_tdr_api.py)
+# ---------------------------------------------------------------------------
+
+_s3fs_mod = None
+_pyproj_mod = None
+_goes_fs = None
+
+
+def _get_s3fs():
+    """Lazy-import s3fs."""
+    global _s3fs_mod
+    if _s3fs_mod is None:
+        try:
+            import s3fs
+            _s3fs_mod = s3fs
+        except ImportError:
+            return None
+    return _s3fs_mod
+
+
+def _get_pyproj():
+    """Lazy-import pyproj."""
+    global _pyproj_mod
+    if _pyproj_mod is None:
+        try:
+            import pyproj
+            _pyproj_mod = pyproj
+        except ImportError:
+            return None
+    return _pyproj_mod
+
+
+def get_goes_fs():
+    """Return a shared s3fs filesystem for public NOAA GOES buckets."""
+    global _goes_fs
+    if _goes_fs is None:
+        s3fs = _get_s3fs()
+        if s3fs is None:
+            return None
+        _goes_fs = s3fs.S3FileSystem(anon=True)
+    return _goes_fs
+
+
+# ---------------------------------------------------------------------------
+# GOES Configuration
+# ---------------------------------------------------------------------------
+
+GOES_BUCKETS = {
+    "east_16": "noaa-goes16",
+    "east_19": "noaa-goes19",
+    "west":    "noaa-goes18",
+}
+
+GOES_LON_0 = {"east": -75.2, "west": -137.2}
+GOES_SAT_HEIGHT = 35786023.0  # metres above Earth centre
+
+# GOES-19 became operational GOES-East on 2025-04-04 15:00 UTC
+GOES_TRANSITION_DT = _dt(2025, 4, 4, 15, 0, 0, tzinfo=timezone.utc)
+
+IR_PRODUCT = "ABI-L2-CMIPF"     # full-disk Cloud & Moisture Imagery
+IR_BAND = 13                     # 10.3 µm clean longwave IR window
+IR_VARIABLE = "CMI"              # variable name in CMI file
+
+IR_VMIN = 190.0                  # brightness temperature colour limits (K)
+IR_VMAX = 310.0
+
+# Enhanced IR colormap LUT (cold → bright/colourful, warm → dark grey)
+_IR_STOPS = [
+    (0.00,   8,   8,   8),
+    (0.15,  40,  40,  40),
+    (0.30,  90,  90,  90),
+    (0.40, 140, 140, 140),
+    (0.50, 200, 200, 200),
+    (0.55,   0, 180, 255),
+    (0.60,   0, 100, 255),
+    (0.65,   0, 255,   0),
+    (0.70, 255, 255,   0),
+    (0.75, 255, 180,   0),
+    (0.80, 255,  80,   0),
+    (0.85, 255,   0,   0),
+    (0.90, 180,   0, 180),
+    (0.95, 255, 180, 255),
+    (1.00, 255, 255, 255),
+]
+
+
+def _build_ir_lut() -> np.ndarray:
+    """Build a 256-entry uint8 RGBA LUT for IR brightness temperatures."""
+    lut = np.zeros((256, 4), dtype=np.uint8)
+    for i in range(256):
+        frac = i / 255.0
+        lo, hi = _IR_STOPS[0], _IR_STOPS[-1]
+        for s in range(len(_IR_STOPS) - 1):
+            if _IR_STOPS[s][0] <= frac <= _IR_STOPS[s + 1][0]:
+                lo, hi = _IR_STOPS[s], _IR_STOPS[s + 1]
+                break
+        t = 0.0 if hi[0] == lo[0] else (frac - lo[0]) / (hi[0] - lo[0])
+        lut[i, 0] = int(lo[1] + t * (hi[1] - lo[1]) + 0.5)
+        lut[i, 1] = int(lo[2] + t * (hi[2] - lo[2]) + 0.5)
+        lut[i, 2] = int(lo[3] + t * (hi[3] - lo[3]) + 0.5)
+        lut[i, 3] = 255  # fully opaque for standalone rendering
+    return lut
+
+
+_IR_LUT = _build_ir_lut()
+
+
+# ---------------------------------------------------------------------------
+# Core Functions
+# ---------------------------------------------------------------------------
+
+def select_goes_sat(longitude: float, analysis_dt: _dt) -> tuple:
+    """
+    Select GOES satellite based on storm longitude and analysis date.
+    Returns (bucket_name, sat_key) where sat_key is 'east' or 'west'.
+    """
+    if longitude > -115:
+        sat_key = "east"
+        if analysis_dt.replace(tzinfo=timezone.utc) >= GOES_TRANSITION_DT:
+            bucket = GOES_BUCKETS["east_19"]
+        else:
+            bucket = GOES_BUCKETS["east_16"]
+    else:
+        sat_key = "west"
+        bucket = GOES_BUCKETS["west"]
+    return bucket, sat_key
+
+
+def satellite_name_from_bucket(bucket: str) -> str:
+    """Human-readable satellite name from bucket."""
+    names = {
+        "noaa-goes16": "GOES-16",
+        "noaa-goes19": "GOES-19",
+        "noaa-goes18": "GOES-18",
+    }
+    return names.get(bucket, bucket)
+
+
+def find_goes_file(bucket: str, target_dt: _dt,
+                   tolerance_min: int = 15) -> Optional[str]:
+    """
+    Find the GOES ABI Band 13 full-disk file closest to target_dt.
+    Returns the full S3 key or None.
+    """
+    fs = get_goes_fs()
+    if fs is None:
+        return None
+
+    jday = target_dt.timetuple().tm_yday
+    prefix = f"{bucket}/{IR_PRODUCT}/{target_dt.year}/{jday:03d}/{target_dt.hour:02d}/"
+
+    try:
+        files = fs.ls(prefix, detail=False)
+    except Exception:
+        return None
+
+    band_tag = f"C{IR_BAND:02d}"
+    candidates = [f for f in files if band_tag in f.split("/")[-1]]
+    if not candidates:
+        return None
+
+    best_file = None
+    best_delta = timedelta(minutes=tolerance_min + 1)
+    ts_re = re.compile(r"[-_]s(\d{4})(\d{3})(\d{2})(\d{2})(\d{2})")
+
+    for fpath in candidates:
+        fname = fpath.split("/")[-1]
+        m = ts_re.search(fname)
+        if not m:
+            continue
+        try:
+            yr = int(m.group(1))
+            jd = int(m.group(2))
+            hh = int(m.group(3))
+            mm = int(m.group(4))
+            ss = int(m.group(5))
+            file_dt = _dt(yr, 1, 1, hh, mm, ss, tzinfo=timezone.utc) + timedelta(days=jd - 1)
+            delta = abs(file_dt - target_dt.replace(tzinfo=timezone.utc))
+            if delta < best_delta:
+                best_delta = delta
+                best_file = fpath
+        except Exception:
+            continue
+
+    if best_delta > timedelta(minutes=tolerance_min):
+        return None
+    return best_file
+
+
+def latlon_to_goes_xy(lat: float, lon: float, sat_key: str) -> tuple:
+    """Convert geographic (lat, lon) to GOES fixed-grid (x, y) in radians."""
+    pyproj = _get_pyproj()
+    if pyproj is None:
+        raise RuntimeError("pyproj is required for GOES IR subsetting")
+    lon_0 = GOES_LON_0[sat_key]
+    proj = pyproj.Proj(proj="geos", h=GOES_SAT_HEIGHT, lon_0=lon_0, sweep="x")
+    x_m, y_m = proj(lon, lat)
+    return x_m / GOES_SAT_HEIGHT, y_m / GOES_SAT_HEIGHT
+
+
+def open_goes_subset(s3_key: str, center_lat: float, center_lon: float,
+                     sat_key: str, box_deg: float = 8.0) -> np.ndarray:
+    """
+    Open a GOES CMI file from S3 and return a geographically-subsetted
+    2D brightness-temperature array (y, x) in Kelvin.
+    """
+    import xarray as xr
+
+    fs = get_goes_fs()
+    if fs is None:
+        raise RuntimeError("s3fs not available")
+
+    half = box_deg / 2.0
+    x_min, y_min = latlon_to_goes_xy(center_lat - half, center_lon - half, sat_key)
+    x_max, y_max = latlon_to_goes_xy(center_lat + half, center_lon + half, sat_key)
+    x_lo, x_hi = min(x_min, x_max), max(x_min, x_max)
+    y_lo, y_hi = min(y_min, y_max), max(y_min, y_max)
+
+    fobj = fs.open(f"s3://{s3_key}", "rb")
+    try:
+        ds = xr.open_dataset(fobj, engine="h5netcdf")
+        ds_sub = ds.sel(x=slice(x_lo, x_hi), y=slice(y_hi, y_lo))
+
+        if IR_VARIABLE in ds_sub:
+            tb = ds_sub[IR_VARIABLE].values.astype(np.float32)
+        else:
+            alt_var = f"CMI_C{IR_BAND:02d}"
+            if alt_var in ds_sub:
+                tb = ds_sub[alt_var].values.astype(np.float32)
+            else:
+                raise ValueError(f"Neither {IR_VARIABLE} nor {alt_var} found in dataset")
+    finally:
+        ds.close()
+        fobj.close()
+        gc.collect()
+    return tb
+
+
+def render_ir_png(frame_2d: np.ndarray, as_data_url: bool = False) -> Optional[str]:
+    """
+    Render a 2D Tb array to a base64-encoded PNG string.
+    If as_data_url=True, prepends 'data:image/png;base64,'.
+    Returns None if all data is NaN.
+    """
+    from PIL import Image
+
+    arr = np.asarray(frame_2d, dtype=np.float32)
+    if not np.any(np.isfinite(arr)):
+        return None
+
+    # Normalise: cold clouds (low Tb) → high index → bright colours
+    frac = 1.0 - (arr - IR_VMIN) / (IR_VMAX - IR_VMIN)
+    frac = np.clip(frac, 0.0, 1.0)
+    indices = (frac * 255).astype(np.uint8)
+
+    rgba = _IR_LUT[indices]  # (H, W, 4)
+
+    # NaN / invalid pixels → transparent
+    mask = ~np.isfinite(arr) | (arr <= 0)
+    rgba[mask] = [0, 0, 0, 0]
+
+    img = Image.fromarray(rgba, "RGBA")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", compress_level=1)
+    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+
+    if as_data_url:
+        return f"data:image/png;base64,{b64}"
+    return b64
+
+
+def build_frame_times(center_dt: _dt, lookback_hours: float = 6.0,
+                      interval_min: int = 30) -> list:
+    """
+    Build list of target GOES scan times for an IR animation.
+    Returns datetimes from t=0 (most recent) to t−lookback_hours.
+    """
+    base = center_dt.replace(tzinfo=timezone.utc) if center_dt.tzinfo is None else center_dt
+    n_frames = int(lookback_hours * 60 / interval_min) + 1
+    return [base - timedelta(minutes=i * interval_min) for i in range(n_frames)]
+
+
+def fetch_ir_frame(center_lat: float, center_lon: float,
+                   target_dt: _dt, box_deg: float = 8.0) -> Optional[dict]:
+    """
+    Fetch and render a single IR frame for a given storm position and time.
+    Returns dict with 'image_b64', 'datetime_utc', 'satellite', 'bounds'
+    or None on failure.
+    """
+    bucket, sat_key = select_goes_sat(center_lon, target_dt)
+
+    try:
+        s3_key = find_goes_file(bucket, target_dt)
+        if not s3_key:
+            return None
+
+        tb = open_goes_subset(s3_key, center_lat, center_lon, sat_key, box_deg)
+        png_b64 = render_ir_png(tb)
+        del tb
+        gc.collect()
+
+        if not png_b64:
+            return None
+
+        half = box_deg / 2.0
+        return {
+            "image_b64": png_b64,
+            "datetime_utc": target_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "satellite": satellite_name_from_bucket(bucket),
+            "bounds": [
+                [center_lat - half, center_lon - half],
+                [center_lat + half, center_lon + half],
+            ],
+            "storm_center": {"lat": center_lat, "lon": center_lon},
+        }
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        return None
