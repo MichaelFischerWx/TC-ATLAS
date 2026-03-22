@@ -6,6 +6,13 @@
 (function () {
 'use strict';
 
+// ── GA4 analytics helper ─────────────────────────────────────
+function _ga(action, params) {
+    if (typeof gtag === 'function') {
+        try { gtag('event', action, params || {}); } catch (e) { /* silent */ }
+    }
+}
+
 // ── Configuration ────────────────────────────────────────────
 var API_BASE = 'https://tc-atlas-api-361010099051.us-east1.run.app';
 var STORMS_JSON = 'ibtracs_storms.json';
@@ -151,6 +158,7 @@ var PLOTLY_CONFIG = {
 // ══════════════════════════════════════════════════════════════
 
 window.switchTab = function (tabName) {
+    _ga('ga_switch_tab', { tab_name: tabName });
     // If switching to detail without a selected storm, redirect through viewStormDetail
     if (tabName === 'detail' && !selectedStorm) {
         showToast('Select a storm first, then click "View Detail"');
@@ -530,6 +538,7 @@ window.setMapView = function (mode) {
 // ── Storm selection ──────────────────────────────────────────
 
 function selectStorm(storm) {
+    _ga('ga_select_storm', { sid: storm.sid, storm_name: storm.name, year: storm.year, basin: storm.basin, peak_wind_kt: storm.peak_wind_kt });
     selectedStorm = storm;
     var card = document.getElementById('storm-card');
     card.style.display = '';
@@ -693,6 +702,7 @@ window.onRWFilterChange = function () {
 };
 
 function applyFilters() {
+    _ga('ga_apply_filters', {});
     var nameQuery = (document.getElementById('filter-name').value || '').trim().toUpperCase();
     var yearMin = parseInt(document.getElementById('filter-year-min').value) || 0;
     var yearMax = parseInt(document.getElementById('filter-year-max').value) || 9999;
@@ -816,6 +826,7 @@ window.viewStormDetail = function () {
 };
 
 function renderStormDetail(storm) {
+    _ga('ga_view_storm_detail', { sid: storm.sid, storm_name: storm.name, year: storm.year, basin: storm.basin });
     // Header
     var color = getIntensityColor(storm.peak_wind_kt);
     var cat = getIntensityCategory(storm.peak_wind_kt);
@@ -1404,6 +1415,7 @@ window.addCurrentToCompare = function () {
 };
 
 function addToCompare(storm) {
+    _ga('ga_add_to_compare', { storm_name: storm.name, year: storm.year, basin: storm.basin });
     if (compareStorms.length >= COMPARE_MAX) {
         showToast('Maximum ' + COMPARE_MAX + ' storms for comparison');
         return;
@@ -2139,6 +2151,7 @@ function renderDetailMap(track, storm) {
 // ══════════════════════════════════════════════════════════════
 
 function loadHURSAT(storm) {
+    _ga('ga_load_ir_imagery', { sid: storm.sid, storm_name: storm.name, year: storm.year });
     irFrames = [];
     irMeta = null;
     irFrameIdx = 0;
@@ -2801,6 +2814,7 @@ window.toggleIRPlay = function () {
 
 function startIRPlayback() {
     if (!irMeta || irMeta.n_frames === 0) return;
+    _ga('ga_ir_playback', { storm: selectedStorm ? selectedStorm.name : '', n_frames: irMeta.n_frames });
     irPlaying = true;
     document.getElementById('ir-play-btn').innerHTML = '&#9646;&#9646; Pause';
 
@@ -2876,6 +2890,7 @@ function syncIRToTime(clickedTime) {
 // ══════════════════════════════════════════════════════════════
 
 function renderClimatology() {
+    _ga('ga_view_climatology', {});
     if (allStorms.length === 0) return;
     climRendered = true;
 

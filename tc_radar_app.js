@@ -1,5 +1,12 @@
 const API_BASE = 'https://tc-atlas-api-361010099051.us-east1.run.app';
 
+// ── GA4 analytics helper ─────────────────────────────────────
+function _ga(action, params) {
+    if (typeof gtag === 'function') {
+        try { gtag('event', action, params || {}); } catch (e) { /* silent */ }
+    }
+}
+
 // ── Prevent browser from restoring previous scroll position on reload ──
 if ('scrollRestoration' in history) {
     history.scrollRestoration = 'manual';
@@ -36,6 +43,7 @@ function showToast(message, type, duration) {
 function archiveSavePlotPNG(chartDivId, defaultName) {
     var gd = document.getElementById(chartDivId);
     if (!gd || !gd.data) { showToast('No plot to save', 'warn'); return; }
+    _ga('export_png', { chart: defaultName || chartDivId, module: 'archive' });
     var fname = defaultName || chartDivId;
     var now = new Date();
     var ts = now.getFullYear() +
@@ -143,6 +151,7 @@ function toggleFilterDrawer() {
     var isOpen = drawer.classList.contains('open');
     btn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
     btn.classList.toggle('active');
+    _ga('toggle_filter_drawer', { is_open: isOpen });
 }
 
 // ── Two-step Storm → Case selection ──────────────────────────
@@ -256,6 +265,7 @@ function exploreCaseGo() {
     if (isNaN(idx) || !_getActiveData()) return;
     var caseData = _getActiveData().cases.find(function(c) { return c.case_index === idx; });
     if (!caseData) return;
+    _ga('explore_case', { case_index: idx, storm_name: caseData.storm_name, vmax_kt: caseData.vmax_kt, data_type: _activeDataType });
     enterFocusMode(caseData);
     openSidePanel(caseData, true);
 }
@@ -757,6 +767,7 @@ function _era5RenderCanvas(data2d, field) {
 
 // ── ERA5 data fetch ──────────────────────────────────────────
 function fetchERA5Data(caseIndex, field, callback) {
+    _ga('fetch_era5', { case_index: caseIndex, field: field });
     if (_era5Fetching) return;
     _era5Fetching = true;
     var url = API_BASE + '/era5?case_index=' + caseIndex + '&field=' + (field || 'shear_mag') + '&radius_km=300' + '&data_type=' + _activeDataType;
@@ -3454,6 +3465,7 @@ function generateCustomPlot(callback) {
     _lastSqJson = null;
     var variable = document.getElementById('ep-var').value;
     var level_km = document.getElementById('ep-level').value;
+    _ga('generate_plan_view', { case_index: currentCaseIndex, variable: variable, level_km: level_km, data_type: _activeDataType });
     var overlay = (document.getElementById('ep-overlay') || {}).value || '';
     var resultDiv = document.getElementById('ep-result');
     var btn = document.getElementById('ep-btn');
@@ -4053,6 +4065,7 @@ function handlePlotClick(eventData) {
 
 function fetchCrossSection(a, b) {
     var variable = document.getElementById('ep-var').value;
+    _ga('cross_section', { case_index: currentCaseIndex, variable: variable, data_type: _activeDataType });
     var overlay = (document.getElementById('ep-overlay') || {}).value || '';
     var csResult = document.getElementById('cs-result'); if (!csResult) return;
     csResult.innerHTML = _hurricaneLoadingHTML('Computing cross-section\u2026', true);
@@ -4212,6 +4225,7 @@ function _renderDualAzimuthalMean(json) {
 // ── Azimuthal Mean (dispatcher for coordinate mode selector) ──
 // Routes to the correct fetch function based on the az-coord-mode dropdown
 function dispatchAzimuthalMean() {
+    _ga('azimuthal_mean', { case_index: currentCaseIndex, data_type: _activeDataType });
     var mode = (document.getElementById('az-coord-mode') || {}).value || 'standard';
     if (mode === 'hybrid') {
         fetchHybridAzimuthalMean();
@@ -4833,6 +4847,7 @@ function toggleSingleCFADConfig() {
 }
 
 function fetchSingleCFAD() {
+    _ga('single_cfad', { case_index: currentCaseIndex });
     if (!currentCaseIndex && currentCaseIndex !== 0) return;
     var btn = document.getElementById('cfad-btn');
     if (btn) { btn.disabled = true; btn.textContent = 'Loading...'; }
@@ -6135,6 +6150,7 @@ function _removeArchiveFDeckTraces() {
 var _hovmollerVisible = false;
 
 function toggleHovmoller() {
+    _ga('toggle_hovmoller', { case_index: currentCaseIndex });
     var panel = document.getElementById('hovmoller-panel');
     var btn = document.getElementById('hovmoller-btn');
     if (!panel || !btn) return;
@@ -6589,6 +6605,7 @@ updateMarkers = function() {
 
 function switchDataType(dt) {
     if (dt === _activeDataType) return;
+    _ga('switch_data_type', { from: _activeDataType, to: dt });
     var src = dt === 'merge' ? mergeData : allData;
     if (!src) {
         alert(dt === 'merge' ? 'Merge metadata not loaded yet.' : 'Swath metadata not loaded yet.');
@@ -6806,6 +6823,7 @@ var _last3DJson = null;
 function fetch3DVolume() {
     if (currentCaseIndex === null) return;
     var variable = document.getElementById('ep-var').value;
+    _ga('view_3d_volume', { case_index: currentCaseIndex, variable: variable, data_type: _activeDataType });
     var btn = document.getElementById('vol-btn');
     btn.disabled = true; btn.textContent = '\uD83D\uDDA5 Loading\u2026';
 
@@ -9099,6 +9117,7 @@ function generateCompositeAzMean() {
     var filters = _getCompositeFilters();
     var variable = document.getElementById('comp-var').value;
     var dataType = document.getElementById('comp-dtype').value;
+    _ga('composite_az_mean', { variable: variable, data_type: dataType });
     var coverage = parseInt(document.getElementById('comp-coverage').value) / 100;
     var btnAz = document.getElementById('comp-btn-az'), btnSq = document.getElementById('comp-btn-sq'), btnPv = document.getElementById('comp-btn-pv');
     if (btnAz) if (btnAz) btnAz.disabled = true; if (btnSq) if (btnSq) btnSq.disabled = true; if (btnPv) if (btnPv) btnPv.disabled = true;
@@ -9131,6 +9150,7 @@ function generateCompositeAzMean() {
 // ── Composite Anomaly & VP Scatter ──────────────────────────────────────
 
 function generateCompositeAnomaly() {
+    _ga('composite_anomaly', {});
     var resultEl = document.getElementById('comp-result-anom');
     var dataType = document.getElementById('comp-dtype').value;
     if (dataType !== 'merge') {
@@ -9500,6 +9520,7 @@ function generateCompositeCFAD() {
     var filters = _getCompositeFilters();
     var variable = document.getElementById('comp-var').value;
     var dataType = document.getElementById('comp-dtype').value;
+    _ga('composite_cfad', { variable: variable, data_type: dataType });
     var _crp = document.getElementById('comp-result-placeholder') || document.getElementById('wiz-result-placeholder'); if (_crp) _crp.style.display = 'none';
     _showCompStatus('loading', 'Computing CFAD \u2014 this may take 30\u201390 seconds for many cases\u2026');
 
@@ -9862,6 +9883,7 @@ function generateCompositeQuadMean() {
     var filters = _getCompositeFilters();
     var variable = document.getElementById('comp-var').value;
     var dataType = document.getElementById('comp-dtype').value;
+    _ga('composite_quad_mean', { variable: variable, data_type: dataType });
     var coverage = parseInt(document.getElementById('comp-coverage').value) / 100;
     var btnAz = document.getElementById('comp-btn-az'), btnSq = document.getElementById('comp-btn-sq'), btnPv = document.getElementById('comp-btn-pv');
     if (btnAz) if (btnAz) btnAz.disabled = true; if (btnSq) if (btnSq) btnSq.disabled = true; if (btnPv) if (btnPv) btnPv.disabled = true;
@@ -9908,6 +9930,7 @@ function generateCompositePlanView() {
     var pvParams = _getCompositePlanViewParams();
     var variable = document.getElementById('comp-var').value;
     var dataType = document.getElementById('comp-dtype').value;
+    _ga('composite_plan_view', { variable: variable, data_type: dataType });
     var coverage = parseInt(document.getElementById('comp-coverage').value) / 100;
 
     var btnPv = document.getElementById('comp-btn-pv');
@@ -12625,6 +12648,7 @@ var _archFLResVisible = { '1s': true, '10s': true, '30s': true };
 var _archFLTSXAxis = 'time'; // 'time' or 'radius'
 
 function archiveToggleFlightLevel() {
+    _ga('toggle_flight_level', { case_index: currentCaseIndex });
     var btn = document.getElementById('btn-archive-fl');
     if (_archiveFLActive) {
         // Deactivate
@@ -13181,6 +13205,7 @@ function _archSondeColor(idx) {
 }
 
 function archiveToggleDropsondes() {
+    _ga('toggle_dropsondes', { case_index: currentCaseIndex });
     var btn = document.getElementById('btn-archive-sonde');
     if (_archiveSondeActive) {
         _archiveSondeActive = false;
@@ -14119,6 +14144,7 @@ var _irMapColorbar = null;      // L.control for IR colorbar on Leaflet map
  * Subsequent: toggle visibility.
  */
 function toggleMicrowaveOverlay() {
+    _ga('toggle_microwave_overlay', { case_index: currentCaseIndex });
     var btn = document.getElementById('mw-overlay-btn');
     var panel = document.getElementById('mw-overpass-panel');
     if (!btn || !panel) return;

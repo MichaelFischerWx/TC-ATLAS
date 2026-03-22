@@ -13,6 +13,13 @@
 (function () {
     'use strict';
 
+    // ── GA4 analytics helper ────────────────────────────────────
+    function _ga(action, params) {
+        if (typeof gtag === 'function') {
+            try { gtag('event', action, params || {}); } catch (e) { /* silent */ }
+        }
+    }
+
     // ── Configuration ────────────────────────────────────────────
     var API_BASE = 'https://tc-atlas-api-361010099051.us-east1.run.app';
     var RT_PREFIX = '/realtime';
@@ -62,6 +69,7 @@
     window.rtSavePlotPNG = function (chartDivId, defaultName) {
         var gd = document.getElementById(chartDivId);
         if (!gd || !gd.data) { if (typeof rtToast === 'function') rtToast('No plot to save', 'warn'); return; }
+        _ga('export_png', { chart: defaultName || chartDivId, module: 'realtime_tdr' });
         var fname = defaultName || chartDivId;
         // Build a timestamp suffix: YYYYMMDD_HHmmss
         var now = new Date();
@@ -182,6 +190,7 @@
 
     // ── Load files for a mission ─────────────────────────────────
     function loadFiles(mission) {
+        _ga('rt_select_mission', { mission: mission });
         var sel = document.getElementById('rt-file-select');
         var goBtn = document.getElementById('rt-go-btn');
         sel.innerHTML = '<option value="">Loading files…</option>';
@@ -241,6 +250,7 @@
     window.rtExploreFile = function () {
         var fileUrl = document.getElementById('rt-file-select').value;
         if (!fileUrl) return;
+        _ga('rt_explore_file', { file_url: fileUrl });
         _currentFileUrl = fileUrl;
         _rtDataCache = {};
         _rtCaseMeta = null;
@@ -330,6 +340,7 @@
         if (!_currentFileUrl) return;
         var variable = document.getElementById('rt-var').value;
         var level_km = document.getElementById('rt-level').value;
+        _ga('rt_generate_plot', { variable: variable, level_km: level_km });
         var overlay = (document.getElementById('rt-overlay') || {}).value || '';
         var resultDiv = document.getElementById('rt-display-area');
         var btn = document.getElementById('rt-gen-btn');
@@ -963,6 +974,7 @@
     }
 
     function rtFetchCrossSection(a, b) {
+        _ga('rt_cross_section', {});
         var variable = document.getElementById('rt-var').value;
         var overlay = (document.getElementById('rt-overlay') || {}).value || '';
         var csResult = document.getElementById('rt-cs-result');
@@ -1056,6 +1068,7 @@
     };
 
     function rtOpen3DModal() {
+        _ga('rt_view_3d_volume', {});
         if (!_rtLast3DJson) return;
         // Reuse the existing vol3DModal from index.html
         // Store and swap the global _last3DJson temporarily
@@ -1681,6 +1694,7 @@
 
     // ── Two-phase IR fetch ───────────────────────────────────────
     function rtFetchIR() {
+        _ga('rt_fetch_ir', {});
         if (!_currentFileUrl || _rtIRFetching) return;
         _rtIRFetching = true;
         _rtIRAllLoaded = false;
