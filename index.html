@@ -20,17 +20,17 @@
     <meta property="og:title" content="TC-ATLAS — Tropical Cyclone Analysis Tool for Live and Archived Structure">
     <meta property="og:description" content="A multi-source platform for exploring tropical cyclone vortex structure with airborne radar, satellite imagery, and environmental diagnostics.">
     <meta property="og:url" content="https://michaelfischerwx.github.io/TC-ATLAS/">
-    <meta property="og:image" content="https://michaelfischerwx.github.io/TC-RADAR/images/og-preview.png">
+    <meta property="og:image" content="https://michaelfischerwx.github.io/TC-ATLAS/images/og-preview.png">
     <meta property="og:site_name" content="TC-ATLAS">
 
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="TC-ATLAS — Tropical Cyclone Analysis Tool for Live and Archived Structure">
     <meta name="twitter:description" content="A multi-source platform for exploring tropical cyclone vortex structure with airborne radar, satellite imagery, and environmental diagnostics.">
-    <meta name="twitter:image" content="https://michaelfischerwx.github.io/TC-RADAR/images/og-preview.png">
+    <meta name="twitter:image" content="https://michaelfischerwx.github.io/TC-ATLAS/images/og-preview.png">
 
     <!-- Favicon -->
-    <link rel="icon" type="image/png" href="../TC-RADAR/tc-atlas-icon.png">
+    <link rel="icon" type="image/png" href="tc-atlas-icon.png">
 
     <title>TC-ATLAS — Tropical Cyclone Analysis Tool for Live and Archived Structure</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -94,8 +94,8 @@
             pointer-events: none;
         }
         .hero-icon {
-            width: 72px;
-            height: 72px;
+            width: 96px;
+            height: 96px;
             border-radius: 16px;
             margin-bottom: 2rem;
             filter: drop-shadow(0 0 30px rgba(0, 212, 255, 0.3));
@@ -285,7 +285,7 @@
     <header class="topbar" role="banner">
         <div class="topbar-inner">
             <div class="topbar-brand">
-                <img src="../TC-RADAR/tc-atlas-icon.png" alt="TC-ATLAS" class="topbar-icon" width="28" height="28">
+                <img src="tc-atlas-icon.png" alt="TC-ATLAS" class="topbar-icon" width="28" height="28">
                 <div class="topbar-logo" role="heading" aria-level="1">TC-ATLAS</div>
             </div>
             <nav aria-label="Main navigation">
@@ -301,14 +301,14 @@
 
     <!-- ── Hero ──────────────────────────────────────────── -->
     <section class="hero">
-        <img src="../TC-RADAR/tc-atlas-icon.png" alt="" class="hero-icon" aria-hidden="true">
+        <img src="tc-atlas-icon.png" alt="" class="hero-icon" aria-hidden="true">
         <h1 class="hero-title">TC-ATLAS</h1>
         <p class="hero-subtitle">Tropical Cyclone Analysis Tool for Live and Archived Structure</p>
         <p class="hero-desc">A multi-source platform for exploring tropical cyclone vortex structure. TC-ATLAS brings together airborne Doppler radar, passive microwave and infrared satellite imagery, ERA5 environmental diagnostics, dropsonde profiles, and flight-level observations into one unified interactive tool.</p>
 
         <!-- ── Platform cards ────────────────────────────── -->
         <div class="platform-grid" id="tools">
-            <a href="../TC-RADAR/" class="platform-card card-radar">
+            <a href="explorer.html" class="platform-card card-radar">
                 <div class="card-icon">&#127744;</div>
                 <div class="card-title">TC-RADAR Archive</div>
                 <div class="card-desc">Explore 1,500+ post-processed airborne Doppler radar analyses with interactive 3D wind fields, cross-sections, azimuthal means, and multi-variable visualization spanning 1997&ndash;2024.</div>
@@ -320,7 +320,7 @@
                 <span class="card-arrow">&rarr;</span>
             </a>
 
-            <a href="../TC-RADAR/#rt" class="platform-card card-realtime" onclick="sessionStorage.setItem('openRT','1')">
+            <a href="explorer.html#rt" class="platform-card card-realtime" onclick="sessionStorage.setItem('openRT','1')">
                 <div class="card-icon">&#128225;</div>
                 <div class="card-title">Real-Time TDR</div>
                 <div class="card-desc">Monitor active hurricane reconnaissance missions with live tail Doppler radar visualizations, flight-level data, dropsonde profiles, and SHIPS environmental diagnostics.</div>
@@ -331,7 +331,7 @@
                 <span class="card-arrow">&rarr;</span>
             </a>
 
-            <a href="../TC-RADAR/global_archive.html" class="platform-card card-global">
+            <a href="global_archive.html" class="platform-card card-global">
                 <div class="card-icon">&#127758;</div>
                 <div class="card-title">Global Archive</div>
                 <div class="card-desc">Browse the complete IBTrACS tropical cyclone record from 1842 to present with satellite imagery, intensity timelines, climatology, and multi-storm comparison tools.</div>
@@ -343,7 +343,7 @@
                 <span class="card-arrow">&rarr;</span>
             </a>
 
-            <a href="../TC-RADAR/#composites" class="platform-card card-composites" onclick="sessionStorage.setItem('openComposites','1')">
+            <a href="explorer.html#composites" class="platform-card card-composites" onclick="sessionStorage.setItem('openComposites','1')">
                 <div class="card-icon">&#128202;</div>
                 <div class="card-title">Composites</div>
                 <div class="card-desc">Build custom composite analyses from the TC-RADAR database. Filter by intensity, shear, tilt, motion, and more to reveal systematic structural patterns across tropical cyclones.</div>
@@ -364,7 +364,7 @@
             <div class="source-grid">
                 <div class="source-card">
                     <h4>Airborne Doppler Radar</h4>
-                    <p>Post-processed NOAA P-3 tail Doppler radar analyses providing full 3D wind fields, reflectivity, and derived vortex diagnostics via the <a href="../TC-RADAR/">TC-RADAR database</a>.</p>
+                    <p>Post-processed NOAA P-3 tail Doppler radar analyses providing full 3D wind fields, reflectivity, and derived vortex diagnostics via the <a href="explorer.html">TC-RADAR database</a>.</p>
                 </div>
                 <div class="source-card">
                     <h4>Passive Microwave Satellite</h4>
@@ -394,7 +394,7 @@
     <section id="about">
         <div class="content-section">
             <h2 class="section-title">About <span class="accent">TC-ATLAS</span></h2>
-            <p class="section-desc">TC-ATLAS was developed by Dr. Michael Fischer at the University of Miami to enable researchers to conduct storm-to-storm comparisons and climatological analyses of tropical cyclone vortex and convective characteristics across all stages of the lifecycle. The platform is built around the <a href="../TC-RADAR/" style="color:var(--cyan);">TC-RADAR database</a>, developed in collaboration with NOAA's Hurricane Research Division, and continues to expand with new data sources and capabilities.</p>
+            <p class="section-desc">TC-ATLAS was developed by Dr. Michael Fischer at the University of Miami to enable researchers to conduct storm-to-storm comparisons and climatological analyses of tropical cyclone vortex and convective characteristics across all stages of the lifecycle. The platform is built around the <a href="explorer.html" style="color:var(--cyan);">TC-RADAR database</a>, developed in collaboration with NOAA's Hurricane Research Division, and continues to expand with new data sources and capabilities.</p>
         </div>
     </section>
 

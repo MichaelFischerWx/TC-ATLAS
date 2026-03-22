@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <!-- Google Analytics (GA4) -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-EFM8GFFKLK"></script>
+    <script>
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){dataLayer.push(arguments);}
+        gtag('js', new Date());
+        gtag('config', 'G-EFM8GFFKLK');
+    </script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="TC-ATLAS: Tropical Cyclone Analysis Tool for Live and Archived Structure. Explore 1,500+ airborne Doppler radar analyses of tropical cyclones (1997–2024) with 3D vortex structure, IR satellite imagery, microwave overlays, ERA5 environmental diagnostics, and more.">
+    <meta name="keywords" content="tropical cyclone, hurricane, radar, TC-ATLAS, airborne Doppler, vortex structure, NOAA, HRD, wind analysis, microwave, satellite">
+    <meta name="author" content="Dr. Michael Fischer, University of Miami / NOAA HRD">
+
+    <!-- Open Graph / Social Sharing -->
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="TC-ATLAS — Tropical Cyclone Analysis Tool for Live and Archived Structure">
+    <meta property="og:description" content="Explore 1,500+ airborne Doppler radar analyses of tropical cyclones. Interactive 3D wind fields, IR satellite overlays, microwave imagery, ERA5 environmental diagnostics, and compositing tools.">
+    <meta property="og:url" content="https://michaelfischerwx.github.io/TC-ATLAS/explorer">
+    <meta property="og:image" content="https://michaelfischerwx.github.io/TC-ATLAS/images/og-preview.png">
+    <meta property="og:site_name" content="TC-ATLAS">
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="TC-ATLAS — Tropical Cyclone Analysis Tool for Live and Archived Structure">
+    <meta name="twitter:description" content="Explore 1,500+ airborne Doppler radar analyses of tropical cyclones with interactive 3D visualization, microwave imagery, and environmental diagnostics.">
+    <meta name="twitter:image" content="https://michaelfischerwx.github.io/TC-ATLAS/images/og-preview.png">
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/png" href="tc-atlas-icon.png">
+
+    <title>TC-ATLAS — Tropical Cyclone Analysis Tool for Live and Archived Structure</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="tc_radar_styles.css">
+    <link rel="stylesheet" href="realtime_tdr_styles.css">
+</head>
+<body>
+    <a href="#map-section" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
+    <header class="topbar" role="banner">
+        <div class="topbar-inner">
+            <div class="topbar-brand">
+                <img src="tc-atlas-icon.png" alt="TC-ATLAS" class="topbar-icon" width="28" height="28">
+                <div class="topbar-logo" role="heading" aria-level="1">TC-ATLAS</div>
+                <div class="topbar-divider"></div>
+                <div class="topbar-subtitle">Structure Analysis</div>
+            </div>
+            <div class="topbar-stats">
+                <div class="topbar-stat"><span class="topbar-stat-val" id="total-cases">&mdash;</span><span class="topbar-stat-label">Analyses</span></div>
+                <div class="topbar-stat"><span class="topbar-stat-val" id="unique-storms">&mdash;</span><span class="topbar-stat-label">Storms</span></div>
+                <div class="topbar-stat"><span class="topbar-stat-val" id="year-range">&mdash;</span><span class="topbar-stat-label">Coverage</span></div>
+                <span class="topbar-version">v3m</span>
+            </div>
+            <nav aria-label="Main navigation">
+            <ul class="topbar-nav">
+                <li><a href="index.html" role="button">Home</a></li>
+                <li><a href="javascript:void(0)" onclick="showArchiveTab()" role="button" id="archive-nav-link">TC-RADAR</a></li>
+                <li><a href="javascript:void(0)" onclick="toggleRealtimeTab()" role="button" id="rt-nav-link" class="rt-nav-highlight"><span class="nav-full">Real-Time TDR</span><span class="nav-short">RT TDR</span></a></li>
+                <li><a href="javascript:void(0)" onclick="toggleCompositePanel()" role="button"><span class="nav-full">Composites</span><span class="nav-short">Comp.</span></a></li>
+                <li><a href="global_archive.html" role="button"><span class="nav-full">Global Archive</span><span class="nav-short">Global</span></a></li>
+                <li><a href="#about">About</a></li>
+                <li><a href="#tc-radar-db">TC-RADAR</a></li>
+                <li><a href="#contact">Contact</a></li>
+            </ul>
+            </nav>
+        </div>
+    </header>
+
+    <section id="map-section" role="main" aria-label="TC-RADAR Map Explorer">
+        <div class="map-toolbar" role="toolbar" aria-label="Case selection and filters">
+            <div class="toolbar-group">
+                <label class="toolbar-label" for="year-select">Year</label>
+                <select id="year-select" class="toolbar-select" style="min-width:100px;" aria-label="Select year"><option value="">All Years</option></select>
+            </div>
+            <div class="toolbar-group">
+                <label class="toolbar-label" for="storm-select">Storm</label>
+                <select id="storm-select" class="toolbar-select" style="min-width:160px;" aria-label="Select storm"><option value="">All Storms</option></select>
+            </div>
+            <div class="toolbar-group">
+                <label class="toolbar-label" for="case-select">Case</label>
+                <select id="case-select" class="toolbar-select" style="min-width:260px;" disabled aria-label="Select case"><option value="">← Select a storm first</option></select>
+            </div>
+            <button class="toolbar-explore-btn" id="explore-btn" onclick="exploreCaseGo()" disabled aria-label="Explore selected case">Explore →</button>
+            <div class="toolbar-sep" aria-hidden="true"></div>
+            <button class="filter-toggle-btn" id="filter-toggle" onclick="toggleFilterDrawer()" aria-expanded="false" aria-controls="filter-drawer"><span style="font-size:13px;" aria-hidden="true">&#9881;</span> Filters</button>
+            <button class="toolbar-reset" onclick="resetFilters()" aria-label="Reset all filters">Reset</button>
+            <span class="toolbar-count" aria-live="polite"><span id="filtered-count">0</span> / <span id="total-count">0</span> cases</span>
+        </div>
+        <div class="filter-drawer" id="filter-drawer" role="region" aria-label="Filter controls">
+            <div class="filter-grid">
+                <div class="filter-group">
+                    <label>Intensity Range (kt)</label>
+                    <div class="slider-values"><span id="min-intensity-value">0</span><span id="max-intensity-value">200</span></div>
+                    <div class="slider-wrapper"><div class="slider-track"></div><div class="slider-range" id="intensity-range-fill"></div><input type="range" id="min-intensity" min="0" max="200" value="0" step="5"><input type="range" id="max-intensity" min="0" max="200" value="200" step="5"></div>
+                </div>
+                <div class="filter-group">
+                    <label>24-h Intensity Change (kt)</label>
+                    <div class="slider-values"><span id="min-vmax-change-value">-100</span><span id="max-vmax-change-value">85</span></div>
+                    <div class="slider-wrapper"><div class="slider-track"></div><div class="slider-range" id="vmax-change-range-fill"></div><input type="range" id="min-vmax-change" min="-100" max="85" value="-100" step="5"><input type="range" id="max-vmax-change" min="-100" max="85" value="85" step="5"></div>
+                </div>
+                <div class="filter-group">
+                    <label>Tilt Magnitude (km)</label>
+                    <div class="slider-values"><span id="min-tilt-value">0</span><span id="max-tilt-value">200</span></div>
+                    <div class="slider-wrapper"><div class="slider-track"></div><div class="slider-range" id="tilt-range-fill"></div><input type="range" id="min-tilt" min="0" max="200" value="0" step="5"><input type="range" id="max-tilt" min="0" max="200" value="200" step="5"></div>
+                </div>
+                <div class="filter-group">
+                    <label>Max TDR Wind &mdash; 0.5 km (m/s)</label>
+                    <div class="slider-values"><span id="min-wspd05-value">0</span><span id="max-wspd05-value">100</span></div>
+                    <div class="slider-wrapper"><div class="slider-track"></div><div class="slider-range" id="wspd05-range-fill"></div><input type="range" id="min-wspd05" min="0" max="100" value="0" step="2"><input type="range" id="max-wspd05" min="0" max="100" value="100" step="2"></div>
+                </div>
+                <div class="filter-group">
+                    <label>Max TDR Wind &mdash; 2.0 km (m/s)</label>
+                    <div class="slider-values"><span id="min-wspd20-value">0</span><span id="max-wspd20-value">100</span></div>
+                    <div class="slider-wrapper"><div class="slider-track"></div><div class="slider-range" id="wspd20-range-fill"></div><input type="range" id="min-wspd20" min="0" max="100" value="0" step="2"><input type="range" id="max-wspd20" min="0" max="100" value="100" step="2"></div>
+                </div>
+                <div class="filter-group">
+                    <label>Year Range</label>
+                    <div style="display:flex;gap:8px;align-items:center;margin-top:4px;">
+                        <input type="number" id="min-year" min="1997" max="2024" value="1997">
+                        <span style="color:var(--slate);font-size:0.8rem;">to</span>
+                        <input type="number" id="max-year" min="1997" max="2024" value="2024">
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div id="map-wrapper">
+            <div id="map-container">
+                <div id="loading"><div class="spinner"></div><div>Loading TC-RADAR data&hellip;</div></div>
+                <div id="map" role="application" aria-label="Interactive map showing TC-RADAR case locations"></div>
+                <div class="scroll-prompt"><span>Scroll for details</span><div class="arrow"></div></div>
+            </div>
+            <div id="side-panel"><div id="side-panel-inner"><button id="side-panel-close" onclick="closeSidePanel()">&times;</button></div></div>
+        </div>
+    </section>
+
+    <!-- ══════════════════════════════════════════════════════════ -->
+    <!-- Real-Time TDR Section (hidden by default)                 -->
+    <!-- ══════════════════════════════════════════════════════════ -->
+    <section id="realtime-section" style="display:none;" role="main" aria-label="Real-Time TDR Visualization">
+        <div class="rt-header">
+            <h2 class="rt-header-title">Real-Time TDR Analysis</h2>
+            <p class="rt-header-desc">Browse and visualize real-time Tail Doppler Radar analyses from NOAA P-3 reconnaissance missions.</p>
+        </div>
+
+        <!-- Mission / File selection toolbar -->
+        <div class="rt-toolbar">
+            <div class="toolbar-group">
+                <label class="toolbar-label" for="rt-mission-select">Mission</label>
+                <select id="rt-mission-select" class="toolbar-select" style="min-width:200px;">
+                    <option value="">Select a mission…</option>
+                </select>
+            </div>
+            <div class="toolbar-group">
+                <label class="toolbar-label" for="rt-file-select">Analysis</label>
+                <select id="rt-file-select" class="toolbar-select" style="min-width:320px;" disabled>
+                    <option value="">← Select a mission first</option>
+                </select>
+            </div>
+            <button class="toolbar-explore-btn" id="rt-go-btn" onclick="rtExploreFile()" disabled>Explore →</button>
+        </div>
+
+        <!-- Visualization panel (shown after file selected) -->
+        <div id="rt-viz-panel" class="rt-viz-panel" style="display:none;">
+            <div class="rt-viz-layout">
+                <!-- LEFT (30%): Leaflet map with IR overlay + storm marker -->
+                <div class="rt-viz-map-panel">
+                    <div id="rt-map-wrapper" class="rt-map-wrapper">
+                        <div id="rt-map" style="width:100%;height:100%;"></div>
+                        <!-- IR animation controls injected here by JS -->
+                    </div>
+                </div>
+
+                <!-- RIGHT (70%): Explorer layout (plot left, controls right) -->
+                <div class="rt-viz-content-panel">
+                    <div class="explorer-layout">
+                        <!-- LEFT: Plot display + action buttons -->
+                        <div class="explorer-display">
+                            <div id="rt-display-area"></div>
+                            <div class="overlay-strip" style="margin-top:8px;">
+                                <span class="overlay-strip-label">Layers</span>
+                                <button class="overlay-pill" id="rt-ir-underlay-btn" onclick="rtToggleIRUnderlay()" disabled data-color="cyan" title="IR Satellite Underlay">🛰 IR</button>
+                                <button class="overlay-pill" id="rt-fl-btn" onclick="rtToggleFlightLevel()" disabled data-color="blue" title="Flight-Level Data">✈ FL</button>
+                                <button class="overlay-pill" id="rt-sonde-btn" onclick="rtToggleDropsondes()" disabled data-color="green" title="Dropsonde Data">🪂 Sondes</button>
+                                <button class="overlay-pill" id="rt-barb-btn" onclick="rtToggleBarbs()" disabled data-color="slate" title="Wind Barbs">🌬 Barbs</button>
+                                <button class="overlay-pill" id="rt-tilt-btn" onclick="rtToggleTilt()" disabled data-color="pink" title="Vortex Tilt Profile">🎯 Tilt</button>
+                                <button class="overlay-pill" id="rt-mw-overlay-btn" onclick="rtToggleMicrowaveOverlay()" data-color="orange" title="Microwave Satellite Overlay">📡 MW</button>
+                            </div>
+                            <!-- Microwave overpass selector (hidden by default) -->
+                            <div id="rt-mw-overpass-panel" style="display:none;margin-top:6px;background:rgba(30,41,59,0.95);border:1px solid rgba(251,146,60,0.35);border-radius:8px;padding:8px 12px;">
+                                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                                    <label style="font-size:10px;font-weight:600;color:#fdba74;text-transform:uppercase;letter-spacing:0.5px;">Overpass</label>
+                                    <select id="rt-mw-overpass-select" onchange="rtLoadMicrowaveOverpass()" style="flex:1;min-width:180px;font-size:10px;padding:4px 6px;border:1px solid rgba(255,255,255,0.1);border-radius:4px;background:var(--navy);color:var(--text);font-family:'JetBrains Mono',monospace;"></select>
+                                    <label style="font-size:10px;color:#9ca3af;">Product</label>
+                                    <select id="rt-mw-product-select" onchange="rtLoadMicrowaveOverpass()" style="font-size:10px;padding:4px 6px;border:1px solid rgba(255,255,255,0.1);border-radius:4px;background:var(--navy);color:var(--text);font-family:'JetBrains Mono',monospace;">
+                                        <option value="89pct">89 GHz PCT</option>
+                                        <option value="37h">37 GHz H-pol</option>
+                                    </select>
+                                    <span id="rt-mw-status" style="font-size:9px;color:#64748b;"></span>
+                                    <span style="font-size:8px;color:#64748b;margin-left:auto;">Data: <a href="https://rammb-data.cira.colostate.edu/tcprimed/" target="_blank" rel="noopener" style="color:#94a3b8;text-decoration:none;border-bottom:1px dotted #64748b;">TC-PRIMED</a> (NOAA/CSU)</span>
+                                </div>
+                            </div>
+                            <div class="action-section">
+                                <span class="action-section-label">Analysis</span>
+                                <div class="display-actions">
+                                <button class="cs-btn" id="rt-cs-btn" onclick="rtToggleCrossSection()" disabled>✂ Cross Section</button>
+                                <button class="cs-btn" id="rt-az-btn" onclick="rtFetchAzimuthalMean()" disabled>↻ Azim. Mean</button>
+                                <button class="cs-btn" id="rt-quad-btn" onclick="rtFetchQuadrants()" disabled style="background:rgba(251,146,60,0.12);border-color:rgba(251,146,60,0.35);color:#fdba74;">⊙ Shear Quads</button>
+                                <button class="cs-btn" id="rt-vol-btn" onclick="rtFetch3DVolume()" disabled>🖥 3D Volume</button>
+                                <button class="cs-btn" id="rt-anomaly-btn" onclick="rtFetchAnomaly()" disabled style="background:rgba(52,211,153,0.12);border-color:rgba(52,211,153,0.35);color:#6ee7b7;">Z* Anomaly</button>
+                                <button class="cs-btn" id="rt-vp-btn" onclick="rtFetchVPScatter()" disabled style="background:rgba(251,191,36,0.12);border-color:rgba(251,191,36,0.35);color:#fde68a;">⬤ VP Scatter</button>
+                                <button class="cs-btn" id="rt-cfad-btn" onclick="rtToggleCFADConfig()" disabled style="background:rgba(168,85,247,0.12);border-color:rgba(168,85,247,0.35);color:#c4b5fd;">▓ CFAD</button>
+                                </div>
+                            </div>
+                            <!-- CFAD config panel (inline, hidden by default) -->
+                            <div id="rt-cfad-config-popover" style="display:none;margin-top:6px;background:rgba(30,41,59,0.95);border:1px solid rgba(168,85,247,0.35);border-radius:8px;padding:10px 12px;">
+                                <div style="font-size:10px;font-weight:600;color:#c4b5fd;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">▓ CFAD Options</div>
+                                <div style="display:flex;flex-wrap:wrap;gap:8px 16px;">
+                                    <div style="display:flex;align-items:center;gap:6px;"><label style="font-size:10px;color:#9ca3af;width:70px;flex-shrink:0;">Bin Width</label><input type="number" id="rt-cfad-bin-width" placeholder="auto" min="0.1" step="any" style="width:65px;padding:3px 6px;font-size:10px;border:1px solid rgba(255,255,255,0.1);border-radius:4px;background:var(--navy);color:var(--text);font-family:'JetBrains Mono',monospace;"></div>
+                                    <div style="display:flex;align-items:center;gap:6px;"><label style="font-size:10px;color:#9ca3af;width:50px;flex-shrink:0;"># Bins</label><input type="number" id="rt-cfad-n-bins" value="40" min="5" max="200" step="1" style="width:55px;padding:3px 6px;font-size:10px;border:1px solid rgba(255,255,255,0.1);border-radius:4px;background:var(--navy);color:var(--text);font-family:'JetBrains Mono',monospace;"><span style="font-size:8px;color:#6b7280;">(if no width)</span></div>
+                                    <div style="display:flex;align-items:center;gap:6px;"><label style="font-size:10px;color:#9ca3af;width:70px;flex-shrink:0;">Bin Range</label><input type="number" id="rt-cfad-bin-min" placeholder="auto" step="any" style="width:55px;padding:3px 6px;font-size:10px;border:1px solid rgba(255,255,255,0.1);border-radius:4px;background:var(--navy);color:var(--text);font-family:'JetBrains Mono',monospace;"><span style="font-size:9px;color:#6b7280;">to</span><input type="number" id="rt-cfad-bin-max" placeholder="auto" step="any" style="width:55px;padding:3px 6px;font-size:10px;border:1px solid rgba(255,255,255,0.1);border-radius:4px;background:var(--navy);color:var(--text);font-family:'JetBrains Mono',monospace;"></div>
+                                    <div style="display:flex;align-items:center;gap:6px;"><label style="font-size:10px;color:#9ca3af;width:70px;flex-shrink:0;">Normalise</label><select id="rt-cfad-normalise" style="font-size:10px;padding:3px 4px;border:1px solid rgba(255,255,255,0.1);border-radius:4px;background:var(--navy);color:var(--text);font-family:'JetBrains Mono',monospace;"><option value="height">% at Each Height</option><option value="total">% of Total</option><option value="raw">Raw Counts</option></select></div>
+                                    <div style="display:flex;align-items:center;gap:6px;"><label style="font-size:10px;color:#9ca3af;width:70px;flex-shrink:0;">Radial (km)</label><input type="number" id="rt-cfad-min-radius" value="0" min="0" max="500" step="any" style="width:55px;padding:3px 6px;font-size:10px;border:1px solid rgba(255,255,255,0.1);border-radius:4px;background:var(--navy);color:var(--text);font-family:'JetBrains Mono',monospace;"><span style="font-size:9px;color:#6b7280;">to</span><input type="number" id="rt-cfad-max-radius" value="200" min="0.1" max="500" step="any" style="width:55px;padding:3px 6px;font-size:10px;border:1px solid rgba(255,255,255,0.1);border-radius:4px;background:var(--navy);color:var(--text);font-family:'JetBrains Mono',monospace;"></div>
+                                    <div style="display:flex;align-items:center;gap:4px;"><input type="checkbox" id="rt-cfad-log-scale"><label for="rt-cfad-log-scale" style="font-size:10px;color:#9ca3af;">Log-scale colorbar</label></div>
+                                </div>
+                                <div style="display:flex;gap:6px;margin-top:10px;">
+                                    <button onclick="rtFetchCFAD()" style="padding:6px 16px;font-size:11px;font-weight:700;border:none;border-radius:5px;background:rgba(168,85,247,0.5);color:#e9d5ff;cursor:pointer;font-family:'JetBrains Mono',monospace;transition:background 0.2s;" onmouseover="this.style.background='rgba(168,85,247,0.7)'" onmouseout="this.style.background='rgba(168,85,247,0.5)'">Generate CFAD</button>
+                                    <button onclick="rtToggleCFADConfig()" style="padding:6px 12px;font-size:11px;font-weight:700;border:1px solid rgba(255,255,255,0.1);border-radius:5px;background:transparent;color:#9ca3af;cursor:pointer;font-family:'JetBrains Mono',monospace;">Cancel</button>
+                                </div>
+                            </div>
+                            <select id="rt-sonde-select" onchange="rtSelectSonde(this.value)" disabled style="display:none; background:#1a1a2e; color:#c4b5fd; border:1px solid rgba(168,85,247,0.35); border-radius:6px; padding:4px 8px; font-size:11px; cursor:pointer; max-width:220px; margin-top:4px;">
+                                <option value="">🪂 Select Sonde…</option>
+                            </select>
+                            <div id="rt-cs-result"></div>
+                            <div id="rt-cs-status" class="cs-status"></div>
+                            <div id="rt-az-result"></div>
+                            <div id="rt-quad-result"></div>
+                            <div id="rt-anomaly-result"></div>
+                            <div id="rt-vp-result"></div>
+                            <!-- Dropsonde Table + Wind Profile (shown when sondes loaded) -->
+                            <div id="rt-sonde-table-panel" style="display:none;"></div>
+                            <div id="rt-sonde-wind-panel" style="display:none;">
+                                <div style="display:flex;align-items:flex-start;justify-content:space-between;padding:2px 6px;">
+                                    <div id="rt-wind-title" style="color:#e5e7eb;font-size:11px;font-weight:600;flex:1;min-width:0;"></div>
+                                    <div style="display:flex;align-items:center;flex-shrink:0;margin-left:4px;">
+                                        <button onclick="rtSavePlotPNG('rt-sonde-wind','WindProfile')" title="Save as PNG" class="rt-save-png-btn" style="margin-right:4px;"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg></button>
+                                        <button onclick="document.getElementById('rt-sonde-wind-panel').style.display='none'" class="cs-btn" style="padding:0 6px;font-size:13px;line-height:1;">&times;</button>
+                                    </div>
+                                </div>
+                                <div id="rt-sonde-wind" style="width:100%;height:420px;"></div>
+                                <div id="rt-sonde-wind-info" style="padding:4px 8px;"></div>
+                            </div>
+                            <!-- Dropsonde Skew-T panel (shown on sonde click) -->
+                            <div id="rt-sonde-skewt-panel" style="display:none;">
+                                <div style="display:flex; align-items:center; padding:6px 12px; background:rgba(168,85,247,0.08); border-top:1px solid rgba(168,85,247,0.2);">
+                                    <span id="rt-skewt-title" style="color:#c4b5fd; font-size:13px; font-weight:600; flex:1;"></span>
+                                    <select id="rt-skewt-sonde-select" onchange="rtSelectSonde(this.value)" style="background:#1a1a2e; color:#c4b5fd; border:1px solid rgba(168,85,247,0.35); border-radius:4px; padding:2px 6px; font-size:11px; cursor:pointer; margin-left:8px; max-width:180px;"></select>
+                                    <button onclick="rtSavePlotPNG('rt-sonde-skewt','SkewT')" class="rt-save-png-btn" style="margin-left:6px;" title="Save as PNG"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg></button>
+                                    <button onclick="rtCloseSkewT()" style="margin-left:8px; background:none; border:none; color:#888; cursor:pointer; font-size:18px; line-height:1;" title="Close Skew-T">&times;</button>
+                                </div>
+                                <div style="display:flex; gap:0;">
+                                    <div id="rt-sonde-skewt" style="flex:1; height:450px;"></div>
+                                    <div id="rt-sonde-skewt-info" style="width:260px; height:450px; overflow-y:auto; font-size:11px; color:#9ca3af; padding:8px;"></div>
+                                </div>
+                            </div>
+                            <!-- Flight-Level Along-Track Time Series panel -->
+                            <div id="rt-fl-timeseries-panel" style="display:none;">
+                                <div class="fl-ts-header">
+                                    <span class="fl-ts-title">✈ Along-Track Time Series</span>
+                                    <div class="fl-ts-controls">
+                                        <div class="fl-ts-res-group">
+                                            <span class="fl-ts-res-label">Avg:</span>
+                                            <button id="rt-fl-res-1s" class="fl-ts-res-btn active" onclick="rtFLToggleRes('1s')" title="1-second (raw)">1 s</button>
+                                            <button id="rt-fl-res-10s" class="fl-ts-res-btn active" onclick="rtFLToggleRes('10s')" title="10-second average">10 s</button>
+                                            <button id="rt-fl-res-30s" class="fl-ts-res-btn active" onclick="rtFLToggleRes('30s')" title="30-second average">30 s</button>
+                                        </div>
+                                        <div id="rt-fl-ts-vars" class="fl-ts-var-group">
+                                            <button class="fl-ts-var-btn active" data-var="fl_wspd_ms" onclick="rtFLToggleVar(this)" style="--var-color:#60a5fa">FL Wind</button>
+                                            <button class="fl-ts-var-btn active" data-var="tdr_wspd_fl_alt" onclick="rtFLToggleVar(this)" style="--var-color:#f472b6">TDR@FL</button>
+                                            <button class="fl-ts-var-btn active" data-var="tdr_wspd_0p5km" onclick="rtFLToggleVar(this)" style="--var-color:#34d399">TDR 0.5km</button>
+                                            <button class="fl-ts-var-btn" data-var="tdr_wspd_2km" onclick="rtFLToggleVar(this)" style="--var-color:#c084fc">TDR 2km</button>
+                                            <button class="fl-ts-var-btn active" data-var="slp_hpa" onclick="rtFLToggleVar(this)" style="--var-color:#fbbf24">SLP</button>
+                                            <button class="fl-ts-var-btn" data-var="static_pres_hpa" onclick="rtFLToggleVar(this)" style="--var-color:#fb923c">Static P</button>
+                                            <button class="fl-ts-var-btn" data-var="temp_c" onclick="rtFLToggleVar(this)" style="--var-color:#f87171">Temp</button>
+                                            <button class="fl-ts-var-btn" data-var="dewpoint_c" onclick="rtFLToggleVar(this)" style="--var-color:#a78bfa">Dewpt</button>
+                                            <button class="fl-ts-var-btn" data-var="gps_alt_m" onclick="rtFLToggleVar(this)" style="--var-color:#6b7280">Alt</button>
+                                        </div>
+                                        <button onclick="rtSavePlotPNG('rt-fl-ts-plot','FL_TimeSeries')" class="rt-save-png-btn" style="margin-left:4px;" title="Save as PNG"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg></button>
+                                        <button onclick="rtFLCloseTimeSeries()" class="fl-ts-close" title="Close time series">&times;</button>
+                                    </div>
+                                </div>
+                                <div id="rt-fl-ts-plot" style="width:100%; height:380px;"></div>
+                                <div style="text-align:center; padding:2px 0 6px; color:#64748b; font-size:10px;">Click and drag to zoom · Double-click to reset</div>
+                            </div>
+                        </div>
+
+                        <!-- RIGHT: Controls panel (280px sidebar) -->
+                        <div class="explorer-controls">
+                            <div id="rt-meta-panel" class="rt-meta-panel"></div>
+                            <div id="rt-ships-panel" class="rt-meta-panel" style="display:none; margin-top:8px; border-top:1px solid rgba(251,146,60,0.2); padding-top:8px;"></div>
+
+                            <div class="explorer-title" style="margin-top:12px;">🔬 Explore Data</div>
+                            <div class="explorer-row"><label>Variable</label>
+                                <select class="explorer-select" id="rt-var">
+                                    <option value="TANGENTIAL_WIND">Tangential Wind</option>
+                                    <option value="RADIAL_WIND">Radial Wind</option>
+                                    <option value="W">Vertical Velocity</option>
+                                    <option value="REFLECTIVITY">Reflectivity</option>
+                                    <option value="WIND_SPEED">Wind Speed</option>
+                                    <option value="VORT">Relative Vorticity</option>
+                                    <option value="U">Eastward Wind (U)</option>
+                                    <option value="V">Northward Wind (V)</option>
+                                    <option value="EARTH_REL_WSPD">Earth-Rel. Wind Speed</option>
+                                </select>
+                            </div>
+                            <div class="explorer-row"><label>Contour Overlay</label>
+                                <select class="explorer-select" id="rt-overlay" style="font-size:11px;">
+                                    <option value="">None</option>
+                                    <option value="TANGENTIAL_WIND">Tangential Wind</option>
+                                    <option value="RADIAL_WIND">Radial Wind</option>
+                                    <option value="W">Vertical Velocity</option>
+                                    <option value="REFLECTIVITY">Reflectivity</option>
+                                    <option value="WIND_SPEED">Wind Speed</option>
+                                    <option value="VORT">Relative Vorticity</option>
+                                </select>
+                                <div style="display:flex;align-items:center;gap:5px;margin-top:2px;">
+                                    <label style="font-size:9px;white-space:nowrap;margin:0;">Int:</label>
+                                    <input type="number" id="rt-contour-int" value="" placeholder="auto" style="width:55px;padding:2px 4px;font-size:10px;border:1px solid var(--border-light);border-radius:4px;background:var(--navy);color:var(--text);">
+                                </div>
+                            </div>
+                            <div class="explorer-row"><label>Colormap</label>
+                                <select class="explorer-select" id="rt-cmap" style="font-size:11px;" onchange="rtApplyCmap()">
+                                    <option value="">Default (from variable)</option>
+                                    <optgroup label="Sequential"><option value="Viridis">Viridis</option><option value="Inferno">Inferno</option><option value="Magma">Magma</option><option value="Plasma">Plasma</option><option value="Hot">Hot</option><option value="YlOrRd">YlOrRd</option><option value="Blues">Blues</option></optgroup>
+                                    <optgroup label="Diverging"><option value="RdBu">RdBu</option><option value='[[ 0,"rgb(5,10,172)"],[0.5,"rgb(255,255,255)"],[1,"rgb(178,10,28)"]]'>BuWtRd</option></optgroup>
+                                    <optgroup label="Other"><option value="Jet">Jet</option><option value="Rainbow">Rainbow</option><option value="Electric">Electric</option></optgroup>
+                                </select>
+                            </div>
+                            <div class="explorer-row"><label>Color Range</label>
+                                <div style="display:flex;align-items:center;gap:4px;">
+                                    <input type="number" id="rt-vmin" placeholder="min" step="any" style="width:60px;padding:2px 4px;font-size:10px;border:1px solid var(--border-light);border-radius:4px;background:var(--navy);color:var(--text);" onchange="rtApplyColorRange()">
+                                    <span style="font-size:10px;color:var(--slate);">to</span>
+                                    <input type="number" id="rt-vmax" placeholder="max" step="any" style="width:60px;padding:2px 4px;font-size:10px;border:1px solid var(--border-light);border-radius:4px;background:var(--navy);color:var(--text);" onchange="rtApplyColorRange()">
+                                    <button onclick="rtResetColorRange()" title="Reset" style="padding:2px 5px;font-size:9px;border:1px solid var(--border-light);border-radius:4px;background:var(--navy);cursor:pointer;color:var(--slate);">↺</button>
+                                </div>
+                            </div>
+                            <div class="explorer-row"><label>Height Level</label>
+                                <div class="explorer-level-row">
+                                    <input type="range" id="rt-level" min="0" max="18" step="0.5" value="2" oninput="document.getElementById('rt-level-val').textContent = parseFloat(this.value).toFixed(1)+' km'">
+                                    <span class="explorer-level-value" id="rt-level-val">2.0 km</span>
+                                </div>
+                                <div class="anim-controls">
+                                    <button class="anim-btn" onclick="rtAnimStep(-1)" title="Previous level">◀◀</button>
+                                    <button class="anim-btn" id="rt-anim-play" onclick="rtAnimToggle()" title="Play/Pause">▶</button>
+                                    <button class="anim-btn" onclick="rtAnimStep(1)" title="Next level">▶▶</button>
+                                </div>
+                            </div>
+
+                            <div class="explorer-row" style="margin-top:4px;"><label>Min. Coverage Threshold</label>
+                                <div class="explorer-level-row">
+                                    <input type="range" id="rt-az-coverage" min="0" max="100" value="50" step="5" style="flex:1;">
+                                    <span class="explorer-level-value" id="rt-az-cov-val">50%</span>
+                                </div>
+                            </div>
+
+                            <!-- SHIPS: auto-fetched after plot render; manual retry hidden by default -->
+                            <div id="rt-ships-status" style="margin-top:8px;font-size:10px;color:#6b7280;display:none;"></div>
+                            <div id="rt-ships-manual" style="display:none;margin-top:6px;">
+                                <div class="explorer-title" style="margin-top:0;">🌊 SHIPS Override</div>
+                                <div class="explorer-row"><label>Basin / Storm #</label>
+                                    <div style="display:flex;align-items:center;gap:4px;">
+                                        <select class="explorer-select" id="rt-ships-basin" style="width:60px;font-size:11px;">
+                                            <option value="">Auto</option>
+                                            <option value="AL">AL</option>
+                                            <option value="EP">EP</option>
+                                            <option value="CP">CP</option>
+                                            <option value="WP">WP</option>
+                                        </select>
+                                        <input type="number" id="rt-ships-stnum" min="0" max="50" value="0" placeholder="Auto" style="width:50px;padding:2px 4px;font-size:10px;border:1px solid var(--border-light);border-radius:4px;background:var(--navy);color:var(--text);">
+                                    </div>
+                                </div>
+                                <button class="cs-btn" id="rt-ships-btn" onclick="rtFetchSHIPS()" style="margin-top:4px;width:100%;background:rgba(251,146,60,0.12);border-color:rgba(251,146,60,0.35);color:#fdba74;">📡 Retry SHIPS</button>
+                            </div>
+
+                            <button class="generate-btn" id="rt-gen-btn" onclick="rtGeneratePlot()">Generate Plot</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Data source attribution -->
+        <div class="rt-attribution">
+            Data sources: <a href="https://seb.omao.noaa.gov/pub/flight/radar/" target="_blank" rel="noopener">NOAA AOC — SEB Radar Archive</a> · <a href="https://seb.omao.noaa.gov/pub/acdata/" target="_blank" rel="noopener">SEB Flight-Level Data</a> · <a href="https://seb.omao.noaa.gov/pub/flight/ASPEN_Data/" target="_blank" rel="noopener">SEB Dropsonde Archive</a>
+        </div>
+    </section>
+
+    <section id="about">
+        <div class="content-section">
+            <h2 class="section-title">About <span class="accent">TC-ATLAS</span></h2>
+            <p class="section-desc"><strong>TC-ATLAS</strong> &mdash; <em>Tropical Cyclone Analysis Tool for Live and Archived Structure</em> &mdash; provides a comprehensive, multi-source platform for exploring tropical cyclone vortex structure. Developed by Dr. Michael Fischer (University of Miami) in collaboration with NOAA's Hurricane Research Division, TC-ATLAS enables researchers to conduct storm-to-storm comparisons and climatological analyses of TC vortex and convective characteristics across all stages of the tropical cyclone lifecycle.</p>
+            <div class="feature-grid">
+                <div class="feature-card"><div class="feature-icon">&#128752;</div><h3>Multi-Source Integration</h3><p>Combines airborne Doppler radar, passive microwave and infrared satellite imagery, ERA5 reanalysis, flight-level data, and dropsonde profiles in a unified interactive environment.</p></div>
+                <div class="feature-card"><div class="feature-icon">&#128225;</div><h3>Real-Time Monitoring</h3><p>Track active NOAA hurricane reconnaissance missions with live tail Doppler radar visualizations, flight-level observations, and environmental diagnostics as they happen.</p></div>
+                <div class="feature-card"><div class="feature-icon">&#127758;</div><h3>Global Coverage</h3><p>Browse the complete IBTrACS record of tropical cyclones from 1842 to present with satellite imagery, intensity timelines, climatology, and multi-storm comparison tools.</p></div>
+            </div>
+        </div>
+    </section>
+
+    <section id="tc-radar-db" class="section-bg">
+        <div class="content-section">
+            <h2 class="section-title">The <span class="accent">TC-RADAR</span> Database</h2>
+            <p class="section-desc">The TC-RADAR dataset forms the backbone of TC-ATLAS, providing over 1,500 post-processed airborne Doppler radar analyses of tropical cyclones from 1997 to 2024. All analyses are mapped onto storm-centered grids at 2.0 km horizontal and 0.5 km vertical resolution, spanning 0&ndash;18 km in height.</p>
+            <div style="max-width:800px;margin:0 auto;">
+                <h3 style="color:var(--blue-light);margin-bottom:0.5rem;font-size:1.1rem;">Available Variables</h3>
+                <ul class="variables-list">
+                    <li>Eastward &amp; Northward Velocity</li><li>Vertical Velocity</li>
+                    <li>Radar Reflectivity</li><li>Wind Speed</li>
+                    <li>Tangential &amp; Radial Velocity</li><li>Relative Vorticity</li>
+                    <li>Divergence</li><li>Vortex Tilt Profiles</li><li>Radius of Maximum Wind</li>
+                </ul>
+                <h3 style="color:var(--blue-light);margin-top:2.5rem;margin-bottom:0.75rem;font-size:1.1rem;">Reference Frameworks</h3>
+                <div class="ref-grid">
+                    <div class="ref-card"><h4>Real-time Center Fix</h4><p>Based on operational center position during the mission</p></div>
+                    <div class="ref-card"><h4>2-km Recentered</h4><p>Using WCM method at 2 km reference height</p></div>
+                    <div class="ref-card"><h4>Vortex Tilt-Relative</h4><p>Recentered at every vertical level for tilt analysis</p></div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="download">
+        <div class="content-section">
+            <h2 class="section-title">Download <span class="accent">TC-RADAR</span></h2>
+            <p class="section-desc">TC-RADAR consists of four netCDF files, grouped by data type and time period. Each file is approximately 10 GB.</p>
+            <div class="data-files">
+                <div class="file-card"><h3>Swath Data</h3><p class="file-period">1997&ndash;2019</p><div class="file-size">~10 GB</div><a href="https://www.aoml.noaa.gov/ftp/pub/hrd/data/radar/level3/tc_radar_v3m_1997_2019_xy_rel_swath_ships.nc" class="download-btn" target="_blank">Download</a></div>
+                <div class="file-card"><h3>Swath Data</h3><p class="file-period">2020&ndash;2024</p><div class="file-size">~10 GB</div><a href="https://www.aoml.noaa.gov/ftp/pub/hrd/data/radar/level3/tc_radar_v3m_2020_2024_xy_rel_swath_ships.nc" class="download-btn" target="_blank">Download</a></div>
+                <div class="file-card"><h3>Merged Data</h3><p class="file-period">1997&ndash;2019</p><div class="file-size">~10 GB</div><a href="https://www.aoml.noaa.gov/ftp/pub/hrd/data/radar/level3/tc_radar_v3m_1997_2019_xy_rel_merge_ships.nc" class="download-btn" target="_blank">Download</a></div>
+                <div class="file-card"><h3>Merged Data</h3><p class="file-period">2020&ndash;2024</p><div class="file-size">~10 GB</div><a href="https://www.aoml.noaa.gov/ftp/pub/hrd/data/radar/level3/tc_radar_v3m_2020_2024_xy_rel_merge_ships.nc" class="download-btn" target="_blank">Download</a></div>
+            </div>
+            <div class="usage-policy">
+                <h3>&#128203; Usage Policy</h3>
+                <p>Users are free to download TC-RADAR. However, we request that you notify <strong>Dr. Michael Fischer</strong> (<a href="mailto:mike.fischer@miami.edu">mike.fischer@miami.edu</a>) and NOAA's Hurricane Research Division radar team lead, <strong>Dr. Paul Reasor</strong> (<a href="mailto:paul.reasor@noaa.gov">paul.reasor@noaa.gov</a>), of the nature of your research project to ensure proper usage. Users should carefully examine data and apply additional QC consistent with their objectives.</p>
+            </div>
+            <div class="citation-box">
+                <h3>&#128218; Citation</h3>
+                <p>Fischer, M. S., P. D. Reasor, R. F. Rogers, and J. F. Gamache, 2022: An updated tropical cyclone radar database. Mon. Wea. Rev., 150, 2255-2278, https://doi.org/10.1175/MWR-D-21-0223.1.</p>
+                <p style="margin-top:1rem;padding-top:0.75rem;border-top:1px solid var(--border);">
+                <strong style="color:var(--blue-light);">For vortex tilt analyses, also cite:</strong><br>Fischer, M. S., P. D. Reasor, J. P. Dunion, and R. F. Rogers, 2024: An Observational Analysis of the Relationship between Tropical Cyclone Vortex Tilt, Precipitation Structure, and Intensity Change. Mon. Wea. Rev., 152, 203-225, https://doi.org/10.1175/MWR-D-23-0089.1.</p>
+            </div>
+            <p style="margin-top:1.5rem;text-align:center;"><a href="https://www.aoml.noaa.gov/ftp/pub/hrd/data/radar/level3/TC_RADAR_README.pdf" target="_blank" style="color:var(--blue-light);font-size:0.9rem;">Full TC-RADAR Documentation (README PDF)</a></p>
+        </div>
+    </section>
+
+    <section id="acknowledgments" class="section-bg">
+        <div class="content-section">
+            <h2 class="section-title">Data Sources &amp; <span class="accent">Acknowledgments</span></h2>
+            <p class="section-desc">TC-ATLAS integrates data from multiple publicly available datasets. We gratefully acknowledge the following data providers.</p>
+            <div class="citation-box" style="margin-top:1.5rem;">
+                <h3 style="color:#fdba74;">Passive Microwave Satellite Imagery</h3>
+                <p><strong><a href="https://rammb-data.cira.colostate.edu/tcprimed/" target="_blank" rel="noopener" style="color:var(--blue-light);">TC-PRIMED</a></strong> &mdash; Tropical Cyclone PRecipitation, Infrared, Microwave, and Environmental Dataset (NOAA/NESDIS &amp; CSU/CIRA).</p>
+                <p style="margin-top:0.5rem;font-size:0.85rem;color:#94a3b8;">Razin, M. N., C. J. Slocum, J. A. Knaff, and P. J. Brown, 2023: Tropical Cyclone PRecipitation, Infrared, Microwave, and Environmental Dataset (TC PRIMED). V1.0. NOAA National Centers for Environmental Information. <a href="https://doi.org/10.25921/dmy1-0595" target="_blank" rel="noopener" style="color:var(--blue-light);">https://doi.org/10.25921/dmy1-0595</a></p>
+            </div>
+            <div class="citation-box" style="margin-top:1rem;">
+                <h3 style="color:#fdba74;">Infrared Satellite Imagery</h3>
+                <p><strong><a href="https://www.ncei.noaa.gov/products/gridded-geostationary-brightness-temperature" target="_blank" rel="noopener" style="color:var(--blue-light);">GridSat-B1</a></strong> &mdash; Geostationary IR Channel Brightness Temperature &mdash; Gridded Satellite Data (NOAA/NCEI CDR).</p>
+                <p style="margin-top:0.5rem;"><strong><a href="https://disc.gsfc.nasa.gov/datasets/GPM_MERGIR_1/summary" target="_blank" rel="noopener" style="color:var(--blue-light);">MergIR</a></strong> &mdash; NCEP/CPC L3 Half-Hourly Merged Global IR (NASA GES DISC).</p>
+                <p style="margin-top:0.5rem;"><strong>GOES ABI</strong> &mdash; Real-time Band 13 (10.3 &micro;m) imagery via the <a href="https://registry.opendata.aws/noaa-goes/" target="_blank" rel="noopener" style="color:var(--blue-light);">NOAA Open Data Dissemination Program</a>.</p>
+            </div>
+            <div class="citation-box" style="margin-top:1rem;">
+                <h3 style="color:#fdba74;">Environmental &amp; Best-Track Data</h3>
+                <p><strong><a href="https://www.ecmwf.int/en/forecasts/dataset/ecmwf-reanalysis-v5" target="_blank" rel="noopener" style="color:var(--blue-light);">ERA5</a></strong> &mdash; ECMWF Reanalysis v5. Hersbach, H. et al., 2020. <em>Q. J. R. Meteorol. Soc.</em>, 146, 1999&ndash;2049. <a href="https://doi.org/10.1002/qj.3803" target="_blank" rel="noopener" style="color:var(--blue-light);">doi:10.1002/qj.3803</a></p>
+                <p style="margin-top:0.5rem;"><strong><a href="https://www.ncei.noaa.gov/products/international-best-track-archive" target="_blank" rel="noopener" style="color:var(--blue-light);">IBTrACS</a></strong> &mdash; International Best Track Archive for Climate Stewardship, v04 (NOAA/NCEI). Knapp, K. R. et al., 2010. <em>Bull. Amer. Meteor. Soc.</em>, 91, 363&ndash;376.</p>
+            </div>
+            <div class="citation-box" style="margin-top:1rem;">
+                <h3 style="color:#fdba74;">Airborne Observations</h3>
+                <p><strong>NOAA Aircraft Operations Center</strong> &mdash; Tail Doppler radar, flight-level, and dropsonde data from NOAA P-3 and G-IV reconnaissance missions, via the <a href="https://seb.omao.noaa.gov/" target="_blank" rel="noopener" style="color:var(--blue-light);">Systems Engineering Branch (SEB)</a> archives.</p>
+            </div>
+            <p style="margin-top:1.5rem;font-size:0.85rem;color:#94a3b8;max-width:700px;margin-left:auto;margin-right:auto;text-align:center;">TC-ATLAS is not affiliated with or endorsed by any of the data providers listed above. All datasets are used in accordance with their respective open data policies.</p>
+        </div>
+    </section>
+
+    <section class="contact-section" id="contact">
+        <h2 class="section-title" style="color:white;">Get in Touch</h2>
+        <p style="font-size:1.1rem;margin-bottom:2rem;opacity:0.9;">Questions about TC-ATLAS? Contact the developer.</p>
+        <div class="contact-info">
+            <p style="font-size:1.15rem;margin-bottom:0.75rem;"><strong>Dr. Michael Fischer</strong></p>
+            <p style="opacity:0.85;">TC-ATLAS Developer &middot; University of Miami</p>
+            <p style="margin-top:1rem;"><a href="mailto:mike.fischer@miami.edu" style="font-size:1rem;">mike.fischer@miami.edu</a></p>
+            <p style="margin-top:1.5rem;font-size:0.85rem;opacity:0.75;">Please include details about your research project and intended use of the data.</p>
+        </div>
+    </section>
+
+    <footer>
+        <div>Created by Michael S. Fischer &middot; University of Miami</div>
+        <div style="margin-top:6px;"><a href="index.html">TC-ATLAS Home</a> &middot; <a href="https://www.aoml.noaa.gov/ftp/pub/hrd/data/radar/level3/TC_RADAR_README.pdf" target="_blank">TC-RADAR Documentation</a></div>
+    </footer>
+
+    <div id="imageModal" class="image-modal" onclick="closeImageModal()">
+        <div class="image-modal-content" onclick="event.stopPropagation()">
+            <span class="modal-close" onclick="closeImageModal()">&times;</span>
+            <img id="modalImage" class="modal-image" alt="Full size radar analysis">
+            <div id="modalCaption" class="modal-caption"></div>
+        </div>
+    </div>
+    <div id="plotModal" class="plot-modal-overlay" onclick="closePlotModal()">
+        <div class="plot-modal-box" id="plotModalBox" onclick="event.stopPropagation()">
+            <button class="plot-modal-close" onclick="closePlotModal()" title="Close (Esc)">&times;</button>
+            <div id="plotly-fullscreen"></div>
+            <div class="cs-full-divider" id="cs-full-divider" style="display:none;"></div>
+            <div id="cs-fullscreen" style="display:none;"></div>
+            <div class="cs-full-divider" id="sq-full-divider" style="display:none;"></div>
+            <div id="sq-fullscreen" style="display:none;width:100%;"></div>
+            <div class="cs-full-divider" id="az-full-divider" style="display:none;"></div>
+            <div id="az-fullscreen" style="display:none;"></div>
+        </div>
+    </div>
+
+    <!-- ── 3D Volume Isosurface Modal ────────────────────────── -->
+    <div id="vol3DModal" class="plot-modal-overlay" onclick="close3DModal()">
+        <div class="vol3d-modal-box" onclick="event.stopPropagation()">
+            <button class="plot-modal-close" onclick="close3DModal()" title="Close (Esc)">&times;</button>
+            <div class="vol3d-controls">
+                <label>Iso Min <span id="vol-iso-min-val"></span></label>
+                <input type="number" id="vol-iso-min" step="any" style="width:65px;" onchange="render3DIsosurface()">
+                <label>Iso Max <span id="vol-iso-max-val"></span></label>
+                <input type="number" id="vol-iso-max" step="any" style="width:65px;" onchange="render3DIsosurface()">
+                <span id="vol-units" style="font-size:10px;color:#8899aa;"></span>
+                <label>Surfaces</label>
+                <select id="vol-surfaces" onchange="render3DIsosurface()" style="width:50px;">
+                    <option value="2">2</option>
+                    <option value="3">3</option>
+                    <option value="4" selected>4</option>
+                    <option value="5">5</option>
+                    <option value="6">6</option>
+                    <option value="8">8</option>
+                </select>
+                <label>Opacity</label>
+                <select id="vol-opacity" onchange="render3DIsosurface()" style="width:55px;">
+                    <option value="0.15">0.15</option>
+                    <option value="0.2">0.20</option>
+                    <option value="0.3" selected>0.30</option>
+                    <option value="0.4">0.40</option>
+                    <option value="0.5">0.50</option>
+                    <option value="0.7">0.70</option>
+                    <option value="1.0">1.00</option>
+                </select>
+                <button id="vol-caps" class="vol3d-toggle-btn" onclick="toggle3DCaps()" title="Toggle end caps">Caps</button>
+                <span style="margin-left:auto;"></span>
+                <button id="vol-tdr-toggle" class="vol3d-toggle-btn active" onclick="rtToggle3DTDR()" title="Toggle TDR isosurfaces">TDR</button>
+                <button id="vol-sonde-toggle" class="vol3d-toggle-btn" onclick="rtToggle3DSondes()" title="Toggle dropsonde traces" style="border-color:rgba(168,85,247,0.5);color:#c4b5fd;" disabled>Sondes</button>
+                <button id="vol-tilt-toggle" class="vol3d-toggle-btn" onclick="typeof rtToggle3DTilt==='function'&&document.querySelector('.tab-btn.active[data-tab=realtime]')?rtToggle3DTilt():toggle3DTilt()" title="Toggle vortex tilt hodograph" style="border-color:rgba(52,211,153,0.5);color:#6ee7b7;" disabled>Tilt</button>
+            </div>
+            <div id="vol-3d-chart"></div>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <!-- ensurePlotly() kept as a no-op safety net so the JS guards don't break -->
+    <script>function ensurePlotly(cb) { if (cb) cb(); }</script>
+    <script src="tc_radar_app.js"></script>
+    <script src="realtime_tdr.js"></script>
+</body>
+</html>

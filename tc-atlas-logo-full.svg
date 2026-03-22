@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 140" width="480" height="140">
+  <defs>
+    <linearGradient id="full-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2e7dff"/>
+      <stop offset="100%" stop-color="#00d4ff"/>
+    </linearGradient>
+    <linearGradient id="full-icon" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2e7dff"/>
+      <stop offset="50%" stop-color="#0099cc"/>
+      <stop offset="100%" stop-color="#00d4ff"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="480" height="140" rx="12" fill="#0c1d3d"/>
+
+  <!-- Cyclone-globe icon -->
+  <g transform="translate(62, 58)">
+    <!-- Globe grid -->
+    <circle cx="0" cy="0" r="32" fill="none" stroke="url(#full-icon)" stroke-width="2" opacity="0.25"/>
+    <ellipse cx="0" cy="0" rx="18" ry="32" fill="none" stroke="url(#full-icon)" stroke-width="1.2" opacity="0.18"/>
+    <ellipse cx="0" cy="0" rx="32" ry="18" fill="none" stroke="url(#full-icon)" stroke-width="0.8" opacity="0.12"/>
+    <line x1="-32" y1="0" x2="32" y2="0" stroke="url(#full-icon)" stroke-width="0.8" opacity="0.15"/>
+    <line x1="0" y1="-32" x2="0" y2="32" stroke="url(#full-icon)" stroke-width="0.6" opacity="0.1"/>
+
+    <!-- Cyclone spiral -->
+    <path d="M 0,-3
+             C 8,-3  13,-8  13,-15
+             C 13,-22  8,-28  -2,-28
+             C -13,-28  -24,-20  -26,-9
+             C -28,4  -22,17  -11,24
+             C 0,30  15,28  24,20
+             C 30,12  30,-2  24,-10"
+          fill="none" stroke="url(#full-icon)" stroke-width="3.5" stroke-linecap="round" opacity="0.9"/>
+
+    <!-- Eye -->
+    <circle cx="0" cy="-2" r="4.5" fill="url(#full-icon)" opacity="0.85"/>
+  </g>
+
+  <!-- TC-ATLAS text -->
+  <text x="116" y="66" font-family="'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="42" font-weight="700" letter-spacing="-0.02em" fill="url(#full-grad)">TC-ATLAS</text>
+
+  <!-- Subtitle -->
+  <text x="118" y="88" font-family="'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="10.5" font-weight="500" letter-spacing="0.06em" fill="#8b9ec2">TROPICAL CYCLONE ANALYSIS TOOL FOR LIVE AND ARCHIVED STRUCTURE</text>
+</svg>

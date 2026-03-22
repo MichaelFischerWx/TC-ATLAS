@@ -1,0 +1,797 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <!-- Google Analytics (GA4) -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-EFM8GFFKLK"></script>
+    <script>
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){dataLayer.push(arguments);}
+        gtag('js', new Date());
+        gtag('config', 'G-EFM8GFFKLK');
+    </script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Global Tropical Cyclone Archive — Browse all IBTrACS storms from 1842 to present with satellite imagery, intensity timelines, and climatology.">
+    <meta name="keywords" content="tropical cyclone, hurricane, typhoon, IBTrACS, HURSAT, satellite, climatology, global archive">
+    <meta name="author" content="Dr. Michael Fischer, University of Miami / NOAA HRD">
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="Global TC Archive — TC-ATLAS">
+    <meta property="og:description" content="Browse all global tropical cyclones with satellite imagery, intensity timelines, and climatology charts.">
+    <meta property="og:url" content="https://michaelfischerwx.github.io/TC-ATLAS/global_archive.html">
+    <meta property="og:site_name" content="TC-ATLAS">
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/png" href="tc-atlas-icon.png">
+
+    <title>Global TC Archive — TC-ATLAS</title>
+
+    <!-- Leaflet -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+    <!-- Styles -->
+    <link rel="stylesheet" href="tc_radar_styles.css">
+    <link rel="stylesheet" href="global_archive_styles.css">
+</head>
+<body>
+    <a href="#global-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
+
+    <!-- ── Topbar ─────────────────────────────────────────────── -->
+    <header class="topbar" role="banner">
+        <div class="topbar-inner">
+            <div class="topbar-brand">
+                <img src="tc-atlas-icon.png" alt="TC-ATLAS" class="topbar-icon" width="28" height="28">
+                <div class="topbar-logo" role="heading" aria-level="1">TC-ATLAS</div>
+                <div class="topbar-divider"></div>
+                <div class="topbar-subtitle">Global TC Archive</div>
+            </div>
+            <div class="topbar-stats">
+                <div class="topbar-stat">
+                    <span class="topbar-stat-val" id="stat-storms">&mdash;</span>
+                    <span class="topbar-stat-label">Storms</span>
+                </div>
+                <div class="topbar-stat">
+                    <span class="topbar-stat-val" id="stat-years">&mdash;</span>
+                    <span class="topbar-stat-label">Coverage</span>
+                </div>
+                <div class="topbar-stat">
+                    <span class="topbar-stat-val" id="stat-basins">&mdash;</span>
+                    <span class="topbar-stat-label">Basins</span>
+                </div>
+                <span class="topbar-version">IBTrACS v04</span>
+            </div>
+            <nav aria-label="Main navigation">
+                <ul class="topbar-nav">
+                    <li><a href="index.html" role="button">Home</a></li>
+                    <li><a href="explorer.html" role="button"><span class="nav-full">TC-RADAR</span><span class="nav-short">Radar</span></a></li>
+                    <li><a href="global_archive.html" role="button" class="ga-nav-active"><span class="nav-full">Global Archive</span><span class="nav-short">Global</span></a></li>
+                    <li><a href="explorer.html#about" role="button">About</a></li>
+                </ul>
+            </nav>
+        </div>
+    </header>
+
+    <!-- ── Tab bar ────────────────────────────────────────────── -->
+    <div class="ga-tabs" role="tablist" aria-label="Global archive sections">
+        <button class="ga-tab active" role="tab" aria-selected="true" data-tab="browser" onclick="switchTab('browser')">
+            Storm Browser
+        </button>
+        <button class="ga-tab" role="tab" aria-selected="false" data-tab="detail" onclick="switchTab('detail')">
+            Storm Detail
+        </button>
+        <button class="ga-tab" role="tab" aria-selected="false" data-tab="climatology" onclick="switchTab('climatology')">
+            Climatology
+        </button>
+        <button class="ga-tab" role="tab" aria-selected="false" data-tab="compare" onclick="switchTab('compare')">
+            Compare
+        </button>
+    </div>
+
+    <!-- ── Main content ───────────────────────────────────────── -->
+    <main id="global-main">
+
+        <!-- TAB 1: STORM BROWSER -->
+        <section id="tab-browser" class="ga-tab-content active" role="tabpanel">
+            <div class="browser-layout">
+                <div class="browser-map-wrap">
+                    <div id="storm-map"></div>
+                    <div class="map-overlay-loading" id="map-loading">
+                        <div class="ga-spinner"></div>
+                        <span>Loading storms...</span>
+                    </div>
+                    <!-- Floating storm info card on map -->
+                    <div id="map-storm-card" class="map-storm-card" style="display:none;">
+                        <button class="map-storm-card-close" onclick="dismissMapStormCard()" title="Dismiss">&times;</button>
+                        <div class="map-storm-card-header">
+                            <span id="map-card-name" class="map-storm-card-name"></span>
+                            <span id="map-card-badge" class="intensity-badge"></span>
+                        </div>
+                        <div class="map-storm-card-stats">
+                            <div class="map-card-stat">
+                                <span class="map-card-stat-label">Wind</span>
+                                <span id="map-card-wind" class="map-card-stat-value"></span>
+                            </div>
+                            <div class="map-card-stat">
+                                <span class="map-card-stat-label">Pres</span>
+                                <span id="map-card-pres" class="map-card-stat-value"></span>
+                            </div>
+                            <div class="map-card-stat">
+                                <span class="map-card-stat-label">Year</span>
+                                <span id="map-card-year" class="map-card-stat-value"></span>
+                            </div>
+                            <div class="map-card-stat">
+                                <span class="map-card-stat-label">Basin</span>
+                                <span id="map-card-basin" class="map-card-stat-value"></span>
+                            </div>
+                        </div>
+                        <button class="map-storm-card-btn" onclick="viewStormDetail()">
+                            View Storm Detail <span style="margin-left:4px;">&#8594;</span>
+                        </button>
+                    </div>
+                </div>
+                <aside class="browser-sidebar">
+                    <div class="sidebar-section">
+                        <h3 class="sidebar-title">Filter Storms</h3>
+
+                        <label class="filter-label" for="filter-name">Storm Name</label>
+                        <input type="text" id="filter-name" class="ga-input" placeholder="Search (e.g. Katrina)..." oninput="onFilterChange()">
+
+                        <label class="filter-label">Basin</label>
+                        <div class="basin-chips" id="basin-chips">
+                            <button class="basin-chip active" data-basin="ALL" onclick="toggleBasin(this)">All</button>
+                            <button class="basin-chip" data-basin="NA" onclick="toggleBasin(this)">NA</button>
+                            <button class="basin-chip" data-basin="EP" onclick="toggleBasin(this)">EP</button>
+                            <button class="basin-chip" data-basin="WP" onclick="toggleBasin(this)">WP</button>
+                            <button class="basin-chip" data-basin="NI" onclick="toggleBasin(this)">NI</button>
+                            <button class="basin-chip" data-basin="SI" onclick="toggleBasin(this)">SI</button>
+                            <button class="basin-chip" data-basin="SP" onclick="toggleBasin(this)">SP</button>
+                            <button class="basin-chip" data-basin="SA" onclick="toggleBasin(this)">SA</button>
+                        </div>
+
+                        <div class="filter-row">
+                            <div class="filter-col">
+                                <label class="filter-label" for="filter-year-min">Year From</label>
+                                <input type="number" id="filter-year-min" class="ga-input ga-input-sm" placeholder="1842" oninput="onFilterChange()">
+                            </div>
+                            <div class="filter-col">
+                                <label class="filter-label" for="filter-year-max">Year To</label>
+                                <input type="number" id="filter-year-max" class="ga-input ga-input-sm" placeholder="2024" oninput="onFilterChange()">
+                            </div>
+                        </div>
+
+                        <label class="filter-label">Min Peak Intensity</label>
+                        <div class="intensity-filter">
+                            <div class="intensity-scale">
+                                <span class="scale-tick" style="left:0%;">0</span>
+                                <span class="scale-tick" style="left:18%;">TD</span>
+                                <span class="scale-tick" style="left:35%;">TS</span>
+                                <span class="scale-tick" style="left:45%;">C1</span>
+                                <span class="scale-tick" style="left:52%;">C2</span>
+                                <span class="scale-tick" style="left:61%;">C3</span>
+                                <span class="scale-tick" style="left:74%;">C4</span>
+                                <span class="scale-tick" style="left:100%;">C5</span>
+                            </div>
+                            <input type="range" id="filter-wind-min" min="0" max="185" value="0" class="ga-range" oninput="onWindFilterChange()">
+                            <div class="range-value-row">
+                                <span id="wind-min-label" class="range-label">0 kt (All)</span>
+                            </div>
+                        </div>
+
+                        <label class="filter-label" for="filter-ace-min">Min ACE</label>
+                        <div class="intensity-filter">
+                            <input type="range" id="filter-ace-min" min="0" max="200" value="0" step="1" class="ga-range" oninput="onAceFilterChange()">
+                            <div class="range-value-row">
+                                <span id="ace-min-label" class="range-label">0 (All)</span>
+                            </div>
+                        </div>
+
+                        <label class="filter-label" for="filter-ri-min">Min 24-h Intensification</label>
+                        <div class="intensity-filter">
+                            <input type="range" id="filter-ri-min" min="0" max="100" value="0" step="5" class="ga-range" oninput="onRIFilterChange()">
+                            <div class="range-value-row">
+                                <span id="ri-min-label" class="range-label">0 kt (All)</span>
+                            </div>
+                        </div>
+
+                        <label class="filter-label" for="filter-rw-max">Max 24-h Weakening</label>
+                        <div class="intensity-filter">
+                            <input type="range" id="filter-rw-max" min="-100" max="0" value="0" step="5" class="ga-range" oninput="onRWFilterChange()">
+                            <div class="range-value-row">
+                                <span id="rw-max-label" class="range-label">0 kt (All)</span>
+                            </div>
+                        </div>
+
+                        <label class="filter-label" for="sort-by">Sort By</label>
+                        <select id="sort-by" class="ga-select" onchange="onFilterChange()">
+                            <option value="year-desc">Year (newest first)</option>
+                            <option value="year-asc">Year (oldest first)</option>
+                            <option value="wind-desc">Peak Intensity (strongest)</option>
+                            <option value="ri-desc">Max 24-h Intensification</option>
+                            <option value="rw-desc">Max 24-h Weakening</option>
+                            <option value="ace-desc">ACE (highest)</option>
+                        </select>
+
+                        <div class="filter-actions">
+                            <button class="ga-btn ga-btn-secondary" onclick="resetFilters()">Reset</button>
+                        </div>
+                    </div>
+
+                    <div class="sidebar-section filter-stats-section">
+                        <div class="filter-stats">
+                            <span class="stat-highlight" id="filtered-count">0</span>
+                            <span class="stat-of">of</span>
+                            <span id="total-count">0</span>
+                            <span class="stat-label-inline">storms</span>
+                        </div>
+                        <div class="view-toggle">
+                            <button class="view-toggle-btn" data-view="cluster" onclick="setMapView('cluster')">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><text x="12" y="16" text-anchor="middle" font-size="12" fill="currentColor" stroke="none">#</text></svg>
+                                Clusters
+                            </button>
+                            <button class="view-toggle-btn active" data-view="tracks" onclick="setMapView('tracks')">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 17 C8 9, 16 5, 21 12"/></svg>
+                                Tracks
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Selected storm card -->
+                    <div id="storm-card" class="sidebar-section storm-card" style="display:none;">
+                        <div class="storm-card-header">
+                            <h3 id="card-name" class="storm-card-name"></h3>
+                            <span id="card-cat-badge" class="intensity-badge"></span>
+                        </div>
+                        <button class="ga-btn ga-btn-primary storm-detail-pulse" onclick="viewStormDetail()" style="margin-bottom:10px;font-size:0.88rem;padding:10px 14px;font-weight:700;letter-spacing:0.3px;">View Storm Detail <span style="margin-left:4px;">&#8594;</span></button>
+                        <div class="storm-card-meta">
+                            <div class="card-row"><span class="card-label">Year</span><span id="card-year" class="card-value"></span></div>
+                            <div class="card-row"><span class="card-label">Basin</span><span id="card-basin" class="card-value"></span></div>
+                            <div class="card-row"><span class="card-label">Peak Wind</span><span id="card-wind" class="card-value mono"></span></div>
+                            <div class="card-row"><span class="card-label">Min Pressure</span><span id="card-pres" class="card-value mono"></span></div>
+                            <div class="card-row"><span class="card-label">Duration</span><span id="card-dates" class="card-value"></span></div>
+                            <div class="card-row"><span class="card-label">ACE</span><span id="card-ace" class="card-value mono"></span></div>
+                            <div id="card-hursat-row" class="card-row"><span class="card-label">HURSAT IR</span><span id="card-hursat" class="card-value"></span></div>
+                        </div>
+                    </div>
+                </aside>
+            </div>
+        </section>
+
+        <!-- TAB 2: STORM DETAIL -->
+        <section id="tab-detail" class="ga-tab-content" role="tabpanel">
+            <div class="detail-layout">
+                <div class="detail-header">
+                    <div class="detail-header-top">
+                        <button class="ga-btn ga-btn-ghost" onclick="switchTab('browser')">← Back to Browser</button>
+                        <div class="detail-header-actions">
+                            <button class="ga-btn ga-btn-sm ga-btn-accent" onclick="openAnalogFinder()">Find Analogs</button>
+                            <button class="ga-btn ga-btn-sm" onclick="addCurrentToCompare()">+ Compare</button>
+                        </div>
+                    </div>
+                    <h2 id="detail-title" class="detail-storm-title"></h2>
+                    <div id="detail-subtitle" class="detail-storm-subtitle"></div>
+                </div>
+
+                <div class="detail-grid">
+                    <!-- Intensity Timeline -->
+                    <div class="detail-panel">
+                        <div class="panel-header">
+                            <h3>Intensity Timeline</h3>
+                            <div id="fdeck-toggle-wrap" style="display:none;">
+                                <button id="fdeck-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleFDeck()">
+                                    Show F-Deck
+                                </button>
+                                <span id="fdeck-status" class="ir-status"></span>
+                            </div>
+                        </div>
+                        <div id="timeline-chart" class="chart-container"></div>
+                    </div>
+
+                    <!-- Track Map + IR Overlay -->
+                    <div class="detail-panel detail-map-panel">
+                        <div class="panel-header">
+                            <h3>Storm Track</h3>
+                            <div id="ir-toggle-wrap" style="display:none;">
+                                <button id="ir-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleIROverlay()">
+                                    Show IR
+                                </button>
+                                <span id="ir-status" class="ir-status"></span>
+                            </div>
+                            <div id="ga-mw-toggle-wrap" style="display:none;">
+                                <button id="ga-mw-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleGlobalMWOverlay()" style="background:rgba(251,146,60,0.15);border-color:rgba(251,146,60,0.4);color:#fdba74;">
+                                    &#128225; MW
+                                </button>
+                                <span id="ga-mw-status" class="ir-status"></span>
+                            </div>
+                        </div>
+                        <div class="detail-map-wrap">
+                            <div id="detail-map" class="detail-map-container"></div>
+                            <!-- Loading spinner overlay (stays inside map) -->
+                            <div id="ir-frame-loading" class="ir-map-loading" style="display:none;">
+                                <div class="ga-spinner"></div>
+                                <div id="ir-loading-text" class="ir-loading-text">Loading IR frame...</div>
+                            </div>
+                        </div>
+                        <!-- Controls below the map so they don't cover the imagery -->
+                        <div id="ga-mw-controls" style="display:none;background:rgba(15,23,42,0.92);border:1px solid rgba(251,146,60,0.3);border-radius:6px;padding:6px 10px;margin-top:4px;">
+                            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                                <label style="font-size:10px;font-weight:600;color:#fdba74;text-transform:uppercase;letter-spacing:0.5px;">MW Overpass</label>
+                                <select id="ga-mw-overpass-select" onchange="loadGlobalMWOverpass()" style="flex:1;min-width:200px;font-size:10px;padding:3px 6px;border:1px solid rgba(255,255,255,0.12);border-radius:4px;background:#0f172a;color:#e2e8f0;font-family:'JetBrains Mono',monospace;"></select>
+                                <select id="ga-mw-product-select" onchange="loadGlobalMWOverpass()" style="font-size:10px;padding:3px 6px;border:1px solid rgba(255,255,255,0.12);border-radius:4px;background:#0f172a;color:#e2e8f0;font-family:'JetBrains Mono',monospace;">
+                                    <option value="89pct">89 GHz PCT</option>
+                                    <option value="89v">89 GHz V-pol</option>
+                                    <option value="89h">89 GHz H-pol</option>
+                                    <option value="37color">37 GHz Color</option>
+                                    <option value="37v">37 GHz V-pol</option>
+                                    <option value="37h">37 GHz H-pol</option>
+                                </select>
+                                <span id="ga-mw-frame-status" style="font-size:9px;color:#64748b;"></span>
+                            </div>
+                        </div>
+                        <div id="ir-map-controls" class="ir-map-controls" style="display:none;position:relative;margin-top:4px;">
+                            <div class="ir-map-info">
+                                <span id="ir-datetime" class="ir-datetime"></span>
+                                <span id="ir-frame-info" class="ir-frame-info"></span>
+                                <span class="panel-badge" id="ir-source-badge">HURSAT-B1</span>
+                            </div>
+                            <div class="ir-map-playback">
+                                <button id="ir-play-btn" class="ga-btn ga-btn-sm" onclick="toggleIRPlay()">&#9654; Play</button>
+                                <input type="range" id="ir-slider" class="ga-range ir-slider" min="0" max="0" value="0" oninput="seekIRFrame(this.value)">
+                                <select id="ir-speed" class="ga-select-sm" onchange="setIRSpeed(this.value)">
+                                    <option value="1500">0.5x</option>
+                                    <option value="750" selected>1x</option>
+                                    <option value="375">2x</option>
+                                </select>
+                                <button class="ga-btn ga-btn-sm ir-opacity-btn" onclick="cycleIROpacity()" title="Adjust IR opacity">
+                                    <span id="ir-opacity-label">80%</span>
+                                </button>
+                                <button id="ir-follow-btn" class="ga-btn ga-btn-sm ir-follow-btn active" onclick="toggleIRFollow()" title="View locked to storm center (click to unlock)">
+                                    &#8982;
+                                </button>
+                            </div>
+                            <div class="ir-colorbar-wrap">
+                                <div class="ir-colorbar"></div>
+                                <div class="ir-colorbar-labels">
+                                    <span>310</span>
+                                    <span>270</span>
+                                    <span>240</span>
+                                    <span>220</span>
+                                    <span>200</span>
+                                    <span>170 K</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Hidden panel for backward compat (ir-panel display logic) -->
+                <div id="ir-panel" style="display:none;"></div>
+            </div>
+        </section>
+
+        <!-- TAB 3: STORM COMPARISON -->
+        <section id="tab-compare" class="ga-tab-content" role="tabpanel">
+            <div class="compare-layout">
+                <div class="compare-header">
+                    <h2>Storm Comparison</h2>
+                    <div style="display:flex;gap:8px;align-items:center;">
+                        <button class="ga-btn ga-btn-sm ga-btn-accent" id="compare-add-btn" onclick="toggleCompareSearch()" style="display:none;">+ Add Storm</button>
+                        <button class="ga-btn ga-btn-sm ga-btn-ghost" onclick="clearCompare()">Clear All</button>
+                    </div>
+                </div>
+                <div id="compare-chips" class="compare-chips"></div>
+
+                <!-- Inline search panel (when storms already selected) -->
+                <div id="compare-search-inline" class="compare-search-inline" style="display:none;"></div>
+
+                <div id="compare-empty" class="compare-empty">
+                    <div class="compare-search-panel">
+                        <h3 class="compare-search-title">Add Storms to Compare</h3>
+                        <p class="compare-search-hint">Search and filter storms, or use <strong>+ Compare</strong> from Storm Detail.</p>
+                        <div class="compare-search-row">
+                            <input type="text" id="compare-search-name" class="ga-input" placeholder="Search by name (e.g. Katrina)" oninput="updateCompareSearch()">
+                        </div>
+                        <div class="compare-filter-row">
+                            <span class="compare-filter-label">Basin:</span>
+                            <div class="compare-basin-chips">
+                                <button class="basin-chip active" data-basin="ALL" onclick="toggleCompareBasin(this)">All</button>
+                                <button class="basin-chip" data-basin="AL" onclick="toggleCompareBasin(this)">AL</button>
+                                <button class="basin-chip" data-basin="EP" onclick="toggleCompareBasin(this)">EP</button>
+                                <button class="basin-chip" data-basin="WP" onclick="toggleCompareBasin(this)">WP</button>
+                                <button class="basin-chip" data-basin="IO" onclick="toggleCompareBasin(this)">IO</button>
+                                <button class="basin-chip" data-basin="SH" onclick="toggleCompareBasin(this)">SH</button>
+                            </div>
+                        </div>
+                        <div class="compare-filter-row compare-filter-grid">
+                            <div class="compare-filter-cell">
+                                <label>Year</label>
+                                <div class="compare-range-inputs">
+                                    <input type="number" id="compare-year-min" class="ga-input ga-input-sm" placeholder="1997" oninput="updateCompareSearch()">
+                                    <span>&ndash;</span>
+                                    <input type="number" id="compare-year-max" class="ga-input ga-input-sm" placeholder="2024" oninput="updateCompareSearch()">
+                                </div>
+                            </div>
+                            <div class="compare-filter-cell">
+                                <label>Min Wind (kt)</label>
+                                <input type="number" id="compare-wind-min" class="ga-input ga-input-sm" placeholder="0" oninput="updateCompareSearch()">
+                            </div>
+                            <div class="compare-filter-cell">
+                                <label>Min RI (kt/24h)</label>
+                                <input type="number" id="compare-ri-min" class="ga-input ga-input-sm" placeholder="0" oninput="updateCompareSearch()">
+                            </div>
+                        </div>
+                        <div class="compare-filter-row">
+                            <span class="compare-filter-label">Sort:</span>
+                            <select id="compare-sort" class="ga-select ga-select-sm" onchange="updateCompareSearch()">
+                                <option value="year-desc">Year (newest)</option>
+                                <option value="year-asc">Year (oldest)</option>
+                                <option value="wind-desc">Peak Wind</option>
+                                <option value="ri-desc">RI Rate</option>
+                                <option value="ace-desc">ACE</option>
+                            </select>
+                            <span class="compare-result-count" id="compare-result-count"></span>
+                        </div>
+                        <div id="compare-search-results" class="compare-search-results"></div>
+                    </div>
+                </div>
+                <div id="compare-content" class="detail-grid" style="display:none;">
+                    <div class="detail-panel">
+                        <div class="panel-header">
+                            <h3>Intensity Comparison</h3>
+                            <div class="compare-align-group">
+                                <span class="compare-align-label">Align:</span>
+                                <button class="ga-btn ga-btn-xs compare-align" data-align="absolute" onclick="setCompareAlign('absolute')">Date</button>
+                                <button class="ga-btn ga-btn-xs compare-align active" data-align="genesis" onclick="setCompareAlign('genesis')">Genesis</button>
+                                <button class="ga-btn ga-btn-xs compare-align" data-align="lmi" onclick="setCompareAlign('lmi')">LMI</button>
+                            </div>
+                        </div>
+                        <div id="compare-timeline" class="chart-container"></div>
+                    </div>
+                    <div class="detail-panel detail-map-panel">
+                        <div class="panel-header"><h3>Track Comparison</h3></div>
+                        <div id="compare-map" class="detail-map-container"></div>
+                    </div>
+                </div>
+                <div id="compare-table-wrap" style="display:none;">
+                    <div class="detail-panel" style="margin-top:16px;">
+                        <div class="panel-header"><h3>Summary</h3></div>
+                        <div id="compare-table" class="compare-stats-table"></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- TAB 4: CLIMATOLOGY -->
+        <section id="tab-climatology" class="ga-tab-content" role="tabpanel">
+            <div class="clim-layout">
+                <div class="clim-header">
+                    <h2>Global Tropical Cyclone Climatology</h2>
+                    <p class="clim-subtitle">IBTrACS v04 &mdash; <span id="clim-year-range"></span></p>
+                </div>
+                <div class="clim-grid">
+                    <div class="clim-panel clim-panel-clickable" onclick="openACEModal()" title="Click to explore ACE by basin">
+                        <h3 class="clim-panel-title">Accumulated Cyclone Energy (ACE) by Year <span class="ace-hint">Click to explore →</span></h3>
+                        <div id="clim-ace-chart" class="chart-container chart-tall"></div>
+                    </div>
+                    <div class="clim-panel clim-panel-clickable" onclick="openSeasonalModal()" title="Click to explore seasonal patterns by basin">
+                        <h3 class="clim-panel-title">Named Storms per Season by Category <span class="ace-hint">Click to explore →</span></h3>
+                        <div id="clim-freq-chart" class="chart-container chart-tall"></div>
+                    </div>
+                    <div class="clim-panel clim-panel-clickable" onclick="openIntensityModal()" title="Click to explore intensity distributions by basin">
+                        <h3 class="clim-panel-title">Peak Intensity by Basin <span class="ace-hint">Click to explore →</span></h3>
+                        <div id="clim-hist-chart" class="chart-container"></div>
+                    </div>
+                    <div class="clim-panel clim-panel-clickable" onclick="openIntensityChangeModal()" title="Click to analyze rapid intensification by basin">
+                        <h3 class="clim-panel-title">24-h Intensity Change (Overwater) <span class="ace-hint">Click to explore →</span></h3>
+                        <div id="clim-ri-chart" class="chart-container"></div>
+                    </div>
+                    <div class="clim-panel">
+                        <h3 class="clim-panel-title">Storms by Basin</h3>
+                        <div id="clim-basin-chart" class="chart-container"></div>
+                    </div>
+                    <div class="clim-panel clim-panel-clickable" onclick="openLMILatModal()" title="Click to explore where storms reach peak intensity">
+                        <h3 class="clim-panel-title">Latitude of Peak Intensity <span class="ace-hint">Click to explore →</span></h3>
+                        <div id="clim-lmi-chart" class="chart-container"></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- ACE Drill-Down Modal -->
+    <div id="ace-modal" class="ace-modal-overlay" style="display:none;" onclick="if(event.target===this)closeACEModal()">
+        <div class="ace-modal-content">
+            <div class="ace-modal-header">
+                <h2 class="ace-modal-title">ACE Basin Analysis</h2>
+                <button class="ace-modal-close" onclick="closeACEModal()" aria-label="Close">&times;</button>
+            </div>
+            <div class="ace-modal-body">
+                <!-- Basin selector chips -->
+                <div class="ace-basin-selector">
+                    <span class="ace-basin-label">Basins:</span>
+                    <div class="ace-basin-chips" id="ace-basin-chips">
+                        <button class="basin-chip active" data-basin="ALL" onclick="toggleACEBasin(this)">All</button>
+                        <button class="basin-chip" data-basin="NA" onclick="toggleACEBasin(this)">NA</button>
+                        <button class="basin-chip" data-basin="EP" onclick="toggleACEBasin(this)">EP</button>
+                        <button class="basin-chip" data-basin="WP" onclick="toggleACEBasin(this)">WP</button>
+                        <button class="basin-chip" data-basin="NI" onclick="toggleACEBasin(this)">NI</button>
+                        <button class="basin-chip" data-basin="SI" onclick="toggleACEBasin(this)">SI</button>
+                        <button class="basin-chip" data-basin="SP" onclick="toggleACEBasin(this)">SP</button>
+                        <button class="basin-chip" data-basin="SA" onclick="toggleACEBasin(this)">SA</button>
+                    </div>
+                </div>
+
+                <!-- Per-basin ACE time series chart -->
+                <div class="ace-chart-wrap">
+                    <h3 class="ace-section-title">Annual ACE by Basin <span class="ace-hint">(click a year to drill down)</span></h3>
+                    <div id="ace-drilldown-chart" class="chart-container chart-tall"></div>
+                </div>
+
+                <!-- Year drill-down: storm-by-storm breakdown -->
+                <div id="ace-year-detail" class="ace-year-detail" style="display:none;">
+                    <h3 class="ace-section-title" id="ace-year-title">2005 Storm ACE Breakdown</h3>
+                    <div id="ace-season-map"></div>
+                    <div id="ace-year-chart" class="chart-container"></div>
+                    <div id="ace-year-table" class="ace-year-table"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Intensity Distribution Modal -->
+    <div id="intensity-modal" class="ace-modal-overlay" style="display:none;" onclick="if(event.target===this)closeIntensityModal()">
+        <div class="ace-modal-content">
+            <div class="ace-modal-header">
+                <h2 class="ace-modal-title">Peak Intensity Distribution by Basin</h2>
+                <button class="ace-modal-close" onclick="closeIntensityModal()" aria-label="Close">&times;</button>
+            </div>
+            <div class="ace-modal-body">
+                <div class="ace-basin-selector">
+                    <span class="ace-basin-label">Basins:</span>
+                    <div class="ace-basin-chips" id="intensity-basin-chips">
+                        <button class="basin-chip active" data-basin="ALL" onclick="toggleIntensityBasin(this)">All</button>
+                        <button class="basin-chip" data-basin="NA" onclick="toggleIntensityBasin(this)">NA</button>
+                        <button class="basin-chip" data-basin="EP" onclick="toggleIntensityBasin(this)">EP</button>
+                        <button class="basin-chip" data-basin="WP" onclick="toggleIntensityBasin(this)">WP</button>
+                        <button class="basin-chip" data-basin="NI" onclick="toggleIntensityBasin(this)">NI</button>
+                        <button class="basin-chip" data-basin="SI" onclick="toggleIntensityBasin(this)">SI</button>
+                        <button class="basin-chip" data-basin="SP" onclick="toggleIntensityBasin(this)">SP</button>
+                        <button class="basin-chip" data-basin="SA" onclick="toggleIntensityBasin(this)">SA</button>
+                    </div>
+                </div>
+                <div class="ace-chart-wrap">
+                    <h3 class="ace-section-title">Cumulative Distribution (CDF) of Peak Wind Speed</h3>
+                    <div id="intensity-cdf-chart" class="chart-container chart-tall"></div>
+                </div>
+                <div class="ace-chart-wrap">
+                    <h3 class="ace-section-title">Box Plots</h3>
+                    <div id="intensity-box-chart" class="chart-container"></div>
+                </div>
+                <div id="intensity-stats-table" class="clim-stats-table"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 24-h Intensity Change Modal -->
+    <div id="intensity-change-modal" class="ace-modal-overlay" style="display:none;" onclick="if(event.target===this)closeIntensityChangeModal()">
+        <div class="ace-modal-content">
+            <div class="ace-modal-header">
+                <h2 class="ace-modal-title">24-h Overwater Intensity Change Analysis</h2>
+                <button class="ace-modal-close" onclick="closeIntensityChangeModal()" aria-label="Close">&times;</button>
+            </div>
+            <div class="ace-modal-body">
+                <div class="ace-basin-selector">
+                    <span class="ace-basin-label">Basins:</span>
+                    <div class="ace-basin-chips" id="ri-basin-chips">
+                        <button class="basin-chip active" data-basin="ALL" onclick="toggleRIBasin(this)">All</button>
+                        <button class="basin-chip" data-basin="NA" onclick="toggleRIBasin(this)">NA</button>
+                        <button class="basin-chip" data-basin="EP" onclick="toggleRIBasin(this)">EP</button>
+                        <button class="basin-chip" data-basin="WP" onclick="toggleRIBasin(this)">WP</button>
+                        <button class="basin-chip" data-basin="NI" onclick="toggleRIBasin(this)">NI</button>
+                        <button class="basin-chip" data-basin="SI" onclick="toggleRIBasin(this)">SI</button>
+                        <button class="basin-chip" data-basin="SP" onclick="toggleRIBasin(this)">SP</button>
+                        <button class="basin-chip" data-basin="SA" onclick="toggleRIBasin(this)">SA</button>
+                    </div>
+                </div>
+                <div class="ace-basin-selector" style="margin-top:4px;">
+                    <span class="ace-basin-label">Period:</span>
+                    <div class="ace-basin-chips" id="ri-period-chips">
+                        <button class="basin-chip" data-period="all" onclick="toggleRIPeriod(this)">All Years</button>
+                        <button class="basin-chip" data-period="satellite" onclick="toggleRIPeriod(this)">Satellite (1966+)</button>
+                        <button class="basin-chip active" data-period="modern" onclick="toggleRIPeriod(this)">Modern (1980+)</button>
+                        <button class="basin-chip" data-period="30yr" onclick="toggleRIPeriod(this)">1991–2020</button>
+                        <button class="basin-chip" data-period="custom" onclick="toggleRIPeriod(this)">Custom</button>
+                    </div>
+                    <span id="ri-custom-range" style="display:none;margin-left:8px;align-items:center;gap:4px;">
+                        <input id="ri-year-start" type="number" min="1850" max="2025" value="1980" step="1"
+                               style="width:60px;background:var(--bg-card);border:1px solid var(--border);color:var(--text);border-radius:4px;padding:2px 4px;font-size:0.8rem;font-family:'JetBrains Mono',monospace;"
+                               onchange="applyRICustomPeriod()">
+                        <span style="color:var(--text-dim);font-size:0.8rem;">–</span>
+                        <input id="ri-year-end" type="number" min="1850" max="2025" value="2025" step="1"
+                               style="width:60px;background:var(--bg-card);border:1px solid var(--border);color:var(--text);border-radius:4px;padding:2px 4px;font-size:0.8rem;font-family:'JetBrains Mono',monospace;"
+                               onchange="applyRICustomPeriod()">
+                    </span>
+                </div>
+                <div class="ace-chart-wrap">
+                    <h3 class="ace-section-title">All Overwater 24-h Intensity Change Episodes <span id="ri-episode-count" style="font-size:0.75rem;color:var(--text-dim);font-weight:400;"></span> <span style="font-size:0.75rem;color:var(--text-dim);font-weight:400;">(dashed lines = RI/RW thresholds)</span></h3>
+                    <div id="ri-hist-chart" class="chart-container chart-tall"></div>
+                </div>
+                <div class="ace-chart-wrap">
+                    <h3 class="ace-section-title">Exceedance Probability <span style="font-size:0.75rem;color:var(--text-dim);font-weight:400;">(intensification episodes only)</span></h3>
+                    <div id="ri-cdf-chart" class="chart-container"></div>
+                </div>
+                <div id="ri-stats-table" class="clim-stats-table"></div>
+
+                <div class="ace-chart-wrap" style="margin-top:16px;">
+                    <h3 class="ace-section-title">RI Frequency Trend <span style="font-size:0.75rem;color:var(--text-dim);font-weight:400;">(% of overwater 24-h episodes exceeding threshold, by 5-yr bins)</span></h3>
+                    <div id="ri-trend-chart" class="chart-container chart-tall"></div>
+                </div>
+                <div class="ace-chart-wrap">
+                    <h3 class="ace-section-title">Exceedance Probability by Era <span style="font-size:0.75rem;color:var(--text-dim);font-weight:400;">(intensification episodes only)</span></h3>
+                    <div id="ri-era-cdf-chart" class="chart-container chart-tall"></div>
+                </div>
+                <div id="ri-era-stats-table" class="clim-stats-table"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Seasonal Cycle Modal -->
+    <div id="seasonal-modal" class="ace-modal-overlay" style="display:none;" onclick="if(event.target===this)closeSeasonalModal()">
+        <div class="ace-modal-content">
+            <div class="ace-modal-header">
+                <h2 class="ace-modal-title">Seasonal Cycle by Basin</h2>
+                <button class="ace-modal-close" onclick="closeSeasonalModal()" aria-label="Close">&times;</button>
+            </div>
+            <div class="ace-modal-body">
+                <div class="ace-basin-selector">
+                    <span class="ace-basin-label">Basins:</span>
+                    <div class="ace-basin-chips" id="seasonal-basin-chips">
+                        <button class="basin-chip active" data-basin="ALL" onclick="toggleSeasonalBasin(this)">All</button>
+                        <button class="basin-chip" data-basin="NA" onclick="toggleSeasonalBasin(this)">NA</button>
+                        <button class="basin-chip" data-basin="EP" onclick="toggleSeasonalBasin(this)">EP</button>
+                        <button class="basin-chip" data-basin="WP" onclick="toggleSeasonalBasin(this)">WP</button>
+                        <button class="basin-chip" data-basin="NI" onclick="toggleSeasonalBasin(this)">NI</button>
+                        <button class="basin-chip" data-basin="SI" onclick="toggleSeasonalBasin(this)">SI</button>
+                        <button class="basin-chip" data-basin="SP" onclick="toggleSeasonalBasin(this)">SP</button>
+                        <button class="basin-chip" data-basin="SA" onclick="toggleSeasonalBasin(this)">SA</button>
+                    </div>
+                </div>
+                <div class="ace-chart-wrap">
+                    <h3 class="ace-section-title">Mean Storms per Month (Climatological Average)</h3>
+                    <div id="seasonal-chart" class="chart-container chart-tall"></div>
+                </div>
+                <div id="seasonal-stats-table" class="clim-stats-table"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- LMI Latitude Modal -->
+    <div id="lmi-modal" class="ace-modal-overlay" style="display:none;" onclick="if(event.target===this)closeLMILatModal()">
+        <div class="ace-modal-content">
+            <div class="ace-modal-header">
+                <h2 class="ace-modal-title">Latitude of Peak Intensity by Basin</h2>
+                <button class="ace-modal-close" onclick="closeLMILatModal()" aria-label="Close">&times;</button>
+            </div>
+            <div class="ace-modal-body">
+                <div class="ace-basin-selector">
+                    <span class="ace-basin-label">Basins:</span>
+                    <div class="ace-basin-chips" id="lmi-basin-chips">
+                        <button class="basin-chip active" data-basin="ALL" onclick="toggleLMIBasin(this)">All</button>
+                        <button class="basin-chip" data-basin="NA" onclick="toggleLMIBasin(this)">NA</button>
+                        <button class="basin-chip" data-basin="EP" onclick="toggleLMIBasin(this)">EP</button>
+                        <button class="basin-chip" data-basin="WP" onclick="toggleLMIBasin(this)">WP</button>
+                        <button class="basin-chip" data-basin="NI" onclick="toggleLMIBasin(this)">NI</button>
+                        <button class="basin-chip" data-basin="SI" onclick="toggleLMIBasin(this)">SI</button>
+                        <button class="basin-chip" data-basin="SP" onclick="toggleLMIBasin(this)">SP</button>
+                        <button class="basin-chip" data-basin="SA" onclick="toggleLMIBasin(this)">SA</button>
+                    </div>
+                </div>
+                <div class="ace-basin-selector" style="margin-top:4px;">
+                    <span class="ace-basin-label">Period:</span>
+                    <div class="ace-basin-chips" id="lmi-period-chips">
+                        <button class="basin-chip" data-period="all" onclick="toggleLMIPeriod(this)">All Years</button>
+                        <button class="basin-chip" data-period="satellite" onclick="toggleLMIPeriod(this)">Satellite (1966+)</button>
+                        <button class="basin-chip active" data-period="modern" onclick="toggleLMIPeriod(this)">Modern (1980+)</button>
+                        <button class="basin-chip" data-period="30yr" onclick="toggleLMIPeriod(this)">1991–2020</button>
+                        <button class="basin-chip" data-period="custom" onclick="toggleLMIPeriod(this)">Custom</button>
+                    </div>
+                    <span id="lmi-custom-range" style="display:none;align-items:center;gap:4px;margin-left:8px;">
+                        <input id="lmi-year-start" type="number" min="1850" max="2025" value="1980" step="1"
+                               style="width:60px;background:var(--bg-card);border:1px solid var(--border);color:var(--text);border-radius:4px;padding:2px 4px;font-size:0.8rem;font-family:'JetBrains Mono',monospace;"
+                               onchange="applyLMICustomPeriod()">
+                        <span style="color:var(--text-dim);font-size:0.8rem;">–</span>
+                        <input id="lmi-year-end" type="number" min="1850" max="2025" value="2025" step="1"
+                               style="width:60px;background:var(--bg-card);border:1px solid var(--border);color:var(--text);border-radius:4px;padding:2px 4px;font-size:0.8rem;font-family:'JetBrains Mono',monospace;"
+                               onchange="applyLMICustomPeriod()">
+                    </span>
+                </div>
+                <div class="ace-chart-wrap">
+                    <h3 class="ace-section-title">LMI Latitude vs Peak Wind <span id="lmi-period-info" style="font-size:0.75rem;color:var(--text-dim);font-weight:400;"></span></h3>
+                    <div id="lmi-scatter-chart" class="chart-container chart-tall"></div>
+                </div>
+                <div class="ace-chart-wrap">
+                    <h3 class="ace-section-title">LMI Latitude Distribution</h3>
+                    <div id="lmi-box-chart" class="chart-container"></div>
+                </div>
+                <div id="lmi-stats-table" class="clim-stats-table"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Analog Finder Modal -->
+    <div id="analog-modal" class="ace-modal-overlay" style="display:none;" onclick="if(event.target===this)closeAnalogFinder()">
+        <div class="ace-modal-content" style="max-width:900px;">
+            <div class="ace-modal-header">
+                <h2 id="analog-modal-title">Find Analogs</h2>
+                <button class="ace-modal-close" onclick="closeAnalogFinder()">&times;</button>
+            </div>
+            <div class="ace-modal-body">
+                <!-- Weight sliders -->
+                <div class="analog-weights">
+                    <div class="analog-weight-row">
+                        <label>Peak Intensity</label>
+                        <input type="range" min="0" max="5" step="1" value="3" id="aw-peak" oninput="updateAnalogResults()">
+                        <span class="aw-val" id="aw-peak-val">3</span>
+                    </div>
+                    <div class="analog-weight-row">
+                        <label>RI Rate (24h)</label>
+                        <input type="range" min="0" max="5" step="1" value="3" id="aw-ri" oninput="updateAnalogResults()">
+                        <span class="aw-val" id="aw-ri-val">3</span>
+                    </div>
+                    <div class="analog-weight-row">
+                        <label>Genesis Location</label>
+                        <input type="range" min="0" max="5" step="1" value="2" id="aw-genesis" oninput="updateAnalogResults()">
+                        <span class="aw-val" id="aw-genesis-val">2</span>
+                    </div>
+                    <div class="analog-weight-row">
+                        <label>Track Shape</label>
+                        <input type="range" min="0" max="5" step="1" value="2" id="aw-track" oninput="updateAnalogResults()">
+                        <span class="aw-val" id="aw-track-val">2</span>
+                    </div>
+                    <div class="analog-weight-row">
+                        <label>Time of Year</label>
+                        <input type="range" min="0" max="5" step="1" value="1" id="aw-season" oninput="updateAnalogResults()">
+                        <span class="aw-val" id="aw-season-val">1</span>
+                    </div>
+                    <div class="analog-weight-row">
+                        <label>ACE / Duration</label>
+                        <input type="range" min="0" max="5" step="1" value="1" id="aw-ace" oninput="updateAnalogResults()">
+                        <span class="aw-val" id="aw-ace-val">1</span>
+                    </div>
+                </div>
+                <!-- Basin filter -->
+                <div class="analog-basin-filter">
+                    <span class="analog-filter-label">Basin:</span>
+                    <button class="basin-chip active" data-basin="same" onclick="toggleAnalogBasin(this)">Same Basin</button>
+                    <button class="basin-chip" data-basin="ALL" onclick="toggleAnalogBasin(this)">All Basins</button>
+                </div>
+                <!-- Results -->
+                <div id="analog-results" class="analog-results">
+                    <p style="color:#8b9ec2;text-align:center;padding:20px;">Select a storm first, then open this modal.</p>
+                </div>
+                <!-- Footer -->
+                <div class="analog-footer">
+                    <span id="analog-selected-count">0 selected</span>
+                    <button class="ga-btn ga-btn-sm ga-btn-accent" onclick="compareSelectedAnalogs()">Compare Selected</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast -->
+    <div id="toast" class="ga-toast" style="display:none;"></div>
+
+    <!-- Scripts -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <script src="global_archive.js"></script>
+</body>
+</html>

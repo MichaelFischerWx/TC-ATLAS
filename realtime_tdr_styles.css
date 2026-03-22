@@ -1,0 +1,534 @@
+/* ══════════════════════════════════════════════════════════════
+   Real-Time TDR Tab — Styles
+   Append these to tc_radar_styles.css (or include as a separate file)
+   ══════════════════════════════════════════════════════════════ */
+
+/* ── Nav highlight for Real-Time TDR link ─────────────────── */
+.rt-nav-highlight {
+    color: var(--cyan) !important;
+    font-weight: 600 !important;
+}
+.rt-nav-highlight.active {
+    background: rgba(0, 212, 255, 0.12);
+    border-radius: 6px;
+    padding: 4px 10px !important;
+}
+
+/* ── Section header ───────────────────────────────────────── */
+.rt-header {
+    padding: 32px 32px 16px;
+    text-align: center;
+}
+.rt-header-title {
+    font-size: 1.6rem;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 6px;
+}
+.rt-header-desc {
+    font-size: 0.95rem;
+    color: var(--slate);
+    max-width: 640px;
+    margin: 0 auto;
+}
+
+/* ── Toolbar (mission + file selection) ───────────────────── */
+.rt-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 24px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+}
+
+/* ── Viz panel layout — 30/70 side-by-side split ─────────── */
+.rt-viz-panel {
+    padding: 16px 24px;
+    min-height: calc(100vh - 200px);
+}
+.rt-viz-layout {
+    display: flex;
+    gap: 16px;
+    align-items: stretch;
+}
+
+/* LEFT: Map panel (30%) — always visible when exploring ──── */
+.rt-viz-map-panel {
+    flex: 0 0 30%;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+/* RIGHT: Content panel (70%) — uses explorer-layout inside ── */
+.rt-viz-content-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+/* The explorer-layout inside the RT content panel inherits
+   styles from tc_radar_styles.css (.explorer-layout, .explorer-display,
+   .explorer-controls). Override min-height so it fills the viewport. */
+.rt-viz-content-panel .explorer-layout {
+    flex: 1;
+    min-height: 0;
+}
+.rt-viz-content-panel .explorer-controls {
+    overflow-y: auto;
+    max-height: calc(100vh - 140px);
+    /* Show scrollbar on macOS so users know the panel scrolls */
+    scrollbar-width: thin;
+    scrollbar-color: rgba(96,165,250,0.3) transparent;
+}
+.rt-viz-content-panel .explorer-controls::-webkit-scrollbar {
+    width: 6px;
+}
+.rt-viz-content-panel .explorer-controls::-webkit-scrollbar-thumb {
+    background: rgba(96,165,250,0.3);
+    border-radius: 3px;
+}
+
+/* Sticky Generate button — always visible at bottom of controls panel */
+.rt-viz-content-panel .generate-btn {
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
+    margin-top: 8px;
+    /* Solid background so it doesn't overlap content transparently */
+    box-shadow: 0 -8px 12px rgba(10, 22, 40, 0.95);
+}
+
+/* ── Responsive: tablet ≤1024px (35/65 split) ────────────── */
+@media (max-width: 1024px) {
+    .rt-viz-map-panel { flex: 0 0 35%; }
+}
+
+/* ── Responsive: mobile ≤768px (stacked vertically) ──────── */
+@media (max-width: 768px) {
+    .rt-viz-layout {
+        flex-direction: column;
+        gap: 12px;
+    }
+    .rt-viz-map-panel {
+        flex: 0 0 auto;
+    }
+    .rt-map-wrapper {
+        min-height: 200px !important;
+        height: 200px !important;
+    }
+    .rt-viz-content-panel {
+        flex: 1;
+    }
+    .rt-viz-content-panel .explorer-layout {
+        flex-direction: column !important;
+    }
+    .rt-viz-content-panel .explorer-controls {
+        width: 100% !important;
+        border-left: none !important;
+        padding-left: 0 !important;
+        border-top: 1px solid var(--border);
+        padding-top: 10px;
+        max-height: none;
+    }
+}
+
+/* ── Metadata panel ───────────────────────────────────────── */
+.rt-meta-panel {
+    margin-bottom: 8px;
+}
+.rt-meta-title {
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 2px;
+}
+.rt-meta-row {
+    font-size: 0.82rem;
+    color: var(--slate);
+    margin-bottom: 10px;
+}
+.rt-meta-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    padding: 8px 0;
+    border-top: 1px solid var(--border);
+}
+.rt-meta-item {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+.rt-meta-label {
+    font-size: 0.7rem;
+    color: var(--slate);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.rt-meta-val {
+    font-size: 0.85rem;
+    color: var(--text);
+    font-weight: 500;
+    font-family: 'JetBrains Mono', monospace;
+}
+
+/* ── Leaflet Map (IR + Storm Context) ────────────────────── */
+.rt-map-wrapper {
+    position: relative;
+    width: 100%;
+    flex: 1;
+    min-height: 400px;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    background: #0a1628;
+}
+#rt-map {
+    z-index: 1;
+}
+.rt-map-ir-controls {
+    position: absolute;
+    bottom: 8px;
+    left: 8px;
+    right: 8px;
+    z-index: 1000;
+    background: rgba(10, 22, 40, 0.88);
+    backdrop-filter: blur(6px);
+    border-radius: 6px;
+    border: 1px solid rgba(96, 165, 250, 0.25);
+    padding: 6px 10px;
+}
+.ir-ctrl-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.ir-ctrl-btn {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    color: #ccc;
+    font-size: 11px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s;
+}
+.ir-ctrl-btn:hover {
+    background: rgba(255, 255, 255, 0.18);
+    color: #fff;
+}
+.ir-slider {
+    flex: 1;
+    min-width: 60px;
+    accent-color: var(--cyan, #00d4ff);
+    height: 4px;
+}
+.ir-label {
+    font-size: 10px;
+    color: #93c5fd;
+    font-family: 'JetBrains Mono', monospace;
+    white-space: nowrap;
+    min-width: 100px;
+    text-align: right;
+}
+
+/* (Standalone IR panel removed — IR displayed via Leaflet map overlay only) */
+
+/* ── Attribution footer ───────────────────────────────────── */
+.rt-attribution {
+    text-align: center;
+    padding: 20px;
+    font-size: 0.8rem;
+    color: var(--slate);
+}
+.rt-attribution a {
+    color: var(--blue-light);
+    text-decoration: none;
+}
+.rt-attribution a:hover {
+    text-decoration: underline;
+}
+
+/* ── Dropsonde toggle button ─────────────────────────────── */
+#rt-sonde-btn.active {
+    background: rgba(168, 85, 247, 0.25) !important;
+    border-color: rgba(168, 85, 247, 0.6) !important;
+    color: #e9d5ff !important;
+}
+#rt-sonde-btn.sonde-only {
+    background: rgba(168, 85, 247, 0.45) !important;
+    border-color: rgba(168, 85, 247, 0.8) !important;
+    color: #fff !important;
+    box-shadow: 0 0 8px rgba(168, 85, 247, 0.3);
+}
+
+/* Dropsonde Leaflet popup styling */
+.sonde-popup {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 12px;
+    line-height: 1.5;
+    min-width: 200px;
+}
+.sonde-popup .sonde-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #c4b5fd;
+    margin-bottom: 2px;
+}
+.sonde-popup .sonde-meta {
+    font-size: 11px;
+    color: #aaa;
+    margin-bottom: 4px;
+}
+.sonde-popup .sonde-stats {
+    font-size: 11px;
+    color: #e5e7eb;
+}
+.sonde-popup .sonde-comment {
+    font-size: 10px;
+    color: #a5b4fc;
+    font-style: italic;
+    margin-top: 3px;
+}
+
+/* ── Dropsonde Skew-T Panel ─────────────────── */
+#rt-sonde-skewt-panel {
+    border: 1px solid rgba(168, 85, 247, 0.2);
+    border-radius: 8px;
+    margin-top: 8px;
+    background: rgba(10, 15, 25, 0.6);
+    overflow: hidden;
+}
+
+/* ── Dropsonde selector dropdown ──────────────── */
+#rt-sonde-select,
+#rt-skewt-sonde-select {
+    font-family: 'DM Sans', sans-serif;
+    outline: none;
+    transition: border-color 0.15s;
+}
+#rt-sonde-select:hover,
+#rt-skewt-sonde-select:hover {
+    border-color: rgba(168, 85, 247, 0.6);
+}
+#rt-sonde-select:focus,
+#rt-skewt-sonde-select:focus {
+    border-color: rgba(168, 85, 247, 0.8);
+    box-shadow: 0 0 4px rgba(168, 85, 247, 0.25);
+}
+
+/* ── 3D Volume Sonde toggle active state ────── */
+#vol-sonde-toggle.active {
+    background: rgba(168, 85, 247, 0.25);
+    border-color: rgba(168, 85, 247, 0.6) !important;
+    color: #e9d5ff !important;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   Flight-Level (In Situ) Observations — Styles
+   ══════════════════════════════════════════════════════════════ */
+
+/* ── FL toggle button ─────────────────────────── */
+#rt-fl-btn.active {
+    background: rgba(96, 165, 250, 0.25) !important;
+    border-color: rgba(96, 165, 250, 0.6) !important;
+    color: #bfdbfe !important;
+}
+
+/* ── FL aircraft icon on map ──────────────────── */
+.fl-aircraft-icon {
+    background: none !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+.fl-aircraft-icon div {
+    color: #fff;
+    filter: drop-shadow(0 0 3px rgba(0, 0, 0, 0.8));
+}
+
+/* ── FL Legend (inside map wrapper, top-right) ─── */
+.rt-fl-legend {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 1000;
+    background: rgba(10, 22, 40, 0.88);
+    backdrop-filter: blur(6px);
+    border-radius: 6px;
+    border: 1px solid rgba(96, 165, 250, 0.25);
+    padding: 6px 10px;
+    min-width: 140px;
+}
+.fl-legend-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 4px;
+}
+.fl-legend-label {
+    font-size: 10px;
+    color: #93c5fd;
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 600;
+    white-space: nowrap;
+}
+.fl-legend-select {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    color: #ccc;
+    font-size: 10px;
+    padding: 2px 4px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: 'DM Sans', sans-serif;
+    outline: none;
+    max-width: 120px;
+}
+.fl-legend-select:hover {
+    background: rgba(255, 255, 255, 0.18);
+    color: #fff;
+}
+.fl-legend-bar {
+    height: 6px;
+    border-radius: 3px;
+    background: linear-gradient(
+        to right,
+        rgb(96, 165, 250),
+        rgb(6, 182, 212),
+        rgb(52, 211, 153),
+        rgb(251, 191, 36),
+        rgb(239, 68, 68)
+    );
+    margin: 2px 0;
+}
+.fl-legend-range {
+    display: flex;
+    justify-content: space-between;
+    font-size: 9px;
+    color: #6b7280;
+    font-family: 'JetBrains Mono', monospace;
+}
+
+/* ── Flight-Level Along-Track Time Series Panel ─────── */
+#rt-fl-timeseries-panel {
+    border: 1px solid rgba(96, 165, 250, 0.2);
+    border-radius: 8px;
+    margin-top: 8px;
+    background: rgba(10, 15, 25, 0.6);
+    overflow: hidden;
+}
+.fl-ts-header {
+    display: flex;
+    align-items: center;
+    padding: 6px 12px;
+    background: rgba(96, 165, 250, 0.08);
+    border-bottom: 1px solid rgba(96, 165, 250, 0.15);
+}
+.fl-ts-title {
+    color: #93c5fd;
+    font-size: 13px;
+    font-weight: 600;
+    flex: 1;
+}
+.fl-ts-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.fl-ts-var-group {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 3px;
+}
+.fl-ts-var-btn {
+    background: rgba(30, 40, 60, 0.8);
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 4px;
+    color: #64748b;
+    font-size: 10px;
+    font-family: 'DM Sans', sans-serif;
+    padding: 2px 7px;
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+}
+.fl-ts-var-btn.active {
+    background: rgba(var(--var-color-rgb, 96,165,250), 0.15);
+    border-color: var(--var-color, rgba(96, 165, 250, 0.6));
+    color: var(--var-color, #93c5fd);
+}
+.fl-ts-var-btn:hover {
+    border-color: var(--var-color, rgba(96, 165, 250, 0.5));
+    color: var(--var-color, #93c5fd);
+}
+.fl-ts-close {
+    background: none;
+    border: none;
+    color: #888;
+    cursor: pointer;
+    font-size: 18px;
+    line-height: 1;
+    padding: 0 4px;
+}
+.fl-ts-close:hover {
+    color: #fff;
+}
+
+/* ── Resolution toggle button group ──────── */
+.fl-ts-res-group {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    margin-right: 8px;
+}
+.fl-ts-res-label {
+    color: #64748b;
+    font-size: 10px;
+    margin-right: 2px;
+    white-space: nowrap;
+}
+.fl-ts-res-btn {
+    background: rgba(30, 40, 60, 0.8);
+    border: 1px solid rgba(96, 165, 250, 0.25);
+    border-radius: 4px;
+    color: #64748b;
+    font-size: 10px;
+    font-family: 'JetBrains Mono', monospace;
+    padding: 2px 6px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.fl-ts-res-btn.active {
+    background: rgba(96, 165, 250, 0.2);
+    border-color: rgba(96, 165, 250, 0.6);
+    color: #93c5fd;
+}
+.fl-ts-res-btn:hover {
+    border-color: rgba(96, 165, 250, 0.5);
+    color: #93c5fd;
+}
+
+/* ── PNG save button ────────────────────────── */
+.rt-save-png-btn {
+    background: rgba(255,255,255,0.08);
+    border: none;
+    color: #aab;
+    width: 30px;
+    height: 30px;
+    border-radius: 5px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s, color 0.2s;
+}
+.rt-save-png-btn:hover {
+    background: rgba(255,255,255,0.2);
+    color: #fff;
+}
