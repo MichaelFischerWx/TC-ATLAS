@@ -1,0 +1,9 @@
+# Deployment secrets (contains AWS keys — never commit)
+deploy.env
+
+# Python
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
