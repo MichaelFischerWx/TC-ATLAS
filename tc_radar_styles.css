@@ -115,12 +115,12 @@ input[type="range"]::-webkit-slider-runnable-track { height: 4px; background: tr
 input[type="range"]::-moz-range-track { height: 4px; background: transparent; border-radius: 2px; }
 
 /* ── Map + side panel ────────────────────────────── */
-#map-wrapper { flex: 1; display: flex; position: relative; }
+#map-wrapper { flex: 1; display: flex; position: relative; overflow: hidden; }
 #map-container { flex: 1; position: relative; min-width: 0; min-height: 400px; max-height: calc(100vh - 100px); transition: flex 0.35s ease; }
 #map { height: 100%; width: 100%; }
 .leaflet-container { background: #0a1628; }
 
-#side-panel { width: 0; overflow: hidden; background: var(--surface); border-left: none; transition: width 0.35s ease, border 0.35s ease; display: flex; flex-direction: column; position: relative; z-index: 500; }
+#side-panel { width: 0; overflow: hidden; background: var(--surface); border-left: none; transition: width 0.35s ease, border 0.35s ease; display: flex; flex-direction: column; position: relative; z-index: 500; height: 100%; }
 #side-panel.open { width: 420px; border-left: 1px solid var(--border-light); }
 
 /* Focus mode: map shrinks, panel dominates */
@@ -134,7 +134,7 @@ input[type="range"]::-moz-range-track { height: 4px; background: transparent; bo
 }
 .focus-back-btn:hover { background: var(--blue); color: white; border-color: var(--blue); }
 .focus-back-btn svg { width: 12px; height: 12px; }
-#side-panel-inner { width: 420px; min-height: 100%; overflow-x: hidden; padding: 14px 16px; display: flex; flex-direction: column; }
+#side-panel-inner { width: 420px; overflow-y: auto; overflow-x: hidden; padding: 14px 16px; display: flex; flex-direction: column; flex: 1; min-height: 0; }
 #side-panel-close { position: absolute; top: 10px; right: 10px; background: var(--navy-mid); border: 1px solid var(--border-light); border-radius: 50%; width: 28px; height: 28px; font-size: 14px; cursor: pointer; display: flex; align-items: center; justify-content: center; color: var(--slate); z-index: 10; line-height: 1; transition: all 0.2s; }
 #side-panel-close:hover { background: var(--blue); color: white; border-color: var(--blue); }
 

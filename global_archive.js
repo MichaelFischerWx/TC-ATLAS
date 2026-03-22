@@ -205,6 +205,17 @@ window.switchTab = function (tabName) {
 function loadData() {
     var loadingEl = document.getElementById('map-loading');
 
+    // Show loading indicator on map
+    var mapEl = document.getElementById('browser-map');
+    if (mapEl) {
+        var loader = document.createElement('div');
+        loader.id = 'ga-map-loader';
+        loader.style.cssText = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:1000;text-align:center;color:#8b9ec2;font-size:14px;font-family:DM Sans,sans-serif;';
+        loader.innerHTML = '<div style="width:40px;height:40px;border:3px solid rgba(46,125,255,0.2);border-top-color:#2e7dff;border-radius:50%;animation:spin 0.8s linear infinite;margin:0 auto 12px;"></div>Loading storm database\u2026';
+        mapEl.style.position = 'relative';
+        mapEl.appendChild(loader);
+    }
+
     // Load storms metadata
     fetch(STORMS_JSON)
         .then(function (r) { return r.json(); })
@@ -228,11 +239,16 @@ function loadData() {
             }
             if (loadingEl) loadingEl.style.display = 'none';
 
+            var _loader = document.getElementById('ga-map-loader');
+            if (_loader) _loader.remove();
+
             showToast('Loaded ' + allStorms.length.toLocaleString() + ' storms');
         })
         .catch(function (err) {
             console.error('Failed to load storms:', err);
             if (loadingEl) loadingEl.innerHTML = '<span style="color:#f87171;">Failed to load storm data. Check console.</span>';
+            var _loader = document.getElementById('ga-map-loader');
+            if (_loader) _loader.innerHTML = '<div style="color:#ef4444;font-size:14px;">\u26A0 Could not load storm data. Try refreshing.</div>';
         });
 
     // Load track data — try chunked manifest first, fall back to single file
@@ -367,9 +383,9 @@ function renderMarkers(storms) {
         var color = getIntensityColor(s.peak_wind_kt);
         var icon = L.divIcon({
             className: 'custom-div-icon',
-            html: '<div class="custom-marker" style="background-color:' + color + ';width:10px;height:10px;box-shadow:0 0 6px ' + color + '40;"></div>',
-            iconSize: [10, 10],
-            iconAnchor: [5, 5]
+            html: '<div class="custom-marker" style="background-color:' + color + ';width:14px;height:14px;box-shadow:0 0 6px ' + color + '40;"></div>',
+            iconSize: [14, 14],
+            iconAnchor: [7, 7]
         });
 
         var marker = L.marker([s.genesis_lat, s.genesis_lon], { icon: icon });

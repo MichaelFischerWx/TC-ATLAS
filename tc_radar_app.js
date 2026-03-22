@@ -7,6 +7,48 @@ function _ga(action, params) {
     }
 }
 
+// ── Deep linking: ?tab=realtime / ?tab=composites / #case=N ──
+function _handleDeepLink() {
+    var params = new URLSearchParams(window.location.search);
+    var tab = params.get('tab');
+    if (tab === 'realtime' && typeof toggleRealtimeTab === 'function') {
+        toggleRealtimeTab();
+        return;
+    }
+    if (tab === 'composites' && typeof toggleCompositePanel === 'function') {
+        toggleCompositePanel();
+        return;
+    }
+    var hash = window.location.hash;
+    var caseMatch = hash.match(/case=(\d+)/);
+    if (caseMatch) {
+        var targetIdx = parseInt(caseMatch[1]);
+        // Wait for data to load, then open the case
+        var _checkInterval = setInterval(function() {
+            var d = _getActiveData();
+            if (!d) return;
+            clearInterval(_checkInterval);
+            var caseData = d.cases.find(function(c) { return c.case_index === targetIdx; });
+            if (caseData) {
+                // Set dropdowns to match
+                var yearSel = document.getElementById('year-select');
+                if (yearSel) { yearSel.value = String(caseData.year); yearSel.dispatchEvent(new Event('change')); }
+                setTimeout(function() {
+                    var stormSel = document.getElementById('storm-select');
+                    if (stormSel) { stormSel.value = caseData.storm_name; stormSel.dispatchEvent(new Event('change')); }
+                    setTimeout(function() {
+                        var caseSel = document.getElementById('case-select');
+                        if (caseSel) { caseSel.value = String(targetIdx); }
+                        exploreCaseGo();
+                    }, 200);
+                }, 200);
+            }
+        }, 300);
+        // Safety: clear after 15s
+        setTimeout(function() { clearInterval(_checkInterval); }, 15000);
+    }
+}
+
 // ── Prevent browser from restoring previous scroll position on reload ──
 if ('scrollRestoration' in history) {
     history.scrollRestoration = 'manual';
@@ -5586,7 +5628,7 @@ fetch('tc_radar_metadata.json')
 
         data.cases.forEach(function(caseData) {
             var color = getIntensityColor(caseData.vmax_kt);
-            var icon = L.divIcon({ className:'custom-div-icon', html:'<div class="custom-marker" style="background-color:'+color+';width:12px;height:12px;box-shadow:0 0 6px '+color+'40;"></div>', iconSize:[12,12], iconAnchor:[6,6] });
+            var icon = L.divIcon({ className:'custom-div-icon', html:'<div class="custom-marker" style="background-color:'+color+';width:16px;height:16px;box-shadow:0 0 6px '+color+'40;"></div>', iconSize:[16,16], iconAnchor:[8,8] });
             var marker = L.marker([caseData.latitude, caseData.longitude], { icon: icon });
             marker.bindPopup(createPopupContent(caseData), { maxWidth:320,minWidth:260,autoPan:true,autoPanPadding:[50,50],keepInView:true,closeButton:true,closeOnEscapeKey:true });
             allMarkers.push({ caseIndex: caseData.case_index, marker: marker });
@@ -5648,6 +5690,9 @@ fetch('tc_radar_metadata.json')
 
         // Check for composite permalink in URL hash
         _checkCompPermalink();
+
+        // Handle deep links for tabs and cases
+        _handleDeepLink();
     })
     .catch(function(err) { document.getElementById('loading').innerHTML = '<div style="color:#f87171;"><strong>Error loading data</strong><br><small>' + err.message + '</small></div>'; });
 
@@ -6646,7 +6691,7 @@ function switchDataType(dt) {
     allMarkers = [];
     src.cases.forEach(function(caseData) {
         var color = getIntensityColor(caseData.vmax_kt);
-        var icon = L.divIcon({ className:'custom-div-icon', html:'<div class="custom-marker" style="background-color:'+color+';width:12px;height:12px;box-shadow:0 0 6px '+color+'40;"></div>', iconSize:[12,12], iconAnchor:[6,6] });
+        var icon = L.divIcon({ className:'custom-div-icon', html:'<div class="custom-marker" style="background-color:'+color+';width:16px;height:16px;box-shadow:0 0 6px '+color+'40;"></div>', iconSize:[16,16], iconAnchor:[8,8] });
         var marker = L.marker([caseData.latitude, caseData.longitude], { icon: icon });
         marker.bindPopup(createPopupContent(caseData), { maxWidth:320,minWidth:260,autoPan:true,autoPanPadding:[50,50],keepInView:true,closeButton:true,closeOnEscapeKey:true });
         allMarkers.push({ caseIndex: caseData.case_index, marker: marker });
