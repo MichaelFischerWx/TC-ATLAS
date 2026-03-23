@@ -24,6 +24,21 @@
     var GIBS_MAX_ZOOM = 6;  // GIBS geostationary imagery max zoom
     var GIBS_IR_INTERVAL_MIN = 10;  // GIBS tiles every 10 minutes
 
+    // Longitude bounds for each satellite to prevent overlap on global map
+    // These bounds clip each layer so only one satellite covers any given area
+    var GIBS_LAYER_BOUNDS = {
+        'GOES-East':  [[-80, -110], [80,   10]],   // Americas + Atlantic
+        'GOES-West':  [[-80, -180], [80, -110]],   // Eastern Pacific
+        'Himawari':   [[-80,   80], [80,  180]]    // Western Pacific + IO
+    };
+
+    // Sub-satellite longitudes for choosing best satellite per storm
+    var SAT_SUBLONS = [
+        { name: 'GOES-East', sublon: -75.2 },
+        { name: 'GOES-West', sublon: -137.2 },
+        { name: 'Himawari',  sublon: 140.7 }
+    ];
+
     // Saffir-Simpson color palette (matches global_archive.js)
     var SS_COLORS = {
         TD: '#60a5fa', TS: '#34d399', C1: '#fbbf24',
@@ -48,14 +63,17 @@
 
     // Storm detail mini-map state
     var detailMap = null;
-    var detailIRLayer = null;
     var detailTrackLayers = [];
+    var detailSatName = '';     // which satellite is used for this storm
 
-    // Animation state (GIBS time-stepping)
+    // Pre-loaded frame animation state
     var animFrameTimes = [];   // array of ISO time strings
+    var animFrameLayers = [];  // parallel array of L.tileLayer (one per frame)
     var animIndex = 0;
     var animPlaying = false;
     var animTimer = null;
+    var framesLoaded = 0;      // how many frames have finished loading tiles
+    var framesReady = false;   // true once all frames loaded
 
     // ── Helpers ─────────────────────────────────────────────────
 
@@ -128,6 +146,17 @@
         } catch (e) { return isoStr; }
     }
 
+    /** Pick the best satellite for a given longitude (angular distance to sub-satellite point) */
+    function bestSatelliteForLon(lon) {
+        var best = SAT_SUBLONS[0], bestDist = 999;
+        for (var i = 0; i < SAT_SUBLONS.length; i++) {
+            var d = Math.abs(lon - SAT_SUBLONS[i].sublon);
+            if (d > 180) d = 360 - d;
+            if (d < bestDist) { bestDist = d; best = SAT_SUBLONS[i]; }
+        }
+        return best.name;
+    }
+
     // ═══════════════════════════════════════════════════════════
     //  GIBS TILE HELPERS
     // ═══════════════════════════════════════════════════════════
@@ -156,17 +185,21 @@
     }
 
     /** Create a Leaflet tile layer for a GIBS IR product at a given time */
-    function createGIBSLayer(layerName, timeStr, opacity) {
-        return L.tileLayer(gibsTileUrl(layerName, timeStr), {
+    function createGIBSLayer(layerName, timeStr, opacity, bounds) {
+        var opts = {
             maxZoom: GIBS_MAX_ZOOM,
             maxNativeZoom: GIBS_MAX_ZOOM,
             tileSize: 256,
             opacity: opacity || 0.6,
             attribution: '<a href="https://earthdata.nasa.gov/gibs">NASA GIBS</a>'
-        });
+        };
+        if (bounds) {
+            opts.bounds = L.latLngBounds(bounds);
+        }
+        return L.tileLayer(gibsTileUrl(layerName, timeStr), opts);
     }
 
-    /** Add all 3 GIBS IR layers to the map for the current time */
+    /** Add all 3 GIBS IR layers to the map for the current time (with bounds to prevent overlap) */
     function addGIBSOverlay(targetMap, opacity) {
         var now = roundToGIBSInterval(new Date());
         // Go back 20 min to ensure tiles are available (GIBS has slight delay)
@@ -176,7 +209,9 @@
         var layers = [];
         var layerNames = Object.keys(GIBS_IR_LAYERS);
         for (var i = 0; i < layerNames.length; i++) {
-            var lyr = createGIBSLayer(GIBS_IR_LAYERS[layerNames[i]], timeStr, opacity || 0.55);
+            var name = layerNames[i];
+            var bds = GIBS_LAYER_BOUNDS[name] || null;
+            var lyr = createGIBSLayer(GIBS_IR_LAYERS[name], timeStr, opacity || 0.55, bds);
             lyr.addTo(targetMap);
             layers.push(lyr);
         }
@@ -190,7 +225,7 @@
         }
     }
 
-    /** Swap GIBS layers to a new time string */
+    /** Swap GIBS layers to a new time string (global map — with bounds) */
     function swapGIBSTime(targetMap, layers, timeStr, opacity) {
         for (var i = 0; i < layers.length; i++) {
             targetMap.removeLayer(layers[i]);
@@ -198,7 +233,9 @@
         var layerNames = Object.keys(GIBS_IR_LAYERS);
         var newLayers = [];
         for (var j = 0; j < layerNames.length; j++) {
-            var lyr = createGIBSLayer(GIBS_IR_LAYERS[layerNames[j]], timeStr, opacity || 0.7);
+            var name = layerNames[j];
+            var bds = GIBS_LAYER_BOUNDS[name] || null;
+            var lyr = createGIBSLayer(GIBS_IR_LAYERS[name], timeStr, opacity || 0.7, bds);
             lyr.addTo(targetMap);
             newLayers.push(lyr);
         }
@@ -462,13 +499,61 @@
             });
     }
 
-    /** Initialize the GIBS-based detail mini-map for a storm */
+    /** Clean up pre-loaded frame layers */
+    function cleanupFrameLayers() {
+        for (var i = 0; i < animFrameLayers.length; i++) {
+            if (animFrameLayers[i] && detailMap) {
+                detailMap.removeLayer(animFrameLayers[i]);
+            }
+        }
+        animFrameLayers = [];
+        animFrameTimes = [];
+        framesLoaded = 0;
+        framesReady = false;
+    }
+
+    /** Show/hide the loading progress overlay on the detail map */
+    function showLoadingProgress(show, pct) {
+        var loader = document.getElementById('ir-image-loader');
+        var loaderText = loader ? loader.querySelector('.ir-loader-text') : null;
+        if (!loader) return;
+        if (show) {
+            loader.style.display = 'flex';
+            if (loaderText) {
+                loaderText.textContent = pct != null
+                    ? 'Pre-loading IR frames\u2026 ' + pct + '%'
+                    : 'Pre-loading IR frames\u2026';
+            }
+        } else {
+            loader.style.display = 'none';
+        }
+    }
+
+    /** Called when a single frame layer finishes loading its tiles */
+    function onFrameLayerLoaded() {
+        framesLoaded++;
+        var total = animFrameTimes.length;
+        var pct = Math.round((framesLoaded / total) * 100);
+        showLoadingProgress(true, pct);
+
+        if (framesLoaded >= total) {
+            framesReady = true;
+            showLoadingProgress(false);
+            // Show the latest frame now that all tiles are cached
+            showFrame(animFrameTimes.length - 1);
+            // Enable animation controls
+            var playBtn = document.getElementById('ir-anim-play');
+            if (playBtn) playBtn.disabled = false;
+            console.log('[IR Monitor] All ' + total + ' frames pre-loaded (' + detailSatName + ')');
+        }
+    }
+
+    /** Initialize the GIBS-based detail mini-map for a storm with PRE-LOADED frames */
     function initDetailMap(storm) {
         var container = document.getElementById('ir-image-container');
-        var imageLoader = document.getElementById('ir-image-loader');
-        if (imageLoader) imageLoader.style.display = 'none';
 
         // Destroy old mini-map if exists
+        cleanupFrameLayers();
         if (detailMap) {
             detailMap.remove();
             detailMap = null;
@@ -502,16 +587,42 @@
             subdomains: 'abcd', maxZoom: 19
         }).addTo(detailMap);
 
-        // Build animation frame times
+        // Pick the single best satellite for this storm's longitude
+        detailSatName = bestSatelliteForLon(storm.lon);
+        var satLayerName = GIBS_IR_LAYERS[detailSatName];
+
+        // Build animation frame times (30-min steps, 6h lookback)
         var lastFix = storm.last_fix_utc ? new Date(storm.last_fix_utc) : new Date();
         animFrameTimes = buildFrameTimes(lastFix, DEFAULT_LOOKBACK_HOURS);
         animIndex = animFrameTimes.length - 1;
+        framesLoaded = 0;
+        framesReady = false;
 
-        // Add GIBS IR for the latest frame
-        var timeStr = animFrameTimes[animIndex] || toGIBSTime(roundToGIBSInterval(new Date()));
-        detailIRLayer = swapGIBSTime(detailMap, [], timeStr, 0.75);
+        // Disable play button until frames load
+        var playBtn = document.getElementById('ir-anim-play');
+        if (playBtn) playBtn.disabled = true;
 
-        // Labels on top
+        // Show loading progress
+        showLoadingProgress(true, 0);
+
+        // Pre-create ALL frame tile layers (hidden at opacity 0)
+        animFrameLayers = [];
+        for (var i = 0; i < animFrameTimes.length; i++) {
+            var timeStr = animFrameTimes[i];
+            var lyr = createGIBSLayer(satLayerName, timeStr, 0); // opacity 0 = hidden
+            lyr.addTo(detailMap);
+
+            // Listen for tile load completion
+            (function (layer) {
+                layer.on('load', function () {
+                    onFrameLayerLoaded();
+                });
+            })(lyr);
+
+            animFrameLayers.push(lyr);
+        }
+
+        // Labels on top (in overlay pane so above IR tiles)
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {
             subdomains: 'abcd', maxZoom: 19, pane: 'overlayPane'
         }).addTo(detailMap);
@@ -543,7 +654,23 @@
         // Force map resize after layout settles
         setTimeout(function () { detailMap.invalidateSize(); }, 100);
 
-        _ga('ir_detail_map_init', { atcf_id: storm.atcf_id, frames: animFrameTimes.length });
+        // Safety timeout: if tiles haven't all loaded within 30s, start anyway
+        setTimeout(function () {
+            if (!framesReady && animFrameLayers.length > 0) {
+                console.warn('[IR Monitor] Frame preload timeout — enabling animation with ' + framesLoaded + '/' + animFrameTimes.length + ' frames');
+                framesReady = true;
+                showLoadingProgress(false);
+                var playBtn = document.getElementById('ir-anim-play');
+                if (playBtn) playBtn.disabled = false;
+                showFrame(animFrameTimes.length - 1);
+            }
+        }, 30000);
+
+        _ga('ir_detail_map_init', {
+            atcf_id: storm.atcf_id,
+            satellite: detailSatName,
+            frames: animFrameTimes.length
+        });
     }
 
     /** Fetch storm metadata (intensity history, etc.) */
@@ -659,11 +786,13 @@
         currentStormId = null;
         stopAnimation();
 
+        // Clean up pre-loaded frame layers
+        cleanupFrameLayers();
+
         // Clean up detail mini-map
         if (detailMap) {
             detailMap.remove();
             detailMap = null;
-            detailIRLayer = null;
         }
         var detailMapDiv = document.getElementById('ir-detail-map');
         if (detailMapDiv) detailMapDiv.style.display = 'none';
@@ -693,15 +822,21 @@
         if (animFrameTimes.length === 0) return;
         var timeStr = animFrameTimes[animIndex];
         document.getElementById('ir-frame-time').textContent = fmtUTC(timeStr);
-        document.getElementById('ir-satellite-label').textContent = 'GIBS IR';
+        document.getElementById('ir-satellite-label').textContent = detailSatName || 'GIBS IR';
     }
 
-    /** Swap the detail map IR tiles to a new time index */
+    /** Show a specific frame by toggling opacity (instant — no tile fetching) */
     function showFrame(idx) {
-        if (idx < 0 || idx >= animFrameTimes.length || !detailMap) return;
+        if (idx < 0 || idx >= animFrameLayers.length || !detailMap) return;
+
+        // Hide the current frame
+        if (animIndex >= 0 && animIndex < animFrameLayers.length) {
+            animFrameLayers[animIndex].setOpacity(0);
+        }
+
+        // Show the new frame
         animIndex = idx;
-        var timeStr = animFrameTimes[idx];
-        detailIRLayer = swapGIBSTime(detailMap, detailIRLayer || [], timeStr, 0.75);
+        animFrameLayers[idx].setOpacity(0.85);
         updateFrameOverlay();
     }
 
@@ -713,7 +848,7 @@
 
     /** Step to next frame */
     function nextFrame() {
-        if (animFrameTimes.length === 0) return;
+        if (animFrameTimes.length === 0 || !framesReady) return;
         animIndex = (animIndex + 1) % animFrameTimes.length;
         document.getElementById('ir-anim-slider').value = animIndex;
         updateAnimCounter();
@@ -722,7 +857,7 @@
 
     /** Step to previous frame */
     function prevFrame() {
-        if (animFrameTimes.length === 0) return;
+        if (animFrameTimes.length === 0 || !framesReady) return;
         animIndex = (animIndex - 1 + animFrameTimes.length) % animFrameTimes.length;
         document.getElementById('ir-anim-slider').value = animIndex;
         updateAnimCounter();
@@ -740,15 +875,16 @@
 
     /** Start animation loop */
     function startAnimation() {
-        if (animFrameTimes.length < 2) return;
+        if (animFrameTimes.length < 2 || !framesReady) return;
         animPlaying = true;
         var btn = document.getElementById('ir-anim-play');
         btn.innerHTML = '&#9646;&#9646;'; // pause icon
         btn.title = 'Pause';
 
+        // Faster frame rate since all tiles are pre-loaded (no network wait)
         animTimer = setInterval(function () {
             nextFrame();
-        }, 750); // slower for tile loading (~1.3 fps)
+        }, 500); // ~2 fps — smooth enough for convective evolution
     }
 
     /** Stop animation loop */
@@ -874,6 +1010,7 @@
             nextFrame();
         });
         document.getElementById('ir-anim-slider').addEventListener('input', function () {
+            if (!framesReady) return;
             stopAnimation();
             animIndex = parseInt(this.value, 10);
             updateAnimCounter();
