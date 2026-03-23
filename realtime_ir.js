@@ -85,9 +85,58 @@
 
     // IR Vigor overlay state
     var vigorMode = false;          // true when vigor product is active
-    var vigorLayer = null;          // L.imageOverlay for vigor PNG
-    var vigorCache = {};            // keyed by atcf_id → {image_b64, bounds, ...}
-    var vigorFetching = false;      // true while vigor endpoint is in-flight
+    var vigorLayer = null;          // L.GridLayer for client-side vigor tiles
+    var vigorCache = {};            // keyed by atcf_id → computed vigor data
+    var vigorFetching = false;      // true while vigor computation is running
+
+    // GIBS Clean IR approximate Tb mapping (standard inverted grayscale)
+    // white (255) = cold cloud top, black (0) = warm surface
+    var GIBS_TB_MIN = 163.0;        // K — coldest (white)
+    var GIBS_TB_MAX = 330.0;        // K — warmest (black)
+
+    // Vigor rendering range (K)
+    var VIGOR_VMIN = -10.0;         // strong deepening convection
+    var VIGOR_VMAX =  80.0;         // clear sky well above local min
+
+    // Vigor colormap stops (matches backend _VIGOR_STOPS)
+    var VIGOR_STOPS = [
+        [0.00,  10,  10,  30],
+        [0.10,  20,  40, 120],
+        [0.20,  40,  80, 180],
+        [0.30,  80, 140, 220],
+        [0.40, 160, 200, 240],
+        [0.50, 230, 230, 230],
+        [0.60, 255, 255, 150],
+        [0.70, 255, 220,  50],
+        [0.80, 255, 140,   0],
+        [0.90, 230,  50,   0],
+        [1.00, 200,   0, 150]
+    ];
+
+    // Pre-built 256-entry vigor RGBA LUT
+    var VIGOR_LUT = (function () {
+        var lut = new Uint8Array(256 * 4);
+        for (var i = 0; i < 256; i++) {
+            var frac = i / 255.0;
+            var lo = VIGOR_STOPS[0], hi = VIGOR_STOPS[VIGOR_STOPS.length - 1];
+            for (var s = 0; s < VIGOR_STOPS.length - 1; s++) {
+                if (VIGOR_STOPS[s][0] <= frac && frac <= VIGOR_STOPS[s + 1][0]) {
+                    lo = VIGOR_STOPS[s];
+                    hi = VIGOR_STOPS[s + 1];
+                    break;
+                }
+            }
+            var t = (hi[0] === lo[0]) ? 0 : (frac - lo[0]) / (hi[0] - lo[0]);
+            lut[i * 4]     = Math.round(lo[1] + t * (hi[1] - lo[1]));
+            lut[i * 4 + 1] = Math.round(lo[2] + t * (hi[2] - lo[2]));
+            lut[i * 4 + 2] = Math.round(lo[3] + t * (hi[3] - lo[3]));
+            lut[i * 4 + 3] = 255;
+        }
+        return lut;
+    })();
+
+    // Spatial min filter radius in degrees (~200 km at equator)
+    var VIGOR_RADIUS_DEG = 1.8;
 
     // ── Helpers ─────────────────────────────────────────────────
 
@@ -1379,7 +1428,254 @@
         }
     }
 
-    /** Fetch vigor data from the API and overlay it on the detail map */
+    // ── Client-Side Vigor Computation Helpers ────────────────
+
+    /** Convert GIBS Clean IR grayscale pixel → approximate Tb (Kelvin).
+     *  GIBS Band 13 "Clean IR" uses inverted grayscale: white=cold, black=warm. */
+    function gibsPixelToTb(r, g, b) {
+        var gray = (r * 0.299 + g * 0.587 + b * 0.114); // luminance
+        return GIBS_TB_MAX - (gray / 255.0) * (GIBS_TB_MAX - GIBS_TB_MIN);
+    }
+
+    /** Read pixel data from all visible tiles in a GridLayer.
+     *  Returns { tiles: { 'z:x:y': { tb: Float32Array, w, h, coords } }, tileKeys: [] } */
+    function extractTbFromLayer(layer) {
+        var tiles = layer._tiles;
+        var result = {};
+        var keys = [];
+        if (!tiles) return { tiles: result, tileKeys: keys };
+        for (var key in tiles) {
+            if (!tiles.hasOwnProperty(key)) continue;
+            var tile = tiles[key];
+            if (!tile.el || !tile.current) continue;
+            var canvas = tile.el;
+            try {
+                var ctx = canvas.getContext('2d');
+                var imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                var pixels = imgData.data;
+                var n = canvas.width * canvas.height;
+                var tb = new Float32Array(n);
+                for (var i = 0; i < n; i++) {
+                    var off = i * 4;
+                    if (pixels[off + 3] < 128) {
+                        tb[i] = NaN;
+                    } else {
+                        tb[i] = gibsPixelToTb(pixels[off], pixels[off + 1], pixels[off + 2]);
+                    }
+                }
+                result[key] = { tb: tb, w: canvas.width, h: canvas.height, coords: tile.coords };
+                keys.push(key);
+            } catch (e) {
+                // Cross-origin canvas or empty tile — skip
+            }
+        }
+        return { tiles: result, tileKeys: keys };
+    }
+
+    /** Stitch tile Tb arrays into a single large 2D array.
+     *  Returns { tb: Float32Array, w, h, bounds: {south,north,west,east}, tileW, tileH, grid } */
+    function stitchTileTb(tileData) {
+        var tiles = tileData.tiles;
+        var keys = tileData.tileKeys;
+        if (keys.length === 0) return null;
+
+        // Find bounding tile coords
+        var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        var zoom = 0, tileW = 256, tileH = 256;
+        for (var i = 0; i < keys.length; i++) {
+            var t = tiles[keys[i]];
+            var c = t.coords;
+            zoom = c.z;
+            tileW = t.w;
+            tileH = t.h;
+            if (c.x < minX) minX = c.x;
+            if (c.x > maxX) maxX = c.x;
+            if (c.y < minY) minY = c.y;
+            if (c.y > maxY) maxY = c.y;
+        }
+
+        var gridW = maxX - minX + 1;
+        var gridH = maxY - minY + 1;
+        var totalW = gridW * tileW;
+        var totalH = gridH * tileH;
+        var stitched = new Float32Array(totalW * totalH);
+        stitched.fill(NaN);
+
+        // Place each tile's data
+        for (var i = 0; i < keys.length; i++) {
+            var t = tiles[keys[i]];
+            var c = t.coords;
+            var ox = (c.x - minX) * tileW;
+            var oy = (c.y - minY) * tileH;
+            for (var row = 0; row < t.h; row++) {
+                for (var col = 0; col < t.w; col++) {
+                    stitched[(oy + row) * totalW + (ox + col)] = t.tb[row * t.w + col];
+                }
+            }
+        }
+
+        // Compute geographic bounds (Web Mercator tile → lat/lon)
+        var n = Math.pow(2, zoom);
+        var west = minX / n * 360 - 180;
+        var east = (maxX + 1) / n * 360 - 180;
+        // Y → lat via Mercator inverse
+        var north = Math.atan(Math.sinh(Math.PI * (1 - 2 * minY / n))) * 180 / Math.PI;
+        var south = Math.atan(Math.sinh(Math.PI * (1 - 2 * (maxY + 1) / n))) * 180 / Math.PI;
+
+        return {
+            tb: stitched, w: totalW, h: totalH,
+            bounds: { south: south, north: north, west: west, east: east },
+            tileW: tileW, tileH: tileH,
+            grid: { minX: minX, maxX: maxX, minY: minY, maxY: maxY, zoom: zoom }
+        };
+    }
+
+    /** Compute pixel-wise temporal average across multiple stitched Tb frames.
+     *  All frames must have the same dimensions. */
+    function temporalAvgTb(stitchedFrames) {
+        if (stitchedFrames.length === 0) return null;
+        var ref = stitchedFrames[0];
+        var n = ref.w * ref.h;
+        var sum = new Float32Array(n);
+        var cnt = new Uint8Array(n);
+
+        for (var f = 0; f < stitchedFrames.length; f++) {
+            var tb = stitchedFrames[f].tb;
+            for (var i = 0; i < n; i++) {
+                if (!isNaN(tb[i])) {
+                    sum[i] += tb[i];
+                    cnt[i]++;
+                }
+            }
+        }
+        var avg = new Float32Array(n);
+        for (var i = 0; i < n; i++) {
+            avg[i] = cnt[i] > 0 ? sum[i] / cnt[i] : NaN;
+        }
+        return { tb: avg, w: ref.w, h: ref.h, bounds: ref.bounds, grid: ref.grid, tileW: ref.tileW, tileH: ref.tileH };
+    }
+
+    /** Separable 2D spatial minimum filter.
+     *  Operates on a flat Float32Array of size w×h with given pixel radius.
+     *  NaN pixels are skipped; if an entire window is NaN the output is NaN. */
+    function spatialMinFilter(tb, w, h, radius) {
+        var n = w * h;
+        var temp = new Float32Array(n);
+        var out = new Float32Array(n);
+
+        // Horizontal pass
+        for (var y = 0; y < h; y++) {
+            for (var x = 0; x < w; x++) {
+                var minVal = Infinity;
+                var x0 = Math.max(0, x - radius);
+                var x1 = Math.min(w - 1, x + radius);
+                for (var xx = x0; xx <= x1; xx++) {
+                    var v = tb[y * w + xx];
+                    if (!isNaN(v) && v < minVal) minVal = v;
+                }
+                temp[y * w + x] = (minVal === Infinity) ? NaN : minVal;
+            }
+        }
+
+        // Vertical pass
+        for (var x = 0; x < w; x++) {
+            for (var y = 0; y < h; y++) {
+                var minVal = Infinity;
+                var y0 = Math.max(0, y - radius);
+                var y1 = Math.min(h - 1, y + radius);
+                for (var yy = y0; yy <= y1; yy++) {
+                    var v = temp[yy * w + x];
+                    if (!isNaN(v) && v < minVal) minVal = v;
+                }
+                out[y * w + x] = (minVal === Infinity) ? NaN : minVal;
+            }
+        }
+        return out;
+    }
+
+    /** Map a vigor value (K) to RGBA using the pre-built LUT */
+    function vigorToRGBA(vigor) {
+        if (isNaN(vigor)) return [0, 0, 0, 0];
+        var frac = (vigor - VIGOR_VMIN) / (VIGOR_VMAX - VIGOR_VMIN);
+        frac = Math.max(0, Math.min(1, frac));
+        var idx = Math.round(frac * 255);
+        return [VIGOR_LUT[idx * 4], VIGOR_LUT[idx * 4 + 1], VIGOR_LUT[idx * 4 + 2], VIGOR_LUT[idx * 4 + 3]];
+    }
+
+    /** Compute client-side vigor from pre-loaded animation frame tile canvases.
+     *  vigor = current_Tb − local_min(temporal_avg_Tb) */
+    function computeClientVigor() {
+        if (!detailMap || animFrameLayers.length === 0 || validFrames.length === 0) return null;
+
+        console.time('[Vigor] total computation');
+
+        // 1. Extract Tb from all valid animation frames
+        var allStitched = [];
+        var refGrid = null;
+        for (var fi = 0; fi < validFrames.length; fi++) {
+            var layer = animFrameLayers[validFrames[fi]];
+            var tileData = extractTbFromLayer(layer);
+            var stitched = stitchTileTb(tileData);
+            if (!stitched) continue;
+            if (!refGrid) refGrid = stitched;
+            allStitched.push(stitched);
+        }
+
+        if (allStitched.length < 2) {
+            console.warn('[Vigor] Not enough frames with tile data:', allStitched.length);
+            return null;
+        }
+
+        console.log('[Vigor] Extracted Tb from', allStitched.length, 'frames,',
+                     'stitched size:', refGrid.w, '×', refGrid.h);
+
+        // 2. Compute temporal average Tb
+        var avgData = temporalAvgTb(allStitched);
+        if (!avgData) return null;
+
+        // 3. Compute spatial minimum filter radius in pixels
+        var degPerPixelLon = (refGrid.bounds.east - refGrid.bounds.west) / refGrid.w;
+        var radiusPx = Math.max(1, Math.round(VIGOR_RADIUS_DEG / degPerPixelLon));
+        // Cap radius to avoid extremely slow computation
+        if (radiusPx > 120) radiusPx = 120;
+        console.log('[Vigor] Spatial min filter radius:', radiusPx, 'px (',
+                     (radiusPx * degPerPixelLon).toFixed(2), '°)');
+
+        // 4. Apply spatial minimum filter to temporal average
+        console.time('[Vigor] spatial min filter');
+        var minAvg = spatialMinFilter(avgData.tb, avgData.w, avgData.h, radiusPx);
+        console.timeEnd('[Vigor] spatial min filter');
+
+        // 5. Compute vigor using the latest frame: vigor = current_Tb - local_min(avg_Tb)
+        var latestIdx = validFrames[validFrames.length - 1];
+        var latestStitched = allStitched[allStitched.length - 1];
+        var vigorArr = new Float32Array(refGrid.w * refGrid.h);
+        for (var i = 0; i < vigorArr.length; i++) {
+            var curTb = latestStitched.tb[i];
+            var minA = minAvg[i];
+            if (isNaN(curTb) || !isFinite(minA)) {
+                vigorArr[i] = NaN;
+            } else {
+                vigorArr[i] = curTb - minA;
+            }
+        }
+
+        console.timeEnd('[Vigor] total computation');
+
+        return {
+            vigor: vigorArr,
+            w: refGrid.w,
+            h: refGrid.h,
+            bounds: refGrid.bounds,
+            grid: refGrid.grid,
+            tileW: refGrid.tileW,
+            tileH: refGrid.tileH,
+            framesUsed: allStitched.length,
+            datetime_utc: animFrameTimes[latestIdx]
+        };
+    }
+
+    /** Compute vigor and display as tile overlay (called when vigor mode is activated) */
     function fetchAndShowVigor() {
         if (!currentStormId || !detailMap) return;
 
@@ -1389,107 +1685,144 @@
             return;
         }
 
-        // Show loading state on the button
+        if (!framesReady || validFrames.length < 2) {
+            showVigorToast('IR Vigor requires at least 2 loaded animation frames. Please wait for frames to load.');
+            setVigorMode(false);
+            return;
+        }
+
+        // Show loading state
         var vigBtn = document.getElementById('ir-product-vigor');
         if (vigBtn) {
             vigBtn.classList.add('ir-vigor-loading');
-            vigBtn.textContent = 'Loading\u2026';
+            vigBtn.textContent = 'Computing\u2026';
         }
         vigorFetching = true;
 
-        var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(currentStormId) + '/ir-vigor';
-
-        // Abort after 90s to allow for Cloud Run cold start + S3 fetches + scipy computation
-        var _vigorAbort = new AbortController();
-        var _vigorTimeout = setTimeout(function () { _vigorAbort.abort(); }, 90000);
-
-        fetch(url, { signal: _vigorAbort.signal })
-            .then(function (r) {
-                if (!r.ok) throw new Error('HTTP ' + r.status);
-                return r.json();
-            })
-            .then(function (data) {
-                clearTimeout(_vigorTimeout);
-                vigorCache[currentStormId] = data;
+        // Run computation asynchronously (setTimeout to allow UI update)
+        setTimeout(function () {
+            try {
+                var result = computeClientVigor();
                 vigorFetching = false;
 
-                // Restore button
                 if (vigBtn) {
                     vigBtn.classList.remove('ir-vigor-loading');
                     vigBtn.textContent = 'IR Vigor';
                 }
 
-                // Only show if still in vigor mode
+                if (!result) {
+                    showVigorToast('IR Vigor computation failed — not enough tile data available.');
+                    setVigorMode(false);
+                    return;
+                }
+
+                vigorCache[currentStormId] = result;
+
                 if (vigorMode) {
-                    showVigorOverlay(data);
+                    showVigorOverlay(result);
                 }
 
                 _ga('ir_vigor_loaded', {
                     atcf_id: currentStormId,
-                    frames_used: data.frames_used
+                    frames_used: result.framesUsed
                 });
-            })
-            .catch(function (err) {
-                console.warn('[IR Monitor] Vigor fetch failed:', err.message);
+            } catch (err) {
+                console.warn('[IR Monitor] Vigor computation error:', err);
                 vigorFetching = false;
-                clearTimeout(_vigorTimeout);
                 if (vigBtn) {
                     vigBtn.classList.remove('ir-vigor-loading');
                     vigBtn.textContent = 'IR Vigor';
                 }
-
-                // Show user-visible error message
-                var msg;
-                if (err.name === 'AbortError') {
-                    msg = 'IR Vigor timed out. The server may be starting up \u2014 try again in a moment.';
-                } else if (err.message && err.message.indexOf('502') >= 0) {
-                    msg = 'IR Vigor: server is restarting. Please try again in ~30 seconds.';
-                } else if (err.message && err.message.indexOf('503') >= 0) {
-                    msg = 'IR Vigor: satellite data temporarily unavailable for this storm.';
-                } else {
-                    msg = 'IR Vigor unavailable: ' + err.message + '. Try again shortly.';
-                }
-                // Show a temporary floating message near the vigor button
-                var toast = document.createElement('div');
-                toast.textContent = msg;
-                toast.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:rgba(180,80,20,0.95);color:#fff;padding:10px 20px;border-radius:8px;font-size:13px;z-index:10000;max-width:500px;text-align:center;box-shadow:0 4px 12px rgba(0,0,0,0.4);';
-                document.body.appendChild(toast);
-                setTimeout(function () { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 6000);
-
-                // Fall back to enhanced IR
+                showVigorToast('IR Vigor computation failed: ' + err.message);
                 setVigorMode(false);
-            })
-            .finally(function () { clearTimeout(_vigorTimeout); });
+            }
+        }, 50);
     }
 
-    /** Display the vigor PNG as a Leaflet image overlay with pixel-based rendering.
-     *  Uses CSS image-rendering: pixelated so each grid point is a discrete pixel
-     *  (matching the look of IR imagery), not a smooth interpolated overlay. */
+    /** Show a temporary toast message */
+    function showVigorToast(msg) {
+        var toast = document.createElement('div');
+        toast.textContent = msg;
+        toast.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:rgba(180,80,20,0.95);color:#fff;padding:10px 20px;border-radius:8px;font-size:13px;z-index:10000;max-width:500px;text-align:center;box-shadow:0 4px 12px rgba(0,0,0,0.4);';
+        document.body.appendChild(toast);
+        setTimeout(function () { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 6000);
+    }
+
+    /** Render the computed vigor data as a Leaflet GridLayer (tile-by-tile).
+     *  Each tile reads from the pre-computed vigor array, so resolution matches
+     *  the Enhanced IR tiles pixel-for-pixel at every zoom level. */
     function showVigorOverlay(data) {
         removeVigorLayer();
-        if (!detailMap || !data.image_b64 || !data.bounds) return;
+        if (!detailMap || !data.vigor || !data.bounds) return;
 
-        var imgUrl = 'data:image/png;base64,' + data.image_b64;
-        var bounds = L.latLngBounds(
-            L.latLng(data.bounds[0][0], data.bounds[0][1]),
-            L.latLng(data.bounds[1][0], data.bounds[1][1])
-        );
+        var vigorArr = data.vigor;
+        var vw = data.w;
+        var vh = data.h;
+        var bnd = data.bounds;
+        var grid = data.grid;
+        var tw = data.tileW;
+        var th = data.tileH;
 
-        vigorLayer = L.imageOverlay(imgUrl, bounds, { opacity: 0.95 });
+        // Create a custom GridLayer that paints vigor from the precomputed array
+        var VigorTileLayer = L.GridLayer.extend({
+            options: {
+                maxZoom: GIBS_MAX_ZOOM,
+                maxNativeZoom: GIBS_MAX_ZOOM,
+                tileSize: 256,
+                opacity: 0.92,
+                updateWhenZooming: false,
+                keepBuffer: 2
+            },
+            createTile: function (coords) {
+                var tile = document.createElement('canvas');
+                tile.width = tw;
+                tile.height = th;
+                var ctx = tile.getContext('2d');
+
+                // Map tile coords to the precomputed vigor grid
+                var ox = (coords.x - grid.minX) * tw;
+                var oy = (coords.y - grid.minY) * th;
+
+                // Check if this tile is within our computed bounds
+                if (coords.z !== grid.zoom ||
+                    coords.x < grid.minX || coords.x > grid.maxX ||
+                    coords.y < grid.minY || coords.y > grid.maxY) {
+                    return tile; // empty — outside computed area
+                }
+
+                var imgData = ctx.createImageData(tw, th);
+                var pix = imgData.data;
+
+                for (var row = 0; row < th; row++) {
+                    for (var col = 0; col < tw; col++) {
+                        var sx = ox + col;
+                        var sy = oy + row;
+                        if (sx < 0 || sx >= vw || sy < 0 || sy >= vh) continue;
+                        var v = vigorArr[sy * vw + sx];
+                        if (isNaN(v)) continue;
+
+                        var frac = (v - VIGOR_VMIN) / (VIGOR_VMAX - VIGOR_VMIN);
+                        frac = Math.max(0, Math.min(1, frac));
+                        var idx = Math.round(frac * 255);
+                        var off = (row * tw + col) * 4;
+                        pix[off]     = VIGOR_LUT[idx * 4];
+                        pix[off + 1] = VIGOR_LUT[idx * 4 + 1];
+                        pix[off + 2] = VIGOR_LUT[idx * 4 + 2];
+                        pix[off + 3] = 255;
+                    }
+                }
+
+                ctx.putImageData(imgData, 0, 0);
+                return tile;
+            }
+        });
+
+        vigorLayer = new VigorTileLayer();
         vigorLayer.addTo(detailMap);
-
-        // Apply pixelated rendering to the image element so the discrete grid
-        // points are visible (like IR tiles) instead of browser-smoothed blobs.
-        var imgEl = vigorLayer.getElement();
-        if (imgEl) {
-            imgEl.style.imageRendering = 'pixelated';         // Chrome/Edge/Firefox
-            imgEl.style.imageRendering = '-moz-crisp-edges';  // Firefox fallback
-            imgEl.style.imageRendering = 'crisp-edges';       // Safari fallback
-        }
 
         // Update the overlay info label
         var satLabel = document.getElementById('ir-satellite-label');
-        if (satLabel) satLabel.textContent = 'IR Vigor (' + (data.frames_used || '?') + ' frames, ' + (data.lookback_hours || 4) + 'h)';
+        if (satLabel) satLabel.textContent = 'IR Vigor (' + data.framesUsed + ' frames)';
         var timeLabel = document.getElementById('ir-frame-time');
         if (timeLabel) timeLabel.textContent = fmtUTC(data.datetime_utc);
     }

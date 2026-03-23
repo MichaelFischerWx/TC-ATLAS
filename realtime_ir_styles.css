@@ -317,13 +317,26 @@
     top: 10px;
     left: 10px;
     display: flex;
-    gap: 12px;
+    gap: 14px;
+    align-items: center;
     font-family: 'JetBrains Mono', monospace;
+    font-size: 0.82rem;
+    color: #fff;
+    background: rgba(0, 0, 0, 0.7);
+    padding: 6px 14px;
+    border-radius: 6px;
+    z-index: 500;
+    pointer-events: none;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.6);
+    transition: opacity 0.2s;
+}
+.ir-overlay-info .ir-frame-time-label {
+    font-weight: 600;
+    letter-spacing: 0.03em;
+}
+.ir-overlay-info .ir-sat-label {
     font-size: 0.72rem;
-    color: rgba(255, 255, 255, 0.7);
-    background: rgba(0, 0, 0, 0.5);
-    padding: 4px 10px;
-    border-radius: 4px;
+    color: rgba(255, 255, 255, 0.65);
 }
 
 /* ── Product toggle (Enhanced IR / IR Vigor) ────────────────── */
