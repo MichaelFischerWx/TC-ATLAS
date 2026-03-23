@@ -320,6 +320,114 @@
     border-radius: 4px;
 }
 
+/* ── Product toggle (Enhanced IR / IR Vigor) ────────────────── */
+.ir-product-toggle {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    z-index: 500;
+    display: flex;
+    gap: 0;
+    border-radius: 5px;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+}
+.ir-product-btn {
+    padding: 5px 12px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.7rem;
+    font-weight: 500;
+    color: #8b9ec2;
+    background: rgba(15, 33, 64, 0.85);
+    border: none;
+    cursor: pointer;
+    transition: background 0.2s, color 0.2s;
+    white-space: nowrap;
+}
+.ir-product-btn:hover {
+    background: rgba(30, 60, 110, 0.9);
+    color: #c0d0ea;
+}
+.ir-product-btn.ir-product-active {
+    background: rgba(46, 125, 255, 0.25);
+    color: #60a5fa;
+}
+.ir-product-btn.ir-vigor-loading {
+    color: #fbbf24;
+}
+
+/* IR Brightness Temperature legend overlay */
+.ir-tb-legend {
+    position: absolute;
+    bottom: 10px;
+    left: 10px;
+    z-index: 500;
+    background: rgba(0, 0, 0, 0.65);
+    padding: 6px 10px;
+    border-radius: 4px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem;
+    color: rgba(255, 255, 255, 0.7);
+}
+.ir-tb-legend-bar {
+    width: 160px;
+    height: 10px;
+    border-radius: 2px;
+    margin: 4px 0 2px;
+    /* Warm (310K) → Cold (190K): dark grey → light grey → blue → green → yellow → red → magenta → white */
+    background: linear-gradient(to right,
+        rgb(8, 8, 8),
+        rgb(90, 90, 90),
+        rgb(200, 200, 200),
+        rgb(0, 100, 255),
+        rgb(0, 255, 0),
+        rgb(255, 180, 0),
+        rgb(255, 0, 0),
+        rgb(180, 0, 180),
+        rgb(255, 255, 255)
+    );
+}
+.ir-tb-legend-labels {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.6rem;
+}
+
+/* Vigor legend overlay */
+.ir-vigor-legend {
+    position: absolute;
+    bottom: 10px;
+    left: 10px;
+    z-index: 500;
+    background: rgba(0, 0, 0, 0.65);
+    padding: 6px 10px;
+    border-radius: 4px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem;
+    color: rgba(255, 255, 255, 0.7);
+    display: none;
+}
+.ir-vigor-legend-bar {
+    width: 160px;
+    height: 10px;
+    border-radius: 2px;
+    margin: 4px 0 2px;
+    background: linear-gradient(to right,
+        rgb(10, 10, 30),
+        rgb(40, 80, 180),
+        rgb(160, 200, 240),
+        rgb(230, 230, 230),
+        rgb(255, 255, 150),
+        rgb(255, 140, 0),
+        rgb(200, 0, 150)
+    );
+}
+.ir-vigor-legend-labels {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.6rem;
+}
+
 /* ── Animation controls ──────────────────────────────────────── */
 .ir-anim-controls {
     display: flex;

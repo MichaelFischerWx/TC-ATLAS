@@ -37,6 +37,9 @@ from satellite_ir import (
     render_ir_png,
     build_frame_times,
     fetch_ir_frame,
+    fetch_ir_tb_raw,
+    compute_ir_vigor,
+    render_vigor_png,
 )
 
 try:
@@ -796,5 +799,119 @@ def get_storm_metadata(atcf_id: str):
 
     return JSONResponse(
         content=result,
+        headers={"Cache-Control": "public, max-age=300"},
+    )
+
+
+# ---------------------------------------------------------------------------
+# IR Vigor Endpoint
+# ---------------------------------------------------------------------------
+
+@router.get("/storm/{atcf_id}/ir-vigor")
+def get_storm_ir_vigor(
+    atcf_id: str,
+    lookback_hours: float = Query(4.0, ge=1, le=8, description="Hours of Tb frames for temporal average"),
+    radius_deg: float = Query(3.0, ge=1.0, le=8.0, description="Cutout radius in degrees"),
+    radius_km: float = Query(300.0, ge=50, le=600, description="Spatial radius (km) for local minimum"),
+    interval_min: int = Query(30, ge=10, le=60, description="Minutes between frames"),
+):
+    """
+    Compute and return a spatially-aware IR vigor image for a storm.
+
+    Vigor = current_Tb − local_min(temporal_avg_Tb), where local_min
+    is computed within `radius_km` of each grid point.  The temporal
+    average spans the past `lookback_hours` at `interval_min` intervals.
+
+    Returns a single base64-encoded PNG frame with a diverging colormap.
+    """
+    # Find the storm in the active list
+    _ensure_fresh_cache()
+    storm = None
+    with _active_storms_lock:
+        for s in _active_storms_cache["storms"]:
+            if s["atcf_id"].upper() == atcf_id.upper():
+                storm = dict(s)
+                break
+
+    if not storm:
+        raise HTTPException(status_code=404, detail=f"Storm {atcf_id} not found in active list")
+
+    center_lat = storm["lat"]
+    center_lon = storm["lon"]
+    box_deg = radius_deg * 2
+
+    # Parse the last fix time as the animation center
+    try:
+        center_dt = _dt.fromisoformat(storm["last_fix_utc"].replace("Z", "+00:00"))
+    except Exception:
+        center_dt = _dt.now(timezone.utc)
+
+    # Build frame times for the temporal average (past N hours)
+    frame_times = build_frame_times(center_dt, lookback_hours, interval_min)
+
+    # Fetch raw Tb arrays (oldest first)
+    raw_frames = []
+    for target_dt in reversed(frame_times):
+        result = fetch_ir_tb_raw(center_lat, center_lon, target_dt, box_deg)
+        if result:
+            raw_frames.append(result)
+        gc.collect()
+
+    if len(raw_frames) < 2:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Only {len(raw_frames)} IR frames available — need at least 2 for vigor",
+        )
+
+    # Extract Tb arrays (ordered oldest → newest)
+    tb_arrays = [f["tb"] for f in raw_frames]
+
+    # Resample all arrays to the same shape as the last (current) frame
+    # (minor size differences can occur between satellite scan times)
+    target_shape = tb_arrays[-1].shape
+    resampled = []
+    for tb in tb_arrays:
+        if tb.shape == target_shape:
+            resampled.append(tb)
+        else:
+            # Simple nearest-neighbour resize
+            from PIL import Image
+            img = Image.fromarray(tb)
+            img_resized = img.resize((target_shape[1], target_shape[0]),
+                                     Image.NEAREST)
+            resampled.append(np.array(img_resized, dtype=np.float32))
+    tb_arrays = resampled
+
+    # Compute vigor
+    vigor = compute_ir_vigor(tb_arrays, radius_km=radius_km, box_deg=box_deg)
+    if vigor is None:
+        raise HTTPException(status_code=502, detail="Vigor computation failed")
+
+    # Render to PNG
+    png_b64 = render_vigor_png(vigor)
+    n_frames_used = len(tb_arrays)
+    vigor_satellite = raw_frames[-1].get("satellite", "Unknown") if raw_frames else storm.get("satellite", "Unknown")
+    del vigor, tb_arrays, raw_frames
+    gc.collect()
+
+    if not png_b64:
+        raise HTTPException(status_code=502, detail="Vigor rendering failed")
+
+    half = box_deg / 2.0
+
+    return JSONResponse(
+        content={
+            "image_b64": png_b64,
+            "datetime_utc": center_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "satellite": vigor_satellite,
+            "bounds": [
+                [center_lat - half, center_lon - half],
+                [center_lat + half, center_lon + half],
+            ],
+            "storm_center": {"lat": center_lat, "lon": center_lon},
+            "frames_used": n_frames_used,
+            "lookback_hours": lookback_hours,
+            "radius_km": radius_km,
+        },
         headers={"Cache-Control": "public, max-age=300"},
     )

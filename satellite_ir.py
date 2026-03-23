@@ -464,6 +464,206 @@ def open_himawari_subset(s3_key: str, center_lat: float, center_lon: float,
     return tb
 
 
+# ---------------------------------------------------------------------------
+# IR Vigor Colormap
+# ---------------------------------------------------------------------------
+# Diverging colormap for vigor: dark → blue (low vigor) → white → yellow →
+# red → magenta (high vigor).  Vigor values are normalised 0..1 where 0.5 is
+# the "neutral" point.
+
+_VIGOR_STOPS = [
+    (0.00,  10,  10,  30),    # very low vigor — near-black/deep blue
+    (0.10,  20,  40, 120),
+    (0.20,  40,  80, 180),
+    (0.30,  80, 140, 220),
+    (0.40, 160, 200, 240),
+    (0.50, 230, 230, 230),    # neutral — light grey
+    (0.60, 255, 255, 150),
+    (0.70, 255, 220,  50),
+    (0.80, 255, 140,   0),
+    (0.90, 230,  50,   0),
+    (1.00, 200,   0, 150),    # extreme vigor — magenta
+]
+
+
+def _build_vigor_lut() -> np.ndarray:
+    """Build a 256-entry uint8 RGBA LUT for IR vigor rendering."""
+    lut = np.zeros((256, 4), dtype=np.uint8)
+    for i in range(256):
+        frac = i / 255.0
+        lo, hi = _VIGOR_STOPS[0], _VIGOR_STOPS[-1]
+        for s in range(len(_VIGOR_STOPS) - 1):
+            if _VIGOR_STOPS[s][0] <= frac <= _VIGOR_STOPS[s + 1][0]:
+                lo, hi = _VIGOR_STOPS[s], _VIGOR_STOPS[s + 1]
+                break
+        t = 0.0 if hi[0] == lo[0] else (frac - lo[0]) / (hi[0] - lo[0])
+        lut[i, 0] = int(lo[1] + t * (hi[1] - lo[1]) + 0.5)
+        lut[i, 1] = int(lo[2] + t * (hi[2] - lo[2]) + 0.5)
+        lut[i, 2] = int(lo[3] + t * (hi[3] - lo[3]) + 0.5)
+        lut[i, 3] = 255
+    return lut
+
+
+_VIGOR_LUT = _build_vigor_lut()
+
+# Vigor rendering range (in Kelvin — vigor = Tb_current − local_min_avg)
+VIGOR_VMIN = -10.0   # strong deepening convection (colder than local avg min)
+VIGOR_VMAX = 80.0    # clear sky well above local coldest convection
+
+
+# ---------------------------------------------------------------------------
+# Raw Tb Fetcher (for vigor computation)
+# ---------------------------------------------------------------------------
+
+def fetch_ir_tb_raw(center_lat: float, center_lon: float,
+                    target_dt: _dt, box_deg: float = 8.0) -> Optional[dict]:
+    """
+    Fetch a single IR frame and return the RAW brightness temperature array.
+    Same routing as fetch_ir_frame but returns numpy Tb instead of rendered PNG.
+    Returns dict with 'tb' (np.ndarray), 'datetime_utc', 'satellite', 'bounds'
+    or None on failure.
+    """
+    bucket, sat_key = select_goes_sat(center_lon, target_dt)
+
+    try:
+        if sat_key == "himawari":
+            s3_key = find_himawari_file(target_dt)
+            if not s3_key:
+                return None
+            tb = open_himawari_subset(s3_key, center_lat, center_lon, box_deg)
+        else:
+            s3_key = find_goes_file(bucket, target_dt)
+            if not s3_key:
+                return None
+            tb = open_goes_subset(s3_key, center_lat, center_lon, sat_key, box_deg)
+
+        if not np.any(np.isfinite(tb)):
+            return None
+
+        half = box_deg / 2.0
+        return {
+            "tb": tb,
+            "datetime_utc": target_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "satellite": satellite_name_from_bucket(bucket),
+            "bounds": [
+                [center_lat - half, center_lon - half],
+                [center_lat + half, center_lon + half],
+            ],
+            "storm_center": {"lat": center_lat, "lon": center_lon},
+        }
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Spatially-Aware IR Vigor Computation
+# ---------------------------------------------------------------------------
+
+def _build_circular_footprint(radius_km: float, pixel_km: float) -> np.ndarray:
+    """
+    Build a 2D boolean circular footprint for use with scipy ndimage filters.
+    radius_km: physical radius in km
+    pixel_km:  approximate pixel size in km
+    Returns boolean ndarray.
+    """
+    radius_px = max(1, int(round(radius_km / pixel_km)))
+    size = 2 * radius_px + 1
+    y, x = np.ogrid[-radius_px:radius_px + 1, -radius_px:radius_px + 1]
+    mask = (x * x + y * y) <= (radius_px * radius_px)
+    return mask
+
+
+def compute_ir_vigor(tb_frames: list, radius_km: float = 300.0,
+                     box_deg: float = 8.0) -> Optional[np.ndarray]:
+    """
+    Compute spatially-aware IR vigor from a list of raw Tb arrays.
+
+    For each grid point, vigor = current_Tb − local_min(temporal_avg),
+    where local_min is the minimum within `radius_km` of that point.
+
+    Parameters
+    ----------
+    tb_frames : list of np.ndarray
+        Raw Tb arrays (oldest first).  The LAST frame is "current".
+    radius_km : float
+        Spatial radius (km) for the local minimum filter.
+    box_deg : float
+        Size of the cutout domain in degrees (used to estimate pixel size).
+
+    Returns
+    -------
+    np.ndarray or None
+        2D vigor array (same shape as input frames) in Kelvin.
+    """
+    from scipy.ndimage import minimum_filter
+
+    if not tb_frames or len(tb_frames) < 2:
+        return None
+
+    # Current frame is the last one
+    current_tb = tb_frames[-1].astype(np.float32)
+
+    # Temporal average of all frames
+    stack = np.stack([f.astype(np.float32) for f in tb_frames], axis=0)
+    avg_tb = np.nanmean(stack, axis=0)
+
+    # Estimate pixel size in km from domain size and array shape
+    # box_deg covers the full domain; 1° latitude ≈ 111 km
+    domain_km = box_deg * 111.0
+    ny, nx = current_tb.shape
+    pixel_km = domain_km / max(ny, nx) if max(ny, nx) > 0 else 2.0
+
+    # Build circular footprint for the spatial filter
+    footprint = _build_circular_footprint(radius_km, pixel_km)
+
+    # Spatially-aware local minimum of the temporal average
+    # NaN-safe: replace NaN with extreme sentinel before filtering, restore after
+    _NAN_SENTINEL = 9999.0
+    avg_filled = np.where(np.isfinite(avg_tb), avg_tb, _NAN_SENTINEL)
+    local_min = minimum_filter(avg_filled, footprint=footprint)
+    local_min = np.where(local_min >= _NAN_SENTINEL * 0.9, np.nan, local_min)
+
+    # Vigor = current Tb − local min of temporal average
+    vigor = current_tb - local_min
+
+    return vigor
+
+
+def render_vigor_png(vigor_2d: np.ndarray,
+                     as_data_url: bool = False) -> Optional[str]:
+    """
+    Render a 2D vigor array to a base64-encoded PNG string using
+    the vigor colormap.  Returns None if all data is NaN.
+    """
+    from PIL import Image
+
+    arr = np.asarray(vigor_2d, dtype=np.float32)
+    if not np.any(np.isfinite(arr)):
+        return None
+
+    # Normalise to 0..1 range using vigor limits
+    frac = (arr - VIGOR_VMIN) / (VIGOR_VMAX - VIGOR_VMIN)
+    frac = np.clip(frac, 0.0, 1.0)
+    indices = (frac * 255).astype(np.uint8)
+
+    rgba = _VIGOR_LUT[indices]  # (H, W, 4)
+
+    # NaN / invalid pixels → transparent
+    mask = ~np.isfinite(arr)
+    rgba[mask] = [0, 0, 0, 0]
+
+    img = Image.fromarray(rgba, "RGBA")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", compress_level=1)
+    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+
+    if as_data_url:
+        return f"data:image/png;base64,{b64}"
+    return b64
+
+
 def render_ir_png(frame_2d: np.ndarray, as_data_url: bool = False) -> Optional[str]:
     """
     Render a 2D Tb array to a base64-encoded PNG string.

@@ -138,6 +138,31 @@
                         <span id="ir-frame-time"></span>
                         <span id="ir-satellite-label"></span>
                     </div>
+                    <!-- Product toggle (Enhanced IR / IR Vigor) -->
+                    <div id="ir-product-toggle" class="ir-product-toggle">
+                        <button id="ir-product-eir" class="ir-product-btn ir-product-active" title="Enhanced Infrared">Enhanced IR</button>
+                        <button id="ir-product-vigor" class="ir-product-btn" title="IR Vigor (4-hr spatially-aware)">IR Vigor</button>
+                    </div>
+                    <!-- IR Tb colorbar legend (shown in enhanced IR mode) -->
+                    <div id="ir-tb-legend" class="ir-tb-legend">
+                        <div>Brightness Temp (K)</div>
+                        <div class="ir-tb-legend-bar"></div>
+                        <div class="ir-tb-legend-labels">
+                            <span>310</span>
+                            <span>250</span>
+                            <span>190</span>
+                        </div>
+                    </div>
+                    <!-- Vigor colorbar legend (shown only in vigor mode) -->
+                    <div id="ir-vigor-legend" class="ir-vigor-legend">
+                        <div>IR Vigor (K)</div>
+                        <div class="ir-vigor-legend-bar"></div>
+                        <div class="ir-vigor-legend-labels">
+                            <span>&minus;10</span>
+                            <span>35</span>
+                            <span>80+</span>
+                        </div>
+                    </div>
                 </div>
                 <!-- Animation controls -->
                 <div class="ir-anim-controls">

@@ -75,6 +75,12 @@
     var framesLoaded = 0;      // how many frames have finished loading tiles
     var framesReady = false;   // true once all frames loaded
 
+    // IR Vigor overlay state
+    var vigorMode = false;          // true when vigor product is active
+    var vigorLayer = null;          // L.imageOverlay for vigor PNG
+    var vigorCache = {};            // keyed by atcf_id → {image_b64, bounds, ...}
+    var vigorFetching = false;      // true while vigor endpoint is in-flight
+
     // ── Helpers ─────────────────────────────────────────────────
 
     /** Classify wind speed (kt) to Saffir-Simpson category key */
@@ -622,6 +628,16 @@
             animFrameLayers.push(lyr);
         }
 
+        // Coastlines & borders (above IR, below labels)
+        // Uses a custom pane so coastlines render between IR tiles and text labels
+        detailMap.createPane('coastlinePane');
+        detailMap.getPane('coastlinePane').style.zIndex = 450;
+        detailMap.getPane('coastlinePane').style.opacity = 0.5;
+        L.tileLayer('https://tiles.stadiamaps.com/tiles/stamen_toner_lines/{z}/{x}/{y}{r}.png', {
+            subdomains: '', maxZoom: 18, pane: 'coastlinePane',
+            attribution: ''
+        }).addTo(detailMap);
+
         // Labels on top (in overlay pane so above IR tiles)
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {
             subdomains: 'abcd', maxZoom: 19, pane: 'overlayPane'
@@ -650,6 +666,10 @@
         slider.value = animIndex;
         updateAnimCounter();
         updateFrameOverlay();
+
+        // Show IR Tb colorbar legend (vigor legend stays hidden until toggled)
+        var tbLeg = document.getElementById('ir-tb-legend');
+        if (tbLeg) tbLeg.style.display = 'block';
 
         // Force map resize after layout settles
         setTimeout(function () { detailMap.invalidateSize(); }, 100);
@@ -698,6 +718,17 @@
     /** Open the storm detail view */
     function openStormDetail(atcfId) {
         currentStormId = atcfId;
+
+        // Reset vigor state for new storm
+        vigorMode = false;
+        vigorFetching = false;
+        removeVigorLayer();
+        var eirBtn = document.getElementById('ir-product-eir');
+        var vigBtn = document.getElementById('ir-product-vigor');
+        if (eirBtn) eirBtn.classList.add('ir-product-active');
+        if (vigBtn) { vigBtn.classList.remove('ir-product-active'); vigBtn.classList.remove('ir-vigor-loading'); vigBtn.textContent = 'IR Vigor'; }
+        var vigorLegend = document.getElementById('ir-vigor-legend');
+        if (vigorLegend) vigorLegend.style.display = 'none';
 
         // Find storm in current data
         var storm = null;
@@ -786,6 +817,19 @@
         currentStormId = null;
         stopAnimation();
 
+        // Reset vigor state
+        removeVigorLayer();
+        vigorMode = false;
+        vigorFetching = false;
+        var eirBtn = document.getElementById('ir-product-eir');
+        var vigBtn = document.getElementById('ir-product-vigor');
+        if (eirBtn) eirBtn.classList.add('ir-product-active');
+        if (vigBtn) { vigBtn.classList.remove('ir-product-active'); vigBtn.classList.remove('ir-vigor-loading'); vigBtn.textContent = 'IR Vigor'; }
+        var vigorLegend = document.getElementById('ir-vigor-legend');
+        if (vigorLegend) vigorLegend.style.display = 'none';
+        var tbLegend = document.getElementById('ir-tb-legend');
+        if (tbLegend) tbLegend.style.display = 'none';
+
         // Clean up pre-loaded frame layers
         cleanupFrameLayers();
 
@@ -848,6 +892,7 @@
 
     /** Step to next frame */
     function nextFrame() {
+        if (vigorMode) return;
         if (animFrameTimes.length === 0 || !framesReady) return;
         var newIdx = (animIndex + 1) % animFrameTimes.length;
         showFrame(newIdx);
@@ -857,6 +902,7 @@
 
     /** Step to previous frame */
     function prevFrame() {
+        if (vigorMode) return;
         if (animFrameTimes.length === 0 || !framesReady) return;
         var newIdx = (animIndex - 1 + animFrameTimes.length) % animFrameTimes.length;
         showFrame(newIdx);
@@ -875,6 +921,7 @@
 
     /** Start animation loop */
     function startAnimation() {
+        if (vigorMode) return;
         if (animFrameTimes.length < 2 || !framesReady) return;
         animPlaying = true;
         var btn = document.getElementById('ir-anim-play');
@@ -967,6 +1014,132 @@
     }
 
     // ═══════════════════════════════════════════════════════════
+    //  IR VIGOR PRODUCT
+    // ═══════════════════════════════════════════════════════════
+
+    /** Toggle between Enhanced IR and IR Vigor products */
+    function setVigorMode(enabled) {
+        vigorMode = enabled;
+
+        // Update toggle button states
+        var eirBtn = document.getElementById('ir-product-eir');
+        var vigBtn = document.getElementById('ir-product-vigor');
+        if (eirBtn) eirBtn.classList.toggle('ir-product-active', !enabled);
+        if (vigBtn) vigBtn.classList.toggle('ir-product-active', enabled);
+
+        // Show/hide legends
+        var vigorLeg = document.getElementById('ir-vigor-legend');
+        var tbLeg = document.getElementById('ir-tb-legend');
+        if (vigorLeg) vigorLeg.style.display = enabled ? 'block' : 'none';
+        if (tbLeg) tbLeg.style.display = enabled ? 'none' : 'block';
+
+        if (enabled) {
+            // Show vigor overlay, hide IR animation frames
+            hideAllAnimFrames();
+            stopAnimation();
+            fetchAndShowVigor();
+        } else {
+            // Remove vigor overlay, restore IR animation
+            removeVigorLayer();
+            if (animFrameLayers.length > 0 && framesReady) {
+                showFrame(animIndex);
+            }
+        }
+    }
+
+    /** Hide all IR animation frame layers */
+    function hideAllAnimFrames() {
+        for (var i = 0; i < animFrameLayers.length; i++) {
+            animFrameLayers[i].setOpacity(0);
+        }
+    }
+
+    /** Remove the vigor image overlay from the map */
+    function removeVigorLayer() {
+        if (vigorLayer && detailMap) {
+            detailMap.removeLayer(vigorLayer);
+            vigorLayer = null;
+        }
+    }
+
+    /** Fetch vigor data from the API and overlay it on the detail map */
+    function fetchAndShowVigor() {
+        if (!currentStormId || !detailMap) return;
+
+        // Check cache first
+        if (vigorCache[currentStormId]) {
+            showVigorOverlay(vigorCache[currentStormId]);
+            return;
+        }
+
+        // Show loading state on the button
+        var vigBtn = document.getElementById('ir-product-vigor');
+        if (vigBtn) {
+            vigBtn.classList.add('ir-vigor-loading');
+            vigBtn.textContent = 'Loading\u2026';
+        }
+        vigorFetching = true;
+
+        var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(currentStormId) + '/ir-vigor';
+        fetch(url)
+            .then(function (r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            })
+            .then(function (data) {
+                vigorCache[currentStormId] = data;
+                vigorFetching = false;
+
+                // Restore button
+                if (vigBtn) {
+                    vigBtn.classList.remove('ir-vigor-loading');
+                    vigBtn.textContent = 'IR Vigor';
+                }
+
+                // Only show if still in vigor mode
+                if (vigorMode) {
+                    showVigorOverlay(data);
+                }
+
+                _ga('ir_vigor_loaded', {
+                    atcf_id: currentStormId,
+                    frames_used: data.frames_used
+                });
+            })
+            .catch(function (err) {
+                console.warn('[IR Monitor] Vigor fetch failed:', err.message);
+                vigorFetching = false;
+                if (vigBtn) {
+                    vigBtn.classList.remove('ir-vigor-loading');
+                    vigBtn.textContent = 'IR Vigor';
+                }
+                // Fall back to enhanced IR
+                setVigorMode(false);
+            });
+    }
+
+    /** Display the vigor PNG as a Leaflet image overlay */
+    function showVigorOverlay(data) {
+        removeVigorLayer();
+        if (!detailMap || !data.image_b64 || !data.bounds) return;
+
+        var imgUrl = 'data:image/png;base64,' + data.image_b64;
+        var bounds = L.latLngBounds(
+            L.latLng(data.bounds[0][0], data.bounds[0][1]),
+            L.latLng(data.bounds[1][0], data.bounds[1][1])
+        );
+
+        vigorLayer = L.imageOverlay(imgUrl, bounds, { opacity: 0.85 });
+        vigorLayer.addTo(detailMap);
+
+        // Update the overlay info label
+        var satLabel = document.getElementById('ir-satellite-label');
+        if (satLabel) satLabel.textContent = 'IR Vigor (' + (data.frames_used || '?') + ' frames, ' + (data.lookback_hours || 4) + 'h)';
+        var timeLabel = document.getElementById('ir-frame-time');
+        if (timeLabel) timeLabel.textContent = fmtUTC(data.datetime_utc);
+    }
+
+    // ═══════════════════════════════════════════════════════════
     //  DEEP LINKING
     // ═══════════════════════════════════════════════════════════
 
@@ -1015,6 +1188,16 @@
             var newIdx = parseInt(this.value, 10);
             showFrame(newIdx);
             updateAnimCounter();
+        });
+
+        // Product toggle buttons (Enhanced IR / IR Vigor)
+        document.getElementById('ir-product-eir').addEventListener('click', function () {
+            if (!vigorMode) return;
+            setVigorMode(false);
+        });
+        document.getElementById('ir-product-vigor').addEventListener('click', function () {
+            if (vigorMode || vigorFetching) return;
+            setVigorMode(true);
         });
 
         // Browser back/forward
