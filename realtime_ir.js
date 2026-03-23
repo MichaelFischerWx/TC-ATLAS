@@ -82,6 +82,11 @@
     var gibsIRLayers = [];     // GIBS IR tile layers on main map
     var trackLayers = [];      // past track polylines + dots on main map
 
+    // Global map product state
+    var globalProduct = 'eir';       // 'eir' or 'geocolor'
+    var gibsVisLayers = [];          // GIBS GeoColor tile layers on main map
+    var latestGIBSTime = null;       // cached latest GIBS time string
+
     // Storm detail mini-map state
     var detailMap = null;
     var detailTrackLayers = [];
@@ -428,10 +433,150 @@
         return layer;
     }
 
+    /** Like satellitesForTile but returns GeoColor/visible layer names.
+     *  For Himawari, falls back to Red Visible + includes IR fallback layer name
+     *  so the compositor can draw IR as base for nighttime tiles. */
+    function satellitesForTileVis(x, z) {
+        var lonRange = tileLonRange(x, z);
+        var centerLon = (lonRange.west + lonRange.east) / 2;
+
+        var bestSat = null;
+        var bestScore = -Infinity;
+
+        for (var i = 0; i < SAT_ZONES.length; i++) {
+            var sat = SAT_ZONES[i];
+            var hasGeoColor = !!GIBS_GEOCOLOR_LAYERS[sat.name];
+            var layerName = GIBS_GEOCOLOR_LAYERS[sat.name] || GIBS_VIS_LAYERS[sat.name];
+            if (!layerName) continue;
+
+            var score;
+            if (centerLon >= sat.coreWest && centerLon <= sat.coreEast) {
+                score = 1.0;
+            } else {
+                var distW = sat.coreWest - centerLon;
+                var distE = centerLon - sat.coreEast;
+                score = -Math.min(Math.abs(distW), Math.abs(distE));
+            }
+
+            if (score > bestScore) {
+                bestScore = score;
+                bestSat = {
+                    name: sat.name,
+                    layerName: layerName,
+                    weight: 1.0,
+                    irFallback: hasGeoColor ? null : (GIBS_IR_LAYERS[sat.name] || null)
+                };
+            }
+        }
+
+        if (!bestSat) {
+            var best = SAT_SUBLONS[0], bestDist = 999;
+            for (var j = 0; j < SAT_SUBLONS.length; j++) {
+                var d = Math.abs(centerLon - SAT_SUBLONS[j].sublon);
+                if (d > 180) d = 360 - d;
+                if (d < bestDist) { bestDist = d; best = SAT_SUBLONS[j]; }
+            }
+            var hasGC = !!GIBS_GEOCOLOR_LAYERS[best.name];
+            var ln = GIBS_GEOCOLOR_LAYERS[best.name] || GIBS_VIS_LAYERS[best.name];
+            bestSat = {
+                name: best.name,
+                layerName: ln,
+                weight: 1.0,
+                irFallback: hasGC ? null : (GIBS_IR_LAYERS[best.name] || null)
+            };
+        }
+
+        return [bestSat];
+    }
+
+    /** Check average brightness of an image by sampling pixels.
+     *  Returns true if the tile has meaningful daytime visible data. */
+    function tileHasVisibleData(img, size) {
+        var tmpCanvas = document.createElement('canvas');
+        tmpCanvas.width = size;
+        tmpCanvas.height = size;
+        var tmpCtx = tmpCanvas.getContext('2d');
+        tmpCtx.drawImage(img, 0, 0, size, size);
+        var sampleData = tmpCtx.getImageData(0, 0, size, size).data;
+        var totalBright = 0;
+        var sampCount = 0;
+        for (var p = 0; p < sampleData.length; p += 64 * 4) {
+            totalBright += sampleData[p] + sampleData[p + 1] + sampleData[p + 2];
+            sampCount++;
+        }
+        return (totalBright / (sampCount * 3)) > 15;
+    }
+
+    /** Create a seamless composite GeoColor/Visible layer for the global map.
+     *  For GOES: uses GeoColor (handles day/night automatically).
+     *  For Himawari: hybrid — draws IR as base, overlays Red Visible during daytime. */
+    function createCompositeGIBSLayerVis(timeStr, opacity) {
+        var CompositeVisLayer = L.GridLayer.extend({
+            options: {
+                tileSize: 256,
+                maxZoom: GIBS_VIS_MAX_ZOOM,
+                maxNativeZoom: GIBS_VIS_MAX_ZOOM,
+                opacity: opacity || 0.65,
+                attribution: '<a href="https://earthdata.nasa.gov/gibs">NASA GIBS</a>',
+                updateWhenZooming: false,
+                keepBuffer: 3
+            },
+
+            _timeStr: timeStr,
+
+            createTile: function (coords, done) {
+                var tile = document.createElement('canvas');
+                var ctx = tile.getContext('2d');
+                var size = this.getTileSize();
+                tile.width = size.x;
+                tile.height = size.y;
+
+                var sats = satellitesForTileVis(coords.x, coords.z);
+                var z = coords.z;
+                var y = coords.y;
+                var x = coords.x;
+                var ts = this._timeStr;
+                var sat = sats[0];
+
+                if (sat.irFallback) {
+                    // Hybrid mode: load IR base + visible overlay
+                    Promise.all([
+                        loadImageWithRetry(sat.irFallback, ts, z, y, x),
+                        loadImageWithRetryVis(sat.layerName, ts, z, y, x)
+                    ]).then(function (results) {
+                        var irResult = results[0];
+                        var visResult = results[1];
+                        if (irResult.img) {
+                            ctx.drawImage(irResult.img, 0, 0, size.x, size.y);
+                        }
+                        if (visResult.img && tileHasVisibleData(visResult.img, size.x)) {
+                            ctx.drawImage(visResult.img, 0, 0, size.x, size.y);
+                        }
+                        done(null, tile);
+                    });
+                } else {
+                    // Standard GeoColor (handles day/night itself)
+                    loadImageWithRetryVis(sat.layerName, ts, z, y, x).then(function (result) {
+                        if (result.img) {
+                            ctx.drawImage(result.img, 0, 0, size.x, size.y);
+                        }
+                        done(null, tile);
+                    });
+                }
+
+                return tile;
+            }
+        });
+
+        return new CompositeVisLayer();
+    }
+
     /** Create a Leaflet tile layer for GIBS GeoColor/Visible at a given time.
      *  Uses GoogleMapsCompatible_Level7 (higher zoom than IR).
-     *  For Himawari, falls back to Red Visible (no GeoColor available). */
-    function createGIBSLayerVis(layerName, timeStr, opacity) {
+     *  For GOES: uses GeoColor which handles day/night automatically.
+     *  For Himawari: uses hybrid mode — Enhanced IR as base with Red Visible
+     *  composited on top during daytime. At night the IR shines through. */
+    function createGIBSLayerVis(layerName, timeStr, opacity, irFallbackLayer) {
         var VisRetryLayer = L.GridLayer.extend({
             options: {
                 maxZoom: GIBS_VIS_MAX_ZOOM,
@@ -445,6 +590,7 @@
 
             _layerName: layerName,
             _timeStr: timeStr,
+            _irFallback: irFallbackLayer || null,
 
             createTile: function (coords, done) {
                 var tile = document.createElement('canvas');
@@ -452,14 +598,36 @@
                 var size = this.getTileSize();
                 tile.width = size.x;
                 tile.height = size.y;
+                var irLayer = this._irFallback;
+                var visLayer = this._layerName;
+                var ts = this._timeStr;
 
-                loadImageWithRetryVis(this._layerName, this._timeStr, coords.z, coords.y, coords.x)
-                    .then(function (result) {
-                        if (result.img) {
-                            ctx.drawImage(result.img, 0, 0, size.x, size.y);
+                if (irLayer) {
+                    // Hybrid mode: load IR first, then overlay visible if daytime
+                    Promise.all([
+                        loadImageWithRetry(irLayer, ts, coords.z, coords.y, coords.x),
+                        loadImageWithRetryVis(visLayer, ts, coords.z, coords.y, coords.x)
+                    ]).then(function (results) {
+                        var irResult = results[0];
+                        var visResult = results[1];
+                        if (irResult.img) {
+                            ctx.drawImage(irResult.img, 0, 0, size.x, size.y);
+                        }
+                        if (visResult.img && tileHasVisibleData(visResult.img, size.x)) {
+                            ctx.drawImage(visResult.img, 0, 0, size.x, size.y);
                         }
                         done(null, tile);
                     });
+                } else {
+                    // Standard mode (GeoColor handles day/night itself)
+                    loadImageWithRetryVis(visLayer, ts, coords.z, coords.y, coords.x)
+                        .then(function (result) {
+                            if (result.img) {
+                                ctx.drawImage(result.img, 0, 0, size.x, size.y);
+                            }
+                            done(null, tile);
+                        });
+                }
 
                 return tile;
             }
@@ -697,6 +865,7 @@
     /** Add the seamless composite GIBS IR layer to the map */
     function addGIBSOverlay(targetMap, opacity) {
         findLatestGIBSTime().then(function (timeStr) {
+            latestGIBSTime = timeStr;
             var lyr = createCompositeGIBSLayer(timeStr, opacity || 0.65);
             lyr.addTo(targetMap);
             gibsIRLayers = [lyr];
@@ -704,7 +873,7 @@
         return []; // layers added asynchronously — gibsIRLayers updated in callback
     }
 
-    /** Remove GIBS IR layers from a map */
+    /** Remove GIBS layers from a map */
     function removeGIBSOverlay(targetMap, layers) {
         for (var i = 0; i < layers.length; i++) {
             targetMap.removeLayer(layers[i]);
@@ -719,6 +888,40 @@
         var lyr = createCompositeGIBSLayer(timeStr, opacity || 0.7);
         lyr.addTo(targetMap);
         return [lyr];
+    }
+
+    /** Toggle the global map between IR and GeoColor */
+    function setGlobalProduct(mode) {
+        if (mode === globalProduct) return;
+        globalProduct = mode;
+
+        // Update toggle button
+        var toggleBtn = document.getElementById('ir-global-product-toggle');
+        if (toggleBtn) {
+            toggleBtn.textContent = (mode === 'geocolor') ? 'Switch to IR' : 'Switch to GeoColor';
+            toggleBtn.title = (mode === 'geocolor')
+                ? 'Currently showing GeoColor — click to switch to Enhanced IR'
+                : 'Currently showing Enhanced IR — click to switch to GeoColor';
+        }
+
+        var timeStr = latestGIBSTime;
+        if (!timeStr) return; // GIBS time not resolved yet
+
+        if (mode === 'geocolor') {
+            // Remove IR, add GeoColor
+            removeGIBSOverlay(map, gibsIRLayers);
+            gibsIRLayers = [];
+            var visLyr = createCompositeGIBSLayerVis(timeStr, 0.75);
+            visLyr.addTo(map);
+            gibsVisLayers = [visLyr];
+        } else {
+            // Remove GeoColor, add IR
+            removeGIBSOverlay(map, gibsVisLayers);
+            gibsVisLayers = [];
+            var irLyr = createCompositeGIBSLayer(timeStr, 0.65);
+            irLyr.addTo(map);
+            gibsIRLayers = [irLyr];
+        }
     }
 
     /** Build an array of GIBS time strings for animation (lookback_hours, every 30 min) */
@@ -803,6 +1006,35 @@
         }).addTo(map);
 
         map.zoomControl.setPosition('topleft');
+
+        // Allow zoom 7 (GeoColor tiles go up to Level7)
+        map.setMaxZoom(GIBS_VIS_MAX_ZOOM);
+
+        // Add IR/GeoColor toggle control (bottom-right of map)
+        var ProductToggle = L.Control.extend({
+            options: { position: 'topright' },
+            onAdd: function () {
+                var btn = L.DomUtil.create('button', 'ir-global-toggle-btn');
+                btn.id = 'ir-global-product-toggle';
+                btn.textContent = 'Switch to GeoColor';
+                btn.title = 'Currently showing Enhanced IR — click to switch to GeoColor';
+                btn.style.cssText = 'padding:6px 14px;font-family:DM Sans,sans-serif;font-size:0.72rem;font-weight:500;color:#8b9ec2;background:rgba(15,33,64,0.88);border:1px solid rgba(255,255,255,0.12);border-radius:5px;cursor:pointer;white-space:nowrap;backdrop-filter:blur(4px);';
+                L.DomEvent.disableClickPropagation(btn);
+                btn.addEventListener('click', function () {
+                    setGlobalProduct(globalProduct === 'eir' ? 'geocolor' : 'eir');
+                });
+                btn.addEventListener('mouseenter', function () {
+                    btn.style.background = 'rgba(30,60,110,0.9)';
+                    btn.style.color = '#c0d0ea';
+                });
+                btn.addEventListener('mouseleave', function () {
+                    btn.style.background = 'rgba(15,33,64,0.88)';
+                    btn.style.color = '#8b9ec2';
+                });
+                return btn;
+            }
+        });
+        map.addControl(new ProductToggle());
     }
 
     /** Clear existing storm markers from the map */
@@ -1746,8 +1978,11 @@
 
         // Determine visible layer name — GeoColor for GOES, Red Visible for Himawari
         var visLayerName = GIBS_GEOCOLOR_LAYERS[detailSatName];
+        var irFallback = null; // only set for satellites without GeoColor (Himawari)
         if (!visLayerName) {
             visLayerName = GIBS_VIS_LAYERS[detailSatName];
+            // Himawari Red Visible is daytime-only; use IR as nighttime fallback
+            irFallback = GIBS_IR_LAYERS[detailSatName] || null;
         }
         if (!visLayerName) {
             showVigorToast('No visible imagery available for ' + detailSatName);
@@ -1774,13 +2009,13 @@
         var satLabel = document.getElementById('ir-satellite-label');
         if (satLabel) {
             var isGeoColor = !!GIBS_GEOCOLOR_LAYERS[detailSatName];
-            satLabel.textContent = (isGeoColor ? 'GeoColor' : 'Red Visible') + ' \u2014 ' + detailSatName;
+            satLabel.textContent = (isGeoColor ? 'GeoColor' : 'Visible / IR') + ' \u2014 ' + detailSatName;
         }
 
         // Pre-create ALL GeoColor frame tile layers (hidden at opacity 0)
         for (var i = 0; i < geocolorFrameTimes.length; i++) {
             var timeStr = geocolorFrameTimes[i];
-            var lyr = createGIBSLayerVis(visLayerName, timeStr, 0);
+            var lyr = createGIBSLayerVis(visLayerName, timeStr, 0, irFallback);
             lyr.addTo(detailMap);
             geocolorFrameHasError.push(false);
 
@@ -1877,7 +2112,7 @@
         }
         var isGeoColor = !!GIBS_GEOCOLOR_LAYERS[detailSatName];
         document.getElementById('ir-satellite-label').textContent =
-            (isGeoColor ? 'GeoColor' : 'Red Visible') + ' \u2014 ' + detailSatName;
+            (isGeoColor ? 'GeoColor' : 'Visible / IR') + ' \u2014 ' + detailSatName;
     }
 
     // ── Client-Side Vigor Computation Helpers ────────────────
@@ -2059,7 +2294,13 @@
     }
 
     /** Compute client-side vigor from pre-loaded animation frame tile canvases.
-     *  vigor = current_Tb − local_min(temporal_avg_Tb) */
+     *  vigor = current_Tb − domain_min(temporal_avg_Tb)
+     *
+     *  The reference is the DOMAIN-WIDE minimum of the temporal-average Tb —
+     *  a single scalar representing the coldest persistent convection in the
+     *  entire storm system.  This means only the CDO core (where current Tb
+     *  is colder than the coldest time-averaged point) can go negative.
+     *  Most grid points will be positive (warmer than the CDO reference). */
     function computeClientVigor() {
         if (!detailMap || animFrameLayers.length === 0 || validFrames.length === 0) return null;
 
@@ -2089,20 +2330,21 @@
         var avgData = temporalAvgTb(allStitched);
         if (!avgData) return null;
 
-        // 3. Compute spatial minimum filter radius in pixels
-        var degPerPixelLon = (refGrid.bounds.east - refGrid.bounds.west) / refGrid.w;
-        var radiusPx = Math.max(1, Math.round(VIGOR_RADIUS_DEG / degPerPixelLon));
-        // Cap radius to avoid extremely slow computation
-        if (radiusPx > 120) radiusPx = 120;
-        console.log('[Vigor] Spatial min filter radius:', radiusPx, 'px (',
-                     (radiusPx * degPerPixelLon).toFixed(2), '°)');
+        // 3. Find the domain-wide minimum of the temporal-average Tb.
+        //    This single scalar is the coldest persistent convection in the
+        //    storm domain and serves as the reference for all grid points.
+        var domainMinAvg = Infinity;
+        for (var j = 0; j < avgData.tb.length; j++) {
+            var v = avgData.tb[j];
+            if (!isNaN(v) && v < domainMinAvg) domainMinAvg = v;
+        }
+        if (!isFinite(domainMinAvg)) {
+            console.warn('[Vigor] No valid temporal average data');
+            return null;
+        }
+        console.log('[Vigor] Domain min of temporal avg:', domainMinAvg.toFixed(1), 'K');
 
-        // 4. Apply spatial minimum filter to temporal average
-        console.time('[Vigor] spatial min filter');
-        var minAvg = spatialMinFilter(avgData.tb, avgData.w, avgData.h, radiusPx);
-        console.timeEnd('[Vigor] spatial min filter');
-
-        // 5. Compute vigor using the latest frame: vigor = current_Tb - local_min(avg_Tb)
+        // 4. Compute vigor: current_Tb − domain_min(temporal_avg)
         //    Mask out warm pixels (Tb >= VIGOR_TB_THRESHOLD) so vigor only
         //    displays over cold cloud tops (convection), not clear sky.
         var latestIdx = validFrames[validFrames.length - 1];
@@ -2110,11 +2352,10 @@
         var vigorArr = new Float32Array(refGrid.w * refGrid.h);
         for (var i = 0; i < vigorArr.length; i++) {
             var curTb = latestStitched.tb[i];
-            var minA = minAvg[i];
-            if (isNaN(curTb) || !isFinite(minA) || curTb >= VIGOR_TB_THRESHOLD) {
+            if (isNaN(curTb) || curTb >= VIGOR_TB_THRESHOLD) {
                 vigorArr[i] = NaN;
             } else {
-                vigorArr[i] = curTb - minA;
+                vigorArr[i] = curTb - domainMinAvg;
             }
         }
 
