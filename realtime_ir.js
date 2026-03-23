@@ -21,8 +21,23 @@
         'Himawari':   'Himawari_AHI_Band13_Clean_Infrared'
     };
     var GIBS_TILEMATRIX = 'GoogleMapsCompatible_Level6';
-    var GIBS_MAX_ZOOM = 6;  // GIBS geostationary imagery max zoom
+    var GIBS_MAX_ZOOM = 6;  // GIBS geostationary IR imagery max zoom
     var GIBS_IR_INTERVAL_MIN = 10;  // GIBS tiles every 10 minutes
+
+    // GIBS GeoColor (true-colour day, blended IR night) — higher zoom
+    var GIBS_GEOCOLOR_LAYERS = {
+        'GOES-East':  'GOES-East_ABI_GeoColor',
+        'GOES-West':  'GOES-West_ABI_GeoColor',
+        'Himawari':   null  // no GIBS GeoColor for Himawari; fall back to red visible
+    };
+    // GIBS Red Visible (single-band daytime-only)
+    var GIBS_VIS_LAYERS = {
+        'GOES-East':  'GOES-East_ABI_Band2_Red_Visible_1km',
+        'GOES-West':  'GOES-West_ABI_Band2_Red_Visible_1km',
+        'Himawari':   'Himawari_AHI_Band3_Red_Visible_1km'
+    };
+    var GIBS_VIS_TILEMATRIX = 'GoogleMapsCompatible_Level7';
+    var GIBS_VIS_MAX_ZOOM = 7;
 
     // Satellite coverage zones for seamless compositing.
     // Each satellite has a "core" range (full opacity) and a narrow cross-fade
@@ -82,6 +97,17 @@
     var framesReady = false;   // true once all frames loaded
     var validFrames = [];      // indices of frames that loaded actual tile data
     var frameHasError = [];    // parallel to animFrameLayers — true if frame had tile errors
+
+    // Product mode: 'eir' (Enhanced IR), 'geocolor', or 'vigor'
+    var productMode = 'eir';
+
+    // GeoColor overlay state
+    var geocolorFrameLayers = [];   // parallel array of L.tileLayer for GeoColor frames
+    var geocolorFrameTimes = [];    // ISO time strings for GeoColor frames
+    var geocolorFramesLoaded = 0;
+    var geocolorFramesReady = false;
+    var geocolorValidFrames = [];
+    var geocolorFrameHasError = [];
 
     // IR Vigor overlay state
     var vigorMode = false;          // true when vigor product is active
@@ -350,6 +376,12 @@
                '/GoogleMapsCompatible_Level6/' + z + '/' + y + '/' + x + '.png';
     }
 
+    /** Create a direct GIBS tile URL with configurable TileMatrixSet */
+    function gibsTileUrlWithMatrix(layerName, timeStr, z, y, x, tileMatrix) {
+        return GIBS_BASE + '/' + layerName + '/default/' + timeStr +
+               '/' + tileMatrix + '/' + z + '/' + y + '/' + x + '.png';
+    }
+
     /** Create a Leaflet tile layer for a single GIBS IR product at a given time
      *  (used for storm-detail animation where only one satellite is needed).
      *  Uses a custom GridLayer with per-tile retry so that individual tiles
@@ -394,6 +426,66 @@
             layer.options.bounds = L.latLngBounds(bounds);
         }
         return layer;
+    }
+
+    /** Create a Leaflet tile layer for GIBS GeoColor/Visible at a given time.
+     *  Uses GoogleMapsCompatible_Level7 (higher zoom than IR).
+     *  For Himawari, falls back to Red Visible (no GeoColor available). */
+    function createGIBSLayerVis(layerName, timeStr, opacity) {
+        var VisRetryLayer = L.GridLayer.extend({
+            options: {
+                maxZoom: GIBS_VIS_MAX_ZOOM,
+                maxNativeZoom: GIBS_VIS_MAX_ZOOM,
+                tileSize: 256,
+                opacity: opacity || 0.6,
+                attribution: '<a href="https://earthdata.nasa.gov/gibs">NASA GIBS</a>',
+                updateWhenZooming: false,
+                keepBuffer: 3
+            },
+
+            _layerName: layerName,
+            _timeStr: timeStr,
+
+            createTile: function (coords, done) {
+                var tile = document.createElement('canvas');
+                var ctx = tile.getContext('2d');
+                var size = this.getTileSize();
+                tile.width = size.x;
+                tile.height = size.y;
+
+                loadImageWithRetryVis(this._layerName, this._timeStr, coords.z, coords.y, coords.x)
+                    .then(function (result) {
+                        if (result.img) {
+                            ctx.drawImage(result.img, 0, 0, size.x, size.y);
+                        }
+                        done(null, tile);
+                    });
+
+                return tile;
+            }
+        });
+
+        return new VisRetryLayer();
+    }
+
+    /** Load a GIBS visible/GeoColor tile with time-fallback retry.
+     *  Same strategy as IR but uses the visible TileMatrixSet. */
+    function loadImageWithRetryVis(layerName, timeStr, z, y, x) {
+        var attempts = [0, 10, 20, 30];
+        var baseDate = new Date(timeStr);
+
+        function tryAttempt(idx) {
+            if (idx >= attempts.length) return Promise.resolve({ img: null });
+            var dt = new Date(baseDate.getTime() - attempts[idx] * 60 * 1000);
+            var ts = toGIBSTime(roundToGIBSInterval(dt));
+            var url = gibsTileUrlWithMatrix(layerName, ts, z, y, x, GIBS_VIS_TILEMATRIX);
+            return loadImage(url).then(function (img) {
+                if (img) return { img: img, timeUsed: ts };
+                return tryAttempt(idx + 1);
+            });
+        }
+
+        return tryAttempt(0);
     }
 
     // ── Seamless Composite GIBS Layer ─────────────────────────
@@ -931,6 +1023,8 @@
         animFrameTimes = [];
         framesLoaded = 0;
         framesReady = false;
+        // Also clean up GeoColor frames
+        cleanupGeocolorFrameLayers();
     }
 
     /** Show/hide the loading progress overlay on the detail map */
@@ -941,9 +1035,10 @@
         if (show) {
             loader.style.display = 'flex';
             if (loaderText) {
+                var label = (productMode === 'geocolor') ? 'GeoColor' : 'IR';
                 loaderText.textContent = pct != null
-                    ? 'Pre-loading IR frames\u2026 ' + pct + '%'
-                    : 'Pre-loading IR frames\u2026';
+                    ? 'Pre-loading ' + label + ' frames\u2026 ' + pct + '%'
+                    : 'Pre-loading ' + label + ' frames\u2026';
             }
         } else {
             loader.style.display = 'none';
@@ -965,24 +1060,27 @@
 
         if (framesLoaded >= total) {
             framesReady = true;
-            showLoadingProgress(false);
-            // Show the latest VALID frame now that all tiles are cached
-            if (validFrames.length > 0) {
-                showFrame(validFrames[validFrames.length - 1]);
-            } else {
-                showFrame(animFrameTimes.length - 1);
+            // Only update UI if we're currently in EIR mode (GeoColor has its own handler)
+            if (productMode === 'eir') {
+                showLoadingProgress(false);
+                // Show the latest VALID frame now that all tiles are cached
+                if (validFrames.length > 0) {
+                    showFrame(validFrames[validFrames.length - 1]);
+                } else {
+                    showFrame(animFrameTimes.length - 1);
+                }
+                // Update slider max to reflect valid frame count
+                var slider = document.getElementById('ir-anim-slider');
+                if (slider && validFrames.length > 0) {
+                    slider.max = validFrames.length - 1;
+                    slider.value = validFrames.length - 1;
+                }
+                // Enable animation controls
+                var playBtn = document.getElementById('ir-anim-play');
+                if (playBtn) playBtn.disabled = false;
+                updateAnimCounter();
             }
-            // Update slider max to reflect valid frame count
-            var slider = document.getElementById('ir-anim-slider');
-            if (slider && validFrames.length > 0) {
-                slider.max = validFrames.length - 1;
-                slider.value = validFrames.length - 1;
-            }
-            // Enable animation controls
-            var playBtn = document.getElementById('ir-anim-play');
-            if (playBtn) playBtn.disabled = false;
-            updateAnimCounter();
-            console.log('[IR Monitor] All ' + total + ' frames pre-loaded (' + detailSatName + '), ' + validFrames.length + ' valid');
+            console.log('[IR Monitor] All ' + total + ' IR frames pre-loaded (' + detailSatName + '), ' + validFrames.length + ' valid');
         }
     }
 
@@ -1011,11 +1109,12 @@
         mapDiv.style.display = 'block';
 
         // Create mini-map centered on storm
+        // Allow up to zoom 7 (GeoColor supports Level7); IR tiles still capped at Level6
         detailMap = L.map(mapDiv, {
             center: [storm.lat, storm.lon],
             zoom: 5,
             minZoom: 3,
-            maxZoom: GIBS_MAX_ZOOM,
+            maxZoom: GIBS_VIS_MAX_ZOOM,
             zoomControl: true,
             attributionControl: false
         });
@@ -1117,18 +1216,22 @@
             if (!framesReady && animFrameLayers.length > 0) {
                 console.warn('[IR Monitor] Frame preload timeout — enabling animation with ' + framesLoaded + '/' + animFrameTimes.length + ' frames (' + validFrames.length + ' valid)');
                 framesReady = true;
-                showLoadingProgress(false);
-                var playBtn = document.getElementById('ir-anim-play');
-                if (playBtn) playBtn.disabled = false;
-                var slider = document.getElementById('ir-anim-slider');
-                if (slider && validFrames.length > 0) {
-                    slider.max = validFrames.length - 1;
-                    slider.value = validFrames.length - 1;
-                    showFrame(validFrames[validFrames.length - 1]);
-                } else {
-                    showFrame(animFrameTimes.length - 1);
+                if (productMode === 'eir') {
+                    showLoadingProgress(false);
                 }
-                updateAnimCounter();
+                var playBtn = document.getElementById('ir-anim-play');
+                if (playBtn && productMode === 'eir') playBtn.disabled = false;
+                var slider = document.getElementById('ir-anim-slider');
+                if (productMode === 'eir') {
+                    if (slider && validFrames.length > 0) {
+                        slider.max = validFrames.length - 1;
+                        slider.value = validFrames.length - 1;
+                        showFrame(validFrames[validFrames.length - 1]);
+                    } else {
+                        showFrame(animFrameTimes.length - 1);
+                    }
+                    updateAnimCounter();
+                }
             }
         }, 30000);
 
@@ -1165,13 +1268,17 @@
     function openStormDetail(atcfId) {
         currentStormId = atcfId;
 
-        // Reset vigor state for new storm
+        // Reset product state for new storm
+        productMode = 'eir';
         vigorMode = false;
         vigorFetching = false;
         removeVigorLayer();
+        cleanupGeocolorFrameLayers();
         var eirBtn = document.getElementById('ir-product-eir');
+        var geoBtn = document.getElementById('ir-product-geocolor');
         var vigBtn = document.getElementById('ir-product-vigor');
         if (eirBtn) eirBtn.classList.add('ir-product-active');
+        if (geoBtn) { geoBtn.classList.remove('ir-product-active'); geoBtn.classList.remove('ir-vigor-loading'); geoBtn.textContent = 'GeoColor'; }
         if (vigBtn) { vigBtn.classList.remove('ir-product-active'); vigBtn.classList.remove('ir-vigor-loading'); vigBtn.textContent = 'IR Vigor'; }
         var vigorLegend = document.getElementById('ir-vigor-legend');
         if (vigorLegend) vigorLegend.style.display = 'none';
@@ -1263,13 +1370,17 @@
         currentStormId = null;
         stopAnimation();
 
-        // Reset vigor state
+        // Reset product state
         removeVigorLayer();
+        cleanupGeocolorFrameLayers();
+        productMode = 'eir';
         vigorMode = false;
         vigorFetching = false;
         var eirBtn = document.getElementById('ir-product-eir');
+        var geoBtn = document.getElementById('ir-product-geocolor');
         var vigBtn = document.getElementById('ir-product-vigor');
         if (eirBtn) eirBtn.classList.add('ir-product-active');
+        if (geoBtn) { geoBtn.classList.remove('ir-product-active'); geoBtn.classList.remove('ir-vigor-loading'); geoBtn.textContent = 'GeoColor'; }
         if (vigBtn) { vigBtn.classList.remove('ir-product-active'); vigBtn.classList.remove('ir-vigor-loading'); vigBtn.textContent = 'IR Vigor'; }
         var vigorLegend = document.getElementById('ir-vigor-legend');
         if (vigorLegend) vigorLegend.style.display = 'none';
@@ -1331,44 +1442,69 @@
     }
 
     /** Find the position of animIndex within validFrames (or -1) */
-    function validFramePos() {
-        for (var i = 0; i < validFrames.length; i++) {
-            if (validFrames[i] === animIndex) return i;
+    /** Get the active set of valid frames and frame layers for the current product mode */
+    function activeFrameState() {
+        if (productMode === 'geocolor') {
+            return {
+                valid: geocolorValidFrames,
+                layers: geocolorFrameLayers,
+                times: geocolorFrameTimes,
+                ready: geocolorFramesReady,
+                showFn: showGeocolorFrame
+            };
         }
-        return -1;
+        return {
+            valid: validFrames,
+            layers: animFrameLayers,
+            times: animFrameTimes,
+            ready: framesReady,
+            showFn: showFrame
+        };
     }
 
     /** Update the frame counter text (shows position in valid frames) */
     function updateAnimCounter() {
         var counter = document.getElementById('ir-anim-counter');
-        var pos = validFramePos();
-        if (validFrames.length > 0 && pos >= 0) {
-            counter.textContent = (pos + 1) + ' / ' + validFrames.length;
+        var state = activeFrameState();
+        var pos = activeValidFramePos();
+        if (state.valid.length > 0 && pos >= 0) {
+            counter.textContent = (pos + 1) + ' / ' + state.valid.length;
         } else {
-            counter.textContent = (animIndex + 1) + ' / ' + animFrameTimes.length;
+            counter.textContent = (animIndex + 1) + ' / ' + state.times.length;
         }
+    }
+
+    /** Find position of animIndex within the active valid frames array */
+    function activeValidFramePos() {
+        var state = activeFrameState();
+        for (var i = 0; i < state.valid.length; i++) {
+            if (state.valid[i] === animIndex) return i;
+        }
+        return -1;
     }
 
     /** Step to next valid frame */
     function nextFrame() {
-        if (vigorMode) return;
-        if (!framesReady) return;
-        if (validFrames.length === 0) return;
-        var pos = validFramePos();
-        var nextPos = (pos + 1) % validFrames.length;
-        showFrame(validFrames[nextPos]);
+        if (productMode === 'vigor') return;
+        var state = activeFrameState();
+        if (!state.ready) return;
+        if (state.valid.length === 0) return;
+        var pos = activeValidFramePos();
+        var nextPos = (pos + 1) % state.valid.length;
+        state.showFn(state.valid[nextPos]);
         document.getElementById('ir-anim-slider').value = nextPos;
         updateAnimCounter();
     }
 
     /** Step to previous valid frame */
     function prevFrame() {
-        if (vigorMode) return;
-        if (!framesReady) return;
-        if (validFrames.length === 0) return;
-        var pos = validFramePos();
-        var prevPos = (pos - 1 + validFrames.length) % validFrames.length;
-        showFrame(validFrames[prevPos]);
+        if (productMode === 'vigor') return;
+        var state = activeFrameState();
+        if (!state.ready) return;
+        if (state.valid.length === 0) return;
+        var pos = activeValidFramePos();
+        var prevPos = (pos - 1 + state.valid.length) % state.valid.length;
+        state.showFn(state.valid[prevPos]);
         document.getElementById('ir-anim-slider').value = prevPos;
         updateAnimCounter();
     }
@@ -1384,8 +1520,9 @@
 
     /** Start animation loop */
     function startAnimation() {
-        if (vigorMode) return;
-        if (animFrameTimes.length < 2 || !framesReady) return;
+        if (productMode === 'vigor') return;
+        var state = activeFrameState();
+        if (state.times.length < 2 || !state.ready) return;
         animPlaying = true;
         var btn = document.getElementById('ir-anim-play');
         btn.innerHTML = '&#9646;&#9646;'; // pause icon
@@ -1480,34 +1617,70 @@
     //  IR VIGOR PRODUCT
     // ═══════════════════════════════════════════════════════════
 
-    /** Toggle between Enhanced IR and IR Vigor products */
-    function setVigorMode(enabled) {
-        vigorMode = enabled;
+    /** Switch between product modes: 'eir', 'geocolor', 'vigor' */
+    function setProductMode(mode) {
+        var prevMode = productMode;
+        productMode = mode;
+        vigorMode = (mode === 'vigor');
 
-        // Update toggle button states
+        // Update toggle button active states
         var eirBtn = document.getElementById('ir-product-eir');
+        var geoBtn = document.getElementById('ir-product-geocolor');
         var vigBtn = document.getElementById('ir-product-vigor');
-        if (eirBtn) eirBtn.classList.toggle('ir-product-active', !enabled);
-        if (vigBtn) vigBtn.classList.toggle('ir-product-active', enabled);
+        if (eirBtn) eirBtn.classList.toggle('ir-product-active', mode === 'eir');
+        if (geoBtn) geoBtn.classList.toggle('ir-product-active', mode === 'geocolor');
+        if (vigBtn) vigBtn.classList.toggle('ir-product-active', mode === 'vigor');
 
         // Show/hide legends
         var vigorLeg = document.getElementById('ir-vigor-legend');
         var tbLeg = document.getElementById('ir-tb-legend');
-        if (vigorLeg) vigorLeg.style.display = enabled ? 'block' : 'none';
-        if (tbLeg) tbLeg.style.display = enabled ? 'none' : 'block';
+        if (vigorLeg) vigorLeg.style.display = (mode === 'vigor') ? 'block' : 'none';
+        if (tbLeg) tbLeg.style.display = (mode === 'eir') ? 'block' : 'none';
 
-        if (enabled) {
-            // Show vigor overlay, hide IR animation frames
+        // --- Deactivate previous mode ---
+        if (prevMode === 'eir') {
             hideAllAnimFrames();
             stopAnimation();
-            fetchAndShowVigor();
-        } else {
-            // Remove vigor overlay, restore IR animation
+        } else if (prevMode === 'geocolor') {
+            hideAllGeocolorFrames();
+            stopAnimation();
+        } else if (prevMode === 'vigor') {
             removeVigorLayer();
+        }
+
+        // --- Activate new mode ---
+        if (mode === 'eir') {
+            // Restore IR slider state
+            var slider = document.getElementById('ir-anim-slider');
+            if (slider && validFrames.length > 0) {
+                slider.max = validFrames.length - 1;
+                var pos = -1;
+                for (var vi = 0; vi < validFrames.length; vi++) {
+                    if (validFrames[vi] === animIndex) { pos = vi; break; }
+                }
+                if (pos < 0) pos = validFrames.length - 1;
+                slider.value = pos;
+            }
             if (animFrameLayers.length > 0 && framesReady) {
                 showFrame(animIndex);
             }
+            var playBtn = document.getElementById('ir-anim-play');
+            if (playBtn) playBtn.disabled = !framesReady;
+            updateFrameOverlay();
+            updateAnimCounter();
+        } else if (mode === 'geocolor') {
+            loadGeocolorFrames();
+        } else if (mode === 'vigor') {
+            hideAllAnimFrames();
+            hideAllGeocolorFrames();
+            stopAnimation();
+            fetchAndShowVigor();
         }
+    }
+
+    /** Backward-compatible wrapper for vigor toggle */
+    function setVigorMode(enabled) {
+        setProductMode(enabled ? 'vigor' : 'eir');
     }
 
     /** Hide all IR animation frame layers */
@@ -1517,12 +1690,194 @@
         }
     }
 
+    /** Hide all GeoColor animation frame layers */
+    function hideAllGeocolorFrames() {
+        for (var i = 0; i < geocolorFrameLayers.length; i++) {
+            geocolorFrameLayers[i].setOpacity(0);
+        }
+    }
+
+    /** Clean up GeoColor frame layers from the map */
+    function cleanupGeocolorFrameLayers() {
+        for (var i = 0; i < geocolorFrameLayers.length; i++) {
+            if (detailMap && geocolorFrameLayers[i]) {
+                detailMap.removeLayer(geocolorFrameLayers[i]);
+            }
+        }
+        geocolorFrameLayers = [];
+        geocolorFrameTimes = [];
+        geocolorValidFrames = [];
+        geocolorFrameHasError = [];
+        geocolorFramesLoaded = 0;
+        geocolorFramesReady = false;
+    }
+
     /** Remove the vigor image overlay from the map */
     function removeVigorLayer() {
         if (vigorLayer && detailMap) {
             detailMap.removeLayer(vigorLayer);
             vigorLayer = null;
         }
+    }
+
+    /** Load GeoColor animation frames lazily (only when user switches to GeoColor mode).
+     *  Uses same frame times as IR but with GeoColor/visible GIBS layers. */
+    function loadGeocolorFrames() {
+        if (!detailMap || !currentStormId) return;
+
+        // If already loaded, just restore slider and show the current frame
+        if (geocolorFramesReady && geocolorFrameLayers.length > 0) {
+            var slider = document.getElementById('ir-anim-slider');
+            if (slider && geocolorValidFrames.length > 0) {
+                slider.max = geocolorValidFrames.length - 1;
+                slider.value = geocolorValidFrames.length - 1;
+            }
+            var playBtn = document.getElementById('ir-anim-play');
+            if (playBtn) playBtn.disabled = false;
+            showGeocolorFrame(geocolorValidFrames.length > 0
+                ? geocolorValidFrames[geocolorValidFrames.length - 1]
+                : geocolorFrameLayers.length - 1);
+            updateAnimCounter();
+            return;
+        }
+
+        // If already loading, skip
+        if (geocolorFrameLayers.length > 0 && !geocolorFramesReady) return;
+
+        // Determine visible layer name — GeoColor for GOES, Red Visible for Himawari
+        var visLayerName = GIBS_GEOCOLOR_LAYERS[detailSatName];
+        if (!visLayerName) {
+            visLayerName = GIBS_VIS_LAYERS[detailSatName];
+        }
+        if (!visLayerName) {
+            showVigorToast('No visible imagery available for ' + detailSatName);
+            setProductMode('eir');
+            return;
+        }
+
+        // Use the same frame times as IR
+        geocolorFrameTimes = animFrameTimes.slice();
+        geocolorFramesLoaded = 0;
+        geocolorFramesReady = false;
+        geocolorValidFrames = [];
+        geocolorFrameHasError = [];
+
+        // Show loading state on the GeoColor button
+        var geoBtn = document.getElementById('ir-product-geocolor');
+        if (geoBtn) {
+            geoBtn.classList.add('ir-vigor-loading');
+            geoBtn.textContent = 'Loading\u2026';
+        }
+        showLoadingProgress(true, 0);
+
+        // Update satellite label
+        var satLabel = document.getElementById('ir-satellite-label');
+        if (satLabel) {
+            var isGeoColor = !!GIBS_GEOCOLOR_LAYERS[detailSatName];
+            satLabel.textContent = (isGeoColor ? 'GeoColor' : 'Red Visible') + ' \u2014 ' + detailSatName;
+        }
+
+        // Pre-create ALL GeoColor frame tile layers (hidden at opacity 0)
+        for (var i = 0; i < geocolorFrameTimes.length; i++) {
+            var timeStr = geocolorFrameTimes[i];
+            var lyr = createGIBSLayerVis(visLayerName, timeStr, 0);
+            lyr.addTo(detailMap);
+            geocolorFrameHasError.push(false);
+
+            (function (layer, idx) {
+                layer.on('tileerror', function () {
+                    geocolorFrameHasError[idx] = true;
+                });
+                layer.on('load', function () {
+                    onGeocolorFrameLoaded(idx);
+                });
+            })(lyr, i);
+
+            geocolorFrameLayers.push(lyr);
+        }
+
+        // Safety timeout
+        setTimeout(function () {
+            if (!geocolorFramesReady && geocolorFrameLayers.length > 0 && productMode === 'geocolor') {
+                console.warn('[IR Monitor] GeoColor preload timeout — enabling with ' + geocolorFramesLoaded + '/' + geocolorFrameTimes.length + ' frames');
+                geocolorFramesReady = true;
+                showLoadingProgress(false);
+                if (geoBtn) {
+                    geoBtn.classList.remove('ir-vigor-loading');
+                    geoBtn.textContent = 'GeoColor';
+                }
+                var playBtn = document.getElementById('ir-anim-play');
+                if (playBtn) playBtn.disabled = false;
+                var slider = document.getElementById('ir-anim-slider');
+                if (slider && geocolorValidFrames.length > 0) {
+                    slider.max = geocolorValidFrames.length - 1;
+                    slider.value = geocolorValidFrames.length - 1;
+                    showGeocolorFrame(geocolorValidFrames[geocolorValidFrames.length - 1]);
+                }
+                updateAnimCounter();
+            }
+        }, 30000);
+    }
+
+    /** Called when a GeoColor frame tile layer finishes loading */
+    function onGeocolorFrameLoaded(idx) {
+        geocolorFramesLoaded++;
+        if (!geocolorFrameHasError[idx]) {
+            geocolorValidFrames.push(idx);
+            geocolorValidFrames.sort(function (a, b) { return a - b; });
+        }
+
+        var total = geocolorFrameTimes.length;
+        var pct = Math.round((geocolorFramesLoaded / total) * 100);
+        showLoadingProgress(true, pct);
+
+        if (geocolorFramesLoaded >= total) {
+            geocolorFramesReady = true;
+            showLoadingProgress(false);
+            var geoBtn = document.getElementById('ir-product-geocolor');
+            if (geoBtn) {
+                geoBtn.classList.remove('ir-vigor-loading');
+                geoBtn.textContent = 'GeoColor';
+            }
+
+            var playBtn = document.getElementById('ir-anim-play');
+            if (playBtn) playBtn.disabled = false;
+
+            // Update slider for GeoColor valid frames
+            var slider = document.getElementById('ir-anim-slider');
+            if (slider && geocolorValidFrames.length > 0) {
+                slider.max = geocolorValidFrames.length - 1;
+                slider.value = geocolorValidFrames.length - 1;
+            }
+
+            // Show last frame if still in GeoColor mode
+            if (productMode === 'geocolor' && geocolorValidFrames.length > 0) {
+                showGeocolorFrame(geocolorValidFrames[geocolorValidFrames.length - 1]);
+            }
+            updateAnimCounter();
+        }
+    }
+
+    /** Show a specific GeoColor frame by toggling opacity */
+    function showGeocolorFrame(idx) {
+        if (idx < 0 || idx >= geocolorFrameLayers.length || !detailMap) return;
+
+        // Hide all GeoColor frames
+        for (var i = 0; i < geocolorFrameLayers.length; i++) {
+            geocolorFrameLayers[i].setOpacity(0);
+        }
+
+        // Show the requested frame
+        animIndex = idx;
+        geocolorFrameLayers[idx].setOpacity(0.92);
+
+        // Update overlay info
+        if (geocolorFrameTimes[idx]) {
+            document.getElementById('ir-frame-time').textContent = fmtUTC(geocolorFrameTimes[idx]);
+        }
+        var isGeoColor = !!GIBS_GEOCOLOR_LAYERS[detailSatName];
+        document.getElementById('ir-satellite-label').textContent =
+            (isGeoColor ? 'GeoColor' : 'Red Visible') + ' \u2014 ' + detailSatName;
     }
 
     // ── Client-Side Vigor Computation Helpers ────────────────
@@ -1955,24 +2310,28 @@
             nextFrame();
         });
         document.getElementById('ir-anim-slider').addEventListener('input', function () {
-            if (!framesReady) return;
+            var state = activeFrameState();
+            if (!state.ready) return;
             stopAnimation();
             var sliderPos = parseInt(this.value, 10);
-            // Map slider position to valid frame index
-            if (validFrames.length > 0 && sliderPos < validFrames.length) {
-                showFrame(validFrames[sliderPos]);
+            if (state.valid.length > 0 && sliderPos < state.valid.length) {
+                state.showFn(state.valid[sliderPos]);
             }
             updateAnimCounter();
         });
 
-        // Product toggle buttons (Enhanced IR / IR Vigor)
+        // Product toggle buttons (Enhanced IR / GeoColor / IR Vigor)
         document.getElementById('ir-product-eir').addEventListener('click', function () {
-            if (!vigorMode) return;
-            setVigorMode(false);
+            if (productMode === 'eir') return;
+            setProductMode('eir');
+        });
+        document.getElementById('ir-product-geocolor').addEventListener('click', function () {
+            if (productMode === 'geocolor') return;
+            setProductMode('geocolor');
         });
         document.getElementById('ir-product-vigor').addEventListener('click', function () {
-            if (vigorMode || vigorFetching) return;
-            setVigorMode(true);
+            if (productMode === 'vigor' || vigorFetching) return;
+            setProductMode('vigor');
         });
 
         // Browser back/forward
