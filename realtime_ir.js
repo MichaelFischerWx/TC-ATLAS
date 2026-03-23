@@ -306,6 +306,27 @@
         });
     }
 
+    /** Load an image with retry at progressively older GIBS times.
+     *  Tries the primary time, then falls back 10/20/30 min earlier.
+     *  Returns {img, timeUsed} or {img: null} if all attempts fail. */
+    function loadImageWithRetry(layerName, timeStr, z, y, x) {
+        var attempts = [0, 10, 20, 30]; // minute offsets to try
+        var baseDate = new Date(timeStr);
+
+        function tryAttempt(idx) {
+            if (idx >= attempts.length) return Promise.resolve({ img: null });
+            var dt = new Date(baseDate.getTime() - attempts[idx] * 60 * 1000);
+            var ts = toGIBSTime(roundToGIBSInterval(dt));
+            var url = gibsTileUrlDirect(layerName, ts, z, y, x);
+            return loadImage(url).then(function (img) {
+                if (img) return { img: img, timeUsed: ts };
+                return tryAttempt(idx + 1);
+            });
+        }
+
+        return tryAttempt(0);
+    }
+
     /** Create the seamless composite GIBS GridLayer */
     function createCompositeGIBSLayer(timeStr, opacity) {
         var CompositeLayer = L.GridLayer.extend({
@@ -335,26 +356,24 @@
                 var ts = this._timeStr;
 
                 if (sats.length === 1) {
-                    // Single satellite — just load and draw (most common case, no compositing overhead)
-                    var url = gibsTileUrlDirect(sats[0].layerName, ts, z, y, x);
-                    loadImage(url).then(function (img) {
-                        if (img) {
-                            ctx.drawImage(img, 0, 0, size.x, size.y);
+                    // Single satellite — load with retry fallback
+                    loadImageWithRetry(sats[0].layerName, ts, z, y, x).then(function (result) {
+                        if (result.img) {
+                            ctx.drawImage(result.img, 0, 0, size.x, size.y);
                         }
                         done(null, tile);
                     });
                 } else {
-                    // Multiple satellites — composite with alpha blending
+                    // Multiple satellites — composite with alpha blending + retry
                     var promises = [];
                     for (var i = 0; i < sats.length; i++) {
-                        var satUrl = gibsTileUrlDirect(sats[i].layerName, ts, z, y, x);
-                        promises.push(loadImage(satUrl));
+                        promises.push(loadImageWithRetry(sats[i].layerName, ts, z, y, x));
                     }
-                    Promise.all(promises).then(function (images) {
-                        for (var j = 0; j < images.length; j++) {
-                            if (!images[j]) continue;
+                    Promise.all(promises).then(function (results) {
+                        for (var j = 0; j < results.length; j++) {
+                            if (!results[j].img) continue;
                             ctx.globalAlpha = sats[j].weight;
-                            ctx.drawImage(images[j], 0, 0, size.x, size.y);
+                            ctx.drawImage(results[j].img, 0, 0, size.x, size.y);
                         }
                         ctx.globalAlpha = 1.0;
                         done(null, tile);
@@ -497,15 +516,19 @@
             }
         }, 800);
 
-        // Coastline/borders overlay — sits above IR so land boundaries are visible
-        // Uses light basemap at low opacity: coastlines and borders show as faint white lines
+        // Coastline/borders overlay — sits above IR so land boundaries are visible.
+        // Uses CartoDB Voyager (no labels) with mix-blend-mode: screen so that only
+        // the bright coastline/border strokes show through while the dark ocean areas
+        // have zero effect on the IR underneath.  This avoids the white wash that
+        // plain opacity caused with the old light_nolabels approach.
         map.createPane('coastlinePane');
         map.getPane('coastlinePane').style.zIndex = 450; // above tilePane (200) but below overlayPane (400)
         map.getPane('coastlinePane').style.pointerEvents = 'none';
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png', {
+        map.getPane('coastlinePane').style.mixBlendMode = 'screen';
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}{r}.png', {
             subdomains: 'abcd',
             maxZoom: 19,
-            opacity: 0.28,
+            opacity: 0.35,
             pane: 'coastlinePane'
         }).addTo(map);
 
@@ -873,12 +896,14 @@
             animFrameLayers.push(lyr);
         }
 
-        // Coastline/borders overlay — above IR so land boundaries are clearly visible
+        // Coastline/borders overlay — uses mix-blend-mode: screen so only the
+        // bright coastline/border strokes show through without washing out the IR.
         detailMap.createPane('coastlinePane');
         detailMap.getPane('coastlinePane').style.zIndex = 450;
         detailMap.getPane('coastlinePane').style.pointerEvents = 'none';
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png', {
-            subdomains: 'abcd', maxZoom: 19, opacity: 0.28, pane: 'coastlinePane'
+        detailMap.getPane('coastlinePane').style.mixBlendMode = 'screen';
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}{r}.png', {
+            subdomains: 'abcd', maxZoom: 19, opacity: 0.35, pane: 'coastlinePane'
         }).addTo(detailMap);
 
         // Labels on top (in overlay pane so above IR tiles)
@@ -1413,7 +1438,9 @@
             .finally(function () { clearTimeout(_vigorTimeout); });
     }
 
-    /** Display the vigor PNG as a Leaflet image overlay */
+    /** Display the vigor PNG as a Leaflet image overlay with pixel-based rendering.
+     *  Uses CSS image-rendering: pixelated so each grid point is a discrete pixel
+     *  (matching the look of IR imagery), not a smooth interpolated overlay. */
     function showVigorOverlay(data) {
         removeVigorLayer();
         if (!detailMap || !data.image_b64 || !data.bounds) return;
@@ -1424,8 +1451,17 @@
             L.latLng(data.bounds[1][0], data.bounds[1][1])
         );
 
-        vigorLayer = L.imageOverlay(imgUrl, bounds, { opacity: 0.85 });
+        vigorLayer = L.imageOverlay(imgUrl, bounds, { opacity: 0.95 });
         vigorLayer.addTo(detailMap);
+
+        // Apply pixelated rendering to the image element so the discrete grid
+        // points are visible (like IR tiles) instead of browser-smoothed blobs.
+        var imgEl = vigorLayer.getElement();
+        if (imgEl) {
+            imgEl.style.imageRendering = 'pixelated';         // Chrome/Edge/Firefox
+            imgEl.style.imageRendering = '-moz-crisp-edges';  // Firefox fallback
+            imgEl.style.imageRendering = 'crisp-edges';       // Safari fallback
+        }
 
         // Update the overlay info label
         var satLabel = document.getElementById('ir-satellite-label');
