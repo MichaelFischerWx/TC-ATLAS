@@ -98,6 +98,13 @@
     var globalAnimLoaded = 0;
     var globalAnimReady = false;
     var globalAnimLoading = false;    // true while frames are being pre-loaded
+    var globalAnimSpeedIdx = 1;        // index into GLOBAL_ANIM_SPEEDS
+    var GLOBAL_ANIM_SPEEDS = [
+        { label: '0.5×', ms: 1200 },
+        { label: '1×',   ms: 600 },
+        { label: '1.5×', ms: 400 },
+        { label: '2×',   ms: 300 }
+    ];
 
     // Storm detail mini-map state
     var detailMap = null;
@@ -565,6 +572,8 @@
                             ctx.drawImage(visResult.img, 0, 0, size.x, size.y);
                         }
                         done(null, tile);
+                    }).catch(function () {
+                        done(null, tile); // show whatever was drawn (may be blank)
                     });
                 } else {
                     // Standard GeoColor (handles day/night itself)
@@ -572,6 +581,8 @@
                         if (result.img) {
                             ctx.drawImage(result.img, 0, 0, size.x, size.y);
                         }
+                        done(null, tile);
+                    }).catch(function () {
                         done(null, tile);
                     });
                 }
@@ -651,7 +662,9 @@
     /** Load a GIBS visible/GeoColor tile with time-fallback retry.
      *  Same strategy as IR but uses the visible TileMatrixSet. */
     function loadImageWithRetryVis(layerName, timeStr, z, y, x) {
-        var attempts = [0, 10, 20, 30];
+        // Wider retry window for visible/GeoColor tiles — Himawari data on
+        // GIBS can lag 1-2 hours behind GOES due to the JMA→LANCE→GIBS pipeline
+        var attempts = [0, 10, 20, 30, 60, 90, 120];
         var baseDate = new Date(timeStr);
 
         function tryAttempt(idx) {
@@ -1080,9 +1093,25 @@
         }
         globalAnimPlaying = true;
         updateGlobalAnimControls('playing');
+        var ms = GLOBAL_ANIM_SPEEDS[globalAnimSpeedIdx].ms;
         globalAnimTimer = setInterval(function () {
             nextGlobalFrame();
-        }, 600); // ~1.7 fps for smooth global view
+        }, ms);
+    }
+
+    /** Cycle to the next animation speed and restart if playing */
+    function cycleGlobalAnimSpeed() {
+        globalAnimSpeedIdx = (globalAnimSpeedIdx + 1) % GLOBAL_ANIM_SPEEDS.length;
+        var speedBtn = document.getElementById('ir-global-anim-speed');
+        if (speedBtn) speedBtn.textContent = GLOBAL_ANIM_SPEEDS[globalAnimSpeedIdx].label;
+        // Restart timer with new speed if playing
+        if (globalAnimPlaying && globalAnimTimer) {
+            clearInterval(globalAnimTimer);
+            var ms = GLOBAL_ANIM_SPEEDS[globalAnimSpeedIdx].ms;
+            globalAnimTimer = setInterval(function () {
+                nextGlobalFrame();
+            }, ms);
+        }
     }
 
     /** Stop global animation loop */
@@ -1267,13 +1296,13 @@
         });
         map.addControl(new ProductToggle());
 
-        // Add global animation control panel (bottom-left of map)
+        // Add global animation control panel (bottom-right, above status bar)
         var AnimPanel = L.Control.extend({
-            options: { position: 'bottomleft' },
+            options: { position: 'bottomright' },
             onAdd: function () {
                 var container = L.DomUtil.create('div', 'ir-global-anim-panel');
                 container.id = 'ir-global-anim-panel';
-                container.style.cssText = 'display:flex;align-items:center;gap:6px;padding:5px 10px;font-family:DM Sans,sans-serif;font-size:0.72rem;color:#8b9ec2;background:rgba(15,33,64,0.88);border:1px solid rgba(255,255,255,0.12);border-radius:5px;backdrop-filter:blur(4px);';
+                container.style.cssText = 'display:flex;align-items:center;gap:6px;padding:5px 10px;font-family:DM Sans,sans-serif;font-size:0.72rem;color:#8b9ec2;background:rgba(15,33,64,0.88);border:1px solid rgba(255,255,255,0.12);border-radius:5px;backdrop-filter:blur(4px);margin-bottom:30px;';
                 L.DomEvent.disableClickPropagation(container);
 
                 // Prev button
@@ -1327,6 +1356,14 @@
                 var statusSpan = L.DomUtil.create('span', '', container);
                 statusSpan.id = 'ir-global-anim-status';
                 statusSpan.style.cssText = 'color:#64748b;font-size:0.65rem;';
+
+                // Speed toggle button
+                var speedBtn = L.DomUtil.create('button', '', container);
+                speedBtn.id = 'ir-global-anim-speed';
+                speedBtn.textContent = GLOBAL_ANIM_SPEEDS[globalAnimSpeedIdx].label;
+                speedBtn.title = 'Cycle animation speed';
+                speedBtn.style.cssText = 'background:rgba(96,165,250,0.15);border:1px solid rgba(96,165,250,0.3);color:#60a5fa;cursor:pointer;font-size:0.6rem;font-weight:600;padding:1px 6px;border-radius:3px;font-family:JetBrains Mono,monospace;';
+                speedBtn.addEventListener('click', cycleGlobalAnimSpeed);
 
                 // Stop/reset button
                 var stopBtn = L.DomUtil.create('button', '', container);
@@ -1442,6 +1479,14 @@
         for (var i = 1; i < history.length; i++) {
             var prev = history[i - 1];
             var curr = history[i];
+
+            // Skip segments with impossibly large spatial jumps (recycled invest IDs)
+            var dlat = curr.lat - prev.lat;
+            var dlon = curr.lon - prev.lon;
+            var cosLat = Math.cos((curr.lat + prev.lat) * 0.5 * Math.PI / 180);
+            var dist = Math.sqrt(dlat * dlat + (dlon * cosLat) * (dlon * cosLat));
+            if (dist > 8) continue;  // >8° (~900 km) in one fix interval = invest recycling
+
             var cat = windToCategory(curr.vmax_kt);
             var color = SS_COLORS[cat] || SS_COLORS.TD;
 

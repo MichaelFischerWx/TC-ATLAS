@@ -876,14 +876,26 @@ def get_storm_metadata(atcf_id: str):
     # ── Guard against reused invest numbers (e.g. SH98) ──
     # JTWC B-decks can contain multiple disturbances under the same
     # invest designator across a season.  Detect large temporal gaps
-    # (>72 h) and keep only the most recent continuous segment.
+    # (>72 h) OR large spatial jumps (>8° great-circle) and keep only
+    # the most recent continuous segment.
     if len(intensity_history) >= 2:
         _GAP_HOURS = 72
+        _MAX_JUMP_DEG = 8.0  # ~900 km — far exceeds any 6-hourly TC motion
         last_seg_start = 0
         for i in range(1, len(intensity_history)):
             t_prev = _dt.fromisoformat(intensity_history[i - 1]["time"].replace("Z", "+00:00"))
             t_curr = _dt.fromisoformat(intensity_history[i]["time"].replace("Z", "+00:00"))
-            if (t_curr - t_prev) > timedelta(hours=_GAP_HOURS):
+            time_gap = (t_curr - t_prev) > timedelta(hours=_GAP_HOURS)
+
+            # Spatial jump check
+            prev_pt = intensity_history[i - 1]
+            curr_pt = intensity_history[i]
+            spatial_jump = _haversine_deg(
+                prev_pt["lat"], prev_pt["lon"],
+                curr_pt["lat"], curr_pt["lon"]
+            ) > _MAX_JUMP_DEG
+
+            if time_gap or spatial_jump:
                 last_seg_start = i
         if last_seg_start > 0:
             intensity_history = intensity_history[last_seg_start:]
