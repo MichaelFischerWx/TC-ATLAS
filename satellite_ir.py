@@ -431,70 +431,121 @@ def _himawari_seg_for_lat(center_lat: float, box_deg: float) -> list:
 def _parse_hsd_header(data: bytes) -> dict:
     """
     Parse the essential header fields from a Himawari Standard Data (HSD) file.
-    Returns dict with calibration coefficients and geometry info.
+    Reads block lengths dynamically to find correct offsets.
+
+    HSD block layout (big-endian):
+      Block 1 (Basic info):   byte 0: blk_num(1) + blk_len(2) + ...
+      Block 2 (Data info):    starts at block1_len
+      Block 3 (Projection):   starts at block1_len + block2_len
+      Block 4 (Navigation):   starts at sum of blocks 1-3
+      Block 5 (Calibration):  starts at sum of blocks 1-4
+
+    Returns dict with n_columns, n_lines, calibration coefficients,
+    and data_offset.
     """
     import struct
 
     header = {}
-    # Block 1: Basic info (282 bytes)
-    header["block1_size"] = struct.unpack_from(">I", data, 4)[0]
-    header["n_columns"] = struct.unpack_from(">H", data, 12)[0]
-    header["n_lines"] = struct.unpack_from(">H", data, 14)[0]
 
-    # Block 5: Calibration (18 bytes, starts at offset varies)
-    # The HSD format has fixed block positions:
-    # Block 1: 282, Block 2: 50, Block 3: 127, Block 4: 8, Block 5: 40
-    blk5_offset = 282 + 50 + 127 + 8  # = 467
-    # Block 5 header: block number (1B) + block length (2B)
-    # For IR bands, calibration uses: c0, c1, c2 (planck), then gain/offset
-    # Simpler: use gain and offset from block 5
-    # Format: block_num(1) + block_len(2) + band_num(2) + wavelength(8) +
-    #         planck_c1(8) + planck_c2(8) + planck_c0(8) +
+    # Read block lengths dynamically by walking the block chain
+    # Each block starts with: block_number (uint8, 1B) + block_length (uint16, 2B)
+    def blk_len_at(offset):
+        return struct.unpack_from(">H", data, offset + 1)[0]
+
+    try:
+        blk1_len = blk_len_at(0)
+        blk2_start = blk1_len
+        blk2_len = blk_len_at(blk2_start)
+        blk3_start = blk2_start + blk2_len
+        blk3_len = blk_len_at(blk3_start)
+        blk4_start = blk3_start + blk3_len
+        blk4_len = blk_len_at(blk4_start)
+        blk5_start = blk4_start + blk4_len
+    except Exception as e:
+        print(f"[satellite_ir] HSD block chain walk failed: {e}")
+        # Fallback to typical offsets for 2km FLDK data
+        blk2_start = 282
+        blk5_start = 467
+        blk1_len = 282
+
+    # Block 2: Data info — contains image dimensions
+    # Layout: blk_num(1) + blk_len(2) + bits_per_pixel(2) +
+    #         n_columns(2) + n_lines(2) + compression(1) + ...
+    try:
+        header["n_columns"] = struct.unpack_from(">H", data, blk2_start + 5)[0]
+        header["n_lines"] = struct.unpack_from(">H", data, blk2_start + 7)[0]
+    except Exception:
+        header["n_columns"] = HIMAWARI_NCOLS   # fallback: 5500
+        header["n_lines"] = HIMAWARI_NLINES_PER_SEG  # fallback: 550
+
+    # Block 5: Calibration — IR band coefficients
+    # Layout: blk_num(1) + blk_len(2) + band_num(2) + central_wl(8) +
+    #         valid_bits(2) + error_count(2) + outside_count(2) +
+    #         gain_count2rad(8) + const_count2rad(8) +
+    #   [IR bands only, byte 35+]:
+    #         c0_planck(8) + c1_planck(8) + c2_planck(8) +
     #         gain_count2tbb(8) + const_count2tbb(8)
     try:
-        header["planck_c0"] = struct.unpack_from(">d", data, blk5_offset + 21)[0]
-        header["planck_c1"] = struct.unpack_from(">d", data, blk5_offset + 5 + 2 + 8)[0]
-        header["planck_c2"] = struct.unpack_from(">d", data, blk5_offset + 5 + 2 + 16)[0]
-        header["gain"] = struct.unpack_from(">d", data, blk5_offset + 5 + 2 + 32)[0]
-        header["offset"] = struct.unpack_from(">d", data, blk5_offset + 5 + 2 + 40)[0]
-    except Exception:
-        header["gain"] = 1.0
-        header["offset"] = 0.0
-        header["planck_c0"] = 0.0
-        header["planck_c1"] = 0.0
-        header["planck_c2"] = 0.0
+        # count→radiance conversion (for all bands)
+        header["gain"] = struct.unpack_from(">d", data, blk5_start + 19)[0]
+        header["offset"] = struct.unpack_from(">d", data, blk5_start + 27)[0]
 
-    # Data offset: sum of all header blocks
-    # Total header = blocks 1-11, but it's simpler to use n_header_blocks
-    # The header block count is at offset 2 (2 bytes)
+        # Planck coefficients (IR bands only — Band 7-16)
+        header["planck_c0"] = struct.unpack_from(">d", data, blk5_start + 35)[0]
+        header["planck_c1"] = struct.unpack_from(">d", data, blk5_start + 43)[0]
+        header["planck_c2"] = struct.unpack_from(">d", data, blk5_start + 51)[0]
+
+        # Direct count→Tbb speed-up coefficients (avoids radiance step)
+        header["tbb_gain"] = struct.unpack_from(">d", data, blk5_start + 59)[0]
+        header["tbb_offset"] = struct.unpack_from(">d", data, blk5_start + 67)[0]
+    except Exception as e:
+        print(f"[satellite_ir] HSD calibration parse failed: {e}")
+        header.setdefault("gain", 1.0)
+        header.setdefault("offset", 0.0)
+        header.setdefault("planck_c0", 0.0)
+        header.setdefault("planck_c1", 0.0)
+        header.setdefault("planck_c2", 0.0)
+        header.setdefault("tbb_gain", 0.0)
+        header.setdefault("tbb_offset", 0.0)
+
+    # Total header length is stored in Block 1 at byte 70 (uint32)
     try:
-        n_header_blocks = struct.unpack_from(">H", data, 2)[0]
-        # Each header block has its own length — but the total header is
-        # typically ~4608 bytes for 2km data
-        # Actually, the data starts right after all header blocks.
-        # Safest: look for the data start marker.
-        # The data section starts at offset = sum of all block sizes.
-        # Block sizes are in the header. Let's use a simpler approach:
-        # At 2km resolution, each line = ncols * 2 bytes (uint16)
-        # Total data size = nlines * ncols * 2
+        total_header_len = struct.unpack_from(">I", data, 70)[0]
+        header["data_offset"] = total_header_len
+    except Exception:
+        # Fallback: compute from file size minus expected data
         data_size = header["n_lines"] * header["n_columns"] * 2
         header["data_offset"] = len(data) - data_size
-    except Exception:
-        header["data_offset"] = 4608  # typical for 2km
+
+    print(f"[satellite_ir] HSD header: {header['n_columns']}x{header['n_lines']}, "
+          f"data_offset={header['data_offset']}, "
+          f"gain={header.get('gain', 'N/A'):.6g}, "
+          f"tbb_gain={header.get('tbb_gain', 'N/A'):.6g}")
 
     return header
 
 
 def _hsd_counts_to_tbb(counts: np.ndarray, header: dict) -> np.ndarray:
-    """Convert raw HSD uint16 counts to brightness temperature (K)."""
-    # Step 1: counts → radiance using gain/offset
-    # radiance = gain * count + offset
+    """Convert raw HSD uint16 counts to brightness temperature (K).
+
+    Uses the direct count→Tbb speed-up coefficients if available (most
+    efficient).  Falls back to the two-step count→radiance→Tbb path
+    using Planck inversion otherwise.
+    """
     valid = counts > 0
+
+    # Fast path: use direct count→Tbb linear coefficients
+    tbb_gain = header.get("tbb_gain", 0.0)
+    tbb_offset = header.get("tbb_offset", 0.0)
+    if tbb_gain != 0.0:
+        tbb = np.full(counts.shape, np.nan, dtype=np.float32)
+        tbb[valid] = tbb_gain * counts[valid].astype(np.float32) + tbb_offset
+        return tbb
+
+    # Slow path: count → radiance → Tbb
     rad = np.full(counts.shape, np.nan, dtype=np.float32)
     rad[valid] = header["gain"] * counts[valid].astype(np.float32) + header["offset"]
 
-    # Step 2: radiance → brightness temperature using inverse Planck
-    # Tbb = (c2 / ln(1 + c1/radiance)) + c0  (approximately)
     c0 = header.get("planck_c0", 0.0)
     c1 = header.get("planck_c1", 0.0)
     c2 = header.get("planck_c2", 0.0)
@@ -503,7 +554,6 @@ def _hsd_counts_to_tbb(counts: np.ndarray, header: dict) -> np.ndarray:
         with np.errstate(divide="ignore", invalid="ignore"):
             tbb = c2 / np.log(1.0 + c1 / rad) + c0
     else:
-        # Fallback: assume counts ARE Tb (some products)
         tbb = rad
 
     tbb[~valid] = np.nan
@@ -558,8 +608,11 @@ def open_himawari_subset(s3_prefix: str, center_lat: float, center_lon: float,
     for seg_num in sorted(seg_files.keys()):
         fpath = seg_files[seg_num]
         try:
+            print(f"[satellite_ir] Downloading segment {seg_num}: {fpath.split('/')[-1]}")
             compressed = fs.cat_file(fpath)
+            print(f"[satellite_ir]   compressed size: {len(compressed)} bytes, decompressing...")
             raw_data = bz2.decompress(compressed)
+            print(f"[satellite_ir]   decompressed size: {len(raw_data)} bytes")
             del compressed
 
             hdr = _parse_hsd_header(raw_data)

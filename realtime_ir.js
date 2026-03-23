@@ -368,31 +368,44 @@
         return new CompositeLayer();
     }
 
-    /** Probe GIBS for the latest available time by HEAD-requesting a known tile.
-     *  Tries offsets from 20 min to 120 min in 10-min steps.
-     *  Returns a promise that resolves with the first valid GIBS time string. */
+    /** Probe GIBS for the latest available time where ALL satellites have data.
+     *  Tests a representative tile from each satellite (GOES-East, GOES-West, Himawari).
+     *  Returns a promise that resolves with the first valid GIBS time string.
+     *  Different satellites can have different processing delays, so we need a time
+     *  where all three return 200. */
     function findLatestGIBSTime() {
         var offsets = [20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120];
-        var testLayer = GIBS_IR_LAYERS['GOES-East'];
-        // Pick a tile that's always within GOES-East footprint: z3/y3/x2 (eastern US/Atlantic)
-        var tileSuffix = '/GoogleMapsCompatible_Level6/3/3/2.png';
+        // Representative tiles for each satellite (z3 tiles within each footprint)
+        var testTiles = [
+            { layer: GIBS_IR_LAYERS['GOES-East'], suffix: '/GoogleMapsCompatible_Level6/3/3/2.png' },
+            { layer: GIBS_IR_LAYERS['GOES-West'], suffix: '/GoogleMapsCompatible_Level6/3/3/0.png' },
+            { layer: GIBS_IR_LAYERS['Himawari'],  suffix: '/GoogleMapsCompatible_Level6/3/3/6.png' }
+        ];
 
         function tryOffset(idx) {
             if (idx >= offsets.length) {
-                // All failed — fall back to 60 min ago as best guess
+                // All failed — fall back to 90 min ago as best guess
                 var fb = roundToGIBSInterval(new Date());
-                fb = new Date(fb.getTime() - 60 * 60 * 1000);
+                fb = new Date(fb.getTime() - 90 * 60 * 1000);
                 return Promise.resolve(toGIBSTime(fb));
             }
             var dt = roundToGIBSInterval(new Date());
             dt = new Date(dt.getTime() - offsets[idx] * 60 * 1000);
             var ts = toGIBSTime(dt);
-            var url = GIBS_BASE + '/' + testLayer + '/default/' + ts + tileSuffix;
 
-            return fetch(url, { method: 'HEAD' }).then(function (r) {
-                if (r.ok) return ts;
-                return tryOffset(idx + 1);
-            }).catch(function () {
+            // Check ALL satellites at this time
+            var checks = testTiles.map(function (t) {
+                var url = GIBS_BASE + '/' + t.layer + '/default/' + ts + t.suffix;
+                return fetch(url, { method: 'HEAD' }).then(function (r) {
+                    return r.ok;
+                }).catch(function () {
+                    return false;
+                });
+            });
+
+            return Promise.all(checks).then(function (results) {
+                var allOk = results.every(function (ok) { return ok; });
+                if (allOk) return ts;
                 return tryOffset(idx + 1);
             });
         }
@@ -483,6 +496,18 @@
                 addGIBSOverlay(map, 0.65);
             }
         }, 800);
+
+        // Coastline/borders overlay — sits above IR so land boundaries are visible
+        // Uses light basemap at low opacity: coastlines and borders show as faint white lines
+        map.createPane('coastlinePane');
+        map.getPane('coastlinePane').style.zIndex = 450; // above tilePane (200) but below overlayPane (400)
+        map.getPane('coastlinePane').style.pointerEvents = 'none';
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png', {
+            subdomains: 'abcd',
+            maxZoom: 19,
+            opacity: 0.12,
+            pane: 'coastlinePane'
+        }).addTo(map);
 
         // Labels on top of IR
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {
@@ -847,6 +872,14 @@
 
             animFrameLayers.push(lyr);
         }
+
+        // Coastline/borders overlay — above IR so land boundaries are clearly visible
+        detailMap.createPane('coastlinePane');
+        detailMap.getPane('coastlinePane').style.zIndex = 450;
+        detailMap.getPane('coastlinePane').style.pointerEvents = 'none';
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png', {
+            subdomains: 'abcd', maxZoom: 19, opacity: 0.15, pane: 'coastlinePane'
+        }).addTo(detailMap);
 
         // Labels on top (in overlay pane so above IR tiles)
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {
