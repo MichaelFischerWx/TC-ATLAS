@@ -2673,56 +2673,60 @@
 
         console.time('[Vigor] total computation');
 
-        // 1. Extract Tb from all valid animation frames
-        var allStitched = [];
-        var refGrid = null;
-        for (var fi = 0; fi < validFrames.length; fi++) {
-            var layer = animFrameLayers[validFrames[fi]];
-            var tileData = extractTbFromLayer(layer);
-            var stitched = stitchTileTb(tileData);
-            if (!stitched) continue;
-            if (!refGrid) refGrid = stitched;
-            allStitched.push(stitched);
-        }
-
-        if (allStitched.length < 2) {
-            console.warn('[Vigor] Not enough frames with tile data:', allStitched.length);
-            return null;
-        }
-
-        console.log('[Vigor] Extracted Tb from', allStitched.length, 'frames,',
-                     'stitched size:', refGrid.w, '×', refGrid.h);
-
-        // 2. Compute temporal average Tb
-        var avgData = temporalAvgTb(allStitched);
-        if (!avgData) return null;
-
-        // 3. Find the domain-wide minimum of the temporal-average Tb.
-        //    This single scalar is the coldest persistent convection in the
-        //    storm domain and serves as the reference for all grid points.
-        var domainMinAvg = Infinity;
-        for (var j = 0; j < avgData.tb.length; j++) {
-            var v = avgData.tb[j];
-            if (!isNaN(v) && v < domainMinAvg) domainMinAvg = v;
-        }
-        if (!isFinite(domainMinAvg)) {
-            console.warn('[Vigor] No valid temporal average data');
-            return null;
-        }
-        console.log('[Vigor] Domain min of temporal avg:', domainMinAvg.toFixed(1), 'K');
-
-        // 4. Compute vigor: current_Tb − domain_min(temporal_avg)
-        //    Mask out warm pixels (Tb >= VIGOR_TB_THRESHOLD) so vigor only
-        //    displays over cold cloud tops (convection), not clear sky.
+        // Use only the latest valid frame — no temporal averaging needed.
+        // This avoids the storm-following problem: a fixed Eulerian grid
+        // smears the CDO when computing temporal averages because the storm
+        // translates through the domain over the lookback window.
         var latestIdx = validFrames[validFrames.length - 1];
-        var latestStitched = allStitched[allStitched.length - 1];
-        var vigorArr = new Float32Array(refGrid.w * refGrid.h);
+        var layer = animFrameLayers[latestIdx];
+        var tileData = extractTbFromLayer(layer);
+        var stitched = stitchTileTb(tileData);
+        if (!stitched) {
+            console.warn('[Vigor] Could not extract Tb from latest frame');
+            return null;
+        }
+
+        console.log('[Vigor] Stitched size:', stitched.w, '×', stitched.h);
+
+        // 1. Collect all convective pixels (Tb < -20°C / 253.15 K)
+        var coldPixels = [];
+        for (var j = 0; j < stitched.tb.length; j++) {
+            var t = stitched.tb[j];
+            if (!isNaN(t) && t < VIGOR_TB_THRESHOLD) {
+                coldPixels.push(t);
+            }
+        }
+
+        if (coldPixels.length < 20) {
+            console.warn('[Vigor] Too few cold pixels:', coldPixels.length);
+            return null;
+        }
+
+        // 2. Find the 5th percentile of cold-pixel Tb (the coldest 5% of
+        //    convective cloud tops).  This is the vigor reference — robust to
+        //    single-pixel noise unlike an absolute minimum.
+        coldPixels.sort(function (a, b) { return a - b; });
+        var p05idx = Math.floor(coldPixels.length * 0.05);
+        var p05 = coldPixels[p05idx];
+
+        console.log('[Vigor] Cold pixels:', coldPixels.length,
+                     '| P05 Tb:', p05.toFixed(1), 'K (' + (p05 - 273.15).toFixed(1) + '°C)',
+                     '| Min Tb:', coldPixels[0].toFixed(1), 'K');
+
+        // 3. Compute vigor: current_Tb − P05(cold_Tb)
+        //    - Negative → colder than the 5th percentile (overshooting tops,
+        //      vigorous convective cores)
+        //    - Near zero → among the coldest sustained convection (CDO core)
+        //    - Positive → warmer than the coldest convection (thinning anvil,
+        //      outer rain bands, warming CDO)
+        //    Warm pixels (Tb >= threshold) are masked out.
+        var vigorArr = new Float32Array(stitched.w * stitched.h);
         for (var i = 0; i < vigorArr.length; i++) {
-            var curTb = latestStitched.tb[i];
+            var curTb = stitched.tb[i];
             if (isNaN(curTb) || curTb >= VIGOR_TB_THRESHOLD) {
                 vigorArr[i] = NaN;
             } else {
-                vigorArr[i] = curTb - domainMinAvg;
+                vigorArr[i] = curTb - p05;
             }
         }
 
@@ -2730,13 +2734,13 @@
 
         return {
             vigor: vigorArr,
-            w: refGrid.w,
-            h: refGrid.h,
-            bounds: refGrid.bounds,
-            grid: refGrid.grid,
-            tileW: refGrid.tileW,
-            tileH: refGrid.tileH,
-            framesUsed: allStitched.length,
+            w: stitched.w,
+            h: stitched.h,
+            bounds: stitched.bounds,
+            grid: stitched.grid,
+            tileW: stitched.tileW,
+            tileH: stitched.tileH,
+            framesUsed: 1,
             datetime_utc: animFrameTimes[latestIdx]
         };
     }
@@ -2751,8 +2755,8 @@
             return;
         }
 
-        if (!framesReady || validFrames.length < 2) {
-            showVigorToast('IR Vigor requires at least 2 loaded animation frames. Please wait for frames to load.');
+        if (!framesReady || validFrames.length < 1) {
+            showVigorToast('IR Vigor requires at least 1 loaded animation frame. Please wait for frames to load.');
             setVigorMode(false);
             return;
         }
