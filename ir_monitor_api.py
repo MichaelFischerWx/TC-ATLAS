@@ -16,6 +16,7 @@ Indian Ocean, and Southern Hemisphere (JTWC B-deck).
 
 import gc
 import io
+import math
 import re
 import threading
 import time
@@ -449,6 +450,58 @@ def _build_storm_entry(atcf_id: str, records: list,
     }
 
 
+def _is_invest(atcf_id: str) -> bool:
+    """True if the ATCF ID is an invest (storm number 90-99)."""
+    try:
+        num = int(atcf_id[2:4])
+        return 90 <= num <= 99
+    except (IndexError, ValueError):
+        return False
+
+
+def _haversine_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Approximate great-circle distance in degrees (good enough for filtering)."""
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    # Simple Euclidean in lat/lon space with cos(lat) correction
+    cos_lat = math.cos(math.radians((lat1 + lat2) / 2.0))
+    return math.sqrt(dlat * dlat + (dlon * cos_lat) ** 2)
+
+
+def _filter_genesis_invests(storms: list, radius_deg: float = 5.0) -> list:
+    """
+    Remove invests (90-99) that are geographically close to a named storm
+    (01-89) in the same basin.  This handles the case where a JTWC invest
+    has undergone genesis and a new numbered storm exists for the same system,
+    but the invest B-deck file is still listed on the server.
+    """
+    # Separate named storms from invests
+    named = [s for s in storms if not _is_invest(s["atcf_id"])]
+    invests = [s for s in storms if _is_invest(s["atcf_id"])]
+
+    if not invests or not named:
+        return storms  # nothing to filter
+
+    # Check each invest against named storms in the same basin
+    keep = []
+    for inv in invests:
+        inv_basin = inv["basin"]
+        is_duplicate = False
+        for ns in named:
+            if ns["basin"] != inv_basin:
+                continue
+            dist = _haversine_deg(inv["lat"], inv["lon"], ns["lat"], ns["lon"])
+            if dist < radius_deg:
+                print(f"[IR Monitor] Filtering invest {inv['atcf_id']} — "
+                      f"within {dist:.1f}° of named storm {ns['atcf_id']} ({ns['name']})")
+                is_duplicate = True
+                break
+        if not is_duplicate:
+            keep.append(inv)
+
+    return named + keep
+
+
 # ---------------------------------------------------------------------------
 # Polling Logic
 # ---------------------------------------------------------------------------
@@ -514,6 +567,13 @@ def _poll_active_storms():
             jtwc_count += 1
 
     print(f"[IR Monitor] JTWC: {len(jtwc_storms)} B-deck files → {jtwc_count} active storms")
+
+    # ── Filter out invests that have undergone genesis ──
+    # When a JTWC invest (number 90-99) develops into a named storm
+    # (number 01-89), both entries may appear in the active list.
+    # Remove invests that are within 5° of a named storm in the same basin,
+    # since they almost certainly represent the same system post-genesis.
+    storms = _filter_genesis_invests(storms)
 
     # ── Update cache ──
     count_by_basin: dict = {}

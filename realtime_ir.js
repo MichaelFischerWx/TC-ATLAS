@@ -138,6 +138,10 @@
     // Spatial min filter radius in degrees (~200 km at equator)
     var VIGOR_RADIUS_DEG = 1.8;
 
+    // Cold-cloud Tb threshold for vigor display (only show vigor where
+    // current Tb < this value, i.e. convective cloud tops only)
+    var VIGOR_TB_THRESHOLD = 253.15;  // -20°C in Kelvin
+
     // ── Helpers ─────────────────────────────────────────────────
 
     /** Classify wind speed (kt) to Saffir-Simpson category key */
@@ -1647,13 +1651,15 @@
         console.timeEnd('[Vigor] spatial min filter');
 
         // 5. Compute vigor using the latest frame: vigor = current_Tb - local_min(avg_Tb)
+        //    Mask out warm pixels (Tb >= VIGOR_TB_THRESHOLD) so vigor only
+        //    displays over cold cloud tops (convection), not clear sky.
         var latestIdx = validFrames[validFrames.length - 1];
         var latestStitched = allStitched[allStitched.length - 1];
         var vigorArr = new Float32Array(refGrid.w * refGrid.h);
         for (var i = 0; i < vigorArr.length; i++) {
             var curTb = latestStitched.tb[i];
             var minA = minAvg[i];
-            if (isNaN(curTb) || !isFinite(minA)) {
+            if (isNaN(curTb) || !isFinite(minA) || curTb >= VIGOR_TB_THRESHOLD) {
                 vigorArr[i] = NaN;
             } else {
                 vigorArr[i] = curTb - minA;
@@ -1748,9 +1754,10 @@
         setTimeout(function () { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 6000);
     }
 
-    /** Render the computed vigor data as a Leaflet GridLayer (tile-by-tile).
-     *  Each tile reads from the pre-computed vigor array, so resolution matches
-     *  the Enhanced IR tiles pixel-for-pixel at every zoom level. */
+    /** Render the computed vigor data as a canvas-based Leaflet ImageOverlay.
+     *  The vigor array is painted into an offscreen canvas at full tile resolution,
+     *  then displayed as an image overlay with proper geographic bounds.
+     *  This scales naturally with zoom (Leaflet handles the CSS transform). */
     function showVigorOverlay(data) {
         removeVigorLayer();
         if (!detailMap || !data.vigor || !data.bounds) return;
@@ -1759,66 +1766,46 @@
         var vw = data.w;
         var vh = data.h;
         var bnd = data.bounds;
-        var grid = data.grid;
-        var tw = data.tileW;
-        var th = data.tileH;
 
-        // Create a custom GridLayer that paints vigor from the precomputed array
-        var VigorTileLayer = L.GridLayer.extend({
-            options: {
-                maxZoom: GIBS_MAX_ZOOM,
-                maxNativeZoom: GIBS_MAX_ZOOM,
-                tileSize: 256,
-                opacity: 0.92,
-                updateWhenZooming: false,
-                keepBuffer: 2
-            },
-            createTile: function (coords) {
-                var tile = document.createElement('canvas');
-                tile.width = tw;
-                tile.height = th;
-                var ctx = tile.getContext('2d');
+        // Render vigor into an offscreen canvas at full computed resolution
+        var canvas = document.createElement('canvas');
+        canvas.width = vw;
+        canvas.height = vh;
+        var ctx = canvas.getContext('2d');
+        var imgData = ctx.createImageData(vw, vh);
+        var pix = imgData.data;
 
-                // Map tile coords to the precomputed vigor grid
-                var ox = (coords.x - grid.minX) * tw;
-                var oy = (coords.y - grid.minY) * th;
+        for (var i = 0; i < vigorArr.length; i++) {
+            var v = vigorArr[i];
+            if (isNaN(v)) continue;
 
-                // Check if this tile is within our computed bounds
-                if (coords.z !== grid.zoom ||
-                    coords.x < grid.minX || coords.x > grid.maxX ||
-                    coords.y < grid.minY || coords.y > grid.maxY) {
-                    return tile; // empty — outside computed area
-                }
+            var frac = (v - VIGOR_VMIN) / (VIGOR_VMAX - VIGOR_VMIN);
+            frac = Math.max(0, Math.min(1, frac));
+            var idx = Math.round(frac * 255);
+            var off = i * 4;
+            pix[off]     = VIGOR_LUT[idx * 4];
+            pix[off + 1] = VIGOR_LUT[idx * 4 + 1];
+            pix[off + 2] = VIGOR_LUT[idx * 4 + 2];
+            pix[off + 3] = 255;
+        }
+        ctx.putImageData(imgData, 0, 0);
 
-                var imgData = ctx.createImageData(tw, th);
-                var pix = imgData.data;
+        // Convert canvas to data URL and create image overlay
+        var dataUrl = canvas.toDataURL('image/png');
+        var bounds = L.latLngBounds(
+            L.latLng(bnd.south, bnd.west),
+            L.latLng(bnd.north, bnd.east)
+        );
 
-                for (var row = 0; row < th; row++) {
-                    for (var col = 0; col < tw; col++) {
-                        var sx = ox + col;
-                        var sy = oy + row;
-                        if (sx < 0 || sx >= vw || sy < 0 || sy >= vh) continue;
-                        var v = vigorArr[sy * vw + sx];
-                        if (isNaN(v)) continue;
-
-                        var frac = (v - VIGOR_VMIN) / (VIGOR_VMAX - VIGOR_VMIN);
-                        frac = Math.max(0, Math.min(1, frac));
-                        var idx = Math.round(frac * 255);
-                        var off = (row * tw + col) * 4;
-                        pix[off]     = VIGOR_LUT[idx * 4];
-                        pix[off + 1] = VIGOR_LUT[idx * 4 + 1];
-                        pix[off + 2] = VIGOR_LUT[idx * 4 + 2];
-                        pix[off + 3] = 255;
-                    }
-                }
-
-                ctx.putImageData(imgData, 0, 0);
-                return tile;
-            }
-        });
-
-        vigorLayer = new VigorTileLayer();
+        vigorLayer = L.imageOverlay(dataUrl, bounds, { opacity: 0.92 });
         vigorLayer.addTo(detailMap);
+
+        // Use crisp rendering so individual pixels stay sharp when zoomed
+        var imgEl = vigorLayer.getElement();
+        if (imgEl) {
+            imgEl.style.imageRendering = 'pixelated';
+            imgEl.style.imageRendering = '-moz-crisp-edges';
+        }
 
         // Update the overlay info label
         var satLabel = document.getElementById('ir-satellite-label');
