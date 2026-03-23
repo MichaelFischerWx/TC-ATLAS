@@ -69,7 +69,7 @@ _NHC_BASINS = {"EP", "CP", "AL"}
 
 # Cache settings
 _STORM_CACHE_TTL = 600          # 10 minutes
-_IR_FRAME_CACHE_MAX = 100       # max cached IR frames
+_IR_FRAME_CACHE_MAX = 200       # max cached IR frames (covers ~15 storms)
 _IR_FRAME_CACHE_TTL = 300       # 5 minutes per frame
 
 # Saffir-Simpson thresholds
@@ -278,8 +278,10 @@ def _extract_storm_name(text: str) -> Optional[str]:
     """
     Try to extract the storm name from a B-deck file.
     ATCF B-deck extended format has the name in column 27 (0-indexed).
+    Iterates in reverse to get the most recent (and usually proper) name.
     """
-    for line in text.strip().split("\n"):
+    lines = text.strip().split("\n")
+    for line in reversed(lines):
         parts = [p.strip() for p in line.split(",")]
         if len(parts) > 27 and parts[27].strip():
             name = parts[27].strip().upper()
@@ -524,6 +526,84 @@ def _poll_active_storms():
     _last_poll_time = time.time()
     total = len(storms)
     print(f"[IR Monitor] Total: {total} active storms worldwide — {count_by_basin}")
+
+    # Kick off background IR pre-fetch for all active storms
+    if storms:
+        t = threading.Thread(target=_prefetch_ir_frames, args=(list(storms),), daemon=True)
+        t.start()
+
+
+# ---------------------------------------------------------------------------
+# Background IR Pre-Fetch
+# ---------------------------------------------------------------------------
+
+# Default pre-fetch settings (match the endpoint defaults)
+_PREFETCH_LOOKBACK_HOURS = 6.0
+_PREFETCH_INTERVAL_MIN = 30
+_PREFETCH_RADIUS_DEG = 3.0
+_prefetch_lock = threading.Lock()
+
+def _prefetch_ir_frames(storms: list):
+    """
+    Pre-fetch IR imagery for all active storms in the background.
+    Runs after each poll cycle so frames are ready when users click a storm.
+    Only fetches frames not already in cache.
+    """
+    if not _prefetch_lock.acquire(blocking=False):
+        print("[IR Pre-fetch] Already running, skipping")
+        return
+    try:
+        total_fetched = 0
+        total_cached = 0
+        for storm in storms:
+            atcf_id = storm["atcf_id"]
+            center_lat = storm["lat"]
+            center_lon = storm["lon"]
+            box_deg = _PREFETCH_RADIUS_DEG * 2
+
+            try:
+                center_dt = _dt.fromisoformat(
+                    storm["last_fix_utc"].replace("Z", "+00:00")
+                )
+            except Exception:
+                center_dt = _dt.now(timezone.utc)
+
+            frame_times = build_frame_times(
+                center_dt, _PREFETCH_LOOKBACK_HOURS, _PREFETCH_INTERVAL_MIN
+            )
+
+            storm_fetched = 0
+            for target_dt in reversed(frame_times):
+                cache_key = (atcf_id.upper(), target_dt.strftime("%Y%m%d%H%M"))
+                if cache_key in _ir_frame_cache:
+                    total_cached += 1
+                    continue
+
+                try:
+                    frame = fetch_ir_frame(
+                        center_lat, center_lon, target_dt, box_deg
+                    )
+                except Exception:
+                    continue
+
+                if frame:
+                    _ir_frame_cache[cache_key] = frame
+                    if len(_ir_frame_cache) > _IR_FRAME_CACHE_MAX:
+                        _ir_frame_cache.popitem(last=False)
+                    storm_fetched += 1
+                    total_fetched += 1
+
+                gc.collect()
+
+            if storm_fetched:
+                print(f"[IR Pre-fetch] {atcf_id}: fetched {storm_fetched} new frames")
+
+        print(f"[IR Pre-fetch] Done — {total_fetched} new frames fetched, "
+              f"{total_cached} already cached")
+    except Exception:
+        traceback.print_exc()
+    finally:
+        _prefetch_lock.release()
 
 
 def _ensure_fresh_cache():
