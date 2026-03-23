@@ -87,6 +87,18 @@
     var gibsVisLayers = [];          // GIBS GeoColor tile layers on main map
     var latestGIBSTime = null;       // cached latest GIBS time string
 
+    // Global map animation state
+    var GLOBAL_ANIM_LOOKBACK_H = 4;  // 4-hour lookback for global animation
+    var GLOBAL_ANIM_STEP_MIN = 30;   // 30-min steps
+    var globalAnimFrameTimes = [];    // ISO time strings
+    var globalAnimFrameLayers = [];   // parallel composite L.GridLayer (one per frame, opacity 0 until shown)
+    var globalAnimIndex = 0;
+    var globalAnimPlaying = false;
+    var globalAnimTimer = null;
+    var globalAnimLoaded = 0;
+    var globalAnimReady = false;
+    var globalAnimLoading = false;    // true while frames are being pre-loaded
+
     // Storm detail mini-map state
     var detailMap = null;
     var detailTrackLayers = [];
@@ -904,23 +916,242 @@
                 : 'Currently showing Enhanced IR — click to switch to GeoColor';
         }
 
+        // If global animation is loaded, it needs to be rebuilt for the new product
+        var hadAnim = globalAnimReady;
+        if (globalAnimFrameLayers.length > 0) {
+            cleanupGlobalAnimation();
+        }
+
         var timeStr = latestGIBSTime;
         if (!timeStr) return; // GIBS time not resolved yet
 
         if (mode === 'geocolor') {
-            // Remove IR, add GeoColor
             removeGIBSOverlay(map, gibsIRLayers);
             gibsIRLayers = [];
             var visLyr = createCompositeGIBSLayerVis(timeStr, 0.75);
             visLyr.addTo(map);
             gibsVisLayers = [visLyr];
         } else {
-            // Remove GeoColor, add IR
             removeGIBSOverlay(map, gibsVisLayers);
             gibsVisLayers = [];
             var irLyr = createCompositeGIBSLayer(timeStr, 0.65);
             irLyr.addTo(map);
             gibsIRLayers = [irLyr];
+        }
+
+        // Re-load animation if it was active
+        if (hadAnim) {
+            loadGlobalAnimation();
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  GLOBAL MAP ANIMATION
+    // ═══════════════════════════════════════════════════════════
+
+    /** Create a composite layer for a given time based on the current global product. */
+    function createGlobalAnimFrame(timeStr) {
+        if (globalProduct === 'geocolor') {
+            return createCompositeGIBSLayerVis(timeStr, 0);
+        }
+        return createCompositeGIBSLayer(timeStr, 0);
+    }
+
+    /** Load all global animation frames. Called when user clicks the play button. */
+    function loadGlobalAnimation() {
+        if (!map || !latestGIBSTime || globalAnimLoading) return;
+
+        // If already loaded, just show the latest frame
+        if (globalAnimReady && globalAnimFrameLayers.length > 0) {
+            showGlobalAnimFrame(globalAnimFrameLayers.length - 1);
+            return;
+        }
+
+        globalAnimLoading = true;
+        globalAnimLoaded = 0;
+        globalAnimReady = false;
+
+        // Build frame times from latestGIBSTime
+        var latest = new Date(latestGIBSTime);
+        globalAnimFrameTimes = [];
+        var step = GLOBAL_ANIM_STEP_MIN * 60 * 1000;
+        var numFrames = Math.floor(GLOBAL_ANIM_LOOKBACK_H * 60 / GLOBAL_ANIM_STEP_MIN) + 1;
+        for (var i = numFrames - 1; i >= 0; i--) {
+            var dt = new Date(latest.getTime() - i * step);
+            globalAnimFrameTimes.push(toGIBSTime(roundToGIBSInterval(dt)));
+        }
+
+        console.log('[Global Anim] Loading', globalAnimFrameTimes.length, 'frames for', globalProduct);
+
+        // Update controls to show loading state
+        updateGlobalAnimControls('loading', 0);
+
+        // Remove static single-frame layer — animation frames will replace it
+        if (globalProduct === 'geocolor') {
+            removeGIBSOverlay(map, gibsVisLayers);
+            gibsVisLayers = [];
+        } else {
+            removeGIBSOverlay(map, gibsIRLayers);
+            gibsIRLayers = [];
+        }
+
+        // Pre-create all frame layers at opacity 0
+        globalAnimFrameLayers = [];
+        for (var f = 0; f < globalAnimFrameTimes.length; f++) {
+            var lyr = createGlobalAnimFrame(globalAnimFrameTimes[f]);
+            lyr.addTo(map);
+            globalAnimFrameLayers.push(lyr);
+
+            (function (layer, idx, total) {
+                layer.on('load', function () {
+                    globalAnimLoaded++;
+                    var pct = Math.round((globalAnimLoaded / total) * 100);
+                    updateGlobalAnimControls('loading', pct);
+
+                    if (globalAnimLoaded >= total) {
+                        globalAnimReady = true;
+                        globalAnimLoading = false;
+                        globalAnimIndex = total - 1;
+                        showGlobalAnimFrame(globalAnimIndex);
+                        updateGlobalAnimControls('ready');
+                        console.log('[Global Anim] All', total, 'frames loaded');
+                    }
+                });
+            })(lyr, f, globalAnimFrameTimes.length);
+        }
+
+        // Safety timeout: force-enable after 45s
+        setTimeout(function () {
+            if (globalAnimLoading && !globalAnimReady) {
+                console.warn('[Global Anim] Timeout — enabling with', globalAnimLoaded, '/', globalAnimFrameTimes.length);
+                globalAnimReady = true;
+                globalAnimLoading = false;
+                globalAnimIndex = globalAnimFrameTimes.length - 1;
+                showGlobalAnimFrame(globalAnimIndex);
+                updateGlobalAnimControls('ready');
+            }
+        }, 45000);
+    }
+
+    /** Show a specific global animation frame */
+    function showGlobalAnimFrame(idx) {
+        if (idx < 0 || idx >= globalAnimFrameLayers.length) return;
+
+        // Hide all frames
+        for (var i = 0; i < globalAnimFrameLayers.length; i++) {
+            globalAnimFrameLayers[i].setOpacity(0);
+        }
+
+        // Show requested frame
+        globalAnimIndex = idx;
+        globalAnimFrameLayers[idx].setOpacity(globalProduct === 'geocolor' ? 0.75 : 0.65);
+
+        // Update time display
+        var timeEl = document.getElementById('ir-global-anim-time');
+        if (timeEl && globalAnimFrameTimes[idx]) {
+            timeEl.textContent = fmtUTC(globalAnimFrameTimes[idx]);
+        }
+
+        // Update slider
+        var slider = document.getElementById('ir-global-anim-slider');
+        if (slider) slider.value = idx;
+    }
+
+    /** Step to next global animation frame */
+    function nextGlobalFrame() {
+        if (!globalAnimReady || globalAnimFrameLayers.length === 0) return;
+        var next = (globalAnimIndex + 1) % globalAnimFrameLayers.length;
+        showGlobalAnimFrame(next);
+    }
+
+    /** Step to previous global animation frame */
+    function prevGlobalFrame() {
+        if (!globalAnimReady || globalAnimFrameLayers.length === 0) return;
+        var prev = (globalAnimIndex - 1 + globalAnimFrameLayers.length) % globalAnimFrameLayers.length;
+        showGlobalAnimFrame(prev);
+    }
+
+    /** Start global animation loop */
+    function startGlobalAnimation() {
+        if (!globalAnimReady) {
+            // Start loading if not yet loaded
+            loadGlobalAnimation();
+            return;
+        }
+        globalAnimPlaying = true;
+        updateGlobalAnimControls('playing');
+        globalAnimTimer = setInterval(function () {
+            nextGlobalFrame();
+        }, 600); // ~1.7 fps for smooth global view
+    }
+
+    /** Stop global animation loop */
+    function stopGlobalAnimation() {
+        globalAnimPlaying = false;
+        if (globalAnimTimer) clearInterval(globalAnimTimer);
+        globalAnimTimer = null;
+        if (globalAnimReady) {
+            updateGlobalAnimControls('ready');
+        }
+    }
+
+    /** Toggle global animation play/pause */
+    function toggleGlobalAnimation() {
+        if (globalAnimPlaying) {
+            stopGlobalAnimation();
+        } else {
+            startGlobalAnimation();
+        }
+    }
+
+    /** Clean up global animation frames */
+    function cleanupGlobalAnimation() {
+        stopGlobalAnimation();
+        for (var i = 0; i < globalAnimFrameLayers.length; i++) {
+            if (map && globalAnimFrameLayers[i]) {
+                map.removeLayer(globalAnimFrameLayers[i]);
+            }
+        }
+        globalAnimFrameLayers = [];
+        globalAnimFrameTimes = [];
+        globalAnimLoaded = 0;
+        globalAnimReady = false;
+        globalAnimLoading = false;
+        globalAnimIndex = 0;
+        updateGlobalAnimControls('idle');
+    }
+
+    /** Update the global animation control panel state.
+     *  States: 'idle', 'loading', 'ready', 'playing' */
+    function updateGlobalAnimControls(state, pct) {
+        var panel = document.getElementById('ir-global-anim-panel');
+        if (!panel) return;
+
+        var playBtn = document.getElementById('ir-global-anim-play');
+        var slider = document.getElementById('ir-global-anim-slider');
+        var timeEl = document.getElementById('ir-global-anim-time');
+        var statusEl = document.getElementById('ir-global-anim-status');
+
+        if (state === 'idle') {
+            if (playBtn) { playBtn.innerHTML = '&#9654;'; playBtn.title = 'Load & play global animation'; }
+            if (slider) { slider.style.display = 'none'; }
+            if (timeEl) timeEl.textContent = '';
+            if (statusEl) statusEl.textContent = '';
+        } else if (state === 'loading') {
+            if (playBtn) { playBtn.innerHTML = '&#8987;'; playBtn.title = 'Loading frames\u2026'; playBtn.disabled = true; }
+            if (slider) slider.style.display = 'none';
+            if (statusEl) statusEl.textContent = (pct != null ? pct + '%' : 'Loading\u2026');
+        } else if (state === 'ready') {
+            if (playBtn) { playBtn.innerHTML = '&#9654;'; playBtn.title = 'Play'; playBtn.disabled = false; }
+            if (slider) {
+                slider.style.display = 'block';
+                slider.max = globalAnimFrameLayers.length - 1;
+                slider.value = globalAnimIndex;
+            }
+            if (statusEl) statusEl.textContent = (globalAnimIndex + 1) + '/' + globalAnimFrameLayers.length;
+        } else if (state === 'playing') {
+            if (playBtn) { playBtn.innerHTML = '&#9646;&#9646;'; playBtn.title = 'Pause'; playBtn.disabled = false; }
+            if (statusEl) statusEl.textContent = '';
         }
     }
 
@@ -1035,6 +1266,94 @@
             }
         });
         map.addControl(new ProductToggle());
+
+        // Add global animation control panel (bottom-left of map)
+        var AnimPanel = L.Control.extend({
+            options: { position: 'bottomleft' },
+            onAdd: function () {
+                var container = L.DomUtil.create('div', 'ir-global-anim-panel');
+                container.id = 'ir-global-anim-panel';
+                container.style.cssText = 'display:flex;align-items:center;gap:6px;padding:5px 10px;font-family:DM Sans,sans-serif;font-size:0.72rem;color:#8b9ec2;background:rgba(15,33,64,0.88);border:1px solid rgba(255,255,255,0.12);border-radius:5px;backdrop-filter:blur(4px);';
+                L.DomEvent.disableClickPropagation(container);
+
+                // Prev button
+                var prevBtn = L.DomUtil.create('button', '', container);
+                prevBtn.innerHTML = '&#9664;';
+                prevBtn.title = 'Previous frame';
+                prevBtn.style.cssText = 'background:none;border:none;color:#8b9ec2;cursor:pointer;font-size:0.7rem;padding:2px 4px;';
+                prevBtn.addEventListener('click', function () {
+                    stopGlobalAnimation();
+                    prevGlobalFrame();
+                });
+
+                // Play/Pause button
+                var playBtn = L.DomUtil.create('button', '', container);
+                playBtn.id = 'ir-global-anim-play';
+                playBtn.innerHTML = '&#9654;';
+                playBtn.title = 'Load & play global animation';
+                playBtn.style.cssText = 'background:none;border:none;color:#60a5fa;cursor:pointer;font-size:0.85rem;padding:2px 6px;';
+                playBtn.addEventListener('click', toggleGlobalAnimation);
+
+                // Next button
+                var nextBtn = L.DomUtil.create('button', '', container);
+                nextBtn.innerHTML = '&#9654;';
+                nextBtn.title = 'Next frame';
+                nextBtn.style.cssText = 'background:none;border:none;color:#8b9ec2;cursor:pointer;font-size:0.7rem;padding:2px 4px;';
+                nextBtn.addEventListener('click', function () {
+                    stopGlobalAnimation();
+                    nextGlobalFrame();
+                });
+
+                // Slider
+                var slider = L.DomUtil.create('input', '', container);
+                slider.type = 'range';
+                slider.id = 'ir-global-anim-slider';
+                slider.min = '0';
+                slider.max = '0';
+                slider.value = '0';
+                slider.style.cssText = 'width:100px;display:none;accent-color:#60a5fa;height:4px;';
+                slider.addEventListener('input', function () {
+                    if (!globalAnimReady) return;
+                    stopGlobalAnimation();
+                    showGlobalAnimFrame(parseInt(this.value, 10));
+                });
+
+                // Time display
+                var timeSpan = L.DomUtil.create('span', '', container);
+                timeSpan.id = 'ir-global-anim-time';
+                timeSpan.style.cssText = 'color:#e2e8f0;font-weight:500;font-size:0.68rem;letter-spacing:0.03em;min-width:90px;';
+
+                // Status display
+                var statusSpan = L.DomUtil.create('span', '', container);
+                statusSpan.id = 'ir-global-anim-status';
+                statusSpan.style.cssText = 'color:#64748b;font-size:0.65rem;';
+
+                // Stop/reset button
+                var stopBtn = L.DomUtil.create('button', '', container);
+                stopBtn.innerHTML = '&#9632;';
+                stopBtn.title = 'Stop animation and return to latest';
+                stopBtn.style.cssText = 'background:none;border:none;color:#8b9ec2;cursor:pointer;font-size:0.65rem;padding:2px 4px;';
+                stopBtn.addEventListener('click', function () {
+                    if (globalAnimFrameLayers.length === 0) return;
+                    cleanupGlobalAnimation();
+                    // Restore static single-frame layer
+                    if (latestGIBSTime) {
+                        if (globalProduct === 'geocolor') {
+                            var visLyr = createCompositeGIBSLayerVis(latestGIBSTime, 0.75);
+                            visLyr.addTo(map);
+                            gibsVisLayers = [visLyr];
+                        } else {
+                            var irLyr = createCompositeGIBSLayer(latestGIBSTime, 0.65);
+                            irLyr.addTo(map);
+                            gibsIRLayers = [irLyr];
+                        }
+                    }
+                });
+
+                return container;
+            }
+        });
+        map.addControl(new AnimPanel());
     }
 
     /** Clear existing storm markers from the map */
@@ -1499,6 +1818,9 @@
     /** Open the storm detail view */
     function openStormDetail(atcfId) {
         currentStormId = atcfId;
+
+        // Stop global animation if running (frames stay in memory for return)
+        stopGlobalAnimation();
 
         // Reset product state for new storm
         productMode = 'eir';
