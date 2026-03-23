@@ -80,6 +80,8 @@
     var animTimer = null;
     var framesLoaded = 0;      // how many frames have finished loading tiles
     var framesReady = false;   // true once all frames loaded
+    var validFrames = [];      // indices of frames that loaded actual tile data
+    var frameHasError = [];    // parallel to animFrameLayers — true if frame had tile errors
 
     // IR Vigor overlay state
     var vigorMode = false;          // true when vigor product is active
@@ -694,21 +696,38 @@
     }
 
     /** Called when a single frame layer finishes loading its tiles */
-    function onFrameLayerLoaded() {
+    function onFrameLayerLoaded(frameIdx) {
         framesLoaded++;
         var total = animFrameTimes.length;
         var pct = Math.round((framesLoaded / total) * 100);
         showLoadingProgress(true, pct);
 
+        // Track this frame as valid if it didn't have tile errors
+        if (!frameHasError[frameIdx]) {
+            validFrames.push(frameIdx);
+            validFrames.sort(function (a, b) { return a - b; });
+        }
+
         if (framesLoaded >= total) {
             framesReady = true;
             showLoadingProgress(false);
-            // Show the latest frame now that all tiles are cached
-            showFrame(animFrameTimes.length - 1);
+            // Show the latest VALID frame now that all tiles are cached
+            if (validFrames.length > 0) {
+                showFrame(validFrames[validFrames.length - 1]);
+            } else {
+                showFrame(animFrameTimes.length - 1);
+            }
+            // Update slider max to reflect valid frame count
+            var slider = document.getElementById('ir-anim-slider');
+            if (slider && validFrames.length > 0) {
+                slider.max = validFrames.length - 1;
+                slider.value = validFrames.length - 1;
+            }
             // Enable animation controls
             var playBtn = document.getElementById('ir-anim-play');
             if (playBtn) playBtn.disabled = false;
-            console.log('[IR Monitor] All ' + total + ' frames pre-loaded (' + detailSatName + ')');
+            updateAnimCounter();
+            console.log('[IR Monitor] All ' + total + ' frames pre-loaded (' + detailSatName + '), ' + validFrames.length + ' valid');
         }
     }
 
@@ -771,17 +790,23 @@
 
         // Pre-create ALL frame tile layers (hidden at opacity 0)
         animFrameLayers = [];
+        validFrames = [];
+        frameHasError = [];
         for (var i = 0; i < animFrameTimes.length; i++) {
             var timeStr = animFrameTimes[i];
             var lyr = createGIBSLayer(satLayerName, timeStr, 0); // opacity 0 = hidden
             lyr.addTo(detailMap);
+            frameHasError.push(false);
 
-            // Listen for tile load completion
-            (function (layer) {
-                layer.on('load', function () {
-                    onFrameLayerLoaded();
+            // Listen for tile load completion AND tile errors
+            (function (layer, idx) {
+                layer.on('tileerror', function () {
+                    frameHasError[idx] = true;
                 });
-            })(lyr);
+                layer.on('load', function () {
+                    onFrameLayerLoaded(idx);
+                });
+            })(lyr, i);
 
             animFrameLayers.push(lyr);
         }
@@ -825,12 +850,20 @@
         // Safety timeout: if tiles haven't all loaded within 30s, start anyway
         setTimeout(function () {
             if (!framesReady && animFrameLayers.length > 0) {
-                console.warn('[IR Monitor] Frame preload timeout — enabling animation with ' + framesLoaded + '/' + animFrameTimes.length + ' frames');
+                console.warn('[IR Monitor] Frame preload timeout — enabling animation with ' + framesLoaded + '/' + animFrameTimes.length + ' frames (' + validFrames.length + ' valid)');
                 framesReady = true;
                 showLoadingProgress(false);
                 var playBtn = document.getElementById('ir-anim-play');
                 if (playBtn) playBtn.disabled = false;
-                showFrame(animFrameTimes.length - 1);
+                var slider = document.getElementById('ir-anim-slider');
+                if (slider && validFrames.length > 0) {
+                    slider.max = validFrames.length - 1;
+                    slider.value = validFrames.length - 1;
+                    showFrame(validFrames[validFrames.length - 1]);
+                } else {
+                    showFrame(animFrameTimes.length - 1);
+                }
+                updateAnimCounter();
             }
         }, 30000);
 
@@ -1032,29 +1065,46 @@
         updateFrameOverlay();
     }
 
-    /** Update the frame counter text */
-    function updateAnimCounter() {
-        var counter = document.getElementById('ir-anim-counter');
-        counter.textContent = (animIndex + 1) + ' / ' + animFrameTimes.length;
+    /** Find the position of animIndex within validFrames (or -1) */
+    function validFramePos() {
+        for (var i = 0; i < validFrames.length; i++) {
+            if (validFrames[i] === animIndex) return i;
+        }
+        return -1;
     }
 
-    /** Step to next frame */
+    /** Update the frame counter text (shows position in valid frames) */
+    function updateAnimCounter() {
+        var counter = document.getElementById('ir-anim-counter');
+        var pos = validFramePos();
+        if (validFrames.length > 0 && pos >= 0) {
+            counter.textContent = (pos + 1) + ' / ' + validFrames.length;
+        } else {
+            counter.textContent = (animIndex + 1) + ' / ' + animFrameTimes.length;
+        }
+    }
+
+    /** Step to next valid frame */
     function nextFrame() {
         if (vigorMode) return;
-        if (animFrameTimes.length === 0 || !framesReady) return;
-        var newIdx = (animIndex + 1) % animFrameTimes.length;
-        showFrame(newIdx);
-        document.getElementById('ir-anim-slider').value = animIndex;
+        if (!framesReady) return;
+        if (validFrames.length === 0) return;
+        var pos = validFramePos();
+        var nextPos = (pos + 1) % validFrames.length;
+        showFrame(validFrames[nextPos]);
+        document.getElementById('ir-anim-slider').value = nextPos;
         updateAnimCounter();
     }
 
-    /** Step to previous frame */
+    /** Step to previous valid frame */
     function prevFrame() {
         if (vigorMode) return;
-        if (animFrameTimes.length === 0 || !framesReady) return;
-        var newIdx = (animIndex - 1 + animFrameTimes.length) % animFrameTimes.length;
-        showFrame(newIdx);
-        document.getElementById('ir-anim-slider').value = animIndex;
+        if (!framesReady) return;
+        if (validFrames.length === 0) return;
+        var pos = validFramePos();
+        var prevPos = (pos - 1 + validFrames.length) % validFrames.length;
+        showFrame(validFrames[prevPos]);
+        document.getElementById('ir-anim-slider').value = prevPos;
         updateAnimCounter();
     }
 
@@ -1230,9 +1280,9 @@
 
         var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(currentStormId) + '/ir-vigor';
 
-        // Abort after 60s to avoid indefinite hangs (e.g. Cloud Run cold start + heavy computation)
+        // Abort after 90s to allow for Cloud Run cold start + S3 fetches + scipy computation
         var _vigorAbort = new AbortController();
-        var _vigorTimeout = setTimeout(function () { _vigorAbort.abort(); }, 60000);
+        var _vigorTimeout = setTimeout(function () { _vigorAbort.abort(); }, 90000);
 
         fetch(url, { signal: _vigorAbort.signal })
             .then(function (r) {
@@ -1240,6 +1290,7 @@
                 return r.json();
             })
             .then(function (data) {
+                clearTimeout(_vigorTimeout);
                 vigorCache[currentStormId] = data;
                 vigorFetching = false;
 
@@ -1262,15 +1313,23 @@
             .catch(function (err) {
                 console.warn('[IR Monitor] Vigor fetch failed:', err.message);
                 vigorFetching = false;
+                clearTimeout(_vigorTimeout);
                 if (vigBtn) {
                     vigBtn.classList.remove('ir-vigor-loading');
                     vigBtn.textContent = 'IR Vigor';
                 }
 
                 // Show user-visible error message
-                var msg = err.name === 'AbortError'
-                    ? 'IR Vigor timed out (>60s). The server may be starting up \u2014 try again in a moment.'
-                    : 'IR Vigor unavailable: ' + err.message + '. Try again shortly.';
+                var msg;
+                if (err.name === 'AbortError') {
+                    msg = 'IR Vigor timed out. The server may be starting up \u2014 try again in a moment.';
+                } else if (err.message && err.message.indexOf('502') >= 0) {
+                    msg = 'IR Vigor: server is restarting. Please try again in ~30 seconds.';
+                } else if (err.message && err.message.indexOf('503') >= 0) {
+                    msg = 'IR Vigor: satellite data temporarily unavailable for this storm.';
+                } else {
+                    msg = 'IR Vigor unavailable: ' + err.message + '. Try again shortly.';
+                }
                 // Show a temporary floating message near the vigor button
                 var toast = document.createElement('div');
                 toast.textContent = msg;
@@ -1351,8 +1410,11 @@
         document.getElementById('ir-anim-slider').addEventListener('input', function () {
             if (!framesReady) return;
             stopAnimation();
-            var newIdx = parseInt(this.value, 10);
-            showFrame(newIdx);
+            var sliderPos = parseInt(this.value, 10);
+            // Map slider position to valid frame index
+            if (validFrames.length > 0 && sliderPos < validFrames.length) {
+                showFrame(validFrames[sliderPos]);
+            }
             updateAnimCounter();
         });
 

@@ -824,6 +824,31 @@ def get_storm_ir_vigor(
 
     Returns a single base64-encoded PNG frame with a diverging colormap.
     """
+    try:
+        return _compute_vigor_inner(
+            atcf_id, lookback_hours, radius_deg, radius_km, interval_min
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Vigor computation error: {type(exc).__name__}: {exc}",
+        )
+
+
+def _compute_vigor_inner(
+    atcf_id: str,
+    lookback_hours: float,
+    radius_deg: float,
+    radius_km: float,
+    interval_min: int,
+):
+    """Inner implementation for vigor — separated so the outer handler can
+    catch any uncaught exceptions and return a clean 500 instead of crashing
+    the Cloud Run container (which surfaces as a 502 gateway error)."""
+
     # Find the storm in the active list
     _ensure_fresh_cache()
     storm = None
@@ -848,19 +873,38 @@ def get_storm_ir_vigor(
 
     # Build frame times for the temporal average (past N hours)
     frame_times = build_frame_times(center_dt, lookback_hours, interval_min)
+    print(f"[ir-vigor] {atcf_id}: fetching {len(frame_times)} frames, "
+          f"center={center_lat:.1f},{center_lon:.1f}, box={box_deg}°")
 
-    # Fetch raw Tb arrays (oldest first)
+    # Fetch raw Tb arrays (oldest first), stop early once we have enough
     raw_frames = []
+    fetch_errors = 0
     for target_dt in reversed(frame_times):
-        result = fetch_ir_tb_raw(center_lat, center_lon, target_dt, box_deg)
-        if result:
-            raw_frames.append(result)
+        try:
+            result = fetch_ir_tb_raw(center_lat, center_lon, target_dt, box_deg)
+            if result:
+                raw_frames.append(result)
+                print(f"[ir-vigor]   frame {target_dt.strftime('%H:%MZ')}: OK "
+                      f"({result['tb'].shape})")
+            else:
+                fetch_errors += 1
+                print(f"[ir-vigor]   frame {target_dt.strftime('%H:%MZ')}: "
+                      f"no data")
+        except Exception as exc:
+            fetch_errors += 1
+            print(f"[ir-vigor]   frame {target_dt.strftime('%H:%MZ')}: "
+                  f"ERROR {type(exc).__name__}: {exc}")
         gc.collect()
+
+    print(f"[ir-vigor] {atcf_id}: {len(raw_frames)} frames fetched, "
+          f"{fetch_errors} failed")
 
     if len(raw_frames) < 2:
         raise HTTPException(
-            status_code=502,
-            detail=f"Only {len(raw_frames)} IR frames available — need at least 2 for vigor",
+            status_code=503,
+            detail=(f"Only {len(raw_frames)} of {len(frame_times)} IR frames "
+                    f"available ({fetch_errors} failed) — need at least 2 for vigor. "
+                    f"Satellite data may be temporarily unavailable."),
         )
 
     # Extract Tb arrays (ordered oldest → newest)
@@ -883,19 +927,21 @@ def get_storm_ir_vigor(
     tb_arrays = resampled
 
     # Compute vigor
+    print(f"[ir-vigor] {atcf_id}: computing vigor with {len(tb_arrays)} frames, "
+          f"radius={radius_km}km")
     vigor = compute_ir_vigor(tb_arrays, radius_km=radius_km, box_deg=box_deg)
     if vigor is None:
-        raise HTTPException(status_code=502, detail="Vigor computation failed")
+        raise HTTPException(status_code=500, detail="Vigor computation returned None")
 
     # Render to PNG
     png_b64 = render_vigor_png(vigor)
     n_frames_used = len(tb_arrays)
     vigor_satellite = raw_frames[-1].get("satellite", "Unknown") if raw_frames else storm.get("satellite", "Unknown")
-    del vigor, tb_arrays, raw_frames
+    del vigor, tb_arrays, raw_frames, resampled
     gc.collect()
 
     if not png_b64:
-        raise HTTPException(status_code=502, detail="Vigor rendering failed")
+        raise HTTPException(status_code=500, detail="Vigor rendering failed")
 
     half = box_deg / 2.0
 
