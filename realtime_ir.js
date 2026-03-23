@@ -24,13 +24,19 @@
     var GIBS_MAX_ZOOM = 6;  // GIBS geostationary imagery max zoom
     var GIBS_IR_INTERVAL_MIN = 10;  // GIBS tiles every 10 minutes
 
-    // Longitude bounds for each satellite to prevent overlap on global map
-    // These bounds clip each layer so only one satellite covers any given area
-    var GIBS_LAYER_BOUNDS = {
-        'GOES-East':  [[-80, -110], [80,   10]],   // Americas + Atlantic
-        'GOES-West':  [[-80, -180], [80, -110]],   // Eastern Pacific
-        'Himawari':   [[-80,   80], [80,  180]]    // Western Pacific + IO
-    };
+    // Satellite coverage zones for seamless compositing
+    // Each satellite has a "core" range (full opacity) and blending in overlap zones
+    // Core zones define where each satellite is at full opacity.
+    // BLEND_WIDTH_DEG on each side creates a cross-fade to the neighbor.
+    // Zones are generous so there's always at least one satellite per tile.
+    // The Africa/Middle East gap (no Meteosat in GIBS) is handled by the
+    // nearest-satellite fallback in satellitesForTile().
+    var SAT_ZONES = [
+        { name: 'GOES-East', sublon: -75.2,  coreWest: -105, coreEast:   15 },
+        { name: 'GOES-West', sublon: -137.2, coreWest: -180, coreEast: -115 },
+        { name: 'Himawari',  sublon:  140.7, coreWest:   60, coreEast:  180 }
+    ];
+    var BLEND_WIDTH_DEG = 25; // degrees of longitude over which to cross-fade
 
     // Sub-satellite longitudes for choosing best satellite per storm
     var SAT_SUBLONS = [
@@ -184,13 +190,20 @@
                String(dt.getUTCMinutes()).padStart(2, '0') + ':00Z';
     }
 
-    /** Create a GIBS IR tile URL template for Leaflet for a given layer + time */
+    /** Create a GIBS IR tile URL for a given layer + time (direct, no Leaflet template) */
     function gibsTileUrl(layerName, timeStr) {
         return GIBS_BASE + '/' + layerName + '/default/' + timeStr +
                '/GoogleMapsCompatible_Level6/{z}/{y}/{x}.png';
     }
 
-    /** Create a Leaflet tile layer for a GIBS IR product at a given time */
+    /** Create a direct GIBS tile URL (no Leaflet placeholders) */
+    function gibsTileUrlDirect(layerName, timeStr, z, y, x) {
+        return GIBS_BASE + '/' + layerName + '/default/' + timeStr +
+               '/GoogleMapsCompatible_Level6/' + z + '/' + y + '/' + x + '.png';
+    }
+
+    /** Create a Leaflet tile layer for a single GIBS IR product at a given time
+     *  (used for storm-detail animation where only one satellite is needed) */
     function createGIBSLayer(layerName, timeStr, opacity, bounds) {
         var opts = {
             maxZoom: GIBS_MAX_ZOOM,
@@ -205,23 +218,164 @@
         return L.tileLayer(gibsTileUrl(layerName, timeStr), opts);
     }
 
-    /** Add all 3 GIBS IR layers to the map for the current time (with bounds to prevent overlap) */
+    // ── Seamless Composite GIBS Layer ─────────────────────────
+    // Replaces 3 separate bounded tile layers with a single
+    // L.GridLayer that alpha-blends satellite imagery at boundaries.
+
+    /** Convert tile coords to the longitude of the tile center */
+    function tileCenterLon(x, z) {
+        var n = Math.pow(2, z);
+        return (x + 0.5) / n * 360 - 180;
+    }
+
+    /** Convert tile coords to the longitude range of the tile */
+    function tileLonRange(x, z) {
+        var n = Math.pow(2, z);
+        var west = x / n * 360 - 180;
+        var east = (x + 1) / n * 360 - 180;
+        return { west: west, east: east };
+    }
+
+    /** Determine which satellite(s) should contribute to a given tile,
+     *  and what blend weight each should get (0..1).
+     *  Returns array of {name, layerName, weight} */
+    function satellitesForTile(x, z) {
+        var lonRange = tileLonRange(x, z);
+        var centerLon = (lonRange.west + lonRange.east) / 2;
+        var results = [];
+
+        for (var i = 0; i < SAT_ZONES.length; i++) {
+            var sat = SAT_ZONES[i];
+            var layerName = GIBS_IR_LAYERS[sat.name];
+            if (!layerName) continue;
+
+            // Full coverage zone (core + blend margin on each side)
+            var fullWest = sat.coreWest - BLEND_WIDTH_DEG;
+            var fullEast = sat.coreEast + BLEND_WIDTH_DEG;
+
+            // Check if tile center falls in this satellite's full zone
+            if (centerLon < fullWest || centerLon > fullEast) continue;
+
+            // Compute weight: 1.0 in core zone, ramp down in blend margins
+            var weight = 1.0;
+            if (centerLon < sat.coreWest) {
+                // West blend zone: ramp from 0 to 1
+                weight = (centerLon - fullWest) / BLEND_WIDTH_DEG;
+            } else if (centerLon > sat.coreEast) {
+                // East blend zone: ramp from 1 to 0
+                weight = (fullEast - centerLon) / BLEND_WIDTH_DEG;
+            }
+            weight = Math.max(0, Math.min(1, weight));
+
+            if (weight > 0.01) {
+                results.push({ name: sat.name, layerName: layerName, weight: weight });
+            }
+        }
+
+        // If nothing matched (gaps in coverage), fall back to nearest satellite
+        if (results.length === 0) {
+            var best = SAT_SUBLONS[0], bestDist = 999;
+            for (var j = 0; j < SAT_SUBLONS.length; j++) {
+                var d = Math.abs(centerLon - SAT_SUBLONS[j].sublon);
+                if (d > 180) d = 360 - d;
+                if (d < bestDist) { bestDist = d; best = SAT_SUBLONS[j]; }
+            }
+            results.push({ name: best.name, layerName: GIBS_IR_LAYERS[best.name], weight: 1.0 });
+        }
+
+        // Normalize weights so they sum to 1
+        var total = 0;
+        for (var k = 0; k < results.length; k++) total += results[k].weight;
+        if (total > 0) {
+            for (var m = 0; m < results.length; m++) results[m].weight /= total;
+        }
+
+        return results;
+    }
+
+    /** Load an image as a promise */
+    function loadImage(url) {
+        return new Promise(function (resolve, reject) {
+            var img = new Image();
+            img.crossOrigin = 'anonymous';
+            img.onload = function () { resolve(img); };
+            img.onerror = function () { resolve(null); }; // resolve null on error (tile may not exist)
+            img.src = url;
+        });
+    }
+
+    /** Create the seamless composite GIBS GridLayer */
+    function createCompositeGIBSLayer(timeStr, opacity) {
+        var CompositeLayer = L.GridLayer.extend({
+            options: {
+                tileSize: 256,
+                maxZoom: GIBS_MAX_ZOOM,
+                maxNativeZoom: GIBS_MAX_ZOOM,
+                opacity: opacity || 0.65,
+                attribution: '<a href="https://earthdata.nasa.gov/gibs">NASA GIBS</a>',
+                updateWhenZooming: false,
+                keepBuffer: 3
+            },
+
+            _timeStr: timeStr,
+
+            createTile: function (coords, done) {
+                var tile = document.createElement('canvas');
+                var ctx = tile.getContext('2d');
+                var size = this.getTileSize();
+                tile.width = size.x;
+                tile.height = size.y;
+
+                var sats = satellitesForTile(coords.x, coords.z);
+                var z = coords.z;
+                var y = coords.y;
+                var x = coords.x;
+                var ts = this._timeStr;
+
+                if (sats.length === 1) {
+                    // Single satellite — just load and draw (most common case, no compositing overhead)
+                    var url = gibsTileUrlDirect(sats[0].layerName, ts, z, y, x);
+                    loadImage(url).then(function (img) {
+                        if (img) {
+                            ctx.drawImage(img, 0, 0, size.x, size.y);
+                        }
+                        done(null, tile);
+                    });
+                } else {
+                    // Multiple satellites — composite with alpha blending
+                    var promises = [];
+                    for (var i = 0; i < sats.length; i++) {
+                        var satUrl = gibsTileUrlDirect(sats[i].layerName, ts, z, y, x);
+                        promises.push(loadImage(satUrl));
+                    }
+                    Promise.all(promises).then(function (images) {
+                        for (var j = 0; j < images.length; j++) {
+                            if (!images[j]) continue;
+                            ctx.globalAlpha = sats[j].weight;
+                            ctx.drawImage(images[j], 0, 0, size.x, size.y);
+                        }
+                        ctx.globalAlpha = 1.0;
+                        done(null, tile);
+                    });
+                }
+
+                return tile;
+            }
+        });
+
+        return new CompositeLayer();
+    }
+
+    /** Add the seamless composite GIBS IR layer to the map */
     function addGIBSOverlay(targetMap, opacity) {
         var now = roundToGIBSInterval(new Date());
         // Go back 20 min to ensure tiles are available (GIBS has slight delay)
         now = new Date(now.getTime() - 20 * 60 * 1000);
         var timeStr = toGIBSTime(now);
 
-        var layers = [];
-        var layerNames = Object.keys(GIBS_IR_LAYERS);
-        for (var i = 0; i < layerNames.length; i++) {
-            var name = layerNames[i];
-            var bds = GIBS_LAYER_BOUNDS[name] || null;
-            var lyr = createGIBSLayer(GIBS_IR_LAYERS[name], timeStr, opacity || 0.55, bds);
-            lyr.addTo(targetMap);
-            layers.push(lyr);
-        }
-        return layers;
+        var lyr = createCompositeGIBSLayer(timeStr, opacity || 0.65);
+        lyr.addTo(targetMap);
+        return [lyr]; // return as array for API compatibility
     }
 
     /** Remove GIBS IR layers from a map */
@@ -231,21 +385,14 @@
         }
     }
 
-    /** Swap GIBS layers to a new time string (global map — with bounds) */
+    /** Swap composite GIBS layer to a new time string */
     function swapGIBSTime(targetMap, layers, timeStr, opacity) {
         for (var i = 0; i < layers.length; i++) {
             targetMap.removeLayer(layers[i]);
         }
-        var layerNames = Object.keys(GIBS_IR_LAYERS);
-        var newLayers = [];
-        for (var j = 0; j < layerNames.length; j++) {
-            var name = layerNames[j];
-            var bds = GIBS_LAYER_BOUNDS[name] || null;
-            var lyr = createGIBSLayer(GIBS_IR_LAYERS[name], timeStr, opacity || 0.7, bds);
-            lyr.addTo(targetMap);
-            newLayers.push(lyr);
-        }
-        return newLayers;
+        var lyr = createCompositeGIBSLayer(timeStr, opacity || 0.7);
+        lyr.addTo(targetMap);
+        return [lyr];
     }
 
     /** Build an array of GIBS time strings for animation (lookback_hours, every 10 min) */
@@ -275,17 +422,28 @@
             minZoom: 2,
             maxZoom: GIBS_MAX_ZOOM,
             zoomControl: true,
-            worldCopyJump: true
+            worldCopyJump: true,
+            preferCanvas: true  // faster rendering for vector overlays
         });
 
-        // Dark basemap (underneath IR)
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
+        // Dark basemap (underneath IR) — load first for fast initial paint
+        var basemap = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
             subdomains: 'abcd',
             maxZoom: 19
         }).addTo(map);
 
-        // Add GIBS IR overlay (all 3 satellites)
-        gibsIRLayers = addGIBSOverlay(map, 0.55);
+        // Defer GIBS overlay slightly so basemap tiles get priority in the browser's
+        // connection pool (6 connections per host). This makes the map feel responsive
+        // immediately rather than everything loading at once.
+        basemap.once('load', function () {
+            gibsIRLayers = addGIBSOverlay(map, 0.65);
+        });
+        // Fallback in case basemap load event doesn't fire (cached tiles)
+        setTimeout(function () {
+            if (gibsIRLayers.length === 0) {
+                gibsIRLayers = addGIBSOverlay(map, 0.65);
+            }
+        }, 800);
 
         // Labels on top of IR
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {
@@ -1071,7 +1229,12 @@
         vigorFetching = true;
 
         var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(currentStormId) + '/ir-vigor';
-        fetch(url)
+
+        // Abort after 60s to avoid indefinite hangs (e.g. Cloud Run cold start + heavy computation)
+        var _vigorAbort = new AbortController();
+        var _vigorTimeout = setTimeout(function () { _vigorAbort.abort(); }, 60000);
+
+        fetch(url, { signal: _vigorAbort.signal })
             .then(function (r) {
                 if (!r.ok) throw new Error('HTTP ' + r.status);
                 return r.json();
@@ -1103,9 +1266,22 @@
                     vigBtn.classList.remove('ir-vigor-loading');
                     vigBtn.textContent = 'IR Vigor';
                 }
+
+                // Show user-visible error message
+                var msg = err.name === 'AbortError'
+                    ? 'IR Vigor timed out (>60s). The server may be starting up \u2014 try again in a moment.'
+                    : 'IR Vigor unavailable: ' + err.message + '. Try again shortly.';
+                // Show a temporary floating message near the vigor button
+                var toast = document.createElement('div');
+                toast.textContent = msg;
+                toast.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:rgba(180,80,20,0.95);color:#fff;padding:10px 20px;border-radius:8px;font-size:13px;z-index:10000;max-width:500px;text-align:center;box-shadow:0 4px 12px rgba(0,0,0,0.4);';
+                document.body.appendChild(toast);
+                setTimeout(function () { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 6000);
+
                 // Fall back to enhanced IR
                 setVigorMode(false);
-            });
+            })
+            .finally(function () { clearTimeout(_vigorTimeout); });
     }
 
     /** Display the vigor PNG as a Leaflet image overlay */

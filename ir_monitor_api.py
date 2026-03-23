@@ -812,7 +812,7 @@ def get_storm_ir_vigor(
     atcf_id: str,
     lookback_hours: float = Query(4.0, ge=1, le=8, description="Hours of Tb frames for temporal average"),
     radius_deg: float = Query(3.0, ge=1.0, le=8.0, description="Cutout radius in degrees"),
-    radius_km: float = Query(300.0, ge=50, le=600, description="Spatial radius (km) for local minimum"),
+    radius_km: float = Query(200.0, ge=50, le=600, description="Spatial radius (km) for local minimum"),
     interval_min: int = Query(30, ge=10, le=60, description="Minutes between frames"),
 ):
     """
