@@ -747,6 +747,21 @@ def get_storm_metadata(atcf_id: str):
             "lon": r["lon"],
         })
 
+    # ── Guard against reused invest numbers (e.g. SH98) ──
+    # JTWC B-decks can contain multiple disturbances under the same
+    # invest designator across a season.  Detect large temporal gaps
+    # (>72 h) and keep only the most recent continuous segment.
+    if len(intensity_history) >= 2:
+        _GAP_HOURS = 72
+        last_seg_start = 0
+        for i in range(1, len(intensity_history)):
+            t_prev = _dt.fromisoformat(intensity_history[i - 1]["time"].replace("Z", "+00:00"))
+            t_curr = _dt.fromisoformat(intensity_history[i]["time"].replace("Z", "+00:00"))
+            if (t_curr - t_prev) > timedelta(hours=_GAP_HOURS):
+                last_seg_start = i
+        if last_seg_start > 0:
+            intensity_history = intensity_history[last_seg_start:]
+
     # Get current storm info from active cache
     current = None
     with _active_storms_lock:
