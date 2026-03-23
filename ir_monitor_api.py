@@ -468,12 +468,19 @@ def _haversine_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return math.sqrt(dlat * dlat + (dlon * cos_lat) ** 2)
 
 
-def _filter_genesis_invests(storms: list, radius_deg: float = 5.0) -> list:
+def _filter_genesis_invests(storms: list, radius_deg: float = 5.0,
+                            genesis_radius_deg: float = 12.0) -> list:
     """
-    Remove invests (90-99) that are geographically close to a named storm
-    (01-89) in the same basin.  This handles the case where a JTWC invest
-    has undergone genesis and a new numbered storm exists for the same system,
-    but the invest B-deck file is still listed on the server.
+    Remove invests (90-99) that have likely undergone genesis into a named
+    storm (01-89) in the same basin.
+
+    Two checks are applied:
+    1. Current-position proximity: invest is within `radius_deg` of a named
+       storm's current position (catches storms that haven't moved far).
+    2. Genesis-track proximity: invest has a B-deck fix near the named
+       storm's FIRST fix (genesis position) within ±72 h.  This catches
+       cases like JTWC where the invest B-deck persists after genesis and
+       the named storm has moved far from the invest's last position.
     """
     # Separate named storms from invests
     named = [s for s in storms if not _is_invest(s["atcf_id"])]
@@ -482,20 +489,76 @@ def _filter_genesis_invests(storms: list, radius_deg: float = 5.0) -> list:
     if not invests or not named:
         return storms  # nothing to filter
 
-    # Check each invest against named storms in the same basin
+    # For genesis-track check, we need the named storms' first fixes
+    # (genesis positions).  Fetch B-deck tracks for named storms.
+    named_genesis = {}  # atcf_id → {lat, lon, datetime}
+    for ns in named:
+        try:
+            records = _fetch_bdeck(ns["atcf_id"].lower())
+            if not records:
+                records = _fetch_jtwc_bdeck(ns["atcf_id"].lower())
+            if records:
+                t0_records = [r for r in records if r.get("tau", 0) == 0]
+                if t0_records:
+                    first = t0_records[0]
+                    named_genesis[ns["atcf_id"]] = {
+                        "lat": first["lat"], "lon": first["lon"],
+                        "datetime": first["datetime"]
+                    }
+        except Exception:
+            pass
+
     keep = []
     for inv in invests:
         inv_basin = inv["basin"]
         is_duplicate = False
+
         for ns in named:
             if ns["basin"] != inv_basin:
                 continue
+
+            # Check 1: current-position proximity
             dist = _haversine_deg(inv["lat"], inv["lon"], ns["lat"], ns["lon"])
             if dist < radius_deg:
                 print(f"[IR Monitor] Filtering invest {inv['atcf_id']} — "
                       f"within {dist:.1f}° of named storm {ns['atcf_id']} ({ns['name']})")
                 is_duplicate = True
                 break
+
+            # Check 2: genesis-track proximity
+            genesis = named_genesis.get(ns["atcf_id"])
+            if genesis:
+                # Fetch invest's B-deck to check if any fix was near genesis
+                try:
+                    inv_records = _fetch_jtwc_bdeck(inv["atcf_id"].lower())
+                    if not inv_records:
+                        inv_records = _fetch_bdeck(inv["atcf_id"].lower())
+                    if inv_records:
+                        gen_dt = genesis["datetime"]
+                        for r in inv_records:
+                            if r.get("tau", 0) != 0:
+                                continue
+                            # Check temporal proximity (within 72h of genesis)
+                            dt_diff = abs((r["datetime"] - gen_dt).total_seconds())
+                            if dt_diff > 72 * 3600:
+                                continue
+                            # Check spatial proximity to genesis position
+                            d = _haversine_deg(r["lat"], r["lon"],
+                                               genesis["lat"], genesis["lon"])
+                            if d < genesis_radius_deg:
+                                print(f"[IR Monitor] Filtering invest {inv['atcf_id']} — "
+                                      f"track fix within {d:.1f}° of "
+                                      f"{ns['atcf_id']} ({ns['name']}) genesis "
+                                      f"position at {gen_dt:%Y-%m-%d}")
+                                is_duplicate = True
+                                break
+                except Exception as e:
+                    print(f"[IR Monitor] Error checking invest {inv['atcf_id']} "
+                          f"genesis proximity: {e}")
+
+            if is_duplicate:
+                break
+
         if not is_duplicate:
             keep.append(inv)
 

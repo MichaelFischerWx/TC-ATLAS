@@ -89,10 +89,103 @@
     var vigorCache = {};            // keyed by atcf_id → computed vigor data
     var vigorFetching = false;      // true while vigor computation is running
 
-    // GIBS Clean IR approximate Tb mapping (standard inverted grayscale)
-    // white (255) = cold cloud top, black (0) = warm surface
+    // ── GIBS Clean IR Colormap Reverse LUT ───────────────────
+    // GIBS Band 13 "Clean Infrared" uses an enhanced colormap:
+    //   warm (330K) → black/dark gray → mid gray → light gray (248K)
+    //   → cyan → blue → green → yellow → orange → red → pink → white (163K)
+    // The forward stops below were derived empirically from GIBS tile
+    // pixel data and calibrated against known meteorological Tb ranges.
+    // The reverse LUT maps any RGB → approximate Tb via nearest-colour.
     var GIBS_TB_MIN = 163.0;        // K — coldest (white)
     var GIBS_TB_MAX = 330.0;        // K — warmest (black)
+
+    // Forward colormap stops: [Tb_kelvin, R, G, B]
+    var GIBS_CMAP_STOPS = [
+        [330,   0,   0,   0],     // black (warmest)
+        [320,  18,  18,  18],
+        [310,  40,  40,  40],
+        [300,  68,  68,  68],     // dark gray (warm ocean surface)
+        [290, 100, 100, 100],     // mid gray (typical SST)
+        [280, 133, 133, 133],
+        [270, 165, 165, 165],
+        [260, 195, 195, 195],
+        [250, 218, 218, 218],     // light gray
+        [245,   0, 210, 240],     // light cyan (gray→colour transition)
+        [240,   0, 180, 220],     // cyan
+        [235,   0, 140, 200],     // cyan-blue
+        [230,   0, 100, 175],     // blue
+        [225,   0,  60, 150],     // dark blue
+        [220,   0,  25, 125],     // very dark blue
+        [215,   0, 100,  30],     // dark green (blue→green transition)
+        [210,   0, 200,  40],     // green
+        [205,  60, 240,   0],     // yellow-green
+        [200, 180, 255,   0],     // yellow
+        [195, 255, 220,   0],     // golden yellow
+        [190, 255, 160,   0],     // orange
+        [185, 255,  80,   0],     // red-orange
+        [180, 255,   0,   0],     // red
+        [175, 200,   0, 120],     // dark magenta
+        [170, 255, 150, 255],     // pink
+        [163, 255, 255, 255]      // white (coldest)
+    ];
+
+    // Build 512-entry forward table (Tb → RGB) by interpolating stops
+    var GIBS_FWD_LUT_SIZE = 512;
+    var GIBS_FWD_LUT = (function () {
+        var n = GIBS_FWD_LUT_SIZE;
+        var lut = new Uint8Array(n * 3); // [R,G,B, R,G,B, ...]
+        var tbArr = new Float32Array(n);
+        for (var i = 0; i < n; i++) {
+            // Map index to Tb: 0 → GIBS_TB_MAX (warm), n-1 → GIBS_TB_MIN (cold)
+            var tb = GIBS_TB_MAX - (i / (n - 1)) * (GIBS_TB_MAX - GIBS_TB_MIN);
+            tbArr[i] = tb;
+            // Find surrounding stops (stops are sorted warm→cold, descending Tb)
+            var lo = GIBS_CMAP_STOPS[0], hi = GIBS_CMAP_STOPS[GIBS_CMAP_STOPS.length - 1];
+            for (var s = 0; s < GIBS_CMAP_STOPS.length - 1; s++) {
+                if (tb <= GIBS_CMAP_STOPS[s][0] && tb >= GIBS_CMAP_STOPS[s + 1][0]) {
+                    lo = GIBS_CMAP_STOPS[s];
+                    hi = GIBS_CMAP_STOPS[s + 1];
+                    break;
+                }
+            }
+            var t = (lo[0] === hi[0]) ? 0 : (lo[0] - tb) / (lo[0] - hi[0]);
+            lut[i * 3]     = Math.round(lo[1] + t * (hi[1] - lo[1]));
+            lut[i * 3 + 1] = Math.round(lo[2] + t * (hi[2] - lo[2]));
+            lut[i * 3 + 2] = Math.round(lo[3] + t * (hi[3] - lo[3]));
+        }
+        return { rgb: lut, tb: tbArr };
+    })();
+
+    // Build 3D reverse lookup table (quantised RGB → forward LUT index → Tb)
+    // Quantise to 32 levels per channel → 32³ = 32768 entries
+    var GIBS_REV_Q = 32;
+    var GIBS_REV_SHIFT = 3; // 256 / 32 = 8, log2(8) = 3
+    var GIBS_REV_LUT = (function () {
+        var q = GIBS_REV_Q;
+        var table = new Uint16Array(q * q * q); // stores forward LUT index (0..511)
+        var fwd = GIBS_FWD_LUT.rgb;
+        var n = GIBS_FWD_LUT_SIZE;
+
+        for (var ri = 0; ri < q; ri++) {
+            var rc = ri * 8 + 4; // centre of quantisation bin
+            for (var gi = 0; gi < q; gi++) {
+                var gc = gi * 8 + 4;
+                for (var bi = 0; bi < q; bi++) {
+                    var bc = bi * 8 + 4;
+                    var bestDist = Infinity, bestIdx = 0;
+                    for (var j = 0; j < n; j++) {
+                        var dr = rc - fwd[j * 3];
+                        var dg = gc - fwd[j * 3 + 1];
+                        var db = bc - fwd[j * 3 + 2];
+                        var d = dr * dr + dg * dg + db * db;
+                        if (d < bestDist) { bestDist = d; bestIdx = j; }
+                    }
+                    table[(ri * q + gi) * q + bi] = bestIdx;
+                }
+            }
+        }
+        return table;
+    })();
 
     // Vigor rendering range (K)
     var VIGOR_VMIN = -10.0;         // strong deepening convection
@@ -1434,11 +1527,15 @@
 
     // ── Client-Side Vigor Computation Helpers ────────────────
 
-    /** Convert GIBS Clean IR grayscale pixel → approximate Tb (Kelvin).
-     *  GIBS Band 13 "Clean IR" uses inverted grayscale: white=cold, black=warm. */
+    /** Convert GIBS Clean IR pixel → approximate Tb (Kelvin).
+     *  Uses the pre-computed 3D reverse LUT for O(1) nearest-colour lookup.
+     *  Handles both the grayscale (warm) and enhanced-colour (cold) regions. */
     function gibsPixelToTb(r, g, b) {
-        var gray = (r * 0.299 + g * 0.587 + b * 0.114); // luminance
-        return GIBS_TB_MAX - (gray / 255.0) * (GIBS_TB_MAX - GIBS_TB_MIN);
+        var ri = r >> GIBS_REV_SHIFT;
+        var gi = g >> GIBS_REV_SHIFT;
+        var bi = b >> GIBS_REV_SHIFT;
+        var idx = GIBS_REV_LUT[(ri * GIBS_REV_Q + gi) * GIBS_REV_Q + bi];
+        return GIBS_FWD_LUT.tb[idx];
     }
 
     /** Read pixel data from all visible tiles in a GridLayer.
