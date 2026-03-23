@@ -97,9 +97,14 @@ HIMAWARI_SAT_HEIGHT = 35786023.0   # same as GOES
 HIMAWARI_SWEEP = "y"               # Himawari uses sweep='y' (GOES uses 'x')
 
 # Himawari AHI products on NOAA S3
-# Band 13 (10.4 µm) = clean IR window, equivalent to GOES Band 13
-HIMAWARI_PRODUCT = "AHI-L2-FLDK-ISatSS"
+# As of 2026, L1b data uses HSD format (.DAT.bz2) with month/day/HHMM paths:
+#   AHI-L1b-FLDK/{year}/{month:02d}/{day:02d}/{HHMM}/HS_H09_..._B13_FLDK_R20_S{seg}.DAT.bz2
+# Band 13 (10.4 µm) at 2km resolution (R20), 10 segments per scan
+HIMAWARI_L1B_PRODUCT = "AHI-L1b-FLDK"
 HIMAWARI_BAND = 13
+HIMAWARI_N_SEGMENTS = 10   # full disk is split into 10 latitude segments
+HIMAWARI_NLINES_PER_SEG = 550  # lines per segment at 2km resolution
+HIMAWARI_NCOLS = 5500      # columns at 2km resolution (full disk)
 
 # ---------------------------------------------------------------------------
 # Common IR settings
@@ -315,24 +320,38 @@ def open_goes_subset(s3_key: str, center_lat: float, center_lon: float,
 
 def find_himawari_file(target_dt: _dt, tolerance_min: int = 20) -> Optional[str]:
     """
-    Find a Himawari-9 AHI Band 13 full-disk file closest to target_dt.
-    Returns the full S3 key or None.
+    Find the S3 prefix for a Himawari-9 AHI Band 13 full-disk scan
+    closest to target_dt.
 
-    Tries multiple known product paths on the noaa-himawari9 bucket.
+    As of 2026, the noaa-himawari9 bucket uses:
+        AHI-L1b-FLDK/{year}/{month:02d}/{day:02d}/{HHMM}/
+            HS_H09_YYYYMMDD_HHMM_B13_FLDK_R20_S{seg}10.DAT.bz2
+
+    Returns the S3 *directory prefix* (not a single file) containing the
+    segment files, or None if nothing is found within tolerance.
     """
-    fs = get_goes_fs()  # same anon S3 filesystem works for all NOAA buckets
+    fs = get_goes_fs()
     if fs is None:
         return None
 
-    jday = target_dt.timetuple().tm_yday
+    utc_dt = target_dt.replace(tzinfo=timezone.utc) if target_dt.tzinfo is None else target_dt
 
-    # Try known Himawari product paths on NOAA S3
-    product_paths = [
-        f"{HIMAWARI_BUCKET}/AHI-L2-FLDK-ISatSS/{target_dt.year}/{jday:03d}/{target_dt.hour:02d}/",
-        f"{HIMAWARI_BUCKET}/AHI-L1b-FLDK/{target_dt.year}/{jday:03d}/{target_dt.hour:02d}/",
+    # Round to the nearest 10 minutes (Himawari scans every 10 min)
+    minute = utc_dt.minute
+    base_min = minute - (minute % 10)
+
+    # Try the target time and +/- 10 min offsets
+    candidates_dt = [
+        utc_dt.replace(minute=base_min, second=0, microsecond=0),
     ]
+    for offset in [10, -10, 20, -20]:
+        candidates_dt.append(candidates_dt[0] + timedelta(minutes=offset))
 
-    for prefix in product_paths:
+    for cdt in candidates_dt:
+        hhmm = f"{cdt.hour:02d}{cdt.minute:02d}"
+        prefix = (f"{HIMAWARI_BUCKET}/{HIMAWARI_L1B_PRODUCT}/"
+                  f"{cdt.year}/{cdt.month:02d}/{cdt.day:02d}/{hhmm}/")
+
         try:
             files = fs.ls(prefix, detail=False)
         except Exception:
@@ -341,127 +360,302 @@ def find_himawari_file(target_dt: _dt, tolerance_min: int = 20) -> Optional[str]
         if not files:
             continue
 
-        # Filter for Band 13 files
-        band_tags = [f"B{HIMAWARI_BAND:02d}", f"C{HIMAWARI_BAND:02d}", f"b{HIMAWARI_BAND:02d}"]
-        candidates = []
-        for f in files:
-            fname = f.split("/")[-1]
-            if any(tag in fname for tag in band_tags):
-                candidates.append(f)
+        # Check that Band 13 segment files exist
+        band_tag = f"B{HIMAWARI_BAND:02d}"
+        b13_files = [f for f in files if band_tag in f.split("/")[-1]]
+        if not b13_files:
+            continue
 
-        if not candidates:
-            # If no band-specific files, the product might store all bands in one file
-            # (e.g., ISatSS stores SST which already contains Tb)
-            candidates = files[:5]  # try first few files
+        delta = abs(cdt - utc_dt)
+        if delta <= timedelta(minutes=tolerance_min):
+            print(f"[satellite_ir] Himawari L1b dir found: {prefix.split('/')[-2]} "
+                  f"({len(b13_files)} B13 segments)")
+            return prefix  # return the directory prefix
 
-        # Find closest to target time
-        best_file = None
-        best_delta = timedelta(minutes=tolerance_min + 1)
-
-        # Himawari filenames typically contain timestamps
-        # Pattern: various formats including YYYYMMDD_HHMM, or sYYYYJJJHHMMSS
-        ts_patterns = [
-            re.compile(r"(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})"),  # YYYYMMDD_HHMM
-            re.compile(r"[-_]s(\d{4})(\d{3})(\d{2})(\d{2})(\d{2})"),  # sYYYYJJJHHMMSS
-        ]
-
-        for fpath in candidates:
-            fname = fpath.split("/")[-1]
-            for ts_re in ts_patterns:
-                m = ts_re.search(fname)
-                if not m:
-                    continue
-                try:
-                    groups = m.groups()
-                    if len(groups) == 5 and len(m.group(1)) == 4 and len(m.group(2)) == 2:
-                        # YYYYMMDD_HHMM format
-                        file_dt = _dt(
-                            int(groups[0]), int(groups[1]), int(groups[2]),
-                            int(groups[3]), int(groups[4]),
-                            tzinfo=timezone.utc,
-                        )
-                    else:
-                        # sYYYYJJJHHMMSS format (same as GOES)
-                        yr = int(groups[0])
-                        jd = int(groups[1])
-                        hh = int(groups[2])
-                        mm = int(groups[3])
-                        ss = int(groups[4])
-                        file_dt = _dt(yr, 1, 1, hh, mm, ss, tzinfo=timezone.utc) + timedelta(days=jd - 1)
-
-                    delta = abs(file_dt - target_dt.replace(tzinfo=timezone.utc))
-                    if delta < best_delta:
-                        best_delta = delta
-                        best_file = fpath
-                    break
-                except Exception:
-                    continue
-
-        if best_file and best_delta <= timedelta(minutes=tolerance_min):
-            print(f"[satellite_ir] Himawari file found: {best_file.split('/')[-1]}")
-            return best_file
-
-    print(f"[satellite_ir] No Himawari file found for {target_dt.isoformat()}")
+    print(f"[satellite_ir] No Himawari L1b data found for {target_dt.isoformat()}")
     return None
 
 
-def open_himawari_subset(s3_key: str, center_lat: float, center_lon: float,
+def _himawari_seg_for_lat(center_lat: float, box_deg: float) -> list:
+    """
+    Determine which Himawari segment numbers (1-10) are needed
+    to cover the latitude range [center_lat ± box_deg/2].
+
+    Himawari full-disk at 2km resolution: 5500 lines, 10 segments of 550 lines.
+    Segment 1 = top of disk (northernmost), segment 10 = bottom.
+    The full disk spans approx ±80° latitude from the sub-satellite point.
+    """
+    pyproj = _get_pyproj()
+    if pyproj is None:
+        # Fallback: return all segments
+        return list(range(1, HIMAWARI_N_SEGMENTS + 1))
+
+    proj = pyproj.Proj(
+        proj="geos", h=HIMAWARI_SAT_HEIGHT,
+        lon_0=HIMAWARI_LON_0, sweep=HIMAWARI_SWEEP,
+    )
+
+    half = box_deg / 2.0
+    total_lines = HIMAWARI_NLINES_PER_SEG * HIMAWARI_N_SEGMENTS  # 5500
+
+    segs_needed = set()
+    for lat in [center_lat - half, center_lat + half, center_lat]:
+        # Clamp latitude to avoid off-disk
+        lat_c = max(-80.0, min(80.0, lat))
+        try:
+            _, y_m = proj(HIMAWARI_LON_0, lat_c)
+            # Convert to line number (0-based from top of disk)
+            # The y coordinate in meters: positive = north.
+            # Full disk radius in meters:
+            y_rad = HIMAWARI_SAT_HEIGHT * np.sin(np.radians(80.0))
+            # Normalise to [0, 1] where 0 = north edge, 1 = south edge
+            frac = 0.5 - (y_m / (2.0 * y_rad))
+            frac = max(0.0, min(1.0, frac))
+            line = int(frac * total_lines)
+            seg = (line // HIMAWARI_NLINES_PER_SEG) + 1
+            seg = max(1, min(HIMAWARI_N_SEGMENTS, seg))
+            segs_needed.add(seg)
+        except Exception:
+            continue
+
+    if not segs_needed:
+        # Fallback: return middle segments
+        return [5, 6]
+
+    # Expand range to include all segments between min and max
+    seg_min = min(segs_needed)
+    seg_max = max(segs_needed)
+    return list(range(seg_min, seg_max + 1))
+
+
+def _parse_hsd_header(data: bytes) -> dict:
+    """
+    Parse the essential header fields from a Himawari Standard Data (HSD) file.
+    Returns dict with calibration coefficients and geometry info.
+    """
+    import struct
+
+    header = {}
+    # Block 1: Basic info (282 bytes)
+    header["block1_size"] = struct.unpack_from(">I", data, 4)[0]
+    header["n_columns"] = struct.unpack_from(">H", data, 12)[0]
+    header["n_lines"] = struct.unpack_from(">H", data, 14)[0]
+
+    # Block 5: Calibration (18 bytes, starts at offset varies)
+    # The HSD format has fixed block positions:
+    # Block 1: 282, Block 2: 50, Block 3: 127, Block 4: 8, Block 5: 40
+    blk5_offset = 282 + 50 + 127 + 8  # = 467
+    # Block 5 header: block number (1B) + block length (2B)
+    # For IR bands, calibration uses: c0, c1, c2 (planck), then gain/offset
+    # Simpler: use gain and offset from block 5
+    # Format: block_num(1) + block_len(2) + band_num(2) + wavelength(8) +
+    #         planck_c1(8) + planck_c2(8) + planck_c0(8) +
+    #         gain_count2tbb(8) + const_count2tbb(8)
+    try:
+        header["planck_c0"] = struct.unpack_from(">d", data, blk5_offset + 21)[0]
+        header["planck_c1"] = struct.unpack_from(">d", data, blk5_offset + 5 + 2 + 8)[0]
+        header["planck_c2"] = struct.unpack_from(">d", data, blk5_offset + 5 + 2 + 16)[0]
+        header["gain"] = struct.unpack_from(">d", data, blk5_offset + 5 + 2 + 32)[0]
+        header["offset"] = struct.unpack_from(">d", data, blk5_offset + 5 + 2 + 40)[0]
+    except Exception:
+        header["gain"] = 1.0
+        header["offset"] = 0.0
+        header["planck_c0"] = 0.0
+        header["planck_c1"] = 0.0
+        header["planck_c2"] = 0.0
+
+    # Data offset: sum of all header blocks
+    # Total header = blocks 1-11, but it's simpler to use n_header_blocks
+    # The header block count is at offset 2 (2 bytes)
+    try:
+        n_header_blocks = struct.unpack_from(">H", data, 2)[0]
+        # Each header block has its own length — but the total header is
+        # typically ~4608 bytes for 2km data
+        # Actually, the data starts right after all header blocks.
+        # Safest: look for the data start marker.
+        # The data section starts at offset = sum of all block sizes.
+        # Block sizes are in the header. Let's use a simpler approach:
+        # At 2km resolution, each line = ncols * 2 bytes (uint16)
+        # Total data size = nlines * ncols * 2
+        data_size = header["n_lines"] * header["n_columns"] * 2
+        header["data_offset"] = len(data) - data_size
+    except Exception:
+        header["data_offset"] = 4608  # typical for 2km
+
+    return header
+
+
+def _hsd_counts_to_tbb(counts: np.ndarray, header: dict) -> np.ndarray:
+    """Convert raw HSD uint16 counts to brightness temperature (K)."""
+    # Step 1: counts → radiance using gain/offset
+    # radiance = gain * count + offset
+    valid = counts > 0
+    rad = np.full(counts.shape, np.nan, dtype=np.float32)
+    rad[valid] = header["gain"] * counts[valid].astype(np.float32) + header["offset"]
+
+    # Step 2: radiance → brightness temperature using inverse Planck
+    # Tbb = (c2 / ln(1 + c1/radiance)) + c0  (approximately)
+    c0 = header.get("planck_c0", 0.0)
+    c1 = header.get("planck_c1", 0.0)
+    c2 = header.get("planck_c2", 0.0)
+
+    if c1 > 0 and c2 > 0:
+        with np.errstate(divide="ignore", invalid="ignore"):
+            tbb = c2 / np.log(1.0 + c1 / rad) + c0
+    else:
+        # Fallback: assume counts ARE Tb (some products)
+        tbb = rad
+
+    tbb[~valid] = np.nan
+    return tbb
+
+
+def open_himawari_subset(s3_prefix: str, center_lat: float, center_lon: float,
                          box_deg: float = 8.0) -> np.ndarray:
     """
-    Open a Himawari file from S3 and return a geographically-subsetted
+    Open Himawari HSD segment files from S3 and return a geographically-subsetted
     2D brightness-temperature array (y, x) in Kelvin.
+
+    s3_prefix is the directory containing the segment .DAT.bz2 files.
+    Only downloads the segment(s) needed for the latitude range.
     """
-    import xarray as xr
+    import bz2
 
     fs = get_goes_fs()
     if fs is None:
         raise RuntimeError("s3fs not available")
 
-    half = box_deg / 2.0
-    x_min, y_min = latlon_to_himawari_xy(center_lat - half, center_lon - half)
-    x_max, y_max = latlon_to_himawari_xy(center_lat + half, center_lon + half)
-    x_lo, x_hi = min(x_min, x_max), max(x_min, x_max)
-    y_lo, y_hi = min(y_min, y_max), max(y_min, y_max)
+    # Determine which segments we need
+    needed_segs = _himawari_seg_for_lat(center_lat, box_deg)
+    print(f"[satellite_ir] Himawari: need segments {needed_segs} for "
+          f"lat={center_lat:.1f}±{box_deg/2:.0f}°")
 
-    fobj = fs.open(f"s3://{s3_key}", "rb")
+    # List files in the prefix directory
     try:
-        ds = xr.open_dataset(fobj, engine="h5netcdf")
+        all_files = fs.ls(s3_prefix, detail=False)
+    except Exception as e:
+        raise RuntimeError(f"Cannot list {s3_prefix}: {e}")
 
-        # Try subsetting by x/y coordinates (same convention as GOES)
-        if "x" in ds.coords and "y" in ds.coords:
-            ds_sub = ds.sel(x=slice(x_lo, x_hi), y=slice(y_hi, y_lo))
-        elif "longitude" in ds.coords and "latitude" in ds.coords:
-            # Some products use lat/lon directly
-            ds_sub = ds.sel(
-                longitude=slice(center_lon - half, center_lon + half),
-                latitude=slice(center_lat + half, center_lat - half),
-            )
-        else:
-            # Fall back to first 2D variable
-            ds_sub = ds
+    band_tag = f"B{HIMAWARI_BAND:02d}"
+    seg_files = {}
+    for fpath in all_files:
+        fname = fpath.split("/")[-1]
+        if band_tag not in fname:
+            continue
+        # Extract segment number from filename: ..._S0110.DAT.bz2 → seg 1
+        m = re.search(r"_S(\d{2})10\.DAT", fname)
+        if m:
+            seg_num = int(m.group(1))
+            if seg_num in needed_segs:
+                seg_files[seg_num] = fpath
 
-        # Try common variable names for brightness temperature
-        tb = None
-        for var_name in ["CMI", "Tb", "toa_brightness_temperature",
-                         "sea_surface_temperature", "SST",
-                         f"CMI_C{HIMAWARI_BAND:02d}"]:
-            if var_name in ds_sub:
-                tb = ds_sub[var_name].values.astype(np.float32)
-                break
+    if not seg_files:
+        raise RuntimeError(f"No Band {HIMAWARI_BAND} segment files found in {s3_prefix}")
 
-        if tb is None:
-            # Try first data variable
-            data_vars = list(ds_sub.data_vars)
-            if data_vars:
-                tb = ds_sub[data_vars[0]].values.astype(np.float32)
-            else:
-                raise ValueError(f"No suitable variable found in Himawari file")
-    finally:
-        ds.close()
-        fobj.close()
-        gc.collect()
+    # Download, decompress, and parse each segment
+    seg_arrays = {}
+    header = None
+    for seg_num in sorted(seg_files.keys()):
+        fpath = seg_files[seg_num]
+        try:
+            compressed = fs.cat_file(fpath)
+            raw_data = bz2.decompress(compressed)
+            del compressed
 
-    return tb
+            hdr = _parse_hsd_header(raw_data)
+            if header is None:
+                header = hdr
+
+            nlines = hdr["n_lines"]
+            ncols = hdr["n_columns"]
+            data_offset = hdr["data_offset"]
+
+            # Extract raw counts (uint16 big-endian)
+            counts = np.frombuffer(raw_data[data_offset:data_offset + nlines * ncols * 2],
+                                   dtype=">u2").reshape(nlines, ncols)
+            del raw_data
+
+            # Convert to brightness temperature
+            tbb = _hsd_counts_to_tbb(counts, hdr)
+            del counts
+            seg_arrays[seg_num] = tbb
+            gc.collect()
+        except Exception as e:
+            print(f"[satellite_ir] Himawari segment {seg_num} failed: {e}")
+            continue
+
+    if not seg_arrays:
+        raise RuntimeError("All Himawari segment reads failed")
+
+    # Stack segments vertically (segment 1 = top/north, 10 = bottom/south)
+    ordered = [seg_arrays[s] for s in sorted(seg_arrays.keys())]
+    full_tb = np.vstack(ordered)
+    del seg_arrays, ordered
+    gc.collect()
+
+    # Now subset to the geographic bounding box
+    pyproj = _get_pyproj()
+    if pyproj is None:
+        return full_tb  # return full segment data if can't subset
+
+    proj = pyproj.Proj(
+        proj="geos", h=HIMAWARI_SAT_HEIGHT,
+        lon_0=HIMAWARI_LON_0, sweep=HIMAWARI_SWEEP,
+    )
+
+    # Compute pixel coordinates for the bounding box corners
+    half = box_deg / 2.0
+    total_nlines = HIMAWARI_NLINES_PER_SEG * HIMAWARI_N_SEGMENTS  # 5500
+    total_ncols = HIMAWARI_NCOLS  # 5500
+
+    # The pixel scale (radians per pixel)
+    # Full disk covers ±~0.1518 radians at 2km
+    # CFAC/LFAC for 2km: 20466275 (from JMA docs)
+    cfac = 20466275.0
+    coff = total_ncols / 2.0   # 2750
+    lfac = 20466275.0
+    loff = total_nlines / 2.0  # 2750
+
+    def latlon_to_pixel(lat, lon):
+        """Convert lat/lon to pixel row/col in full-disk image."""
+        try:
+            x_m, y_m = proj(lon, lat)
+            # Convert metres to intermediate coords (per JMA formula)
+            x_rad = x_m / HIMAWARI_SAT_HEIGHT
+            y_rad = y_m / HIMAWARI_SAT_HEIGHT
+            col = coff + x_rad * cfac / 65536.0
+            row = loff - y_rad * lfac / 65536.0
+            return int(row), int(col)
+        except Exception:
+            return None, None
+
+    r1, c1 = latlon_to_pixel(center_lat + half, center_lon - half)  # NW corner
+    r2, c2 = latlon_to_pixel(center_lat - half, center_lon + half)  # SE corner
+
+    if r1 is None or r2 is None:
+        return full_tb
+
+    # Adjust row indices relative to the stacked array
+    # (which starts from the first needed segment, not segment 1)
+    min_seg = min(seg_files.keys())
+    row_offset = (min_seg - 1) * HIMAWARI_NLINES_PER_SEG
+
+    r1_local = max(0, r1 - row_offset)
+    r2_local = min(full_tb.shape[0], r2 - row_offset)
+    c1_local = max(0, min(c1, c2))
+    c2_local = min(full_tb.shape[1], max(c1, c2))
+
+    if r2_local <= r1_local or c2_local <= c1_local:
+        print(f"[satellite_ir] Himawari subset empty: rows {r1_local}-{r2_local}, "
+              f"cols {c1_local}-{c2_local}")
+        return full_tb
+
+    subset = full_tb[r1_local:r2_local, c1_local:c2_local].copy()
+    del full_tb
+    gc.collect()
+
+    print(f"[satellite_ir] Himawari subset: {subset.shape} from segments {list(seg_files.keys())}")
+    return subset
 
 
 # ---------------------------------------------------------------------------

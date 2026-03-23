@@ -368,16 +368,46 @@
         return new CompositeLayer();
     }
 
+    /** Probe GIBS for the latest available time by HEAD-requesting a known tile.
+     *  Tries offsets from 20 min to 120 min in 10-min steps.
+     *  Returns a promise that resolves with the first valid GIBS time string. */
+    function findLatestGIBSTime() {
+        var offsets = [20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120];
+        var testLayer = GIBS_IR_LAYERS['GOES-East'];
+        // Pick a tile that's always within GOES-East footprint: z3/y3/x2 (eastern US/Atlantic)
+        var tileSuffix = '/GoogleMapsCompatible_Level6/3/3/2.png';
+
+        function tryOffset(idx) {
+            if (idx >= offsets.length) {
+                // All failed — fall back to 60 min ago as best guess
+                var fb = roundToGIBSInterval(new Date());
+                fb = new Date(fb.getTime() - 60 * 60 * 1000);
+                return Promise.resolve(toGIBSTime(fb));
+            }
+            var dt = roundToGIBSInterval(new Date());
+            dt = new Date(dt.getTime() - offsets[idx] * 60 * 1000);
+            var ts = toGIBSTime(dt);
+            var url = GIBS_BASE + '/' + testLayer + '/default/' + ts + tileSuffix;
+
+            return fetch(url, { method: 'HEAD' }).then(function (r) {
+                if (r.ok) return ts;
+                return tryOffset(idx + 1);
+            }).catch(function () {
+                return tryOffset(idx + 1);
+            });
+        }
+
+        return tryOffset(0);
+    }
+
     /** Add the seamless composite GIBS IR layer to the map */
     function addGIBSOverlay(targetMap, opacity) {
-        var now = roundToGIBSInterval(new Date());
-        // Go back 20 min to ensure tiles are available (GIBS has slight delay)
-        now = new Date(now.getTime() - 20 * 60 * 1000);
-        var timeStr = toGIBSTime(now);
-
-        var lyr = createCompositeGIBSLayer(timeStr, opacity || 0.65);
-        lyr.addTo(targetMap);
-        return [lyr]; // return as array for API compatibility
+        findLatestGIBSTime().then(function (timeStr) {
+            var lyr = createCompositeGIBSLayer(timeStr, opacity || 0.65);
+            lyr.addTo(targetMap);
+            gibsIRLayers = [lyr];
+        });
+        return []; // layers added asynchronously — gibsIRLayers updated in callback
     }
 
     /** Remove GIBS IR layers from a map */
@@ -397,12 +427,12 @@
         return [lyr];
     }
 
-    /** Build an array of GIBS time strings for animation (lookback_hours, every 10 min) */
+    /** Build an array of GIBS time strings for animation (lookback_hours, every 30 min) */
     function buildFrameTimes(centerDt, lookbackHours) {
         var times = [];
         var end = roundToGIBSInterval(centerDt);
-        // Go back 20 min for availability
-        end = new Date(end.getTime() - 20 * 60 * 1000);
+        // Go back 40 min for availability (GIBS has ~30 min processing delay + margin)
+        end = new Date(end.getTime() - 40 * 60 * 1000);
         var start = new Date(end.getTime() - lookbackHours * 3600 * 1000);
         var step = 30 * 60 * 1000; // 30-min steps for animation (not every 10 min — too many frames)
         for (var t = start.getTime(); t <= end.getTime(); t += step) {
@@ -437,13 +467,20 @@
         // Defer GIBS overlay slightly so basemap tiles get priority in the browser's
         // connection pool (6 connections per host). This makes the map feel responsive
         // immediately rather than everything loading at once.
+        // addGIBSOverlay is now async (probes for latest available GIBS time)
+        // and updates gibsIRLayers directly when the layer is ready.
+        var gibsRequested = false;
         basemap.once('load', function () {
-            gibsIRLayers = addGIBSOverlay(map, 0.65);
+            if (!gibsRequested) {
+                gibsRequested = true;
+                addGIBSOverlay(map, 0.65);
+            }
         });
         // Fallback in case basemap load event doesn't fire (cached tiles)
         setTimeout(function () {
-            if (gibsIRLayers.length === 0) {
-                gibsIRLayers = addGIBSOverlay(map, 0.65);
+            if (!gibsRequested) {
+                gibsRequested = true;
+                addGIBSOverlay(map, 0.65);
             }
         }, 800);
 
