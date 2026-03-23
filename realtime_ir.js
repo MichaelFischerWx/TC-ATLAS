@@ -268,61 +268,55 @@
         return { west: west, east: east };
     }
 
-    /** Determine which satellite(s) should contribute to a given tile,
-     *  and what blend weight each should get (0..1).
-     *  Returns array of {name, layerName, weight} */
+    /** Determine the single best satellite for a given tile.
+     *  Always returns exactly one satellite — no multi-source blending.
+     *  Alpha-blending two geostationary views (different angles + scan times)
+     *  produces visible dark/blurry bands, especially at low zoom where tiles
+     *  span 20-45° of longitude.  A hard cutoff is cleaner because GOES-East
+     *  and GOES-West use the same ABI instrument on overlapping footprints. */
     function satellitesForTile(x, z) {
         var lonRange = tileLonRange(x, z);
         var centerLon = (lonRange.west + lonRange.east) / 2;
-        var results = [];
+
+        // Score each satellite by how close the tile center is to the core zone
+        var bestSat = null;
+        var bestScore = -Infinity;
 
         for (var i = 0; i < SAT_ZONES.length; i++) {
             var sat = SAT_ZONES[i];
             var layerName = GIBS_IR_LAYERS[sat.name];
             if (!layerName) continue;
 
-            // Full coverage zone (core + blend margin on each side)
-            var fullWest = sat.coreWest - BLEND_WIDTH_DEG;
-            var fullEast = sat.coreEast + BLEND_WIDTH_DEG;
-
-            // Check if tile center falls in this satellite's full zone
-            if (centerLon < fullWest || centerLon > fullEast) continue;
-
-            // Compute weight: 1.0 in core zone, ramp down in blend margins
-            var weight = 1.0;
-            if (centerLon < sat.coreWest) {
-                // West blend zone: ramp from 0 to 1
-                weight = (centerLon - fullWest) / BLEND_WIDTH_DEG;
-            } else if (centerLon > sat.coreEast) {
-                // East blend zone: ramp from 1 to 0
-                weight = (fullEast - centerLon) / BLEND_WIDTH_DEG;
+            // Score = 1.0 if inside core, ramps down with distance outside core
+            var score;
+            if (centerLon >= sat.coreWest && centerLon <= sat.coreEast) {
+                // Inside core — score based on distance to nearest edge (prefer center)
+                score = 1.0;
+            } else {
+                // Outside core — negative distance (further = worse)
+                var distW = sat.coreWest - centerLon;
+                var distE = centerLon - sat.coreEast;
+                score = -Math.min(Math.abs(distW), Math.abs(distE));
             }
-            weight = Math.max(0, Math.min(1, weight));
 
-            if (weight > 0.01) {
-                results.push({ name: sat.name, layerName: layerName, weight: weight });
+            if (score > bestScore) {
+                bestScore = score;
+                bestSat = { name: sat.name, layerName: layerName, weight: 1.0 };
             }
         }
 
-        // If nothing matched (gaps in coverage), fall back to nearest satellite
-        if (results.length === 0) {
+        // Fallback to nearest sub-satellite point if nothing scored well
+        if (!bestSat) {
             var best = SAT_SUBLONS[0], bestDist = 999;
             for (var j = 0; j < SAT_SUBLONS.length; j++) {
                 var d = Math.abs(centerLon - SAT_SUBLONS[j].sublon);
                 if (d > 180) d = 360 - d;
                 if (d < bestDist) { bestDist = d; best = SAT_SUBLONS[j]; }
             }
-            results.push({ name: best.name, layerName: GIBS_IR_LAYERS[best.name], weight: 1.0 });
+            bestSat = { name: best.name, layerName: GIBS_IR_LAYERS[best.name], weight: 1.0 };
         }
 
-        // Normalize weights so they sum to 1
-        var total = 0;
-        for (var k = 0; k < results.length; k++) total += results[k].weight;
-        if (total > 0) {
-            for (var m = 0; m < results.length; m++) results[m].weight /= total;
-        }
-
-        return results;
+        return [bestSat];
     }
 
     /** Load an image as a promise */
