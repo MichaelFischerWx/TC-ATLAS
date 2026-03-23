@@ -1298,11 +1298,11 @@
 
         // Add global animation control panel (bottom-right, above status bar)
         var AnimPanel = L.Control.extend({
-            options: { position: 'bottomright' },
+            options: { position: 'bottomleft' },
             onAdd: function () {
                 var container = L.DomUtil.create('div', 'ir-global-anim-panel');
                 container.id = 'ir-global-anim-panel';
-                container.style.cssText = 'display:flex;align-items:center;gap:6px;padding:5px 10px;font-family:DM Sans,sans-serif;font-size:0.72rem;color:#8b9ec2;background:rgba(15,33,64,0.88);border:1px solid rgba(255,255,255,0.12);border-radius:5px;backdrop-filter:blur(4px);margin-bottom:30px;';
+                container.style.cssText = 'display:flex;align-items:center;gap:6px;padding:5px 10px;font-family:DM Sans,sans-serif;font-size:0.72rem;color:#8b9ec2;background:rgba(15,33,64,0.88);border:1px solid rgba(255,255,255,0.12);border-radius:5px;backdrop-filter:blur(4px);margin-bottom:36px;';
                 L.DomEvent.disableClickPropagation(container);
 
                 // Prev button
