@@ -436,6 +436,31 @@
     text-decoration: underline;
 }
 
+/* ── Official forecast link ─────────────────────────────────── */
+.ir-official-link {
+    display: inline-block;
+    padding: 8px 16px;
+    background: rgba(46, 125, 255, 0.12);
+    border: 1px solid rgba(46, 125, 255, 0.3);
+    border-radius: 6px;
+    color: #60a5fa;
+    text-decoration: none;
+    font-size: 0.82rem;
+    font-weight: 500;
+    transition: all 0.2s;
+}
+.ir-official-link:hover {
+    background: rgba(46, 125, 255, 0.2);
+    border-color: rgba(46, 125, 255, 0.5);
+    color: #93bbfc;
+}
+.ir-official-note {
+    margin-top: 6px;
+    font-size: 0.72rem;
+    color: #64748b;
+    line-height: 1.4;
+}
+
 /* ═══════════════════════════════════════════════════════════════
    Responsive
    ═══════════════════════════════════════════════════════════════ */

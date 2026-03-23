@@ -44,10 +44,12 @@
     var pollTimer = null;
     var currentStormId = null; // ATCF ID of detail view
     var gibsIRLayers = [];     // GIBS IR tile layers on main map
+    var trackLayers = [];      // past track polylines + dots on main map
 
     // Storm detail mini-map state
     var detailMap = null;
     var detailIRLayer = null;
+    var detailTrackLayers = [];
 
     // Animation state (GIBS time-stepping)
     var animFrameTimes = [];   // array of ISO time strings
@@ -93,6 +95,24 @@
         var ew = lon >= 0 ? 'E' : 'W';
         return Math.abs(lat).toFixed(1) + '\u00B0' + ns + ' ' +
                Math.abs(lon).toFixed(1) + '\u00B0' + ew;
+    }
+
+    /** Get the official forecast URL for a storm based on its source/basin */
+    function getOfficialForecastUrl(storm) {
+        var source = (storm.source || '').toUpperCase();
+        var basin = (storm.basin || '').toUpperCase();
+        var id = (storm.atcf_id || '').toUpperCase();
+
+        if (source === 'NHC' || basin === 'ATL' || basin === 'EPAC' || basin === 'CPAC') {
+            // NHC — link to the storm-specific advisory page
+            // NHC URL pattern: https://www.nhc.noaa.gov/refresh/graphics_{basin_num}+shtml/...
+            // Simpler: link to the main active storms page
+            return 'https://www.nhc.noaa.gov/';
+        } else if (source === 'JTWC' || basin === 'WPAC' || basin === 'IO' || basin === 'SHEM') {
+            // JTWC — link to their tropical warnings page
+            return 'https://www.metoc.navy.mil/jtwc/jtwc.html';
+        }
+        return null;
     }
 
     /** Format UTC timestamp for display */
@@ -294,6 +314,83 @@
         }
     }
 
+    /** Clear past track layers from the map */
+    function clearTracks() {
+        for (var i = 0; i < trackLayers.length; i++) {
+            map.removeLayer(trackLayers[i]);
+        }
+        trackLayers = [];
+    }
+
+    /** Fetch metadata for a storm and draw its past track on the main map */
+    function fetchAndDrawTrack(storm) {
+        var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(storm.atcf_id) + '/metadata';
+
+        fetch(url)
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (meta) {
+                if (!meta || !meta.intensity_history || meta.intensity_history.length < 2) return;
+                drawTrackOnMap(map, meta.intensity_history, storm, trackLayers);
+            })
+            .catch(function () { /* silent — track is non-critical */ });
+    }
+
+    /** Draw a past track polyline + intensity dots on a Leaflet map */
+    function drawTrackOnMap(targetMap, history, storm, layerArr) {
+        // Build segments colored by intensity
+        for (var i = 1; i < history.length; i++) {
+            var prev = history[i - 1];
+            var curr = history[i];
+            var cat = windToCategory(curr.vmax_kt);
+            var color = SS_COLORS[cat] || SS_COLORS.TD;
+
+            // Segment polyline
+            var seg = L.polyline(
+                [[prev.lat, prev.lon], [curr.lat, curr.lon]],
+                { color: color, weight: 2.5, opacity: 0.7 }
+            );
+            seg.addTo(targetMap);
+            layerArr.push(seg);
+
+            // Dot at each fix
+            var dot = L.circleMarker([curr.lat, curr.lon], {
+                radius: 3, color: color, fillColor: color,
+                fillOpacity: 0.9, weight: 0
+            });
+            // Tooltip with time + wind
+            var tipText = fmtUTC(curr.time) +
+                (curr.vmax_kt != null ? ' — ' + curr.vmax_kt + ' kt' : '');
+            dot.bindTooltip(tipText, { direction: 'top', offset: [0, -6] });
+            dot.addTo(targetMap);
+            layerArr.push(dot);
+        }
+
+        // Name label near the current position
+        var last = history[history.length - 1];
+        var cat = storm.category || windToCategory(storm.vmax_kt);
+        var label = L.marker([last.lat, last.lon], {
+            icon: L.divIcon({
+                className: '',
+                html: '<div style="color:#fff;font-size:11px;font-weight:600;' +
+                      'text-shadow:0 1px 3px rgba(0,0,0,0.8);white-space:nowrap;' +
+                      'pointer-events:none;transform:translate(12px,-6px);">' +
+                      (storm.name || storm.atcf_id) + '</div>',
+                iconSize: [0, 0]
+            }),
+            interactive: false
+        });
+        label.addTo(targetMap);
+        layerArr.push(label);
+    }
+
+    /** Fetch tracks for all active storms */
+    function fetchAllTracks(storms) {
+        clearTracks();
+        for (var i = 0; i < storms.length; i++) {
+            fetchAndDrawTrack(storms[i]);
+        }
+    }
+
     /** Update the stats bar in the topbar */
     function updateStats(data) {
         var el = function (id) { return document.getElementById(id); };
@@ -341,6 +438,7 @@
                 // Update UI
                 updateStats(data);
                 renderStormMarkers(stormData);
+                fetchAllTracks(stormData);
 
                 // Show/hide no-storms message
                 if (noStormsEl) {
@@ -426,6 +524,15 @@
             fillOpacity: 0.7, weight: 2
         }).addTo(detailMap);
 
+        // Fetch and draw past track on detail map
+        detailTrackLayers = [];
+        var stormCopy = storm;
+        fetchStormMetadata(storm.atcf_id, function (metaErr, meta) {
+            if (!metaErr && meta && meta.intensity_history && meta.intensity_history.length >= 2) {
+                drawTrackOnMap(detailMap, meta.intensity_history, stormCopy, detailTrackLayers);
+            }
+        });
+
         // Update animation controls
         var slider = document.getElementById('ir-anim-slider');
         slider.max = animFrameTimes.length - 1;
@@ -509,6 +616,17 @@
         document.getElementById('ir-info-vmax').textContent =
             storm.vmax_kt != null ? storm.vmax_kt + ' kt (' + categoryShort(cat) + ')' : '\u2014';
         document.getElementById('ir-info-lastfix').textContent = fmtUTC(storm.last_fix_utc);
+
+        // Official forecast link
+        var officialSection = document.getElementById('ir-official-section');
+        var officialLink = document.getElementById('ir-official-link');
+        var officialUrl = getOfficialForecastUrl(storm);
+        if (officialUrl) {
+            officialLink.href = officialUrl;
+            officialSection.style.display = 'block';
+        } else {
+            officialSection.style.display = 'none';
+        }
 
         // Initialize GIBS-based IR mini-map
         stopAnimation();
