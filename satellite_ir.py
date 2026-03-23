@@ -826,6 +826,46 @@ def _build_circular_footprint(radius_km: float, pixel_km: float) -> np.ndarray:
     return mask
 
 
+def _min_filter_2d_pure_numpy(arr: np.ndarray, size: int) -> np.ndarray:
+    """
+    2D minimum filter using separable 1D passes (pure numpy, no scipy).
+    Equivalent to scipy.ndimage.minimum_filter(arr, size=size) for square kernels.
+
+    Uses numpy.lib.stride_tricks.sliding_window_view for efficient vectorized
+    sliding-window minimums along each axis.  The grid is on a fixed-distance
+    regular lat/lon grid, so separable row/column passes are valid.
+
+    Parameters
+    ----------
+    arr : 2D float32 array
+    size : kernel width (odd integer)
+
+    Returns
+    -------
+    2D float32 array with local minimums.
+    """
+    from numpy.lib.stride_tricks import sliding_window_view
+
+    half_w = size // 2
+    ny, nx = arr.shape
+
+    # Pass 1: minimum along rows (axis=1)
+    # Pad columns with inf so boundary windows are handled correctly
+    padded_rows = np.pad(arr, ((0, 0), (half_w, half_w)),
+                         mode='constant', constant_values=np.inf)
+    # sliding_window_view along axis=1 gives shape (ny, nx, size)
+    windows_r = sliding_window_view(padded_rows, size, axis=1)
+    temp = np.min(windows_r, axis=2).astype(np.float32)
+
+    # Pass 2: minimum along columns (axis=0) of the row-filtered result
+    padded_cols = np.pad(temp, ((half_w, half_w), (0, 0)),
+                         mode='constant', constant_values=np.inf)
+    windows_c = sliding_window_view(padded_cols, size, axis=0)
+    out = np.min(windows_c, axis=2).astype(np.float32)
+
+    return out
+
+
 def compute_ir_vigor(tb_frames: list, radius_km: float = 200.0,
                      box_deg: float = 8.0) -> Optional[np.ndarray]:
     """
@@ -833,6 +873,10 @@ def compute_ir_vigor(tb_frames: list, radius_km: float = 200.0,
 
     For each grid point, vigor = current_Tb − local_min(temporal_avg),
     where local_min is the minimum within `radius_km` of that point.
+
+    Uses a pure-numpy separable minimum filter (no scipy dependency).
+    The grid is on a fixed-distance regular lat/lon grid, so separable
+    row/column passes produce equivalent results to a 2D square kernel.
 
     Parameters
     ----------
@@ -848,8 +892,6 @@ def compute_ir_vigor(tb_frames: list, radius_km: float = 200.0,
     np.ndarray or None
         2D vigor array (same shape as input frames) in Kelvin.
     """
-    from scipy.ndimage import minimum_filter
-
     if not tb_frames or len(tb_frames) < 2:
         return None
 
@@ -867,18 +909,13 @@ def compute_ir_vigor(tb_frames: list, radius_km: float = 200.0,
     pixel_km = domain_km / max(ny, nx) if max(ny, nx) > 0 else 2.0
 
     # Compute filter kernel size in pixels (diameter of the radius)
-    # Using a square kernel instead of a circular footprint because scipy's
-    # minimum_filter uses the O(H×W) van Herk/Gil-Werman algorithm for
-    # rectangular kernels, vs O(H×W×K) for arbitrary footprints where K is
-    # the number of True pixels. For radius_km=200 at ~2km resolution,
-    # this is ~16× faster (seconds vs minutes).
     filter_size = max(3, 2 * int(round(radius_km / pixel_km)) + 1)
 
     # Spatially-aware local minimum of the temporal average
     # NaN-safe: replace NaN with extreme sentinel before filtering, restore after
     _NAN_SENTINEL = 9999.0
     avg_filled = np.where(np.isfinite(avg_tb), avg_tb, _NAN_SENTINEL)
-    local_min = minimum_filter(avg_filled, size=filter_size)
+    local_min = _min_filter_2d_pure_numpy(avg_filled, filter_size)
     local_min = np.where(local_min >= _NAN_SENTINEL * 0.9, np.nan, local_min)
 
     # Vigor = current Tb − local min of temporal average
@@ -888,10 +925,27 @@ def compute_ir_vigor(tb_frames: list, radius_km: float = 200.0,
 
 
 def render_vigor_png(vigor_2d: np.ndarray,
-                     as_data_url: bool = False) -> Optional[str]:
+                     as_data_url: bool = False,
+                     min_output_px: int = 1024) -> Optional[str]:
     """
     Render a 2D vigor array to a base64-encoded PNG string using
-    the vigor colormap.  Returns None if all data is NaN.
+    the vigor colormap.  The output is upsampled with nearest-neighbor
+    interpolation so that each grid-point "pixel" matches the visual size
+    of GIBS IR tiles on the Leaflet map (which render at ~256 px per tile).
+    The frontend additionally uses CSS image-rendering: pixelated to ensure
+    the browser does not blur the discrete pixels.
+
+    Parameters
+    ----------
+    vigor_2d : 2D float32 array of vigor values (Kelvin).
+    as_data_url : if True, prepend the data:image/png;base64, prefix.
+    min_output_px : target minimum dimension for the output PNG.
+        The native Tb grid (~333 px for a 6° box at 2 km) is upsampled
+        by an integer factor so the longest side reaches at least this
+        value.  Default 1024 gives ~3× upsampling, matching GIBS tile
+        density on retina displays at zoom 5-6.
+
+    Returns None if all data is NaN.
     """
     from PIL import Image
 
@@ -911,6 +965,16 @@ def render_vigor_png(vigor_2d: np.ndarray,
     rgba[mask] = [0, 0, 0, 0]
 
     img = Image.fromarray(rgba, "RGBA")
+
+    # Upsample with nearest-neighbor so each grid-point pixel matches
+    # the visual density of GIBS IR tiles on retina displays.
+    max_dim = max(img.size)  # (width, height)
+    if max_dim > 0 and max_dim < min_output_px:
+        scale = max(1, min_output_px // max_dim)
+        new_w = img.size[0] * scale
+        new_h = img.size[1] * scale
+        img = img.resize((new_w, new_h), Image.NEAREST)
+
     buf = io.BytesIO()
     img.save(buf, format="PNG", compress_level=1)
     b64 = base64.b64encode(buf.getvalue()).decode("ascii")

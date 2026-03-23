@@ -24,19 +24,19 @@
     var GIBS_MAX_ZOOM = 6;  // GIBS geostationary imagery max zoom
     var GIBS_IR_INTERVAL_MIN = 10;  // GIBS tiles every 10 minutes
 
-    // Satellite coverage zones for seamless compositing
-    // Each satellite has a "core" range (full opacity) and blending in overlap zones
-    // Core zones define where each satellite is at full opacity.
-    // BLEND_WIDTH_DEG on each side creates a cross-fade to the neighbor.
-    // Zones are generous so there's always at least one satellite per tile.
-    // The Africa/Middle East gap (no Meteosat in GIBS) is handled by the
-    // nearest-satellite fallback in satellitesForTile().
+    // Satellite coverage zones for seamless compositing.
+    // Each satellite has a "core" range (full opacity) and a narrow cross-fade
+    // at the boundary to the adjacent satellite.  Core zones are set so that
+    // GOES-East and GOES-West meet cleanly near -110° with a tight 5° blend
+    // (the old 25° blend created a visible 40° swath of blurry dual-source
+    // compositing over the western US).  The Africa/Middle East gap (no
+    // Meteosat in GIBS) is handled by the nearest-satellite fallback.
     var SAT_ZONES = [
-        { name: 'GOES-East', sublon: -75.2,  coreWest: -105, coreEast:   15 },
-        { name: 'GOES-West', sublon: -137.2, coreWest: -180, coreEast: -115 },
+        { name: 'GOES-East', sublon: -75.2,  coreWest: -110, coreEast:   15 },
+        { name: 'GOES-West', sublon: -137.2, coreWest: -180, coreEast: -110 },
         { name: 'Himawari',  sublon:  140.7, coreWest:   60, coreEast:  180 }
     ];
-    var BLEND_WIDTH_DEG = 25; // degrees of longitude over which to cross-fade
+    var BLEND_WIDTH_DEG = 5; // narrow cross-fade to avoid blurry dual-source artifacts
 
     // Sub-satellite longitudes for choosing best satellite per storm
     var SAT_SUBLONS = [
@@ -205,19 +205,49 @@
     }
 
     /** Create a Leaflet tile layer for a single GIBS IR product at a given time
-     *  (used for storm-detail animation where only one satellite is needed) */
+     *  (used for storm-detail animation where only one satellite is needed).
+     *  Uses a custom GridLayer with per-tile retry so that individual tiles
+     *  that 404 at the requested time automatically fall back to 10/20/30 min
+     *  earlier, eliminating gaps in the animation frames. */
     function createGIBSLayer(layerName, timeStr, opacity, bounds) {
-        var opts = {
-            maxZoom: GIBS_MAX_ZOOM,
-            maxNativeZoom: GIBS_MAX_ZOOM,
-            tileSize: 256,
-            opacity: opacity || 0.6,
-            attribution: '<a href="https://earthdata.nasa.gov/gibs">NASA GIBS</a>'
-        };
+        var RetryLayer = L.GridLayer.extend({
+            options: {
+                maxZoom: GIBS_MAX_ZOOM,
+                maxNativeZoom: GIBS_MAX_ZOOM,
+                tileSize: 256,
+                opacity: opacity || 0.6,
+                attribution: '<a href="https://earthdata.nasa.gov/gibs">NASA GIBS</a>',
+                updateWhenZooming: false,
+                keepBuffer: 3
+            },
+
+            _layerName: layerName,
+            _timeStr: timeStr,
+
+            createTile: function (coords, done) {
+                var tile = document.createElement('canvas');
+                var ctx = tile.getContext('2d');
+                var size = this.getTileSize();
+                tile.width = size.x;
+                tile.height = size.y;
+
+                loadImageWithRetry(this._layerName, this._timeStr, coords.z, coords.y, coords.x)
+                    .then(function (result) {
+                        if (result.img) {
+                            ctx.drawImage(result.img, 0, 0, size.x, size.y);
+                        }
+                        done(null, tile);
+                    });
+
+                return tile;
+            }
+        });
+
+        var layer = new RetryLayer();
         if (bounds) {
-            opts.bounds = L.latLngBounds(bounds);
+            layer.options.bounds = L.latLngBounds(bounds);
         }
-        return L.tileLayer(gibsTileUrl(layerName, timeStr), opts);
+        return layer;
     }
 
     // ── Seamless Composite GIBS Layer ─────────────────────────
