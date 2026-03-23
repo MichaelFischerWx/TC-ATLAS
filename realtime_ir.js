@@ -13,6 +13,17 @@
     var DEFAULT_LOOKBACK_HOURS = 6;
     var DEFAULT_RADIUS_DEG = 3.0;
 
+    // NASA GIBS WMTS tile config for IR imagery
+    var GIBS_BASE = 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best';
+    var GIBS_IR_LAYERS = {
+        'GOES-East':  'GOES-East_ABI_Band13_Clean_Infrared',
+        'GOES-West':  'GOES-West_ABI_Band13_Clean_Infrared',
+        'Himawari':   'Himawari_AHI_Band13_Clean_Infrared'
+    };
+    var GIBS_TILEMATRIX = 'GoogleMapsCompatible_Level6';
+    var GIBS_MAX_ZOOM = 6;  // GIBS geostationary imagery max zoom
+    var GIBS_IR_INTERVAL_MIN = 10;  // GIBS tiles every 10 minutes
+
     // Saffir-Simpson color palette (matches global_archive.js)
     var SS_COLORS = {
         TD: '#60a5fa', TS: '#34d399', C1: '#fbbf24',
@@ -32,9 +43,14 @@
     var stormData = [];        // latest active-storms response
     var pollTimer = null;
     var currentStormId = null; // ATCF ID of detail view
+    var gibsIRLayers = [];     // GIBS IR tile layers on main map
 
-    // Animation state
-    var irFrames = [];         // array of {image_b64, datetime_utc, ...}
+    // Storm detail mini-map state
+    var detailMap = null;
+    var detailIRLayer = null;
+
+    // Animation state (GIBS time-stepping)
+    var animFrameTimes = [];   // array of ISO time strings
     var animIndex = 0;
     var animPlaying = false;
     var animTimer = null;
@@ -93,6 +109,98 @@
     }
 
     // ═══════════════════════════════════════════════════════════
+    //  GIBS TILE HELPERS
+    // ═══════════════════════════════════════════════════════════
+
+    /** Round a Date to the nearest GIBS interval (10 min) in the past */
+    function roundToGIBSInterval(dt) {
+        var d = new Date(dt.getTime());
+        var m = d.getUTCMinutes();
+        d.setUTCMinutes(m - (m % GIBS_IR_INTERVAL_MIN), 0, 0);
+        return d;
+    }
+
+    /** Format a Date as GIBS subdaily time string: YYYY-MM-DDTHH:MI:SSZ */
+    function toGIBSTime(dt) {
+        return dt.getUTCFullYear() + '-' +
+               String(dt.getUTCMonth() + 1).padStart(2, '0') + '-' +
+               String(dt.getUTCDate()).padStart(2, '0') + 'T' +
+               String(dt.getUTCHours()).padStart(2, '0') + ':' +
+               String(dt.getUTCMinutes()).padStart(2, '0') + ':00Z';
+    }
+
+    /** Create a GIBS IR tile URL template for Leaflet for a given layer + time */
+    function gibsTileUrl(layerName, timeStr) {
+        return GIBS_BASE + '/' + layerName + '/default/' + timeStr +
+               '/GoogleMapsCompatible_Level6/{z}/{y}/{x}.png';
+    }
+
+    /** Create a Leaflet tile layer for a GIBS IR product at a given time */
+    function createGIBSLayer(layerName, timeStr, opacity) {
+        return L.tileLayer(gibsTileUrl(layerName, timeStr), {
+            maxZoom: GIBS_MAX_ZOOM,
+            maxNativeZoom: GIBS_MAX_ZOOM,
+            tileSize: 256,
+            opacity: opacity || 0.6,
+            attribution: '<a href="https://earthdata.nasa.gov/gibs">NASA GIBS</a>'
+        });
+    }
+
+    /** Add all 3 GIBS IR layers to the map for the current time */
+    function addGIBSOverlay(targetMap, opacity) {
+        var now = roundToGIBSInterval(new Date());
+        // Go back 20 min to ensure tiles are available (GIBS has slight delay)
+        now = new Date(now.getTime() - 20 * 60 * 1000);
+        var timeStr = toGIBSTime(now);
+
+        var layers = [];
+        var layerNames = Object.keys(GIBS_IR_LAYERS);
+        for (var i = 0; i < layerNames.length; i++) {
+            var lyr = createGIBSLayer(GIBS_IR_LAYERS[layerNames[i]], timeStr, opacity || 0.55);
+            lyr.addTo(targetMap);
+            layers.push(lyr);
+        }
+        return layers;
+    }
+
+    /** Remove GIBS IR layers from a map */
+    function removeGIBSOverlay(targetMap, layers) {
+        for (var i = 0; i < layers.length; i++) {
+            targetMap.removeLayer(layers[i]);
+        }
+    }
+
+    /** Swap GIBS layers to a new time string */
+    function swapGIBSTime(targetMap, layers, timeStr, opacity) {
+        for (var i = 0; i < layers.length; i++) {
+            targetMap.removeLayer(layers[i]);
+        }
+        var layerNames = Object.keys(GIBS_IR_LAYERS);
+        var newLayers = [];
+        for (var j = 0; j < layerNames.length; j++) {
+            var lyr = createGIBSLayer(GIBS_IR_LAYERS[layerNames[j]], timeStr, opacity || 0.7);
+            lyr.addTo(targetMap);
+            newLayers.push(lyr);
+        }
+        return newLayers;
+    }
+
+    /** Build an array of GIBS time strings for animation (lookback_hours, every 10 min) */
+    function buildFrameTimes(centerDt, lookbackHours) {
+        var times = [];
+        var end = roundToGIBSInterval(centerDt);
+        // Go back 20 min for availability
+        end = new Date(end.getTime() - 20 * 60 * 1000);
+        var start = new Date(end.getTime() - lookbackHours * 3600 * 1000);
+        var step = 30 * 60 * 1000; // 30-min steps for animation (not every 10 min — too many frames)
+        for (var t = start.getTime(); t <= end.getTime(); t += step) {
+            var d = roundToGIBSInterval(new Date(t));
+            times.push(toGIBSTime(d));
+        }
+        return times;
+    }
+
+    // ═══════════════════════════════════════════════════════════
     //  MAP VIEW
     // ═══════════════════════════════════════════════════════════
 
@@ -102,18 +210,28 @@
             center: [20, -40],
             zoom: 3,
             minZoom: 2,
-            maxZoom: 12,
+            maxZoom: GIBS_MAX_ZOOM,
             zoomControl: true,
             worldCopyJump: true
         });
 
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>',
+        // Dark basemap (underneath IR)
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
             subdomains: 'abcd',
             maxZoom: 19
         }).addTo(map);
 
-        // Move zoom control to top-left (default)
+        // Add GIBS IR overlay (all 3 satellites)
+        gibsIRLayers = addGIBSOverlay(map, 0.55);
+
+        // Labels on top of IR
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a> | IR: <a href="https://earthdata.nasa.gov/gibs">NASA GIBS</a>',
+            subdomains: 'abcd',
+            maxZoom: 19,
+            pane: 'overlayPane'
+        }).addTo(map);
+
         map.zoomControl.setPosition('topleft');
     }
 
@@ -187,6 +305,7 @@
         el('stat-atl').textContent = (byBasin.ATL || 0);
         el('stat-epac').textContent = (byBasin.EPAC || 0);
         el('stat-wpac').textContent = (byBasin.WPAC || 0);
+        el('stat-shem').textContent = (byBasin.SHEM || 0);
 
         // Update status bar
         if (totalActive === 0) {
@@ -245,32 +364,79 @@
             });
     }
 
-    /** Fetch IR frames for a storm */
-    function fetchIRFrames(atcfId, callback) {
+    /** Initialize the GIBS-based detail mini-map for a storm */
+    function initDetailMap(storm) {
+        var container = document.getElementById('ir-image-container');
         var imageLoader = document.getElementById('ir-image-loader');
-        if (imageLoader) imageLoader.style.display = 'flex';
+        if (imageLoader) imageLoader.style.display = 'none';
 
-        var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) + '/ir' +
-                  '?lookback_hours=' + DEFAULT_LOOKBACK_HOURS +
-                  '&radius_deg=' + DEFAULT_RADIUS_DEG;
+        // Destroy old mini-map if exists
+        if (detailMap) {
+            detailMap.remove();
+            detailMap = null;
+        }
 
-        fetch(url)
-            .then(function (r) {
-                if (!r.ok) throw new Error('HTTP ' + r.status);
-                return r.json();
-            })
-            .then(function (data) {
-                if (imageLoader) imageLoader.style.display = 'none';
-                irFrames = data.frames || (data.image_b64 ? [data] : []);
-                callback(null, irFrames);
-                _ga('ir_fetch_frames', { atcf_id: atcfId, frame_count: irFrames.length });
-            })
-            .catch(function (err) {
-                if (imageLoader) imageLoader.style.display = 'none';
-                console.warn('[IR Monitor] IR fetch failed:', err.message);
-                callback(err);
-                _ga('ir_fetch_frames_error', { atcf_id: atcfId, error: err.message });
-            });
+        // Hide the old canvas, ensure map div exists
+        var canvas = document.getElementById('ir-canvas');
+        if (canvas) canvas.style.display = 'none';
+
+        var mapDiv = document.getElementById('ir-detail-map');
+        if (!mapDiv) {
+            mapDiv = document.createElement('div');
+            mapDiv.id = 'ir-detail-map';
+            mapDiv.style.cssText = 'width:100%;height:100%;position:absolute;top:0;left:0;z-index:1;';
+            container.appendChild(mapDiv);
+        }
+        mapDiv.style.display = 'block';
+
+        // Create mini-map centered on storm
+        detailMap = L.map(mapDiv, {
+            center: [storm.lat, storm.lon],
+            zoom: 5,
+            minZoom: 3,
+            maxZoom: GIBS_MAX_ZOOM,
+            zoomControl: true,
+            attributionControl: false
+        });
+
+        // Dark basemap
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
+            subdomains: 'abcd', maxZoom: 19
+        }).addTo(detailMap);
+
+        // Build animation frame times
+        var lastFix = storm.last_fix_utc ? new Date(storm.last_fix_utc) : new Date();
+        animFrameTimes = buildFrameTimes(lastFix, DEFAULT_LOOKBACK_HOURS);
+        animIndex = animFrameTimes.length - 1;
+
+        // Add GIBS IR for the latest frame
+        var timeStr = animFrameTimes[animIndex] || toGIBSTime(roundToGIBSInterval(new Date()));
+        detailIRLayer = swapGIBSTime(detailMap, [], timeStr, 0.75);
+
+        // Labels on top
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {
+            subdomains: 'abcd', maxZoom: 19, pane: 'overlayPane'
+        }).addTo(detailMap);
+
+        // Storm center marker
+        var cat = storm.category || windToCategory(storm.vmax_kt);
+        var color = SS_COLORS[cat] || SS_COLORS.TD;
+        L.circleMarker([storm.lat, storm.lon], {
+            radius: 8, color: color, fillColor: color,
+            fillOpacity: 0.7, weight: 2
+        }).addTo(detailMap);
+
+        // Update animation controls
+        var slider = document.getElementById('ir-anim-slider');
+        slider.max = animFrameTimes.length - 1;
+        slider.value = animIndex;
+        updateAnimCounter();
+        updateFrameOverlay();
+
+        // Force map resize after layout settles
+        setTimeout(function () { detailMap.invalidateSize(); }, 100);
+
+        _ga('ir_detail_map_init', { atcf_id: storm.atcf_id, frames: animFrameTimes.length });
     }
 
     /** Fetch storm metadata (intensity history, etc.) */
@@ -344,15 +510,11 @@
             storm.vmax_kt != null ? storm.vmax_kt + ' kt (' + categoryShort(cat) + ')' : '\u2014';
         document.getElementById('ir-info-lastfix').textContent = fmtUTC(storm.last_fix_utc);
 
-        // Fetch IR frames
+        // Initialize GIBS-based IR mini-map
         stopAnimation();
-        irFrames = [];
+        animFrameTimes = [];
         animIndex = 0;
-        fetchIRFrames(atcfId, function (err, frames) {
-            if (!err && frames && frames.length > 0) {
-                initAnimation(frames);
-            }
-        });
+        initDetailMap(storm);
 
         // Fetch metadata for intensity chart
         fetchStormMetadata(atcfId, function (err, meta) {
@@ -379,6 +541,15 @@
         currentStormId = null;
         stopAnimation();
 
+        // Clean up detail mini-map
+        if (detailMap) {
+            detailMap.remove();
+            detailMap = null;
+            detailIRLayer = null;
+        }
+        var detailMapDiv = document.getElementById('ir-detail-map');
+        if (detailMapDiv) detailMapDiv.style.display = 'none';
+
         // Update URL
         if (window.history && window.history.replaceState) {
             window.history.replaceState(null, '', 'realtime_ir.html');
@@ -396,65 +567,48 @@
     }
 
     // ═══════════════════════════════════════════════════════════
-    //  IR ANIMATION
+    //  IR ANIMATION (GIBS time-stepping)
     // ═══════════════════════════════════════════════════════════
 
-    /** Initialize the animation with fetched frames */
-    function initAnimation(frames) {
-        irFrames = frames;
-        animIndex = frames.length - 1; // start on most recent frame
-
-        var slider = document.getElementById('ir-anim-slider');
-        slider.max = frames.length - 1;
-        slider.value = animIndex;
-
-        updateAnimCounter();
-        drawFrame(animIndex);
+    /** Update the overlay info with the current frame time */
+    function updateFrameOverlay() {
+        if (animFrameTimes.length === 0) return;
+        var timeStr = animFrameTimes[animIndex];
+        document.getElementById('ir-frame-time').textContent = fmtUTC(timeStr);
+        document.getElementById('ir-satellite-label').textContent = 'GIBS IR';
     }
 
-    /** Draw a single IR frame to the canvas */
-    function drawFrame(idx) {
-        if (idx < 0 || idx >= irFrames.length) return;
-
-        var frame = irFrames[idx];
-        var canvas = document.getElementById('ir-canvas');
-        var ctx = canvas.getContext('2d');
-
-        var img = new Image();
-        img.onload = function () {
-            canvas.width = img.width;
-            canvas.height = img.height;
-            ctx.drawImage(img, 0, 0);
-        };
-        img.src = 'data:image/png;base64,' + frame.image_b64;
-
-        // Update overlay info
-        document.getElementById('ir-frame-time').textContent = fmtUTC(frame.datetime_utc);
-        document.getElementById('ir-satellite-label').textContent = frame.satellite || '';
+    /** Swap the detail map IR tiles to a new time index */
+    function showFrame(idx) {
+        if (idx < 0 || idx >= animFrameTimes.length || !detailMap) return;
+        animIndex = idx;
+        var timeStr = animFrameTimes[idx];
+        detailIRLayer = swapGIBSTime(detailMap, detailIRLayer || [], timeStr, 0.75);
+        updateFrameOverlay();
     }
 
     /** Update the frame counter text */
     function updateAnimCounter() {
         var counter = document.getElementById('ir-anim-counter');
-        counter.textContent = (animIndex + 1) + ' / ' + irFrames.length;
+        counter.textContent = (animIndex + 1) + ' / ' + animFrameTimes.length;
     }
 
     /** Step to next frame */
     function nextFrame() {
-        if (irFrames.length === 0) return;
-        animIndex = (animIndex + 1) % irFrames.length;
+        if (animFrameTimes.length === 0) return;
+        animIndex = (animIndex + 1) % animFrameTimes.length;
         document.getElementById('ir-anim-slider').value = animIndex;
         updateAnimCounter();
-        drawFrame(animIndex);
+        showFrame(animIndex);
     }
 
     /** Step to previous frame */
     function prevFrame() {
-        if (irFrames.length === 0) return;
-        animIndex = (animIndex - 1 + irFrames.length) % irFrames.length;
+        if (animFrameTimes.length === 0) return;
+        animIndex = (animIndex - 1 + animFrameTimes.length) % animFrameTimes.length;
         document.getElementById('ir-anim-slider').value = animIndex;
         updateAnimCounter();
-        drawFrame(animIndex);
+        showFrame(animIndex);
     }
 
     /** Toggle play/pause */
@@ -468,7 +622,7 @@
 
     /** Start animation loop */
     function startAnimation() {
-        if (irFrames.length < 2) return;
+        if (animFrameTimes.length < 2) return;
         animPlaying = true;
         var btn = document.getElementById('ir-anim-play');
         btn.innerHTML = '&#9646;&#9646;'; // pause icon
@@ -476,7 +630,7 @@
 
         animTimer = setInterval(function () {
             nextFrame();
-        }, 250); // 4 fps
+        }, 750); // slower for tile loading (~1.3 fps)
     }
 
     /** Stop animation loop */
@@ -605,7 +759,7 @@
             stopAnimation();
             animIndex = parseInt(this.value, 10);
             updateAnimCounter();
-            drawFrame(animIndex);
+            showFrame(animIndex);
         });
 
         // Browser back/forward
