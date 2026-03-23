@@ -628,16 +628,6 @@
             animFrameLayers.push(lyr);
         }
 
-        // Coastlines & borders (above IR, below labels)
-        // Uses a custom pane so coastlines render between IR tiles and text labels
-        detailMap.createPane('coastlinePane');
-        detailMap.getPane('coastlinePane').style.zIndex = 450;
-        detailMap.getPane('coastlinePane').style.opacity = 0.5;
-        L.tileLayer('https://tiles.stadiamaps.com/tiles/stamen_toner_lines/{z}/{x}/{y}{r}.png', {
-            subdomains: '', maxZoom: 18, pane: 'coastlinePane',
-            attribution: ''
-        }).addTo(detailMap);
-
         // Labels on top (in overlay pane so above IR tiles)
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {
             subdomains: 'abcd', maxZoom: 19, pane: 'overlayPane'
