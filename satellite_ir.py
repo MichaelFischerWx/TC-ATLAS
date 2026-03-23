@@ -447,10 +447,12 @@ def _parse_hsd_header(data: bytes) -> dict:
 
     header = {}
 
-    # Read block lengths dynamically by walking the block chain
+    # HSD format is LITTLE-ENDIAN (confirmed by JMA spec and satpy reader).
     # Each block starts with: block_number (uint8, 1B) + block_length (uint16, 2B)
+    LE = "<"  # little-endian prefix
+
     def blk_len_at(offset):
-        return struct.unpack_from(">H", data, offset + 1)[0]
+        return struct.unpack_from(f"{LE}H", data, offset + 1)[0]
 
     try:
         blk1_len = blk_len_at(0)
@@ -461,19 +463,21 @@ def _parse_hsd_header(data: bytes) -> dict:
         blk4_start = blk3_start + blk3_len
         blk4_len = blk_len_at(blk4_start)
         blk5_start = blk4_start + blk4_len
+        print(f"[satellite_ir] HSD block chain: blk1={blk1_len}, blk2@{blk2_start} len={blk2_len}, "
+              f"blk5@{blk5_start}")
     except Exception as e:
         print(f"[satellite_ir] HSD block chain walk failed: {e}")
         # Fallback to typical offsets for 2km FLDK data
         blk2_start = 282
-        blk5_start = 467
+        blk5_start = 598  # 282 + 50 + 127 + 139
         blk1_len = 282
 
     # Block 2: Data info — contains image dimensions
     # Layout: blk_num(1) + blk_len(2) + bits_per_pixel(2) +
     #         n_columns(2) + n_lines(2) + compression(1) + ...
     try:
-        header["n_columns"] = struct.unpack_from(">H", data, blk2_start + 5)[0]
-        header["n_lines"] = struct.unpack_from(">H", data, blk2_start + 7)[0]
+        header["n_columns"] = struct.unpack_from(f"{LE}H", data, blk2_start + 5)[0]
+        header["n_lines"] = struct.unpack_from(f"{LE}H", data, blk2_start + 7)[0]
     except Exception:
         header["n_columns"] = HIMAWARI_NCOLS   # fallback: 5500
         header["n_lines"] = HIMAWARI_NLINES_PER_SEG  # fallback: 550
@@ -487,17 +491,17 @@ def _parse_hsd_header(data: bytes) -> dict:
     #         gain_count2tbb(8) + const_count2tbb(8)
     try:
         # count→radiance conversion (for all bands)
-        header["gain"] = struct.unpack_from(">d", data, blk5_start + 19)[0]
-        header["offset"] = struct.unpack_from(">d", data, blk5_start + 27)[0]
+        header["gain"] = struct.unpack_from(f"{LE}d", data, blk5_start + 19)[0]
+        header["offset"] = struct.unpack_from(f"{LE}d", data, blk5_start + 27)[0]
 
         # Planck coefficients (IR bands only — Band 7-16)
-        header["planck_c0"] = struct.unpack_from(">d", data, blk5_start + 35)[0]
-        header["planck_c1"] = struct.unpack_from(">d", data, blk5_start + 43)[0]
-        header["planck_c2"] = struct.unpack_from(">d", data, blk5_start + 51)[0]
+        header["planck_c0"] = struct.unpack_from(f"{LE}d", data, blk5_start + 35)[0]
+        header["planck_c1"] = struct.unpack_from(f"{LE}d", data, blk5_start + 43)[0]
+        header["planck_c2"] = struct.unpack_from(f"{LE}d", data, blk5_start + 51)[0]
 
         # Direct count→Tbb speed-up coefficients (avoids radiance step)
-        header["tbb_gain"] = struct.unpack_from(">d", data, blk5_start + 59)[0]
-        header["tbb_offset"] = struct.unpack_from(">d", data, blk5_start + 67)[0]
+        header["tbb_gain"] = struct.unpack_from(f"{LE}d", data, blk5_start + 59)[0]
+        header["tbb_offset"] = struct.unpack_from(f"{LE}d", data, blk5_start + 67)[0]
     except Exception as e:
         print(f"[satellite_ir] HSD calibration parse failed: {e}")
         header.setdefault("gain", 1.0)
@@ -510,7 +514,7 @@ def _parse_hsd_header(data: bytes) -> dict:
 
     # Total header length is stored in Block 1 at byte 70 (uint32)
     try:
-        total_header_len = struct.unpack_from(">I", data, 70)[0]
+        total_header_len = struct.unpack_from(f"{LE}I", data, 70)[0]
         header["data_offset"] = total_header_len
     except Exception:
         # Fallback: compute from file size minus expected data
@@ -623,9 +627,9 @@ def open_himawari_subset(s3_prefix: str, center_lat: float, center_lon: float,
             ncols = hdr["n_columns"]
             data_offset = hdr["data_offset"]
 
-            # Extract raw counts (uint16 big-endian)
+            # Extract raw counts (uint16 little-endian per HSD spec)
             counts = np.frombuffer(raw_data[data_offset:data_offset + nlines * ncols * 2],
-                                   dtype=">u2").reshape(nlines, ncols)
+                                   dtype="<u2").reshape(nlines, ncols)
             del raw_data
 
             # Convert to brightness temperature

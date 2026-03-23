@@ -396,7 +396,7 @@
             // Check ALL satellites at this time
             var checks = testTiles.map(function (t) {
                 var url = GIBS_BASE + '/' + t.layer + '/default/' + ts + t.suffix;
-                return fetch(url, { method: 'HEAD' }).then(function (r) {
+                return fetch(url).then(function (r) {
                     return r.ok;
                 }).catch(function () {
                     return false;
@@ -505,7 +505,7 @@
         L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png', {
             subdomains: 'abcd',
             maxZoom: 19,
-            opacity: 0.12,
+            opacity: 0.28,
             pane: 'coastlinePane'
         }).addTo(map);
 
@@ -878,7 +878,7 @@
         detailMap.getPane('coastlinePane').style.zIndex = 450;
         detailMap.getPane('coastlinePane').style.pointerEvents = 'none';
         L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png', {
-            subdomains: 'abcd', maxZoom: 19, opacity: 0.15, pane: 'coastlinePane'
+            subdomains: 'abcd', maxZoom: 19, opacity: 0.28, pane: 'coastlinePane'
         }).addTo(detailMap);
 
         // Labels on top (in overlay pane so above IR tiles)
