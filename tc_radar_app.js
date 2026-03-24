@@ -417,8 +417,6 @@ function openSidePanel(caseData, fromQuickSelect) {
             (caseData.number_of_swaths ? ' \u00b7 ' + caseData.number_of_swaths + ' swaths' : '') +
         '</div>' +
 
-        buildCaseMetaPanel(caseData) +
-
         '<div class="explorer-layout">' +
             // ── LEFT: Display area + action buttons ──
             '<div class="explorer-display">' +
