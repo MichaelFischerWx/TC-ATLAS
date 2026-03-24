@@ -1352,11 +1352,6 @@
                 timeSpan.id = 'ir-global-anim-time';
                 timeSpan.style.cssText = 'color:#e2e8f0;font-weight:500;font-size:0.68rem;letter-spacing:0.03em;min-width:90px;';
 
-                // Status display
-                var statusSpan = L.DomUtil.create('span', '', container);
-                statusSpan.id = 'ir-global-anim-status';
-                statusSpan.style.cssText = 'color:#64748b;font-size:0.65rem;';
-
                 // Speed toggle button
                 var speedBtn = L.DomUtil.create('button', '', container);
                 speedBtn.id = 'ir-global-anim-speed';
@@ -1364,6 +1359,11 @@
                 speedBtn.title = 'Cycle animation speed';
                 speedBtn.style.cssText = 'background:rgba(96,165,250,0.15);border:1px solid rgba(96,165,250,0.3);color:#60a5fa;cursor:pointer;font-size:0.6rem;font-weight:600;padding:1px 6px;border-radius:3px;font-family:JetBrains Mono,monospace;';
                 speedBtn.addEventListener('click', cycleGlobalAnimSpeed);
+
+                // Status display
+                var statusSpan = L.DomUtil.create('span', '', container);
+                statusSpan.id = 'ir-global-anim-status';
+                statusSpan.style.cssText = 'color:#64748b;font-size:0.65rem;';
 
                 // Stop/reset button
                 var stopBtn = L.DomUtil.create('button', '', container);
