@@ -947,7 +947,7 @@ def get_rt_data(
             v = ds["V"].isel(time=0, level=zi).transpose("y", "x").values
             if _has_mot:
                 u = u - _su; v = v - _sv
-            return _wcm_center_km(u, v, x_km, y_km, num_sectors=12, spad=6, num_iterations=3)
+            return _wcm_center_km(u, v, x_km, y_km, num_sectors=1, spad=6, num_iterations=3)
 
         c2 = _quick_center(2.0)
         if c2["converged"]:
@@ -3786,7 +3786,7 @@ def _compute_rt_tilt_profile(ds, min_height=0.5, max_height=8.0, ref_height=2.0)
 
     u_ref, v_ref = uv_slices[ref_lev]
     ref_result = _wcm_center_km(u_ref, v_ref, x_km, y_km,
-                                 num_sectors=12, spad=6, num_iterations=3)
+                                 num_sectors=1, spad=6, num_iterations=3)
     if not ref_result["converged"]:
         # Fall back to grid centre
         ref_result["center_ix"] = len(x_km) // 2
@@ -3798,7 +3798,7 @@ def _compute_rt_tilt_profile(ds, min_height=0.5, max_height=8.0, ref_height=2.0)
     def _solve_level(lev):
         u, v = uv_slices[lev]
         res = _wcm_center_km(u, v, x_km, y_km,
-                              num_sectors=12, spad=6, num_iterations=3,
+                              num_sectors=1, spad=6, num_iterations=3,
                               first_guess_xy=ref_guess)
         return lev, res
 
