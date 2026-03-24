@@ -48,10 +48,8 @@
     // Meteosat in GIBS) is handled by the nearest-satellite fallback.
     var SAT_ZONES = [
         { name: 'GOES-East', sublon: -75.2,  coreWest: -110, coreEast:   15 },
-        { name: 'GOES-West', sublon: -137.2, coreWest: -150, coreEast: -110 },
-        { name: 'Himawari',  sublon:  140.7, coreWest:   60, coreEast:  180 },
-        // Mirror entry: Himawari coverage west of the dateline (western Pacific)
-        { name: 'Himawari',  sublon:  140.7, coreWest: -180, coreEast: -150 }
+        { name: 'GOES-West', sublon: -137.2, coreWest: -180, coreEast: -110 },
+        { name: 'Himawari',  sublon:  140.7, coreWest:   60, coreEast:  180 }
     ];
     var BLEND_WIDTH_DEG = 5; // narrow cross-fade to avoid blurry dual-source artifacts
 
@@ -530,8 +528,9 @@
     }
 
     /** Per-pixel blend: overlay visible image onto IR base in a canvas context.
-     *  Only pixels with brightness above the threshold are drawn from the
-     *  visible image; dark (nighttime) pixels are left as the IR base.
+     *  Daytime pixels (visible brightness above threshold) use the visible image.
+     *  Nighttime pixels (dark visible) convert the colored IR to grayscale,
+     *  mimicking the look of real GeoColor imagery (grayscale IR at night).
      *  This correctly handles tiles that span the day/night terminator. */
     function blendVisibleOverIR(ctx, visImg, w, h) {
         var VIS_BRIGHT_THRESHOLD = 12; // nighttime pixels are 0-2, daytime ocean ~15+
@@ -547,10 +546,17 @@
         for (var p = 0; p < vd.length; p += 4) {
             var brightness = (vd[p] + vd[p + 1] + vd[p + 2]) / 3;
             if (brightness > VIS_BRIGHT_THRESHOLD) {
+                // Daytime: use visible imagery
                 id[p]     = vd[p];
                 id[p + 1] = vd[p + 1];
                 id[p + 2] = vd[p + 2];
                 id[p + 3] = 255;
+            } else {
+                // Nighttime: convert colored IR to grayscale
+                var gray = Math.round(0.299 * id[p] + 0.587 * id[p + 1] + 0.114 * id[p + 2]);
+                id[p]     = gray;
+                id[p + 1] = gray;
+                id[p + 2] = gray;
             }
         }
         ctx.putImageData(irData, 0, 0);
