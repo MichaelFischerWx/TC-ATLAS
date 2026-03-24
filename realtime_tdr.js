@@ -297,6 +297,7 @@
 
         // Fetch GOES IR satellite imagery in parallel
         _rtShowIRLoadingIndicator();
+        rtFetchIR._retried = false;  // reset retry flag for new file
         rtFetchIR();
     };
 
@@ -1737,9 +1738,17 @@
                 console.warn('RT IR fetch failed:', err);
                 _rtIRFetching = false;
                 _rtIRData = null;
-                _rtRemoveIRLoadingIndicator();
+                // Retry once after 3s (handles Cloud Run cold-start failures)
+                if (!rtFetchIR._retried) {
+                    rtFetchIR._retried = true;
+                    console.info('RT IR: retrying in 3s…');
+                    setTimeout(rtFetchIR, 3000);
+                } else {
+                    _rtRemoveIRLoadingIndicator();
+                }
             });
     }
+    rtFetchIR._retried = false;
     window.rtFetchIR = rtFetchIR;
 
     function _rtFetchIRFramesParallel(startIdx) {
