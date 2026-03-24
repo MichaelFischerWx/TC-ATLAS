@@ -7,7 +7,34 @@ function _ga(action, params) {
     }
 }
 
-// ── Deep linking: ?tab=realtime / ?tab=composites / #case=N ──
+// ── Deep linking: ?tab=realtime / ?tab=composites / #case=N&var=X&level=Y&dtype=Z ──
+function _updatePermalink() {
+    if (currentCaseIndex === null) return;
+    var parts = ['case=' + currentCaseIndex];
+    var varSel = document.getElementById('ep-var');
+    var lvlSel = document.getElementById('ep-level');
+    if (varSel && varSel.value) parts.push('var=' + encodeURIComponent(varSel.value));
+    if (lvlSel && lvlSel.value) parts.push('level=' + lvlSel.value);
+    if (_activeDataType && _activeDataType !== 'swath') parts.push('dtype=' + _activeDataType);
+    history.replaceState(null, '', '#' + parts.join('&'));
+}
+
+function _getPermalink() {
+    var base = window.location.origin + window.location.pathname;
+    return base + window.location.hash;
+}
+
+function copyPermalink() {
+    var url = _getPermalink();
+    if (navigator.clipboard) {
+        navigator.clipboard.writeText(url).then(function() { showToast('Link copied to clipboard', 'info', 2500); });
+    } else {
+        // Fallback
+        var ta = document.createElement('textarea'); ta.value = url; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
+        showToast('Link copied to clipboard', 'info', 2500);
+    }
+}
+
 function _handleDeepLink() {
     var params = new URLSearchParams(window.location.search);
     var tab = params.get('tab');
@@ -23,6 +50,17 @@ function _handleDeepLink() {
     var caseMatch = hash.match(/case=(\d+)/);
     if (caseMatch) {
         var targetIdx = parseInt(caseMatch[1]);
+        // Parse additional deep-link params
+        var dlVar = (hash.match(/var=([^&]+)/) || [])[1];
+        var dlLevel = (hash.match(/level=([^&]+)/) || [])[1];
+        var dlDtype = (hash.match(/dtype=([^&]+)/) || [])[1];
+        if (dlVar) dlVar = decodeURIComponent(dlVar);
+
+        // Switch data type if specified
+        if (dlDtype && dlDtype !== _activeDataType && typeof switchDataType === 'function') {
+            switchDataType(dlDtype);
+        }
+
         // Wait for data to load, then open the case
         var _checkInterval = setInterval(function() {
             var d = _getActiveData();
@@ -40,6 +78,16 @@ function _handleDeepLink() {
                         var caseSel = document.getElementById('case-select');
                         if (caseSel) { caseSel.value = String(targetIdx); }
                         exploreCaseGo();
+                        // After case loads, set variable and level from deep link
+                        if (dlVar || dlLevel) {
+                            setTimeout(function() {
+                                var varSel = document.getElementById('ep-var');
+                                var lvlSel = document.getElementById('ep-level');
+                                if (dlVar && varSel) varSel.value = dlVar;
+                                if (dlLevel && lvlSel) lvlSel.value = dlLevel;
+                                if (dlVar || dlLevel) generateCustomPlot();
+                            }, 500);
+                        }
                     }, 200);
                 }, 200);
             }
@@ -133,6 +181,27 @@ function _archSaveBtnHTML(chartDivId, defaultName) {
         '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
         '<path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/>' +
         '<circle cx="12" cy="13" r="4"/></svg></button>';
+}
+
+// Returns a small export-data dropdown button (CSV + JSON) positioned absolutely
+// within the chart wrapper. rightPx controls distance from right edge (default 74,
+// use 40 when no PNG save button is present).
+function _archExportBtnHTML(csvFn, jsonFn, dropId, rightPx) {
+    if (rightPx === undefined) rightPx = 74;
+    var itemStyle = 'padding:5px 12px;font-size:11px;color:#e2e8f0;cursor:pointer;white-space:nowrap;font-family:monospace;';
+    var toggleJs = 'var d=document.getElementById(\'' + dropId + '\');d.style.display=d.style.display===\'none\'?\'block\':\'none\'';
+    return '<div style="position:absolute;top:6px;right:' + rightPx + 'px;z-index:20;">' +
+        '<button onclick="' + toggleJs + '" title="Export data (CSV / JSON)" class="rt-save-png-btn" style="position:static;">' +
+        '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
+        '<path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>' +
+        '<polyline points="7 10 12 15 17 10"/>' +
+        '<line x1="12" y1="15" x2="12" y2="3"/></svg></button>' +
+        '<div id="' + dropId + '" style="display:none;position:absolute;right:0;top:33px;background:#1e293b;border:1px solid #334155;border-radius:5px;overflow:hidden;z-index:200;min-width:80px;">' +
+        '<div onclick="' + csvFn + '();document.getElementById(\'' + dropId + '\').style.display=\'none\'" ' +
+        'style="' + itemStyle + '" onmouseover="this.style.background=\'#334155\'" onmouseout="this.style.background=\'\'">\u2193\u00a0CSV</div>' +
+        '<div onclick="' + jsonFn + '();document.getElementById(\'' + dropId + '\').style.display=\'none\'" ' +
+        'style="' + itemStyle + 'border-top:1px solid #334155;" onmouseover="this.style.background=\'#334155\'" onmouseout="this.style.background=\'\'">\u2193\u00a0JSON</div>' +
+        '</div></div>';
 }
 
 // ── API cold-start pre-warming ───────────────────────────────
@@ -319,6 +388,7 @@ function openSidePanel(caseData, fromQuickSelect) {
     currentCaseIndex = caseData.case_index;
     currentCaseData = caseData;
     _currentSddc = (caseData.sddc !== null && caseData.sddc !== undefined && caseData.sddc !== 9999) ? caseData.sddc : null;
+    _updatePermalink();
     const idx = caseData.case_index;
     const padded = String(idx).padStart(4, '0');
     const imgPrefix = _activeDataType === 'merge' ? 'v3m_merge_cf_' : 'v3m_swath_cf_';
@@ -340,10 +410,14 @@ function openSidePanel(caseData, fromQuickSelect) {
         backBtnHtml +
         '<div class="panel-storm-name">' + caseData.storm_name +
             (_activeDataType === 'merge' ? ' <span style="font-size:10px;background:#4f46e5;color:#fff;padding:1px 6px;border-radius:3px;vertical-align:middle;">MERGE</span>' : '') +
+            '<button class="cite-btn" onclick="showCiteModal()" title="How to cite TC-ATLAS &amp; TC-RADAR">\uD83D\uDCCB Cite</button>' +
+            '<button class="cite-btn" onclick="copyPermalink()" title="Copy shareable link" style="margin-left:4px;">\uD83D\uDD17 Share</button>' +
         '</div>' +
         '<div class="panel-mission">' + caseData.mission_id + ' \u00b7 ' + caseData.datetime +
             (caseData.number_of_swaths ? ' \u00b7 ' + caseData.number_of_swaths + ' swaths' : '') +
         '</div>' +
+
+        buildCaseMetaPanel(caseData) +
 
         '<div class="explorer-layout">' +
             // ── LEFT: Display area + action buttons ──
@@ -3508,6 +3582,7 @@ function generateCustomPlot(callback) {
     var variable = document.getElementById('ep-var').value;
     var level_km = document.getElementById('ep-level').value;
     _ga('generate_plan_view', { case_index: currentCaseIndex, variable: variable, level_km: level_km, data_type: _activeDataType });
+    _updatePermalink();
     var overlay = (document.getElementById('ep-overlay') || {}).value || '';
     var resultDiv = document.getElementById('ep-result');
     var btn = document.getElementById('ep-btn');
@@ -4409,7 +4484,7 @@ function renderAzimuthalMeanInto(targetId, json, fullsize) {
     if (!fullsize) {
         var thumbWrap = document.getElementById('thumbnail-wrap');
         if (thumbWrap) thumbWrap.style.display = 'none';
-        el.innerHTML = '<div style="position:relative;"><div id="az-chart" style="width:100%;height:340px;border-radius:6px;overflow:hidden;"></div>' + _archSaveBtnHTML('az-chart', 'TDR_AzMean') + '<button onclick="openPlotModal()" title="Expand to fullscreen" style="position:absolute;top:6px;right:6px;z-index:10;background:rgba(255,255,255,0.08);border:none;color:#ccc;font-size:16px;width:30px;height:30px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;" onmouseover="this.style.background=\'rgba(255,255,255,0.2)\'" onmouseout="this.style.background=\'rgba(255,255,255,0.08)\'">\u26F6</button></div><div style="font-size:11px;color:var(--slate);text-align:center;margin-top:4px;">Hover \u00b7 zoom \u00b7 pan \u00b7 \u26F6 expand</div>';
+        el.innerHTML = '<div style="position:relative;"><div id="az-chart" style="width:100%;height:340px;border-radius:6px;overflow:hidden;"></div>' + _archSaveBtnHTML('az-chart', 'TDR_AzMean') + _archExportBtnHTML('exportAzMeanCSV','exportAzMeanJSON','az-exp-drop',74) + '<button onclick="openPlotModal()" title="Expand to fullscreen" style="position:absolute;top:6px;right:6px;z-index:10;background:rgba(255,255,255,0.08);border:none;color:#ccc;font-size:16px;width:30px;height:30px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;" onmouseover="this.style.background=\'rgba(255,255,255,0.2)\'" onmouseout="this.style.background=\'rgba(255,255,255,0.08)\'">\u26F6</button></div><div style="font-size:11px;color:var(--slate);text-align:center;margin-top:4px;">Hover \u00b7 zoom \u00b7 pan \u00b7 \u26F6 expand</div>';
         Plotly.newPlot('az-chart', [heatmap].concat(azOverlayTraces).concat(azMaxTraces), layout, { responsive:true,displayModeBar:false,displaylogo:false });
         var panelInner = document.getElementById('side-panel-inner');
         if (panelInner) panelInner.scrollTop = 0;
@@ -4513,7 +4588,7 @@ function renderHybridAzimuthalMeanInto(targetId, json, fullsize) {
     if (!fullsize) {
         var thumbWrap = document.getElementById('thumbnail-wrap');
         if (thumbWrap) thumbWrap.style.display = 'none';
-        el.innerHTML = '<div style="position:relative;"><div id="az-chart" style="width:100%;height:340px;border-radius:6px;overflow:hidden;"></div>' + _archSaveBtnHTML('az-chart', 'TDR_HybridAzMean') + '<button onclick="openPlotModal()" title="Expand" style="position:absolute;top:6px;right:6px;z-index:10;background:rgba(255,255,255,0.08);border:none;color:#ccc;font-size:16px;width:30px;height:30px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;">\u26F6</button></div>';
+        el.innerHTML = '<div style="position:relative;"><div id="az-chart" style="width:100%;height:340px;border-radius:6px;overflow:hidden;"></div>' + _archSaveBtnHTML('az-chart', 'TDR_HybridAzMean') + _archExportBtnHTML('exportAzMeanCSV','exportAzMeanJSON','az-exp-drop',74) + '<button onclick="openPlotModal()" title="Expand" style="position:absolute;top:6px;right:6px;z-index:10;background:rgba(255,255,255,0.08);border:none;color:#ccc;font-size:16px;width:30px;height:30px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;">\u26F6</button></div>';
         Plotly.newPlot('az-chart', [heatmap], layout, { responsive:true,displayModeBar:false });
     } else {
         Plotly.newPlot(targetId, [heatmap], layout, { responsive:true,displayModeBar:true,displaylogo:false });
@@ -4608,7 +4683,7 @@ function renderAnomalyAzimuthalMeanInto(targetId, json, fullsize) {
     if (!fullsize) {
         var thumbWrap = document.getElementById('thumbnail-wrap');
         if (thumbWrap) thumbWrap.style.display = 'none';
-        el.innerHTML = '<div style="position:relative;"><div id="az-chart" style="width:100%;height:340px;border-radius:6px;overflow:hidden;"></div>' + _archSaveBtnHTML('az-chart', 'TDR_Anomaly') + '<button onclick="openPlotModal()" title="Expand" style="position:absolute;top:6px;right:6px;z-index:10;background:rgba(255,255,255,0.08);border:none;color:#ccc;font-size:16px;width:30px;height:30px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;">\u26F6</button></div>';
+        el.innerHTML = '<div style="position:relative;"><div id="az-chart" style="width:100%;height:340px;border-radius:6px;overflow:hidden;"></div>' + _archSaveBtnHTML('az-chart', 'TDR_Anomaly') + _archExportBtnHTML('exportAzMeanCSV','exportAzMeanJSON','az-exp-drop',74) + '<button onclick="openPlotModal()" title="Expand" style="position:absolute;top:6px;right:6px;z-index:10;background:rgba(255,255,255,0.08);border:none;color:#ccc;font-size:16px;width:30px;height:30px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;">\u26F6</button></div>';
         Plotly.newPlot('az-chart', [heatmap], layout, { responsive:true,displayModeBar:false });
     } else {
         Plotly.newPlot(targetId, [heatmap], layout, { responsive:true,displayModeBar:true,displaylogo:false });
@@ -4867,7 +4942,7 @@ function renderVPScatterInto(targetId, json, fullsize) {
     if (!fullsize) {
         var thumbWrap = document.getElementById('thumbnail-wrap');
         if (thumbWrap) thumbWrap.style.display = 'none';
-        el.innerHTML = '<div style="position:relative;"><div id="az-chart" style="width:100%;height:360px;border-radius:6px;overflow:hidden;"></div>' + _archSaveBtnHTML('az-chart', 'VP_Scatter') + '<button onclick="openPlotModal()" title="Expand" style="position:absolute;top:6px;right:6px;z-index:10;background:rgba(255,255,255,0.08);border:none;color:#ccc;font-size:16px;width:30px;height:30px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;">\u26F6</button></div>' +
+        el.innerHTML = '<div style="position:relative;"><div id="az-chart" style="width:100%;height:360px;border-radius:6px;overflow:hidden;"></div>' + _archSaveBtnHTML('az-chart', 'VP_Scatter') + _archExportBtnHTML('exportVPScatterCSV','exportVPScatterJSON','vp-exp-drop',74) + '<button onclick="openPlotModal()" title="Expand" style="position:absolute;top:6px;right:6px;z-index:10;background:rgba(255,255,255,0.08);border:none;color:#ccc;font-size:16px;width:30px;height:30px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;">\u26F6</button></div>' +
             '<div style="display:flex;gap:6px;justify-content:center;margin-top:6px;">' +
             '<button class="cs-btn" onclick="fetchVPScatter(\'dvmax_12h\')" style="font-size:10px;padding:2px 8px;">12-h \u0394Vmax</button>' +
             '<button class="cs-btn" onclick="fetchVPScatter(\'dvmax_24h\')" style="font-size:10px;padding:2px 8px;">24-h \u0394Vmax</button>' +
@@ -5010,6 +5085,7 @@ function renderSingleCFADInto(targetId, json, fullsize) {
         var thumbWrap = document.getElementById('thumbnail-wrap');
         if (thumbWrap) thumbWrap.style.display = 'none';
         el.innerHTML = '<div style="position:relative;"><div id="az-chart" style="width:100%;height:360px;border-radius:6px;overflow:hidden;"></div>' +
+            _archExportBtnHTML('exportCFADCSV','exportCFADJSON','cfad-exp-drop',40) +
             '<button onclick="openPlotModal()" title="Expand" style="position:absolute;top:6px;right:6px;z-index:10;background:rgba(255,255,255,0.08);border:none;color:#ccc;font-size:16px;width:30px;height:30px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;">\u26F6</button></div>';
         Plotly.newPlot('az-chart', [trace], layout, { responsive: true, displayModeBar: false });
     } else {
@@ -5017,6 +5093,133 @@ function renderSingleCFADInto(targetId, json, fullsize) {
     }
 }
 
+
+// ── Diagnostic panel data export ─────────────────────────────────────────
+
+// ── Azimuthal Mean (standard / hybrid / anomaly) ──
+function exportAzMeanCSV() {
+    var json = _lastAzJson || _lastHybridAzJson || _lastAnomalyAzJson;
+    if (!json) { showToast('No azimuthal mean data to export', 'warn'); return; }
+    var isAnomaly = json === _lastAnomalyAzJson && !!_lastAnomalyAzJson;
+    var isHybrid  = json === _lastHybridAzJson  && !!_lastHybridAzJson;
+    var data2d = isAnomaly ? json.anomaly : json.azimuthal_mean;
+    var radii  = (isHybrid || isAnomaly) ? json.r_h_axis : json.radius_km;
+    var heights = json.height_km;
+    var varInfo = json.variable || {};
+    var meta    = json.case_meta || {};
+    var rLabel  = (isHybrid || isAnomaly) ? 'r_h' : 'radius_km';
+    var lines = [];
+    lines.push('# TC-ATLAS Azimuthal Mean Export');
+    if (meta.storm_name) lines.push('# Storm: ' + meta.storm_name);
+    if (meta.datetime)   lines.push('# Time: '  + meta.datetime);
+    if (meta.mission_id) lines.push('# Mission: ' + meta.mission_id);
+    lines.push('# Variable: ' + (varInfo.display_name || '') + ' (' + (varInfo.units || '') + ')');
+    if (isAnomaly) lines.push('# Type: Z-score anomaly (hybrid R_h coordinate)');
+    else if (isHybrid) lines.push('# Type: Hybrid R_h coordinate');
+    lines.push('#');
+    lines.push('height_km,' + radii.map(function(r) { return rLabel + '=' + (+r).toFixed(3); }).join(','));
+    for (var h = 0; h < heights.length; h++) {
+        var row = [heights[h]];
+        for (var r = 0; r < radii.length; r++) {
+            var v = data2d[h] != null ? data2d[h][r] : null;
+            row.push(v !== null && v !== undefined ? v : '');
+        }
+        lines.push(row.join(','));
+    }
+    var label    = isAnomaly ? 'anomaly' : (isHybrid ? 'hybrid_az_mean' : 'az_mean');
+    var varLabel = (varInfo.display_name || 'data').replace(/\s+/g,'_').replace(/[^a-zA-Z0-9_]/g,'');
+    var storm    = meta.storm_name ? meta.storm_name.replace(/\s+/g,'_') + '_' : '';
+    _triggerDownload(lines.join('\n'), 'tc_atlas_' + storm + label + '_' + varLabel + '.csv', 'text/csv');
+    _ga('export_csv', { chart: 'az_mean', module: 'archive' });
+}
+
+function exportAzMeanJSON() {
+    var json = _lastAzJson || _lastHybridAzJson || _lastAnomalyAzJson;
+    if (!json) { showToast('No azimuthal mean data to export', 'warn'); return; }
+    var isAnomaly = json === _lastAnomalyAzJson;
+    var isHybrid  = json === _lastHybridAzJson;
+    var label    = isAnomaly ? 'anomaly' : (isHybrid ? 'hybrid_az_mean' : 'az_mean');
+    var varInfo  = json.variable || {};
+    var meta     = json.case_meta || {};
+    var varLabel = (varInfo.display_name || 'data').replace(/\s+/g,'_').replace(/[^a-zA-Z0-9_]/g,'');
+    var storm    = meta.storm_name ? meta.storm_name.replace(/\s+/g,'_') + '_' : '';
+    _triggerDownload(JSON.stringify(json, null, 2), 'tc_atlas_' + storm + label + '_' + varLabel + '.json', 'application/json');
+    _ga('export_json', { chart: 'az_mean', module: 'archive' });
+}
+
+// ── VP Scatter ──
+function exportVPScatterCSV() {
+    if (!_lastVPScatterJson) { showToast('No VP scatter data to export', 'warn'); return; }
+    var json   = _lastVPScatterJson;
+    var points = json.points || [];
+    var colorBy = json.color_by || 'dvmax_12h';
+    var lines = ['# TC-ATLAS VP Scatter Export', '# Color by: ' + colorBy, '#'];
+    lines.push('case_index,storm_name,datetime,vmax_kt,vp,vortex_favorability,vortex_width,vortex_height,dvmax_12h,dvmax_24h');
+    for (var i = 0; i < points.length; i++) {
+        var p = points[i];
+        lines.push([
+            p.case_index  !== undefined ? p.case_index  : '',
+            p.storm_name  || '',
+            p.datetime    || '',
+            p.vmax_kt     != null ? p.vmax_kt     : '',
+            p.vp          != null ? p.vp          : '',
+            p.vortex_favorability != null ? p.vortex_favorability : '',
+            p.vortex_width  != null ? p.vortex_width  : '',
+            p.vortex_height != null ? p.vortex_height : '',
+            p.dvmax_12h   != null ? p.dvmax_12h   : '',
+            p.dvmax_24h   != null ? p.dvmax_24h   : ''
+        ].join(','));
+    }
+    _triggerDownload(lines.join('\n'), 'tc_atlas_vp_scatter_' + colorBy + '.csv', 'text/csv');
+    _ga('export_csv', { chart: 'vp_scatter', module: 'archive' });
+}
+
+function exportVPScatterJSON() {
+    if (!_lastVPScatterJson) { showToast('No VP scatter data to export', 'warn'); return; }
+    var colorBy = _lastVPScatterJson.color_by || 'dvmax_12h';
+    _triggerDownload(JSON.stringify(_lastVPScatterJson, null, 2), 'tc_atlas_vp_scatter_' + colorBy + '.json', 'application/json');
+    _ga('export_json', { chart: 'vp_scatter', module: 'archive' });
+}
+
+// ── CFAD ──
+function exportCFADCSV() {
+    if (!_lastCFADJson) { showToast('No CFAD data to export', 'warn'); return; }
+    var json    = _lastCFADJson;
+    var cfad    = json.cfad;
+    var bins    = json.bin_centers;
+    var heights = json.height_km;
+    var varInfo = json.variable || {};
+    var meta    = json.case_meta || {};
+    var lines   = ['# TC-ATLAS CFAD Export'];
+    if (meta.storm_name) lines.push('# Storm: ' + meta.storm_name);
+    if (meta.vmax)       lines.push('# Vmax: '  + meta.vmax + ' kt');
+    lines.push('# Variable: ' + (varInfo.display_name || '') + ' (' + (varInfo.units || '') + ')');
+    if (json.norm_label) lines.push('# Normalisation: ' + json.norm_label);
+    lines.push('#');
+    lines.push('height_km,' + bins.map(function(b) { return 'bin=' + (+b).toFixed(2); }).join(','));
+    for (var h = 0; h < heights.length; h++) {
+        var row = [heights[h]];
+        for (var b = 0; b < bins.length; b++) {
+            var v = cfad[h] != null ? cfad[h][b] : null;
+            row.push(v !== null && v !== undefined ? v : '');
+        }
+        lines.push(row.join(','));
+    }
+    var varLabel = (varInfo.display_name || 'data').replace(/\s+/g,'_').replace(/[^a-zA-Z0-9_]/g,'');
+    var storm    = meta.storm_name ? meta.storm_name.replace(/\s+/g,'_') + '_' : '';
+    _triggerDownload(lines.join('\n'), 'tc_atlas_cfad_' + storm + varLabel + '.csv', 'text/csv');
+    _ga('export_csv', { chart: 'cfad', module: 'archive' });
+}
+
+function exportCFADJSON() {
+    if (!_lastCFADJson) { showToast('No CFAD data to export', 'warn'); return; }
+    var meta     = _lastCFADJson.case_meta || {};
+    var varInfo  = _lastCFADJson.variable  || {};
+    var varLabel = (varInfo.display_name || 'data').replace(/\s+/g,'_').replace(/[^a-zA-Z0-9_]/g,'');
+    var storm    = meta.storm_name ? meta.storm_name.replace(/\s+/g,'_') + '_' : '';
+    _triggerDownload(JSON.stringify(_lastCFADJson, null, 2), 'tc_atlas_cfad_' + storm + varLabel + '.json', 'application/json');
+    _ga('export_json', { chart: 'cfad', module: 'archive' });
+}
 
 function buildAzOverlayContours(json, radius_km, height_km) {
     if (!json.overlay) return []; var ov = json.overlay; var ovData = ov.azimuthal_mean; if (!ovData) return [];
@@ -5462,6 +5665,111 @@ function createPopupContent(caseData) {
 }
 
 function openSidePanelById(idx) { var d = _getActiveData(); if (!d) return; var caseData = d.cases.find(function(c) { return c.case_index === idx; }); if (caseData) openSidePanel(caseData); }
+
+// ── "About this case" metadata panel ─────────────────────────
+function buildCaseMetaPanel(caseData) {
+    // IBTrACS lookup for ATCF ID and basin (if data is already loaded)
+    var atcfId = null, basin = null;
+    if (typeof _tdrToSID !== 'undefined' && typeof _ibtStormsBySID !== 'undefined') {
+        var ibtKey = caseData.storm_name + '|' + caseData.year;
+        var sid = _tdrToSID[ibtKey];
+        var ibtStorm = sid ? _ibtStormsBySID[sid] : null;
+        if (ibtStorm) { atcfId = ibtStorm.atcf_id || null; basin = ibtStorm.basin || null; }
+    }
+
+    var cat = getIntensityCategory(caseData.vmax_kt);
+    var catColor = getIntensityColor(caseData.vmax_kt);
+
+    // 24h intensity change: blue=weakening, red=intensifying, bold red for RI >=30
+    var dv = caseData['24-h_vmax_change_kt'];
+    var dvStr = (dv !== null && dv !== undefined) ? (dv > 0 ? '+' : '') + dv + ' kt/24h' : '\u2014';
+    var dvStyle = '';
+    if (dv !== null && dv !== undefined) {
+        if (dv >= 30)       dvStyle = 'color:#ef4444;font-weight:700;';
+        else if (dv > 0)    dvStyle = 'color:#f87171;';
+        else if (dv < 0)    dvStyle = 'color:#60a5fa;';
+    }
+
+    // Shear colour: green <15 kt, amber 15-25 kt, red >25 kt
+    var shearMag = caseData.shear_magnitude_kt;
+    var shearColor = 'var(--text)';
+    if (shearMag !== null && shearMag !== undefined) {
+        if (shearMag >= 25) shearColor = '#f87171';
+        else if (shearMag >= 15) shearColor = '#fbbf24';
+        else shearColor = '#34d399';
+    }
+
+    function fmt(v, unit, dec) {
+        if (v === null || v === undefined) return '\u2014';
+        return (dec !== undefined ? parseFloat(v).toFixed(dec) : v) + (unit ? '\u00a0' + unit : '');
+    }
+    function latStr(v) { return v === null || v === undefined ? '\u2014' : Math.abs(v).toFixed(2) + '\u00b0' + (v >= 0 ? 'N' : 'S'); }
+    function lonStr(v) { return v === null || v === undefined ? '\u2014' : Math.abs(v).toFixed(2) + '\u00b0' + (v >= 0 ? 'E' : 'W'); }
+
+    var basinNames = { NA:'N. Atlantic', EP:'E. Pacific', WP:'W. Pacific', NI:'N. Indian', SI:'S. Indian', SP:'S. Pacific', SA:'S. Atlantic' };
+    var basinStr = basin ? (basinNames[basin] || basin) : '\u2014';
+
+    var dtLabel = _activeDataType === 'merge'
+        ? 'Merged' + (caseData.number_of_swaths ? ' (' + caseData.number_of_swaths + ' swaths)' : '')
+        : 'Single swath';
+
+    var covStr = (caseData.coverage !== null && caseData.coverage !== undefined)
+        ? (caseData.coverage * 100).toFixed(0) + '%' : '\u2014';
+
+    var atcfHtml = atcfId
+        ? '<a href="https://www.ncei.noaa.gov/products/international-best-track-archive?name=' + atcfId + '" target="_blank" rel="noopener" class="case-meta-link">' + atcfId + '\u00a0\u2197</a>'
+        : '\u2014';
+
+    function section(title, rows) {
+        var h = '<div class="case-meta-section"><div class="case-meta-section-hdr">' + title + '</div>';
+        rows.forEach(function(r) {
+            h += '<div class="case-meta-cell"><span class="case-meta-lbl">' + r[0] + '</span><span class="case-meta-val">' + r[1] + '</span></div>';
+        });
+        return h + '</div>';
+    }
+
+    var html = '<div class="case-meta-panel">';
+
+    html += section('Storm', [
+        ['Name', caseData.storm_name],
+        ['Basin', basinStr],
+        ['ATCF ID', atcfHtml],
+    ]);
+
+    html += section('Analysis', [
+        ['Date / Time', caseData.datetime],
+        ['Mission', caseData.mission_id],
+        ['Type', dtLabel],
+        ['Coverage', covStr],
+    ]);
+
+    html += section('Intensity', [
+        ['Vmax', '<span class="case-cat-badge" style="background:' + catColor + ';">' + cat + '</span>' + fmt(caseData.vmax_kt, 'kt')],
+        ['MSLP', fmt(caseData.min_pressure_hpa, 'hPa')],
+        ['24h \u0394Vmax', '<span style="' + dvStyle + '">' + dvStr + '</span>'],
+    ]);
+
+    html += section('Structure', [
+        ['RMW', fmt(caseData.rmw_km, 'km')],
+        ['Vortex tilt', fmt(caseData.tilt_magnitude_km, 'km', 1)],
+    ]);
+
+    var hasShearMag = shearMag !== null && shearMag !== undefined;
+    var hasShearDir = caseData.sddc !== null && caseData.sddc !== undefined && caseData.sddc !== 9999;
+    if (hasShearMag || hasShearDir) {
+        var envRows = [];
+        if (hasShearMag) envRows.push(['DL shear', '<span style="color:' + shearColor + ';">' + parseFloat(shearMag).toFixed(1) + '\u00a0kt</span>']);
+        if (hasShearDir) envRows.push(['Shear dir', parseFloat(caseData.sddc).toFixed(0) + '\u00b0']);
+        html += section('Environment', envRows);
+    }
+
+    html += section('Position', [
+        ['Lat', latStr(caseData.latitude)],
+        ['Lon', lonStr(caseData.longitude)],
+    ]);
+
+    return html + '</div>';
+}
 
 // ── Filters ──────────────────────────────────────────────────
 function passesFilters(c) {
@@ -14918,6 +15226,82 @@ function removeMicrowaveOverlay() {
     if (dlBtn) dlBtn.remove();
 }
 
+
+// ── Citation modal ───────────────────────────────────────────
+var _CITATIONS = [
+    {
+        label: 'TC-RADAR Dataset',
+        text: 'Fischer, M. S., P. D. Reasor, R. F. Rogers, and J. F. Gamache, 2022: An updated tropical cyclone radar database. Mon. Wea. Rev., 150, 2255\u20132278, https://doi.org/10.1175/MWR-D-21-0223.1.',
+        bibtex: '@article{Fischer2022TCRadar,\n  author  = {Fischer, Michael S. and Reasor, Paul D. and Rogers, Robert F. and Gamache, John F.},\n  title   = {An updated tropical cyclone radar database},\n  journal = {Monthly Weather Review},\n  year    = {2022},\n  volume  = {150},\n  pages   = {2255--2278},\n  doi     = {10.1175/MWR-D-21-0223.1}\n}'
+    },
+    {
+        label: 'Vortex Tilt & Precipitation Structure',
+        text: 'Fischer, M. S., P. D. Reasor, J. P. Dunion, and R. F. Rogers, 2024: An observational analysis of the relationship between tropical cyclone vortex tilt, precipitation structure, and intensity change. Mon. Wea. Rev., 152, 203\u2013225, https://doi.org/10.1175/MWR-D-23-0089.1.',
+        bibtex: '@article{Fischer2024VortexTilt,\n  author  = {Fischer, Michael S. and Reasor, Paul D. and Dunion, Jason P. and Rogers, Robert F.},\n  title   = {An observational analysis of the relationship between tropical cyclone vortex tilt, precipitation structure, and intensity change},\n  journal = {Monthly Weather Review},\n  year    = {2024},\n  volume  = {152},\n  pages   = {203--225},\n  doi     = {10.1175/MWR-D-23-0089.1}\n}'
+    },
+    {
+        label: 'Anomaly-Based Vortex Diagnostics',
+        text: 'Fischer, M. S., P. D. Reasor, J. P. Dunion, and R. F. Rogers, 2025: An anomaly-based framework for evaluating tropical cyclone vortex structure. Mon. Wea. Rev., 153, 857\u2013875, https://doi.org/10.1175/MWR-D-24-0101.1.',
+        bibtex: '@article{Fischer2025AnomalyFramework,\n  author  = {Fischer, Michael S. and Reasor, Paul D. and Dunion, Jason P. and Rogers, Robert F.},\n  title   = {An anomaly-based framework for evaluating tropical cyclone vortex structure},\n  journal = {Monthly Weather Review},\n  year    = {2025},\n  volume  = {153},\n  pages   = {857--875},\n  doi     = {10.1175/MWR-D-24-0101.1}\n}'
+    },
+    {
+        label: 'TC-ATLAS Web Tool',
+        text: 'TC-ATLAS: Tropical Cyclone Analysis Tool for Live and Archived Structure. Available at https://michaelfischerwx.github.io/TC-ATLAS/',
+        bibtex: '@misc{TCATLAS,\n  title  = {{TC-ATLAS}: Tropical Cyclone Analysis Tool for Live and Archived Structure},\n  author = {Fischer, Michael S.},\n  year   = {2024},\n  url    = {https://michaelfischerwx.github.io/TC-ATLAS/}\n}'
+    }
+];
+
+function _citeCopy(text, btn) {
+    navigator.clipboard.writeText(text).then(function() {
+        var orig = btn.textContent;
+        btn.textContent = '\u2713 Copied';
+        btn.classList.add('copied');
+        setTimeout(function() { btn.textContent = orig; btn.classList.remove('copied'); }, 2000);
+    }).catch(function() { showToast('Copy failed \u2014 select text manually', 'warn'); });
+}
+
+function showCiteModal() {
+    var existing = document.getElementById('cite-modal-overlay');
+    if (existing) { existing.classList.add('active'); return; }
+
+    var overlay = document.createElement('div');
+    overlay.id = 'cite-modal-overlay';
+    overlay.className = 'cite-modal-overlay active';
+    overlay.addEventListener('click', function(e) {
+        if (e.target === overlay) overlay.classList.remove('active');
+    });
+
+    var entriesHtml = _CITATIONS.map(function(c, i) {
+        return '<div class="cite-entry">' +
+            '<div class="cite-entry-label">' + c.label + '</div>' +
+            '<div class="cite-entry-text">' + c.text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</div>' +
+            '<button class="cite-copy-btn" onclick="(function(btn){_citeCopy(' + JSON.stringify(c.text) + ',btn);})(this)">Copy</button>' +
+        '</div>';
+    }).join('');
+
+    var allBibtex = _CITATIONS.map(function(c) { return c.bibtex; }).join('\n\n');
+
+    overlay.innerHTML =
+        '<div class="cite-modal-box">' +
+            '<button class="cite-modal-close" onclick="document.getElementById(\'cite-modal-overlay\').classList.remove(\'active\')">\u2715</button>' +
+            '<div class="cite-modal-title">\uD83D\uDCCB How to Cite</div>' +
+            entriesHtml +
+            '<div class="cite-bibtex-row">' +
+                '<button class="cite-bibtex-btn" onclick="(function(btn){_citeCopy(' + JSON.stringify(allBibtex) + ',btn);})(this)">' +
+                    '\uD83D\uDCCB Copy All BibTeX' +
+                '</button>' +
+            '</div>' +
+        '</div>';
+
+    document.body.appendChild(overlay);
+
+    document.addEventListener('keydown', function _citeEsc(e) {
+        if (e.key === 'Escape') {
+            var ov = document.getElementById('cite-modal-overlay');
+            if (ov && ov.classList.contains('active')) { ov.classList.remove('active'); document.removeEventListener('keydown', _citeEsc); }
+        }
+    });
+}
 
 // Close composite panel on Escape
 (function() {
