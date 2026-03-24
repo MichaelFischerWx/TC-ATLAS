@@ -5734,9 +5734,6 @@ function buildCaseMetaPanel(caseData) {
         ['Name', caseData.storm_name],
         ['Basin', basinStr],
         ['ATCF ID', atcfHtml],
-    ]);
-
-    html += section('Analysis', [
         ['Date / Time', caseData.datetime],
         ['Mission', caseData.mission_id],
         ['Type', dtLabel],
@@ -5749,24 +5746,16 @@ function buildCaseMetaPanel(caseData) {
         ['24h \u0394Vmax', '<span style="' + dvStyle + '">' + dvStr + '</span>'],
     ]);
 
-    html += section('Structure', [
+    var structRows = [
         ['RMW', fmt(caseData.rmw_km, 'km')],
         ['Vortex tilt', fmt(caseData.tilt_magnitude_km, 'km', 1)],
-    ]);
-
+    ];
     var hasShearMag = shearMag !== null && shearMag !== undefined;
     var hasShearDir = caseData.sddc !== null && caseData.sddc !== undefined && caseData.sddc !== 9999;
-    if (hasShearMag || hasShearDir) {
-        var envRows = [];
-        if (hasShearMag) envRows.push(['DL shear', '<span style="color:' + shearColor + ';">' + parseFloat(shearMag).toFixed(1) + '\u00a0kt</span>']);
-        if (hasShearDir) envRows.push(['Shear dir', parseFloat(caseData.sddc).toFixed(0) + '\u00b0']);
-        html += section('Environment', envRows);
-    }
-
-    html += section('Position', [
-        ['Lat', latStr(caseData.latitude)],
-        ['Lon', lonStr(caseData.longitude)],
-    ]);
+    if (hasShearMag) structRows.push(['DL shear', '<span style="color:' + shearColor + ';">' + parseFloat(shearMag).toFixed(1) + '\u00a0kt</span>']);
+    if (hasShearDir) structRows.push(['Shear dir', parseFloat(caseData.sddc).toFixed(0) + '\u00b0']);
+    structRows.push(['Position', latStr(caseData.latitude) + ', ' + lonStr(caseData.longitude)]);
+    html += section('Structure', structRows);
 
     return html + '</div>';
 }

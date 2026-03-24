@@ -142,12 +142,13 @@ input[type="range"]::-moz-range-track { height: 4px; background: transparent; bo
 .panel-mission { font-size: 10px; color: var(--slate); font-family: 'JetBrains Mono', monospace; margin-bottom: 8px; }
 
 /* ── "About this case" metadata panel ── */
-.case-meta-panel { background: rgba(12,29,61,0.6); border: 1px solid var(--border-light); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; display: flex; flex-direction: column; gap: 6px; }
-.case-meta-section { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; align-items: baseline; }
-.case-meta-section-hdr { grid-column: 1 / -1; font-size: 9px; font-weight: 700; color: var(--slate); text-transform: uppercase; letter-spacing: 0.09em; padding-bottom: 3px; border-bottom: 1px solid var(--border); margin-bottom: 1px; }
+.case-meta-panel { background: rgba(12,29,61,0.6); border: 1px solid var(--border-light); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; display: flex; flex-direction: column; gap: 2px; }
+.case-meta-section { display: grid; grid-template-columns: auto 1fr; gap: 1px 10px; align-items: baseline; }
+.case-meta-section-hdr { grid-column: 1 / -1; font-size: 8px; font-weight: 700; color: var(--slate); text-transform: uppercase; letter-spacing: 0.09em; padding-bottom: 1px; border-bottom: 1px solid var(--border); margin-bottom: 0; margin-top: 2px; }
+.case-meta-section:first-child .case-meta-section-hdr { margin-top: 0; }
 .case-meta-cell { display: contents; }
-.case-meta-lbl { font-size: 10px; font-weight: 600; color: var(--slate); white-space: nowrap; }
-.case-meta-val { font-size: 11px; font-weight: 600; color: var(--text); font-family: 'JetBrains Mono', monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.case-meta-lbl { font-size: 9.5px; font-weight: 600; color: var(--slate); white-space: nowrap; line-height: 1.4; }
+.case-meta-val { font-size: 10.5px; font-weight: 600; color: var(--text); font-family: 'JetBrains Mono', monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.4; }
 .case-cat-badge { display: inline-block; color: #fff; font-size: 9px; padding: 0 5px; border-radius: 3px; margin-right: 3px; vertical-align: middle; font-family: 'DM Sans', sans-serif; }
 a.case-meta-link { color: #60a5fa; text-decoration: none; border-bottom: 1px dotted #3b82f6; }
 a.case-meta-link:hover { color: #93c5fd; border-bottom-color: #93c5fd; }
