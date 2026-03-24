@@ -508,22 +508,31 @@
         return [bestSat];
     }
 
-    /** Check average brightness of an image by sampling pixels.
-     *  Returns true if the tile has meaningful daytime visible data. */
-    function tileHasVisibleData(img, size) {
+    /** Per-pixel blend: overlay visible image onto IR base in a canvas context.
+     *  Only pixels with brightness above the threshold are drawn from the
+     *  visible image; dark (nighttime) pixels are left as the IR base.
+     *  This correctly handles tiles that span the day/night terminator. */
+    function blendVisibleOverIR(ctx, visImg, w, h) {
+        var VIS_BRIGHT_THRESHOLD = 12; // nighttime pixels are 0-2, daytime ocean ~15+
         var tmpCanvas = document.createElement('canvas');
-        tmpCanvas.width = size;
-        tmpCanvas.height = size;
+        tmpCanvas.width = w;
+        tmpCanvas.height = h;
         var tmpCtx = tmpCanvas.getContext('2d');
-        tmpCtx.drawImage(img, 0, 0, size, size);
-        var sampleData = tmpCtx.getImageData(0, 0, size, size).data;
-        var totalBright = 0;
-        var sampCount = 0;
-        for (var p = 0; p < sampleData.length; p += 64 * 4) {
-            totalBright += sampleData[p] + sampleData[p + 1] + sampleData[p + 2];
-            sampCount++;
+        tmpCtx.drawImage(visImg, 0, 0, w, h);
+        var visData = tmpCtx.getImageData(0, 0, w, h);
+        var irData = ctx.getImageData(0, 0, w, h);
+        var vd = visData.data;
+        var id = irData.data;
+        for (var p = 0; p < vd.length; p += 4) {
+            var brightness = (vd[p] + vd[p + 1] + vd[p + 2]) / 3;
+            if (brightness > VIS_BRIGHT_THRESHOLD) {
+                id[p]     = vd[p];
+                id[p + 1] = vd[p + 1];
+                id[p + 2] = vd[p + 2];
+                id[p + 3] = 255;
+            }
         }
-        return (totalBright / (sampCount * 3)) > 15;
+        ctx.putImageData(irData, 0, 0);
     }
 
     /** Create a seamless composite GeoColor/Visible layer for the global map.
@@ -558,7 +567,9 @@
                 var sat = sats[0];
 
                 if (sat.irFallback) {
-                    // Hybrid mode: load IR base + visible overlay
+                    // Hybrid mode: IR base + per-pixel visible overlay
+                    // Visible pixels brighter than threshold replace IR;
+                    // dark (nighttime) pixels keep the IR base underneath.
                     Promise.all([
                         loadImageWithRetry(sat.irFallback, ts, z, y, x),
                         loadImageWithRetryVis(sat.layerName, ts, z, y, x)
@@ -568,12 +579,12 @@
                         if (irResult.img) {
                             ctx.drawImage(irResult.img, 0, 0, size.x, size.y);
                         }
-                        if (visResult.img && tileHasVisibleData(visResult.img, size.x)) {
-                            ctx.drawImage(visResult.img, 0, 0, size.x, size.y);
+                        if (visResult.img) {
+                            blendVisibleOverIR(ctx, visResult.img, size.x, size.y);
                         }
                         done(null, tile);
                     }).catch(function () {
-                        done(null, tile); // show whatever was drawn (may be blank)
+                        done(null, tile);
                     });
                 } else {
                     // Standard GeoColor (handles day/night itself)
@@ -626,7 +637,7 @@
                 var ts = this._timeStr;
 
                 if (irLayer) {
-                    // Hybrid mode: load IR first, then overlay visible if daytime
+                    // Hybrid mode: IR base + per-pixel visible overlay
                     Promise.all([
                         loadImageWithRetry(irLayer, ts, coords.z, coords.y, coords.x),
                         loadImageWithRetryVis(visLayer, ts, coords.z, coords.y, coords.x)
@@ -636,9 +647,11 @@
                         if (irResult.img) {
                             ctx.drawImage(irResult.img, 0, 0, size.x, size.y);
                         }
-                        if (visResult.img && tileHasVisibleData(visResult.img, size.x)) {
-                            ctx.drawImage(visResult.img, 0, 0, size.x, size.y);
+                        if (visResult.img) {
+                            blendVisibleOverIR(ctx, visResult.img, size.x, size.y);
                         }
+                        done(null, tile);
+                    }).catch(function () {
                         done(null, tile);
                     });
                 } else {
@@ -1065,9 +1078,6 @@
             timeEl.textContent = fmtUTC(globalAnimFrameTimes[idx]);
         }
 
-        // Update slider
-        var slider = document.getElementById('ir-global-anim-slider');
-        if (slider) slider.value = idx;
     }
 
     /** Step to next global animation frame */
@@ -1157,26 +1167,18 @@
         if (!panel) return;
 
         var playBtn = document.getElementById('ir-global-anim-play');
-        var slider = document.getElementById('ir-global-anim-slider');
         var timeEl = document.getElementById('ir-global-anim-time');
         var statusEl = document.getElementById('ir-global-anim-status');
 
         if (state === 'idle') {
             if (playBtn) { playBtn.innerHTML = '&#9654;'; playBtn.title = 'Load & play global animation'; }
-            if (slider) { slider.style.display = 'none'; }
             if (timeEl) timeEl.textContent = '';
             if (statusEl) statusEl.textContent = '';
         } else if (state === 'loading') {
             if (playBtn) { playBtn.innerHTML = '&#8987;'; playBtn.title = 'Loading frames\u2026'; playBtn.disabled = true; }
-            if (slider) slider.style.display = 'none';
             if (statusEl) statusEl.textContent = (pct != null ? pct + '%' : 'Loading\u2026');
         } else if (state === 'ready') {
             if (playBtn) { playBtn.innerHTML = '&#9654;'; playBtn.title = 'Play'; playBtn.disabled = false; }
-            if (slider) {
-                slider.style.display = 'block';
-                slider.max = globalAnimFrameLayers.length - 1;
-                slider.value = globalAnimIndex;
-            }
             if (statusEl) statusEl.textContent = (globalAnimIndex + 1) + '/' + globalAnimFrameLayers.length;
         } else if (state === 'playing') {
             if (playBtn) { playBtn.innerHTML = '&#9646;&#9646;'; playBtn.title = 'Pause'; playBtn.disabled = false; }
@@ -1331,20 +1333,6 @@
                 nextBtn.addEventListener('click', function () {
                     stopGlobalAnimation();
                     nextGlobalFrame();
-                });
-
-                // Slider
-                var slider = L.DomUtil.create('input', '', container);
-                slider.type = 'range';
-                slider.id = 'ir-global-anim-slider';
-                slider.min = '0';
-                slider.max = '0';
-                slider.value = '0';
-                slider.style.cssText = 'width:100px;display:none;accent-color:#60a5fa;height:4px;';
-                slider.addEventListener('input', function () {
-                    if (!globalAnimReady) return;
-                    stopGlobalAnimation();
-                    showGlobalAnimFrame(parseInt(this.value, 10));
                 });
 
                 // Time display
