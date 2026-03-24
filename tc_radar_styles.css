@@ -141,6 +141,17 @@ input[type="range"]::-moz-range-track { height: 4px; background: transparent; bo
 .panel-storm-name { font-size: 16px; font-weight: 700; color: var(--text); padding-right: 32px; margin-bottom: 1px; }
 .panel-mission { font-size: 10px; color: var(--slate); font-family: 'JetBrains Mono', monospace; margin-bottom: 8px; }
 
+/* ── "About this case" metadata panel ── */
+.case-meta-panel { background: rgba(12,29,61,0.6); border: 1px solid var(--border-light); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; display: flex; flex-direction: column; gap: 6px; }
+.case-meta-section { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; align-items: baseline; }
+.case-meta-section-hdr { grid-column: 1 / -1; font-size: 9px; font-weight: 700; color: var(--slate); text-transform: uppercase; letter-spacing: 0.09em; padding-bottom: 3px; border-bottom: 1px solid var(--border); margin-bottom: 1px; }
+.case-meta-cell { display: contents; }
+.case-meta-lbl { font-size: 10px; font-weight: 600; color: var(--slate); white-space: nowrap; }
+.case-meta-val { font-size: 11px; font-weight: 600; color: var(--text); font-family: 'JetBrains Mono', monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.case-cat-badge { display: inline-block; color: #fff; font-size: 9px; padding: 0 5px; border-radius: 3px; margin-right: 3px; vertical-align: middle; font-family: 'DM Sans', sans-serif; }
+a.case-meta-link { color: #60a5fa; text-decoration: none; border-bottom: 1px dotted #3b82f6; }
+a.case-meta-link:hover { color: #93c5fd; border-bottom-color: #93c5fd; }
+
 /* Two-column explorer layout (used in focus mode) */
 .explorer-layout { display: flex; gap: 16px; flex: 1; }
 .explorer-display { flex: 1; min-width: 0; display: flex; flex-direction: column; }
@@ -302,6 +313,26 @@ input[type="range"]::-moz-range-track { height: 4px; background: transparent; bo
 .cs-status { font-size: 10px; color: var(--slate); text-align: center; margin-top: 3px; }
 .cs-result { margin-top: 6px; }
 .explorer-result { margin-top: 6px; text-align: center; }
+
+/* ── Cite button & modal ─────────────────────────── */
+.cite-btn { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; font-size: 10px; font-weight: 600; font-family: 'DM Sans', sans-serif; background: rgba(46,125,255,0.12); border: 1px solid rgba(46,125,255,0.35); border-radius: 4px; color: #93c5fd; cursor: pointer; transition: all 0.2s; vertical-align: middle; margin-left: 8px; }
+.cite-btn:hover { background: rgba(46,125,255,0.25); border-color: rgba(46,125,255,0.6); color: #bfdbfe; }
+.cite-modal-overlay { display: none; position: fixed; inset: 0; z-index: 20000; background: rgba(0,0,0,0.75); backdrop-filter: blur(4px); align-items: center; justify-content: center; }
+.cite-modal-overlay.active { display: flex; }
+.cite-modal-box { width: min(600px, 94vw); background: var(--navy); border-radius: var(--radius-lg); border: 1px solid var(--border-light); box-shadow: 0 16px 48px rgba(0,0,0,0.6); padding: 24px; position: relative; max-height: 90vh; overflow-y: auto; }
+.cite-modal-title { font-size: 15px; font-weight: 700; color: var(--text); margin-bottom: 16px; padding-right: 32px; }
+.cite-modal-close { position: absolute; top: 14px; right: 14px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1); border-radius: 50%; width: 28px; height: 28px; font-size: 14px; cursor: pointer; color: var(--slate); display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
+.cite-modal-close:hover { background: var(--blue); color: white; border-color: var(--blue); }
+.cite-entry { background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; }
+.cite-entry-label { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--cyan); margin-bottom: 6px; }
+.cite-entry-text { font-size: 11.5px; line-height: 1.6; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; word-break: break-word; }
+.cite-copy-btn { display: inline-flex; align-items: center; gap: 4px; margin-top: 8px; padding: 3px 10px; font-size: 10px; font-weight: 600; font-family: 'DM Sans', sans-serif; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.12); border-radius: 4px; color: var(--slate); cursor: pointer; transition: all 0.2s; }
+.cite-copy-btn:hover { background: rgba(46,125,255,0.18); border-color: rgba(46,125,255,0.4); color: #93c5fd; }
+.cite-copy-btn.copied { background: rgba(52,211,153,0.18); border-color: rgba(52,211,153,0.4); color: #6ee7b7; }
+.cite-bibtex-row { display: flex; justify-content: flex-end; margin-top: 4px; }
+.cite-bibtex-btn { display: inline-flex; align-items: center; gap: 5px; padding: 6px 14px; font-size: 11px; font-weight: 700; font-family: 'DM Sans', sans-serif; background: rgba(168,85,247,0.14); border: 1px solid rgba(168,85,247,0.4); border-radius: 5px; color: #c4b5fd; cursor: pointer; transition: all 0.2s; }
+.cite-bibtex-btn:hover { background: rgba(168,85,247,0.28); border-color: rgba(168,85,247,0.65); }
+.cite-bibtex-btn.copied { background: rgba(52,211,153,0.18); border-color: rgba(52,211,153,0.4); color: #6ee7b7; }
 
 /* ── Plot modals ─────────────────────────────────── */
 .plot-modal-overlay { display: none; position: fixed; inset: 0; z-index: 10000; background: rgba(0,0,0,0.92); backdrop-filter: blur(6px); align-items: center; justify-content: center; }
