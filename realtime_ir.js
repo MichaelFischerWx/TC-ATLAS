@@ -28,7 +28,7 @@
     var GIBS_GEOCOLOR_LAYERS = {
         'GOES-East':  'GOES-East_ABI_GeoColor',
         'GOES-West':  'GOES-West_ABI_GeoColor',
-        'Himawari':   null  // no GIBS GeoColor for Himawari; fall back to red visible
+        'Himawari':   null  // no native GIBS GeoColor; synthesized via day(vis)/night(IR) switching
     };
     // GIBS Red Visible (single-band daytime-only)
     var GIBS_VIS_LAYERS = {
@@ -110,6 +110,8 @@
     var detailMap = null;
     var detailTrackLayers = [];
     var detailSatName = '';     // which satellite is used for this storm
+    var detailStormLat = 0;    // storm latitude for solar position calc
+    var detailStormLon = 0;    // storm longitude for solar position calc
 
     // Pre-loaded frame animation state
     var animFrameTimes = [];   // array of ISO time strings
@@ -386,6 +388,23 @@
                String(dt.getUTCDate()).padStart(2, '0') + 'T' +
                String(dt.getUTCHours()).padStart(2, '0') + ':' +
                String(dt.getUTCMinutes()).padStart(2, '0') + ':00Z';
+    }
+
+    /** Approximate solar elevation angle (degrees) at a given lat/lon/time.
+     *  Positive = sun above horizon, negative = below.
+     *  Used to determine day/night for Himawari GeoColor compositing. */
+    function solarElevation(lat, lon, date) {
+        var d = new Date(date);
+        var start = new Date(d.getUTCFullYear(), 0, 1);
+        var dayOfYear = Math.floor((d - start) / 86400000) + 1;
+        var declRad = (23.45 * Math.PI / 180) * Math.sin(2 * Math.PI * (284 + dayOfYear) / 365);
+        var utcHours = d.getUTCHours() + d.getUTCMinutes() / 60 + d.getUTCSeconds() / 3600;
+        var haRad = ((utcHours - 12) * 15 + lon) * Math.PI / 180;
+        var latRad = lat * Math.PI / 180;
+        return Math.asin(
+            Math.sin(latRad) * Math.sin(declRad) +
+            Math.cos(latRad) * Math.cos(declRad) * Math.cos(haRad)
+        ) * 180 / Math.PI;
     }
 
     /** Create a GIBS IR tile URL for a given layer + time (direct, no Leaflet template) */
@@ -1708,6 +1727,10 @@
             subdomains: 'abcd', maxZoom: 19
         }).addTo(detailMap);
 
+        // Store storm position for solar elevation calculations (GeoColor day/night)
+        detailStormLat = storm.lat;
+        detailStormLon = storm.lon;
+
         // Pick the single best satellite for this storm's longitude
         detailSatName = bestSatelliteForLon(storm.lon);
         var satLayerName = GIBS_IR_LAYERS[detailSatName];
@@ -2331,14 +2354,10 @@
         // If already loading, skip
         if (geocolorFrameLayers.length > 0 && !geocolorFramesReady) return;
 
-        // Determine visible layer name — GeoColor for GOES, Red Visible for Himawari
-        var visLayerName = GIBS_GEOCOLOR_LAYERS[detailSatName];
-        var irFallback = null; // only set for satellites without GeoColor (Himawari)
-        if (!visLayerName) {
-            visLayerName = GIBS_VIS_LAYERS[detailSatName];
-            // Himawari Red Visible is daytime-only; use IR as nighttime fallback
-            irFallback = GIBS_IR_LAYERS[detailSatName] || null;
-        }
+        // Determine layer strategy
+        var hasNativeGeoColor = !!GIBS_GEOCOLOR_LAYERS[detailSatName];
+        var visLayerName = GIBS_GEOCOLOR_LAYERS[detailSatName] || GIBS_VIS_LAYERS[detailSatName];
+        var irLayerName = GIBS_IR_LAYERS[detailSatName] || null;
         if (!visLayerName) {
             showVigorToast('No visible imagery available for ' + detailSatName);
             setProductMode('eir');
@@ -2360,17 +2379,33 @@
         }
         showLoadingProgress(true, 0);
 
-        // Update satellite label
+        // Update satellite label — always "GeoColor" regardless of satellite
         var satLabel = document.getElementById('ir-satellite-label');
         if (satLabel) {
-            var isGeoColor = !!GIBS_GEOCOLOR_LAYERS[detailSatName];
-            satLabel.textContent = (isGeoColor ? 'GeoColor' : 'Visible / IR') + ' \u2014 ' + detailSatName;
+            satLabel.textContent = 'GeoColor \u2014 ' + detailSatName;
         }
 
-        // Pre-create ALL GeoColor frame tile layers (hidden at opacity 0)
+        // Pre-create ALL GeoColor frame tile layers (hidden at opacity 0).
+        // For satellites with native GeoColor (GOES): use createGIBSLayerVis.
+        // For satellites without (Himawari): per-frame day/night switching —
+        //   daytime → Red Visible tiles,  nighttime → Clean IR tiles (grayscale).
         for (var i = 0; i < geocolorFrameTimes.length; i++) {
             var timeStr = geocolorFrameTimes[i];
-            var lyr = createGIBSLayerVis(visLayerName, timeStr, 0, irFallback);
+            var lyr;
+            if (hasNativeGeoColor) {
+                // GOES: use native GeoColor layer (handles day/night internally)
+                lyr = createGIBSLayerVis(visLayerName, timeStr, 0, null);
+            } else {
+                // Himawari: choose visible or IR based on solar elevation
+                var sunElev = solarElevation(detailStormLat, detailStormLon, new Date(timeStr));
+                if (sunElev > -6) {
+                    // Daytime / civil twilight: use visible tiles (Level7)
+                    lyr = createGIBSLayerVis(visLayerName, timeStr, 0, null);
+                } else {
+                    // Nighttime: use clean IR tiles (grayscale, Level6)
+                    lyr = createGIBSLayer(irLayerName, timeStr, 0);
+                }
+            }
             lyr.addTo(detailMap);
             geocolorFrameHasError.push(false);
 
@@ -2465,9 +2500,8 @@
         if (geocolorFrameTimes[idx]) {
             document.getElementById('ir-frame-time').textContent = fmtUTC(geocolorFrameTimes[idx]);
         }
-        var isGeoColor = !!GIBS_GEOCOLOR_LAYERS[detailSatName];
         document.getElementById('ir-satellite-label').textContent =
-            (isGeoColor ? 'GeoColor' : 'Visible / IR') + ' \u2014 ' + detailSatName;
+            'GeoColor \u2014 ' + detailSatName;
     }
 
     // ── Client-Side Vigor Computation Helpers ────────────────
