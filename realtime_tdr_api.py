@@ -955,7 +955,8 @@ def get_rt_data(
             result["wcm_vt_max_ms"] = c2["vt_max_ms"]
             result["wcm_center_x_km"] = c2["center_x_km"]
             result["wcm_center_y_km"] = c2["center_y_km"]
-            # 2-to-6 km tilt
+            # 2-to-6 km tilt (each level uses its own vorticity centroid,
+            # consistent with tilt_profile parallel approach)
             c6 = _quick_center(6.0)
             if c6["converged"] and c2["center_x_km"] is not None and c6["center_x_km"] is not None:
                 dx = c6["center_x_km"] - c2["center_x_km"]
@@ -3779,27 +3780,14 @@ def _compute_rt_tilt_profile(ds, min_height=0.5, max_height=8.0, ref_height=2.0)
     if not uv_slices:
         return None
 
-    # Find centre at reference height first (provides first-guess for others)
-    ref_lev = float(sel_levels[np.argmin(np.abs(sel_levels - ref_height))])
-    if ref_lev not in uv_slices:
-        ref_lev = list(uv_slices.keys())[0]
-
-    u_ref, v_ref = uv_slices[ref_lev]
-    ref_result = _wcm_center_km(u_ref, v_ref, x_km, y_km,
-                                 num_sectors=1, spad=6, num_iterations=3)
-    if not ref_result["converged"]:
-        # Fall back to grid centre
-        ref_result["center_ix"] = len(x_km) // 2
-        ref_result["center_iy"] = len(y_km) // 2
-
-    ref_guess = (ref_result["center_ix"], ref_result["center_iy"])
-
-    # Run WCM at all heights in parallel, using ref centre as first guess
+    # Run WCM at all heights in parallel.  Each level finds its own
+    # smoothed-vorticity centroid as the first guess (no first_guess_xy),
+    # so the search isn't biased by a single reference level — important
+    # when the vortex is highly tilted.
     def _solve_level(lev):
         u, v = uv_slices[lev]
         res = _wcm_center_km(u, v, x_km, y_km,
-                              num_sectors=1, spad=6, num_iterations=3,
-                              first_guess_xy=ref_guess)
+                              num_sectors=1, spad=6, num_iterations=3)
         return lev, res
 
     results = {}
@@ -3814,6 +3802,18 @@ def _compute_rt_tilt_profile(ds, min_height=0.5, max_height=8.0, ref_height=2.0)
                 results[lev] = res
             except Exception:
                 pass
+
+    if not results:
+        return None
+
+    # Identify the reference level result
+    ref_lev = float(sel_levels[np.argmin(np.abs(sel_levels - ref_height))])
+    if ref_lev not in results or not results.get(ref_lev, {}).get("converged"):
+        # Fall back to closest converged level
+        ref_lev = next((l for l in sorted_levels if results.get(l, {}).get("converged")), None)
+    if ref_lev is None:
+        return None
+    ref_result = results[ref_lev]
 
     if not results:
         return None
