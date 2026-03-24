@@ -48,8 +48,10 @@
     // Meteosat in GIBS) is handled by the nearest-satellite fallback.
     var SAT_ZONES = [
         { name: 'GOES-East', sublon: -75.2,  coreWest: -110, coreEast:   15 },
-        { name: 'GOES-West', sublon: -137.2, coreWest: -180, coreEast: -110 },
-        { name: 'Himawari',  sublon:  140.7, coreWest:   60, coreEast:  180 }
+        { name: 'GOES-West', sublon: -137.2, coreWest: -150, coreEast: -110 },
+        { name: 'Himawari',  sublon:  140.7, coreWest:   60, coreEast:  180 },
+        // Mirror entry: Himawari coverage west of the dateline (western Pacific)
+        { name: 'Himawari',  sublon:  140.7, coreWest: -180, coreEast: -150 }
     ];
     var BLEND_WIDTH_DEG = 5; // narrow cross-fade to avoid blurry dual-source artifacts
 
