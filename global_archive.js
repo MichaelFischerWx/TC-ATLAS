@@ -597,9 +597,15 @@ function selectStorm(storm) {
 
     // Early IR metadata prefetch — kick off the metadata request now
     // so it's already cached when the user opens the detail panel.
+    // IMPORTANT: For MergIR/GridSat-eligible storms (year >= 2000), we MUST
+    // have track data to send with the request.  Without it, the server falls
+    // back to HURSAT and caches that result, poisoning all subsequent requests
+    // for this SID (including frame requests).  Skip prefetch if tracks aren't
+    // loaded yet — the detail view will fetch properly when opened.
     var hasIR = storm.hursat || storm.year >= 1998;
-    if (hasIR && !irMetaPrefetchCache[storm.sid]) {
-        var track = allTracks[storm.sid] || [];
+    var needsTrack = storm.year >= 2000;  // MergIR/GridSat need track positions
+    var track = allTracks[storm.sid] || [];
+    if (hasIR && !irMetaPrefetchCache[storm.sid] && (!needsTrack || track.length > 0)) {
         var trackP = track.length > 0 ? '&track=' + encodeURIComponent(JSON.stringify(track)) : '';
         var lonP = storm.lmi_lon != null ? '&storm_lon=' + storm.lmi_lon : '';
         var prefetchUrl = API_BASE + '/global/ir/meta?sid=' + encodeURIComponent(storm.sid) + trackP + lonP;

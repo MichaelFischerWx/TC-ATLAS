@@ -256,6 +256,49 @@ def _mergir_rate_limit():
             _time.sleep(MERGIR_MIN_INTERVAL - elapsed)
         _mergir_last_request_ts = _time.monotonic()
 
+
+# ── MergIR circuit breaker ───────────────────────────────────────────
+# If N consecutive MergIR fetches fail/timeout, temporarily skip MergIR
+# and fall back to GridSat/HURSAT.  This prevents the entire pipeline
+# from hanging when NASA GES DISC is slow or the Earthdata token is
+# expired (which causes silent redirect-to-login-page failures).
+_mergir_consecutive_failures = 0
+_mergir_circuit_open_until = 0.0  # monotonic timestamp
+_mergir_circuit_lock = threading.Lock()
+MERGIR_CIRCUIT_THRESHOLD = 3    # failures before opening circuit
+MERGIR_CIRCUIT_COOLDOWN = 300   # seconds to skip MergIR after circuit opens (5 min)
+
+
+def _mergir_record_success():
+    """Reset the circuit breaker on a successful MergIR fetch."""
+    global _mergir_consecutive_failures
+    with _mergir_circuit_lock:
+        _mergir_consecutive_failures = 0
+
+
+def _mergir_record_failure():
+    """Record a MergIR failure.  Opens the circuit after THRESHOLD consecutive failures."""
+    global _mergir_consecutive_failures, _mergir_circuit_open_until
+    with _mergir_circuit_lock:
+        _mergir_consecutive_failures += 1
+        if _mergir_consecutive_failures >= MERGIR_CIRCUIT_THRESHOLD:
+            _mergir_circuit_open_until = _time.monotonic() + MERGIR_CIRCUIT_COOLDOWN
+            logger.warning(
+                f"MergIR circuit breaker OPEN — {_mergir_consecutive_failures} consecutive "
+                f"failures, skipping MergIR for {MERGIR_CIRCUIT_COOLDOWN}s"
+            )
+
+
+def _mergir_circuit_is_open() -> bool:
+    """Check if the MergIR circuit breaker is open (should skip MergIR)."""
+    with _mergir_circuit_lock:
+        if _mergir_circuit_open_until == 0.0:
+            return False
+        if _time.monotonic() >= _mergir_circuit_open_until:
+            # Cooldown expired — half-open: allow one attempt
+            return False
+        return True
+
 # Persistent HTTP session for NCEI (GridSat) and general downloads.
 # Reusing a session keeps TCP connections alive, avoiding ~200-500ms
 # TCP+TLS handshake overhead per request.
@@ -1191,13 +1234,21 @@ def _load_mergir_subset_inner(target_dt, center_lat, center_lon, xr, timedelta):
         # OPeNDAP subset as fallback
         subset_url = _mergir_subset_url(attempt_dt, center_lat, center_lon)
 
+        # Check circuit breaker before attempting NASA requests
+        if _mergir_circuit_is_open():
+            logger.info("MergIR: circuit breaker open, skipping NASA fetch")
+            return None, None
+
         for url_label, url in [("subset", subset_url), ("full", full_url)]:
             tmp = None
             try:
                 # Pace requests to avoid NASA GES DISC throttling / 503s
                 _mergir_rate_limit()
                 logger.info(f"MergIR: downloading {url_label} from {url[:120]}...")
-                resp = session.get(url, timeout=90, allow_redirects=True, stream=True)
+                # timeout=(connect, read): 15s to connect, 30s per chunk read.
+                # The old timeout=90 only covered connection with stream=True,
+                # allowing iter_content to hang indefinitely on slow NASA responses.
+                resp = session.get(url, timeout=(15, 30), allow_redirects=True, stream=True)
 
                 if resp.status_code in (401, 403):
                     logger.warning(
@@ -1208,11 +1259,27 @@ def _load_mergir_subset_inner(target_dt, center_lat, center_lon, xr, timedelta):
                     global _earthdata_session
                     _earthdata_session = None
                     session = _get_earthdata_session()
+                    _mergir_record_failure()
+                    continue
+
+                # Detect Earthdata login page redirect — if the response is
+                # HTML instead of NetCDF, the token is likely expired.
+                content_type = resp.headers.get("content-type", "")
+                if "text/html" in content_type:
+                    logger.warning(
+                        f"MergIR: got HTML response for {url_label} — "
+                        f"likely expired Earthdata token (redirected to login page)"
+                    )
+                    resp.close()
+                    _earthdata_session = None
+                    session = _get_earthdata_session()
+                    _mergir_record_failure()
                     continue
 
                 if resp.status_code != 200:
                     logger.info(f"MergIR: HTTP {resp.status_code} for {url_label}")
                     resp.close()
+                    _mergir_record_failure()
                     continue
 
                 # Stream to temp file (avoid buffering 130 MB in memory)
@@ -1228,6 +1295,12 @@ def _load_mergir_subset_inner(target_dt, center_lat, center_lon, xr, timedelta):
 
             except Exception as e:
                 logger.warning(f"MergIR: {url_label} download failed: {e}")
+                _mergir_record_failure()
+                if tmp and hasattr(tmp, 'name') and os.path.exists(tmp.name):
+                    try:
+                        os.unlink(tmp.name)
+                    except OSError:
+                        pass
                 continue
 
             try:
@@ -1305,6 +1378,7 @@ def _load_mergir_subset_inner(target_dt, center_lat, center_lon, xr, timedelta):
 
                     # MergIR lat is ascending (south→north), flip so
                     # row 0 = north (as Leaflet imageOverlay expects)
+                    _mergir_record_success()
                     return tb[::-1], actual_bounds
 
             except Exception as e:
@@ -1317,6 +1391,7 @@ def _load_mergir_subset_inner(target_dt, center_lat, center_lon, xr, timedelta):
                 continue
 
     logger.warning(f"MergIR: no data found for {target_dt}")
+    _mergir_record_failure()
     return None, None
 
 
@@ -1655,7 +1730,8 @@ def ir_meta(
                 pass
 
         if not track_points:
-            # Fall back to HURSAT if available
+            # Fall back to HURSAT if available, but DO NOT cache (same
+            # cache-poisoning issue as MergIR — see comment above).
             if HURSAT_START_YEAR <= year <= HURSAT_END_YEAR:
                 frames = _get_extracted_frames(sid, storm_lon=storm_lon)
                 if frames:
@@ -1669,13 +1745,12 @@ def ir_meta(
                     result = {
                         "sid": sid, "available": True, "source": "hursat",
                         "n_frames": len(frames), "frames": frame_list,
+                        "_fallback": True,
                     }
-                    _mergir_meta_cache[cache_key] = result
-                    if len(_mergir_meta_cache) > _MERGIR_META_CACHE_MAX:
-                        _mergir_meta_cache.popitem(last=False)
+                    # NOT cached — next request with track data should get GridSat
                     return JSONResponse(
                         result,
-                        headers={"Cache-Control": "public, max-age=3600"},
+                        headers={"Cache-Control": "public, max-age=60"},
                     )
 
             result = {
@@ -1717,7 +1792,12 @@ def ir_meta(
                 pass
 
         if not track_points:
-            # Fall back to HURSAT if available
+            # Fall back to HURSAT if available, but DO NOT cache this result.
+            # Caching a HURSAT fallback under the MergIR cache key poisons all
+            # subsequent requests for this SID — even when track data is provided
+            # later, the cached HURSAT result is returned.  This was the root
+            # cause of MergIR "failures": an early prefetch without track data
+            # would cache HURSAT and lock out MergIR for that storm.
             if HURSAT_START_YEAR <= year <= HURSAT_END_YEAR:
                 frames = _get_extracted_frames(sid, storm_lon=storm_lon)
                 if frames:
@@ -1731,13 +1811,12 @@ def ir_meta(
                     result = {
                         "sid": sid, "available": True, "source": "hursat",
                         "n_frames": len(frames), "frames": frame_list,
+                        "_fallback": True,  # Signal that this is a trackless fallback
                     }
-                    _mergir_meta_cache[cache_key] = result
-                    if len(_mergir_meta_cache) > _MERGIR_META_CACHE_MAX:
-                        _mergir_meta_cache.popitem(last=False)
+                    # NOT cached — next request with track data should get MergIR
                     return JSONResponse(
                         result,
-                        headers={"Cache-Control": "public, max-age=3600"},
+                        headers={"Cache-Control": "public, max-age=60"},  # Short TTL
                     )
 
             result = {
@@ -2536,6 +2615,12 @@ def global_health():
         "earthdata_configured": bool(EARTHDATA_TOKEN or EARTHDATA_USER),
         "earthdata_method": "token" if EARTHDATA_TOKEN else ("user/pass" if EARTHDATA_USER else "none"),
         "mergir_available": bool(EARTHDATA_TOKEN or EARTHDATA_USER),
+        "mergir_circuit_breaker": {
+            "open": _mergir_circuit_is_open(),
+            "consecutive_failures": _mergir_consecutive_failures,
+            "threshold": MERGIR_CIRCUIT_THRESHOLD,
+            "cooldown_s": MERGIR_CIRCUIT_COOLDOWN,
+        },
         "gridsat_available": True,
     }
 
