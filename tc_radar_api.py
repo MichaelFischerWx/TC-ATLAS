@@ -762,29 +762,61 @@ def _filter_cases_for_composite(
 
 @app.get("/health")
 def health():
+    """Lightweight health/readiness check for Cloud Run liveness probes."""
     return {
         "status": "ok",
+        "version": "2.0",
         "backend": "s3_zarr" if USE_S3 else "aoml_http",
         "bucket": S3_BUCKET if USE_S3 else None,
     }
 
 
-# /debug endpoint removed for production — exposed internal dataset structure.
-# To re-enable for development, uncomment the block below and protect with auth.
-# @app.get("/debug")
-# def debug():
-#     """Debug endpoint — shows what xarray sees in the Zarr store."""
-#     try:
-#         ds = get_dataset("swath", "early")
-#         return {"dims": dict(ds.sizes), "data_vars": list(ds.data_vars), "coords": list(ds.coords)}
-#     except Exception as e:
-#         return {"error": str(e)}
+@app.get("/warmup")
+def warmup():
+    """
+    Warm-up endpoint called by Cloud Scheduler every 5 minutes.
+    Does three things beyond keeping the container alive:
+      1. Refreshes the active storms cache (NHC + JTWC polling)
+      2. Touches S3 to keep connection pools / TLS sessions alive
+      3. Pre-warms the SEB directory listing for real-time TDR
+    Point Cloud Scheduler at: GET https://<service-url>/warmup
+    """
+    result = {"status": "warm"}
 
+    # 1. Refresh active storms cache (skips if refreshed <60s ago)
+    try:
+        from ir_monitor_api import refresh_active_storms_cache
+        storm_info = refresh_active_storms_cache()
+        result["storms"] = storm_info
+    except Exception as e:
+        result["storms_error"] = str(e)
 
-@app.get("/health")
-def health_check():
-    """Lightweight health/readiness check for monitoring cold-start status."""
-    return {"status": "ok", "version": "2.0"}
+    # 2. Touch S3 to keep connection pool alive (s3fs HTTP/2 sessions
+    #    go stale after a few minutes of inactivity, causing slow first
+    #    requests when a user arrives)
+    if USE_S3:
+        try:
+            import s3fs
+            fs = s3fs.S3FileSystem(anon=False,
+                                   client_kwargs={"region_name": AWS_REGION})
+            fs.ls(f"{S3_BUCKET}/{S3_PREFIX}/", detail=False)
+            result["s3_alive"] = True
+        except Exception as e:
+            result["s3_alive"] = False
+            result["s3_error"] = str(e)
+
+    # 3. Pre-warm SEB directory listing for real-time TDR page
+    #    (this populates _rt_dir_cache so the first /realtime/missions
+    #    request is instant instead of waiting for SEB HTTP response)
+    try:
+        from realtime_tdr_api import _parse_directory, SEB_BASE
+        _parse_directory(SEB_BASE + "/")
+        result["seb_primed"] = True
+    except Exception as e:
+        result["seb_primed"] = False
+        result["seb_error"] = str(e)
+
+    return result
 
 
 @app.get("/variables")
@@ -7797,8 +7829,13 @@ app.include_router(realtime_router, prefix="/realtime")
 from global_archive_api import router as global_router
 app.include_router(global_router, prefix="/global")
 
-from ir_monitor_api import router as ir_monitor_router
+from ir_monitor_api import (
+    router as ir_monitor_router,
+    start_background_refresh as _ir_start_bg,
+    refresh_active_storms_cache as _ir_refresh,
+)
 app.include_router(ir_monitor_router, prefix="/ir-monitor")
+_ir_start_bg()  # Start background storm cache refresh thread
 
 try:
     from microwave_api import router as microwave_router, start_index_build as _mw_start

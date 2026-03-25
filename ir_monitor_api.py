@@ -72,7 +72,7 @@ JTWC_SOURCES = [
 _NHC_BASINS = {"EP", "CP", "AL"}
 
 # Cache settings
-_STORM_CACHE_TTL = 600          # 10 minutes
+_STORM_CACHE_TTL = 300          # 5 minutes (matches Cloud Scheduler ping interval)
 _IR_FRAME_CACHE_MAX = 200       # max cached IR frames (covers ~15 storms)
 _IR_FRAME_CACHE_TTL = 300       # 5 minutes per frame
 
@@ -740,6 +740,60 @@ def _ensure_fresh_cache():
             _poll_active_storms()
         except Exception:
             traceback.print_exc()
+
+
+# ---------------------------------------------------------------------------
+# Background Storm Refresh Thread
+# ---------------------------------------------------------------------------
+# Proactively refreshes the active storms cache on a fixed interval so that
+# no user request ever has to wait for NHC/JTWC polling.  The /warmup
+# endpoint in tc_radar_api.py also calls refresh_active_storms_cache()
+# as a belt-and-suspenders approach (Cloud Scheduler every 5 min).
+
+_bg_refresh_stop = threading.Event()
+
+
+def _background_storm_refresh():
+    """Daemon thread: refresh active storms cache every _STORM_CACHE_TTL seconds."""
+    # Small initial delay to let the app finish startup before first poll
+    _bg_refresh_stop.wait(10)
+    while not _bg_refresh_stop.is_set():
+        try:
+            _poll_active_storms()
+            print("[IR Monitor] Background refresh completed")
+        except Exception:
+            traceback.print_exc()
+        _bg_refresh_stop.wait(_STORM_CACHE_TTL)
+
+
+def start_background_refresh():
+    """Start the background storm refresh thread.  Called once at app startup."""
+    t = threading.Thread(target=_background_storm_refresh, daemon=True,
+                         name="storm-refresh")
+    t.start()
+    print("[IR Monitor] Background storm refresh thread started "
+          f"(interval={_STORM_CACHE_TTL}s)")
+
+
+def refresh_active_storms_cache():
+    """
+    Exported helper for the /warmup endpoint.
+    Forces an immediate cache refresh if the cache is older than 60 seconds
+    (avoids double-polling when the background thread just ran).
+    Returns summary dict for the warmup response.
+    """
+    if time.time() - _last_poll_time > 60:
+        try:
+            _poll_active_storms()
+        except Exception:
+            traceback.print_exc()
+
+    with _active_storms_lock:
+        return {
+            "storm_count": len(_active_storms_cache["storms"]),
+            "updated_utc": _active_storms_cache["updated_utc"],
+            "count_by_basin": dict(_active_storms_cache["count_by_basin"]),
+        }
 
 
 # ---------------------------------------------------------------------------
