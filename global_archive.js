@@ -18,8 +18,10 @@ var API_BASE = 'https://tc-atlas-api-361010099051.us-east1.run.app';
 var STORMS_JSON = 'ibtracs_storms.json';
 var TRACKS_MANIFEST = 'ibtracs_tracks_manifest.json';
 var TRACKS_JSON_FALLBACK = 'ibtracs_tracks.json';  // Fallback for single-file mode
+var TC_RADAR_LOOKUP_JSON = 'tc_radar_lookup.json';
 
 // ── State ────────────────────────────────────────────────────
+var tcRadarLookup = null;    // storm_name_year → {case, n} (loaded async)
 var allStorms = [];          // Full storm metadata array
 var allTracks = {};          // SID → track points dict
 var filteredStorms = [];     // Currently filtered subset
@@ -584,6 +586,20 @@ function selectStorm(storm) {
         hursatEl.innerHTML = '<span style="color:#6b7280;">Not available</span>';
     }
 
+    // TC-RADAR badge in sidebar card
+    var radarRowEl = document.getElementById('card-tc-radar');
+    var radarValEl = document.getElementById('card-tc-radar-value');
+    if (radarRowEl && radarValEl) {
+        var rk = (storm.name || '').toUpperCase() + '_' + storm.year;
+        var re = tcRadarLookup && tcRadarLookup[rk];
+        if (re) {
+            radarValEl.innerHTML = '<span style="color:#ffad00;">🛩️ ' + re.n + ' ' + (re.n === 1 ? 'analysis' : 'analyses') + '</span>';
+            radarRowEl.style.display = '';
+        } else {
+            radarRowEl.style.display = 'none';
+        }
+    }
+
     // Update the floating map card
     _showMapStormCard(storm, color, cat);
 
@@ -885,7 +901,11 @@ window.viewStormDetail = function () {
 };
 
 function renderStormDetail(storm) {
-    _ga('ga_view_storm_detail', { sid: storm.sid, storm_name: storm.name, year: storm.year, basin: storm.basin });
+    var _radarKey = (storm.name || '').toUpperCase() + '_' + storm.year;
+    _ga('ga_view_storm_detail', {
+        sid: storm.sid, storm_name: storm.name, year: storm.year, basin: storm.basin,
+        peak_wind_kt: storm.peak_wind_kt, has_tc_radar: !!(tcRadarLookup && tcRadarLookup[_radarKey])
+    });
     // Header
     var color = getIntensityColor(storm.peak_wind_kt);
     var cat = getIntensityCategory(storm.peak_wind_kt);
@@ -896,6 +916,18 @@ function renderStormDetail(storm) {
         storm.year + ' · ' + (BASIN_NAMES[storm.basin] || storm.basin) +
         ' · Peak: ' + (storm.peak_wind_kt || '?') + ' kt / ' + (storm.min_pres_hpa || '?') + ' hPa' +
         ' · ACE: ' + (storm.ace || 0).toFixed(1);
+
+    // TC-RADAR cross-link — show button if this storm has airborne radar analyses
+    var radarLink = document.getElementById('tc-radar-link');
+    var radarKey = (storm.name || '').toUpperCase() + '_' + storm.year;
+    var radarEntry = tcRadarLookup && tcRadarLookup[radarKey];
+    if (radarEntry) {
+        radarLink.href = 'explorer.html#case=' + radarEntry.case;
+        radarLink.title = radarEntry.n + ' airborne radar ' + (radarEntry.n === 1 ? 'analysis' : 'analyses') + ' available';
+        radarLink.style.display = '';
+    } else {
+        radarLink.style.display = 'none';
+    }
 
     // Get track data
     var track = allTracks[storm.sid];
@@ -4366,6 +4398,11 @@ function showToast(message) {
 
 document.addEventListener('DOMContentLoaded', function () {
     loadData();
+
+    // Load TC-RADAR lookup (tiny file, ~3KB) for cross-linking
+    fetch(TC_RADAR_LOOKUP_JSON).then(function (r) { return r.json(); })
+        .then(function (data) { tcRadarLookup = data; })
+        .catch(function () { tcRadarLookup = {}; });
 
     // Warm up the API server on page load — a lightweight health check wakes
     // the Render instance so it's ready when the user selects a storm.

@@ -1283,6 +1283,16 @@ input[type="range"].ga-range::-moz-range-thumb {
     border: none;
 }
 .ga-btn-accent:hover { opacity: 0.9; }
+.ga-btn-radar {
+    background: linear-gradient(135deg, #ff6b2e, #ffad00);
+    color: #fff;
+    border: none;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+.ga-btn-radar:hover { opacity: 0.9; }
 .ga-btn-xs {
     font-size: 0.68rem;
     padding: 2px 8px;

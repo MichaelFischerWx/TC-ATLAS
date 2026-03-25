@@ -261,6 +261,7 @@
                             <div class="card-row"><span class="card-label">Duration</span><span id="card-dates" class="card-value"></span></div>
                             <div class="card-row"><span class="card-label">ACE</span><span id="card-ace" class="card-value mono"></span></div>
                             <div id="card-hursat-row" class="card-row"><span class="card-label">HURSAT IR</span><span id="card-hursat" class="card-value"></span></div>
+                            <div id="card-tc-radar" class="card-row" style="display:none;"><span class="card-label">TC-RADAR</span><span id="card-tc-radar-value" class="card-value"></span></div>
                         </div>
                     </div>
                 </aside>
@@ -274,6 +275,9 @@
                     <div class="detail-header-top">
                         <button class="ga-btn ga-btn-ghost" onclick="switchTab('browser')">← Back to Browser</button>
                         <div class="detail-header-actions">
+                            <a id="tc-radar-link" class="ga-btn ga-btn-sm ga-btn-radar" href="#" target="_blank" style="display:none;" onclick="_ga('ga_click_tc_radar',{sid:selectedStorm&&selectedStorm.sid,storm_name:selectedStorm&&selectedStorm.name})">
+                                🛩️ 3D Winds Analysis
+                            </a>
                             <button class="ga-btn ga-btn-sm ga-btn-accent" onclick="openAnalogFinder()">Find Analogs</button>
                             <button class="ga-btn ga-btn-sm" onclick="addCurrentToCompare()">+ Compare</button>
                         </div>
