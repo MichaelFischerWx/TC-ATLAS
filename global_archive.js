@@ -2680,7 +2680,8 @@ var irPrefetchQueue = [];    // Frames queued for prefetch
 var irPrefetchActive = 0;    // Number of active prefetch requests
 var IR_PREFETCH_BATCH = 8;          // Concurrent prefetch requests (HURSAT)
 var IR_PREFETCH_BATCH_GRIDSAT = 14; // Higher concurrency for GridSat (small subsets, no auth)
-var IR_PREFETCH_BATCH_MERGIR = 12;  // MergIR (Earthdata auth, 4km subsets)
+var IR_PREFETCH_BATCH_MERGIR = 4;   // MergIR: keep under server semaphore limit (5 slots)
+                                    // to avoid cascade timeouts
 var IR_PREFETCH_AHEAD = 20;  // How many frames ahead to prefetch
 
 function setIRLoadingText(msg) {
@@ -2774,9 +2775,11 @@ function fetchIRFrameSingle(idx, callback) {
             '&_v=' + irCacheVer;
     }
 
-    // Use longer timeout for first frame (tarball download can take 60-120s)
+    // Timeout must be long enough for the full server-side cascade:
+    // MergIR attempt (~30-90s) → GridSat attempt (~10-30s) → HURSAT (~5-60s)
+    // First frame needs extra time for HURSAT tarball download.
     var cached = Object.keys(irFrames).length;
-    var timeoutMs = cached === 0 ? 180000 : 60000;  // 3 min first, 1 min after
+    var timeoutMs = cached === 0 ? 180000 : 120000;  // 3 min first, 2 min after
     var controller = new AbortController();
     var timer = setTimeout(function () { controller.abort(); }, timeoutMs);
 
