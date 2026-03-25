@@ -611,12 +611,13 @@ function selectStorm(storm) {
                     // Also prefetch the first frame so display is near-instant
                     var source = meta.source || 'hursat';
                     var frameUrl;
+                    var irCacheVer = 'v3';
                     if ((source === 'mergir' || source === 'gridsat') && meta.frames && meta.frames[0]) {
                         var fi = meta.frames[0];
                         frameUrl = API_BASE + '/global/ir/frame?sid=' + encodeURIComponent(storm.sid) +
-                            '&frame_idx=0&lat=' + fi.lat + '&lon=' + fi.lon;
+                            '&frame_idx=0&lat=' + fi.lat + '&lon=' + fi.lon + '&_v=' + irCacheVer;
                     } else {
-                        frameUrl = API_BASE + '/global/hursat/frame?sid=' + encodeURIComponent(storm.sid) + '&frame_idx=0';
+                        frameUrl = API_BASE + '/global/hursat/frame?sid=' + encodeURIComponent(storm.sid) + '&frame_idx=0&_v=' + irCacheVer;
                     }
                     fetch(frameUrl)
                         .then(function (r) { return r.ok ? r.json() : null; })
@@ -2756,15 +2757,21 @@ function fetchIRFrameSingle(idx, callback) {
     var frameUrl;
     var source = irMeta.source || 'hursat';
 
+    // Cache version — bump when rendering changes (domain size, colormap, etc.)
+    // to force browsers to discard stale cached frames.
+    var irCacheVer = 'v3';
+
     if ((source === 'mergir' || source === 'gridsat') && irMeta.frames && irMeta.frames[idx]) {
         var fi = irMeta.frames[idx];
         frameUrl = API_BASE + '/global/ir/frame?sid=' + encodeURIComponent(selectedStorm.sid) +
             '&frame_idx=' + idx +
-            '&lat=' + fi.lat + '&lon=' + fi.lon;
+            '&lat=' + fi.lat + '&lon=' + fi.lon +
+            '&_v=' + irCacheVer;
     } else {
         // HURSAT: use legacy endpoint directly (most reliable)
         frameUrl = API_BASE + '/global/hursat/frame?sid=' + encodeURIComponent(selectedStorm.sid) +
-            '&frame_idx=' + idx;
+            '&frame_idx=' + idx +
+            '&_v=' + irCacheVer;
     }
 
     // Use longer timeout for first frame (tarball download can take 60-120s)
@@ -2790,10 +2797,10 @@ function fetchIRFrameSingle(idx, callback) {
             // Fallback: try the other endpoint
             var fallbackUrl;
             if (source === 'hursat') {
-                fallbackUrl = API_BASE + '/global/ir/frame?sid=' + encodeURIComponent(selectedStorm.sid) + '&frame_idx=' + idx;
+                fallbackUrl = API_BASE + '/global/ir/frame?sid=' + encodeURIComponent(selectedStorm.sid) + '&frame_idx=' + idx + '&_v=' + irCacheVer;
             } else {
                 // For mergir/gridsat, fall back to HURSAT legacy endpoint
-                fallbackUrl = API_BASE + '/global/hursat/frame?sid=' + encodeURIComponent(selectedStorm.sid) + '&frame_idx=' + idx;
+                fallbackUrl = API_BASE + '/global/hursat/frame?sid=' + encodeURIComponent(selectedStorm.sid) + '&frame_idx=' + idx + '&_v=' + irCacheVer;
             }
             fetch(fallbackUrl)
                 .then(function (r) { return r.ok ? r.json() : null; })
