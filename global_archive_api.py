@@ -70,7 +70,7 @@ def _get_gcs_bucket():
 
 
 # Bump this version whenever rendering logic changes to invalidate stale cache.
-_GCS_CACHE_VERSION = "v2"
+_GCS_CACHE_VERSION = "v3"  # v3: 14° domain (up from 10°), consistent bounds across all sources
 
 
 def _gcs_cache_key(sid: str, frame_idx: int, source: str = "ir") -> str:
@@ -134,7 +134,7 @@ GRIDSAT_THREDDS = "https://www.ncei.noaa.gov/thredds/dodsC/cdr/gridsat"
 GRIDSAT_DIRECT = "https://www.ncei.noaa.gov/data/geostationary-ir-channel-brightness-temperature-gridsat-b1/access"
 GRIDSAT_START_YEAR = 1980
 GRIDSAT_END_YEAR = 2024  # Updates paused since March 2024
-GRIDSAT_HALF_DOMAIN = 5.0  # Same box size as MergIR for consistency
+GRIDSAT_HALF_DOMAIN = 7.0  # 7° each direction = 14°×14° box — fills Leaflet panel
 
 # Earthdata credentials for MergIR access (set via env vars on Render)
 # Option 1: Bearer token (EARTHDATA_TOKEN) — preferred
@@ -965,7 +965,7 @@ _mergir_meta_cache: OrderedDict = OrderedDict()
 _MERGIR_META_CACHE_MAX = 100
 
 # Box size for storm-centered subset (degrees from center)
-MERGIR_HALF_DOMAIN = 5.0  # 5° each direction = 10°×10° box
+MERGIR_HALF_DOMAIN = 7.0  # 7° each direction = 14°×14° box — fills Leaflet panel
 
 
 def _mergir_opendap_file_url(dt: datetime) -> str:
@@ -1795,6 +1795,9 @@ def _heal_frame_background(sid: str, frame_idx: int, preferred_source: str,
             ir_scale = 4
 
         if frame_2d is None:
+            _heal_stats["failed"] += 1
+            _record_heal_history(sid, frame_idx, preferred_source, success=False,
+                                 reason="preferred source returned no data")
             return  # Preferred source still unavailable — keep fallback
 
         png = _render_ir_png(frame_2d, vmin=170.0, vmax=310.0, scale=ir_scale)
@@ -1819,27 +1822,80 @@ def _heal_frame_background(sid: str, frame_idx: int, preferred_source: str,
         # Update GCS persistent cache
         _gcs_put_frame(sid, frame_idx, result, source="ir")
 
-        logger.info(f"[Cache Heal] Upgraded {sid} frame {frame_idx} → {preferred_source}")
+        _heal_stats["succeeded"] += 1
+        _record_heal_history(sid, frame_idx, preferred_source, success=True)
+        print(f"[Cache Heal] ✓ Upgraded {sid} frame {frame_idx} → {preferred_source}")
 
     except Exception as e:
-        logger.debug(f"[Cache Heal] Failed for {sid} frame {frame_idx}: {e}")
+        _heal_stats["failed"] += 1
+        _record_heal_history(sid, frame_idx, preferred_source, success=False,
+                             reason=str(e))
+        print(f"[Cache Heal] ✗ Failed {sid} frame {frame_idx}: {e}")
     finally:
         with _heal_lock:
             _heal_in_progress.discard(heal_key)
+
+
+def _record_heal_history(sid: str, frame_idx: int, target_source: str,
+                         success: bool, reason: str = ""):
+    """Append to the rolling heal history for the diagnostic endpoint."""
+    entry = {
+        "sid": sid, "frame_idx": frame_idx,
+        "target_source": target_source,
+        "success": success,
+        "reason": reason,
+        "time_utc": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    _heal_stats["history"].append(entry)
+    if len(_heal_stats["history"]) > _HEAL_HISTORY_MAX:
+        _heal_stats["history"] = _heal_stats["history"][-_HEAL_HISTORY_MAX:]
+
+
+_heal_stats = {"attempted": 0, "succeeded": 0, "failed": 0, "skipped": 0, "history": []}
+_HEAL_HISTORY_MAX = 50  # Keep last N heal results for the diagnostic endpoint
+
+
+def _determine_preferred_source(sid: str) -> str | None:
+    """
+    Determine the preferred IR source for a storm based on its year and
+    server configuration.  Uses the same logic as ir_meta but doesn't
+    require the metadata cache to be populated.
+    """
+    year = _parse_sid_year(sid)
+    _earthdata_configured = bool(EARTHDATA_TOKEN or EARTHDATA_USER)
+    if year >= MERGIR_START_YEAR and _earthdata_configured:
+        return "mergir"
+    elif GRIDSAT_START_YEAR <= year <= GRIDSAT_END_YEAR:
+        return "gridsat"
+    return None  # Can't determine or no upgrade possible
 
 
 def _maybe_heal_frame(sid: str, frame_idx: int, cached_result: dict):
     """
     Check if a cached frame was served from a fallback source and, if so,
     spawn a background thread to retry the preferred source.
+
+    Works in two modes:
+      1. If _mergir_meta_cache has metadata for this storm, use it for
+         frame coordinates (most accurate).
+      2. Otherwise, infer the preferred source from the SID year and
+         extract coordinates from the cached frame's bounds (works even
+         after container restarts when only GCS cache is available).
     """
     actual_source = cached_result.get("source", "")
-    meta_key = f"ir_{sid}"
-    meta = _mergir_meta_cache.get(meta_key)
-    if not meta or not meta.get("available"):
+    if not actual_source:
         return
 
-    preferred_source = meta.get("source", "")
+    # Try metadata cache first, fall back to year-based inference
+    meta_key = f"ir_{sid}"
+    meta = _mergir_meta_cache.get(meta_key)
+    if meta and meta.get("available"):
+        preferred_source = meta.get("source", "")
+    else:
+        preferred_source = _determine_preferred_source(sid)
+
+    if not preferred_source:
+        return
 
     # Nothing to heal if the frame already came from the preferred source
     if actual_source == preferred_source:
@@ -1857,31 +1913,52 @@ def _maybe_heal_frame(sid: str, frame_idx: int, cached_result: dict):
             return
         _heal_in_progress.add(heal_key)
 
-    # Get frame coordinates from metadata
-    frames = meta.get("frames", [])
-    if frame_idx >= len(frames):
-        with _heal_lock:
-            _heal_in_progress.discard(heal_key)
-        return
+    # Get frame coordinates — prefer metadata, fall back to cached bounds
+    frame_lat = None
+    frame_lon = None
+    frame_dt = None
 
-    frame_info = frames[frame_idx]
-    frame_lat = frame_info.get("lat")
-    frame_lon = frame_info.get("lon")
+    if meta and meta.get("frames"):
+        frames = meta.get("frames", [])
+        if frame_idx < len(frames):
+            frame_info = frames[frame_idx]
+            frame_lat = frame_info.get("lat")
+            frame_lon = frame_info.get("lon")
+            try:
+                frame_dt = datetime.fromisoformat(frame_info["datetime"])
+            except Exception:
+                pass
+
+    # Fall back to extracting coords from the cached frame's bounds
     if frame_lat is None or frame_lon is None:
+        bounds = cached_result.get("bounds")
+        if bounds:
+            frame_lat = (bounds.get("south", 0) + bounds.get("north", 0)) / 2
+            frame_lon = (bounds.get("west", 0) + bounds.get("east", 0)) / 2
+
+    if frame_dt is None:
+        dt_str = cached_result.get("datetime", "")
+        if dt_str:
+            try:
+                frame_dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+            except Exception:
+                pass
+
+    if frame_lat is None or frame_lon is None or frame_dt is None:
         with _heal_lock:
             _heal_in_progress.discard(heal_key)
+        _heal_stats["skipped"] += 1
         return
 
-    frame_dt = datetime.fromisoformat(frame_info["datetime"])
-
+    _heal_stats["attempted"] += 1
     t = threading.Thread(
         target=_heal_frame_background,
         args=(sid, frame_idx, preferred_source, frame_dt, frame_lat, frame_lon),
         daemon=True, name=f"heal-{sid}-{frame_idx}",
     )
     t.start()
-    logger.debug(f"[Cache Heal] Spawned heal thread for {sid} frame {frame_idx} "
-                 f"({actual_source} → {preferred_source})")
+    print(f"[Cache Heal] Spawned heal for {sid} frame {frame_idx} "
+          f"({actual_source} → {preferred_source})")
 
 
 @router.get("/ir/frame")
@@ -1972,16 +2049,8 @@ def ir_frame(
                     frame_2d, ir_bounds = _load_frame_from_nc(nc_path)
                     if frame_2d is not None:
                         actual_source = "hursat"
+                        half_domain = GRIDSAT_HALF_DOMAIN  # Use consistent domain
                         ir_scale = 4
-                        png = _render_ir_png(frame_2d, vmin=170.0, vmax=310.0, scale=ir_scale)
-                        result = {
-                            "sid": sid, "frame_idx": frame_idx,
-                            "datetime": frame_info["datetime"],
-                            "source": actual_source,
-                            "frame": png,
-                        }
-                        if ir_bounds:
-                            result["bounds"] = ir_bounds
             except Exception as e:
                 logger.debug(f"HURSAT fallback failed for {sid} frame {frame_idx}: {e}")
 
@@ -1991,26 +2060,22 @@ def ir_frame(
                 detail=f"No IR data available from any source for {frame_info['datetime']}",
             )
 
-        # Build result for MergIR/GridSat path (HURSAT result built above)
-        if actual_source != "hursat":
-            png = _render_ir_png(frame_2d, vmin=170.0, vmax=310.0, scale=ir_scale)
-            # Always use consistent requested bounds (center ± half_domain)
-            # rather than actual data extent, so every frame plots the same
-            # domain size on the map. OPeNDAP subsets can return slightly
-            # truncated extents, causing visible domain jumps between frames.
-            # Any edge pixels outside the data are transparent (NaN).
-            bounds = {
-                "south": frame_lat - half_domain,
-                "north": frame_lat + half_domain,
-                "west": frame_lon - half_domain,
-                "east": frame_lon + half_domain,
-            }
-            result = {
-                "sid": sid, "frame_idx": frame_idx,
-                "datetime": frame_info["datetime"], "source": actual_source,
-                "frame": png,
-                "bounds": bounds,
-            }
+        # Build result — all sources use consistent center ± half_domain bounds
+        # so every frame plots the same domain size on the map, regardless of
+        # whether it came from MergIR, GridSat, or HURSAT cascade fallback.
+        png = _render_ir_png(frame_2d, vmin=170.0, vmax=310.0, scale=ir_scale)
+        bounds = {
+            "south": frame_lat - half_domain,
+            "north": frame_lat + half_domain,
+            "west": frame_lon - half_domain,
+            "east": frame_lon + half_domain,
+        }
+        result = {
+            "sid": sid, "frame_idx": frame_idx,
+            "datetime": frame_info["datetime"], "source": actual_source,
+            "frame": png,
+            "bounds": bounds,
+        }
 
     else:
         # HURSAT path (default)
@@ -2448,6 +2513,25 @@ def global_health():
         "earthdata_method": "token" if EARTHDATA_TOKEN else ("user/pass" if EARTHDATA_USER else "none"),
         "mergir_available": bool(EARTHDATA_TOKEN or EARTHDATA_USER),
         "gridsat_available": True,
+    }
+
+
+@router.get("/ir/heal-status")
+def ir_heal_status():
+    """
+    Diagnostic endpoint showing cache heal activity.
+    Check this after loading a storm to verify healing is working.
+    Example: GET /global/ir/heal-status
+    """
+    with _heal_lock:
+        in_progress = list(_heal_in_progress)
+    return {
+        "attempted": _heal_stats["attempted"],
+        "succeeded": _heal_stats["succeeded"],
+        "failed": _heal_stats["failed"],
+        "skipped": _heal_stats["skipped"],
+        "in_progress": in_progress,
+        "history": _heal_stats["history"][-20:],  # Last 20 events
     }
 
 

@@ -2433,7 +2433,7 @@ function displayIROnMap(data) {
             centerLat = selectedStorm.lmi_lat || 20;
             centerLon = selectedStorm.lmi_lon || -60;
         }
-        var halfDeg = (data.source === 'mergir' || data.source === 'gridsat') ? 5.0 : 6.0;
+        var halfDeg = 7.0;  // Consistent domain size across all sources
         bounds = {
             south: centerLat - halfDeg,
             north: centerLat + halfDeg,
@@ -2647,13 +2647,32 @@ function updateIRCacheStatus() {
     if (!irMeta) return;
     var cached = irFrames.filter(function (f) { return f; }).length;
     var total = irMeta.n_frames;
-    var sourceLabel = irMeta.source === 'mergir' ? 'MergIR 4km' : (irMeta.source === 'gridsat' ? 'GridSat-B1' : 'HURSAT-B1');
+    var sourceLabels = {
+        'mergir': 'MergIR 4km',
+        'gridsat': 'GridSat 8km',
+        'hursat': 'HURSAT-B1'
+    };
+    var plannedLabel = sourceLabels[irMeta.source] || irMeta.source;
     var statusEl = document.getElementById('ir-status');
-    if (cached < total) {
-        statusEl.textContent = cached + ' / ' + total + ' frames loaded (' + sourceLabel + ')';
-    } else {
-        statusEl.textContent = total + ' frames (' + sourceLabel + ')';
+
+    // Count how many cached frames came from a fallback source
+    var fallbackCount = 0;
+    if (irMeta.source) {
+        irFrames.forEach(function (f) {
+            if (f && f.source && f.source !== irMeta.source) fallbackCount++;
+        });
     }
+
+    var text;
+    if (cached < total) {
+        text = cached + ' / ' + total + ' frames loaded (' + plannedLabel + ')';
+    } else {
+        text = total + ' frames (' + plannedLabel + ')';
+    }
+    if (fallbackCount > 0) {
+        text += ' · ' + fallbackCount + ' fallback';
+    }
+    statusEl.textContent = text;
 }
 
 var irPrefetchQueue = [];    // Frames queued for prefetch
@@ -2865,6 +2884,25 @@ function updateIRMeta(idx) {
     }
     var slider = document.getElementById('ir-slider');
     if (slider) slider.value = idx;
+
+    // Update per-frame source badge (shows actual source, not planned source)
+    var frameData = irFrames[idx];
+    var badgeEl = document.getElementById('ir-source-badge');
+    if (badgeEl && frameData && frameData.source) {
+        var actualSource = frameData.source;
+        var plannedSource = irMeta ? irMeta.source : '';
+        var sourceLabels = {
+            'mergir': 'MergIR 4km',
+            'gridsat': 'GridSat 8km',
+            'hursat': 'HURSAT-B1'
+        };
+        var label = sourceLabels[actualSource] || actualSource;
+        // If this frame fell back to a different source, indicate it
+        var isFallback = plannedSource && actualSource !== plannedSource;
+        badgeEl.textContent = label;
+        badgeEl.className = 'panel-badge ir-source-' + actualSource +
+            (isFallback ? ' ir-source-fallback' : '');
+    }
 
     // Sync intensity chart marker to current IR time
     updateIntensityMarker(dtText);

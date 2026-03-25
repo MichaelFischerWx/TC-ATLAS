@@ -205,6 +205,30 @@ input[type="range"].ga-range::-moz-range-thumb {
     border-radius: 10px;
     margin-left: 8px;
     vertical-align: middle;
+    transition: color 0.2s, background 0.2s;
+}
+
+/* Per-frame IR source badges */
+.ir-source-mergir {
+    color: #00d4ff;
+    background: rgba(0,212,255,0.1);
+}
+.ir-source-gridsat {
+    color: #facc15;
+    background: rgba(250,204,21,0.1);
+}
+.ir-source-hursat {
+    color: #a78bfa;
+    background: rgba(167,139,250,0.1);
+}
+/* Pulsing border when frame fell back from preferred source */
+.ir-source-fallback {
+    border: 1px solid currentColor;
+    animation: fallback-pulse 2s ease-in-out 1;
+}
+@keyframes fallback-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
 }
 
 /* ── Toast ────────────────────────────────────────────────── */
