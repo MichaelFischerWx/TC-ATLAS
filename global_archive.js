@@ -617,7 +617,7 @@ function selectStorm(storm) {
                     // Also prefetch the first frame so display is near-instant
                     var source = meta.source || 'hursat';
                     var frameUrl;
-                    var irCacheVer = 'v3';
+                    var irCacheVer = 'v4';  // bumped: 20°×20° domain (was 14°×14°)
                     if ((source === 'mergir' || source === 'gridsat') && meta.frames && meta.frames[0]) {
                         var fi = meta.frames[0];
                         frameUrl = API_BASE + '/global/ir/frame?sid=' + encodeURIComponent(storm.sid) +
@@ -2766,7 +2766,7 @@ function fetchIRFrameSingle(idx, callback) {
 
     // Cache version — bump when rendering changes (domain size, colormap, etc.)
     // to force browsers to discard stale cached frames.
-    var irCacheVer = 'v3';
+    var irCacheVer = 'v4';  // bumped: 20°×20° domain (was 14°×14°)
 
     if ((source === 'mergir' || source === 'gridsat') && irMeta.frames && irMeta.frames[idx]) {
         var fi = irMeta.frames[idx];

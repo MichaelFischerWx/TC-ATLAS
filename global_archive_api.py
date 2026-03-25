@@ -70,7 +70,7 @@ def _get_gcs_bucket():
 
 
 # Bump this version whenever rendering logic changes to invalidate stale cache.
-_GCS_CACHE_VERSION = "v3"  # v3: 14° domain (up from 10°), consistent bounds across all sources
+_GCS_CACHE_VERSION = "v4"  # v4: 20° domain (up from 14°), consistent bounds across all sources
 
 
 def _gcs_cache_key(sid: str, frame_idx: int, source: str = "ir") -> str:
@@ -134,7 +134,7 @@ GRIDSAT_THREDDS = "https://www.ncei.noaa.gov/thredds/dodsC/cdr/gridsat"
 GRIDSAT_DIRECT = "https://www.ncei.noaa.gov/data/geostationary-ir-channel-brightness-temperature-gridsat-b1/access"
 GRIDSAT_START_YEAR = 1980
 GRIDSAT_END_YEAR = 2024  # Updates paused since March 2024
-GRIDSAT_HALF_DOMAIN = 7.0  # 7° each direction = 14°×14° box — fills Leaflet panel
+GRIDSAT_HALF_DOMAIN = 10.0  # 10° each direction = 20°×20° box — fills Leaflet panel
 
 # Earthdata credentials for MergIR access (set via env vars on Render)
 # Option 1: Bearer token (EARTHDATA_TOKEN) — preferred
@@ -1030,7 +1030,7 @@ _mergir_meta_cache: OrderedDict = OrderedDict()
 _MERGIR_META_CACHE_MAX = 100
 
 # Box size for storm-centered subset (degrees from center)
-MERGIR_HALF_DOMAIN = 7.0  # 7° each direction = 14°×14° box — fills Leaflet panel
+MERGIR_HALF_DOMAIN = 10.0  # 10° each direction = 20°×20° box — fills Leaflet panel
 
 
 def _mergir_opendap_file_url(dt: datetime) -> str:
@@ -1356,7 +1356,7 @@ def _load_mergir_subset_inner(target_dt, center_lat, center_lon, xr, timedelta):
 
                     # Validate subset covers at least ~50% of requested domain.
                     # OPeNDAP subsets can sometimes return truncated data.
-                    expected_range = 2 * MERGIR_HALF_DOMAIN  # 10°
+                    expected_range = 2 * MERGIR_HALF_DOMAIN  # 20°
                     actual_lat_range = actual_bounds["north"] - actual_bounds["south"]
                     actual_lon_range = actual_bounds["east"] - actual_bounds["west"]
                     if actual_lat_range < expected_range * 0.5 or actual_lon_range < expected_range * 0.5:
@@ -2210,7 +2210,8 @@ def ir_frame(
         }
         result = {
             "sid": sid, "frame_idx": frame_idx,
-            "datetime": frame_info["datetime"], "source": actual_source,
+            "datetime": frame_dt.isoformat() if frame_dt else "",
+            "source": actual_source,
             "frame": png,
             "bounds": bounds,
         }
