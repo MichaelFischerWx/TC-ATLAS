@@ -69,9 +69,13 @@ def _get_gcs_bucket():
         return None
 
 
+# Bump this version whenever rendering logic changes to invalidate stale cache.
+_GCS_CACHE_VERSION = "v2"
+
+
 def _gcs_cache_key(sid: str, frame_idx: int, source: str = "ir") -> str:
     """Build GCS object path for a cached frame."""
-    return f"{source}/{sid}/{frame_idx}.json"
+    return f"{_GCS_CACHE_VERSION}/{source}/{sid}/{frame_idx}.json"
 
 
 def _gcs_get_frame(sid: str, frame_idx: int, source: str = "ir") -> dict | None:
