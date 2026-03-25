@@ -1266,14 +1266,18 @@ def _nrl_37color_rgb(v37: np.ndarray, h37: np.ndarray) -> np.ndarray:
 
         PCT37 = 2.18 * V37 − 1.18 * H37   (Grody 1993)
 
-        Red   = clamp((285 − PCT37) / 100,  0, 1)   (inverted: low PCT = high red)
-        Green = clamp((V37 − 155) / 125,    0, 1)
-        Blue  = clamp((H37 − 145) / 135,    0, 1)
+        Red   = clamp((285 − PCT37) / 100,  0, 1)
+        Green = clamp((V37 − 155) / 125,    0, 1) ** 1.6
+        Blue  = clamp((H37 − 145) / 135,    0, 1) ** 1.1
+
+    Differential gamma (G^1.6 > B^1.1) compresses green faster than blue
+    for low-TB scenes, so B > G in deep convection → pink/magenta tones.
+    At high TBs (rain) both approach 1.0 → cyan is preserved.
 
     Resulting colour scheme (Jiang 2018 Table 1, Fig. 1):
         - Dark green:  clear ocean  (PCT37 ~270-300, V37 low, H37 very low)
         - Cyan / teal: warm rain, shallow convection (high V37 & H37)
-        - Pink/salmon: deep convection with ice (low PCT37, moderate V37/H37)
+        - Pink/magenta: deep convection with ice (low PCT37)
         - Red:         intense ice scattering (very low PCT37)
 
     Parameters
@@ -1288,10 +1292,10 @@ def _nrl_37color_rgb(v37: np.ndarray, h37: np.ndarray) -> np.ndarray:
 
     # R ← inverted PCT37: high red for ice scattering (low PCT37)
     r = np.clip((285.0 - pct37) / 100.0, 0.0, 1.0)
-    # G ← V37: high green for warm emission
-    g = np.clip((v37 - 155.0) / 125.0, 0.0, 1.0)
-    # B ← H37: high blue for depolarized (rainy/icy) scenes
-    b = np.clip((h37 - 145.0) / 135.0, 0.0, 1.0)
+    # G ← V37 with gamma 1.6: compresses mid-range → less green in convection
+    g = np.clip((v37 - 155.0) / 125.0, 0.0, 1.0) ** 1.6
+    # B ← H37 with gamma 1.1: lighter compression → B > G in convection → pink
+    b = np.clip((h37 - 145.0) / 135.0, 0.0, 1.0) ** 1.1
 
     # Mask invalid pixels
     invalid = ~(np.isfinite(v37) & np.isfinite(h37) & (v37 > 0) & (h37 > 0))

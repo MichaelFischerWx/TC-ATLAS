@@ -23,6 +23,7 @@ Data sources:
 import base64
 import gc
 import io
+import json
 import logging
 import os
 import re
@@ -40,6 +41,73 @@ from fastapi.responses import JSONResponse
 from PIL import Image
 
 logger = logging.getLogger("global_archive")
+
+# ── GCS Frame Cache ──────────────────────────────────────────
+# Caches rendered IR frames (JSON responses) in Google Cloud Storage
+# so subsequent requests serve instantly without OPeNDAP fetches.
+# Set GCS_IR_CACHE_BUCKET env var to enable (e.g. "tc-atlas-ir-cache").
+GCS_IR_CACHE_BUCKET = os.environ.get("GCS_IR_CACHE_BUCKET", "")
+_gcs_client = None
+_gcs_bucket = None
+
+
+def _get_gcs_bucket():
+    """Lazy-init GCS client and bucket. Returns None if not configured."""
+    global _gcs_client, _gcs_bucket
+    if not GCS_IR_CACHE_BUCKET:
+        return None
+    if _gcs_bucket is not None:
+        return _gcs_bucket
+    try:
+        from google.cloud import storage
+        _gcs_client = storage.Client()
+        _gcs_bucket = _gcs_client.bucket(GCS_IR_CACHE_BUCKET)
+        logger.info(f"GCS IR cache enabled: gs://{GCS_IR_CACHE_BUCKET}")
+        return _gcs_bucket
+    except Exception as e:
+        logger.warning(f"GCS IR cache init failed: {e}")
+        return None
+
+
+def _gcs_cache_key(sid: str, frame_idx: int, source: str = "ir") -> str:
+    """Build GCS object path for a cached frame."""
+    return f"{source}/{sid}/{frame_idx}.json"
+
+
+def _gcs_get_frame(sid: str, frame_idx: int, source: str = "ir") -> dict | None:
+    """Try to read a cached frame from GCS. Returns parsed dict or None."""
+    bucket = _get_gcs_bucket()
+    if bucket is None:
+        return None
+    key = _gcs_cache_key(sid, frame_idx, source)
+    try:
+        blob = bucket.blob(key)
+        data = blob.download_as_bytes(timeout=5)
+        return json.loads(data)
+    except Exception:
+        return None
+
+
+def _gcs_put_frame(sid: str, frame_idx: int, result: dict, source: str = "ir"):
+    """Write a rendered frame to GCS in a background thread (fire-and-forget)."""
+    bucket = _get_gcs_bucket()
+    if bucket is None:
+        return
+
+    def _upload():
+        key = _gcs_cache_key(sid, frame_idx, source)
+        try:
+            blob = bucket.blob(key)
+            blob.upload_from_string(
+                json.dumps(result, separators=(",", ":")),
+                content_type="application/json",
+                timeout=15,
+            )
+            logger.debug(f"GCS cache PUT: {key}")
+        except Exception as e:
+            logger.debug(f"GCS cache PUT failed: {key}: {e}")
+
+    threading.Thread(target=_upload, daemon=True).start()
 
 router = APIRouter(tags=["global_archive"])
 
@@ -800,7 +868,7 @@ def hursat_frame(
     """Return a rendered IR frame as base64 PNG."""
     cache_key = (sid, frame_idx)
 
-    # Check frame cache
+    # Check in-memory frame cache
     if cache_key in _frame_cache:
         _frame_cache.move_to_end(cache_key)
         return JSONResponse(
@@ -808,6 +876,20 @@ def hursat_frame(
             headers={
                 "Cache-Control": "public, max-age=86400, immutable",
                 "X-Cache": "HIT",
+            },
+        )
+
+    # Check GCS persistent cache
+    gcs_result = _gcs_get_frame(sid, frame_idx, source="hursat")
+    if gcs_result is not None:
+        _frame_cache[cache_key] = gcs_result
+        if len(_frame_cache) > _FRAME_CACHE_MAX:
+            _frame_cache.popitem(last=False)
+        return JSONResponse(
+            gcs_result,
+            headers={
+                "Cache-Control": "public, max-age=86400, immutable",
+                "X-Cache": "GCS-HIT",
             },
         )
 
@@ -854,11 +936,12 @@ def hursat_frame(
     # Attach downsampled Tb grid for hover display
     result["tb_grid"] = _downsample_tb_grid(frame_2d)
 
-    # Cache rendered frame
+    # Cache rendered frame (in-memory + GCS persistent)
     _frame_cache[cache_key] = result
     if len(_frame_cache) > _FRAME_CACHE_MAX:
         _frame_cache.popitem(last=False)
         gc.collect()
+    _gcs_put_frame(sid, frame_idx, result, source="hursat")
 
     return JSONResponse(
         result,
@@ -1682,12 +1765,24 @@ def ir_frame(
     """
     cache_key = (f"ir_{sid}", frame_idx)
 
-    # Check frame cache
+    # Check in-memory frame cache
     if cache_key in _frame_cache:
         _frame_cache.move_to_end(cache_key)
         return JSONResponse(
             _frame_cache[cache_key],
             headers={"Cache-Control": "public, max-age=86400", "X-Cache": "HIT"},
+        )
+
+    # Check GCS persistent cache
+    gcs_result = _gcs_get_frame(sid, frame_idx, source="ir")
+    if gcs_result is not None:
+        # Populate in-memory cache too
+        _frame_cache[cache_key] = gcs_result
+        if len(_frame_cache) > _FRAME_CACHE_MAX:
+            _frame_cache.popitem(last=False)
+        return JSONResponse(
+            gcs_result,
+            headers={"Cache-Control": "public, max-age=86400", "X-Cache": "GCS-HIT"},
         )
 
     # Check what source was determined for this storm
@@ -1816,11 +1911,12 @@ def ir_frame(
     if frame_2d is not None:
         result["tb_grid"] = _downsample_tb_grid(frame_2d)
 
-    # Cache rendered frame
+    # Cache rendered frame (in-memory + GCS persistent)
     _frame_cache[cache_key] = result
     if len(_frame_cache) > _FRAME_CACHE_MAX:
         _frame_cache.popitem(last=False)
         gc.collect()
+    _gcs_put_frame(sid, frame_idx, result, source="ir")
 
     return JSONResponse(
         result,

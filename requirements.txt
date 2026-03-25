@@ -24,5 +24,8 @@ boto3>=1.34
 pyproj>=3.6
 requests>=2.31
 
+# Google Cloud Storage (IR frame cache)
+google-cloud-storage>=2.14
+
 # ASGI
 gunicorn>=21.2
