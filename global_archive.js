@@ -60,6 +60,8 @@ var irOpacity = 0.8;
 var irOpacityLevels = [0.8, 0.6, 0.4, 1.0];
 var irOpacityIdx = 0;
 var irFailedFrames = {};     // Track frames that permanently failed
+var irMetaPrefetchCache = {};  // Pre-fetched IR metadata keyed by SID
+var irFirstFrameCache = {};    // Pre-fetched first frame keyed by SID
 var irFollowStorm = true;    // Lock map view to follow storm center
 var irFollowZoomSet = false; // True after first fitBounds sets the zoom level
 var irCurrentTbGrid = null;  // Downsampled Tb grid for current frame (for hover)
@@ -592,6 +594,40 @@ function selectStorm(storm) {
 
     // Show track on map if available
     showTrackOnBrowserMap(storm.sid);
+
+    // Early IR metadata prefetch — kick off the metadata request now
+    // so it's already cached when the user opens the detail panel.
+    var hasIR = storm.hursat || storm.year >= 1998;
+    if (hasIR && !irMetaPrefetchCache[storm.sid]) {
+        var track = allTracks[storm.sid] || [];
+        var trackP = track.length > 0 ? '&track=' + encodeURIComponent(JSON.stringify(track)) : '';
+        var lonP = storm.lmi_lon != null ? '&storm_lon=' + storm.lmi_lon : '';
+        var prefetchUrl = API_BASE + '/global/ir/meta?sid=' + encodeURIComponent(storm.sid) + trackP + lonP;
+        fetch(prefetchUrl)
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (meta) {
+                if (meta && meta.available && meta.n_frames > 0) {
+                    irMetaPrefetchCache[storm.sid] = meta;
+                    // Also prefetch the first frame so display is near-instant
+                    var source = meta.source || 'hursat';
+                    var frameUrl;
+                    if ((source === 'mergir' || source === 'gridsat') && meta.frames && meta.frames[0]) {
+                        var fi = meta.frames[0];
+                        frameUrl = API_BASE + '/global/ir/frame?sid=' + encodeURIComponent(storm.sid) +
+                            '&frame_idx=0&lat=' + fi.lat + '&lon=' + fi.lon;
+                    } else {
+                        frameUrl = API_BASE + '/global/hursat/frame?sid=' + encodeURIComponent(storm.sid) + '&frame_idx=0';
+                    }
+                    fetch(frameUrl)
+                        .then(function (r) { return r.ok ? r.json() : null; })
+                        .then(function (data) {
+                            if (data) irFirstFrameCache[storm.sid] = data;
+                        })
+                        .catch(function () {});
+                }
+            })
+            .catch(function () {});
+    }
 }
 
 function _showMapStormCard(storm, color, cat) {
@@ -2192,18 +2228,25 @@ function loadHURSAT(storm) {
 
     document.getElementById('ir-status').textContent = 'Checking satellite data...';
 
-    fetch(metaUrl)
-        .then(function (r) {
-            if (!r.ok) throw new Error('IR metadata not available');
-            return r.json();
-        })
-        .catch(function () {
-            return fetch(fallbackUrl).then(function (r) {
-                if (!r.ok) throw new Error('HURSAT metadata not available');
+    // Use prefetched metadata if available (from selectStorm early prefetch)
+    var metaPromise;
+    if (irMetaPrefetchCache[storm.sid]) {
+        metaPromise = Promise.resolve(irMetaPrefetchCache[storm.sid]);
+    } else {
+        metaPromise = fetch(metaUrl)
+            .then(function (r) {
+                if (!r.ok) throw new Error('IR metadata not available');
                 return r.json();
+            })
+            .catch(function () {
+                return fetch(fallbackUrl).then(function (r) {
+                    if (!r.ok) throw new Error('HURSAT metadata not available');
+                    return r.json();
+                });
             });
-        })
-        .then(function (meta) {
+    }
+
+    metaPromise.then(function (meta) {
             if (!meta.available || meta.n_frames === 0) {
                 var reason = meta.reason || 'No satellite frames found';
                 document.getElementById('ir-status').textContent = reason;
@@ -2237,12 +2280,22 @@ function loadHURSAT(storm) {
                 setIRLoadingText('Loading satellite imagery...');
             }
 
-            // Load first frame — this triggers the tarball download on the server
+            // Load first frame — use prefetched data if available
             irFrameIdx = 0;
-            loadIRFrame(0);
+            if (irFirstFrameCache[storm.sid]) {
+                // First frame was already prefetched — display instantly
+                irFrames[0] = irFirstFrameCache[storm.sid];
+                delete irFirstFrameCache[storm.sid]; // Free memory
+                displayIROnMap(irFrames[0]);
+                updateIRMeta(0);
+                var loadingEl2 = document.getElementById('ir-frame-loading');
+                if (loadingEl2) loadingEl2.style.display = 'none';
+                prefetchIRFrames(0);
+            } else {
+                loadIRFrame(0);
+            }
 
-            // Don't start prefetching until the first frame succeeds
-            // (prefetch is triggered by loadIRFrame's callback)
+            // Prefetching is triggered by loadIRFrame's callback (or above)
         })
         .catch(function (err) {
             console.warn('IR load failed:', err);
@@ -2605,9 +2658,9 @@ function updateIRCacheStatus() {
 
 var irPrefetchQueue = [];    // Frames queued for prefetch
 var irPrefetchActive = 0;    // Number of active prefetch requests
-var IR_PREFETCH_BATCH = 6;         // Concurrent prefetch requests (HURSAT)
-var IR_PREFETCH_BATCH_GRIDSAT = 10; // Higher concurrency for GridSat (small subsets, no auth)
-var IR_PREFETCH_BATCH_MERGIR = 8;  // MergIR (Earthdata auth, 4km subsets)
+var IR_PREFETCH_BATCH = 8;          // Concurrent prefetch requests (HURSAT)
+var IR_PREFETCH_BATCH_GRIDSAT = 14; // Higher concurrency for GridSat (small subsets, no auth)
+var IR_PREFETCH_BATCH_MERGIR = 12;  // MergIR (Earthdata auth, 4km subsets)
 var IR_PREFETCH_AHEAD = 20;  // How many frames ahead to prefetch
 
 function setIRLoadingText(msg) {
@@ -2834,22 +2887,26 @@ function startIRPlayback() {
     irPlaying = true;
     document.getElementById('ir-play-btn').innerHTML = '&#9646;&#9646; Pause';
 
+    // Kick a prefetch burst when playback starts so the buffer fills faster
+    prefetchIRFrames(irFrameIdx);
+
     irTimer = setInterval(function () {
         var nextIdx = (irFrameIdx + 1) % irMeta.n_frames;
 
-        // If next frame isn't cached and isn't a known failure, loop back to
-        // the earliest cached frame so the user never sees a loading spinner.
+        // If next frame isn't cached and isn't a known failure, skip forward
+        // to the nearest cached frame so playback never stalls on a spinner.
         if (!irFrames[nextIdx] && !irFailedFrames[nextIdx]) {
-            // Find the first cached frame at or after index 0
-            var loopIdx = -1;
-            for (var i = 0; i < irMeta.n_frames; i++) {
-                if (irFrames[i]) { loopIdx = i; break; }
+            var skipIdx = -1;
+            // Look ahead for the next cached frame (up to full loop)
+            for (var i = 1; i < irMeta.n_frames; i++) {
+                var candidate = (nextIdx + i) % irMeta.n_frames;
+                if (irFrames[candidate]) { skipIdx = candidate; break; }
             }
-            if (loopIdx >= 0 && loopIdx !== irFrameIdx) {
-                irFrameIdx = loopIdx;
-                displayIROnMap(irFrames[loopIdx]);
-                updateIRMeta(loopIdx);
-                // Continue prefetching ahead of where we stopped
+            if (skipIdx >= 0 && skipIdx !== irFrameIdx) {
+                irFrameIdx = skipIdx;
+                displayIROnMap(irFrames[skipIdx]);
+                updateIRMeta(skipIdx);
+                // Continue prefetching ahead of where we were blocked
                 prefetchIRFrames(nextIdx);
                 return;
             }
@@ -4251,6 +4308,10 @@ function showToast(message) {
 
 document.addEventListener('DOMContentLoaded', function () {
     loadData();
+
+    // Warm up the API server on page load — a lightweight health check wakes
+    // the Render instance so it's ready when the user selects a storm.
+    fetch(API_BASE + '/health', { method: 'GET' }).catch(function () {});
 
     // Close any open modal on Escape
     document.addEventListener('keydown', function (e) {
