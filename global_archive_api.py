@@ -234,6 +234,28 @@ _META_CACHE_MAX = 80
 # parallelism while keeping peak memory under ~750 MB (5 × 150 MB).
 _data_load_semaphore = threading.Semaphore(5)
 
+# ── MergIR rate limiter ──────────────────────────────────────────────
+# NASA GES DISC (Earthdata) can throttle or 503 when a single client
+# sustains many parallel OPeNDAP/HTTP requests.  This serialises the
+# pacing so requests are spaced ≥ MERGIR_MIN_INTERVAL apart, without
+# slowing down GridSat or HURSAT fetches which use different servers.
+import time as _time
+
+_mergir_last_request_ts = 0.0
+_mergir_rate_lock = threading.Lock()
+MERGIR_MIN_INTERVAL = 0.5  # seconds between consecutive NASA requests
+
+
+def _mergir_rate_limit():
+    """Block until at least MERGIR_MIN_INTERVAL since the last NASA request."""
+    global _mergir_last_request_ts
+    with _mergir_rate_lock:
+        now = _time.monotonic()
+        elapsed = now - _mergir_last_request_ts
+        if elapsed < MERGIR_MIN_INTERVAL:
+            _time.sleep(MERGIR_MIN_INTERVAL - elapsed)
+        _mergir_last_request_ts = _time.monotonic()
+
 # Persistent HTTP session for NCEI (GridSat) and general downloads.
 # Reusing a session keeps TCP connections alive, avoiding ~200-500ms
 # TCP+TLS handshake overhead per request.
@@ -1172,6 +1194,8 @@ def _load_mergir_subset_inner(target_dt, center_lat, center_lon, xr, timedelta):
         for url_label, url in [("subset", subset_url), ("full", full_url)]:
             tmp = None
             try:
+                # Pace requests to avoid NASA GES DISC throttling / 503s
+                _mergir_rate_limit()
                 logger.info(f"MergIR: downloading {url_label} from {url[:120]}...")
                 resp = session.get(url, timeout=90, allow_redirects=True, stream=True)
 

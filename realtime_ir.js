@@ -85,7 +85,8 @@
     // Global map product state
     var globalProduct = 'eir';       // 'eir' or 'geocolor'
     var gibsVisLayers = [];          // GIBS GeoColor tile layers on main map
-    var latestGIBSTime = null;       // cached latest GIBS time string
+    var latestGIBSTime = null;       // cached latest GIBS time string (oldest satellite — used for animation)
+    var latestGIBSTimes = {};         // per-satellite latest times, e.g. {'GOES-East': '...', 'Himawari': '...'}
 
     // Global map animation state
     var GLOBAL_ANIM_LOOKBACK_H = 4;  // 4-hour lookback for global animation
@@ -823,7 +824,12 @@
     }
 
     /** Create the seamless composite GIBS GridLayer */
-    function createCompositeGIBSLayer(timeStr, opacity) {
+    function createCompositeGIBSLayer(timeStr, opacity, perSatTimes) {
+        // perSatTimes is optional: {'GOES-East': ts, 'GOES-West': ts, 'Himawari': ts}
+        // When provided, each tile uses the freshest time for its assigned satellite.
+        // When absent (e.g. animation frames), all tiles share timeStr.
+        var satTimes = perSatTimes || null;
+
         var CompositeLayer = L.GridLayer.extend({
             options: {
                 tileSize: 256,
@@ -836,6 +842,7 @@
             },
 
             _timeStr: timeStr,
+            _satTimes: satTimes,
 
             createTile: function (coords, done) {
                 var tile = document.createElement('canvas');
@@ -848,10 +855,12 @@
                 var z = coords.z;
                 var y = coords.y;
                 var x = coords.x;
-                var ts = this._timeStr;
+                var layerSatTimes = this._satTimes;
+                var fallbackTs = this._timeStr;
 
                 if (sats.length === 1) {
-                    // Single satellite — load with retry fallback
+                    // Single satellite — use per-satellite time if available
+                    var ts = (layerSatTimes && layerSatTimes[sats[0].name]) || fallbackTs;
                     loadImageWithRetry(sats[0].layerName, ts, z, y, x).then(function (result) {
                         if (result.img) {
                             ctx.drawImage(result.img, 0, 0, size.x, size.y);
@@ -862,6 +871,7 @@
                     // Multiple satellites — composite with alpha blending + retry
                     var promises = [];
                     for (var i = 0; i < sats.length; i++) {
+                        var ts = (layerSatTimes && layerSatTimes[sats[i].name]) || fallbackTs;
                         promises.push(loadImageWithRetry(sats[i].layerName, ts, z, y, x));
                     }
                     Promise.all(promises).then(function (results) {
@@ -882,58 +892,83 @@
         return new CompositeLayer();
     }
 
-    /** Probe GIBS for the latest available time where ALL satellites have data.
-     *  Tests a representative tile from each satellite (GOES-East, GOES-West, Himawari).
-     *  Returns a promise that resolves with the first valid GIBS time string.
-     *  Different satellites can have different processing delays, so we need a time
-     *  where all three return 200. */
-    function findLatestGIBSTime() {
-        var offsets = [20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120];
+    /** Probe GIBS for the latest available time for EACH satellite independently.
+     *  GOES data typically arrives within 15-20 min; Himawari can lag 60-120 min
+     *  due to the JMA → LANCE → GIBS pipeline.  By finding per-satellite times we
+     *  avoid penalising GOES freshness for Himawari's slower pipeline.
+     *
+     *  Returns a promise that resolves with:
+     *    { perSat: {'GOES-East': ts, 'GOES-West': ts, 'Himawari': ts},
+     *      oldest: ts }    // oldest across all sats (safe for animation)
+     */
+    function findLatestGIBSTimes() {
+        var offsets = [15, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120];
         // Representative tiles for each satellite (z3 tiles within each footprint)
-        var testTiles = [
-            { layer: GIBS_IR_LAYERS['GOES-East'], suffix: '/GoogleMapsCompatible_Level6/3/3/2.png' },
-            { layer: GIBS_IR_LAYERS['GOES-West'], suffix: '/GoogleMapsCompatible_Level6/3/3/0.png' },
-            { layer: GIBS_IR_LAYERS['Himawari'],  suffix: '/GoogleMapsCompatible_Level6/3/3/6.png' }
+        var satellites = [
+            { name: 'GOES-East', layer: GIBS_IR_LAYERS['GOES-East'], suffix: '/GoogleMapsCompatible_Level6/3/3/2.png' },
+            { name: 'GOES-West', layer: GIBS_IR_LAYERS['GOES-West'], suffix: '/GoogleMapsCompatible_Level6/3/3/0.png' },
+            { name: 'Himawari',  layer: GIBS_IR_LAYERS['Himawari'],  suffix: '/GoogleMapsCompatible_Level6/3/3/6.png' }
         ];
 
-        function tryOffset(idx) {
-            if (idx >= offsets.length) {
-                // All failed — fall back to 90 min ago as best guess
-                var fb = roundToGIBSInterval(new Date());
-                fb = new Date(fb.getTime() - 90 * 60 * 1000);
-                return Promise.resolve(toGIBSTime(fb));
-            }
-            var dt = roundToGIBSInterval(new Date());
-            dt = new Date(dt.getTime() - offsets[idx] * 60 * 1000);
-            var ts = toGIBSTime(dt);
-
-            // Check ALL satellites at this time
-            var checks = testTiles.map(function (t) {
-                var url = GIBS_BASE + '/' + t.layer + '/default/' + ts + t.suffix;
+        function findTimeForSat(sat) {
+            function tryOffset(idx) {
+                if (idx >= offsets.length) {
+                    // All failed — fall back to 90 min ago
+                    var fb = roundToGIBSInterval(new Date());
+                    fb = new Date(fb.getTime() - 90 * 60 * 1000);
+                    return Promise.resolve(toGIBSTime(fb));
+                }
+                var dt = roundToGIBSInterval(new Date());
+                dt = new Date(dt.getTime() - offsets[idx] * 60 * 1000);
+                var ts = toGIBSTime(dt);
+                var url = GIBS_BASE + '/' + sat.layer + '/default/' + ts + sat.suffix;
                 return fetch(url).then(function (r) {
-                    return r.ok;
+                    if (r.ok) return ts;
+                    return tryOffset(idx + 1);
                 }).catch(function () {
-                    return false;
+                    return tryOffset(idx + 1);
                 });
-            });
-
-            return Promise.all(checks).then(function (results) {
-                var allOk = results.every(function (ok) { return ok; });
-                if (allOk) return ts;
-                return tryOffset(idx + 1);
-            });
+            }
+            return tryOffset(0);
         }
 
-        return tryOffset(0);
+        return Promise.all(satellites.map(function (sat) {
+            return findTimeForSat(sat).then(function (ts) {
+                return { name: sat.name, time: ts };
+            });
+        })).then(function (results) {
+            var perSat = {};
+            var oldestMs = Infinity;
+            for (var i = 0; i < results.length; i++) {
+                perSat[results[i].name] = results[i].time;
+                var ms = new Date(results[i].time).getTime();
+                if (ms < oldestMs) oldestMs = ms;
+            }
+            var oldest = toGIBSTime(new Date(oldestMs));
+            return { perSat: perSat, oldest: oldest };
+        });
     }
 
-    /** Add the seamless composite GIBS IR layer to the map */
+    /** Legacy wrapper — returns the oldest satellite time (for animation compatibility) */
+    function findLatestGIBSTime() {
+        return findLatestGIBSTimes().then(function (result) {
+            latestGIBSTimes = result.perSat;
+            return result.oldest;
+        });
+    }
+
+    /** Add the seamless composite GIBS IR layer to the map.
+     *  Uses per-satellite times so GOES tiles show the freshest data (~15-20 min)
+     *  while Himawari tiles use their own latest (may be 60-120 min behind). */
     function addGIBSOverlay(targetMap, opacity) {
-        findLatestGIBSTime().then(function (timeStr) {
-            latestGIBSTime = timeStr;
-            var lyr = createCompositeGIBSLayer(timeStr, opacity || 0.65);
+        findLatestGIBSTimes().then(function (result) {
+            latestGIBSTimes = result.perSat;
+            latestGIBSTime = result.oldest;  // animation fallback
+            var lyr = createCompositeGIBSLayer(result.oldest, opacity || 0.65, result.perSat);
             lyr.addTo(targetMap);
             gibsIRLayers = [lyr];
+            console.log('GIBS per-satellite times:', JSON.stringify(result.perSat),
+                        '| oldest (animation):', result.oldest);
         });
         return []; // layers added asynchronously — gibsIRLayers updated in callback
     }
@@ -987,7 +1022,9 @@
         } else {
             removeGIBSOverlay(map, gibsVisLayers);
             gibsVisLayers = [];
-            var irLyr = createCompositeGIBSLayer(timeStr, 0.65);
+            // Use per-satellite times for static IR layer (fresher GOES tiles)
+            var perSat = (Object.keys(latestGIBSTimes).length > 0) ? latestGIBSTimes : null;
+            var irLyr = createCompositeGIBSLayer(timeStr, 0.65, perSat);
             irLyr.addTo(map);
             gibsIRLayers = [irLyr];
         }
@@ -1217,8 +1254,11 @@
     function buildFrameTimes(centerDt, lookbackHours) {
         var times = [];
         var end = roundToGIBSInterval(centerDt);
-        // Go back 40 min for availability (GIBS has ~30 min processing delay + margin)
-        end = new Date(end.getTime() - 40 * 60 * 1000);
+        // Reduced from 40 min to 15 min: findLatestGIBSTimes already probes actual
+        // availability, so the extra margin only needs to cover the 10-min GIBS
+        // rounding interval plus a small buffer.  Per-tile retry (loadImageWithRetry)
+        // handles any remaining gaps by falling back 10/20/30 min automatically.
+        end = new Date(end.getTime() - 15 * 60 * 1000);
         var start = new Date(end.getTime() - lookbackHours * 3600 * 1000);
         var step = 30 * 60 * 1000; // 30-min steps for animation (not every 10 min — too many frames)
         for (var t = start.getTime(); t <= end.getTime(); t += step) {
@@ -1388,14 +1428,15 @@
                 stopBtn.addEventListener('click', function () {
                     if (globalAnimFrameLayers.length === 0) return;
                     cleanupGlobalAnimation();
-                    // Restore static single-frame layer
+                    // Restore static single-frame layer (with per-satellite times for IR)
                     if (latestGIBSTime) {
                         if (globalProduct === 'geocolor') {
                             var visLyr = createCompositeGIBSLayerVis(latestGIBSTime, 0.75);
                             visLyr.addTo(map);
                             gibsVisLayers = [visLyr];
                         } else {
-                            var irLyr = createCompositeGIBSLayer(latestGIBSTime, 0.65);
+                            var perSat = (Object.keys(latestGIBSTimes).length > 0) ? latestGIBSTimes : null;
+                            var irLyr = createCompositeGIBSLayer(latestGIBSTime, 0.65, perSat);
                             irLyr.addTo(map);
                             gibsIRLayers = [irLyr];
                         }
