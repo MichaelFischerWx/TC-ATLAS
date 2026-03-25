@@ -453,8 +453,11 @@ function openSidePanel(caseData, fromQuickSelect) {
                         '<label style="font-size:10px;color:#9ca3af;">Product</label>' +
                         '<select id="mw-product-select" onchange="loadMicrowaveOverpass()" style="font-size:10px;padding:4px 6px;border:1px solid rgba(255,255,255,0.1);border-radius:4px;background:var(--navy);color:var(--text);font-family:\'JetBrains Mono\',monospace;">' +
                             '<option value="89pct">89 GHz PCT</option>' +
-                            '<option value="37h">37 GHz H-pol</option>' +
+                            '<option value="89v">89 GHz V-pol</option>' +
+                            '<option value="89h">89 GHz H-pol</option>' +
                             '<option value="37color">37 GHz Color</option>' +
+                            '<option value="37v">37 GHz V-pol</option>' +
+                            '<option value="37h">37 GHz H-pol</option>' +
                         '</select>' +
                         '<span id="mw-status" style="font-size:9px;color:#64748b;"></span>' +
                         '<span style="font-size:8px;color:#64748b;margin-left:auto;">Data: <a href="https://rammb-data.cira.colostate.edu/tcprimed/" target="_blank" rel="noopener" style="color:#94a3b8;text-decoration:none;border-bottom:1px dotted #64748b;">TC-PRIMED</a> (NOAA/CSU)</span>' +
@@ -14589,8 +14592,14 @@ function loadMicrowaveOverpass() {
     var product = (prodSel && prodSel.value) || '89pct';
 
     // Check if the sensor supports this product
-    if ((product === '37h' || product === '37color') && !op.has_37) {
+    var is37 = (product === '37h' || product === '37v' || product === '37color');
+    var is89 = (product === '89pct' || product === '89v' || product === '89h');
+    if (is37 && !op.has_37) {
         if (status) status.textContent = op.sensor + ' does not have 37 GHz';
+        return;
+    }
+    if (is89 && !op.has_89) {
+        if (status) status.textContent = op.sensor + ' does not have 89 GHz';
         return;
     }
 
@@ -14765,7 +14774,11 @@ function _createStandaloneMWPlanView() {
             [0.615, '#ADFF2F'], [0.700, '#00CC44'], [0.745, '#00DDCC'],
             [0.825, '#0066FF'], [0.875, '#0000CC'], [1.000, '#8888FF']
         ];
-        var cbarTitle = product === '89pct' ? 'PCT (K)' : '37H (K)';
+        var _CBAR_TITLES = {
+            '89pct': 'PCT (K)', '89v': '89V TB (K)', '89h': '89H TB (K)',
+            '37h': '37H TB (K)', '37v': '37V TB (K)', '37color': '37 Color'
+        };
+        var cbarTitle = _CBAR_TITLES[product] || 'TB (K)';
         var ext2 = _mwStormGrid.extent_km || 250;
         var mwTrace = {
             z: _mwStormGrid.z, x: _mwStormGrid.x_axis, y: _mwStormGrid.y_axis,
@@ -14845,7 +14858,11 @@ function _applyMWPlanViewOverlay() {
 
     var prodSel = document.getElementById('mw-product-select');
     var product = (prodSel && prodSel.value) || '89pct';
-    var cbarTitle = product === '89pct' ? 'PCT (K)' : '37H (K)';
+    var _CBAR_TITLES2 = {
+        '89pct': 'PCT (K)', '89v': '89V TB (K)', '89h': '89H TB (K)',
+        '37h': '37H TB (K)', '37v': '37V TB (K)', '37color': '37 Color'
+    };
+    var cbarTitle = _CBAR_TITLES2[product] || 'TB (K)';
 
     var mwTrace = {
         z: _mwStormGrid.z,
@@ -14939,7 +14956,11 @@ function _showMWMapColorbar(product, vmin, vmax) {
             '</div>';
     } else {
         // Single-channel: show a gradient colorbar
-        var label = product === '89pct' ? '89 GHz PCT' : '37 GHz H';
+        var _CBAR_LABELS = {
+            '89pct': '89 GHz PCT', '89v': '89 GHz V-pol', '89h': '89 GHz H-pol',
+            '37h': '37 GHz H-pol', '37v': '37 GHz V-pol', '37color': '37 GHz Color'
+        };
+        var label = _CBAR_LABELS[product] || 'TB (K)';
         // NRL colormap gradient
         var gradientStops = 'linear-gradient(to right, #303030, #606060, #800000, #FF0000, #FF8C00, #FFD700, #ADFF2F, #00CC44, #00DDCC, #0066FF, #0000CC, #8888FF)';
         el.innerHTML =

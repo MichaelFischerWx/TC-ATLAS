@@ -602,8 +602,9 @@ async def get_microwave_data(
     import matplotlib.pyplot as plt
     import matplotlib.colors as mcolors
 
-    if product not in ("89pct", "37h", "37color"):
-        raise HTTPException(400, "product must be '89pct', '37h', or '37color'")
+    _VALID_PRODUCTS = ("89pct", "89v", "89h", "37h", "37v", "37color")
+    if product not in _VALID_PRODUCTS:
+        raise HTTPException(400, f"product must be one of {_VALID_PRODUCTS}")
 
     # Validate S3 key
     if not s3_key.startswith(TCPRIMED_PREFIX) or not s3_key.endswith(".nc"):
@@ -945,8 +946,8 @@ async def get_microwave_data(
             "89pct": (NRL_89GHZ_PLOTLY_COLORSCALE, NRL_VMIN, NRL_VMAX),
             "89v":   (NRL_89GHZ_PLOTLY_COLORSCALE, 150, 300),
             "89h":   (NRL_89GHZ_PLOTLY_COLORSCALE, 100, 290),
-            "37h":   (NRL_89GHZ_PLOTLY_COLORSCALE, 130, 300),
-            "37v":   (NRL_89GHZ_PLOTLY_COLORSCALE, 150, 300),
+            "37h":   (NRL_37GHZ_PLOTLY_COLORSCALE, NRL_37_VMIN, NRL_37_VMAX),
+            "37v":   (NRL_37GHZ_PLOTLY_COLORSCALE, NRL_37_VMIN, NRL_37_VMAX),
         }
         if product == "37color":
             # 37color is RGB — no single-channel colorscale
@@ -1255,22 +1256,32 @@ def _compute_89h_swath(ds_bt, ds_geo, sensor: str) -> dict:
 
 def _nrl_37color_rgb(v37: np.ndarray, h37: np.ndarray) -> np.ndarray:
     """
-    NRL 37 GHz false-color composite per Lee et al. (2002) as documented
-    in Kieper and Jiang (2012, MWR, Eq. 3):
+    NRL 37 GHz false-color composite inspired by Lee et al. (2002) and
+    Kieper & Jiang (2012), with a depolarization-based blue channel to
+    match the NRL-Monterey visual appearance.
 
         PCT37 = 2.20 * V37 − 1.20 * H37   (Cecil et al. 2002)
 
-        Red   = clamp(−0.05 * PCT37 + 14,   0, 1)
-        Green = clamp( 0.0083 * H37 − 1.5,  0, 1)
-        Blue  = clamp( 0.0071 * V37 − 1.1429, 0, 1)
+        Red   = clamp((280 − PCT37) / 80,          0, 1)
+        Green = clamp((H37 − 130) / 170,           0, 1)
+        Blue  = clamp(1 − (V37 − H37) / 60,        0, 1)
 
     Physical interpretation:
-        - Red is HIGH when PCT37 is LOW (ice scattering → deep convection pink)
-        - Green is HIGH when H37 is HIGH (warm rain / land)
-        - Blue is HIGH when V37 is HIGH (warm emission)
-        - Pink:  deep convection (high R, low G, low B)
-        - Cyan:  rain / low-level water cloud (low R, high G, high B)
-        - Green/orange: ocean / other (variable R, low G, moderate B)
+        - Red is HIGH when PCT37 is LOW (ice scattering → deep convection)
+        - Green is proportional to H37 emission (moderate over ocean,
+          high in warm rain / land)
+        - Blue is HIGH when polarization difference (V37 − H37) is SMALL,
+          i.e. depolarization from rain/ice.  Over clear ocean the large
+          V-H difference keeps blue low → green dominates → dark green.
+          In rain (depolarized) blue rises → cyan.
+          In deep convection blue is high + red high → pink/magenta.
+
+    Resulting colour scheme:
+        - Dark green:  clear ocean
+        - Cyan / teal: warm rain, shallow convection
+        - Pink:        deep convection (moderate ice scattering)
+        - Magenta:     intense ice scattering
+        - White:       extreme cases (all channels high)
 
     Parameters
     ----------
@@ -1282,9 +1293,9 @@ def _nrl_37color_rgb(v37: np.ndarray, h37: np.ndarray) -> np.ndarray:
     """
     pct37 = 2.20 * v37 - 1.20 * h37
 
-    r = np.clip(-0.05 * pct37 + 14.0, 0.0, 1.0)
-    g = np.clip(0.0083 * h37 - 1.5, 0.0, 1.0)
-    b = np.clip(0.0071 * v37 - 1.1429, 0.0, 1.0)
+    r = np.clip((280.0 - pct37) / 80.0, 0.0, 1.0)
+    g = np.clip((h37 - 130.0) / 170.0, 0.0, 1.0)
+    b = np.clip(1.0 - (v37 - h37) / 60.0, 0.0, 1.0)
 
     # Mask invalid pixels
     invalid = ~(np.isfinite(v37) & np.isfinite(h37) & (v37 > 0) & (h37 > 0))
@@ -1775,6 +1786,68 @@ NRL_VMIN = 105
 NRL_VMAX = 305
 
 
+# ---------------------------------------------------------------------------
+# NRL-Monterey 37 GHz colormap (for V-pol and H-pol brightness temperatures)
+# ---------------------------------------------------------------------------
+# Sampled from the NRL-Monterey SSMIS 37V/37H product colorbars.
+# Range: 125 K → 300 K
+# Progression: magenta/pink → blue → cyan → green → yellow-green → yellow
+#              → orange → red/brown → dark red
+# Grey tones are used for land masking (handled separately).
+
+def _nrl_37ghz_cmap():
+    """
+    Build a matplotlib colormap mimicking the NRL-Monterey 37 GHz V/H-pol
+    display.  Anchor points sampled from reference NRL imagery:
+        125 K  magenta/pink     (coldest — deep ice scattering)
+        150 K  blue
+        175 K  cyan
+        200 K  green
+        220 K  yellow-green
+        240 K  yellow
+        255 K  orange
+        275 K  red-brown
+        300 K  dark brown/maroon (warm land / ocean background)
+    """
+    import matplotlib.colors as mcolors
+    # Normalised positions for vmin=125, vmax=300
+    anchors = [
+        (0.000, "#CC00CC"),   # 125 K — magenta
+        (0.086, "#9900CC"),   # 140 K — blue-magenta
+        (0.143, "#3333FF"),   # 150 K — blue
+        (0.229, "#0099FF"),   # 165 K — light blue
+        (0.286, "#00CCCC"),   # 175 K — cyan
+        (0.371, "#00CC66"),   # 190 K — green-cyan
+        (0.429, "#33CC33"),   # 200 K — green
+        (0.514, "#99CC00"),   # 215 K — yellow-green
+        (0.543, "#CCCC00"),   # 220 K — yellow-green
+        (0.600, "#FFD700"),   # 230 K — gold/yellow
+        (0.657, "#FFAA00"),   # 240 K — orange-yellow
+        (0.714, "#FF8800"),   # 250 K — orange
+        (0.743, "#FF6600"),   # 255 K — dark orange
+        (0.829, "#CC3300"),   # 270 K — red-brown
+        (0.886, "#993300"),   # 280 K — brown
+        (1.000, "#663300"),   # 300 K — dark brown
+    ]
+    positions = [a[0] for a in anchors]
+    colors = [a[1] for a in anchors]
+    return mcolors.LinearSegmentedColormap.from_list("nrl37ghz", list(zip(positions, colors)), N=256)
+
+
+# Plotly-compatible colorscale for 37 GHz V/H-pol products
+NRL_37GHZ_PLOTLY_COLORSCALE = [
+    [0.000, "#CC00CC"], [0.086, "#9900CC"], [0.143, "#3333FF"],
+    [0.229, "#0099FF"], [0.286, "#00CCCC"], [0.371, "#00CC66"],
+    [0.429, "#33CC33"], [0.514, "#99CC00"], [0.543, "#CCCC00"],
+    [0.600, "#FFD700"], [0.657, "#FFAA00"], [0.714, "#FF8800"],
+    [0.743, "#FF6600"], [0.829, "#CC3300"], [0.886, "#993300"],
+    [1.000, "#663300"],
+]
+
+NRL_37_VMIN = 125
+NRL_37_VMAX = 300
+
+
 def _render_product_image(data_dict: dict, product: str) -> str:
     """
     Render the gridded product data as a transparent PNG (base64-encoded)
@@ -1818,10 +1891,14 @@ def _render_product_image(data_dict: dict, product: str) -> str:
         "89pct": (NRL_VMIN, NRL_VMAX),
         "89v":   (150, 300),
         "89h":   (100, 290),
-        "37h":   (130, 300),
-        "37v":   (150, 300),
+        "37h":   (NRL_37_VMIN, NRL_37_VMAX),
+        "37v":   (NRL_37_VMIN, NRL_37_VMAX),
     }
-    cmap = _nrl_89ghz_cmap()
+    # Use dedicated 37 GHz colormap for 37V/37H products
+    if product in ("37h", "37v"):
+        cmap = _nrl_37ghz_cmap()
+    else:
+        cmap = _nrl_89ghz_cmap()
     vmin, vmax = _CBAR_RANGES.get(product, (NRL_VMIN, NRL_VMAX))
 
     # Create figure with transparent background
@@ -1874,31 +1951,37 @@ async def get_colorbar(
     import matplotlib.colors as mcolors
 
     if product == "37color":
-        # Build a synthetic 1-D gradient bar using the Lee et al. (2002)
-        # / Kieper & Jiang (2012) formulas.  We sweep PCT37 from 170→310 K
-        # while keeping V37 and H37 at "typical" ocean-like values that are
-        # consistent with each PCT37 value.  For a rough physical mapping we
-        # assume pol-ratio (V-H)/V ≈ 0.07 → H37 ≈ 0.93*V37, then solve
-        # PCT37 = 2.20*V37 − 1.20*H37 = V37*(2.20 − 1.20*0.93) = 1.084*V37
-        # → V37 = PCT37 / 1.084, H37 = 0.93*V37.
-        pct_range = np.linspace(170, 310, 256)
-        v37_bar = pct_range / 1.084
-        h37_bar = 0.93 * v37_bar
+        # Build a synthetic 1-D gradient bar that sweeps through the three
+        # key scene types in the 37 GHz color composite:
+        #   Left:   deep convection (pink/magenta) — low PCT37, low pol-diff
+        #   Centre: warm rain (cyan/teal)          — high PCT37, low pol-diff
+        #   Right:  clear ocean (dark green)        — high PCT37, high pol-diff
+        #
+        # We parameterize V37 and H37 along this gradient using physical
+        # scene archetypes.
+        n = 256
+        t = np.linspace(0, 1, n)
+        # Segment 1: t=0→0.5  convection→rain (V37 rises, H37 stays close)
+        # Segment 2: t=0.5→1  rain→ocean (V37 moderate, H37 drops → pol rises)
+        v37_bar = np.where(t < 0.5,
+                           165 + (255 - 165) * (t / 0.5),          # 165→255
+                           255 + (220 - 255) * ((t - 0.5) / 0.5))  # 255→220
+        h37_bar = np.where(t < 0.5,
+                           160 + (245 - 160) * (t / 0.5),          # 160→245
+                           245 + (175 - 245) * ((t - 0.5) / 0.5))  # 245→175
         rgb_1d = _nrl_37color_rgb(v37_bar, h37_bar)          # (256, 3) uint8
         rgb_bar = rgb_1d[np.newaxis, :, :].astype(np.float64) / 255.0  # (1, 256, 3)
 
         fig, ax = plt.subplots(figsize=(3.5, 0.5))
-        ax.imshow(rgb_bar, aspect="auto", extent=[170, 310, 0, 1])
+        ax.imshow(rgb_bar, aspect="auto", extent=[0, 1, 0, 1])
         ax.set_yticks([])
-        ax.set_xlabel("PCT37 (K)", fontsize=7, color="white", labelpad=2)
-        ax.tick_params(axis="x", colors="white", labelsize=6)
-        ax.set_xticks([180, 200, 220, 240, 260, 280, 300])
-        # Physical annotations
-        ax.text(185, 1.15, "Ice", fontsize=6, color="white", ha="center", va="bottom")
-        ax.text(230, 1.15, "Rain", fontsize=6, color="white", ha="center", va="bottom")
-        ax.text(265, 1.15, "Ocean", fontsize=6, color="white", ha="center", va="bottom")
-        ax.text(295, 1.15, "Land", fontsize=6, color="white", ha="center", va="bottom")
-        ax.set_title("37 GHz Color (Lee et al. 2002)", fontsize=7, color="white", pad=8)
+        ax.set_xlabel("")
+        ax.set_xticks([])
+        # Physical annotations — positioned along the gradient
+        ax.text(0.08, 1.15, "Ice", fontsize=6, color="white", ha="center", va="bottom")
+        ax.text(0.35, 1.15, "Rain", fontsize=6, color="white", ha="center", va="bottom")
+        ax.text(0.65, 1.15, "Ocean", fontsize=6, color="white", ha="center", va="bottom")
+        ax.set_title("37 GHz Color Composite", fontsize=7, color="white", pad=8)
         fig.patch.set_facecolor("none")
         for spine in ax.spines.values():
             spine.set_edgecolor("white")
@@ -1910,17 +1993,21 @@ async def get_colorbar(
         b64 = base64.b64encode(buf.read()).decode("ascii")
         return JSONResponse({"image_b64": b64, "product": product, "label": "37 GHz Color Composite"})
 
+    # For 37V/37H, use our custom NRL 37 GHz colormap; others use NRL 89 GHz
     _CBAR_DEFS = {
-        "89pct": (80, 280, "RdYlBu", "89 GHz PCT (K)"),
-        "89v":   (150, 300, "RdYlBu", "89 GHz V-pol TB (K)"),
-        "89h":   (100, 290, "RdYlBu", "89 GHz H-pol TB (K)"),
-        "37h":   (130, 280, "RdYlBu_r", "37 GHz H-pol TB (K)"),
-        "37v":   (150, 300, "RdYlBu_r", "37 GHz V-pol TB (K)"),
+        "89pct": (NRL_VMIN, NRL_VMAX, "nrl89", "89 GHz PCT (K)"),
+        "89v":   (150, 300, "nrl89", "89 GHz V-pol TB (K)"),
+        "89h":   (100, 290, "nrl89", "89 GHz H-pol TB (K)"),
+        "37h":   (NRL_37_VMIN, NRL_37_VMAX, "nrl37", "37 GHz H-pol TB (K)"),
+        "37v":   (NRL_37_VMIN, NRL_37_VMAX, "nrl37", "37 GHz V-pol TB (K)"),
     }
     if product not in _CBAR_DEFS:
         raise HTTPException(400, f"Unknown product '{product}'")
-    vmin, vmax, cmap_name, label = _CBAR_DEFS[product]
-    cmap = plt.cm.get_cmap(cmap_name)
+    vmin, vmax, cmap_key, label = _CBAR_DEFS[product]
+    if cmap_key == "nrl37":
+        cmap = _nrl_37ghz_cmap()
+    else:
+        cmap = _nrl_89ghz_cmap()
 
     fig, ax = plt.subplots(figsize=(4, 0.4))
     norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
