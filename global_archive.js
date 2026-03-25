@@ -2686,7 +2686,7 @@ var irPrefetchQueue = [];    // Frames queued for prefetch
 var irPrefetchActive = 0;    // Number of active prefetch requests
 var IR_PREFETCH_BATCH = 8;          // Concurrent prefetch requests (HURSAT)
 var IR_PREFETCH_BATCH_GRIDSAT = 14; // Higher concurrency for GridSat (small subsets, no auth)
-var IR_PREFETCH_BATCH_MERGIR = 3;   // MergIR: reduced from 4 to ease NASA GES DISC rate
+var IR_PREFETCH_BATCH_MERGIR = 6;   // MergIR: server-side rate limiter handles pacing
                                     // limiting (server also paces with 0.5s min interval)
 var IR_PREFETCH_AHEAD = 20;  // How many frames ahead to prefetch
 

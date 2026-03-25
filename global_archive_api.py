@@ -243,7 +243,7 @@ import time as _time
 
 _mergir_last_request_ts = 0.0
 _mergir_rate_lock = threading.Lock()
-MERGIR_MIN_INTERVAL = 0.5  # seconds between consecutive NASA requests
+MERGIR_MIN_INTERVAL = 0.15  # seconds between consecutive NASA requests (was 0.5)
 
 
 def _mergir_rate_limit():
