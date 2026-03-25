@@ -11,8 +11,8 @@ Products:
     - 37 GHz H-pol brightness temperature:
       Available from: GMI, SSMIS, AMSR2, SSM/I, TMI
     - 37 GHz Color Composite (NRL 37color per Lee et al. 2002 / Kieper & Jiang 2012):
-        RGB false-color: R=f(PCT37), G=f(H37), B=f(V37)
-        PCT37 = 2.20 * V37 − 1.20 * H37
+        RGB false-color: R=f(PCT37, inverted), G=f(V37), B=f(H37)
+        PCT37 = 2.18 * V37 − 1.18 * H37  (Grody 1993)
       Available from: GMI, SSMIS, AMSR2, SSM/I, TMI
 
 Data source:
@@ -878,7 +878,7 @@ async def get_microwave_data(
                     if v37_name and h37_name:
                         v37_raw = ds_data[v37_name].values.astype(np.float32)
                         h37_raw = ds_data[h37_name].values.astype(np.float32)
-                        pct37_raw = 2.20 * v37_raw - 1.20 * h37_raw
+                        pct37_raw = 2.18 * v37_raw - 1.18 * h37_raw
                         # Build a single grid from PCT37 for the single-channel Plotly view
                         storm_grid = _build_storm_relative_grid(
                             x_km_raw, y_km_raw, pct37_raw, grid_extent_km=250, grid_res_km=4
@@ -1149,7 +1149,8 @@ def _compute_37h_swath(ds_bt, ds_geo, sensor: str) -> dict:
 
     data = ds_bt[h_name].values.astype(np.float32)
     lats, lons = _get_swath_geolocation(ds_geo)
-    gridded = _regrid_swath(data, lats, lons)
+    # 37 GHz has coarser footprint (~37 km for SSMIS) — use coarser grid
+    gridded = _regrid_swath(data, lats, lons, grid_res_deg=0.05)
     gridded["product_label"] = "37 GHz H-pol TB (K)"
     gridded["stats"] = {
         "min": float(np.nanmin(data[np.isfinite(data)])) if np.any(np.isfinite(data)) else None,
@@ -1181,7 +1182,8 @@ def _compute_37v_swath(ds_bt, ds_geo, sensor: str) -> dict:
         raise ValueError(f"Cannot find 37 GHz V-pol for sensor {sensor}")
     data = ds_bt[v_name].values.astype(np.float32)
     lats, lons = _get_swath_geolocation(ds_geo)
-    gridded = _regrid_swath(data, lats, lons)
+    # 37 GHz has coarser footprint (~37 km for SSMIS) — use coarser grid
+    gridded = _regrid_swath(data, lats, lons, grid_res_deg=0.05)
     gridded["product_label"] = "37 GHz V-pol TB (K)"
     gridded["stats"] = {
         "min": float(np.nanmin(data[np.isfinite(data)])) if np.any(np.isfinite(data)) else None,
@@ -1256,46 +1258,40 @@ def _compute_89h_swath(ds_bt, ds_geo, sensor: str) -> dict:
 
 def _nrl_37color_rgb(v37: np.ndarray, h37: np.ndarray) -> np.ndarray:
     """
-    NRL 37 GHz false-color composite inspired by Lee et al. (2002) and
-    Kieper & Jiang (2012), with a depolarization-based blue channel to
-    match the NRL-Monterey visual appearance.
+    NRL 37 GHz false-color composite per Jiang et al. (2018, JGR) and
+    Lee et al. (2002, Earth Interactions).
 
-        PCT37 = 2.20 * V37 − 1.20 * H37   (Cecil et al. 2002)
+    From Jiang (2018) p. 5511: "PCT37, V37, and H37 values are displayed
+    into RGB guns, respectively."
 
-        Red   = clamp((280 − PCT37) / 80,          0, 1)
-        Green = clamp((H37 − 130) / 170,           0, 1)
-        Blue  = clamp(1 − (V37 − H37) / 60,        0, 1)
+        PCT37 = 2.18 * V37 − 1.18 * H37   (Grody 1993)
 
-    Physical interpretation:
-        - Red is HIGH when PCT37 is LOW (ice scattering → deep convection)
-        - Green is proportional to H37 emission (moderate over ocean,
-          high in warm rain / land)
-        - Blue is HIGH when polarization difference (V37 − H37) is SMALL,
-          i.e. depolarization from rain/ice.  Over clear ocean the large
-          V-H difference keeps blue low → green dominates → dark green.
-          In rain (depolarized) blue rises → cyan.
-          In deep convection blue is high + red high → pink/magenta.
+        Red   = clamp((285 − PCT37) / 100,  0, 1)   (inverted: low PCT = high red)
+        Green = clamp((V37 − 155) / 125,    0, 1)
+        Blue  = clamp((H37 − 145) / 135,    0, 1)
 
-    Resulting colour scheme:
-        - Dark green:  clear ocean
-        - Cyan / teal: warm rain, shallow convection
-        - Pink:        deep convection (moderate ice scattering)
-        - Magenta:     intense ice scattering
-        - White:       extreme cases (all channels high)
+    Resulting colour scheme (Jiang 2018 Table 1, Fig. 1):
+        - Dark green:  clear ocean  (PCT37 ~270-300, V37 low, H37 very low)
+        - Cyan / teal: warm rain, shallow convection (high V37 & H37)
+        - Pink/salmon: deep convection with ice (low PCT37, moderate V37/H37)
+        - Red:         intense ice scattering (very low PCT37)
 
     Parameters
     ----------
-    v37, h37 : 2-D float arrays (same shape), brightness temperatures in K.
+    v37, h37 : float arrays (same shape), brightness temperatures in K.
 
     Returns
     -------
     rgb : uint8 array, shape (*v37.shape, 3)
     """
-    pct37 = 2.20 * v37 - 1.20 * h37
+    pct37 = 2.18 * v37 - 1.18 * h37
 
-    r = np.clip((280.0 - pct37) / 80.0, 0.0, 1.0)
-    g = np.clip((h37 - 130.0) / 170.0, 0.0, 1.0)
-    b = np.clip(1.0 - (v37 - h37) / 60.0, 0.0, 1.0)
+    # R ← inverted PCT37: high red for ice scattering (low PCT37)
+    r = np.clip((285.0 - pct37) / 100.0, 0.0, 1.0)
+    # G ← V37: high green for warm emission
+    g = np.clip((v37 - 155.0) / 125.0, 0.0, 1.0)
+    # B ← H37: high blue for depolarized (rainy/icy) scenes
+    b = np.clip((h37 - 145.0) / 135.0, 0.0, 1.0)
 
     # Mask invalid pixels
     invalid = ~(np.isfinite(v37) & np.isfinite(h37) & (v37 > 0) & (h37 > 0))
@@ -1326,13 +1322,15 @@ def _compute_37color_swath(ds_bt, ds_geo, sensor: str) -> dict:
 
     tb_v = ds_bt[v_name].values.astype(np.float32)
     tb_h = ds_bt[h_name].values.astype(np.float32)
-    pct37 = 2.20 * tb_v - 1.20 * tb_h
+    pct37 = 2.18 * tb_v - 1.18 * tb_h
 
     lats, lons = _get_swath_geolocation(ds_geo)
 
     # Regrid V37 and H37 onto a SINGLE consistent grid (need both for RGB)
+    # 37 GHz has coarser footprint (~37 km for SSMIS) — use coarser grid
     gridded = _regrid_swath_multi(
-        [tb_v, tb_h], lats, lons, channel_names=["v37", "h37"]
+        [tb_v, tb_h], lats, lons, channel_names=["v37", "h37"],
+        grid_res_deg=0.05,
     )
 
     # Apply NRL Lee et al. (2002) formulas
@@ -1372,7 +1370,7 @@ def _compute_37color_interpolated(ds, sensor: str) -> dict:
 
     tb_v = ds[v_name].values.astype(np.float32)
     tb_h = ds[h_name].values.astype(np.float32)
-    pct37 = 2.20 * tb_v - 1.20 * tb_h
+    pct37 = 2.18 * tb_v - 1.18 * tb_h
 
     # Apply NRL formulas
     rgb = _nrl_37color_rgb(tb_v, tb_h)
