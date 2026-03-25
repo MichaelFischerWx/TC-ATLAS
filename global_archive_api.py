@@ -1756,6 +1756,134 @@ def ir_meta(
     )
 
 
+# ---------------------------------------------------------------------------
+# Cache Healing — Opportunistic Upgrade of Fallback Frames
+# ---------------------------------------------------------------------------
+# When a frame was served from a fallback source (e.g. GridSat when MergIR
+# was preferred), subsequent cache hits detect this and spawn a background
+# thread to retry the preferred source.  If the retry succeeds, the in-memory
+# and GCS caches are silently upgraded so future users get the higher-quality
+# frame without any latency penalty.
+#
+# This is safe because:
+#   - The heal runs in a daemon thread (no request latency impact)
+#   - It respects the concurrency semaphore (won't cause OOM)
+#   - Failed retries are silently ignored (fallback frame stays)
+#   - A per-frame lock prevents duplicate heal attempts
+
+_heal_in_progress: set = set()       # set of (sid, frame_idx) currently healing
+_heal_lock = threading.Lock()
+
+
+def _heal_frame_background(sid: str, frame_idx: int, preferred_source: str,
+                           frame_dt: datetime, frame_lat: float, frame_lon: float):
+    """
+    Background worker: retry fetching a frame from the preferred source.
+    If successful, update both in-memory and GCS caches.
+    """
+    heal_key = (sid, frame_idx)
+    try:
+        frame_2d = None
+
+        if preferred_source == "mergir":
+            frame_2d, ir_bounds = _load_mergir_subset(frame_dt, frame_lat, frame_lon)
+            half_domain = MERGIR_HALF_DOMAIN
+            ir_scale = 3
+        elif preferred_source == "gridsat":
+            frame_2d, ir_bounds = _load_gridsat_subset(frame_dt, frame_lat, frame_lon)
+            half_domain = GRIDSAT_HALF_DOMAIN
+            ir_scale = 4
+
+        if frame_2d is None:
+            return  # Preferred source still unavailable — keep fallback
+
+        png = _render_ir_png(frame_2d, vmin=170.0, vmax=310.0, scale=ir_scale)
+        bounds = {
+            "south": frame_lat - half_domain,
+            "north": frame_lat + half_domain,
+            "west": frame_lon - half_domain,
+            "east": frame_lon + half_domain,
+        }
+        result = {
+            "sid": sid, "frame_idx": frame_idx,
+            "datetime": frame_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "source": preferred_source,
+            "frame": png,
+            "bounds": bounds,
+            "tb_grid": _downsample_tb_grid(frame_2d),
+        }
+
+        # Update in-memory cache
+        cache_key = (f"ir_{sid}", frame_idx)
+        _frame_cache[cache_key] = result
+        # Update GCS persistent cache
+        _gcs_put_frame(sid, frame_idx, result, source="ir")
+
+        logger.info(f"[Cache Heal] Upgraded {sid} frame {frame_idx} → {preferred_source}")
+
+    except Exception as e:
+        logger.debug(f"[Cache Heal] Failed for {sid} frame {frame_idx}: {e}")
+    finally:
+        with _heal_lock:
+            _heal_in_progress.discard(heal_key)
+
+
+def _maybe_heal_frame(sid: str, frame_idx: int, cached_result: dict):
+    """
+    Check if a cached frame was served from a fallback source and, if so,
+    spawn a background thread to retry the preferred source.
+    """
+    actual_source = cached_result.get("source", "")
+    meta_key = f"ir_{sid}"
+    meta = _mergir_meta_cache.get(meta_key)
+    if not meta or not meta.get("available"):
+        return
+
+    preferred_source = meta.get("source", "")
+
+    # Nothing to heal if the frame already came from the preferred source
+    if actual_source == preferred_source:
+        return
+
+    # Only heal upgrades (gridsat→mergir, hursat→gridsat, hursat→mergir)
+    _SOURCE_RANK = {"mergir": 0, "gridsat": 1, "hursat": 2}
+    if _SOURCE_RANK.get(actual_source, 99) <= _SOURCE_RANK.get(preferred_source, 99):
+        return
+
+    # Don't duplicate heal attempts
+    heal_key = (sid, frame_idx)
+    with _heal_lock:
+        if heal_key in _heal_in_progress:
+            return
+        _heal_in_progress.add(heal_key)
+
+    # Get frame coordinates from metadata
+    frames = meta.get("frames", [])
+    if frame_idx >= len(frames):
+        with _heal_lock:
+            _heal_in_progress.discard(heal_key)
+        return
+
+    frame_info = frames[frame_idx]
+    frame_lat = frame_info.get("lat")
+    frame_lon = frame_info.get("lon")
+    if frame_lat is None or frame_lon is None:
+        with _heal_lock:
+            _heal_in_progress.discard(heal_key)
+        return
+
+    frame_dt = datetime.fromisoformat(frame_info["datetime"])
+
+    t = threading.Thread(
+        target=_heal_frame_background,
+        args=(sid, frame_idx, preferred_source, frame_dt, frame_lat, frame_lon),
+        daemon=True, name=f"heal-{sid}-{frame_idx}",
+    )
+    t.start()
+    logger.debug(f"[Cache Heal] Spawned heal thread for {sid} frame {frame_idx} "
+                 f"({actual_source} → {preferred_source})")
+
+
 @router.get("/ir/frame")
 def ir_frame(
     sid: str = Query(..., description="IBTrACS storm ID"),
@@ -1772,8 +1900,11 @@ def ir_frame(
     # Check in-memory frame cache
     if cache_key in _frame_cache:
         _frame_cache.move_to_end(cache_key)
+        cached = _frame_cache[cache_key]
+        # Opportunistically heal fallback frames in the background
+        _maybe_heal_frame(sid, frame_idx, cached)
         return JSONResponse(
-            _frame_cache[cache_key],
+            cached,
             headers={"Cache-Control": "public, max-age=86400", "X-Cache": "HIT"},
         )
 
@@ -1784,6 +1915,8 @@ def ir_frame(
         _frame_cache[cache_key] = gcs_result
         if len(_frame_cache) > _FRAME_CACHE_MAX:
             _frame_cache.popitem(last=False)
+        # Opportunistically heal fallback frames in the background
+        _maybe_heal_frame(sid, frame_idx, gcs_result)
         return JSONResponse(
             gcs_result,
             headers={"Cache-Control": "public, max-age=86400", "X-Cache": "GCS-HIT"},
@@ -2061,6 +2194,11 @@ def ir_batch(
         for future in as_completed(futures):
             idx, data = future.result()
             results[str(idx)] = data
+
+    # Opportunistically heal any fallback frames in the background
+    for idx_str, frame_data in results.items():
+        if frame_data is not None:
+            _maybe_heal_frame(sid, int(idx_str), frame_data)
 
     return JSONResponse(
         {"sid": sid, "source": source, "frames": results},
