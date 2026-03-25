@@ -302,6 +302,21 @@
             .platform-grid-bottom { flex-direction: column; }
             .platform-grid-bottom .platform-card { flex: 1 1 auto; }
         }
+
+        /* ── Citation section ────────────────────────────── */
+        .cite-list { display: flex; flex-direction: column; gap: 1rem; max-width: 840px; margin: 0 auto; }
+        .cite-pub { background: var(--navy-mid); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.25rem 1.5rem; }
+        .cite-pub-label { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--cyan); margin-bottom: 0.5rem; }
+        .cite-pub-text { font-size: 0.875rem; line-height: 1.7; color: var(--slate); font-family: 'JetBrains Mono', monospace; word-break: break-word; }
+        .cite-pub-text a { color: var(--blue-light); text-decoration: none; }
+        .cite-pub-text a:hover { text-decoration: underline; }
+        .cite-pub-text em { font-style: italic; }
+        .cite-copy-landing { display: inline-flex; align-items: center; gap: 4px; margin-top: 0.75rem; padding: 4px 12px; font-size: 0.75rem; font-weight: 600; font-family: 'DM Sans', sans-serif; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.12); border-radius: 4px; color: var(--slate); cursor: pointer; transition: all 0.2s; }
+        .cite-copy-landing:hover { background: rgba(46,125,255,0.18); border-color: rgba(46,125,255,0.4); color: #93c5fd; }
+        .cite-copy-landing.copied { background: rgba(52,211,153,0.18); border-color: rgba(52,211,153,0.4); color: #6ee7b7; }
+        .cite-bibtex-landing { display: inline-flex; align-items: center; gap: 6px; padding: 8px 20px; font-size: 0.875rem; font-weight: 700; font-family: 'DM Sans', sans-serif; background: rgba(168,85,247,0.14); border: 1px solid rgba(168,85,247,0.4); border-radius: 6px; color: #c4b5fd; cursor: pointer; transition: all 0.2s; }
+        .cite-bibtex-landing:hover { background: rgba(168,85,247,0.28); border-color: rgba(168,85,247,0.65); }
+        .cite-bibtex-landing.copied { background: rgba(52,211,153,0.18); border-color: rgba(52,211,153,0.4); color: #6ee7b7; }
     </style>
 </head>
 <body>
@@ -320,6 +335,7 @@
                     <li><a href="global_archive.html"><span class="nav-full">Global Archive</span><span class="nav-short">Global</span></a></li>
                     <li><a href="explorer.html?tab=composites"><span class="nav-full">Composites</span><span class="nav-short">Comp.</span></a></li>
                     <li><a href="#about">About</a></li>
+                    <li><a href="#cite">Cite</a></li>
                 </ul>
             </nav>
         </div>
@@ -437,6 +453,39 @@
         </div>
     </section>
 
+    <!-- ── How to Cite ──────────────────────────────────────── -->
+    <section id="cite" class="section-bg">
+        <div class="content-section">
+            <h2 class="section-title">How to <span class="accent">Cite</span></h2>
+            <p class="section-desc">If you use TC-ATLAS or the underlying TC-RADAR dataset in your research, please cite the relevant publications below.</p>
+            <div class="cite-list">
+                <div class="cite-pub">
+                    <div class="cite-pub-label">TC-RADAR Dataset</div>
+                    <p class="cite-pub-text">Fischer, M. S., P. D. Reasor, R. F. Rogers, and J. F. Gamache, 2022: An updated tropical cyclone radar database. <em>Mon. Wea. Rev.</em>, <strong>150</strong>, 2255&ndash;2278, <a href="https://doi.org/10.1175/MWR-D-21-0223.1" target="_blank" rel="noopener">https://doi.org/10.1175/MWR-D-21-0223.1</a>.</p>
+                    <button class="cite-copy-landing" onclick="landingCopy('Fischer, M. S., P. D. Reasor, R. F. Rogers, and J. F. Gamache, 2022: An updated tropical cyclone radar database. Mon. Wea. Rev., 150, 2255\u20132278, https://doi.org/10.1175/MWR-D-21-0223.1.',this)">Copy</button>
+                </div>
+                <div class="cite-pub">
+                    <div class="cite-pub-label">Vortex Tilt &amp; Precipitation Structure</div>
+                    <p class="cite-pub-text">Fischer, M. S., P. D. Reasor, J. P. Dunion, and R. F. Rogers, 2024: An observational analysis of the relationship between tropical cyclone vortex tilt, precipitation structure, and intensity change. <em>Mon. Wea. Rev.</em>, <strong>152</strong>, 203&ndash;225, <a href="https://doi.org/10.1175/MWR-D-23-0089.1" target="_blank" rel="noopener">https://doi.org/10.1175/MWR-D-23-0089.1</a>.</p>
+                    <button class="cite-copy-landing" onclick="landingCopy('Fischer, M. S., P. D. Reasor, J. P. Dunion, and R. F. Rogers, 2024: An observational analysis of the relationship between tropical cyclone vortex tilt, precipitation structure, and intensity change. Mon. Wea. Rev., 152, 203\u2013225, https://doi.org/10.1175/MWR-D-23-0089.1.',this)">Copy</button>
+                </div>
+                <div class="cite-pub">
+                    <div class="cite-pub-label">Anomaly-Based Vortex Diagnostics</div>
+                    <p class="cite-pub-text">Fischer, M. S., P. D. Reasor, J. P. Dunion, and R. F. Rogers, 2025: An anomaly-based framework for evaluating tropical cyclone vortex structure. <em>Mon. Wea. Rev.</em>, <strong>153</strong>, 857&ndash;875, <a href="https://doi.org/10.1175/MWR-D-24-0101.1" target="_blank" rel="noopener">https://doi.org/10.1175/MWR-D-24-0101.1</a>.</p>
+                    <button class="cite-copy-landing" onclick="landingCopy('Fischer, M. S., P. D. Reasor, J. P. Dunion, and R. F. Rogers, 2025: An anomaly-based framework for evaluating tropical cyclone vortex structure. Mon. Wea. Rev., 153, 857\u2013875, https://doi.org/10.1175/MWR-D-24-0101.1.',this)">Copy</button>
+                </div>
+                <div class="cite-pub">
+                    <div class="cite-pub-label">TC-ATLAS Web Tool</div>
+                    <p class="cite-pub-text">TC-ATLAS: Tropical Cyclone Analysis Tool for Live and Archived Structure. Available at <a href="https://michaelfischerwx.github.io/TC-ATLAS/" target="_blank" rel="noopener">https://michaelfischerwx.github.io/TC-ATLAS/</a></p>
+                    <button class="cite-copy-landing" onclick="landingCopy('TC-ATLAS: Tropical Cyclone Analysis Tool for Live and Archived Structure. Available at https://michaelfischerwx.github.io/TC-ATLAS/',this)">Copy</button>
+                </div>
+            </div>
+            <div style="display:flex;justify-content:center;margin-top:1.5rem;">
+                <button class="cite-bibtex-landing" onclick="landingCopyBibtex(this)">&#x1F4CB; Copy All BibTeX</button>
+            </div>
+        </div>
+    </section>
+
     <!-- ── Contact ───────────────────────────────────────── -->
     <section class="contact-section" id="contact">
         <h2 class="section-title" style="color:white;">Get in Touch</h2>
@@ -451,6 +500,36 @@
     <footer>
         <div>Created by Michael S. Fischer &middot; University of Miami</div>
         <div style="margin-top:6px;">Built with assistance from <a href="https://claude.ai" target="_blank" rel="noopener">Claude</a> (Anthropic)</div>
+        <div style="margin-top:12px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.08);font-size:0.72rem;color:#64748b;max-width:700px;margin-left:auto;margin-right:auto;line-height:1.5;">
+            <strong>Disclaimer:</strong> TC-ATLAS is a research visualization platform developed at the University of Miami in collaboration with NOAA&rsquo;s Hurricane Research Division. It is provided for research and educational purposes only and is not intended for operational forecasting or decision-making. Data products are provided as-is without warranty. Real-time products may experience delays or interruptions. The developers assume no liability for the use or interpretation of information presented on this site.
+        </div>
     </footer>
+
+    <script>
+    var _LANDING_BIBTEX = [
+        '@article{Fischer2022TCRadar,\n  author  = {Fischer, Michael S. and Reasor, Paul D. and Rogers, Robert F. and Gamache, John F.},\n  title   = {An updated tropical cyclone radar database},\n  journal = {Monthly Weather Review},\n  year    = {2022},\n  volume  = {150},\n  pages   = {2255--2278},\n  doi     = {10.1175/MWR-D-21-0223.1}\n}',
+        '@article{Fischer2024VortexTilt,\n  author  = {Fischer, Michael S. and Reasor, Paul D. and Dunion, Jason P. and Rogers, Robert F.},\n  title   = {An observational analysis of the relationship between tropical cyclone vortex tilt, precipitation structure, and intensity change},\n  journal = {Monthly Weather Review},\n  year    = {2024},\n  volume  = {152},\n  pages   = {203--225},\n  doi     = {10.1175/MWR-D-23-0089.1}\n}',
+        '@article{Fischer2025AnomalyFramework,\n  author  = {Fischer, Michael S. and Reasor, Paul D. and Dunion, Jason P. and Rogers, Robert F.},\n  title   = {An anomaly-based framework for evaluating tropical cyclone vortex structure},\n  journal = {Monthly Weather Review},\n  year    = {2025},\n  volume  = {153},\n  pages   = {857--875},\n  doi     = {10.1175/MWR-D-24-0101.1}\n}',
+        '@misc{TCATLAS,\n  title  = {{TC-ATLAS}: Tropical Cyclone Analysis Tool for Live and Archived Structure},\n  author = {Fischer, Michael S.},\n  year   = {2024},\n  url    = {https://michaelfischerwx.github.io/TC-ATLAS/}\n}'
+    ].join('\n\n');
+
+    function landingCopy(text, btn) {
+        navigator.clipboard.writeText(text).then(function() {
+            var orig = btn.textContent;
+            btn.textContent = '\u2713 Copied';
+            btn.classList.add('copied');
+            setTimeout(function() { btn.textContent = orig; btn.classList.remove('copied'); }, 2000);
+        });
+    }
+
+    function landingCopyBibtex(btn) {
+        navigator.clipboard.writeText(_LANDING_BIBTEX).then(function() {
+            var orig = btn.textContent;
+            btn.textContent = '\u2713 Copied!';
+            btn.classList.add('copied');
+            setTimeout(function() { btn.textContent = orig; btn.classList.remove('copied'); }, 2000);
+        });
+    }
+    </script>
 </body>
 </html>
