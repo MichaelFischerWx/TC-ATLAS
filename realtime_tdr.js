@@ -159,13 +159,26 @@
             '<div>' + msg + '</div></div>';
     }
 
+    // ── Fetch with retry (handles Cloud Run cold-start 502/503) ──
+    function fetchWithRetry(url, opts, retries, delay) {
+        retries = retries || 3;
+        delay = delay || 2000;
+        return fetch(url, opts).then(function (r) {
+            if ((r.status === 502 || r.status === 503) && retries > 0) {
+                return new Promise(function (resolve) { setTimeout(resolve, delay); })
+                    .then(function () { return fetchWithRetry(url, opts, retries - 1, delay * 1.5); });
+            }
+            return r;
+        });
+    }
+
     // ── Load mission list ────────────────────────────────────────
     function loadMissions() {
         var sel = document.getElementById('rt-mission-select');
         sel.innerHTML = '<option value="">Loading missions…</option>';
         sel.disabled = true;
 
-        fetch(API_BASE + RT_PREFIX + '/missions')
+        fetchWithRetry(API_BASE + RT_PREFIX + '/missions')
             .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
             .then(function (json) {
                 sel.innerHTML = '<option value="">Select a mission…</option>';
@@ -197,7 +210,7 @@
         sel.disabled = true;
         goBtn.disabled = true;
 
-        fetch(API_BASE + RT_PREFIX + '/files?mission=' + encodeURIComponent(mission))
+        fetchWithRetry(API_BASE + RT_PREFIX + '/files?mission=' + encodeURIComponent(mission))
             .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
             .then(function (json) {
                 sel.innerHTML = '<option value="">Select an analysis…</option>';
@@ -303,7 +316,7 @@
 
     // ── Fetch and display metadata ───────────────────────────────
     function rtFetchMeta(fileUrl) {
-        fetch(API_BASE + RT_PREFIX + '/data?file_url=' + encodeURIComponent(fileUrl) + '&variable=' + DEFAULT_RT_VAR + '&level_km=2')
+        fetchWithRetry(API_BASE + RT_PREFIX + '/data?file_url=' + encodeURIComponent(fileUrl) + '&variable=' + DEFAULT_RT_VAR + '&level_km=2')
             .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
             .then(function (json) {
                 var m = json.case_meta || {};
@@ -2076,7 +2089,7 @@
             var btn = document.getElementById('rt-sonde-btn');
             if (btn) btn.textContent = '\uD83E\uDE82 Loading\u2026';
 
-            fetch(API_BASE + RT_PREFIX + '/dropsondes?file_url=' + encodeURIComponent(_currentFileUrl))
+            fetchWithRetry(API_BASE + RT_PREFIX + '/dropsondes?file_url=' + encodeURIComponent(_currentFileUrl))
                 .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
                 .then(function (json) {
                     _rtSondeData = json;
