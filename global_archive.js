@@ -2806,7 +2806,11 @@ function fetchIRFrameSingle(idx, callback) {
             // Fallback: try the other endpoint
             var fallbackUrl;
             if (source === 'hursat') {
-                fallbackUrl = API_BASE + '/global/ir/frame?sid=' + encodeURIComponent(selectedStorm.sid) + '&frame_idx=' + idx + '&_v=' + irCacheVer;
+                // HURSAT failed — try the unified /ir/frame with lat/lon so the
+                // server can attempt MergIR → GridSat cascade.
+                var fiFallback = (irMeta && irMeta.frames) ? irMeta.frames[idx] : null;
+                var latParam = fiFallback ? ('&lat=' + fiFallback.lat + '&lon=' + fiFallback.lon) : '';
+                fallbackUrl = API_BASE + '/global/ir/frame?sid=' + encodeURIComponent(selectedStorm.sid) + '&frame_idx=' + idx + latParam + '&_v=' + irCacheVer;
             } else {
                 // For mergir/gridsat, fall back to HURSAT legacy endpoint
                 fallbackUrl = API_BASE + '/global/hursat/frame?sid=' + encodeURIComponent(selectedStorm.sid) + '&frame_idx=' + idx + '&_v=' + irCacheVer;

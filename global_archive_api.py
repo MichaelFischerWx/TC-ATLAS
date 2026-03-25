@@ -2102,26 +2102,61 @@ def ir_frame(
             headers={"Cache-Control": "public, max-age=86400", "X-Cache": "GCS-HIT"},
         )
 
-    # Check what source was determined for this storm
+    # Check what source was determined for this storm.
+    # If the server's meta cache is empty (e.g. fresh container restart, or
+    # meta served from browser HTTP cache), infer the source from the storm
+    # year and whether lat/lon were provided.  Without this, every frame
+    # falls back to HURSAT after a container restart even though MergIR is
+    # available and the client sent lat/lon.
     meta_key = f"ir_{sid}"
     meta = _mergir_meta_cache.get(meta_key)
-    source = meta.get("source", "hursat") if meta else "hursat"
+    source = meta.get("source", "hursat") if meta else None
 
     year = _parse_sid_year(sid)
 
-    if source in ("mergir", "gridsat") and meta and meta.get("available"):
-        # MergIR/GridSat path: need lat/lon for the specific frame
-        frames = meta.get("frames", [])
-        if frame_idx >= len(frames):
-            raise HTTPException(status_code=404, detail=f"Frame {frame_idx} out of range")
+    if source is None:
+        # Meta cache miss — infer source from year + credentials + params
+        _earthdata_configured = bool(EARTHDATA_TOKEN or EARTHDATA_USER)
+        if year >= MERGIR_START_YEAR and _earthdata_configured and lat is not None and lon is not None:
+            source = "mergir"
+            logger.info(f"ir_frame: meta cache miss for {sid}, inferred source=mergir from year={year} + lat/lon")
+        elif GRIDSAT_START_YEAR <= year <= GRIDSAT_END_YEAR and lat is not None and lon is not None:
+            source = "gridsat"
+            logger.info(f"ir_frame: meta cache miss for {sid}, inferred source=gridsat from year={year} + lat/lon")
+        else:
+            source = "hursat"
 
-        frame_info = frames[frame_idx]
-        frame_lat = lat or frame_info.get("lat")
-        frame_lon = lon or frame_info.get("lon")
-        frame_dt = datetime.fromisoformat(frame_info["datetime"])
+    if source in ("mergir", "gridsat") and (lat is not None and lon is not None):
+        # MergIR/GridSat path: need lat/lon for the specific frame.
+        # When meta cache is available, use it for frame coordinates and datetime.
+        # When meta is missing (container restart), fall back to client-provided
+        # lat/lon and derive datetime from HURSAT frame list.
+        frame_lat = lat
+        frame_lon = lon
+        frame_dt = None
 
-        if frame_lat is None or frame_lon is None:
-            raise HTTPException(status_code=400, detail="lat/lon required for MergIR/GridSat")
+        if meta and meta.get("available"):
+            frames = meta.get("frames", [])
+            if frame_idx < len(frames):
+                frame_info = frames[frame_idx]
+                frame_lat = lat or frame_info.get("lat")
+                frame_lon = lon or frame_info.get("lon")
+                frame_dt = datetime.fromisoformat(frame_info["datetime"])
+
+        # If we don't have frame_dt from meta, try to get it from HURSAT frame list
+        if frame_dt is None:
+            try:
+                hursat_frames = _get_extracted_frames(sid, storm_lon=lon or 0.0)
+                if hursat_frames and frame_idx < len(hursat_frames):
+                    dt_str = hursat_frames[frame_idx][0]
+                    frame_dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00").split("+")[0])
+            except Exception:
+                pass
+
+        if frame_dt is None:
+            # Can't determine frame time — fall back to HURSAT path
+            logger.warning(f"ir_frame: no frame datetime for {sid} frame {frame_idx}, falling back to HURSAT")
+            source = "hursat"
 
         # Try primary source, then cascade to alternatives on failure.
         # Priority: MergIR → GridSat → HURSAT (for 2000+ storms)
@@ -2160,7 +2195,7 @@ def ir_frame(
         if frame_2d is None:
             raise HTTPException(
                 status_code=502,
-                detail=f"No IR data available from any source for {frame_info['datetime']}",
+                detail=f"No IR data available from any source for {sid} frame {frame_idx} (dt={frame_dt})",
             )
 
         # Build result — all sources use consistent center ± half_domain bounds
