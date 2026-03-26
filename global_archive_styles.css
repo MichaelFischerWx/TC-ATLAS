@@ -681,10 +681,22 @@ input[type="range"].ga-range::-moz-range-thumb {
 .ir-map-playback {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 6px;
 }
 .ir-map-playback .ir-slider {
     flex: 1;
+}
+.ir-map-options {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 5px;
+    flex-wrap: wrap;
+}
+.ir-step-btn {
+    font-size: 0.65rem;
+    padding: 2px 6px;
+    line-height: 1;
 }
 .ir-opacity-btn {
     font-size: 0.68rem;
@@ -729,11 +741,15 @@ input[type="range"].ga-range::-moz-range-thumb {
 }
 
 /* IR brightness temperature colorbar */
-.ir-colorbar-wrap {
-    margin-top: 4px;
+.ir-colorbar-inline {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 80px;
+    margin-left: 4px;
 }
 .ir-colorbar {
-    height: 10px;
+    height: 8px;
     border-radius: 3px;
     border: 1px solid rgba(255,255,255,0.15);
     background: linear-gradient(to right,
@@ -757,8 +773,8 @@ input[type="range"].ga-range::-moz-range-thumb {
 .ir-colorbar-labels {
     display: flex;
     justify-content: space-between;
-    font-size: 0.6rem;
-    color: rgba(180, 195, 220, 0.7);
+    font-size: 0.55rem;
+    color: rgba(180, 195, 220, 0.6);
     padding-top: 1px;
     line-height: 1;
 }

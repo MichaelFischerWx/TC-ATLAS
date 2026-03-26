@@ -3238,6 +3238,20 @@ window.seekIRFrame = function (val) {
     loadIRFrame(irFrameIdx);
 };
 
+window.stepIRFrame = function (delta) {
+    if (!irMeta || !irMeta.frames) return;
+    var maxIdx = irMeta.frames.length - 1;
+    var newIdx = irFrameIdx + delta;
+    if (newIdx < 0) newIdx = 0;
+    if (newIdx > maxIdx) newIdx = maxIdx;
+    if (newIdx !== irFrameIdx) {
+        irFrameIdx = newIdx;
+        var slider = document.getElementById('ir-slider');
+        if (slider) slider.value = newIdx;
+        loadIRFrame(newIdx);
+    }
+};
+
 window.setIRSpeed = function (val) {
     irSpeed = parseInt(val);
     if (irPlaying) {
