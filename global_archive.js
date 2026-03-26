@@ -3057,6 +3057,7 @@ function loadIRFrame(idx) {
 function fetchIRFrameSingle(idx, callback) {
     if (!irMeta || !selectedStorm) return;
     if (irFrames[idx]) { callback(irFrames[idx]); return; }
+    if (irFailedFrames[idx]) { if (callback) callback(null); return; }
 
     // Build URL based on source (MergIR needs lat/lon, use unified endpoint)
     var frameUrl;
@@ -3182,19 +3183,41 @@ function prefetchIRFrames(currentIdx) {
 
 /* fetchIRBatch removed — all sources now use individual parallel fetches via prefetchIRFrames */
 
+var _MONTH_NAMES = ['January','February','March','April','May','June',
+                    'July','August','September','October','November','December'];
+
+function _formatIRDatetime(isoStr) {
+    // Convert "2025-10-21T06:00:00" → "06 UTC 21 October 2025"
+    if (!isoStr) return '';
+    try {
+        var parts = isoStr.split('T');
+        var dateParts = parts[0].split('-');
+        var timeParts = (parts[1] || '00:00:00').split(':');
+        var year = dateParts[0];
+        var month = parseInt(dateParts[1], 10) - 1;
+        var day = parseInt(dateParts[2], 10);
+        var hour = timeParts[0];
+        return hour + ' UTC ' + day + ' ' + _MONTH_NAMES[month] + ' ' + year;
+    } catch (e) {
+        return isoStr;  // Fallback to raw string
+    }
+}
+
 function updateIRMeta(idx) {
     var datetimeEl = document.getElementById('ir-datetime');
     var frameInfoEl = document.getElementById('ir-frame-info');
 
     var dtText = '';
     if (irMeta && irMeta.frames && irMeta.frames[idx]) {
-        dtText = irMeta.frames[idx].datetime || '';
+        var rawDt = irMeta.frames[idx].datetime || '';
         var sat = irMeta.frames[idx].satellite || '';
+        // Format: "06 UTC 21 October 2025"
+        dtText = _formatIRDatetime(rawDt);
         if (datetimeEl) datetimeEl.textContent = dtText + (sat ? '  [' + sat + ']' : '');
         // Log NC file for HURSAT debugging
         var frameData = irFrames[idx];
         if (frameData && frameData.nc_file) {
-            console.log('Frame ' + idx + ': ' + dtText + ' → ' + frameData.nc_file);
+            console.log('Frame ' + idx + ': ' + rawDt + ' → ' + frameData.nc_file);
         }
     }
     if (frameInfoEl) {
