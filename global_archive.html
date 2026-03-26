@@ -362,6 +362,14 @@
                                 <button id="ir-follow-btn" class="ga-btn ga-btn-sm ir-follow-btn active" onclick="toggleIRFollow()" title="View locked to storm center (click to unlock)">
                                     &#8982;
                                 </button>
+                                <button id="ir-track-toggle-btn" class="ga-btn ga-btn-sm ir-follow-btn active" onclick="toggleTrackOverlay()" title="Show/hide track and position marker">
+                                    &#9992;
+                                </button>
+                                <span class="ir-cmap-group" title="Switch IR colormap">
+                                    <button class="ga-btn ga-btn-sm ir-cmap-btn active" data-cmap="enhanced" onclick="switchColormap('enhanced')">IR</button>
+                                    <button class="ga-btn ga-btn-sm ir-cmap-btn" data-cmap="dvorak" onclick="switchColormap('dvorak')">BD</button>
+                                    <button class="ga-btn ga-btn-sm ir-cmap-btn" data-cmap="grayscale" onclick="switchColormap('grayscale')">BW</button>
+                                </span>
                             </div>
                             <div class="ir-colorbar-wrap">
                                 <div class="ir-colorbar"></div>

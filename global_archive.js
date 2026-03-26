@@ -68,9 +68,149 @@ var irMetaPrefetchCache = {};  // Pre-fetched IR metadata keyed by SID
 var irFirstFrameCache = {};    // Pre-fetched first frame keyed by SID
 var irFollowStorm = true;    // Lock map view to follow storm center
 var irFollowZoomSet = false; // True after first fitBounds sets the zoom level
-var irCurrentTbGrid = null;  // Downsampled Tb grid for current frame (for hover)
+var irCurrentTbData = null;  // Uint8Array of raw Tb for current frame (for hover + render)
+var irCurrentTbRows = 0;
+var irCurrentTbCols = 0;
+var irCurrentTbVmin = 170.0;
+var irCurrentTbVmax = 310.0;
 var irCurrentBounds = null;  // L.latLngBounds for current IR overlay
 var irTbTooltip = null;      // L.popup for Tb hover display
+var irSelectedColormap = 'enhanced';  // Current colormap name
+
+// ── Colormap LUTs (256 entries: index 0 = transparent, 1-255 = Tb) ────
+// Each LUT is a Uint8Array of length 256*4 (RGBA).
+// Index 0 → [0,0,0,0] (transparent for invalid pixels)
+// Indices 1-255 map linearly to Tb from TB_VMIN (170K) to TB_VMAX (310K)
+var IR_COLORMAPS = {};
+
+(function buildColormaps() {
+    // Helper: linear interpolation between color stops
+    function buildLUT(stops) {
+        // stops: array of {tb: K, r, g, b} sorted by tb ascending
+        var lut = new Uint8Array(256 * 4);
+        // Index 0 = transparent
+        lut[0] = 0; lut[1] = 0; lut[2] = 0; lut[3] = 0;
+        var vmin = 170.0, vmax = 310.0;
+        for (var i = 1; i <= 255; i++) {
+            var tb = vmin + (i - 1) * (vmax - vmin) / 254.0;
+            // Find bounding stops
+            var lo = stops[0], hi = stops[stops.length - 1];
+            for (var s = 0; s < stops.length - 1; s++) {
+                if (tb >= stops[s].tb && tb <= stops[s + 1].tb) {
+                    lo = stops[s]; hi = stops[s + 1];
+                    break;
+                }
+            }
+            var t = (hi.tb === lo.tb) ? 0 : (tb - lo.tb) / (hi.tb - lo.tb);
+            t = Math.max(0, Math.min(1, t));
+            var idx = i * 4;
+            lut[idx]     = Math.round(lo.r + t * (hi.r - lo.r));
+            lut[idx + 1] = Math.round(lo.g + t * (hi.g - lo.g));
+            lut[idx + 2] = Math.round(lo.b + t * (hi.b - lo.b));
+            lut[idx + 3] = 255;
+        }
+        return lut;
+    }
+
+    // Enhanced IR (warm grays → cool blues → white tops)
+    IR_COLORMAPS['enhanced'] = buildLUT([
+        {tb: 170, r: 255, g: 255, b: 255},  // Very cold cloud tops → white
+        {tb: 195, r: 200, g: 220, b: 255},  // High clouds → light blue
+        {tb: 210, r: 100, g: 150, b: 255},  // Deep convection → blue
+        {tb: 220, r: 50,  g: 80,  b: 200},  // Moderate convection → dark blue
+        {tb: 235, r: 80,  g: 80,  b: 80},   // Mid-level cloud → dark gray
+        {tb: 260, r: 140, g: 140, b: 140},  // Low cloud → medium gray
+        {tb: 280, r: 200, g: 200, b: 200},  // Near surface → light gray
+        {tb: 300, r: 40,  g: 40,  b: 40},   // Warm surface → near black
+        {tb: 310, r: 20,  g: 20,  b: 20}    // Hot surface → black
+    ]);
+
+    // Dvorak Enhanced (BD curve-inspired color scheme)
+    IR_COLORMAPS['dvorak'] = buildLUT([
+        {tb: 170, r: 255, g: 0,   b: 255},  // < -90°C → magenta (overshooting)
+        {tb: 183, r: 255, g: 0,   b: 0},    // -90°C → red
+        {tb: 193, r: 255, g: 128, b: 0},    // -80°C → orange
+        {tb: 203, r: 255, g: 255, b: 0},    // -70°C → yellow
+        {tb: 213, r: 0,   g: 255, b: 0},    // -60°C → green
+        {tb: 223, r: 0,   g: 128, b: 255},  // -50°C → light blue
+        {tb: 233, r: 0,   g: 0,   b: 255},  // -40°C → blue
+        {tb: 243, r: 128, g: 128, b: 128},  // -30°C → gray
+        {tb: 263, r: 180, g: 180, b: 180},  // -10°C → light gray
+        {tb: 283, r: 60,  g: 60,  b: 60},   //  10°C → dark gray
+        {tb: 310, r: 20,  g: 20,  b: 20}    //  37°C → near black
+    ]);
+
+    // Grayscale (standard IR - warm=black, cold=white)
+    IR_COLORMAPS['grayscale'] = buildLUT([
+        {tb: 170, r: 255, g: 255, b: 255},  // Cold → white
+        {tb: 310, r: 0,   g: 0,   b: 0}     // Warm → black
+    ]);
+
+    // Inverted grayscale (warm=white, cold=black)
+    IR_COLORMAPS['inverted'] = buildLUT([
+        {tb: 170, r: 0,   g: 0,   b: 0},    // Cold → black
+        {tb: 310, r: 255, g: 255, b: 255}    // Warm → white
+    ]);
+})();
+
+// Render Tb uint8 data to a data URI PNG using canvas + selected colormap
+var _irRenderCanvas = null;
+function renderTbToDataURI(tbData, rows, cols, colormap) {
+    if (!_irRenderCanvas) {
+        _irRenderCanvas = document.createElement('canvas');
+    }
+    _irRenderCanvas.width = cols;
+    _irRenderCanvas.height = rows;
+    var ctx = _irRenderCanvas.getContext('2d');
+    var imgData = ctx.createImageData(cols, rows);
+    var pixels = imgData.data;
+    var lut = IR_COLORMAPS[colormap] || IR_COLORMAPS['enhanced'];
+    for (var i = 0; i < tbData.length; i++) {
+        var val = tbData[i];
+        var pi = i * 4;
+        var li = val * 4;
+        pixels[pi]     = lut[li];
+        pixels[pi + 1] = lut[li + 1];
+        pixels[pi + 2] = lut[li + 2];
+        pixels[pi + 3] = lut[li + 3];
+    }
+    ctx.putImageData(imgData, 0, 0);
+    return _irRenderCanvas.toDataURL('image/png');
+}
+
+// Decode base64 tb_data from server into Uint8Array
+function decodeTbData(base64str) {
+    var binary = atob(base64str);
+    var arr = new Uint8Array(binary.length);
+    for (var i = 0; i < binary.length; i++) {
+        arr[i] = binary.charCodeAt(i);
+    }
+    return arr;
+}
+
+// Switch colormap and re-render current frame (no server round-trip)
+function switchColormap(name) {
+    if (!IR_COLORMAPS[name]) return;
+    irSelectedColormap = name;
+    // Re-render current frame if we have data
+    if (irCurrentTbData && irCurrentBounds && detailMap) {
+        var dataURI = renderTbToDataURI(irCurrentTbData, irCurrentTbRows, irCurrentTbCols, name);
+        if (irOverlayLayer) {
+            try { detailMap.removeLayer(irOverlayLayer); } catch (e) {}
+        }
+        irOverlayLayer = L.imageOverlay(dataURI, irCurrentBounds, {
+            opacity: irOpacity,
+            interactive: false,
+            className: 'ir-overlay-image'
+        }).addTo(detailMap);
+    }
+    // Update button states
+    var btns = document.querySelectorAll('.ir-cmap-btn');
+    for (var i = 0; i < btns.length; i++) {
+        btns[i].classList.toggle('active', btns[i].getAttribute('data-cmap') === name);
+    }
+}
+window.switchColormap = switchColormap;
 
 // Climatology state
 var climRendered = false;
@@ -635,7 +775,7 @@ function selectStorm(storm) {
                     // Also prefetch the first frame so display is near-instant
                     var source = meta.source || 'hursat';
                     var frameUrl;
-                    var irCacheVer = 'v4';  // bumped: 20°×20° domain (was 14°×14°)
+                    var irCacheVer = 'v5';  // bumped: raw Tb uint8 for client-side colormap rendering
                     if ((source === 'mergir' || source === 'gridsat') && meta.frames && meta.frames[0]) {
                         var fi = meta.frames[0];
                         frameUrl = API_BASE + '/global/ir/frame?sid=' + encodeURIComponent(storm.sid) +
@@ -2370,7 +2510,9 @@ function removeIROverlay() {
     irPositionMarker = null;
     irOverlayVisible = false;
     // Clear Tb hover state
-    irCurrentTbGrid = null;
+    irCurrentTbData = null;
+    irCurrentTbRows = 0;
+    irCurrentTbCols = 0;
     irCurrentBounds = null;
     if (irTbTooltip && detailMap) {
         try { detailMap.closePopup(irTbTooltip); } catch (e) {}
@@ -2485,11 +2627,13 @@ function displayIROnMap(data) {
         console.log('displayIROnMap: skipped (map=' + !!detailMap + ', visible=' + irOverlayVisible + ')');
         return;
     }
-    if (!data || !data.frame) {
+    // Support both new tb_data format and legacy PNG format
+    var hasTbData = data && data.tb_data;
+    var hasFrame = data && data.frame;
+    if (!hasTbData && !hasFrame) {
         console.warn('displayIROnMap: no frame data', data);
         return;
     }
-    console.log('displayIROnMap: rendering frame, bounds=', data.bounds, 'frame length=', data.frame.length);
 
     var bounds = data.bounds;
     if (!bounds) {
@@ -2508,7 +2652,7 @@ function displayIROnMap(data) {
             centerLat = selectedStorm.lmi_lat || 20;
             centerLon = selectedStorm.lmi_lon || -60;
         }
-        var halfDeg = 7.0;  // Consistent domain size across all sources
+        var halfDeg = 10.0;  // Consistent domain size across all sources (20°×20°)
         bounds = {
             south: centerLat - halfDeg,
             north: centerLat + halfDeg,
@@ -2522,19 +2666,35 @@ function displayIROnMap(data) {
         [bounds.north, bounds.east]
     );
 
+    // Build the image data URI — either from raw Tb or legacy PNG
+    var imageURI;
+    if (hasTbData) {
+        var tbArr = decodeTbData(data.tb_data);
+        irCurrentTbData = tbArr;
+        irCurrentTbRows = data.tb_rows;
+        irCurrentTbCols = data.tb_cols;
+        irCurrentTbVmin = data.tb_vmin || 170.0;
+        irCurrentTbVmax = data.tb_vmax || 310.0;
+        imageURI = renderTbToDataURI(tbArr, data.tb_rows, data.tb_cols, irSelectedColormap);
+    } else {
+        // Legacy PNG format (from old cache entries)
+        irCurrentTbData = null;
+        irCurrentTbRows = 0;
+        irCurrentTbCols = 0;
+        imageURI = data.frame;
+    }
+
     // Remove old overlay and create fresh one each frame
-    // (setUrl + setBounds on data URIs can cause stale image rendering)
     if (irOverlayLayer) {
         try { detailMap.removeLayer(irOverlayLayer); } catch (e) {}
     }
-    irOverlayLayer = L.imageOverlay(data.frame, imageBounds, {
+    irOverlayLayer = L.imageOverlay(imageURI, imageBounds, {
         opacity: irOpacity,
         interactive: false,
         className: 'ir-overlay-image'
     }).addTo(detailMap);
 
-    // Store Tb grid and bounds for hover display
-    irCurrentTbGrid = data.tb_grid || null;
+    // Store bounds for hover display
     irCurrentBounds = imageBounds;
 
     // Set up mousemove handler (once) for Tb hover
@@ -2586,7 +2746,7 @@ function _handleIRMouseMove(e) {
     _irHoverThrottled = true;
     setTimeout(function () { _irHoverThrottled = false; }, 50); // ~20 Hz
 
-    if (!irOverlayVisible || !irCurrentTbGrid || !irCurrentBounds || !detailMap) {
+    if (!irOverlayVisible || !irCurrentTbData || !irCurrentBounds || !detailMap) {
         if (irTbTooltip && detailMap && detailMap.hasLayer(irTbTooltip)) {
             detailMap.closePopup(irTbTooltip);
         }
@@ -2606,10 +2766,9 @@ function _handleIRMouseMove(e) {
         return;
     }
 
-    // Map lat/lon to grid indices (grid is north-at-top, row 0 = north)
-    var grid = irCurrentTbGrid;
-    var nRows = grid.length;
-    var nCols = grid[0] ? grid[0].length : 0;
+    // Map lat/lon to grid indices using full-res Tb data (row 0 = north)
+    var nRows = irCurrentTbRows;
+    var nCols = irCurrentTbCols;
     if (nRows === 0 || nCols === 0) return;
 
     var fracY = (b.getNorth() - lat) / (b.getNorth() - b.getSouth());
@@ -2617,18 +2776,22 @@ function _handleIRMouseMove(e) {
     var row = Math.min(Math.floor(fracY * nRows), nRows - 1);
     var col = Math.min(Math.floor(fracX * nCols), nCols - 1);
 
-    var tbK = grid[row] ? grid[row][col] : null;
-    if (tbK == null) {
+    var rawVal = irCurrentTbData[row * nCols + col];
+    if (rawVal === 0) {
+        // Invalid pixel
         if (irTbTooltip && detailMap.hasLayer(irTbTooltip)) {
             detailMap.closePopup(irTbTooltip);
         }
         return;
     }
 
+    // Decode uint8 back to Tb in Kelvin: val 1-255 → TB_VMIN to TB_VMAX
+    var tbK = irCurrentTbVmin + (rawVal - 1) * (irCurrentTbVmax - irCurrentTbVmin) / 254.0;
+    var tbKStr = tbK.toFixed(1);
     var tbC = (tbK - 273.15).toFixed(1);
     var latStr = Math.abs(lat).toFixed(1) + (lat >= 0 ? '°N' : '°S');
     var lngStr = Math.abs(lng).toFixed(1) + (lng >= 0 ? '°E' : '°W');
-    var html = '<span class="ir-tb-val">' + tbK + ' K</span>' +
+    var html = '<span class="ir-tb-val">' + tbKStr + ' K</span>' +
                '<span class="ir-tb-sep"> / </span>' +
                '<span class="ir-tb-val">' + tbC + ' °C</span>' +
                '<span class="ir-tb-sep"> &nbsp; </span>' +
@@ -2835,7 +2998,7 @@ function fetchIRFrameSingle(idx, callback) {
 
     // Cache version — bump when rendering changes (domain size, colormap, etc.)
     // to force browsers to discard stale cached frames.
-    var irCacheVer = 'v4';  // bumped: 20°×20° domain (was 14°×14°)
+    var irCacheVer = 'v5';  // bumped: raw Tb uint8 for client-side colormap rendering
 
     if ((source === 'mergir' || source === 'gridsat') && irMeta.frames && irMeta.frames[idx]) {
         var fi = irMeta.frames[idx];

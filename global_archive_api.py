@@ -70,7 +70,7 @@ def _get_gcs_bucket():
 
 
 # Bump this version whenever rendering logic changes to invalidate stale cache.
-_GCS_CACHE_VERSION = "v4"  # v4: 20° domain (up from 14°), consistent bounds across all sources
+_GCS_CACHE_VERSION = "v5"  # v5: raw Tb uint8 (Path 1 client-side colormap rendering)
 
 
 def _gcs_cache_key(sid: str, frame_idx: int, source: str = "ir") -> str:
@@ -312,6 +312,43 @@ def _get_ncei_session() -> requests.Session:
         _ncei_session = requests.Session()
         _ncei_session.headers.update(_HTTP_HEADERS)
     return _ncei_session
+
+
+# ── IR Tb Encoding ───────────────────────────────────────────
+# Encode Tb as uint8 for compact transfer to client.
+# Client applies colormaps locally, enabling instant colorbar switching.
+# Encoding: 0 = invalid/transparent, 1-255 = Tb from TB_VMIN to TB_VMAX
+# Precision: (310-170)/254 ≈ 0.551 K per step
+TB_VMIN = 170.0  # K
+TB_VMAX = 310.0  # K
+TB_SCALE = 254.0 / (TB_VMAX - TB_VMIN)  # steps per K
+
+
+def _encode_tb_uint8(frame_2d):
+    """
+    Encode a 2D Tb array as a compact base64 uint8 string for client-side rendering.
+
+    Returns dict with:
+      - tb_data: base64-encoded uint8 array (row-major, north-at-top)
+      - tb_rows: number of rows
+      - tb_cols: number of columns
+      - tb_vmin/tb_vmax: Tb range for decoding
+    """
+    arr = np.asarray(frame_2d, dtype=np.float32)
+    mask = ~np.isfinite(arr) | (arr <= 0)
+
+    # Map Tb to 1-255 range (0 = invalid)
+    scaled = np.clip((arr - TB_VMIN) * TB_SCALE + 1, 1, 255)
+    scaled[mask] = 0
+    encoded = scaled.astype(np.uint8)
+
+    return {
+        "tb_data": base64.b64encode(encoded.tobytes()).decode("ascii"),
+        "tb_rows": encoded.shape[0],
+        "tb_cols": encoded.shape[1],
+        "tb_vmin": TB_VMIN,
+        "tb_vmax": TB_VMAX,
+    }
 
 
 # ── IR Colormap (matches radar archive: NOAA-style enhanced) ─
@@ -987,23 +1024,20 @@ def hursat_frame(
     if frame_2d is None:
         raise HTTPException(status_code=500, detail="Failed to read frame data")
 
-    # Render PNG (HURSAT = 8km → scale=4 for crisp pixels)
-    png = _render_ir_png(frame_2d, vmin=170.0, vmax=310.0, scale=4)
+    # Path 1: send raw Tb as uint8 for client-side colormap rendering
+    tb_encoded = _encode_tb_uint8(frame_2d)
 
     result = {
         "sid": sid,
         "frame_idx": frame_idx,
         "datetime": dt_str,
-        "frame": png,
         "nc_file": nc_filename,
+        **tb_encoded,
     }
     if satellite:
         result["satellite"] = satellite
     if bounds:
         result["bounds"] = bounds
-
-    # Attach downsampled Tb grid for hover display
-    result["tb_grid"] = _downsample_tb_grid(frame_2d)
 
     # Cache rendered frame (in-memory + GCS persistent)
     _frame_cache[cache_key] = result
@@ -1903,7 +1937,7 @@ def _heal_frame_background(sid: str, frame_idx: int, preferred_source: str,
                                  reason="preferred source returned no data")
             return  # Preferred source still unavailable — keep fallback
 
-        png = _render_ir_png(frame_2d, vmin=170.0, vmax=310.0, scale=ir_scale)
+        tb_encoded = _encode_tb_uint8(frame_2d)
         bounds = {
             "south": frame_lat - half_domain,
             "north": frame_lat + half_domain,
@@ -1914,9 +1948,8 @@ def _heal_frame_background(sid: str, frame_idx: int, preferred_source: str,
             "sid": sid, "frame_idx": frame_idx,
             "datetime": frame_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
             "source": preferred_source,
-            "frame": png,
             "bounds": bounds,
-            "tb_grid": _downsample_tb_grid(frame_2d),
+            **tb_encoded,
         }
 
         # Update in-memory cache
@@ -2201,7 +2234,8 @@ def ir_frame(
         # Build result — all sources use consistent center ± half_domain bounds
         # so every frame plots the same domain size on the map, regardless of
         # whether it came from MergIR, GridSat, or HURSAT cascade fallback.
-        png = _render_ir_png(frame_2d, vmin=170.0, vmax=310.0, scale=ir_scale)
+        # Path 1: send raw Tb as uint8 for client-side colormap rendering
+        tb_encoded = _encode_tb_uint8(frame_2d)
         bounds = {
             "south": frame_lat - half_domain,
             "north": frame_lat + half_domain,
@@ -2212,8 +2246,8 @@ def ir_frame(
             "sid": sid, "frame_idx": frame_idx,
             "datetime": frame_dt.isoformat() if frame_dt else "",
             "source": actual_source,
-            "frame": png,
             "bounds": bounds,
+            **tb_encoded,
         }
 
     else:
@@ -2237,20 +2271,16 @@ def ir_frame(
         if frame_2d is None:
             raise HTTPException(status_code=500, detail="Failed to read frame data")
 
-        png = _render_ir_png(frame_2d, vmin=170.0, vmax=310.0, scale=4)
+        tb_encoded = _encode_tb_uint8(frame_2d)
         result = {
             "sid": sid, "frame_idx": frame_idx,
             "datetime": dt_str, "source": "hursat",
-            "frame": png,
+            **tb_encoded,
         }
         if satellite:
             result["satellite"] = satellite
         if bounds:
             result["bounds"] = bounds
-
-    # Attach downsampled Tb grid for hover display (~3-5 KB)
-    if frame_2d is not None:
-        result["tb_grid"] = _downsample_tb_grid(frame_2d)
 
     # Cache rendered frame (in-memory + GCS persistent)
     _frame_cache[cache_key] = result
@@ -2339,7 +2369,7 @@ def ir_batch(
                 if frame_2d is None:
                     return (frame_idx, None)
 
-                png = _render_ir_png(frame_2d, vmin=170.0, vmax=310.0, scale=ir_scale)
+                tb_encoded = _encode_tb_uint8(frame_2d)
                 # Consistent bounds (center ± half_domain), not actual data extent
                 bounds = {
                     "south": frame_lat - half_domain,
@@ -2350,9 +2380,8 @@ def ir_batch(
                 result = {
                     "sid": sid, "frame_idx": frame_idx,
                     "datetime": frame_info["datetime"], "source": source,
-                    "frame": png,
                     "bounds": bounds,
-                    "tb_grid": _downsample_tb_grid(frame_2d),
+                    **tb_encoded,
                 }
             else:
                 # HURSAT path
@@ -2368,12 +2397,11 @@ def ir_batch(
                 if frame_2d is None:
                     return (frame_idx, None)
 
-                png = _render_ir_png(frame_2d, vmin=170.0, vmax=310.0, scale=4)
+                tb_encoded = _encode_tb_uint8(frame_2d)
                 result = {
                     "sid": sid, "frame_idx": frame_idx,
                     "datetime": dt_str, "source": "hursat",
-                    "frame": png,
-                    "tb_grid": _downsample_tb_grid(frame_2d),
+                    **tb_encoded,
                 }
                 if satellite:
                     result["satellite"] = satellite
