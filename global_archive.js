@@ -158,16 +158,36 @@ var IR_COLORMAPS = {};
         {tb: 310, r:  10, g:  10, b:  10}   //  37°C → near black
     ]);
 
-    // Grayscale (standard IR - warm=black, cold=white)
-    IR_COLORMAPS['grayscale'] = buildLUT([
-        {f: 0.0, r:   0, g:   0, b:   0},   // Warm → black
-        {f: 1.0, r: 255, g: 255, b: 255}    // Cold → white
-    ]);
-
-    // Inverted grayscale (warm=white, cold=black)
-    IR_COLORMAPS['inverted'] = buildLUT([
-        {f: 0.0, r: 255, g: 255, b: 255},   // Warm → white
-        {f: 1.0, r:   0, g:   0, b:   0}    // Cold → black
+    // Classic Dvorak BD-curve Enhanced B&W — the standard operational grayscale
+    // enhancement with flat-shaded bands and sharp stepped transitions at cold
+    // cloud-top thresholds. Used at NHC, JTWC, CIMSS, and in the ADT.
+    // Thresholds (°C): +9, -30, -41, -53, -63 | -69, -75, -80, -85
+    //                  ←— smooth gray ramp —→  ←— stepped B/W bands —→
+    IR_COLORMAPS['grayscale'] = buildLUTfromTb([
+        // ── Warm side: smooth gray ramp (dark→light) ──
+        {tb: 310, r:   0, g:   0, b:   0},  //  37°C → black (hot surface)
+        {tb: 282, r:  90, g:  90, b:  90},  //  +9°C → medium-dark gray
+        {tb: 243, r: 170, g: 170, b: 170},  // -30°C → medium-light gray
+        {tb: 232, r: 195, g: 195, b: 195},  // -41°C → light gray
+        {tb: 220, r: 220, g: 220, b: 220},  // -53°C → lighter gray
+        // ── Band 1: off-white → WHITE at -63°C ──
+        {tb: 211, r: 255, g: 255, b: 255},  // -62°C → WHITE (approaching threshold)
+        {tb: 210, r: 255, g: 255, b: 255},  // -63°C → WHITE
+        // ── Band 2: BLACK from -63 to -69°C (sharp step!) ──
+        {tb: 209, r:   0, g:   0, b:   0},  // -64°C → BLACK (sharp transition)
+        {tb: 204, r:   0, g:   0, b:   0},  // -69°C → BLACK (flat band)
+        // ── Band 3: MEDIUM GRAY from -69 to -75°C ──
+        {tb: 203, r: 140, g: 140, b: 140},  // -70°C → MEDIUM GRAY (sharp step)
+        {tb: 198, r: 140, g: 140, b: 140},  // -75°C → MEDIUM GRAY (flat band)
+        // ── Band 4: WHITE from -75 to -80°C ──
+        {tb: 197, r: 255, g: 255, b: 255},  // -76°C → WHITE (sharp step)
+        {tb: 193, r: 255, g: 255, b: 255},  // -80°C → WHITE (flat band)
+        // ── Band 5: BLACK from -80 to -85°C ──
+        {tb: 192, r:   0, g:   0, b:   0},  // -81°C → BLACK (sharp step)
+        {tb: 188, r:   0, g:   0, b:   0},  // -85°C → BLACK (flat band)
+        // ── Overshooting tops: WHITE below -85°C ──
+        {tb: 187, r: 255, g: 255, b: 255},  // -86°C → WHITE (sharp step)
+        {tb: 170, r: 255, g: 255, b: 255}   //-103°C → WHITE
     ]);
 })();
 
@@ -206,10 +226,38 @@ function decodeTbData(base64str) {
     return arr;
 }
 
+// Render the colorbar canvas from the active colormap LUT
+// This guarantees the colorbar exactly matches the map rendering.
+// Warm (310K) on left → cold (170K) on right.
+function renderColorbarCanvas(colormapName) {
+    var canvas = document.getElementById('ir-colorbar-canvas');
+    if (!canvas) return;
+    var lut = IR_COLORMAPS[colormapName] || IR_COLORMAPS['enhanced'];
+    // Draw 255 pixels wide (one per uint8 value 1-255), warm→cold = left→right
+    canvas.width = 255;
+    canvas.height = 1;
+    var ctx = canvas.getContext('2d');
+    var imgData = ctx.createImageData(255, 1);
+    var px = imgData.data;
+    for (var x = 0; x < 255; x++) {
+        // x=0 → warmest (uint8=255=310K), x=254 → coldest (uint8=1=170K)
+        var val = 255 - x;
+        var li = val * 4;
+        var pi = x * 4;
+        px[pi]     = lut[li];
+        px[pi + 1] = lut[li + 1];
+        px[pi + 2] = lut[li + 2];
+        px[pi + 3] = 255;  // Colorbar always fully opaque
+    }
+    ctx.putImageData(imgData, 0, 0);
+}
+
 // Switch colormap and re-render current frame (no server round-trip)
 function switchColormap(name) {
     if (!IR_COLORMAPS[name]) return;
     irSelectedColormap = name;
+    // Update colorbar to match
+    renderColorbarCanvas(name);
     // Re-render current frame if we have data
     if (irCurrentTbData && irCurrentBounds && detailMap) {
         var dataURI = renderTbToDataURI(irCurrentTbData, irCurrentTbRows, irCurrentTbCols, name);
@@ -4630,6 +4678,9 @@ function showToast(message) {
 
 document.addEventListener('DOMContentLoaded', function () {
     loadData();
+
+    // Render colorbar canvas from default colormap
+    renderColorbarCanvas(irSelectedColormap);
 
     // Load TC-RADAR lookup (tiny file, ~3KB) for cross-linking
     fetch(TC_RADAR_LOOKUP_JSON).then(function (r) { return r.json(); })
