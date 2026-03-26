@@ -3183,8 +3183,8 @@ function prefetchIRFrames(currentIdx) {
 
 /* fetchIRBatch removed — all sources now use individual parallel fetches via prefetchIRFrames */
 
-var _MONTH_NAMES = ['January','February','March','April','May','June',
-                    'July','August','September','October','November','December'];
+var _MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun',
+                    'Jul','Aug','Sep','Oct','Nov','Dec'];
 
 function _formatIRDatetime(isoStr) {
     // Convert "2025-10-21T06:00:00" → "06 UTC 21 October 2025"

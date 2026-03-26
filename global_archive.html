@@ -348,18 +348,16 @@
                                 <span id="ir-frame-info" class="ir-frame-info"></span>
                                 <span class="panel-badge" id="ir-source-badge">HURSAT-B1</span>
                             </div>
-                            <div class="ir-map-playback">
+                            <div class="ir-map-controls-row">
                                 <button class="ga-btn ga-btn-sm ir-step-btn" onclick="stepIRFrame(-1)" title="Previous frame">&#9664;</button>
                                 <button id="ir-play-btn" class="ga-btn ga-btn-sm" onclick="toggleIRPlay()">&#9654; Play</button>
                                 <button class="ga-btn ga-btn-sm ir-step-btn" onclick="stepIRFrame(1)" title="Next frame">&#9654;</button>
-                                <input type="range" id="ir-slider" class="ga-range ir-slider" min="0" max="0" value="0" oninput="seekIRFrame(this.value)">
                                 <select id="ir-speed" class="ga-select-sm" onchange="setIRSpeed(this.value)">
                                     <option value="1500">0.5x</option>
                                     <option value="750" selected>1x</option>
                                     <option value="375">2x</option>
                                 </select>
-                            </div>
-                            <div class="ir-map-options">
+                                <span class="ir-controls-spacer"></span>
                                 <button class="ga-btn ga-btn-sm ir-opacity-btn" onclick="cycleIROpacity()" title="Adjust IR opacity">
                                     <span id="ir-opacity-label">80%</span>
                                 </button>
@@ -374,6 +372,9 @@
                                     <button class="ga-btn ga-btn-sm ir-cmap-btn" data-cmap="dvorak" onclick="switchColormap('dvorak')">BD</button>
                                     <button class="ga-btn ga-btn-sm ir-cmap-btn" data-cmap="grayscale" onclick="switchColormap('grayscale')">BW</button>
                                 </span>
+                            </div>
+                            <div class="ir-slider-row">
+                                <input type="range" id="ir-slider" class="ga-range ir-slider" min="0" max="0" value="0" oninput="seekIRFrame(this.value)">
                             </div>
                             <div class="ir-colorbar-row">
                                 <canvas id="ir-colorbar-canvas" height="8"></canvas>

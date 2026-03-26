@@ -674,24 +674,29 @@ input[type="range"].ga-range::-moz-range-thumb {
 .ir-map-info {
     display: flex;
     align-items: center;
-    gap: 10px;
-    margin-bottom: 6px;
+    gap: 8px;
+    margin-bottom: 4px;
     font-size: 0.78rem;
+    flex-wrap: nowrap;
+    white-space: nowrap;
+    overflow: hidden;
 }
-.ir-map-playback {
+.ir-map-controls-row {
     display: flex;
     align-items: center;
-    gap: 6px;
-}
-.ir-map-playback .ir-slider {
-    flex: 1;
-}
-.ir-map-options {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-top: 5px;
+    gap: 5px;
     flex-wrap: wrap;
+}
+.ir-controls-spacer {
+    flex: 1;
+    min-width: 4px;
+}
+.ir-slider-row {
+    margin-top: 4px;
+    padding: 0 2px;
+}
+.ir-slider-row .ir-slider {
+    width: 100%;
 }
 .ir-step-btn {
     font-size: 0.65rem;
@@ -788,7 +793,10 @@ input[type="range"].ga-range::-moz-range-thumb {
     color: var(--text);
     font-family: 'DM Sans', sans-serif;
     font-weight: 500;
-    font-size: 0.82rem;
+    font-size: 0.78rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 .ir-frame-info {
     color: var(--slate);
@@ -799,10 +807,6 @@ input[type="range"].ga-range::-moz-range-thumb {
     color: var(--text-dim);
     margin-left: auto;
 }
-.ir-slider {
-    flex: 1;
-}
-
 /* Leaflet image overlay for IR — crisp nearest-neighbor for sharp pixels.
    Combined with server-side NEAREST upscale (4x for 8km, 3x for 4km),
    this preserves clean pixel boundaries at all zoom levels. */
