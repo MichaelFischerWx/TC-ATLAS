@@ -84,24 +84,24 @@ var irSelectedColormap = 'enhanced';  // Current colormap name
 var IR_COLORMAPS = {};
 
 (function buildColormaps() {
-    // Helper: linear interpolation between color stops
+    // Build a 256×4 RGBA LUT from fractional color stops.
+    // Stops: [{f, r, g, b}] where f is 0.0 (warm/310K) to 1.0 (cold/170K).
+    // This matches the server's original: frac = 1.0 - (Tb - vmin)/(vmax - vmin)
+    // uint8 index 1 = 170K (cold, frac=1.0), index 255 = 310K (warm, frac=0.0)
     function buildLUT(stops) {
-        // stops: array of {tb: K, r, g, b} sorted by tb ascending
         var lut = new Uint8Array(256 * 4);
-        // Index 0 = transparent
+        // Index 0 = transparent (invalid pixel)
         lut[0] = 0; lut[1] = 0; lut[2] = 0; lut[3] = 0;
-        var vmin = 170.0, vmax = 310.0;
         for (var i = 1; i <= 255; i++) {
-            var tb = vmin + (i - 1) * (vmax - vmin) / 254.0;
-            // Find bounding stops
+            var frac = 1.0 - (i - 1) / 254.0;  // i=1→frac=1.0 (cold), i=255→frac=0.0 (warm)
             var lo = stops[0], hi = stops[stops.length - 1];
             for (var s = 0; s < stops.length - 1; s++) {
-                if (tb >= stops[s].tb && tb <= stops[s + 1].tb) {
+                if (frac >= stops[s].f && frac <= stops[s + 1].f) {
                     lo = stops[s]; hi = stops[s + 1];
                     break;
                 }
             }
-            var t = (hi.tb === lo.tb) ? 0 : (tb - lo.tb) / (hi.tb - lo.tb);
+            var t = (hi.f === lo.f) ? 0 : (frac - lo.f) / (hi.f - lo.f);
             t = Math.max(0, Math.min(1, t));
             var idx = i * 4;
             lut[idx]     = Math.round(lo.r + t * (hi.r - lo.r));
@@ -112,44 +112,62 @@ var IR_COLORMAPS = {};
         return lut;
     }
 
-    // Enhanced IR (warm grays → cool blues → white tops)
+    // Helper: convert Tb-based stops to frac-based stops
+    function buildLUTfromTb(tbStops) {
+        var vmin = 170.0, vmax = 310.0;
+        var fracStops = tbStops.map(function(s) {
+            return {f: 1.0 - (s.tb - vmin) / (vmax - vmin), r: s.r, g: s.g, b: s.b};
+        });
+        fracStops.sort(function(a, b) { return a.f - b.f; });
+        return buildLUT(fracStops);
+    }
+
+    // Enhanced IR — exact match of server-side IR_COLORMAP_STOPS (NOAA-style)
+    // Frac 0.00 (warm surface=black) → grays → colors → 1.00 (cold tops=white)
     IR_COLORMAPS['enhanced'] = buildLUT([
-        {tb: 170, r: 255, g: 255, b: 255},  // Very cold cloud tops → white
-        {tb: 195, r: 200, g: 220, b: 255},  // High clouds → light blue
-        {tb: 210, r: 100, g: 150, b: 255},  // Deep convection → blue
-        {tb: 220, r: 50,  g: 80,  b: 200},  // Moderate convection → dark blue
-        {tb: 235, r: 80,  g: 80,  b: 80},   // Mid-level cloud → dark gray
-        {tb: 260, r: 140, g: 140, b: 140},  // Low cloud → medium gray
-        {tb: 280, r: 200, g: 200, b: 200},  // Near surface → light gray
-        {tb: 300, r: 40,  g: 40,  b: 40},   // Warm surface → near black
-        {tb: 310, r: 20,  g: 20,  b: 20}    // Hot surface → black
+        {f: 0.00, r:   8, g:   8, b:   8},  // Warm surface → near-black
+        {f: 0.15, r:  40, g:  40, b:  40},
+        {f: 0.30, r:  90, g:  90, b:  90},
+        {f: 0.40, r: 140, g: 140, b: 140},
+        {f: 0.50, r: 200, g: 200, b: 200},  // Mid-level → light gray
+        {f: 0.55, r:   0, g: 180, b: 255},  // Convective → cyan
+        {f: 0.60, r:   0, g: 100, b: 255},  // → blue
+        {f: 0.65, r:   0, g: 255, b:   0},  // → green
+        {f: 0.70, r: 255, g: 255, b:   0},  // → yellow
+        {f: 0.75, r: 255, g: 180, b:   0},  // → orange
+        {f: 0.80, r: 255, g:  80, b:   0},  // → dark orange
+        {f: 0.85, r: 255, g:   0, b:   0},  // → red
+        {f: 0.90, r: 180, g:   0, b: 180},  // → magenta
+        {f: 0.95, r: 255, g: 180, b: 255},  // → pink
+        {f: 1.00, r: 255, g: 255, b: 255}   // Very cold tops → white
     ]);
 
     // Dvorak Enhanced (BD curve-inspired color scheme)
-    IR_COLORMAPS['dvorak'] = buildLUT([
-        {tb: 170, r: 255, g: 0,   b: 255},  // < -90°C → magenta (overshooting)
-        {tb: 183, r: 255, g: 0,   b: 0},    // -90°C → red
-        {tb: 193, r: 255, g: 128, b: 0},    // -80°C → orange
-        {tb: 203, r: 255, g: 255, b: 0},    // -70°C → yellow
-        {tb: 213, r: 0,   g: 255, b: 0},    // -60°C → green
-        {tb: 223, r: 0,   g: 128, b: 255},  // -50°C → light blue
-        {tb: 233, r: 0,   g: 0,   b: 255},  // -40°C → blue
-        {tb: 243, r: 128, g: 128, b: 128},  // -30°C → gray
-        {tb: 263, r: 180, g: 180, b: 180},  // -10°C → light gray
-        {tb: 283, r: 60,  g: 60,  b: 60},   //  10°C → dark gray
-        {tb: 310, r: 20,  g: 20,  b: 20}    //  37°C → near black
+    IR_COLORMAPS['dvorak'] = buildLUTfromTb([
+        {tb: 170, r: 255, g: 255, b: 255},  // < -100°C → white (overshooting)
+        {tb: 183, r: 255, g:   0, b: 255},  // -90°C → magenta
+        {tb: 193, r: 255, g:   0, b:   0},  // -80°C → red
+        {tb: 203, r: 255, g: 128, b:   0},  // -70°C → orange
+        {tb: 213, r: 255, g: 255, b:   0},  // -60°C → yellow
+        {tb: 223, r:   0, g: 255, b:   0},  // -50°C → green
+        {tb: 233, r:   0, g: 128, b: 255},  // -40°C → light blue
+        {tb: 243, r:   0, g:   0, b: 255},  // -30°C → blue
+        {tb: 253, r: 128, g: 128, b: 128},  // -20°C → gray
+        {tb: 273, r: 180, g: 180, b: 180},  //   0°C → light gray
+        {tb: 293, r:  60, g:  60, b:  60},  //  20°C → dark gray
+        {tb: 310, r:  10, g:  10, b:  10}   //  37°C → near black
     ]);
 
     // Grayscale (standard IR - warm=black, cold=white)
     IR_COLORMAPS['grayscale'] = buildLUT([
-        {tb: 170, r: 255, g: 255, b: 255},  // Cold → white
-        {tb: 310, r: 0,   g: 0,   b: 0}     // Warm → black
+        {f: 0.0, r:   0, g:   0, b:   0},   // Warm → black
+        {f: 1.0, r: 255, g: 255, b: 255}    // Cold → white
     ]);
 
     // Inverted grayscale (warm=white, cold=black)
     IR_COLORMAPS['inverted'] = buildLUT([
-        {tb: 170, r: 0,   g: 0,   b: 0},    // Cold → black
-        {tb: 310, r: 255, g: 255, b: 255}    // Warm → white
+        {f: 0.0, r: 255, g: 255, b: 255},   // Warm → white
+        {f: 1.0, r:   0, g:   0, b:   0}    // Cold → black
     ]);
 })();
 
