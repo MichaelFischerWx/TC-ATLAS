@@ -152,6 +152,12 @@ def _setup_earthdata_netrc():
     OPeNDAP (used by xarray) requires ~/.netrc with Earthdata credentials.
     Also creates ~/.dodsrc to tell the DAP client to follow redirects and
     check cookies from urs.earthdata.nasa.gov.
+
+    Security note: The token is injected from GCP Secret Manager at container
+    start (see deploy.sh --set-secrets). The .netrc is written to the ephemeral
+    container filesystem with 0o600 permissions and is destroyed when the
+    container shuts down. This is the standard NASA-recommended auth pattern
+    for OPeNDAP clients.
     """
     home = os.path.expanduser("~")
     netrc_path = os.path.join(home, ".netrc")
@@ -1938,12 +1944,15 @@ def _heal_frame_background(sid: str, frame_idx: int, preferred_source: str,
             return  # Preferred source still unavailable — keep fallback
 
         tb_encoded = _encode_tb_uint8(frame_2d)
-        bounds = {
-            "south": frame_lat - half_domain,
-            "north": frame_lat + half_domain,
-            "west": frame_lon - half_domain,
-            "east": frame_lon + half_domain,
-        }
+        if ir_bounds:
+            bounds = ir_bounds
+        else:
+            bounds = {
+                "south": frame_lat - half_domain,
+                "north": frame_lat + half_domain,
+                "west": frame_lon - half_domain,
+                "east": frame_lon + half_domain,
+            }
         result = {
             "sid": sid, "frame_idx": frame_idx,
             "datetime": frame_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -2231,17 +2240,21 @@ def ir_frame(
                 detail=f"No IR data available from any source for {sid} frame {frame_idx} (dt={frame_dt})",
             )
 
-        # Build result — all sources use consistent center ± half_domain bounds
-        # so every frame plots the same domain size on the map, regardless of
-        # whether it came from MergIR, GridSat, or HURSAT cascade fallback.
-        # Path 1: send raw Tb as uint8 for client-side colormap rendering
+        # Use actual data bounds from the loader for precise geo-alignment.
+        # The loaders return ir_bounds with the exact lat/lon extent of the
+        # data array, which ensures the image overlay and hover lookup match
+        # the true pixel coordinates (avoids sub-degree offset from grid snapping).
+        # Fall back to center ± half_domain if ir_bounds is missing.
         tb_encoded = _encode_tb_uint8(frame_2d)
-        bounds = {
-            "south": frame_lat - half_domain,
-            "north": frame_lat + half_domain,
-            "west": frame_lon - half_domain,
-            "east": frame_lon + half_domain,
-        }
+        if ir_bounds:
+            bounds = ir_bounds
+        else:
+            bounds = {
+                "south": frame_lat - half_domain,
+                "north": frame_lat + half_domain,
+                "west": frame_lon - half_domain,
+                "east": frame_lon + half_domain,
+            }
         result = {
             "sid": sid, "frame_idx": frame_idx,
             "datetime": frame_dt.isoformat() if frame_dt else "",
@@ -2370,13 +2383,16 @@ def ir_batch(
                     return (frame_idx, None)
 
                 tb_encoded = _encode_tb_uint8(frame_2d)
-                # Consistent bounds (center ± half_domain), not actual data extent
-                bounds = {
-                    "south": frame_lat - half_domain,
-                    "north": frame_lat + half_domain,
-                    "west": frame_lon - half_domain,
-                    "east": frame_lon + half_domain,
-                }
+                # Use actual data bounds for precise geo-alignment
+                if ir_bounds:
+                    bounds = ir_bounds
+                else:
+                    bounds = {
+                        "south": frame_lat - half_domain,
+                        "north": frame_lat + half_domain,
+                        "west": frame_lon - half_domain,
+                        "east": frame_lon + half_domain,
+                    }
                 result = {
                     "sid": sid, "frame_idx": frame_idx,
                     "datetime": frame_info["datetime"], "source": source,

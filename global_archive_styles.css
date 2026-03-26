@@ -662,34 +662,30 @@ input[type="range"].ga-range::-moz-range-thumb {
     color: #fff;
 }
 
-/* Playback controls floating over the map */
+/* Playback controls below the map */
 .ir-map-controls {
     position: relative;
     background: rgba(10, 22, 40, 0.92);
-    padding: 8px 12px;
+    padding: 8px 10px;
     border: 1px solid rgba(255,255,255,0.08);
     border-radius: 6px;
     margin-top: 4px;
+    overflow: visible;
 }
 .ir-map-info {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
     margin-bottom: 4px;
     font-size: 0.78rem;
-    flex-wrap: nowrap;
-    white-space: nowrap;
-    overflow: hidden;
+    flex-wrap: wrap;
+    min-height: 0;
 }
-.ir-map-controls-row {
+.ir-map-playback {
     display: flex;
     align-items: center;
     gap: 5px;
-    flex-wrap: wrap;
-}
-.ir-controls-spacer {
-    flex: 1;
-    min-width: 4px;
+    margin-top: 2px;
 }
 .ir-slider-row {
     margin-top: 4px;
@@ -697,6 +693,13 @@ input[type="range"].ga-range::-moz-range-thumb {
 }
 .ir-slider-row .ir-slider {
     width: 100%;
+}
+.ir-map-options {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin-top: 4px;
+    flex-wrap: wrap;
 }
 .ir-step-btn {
     font-size: 0.65rem;
@@ -726,9 +729,9 @@ input[type="range"].ga-range::-moz-range-thumb {
 .ir-cmap-group {
     display: inline-flex;
     gap: 2px;
-    margin-left: 6px;
+    margin-left: 4px;
     border-left: 1px solid rgba(255,255,255,0.15);
-    padding-left: 6px;
+    padding-left: 4px;
 }
 .ir-cmap-btn {
     font-size: 0.7rem;
@@ -748,6 +751,7 @@ input[type="range"].ga-range::-moz-range-thumb {
 /* IR brightness temperature colorbar */
 .ir-colorbar-row {
     margin-top: 5px;
+    max-width: 100%;
 }
 #ir-colorbar-canvas {
     width: 100%;
@@ -795,12 +799,12 @@ input[type="range"].ga-range::-moz-range-thumb {
     font-weight: 500;
     font-size: 0.78rem;
     white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
 }
 .ir-frame-info {
     color: var(--slate);
     font-family: 'DM Sans', sans-serif;
+    font-size: 0.72rem;
+    white-space: nowrap;
 }
 .ir-status {
     font-size: 0.72rem;
