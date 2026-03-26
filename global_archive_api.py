@@ -70,7 +70,7 @@ def _get_gcs_bucket():
 
 
 # Bump this version whenever rendering logic changes to invalidate stale cache.
-_GCS_CACHE_VERSION = "v5"  # v5: raw Tb uint8 (Path 1 client-side colormap rendering)
+_GCS_CACHE_VERSION = "v6"  # v6: actual data bounds from loaders (fixes geo-alignment offset)
 
 
 def _gcs_cache_key(sid: str, frame_idx: int, source: str = "ir") -> str:
