@@ -2890,8 +2890,8 @@ function _handleIRMouseMove(e) {
     var tbK = irCurrentTbVmin + (rawVal - 1) * (irCurrentTbVmax - irCurrentTbVmin) / 254.0;
     var tbKStr = tbK.toFixed(1);
     var tbC = (tbK - 273.15).toFixed(1);
-    var latStr = Math.abs(lat).toFixed(1) + (lat >= 0 ? '°N' : '°S');
-    var lngStr = Math.abs(lng).toFixed(1) + (lng >= 0 ? '°E' : '°W');
+    var latStr = Math.abs(lat).toFixed(2) + (lat >= 0 ? '°N' : '°S');
+    var lngStr = Math.abs(lng).toFixed(2) + (lng >= 0 ? '°E' : '°W');
     var html = '<span class="ir-tb-val">' + tbKStr + ' K</span>' +
                '<span class="ir-tb-sep"> / </span>' +
                '<span class="ir-tb-val">' + tbC + ' °C</span>' +
