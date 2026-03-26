@@ -58,6 +58,8 @@ var irOverlayLayer = null;   // L.imageOverlay on detail map
 var irPositionMarker = null; // L.circleMarker showing current storm center
 var trackAnnotationMarkers = []; // Genesis, LMI, dissipation markers (hidden during IR)
 var irOverlayVisible = false;
+var irTrackVisible = true;       // Track + position marker visible on detail map
+var detailTrackElements = [];    // All track polylines/markers added to detail map
 var irOpacity = 0.8;
 var irOpacityLevels = [0.8, 0.6, 0.4, 1.0];
 var irOpacityIdx = 0;
@@ -2159,6 +2161,10 @@ function renderDetailMap(track, storm) {
     // Destroy existing map and IR overlay references
     irOverlayLayer = null;
     irPositionMarker = null;
+    irTrackVisible = true;
+    detailTrackElements = [];
+    var trackBtn = document.getElementById('ir-track-toggle-btn');
+    if (trackBtn) trackBtn.classList.add('active');
     if (detailMap) {
         detailMap.remove();
         detailMap = null;
@@ -2183,6 +2189,7 @@ function renderDetailMap(track, storm) {
 
     // Draw track — TC phases (TS/SS) get thick solid lines,
     // non-TC phases (DS=disturbance, ET=extratropical) get thin dashed lines
+    detailTrackElements = [];
     for (var i = 1; i < track.length; i++) {
         var p0 = track[i - 1];
         var p1 = track[i];
@@ -2193,10 +2200,11 @@ function renderDetailMap(track, storm) {
         var weight = isTCPhase ? 3.5 : 1.5;
         var opacity = isTCPhase ? 0.9 : 0.5;
         var dashArray = isTCPhase ? null : '6,4';
-        L.polyline(
+        var seg = L.polyline(
             [[p0.la, p0.lo], [p1.la, p1.lo]],
             { color: color, weight: weight, opacity: opacity, dashArray: dashArray }
         ).addTo(detailMap);
+        detailTrackElements.push(seg);
     }
 
     // Add markers at key points
@@ -2210,6 +2218,7 @@ function renderDetailMap(track, storm) {
             radius: 6, color: '#fff', fillColor: '#60a5fa', fillOpacity: 1, weight: 2
         }).bindTooltip('Genesis: ' + (gen.t || '').substring(0, 10), { className: 'track-tooltip' }).addTo(detailMap);
         trackAnnotationMarkers.push(genM);
+        detailTrackElements.push(genM);
 
         // LMI marker
         var lmiPt = validPts.reduce(function (max, p) { return (p.w || 0) > (max.w || 0) ? p : max; }, validPts[0]);
@@ -2218,6 +2227,7 @@ function renderDetailMap(track, storm) {
                 radius: 8, color: '#fff', fillColor: getIntensityColor(lmiPt.w), fillOpacity: 1, weight: 2
             }).bindTooltip('Peak: ' + (lmiPt.w || '?') + ' kt @ ' + (lmiPt.t || '').substring(0, 10), { className: 'track-tooltip' }).addTo(detailMap);
             trackAnnotationMarkers.push(lmiM);
+            detailTrackElements.push(lmiM);
         }
 
         // End marker
@@ -2226,6 +2236,7 @@ function renderDetailMap(track, storm) {
             radius: 5, color: '#fff', fillColor: '#6b7280', fillOpacity: 1, weight: 2
         }).bindTooltip('Dissipation: ' + (end.t || '').substring(0, 10), { className: 'track-tooltip' }).addTo(detailMap);
         trackAnnotationMarkers.push(endM);
+        detailTrackElements.push(endM);
 
         // Fit bounds
         var lats = validPts.map(function (p) { return p.la; });
@@ -2444,6 +2455,31 @@ window.toggleIRFollow = function () {
     }
 };
 
+window.toggleTrackOverlay = function () {
+    irTrackVisible = !irTrackVisible;
+    var btn = document.getElementById('ir-track-toggle-btn');
+    if (btn) {
+        btn.classList.toggle('active', irTrackVisible);
+        btn.title = irTrackVisible ? 'Hide track and position marker' : 'Show track and position marker';
+    }
+    // Toggle all track polylines and annotation markers
+    detailTrackElements.forEach(function (el) {
+        if (irTrackVisible) {
+            if (detailMap && !detailMap.hasLayer(el)) el.addTo(detailMap);
+        } else {
+            if (detailMap && detailMap.hasLayer(el)) detailMap.removeLayer(el);
+        }
+    });
+    // Toggle the position marker too
+    if (irPositionMarker) {
+        if (irTrackVisible) {
+            if (detailMap && !detailMap.hasLayer(irPositionMarker)) irPositionMarker.addTo(detailMap);
+        } else {
+            if (detailMap && detailMap.hasLayer(irPositionMarker)) detailMap.removeLayer(irPositionMarker);
+        }
+    }
+};
+
 function displayIROnMap(data) {
     if (!detailMap || !irOverlayVisible) {
         console.log('displayIROnMap: skipped (map=' + !!detailMap + ', visible=' + irOverlayVisible + ')');
@@ -2630,7 +2666,8 @@ function updateIRPositionMarker(data) {
                 fillOpacity: 0,
                 weight: 1.5,
                 pane: 'markerPane'
-            }).addTo(detailMap);
+            });
+            if (irTrackVisible) irPositionMarker.addTo(detailMap);
             irPositionMarker.bindTooltip('', { className: 'track-tooltip', permanent: false });
         }
         var tipText = (frameMeta.datetime || '');
