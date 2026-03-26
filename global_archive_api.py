@@ -2658,6 +2658,12 @@ def global_health():
             "cooldown_s": MERGIR_CIRCUIT_COOLDOWN,
         },
         "gridsat_available": True,
+        "gcs_cache": {
+            "enabled": bool(GCS_IR_CACHE_BUCKET),
+            "bucket": GCS_IR_CACHE_BUCKET or None,
+            "connected": _gcs_bucket is not None,
+            "cache_version": _GCS_CACHE_VERSION,
+        },
     }
 
 
