@@ -159,36 +159,68 @@ var IR_COLORMAPS = {};
     ]);
 
     // Classic Dvorak BD-curve Enhanced B&W — the standard operational grayscale
-    // enhancement with flat-shaded bands and sharp stepped transitions at cold
-    // cloud-top thresholds. Used at NHC, JTWC, CIMSS, and in the ADT.
-    // Thresholds (°C): +9, -30, -41, -53, -63 | -69, -75, -80, -85
-    //                  ←— smooth gray ramp —→  ←— stepped B/W bands —→
-    IR_COLORMAPS['grayscale'] = buildLUTfromTb([
-        // ── Warm side: smooth gray ramp (dark→light) ──
-        {tb: 310, r:   0, g:   0, b:   0},  //  37°C → black (hot surface)
-        {tb: 282, r:  90, g:  90, b:  90},  //  +9°C → medium-dark gray
-        {tb: 243, r: 170, g: 170, b: 170},  // -30°C → medium-light gray
-        {tb: 232, r: 195, g: 195, b: 195},  // -41°C → light gray
-        {tb: 220, r: 220, g: 220, b: 220},  // -53°C → lighter gray
-        // ── Band 1: off-white → WHITE at -63°C ──
-        {tb: 211, r: 255, g: 255, b: 255},  // -62°C → WHITE (approaching threshold)
-        {tb: 210, r: 255, g: 255, b: 255},  // -63°C → WHITE
-        // ── Band 2: BLACK from -63 to -69°C (sharp step!) ──
-        {tb: 209, r:   0, g:   0, b:   0},  // -64°C → BLACK (sharp transition)
-        {tb: 204, r:   0, g:   0, b:   0},  // -69°C → BLACK (flat band)
-        // ── Band 3: MEDIUM GRAY from -69 to -75°C ──
-        {tb: 203, r: 140, g: 140, b: 140},  // -70°C → MEDIUM GRAY (sharp step)
-        {tb: 198, r: 140, g: 140, b: 140},  // -75°C → MEDIUM GRAY (flat band)
-        // ── Band 4: WHITE from -75 to -80°C ──
-        {tb: 197, r: 255, g: 255, b: 255},  // -76°C → WHITE (sharp step)
-        {tb: 193, r: 255, g: 255, b: 255},  // -80°C → WHITE (flat band)
-        // ── Band 5: BLACK from -80 to -85°C ──
-        {tb: 192, r:   0, g:   0, b:   0},  // -81°C → BLACK (sharp step)
-        {tb: 188, r:   0, g:   0, b:   0},  // -85°C → BLACK (flat band)
-        // ── Overshooting tops: WHITE below -85°C ──
-        {tb: 187, r: 255, g: 255, b: 255},  // -86°C → WHITE (sharp step)
-        {tb: 170, r: 255, g: 255, b: 255}   //-103°C → WHITE
-    ]);
+    // enhancement with flat-shaded bands and sharp stepped transitions.
+    // Official thresholds (°C): +9, -30, -41, -53, -63, -69, -75, -80, -85
+    // Warm side (+9 to -53): smooth gray ramp (dark → white)
+    // Cold side (-53 and below): flat stepped B/W bands, NO gradients
+    // Built with a step function (no interpolation) to match operational look.
+    IR_COLORMAPS['grayscale'] = (function () {
+        var vmin = 170.0, vmax = 310.0;
+        var lut = new Uint8Array(256 * 4);
+        lut[0] = 0; lut[1] = 0; lut[2] = 0; lut[3] = 0;  // index 0 = transparent
+
+        // Stepped bands [Tb_upper_K, Tb_lower_K, gray_value] — flat, no gradients
+        var bands = [
+            [188, 170, 255],   // below -85°C  → WHITE (overshooting tops)
+            [193, 188,   0],   // -80 to -85°C → BLACK
+            [198, 193, 255],   // -75 to -80°C → WHITE
+            [204, 198, 140],   // -69 to -75°C → MEDIUM GRAY
+            [210, 204,   0],   // -63 to -69°C → BLACK
+            [220, 210, 255],   // -53 to -63°C → WHITE
+        ];
+
+        // Smooth gray ramp control points for warm side (Tb >= 220K / >= -53°C)
+        var ramp = [
+            {tb: 310, v:   0},   //  +37°C → black (hot surface)
+            {tb: 282, v:  90},   //   +9°C → medium-dark gray
+            {tb: 243, v: 170},   //  -30°C → medium-light gray
+            {tb: 232, v: 200},   //  -41°C → light gray
+            {tb: 220, v: 240},   //  -53°C → near-white (meets first band)
+        ];
+
+        for (var i = 1; i <= 255; i++) {
+            var tb = vmin + (i - 1) * (vmax - vmin) / 254.0;
+            var gray = 128;
+            var inBand = false;
+
+            for (var b = 0; b < bands.length; b++) {
+                if (tb >= bands[b][1] && tb < bands[b][0]) {
+                    gray = bands[b][2];
+                    inBand = true;
+                    break;
+                }
+            }
+
+            if (!inBand && tb >= 220) {
+                // Smooth gray ramp for warm side
+                var lo = ramp[0], hi = ramp[ramp.length - 1];
+                for (var r = 0; r < ramp.length - 1; r++) {
+                    if (tb <= ramp[r].tb && tb >= ramp[r + 1].tb) {
+                        lo = ramp[r]; hi = ramp[r + 1];
+                        break;
+                    }
+                }
+                var t = (lo.tb === hi.tb) ? 0 : (tb - hi.tb) / (lo.tb - hi.tb);
+                gray = Math.round(hi.v + t * (lo.v - hi.v));
+            } else if (!inBand) {
+                gray = 255;  // fallback: white
+            }
+
+            var idx = i * 4;
+            lut[idx] = gray; lut[idx + 1] = gray; lut[idx + 2] = gray; lut[idx + 3] = 255;
+        }
+        return lut;
+    })();
 })();
 
 // Render Tb uint8 data to a data URI PNG using canvas + selected colormap
@@ -3208,10 +3240,11 @@ function updateIRMeta(idx) {
     var frameInfoEl = document.getElementById('ir-frame-info');
 
     var dtText = '';
+    var rawDt = '';
     if (irMeta && irMeta.frames && irMeta.frames[idx]) {
-        var rawDt = irMeta.frames[idx].datetime || '';
+        rawDt = irMeta.frames[idx].datetime || '';
         var sat = irMeta.frames[idx].satellite || '';
-        // Format: "06 UTC 21 October 2025"
+        // Format: "06 UTC 21 Oct 2025"
         dtText = _formatIRDatetime(rawDt);
         if (datetimeEl) datetimeEl.textContent = dtText + (sat ? '  [' + sat + ']' : '');
         // Log NC file for HURSAT debugging
@@ -3245,8 +3278,8 @@ function updateIRMeta(idx) {
             (isFallback ? ' ir-source-fallback' : '');
     }
 
-    // Sync intensity chart marker to current IR time
-    updateIntensityMarker(dtText);
+    // Sync intensity chart marker to current IR time (use raw ISO datetime for Plotly)
+    updateIntensityMarker(rawDt);
 
     // Update cache status
     updateIRCacheStatus();
