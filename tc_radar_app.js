@@ -4589,7 +4589,10 @@ function renderHybridAzimuthalMeanInto(targetId, json, fullsize) {
     if (!fullsize) {
         var thumbWrap = document.getElementById('thumbnail-wrap');
         if (thumbWrap) thumbWrap.style.display = 'none';
-        el.innerHTML = '<div style="position:relative;"><div id="az-chart" style="width:100%;height:340px;border-radius:6px;overflow:hidden;"></div>' + _archSaveBtnHTML('az-chart', 'TDR_HybridAzMean') + _archExportBtnHTML('exportAzMeanCSV','exportAzMeanJSON','az-exp-drop',74) + '<button onclick="openPlotModal()" title="Expand" style="position:absolute;top:6px;right:6px;z-index:10;background:rgba(255,255,255,0.08);border:none;color:#ccc;font-size:16px;width:30px;height:30px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;">\u26F6</button></div>';
+        el.innerHTML = '<div style="position:relative;"><div id="az-chart" style="width:100%;height:340px;border-radius:6px;overflow:hidden;"></div>' + _archSaveBtnHTML('az-chart', 'TDR_HybridAzMean') + _archExportBtnHTML('exportAzMeanCSV','exportAzMeanJSON','az-exp-drop',74) + '<button onclick="openPlotModal()" title="Expand" style="position:absolute;top:6px;right:6px;z-index:10;background:rgba(255,255,255,0.08);border:none;color:#ccc;font-size:16px;width:30px;height:30px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;">\u26F6</button></div>' +
+            '<div style="text-align:right;margin-top:3px;"><a href="https://doi.org/10.1175/MWR-D-24-0118.1" target="_blank" rel="noopener" ' +
+            'style="font-size:9px;color:rgba(180,195,220,0.5);text-decoration:none;" ' +
+            'title="Fischer et al. (2025, MWR)">Fischer et al. 2025</a></div>';
         Plotly.newPlot('az-chart', [heatmap], layout, { responsive:true,displayModeBar:false });
     } else {
         Plotly.newPlot(targetId, [heatmap], layout, { responsive:true,displayModeBar:true,displaylogo:false });
@@ -4684,7 +4687,10 @@ function renderAnomalyAzimuthalMeanInto(targetId, json, fullsize) {
     if (!fullsize) {
         var thumbWrap = document.getElementById('thumbnail-wrap');
         if (thumbWrap) thumbWrap.style.display = 'none';
-        el.innerHTML = '<div style="position:relative;"><div id="az-chart" style="width:100%;height:340px;border-radius:6px;overflow:hidden;"></div>' + _archSaveBtnHTML('az-chart', 'TDR_Anomaly') + _archExportBtnHTML('exportAzMeanCSV','exportAzMeanJSON','az-exp-drop',74) + '<button onclick="openPlotModal()" title="Expand" style="position:absolute;top:6px;right:6px;z-index:10;background:rgba(255,255,255,0.08);border:none;color:#ccc;font-size:16px;width:30px;height:30px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;">\u26F6</button></div>';
+        el.innerHTML = '<div style="position:relative;"><div id="az-chart" style="width:100%;height:340px;border-radius:6px;overflow:hidden;"></div>' + _archSaveBtnHTML('az-chart', 'TDR_Anomaly') + _archExportBtnHTML('exportAzMeanCSV','exportAzMeanJSON','az-exp-drop',74) + '<button onclick="openPlotModal()" title="Expand" style="position:absolute;top:6px;right:6px;z-index:10;background:rgba(255,255,255,0.08);border:none;color:#ccc;font-size:16px;width:30px;height:30px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;">\u26F6</button></div>' +
+            '<div style="text-align:right;margin-top:3px;"><a href="https://doi.org/10.1175/MWR-D-24-0118.1" target="_blank" rel="noopener" ' +
+            'style="font-size:9px;color:rgba(180,195,220,0.5);text-decoration:none;" ' +
+            'title="Fischer et al. (2025, MWR)">Fischer et al. 2025</a></div>';
         Plotly.newPlot('az-chart', [heatmap], layout, { responsive:true,displayModeBar:false });
     } else {
         Plotly.newPlot(targetId, [heatmap], layout, { responsive:true,displayModeBar:true,displaylogo:false });
@@ -4944,9 +4950,13 @@ function renderVPScatterInto(targetId, json, fullsize) {
         var thumbWrap = document.getElementById('thumbnail-wrap');
         if (thumbWrap) thumbWrap.style.display = 'none';
         el.innerHTML = '<div style="position:relative;"><div id="az-chart" style="width:100%;height:360px;border-radius:6px;overflow:hidden;"></div>' + _archSaveBtnHTML('az-chart', 'VP_Scatter') + _archExportBtnHTML('exportVPScatterCSV','exportVPScatterJSON','vp-exp-drop',74) + '<button onclick="openPlotModal()" title="Expand" style="position:absolute;top:6px;right:6px;z-index:10;background:rgba(255,255,255,0.08);border:none;color:#ccc;font-size:16px;width:30px;height:30px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;">\u26F6</button></div>' +
-            '<div style="display:flex;gap:6px;justify-content:center;margin-top:6px;">' +
+            '<div style="display:flex;gap:6px;justify-content:center;align-items:center;margin-top:6px;">' +
             '<button class="cs-btn" onclick="fetchVPScatter(\'dvmax_12h\')" style="font-size:10px;padding:2px 8px;">12-h \u0394Vmax</button>' +
             '<button class="cs-btn" onclick="fetchVPScatter(\'dvmax_24h\')" style="font-size:10px;padding:2px 8px;">24-h \u0394Vmax</button>' +
+            '<a href="https://doi.org/10.1175/MWR-D-24-0118.1" target="_blank" rel="noopener" ' +
+            'style="font-size:9px;color:rgba(180,195,220,0.5);text-decoration:none;margin-left:4px;" ' +
+            'title="Fischer et al. (2025, MWR)">' +
+            'Fischer et al. 2025</a>' +
             '</div>';
         Plotly.newPlot('az-chart', traces, layout, { responsive:true,displayModeBar:false });
     } else {
@@ -5154,12 +5164,14 @@ function exportVPScatterCSV() {
     var json   = _lastVPScatterJson;
     var points = json.points || [];
     var colorBy = json.color_by || 'dvmax_12h';
-    var lines = ['# TC-ATLAS VP Scatter Export', '# Color by: ' + colorBy, '#'];
-    lines.push('case_index,storm_name,datetime,vmax_kt,vp,vortex_favorability,vortex_width,vortex_height,dvmax_12h,dvmax_24h');
+    var lines = ['# TC-ATLAS VP Scatter Export', '# Color by: ' + colorBy,
+                  '# Reference: Fischer et al. (2025, MWR) https://doi.org/10.1175/MWR-D-24-0118.1', '#'];
+    lines.push('case_index,mission_id,storm_name,datetime,vmax_kt,vp,vortex_favorability,vortex_width,vortex_height,dvmax_12h,dvmax_24h');
     for (var i = 0; i < points.length; i++) {
         var p = points[i];
         lines.push([
             p.case_index  !== undefined ? p.case_index  : '',
+            p.mission_id  || '',
             p.storm_name  || '',
             p.datetime    || '',
             p.vmax_kt     != null ? p.vmax_kt     : '',

@@ -7587,6 +7587,7 @@ def scatter_vp_favorability(
 
         points.append({
             "case_index": ci,
+            "mission_id": meta.get("mission_id", ""),
             "storm_name": meta.get("storm_name", ""),
             "datetime": meta.get("datetime", ""),
             "vmax_kt": meta.get("vmax_kt"),
