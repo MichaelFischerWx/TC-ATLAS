@@ -2773,6 +2773,9 @@ function displayIROnMap(data) {
         irCurrentTbCols = data.tb_cols;
         irCurrentTbVmin = data.tb_vmin || 170.0;
         irCurrentTbVmax = data.tb_vmax || 310.0;
+        console.log('[IR] Tb grid: ' + data.tb_rows + '×' + data.tb_cols +
+            ' (' + tbArr.length + ' bytes), bounds: S=' + bounds.south +
+            ' N=' + bounds.north + ' W=' + bounds.west + ' E=' + bounds.east);
         imageURI = renderTbToDataURI(tbArr, data.tb_rows, data.tb_cols, irSelectedColormap);
     } else {
         // Legacy PNG format (from old cache entries)
