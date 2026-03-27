@@ -289,6 +289,34 @@ var IR_COLORMAPS = {};
         {tb: 193, r: 224, g: 224, b: 255},  // -80°C lavender
         {tb: 173, r:   0, g:   0, b:   0}   // -100°C black
     ]);
+
+    // Claude — custom enhancement optimized for TC analysis
+    // Design: cool-toned grayscale warm side preserves cloud texture;
+    // color begins at convective onset (-20°C); teal→green→amber→terracotta
+    // progression maps perceptually to intensifying convection; magenta/pink
+    // for extreme cold tops; white overshooting stands out against any band.
+    IR_COLORMAPS['claude'] = buildLUTfromTb([
+        {tb: 310, r:  12, g:  12, b:  22},  // +37°C near-black (cool undertone)
+        {tb: 293, r:  70, g:  70, b:  82},  // +20°C dark cool gray
+        {tb: 283, r: 120, g: 120, b: 132},  // +10°C medium cool gray
+        {tb: 273, r: 180, g: 180, b: 192},  //   0°C light cool gray
+        {tb: 263, r: 216, g: 218, b: 228},  // -10°C pale silver-blue
+        {tb: 253, r: 140, g: 210, b: 220},  // -20°C light teal (convective onset)
+        {tb: 248, r:  68, g: 180, b: 196},  // -25°C medium teal
+        {tb: 243, r:  32, g: 148, b: 166},  // -30°C deep teal
+        {tb: 238, r:  40, g: 178, b: 116},  // -35°C emerald
+        {tb: 233, r:  96, g: 208, b:  68},  // -40°C bright green
+        {tb: 228, r: 192, g: 220, b:  40},  // -45°C chartreuse
+        {tb: 223, r: 238, g: 196, b:  48},  // -50°C golden amber
+        {tb: 218, r: 228, g: 132, b:  48},  // -55°C deep amber
+        {tb: 213, r: 214, g:  78, b:  56},  // -60°C terracotta
+        {tb: 208, r: 180, g:  36, b:  68},  // -65°C crimson
+        {tb: 203, r: 196, g:  48, b: 156},  // -70°C magenta
+        {tb: 198, r: 228, g: 112, b: 204},  // -75°C pink
+        {tb: 193, r: 248, g: 196, b: 240},  // -80°C light pink
+        {tb: 183, r: 255, g: 255, b: 255},  // -90°C white (overshooting)
+        {tb: 173, r: 240, g: 240, b: 255}   // -100°C ice white
+    ]);
 })();
 
 // Render Tb uint8 data to a data URI PNG using canvas + selected colormap
