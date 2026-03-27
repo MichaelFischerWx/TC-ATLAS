@@ -158,23 +158,17 @@ var IR_COLORMAPS = {};
         {tb: 310, r:  10, g:  10, b:  10}   //  37°C → near black
     ]);
 
-    // Dvorak BD-curve grayscale — exact operational thresholds
-    // Reference: Dvorak (1984), Velden et al. (2006), CIMSS/RAMMB
-    //
-    // WARM SIDE (linear gray ramp):
-    //   +37°C (310K) →   0 (black)      hot surface
-    //    +9°C (282K) → 156 (medium)      BD transition
-    //   -30°C (243K) → 176 (med-light)
-    //   -42°C (231K) → 198 (light)
-    //   -53°C (220K) → 255 (white)       meets first band
-    //
-    // COLD SIDE (flat stepped bands — no gradients):
-    //   -53 to -63°C (220–210K) → 255 WHITE
-    //   -63 to -69°C (210–204K) →   0 BLACK
-    //   -69 to -76°C (204–197K) → 128 MEDIUM GRAY
-    //   -76 to -80°C (197–193K) →   0 BLACK
-    //   below  -80°C (< 193K)  → 255 WHITE  (overshooting tops)
-    //
+    // Dvorak BD-curve grayscale (BW) — from satcmaps.bd05()
+    // Exact operational BD enhancement with stepped cold bands:
+    //   +30 to +9°C  (303–282K): black(0) → white(255) ramp
+    //   +9  to -30°C (282–243K): gray 109 → 202 ramp
+    //   -30 to -41°C (243–232K): flat gray 60
+    //   -41 to -53°C (232–220K): flat gray 110
+    //   -53 to -63°C (220–210K): flat gray 160
+    //   -63 to -69°C (210–204K): flat BLACK (0)
+    //   -69 to -75°C (204–198K): flat WHITE (255)
+    //   -75 to -80°C (198–193K): flat gray 135
+    //   below -80°C  (< 193K):   flat gray 85
     IR_COLORMAPS['grayscale'] = (function () {
         var vmin = 170.0, vmax = 310.0;
         var lut = new Uint8Array(256 * 4);
@@ -185,44 +179,116 @@ var IR_COLORMAPS = {};
             var gray;
 
             if (tb < 193) {
-                // Below -80°C → WHITE (overshooting tops)
-                gray = 255;
-            } else if (tb < 197) {
-                // -80 to -76°C → BLACK (second dark band)
-                gray = 0;
+                gray = 85;       // below -80°C
+            } else if (tb < 198) {
+                gray = 135;      // -80 to -75°C
             } else if (tb < 204) {
-                // -76 to -69°C → MEDIUM GRAY
-                gray = 128;
+                gray = 255;      // -75 to -69°C (WHITE)
             } else if (tb < 210) {
-                // -69 to -63°C → BLACK (first dark band)
-                gray = 0;
+                gray = 0;        // -69 to -63°C (BLACK)
             } else if (tb < 220) {
-                // -63 to -53°C → WHITE (CDO band)
-                gray = 255;
+                gray = 160;      // -63 to -53°C
+            } else if (tb < 232) {
+                gray = 110;      // -53 to -41°C
+            } else if (tb < 243) {
+                gray = 60;       // -41 to -30°C
+            } else if (tb < 282) {
+                // -30 to +9°C: gray ramp 202 → 109
+                gray = Math.round(202 + (tb - 243) * (109 - 202) / (282 - 243));
+            } else if (tb <= 303) {
+                // +9 to +30°C: white(255) → black(0)
+                gray = Math.round(255 + (tb - 282) * (0 - 255) / (303 - 282));
             } else {
-                // Warm side: linear ramp from white (220K/-53°C) to black (310K/+37°C)
-                // Uses 4 control points for the standard BD warm-side curve
-                if (tb <= 231) {
-                    // -53 to -42°C: 255 → 198
-                    gray = Math.round(255 + (tb - 220) * (198 - 255) / (231 - 220));
-                } else if (tb <= 243) {
-                    // -42 to -30°C: 198 → 176
-                    gray = Math.round(198 + (tb - 231) * (176 - 198) / (243 - 231));
-                } else if (tb <= 282) {
-                    // -30 to +9°C: 176 → 156
-                    gray = Math.round(176 + (tb - 243) * (156 - 176) / (282 - 243));
-                } else {
-                    // +9 to +37°C: 156 → 0
-                    gray = Math.round(156 + (tb - 282) * (0 - 156) / (310 - 282));
-                }
-                gray = Math.max(0, Math.min(255, gray));
+                gray = 0;        // above +30°C (black)
             }
+            gray = Math.max(0, Math.min(255, gray));
 
             var idx = i * 4;
             lut[idx] = gray; lut[idx + 1] = gray; lut[idx + 2] = gray; lut[idx + 3] = 255;
         }
         return lut;
     })();
+
+    // NOAA Funktop enhancement — stepped color bands (vmax=36°C, vmin=-92°C)
+    IR_COLORMAPS['funktop'] = buildLUTfromTb([
+        {tb: 309, r:   0, g:   0, b:   0},  // +36°C black
+        {tb: 308, r:  20, g:  20, b:  20},  // +35°C
+        {tb: 255, r: 216, g: 216, b: 216},  // -18°C light gray
+        {tb: 254.9, r: 100, g: 100, b:   0},  // → olive
+        {tb: 235, r: 248, g: 248, b:   0},  // -38°C yellow
+        {tb: 234.9, r:   0, g:   0, b: 120},  // → navy
+        {tb: 215, r:   0, g: 252, b: 252},  // -58°C cyan
+        {tb: 214.9, r:  84, g:   0, b:   0},  // → dark red
+        {tb: 203, r: 252, g:   0, b:   0},  // -70°C red
+        {tb: 202.9, r: 252, g:  80, b:  80},  // → salmon
+        {tb: 195, r: 252, g: 140, b: 140},  // -78°C pink
+        {tb: 194.9, r:   0, g: 252, b:   0},  // → green
+        {tb: 182, r: 252, g: 252, b: 252},  // -91°C white
+        {tb: 181, r: 252, g: 252, b: 252}   // -92°C white
+    ]);
+
+    // AVN enhancement — aviation weather style (vmax=50°C, vmin=-81°C)
+    IR_COLORMAPS['avn'] = buildLUTfromTb([
+        {tb: 310, r:   0, g:   0, b:   0},  // warm edge black
+        {tb: 243, r: 255, g: 255, b: 255},  // -30°C white
+        {tb: 242.9, r:   0, g: 150, b: 255},  // → blue
+        {tb: 223, r:   0, g: 110, b: 150},  // -50°C teal
+        {tb: 222.9, r: 160, g: 160, b:   0},  // → olive-yellow
+        {tb: 213, r: 250, g: 250, b:   0},  // -60°C yellow
+        {tb: 212.9, r: 250, g: 250, b:   0},
+        {tb: 203, r: 200, g: 120, b:   0},  // -70°C orange
+        {tb: 202.9, r: 250, g:   0, b:   0},  // → red
+        {tb: 193, r: 200, g:   0, b:   0},  // -80°C dark red
+        {tb: 192, r:  88, g:  88, b:  88}   // -81°C gray
+    ]);
+
+    // NHC enhancement — blue/green/red (vmax=25°C, vmin=-110°C)
+    IR_COLORMAPS['nhc'] = buildLUTfromTb([
+        {tb: 298, r:   0, g:   0, b:   0},  // +25°C black
+        {tb: 297, r:   0, g:   0, b:  24},  // +24°C
+        {tb: 282, r:   0, g:   0, b: 252},  // +9°C blue
+        {tb: 262, r:   0, g: 252, b:   0},  // -11°C green
+        {tb: 242, r: 252, g:   0, b:   0},  // -31°C red
+        {tb: 203, r: 252, g: 248, b: 248},  // -70°C near-white
+        {tb: 202.9, r: 216, g: 216, b: 216},  // → light gray
+        {tb: 170, r: 252, g: 252, b: 252}   // cold edge white
+    ]);
+
+    // RAMMB enhancement — multi-band (vmax=50°C, vmin=-100°C)
+    IR_COLORMAPS['rammb'] = buildLUTfromTb([
+        {tb: 310, r: 181, g:  85, b:  85},  // warm edge
+        {tb: 298, r:   0, g:   0, b:   0},  // +25°C black
+        {tb: 243, r: 254, g: 254, b: 254},  // -30°C white
+        {tb: 242.9, r: 168, g: 253, b: 253},  // → cyan
+        {tb: 223, r:  84, g:  84, b:  84},  // -50°C dark gray
+        {tb: 222.9, r:   0, g:   0, b: 103},  // → dark blue
+        {tb: 213, r:   0, g:   0, b: 254},  // -60°C blue
+        {tb: 212.9, r:   0, g:  96, b:  13},  // → dark green
+        {tb: 203, r:   0, g: 252, b:   0},  // -70°C green
+        {tb: 202.9, r:  77, g:  13, b:   0},  // → dark red
+        {tb: 193, r: 251, g:   0, b:   0},  // -80°C red
+        {tb: 192.9, r: 252, g: 252, b:   0},  // → yellow
+        {tb: 183, r:   0, g:   0, b:   0},  // -90°C black
+        {tb: 182.9, r: 255, g: 255, b: 255},  // → white
+        {tb: 173, r:   4, g:   4, b:   4}   // -100°C near-black
+    ]);
+
+    // IRB enhancement — vibrant multi-color (vmax=30°C, vmin=-100°C)
+    IR_COLORMAPS['irb'] = buildLUTfromTb([
+        {tb: 303, r:  18, g:  18, b:  18},  // +30°C dark gray
+        {tb: 283, r: 120, g: 120, b: 120},  // +10°C gray
+        {tb: 278, r: 215, g: 217, b: 219},  //  +5°C silver
+        {tb: 273, r: 252, g: 252, b: 252},  //   0°C white
+        {tb: 263, r:  43, g:  57, b: 161},  // -10°C blue
+        {tb: 253, r:  61, g: 173, b: 143},  // -20°C teal
+        {tb: 238, r: 255, g: 249, b:  87},  // -35°C yellow
+        {tb: 233, r: 227, g: 192, b:  36},  // -40°C gold
+        {tb: 218, r: 166, g:  35, b:  63},  // -55°C crimson
+        {tb: 213, r:  77, g:  13, b:   7},  // -60°C dark red
+        {tb: 203, r: 150, g:  73, b: 201},  // -70°C purple
+        {tb: 193, r: 224, g: 224, b: 255},  // -80°C lavender
+        {tb: 173, r:   0, g:   0, b:   0}   // -100°C black
+    ]);
 })();
 
 // Render Tb uint8 data to a data URI PNG using canvas + selected colormap
