@@ -725,13 +725,17 @@ input[type="range"].ga-range::-moz-range-thumb {
     border-color: rgba(0, 180, 255, 0.6);
 }
 
-/* Colormap selector button group */
+/* Colormap selector row — own line below options */
+.ir-cmap-row {
+    margin-top: 4px;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+}
 .ir-cmap-group {
     display: inline-flex;
     gap: 2px;
-    margin-left: 4px;
-    border-left: 1px solid rgba(255,255,255,0.15);
-    padding-left: 4px;
+    flex-wrap: wrap;
 }
 .ir-cmap-btn {
     font-size: 0.7rem;
@@ -751,7 +755,7 @@ input[type="range"].ga-range::-moz-range-thumb {
 /* IR brightness temperature colorbar */
 .ir-colorbar-row {
     margin-top: 5px;
-    max-width: 65%;
+    max-width: 100%;
 }
 #ir-colorbar-canvas {
     width: 100%;
