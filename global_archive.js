@@ -158,62 +158,64 @@ var IR_COLORMAPS = {};
         {tb: 310, r:  10, g:  10, b:  10}   //  37°C → near black
     ]);
 
-    // Classic Dvorak BD-curve Enhanced B&W — the standard operational grayscale
-    // enhancement with flat-shaded bands and sharp stepped transitions.
-    // Official thresholds (°C): +9, -30, -41, -53, -63, -69, -75, -80, -85
-    // Warm side (+9 to -53): smooth gray ramp (dark → white)
-    // Cold side (-53 and below): flat stepped B/W bands, NO gradients
-    // Built with a step function (no interpolation) to match operational look.
+    // Dvorak BD-curve grayscale — exact operational thresholds
+    // Reference: Dvorak (1984), Velden et al. (2006), CIMSS/RAMMB
+    //
+    // WARM SIDE (linear gray ramp):
+    //   +37°C (310K) →   0 (black)      hot surface
+    //    +9°C (282K) → 156 (medium)      BD transition
+    //   -30°C (243K) → 176 (med-light)
+    //   -42°C (231K) → 198 (light)
+    //   -53°C (220K) → 255 (white)       meets first band
+    //
+    // COLD SIDE (flat stepped bands — no gradients):
+    //   -53 to -63°C (220–210K) → 255 WHITE
+    //   -63 to -69°C (210–204K) →   0 BLACK
+    //   -69 to -76°C (204–197K) → 128 MEDIUM GRAY
+    //   -76 to -80°C (197–193K) →   0 BLACK
+    //   below  -80°C (< 193K)  → 255 WHITE  (overshooting tops)
+    //
     IR_COLORMAPS['grayscale'] = (function () {
         var vmin = 170.0, vmax = 310.0;
         var lut = new Uint8Array(256 * 4);
         lut[0] = 0; lut[1] = 0; lut[2] = 0; lut[3] = 0;  // index 0 = transparent
 
-        // Stepped bands [Tb_upper_K, Tb_lower_K, gray_value] — flat, no gradients
-        var bands = [
-            [188, 170, 255],   // below -85°C  → WHITE (overshooting tops)
-            [193, 188,   0],   // -80 to -85°C → BLACK
-            [198, 193, 255],   // -75 to -80°C → WHITE
-            [204, 198, 140],   // -69 to -75°C → MEDIUM GRAY
-            [210, 204,   0],   // -63 to -69°C → BLACK
-            [220, 210, 255],   // -53 to -63°C → WHITE
-        ];
-
-        // Smooth gray ramp control points for warm side (Tb >= 220K / >= -53°C)
-        var ramp = [
-            {tb: 310, v:   0},   //  +37°C → black (hot surface)
-            {tb: 282, v:  90},   //   +9°C → medium-dark gray
-            {tb: 243, v: 170},   //  -30°C → medium-light gray
-            {tb: 232, v: 200},   //  -41°C → light gray
-            {tb: 220, v: 240},   //  -53°C → near-white (meets first band)
-        ];
-
         for (var i = 1; i <= 255; i++) {
             var tb = vmin + (i - 1) * (vmax - vmin) / 254.0;
-            var gray = 128;
-            var inBand = false;
+            var gray;
 
-            for (var b = 0; b < bands.length; b++) {
-                if (tb >= bands[b][1] && tb < bands[b][0]) {
-                    gray = bands[b][2];
-                    inBand = true;
-                    break;
+            if (tb < 193) {
+                // Below -80°C → WHITE (overshooting tops)
+                gray = 255;
+            } else if (tb < 197) {
+                // -80 to -76°C → BLACK (second dark band)
+                gray = 0;
+            } else if (tb < 204) {
+                // -76 to -69°C → MEDIUM GRAY
+                gray = 128;
+            } else if (tb < 210) {
+                // -69 to -63°C → BLACK (first dark band)
+                gray = 0;
+            } else if (tb < 220) {
+                // -63 to -53°C → WHITE (CDO band)
+                gray = 255;
+            } else {
+                // Warm side: linear ramp from white (220K/-53°C) to black (310K/+37°C)
+                // Uses 4 control points for the standard BD warm-side curve
+                if (tb <= 231) {
+                    // -53 to -42°C: 255 → 198
+                    gray = Math.round(255 + (tb - 220) * (198 - 255) / (231 - 220));
+                } else if (tb <= 243) {
+                    // -42 to -30°C: 198 → 176
+                    gray = Math.round(198 + (tb - 231) * (176 - 198) / (243 - 231));
+                } else if (tb <= 282) {
+                    // -30 to +9°C: 176 → 156
+                    gray = Math.round(176 + (tb - 243) * (156 - 176) / (282 - 243));
+                } else {
+                    // +9 to +37°C: 156 → 0
+                    gray = Math.round(156 + (tb - 282) * (0 - 156) / (310 - 282));
                 }
-            }
-
-            if (!inBand && tb >= 220) {
-                // Smooth gray ramp for warm side
-                var lo = ramp[0], hi = ramp[ramp.length - 1];
-                for (var r = 0; r < ramp.length - 1; r++) {
-                    if (tb <= ramp[r].tb && tb >= ramp[r + 1].tb) {
-                        lo = ramp[r]; hi = ramp[r + 1];
-                        break;
-                    }
-                }
-                var t = (lo.tb === hi.tb) ? 0 : (tb - hi.tb) / (lo.tb - hi.tb);
-                gray = Math.round(hi.v + t * (lo.v - hi.v));
-            } else if (!inBand) {
-                gray = 255;  // fallback: white
+                gray = Math.max(0, Math.min(255, gray));
             }
 
             var idx = i * 4;

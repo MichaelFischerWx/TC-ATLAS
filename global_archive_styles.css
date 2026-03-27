@@ -684,7 +684,7 @@ input[type="range"].ga-range::-moz-range-thumb {
 .ir-map-playback {
     display: flex;
     align-items: center;
-    gap: 5px;
+    gap: 8px;
     margin-top: 2px;
 }
 .ir-slider-row {
@@ -751,7 +751,7 @@ input[type="range"].ga-range::-moz-range-thumb {
 /* IR brightness temperature colorbar */
 .ir-colorbar-row {
     margin-top: 5px;
-    max-width: 100%;
+    max-width: 65%;
 }
 #ir-colorbar-canvas {
     width: 100%;
