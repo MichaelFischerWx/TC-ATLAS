@@ -2927,16 +2927,21 @@ function displayIROnMap(data) {
         return;
     }
 
-    var bounds = data.bounds;
-    if (!bounds) {
-        // Fallback: estimate bounds from storm position
+    // Always compute bounds from frame metadata lat/lon for animation consistency.
+    // API may return actual_bounds that vary slightly frame-to-frame; using the
+    // requested domain (center ± 10°) ensures smooth, jitter-free animation.
+    var frameMeta = irMeta && irMeta.frames ? irMeta.frames[irFrameIdx] : null;
+    var centerLat, centerLon;
+    if (frameMeta && frameMeta.lat != null) {
+        centerLat = frameMeta.lat;
+        centerLon = frameMeta.lon;
+    } else if (data.bounds) {
+        // Derive center from API bounds as fallback
+        centerLat = (data.bounds.south + data.bounds.north) / 2;
+        centerLon = (data.bounds.west + data.bounds.east) / 2;
+    } else {
         var track = allTracks[selectedStorm.sid] || [];
-        var frameMeta = irMeta && irMeta.frames ? irMeta.frames[irFrameIdx] : null;
-        var centerLat, centerLon;
-        if (frameMeta && frameMeta.lat != null) {
-            centerLat = frameMeta.lat;
-            centerLon = frameMeta.lon;
-        } else if (frameMeta && frameMeta.datetime) {
+        if (frameMeta && frameMeta.datetime) {
             var pt = findTrackPointAtTime(track, frameMeta.datetime);
             centerLat = pt ? pt.la : (selectedStorm.lmi_lat || 20);
             centerLon = pt ? pt.lo : (selectedStorm.lmi_lon || -60);
@@ -2944,14 +2949,14 @@ function displayIROnMap(data) {
             centerLat = selectedStorm.lmi_lat || 20;
             centerLon = selectedStorm.lmi_lon || -60;
         }
-        var halfDeg = 10.0;  // Consistent domain size across all sources (20°×20°)
-        bounds = {
-            south: centerLat - halfDeg,
-            north: centerLat + halfDeg,
-            west: centerLon - halfDeg,
-            east: centerLon + halfDeg
-        };
     }
+    var halfDeg = 10.0;  // Consistent domain size across all sources (20°×20°)
+    var bounds = {
+        south: centerLat - halfDeg,
+        north: centerLat + halfDeg,
+        west: centerLon - halfDeg,
+        east: centerLon + halfDeg
+    };
 
     var imageBounds = L.latLngBounds(
         [bounds.south, bounds.west],
@@ -5227,7 +5232,11 @@ var MODEL_COLORS = {
     'HWRF': '#00b894', 'HWFI': '#00b894',
     'HMON': '#e17055', 'HMNI': '#e17055',
     'HAFS': '#00cec9', 'HAFA': '#00cec9', 'HAFB': '#81ecec',
-    'CTCX': '#fab1a0',
+    'CTCX': '#fab1a0', 'COTC': '#fab1a0', 'COTI': '#fab1a0',
+    'GFDN': '#e17055', 'GFNI': '#e17055',
+    'AVNX': '#ff6b6b', 'NGX': '#6c5ce7',
+    'AEMN': '#ff8a80', 'NEMN': '#b388ff', 'CEMN': '#fff176',
+    'CHIP': '#ce93d8',
     'GENI': '#00ff87', 'GEN2': '#00ff87',
     'GRPH': '#00e676', 'GRPI': '#00e676', 'GRP2': '#00e676',
     'APTS': '#76ff03', 'PTSI': '#76ff03',

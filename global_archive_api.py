@@ -1419,7 +1419,16 @@ def _load_mergir_subset_inner(target_dt, center_lat, center_lon, xr, timedelta):
                     # MergIR lat is ascending (south→north), flip so
                     # row 0 = north (as Leaflet imageOverlay expects)
                     _mergir_record_success()
-                    return tb[::-1], actual_bounds
+                    # Use REQUESTED bounds (not actual) for frame-to-frame
+                    # consistency — avoids jitter/cropping in animation.
+                    # Actual vs requested differs by <0.5° (sub-pixel).
+                    requested_bounds = {
+                        "south": center_lat - MERGIR_HALF_DOMAIN,
+                        "north": center_lat + MERGIR_HALF_DOMAIN,
+                        "west": center_lon - MERGIR_HALF_DOMAIN,
+                        "east": center_lon + MERGIR_HALF_DOMAIN,
+                    }
+                    return tb[::-1], requested_bounds
 
             except Exception as e:
                 logger.warning(f"MergIR: {url_label} parse failed: {e}")
@@ -1593,7 +1602,14 @@ def _load_gridsat_subset_inner(target_dt, center_lat, center_lon, requests_mod, 
                         # GridSat lat is ascending (-70 to 70), flip to north-at-top
                         if len(actual_lats) >= 2 and actual_lats[-1] > actual_lats[0]:
                             tb = tb[::-1]
-                        return tb, actual_bounds
+                        # Use requested bounds for animation consistency
+                        requested_bounds = {
+                            "south": center_lat - GRIDSAT_HALF_DOMAIN,
+                            "north": center_lat + GRIDSAT_HALF_DOMAIN,
+                            "west": center_lon - GRIDSAT_HALF_DOMAIN,
+                            "east": center_lon + GRIDSAT_HALF_DOMAIN,
+                        }
+                        return tb, requested_bounds
 
     except Exception as e:
         logger.warning(f"GridSat: OPeNDAP failed: {e}")
@@ -1673,7 +1689,14 @@ def _load_gridsat_subset_inner(target_dt, center_lat, center_lon, requests_mod, 
             # Flip to north-at-top if needed
             if len(actual_lats) >= 2 and actual_lats[-1] > actual_lats[0]:
                 tb = tb[::-1]
-            return tb, actual_bounds
+            # Use requested bounds for animation consistency
+            requested_bounds = {
+                "south": center_lat - GRIDSAT_HALF_DOMAIN,
+                "north": center_lat + GRIDSAT_HALF_DOMAIN,
+                "west": center_lon - GRIDSAT_HALF_DOMAIN,
+                "east": center_lon + GRIDSAT_HALF_DOMAIN,
+            }
+            return tb, requested_bounds
 
     except Exception as e:
         logger.warning(f"GridSat: direct download failed: {e}")
@@ -2719,6 +2742,16 @@ ADECK_MODELS = {
     "HAFA": {"name": "HAFS-A",    "color": "#00cec9", "type": "dynamical", "interp": False},
     "HAFB": {"name": "HAFS-B",    "color": "#81ecec", "type": "dynamical", "interp": False},
     "CTCX": {"name": "COAMPS-TC", "color": "#fab1a0", "type": "dynamical", "interp": False},
+    "COTC": {"name": "COAMPS-TC", "color": "#fab1a0", "type": "dynamical", "interp": False},
+    "COTI": {"name": "COAMPS-TC", "color": "#fab1a0", "type": "dynamical", "interp": True},
+    "GFDN": {"name": "GFDL-Navy", "color": "#e17055", "type": "dynamical", "interp": False},
+    "GFNI": {"name": "GFDL-Navy", "color": "#e17055", "type": "dynamical", "interp": True},
+    "AVNX": {"name": "GFS",       "color": "#ff6b6b", "type": "dynamical", "interp": False},
+    "NGX":  {"name": "NAVGEM",    "color": "#6c5ce7", "type": "dynamical", "interp": False},
+    "AEMN": {"name": "GFS-EPS",   "color": "#ff8a80", "type": "consensus", "interp": False},
+    "NEMN": {"name": "NAVGEM-EPS","color": "#b388ff", "type": "consensus", "interp": False},
+    "CEMN": {"name": "CMC-EPS",   "color": "#fff176", "type": "consensus", "interp": False},
+    "CHIP": {"name": "CHIPS",     "color": "#ce93d8", "type": "statistical","interp": False},
     "JGSM": {"name": "JGSM",      "color": "#b2bec3", "type": "dynamical", "interp": False},
     # Legacy dynamical models (1990s–early 2000s)
     "GFDL": {"name": "GFDL",      "color": "#e17055", "type": "dynamical", "interp": False},
@@ -2931,59 +2964,94 @@ def _fetch_adeck(atcf_id: str) -> dict | None:
 
     import requests as req
 
-    # Build URL list — order matters (fastest/most reliable first)
     fname = f"a{basin}{num}{year}"
-    urls = []
 
-    if basin in ("al", "ep", "cp"):
-        # NHC-monitored basins — NHC FTP is primary
-        urls += [
-            f"https://ftp.nhc.noaa.gov/atcf/aid_public/{fname}.dat.gz",
-            f"https://ftp.nhc.noaa.gov/atcf/aid/{fname}.dat",
-            f"https://ftp.nhc.noaa.gov/atcf/archive/{year}/{fname}.dat.gz",
-        ]
-    else:
-        # JTWC-monitored basins (WP, IO, SH)
-        # NHC aid_public has JTWC data for ACTIVE storms (current season only)
-        # NRL is the authoritative JTWC archive for historical storms
-        # Note: ssd.noaa.gov/PS/TROP/DATA/ATCF/JTWC/ returns 403 Forbidden
-        urls += [
-            # Active storms (current season)
-            f"https://ftp.nhc.noaa.gov/atcf/aid_public/{fname}.dat.gz",
-            # NRL ATCF archive (primary historical source for JTWC)
-            f"https://science.nrlmry.navy.mil/atcf/aidarchive/{year}/{fname}.dat.gz",
-            f"https://science.nrlmry.navy.mil/atcf/archive/{year}/{fname}.dat.gz",
-            f"https://science.nrlmry.navy.mil/atcf-web/docs/current_storms/{fname}.dat",
-        ]
-
-    # Universal fallbacks (all basins)
-    urls += [
-        # UCAR RAL TC Guidance Project — global aggregator (all basins, all years)
-        # adecks_open/ is the publicly accessible directory
-        f"https://hurricanes.ral.ucar.edu/repository/data/adecks_open/{year}/{fname}.dat",
-        f"https://hurricanes.ral.ucar.edu/repository/data/{year}/{fname}.dat",
-        # Alternate NHC archive paths (non-gzipped)
-        f"https://ftp.nhc.noaa.gov/atcf/archive/{year}/{fname}.dat",
-    ]
-
-    raw_text = None
-    source = None
-    for url in urls:
+    def _fetch_url(url: str) -> str | None:
+        """Fetch a single a-deck URL, return decoded text or None."""
         try:
             logger.info(f"Fetching a-deck: {url}")
             resp = req.get(url, timeout=20, headers=_HTTP_HEADERS)
             if resp.status_code == 200 and len(resp.content) > 100:
                 if url.endswith(".gz"):
                     import gzip
-                    raw_text = gzip.decompress(resp.content).decode("utf-8", errors="replace")
+                    text = gzip.decompress(resp.content).decode("utf-8", errors="replace")
                 else:
-                    raw_text = resp.text
-                source = url
-                logger.info(f"A-deck fetched: {len(raw_text)} bytes from {url}")
-                break
+                    text = resp.text
+                logger.info(f"A-deck fetched: {len(text)} bytes from {url}")
+                return text
         except Exception as e:
             logger.warning(f"A-deck fetch failed for {url}: {e}")
-            continue
+        return None
+
+    if basin in ("al", "ep", "cp"):
+        # NHC-monitored basins — NHC FTP is primary, one file has all models
+        urls = [
+            f"https://ftp.nhc.noaa.gov/atcf/aid_public/{fname}.dat.gz",
+            f"https://ftp.nhc.noaa.gov/atcf/aid/{fname}.dat",
+            f"https://ftp.nhc.noaa.gov/atcf/archive/{year}/{fname}.dat.gz",
+            f"https://hurricanes.ral.ucar.edu/repository/data/adecks_open/{year}/{fname}.dat",
+            f"https://ftp.nhc.noaa.gov/atcf/archive/{year}/{fname}.dat",
+        ]
+        # For NHC basins, one file has everything — stop at first success
+        raw_text = None
+        source = None
+        for url in urls:
+            text = _fetch_url(url)
+            if text:
+                raw_text = text
+                source = url
+                break
+    else:
+        # JTWC-monitored basins (WP, IO, SH)
+        # A-deck data is fragmented across multiple data providers on UCAR RAL:
+        #   - adecks_open/  : HWRF and various models (comprehensive for recent storms)
+        #   - fnmoc/        : NVGM, COTC, GFDN, NAVGEM ensembles
+        #   - nrlmry/       : CTCX and other Navy models (2015+ only)
+        # We COMBINE data from all available sources for the fullest picture.
+
+        raw_text = None
+        source = None
+        combined_parts = []
+        sources_used = []
+
+        # 1. Try NHC aid_public first (has all models for ACTIVE storms)
+        nhc_url = f"https://ftp.nhc.noaa.gov/atcf/aid_public/{fname}.dat.gz"
+        text = _fetch_url(nhc_url)
+        if text and len(text) > 5000:
+            # NHC aid_public for active JTWC storms is comprehensive — use it directly
+            raw_text = text
+            source = nhc_url
+        else:
+            # Historical storm — combine from multiple UCAR RAL directories
+            ucar_sources = [
+                f"https://hurricanes.ral.ucar.edu/repository/data/adecks_open/{year}/{fname}.dat",
+                f"https://hurricanes.ral.ucar.edu/repository/data/fnmoc/{year}/{fname}.dat",
+                f"https://hurricanes.ral.ucar.edu/repository/data/nrlmry/{year}/{fname}.dat",
+            ]
+            for url in ucar_sources:
+                text = _fetch_url(url)
+                if text:
+                    combined_parts.append(text)
+                    sources_used.append(url)
+
+            # Also try NRL direct and NHC archive as fallbacks
+            fallback_urls = [
+                f"https://science.nrlmry.navy.mil/atcf/aidarchive/{year}/{fname}.dat.gz",
+                f"https://science.nrlmry.navy.mil/atcf/archive/{year}/{fname}.dat.gz",
+                f"https://ftp.nhc.noaa.gov/atcf/archive/{year}/{fname}.dat",
+            ]
+            if not combined_parts:
+                for url in fallback_urls:
+                    text = _fetch_url(url)
+                    if text:
+                        combined_parts.append(text)
+                        sources_used.append(url)
+                        break  # Fallbacks are single-source, stop at first
+
+            if combined_parts:
+                raw_text = "\n".join(combined_parts)
+                source = " + ".join(sources_used)
+                logger.info(f"A-deck combined from {len(sources_used)} sources: {source}")
 
     if not raw_text:
         return None
