@@ -1054,6 +1054,10 @@
                 : 'Currently showing Enhanced IR — click to switch to GeoColor';
         }
 
+        // Show/hide IR colorbar
+        var colorbar = document.getElementById('ir-global-colorbar');
+        if (colorbar) colorbar.style.display = (mode === 'geocolor') ? 'none' : '';
+
         // If global animation is loaded, it needs to be rebuilt for the new product
         var hadAnim = globalAnimReady;
         if (globalAnimFrameLayers.length > 0) {
@@ -1405,6 +1409,31 @@
             }
         });
         map.addControl(new ProductToggle());
+
+        // Add IR Tb colorbar to global map (bottom-left, above animation panel)
+        var TbColorbar = L.Control.extend({
+            options: { position: 'bottomleft' },
+            onAdd: function () {
+                var container = L.DomUtil.create('div', 'ir-global-colorbar');
+                container.id = 'ir-global-colorbar';
+                container.style.cssText = 'background:rgba(0,0,0,0.65);padding:6px 10px;border-radius:4px;font-family:JetBrains Mono,monospace;font-size:0.65rem;color:rgba(255,255,255,0.7);pointer-events:none;margin-bottom:4px;';
+                L.DomEvent.disableClickPropagation(container);
+
+                var label = L.DomUtil.create('div', '', container);
+                label.textContent = 'Brightness Temp (K)';
+                label.style.cssText = 'margin-bottom:2px;';
+
+                var bar = L.DomUtil.create('div', '', container);
+                bar.style.cssText = 'width:160px;height:10px;border-radius:2px;margin:4px 0 2px;background:linear-gradient(to right,rgb(8,8,8),rgb(90,90,90),rgb(200,200,200),rgb(0,100,255),rgb(0,255,0),rgb(255,180,0),rgb(255,0,0),rgb(180,0,180),rgb(255,255,255));';
+
+                var labels = L.DomUtil.create('div', '', container);
+                labels.style.cssText = 'display:flex;justify-content:space-between;font-size:0.6rem;';
+                labels.innerHTML = '<span>310</span><span>250</span><span>190</span>';
+
+                return container;
+            }
+        });
+        map.addControl(new TbColorbar());
 
         // Add global animation control panel (bottom-right, above status bar)
         var AnimPanel = L.Control.extend({
