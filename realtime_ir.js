@@ -79,6 +79,21 @@
     var stormData = [];        // latest active-storms response
     var pollTimer = null;
     var currentStormId = null; // ATCF ID of detail view
+
+    // Basin activity sidebar
+    var basinSidebarVisible = false;
+    var seasonSummaryData = null;
+    var seasonSummaryTimer = null;
+    var SEASON_SUMMARY_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
+
+    var BASIN_NAMES = {
+        NA: 'North Atlantic', EP: 'East Pacific', WP: 'West Pacific',
+        NI: 'North Indian', SI: 'South Indian', SP: 'South Pacific'
+    };
+    var BASIN_COLORS = {
+        NA: '#2e7dff', EP: '#00d4ff', WP: '#f87171',
+        NI: '#fbbf24', SI: '#34d399', SP: '#a78bfa'
+    };
     var gibsIRLayers = [];     // GIBS IR tile layers on main map
     var trackLayers = [];      // past track polylines + dots on main map
 
@@ -3047,6 +3062,126 @@
         openStormDetail(atcfId);
     };
 
+    // ═══════════════════════════════════════════════════════════
+    //  BASIN ACTIVITY SIDEBAR
+    // ═══════════════════════════════════════════════════════════
+
+    window.toggleBasinSidebar = function () {
+        basinSidebarVisible = !basinSidebarVisible;
+        var sidebar = document.getElementById('basin-sidebar');
+        var toggle = document.getElementById('basin-sidebar-toggle');
+        var mapEl = document.getElementById('ir-map');
+
+        if (basinSidebarVisible) {
+            sidebar.classList.add('open');
+            toggle.classList.add('active');
+            mapEl.classList.add('sidebar-open');
+            // Fetch if we don't have data yet
+            if (!seasonSummaryData) fetchSeasonSummary();
+        } else {
+            sidebar.classList.remove('open');
+            toggle.classList.remove('active');
+            mapEl.classList.remove('sidebar-open');
+        }
+        // Let Leaflet recalculate after CSS transition
+        setTimeout(function () { if (map) map.invalidateSize(); }, 350);
+        _ga('ir_basin_sidebar_toggle', { visible: basinSidebarVisible });
+    };
+
+    function fetchSeasonSummary() {
+        fetch(API_BASE + '/ir-monitor/season-summary')
+            .then(function (r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            })
+            .then(function (data) {
+                seasonSummaryData = data;
+                renderBasinSidebar();
+            })
+            .catch(function (err) {
+                console.warn('[IR Monitor] Season summary fetch failed:', err.message || '');
+                var content = document.getElementById('basin-sidebar-content');
+                if (content) content.innerHTML = '<div class="basin-sidebar-loading">Unable to load season data</div>';
+            });
+    }
+
+    function renderBasinSidebar() {
+        if (!seasonSummaryData) return;
+
+        var yearEl = document.getElementById('basin-sidebar-year');
+        if (yearEl) yearEl.textContent = seasonSummaryData.year;
+
+        var climoLabel = document.getElementById('basin-sidebar-climo-label');
+        if (climoLabel) climoLabel.textContent = 'Climatology: ' + (seasonSummaryData.climo_period || '1991-2020');
+
+        var content = document.getElementById('basin-sidebar-content');
+        if (!content) return;
+
+        var basins = seasonSummaryData.basins || {};
+        // Sort: active_now desc, then named_storms desc
+        var keys = Object.keys(basins).sort(function (a, b) {
+            var da = basins[a], db = basins[b];
+            if (db.active_now !== da.active_now) return db.active_now - da.active_now;
+            return db.named_storms - da.named_storms;
+        });
+
+        var html = '';
+        for (var i = 0; i < keys.length; i++) {
+            var basin = keys[i];
+            var d = basins[basin];
+            var color = BASIN_COLORS[basin] || '#64748b';
+            var name = BASIN_NAMES[basin] || basin;
+
+            // Skip basins with zero activity this season and no active storms
+            if (d.named_storms === 0 && d.active_now === 0) continue;
+
+            // Active badge
+            var activeBadge = d.active_now > 0
+                ? '<span class="basin-card-active">' + d.active_now + ' active</span>'
+                : '<span class="basin-card-active none">quiet</span>';
+
+            // ACE bar
+            var acePct = d.climo_ace > 0 ? Math.round((d.ace / d.climo_ace) * 100) : 0;
+            var aceBarWidth = Math.min(acePct, 150); // cap at 150% for display
+            var aceColor = acePct >= 100 ? '#f87171' : acePct >= 75 ? '#fbbf24' : '#34d399';
+
+            html += '<div class="basin-card" style="--basin-color:' + color + ';">' +
+                '<div class="basin-card-header">' +
+                    '<span class="basin-card-name">' + name + '</span>' +
+                    activeBadge +
+                '</div>' +
+                '<div class="basin-card-stats">' +
+                    '<div class="basin-stat">' +
+                        '<div class="basin-stat-val">' + d.named_storms + '</div>' +
+                        '<div class="basin-stat-label">Named</div>' +
+                    '</div>' +
+                    '<div class="basin-stat">' +
+                        '<div class="basin-stat-val">' + d.hurricanes + '</div>' +
+                        '<div class="basin-stat-label">Hurr</div>' +
+                    '</div>' +
+                    '<div class="basin-stat">' +
+                        '<div class="basin-stat-val">' + d.major_hurricanes + '</div>' +
+                        '<div class="basin-stat-label">Major</div>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="basin-ace-row">' +
+                    '<span class="basin-ace-label">ACE ' + d.ace.toFixed(1) + '</span>' +
+                    '<div class="basin-ace-bar">' +
+                        '<div class="basin-ace-fill" style="width:' + aceBarWidth + '%;background:' + aceColor + ';"></div>' +
+                    '</div>' +
+                    '<span class="basin-ace-pct">' + acePct + '%</span>' +
+                '</div>' +
+            '</div>';
+        }
+
+        // If no basins have activity
+        if (!html) {
+            html = '<div class="basin-sidebar-loading">No tropical cyclone activity this season</div>';
+        }
+
+        content.innerHTML = html;
+    }
+
     function init() {
         initMap();
         bindEvents();
@@ -3057,11 +3192,16 @@
         // Set up recurring poll
         pollTimer = setInterval(pollActiveStorms, POLL_INTERVAL_MS);
 
+        // Fetch season summary (initial + recurring every 30 min)
+        fetchSeasonSummary();
+        seasonSummaryTimer = setInterval(fetchSeasonSummary, SEASON_SUMMARY_INTERVAL_MS);
+
         // Clean up timers on page unload to prevent memory leaks
         window.addEventListener('beforeunload', function () {
             if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
             if (globalAnimTimer) { clearInterval(globalAnimTimer); globalAnimTimer = null; }
             if (animTimer) { clearInterval(animTimer); animTimer = null; }
+            if (seasonSummaryTimer) { clearInterval(seasonSummaryTimer); seasonSummaryTimer = null; }
         });
 
         _ga('ir_page_load');

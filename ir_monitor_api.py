@@ -16,13 +16,16 @@ Indian Ocean, and Southern Hemisphere (JTWC B-deck).
 
 import gc
 import io
+import json
 import math
+import os
 import re
 import threading
 import time
 import traceback
 from collections import OrderedDict
 from datetime import datetime as _dt, timedelta, timezone
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -91,6 +94,143 @@ _active_storms_lock = threading.Lock()
 _last_poll_time: float = 0.0
 
 _ir_frame_cache: OrderedDict = OrderedDict()
+
+# ---------------------------------------------------------------------------
+# Season Summary — IBTrACS-based climatology + current season stats
+# ---------------------------------------------------------------------------
+_CLIMO_YEARS = (1991, 2020)  # 30-year climatological baseline
+_IBTRACS_BASINS = ["NA", "EP", "WP", "NI", "SI", "SP"]
+
+# Basin name mapping from ATCF active-storm codes to IBTrACS codes
+_ACTIVE_TO_IBTRACS_BASIN = {
+    "ATL": "NA", "EPAC": "EP", "WPAC": "WP",
+    "IO": "NI", "SHEM_SI": "SI", "SHEM_SP": "SP", "SHEM": "SI",
+}
+
+_ibtracs_storms: list = []         # raw storms from ibtracs_storms.json
+_climo_cache: dict = {}            # basin → {named, hurricanes, major, ace} averages
+_season_summary_cache: dict = {}   # last computed summary
+_season_summary_ts: float = 0.0    # timestamp of last computation
+
+
+def _load_ibtracs_for_climo():
+    """Load ibtracs_storms.json once on startup for climatology."""
+    global _ibtracs_storms, _climo_cache
+    json_path = Path(__file__).parent / "ibtracs_storms.json"
+    if not json_path.exists():
+        print("[Season Summary] ibtracs_storms.json not found — season summary disabled")
+        return
+    try:
+        data = json.loads(json_path.read_text())
+        _ibtracs_storms = data.get("storms", [])
+        print(f"[Season Summary] Loaded {len(_ibtracs_storms)} storms from IBTrACS")
+    except Exception as exc:
+        print(f"[Season Summary] Failed to load IBTrACS: {exc}")
+        return
+
+    # Pre-compute 30-year climatological averages per basin
+    for basin in _IBTRACS_BASINS:
+        yearly = {}  # year → {named, hurricanes, major, ace}
+        for yr in range(_CLIMO_YEARS[0], _CLIMO_YEARS[1] + 1):
+            yearly[yr] = {"named": 0, "hurricanes": 0, "major": 0, "ace": 0.0}
+        for s in _ibtracs_storms:
+            if s.get("basin") != basin:
+                continue
+            yr = s.get("year")
+            if yr is None or yr < _CLIMO_YEARS[0] or yr > _CLIMO_YEARS[1]:
+                continue
+            pk = s.get("peak_wind_kt") or 0
+            ace = s.get("ace") or 0.0
+            if pk >= 34:
+                yearly[yr]["named"] += 1
+            if pk >= 64:
+                yearly[yr]["hurricanes"] += 1
+            if pk >= 96:
+                yearly[yr]["major"] += 1
+            yearly[yr]["ace"] += ace
+        n_years = _CLIMO_YEARS[1] - _CLIMO_YEARS[0] + 1
+        _climo_cache[basin] = {
+            "named": round(sum(y["named"] for y in yearly.values()) / n_years, 1),
+            "hurricanes": round(sum(y["hurricanes"] for y in yearly.values()) / n_years, 1),
+            "major": round(sum(y["major"] for y in yearly.values()) / n_years, 1),
+            "ace": round(sum(y["ace"] for y in yearly.values()) / n_years, 1),
+        }
+    print(f"[Season Summary] Climatology computed for {list(_climo_cache.keys())}")
+
+
+def _compute_season_summary() -> dict:
+    """Compute current-year season stats per basin."""
+    global _season_summary_cache, _season_summary_ts
+
+    now = _dt.now(timezone.utc)
+    current_year = now.year
+
+    # Check cache (10-minute TTL)
+    if _season_summary_cache and (time.time() - _season_summary_ts) < 600:
+        # Just update active_now counts from live data
+        with _active_storms_lock:
+            active_by_basin = dict(_active_storms_cache.get("count_by_basin", {}))
+        for basin_code, bdata in _season_summary_cache.get("basins", {}).items():
+            active = 0
+            for atcf_code, ibt_code in _ACTIVE_TO_IBTRACS_BASIN.items():
+                if ibt_code == basin_code:
+                    active += active_by_basin.get(atcf_code, 0)
+            bdata["active_now"] = active
+        _season_summary_cache["updated_utc"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        return _season_summary_cache
+
+    basins = {}
+    for basin in _IBTRACS_BASINS:
+        named = 0
+        hurricanes = 0
+        major = 0
+        ace = 0.0
+        for s in _ibtracs_storms:
+            if s.get("basin") != basin or s.get("year") != current_year:
+                continue
+            pk = s.get("peak_wind_kt") or 0
+            if pk >= 34:
+                named += 1
+            if pk >= 64:
+                hurricanes += 1
+            if pk >= 96:
+                major += 1
+            ace += s.get("ace") or 0.0
+
+        climo = _climo_cache.get(basin, {})
+
+        # Get active-now count from live cache
+        active = 0
+        with _active_storms_lock:
+            active_by_basin = dict(_active_storms_cache.get("count_by_basin", {}))
+        for atcf_code, ibt_code in _ACTIVE_TO_IBTRACS_BASIN.items():
+            if ibt_code == basin:
+                active += active_by_basin.get(atcf_code, 0)
+
+        basins[basin] = {
+            "named_storms": named,
+            "hurricanes": hurricanes,
+            "major_hurricanes": major,
+            "ace": round(ace, 1),
+            "climo_named": climo.get("named", 0),
+            "climo_hurricanes": climo.get("hurricanes", 0),
+            "climo_major": climo.get("major", 0),
+            "climo_ace": climo.get("ace", 0),
+            "active_now": active,
+        }
+
+    _season_summary_cache = {
+        "year": current_year,
+        "basins": basins,
+        "climo_period": f"{_CLIMO_YEARS[0]}-{_CLIMO_YEARS[1]}",
+        "updated_utc": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    _season_summary_ts = time.time()
+    return _season_summary_cache
+
+
+# Load IBTrACS on module import
+_load_ibtracs_for_climo()
 
 # Basin mapping from ATCF 2-letter code
 _BASIN_MAP = {
@@ -819,6 +959,23 @@ def get_active_storms():
     return JSONResponse(
         content=data,
         headers={"Cache-Control": "public, max-age=120"},
+    )
+
+
+@router.get("/season-summary")
+def get_season_summary():
+    """
+    Return current-year season statistics per basin with climatological comparison.
+    Uses IBTrACS archive for historical counts/ACE and 30-year (1991-2020) averages.
+    Active-now counts are merged from the live active-storms cache.
+    """
+    if not _ibtracs_storms:
+        raise HTTPException(status_code=503, detail="IBTrACS data not loaded")
+
+    summary = _compute_season_summary()
+    return JSONResponse(
+        content=summary,
+        headers={"Cache-Control": "public, max-age=300"},
     )
 
 

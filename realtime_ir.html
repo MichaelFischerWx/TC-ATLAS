@@ -91,6 +91,26 @@
     <!-- ── Map View ───────────────────────────────────────────── -->
     <section id="ir-main" role="main" aria-label="Real-Time IR Monitor">
 
+        <!-- Basin Activity Sidebar -->
+        <div id="basin-sidebar" class="basin-sidebar">
+            <div class="basin-sidebar-header">
+                <h3>Season Activity</h3>
+                <span id="basin-sidebar-year" class="basin-sidebar-year"></span>
+            </div>
+            <div id="basin-sidebar-content" class="basin-sidebar-content">
+                <div class="basin-sidebar-loading">Loading season data&hellip;</div>
+            </div>
+            <div class="basin-sidebar-footer">
+                <span id="basin-sidebar-climo-label" class="basin-sidebar-climo-label"></span>
+            </div>
+        </div>
+
+        <!-- Basin Activity toggle button -->
+        <button id="basin-sidebar-toggle" class="basin-sidebar-toggle"
+                onclick="window.toggleBasinSidebar()" title="Toggle basin activity panel">
+            &#9776; Basins
+        </button>
+
         <!-- Map container -->
         <div id="ir-map" class="ir-map"></div>
 
