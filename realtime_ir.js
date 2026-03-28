@@ -13,6 +13,280 @@
     var DEFAULT_LOOKBACK_HOURS = 6;
     var DEFAULT_RADIUS_DEG = 3.0;
 
+    // ── IR Colormap LUTs (for client-side raw Tb rendering) ────
+    var IR_COLORMAPS = {};
+    var irSelectedColormap = 'enhanced';
+    var _irRenderCanvas = null;
+
+    // Raw Tb frame storage — parallel to animFrameLayers
+    var rawTbFrames = [];  // array of {tb_data: Uint8Array, rows, cols, bounds}
+
+    (function buildColormaps() {
+        function buildLUT(stops) {
+            var lut = new Uint8Array(256 * 4);
+            lut[0] = 0; lut[1] = 0; lut[2] = 0; lut[3] = 0;
+            for (var i = 1; i <= 255; i++) {
+                var frac = 1.0 - (i - 1) / 254.0;
+                var lo = stops[0], hi = stops[stops.length - 1];
+                for (var s = 0; s < stops.length - 1; s++) {
+                    if (frac >= stops[s].f && frac <= stops[s + 1].f) {
+                        lo = stops[s]; hi = stops[s + 1];
+                        break;
+                    }
+                }
+                var t = (hi.f === lo.f) ? 0 : (frac - lo.f) / (hi.f - lo.f);
+                t = Math.max(0, Math.min(1, t));
+                var idx = i * 4;
+                lut[idx]     = Math.round(lo.r + t * (hi.r - lo.r));
+                lut[idx + 1] = Math.round(lo.g + t * (hi.g - lo.g));
+                lut[idx + 2] = Math.round(lo.b + t * (hi.b - lo.b));
+                lut[idx + 3] = 255;
+            }
+            return lut;
+        }
+
+        function buildLUTfromTb(tbStops) {
+            var vmin = 170.0, vmax = 310.0;
+            var fracStops = tbStops.map(function(s) {
+                return {f: 1.0 - (s.tb - vmin) / (vmax - vmin), r: s.r, g: s.g, b: s.b};
+            });
+            fracStops.sort(function(a, b) { return a.f - b.f; });
+            return buildLUT(fracStops);
+        }
+
+        // Enhanced IR — NOAA-style
+        IR_COLORMAPS['enhanced'] = buildLUT([
+            {f: 0.00, r:   8, g:   8, b:   8},
+            {f: 0.15, r:  40, g:  40, b:  40},
+            {f: 0.30, r:  90, g:  90, b:  90},
+            {f: 0.40, r: 140, g: 140, b: 140},
+            {f: 0.50, r: 200, g: 200, b: 200},
+            {f: 0.55, r:   0, g: 180, b: 255},
+            {f: 0.60, r:   0, g: 100, b: 255},
+            {f: 0.65, r:   0, g: 255, b:   0},
+            {f: 0.70, r: 255, g: 255, b:   0},
+            {f: 0.75, r: 255, g: 180, b:   0},
+            {f: 0.80, r: 255, g:  80, b:   0},
+            {f: 0.85, r: 255, g:   0, b:   0},
+            {f: 0.90, r: 180, g:   0, b: 180},
+            {f: 0.95, r: 255, g: 180, b: 255},
+            {f: 1.00, r: 255, g: 255, b: 255}
+        ]);
+
+        // Dvorak Enhanced
+        IR_COLORMAPS['dvorak'] = buildLUTfromTb([
+            {tb: 170, r: 255, g: 255, b: 255},
+            {tb: 183, r: 255, g:   0, b: 255},
+            {tb: 193, r: 255, g:   0, b:   0},
+            {tb: 203, r: 255, g: 128, b:   0},
+            {tb: 213, r: 255, g: 255, b:   0},
+            {tb: 223, r:   0, g: 255, b:   0},
+            {tb: 233, r:   0, g: 128, b: 255},
+            {tb: 243, r:   0, g:   0, b: 255},
+            {tb: 253, r: 128, g: 128, b: 128},
+            {tb: 273, r: 180, g: 180, b: 180},
+            {tb: 293, r:  60, g:  60, b:  60},
+            {tb: 310, r:  10, g:  10, b:  10}
+        ]);
+
+        // BD Grayscale
+        IR_COLORMAPS['grayscale'] = (function () {
+            var vmin = 170.0, vmax = 310.0;
+            var lut = new Uint8Array(256 * 4);
+            lut[0] = 0; lut[1] = 0; lut[2] = 0; lut[3] = 0;
+            for (var i = 1; i <= 255; i++) {
+                var tb = vmin + (i - 1) * (vmax - vmin) / 254.0;
+                var gray;
+                if (tb < 193) gray = 85;
+                else if (tb < 198) gray = 135;
+                else if (tb < 204) gray = 255;
+                else if (tb < 210) gray = 0;
+                else if (tb < 220) gray = 160;
+                else if (tb < 232) gray = 110;
+                else if (tb < 243) gray = 60;
+                else if (tb < 282) gray = Math.round(202 + (tb - 243) * (109 - 202) / (282 - 243));
+                else if (tb <= 303) gray = Math.round(255 + (tb - 282) * (0 - 255) / (303 - 282));
+                else gray = 0;
+                gray = Math.max(0, Math.min(255, gray));
+                var idx = i * 4;
+                lut[idx] = gray; lut[idx + 1] = gray; lut[idx + 2] = gray; lut[idx + 3] = 255;
+            }
+            return lut;
+        })();
+
+        // Funktop
+        IR_COLORMAPS['funktop'] = buildLUTfromTb([
+            {tb: 309, r:   0, g:   0, b:   0},
+            {tb: 308, r:  20, g:  20, b:  20},
+            {tb: 255, r: 216, g: 216, b: 216},
+            {tb: 254.9, r: 100, g: 100, b:   0},
+            {tb: 235, r: 248, g: 248, b:   0},
+            {tb: 234.9, r:   0, g:   0, b: 120},
+            {tb: 215, r:   0, g: 252, b: 252},
+            {tb: 214.9, r:  84, g:   0, b:   0},
+            {tb: 203, r: 252, g:   0, b:   0},
+            {tb: 202.9, r: 252, g:  80, b:  80},
+            {tb: 195, r: 252, g: 140, b: 140},
+            {tb: 194.9, r:   0, g: 252, b:   0},
+            {tb: 182, r: 252, g: 252, b: 252},
+            {tb: 181, r: 252, g: 252, b: 252}
+        ]);
+
+        // AVN
+        IR_COLORMAPS['avn'] = buildLUTfromTb([
+            {tb: 310, r:   0, g:   0, b:   0},
+            {tb: 243, r: 255, g: 255, b: 255},
+            {tb: 242.9, r:   0, g: 150, b: 255},
+            {tb: 223, r:   0, g: 110, b: 150},
+            {tb: 222.9, r: 160, g: 160, b:   0},
+            {tb: 213, r: 250, g: 250, b:   0},
+            {tb: 212.9, r: 250, g: 250, b:   0},
+            {tb: 203, r: 200, g: 120, b:   0},
+            {tb: 202.9, r: 250, g:   0, b:   0},
+            {tb: 193, r: 200, g:   0, b:   0},
+            {tb: 192, r:  88, g:  88, b:  88}
+        ]);
+
+        // NHC
+        IR_COLORMAPS['nhc'] = buildLUTfromTb([
+            {tb: 298, r:   0, g:   0, b:   0},
+            {tb: 297, r:   0, g:   0, b:  24},
+            {tb: 282, r:   0, g:   0, b: 252},
+            {tb: 262, r:   0, g: 252, b:   0},
+            {tb: 242, r: 252, g:   0, b:   0},
+            {tb: 203, r: 252, g: 248, b: 248},
+            {tb: 202.9, r: 216, g: 216, b: 216},
+            {tb: 170, r: 252, g: 252, b: 252}
+        ]);
+
+        // RAMMB
+        IR_COLORMAPS['rammb'] = buildLUTfromTb([
+            {tb: 310, r: 181, g:  85, b:  85},
+            {tb: 298, r:   0, g:   0, b:   0},
+            {tb: 243, r: 254, g: 254, b: 254},
+            {tb: 242.9, r: 168, g: 253, b: 253},
+            {tb: 223, r:  84, g:  84, b:  84},
+            {tb: 222.9, r:   0, g:   0, b: 103},
+            {tb: 213, r:   0, g:   0, b: 254},
+            {tb: 212.9, r:   0, g:  96, b:  13},
+            {tb: 203, r:   0, g: 252, b:   0},
+            {tb: 202.9, r:  77, g:  13, b:   0},
+            {tb: 193, r: 251, g:   0, b:   0},
+            {tb: 192.9, r: 252, g: 252, b:   0},
+            {tb: 183, r:   0, g:   0, b:   0},
+            {tb: 182.9, r: 255, g: 255, b: 255},
+            {tb: 173, r:   4, g:   4, b:   4}
+        ]);
+
+        // IRB
+        IR_COLORMAPS['irb'] = buildLUTfromTb([
+            {tb: 303, r:  18, g:  18, b:  18},
+            {tb: 283, r: 120, g: 120, b: 120},
+            {tb: 278, r: 215, g: 217, b: 219},
+            {tb: 273, r: 252, g: 252, b: 252},
+            {tb: 263, r:  43, g:  57, b: 161},
+            {tb: 253, r:  61, g: 173, b: 143},
+            {tb: 238, r: 255, g: 249, b:  87},
+            {tb: 233, r: 227, g: 192, b:  36},
+            {tb: 218, r: 166, g:  35, b:  63},
+            {tb: 213, r:  77, g:  13, b:   7},
+            {tb: 203, r: 150, g:  73, b: 201},
+            {tb: 193, r: 224, g: 224, b: 255},
+            {tb: 173, r:   0, g:   0, b:   0}
+        ]);
+
+        // Claude — custom TC analysis enhancement
+        IR_COLORMAPS['claude'] = buildLUTfromTb([
+            {tb: 310, r:  12, g:  12, b:  22},
+            {tb: 293, r:  70, g:  70, b:  82},
+            {tb: 283, r: 120, g: 120, b: 132},
+            {tb: 273, r: 180, g: 180, b: 192},
+            {tb: 263, r: 216, g: 218, b: 228},
+            {tb: 253, r: 140, g: 210, b: 220},
+            {tb: 248, r:  68, g: 180, b: 196},
+            {tb: 243, r:  32, g: 148, b: 166},
+            {tb: 238, r:  40, g: 178, b: 116},
+            {tb: 233, r:  96, g: 208, b:  68},
+            {tb: 228, r: 192, g: 220, b:  40},
+            {tb: 223, r: 238, g: 196, b:  48},
+            {tb: 218, r: 228, g: 132, b:  48},
+            {tb: 213, r: 214, g:  78, b:  56},
+            {tb: 208, r: 180, g:  36, b:  68},
+            {tb: 203, r: 196, g:  48, b: 156},
+            {tb: 198, r: 228, g: 112, b: 204},
+            {tb: 193, r: 248, g: 196, b: 240},
+            {tb: 183, r: 255, g: 255, b: 255},
+            {tb: 173, r: 240, g: 240, b: 255}
+        ]);
+    })();
+
+    /** Decode base64 tb_data into Uint8Array */
+    function decodeTbData(base64str) {
+        var binary = atob(base64str);
+        var arr = new Uint8Array(binary.length);
+        for (var i = 0; i < binary.length; i++) {
+            arr[i] = binary.charCodeAt(i);
+        }
+        return arr;
+    }
+
+    /** Render raw Tb uint8 array to a data:image/png URI using canvas + colormap LUT */
+    function renderTbToDataURI(tbData, rows, cols, colormap) {
+        if (!_irRenderCanvas) _irRenderCanvas = document.createElement('canvas');
+        _irRenderCanvas.width = cols;
+        _irRenderCanvas.height = rows;
+        var ctx = _irRenderCanvas.getContext('2d');
+        var imgData = ctx.createImageData(cols, rows);
+        var pixels = imgData.data;
+        var lut = IR_COLORMAPS[colormap] || IR_COLORMAPS['enhanced'];
+        for (var i = 0; i < tbData.length; i++) {
+            var val = tbData[i];
+            var pi = i * 4;
+            if (val === 0) {
+                pixels[pi] = 0; pixels[pi + 1] = 0; pixels[pi + 2] = 0; pixels[pi + 3] = 0;
+            } else {
+                var li = val * 4;
+                pixels[pi]     = lut[li];
+                pixels[pi + 1] = lut[li + 1];
+                pixels[pi + 2] = lut[li + 2];
+                pixels[pi + 3] = lut[li + 3];
+            }
+        }
+        ctx.putImageData(imgData, 0, 0);
+        return _irRenderCanvas.toDataURL('image/png');
+    }
+
+    /** Render the detail view Tb colorbar canvas from active colormap LUT */
+    function renderDetailColorbar() {
+        var canvas = document.getElementById('ir-tb-colorbar-canvas');
+        if (!canvas) return;
+        var lut = IR_COLORMAPS[irSelectedColormap] || IR_COLORMAPS['enhanced'];
+        var ctx = canvas.getContext('2d');
+        var w = canvas.width, h = canvas.height;
+        for (var x = 0; x < w; x++) {
+            // Left = warm (index 255 = 310K), right = cold (index 1 = 170K)
+            var idx = Math.round(255 - x * 254 / (w - 1));
+            if (idx < 1) idx = 1;
+            var li = idx * 4;
+            ctx.fillStyle = 'rgb(' + lut[li] + ',' + lut[li + 1] + ',' + lut[li + 2] + ')';
+            ctx.fillRect(x, 0, 1, h);
+        }
+    }
+
+    /** Re-render all raw Tb frames with a new colormap (no server round-trip) */
+    function recolorRawFrames() {
+        if (rawTbFrames.length === 0) return;
+        for (var i = 0; i < rawTbFrames.length; i++) {
+            var frame = rawTbFrames[i];
+            if (!frame || !frame.tb_data) continue;
+            var dataUrl = renderTbToDataURI(frame.tb_data, frame.rows, frame.cols, irSelectedColormap);
+            if (animFrameLayers[i] && animFrameLayers[i].setUrl) {
+                animFrameLayers[i].setUrl(dataUrl);
+            }
+        }
+        renderDetailColorbar();
+    }
+
     // ── Natural Earth coastline GeoJSON cache ──────────────────
     var _coastlineGeoJSON = null;
     var _coastlineLoading = false;
@@ -2098,9 +2372,19 @@
         // Reset product state
         removeVigorLayer();
         cleanupGeocolorFrameLayers();
+        rawTbFrames = [];
+        _gibsAnimFrameLayers = null;
         productMode = 'eir';
         vigorMode = false;
         vigorFetching = false;
+
+        // Reset colormap selector
+        var cmapSelect = document.getElementById('ir-colormap-select');
+        if (cmapSelect) cmapSelect.value = 'gibs';
+        var gradBar = document.getElementById('ir-tb-legend-bar-gradient');
+        var canvasBar = document.getElementById('ir-tb-colorbar-canvas');
+        if (gradBar) gradBar.style.display = '';
+        if (canvasBar) canvasBar.style.display = 'none';
         var eirBtn = document.getElementById('ir-product-eir');
         var geoBtn = document.getElementById('ir-product-geocolor');
         var vigBtn = document.getElementById('ir-product-vigor');
@@ -2412,6 +2696,130 @@
     function hideAllAnimFrames() {
         for (var i = 0; i < animFrameLayers.length; i++) {
             animFrameLayers[i].setOpacity(0);
+        }
+    }
+
+    // ── Cached GIBS tile layers for switching back from raw Tb ──
+    var _gibsAnimFrameLayers = null;  // stashed GIBS tile layers
+
+    /** Fetch raw Tb frames from API and switch to client-side rendering */
+    function fetchRawTbFrames() {
+        if (!currentStormId) return;
+        showLoadingProgress(true, 0);
+
+        var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(currentStormId) + '/ir-raw'
+            + '?lookback_hours=' + DEFAULT_LOOKBACK_HOURS
+            + '&radius_deg=' + DEFAULT_RADIUS_DEG
+            + '&interval_min=30';
+
+        fetch(url)
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (!data.frames || data.frames.length === 0) {
+                    console.warn('[IR Monitor] No raw Tb frames returned');
+                    showLoadingProgress(false);
+                    return;
+                }
+
+                // Stash current GIBS tile layers
+                if (!_gibsAnimFrameLayers && animFrameLayers.length > 0) {
+                    _gibsAnimFrameLayers = animFrameLayers.slice();
+                    // Hide GIBS layers
+                    for (var i = 0; i < _gibsAnimFrameLayers.length; i++) {
+                        _gibsAnimFrameLayers[i].setOpacity(0);
+                    }
+                }
+
+                // Create image overlay layers from raw Tb
+                rawTbFrames = [];
+                var newLayers = [];
+                for (var i = 0; i < data.frames.length; i++) {
+                    var frame = data.frames[i];
+                    var tbData = decodeTbData(frame.tb_data);
+                    var dataUrl = renderTbToDataURI(tbData, frame.tb_rows, frame.tb_cols, irSelectedColormap);
+
+                    rawTbFrames.push({
+                        tb_data: tbData,
+                        rows: frame.tb_rows,
+                        cols: frame.tb_cols,
+                        bounds: frame.bounds
+                    });
+
+                    // bounds from API: [[south, west], [north, east]]
+                    var bounds = L.latLngBounds(
+                        [frame.bounds[0][0], frame.bounds[0][1]],
+                        [frame.bounds[1][0], frame.bounds[1][1]]
+                    );
+                    var overlay = L.imageOverlay(dataUrl, bounds, { opacity: 0, pane: 'tilePane' });
+                    overlay.addTo(detailMap);
+                    newLayers.push(overlay);
+                }
+
+                // Replace animFrameLayers with raw overlays
+                animFrameLayers = newLayers;
+
+                // Update animation frame times to match API response
+                animFrameTimes = data.frames.map(function (f) { return f.datetime_utc; });
+                validFrames = [];
+                for (var i = 0; i < animFrameTimes.length; i++) {
+                    validFrames.push(i);
+                }
+                framesReady = true;
+                animIndex = animFrameTimes.length - 1;
+
+                // Update slider
+                var slider = document.getElementById('ir-anim-slider');
+                if (slider) {
+                    slider.max = validFrames.length - 1;
+                    slider.value = validFrames.length - 1;
+                }
+
+                showFrame(animIndex);
+                showLoadingProgress(false);
+                renderDetailColorbar();
+
+                var playBtn = document.getElementById('ir-anim-play');
+                if (playBtn) playBtn.disabled = false;
+            })
+            .catch(function (err) {
+                console.error('[IR Monitor] Raw Tb fetch failed:', err);
+                showLoadingProgress(false);
+                // Revert colormap selector to GIBS
+                var cmapSelect = document.getElementById('ir-colormap-select');
+                if (cmapSelect) cmapSelect.value = 'gibs';
+            });
+    }
+
+    /** Switch back to GIBS tile layers from raw Tb overlays */
+    function switchToGIBSTiles() {
+        // Remove raw Tb overlays from map
+        for (var i = 0; i < animFrameLayers.length; i++) {
+            if (animFrameLayers[i] && detailMap) {
+                detailMap.removeLayer(animFrameLayers[i]);
+            }
+        }
+        rawTbFrames = [];
+
+        // Restore stashed GIBS tile layers
+        if (_gibsAnimFrameLayers) {
+            animFrameLayers = _gibsAnimFrameLayers;
+            _gibsAnimFrameLayers = null;
+
+            // Restore valid frames and show current frame
+            validFrames = [];
+            for (var i = 0; i < animFrameLayers.length; i++) {
+                if (!frameHasError[i]) validFrames.push(i);
+            }
+            if (validFrames.length > 0) {
+                animIndex = validFrames[validFrames.length - 1];
+                showFrame(animIndex);
+            }
+
+            var slider = document.getElementById('ir-anim-slider');
+            if (slider) {
+                slider.max = validFrames.length - 1;
+                slider.value = validFrames.length - 1;
+            }
         }
     }
 
@@ -3082,6 +3490,40 @@
             if (productMode === 'vigor' || vigorFetching) return;
             setProductMode('vigor');
         });
+
+        // Colormap selector
+        var cmapSelect = document.getElementById('ir-colormap-select');
+        if (cmapSelect) {
+            cmapSelect.addEventListener('change', function () {
+                var val = cmapSelect.value;
+                if (val === 'gibs') {
+                    // Switch back to GIBS tiles
+                    if (rawTbFrames.length > 0) {
+                        switchToGIBSTiles();
+                    }
+                    // Show gradient bar, hide canvas
+                    var gradBar = document.getElementById('ir-tb-legend-bar-gradient');
+                    var canvasBar = document.getElementById('ir-tb-colorbar-canvas');
+                    if (gradBar) gradBar.style.display = '';
+                    if (canvasBar) canvasBar.style.display = 'none';
+                } else {
+                    irSelectedColormap = val;
+                    if (rawTbFrames.length > 0) {
+                        // Already have raw data — just re-render
+                        recolorRawFrames();
+                    } else {
+                        // Need to fetch raw Tb data from API
+                        fetchRawTbFrames();
+                    }
+                    // Show canvas bar, hide gradient bar
+                    var gradBar = document.getElementById('ir-tb-legend-bar-gradient');
+                    var canvasBar = document.getElementById('ir-tb-colorbar-canvas');
+                    if (gradBar) gradBar.style.display = 'none';
+                    if (canvasBar) canvasBar.style.display = '';
+                    renderDetailColorbar();
+                }
+            });
+        }
 
         // Browser back/forward
         window.addEventListener('popstate', function () {

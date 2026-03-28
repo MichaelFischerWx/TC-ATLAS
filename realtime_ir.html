@@ -166,8 +166,23 @@
                     </div>
                     <!-- IR Tb colorbar legend (shown in enhanced IR mode) -->
                     <div id="ir-tb-legend" class="ir-tb-legend">
-                        <div>Brightness Temp (K)</div>
-                        <div class="ir-tb-legend-bar"></div>
+                        <div style="display:flex;align-items:center;gap:6px;">
+                            <span>Brightness Temp (K)</span>
+                            <select id="ir-colormap-select" title="Change IR colormap" style="background:rgba(255,255,255,0.1);color:rgba(255,255,255,0.8);border:1px solid rgba(255,255,255,0.2);border-radius:3px;font-size:0.6rem;font-family:'JetBrains Mono',monospace;padding:1px 4px;cursor:pointer;">
+                                <option value="gibs">GIBS Default</option>
+                                <option value="enhanced">Enhanced</option>
+                                <option value="dvorak">Dvorak</option>
+                                <option value="grayscale">BD Grayscale</option>
+                                <option value="funktop">Funktop</option>
+                                <option value="avn">AVN</option>
+                                <option value="nhc">NHC</option>
+                                <option value="rammb">RAMMB</option>
+                                <option value="irb">IRB</option>
+                                <option value="claude">Claude</option>
+                            </select>
+                        </div>
+                        <canvas id="ir-tb-colorbar-canvas" width="160" height="10" style="border-radius:2px;margin:4px 0 2px;display:none;"></canvas>
+                        <div class="ir-tb-legend-bar" id="ir-tb-legend-bar-gradient"></div>
                         <div class="ir-tb-legend-labels">
                             <span>310</span>
                             <span>250</span>

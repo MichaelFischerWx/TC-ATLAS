@@ -14,6 +14,7 @@ Covers Atlantic + East Pacific (NHC ATCF), Western Pacific,
 Indian Ocean, and Southern Hemisphere (JTWC B-deck).
 """
 
+import base64
 import gc
 import io
 import json
@@ -1040,6 +1041,84 @@ def get_storm_ir(
         raise HTTPException(
             status_code=502,
             detail="Could not retrieve any IR frames (satellite data may be temporarily unavailable)",
+        )
+
+    return JSONResponse(
+        content={"frames": frames, "storm": storm},
+        headers={"Cache-Control": "public, max-age=180"},
+    )
+
+
+@router.get("/storm/{atcf_id}/ir-raw")
+def get_storm_ir_raw(
+    atcf_id: str,
+    lookback_hours: float = Query(6.0, ge=1, le=24, description="Hours of lookback"),
+    radius_deg: float = Query(3.0, ge=1.0, le=8.0, description="Cutout radius in degrees"),
+    interval_min: int = Query(30, ge=10, le=60, description="Minutes between frames"),
+):
+    """
+    Fetch storm-centered IR frames as raw Tb uint8 data for client-side colormap rendering.
+    Returns base64-encoded uint8 arrays instead of pre-rendered PNGs.
+    """
+    _ensure_fresh_cache()
+    storm = None
+    with _active_storms_lock:
+        for s in _active_storms_cache["storms"]:
+            if s["atcf_id"].upper() == atcf_id.upper():
+                storm = dict(s)
+                break
+
+    if not storm:
+        raise HTTPException(status_code=404, detail=f"Storm {atcf_id} not found in active list")
+
+    center_lat = storm["lat"]
+    center_lon = storm["lon"]
+    box_deg = radius_deg * 2
+
+    try:
+        center_dt = _dt.fromisoformat(storm["last_fix_utc"].replace("Z", "+00:00"))
+    except Exception:
+        center_dt = _dt.now(timezone.utc)
+
+    frame_times = build_frame_times(center_dt, lookback_hours, interval_min)
+
+    TB_VMIN = 170.0
+    TB_VMAX = 310.0
+    TB_SCALE = 254.0 / (TB_VMAX - TB_VMIN)
+
+    frames = []
+    half = box_deg / 2.0
+    for target_dt in reversed(frame_times):
+        raw = fetch_ir_tb_raw(center_lat, center_lon, target_dt, box_deg)
+        if raw and raw.get("tb") is not None:
+            tb = raw["tb"]
+            # Encode as uint8: 0 = invalid, 1-255 = Tb range
+            arr = np.asarray(tb, dtype=np.float32)
+            mask = ~np.isfinite(arr) | (arr <= 0)
+            scaled = np.clip((arr - TB_VMIN) * TB_SCALE + 1, 1, 255)
+            scaled[mask] = 0
+            encoded = scaled.astype(np.uint8)
+
+            frames.append({
+                "tb_data": base64.b64encode(encoded.tobytes()).decode("ascii"),
+                "tb_rows": encoded.shape[0],
+                "tb_cols": encoded.shape[1],
+                "tb_vmin": TB_VMIN,
+                "tb_vmax": TB_VMAX,
+                "datetime_utc": raw["datetime_utc"],
+                "satellite": raw.get("satellite", ""),
+                "bounds": raw.get("bounds", [
+                    [center_lat - half, center_lon - half],
+                    [center_lat + half, center_lon + half],
+                ]),
+            })
+            del tb, arr, mask, scaled, encoded
+            gc.collect()
+
+    if not frames:
+        raise HTTPException(
+            status_code=502,
+            detail="Could not retrieve any raw IR frames",
         )
 
     return JSONResponse(
