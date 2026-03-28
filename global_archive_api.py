@@ -2682,6 +2682,269 @@ def get_fdeck(atcf_id: str = Query(..., description="ATCF storm ID, e.g., AL1220
     )
 
 
+# ═══════════════════════════════════════════════════════════════
+# ── ATCF A-DECK (MODEL FORECAST) PARSER ───────────────────────
+# ═══════════════════════════════════════════════════════════════
+
+_adeck_cache: OrderedDict = OrderedDict()
+_ADECK_CACHE_MAX = 30
+
+# Models we care about — the "leading" dynamical & statistical models
+# Tech IDs from ATCF: https://www.nrlmry.navy.mil/atcf_web/docs/database/new/
+ADECK_MODELS = {
+    # Dynamical models
+    "AVNO": {"name": "GFS",      "color": "#ff6b6b", "type": "dynamical"},
+    "AVNI": {"name": "GFS (I)",  "color": "#ff6b6b", "type": "dynamical"},
+    "GFSO": {"name": "GFS",      "color": "#ff6b6b", "type": "dynamical"},
+    "EMX":  {"name": "ECMWF",    "color": "#4ecdc4", "type": "dynamical"},
+    "EMXI": {"name": "ECMWF (I)","color": "#4ecdc4", "type": "dynamical"},
+    "EEMN": {"name": "ECMWF-EPS","color": "#45b7aa", "type": "dynamical"},
+    "CMC":  {"name": "CMC",      "color": "#ffe66d", "type": "dynamical"},
+    "CMCI": {"name": "CMC (I)",  "color": "#ffe66d", "type": "dynamical"},
+    "UKM":  {"name": "UKMET",    "color": "#a29bfe", "type": "dynamical"},
+    "UKMI": {"name": "UKMET (I)","color": "#a29bfe", "type": "dynamical"},
+    "NAM":  {"name": "NAM",      "color": "#fd79a8", "type": "dynamical"},
+    "NVGM": {"name": "NAVGEM",   "color": "#6c5ce7", "type": "dynamical"},
+    "NGMI": {"name": "NAVGEM (I)","color": "#6c5ce7","type": "dynamical"},
+    "HWRF": {"name": "HWRF",     "color": "#00b894", "type": "dynamical"},
+    "HWFI": {"name": "HWRF (I)", "color": "#00b894", "type": "dynamical"},
+    "HMON": {"name": "HMON",     "color": "#e17055", "type": "dynamical"},
+    "HMNI": {"name": "HMON (I)", "color": "#e17055", "type": "dynamical"},
+    "HAFS": {"name": "HAFS-A",   "color": "#00cec9", "type": "dynamical"},
+    "HAFA": {"name": "HAFS-A",   "color": "#00cec9", "type": "dynamical"},
+    "HAFB": {"name": "HAFS-B",   "color": "#81ecec", "type": "dynamical"},
+    "CTCX": {"name": "COAMPS-TC","color": "#fab1a0", "type": "dynamical"},
+    "JGSM": {"name": "JGSM",     "color": "#b2bec3", "type": "dynamical"},
+    # Statistical / consensus models
+    "SHIP": {"name": "SHIPS",    "color": "#ffeaa7", "type": "statistical"},
+    "SHIA": {"name": "SHIPS-A",  "color": "#ffeaa7", "type": "statistical"},
+    "DSHP": {"name": "DSHIPS",   "color": "#fdcb6e", "type": "statistical"},
+    "LGEM": {"name": "LGEM",     "color": "#e2b04a", "type": "statistical"},
+    "RVCN": {"name": "RVCN",     "color": "#dfe6e9", "type": "statistical"},
+    # Consensus aids
+    "TVCN": {"name": "TVCA Con", "color": "#ffffff", "type": "consensus"},
+    "TVCE": {"name": "TVCE Con", "color": "#f0f0f0", "type": "consensus"},
+    "TVCA": {"name": "TVCA Con", "color": "#ffffff", "type": "consensus"},
+    "TVCX": {"name": "TVCX Con", "color": "#e0e0e0", "type": "consensus"},
+    "IVCN": {"name": "IVCN Con", "color": "#dfe6e9", "type": "consensus"},
+    "ICON": {"name": "ICON Con", "color": "#c8d6e5", "type": "consensus"},
+    "FSSE": {"name": "FSU Super","color": "#74b9ff", "type": "consensus"},
+    "GUNA": {"name": "GUNS Con", "color": "#b2bec3", "type": "consensus"},
+    "CGUN": {"name": "Corr GUNS","color": "#636e72", "type": "consensus"},
+}
+
+
+def _parse_adeck(raw_text: str) -> dict:
+    """Parse an ATCF a-deck file into structured forecast data.
+
+    Returns: {
+        "cycles": {
+            "2017090506": {    # init time YYYYMMDDHH
+                "AVNO": {
+                    "tech": "AVNO", "name": "GFS", "color": "#ff6b6b",
+                    "points": [
+                        {"tau": 0, "lat": 17.4, "lon": -57.2, "wind": 115, "pres": 940},
+                        {"tau": 12, "lat": 18.1, "lon": -58.5, "wind": 110, "pres": 945},
+                        ...
+                    ]
+                },
+                ...
+            },
+            ...
+        },
+        "init_times": ["2017083000", "2017083006", ...],  # sorted
+        "models": ["AVNO", "EMX", "HWRF", ...],           # unique models found
+    }
+    """
+    cycles = {}
+    models_seen = set()
+
+    for line in raw_text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) < 12:
+            continue
+
+        # ATCF a-deck columns:
+        # 0: BASIN (AL, EP, WP, ...)
+        # 1: CY (storm number 01-99)
+        # 2: YYYYMMDDHH (init datetime)
+        # 3: TECHNUM/MIN
+        # 4: TECH (model ID)
+        # 5: TAU (forecast hour)
+        # 6: LatN/S (tenths of degrees, e.g., "174N")
+        # 7: LonE/W (tenths of degrees, e.g., "572W")
+        # 8: VMAX (kt)
+        # 9: MSLP (hPa)
+        # 10: TY (development level: TD, TS, HU, etc.)
+        # 11+: wind radii and other fields
+
+        try:
+            init_time = parts[2].strip()
+            tech = parts[4].strip().upper()
+            tau = int(parts[5]) if parts[5].strip() else 0
+
+            # Only keep models we care about
+            if tech not in ADECK_MODELS:
+                continue
+
+            # Skip negative taus (CARQ/WRNG historical records)
+            if tau < 0:
+                continue
+
+            # Parse latitude (tenths of degrees, N/S suffix)
+            lat_str = parts[6].strip()
+            if not lat_str:
+                continue
+            lat_hemi = lat_str[-1].upper() if lat_str[-1].isalpha() else "N"
+            lat_val = float(lat_str[:-1]) / 10.0 if lat_str[-1].isalpha() else float(lat_str) / 10.0
+            if lat_hemi == "S":
+                lat_val = -lat_val
+
+            # Parse longitude (tenths of degrees, E/W suffix)
+            lon_str = parts[7].strip()
+            if not lon_str:
+                continue
+            lon_hemi = lon_str[-1].upper() if lon_str[-1].isalpha() else "E"
+            lon_val = float(lon_str[:-1]) / 10.0 if lon_str[-1].isalpha() else float(lon_str) / 10.0
+            if lon_hemi == "W":
+                lon_val = -lon_val
+
+            # Parse wind and pressure (may be blank)
+            wind = int(parts[8]) if parts[8].strip() else None
+            pres = int(parts[9]) if parts[9].strip() else None
+
+            # Build point
+            point = {"tau": tau, "lat": round(lat_val, 2), "lon": round(lon_val, 2)}
+            if wind is not None and wind > 0:
+                point["wind"] = wind
+            if pres is not None and pres > 0:
+                point["pres"] = pres
+
+            # Insert into cycles dict
+            if init_time not in cycles:
+                cycles[init_time] = {}
+
+            if tech not in cycles[init_time]:
+                model_info = ADECK_MODELS[tech]
+                cycles[init_time][tech] = {
+                    "tech": tech,
+                    "name": model_info["name"],
+                    "color": model_info["color"],
+                    "type": model_info["type"],
+                    "points": [],
+                }
+
+            cycles[init_time][tech]["points"].append(point)
+            models_seen.add(tech)
+
+        except (ValueError, IndexError):
+            continue
+
+    # Sort points within each forecast by tau
+    for init_time in cycles:
+        for tech in cycles[init_time]:
+            cycles[init_time][tech]["points"].sort(key=lambda p: p["tau"])
+
+    # Build sorted init times list
+    init_times = sorted(cycles.keys())
+
+    return {
+        "cycles": cycles,
+        "init_times": init_times,
+        "models": sorted(models_seen),
+    }
+
+
+def _fetch_adeck(atcf_id: str) -> dict | None:
+    """Fetch and parse a-deck model forecast data for an ATCF storm ID.
+
+    Tries current aid directory first, then archive (gzipped).
+    Returns parsed forecast dict or None on failure.
+    """
+    if atcf_id in _adeck_cache:
+        _adeck_cache.move_to_end(atcf_id)
+        return _adeck_cache[atcf_id]
+
+    atcf_id = atcf_id.upper().strip()
+    if len(atcf_id) < 8:
+        return None
+
+    basin = atcf_id[:2].lower()
+    num = atcf_id[2:4]
+    year = atcf_id[4:]
+
+    import requests as req
+
+    # a-deck URL patterns:
+    #   Current: https://ftp.nhc.noaa.gov/atcf/aid/aal092017.dat
+    #   Archive: https://ftp.nhc.noaa.gov/atcf/archive/2017/aal092017.dat.gz
+    urls = [
+        f"https://ftp.nhc.noaa.gov/atcf/aid/a{basin}{num}{year}.dat",
+        f"https://ftp.nhc.noaa.gov/atcf/archive/{year}/a{basin}{num}{year}.dat.gz",
+    ]
+
+    raw_text = None
+    for url in urls:
+        try:
+            logger.info(f"Fetching a-deck: {url}")
+            resp = req.get(url, timeout=30, headers=_HTTP_HEADERS)
+            if resp.status_code == 200:
+                if url.endswith(".gz"):
+                    import gzip
+                    raw_text = gzip.decompress(resp.content).decode("utf-8", errors="replace")
+                else:
+                    raw_text = resp.text
+                logger.info(f"A-deck fetched: {len(raw_text)} bytes from {url}")
+                break
+        except Exception as e:
+            logger.warning(f"A-deck fetch failed for {url}: {e}")
+            continue
+
+    if not raw_text:
+        return None
+
+    parsed = _parse_adeck(raw_text)
+
+    # Cache result
+    _adeck_cache[atcf_id] = parsed
+    if len(_adeck_cache) > _ADECK_CACHE_MAX:
+        _adeck_cache.popitem(last=False)
+
+    return parsed
+
+
+@router.get("/adeck")
+def get_adeck(atcf_id: str = Query(..., description="ATCF storm ID, e.g., AL092017")):
+    """Fetch ATCF a-deck model forecast tracks for a storm.
+
+    Returns forecast cycles grouped by init time, with track and intensity
+    forecast points for each model. Includes ~40 leading dynamical models,
+    statistical models, and consensus aids.
+    """
+    result = _fetch_adeck(atcf_id)
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"A-deck data not found for {atcf_id}. "
+                   f"Data is only available for NHC/JTWC-monitored storms.",
+        )
+
+    return JSONResponse(
+        content={
+            "atcf_id": atcf_id,
+            "cycles": result["cycles"],
+            "init_times": result["init_times"],
+            "models": result["models"],
+            "n_cycles": len(result["init_times"]),
+        },
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
 @router.get("/health")
 def global_health():
     """Health check for global archive endpoints."""

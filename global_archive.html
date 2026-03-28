@@ -318,6 +318,12 @@
                                 </button>
                                 <span id="ga-mw-status" class="ir-status"></span>
                             </div>
+                            <div id="ga-models-toggle-wrap" style="display:none;">
+                                <button id="ga-models-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleModelOverlay()" style="background:rgba(116,185,255,0.15);border-color:rgba(116,185,255,0.4);color:#74b9ff;">
+                                    &#127760; Models
+                                </button>
+                                <span id="ga-models-status" class="ir-status"></span>
+                            </div>
                         </div>
                         <div class="detail-map-wrap">
                             <div id="detail-map" class="detail-map-container"></div>
@@ -420,6 +426,27 @@
                                 </select>
                                 <span id="ga-mw-frame-status" style="font-size:9px;color:#64748b;"></span>
                             </div>
+                        </div>
+                        <!-- Model forecast overlay controls -->
+                        <div id="ga-model-controls" style="display:none;background:rgba(15,23,42,0.92);border:1px solid rgba(116,185,255,0.3);border-radius:6px;padding:8px 10px;margin-top:4px;">
+                            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+                                <label style="font-size:10px;font-weight:600;color:#74b9ff;text-transform:uppercase;letter-spacing:0.5px;">Forecast Cycle</label>
+                                <select id="model-cycle-select" onchange="selectModelCycle(this.value)" style="flex:1;min-width:140px;font-size:10px;padding:3px 6px;border:1px solid rgba(255,255,255,0.12);border-radius:4px;background:#0f172a;color:#e2e8f0;font-family:'JetBrains Mono',monospace;"></select>
+                                <label class="gif-toggle" style="width:28px;height:16px;" title="Auto-sync cycle to IR frame time">
+                                    <input type="checkbox" id="model-auto-sync" checked onchange="toggleModelAutoSync()">
+                                    <span class="gif-toggle-slider"></span>
+                                </label>
+                                <span style="font-size:9px;color:#64748b;">Auto</span>
+                            </div>
+                            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                                <span style="font-size:9px;color:#64748b;margin-right:2px;">Show:</span>
+                                <button class="ga-btn ga-btn-xs model-filter-btn active" data-mtype="dynamical" onclick="toggleModelTypeFilter('dynamical')" style="font-size:9px;">Dynamical</button>
+                                <button class="ga-btn ga-btn-xs model-filter-btn active" data-mtype="consensus" onclick="toggleModelTypeFilter('consensus')" style="font-size:9px;">Consensus</button>
+                                <button class="ga-btn ga-btn-xs model-filter-btn" data-mtype="statistical" onclick="toggleModelTypeFilter('statistical')" style="font-size:9px;">Statistical</button>
+                                <span style="flex:1;"></span>
+                                <button class="ga-btn ga-btn-xs" onclick="toggleModelIntensity()" id="model-intensity-btn" title="Toggle intensity forecasts on chart" style="font-size:9px;color:#74b9ff;">&#128200; Intensity</button>
+                            </div>
+                            <div id="model-legend" class="model-legend" style="margin-top:6px;"></div>
                         </div>
                         <div id="ir-map-controls" class="ir-map-controls" style="display:none;position:relative;margin-top:4px;">
                             <div class="ir-map-info">

@@ -895,6 +895,44 @@ input[type="range"].ga-range::-moz-range-thumb {
     background: rgba(251, 191, 36, 0.25) !important;
 }
 
+/* ── Model Forecast Overlay ──────────────────────────────── */
+.model-filter-btn {
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--slate);
+    transition: all 0.2s;
+}
+.model-filter-btn.active {
+    background: rgba(116, 185, 255, 0.15);
+    color: #74b9ff;
+    border-color: rgba(116, 185, 255, 0.4);
+}
+.model-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 10px;
+    max-height: 60px;
+    overflow-y: auto;
+}
+.model-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.65rem;
+    font-family: 'JetBrains Mono', monospace;
+    white-space: nowrap;
+}
+.model-legend-swatch {
+    display: inline-block;
+    width: 10px;
+    height: 3px;
+    border-radius: 1px;
+    flex-shrink: 0;
+}
+.model-forecast-track {
+    pointer-events: none;
+}
+
 /* IR brightness temperature colorbar */
 .ir-colorbar-row {
     margin-top: 5px;
