@@ -13,6 +13,40 @@
     var DEFAULT_LOOKBACK_HOURS = 6;
     var DEFAULT_RADIUS_DEG = 3.0;
 
+    // ── Natural Earth coastline GeoJSON cache ──────────────────
+    var _coastlineGeoJSON = null;
+    var _coastlineLoading = false;
+    var _coastlineQueue = [];
+
+    function _loadCoastlineOverlay(targetMap) {
+        function _addToMap(geojson, m) {
+            L.geoJSON(geojson, {
+                pane: 'coastlinePane',
+                style: {
+                    color: '#000000',
+                    weight: 1.2,
+                    opacity: 0.7,
+                    fillColor: 'transparent',
+                    fillOpacity: 0,
+                    interactive: false
+                }
+            }).addTo(m);
+        }
+        if (_coastlineGeoJSON) { _addToMap(_coastlineGeoJSON, targetMap); return; }
+        _coastlineQueue.push(targetMap);
+        if (_coastlineLoading) return;
+        _coastlineLoading = true;
+        fetch('https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_coastline.geojson')
+            .then(function (r) { return r.json(); })
+            .then(function (geojson) {
+                _coastlineGeoJSON = geojson;
+                _coastlineQueue.forEach(function (m) { _addToMap(geojson, m); });
+                _coastlineQueue = [];
+            })
+            .catch(function () { _coastlineQueue = []; })
+            .finally(function () { _coastlineLoading = false; });
+    }
+
     // NASA GIBS WMTS tile config for IR imagery
     var GIBS_BASE = 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best';
     var GIBS_IR_LAYERS = {
@@ -1315,32 +1349,23 @@
         basemap.once('load', function () {
             if (!gibsRequested) {
                 gibsRequested = true;
-                addGIBSOverlay(map, 0.65);
+                addGIBSOverlay(map, 0.55);
             }
         });
         // Fallback in case basemap load event doesn't fire (cached tiles)
         setTimeout(function () {
             if (!gibsRequested) {
                 gibsRequested = true;
-                addGIBSOverlay(map, 0.65);
+                addGIBSOverlay(map, 0.55);
             }
         }, 800);
 
-        // Coastline/borders overlay — sits above IR so land boundaries are visible.
-        // Uses CartoDB Voyager (no labels) with mix-blend-mode: screen so that only
-        // the bright coastline/border strokes show through while the dark ocean areas
-        // have zero effect on the IR underneath.  This avoids the white wash that
-        // plain opacity caused with the old light_nolabels approach.
+        // Coastline overlay — Natural Earth 50m GeoJSON as thin black outlines
+        // (same approach as global archive) so land masses are clearly visible.
         map.createPane('coastlinePane');
-        map.getPane('coastlinePane').style.zIndex = 450; // above tilePane (200) but below overlayPane (400)
+        map.getPane('coastlinePane').style.zIndex = 450;
         map.getPane('coastlinePane').style.pointerEvents = 'none';
-        map.getPane('coastlinePane').style.mixBlendMode = 'screen';
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}{r}.png', {
-            subdomains: 'abcd',
-            maxZoom: 19,
-            opacity: 0.35,
-            pane: 'coastlinePane'
-        }).addTo(map);
+        _loadCoastlineOverlay(map);
 
         // Labels on top of IR
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {
@@ -1837,15 +1862,11 @@
             animFrameLayers.push(lyr);
         }
 
-        // Coastline/borders overlay — uses mix-blend-mode: screen so only the
-        // bright coastline/border strokes show through without washing out the IR.
+        // Coastline overlay — Natural Earth 50m black outlines (matches global archive)
         detailMap.createPane('coastlinePane');
         detailMap.getPane('coastlinePane').style.zIndex = 450;
         detailMap.getPane('coastlinePane').style.pointerEvents = 'none';
-        detailMap.getPane('coastlinePane').style.mixBlendMode = 'screen';
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}{r}.png', {
-            subdomains: 'abcd', maxZoom: 19, opacity: 0.35, pane: 'coastlinePane'
-        }).addTo(detailMap);
+        _loadCoastlineOverlay(detailMap);
 
         // Labels on top (in overlay pane so above IR tiles)
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {
