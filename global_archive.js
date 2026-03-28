@@ -5261,6 +5261,35 @@ window.toggleModelAutoSync = function () {
 };
 
 /**
+ * Immediately sync the model forecast cycle to the current IR frame time.
+ * Also enables auto-sync and, if IR isn't active yet, turns it on.
+ */
+window.syncModelsToIRNow = function () {
+    // If IR overlay isn't active but data is loaded, activate it first
+    if (irMeta && !irOverlayVisible) {
+        if (typeof toggleIROverlay === 'function') toggleIROverlay();
+    }
+
+    // Enable auto-sync
+    _modelAutoSync = true;
+    var syncCheck = document.getElementById('model-auto-sync');
+    if (syncCheck) syncCheck.checked = true;
+
+    // Force immediate sync
+    if (_modelVisible && _modelData) {
+        _modelActiveCycle = null; // Reset so it forces a re-render
+        _syncModelCycleToIR();
+    }
+
+    // Flash the button to give visual feedback
+    var btn = document.getElementById('model-sync-ir-btn');
+    if (btn) {
+        btn.style.background = 'rgba(251,191,36,0.3)';
+        setTimeout(function () { btn.style.background = ''; }, 400);
+    }
+};
+
+/**
  * Toggle a model type filter (dynamical, consensus, statistical).
  */
 window.toggleModelTypeFilter = function (mtype) {
