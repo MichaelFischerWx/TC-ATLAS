@@ -3426,6 +3426,11 @@ function updateIRMeta(idx) {
     // Sync intensity chart marker to current IR time (use raw ISO datetime for Plotly)
     updateIntensityMarker(rawDt);
 
+    // Sync model forecast overlay to current IR frame time
+    if (_modelVisible && _modelAutoSync && _modelData) {
+        _syncModelCycleToIR();
+    }
+
     // Update cache status
     updateIRCacheStatus();
 }
@@ -5396,6 +5401,7 @@ function _renderModelCycle(initTime) {
 
     var cycle = _modelData.cycles[initTime];
     var legendHtml = '';
+    var _legendSeen = {};
     _modelLegendModels = [];
 
     // Convert initTime to Date for forecast hour → datetime conversion
@@ -5468,11 +5474,15 @@ function _renderModelCycle(initTime) {
             }
         }
 
-        // Build legend entry
+        // Build legend entry — deduplicate by display name + color
+        var legendKey = forecast.name + '|' + color;
         _modelLegendModels.push(tech);
-        legendHtml += '<span class="model-legend-item" style="color:' + color + ';">' +
-            '<span class="model-legend-swatch" style="background:' + color + ';"></span>' +
-            forecast.name + '</span>';
+        if (!_legendSeen[legendKey]) {
+            _legendSeen[legendKey] = true;
+            legendHtml += '<span class="model-legend-item" style="color:' + color + ';">' +
+                '<span class="model-legend-swatch" style="background:' + color + ';"></span>' +
+                forecast.name + '</span>';
+        }
     }
 
     // Update legend
@@ -7825,10 +7835,7 @@ var _origSeekIRFrame = window.seekIRFrame;
 window.seekIRFrame = function (val) {
     _origSeekIRFrame(val);
     updateHashSilently();
-    // Auto-sync model overlay to new IR frame time
-    if (_modelVisible && _modelAutoSync && _modelData) {
-        _syncModelCycleToIR();
-    }
+    // Model sync now handled centrally in updateIRMeta()
 };
 
 var _origSwitchColormap = switchColormap;
