@@ -77,6 +77,56 @@ var irCurrentBounds = null;  // L.latLngBounds for current IR overlay
 var irTbTooltip = null;      // L.popup for Tb hover display
 var irSelectedColormap = 'enhanced';  // Current colormap name
 
+// ── Coastline overlay cache ────────────────────────────────────────────
+// Natural Earth 110m coastlines as GeoJSON — loaded once, shared by all maps.
+var _coastlineGeoJSON = null;
+var _coastlineLoading = false;
+var _coastlineQueue = []; // maps waiting for coastline data
+
+/**
+ * Load Natural Earth 110m coastlines and add as thin dark outlines to a map.
+ * Uses the 'coastlines' pane (z=450) so lines render above IR but below markers.
+ * Caches the GeoJSON so it's only fetched once across all maps.
+ */
+function _loadCoastlineOverlay(map) {
+    function _addToMap(geojson, m) {
+        L.geoJSON(geojson, {
+            pane: 'coastlines',
+            style: {
+                color: '#000000',
+                weight: 1.2,
+                opacity: 0.7,
+                fillColor: 'transparent',
+                fillOpacity: 0,
+                interactive: false
+            }
+        }).addTo(m);
+    }
+
+    if (_coastlineGeoJSON) {
+        _addToMap(_coastlineGeoJSON, map);
+        return;
+    }
+
+    _coastlineQueue.push(map);
+    if (_coastlineLoading) return;
+    _coastlineLoading = true;
+
+    // Natural Earth 110m coastlines via GitHub CDN (~30KB gzipped)
+    fetch('https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_coastline.geojson')
+        .then(function (r) { return r.json(); })
+        .then(function (geojson) {
+            _coastlineGeoJSON = geojson;
+            _coastlineQueue.forEach(function (m) { _addToMap(geojson, m); });
+            _coastlineQueue = [];
+        })
+        .catch(function (e) {
+            console.warn('Coastline load failed:', e);
+            _coastlineQueue = [];
+        })
+        .finally(function () { _coastlineLoading = false; });
+}
+
 // ── Colormap LUTs (256 entries: index 0 = transparent, 1-255 = Tb) ────
 // Each LUT is a Uint8Array of length 256*4 (RGBA).
 // Index 0 → [0,0,0,0] (transparent for invalid pixels)
@@ -2551,7 +2601,7 @@ function renderDetailMap(track, storm) {
         worldCopyJump: true
     });
 
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
         attribution: '&copy; CARTO',
         subdomains: 'abcd',
         maxZoom: 12
@@ -2564,14 +2614,9 @@ function renderDetailMap(track, storm) {
     detailMap.getPane('coastlines').style.zIndex = 450;
     detailMap.getPane('coastlines').style.pointerEvents = 'none';
 
-    // Add CARTO "dark_only_labels" tiles as coastline/border/label overlay
-    // These are transparent PNGs showing only labels, borders, and coastlines
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {
-        subdomains: 'abcd',
-        maxZoom: 12,
-        pane: 'coastlines',
-        opacity: 0.8
-    }).addTo(detailMap);
+    // Load Natural Earth 110m coastlines as thin dark outlines above IR
+    // Source: Natural Earth via GitHub (simplified 110m resolution, ~30KB)
+    _loadCoastlineOverlay(detailMap);
 
     // Draw track — TC phases (TS/SS) get thick solid lines,
     // non-TC phases (DS=disturbance, ET=extratropical) get thin dashed lines
@@ -6318,9 +6363,7 @@ function initCompareIR() {
         _cmpIR.left.map.createPane('coastlines');
         _cmpIR.left.map.getPane('coastlines').style.zIndex = 450;
         _cmpIR.left.map.getPane('coastlines').style.pointerEvents = 'none';
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {
-            subdomains: 'abcd', maxZoom: 18, pane: 'coastlines', opacity: 0.8
-        }).addTo(_cmpIR.left.map);
+        _loadCoastlineOverlay(_cmpIR.left.map);
         _attachCompareIRHover('left');
     }
     if (!_cmpIR.right.map) {
@@ -6336,9 +6379,7 @@ function initCompareIR() {
         _cmpIR.right.map.createPane('coastlines');
         _cmpIR.right.map.getPane('coastlines').style.zIndex = 450;
         _cmpIR.right.map.getPane('coastlines').style.pointerEvents = 'none';
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {
-            subdomains: 'abcd', maxZoom: 18, pane: 'coastlines', opacity: 0.8
-        }).addTo(_cmpIR.right.map);
+        _loadCoastlineOverlay(_cmpIR.right.map);
         _attachCompareIRHover('right');
     }
 
