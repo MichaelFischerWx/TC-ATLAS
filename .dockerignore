@@ -1,0 +1,57 @@
+# ── Git ──
+.git
+.gitignore
+
+# ── Frontend (served from GitHub Pages, not from the API container) ──
+*.html
+*.css
+*.js
+*.ico
+*.png
+*.jpg
+*.svg
+
+# ── Preprocessing / utility scripts (not needed at runtime) ──
+precompute_climatology.py
+preprocess_ibtracs.py
+generate_ir_archive.py
+repair_zarr_metadata.py
+
+# ── Large raw data (not used by the API at runtime) ──
+ibtracs.ALL.list.v04r01.csv
+
+# ── Cloud Run / Docker config (don't nest inside image) ──
+Dockerfile
+.dockerignore
+deploy.sh
+
+# ── Python artifacts ──
+__pycache__
+*.pyc
+*.pyo
+.mypy_cache
+.ruff_cache
+.venv
+env
+
+# ── IDE / OS ──
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+
+# ── Cached data (MergIR frames — can be huge, NOT needed in container) ──
+mergir_cache/
+
+# ── Logs ──
+*.log
+
+# ── Deploy secrets / config ──
+deploy.env
+deploy.env.example
+
+# ── Docs / misc ──
+README.md
+LICENSE
+*.md
+*.docx

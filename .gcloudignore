@@ -1,0 +1,62 @@
+# ── .gcloudignore ──
+# Controls what gets uploaded to Cloud Build.
+# NOTE: Do NOT #!include:.dockerignore — it excludes the Dockerfile itself,
+# which Cloud Build needs to receive in order to run `docker build`.
+
+# ── Git ──
+.git
+.gitignore
+
+# ── Frontend (served from GitHub Pages, not the API container) ──
+*.html
+*.css
+*.js
+*.ico
+*.png
+*.jpg
+*.svg
+
+# ── Cached data (MergIR frames — huge, not needed in container) ──
+mergir_cache/
+
+# ── Claude worktrees (dev artifacts) ──
+.claude/
+
+# ── Preprocessing / utility scripts ──
+precompute_climatology.py
+preprocess_ibtracs.py
+generate_ir_archive.py
+repair_zarr_metadata.py
+precache_mergir.py
+upload_npz_to_gcs.py
+
+# ── Large raw data ──
+ibtracs.ALL.list.v04r01.csv
+
+# ── Deploy config (secrets — never upload) ──
+deploy.env
+deploy.env.example
+deploy.sh
+
+# ── Python artifacts ──
+__pycache__
+*.pyc
+*.pyo
+.mypy_cache
+.ruff_cache
+.venv
+env
+
+# ── IDE / OS ──
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+
+# ── Docs / misc ──
+README.md
+LICENSE
+*.md
+*.docx
+*.log
+images/

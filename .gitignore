@@ -7,3 +7,13 @@ __pycache__/
 
 # OS
 .DS_Store
+
+# Cache and data files
+mergir_cache/
+*.log
+
+# Large data (tracked as split files instead)
+ibtracs_tracks.json
+
+# Claude Code working state
+.claude/
