@@ -5155,8 +5155,8 @@ var _modelIntensityTraces = [];  // Plotly trace indices for intensity chart
 
 // Color map for models (sent from API, but also define fallbacks)
 var MODEL_COLORS = {
-    'OFCL': '#ff4757', 'OFCI': '#ff4757', 'OFCP': '#ff6b81',
-    'JTWC': '#ff4757', 'JTWI': '#ff4757',
+    'OFCL': '#ff4757', 'OFCI': '#ff8c69', 'OFCP': '#ff6b81',
+    'JTWC': '#ffa502', 'JTWI': '#ffbe76',
     'AVNO': '#ff6b6b', 'AVNI': '#ff6b6b', 'GFSO': '#ff6b6b',
     'EMX':  '#4ecdc4', 'EMXI': '#4ecdc4', 'EEMN': '#45b7aa',
     'CMC':  '#ffe66d', 'CMCI': '#ffe66d',
@@ -5339,9 +5339,12 @@ window.toggleModelTypeFilter = function (mtype) {
         }
     });
 
-    // Re-render
+    // Re-render map tracks AND intensity traces
     if (_modelVisible && _modelActiveCycle) {
         _renderModelCycle(_modelActiveCycle);
+        if (_modelShowIntensity) {
+            _renderModelIntensityTraces(_modelActiveCycle);
+        }
     }
 };
 
