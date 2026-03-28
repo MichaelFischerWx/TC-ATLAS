@@ -506,12 +506,15 @@
                     </div>
                 </div>
 
-                <!-- Side-by-side IR Comparison -->
+                <!-- Side-by-side IR / MW Comparison -->
                 <div id="compare-ir-wrap" style="display:none;margin-top:16px;">
                     <div class="detail-panel">
                         <div class="panel-header">
-                            <h3>IR Satellite Comparison</h3>
+                            <h3 id="compare-sat-title">IR Satellite Comparison</h3>
                             <div style="display:flex;gap:8px;align-items:center;">
+                                <button class="ga-btn ga-btn-xs compare-mode-btn active" id="compare-mode-ir" onclick="switchCompareMode('ir')" title="Compare IR imagery">IR</button>
+                                <button class="ga-btn ga-btn-xs compare-mode-btn" id="compare-mode-mw" onclick="switchCompareMode('mw')" title="Compare microwave imagery">&#128225; MW</button>
+                                <span style="width:1px;height:16px;background:#555;"></span>
                                 <button class="ga-btn ga-btn-xs compare-align" id="compare-ir-peak-btn" onclick="jumpBothToPeak()" title="Jump both storms to peak intensity">&#9733; Peak</button>
                                 <button class="ga-btn ga-btn-xs compare-align" id="compare-ir-sync-btn" onclick="toggleCompareIRSync()" title="Sync playback between both viewers">&#128279; Sync</button>
                             </div>
@@ -530,7 +533,7 @@
                                 <button class="ga-btn ga-btn-sm ir-cmap-btn compare-ir-cmap-btn" data-cmap="claude" onclick="setCompareIRColormap('claude')">Claude</button>
                             </span>
                         </div>
-                        <div class="compare-ir-grid">
+                        <div class="compare-ir-grid" id="compare-ir-grid-ir">
                             <div class="compare-ir-cell" id="compare-ir-left">
                                 <div class="compare-ir-label" id="compare-ir-left-label">Select storm 1</div>
                                 <div class="compare-ir-map-wrap">
@@ -565,6 +568,61 @@
                         <div class="ir-colorbar-row" style="margin-top:8px;padding:0 12px;">
                             <canvas id="compare-ir-colorbar" height="8"></canvas>
                             <div class="ir-colorbar-labels"><span>310 K</span><span>240</span><span>170 K</span></div>
+                        </div>
+
+                        <!-- MW Comparison Panel (hidden by default, shown when MW mode active) -->
+                        <div id="compare-mw-panel" style="display:none;">
+                            <div class="compare-mw-product-row">
+                                <label>Product:</label>
+                                <select id="compare-mw-product" onchange="setCompareMWProduct(this.value)">
+                                    <option value="89pct" selected>89 GHz PCT</option>
+                                    <option value="89v">89 GHz V-pol</option>
+                                    <option value="89h">89 GHz H-pol</option>
+                                    <option value="37color">37 GHz Color</option>
+                                    <option value="37v">37 GHz V-pol</option>
+                                    <option value="37h">37 GHz H-pol</option>
+                                </select>
+                            </div>
+                            <div class="compare-ir-grid">
+                                <div class="compare-ir-cell" id="compare-mw-left">
+                                    <div class="compare-ir-label" id="compare-mw-left-label">Select storm 1</div>
+                                    <div class="compare-mw-overpass-row">
+                                        <select id="compare-mw-sel-left" onchange="loadCompareMWOverpass('left')"></select>
+                                        <span id="compare-mw-status-left" class="compare-mw-status"></span>
+                                    </div>
+                                    <div class="compare-ir-map-wrap">
+                                        <div id="compare-mw-map-left" class="compare-ir-map"></div>
+                                    </div>
+                                    <div class="compare-ir-controls" id="compare-mw-ctrl-left">
+                                        <button class="ga-btn ga-btn-sm ir-step-btn" onclick="stepCompareMW('left',-1)">&#9664;</button>
+                                        <button class="ga-btn ga-btn-sm ir-step-btn" onclick="stepCompareMW('left',1)">&#9654;</button>
+                                        <button class="ga-btn ga-btn-sm ir-step-btn" onclick="jumpCompareMWToPeak('left')" title="Jump to overpass nearest peak intensity">&#9733;</button>
+                                        <span class="compare-ir-datetime" id="compare-mw-dt-left"></span>
+                                    </div>
+                                    <div class="compare-ir-intensity" id="compare-mw-intensity-left"></div>
+                                </div>
+                                <div class="compare-ir-cell" id="compare-mw-right">
+                                    <div class="compare-ir-label" id="compare-mw-right-label">Select storm 2</div>
+                                    <div class="compare-mw-overpass-row">
+                                        <select id="compare-mw-sel-right" onchange="loadCompareMWOverpass('right')"></select>
+                                        <span id="compare-mw-status-right" class="compare-mw-status"></span>
+                                    </div>
+                                    <div class="compare-ir-map-wrap">
+                                        <div id="compare-mw-map-right" class="compare-ir-map"></div>
+                                    </div>
+                                    <div class="compare-ir-controls" id="compare-mw-ctrl-right">
+                                        <button class="ga-btn ga-btn-sm ir-step-btn" onclick="stepCompareMW('right',-1)">&#9664;</button>
+                                        <button class="ga-btn ga-btn-sm ir-step-btn" onclick="stepCompareMW('right',1)">&#9654;</button>
+                                        <button class="ga-btn ga-btn-sm ir-step-btn" onclick="jumpCompareMWToPeak('right')" title="Jump to overpass nearest peak intensity">&#9733;</button>
+                                        <span class="compare-ir-datetime" id="compare-mw-dt-right"></span>
+                                    </div>
+                                    <div class="compare-ir-intensity" id="compare-mw-intensity-right"></div>
+                                </div>
+                            </div>
+                            <div id="compare-mw-colorbar-row" class="ir-colorbar-row" style="margin-top:8px;padding:0 12px;">
+                                <canvas id="compare-mw-colorbar" height="8"></canvas>
+                                <div class="ir-colorbar-labels" id="compare-mw-colorbar-labels"><span>285 K</span><span>230</span><span>100 K</span></div>
+                            </div>
                         </div>
                     </div>
                 </div>

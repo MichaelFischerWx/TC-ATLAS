@@ -1916,6 +1916,8 @@ function renderCompareView() {
                 _cmpIR[side].playing = false;
             }
         });
+        // Cleanup MW comparison
+        if (typeof _cleanupCompareMW === 'function') _cleanupCompareMW();
         // Auto-populate search results in empty state
         setTimeout(function () { _doCompareSearch(''); }, 50);
         return;
@@ -1933,6 +1935,10 @@ function renderCompareView() {
     // Initialize side-by-side IR comparison if 2+ storms
     if (compareStorms.length >= 2 && typeof initCompareIR === 'function') {
         setTimeout(initCompareIR, 300);
+    }
+    // If MW mode is active, also init MW comparison
+    if (compareStorms.length >= 2 && _compareMode === 'mw' && typeof initCompareMW === 'function') {
+        setTimeout(initCompareMW, 400);
     }
 }
 
@@ -5177,12 +5183,32 @@ window.exportIRGif = function () {
     var outH = irRows * scale + 48; // Extra 48px for header/footer annotations
 
     // Create the GIF encoder
+    // Use blob URL for worker to avoid CORS issues with CDN-hosted worker scripts
+    function _createGifEncoder(cb) {
+        if (window._gifWorkerBlobUrl) {
+            cb(window._gifWorkerBlobUrl);
+            return;
+        }
+        fetch('https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js')
+            .then(function (r) { return r.text(); })
+            .then(function (src) {
+                var blob = new Blob([src], { type: 'application/javascript' });
+                window._gifWorkerBlobUrl = URL.createObjectURL(blob);
+                cb(window._gifWorkerBlobUrl);
+            })
+            .catch(function (e) {
+                console.warn('Failed to fetch gif worker, falling back to CDN URL', e);
+                cb('https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js');
+            });
+    }
+
+    _createGifEncoder(function (workerUrl) {
     var gif = new GIF({
         workers: 2,
         quality: 8,
         width: outW,
         height: outH,
-        workerScript: 'https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js',
+        workerScript: workerUrl,
         transparent: null,
         background: '#0a1628'
     });
@@ -5358,6 +5384,7 @@ window.exportIRGif = function () {
 
     // Start processing
     requestAnimationFrame(function () { processBatch(0); });
+    }); // end _createGifEncoder callback
 };
 
 window.cancelGifExport = function () {
@@ -5836,6 +5863,446 @@ window.setCompareIRColormap = function (name) {
 
 // Hook into compare rendering to auto-init IR comparison
 var _origRenderCompareTimeline = typeof renderCompareTimeline === 'function' ? renderCompareTimeline : null;
+
+
+// ═══════════════════════════════════════════════════════════════
+// ── SIDE-BY-SIDE MICROWAVE COMPARISON ─────────────────────────
+// ═══════════════════════════════════════════════════════════════
+
+var _compareMode = 'ir'; // 'ir' or 'mw'
+
+var _cmpMW = {
+    left:  { map: null, storm: null, overpasses: [], idx: 0, overlay: null, loading: false },
+    right: { map: null, storm: null, overpasses: [], idx: 0, overlay: null, loading: false },
+    product: '89pct'
+};
+
+/**
+ * Switch between IR and MW compare modes.
+ */
+window.switchCompareMode = function (mode) {
+    _compareMode = mode;
+    var irGrid = document.getElementById('compare-ir-grid-ir');
+    var irCmapRow = document.querySelector('#compare-ir-wrap .ir-cmap-row');
+    var irColorbarRow = document.querySelector('#compare-ir-colorbar').parentElement;
+    var mwPanel = document.getElementById('compare-mw-panel');
+    var title = document.getElementById('compare-sat-title');
+    var peakBtn = document.getElementById('compare-ir-peak-btn');
+    var syncBtn = document.getElementById('compare-ir-sync-btn');
+
+    // Update mode button active states
+    document.getElementById('compare-mode-ir').classList.toggle('active', mode === 'ir');
+    document.getElementById('compare-mode-mw').classList.toggle('active', mode === 'mw');
+
+    if (mode === 'ir') {
+        if (irGrid) irGrid.style.display = '';
+        if (irCmapRow) irCmapRow.style.display = '';
+        if (irColorbarRow) irColorbarRow.style.display = '';
+        if (mwPanel) mwPanel.style.display = 'none';
+        if (title) title.textContent = 'IR Satellite Comparison';
+        if (peakBtn) peakBtn.style.display = '';
+        if (syncBtn) syncBtn.style.display = '';
+    } else {
+        if (irGrid) irGrid.style.display = 'none';
+        if (irCmapRow) irCmapRow.style.display = 'none';
+        if (irColorbarRow) irColorbarRow.style.display = 'none';
+        if (mwPanel) mwPanel.style.display = '';
+        if (title) title.textContent = 'Microwave Satellite Comparison';
+        if (peakBtn) peakBtn.style.display = 'none';
+        if (syncBtn) syncBtn.style.display = 'none';
+        initCompareMW();
+    }
+};
+
+/**
+ * Initialize MW comparison: set up maps and load overpass lists.
+ */
+function initCompareMW() {
+    if (compareStorms.length < 2) return;
+
+    // Init maps if needed
+    if (!_cmpMW.left.map) {
+        _cmpMW.left.map = L.map('compare-mw-map-left', {
+            zoomControl: true,
+            attributionControl: false,
+            minZoom: 2, maxZoom: 10,
+            scrollWheelZoom: true
+        }).setView([20, -60], 4);
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
+            maxZoom: 18
+        }).addTo(_cmpMW.left.map);
+    }
+    if (!_cmpMW.right.map) {
+        _cmpMW.right.map = L.map('compare-mw-map-right', {
+            zoomControl: true,
+            attributionControl: false,
+            minZoom: 2, maxZoom: 10,
+            scrollWheelZoom: true
+        }).setView([20, -60], 4);
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
+            maxZoom: 18
+        }).addTo(_cmpMW.right.map);
+    }
+
+    setTimeout(function () {
+        _cmpMW.left.map.invalidateSize();
+        _cmpMW.right.map.invalidateSize();
+    }, 150);
+
+    // Assign storms
+    var s1 = compareStorms[0];
+    var s2 = compareStorms[1];
+    if (!_cmpMW.left.storm || _cmpMW.left.storm.sid !== s1.sid) {
+        _loadCompareMWStorm('left', s1);
+    }
+    if (!_cmpMW.right.storm || _cmpMW.right.storm.sid !== s2.sid) {
+        _loadCompareMWStorm('right', s2);
+    }
+
+    // Render MW colorbar for current product
+    _renderCompareMWColorbar();
+}
+
+/**
+ * Load MW overpass list for one side.
+ */
+function _loadCompareMWStorm(side, storm) {
+    var s = _cmpMW[side];
+    s.storm = storm;
+    s.overpasses = [];
+    s.idx = 0;
+    if (s.overlay && s.map) { s.map.removeLayer(s.overlay); s.overlay = null; }
+
+    var label = document.getElementById('compare-mw-' + side + '-label');
+    if (label) {
+        var cat = getIntensityCategory(storm.peak_wind_kt);
+        var color = getIntensityColor(storm.peak_wind_kt);
+        label.innerHTML = '<span style="color:' + color + ';font-weight:700;">' +
+            (storm.name || 'UNNAMED') + '</span> ' + storm.year +
+            ' <span style="font-size:0.7rem;color:' + color + ';">' + cat + '</span>';
+    }
+
+    var sel = document.getElementById('compare-mw-sel-' + side);
+    var statusEl = document.getElementById('compare-mw-status-' + side);
+    var dtEl = document.getElementById('compare-mw-dt-' + side);
+    if (sel) sel.innerHTML = '<option value="">Loading...</option>';
+    if (statusEl) statusEl.textContent = 'Searching...';
+    if (dtEl) dtEl.textContent = '';
+
+    var atcfId = storm.atcf_id;
+    if (!atcfId) {
+        if (sel) sel.innerHTML = '<option value="">No ATCF ID</option>';
+        if (statusEl) statusEl.textContent = 'No ATCF ID';
+        return;
+    }
+
+    // Center map on storm
+    var lat = storm.lmi_lat || 20;
+    var lon = storm.lmi_lon || -60;
+    s.map.setView([lat, lon], 5);
+
+    fetch(API_BASE + '/microwave/storm_overpasses?atcf_id=' + encodeURIComponent(atcfId))
+        .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+        .then(function (json) {
+            s.overpasses = json.overpasses || [];
+            sel.innerHTML = '';
+
+            if (s.overpasses.length === 0) {
+                sel.innerHTML = '<option value="">No overpasses</option>';
+                if (statusEl) statusEl.textContent = 'No data';
+                return;
+            }
+
+            // Filter by current product capability
+            var filtered = _filterMWOverpasses(s.overpasses, _cmpMW.product);
+
+            if (filtered.length === 0) {
+                sel.innerHTML = '<option value="">No ' + _cmpMW.product + ' data</option>';
+                if (statusEl) statusEl.textContent = '0 passes';
+                return;
+            }
+
+            for (var i = 0; i < filtered.length; i++) {
+                var op = filtered[i];
+                var opt = document.createElement('option');
+                opt.value = op._origIdx;
+                opt.textContent = op.sensor + ' / ' + op.platform + ' — ' + op.datetime;
+                sel.appendChild(opt);
+            }
+
+            if (statusEl) statusEl.textContent = filtered.length + ' pass(es)';
+
+            // Auto-load first overpass
+            s.idx = 0;
+            loadCompareMWOverpass(side);
+        })
+        .catch(function (e) {
+            if (sel) sel.innerHTML = '<option value="">Error</option>';
+            if (statusEl) statusEl.textContent = 'Error';
+            console.warn('Compare MW load failed', e);
+        });
+}
+
+/**
+ * Filter overpasses by product capability (89 vs 37 GHz).
+ */
+function _filterMWOverpasses(overpasses, product) {
+    var is37 = (product === '37h' || product === '37v' || product === '37color');
+    var is89 = (product === '89pct' || product === '89v' || product === '89h');
+    var result = [];
+    for (var i = 0; i < overpasses.length; i++) {
+        var op = overpasses[i];
+        if (is37 && !op.has_37) continue;
+        if (is89 && !op.has_89) continue;
+        op._origIdx = i;
+        result.push(op);
+    }
+    return result;
+}
+
+/**
+ * Load the selected MW overpass image for one side.
+ */
+window.loadCompareMWOverpass = function (side) {
+    var s = _cmpMW[side];
+    var sel = document.getElementById('compare-mw-sel-' + side);
+    var dtEl = document.getElementById('compare-mw-dt-' + side);
+    var intensityEl = document.getElementById('compare-mw-intensity-' + side);
+    if (!sel || sel.value === '') return;
+
+    var origIdx = parseInt(sel.value, 10);
+    var op = s.overpasses[origIdx];
+    if (!op) return;
+
+    s.loading = true;
+    if (dtEl) dtEl.textContent = 'Loading...';
+
+    var product = _cmpMW.product;
+    var url = API_BASE + '/microwave/data?s3_key=' + encodeURIComponent(op.s3_key) +
+        '&product=' + product;
+
+    // Pass storm center for cropping
+    if (s.storm) {
+        var lat = s.storm.lmi_lat || s.storm.genesis_lat || 0;
+        var lon = s.storm.lmi_lon || s.storm.genesis_lon || 0;
+        url += '&center_lat=' + lat + '&center_lon=' + lon;
+    }
+
+    fetch(url)
+        .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+        .then(function (json) {
+            s.loading = false;
+            if (!json.image_b64 || !json.bounds) {
+                if (dtEl) dtEl.textContent = 'No data returned';
+                return;
+            }
+
+            var imgUrl = 'data:image/png;base64,' + json.image_b64;
+            var bounds = L.latLngBounds(
+                L.latLng(json.bounds[0][0], json.bounds[0][1]),
+                L.latLng(json.bounds[1][0], json.bounds[1][1])
+            );
+
+            if (s.overlay && s.map) { s.map.removeLayer(s.overlay); }
+            s.overlay = L.imageOverlay(imgUrl, bounds, {
+                opacity: 0.85, interactive: false, zIndex: 650
+            });
+            s.overlay.addTo(s.map);
+
+            // Pan to MW image center
+            if (bounds.isValid()) {
+                s.map.panTo(bounds.getCenter(), { animate: false });
+            }
+
+            // Update datetime display
+            var dtStr = json.sensor + ' — ' + json.datetime;
+            if (dtEl) dtEl.textContent = dtStr;
+
+            // Update intensity from track data
+            if (intensityEl && s.storm && json.datetime) {
+                var track = allTracks[s.storm.sid] || [];
+                // Parse MW datetime "YYYY-MM-DD HH:MM UTC"
+                var isoStr = json.datetime.replace(' UTC', '').replace(' ', 'T') + ':00';
+                var pt = findTrackPointAtTime(track, isoStr);
+                if (pt && (pt.w != null || pt.p != null)) {
+                    var windStr = pt.w != null ? '<span class="cmp-wind">' + pt.w + ' kt</span>' : '';
+                    var presStr = pt.p != null ? '<span class="cmp-pres">' + pt.p + ' hPa</span>' : '';
+                    var cat = pt.w != null ? getIntensityCategory(pt.w) : '';
+                    var clr = pt.w != null ? getIntensityColor(pt.w) : '#8899aa';
+                    var catStr = cat ? '<span class="cmp-cat" style="color:' + clr + ';border:1px solid ' + clr + ';">' + cat + '</span>' : '';
+                    intensityEl.innerHTML = windStr + presStr + catStr;
+                } else {
+                    intensityEl.innerHTML = '';
+                }
+            }
+
+            // GA4 event
+            if (typeof _ga === 'function') _ga('ga_compare_mw', { product: product, sensor: json.sensor });
+        })
+        .catch(function (e) {
+            s.loading = false;
+            if (dtEl) dtEl.textContent = 'Error: ' + e.message;
+            console.warn('MW compare frame load failed', e);
+        });
+};
+
+/**
+ * Step forward/backward through MW overpasses for one side.
+ */
+window.stepCompareMW = function (side, delta) {
+    var sel = document.getElementById('compare-mw-sel-' + side);
+    if (!sel || sel.options.length === 0) return;
+
+    var curIdx = sel.selectedIndex;
+    var newIdx = curIdx + delta;
+    if (newIdx < 0) newIdx = sel.options.length - 1;
+    if (newIdx >= sel.options.length) newIdx = 0;
+    sel.selectedIndex = newIdx;
+    loadCompareMWOverpass(side);
+};
+
+/**
+ * Jump to the overpass closest to peak intensity for one side.
+ */
+window.jumpCompareMWToPeak = function (side) {
+    var s = _cmpMW[side];
+    if (!s.storm || !s.overpasses.length) return;
+
+    var track = allTracks[s.storm.sid] || [];
+    if (!track.length) return;
+
+    // Find peak wind time from track
+    var peakWind = -1;
+    var peakTime = null;
+    for (var t = 0; t < track.length; t++) {
+        if (track[t].w != null && track[t].w > peakWind) {
+            peakWind = track[t].w;
+            peakTime = track[t].t;
+        }
+    }
+    if (!peakTime) return;
+
+    // Find the overpass with datetime closest to peak
+    var peakMs = new Date(peakTime).getTime();
+    var filtered = _filterMWOverpasses(s.overpasses, _cmpMW.product);
+    if (!filtered.length) return;
+
+    var bestDist = Infinity;
+    var bestFilteredIdx = 0;
+    for (var i = 0; i < filtered.length; i++) {
+        var opDt = filtered[i].datetime.replace(' UTC', '').replace(' ', 'T') + ':00';
+        var dist = Math.abs(new Date(opDt).getTime() - peakMs);
+        if (dist < bestDist) {
+            bestDist = dist;
+            bestFilteredIdx = i;
+        }
+    }
+
+    // Set dropdown selection
+    var sel = document.getElementById('compare-mw-sel-' + side);
+    if (sel && sel.options[bestFilteredIdx]) {
+        sel.selectedIndex = bestFilteredIdx;
+        loadCompareMWOverpass(side);
+        showToast('Jumped to overpass nearest peak');
+    }
+};
+
+/**
+ * Change MW product and reload both sides.
+ */
+window.setCompareMWProduct = function (product) {
+    _cmpMW.product = product;
+
+    // Re-populate dropdown lists (filtering by capability)
+    ['left', 'right'].forEach(function (side) {
+        var s = _cmpMW[side];
+        if (!s.storm || !s.overpasses.length) return;
+
+        var sel = document.getElementById('compare-mw-sel-' + side);
+        var statusEl = document.getElementById('compare-mw-status-' + side);
+        if (!sel) return;
+
+        sel.innerHTML = '';
+        var filtered = _filterMWOverpasses(s.overpasses, product);
+
+        if (filtered.length === 0) {
+            sel.innerHTML = '<option value="">No ' + product + ' data</option>';
+            if (statusEl) statusEl.textContent = '0 passes';
+            return;
+        }
+
+        for (var i = 0; i < filtered.length; i++) {
+            var op = filtered[i];
+            var opt = document.createElement('option');
+            opt.value = op._origIdx;
+            opt.textContent = op.sensor + ' / ' + op.platform + ' — ' + op.datetime;
+            sel.appendChild(opt);
+        }
+
+        if (statusEl) statusEl.textContent = filtered.length + ' pass(es)';
+
+        // Reload current overpass with new product
+        loadCompareMWOverpass(side);
+    });
+
+    _renderCompareMWColorbar();
+};
+
+/**
+ * Render the MW colorbar for the current product.
+ */
+function _renderCompareMWColorbar() {
+    var canvas = document.getElementById('compare-mw-colorbar');
+    var labelsEl = document.getElementById('compare-mw-colorbar-labels');
+    if (!canvas) return;
+
+    var product = _cmpMW.product;
+
+    // Fetch colorbar from API
+    fetch(API_BASE + '/microwave/colorbar?product=' + product)
+        .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+        .then(function (json) {
+            if (json.image_b64) {
+                var img = new Image();
+                img.onload = function () {
+                    canvas.width = img.width;
+                    canvas.height = 1;
+                    var ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0, img.width, 1);
+                };
+                img.src = 'data:image/png;base64,' + json.image_b64;
+            }
+
+            // Update labels based on product
+            if (labelsEl) {
+                if (product === '89pct') {
+                    labelsEl.innerHTML = '<span>285 K</span><span>200</span><span>100 K</span>';
+                } else if (product === '37color') {
+                    labelsEl.innerHTML = '<span>Color Composite</span>';
+                } else if (product.indexOf('37') === 0) {
+                    labelsEl.innerHTML = '<span>290 K</span><span>240</span><span>150 K</span>';
+                } else {
+                    labelsEl.innerHTML = '<span>285 K</span><span>200</span><span>100 K</span>';
+                }
+            }
+        })
+        .catch(function () {
+            // Fallback: just leave canvas blank
+        });
+}
+
+/**
+ * Cleanup MW compare state when storms are cleared.
+ */
+function _cleanupCompareMW() {
+    ['left', 'right'].forEach(function (side) {
+        var s = _cmpMW[side];
+        if (s.overlay && s.map) { s.map.removeLayer(s.overlay); s.overlay = null; }
+        s.storm = null;
+        s.overpasses = [];
+        s.idx = 0;
+    });
+}
 
 
 // ═══════════════════════════════════════════════════════════════
