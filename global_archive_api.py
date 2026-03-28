@@ -2933,15 +2933,37 @@ def _fetch_adeck(atcf_id: str) -> dict | None:
 
     # Build URL list — order matters (fastest/most reliable first)
     fname = f"a{basin}{num}{year}"
-    urls = [
-        # 1. NHC current aid directory (active storms)
-        f"https://ftp.nhc.noaa.gov/atcf/aid/{fname}.dat",
-        # 2. NHC archive (historical, all basins including JTWC WP/IO/SH)
-        f"https://ftp.nhc.noaa.gov/atcf/archive/{year}/{fname}.dat.gz",
-        # 3. NRL ATCF server (Naval Research Lab — primary JTWC data host)
-        f"https://science.nrlmry.navy.mil/atcf/aidarchive/{year}/{fname}.dat.gz",
-        # 4. UCAR RAL TC Guidance Project (global aggregator, all basins)
+    urls = []
+
+    if basin in ("al", "ep", "cp"):
+        # NHC-monitored basins — NHC FTP is primary
+        urls += [
+            f"https://ftp.nhc.noaa.gov/atcf/aid_public/{fname}.dat.gz",
+            f"https://ftp.nhc.noaa.gov/atcf/aid/{fname}.dat",
+            f"https://ftp.nhc.noaa.gov/atcf/archive/{year}/{fname}.dat.gz",
+        ]
+    else:
+        # JTWC-monitored basins (WP, IO, SH)
+        # NHC aid_public has JTWC data for ACTIVE storms (current season only)
+        # NRL is the authoritative JTWC archive for historical storms
+        # Note: ssd.noaa.gov/PS/TROP/DATA/ATCF/JTWC/ returns 403 Forbidden
+        urls += [
+            # Active storms (current season)
+            f"https://ftp.nhc.noaa.gov/atcf/aid_public/{fname}.dat.gz",
+            # NRL ATCF archive (primary historical source for JTWC)
+            f"https://science.nrlmry.navy.mil/atcf/aidarchive/{year}/{fname}.dat.gz",
+            f"https://science.nrlmry.navy.mil/atcf/archive/{year}/{fname}.dat.gz",
+            f"https://science.nrlmry.navy.mil/atcf-web/docs/current_storms/{fname}.dat",
+        ]
+
+    # Universal fallbacks (all basins)
+    urls += [
+        # UCAR RAL TC Guidance Project — global aggregator (all basins, all years)
+        # adecks_open/ is the publicly accessible directory
+        f"https://hurricanes.ral.ucar.edu/repository/data/adecks_open/{year}/{fname}.dat",
         f"https://hurricanes.ral.ucar.edu/repository/data/{year}/{fname}.dat",
+        # Alternate NHC archive paths (non-gzipped)
+        f"https://ftp.nhc.noaa.gov/atcf/archive/{year}/{fname}.dat",
     ]
 
     raw_text = None
