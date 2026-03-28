@@ -641,3 +641,16 @@
 .leaflet-popup-close-button:hover {
     color: #e2e8f0 !important;
 }
+
+/* ── Mobile touch-target fixes ─────────────────────────────── */
+@media (max-width: 768px) {
+    .ir-product-toggle button {
+        padding: 8px 12px;
+        font-size: 12px;
+        min-height: 40px;
+    }
+    .modebar-container,
+    .modebar {
+        display: none !important;
+    }
+}

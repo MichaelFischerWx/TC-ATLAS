@@ -664,6 +664,7 @@ input[type="range"].ga-range::-moz-range-thumb {
 
 /* Playback controls below the map */
 .ir-map-controls {
+    display: block !important;   /* Override tc_radar_styles.css display:flex bleed */
     position: relative;
     background: rgba(10, 22, 40, 0.92);
     padding: 8px 10px;
@@ -1159,6 +1160,126 @@ input[type="range"].ga-range::-moz-range-thumb {
     }
     .topbar-stats {
         display: none;
+    }
+
+    /* ── IR controls mobile layout ────────────────────────── */
+    .ir-map-controls {
+        padding: 6px 8px;
+    }
+    .ir-map-info {
+        font-size: 0.7rem;
+        gap: 4px;
+    }
+    .ir-map-playback {
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+    .ir-map-playback .ga-btn-sm {
+        min-height: 32px;
+        min-width: 32px;
+        padding: 4px 10px;
+        font-size: 0.82rem;
+    }
+    .ir-step-btn {
+        min-height: 32px;
+        min-width: 32px;
+        padding: 4px 8px !important;
+        font-size: 0.75rem !important;
+    }
+    .ir-datetime {
+        font-size: 0.7rem;
+        width: 100%;
+        margin-top: 2px;
+    }
+    .ir-slider-row {
+        margin-top: 6px;
+    }
+    .ir-slider-row .ir-slider {
+        width: 100%;
+        height: 24px;
+        -webkit-appearance: none;
+    }
+    .ir-map-options {
+        gap: 4px;
+        margin-top: 6px;
+    }
+    .ir-map-options .ga-btn-sm {
+        min-height: 32px;
+        min-width: 36px;
+        padding: 4px 8px;
+    }
+
+    /* Colormap buttons: scrollable row on mobile */
+    .ir-cmap-row {
+        margin-top: 6px;
+        overflow-x: auto;
+        flex-wrap: nowrap;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;          /* Firefox */
+        padding-bottom: 2px;
+    }
+    .ir-cmap-row::-webkit-scrollbar {
+        display: none;                  /* Chrome/Safari */
+    }
+    .ir-cmap-group {
+        flex-wrap: nowrap;
+        gap: 4px;
+    }
+    .ir-cmap-btn {
+        min-height: 28px;
+        min-width: 36px;
+        padding: 4px 8px;
+        font-size: 0.68rem;
+        white-space: nowrap;
+        flex-shrink: 0;
+    }
+
+    /* Colorbar stays full-width */
+    .ir-colorbar-row {
+        margin-top: 6px;
+    }
+    .ir-colorbar-labels {
+        font-size: 0.55rem;
+    }
+
+    /* Detail map height for mobile */
+    .detail-map-container {
+        height: 300px;
+    }
+
+    /* Detail header compact */
+    .detail-header {
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+    .detail-storm-title {
+        font-size: 1.1rem;
+    }
+
+    /* Chart height on mobile */
+    .chart-container {
+        height: 260px;
+    }
+}
+
+@media (max-width: 420px) {
+    /* Extra-small phones: hide nav labels, keep logo */
+    .topbar-nav a {
+        font-size: 0.65rem;
+        padding: 6px 6px;
+    }
+    .ir-map-playback .ga-btn-sm {
+        padding: 4px 8px;
+        font-size: 0.75rem;
+    }
+    .ir-datetime {
+        font-size: 0.62rem;
+    }
+    .detail-map-container {
+        height: 250px;
+    }
+    .chart-container {
+        height: 220px;
     }
 }
 

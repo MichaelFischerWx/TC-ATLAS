@@ -1744,3 +1744,40 @@ footer a:hover { text-decoration: underline; }
         font-size: initial;
     }
 }
+
+/* ── Mobile touch-target & layout fixes ────────────────────── */
+/* These rules only apply on mobile — no effect on desktop.     */
+
+@media (max-width: 768px) {
+    /* 1. Larger touch targets for analysis buttons (44px min) */
+    .display-actions .cs-btn {
+        padding: 10px 4px;
+        font-size: 12px;
+        min-height: 44px;
+    }
+
+    /* Larger touch targets for overlay pills */
+    .overlay-pill {
+        padding: 6px 10px;
+        font-size: 11px;
+        min-height: 36px;
+    }
+
+    /* 2. Hide Plotly toolbar on mobile (buttons too small for touch) */
+    .modebar-container,
+    .modebar {
+        display: none !important;
+    }
+
+    /* 3. MW overpass panel: prevent cramped wrapping on small screens */
+    #mw-overpass-panel,
+    #rt-mw-overpass-panel {
+        font-size: 11px;
+    }
+    #mw-overpass-panel select,
+    #rt-mw-overpass-panel select {
+        min-width: 120px;
+        font-size: 11px;
+        padding: 6px 8px;
+    }
+}
