@@ -1905,6 +1905,17 @@ function renderCompareView() {
         if (addBtn) addBtn.style.display = 'none';
         if (inlinePanel) { inlinePanel.style.display = 'none'; inlinePanel.innerHTML = ''; }
         compareSearchVisible = false;
+        // Hide IR comparison
+        var irWrap = document.getElementById('compare-ir-wrap');
+        if (irWrap) irWrap.style.display = 'none';
+        // Stop any playing IR timers
+        ['left','right'].forEach(function (side) {
+            if (_cmpIR && _cmpIR[side] && _cmpIR[side].timer) {
+                clearInterval(_cmpIR[side].timer);
+                _cmpIR[side].timer = null;
+                _cmpIR[side].playing = false;
+            }
+        });
         // Auto-populate search results in empty state
         setTimeout(function () { _doCompareSearch(''); }, 50);
         return;
@@ -1918,6 +1929,11 @@ function renderCompareView() {
     renderCompareTimeline();
     renderCompareMap();
     renderCompareTable();
+
+    // Initialize side-by-side IR comparison if 2+ storms
+    if (compareStorms.length >= 2 && typeof initCompareIR === 'function') {
+        setTimeout(initCompareIR, 300);
+    }
 }
 
 function renderCompareTimeline() {
@@ -5094,6 +5110,568 @@ function removeGlobalMWOverlay() {
     var controls = document.getElementById('ga-mw-controls');
     if (controls) controls.style.display = 'none';
 }
+
+
+// ═══════════════════════════════════════════════════════════════
+// ── SIDE-BY-SIDE IR COMPARISON ────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+
+var _cmpIR = {
+    left:  { map: null, storm: null, meta: null, frames: [], idx: 0, overlay: null, playing: false, timer: null },
+    right: { map: null, storm: null, meta: null, frames: [], idx: 0, overlay: null, playing: false, timer: null },
+    sync: false,
+    cmap: 'enhanced',
+    speed: 750
+};
+
+/**
+ * Initialize the compare IR section whenever storms are added to compare.
+ * Auto-assigns the first two compare storms to left and right viewers.
+ */
+function initCompareIR() {
+    var wrap = document.getElementById('compare-ir-wrap');
+    if (!wrap) return;
+    if (compareStorms.length < 2) {
+        wrap.style.display = 'none';
+        return;
+    }
+    wrap.style.display = '';
+
+    // Init maps if needed
+    if (!_cmpIR.left.map) {
+        _cmpIR.left.map = L.map('compare-ir-map-left', {
+            zoomControl: false,
+            attributionControl: false,
+            minZoom: 2, maxZoom: 10
+        }).setView([20, -60], 4);
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
+            maxZoom: 18
+        }).addTo(_cmpIR.left.map);
+    }
+    if (!_cmpIR.right.map) {
+        _cmpIR.right.map = L.map('compare-ir-map-right', {
+            zoomControl: false,
+            attributionControl: false,
+            minZoom: 2, maxZoom: 10
+        }).setView([20, -60], 4);
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
+            maxZoom: 18
+        }).addTo(_cmpIR.right.map);
+    }
+
+    // Invalidate map sizes after display
+    setTimeout(function () {
+        _cmpIR.left.map.invalidateSize();
+        _cmpIR.right.map.invalidateSize();
+    }, 150);
+
+    // Assign storms
+    var s1 = compareStorms[0];
+    var s2 = compareStorms[1];
+
+    if (!_cmpIR.left.storm || _cmpIR.left.storm.sid !== s1.sid) {
+        _loadCompareIRStorm('left', s1);
+    }
+    if (!_cmpIR.right.storm || _cmpIR.right.storm.sid !== s2.sid) {
+        _loadCompareIRStorm('right', s2);
+    }
+
+    // Render colorbar
+    _renderCompareColorbar();
+}
+
+function _renderCompareColorbar() {
+    var canvas = document.getElementById('compare-ir-colorbar');
+    if (!canvas) return;
+    var lut = IR_COLORMAPS[_cmpIR.cmap] || IR_COLORMAPS['enhanced'];
+    canvas.width = 255;
+    canvas.height = 1;
+    var ctx = canvas.getContext('2d');
+    var imgData = ctx.createImageData(255, 1);
+    var px = imgData.data;
+    for (var x = 0; x < 255; x++) {
+        var val = 255 - x;
+        var li = val * 4;
+        var pi = x * 4;
+        px[pi] = lut[li]; px[pi+1] = lut[li+1]; px[pi+2] = lut[li+2]; px[pi+3] = 255;
+    }
+    ctx.putImageData(imgData, 0, 0);
+}
+
+/**
+ * Load IR metadata + first frame for one side of the comparison.
+ */
+function _loadCompareIRStorm(side, storm) {
+    var s = _cmpIR[side];
+    s.storm = storm;
+    s.meta = null;
+    s.frames = [];
+    s.idx = 0;
+    if (s.timer) { clearInterval(s.timer); s.timer = null; s.playing = false; }
+    if (s.overlay && s.map) { s.map.removeLayer(s.overlay); s.overlay = null; }
+
+    var label = document.getElementById('compare-ir-' + side + '-label');
+    if (label) {
+        var cat = getIntensityCategory(storm.peak_wind_kt);
+        var color = getIntensityColor(storm.peak_wind_kt);
+        label.innerHTML = '<span style="color:' + color + ';font-weight:700;">' +
+            (storm.name || 'UNNAMED') + '</span> ' + storm.year + ' <span style="font-size:0.7rem;color:' + color + ';">' + cat + '</span>';
+    }
+
+    // Build metadata URL
+    var track = allTracks[storm.sid] || [];
+    var trackParam = track.length > 0 ? '&track=' + encodeURIComponent(JSON.stringify(track)) : '';
+    var lonParam = storm.lmi_lon != null ? '&storm_lon=' + storm.lmi_lon : '';
+    var metaUrl = API_BASE + '/global/ir/meta?sid=' + encodeURIComponent(storm.sid) + trackParam + lonParam;
+
+    var dtEl = document.getElementById('compare-ir-dt-' + side);
+    if (dtEl) dtEl.textContent = 'Loading...';
+
+    fetch(metaUrl)
+        .then(function (r) { if (!r.ok) throw new Error('No IR data'); return r.json(); })
+        .then(function (meta) {
+            if (!meta.available || meta.n_frames === 0) {
+                if (dtEl) dtEl.textContent = 'No IR data available';
+                return;
+            }
+            s.meta = meta;
+            var slider = document.getElementById('compare-ir-slider-' + side);
+            if (slider) { slider.max = meta.n_frames - 1; slider.value = 0; }
+
+            // Center map on storm LMI position
+            var lat = storm.lmi_lat || 20;
+            var lon = storm.lmi_lon || -60;
+            s.map.setView([lat, lon], 5);
+
+            // Load first frame
+            _loadCompareIRFrame(side, 0);
+        })
+        .catch(function (e) {
+            if (dtEl) dtEl.textContent = 'IR unavailable';
+            console.warn('Compare IR load failed for ' + storm.sid, e);
+        });
+}
+
+function _loadCompareIRFrame(side, idx) {
+    var s = _cmpIR[side];
+    if (!s.meta || !s.storm) return;
+
+    // Check cache
+    if (s.frames[idx]) {
+        _displayCompareIR(side, s.frames[idx]);
+        _updateCompareIRMeta(side, idx);
+        return;
+    }
+
+    var source = s.meta.source || 'hursat';
+    var irCacheVer = 'v5';
+    var frameUrl;
+
+    if ((source === 'mergir' || source === 'gridsat') && s.meta.frames && s.meta.frames[idx]) {
+        var fi = s.meta.frames[idx];
+        frameUrl = API_BASE + '/global/ir/frame?sid=' + encodeURIComponent(s.storm.sid) +
+            '&frame_idx=' + idx + '&lat=' + fi.lat + '&lon=' + fi.lon + '&_v=' + irCacheVer;
+    } else {
+        frameUrl = API_BASE + '/global/hursat/frame?sid=' + encodeURIComponent(s.storm.sid) +
+            '&frame_idx=' + idx + '&_v=' + irCacheVer;
+    }
+
+    fetch(frameUrl)
+        .then(function (r) { if (!r.ok) throw new Error('Frame unavailable'); return r.json(); })
+        .then(function (data) {
+            s.frames[idx] = data;
+            if (s.idx === idx) {
+                _displayCompareIR(side, data);
+            }
+            _updateCompareIRMeta(side, idx);
+        })
+        .catch(function () {
+            var dtEl = document.getElementById('compare-ir-dt-' + side);
+            if (dtEl) dtEl.textContent = 'Frame ' + (idx + 1) + ' unavailable';
+        });
+}
+
+function _displayCompareIR(side, data) {
+    var s = _cmpIR[side];
+    if (!s.map || !data) return;
+
+    var bounds = data.bounds;
+    if (!bounds) {
+        var lat = s.storm.lmi_lat || 20;
+        var lon = s.storm.lmi_lon || -60;
+        bounds = { south: lat - 10, north: lat + 10, west: lon - 10, east: lon + 10 };
+    }
+    var imageBounds = L.latLngBounds([bounds.south, bounds.west], [bounds.north, bounds.east]);
+
+    var imageURI;
+    if (data.tb_data) {
+        var tbArr = decodeTbData(data.tb_data);
+        imageURI = renderTbToDataURI(tbArr, data.tb_rows, data.tb_cols, _cmpIR.cmap);
+    } else if (data.frame) {
+        imageURI = data.frame;
+    } else {
+        return;
+    }
+
+    if (s.overlay) { try { s.map.removeLayer(s.overlay); } catch (e) {} }
+    s.overlay = L.imageOverlay(imageURI, imageBounds, {
+        opacity: 0.8,
+        interactive: false,
+        className: 'ir-overlay-image'
+    }).addTo(s.map);
+}
+
+function _updateCompareIRMeta(side, idx) {
+    var s = _cmpIR[side];
+    var dtEl = document.getElementById('compare-ir-dt-' + side);
+    var slider = document.getElementById('compare-ir-slider-' + side);
+    if (slider) slider.value = idx;
+    if (dtEl && s.meta && s.meta.frames && s.meta.frames[idx]) {
+        dtEl.textContent = s.meta.frames[idx].datetime || ('Frame ' + (idx + 1));
+    } else if (dtEl) {
+        dtEl.textContent = 'Frame ' + (idx + 1) + ' / ' + (s.meta ? s.meta.n_frames : '?');
+    }
+}
+
+window.seekCompareIR = function (side, val) {
+    var s = _cmpIR[side];
+    s.idx = parseInt(val);
+    _loadCompareIRFrame(side, s.idx);
+
+    // Sync: seek other side to same relative position
+    if (_cmpIR.sync) {
+        var other = side === 'left' ? 'right' : 'left';
+        var os = _cmpIR[other];
+        if (os.meta && os.meta.n_frames) {
+            var ratio = s.idx / Math.max(1, (s.meta.n_frames - 1));
+            os.idx = Math.round(ratio * (os.meta.n_frames - 1));
+            _loadCompareIRFrame(other, os.idx);
+        }
+    }
+};
+
+window.stepCompareIR = function (side, delta) {
+    var s = _cmpIR[side];
+    if (!s.meta) return;
+    var newIdx = s.idx + delta;
+    if (newIdx < 0) newIdx = s.meta.n_frames - 1;
+    if (newIdx >= s.meta.n_frames) newIdx = 0;
+    s.idx = newIdx;
+    _loadCompareIRFrame(side, s.idx);
+
+    if (_cmpIR.sync) {
+        var other = side === 'left' ? 'right' : 'left';
+        stepCompareIR(other, delta);
+    }
+};
+
+window.toggleCompareIRPlay = function (side) {
+    var s = _cmpIR[side];
+    if (s.playing) {
+        clearInterval(s.timer); s.timer = null; s.playing = false;
+        var btn = document.getElementById('compare-ir-play-' + side);
+        if (btn) btn.innerHTML = '&#9654; Play';
+        if (_cmpIR.sync) {
+            var other = side === 'left' ? 'right' : 'left';
+            var os = _cmpIR[other];
+            if (os.playing) { clearInterval(os.timer); os.timer = null; os.playing = false; }
+            var obtn = document.getElementById('compare-ir-play-' + other);
+            if (obtn) obtn.innerHTML = '&#9654; Play';
+        }
+    } else {
+        s.playing = true;
+        var btn2 = document.getElementById('compare-ir-play-' + side);
+        if (btn2) btn2.innerHTML = '&#9632; Stop';
+        s.timer = setInterval(function () {
+            stepCompareIR(side, 1);
+        }, _cmpIR.speed);
+
+        if (_cmpIR.sync) {
+            var other2 = side === 'left' ? 'right' : 'left';
+            var os2 = _cmpIR[other2];
+            os2.playing = true;
+            var obtn2 = document.getElementById('compare-ir-play-' + other2);
+            if (obtn2) obtn2.innerHTML = '&#9632; Stop';
+            os2.timer = setInterval(function () {
+                stepCompareIR(other2, 1);
+            }, _cmpIR.speed);
+        }
+    }
+};
+
+window.toggleCompareIRSync = function () {
+    _cmpIR.sync = !_cmpIR.sync;
+    var btn = document.getElementById('compare-ir-sync-btn');
+    if (btn) {
+        btn.classList.toggle('active', _cmpIR.sync);
+        btn.style.background = _cmpIR.sync ? 'rgba(0, 180, 255, 0.25)' : '';
+    }
+    if (_cmpIR.sync) showToast('IR playback synced');
+};
+
+window.setCompareIRColormap = function (name) {
+    if (!IR_COLORMAPS[name]) return;
+    _cmpIR.cmap = name;
+    _renderCompareColorbar();
+    // Re-render both sides with new colormap
+    ['left', 'right'].forEach(function (side) {
+        var s = _cmpIR[side];
+        if (s.frames[s.idx]) {
+            _displayCompareIR(side, s.frames[s.idx]);
+        }
+    });
+};
+
+// Hook into compare rendering to auto-init IR comparison
+var _origRenderCompareTimeline = typeof renderCompareTimeline === 'function' ? renderCompareTimeline : null;
+
+
+// ═══════════════════════════════════════════════════════════════
+// ── SHAREABLE DEEP LINKS ──────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Build a shareable URL that encodes the current view state.
+ * Format: #storm=SID&frame=N&cmap=NAME&opacity=N&zoom=N&lat=N&lng=N&tab=NAME
+ */
+function buildShareHash() {
+    var params = [];
+
+    // Current tab
+    var activeTab = document.querySelector('.ga-tab.active');
+    var tab = activeTab ? activeTab.getAttribute('data-tab') : 'browser';
+    params.push('tab=' + tab);
+
+    // Storm (for detail)
+    if (selectedStorm && tab === 'detail') {
+        params.push('storm=' + encodeURIComponent(selectedStorm.sid));
+
+        // IR state (only if IR overlay is visible)
+        if (irOverlayVisible) {
+            params.push('frame=' + irFrameIdx);
+            params.push('cmap=' + irSelectedColormap);
+            params.push('opacity=' + Math.round(irOpacity * 100));
+        }
+
+        // Map zoom/center
+        if (detailMap) {
+            var c = detailMap.getCenter();
+            var z = detailMap.getZoom();
+            params.push('zoom=' + z);
+            params.push('lat=' + c.lat.toFixed(3));
+            params.push('lng=' + c.lng.toFixed(3));
+        }
+    }
+
+    // Compare tab: encode storm SIDs and alignment
+    if (tab === 'compare' && compareStorms.length > 0) {
+        params.push('storms=' + compareStorms.map(function (s) { return s.sid; }).join(','));
+        params.push('align=' + (compareAlign || 'genesis'));
+    }
+
+    // Climatology tab: encode basin filter if set
+    if (tab === 'climatology') {
+        var climBasinSel = document.getElementById('clim-basin-select');
+        if (climBasinSel && climBasinSel.value) {
+            params.push('basin=' + climBasinSel.value);
+        }
+    }
+
+    return '#' + params.join('&');
+}
+
+/**
+ * Copy a shareable link to the clipboard and show feedback.
+ */
+window.copyShareLink = function () {
+    var hash = buildShareHash();
+    var url = window.location.origin + window.location.pathname + hash;
+
+    // Update the URL bar silently
+    history.replaceState(null, '', hash);
+
+    // Copy to clipboard
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(url).then(function () {
+            showToast('Link copied to clipboard!');
+            _ga('ga_share_link', { url: url });
+        }).catch(function () {
+            _fallbackCopy(url);
+        });
+    } else {
+        _fallbackCopy(url);
+    }
+};
+
+function _fallbackCopy(text) {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;left:-9999px;';
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+        document.execCommand('copy');
+        showToast('Link copied to clipboard!');
+    } catch (e) {
+        showToast('Could not copy — check browser permissions');
+    }
+    document.body.removeChild(ta);
+}
+
+/**
+ * Update hash in URL bar silently when user changes state.
+ */
+var _hashUpdateTimer = null;
+function updateHashSilently() {
+    // Debounce to avoid hammering history API during animation playback
+    clearTimeout(_hashUpdateTimer);
+    _hashUpdateTimer = setTimeout(function () {
+        var activeTab = document.querySelector('.ga-tab.active');
+        var tab = activeTab ? activeTab.getAttribute('data-tab') : 'browser';
+        if (tab === 'detail' && selectedStorm) {
+            history.replaceState(null, '', buildShareHash());
+        }
+    }, 500);
+}
+
+/**
+ * Parse hash params on page load and restore state.
+ */
+var _hashRestored = false;
+function restoreFromHash() {
+    var hash = window.location.hash;
+    if (!hash || hash.length < 2) return;
+    if (_hashRestored) return;  // Only restore once on initial load
+
+    var parts = hash.substring(1).split('&');
+    var params = {};
+    parts.forEach(function (p) {
+        var kv = p.split('=');
+        if (kv.length === 2) params[kv[0]] = decodeURIComponent(kv[1]);
+    });
+
+    if (!params.tab) return;
+
+    // Wait for storm data to be loaded before restoring
+    var _attempts = 0;
+    var _restoreInterval = setInterval(function () {
+        _attempts++;
+        if (!allStorms || allStorms.length === 0) {
+            if (_attempts > 100) clearInterval(_restoreInterval); // 20s timeout
+            return;
+        }
+        clearInterval(_restoreInterval);
+        _hashRestored = true;
+
+        // ── Restore storm detail view ──
+        if (params.tab === 'detail' && params.storm) {
+            var storm = allStorms.find(function (s) { return s.sid === params.storm; });
+            if (!storm) {
+                showToast('Storm not found: ' + params.storm);
+                return;
+            }
+            selectedStorm = storm;
+            viewStormDetail();
+
+            // Wait for detail to render, then apply IR state
+            setTimeout(function () {
+                // Apply colormap first (before IR loads)
+                if (params.cmap && IR_COLORMAPS[params.cmap]) {
+                    _origSwitchColormap(params.cmap);
+                }
+                if (params.opacity) {
+                    var opVal = parseInt(params.opacity) / 100;
+                    if (opVal > 0 && opVal <= 1) {
+                        irOpacity = opVal;
+                        for (var oi = 0; oi < irOpacityLevels.length; oi++) {
+                            if (Math.abs(irOpacityLevels[oi] - opVal) < 0.05) {
+                                irOpacityIdx = oi;
+                                break;
+                            }
+                        }
+                        var opLabel = document.getElementById('ir-opacity-label');
+                        if (opLabel) opLabel.textContent = Math.round(irOpacity * 100) + '%';
+                    }
+                }
+
+                // Apply map position
+                if (params.zoom && params.lat && params.lng && detailMap) {
+                    detailMap.setView(
+                        [parseFloat(params.lat), parseFloat(params.lng)],
+                        parseInt(params.zoom)
+                    );
+                    irFollowStorm = false;
+                    var followBtn = document.getElementById('ir-follow-btn');
+                    if (followBtn) followBtn.classList.remove('active');
+                }
+
+                // Seek to specific frame (wait for IR metadata to load)
+                if (params.frame !== undefined) {
+                    var _fAttempts = 0;
+                    var _frameInterval = setInterval(function () {
+                        _fAttempts++;
+                        if (!irMeta || !irMeta.n_frames) {
+                            if (_fAttempts > 50) clearInterval(_frameInterval);
+                            return;
+                        }
+                        clearInterval(_frameInterval);
+                        var f = parseInt(params.frame);
+                        if (f >= 0 && f < irMeta.n_frames) {
+                            _origSeekIRFrame(f);
+                        }
+                    }, 300);
+                }
+            }, 800);
+        }
+
+        // ── Restore compare view ──
+        if (params.tab === 'compare' && params.storms) {
+            var sids = params.storms.split(',');
+            sids.forEach(function (sid) {
+                var s = allStorms.find(function (st) { return st.sid === sid; });
+                if (s && !compareStorms.some(function (c) { return c.sid === sid; })) {
+                    compareStorms.push(s);
+                }
+            });
+            if (params.align) compareAlign = params.align;
+            switchTab('compare');
+        }
+
+        // ── Restore climatology view ──
+        if (params.tab === 'climatology') {
+            switchTab('climatology');
+            if (params.basin) {
+                setTimeout(function () {
+                    var climSel = document.getElementById('clim-basin-select');
+                    if (climSel) {
+                        climSel.value = params.basin;
+                        climSel.dispatchEvent(new Event('change'));
+                    }
+                }, 200);
+            }
+        }
+
+    }, 200);
+}
+
+// ── Hook into state changes for silent URL updates ──
+var _origSeekIRFrame = window.seekIRFrame;
+window.seekIRFrame = function (val) {
+    _origSeekIRFrame(val);
+    updateHashSilently();
+};
+
+var _origSwitchColormap = switchColormap;
+switchColormap = function (name) {
+    _origSwitchColormap(name);
+    updateHashSilently();
+};
+window.switchColormap = switchColormap;
+
+// Restore state from hash on load
+document.addEventListener('DOMContentLoaded', function () {
+    restoreFromHash();
+});
 
 
 })();

@@ -280,6 +280,7 @@
                             </a>
                             <button class="ga-btn ga-btn-sm ga-btn-accent" onclick="openAnalogFinder()">Find Analogs</button>
                             <button class="ga-btn ga-btn-sm" onclick="addCurrentToCompare()">+ Compare</button>
+                            <button id="share-link-btn" class="ga-btn ga-btn-sm" onclick="copyShareLink()" title="Copy shareable link to this view">&#128279; Share</button>
                         </div>
                     </div>
                     <h2 id="detail-title" class="detail-storm-title"></h2>
@@ -489,6 +490,61 @@
                     <div class="detail-panel" style="margin-top:16px;">
                         <div class="panel-header"><h3>Summary</h3></div>
                         <div id="compare-table" class="compare-stats-table"></div>
+                    </div>
+                </div>
+
+                <!-- Side-by-side IR Comparison -->
+                <div id="compare-ir-wrap" style="display:none;margin-top:16px;">
+                    <div class="detail-panel">
+                        <div class="panel-header">
+                            <h3>IR Satellite Comparison</h3>
+                            <div style="display:flex;gap:8px;align-items:center;">
+                                <button class="ga-btn ga-btn-xs compare-align" id="compare-ir-sync-btn" onclick="toggleCompareIRSync()" title="Sync playback between both viewers">&#128279; Sync</button>
+                                <select id="compare-ir-cmap" class="ga-select-sm" onchange="setCompareIRColormap(this.value)">
+                                    <option value="enhanced">IR</option>
+                                    <option value="dvorak">BD</option>
+                                    <option value="grayscale">BW</option>
+                                    <option value="funktop">FK</option>
+                                    <option value="avn">AVN</option>
+                                    <option value="nhc">NHC</option>
+                                    <option value="rammb">RAMMB</option>
+                                    <option value="irb">IRB</option>
+                                    <option value="claude">Claude</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="compare-ir-grid">
+                            <div class="compare-ir-cell" id="compare-ir-left">
+                                <div class="compare-ir-label" id="compare-ir-left-label">Select storm 1</div>
+                                <div class="compare-ir-map-wrap">
+                                    <div id="compare-ir-map-left" class="compare-ir-map"></div>
+                                </div>
+                                <div class="compare-ir-controls" id="compare-ir-ctrl-left">
+                                    <button class="ga-btn ga-btn-sm ir-step-btn" onclick="stepCompareIR('left',-1)">&#9664;</button>
+                                    <button class="ga-btn ga-btn-sm" id="compare-ir-play-left" onclick="toggleCompareIRPlay('left')">&#9654; Play</button>
+                                    <button class="ga-btn ga-btn-sm ir-step-btn" onclick="stepCompareIR('left',1)">&#9654;</button>
+                                    <span class="compare-ir-datetime" id="compare-ir-dt-left"></span>
+                                </div>
+                                <input type="range" class="ga-range ir-slider" id="compare-ir-slider-left" min="0" max="0" value="0" oninput="seekCompareIR('left', this.value)">
+                            </div>
+                            <div class="compare-ir-cell" id="compare-ir-right">
+                                <div class="compare-ir-label" id="compare-ir-right-label">Select storm 2</div>
+                                <div class="compare-ir-map-wrap">
+                                    <div id="compare-ir-map-right" class="compare-ir-map"></div>
+                                </div>
+                                <div class="compare-ir-controls" id="compare-ir-ctrl-right">
+                                    <button class="ga-btn ga-btn-sm ir-step-btn" onclick="stepCompareIR('right',-1)">&#9664;</button>
+                                    <button class="ga-btn ga-btn-sm" id="compare-ir-play-right" onclick="toggleCompareIRPlay('right')">&#9654; Play</button>
+                                    <button class="ga-btn ga-btn-sm ir-step-btn" onclick="stepCompareIR('right',1)">&#9654;</button>
+                                    <span class="compare-ir-datetime" id="compare-ir-dt-right"></span>
+                                </div>
+                                <input type="range" class="ga-range ir-slider" id="compare-ir-slider-right" min="0" max="0" value="0" oninput="seekCompareIR('right', this.value)">
+                            </div>
+                        </div>
+                        <div class="ir-colorbar-row" style="margin-top:8px;">
+                            <canvas id="compare-ir-colorbar" height="8"></canvas>
+                            <div class="ir-colorbar-labels"><span>310 K</span><span>240</span><span>170 K</span></div>
+                        </div>
                     </div>
                 </div>
             </div>
