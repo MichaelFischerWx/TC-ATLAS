@@ -820,7 +820,7 @@
 /* ── Toggle button ───────────────────────────────────────────── */
 .basin-sidebar-toggle {
     position: fixed;
-    top: 62px;
+    top: 132px;
     left: 10px;
     z-index: 600;
     background: rgba(12, 29, 61, 0.88);
