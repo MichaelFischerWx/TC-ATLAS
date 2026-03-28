@@ -2741,6 +2741,11 @@ ADECK_MODELS = {
     "HAFS": {"name": "HAFS-A",    "color": "#00cec9", "type": "dynamical", "interp": False},
     "HAFA": {"name": "HAFS-A",    "color": "#00cec9", "type": "dynamical", "interp": False},
     "HAFB": {"name": "HAFS-B",    "color": "#81ecec", "type": "dynamical", "interp": False},
+    # HAFS operational (2023+) — replaced HWRF (→HFSA) and HMON (→HFSB)
+    "HFSA": {"name": "HAFS-A",    "color": "#00cec9", "type": "dynamical", "interp": False},
+    "HFSB": {"name": "HAFS-B",    "color": "#81ecec", "type": "dynamical", "interp": False},
+    "HFAI": {"name": "HAFS-A",    "color": "#00cec9", "type": "dynamical", "interp": True},
+    "HFBI": {"name": "HAFS-B",    "color": "#81ecec", "type": "dynamical", "interp": True},
     "CTCX": {"name": "COAMPS-TC", "color": "#fab1a0", "type": "dynamical", "interp": False},
     "COTC": {"name": "COAMPS-TC", "color": "#fab1a0", "type": "dynamical", "interp": False},
     "COTI": {"name": "COAMPS-TC", "color": "#fab1a0", "type": "dynamical", "interp": True},

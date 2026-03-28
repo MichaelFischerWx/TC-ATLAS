@@ -385,11 +385,19 @@ function renderTbToDataURI(tbData, rows, cols, colormap) {
     for (var i = 0; i < tbData.length; i++) {
         var val = tbData[i];
         var pi = i * 4;
-        var li = val * 4;
-        pixels[pi]     = lut[li];
-        pixels[pi + 1] = lut[li + 1];
-        pixels[pi + 2] = lut[li + 2];
-        pixels[pi + 3] = lut[li + 3];
+        if (val === 0) {
+            // uint8 0 = missing/invalid data — render as fully transparent
+            pixels[pi] = 0;
+            pixels[pi + 1] = 0;
+            pixels[pi + 2] = 0;
+            pixels[pi + 3] = 0;
+        } else {
+            var li = val * 4;
+            pixels[pi]     = lut[li];
+            pixels[pi + 1] = lut[li + 1];
+            pixels[pi + 2] = lut[li + 2];
+            pixels[pi + 3] = lut[li + 3];
+        }
     }
     ctx.putImageData(imgData, 0, 0);
     return _irRenderCanvas.toDataURL('image/png');
@@ -5232,6 +5240,7 @@ var MODEL_COLORS = {
     'HWRF': '#00b894', 'HWFI': '#00b894',
     'HMON': '#e17055', 'HMNI': '#e17055',
     'HAFS': '#00cec9', 'HAFA': '#00cec9', 'HAFB': '#81ecec',
+    'HFSA': '#00cec9', 'HFAI': '#00cec9', 'HFSB': '#81ecec', 'HFBI': '#81ecec',
     'CTCX': '#fab1a0', 'COTC': '#fab1a0', 'COTI': '#fab1a0',
     'GFDN': '#e17055', 'GFNI': '#e17055',
     'AVNX': '#ff6b6b', 'NGX': '#6c5ce7',
@@ -5845,6 +5854,29 @@ window.openGifSettings = function () {
     updateGifRangeUI();
     _updateGifEstimate();
 
+    // Pre-load coastline GeoJSON if not already cached
+    if (!_coastlineGeoJSON && !_coastlineLoading) {
+        _coastlineLoading = true;
+        fetch('https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_coastline.geojson')
+            .then(function (r) { return r.json(); })
+            .then(function (geojson) { _coastlineGeoJSON = geojson; })
+            .catch(function (e) { console.warn('Coastline pre-load failed:', e); })
+            .finally(function () { _coastlineLoading = false; });
+    }
+
+    // Enable/disable model checkbox based on whether model data is loaded
+    var modelCb = document.getElementById('gif-show-models');
+    if (modelCb) {
+        if (_modelData && _modelData.cycles) {
+            modelCb.disabled = false;
+            modelCb.parentElement.style.opacity = '';
+        } else {
+            modelCb.disabled = true;
+            modelCb.checked = false;
+            modelCb.parentElement.style.opacity = '0.4';
+        }
+    }
+
     var overlay = document.getElementById('gif-settings-overlay');
     if (overlay) overlay.style.display = 'flex';
 };
@@ -5994,6 +6026,8 @@ window.startGifExport = function () {
     var skip = parseInt(document.getElementById('gif-frame-skip').value) || 1;
     var delay = parseInt(document.getElementById('gif-speed-setting').value) || 200;
     var showIntensity = document.getElementById('gif-show-intensity').checked;
+    var showCoastlines = document.getElementById('gif-show-coastlines').checked;
+    var showModels = document.getElementById('gif-show-models').checked;
 
     // Close settings, show progress
     closeGifSettings();
@@ -6195,6 +6229,180 @@ window.startGifExport = function () {
             spanMs2 = Math.max(1, lastDtMs2 - firstDtMs);
         }
 
+        /**
+         * Project lat/lon to pixel position on the IR image area of the composite canvas.
+         * bounds = { south, north, west, east } in degrees.
+         * Returns { x, y } in composite canvas coords (offset by irY = 24px header).
+         */
+        function _geoToPixel(lat, lon, bounds) {
+            var xFrac = (lon - bounds.west) / (bounds.east - bounds.west);
+            var yFrac = (bounds.north - lat) / (bounds.north - bounds.south);
+            return { x: xFrac * outW, y: 24 + yFrac * irImageH };
+        }
+
+        /**
+         * Draw coastline outlines from cached GeoJSON onto the composite canvas.
+         */
+        function _drawCoastlines(ctx, bounds) {
+            if (!_coastlineGeoJSON || !_coastlineGeoJSON.features) return;
+            ctx.strokeStyle = 'rgba(200,200,200,0.55)';
+            ctx.lineWidth = 0.8;
+            var bW = bounds.east - bounds.west;
+            var bS = bounds.south, bN = bounds.north, bWest = bounds.west, bEast = bounds.east;
+
+            for (var fi = 0; fi < _coastlineGeoJSON.features.length; fi++) {
+                var geom = _coastlineGeoJSON.features[fi].geometry;
+                if (!geom) continue;
+                var coordSets = geom.type === 'MultiLineString' ? geom.coordinates : [geom.coordinates];
+                for (var si = 0; si < coordSets.length; si++) {
+                    var coords = coordSets[si];
+                    if (!coords || coords.length < 2) continue;
+                    // Quick bbox check — skip segments entirely outside our bounds
+                    var anyIn = false;
+                    for (var ci = 0; ci < coords.length; ci++) {
+                        var clon = coords[ci][0], clat = coords[ci][1];
+                        if (clat >= bS - 2 && clat <= bN + 2 && clon >= bWest - 2 && clon <= bEast + 2) {
+                            anyIn = true; break;
+                        }
+                    }
+                    if (!anyIn) continue;
+                    ctx.beginPath();
+                    var started = false;
+                    for (var ci = 0; ci < coords.length; ci++) {
+                        var p = _geoToPixel(coords[ci][1], coords[ci][0], bounds);
+                        // Clip to canvas area (with some margin for line continuity)
+                        if (p.x < -20 || p.x > outW + 20 || p.y < 4 || p.y > 24 + irImageH + 20) {
+                            started = false; continue;
+                        }
+                        if (!started) { ctx.moveTo(p.x, p.y); started = true; }
+                        else ctx.lineTo(p.x, p.y);
+                    }
+                    ctx.stroke();
+                }
+            }
+        }
+
+        /**
+         * Draw model forecast tracks for the cycle closest to a given frame datetime.
+         */
+        function _drawModelTracks(ctx, bounds, frameDatetime) {
+            if (!_modelData || !_modelData.cycles) return;
+            // Find the best init cycle for this frame time
+            var frameMs = frameDatetime ? new Date(frameDatetime).getTime() : 0;
+            if (!frameMs) return;
+
+            var inits = _modelData.init_times || [];
+            var bestInit = null, bestDiff = Infinity;
+            for (var ii = 0; ii < inits.length; ii++) {
+                var iStr = inits[ii];
+                var iDate = new Date(
+                    parseInt(iStr.substring(0,4)),
+                    parseInt(iStr.substring(4,6)) - 1,
+                    parseInt(iStr.substring(6,8)),
+                    parseInt(iStr.substring(8,10))
+                );
+                var diff = frameMs - iDate.getTime();
+                // Use most recent init that is before or at this frame time
+                if (diff >= 0 && diff < bestDiff) {
+                    bestDiff = diff; bestInit = iStr;
+                }
+            }
+            if (!bestInit) {
+                // If no init before this frame, use the earliest available
+                if (inits.length > 0) bestInit = inits[0];
+                else return;
+            }
+
+            var cycle = _modelData.cycles[bestInit];
+            if (!cycle) return;
+
+            var techKeys = Object.keys(cycle).sort();
+            var legendItems = [];
+
+            for (var ti = 0; ti < techKeys.length; ti++) {
+                var tech = techKeys[ti];
+                var forecast = cycle[tech];
+                // Apply same type filters as the live map
+                if (!_modelTypeFilters[forecast.type]) continue;
+                if (_modelShowInterp && forecast.interp === false) continue;
+
+                var points = forecast.points;
+                if (!points || points.length < 2) continue;
+
+                var color = forecast.color || MODEL_COLORS[tech] || '#888';
+                var isOfficial = forecast.type === 'official';
+                var isConsensus = forecast.type === 'consensus';
+                var weight = isOfficial ? 2.5 : (isConsensus ? 2 : 1.2);
+                var opacity = isOfficial ? 0.9 : (isConsensus ? 0.8 : 0.5);
+
+                // Draw polyline
+                ctx.beginPath();
+                ctx.strokeStyle = color;
+                ctx.lineWidth = weight;
+                ctx.globalAlpha = opacity;
+                if (!isOfficial && !isConsensus) ctx.setLineDash([3, 2]);
+                else ctx.setLineDash([]);
+
+                var started = false;
+                for (var pi = 0; pi < points.length; pi++) {
+                    var p = _geoToPixel(points[pi].lat, points[pi].lon, bounds);
+                    if (!started) { ctx.moveTo(p.x, p.y); started = true; }
+                    else ctx.lineTo(p.x, p.y);
+                }
+                ctx.stroke();
+                ctx.setLineDash([]);
+
+                // Draw tau markers (every 24h)
+                for (var mi = 0; mi < points.length; mi++) {
+                    var pt = points[mi];
+                    if (pt.tau > 0 && pt.tau % 24 === 0) {
+                        var mp = _geoToPixel(pt.lat, pt.lon, bounds);
+                        ctx.beginPath();
+                        ctx.arc(mp.x, mp.y, isOfficial ? 3 : 2, 0, Math.PI * 2);
+                        ctx.fillStyle = color;
+                        ctx.fill();
+                    }
+                }
+
+                ctx.globalAlpha = 1.0;
+
+                // Collect legend items (deduplicate by name)
+                var lname = forecast.name || tech;
+                var alreadyInLegend = false;
+                for (var li = 0; li < legendItems.length; li++) {
+                    if (legendItems[li].name === lname) { alreadyInLegend = true; break; }
+                }
+                if (!alreadyInLegend && (isOfficial || isConsensus || legendItems.length < 8)) {
+                    legendItems.push({ name: lname, color: color, official: isOfficial });
+                }
+            }
+
+            // Draw compact legend in bottom-right of IR area
+            if (legendItems.length > 0) {
+                // Sort: official first, then alphabetical
+                legendItems.sort(function (a, b) {
+                    if (a.official && !b.official) return -1;
+                    if (!a.official && b.official) return 1;
+                    return a.name < b.name ? -1 : 1;
+                });
+                var legendH = legendItems.length * 11 + 6;
+                var legendW = 70;
+                var legendX = outW - legendW - 4;
+                var legendY = 24 + irImageH - legendH - 4;
+                ctx.fillStyle = 'rgba(10,22,40,0.75)';
+                ctx.fillRect(legendX, legendY, legendW, legendH);
+                ctx.font = '8px sans-serif';
+                ctx.textBaseline = 'middle';
+                for (var li = 0; li < legendItems.length; li++) {
+                    var ly = legendY + 6 + li * 11;
+                    ctx.fillStyle = legendItems[li].color;
+                    ctx.fillRect(legendX + 3, ly - 1.5, 10, 3);
+                    ctx.fillStyle = '#c8d6e5';
+                    ctx.fillText(legendItems[li].name, legendX + 16, ly);
+                }
+            }
+        }
+
         var framesDone = 0;
         var batchSize = 4;
 
@@ -6239,6 +6447,56 @@ window.startGifExport = function () {
                 // IR image
                 compCtx.imageSmoothingEnabled = false;
                 compCtx.drawImage(irCanvas, 0, 24, outW, irImageH);
+
+                // Compute geographic bounds for this frame (center ± 10°)
+                var frameMeta = irMeta.frames ? irMeta.frames[fIdx] : null;
+                var fCenterLat, fCenterLon;
+                if (frameMeta && frameMeta.lat != null) {
+                    fCenterLat = frameMeta.lat;
+                    fCenterLon = frameMeta.lon;
+                } else if (frameData.bounds) {
+                    fCenterLat = (frameData.bounds.south + frameData.bounds.north) / 2;
+                    fCenterLon = (frameData.bounds.west + frameData.bounds.east) / 2;
+                } else {
+                    fCenterLat = selectedStorm.lmi_lat || 20;
+                    fCenterLon = selectedStorm.lmi_lon || -60;
+                }
+                var frameBounds = {
+                    south: fCenterLat - 10, north: fCenterLat + 10,
+                    west: fCenterLon - 10, east: fCenterLon + 10
+                };
+
+                // Coastline overlay
+                if (showCoastlines) {
+                    compCtx.save();
+                    compCtx.beginPath();
+                    compCtx.rect(0, 24, outW, irImageH);
+                    compCtx.clip();
+                    _drawCoastlines(compCtx, frameBounds);
+                    compCtx.restore();
+                }
+
+                // Model forecast overlay
+                if (showModels) {
+                    compCtx.save();
+                    compCtx.beginPath();
+                    compCtx.rect(0, 24, outW, irImageH);
+                    compCtx.clip();
+                    _drawModelTracks(compCtx, frameBounds, dtStr);
+                    compCtx.restore();
+                }
+
+                // Best track position marker (white dot at storm center)
+                if (frameMeta && frameMeta.lat != null) {
+                    var stormPx = _geoToPixel(frameMeta.lat, frameMeta.lon, frameBounds);
+                    if (stormPx.y >= 24 && stormPx.y <= 24 + irImageH) {
+                        compCtx.beginPath();
+                        compCtx.arc(stormPx.x, stormPx.y, 3, 0, Math.PI * 2);
+                        compCtx.strokeStyle = '#ffffff';
+                        compCtx.lineWidth = 1.5;
+                        compCtx.stroke();
+                    }
+                }
 
                 // Intensity chart (if enabled)
                 if (showIntensity && intensityPts.length > 1) {
