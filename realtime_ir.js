@@ -1349,14 +1349,14 @@
         basemap.once('load', function () {
             if (!gibsRequested) {
                 gibsRequested = true;
-                addGIBSOverlay(map, 0.55);
+                addGIBSOverlay(map, 0.85);
             }
         });
         // Fallback in case basemap load event doesn't fire (cached tiles)
         setTimeout(function () {
             if (!gibsRequested) {
                 gibsRequested = true;
-                addGIBSOverlay(map, 0.55);
+                addGIBSOverlay(map, 0.85);
             }
         }, 800);
 
