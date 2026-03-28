@@ -2720,7 +2720,7 @@ ADECK_MODELS = {
     "HAFB": {"name": "HAFS-B",    "color": "#81ecec", "type": "dynamical", "interp": False},
     "CTCX": {"name": "COAMPS-TC", "color": "#fab1a0", "type": "dynamical", "interp": False},
     "JGSM": {"name": "JGSM",      "color": "#b2bec3", "type": "dynamical", "interp": False},
-    # Legacy dynamical models (1990s–early 2000s, before "I" convention)
+    # Legacy dynamical models (1990s–early 2000s)
     "GFDL": {"name": "GFDL",      "color": "#e17055", "type": "dynamical", "interp": False},
     "GFDI": {"name": "GFDL",      "color": "#e17055", "type": "dynamical", "interp": True},
     "NGPS": {"name": "NOGAPS",    "color": "#6c5ce7", "type": "dynamical", "interp": False},
@@ -2728,8 +2728,15 @@ ADECK_MODELS = {
     "UKMO": {"name": "UKMET",     "color": "#a29bfe", "type": "dynamical", "interp": False},
     "ETA":  {"name": "Eta",       "color": "#fd79a8", "type": "dynamical", "interp": False},
     "ETAI": {"name": "Eta",       "color": "#fd79a8", "type": "dynamical", "interp": True},
+    "QLM":  {"name": "QLM",       "color": "#e056a0", "type": "dynamical", "interp": False},
+    "QLMI": {"name": "QLM",       "color": "#e056a0", "type": "dynamical", "interp": True},
+    "AVN":  {"name": "AVN",       "color": "#ff6b6b", "type": "dynamical", "interp": False},
+    "AVNI": {"name": "AVN",       "color": "#ff6b6b", "type": "dynamical", "interp": True},
+    "MFM":  {"name": "MFM",       "color": "#cf6a87", "type": "dynamical", "interp": False},
+    "MRFO": {"name": "MRF",       "color": "#ff7979", "type": "dynamical", "interp": False},
     # Legacy statistical/trajectory models (baselines + BAM family)
     "LBAR": {"name": "LBAR",      "color": "#dfe6e9", "type": "statistical", "interp": False},
+    "VBAR": {"name": "VICBAR",    "color": "#c8d6e5", "type": "statistical", "interp": False},
     "BAMD": {"name": "BAM Deep",  "color": "#b2bec3", "type": "statistical", "interp": False},
     "BAMM": {"name": "BAM Medium","color": "#a0a8b0", "type": "statistical", "interp": False},
     "BAMS": {"name": "BAM Shallow","color":"#8e96a0", "type": "statistical", "interp": False},
@@ -2738,6 +2745,12 @@ ADECK_MODELS = {
     "SHF5": {"name": "SHIFOR 5d", "color": "#b8a07e", "type": "statistical", "interp": False},
     "SHFR": {"name": "SHIFOR",    "color": "#b8a07e", "type": "statistical", "interp": False},
     "XTRP": {"name": "Extrap",    "color": "#576574", "type": "statistical", "interp": False},
+    "A90E": {"name": "NHC90",     "color": "#a29bfe", "type": "statistical", "interp": False},
+    "A98E": {"name": "NHC98",     "color": "#a29bfe", "type": "statistical", "interp": False},
+    "SBAR": {"name": "SANBAR",    "color": "#7f8fa6", "type": "statistical", "interp": False},
+    "SANL": {"name": "SANL",      "color": "#7f8fa6", "type": "statistical", "interp": False},
+    # Legacy consensus aids
+    "CONU": {"name": "CONU Con",  "color": "#dcdde1", "type": "consensus", "interp": False},
     # Statistical models
     "SHIP": {"name": "SHIPS",     "color": "#ffeaa7", "type": "statistical", "interp": True},
     "SHIA": {"name": "SHIPS-A",   "color": "#ffeaa7", "type": "statistical", "interp": True},
