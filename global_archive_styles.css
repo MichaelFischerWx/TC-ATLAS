@@ -753,6 +753,18 @@ input[type="range"].ga-range::-moz-range-thumb {
     border-color: rgba(0, 180, 255, 0.6);
 }
 
+#ir-gif-btn {
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: #fbbf24;
+    border-color: rgba(251, 191, 36, 0.3);
+}
+#ir-gif-btn:hover {
+    background: rgba(251, 191, 36, 0.15);
+    border-color: rgba(251, 191, 36, 0.5);
+}
+
 /* IR brightness temperature colorbar */
 .ir-colorbar-row {
     margin-top: 5px;
@@ -1668,6 +1680,29 @@ input[type="range"].ga-range::-moz-range-thumb {
     font-family: 'JetBrains Mono', monospace;
     color: var(--slate);
     margin-left: auto;
+}
+.compare-ir-intensity {
+    font-size: 0.78rem;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--text);
+    text-align: center;
+    padding: 2px 0;
+    min-height: 1.2em;
+}
+.compare-ir-intensity .cmp-wind {
+    font-weight: 700;
+}
+.compare-ir-intensity .cmp-pres {
+    color: var(--slate);
+    margin-left: 8px;
+}
+.compare-ir-intensity .cmp-cat {
+    font-size: 0.68rem;
+    font-weight: 600;
+    margin-left: 6px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    display: inline-block;
 }
 #compare-ir-colorbar {
     width: 100%;

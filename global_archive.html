@@ -326,6 +326,16 @@
                                 <div class="ga-spinner"></div>
                                 <div id="ir-loading-text" class="ir-loading-text">Loading IR frame...</div>
                             </div>
+                            <!-- GIF export progress overlay -->
+                            <div id="gif-export-overlay" class="ir-map-loading" style="display:none;">
+                                <div style="background:rgba(10,22,40,0.95);padding:20px 32px;border-radius:10px;border:1px solid rgba(0,180,255,0.3);text-align:center;">
+                                    <div id="gif-progress-text" class="ir-loading-text" style="margin-bottom:10px;">Rendering GIF...</div>
+                                    <div style="width:200px;height:6px;background:rgba(255,255,255,0.1);border-radius:3px;overflow:hidden;">
+                                        <div id="gif-progress-bar" style="width:0%;height:100%;background:linear-gradient(90deg,#00b4ff,#00d4ff);border-radius:3px;transition:width 0.2s;"></div>
+                                    </div>
+                                    <button class="ga-btn ga-btn-sm" style="margin-top:12px;" onclick="cancelGifExport()">Cancel</button>
+                                </div>
+                            </div>
                         </div>
                         <!-- Controls below the map so they don't cover the imagery -->
                         <div id="ga-mw-controls" style="display:none;background:rgba(15,23,42,0.92);border:1px solid rgba(251,146,60,0.3);border-radius:6px;padding:6px 10px;margin-top:4px;">
@@ -371,6 +381,9 @@
                                 </button>
                                 <button id="ir-track-toggle-btn" class="ga-btn ga-btn-sm ir-follow-btn active" onclick="toggleTrackOverlay()" title="Show/hide track and position marker">
                                     &#9992;
+                                </button>
+                                <button id="ir-gif-btn" class="ga-btn ga-btn-sm ir-follow-btn" onclick="exportIRGif()" title="Export IR loop as animated GIF">
+                                    GIF
                                 </button>
                             </div>
                             <div class="ir-cmap-row">
@@ -499,19 +512,23 @@
                         <div class="panel-header">
                             <h3>IR Satellite Comparison</h3>
                             <div style="display:flex;gap:8px;align-items:center;">
+                                <button class="ga-btn ga-btn-xs compare-align" id="compare-ir-peak-btn" onclick="jumpBothToPeak()" title="Jump both storms to peak intensity">&#9733; Peak</button>
                                 <button class="ga-btn ga-btn-xs compare-align" id="compare-ir-sync-btn" onclick="toggleCompareIRSync()" title="Sync playback between both viewers">&#128279; Sync</button>
-                                <select id="compare-ir-cmap" class="ga-select-sm" onchange="setCompareIRColormap(this.value)">
-                                    <option value="enhanced">IR</option>
-                                    <option value="dvorak">BD</option>
-                                    <option value="grayscale">BW</option>
-                                    <option value="funktop">FK</option>
-                                    <option value="avn">AVN</option>
-                                    <option value="nhc">NHC</option>
-                                    <option value="rammb">RAMMB</option>
-                                    <option value="irb">IRB</option>
-                                    <option value="claude">Claude</option>
-                                </select>
                             </div>
+                        </div>
+                        <!-- Colormap buttons (full row) -->
+                        <div class="ir-cmap-row" style="padding:0 12px;">
+                            <span class="ir-cmap-group" title="Switch IR colormap">
+                                <button class="ga-btn ga-btn-sm ir-cmap-btn compare-ir-cmap-btn active" data-cmap="enhanced" onclick="setCompareIRColormap('enhanced')">IR</button>
+                                <button class="ga-btn ga-btn-sm ir-cmap-btn compare-ir-cmap-btn" data-cmap="dvorak" onclick="setCompareIRColormap('dvorak')">BD</button>
+                                <button class="ga-btn ga-btn-sm ir-cmap-btn compare-ir-cmap-btn" data-cmap="grayscale" onclick="setCompareIRColormap('grayscale')">BW</button>
+                                <button class="ga-btn ga-btn-sm ir-cmap-btn compare-ir-cmap-btn" data-cmap="funktop" onclick="setCompareIRColormap('funktop')">FK</button>
+                                <button class="ga-btn ga-btn-sm ir-cmap-btn compare-ir-cmap-btn" data-cmap="avn" onclick="setCompareIRColormap('avn')">AVN</button>
+                                <button class="ga-btn ga-btn-sm ir-cmap-btn compare-ir-cmap-btn" data-cmap="nhc" onclick="setCompareIRColormap('nhc')">NHC</button>
+                                <button class="ga-btn ga-btn-sm ir-cmap-btn compare-ir-cmap-btn" data-cmap="rammb" onclick="setCompareIRColormap('rammb')">RAMMB</button>
+                                <button class="ga-btn ga-btn-sm ir-cmap-btn compare-ir-cmap-btn" data-cmap="irb" onclick="setCompareIRColormap('irb')">IRB</button>
+                                <button class="ga-btn ga-btn-sm ir-cmap-btn compare-ir-cmap-btn" data-cmap="claude" onclick="setCompareIRColormap('claude')">Claude</button>
+                            </span>
                         </div>
                         <div class="compare-ir-grid">
                             <div class="compare-ir-cell" id="compare-ir-left">
@@ -523,8 +540,10 @@
                                     <button class="ga-btn ga-btn-sm ir-step-btn" onclick="stepCompareIR('left',-1)">&#9664;</button>
                                     <button class="ga-btn ga-btn-sm" id="compare-ir-play-left" onclick="toggleCompareIRPlay('left')">&#9654; Play</button>
                                     <button class="ga-btn ga-btn-sm ir-step-btn" onclick="stepCompareIR('left',1)">&#9654;</button>
+                                    <button class="ga-btn ga-btn-sm ir-step-btn" onclick="jumpCompareIRToPeak('left')" title="Jump to peak intensity">&#9733;</button>
                                     <span class="compare-ir-datetime" id="compare-ir-dt-left"></span>
                                 </div>
+                                <div class="compare-ir-intensity" id="compare-ir-intensity-left"></div>
                                 <input type="range" class="ga-range ir-slider" id="compare-ir-slider-left" min="0" max="0" value="0" oninput="seekCompareIR('left', this.value)">
                             </div>
                             <div class="compare-ir-cell" id="compare-ir-right">
@@ -536,12 +555,14 @@
                                     <button class="ga-btn ga-btn-sm ir-step-btn" onclick="stepCompareIR('right',-1)">&#9664;</button>
                                     <button class="ga-btn ga-btn-sm" id="compare-ir-play-right" onclick="toggleCompareIRPlay('right')">&#9654; Play</button>
                                     <button class="ga-btn ga-btn-sm ir-step-btn" onclick="stepCompareIR('right',1)">&#9654;</button>
+                                    <button class="ga-btn ga-btn-sm ir-step-btn" onclick="jumpCompareIRToPeak('right')" title="Jump to peak intensity">&#9733;</button>
                                     <span class="compare-ir-datetime" id="compare-ir-dt-right"></span>
                                 </div>
+                                <div class="compare-ir-intensity" id="compare-ir-intensity-right"></div>
                                 <input type="range" class="ga-range ir-slider" id="compare-ir-slider-right" min="0" max="0" value="0" oninput="seekCompareIR('right', this.value)">
                             </div>
                         </div>
-                        <div class="ir-colorbar-row" style="margin-top:8px;">
+                        <div class="ir-colorbar-row" style="margin-top:8px;padding:0 12px;">
                             <canvas id="compare-ir-colorbar" height="8"></canvas>
                             <div class="ir-colorbar-labels"><span>310 K</span><span>240</span><span>170 K</span></div>
                         </div>
@@ -874,6 +895,7 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
     <script src="global_archive.js"></script>
 </body>
 </html>
