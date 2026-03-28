@@ -2181,6 +2181,19 @@ input[type="range"].ga-range::-moz-range-thumb {
 .scorecard-neg-bias {
     color: #60a5fa !important;
 }
+.scorecard-official-row {
+    background: rgba(255, 71, 87, 0.06) !important;
+}
+.scorecard-official-row td {
+    font-weight: 600;
+    border-bottom: 1px solid rgba(255, 71, 87, 0.15);
+}
+.scorecard-separator td {
+    height: 3px;
+    padding: 0;
+    background: rgba(255, 71, 87, 0.2);
+    border: none;
+}
 
 /* ── SHIPS Environmental Section ────────────────────────── */
 .ships-section {

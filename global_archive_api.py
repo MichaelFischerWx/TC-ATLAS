@@ -2692,6 +2692,12 @@ _ADECK_CACHE_MAX = 30
 # Models we care about — the "leading" dynamical & statistical models
 # Tech IDs from ATCF: https://www.nrlmry.navy.mil/atcf_web/docs/database/new/
 ADECK_MODELS = {
+    # Official forecasts — always displayed prominently
+    "OFCL": {"name": "NHC Official",  "color": "#ff4757", "type": "official"},
+    "OFCI": {"name": "NHC Official (I)", "color": "#ff4757", "type": "official"},
+    "OFCP": {"name": "NHC Official (prev)", "color": "#ff6b81", "type": "official"},
+    "JTWC": {"name": "JTWC Official", "color": "#ff4757", "type": "official"},
+    "JTWI": {"name": "JTWC Official (I)", "color": "#ff4757", "type": "official"},
     # Dynamical models
     "AVNO": {"name": "GFS",      "color": "#ff6b6b", "type": "dynamical"},
     "AVNI": {"name": "GFS (I)",  "color": "#ff6b6b", "type": "dynamical"},

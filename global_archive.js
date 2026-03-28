@@ -5150,11 +5150,13 @@ var _modelTrackLayers = [];      // Leaflet polylines on map
 var _modelMarkerLayers = [];     // Leaflet circle markers for forecast points
 var _modelLegendModels = [];     // Models visible in current cycle
 var _modelLastAtcf = null;       // Last ATCF ID loaded
-var _modelTypeFilters = { dynamical: true, consensus: true, statistical: false };
+var _modelTypeFilters = { official: true, dynamical: true, consensus: true, statistical: false };
 var _modelIntensityTraces = [];  // Plotly trace indices for intensity chart
 
 // Color map for models (sent from API, but also define fallbacks)
 var MODEL_COLORS = {
+    'OFCL': '#ff4757', 'OFCI': '#ff4757', 'OFCP': '#ff6b81',
+    'JTWC': '#ff4757', 'JTWI': '#ff4757',
     'AVNO': '#ff6b6b', 'AVNI': '#ff6b6b', 'GFSO': '#ff6b6b',
     'EMX':  '#4ecdc4', 'EMXI': '#4ecdc4', 'EEMN': '#45b7aa',
     'CMC':  '#ffe66d', 'CMCI': '#ffe66d',
@@ -5425,10 +5427,11 @@ function _renderModelCycle(initTime) {
         if (!points || points.length < 2) continue;
 
         var color = forecast.color || MODEL_COLORS[tech] || '#888';
+        var isOfficial = forecast.type === 'official';
         var isConsensus = forecast.type === 'consensus';
-        var weight = isConsensus ? 2.5 : 1.5;
-        var opacity = isConsensus ? 0.9 : 0.6;
-        var dashArray = isConsensus ? null : '4,3';
+        var weight = isOfficial ? 3.5 : (isConsensus ? 2.5 : 1.5);
+        var opacity = isOfficial ? 1.0 : (isConsensus ? 0.9 : 0.6);
+        var dashArray = (isOfficial || isConsensus) ? null : '4,3';
 
         // Build polyline from forecast points
         var latlngs = [];
@@ -5453,8 +5456,8 @@ function _renderModelCycle(initTime) {
             var is24h = (pt.tau > 0 && pt.tau % 24 === 0);
 
             if (isTau0 || is24h) {
-                var mRadius = isTau0 ? 3.5 : 2.5;
-                var mWeight = isTau0 ? 1.5 : 1;
+                var mRadius = isOfficial ? (isTau0 ? 5 : 4) : (isTau0 ? 3.5 : 2.5);
+                var mWeight = isOfficial ? 2 : (isTau0 ? 1.5 : 1);
                 var marker = L.circleMarker([pt.lat, pt.lon], {
                     radius: mRadius,
                     color: isTau0 ? '#fff' : color,
@@ -5536,19 +5539,21 @@ function _renderModelIntensityTraces(initTime) {
         if (!hasWind || winds.length < 2) continue;
 
         var color = forecast.color || MODEL_COLORS[tech] || '#888';
+        var isOfficial = forecast.type === 'official';
         var isConsensus = forecast.type === 'consensus';
         newTraces.push({
             x: times,
             y: winds,
             type: 'scatter',
-            mode: 'lines',
+            mode: isOfficial ? 'lines+markers' : 'lines',
             name: forecast.name,
             line: {
                 color: color,
-                width: isConsensus ? 2.5 : 1.5,
+                width: isOfficial ? 3 : (isConsensus ? 2.5 : 1.5),
                 dash: 'solid'
             },
-            opacity: isConsensus ? 0.85 : 0.65,
+            marker: isOfficial ? { size: 5, symbol: 'diamond', color: color } : undefined,
+            opacity: isOfficial ? 1.0 : (isConsensus ? 0.85 : 0.65),
             showlegend: false,
             hovertemplate: forecast.name + ': %{y} kt<extra></extra>'
         });
@@ -7466,6 +7471,11 @@ window.toggleScorecard = function () {
         if (!_shipsData && selectedStorm && selectedStorm.atcf_id) {
             loadSHIPSData(selectedStorm);
         }
+
+        // Scroll the scorecard panel into view
+        setTimeout(function () {
+            panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }, 100);
     } else {
         panel.style.display = 'none';
         btn.classList.remove('active');
@@ -7489,10 +7499,14 @@ function renderScorecardTable() {
     var sc = _scorecardData;
     var taus = sc.taus;
 
-    // Build model list sorted by 48h track error (ascending = best first)
+    // Build model list: official forecasts pinned to top, then sorted by 48h track error
     var modelList = Object.keys(sc.models).filter(function (tech) {
         return sc.models[tech].totalSamples > 0;
     }).sort(function (a, b) {
+        // Official always first
+        var aOff = sc.models[a].type === 'official' ? 0 : 1;
+        var bOff = sc.models[b].type === 'official' ? 0 : 1;
+        if (aOff !== bOff) return aOff - bOff;
         var ea = sc.models[a].errors[48] ? sc.models[a].errors[48].meanTrack : 9999;
         var eb = sc.models[b].errors[48] ? sc.models[b].errors[48].meanTrack : 9999;
         return (ea || 9999) - (eb || 9999);
@@ -7564,9 +7578,16 @@ function _buildScorecardTable(sc, modelList, taus, metric) {
         mins[tau] = best;
     });
 
+    var _prevType = '';
     modelList.forEach(function (tech) {
         var m = sc.models[tech];
-        html += '<tr>';
+        // Insert separator after official rows
+        if (_prevType === 'official' && m.type !== 'official') {
+            html += '<tr class="scorecard-separator"><td colspan="' + (taus.length + 2) + '"></td></tr>';
+        }
+        _prevType = m.type;
+        var rowCls = m.type === 'official' ? ' class="scorecard-official-row"' : '';
+        html += '<tr' + rowCls + '>';
         html += '<td class="scorecard-model-col"><span class="scorecard-swatch" style="background:' + m.color + '"></span>' + m.name + ' <span class="scorecard-tech">(' + tech + ')</span></td>';
 
         // Sample count at tau=48 (representative)
