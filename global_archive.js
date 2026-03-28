@@ -5536,6 +5536,7 @@ function _renderModelIntensityTraces(initTime) {
         if (!hasWind || winds.length < 2) continue;
 
         var color = forecast.color || MODEL_COLORS[tech] || '#888';
+        var isConsensus = forecast.type === 'consensus';
         newTraces.push({
             x: times,
             y: winds,
@@ -5544,10 +5545,10 @@ function _renderModelIntensityTraces(initTime) {
             name: forecast.name,
             line: {
                 color: color,
-                width: 1.5,
-                dash: forecast.type === 'consensus' ? 'solid' : 'dash'
+                width: isConsensus ? 2.5 : 1.5,
+                dash: 'solid'
             },
-            opacity: 0.6,
+            opacity: isConsensus ? 0.85 : 0.65,
             showlegend: false,
             hovertemplate: forecast.name + ': %{y} kt<extra></extra>'
         });
