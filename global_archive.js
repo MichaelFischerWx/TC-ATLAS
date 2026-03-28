@@ -595,6 +595,7 @@ window.switchTab = function (tabName) {
             setTimeout(function () { compareMap.invalidateSize(); }, 100);
         }
     }
+    updateHashSilently();
 };
 
 // ══════════════════════════════════════════════════════════════
@@ -1135,6 +1136,7 @@ window.toggleBasin = function (btn) {
         }
     }
     onFilterChange();
+    updateHashSilently();
 };
 
 window.onFilterChange = function () {
@@ -1927,6 +1929,7 @@ function addToCompare(storm) {
     compareStorms.push(storm);
     showToast(storm.name + ' (' + storm.year + ') added to comparison');
     renderCompareView();
+    updateHashSilently();
     // Refresh search results to update "Added" badges
     _doCompareSearch('');
     _doCompareSearch('inline');
@@ -1935,6 +1938,7 @@ function addToCompare(storm) {
 window.removeFromCompare = function (sid) {
     compareStorms = compareStorms.filter(function (s) { return s.sid !== sid; });
     renderCompareView();
+    updateHashSilently();
     _doCompareSearch('');
     _doCompareSearch('inline');
 };
@@ -1943,6 +1947,7 @@ window.clearCompare = function () {
     compareStorms = [];
     compareSearchVisible = false;
     renderCompareView();
+    updateHashSilently();
 };
 
 window.setCompareAlign = function (mode) {
@@ -4972,8 +4977,9 @@ document.addEventListener('DOMContentLoaded', function () {
     // the Render instance so it's ready when the user selects a storm.
     fetch(API_BASE + '/health', { method: 'GET' }).catch(function () {});
 
-    // Close any open modal on Escape
+    // Keyboard shortcuts
     document.addEventListener('keydown', function (e) {
+        // Escape: close any open modal
         if (e.key === 'Escape') {
             var modals = [
                 { id: 'analog-modal', close: closeAnalogFinder },
@@ -4989,6 +4995,46 @@ document.addEventListener('DOMContentLoaded', function () {
                     modals[i].close();
                     break;
                 }
+            }
+            return;
+        }
+
+        // Don't capture arrow/space when typing in inputs
+        var tag = (document.activeElement || {}).tagName || '';
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+        if (document.activeElement && document.activeElement.isContentEditable) return;
+
+        var activeTabEl = document.querySelector('.ga-tab.active');
+        var tab = activeTabEl ? activeTabEl.getAttribute('data-tab') : 'browser';
+
+        if (tab === 'detail') {
+            if (irOverlayVisible && irMeta && irMeta.n_frames) {
+                // IR active — arrows step frames, space toggles play
+                if (e.key === 'ArrowLeft')  { e.preventDefault(); stepIRFrame(-1); }
+                if (e.key === 'ArrowRight') { e.preventDefault(); stepIRFrame(1); }
+                if (e.key === ' ')          { e.preventDefault(); toggleIRPlay(); }
+            } else if (selectedStorm && filteredStorms.length > 0) {
+                // No IR — arrows navigate to prev/next storm in filtered list
+                if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                    e.preventDefault();
+                    var idx = -1;
+                    for (var si = 0; si < filteredStorms.length; si++) {
+                        if (filteredStorms[si].sid === selectedStorm.sid) { idx = si; break; }
+                    }
+                    if (idx === -1) return;
+                    var newIdx = e.key === 'ArrowLeft' ? idx - 1 : idx + 1;
+                    if (newIdx >= 0 && newIdx < filteredStorms.length) {
+                        selectStorm(filteredStorms[newIdx]);
+                        viewStormDetail();
+                    }
+                }
+            }
+        } else if (tab === 'compare') {
+            if (_cmpIR && (_cmpIR.left.meta || _cmpIR.right.meta)) {
+                // Compare IR loaded — arrows step frames (sync handles both sides)
+                if (e.key === 'ArrowLeft')  { e.preventDefault(); stepCompareIR('left', -1); }
+                if (e.key === 'ArrowRight') { e.preventDefault(); stepCompareIR('left', 1); }
+                if (e.key === ' ')          { e.preventDefault(); toggleCompareIRPlay('left'); }
             }
         }
     });
@@ -7543,6 +7589,11 @@ function buildShareHash() {
         params.push('align=' + (compareAlign || 'genesis'));
     }
 
+    // Basin filter for browser/detail tabs
+    if ((tab === 'browser' || tab === 'detail') && activeBasins[0] !== 'ALL') {
+        params.push('basin=' + activeBasins.join(','));
+    }
+
     // Climatology tab: encode basin filter if set
     if (tab === 'climatology') {
         var climBasinSel = document.getElementById('clim-basin-select');
@@ -7600,11 +7651,7 @@ function updateHashSilently() {
     // Debounce to avoid hammering history API during animation playback
     clearTimeout(_hashUpdateTimer);
     _hashUpdateTimer = setTimeout(function () {
-        var activeTab = document.querySelector('.ga-tab.active');
-        var tab = activeTab ? activeTab.getAttribute('data-tab') : 'browser';
-        if (tab === 'detail' && selectedStorm) {
-            history.replaceState(null, '', buildShareHash());
-        }
+        history.replaceState(null, '', buildShareHash());
     }, 500);
 }
 
@@ -7636,6 +7683,20 @@ function restoreFromHash() {
         }
         clearInterval(_restoreInterval);
         _hashRestored = true;
+
+        // ── Restore basin filter for browser/detail tabs ──
+        if (params.basin && (params.tab === 'browser' || params.tab === 'detail')) {
+            activeBasins = params.basin.split(',');
+            document.querySelectorAll('.basin-chip').forEach(function (c) {
+                var b = c.getAttribute('data-basin');
+                if (b === 'ALL') {
+                    c.classList.remove('active');
+                } else {
+                    c.classList.toggle('active', activeBasins.indexOf(b) !== -1);
+                }
+            });
+            applyFilters();
+        }
 
         // ── Restore storm detail view ──
         if (params.tab === 'detail' && params.storm) {
