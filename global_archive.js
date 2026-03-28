@@ -5151,7 +5151,7 @@ var _modelMarkerLayers = [];     // Leaflet circle markers for forecast points
 var _modelLegendModels = [];     // Models visible in current cycle
 var _modelLastAtcf = null;       // Last ATCF ID loaded
 var _modelTypeFilters = { official: true, dynamical: true, ai: true, consensus: true, statistical: false };
-var _modelShowInterp = true;     // true = interpolated only (NHC verification), false = show all
+var _modelShowInterp = false;    // false = show all models (default), true = interpolated/late-cycle only
 var _modelIntensityTraces = [];  // Plotly trace indices for intensity chart
 
 // Color map for models (sent from API, but also define fallbacks)
@@ -5220,6 +5220,47 @@ function loadModelForecasts(storm) {
             }
 
             if (statusEl) statusEl.textContent = json.n_cycles + ' cycles, ' + json.models.length + ' models';
+
+            // Check if this storm has any interpolated models.
+            // Pre-~2000 storms only have non-interpolated tech IDs (AVNO, EMX, etc.)
+            // so the "Late Cycle" filter would hide everything. Auto-detect and adjust.
+            var hasInterp = false;
+            var cycles = json.cycles || {};
+            var cKeys = Object.keys(cycles);
+            for (var ci = 0; ci < cKeys.length && !hasInterp; ci++) {
+                var cyc = cycles[cKeys[ci]];
+                var tKeys = Object.keys(cyc);
+                for (var tj = 0; tj < tKeys.length; tj++) {
+                    if (cyc[tKeys[tj]].interp === true) { hasInterp = true; break; }
+                }
+            }
+
+            var interpBtn = document.getElementById('model-interp-btn');
+            // Default: show all models. Button lets user filter to late-cycle only.
+            _modelShowInterp = false;
+            if (!hasInterp) {
+                // No interpolated models (legacy storm) — disable the button
+                if (interpBtn) {
+                    interpBtn.textContent = 'Late Cycle';
+                    interpBtn.title = 'No interpolated models available for this storm era.';
+                    interpBtn.style.color = '';
+                    interpBtn.style.borderColor = '';
+                    interpBtn.style.background = '';
+                    interpBtn.disabled = true;
+                    interpBtn.style.opacity = '0.4';
+                }
+            } else {
+                // Has interpolated models — enable the late-cycle filter button
+                if (interpBtn) {
+                    interpBtn.textContent = 'Late Cycle';
+                    interpBtn.title = 'Click to show only interpolated (late cycle) models — NHC verification standard.';
+                    interpBtn.style.color = '';
+                    interpBtn.style.borderColor = '';
+                    interpBtn.style.background = '';
+                    interpBtn.disabled = false;
+                    interpBtn.style.opacity = '';
+                }
+            }
 
             // If overlay is active, render current cycle
             if (_modelVisible) {
@@ -5361,14 +5402,16 @@ window.toggleModelInterp = function () {
     var btn = document.getElementById('model-interp-btn');
     if (btn) {
         if (_modelShowInterp) {
+            // Filter is ON — only late-cycle/interpolated models shown
             btn.textContent = 'Late Cycle';
-            btn.title = 'Showing interpolated models only (NHC verification standard). Click for all models.';
+            btn.title = 'Filtering to late-cycle (interpolated) models only. Click to show all.';
             btn.style.color = '#fbbf24';
             btn.style.borderColor = 'rgba(251,191,36,0.4)';
             btn.style.background = 'rgba(251,191,36,0.15)';
         } else {
-            btn.textContent = 'All Cycles';
-            btn.title = 'Showing all models (early + late cycle). Click to show late cycle only.';
+            // Filter is OFF — all models shown (default)
+            btn.textContent = 'Late Cycle';
+            btn.title = 'Click to show only late-cycle (interpolated) models — NHC verification standard.';
             btn.style.color = '';
             btn.style.borderColor = '';
             btn.style.background = '';
