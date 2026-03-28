@@ -5234,11 +5234,13 @@ function loadModelForecasts(storm) {
 window.toggleModelOverlay = function () {
     var btn = document.getElementById('ga-models-toggle-btn');
     var controls = document.getElementById('ga-model-controls');
+    var chartControls = document.getElementById('model-chart-controls');
 
     if (_modelVisible) {
         _modelVisible = false;
         if (btn) btn.textContent = '\uD83C\uDF10 Models';
         if (controls) controls.style.display = 'none';
+        if (chartControls) chartControls.style.display = 'none';
         _clearModelLayers();
         _clearModelIntensityTraces();
         return;
@@ -5247,10 +5249,14 @@ window.toggleModelOverlay = function () {
     _modelVisible = true;
     if (btn) btn.textContent = 'Hide Models';
     if (controls) controls.style.display = '';
+    if (chartControls) chartControls.style.display = '';
 
-    // Update intensity button to reflect current state
+    // Update intensity buttons to reflect current state
+    var intBtnStyle = _modelShowIntensity ? 'rgba(116,185,255,0.2)' : '';
     var intBtn = document.getElementById('model-intensity-btn');
-    if (intBtn) intBtn.style.background = _modelShowIntensity ? 'rgba(116,185,255,0.2)' : '';
+    var intBtn2 = document.getElementById('model-intensity-btn2');
+    if (intBtn) intBtn.style.background = intBtnStyle;
+    if (intBtn2) intBtn2.style.background = intBtnStyle;
 
     if (_modelData) {
         _syncModelCycleToIR();
@@ -5319,10 +5325,11 @@ window.toggleModelTypeFilter = function (mtype) {
  */
 window.toggleModelIntensity = function () {
     _modelShowIntensity = !_modelShowIntensity;
+    var style = _modelShowIntensity ? 'rgba(116,185,255,0.2)' : '';
     var btn = document.getElementById('model-intensity-btn');
-    if (btn) {
-        btn.style.background = _modelShowIntensity ? 'rgba(116,185,255,0.2)' : '';
-    }
+    var btn2 = document.getElementById('model-intensity-btn2');
+    if (btn) btn.style.background = style;
+    if (btn2) btn2.style.background = style;
 
     if (_modelShowIntensity && _modelActiveCycle) {
         _renderModelIntensityTraces(_modelActiveCycle);
@@ -5615,6 +5622,8 @@ function removeModelOverlay() {
     if (btn) btn.textContent = '\uD83C\uDF10 Models';
     var controls = document.getElementById('ga-model-controls');
     if (controls) controls.style.display = 'none';
+    var chartControls = document.getElementById('model-chart-controls');
+    if (chartControls) chartControls.style.display = 'none';
     var toggleWrap = document.getElementById('ga-models-toggle-wrap');
     if (toggleWrap) toggleWrap.style.display = 'none';
 }
