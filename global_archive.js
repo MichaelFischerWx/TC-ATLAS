@@ -5132,7 +5132,7 @@ function removeGlobalMWOverlay() {
 var _modelData = null;           // Full a-deck response from API
 var _modelVisible = false;       // Overlay is active
 var _modelAutoSync = true;       // Auto-switch cycle based on IR frame time
-var _modelShowIntensity = false;  // Show intensity forecasts on chart
+var _modelShowIntensity = true;   // Show intensity forecasts on chart (on by default)
 var _modelActiveCycle = null;    // Currently displayed init time (YYYYMMDDHH)
 var _modelTrackLayers = [];      // Leaflet polylines on map
 var _modelMarkerLayers = [];     // Leaflet circle markers for forecast points
@@ -5233,6 +5233,10 @@ window.toggleModelOverlay = function () {
     _modelVisible = true;
     if (btn) btn.textContent = 'Hide Models';
     if (controls) controls.style.display = '';
+
+    // Update intensity button to reflect current state
+    var intBtn = document.getElementById('model-intensity-btn');
+    if (intBtn) intBtn.style.background = _modelShowIntensity ? 'rgba(116,185,255,0.2)' : '';
 
     if (_modelData) {
         _syncModelCycleToIR();
@@ -5400,19 +5404,30 @@ function _renderModelCycle(initTime) {
         }).addTo(detailMap);
         _modelTrackLayers.push(line);
 
-        // Add small markers at 24h, 48h, 72h, 96h, 120h positions
+        // Add markers at tau-0 (init) and every 24h
         for (var mi = 0; mi < points.length; mi++) {
             var pt = points[mi];
-            if (pt.tau > 0 && pt.tau % 24 === 0) {
+            var isTau0 = (pt.tau === 0);
+            var is24h = (pt.tau > 0 && pt.tau % 24 === 0);
+
+            if (isTau0 || is24h) {
+                var mRadius = isTau0 ? 3.5 : 2.5;
+                var mWeight = isTau0 ? 1.5 : 1;
                 var marker = L.circleMarker([pt.lat, pt.lon], {
-                    radius: 2.5,
-                    color: color,
+                    radius: mRadius,
+                    color: isTau0 ? '#fff' : color,
                     fillColor: color,
-                    fillOpacity: 0.7,
-                    weight: 1,
-                    opacity: 0.7,
-                    interactive: false
+                    fillOpacity: isTau0 ? 1.0 : 0.7,
+                    weight: mWeight,
+                    opacity: 0.8,
+                    interactive: true
                 }).addTo(detailMap);
+
+                // Tooltip with tau info
+                var tauLabel = isTau0 ? forecast.name + ' init' : forecast.name + ' +' + pt.tau + 'h';
+                if (pt.wind) tauLabel += ' · ' + pt.wind + ' kt';
+                marker.bindTooltip(tauLabel, { direction: 'top', offset: [0, -6] });
+
                 _modelMarkerLayers.push(marker);
             }
         }
@@ -5437,7 +5452,7 @@ function _renderModelIntensityTraces(initTime) {
 
     if (!_modelData || !_modelData.cycles || !_modelData.cycles[initTime]) return;
 
-    var chartEl = document.getElementById('intensity-chart');
+    var chartEl = document.getElementById('timeline-chart');
     if (!chartEl || !chartEl.data) return;
 
     var cycle = _modelData.cycles[initTime];
@@ -5521,7 +5536,7 @@ function _clearModelLayers() {
  */
 function _clearModelIntensityTraces() {
     if (_modelIntensityTraces.length === 0) return;
-    var chartEl = document.getElementById('intensity-chart');
+    var chartEl = document.getElementById('timeline-chart');
     if (!chartEl || typeof Plotly === 'undefined') return;
 
     try {
