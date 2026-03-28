@@ -1324,6 +1324,13 @@ function renderStormDetail(storm) {
     } else if (typeof removeModelOverlay === 'function') {
         removeModelOverlay();
     }
+
+    // Scorecard — reset and show toggle if storm has ATCF ID
+    if (typeof removeScorecard === 'function') removeScorecard();
+    var scorecardWrap = document.getElementById('scorecard-toggle-wrap');
+    if (scorecardWrap) {
+        scorecardWrap.style.display = storm.atcf_id ? '' : 'none';
+    }
 }
 
 function renderIntensityTimeline(track, storm) {
@@ -7219,6 +7226,570 @@ function restoreFromHash() {
 
     }, 200);
 }
+
+// ═══════════════════════════════════════════════════════════════
+// FORECAST SCORECARD & SHIPS ENVIRONMENTAL DATA
+// Computes model verification (track/intensity errors from a-deck vs best track)
+// and overlays SHIPS environmental diagnostics on the timeline.
+// ═══════════════════════════════════════════════════════════════
+
+var _scorecardVisible = false;
+var _scorecardData = null;     // Computed scorecard { models: {...}, taus: [...] }
+var _shipsData = null;         // SHIPS LSDIAG environmental data from API
+var _shipsVisible = false;     // SHIPS traces on timeline
+var _shipsTraceIndices = [];   // Plotly trace indices for SHIPS variables
+var _scorecardLastAtcf = null;
+
+// SHIPS variable display config (matches backend SHIPS_VARIABLES)
+var SHIPS_VAR_META = {
+    SHDC: { name: 'Deep Shear (ctr)',  unit: 'kt',      color: '#ff6b6b', group: 'shear' },
+    SHGC: { name: 'Gen. Shear',        unit: 'kt',      color: '#e17055', group: 'shear' },
+    SHRD: { name: 'Deep Shear (avg)',   unit: 'kt',      color: '#fab1a0', group: 'shear' },
+    RSST: { name: 'SST',               unit: '°C',       color: '#00d4ff', group: 'ocean' },
+    COHC: { name: 'Ocean Heat Content', unit: 'kJ/cm²',  color: '#4ecdc4', group: 'ocean' },
+    VMPI: { name: 'Max Pot. Intensity', unit: 'kt',      color: '#a78bfa', group: 'ocean' },
+    RHMD: { name: 'Mid-level RH',      unit: '%',        color: '#34d399', group: 'moisture' },
+    RHLO: { name: 'Low-level RH',      unit: '%',        color: '#6ee7b7', group: 'moisture' },
+    MTPW: { name: 'Total Precip Water', unit: 'mm',      color: '#60a5fa', group: 'moisture' },
+    D200: { name: '200 hPa Divergence', unit: '×10⁻⁷/s', color: '#fbbf24', group: 'dynamics' },
+    T200: { name: '200 hPa Temp',       unit: '°C',       color: '#f472b6', group: 'dynamics' }
+};
+
+// Default variables to show
+var SHIPS_DEFAULT_SHOW = ['SHDC', 'SHGC', 'RSST', 'COHC', 'MTPW'];
+
+/**
+ * Great-circle distance in nautical miles between two lat/lon points.
+ */
+function _gcDistNm(lat1, lon1, lat2, lon2) {
+    var toRad = Math.PI / 180;
+    var dLat = (lat2 - lat1) * toRad;
+    var dLon = (lon2 - lon1) * toRad;
+    var a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(lat1 * toRad) * Math.cos(lat2 * toRad) *
+            Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    var c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return c * 3440.065; // Earth radius in nm
+}
+
+/**
+ * Interpolate best track position at a given datetime.
+ * Returns { lat, lon, wind } or null if outside track range.
+ */
+function _interpBestTrack(track, targetTime) {
+    if (!track || track.length === 0) return null;
+
+    var tgt = new Date(targetTime).getTime();
+    if (isNaN(tgt)) return null;
+
+    // Find bounding track points
+    for (var i = 0; i < track.length - 1; i++) {
+        var t0 = new Date(track[i].t).getTime();
+        var t1 = new Date(track[i + 1].t).getTime();
+        if (isNaN(t0) || isNaN(t1)) continue;
+
+        if (tgt >= t0 && tgt <= t1) {
+            var frac = (t1 === t0) ? 0 : (tgt - t0) / (t1 - t0);
+            return {
+                lat: track[i].la + frac * (track[i + 1].la - track[i].la),
+                lon: track[i].lo + frac * (track[i + 1].lo - track[i].lo),
+                wind: track[i].w != null && track[i + 1].w != null ?
+                      Math.round(track[i].w + frac * (track[i + 1].w - track[i].w)) : null
+            };
+        }
+    }
+
+    // Exact match on first or last point
+    var first = new Date(track[0].t).getTime();
+    var last = new Date(track[track.length - 1].t).getTime();
+    if (Math.abs(tgt - first) < 3600000) return { lat: track[0].la, lon: track[0].lo, wind: track[0].w };
+    if (Math.abs(tgt - last) < 3600000) return { lat: track[track.length - 1].la, lon: track[track.length - 1].lo, wind: track[track.length - 1].w };
+
+    return null;
+}
+
+/**
+ * Compute forecast verification scorecard from a-deck data and best track.
+ * Returns: {
+ *   models: { 'AVNO': { name, color, type, errors: { 24: { trackErr: [...], intErr: [...], mean/n }, ... } }, ... },
+ *   taus: [0, 12, 24, 36, 48, 72, 96, 120],
+ *   summary: { ... }
+ * }
+ */
+function computeScorecard(modelData, track, storm) {
+    if (!modelData || !modelData.cycles || !track || track.length < 2) return null;
+
+    var standardTaus = [0, 12, 24, 36, 48, 72, 96, 120];
+    var result = { models: {}, taus: standardTaus, summary: {} };
+
+    // Iterate all cycles and models
+    var cycles = modelData.cycles;
+    Object.keys(cycles).forEach(function (initTime) {
+        var cycle = cycles[initTime];
+        Object.keys(cycle).forEach(function (tech) {
+            var forecast = cycle[tech];
+            if (!forecast.points || forecast.points.length === 0) return;
+
+            if (!result.models[tech]) {
+                result.models[tech] = {
+                    name: forecast.name,
+                    color: forecast.color || MODEL_COLORS[tech] || '#888',
+                    type: forecast.type,
+                    errors: {}
+                };
+                standardTaus.forEach(function (tau) {
+                    result.models[tech].errors[tau] = { trackErr: [], intErr: [], biasErr: [] };
+                });
+            }
+
+            // Parse init time → Date
+            var yr = parseInt(initTime.substring(0, 4));
+            var mo = parseInt(initTime.substring(4, 6)) - 1;
+            var dy = parseInt(initTime.substring(6, 8));
+            var hr = parseInt(initTime.substring(8, 10));
+            var initDate = new Date(Date.UTC(yr, mo, dy, hr));
+
+            forecast.points.forEach(function (pt) {
+                var tau = pt.tau;
+                if (standardTaus.indexOf(tau) === -1) return;
+
+                var validTime = new Date(initDate.getTime() + tau * 3600000);
+                var bt = _interpBestTrack(track, validTime.toISOString());
+                if (!bt) return;
+
+                // Track error (nm)
+                var trkErr = _gcDistNm(pt.lat, pt.lon, bt.lat, bt.lon);
+
+                // Intensity error (kt) — signed (forecast - observed)
+                var intErr = null;
+                var biasErr = null;
+                if (pt.wind != null && bt.wind != null) {
+                    intErr = Math.abs(pt.wind - bt.wind);
+                    biasErr = pt.wind - bt.wind;
+                }
+
+                result.models[tech].errors[tau].trackErr.push(trkErr);
+                if (intErr !== null) {
+                    result.models[tech].errors[tau].intErr.push(intErr);
+                    result.models[tech].errors[tau].biasErr.push(biasErr);
+                }
+            });
+        });
+    });
+
+    // Compute means and sample sizes
+    Object.keys(result.models).forEach(function (tech) {
+        var m = result.models[tech];
+        var totalTrackSamples = 0;
+        standardTaus.forEach(function (tau) {
+            var e = m.errors[tau];
+            e.n_track = e.trackErr.length;
+            e.n_int = e.intErr.length;
+            e.meanTrack = e.trackErr.length > 0 ?
+                Math.round(e.trackErr.reduce(function (a, b) { return a + b; }, 0) / e.trackErr.length) : null;
+            e.meanInt = e.intErr.length > 0 ?
+                Math.round(e.intErr.reduce(function (a, b) { return a + b; }, 0) / e.intErr.length) : null;
+            e.meanBias = e.biasErr.length > 0 ?
+                Math.round(e.biasErr.reduce(function (a, b) { return a + b; }, 0) / e.biasErr.length) : null;
+            totalTrackSamples += e.n_track;
+        });
+        m.totalSamples = totalTrackSamples;
+    });
+
+    return result;
+}
+
+/**
+ * Toggle scorecard panel visibility. Computes scorecard on first open.
+ */
+window.toggleScorecard = function () {
+    var panel = document.getElementById('scorecard-panel');
+    var btn = document.getElementById('scorecard-toggle-btn');
+    if (!panel || !btn) return;
+
+    _scorecardVisible = !_scorecardVisible;
+
+    if (_scorecardVisible) {
+        panel.style.display = '';
+        btn.classList.add('active');
+        btn.textContent = '📊 Scorecard';
+
+        // Compute scorecard if not already done
+        if (!_scorecardData && _modelData && selectedStorm) {
+            var track = allTracks[selectedStorm.sid];
+            _scorecardData = computeScorecard(_modelData, track, selectedStorm);
+        }
+
+        renderScorecardTable();
+
+        // Load SHIPS data if we have an ATCF ID in AL/EP/CP
+        if (!_shipsData && selectedStorm && selectedStorm.atcf_id) {
+            loadSHIPSData(selectedStorm);
+        }
+    } else {
+        panel.style.display = 'none';
+        btn.classList.remove('active');
+        btn.textContent = '📊 Scorecard';
+        removeSHIPSTraces();
+    }
+};
+
+/**
+ * Render the scorecard error table.
+ */
+function renderScorecardTable() {
+    var container = document.getElementById('scorecard-content');
+    if (!container) return;
+
+    if (!_scorecardData || Object.keys(_scorecardData.models).length === 0) {
+        container.innerHTML = '<div style="padding:30px;text-align:center;color:#8b9ec2;">No model forecast data available for scorecard computation. Enable the Models overlay first.</div>';
+        return;
+    }
+
+    var sc = _scorecardData;
+    var taus = sc.taus;
+
+    // Build model list sorted by 48h track error (ascending = best first)
+    var modelList = Object.keys(sc.models).filter(function (tech) {
+        return sc.models[tech].totalSamples > 0;
+    }).sort(function (a, b) {
+        var ea = sc.models[a].errors[48] ? sc.models[a].errors[48].meanTrack : 9999;
+        var eb = sc.models[b].errors[48] ? sc.models[b].errors[48].meanTrack : 9999;
+        return (ea || 9999) - (eb || 9999);
+    });
+
+    if (modelList.length === 0) {
+        container.innerHTML = '<div style="padding:30px;text-align:center;color:#8b9ec2;">No verification data available (model forecasts may not overlap with best track period).</div>';
+        return;
+    }
+
+    // --- Tab buttons for Track / Intensity / Bias ---
+    var html = '<div class="scorecard-tabs">';
+    html += '<button class="scorecard-tab active" onclick="switchScorecardTab(\'track\')">Track Error (nm)</button>';
+    html += '<button class="scorecard-tab" onclick="switchScorecardTab(\'intensity\')">Intensity MAE (kt)</button>';
+    html += '<button class="scorecard-tab" onclick="switchScorecardTab(\'bias\')">Intensity Bias (kt)</button>';
+    html += '</div>';
+
+    // --- Track Error Table ---
+    html += '<div id="scorecard-table-track" class="scorecard-table-wrap">';
+    html += _buildScorecardTable(sc, modelList, taus, 'track');
+    html += '</div>';
+
+    // --- Intensity Error Table ---
+    html += '<div id="scorecard-table-intensity" class="scorecard-table-wrap" style="display:none">';
+    html += _buildScorecardTable(sc, modelList, taus, 'intensity');
+    html += '</div>';
+
+    // --- Bias Table ---
+    html += '<div id="scorecard-table-bias" class="scorecard-table-wrap" style="display:none">';
+    html += _buildScorecardTable(sc, modelList, taus, 'bias');
+    html += '</div>';
+
+    // --- SHIPS Environmental section ---
+    html += '<div id="ships-section" class="ships-section">';
+    html += '<div class="ships-header">';
+    html += '<h4 style="margin:0;color:#e2e8f0;font-size:0.92rem;">SHIPS Environmental Diagnostics</h4>';
+    html += '<span id="ships-status" style="font-size:0.8rem;color:#8b9ec2;"></span>';
+    html += '</div>';
+    html += '<div id="ships-var-toggles" class="ships-var-toggles"></div>';
+    html += '<div id="ships-chart" class="chart-container" style="height:280px;"></div>';
+    html += '</div>';
+
+    container.innerHTML = html;
+
+    // Render SHIPS if we have data
+    if (_shipsData && _shipsData.available) {
+        renderSHIPSControls();
+        renderSHIPSChart();
+    }
+}
+
+function _buildScorecardTable(sc, modelList, taus, metric) {
+    var html = '<table class="scorecard-table"><thead><tr>';
+    html += '<th class="scorecard-model-col">Model</th>';
+    html += '<th class="scorecard-n-col">N</th>';
+    taus.forEach(function (tau) {
+        html += '<th>' + tau + 'h</th>';
+    });
+    html += '</tr></thead><tbody>';
+
+    // Find min value per tau for highlighting
+    var mins = {};
+    taus.forEach(function (tau) {
+        var best = Infinity;
+        modelList.forEach(function (tech) {
+            var val = _getScorecardVal(sc.models[tech], tau, metric);
+            if (val !== null && Math.abs(val) < best) best = Math.abs(val);
+        });
+        mins[tau] = best;
+    });
+
+    modelList.forEach(function (tech) {
+        var m = sc.models[tech];
+        html += '<tr>';
+        html += '<td class="scorecard-model-col"><span class="scorecard-swatch" style="background:' + m.color + '"></span>' + m.name + ' <span class="scorecard-tech">(' + tech + ')</span></td>';
+
+        // Sample count at tau=48 (representative)
+        var n = m.errors[48] ? (metric === 'track' ? m.errors[48].n_track : m.errors[48].n_int) : 0;
+        html += '<td class="scorecard-n-col">' + n + '</td>';
+
+        taus.forEach(function (tau) {
+            var val = _getScorecardVal(m, tau, metric);
+            var cls = '';
+            if (val !== null && mins[tau] !== Infinity && Math.abs(val) === mins[tau]) {
+                cls = ' scorecard-best';
+            }
+            if (metric === 'bias' && val !== null) {
+                cls += val > 0 ? ' scorecard-pos-bias' : (val < 0 ? ' scorecard-neg-bias' : '');
+            }
+            html += '<td class="scorecard-val' + cls + '">' + (val !== null ? val : '—') + '</td>';
+        });
+        html += '</tr>';
+    });
+
+    html += '</tbody></table>';
+    return html;
+}
+
+function _getScorecardVal(model, tau, metric) {
+    var e = model.errors[tau];
+    if (!e) return null;
+    if (metric === 'track') return e.meanTrack;
+    if (metric === 'intensity') return e.meanInt;
+    if (metric === 'bias') return e.meanBias;
+    return null;
+}
+
+window.switchScorecardTab = function (tab) {
+    ['track', 'intensity', 'bias'].forEach(function (t) {
+        var el = document.getElementById('scorecard-table-' + t);
+        if (el) el.style.display = (t === tab) ? '' : 'none';
+    });
+    // Update tab button active state
+    document.querySelectorAll('.scorecard-tab').forEach(function (btn) {
+        btn.classList.toggle('active', btn.textContent.toLowerCase().indexOf(tab) !== -1 ||
+            (tab === 'track' && btn.textContent.indexOf('Track') !== -1) ||
+            (tab === 'intensity' && btn.textContent.indexOf('MAE') !== -1) ||
+            (tab === 'bias' && btn.textContent.indexOf('Bias') !== -1));
+    });
+};
+
+/**
+ * Load SHIPS LSDIAG environmental data.
+ */
+function loadSHIPSData(storm) {
+    if (!storm.atcf_id) return;
+
+    var basin = storm.atcf_id.substring(0, 2).toUpperCase();
+    if (basin !== 'AL' && basin !== 'EP' && basin !== 'CP') {
+        document.getElementById('ships-status').textContent = 'SHIPS data only available for AL/EP/CP basins';
+        return;
+    }
+
+    document.getElementById('ships-status').textContent = 'Loading...';
+
+    var url = API_BASE + '/global/ships?atcf_id=' + encodeURIComponent(storm.atcf_id);
+    fetch(url).then(function (r) { return r.json(); }).then(function (data) {
+        _shipsData = data;
+        if (data.available && data.cases && data.cases.length > 0) {
+            document.getElementById('ships-status').textContent = data.n_cases + ' cases loaded';
+            renderSHIPSControls();
+            renderSHIPSChart();
+        } else {
+            document.getElementById('ships-status').textContent = data.reason || 'No data available';
+        }
+    }).catch(function (err) {
+        document.getElementById('ships-status').textContent = 'Failed to load';
+        console.warn('SHIPS load error:', err);
+    });
+}
+
+/**
+ * Render toggle buttons for each SHIPS variable.
+ */
+function renderSHIPSControls() {
+    var container = document.getElementById('ships-var-toggles');
+    if (!container || !_shipsData || !_shipsData.variables) return;
+
+    var html = '';
+    _shipsData.variables.forEach(function (varName) {
+        var meta = SHIPS_VAR_META[varName];
+        if (!meta) return;
+        var active = SHIPS_DEFAULT_SHOW.indexOf(varName) !== -1;
+        html += '<button class="ships-var-btn' + (active ? ' active' : '') + '" '
+              + 'data-var="' + varName + '" '
+              + 'style="border-color:' + meta.color + ';' + (active ? 'background:' + meta.color + '22;color:' + meta.color : '') + '" '
+              + 'onclick="toggleSHIPSVar(\'' + varName + '\', this)">'
+              + meta.name + '</button>';
+    });
+    container.innerHTML = html;
+}
+
+window.toggleSHIPSVar = function (varName, btn) {
+    btn.classList.toggle('active');
+    var meta = SHIPS_VAR_META[varName];
+    if (btn.classList.contains('active')) {
+        btn.style.background = meta.color + '22';
+        btn.style.color = meta.color;
+    } else {
+        btn.style.background = '';
+        btn.style.color = '';
+    }
+    renderSHIPSChart();
+};
+
+/**
+ * Render SHIPS environmental variables chart using Plotly.
+ */
+function renderSHIPSChart() {
+    var chartEl = document.getElementById('ships-chart');
+    if (!chartEl || !_shipsData || !_shipsData.cases || _shipsData.cases.length === 0) return;
+
+    // Get active variables
+    var activeVars = [];
+    document.querySelectorAll('.ships-var-btn.active').forEach(function (btn) {
+        activeVars.push(btn.getAttribute('data-var'));
+    });
+
+    if (activeVars.length === 0) {
+        Plotly.purge(chartEl);
+        return;
+    }
+
+    // Build time series from SHIPS cases.
+    // Each case has an init_time and predictors at tau=0 (analysis time).
+    // We want the tau=0 values to form a time series across all cases.
+    var traces = [];
+    var yAxes = {};
+    var axisCount = 0;
+
+    activeVars.forEach(function (varName, idx) {
+        var meta = SHIPS_VAR_META[varName];
+        if (!meta) return;
+
+        var times = [];
+        var values = [];
+
+        _shipsData.cases.forEach(function (c) {
+            if (!c.predictors || !c.predictors[varName]) return;
+            // Find tau=0 value
+            var series = c.predictors[varName];
+            for (var j = 0; j < series.length; j++) {
+                if (series[j].tau === 0) {
+                    // Convert init_time to Date string
+                    var it = c.init_time;
+                    if (it && it.length >= 10) {
+                        var dateStr = it.substring(0, 4) + '-' + it.substring(4, 6) + '-' + it.substring(6, 8)
+                                    + 'T' + it.substring(8, 10) + ':00:00Z';
+                        times.push(dateStr);
+                        values.push(series[j].val);
+                    }
+                    break;
+                }
+            }
+        });
+
+        if (times.length === 0) return;
+
+        // Assign y-axis (group similar units on same axis)
+        var axisKey = meta.unit;
+        if (!yAxes[axisKey]) {
+            axisCount++;
+            yAxes[axisKey] = {
+                idx: axisCount,
+                unit: meta.unit,
+                side: axisCount % 2 === 1 ? 'left' : 'right'
+            };
+        }
+
+        var yAxisName = yAxes[axisKey].idx === 1 ? 'y' : 'y' + yAxes[axisKey].idx;
+
+        traces.push({
+            x: times,
+            y: values,
+            type: 'scatter',
+            mode: 'lines+markers',
+            name: meta.name + ' (' + meta.unit + ')',
+            line: { color: meta.color, width: 2 },
+            marker: { size: 4, color: meta.color },
+            yaxis: yAxisName,
+            hovertemplate: '<b>' + meta.name + '</b><br>%{x}<br>%{y} ' + meta.unit + '<extra></extra>'
+        });
+    });
+
+    if (traces.length === 0) {
+        Plotly.purge(chartEl);
+        return;
+    }
+
+    // Build layout with dynamic y-axes
+    var layout = {
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor: 'rgba(0,0,0,0)',
+        font: { family: 'Inter, sans-serif', color: '#e2e8f0' },
+        margin: { l: 55, r: 55, t: 10, b: 40 },
+        showlegend: true,
+        legend: {
+            x: 0.01, y: 0.99,
+            bgcolor: 'rgba(15,33,64,0.8)',
+            bordercolor: 'rgba(255,255,255,0.08)',
+            borderwidth: 1,
+            font: { size: 10, color: '#e2e8f0' },
+            orientation: 'h'
+        },
+        xaxis: {
+            tickfont: { size: 10, color: '#8b9ec2' },
+            gridcolor: 'rgba(255,255,255,0.04)',
+            linecolor: 'rgba(255,255,255,0.08)'
+        }
+    };
+
+    // Add y-axes
+    var axisKeys = Object.keys(yAxes);
+    axisKeys.forEach(function (key, i) {
+        var ax = yAxes[key];
+        var yKey = ax.idx === 1 ? 'yaxis' : 'yaxis' + ax.idx;
+        layout[yKey] = {
+            title: { text: ax.unit, font: { size: 11, color: '#8b9ec2' } },
+            tickfont: { size: 10, color: '#8b9ec2' },
+            gridcolor: ax.idx === 1 ? 'rgba(255,255,255,0.04)' : 'transparent',
+            side: ax.side,
+            overlaying: ax.idx > 1 ? 'y' : undefined
+        };
+    });
+
+    Plotly.newPlot(chartEl, traces, layout, { responsive: true, displayModeBar: false });
+}
+
+/**
+ * Remove SHIPS overlay traces from the main timeline chart.
+ */
+function removeSHIPSTraces() {
+    _shipsTraceIndices = [];
+}
+
+/**
+ * Clean up scorecard state when switching storms.
+ */
+function removeScorecard() {
+    _scorecardVisible = false;
+    _scorecardData = null;
+    _shipsData = null;
+    _shipsVisible = false;
+    _scorecardLastAtcf = null;
+    removeSHIPSTraces();
+    var panel = document.getElementById('scorecard-panel');
+    if (panel) panel.style.display = 'none';
+    var btn = document.getElementById('scorecard-toggle-btn');
+    if (btn) {
+        btn.classList.remove('active');
+        btn.textContent = '📊 Scorecard';
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// END FORECAST SCORECARD
+// ═══════════════════════════════════════════════════════════════
 
 // ── Hook into state changes for silent URL updates ──
 var _origSeekIRFrame = window.seekIRFrame;

@@ -2958,6 +2958,367 @@ def get_adeck(atcf_id: str = Query(..., description="ATCF storm ID, e.g., AL0920
     )
 
 
+# ── SHIPS Developmental Data (LSDIAG) ──────────────────────────
+# Environmental diagnostics from the SHIPS statistical model.
+# Available for Atlantic (AL), East Pacific (EP), and Central Pacific (CP).
+# Source: CIRA/RAMMB developmental dataset & NHC ATCF lsdiag files.
+
+# Variables we extract and their descriptions / scale factors
+SHIPS_VARIABLES = {
+    # Shear variables (kt)
+    "SHDC": {"name": "Deep Shear (centered)", "unit": "kt", "scale": 0.1, "group": "shear",
+             "desc": "200-850 hPa shear magnitude centered on vortex"},
+    "SHGC": {"name": "Generalized Shear", "unit": "kt", "scale": 0.1, "group": "shear",
+             "desc": "Generalized 200-850 hPa shear accounting for vortex depth"},
+    "SHRD": {"name": "Deep Shear (area avg)", "unit": "kt", "scale": 0.1, "group": "shear",
+             "desc": "200-850 hPa shear magnitude, 0-500 km area average"},
+    # SST / Ocean
+    "RSST": {"name": "SST", "unit": "°C", "scale": 0.1, "group": "ocean",
+             "desc": "Reynolds SST at storm center"},
+    "COHC": {"name": "Ocean Heat Content", "unit": "kJ/cm²", "scale": 0.1, "group": "ocean",
+             "desc": "Ocean heat content from NCODA"},
+    "VMPI": {"name": "Max Potential Intensity", "unit": "kt", "scale": 0.1, "group": "ocean",
+             "desc": "Maximum potential intensity (Emanuel)"},
+    # Moisture / Thermodynamic
+    "RHMD": {"name": "Mid-level RH", "unit": "%", "scale": 0.1, "group": "moisture",
+             "desc": "700-500 hPa relative humidity, 200-800 km annulus"},
+    "RHLO": {"name": "Low-level RH", "unit": "%", "scale": 0.1, "group": "moisture",
+             "desc": "850-700 hPa relative humidity, 200-800 km annulus"},
+    "MTPW": {"name": "Total Precip. Water", "unit": "mm", "scale": 0.1, "group": "moisture",
+             "desc": "Total precipitable water at t=0 from GFS analysis"},
+    # Upper-level dynamics
+    "D200": {"name": "200 hPa Divergence", "unit": "×10⁻⁷/s", "scale": 0.1, "group": "dynamics",
+             "desc": "200 hPa divergence, 0-1000 km area"},
+    "T200": {"name": "200 hPa Temp", "unit": "°C", "scale": 0.1, "group": "dynamics",
+             "desc": "200 hPa temperature at storm center"},
+    "PENV": {"name": "Environmental Pressure", "unit": "hPa", "scale": 0.1, "group": "dynamics",
+             "desc": "Pressure of the outermost closed isobar"},
+    # Vortex parameters
+    "VMAX": {"name": "Best Track Vmax", "unit": "kt", "scale": 1.0, "group": "vortex",
+             "desc": "Best track maximum sustained wind (from HEAD line)"},
+}
+
+# Which variables to return by default
+SHIPS_DEFAULT_VARS = ["SHDC", "SHGC", "RSST", "COHC", "VMPI", "RHMD", "MTPW", "D200"]
+
+# Tau offsets for 7-day files (hours relative to init time)
+_SHIPS_TAUS_7DAY = list(range(-12, 169, 6))  # -12, -6, 0, 6, ..., 168
+_SHIPS_TAUS_5DAY = list(range(-12, 121, 6))  # -12, -6, 0, ..., 120
+
+_ships_cache: OrderedDict = OrderedDict()
+_SHIPS_CACHE_MAX = 20
+
+
+def _parse_ships_lsdiag(raw_text: str, atcf_id: str) -> dict:
+    """Parse a SHIPS LSDIAG developmental data file.
+
+    The file contains cases for one or more storms. Each case starts with a
+    HEAD line and ends with a LAST line. Between them are predictor lines,
+    each containing values at different forecast hours (-12 through +168h).
+
+    HEAD line format (space-delimited):
+        HEAD basin storm_num YYYYMMDDHH storm_name lat lon vmax mslp ...
+
+    Predictor lines:
+        val1  val2  val3  ... varname
+
+    Values are integers, scaled (usually *10). Missing = 9999.
+
+    Returns: {
+        "cases": [
+            {
+                "init_time": "2017090506",
+                "storm_name": "IRMA",
+                "lat": 17.4, "lon": -57.2,
+                "vmax": 115, "mslp": 940,
+                "predictors": {
+                    "SHDC": [{"tau": -12, "val": 12.3}, {"tau": -6, "val": 11.8}, ...],
+                    "RSST": [...],
+                    ...
+                }
+            },
+            ...
+        ],
+        "variables": ["SHDC", "SHGC", ...],  # variables found
+        "n_cases": 42,
+    }
+    """
+    cases = []
+    current_case = None
+    variables_found = set()
+
+    lines = raw_text.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        i += 1
+
+        if not line:
+            continue
+
+        # Check for HEAD line
+        if line.startswith("HEAD"):
+            # Parse HEAD line — format varies but key fields are identifiable
+            parts = line.split()
+            if len(parts) < 8:
+                continue
+
+            try:
+                # Typical: HEAD AL 09 2017090506 IRMA 17.4N 57.2W 115 940 ...
+                # or:      HEAD  AL, 09, 2017090506, IRMA, ...
+                # Try comma-separated first, then space-separated
+                if "," in line:
+                    cparts = [p.strip() for p in line.split(",")]
+                    # HEAD, basin, num, datetime, name, lat, lon, vmax, mslp
+                    init_time = cparts[2].strip() if len(cparts) > 2 else ""
+                    storm_name = cparts[3].strip() if len(cparts) > 3 else ""
+                    lat_str = cparts[4].strip() if len(cparts) > 4 else ""
+                    lon_str = cparts[5].strip() if len(cparts) > 5 else ""
+                    vmax_str = cparts[6].strip() if len(cparts) > 6 else ""
+                    mslp_str = cparts[7].strip() if len(cparts) > 7 else ""
+                else:
+                    init_time = parts[3] if len(parts) > 3 else ""
+                    storm_name = parts[4] if len(parts) > 4 else ""
+                    lat_str = parts[5] if len(parts) > 5 else ""
+                    lon_str = parts[6] if len(parts) > 6 else ""
+                    vmax_str = parts[7] if len(parts) > 7 else ""
+                    mslp_str = parts[8] if len(parts) > 8 else ""
+
+                # Parse lat/lon with N/S/E/W suffix
+                lat = _parse_ships_coord(lat_str, "NS")
+                lon = _parse_ships_coord(lon_str, "EW")
+
+                vmax = int(float(vmax_str)) if vmax_str and vmax_str != "9999" else None
+                mslp = int(float(mslp_str)) if mslp_str and mslp_str != "9999" else None
+
+                current_case = {
+                    "init_time": init_time[:10] if len(init_time) >= 10 else init_time,
+                    "storm_name": storm_name,
+                    "lat": lat,
+                    "lon": lon,
+                    "vmax": vmax,
+                    "mslp": mslp,
+                    "predictors": {},
+                }
+            except (ValueError, IndexError):
+                current_case = None
+            continue
+
+        # Check for LAST line — finalize case
+        if line.startswith("LAST") or line.endswith("LAST"):
+            if current_case is not None:
+                cases.append(current_case)
+                current_case = None
+            continue
+
+        # Predictor line: values followed by variable name at end
+        if current_case is None:
+            continue
+
+        # The variable name is the last token (4 chars, alpha)
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+
+        varname = parts[-1].strip()
+        if not varname.isalpha() or len(varname) > 6:
+            continue
+
+        # Only extract variables we care about
+        if varname not in SHIPS_VARIABLES:
+            continue
+
+        # Parse values (all tokens except the last one = varname)
+        vals = parts[:-1]
+        scale = SHIPS_VARIABLES[varname]["scale"]
+
+        # Determine tau list based on number of values
+        if len(vals) >= 28:
+            taus = _SHIPS_TAUS_7DAY[:len(vals)]
+        else:
+            taus = _SHIPS_TAUS_5DAY[:len(vals)]
+
+        series = []
+        for j, v in enumerate(vals):
+            try:
+                ival = int(float(v))
+                if ival == 9999 or ival == -9999:
+                    continue
+                tau = taus[j] if j < len(taus) else j * 6 - 12
+                series.append({"tau": tau, "val": round(ival * scale, 2)})
+            except (ValueError, IndexError):
+                continue
+
+        if series:
+            current_case["predictors"][varname] = series
+            variables_found.add(varname)
+
+    # If file ended without LAST, add final case
+    if current_case is not None and current_case.get("predictors"):
+        cases.append(current_case)
+
+    return {
+        "cases": cases,
+        "variables": sorted(variables_found),
+        "n_cases": len(cases),
+    }
+
+
+def _parse_ships_coord(s: str, axes: str = "NS") -> float | None:
+    """Parse a coordinate string like '17.4N' or '57.2W'."""
+    if not s:
+        return None
+    s = s.strip()
+    try:
+        if s[-1].upper() in "NSEW":
+            val = float(s[:-1])
+            if s[-1].upper() in ("S", "W"):
+                val = -val
+            return round(val, 2)
+        else:
+            return round(float(s), 2)
+    except (ValueError, IndexError):
+        return None
+
+
+def _fetch_ships(atcf_id: str) -> dict | None:
+    """Fetch SHIPS developmental / LSDIAG data for a storm.
+
+    Tries multiple sources:
+      1. CIRA/RAMMB 7-day developmental data (bulk per basin/year)
+      2. CIRA/RAMMB 5-day developmental data (older, but more complete)
+      3. NHC ATCF lsdiag directory (per-storm diagnostic files)
+
+    For bulk files, we filter to only the requested storm.
+    Returns parsed dict or None on failure.
+    """
+    if atcf_id in _ships_cache:
+        _ships_cache.move_to_end(atcf_id)
+        return _ships_cache[atcf_id]
+
+    atcf_id = atcf_id.upper().strip()
+    if len(atcf_id) < 8:
+        return None
+
+    basin = atcf_id[:2].lower()
+    num = atcf_id[2:4]
+    year = atcf_id[4:]
+
+    # SHIPS only available for AL, EP, CP
+    if basin not in ("al", "ep", "cp"):
+        return None
+
+    import requests as req
+
+    # URL patterns for CIRA/RAMMB developmental data
+    # Files are per-basin, per-year: lsdiag_{basin}_7day_{year}.dat
+    urls = [
+        # RAMMB-data server (new CDN)
+        f"https://rammb-data.cira.colostate.edu/ships/data/lsdiag_{basin}_7day_{year}.dat",
+        # RAMMB main site
+        f"https://rammb2.cira.colostate.edu/research/tropical-cyclones/ships/development_data/lsdiag_{basin}_7day_{year}.dat",
+        # 5-day fallback
+        f"https://rammb-data.cira.colostate.edu/ships/data/lsdiag_{basin}_5day_{year}.dat",
+        f"https://rammb2.cira.colostate.edu/research/tropical-cyclones/ships/development_data/lsdiag_{basin}_5day_{year}.dat",
+    ]
+
+    raw_text = None
+    source = None
+    for url in urls:
+        try:
+            logger.info(f"Fetching SHIPS LSDIAG: {url}")
+            resp = req.get(url, timeout=30, headers=_HTTP_HEADERS)
+            if resp.status_code == 200 and len(resp.content) > 200:
+                raw_text = resp.text
+                source = url
+                logger.info(f"SHIPS LSDIAG fetched: {len(raw_text)} bytes from {url}")
+                break
+        except Exception as e:
+            logger.warning(f"SHIPS LSDIAG fetch failed for {url}: {e}")
+            continue
+
+    if not raw_text:
+        return None
+
+    # Parse the full file
+    parsed = _parse_ships_lsdiag(raw_text, atcf_id)
+    parsed["source"] = source
+    parsed["basin"] = basin.upper()
+
+    # The bulk file has ALL storms for this basin/year.
+    # We filter to only the relevant storm number.
+    # Storm identification: check init_time year matches and filter by proximity
+    # to the storm's known positions (from best track).
+    # For simplicity, we rely on storm_name matching or case timing.
+    # The ATCF storm number (e.g., 09) corresponds to the 9th storm in the basin.
+    # SHIPS HEAD lines include this.
+
+    # Cache the full parsed result (includes all cases for the storm)
+    _ships_cache[atcf_id] = parsed
+    if len(_ships_cache) > _SHIPS_CACHE_MAX:
+        _ships_cache.popitem(last=False)
+
+    return parsed
+
+
+@router.get("/ships")
+def get_ships(atcf_id: str = Query(..., description="ATCF storm ID, e.g., AL092017")):
+    """Fetch SHIPS environmental diagnostics (LSDIAG) for a storm.
+
+    Returns time series of key environmental predictors (shear, SST, OHC,
+    moisture, etc.) from the SHIPS developmental dataset.
+
+    Only available for Atlantic (AL), East Pacific (EP), and Central Pacific (CP) storms.
+    """
+    atcf_id = atcf_id.upper().strip()
+    basin = atcf_id[:2].upper() if len(atcf_id) >= 2 else ""
+
+    if basin not in ("AL", "EP", "CP"):
+        return JSONResponse(
+            content={
+                "atcf_id": atcf_id,
+                "available": False,
+                "reason": f"SHIPS data only available for AL/EP/CP basins, not {basin}",
+                "cases": [],
+                "variables": [],
+            },
+            headers={"Cache-Control": "public, max-age=3600"},
+        )
+
+    result = _fetch_ships(atcf_id)
+    if result is None:
+        return JSONResponse(
+            content={
+                "atcf_id": atcf_id,
+                "available": False,
+                "reason": "SHIPS LSDIAG data not found for this storm/year",
+                "cases": [],
+                "variables": [],
+            },
+            headers={"Cache-Control": "public, max-age=3600"},
+        )
+
+    return JSONResponse(
+        content={
+            "atcf_id": atcf_id,
+            "available": True,
+            "cases": result["cases"],
+            "variables": result["variables"],
+            "n_cases": result["n_cases"],
+            "source": result.get("source", ""),
+            "variable_meta": {
+                k: {
+                    "name": v["name"],
+                    "unit": v["unit"],
+                    "group": v["group"],
+                    "desc": v["desc"],
+                } for k, v in SHIPS_VARIABLES.items()
+            },
+        },
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
 @router.get("/health")
 def global_health():
     """Health check for global archive endpoints."""

@@ -2081,3 +2081,135 @@ input[type="range"].ga-range::-moz-range-thumb {
     font-size: 0.76rem;
     color: var(--slate);
 }
+
+/* ── Forecast Scorecard ─────────────────────────────────── */
+.scorecard-panel {
+    grid-column: 1 / -1;
+}
+.scorecard-content {
+    padding: 8px 0;
+}
+.scorecard-tabs {
+    display: flex;
+    gap: 4px;
+    padding: 0 12px 10px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 10px;
+}
+.scorecard-tab {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.1);
+    color: var(--slate);
+    padding: 5px 12px;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.scorecard-tab:hover {
+    background: rgba(255,255,255,0.08);
+}
+.scorecard-tab.active {
+    background: rgba(251,191,36,0.15);
+    border-color: rgba(251,191,36,0.4);
+    color: #fbbf24;
+}
+.scorecard-table-wrap {
+    overflow-x: auto;
+    padding: 0 12px;
+}
+.scorecard-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.82rem;
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+.scorecard-table th {
+    background: rgba(255,255,255,0.03);
+    color: var(--slate);
+    font-weight: 500;
+    padding: 6px 8px;
+    text-align: center;
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    font-size: 0.78rem;
+}
+.scorecard-table td {
+    padding: 5px 8px;
+    text-align: center;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+    color: #c8d6e5;
+}
+.scorecard-table tr:hover td {
+    background: rgba(255,255,255,0.03);
+}
+.scorecard-model-col {
+    text-align: left !important;
+    white-space: nowrap;
+    min-width: 120px;
+}
+.scorecard-n-col {
+    color: var(--slate) !important;
+    font-size: 0.75rem;
+}
+.scorecard-swatch {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    margin-right: 6px;
+    vertical-align: middle;
+}
+.scorecard-tech {
+    color: var(--slate);
+    font-size: 0.72rem;
+}
+.scorecard-val {
+    min-width: 48px;
+}
+.scorecard-best {
+    color: #34d399 !important;
+    font-weight: 700;
+}
+.scorecard-pos-bias {
+    color: #f87171 !important;
+}
+.scorecard-neg-bias {
+    color: #60a5fa !important;
+}
+
+/* ── SHIPS Environmental Section ────────────────────────── */
+.ships-section {
+    margin-top: 16px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+}
+.ships-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 12px 8px;
+}
+.ships-var-toggles {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 0 12px 10px;
+}
+.ships-var-btn {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.15);
+    color: var(--slate);
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.ships-var-btn:hover {
+    background: rgba(255,255,255,0.08);
+}
+.ships-var-btn.active {
+    font-weight: 600;
+}

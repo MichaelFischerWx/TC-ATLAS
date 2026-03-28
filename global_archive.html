@@ -298,6 +298,11 @@
                                 </button>
                                 <span id="fdeck-status" class="ir-status"></span>
                             </div>
+                            <div id="scorecard-toggle-wrap" style="display:none;">
+                                <button id="scorecard-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleScorecard()" style="background:rgba(251,191,36,0.15);border-color:rgba(251,191,36,0.4);color:#fbbf24;">
+                                    &#128202; Scorecard
+                                </button>
+                            </div>
                         </div>
                         <div id="timeline-chart" class="chart-container"></div>
                     </div>
@@ -508,6 +513,19 @@
 
                 <!-- Hidden panel for backward compat (ir-panel display logic) -->
                 <div id="ir-panel" style="display:none;"></div>
+
+                <!-- Forecast Scorecard Panel -->
+                <div id="scorecard-panel" class="detail-panel scorecard-panel" style="display:none;margin-top:16px;">
+                    <div class="panel-header">
+                        <h3>&#128202; Forecast Scorecard</h3>
+                        <span style="font-size:0.78rem;color:#8b9ec2;">Model forecast errors vs. best track</span>
+                    </div>
+                    <div id="scorecard-content" class="scorecard-content">
+                        <div style="padding:30px;text-align:center;color:#8b9ec2;">
+                            Loading scorecard...
+                        </div>
+                    </div>
+                </div>
             </div>
         </section>
 
