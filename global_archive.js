@@ -2551,10 +2551,26 @@ function renderDetailMap(track, storm) {
         worldCopyJump: true
     });
 
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
         attribution: '&copy; CARTO',
         subdomains: 'abcd',
         maxZoom: 12
+    }).addTo(detailMap);
+
+    // Create a pane for coastline outlines that renders ABOVE IR imagery
+    // Leaflet default pane z-index: tile=200, overlay=400, shadow=500, marker=600
+    // We put coastlines at z=450 — above IR overlays (400) but below markers (600)
+    detailMap.createPane('coastlines');
+    detailMap.getPane('coastlines').style.zIndex = 450;
+    detailMap.getPane('coastlines').style.pointerEvents = 'none';
+
+    // Add CARTO "dark_only_labels" tiles as coastline/border/label overlay
+    // These are transparent PNGs showing only labels, borders, and coastlines
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {
+        subdomains: 'abcd',
+        maxZoom: 12,
+        pane: 'coastlines',
+        opacity: 0.8
     }).addTo(detailMap);
 
     // Draw track — TC phases (TS/SS) get thick solid lines,
@@ -6299,6 +6315,12 @@ function initCompareIR() {
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
             maxZoom: 18
         }).addTo(_cmpIR.left.map);
+        _cmpIR.left.map.createPane('coastlines');
+        _cmpIR.left.map.getPane('coastlines').style.zIndex = 450;
+        _cmpIR.left.map.getPane('coastlines').style.pointerEvents = 'none';
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {
+            subdomains: 'abcd', maxZoom: 18, pane: 'coastlines', opacity: 0.8
+        }).addTo(_cmpIR.left.map);
         _attachCompareIRHover('left');
     }
     if (!_cmpIR.right.map) {
@@ -6310,6 +6332,12 @@ function initCompareIR() {
         }).setView([20, -60], 4);
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
             maxZoom: 18
+        }).addTo(_cmpIR.right.map);
+        _cmpIR.right.map.createPane('coastlines');
+        _cmpIR.right.map.getPane('coastlines').style.zIndex = 450;
+        _cmpIR.right.map.getPane('coastlines').style.pointerEvents = 'none';
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {
+            subdomains: 'abcd', maxZoom: 18, pane: 'coastlines', opacity: 0.8
         }).addTo(_cmpIR.right.map);
         _attachCompareIRHover('right');
     }
