@@ -112,8 +112,9 @@ function _loadCoastlineOverlay(map) {
     if (_coastlineLoading) return;
     _coastlineLoading = true;
 
-    // Natural Earth 110m coastlines via GitHub CDN (~30KB gzipped)
-    fetch('https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_coastline.geojson')
+    // Natural Earth 50m coastlines via GitHub CDN (~150KB gzipped)
+    // 50m gives smooth coastlines at typical TC-scale zoom levels (z3-z8)
+    fetch('https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_coastline.geojson')
         .then(function (r) { return r.json(); })
         .then(function (geojson) {
             _coastlineGeoJSON = geojson;
