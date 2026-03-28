@@ -2727,6 +2727,16 @@ ADECK_MODELS = {
     "DSHP": {"name": "DSHIPS",   "color": "#fdcb6e", "type": "statistical"},
     "LGEM": {"name": "LGEM",     "color": "#e2b04a", "type": "statistical"},
     "RVCN": {"name": "RVCN",     "color": "#dfe6e9", "type": "statistical"},
+    # AI / Machine Learning models
+    "GENI": {"name": "GenCast",    "color": "#00ff87", "type": "ai"},
+    "GEN2": {"name": "GenCast",    "color": "#00ff87", "type": "ai"},
+    "GRPH": {"name": "GraphCast",  "color": "#00e676", "type": "ai"},
+    "GRPI": {"name": "GraphCast (I)", "color": "#00e676", "type": "ai"},
+    "GRP2": {"name": "GraphCast",  "color": "#00e676", "type": "ai"},
+    "APTS": {"name": "Pangu",      "color": "#76ff03", "type": "ai"},
+    "PTSI": {"name": "Pangu (I)",  "color": "#76ff03", "type": "ai"},
+    "AIFS": {"name": "ECMWF-AIFS", "color": "#69f0ae", "type": "ai"},
+    "AIFI": {"name": "ECMWF-AIFS (I)", "color": "#69f0ae", "type": "ai"},
     # Consensus aids
     "TVCN": {"name": "TVCA Con", "color": "#ffffff", "type": "consensus"},
     "TVCE": {"name": "TVCE Con", "color": "#f0f0f0", "type": "consensus"},

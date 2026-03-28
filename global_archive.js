@@ -5150,7 +5150,7 @@ var _modelTrackLayers = [];      // Leaflet polylines on map
 var _modelMarkerLayers = [];     // Leaflet circle markers for forecast points
 var _modelLegendModels = [];     // Models visible in current cycle
 var _modelLastAtcf = null;       // Last ATCF ID loaded
-var _modelTypeFilters = { official: true, dynamical: true, consensus: true, statistical: false };
+var _modelTypeFilters = { official: true, dynamical: true, ai: true, consensus: true, statistical: false };
 var _modelIntensityTraces = [];  // Plotly trace indices for intensity chart
 
 // Color map for models (sent from API, but also define fallbacks)
@@ -5166,6 +5166,10 @@ var MODEL_COLORS = {
     'HMON': '#e17055', 'HMNI': '#e17055',
     'HAFS': '#00cec9', 'HAFA': '#00cec9', 'HAFB': '#81ecec',
     'CTCX': '#fab1a0',
+    'GENI': '#00ff87', 'GEN2': '#00ff87',
+    'GRPH': '#00e676', 'GRPI': '#00e676', 'GRP2': '#00e676',
+    'APTS': '#76ff03', 'PTSI': '#76ff03',
+    'AIFS': '#69f0ae', 'AIFI': '#69f0ae',
     'SHIP': '#ffeaa7', 'DSHP': '#fdcb6e', 'LGEM': '#e2b04a',
     'TVCN': '#ffffff', 'TVCA': '#ffffff', 'TVCE': '#f0f0f0', 'TVCX': '#e0e0e0',
     'IVCN': '#dfe6e9', 'ICON': '#c8d6e5', 'FSSE': '#74b9ff',
@@ -5303,15 +5307,36 @@ window.syncModelsToIRNow = function () {
 };
 
 /**
- * Toggle a model type filter (dynamical, consensus, statistical).
+ * Toggle a model type filter (official, dynamical, ai, consensus, statistical).
  */
 window.toggleModelTypeFilter = function (mtype) {
     _modelTypeFilters[mtype] = !_modelTypeFilters[mtype];
 
-    // Update button active state
+    // Inline style definitions for specially-colored filter buttons
+    var _filterBtnStyles = {
+        official: { color: '#ff4757', border: 'rgba(255,71,87,0.4)', bg: 'rgba(255,71,87,0.15)' },
+        ai:       { color: '#00ff87', border: 'rgba(0,255,135,0.4)', bg: 'rgba(0,255,135,0.15)' }
+    };
+
+    // Update button active state — handle inline-styled buttons properly
     document.querySelectorAll('.model-filter-btn').forEach(function (btn) {
         var t = btn.getAttribute('data-mtype');
-        btn.classList.toggle('active', _modelTypeFilters[t]);
+        var isActive = _modelTypeFilters[t];
+        btn.classList.toggle('active', isActive);
+
+        // For buttons with custom color styling, toggle inline styles on/off
+        var styles = _filterBtnStyles[t];
+        if (styles) {
+            if (isActive) {
+                btn.style.color = styles.color;
+                btn.style.borderColor = styles.border;
+                btn.style.background = styles.bg;
+            } else {
+                btn.style.color = '';
+                btn.style.borderColor = '';
+                btn.style.background = '';
+            }
+        }
     });
 
     // Re-render
