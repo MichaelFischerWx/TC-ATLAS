@@ -5406,23 +5406,27 @@ function initCompareIR() {
     // Init maps if needed
     if (!_cmpIR.left.map) {
         _cmpIR.left.map = L.map('compare-ir-map-left', {
-            zoomControl: false,
+            zoomControl: true,
             attributionControl: false,
-            minZoom: 2, maxZoom: 10
+            minZoom: 2, maxZoom: 10,
+            scrollWheelZoom: true
         }).setView([20, -60], 4);
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
             maxZoom: 18
         }).addTo(_cmpIR.left.map);
+        _attachCompareIRHover('left');
     }
     if (!_cmpIR.right.map) {
         _cmpIR.right.map = L.map('compare-ir-map-right', {
-            zoomControl: false,
+            zoomControl: true,
             attributionControl: false,
-            minZoom: 2, maxZoom: 10
+            minZoom: 2, maxZoom: 10,
+            scrollWheelZoom: true
         }).setView([20, -60], 4);
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
             maxZoom: 18
         }).addTo(_cmpIR.right.map);
+        _attachCompareIRHover('right');
     }
 
     // Invalidate map sizes after display
@@ -5573,8 +5577,14 @@ function _displayCompareIR(side, data) {
     if (data.tb_data) {
         var tbArr = decodeTbData(data.tb_data);
         imageURI = renderTbToDataURI(tbArr, data.tb_rows, data.tb_cols, _cmpIR.cmap);
+        // Store Tb data for hover display
+        s.tbData = tbArr;
+        s.tbRows = data.tb_rows;
+        s.tbCols = data.tb_cols;
+        s.tbBounds = imageBounds;
     } else if (data.frame) {
         imageURI = data.frame;
+        s.tbData = null;
     } else {
         return;
     }
@@ -5585,6 +5595,76 @@ function _displayCompareIR(side, data) {
         interactive: false,
         className: 'ir-overlay-image'
     }).addTo(s.map);
+
+    // Pan map to follow storm center
+    s.map.panTo(imageBounds.getCenter(), { animate: false });
+}
+
+/**
+ * Attach Tb hover display to a compare IR map.
+ */
+function _attachCompareIRHover(side) {
+    var s = _cmpIR[side];
+    if (!s.map) return;
+
+    s.tooltip = L.popup({
+        closeButton: false, autoPan: false, autoClose: false,
+        className: 'ir-tb-tooltip', offset: [12, -12]
+    });
+
+    var throttled = false;
+    s.map.on('mousemove', function (e) {
+        if (throttled) return;
+        throttled = true;
+        setTimeout(function () { throttled = false; }, 50);
+
+        if (!s.tbData || !s.tbBounds) {
+            if (s.tooltip && s.map.hasLayer(s.tooltip)) s.map.closePopup(s.tooltip);
+            return;
+        }
+
+        var lat = e.latlng.lat;
+        var lng = e.latlng.lng;
+        var b = s.tbBounds;
+
+        if (lat < b.getSouth() || lat > b.getNorth() ||
+            lng < b.getWest() || lng > b.getEast()) {
+            if (s.tooltip && s.map.hasLayer(s.tooltip)) s.map.closePopup(s.tooltip);
+            return;
+        }
+
+        // Mercator-corrected grid lookup (same as main viewer)
+        var nRows = s.tbRows, nCols = s.tbCols;
+        if (!nRows || !nCols) return;
+
+        function _mercY(d) { var r = d * Math.PI / 180; return Math.log(Math.tan(Math.PI / 4 + r / 2)); }
+        var mercN = _mercY(b.getNorth());
+        var mercS = _mercY(b.getSouth());
+        var mercL = _mercY(lat);
+        var fracY = (mercN - mercL) / (mercN - mercS);
+        var fracX = (lng - b.getWest()) / (b.getEast() - b.getWest());
+        var row = Math.min(Math.floor(fracY * nRows), nRows - 1);
+        var col = Math.min(Math.floor(fracX * nCols), nCols - 1);
+
+        var rawVal = s.tbData[row * nCols + col];
+        if (rawVal === 0) {
+            if (s.tooltip && s.map.hasLayer(s.tooltip)) s.map.closePopup(s.tooltip);
+            return;
+        }
+
+        var tbK = 170.0 + (rawVal - 1) * (310.0 - 170.0) / 254.0;
+        var tbC = (tbK - 273.15).toFixed(1);
+        var html = '<span class="ir-tb-val">' + tbK.toFixed(1) + ' K</span>' +
+                   '<span class="ir-tb-sep"> / </span>' +
+                   '<span class="ir-tb-val">' + tbC + ' °C</span>';
+
+        s.tooltip.setLatLng(e.latlng).setContent(html);
+        if (!s.map.hasLayer(s.tooltip)) s.tooltip.openOn(s.map);
+    });
+
+    s.map.on('mouseout', function () {
+        if (s.tooltip && s.map.hasLayer(s.tooltip)) s.map.closePopup(s.tooltip);
+    });
 }
 
 function _updateCompareIRMeta(side, idx) {
