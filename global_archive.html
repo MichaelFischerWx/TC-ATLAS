@@ -326,7 +326,75 @@
                                 <div class="ga-spinner"></div>
                                 <div id="ir-loading-text" class="ir-loading-text">Loading IR frame...</div>
                             </div>
-                            <!-- GIF export progress overlay -->
+                            <!-- GIF settings & export overlay -->
+                            <div id="gif-settings-overlay" class="ir-map-loading" style="display:none;">
+                                <div class="gif-settings-panel">
+                                    <div class="gif-settings-title">GIF Export Settings</div>
+
+                                    <div class="gif-settings-row">
+                                        <label>Time Window</label>
+                                        <div class="gif-range-wrap">
+                                            <select id="gif-range-mode" onchange="updateGifRangeUI()">
+                                                <option value="full">Full Loop</option>
+                                                <option value="peak12">Peak &plusmn; 12h</option>
+                                                <option value="peak24">Peak &plusmn; 24h</option>
+                                                <option value="peak48">Peak &plusmn; 48h</option>
+                                                <option value="custom">Custom Range</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div id="gif-custom-range" class="gif-settings-row" style="display:none;">
+                                        <label>Frame Range</label>
+                                        <div class="gif-range-sliders">
+                                            <span id="gif-range-start-lbl" class="gif-range-lbl">1</span>
+                                            <input type="range" id="gif-range-start" class="ga-range" min="0" max="0" value="0" oninput="updateGifRangeLabels()">
+                                            <span class="gif-range-sep">to</span>
+                                            <input type="range" id="gif-range-end" class="ga-range" min="0" max="0" value="0" oninput="updateGifRangeLabels()">
+                                            <span id="gif-range-end-lbl" class="gif-range-lbl">1</span>
+                                        </div>
+                                    </div>
+
+                                    <div class="gif-settings-row">
+                                        <label>Frame Skip</label>
+                                        <select id="gif-frame-skip">
+                                            <option value="1">Every frame</option>
+                                            <option value="2" selected>Every 2nd frame</option>
+                                            <option value="3">Every 3rd frame</option>
+                                            <option value="4">Every 4th frame</option>
+                                            <option value="6">Every 6th frame</option>
+                                        </select>
+                                    </div>
+
+                                    <div class="gif-settings-row">
+                                        <label>Speed</label>
+                                        <select id="gif-speed-setting">
+                                            <option value="400">Slow</option>
+                                            <option value="200" selected>Normal</option>
+                                            <option value="120">Fast</option>
+                                            <option value="80">Very Fast</option>
+                                        </select>
+                                    </div>
+
+                                    <div class="gif-settings-row">
+                                        <label>Intensity Trace</label>
+                                        <div class="gif-toggle-wrap">
+                                            <label class="gif-toggle">
+                                                <input type="checkbox" id="gif-show-intensity" checked>
+                                                <span class="gif-toggle-slider"></span>
+                                            </label>
+                                            <span class="gif-toggle-label">Show wind/pressure timeline</span>
+                                        </div>
+                                    </div>
+
+                                    <div id="gif-frame-estimate" class="gif-frame-estimate"></div>
+
+                                    <div class="gif-settings-actions">
+                                        <button class="ga-btn ga-btn-sm" onclick="closeGifSettings()">Cancel</button>
+                                        <button class="ga-btn ga-btn-sm gif-export-go" id="gif-export-go-btn" onclick="startGifExport()">Export GIF</button>
+                                    </div>
+                                </div>
+                            </div>
+                            <!-- GIF encoding progress overlay -->
                             <div id="gif-export-overlay" class="ir-map-loading" style="display:none;">
                                 <div style="background:rgba(10,22,40,0.95);padding:20px 32px;border-radius:10px;border:1px solid rgba(0,180,255,0.3);text-align:center;">
                                     <div id="gif-progress-text" class="ir-loading-text" style="margin-bottom:10px;">Rendering GIF...</div>
@@ -382,7 +450,7 @@
                                 <button id="ir-track-toggle-btn" class="ga-btn ga-btn-sm ir-follow-btn active" onclick="toggleTrackOverlay()" title="Show/hide track and position marker">
                                     &#9992;
                                 </button>
-                                <button id="ir-gif-btn" class="ga-btn ga-btn-sm ir-follow-btn" onclick="exportIRGif()" title="Export IR loop as animated GIF">
+                                <button id="ir-gif-btn" class="ga-btn ga-btn-sm ir-follow-btn" onclick="openGifSettings()" title="Export IR loop as animated GIF">
                                     GIF
                                 </button>
                             </div>

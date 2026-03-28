@@ -765,6 +765,136 @@ input[type="range"].ga-range::-moz-range-thumb {
     border-color: rgba(251, 191, 36, 0.5);
 }
 
+/* ── GIF Settings Panel ──────────────────────────────────── */
+.gif-settings-panel {
+    background: rgba(10, 22, 40, 0.97);
+    border: 1px solid rgba(0, 180, 255, 0.3);
+    border-radius: 10px;
+    padding: 16px 20px;
+    width: 340px;
+    max-width: 90vw;
+}
+.gif-settings-title {
+    font-size: 0.88rem;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 12px;
+    text-align: center;
+    letter-spacing: 0.03em;
+}
+.gif-settings-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+.gif-settings-row > label {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--slate);
+    min-width: 85px;
+    flex-shrink: 0;
+}
+.gif-settings-row select {
+    flex: 1;
+    background: var(--card);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 4px 8px;
+    font-size: 0.72rem;
+    font-family: inherit;
+}
+.gif-range-sliders {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 1;
+}
+.gif-range-sliders .ga-range {
+    flex: 1;
+    height: 4px;
+}
+.gif-range-lbl {
+    font-size: 0.65rem;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--slate);
+    min-width: 24px;
+    text-align: center;
+}
+.gif-range-sep {
+    font-size: 0.65rem;
+    color: var(--slate);
+}
+.gif-toggle-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.gif-toggle {
+    position: relative;
+    display: inline-block;
+    width: 32px;
+    height: 18px;
+}
+.gif-toggle input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+.gif-toggle-slider {
+    position: absolute;
+    inset: 0;
+    background: rgba(255,255,255,0.1);
+    border-radius: 9px;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+.gif-toggle-slider::before {
+    content: '';
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    left: 2px;
+    bottom: 2px;
+    background: #8899aa;
+    border-radius: 50%;
+    transition: transform 0.2s, background 0.2s;
+}
+.gif-toggle input:checked + .gif-toggle-slider {
+    background: rgba(0, 180, 255, 0.3);
+}
+.gif-toggle input:checked + .gif-toggle-slider::before {
+    transform: translateX(14px);
+    background: var(--cyan);
+}
+.gif-toggle-label {
+    font-size: 0.68rem;
+    color: var(--slate);
+}
+.gif-frame-estimate {
+    font-size: 0.68rem;
+    color: var(--slate);
+    text-align: center;
+    margin: 8px 0 4px;
+    font-family: 'JetBrains Mono', monospace;
+}
+.gif-settings-actions {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    margin-top: 12px;
+}
+.gif-export-go {
+    background: rgba(251, 191, 36, 0.15) !important;
+    color: #fbbf24 !important;
+    border-color: rgba(251, 191, 36, 0.4) !important;
+    font-weight: 700 !important;
+}
+.gif-export-go:hover {
+    background: rgba(251, 191, 36, 0.25) !important;
+}
+
 /* IR brightness temperature colorbar */
 .ir-colorbar-row {
     margin-top: 5px;

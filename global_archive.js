@@ -5119,279 +5119,516 @@ function removeGlobalMWOverlay() {
 
 
 // ═══════════════════════════════════════════════════════════════
-// ── ANIMATED GIF EXPORT ───────────────────────────────────────
+// ── ANIMATED GIF EXPORT (with settings panel) ─────────────────
 // ═══════════════════════════════════════════════════════════════
 
-var _gifExporter = null;     // Active GIF instance (for cancellation)
+var _gifExporter = null;
 var _gifCancelled = false;
 
 /**
- * Export the current IR loop as an animated GIF.
- * Renders each cached frame through the current colormap,
- * composites with a dark background, storm label, timestamp, and colorbar.
+ * Open the GIF settings panel (called by the GIF button).
  */
-window.exportIRGif = function () {
+window.openGifSettings = function () {
     if (!irMeta || !selectedStorm) {
         showToast('Load IR imagery first');
         return;
     }
-    if (typeof GIF === 'undefined') {
-        showToast('GIF library not loaded — try refreshing');
-        return;
-    }
 
-    // Check how many frames are cached
-    var cachedCount = 0;
     var totalFrames = irMeta.n_frames;
+    var cachedCount = 0;
     for (var i = 0; i < totalFrames; i++) {
         if (irFrames[i]) cachedCount++;
     }
-
     if (cachedCount < 3) {
         showToast('Play the IR loop first to cache frames (' + cachedCount + '/' + totalFrames + ' loaded)');
         return;
     }
 
+    // Set up range sliders
+    var startSlider = document.getElementById('gif-range-start');
+    var endSlider = document.getElementById('gif-range-end');
+    if (startSlider) { startSlider.max = totalFrames - 1; startSlider.value = 0; }
+    if (endSlider) { endSlider.max = totalFrames - 1; endSlider.value = totalFrames - 1; }
+
+    updateGifRangeUI();
+    _updateGifEstimate();
+
+    var overlay = document.getElementById('gif-settings-overlay');
+    if (overlay) overlay.style.display = 'flex';
+};
+
+window.closeGifSettings = function () {
+    var overlay = document.getElementById('gif-settings-overlay');
+    if (overlay) overlay.style.display = 'none';
+};
+
+/**
+ * Show/hide the custom range sliders based on mode selection.
+ */
+window.updateGifRangeUI = function () {
+    var mode = document.getElementById('gif-range-mode').value;
+    var customRow = document.getElementById('gif-custom-range');
+    if (customRow) customRow.style.display = (mode === 'custom') ? 'flex' : 'none';
+    updateGifRangeLabels();
+    _updateGifEstimate();
+};
+
+window.updateGifRangeLabels = function () {
+    var startSlider = document.getElementById('gif-range-start');
+    var endSlider = document.getElementById('gif-range-end');
+    var startLbl = document.getElementById('gif-range-start-lbl');
+    var endLbl = document.getElementById('gif-range-end-lbl');
+    if (startSlider && endSlider) {
+        // Ensure start <= end
+        if (parseInt(startSlider.value) > parseInt(endSlider.value)) {
+            startSlider.value = endSlider.value;
+        }
+    }
+    if (startLbl && startSlider) startLbl.textContent = parseInt(startSlider.value) + 1;
+    if (endLbl && endSlider) endLbl.textContent = parseInt(endSlider.value) + 1;
+    _updateGifEstimate();
+};
+
+/**
+ * Compute the frame range based on current settings.
+ * Returns { startIdx, endIdx } (inclusive).
+ */
+function _getGifFrameRange() {
+    var mode = document.getElementById('gif-range-mode').value;
+    var totalFrames = irMeta ? irMeta.n_frames : 0;
+
+    if (mode === 'custom') {
+        var s = parseInt(document.getElementById('gif-range-start').value) || 0;
+        var e = parseInt(document.getElementById('gif-range-end').value) || (totalFrames - 1);
+        return { startIdx: Math.max(0, s), endIdx: Math.min(totalFrames - 1, e) };
+    }
+
+    if (mode === 'full') {
+        return { startIdx: 0, endIdx: totalFrames - 1 };
+    }
+
+    // Peak ± Nh modes
+    var hours = 24;
+    if (mode === 'peak12') hours = 12;
+    else if (mode === 'peak24') hours = 24;
+    else if (mode === 'peak48') hours = 48;
+
+    // Find peak frame
+    var track = selectedStorm ? (allTracks[selectedStorm.sid] || []) : [];
+    var peakTime = null;
+    var peakWind = -1;
+    for (var t = 0; t < track.length; t++) {
+        if (track[t].w != null && track[t].w > peakWind) {
+            peakWind = track[t].w;
+            peakTime = track[t].t;
+        }
+    }
+
+    if (!peakTime || !irMeta.frames) {
+        return { startIdx: 0, endIdx: totalFrames - 1 };
+    }
+
+    var peakMs = new Date(peakTime).getTime();
+    var windowMs = hours * 3600000;
+    var startIdx = 0, endIdx = totalFrames - 1;
+
+    for (var i = 0; i < totalFrames; i++) {
+        if (!irMeta.frames[i] || !irMeta.frames[i].datetime) continue;
+        var fMs = new Date(irMeta.frames[i].datetime).getTime();
+        if (fMs >= peakMs - windowMs) { startIdx = i; break; }
+    }
+    for (var j = totalFrames - 1; j >= 0; j--) {
+        if (!irMeta.frames[j] || !irMeta.frames[j].datetime) continue;
+        var fMs2 = new Date(irMeta.frames[j].datetime).getTime();
+        if (fMs2 <= peakMs + windowMs) { endIdx = j; break; }
+    }
+
+    return { startIdx: startIdx, endIdx: endIdx };
+}
+
+function _updateGifEstimate() {
+    var el = document.getElementById('gif-frame-estimate');
+    if (!el || !irMeta) return;
+
+    var range = _getGifFrameRange();
+    var skip = parseInt(document.getElementById('gif-frame-skip').value) || 1;
+
+    // Count cached frames in range after skipping
+    var count = 0;
+    for (var i = range.startIdx; i <= range.endIdx; i += skip) {
+        if (irFrames[i]) count++;
+    }
+
+    var speed = parseInt(document.getElementById('gif-speed-setting').value) || 200;
+    var duration = (count * speed / 1000).toFixed(1);
+
+    el.textContent = count + ' frames · ~' + duration + 's duration';
+}
+
+// Wire up estimate updates on skip/speed change
+document.addEventListener('change', function (e) {
+    if (e.target.id === 'gif-frame-skip' || e.target.id === 'gif-speed-setting' ||
+        e.target.id === 'gif-show-intensity' || e.target.id === 'gif-range-mode') {
+        _updateGifEstimate();
+    }
+});
+
+/**
+ * Fetch gif.js worker as a blob URL to avoid CORS issues.
+ */
+function _createGifEncoder(cb) {
+    if (window._gifWorkerBlobUrl) { cb(window._gifWorkerBlobUrl); return; }
+    fetch('https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js')
+        .then(function (r) { return r.text(); })
+        .then(function (src) {
+            var blob = new Blob([src], { type: 'application/javascript' });
+            window._gifWorkerBlobUrl = URL.createObjectURL(blob);
+            cb(window._gifWorkerBlobUrl);
+        })
+        .catch(function (e) {
+            console.warn('Failed to fetch gif worker, using CDN fallback', e);
+            cb('https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js');
+        });
+}
+
+/**
+ * Start the actual GIF export using the current settings.
+ */
+window.startGifExport = function () {
+    if (!irMeta || !selectedStorm || typeof GIF === 'undefined') return;
+
+    // Read settings
+    var range = _getGifFrameRange();
+    var skip = parseInt(document.getElementById('gif-frame-skip').value) || 1;
+    var delay = parseInt(document.getElementById('gif-speed-setting').value) || 200;
+    var showIntensity = document.getElementById('gif-show-intensity').checked;
+
+    // Close settings, show progress
+    closeGifSettings();
     _gifCancelled = false;
 
-    // Show progress overlay
     var overlay = document.getElementById('gif-export-overlay');
     var progressText = document.getElementById('gif-progress-text');
     var progressBar = document.getElementById('gif-progress-bar');
     if (overlay) overlay.style.display = 'flex';
-    if (progressText) progressText.textContent = 'Preparing frames (0/' + cachedCount + ')...';
+    if (progressText) progressText.textContent = 'Preparing...';
     if (progressBar) progressBar.style.width = '0%';
 
-    // Disable the GIF button during export
     var gifBtn = document.getElementById('ir-gif-btn');
     if (gifBtn) { gifBtn.disabled = true; gifBtn.style.opacity = '0.4'; }
 
-    // Determine output dimensions — use the IR grid size scaled up
-    // Most IR frames are ~200x200 grid cells; we'll render at 2x for a nice 400-500px GIF
-    var sampleFrame = null;
-    for (var si = 0; si < totalFrames; si++) {
-        if (irFrames[si]) { sampleFrame = irFrames[si]; break; }
+    // Build list of frame indices to export
+    var frameIndices = [];
+    for (var i = range.startIdx; i <= range.endIdx; i += skip) {
+        if (irFrames[i]) frameIndices.push(i);
     }
-    if (!sampleFrame) { _gifCleanup(); return; }
+    if (frameIndices.length === 0) { _gifCleanup(); showToast('No cached frames in range'); return; }
 
+    // Determine output dimensions
+    var sampleFrame = irFrames[frameIndices[0]];
     var irCols = sampleFrame.tb_cols || 200;
     var irRows = sampleFrame.tb_rows || 200;
-
-    // Scale so the longer side is ~480px
     var scale = Math.max(1, Math.floor(480 / Math.max(irCols, irRows)));
+    var irImageH = irRows * scale;
     var outW = irCols * scale;
-    var outH = irRows * scale + 48; // Extra 48px for header/footer annotations
 
-    // Create the GIF encoder
-    // Use blob URL for worker to avoid CORS issues with CDN-hosted worker scripts
-    function _createGifEncoder(cb) {
-        if (window._gifWorkerBlobUrl) {
-            cb(window._gifWorkerBlobUrl);
-            return;
+    // Layout: 24px header + IR image + optional intensity chart (60px) + 24px footer
+    var intensityH = showIntensity ? 60 : 0;
+    var outH = 24 + irImageH + intensityH + 24;
+
+    // Pre-build intensity data for chart if needed
+    var track = (selectedStorm ? (allTracks[selectedStorm.sid] || []) : []);
+    var intensityPts = []; // { frac: 0-1 position in our frame list, w: wind, p: pressure }
+    if (showIntensity && track.length > 0) {
+        // Get time range for normalization
+        var firstDt = irMeta.frames[frameIndices[0]] ? irMeta.frames[frameIndices[0]].datetime : null;
+        var lastDt = irMeta.frames[frameIndices[frameIndices.length - 1]] ? irMeta.frames[frameIndices[frameIndices.length - 1]].datetime : null;
+        var firstMs = firstDt ? new Date(firstDt).getTime() : 0;
+        var lastMs = lastDt ? new Date(lastDt).getTime() : 1;
+        var spanMs = Math.max(1, lastMs - firstMs);
+
+        // Sample track points that fall within our window
+        for (var ti = 0; ti < track.length; ti++) {
+            var tp = track[ti];
+            if (!tp.t) continue;
+            var tMs = new Date(tp.t).getTime();
+            if (tMs < firstMs || tMs > lastMs) continue;
+            var frac = (tMs - firstMs) / spanMs;
+            intensityPts.push({ frac: frac, w: tp.w, p: tp.p });
         }
-        fetch('https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js')
-            .then(function (r) { return r.text(); })
-            .then(function (src) {
-                var blob = new Blob([src], { type: 'application/javascript' });
-                window._gifWorkerBlobUrl = URL.createObjectURL(blob);
-                cb(window._gifWorkerBlobUrl);
-            })
-            .catch(function (e) {
-                console.warn('Failed to fetch gif worker, falling back to CDN URL', e);
-                cb('https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js');
-            });
     }
+
+    // Find max wind for scaling the chart
+    var maxWind = 0;
+    for (var k = 0; k < intensityPts.length; k++) {
+        if (intensityPts[k].w != null && intensityPts[k].w > maxWind) maxWind = intensityPts[k].w;
+    }
+    if (maxWind < 40) maxWind = 80;
 
     _createGifEncoder(function (workerUrl) {
-    var gif = new GIF({
-        workers: 2,
-        quality: 8,
-        width: outW,
-        height: outH,
-        workerScript: workerUrl,
-        transparent: null,
-        background: '#0a1628'
-    });
-    _gifExporter = gif;
+        var gif = new GIF({
+            workers: 2, quality: 8, width: outW, height: outH,
+            workerScript: workerUrl, transparent: null, background: '#0a1628'
+        });
+        _gifExporter = gif;
 
-    // Compositing canvas
-    var compCanvas = document.createElement('canvas');
-    compCanvas.width = outW;
-    compCanvas.height = outH;
-    var compCtx = compCanvas.getContext('2d');
+        var compCanvas = document.createElement('canvas');
+        compCanvas.width = outW; compCanvas.height = outH;
+        var compCtx = compCanvas.getContext('2d');
+        var irCanvas = document.createElement('canvas');
 
-    // IR rendering canvas (raw Tb → colormap)
-    var irCanvas = document.createElement('canvas');
+        // Pre-render colorbar
+        var lut = IR_COLORMAPS[irSelectedColormap] || IR_COLORMAPS['enhanced'];
+        var cbarCanvas = document.createElement('canvas');
+        cbarCanvas.width = 255; cbarCanvas.height = 1;
+        var cbarCtx = cbarCanvas.getContext('2d');
+        var cbarImg = cbarCtx.createImageData(255, 1);
+        for (var cx = 0; cx < 255; cx++) {
+            var cval = 255 - cx; var cli = cval * 4; var cpi = cx * 4;
+            cbarImg.data[cpi] = lut[cli]; cbarImg.data[cpi+1] = lut[cli+1];
+            cbarImg.data[cpi+2] = lut[cli+2]; cbarImg.data[cpi+3] = 255;
+        }
+        cbarCtx.putImageData(cbarImg, 0, 0);
 
-    // Pre-render the colorbar (1px tall, stretched later)
-    var cbarCanvas = document.createElement('canvas');
-    cbarCanvas.width = 255;
-    cbarCanvas.height = 1;
-    var cbarCtx = cbarCanvas.getContext('2d');
-    var lut = IR_COLORMAPS[irSelectedColormap] || IR_COLORMAPS['enhanced'];
-    var cbarImg = cbarCtx.createImageData(255, 1);
-    for (var cx = 0; cx < 255; cx++) {
-        var cval = 255 - cx;
-        var cli = cval * 4;
-        var cpi = cx * 4;
-        cbarImg.data[cpi] = lut[cli]; cbarImg.data[cpi+1] = lut[cli+1];
-        cbarImg.data[cpi+2] = lut[cli+2]; cbarImg.data[cpi+3] = 255;
-    }
-    cbarCtx.putImageData(cbarImg, 0, 0);
+        var stormLabel = (selectedStorm.name || 'UNNAMED') + ' ' + selectedStorm.year;
+        var cat = getIntensityCategory(selectedStorm.peak_wind_kt);
 
-    // Storm label
-    var stormLabel = (selectedStorm.name || 'UNNAMED') + ' ' + selectedStorm.year;
-    var cat = getIntensityCategory(selectedStorm.peak_wind_kt);
+        // Saffir-Simpson category thresholds for intensity chart background bands
+        var catThresholds = [34, 64, 83, 96, 113, 137]; // TD, TS, Cat1-5
+        var catColors = [
+            'rgba(0,160,255,0.12)',   // TD
+            'rgba(0,200,100,0.12)',   // TS
+            'rgba(255,255,0,0.10)',   // Cat1
+            'rgba(255,180,0,0.10)',   // Cat2
+            'rgba(255,100,0,0.10)',   // Cat3
+            'rgba(255,40,40,0.10)',   // Cat4
+            'rgba(255,0,80,0.12)'     // Cat5
+        ];
 
-    // Build frames asynchronously to avoid blocking UI
-    var frameIndices = [];
-    for (var fi = 0; fi < totalFrames; fi++) {
-        if (irFrames[fi]) frameIndices.push(fi);
-    }
+        /**
+         * Draw the intensity trace chart at position (chartX, chartY) with size (chartW, chartH).
+         * currentFrac = 0..1 position of the current frame in the time series.
+         */
+        function _drawIntensityChart(ctx, chartX, chartY, chartW, chartH, currentFrac) {
+            // Background
+            ctx.fillStyle = 'rgba(10,22,40,0.9)';
+            ctx.fillRect(chartX, chartY, chartW, chartH);
+            ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+            ctx.lineWidth = 0.5;
+            ctx.strokeRect(chartX, chartY, chartW, chartH);
 
-    var framesDone = 0;
-    var batchSize = 4; // Process N frames per animation tick
-
-    function processBatch(startIdx) {
-        if (_gifCancelled) { _gifCleanup(); return; }
-
-        var endIdx = Math.min(startIdx + batchSize, frameIndices.length);
-        for (var bi = startIdx; bi < endIdx; bi++) {
-            var fIdx = frameIndices[bi];
-            var frameData = irFrames[fIdx];
-            if (!frameData || !frameData.tb_data) continue;
-
-            // Decode and render IR
-            var tbArr = decodeTbData(frameData.tb_data);
-            var rows = frameData.tb_rows;
-            var cols = frameData.tb_cols;
-            irCanvas.width = cols;
-            irCanvas.height = rows;
-            var irCtx = irCanvas.getContext('2d');
-            var imgData = irCtx.createImageData(cols, rows);
-            var px = imgData.data;
-            for (var pi = 0; pi < tbArr.length; pi++) {
-                var v = tbArr[pi];
-                var li2 = v * 4;
-                var pp = pi * 4;
-                px[pp] = lut[li2]; px[pp+1] = lut[li2+1]; px[pp+2] = lut[li2+2]; px[pp+3] = lut[li2+3];
+            // Category background bands
+            for (var b = 0; b < catThresholds.length; b++) {
+                var yBot = chartY + chartH - (catThresholds[b] / maxWind) * (chartH - 4);
+                var yTop = (b + 1 < catThresholds.length)
+                    ? chartY + chartH - (catThresholds[b + 1] / maxWind) * (chartH - 4)
+                    : chartY;
+                yBot = Math.max(chartY, Math.min(chartY + chartH, yBot));
+                yTop = Math.max(chartY, Math.min(chartY + chartH, yTop));
+                if (yTop < yBot) {
+                    ctx.fillStyle = catColors[b + 1] || catColors[catColors.length - 1];
+                    ctx.fillRect(chartX, yTop, chartW, yBot - yTop);
+                }
             }
-            irCtx.putImageData(imgData, 0, 0);
 
-            // Composite onto output canvas
-            // Dark background
-            compCtx.fillStyle = '#0a1628';
-            compCtx.fillRect(0, 0, outW, outH);
-
-            // Header: storm name + timestamp (24px tall)
-            compCtx.fillStyle = '#c8d6e5';
-            compCtx.font = 'bold 13px sans-serif';
-            compCtx.textBaseline = 'middle';
-            compCtx.fillText(stormLabel + ' · ' + cat, 8, 12);
-
-            // Timestamp (right-aligned)
-            var dtStr = '';
-            if (irMeta.frames && irMeta.frames[fIdx]) {
-                dtStr = irMeta.frames[fIdx].datetime || '';
+            // Wind trace line
+            if (intensityPts.length > 1) {
+                ctx.beginPath();
+                ctx.strokeStyle = '#ff6b6b';
+                ctx.lineWidth = 1.5;
+                var first = true;
+                for (var ip = 0; ip < intensityPts.length; ip++) {
+                    var pt = intensityPts[ip];
+                    if (pt.w == null) continue;
+                    var px = chartX + pt.frac * chartW;
+                    var py = chartY + chartH - 2 - (pt.w / maxWind) * (chartH - 4);
+                    py = Math.max(chartY + 1, Math.min(chartY + chartH - 1, py));
+                    if (first) { ctx.moveTo(px, py); first = false; }
+                    else ctx.lineTo(px, py);
+                }
+                ctx.stroke();
             }
-            compCtx.font = '11px monospace';
-            compCtx.fillStyle = '#8899aa';
-            var dtW = compCtx.measureText(dtStr).width;
-            compCtx.fillText(dtStr, outW - dtW - 8, 12);
 
-            // IR image (scaled up, below header)
-            compCtx.imageSmoothingEnabled = false;
-            compCtx.drawImage(irCanvas, 0, 24, outW, irRows * scale);
+            // Current position marker (vertical line + dot)
+            var markerX = chartX + currentFrac * chartW;
+            ctx.strokeStyle = 'rgba(0,180,255,0.7)';
+            ctx.lineWidth = 1;
+            ctx.setLineDash([2, 2]);
+            ctx.beginPath();
+            ctx.moveTo(markerX, chartY);
+            ctx.lineTo(markerX, chartY + chartH);
+            ctx.stroke();
+            ctx.setLineDash([]);
 
-            // Footer: colorbar (24px tall, at bottom)
-            var cbarY = outH - 22;
-            var cbarX = 30;
-            var cbarW = outW - 60;
-            compCtx.drawImage(cbarCanvas, cbarX, cbarY, cbarW, 8);
+            // Find wind at this position for the dot
+            var closestW = null;
+            var closestDist = Infinity;
+            for (var cp = 0; cp < intensityPts.length; cp++) {
+                var d = Math.abs(intensityPts[cp].frac - currentFrac);
+                if (d < closestDist && intensityPts[cp].w != null) {
+                    closestDist = d;
+                    closestW = intensityPts[cp].w;
+                }
+            }
+            if (closestW != null) {
+                var dotY = chartY + chartH - 2 - (closestW / maxWind) * (chartH - 4);
+                dotY = Math.max(chartY + 2, Math.min(chartY + chartH - 2, dotY));
+                ctx.beginPath();
+                ctx.arc(markerX, dotY, 3, 0, Math.PI * 2);
+                ctx.fillStyle = '#00d4ff';
+                ctx.fill();
 
-            // Colorbar labels
-            compCtx.font = '9px sans-serif';
-            compCtx.fillStyle = '#6b7d8e';
-            compCtx.textBaseline = 'top';
-            compCtx.fillText('310 K', cbarX, cbarY + 10);
-            var midLabel = '240';
-            var midW = compCtx.measureText(midLabel).width;
-            compCtx.fillText(midLabel, cbarX + cbarW / 2 - midW / 2, cbarY + 10);
-            compCtx.fillText('170 K', cbarX + cbarW - compCtx.measureText('170 K').width, cbarY + 10);
+                // Label: wind value
+                ctx.font = '9px monospace';
+                ctx.fillStyle = '#c8d6e5';
+                ctx.textBaseline = 'bottom';
+                var wLabel = closestW + ' kt';
+                var wLabelX = markerX + 5;
+                if (wLabelX + 30 > chartX + chartW) wLabelX = markerX - 35;
+                ctx.fillText(wLabel, wLabelX, dotY - 2);
+            }
 
-            // TC-ATLAS watermark (subtle)
-            compCtx.font = '9px sans-serif';
-            compCtx.fillStyle = 'rgba(100,120,140,0.4)';
-            compCtx.fillText('TC-ATLAS', outW - 52, outH - 4);
-
-            // Frame delay: use the playback speed or default 200ms
-            var delay = irSpeed || 750;
-            // Scale for GIF (faster playback looks better in GIFs)
-            delay = Math.max(80, Math.min(400, Math.round(delay * 0.4)));
-
-            gif.addFrame(compCtx, { copy: true, delay: delay });
-            framesDone++;
+            // Y-axis label
+            ctx.font = '7px sans-serif';
+            ctx.fillStyle = 'rgba(150,170,190,0.5)';
+            ctx.textBaseline = 'top';
+            ctx.fillText('Wind (kt)', chartX + 2, chartY + 1);
         }
 
-        // Update progress
-        var pct = Math.round(framesDone / frameIndices.length * 60); // Reserve 40% for encoding
-        if (progressText) progressText.textContent = 'Rendering frames (' + framesDone + '/' + frameIndices.length + ')...';
-        if (progressBar) progressBar.style.width = pct + '%';
+        // Time positions for each frame (for intensity chart marker)
+        var firstDtMs = 0, spanMs2 = 1;
+        if (irMeta.frames && irMeta.frames[frameIndices[0]] && irMeta.frames[frameIndices[frameIndices.length - 1]]) {
+            firstDtMs = new Date(irMeta.frames[frameIndices[0]].datetime).getTime();
+            var lastDtMs2 = new Date(irMeta.frames[frameIndices[frameIndices.length - 1]].datetime).getTime();
+            spanMs2 = Math.max(1, lastDtMs2 - firstDtMs);
+        }
 
-        if (endIdx < frameIndices.length) {
-            // Process next batch on next animation frame
-            requestAnimationFrame(function () { processBatch(endIdx); });
-        } else {
-            // All frames added — start encoding
-            if (progressText) progressText.textContent = 'Encoding GIF...';
+        var framesDone = 0;
+        var batchSize = 4;
 
-            gif.on('progress', function (p) {
-                var totalPct = 60 + Math.round(p * 40);
-                if (progressBar) progressBar.style.width = totalPct + '%';
-            });
+        function processBatch(startIdx) {
+            if (_gifCancelled) { _gifCleanup(); return; }
 
-            gif.on('finished', function (blob) {
-                if (_gifCancelled) { _gifCleanup(); return; }
+            var endIdx = Math.min(startIdx + batchSize, frameIndices.length);
+            for (var bi = startIdx; bi < endIdx; bi++) {
+                var fIdx = frameIndices[bi];
+                var frameData = irFrames[fIdx];
+                if (!frameData || !frameData.tb_data) continue;
 
-                // Generate filename
-                var name = (selectedStorm.name || 'UNNAMED').replace(/\s+/g, '_');
-                var filename = 'TC-ATLAS_' + name + '_' + selectedStorm.year + '_' + irSelectedColormap + '.gif';
+                var tbArr = decodeTbData(frameData.tb_data);
+                var rows = frameData.tb_rows, cols = frameData.tb_cols;
+                irCanvas.width = cols; irCanvas.height = rows;
+                var irCtx = irCanvas.getContext('2d');
+                var imgData = irCtx.createImageData(cols, rows);
+                var px = imgData.data;
+                for (var pi = 0; pi < tbArr.length; pi++) {
+                    var v = tbArr[pi]; var li2 = v * 4; var pp = pi * 4;
+                    px[pp] = lut[li2]; px[pp+1] = lut[li2+1]; px[pp+2] = lut[li2+2]; px[pp+3] = lut[li2+3];
+                }
+                irCtx.putImageData(imgData, 0, 0);
 
-                // Trigger download
-                var a = document.createElement('a');
-                a.href = URL.createObjectURL(blob);
-                a.download = filename;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
+                // --- Composite ---
+                compCtx.fillStyle = '#0a1628';
+                compCtx.fillRect(0, 0, outW, outH);
 
-                var sizeMB = (blob.size / 1024 / 1024).toFixed(1);
-                showToast('GIF exported! (' + framesDone + ' frames, ' + sizeMB + ' MB)');
-                _ga('ga_export_gif', {
-                    sid: selectedStorm.sid,
-                    storm_name: selectedStorm.name,
-                    frames: framesDone,
-                    cmap: irSelectedColormap,
-                    size_bytes: blob.size
+                // Header (24px)
+                compCtx.fillStyle = '#c8d6e5';
+                compCtx.font = 'bold 13px sans-serif';
+                compCtx.textBaseline = 'middle';
+                compCtx.fillText(stormLabel + ' \u00B7 ' + cat, 8, 12);
+
+                var dtStr = '';
+                if (irMeta.frames && irMeta.frames[fIdx]) dtStr = irMeta.frames[fIdx].datetime || '';
+                compCtx.font = '11px monospace';
+                compCtx.fillStyle = '#8899aa';
+                var dtW = compCtx.measureText(dtStr).width;
+                compCtx.fillText(dtStr, outW - dtW - 8, 12);
+
+                // IR image
+                compCtx.imageSmoothingEnabled = false;
+                compCtx.drawImage(irCanvas, 0, 24, outW, irImageH);
+
+                // Intensity chart (if enabled)
+                if (showIntensity && intensityPts.length > 1) {
+                    var chartY = 24 + irImageH;
+                    var chartX = 4;
+                    var chartW = outW - 8;
+                    var fMs = irMeta.frames[fIdx] ? new Date(irMeta.frames[fIdx].datetime).getTime() : 0;
+                    var currentFrac = (fMs - firstDtMs) / spanMs2;
+                    currentFrac = Math.max(0, Math.min(1, currentFrac));
+                    _drawIntensityChart(compCtx, chartX, chartY, chartW, intensityH, currentFrac);
+                }
+
+                // Footer: colorbar
+                var footerY = 24 + irImageH + intensityH;
+                var cbarY = footerY + 2;
+                var cbarX = 30;
+                var cbarW = outW - 60;
+                compCtx.drawImage(cbarCanvas, cbarX, cbarY, cbarW, 8);
+
+                compCtx.font = '9px sans-serif';
+                compCtx.fillStyle = '#6b7d8e';
+                compCtx.textBaseline = 'top';
+                compCtx.fillText('310 K', cbarX, cbarY + 10);
+                var midW = compCtx.measureText('240').width;
+                compCtx.fillText('240', cbarX + cbarW / 2 - midW / 2, cbarY + 10);
+                compCtx.fillText('170 K', cbarX + cbarW - compCtx.measureText('170 K').width, cbarY + 10);
+
+                // Watermark
+                compCtx.font = '9px sans-serif';
+                compCtx.fillStyle = 'rgba(100,120,140,0.4)';
+                compCtx.fillText('TC-ATLAS', outW - 52, outH - 4);
+
+                gif.addFrame(compCtx, { copy: true, delay: delay });
+                framesDone++;
+            }
+
+            var pct = Math.round(framesDone / frameIndices.length * 60);
+            if (progressText) progressText.textContent = 'Rendering (' + framesDone + '/' + frameIndices.length + ')...';
+            if (progressBar) progressBar.style.width = pct + '%';
+
+            if (endIdx < frameIndices.length) {
+                requestAnimationFrame(function () { processBatch(endIdx); });
+            } else {
+                if (progressText) progressText.textContent = 'Encoding GIF...';
+
+                gif.on('progress', function (p) {
+                    if (progressBar) progressBar.style.width = (60 + Math.round(p * 40)) + '%';
                 });
 
-                _gifCleanup();
-            });
+                gif.on('finished', function (blob) {
+                    if (_gifCancelled) { _gifCleanup(); return; }
 
-            gif.render();
+                    var name = (selectedStorm.name || 'UNNAMED').replace(/\s+/g, '_');
+                    var filename = 'TC-ATLAS_' + name + '_' + selectedStorm.year + '_' + irSelectedColormap + '.gif';
+
+                    var a = document.createElement('a');
+                    a.href = URL.createObjectURL(blob);
+                    a.download = filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+
+                    var sizeMB = (blob.size / 1024 / 1024).toFixed(1);
+                    showToast('GIF exported! (' + framesDone + ' frames, ' + sizeMB + ' MB)');
+                    _ga('ga_export_gif', {
+                        sid: selectedStorm.sid, storm_name: selectedStorm.name,
+                        frames: framesDone, cmap: irSelectedColormap, size_bytes: blob.size
+                    });
+                    _gifCleanup();
+                });
+
+                gif.render();
+            }
         }
-    }
 
-    // Start processing
-    requestAnimationFrame(function () { processBatch(0); });
+        requestAnimationFrame(function () { processBatch(0); });
     }); // end _createGifEncoder callback
 };
 
 window.cancelGifExport = function () {
     _gifCancelled = true;
-    if (_gifExporter) {
-        try { _gifExporter.abort(); } catch (e) {}
-    }
+    if (_gifExporter) { try { _gifExporter.abort(); } catch (e) {} }
     _gifCleanup();
     showToast('GIF export cancelled');
 };
