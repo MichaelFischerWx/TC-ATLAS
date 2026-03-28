@@ -5151,12 +5151,12 @@ var _modelMarkerLayers = [];     // Leaflet circle markers for forecast points
 var _modelLegendModels = [];     // Models visible in current cycle
 var _modelLastAtcf = null;       // Last ATCF ID loaded
 var _modelTypeFilters = { official: true, dynamical: true, ai: true, consensus: true, statistical: false };
+var _modelShowInterp = true;     // true = interpolated only (NHC verification), false = show all
 var _modelIntensityTraces = [];  // Plotly trace indices for intensity chart
 
 // Color map for models (sent from API, but also define fallbacks)
 var MODEL_COLORS = {
-    'OFCL': '#ff4757', 'OFCI': '#ff8c69', 'OFCP': '#ff6b81',
-    'JTWC': '#ffa502', 'JTWI': '#ffbe76',
+    'OFCL': '#ff4757', 'JTWC': '#ffa502',
     'AVNO': '#ff6b6b', 'AVNI': '#ff6b6b', 'GFSO': '#ff6b6b',
     'EMX':  '#4ecdc4', 'EMXI': '#4ecdc4', 'EEMN': '#45b7aa',
     'CMC':  '#ffe66d', 'CMCI': '#ffe66d',
@@ -5349,6 +5349,42 @@ window.toggleModelTypeFilter = function (mtype) {
 };
 
 /**
+ * Toggle interpolated-only vs all models.
+ * When "Late Cycle" (interpolated) is active, only models corrected to the
+ * observed storm position are shown — matching NHC's verification standard.
+ * When toggled off, all models including raw/early-cycle output are shown.
+ */
+window.toggleModelInterp = function () {
+    _modelShowInterp = !_modelShowInterp;
+
+    // Update button visual state
+    var btn = document.getElementById('model-interp-btn');
+    if (btn) {
+        if (_modelShowInterp) {
+            btn.textContent = 'Late Cycle';
+            btn.title = 'Showing interpolated models only (NHC verification standard). Click for all models.';
+            btn.style.color = '#fbbf24';
+            btn.style.borderColor = 'rgba(251,191,36,0.4)';
+            btn.style.background = 'rgba(251,191,36,0.15)';
+        } else {
+            btn.textContent = 'All Cycles';
+            btn.title = 'Showing all models (early + late cycle). Click to show late cycle only.';
+            btn.style.color = '';
+            btn.style.borderColor = '';
+            btn.style.background = '';
+        }
+    }
+
+    // Re-render
+    if (_modelVisible && _modelActiveCycle) {
+        _renderModelCycle(_modelActiveCycle);
+        if (_modelShowIntensity) {
+            _renderModelIntensityTraces(_modelActiveCycle);
+        }
+    }
+};
+
+/**
  * Toggle intensity forecast traces on the intensity chart.
  */
 window.toggleModelIntensity = function () {
@@ -5457,6 +5493,8 @@ function _renderModelCycle(initTime) {
 
         // Apply type filters
         if (!_modelTypeFilters[forecast.type]) continue;
+        // Apply interpolation filter (skip non-interpolated when _modelShowInterp is true)
+        if (_modelShowInterp && forecast.interp === false) continue;
 
         var points = forecast.points;
         if (!points || points.length < 2) continue;
@@ -5554,6 +5592,7 @@ function _renderModelIntensityTraces(initTime) {
         var tech = techKeys[ti];
         var forecast = cycle[tech];
         if (!_modelTypeFilters[forecast.type]) continue;
+        if (_modelShowInterp && forecast.interp === false) continue;
 
         var points = forecast.points;
         if (!points || points.length < 2) continue;
@@ -7411,6 +7450,8 @@ function computeScorecard(modelData, track, storm) {
         Object.keys(cycle).forEach(function (tech) {
             var forecast = cycle[tech];
             if (!forecast.points || forecast.points.length === 0) return;
+            // Apply interpolation filter to scorecard too
+            if (_modelShowInterp && forecast.interp === false) return;
 
             if (!result.models[tech]) {
                 result.models[tech] = {
