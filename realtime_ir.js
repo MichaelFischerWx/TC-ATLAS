@@ -925,7 +925,8 @@
                 return fetch(url).then(function (r) {
                     if (r.ok) return ts;
                     return tryOffset(idx + 1);
-                }).catch(function () {
+                }).catch(function (err) {
+                    console.warn('[IR Monitor] GIBS probe failed for', sat.layer, 'offset', offsets[idx], err.message || '');
                     return tryOffset(idx + 1);
                 });
             }
@@ -1526,7 +1527,7 @@
                 if (!meta || !meta.intensity_history || meta.intensity_history.length < 2) return;
                 drawTrackOnMap(map, meta.intensity_history, storm, trackLayers);
             })
-            .catch(function () { /* silent — track is non-critical */ });
+            .catch(function (err) { console.warn('[IR Monitor] Track fetch failed:', err.message || ''); });
     }
 
     /** Draw a past track polyline + intensity dots on a Leaflet map */
@@ -3055,6 +3056,13 @@
 
         // Set up recurring poll
         pollTimer = setInterval(pollActiveStorms, POLL_INTERVAL_MS);
+
+        // Clean up timers on page unload to prevent memory leaks
+        window.addEventListener('beforeunload', function () {
+            if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+            if (globalAnimTimer) { clearInterval(globalAnimTimer); globalAnimTimer = null; }
+            if (animTimer) { clearInterval(animTimer); animTimer = null; }
+        });
 
         _ga('ir_page_load');
         console.log('[IR Monitor] Initialized — polling every', POLL_INTERVAL_MS / 1000, 'seconds');
