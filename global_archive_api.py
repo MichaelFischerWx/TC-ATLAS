@@ -2862,7 +2862,12 @@ def _parse_adeck(raw_text: str) -> dict:
 def _fetch_adeck(atcf_id: str) -> dict | None:
     """Fetch and parse a-deck model forecast data for an ATCF storm ID.
 
-    Tries current aid directory first, then archive (gzipped).
+    Tries multiple sources in order:
+      1. NHC current aid directory (active storms, all basins NHC monitors)
+      2. NHC archive (historical, all basins including JTWC: AL, EP, CP, WP, IO, SH)
+      3. NRL ATCF server (Naval Research Lab, primary JTWC source)
+      4. UCAR TC Guidance Project repository (global aggregator)
+
     Returns parsed forecast dict or None on failure.
     """
     if atcf_id in _adeck_cache:
@@ -2879,25 +2884,32 @@ def _fetch_adeck(atcf_id: str) -> dict | None:
 
     import requests as req
 
-    # a-deck URL patterns:
-    #   Current: https://ftp.nhc.noaa.gov/atcf/aid/aal092017.dat
-    #   Archive: https://ftp.nhc.noaa.gov/atcf/archive/2017/aal092017.dat.gz
+    # Build URL list — order matters (fastest/most reliable first)
+    fname = f"a{basin}{num}{year}"
     urls = [
-        f"https://ftp.nhc.noaa.gov/atcf/aid/a{basin}{num}{year}.dat",
-        f"https://ftp.nhc.noaa.gov/atcf/archive/{year}/a{basin}{num}{year}.dat.gz",
+        # 1. NHC current aid directory (active storms)
+        f"https://ftp.nhc.noaa.gov/atcf/aid/{fname}.dat",
+        # 2. NHC archive (historical, all basins including JTWC WP/IO/SH)
+        f"https://ftp.nhc.noaa.gov/atcf/archive/{year}/{fname}.dat.gz",
+        # 3. NRL ATCF server (Naval Research Lab — primary JTWC data host)
+        f"https://science.nrlmry.navy.mil/atcf/aidarchive/{year}/{fname}.dat.gz",
+        # 4. UCAR RAL TC Guidance Project (global aggregator, all basins)
+        f"https://hurricanes.ral.ucar.edu/repository/data/{year}/{fname}.dat",
     ]
 
     raw_text = None
+    source = None
     for url in urls:
         try:
             logger.info(f"Fetching a-deck: {url}")
-            resp = req.get(url, timeout=30, headers=_HTTP_HEADERS)
-            if resp.status_code == 200:
+            resp = req.get(url, timeout=20, headers=_HTTP_HEADERS)
+            if resp.status_code == 200 and len(resp.content) > 100:
                 if url.endswith(".gz"):
                     import gzip
                     raw_text = gzip.decompress(resp.content).decode("utf-8", errors="replace")
                 else:
                     raw_text = resp.text
+                source = url
                 logger.info(f"A-deck fetched: {len(raw_text)} bytes from {url}")
                 break
         except Exception as e:
@@ -2908,6 +2920,7 @@ def _fetch_adeck(atcf_id: str) -> dict | None:
         return None
 
     parsed = _parse_adeck(raw_text)
+    parsed["source"] = source
 
     # Cache result
     _adeck_cache[atcf_id] = parsed
