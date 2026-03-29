@@ -3800,6 +3800,45 @@
             });
     };
 
+    // ── GeoTIFF Export ──────────────────────────────────────────
+    window.downloadActiveStormGeoTIFF = function () {
+        if (!currentStormId) return;
+
+        // Use the current animation frame index (0 = newest)
+        var frameIdx = animIndex || 0;
+
+        var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(currentStormId) +
+            '/geotiff?frame_index=' + frameIdx;
+
+        // Show feedback
+        var btn = document.querySelector('.ir-kml-btn[onclick*="GeoTIFF"]');
+        var origText = btn ? btn.innerHTML : '';
+        if (btn) btn.innerHTML = '⏳ Fetching…';
+
+        fetch(url)
+            .then(function (r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.blob();
+            })
+            .then(function (blob) {
+                var cd = '';  // Content-Disposition has the filename
+                var a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                // Extract filename from the blob or build one
+                a.download = currentStormId + '_frame' + frameIdx + '_Tb.tif';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(a.href);
+                if (btn) btn.innerHTML = origText;
+            })
+            .catch(function (err) {
+                console.warn('[IR Monitor] GeoTIFF export failed:', err.message || '');
+                alert('GeoTIFF export failed: ' + (err.message || 'unknown error'));
+                if (btn) btn.innerHTML = origText;
+            });
+    };
+
     // Boot on DOM ready
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', init);

@@ -31,7 +31,7 @@ from typing import Optional
 
 import numpy as np
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 # Shared satellite IR module
 from satellite_ir import (
@@ -1190,6 +1190,142 @@ def get_storm_ir_raw(
     return JSONResponse(
         content={"frames": frames, "storm": storm},
         headers={"Cache-Control": "public, max-age=180"},
+    )
+
+
+def _write_geotiff_bytes(tb_array: np.ndarray, bounds: list) -> bytes:
+    """
+    Write a float32 brightness temperature array as a minimal GeoTIFF (WGS84).
+    Uses Pillow for TIFF structure + manual GeoTIFF tags. No GDAL/rasterio needed.
+
+    bounds: [[south, west], [north, east]]
+    Returns raw bytes of the .tif file.
+    """
+    import struct
+    from PIL import Image
+
+    rows, cols = tb_array.shape
+    south, west = bounds[0]
+    north, east = bounds[1]
+
+    # Pixel scale: degrees per pixel
+    scale_x = (east - west) / cols
+    scale_y = (north - south) / rows
+
+    # Convert to Pillow image (mode 'F' = float32)
+    img = Image.fromarray(tb_array.astype(np.float32), mode='F')
+
+    # GeoTIFF tags
+    # 33550: ModelPixelScaleTag — (scaleX, scaleY, 0.0) as doubles
+    model_pixel_scale = struct.pack('<3d', scale_x, scale_y, 0.0)
+
+    # 33922: ModelTiepointTag — (col, row, 0, lon, lat, 0) as doubles
+    # Ties pixel (0,0) to the upper-left corner (north-west)
+    model_tiepoint = struct.pack('<6d', 0.0, 0.0, 0.0, west, north, 0.0)
+
+    # 34735: GeoKeyDirectoryTag — array of unsigned shorts
+    # Header: KeyDirectoryVersion=1, KeyRevision=1, MinorRevision=0, NumberOfKeys=3
+    # Key 1024: GTModelTypeGeoKey = 2 (Geographic)
+    # Key 1025: GTRasterTypeGeoKey = 1 (PixelIsArea)
+    # Key 2048: GeographicTypeGeoKey = 4326 (WGS84)
+    geo_keys = struct.pack('<16H',
+        1, 1, 0, 3,         # header
+        1024, 0, 1, 2,      # GTModelTypeGeoKey = Geographic
+        1025, 0, 1, 1,      # GTRasterTypeGeoKey = PixelIsArea
+        2048, 0, 1, 4326,   # GeographicTypeGeoKey = WGS84 / EPSG:4326
+    )
+
+    # Save with custom TIFF tags
+    buf = io.BytesIO()
+    tiffinfo = {
+        33550: model_pixel_scale,
+        33922: model_tiepoint,
+        34735: geo_keys,
+    }
+
+    # Pillow TiffImagePlugin tag types: 7 = UNDEFINED (raw bytes)
+    from PIL.TiffImagePlugin import ImageFileDirectory_v2
+    ifd = ImageFileDirectory_v2()
+    ifd.tagtype[33550] = 12   # DOUBLE
+    ifd.tagtype[33922] = 12   # DOUBLE
+    ifd.tagtype[34735] = 3    # SHORT
+
+    # For DOUBLE tags, Pillow expects tuples of floats
+    ifd[33550] = (scale_x, scale_y, 0.0)
+    ifd[33922] = (0.0, 0.0, 0.0, west, north, 0.0)
+    # For SHORT array, Pillow expects tuple of ints
+    ifd[34735] = (1, 1, 0, 3, 1024, 0, 1, 2, 1025, 0, 1, 1, 2048, 0, 1, 4326)
+
+    img.save(buf, format='TIFF', tiffinfo=ifd)
+    return buf.getvalue()
+
+
+@router.get("/storm/{atcf_id}/geotiff")
+def get_storm_geotiff(
+    atcf_id: str,
+    frame_index: int = Query(0, ge=0, description="Which frame to export (0 = most recent)"),
+    radius_deg: float = Query(3.0, ge=1.0, le=8.0, description="Cutout radius in degrees"),
+):
+    """
+    Export a single IR frame as a GeoTIFF file with brightness temperature (K).
+    The file is georeferenced to WGS84 (EPSG:4326) and can be opened in
+    QGIS, ArcGIS, Google Earth Pro, or any GIS software.
+    """
+    _ensure_fresh_cache()
+    storm = None
+    with _active_storms_lock:
+        for s in _active_storms_cache["storms"]:
+            if s["atcf_id"].upper() == atcf_id.upper():
+                storm = dict(s)
+                break
+
+    if not storm:
+        raise HTTPException(status_code=404, detail=f"Storm {atcf_id} not found")
+
+    center_lat = storm["lat"]
+    center_lon = storm["lon"]
+    box_deg = radius_deg * 2
+
+    try:
+        center_dt = _dt.fromisoformat(storm["last_fix_utc"].replace("Z", "+00:00"))
+    except Exception:
+        center_dt = _dt.now(timezone.utc)
+
+    # Build frame times (30 min interval, 6h lookback)
+    frame_times = build_frame_times(center_dt, 6.0, 30)
+    frame_times = list(reversed(frame_times))  # newest first
+
+    if frame_index >= len(frame_times):
+        raise HTTPException(status_code=400, detail=f"frame_index {frame_index} out of range (max {len(frame_times)-1})")
+
+    target_dt = frame_times[frame_index]
+
+    raw = fetch_ir_tb_raw(center_lat, center_lon, target_dt, box_deg)
+    if not raw or raw.get("tb") is None:
+        raise HTTPException(status_code=502, detail="Could not fetch IR data for this frame")
+
+    tb = np.asarray(raw["tb"], dtype=np.float32)
+    # Replace invalid values with NaN
+    tb[~np.isfinite(tb) | (tb <= 0)] = np.nan
+
+    bounds = raw.get("bounds", [
+        [center_lat - radius_deg, center_lon - radius_deg],
+        [center_lat + radius_deg, center_lon + radius_deg],
+    ])
+
+    tiff_bytes = _write_geotiff_bytes(tb, bounds)
+
+    name = storm.get("name", "UNNAMED").replace(" ", "_")
+    dt_str = target_dt.strftime("%Y%m%d_%H%MZ")
+    filename = f"{name}_{atcf_id.upper()}_{dt_str}_Tb.tif"
+
+    return Response(
+        content=tiff_bytes,
+        media_type="image/tiff",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "public, max-age=3600",
+        },
     )
 
 
