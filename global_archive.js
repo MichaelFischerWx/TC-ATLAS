@@ -1393,10 +1393,11 @@ function renderStormDetail(storm) {
         scorecardWrap.style.display = storm.atcf_id ? '' : 'none';
     }
 
-    // Pre-fetch TC-PRIMED environmental data in background so it's
+    // Pre-fetch environmental data in background so it's
     // ready when the user clicks the Environment button
-    if (storm.atcf_id && typeof loadTCPrimedEnvData === 'function') {
-        loadTCPrimedEnvData(storm);
+    if (storm.atcf_id) {
+        if (typeof loadTCPrimedEnvData === 'function') loadTCPrimedEnvData(storm);
+        if (typeof loadSHIPSData === 'function') loadSHIPSData(storm);
     }
 }
 
@@ -8243,28 +8244,34 @@ window.switchScorecardTab = function (tab) {
  * Load SHIPS LSDIAG environmental data.
  */
 function loadSHIPSData(storm) {
-    if (!storm.atcf_id) return;
+    if (!storm.atcf_id || _shipsData) return;
 
     var basin = storm.atcf_id.substring(0, 2).toUpperCase();
     if (basin !== 'AL' && basin !== 'EP' && basin !== 'CP') {
-        document.getElementById('ships-status').textContent = 'SHIPS data only available for AL/EP/CP basins';
+        var s = document.getElementById('ships-status');
+        if (s) s.textContent = 'SHIPS data only available for AL/EP/CP basins';
         return;
     }
 
-    document.getElementById('ships-status').textContent = 'Loading...';
+    var s = document.getElementById('ships-status');
+    if (s) s.textContent = 'Loading...';
 
     var url = API_BASE + '/global/ships?atcf_id=' + encodeURIComponent(storm.atcf_id);
     fetch(url).then(function (r) { return r.json(); }).then(function (data) {
         _shipsData = data;
+        var s2 = document.getElementById('ships-status');
         if (data.available && data.cases && data.cases.length > 0) {
-            document.getElementById('ships-status').textContent = data.n_cases + ' cases loaded';
-            renderSHIPSControls();
-            renderSHIPSChart();
+            if (s2) s2.textContent = data.n_cases + ' cases loaded';
+            if (_envPanelVisible) {
+                renderSHIPSControls();
+                renderSHIPSChart();
+            }
         } else {
-            document.getElementById('ships-status').textContent = data.reason || 'No data available';
+            if (s2) s2.textContent = data.reason || 'No data available';
         }
     }).catch(function (err) {
-        document.getElementById('ships-status').textContent = 'Failed to load';
+        var s2 = document.getElementById('ships-status');
+        if (s2) s2.textContent = 'Failed to load';
         console.warn('SHIPS load error:', err);
     });
 }
