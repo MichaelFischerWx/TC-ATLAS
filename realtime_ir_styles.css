@@ -276,6 +276,21 @@
     color: #fff;
 }
 
+.ir-kml-btn {
+    font-size: 0.75rem;
+    padding: 2px 8px;
+    border-radius: 4px;
+    border: 1px solid rgba(255,255,255,0.3);
+    background: rgba(255,255,255,0.1);
+    color: #fff;
+    cursor: pointer;
+    margin-left: 8px;
+    transition: background 0.2s;
+}
+.ir-kml-btn:hover {
+    background: rgba(255,255,255,0.25);
+}
+
 /* ── Detail body: two-panel layout ───────────────────────────── */
 .ir-detail-body {
     display: flex;

@@ -8391,5 +8391,106 @@ document.addEventListener('DOMContentLoaded', function () {
     restoreFromHash();
 });
 
+// ── KML Export ─────────────────────────────────────────────────
+// Saffir-Simpson color mapping (KML uses aabbggrr format)
+var KML_COLORS = {
+    'TD':   'ffff8800',   // blue
+    'TS':   'ff00cc00',   // green
+    'Cat1': 'ff00aaff',   // orange
+    'Cat2': 'ff0066ff',   // dark orange
+    'Cat3': 'ff0000ff',   // red
+    'Cat4': 'ff0000cc',   // dark red
+    'Cat5': 'ff0000aa',   // deeper red
+};
+
+function _ssCatFromWind(w) {
+    if (w == null) return 'TD';
+    if (w < 34) return 'TD';
+    if (w < 64) return 'TS';
+    if (w < 83) return 'Cat1';
+    if (w < 96) return 'Cat2';
+    if (w < 113) return 'Cat3';
+    if (w < 137) return 'Cat4';
+    return 'Cat5';
+}
+
+function _escXml(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function buildStormKML(stormName, stormYear, stormId, trackPoints) {
+    var placemarks = '';
+
+    // Track line
+    var coords = [];
+    for (var i = 0; i < trackPoints.length; i++) {
+        var pt = trackPoints[i];
+        coords.push(pt.lo + ',' + pt.la + ',0');
+    }
+    placemarks += '<Placemark>\n' +
+        '  <name>' + _escXml(stormName) + ' Track</name>\n' +
+        '  <Style><LineStyle><color>ffffffff</color><width>2</width></LineStyle></Style>\n' +
+        '  <LineString><coordinates>' + coords.join(' ') + '</coordinates></LineString>\n' +
+        '</Placemark>\n';
+
+    // Individual fix placemarks with intensity coloring
+    for (var j = 0; j < trackPoints.length; j++) {
+        var p = trackPoints[j];
+        var cat = _ssCatFromWind(p.w);
+        var color = KML_COLORS[cat] || 'ffffffff';
+        var desc = '';
+        if (p.w != null) desc += 'Wind: ' + p.w + ' kt\\n';
+        if (p.p != null) desc += 'Pressure: ' + p.p + ' hPa\\n';
+        desc += 'Category: ' + cat;
+
+        placemarks += '<Placemark>\n' +
+            '  <name>' + _escXml(p.t || '') + '</name>\n' +
+            '  <description>' + _escXml(desc) + '</description>\n' +
+            '  <Style><IconStyle><color>' + color + '</color><scale>0.5</scale>' +
+            '<Icon><href>http://maps.google.com/mapfiles/kml/shapes/shaded_dot.png</href></Icon>' +
+            '</IconStyle></Style>\n' +
+            '  <Point><coordinates>' + p.lo + ',' + p.la + ',0</coordinates></Point>\n' +
+            '</Placemark>\n';
+    }
+
+    return '<?xml version="1.0" encoding="UTF-8"?>\n' +
+        '<kml xmlns="http://www.opengis.net/kml/2.2">\n' +
+        '<Document>\n' +
+        '  <name>' + _escXml(stormName + ' ' + stormYear) + '</name>\n' +
+        '  <description>Track exported from TC-ATLAS (https://michaelfischerwx.github.io/TC-ATLAS/)</description>\n' +
+        placemarks +
+        '</Document>\n' +
+        '</kml>';
+}
+
+function _downloadFile(filename, content, mimeType) {
+    var blob = new Blob([content], { type: mimeType });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
+}
+
+window.downloadStormKML = function () {
+    if (!selectedStorm) {
+        showToast('No storm selected');
+        return;
+    }
+    var sid = selectedStorm.sid;
+    var track = allTracks[sid];
+    if (!track || track.length === 0) {
+        showToast('No track data available');
+        return;
+    }
+    var name = selectedStorm.name || 'UNNAMED';
+    var year = selectedStorm.year || '';
+    var kml = buildStormKML(name, year, sid, track);
+    var filename = name.replace(/\s+/g, '_') + '_' + year + '.kml';
+    _downloadFile(filename, kml, 'application/vnd.google-earth.kml+xml');
+    showToast('KML downloaded: ' + filename);
+};
 
 })();

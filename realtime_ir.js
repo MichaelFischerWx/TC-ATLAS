@@ -3700,6 +3700,106 @@
         console.log('[IR Monitor] Initialized — polling every', POLL_INTERVAL_MS / 1000, 'seconds');
     }
 
+    // ═══════════════════════════════════════════════════════════
+    //  KML EXPORT
+    // ═══════════════════════════════════════════════════════════
+
+    var KML_COLORS = {
+        'TD':   'ffff8800',
+        'TS':   'ff00cc00',
+        'Cat1': 'ff00aaff',
+        'Cat2': 'ff0066ff',
+        'Cat3': 'ff0000ff',
+        'Cat4': 'ff0000cc',
+        'Cat5': 'ff0000aa',
+    };
+
+    function _escXml(s) {
+        return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    window.downloadActiveStormKML = function () {
+        if (!currentStormId) return;
+
+        // Find the storm object
+        var storm = null;
+        for (var i = 0; i < stormData.length; i++) {
+            if (stormData[i].atcf_id === currentStormId) {
+                storm = stormData[i];
+                break;
+            }
+        }
+        if (!storm) return;
+
+        // Fetch metadata to get the full track history
+        var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(currentStormId) + '/metadata';
+        fetch(url)
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (meta) {
+                if (!meta || !meta.intensity_history || meta.intensity_history.length === 0) {
+                    alert('No track data available for export');
+                    return;
+                }
+
+                var history = meta.intensity_history;
+                var name = storm.name || 'UNNAMED';
+                var placemarks = '';
+
+                // Track line
+                var coords = [];
+                for (var i = 0; i < history.length; i++) {
+                    coords.push(history[i].lon + ',' + history[i].lat + ',0');
+                }
+                placemarks += '<Placemark>\n' +
+                    '  <name>' + _escXml(name) + ' Track</name>\n' +
+                    '  <Style><LineStyle><color>ffffffff</color><width>2</width></LineStyle></Style>\n' +
+                    '  <LineString><coordinates>' + coords.join(' ') + '</coordinates></LineString>\n' +
+                    '</Placemark>\n';
+
+                // Fix placemarks
+                for (var j = 0; j < history.length; j++) {
+                    var p = history[j];
+                    var cat = windToCategory(p.vmax_kt);
+                    var color = KML_COLORS[cat] || 'ffffffff';
+                    var desc = '';
+                    if (p.vmax_kt != null) desc += 'Wind: ' + p.vmax_kt + ' kt\\n';
+                    if (p.mslp_hpa != null) desc += 'Pressure: ' + p.mslp_hpa + ' hPa\\n';
+                    desc += 'Category: ' + cat;
+
+                    placemarks += '<Placemark>\n' +
+                        '  <name>' + _escXml(p.time || '') + '</name>\n' +
+                        '  <description>' + _escXml(desc) + '</description>\n' +
+                        '  <Style><IconStyle><color>' + color + '</color><scale>0.5</scale>' +
+                        '<Icon><href>http://maps.google.com/mapfiles/kml/shapes/shaded_dot.png</href></Icon>' +
+                        '</IconStyle></Style>\n' +
+                        '  <Point><coordinates>' + p.lon + ',' + p.lat + ',0</coordinates></Point>\n' +
+                        '</Placemark>\n';
+                }
+
+                var kml = '<?xml version="1.0" encoding="UTF-8"?>\n' +
+                    '<kml xmlns="http://www.opengis.net/kml/2.2">\n' +
+                    '<Document>\n' +
+                    '  <name>' + _escXml(name + ' ' + currentStormId) + '</name>\n' +
+                    '  <description>Track exported from TC-ATLAS (https://michaelfischerwx.github.io/TC-ATLAS/)</description>\n' +
+                    placemarks +
+                    '</Document>\n' +
+                    '</kml>';
+
+                var blob = new Blob([kml], { type: 'application/vnd.google-earth.kml+xml' });
+                var a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = name.replace(/\s+/g, '_') + '_' + currentStormId + '.kml';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(a.href);
+            })
+            .catch(function (err) {
+                console.warn('[IR Monitor] KML export failed:', err.message || '');
+                alert('KML export failed — could not fetch track data');
+            });
+    };
+
     // Boot on DOM ready
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', init);
