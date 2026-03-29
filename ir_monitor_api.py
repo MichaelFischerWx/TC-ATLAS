@@ -80,6 +80,59 @@ _STORM_CACHE_TTL = 300          # 5 minutes (matches Cloud Scheduler ping interv
 _IR_FRAME_CACHE_MAX = 200       # max cached IR frames (covers ~15 storms)
 _IR_FRAME_CACHE_TTL = 300       # 5 minutes per frame
 
+# ── GCS Raw Tb Frame Cache ──────────────────────────────────
+# Reuses the same bucket as global archive (GCS_IR_CACHE_BUCKET env var).
+# Stores raw Tb uint8 frames so subsequent colormap requests skip S3 fetches.
+_GCS_IR_CACHE_BUCKET = os.environ.get("GCS_IR_CACHE_BUCKET", "")
+_gcs_rt_client = None
+_gcs_rt_bucket = None
+_GCS_RT_VERSION = "rt-v1"
+
+def _get_rt_gcs_bucket():
+    global _gcs_rt_client, _gcs_rt_bucket
+    if not _GCS_IR_CACHE_BUCKET:
+        return None
+    if _gcs_rt_bucket is not None:
+        return _gcs_rt_bucket
+    try:
+        from google.cloud import storage
+        _gcs_rt_client = storage.Client()
+        _gcs_rt_bucket = _gcs_rt_client.bucket(_GCS_IR_CACHE_BUCKET)
+        return _gcs_rt_bucket
+    except Exception:
+        return None
+
+def _gcs_rt_get(atcf_id: str, dt_str: str) -> dict | None:
+    """Try to read a cached raw Tb frame from GCS."""
+    bucket = _get_rt_gcs_bucket()
+    if bucket is None:
+        return None
+    key = f"{_GCS_RT_VERSION}/ir-raw/{atcf_id}/{dt_str}.json"
+    try:
+        blob = bucket.blob(key)
+        data = blob.download_as_bytes(timeout=5)
+        return json.loads(data)
+    except Exception:
+        return None
+
+def _gcs_rt_put(atcf_id: str, dt_str: str, frame: dict):
+    """Write a raw Tb frame to GCS (fire-and-forget background thread)."""
+    bucket = _get_rt_gcs_bucket()
+    if bucket is None:
+        return
+    def _upload():
+        key = f"{_GCS_RT_VERSION}/ir-raw/{atcf_id}/{dt_str}.json"
+        try:
+            blob = bucket.blob(key)
+            blob.upload_from_string(
+                json.dumps(frame, separators=(",", ":")),
+                content_type="application/json",
+                timeout=15,
+            )
+        except Exception:
+            pass
+    threading.Thread(target=_upload, daemon=True).start()
+
 # Saffir-Simpson thresholds
 _SS_THRESHOLDS = [
     (137, "C5"), (113, "C4"), (96, "C3"), (83, "C2"),
@@ -1089,6 +1142,14 @@ def get_storm_ir_raw(
     frames = []
     half = box_deg / 2.0
     for target_dt in reversed(frame_times):
+        dt_str = target_dt.strftime("%Y%m%d%H%M")
+
+        # Check GCS cache first
+        cached = _gcs_rt_get(atcf_id.upper(), dt_str)
+        if cached is not None:
+            frames.append(cached)
+            continue
+
         raw = fetch_ir_tb_raw(center_lat, center_lon, target_dt, box_deg)
         if raw and raw.get("tb") is not None:
             tb = raw["tb"]
@@ -1099,7 +1160,7 @@ def get_storm_ir_raw(
             scaled[mask] = 0
             encoded = scaled.astype(np.uint8)
 
-            frames.append({
+            frame_result = {
                 "tb_data": base64.b64encode(encoded.tobytes()).decode("ascii"),
                 "tb_rows": encoded.shape[0],
                 "tb_cols": encoded.shape[1],
@@ -1111,7 +1172,12 @@ def get_storm_ir_raw(
                     [center_lat - half, center_lon - half],
                     [center_lat + half, center_lon + half],
                 ]),
-            })
+            }
+            frames.append(frame_result)
+
+            # Cache to GCS (fire-and-forget)
+            _gcs_rt_put(atcf_id.upper(), dt_str, frame_result)
+
             del tb, arr, mask, scaled, encoded
             gc.collect()
 
