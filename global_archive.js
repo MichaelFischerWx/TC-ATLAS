@@ -7845,7 +7845,7 @@ var TCPRIMED_VAR_META = {
     cyclone_phase_space_b_parameter: { name: 'CPS B Parameter',   unit: 'm',    color: '#c084fc', group: 'phase',    extract: function(d) { return _tcpExtract1D(d, 0); } }
 };
 
-var TCPRIMED_DEFAULT_SHOW = ['sst', 'potential_intensity_theoretical', 'shear_magnitude_deep', 'rh_mid', 'precipitable_water_inner', 'warm_core_max'];
+var TCPRIMED_DEFAULT_SHOW = ['potential_intensity_theoretical', 'shear_magnitude_deep'];
 
 // ── TC-PRIMED extraction helpers ──
 // Extract 1D: data is [time] or [time, 1] → return array of values
