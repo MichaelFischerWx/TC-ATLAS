@@ -8078,11 +8078,6 @@ window.toggleScorecard = function () {
 
         renderScorecardTable();
 
-        // Load TC-PRIMED ERA5 environmental data (global)
-        if (!_tcprimedEnvData && selectedStorm && selectedStorm.atcf_id) {
-            loadTCPrimedEnvData(selectedStorm);
-        }
-
         // Load SHIPS data if we have an ATCF ID in AL/EP/CP
         if (!_shipsData && selectedStorm && selectedStorm.atcf_id) {
             loadSHIPSData(selectedStorm);
@@ -8155,39 +8150,10 @@ function renderScorecardTable() {
     html += _buildScorecardTable(sc, modelList, taus, 'bias');
     html += '</div>';
 
-    // --- TC-PRIMED ERA5 Environmental section (global, primary) ---
-    html += '<div id="tcprimed-env-section" class="ships-section">';
-    html += '<div class="ships-header">';
-    html += '<h4 style="margin:0;color:#e2e8f0;font-size:0.92rem;">Environmental Diagnostics <span style="font-size:0.75rem;color:#8b9ec2;">(TC-PRIMED / ERA5)</span></h4>';
-    html += '<span id="tcprimed-env-status" style="font-size:0.8rem;color:#8b9ec2;"></span>';
-    html += '</div>';
-    html += '<div id="tcprimed-env-toggles" class="ships-var-toggles"></div>';
-    html += '<div id="tcprimed-env-chart" class="chart-container" style="height:320px;"></div>';
-    html += '</div>';
-
-    // --- SHIPS Environmental section (AL/EP/CP fallback) ---
-    html += '<div id="ships-section" class="ships-section">';
-    html += '<div class="ships-header">';
-    html += '<h4 style="margin:0;color:#e2e8f0;font-size:0.92rem;">SHIPS Diagnostics <span style="font-size:0.75rem;color:#8b9ec2;">(LSDIAG)</span></h4>';
-    html += '<span id="ships-status" style="font-size:0.8rem;color:#8b9ec2;"></span>';
-    html += '</div>';
-    html += '<div id="ships-var-toggles" class="ships-var-toggles"></div>';
-    html += '<div id="ships-chart" class="chart-container" style="height:280px;"></div>';
-    html += '</div>';
-
     container.innerHTML = html;
 
-    // Render TC-PRIMED if we have data
-    if (_tcprimedEnvData && _tcprimedEnvData.available) {
-        renderTCPrimedEnvControls();
-        renderTCPrimedEnvChart();
-    }
-
-    // Render SHIPS if we have data
-    if (_shipsData && _shipsData.available) {
-        renderSHIPSControls();
-        renderSHIPSChart();
-    }
+    // Render SHIPS if we have data (still in scorecard for legacy compat)
+    // Main env display is now in the separate Environment panel
 }
 
 function _buildScorecardTable(sc, modelList, taus, metric) {
@@ -8458,6 +8424,84 @@ function renderSHIPSChart() {
 // TC-PRIMED ERA5 ENVIRONMENTAL DIAGNOSTICS
 // ═══════════════════════════════════════════════════════════════
 
+var _envPanelVisible = false;
+
+/**
+ * Toggle the Environment panel (separate from Scorecard).
+ */
+window.toggleEnvironment = function () {
+    _envPanelVisible = !_envPanelVisible;
+    var panel = document.getElementById('environment-panel');
+    var btn = document.getElementById('env-toggle-btn');
+    if (!panel) return;
+
+    if (_envPanelVisible) {
+        panel.style.display = '';
+        if (btn) btn.classList.add('active');
+
+        // Build the environment panel content
+        renderEnvironmentPanel();
+
+        // Load data if needed
+        if (!_tcprimedEnvData && selectedStorm && selectedStorm.atcf_id) {
+            loadTCPrimedEnvData(selectedStorm);
+        }
+        if (!_shipsData && selectedStorm && selectedStorm.atcf_id) {
+            loadSHIPSData(selectedStorm);
+        }
+
+        // Scroll into view
+        setTimeout(function () {
+            panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }, 100);
+    } else {
+        panel.style.display = 'none';
+        if (btn) btn.classList.remove('active');
+    }
+};
+
+/**
+ * Render the Environment panel content with TC-PRIMED and SHIPS sections.
+ */
+function renderEnvironmentPanel() {
+    var container = document.getElementById('environment-content');
+    if (!container) return;
+
+    var html = '';
+
+    // --- TC-PRIMED ERA5 Environmental section (global, primary) ---
+    html += '<div id="tcprimed-env-section" class="ships-section">';
+    html += '<div class="ships-header">';
+    html += '<h4 style="margin:0;color:#e2e8f0;font-size:0.92rem;">ERA5 Reanalysis <span style="font-size:0.75rem;color:#8b9ec2;">(TC-PRIMED, all basins)</span></h4>';
+    html += '<span id="tcprimed-env-status" style="font-size:0.8rem;color:#8b9ec2;"></span>';
+    html += '</div>';
+    html += '<div id="tcprimed-env-toggles" class="ships-var-toggles"></div>';
+    html += '<div id="tcprimed-env-chart" class="chart-container" style="height:320px;"></div>';
+    html += '</div>';
+
+    // --- SHIPS Environmental section (AL/EP/CP) ---
+    html += '<div id="ships-section" class="ships-section">';
+    html += '<div class="ships-header">';
+    html += '<h4 style="margin:0;color:#e2e8f0;font-size:0.92rem;">SHIPS Diagnostics <span style="font-size:0.75rem;color:#8b9ec2;">(LSDIAG, AL/EP/CP only)</span></h4>';
+    html += '<span id="ships-status" style="font-size:0.8rem;color:#8b9ec2;"></span>';
+    html += '</div>';
+    html += '<div id="ships-var-toggles" class="ships-var-toggles"></div>';
+    html += '<div id="ships-chart" class="chart-container" style="height:280px;"></div>';
+    html += '</div>';
+
+    container.innerHTML = html;
+
+    // Render existing data if already loaded
+    if (_tcprimedEnvData && _tcprimedEnvData.available) {
+        renderTCPrimedEnvControls();
+        renderTCPrimedEnvChart();
+    }
+    if (_shipsData && _shipsData.available) {
+        renderSHIPSControls();
+        renderSHIPSChart();
+    }
+}
+
 /**
  * Load TC-PRIMED ERA5-based environmental data.
  */
@@ -8690,14 +8734,19 @@ function removeScorecard() {
     _shipsVisible = false;
     _scorecardLastAtcf = null;
     _tcprimedEnvData = null;
+    _envPanelVisible = false;
     removeSHIPSTraces();
     var panel = document.getElementById('scorecard-panel');
     if (panel) panel.style.display = 'none';
+    var envPanel = document.getElementById('environment-panel');
+    if (envPanel) envPanel.style.display = 'none';
     var btn = document.getElementById('scorecard-toggle-btn');
     if (btn) {
         btn.classList.remove('active');
         btn.textContent = '📊 Scorecard';
     }
+    var envBtn = document.getElementById('env-toggle-btn');
+    if (envBtn) envBtn.classList.remove('active');
 }
 
 // ═══════════════════════════════════════════════════════════════

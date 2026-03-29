@@ -303,6 +303,9 @@
                                 <button id="scorecard-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleScorecard()" style="background:rgba(251,191,36,0.15);border-color:rgba(251,191,36,0.4);color:#fbbf24;">
                                     &#128202; Scorecard
                                 </button>
+                                <button id="env-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleEnvironment()" style="background:rgba(0,212,255,0.15);border-color:rgba(0,212,255,0.4);color:#00d4ff;">
+                                    &#127754; Environment
+                                </button>
                             </div>
                         </div>
                         <div id="timeline-chart" class="chart-container"></div>
@@ -557,6 +560,19 @@
                     <div id="scorecard-content" class="scorecard-content">
                         <div style="padding:30px;text-align:center;color:#8b9ec2;">
                             Loading scorecard...
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Environmental Diagnostics Panel -->
+                <div id="environment-panel" class="detail-panel scorecard-panel" style="display:none;margin-top:16px;">
+                    <div class="panel-header">
+                        <h3>&#127754; Environmental Diagnostics</h3>
+                        <span style="font-size:0.78rem;color:#8b9ec2;">ERA5 reanalysis via TC-PRIMED &amp; SHIPS LSDIAG</span>
+                    </div>
+                    <div id="environment-content">
+                        <div style="padding:30px;text-align:center;color:#8b9ec2;">
+                            Loading environmental data...
                         </div>
                     </div>
                 </div>
