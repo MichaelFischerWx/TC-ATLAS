@@ -1392,6 +1392,12 @@ function renderStormDetail(storm) {
     if (scorecardWrap) {
         scorecardWrap.style.display = storm.atcf_id ? '' : 'none';
     }
+
+    // Pre-fetch TC-PRIMED environmental data in background so it's
+    // ready when the user clicks the Environment button
+    if (storm.atcf_id && typeof loadTCPrimedEnvData === 'function') {
+        loadTCPrimedEnvData(storm);
+    }
 }
 
 function renderIntensityTimeline(track, storm) {
@@ -8506,22 +8512,28 @@ function renderEnvironmentPanel() {
  * Load TC-PRIMED ERA5-based environmental data.
  */
 function loadTCPrimedEnvData(storm) {
-    if (!storm.atcf_id) return;
+    if (!storm.atcf_id || _tcprimedEnvData) return;
+
     var statusEl = document.getElementById('tcprimed-env-status');
     if (statusEl) statusEl.textContent = 'Loading ERA5 diagnostics...';
 
     var url = API_BASE + '/global/tcprimed-env?atcf_id=' + encodeURIComponent(storm.atcf_id);
     fetch(url).then(function(r) { return r.json(); }).then(function(data) {
         _tcprimedEnvData = data;
+        // Update UI if the environment panel is currently visible
+        var statusEl2 = document.getElementById('tcprimed-env-status');
         if (data.available && data.times && data.times.length > 0) {
-            if (statusEl) statusEl.textContent = data.times.length + ' synoptic times (' + data.source + ')';
-            renderTCPrimedEnvControls();
-            renderTCPrimedEnvChart();
+            if (statusEl2) statusEl2.textContent = data.times.length + ' synoptic times (' + data.source + ')';
+            if (_envPanelVisible) {
+                renderTCPrimedEnvControls();
+                renderTCPrimedEnvChart();
+            }
         } else {
-            if (statusEl) statusEl.textContent = data.reason || 'No TC-PRIMED data available';
+            if (statusEl2) statusEl2.textContent = data.reason || 'No TC-PRIMED data available';
         }
     }).catch(function(err) {
-        if (statusEl) statusEl.textContent = 'Failed to load';
+        var statusEl2 = document.getElementById('tcprimed-env-status');
+        if (statusEl2) statusEl2.textContent = 'Failed to load';
         console.warn('TC-PRIMED env load error:', err);
     });
 }
