@@ -3461,6 +3461,423 @@ def get_ships(atcf_id: str = Query(..., description="ATCF storm ID, e.g., AL0920
     )
 
 
+# ── TC-PRIMED Environmental Diagnostics (ERA5-based) ────────
+# Global environmental context from TC-PRIMED env files.
+# Uses ERA5 reanalysis — available for all basins (unlike SHIPS LSDIAG).
+# Source: s3://noaa-nesdis-tcprimed-pds/v01r01/final/{season}/{basin}/{num}/
+#         TCPRIMED_v01r01-final_{ATCF_ID}_env_s{start}_e{end}.nc
+#
+# The env file is ~230 MB per storm (mostly gridded fields).
+# We only read the `diagnostics` + `storm_metadata` groups (~1-2 MB).
+# Results are cached as lightweight JSON in GCS for instant subsequent access.
+
+_TCPRIMED_BUCKET = "noaa-nesdis-tcprimed-pds"
+_TCPRIMED_PREFIX = "v01r01/final"
+
+# ATCF basin -> TC-PRIMED directory mapping
+_TCPRIMED_BASIN_MAP = {
+    "AL": "AL", "EP": "EP", "CP": "CP",
+    "WP": "WP", "IO": "IO", "SH": "SH",
+}
+
+# IBTrACS basin codes -> ATCF basin
+_IBTRACS_TO_ATCF_BASIN = {
+    "NA": "AL", "EP": "EP", "WP": "WP",
+    "NI": "IO", "SI": "SH", "SP": "SH", "SA": "AL",
+}
+
+# Variables to extract from the diagnostics group
+_TCPRIMED_ENV_VARS = {
+    "sst": {
+        "name": "Sea Surface Temperature", "unit": "K", "group": "ocean",
+        "desc": "ERA5 sea surface temperature at storm center",
+    },
+    "potential_intensity_theoretical": {
+        "name": "Theoretical MPI", "unit": "kt", "group": "ocean",
+        "desc": "Theoretical maximum potential intensity (Emanuel)",
+    },
+    "potential_intensity_empirical": {
+        "name": "Empirical MPI", "unit": "kt", "group": "ocean",
+        "desc": "Empirically derived maximum potential intensity",
+    },
+    "shear_magnitude": {
+        "name": "Vertical Wind Shear", "unit": "m/s", "group": "shear",
+        "desc": "Layered vertical wind shear magnitude (deep & shallow, multiple radii)",
+    },
+    "shear_direction": {
+        "name": "Shear Direction", "unit": "deg", "group": "shear",
+        "desc": "Direction of the vertical wind shear vector",
+    },
+    "shear_generalized": {
+        "name": "Generalized Shear", "unit": "m/s", "group": "shear",
+        "desc": "Generalized vertical wind shear magnitude",
+    },
+    "relative_humidity": {
+        "name": "Relative Humidity", "unit": "%", "group": "moisture",
+        "desc": "Relative humidity vertical profile at multiple radii",
+    },
+    "precipitable_water": {
+        "name": "Precipitable Water", "unit": "kg/m²", "group": "moisture",
+        "desc": "Total column precipitable water in radial bins",
+    },
+    "divergence": {
+        "name": "Divergence", "unit": "1/s", "group": "dynamics",
+        "desc": "Divergence vertical profile (area-averaged)",
+    },
+    "vorticity": {
+        "name": "Relative Vorticity", "unit": "1/s", "group": "dynamics",
+        "desc": "Relative vorticity vertical profile (area-averaged)",
+    },
+    "temperature_anomaly": {
+        "name": "Warm-Core Anomaly", "unit": "K", "group": "dynamics",
+        "desc": "Warm-core temperature anomaly relative to environment at 1500 km",
+    },
+    "central_min_pressure": {
+        "name": "Central Pressure", "unit": "hPa", "group": "vortex",
+        "desc": "Minimum central mean sea level pressure",
+    },
+    "cyclone_phase_space_b_parameter": {
+        "name": "CPS B Parameter", "unit": "m", "group": "phase",
+        "desc": "Hart CPS B parameter (900-600 hPa thickness asymmetry)",
+    },
+    "cyclone_phase_space_thermal_wind": {
+        "name": "CPS Thermal Wind", "unit": "m/s", "group": "phase",
+        "desc": "Hart CPS thermal wind (lower & upper level)",
+    },
+    "theta_e": {
+        "name": "Equiv. Potential Temp", "unit": "K", "group": "thermo",
+        "desc": "Equivalent potential temperature vertical profile",
+    },
+}
+
+# In-memory LRU + GCS persistent cache
+_tcprimed_env_cache: OrderedDict = OrderedDict()
+_TCPRIMED_ENV_CACHE_MAX = 20
+_GCS_ENV_CACHE_PREFIX = "rt-v1/tcprimed-env"
+
+
+def _atcf_to_tcprimed_path_parts(atcf_id: str):
+    """Convert ATCF ID (e.g., 'AL092017') to TC-PRIMED S3 path components.
+    Returns (basin_dir, storm_num, season) or None.
+    """
+    atcf_id = atcf_id.upper().strip()
+    if len(atcf_id) < 8:
+        return None
+    basin = atcf_id[:2]
+    num = atcf_id[2:4]
+    season = atcf_id[4:]
+    if basin not in _TCPRIMED_BASIN_MAP:
+        return None
+    return (_TCPRIMED_BASIN_MAP[basin], num, season)
+
+
+def _find_tcprimed_env_file(s3_client, basin_dir: str, num: str, season: str) -> str | None:
+    """Find the env file key in TC-PRIMED S3 for a given storm."""
+    prefix = f"{_TCPRIMED_PREFIX}/{season}/{basin_dir}/{num}/"
+    try:
+        resp = s3_client.list_objects_v2(
+            Bucket=_TCPRIMED_BUCKET, Prefix=prefix, MaxKeys=500
+        )
+        for obj in resp.get("Contents", []):
+            key = obj["Key"]
+            fname = key.split("/")[-1]
+            if "_env_" in fname and fname.endswith(".nc"):
+                return key
+        # Paginate if needed
+        while resp.get("IsTruncated"):
+            resp = s3_client.list_objects_v2(
+                Bucket=_TCPRIMED_BUCKET, Prefix=prefix, MaxKeys=500,
+                ContinuationToken=resp["NextContinuationToken"],
+            )
+            for obj in resp.get("Contents", []):
+                key = obj["Key"]
+                fname = key.split("/")[-1]
+                if "_env_" in fname and fname.endswith(".nc"):
+                    return key
+    except Exception as e:
+        logger.warning(f"TC-PRIMED env file search failed: {e}")
+    return None
+
+
+def _extract_tcprimed_env(data: bytes, atcf_id: str) -> dict:
+    """Extract diagnostics and storm metadata from a TC-PRIMED env NetCDF file.
+    Returns a JSON-serializable dict.
+    """
+    import h5py
+    from datetime import datetime, timezone
+
+    result = {
+        "atcf_id": atcf_id,
+        "source": "TC-PRIMED v01r01 (ERA5)",
+        "available": True,
+        "times": [],
+        "storm_metadata": {},
+        "diagnostics": {},
+        "variable_meta": {},
+        "pressure_levels": [],
+        "radial_regions": [],
+        "shear_layers": ["deep (200-850 hPa)", "shallow (500-850 hPa)"],
+    }
+
+    with h5py.File(io.BytesIO(data), "r") as f:
+        # ── Pressure levels ──
+        if "diagnostics/level" in f:
+            result["pressure_levels"] = f["diagnostics/level"][:].tolist()
+
+        # ── Radial regions ──
+        if "diagnostics/regions" in f:
+            result["radial_regions"] = f["diagnostics/regions"][:].tolist()
+
+        # ── Time axis ──
+        if "diagnostics/time" in f:
+            raw_times = f["diagnostics/time"][:]
+            times_iso = []
+            for t in raw_times:
+                try:
+                    dt = datetime.fromtimestamp(int(t), tz=timezone.utc)
+                    times_iso.append(dt.strftime("%Y-%m-%dT%H:%M:%SZ"))
+                except Exception:
+                    times_iso.append(None)
+            result["times"] = times_iso
+
+        # ── Storm metadata ──
+        sm = f.get("storm_metadata")
+        if sm:
+            for key in ["intensity", "central_min_pressure", "storm_latitude",
+                        "storm_longitude", "storm_speed", "storm_heading",
+                        "distance_to_land", "development_level"]:
+                if key in sm:
+                    ds = sm[key]
+                    vals = ds[:]
+                    # Decode bytes/strings
+                    if vals.dtype.kind in ("O", "S", "U"):
+                        result["storm_metadata"][key] = [
+                            v.decode() if isinstance(v, bytes) else str(v)
+                            for v in vals.flat
+                        ]
+                    else:
+                        # Apply scale factor if present
+                        sf = ds.attrs.get("scale_factor", 1)
+                        scale = float(np.asarray(sf).flat[0])
+                        ao = ds.attrs.get("add_offset", 0)
+                        offset = float(np.asarray(ao).flat[0])
+                        vals = vals.astype(float) * scale + offset
+                        # Handle missing values
+                        fv = ds.attrs.get("_FillValue", None)
+                        if fv is not None:
+                            fill_val = float(np.asarray(fv).flat[0])
+                            vals[np.isclose(vals, fill_val * scale + offset)] = float("nan")
+                        result["storm_metadata"][key] = [
+                            None if np.isnan(v) else round(float(v), 3)
+                            for v in vals.flat
+                        ]
+
+        # ── Diagnostics ──
+        diag = f.get("diagnostics")
+        if diag:
+            for varname, meta in _TCPRIMED_ENV_VARS.items():
+                if varname not in diag:
+                    continue
+                ds = diag[varname]
+                vals = ds[:].astype(float)
+
+                # Apply scale/offset (attrs may be arrays, so flatten)
+                sf = ds.attrs.get("scale_factor", 1)
+                scale = float(np.asarray(sf).flat[0])
+                ao = ds.attrs.get("add_offset", 0)
+                offset = float(np.asarray(ao).flat[0])
+                vals = vals * scale + offset
+
+                # Handle fill values
+                fv = ds.attrs.get("_FillValue", None)
+                if fv is not None:
+                    fill = float(np.asarray(fv).flat[0])
+                    fill_scaled = fill * scale + offset
+                    vals[np.isclose(vals, fill_scaled)] = float("nan")
+
+                # Convert to nested lists, replacing NaN with None
+                def to_json(arr):
+                    if arr.ndim == 0:
+                        v = float(arr)
+                        return None if np.isnan(v) else round(v, 4)
+                    elif arr.ndim == 1:
+                        return [None if np.isnan(v) else round(float(v), 4) for v in arr]
+                    else:
+                        return [to_json(arr[i]) for i in range(arr.shape[0])]
+
+                result["diagnostics"][varname] = to_json(vals)
+
+                # Build variable metadata
+                unit = ds.attrs.get("units", b"")
+                if isinstance(unit, bytes):
+                    unit = unit.decode()
+                long_name = ds.attrs.get("long_name", b"")
+                if isinstance(long_name, bytes):
+                    long_name = long_name.decode()
+
+                result["variable_meta"][varname] = {
+                    "name": meta["name"],
+                    "unit": str(unit) or meta["unit"],
+                    "group": meta["group"],
+                    "desc": str(long_name) or meta["desc"],
+                    "shape": list(ds.shape),
+                    "dims": _infer_dims(ds.shape, varname),
+                }
+
+    return result
+
+
+def _infer_dims(shape, varname):
+    """Infer dimension names based on variable shape patterns in TC-PRIMED diagnostics."""
+    ndim = len(shape)
+    if ndim == 1:
+        return ["time"]
+    elif ndim == 2:
+        if "shear" in varname or "precipitable" in varname or "pressure_msl" in varname:
+            return ["time", "region"]
+        elif "phase" in varname and "b_param" in varname:
+            return ["time", "region"]
+        else:
+            return ["time", "dim1"]
+    elif ndim == 3:
+        if "shear" in varname:
+            return ["time", "layer", "region"]
+        elif any(k in varname for k in ["humidity", "temperature", "divergence",
+                                         "vorticity", "theta", "wind", "geopotential"]):
+            return ["time", "level", "region"]
+        elif "thermal_wind" in varname:
+            return ["time", "layer", "region"]
+        else:
+            return ["time", "dim1", "dim2"]
+    return [f"dim{i}" for i in range(ndim)]
+
+
+def _fetch_tcprimed_env(atcf_id: str) -> dict | None:
+    """Fetch TC-PRIMED environmental diagnostics for a storm.
+    Checks GCS cache first, then fetches from S3 and caches result.
+    """
+    atcf_id = atcf_id.upper().strip()
+
+    # 1. Check in-memory cache
+    if atcf_id in _tcprimed_env_cache:
+        _tcprimed_env_cache.move_to_end(atcf_id)
+        logger.info(f"TC-PRIMED env cache hit (memory): {atcf_id}")
+        return _tcprimed_env_cache[atcf_id]
+
+    # 2. Check GCS cache
+    gcs_key = f"{_GCS_ENV_CACHE_PREFIX}/{atcf_id}.json"
+    bucket = _get_gcs_bucket()
+    if bucket:
+        try:
+            blob = bucket.blob(gcs_key)
+            if blob.exists():
+                cached = json.loads(blob.download_as_text())
+                _tcprimed_env_cache[atcf_id] = cached
+                if len(_tcprimed_env_cache) > _TCPRIMED_ENV_CACHE_MAX:
+                    _tcprimed_env_cache.popitem(last=False)
+                logger.info(f"TC-PRIMED env cache hit (GCS): {atcf_id}")
+                return cached
+        except Exception as e:
+            logger.warning(f"GCS env cache read failed for {atcf_id}: {e}")
+
+    # 3. Fetch from TC-PRIMED S3
+    parts = _atcf_to_tcprimed_path_parts(atcf_id)
+    if not parts:
+        return None
+
+    basin_dir, num, season = parts
+
+    try:
+        import boto3
+        from botocore import UNSIGNED
+        from botocore.config import Config as BotoConfig
+        s3 = boto3.client("s3", config=BotoConfig(signature_version=UNSIGNED))
+    except Exception as e:
+        logger.error(f"Failed to create S3 client: {e}")
+        return None
+
+    # Find the env file
+    env_key = _find_tcprimed_env_file(s3, basin_dir, num, season)
+    if not env_key:
+        logger.info(f"No TC-PRIMED env file found for {atcf_id} "
+                     f"(searched {_TCPRIMED_PREFIX}/{season}/{basin_dir}/{num}/)")
+        return None
+
+    # Download and parse
+    logger.info(f"Downloading TC-PRIMED env file: s3://{_TCPRIMED_BUCKET}/{env_key}")
+    try:
+        obj = s3.get_object(Bucket=_TCPRIMED_BUCKET, Key=env_key)
+        data = obj["Body"].read()
+        logger.info(f"Downloaded {len(data)/1e6:.1f} MB for {atcf_id}")
+    except Exception as e:
+        logger.error(f"TC-PRIMED env download failed for {atcf_id}: {e}")
+        return None
+
+    try:
+        result = _extract_tcprimed_env(data, atcf_id)
+        result["s3_key"] = env_key
+    except Exception as e:
+        logger.error(f"TC-PRIMED env parse failed for {atcf_id}: {e}")
+        return None
+
+    # 4. Cache to GCS
+    if bucket:
+        try:
+            blob = bucket.blob(gcs_key)
+            blob.upload_from_string(
+                json.dumps(result, separators=(",", ":")),
+                content_type="application/json",
+            )
+            logger.info(f"TC-PRIMED env cached to GCS: {gcs_key}")
+        except Exception as e:
+            logger.warning(f"GCS env cache write failed for {atcf_id}: {e}")
+
+    # 5. Cache in memory
+    _tcprimed_env_cache[atcf_id] = result
+    if len(_tcprimed_env_cache) > _TCPRIMED_ENV_CACHE_MAX:
+        _tcprimed_env_cache.popitem(last=False)
+
+    return result
+
+
+@router.get("/tcprimed-env")
+def get_tcprimed_env(
+    atcf_id: str = Query(..., description="ATCF storm ID, e.g., AL092017 or WP112019"),
+):
+    """Fetch TC-PRIMED ERA5-based environmental diagnostics for a storm.
+
+    Returns time series of environmental parameters (SST, shear, moisture,
+    divergence, MPI, warm-core anomaly, CPS, etc.) derived from ERA5 reanalysis.
+    Available globally — all basins, not just AL/EP/CP.
+
+    Data is cached in GCS after first request for instant subsequent access.
+    First request may take 15-30s to download the env file from TC-PRIMED S3.
+    """
+    atcf_id = atcf_id.upper().strip()
+    if len(atcf_id) < 6:
+        raise HTTPException(status_code=400, detail="Invalid ATCF ID format")
+
+    result = _fetch_tcprimed_env(atcf_id)
+
+    if result is None:
+        return JSONResponse(
+            content={
+                "atcf_id": atcf_id,
+                "available": False,
+                "reason": "TC-PRIMED environmental data not found for this storm. "
+                          "Data is available for storms from ~1998-2023.",
+                "diagnostics": {},
+                "times": [],
+            },
+            headers={"Cache-Control": "public, max-age=3600"},
+        )
+
+    return JSONResponse(
+        content=result,
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
 @router.get("/health")
 def global_health():
     """Health check for global archive endpoints."""

@@ -7801,6 +7801,7 @@ var _shipsData = null;         // SHIPS LSDIAG environmental data from API
 var _shipsVisible = false;     // SHIPS traces on timeline
 var _shipsTraceIndices = [];   // Plotly trace indices for SHIPS variables
 var _scorecardLastAtcf = null;
+var _tcprimedEnvData = null;   // TC-PRIMED ERA5-based environmental data
 
 // SHIPS variable display config (matches backend SHIPS_VARIABLES)
 var SHIPS_VAR_META = {
@@ -7819,6 +7820,97 @@ var SHIPS_VAR_META = {
 
 // Default variables to show
 var SHIPS_DEFAULT_SHOW = ['SHDC', 'SHGC', 'RSST', 'COHC', 'MTPW'];
+
+// TC-PRIMED ERA5 environmental variable display config
+// For multi-dimensional variables, we pick representative slices:
+//   shear_magnitude: [time, layer, region] → deep layer (idx 0), 0-500km (idx 0)
+//   relative_humidity: [time, level, region] → pick specific levels, 0-500km
+//   precipitable_water: [time, bins] → 0-200km bin (idx 0)
+//   divergence/vorticity: [time, level, region] → 200 hPa for divergence, 850 for vorticity
+//   temperature_anomaly: [time, level, region] → max across levels (warm core)
+var TCPRIMED_VAR_META = {
+    sst:                              { name: 'SST',               unit: 'K',    color: '#00d4ff', group: 'ocean',    extract: function(d) { return _tcpExtract1D(d, 0); } },
+    potential_intensity_theoretical:  { name: 'MPI (theoretical)', unit: 'kt',   color: '#a78bfa', group: 'ocean',    extract: function(d) { return _tcpExtract1D(d, 0); } },
+    potential_intensity_empirical:    { name: 'MPI (empirical)',   unit: 'kt',   color: '#818cf8', group: 'ocean',    extract: function(d) { return _tcpExtract1D(d, 0); } },
+    shear_magnitude_deep:            { name: 'Deep Shear',        unit: 'm/s',  color: '#ff6b6b', group: 'shear',    srcVar: 'shear_magnitude', extract: function(d) { return _tcpExtract3D(d, 0, 0); } },
+    shear_magnitude_shallow:         { name: 'Shallow Shear',     unit: 'm/s',  color: '#fab1a0', group: 'shear',    srcVar: 'shear_magnitude', extract: function(d) { return _tcpExtract3D(d, 1, 0); } },
+    shear_generalized_inner:         { name: 'Gen. Shear (inner)',unit: 'm/s',  color: '#e17055', group: 'shear',    srcVar: 'shear_generalized', extract: function(d) { return _tcpExtract2D(d, 0); } },
+    shear_direction_deep:            { name: 'Shear Dir (deep)',  unit: '°',    color: '#ff9f43', group: 'shear',    srcVar: 'shear_direction', extract: function(d) { return _tcpExtract3D(d, 0, 0); } },
+    rh_mid:                          { name: 'Mid-level RH',     unit: '%',    color: '#34d399', group: 'moisture',  srcVar: 'relative_humidity', extract: function(d, meta) { return _tcpExtractLevel(d, meta, 700, 0); } },
+    rh_low:                          { name: 'Low-level RH',     unit: '%',    color: '#6ee7b7', group: 'moisture',  srcVar: 'relative_humidity', extract: function(d, meta) { return _tcpExtractLevel(d, meta, 850, 0); } },
+    precipitable_water_inner:        { name: 'Precip. Water (inner)', unit: 'kg/m²', color: '#60a5fa', group: 'moisture', srcVar: 'precipitable_water', extract: function(d) { return _tcpExtract2D(d, 0); } },
+    divergence_200:                  { name: '200 hPa Divergence',unit: '×10⁻⁶/s', color: '#fbbf24', group: 'dynamics', srcVar: 'divergence', extract: function(d, meta) { return _tcpExtractLevel(d, meta, 200, 0, 1e6); } },
+    vorticity_850:                   { name: '850 hPa Vorticity', unit: '×10⁻⁵/s', color: '#f472b6', group: 'dynamics', srcVar: 'vorticity', extract: function(d, meta) { return _tcpExtractLevel(d, meta, 850, 0, 1e5); } },
+    warm_core_max:                   { name: 'Warm-Core Anomaly', unit: 'K',    color: '#fb923c', group: 'dynamics',  srcVar: 'temperature_anomaly', extract: function(d) { return _tcpExtractMaxLevel(d); } },
+    cyclone_phase_space_b_parameter: { name: 'CPS B Parameter',   unit: 'm',    color: '#c084fc', group: 'phase',    extract: function(d) { return _tcpExtract1D(d, 0); } }
+};
+
+var TCPRIMED_DEFAULT_SHOW = ['sst', 'potential_intensity_theoretical', 'shear_magnitude_deep', 'rh_mid', 'precipitable_water_inner', 'warm_core_max'];
+
+// ── TC-PRIMED extraction helpers ──
+// Extract 1D: data is [time] or [time, 1] → return array of values
+function _tcpExtract1D(data, colIdx) {
+    if (!data || !Array.isArray(data)) return [];
+    return data.map(function(v) {
+        if (Array.isArray(v)) return v[colIdx != null ? colIdx : 0];
+        return v;
+    });
+}
+
+// Extract 2D: data is [time, dim1] → return array picking dim1[idx]
+function _tcpExtract2D(data, idx) {
+    if (!data || !Array.isArray(data)) return [];
+    return data.map(function(row) {
+        if (Array.isArray(row)) return row[idx] != null ? row[idx] : null;
+        return row;
+    });
+}
+
+// Extract 3D: data is [time, dim1, dim2] → return array picking dim1[i1][i2]
+function _tcpExtract3D(data, i1, i2) {
+    if (!data || !Array.isArray(data)) return [];
+    return data.map(function(row) {
+        if (Array.isArray(row) && Array.isArray(row[i1])) return row[i1][i2];
+        if (Array.isArray(row)) return row[i1];
+        return row;
+    });
+}
+
+// Extract at a specific pressure level: data is [time, level, region]
+function _tcpExtractLevel(data, meta, targetLevel, regionIdx, scaleFactor) {
+    if (!data || !Array.isArray(data)) return [];
+    var levels = _tcprimedEnvData ? _tcprimedEnvData.pressure_levels : [];
+    var levelIdx = 0;
+    for (var i = 0; i < levels.length; i++) {
+        if (Math.abs(levels[i] - targetLevel) < Math.abs(levels[levelIdx] - targetLevel)) {
+            levelIdx = i;
+        }
+    }
+    var sf = scaleFactor || 1;
+    return data.map(function(row) {
+        if (!Array.isArray(row)) return row;
+        var levelData = row[levelIdx];
+        if (Array.isArray(levelData)) {
+            var v = levelData[regionIdx != null ? regionIdx : 0];
+            return v != null ? v * sf : null;
+        }
+        return levelData != null ? levelData * sf : null;
+    });
+}
+
+// Extract max across levels: data is [time, level, region] → max per time step
+function _tcpExtractMaxLevel(data) {
+    if (!data || !Array.isArray(data)) return [];
+    return data.map(function(row) {
+        if (!Array.isArray(row)) return row;
+        var maxVal = null;
+        for (var i = 0; i < row.length; i++) {
+            var v = Array.isArray(row[i]) ? row[i][0] : row[i];
+            if (v != null && (maxVal == null || v > maxVal)) maxVal = v;
+        }
+        return maxVal;
+    });
+}
 
 /**
  * Great-circle distance in nautical miles between two lat/lon points.
@@ -7986,6 +8078,11 @@ window.toggleScorecard = function () {
 
         renderScorecardTable();
 
+        // Load TC-PRIMED ERA5 environmental data (global)
+        if (!_tcprimedEnvData && selectedStorm && selectedStorm.atcf_id) {
+            loadTCPrimedEnvData(selectedStorm);
+        }
+
         // Load SHIPS data if we have an ATCF ID in AL/EP/CP
         if (!_shipsData && selectedStorm && selectedStorm.atcf_id) {
             loadSHIPSData(selectedStorm);
@@ -8058,10 +8155,20 @@ function renderScorecardTable() {
     html += _buildScorecardTable(sc, modelList, taus, 'bias');
     html += '</div>';
 
-    // --- SHIPS Environmental section ---
+    // --- TC-PRIMED ERA5 Environmental section (global, primary) ---
+    html += '<div id="tcprimed-env-section" class="ships-section">';
+    html += '<div class="ships-header">';
+    html += '<h4 style="margin:0;color:#e2e8f0;font-size:0.92rem;">Environmental Diagnostics <span style="font-size:0.75rem;color:#8b9ec2;">(TC-PRIMED / ERA5)</span></h4>';
+    html += '<span id="tcprimed-env-status" style="font-size:0.8rem;color:#8b9ec2;"></span>';
+    html += '</div>';
+    html += '<div id="tcprimed-env-toggles" class="ships-var-toggles"></div>';
+    html += '<div id="tcprimed-env-chart" class="chart-container" style="height:320px;"></div>';
+    html += '</div>';
+
+    // --- SHIPS Environmental section (AL/EP/CP fallback) ---
     html += '<div id="ships-section" class="ships-section">';
     html += '<div class="ships-header">';
-    html += '<h4 style="margin:0;color:#e2e8f0;font-size:0.92rem;">SHIPS Environmental Diagnostics</h4>';
+    html += '<h4 style="margin:0;color:#e2e8f0;font-size:0.92rem;">SHIPS Diagnostics <span style="font-size:0.75rem;color:#8b9ec2;">(LSDIAG)</span></h4>';
     html += '<span id="ships-status" style="font-size:0.8rem;color:#8b9ec2;"></span>';
     html += '</div>';
     html += '<div id="ships-var-toggles" class="ships-var-toggles"></div>';
@@ -8069,6 +8176,12 @@ function renderScorecardTable() {
     html += '</div>';
 
     container.innerHTML = html;
+
+    // Render TC-PRIMED if we have data
+    if (_tcprimedEnvData && _tcprimedEnvData.available) {
+        renderTCPrimedEnvControls();
+        renderTCPrimedEnvChart();
+    }
 
     // Render SHIPS if we have data
     if (_shipsData && _shipsData.available) {
@@ -8341,6 +8454,225 @@ function renderSHIPSChart() {
     Plotly.newPlot(chartEl, traces, layout, { responsive: true, displayModeBar: false });
 }
 
+// ═══════════════════════════════════════════════════════════════
+// TC-PRIMED ERA5 ENVIRONMENTAL DIAGNOSTICS
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Load TC-PRIMED ERA5-based environmental data.
+ */
+function loadTCPrimedEnvData(storm) {
+    if (!storm.atcf_id) return;
+    var statusEl = document.getElementById('tcprimed-env-status');
+    if (statusEl) statusEl.textContent = 'Loading ERA5 diagnostics...';
+
+    var url = API_BASE + '/global/tcprimed-env?atcf_id=' + encodeURIComponent(storm.atcf_id);
+    fetch(url).then(function(r) { return r.json(); }).then(function(data) {
+        _tcprimedEnvData = data;
+        if (data.available && data.times && data.times.length > 0) {
+            if (statusEl) statusEl.textContent = data.times.length + ' synoptic times (' + data.source + ')';
+            renderTCPrimedEnvControls();
+            renderTCPrimedEnvChart();
+        } else {
+            if (statusEl) statusEl.textContent = data.reason || 'No TC-PRIMED data available';
+        }
+    }).catch(function(err) {
+        if (statusEl) statusEl.textContent = 'Failed to load';
+        console.warn('TC-PRIMED env load error:', err);
+    });
+}
+
+/**
+ * Render toggle buttons for TC-PRIMED environmental variables.
+ */
+function renderTCPrimedEnvControls() {
+    var container = document.getElementById('tcprimed-env-toggles');
+    if (!container || !_tcprimedEnvData || !_tcprimedEnvData.available) return;
+
+    var html = '';
+    var varKeys = Object.keys(TCPRIMED_VAR_META);
+    varKeys.forEach(function(varKey) {
+        var meta = TCPRIMED_VAR_META[varKey];
+        // Check that the source data exists
+        var srcVar = meta.srcVar || varKey;
+        if (!_tcprimedEnvData.diagnostics[srcVar]) return;
+
+        var active = TCPRIMED_DEFAULT_SHOW.indexOf(varKey) !== -1;
+        html += '<button class="ships-var-btn tcprimed-var-btn' + (active ? ' active' : '') + '" '
+              + 'data-var="' + varKey + '" '
+              + 'style="border-color:' + meta.color + ';' + (active ? 'background:' + meta.color + '22;color:' + meta.color : '') + '" '
+              + 'onclick="toggleTCPrimedVar(\'' + varKey + '\', this)">'
+              + meta.name + '</button>';
+    });
+    container.innerHTML = html;
+}
+
+window.toggleTCPrimedVar = function(varKey, btn) {
+    btn.classList.toggle('active');
+    var meta = TCPRIMED_VAR_META[varKey];
+    if (btn.classList.contains('active')) {
+        btn.style.background = meta.color + '22';
+        btn.style.color = meta.color;
+    } else {
+        btn.style.background = '';
+        btn.style.color = '';
+    }
+    renderTCPrimedEnvChart();
+};
+
+/**
+ * Render TC-PRIMED environmental chart using Plotly.
+ */
+function renderTCPrimedEnvChart() {
+    var chartEl = document.getElementById('tcprimed-env-chart');
+    if (!chartEl || !_tcprimedEnvData || !_tcprimedEnvData.available) return;
+
+    // Get active variables
+    var activeVars = [];
+    document.querySelectorAll('.tcprimed-var-btn.active').forEach(function(btn) {
+        activeVars.push(btn.getAttribute('data-var'));
+    });
+
+    if (activeVars.length === 0) {
+        Plotly.purge(chartEl);
+        return;
+    }
+
+    var times = _tcprimedEnvData.times;
+    var traces = [];
+    var yAxes = {};
+    var axisCount = 0;
+
+    activeVars.forEach(function(varKey) {
+        var meta = TCPRIMED_VAR_META[varKey];
+        if (!meta) return;
+
+        var srcVar = meta.srcVar || varKey;
+        var rawData = _tcprimedEnvData.diagnostics[srcVar];
+        if (!rawData) return;
+
+        // Extract the time series using the variable-specific extractor
+        var varMeta = _tcprimedEnvData.variable_meta[srcVar];
+        var values = meta.extract(rawData, varMeta);
+
+        // Filter out nulls and align with times
+        var xVals = [];
+        var yVals = [];
+        for (var i = 0; i < Math.min(times.length, values.length); i++) {
+            if (values[i] != null && times[i] != null) {
+                xVals.push(times[i]);
+                yVals.push(values[i]);
+            }
+        }
+
+        if (xVals.length === 0) return;
+
+        // Convert SST from K to °C for display
+        var displayUnit = meta.unit;
+        if (varKey === 'sst') {
+            yVals = yVals.map(function(v) { return v != null ? Math.round((v - 273.15) * 100) / 100 : null; });
+            displayUnit = '°C';
+        }
+
+        // Assign y-axis (group by unit)
+        var axisKey = displayUnit;
+        if (!yAxes[axisKey]) {
+            axisCount++;
+            yAxes[axisKey] = {
+                idx: axisCount,
+                unit: displayUnit,
+                side: axisCount % 2 === 1 ? 'left' : 'right'
+            };
+        }
+
+        var yAxisName = yAxes[axisKey].idx === 1 ? 'y' : 'y' + yAxes[axisKey].idx;
+
+        traces.push({
+            x: xVals,
+            y: yVals,
+            type: 'scatter',
+            mode: 'lines+markers',
+            name: meta.name + ' (' + displayUnit + ')',
+            line: { color: meta.color, width: 2 },
+            marker: { size: 3, color: meta.color },
+            yaxis: yAxisName,
+            hovertemplate: '<b>' + meta.name + '</b><br>%{x}<br>%{y:.2f} ' + displayUnit + '<extra></extra>'
+        });
+    });
+
+    if (traces.length === 0) {
+        Plotly.purge(chartEl);
+        return;
+    }
+
+    // Also overlay intensity from storm_metadata if available
+    var smIntensity = _tcprimedEnvData.storm_metadata ? _tcprimedEnvData.storm_metadata.intensity : null;
+    if (smIntensity && smIntensity.length > 0) {
+        var intX = [];
+        var intY = [];
+        for (var i = 0; i < Math.min(times.length, smIntensity.length); i++) {
+            if (smIntensity[i] != null && times[i] != null) {
+                intX.push(times[i]);
+                intY.push(smIntensity[i]);
+            }
+        }
+        if (intX.length > 0) {
+            // Ensure kt axis exists
+            if (!yAxes['kt']) {
+                axisCount++;
+                yAxes['kt'] = { idx: axisCount, unit: 'kt', side: axisCount % 2 === 1 ? 'left' : 'right' };
+            }
+            var intAxisName = yAxes['kt'].idx === 1 ? 'y' : 'y' + yAxes['kt'].idx;
+            traces.push({
+                x: intX,
+                y: intY,
+                type: 'scatter',
+                mode: 'lines',
+                name: 'Intensity (kt)',
+                line: { color: '#e2e8f0', width: 2, dash: 'dot' },
+                yaxis: intAxisName,
+                hovertemplate: '<b>Intensity</b><br>%{x}<br>%{y} kt<extra></extra>'
+            });
+        }
+    }
+
+    var layout = {
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor: 'rgba(0,0,0,0)',
+        font: { family: 'Inter, sans-serif', color: '#e2e8f0' },
+        margin: { l: 55, r: 55, t: 10, b: 40 },
+        showlegend: true,
+        legend: {
+            x: 0.01, y: 0.99,
+            bgcolor: 'rgba(15,33,64,0.8)',
+            bordercolor: 'rgba(255,255,255,0.08)',
+            borderwidth: 1,
+            font: { size: 10, color: '#e2e8f0' },
+            orientation: 'h'
+        },
+        xaxis: {
+            tickfont: { size: 10, color: '#8b9ec2' },
+            gridcolor: 'rgba(255,255,255,0.04)',
+            linecolor: 'rgba(255,255,255,0.08)'
+        }
+    };
+
+    // Add y-axes
+    Object.keys(yAxes).forEach(function(key) {
+        var ax = yAxes[key];
+        var yKey = ax.idx === 1 ? 'yaxis' : 'yaxis' + ax.idx;
+        layout[yKey] = {
+            title: { text: ax.unit, font: { size: 11, color: '#8b9ec2' } },
+            tickfont: { size: 10, color: '#8b9ec2' },
+            gridcolor: ax.idx === 1 ? 'rgba(255,255,255,0.04)' : 'transparent',
+            side: ax.side,
+            overlaying: ax.idx > 1 ? 'y' : undefined
+        };
+    });
+
+    Plotly.newPlot(chartEl, traces, layout, { responsive: true, displayModeBar: false });
+}
+
 /**
  * Remove SHIPS overlay traces from the main timeline chart.
  */
@@ -8357,6 +8689,7 @@ function removeScorecard() {
     _shipsData = null;
     _shipsVisible = false;
     _scorecardLastAtcf = null;
+    _tcprimedEnvData = null;
     removeSHIPSTraces();
     var panel = document.getElementById('scorecard-panel');
     if (panel) panel.style.display = 'none';
