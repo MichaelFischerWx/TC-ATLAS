@@ -58,6 +58,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.responses import Response, JSONResponse, StreamingResponse
+from starlette.requests import Request as StarletteRequest
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -264,6 +265,87 @@ app.add_middleware(
     allow_methods=["GET"],
     allow_headers=["*"],
 )
+
+
+# ---------------------------------------------------------------------------
+# Per-IP rate limiting — protect against API abuse
+# ---------------------------------------------------------------------------
+import time as _time
+import collections as _collections
+import logging as _logging
+
+_rate_logger = _logging.getLogger("tc-atlas.ratelimit")
+
+# Sliding-window counters per IP
+_rate_window = 60          # window in seconds
+_rate_max_requests = 120   # max requests per window (2/sec avg)
+_rate_alert_threshold = 5  # log warning after this many rejections per IP per window
+_rate_buckets: dict[str, list[float]] = {}
+_rate_rejections: dict[str, int] = _collections.defaultdict(int)
+_rate_lock = threading.Lock()
+
+
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    """Lightweight per-IP rate limiter with abuse alerting."""
+
+    # Skip rate limiting for health checks and static-like endpoints
+    EXEMPT_PREFIXES = ('/health', '/docs', '/openapi.json')
+
+    async def dispatch(self, request: StarletteRequest, call_next):
+        path = request.url.path
+        if any(path.startswith(p) for p in self.EXEMPT_PREFIXES):
+            return await call_next(request)
+
+        # Get client IP (Cloud Run sets X-Forwarded-For)
+        forwarded = request.headers.get("x-forwarded-for", "")
+        client_ip = forwarded.split(",")[0].strip() if forwarded else (
+            request.client.host if request.client else "unknown"
+        )
+
+        now = _time.monotonic()
+        with _rate_lock:
+            # Get or create bucket for this IP
+            if client_ip not in _rate_buckets:
+                _rate_buckets[client_ip] = []
+
+            bucket = _rate_buckets[client_ip]
+            # Remove timestamps outside the window
+            cutoff = now - _rate_window
+            while bucket and bucket[0] < cutoff:
+                bucket.pop(0)
+
+            if len(bucket) >= _rate_max_requests:
+                _rate_rejections[client_ip] += 1
+                rej_count = _rate_rejections[client_ip]
+                if rej_count == _rate_alert_threshold:
+                    _rate_logger.warning(
+                        f"RATE_LIMIT_ABUSE: IP {client_ip} hit rate limit "
+                        f"{rej_count} times in current window — "
+                        f"path={path}, threshold={_rate_max_requests}/{_rate_window}s"
+                    )
+                return JSONResponse(
+                    status_code=429,
+                    content={"detail": "Too many requests. Please slow down."},
+                )
+
+            bucket.append(now)
+            # Reset rejection counter if request succeeds
+            if client_ip in _rate_rejections and _rate_rejections[client_ip] > 0:
+                _rate_rejections[client_ip] = 0
+
+        # Periodically clean up stale IPs (every ~1000 requests)
+        if len(_rate_buckets) > 500:
+            with _rate_lock:
+                stale = [ip for ip, b in _rate_buckets.items()
+                         if not b or b[-1] < now - _rate_window * 2]
+                for ip in stale:
+                    del _rate_buckets[ip]
+                    _rate_rejections.pop(ip, None)
+
+        return await call_next(request)
+
+
+app.add_middleware(RateLimitMiddleware)
 
 
 # ---------------------------------------------------------------------------
