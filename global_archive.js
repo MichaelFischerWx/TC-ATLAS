@@ -5553,6 +5553,12 @@ window.toggleGlobalNexradOverlay = function () {
     // If overlay already loaded, just show it
     if (_gaNexradMapOverlay && detailMap) _gaNexradMapOverlay.addTo(detailMap);
 
+    // Re-search sites using current IR frame position (not LMI/genesis)
+    var fm = irMeta && irMeta.frames ? irMeta.frames[irFrameIdx] : null;
+    if (fm && fm.lat != null && selectedStorm) {
+        loadNexradSites(selectedStorm, fm.lat, fm.lon);
+    }
+
     // Load scans for currently selected site
     var siteSelect = document.getElementById('ga-nexrad-site-select');
     if (siteSelect && siteSelect.value) {
