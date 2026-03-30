@@ -507,10 +507,13 @@ def _read_nexrad_level2(s3_key: str):
 
 
 def _grid_radar(radar, product: str = "reflectivity",
-                sweep: int = 0, grid_spacing_m: int = 500,
+                sweep: int = 0, grid_spacing_m: int = 1000,
                 max_range_m: int = 230000) -> Tuple[np.ndarray, dict]:
     """
     Grid a single sweep of radar data to a regular lat/lon grid.
+
+    Uses lightweight direct gate-to-grid binning instead of pyart.map.grid_from_radars()
+    to stay within Cloud Run's 2GB memory limit.
 
     Returns (data_2d, metadata) where metadata includes bounds and grid info.
     """
@@ -525,7 +528,6 @@ def _grid_radar(radar, product: str = "reflectivity",
 
     # Check if field exists in the radar object
     if field not in radar.fields:
-        # Try alternate field names
         alt_fields = {
             "reflectivity": ["reflectivity", "REF", "DZ", "corrected_reflectivity"],
             "velocity": ["velocity", "VEL", "VR", "corrected_velocity",
@@ -552,47 +554,69 @@ def _grid_radar(radar, product: str = "reflectivity",
         except Exception as e:
             logger.warning(f"Velocity dealiasing failed: {e}")
 
-    # Grid the radar data
-    grid_shape = (1, int(2 * max_range_m / grid_spacing_m),
-                  int(2 * max_range_m / grid_spacing_m))
+    # Get sweep indices
+    sweep_idx = min(sweep, radar.nsweeps - 1)
+    sweep_start = radar.sweep_start_ray_index["data"][sweep_idx]
+    sweep_end = radar.sweep_end_ray_index["data"][sweep_idx]
 
-    try:
-        grid = pyart.map.grid_from_radars(
-            (radar,),
-            grid_shape=grid_shape,
-            grid_limits=(
-                (radar.fixed_angle["data"][min(sweep, len(radar.fixed_angle["data"]) - 1)] * 1000,
-                 radar.fixed_angle["data"][min(sweep, len(radar.fixed_angle["data"]) - 1)] * 1000 + 1),
-                (-max_range_m, max_range_m),
-                (-max_range_m, max_range_m),
-            ),
-            fields=[field],
-            weighting_function="nearest",
-            min_radius=grid_spacing_m,
-        )
-    except Exception as e:
-        raise HTTPException(500, f"Gridding failed: {e}")
+    # Extract gate positions and data for this sweep only
+    # Use get_gate_x_y_z for Cartesian positions relative to radar
+    xg, yg, zg = radar.get_gate_x_y_z(sweep_idx)  # meters from radar
+    field_data = radar.fields[field]["data"][sweep_start:sweep_end + 1]
+    if hasattr(field_data, "filled"):
+        field_data = field_data.filled(np.nan)
+    field_data = np.asarray(field_data, dtype=np.float32)
 
-    # Extract 2D data (squeeze the height dimension)
-    data_2d = grid.fields[field]["data"][0]  # shape: (ny, nx)
-    if hasattr(data_2d, "filled"):
-        data_2d = data_2d.filled(np.nan)
-    data_2d = np.asarray(data_2d, dtype=np.float32)
+    # Build output grid
+    n_bins = int(2 * max_range_m / grid_spacing_m)
+    grid_2d = np.full((n_bins, n_bins), np.nan, dtype=np.float32)
+    count_2d = np.zeros((n_bins, n_bins), dtype=np.int32)
+
+    # Bin gate data into grid cells (nearest-neighbor binning)
+    # xg, yg are in meters; convert to grid indices
+    half = max_range_m
+    xi = ((xg + half) / grid_spacing_m).astype(np.int32)
+    yi = ((yg + half) / grid_spacing_m).astype(np.int32)
+
+    # Flatten for fast indexing
+    xi_flat = xi.ravel()
+    yi_flat = yi.ravel()
+    data_flat = field_data.ravel()
+
+    # Mask valid points
+    valid = ((xi_flat >= 0) & (xi_flat < n_bins) &
+             (yi_flat >= 0) & (yi_flat < n_bins) &
+             np.isfinite(data_flat))
+
+    xi_v = xi_flat[valid]
+    yi_v = yi_flat[valid]
+    dv = data_flat[valid]
+
+    # Accumulate (sum + count for averaging overlapping gates)
+    np.add.at(grid_2d, (yi_v, xi_v), dv)
+    np.add.at(count_2d, (yi_v, xi_v), 1)
+
+    # Average where multiple gates fall in same bin
+    mask = count_2d > 0
+    grid_2d[mask] /= count_2d[mask]
+    grid_2d[~mask] = np.nan
+
+    # Free intermediate arrays
+    del xg, yg, zg, field_data, xi, yi, xi_flat, yi_flat, data_flat
 
     # Flip so north is at top (row 0 = north)
-    data_2d = np.flipud(data_2d)
+    data_2d = np.flipud(grid_2d)
 
     # Get geographic bounds
-    lat_center = radar.latitude["data"][0]
-    lon_center = radar.longitude["data"][0]
+    lat_center = float(radar.latitude["data"][0])
+    lon_center = float(radar.longitude["data"][0])
 
-    # Grid coordinates in meters → geographic bounds
-    dy_deg = (max_range_m / 111320.0)
-    dx_deg = (max_range_m / (111320.0 * math.cos(math.radians(lat_center))))
+    dy_deg = max_range_m / 111320.0
+    dx_deg = max_range_m / (111320.0 * math.cos(math.radians(lat_center)))
 
     bounds = [
-        [float(lat_center - dy_deg), float(lon_center - dx_deg)],
-        [float(lat_center + dy_deg), float(lon_center + dx_deg)],
+        [lat_center - dy_deg, lon_center - dx_deg],
+        [lat_center + dy_deg, lon_center + dx_deg],
     ]
 
     # Scan time
@@ -605,9 +629,7 @@ def _grid_radar(radar, product: str = "reflectivity",
 
     # Elevation angle
     try:
-        elev = float(radar.fixed_angle["data"][
-            min(sweep, len(radar.fixed_angle["data"]) - 1)
-        ])
+        elev = float(radar.fixed_angle["data"][sweep_idx])
     except Exception:
         elev = 0.5
 
@@ -617,13 +639,12 @@ def _grid_radar(radar, product: str = "reflectivity",
         "scan_time": scan_time,
         "product": product,
         "tilt": round(elev, 1),
-        "lat_center": float(lat_center),
-        "lon_center": float(lon_center),
+        "lat_center": lat_center,
+        "lon_center": lon_center,
         "grid_spacing_m": grid_spacing_m,
         "max_range_m": max_range_m,
     }
 
-    grid = None  # free memory
     return data_2d, metadata
 
 
