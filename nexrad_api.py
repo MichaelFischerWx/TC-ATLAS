@@ -419,10 +419,10 @@ def _render_radar_image(data_2d: np.ndarray, lut: np.ndarray,
 
 # ── S3 data fetching ─────────────────────────────────────────
 
-_NEXRAD_BUCKET = "noaa-nexrad-level2"
+_NEXRAD_BUCKET = "unidata-nexrad-level2"
 
 
-def _list_scans_s3(site: str, dt: _dt, window_min: int = 30) -> List[dict]:
+def _list_scans_s3(site: str, dt: _dt, window_min: int = 60) -> List[dict]:
     """
     List available NEXRAD Level II scans near a given datetime.
     Returns list of {s3_key, scan_time, site} sorted by time distance.
@@ -450,6 +450,9 @@ def _list_scans_s3(site: str, dt: _dt, window_min: int = 30) -> List[dict]:
             fname = f.split("/")[-1]
             # Filenames: KBYX20220928_183456_V06 or similar
             if not fname.startswith(site):
+                continue
+            # Skip MDM metadata files
+            if fname.endswith("_MDM"):
                 continue
             # Extract datetime from filename
             try:
@@ -652,7 +655,7 @@ async def get_nearby_sites(
 async def get_available_scans(
     site: str = Query(..., description="NEXRAD site ID (e.g., KBYX)"),
     datetime: str = Query(..., description="ISO datetime (e.g., 2022-09-28T18:00:00)"),
-    window_min: int = Query(30, description="Search window in minutes"),
+    window_min: int = Query(60, description="Search window in minutes"),
 ):
     """List available NEXRAD scans near a given time."""
     site = site.upper()

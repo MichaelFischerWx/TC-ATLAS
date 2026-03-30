@@ -15437,7 +15437,7 @@ window.loadTdrNexradScans = function () {
     scanSelect.innerHTML = '<option value="">Loading...</option>';
     if (status) status.textContent = 'Searching...';
 
-    fetch(API_BASE + '/nexrad/scans?site=' + site + '&datetime=' + encodeURIComponent(refTime) + '&window_min=30')
+    fetch(API_BASE + '/nexrad/scans?site=' + site + '&datetime=' + encodeURIComponent(refTime) + '&window_min=60')
         .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
         .then(function (json) {
             scanSelect.innerHTML = '';
