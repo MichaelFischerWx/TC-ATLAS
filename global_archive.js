@@ -5456,7 +5456,11 @@ window.loadNexradScans = function () {
 
             if (status) status.textContent = json.scans.length + ' scan(s)';
 
-            // Auto-load first (closest) scan
+            // Pre-select the closest scan to the requested time
+            var ci = json.closest_index || 0;
+            if (ci < scanSelect.options.length) scanSelect.selectedIndex = ci;
+
+            // Auto-load closest scan
             loadNexradFrame();
         })
         .catch(function (e) {

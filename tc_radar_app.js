@@ -15457,6 +15457,10 @@ window.loadTdrNexradScans = function () {
 
             if (status) status.textContent = json.scans.length + ' scan(s)';
 
+            // Pre-select closest scan
+            var ci = json.closest_index || 0;
+            if (ci < scanSelect.options.length) scanSelect.selectedIndex = ci;
+
             // Auto-load closest scan
             if (_nexradVisible) loadTdrNexradFrame();
         })

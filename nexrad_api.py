@@ -465,7 +465,7 @@ def _list_scans_s3(site: str, dt: _dt, window_min: int = 60) -> List[dict]:
                     "site": site,
                 })
 
-    results.sort(key=lambda x: x["delta_sec"])
+    results.sort(key=lambda x: x["scan_dt"])
     return results
 
 
@@ -696,6 +696,15 @@ async def get_available_scans(
 
     scans = _list_scans_s3(site, dt, window_min)
 
+    # Find the index of the closest scan to the requested time
+    closest_idx = 0
+    if scans:
+        min_delta = scans[0]["delta_sec"]
+        for i, s in enumerate(scans):
+            if s["delta_sec"] < min_delta:
+                min_delta = s["delta_sec"]
+                closest_idx = i
+
     return JSONResponse({
         "site": site,
         "requested_time": dt.strftime("%Y-%m-%d %H:%M:%S UTC"),
@@ -709,6 +718,7 @@ async def get_available_scans(
             for s in scans
         ],
         "count": len(scans),
+        "closest_index": closest_idx,
     })
 
 
