@@ -1543,8 +1543,8 @@ function _applyIntensityMarker(dtStr) {
     var baseShapes = window._timelineBaseShapes || [];
     var extraShapes = [];
 
-    // IR vertical line (yellow/gold)
-    if (dtStr && irOverlayVisible) {
+    // IR vertical line (yellow/gold) — show when IR or 88D is active
+    if (dtStr && (irOverlayVisible || _gaNexradVisible)) {
         extraShapes.push({
             type: 'line',
             xref: 'x',
