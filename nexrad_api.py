@@ -838,7 +838,7 @@ async def get_storm_relative_frame(
     radar = _read_nexrad_level2(s3_key)
     data_geo, metadata = _grid_radar(
         radar, product=product, sweep=tilt,
-        grid_spacing_m=500,  # high-res intermediate grid
+        grid_spacing_m=1000,  # intermediate grid (1km matches /frame default)
         max_range_m=int((domain_km + 50) * 1000),  # +50 km margin
     )
     radar = None
