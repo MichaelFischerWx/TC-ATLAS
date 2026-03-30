@@ -15505,7 +15505,7 @@ window.loadTdrNexradFrame = function () {
             _nexradMapOverlay = L.imageOverlay(json.image, bounds, {
                 opacity: 0.65, interactive: false, zIndex: 190
             });
-            if (_nexradVisible && _focusMode) _nexradMapOverlay.addTo(map);
+            if (_nexradVisible) _nexradMapOverlay.addTo(map);
 
             if (status) status.textContent = json.site + ' ' + json.scan_time + ' — ' + json.label;
 
@@ -15613,7 +15613,7 @@ window.toggleNexradOverlay = function () {
     if (_nexradVisible) {
         if (btn) btn.classList.add('active');
         if (panel) panel.style.display = '';
-        if (_nexradMapOverlay && _focusMode) _nexradMapOverlay.addTo(map);
+        if (_nexradMapOverlay) _nexradMapOverlay.addTo(map);
 
         // Auto-load scans if site is selected
         var siteSelect = document.getElementById('nexrad-site-select');
