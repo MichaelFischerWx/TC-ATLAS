@@ -1382,12 +1382,13 @@ function renderStormDetail(storm) {
     // NEXRAD 88D ground radar — show toggle and search for nearby sites
     var nexradToggleWrap = document.getElementById('ga-nexrad-toggle-wrap');
     if (nexradToggleWrap) {
-        // Show for storms with known positions (any basin — covers Atlantic, Guam, Hawaii)
+        // Show toggle for storms with known positions from 1991+ (NEXRAD era)
         var hasPos = (storm.lmi_lat || storm.genesis_lat) && (storm.lmi_lon || storm.genesis_lon);
         if (hasPos && storm.year >= 1991) {
             nexradToggleWrap.style.display = '';
             document.getElementById('ga-nexrad-status').textContent = '';
-            loadNexradSites(storm);
+            // Don't search sites yet — wait until user clicks 88D toggle,
+            // which re-searches using the current IR frame position
         } else {
             nexradToggleWrap.style.display = 'none';
             removeGlobalNexradOverlay();
@@ -5536,6 +5537,9 @@ window.loadNexradFrame = function () {
             if (_gaNexradVisible && detailMap) _gaNexradMapOverlay.addTo(detailMap);
 
             if (status) status.textContent = json.site + ' ' + json.scan_time + ' — ' + json.label + ' (tilt ' + json.tilt + '\u00B0)';
+
+            // Update colorbar
+            _updateGaNexradColorbar(product);
         })
         .catch(function (e) {
             if (status) status.textContent = 'Error: ' + e.message;
@@ -5564,10 +5568,14 @@ window.toggleGlobalNexradOverlay = function () {
     // If overlay already loaded, just show it
     if (_gaNexradMapOverlay && detailMap) _gaNexradMapOverlay.addTo(detailMap);
 
-    // Re-search sites using current IR frame position (not LMI/genesis)
-    var fm = irMeta && irMeta.frames ? irMeta.frames[irFrameIdx] : null;
-    if (fm && fm.lat != null && selectedStorm) {
-        loadNexradSites(selectedStorm, fm.lat, fm.lon);
+    // Search sites using current IR frame position, with LMI/genesis fallback
+    if (selectedStorm) {
+        var fm = irMeta && irMeta.frames ? irMeta.frames[irFrameIdx] : null;
+        if (fm && fm.lat != null) {
+            loadNexradSites(selectedStorm, fm.lat, fm.lon);
+        } else {
+            loadNexradSites(selectedStorm);
+        }
     }
 
     // Load scans for currently selected site
@@ -5612,6 +5620,53 @@ function _handleNexradMouseMove(e) {
     // Decode uint8 → physical value
     var val = _gaNexradVmin + (rawVal - 1) * (_gaNexradVmax - _gaNexradVmin) / 254.0;
     return { value: val.toFixed(1), units: _gaNexradUnits };
+}
+
+/**
+ * Update the NEXRAD colorbar in the global archive controls.
+ */
+function _updateGaNexradColorbar(product) {
+    var el = document.getElementById('ga-nexrad-colorbar');
+    if (!el) return;
+
+    if (product === 'velocity') {
+        el.innerHTML =
+            '<div style="display:flex;height:8px;border-radius:3px;border:1px solid rgba(255,255,255,0.15);overflow:hidden;">' +
+                '<div style="flex:1;background:#0000D0;"></div>' +
+                '<div style="flex:1;background:#0050FF;"></div>' +
+                '<div style="flex:1;background:#00C8FF;"></div>' +
+                '<div style="flex:1;background:#00FF80;"></div>' +
+                '<div style="flex:1;background:#80FF00;"></div>' +
+                '<div style="flex:1;background:#FFFF00;"></div>' +
+                '<div style="flex:1;background:#FF8000;"></div>' +
+                '<div style="flex:1;background:#FF0000;"></div>' +
+                '<div style="flex:1;background:#C80000;"></div>' +
+            '</div>' +
+            '<div style="display:flex;justify-content:space-between;font-size:8px;color:#94a3b8;margin-top:1px;">' +
+                '<span>-50 m/s</span><span>0</span><span>+50 m/s</span>' +
+            '</div>';
+    } else {
+        el.innerHTML =
+            '<div style="display:flex;height:8px;border-radius:3px;border:1px solid rgba(255,255,255,0.15);overflow:hidden;">' +
+                '<div style="flex:1;background:#04E9E7;"></div>' +
+                '<div style="flex:1;background:#019FF4;"></div>' +
+                '<div style="flex:1;background:#0300F4;"></div>' +
+                '<div style="flex:1;background:#02FD02;"></div>' +
+                '<div style="flex:1;background:#01C501;"></div>' +
+                '<div style="flex:1;background:#008E00;"></div>' +
+                '<div style="flex:1;background:#FDF802;"></div>' +
+                '<div style="flex:1;background:#E5BC00;"></div>' +
+                '<div style="flex:1;background:#FD9500;"></div>' +
+                '<div style="flex:1;background:#FD0000;"></div>' +
+                '<div style="flex:1;background:#D40000;"></div>' +
+                '<div style="flex:1;background:#BC0000;"></div>' +
+                '<div style="flex:1;background:#F800FD;"></div>' +
+                '<div style="flex:1;background:#9854C6;"></div>' +
+            '</div>' +
+            '<div style="display:flex;justify-content:space-between;font-size:8px;color:#94a3b8;margin-top:1px;">' +
+                '<span>5 dBZ</span><span>20</span><span>35</span><span>50</span><span>65</span>' +
+            '</div>';
+    }
 }
 
 /**

@@ -513,6 +513,7 @@ function openSidePanel(caseData, fromQuickSelect) {
                         '<button id="nexrad-planview-btn" class="overlay-pill" onclick="toggleNexradPlanView()" style="font-size:9px;padding:2px 8px;background:rgba(34,197,94,0.2);border:1px solid rgba(34,197,94,0.4);border-radius:4px;color:#86efac;cursor:pointer;" title="Toggle storm-relative 88D on Plan View">Plan View</button>' +
                         '<span style="font-size:8px;color:#64748b;margin-left:auto;">Data: <a href="https://registry.opendata.aws/noaa-nexrad/" target="_blank" rel="noopener" style="color:#94a3b8;text-decoration:none;border-bottom:1px dotted #64748b;">NOAA NEXRAD L2</a> (AWS)</span>' +
                     '</div>' +
+                    '<div id="nexrad-colorbar" style="margin-top:5px;"></div>' +
                 '</div>' +
                 '<div class="fl-archive-status" id="fl-archive-status" style="display:none;font-size:10px;color:#fbbf24;padding:2px 8px;"></div>' +
                 // ── ANALYSIS: primary action buttons ──
@@ -15537,6 +15538,9 @@ window.loadTdrNexradFrame = function () {
 
             if (status) status.textContent = json.site + ' ' + json.scan_time + ' — ' + json.label;
 
+            // Update colorbar
+            _updateNexradColorbar(product);
+
             // Auto-load storm-relative version for plan view
             _loadNexradStormRelative(site, s3Key, product);
         })
@@ -15688,6 +15692,55 @@ window.toggleNexradPlanView = function () {
         _removeNexradPlanView();
     }
 };
+
+/**
+ * Update the NEXRAD colorbar based on the current product.
+ */
+function _updateNexradColorbar(product) {
+    var el = document.getElementById('nexrad-colorbar');
+    if (!el) return;
+
+    if (product === 'velocity') {
+        el.innerHTML =
+            '<div style="font-size:9px;font-weight:600;color:#86efac;margin-bottom:2px;">Radial Velocity (m/s)</div>' +
+            '<div style="display:flex;height:10px;border-radius:3px;border:1px solid rgba(255,255,255,0.15);overflow:hidden;">' +
+                '<div style="flex:1;background:#0000D0;"></div>' +
+                '<div style="flex:1;background:#0050FF;"></div>' +
+                '<div style="flex:1;background:#00C8FF;"></div>' +
+                '<div style="flex:1;background:#00FF80;"></div>' +
+                '<div style="flex:1;background:#80FF00;"></div>' +
+                '<div style="flex:1;background:#FFFF00;"></div>' +
+                '<div style="flex:1;background:#FF8000;"></div>' +
+                '<div style="flex:1;background:#FF0000;"></div>' +
+                '<div style="flex:1;background:#C80000;"></div>' +
+            '</div>' +
+            '<div style="display:flex;justify-content:space-between;font-size:8px;color:#94a3b8;margin-top:1px;">' +
+                '<span>-50</span><span>0</span><span>+50</span>' +
+            '</div>';
+    } else {
+        el.innerHTML =
+            '<div style="font-size:9px;font-weight:600;color:#86efac;margin-bottom:2px;">Reflectivity (dBZ)</div>' +
+            '<div style="display:flex;height:10px;border-radius:3px;border:1px solid rgba(255,255,255,0.15);overflow:hidden;">' +
+                '<div style="flex:1;background:#04E9E7;"></div>' +
+                '<div style="flex:1;background:#019FF4;"></div>' +
+                '<div style="flex:1;background:#0300F4;"></div>' +
+                '<div style="flex:1;background:#02FD02;"></div>' +
+                '<div style="flex:1;background:#01C501;"></div>' +
+                '<div style="flex:1;background:#008E00;"></div>' +
+                '<div style="flex:1;background:#FDF802;"></div>' +
+                '<div style="flex:1;background:#E5BC00;"></div>' +
+                '<div style="flex:1;background:#FD9500;"></div>' +
+                '<div style="flex:1;background:#FD0000;"></div>' +
+                '<div style="flex:1;background:#D40000;"></div>' +
+                '<div style="flex:1;background:#BC0000;"></div>' +
+                '<div style="flex:1;background:#F800FD;"></div>' +
+                '<div style="flex:1;background:#9854C6;"></div>' +
+            '</div>' +
+            '<div style="display:flex;justify-content:space-between;font-size:8px;color:#94a3b8;margin-top:1px;">' +
+                '<span>5</span><span>20</span><span>35</span><span>50</span><span>65</span>' +
+            '</div>';
+    }
+}
 
 /**
  * Remove NEXRAD map overlay (called on case close / focus exit).
