@@ -7932,6 +7932,15 @@ except Exception as _mw_err:
     print(f"[microwave] FAILED to load microwave_api: {_mw_err}")
     traceback.print_exc()
 
+try:
+    from nexrad_api import router as nexrad_router
+    app.include_router(nexrad_router, prefix="/nexrad")
+    print("[nexrad] Router mounted")
+except Exception as _nx_err:
+    import traceback
+    print(f"[nexrad] FAILED to load nexrad_api: {_nx_err}")
+    traceback.print_exc()
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))

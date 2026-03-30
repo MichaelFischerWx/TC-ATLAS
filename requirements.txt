@@ -21,6 +21,9 @@ s3fs>=2024.2
 # Microwave API (TC-PRIMED S3 access)
 boto3>=1.34
 
+# NEXRAD Level II radar (WSR-88D ground radar overlay)
+arm-pyart>=1.18
+
 # Realtime TDR module (lazy-loaded)
 pyproj>=3.6
 requests>=2.31

@@ -1379,6 +1379,21 @@ function renderStormDetail(storm) {
         }
     }
 
+    // NEXRAD 88D ground radar — show toggle and search for nearby sites
+    var nexradToggleWrap = document.getElementById('ga-nexrad-toggle-wrap');
+    if (nexradToggleWrap) {
+        // Show for storms with known positions (any basin — covers Atlantic, Guam, Hawaii)
+        var hasPos = (storm.lmi_lat || storm.genesis_lat) && (storm.lmi_lon || storm.genesis_lon);
+        if (hasPos && storm.year >= 1991) {
+            nexradToggleWrap.style.display = '';
+            document.getElementById('ga-nexrad-status').textContent = '';
+            loadNexradSites(storm);
+        } else {
+            nexradToggleWrap.style.display = 'none';
+            removeGlobalNexradOverlay();
+        }
+    }
+
     // Model forecast overlay — load a-deck data if storm has ATCF ID
     if (storm.atcf_id && typeof loadModelForecasts === 'function') {
         loadModelForecasts(storm);
@@ -3066,8 +3081,30 @@ function _handleIRMouseMove(e) {
     _irHoverThrottled = true;
     setTimeout(function () { _irHoverThrottled = false; }, 50); // ~20 Hz
 
-    if (!irOverlayVisible || !irCurrentTbData || !irCurrentBounds || !detailMap) {
+    var hasIR = irOverlayVisible && irCurrentTbData && irCurrentBounds;
+    var hasNexrad = _gaNexradVisible && _gaNexradData && _gaNexradBounds;
+    if (!hasIR && !hasNexrad) {
         if (irTbTooltip && detailMap && detailMap.hasLayer(irTbTooltip)) {
+            detailMap.closePopup(irTbTooltip);
+        }
+        return;
+    }
+    if (!detailMap) return;
+
+    // NEXRAD-only hover (no IR visible)
+    if (!hasIR && hasNexrad) {
+        var nxOnly = _handleNexradMouseMove(e);
+        if (nxOnly && irTbTooltip) {
+            var latStr2 = Math.abs(e.latlng.lat).toFixed(2) + (e.latlng.lat >= 0 ? '°N' : '°S');
+            var lngStr2 = Math.abs(e.latlng.lng).toFixed(2) + (e.latlng.lng >= 0 ? '°E' : '°W');
+            var nxHtml = '<span class="ir-tb-val" style="color:#86efac;">' +
+                         nxOnly.value + ' ' + nxOnly.units + '</span>' +
+                         '<span class="ir-tb-sep" style="color:#86efac;"> (88D)</span>' +
+                         '<span class="ir-tb-sep"> &nbsp; </span>' +
+                         '<span class="ir-tb-coord">' + latStr2 + ', ' + lngStr2 + '</span>';
+            irTbTooltip.setLatLng(e.latlng).setContent(nxHtml);
+            if (!detailMap.hasLayer(irTbTooltip)) irTbTooltip.openOn(detailMap);
+        } else if (irTbTooltip && detailMap.hasLayer(irTbTooltip)) {
             detailMap.closePopup(irTbTooltip);
         }
         return;
@@ -3126,6 +3163,14 @@ function _handleIRMouseMove(e) {
                '<span class="ir-tb-val">' + tbC + ' °C</span>' +
                '<span class="ir-tb-sep"> &nbsp; </span>' +
                '<span class="ir-tb-coord">' + latStr + ', ' + lngStr + '</span>';
+
+    // Append NEXRAD readout if available
+    var nxHover = _handleNexradMouseMove(e);
+    if (nxHover) {
+        html += '<br><span class="ir-tb-val" style="color:#86efac;">' +
+                nxHover.value + ' ' + nxHover.units + '</span>' +
+                '<span class="ir-tb-sep" style="color:#86efac;"> (88D)</span>';
+    }
 
     irTbTooltip.setLatLng(e.latlng).setContent(html);
     if (!detailMap.hasLayer(irTbTooltip)) {
@@ -5262,6 +5307,276 @@ function removeGlobalMWOverlay() {
     if (btn) btn.textContent = '\uD83D\uDCE1 MW';
     var controls = document.getElementById('ga-mw-controls');
     if (controls) controls.style.display = 'none';
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// ── NEXRAD WSR-88D GROUND RADAR OVERLAY ───────────────────────
+// ═══════════════════════════════════════════════════════════════
+
+var _gaNexradVisible = false;
+var _gaNexradMapOverlay = null;
+var _gaNexradData = null;       // raw uint8 hover data
+var _gaNexradRows = 0;
+var _gaNexradCols = 0;
+var _gaNexradVmin = -32;
+var _gaNexradVmax = 95;
+var _gaNexradBounds = null;     // L.latLngBounds
+var _gaNexradUnits = 'dBZ';
+var _gaNexradLastStormId = null;
+var _gaNexradTooltip = null;
+
+/**
+ * Check for nearby NEXRAD sites when a storm is selected.
+ * Uses the storm's current track position and time.
+ */
+function loadNexradSites(storm) {
+    var siteSelect = document.getElementById('ga-nexrad-site-select');
+    var status = document.getElementById('ga-nexrad-status');
+    if (!siteSelect) return;
+
+    // Use storm genesis or LMI position as initial search point
+    var lat = storm.lmi_lat || storm.genesis_lat;
+    var lon = storm.lmi_lon || storm.genesis_lon;
+    if (!lat || !lon) {
+        if (status) status.textContent = 'No position';
+        return;
+    }
+
+    _gaNexradLastStormId = storm.sid;
+    siteSelect.innerHTML = '<option value="">Searching...</option>';
+    if (status) status.textContent = '';
+
+    fetch(API_BASE + '/nexrad/sites?lat=' + lat + '&lon=' + lon + '&max_range_km=500')
+        .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+        .then(function (json) {
+            siteSelect.innerHTML = '';
+            if (!json.sites || json.sites.length === 0) {
+                siteSelect.innerHTML = '<option value="">No nearby radars</option>';
+                if (status) status.textContent = 'No 88D coverage';
+                return;
+            }
+
+            for (var i = 0; i < json.sites.length; i++) {
+                var s = json.sites[i];
+                var opt = document.createElement('option');
+                opt.value = s.site;
+                opt.textContent = s.site + ' — ' + s.name + ' (' + s.distance_km + ' km)';
+                siteSelect.appendChild(opt);
+            }
+
+            if (status) status.textContent = json.sites.length + ' site(s)';
+        })
+        .catch(function (e) {
+            siteSelect.innerHTML = '<option value="">Error</option>';
+            if (status) status.textContent = 'Error: ' + e.message;
+        });
+}
+
+/**
+ * Load available scans for the selected site near the current IR frame time.
+ */
+window.loadNexradScans = function () {
+    var siteSelect = document.getElementById('ga-nexrad-site-select');
+    var scanSelect = document.getElementById('ga-nexrad-scan-select');
+    var status = document.getElementById('ga-nexrad-frame-status');
+    if (!siteSelect || !scanSelect || !siteSelect.value) return;
+
+    var site = siteSelect.value;
+
+    // Get the current IR frame time or storm time as reference
+    var refTime = null;
+    if (typeof _lastMarkerDt !== 'undefined' && _lastMarkerDt) {
+        refTime = _lastMarkerDt;
+    } else if (selectedStorm) {
+        // Use genesis time as fallback
+        var y = selectedStorm.year || 2020;
+        var m = selectedStorm.month || 1;
+        var d = selectedStorm.day || 1;
+        refTime = y + '-' + String(m).padStart(2, '0') + '-' + String(d).padStart(2, '0') + 'T12:00:00';
+    }
+    if (!refTime) {
+        if (status) status.textContent = 'No reference time';
+        return;
+    }
+
+    scanSelect.innerHTML = '<option value="">Loading...</option>';
+    if (status) status.textContent = 'Searching...';
+
+    fetch(API_BASE + '/nexrad/scans?site=' + site + '&datetime=' + encodeURIComponent(refTime) + '&window_min=60')
+        .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+        .then(function (json) {
+            scanSelect.innerHTML = '';
+            if (!json.scans || json.scans.length === 0) {
+                scanSelect.innerHTML = '<option value="">No scans found</option>';
+                if (status) status.textContent = 'No scans';
+                return;
+            }
+
+            for (var i = 0; i < json.scans.length; i++) {
+                var sc = json.scans[i];
+                var opt = document.createElement('option');
+                opt.value = sc.s3_key;
+                opt.textContent = sc.scan_time + ' (\u0394' + Math.round(sc.delta_sec) + 's)';
+                scanSelect.appendChild(opt);
+            }
+
+            if (status) status.textContent = json.scans.length + ' scan(s)';
+
+            // Auto-load first (closest) scan
+            loadNexradFrame();
+        })
+        .catch(function (e) {
+            scanSelect.innerHTML = '<option value="">Error</option>';
+            if (status) status.textContent = 'Error: ' + e.message;
+        });
+};
+
+/**
+ * Load and display a NEXRAD radar frame on the detail map.
+ */
+window.loadNexradFrame = function () {
+    var scanSelect = document.getElementById('ga-nexrad-scan-select');
+    var siteSelect = document.getElementById('ga-nexrad-site-select');
+    var prodSelect = document.getElementById('ga-nexrad-product-select');
+    var status = document.getElementById('ga-nexrad-frame-status');
+    if (!scanSelect || !scanSelect.value || !siteSelect || !siteSelect.value) return;
+
+    var s3Key = scanSelect.value;
+    var site = siteSelect.value;
+    var product = (prodSelect && prodSelect.value) || 'reflectivity';
+
+    if (status) status.textContent = 'Loading ' + product + '...';
+
+    var url = API_BASE + '/nexrad/frame?site=' + encodeURIComponent(site) +
+        '&s3_key=' + encodeURIComponent(s3Key) +
+        '&product=' + product;
+
+    fetch(url)
+        .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+        .then(function (json) {
+            if (!json.image || !json.bounds) {
+                if (status) status.textContent = 'No data returned';
+                return;
+            }
+
+            var bounds = L.latLngBounds(
+                L.latLng(json.bounds[0][0], json.bounds[0][1]),
+                L.latLng(json.bounds[1][0], json.bounds[1][1])
+            );
+
+            // Store hover data
+            if (json.data) {
+                var raw = atob(json.data);
+                _gaNexradData = new Uint8Array(raw.length);
+                for (var i = 0; i < raw.length; i++) _gaNexradData[i] = raw.charCodeAt(i);
+                _gaNexradRows = json.data_rows;
+                _gaNexradCols = json.data_cols;
+                _gaNexradVmin = json.data_vmin;
+                _gaNexradVmax = json.data_vmax;
+            }
+            _gaNexradBounds = bounds;
+            _gaNexradUnits = json.units || 'dBZ';
+
+            // Update overlay
+            if (_gaNexradMapOverlay && detailMap) {
+                detailMap.removeLayer(_gaNexradMapOverlay);
+            }
+            _gaNexradMapOverlay = L.imageOverlay(json.image, bounds, {
+                opacity: 0.75, interactive: false, zIndex: 640
+            });
+            if (_gaNexradVisible && detailMap) _gaNexradMapOverlay.addTo(detailMap);
+
+            if (status) status.textContent = json.site + ' ' + json.scan_time + ' — ' + json.label + ' (tilt ' + json.tilt + '\u00B0)';
+        })
+        .catch(function (e) {
+            if (status) status.textContent = 'Error: ' + e.message;
+        });
+};
+
+/**
+ * Toggle the NEXRAD overlay on/off.
+ */
+window.toggleGlobalNexradOverlay = function () {
+    var btn = document.getElementById('ga-nexrad-toggle-btn');
+    var controls = document.getElementById('ga-nexrad-controls');
+
+    if (_gaNexradVisible) {
+        _gaNexradVisible = false;
+        if (btn) btn.textContent = '\uD83C\uDF00 88D';
+        if (controls) controls.style.display = 'none';
+        if (_gaNexradMapOverlay && detailMap) detailMap.removeLayer(_gaNexradMapOverlay);
+        return;
+    }
+
+    _gaNexradVisible = true;
+    if (btn) btn.textContent = 'Hide 88D';
+    if (controls) controls.style.display = '';
+
+    // If overlay already loaded, just show it
+    if (_gaNexradMapOverlay && detailMap) _gaNexradMapOverlay.addTo(detailMap);
+
+    // Load scans for currently selected site
+    var siteSelect = document.getElementById('ga-nexrad-site-select');
+    if (siteSelect && siteSelect.value) {
+        loadNexradScans();
+    }
+};
+
+/**
+ * Handle hover readout for NEXRAD data.
+ * Called from the shared mousemove handler on detailMap.
+ */
+function _handleNexradMouseMove(e) {
+    if (!_gaNexradVisible || !_gaNexradData || !_gaNexradBounds || !detailMap) return null;
+
+    var lat = e.latlng.lat;
+    var lng = e.latlng.lng;
+    var b = _gaNexradBounds;
+
+    if (lat < b.getSouth() || lat > b.getNorth() ||
+        lng < b.getWest() || lng > b.getEast()) {
+        return null;
+    }
+
+    // Mercator-corrected interpolation (same as IR hover)
+    function _latToMercY(d) {
+        var r = d * Math.PI / 180;
+        return Math.log(Math.tan(Math.PI / 4 + r / 2));
+    }
+    var mercNorth = _latToMercY(b.getNorth());
+    var mercSouth = _latToMercY(b.getSouth());
+    var mercLat   = _latToMercY(lat);
+    var fracY = (mercNorth - mercLat) / (mercNorth - mercSouth);
+    var fracX = (lng - b.getWest()) / (b.getEast() - b.getWest());
+    var row = Math.min(Math.floor(fracY * _gaNexradRows), _gaNexradRows - 1);
+    var col = Math.min(Math.floor(fracX * _gaNexradCols), _gaNexradCols - 1);
+
+    var rawVal = _gaNexradData[row * _gaNexradCols + col];
+    if (rawVal === 0) return null;
+
+    // Decode uint8 → physical value
+    var val = _gaNexradVmin + (rawVal - 1) * (_gaNexradVmax - _gaNexradVmin) / 254.0;
+    return { value: val.toFixed(1), units: _gaNexradUnits };
+}
+
+/**
+ * Remove the NEXRAD overlay and reset state.
+ */
+function removeGlobalNexradOverlay() {
+    if (_gaNexradMapOverlay && detailMap) { detailMap.removeLayer(_gaNexradMapOverlay); _gaNexradMapOverlay = null; }
+    _gaNexradData = null;
+    _gaNexradBounds = null;
+    _gaNexradVisible = false;
+    _gaNexradLastStormId = null;
+    var btn = document.getElementById('ga-nexrad-toggle-btn');
+    if (btn) btn.textContent = '\uD83C\uDF00 88D';
+    var controls = document.getElementById('ga-nexrad-controls');
+    if (controls) controls.style.display = 'none';
+    var siteSelect = document.getElementById('ga-nexrad-site-select');
+    if (siteSelect) siteSelect.innerHTML = '';
+    var scanSelect = document.getElementById('ga-nexrad-scan-select');
+    if (scanSelect) scanSelect.innerHTML = '';
 }
 
 

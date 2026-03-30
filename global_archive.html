@@ -350,6 +350,12 @@
                                 </button>
                                 <span id="ga-models-status" class="ir-status"></span>
                             </div>
+                            <div id="ga-nexrad-toggle-wrap" style="display:none;">
+                                <button id="ga-nexrad-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleGlobalNexradOverlay()" style="background:rgba(34,197,94,0.15);border-color:rgba(34,197,94,0.4);color:#86efac;">
+                                    &#127744; 88D
+                                </button>
+                                <span id="ga-nexrad-status" class="ir-status"></span>
+                            </div>
                         </div>
                         <div class="detail-map-wrap">
                             <div id="detail-map" class="detail-map-container"></div>
@@ -473,6 +479,19 @@
                                     <option value="37h">37 GHz H-pol</option>
                                 </select>
                                 <span id="ga-mw-frame-status" style="font-size:9px;color:#64748b;"></span>
+                            </div>
+                        </div>
+                        <!-- NEXRAD 88D ground radar controls -->
+                        <div id="ga-nexrad-controls" style="display:none;background:rgba(15,23,42,0.92);border:1px solid rgba(34,197,94,0.3);border-radius:6px;padding:6px 10px;margin-top:4px;">
+                            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                                <label style="font-size:10px;font-weight:600;color:#86efac;text-transform:uppercase;letter-spacing:0.5px;">88D Site</label>
+                                <select id="ga-nexrad-site-select" onchange="loadNexradScans()" style="flex:1;min-width:140px;font-size:10px;padding:3px 6px;border:1px solid rgba(255,255,255,0.12);border-radius:4px;background:#0f172a;color:#e2e8f0;font-family:'JetBrains Mono',monospace;"></select>
+                                <select id="ga-nexrad-scan-select" onchange="loadNexradFrame()" style="flex:1;min-width:160px;font-size:10px;padding:3px 6px;border:1px solid rgba(255,255,255,0.12);border-radius:4px;background:#0f172a;color:#e2e8f0;font-family:'JetBrains Mono',monospace;"></select>
+                                <select id="ga-nexrad-product-select" onchange="loadNexradFrame()" style="font-size:10px;padding:3px 6px;border:1px solid rgba(255,255,255,0.12);border-radius:4px;background:#0f172a;color:#e2e8f0;font-family:'JetBrains Mono',monospace;">
+                                    <option value="reflectivity">Reflectivity</option>
+                                    <option value="velocity">Velocity</option>
+                                </select>
+                                <span id="ga-nexrad-frame-status" style="font-size:9px;color:#64748b;"></span>
                             </div>
                         </div>
                         <!-- Model forecast overlay controls -->

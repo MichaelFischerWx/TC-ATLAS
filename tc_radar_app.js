@@ -299,6 +299,7 @@ function exitFocusMode() {
     _focusMode = false;
     if (_focusMarker) { map.removeLayer(_focusMarker); _focusMarker = null; }
     removeIRMapOverlay();
+    removeNexradMapOverlay();
     cleanupERA5();
     if (_mapViewMode === 'tracks') {
         if (_trackViewLayer) map.addLayer(_trackViewLayer);
@@ -444,6 +445,7 @@ function openSidePanel(caseData, fromQuickSelect) {
                     '<button class="overlay-pill" id="tilt-btn" onclick="toggleTiltProfile()" data-color="pink" title="Vortex Tilt Profile">\uD83C\uDFAF Tilt</button>' +
                     '<button class="overlay-pill" id="env-case-btn" onclick="toggleEnvOverlay()" data-color="emerald" title="ERA5 Environment Diagnostics">\uD83C\uDF0D Env</button>' +
                     '<button class="overlay-pill" id="mw-overlay-btn" onclick="toggleMicrowaveOverlay()" data-color="orange" title="Microwave Satellite Overlay">\uD83D\uDCE1 MW</button>' +
+                    '<button class="overlay-pill" id="nexrad-overlay-btn" onclick="toggleNexradOverlay()" data-color="green" title="NEXRAD 88D Ground Radar">\uD83C\uDF00 88D</button>' +
                 '</div>' +
                 // ── Microwave overpass selector (hidden by default) ──
                 '<div id="mw-overpass-panel" style="display:none;margin-top:6px;background:rgba(30,41,59,0.95);border:1px solid rgba(251,146,60,0.35);border-radius:8px;padding:8px 12px;">' +
@@ -469,6 +471,23 @@ function openSidePanel(caseData, fromQuickSelect) {
                         '<span style="font-size:9px;color:#64748b;">–</span>' +
                         '<input id="mw-vmax" type="number" value="305" step="5" style="width:44px;font-size:9px;padding:2px 4px;border:1px solid rgba(255,255,255,0.1);border-radius:3px;background:var(--navy);color:var(--text);font-family:\'JetBrains Mono\',monospace;text-align:center;" onchange="updateMWColorBounds()">' +
                         '<span style="font-size:9px;color:#64748b;">K</span>' +
+                    '</div>' +
+                '</div>' +
+                // ── NEXRAD 88D controls (hidden by default) ──
+                '<div id="nexrad-panel" style="display:none;margin-top:6px;background:rgba(30,41,59,0.95);border:1px solid rgba(34,197,94,0.35);border-radius:8px;padding:8px 12px;">' +
+                    '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
+                        '<label style="font-size:10px;font-weight:600;color:#86efac;text-transform:uppercase;letter-spacing:0.5px;">88D Site</label>' +
+                        '<select id="nexrad-site-select" onchange="loadTdrNexradScans()" style="flex:1;min-width:120px;font-size:10px;padding:4px 6px;border:1px solid rgba(255,255,255,0.1);border-radius:4px;background:var(--navy);color:var(--text);font-family:\'JetBrains Mono\',monospace;"></select>' +
+                        '<select id="nexrad-scan-select" onchange="loadTdrNexradFrame()" style="flex:1;min-width:140px;font-size:10px;padding:4px 6px;border:1px solid rgba(255,255,255,0.1);border-radius:4px;background:var(--navy);color:var(--text);font-family:\'JetBrains Mono\',monospace;"></select>' +
+                        '<select id="nexrad-product-select" onchange="loadTdrNexradFrame()" style="font-size:10px;padding:4px 6px;border:1px solid rgba(255,255,255,0.1);border-radius:4px;background:var(--navy);color:var(--text);font-family:\'JetBrains Mono\',monospace;">' +
+                            '<option value="reflectivity">Reflectivity</option>' +
+                            '<option value="velocity">Velocity</option>' +
+                        '</select>' +
+                        '<span id="nexrad-status" style="font-size:9px;color:#64748b;"></span>' +
+                    '</div>' +
+                    '<div style="display:flex;align-items:center;gap:6px;margin-top:5px;flex-wrap:wrap;">' +
+                        '<button id="nexrad-planview-btn" class="overlay-pill" onclick="toggleNexradPlanView()" style="font-size:9px;padding:2px 8px;background:rgba(34,197,94,0.2);border:1px solid rgba(34,197,94,0.4);border-radius:4px;color:#86efac;cursor:pointer;" title="Toggle storm-relative 88D on Plan View">Plan View</button>' +
+                        '<span style="font-size:8px;color:#64748b;margin-left:auto;">Data: <a href="https://registry.opendata.aws/noaa-nexrad/" target="_blank" rel="noopener" style="color:#94a3b8;text-decoration:none;border-bottom:1px dotted #64748b;">NOAA NEXRAD L2</a> (AWS)</span>' +
                     '</div>' +
                 '</div>' +
                 '<div class="fl-archive-status" id="fl-archive-status" style="display:none;font-size:10px;color:#fbbf24;padding:2px 8px;"></div>' +
@@ -734,6 +753,10 @@ function openSidePanel(caseData, fromQuickSelect) {
         // ERA5 data pre-fetched for the Environment overlay (top-nav)
     });
 
+    // Fetch nearby NEXRAD 88D sites for this case
+    _nexradMapOverlay = null; _nexradPlanViewVisible = false; _nexradSrData = null;
+    fetchNexradSites(caseData);
+
     setTimeout(function() { map.invalidateSize(); }, 360);
 }
 
@@ -744,6 +767,7 @@ function closeSidePanel() {
     animStop();
     removeIRMapOverlay();
     removeMicrowaveOverlay();
+    removeNexradOverlay();
     _irPlotlyVisible = false;
     cleanupERA5();
     _csMode = false; _csPointA = null; _removeRubberBand();
@@ -15335,3 +15359,321 @@ function showCiteModal() {
         }
     });
 })();
+
+
+// ══════════════════════════════════════════════════════════════
+// NEXRAD WSR-88D Ground Radar Module
+// ══════════════════════════════════════════════════════════════
+
+var _nexradVisible = false;
+var _nexradMapOverlay = null;
+var _nexradPlanViewVisible = false;
+var _nexradSrData = null;  // storm-relative data for Plotly underlay
+
+/**
+ * Fetch nearby NEXRAD sites for the current case.
+ */
+function fetchNexradSites(caseData) {
+    var siteSelect = document.getElementById('nexrad-site-select');
+    if (!siteSelect) return;
+
+    var lat = caseData.latitude;
+    var lon = caseData.longitude;
+    if (!lat || !lon) return;
+
+    siteSelect.innerHTML = '<option value="">Searching...</option>';
+
+    fetch(API_BASE + '/nexrad/sites?lat=' + lat + '&lon=' + lon + '&max_range_km=460')
+        .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+        .then(function (json) {
+            siteSelect.innerHTML = '';
+            if (!json.sites || json.sites.length === 0) {
+                siteSelect.innerHTML = '<option value="">No nearby 88D</option>';
+                var btn = document.getElementById('nexrad-overlay-btn');
+                if (btn) btn.disabled = true;
+                return;
+            }
+
+            var btn = document.getElementById('nexrad-overlay-btn');
+            if (btn) btn.disabled = false;
+
+            for (var i = 0; i < json.sites.length; i++) {
+                var s = json.sites[i];
+                var opt = document.createElement('option');
+                opt.value = s.site;
+                opt.textContent = s.site + ' — ' + s.name + ' (' + s.distance_km + ' km)';
+                siteSelect.appendChild(opt);
+            }
+        })
+        .catch(function () {
+            siteSelect.innerHTML = '<option value="">Error</option>';
+        });
+}
+
+/**
+ * Load available scans for the selected NEXRAD site.
+ */
+window.loadTdrNexradScans = function () {
+    var siteSelect = document.getElementById('nexrad-site-select');
+    var scanSelect = document.getElementById('nexrad-scan-select');
+    var status = document.getElementById('nexrad-status');
+    if (!siteSelect || !scanSelect || !siteSelect.value) return;
+
+    var site = siteSelect.value;
+
+    // Build reference time from the current case datetime
+    var refTime = null;
+    if (currentCaseData) {
+        var cd = currentCaseData;
+        var y = cd.year || 2020;
+        var mo = String(cd.month || 1).padStart(2, '0');
+        var d = String(cd.day || 1).padStart(2, '0');
+        var h = String(cd.hour || 0).padStart(2, '0');
+        var mi = String(cd.minute || 0).padStart(2, '0');
+        refTime = y + '-' + mo + '-' + d + 'T' + h + ':' + mi + ':00';
+    }
+    if (!refTime) return;
+
+    scanSelect.innerHTML = '<option value="">Loading...</option>';
+    if (status) status.textContent = 'Searching...';
+
+    fetch(API_BASE + '/nexrad/scans?site=' + site + '&datetime=' + encodeURIComponent(refTime) + '&window_min=30')
+        .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+        .then(function (json) {
+            scanSelect.innerHTML = '';
+            if (!json.scans || json.scans.length === 0) {
+                scanSelect.innerHTML = '<option value="">No scans found</option>';
+                if (status) status.textContent = 'No scans';
+                return;
+            }
+
+            for (var i = 0; i < json.scans.length; i++) {
+                var sc = json.scans[i];
+                var opt = document.createElement('option');
+                opt.value = sc.s3_key;
+                opt.textContent = sc.scan_time + ' (\u0394' + Math.round(sc.delta_sec) + 's)';
+                scanSelect.appendChild(opt);
+            }
+
+            if (status) status.textContent = json.scans.length + ' scan(s)';
+
+            // Auto-load closest scan
+            if (_nexradVisible) loadTdrNexradFrame();
+        })
+        .catch(function (e) {
+            scanSelect.innerHTML = '<option value="">Error</option>';
+            if (status) status.textContent = 'Error';
+        });
+};
+
+/**
+ * Load a NEXRAD frame as a geographic overlay on the Leaflet map.
+ */
+window.loadTdrNexradFrame = function () {
+    var scanSelect = document.getElementById('nexrad-scan-select');
+    var siteSelect = document.getElementById('nexrad-site-select');
+    var prodSelect = document.getElementById('nexrad-product-select');
+    var status = document.getElementById('nexrad-status');
+    if (!scanSelect || !scanSelect.value || !siteSelect || !siteSelect.value) return;
+
+    var s3Key = scanSelect.value;
+    var site = siteSelect.value;
+    var product = (prodSelect && prodSelect.value) || 'reflectivity';
+
+    if (status) status.textContent = 'Loading...';
+
+    var url = API_BASE + '/nexrad/frame?site=' + encodeURIComponent(site) +
+        '&s3_key=' + encodeURIComponent(s3Key) +
+        '&product=' + product;
+
+    fetch(url)
+        .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+        .then(function (json) {
+            if (!json.image || !json.bounds) {
+                if (status) status.textContent = 'No data';
+                return;
+            }
+
+            var bounds = L.latLngBounds(
+                L.latLng(json.bounds[0][0], json.bounds[0][1]),
+                L.latLng(json.bounds[1][0], json.bounds[1][1])
+            );
+
+            if (_nexradMapOverlay) {
+                map.removeLayer(_nexradMapOverlay);
+            }
+            _nexradMapOverlay = L.imageOverlay(json.image, bounds, {
+                opacity: 0.65, interactive: false, zIndex: 190
+            });
+            if (_nexradVisible && _focusMode) _nexradMapOverlay.addTo(map);
+
+            if (status) status.textContent = json.site + ' ' + json.scan_time + ' — ' + json.label;
+
+            // Also load storm-relative version if plan view is active
+            if (_nexradPlanViewVisible) _loadNexradStormRelative(site, s3Key, product);
+        })
+        .catch(function (e) {
+            if (status) status.textContent = 'Error: ' + e.message;
+        });
+};
+
+/**
+ * Load storm-relative NEXRAD data for the Plotly plan view underlay.
+ */
+function _loadNexradStormRelative(site, s3Key, product) {
+    if (!currentCaseData) return;
+
+    var cd = currentCaseData;
+    var url = API_BASE + '/nexrad/storm_relative?site=' + encodeURIComponent(site) +
+        '&s3_key=' + encodeURIComponent(s3Key) +
+        '&center_lat=' + cd.latitude + '&center_lon=' + cd.longitude +
+        '&product=' + product +
+        '&grid_spacing_km=2&domain_km=200';
+
+    fetch(url)
+        .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+        .then(function (json) {
+            _nexradSrData = json;
+            _applyNexradPlanView();
+        })
+        .catch(function () {
+            _nexradSrData = null;
+        });
+}
+
+/**
+ * Apply storm-relative NEXRAD as a Plotly image underlay.
+ */
+function _applyNexradPlanView() {
+    var plotDiv = document.getElementById('plotly-chart');
+    if (!plotDiv || !plotDiv.data || !_nexradSrData || !_nexradPlanViewVisible) return;
+
+    var sr = _nexradSrData;
+    var existingImages = (plotDiv.layout.images || []).filter(function(img) {
+        return !img._nexradUnderlay;
+    });
+
+    var img = {
+        source: sr.image,
+        xref: 'x', yref: 'y',
+        x: sr.x_km[0],
+        y: sr.y_km[sr.y_km.length - 1],
+        sizex: sr.x_km[sr.x_km.length - 1] - sr.x_km[0],
+        sizey: sr.y_km[sr.y_km.length - 1] - sr.y_km[0],
+        xanchor: 'left', yanchor: 'top',
+        layer: 'below',
+        opacity: 0.5,
+        _nexradUnderlay: true,
+    };
+
+    existingImages.push(img);
+    Plotly.relayout('plotly-chart', { images: existingImages });
+
+    // Also update fullscreen plot if open
+    var fsdiv = document.getElementById('plotly-fullscreen');
+    if (fsdiv && fsdiv.layout) {
+        var fsImages = (fsdiv.layout.images || []).filter(function(i) {
+            return !i._nexradUnderlay;
+        });
+        var fsImg = JSON.parse(JSON.stringify(img));
+        fsImg._nexradUnderlay = true;
+        fsImages.push(fsImg);
+        Plotly.relayout('plotly-fullscreen', { images: fsImages });
+    }
+}
+
+/**
+ * Remove NEXRAD plan view underlay from Plotly plots.
+ */
+function _removeNexradPlanView() {
+    var plotDiv = document.getElementById('plotly-chart');
+    if (plotDiv && plotDiv.layout) {
+        var clean = (plotDiv.layout.images || []).filter(function(img) {
+            return !img._nexradUnderlay;
+        });
+        Plotly.relayout('plotly-chart', { images: clean });
+    }
+    var fsdiv = document.getElementById('plotly-fullscreen');
+    if (fsdiv && fsdiv.layout) {
+        var fsClean = (fsdiv.layout.images || []).filter(function(img) {
+            return !img._nexradUnderlay;
+        });
+        Plotly.relayout('plotly-fullscreen', { images: fsClean });
+    }
+}
+
+/**
+ * Toggle NEXRAD overlay visibility (map + controls panel).
+ */
+window.toggleNexradOverlay = function () {
+    _nexradVisible = !_nexradVisible;
+    var btn = document.getElementById('nexrad-overlay-btn');
+    var panel = document.getElementById('nexrad-panel');
+
+    if (_nexradVisible) {
+        if (btn) btn.classList.add('active');
+        if (panel) panel.style.display = '';
+        if (_nexradMapOverlay && _focusMode) _nexradMapOverlay.addTo(map);
+
+        // Auto-load scans if site is selected
+        var siteSelect = document.getElementById('nexrad-site-select');
+        if (siteSelect && siteSelect.value) {
+            loadTdrNexradScans();
+        }
+    } else {
+        if (btn) btn.classList.remove('active');
+        if (panel) panel.style.display = 'none';
+        if (_nexradMapOverlay) map.removeLayer(_nexradMapOverlay);
+        if (_nexradPlanViewVisible) {
+            _nexradPlanViewVisible = false;
+            _removeNexradPlanView();
+            var pvBtn = document.getElementById('nexrad-planview-btn');
+            if (pvBtn) pvBtn.classList.remove('active');
+        }
+    }
+};
+
+/**
+ * Toggle storm-relative plan view underlay.
+ */
+window.toggleNexradPlanView = function () {
+    _nexradPlanViewVisible = !_nexradPlanViewVisible;
+    var btn = document.getElementById('nexrad-planview-btn');
+
+    if (_nexradPlanViewVisible) {
+        if (btn) btn.classList.add('active');
+        // Load storm-relative data if we have a scan selected
+        var scanSelect = document.getElementById('nexrad-scan-select');
+        var siteSelect = document.getElementById('nexrad-site-select');
+        var prodSelect = document.getElementById('nexrad-product-select');
+        if (scanSelect && scanSelect.value && siteSelect && siteSelect.value) {
+            var product = (prodSelect && prodSelect.value) || 'reflectivity';
+            _loadNexradStormRelative(siteSelect.value, scanSelect.value, product);
+        }
+    } else {
+        if (btn) btn.classList.remove('active');
+        _removeNexradPlanView();
+    }
+};
+
+/**
+ * Remove NEXRAD map overlay (called on case close / focus exit).
+ */
+function removeNexradMapOverlay() {
+    if (_nexradMapOverlay) { map.removeLayer(_nexradMapOverlay); _nexradMapOverlay = null; }
+}
+
+/**
+ * Full cleanup of NEXRAD state.
+ */
+function removeNexradOverlay() {
+    removeNexradMapOverlay();
+    _nexradVisible = false;
+    _nexradPlanViewVisible = false;
+    _nexradSrData = null;
+    _removeNexradPlanView();
+    var btn = document.getElementById('nexrad-overlay-btn');
+    if (btn) { btn.classList.remove('active'); btn.disabled = false; }
+    var panel = document.getElementById('nexrad-panel');
+    if (panel) panel.style.display = 'none';
+}
