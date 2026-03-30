@@ -254,6 +254,30 @@ L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
     maxZoom:19, subdomains:'abcd'
 }).addTo(map);
 
+// Coastline outlines rendered above overlays (NEXRAD, IR) but below markers
+map.createPane('coastlines');
+map.getPane('coastlines').style.zIndex = 450;
+map.getPane('coastlines').style.pointerEvents = 'none';
+
+(function() {
+    fetch('https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_coastline.geojson')
+        .then(function(r) { return r.json(); })
+        .then(function(geojson) {
+            L.geoJSON(geojson, {
+                pane: 'coastlines',
+                style: {
+                    color: '#000000',
+                    weight: 1.2,
+                    opacity: 0.7,
+                    fillColor: 'transparent',
+                    fillOpacity: 0,
+                    interactive: false
+                }
+            }).addTo(map);
+        })
+        .catch(function() {});
+})();
+
 // ── Filter drawer toggle ─────────────────────────────────────
 function toggleFilterDrawer() {
     const drawer = document.getElementById('filter-drawer');
