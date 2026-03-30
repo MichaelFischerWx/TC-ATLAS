@@ -638,9 +638,19 @@ def _grid_radar(radar, product: str = "reflectivity",
     # (y index increases with northward distance from radar)
     data_2d = grid_2d
 
-    # Get geographic bounds
+    # Get geographic bounds — fall back to site table if radar metadata
+    # has no position (common in pre-2008 Message Type 1 files)
     lat_center = float(radar.latitude["data"][0])
     lon_center = float(radar.longitude["data"][0])
+
+    if abs(lat_center) < 0.01 and abs(lon_center) < 0.01:
+        # Position missing — look up from site table via instrument name
+        site_id = radar.metadata.get("instrument_name", "").upper().strip()
+        if site_id in NEXRAD_SITES:
+            lat_center, lon_center = NEXRAD_SITES[site_id][:2]
+            logger.info(f"Using site table position for {site_id}: {lat_center}, {lon_center}")
+        else:
+            logger.warning(f"Radar position is 0,0 and site '{site_id}' not in table")
 
     dy_deg = max_range_m / 111320.0
     dx_deg = max_range_m / (111320.0 * math.cos(math.radians(lat_center)))
