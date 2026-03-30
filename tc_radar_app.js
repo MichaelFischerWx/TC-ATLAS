@@ -15503,7 +15503,7 @@ window.loadTdrNexradFrame = function () {
                 map.removeLayer(_nexradMapOverlay);
             }
             _nexradMapOverlay = L.imageOverlay(json.image, bounds, {
-                opacity: 0.65, interactive: false, zIndex: 190
+                opacity: 0.75, interactive: false, zIndex: 250
             });
             if (_nexradVisible) _nexradMapOverlay.addTo(map);
 

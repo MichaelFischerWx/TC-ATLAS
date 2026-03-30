@@ -244,13 +244,13 @@ def _build_reflectivity_lut() -> np.ndarray:
     # dBZ breakpoints and colors (NWS standard)
     breaks = [
         (-32.0, (0, 0, 0, 0)),        # below -32: transparent
-        (-10.0, (0, 0, 0, 0)),        # noise floor: transparent
-        (5.0,   (4, 233, 231, 180)),   # light cyan (light precip)
-        (10.0,  (1, 159, 244, 200)),   # medium cyan
-        (15.0,  (3, 0, 244, 220)),     # blue
-        (20.0,  (2, 253, 2, 230)),     # green
-        (25.0,  (1, 197, 1, 240)),     # darker green
-        (30.0,  (0, 142, 0, 250)),     # dark green
+        (4.9,   (0, 0, 0, 0)),         # noise floor: transparent
+        (5.0,   (4, 233, 231, 255)),   # light cyan (light precip)
+        (10.0,  (1, 159, 244, 255)),   # medium cyan
+        (15.0,  (3, 0, 244, 255)),     # blue
+        (20.0,  (2, 253, 2, 255)),     # green
+        (25.0,  (1, 197, 1, 255)),     # darker green
+        (30.0,  (0, 142, 0, 255)),     # dark green
         (35.0,  (253, 248, 2, 255)),   # yellow
         (40.0,  (229, 188, 0, 255)),   # dark yellow
         (45.0,  (253, 149, 0, 255)),   # orange
