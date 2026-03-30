@@ -487,6 +487,15 @@ def _read_nexrad_level2(s3_key: str):
     except Exception as e:
         raise HTTPException(404, f"NEXRAD file not found: {s3_key}: {e}")
 
+    # Pre-2008 NEXRAD files are gzip-compressed (.gz extension).
+    # Py-ART handles internal bzip2 but not the outer gzip wrapper.
+    import gzip as _gzip
+    if data[:2] == b'\x1f\x8b':  # gzip magic bytes
+        try:
+            data = _gzip.decompress(data)
+        except Exception:
+            pass  # not actually gzip, try as-is
+
     try:
         radar = pyart.io.read_nexrad_archive(
             io.BytesIO(data), delay_field_loading=False
