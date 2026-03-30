@@ -3073,6 +3073,14 @@ function displayIROnMap(data) {
 
     // Update storm position marker
     updateIRPositionMarker(data);
+
+    // Update NEXRAD sites/scans for current frame position (throttled)
+    if (_gaNexradVisible && selectedStorm) {
+        var fm = irMeta && irMeta.frames ? irMeta.frames[irFrameIdx] : null;
+        if (fm && fm.lat != null) {
+            _updateNexradForFrame(fm.lat, fm.lon);
+        }
+    }
 }
 
 var _irHoverThrottled = false;
@@ -5325,19 +5333,44 @@ var _gaNexradBounds = null;     // L.latLngBounds
 var _gaNexradUnits = 'dBZ';
 var _gaNexradLastStormId = null;
 var _gaNexradTooltip = null;
+var _gaNexradUpdateTimer = null;
+var _gaNexradLastFrameLat = null;
+var _gaNexradLastFrameLon = null;
+
+/**
+ * Update NEXRAD sites and scans when IR frame position changes.
+ * Throttled to avoid excessive API calls during animation.
+ */
+function _updateNexradForFrame(lat, lon) {
+    // Skip if position hasn't changed significantly (>0.5°)
+    if (_gaNexradLastFrameLat != null &&
+        Math.abs(lat - _gaNexradLastFrameLat) < 0.5 &&
+        Math.abs(lon - _gaNexradLastFrameLon) < 0.5) {
+        return;
+    }
+    _gaNexradLastFrameLat = lat;
+    _gaNexradLastFrameLon = lon;
+
+    if (_gaNexradUpdateTimer) clearTimeout(_gaNexradUpdateTimer);
+    _gaNexradUpdateTimer = setTimeout(function () {
+        if (selectedStorm) {
+            loadNexradSites(selectedStorm, lat, lon);
+        }
+    }, 500);
+}
 
 /**
  * Check for nearby NEXRAD sites when a storm is selected.
  * Uses the storm's current track position and time.
  */
-function loadNexradSites(storm) {
+function loadNexradSites(storm, frameLat, frameLon) {
     var siteSelect = document.getElementById('ga-nexrad-site-select');
     var status = document.getElementById('ga-nexrad-status');
     if (!siteSelect) return;
 
-    // Use storm genesis or LMI position as initial search point
-    var lat = storm.lmi_lat || storm.genesis_lat;
-    var lon = storm.lmi_lon || storm.genesis_lon;
+    // Prefer current IR frame position, fall back to LMI, then genesis
+    var lat = frameLat || storm.lmi_lat || storm.genesis_lat;
+    var lon = frameLon || storm.lmi_lon || storm.genesis_lon;
     if (!lat || !lon) {
         if (status) status.textContent = 'No position';
         return;
