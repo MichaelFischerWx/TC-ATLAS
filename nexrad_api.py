@@ -111,7 +111,7 @@ def _cache_put(key: str, val: dict):
 _GCS_NEXRAD_BUCKET = os.environ.get("GCS_IR_CACHE_BUCKET", "")
 _gcs_client = None
 _gcs_bucket = None
-_GCS_CACHE_VERSION = "v2"
+_GCS_CACHE_VERSION = "v3"
 
 
 def _get_gcs_bucket():
@@ -241,26 +241,24 @@ def _build_reflectivity_lut() -> np.ndarray:
     # Index 0 = transparent/invalid
     lut[0] = [0, 0, 0, 0]
 
-    # dBZ breakpoints and colors (NWS standard)
-    breaks = [
-        (-32.0, (0, 0, 0, 0)),        # below -32: transparent
-        (4.9,   (0, 0, 0, 0)),         # noise floor: transparent
-        (5.0,   (4, 233, 231, 255)),   # light cyan (light precip)
-        (10.0,  (1, 159, 244, 255)),   # medium cyan
-        (15.0,  (3, 0, 244, 255)),     # blue
-        (20.0,  (2, 253, 2, 255)),     # green
-        (25.0,  (1, 197, 1, 255)),     # darker green
-        (30.0,  (0, 142, 0, 255)),     # dark green
-        (35.0,  (253, 248, 2, 255)),   # yellow
-        (40.0,  (229, 188, 0, 255)),   # dark yellow
-        (45.0,  (253, 149, 0, 255)),   # orange
-        (50.0,  (253, 0, 0, 255)),     # red
-        (55.0,  (212, 0, 0, 255)),     # dark red
-        (60.0,  (188, 0, 0, 255)),     # darker red
-        (65.0,  (248, 0, 253, 255)),   # magenta
-        (70.0,  (152, 84, 198, 255)),  # purple
-        (75.0,  (253, 253, 253, 255)), # white
-        (95.0,  (253, 253, 253, 255)), # white (extreme)
+    # dBZ thresholds and discrete colors (NWS standard — no interpolation)
+    # Each entry: (min_dbz, R, G, B, A) — solid color for dbz >= threshold
+    steps = [
+        (75, 253, 253, 253, 255),  # white (extreme)
+        (70, 152,  84, 198, 255),  # purple
+        (65, 248,   0, 253, 255),  # magenta
+        (60, 188,   0,   0, 255),  # darker red
+        (55, 212,   0,   0, 255),  # dark red
+        (50, 253,   0,   0, 255),  # red
+        (45, 253, 149,   0, 255),  # orange
+        (40, 229, 188,   0, 255),  # dark yellow
+        (35, 253, 248,   2, 255),  # yellow
+        (30,   0, 142,   0, 255),  # dark green
+        (25,   1, 197,   1, 255),  # darker green
+        (20,   2, 253,   2, 255),  # green
+        (15,   3,   0, 244, 255),  # blue
+        (10,   1, 159, 244, 255),  # medium cyan
+        ( 5,   4, 233, 231, 255),  # light cyan
     ]
 
     dbz_min, dbz_max = -32.0, 95.0
@@ -268,19 +266,11 @@ def _build_reflectivity_lut() -> np.ndarray:
 
     for i in range(1, 256):
         dbz = dbz_min + (i - 1) * dbz_range / 254.0
-        # Find surrounding breakpoints and interpolate
-        color = np.array([0, 0, 0, 0], dtype=np.uint8)
-        for j in range(len(breaks) - 1):
-            if breaks[j][0] <= dbz <= breaks[j + 1][0]:
-                frac = ((dbz - breaks[j][0]) /
-                        (breaks[j + 1][0] - breaks[j][0]))
-                c0 = np.array(breaks[j][1], dtype=np.float32)
-                c1 = np.array(breaks[j + 1][1], dtype=np.float32)
-                color = np.clip(c0 + frac * (c1 - c0), 0, 255).astype(np.uint8)
+        color = [0, 0, 0, 0]  # transparent by default (below 5 dBZ)
+        for threshold, r, g, b, a in steps:
+            if dbz >= threshold:
+                color = [r, g, b, a]
                 break
-        else:
-            if dbz > breaks[-1][0]:
-                color = np.array(breaks[-1][1], dtype=np.uint8)
         lut[i] = color
 
     return lut
