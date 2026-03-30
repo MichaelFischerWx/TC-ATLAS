@@ -569,7 +569,7 @@ def _grid_radar(radar, product: str = "reflectivity",
 
     # Build output grid
     n_bins = int(2 * max_range_m / grid_spacing_m)
-    grid_2d = np.full((n_bins, n_bins), np.nan, dtype=np.float32)
+    sum_2d = np.zeros((n_bins, n_bins), dtype=np.float64)
     count_2d = np.zeros((n_bins, n_bins), dtype=np.int32)
 
     # Bin gate data into grid cells (nearest-neighbor binning)
@@ -583,7 +583,7 @@ def _grid_radar(radar, product: str = "reflectivity",
     yi_flat = yi.ravel()
     data_flat = field_data.ravel()
 
-    # Mask valid points
+    # Mask valid points (in-bounds AND finite data)
     valid = ((xi_flat >= 0) & (xi_flat < n_bins) &
              (yi_flat >= 0) & (yi_flat < n_bins) &
              np.isfinite(data_flat))
@@ -593,13 +593,13 @@ def _grid_radar(radar, product: str = "reflectivity",
     dv = data_flat[valid]
 
     # Accumulate (sum + count for averaging overlapping gates)
-    np.add.at(grid_2d, (yi_v, xi_v), dv)
+    np.add.at(sum_2d, (yi_v, xi_v), dv)
     np.add.at(count_2d, (yi_v, xi_v), 1)
 
-    # Average where multiple gates fall in same bin
+    # Average where multiple gates fall in same bin; NaN elsewhere
+    grid_2d = np.full((n_bins, n_bins), np.nan, dtype=np.float32)
     mask = count_2d > 0
-    grid_2d[mask] /= count_2d[mask]
-    grid_2d[~mask] = np.nan
+    grid_2d[mask] = (sum_2d[mask] / count_2d[mask]).astype(np.float32)
 
     # Free intermediate arrays
     del xg, yg, zg, field_data, xi, yi, xi_flat, yi_flat, data_flat
