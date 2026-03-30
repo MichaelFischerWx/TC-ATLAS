@@ -372,31 +372,76 @@ var IR_COLORMAPS = {};
 
 // Render Tb uint8 data to a data URI PNG using canvas + selected colormap
 var _irRenderCanvas = null;
-function renderTbToDataURI(tbData, rows, cols, colormap) {
+function renderTbToDataURI(tbData, rows, cols, colormap, southLat, northLat) {
     if (!_irRenderCanvas) {
         _irRenderCanvas = document.createElement('canvas');
     }
-    _irRenderCanvas.width = cols;
-    _irRenderCanvas.height = rows;
-    var ctx = _irRenderCanvas.getContext('2d');
-    var imgData = ctx.createImageData(cols, rows);
-    var pixels = imgData.data;
+
     var lut = IR_COLORMAPS[colormap] || IR_COLORMAPS['enhanced'];
-    for (var i = 0; i < tbData.length; i++) {
-        var val = tbData[i];
-        var pi = i * 4;
-        if (val === 0) {
-            // uint8 0 = missing/invalid data — render as fully transparent
-            pixels[pi] = 0;
-            pixels[pi + 1] = 0;
-            pixels[pi + 2] = 0;
-            pixels[pi + 3] = 0;
-        } else {
-            var li = val * 4;
-            pixels[pi]     = lut[li];
-            pixels[pi + 1] = lut[li + 1];
-            pixels[pi + 2] = lut[li + 2];
-            pixels[pi + 3] = lut[li + 3];
+
+    // If lat bounds provided, apply Mercator warping so the image aligns
+    // correctly when Leaflet stretches it in Web Mercator screen space.
+    // Without this, equirectangular data appears shifted (eye north of track).
+    var warp = (southLat != null && northLat != null);
+    var outRows = rows;
+    var outCols = cols;
+
+    _irRenderCanvas.width = outCols;
+    _irRenderCanvas.height = outRows;
+    var ctx = _irRenderCanvas.getContext('2d');
+    var imgData = ctx.createImageData(outCols, outRows);
+    var pixels = imgData.data;
+
+    if (warp) {
+        // Mercator projection: y = ln(tan(π/4 + lat/2))
+        function _latToMercY(d) {
+            var r = d * Math.PI / 180;
+            return Math.log(Math.tan(Math.PI / 4 + r / 2));
+        }
+        var mercNorth = _latToMercY(northLat);
+        var mercSouth = _latToMercY(southLat);
+        var mercRange = mercNorth - mercSouth;
+
+        for (var outRow = 0; outRow < outRows; outRow++) {
+            // Output row maps to uniform Mercator Y spacing (row 0 = north)
+            var mercY = mercNorth - (outRow / (outRows - 1)) * mercRange;
+            // Convert Mercator Y back to geographic latitude
+            var lat = (2 * Math.atan(Math.exp(mercY)) - Math.PI / 2) * 180 / Math.PI;
+            // Map lat to source row in equirectangular grid (row 0 = north)
+            var srcRowF = (northLat - lat) / (northLat - southLat) * (rows - 1);
+            var srcRow = Math.round(srcRowF);
+            if (srcRow < 0) srcRow = 0;
+            if (srcRow >= rows) srcRow = rows - 1;
+
+            for (var c = 0; c < outCols; c++) {
+                var srcIdx = srcRow * cols + c;
+                var val = tbData[srcIdx];
+                var pi = (outRow * outCols + c) * 4;
+                if (val === 0) {
+                    pixels[pi] = 0; pixels[pi+1] = 0; pixels[pi+2] = 0; pixels[pi+3] = 0;
+                } else {
+                    var li = val * 4;
+                    pixels[pi]     = lut[li];
+                    pixels[pi + 1] = lut[li + 1];
+                    pixels[pi + 2] = lut[li + 2];
+                    pixels[pi + 3] = lut[li + 3];
+                }
+            }
+        }
+    } else {
+        // No warping — direct pixel mapping (original behavior)
+        for (var i = 0; i < tbData.length; i++) {
+            var val = tbData[i];
+            var pi = i * 4;
+            if (val === 0) {
+                pixels[pi] = 0; pixels[pi+1] = 0; pixels[pi+2] = 0; pixels[pi+3] = 0;
+            } else {
+                var li = val * 4;
+                pixels[pi]     = lut[li];
+                pixels[pi + 1] = lut[li + 1];
+                pixels[pi + 2] = lut[li + 2];
+                pixels[pi + 3] = lut[li + 3];
+            }
         }
     }
     ctx.putImageData(imgData, 0, 0);
@@ -447,7 +492,9 @@ function switchColormap(name) {
     renderColorbarCanvas(name);
     // Re-render current frame if we have data
     if (irCurrentTbData && irCurrentBounds && detailMap) {
-        var dataURI = renderTbToDataURI(irCurrentTbData, irCurrentTbRows, irCurrentTbCols, name);
+        var sLat = irCurrentBounds ? irCurrentBounds.getSouth() : null;
+        var nLat = irCurrentBounds ? irCurrentBounds.getNorth() : null;
+        var dataURI = renderTbToDataURI(irCurrentTbData, irCurrentTbRows, irCurrentTbCols, name, sLat, nLat);
         if (irOverlayLayer) {
             try { detailMap.removeLayer(irOverlayLayer); } catch (e) {}
         }
@@ -3011,7 +3058,7 @@ function displayIROnMap(data) {
         console.log('[IR] Tb grid: ' + data.tb_rows + '×' + data.tb_cols +
             ' (' + tbArr.length + ' bytes), bounds: S=' + bounds.south +
             ' N=' + bounds.north + ' W=' + bounds.west + ' E=' + bounds.east);
-        imageURI = renderTbToDataURI(tbArr, data.tb_rows, data.tb_cols, irSelectedColormap);
+        imageURI = renderTbToDataURI(tbArr, data.tb_rows, data.tb_cols, irSelectedColormap, bounds.south, bounds.north);
     } else {
         // Legacy PNG format (from old cache entries)
         irCurrentTbData = null;
@@ -7275,7 +7322,7 @@ function _displayCompareIR(side, data) {
     var imageURI;
     if (data.tb_data) {
         var tbArr = decodeTbData(data.tb_data);
-        imageURI = renderTbToDataURI(tbArr, data.tb_rows, data.tb_cols, _cmpIR.cmap);
+        imageURI = renderTbToDataURI(tbArr, data.tb_rows, data.tb_cols, _cmpIR.cmap, bounds.south, bounds.north);
         // Store Tb data for hover display
         s.tbData = tbArr;
         s.tbRows = data.tb_rows;
