@@ -545,8 +545,25 @@ def _grid_radar(radar, product: str = "reflectivity",
         except Exception as e:
             logger.warning(f"Velocity dealiasing failed: {e}")
 
-    # Get sweep indices
+    # Find a sweep that has data for the requested field.
+    # NEXRAD VCP split-cuts put reflectivity on sweep 0 and velocity on
+    # sweep 1 at the same elevation angle — we need to search for the
+    # first sweep that actually contains valid data.
     sweep_idx = min(sweep, radar.nsweeps - 1)
+    for candidate in range(sweep_idx, min(sweep_idx + 4, radar.nsweeps)):
+        s0 = radar.sweep_start_ray_index["data"][candidate]
+        s1 = radar.sweep_end_ray_index["data"][candidate]
+        check = radar.fields[field]["data"][s0:s1 + 1]
+        if hasattr(check, "count"):
+            # masked array — count non-masked
+            if check.count() > 0:
+                sweep_idx = candidate
+                break
+        else:
+            if np.isfinite(np.asarray(check)).any():
+                sweep_idx = candidate
+                break
+
     sweep_start = radar.sweep_start_ray_index["data"][sweep_idx]
     sweep_end = radar.sweep_end_ray_index["data"][sweep_idx]
 
