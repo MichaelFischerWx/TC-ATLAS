@@ -111,7 +111,7 @@ def _cache_put(key: str, val: dict):
 _GCS_NEXRAD_BUCKET = os.environ.get("GCS_IR_CACHE_BUCKET", "")
 _gcs_client = None
 _gcs_bucket = None
-_GCS_CACHE_VERSION = "v1"
+_GCS_CACHE_VERSION = "v2"
 
 
 def _get_gcs_bucket():
@@ -715,7 +715,7 @@ async def get_radar_frame(
     product: str = Query("reflectivity", description="reflectivity or velocity"),
     tilt: int = Query(0, description="Sweep/tilt index (0 = lowest)"),
     max_range_km: int = Query(230, description="Max radar range in km"),
-    grid_spacing_m: int = Query(500, description="Grid spacing in meters"),
+    grid_spacing_m: int = Query(1000, description="Grid spacing in meters"),
 ):
     """
     Render a NEXRAD radar frame as a geographic overlay image + raw data for hover.
