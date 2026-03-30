@@ -15509,8 +15509,8 @@ window.loadTdrNexradFrame = function () {
 
             if (status) status.textContent = json.site + ' ' + json.scan_time + ' — ' + json.label;
 
-            // Also load storm-relative version if plan view is active
-            if (_nexradPlanViewVisible) _loadNexradStormRelative(site, s3Key, product);
+            // Auto-load storm-relative version for plan view
+            _loadNexradStormRelative(site, s3Key, product);
         })
         .catch(function (e) {
             if (status) status.textContent = 'Error: ' + e.message;
@@ -15614,6 +15614,11 @@ window.toggleNexradOverlay = function () {
         if (btn) btn.classList.add('active');
         if (panel) panel.style.display = '';
         if (_nexradMapOverlay) _nexradMapOverlay.addTo(map);
+
+        // Auto-enable plan view
+        _nexradPlanViewVisible = true;
+        var pvBtn = document.getElementById('nexrad-planview-btn');
+        if (pvBtn) pvBtn.classList.add('active');
 
         // Auto-load scans if site is selected
         var siteSelect = document.getElementById('nexrad-site-select');
