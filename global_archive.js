@@ -5399,6 +5399,9 @@ function loadNexradSites(storm, frameLat, frameLon) {
             }
 
             if (status) status.textContent = json.sites.length + ' site(s)';
+
+            // Auto-trigger scan search if 88D is visible
+            if (_gaNexradVisible) loadNexradScans();
         })
         .catch(function (e) {
             siteSelect.innerHTML = '<option value="">Error</option>';
@@ -5417,12 +5420,20 @@ window.loadNexradScans = function () {
 
     var site = siteSelect.value;
 
-    // Get the current IR frame time or storm time as reference
+    // Get the current IR frame time as reference
     var refTime = null;
-    if (typeof _lastMarkerDt !== 'undefined' && _lastMarkerDt) {
+    // 1. Try IR frame metadata datetime
+    var fm = irMeta && irMeta.frames ? irMeta.frames[irFrameIdx] : null;
+    if (fm && fm.datetime) {
+        // datetime format: "YYYY-MM-DD HH:MM UTC" → convert to ISO
+        refTime = fm.datetime.replace(' UTC', '').replace(' ', 'T') + ':00';
+    }
+    // 2. Fall back to intensity marker datetime
+    if (!refTime && typeof _lastMarkerDt !== 'undefined' && _lastMarkerDt) {
         refTime = _lastMarkerDt;
-    } else if (selectedStorm) {
-        // Use genesis time as fallback
+    }
+    // 3. Fall back to storm genesis
+    if (!refTime && selectedStorm) {
         var y = selectedStorm.year || 2020;
         var m = selectedStorm.month || 1;
         var d = selectedStorm.day || 1;
