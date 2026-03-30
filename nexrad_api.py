@@ -111,7 +111,7 @@ def _cache_put(key: str, val: dict):
 _GCS_NEXRAD_BUCKET = os.environ.get("GCS_IR_CACHE_BUCKET", "")
 _gcs_client = None
 _gcs_bucket = None
-_GCS_CACHE_VERSION = "v3"
+_GCS_CACHE_VERSION = "v4"
 
 
 def _get_gcs_bucket():
@@ -397,7 +397,8 @@ def _render_radar_image(data_2d: np.ndarray, lut: np.ndarray,
 
     buf = io.BytesIO()
     try:
-        img.save(buf, format="WEBP", quality=75, method=0)
+        # Lossless WebP preserves alpha channel cleanly (lossy corrupts it)
+        img.save(buf, format="WEBP", lossless=True, method=0)
         mime = "image/webp"
     except Exception:
         img.save(buf, format="PNG", compress_level=1)
@@ -590,6 +591,19 @@ def _grid_radar(radar, product: str = "reflectivity",
     grid_2d = np.full((n_bins, n_bins), np.nan, dtype=np.float32)
     mask = count_2d > 0
     grid_2d[mask] = (sum_2d[mask] / count_2d[mask]).astype(np.float32)
+
+    # Fill single-pixel radial gaps with nearest-neighbor average.
+    # Gaps appear between radar beams at far range where angular spacing
+    # exceeds the grid cell size.
+    gaps = ~mask
+    if gaps.any():
+        from scipy.ndimage import uniform_filter
+        # Compute neighborhood mean and count of valid neighbors
+        filled = np.where(mask, grid_2d, 0.0)
+        neighbor_sum = uniform_filter(filled.astype(np.float64), size=3, mode='constant')
+        neighbor_cnt = uniform_filter(mask.astype(np.float64), size=3, mode='constant')
+        fill_mask = gaps & (neighbor_cnt > 0.2)  # at least ~2 of 9 neighbors have data
+        grid_2d[fill_mask] = (neighbor_sum[fill_mask] / neighbor_cnt[fill_mask]).astype(np.float32)
 
     # Free intermediate arrays
     del xg, yg, zg, field_data, xi, yi, xi_flat, yi_flat, data_flat
