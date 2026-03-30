@@ -111,7 +111,7 @@ def _cache_put(key: str, val: dict):
 _GCS_NEXRAD_BUCKET = os.environ.get("GCS_IR_CACHE_BUCKET", "")
 _gcs_client = None
 _gcs_bucket = None
-_GCS_CACHE_VERSION = "v4"
+_GCS_CACHE_VERSION = "v5"
 
 
 def _get_gcs_bucket():
@@ -625,8 +625,9 @@ def _grid_radar(radar, product: str = "reflectivity",
     # Free intermediate arrays
     del xg, yg, zg, field_data, xi, yi, xi_flat, yi_flat, data_flat
 
-    # Flip so north is at top (row 0 = north)
-    data_2d = np.flipud(grid_2d)
+    # Grid is in natural order: row 0 = south, row N = north
+    # (y index increases with northward distance from radar)
+    data_2d = grid_2d
 
     # Get geographic bounds
     lat_center = float(radar.latitude["data"][0])
@@ -778,13 +779,13 @@ async def get_radar_frame(
     )
     radar = None  # free memory
 
-    # Render image
+    # Render image (flip so row 0 = north for image display)
     image = _render_radar_image(
-        data_2d, prod_cfg["lut"], prod_cfg["vmin"], prod_cfg["vmax"], scale=1
+        np.flipud(data_2d), prod_cfg["lut"], prod_cfg["vmin"], prod_cfg["vmax"], scale=1
     )
 
-    # Encode raw data for hover readout
-    hover_data = _encode_data_uint8(data_2d, prod_cfg["vmin"], prod_cfg["vmax"])
+    # Encode raw data for hover readout (also flipped for north-at-top display)
+    hover_data = _encode_data_uint8(np.flipud(data_2d), prod_cfg["vmin"], prod_cfg["vmax"])
 
     result = {
         "image": image,
