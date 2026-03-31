@@ -1577,8 +1577,10 @@ def _build_storm_relative_rgb_grid(
     # Apply NRL Lee et al. (2002) RGB formulas
     rgb = _nrl_37color_rgb(v37_grid, h37_grid)  # (n, n, 3) uint8
 
-    # Create alpha channel: transparent where data is missing
-    alpha = np.where(far_mask, 0, 180).astype(np.uint8)
+    # Create alpha channel: transparent where data is missing (far from swath
+    # OR where RGB is black from invalid input data)
+    black_mask = (rgb[:, :, 0] == 0) & (rgb[:, :, 1] == 0) & (rgb[:, :, 2] == 0)
+    alpha = np.where(far_mask | black_mask, 0, 180).astype(np.uint8)
 
     # Build RGBA image
     rgba = np.concatenate([rgb, alpha[:, :, np.newaxis]], axis=-1)

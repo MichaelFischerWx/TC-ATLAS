@@ -5562,6 +5562,317 @@
     }
 
     // ═══════════════════════════════════════════════════════════════
+    // ── NEXRAD WSR-88D GROUND RADAR — REALTIME MODE ──────────────
+    // ═══════════════════════════════════════════════════════════════
+
+    var _rtNexradVisible = false;
+    var _rtNexradMapOverlay = null;
+    var _rtNexradPlanViewVisible = false;
+    var _rtNexradSrData = null;
+    var _rtNexradSitesLoaded = false;
+
+    function _rtBuildNexradRefTime() {
+        if (!_rtCaseMeta || !_rtCaseMeta.datetime) return null;
+        var dt = _rtCaseMeta.datetime.replace(' UTC', '').replace(' ', 'T');
+        if (dt.length === 16) dt += ':00';
+        return dt;
+    }
+
+    function _rtFetchNexradSites() {
+        var siteSelect = document.getElementById('rt-nexrad-site-select');
+        if (!siteSelect || !_rtCaseMeta) return;
+
+        var lat = _rtCaseMeta.latitude;
+        var lon = _rtCaseMeta.longitude;
+        if (!lat || !lon) return;
+
+        siteSelect.innerHTML = '<option value="">Searching\u2026</option>';
+
+        fetch(API_BASE + '/nexrad/sites?lat=' + lat + '&lon=' + lon + '&max_range_km=460')
+            .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+            .then(function (json) {
+                siteSelect.innerHTML = '';
+                if (!json.sites || json.sites.length === 0) {
+                    siteSelect.innerHTML = '<option value="">No nearby 88D</option>';
+                    var btn = document.getElementById('rt-nexrad-btn');
+                    if (btn) btn.disabled = true;
+                    return;
+                }
+                _rtNexradSitesLoaded = true;
+                for (var i = 0; i < json.sites.length; i++) {
+                    var s = json.sites[i];
+                    var opt = document.createElement('option');
+                    opt.value = s.site;
+                    opt.textContent = s.site + ' \u2014 ' + s.name + ' (' + s.distance_km + ' km)';
+                    siteSelect.appendChild(opt);
+                }
+                // Auto-load scans for the first site
+                if (_rtNexradVisible) rtLoadNexradScans();
+            })
+            .catch(function () {
+                siteSelect.innerHTML = '<option value="">Error</option>';
+            });
+    }
+
+    window.rtLoadNexradScans = function () {
+        var siteSelect = document.getElementById('rt-nexrad-site-select');
+        var scanSelect = document.getElementById('rt-nexrad-scan-select');
+        var status = document.getElementById('rt-nexrad-status');
+        if (!siteSelect || !scanSelect || !siteSelect.value) return;
+
+        var site = siteSelect.value;
+        var refTime = _rtBuildNexradRefTime();
+        if (!refTime) return;
+
+        scanSelect.innerHTML = '<option value="">Loading\u2026</option>';
+        if (status) status.textContent = 'Searching\u2026';
+
+        fetch(API_BASE + '/nexrad/scans?site=' + site + '&datetime=' + encodeURIComponent(refTime) + '&window_min=60')
+            .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+            .then(function (json) {
+                scanSelect.innerHTML = '';
+                if (!json.scans || json.scans.length === 0) {
+                    scanSelect.innerHTML = '<option value="">No scans found</option>';
+                    if (status) status.textContent = 'No scans';
+                    return;
+                }
+                for (var i = 0; i < json.scans.length; i++) {
+                    var sc = json.scans[i];
+                    var opt = document.createElement('option');
+                    opt.value = sc.s3_key;
+                    opt.textContent = sc.scan_time + ' (\u0394' + Math.round(sc.delta_sec) + 's)';
+                    scanSelect.appendChild(opt);
+                }
+                if (status) status.textContent = json.scans.length + ' scan(s)';
+                var ci = json.closest_index || 0;
+                if (ci < scanSelect.options.length) scanSelect.selectedIndex = ci;
+                if (_rtNexradVisible) rtLoadNexradFrame();
+            })
+            .catch(function () {
+                scanSelect.innerHTML = '<option value="">Error</option>';
+                if (status) status.textContent = 'Error';
+            });
+    };
+
+    window.rtLoadNexradFrame = function () {
+        var scanSelect = document.getElementById('rt-nexrad-scan-select');
+        var siteSelect = document.getElementById('rt-nexrad-site-select');
+        var prodSelect = document.getElementById('rt-nexrad-product-select');
+        var status = document.getElementById('rt-nexrad-status');
+        if (!scanSelect || !scanSelect.value || !siteSelect || !siteSelect.value) return;
+
+        var s3Key = scanSelect.value;
+        var site = siteSelect.value;
+        var product = (prodSelect && prodSelect.value) || 'reflectivity';
+
+        if (status) status.textContent = 'Loading\u2026';
+
+        var url = API_BASE + '/nexrad/frame?site=' + encodeURIComponent(site) +
+            '&s3_key=' + encodeURIComponent(s3Key) +
+            '&product=' + product;
+
+        fetch(url)
+            .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+            .then(function (json) {
+                if (!json.image || !json.bounds) {
+                    if (status) status.textContent = 'No data';
+                    return;
+                }
+
+                var bounds = L.latLngBounds(
+                    L.latLng(json.bounds[0][0], json.bounds[0][1]),
+                    L.latLng(json.bounds[1][0], json.bounds[1][1])
+                );
+
+                if (_rtNexradMapOverlay && _rtMap) {
+                    _rtMap.removeLayer(_rtNexradMapOverlay);
+                }
+                _rtNexradMapOverlay = L.imageOverlay(json.image, bounds, {
+                    opacity: 0.75, interactive: false, zIndex: 250
+                });
+                if (_rtNexradVisible && _rtMap) _rtNexradMapOverlay.addTo(_rtMap);
+
+                if (status) status.textContent = json.site + ' ' + json.scan_time + ' \u2014 ' + json.label;
+                _rtUpdateNexradColorbar(product);
+                _rtLoadNexradStormRelative(site, s3Key, product);
+            })
+            .catch(function (e) {
+                if (status) status.textContent = 'Error: ' + e.message;
+            });
+    };
+
+    function _rtLoadNexradStormRelative(site, s3Key, product) {
+        if (!_rtCaseMeta) return;
+
+        var url = API_BASE + '/nexrad/storm_relative?site=' + encodeURIComponent(site) +
+            '&s3_key=' + encodeURIComponent(s3Key) +
+            '&center_lat=' + _rtCaseMeta.latitude + '&center_lon=' + _rtCaseMeta.longitude +
+            '&product=' + product +
+            '&grid_spacing_km=2&domain_km=200';
+
+        fetch(url)
+            .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+            .then(function (json) {
+                _rtNexradSrData = json;
+                _rtApplyNexradPlanView();
+            })
+            .catch(function () { _rtNexradSrData = null; });
+    }
+
+    function _rtApplyNexradPlanView() {
+        var plotDiv = document.getElementById('rt-plotly-chart');
+        if (!plotDiv || !plotDiv.data || !_rtNexradSrData || !_rtNexradPlanViewVisible) return;
+
+        var sr = _rtNexradSrData;
+        ['rt-plotly-chart', 'rt-fullscreen-chart'].forEach(function (id) {
+            var el = document.getElementById(id);
+            if (!el || !el.layout) return;
+            var existing = (el.layout.images || []).filter(function (img) { return !img._rtNexradUnderlay; });
+            existing.push({
+                source: sr.image,
+                xref: 'x', yref: 'y',
+                x: sr.x_km[0],
+                y: sr.y_km[sr.y_km.length - 1],
+                sizex: sr.x_km[sr.x_km.length - 1] - sr.x_km[0],
+                sizey: sr.y_km[sr.y_km.length - 1] - sr.y_km[0],
+                xanchor: 'left', yanchor: 'top',
+                layer: 'below',
+                opacity: 0.8,
+                _rtNexradUnderlay: true,
+            });
+            Plotly.relayout(id, { images: existing });
+        });
+    }
+
+    function _rtRemoveNexradPlanView() {
+        ['rt-plotly-chart', 'rt-fullscreen-chart'].forEach(function (id) {
+            var el = document.getElementById(id);
+            if (!el || !el.layout) return;
+            var clean = (el.layout.images || []).filter(function (img) { return !img._rtNexradUnderlay; });
+            Plotly.relayout(id, { images: clean });
+        });
+    }
+
+    window.rtToggleNexradOverlay = function () {
+        _rtNexradVisible = !_rtNexradVisible;
+        var btn = document.getElementById('rt-nexrad-btn');
+        var panel = document.getElementById('rt-nexrad-panel');
+
+        if (_rtNexradVisible) {
+            if (btn) btn.classList.add('active');
+            if (panel) panel.style.display = '';
+            if (_rtNexradMapOverlay && _rtMap) _rtNexradMapOverlay.addTo(_rtMap);
+
+            _rtNexradPlanViewVisible = true;
+            var pvBtn = document.getElementById('rt-nexrad-planview-btn');
+            if (pvBtn) pvBtn.classList.add('active');
+
+            // Wait for metadata if not yet available
+            if (!_rtCaseMeta) {
+                var _waitMeta = setInterval(function () {
+                    if (_rtCaseMeta) {
+                        clearInterval(_waitMeta);
+                        if (!_rtNexradSitesLoaded) _rtFetchNexradSites();
+                    }
+                }, 500);
+                setTimeout(function () { clearInterval(_waitMeta); }, 15000);
+            } else if (!_rtNexradSitesLoaded) {
+                _rtFetchNexradSites();
+            } else {
+                rtLoadNexradScans();
+            }
+        } else {
+            if (btn) btn.classList.remove('active');
+            if (panel) panel.style.display = 'none';
+            if (_rtNexradMapOverlay && _rtMap) _rtMap.removeLayer(_rtNexradMapOverlay);
+            if (_rtNexradPlanViewVisible) {
+                _rtNexradPlanViewVisible = false;
+                _rtRemoveNexradPlanView();
+                var pvBtn = document.getElementById('rt-nexrad-planview-btn');
+                if (pvBtn) pvBtn.classList.remove('active');
+            }
+        }
+    };
+
+    window.rtToggleNexradPlanView = function () {
+        _rtNexradPlanViewVisible = !_rtNexradPlanViewVisible;
+        var btn = document.getElementById('rt-nexrad-planview-btn');
+
+        if (_rtNexradPlanViewVisible) {
+            if (btn) btn.classList.add('active');
+            var scanSelect = document.getElementById('rt-nexrad-scan-select');
+            var siteSelect = document.getElementById('rt-nexrad-site-select');
+            var prodSelect = document.getElementById('rt-nexrad-product-select');
+            if (scanSelect && scanSelect.value && siteSelect && siteSelect.value) {
+                var product = (prodSelect && prodSelect.value) || 'reflectivity';
+                _rtLoadNexradStormRelative(siteSelect.value, scanSelect.value, product);
+            }
+        } else {
+            if (btn) btn.classList.remove('active');
+            _rtRemoveNexradPlanView();
+        }
+    };
+
+    function _rtUpdateNexradColorbar(product) {
+        var el = document.getElementById('rt-nexrad-colorbar');
+        if (!el) return;
+        if (product === 'velocity') {
+            el.innerHTML =
+                '<div style="display:flex;height:10px;border-radius:3px;border:1px solid rgba(255,255,255,0.15);overflow:hidden;">' +
+                    '<div style="flex:1;background:#0000D0;"></div><div style="flex:1;background:#0050FF;"></div>' +
+                    '<div style="flex:1;background:#00C8FF;"></div><div style="flex:1;background:#00FF80;"></div>' +
+                    '<div style="flex:1;background:#80FF00;"></div><div style="flex:1;background:#FFFF00;"></div>' +
+                    '<div style="flex:1;background:#FF8000;"></div><div style="flex:1;background:#FF0000;"></div>' +
+                    '<div style="flex:1;background:#C80000;"></div></div>' +
+                '<div style="display:flex;justify-content:space-between;font-size:8px;color:#94a3b8;margin-top:1px;">' +
+                    '<span>-50 m/s</span><span>0</span><span>+50 m/s</span></div>';
+        } else {
+            el.innerHTML =
+                '<div style="display:flex;height:10px;border-radius:3px;border:1px solid rgba(255,255,255,0.15);overflow:hidden;">' +
+                    '<div style="flex:1;background:#04E9E7;"></div><div style="flex:1;background:#019FF4;"></div>' +
+                    '<div style="flex:1;background:#0300F4;"></div><div style="flex:1;background:#02FD02;"></div>' +
+                    '<div style="flex:1;background:#01C501;"></div><div style="flex:1;background:#008E00;"></div>' +
+                    '<div style="flex:1;background:#FDF802;"></div><div style="flex:1;background:#E5BC00;"></div>' +
+                    '<div style="flex:1;background:#FD9500;"></div><div style="flex:1;background:#FD0000;"></div>' +
+                    '<div style="flex:1;background:#D40000;"></div><div style="flex:1;background:#BC0000;"></div>' +
+                    '<div style="flex:1;background:#F800FD;"></div><div style="flex:1;background:#9854C6;"></div></div>' +
+                '<div style="display:flex;justify-content:space-between;font-size:8px;color:#94a3b8;margin-top:1px;">' +
+                    '<span>5 dBZ</span><span>20</span><span>35</span><span>50</span><span>65</span></div>';
+        }
+    }
+
+    function _rtRemoveNexradOverlay() {
+        if (_rtNexradMapOverlay && _rtMap) { _rtMap.removeLayer(_rtNexradMapOverlay); _rtNexradMapOverlay = null; }
+        _rtNexradVisible = false;
+        _rtNexradPlanViewVisible = false;
+        _rtNexradSrData = null;
+        _rtNexradSitesLoaded = false;
+        _rtRemoveNexradPlanView();
+        var btn = document.getElementById('rt-nexrad-btn');
+        if (btn) btn.classList.remove('active');
+        var panel = document.getElementById('rt-nexrad-panel');
+        if (panel) panel.style.display = 'none';
+        var pvBtn = document.getElementById('rt-nexrad-planview-btn');
+        if (pvBtn) pvBtn.classList.remove('active');
+        var cb = document.getElementById('rt-nexrad-colorbar');
+        if (cb) cb.innerHTML = '';
+    }
+
+    // ── Patch rtExploreFile to reset NEXRAD state ──────────────
+    var _origRtExploreFileNx = window.rtExploreFile;
+    window.rtExploreFile = function () {
+        _rtRemoveNexradOverlay();
+        _origRtExploreFileNx();
+    };
+
+    // ── Patch _rtCleanupMap to also remove NEXRAD layers ──────
+    var _origCleanupMapNx = _rtCleanupMap;
+    _rtCleanupMap = function () {
+        if (_rtNexradMapOverlay && _rtMap) { _rtMap.removeLayer(_rtNexradMapOverlay); _rtNexradMapOverlay = null; }
+        _origCleanupMapNx();
+    };
+
+    // ═══════════════════════════════════════════════════════════════
     // ── MICROWAVE SATELLITE OVERLAY (TC-PRIMED) — REALTIME MODE ──
     // ═══════════════════════════════════════════════════════════════
 

@@ -191,6 +191,7 @@
                                 <button class="overlay-pill" id="rt-barb-btn" onclick="rtToggleBarbs()" disabled data-color="slate" title="Wind Barbs">🌬 Barbs</button>
                                 <button class="overlay-pill" id="rt-tilt-btn" onclick="rtToggleTilt()" disabled data-color="pink" title="Vortex Tilt Profile">🎯 Tilt</button>
                                 <button class="overlay-pill" id="rt-mw-overlay-btn" onclick="rtToggleMicrowaveOverlay()" data-color="orange" title="Microwave Satellite Overlay">📡 MW</button>
+                                <button class="overlay-pill" id="rt-nexrad-btn" onclick="rtToggleNexradOverlay()" data-color="green" title="NEXRAD 88D Ground Radar">🌀 88D</button>
                             </div>
                             <!-- Microwave overpass selector (hidden by default) -->
                             <div id="rt-mw-overpass-panel" style="display:none;margin-top:6px;background:rgba(30,41,59,0.95);border:1px solid rgba(251,146,60,0.35);border-radius:8px;padding:8px 12px;">
@@ -205,6 +206,22 @@
                                     <span id="rt-mw-status" style="font-size:9px;color:#64748b;"></span>
                                     <span style="font-size:8px;color:#64748b;margin-left:auto;">Data: <a href="https://rammb-data.cira.colostate.edu/tcprimed/" target="_blank" rel="noopener" style="color:#94a3b8;text-decoration:none;border-bottom:1px dotted #64748b;">TC-PRIMED</a> (NOAA/CSU)</span>
                                 </div>
+                            </div>
+                            <!-- NEXRAD 88D panel (hidden by default) -->
+                            <div id="rt-nexrad-panel" style="display:none;margin-top:6px;background:rgba(30,41,59,0.95);border:1px solid rgba(34,197,94,0.35);border-radius:8px;padding:8px 12px;">
+                                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                                    <label style="font-size:10px;font-weight:600;color:#86efac;text-transform:uppercase;letter-spacing:0.5px;">88D Site</label>
+                                    <select id="rt-nexrad-site-select" onchange="rtLoadNexradScans()" style="min-width:180px;font-size:10px;padding:4px 6px;border:1px solid rgba(255,255,255,0.1);border-radius:4px;background:var(--navy);color:var(--text);font-family:'JetBrains Mono',monospace;"></select>
+                                    <select id="rt-nexrad-scan-select" onchange="rtLoadNexradFrame()" style="flex:1;min-width:180px;font-size:10px;padding:4px 6px;border:1px solid rgba(255,255,255,0.1);border-radius:4px;background:var(--navy);color:var(--text);font-family:'JetBrains Mono',monospace;"></select>
+                                    <select id="rt-nexrad-product-select" onchange="rtLoadNexradFrame()" style="font-size:10px;padding:4px 6px;border:1px solid rgba(255,255,255,0.1);border-radius:4px;background:var(--navy);color:var(--text);font-family:'JetBrains Mono',monospace;">
+                                        <option value="reflectivity">Reflectivity</option>
+                                        <option value="velocity">Velocity</option>
+                                    </select>
+                                    <button id="rt-nexrad-planview-btn" onclick="rtToggleNexradPlanView()" style="font-size:9px;padding:2px 8px;background:rgba(34,197,94,0.2);border:1px solid rgba(34,197,94,0.4);border-radius:4px;color:#86efac;cursor:pointer;" title="Toggle storm-relative 88D on Plan View">Plan View</button>
+                                    <span id="rt-nexrad-status" style="font-size:9px;color:#64748b;"></span>
+                                    <span style="font-size:8px;color:#64748b;margin-left:auto;">Data: NOAA NEXRAD L2 (AWS)</span>
+                                </div>
+                                <div id="rt-nexrad-colorbar" style="margin-top:4px;"></div>
                             </div>
                             <div class="action-section">
                                 <span class="action-section-label">Analysis</span>
