@@ -1716,7 +1716,11 @@
 
         var url = API_BASE + RT_PREFIX + '/ir?file_url=' + encodeURIComponent(_currentFileUrl);
 
-        fetch(url)
+        // Abort after 45s to prevent browser CORS-masking of timeouts
+        var controller = new AbortController();
+        var abortTimer = setTimeout(function () { controller.abort(); }, 45000);
+
+        fetch(url, { signal: controller.signal })
             .then(function (r) {
                 if (!r.ok) throw new Error('HTTP ' + r.status);
                 return r.json();
@@ -1754,12 +1758,13 @@
                 // Retry once after 3s (handles Cloud Run cold-start failures)
                 if (!rtFetchIR._retried) {
                     rtFetchIR._retried = true;
-                    console.info('RT IR: retrying in 3s…');
+                    console.info('RT IR: retrying in 3s\u2026');
                     setTimeout(rtFetchIR, 3000);
                 } else {
                     _rtRemoveIRLoadingIndicator();
                 }
-            });
+            })
+            .finally(function () { clearTimeout(abortTimer); });
     }
     rtFetchIR._retried = false;
     window.rtFetchIR = rtFetchIR;

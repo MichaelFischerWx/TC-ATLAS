@@ -15595,7 +15595,7 @@ function _applyNexradPlanView() {
         sizey: sr.y_km[sr.y_km.length - 1] - sr.y_km[0],
         xanchor: 'left', yanchor: 'top',
         layer: 'below',
-        opacity: 0.5,
+        opacity: 0.8,
         _nexradUnderlay: true,
     };
 

@@ -489,12 +489,21 @@ def _read_nexrad_level2(s3_key: str):
 
     # Pre-2008 NEXRAD files are gzip-compressed (.gz extension).
     # Py-ART handles internal bzip2 but not the outer gzip wrapper.
+    # Some old files have truncated gzip streams, so we use incremental
+    # decompression to recover as much data as possible.
     import gzip as _gzip
+    import zlib as _zlib
     if data[:2] == b'\x1f\x8b':  # gzip magic bytes
         try:
             data = _gzip.decompress(data)
-        except Exception:
-            pass  # not actually gzip, try as-is
+        except Exception as e:
+            # Truncated gzip — try incremental decompression to salvage data
+            logger.warning(f"gzip.decompress failed for {s3_key}: {e}, trying incremental")
+            try:
+                d = _zlib.decompressobj(_zlib.MAX_WBITS | 16)
+                data = d.decompress(data)
+            except Exception as e2:
+                logger.warning(f"Incremental gzip also failed for {s3_key}: {e2}")
 
     try:
         radar = pyart.io.read_nexrad_archive(
@@ -543,16 +552,30 @@ def _grid_radar(radar, product: str = "reflectivity",
             raise HTTPException(404, f"Field '{product}' not in radar data. "
                                 f"Available: {list(radar.fields.keys())}")
 
-    # Dealias velocity if requested
+    # Dealias velocity — try region-based first, then fourdd
     if product == "velocity":
+        _dealiased = False
+        # Method 1: region-based (works well for most cases)
         try:
             dealiased = pyart.correct.dealias_region_based(
                 radar, vel_field=field, centered=True
             )
             radar.add_field("dealiased_velocity", dealiased, replace_existing=True)
             field = "dealiased_velocity"
+            _dealiased = True
         except Exception as e:
-            logger.warning(f"Velocity dealiasing failed: {e}")
+            logger.warning(f"Region-based dealiasing failed: {e}")
+        # Method 2: unwrap-based fallback
+        if not _dealiased:
+            try:
+                dealiased = pyart.correct.dealias_unwrap_phase(
+                    radar, vel_field=field
+                )
+                radar.add_field("dealiased_velocity", dealiased, replace_existing=True)
+                field = "dealiased_velocity"
+                _dealiased = True
+            except Exception as e:
+                logger.warning(f"Unwrap dealiasing also failed: {e}")
 
     # Find a sweep that has data for the requested field.
     # NEXRAD VCP split-cuts put reflectivity on sweep 0 and velocity on

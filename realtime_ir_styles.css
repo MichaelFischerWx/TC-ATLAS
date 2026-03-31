@@ -85,28 +85,45 @@
 /* ── No storms message ───────────────────────────────────────── */
 .ir-no-storms {
     position: absolute;
-    top: 50%;
+    bottom: 70px;
     left: 50%;
-    transform: translate(-50%, -50%);
+    transform: translateX(-50%);
     text-align: center;
     z-index: 500;
-    padding: 2rem;
+    padding: 10px 24px;
+    background: rgba(12, 29, 61, 0.85);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    pointer-events: auto;
 }
 .ir-no-storms-icon {
-    font-size: 3rem;
-    margin-bottom: 1rem;
+    font-size: 1.4rem;
+    flex-shrink: 0;
 }
 .ir-no-storms-title {
-    font-size: 1.3rem;
-    font-weight: 700;
+    font-size: 0.82rem;
+    font-weight: 600;
     color: #e2e8f0;
-    margin-bottom: 0.5rem;
+    white-space: nowrap;
 }
 .ir-no-storms-desc {
-    font-size: 0.85rem;
-    color: #8b9ec2;
-    max-width: 400px;
-    line-height: 1.6;
+    display: none;
+}
+.ir-no-storms-close {
+    background: none;
+    border: none;
+    color: #64748b;
+    font-size: 1rem;
+    cursor: pointer;
+    padding: 0 0 0 4px;
+    line-height: 1;
+}
+.ir-no-storms-close:hover {
+    color: #e2e8f0;
 }
 
 /* ── Legend ───────────────────────────────────────────────────── */
