@@ -81,7 +81,7 @@ gcloud run deploy "${SERVICE_NAME}" \
     --timeout "${TIMEOUT}" \
     --port 8080 \
     --allow-unauthenticated \
-    --set-env-vars "^||^TC_RADAR_S3_BUCKET=${TC_RADAR_S3_BUCKET:-}||TC_RADAR_S3_PREFIX=${TC_RADAR_S3_PREFIX:-tc-radar}||AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}||AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}||AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-us-east-1}||CORS_ORIGINS=https://michaelfischerwx.github.io,http://localhost:8000" \
+    --update-env-vars "^||^TC_RADAR_S3_BUCKET=${TC_RADAR_S3_BUCKET:-}||TC_RADAR_S3_PREFIX=${TC_RADAR_S3_PREFIX:-tc-radar}||TC_RADAR_GCS_BUCKET=${TC_RADAR_GCS_BUCKET:-}||TC_RADAR_GCS_PREFIX=${TC_RADAR_GCS_PREFIX:-tc-radar}||AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}||AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}||AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-us-east-1}||CORS_ORIGINS=https://michaelfischerwx.github.io,http://localhost:8000" \
     "$@"
 
 echo ""

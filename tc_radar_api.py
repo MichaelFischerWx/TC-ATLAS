@@ -68,9 +68,22 @@ S3_PREFIX  = os.environ.get("TC_RADAR_S3_PREFIX", "tc-radar")
 AWS_REGION = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
 USE_S3     = bool(S3_BUCKET)
 
+# GCS Zarr — preferred over S3 (free egress from Cloud Run)
+GCS_ZARR_BUCKET = os.environ.get("TC_RADAR_GCS_BUCKET", "")
+GCS_ZARR_PREFIX = os.environ.get("TC_RADAR_GCS_PREFIX", "tc-radar")
+USE_GCS_ZARR    = bool(GCS_ZARR_BUCKET)
+
 AOML_BASE = "https://www.aoml.noaa.gov/ftp/pub/hrd/data/radar/level3"
 
-# S3 Zarr paths  (set after conversion script runs)
+# GCS Zarr paths (preferred — free egress from Cloud Run)
+GCS_PATHS = {
+    ("swath", "early"):  f"gs://{GCS_ZARR_BUCKET}/{GCS_ZARR_PREFIX}/swath_early",
+    ("swath", "recent"): f"gs://{GCS_ZARR_BUCKET}/{GCS_ZARR_PREFIX}/swath_recent",
+    ("merge", "early"):  f"gs://{GCS_ZARR_BUCKET}/{GCS_ZARR_PREFIX}/merge_early",
+    ("merge", "recent"): f"gs://{GCS_ZARR_BUCKET}/{GCS_ZARR_PREFIX}/merge_recent",
+} if USE_GCS_ZARR else {}
+
+# S3 Zarr paths (fallback)
 S3_PATHS = {
     ("swath", "early"):  f"s3://{S3_BUCKET}/{S3_PREFIX}/swath_early",
     ("swath", "recent"): f"s3://{S3_BUCKET}/{S3_PREFIX}/swath_recent",
@@ -88,6 +101,7 @@ AOML_FILES = {
 
 
 # IR satellite imagery (MergIR) Zarr store
+IR_GCS_PATH = f"gs://{GCS_ZARR_BUCKET}/{GCS_ZARR_PREFIX}/mergir" if GCS_ZARR_BUCKET else ""
 IR_S3_PATH = f"s3://{S3_BUCKET}/{S3_PREFIX}/mergir" if S3_BUCKET else ""
 
 # IR colormap: NOAA-style enhanced IR (warm=dark, cold=bright/colorful)
@@ -110,6 +124,7 @@ IR_COLORMAP = [
 ]
 
 # ERA5 environmental diagnostics Zarr store
+ERA5_GCS_PATH = f"gs://{GCS_ZARR_BUCKET}/{GCS_ZARR_PREFIX}/era5" if GCS_ZARR_BUCKET else ""
 ERA5_S3_PATH = f"s3://{S3_BUCKET}/{S3_PREFIX}/era5" if S3_BUCKET else ""
 
 ERA5_FIELD_CONFIG = {
@@ -412,47 +427,69 @@ def get_dataset(data_type: str, era: str) -> xr.Dataset:
     """
     Open a TC-RADAR dataset.
 
-    S3 mode  : xr.open_zarr() — case-chunked, <1 s per plot after warm open
-    AOML mode: xr.open_dataset() via fsspec HTTP — ~5-15 s per plot
+    Priority: GCS Zarr (free egress) > S3 Zarr > AOML NetCDF (slow fallback)
     """
+    key = (data_type, era)
+    if USE_GCS_ZARR and key in GCS_PATHS:
+        import gcsfs
+        path = GCS_PATHS[key]
+        fs = gcsfs.GCSFileSystem()
+        store = gcsfs.GCSMap(root=path, gcs=fs, check=False)
+        ds = xr.open_zarr(store, consolidated=True)
+        print(f"Opened Zarr from GCS: {path}")
+        return ds
     if USE_S3:
         import s3fs
-        path = S3_PATHS[(data_type, era)]
+        path = S3_PATHS[key]
         fs   = s3fs.S3FileSystem(anon=False, client_kwargs={"region_name": AWS_REGION})
         store = s3fs.S3Map(root=path, s3=fs, check=False)
         ds = xr.open_zarr(store, consolidated=True)
         print(f"Opened Zarr from S3: {path}")
-    else:
-        url = AOML_FILES[(data_type, era)]
-        of  = fsspec.open(url, "rb")
-        ds  = xr.open_dataset(of.open(), engine="h5netcdf")
-        print(f"Opened NetCDF from AOML: {url}")
+        return ds
+    url = AOML_FILES[key]
+    of  = fsspec.open(url, "rb")
+    ds  = xr.open_dataset(of.open(), engine="h5netcdf")
+    print(f"Opened NetCDF from AOML: {url}")
     return ds
 
 
 
 @lru_cache(maxsize=1)
 def get_ir_dataset():
-    """Open the MergIR Zarr store from S3."""
-    if not USE_S3 or not IR_S3_PATH:
-        return None
-    import s3fs
-    fs = s3fs.S3FileSystem(anon=False, client_kwargs={"region_name": AWS_REGION})
-    store = s3fs.S3Map(root=IR_S3_PATH, s3=fs, check=False)
+    """Open the MergIR Zarr store. Prefers GCS (free egress) over S3."""
     import zarr
-    return zarr.open(store, mode='r')
+    if USE_GCS_ZARR and IR_GCS_PATH:
+        import gcsfs
+        fs = gcsfs.GCSFileSystem()
+        store = gcsfs.GCSMap(root=IR_GCS_PATH, gcs=fs, check=False)
+        print(f"Opened MergIR Zarr from GCS: {IR_GCS_PATH}")
+        return zarr.open(store, mode='r')
+    if USE_S3 and IR_S3_PATH:
+        import s3fs
+        fs = s3fs.S3FileSystem(anon=False, client_kwargs={"region_name": AWS_REGION})
+        store = s3fs.S3Map(root=IR_S3_PATH, s3=fs, check=False)
+        print(f"Opened MergIR Zarr from S3: {IR_S3_PATH}")
+        return zarr.open(store, mode='r')
+    return None
 
 
 @lru_cache(maxsize=1)
 def get_era5_dataset():
-    """Open the ERA5 Zarr store from S3."""
-    if not USE_S3 or not ERA5_S3_PATH:
-        return None
-    import s3fs
-    fs = s3fs.S3FileSystem(anon=False, client_kwargs={"region_name": AWS_REGION})
-    store = s3fs.S3Map(root=ERA5_S3_PATH, s3=fs, check=False)
+    """Open the ERA5 Zarr store. Prefers GCS (free egress) over S3."""
     import zarr
-    return zarr.open(store, mode='r')
+    if USE_GCS_ZARR and ERA5_GCS_PATH:
+        import gcsfs
+        fs = gcsfs.GCSFileSystem()
+        store = gcsfs.GCSMap(root=ERA5_GCS_PATH, gcs=fs, check=False)
+        print(f"Opened ERA5 Zarr from GCS: {ERA5_GCS_PATH}")
+        return zarr.open(store, mode='r')
+    if USE_S3 and ERA5_S3_PATH:
+        import s3fs
+        fs = s3fs.S3FileSystem(anon=False, client_kwargs={"region_name": AWS_REGION})
+        store = s3fs.S3Map(root=ERA5_S3_PATH, s3=fs, check=False)
+        print(f"Opened ERA5 Zarr from S3: {ERA5_S3_PATH}")
+        return zarr.open(store, mode='r')
+    return None
 
 
 def resolve_case(case_index: int, data_type: str) -> tuple[xr.Dataset, int]:
@@ -873,9 +910,16 @@ def warmup():
     except Exception as e:
         result["storms_error"] = str(e)
 
-    # 2. Touch S3 to keep connection pool alive (s3fs HTTP/2 sessions
-    #    go stale after a few minutes of inactivity, causing slow first
-    #    requests when a user arrives)
+    # 2. Touch cloud storage to keep connection pool alive
+    if USE_GCS_ZARR:
+        try:
+            import gcsfs
+            fs = gcsfs.GCSFileSystem()
+            fs.ls(f"{GCS_ZARR_BUCKET}/{GCS_ZARR_PREFIX}/", detail=False)
+            result["gcs_zarr_alive"] = True
+        except Exception as e:
+            result["gcs_zarr_alive"] = False
+            result["gcs_zarr_error"] = str(e)
     if USE_S3:
         try:
             import s3fs
