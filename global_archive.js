@@ -1442,6 +1442,19 @@ function renderStormDetail(storm) {
         }
     }
 
+    // Flight-level reconnaissance — show toggle for all storms (HRD archive goes back to 1960)
+    var flToggleWrap = document.getElementById('ga-fl-toggle-wrap');
+    if (flToggleWrap) {
+        var hasPos = (storm.lmi_lat || storm.genesis_lat) && (storm.lmi_lon || storm.genesis_lon);
+        if (hasPos) {
+            flToggleWrap.style.display = '';
+            document.getElementById('ga-fl-status').textContent = '';
+            if (typeof _gaFLReset === 'function') _gaFLReset();
+        } else {
+            flToggleWrap.style.display = 'none';
+        }
+    }
+
     // Model forecast overlay — load a-deck data if storm has ATCF ID
     if (storm.atcf_id && typeof loadModelForecasts === 'function') {
         loadModelForecasts(storm);
@@ -9364,5 +9377,517 @@ window.downloadStormKML = function () {
     _downloadFile(filename, kml, 'application/vnd.google-earth.kml+xml');
     showToast('KML downloaded: ' + filename);
 };
+
+// ══════════════════════════════════════════════════════════════════════
+// ── FLIGHT-LEVEL RECONNAISSANCE OVERLAY (AOML HRD, 1960–present) ──
+// ══════════════════════════════════════════════════════════════════════
+
+var _gaFLVisible = false;
+var _gaFLData = null;       // Current mission API response
+var _gaFLData1s = null;
+var _gaFLData10s = null;
+var _gaFLData30s = null;
+var _gaFLMissions = null;   // Mission discovery results
+var _gaFLMapLayers = [];    // Leaflet layers for cleanup
+var _gaFLColorVar = 'fl_wspd_ms';
+var _gaFLAutoSync = true;
+var _gaFLFetching = false;
+var _gaFLTSHighlight = null;
+var _gaFLResVisible = { '1s': false, '10s': true, '30s': true };
+var _gaFLXAxisMode = 'time';
+var _gaFLTSOpen = false;
+
+function _gaFLReset() {
+    _gaFLVisible = false;
+    _gaFLData = null;
+    _gaFLData1s = null;
+    _gaFLData10s = null;
+    _gaFLData30s = null;
+    _gaFLMissions = null;
+    _gaFLFetching = false;
+    _gaFLTSOpen = false;
+    _gaFLRemoveFromMap();
+    var btn = document.getElementById('ga-fl-toggle-btn');
+    if (btn) btn.textContent = '\u2708 Flight Level';
+    var controls = document.getElementById('ga-fl-controls');
+    if (controls) controls.style.display = 'none';
+    var ts = document.getElementById('ga-fl-ts-panel');
+    if (ts) ts.style.display = 'none';
+}
+window._gaFLReset = _gaFLReset;
+
+function _gaFLWindColor(wspd) {
+    if (wspd == null) return '#475569';
+    if (wspd < 17.5) return '#60a5fa';
+    if (wspd < 33.0) return '#34d399';
+    if (wspd < 43.0) return '#fbbf24';
+    if (wspd < 49.0) return '#fb923c';
+    if (wspd < 58.0) return '#f87171';
+    if (wspd < 70.0) return '#dc2626';
+    return '#7f1d1d';
+}
+
+window.toggleGlobalFLOverlay = function () {
+    var btn = document.getElementById('ga-fl-toggle-btn');
+    var controls = document.getElementById('ga-fl-controls');
+
+    if (_gaFLVisible) {
+        _gaFLVisible = false;
+        if (btn) btn.textContent = '\u2708 Flight Level';
+        if (controls) controls.style.display = 'none';
+        _gaFLRemoveFromMap();
+        return;
+    }
+
+    _gaFLVisible = true;
+    if (btn) btn.textContent = 'Hide FL';
+    if (controls) controls.style.display = '';
+
+    if (_gaFLData && detailMap) {
+        _gaFLRenderOnMap();
+        return;
+    }
+
+    if (selectedStorm) {
+        _gaFLDiscoverMissions(selectedStorm);
+    }
+};
+
+function _gaFLDiscoverMissions(storm) {
+    var status = document.getElementById('ga-fl-frame-status');
+    if (status) status.textContent = 'Searching\u2026';
+
+    var url = API_BASE + '/global/flightlevel/missions?storm_name=' +
+        encodeURIComponent(storm.name) + '&year=' + storm.year;
+
+    fetch(url)
+        .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+        .then(function (json) {
+            if (!json.success || !json.missions || json.missions.length === 0) {
+                if (status) status.textContent = 'No FL data available';
+                document.getElementById('ga-fl-status').textContent = 'No data';
+                return;
+            }
+            _gaFLMissions = json.missions;
+            _gaFLPopulateMissionDropdown();
+            if (status) status.textContent = json.missions.length + ' mission(s)';
+            _gaFLSyncToIRFrame();
+        })
+        .catch(function (e) {
+            if (status) status.textContent = 'Error: ' + e.message;
+        });
+}
+
+function _gaFLPopulateMissionDropdown() {
+    var select = document.getElementById('ga-fl-mission-select');
+    if (!select || !_gaFLMissions) return;
+    select.innerHTML = '';
+    for (var i = 0; i < _gaFLMissions.length; i++) {
+        var m = _gaFLMissions[i];
+        var opt = document.createElement('option');
+        opt.value = m.file_url;
+        opt.textContent = m.datetime + ' ' + m.aircraft_code + m.sortie +
+            ' (' + m.aircraft + ')';
+        select.appendChild(opt);
+    }
+}
+
+window.gaFLSelectMission = function () {
+    var select = document.getElementById('ga-fl-mission-select');
+    if (!select || !select.value) return;
+    _gaFLLoadMissionData(select.value);
+};
+
+function _gaFLLoadMissionData(fileUrl) {
+    if (_gaFLFetching) return;
+    _gaFLFetching = true;
+    var status = document.getElementById('ga-fl-frame-status');
+    if (status) status.textContent = 'Loading\u2026';
+
+    var centerLat = 0, centerLon = 0;
+    if (selectedStorm) {
+        centerLat = selectedStorm.lmi_lat || selectedStorm.genesis_lat || 0;
+        centerLon = selectedStorm.lmi_lon || selectedStorm.genesis_lon || 0;
+    }
+
+    var url = API_BASE + '/global/flightlevel/data?file_url=' +
+        encodeURIComponent(fileUrl);
+    if (centerLat) url += '&center_lat=' + centerLat + '&center_lon=' + centerLon;
+
+    fetch(url)
+        .then(function (r) { return r.json(); })
+        .then(function (json) {
+            _gaFLFetching = false;
+            if (!json.success) {
+                if (status) status.textContent = json.detail || 'Parse failed';
+                return;
+            }
+            _gaFLData = json;
+            _gaFLData1s = json.obs_1s;
+            _gaFLData10s = json.obs_10s || json.observations;
+            _gaFLData30s = json.obs_30s;
+
+            var res1sBtn = document.getElementById('ga-fl-res-1s');
+            if (res1sBtn) {
+                res1sBtn.style.display = json.has_1s ? '' : 'none';
+                if (!json.has_1s) _gaFLResVisible['1s'] = false;
+            }
+
+            if (status) {
+                var summ = json.summary || {};
+                var parts = [json.n_obs_raw + ' obs'];
+                if (summ.max_fl_wspd_ms != null) parts.push('Max: ' + Math.round(summ.max_fl_wspd_ms * 1.944) + ' kt');
+                if (summ.min_static_pres_hpa != null) parts.push('Min P: ' + summ.min_static_pres_hpa + ' hPa');
+                status.textContent = parts.join(' \u00b7 ');
+            }
+
+            _gaFLRenderOnMap();
+            if (_gaFLTSOpen) _gaFLRenderTimeSeries();
+        })
+        .catch(function (e) {
+            _gaFLFetching = false;
+            if (status) status.textContent = 'Error: ' + e.message;
+        });
+}
+
+function _gaFLRemoveFromMap() {
+    for (var i = 0; i < _gaFLMapLayers.length; i++) {
+        if (detailMap) detailMap.removeLayer(_gaFLMapLayers[i]);
+    }
+    _gaFLMapLayers = [];
+    if (_gaFLTSHighlight && detailMap) {
+        detailMap.removeLayer(_gaFLTSHighlight);
+        _gaFLTSHighlight = null;
+    }
+}
+
+function _gaFLRenderOnMap() {
+    _gaFLRemoveFromMap();
+    if (!detailMap || !_gaFLData10s || _gaFLData10s.length < 2) return;
+
+    var obs = _gaFLData10s;
+
+    // Colored track segments
+    for (var i = 1; i < obs.length; i++) {
+        var p0 = obs[i - 1], p1 = obs[i];
+        if (p0.lat == null || p1.lat == null) continue;
+        var val = p1[_gaFLColorVar];
+        var color = _gaFLColorVar === 'fl_wspd_ms' ? _gaFLWindColor(val) :
+            (val != null ? '#60a5fa' : '#475569');
+        var seg = L.polyline([[p0.lat, p0.lon], [p1.lat, p1.lon]], {
+            color: color, weight: 3.5, opacity: 0.9, interactive: false
+        });
+        seg.addTo(detailMap);
+        _gaFLMapLayers.push(seg);
+    }
+
+    // Hover circles at every 6th observation (~1 min for 10s data)
+    for (var i = 0; i < obs.length; i += 6) {
+        var o = obs[i];
+        if (o.lat == null) continue;
+        var wspd = o.fl_wspd_ms;
+        var wkt = wspd != null ? Math.round(wspd * 1.944) : '?';
+        var tip = '<b>' + o.time + ' UTC</b><br>' +
+            'Wind: ' + (wspd != null ? wspd.toFixed(1) + ' m/s (' + wkt + ' kt)' : '\u2014') + '<br>' +
+            'Dir: ' + (o.fl_wdir_deg != null ? o.fl_wdir_deg + '\u00b0' : '\u2014') + '<br>' +
+            'Alt: ' + (o.gps_alt_m != null ? Math.round(o.gps_alt_m) + ' m' : '\u2014') + '<br>' +
+            'Pres: ' + (o.static_pres_hpa != null ? o.static_pres_hpa + ' hPa' : '\u2014') + '<br>' +
+            'Temp: ' + (o.temp_c != null ? o.temp_c + ' \u00b0C' : '\u2014');
+        var circle = L.circleMarker([o.lat, o.lon], {
+            radius: 4, fillColor: _gaFLWindColor(wspd), fillOpacity: 0.8,
+            color: '#fff', weight: 0.5, opacity: 0.6
+        }).bindTooltip(tip, { sticky: true });
+        circle.addTo(detailMap);
+        _gaFLMapLayers.push(circle);
+    }
+
+    // Wind barbs at ~2 min intervals
+    for (var i = 0; i < obs.length; i += 12) {
+        var o = obs[i];
+        if (o.lat == null || o.fl_wdir_deg == null || o.fl_wspd_ms == null) continue;
+        var barbHtml = _gaFLBarbSVG(o.fl_wspd_ms, o.fl_wdir_deg);
+        var icon = L.divIcon({
+            className: 'ga-fl-barb',
+            html: barbHtml,
+            iconSize: [24, 24],
+            iconAnchor: [12, 12]
+        });
+        var marker = L.marker([o.lat, o.lon], { icon: icon, interactive: false });
+        marker.addTo(detailMap);
+        _gaFLMapLayers.push(marker);
+    }
+
+    _gaFLInjectLegend();
+}
+
+function _gaFLBarbSVG(wspd_ms, wdir_deg) {
+    var kt = wspd_ms * 1.944;
+    var rot = wdir_deg;
+    var remaining = Math.round(kt / 5) * 5;
+    var flags = Math.floor(remaining / 50);
+    remaining -= flags * 50;
+    var full = Math.floor(remaining / 10);
+    remaining -= full * 10;
+    var half = remaining >= 5 ? 1 : 0;
+
+    var svg = '<svg width="24" height="24" viewBox="0 0 24 24" style="transform:rotate(' + rot + 'deg);">';
+    svg += '<line x1="12" y1="12" x2="12" y2="2" stroke="white" stroke-width="1.5" stroke-linecap="round"/>';
+    var y = 2;
+    for (var f = 0; f < flags; f++) {
+        svg += '<polygon points="12,' + y + ' 18,' + (y + 1.5) + ' 12,' + (y + 3) + '" fill="white"/>';
+        y += 3;
+    }
+    for (var b = 0; b < full; b++) {
+        svg += '<line x1="12" y1="' + y + '" x2="18" y2="' + (y - 1.5) + '" stroke="white" stroke-width="1.2"/>';
+        y += 2;
+    }
+    if (half) {
+        svg += '<line x1="12" y1="' + y + '" x2="15" y2="' + (y - 1) + '" stroke="white" stroke-width="1.2"/>';
+    }
+    svg += '</svg>';
+    return svg;
+}
+
+function _gaFLInjectLegend() {
+    var el = document.getElementById('ga-fl-legend');
+    if (!el) return;
+    el.innerHTML =
+        '<div style="display:flex;align-items:center;gap:8px;font-size:9px;color:#94a3b8;">' +
+        '<span style="width:10px;height:10px;border-radius:50%;background:#60a5fa;display:inline-block;"></span>TD' +
+        '<span style="width:10px;height:10px;border-radius:50%;background:#34d399;display:inline-block;"></span>TS' +
+        '<span style="width:10px;height:10px;border-radius:50%;background:#fbbf24;display:inline-block;"></span>C1' +
+        '<span style="width:10px;height:10px;border-radius:50%;background:#fb923c;display:inline-block;"></span>C2' +
+        '<span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;"></span>C3' +
+        '<span style="width:10px;height:10px;border-radius:50%;background:#dc2626;display:inline-block;"></span>C4' +
+        '<span style="width:10px;height:10px;border-radius:50%;background:#7f1d1d;display:inline-block;"></span>C5' +
+        '<span style="margin-left:8px;color:#64748b;">Wind barbs in kt</span></div>';
+}
+
+window.gaFLToggleAutoSync = function () {
+    var cb = document.getElementById('ga-fl-auto-sync');
+    _gaFLAutoSync = cb ? cb.checked : false;
+};
+
+function _gaFLSyncToIRFrame() {
+    if (!_gaFLAutoSync || !_gaFLVisible || !_gaFLMissions || !_gaFLMissions.length) {
+        if (_gaFLMissions && _gaFLMissions.length > 0 && !_gaFLData) {
+            _gaFLLoadMissionData(_gaFLMissions[0].file_url);
+        }
+        return;
+    }
+
+    var irTime = null;
+    if (typeof irMeta !== 'undefined' && irMeta && irMeta.frames && typeof irFrameIdx !== 'undefined') {
+        var frame = irMeta.frames[irFrameIdx];
+        if (frame && frame.datetime) {
+            irTime = new Date(frame.datetime.replace(' UTC', 'Z'));
+        }
+    }
+
+    if (!irTime) {
+        if (!_gaFLData) _gaFLLoadMissionData(_gaFLMissions[0].file_url);
+        return;
+    }
+
+    var bestIdx = 0, bestDelta = Infinity;
+    for (var i = 0; i < _gaFLMissions.length; i++) {
+        var mTime = new Date(_gaFLMissions[i].datetime + 'T12:00:00Z');
+        var delta = Math.abs(irTime - mTime);
+        if (delta < bestDelta) { bestDelta = delta; bestIdx = i; }
+    }
+
+    var select = document.getElementById('ga-fl-mission-select');
+    if (select) {
+        select.selectedIndex = bestIdx;
+        _gaFLLoadMissionData(_gaFLMissions[bestIdx].file_url);
+    }
+}
+window._gaFLSyncToIRFrame = _gaFLSyncToIRFrame;
+
+// ── Time Series ─────────────────────────────────────────────────
+
+var _GA_FL_TS_CONFIG = {
+    'fl_wspd_ms':      { label: 'FL Wind Speed',   btn: 'Wind',    units: 'm/s', color: '#60a5fa', yaxis: 'y' },
+    'static_pres_hpa': { label: 'Static Pressure',  btn: 'Pres',   units: 'hPa', color: '#fbbf24', yaxis: 'y2' },
+    'sfcpr_hpa':       { label: 'Sfc Pressure',     btn: 'SfcP',   units: 'hPa', color: '#fb923c', yaxis: 'y2' },
+    'temp_c':          { label: 'Temperature',       btn: 'T',     units: '\u00b0C', color: '#f87171', yaxis: 'y3' },
+    'dewpoint_c':      { label: 'Dewpoint',          btn: 'Td',    units: '\u00b0C', color: '#a78bfa', yaxis: 'y3' },
+    'theta_e':         { label: 'Theta-E',           btn: '\u03b8e', units: 'K',   color: '#e879f9', yaxis: 'y3' },
+    'gps_alt_m':       { label: 'GPS Altitude',      btn: 'Alt',   units: 'm',   color: '#6b7280', yaxis: 'y4' },
+};
+
+var _GA_FL_RES_STYLE = {
+    '1s':  { opacity: 0.3, width: 0.8 },
+    '10s': { opacity: 0.7, width: 1.5 },
+    '30s': { opacity: 1.0, width: 2.5 },
+};
+
+var _gaFLVarsVisible = { 'fl_wspd_ms': true, 'static_pres_hpa': true, 'temp_c': false, 'dewpoint_c': false, 'theta_e': false, 'gps_alt_m': false, 'sfcpr_hpa': false };
+
+window.gaFLOpenTimeSeries = function () {
+    var panel = document.getElementById('ga-fl-ts-panel');
+    if (!panel) return;
+    _gaFLTSOpen = true;
+    panel.style.display = '';
+    _gaFLPopulateVarToggles();
+    if (_gaFLData) _gaFLRenderTimeSeries();
+};
+
+window.gaFLCloseTimeSeries = function () {
+    var panel = document.getElementById('ga-fl-ts-panel');
+    if (panel) panel.style.display = 'none';
+    _gaFLTSOpen = false;
+};
+
+window.gaFLToggleRes = function (res) {
+    _gaFLResVisible[res] = !_gaFLResVisible[res];
+    var btns = document.querySelectorAll('.ga-fl-res-btn');
+    btns.forEach(function (b) {
+        var r = b.getAttribute('data-res');
+        if (r === res) b.classList.toggle('active', _gaFLResVisible[res]);
+    });
+    if (_gaFLData) _gaFLRenderTimeSeries();
+};
+
+window.gaFLToggleXAxis = function () {
+    _gaFLXAxisMode = _gaFLXAxisMode === 'time' ? 'radius' : 'time';
+    var btn = document.getElementById('ga-fl-xaxis-btn');
+    if (btn) btn.textContent = _gaFLXAxisMode === 'time' ? 'Time' : 'Radius';
+    if (_gaFLData) _gaFLRenderTimeSeries();
+};
+
+function _gaFLPopulateVarToggles() {
+    var container = document.getElementById('ga-fl-var-toggles');
+    if (!container) return;
+    container.innerHTML = '';
+    Object.keys(_GA_FL_TS_CONFIG).forEach(function (key) {
+        var cfg = _GA_FL_TS_CONFIG[key];
+        var active = _gaFLVarsVisible[key];
+        var btn = document.createElement('button');
+        btn.className = 'ga-btn ga-btn-xs' + (active ? ' active' : '');
+        btn.style.cssText = 'font-size:9px;border-color:' + cfg.color + ';color:' + cfg.color + ';' +
+            (active ? 'background:' + cfg.color + '22;' : '');
+        btn.textContent = cfg.btn;
+        btn.onclick = function () {
+            _gaFLVarsVisible[key] = !_gaFLVarsVisible[key];
+            btn.classList.toggle('active', _gaFLVarsVisible[key]);
+            btn.style.background = _gaFLVarsVisible[key] ? cfg.color + '22' : '';
+            if (_gaFLData) _gaFLRenderTimeSeries();
+        };
+        container.appendChild(btn);
+    });
+}
+
+function _gaFLRenderTimeSeries() {
+    var chartDiv = document.getElementById('ga-fl-ts-chart');
+    if (!chartDiv) return;
+
+    var traces = [];
+    var datasets = {};
+    if (_gaFLResVisible['1s'] && _gaFLData1s) datasets['1s'] = _gaFLData1s;
+    if (_gaFLResVisible['10s'] && _gaFLData10s) datasets['10s'] = _gaFLData10s;
+    if (_gaFLResVisible['30s'] && _gaFLData30s) datasets['30s'] = _gaFLData30s;
+
+    Object.keys(_GA_FL_TS_CONFIG).forEach(function (varKey) {
+        if (!_gaFLVarsVisible[varKey]) return;
+        var cfg = _GA_FL_TS_CONFIG[varKey];
+
+        Object.keys(datasets).forEach(function (resKey) {
+            var obs = datasets[resKey];
+            var style = _GA_FL_RES_STYLE[resKey];
+            var xVals = [], yVals = [];
+            for (var i = 0; i < obs.length; i++) {
+                var o = obs[i];
+                if (o[varKey] == null) continue;
+                var xVal;
+                if (_gaFLXAxisMode === 'radius' && o.r_km != null) {
+                    xVal = o.r_km;
+                } else {
+                    xVal = o.time || '';
+                }
+                xVals.push(xVal);
+                yVals.push(o[varKey]);
+            }
+            if (xVals.length === 0) return;
+
+            traces.push({
+                x: xVals, y: yVals,
+                mode: 'lines',
+                name: cfg.btn + ' (' + resKey + ')',
+                line: { color: cfg.color, width: style.width, shape: 'linear' },
+                opacity: style.opacity,
+                yaxis: cfg.yaxis,
+                hovertemplate: '%{y:.1f} ' + cfg.units + '<extra>' + cfg.label + ' (' + resKey + ')</extra>',
+                showlegend: resKey === '10s',
+            });
+        });
+    });
+
+    var layout = {
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor: 'rgba(0,0,0,0)',
+        margin: { t: 10, r: 60, b: 40, l: 55 },
+        font: { family: 'DM Sans, sans-serif', color: '#94a3b8', size: 10 },
+        legend: { orientation: 'h', y: 1.12, font: { size: 9 } },
+        xaxis: {
+            title: _gaFLXAxisMode === 'time' ? 'Time (UTC)' : 'Radius from center (km)',
+            gridcolor: 'rgba(255,255,255,0.06)',
+            zeroline: false,
+        },
+        yaxis: {
+            title: 'Wind (m/s)', titlefont: { color: '#60a5fa' },
+            tickfont: { color: '#60a5fa' }, gridcolor: 'rgba(255,255,255,0.06)',
+            zeroline: false, side: 'left',
+        },
+        yaxis2: {
+            title: 'Pressure (hPa)', titlefont: { color: '#fbbf24' },
+            tickfont: { color: '#fbbf24' }, overlaying: 'y', side: 'right',
+            autorange: 'reversed', showgrid: false,
+        },
+        yaxis3: {
+            title: 'Temp (\u00b0C)', titlefont: { color: '#f87171' },
+            tickfont: { color: '#f87171' }, overlaying: 'y', side: 'left',
+            position: 0, showgrid: false, visible: false, anchor: 'free',
+        },
+        yaxis4: {
+            title: 'Alt (m)', titlefont: { color: '#6b7280' },
+            tickfont: { color: '#6b7280' }, overlaying: 'y', side: 'right',
+            showgrid: false, visible: false, anchor: 'free', position: 1,
+        },
+    };
+
+    if (_gaFLVarsVisible['temp_c'] || _gaFLVarsVisible['dewpoint_c'] || _gaFLVarsVisible['theta_e']) {
+        layout.yaxis3.visible = true;
+    }
+    if (_gaFLVarsVisible['gps_alt_m']) {
+        layout.yaxis4.visible = true;
+    }
+
+    Plotly.newPlot('ga-fl-ts-chart', traces, layout, { responsive: true, displayModeBar: true, displaylogo: false });
+
+    // Click-to-highlight on map
+    chartDiv.on('plotly_click', function (data) {
+        if (!data.points || !data.points[0]) return;
+        var pt = data.points[0];
+        var obs10 = _gaFLData10s;
+        if (!obs10) return;
+        var xVal = pt.x;
+        var bestObs = null, bestDist = Infinity;
+        for (var i = 0; i < obs10.length; i++) {
+            var cmp = _gaFLXAxisMode === 'radius' ? obs10[i].r_km : obs10[i].time;
+            if (cmp == null) continue;
+            var dist = typeof cmp === 'number' ? Math.abs(cmp - (typeof xVal === 'number' ? xVal : 0)) : (cmp === xVal ? 0 : 1);
+            if (dist < bestDist) { bestDist = dist; bestObs = obs10[i]; }
+        }
+        if (bestObs && bestObs.lat != null && detailMap) {
+            if (_gaFLTSHighlight) detailMap.removeLayer(_gaFLTSHighlight);
+            _gaFLTSHighlight = L.circleMarker([bestObs.lat, bestObs.lon], {
+                radius: 8, fillColor: '#fff', fillOpacity: 0.9,
+                color: '#60a5fa', weight: 3
+            }).addTo(detailMap);
+            detailMap.panTo([bestObs.lat, bestObs.lon]);
+        }
+    });
+}
 
 })();

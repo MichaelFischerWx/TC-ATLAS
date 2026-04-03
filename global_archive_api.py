@@ -4000,3 +4000,453 @@ def hursat_debug(sid: str = Query("1992230N11325", description="IBTrACS storm ID
         year_result["error"] = str(e)
 
     return {"sid": sid, "year": year, "year_directory": year_result}
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Flight-Level Reconnaissance Data (AOML HRD Archive, 1960–present)
+# ══════════════════════════════════════════════════════════════════════
+
+# Import shared HRD helpers from the main TC-RADAR API module.
+# These are loaded lazily to avoid circular imports at module level.
+_fl_helpers_loaded = False
+_fl_helpers = {}
+
+
+def _load_fl_helpers():
+    global _fl_helpers_loaded, _fl_helpers
+    if _fl_helpers_loaded:
+        return _fl_helpers
+    try:
+        from tc_radar_api import (
+            HRD_FL_BASE,
+            _hrd_fetch_text,
+            _hrd_parse_directory,
+            _resolve_hrd_storm_name,
+            _parse_hrd_1sec,
+            _hrd_average_window,
+            _merge_hrd_header_tokens,
+        )
+        _fl_helpers = {
+            "HRD_FL_BASE": HRD_FL_BASE,
+            "fetch_text": _hrd_fetch_text,
+            "parse_dir": _hrd_parse_directory,
+            "resolve_name": _resolve_hrd_storm_name,
+            "parse_1sec": _parse_hrd_1sec,
+            "avg_window": _hrd_average_window,
+            "merge_tokens": _merge_hrd_header_tokens,
+        }
+        _fl_helpers_loaded = True
+    except ImportError as e:
+        logger.warning(f"Could not import HRD helpers: {e}")
+    return _fl_helpers
+
+
+# Aircraft code → display name mapping
+_AIRCRAFT_NAMES = {
+    "H": "NOAA N42RF (P-3)",
+    "I": "NOAA N43RF (P-3)",
+    "L": "NOAA (G-IV)",
+    "U": "USAF (WC-130J)",
+}
+
+# Mission discovery cache
+_fl_mission_cache: OrderedDict = OrderedDict()
+_FL_MISSION_CACHE_TTL = 86400
+_FL_MISSION_CACHE_MAX = 200
+
+# Flight-level data cache
+_fl_data_cache: OrderedDict = OrderedDict()
+_FL_DATA_CACHE_TTL = 86400
+_FL_DATA_CACHE_MAX = 30
+
+
+def _detect_fl_format(filename: str) -> str:
+    """Detect file format from filename extension."""
+    fl = filename.lower()
+    if fl.endswith(".1sec.txt") or fl.endswith(".sec.txt") or fl.endswith(".1sec"):
+        return "noaa_1sec"
+    if re.match(r".*\.\d{2}\.txt$", fl):  # e.g., .01.txt
+        return "usaf_01"
+    if fl.endswith(".txt"):
+        return "text_generic"  # Could be NOAA, USAF, or legacy
+    return "unknown"
+
+
+def _parse_fl_filename(filename: str, year: int):
+    """Parse an HRD flight-level filename into mission metadata.
+
+    Returns dict with mission_id, datetime, aircraft_code, sortie, format_hint
+    or None if not parseable.
+    """
+    # Strip extensions to get base mission ID
+    base = filename
+    for ext in [".1sec.txt", ".sec.txt", ".1sec", ".01.txt", ".txt"]:
+        if base.lower().endswith(ext):
+            base = base[: -len(ext)]
+            break
+
+    # Match YYYYMMDDXN or YYMMDDXN pattern
+    m = re.match(r"(\d{8})([A-Za-z])(\d+)", base)
+    if not m:
+        m = re.match(r"(\d{6})([A-Za-z])(\d+)", base)
+        if m:
+            short_date = m.group(1)
+            century = str(year)[:2] if year else ("19" if int(short_date[:2]) >= 60 else "20")
+            date_str = century + short_date
+            aircraft_code = m.group(2).upper()
+            sortie = int(m.group(3))
+        else:
+            return None
+    else:
+        date_str = m.group(1)
+        aircraft_code = m.group(2).upper()
+        sortie = int(m.group(3))
+
+    # Parse date
+    try:
+        dt = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+    except (IndexError, ValueError):
+        return None
+
+    aircraft = _AIRCRAFT_NAMES.get(aircraft_code, f"Aircraft {aircraft_code}")
+    fmt = _detect_fl_format(filename)
+
+    return {
+        "filename": filename,
+        "mission_id": f"{date_str}{aircraft_code}{sortie}",
+        "datetime": dt,
+        "aircraft_code": aircraft_code,
+        "aircraft": aircraft,
+        "sortie": sortie,
+        "format_hint": fmt,
+    }
+
+
+@router.get("/flightlevel/missions")
+def get_fl_missions(
+    storm_name: str = Query(..., description="Storm name, e.g., 'Laura'"),
+    year: int = Query(..., ge=1960, le=2030, description="Year"),
+):
+    """Discover available flight-level missions for a storm from AOML HRD FTP."""
+    h = _load_fl_helpers()
+    if not h:
+        raise HTTPException(503, "Flight-level helpers not available")
+
+    # Check cache
+    import time as _time
+    cache_key = f"{storm_name.lower()}_{year}"
+    now = _time.time()
+    if cache_key in _fl_mission_cache:
+        cached, ts = _fl_mission_cache[cache_key]
+        if now - ts < _FL_MISSION_CACHE_TTL:
+            _fl_mission_cache.move_to_end(cache_key)
+            return cached
+
+    # Resolve storm name to HRD directory
+    hrd_dir = h["resolve_name"](storm_name, year)
+    if not hrd_dir:
+        result = {
+            "success": True,
+            "storm_name": storm_name,
+            "year": year,
+            "hrd_dir": None,
+            "missions": [],
+        }
+        _fl_mission_cache[cache_key] = (result, now)
+        return result
+
+    # Get directory listing
+    dir_url = f"{h['HRD_FL_BASE']}/{year}/{hrd_dir}/"
+    try:
+        entries = h["parse_dir"](dir_url)
+    except Exception as e:
+        raise HTTPException(502, f"Could not list HRD directory: {e}")
+
+    # Filter for data files and parse filenames
+    missions = []
+    seen_ids = set()
+    for entry in entries:
+        entry_clean = entry.rstrip("/")
+        fmt = _detect_fl_format(entry_clean)
+        if fmt == "unknown":
+            continue
+        # Skip non-data files (PDFs, JPGs, summaries, etc.)
+        if entry_clean.lower().endswith((".pdf", ".jpg", ".png", ".SUM.txt")):
+            continue
+        if "SUM" in entry_clean.upper() or "FD" in entry_clean.upper():
+            continue
+        # Skip NetCDF files (we parse text files)
+        if entry_clean.lower().endswith(".nc"):
+            continue
+
+        meta = _parse_fl_filename(entry_clean, year)
+        if meta is None:
+            continue
+        # Deduplicate: prefer .1sec.txt over .txt for same mission
+        mid = meta["mission_id"]
+        if mid in seen_ids:
+            # Replace only if new file is higher priority format
+            if fmt == "noaa_1sec":
+                missions = [m for m in missions if m["mission_id"] != mid]
+            else:
+                continue
+        seen_ids.add(mid)
+        meta["file_url"] = dir_url + entry_clean
+        missions.append(meta)
+
+    # Sort by date then sortie
+    missions.sort(key=lambda m: (m["datetime"], m["aircraft_code"], m["sortie"]))
+
+    result = {
+        "success": True,
+        "storm_name": storm_name,
+        "year": year,
+        "hrd_dir": hrd_dir,
+        "missions": missions,
+    }
+
+    _fl_mission_cache[cache_key] = (result, now)
+    if len(_fl_mission_cache) > _FL_MISSION_CACHE_MAX:
+        _fl_mission_cache.popitem(last=False)
+
+    return result
+
+
+def _parse_hrd_legacy_csv(text: str) -> list:
+    """Parse legacy CSV-format HRD flight-level files (1960s-1980s).
+
+    These files have a header like:
+    FLIGHT ID,STORM NAME,PROCESSED DATE,TIME,HDG,DRF,LAT,LONG,DD,FF,...
+
+    Returns list of observation dicts matching the standard FL format.
+    """
+    import csv
+
+    lines = text.strip().splitlines()
+    if len(lines) < 2:
+        return []
+
+    # Find header line (contains "TIME" and commas)
+    header_idx = 0
+    for i, line in enumerate(lines[:5]):
+        if "TIME" in line.upper() and "," in line:
+            header_idx = i
+            break
+
+    reader = csv.reader(lines[header_idx:])
+    header = None
+    observations = []
+
+    for row in reader:
+        if header is None:
+            header = [h.strip().upper() for h in row]
+            continue
+
+        if len(row) < len(header):
+            continue
+
+        def _get(name):
+            try:
+                idx = header.index(name)
+                val = row[idx].strip()
+                return float(val) if val and val != "999.00" and val != "-999.00" else None
+            except (ValueError, IndexError):
+                return None
+
+        # Parse TIME
+        time_str = None
+        try:
+            idx = header.index("TIME")
+            time_str = row[idx].strip()
+        except (ValueError, IndexError):
+            continue
+        if not time_str or len(time_str) < 4:
+            continue
+
+        # TIME could be HHMMSS or HH:MM:SS
+        time_str = time_str.replace(":", "")
+        try:
+            hh = int(time_str[0:2])
+            mm = int(time_str[2:4])
+            ss = int(time_str[4:6]) if len(time_str) >= 6 else 0
+        except (ValueError, IndexError):
+            continue
+
+        lat = _get("LAT")
+        lon_raw = _get("LONG") or _get("LON")
+        if lat is None or lon_raw is None:
+            continue
+        # Legacy files use positive-west longitude
+        lon = -abs(lon_raw) if lon_raw > 0 else lon_raw
+
+        wspd = _get("FF")  # Wind force/speed
+        wdir = _get("DD")  # Wind direction
+        pres = _get("PRES")
+        alt = _get("PA") or _get("GEOAL")
+
+        obs = {
+            "time": f"{hh:02d}:{mm:02d}:{ss:02d}",
+            "time_sec": hh * 3600 + mm * 60 + ss,
+            "lat": round(lat, 5),
+            "lon": round(lon, 5),
+            "fl_wspd_ms": round(wspd, 2) if wspd is not None else None,
+            "fl_wdir_deg": round(wdir, 1) if wdir is not None else None,
+            "gps_alt_m": round(alt, 1) if alt is not None else None,
+            "static_pres_hpa": round(pres, 1) if pres is not None else None,
+            "temp_c": None,
+            "dewpoint_c": None,
+            "sfcpr_hpa": None,
+            "ground_spd_ms": None,
+            "true_airspd_ms": None,
+            "heading": None,
+            "track": None,
+            "vert_vel_ms": None,
+            "theta_e": None,
+            "sfmr_wspd_ms": None,
+            "slp_hpa": None,
+            "extrapolated_sfc_wspd_ms": None,
+        }
+        observations.append(obs)
+
+    return observations
+
+
+@router.get("/flightlevel/data")
+def get_fl_data(
+    file_url: str = Query(..., description="Full URL of the FL data file on AOML FTP"),
+    center_lat: float = Query(0.0, description="Storm center latitude for relative coords"),
+    center_lon: float = Query(0.0, description="Storm center longitude for relative coords"),
+):
+    """Fetch and parse a specific flight-level mission file."""
+    h = _load_fl_helpers()
+    if not h:
+        raise HTTPException(503, "Flight-level helpers not available")
+
+    # Security: only allow AOML FTP URLs
+    if not file_url.startswith(h["HRD_FL_BASE"]):
+        raise HTTPException(400, "Invalid file URL")
+
+    # Check cache
+    import time as _time
+    now = _time.time()
+    cache_key = f"{file_url}_{center_lat}_{center_lon}"
+    if cache_key in _fl_data_cache:
+        cached, ts = _fl_data_cache[cache_key]
+        if now - ts < _FL_DATA_CACHE_TTL:
+            _fl_data_cache.move_to_end(cache_key)
+            return cached
+
+    # Fetch the file
+    try:
+        text = h["fetch_text"](file_url, timeout=60)
+    except Exception as e:
+        raise HTTPException(502, f"Could not fetch flight-level file: {e}")
+
+    # Detect format and parse
+    filename = file_url.rsplit("/", 1)[-1]
+    fmt = _detect_fl_format(filename)
+    observations = []
+
+    # Try standard parser first (handles both NOAA and most USAF formats)
+    try:
+        observations = h["parse_1sec"](text)
+    except Exception as e:
+        logger.warning(f"Standard parser failed for {filename}: {e}")
+
+    # If standard parser returned too few results, try legacy CSV parser
+    if len(observations) < 10 and "," in text[:500]:
+        try:
+            observations = _parse_hrd_legacy_csv(text)
+            logger.info(f"Legacy CSV parser succeeded for {filename}: {len(observations)} obs")
+        except Exception as e:
+            logger.warning(f"Legacy CSV parser also failed for {filename}: {e}")
+
+    if len(observations) < 10:
+        return {
+            "success": False,
+            "reason": "parse_failed",
+            "detail": f"Could not parse {filename} (format: {fmt}, got {len(observations)} obs)",
+            "observations": [],
+            "obs_1s": [],
+            "obs_10s": [],
+            "obs_30s": [],
+        }
+
+    # Compute storm-relative coordinates if center provided
+    has_sr = False
+    if abs(center_lat) > 0.1 and abs(center_lon) > 0.1:
+        from math import radians, cos
+        R = 6371.0  # Earth radius km
+        clat_rad = radians(center_lat)
+        for obs in observations:
+            if obs["lat"] is not None and obs["lon"] is not None:
+                dy = (obs["lat"] - center_lat) * (R * radians(1))
+                dx = (obs["lon"] - center_lon) * (R * radians(1) * cos(clat_rad))
+                obs["x_km"] = round(dx, 2)
+                obs["y_km"] = round(dy, 2)
+                obs["r_km"] = round((dx**2 + dy**2) ** 0.5, 2)
+                has_sr = True
+            else:
+                obs["x_km"] = None
+                obs["y_km"] = None
+                obs["r_km"] = None
+
+    # Multi-resolution averaging
+    obs_1s = observations
+    try:
+        obs_10s = h["avg_window"](observations, 10.0)
+        obs_30s = h["avg_window"](observations, 30.0)
+    except Exception:
+        obs_10s = observations
+        obs_30s = observations
+
+    # Detect if data is actually 1-second resolution
+    has_1s = True
+    if len(observations) >= 3:
+        dt1 = observations[1]["time_sec"] - observations[0]["time_sec"]
+        dt2 = observations[2]["time_sec"] - observations[1]["time_sec"]
+        avg_dt = (dt1 + dt2) / 2.0
+        if avg_dt > 5:  # > 5s average spacing means not 1-second data
+            has_1s = False
+
+    # Summary
+    wspds = [o["fl_wspd_ms"] for o in observations if o.get("fl_wspd_ms") is not None]
+    presses = [o["static_pres_hpa"] for o in observations if o.get("static_pres_hpa") is not None]
+    alts = [o["gps_alt_m"] for o in observations if o.get("gps_alt_m") is not None]
+
+    summary = {
+        "max_fl_wspd_ms": round(max(wspds), 1) if wspds else None,
+        "min_static_pres_hpa": round(min(presses), 1) if presses else None,
+        "total_obs_1hz": len(observations),
+        "mean_alt_m": round(sum(alts) / len(alts), 0) if alts else None,
+        "start_time": observations[0]["time"] if observations else None,
+        "end_time": observations[-1]["time"] if observations else None,
+    }
+
+    # Extract mission_id from filename
+    meta = _parse_fl_filename(filename, None)
+    mission_id = meta["mission_id"] if meta else filename
+
+    result = {
+        "success": True,
+        "observations": obs_10s,  # Default resolution
+        "obs_1s": obs_1s,
+        "obs_10s": obs_10s,
+        "obs_30s": obs_30s,
+        "mission_id": mission_id,
+        "source_file": filename,
+        "source_url": file_url,
+        "n_obs": len(obs_10s),
+        "n_obs_raw": len(observations),
+        "has_1s": has_1s,
+        "has_storm_relative": has_sr,
+        "center_lat": center_lat if has_sr else None,
+        "center_lon": center_lon if has_sr else None,
+        "summary": summary,
+    }
+
+    _fl_data_cache[cache_key] = (result, now)
+    if len(_fl_data_cache) > _FL_DATA_CACHE_MAX:
+        _fl_data_cache.popitem(last=False)
+
+    return result

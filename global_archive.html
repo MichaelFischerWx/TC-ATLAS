@@ -357,6 +357,12 @@
                                 </button>
                                 <span id="ga-nexrad-status" class="ir-status"></span>
                             </div>
+                            <div id="ga-fl-toggle-wrap" style="display:none;">
+                                <button id="ga-fl-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleGlobalFLOverlay()" style="background:rgba(96,165,250,0.15);border-color:rgba(96,165,250,0.4);color:#93c5fd;">
+                                    &#9992; Flight Level
+                                </button>
+                                <span id="ga-fl-status" class="ir-status"></span>
+                            </div>
                         </div>
                         <div class="detail-map-wrap">
                             <div id="detail-map" class="detail-map-container"></div>
@@ -495,6 +501,39 @@
                                 <span id="ga-nexrad-frame-status" style="font-size:9px;color:#64748b;"></span>
                             </div>
                             <div id="ga-nexrad-colorbar" style="margin-top:4px;"></div>
+                        </div>
+                        <!-- Flight-level reconnaissance controls -->
+                        <div id="ga-fl-controls" style="display:none;background:rgba(15,23,42,0.92);border:1px solid rgba(96,165,250,0.3);border-radius:6px;padding:6px 10px;margin-top:4px;">
+                            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                                <label style="font-size:10px;font-weight:600;color:#93c5fd;text-transform:uppercase;letter-spacing:0.5px;">Mission</label>
+                                <select id="ga-fl-mission-select" onchange="gaFLSelectMission()" style="flex:1;min-width:220px;font-size:10px;padding:3px 6px;border:1px solid rgba(255,255,255,0.12);border-radius:4px;background:#0f172a;color:#e2e8f0;font-family:'JetBrains Mono',monospace;"></select>
+                                <label class="gif-toggle" style="width:28px;height:16px;" title="Auto-sync mission to IR frame time">
+                                    <input type="checkbox" id="ga-fl-auto-sync" checked onchange="gaFLToggleAutoSync()">
+                                    <span class="gif-toggle-slider"></span>
+                                </label>
+                                <span style="font-size:9px;color:#64748b;">Auto</span>
+                                <button class="ga-btn ga-btn-xs" onclick="gaFLOpenTimeSeries()" title="Open time series panel" style="font-size:9px;color:#93c5fd;">&#128200; Time Series</button>
+                                <span id="ga-fl-frame-status" style="font-size:9px;color:#64748b;"></span>
+                            </div>
+                            <div id="ga-fl-legend" style="margin-top:4px;"></div>
+                        </div>
+                        <!-- Flight-level time series side panel -->
+                        <div id="ga-fl-ts-panel" style="display:none;background:rgba(15,23,42,0.95);border:1px solid rgba(96,165,250,0.3);border-radius:8px;padding:10px 12px;margin-top:6px;">
+                            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+                                <div style="font-size:11px;font-weight:600;color:#93c5fd;">Flight-Level Time Series</div>
+                                <div style="display:flex;align-items:center;gap:6px;">
+                                    <span style="font-size:9px;color:#64748b;">Resolution:</span>
+                                    <button class="ga-btn ga-btn-xs ga-fl-res-btn active" data-res="1s" onclick="gaFLToggleRes('1s')" id="ga-fl-res-1s" style="font-size:9px;">1s</button>
+                                    <button class="ga-btn ga-btn-xs ga-fl-res-btn active" data-res="10s" onclick="gaFLToggleRes('10s')" style="font-size:9px;">10s</button>
+                                    <button class="ga-btn ga-btn-xs ga-fl-res-btn active" data-res="30s" onclick="gaFLToggleRes('30s')" style="font-size:9px;">30s</button>
+                                    <span style="font-size:9px;color:#64748b;margin-left:4px;">X-axis:</span>
+                                    <button class="ga-btn ga-btn-xs" onclick="gaFLToggleXAxis()" id="ga-fl-xaxis-btn" style="font-size:9px;">Time</button>
+                                    <button class="ga-btn ga-btn-xs" onclick="gaFLCloseTimeSeries()" style="font-size:9px;color:#f87171;">&#10005;</button>
+                                </div>
+                            </div>
+                            <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px;" id="ga-fl-var-toggles"></div>
+                            <div id="ga-fl-ts-chart" style="width:100%;height:340px;"></div>
+                            <div style="font-size:8px;color:#475569;margin-top:2px;text-align:center;">Click chart to highlight position on map &middot; Drag to zoom &middot; Double-click to reset</div>
                         </div>
                         <!-- Model forecast overlay controls -->
                         <div id="ga-model-controls" style="display:none;background:rgba(15,23,42,0.92);border:1px solid rgba(116,185,255,0.3);border-radius:6px;padding:8px 10px;margin-top:4px;">
