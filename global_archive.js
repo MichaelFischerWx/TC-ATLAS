@@ -1566,11 +1566,20 @@ function renderIntensityTimeline(track, storm) {
 
     Plotly.newPlot('timeline-chart', [windTrace, presTrace], layout, PLOTLY_CONFIG);
 
-    // Click handler to sync IR
+    // Click handler to sync IR + Recon
     document.getElementById('timeline-chart').on('plotly_click', function (data) {
         if (data.points && data.points.length > 0) {
             var clickedTime = data.points[0].x;
             syncIRToTime(clickedTime);
+
+            // If an aircraft fix is clicked (FL_WIND, SFMR, DROPSONDE, AIRC_OTHER),
+            // auto-activate Recon overlay and select the matching mission
+            var pt = data.points[0];
+            var traceName = pt.data && pt.data.name ? pt.data.name : '';
+            var isReconFix = ['Flight-Level', 'SFMR', 'Dropsonde', 'Aircraft (Other)'].indexOf(traceName) >= 0;
+            if (isReconFix && clickedTime) {
+                _gaFLSyncFromFDeckClick(clickedTime);
+            }
         }
     });
 }
@@ -9516,7 +9525,10 @@ window.gaFLSelectMission = function () {
             var bestIdx = 0, bestDelta = Infinity;
             for (var i = 0; i < irMeta.frames.length; i++) {
                 if (!irMeta.frames[i] || !irMeta.frames[i].datetime) continue;
-                var fDate = new Date(irMeta.frames[i].datetime);
+                // Handle "YYYY-MM-DD HH:MM UTC" format
+                var dtStr = irMeta.frames[i].datetime.replace(' UTC', 'Z').replace(' ', 'T');
+                var fDate = new Date(dtStr);
+                if (isNaN(fDate.getTime())) continue;
                 var delta = Math.abs(fDate - mDate);
                 if (delta < bestDelta) { bestDelta = delta; bestIdx = i; }
             }
@@ -9574,6 +9586,9 @@ function _gaFLLoadMissionData(fileUrl) {
             _gaFLRenderOnMap();
             if (_gaFLTSOpen) _gaFLRenderTimeSeries();
 
+            // Highlight the mission time window on the intensity timeline
+            _gaFLHighlightOnTimeline(json);
+
             // Refine IR frame to mission midpoint using actual observation times
             _gaFLSyncIRToMissionMidpoint(json);
         })
@@ -9613,7 +9628,9 @@ function _gaFLSyncIRToMissionMidpoint(json) {
     var bestIdx = irFrameIdx, bestDelta = Infinity;
     for (var i = 0; i < irMeta.frames.length; i++) {
         if (!irMeta.frames[i] || !irMeta.frames[i].datetime) continue;
-        var fDate = new Date(irMeta.frames[i].datetime);
+        var dtStr = irMeta.frames[i].datetime.replace(' UTC', 'Z').replace(' ', 'T');
+        var fDate = new Date(dtStr);
+        if (isNaN(fDate.getTime())) continue;
         var delta = Math.abs(fDate - midDate);
         if (delta < bestDelta) { bestDelta = delta; bestIdx = i; }
     }
@@ -9772,7 +9789,7 @@ function _gaFLSyncToIRFrame() {
     if (typeof irMeta !== 'undefined' && irMeta && irMeta.frames && typeof irFrameIdx !== 'undefined') {
         var frame = irMeta.frames[irFrameIdx];
         if (frame && frame.datetime) {
-            irTime = new Date(frame.datetime.replace(' UTC', 'Z'));
+            irTime = new Date(frame.datetime.replace(' UTC', 'Z').replace(' ', 'T'));
         }
     }
 
@@ -9795,6 +9812,88 @@ function _gaFLSyncToIRFrame() {
     }
 }
 window._gaFLSyncToIRFrame = _gaFLSyncToIRFrame;
+
+// ── F-Deck ↔ Recon cross-linking ────────────────────────────────
+
+function _gaFLSyncFromFDeckClick(clickedTime) {
+    // clickedTime is ISO like "2024-08-28T12:00"
+    var fixDate = clickedTime.substring(0, 10); // "YYYY-MM-DD"
+
+    // Auto-activate Recon if not already visible
+    if (!_gaFLVisible) {
+        toggleGlobalFLOverlay();
+    }
+
+    // Wait for missions to be discovered, then select matching mission
+    function _tryMatch() {
+        if (!_gaFLMissions || _gaFLMissions.length === 0) {
+            // Still loading — retry in 500ms (up to 10s)
+            if (!_tryMatch._retries) _tryMatch._retries = 0;
+            _tryMatch._retries++;
+            if (_tryMatch._retries < 20) setTimeout(_tryMatch, 500);
+            return;
+        }
+
+        // Find the mission closest to the fix datetime
+        var fixMs = new Date(clickedTime.replace('T', 'T') + ':00Z').getTime();
+        var bestIdx = 0, bestDelta = Infinity;
+        for (var i = 0; i < _gaFLMissions.length; i++) {
+            var mMs = new Date(_gaFLMissions[i].datetime + 'T12:00:00Z').getTime();
+            var delta = Math.abs(fixMs - mMs);
+            if (delta < bestDelta) { bestDelta = delta; bestIdx = i; }
+        }
+
+        var select = document.getElementById('ga-fl-mission-select');
+        if (select && select.selectedIndex !== bestIdx) {
+            select.selectedIndex = bestIdx;
+            _gaFLLoadMissionData(_gaFLMissions[bestIdx].file_url);
+        }
+
+        // Show a brief toast
+        if (typeof showToast === 'function') {
+            showToast('Recon synced to ' + fixDate + ' ' +
+                (_gaFLMissions[bestIdx] ? _gaFLMissions[bestIdx].aircraft_code + _gaFLMissions[bestIdx].sortie : ''));
+        }
+    }
+    _tryMatch();
+}
+window._gaFLSyncFromFDeckClick = _gaFLSyncFromFDeckClick;
+
+function _gaFLHighlightOnTimeline(json) {
+    var chartEl = document.getElementById('timeline-chart');
+    if (!chartEl || !chartEl.layout) return;
+
+    var summ = json.summary;
+    if (!summ || !summ.start_time || !summ.end_time) return;
+
+    // Get mission date from dropdown
+    var select = document.getElementById('ga-fl-mission-select');
+    if (!select || !_gaFLMissions) return;
+    var mission = _gaFLMissions[select.selectedIndex];
+    if (!mission || !mission.datetime) return;
+
+    var startISO = mission.datetime + 'T' + summ.start_time;
+    var endISO = mission.datetime + 'T' + summ.end_time;
+
+    // Remove any existing FL highlight shape, keep other shapes
+    var existingShapes = (chartEl.layout.shapes || []).filter(function (s) {
+        return !s._flHighlight;
+    });
+
+    // Add a subtle vertical band for the mission time window
+    existingShapes.push({
+        type: 'rect',
+        xref: 'x', yref: 'paper',
+        x0: startISO, x1: endISO,
+        y0: 0, y1: 1,
+        fillcolor: 'rgba(96,165,250,0.08)',
+        line: { color: 'rgba(96,165,250,0.3)', width: 1, dash: 'dot' },
+        layer: 'below',
+        _flHighlight: true,
+    });
+
+    Plotly.relayout(chartEl, { shapes: existingShapes });
+}
 
 // ── Time Series ─────────────────────────────────────────────────
 
