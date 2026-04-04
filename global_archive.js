@@ -9408,7 +9408,7 @@ function _gaFLReset() {
     _gaFLTSOpen = false;
     _gaFLRemoveFromMap();
     var btn = document.getElementById('ga-fl-toggle-btn');
-    if (btn) btn.textContent = '\u2708 Flight Level';
+    if (btn) btn.textContent = '\u2708 Recon';
     var controls = document.getElementById('ga-fl-controls');
     if (controls) controls.style.display = 'none';
     var ts = document.getElementById('ga-fl-ts-panel');
@@ -9433,14 +9433,14 @@ window.toggleGlobalFLOverlay = function () {
 
     if (_gaFLVisible) {
         _gaFLVisible = false;
-        if (btn) btn.textContent = '\u2708 Flight Level';
+        if (btn) btn.textContent = '\u2708 Recon';
         if (controls) controls.style.display = 'none';
         _gaFLRemoveFromMap();
         return;
     }
 
     _gaFLVisible = true;
-    if (btn) btn.textContent = 'Hide FL';
+    if (btn) btn.textContent = 'Hide Recon';
     if (controls) controls.style.display = '';
 
     if (_gaFLData && detailMap) {
@@ -9496,6 +9496,25 @@ window.gaFLSelectMission = function () {
     var select = document.getElementById('ga-fl-mission-select');
     if (!select || !select.value) return;
     _gaFLLoadMissionData(select.value);
+
+    // Jump IR to the mission date when user manually selects a mission
+    if (_gaFLAutoSync && _gaFLMissions && irMeta && irMeta.frames && irMeta.frames.length > 0) {
+        var mission = _gaFLMissions[select.selectedIndex];
+        if (mission && mission.datetime) {
+            var mDate = new Date(mission.datetime + 'T18:00:00Z');  // ~midday of mission
+            var bestIdx = 0, bestDelta = Infinity;
+            for (var i = 0; i < irMeta.frames.length; i++) {
+                if (!irMeta.frames[i] || !irMeta.frames[i].datetime) continue;
+                var fDate = new Date(irMeta.frames[i].datetime);
+                var delta = Math.abs(fDate - mDate);
+                if (delta < bestDelta) { bestDelta = delta; bestIdx = i; }
+            }
+            if (bestIdx !== irFrameIdx) {
+                irFrameIdx = bestIdx;
+                loadIRFrame(bestIdx);
+            }
+        }
+    }
 };
 
 function _gaFLLoadMissionData(fileUrl) {
