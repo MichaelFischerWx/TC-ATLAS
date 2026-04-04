@@ -269,6 +269,11 @@ for _base in _MERGED_BASES:
 # ---------------------------------------------------------------------------
 app = FastAPI(title="TC-RADAR API", version="2.0.0")
 
+# GZip compression — flight-level JSON responses are 0.5-2 MB and compress
+# very well (~5-10× reduction).  minimum_size avoids overhead on small responses.
+from starlette.middleware.gzip import GZipMiddleware
+app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=5)
+
 _cors_origins = os.environ.get(
     "CORS_ORIGINS",
     "https://michaelfischerwx.github.io,http://localhost:8000",
@@ -5321,7 +5326,7 @@ _FL_AVG_INTERVAL_S = 10    # 10-second averaging window
 _hrd_dir_cache: OrderedDict = OrderedDict()    # url → (links, timestamp)
 _HRD_DIR_CACHE_TTL = 3600  # 1 hour for archive data
 _hrd_fl_cache: OrderedDict = OrderedDict()     # case_index → (result, timestamp)
-_HRD_FL_CACHE_TTL = 86400  # 24 hours — archive data is static
+_HRD_FL_CACHE_TTL = 7 * 86400  # 7 days — archive data is immutable
 _HRD_FL_CACHE_MAX = 50
 
 
@@ -5566,11 +5571,10 @@ def _parse_usaf_10sec(lines: list, col_line_idx: int) -> list:
             skip_next = True
             data_col += 1
             continue
-        if upper == "V" and ti + 1 < len(simple_tokens) and simple_tokens[ti + 1].upper() == "V":
-            col_idx["VV"] = data_col
-            skip_next = True
-            data_col += 1
-            continue
+        # NOTE: Do NOT merge "V V" — in ARWO data files, these are two
+        # separate single-character columns (vertical velocity components)
+        # occupying two data positions.  Merging them shifts all subsequent
+        # columns (WDir, WSpd, SLP, …) by one.
         if upper in ("VALID", "VALIDITY", "SOURCE", "SATCOM", "AVAPS", "DDPH", "SFMR", "FLAGS"):
             # Trailing metadata columns — stop parsing
             break
@@ -5625,13 +5629,20 @@ def _parse_usaf_10sec(lines: list, col_line_idx: int) -> list:
             wd2 = _get("WNDDR2")
             if wd2 is not None and wd2 <= 360:
                 wdir = wd2
+        # ARWO files report wind speed, ground speed, and TAS in knots
+        if wspd is not None:
+            wspd = wspd * 0.514444
         temp = _get("TEMPR")
         dewpt = _get("DEWPT")
         press = _get("PRESS")
         geo_alt = _get("GEOAL")
         sfcpr = _get("SFCPR")
         gn_spd = _get("GNSPD")
+        if gn_spd is not None:
+            gn_spd = gn_spd * 0.514444
         tas = _get("TAS")
+        if tas is not None:
+            tas = tas * 0.514444
         head = _get("HEAD")
         track = _get("TRACK")
         vt_wnd = _get("VTWND")

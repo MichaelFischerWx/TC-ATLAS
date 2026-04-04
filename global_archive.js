@@ -9521,7 +9521,7 @@ window.gaFLSelectMission = function () {
     if (_gaFLAutoSync && _gaFLMissions && irMeta && irMeta.frames && irMeta.frames.length > 0) {
         var mission = _gaFLMissions[select.selectedIndex];
         if (mission && mission.datetime) {
-            var mDate = new Date(mission.datetime + 'T18:00:00Z');  // ~midday of mission
+            var mDate = new Date(mission.datetime + 'T12:00:00Z');  // noon guess; refined by _gaFLSyncIRToMissionMidpoint after data loads
             var bestIdx = 0, bestDelta = Infinity;
             for (var i = 0; i < irMeta.frames.length; i++) {
                 if (!irMeta.frames[i] || !irMeta.frames[i].datetime) continue;
@@ -9578,8 +9578,9 @@ function _gaFLLoadMissionData(fileUrl) {
             if (status) {
                 var summ = json.summary || {};
                 var parts = [json.n_obs_raw + ' obs'];
-                if (summ.max_fl_wspd_ms != null) parts.push('Max: ' + Math.round(summ.max_fl_wspd_ms * 1.944) + ' kt');
-                if (summ.min_static_pres_hpa != null) parts.push('Min P: ' + summ.min_static_pres_hpa + ' hPa');
+                if (summ.max_fl_wspd_ms != null && summ.max_fl_wspd_ms <= 120) parts.push('Max: ' + Math.round(summ.max_fl_wspd_ms * 1.944) + ' kt');
+                var minP = summ.min_sfcpr_hpa != null ? summ.min_sfcpr_hpa : summ.min_static_pres_hpa;
+                if (minP != null && minP >= 850) parts.push('Min P: ' + minP + ' hPa');
                 status.textContent = parts.join(' \u00b7 ');
             }
 
@@ -9589,8 +9590,13 @@ function _gaFLLoadMissionData(fileUrl) {
             // Highlight the mission time window on the intensity timeline
             _gaFLHighlightOnTimeline(json);
 
-            // Refine IR frame to mission midpoint using actual observation times
-            _gaFLSyncIRToMissionMidpoint(json);
+            // Refine IR frame to mission midpoint using actual observation times,
+            // unless triggered by F-Deck click (IR already synced to fix time).
+            if (_gaFLSyncFromFDeck) {
+                _gaFLSyncFromFDeck = false;
+            } else {
+                _gaFLSyncIRToMissionMidpoint(json);
+            }
         })
         .catch(function (e) {
             _gaFLFetching = false;
@@ -9685,7 +9691,7 @@ function _gaFLRenderOnMap() {
         var wspd = o.fl_wspd_ms;
         var wkt = wspd != null ? Math.round(wspd * 1.944) : '?';
         var tip = '<b>' + o.time + ' UTC</b><br>' +
-            'Wind: ' + (wspd != null ? wspd.toFixed(1) + ' m/s (' + wkt + ' kt)' : '\u2014') + '<br>' +
+            'Wind: ' + (wspd != null ? wkt + ' kt' : '\u2014') + '<br>' +
             'Dir: ' + (o.fl_wdir_deg != null ? o.fl_wdir_deg + '\u00b0' : '\u2014') + '<br>' +
             'Alt: ' + (o.gps_alt_m != null ? Math.round(o.gps_alt_m) + ' m' : '\u2014') + '<br>' +
             'Pres: ' + (o.static_pres_hpa != null ? o.static_pres_hpa + ' hPa' : '\u2014') + '<br>' +
@@ -9815,9 +9821,12 @@ window._gaFLSyncToIRFrame = _gaFLSyncToIRFrame;
 
 // ── F-Deck ↔ Recon cross-linking ────────────────────────────────
 
+var _gaFLSyncFromFDeck = false;  // when true, skip IR midpoint override (user clicked a specific fix time)
+
 function _gaFLSyncFromFDeckClick(clickedTime) {
     // clickedTime is ISO like "2024-08-28T12:00"
     var fixDate = clickedTime.substring(0, 10); // "YYYY-MM-DD"
+    _gaFLSyncFromFDeck = true;  // IR already synced to fix time by syncIRToTime; don't override
 
     // Auto-activate Recon if not already visible
     if (!_gaFLVisible) {
@@ -9834,11 +9843,17 @@ function _gaFLSyncFromFDeckClick(clickedTime) {
             return;
         }
 
-        // Find the mission closest to the fix datetime
-        var fixMs = new Date(clickedTime.replace('T', 'T') + ':00Z').getTime();
+        // Find the mission closest to the fix datetime.
+        // Mission metadata only has a date (YYYY-MM-DD), not flight times.
+        // Use the fix's own hour to bias toward missions on the same date:
+        // compare fix time to mission_date + fix_hour (not hardcoded noon),
+        // so an 00Z fix prefers a same-day mission over a previous-day one.
+        var fixMs = new Date(clickedTime + ':00Z').getTime();
+        var fixHour = new Date(fixMs).getUTCHours();
+        var fixTimeStr = 'T' + String(fixHour).padStart(2, '0') + ':00:00Z';
         var bestIdx = 0, bestDelta = Infinity;
         for (var i = 0; i < _gaFLMissions.length; i++) {
-            var mMs = new Date(_gaFLMissions[i].datetime + 'T12:00:00Z').getTime();
+            var mMs = new Date(_gaFLMissions[i].datetime + fixTimeStr).getTime();
             var delta = Math.abs(fixMs - mMs);
             if (delta < bestDelta) { bestDelta = delta; bestIdx = i; }
         }
@@ -10200,7 +10215,7 @@ window._gaFLReset = _gaFLReset;
 // ── Time Series ─────────────────────────────────────────────────
 
 var _GA_FL_TS_CONFIG = {
-    'fl_wspd_ms':      { label: 'FL Wind Speed',   btn: 'Wind',    units: 'm/s', color: '#60a5fa', yaxis: 'y' },
+    'fl_wspd_ms':      { label: 'FL Wind Speed',   btn: 'Wind',    units: 'kt', color: '#60a5fa', yaxis: 'y', scale: 1.944 },
     'static_pres_hpa': { label: 'Static Pressure',  btn: 'Pres',   units: 'hPa', color: '#fbbf24', yaxis: 'y2' },
     'sfcpr_hpa':       { label: 'Sfc Pressure',     btn: 'SfcP',   units: 'hPa', color: '#fb923c', yaxis: 'y5' },
     'temp_c':          { label: 'Temperature',       btn: 'T',     units: '\u00b0C', color: '#f87171', yaxis: 'y3' },
@@ -10210,9 +10225,9 @@ var _GA_FL_TS_CONFIG = {
 };
 
 var _GA_FL_RES_STYLE = {
-    '1s':  { opacity: 0.3, width: 0.8 },
-    '10s': { opacity: 0.7, width: 1.5 },
-    '30s': { opacity: 1.0, width: 2.5 },
+    '1s':  { opacity: 0.5, width: 1.0, color: '#22d3ee' },
+    '10s': { opacity: 0.7, width: 1.5, color: null },
+    '30s': { opacity: 1.0, width: 2.5, color: null },
 };
 
 var _gaFLVarsVisible = { 'fl_wspd_ms': true, 'static_pres_hpa': true, 'temp_c': false, 'dewpoint_c': false, 'theta_e': false, 'gps_alt_m': false, 'sfcpr_hpa': false };
@@ -10222,14 +10237,28 @@ window.gaFLOpenTimeSeries = function () {
     if (!panel) return;
     _gaFLTSOpen = true;
     panel.style.display = '';
+    // Move panel to the top of the left panel (above intensity timeline)
+    var anchor = document.getElementById('ga-fl-ts-top-anchor');
+    if (anchor && panel.parentNode !== anchor.parentNode) {
+        anchor.parentNode.insertBefore(panel, anchor);
+    }
     _gaFLPopulateVarToggles();
     if (_gaFLData) _gaFLRenderTimeSeries();
 };
 
 window.gaFLCloseTimeSeries = function () {
     var panel = document.getElementById('ga-fl-ts-panel');
-    if (panel) panel.style.display = 'none';
+    if (!panel) return;
+    panel.style.display = 'none';
     _gaFLTSOpen = false;
+    // Move panel back to right panel (after fl-controls)
+    var flControls = document.getElementById('ga-fl-controls');
+    if (flControls && panel.parentNode !== flControls.parentNode) {
+        // Insert after the skew-T panel (or after fl-controls if skew-T absent)
+        var skewtPanel = document.getElementById('ga-sonde-skewt-panel');
+        var ref = skewtPanel || flControls;
+        ref.parentNode.insertBefore(panel, ref.nextSibling);
+    }
 };
 
 window.gaFLToggleRes = function (res) {
@@ -10288,6 +10317,7 @@ function _gaFLRenderTimeSeries() {
         Object.keys(datasets).forEach(function (resKey) {
             var obs = datasets[resKey];
             var style = _GA_FL_RES_STYLE[resKey];
+            var scaleFactor = cfg.scale || 1;
             var xVals = [], yVals = [];
             for (var i = 0; i < obs.length; i++) {
                 var o = obs[i];
@@ -10299,6 +10329,7 @@ function _gaFLRenderTimeSeries() {
                 if (varKey === 'fl_wspd_ms' && (val < 0 || val > 150)) continue;
                 if (varKey === 'temp_c' && (val < -90 || val > 60)) continue;
                 if (varKey === 'gps_alt_m' && (val < -100 || val > 25000)) continue;
+                val = val * scaleFactor;
                 var xVal;
                 if (_gaFLXAxisMode === 'radius' && o.r_km != null) {
                     xVal = o.r_km;
@@ -10314,7 +10345,7 @@ function _gaFLRenderTimeSeries() {
                 x: xVals, y: yVals,
                 mode: 'lines',
                 name: cfg.btn + ' (' + resKey + ')',
-                line: { color: cfg.color, width: style.width, shape: 'linear' },
+                line: { color: style.color || cfg.color, width: style.width, shape: 'linear' },
                 opacity: style.opacity,
                 yaxis: cfg.yaxis,
                 hovertemplate: '%{y:.1f} ' + cfg.units + '<extra>' + cfg.label + ' (' + resKey + ')</extra>',
@@ -10337,7 +10368,7 @@ function _gaFLRenderTimeSeries() {
             tickangle: -45,
         },
         yaxis: {
-            title: 'Wind (m/s)', titlefont: { color: '#60a5fa' },
+            title: 'Wind (kt)', titlefont: { color: '#60a5fa' },
             tickfont: { color: '#60a5fa' }, gridcolor: 'rgba(255,255,255,0.06)',
             zeroline: false, side: 'left',
         },

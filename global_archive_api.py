@@ -4049,15 +4049,17 @@ _AIRCRAFT_NAMES = {
     "U": "USAF (WC-130J)",
 }
 
-# Mission discovery cache
+# Mission discovery cache — archive directory listings are quasi-static;
+# new missions appear only during active season, 6h is a reasonable refresh.
 _fl_mission_cache: OrderedDict = OrderedDict()
-_FL_MISSION_CACHE_TTL = 86400
+_FL_MISSION_CACHE_TTL = 6 * 3600   # 6 hours
 _FL_MISSION_CACHE_MAX = 200
 
-# Flight-level data cache
+# Flight-level data cache — parsed file data is immutable once posted.
+# Long TTL is safe; limit max entries to control memory (~1-2 MB each).
 _fl_data_cache: OrderedDict = OrderedDict()
-_FL_DATA_CACHE_TTL = 86400
-_FL_DATA_CACHE_MAX = 30
+_FL_DATA_CACHE_TTL = 7 * 86400     # 7 days
+_FL_DATA_CACHE_MAX = 50
 
 
 def _detect_fl_format(filename: str) -> str:
@@ -4149,15 +4151,15 @@ def get_fl_missions(
     # Resolve storm name to HRD directory
     hrd_dir = h["resolve_name"](storm_name, year)
     if not hrd_dir:
-        result = {
+        # Don't cache negative results — transient FTP failures would block
+        # valid storms for the full 24-hour TTL.
+        return {
             "success": True,
             "storm_name": storm_name,
             "year": year,
             "hrd_dir": None,
             "missions": [],
         }
-        _fl_mission_cache[cache_key] = (result, now)
-        return result
 
     # Get directory listing
     dir_url = f"{h['HRD_FL_BASE']}/{year}/{hrd_dir}/"
@@ -4425,12 +4427,15 @@ def get_fl_data(
 
     # Summary
     wspds = [o["fl_wspd_ms"] for o in observations if o.get("fl_wspd_ms") is not None]
-    presses = [o["static_pres_hpa"] for o in observations if o.get("static_pres_hpa") is not None]
+    # Use extrapolated surface pressure (sfcpr_hpa) for min P, not flight-level
+    # static pressure which reflects altitude, not storm intensity.
+    sfcprs = [o["sfcpr_hpa"] for o in observations
+              if o.get("sfcpr_hpa") is not None and 850 <= o["sfcpr_hpa"] <= 1100]
     alts = [o["gps_alt_m"] for o in observations if o.get("gps_alt_m") is not None]
 
     summary = {
         "max_fl_wspd_ms": round(max(wspds), 1) if wspds else None,
-        "min_static_pres_hpa": round(min(presses), 1) if presses else None,
+        "min_sfcpr_hpa": round(min(sfcprs), 1) if sfcprs else None,
         "total_obs_1hz": len(observations),
         "mean_alt_m": round(sum(alts) / len(alts), 0) if alts else None,
         "start_time": observations[0]["time"] if observations else None,
@@ -4528,11 +4533,18 @@ def get_global_dropsondes(
                 "message": "Could not list operproc directory"}
 
     # Filter tarballs by mission_id if provided
-    tarballs = [e for e in entries if e.lower().endswith(('.tar.gz', '.tgz'))]
+    # Only FRD tarballs contain parsed dropsonde profiles; skip BUFR, raw, etc.
+    tarballs = [e for e in entries
+                if e.lower().endswith(('.tar.gz', '.tgz'))
+                and ('frd' in e.lower() or 'FRD' in e)]
     if mission_id:
-        # Match tarballs containing the mission ID prefix
-        mid_upper = mission_id.upper()
-        tarballs = [t for t in tarballs if mid_upper in t.upper()]
+        # Match tarballs by date + aircraft letter.  Tarball names use a
+        # compact format like "20050823h.frd.tar.gz" while mission IDs are
+        # "20050823H1" (with sortie number).  Strip the trailing sortie digit(s)
+        # to produce the match prefix, e.g. "20050823H".
+        import re as _re
+        mid_prefix = _re.sub(r'\d+$', '', mission_id).upper()   # "20050823H1" → "20050823H"
+        tarballs = [t for t in tarballs if mid_prefix in t.upper()]
 
     if not tarballs:
         return {"success": True, "dropsondes": [], "n_sondes": 0,
@@ -4594,5 +4606,372 @@ def get_global_dropsondes(
     _sonde_cache[cache_key] = (result, now)
     if len(_sonde_cache) > _SONDE_CACHE_MAX:
         _sonde_cache.popitem(last=False)
+
+    return result
+
+
+# ── Vortex Data Messages (VDM) ─────────────────────────────────────
+
+NHC_RECON_BASE = "https://www.nhc.noaa.gov/archive/recon"
+
+_vdm_cache: OrderedDict = OrderedDict()
+_VDM_CACHE_TTL = 7 * 86400   # 7 days — archive data is immutable
+_VDM_CACHE_MAX = 50
+
+
+def _parse_vdm_position(line_b_text: str):
+    """Parse VDM position from line B (deg/min format).
+
+    Examples:
+        '16 deg 46 min N' → 16.767
+        '058 deg 30 min W' → -58.5
+        '17 DEG 21 MIN N' → 17.35
+    """
+    import re
+    m = re.match(r'\s*(\d+)\s*(?:deg|DEG)\s+(\d+)\s*(?:min|MIN)\s+([NSEW])', line_b_text.strip())
+    if not m:
+        return None
+    deg = int(m.group(1))
+    mins = int(m.group(2))
+    hemi = m.group(3).upper()
+    val = deg + mins / 60.0
+    if hemi in ('S', 'W'):
+        val = -val
+    return round(val, 3)
+
+
+def _parse_vdm_text(text: str, year: int) -> dict | None:
+    """Parse a single VDM text message into structured data.
+
+    Handles both modern (2006+, 'VORTEX DATA MESSAGE AL{NN}{YYYY}')
+    and legacy (pre-2006, 'DETAILED VORTEX DATA MESSAGE') formats.
+    Returns dict with all extracted fields or None on failure.
+    """
+    import re
+
+    lines = text.strip().splitlines()
+    if len(lines) < 10:
+        return None
+
+    # Identify storm from header
+    atcf_id = None
+    for line in lines[:5]:
+        m = re.search(r'(AL|EP|CP|WP|IO|SH)\s*(\d{2})\s*(\d{4})', line)
+        if m:
+            atcf_id = f"{m.group(1)}{m.group(2)}{m.group(3)}"
+            break
+
+    # Parse structured lines A–P/Q
+    vdm = {"atcf_id": atcf_id, "raw_text": text}
+
+    # Build a dict of line labels → content
+    line_map = {}
+    for line in lines:
+        lm = re.match(r'^([A-Q])\.\s*(.*)', line.strip())
+        if lm:
+            line_map[lm.group(1)] = lm.group(2).strip()
+
+    # A. Fix time: "05/14:49:00Z" or "27/0518Z"
+    a = line_map.get("A", "")
+    tm = re.match(r'(\d{1,2})/(\d{2}):?(\d{2}):?(\d{2})?Z?', a)
+    if tm:
+        day = int(tm.group(1))
+        hh = int(tm.group(2))
+        mm = int(tm.group(3))
+        ss = int(tm.group(4)) if tm.group(4) else 0
+        # Determine month from day + year context (we'll refine with start_date later)
+        vdm["_day"] = day
+        vdm["_hh"] = hh
+        vdm["_mm"] = mm
+        vdm["_ss"] = ss
+    else:
+        return None  # Can't parse time → skip
+
+    # B. Position — may span two lines
+    lat = None
+    lon = None
+    for i, line in enumerate(lines):
+        if line.strip().startswith("B."):
+            # Lat is on this line or next
+            lat_text = re.sub(r'^B\.\s*', '', line.strip())
+            lat = _parse_vdm_position(lat_text)
+            # Lon is typically next line
+            if i + 1 < len(lines):
+                lon = _parse_vdm_position(lines[i + 1])
+            break
+    vdm["lat"] = lat
+    vdm["lon"] = lon
+
+    # C. Flight level: "700 mb 2454 m" or "700 MB 2343 M"
+    c = line_map.get("C", "")
+    cm = re.search(r'(\d+)\s*(?:mb|MB)', c)
+    vdm["flight_level_mb"] = int(cm.group(1)) if cm else None
+
+    # D. Max FL wind (some formats): "147 kt" or "NA"
+    d = line_map.get("D", "")
+    dm = re.search(r'(\d+)\s*(?:kt|KT)', d)
+    vdm["max_fl_wind_kt"] = int(dm.group(1)) if dm else None
+
+    # F. May contain max wind info in some formats: "160 deg 142 kt"
+    # or storm motion. Parse carefully.
+    f = line_map.get("F", "")
+    fm = re.search(r'(\d+)\s*(?:deg|DEG)\s+(\d+)\s*(?:kt|KT)', f)
+    if fm and vdm["max_fl_wind_kt"] is None:
+        # In legacy format, F often has max wind
+        vdm["max_fl_wind_kt"] = int(fm.group(2))
+
+    # H. Min SLP: "927 mb" or "918 MB"
+    h = line_map.get("H", "")
+    hm = re.search(r'(\d+)\s*(?:mb|MB)', h)
+    vdm["min_slp_hpa"] = int(hm.group(1)) if hm else None
+
+    # I. Eye temp: "8 C / 3022 m" or "13 C / 3045 m"
+    i_line = line_map.get("I", "")
+    im = re.search(r'(-?\d+)\s*C', i_line)
+    vdm["eye_temp_c"] = int(im.group(1)) if im else None
+
+    # J. Eyewall temp
+    j_line = line_map.get("J", "")
+    jm = re.search(r'(-?\d+)\s*C', j_line)
+    vdm["eyewall_temp_c"] = int(jm.group(1)) if jm else None
+
+    # L. Eye shape: "CLOSED", "OPEN NW", etc.
+    vdm["eye_shape"] = line_map.get("L", "").strip() or None
+
+    # M. Eye diameter: "C25" → circular 25 nm, "E20/30" → elliptical
+    m_line = line_map.get("M", "")
+    mm_match = re.search(r'C\s*(\d+)', m_line)
+    if mm_match:
+        vdm["eye_diameter_nm"] = int(mm_match.group(1))
+    else:
+        em = re.search(r'E\s*(\d+)', m_line)
+        vdm["eye_diameter_nm"] = int(em.group(1)) if em else None
+
+    # P/Q. Aircraft, mission, storm name, OB number
+    # Look for the line with aircraft info
+    aircraft = mission_id = storm_name = None
+    ob_number = None
+    for line in lines:
+        pm = re.match(
+            r'\s*(?:P\.\s*)?(?:Q\.\s*)?(AF\d+|NOAA\d+)\s+(\w+)\s+(\w+)\s+OB\s+(\d+)',
+            line.strip(), re.IGNORECASE
+        )
+        if pm:
+            aircraft = pm.group(1).upper()
+            mission_id = pm.group(2).upper()
+            storm_name = pm.group(3).upper()
+            ob_number = int(pm.group(4))
+            break
+    vdm["aircraft"] = aircraft
+    vdm["mission_id"] = mission_id
+    vdm["storm_name"] = storm_name
+    vdm["ob_number"] = ob_number
+
+    # Post-P lines: MAX FL WIND, MAX OUTBOUND FL WIND, CNTR DROPSONDE, MAX SFMR
+    max_fl = max_outbound = cntr_sonde = max_sfmr = None
+    max_fl_bearing = max_fl_range = None
+    max_fl_time = None
+    for line in lines:
+        lu = line.strip().upper()
+        # MAX FL WIND 152 KT 333 / 16 NM 11:31:00Z
+        wm = re.match(r'MAX FL WIND\s+(\d+)\s*KT\s+(\d+)\s*/\s*(\d+)\s*NM\s+(\S+)', lu)
+        if wm:
+            max_fl = int(wm.group(1))
+            max_fl_bearing = int(wm.group(2))
+            max_fl_range = int(wm.group(3))
+            max_fl_time = wm.group(4).rstrip('Z')
+        # MAX OUTBOUND FL WIND 127 KT ...
+        om = re.match(r'MAX OUTBOUND FL WIND\s+(\d+)\s*KT', lu)
+        if om:
+            max_outbound = int(om.group(1))
+        # CNTR DROPSONDE SFC WIND 335 / 7 KT or 110 / 13 KT
+        cm = re.match(r'CNTR DROPSONDE SFC WIND\s+\d+\s*/\s*(\d+)\s*KT', lu)
+        if cm:
+            cntr_sonde = int(cm.group(1))
+        # MAX SFMR SFC WIND ...
+        sm = re.match(r'MAX (?:SFMR\s+)?SFC WIND\s+(\d+)\s*KT', lu)
+        if sm:
+            max_sfmr = int(sm.group(1))
+
+    # Prefer post-P MAX FL WIND over line D
+    if max_fl is not None:
+        vdm["max_fl_wind_kt"] = max_fl
+    vdm["max_fl_wind_bearing"] = max_fl_bearing
+    vdm["max_fl_wind_range_nm"] = max_fl_range
+    vdm["max_outbound_fl_wind_kt"] = max_outbound
+    vdm["cntr_sonde_wind_kt"] = cntr_sonde
+    vdm["max_sfmr_kt"] = max_sfmr
+
+    return vdm
+
+
+def _resolve_vdm_time(vdm: dict, year: int, start_date: str, end_date: str) -> str | None:
+    """Resolve a VDM's day/time to a full ISO datetime using the storm date range.
+
+    VDMs only have day-of-month + time, so we need the month context.
+    """
+    day = vdm.get("_day")
+    if day is None:
+        return None
+
+    from datetime import datetime, timedelta
+
+    try:
+        sd = datetime.strptime(start_date, "%Y-%m-%d")
+        ed = datetime.strptime(end_date, "%Y-%m-%d")
+    except (ValueError, TypeError):
+        return None
+
+    # Search ±3 days around the storm date range for the matching day
+    best = None
+    best_dist = 999
+    d = sd - timedelta(days=3)
+    while d <= ed + timedelta(days=3):
+        if d.day == day:
+            # Prefer dates within the storm window
+            dist = 0 if sd <= d <= ed else abs((d - sd).days if d < sd else (d - ed).days)
+            if dist < best_dist:
+                best = d
+                best_dist = dist
+        d += timedelta(days=1)
+
+    if best is None:
+        return None
+
+    hh = vdm.get("_hh", 0)
+    mm = vdm.get("_mm", 0)
+    ss = vdm.get("_ss", 0)
+    dt = best.replace(hour=hh, minute=mm, second=ss)
+    return dt.strftime("%Y-%m-%dT%H:%M:%S")
+
+
+@router.get("/vdm")
+def get_vdm(
+    storm_name: str = Query(..., description="Storm name"),
+    year: int = Query(..., ge=1989, le=2030, description="Year"),
+    atcf_id: str = Query("", description="ATCF ID (e.g., AL112017) for filtering 2006+ VDMs"),
+    start_date: str = Query("", description="Storm start date YYYY-MM-DD"),
+    end_date: str = Query("", description="Storm end date YYYY-MM-DD"),
+):
+    """Fetch and parse VDMs from the NHC reconnaissance archive."""
+    import time as _time
+    now = _time.time()
+    cache_key = f"vdm_{storm_name.lower()}_{year}"
+    if cache_key in _vdm_cache:
+        cached, ts = _vdm_cache[cache_key]
+        if now - ts < _VDM_CACHE_TTL:
+            _vdm_cache.move_to_end(cache_key)
+            return cached
+
+    from tc_radar_api import _hrd_fetch_text, _hrd_parse_directory
+
+    vdms = []
+
+    if year >= 2006:
+        # Modern format: REPNT2 directory
+        repnt2_url = f"{NHC_RECON_BASE}/{year}/REPNT2/"
+        try:
+            entries = _hrd_parse_directory(repnt2_url)
+        except Exception:
+            return {"success": True, "vdms": [], "n_vdms": 0,
+                    "message": "Could not list REPNT2 directory"}
+
+        # Filter by date range from filenames (REPNT2-KNHC.YYYYMMDDHHmm.txt)
+        import re
+        target_files = []
+        for entry in entries:
+            if not entry.lower().endswith('.txt'):
+                continue
+            dm = re.search(r'(\d{12})\.txt$', entry)
+            if not dm:
+                continue
+            file_date = dm.group(1)[:8]  # YYYYMMDD
+            # Filter to storm date range ±2 days
+            if start_date and end_date:
+                from datetime import datetime, timedelta
+                try:
+                    fd = datetime.strptime(file_date, "%Y%m%d")
+                    sd = datetime.strptime(start_date, "%Y-%m-%d") - timedelta(days=2)
+                    ed = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=2)
+                    if not (sd <= fd <= ed):
+                        continue
+                except ValueError:
+                    pass
+            target_files.append(entry)
+
+        # Fetch and parse each VDM file (they're tiny, ~400 bytes each)
+        storm_upper = storm_name.upper().strip()
+        atcf_upper = atcf_id.upper().strip() if atcf_id else ""
+        for fname in target_files:
+            try:
+                text = _hrd_fetch_text(repnt2_url + fname, timeout=10)
+                vdm = _parse_vdm_text(text, year)
+                if vdm is None:
+                    continue
+                # Filter by storm: match ATCF ID or storm name
+                if atcf_upper and vdm.get("atcf_id") and atcf_upper != vdm["atcf_id"]:
+                    continue
+                if not atcf_upper and vdm.get("storm_name") and vdm["storm_name"] != storm_upper:
+                    continue
+                # Resolve full datetime
+                iso_time = _resolve_vdm_time(vdm, year, start_date, end_date)
+                if iso_time:
+                    vdm["time"] = iso_time
+                else:
+                    continue  # can't resolve time → skip
+
+                # Clean up internal fields
+                for k in ("_day", "_hh", "_mm", "_ss", "raw_text"):
+                    vdm.pop(k, None)
+                vdms.append(vdm)
+            except Exception as e:
+                logger.warning(f"Failed to fetch/parse VDM {fname}: {e}")
+
+    else:
+        # Legacy format (1989-2005): storm-specific directory with V*.txt files
+        # Try both lowercase and uppercase storm names
+        storm_dir = None
+        for name_variant in [storm_name.lower(), storm_name.upper(), storm_name.capitalize()]:
+            test_url = f"{NHC_RECON_BASE}/{year}/{name_variant}/"
+            try:
+                entries = _hrd_parse_directory(test_url)
+                if entries:
+                    storm_dir = test_url
+                    break
+            except Exception:
+                continue
+
+        if storm_dir:
+            v_files = [e for e in entries if e.upper().startswith("V") and e.lower().endswith(".txt")]
+            for fname in v_files:
+                try:
+                    text = _hrd_fetch_text(storm_dir + fname, timeout=10)
+                    vdm = _parse_vdm_text(text, year)
+                    if vdm is None:
+                        continue
+                    iso_time = _resolve_vdm_time(vdm, year, start_date, end_date)
+                    if iso_time:
+                        vdm["time"] = iso_time
+                    for k in ("_day", "_hh", "_mm", "_ss", "raw_text"):
+                        vdm.pop(k, None)
+                    vdms.append(vdm)
+                except Exception as e:
+                    logger.warning(f"Failed to fetch/parse legacy VDM {fname}: {e}")
+
+    # Sort by time
+    vdms.sort(key=lambda v: v.get("time", ""))
+
+    result = {
+        "success": True,
+        "storm_name": storm_name,
+        "year": year,
+        "atcf_id": atcf_id or None,
+        "vdms": vdms,
+        "n_vdms": len(vdms),
+    }
+
+    _vdm_cache[cache_key] = (result, now)
+    if len(_vdm_cache) > _VDM_CACHE_MAX:
+        _vdm_cache.popitem(last=False)
 
     return result
