@@ -9900,7 +9900,7 @@ function _gaFLHighlightOnTimeline(json) {
 var _GA_FL_TS_CONFIG = {
     'fl_wspd_ms':      { label: 'FL Wind Speed',   btn: 'Wind',    units: 'm/s', color: '#60a5fa', yaxis: 'y' },
     'static_pres_hpa': { label: 'Static Pressure',  btn: 'Pres',   units: 'hPa', color: '#fbbf24', yaxis: 'y2' },
-    'sfcpr_hpa':       { label: 'Sfc Pressure',     btn: 'SfcP',   units: 'hPa', color: '#fb923c', yaxis: 'y2' },
+    'sfcpr_hpa':       { label: 'Sfc Pressure',     btn: 'SfcP',   units: 'hPa', color: '#fb923c', yaxis: 'y5' },
     'temp_c':          { label: 'Temperature',       btn: 'T',     units: '\u00b0C', color: '#f87171', yaxis: 'y3' },
     'dewpoint_c':      { label: 'Dewpoint',          btn: 'Td',    units: '\u00b0C', color: '#a78bfa', yaxis: 'y3' },
     'theta_e':         { label: 'Theta-E',           btn: '\u03b8e', units: 'K',   color: '#e879f9', yaxis: 'y3' },
@@ -10054,6 +10054,12 @@ function _gaFLRenderTimeSeries() {
             tickfont: { color: '#6b7280' }, overlaying: 'y', side: 'right',
             showgrid: false, visible: false, anchor: 'free', position: 1,
         },
+        yaxis5: {
+            title: 'Sfc P (hPa)', titlefont: { color: '#fb923c' },
+            tickfont: { color: '#fb923c' }, overlaying: 'y', side: 'right',
+            autorange: 'reversed', showgrid: false, visible: false,
+            anchor: 'free', position: 0.95,
+        },
     };
 
     if (_gaFLVarsVisible['temp_c'] || _gaFLVarsVisible['dewpoint_c'] || _gaFLVarsVisible['theta_e']) {
@@ -10061,6 +10067,9 @@ function _gaFLRenderTimeSeries() {
     }
     if (_gaFLVarsVisible['gps_alt_m']) {
         layout.yaxis4.visible = true;
+    }
+    if (_gaFLVarsVisible['sfcpr_hpa']) {
+        layout.yaxis5.visible = true;
     }
 
     Plotly.newPlot('ga-fl-ts-chart', traces, layout, { responsive: true, displayModeBar: true, displaylogo: false });
