@@ -9393,7 +9393,7 @@ var _gaFLColorVar = 'fl_wspd_ms';
 var _gaFLAutoSync = true;
 var _gaFLFetching = false;
 var _gaFLTSHighlight = null;
-var _gaFLResVisible = { '1s': false, '10s': true, '30s': true };
+var _gaFLResVisible = { '1s': false, '10s': true, '30s': false };
 var _gaFLXAxisMode = 'time';
 var _gaFLTSOpen = false;
 
@@ -9595,8 +9595,9 @@ function _gaFLRenderOnMap() {
             'Temp: ' + (o.temp_c != null ? o.temp_c + ' \u00b0C' : '\u2014');
         var circle = L.circleMarker([o.lat, o.lon], {
             radius: 4, fillColor: _gaFLWindColor(wspd), fillOpacity: 0.8,
-            color: '#fff', weight: 0.5, opacity: 0.6
-        }).bindTooltip(tip, { sticky: true });
+            color: '#fff', weight: 0.5, opacity: 0.6,
+            pane: 'markerPane'
+        }).bindTooltip(tip, { sticky: true, pane: 'tooltipPane', className: 'ga-fl-tooltip' });
         circle.addTo(detailMap);
         _gaFLMapLayers.push(circle);
     }
@@ -9798,7 +9799,14 @@ function _gaFLRenderTimeSeries() {
             var xVals = [], yVals = [];
             for (var i = 0; i < obs.length; i++) {
                 var o = obs[i];
-                if (o[varKey] == null) continue;
+                var val = o[varKey];
+                if (val == null || !isFinite(val)) continue;
+                // Filter unrealistic values
+                if (varKey === 'static_pres_hpa' && (val < 100 || val > 1100)) continue;
+                if (varKey === 'sfcpr_hpa' && (val < 100 || val > 1100)) continue;
+                if (varKey === 'fl_wspd_ms' && (val < 0 || val > 150)) continue;
+                if (varKey === 'temp_c' && (val < -90 || val > 60)) continue;
+                if (varKey === 'gps_alt_m' && (val < -100 || val > 25000)) continue;
                 var xVal;
                 if (_gaFLXAxisMode === 'radius' && o.r_km != null) {
                     xVal = o.r_km;
@@ -9806,7 +9814,7 @@ function _gaFLRenderTimeSeries() {
                     xVal = o.time || '';
                 }
                 xVals.push(xVal);
-                yVals.push(o[varKey]);
+                yVals.push(val);
             }
             if (xVals.length === 0) return;
 
@@ -9833,6 +9841,8 @@ function _gaFLRenderTimeSeries() {
             title: _gaFLXAxisMode === 'time' ? 'Time (UTC)' : 'Radius from center (km)',
             gridcolor: 'rgba(255,255,255,0.06)',
             zeroline: false,
+            nticks: 12,
+            tickangle: -45,
         },
         yaxis: {
             title: 'Wind (m/s)', titlefont: { color: '#60a5fa' },

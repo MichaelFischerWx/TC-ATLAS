@@ -5496,10 +5496,12 @@ def _parse_hrd_1sec(text: str) -> list[dict]:
     if len(lines) < 5:
         return []
 
-    # Find the header line with column names — look for "TIME" in the line
+    # Find the header line with column names — look for "TIME" and "LAT" (case-insensitive)
+    # NOAA files use "TIME" + "Lat"; USAF files use "GMT Time" + "LAT"
     col_line_idx = None
-    for i, line in enumerate(lines[:6]):
-        if "TIME" in line and "Lat" in line:
+    for i, line in enumerate(lines[:10]):
+        upper = line.upper()
+        if "TIME" in upper and "LAT" in upper:
             col_line_idx = i
             break
     if col_line_idx is None:
@@ -5528,6 +5530,28 @@ def _parse_hrd_1sec(text: str) -> list[dict]:
     col_idx = {}
     for j, name in enumerate(col_names):
         col_idx[name.upper().replace(" ", "")] = j
+
+    # USAF column name aliases → standard names
+    _USAF_ALIASES = {
+        "WS": "WNDSP", "WD": "WNDDR", "TA": "TEMPR", "DPR": "DEWPT",
+        "TDD": "DEWPT", "BSP": "PRESS", "CSP": "PRESS", "GPSA": "GEOAL",
+        "SLP": "SFCPR", "THD": "HEAD", "TRK": "TRACK", "GS": "GNSPD",
+        "GMTTIME": "TIME", "VV": "VTWND",
+    }
+    for alias, canonical in _USAF_ALIASES.items():
+        if alias in col_idx and canonical not in col_idx:
+            col_idx[canonical] = col_idx[alias]
+
+    # Handle HH:MM:SS time format (USAF) vs HHMMSS (NOAA)
+    _usaf_time_format = False
+    if "TIME" in col_idx:
+        # Check a data sample to detect if time has colons
+        for sline in lines[data_start:min(data_start + 5, len(lines))]:
+            sparts = sline.split()
+            tidx = col_idx["TIME"]
+            if tidx < len(sparts) and ":" in sparts[tidx]:
+                _usaf_time_format = True
+                break
 
     # Detect wind speed units from the units line
     # HRD files use either "m/s" or "kts"/"kt"/"knots" for WNDSP
@@ -5571,22 +5595,31 @@ def _parse_hrd_1sec(text: str) -> list[dict]:
 
         # Parse TIME (HHMMSS format)
         time_str = parts[col_idx.get("TIME", 0)] if "TIME" in col_idx else None
-        if not time_str or len(time_str) < 6:
+        if not time_str or len(time_str) < 5:
             continue
         try:
-            hh = int(time_str[0:2])
-            mm = int(time_str[2:4])
-            ss = int(time_str[4:6])
+            if _usaf_time_format or ":" in time_str:
+                # HH:MM:SS format (USAF)
+                tp = time_str.split(":")
+                hh, mm = int(tp[0]), int(tp[1])
+                ss = int(tp[2]) if len(tp) > 2 else 0
+            else:
+                # HHMMSS format (NOAA)
+                hh = int(time_str[0:2])
+                mm = int(time_str[2:4])
+                ss = int(time_str[4:6])
             time_sec = hh * 3600 + mm * 60 + ss
         except (ValueError, IndexError):
             continue
 
         lat = _get("LAT")
-        # Longitude: HRD uses "Deg W" (positive = west), negate for standard
-        lon_w = _get("LON")
-        if lat is None or lon_w is None:
+        lon_raw = _get("LON")
+        if lat is None or lon_raw is None:
             continue
-        lon = -abs(lon_w)  # Convert west-positive to standard negative-west
+        # NOAA files: "Deg W" (positive = west), negate for standard
+        # USAF files: standard negative-west already
+        # Heuristic: if lon > 0 and in Western Hemisphere (Atlantic/EPAC), negate
+        lon = -abs(lon_raw) if lon_raw > 0 else lon_raw
 
         wspd = _get("WNDSP")   # may be knots or m/s depending on file
         if wspd is not None and wspd_in_knots:

@@ -1643,7 +1643,16 @@ input[type="range"].ga-range::-moz-range-thumb {
     font-size: 0.68rem;
     padding: 2px 8px;
     border-radius: 4px;
+    width: auto;
 }
+
+/* ── Flight-level tooltip (higher z-index than IR hover) ──── */
+.ga-fl-tooltip {
+    z-index: 1000 !important;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+}
+.ga-fl-barb { pointer-events: none; }
 
 /* ── Compare tab ───────────────────────────────────────────── */
 .compare-layout { padding: 16px; }
