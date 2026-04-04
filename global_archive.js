@@ -10575,7 +10575,9 @@ function _gaFLRenderTimeSeries() {
                 if (_gaFLXAxisMode === 'radius' && o.r_km != null) {
                     xVal = o.r_km;
                 } else {
-                    xVal = o.time || '';
+                    // Trim seconds from HH:MM:SS → HH:MM for cleaner axis labels
+                    var t = o.time || '';
+                    xVal = t.length > 5 ? t.substring(0, 5) : t;
                 }
                 xVals.push(xVal);
                 yVals.push(val);
@@ -10605,8 +10607,8 @@ function _gaFLRenderTimeSeries() {
             title: _gaFLXAxisMode === 'time' ? 'Time (UTC)' : 'Radius from center (km)',
             gridcolor: 'rgba(255,255,255,0.06)',
             zeroline: false,
-            nticks: 12,
-            tickangle: -45,
+            nticks: 8,
+            tickangle: 0,
         },
         yaxis: {
             title: 'Wind (kt)', titlefont: { color: '#60a5fa' },
