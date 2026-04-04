@@ -516,6 +516,28 @@
                                 <span id="ga-fl-frame-status" style="font-size:9px;color:#64748b;"></span>
                             </div>
                             <div id="ga-fl-legend" style="margin-top:4px;"></div>
+                            <!-- Dropsonde info (shown when sondes found) -->
+                            <div id="ga-sonde-info" style="display:none;margin-top:6px;border-top:1px solid rgba(52,211,153,0.2);padding-top:6px;">
+                                <div style="display:flex;align-items:center;gap:8px;">
+                                    <span style="font-size:10px;font-weight:600;color:#6ee7b7;text-transform:uppercase;letter-spacing:0.5px;">&#129666; Sondes</span>
+                                    <span id="ga-sonde-count" style="font-size:9px;color:#64748b;"></span>
+                                </div>
+                                <div id="ga-sonde-table-wrap" style="max-height:160px;overflow-y:auto;margin-top:4px;"></div>
+                            </div>
+                        </div>
+                        <!-- Dropsonde Skew-T display -->
+                        <div id="ga-sonde-skewt-panel" style="display:none;background:rgba(15,23,42,0.95);border:1px solid rgba(52,211,153,0.3);border-radius:8px;padding:10px 12px;margin-top:6px;">
+                            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+                                <div id="ga-sonde-skewt-title" style="font-size:11px;font-weight:600;color:#6ee7b7;"></div>
+                                <div style="display:flex;align-items:center;gap:6px;">
+                                    <select id="ga-sonde-skewt-select" onchange="gaSondeShowSkewT(this.value)" style="font-size:9px;padding:2px 4px;background:#0f172a;color:#e2e8f0;border:1px solid rgba(255,255,255,0.12);border-radius:3px;"></select>
+                                    <button class="ga-btn ga-btn-xs" onclick="gaSondeCloseSkewT()" style="font-size:9px;color:#f87171;">&#10005;</button>
+                                </div>
+                            </div>
+                            <div style="display:flex;gap:8px;">
+                                <div id="ga-sonde-skewt" style="flex:1;height:420px;"></div>
+                                <div id="ga-sonde-skewt-info" style="width:180px;font-size:10px;color:#d1d5db;overflow-y:auto;max-height:420px;"></div>
+                            </div>
                         </div>
                         <!-- Flight-level time series side panel -->
                         <div id="ga-fl-ts-panel" style="display:none;background:rgba(15,23,42,0.95);border:1px solid rgba(96,165,250,0.3);border-radius:8px;padding:10px 12px;margin-top:6px;">
@@ -1177,6 +1199,7 @@
     <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
+    <script src="skewt.js"></script>
     <script src="global_archive.js"></script>
 </body>
 </html>

@@ -4464,3 +4464,135 @@ def get_fl_data(
         _fl_data_cache.popitem(last=False)
 
     return result
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Dropsonde Data (AOML HRD Archive, ~1996–present)
+# ══════════════════════════════════════════════════════════════════════
+
+_sonde_cache: OrderedDict = OrderedDict()
+_SONDE_CACHE_TTL = 86400
+_SONDE_CACHE_MAX = 20
+
+
+@router.get("/dropsondes/data")
+def get_global_dropsondes(
+    storm_name: str = Query(..., description="Storm name"),
+    year: int = Query(..., ge=1990, le=2030, description="Year"),
+    mission_id: str = Query("", description="Mission ID (e.g., 20050823U1) to filter sondes"),
+    center_lat: float = Query(0.0, description="Storm center latitude"),
+    center_lon: float = Query(0.0, description="Storm center longitude"),
+):
+    """Fetch dropsonde profiles for a storm from AOML HRD archive."""
+    import time as _time
+    now = _time.time()
+    cache_key = f"ga_sonde_{storm_name.lower()}_{year}_{mission_id}"
+    if cache_key in _sonde_cache:
+        cached, ts = _sonde_cache[cache_key]
+        if now - ts < _SONDE_CACHE_TTL:
+            _sonde_cache.move_to_end(cache_key)
+            return cached
+
+    # Import sonde helpers from tc_radar_api
+    try:
+        from tc_radar_api import (
+            _resolve_hurr_season,
+            _resolve_sonde_storm_dir,
+            _find_frd_tarball,
+            _fetch_and_extract_frd_tarball,
+            _parse_frd_file,
+            _filter_valid_frd_profile,
+            HRD_SONDE_BASE,
+            _hrd_parse_directory,
+        )
+    except ImportError as e:
+        raise HTTPException(503, f"Dropsonde helpers not available: {e}")
+
+    # Resolve storm → HRD archive path
+    season_dir = _resolve_hurr_season(year)
+    if not season_dir:
+        return {"success": True, "dropsondes": [], "n_sondes": 0,
+                "message": "No dropsonde archive for this year"}
+
+    storm_url = _resolve_sonde_storm_dir(season_dir, storm_name)
+    if not storm_url:
+        return {"success": True, "dropsondes": [], "n_sondes": 0,
+                "message": "No dropsonde data for this storm"}
+
+    # Find tarballs in operproc/
+    operproc_url = storm_url + "/operproc/"
+    try:
+        entries = _hrd_parse_directory(operproc_url)
+    except Exception:
+        return {"success": True, "dropsondes": [], "n_sondes": 0,
+                "message": "Could not list operproc directory"}
+
+    # Filter tarballs by mission_id if provided
+    tarballs = [e for e in entries if e.lower().endswith(('.tar.gz', '.tgz'))]
+    if mission_id:
+        # Match tarballs containing the mission ID prefix
+        mid_upper = mission_id.upper()
+        tarballs = [t for t in tarballs if mid_upper in t.upper()]
+
+    if not tarballs:
+        return {"success": True, "dropsondes": [], "n_sondes": 0,
+                "message": "No dropsonde tarballs found" + (f" for mission {mission_id}" if mission_id else "")}
+
+    # Fetch and parse all matching tarballs
+    all_sondes = []
+    for tarball in tarballs[:3]:  # Limit to 3 tarballs to avoid timeout
+        tarball_url = operproc_url + tarball
+        try:
+            frd_contents = _fetch_and_extract_frd_tarball(tarball_url)
+            for fname, text in frd_contents:
+                try:
+                    sonde = _parse_frd_file(text)
+                    if sonde and _filter_valid_frd_profile(sonde):
+                        # Add storm-relative coords if center provided
+                        if abs(center_lat) > 0.1 and abs(center_lon) > 0.1 and sonde.get("profile"):
+                            from math import radians, cos
+                            R = 6371.0
+                            clat_rad = radians(center_lat)
+                            prof = sonde["profile"]
+                            for key in ["x_km", "y_km"]:
+                                if key not in prof:
+                                    prof[key] = []
+                            if not prof.get("x_km"):
+                                prof["x_km"] = []
+                                prof["y_km"] = []
+                                for li in range(len(prof.get("lat", []))):
+                                    lat_i = prof["lat"][li]
+                                    lon_i = prof["lon"][li]
+                                    if lat_i is not None and lon_i is not None:
+                                        dy = (lat_i - center_lat) * (R * radians(1))
+                                        dx = (lon_i - center_lon) * (R * radians(1) * cos(clat_rad))
+                                        prof["x_km"].append(round(dx, 2))
+                                        prof["y_km"].append(round(dy, 2))
+                                    else:
+                                        prof["x_km"].append(None)
+                                        prof["y_km"].append(None)
+                        all_sondes.append(sonde)
+                except Exception as e:
+                    logger.warning(f"Failed to parse FRD file {fname}: {e}")
+        except Exception as e:
+            logger.warning(f"Failed to fetch/extract tarball {tarball}: {e}")
+
+    # Sort by launch time
+    all_sondes.sort(key=lambda s: s.get("launch_time", "") or "")
+
+    result = {
+        "success": True,
+        "dropsondes": all_sondes,
+        "n_sondes": len(all_sondes),
+        "storm_name": storm_name,
+        "year": year,
+        "mission_id": mission_id,
+        "center_lat": center_lat if abs(center_lat) > 0.1 else None,
+        "center_lon": center_lon if abs(center_lon) > 0.1 else None,
+    }
+
+    _sonde_cache[cache_key] = (result, now)
+    if len(_sonde_cache) > _SONDE_CACHE_MAX:
+        _sonde_cache.popitem(last=False)
+
+    return result

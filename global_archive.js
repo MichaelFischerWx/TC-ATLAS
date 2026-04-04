@@ -9895,6 +9895,308 @@ function _gaFLHighlightOnTimeline(json) {
     Plotly.relayout(chartEl, { shapes: existingShapes });
 }
 
+// ── Dropsondes (within Recon) ────────────────────────────────────
+
+var _gaSondeData = null;
+var _gaSondeMapLayers = [];
+var _SONDE_COLORS = [
+    '#34d399','#60a5fa','#f472b6','#fbbf24','#a78bfa',
+    '#fb923c','#38bdf8','#f87171','#4ade80','#e879f9',
+    '#facc15','#2dd4bf','#f97316','#818cf8','#fb7185'
+];
+
+function _gaSondeFetch(stormName, year, missionId, centerLat, centerLon) {
+    var url = API_BASE + '/global/dropsondes/data?storm_name=' +
+        encodeURIComponent(stormName) + '&year=' + year;
+    if (missionId) url += '&mission_id=' + encodeURIComponent(missionId);
+    if (centerLat) url += '&center_lat=' + centerLat + '&center_lon=' + centerLon;
+
+    fetch(url)
+        .then(function (r) { return r.json(); })
+        .then(function (json) {
+            if (!json.success || !json.dropsondes || json.dropsondes.length === 0) {
+                _gaSondeHideUI();
+                return;
+            }
+            _gaSondeData = json.dropsondes;
+            _gaSondeShowUI();
+            _gaSondeRenderOnMap();
+            _gaSondeRenderTable();
+        })
+        .catch(function () { _gaSondeHideUI(); });
+}
+
+function _gaSondeShowUI() {
+    var el = document.getElementById('ga-sonde-info');
+    if (el) el.style.display = '';
+    var cnt = document.getElementById('ga-sonde-count');
+    if (cnt && _gaSondeData) {
+        var nSfc = _gaSondeData.filter(function (s) { return s.hit_surface; }).length;
+        cnt.textContent = _gaSondeData.length + ' sonde(s)' + (nSfc ? ', ' + nSfc + ' sfc' : '');
+    }
+}
+
+function _gaSondeHideUI() {
+    _gaSondeData = null;
+    var el = document.getElementById('ga-sonde-info');
+    if (el) el.style.display = 'none';
+    var skewt = document.getElementById('ga-sonde-skewt-panel');
+    if (skewt) skewt.style.display = 'none';
+    _gaSondeRemoveFromMap();
+}
+
+function _gaSondeRemoveFromMap() {
+    for (var i = 0; i < _gaSondeMapLayers.length; i++) {
+        if (detailMap) detailMap.removeLayer(_gaSondeMapLayers[i]);
+    }
+    _gaSondeMapLayers = [];
+}
+
+function _gaSondeRenderOnMap() {
+    _gaSondeRemoveFromMap();
+    if (!detailMap || !_gaSondeData) return;
+
+    for (var si = 0; si < _gaSondeData.length; si++) {
+        var sonde = _gaSondeData[si];
+        var prof = sonde.profile;
+        if (!prof || !prof.lat || prof.lat.length < 2) continue;
+
+        var color = _SONDE_COLORS[si % _SONDE_COLORS.length];
+
+        // Trajectory polyline
+        var coords = [];
+        for (var pi = 0; pi < prof.lat.length; pi++) {
+            if (prof.lat[pi] != null && prof.lon[pi] != null) {
+                coords.push([prof.lat[pi], prof.lon[pi]]);
+            }
+        }
+        if (coords.length > 1) {
+            var traj = L.polyline(coords, {
+                color: color, weight: 2.5, opacity: 0.8,
+                dashArray: '6,4', interactive: false
+            });
+            traj.addTo(detailMap);
+            _gaSondeMapLayers.push(traj);
+        }
+
+        // Launch marker (hollow circle at top)
+        if (sonde.launch && sonde.launch.lat != null) {
+            var launchMarker = L.circleMarker([sonde.launch.lat, sonde.launch.lon], {
+                radius: 5, fillColor: color, fillOpacity: 0.3,
+                color: color, weight: 1.5, opacity: 0.8
+            });
+            launchMarker.addTo(detailMap);
+            _gaSondeMapLayers.push(launchMarker);
+        }
+
+        // Surface marker (filled circle at bottom)
+        if (sonde.surface && sonde.surface.lat != null) {
+            var sfcTip = '<b>Sonde ' + (si + 1) + '</b>' +
+                (sonde.sonde_id ? ' (' + sonde.sonde_id + ')' : '') + '<br>' +
+                (sonde.launch_time || '') + '<br>' +
+                'Sfc: ' + (sonde.hit_surface ? 'Yes' : 'No') +
+                (sonde.splash_pr ? ' · P: ' + sonde.splash_pr.toFixed(1) + ' hPa' : '');
+            var sfcMarker = L.circleMarker([sonde.surface.lat, sonde.surface.lon], {
+                radius: 6, fillColor: color, fillOpacity: 0.9,
+                color: '#fff', weight: 1, opacity: 0.8
+            }).bindTooltip(sfcTip, { sticky: true });
+            // Click to show Skew-T
+            (function (idx) {
+                sfcMarker.on('click', function () { gaSondeShowSkewT(idx); });
+            })(si);
+            sfcMarker.addTo(detailMap);
+            _gaSondeMapLayers.push(sfcMarker);
+        }
+    }
+}
+
+function _gaSondeRenderTable() {
+    var wrap = document.getElementById('ga-sonde-table-wrap');
+    if (!wrap || !_gaSondeData) return;
+
+    var html = '<table style="width:100%;border-collapse:collapse;font-size:9px;font-family:\'JetBrains Mono\',monospace;">' +
+        '<tr style="color:#6ee7b7;border-bottom:1px solid rgba(255,255,255,0.1);">' +
+        '<th style="padding:2px 4px;text-align:left;">#</th>' +
+        '<th style="padding:2px 4px;text-align:left;">Time</th>' +
+        '<th style="padding:2px 4px;text-align:right;">Vmax</th>' +
+        '<th style="padding:2px 4px;text-align:right;">Psfc</th>' +
+        '<th style="padding:2px 4px;text-align:center;">Sfc</th>' +
+        '<th style="padding:2px 4px;"></th></tr>';
+
+    for (var i = 0; i < _gaSondeData.length; i++) {
+        var s = _gaSondeData[i];
+        var prof = s.profile || {};
+        var maxWspd = null;
+        if (prof.wspd) {
+            for (var wi = 0; wi < prof.wspd.length; wi++) {
+                if (prof.wspd[wi] != null && (maxWspd == null || prof.wspd[wi] > maxWspd)) maxWspd = prof.wspd[wi];
+            }
+        }
+        var psfc = s.splash_pr || s.hyd_sfcp || null;
+        var timeShort = (s.launch_time || '').replace(/.*T/, '').replace('Z', '').substring(0, 8);
+
+        html += '<tr style="border-bottom:1px solid rgba(255,255,255,0.05);cursor:pointer;" onclick="gaSondeShowSkewT(' + i + ')">' +
+            '<td style="padding:2px 4px;color:' + _SONDE_COLORS[i % _SONDE_COLORS.length] + ';">' + (i + 1) + '</td>' +
+            '<td style="padding:2px 4px;">' + timeShort + '</td>' +
+            '<td style="padding:2px 4px;text-align:right;">' + (maxWspd != null ? (maxWspd * 1.944).toFixed(0) + ' kt' : '\u2014') + '</td>' +
+            '<td style="padding:2px 4px;text-align:right;">' + (psfc != null ? psfc.toFixed(0) : '\u2014') + '</td>' +
+            '<td style="padding:2px 4px;text-align:center;">' + (s.hit_surface ? '\u2705' : '\u274c') + '</td>' +
+            '<td style="padding:2px 4px;"><button class="ga-btn ga-btn-xs" style="font-size:8px;color:#6ee7b7;" onclick="event.stopPropagation();gaSondeShowSkewT(' + i + ')">Skew-T</button></td></tr>';
+    }
+    html += '</table>';
+    wrap.innerHTML = html;
+}
+
+window.gaSondeShowSkewT = function (idx) {
+    if (!_gaSondeData || idx >= _gaSondeData.length) return;
+    var sonde = _gaSondeData[idx];
+    var prof = sonde.profile;
+    if (!prof) return;
+
+    var panel = document.getElementById('ga-sonde-skewt-panel');
+    if (panel) panel.style.display = '';
+
+    // Build profiles object for renderSkewT
+    var plev = prof.pres || [];
+    var tK = (prof.temp || []).map(function (t) { return t != null ? t + 273.15 : null; });
+
+    // Compute specific humidity from RH if dewpoint not available
+    var qArr = [];
+    if (prof.dewpoint && prof.dewpoint.some(function (d) { return d != null; })) {
+        // Use dewpoint directly → convert to q
+        for (var i = 0; i < plev.length; i++) {
+            if (prof.dewpoint[i] != null && plev[i] != null) {
+                var es = 6.112 * Math.exp(17.67 * prof.dewpoint[i] / (prof.dewpoint[i] + 243.5));
+                qArr.push(0.622 * es / (plev[i] - es));
+            } else { qArr.push(null); }
+        }
+    } else if (prof.rh) {
+        // Compute from RH + temperature
+        for (var i = 0; i < plev.length; i++) {
+            if (prof.rh[i] != null && prof.temp[i] != null && plev[i] != null) {
+                var esat = 6.112 * Math.exp(17.67 * prof.temp[i] / (prof.temp[i] + 243.5));
+                var e = (prof.rh[i] / 100.0) * esat;
+                qArr.push(0.622 * e / (plev[i] - e));
+            } else { qArr.push(null); }
+        }
+    }
+
+    var profiles = {
+        plev: plev,
+        t: tK,
+        q: qArr.length > 0 ? qArr : null,
+        u: prof.uwnd || null,
+        v: prof.vwnd || null,
+    };
+
+    // Render Skew-T
+    if (typeof renderSkewT === 'function') {
+        renderSkewT(profiles, 'ga-sonde-skewt');
+    }
+
+    // Title
+    var title = document.getElementById('ga-sonde-skewt-title');
+    if (title) {
+        title.textContent = 'Sonde ' + (idx + 1) +
+            (sonde.sonde_id ? ' (' + sonde.sonde_id + ')' : '') +
+            ' \u2014 ' + (sonde.launch_time || '');
+    }
+
+    // Populate sonde selector dropdown
+    var sel = document.getElementById('ga-sonde-skewt-select');
+    if (sel && sel.options.length !== _gaSondeData.length) {
+        sel.innerHTML = '';
+        for (var j = 0; j < _gaSondeData.length; j++) {
+            var opt = document.createElement('option');
+            opt.value = j;
+            var t = (_gaSondeData[j].launch_time || '').replace(/.*T/, '').replace('Z', '').substring(0, 8);
+            opt.textContent = (j + 1) + ': ' + t;
+            sel.appendChild(opt);
+        }
+    }
+    if (sel) sel.value = idx;
+
+    // Info panel with derived parameters
+    _gaSondeRenderSkewTInfo(profiles, sonde, idx);
+};
+
+window.gaSondeCloseSkewT = function () {
+    var panel = document.getElementById('ga-sonde-skewt-panel');
+    if (panel) panel.style.display = 'none';
+};
+
+function _gaSondeRenderSkewTInfo(profiles, sonde, idx) {
+    var el = document.getElementById('ga-sonde-skewt-info');
+    if (!el) return;
+
+    var d = profiles._derived || {};
+    var html = '<div style="font-weight:600;color:#6ee7b7;margin-bottom:6px;">Derived Parameters</div>';
+    html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 8px;font-size:9px;">';
+    html += '<span style="color:#94a3b8;">CAPE:</span><span>' + (d.cape != null ? d.cape + ' J/kg' : '\u2014') + '</span>';
+    html += '<span style="color:#94a3b8;">CIN:</span><span>' + (d.cin != null ? d.cin + ' J/kg' : '\u2014') + '</span>';
+    html += '<span style="color:#94a3b8;">PWAT:</span><span>' + (d.pwat != null ? d.pwat.toFixed(1) + ' mm' : '\u2014') + '</span>';
+    html += '<span style="color:#94a3b8;">LCL:</span><span>' + (d.lcl_p != null ? d.lcl_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
+    html += '<span style="color:#94a3b8;">LFC:</span><span>' + (d.lfc_p != null ? d.lfc_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
+    html += '<span style="color:#94a3b8;">EL:</span><span>' + (d.el_p != null ? d.el_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
+    html += '<span style="color:#94a3b8;">0\u00b0C:</span><span>' + (d.freezing_p != null ? d.freezing_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
+    html += '</div>';
+
+    // Surface info
+    html += '<div style="margin-top:8px;font-weight:600;color:#6ee7b7;margin-bottom:4px;">Surface</div>';
+    html += '<div style="font-size:9px;">';
+    html += 'Hit surface: ' + (sonde.hit_surface ? 'Yes' : 'No') + '<br>';
+    if (sonde.splash_pr) html += 'Splash P: ' + sonde.splash_pr.toFixed(1) + ' hPa<br>';
+    if (sonde.hyd_sfcp) html += 'Hyd SfcP: ' + sonde.hyd_sfcp.toFixed(1) + ' hPa<br>';
+    html += '</div>';
+
+    // Max wind in profile
+    var prof = sonde.profile || {};
+    if (prof.wspd) {
+        var maxW = 0, maxWp = null;
+        for (var i = 0; i < prof.wspd.length; i++) {
+            if (prof.wspd[i] != null && prof.wspd[i] > maxW) {
+                maxW = prof.wspd[i]; maxWp = prof.pres ? prof.pres[i] : null;
+            }
+        }
+        if (maxW > 0) {
+            html += '<div style="margin-top:6px;font-size:9px;">';
+            html += 'Max wind: ' + maxW.toFixed(1) + ' m/s (' + (maxW * 1.944).toFixed(0) + ' kt)';
+            if (maxWp) html += ' at ' + maxWp.toFixed(0) + ' hPa';
+            html += '</div>';
+        }
+    }
+
+    el.innerHTML = html;
+}
+
+// Hook: auto-fetch sondes when a FL mission loads
+var _origGaFLLoadMissionData = _gaFLLoadMissionData;
+// We can't directly wrap _gaFLLoadMissionData since it's a local function.
+// Instead, hook into the success callback by watching _gaFLData changes.
+// Simpler approach: add a call in the existing success path.
+// (This is done via the _gaFLRenderOnMap call — we piggyback on it)
+
+var _origGaFLRenderOnMap = _gaFLRenderOnMap;
+_gaFLRenderOnMap = function () {
+    _origGaFLRenderOnMap();
+    // After FL renders on map, auto-fetch sondes for the same mission
+    if (_gaFLData && selectedStorm) {
+        var missionId = _gaFLData.mission_id || '';
+        var centerLat = selectedStorm.lmi_lat || selectedStorm.genesis_lat || 0;
+        var centerLon = selectedStorm.lmi_lon || selectedStorm.genesis_lon || 0;
+        _gaSondeFetch(selectedStorm.name, selectedStorm.year, missionId, centerLat, centerLon);
+    }
+};
+
+// Clean up sondes on FL reset
+var _origGaFLReset = _gaFLReset;
+_gaFLReset = function () {
+    _gaSondeHideUI();
+    _gaSondeRemoveFromMap();
+    _origGaFLReset();
+};
+window._gaFLReset = _gaFLReset;
+
 // ── Time Series ─────────────────────────────────────────────────
 
 var _GA_FL_TS_CONFIG = {
