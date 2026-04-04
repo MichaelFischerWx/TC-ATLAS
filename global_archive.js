@@ -3150,6 +3150,12 @@ function _handleIRMouseMove(e) {
     _irHoverThrottled = true;
     setTimeout(function () { _irHoverThrottled = false; }, 50); // ~20 Hz
 
+    // Suppress IR hover when a FL/sonde tooltip is open (recon takes precedence)
+    if (_gaFLVisible && _gaFLTooltipOpen) {
+        if (irTbTooltip && detailMap.hasLayer(irTbTooltip)) detailMap.closePopup(irTbTooltip);
+        return;
+    }
+
     var hasIR = irOverlayVisible && irCurrentTbData && irCurrentBounds;
     var hasNexrad = _gaNexradVisible && _gaNexradData && _gaNexradBounds;
     if (!hasIR && !hasNexrad) {
@@ -9391,6 +9397,7 @@ var _gaFLMissions = null;   // Mission discovery results
 var _gaFLMapLayers = [];    // Leaflet layers for cleanup
 var _gaFLColorVar = 'fl_wspd_ms';
 var _gaFLAutoSync = true;
+var _gaFLTooltipOpen = false;
 var _gaFLFetching = false;
 var _gaFLTSHighlight = null;
 var _gaFLResVisible = { '1s': false, '10s': true, '30s': false };
@@ -9562,11 +9569,54 @@ function _gaFLLoadMissionData(fileUrl) {
 
             _gaFLRenderOnMap();
             if (_gaFLTSOpen) _gaFLRenderTimeSeries();
+
+            // Refine IR frame to mission midpoint using actual observation times
+            _gaFLSyncIRToMissionMidpoint(json);
         })
         .catch(function (e) {
             _gaFLFetching = false;
             if (status) status.textContent = 'Error: ' + e.message;
         });
+}
+
+function _gaFLSyncIRToMissionMidpoint(json) {
+    if (!_gaFLAutoSync || !irMeta || !irMeta.frames || irMeta.frames.length === 0) return;
+    var summ = json.summary;
+    if (!summ || !summ.start_time || !summ.end_time) return;
+
+    // Build a datetime from the mission date + midpoint time
+    var select = document.getElementById('ga-fl-mission-select');
+    if (!select || !_gaFLMissions) return;
+    var mission = _gaFLMissions[select.selectedIndex];
+    if (!mission || !mission.datetime) return;
+
+    // Calculate midpoint time
+    var st = summ.start_time.split(':');
+    var et = summ.end_time.split(':');
+    var startSec = parseInt(st[0]) * 3600 + parseInt(st[1]) * 60 + (parseInt(st[2]) || 0);
+    var endSec = parseInt(et[0]) * 3600 + parseInt(et[1]) * 60 + (parseInt(et[2]) || 0);
+    if (endSec < startSec) endSec += 86400; // crossed midnight
+    var midSec = (startSec + endSec) / 2;
+    var midHH = Math.floor(midSec / 3600) % 24;
+    var midMM = Math.floor((midSec % 3600) / 60);
+
+    var midDateStr = mission.datetime + 'T' +
+        String(midHH).padStart(2, '0') + ':' + String(midMM).padStart(2, '0') + ':00Z';
+    var midDate = new Date(midDateStr);
+    if (isNaN(midDate.getTime())) return;
+
+    // Find nearest IR frame
+    var bestIdx = irFrameIdx, bestDelta = Infinity;
+    for (var i = 0; i < irMeta.frames.length; i++) {
+        if (!irMeta.frames[i] || !irMeta.frames[i].datetime) continue;
+        var fDate = new Date(irMeta.frames[i].datetime);
+        var delta = Math.abs(fDate - midDate);
+        if (delta < bestDelta) { bestDelta = delta; bestIdx = i; }
+    }
+    if (bestIdx !== irFrameIdx) {
+        irFrameIdx = bestIdx;
+        loadIRFrame(bestIdx);
+    }
 }
 
 function _gaFLRemoveFromMap() {
@@ -9617,6 +9667,8 @@ function _gaFLRenderOnMap() {
             color: '#fff', weight: 0.5, opacity: 0.6,
             pane: 'markerPane'
         }).bindTooltip(tip, { sticky: true, pane: 'tooltipPane', className: 'ga-fl-tooltip' });
+        circle.on('tooltipopen', function () { _gaFLTooltipOpen = true; });
+        circle.on('tooltipclose', function () { _gaFLTooltipOpen = false; });
         circle.addTo(detailMap);
         _gaFLMapLayers.push(circle);
     }

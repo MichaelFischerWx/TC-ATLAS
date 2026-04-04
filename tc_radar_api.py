@@ -5477,6 +5477,178 @@ def _merge_hrd_header_tokens(line: str, expected_ncols: int) -> list[str]:
     return [w[2] for w in words]
 
 
+def _parse_usaf_10sec(lines: list, col_line_idx: int) -> list:
+    """
+    Parse USAF .10sec.txt flight-level files.
+
+    USAF files have a distinct header format with multi-word columns
+    (GMT Time, V V, Valid Flags, Source Tags) and HH:MM:SS time format.
+    The header columns are whitespace-separated single tokens EXCEPT for
+    "GMT Time", "V V", "Valid Flags", and "Source Tags".
+
+    We use a known column name list matched by position rather than the
+    generic merge algorithm which fails on this format.
+    """
+    header_line = lines[col_line_idx]
+    # Data starts on the line immediately after the header (no units line)
+    data_start = col_line_idx + 1
+
+    # Parse header: split on 2+ spaces to handle "GMT Time" etc.
+    import re as _re
+    raw_tokens = _re.split(r'\s{2,}', header_line.strip())
+    # Build column index from the split tokens by finding their position
+    # in a whitespace-split of data lines
+    # Simpler approach: just use the known USAF column names and find them
+    # by matching tokens in the header
+    col_names_upper = [t.strip().upper().replace(" ", "") for t in raw_tokens]
+
+    # Map known USAF names to our standard field names
+    _USAF_MAP = {
+        "GMTTIME": "TIME", "LAT": "LAT", "LON": "LON",
+        "WS": "WNDSP", "WD": "WNDDR", "TA": "TEMPR",
+        "DPR": "DEWPT", "TDD": "DEWPT",
+        "BSP": "PRESS", "CSP": "PRESS2",
+        "GPSA": "GEOAL", "SLP": "SFCPR",
+        "THD": "HEAD", "TRK": "TRACK",
+        "GS": "GNSPD", "TAS": "TAS",
+        "VV": "VTWND", "GA": "GA",
+    }
+
+    # Build column index by position in whitespace-split data
+    # Strategy: read the header with single-space split, then figure out
+    # which data-split index each known column corresponds to.
+    # Since USAF headers are fixed-width, use character positions.
+    col_positions = []  # list of (start_char, name)
+    i = 0
+    hdr = header_line
+    while i < len(hdr):
+        if hdr[i] != ' ':
+            j = i
+            while j < len(hdr) and hdr[j] != ' ':
+                j += 1
+            # Check if next word is part of a known multi-word token
+            word = hdr[i:j]
+            # Peek ahead for known multi-word headers
+            rest = hdr[j:].lstrip()
+            combined = word + rest.split()[0] if rest.split() else ""
+            if combined.upper().replace(" ", "") in ("GMTTIME", "VALIDFLAGS", "SOURCETAGS"):
+                end = j
+                while end < len(hdr) and hdr[end] == ' ':
+                    end += 1
+                j2 = end
+                while j2 < len(hdr) and hdr[j2] != ' ':
+                    j2 += 1
+                word = hdr[i:j2].strip()
+                j = j2
+            col_positions.append((i, word))
+            i = j
+        else:
+            i += 1
+
+    # Now build a simple index: for each data line split(), which index maps to which column
+    # Use the simpler approach: just split the header normally and handle known aliases
+    simple_tokens = header_line.split()
+    col_idx = {}
+    skip_next = False
+    data_col = 0
+    for ti, tok in enumerate(simple_tokens):
+        if skip_next:
+            skip_next = False
+            continue
+        upper = tok.upper()
+        # Check for multi-word tokens we need to merge
+        if upper == "GMT" and ti + 1 < len(simple_tokens) and simple_tokens[ti + 1].upper() == "TIME":
+            col_idx["TIME"] = data_col
+            skip_next = True
+            data_col += 1
+            continue
+        if upper == "V" and ti + 1 < len(simple_tokens) and simple_tokens[ti + 1].upper() == "V":
+            col_idx["VV"] = data_col
+            skip_next = True
+            data_col += 1
+            continue
+        if upper == "VALID" or upper == "SOURCE":
+            # "Valid Flags" or "Source Tags" — these are trailing text, skip rest
+            break
+        # Map to standard name
+        std = _USAF_MAP.get(upper, upper)
+        col_idx[std] = data_col
+        data_col += 1
+
+    observations = []
+    for line in lines[data_start:]:
+        parts = line.split()
+        if len(parts) < 15:
+            continue
+
+        def _get(name):
+            idx = col_idx.get(name)
+            if idx is not None and idx < len(parts):
+                try:
+                    return float(parts[idx])
+                except (ValueError, TypeError):
+                    return None
+            return None
+
+        # Parse TIME (HH:MM:SS format)
+        time_str = parts[col_idx.get("TIME", 0)] if "TIME" in col_idx else None
+        if not time_str or ":" not in time_str:
+            continue
+        try:
+            tp = time_str.split(":")
+            hh, mm = int(tp[0]), int(tp[1])
+            ss = int(tp[2]) if len(tp) > 2 else 0
+            time_sec = hh * 3600 + mm * 60 + ss
+        except (ValueError, IndexError):
+            continue
+
+        lat = _get("LAT")
+        lon_raw = _get("LON")
+        if lat is None or lon_raw is None:
+            continue
+        # USAF uses standard negative-west convention
+        lon = lon_raw
+
+        wspd = _get("WNDSP")
+        wdir = _get("WNDDR")
+        temp = _get("TEMPR")
+        dewpt = _get("DEWPT")
+        press = _get("PRESS")
+        geo_alt = _get("GEOAL")
+        sfcpr = _get("SFCPR")
+        gn_spd = _get("GNSPD")
+        tas = _get("TAS")
+        head = _get("HEAD")
+        track = _get("TRACK")
+        vt_wnd = _get("VTWND")
+
+        obs = {
+            "time": f"{hh:02d}:{mm:02d}:{ss:02d}",
+            "time_sec": time_sec,
+            "lat": round(lat, 5),
+            "lon": round(lon, 5),
+            "fl_wspd_ms": round(wspd, 2) if wspd is not None else None,
+            "fl_wdir_deg": round(wdir, 1) if wdir is not None else None,
+            "gps_alt_m": round(geo_alt, 1) if geo_alt is not None else None,
+            "static_pres_hpa": round(press, 1) if press is not None else None,
+            "temp_c": round(temp, 2) if temp is not None else None,
+            "dewpoint_c": round(dewpt, 2) if dewpt is not None else None,
+            "sfcpr_hpa": round(sfcpr, 1) if sfcpr is not None else None,
+            "ground_spd_ms": round(gn_spd, 1) if gn_spd is not None else None,
+            "true_airspd_ms": round(tas, 1) if tas is not None else None,
+            "heading": round(head, 1) if head is not None else None,
+            "track": round(track, 1) if track is not None else None,
+            "vert_vel_ms": round(vt_wnd, 2) if vt_wnd is not None else None,
+            "theta_e": None,
+            "sfmr_wspd_ms": None,
+            "slp_hpa": None,
+            "extrapolated_sfc_wspd_ms": None,
+        }
+        observations.append(obs)
+
+    return observations
+
+
 def _parse_hrd_1sec(text: str) -> list[dict]:
     """
     Parse an HRD archive 1-second flight-level .sec.txt file.
@@ -5499,14 +5671,25 @@ def _parse_hrd_1sec(text: str) -> list[dict]:
     # Find the header line with column names — look for "TIME" and "LAT" (case-insensitive)
     # NOAA files use "TIME" + "Lat"; USAF files use "GMT Time" + "LAT"
     col_line_idx = None
+    _is_usaf_format = False
     for i, line in enumerate(lines[:10]):
         upper = line.upper()
         if "TIME" in upper and "LAT" in upper:
             col_line_idx = i
+            # Detect USAF format: has "GMT Time", "Valid Flags", "Source Tags"
+            if "GMT" in upper or "VALID FLAGS" in upper or "SOURCE TAGS" in upper:
+                _is_usaf_format = True
             break
     if col_line_idx is None:
         # Fallback: assume line index 2 has column names
         col_line_idx = 2
+
+    # ── USAF format: use known column layout ──────────────────────
+    # USAF .10sec.txt files have complex multi-word headers and trailing
+    # text fields ("Valid Flags", "Source Tags") that break the NOAA parser.
+    # Use direct column name mapping from the header instead.
+    if _is_usaf_format:
+        return _parse_usaf_10sec(lines, col_line_idx)
 
     # Units line is immediately after column names
     units_line = lines[col_line_idx + 1] if col_line_idx + 1 < len(lines) else ""
@@ -5531,27 +5714,7 @@ def _parse_hrd_1sec(text: str) -> list[dict]:
     for j, name in enumerate(col_names):
         col_idx[name.upper().replace(" ", "")] = j
 
-    # USAF column name aliases → standard names
-    _USAF_ALIASES = {
-        "WS": "WNDSP", "WD": "WNDDR", "TA": "TEMPR", "DPR": "DEWPT",
-        "TDD": "DEWPT", "BSP": "PRESS", "CSP": "PRESS", "GPSA": "GEOAL",
-        "SLP": "SFCPR", "THD": "HEAD", "TRK": "TRACK", "GS": "GNSPD",
-        "GMTTIME": "TIME", "VV": "VTWND",
-    }
-    for alias, canonical in _USAF_ALIASES.items():
-        if alias in col_idx and canonical not in col_idx:
-            col_idx[canonical] = col_idx[alias]
-
-    # Handle HH:MM:SS time format (USAF) vs HHMMSS (NOAA)
     _usaf_time_format = False
-    if "TIME" in col_idx:
-        # Check a data sample to detect if time has colons
-        for sline in lines[data_start:min(data_start + 5, len(lines))]:
-            sparts = sline.split()
-            tidx = col_idx["TIME"]
-            if tidx < len(sparts) and ":" in sparts[tidx]:
-                _usaf_time_format = True
-                break
 
     # Detect wind speed units from the units line
     # HRD files use either "m/s" or "kts"/"kt"/"knots" for WNDSP
