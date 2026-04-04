@@ -1538,7 +1538,7 @@ function renderIntensityTimeline(track, storm) {
             title: { text: 'Max Wind (kt)', font: { size: 11, color: '#00d4ff' } },
             tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' },
             gridcolor: 'rgba(255,255,255,0.04)',
-            range: [0, Math.min(maxWind + 20, 200)],
+            range: [0, Math.max(maxWind + 20, 180)],
             side: 'left'
         },
         yaxis2: {

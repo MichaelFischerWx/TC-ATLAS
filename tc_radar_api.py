@@ -5502,16 +5502,20 @@ def _parse_usaf_10sec(lines: list, col_line_idx: int) -> list:
     # by matching tokens in the header
     col_names_upper = [t.strip().upper().replace(" ", "") for t in raw_tokens]
 
-    # Map known USAF names to our standard field names
+    # Map known USAF names to our standard field names.
+    # Note: some USAF files have both WSpd/WDir (meteorological wind) AND WS/WD
+    # (potentially different quantity). Prefer WSpd/WDir when present.
     _USAF_MAP = {
         "GMTTIME": "TIME", "LAT": "LAT", "LON": "LON",
-        "WS": "WNDSP", "WD": "WNDDR", "TA": "TEMPR",
-        "DPR": "DEWPT", "TDD": "DEWPT",
+        "WSPD": "WNDSP", "WDIR": "WNDDR",  # Preferred wind columns
+        "WS": "WNDSP2", "WD": "WNDDR2",    # Fallback wind (may be flags in newer files)
+        "TA": "TEMPR", "DPR": "DEWPT", "TDD": "DEWPT", "TD": "DEWPT",
         "BSP": "PRESS", "CSP": "PRESS2",
         "GPSA": "GEOAL", "SLP": "SFCPR",
         "THD": "HEAD", "TRK": "TRACK",
         "GS": "GNSPD", "TAS": "TAS",
         "VV": "VTWND", "GA": "GA",
+        "PT": "PRESS",  # Some files use PT for pressure
     }
 
     # Build column index by position in whitespace-split data
@@ -5567,8 +5571,8 @@ def _parse_usaf_10sec(lines: list, col_line_idx: int) -> list:
             skip_next = True
             data_col += 1
             continue
-        if upper == "VALID" or upper == "SOURCE":
-            # "Valid Flags" or "Source Tags" — these are trailing text, skip rest
+        if upper in ("VALID", "VALIDITY", "SOURCE", "SATCOM", "AVAPS", "DDPH", "SFMR", "FLAGS"):
+            # Trailing metadata columns — stop parsing
             break
         # Map to standard name
         std = _USAF_MAP.get(upper, upper)
@@ -5611,6 +5615,16 @@ def _parse_usaf_10sec(lines: list, col_line_idx: int) -> list:
 
         wspd = _get("WNDSP")
         wdir = _get("WNDDR")
+        # Fallback to WS/WD if WSpd/WDir not present (but validate — WS/WD
+        # may be validity flag strings in newer USAF files, not numbers)
+        if wspd is None:
+            ws2 = _get("WNDSP2")
+            if ws2 is not None and ws2 < 200:  # Sanity check: flag strings parse as large numbers
+                wspd = ws2
+        if wdir is None:
+            wd2 = _get("WNDDR2")
+            if wd2 is not None and wd2 <= 360:
+                wdir = wd2
         temp = _get("TEMPR")
         dewpt = _get("DEWPT")
         press = _get("PRESS")
