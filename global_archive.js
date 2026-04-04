@@ -9993,7 +9993,7 @@ function _gaFLRenderTimeSeries() {
                 if (val == null || !isFinite(val)) continue;
                 // Filter unrealistic values
                 if (varKey === 'static_pres_hpa' && (val < 100 || val > 1100)) continue;
-                if (varKey === 'sfcpr_hpa' && (val < 100 || val > 1100)) continue;
+                if (varKey === 'sfcpr_hpa' && (val < 850 || val > 1100)) continue;
                 if (varKey === 'fl_wspd_ms' && (val < 0 || val > 150)) continue;
                 if (varKey === 'temp_c' && (val < -90 || val > 60)) continue;
                 if (varKey === 'gps_alt_m' && (val < -100 || val > 25000)) continue;
