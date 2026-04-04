@@ -4065,8 +4065,12 @@ def _detect_fl_format(filename: str) -> str:
     fl = filename.lower()
     if fl.endswith(".1sec.txt") or fl.endswith(".sec.txt") or fl.endswith(".1sec"):
         return "noaa_1sec"
+    if fl.endswith(".10sec.txt"):
+        return "usaf_10sec"
     if re.match(r".*\.\d{2}\.txt$", fl):  # e.g., .01.txt
         return "usaf_01"
+    if fl.endswith(".ten"):
+        return "usaf_ten"
     if fl.endswith(".txt"):
         return "text_generic"  # Could be NOAA, USAF, or legacy
     return "unknown"
@@ -4080,7 +4084,7 @@ def _parse_fl_filename(filename: str, year: int):
     """
     # Strip extensions to get base mission ID
     base = filename
-    for ext in [".1sec.txt", ".sec.txt", ".1sec", ".01.txt", ".txt"]:
+    for ext in [".1sec.txt", ".10sec.txt", ".sec.txt", ".1sec", ".01.txt", ".ten", ".txt"]:
         if base.lower().endswith(ext):
             base = base[: -len(ext)]
             break
@@ -4353,7 +4357,17 @@ def get_fl_data(
     except Exception as e:
         logger.warning(f"Standard parser failed for {filename}: {e}")
 
-    # If standard parser returned too few results, try legacy CSV parser
+    # If standard parser returned too few results, try .ten parser (USAF deg-min format)
+    if len(observations) < 10 and fmt in ("usaf_ten", "text_generic"):
+        try:
+            from tc_radar_api import _parse_usaf_ten
+            observations = _parse_usaf_ten(text)
+            if observations:
+                logger.info(f"USAF .ten parser succeeded for {filename}: {len(observations)} obs")
+        except Exception as e:
+            logger.warning(f"USAF .ten parser failed for {filename}: {e}")
+
+    # If still too few results, try legacy CSV parser
     if len(observations) < 10 and "," in text[:500]:
         try:
             observations = _parse_hrd_legacy_csv(text)

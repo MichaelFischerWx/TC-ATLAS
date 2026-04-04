@@ -5649,6 +5649,124 @@ def _parse_usaf_10sec(lines: list, col_line_idx: int) -> list:
     return observations
 
 
+def _parse_usaf_ten(text: str) -> list:
+    """
+    Parse USAF .ten format flight-level files (10-second data, late 1990s).
+
+    Format:
+      Line 1: column names (time lt lg ta td wd ws dv pa ra flag)
+      Line 2: @ metadata line (date, aircraft, storm)
+      Line 3+: data in deg-min format (30 24.2N  88 55.6W)
+
+    Time is HH:MM:SS with possible space-padded seconds (16:30: 0).
+    Lat/lon use degrees + decimal minutes + N/S/E/W suffix.
+    """
+    lines = text.replace('\x00', '').strip().splitlines()
+    if len(lines) < 3:
+        return []
+
+    # Find the metadata line starting with @ to extract the date
+    flight_date = None
+    data_start = 0
+    for i, line in enumerate(lines[:5]):
+        if line.strip().startswith('@'):
+            # Extract date: @ 1998/10/21 16:28:55 ...
+            parts = line.split()
+            if len(parts) >= 2:
+                dp = parts[1].split('/')
+                if len(dp) == 3:
+                    flight_date = f"{dp[0]}-{dp[1]}-{dp[2]}"
+            data_start = i + 1
+            break
+
+    observations = []
+    import re as _re
+
+    for line in lines[data_start:]:
+        line = line.strip()
+        if not line or line.startswith('@') or line.startswith('#'):
+            continue
+
+        # Parse time: HH:MM:SS (may have space-padded seconds like "16:30: 0")
+        # Also handle "16:30:00" format
+        m = _re.match(r'(\d{1,2}):(\d{2}):\s*(\d{1,2})', line)
+        if not m:
+            continue
+        hh, mm, ss = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        time_sec = hh * 3600 + mm * 60 + ss
+
+        # Parse remaining fields after the time
+        rest = line[m.end():].strip()
+
+        # Lat: "30 24.2N" or "30  0.5N" (deg min dir)
+        lat_m = _re.search(r'(\d{1,2})\s+(\d{1,2}\.\d+)([NS])', rest)
+        if not lat_m:
+            continue
+        lat_deg = int(lat_m.group(1))
+        lat_min = float(lat_m.group(2))
+        lat = lat_deg + lat_min / 60.0
+        if lat_m.group(3) == 'S':
+            lat = -lat
+
+        # Lon: "88 55.6W" or "88  0.5E"
+        lon_m = _re.search(r'(\d{1,3})\s+(\d{1,2}\.\d+)([EW])', rest)
+        if not lon_m:
+            continue
+        lon_deg = int(lon_m.group(1))
+        lon_min = float(lon_m.group(2))
+        lon = lon_deg + lon_min / 60.0
+        if lon_m.group(3) == 'W':
+            lon = -lon
+
+        # Extract numeric fields after the lon
+        after_lon = rest[lon_m.end():].strip()
+        vals = after_lon.split()
+
+        def _fget(idx):
+            try:
+                return float(vals[idx]) if idx < len(vals) else None
+            except (ValueError, IndexError):
+                return None
+
+        # Column order after lat/lon: ta, td, wd, ws, dv, pa, ra, flag
+        temp = _fget(0)      # temperature (°C)
+        dewpt = _fget(1)     # dewpoint (°C)
+        wdir = _fget(2)      # wind direction (deg)
+        wspd = _fget(3)      # wind speed (kt in .ten format)
+        dval = _fget(4)      # D-value (m)
+        palt = _fget(5)      # pressure altitude
+        ralt = _fget(6)      # radar altitude
+
+        # Convert wind speed from knots to m/s
+        wspd_ms = wspd * 0.514444 if wspd is not None else None
+
+        obs = {
+            "time": f"{hh:02d}:{mm:02d}:{ss:02d}",
+            "time_sec": time_sec,
+            "lat": round(lat, 5),
+            "lon": round(lon, 5),
+            "fl_wspd_ms": round(wspd_ms, 2) if wspd_ms is not None else None,
+            "fl_wdir_deg": round(wdir, 1) if wdir is not None else None,
+            "gps_alt_m": None,
+            "static_pres_hpa": None,
+            "temp_c": round(temp, 2) if temp is not None else None,
+            "dewpoint_c": round(dewpt, 2) if dewpt is not None else None,
+            "sfcpr_hpa": None,
+            "ground_spd_ms": None,
+            "true_airspd_ms": None,
+            "heading": None,
+            "track": None,
+            "vert_vel_ms": None,
+            "theta_e": None,
+            "sfmr_wspd_ms": None,
+            "slp_hpa": None,
+            "extrapolated_sfc_wspd_ms": None,
+        }
+        observations.append(obs)
+
+    return observations
+
+
 def _parse_hrd_1sec(text: str) -> list[dict]:
     """
     Parse an HRD archive 1-second flight-level .sec.txt file.

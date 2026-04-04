@@ -9413,6 +9413,10 @@ function _gaFLReset() {
     _gaFLMissions = null;
     _gaFLFetching = false;
     _gaFLTSOpen = false;
+    if (_gaFLZoomHandler && detailMap) {
+        detailMap.off('zoomend', _gaFLZoomHandler);
+        _gaFLZoomHandler = null;
+    }
     _gaFLRemoveFromMap();
     var btn = document.getElementById('ga-fl-toggle-btn');
     if (btn) btn.textContent = '\u2708 Recon';
@@ -9636,7 +9640,14 @@ function _gaFLRenderOnMap() {
 
     var obs = _gaFLData10s;
 
-    // Colored track segments
+    // Zoom-adaptive marker density:
+    // zoom 3-5: every 12th obs (~2 min), zoom 6-7: every 6th (~1 min),
+    // zoom 8-9: every 2nd (~20s), zoom 10+: every obs (~10s)
+    var zoom = detailMap.getZoom();
+    var circleStep = zoom >= 10 ? 1 : zoom >= 8 ? 2 : zoom >= 6 ? 6 : 12;
+    var barbStep = circleStep * 2;  // barbs at half the density of circles
+
+    // Colored track segments (always full resolution)
     for (var i = 1; i < obs.length; i++) {
         var p0 = obs[i - 1], p1 = obs[i];
         if (p0.lat == null || p1.lat == null) continue;
@@ -9650,8 +9661,8 @@ function _gaFLRenderOnMap() {
         _gaFLMapLayers.push(seg);
     }
 
-    // Hover circles at every 6th observation (~1 min for 10s data)
-    for (var i = 0; i < obs.length; i += 6) {
+    // Hover circles (zoom-adaptive density)
+    for (var i = 0; i < obs.length; i += circleStep) {
         var o = obs[i];
         if (o.lat == null) continue;
         var wspd = o.fl_wspd_ms;
@@ -9673,8 +9684,8 @@ function _gaFLRenderOnMap() {
         _gaFLMapLayers.push(circle);
     }
 
-    // Wind barbs at ~2 min intervals
-    for (var i = 0; i < obs.length; i += 12) {
+    // Wind barbs (zoom-adaptive density)
+    for (var i = 0; i < obs.length; i += barbStep) {
         var o = obs[i];
         if (o.lat == null || o.fl_wdir_deg == null || o.fl_wspd_ms == null) continue;
         var barbHtml = _gaFLBarbSVG(o.fl_wspd_ms, o.fl_wdir_deg);
@@ -9690,7 +9701,16 @@ function _gaFLRenderOnMap() {
     }
 
     _gaFLInjectLegend();
+
+    // Re-render markers on zoom change for adaptive density
+    if (!_gaFLZoomHandler) {
+        _gaFLZoomHandler = function () {
+            if (_gaFLVisible && _gaFLData10s) _gaFLRenderOnMap();
+        };
+        detailMap.on('zoomend', _gaFLZoomHandler);
+    }
 }
+var _gaFLZoomHandler = null;
 
 function _gaFLBarbSVG(wspd_ms, wdir_deg) {
     var kt = wspd_ms * 1.944;
