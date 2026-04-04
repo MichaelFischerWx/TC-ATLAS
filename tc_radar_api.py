@@ -5664,6 +5664,9 @@ def _parse_hrd_1sec(text: str) -> list[dict]:
     field-count changes (day-offset flag inserted after midnight).
     Returns list of observation dicts with consistent field names.
     """
+    # Strip null bytes (some legacy files contain embedded \x00 characters)
+    text = text.replace('\x00', '')
+
     lines = text.strip().splitlines()
     if len(lines) < 5:
         return []
