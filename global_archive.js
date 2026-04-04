@@ -10225,7 +10225,7 @@ var _GA_FL_TS_CONFIG = {
 };
 
 var _GA_FL_RES_STYLE = {
-    '1s':  { opacity: 0.5, width: 1.0, color: '#22d3ee' },
+    '1s':  { opacity: 0.5, width: 1.0, color: '#0891b2' },
     '10s': { opacity: 0.7, width: 1.5, color: null },
     '30s': { opacity: 1.0, width: 2.5, color: null },
 };
