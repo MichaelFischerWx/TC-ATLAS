@@ -9763,6 +9763,9 @@ function _gaFLApplyData(json) {
         });
     }
 
+    // Build FL-derived center fixes from pressure minima (for radial/xsec views)
+    _buildFLCenterFixes();
+
     var res1sBtn = document.getElementById('ga-fl-res-1s');
     if (res1sBtn) {
         res1sBtn.style.display = json.has_1s ? '' : 'none';
@@ -10955,13 +10958,60 @@ function _getActiveMissionDate() {
     return (sel && _gaFLMissions[sel.selectedIndex]) ? _gaFLMissions[sel.selectedIndex].datetime : '';
 }
 
+// Cache of FL-derived center fixes (pressure minima from eye passages)
+var _flCenterFixes = null;
+
+function _buildFLCenterFixes() {
+    // Find eye passages by detecting local minima in static pressure.
+    // Each minimum gives a center fix (lat, lon, time_sec).
+    _flCenterFixes = [];
+    var obs = _gaFLData10s;
+    if (!obs || obs.length < 50) return;
+
+    // Smooth pressure to avoid noise-triggered minima (simple 30-point running mean)
+    var pSmooth = [];
+    var halfWin = 15;
+    for (var i = 0; i < obs.length; i++) {
+        var sum = 0, cnt = 0;
+        for (var j = Math.max(0, i - halfWin); j <= Math.min(obs.length - 1, i + halfWin); j++) {
+            if (obs[j].static_pres_hpa != null) { sum += obs[j].static_pres_hpa; cnt++; }
+        }
+        pSmooth.push(cnt > 0 ? sum / cnt : null);
+    }
+
+    // Find local minima: pressure lower than surrounding ±100 points by at least 3 hPa
+    var searchRadius = 100;
+    for (var i = searchRadius; i < obs.length - searchRadius; i++) {
+        if (pSmooth[i] == null || obs[i].lat == null) continue;
+        var isMin = true;
+        for (var j = i - searchRadius; j <= i + searchRadius; j++) {
+            if (j === i || pSmooth[j] == null) continue;
+            if (pSmooth[j] < pSmooth[i] - 0.5) { isMin = false; break; }
+        }
+        if (!isMin) continue;
+        // Verify it's a significant minimum (at least 3 hPa below edges)
+        var edgeP = Math.max(pSmooth[i - searchRadius] || 0, pSmooth[i + searchRadius] || 0);
+        if (edgeP - pSmooth[i] < 3) continue;
+
+        _flCenterFixes.push({
+            la: obs[i].lat, lo: obs[i].lon,
+            time_sec: obs[i].time_sec,
+            pres: pSmooth[i],
+        });
+        // Skip ahead to avoid detecting the same eye passage multiple times
+        i += searchRadius;
+    }
+}
+
 function _findCenterAtTime(track, timeISO) {
     // Find storm center at a given time.
-    // Priority: nearest VDM center fix (within 3 hours), else IBTrACS interpolation.
+    // Priority: 1) VDM center fix (within 3h)
+    //           2) FL pressure minimum (within 2h)
+    //           3) IBTrACS interpolation
     var targetMs = new Date(timeISO).getTime();
     if (isNaN(targetMs)) return findTrackPointAtTime(track, timeISO);
 
-    // Check VDM fixes first
+    // 1) Check VDM fixes
     if (vdmData && vdmData.length > 0) {
         var bestVdm = null, bestDelta = Infinity;
         for (var vi = 0; vi < vdmData.length; vi++) {
@@ -10972,13 +11022,30 @@ function _findCenterAtTime(track, timeISO) {
             var delta = Math.abs(vMs - targetMs);
             if (delta < bestDelta) { bestDelta = delta; bestVdm = v; }
         }
-        // Use VDM if within 3 hours (10800000 ms)
         if (bestVdm && bestDelta < 10800000) {
             return { la: bestVdm.lat, lo: bestVdm.lon };
         }
     }
 
-    // Fall back to IBTrACS interpolation
+    // 2) Check FL pressure minimum center fixes (within 2 hours)
+    if (_flCenterFixes && _flCenterFixes.length > 0 && _gaFLData && _gaFLData.summary) {
+        var missionDate = _getActiveMissionDate();
+        if (missionDate) {
+            var baseDateMs = new Date(missionDate + 'T00:00:00Z').getTime();
+            var targetSec = (targetMs - baseDateMs) / 1000;
+            var bestFL = null, bestFLDelta = Infinity;
+            for (var fi = 0; fi < _flCenterFixes.length; fi++) {
+                var fd = Math.abs(_flCenterFixes[fi].time_sec - targetSec);
+                if (fd < bestFLDelta) { bestFLDelta = fd; bestFL = _flCenterFixes[fi]; }
+            }
+            // Use if within 2 hours (7200 seconds)
+            if (bestFL && bestFLDelta < 7200) {
+                return { la: bestFL.la, lo: bestFL.lo };
+            }
+        }
+    }
+
+    // 3) Fall back to IBTrACS interpolation
     return findTrackPointAtTime(track, timeISO);
 }
 
