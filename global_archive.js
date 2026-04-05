@@ -9599,7 +9599,8 @@ window.gaFLSetColorVar = function (varName) {
             b.classList.remove('active');
         }
     });
-    // Re-render map with new coloring
+    // Update legend and re-render map with new coloring
+    _gaFLInjectLegend();
     if (_gaFLData) _gaFLRenderOnMap();
 };
 
@@ -9918,19 +9919,60 @@ function _gaFLBarbSVG(wspd_ms, wdir_deg) {
     return svg;
 }
 
+var _GA_FL_COLORBARS = {
+    'fl_wspd_ms': {
+        label: 'Wind (m/s)',
+        stops: [
+            { val: '<17.5', color: '#60a5fa', lbl: 'TD' },
+            { val: '17.5', color: '#34d399', lbl: 'TS' },
+            { val: '33',   color: '#fbbf24', lbl: 'C1' },
+            { val: '43',   color: '#fb923c', lbl: 'C2' },
+            { val: '49',   color: '#f87171', lbl: 'C3' },
+            { val: '58',   color: '#dc2626', lbl: 'C4' },
+            { val: '70+',  color: '#7f1d1d', lbl: 'C5' },
+        ]
+    },
+    'temp_c': {
+        label: 'Temperature (\u00b0C)',
+        stops: [
+            { val: '<-20', color: '#3b82f6' }, { val: '-10', color: '#06b6d4' },
+            { val: '0', color: '#22d3ee' }, { val: '10', color: '#34d399' },
+            { val: '20', color: '#fbbf24' }, { val: '25', color: '#fb923c' },
+            { val: '30+', color: '#f87171' },
+        ]
+    },
+    'dewpoint_c': {
+        label: 'Dewpoint (\u00b0C)',
+        stops: [
+            { val: '<-20', color: '#3b82f6' }, { val: '-10', color: '#06b6d4' },
+            { val: '0', color: '#22d3ee' }, { val: '10', color: '#34d399' },
+            { val: '20', color: '#fbbf24' }, { val: '25', color: '#fb923c' },
+            { val: '30+', color: '#f87171' },
+        ]
+    },
+    'theta_e': {
+        label: '\u03b8e (K)',
+        stops: [
+            { val: '<330', color: '#3b82f6' }, { val: '340', color: '#06b6d4' },
+            { val: '345', color: '#34d399' }, { val: '350', color: '#a3e635' },
+            { val: '355', color: '#fbbf24' }, { val: '360', color: '#fb923c' },
+            { val: '365+', color: '#f87171' },
+        ]
+    },
+};
+
 function _gaFLInjectLegend() {
     var el = document.getElementById('ga-fl-legend');
     if (!el) return;
-    el.innerHTML =
-        '<div style="display:flex;align-items:center;gap:8px;font-size:9px;color:#94a3b8;">' +
-        '<span style="width:10px;height:10px;border-radius:50%;background:#60a5fa;display:inline-block;"></span>TD' +
-        '<span style="width:10px;height:10px;border-radius:50%;background:#34d399;display:inline-block;"></span>TS' +
-        '<span style="width:10px;height:10px;border-radius:50%;background:#fbbf24;display:inline-block;"></span>C1' +
-        '<span style="width:10px;height:10px;border-radius:50%;background:#fb923c;display:inline-block;"></span>C2' +
-        '<span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;"></span>C3' +
-        '<span style="width:10px;height:10px;border-radius:50%;background:#dc2626;display:inline-block;"></span>C4' +
-        '<span style="width:10px;height:10px;border-radius:50%;background:#7f1d1d;display:inline-block;"></span>C5' +
-        '<span style="margin-left:8px;color:#64748b;">Wind barbs in kt</span></div>';
+    var cb = _GA_FL_COLORBARS[_gaFLColorVar];
+    if (!cb) return;
+    var html = '<div style="display:flex;align-items:center;gap:6px;font-size:9px;color:#94a3b8;">';
+    cb.stops.forEach(function (s) {
+        html += '<span style="width:10px;height:10px;border-radius:50%;background:' + s.color + ';display:inline-block;"></span>';
+        html += (s.lbl || s.val);
+    });
+    html += '<span style="margin-left:6px;color:#64748b;">' + cb.label + '</span></div>';
+    el.innerHTML = html;
 }
 
 window.gaFLToggleAutoSync = function () {
@@ -10113,6 +10155,7 @@ function _gaSondeHideUI() {
     var skewt = document.getElementById('ga-sonde-skewt-panel');
     if (skewt) skewt.style.display = 'none';
     _gaSondeRemoveFromMap();
+    _gaSondePlanViewRemove();
 }
 
 function _gaSondeRemoveFromMap() {
@@ -10215,6 +10258,139 @@ function _gaSondeRenderTable() {
     }
     html += '</table>';
     wrap.innerHTML = html;
+}
+
+// ── Sonde plan-view (colored markers at a specific pressure level) ──
+
+var _gaSondePlanVar = null;
+var _gaSondePlanLevel = 850;
+var _gaSondePlanLayers = [];
+
+function _gaFLRHColor(rh) {
+    if (rh == null) return '#475569';
+    if (rh < 30) return '#f87171';
+    if (rh < 50) return '#fb923c';
+    if (rh < 60) return '#fbbf24';
+    if (rh < 70) return '#a3e635';
+    if (rh < 80) return '#34d399';
+    if (rh < 90) return '#06b6d4';
+    return '#3b82f6';
+}
+
+function _sondePlanViewColor(varName, val) {
+    if (varName === 'wspd') return _gaFLWindColor(val);
+    if (varName === 'temp') return _gaFLTempColor(val);
+    if (varName === 'theta_e') return _gaFLThetaEColor(val);
+    if (varName === 'rh') return _gaFLRHColor(val);
+    return '#60a5fa';
+}
+
+function _sondePlanViewUnits(varName) {
+    if (varName === 'wspd') return 'kt';
+    if (varName === 'temp') return '\u00b0C';
+    if (varName === 'theta_e') return 'K';
+    if (varName === 'rh') return '%';
+    return '';
+}
+
+function _sondePlanViewFormat(varName, val) {
+    if (val == null) return '\u2014';
+    if (varName === 'wspd') return Math.round(val * 1.944) + ' kt';
+    if (varName === 'temp') return val.toFixed(1) + ' \u00b0C';
+    if (varName === 'theta_e') return val.toFixed(1) + ' K';
+    if (varName === 'rh') return val.toFixed(0) + '%';
+    return val.toFixed(1);
+}
+
+window.gaSondePlanView = function (varName) {
+    _gaSondePlanVar = varName;
+    var levelSel = document.getElementById('ga-sonde-pv-level');
+    if (levelSel) _gaSondePlanLevel = parseInt(levelSel.value);
+    // Update button active states
+    var btns = document.querySelectorAll('.ga-sonde-pv-btn');
+    btns.forEach(function (b) {
+        var bvar = b.getAttribute('data-var');
+        if ((!varName && bvar === '') || bvar === varName) {
+            b.classList.add('active');
+        } else {
+            b.classList.remove('active');
+        }
+    });
+    _gaSondePlanViewRender();
+};
+
+window.gaSondePlanViewRefresh = function () {
+    var levelSel = document.getElementById('ga-sonde-pv-level');
+    if (levelSel) _gaSondePlanLevel = parseInt(levelSel.value);
+    _gaSondePlanViewRender();
+};
+
+function _gaSondePlanViewRemove() {
+    for (var i = 0; i < _gaSondePlanLayers.length; i++) {
+        if (detailMap) detailMap.removeLayer(_gaSondePlanLayers[i]);
+    }
+    _gaSondePlanLayers = [];
+}
+
+function _gaSondePlanViewRender() {
+    _gaSondePlanViewRemove();
+    if (!_gaSondePlanVar || !_gaSondeData || !detailMap) return;
+
+    var targetP = _gaSondePlanLevel;
+    var varName = _gaSondePlanVar;
+    var tolerance = 25; // hPa
+
+    _gaSondeData.forEach(function (s, si) {
+        var prof = s.profile;
+        if (!prof || !prof.pres || prof.pres.length === 0) return;
+
+        // Find nearest pressure level
+        var bestIdx = -1, bestDist = Infinity;
+        for (var i = 0; i < prof.pres.length; i++) {
+            if (prof.pres[i] == null) continue;
+            var dist = Math.abs(prof.pres[i] - targetP);
+            if (dist < bestDist) { bestDist = dist; bestIdx = i; }
+        }
+        if (bestIdx < 0 || bestDist > tolerance) return;
+
+        var val = prof[varName] ? prof[varName][bestIdx] : null;
+        if (val == null) return;
+
+        var lat = prof.lat[bestIdx];
+        var lon = prof.lon[bestIdx];
+        if (lat == null || lon == null) return;
+
+        var color = _sondePlanViewColor(varName, val);
+        var actualP = prof.pres[bestIdx];
+
+        var tip = '<b>Sonde #' + (si + 1) + '</b><br>' +
+            _sondePlanViewFormat(varName, val) + '<br>' +
+            'at ' + Math.round(actualP) + ' hPa<br>' +
+            (s.launch_time || '');
+
+        var marker = L.circleMarker([lat, lon], {
+            radius: 8, fillColor: color, fillOpacity: 0.95,
+            color: '#fff', weight: 2, opacity: 1,
+            pane: 'markerPane'
+        }).bindTooltip(tip, { permanent: true, direction: 'top', offset: [0, -10],
+                             className: 'ga-fl-tooltip',
+                             style: 'font-size:10px;font-weight:600;' });
+
+        // Show value as permanent label
+        var labelIcon = L.divIcon({
+            className: '',
+            iconSize: [40, 14],
+            iconAnchor: [20, -6],
+            html: '<div style="font-size:10px;font-weight:700;color:#fff;text-shadow:0 0 4px #000,0 0 2px #000;text-align:center;white-space:nowrap;">' +
+                _sondePlanViewFormat(varName, val) + '</div>'
+        });
+        var label = L.marker([lat, lon], { icon: labelIcon, interactive: false, pane: 'tooltipPane' });
+
+        marker.addTo(detailMap);
+        label.addTo(detailMap);
+        _gaSondePlanLayers.push(marker);
+        _gaSondePlanLayers.push(label);
+    });
 }
 
 window.gaSondeShowSkewT = function (idx) {
@@ -10564,63 +10740,61 @@ function _gaFLRenderTimeSeries() {
         layout.yaxis5.visible = true;
     }
 
-    // Add VDM markers to the time series if available
-    if (vdmData && vdmData.length > 0 && _gaFLData && _gaFLData.mission_id) {
-        // Get mission date to filter VDMs to this mission's day
+    // Add VDM min SLP markers on pressure axis (filtered to mission time window)
+    if (vdmData && vdmData.length > 0 && _gaFLData && _gaFLData.summary) {
+        var summ = _gaFLData.summary;
         var missionDate = '';
         if (_gaFLMissions) {
             var sel = document.getElementById('ga-fl-mission-select');
             if (sel && _gaFLMissions[sel.selectedIndex]) {
-                missionDate = _gaFLMissions[sel.selectedIndex].datetime; // "YYYY-MM-DD"
+                missionDate = _gaFLMissions[sel.selectedIndex].datetime;
             }
         }
+        // Mission time window in seconds (with ±30 min buffer)
+        var mStartSec = 0, mEndSec = 86400;
+        if (summ.start_time) {
+            var sp = summ.start_time.split(':');
+            mStartSec = parseInt(sp[0]) * 3600 + parseInt(sp[1]) * 60 - 1800;
+        }
+        if (summ.end_time) {
+            var ep = summ.end_time.split(':');
+            mEndSec = parseInt(ep[0]) * 3600 + parseInt(ep[1]) * 60 + 1800;
+            if (mEndSec < mStartSec) mEndSec += 86400; // crossed midnight
+        }
 
-        var vdmTimes = [], vdmWinds = [], vdmPres = [], vdmHovers = [], vdmPresHovers = [];
+        var vdmPTimes = [], vdmPVals = [], vdmPHovers = [];
         vdmData.forEach(function (v) {
-            if (!v.time) return;
-            // Filter to VDMs on the same day as the mission
+            if (!v.time || v.min_slp_hpa == null || v.min_slp_hpa < 850) return;
             if (missionDate && v.time.substring(0, 10) !== missionDate) return;
-            var tHHMM = v.time.substring(11, 16); // "HH:MM" from ISO
-            var hoverBase = '<b>VDM OB ' + (v.ob_number || '?') + '</b><br>' +
-                (v.aircraft || '') + ' ' + (v.mission_id || '') + '<br>';
+            // Check time within mission window
+            var vHH = parseInt(v.time.substring(11, 13));
+            var vMM = parseInt(v.time.substring(14, 16));
+            var vSec = vHH * 3600 + vMM * 60;
+            if (vSec < mStartSec || vSec > mEndSec) return;
 
-            if (v.max_fl_wind_kt != null && _gaFLVarsVisible['fl_wspd_ms']) {
-                vdmTimes.push(tHHMM);
-                vdmWinds.push(v.max_fl_wind_kt);
-                var wh = hoverBase + 'Max FL: ' + v.max_fl_wind_kt + ' kt';
-                if (v.min_slp_hpa != null) wh += '<br>Min SLP: ' + v.min_slp_hpa + ' hPa';
-                if (v.eye_diameter_nm != null) wh += '<br>Eye: ' + v.eye_diameter_nm + ' nm';
-                vdmHovers.push(wh);
-            }
-            if (v.min_slp_hpa != null && v.min_slp_hpa >= 850 && _gaFLVarsVisible['static_pres_hpa']) {
-                vdmPres.push({ t: tHHMM, p: v.min_slp_hpa,
-                    h: hoverBase + 'Min SLP: ' + v.min_slp_hpa + ' hPa' });
-            }
+            var tHHMM = v.time.substring(11, 16);
+            var hover = '<b>VDM OB ' + (v.ob_number || '?') + '</b><br>' +
+                (v.aircraft || '') + ' ' + (v.mission_id || '') + '<br>' +
+                'Min SLP: ' + v.min_slp_hpa + ' hPa';
+            if (v.max_fl_wind_kt != null) hover += '<br>Max FL: ' + v.max_fl_wind_kt + ' kt';
+            if (v.eye_diameter_nm != null) hover += '<br>Eye: ' + v.eye_diameter_nm + ' nm ' + (v.eye_shape || '');
+            if (v.max_sfmr_kt != null) hover += '<br>SFMR: ' + v.max_sfmr_kt + ' kt';
+
+            vdmPTimes.push(tHHMM);
+            vdmPVals.push(v.min_slp_hpa);
+            vdmPHovers.push(hover);
         });
 
-        if (vdmTimes.length > 0) {
+        if (vdmPTimes.length > 0) {
             traces.push({
-                x: vdmTimes, y: vdmWinds,
+                x: vdmPTimes, y: vdmPVals,
                 type: 'scatter', mode: 'markers',
-                name: 'VDM Fix',
+                name: 'VDM SLP',
                 marker: { color: '#ef4444', symbol: 'star-diamond', size: 12,
                           line: { color: '#fff', width: 1.5 } },
                 hovertemplate: '%{text}<extra></extra>',
-                text: vdmHovers,
-                yaxis: 'y', showlegend: true,
-            });
-        }
-        if (vdmPres.length > 0) {
-            traces.push({
-                x: vdmPres.map(function (p) { return p.t; }),
-                y: vdmPres.map(function (p) { return p.p; }),
-                type: 'scatter', mode: 'markers',
-                name: 'VDM SLP',
-                marker: { color: '#dc2626', symbol: 'star-diamond', size: 12,
-                          line: { color: '#fff', width: 1.5 } },
-                hovertemplate: '%{text}<extra></extra>',
-                text: vdmPres.map(function (p) { return p.h; }),
-                yaxis: 'y2', showlegend: false,
+                text: vdmPHovers,
+                yaxis: 'y2', showlegend: true,
             });
         }
     }

@@ -4507,6 +4507,7 @@ def get_global_dropsondes(
             _fetch_and_extract_frd_tarball,
             _parse_frd_file,
             _filter_valid_frd_profile,
+            _build_archive_sonde_response,
             HRD_SONDE_BASE,
             _hrd_parse_directory,
         )
@@ -4550,40 +4551,25 @@ def get_global_dropsondes(
         return {"success": True, "dropsondes": [], "n_sondes": 0,
                 "message": "No dropsonde tarballs found" + (f" for mission {mission_id}" if mission_id else "")}
 
-    # Fetch and parse all matching tarballs
+    # Fetch and parse all matching tarballs — use the same response builder
+    # as TC-RADAR (_build_archive_sonde_response) for consistent output format
     all_sondes = []
-    for tarball in tarballs[:3]:  # Limit to 3 tarballs to avoid timeout
+    for tarball in tarballs[:5]:  # Limit to 5 tarballs
         tarball_url = operproc_url + tarball
         try:
             frd_contents = _fetch_and_extract_frd_tarball(tarball_url)
             for fname, text in frd_contents:
                 try:
-                    sonde = _parse_frd_file(text)
-                    if sonde and sonde.get("profile") and _filter_valid_frd_profile(sonde["profile"]):
-                        # Add storm-relative coords if center provided
-                        if abs(center_lat) > 0.1 and abs(center_lon) > 0.1 and sonde.get("profile"):
-                            from math import radians, cos
-                            R = 6371.0
-                            clat_rad = radians(center_lat)
-                            prof = sonde["profile"]
-                            for key in ["x_km", "y_km"]:
-                                if key not in prof:
-                                    prof[key] = []
-                            if not prof.get("x_km"):
-                                prof["x_km"] = []
-                                prof["y_km"] = []
-                                for li in range(len(prof.get("lat", []))):
-                                    lat_i = prof["lat"][li]
-                                    lon_i = prof["lon"][li]
-                                    if lat_i is not None and lon_i is not None:
-                                        dy = (lat_i - center_lat) * (R * radians(1))
-                                        dx = (lon_i - center_lon) * (R * radians(1) * cos(clat_rad))
-                                        prof["x_km"].append(round(dx, 2))
-                                        prof["y_km"].append(round(dy, 2))
-                                    else:
-                                        prof["x_km"].append(None)
-                                        prof["y_km"].append(None)
-                        all_sondes.append(sonde)
+                    parsed = _parse_frd_file(text)
+                    if not parsed or not parsed.get("profile"):
+                        continue
+                    result_sonde = _build_archive_sonde_response(
+                        parsed, center_lat, center_lon,
+                        analysis_dt=None,
+                        storm_u=-999, storm_v=-999,
+                    )
+                    if result_sonde:
+                        all_sondes.append(result_sonde)
                 except Exception as e:
                     logger.warning(f"Failed to parse FRD file {fname}: {e}")
         except Exception as e:

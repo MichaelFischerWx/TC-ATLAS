@@ -531,6 +531,22 @@
                                     <span style="font-size:10px;font-weight:600;color:#6ee7b7;text-transform:uppercase;letter-spacing:0.5px;">&#129666; Sondes</span>
                                     <span id="ga-sonde-count" style="font-size:9px;color:#64748b;"></span>
                                 </div>
+                                <div style="display:flex;align-items:center;gap:4px;margin-top:4px;flex-wrap:wrap;">
+                                    <span style="font-size:9px;color:#64748b;">Plan view:</span>
+                                    <button class="ga-btn ga-btn-xs ga-sonde-pv-btn active" onclick="gaSondePlanView(null)" data-var="" style="font-size:9px;">Off</button>
+                                    <button class="ga-btn ga-btn-xs ga-sonde-pv-btn" onclick="gaSondePlanView('wspd')" data-var="wspd" style="font-size:9px;">Wind</button>
+                                    <button class="ga-btn ga-btn-xs ga-sonde-pv-btn" onclick="gaSondePlanView('temp')" data-var="temp" style="font-size:9px;">Temp</button>
+                                    <button class="ga-btn ga-btn-xs ga-sonde-pv-btn" onclick="gaSondePlanView('theta_e')" data-var="theta_e" style="font-size:9px;">&theta;e</button>
+                                    <button class="ga-btn ga-btn-xs ga-sonde-pv-btn" onclick="gaSondePlanView('rh')" data-var="rh" style="font-size:9px;">RH</button>
+                                    <select id="ga-sonde-pv-level" onchange="gaSondePlanViewRefresh()" style="font-size:9px;padding:2px 4px;background:#0f172a;color:#e2e8f0;border:1px solid rgba(255,255,255,0.12);border-radius:3px;">
+                                        <option value="1000">1000</option>
+                                        <option value="925">925</option>
+                                        <option value="850" selected>850</option>
+                                        <option value="700">700</option>
+                                        <option value="500">500</option>
+                                    </select>
+                                    <span style="font-size:9px;color:#64748b;">mb</span>
+                                </div>
                                 <div id="ga-sonde-table-wrap" style="max-height:160px;overflow-y:auto;margin-top:4px;"></div>
                             </div>
                         </div>
