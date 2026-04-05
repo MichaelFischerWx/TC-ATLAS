@@ -10997,34 +10997,8 @@ function _buildFLCenterFixes() {
         var edgeP = Math.max(pSmooth[i - searchRadius] || 0, pSmooth[i + searchRadius] || 0);
         if (edgeP - pSmooth[i] < 3) continue;
 
-        // Refine center: find steepest pressure gradients on each side of the
-        // minimum and take their midpoint. This estimates the geometric center
-        // even when the aircraft doesn't fly through the exact center.
-        var centerLat = obs[i].lat, centerLon = obs[i].lon;
-        var maxGradL = 0, maxGradR = 0, idxL = i, idxR = i;
-
-        // Search left (before minimum) for steepest gradient
-        for (var gl = i - 1; gl >= Math.max(0, i - searchRadius); gl--) {
-            if (pSmooth[gl] == null || pSmooth[gl + 1] == null) continue;
-            var grad = pSmooth[gl] - pSmooth[gl + 1]; // positive = pressure increasing outward
-            if (grad > maxGradL) { maxGradL = grad; idxL = gl; }
-        }
-        // Search right (after minimum) for steepest gradient
-        for (var gr = i + 1; gr <= Math.min(obs.length - 1, i + searchRadius); gr++) {
-            if (pSmooth[gr] == null || pSmooth[gr - 1] == null) continue;
-            var grad = pSmooth[gr] - pSmooth[gr - 1];
-            if (grad > maxGradR) { maxGradR = grad; idxR = gr; }
-        }
-
-        // Midpoint of the two gradient maxima
-        if (maxGradL > 0.5 && maxGradR > 0.5 &&
-            obs[idxL].lat != null && obs[idxR].lat != null) {
-            centerLat = (obs[idxL].lat + obs[idxR].lat) / 2;
-            centerLon = (obs[idxL].lon + obs[idxR].lon) / 2;
-        }
-
         _flCenterFixes.push({
-            la: centerLat, lo: centerLon,
+            la: obs[i].lat, lo: obs[i].lon,
             time_sec: obs[i].time_sec,
             pres: pSmooth[i],
         });
