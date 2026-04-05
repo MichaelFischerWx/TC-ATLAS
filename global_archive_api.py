@@ -4317,6 +4317,66 @@ def _parse_hrd_legacy_csv(text: str) -> list:
     return observations
 
 
+_FL_GCS_CACHE_PREFIX = "recon/v1"
+
+
+def _fl_gcs_cache_key(filename: str, center_lat: float, center_lon: float) -> str:
+    """Build GCS object key for a cached flight-level result."""
+    return f"{_FL_GCS_CACHE_PREFIX}/{filename}_{center_lat:.1f}_{center_lon:.1f}.json"
+
+
+def _fl_gcs_get(filename: str, center_lat: float, center_lon: float):
+    """Try reading a cached flight-level result from GCS."""
+    bucket = _get_gcs_bucket()
+    if bucket is None:
+        return None
+    key = _fl_gcs_cache_key(filename, center_lat, center_lon)
+    try:
+        blob = bucket.blob(key)
+        data = blob.download_as_bytes(timeout=5)
+        return json.loads(data)
+    except Exception:
+        return None
+
+
+def _fl_gcs_put(filename: str, center_lat: float, center_lon: float, result: dict):
+    """Write a parsed flight-level result to GCS (background, fire-and-forget)."""
+    bucket = _get_gcs_bucket()
+    if bucket is None:
+        return
+
+    def _upload():
+        key = _fl_gcs_cache_key(filename, center_lat, center_lon)
+        try:
+            blob = bucket.blob(key)
+            blob.upload_from_string(
+                json.dumps(result, separators=(",", ":")),
+                content_type="application/json",
+            )
+        except Exception as e:
+            logger.warning(f"GCS recon cache write failed: {e}")
+
+    import threading
+    threading.Thread(target=_upload, daemon=True).start()
+
+
+def _fl_source_changed(file_url: str, cached_size: int | None) -> bool:
+    """Quick HEAD check to see if the source file changed since caching.
+    Returns True if the file has changed (or we can't check), False if unchanged.
+    """
+    if cached_size is None:
+        return True  # no size recorded → must refetch
+    try:
+        import requests as _req
+        resp = _req.head(file_url, timeout=10)
+        if resp.status_code == 200:
+            remote_size = int(resp.headers.get("Content-Length", 0))
+            return remote_size != cached_size
+    except Exception:
+        pass
+    return False  # assume unchanged on error (fail open to avoid blocking)
+
+
 @router.get("/flightlevel/data")
 def get_fl_data(
     file_url: str = Query(..., description="Full URL of the FL data file on AOML FTP"),
@@ -4332,7 +4392,9 @@ def get_fl_data(
     if not file_url.startswith(h["HRD_FL_BASE"]):
         raise HTTPException(400, "Invalid file URL")
 
-    # Check cache
+    filename = file_url.rsplit("/", 1)[-1]
+
+    # Check in-memory cache
     import time as _time
     now = _time.time()
     cache_key = f"{file_url}_{center_lat}_{center_lon}"
@@ -4342,14 +4404,40 @@ def get_fl_data(
             _fl_data_cache.move_to_end(cache_key)
             return cached
 
-    # Fetch the file
+    # Check GCS persistent cache
+    gcs_result = _fl_gcs_get(filename, center_lat, center_lon)
+    if gcs_result:
+        # For recent data (< 2 years), verify source hasn't changed via HEAD request
+        import re
+        year_m = re.search(r'(\d{4})', filename)
+        file_year = int(year_m.group(1)) if year_m else 0
+        current_year = int(_time.strftime("%Y"))
+        is_recent = (current_year - file_year) < 2
+
+        if is_recent:
+            source_size = gcs_result.get("_source_size")
+            if _fl_source_changed(file_url, source_size):
+                logger.info(f"GCS recon cache stale (source changed): {filename}")
+            else:
+                # Source unchanged — use cached
+                _fl_data_cache[cache_key] = (gcs_result, now)
+                return gcs_result
+        else:
+            # Historical data (≥2 years old) — trust the cache
+            _fl_data_cache[cache_key] = (gcs_result, now)
+            return gcs_result
+
+    # Fetch the file from AOML
     try:
-        text = h["fetch_text"](file_url, timeout=60)
+        import requests as _req
+        resp = _req.get(file_url, timeout=60)
+        resp.raise_for_status()
+        text = resp.text
+        source_size = len(resp.content)
     except Exception as e:
         raise HTTPException(502, f"Could not fetch flight-level file: {e}")
 
     # Detect format and parse
-    filename = file_url.rsplit("/", 1)[-1]
     fmt = _detect_fl_format(filename)
     observations = []
 
@@ -4467,11 +4555,15 @@ def get_fl_data(
         "center_lat": center_lat if has_sr else None,
         "center_lon": center_lon if has_sr else None,
         "summary": summary,
+        "_source_size": source_size,  # for GCS cache invalidation
     }
 
     _fl_data_cache[cache_key] = (result, now)
     if len(_fl_data_cache) > _FL_DATA_CACHE_MAX:
         _fl_data_cache.popitem(last=False)
+
+    # Persist to GCS for cross-instance / cold-start cache hits
+    _fl_gcs_put(filename, center_lat, center_lon, result)
 
     return result
 
