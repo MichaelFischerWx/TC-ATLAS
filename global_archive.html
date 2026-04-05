@@ -514,18 +514,18 @@
                                     <span class="gif-toggle-slider"></span>
                                 </label>
                                 <span style="font-size:9px;color:#64748b;">Auto</span>
-                                <button class="ga-btn ga-btn-xs" onclick="gaFLOpenTimeSeries()" title="Open time series panel" style="font-size:9px;color:#93c5fd;">&#128200; Time Series</button>
-                                <button class="ga-btn ga-btn-xs" onclick="gaFLOpenXSec()" title="Radius-height cross-section" style="font-size:9px;color:#6ee7b7;">X-Sec</button>
-                                <button class="ga-btn ga-btn-xs" onclick="gaFLOpenRadial()" title="Radial profile" style="font-size:9px;color:#6ee7b7;">Radial</button>
+                                <button id="ga-fl-btn-ts" class="ga-btn ga-btn-xs ga-fl-panel-btn" onclick="gaFLOpenTimeSeries()" title="Flight-level time series" style="font-size:9px;color:#93c5fd;">&#128200; Time Series</button>
+                                <button id="ga-fl-btn-xsec" class="ga-btn ga-btn-xs ga-fl-panel-btn" onclick="gaFLOpenXSec()" title="Radius-height cross-section (all legs composited)" style="font-size:9px;color:#6ee7b7;">X-Sec</button>
+                                <button id="ga-fl-btn-radial" class="ga-btn ga-btn-xs ga-fl-panel-btn" onclick="gaFLOpenRadial()" title="Radial profile of flight-level variable" style="font-size:9px;color:#6ee7b7;">Radial</button>
                                 <span id="ga-fl-frame-status" style="font-size:9px;color:#64748b;"></span>
                             </div>
                             <div id="ga-fl-legend" style="margin-top:4px;"></div>
                             <div style="display:flex;align-items:center;gap:5px;margin-top:4px;">
                                 <span style="font-size:9px;color:#64748b;">Color by:</span>
-                                <button class="ga-btn ga-btn-xs ga-fl-color-btn active" onclick="gaFLSetColorVar('fl_wspd_ms')" data-var="fl_wspd_ms" style="font-size:9px;">Wind</button>
-                                <button class="ga-btn ga-btn-xs ga-fl-color-btn" onclick="gaFLSetColorVar('temp_c')" data-var="temp_c" style="font-size:9px;">Temp</button>
-                                <button class="ga-btn ga-btn-xs ga-fl-color-btn" onclick="gaFLSetColorVar('dewpoint_c')" data-var="dewpoint_c" style="font-size:9px;">Td</button>
-                                <button class="ga-btn ga-btn-xs ga-fl-color-btn" onclick="gaFLSetColorVar('theta_e')" data-var="theta_e" style="font-size:9px;">&theta;e</button>
+                                <button class="ga-btn ga-btn-xs ga-fl-color-btn active" onclick="gaFLSetColorVar('fl_wspd_ms')" data-var="fl_wspd_ms" style="font-size:9px;" title="Flight-level wind speed">Wind</button>
+                                <button class="ga-btn ga-btn-xs ga-fl-color-btn" onclick="gaFLSetColorVar('temp_c')" data-var="temp_c" style="font-size:9px;" title="Air temperature">Temp</button>
+                                <button class="ga-btn ga-btn-xs ga-fl-color-btn" onclick="gaFLSetColorVar('dewpoint_c')" data-var="dewpoint_c" style="font-size:9px;" title="Dewpoint temperature">Td</button>
+                                <button class="ga-btn ga-btn-xs ga-fl-color-btn" onclick="gaFLSetColorVar('theta_e')" data-var="theta_e" style="font-size:9px;" title="Equivalent potential temperature">&theta;e</button>
                             </div>
                             <!-- Dropsonde info (shown when sondes found) -->
                             <div id="ga-sonde-info" style="display:none;margin-top:6px;border-top:1px solid rgba(52,211,153,0.2);padding-top:6px;">
@@ -536,10 +536,10 @@
                                 <div style="display:flex;align-items:center;gap:4px;margin-top:4px;flex-wrap:wrap;">
                                     <span style="font-size:9px;color:#64748b;">Plan view:</span>
                                     <button class="ga-btn ga-btn-xs ga-sonde-pv-btn active" onclick="gaSondePlanView(null)" data-var="" style="font-size:9px;">Off</button>
-                                    <button class="ga-btn ga-btn-xs ga-sonde-pv-btn" onclick="gaSondePlanView('wspd')" data-var="wspd" style="font-size:9px;">Wind</button>
-                                    <button class="ga-btn ga-btn-xs ga-sonde-pv-btn" onclick="gaSondePlanView('temp')" data-var="temp" style="font-size:9px;">Temp</button>
-                                    <button class="ga-btn ga-btn-xs ga-sonde-pv-btn" onclick="gaSondePlanView('theta_e')" data-var="theta_e" style="font-size:9px;">&theta;e</button>
-                                    <button class="ga-btn ga-btn-xs ga-sonde-pv-btn" onclick="gaSondePlanView('rh')" data-var="rh" style="font-size:9px;">RH</button>
+                                    <button class="ga-btn ga-btn-xs ga-sonde-pv-btn" onclick="gaSondePlanView('wspd')" data-var="wspd" style="font-size:9px;" title="Wind speed at selected level">Wind</button>
+                                    <button class="ga-btn ga-btn-xs ga-sonde-pv-btn" onclick="gaSondePlanView('temp')" data-var="temp" style="font-size:9px;" title="Temperature at selected level">Temp</button>
+                                    <button class="ga-btn ga-btn-xs ga-sonde-pv-btn" onclick="gaSondePlanView('theta_e')" data-var="theta_e" style="font-size:9px;" title="Equivalent potential temperature">&theta;e</button>
+                                    <button class="ga-btn ga-btn-xs ga-sonde-pv-btn" onclick="gaSondePlanView('rh')" data-var="rh" style="font-size:9px;" title="Relative humidity at selected level">RH</button>
                                     <select id="ga-sonde-pv-level" onchange="gaSondePlanViewRefresh()" style="font-size:9px;padding:2px 4px;background:#0f172a;color:#e2e8f0;border:1px solid rgba(255,255,255,0.12);border-radius:3px;">
                                         <option value="1000">1000</option>
                                         <option value="925">925</option>
@@ -549,7 +549,7 @@
                                     </select>
                                     <span style="font-size:9px;color:#64748b;">mb</span>
                                 </div>
-                                <div id="ga-sonde-table-wrap" style="max-height:160px;overflow-y:auto;margin-top:4px;"></div>
+                                <div id="ga-sonde-table-wrap" style="max-height:280px;overflow-y:auto;margin-top:4px;"></div>
                             </div>
                         </div>
                         <!-- Dropsonde Skew-T display -->
@@ -557,24 +557,24 @@
                             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
                                 <div id="ga-sonde-skewt-title" style="font-size:11px;font-weight:600;color:#6ee7b7;"></div>
                                 <div style="display:flex;align-items:center;gap:6px;">
-                                    <button id="ga-sonde-view-skewt" class="ga-btn ga-btn-xs active" onclick="gaSondeSetView('skewt')" style="font-size:9px;">Skew-T</button>
-                                    <button id="ga-sonde-view-wind" class="ga-btn ga-btn-xs" onclick="gaSondeSetView('wind')" style="font-size:9px;">Wind</button>
-                                    <button id="ga-sonde-view-xsec" class="ga-btn ga-btn-xs" onclick="gaSondeSetView('xsec')" style="font-size:9px;">X-Sec</button>
-                                    <button id="ga-sonde-view-radial" class="ga-btn ga-btn-xs" onclick="gaSondeSetView('radial')" style="font-size:9px;">Radial</button>
+                                    <button id="ga-sonde-view-skewt" class="ga-btn ga-btn-xs active" onclick="gaSondeSetView('skewt')" style="font-size:9px;" title="Skew-T / Log-P thermodynamic diagram">Skew-T</button>
+                                    <button id="ga-sonde-view-wind" class="ga-btn ga-btn-xs" onclick="gaSondeSetView('wind')" style="font-size:9px;" title="Wind speed and direction vs altitude">Wind</button>
+                                    <button id="ga-sonde-view-xsec" class="ga-btn ga-btn-xs" onclick="gaSondeSetView('xsec')" style="font-size:9px;" title="Radius-height cross-section (all legs)">X-Sec</button>
+                                    <button id="ga-sonde-view-radial" class="ga-btn ga-btn-xs" onclick="gaSondeSetView('radial')" style="font-size:9px;" title="Radial profile of selected variable">Radial</button>
                                     <select id="ga-sonde-skewt-select" onchange="gaSondeShowSkewT(this.value)" style="font-size:9px;padding:2px 4px;background:#0f172a;color:#e2e8f0;border:1px solid rgba(255,255,255,0.12);border-radius:3px;" data-hide-in-xsec="1"></select>
                                     <button class="ga-btn ga-btn-xs" onclick="gaSondeCloseSkewT()" style="font-size:9px;color:#f87171;">&#10005;</button>
                                 </div>
                             </div>
                             <div id="ga-xsec-var-row" style="display:none;margin-bottom:6px;">
                                 <span style="font-size:9px;color:#64748b;">Variable:</span>
-                                <button class="ga-btn ga-btn-xs ga-xsec-var-btn active" onclick="gaXSecSetVar('wspd')" data-var="wspd" style="font-size:9px;">Wind</button>
-                                <button class="ga-btn ga-btn-xs ga-xsec-var-btn" onclick="gaXSecSetVar('temp')" data-var="temp" style="font-size:9px;">Temp</button>
-                                <button class="ga-btn ga-btn-xs ga-xsec-var-btn" onclick="gaXSecSetVar('theta_e')" data-var="theta_e" style="font-size:9px;">&theta;e</button>
-                                <button class="ga-btn ga-btn-xs ga-xsec-var-btn" onclick="gaXSecSetVar('rh')" data-var="rh" style="font-size:9px;">RH</button>
+                                <button class="ga-btn ga-btn-xs ga-xsec-var-btn active" onclick="gaXSecSetVar('wspd')" data-var="wspd" style="font-size:9px;" title="Flight-level wind speed">Wind</button>
+                                <button class="ga-btn ga-btn-xs ga-xsec-var-btn" onclick="gaXSecSetVar('temp')" data-var="temp" style="font-size:9px;" title="Air temperature">Temp</button>
+                                <button class="ga-btn ga-btn-xs ga-xsec-var-btn" onclick="gaXSecSetVar('theta_e')" data-var="theta_e" style="font-size:9px;" title="Equivalent potential temperature">&theta;e</button>
+                                <button class="ga-btn ga-btn-xs ga-xsec-var-btn" onclick="gaXSecSetVar('rh')" data-var="rh" style="font-size:9px;" title="Relative humidity">RH</button>
                             </div>
                             <div style="display:flex;gap:8px;">
-                                <div id="ga-sonde-skewt" style="flex:1;height:420px;"></div>
-                                <div id="ga-sonde-skewt-info" style="width:180px;font-size:10px;color:#d1d5db;overflow-y:auto;max-height:420px;"></div>
+                                <div id="ga-sonde-skewt" style="flex:1;height:520px;"></div>
+                                <div id="ga-sonde-skewt-info" style="width:180px;font-size:10px;color:#d1d5db;overflow-y:auto;max-height:520px;"></div>
                             </div>
                         </div>
                         <!-- Flight-level time series side panel -->

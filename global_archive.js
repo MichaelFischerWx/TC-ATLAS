@@ -9741,6 +9741,7 @@ window.gaFLSelectMission = function () {
 var _gaFLClientCache = {};  // fileUrl → parsed JSON (browser-side cache)
 
 function _gaFLApplyData(json) {
+    _vdmCloseTextOverlay();  // close VDM text on mission change
     var status = document.getElementById('ga-fl-frame-status');
     _gaFLData = json;
     _gaFLData1s = json.obs_1s;
@@ -9837,7 +9838,7 @@ function _gaFLLoadMissionData(fileUrl) {
             if (json.has_1s && (!json.obs_1s || json.obs_1s.length === 0)) {
                 // Show 1s button immediately with loading indicator
                 var btn1s = document.getElementById('ga-fl-res-1s');
-                if (btn1s) { btn1s.style.display = ''; btn1s.style.opacity = '0.5'; }
+                if (btn1s) { btn1s.style.display = ''; btn1s.style.opacity = '0.5'; btn1s.textContent = '1s \u23f3'; }
 
                 fetch(baseUrl + '&include_1s=true')
                     .then(function (r2) { return r2.json(); })
@@ -9846,7 +9847,7 @@ function _gaFLLoadMissionData(fileUrl) {
                             json.obs_1s = json1s.obs_1s;
                             _gaFLData1s = json1s.obs_1s;
                             _gaFLClientCache[fileUrl] = json;
-                            if (btn1s) btn1s.style.opacity = '1';
+                            if (btn1s) { btn1s.style.opacity = '1'; btn1s.textContent = '1s'; }
                             // Re-render time series if 1s is toggled on
                             if (_gaFLResVisible['1s'] && _gaFLTSOpen) _gaFLRenderTimeSeries();
                         }
@@ -9925,7 +9926,7 @@ function _gaFLRenderOnMap() {
     // zoom 8-9: every 2nd (~20s), zoom 10+: every obs (~10s)
     var zoom = detailMap.getZoom();
     var circleStep = zoom >= 10 ? 1 : zoom >= 8 ? 2 : zoom >= 6 ? 6 : 12;
-    var barbStep = circleStep * 2;  // barbs at half the density of circles
+    var barbStep = zoom >= 10 ? 3 : circleStep * 2;  // reduce barb clutter at high zoom
 
     // Colored track segments (always full resolution)
     for (var i = 1; i < obs.length; i++) {
@@ -10066,12 +10067,21 @@ function _gaFLInjectLegend() {
     if (!el) return;
     var cb = _GA_FL_COLORBARS[_gaFLColorVar];
     if (!cb) return;
-    var html = '<div style="display:flex;align-items:center;gap:6px;font-size:9px;color:#94a3b8;">';
-    cb.stops.forEach(function (s) {
-        html += '<span style="width:10px;height:10px;border-radius:50%;background:' + s.color + ';display:inline-block;"></span>';
-        html += (s.lbl || s.val);
+
+    // Build a horizontal gradient colorbar with tick labels
+    var stops = cb.stops;
+    var gradStops = stops.map(function (s, i) {
+        return s.color + ' ' + Math.round(i / (stops.length - 1) * 100) + '%';
+    }).join(', ');
+
+    var html = '<div style="margin-top:2px;">' +
+        '<div style="height:12px;border-radius:3px;background:linear-gradient(to right,' + gradStops + ');border:1px solid rgba(255,255,255,0.1);"></div>' +
+        '<div style="display:flex;justify-content:space-between;font-size:8px;color:#94a3b8;margin-top:1px;">';
+    stops.forEach(function (s) {
+        html += '<span>' + (s.lbl || s.val) + '</span>';
     });
-    html += '<span style="margin-left:6px;color:#64748b;">' + cb.label + '</span></div>';
+    html += '</div>' +
+        '<div style="font-size:8px;color:#64748b;text-align:center;margin-top:1px;">' + cb.label + '</div></div>';
     el.innerHTML = html;
 }
 
@@ -10236,7 +10246,15 @@ function _gaSondeFetch(stormName, year, missionId, centerLat, centerLon) {
         .then(function (r) { return r.json(); })
         .then(function (json) {
             if (!json.success || !json.dropsondes || json.dropsondes.length === 0) {
-                _gaSondeHideUI();
+                // Show "no sondes" message instead of hiding completely
+                var el = document.getElementById('ga-sonde-info');
+                if (el) {
+                    el.style.display = '';
+                    var cnt = document.getElementById('ga-sonde-count');
+                    if (cnt) cnt.textContent = 'No sondes for this mission';
+                    var wrap = document.getElementById('ga-sonde-table-wrap');
+                    if (wrap) wrap.innerHTML = '';
+                }
                 return;
             }
             _gaSondeData = json.dropsondes;
@@ -10336,15 +10354,15 @@ function _gaSondeRenderTable() {
     var wrap = document.getElementById('ga-sonde-table-wrap');
     if (!wrap || !_gaSondeData) return;
 
-    var html = '<table style="width:100%;border-collapse:collapse;font-size:9px;font-family:\'JetBrains Mono\',monospace;">' +
+    var html = '<table style="width:100%;border-collapse:collapse;font-size:10px;font-family:\'JetBrains Mono\',monospace;">' +
         '<tr style="color:#6ee7b7;border-bottom:1px solid rgba(255,255,255,0.1);">' +
-        '<th style="padding:2px 4px;text-align:left;">#</th>' +
-        '<th style="padding:2px 4px;text-align:left;">Time</th>' +
-        '<th style="padding:2px 4px;text-align:right;">Vmax</th>' +
-        '<th style="padding:2px 4px;text-align:right;">WL150</th>' +
-        '<th style="padding:2px 4px;text-align:right;">Psfc</th>' +
-        '<th style="padding:2px 4px;text-align:center;">Sfc</th>' +
-        '<th style="padding:2px 4px;"></th></tr>';
+        '<th style="padding:3px 4px;text-align:left;">#</th>' +
+        '<th style="padding:3px 4px;text-align:left;">Time</th>' +
+        '<th style="padding:3px 4px;text-align:right;" title="Maximum wind speed in profile">Vmax</th>' +
+        '<th style="padding:3px 4px;text-align:right;" title="Mean wind in lowest 150m (Franklin et al. 2003)">WL150</th>' +
+        '<th style="padding:3px 4px;text-align:right;" title="Surface pressure (splash or hydrostatic)">Psfc</th>' +
+        '<th style="padding:3px 4px;text-align:center;" title="Reached surface?">Sfc</th>' +
+        '<th style="padding:3px 4px;"></th></tr>';
 
     for (var i = 0; i < _gaSondeData.length; i++) {
         var s = _gaSondeData[i];
@@ -10652,12 +10670,14 @@ window.gaFLOpenXSec = function () {
     _moveProfilePanelAboveSondes();
     var panel = document.getElementById('ga-sonde-skewt-panel');
     if (panel) panel.style.display = '';
+    _gaFLUpdatePanelButtons('ga-fl-btn-xsec');
     gaSondeSetView('xsec');
 };
 window.gaFLOpenRadial = function () {
     _moveProfilePanelAboveSondes();
     var panel = document.getElementById('ga-sonde-skewt-panel');
     if (panel) panel.style.display = '';
+    _gaFLUpdatePanelButtons('ga-fl-btn-radial');
     gaSondeSetView('radial');
 };
 
@@ -11350,10 +11370,18 @@ var _GA_FL_RES_STYLE = {
 
 var _gaFLVarsVisible = { 'fl_wspd_ms': true, 'static_pres_hpa': true, 'temp_c': false, 'dewpoint_c': false, 'theta_e': false, 'gps_alt_m': false, 'sfcpr_hpa': false, 'vert_vel_ms': false };
 
+function _gaFLUpdatePanelButtons(activeId) {
+    ['ga-fl-btn-ts', 'ga-fl-btn-xsec', 'ga-fl-btn-radial'].forEach(function (id) {
+        var b = document.getElementById(id);
+        if (b) b.classList.toggle('active', id === activeId);
+    });
+}
+
 window.gaFLOpenTimeSeries = function () {
     var panel = document.getElementById('ga-fl-ts-panel');
     if (!panel) return;
     _gaFLTSOpen = true;
+    _gaFLUpdatePanelButtons('ga-fl-btn-ts');
     panel.style.display = '';
     // Move panel to the top of the left panel (above intensity timeline)
     var anchor = document.getElementById('ga-fl-ts-top-anchor');
@@ -11369,6 +11397,7 @@ window.gaFLCloseTimeSeries = function () {
     if (!panel) return;
     panel.style.display = 'none';
     _gaFLTSOpen = false;
+    _gaFLUpdatePanelButtons(null);
     // Move panel back to right panel (after fl-controls)
     var flControls = document.getElementById('ga-fl-controls');
     if (flControls && panel.parentNode !== flControls.parentNode) {
@@ -11408,6 +11437,7 @@ function _gaFLPopulateVarToggles() {
         btn.style.cssText = 'font-size:9px;border-color:' + cfg.color + ';color:' + cfg.color + ';' +
             (active ? 'background:' + cfg.color + '22;' : '');
         btn.textContent = cfg.btn;
+        btn.title = cfg.label + ' (' + cfg.units + ')';
         btn.onclick = function () {
             _gaFLVarsVisible[key] = !_gaFLVarsVisible[key];
             btn.classList.toggle('active', _gaFLVarsVisible[key]);
