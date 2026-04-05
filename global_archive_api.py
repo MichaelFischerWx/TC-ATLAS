@@ -4425,17 +4425,22 @@ def get_fl_data(
         if avg_dt > 5:  # > 5s average spacing means not 1-second data
             has_1s = False
 
-    # Summary
-    wspds = [o["fl_wspd_ms"] for o in observations if o.get("fl_wspd_ms") is not None]
-    # Use extrapolated surface pressure (sfcpr_hpa) for min P, not flight-level
-    # static pressure which reflects altitude, not storm intensity.
-    sfcprs = [o["sfcpr_hpa"] for o in observations
-              if o.get("sfcpr_hpa") is not None and 850 <= o["sfcpr_hpa"] <= 1100]
+    # Summary — compute from both 1s and 10s for operational consistency
+    wspds_1s = [o["fl_wspd_ms"] for o in observations if o.get("fl_wspd_ms") is not None]
+    sfcprs_1s = [o["sfcpr_hpa"] for o in observations
+                 if o.get("sfcpr_hpa") is not None and 850 <= o["sfcpr_hpa"] <= 1100]
+    wspds_10s = [o["fl_wspd_ms"] for o in obs_10s if o.get("fl_wspd_ms") is not None]
+    sfcprs_10s = [o["sfcpr_hpa"] for o in obs_10s
+                  if o.get("sfcpr_hpa") is not None and 850 <= o["sfcpr_hpa"] <= 1100]
     alts = [o["gps_alt_m"] for o in observations if o.get("gps_alt_m") is not None]
 
     summary = {
-        "max_fl_wspd_ms": round(max(wspds), 1) if wspds else None,
-        "min_sfcpr_hpa": round(min(sfcprs), 1) if sfcprs else None,
+        # 10-second values (operational standard)
+        "max_fl_wspd_ms": round(max(wspds_10s), 1) if wspds_10s else None,
+        "min_sfcpr_hpa": round(min(sfcprs_10s), 1) if sfcprs_10s else None,
+        # 1-second peak values
+        "max_fl_wspd_ms_1s": round(max(wspds_1s), 1) if wspds_1s else None,
+        "min_sfcpr_hpa_1s": round(min(sfcprs_1s), 1) if sfcprs_1s else None,
         "total_obs_1hz": len(observations),
         "mean_alt_m": round(sum(alts) / len(alts), 0) if alts else None,
         "start_time": observations[0]["time"] if observations else None,

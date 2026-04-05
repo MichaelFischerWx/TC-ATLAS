@@ -9728,9 +9728,17 @@ function _gaFLLoadMissionData(fileUrl) {
             if (status) {
                 var summ = json.summary || {};
                 var parts = [json.n_obs_raw + ' obs'];
+                // 10-second values (operational standard)
                 if (summ.max_fl_wspd_ms != null && summ.max_fl_wspd_ms <= 120) parts.push('Max: ' + Math.round(summ.max_fl_wspd_ms * 1.944) + ' kt');
                 var minP = summ.min_sfcpr_hpa != null ? summ.min_sfcpr_hpa : summ.min_static_pres_hpa;
                 if (minP != null && minP >= 850) parts.push('Min P: ' + minP + ' hPa');
+                // 1-second peak values (if different from 10s)
+                var max1s = summ.max_fl_wspd_ms_1s;
+                var maxKt10 = summ.max_fl_wspd_ms != null ? Math.round(summ.max_fl_wspd_ms * 1.944) : null;
+                var maxKt1s = max1s != null && max1s <= 120 ? Math.round(max1s * 1.944) : null;
+                if (maxKt1s != null && maxKt10 != null && maxKt1s > maxKt10) {
+                    parts.push('(1s: ' + maxKt1s + ' kt)');
+                }
                 status.textContent = parts.join(' \u00b7 ');
             }
 
