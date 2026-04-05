@@ -1399,21 +1399,10 @@ function renderStormDetail(storm) {
         fdeckToggleWrap.style.display = 'none';
     }
 
-    // VDM toggle — show for storms with recon data (1989+, NA/EP with ATCF ID)
-    var vdmToggleWrap = document.getElementById('vdm-toggle-wrap');
-    vdmVisible = false;
+    // Reset VDM state on storm change
     vdmData = null;
     vdmLoaded = false;
-    vdmTraceCount = 0;
     vdmMapLayers = [];
-    if (hasNHCFDeck && storm.year >= 1989) {
-        vdmToggleWrap.style.display = '';
-        document.getElementById('vdm-toggle-btn').textContent = '✈ VDM';
-        document.getElementById('vdm-toggle-btn').classList.remove('active');
-        document.getElementById('vdm-status').textContent = '';
-    } else {
-        vdmToggleWrap.style.display = 'none';
-    }
 
     // IR overlay — show toggle for storms with IR data (HURSAT 1978-2015, MergIR 1998+)
     var irToggleWrap = document.getElementById('ir-toggle-wrap');
@@ -1796,12 +1785,10 @@ function removeFDeckTraces() {
     var chartEl = document.getElementById('timeline-chart');
     if (!chartEl || !chartEl.data || fdeckTraceCount === 0) return;
 
-    // F-deck traces are always the last N traces added (before VDM traces)
-    // We need to account for VDM traces that may be on top
+    // F-deck traces are always the last N traces added
     var totalTraces = chartEl.data.length;
-    var offset = vdmTraceCount || 0;
     var indices = [];
-    for (var i = totalTraces - offset - fdeckTraceCount; i < totalTraces - offset; i++) {
+    for (var i = totalTraces - fdeckTraceCount; i < totalTraces; i++) {
         indices.push(i);
     }
     Plotly.deleteTraces(chartEl, indices);
@@ -1809,225 +1796,105 @@ function removeFDeckTraces() {
 }
 
 
-// ── Vortex Data Messages (VDM) ─────────────────────────────────
+// ── Vortex Data Messages (VDM) — auto-loaded with recon ────────
 
-var vdmVisible = false;
 var vdmData = null;
 var vdmLoaded = false;
-var vdmTraceCount = 0;
 var vdmMapLayers = [];
 
-window.toggleVDM = function () {
-    if (!selectedStorm) return;
+function _vdmFetch() {
+    if (!selectedStorm || vdmLoaded) return;
 
-    if (!vdmLoaded) {
-        var btn = document.getElementById('vdm-toggle-btn');
-        var status = document.getElementById('vdm-status');
-        btn.textContent = 'Loading...';
-        btn.disabled = true;
-        status.textContent = '';
-
-        // Get storm date range from track
-        var track = allTracks[selectedStorm.sid] || [];
-        var startDate = '', endDate = '';
-        if (track.length > 0) {
-            startDate = track[0].t.substring(0, 10);
-            endDate = track[track.length - 1].t.substring(0, 10);
-        }
-
-        var url = API_BASE + '/global/vdm?storm_name=' + encodeURIComponent(selectedStorm.name) +
-            '&year=' + selectedStorm.year;
-        if (selectedStorm.atcf_id) url += '&atcf_id=' + encodeURIComponent(selectedStorm.atcf_id);
-        if (startDate) url += '&start_date=' + startDate + '&end_date=' + endDate;
-
-        fetch(url)
-            .then(function (resp) {
-                if (!resp.ok) throw new Error('VDM not available (' + resp.status + ')');
-                return resp.json();
-            })
-            .then(function (data) {
-                vdmData = data.vdms || [];
-                vdmLoaded = true;
-                vdmVisible = true;
-                btn.textContent = 'Hide VDM';
-                btn.classList.add('active');
-                btn.disabled = false;
-                status.textContent = vdmData.length + ' fixes';
-                addVDMTraces();
-                addVDMMapMarkers();
-            })
-            .catch(function (err) {
-                btn.textContent = '✈ VDM';
-                btn.disabled = false;
-                status.textContent = 'Not available';
-                status.style.color = '#f87171';
-                console.warn('VDM fetch failed:', err);
-            });
-        return;
+    var track = allTracks[selectedStorm.sid] || [];
+    var startDate = '', endDate = '';
+    if (track.length > 0) {
+        startDate = track[0].t.substring(0, 10);
+        endDate = track[track.length - 1].t.substring(0, 10);
     }
 
-    vdmVisible = !vdmVisible;
-    var btn = document.getElementById('vdm-toggle-btn');
-    if (vdmVisible) {
-        btn.textContent = 'Hide VDM';
-        btn.classList.add('active');
-        addVDMTraces();
-        addVDMMapMarkers();
-    } else {
-        btn.textContent = '✈ VDM';
-        btn.classList.remove('active');
-        removeVDMTraces();
-        removeVDMMapMarkers();
-    }
-};
+    var url = API_BASE + '/global/vdm?storm_name=' + encodeURIComponent(selectedStorm.name) +
+        '&year=' + selectedStorm.year;
+    if (selectedStorm.atcf_id) url += '&atcf_id=' + encodeURIComponent(selectedStorm.atcf_id);
+    if (startDate) url += '&start_date=' + startDate + '&end_date=' + endDate;
 
-function addVDMTraces() {
-    var chartEl = document.getElementById('timeline-chart');
-    if (!chartEl || !chartEl.data || !vdmData || vdmData.length === 0) return;
-    removeVDMTraces();
-
-    var windTimes = [], windVals = [], windHovers = [];
-    var presTimes = [], presVals = [], presHovers = [];
-
-    vdmData.forEach(function (v) {
-        var hoverBase = '<b>VDM — ' + (v.storm_name || '') + ' OB ' + (v.ob_number || '?') + '</b><br>' +
-            v.time + '<br>' +
-            (v.aircraft || '') + ' ' + (v.mission_id || '') + '<br>';
-
-        // Max FL wind trace
-        if (v.max_fl_wind_kt != null) {
-            windTimes.push(v.time);
-            windVals.push(v.max_fl_wind_kt);
-            var wh = hoverBase +
-                'Max FL Wind: ' + v.max_fl_wind_kt + ' kt';
-            if (v.max_outbound_fl_wind_kt != null) wh += '<br>Max Outbound: ' + v.max_outbound_fl_wind_kt + ' kt';
-            if (v.max_sfmr_kt != null) wh += '<br>SFMR Sfc: ' + v.max_sfmr_kt + ' kt';
-            if (v.cntr_sonde_wind_kt != null) wh += '<br>Cntr Sonde: ' + v.cntr_sonde_wind_kt + ' kt';
-            if (v.eye_diameter_nm != null) wh += '<br>Eye: ' + v.eye_diameter_nm + ' nm ' + (v.eye_shape || '');
-            windHovers.push(wh);
-        }
-
-        // Min SLP trace
-        if (v.min_slp_hpa != null && v.min_slp_hpa >= 850 && v.min_slp_hpa <= 1050) {
-            presTimes.push(v.time);
-            presVals.push(v.min_slp_hpa);
-            var ph = hoverBase +
-                'Min SLP: ' + v.min_slp_hpa + ' hPa';
-            if (v.eye_temp_c != null) ph += '<br>Eye Temp: ' + v.eye_temp_c + '°C';
-            if (v.eyewall_temp_c != null) ph += '<br>Eyewall Temp: ' + v.eyewall_temp_c + '°C';
-            if (v.flight_level_mb != null) ph += '<br>Flight Level: ' + v.flight_level_mb + ' mb';
-            presHovers.push(ph);
-        }
-    });
-
-    var newTraces = [];
-
-    if (windTimes.length > 0) {
-        newTraces.push({
-            x: windTimes, y: windVals,
-            type: 'scatter', mode: 'markers',
-            name: 'VDM FL Wind',
-            marker: { color: '#ef4444', symbol: 'star', size: 10,
-                      line: { color: 'rgba(255,255,255,0.7)', width: 1.5 } },
-            hovertemplate: '%{text}<extra></extra>',
-            text: windHovers,
-            yaxis: 'y'
-        });
-    }
-
-    if (presTimes.length > 0) {
-        newTraces.push({
-            x: presTimes, y: presVals,
-            type: 'scatter', mode: 'markers',
-            name: 'VDM Min SLP',
-            marker: { color: '#dc2626', symbol: 'star', size: 10,
-                      line: { color: 'rgba(255,255,255,0.7)', width: 1.5 } },
-            hovertemplate: '%{text}<extra></extra>',
-            text: presHovers,
-            yaxis: 'y2'
-        });
-    }
-
-    if (newTraces.length > 0) {
-        Plotly.addTraces(chartEl, newTraces);
-        vdmTraceCount = newTraces.length;
-    }
+    fetch(url)
+        .then(function (r) { return r.json(); })
+        .then(function (json) {
+            if (!json.success || !json.vdms || json.vdms.length === 0) return;
+            vdmData = json.vdms;
+            vdmLoaded = true;
+            _vdmRenderOnMap();
+            // If FL time series is open, re-render to include VDM markers
+            if (_gaFLTSOpen) _gaFLRenderTimeSeries();
+        })
+        .catch(function () {});
 }
 
-function removeVDMTraces() {
-    var chartEl = document.getElementById('timeline-chart');
-    if (!chartEl || !chartEl.data || vdmTraceCount === 0) return;
-    var totalTraces = chartEl.data.length;
-    var indices = [];
-    for (var i = totalTraces - vdmTraceCount; i < totalTraces; i++) {
-        indices.push(i);
-    }
-    Plotly.deleteTraces(chartEl, indices);
-    vdmTraceCount = 0;
+function _vdmReset() {
+    _vdmRemoveFromMap();
+    vdmData = null;
+    vdmLoaded = false;
 }
 
-function addVDMMapMarkers() {
-    removeVDMMapMarkers();
+function _vdmRemoveFromMap() {
+    for (var i = 0; i < vdmMapLayers.length; i++) {
+        if (detailMap) detailMap.removeLayer(vdmMapLayers[i]);
+    }
+    vdmMapLayers = [];
+}
+
+function _vdmRenderOnMap() {
+    _vdmRemoveFromMap();
     if (!detailMap || !vdmData || vdmData.length === 0) return;
 
     vdmData.forEach(function (v) {
         if (v.lat == null || v.lon == null) return;
 
-        // Color by max FL wind
-        var color = '#ef4444';
-        if (v.max_fl_wind_kt != null) {
-            var kt = v.max_fl_wind_kt;
-            if (kt < 64) color = '#60a5fa';
-            else if (kt < 83) color = '#fbbf24';
-            else if (kt < 96) color = '#fb923c';
-            else if (kt < 113) color = '#f87171';
-            else if (kt < 137) color = '#dc2626';
-            else color = '#7f1d1d';
-        }
-
-        // Center fix marker
         var tip = '<b>VDM — ' + (v.storm_name || '') + ' OB ' + (v.ob_number || '?') + '</b><br>' +
             v.time + '<br>' +
             (v.aircraft || '') + ' ' + (v.mission_id || '') + '<br>' +
             (v.max_fl_wind_kt != null ? 'Max FL: ' + v.max_fl_wind_kt + ' kt<br>' : '') +
             (v.min_slp_hpa != null ? 'Min SLP: ' + v.min_slp_hpa + ' hPa<br>' : '') +
             (v.eye_diameter_nm != null ? 'Eye: ' + v.eye_diameter_nm + ' nm ' + (v.eye_shape || '') + '<br>' : '') +
-            (v.max_sfmr_kt != null ? 'SFMR Sfc: ' + v.max_sfmr_kt + ' kt' : '');
+            (v.max_sfmr_kt != null ? 'SFMR Sfc: ' + v.max_sfmr_kt + ' kt<br>' : '') +
+            (v.cntr_sonde_wind_kt != null ? 'Cntr Sonde: ' + v.cntr_sonde_wind_kt + ' kt' : '');
 
-        var marker = L.circleMarker([v.lat, v.lon], {
-            radius: 6, fillColor: color, fillOpacity: 0.9,
-            color: '#fff', weight: 1.5, opacity: 0.9,
-            pane: 'markerPane'
-        }).bindTooltip(tip, { sticky: true, className: 'ga-fl-tooltip' });
+        // Distinctive crosshair marker for VDM center fixes
+        var icon = L.divIcon({
+            className: '',
+            iconSize: [18, 18],
+            iconAnchor: [9, 9],
+            html: '<svg width="18" height="18" viewBox="0 0 18 18">' +
+                '<circle cx="9" cy="9" r="6" fill="none" stroke="#ef4444" stroke-width="2" opacity="0.9"/>' +
+                '<line x1="9" y1="1" x2="9" y2="5" stroke="#ef4444" stroke-width="1.5" opacity="0.8"/>' +
+                '<line x1="9" y1="13" x2="9" y2="17" stroke="#ef4444" stroke-width="1.5" opacity="0.8"/>' +
+                '<line x1="1" y1="9" x2="5" y2="9" stroke="#ef4444" stroke-width="1.5" opacity="0.8"/>' +
+                '<line x1="13" y1="9" x2="17" y2="9" stroke="#ef4444" stroke-width="1.5" opacity="0.8"/>' +
+                '<circle cx="9" cy="9" r="2" fill="#ef4444" opacity="0.9"/>' +
+                '</svg>'
+        });
 
-        // Click: sync IR to this VDM time
+        var marker = L.marker([v.lat, v.lon], { icon: icon, pane: 'markerPane' })
+            .bindTooltip(tip, { sticky: true, className: 'ga-fl-tooltip' });
         marker.on('click', function () {
             if (typeof syncIRToTime === 'function') syncIRToTime(v.time);
         });
-
         detailMap.addLayer(marker);
         vdmMapLayers.push(marker);
 
-        // Eye diameter circle (if available)
+        // Eye diameter circle
         if (v.eye_diameter_nm != null && v.eye_diameter_nm > 0) {
-            var radiusKm = v.eye_diameter_nm * 1.852 / 2;  // diameter → radius, nm → km
+            var radiusKm = v.eye_diameter_nm * 1.852 / 2;
             var eyeCircle = L.circle([v.lat, v.lon], {
-                radius: radiusKm * 1000,  // meters
-                color: color, weight: 1.5, opacity: 0.5,
-                fillColor: color, fillOpacity: 0.08,
+                radius: radiusKm * 1000,
+                color: '#ef4444', weight: 1.5, opacity: 0.4,
+                fillColor: '#ef4444', fillOpacity: 0.06,
                 interactive: false, pane: 'overlayPane'
             });
             detailMap.addLayer(eyeCircle);
             vdmMapLayers.push(eyeCircle);
         }
     });
-}
-
-function removeVDMMapMarkers() {
-    for (var i = 0; i < vdmMapLayers.length; i++) {
-        if (detailMap) detailMap.removeLayer(vdmMapLayers[i]);
-    }
-    vdmMapLayers = [];
 }
 
 
@@ -10435,20 +10302,22 @@ var _origGaFLLoadMissionData = _gaFLLoadMissionData;
 var _origGaFLRenderOnMap = _gaFLRenderOnMap;
 _gaFLRenderOnMap = function () {
     _origGaFLRenderOnMap();
-    // After FL renders on map, auto-fetch sondes for the same mission
+    // After FL renders on map, auto-fetch sondes and VDMs for the same mission
     if (_gaFLData && selectedStorm) {
         var missionId = _gaFLData.mission_id || '';
         var centerLat = selectedStorm.lmi_lat || selectedStorm.genesis_lat || 0;
         var centerLon = selectedStorm.lmi_lon || selectedStorm.genesis_lon || 0;
         _gaSondeFetch(selectedStorm.name, selectedStorm.year, missionId, centerLat, centerLon);
+        _vdmFetch();
     }
 };
 
-// Clean up sondes on FL reset
+// Clean up sondes and VDMs on FL reset
 var _origGaFLReset = _gaFLReset;
 _gaFLReset = function () {
     _gaSondeHideUI();
     _gaSondeRemoveFromMap();
+    _vdmReset();
     _origGaFLReset();
 };
 window._gaFLReset = _gaFLReset;
@@ -10646,6 +10515,67 @@ function _gaFLRenderTimeSeries() {
     }
     if (_gaFLVarsVisible['sfcpr_hpa']) {
         layout.yaxis5.visible = true;
+    }
+
+    // Add VDM markers to the time series if available
+    if (vdmData && vdmData.length > 0 && _gaFLData && _gaFLData.mission_id) {
+        // Get mission date to filter VDMs to this mission's day
+        var missionDate = '';
+        if (_gaFLMissions) {
+            var sel = document.getElementById('ga-fl-mission-select');
+            if (sel && _gaFLMissions[sel.selectedIndex]) {
+                missionDate = _gaFLMissions[sel.selectedIndex].datetime; // "YYYY-MM-DD"
+            }
+        }
+
+        var vdmTimes = [], vdmWinds = [], vdmPres = [], vdmHovers = [], vdmPresHovers = [];
+        vdmData.forEach(function (v) {
+            if (!v.time) return;
+            // Filter to VDMs on the same day as the mission
+            if (missionDate && v.time.substring(0, 10) !== missionDate) return;
+            var tHHMM = v.time.substring(11, 16); // "HH:MM" from ISO
+            var hoverBase = '<b>VDM OB ' + (v.ob_number || '?') + '</b><br>' +
+                (v.aircraft || '') + ' ' + (v.mission_id || '') + '<br>';
+
+            if (v.max_fl_wind_kt != null && _gaFLVarsVisible['fl_wspd_ms']) {
+                vdmTimes.push(tHHMM);
+                vdmWinds.push(v.max_fl_wind_kt);
+                var wh = hoverBase + 'Max FL: ' + v.max_fl_wind_kt + ' kt';
+                if (v.min_slp_hpa != null) wh += '<br>Min SLP: ' + v.min_slp_hpa + ' hPa';
+                if (v.eye_diameter_nm != null) wh += '<br>Eye: ' + v.eye_diameter_nm + ' nm';
+                vdmHovers.push(wh);
+            }
+            if (v.min_slp_hpa != null && v.min_slp_hpa >= 850 && _gaFLVarsVisible['static_pres_hpa']) {
+                vdmPres.push({ t: tHHMM, p: v.min_slp_hpa,
+                    h: hoverBase + 'Min SLP: ' + v.min_slp_hpa + ' hPa' });
+            }
+        });
+
+        if (vdmTimes.length > 0) {
+            traces.push({
+                x: vdmTimes, y: vdmWinds,
+                type: 'scatter', mode: 'markers',
+                name: 'VDM Fix',
+                marker: { color: '#ef4444', symbol: 'star-diamond', size: 12,
+                          line: { color: '#fff', width: 1.5 } },
+                hovertemplate: '%{text}<extra></extra>',
+                text: vdmHovers,
+                yaxis: 'y', showlegend: true,
+            });
+        }
+        if (vdmPres.length > 0) {
+            traces.push({
+                x: vdmPres.map(function (p) { return p.t; }),
+                y: vdmPres.map(function (p) { return p.p; }),
+                type: 'scatter', mode: 'markers',
+                name: 'VDM SLP',
+                marker: { color: '#dc2626', symbol: 'star-diamond', size: 12,
+                          line: { color: '#fff', width: 1.5 } },
+                hovertemplate: '%{text}<extra></extra>',
+                text: vdmPres.map(function (p) { return p.h; }),
+                yaxis: 'y2', showlegend: false,
+            });
+        }
     }
 
     Plotly.newPlot('ga-fl-ts-chart', traces, layout, { responsive: true, displayModeBar: true, displaylogo: false });
