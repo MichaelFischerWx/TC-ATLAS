@@ -10701,7 +10701,7 @@ var _GA_FL_TS_CONFIG = {
     'dewpoint_c':      { label: 'Dewpoint',          btn: 'Td',    units: '\u00b0C', color: '#a78bfa', yaxis: 'y3' },
     'theta_e':         { label: 'Theta-E',           btn: '\u03b8e', units: 'K',   color: '#e879f9', yaxis: 'y3' },
     'gps_alt_m':       { label: 'GPS Altitude',      btn: 'Alt',   units: 'm',   color: '#6b7280', yaxis: 'y4' },
-    'vert_vel_ms':     { label: 'Vertical Velocity', btn: 'W',     units: 'm/s', color: '#38bdf8', yaxis: 'y6' },
+    'vert_vel_ms':     { label: 'Vertical Velocity', btn: 'W',     units: 'm/s', color: '#a3e635', yaxis: 'y6' },
 };
 
 var _GA_FL_RES_STYLE = {
@@ -10876,10 +10876,10 @@ function _gaFLRenderTimeSeries() {
             anchor: 'free', position: 0.95,
         },
         yaxis6: {
-            title: 'W (m/s)', titlefont: { color: '#38bdf8' },
-            tickfont: { color: '#38bdf8' }, overlaying: 'y', side: 'left',
-            showgrid: false, visible: false, anchor: 'free', position: 0,
-            zeroline: true, zerolinecolor: 'rgba(255,255,255,0.15)',
+            title: 'W (m/s)', titlefont: { color: '#a3e635' },
+            tickfont: { color: '#a3e635', size: 8 }, overlaying: 'y', side: 'right',
+            showgrid: false, visible: false, anchor: 'free', position: 0.92,
+            zeroline: true, zerolinecolor: 'rgba(163,230,53,0.2)',
         },
     };
 
