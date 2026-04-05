@@ -9747,6 +9747,22 @@ function _gaFLApplyData(json) {
     _gaFLData10s = json.obs_10s || json.observations;
     _gaFLData30s = json.obs_30s;
 
+    // QC: if >10% of W values exceed ±30 m/s, the column is unreliable — null it out
+    var datasets = [_gaFLData1s, _gaFLData10s, _gaFLData30s];
+    var wTotal = 0, wBad = 0;
+    if (_gaFLData10s) {
+        for (var qi = 0; qi < _gaFLData10s.length; qi++) {
+            var wv = _gaFLData10s[qi].vert_vel_ms;
+            if (wv != null) { wTotal++; if (Math.abs(wv) > 30) wBad++; }
+        }
+    }
+    if (wTotal > 0 && wBad / wTotal > 0.1) {
+        datasets.forEach(function (ds) {
+            if (!ds) return;
+            for (var qi = 0; qi < ds.length; qi++) ds[qi].vert_vel_ms = null;
+        });
+    }
+
     var res1sBtn = document.getElementById('ga-fl-res-1s');
     if (res1sBtn) {
         res1sBtn.style.display = json.has_1s ? '' : 'none';
@@ -10863,6 +10879,7 @@ function _gaFLRenderTimeSeries() {
                 if (varKey === 'fl_wspd_ms' && (val < 0 || val > 150)) continue;
                 if (varKey === 'temp_c' && (val < -90 || val > 60)) continue;
                 if (varKey === 'gps_alt_m' && (val < -100 || val > 25000)) continue;
+                if (varKey === 'vert_vel_ms' && (val < -30 || val > 30)) continue;
                 val = val * scaleFactor;
                 var xVal;
                 if (_gaFLXAxisMode === 'radius' && o.r_km != null) {
