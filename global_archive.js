@@ -9835,6 +9835,10 @@ function _gaFLLoadMissionData(fileUrl) {
 
             // Background: fetch 1s data and merge in
             if (json.has_1s && (!json.obs_1s || json.obs_1s.length === 0)) {
+                // Show 1s button immediately with loading indicator
+                var btn1s = document.getElementById('ga-fl-res-1s');
+                if (btn1s) { btn1s.style.display = ''; btn1s.style.opacity = '0.5'; }
+
                 fetch(baseUrl + '&include_1s=true')
                     .then(function (r2) { return r2.json(); })
                     .then(function (json1s) {
@@ -9842,12 +9846,14 @@ function _gaFLLoadMissionData(fileUrl) {
                             json.obs_1s = json1s.obs_1s;
                             _gaFLData1s = json1s.obs_1s;
                             _gaFLClientCache[fileUrl] = json;
-                            // Show 1s button now that data is available
-                            var btn1s = document.getElementById('ga-fl-res-1s');
-                            if (btn1s) btn1s.style.display = '';
+                            if (btn1s) btn1s.style.opacity = '1';
+                            // Re-render time series if 1s is toggled on
+                            if (_gaFLResVisible['1s'] && _gaFLTSOpen) _gaFLRenderTimeSeries();
                         }
                     })
-                    .catch(function () {});  // silent failure for background fetch
+                    .catch(function () {
+                        if (btn1s) btn1s.style.opacity = '1';
+                    });
             }
         })
         .catch(function (e) {
