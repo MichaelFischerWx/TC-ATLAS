@@ -10536,6 +10536,15 @@ function _gaSondePlanViewRemove() {
 
 function _gaSondePlanViewRender() {
     _gaSondePlanViewRemove();
+
+    // Hide FL track when plan view is active, show when off
+    _gaFLMapLayers.forEach(function (layer) {
+        if (detailMap) {
+            if (_gaSondePlanVar) detailMap.removeLayer(layer);
+            else detailMap.addLayer(layer);
+        }
+    });
+
     if (!_gaSondePlanVar || !_gaSondeData || !detailMap) return;
 
     var targetP = _gaSondePlanLevel;
@@ -10546,7 +10555,6 @@ function _gaSondePlanViewRender() {
         var prof = s.profile;
         if (!prof || !prof.pres || prof.pres.length === 0) return;
 
-        // Find nearest pressure level
         var bestIdx = -1, bestDist = Infinity;
         for (var i = 0; i < prof.pres.length; i++) {
             if (prof.pres[i] == null) continue;
@@ -10574,24 +10582,10 @@ function _gaSondePlanViewRender() {
             radius: 8, fillColor: color, fillOpacity: 0.95,
             color: '#fff', weight: 2, opacity: 1,
             pane: 'markerPane'
-        }).bindTooltip(tip, { permanent: true, direction: 'top', offset: [0, -10],
-                             className: 'ga-fl-tooltip',
-                             style: 'font-size:10px;font-weight:600;' });
-
-        // Show value as permanent label
-        var labelIcon = L.divIcon({
-            className: '',
-            iconSize: [40, 14],
-            iconAnchor: [20, -6],
-            html: '<div style="font-size:10px;font-weight:700;color:#fff;text-shadow:0 0 4px #000,0 0 2px #000;text-align:center;white-space:nowrap;">' +
-                _sondePlanViewFormat(varName, val) + '</div>'
-        });
-        var label = L.marker([lat, lon], { icon: labelIcon, interactive: false, pane: 'tooltipPane' });
+        }).bindTooltip(tip, { sticky: true, className: 'ga-fl-tooltip' });
 
         marker.addTo(detailMap);
-        label.addTo(detailMap);
         _gaSondePlanLayers.push(marker);
-        _gaSondePlanLayers.push(label);
     });
 }
 

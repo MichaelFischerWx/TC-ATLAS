@@ -4047,8 +4047,10 @@ def _load_fl_helpers():
 _AIRCRAFT_NAMES = {
     "H": "NOAA N42RF (P-3)",
     "I": "NOAA N43RF (P-3)",
+    "N": "NOAA (G-IV)",
     "L": "NOAA (G-IV)",
     "U": "USAF (WC-130J)",
+    "A": "AFRES (WC-130J)",
 }
 
 # Mission discovery cache — archive directory listings are quasi-static;
