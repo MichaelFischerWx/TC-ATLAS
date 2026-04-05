@@ -4592,46 +4592,43 @@ def get_global_dropsondes(
         raise HTTPException(503, f"Dropsonde helpers not available: {e}")
 
     # Resolve storm → HRD archive path
-    season_dir = _resolve_hurr_season(year)
-    if not season_dir:
+    # Search both HURR{YY} (NOAA) and AFRES{YY} (USAF) directories
+    yy = f"{year % 100:02d}"
+    season_candidates = [f"HURR{yy}", f"AFRES{yy}"]
+    operproc_urls = []
+    for season_dir in season_candidates:
+        storm_url = _resolve_sonde_storm_dir(season_dir, storm_name)
+        if storm_url:
+            operproc_urls.append(storm_url + "/operproc/")
+
+    if not operproc_urls:
         return {"success": True, "dropsondes": [], "n_sondes": 0,
                 "message": "No dropsonde archive for this year"}
+    # Collect FRD tarballs from all archive directories (HURR + AFRES)
+    import re as _re
+    all_tarballs = []  # list of (operproc_url, tarball_name)
+    for operproc_url in operproc_urls:
+        try:
+            entries = _hrd_parse_directory(operproc_url)
+        except Exception:
+            continue
+        frd_tarballs = [e for e in entries
+                        if e.lower().endswith(('.tar.gz', '.tgz'))
+                        and ('frd' in e.lower() or 'FRD' in e)]
+        if mission_id:
+            mid_prefix = _re.sub(r'\d+$', '', mission_id).upper()
+            frd_tarballs = [t for t in frd_tarballs if mid_prefix in t.upper()]
+        for t in frd_tarballs:
+            all_tarballs.append((operproc_url, t))
 
-    storm_url = _resolve_sonde_storm_dir(season_dir, storm_name)
-    if not storm_url:
-        return {"success": True, "dropsondes": [], "n_sondes": 0,
-                "message": "No dropsonde data for this storm"}
-
-    # Find tarballs in operproc/
-    operproc_url = storm_url + "/operproc/"
-    try:
-        entries = _hrd_parse_directory(operproc_url)
-    except Exception:
-        return {"success": True, "dropsondes": [], "n_sondes": 0,
-                "message": "Could not list operproc directory"}
-
-    # Filter tarballs by mission_id if provided
-    # Only FRD tarballs contain parsed dropsonde profiles; skip BUFR, raw, etc.
-    tarballs = [e for e in entries
-                if e.lower().endswith(('.tar.gz', '.tgz'))
-                and ('frd' in e.lower() or 'FRD' in e)]
-    if mission_id:
-        # Match tarballs by date + aircraft letter.  Tarball names use a
-        # compact format like "20050823h.frd.tar.gz" while mission IDs are
-        # "20050823H1" (with sortie number).  Strip the trailing sortie digit(s)
-        # to produce the match prefix, e.g. "20050823H".
-        import re as _re
-        mid_prefix = _re.sub(r'\d+$', '', mission_id).upper()   # "20050823H1" → "20050823H"
-        tarballs = [t for t in tarballs if mid_prefix in t.upper()]
-
-    if not tarballs:
+    if not all_tarballs:
         return {"success": True, "dropsondes": [], "n_sondes": 0,
                 "message": "No dropsonde tarballs found" + (f" for mission {mission_id}" if mission_id else "")}
 
     # Fetch and parse all matching tarballs — use the same response builder
     # as TC-RADAR (_build_archive_sonde_response) for consistent output format
     all_sondes = []
-    for tarball in tarballs[:5]:  # Limit to 5 tarballs
+    for operproc_url, tarball in all_tarballs[:8]:  # Limit to 8 tarballs
         tarball_url = operproc_url + tarball
         try:
             frd_contents = _fetch_and_extract_frd_tarball(tarball_url)
