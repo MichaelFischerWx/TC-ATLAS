@@ -4893,13 +4893,18 @@ def get_vdm(
     vdms = []
 
     if year >= 2006:
-        # Modern format: REPNT2 directory
-        repnt2_url = f"{NHC_RECON_BASE}/{year}/REPNT2/"
+        # Modern format: REPNT2 (Atlantic) or REPPN2 (East/Central Pacific)
+        basin_prefix = "REPNT2"
+        if atcf_id and atcf_id.upper().startswith("EP"):
+            basin_prefix = "REPPN2"
+        elif atcf_id and atcf_id.upper().startswith("CP"):
+            basin_prefix = "REPPN2"  # Central Pacific also uses REPPN2
+        repnt2_url = f"{NHC_RECON_BASE}/{year}/{basin_prefix}/"
         try:
             entries = _hrd_parse_directory(repnt2_url)
         except Exception:
             return {"success": True, "vdms": [], "n_vdms": 0,
-                    "message": "Could not list REPNT2 directory"}
+                    "message": f"Could not list {basin_prefix} directory"}
 
         # Filter by date range from filenames (REPNT2-KNHC.YYYYMMDDHHmm.txt)
         import re

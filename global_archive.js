@@ -1879,6 +1879,8 @@ function _vdmRenderOnMap() {
         marker.on('click', function () {
             if (typeof syncIRToTime === 'function') syncIRToTime(v.time);
         });
+        marker.on('tooltipopen', function () { _gaFLTooltipOpen = true; });
+        marker.on('tooltipclose', function () { _gaFLTooltipOpen = false; });
         detailMap.addLayer(marker);
         vdmMapLayers.push(marker);
 
@@ -10056,6 +10058,15 @@ function _gaFLSyncFromFDeckClick(clickedTime) {
             if (delta < bestDelta) { bestDelta = delta; bestIdx = i; }
         }
 
+        // Only auto-select if closest mission is within 24 hours of the fix
+        var MAX_SYNC_DELTA_MS = 24 * 3600 * 1000;
+        if (bestDelta > MAX_SYNC_DELTA_MS) {
+            if (typeof showToast === 'function') {
+                showToast('No recon mission within 24h of ' + fixDate);
+            }
+            return;
+        }
+
         var select = document.getElementById('ga-fl-mission-select');
         if (select && select.selectedIndex !== bestIdx) {
             select.selectedIndex = bestIdx;
@@ -10684,6 +10695,7 @@ var _GA_FL_TS_CONFIG = {
     'dewpoint_c':      { label: 'Dewpoint',          btn: 'Td',    units: '\u00b0C', color: '#a78bfa', yaxis: 'y3' },
     'theta_e':         { label: 'Theta-E',           btn: '\u03b8e', units: 'K',   color: '#e879f9', yaxis: 'y3' },
     'gps_alt_m':       { label: 'GPS Altitude',      btn: 'Alt',   units: 'm',   color: '#6b7280', yaxis: 'y4' },
+    'vert_vel_ms':     { label: 'Vertical Velocity', btn: 'W',     units: 'm/s', color: '#38bdf8', yaxis: 'y6' },
 };
 
 var _GA_FL_RES_STYLE = {
@@ -10692,7 +10704,7 @@ var _GA_FL_RES_STYLE = {
     '30s': { opacity: 1.0, width: 2.5, color: null },
 };
 
-var _gaFLVarsVisible = { 'fl_wspd_ms': true, 'static_pres_hpa': true, 'temp_c': false, 'dewpoint_c': false, 'theta_e': false, 'gps_alt_m': false, 'sfcpr_hpa': false };
+var _gaFLVarsVisible = { 'fl_wspd_ms': true, 'static_pres_hpa': true, 'temp_c': false, 'dewpoint_c': false, 'theta_e': false, 'gps_alt_m': false, 'sfcpr_hpa': false, 'vert_vel_ms': false };
 
 window.gaFLOpenTimeSeries = function () {
     var panel = document.getElementById('ga-fl-ts-panel');
@@ -10857,6 +10869,12 @@ function _gaFLRenderTimeSeries() {
             autorange: 'reversed', showgrid: false, visible: false,
             anchor: 'free', position: 0.95,
         },
+        yaxis6: {
+            title: 'W (m/s)', titlefont: { color: '#38bdf8' },
+            tickfont: { color: '#38bdf8' }, overlaying: 'y', side: 'left',
+            showgrid: false, visible: false, anchor: 'free', position: 0,
+            zeroline: true, zerolinecolor: 'rgba(255,255,255,0.15)',
+        },
     };
 
     if (_gaFLVarsVisible['temp_c'] || _gaFLVarsVisible['dewpoint_c'] || _gaFLVarsVisible['theta_e']) {
@@ -10867,6 +10885,9 @@ function _gaFLRenderTimeSeries() {
     }
     if (_gaFLVarsVisible['sfcpr_hpa']) {
         layout.yaxis5.visible = true;
+    }
+    if (_gaFLVarsVisible['vert_vel_ms']) {
+        layout.yaxis6.visible = true;
     }
 
     // Add VDM min SLP markers on pressure axis (filtered to mission time window)
