@@ -4533,7 +4533,11 @@ def get_fl_data(
     result = {
         "success": True,
         "observations": obs_10s,  # Default resolution
-        "obs_1s": obs_1s if include_1s else [],
+        # Thin 1s data for very long flights to keep payload manageable
+        # (>20k obs → every 2nd, >40k → every 3rd)
+        "obs_1s": (obs_1s[::3] if len(obs_1s) > 40000 else
+                   obs_1s[::2] if len(obs_1s) > 20000 else
+                   obs_1s) if include_1s else [],
         "obs_10s": obs_10s,
         "obs_30s": obs_30s,
         "mission_id": mission_id,
