@@ -4971,8 +4971,8 @@ def get_vdm(
                 else:
                     continue  # can't resolve time → skip
 
-                # Clean up internal fields
-                for k in ("_day", "_hh", "_mm", "_ss", "raw_text"):
+                # Clean up internal fields (keep raw_text for display)
+                for k in ("_day", "_hh", "_mm", "_ss"):
                     vdm.pop(k, None)
                 vdms.append(vdm)
             except Exception as e:
@@ -5003,7 +5003,7 @@ def get_vdm(
                     iso_time = _resolve_vdm_time(vdm, year, start_date, end_date)
                     if iso_time:
                         vdm["time"] = iso_time
-                    for k in ("_day", "_hh", "_mm", "_ss", "raw_text"):
+                    for k in ("_day", "_hh", "_mm", "_ss"):
                         vdm.pop(k, None)
                     vdms.append(vdm)
                 except Exception as e:

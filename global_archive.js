@@ -1878,6 +1878,17 @@ function _vdmRenderOnMap() {
             .bindTooltip(tip, { sticky: true, className: 'ga-fl-tooltip' });
         marker.on('click', function () {
             if (typeof syncIRToTime === 'function') syncIRToTime(v.time);
+            // Show decoded VDM text in a popup
+            if (v.raw_text) {
+                var decoded = '<div style="font-family:\'JetBrains Mono\',monospace;font-size:10px;' +
+                    'white-space:pre-wrap;max-width:400px;max-height:300px;overflow-y:auto;' +
+                    'color:#e2e8f0;line-height:1.4;">' +
+                    v.raw_text.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</div>';
+                L.popup({ maxWidth: 420, className: 'ga-vdm-popup' })
+                    .setLatLng([v.lat, v.lon])
+                    .setContent(decoded)
+                    .openOn(detailMap);
+            }
         });
         marker.on('tooltipopen', function () { _gaFLTooltipOpen = true; });
         marker.on('tooltipclose', function () { _gaFLTooltipOpen = false; });
