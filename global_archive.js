@@ -10977,7 +10977,6 @@ function _gaFLRenderTimeSeries() {
         }
 
         var vdmPTimes = [], vdmPVals = [], vdmPHovers = [];
-        var vdmWTimes = [], vdmWVals = [], vdmWHovers = [];
         vdmData.forEach(function (v) {
             if (!v.time) return;
             // Must have at least SLP or wind to display
@@ -11013,11 +11012,6 @@ function _gaFLRenderTimeSeries() {
                 vdmPVals.push(v.min_slp_hpa);
                 vdmPHovers.push(hover);
             }
-            if (v.max_fl_wind_kt != null) {
-                vdmWTimes.push(tHHMM);
-                vdmWVals.push(v.max_fl_wind_kt);
-                vdmWHovers.push(hover);
-            }
         });
 
         if (vdmPTimes.length > 0) {
@@ -11029,19 +11023,7 @@ function _gaFLRenderTimeSeries() {
                           line: { color: '#fff', width: 1.5 } },
                 hovertemplate: '%{text}<extra></extra>',
                 text: vdmPHovers,
-                yaxis: 'y2', showlegend: false,
-            });
-        }
-        if (vdmWTimes.length > 0) {
-            traces.push({
-                x: vdmWTimes, y: vdmWVals,
-                type: 'scatter', mode: 'markers',
-                name: 'VDM Wind',
-                marker: { color: '#ef4444', symbol: 'star-diamond', size: 12,
-                          line: { color: '#fff', width: 1.5 } },
-                hovertemplate: '%{text}<extra></extra>',
-                text: vdmWHovers,
-                yaxis: 'y', showlegend: true,
+                yaxis: 'y2', showlegend: true,
             });
         }
     }
