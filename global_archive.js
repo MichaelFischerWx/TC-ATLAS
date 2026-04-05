@@ -9536,6 +9536,7 @@ function _gaFLReset() {
     _gaFLMissions = null;
     _gaFLFetching = false;
     _gaFLTSOpen = false;
+    _gaFLClientCache = {};
     if (_gaFLZoomHandler && detailMap) {
         detailMap.off('zoomend', _gaFLZoomHandler);
         _gaFLZoomHandler = null;
@@ -9703,8 +9704,56 @@ window.gaFLSelectMission = function () {
     }
 };
 
+var _gaFLClientCache = {};  // fileUrl → parsed JSON (browser-side cache)
+
+function _gaFLApplyData(json) {
+    var status = document.getElementById('ga-fl-frame-status');
+    _gaFLData = json;
+    _gaFLData1s = json.obs_1s;
+    _gaFLData10s = json.obs_10s || json.observations;
+    _gaFLData30s = json.obs_30s;
+
+    var res1sBtn = document.getElementById('ga-fl-res-1s');
+    if (res1sBtn) {
+        res1sBtn.style.display = json.has_1s ? '' : 'none';
+        if (!json.has_1s) _gaFLResVisible['1s'] = false;
+    }
+
+    if (status) {
+        var summ = json.summary || {};
+        var parts = [json.n_obs_raw + ' obs'];
+        if (summ.max_fl_wspd_ms != null && summ.max_fl_wspd_ms <= 120) parts.push('Max: ' + Math.round(summ.max_fl_wspd_ms * 1.944) + ' kt');
+        var minP = summ.min_sfcpr_hpa != null ? summ.min_sfcpr_hpa : summ.min_static_pres_hpa;
+        if (minP != null && minP >= 850) parts.push('Min P: ' + minP + ' hPa');
+        var max1s = summ.max_fl_wspd_ms_1s;
+        var maxKt10 = summ.max_fl_wspd_ms != null ? Math.round(summ.max_fl_wspd_ms * 1.944) : null;
+        var maxKt1s = max1s != null && max1s <= 120 ? Math.round(max1s * 1.944) : null;
+        if (maxKt1s != null && maxKt10 != null && maxKt1s > maxKt10) {
+            parts.push('(1s: ' + maxKt1s + ' kt)');
+        }
+        status.textContent = parts.join(' \u00b7 ');
+    }
+
+    _gaFLRenderOnMap();
+    if (_gaFLTSOpen) _gaFLRenderTimeSeries();
+    _gaFLHighlightOnTimeline(json);
+
+    if (_gaFLSyncFromFDeck) {
+        _gaFLSyncFromFDeck = false;
+    } else {
+        _gaFLSyncIRToMissionMidpoint(json);
+    }
+}
+
 function _gaFLLoadMissionData(fileUrl) {
     if (_gaFLFetching) return;
+
+    // Check browser-side cache first — instant load for previously viewed missions
+    if (_gaFLClientCache[fileUrl]) {
+        _gaFLApplyData(_gaFLClientCache[fileUrl]);
+        return;
+    }
+
     _gaFLFetching = true;
     var status = document.getElementById('ga-fl-frame-status');
     if (status) status.textContent = 'Loading\u2026';
@@ -9727,47 +9776,9 @@ function _gaFLLoadMissionData(fileUrl) {
                 if (status) status.textContent = json.detail || 'Parse failed';
                 return;
             }
-            _gaFLData = json;
-            _gaFLData1s = json.obs_1s;
-            _gaFLData10s = json.obs_10s || json.observations;
-            _gaFLData30s = json.obs_30s;
-
-            var res1sBtn = document.getElementById('ga-fl-res-1s');
-            if (res1sBtn) {
-                res1sBtn.style.display = json.has_1s ? '' : 'none';
-                if (!json.has_1s) _gaFLResVisible['1s'] = false;
-            }
-
-            if (status) {
-                var summ = json.summary || {};
-                var parts = [json.n_obs_raw + ' obs'];
-                // 10-second values (operational standard)
-                if (summ.max_fl_wspd_ms != null && summ.max_fl_wspd_ms <= 120) parts.push('Max: ' + Math.round(summ.max_fl_wspd_ms * 1.944) + ' kt');
-                var minP = summ.min_sfcpr_hpa != null ? summ.min_sfcpr_hpa : summ.min_static_pres_hpa;
-                if (minP != null && minP >= 850) parts.push('Min P: ' + minP + ' hPa');
-                // 1-second peak values (if different from 10s)
-                var max1s = summ.max_fl_wspd_ms_1s;
-                var maxKt10 = summ.max_fl_wspd_ms != null ? Math.round(summ.max_fl_wspd_ms * 1.944) : null;
-                var maxKt1s = max1s != null && max1s <= 120 ? Math.round(max1s * 1.944) : null;
-                if (maxKt1s != null && maxKt10 != null && maxKt1s > maxKt10) {
-                    parts.push('(1s: ' + maxKt1s + ' kt)');
-                }
-                status.textContent = parts.join(' \u00b7 ');
-            }
-
-            _gaFLRenderOnMap();
-            if (_gaFLTSOpen) _gaFLRenderTimeSeries();
-
-            // Highlight the mission time window on the intensity timeline
-            _gaFLHighlightOnTimeline(json);
-
-            // Refine IR frame to mission midpoint using actual observation times,
-            // unless triggered by F-Deck click (IR already synced to fix time).
-            if (_gaFLSyncFromFDeck) {
-                _gaFLSyncFromFDeck = false;
-            } else {
-                _gaFLSyncIRToMissionMidpoint(json);
-            }
+            // Cache in browser for instant re-access
+            _gaFLClientCache[fileUrl] = json;
+            _gaFLApplyData(json);
         })
         .catch(function (e) {
             _gaFLFetching = false;
