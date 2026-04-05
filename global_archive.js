@@ -10456,8 +10456,12 @@ window.gaSondeShowSkewT = function (idx) {
         v: prof.vwnd || null,
     };
 
-    // Render Skew-T
-    if (typeof renderSkewT === 'function') {
+    _gaSondeCurrentIdx = idx;
+
+    // Render based on selected view mode
+    if (_gaSondeViewMode === 'wind') {
+        _renderSondeWindProfile(sonde, 'ga-sonde-skewt');
+    } else if (typeof renderSkewT === 'function') {
         renderSkewT(profiles, 'ga-sonde-skewt');
     }
 
@@ -10491,6 +10495,89 @@ window.gaSondeCloseSkewT = function () {
     var panel = document.getElementById('ga-sonde-skewt-panel');
     if (panel) panel.style.display = 'none';
 };
+
+var _gaSondeViewMode = 'skewt';
+var _gaSondeCurrentIdx = 0;
+
+window.gaSondeSetView = function (mode) {
+    _gaSondeViewMode = mode;
+    document.getElementById('ga-sonde-view-skewt').classList.toggle('active', mode === 'skewt');
+    document.getElementById('ga-sonde-view-wind').classList.toggle('active', mode === 'wind');
+    gaSondeShowSkewT(_gaSondeCurrentIdx);
+};
+
+function _renderSondeWindProfile(sonde, divId) {
+    var prof = sonde.profile;
+    if (!prof || !prof.wspd || !prof.alt_km) return;
+
+    var altVals = [], wspdVals = [], wdirVals = [];
+    for (var i = 0; i < prof.alt_km.length; i++) {
+        if (prof.alt_km[i] == null || prof.wspd[i] == null) continue;
+        altVals.push(prof.alt_km[i] * 1000); // convert to meters
+        wspdVals.push(prof.wspd[i] * 1.944); // convert to kt
+        wdirVals.push(prof.wdir ? prof.wdir[i] : null);
+    }
+    if (altVals.length < 3) return;
+
+    var traces = [{
+        x: wspdVals, y: altVals,
+        type: 'scatter', mode: 'lines',
+        name: 'Wind Speed',
+        line: { color: '#60a5fa', width: 2 },
+        hovertemplate: '%{x:.0f} kt at %{y:.0f} m<extra></extra>',
+    }];
+
+    // Add wind direction as a secondary trace if available
+    var dirAlts = [], dirVals = [];
+    for (var i = 0; i < altVals.length; i++) {
+        if (wdirVals[i] != null) {
+            dirAlts.push(altVals[i]);
+            dirVals.push(wdirVals[i]);
+        }
+    }
+    if (dirVals.length > 3) {
+        traces.push({
+            x: dirVals, y: dirAlts,
+            type: 'scatter', mode: 'lines',
+            name: 'Wind Dir',
+            line: { color: '#fbbf24', width: 1.5, dash: 'dot' },
+            xaxis: 'x2',
+            hovertemplate: '%{x:.0f}\u00b0 at %{y:.0f} m<extra></extra>',
+        });
+    }
+
+    var maxAlt = Math.min(Math.max.apply(null, altVals) * 1.05, 16000);
+
+    var layout = {
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor: 'rgba(10,22,40,0.5)',
+        margin: { l: 50, r: 50, t: 25, b: 40 },
+        title: { text: 'Wind Profile', font: { size: 10, color: '#00d4ff' }, x: 0.5, y: 0.98 },
+        xaxis: {
+            title: { text: 'Wind Speed (kt)', font: { size: 9, color: '#60a5fa' } },
+            color: '#60a5fa', tickfont: { size: 8 },
+            gridcolor: 'rgba(255,255,255,0.06)', zeroline: false,
+            range: [0, Math.max.apply(null, wspdVals) * 1.1],
+        },
+        xaxis2: {
+            title: { text: 'Direction (\u00b0)', font: { size: 9, color: '#fbbf24' } },
+            color: '#fbbf24', tickfont: { size: 8 },
+            overlaying: 'x', side: 'top',
+            range: [0, 360], dtick: 90,
+            showgrid: false,
+        },
+        yaxis: {
+            title: { text: 'Altitude (m)', font: { size: 9, color: '#8b9ec2' } },
+            color: '#8b9ec2', tickfont: { size: 8 },
+            gridcolor: 'rgba(255,255,255,0.06)', zeroline: false,
+            range: [0, maxAlt],
+        },
+        legend: { font: { color: '#ccc', size: 9 }, x: 0.02, y: 0.98, bgcolor: 'rgba(0,0,0,0.4)' },
+        showlegend: true,
+    };
+
+    Plotly.newPlot(divId, traces, layout, { responsive: true, displayModeBar: false });
+}
 
 function _gaSondeRenderSkewTInfo(profiles, sonde, idx) {
     var el = document.getElementById('ga-sonde-skewt-info');
