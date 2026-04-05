@@ -10943,17 +10943,39 @@ function _gaFLRenderTimeSeries() {
             if (mEndSec < mStartSec) mEndSec += 86400; // crossed midnight
         }
 
+        // For midnight-crossing missions, also accept VDMs from the next calendar day
+        var missionDateNext = '';
+        if (missionDate) {
+            var md = new Date(missionDate + 'T00:00:00Z');
+            md.setUTCDate(md.getUTCDate() + 1);
+            missionDateNext = md.toISOString().substring(0, 10);
+        }
+
         var vdmPTimes = [], vdmPVals = [], vdmPHovers = [];
+        var vdmWTimes = [], vdmWVals = [], vdmWHovers = [];
         vdmData.forEach(function (v) {
-            if (!v.time || v.min_slp_hpa == null || v.min_slp_hpa < 850) return;
-            if (missionDate && v.time.substring(0, 10) !== missionDate) return;
-            // Check time within mission window
+            if (!v.time) return;
+            // Must have at least SLP or wind to display
+            if (v.min_slp_hpa == null && v.max_fl_wind_kt == null) return;
+            var vDate = v.time.substring(0, 10);
             var vHH = parseInt(v.time.substring(11, 13));
             var vMM = parseInt(v.time.substring(14, 16));
             var vSec = vHH * 3600 + vMM * 60;
+
+            // For VDMs on the next calendar day (midnight crossing), add 24h to vSec
+            if (missionDate && vDate === missionDateNext) {
+                vSec += 86400;
+            } else if (missionDate && vDate !== missionDate) {
+                return;  // wrong day entirely
+            }
+
             if (vSec < mStartSec || vSec > mEndSec) return;
 
-            var tHHMM = v.time.substring(11, 16);
+            // Wrap hours for x-axis label (match FL time series format)
+            var displayHH = vHH;
+            if (vDate === missionDateNext) displayHH = vHH + 24;  // keep raw for offset calc
+            var wrappedHH = displayHH >= 24 ? displayHH - 24 : displayHH;
+            var tHHMM = String(wrappedHH).padStart(2, '0') + ':' + String(vMM).padStart(2, '0');
             var hover = '<b>VDM OB ' + (v.ob_number || '?') + '</b><br>' +
                 (v.aircraft || '') + ' ' + (v.mission_id || '') + '<br>' +
                 'Min SLP: ' + v.min_slp_hpa + ' hPa';
@@ -10961,9 +10983,16 @@ function _gaFLRenderTimeSeries() {
             if (v.eye_diameter_nm != null) hover += '<br>Eye: ' + v.eye_diameter_nm + ' nm ' + (v.eye_shape || '');
             if (v.max_sfmr_kt != null) hover += '<br>SFMR: ' + v.max_sfmr_kt + ' kt';
 
-            vdmPTimes.push(tHHMM);
-            vdmPVals.push(v.min_slp_hpa);
-            vdmPHovers.push(hover);
+            if (v.min_slp_hpa != null && v.min_slp_hpa >= 850) {
+                vdmPTimes.push(tHHMM);
+                vdmPVals.push(v.min_slp_hpa);
+                vdmPHovers.push(hover);
+            }
+            if (v.max_fl_wind_kt != null) {
+                vdmWTimes.push(tHHMM);
+                vdmWVals.push(v.max_fl_wind_kt);
+                vdmWHovers.push(hover);
+            }
         });
 
         if (vdmPTimes.length > 0) {
@@ -10975,7 +11004,19 @@ function _gaFLRenderTimeSeries() {
                           line: { color: '#fff', width: 1.5 } },
                 hovertemplate: '%{text}<extra></extra>',
                 text: vdmPHovers,
-                yaxis: 'y2', showlegend: true,
+                yaxis: 'y2', showlegend: false,
+            });
+        }
+        if (vdmWTimes.length > 0) {
+            traces.push({
+                x: vdmWTimes, y: vdmWVals,
+                type: 'scatter', mode: 'markers',
+                name: 'VDM Wind',
+                marker: { color: '#ef4444', symbol: 'star-diamond', size: 12,
+                          line: { color: '#fff', width: 1.5 } },
+                hovertemplate: '%{text}<extra></extra>',
+                text: vdmWHovers,
+                yaxis: 'y', showlegend: true,
             });
         }
     }
