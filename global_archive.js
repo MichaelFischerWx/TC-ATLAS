@@ -1824,8 +1824,8 @@ function _vdmFetch() {
             vdmData = json.vdms;
             vdmLoaded = true;
             _vdmRenderOnMap();
-            // If FL time series is open, re-render to include VDM markers
-            if (_gaFLTSOpen) _gaFLRenderTimeSeries();
+            // Re-render time series to include VDM markers
+            if (_gaFLTSOpen && _gaFLData) _gaFLRenderTimeSeries();
         })
         .catch(function () {});
 }
