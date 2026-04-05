@@ -10239,23 +10239,38 @@ function _gaSondeRenderTable() {
                 if (prof.wspd[wi] != null && (maxWspd == null || prof.wspd[wi] > maxWspd)) maxWspd = prof.wspd[wi];
             }
         }
-        // WL150: mean wind speed in the lowest 150m layer
-        // Only for sondes that reached within 10m of the surface
+        // WL150: vector-mean wind in the lowest 150m layer (Franklin et al. 2003)
+        // Requirements: sonde reached within 10m of surface, ≥3 valid winds,
+        // winds must span ≥75% of the 150m layer (112.5m coverage)
         var wl150 = null;
-        if (prof.alt_km && prof.wspd && s.hit_surface) {
-            var minAlt = null;
+        if (prof.alt_km && prof.wspd && s.hit_surface && prof.uwnd && prof.vwnd) {
+            var minAlt = null, maxAltInLayer = null;
             for (var ai = 0; ai < prof.alt_km.length; ai++) {
-                if (prof.alt_km[ai] != null && (minAlt == null || prof.alt_km[ai] < minAlt)) minAlt = prof.alt_km[ai];
+                if (prof.alt_km[ai] != null) {
+                    if (minAlt == null || prof.alt_km[ai] < minAlt) minAlt = prof.alt_km[ai];
+                }
             }
             if (minAlt != null && minAlt <= 0.01) {
-                var wSum = 0, wCnt = 0;
+                var uSum = 0, vSum = 0, wCnt = 0;
+                var layerTop = minAlt + 0.15; // 150m above lowest point
+                var altMin = Infinity, altMax = -Infinity;
                 for (var hi = 0; hi < prof.alt_km.length; hi++) {
-                    if (prof.alt_km[hi] != null && prof.wspd[hi] != null && prof.alt_km[hi] <= 0.15) {
-                        wSum += prof.wspd[hi];
+                    if (prof.alt_km[hi] != null && prof.uwnd[hi] != null && prof.vwnd[hi] != null &&
+                        prof.alt_km[hi] <= layerTop) {
+                        uSum += prof.uwnd[hi];
+                        vSum += prof.vwnd[hi];
                         wCnt++;
+                        if (prof.alt_km[hi] < altMin) altMin = prof.alt_km[hi];
+                        if (prof.alt_km[hi] > altMax) altMax = prof.alt_km[hi];
                     }
                 }
-                if (wCnt >= 3) wl150 = wSum / wCnt;  // require at least 3 obs in layer
+                var layerSpan = (altMax - altMin) * 1000; // in meters
+                // Franklin et al.: ≥3 winds spanning ≥75% of 150m (112.5m)
+                if (wCnt >= 3 && layerSpan >= 112.5) {
+                    var uMean = uSum / wCnt;
+                    var vMean = vSum / wCnt;
+                    wl150 = Math.sqrt(uMean * uMean + vMean * vMean);
+                }
             }
         }
         var psfc = s.splash_pr || s.hyd_sfcp || null;
