@@ -10813,7 +10813,7 @@ function _renderCrossSection(divId) {
         // Interpolate storm center at this observation's time
         var obsMs = baseDateMs + o.time_sec * 1000;
         var obsISO = new Date(obsMs).toISOString().substring(0, 16);
-        var ctr = findTrackPointAtTime(track, obsISO);
+        var ctr = _findCenterAtTime(track, obsISO);
         if (!ctr) continue;
 
         var dx = (o.lon - ctr.lo) * 111 * Math.cos(ctr.la * Math.PI / 180);
@@ -10846,7 +10846,7 @@ function _renderCrossSection(divId) {
 
             // Interpolate center at sonde launch time
             var launchISO = (s.launch_time || '').replace('Z', '').substring(0, 16);
-            var sCtr = findTrackPointAtTime(track, launchISO);
+            var sCtr = _findCenterAtTime(track, launchISO);
             if (!sCtr) continue;
 
             for (var pi = 0; pi < prof.lat.length; pi++) {
@@ -10955,6 +10955,33 @@ function _getActiveMissionDate() {
     return (sel && _gaFLMissions[sel.selectedIndex]) ? _gaFLMissions[sel.selectedIndex].datetime : '';
 }
 
+function _findCenterAtTime(track, timeISO) {
+    // Find storm center at a given time.
+    // Priority: nearest VDM center fix (within 3 hours), else IBTrACS interpolation.
+    var targetMs = new Date(timeISO).getTime();
+    if (isNaN(targetMs)) return findTrackPointAtTime(track, timeISO);
+
+    // Check VDM fixes first
+    if (vdmData && vdmData.length > 0) {
+        var bestVdm = null, bestDelta = Infinity;
+        for (var vi = 0; vi < vdmData.length; vi++) {
+            var v = vdmData[vi];
+            if (v.lat == null || v.lon == null || !v.time) continue;
+            var vMs = new Date(v.time).getTime();
+            if (isNaN(vMs)) continue;
+            var delta = Math.abs(vMs - targetMs);
+            if (delta < bestDelta) { bestDelta = delta; bestVdm = v; }
+        }
+        // Use VDM if within 3 hours (10800000 ms)
+        if (bestVdm && bestDelta < 10800000) {
+            return { la: bestVdm.lat, lo: bestVdm.lon };
+        }
+    }
+
+    // Fall back to IBTrACS interpolation
+    return findTrackPointAtTime(track, timeISO);
+}
+
 function _isSondeInMission(sonde, missionDate) {
     // Check if a sonde's launch time falls on the mission date (±1 day for midnight crossings)
     if (!sonde.launch_time || !missionDate) return true; // if unknown, include it
@@ -10990,7 +11017,7 @@ function _renderRadialProfile(divId) {
         if (o.lat == null || o.lon == null || o.time_sec == null) continue;
         var obsMs = baseDateMs + o.time_sec * 1000;
         var obsISO = new Date(obsMs).toISOString().substring(0, 16);
-        var ctr = findTrackPointAtTime(track, obsISO);
+        var ctr = _findCenterAtTime(track, obsISO);
         if (!ctr) continue;
         var dx = (o.lon - ctr.lo) * 111 * Math.cos(ctr.la * Math.PI / 180);
         var dy = (o.lat - ctr.la) * 111;
