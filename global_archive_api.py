@@ -4675,9 +4675,12 @@ def get_global_dropsondes(
         "center_lon": center_lon if abs(center_lon) > 0.1 else None,
     }
 
-    _sonde_cache[cache_key] = (result, now)
-    if len(_sonde_cache) > _SONDE_CACHE_MAX:
-        _sonde_cache.popitem(last=False)
+    # Only cache positive results — don't cache "no sondes" to avoid
+    # blocking future requests when FRD files are posted later
+    if all_sondes:
+        _sonde_cache[cache_key] = (result, now)
+        if len(_sonde_cache) > _SONDE_CACHE_MAX:
+            _sonde_cache.popitem(last=False)
 
     return result
 
