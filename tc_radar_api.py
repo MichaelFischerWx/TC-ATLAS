@@ -5648,7 +5648,8 @@ def _parse_usaf_10sec(lines: list, col_line_idx: int) -> list:
             tas = tas * 0.514444
         head = _get("HEAD")
         track = _get("TRACK")
-        vt_wnd = _get("VTWND")
+        # USAF ARWO "V V" is aircraft vertical velocity, not atmospheric W.
+        # Don't report it as vert_vel_ms — only NOAA P-3 VtWnd is atmospheric.
 
         obs = {
             "time": f"{hh:02d}:{mm:02d}:{ss:02d}",
@@ -5666,7 +5667,7 @@ def _parse_usaf_10sec(lines: list, col_line_idx: int) -> list:
             "true_airspd_ms": round(tas, 1) if tas is not None else None,
             "heading": round(head, 1) if head is not None else None,
             "track": round(track, 1) if track is not None else None,
-            "vert_vel_ms": round(vt_wnd, 2) if vt_wnd is not None else None,
+            "vert_vel_ms": None,  # USAF has no atmospheric W
             "theta_e": None,
             "sfmr_wspd_ms": None,
             "slp_hpa": None,
