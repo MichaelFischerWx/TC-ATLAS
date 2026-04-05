@@ -518,6 +518,13 @@
                                 <span id="ga-fl-frame-status" style="font-size:9px;color:#64748b;"></span>
                             </div>
                             <div id="ga-fl-legend" style="margin-top:4px;"></div>
+                            <div style="display:flex;align-items:center;gap:5px;margin-top:4px;">
+                                <span style="font-size:9px;color:#64748b;">Color by:</span>
+                                <button class="ga-btn ga-btn-xs ga-fl-color-btn active" onclick="gaFLSetColorVar('fl_wspd_ms')" data-var="fl_wspd_ms" style="font-size:9px;">Wind</button>
+                                <button class="ga-btn ga-btn-xs ga-fl-color-btn" onclick="gaFLSetColorVar('temp_c')" data-var="temp_c" style="font-size:9px;">Temp</button>
+                                <button class="ga-btn ga-btn-xs ga-fl-color-btn" onclick="gaFLSetColorVar('dewpoint_c')" data-var="dewpoint_c" style="font-size:9px;">Td</button>
+                                <button class="ga-btn ga-btn-xs ga-fl-color-btn" onclick="gaFLSetColorVar('theta_e')" data-var="theta_e" style="font-size:9px;">&theta;e</button>
+                            </div>
                             <!-- Dropsonde info (shown when sondes found) -->
                             <div id="ga-sonde-info" style="display:none;margin-top:6px;border-top:1px solid rgba(52,211,153,0.2);padding-top:6px;">
                                 <div style="display:flex;align-items:center;gap:8px;">

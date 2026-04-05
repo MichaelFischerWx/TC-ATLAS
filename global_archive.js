@@ -9555,6 +9555,54 @@ function _gaFLWindColor(wspd) {
     return '#7f1d1d';
 }
 
+function _gaFLTempColor(t) {
+    // Blue (cold) → cyan → green → yellow → red (warm)
+    if (t == null) return '#475569';
+    if (t < -20) return '#3b82f6';
+    if (t < -10) return '#06b6d4';
+    if (t < 0)   return '#22d3ee';
+    if (t < 10)  return '#34d399';
+    if (t < 20)  return '#fbbf24';
+    if (t < 25)  return '#fb923c';
+    if (t < 30)  return '#f87171';
+    return '#dc2626';
+}
+
+function _gaFLThetaEColor(te) {
+    // Cool → warm scale for equivalent potential temperature (K)
+    if (te == null) return '#475569';
+    if (te < 330) return '#3b82f6';
+    if (te < 340) return '#06b6d4';
+    if (te < 345) return '#34d399';
+    if (te < 350) return '#a3e635';
+    if (te < 355) return '#fbbf24';
+    if (te < 360) return '#fb923c';
+    if (te < 365) return '#f87171';
+    return '#dc2626';
+}
+
+function _gaFLColorByVar(val) {
+    if (_gaFLColorVar === 'fl_wspd_ms') return _gaFLWindColor(val);
+    if (_gaFLColorVar === 'temp_c' || _gaFLColorVar === 'dewpoint_c') return _gaFLTempColor(val);
+    if (_gaFLColorVar === 'theta_e') return _gaFLThetaEColor(val);
+    return val != null ? '#60a5fa' : '#475569';
+}
+
+window.gaFLSetColorVar = function (varName) {
+    _gaFLColorVar = varName;
+    // Update button active states
+    var btns = document.querySelectorAll('.ga-fl-color-btn');
+    btns.forEach(function (b) {
+        if (b.getAttribute('data-var') === varName) {
+            b.classList.add('active');
+        } else {
+            b.classList.remove('active');
+        }
+    });
+    // Re-render map with new coloring
+    if (_gaFLData) _gaFLRenderOnMap();
+};
+
 window.toggleGlobalFLOverlay = function () {
     var btn = document.getElementById('ga-fl-toggle-btn');
     var controls = document.getElementById('ga-fl-controls');
@@ -9783,8 +9831,7 @@ function _gaFLRenderOnMap() {
         var p0 = obs[i - 1], p1 = obs[i];
         if (p0.lat == null || p1.lat == null) continue;
         var val = p1[_gaFLColorVar];
-        var color = _gaFLColorVar === 'fl_wspd_ms' ? _gaFLWindColor(val) :
-            (val != null ? '#60a5fa' : '#475569');
+        var color = _gaFLColorByVar(val);
         var seg = L.polyline([[p0.lat, p0.lon], [p1.lat, p1.lon]], {
             color: color, weight: 3.5, opacity: 0.9, interactive: false
         });
@@ -9805,7 +9852,7 @@ function _gaFLRenderOnMap() {
             'Pres: ' + (o.static_pres_hpa != null ? o.static_pres_hpa + ' hPa' : '\u2014') + '<br>' +
             'Temp: ' + (o.temp_c != null ? o.temp_c + ' \u00b0C' : '\u2014');
         var circle = L.circleMarker([o.lat, o.lon], {
-            radius: 4, fillColor: _gaFLWindColor(wspd), fillOpacity: 0.8,
+            radius: 4, fillColor: _gaFLColorByVar(o[_gaFLColorVar]), fillOpacity: 0.8,
             color: '#fff', weight: 0.5, opacity: 0.6,
             pane: 'markerPane'
         }).bindTooltip(tip, { sticky: true, pane: 'tooltipPane', className: 'ga-fl-tooltip' });
