@@ -10612,12 +10612,24 @@ var _gaSondeViewMode = 'skewt';
 var _gaSondeCurrentIdx = 0;
 
 // Open cross-section or radial directly from the FL controls (no sonde selection needed)
+// Move the panel above the sonde info so it's immediately visible
+function _moveProfilePanelAboveSondes() {
+    var panel = document.getElementById('ga-sonde-skewt-panel');
+    var sondeInfo = document.getElementById('ga-sonde-info');
+    if (panel && sondeInfo && panel.parentNode === sondeInfo.parentNode) {
+        // Insert the profile panel before the sonde info
+        sondeInfo.parentNode.insertBefore(panel, sondeInfo);
+    }
+}
+
 window.gaFLOpenXSec = function () {
+    _moveProfilePanelAboveSondes();
     var panel = document.getElementById('ga-sonde-skewt-panel');
     if (panel) panel.style.display = '';
     gaSondeSetView('xsec');
 };
 window.gaFLOpenRadial = function () {
+    _moveProfilePanelAboveSondes();
     var panel = document.getElementById('ga-sonde-skewt-panel');
     if (panel) panel.style.display = '';
     gaSondeSetView('radial');
