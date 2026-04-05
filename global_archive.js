@@ -9790,6 +9790,9 @@ function _gaFLApplyData(json) {
 
     _gaFLRenderOnMap();
     if (_gaFLTSOpen) _gaFLRenderTimeSeries();
+    // Re-render structure views if open
+    if (_gaSondeViewMode === 'xsec') _renderCrossSection('ga-sonde-skewt');
+    else if (_gaSondeViewMode === 'radial') _renderRadialProfile('ga-sonde-skewt');
     _gaFLHighlightOnTimeline(json);
 
     if (_gaFLSyncFromFDeck) {
