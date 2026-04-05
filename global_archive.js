@@ -9808,7 +9808,34 @@ function _gaFLLoadMissionData(fileUrl) {
 
     // Check browser-side cache first — instant load for previously viewed missions
     if (_gaFLClientCache[fileUrl]) {
-        _gaFLApplyData(_gaFLClientCache[fileUrl]);
+        var cached = _gaFLClientCache[fileUrl];
+        _gaFLApplyData(cached);
+        // If 1s data is missing from cache, fetch it in the background
+        if (cached.has_1s && (!cached.obs_1s || cached.obs_1s.length === 0)) {
+            var centerLat = 0, centerLon = 0;
+            if (selectedStorm) {
+                centerLat = selectedStorm.lmi_lat || selectedStorm.genesis_lat || 0;
+                centerLon = selectedStorm.lmi_lon || selectedStorm.genesis_lon || 0;
+            }
+            var bgUrl = API_BASE + '/global/flightlevel/data?file_url=' +
+                encodeURIComponent(fileUrl);
+            if (centerLat) bgUrl += '&center_lat=' + centerLat + '&center_lon=' + centerLon;
+            var btn1s = document.getElementById('ga-fl-res-1s');
+            if (btn1s) { btn1s.style.display = ''; btn1s.style.opacity = '0.5'; btn1s.textContent = '1s \u23f3'; }
+            if (_gaFL1sAbort) _gaFL1sAbort.abort();
+            _gaFL1sAbort = new AbortController();
+            fetch(bgUrl + '&include_1s=true', { signal: _gaFL1sAbort.signal })
+                .then(function (r) { return r.json(); })
+                .then(function (j) {
+                    if (j.success && j.obs_1s && j.obs_1s.length > 0) {
+                        cached.obs_1s = j.obs_1s;
+                        _gaFLData1s = j.obs_1s;
+                        _gaFLClientCache[fileUrl] = cached;
+                        if (btn1s) { btn1s.style.opacity = '1'; btn1s.textContent = '1s'; }
+                        if (_gaFLResVisible['1s'] && _gaFLTSOpen) _gaFLRenderTimeSeries();
+                    }
+                }).catch(function () {});
+        }
         return;
     }
 
