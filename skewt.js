@@ -553,16 +553,32 @@ function renderSkewT(profiles, divId) {
     var barbShapes = [];
     var windAnnotations = [];
     var xRangeMax = hasWind ? 80 : 70;
+    // Dynamic pressure range from sonde data
+    var pMin = 1050, pMax = 100;
+    for (var pi = 0; pi < plev.length; pi++) {
+        if (plev[pi] != null && plev[pi] > 10) {
+            if (plev[pi] < pMin) pMin = plev[pi];
+        }
+    }
+    // Round top to next standard level with margin
+    var stdLevels = [100, 150, 200, 250, 300, 400, 500];
+    pMax = 100;
+    for (var si = stdLevels.length - 1; si >= 0; si--) {
+        if (stdLevels[si] <= pMin - 20) { pMax = stdLevels[si]; break; }
+    }
+    // Bottom: use max pressure + margin (usually ~1000-1020 hPa)
+    var pBot = 1050;
+
     var skewTAxRanges = {
         xMin: -40, xMax: xRangeMax,
-        logPMin: Math.log10(1050), logPMax: Math.log10(100),
+        logPMin: Math.log10(pBot), logPMax: Math.log10(pMax),
     };
     if (hasWind) {
         barbShapes = _buildWindBarbShapes(profiles.u, profiles.v, plev, barbXPos, 5.5, skewTAxRanges);
         // Add a thin vertical line to separate barbs from the diagram
         barbShapes.push({
             type: 'line', xref: 'x', yref: 'y',
-            x0: barbXPos - 2, y0: 1050, x1: barbXPos - 2, y1: 100,
+            x0: barbXPos - 2, y0: pBot, x1: barbXPos - 2, y1: pMax,
             line: { color: 'rgba(255,255,255,0.08)', width: 0.5 },
         });
     }
@@ -579,9 +595,9 @@ function renderSkewT(profiles, divId) {
         yaxis: {
             title: { text: 'Pressure (hPa)', font: { size: 9, color: '#8b9ec2' } },
             autorange: false, type: 'log',
-            range: [Math.log10(1050), Math.log10(100)],
+            range: [Math.log10(pBot), Math.log10(pMax)],
             color: '#8b9ec2', tickfont: { size: 8 },
-            tickvals: [1000, 850, 700, 500, 400, 300, 200, 150, 100],
+            tickvals: [1000, 850, 700, 500, 400, 300, 200, 150, 100].filter(function (v) { return v >= pMax && v <= pBot; }),
             dtick: null,
             zeroline: false, gridcolor: 'rgba(255,255,255,0.06)',
         },
