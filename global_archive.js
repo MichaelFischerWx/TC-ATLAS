@@ -10788,6 +10788,7 @@ window.gaXSecSetVar = function (v) {
 function _renderCrossSection(divId) {
     var el = document.getElementById(divId);
     if (!el) return;
+    _centerSourceCounts = { vdm: 0, fl_pmin: 0, ibtracs: 0 };
 
     var track = selectedStorm ? allTracks[selectedStorm.sid] : null;
     if (!track || track.length < 2) return;
@@ -10950,6 +10951,9 @@ function _renderCrossSection(divId) {
     };
 
     Plotly.newPlot(divId, traces, layout, { responsive: true, displayModeBar: true, displaylogo: false });
+
+    var title = document.getElementById('ga-sonde-skewt-title');
+    if (title) title.innerHTML = 'Radius\u2013Height Cross-Section<br><span style="font-size:9px;color:#64748b;font-weight:400;">Center: ' + _centerSourceSummary() + '</span>';
 }
 
 function _getActiveMissionDate() {
@@ -10993,14 +10997,50 @@ function _buildFLCenterFixes() {
         var edgeP = Math.max(pSmooth[i - searchRadius] || 0, pSmooth[i + searchRadius] || 0);
         if (edgeP - pSmooth[i] < 3) continue;
 
+        // Refine center: find steepest pressure gradients on each side of the
+        // minimum and take their midpoint. This estimates the geometric center
+        // even when the aircraft doesn't fly through the exact center.
+        var centerLat = obs[i].lat, centerLon = obs[i].lon;
+        var maxGradL = 0, maxGradR = 0, idxL = i, idxR = i;
+
+        // Search left (before minimum) for steepest gradient
+        for (var gl = i - 1; gl >= Math.max(0, i - searchRadius); gl--) {
+            if (pSmooth[gl] == null || pSmooth[gl + 1] == null) continue;
+            var grad = pSmooth[gl] - pSmooth[gl + 1]; // positive = pressure increasing outward
+            if (grad > maxGradL) { maxGradL = grad; idxL = gl; }
+        }
+        // Search right (after minimum) for steepest gradient
+        for (var gr = i + 1; gr <= Math.min(obs.length - 1, i + searchRadius); gr++) {
+            if (pSmooth[gr] == null || pSmooth[gr - 1] == null) continue;
+            var grad = pSmooth[gr] - pSmooth[gr - 1];
+            if (grad > maxGradR) { maxGradR = grad; idxR = gr; }
+        }
+
+        // Midpoint of the two gradient maxima
+        if (maxGradL > 0.5 && maxGradR > 0.5 &&
+            obs[idxL].lat != null && obs[idxR].lat != null) {
+            centerLat = (obs[idxL].lat + obs[idxR].lat) / 2;
+            centerLon = (obs[idxL].lon + obs[idxR].lon) / 2;
+        }
+
         _flCenterFixes.push({
-            la: obs[i].lat, lo: obs[i].lon,
+            la: centerLat, lo: centerLon,
             time_sec: obs[i].time_sec,
             pres: pSmooth[i],
         });
         // Skip ahead to avoid detecting the same eye passage multiple times
         i += searchRadius;
     }
+}
+
+var _centerSourceCounts = { vdm: 0, fl_pmin: 0, ibtracs: 0 };
+
+function _centerSourceSummary() {
+    var parts = [];
+    if (_centerSourceCounts.vdm > 0) parts.push('VDM: ' + _centerSourceCounts.vdm);
+    if (_centerSourceCounts.fl_pmin > 0) parts.push('FL Pmin: ' + _centerSourceCounts.fl_pmin);
+    if (_centerSourceCounts.ibtracs > 0) parts.push('IBTrACS: ' + _centerSourceCounts.ibtracs);
+    return parts.join(' · ') || 'IBTrACS';
 }
 
 function _findCenterAtTime(track, timeISO) {
@@ -11023,6 +11063,7 @@ function _findCenterAtTime(track, timeISO) {
             if (delta < bestDelta) { bestDelta = delta; bestVdm = v; }
         }
         if (bestVdm && bestDelta < 10800000) {
+            _centerSourceCounts.vdm++;
             return { la: bestVdm.lat, lo: bestVdm.lon };
         }
     }
@@ -11037,13 +11078,11 @@ function _findCenterAtTime(track, timeISO) {
             var fixes = _flCenterFixes;
 
             if (fixes.length === 1) {
-                // Single fix: use if within 2 hours
                 if (Math.abs(fixes[0].time_sec - targetSec) < 7200) {
+                    _centerSourceCounts.fl_pmin++;
                     return { la: fixes[0].la, lo: fixes[0].lo };
                 }
             } else {
-                // Multiple fixes: interpolate between the two flanking fixes
-                // Find the fix before and after targetSec
                 var before = null, after = null;
                 for (var fi = 0; fi < fixes.length; fi++) {
                     if (fixes[fi].time_sec <= targetSec) before = fixes[fi];
@@ -11051,13 +11090,16 @@ function _findCenterAtTime(track, timeISO) {
                 }
                 if (before && after && before !== after) {
                     var frac = (targetSec - before.time_sec) / (after.time_sec - before.time_sec);
+                    _centerSourceCounts.fl_pmin++;
                     return {
                         la: before.la + frac * (after.la - before.la),
                         lo: before.lo + frac * (after.lo - before.lo),
                     };
                 } else if (before && Math.abs(before.time_sec - targetSec) < 7200) {
+                    _centerSourceCounts.fl_pmin++;
                     return { la: before.la, lo: before.lo };
                 } else if (after && Math.abs(after.time_sec - targetSec) < 7200) {
+                    _centerSourceCounts.fl_pmin++;
                     return { la: after.la, lo: after.lo };
                 }
             }
@@ -11065,6 +11107,7 @@ function _findCenterAtTime(track, timeISO) {
     }
 
     // 3) Fall back to IBTrACS interpolation
+    _centerSourceCounts.ibtracs++;
     return findTrackPointAtTime(track, timeISO);
 }
 
@@ -11082,6 +11125,7 @@ function _isSondeInMission(sonde, missionDate) {
 function _renderRadialProfile(divId) {
     var el = document.getElementById(divId);
     if (!el) return;
+    _centerSourceCounts = { vdm: 0, fl_pmin: 0, ibtracs: 0 };
 
     var track = selectedStorm ? allTracks[selectedStorm.sid] : null;
     if (!track || track.length < 2) return;
@@ -11186,6 +11230,9 @@ function _renderRadialProfile(divId) {
     };
 
     Plotly.newPlot(divId, traces, layout, { responsive: true, displayModeBar: true, displaylogo: false });
+
+    var title = document.getElementById('ga-sonde-skewt-title');
+    if (title) title.innerHTML = 'Radial Profile<br><span style="font-size:9px;color:#64748b;font-weight:400;">Center: ' + _centerSourceSummary() + '</span>';
 }
 
 function _gaSondeRenderSkewTInfo(profiles, sonde, idx) {
