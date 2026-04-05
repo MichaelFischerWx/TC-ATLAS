@@ -5624,6 +5624,9 @@ def _parse_usaf_10sec(lines: list, col_line_idx: int) -> list:
         lon_raw = _get("LON")
         if lat is None or lon_raw is None:
             continue
+        # Filter GPS null values (0,0 = Gulf of Guinea, not a real position)
+        if abs(lat) < 0.01 and abs(lon_raw) < 0.01:
+            continue
         # USAF uses standard negative-west convention
         lon = lon_raw
 
@@ -5936,6 +5939,9 @@ def _parse_hrd_1sec(text: str) -> list[dict]:
         lat = _get("LAT")
         lon_raw = _get("LON")
         if lat is None or lon_raw is None:
+            continue
+        # Filter GPS null values (0,0 = not a real position)
+        if abs(lat) < 0.01 and abs(lon_raw) < 0.01:
             continue
         # NOAA files: "Deg W" (positive = west), negate for standard
         # USAF files: standard negative-west already
