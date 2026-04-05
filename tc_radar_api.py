@@ -5587,6 +5587,8 @@ def _parse_usaf_10sec(lines: list, col_line_idx: int) -> list:
         data_col += 1
 
     observations = []
+    _usaf_day_offset = 0
+    _usaf_prev_time_sec = -1
     for line in lines[data_start:]:
         parts = line.split()
         if len(parts) < 15:
@@ -5609,7 +5611,12 @@ def _parse_usaf_10sec(lines: list, col_line_idx: int) -> list:
             tp = time_str.split(":")
             hh, mm = int(tp[0]), int(tp[1])
             ss = int(tp[2]) if len(tp) > 2 else 0
-            time_sec = hh * 3600 + mm * 60 + ss
+            raw_sec = hh * 3600 + mm * 60 + ss
+            # Detect midnight crossing: time jumps backward by >12 hours
+            if _usaf_prev_time_sec >= 0 and raw_sec < _usaf_prev_time_sec - 43200:
+                _usaf_day_offset += 86400
+            _usaf_prev_time_sec = raw_sec
+            time_sec = raw_sec + _usaf_day_offset
         except (ValueError, IndexError):
             continue
 
@@ -5886,13 +5893,14 @@ def _parse_hrd_1sec(text: str) -> list[dict]:
         # at index 1 after midnight, adding one extra field per row.
         # Detect by checking: parts[0] is TIME (>=6 chars), parts[1] is
         # a single-digit integer (no decimal point → not a lat value).
-        # This handles both normal +1 field rows AND rows that are
-        # simultaneously missing trailing columns.
+        _day_offset = 0
         if len(parts) >= 2 and len(parts[0]) >= 6:
             p1 = parts[1]
             if len(p1) <= 2 and '.' not in p1:
                 try:
-                    if 0 <= int(p1) <= 9:
+                    d = int(p1)
+                    if 0 <= d <= 9:
+                        _day_offset = d
                         parts = [parts[0]] + parts[2:]  # strip day flag
                 except (ValueError, TypeError):
                     pass
@@ -5921,7 +5929,7 @@ def _parse_hrd_1sec(text: str) -> list[dict]:
                 hh = int(time_str[0:2])
                 mm = int(time_str[2:4])
                 ss = int(time_str[4:6])
-            time_sec = hh * 3600 + mm * 60 + ss
+            time_sec = hh * 3600 + mm * 60 + ss + _day_offset * 86400
         except (ValueError, IndexError):
             continue
 

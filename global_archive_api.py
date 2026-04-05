@@ -4317,7 +4317,7 @@ def _parse_hrd_legacy_csv(text: str) -> list:
     return observations
 
 
-_FL_GCS_CACHE_PREFIX = "recon/v1"
+_FL_GCS_CACHE_PREFIX = "recon/v2"  # v2: fix midnight crossing time_sec
 
 
 def _fl_gcs_cache_key(filename: str, center_lat: float, center_lon: float) -> str:
