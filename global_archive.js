@@ -10478,7 +10478,7 @@ function _gaSondePlanViewRender() {
         }
         if (bestIdx < 0 || bestDist > tolerance) return;
 
-        var val = prof[varName] ? prof[varName][bestIdx] : null;
+        var val = _getSondeVal(prof, varName, bestIdx);
         if (val == null) return;
 
         var lat = prof.lat[bestIdx];
@@ -10715,6 +10715,38 @@ function _renderSondeWindProfile(sonde, divId) {
 
 var _xsecVar = 'wspd';
 
+// Compute θe from T(°C), RH(%), P(hPa) using Bolton (1980) formula
+function _computeThetaE(tc, rh, p) {
+    if (tc == null || rh == null || p == null || p <= 0) return null;
+    var tk = tc + 273.15;
+    // Saturation vapor pressure (Bolton 1980)
+    var es = 6.112 * Math.exp(17.67 * tc / (tc + 243.5));
+    var e = (rh / 100.0) * es;
+    if (e <= 0) return null;
+    // Mixing ratio
+    var r = 0.622 * e / (p - e);
+    // LCL temperature (Bolton 1980)
+    var tlcl = 1.0 / (1.0 / (tk - 55) - Math.log(rh / 100.0) / 2840.0) + 55;
+    // θe (Bolton 1980, eq. 43)
+    var theta_e = tk * Math.pow(1000.0 / p, 0.2854 * (1 - 0.28 * r)) *
+        Math.exp((3.376 / tlcl - 0.00254) * r * 1000 * (1 + 0.81 * r));
+    return isFinite(theta_e) ? theta_e : null;
+}
+
+// Get sonde profile value at a given index, computing θe if needed
+function _getSondeVal(prof, varName, idx) {
+    if (varName === 'wspd' && prof.wspd && prof.wspd[idx] != null) return prof.wspd[idx] * 1.944;
+    if (varName === 'temp' && prof.temp && prof.temp[idx] != null) return prof.temp[idx];
+    if (varName === 'theta_e') {
+        // Use stored θe if available, otherwise compute from T/RH/P
+        if (prof.theta_e && prof.theta_e[idx] != null) return prof.theta_e[idx];
+        if (prof.temp && prof.rh && prof.pres) {
+            return _computeThetaE(prof.temp[idx], prof.rh[idx], prof.pres[idx]);
+        }
+    }
+    return null;
+}
+
 window.gaXSecSetVar = function (v) {
     _xsecVar = v;
     document.querySelectorAll('.ga-xsec-var-btn').forEach(function (b) {
@@ -10796,10 +10828,7 @@ function _renderCrossSection(divId) {
                 var sr = Math.sqrt(sdx * sdx + sdy * sdy);
                 var salt = prof.alt_km[pi];
 
-                var sval = null;
-                if (_xsecVar === 'wspd' && prof.wspd && prof.wspd[pi] != null) sval = prof.wspd[pi] * 1.944;
-                else if (_xsecVar === 'temp' && prof.temp && prof.temp[pi] != null) sval = prof.temp[pi];
-                else if (_xsecVar === 'theta_e' && prof.theta_e && prof.theta_e[pi] != null) sval = prof.theta_e[pi];
+                var sval = _getSondeVal(prof, _xsecVar, pi);
                 if (sval == null) continue;
 
                 sondeRVals.push(sr);
@@ -10976,10 +11005,7 @@ function _renderRadialProfile(divId) {
             var sdx = (prof.lon[bestIdx] - sCtr.lo) * 111 * Math.cos(sCtr.la * Math.PI / 180);
             var sdy = (prof.lat[bestIdx] - sCtr.la) * 111;
             var sr = Math.sqrt(sdx * sdx + sdy * sdy);
-            var sval = null;
-            if (_xsecVar === 'wspd' && prof.wspd && prof.wspd[bestIdx] != null) sval = prof.wspd[bestIdx] * 1.944;
-            else if (_xsecVar === 'temp' && prof.temp && prof.temp[bestIdx] != null) sval = prof.temp[bestIdx];
-            else if (_xsecVar === 'theta_e' && prof.theta_e && prof.theta_e[bestIdx] != null) sval = prof.theta_e[bestIdx];
+            var sval = _getSondeVal(prof, _xsecVar, bestIdx);
             if (sval == null) continue;
 
             sondeR.push(sr);
