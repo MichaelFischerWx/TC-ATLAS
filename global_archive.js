@@ -1881,9 +1881,18 @@ function _vdmRenderOnMap() {
     vdmData.forEach(function (v) {
         if (v.lat == null || v.lon == null) return;
 
+        // Map aircraft code to readable name
+        var acCode = (v.aircraft || '').toUpperCase();
+        var acName = acCode;
+        if (acCode.startsWith('AF')) acName = 'USAF ' + acCode;
+        else if (acCode.startsWith('NOAA')) acName = 'NOAA ' + acCode.replace('NOAA', 'P-3 N');
+
+        // Flight date from mission_id (e.g., "1111A" → mission 11 of storm 11 in year)
+        var flightDate = v.time ? v.time.substring(0, 10) : '';
+
         var tip = '<b>VDM — ' + (v.storm_name || '') + ' OB ' + (v.ob_number || '?') + '</b><br>' +
-            v.time + '<br>' +
-            (v.aircraft || '') + ' ' + (v.mission_id || '') + '<br>' +
+            '<span style="color:#94a3b8;">' + acName + ' · ' + flightDate + '</span><br>' +
+            (v.time ? v.time.substring(11, 19) + ' UTC<br>' : '') +
             (v.max_fl_wind_kt != null ? 'Max FL: ' + v.max_fl_wind_kt + ' kt<br>' : '') +
             (v.min_slp_hpa != null ? 'Min SLP: ' + v.min_slp_hpa + ' hPa<br>' : '') +
             (v.eye_diameter_nm != null ? 'Eye: ' + v.eye_diameter_nm + ' nm ' + (v.eye_shape || '') + '<br>' : '') +
