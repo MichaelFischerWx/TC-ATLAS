@@ -3315,22 +3315,15 @@ function _handleIRMouseMove(e) {
         return;
     }
 
-    // Map lat/lon to grid indices using full-res Tb data (row 0 = north)
-    // IMPORTANT: Leaflet stretches the imageOverlay in Mercator (EPSG:3857)
-    // screen space, so we must convert lat to Mercator Y before interpolating.
-    // Linear lat interpolation causes ~0.3° offset at tropical latitudes.
+    // Map lat/lon to grid indices in the equirectangular Tb data (row 0 = north).
+    // The Tb data grid has uniform latitude spacing (equirectangular), so we use
+    // geographic lat directly — NOT Mercator Y. The rendered *image* is warped to
+    // Mercator for display, but the hover reads from the original data grid.
     var nRows = irCurrentTbRows;
     var nCols = irCurrentTbCols;
     if (nRows === 0 || nCols === 0) return;
 
-    function _latToMercY(d) {
-        var r = d * Math.PI / 180;
-        return Math.log(Math.tan(Math.PI / 4 + r / 2));
-    }
-    var mercNorth = _latToMercY(b.getNorth());
-    var mercSouth = _latToMercY(b.getSouth());
-    var mercLat   = _latToMercY(lat);
-    var fracY = (mercNorth - mercLat) / (mercNorth - mercSouth);
+    var fracY = (b.getNorth() - lat) / (b.getNorth() - b.getSouth());
     var fracX = (lng - b.getWest()) / (b.getEast() - b.getWest());
     var row = Math.min(Math.floor(fracY * nRows), nRows - 1);
     var col = Math.min(Math.floor(fracX * nCols), nCols - 1);
