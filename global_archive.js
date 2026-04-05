@@ -11051,20 +11051,38 @@ function _findCenterAtTime(track, timeISO) {
     var targetMs = new Date(timeISO).getTime();
     if (isNaN(targetMs)) return findTrackPointAtTime(track, timeISO);
 
-    // 1) Check VDM fixes
+    // 1) Interpolate between VDM center fixes (accounts for storm translation)
     if (vdmData && vdmData.length > 0) {
-        var bestVdm = null, bestDelta = Infinity;
+        var vdmBefore = null, vdmAfter = null;
+        var vdmBeforeMs = -Infinity, vdmAfterMs = Infinity;
         for (var vi = 0; vi < vdmData.length; vi++) {
             var v = vdmData[vi];
             if (v.lat == null || v.lon == null || !v.time) continue;
             var vMs = new Date(v.time).getTime();
             if (isNaN(vMs)) continue;
-            var delta = Math.abs(vMs - targetMs);
-            if (delta < bestDelta) { bestDelta = delta; bestVdm = v; }
+            if (vMs <= targetMs && vMs > vdmBeforeMs) { vdmBefore = v; vdmBeforeMs = vMs; }
+            if (vMs >= targetMs && vMs < vdmAfterMs) { vdmAfter = v; vdmAfterMs = vMs; }
         }
-        if (bestVdm && bestDelta < 10800000) {
+        // Interpolate between flanking VDMs
+        if (vdmBefore && vdmAfter && vdmBefore !== vdmAfter) {
+            var span = vdmAfterMs - vdmBeforeMs;
+            if (span > 0 && span < 21600000) { // both within 6 hours of each other
+                var frac = (targetMs - vdmBeforeMs) / span;
+                _centerSourceCounts.vdm++;
+                return {
+                    la: vdmBefore.lat + frac * (vdmAfter.lat - vdmBefore.lat),
+                    lo: vdmBefore.lon + frac * (vdmAfter.lon - vdmBefore.lon),
+                };
+            }
+        }
+        // Single flanking VDM within 3 hours
+        if (vdmBefore && (targetMs - vdmBeforeMs) < 10800000) {
             _centerSourceCounts.vdm++;
-            return { la: bestVdm.lat, lo: bestVdm.lon };
+            return { la: vdmBefore.lat, lo: vdmBefore.lon };
+        }
+        if (vdmAfter && (vdmAfterMs - targetMs) < 10800000) {
+            _centerSourceCounts.vdm++;
+            return { la: vdmAfter.lat, lo: vdmAfter.lon };
         }
     }
 
