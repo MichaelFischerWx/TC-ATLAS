@@ -10250,7 +10250,7 @@ function _gaSondeRenderTable() {
                     if (minAlt == null || prof.alt_km[ai] < minAlt) minAlt = prof.alt_km[ai];
                 }
             }
-            if (minAlt != null && minAlt <= 0.01) {
+            if (minAlt != null && minAlt <= 0.5) {  // sonde must reach within 500m of surface
                 var uSum = 0, vSum = 0, wCnt = 0;
                 var layerTop = minAlt + 0.15; // 150m above lowest point
                 var altMin = Infinity, altMax = -Infinity;
