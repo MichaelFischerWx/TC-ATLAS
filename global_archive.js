@@ -11027,20 +11027,39 @@ function _findCenterAtTime(track, timeISO) {
         }
     }
 
-    // 2) Check FL pressure minimum center fixes (within 2 hours)
-    if (_flCenterFixes && _flCenterFixes.length > 0 && _gaFLData && _gaFLData.summary) {
+    // 2) Interpolate between FL pressure minimum center fixes
+    // This accounts for storm motion between eye passages.
+    if (_flCenterFixes && _flCenterFixes.length > 0) {
         var missionDate = _getActiveMissionDate();
         if (missionDate) {
             var baseDateMs = new Date(missionDate + 'T00:00:00Z').getTime();
             var targetSec = (targetMs - baseDateMs) / 1000;
-            var bestFL = null, bestFLDelta = Infinity;
-            for (var fi = 0; fi < _flCenterFixes.length; fi++) {
-                var fd = Math.abs(_flCenterFixes[fi].time_sec - targetSec);
-                if (fd < bestFLDelta) { bestFLDelta = fd; bestFL = _flCenterFixes[fi]; }
-            }
-            // Use if within 2 hours (7200 seconds)
-            if (bestFL && bestFLDelta < 7200) {
-                return { la: bestFL.la, lo: bestFL.lo };
+            var fixes = _flCenterFixes;
+
+            if (fixes.length === 1) {
+                // Single fix: use if within 2 hours
+                if (Math.abs(fixes[0].time_sec - targetSec) < 7200) {
+                    return { la: fixes[0].la, lo: fixes[0].lo };
+                }
+            } else {
+                // Multiple fixes: interpolate between the two flanking fixes
+                // Find the fix before and after targetSec
+                var before = null, after = null;
+                for (var fi = 0; fi < fixes.length; fi++) {
+                    if (fixes[fi].time_sec <= targetSec) before = fixes[fi];
+                    if (fixes[fi].time_sec >= targetSec && !after) after = fixes[fi];
+                }
+                if (before && after && before !== after) {
+                    var frac = (targetSec - before.time_sec) / (after.time_sec - before.time_sec);
+                    return {
+                        la: before.la + frac * (after.la - before.la),
+                        lo: before.lo + frac * (after.lo - before.lo),
+                    };
+                } else if (before && Math.abs(before.time_sec - targetSec) < 7200) {
+                    return { la: before.la, lo: before.lo };
+                } else if (after && Math.abs(after.time_sec - targetSec) < 7200) {
+                    return { la: after.la, lo: after.lo };
+                }
             }
         }
     }
