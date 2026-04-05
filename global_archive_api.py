@@ -4360,22 +4360,6 @@ def _fl_gcs_put(filename: str, center_lat: float, center_lon: float, result: dic
     threading.Thread(target=_upload, daemon=True).start()
 
 
-def _fl_source_changed(file_url: str, cached_size: int | None) -> bool:
-    """Quick HEAD check to see if the source file changed since caching.
-    Returns True if the file has changed (or we can't check), False if unchanged.
-    """
-    if cached_size is None:
-        return True  # no size recorded → must refetch
-    try:
-        import requests as _req
-        resp = _req.head(file_url, timeout=10)
-        if resp.status_code == 200:
-            remote_size = int(resp.headers.get("Content-Length", 0))
-            return remote_size != cached_size
-    except Exception:
-        pass
-    return False  # assume unchanged on error (fail open to avoid blocking)
-
 
 @router.get("/flightlevel/data")
 def get_fl_data(
@@ -4407,25 +4391,20 @@ def get_fl_data(
     # Check GCS persistent cache
     gcs_result = _fl_gcs_get(filename, center_lat, center_lon)
     if gcs_result:
-        # For recent data (< 2 years), verify source hasn't changed via HEAD request
+        cached_at = gcs_result.get("_cached_at", 0)
         import re
         year_m = re.search(r'(\d{4})', filename)
         file_year = int(year_m.group(1)) if year_m else 0
         current_year = int(_time.strftime("%Y"))
-        is_recent = (current_year - file_year) < 2
+        age_days = (now - cached_at) / 86400 if cached_at else 9999
 
-        if is_recent:
-            source_size = gcs_result.get("_source_size")
-            if _fl_source_changed(file_url, source_size):
-                logger.info(f"GCS recon cache stale (source changed): {filename}")
-            else:
-                # Source unchanged — use cached
-                _fl_data_cache[cache_key] = (gcs_result, now)
-                return gcs_result
-        else:
-            # Historical data (≥2 years old) — trust the cache
+        # Historical data (≥2 years old): trust indefinitely
+        # Recent data: trust for 7 days, then refetch to catch QC revisions
+        if (current_year - file_year) >= 2 or age_days < 7:
             _fl_data_cache[cache_key] = (gcs_result, now)
             return gcs_result
+        else:
+            logger.info(f"GCS recon cache expired ({age_days:.0f}d old): {filename}")
 
     # Fetch the file from AOML
     try:
@@ -4555,7 +4534,8 @@ def get_fl_data(
         "center_lat": center_lat if has_sr else None,
         "center_lon": center_lon if has_sr else None,
         "summary": summary,
-        "_source_size": source_size,  # for GCS cache invalidation
+        "_source_size": source_size,
+        "_cached_at": now,  # epoch timestamp for GCS TTL check
     }
 
     _fl_data_cache[cache_key] = (result, now)
