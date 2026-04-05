@@ -1578,9 +1578,9 @@ def _build_storm_relative_rgb_grid(
     rgb = _nrl_37color_rgb(v37_grid, h37_grid)  # (n, n, 3) uint8
 
     # Create alpha channel: transparent where data is missing (far from swath
-    # OR where RGB is black from invalid input data)
-    black_mask = (rgb[:, :, 0] == 0) & (rgb[:, :, 1] == 0) & (rgb[:, :, 2] == 0)
-    alpha = np.where(far_mask | black_mask, 0, 180).astype(np.uint8)
+    # OR where RGB is near-black from invalid/fill input data)
+    near_black = (rgb[:, :, 0].astype(int) + rgb[:, :, 1].astype(int) + rgb[:, :, 2].astype(int)) < 15
+    alpha = np.where(far_mask | near_black, 0, 180).astype(np.uint8)
 
     # Build RGBA image
     rgba = np.concatenate([rgb, alpha[:, :, np.newaxis]], axis=-1)
@@ -1870,11 +1870,9 @@ def _render_product_image(data_dict: dict, product: str) -> str:
     if product == "37color" and data.ndim == 3 and data.shape[2] == 3:
         from PIL import Image
         ny, nx = data.shape[:2]
-        # Add alpha channel: transparent where all channels are zero
-        alpha = np.where(
-            (data[:, :, 0] == 0) & (data[:, :, 1] == 0) & (data[:, :, 2] == 0),
-            0, 200
-        ).astype(np.uint8)
+        # Add alpha channel: transparent where RGB is near-black (fill/missing data)
+        rgb_sum = data[:, :, 0].astype(int) + data[:, :, 1].astype(int) + data[:, :, 2].astype(int)
+        alpha = np.where(rgb_sum < 15, 0, 200).astype(np.uint8)
         rgba = np.concatenate([data, alpha[:, :, np.newaxis]], axis=-1)
         # Flip vertically (origin="lower" convention)
         rgba = rgba[::-1]
@@ -1914,8 +1912,9 @@ def _render_product_image(data_dict: dict, product: str) -> str:
     ax.set_position([0, 0, 1, 1])
     ax.set_axis_off()
 
-    # Mask invalid values and set transparency
+    # Mask invalid values (NaN) and zero/near-zero fill values, then set transparent
     masked = np.ma.masked_invalid(data)
+    masked = np.ma.masked_less_equal(masked, 1.0)  # Tb ≤ 1K = fill/missing
     cmap_copy = cmap.copy()
     cmap_copy.set_bad(alpha=0.0)
 
