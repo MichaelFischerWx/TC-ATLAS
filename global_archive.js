@@ -10565,6 +10565,10 @@ window.gaSondeShowSkewT = function (idx) {
     // Render based on selected view mode
     if (_gaSondeViewMode === 'xsec') {
         _renderCrossSection('ga-sonde-skewt');
+        return;  // cross-section doesn't depend on selected sonde
+    } else if (_gaSondeViewMode === 'radial') {
+        _renderRadialProfile('ga-sonde-skewt');
+        return;
     } else if (_gaSondeViewMode === 'wind') {
         _renderSondeWindProfile(sonde, 'ga-sonde-skewt');
     } else if (typeof renderSkewT === 'function') {
@@ -10612,22 +10616,24 @@ window.gaSondeSetView = function (mode) {
     document.getElementById('ga-sonde-view-skewt').classList.toggle('active', mode === 'skewt');
     document.getElementById('ga-sonde-view-wind').classList.toggle('active', mode === 'wind');
     document.getElementById('ga-sonde-view-xsec').classList.toggle('active', mode === 'xsec');
-    // Show/hide sonde selector (not relevant for cross-section) and variable row
+    document.getElementById('ga-sonde-view-radial').classList.toggle('active', mode === 'radial');
+    var isStructure = (mode === 'xsec' || mode === 'radial');
+    // Show/hide sonde selector (not relevant for cross-section/radial) and variable row
     var sel = document.getElementById('ga-sonde-skewt-select');
-    if (sel) sel.style.display = mode === 'xsec' ? 'none' : '';
+    if (sel) sel.style.display = isStructure ? 'none' : '';
     var varRow = document.getElementById('ga-xsec-var-row');
-    if (varRow) varRow.style.display = mode === 'xsec' ? '' : 'none';
-    // Hide the derived params panel for cross-section
+    if (varRow) varRow.style.display = isStructure ? '' : 'none';
+    // Hide the derived params panel for structure views
     var info = document.getElementById('ga-sonde-skewt-info');
-    if (info) info.style.display = mode === 'xsec' ? 'none' : '';
+    if (info) info.style.display = isStructure ? 'none' : '';
 
-    if (mode === 'xsec') {
-        // Open the sonde panel if not already visible
+    if (isStructure) {
         var panel = document.getElementById('ga-sonde-skewt-panel');
         if (panel) panel.style.display = '';
         var title = document.getElementById('ga-sonde-skewt-title');
-        if (title) title.textContent = 'Radius\u2013Height Cross-Section';
-        _renderCrossSection('ga-sonde-skewt');
+        if (title) title.textContent = mode === 'xsec' ? 'Radius\u2013Height Cross-Section' : 'Radial Profile';
+        if (mode === 'xsec') _renderCrossSection('ga-sonde-skewt');
+        else _renderRadialProfile('ga-sonde-skewt');
     } else {
         gaSondeShowSkewT(_gaSondeCurrentIdx);
     }
@@ -10768,11 +10774,12 @@ function _renderCrossSection(divId) {
             (_xsecVar === 'wspd' ? 'kt' : _xsecVar === 'temp' ? '°C' : 'K'));
     }
 
-    // ── Dropsonde data ──
+    // ── Dropsonde data (filtered to current mission) ──
     var sondeRVals = [], sondeAltVals = [], sondeColorVals = [], sondeHovers = [];
     if (_gaSondeData) {
         for (var si = 0; si < _gaSondeData.length; si++) {
             var s = _gaSondeData[si];
+            if (!_isSondeInMission(s, missionDate)) continue;
             var prof = s.profile;
             if (!prof || !prof.lat || !prof.alt_km) continue;
 
@@ -10874,6 +10881,143 @@ function _renderCrossSection(divId) {
             range: [0, maxAlt],
         },
         legend: { font: { color: '#ccc', size: 9 }, x: 0.02, y: 0.98, bgcolor: 'rgba(0,0,0,0.4)' },
+        showlegend: true,
+    };
+
+    Plotly.newPlot(divId, traces, layout, { responsive: true, displayModeBar: true, displaylogo: false });
+}
+
+function _getActiveMissionDate() {
+    if (!_gaFLMissions) return '';
+    var sel = document.getElementById('ga-fl-mission-select');
+    return (sel && _gaFLMissions[sel.selectedIndex]) ? _gaFLMissions[sel.selectedIndex].datetime : '';
+}
+
+function _isSondeInMission(sonde, missionDate) {
+    // Check if a sonde's launch time falls on the mission date (±1 day for midnight crossings)
+    if (!sonde.launch_time || !missionDate) return true; // if unknown, include it
+    var sondeDate = sonde.launch_time.substring(0, 10);
+    if (sondeDate === missionDate) return true;
+    // Check next day for midnight-crossing missions
+    var md = new Date(missionDate + 'T00:00:00Z');
+    md.setUTCDate(md.getUTCDate() + 1);
+    return sondeDate === md.toISOString().substring(0, 10);
+}
+
+function _renderRadialProfile(divId) {
+    var el = document.getElementById(divId);
+    if (!el) return;
+
+    var track = selectedStorm ? allTracks[selectedStorm.sid] : null;
+    if (!track || track.length < 2) return;
+
+    var missionDate = _getActiveMissionDate();
+    if (!missionDate) return;
+    var baseDateMs = new Date(missionDate + 'T00:00:00Z').getTime();
+
+    var varLabel = _xsecVar === 'wspd' ? 'Wind Speed (kt)' : _xsecVar === 'temp' ? 'Temperature (°C)' : 'θe (K)';
+    var varColor = _xsecVar === 'wspd' ? '#60a5fa' : _xsecVar === 'temp' ? '#f87171' : '#e879f9';
+
+    // ── Flight-level radial profile ──
+    var flR = [], flVals = [];
+    var flObs = _gaFLData10s || [];
+    for (var i = 0; i < flObs.length; i++) {
+        var o = flObs[i];
+        if (o.lat == null || o.lon == null || o.time_sec == null) continue;
+        var obsMs = baseDateMs + o.time_sec * 1000;
+        var obsISO = new Date(obsMs).toISOString().substring(0, 16);
+        var ctr = findTrackPointAtTime(track, obsISO);
+        if (!ctr) continue;
+        var dx = (o.lon - ctr.lo) * 111 * Math.cos(ctr.la * Math.PI / 180);
+        var dy = (o.lat - ctr.la) * 111;
+        var r = Math.sqrt(dx * dx + dy * dy);
+        var val = null;
+        if (_xsecVar === 'wspd' && o.fl_wspd_ms != null) val = o.fl_wspd_ms * 1.944;
+        else if (_xsecVar === 'temp' && o.temp_c != null) val = o.temp_c;
+        else if (_xsecVar === 'theta_e' && o.theta_e != null) val = o.theta_e;
+        if (val == null) continue;
+        flR.push(r);
+        flVals.push(val);
+    }
+
+    var traces = [];
+    if (flR.length > 0) {
+        traces.push({
+            x: flR, y: flVals,
+            type: 'scatter', mode: 'markers',
+            name: 'Flight Level',
+            marker: { color: varColor, size: 3, opacity: 0.6 },
+            hovertemplate: 'r=%{x:.0f} km · %{y:.1f}<extra>FL</extra>',
+        });
+    }
+
+    // ── Sonde profiles at selected level (850 mb default) ──
+    if (_gaSondeData) {
+        var targetP = parseInt(document.getElementById('ga-sonde-pv-level').value) || 850;
+        var sondeR = [], sondeVals = [], sondeHovers = [];
+        for (var si = 0; si < _gaSondeData.length; si++) {
+            var s = _gaSondeData[si];
+            if (!_isSondeInMission(s, missionDate)) continue;
+            var prof = s.profile;
+            if (!prof || !prof.pres || !prof.lat) continue;
+            var launchISO = (s.launch_time || '').replace('Z', '').substring(0, 16);
+            var sCtr = findTrackPointAtTime(track, launchISO);
+            if (!sCtr) continue;
+
+            // Find nearest pressure level
+            var bestIdx = -1, bestDist = Infinity;
+            for (var pi = 0; pi < prof.pres.length; pi++) {
+                if (prof.pres[pi] == null) continue;
+                var dist = Math.abs(prof.pres[pi] - targetP);
+                if (dist < bestDist) { bestDist = dist; bestIdx = pi; }
+            }
+            if (bestIdx < 0 || bestDist > 25) continue;
+
+            var sdx = (prof.lon[bestIdx] - sCtr.lo) * 111 * Math.cos(sCtr.la * Math.PI / 180);
+            var sdy = (prof.lat[bestIdx] - sCtr.la) * 111;
+            var sr = Math.sqrt(sdx * sdx + sdy * sdy);
+            var sval = null;
+            if (_xsecVar === 'wspd' && prof.wspd && prof.wspd[bestIdx] != null) sval = prof.wspd[bestIdx] * 1.944;
+            else if (_xsecVar === 'temp' && prof.temp && prof.temp[bestIdx] != null) sval = prof.temp[bestIdx];
+            else if (_xsecVar === 'theta_e' && prof.theta_e && prof.theta_e[bestIdx] != null) sval = prof.theta_e[bestIdx];
+            if (sval == null) continue;
+
+            sondeR.push(sr);
+            sondeVals.push(sval);
+            sondeHovers.push('Sonde ' + (si + 1) + ' · r=' + sr.toFixed(0) + ' km · ' + sval.toFixed(1) +
+                ' at ' + Math.round(prof.pres[bestIdx]) + ' hPa');
+        }
+        if (sondeR.length > 0) {
+            traces.push({
+                x: sondeR, y: sondeVals,
+                type: 'scatter', mode: 'markers',
+                name: 'Sonde (' + targetP + ' mb)',
+                marker: { color: '#34d399', size: 8, symbol: 'diamond',
+                          line: { color: '#fff', width: 1 } },
+                text: sondeHovers,
+                hovertemplate: '%{text}<extra></extra>',
+            });
+        }
+    }
+
+    if (traces.length === 0) return;
+
+    var layout = {
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor: 'rgba(10,22,40,0.5)',
+        margin: { l: 55, r: 15, t: 10, b: 40 },
+        xaxis: {
+            title: { text: 'Radius from center (km)', font: { size: 9, color: '#8b9ec2' } },
+            color: '#8b9ec2', tickfont: { size: 8 },
+            gridcolor: 'rgba(255,255,255,0.06)', zeroline: true,
+            zerolinecolor: 'rgba(255,255,255,0.15)', range: [0, 300],
+        },
+        yaxis: {
+            title: { text: varLabel, font: { size: 9, color: varColor } },
+            color: varColor, tickfont: { size: 8 },
+            gridcolor: 'rgba(255,255,255,0.06)', zeroline: false,
+        },
+        legend: { font: { color: '#ccc', size: 9 }, x: 0.7, y: 0.98, bgcolor: 'rgba(0,0,0,0.4)' },
         showlegend: true,
     };
 
