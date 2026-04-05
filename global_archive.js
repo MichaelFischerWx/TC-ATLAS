@@ -10765,7 +10765,9 @@ window.gaXSecSetVar = function (v) {
     document.querySelectorAll('.ga-xsec-var-btn').forEach(function (b) {
         b.classList.toggle('active', b.getAttribute('data-var') === v);
     });
-    _renderCrossSection('ga-sonde-skewt');
+    // Re-render the current view (not always cross-section)
+    if (_gaSondeViewMode === 'radial') _renderRadialProfile('ga-sonde-skewt');
+    else _renderCrossSection('ga-sonde-skewt');
 };
 
 function _renderCrossSection(divId) {
@@ -10969,7 +10971,7 @@ function _renderRadialProfile(divId) {
     var varColor = varColors2[_xsecVar] || '#60a5fa';
 
     // ── Flight-level radial profile ──
-    var flR = [], flVals = [];
+    var flR = [], flVals = [], flPres = [];
     var flObs = _gaFLData10s || [];
     for (var i = 0; i < flObs.length; i++) {
         var o = flObs[i];
@@ -10985,65 +10987,54 @@ function _renderRadialProfile(divId) {
         if (_xsecVar === 'wspd' && o.fl_wspd_ms != null) val = o.fl_wspd_ms * 1.944;
         else if (_xsecVar === 'temp' && o.temp_c != null) val = o.temp_c;
         else if (_xsecVar === 'theta_e' && o.theta_e != null) val = o.theta_e;
-        else if (_xsecVar === 'rh') continue;  // FL data doesn't have RH
+        else if (_xsecVar === 'rh') continue;
         if (val == null) continue;
         flR.push(r);
         flVals.push(val);
+        flPres.push(o.static_pres_hpa != null ? Math.round(o.static_pres_hpa) : null);
     }
 
     var traces = [];
     if (flR.length > 0) {
+        // Individual observations colored by flight-level pressure
         traces.push({
             x: flR, y: flVals,
             type: 'scatter', mode: 'markers',
             name: 'Flight Level',
-            marker: { color: varColor, size: 3, opacity: 0.6 },
-            hovertemplate: 'r=%{x:.0f} km · %{y:.1f}<extra>FL</extra>',
+            marker: {
+                color: flPres, colorscale: [[0, '#22d3ee'], [0.5, '#60a5fa'], [1, '#a78bfa']],
+                cmin: 500, cmax: 900, size: 3, opacity: 0.5,
+                colorbar: { title: 'hPa', titleside: 'right', thickness: 10, len: 0.5,
+                             x: 1.02, tickfont: { size: 8 } },
+            },
+            hovertemplate: 'r=%{x:.0f} km · %{y:.1f} · %{marker.color} hPa<extra></extra>',
         });
-    }
 
-    // ── Sonde profiles at selected level (850 mb default) ──
-    if (_gaSondeData) {
-        var targetP = parseInt(document.getElementById('ga-sonde-pv-level').value) || 850;
-        var sondeR = [], sondeVals = [], sondeHovers = [];
-        for (var si = 0; si < _gaSondeData.length; si++) {
-            var s = _gaSondeData[si];
-            if (!_isSondeInMission(s, missionDate)) continue;
-            var prof = s.profile;
-            if (!prof || !prof.pres || !prof.lat) continue;
-            var launchISO = (s.launch_time || '').replace('Z', '').substring(0, 16);
-            var sCtr = findTrackPointAtTime(track, launchISO);
-            if (!sCtr) continue;
-
-            // Find nearest pressure level
-            var bestIdx = -1, bestDist = Infinity;
-            for (var pi = 0; pi < prof.pres.length; pi++) {
-                if (prof.pres[pi] == null) continue;
-                var dist = Math.abs(prof.pres[pi] - targetP);
-                if (dist < bestDist) { bestDist = dist; bestIdx = pi; }
-            }
-            if (bestIdx < 0 || bestDist > 25) continue;
-
-            var sdx = (prof.lon[bestIdx] - sCtr.lo) * 111 * Math.cos(sCtr.la * Math.PI / 180);
-            var sdy = (prof.lat[bestIdx] - sCtr.la) * 111;
-            var sr = Math.sqrt(sdx * sdx + sdy * sdy);
-            var sval = _getSondeVal(prof, _xsecVar, bestIdx);
-            if (sval == null) continue;
-
-            sondeR.push(sr);
-            sondeVals.push(sval);
-            sondeHovers.push('Sonde ' + (si + 1) + ' · r=' + sr.toFixed(0) + ' km · ' + sval.toFixed(1) +
-                ' at ' + Math.round(prof.pres[bestIdx]) + ' hPa');
+        // Mean radial profile (5 km bins)
+        var binSize = 5; // km
+        var maxBin = 300;
+        var binSums = {}, binCounts = {};
+        for (var bi = 0; bi < flR.length; bi++) {
+            var bin = Math.round(flR[bi] / binSize) * binSize;
+            if (bin > maxBin) continue;
+            if (!binCounts[bin]) { binSums[bin] = 0; binCounts[bin] = 0; }
+            binSums[bin] += flVals[bi];
+            binCounts[bin]++;
         }
-        if (sondeR.length > 0) {
+        var meanR = [], meanVals = [];
+        for (var b = 0; b <= maxBin; b += binSize) {
+            if (binCounts[b] && binCounts[b] >= 3) { // require ≥3 obs per bin
+                meanR.push(b);
+                meanVals.push(binSums[b] / binCounts[b]);
+            }
+        }
+        if (meanR.length > 3) {
             traces.push({
-                x: sondeR, y: sondeVals,
-                type: 'scatter', mode: 'markers',
-                name: 'Sonde (' + targetP + ' mb)',
-                marker: { color: '#34d399', size: 8, symbol: 'diamond',
-                          line: { color: '#fff', width: 1 } },
-                text: sondeHovers,
-                hovertemplate: '%{text}<extra></extra>',
+                x: meanR, y: meanVals,
+                type: 'scatter', mode: 'lines',
+                name: 'Mean Profile',
+                line: { color: '#fff', width: 2.5 },
+                hovertemplate: 'r=%{x:.0f} km · %{y:.1f}<extra>Mean</extra>',
             });
         }
     }
