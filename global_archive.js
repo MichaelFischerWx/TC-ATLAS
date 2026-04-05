@@ -9739,6 +9739,7 @@ window.gaFLSelectMission = function () {
 };
 
 var _gaFLClientCache = {};  // fileUrl → parsed JSON (browser-side cache)
+var _gaFL1sAbort = null;    // AbortController for pending 1s background fetch
 
 function _gaFLApplyData(json) {
     _vdmCloseTextOverlay();  // close VDM text on mission change
@@ -9838,12 +9839,14 @@ function _gaFLLoadMissionData(fileUrl) {
             _gaFLApplyData(json);
 
             // Background: fetch 1s data and merge in
+            // Abort any previous 1s fetch to avoid blocking new requests
+            if (_gaFL1sAbort) _gaFL1sAbort.abort();
             if (json.has_1s && (!json.obs_1s || json.obs_1s.length === 0)) {
-                // Show 1s button immediately with loading indicator
                 var btn1s = document.getElementById('ga-fl-res-1s');
                 if (btn1s) { btn1s.style.display = ''; btn1s.style.opacity = '0.5'; btn1s.textContent = '1s \u23f3'; }
 
-                fetch(baseUrl + '&include_1s=true')
+                _gaFL1sAbort = new AbortController();
+                fetch(baseUrl + '&include_1s=true', { signal: _gaFL1sAbort.signal })
                     .then(function (r2) { return r2.json(); })
                     .then(function (json1s) {
                         if (json1s.success && json1s.obs_1s && json1s.obs_1s.length > 0) {
