@@ -557,9 +557,16 @@
                                 <div style="display:flex;align-items:center;gap:6px;">
                                     <button id="ga-sonde-view-skewt" class="ga-btn ga-btn-xs active" onclick="gaSondeSetView('skewt')" style="font-size:9px;">Skew-T</button>
                                     <button id="ga-sonde-view-wind" class="ga-btn ga-btn-xs" onclick="gaSondeSetView('wind')" style="font-size:9px;">Wind</button>
-                                    <select id="ga-sonde-skewt-select" onchange="gaSondeShowSkewT(this.value)" style="font-size:9px;padding:2px 4px;background:#0f172a;color:#e2e8f0;border:1px solid rgba(255,255,255,0.12);border-radius:3px;"></select>
+                                    <button id="ga-sonde-view-xsec" class="ga-btn ga-btn-xs" onclick="gaSondeSetView('xsec')" style="font-size:9px;">X-Sec</button>
+                                    <select id="ga-sonde-skewt-select" onchange="gaSondeShowSkewT(this.value)" style="font-size:9px;padding:2px 4px;background:#0f172a;color:#e2e8f0;border:1px solid rgba(255,255,255,0.12);border-radius:3px;" data-hide-in-xsec="1"></select>
                                     <button class="ga-btn ga-btn-xs" onclick="gaSondeCloseSkewT()" style="font-size:9px;color:#f87171;">&#10005;</button>
                                 </div>
+                            </div>
+                            <div id="ga-xsec-var-row" style="display:none;margin-bottom:6px;">
+                                <span style="font-size:9px;color:#64748b;">Variable:</span>
+                                <button class="ga-btn ga-btn-xs ga-xsec-var-btn active" onclick="gaXSecSetVar('wspd')" data-var="wspd" style="font-size:9px;">Wind</button>
+                                <button class="ga-btn ga-btn-xs ga-xsec-var-btn" onclick="gaXSecSetVar('temp')" data-var="temp" style="font-size:9px;">Temp</button>
+                                <button class="ga-btn ga-btn-xs ga-xsec-var-btn" onclick="gaXSecSetVar('theta_e')" data-var="theta_e" style="font-size:9px;">&theta;e</button>
                             </div>
                             <div style="display:flex;gap:8px;">
                                 <div id="ga-sonde-skewt" style="flex:1;height:420px;"></div>
