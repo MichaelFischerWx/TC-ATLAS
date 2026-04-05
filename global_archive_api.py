@@ -4389,6 +4389,10 @@ def get_fl_data(
         cached, ts = _fl_data_cache[cache_key]
         if now - ts < _FL_DATA_CACHE_TTL:
             _fl_data_cache.move_to_end(cache_key)
+            if not include_1s:
+                resp = {k: v for k, v in cached.items() if k != "obs_1s"}
+                resp["obs_1s"] = []
+                return resp
             return cached
 
     # Check GCS persistent cache
@@ -4405,6 +4409,11 @@ def get_fl_data(
         # Recent data: trust for 7 days, then refetch to catch QC revisions
         if (current_year - file_year) >= 2 or age_days < 7:
             _fl_data_cache[cache_key] = (gcs_result, now)
+            if not include_1s:
+                # Return without 1s data for faster response
+                resp = {k: v for k, v in gcs_result.items() if k != "obs_1s"}
+                resp["obs_1s"] = []
+                return resp
             return gcs_result
         else:
             logger.info(f"GCS recon cache expired ({age_days:.0f}d old): {filename}")
