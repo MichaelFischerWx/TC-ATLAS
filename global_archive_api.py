@@ -4368,6 +4368,7 @@ def get_fl_data(
     file_url: str = Query(..., description="Full URL of the FL data file on AOML FTP"),
     center_lat: float = Query(0.0, description="Storm center latitude for relative coords"),
     center_lon: float = Query(0.0, description="Storm center longitude for relative coords"),
+    include_1s: bool = Query(False, description="Include 1-second resolution data (large payload)"),
 ):
     """Fetch and parse a specific flight-level mission file."""
     h = _load_fl_helpers()
@@ -4523,7 +4524,7 @@ def get_fl_data(
     result = {
         "success": True,
         "observations": obs_10s,  # Default resolution
-        "obs_1s": obs_1s,
+        "obs_1s": obs_1s if include_1s else [],
         "obs_10s": obs_10s,
         "obs_30s": obs_30s,
         "mission_id": mission_id,

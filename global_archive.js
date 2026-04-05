@@ -9817,11 +9817,12 @@ function _gaFLLoadMissionData(fileUrl) {
         centerLon = selectedStorm.lmi_lon || selectedStorm.genesis_lon || 0;
     }
 
-    var url = API_BASE + '/global/flightlevel/data?file_url=' +
+    var baseUrl = API_BASE + '/global/flightlevel/data?file_url=' +
         encodeURIComponent(fileUrl);
-    if (centerLat) url += '&center_lat=' + centerLat + '&center_lon=' + centerLon;
+    if (centerLat) baseUrl += '&center_lat=' + centerLat + '&center_lon=' + centerLon;
 
-    fetch(url)
+    // Fast load: fetch 10s/30s first (small payload ~1.3 MB), then 1s in background
+    fetch(baseUrl)
         .then(function (r) { return r.json(); })
         .then(function (json) {
             _gaFLFetching = false;
@@ -9829,9 +9830,25 @@ function _gaFLLoadMissionData(fileUrl) {
                 if (status) status.textContent = json.detail || 'Parse failed';
                 return;
             }
-            // Cache in browser for instant re-access
             _gaFLClientCache[fileUrl] = json;
             _gaFLApplyData(json);
+
+            // Background: fetch 1s data and merge in
+            if (json.has_1s && (!json.obs_1s || json.obs_1s.length === 0)) {
+                fetch(baseUrl + '&include_1s=true')
+                    .then(function (r2) { return r2.json(); })
+                    .then(function (json1s) {
+                        if (json1s.success && json1s.obs_1s && json1s.obs_1s.length > 0) {
+                            json.obs_1s = json1s.obs_1s;
+                            _gaFLData1s = json1s.obs_1s;
+                            _gaFLClientCache[fileUrl] = json;
+                            // Show 1s button now that data is available
+                            var btn1s = document.getElementById('ga-fl-res-1s');
+                            if (btn1s) btn1s.style.display = '';
+                        }
+                    })
+                    .catch(function () {});  // silent failure for background fetch
+            }
         })
         .catch(function (e) {
             _gaFLFetching = false;
