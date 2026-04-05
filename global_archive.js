@@ -10584,8 +10584,7 @@ function _renderSondeWindProfile(sonde, divId) {
     var layout = {
         paper_bgcolor: 'rgba(0,0,0,0)',
         plot_bgcolor: 'rgba(10,22,40,0.5)',
-        margin: { l: 50, r: 50, t: 25, b: 40 },
-        title: { text: 'Wind Profile', font: { size: 10, color: '#00d4ff' }, x: 0.5, y: 0.98 },
+        margin: { l: 50, r: 50, t: 35, b: 40 },
         xaxis: {
             title: { text: 'Wind Speed (kt)', font: { size: 9, color: '#60a5fa' } },
             color: '#60a5fa', tickfont: { size: 8 },
