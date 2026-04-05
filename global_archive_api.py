@@ -4559,7 +4559,7 @@ def get_global_dropsondes(
             for fname, text in frd_contents:
                 try:
                     sonde = _parse_frd_file(text)
-                    if sonde and _filter_valid_frd_profile(sonde):
+                    if sonde and sonde.get("profile") and _filter_valid_frd_profile(sonde["profile"]):
                         # Add storm-relative coords if center provided
                         if abs(center_lat) > 0.1 and abs(center_lon) > 0.1 and sonde.get("profile"):
                             from math import radians, cos
