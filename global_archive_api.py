@@ -42,11 +42,13 @@ from PIL import Image
 
 logger = logging.getLogger("global_archive")
 
-# ── GCS Frame Cache ──────────────────────────────────────────
-# Caches rendered IR frames (JSON responses) in Google Cloud Storage
-# so subsequent requests serve instantly without OPeNDAP fetches.
-# Set GCS_IR_CACHE_BUCKET env var to enable (e.g. "tc-atlas-ir-cache").
-GCS_IR_CACHE_BUCKET = os.environ.get("GCS_IR_CACHE_BUCKET", "")
+# ── GCS Cache ────────────────────────────────────────────────
+# Shared GCS bucket for IR frame cache AND flight-level recon cache.
+# Tries GCS_IR_CACHE_BUCKET first, falls back to TC_RADAR_GCS_BUCKET.
+GCS_IR_CACHE_BUCKET = (
+    os.environ.get("GCS_IR_CACHE_BUCKET", "")
+    or os.environ.get("TC_RADAR_GCS_BUCKET", "")
+)
 _gcs_client = None
 _gcs_bucket = None
 
@@ -62,10 +64,10 @@ def _get_gcs_bucket():
         from google.cloud import storage
         _gcs_client = storage.Client()
         _gcs_bucket = _gcs_client.bucket(GCS_IR_CACHE_BUCKET)
-        logger.info(f"GCS IR cache enabled: gs://{GCS_IR_CACHE_BUCKET}")
+        logger.info(f"GCS cache enabled: gs://{GCS_IR_CACHE_BUCKET}")
         return _gcs_bucket
     except Exception as e:
-        logger.warning(f"GCS IR cache init failed: {e}")
+        logger.warning(f"GCS cache init failed: {e}")
         return None
 
 
