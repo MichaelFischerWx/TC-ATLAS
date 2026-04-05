@@ -10292,7 +10292,13 @@ function _gaSondeRenderTable() {
                 }
             }
         }
+        // Surface pressure: prefer splash_pr, then hyd_sfcp, then last valid profile pressure
         var psfc = s.splash_pr || s.hyd_sfcp || null;
+        if (psfc == null && prof.pres) {
+            for (var pi = prof.pres.length - 1; pi >= 0; pi--) {
+                if (prof.pres[pi] != null && prof.pres[pi] > 850) { psfc = prof.pres[pi]; break; }
+            }
+        }
         var timeShort = (s.launch_time || '').replace(/.*T/, '').replace('Z', '').substring(0, 8);
 
         html += '<tr style="border-bottom:1px solid rgba(255,255,255,0.05);cursor:pointer;" onclick="gaSondeShowSkewT(' + i + ')">' +

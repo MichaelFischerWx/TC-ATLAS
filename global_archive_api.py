@@ -4732,53 +4732,69 @@ def _parse_vdm_text(text: str, year: int) -> dict | None:
     cm = re.search(r'(\d+)\s*(?:mb|MB)', c)
     vdm["flight_level_mb"] = int(cm.group(1)) if cm else None
 
-    # D. Max FL wind (some formats): "147 kt" or "NA"
-    d = line_map.get("D", "")
-    dm = re.search(r'(\d+)\s*(?:kt|KT)', d)
-    vdm["max_fl_wind_kt"] = int(dm.group(1)) if dm else None
+    # Format-agnostic parsing: the VDM format changed over time.
+    # Old (pre-2020): D=max FL wind (kt), H=min SLP (mb), P=aircraft
+    # New (2020+):    D=min SLP (mb), H=max FL wind (kt), U=aircraft
+    # Solution: scan ALL lettered lines for pressure and wind values.
+    vdm["max_fl_wind_kt"] = None
+    vdm["min_slp_hpa"] = None
+    vdm["eye_temp_c"] = None
+    vdm["eyewall_temp_c"] = None
+    vdm["eye_shape"] = None
+    vdm["eye_diameter_nm"] = None
 
-    # F. May contain max wind info in some formats: "160 deg 142 kt"
-    # or storm motion. Parse carefully.
-    f = line_map.get("F", "")
-    fm = re.search(r'(\d+)\s*(?:deg|DEG)\s+(\d+)\s*(?:kt|KT)', f)
-    if fm and vdm["max_fl_wind_kt"] is None:
-        # In legacy format, F often has max wind
-        vdm["max_fl_wind_kt"] = int(fm.group(2))
+    for key in "DEFGHIJKLMNOPQRSTU":
+        val = line_map.get(key, "")
+        if not val:
+            continue
 
-    # H. Min SLP: "927 mb" or "918 MB"
-    h = line_map.get("H", "")
-    hm = re.search(r'(\d+)\s*(?:mb|MB)', h)
-    vdm["min_slp_hpa"] = int(hm.group(1)) if hm else None
+        # SLP: standalone pressure value "927 mb" or "943 mb" (not flight level)
+        if vdm["min_slp_hpa"] is None and key != "C":
+            slp_m = re.match(r'^\s*(\d+)\s*(?:mb|MB|hPa)\s*$', val)
+            if slp_m:
+                p = int(slp_m.group(1))
+                if 850 <= p <= 1050:  # valid SLP range
+                    vdm["min_slp_hpa"] = p
 
-    # I. Eye temp: "8 C / 3022 m" or "13 C / 3045 m"
-    i_line = line_map.get("I", "")
-    im = re.search(r'(-?\d+)\s*C', i_line)
-    vdm["eye_temp_c"] = int(im.group(1)) if im else None
+        # Max FL wind: standalone wind value "147 kt"
+        if vdm["max_fl_wind_kt"] is None:
+            wm = re.match(r'^\s*(\d+)\s*(?:kt|KT)\s*$', val)
+            if wm:
+                w = int(wm.group(1))
+                if 10 <= w <= 300:
+                    vdm["max_fl_wind_kt"] = w
 
-    # J. Eyewall temp
-    j_line = line_map.get("J", "")
-    jm = re.search(r'(-?\d+)\s*C', j_line)
-    vdm["eyewall_temp_c"] = int(jm.group(1)) if jm else None
+        # Eye shape: "CLOSED", "OPEN NW", etc.
+        if val.upper().startswith("CLOSED") or val.upper().startswith("OPEN"):
+            vdm["eye_shape"] = val.strip()
 
-    # L. Eye shape: "CLOSED", "OPEN NW", etc.
-    vdm["eye_shape"] = line_map.get("L", "").strip() or None
+        # Eye diameter: "C25" or "C10"
+        diam_m = re.match(r'^C\s*(\d+)\s*$', val.strip())
+        if diam_m:
+            vdm["eye_diameter_nm"] = int(diam_m.group(1))
+        if vdm["eye_diameter_nm"] is None:
+            diam_m2 = re.match(r'^E\s*(\d+)', val.strip())
+            if diam_m2:
+                vdm["eye_diameter_nm"] = int(diam_m2.group(1))
 
-    # M. Eye diameter: "C25" → circular 25 nm, "E20/30" → elliptical
-    m_line = line_map.get("M", "")
-    mm_match = re.search(r'C\s*(\d+)', m_line)
-    if mm_match:
-        vdm["eye_diameter_nm"] = int(mm_match.group(1))
-    else:
-        em = re.search(r'E\s*(\d+)', m_line)
-        vdm["eye_diameter_nm"] = int(em.group(1)) if em else None
+    # Eye/eyewall temperatures: look for "X C / YYYY m" pattern in any line
+    temp_matches = []
+    for key in "IJKLMNOPQR":
+        val = line_map.get(key, "")
+        tm = re.search(r'(-?\d+)\s*C\s*/\s*(\d+)\s*m', val)
+        if tm:
+            temp_matches.append(int(tm.group(1)))
+    if len(temp_matches) >= 1:
+        vdm["eye_temp_c"] = temp_matches[0]
+    if len(temp_matches) >= 2:
+        vdm["eyewall_temp_c"] = temp_matches[1]
 
-    # P/Q. Aircraft, mission, storm name, OB number
-    # Look for the line with aircraft info
+    # Aircraft/mission/OB: search ALL lines (was in P, now in U)
     aircraft = mission_id = storm_name = None
     ob_number = None
     for line in lines:
-        pm = re.match(
-            r'\s*(?:P\.\s*)?(?:Q\.\s*)?(AF\d+|NOAA\d+)\s+(\w+)\s+(\w+)\s+OB\s+(\d+)',
+        pm = re.search(
+            r'(AF\d+|NOAA\d+)\s+(\w+)\s+(\w+)\s+OB\s+(\d+)',
             line.strip(), re.IGNORECASE
         )
         if pm:
@@ -4792,29 +4808,34 @@ def _parse_vdm_text(text: str, year: int) -> dict | None:
     vdm["storm_name"] = storm_name
     vdm["ob_number"] = ob_number
 
-    # Post-P lines: MAX FL WIND, MAX OUTBOUND FL WIND, CNTR DROPSONDE, MAX SFMR
+    # Post-lettered lines: MAX FL WIND, MAX OUTBOUND, CNTR DROPSONDE, MAX SFMR
+    # Use re.search (not re.match) since line wording varies across years
     max_fl = max_outbound = cntr_sonde = max_sfmr = None
     max_fl_bearing = max_fl_range = None
-    max_fl_time = None
     for line in lines:
         lu = line.strip().upper()
-        # MAX FL WIND 152 KT 333 / 16 NM 11:31:00Z
-        wm = re.match(r'MAX FL WIND\s+(\d+)\s*KT\s+(\d+)\s*/\s*(\d+)\s*NM\s+(\S+)', lu)
+        # "MAX FL WIND 152 KT..." or "MAX OUTBOUND AND MAX FL WIND 158 KT..."
+        wm = re.search(r'MAX\s+FL\s+WIND\s+(\d+)\s*KT\s+(\d+)\s*/\s*(\d+)\s*NM', lu)
         if wm:
-            max_fl = int(wm.group(1))
-            max_fl_bearing = int(wm.group(2))
-            max_fl_range = int(wm.group(3))
-            max_fl_time = wm.group(4).rstrip('Z')
-        # MAX OUTBOUND FL WIND 127 KT ...
-        om = re.match(r'MAX OUTBOUND FL WIND\s+(\d+)\s*KT', lu)
+            w = int(wm.group(1))
+            if max_fl is None or w > max_fl:
+                max_fl = w
+                max_fl_bearing = int(wm.group(2))
+                max_fl_range = int(wm.group(3))
+        # Simpler match without bearing/range
+        wm2 = re.search(r'MAX\s+FL\s+WIND\s+(\d+)\s*KT', lu)
+        if wm2 and max_fl is None:
+            max_fl = int(wm2.group(1))
+        # MAX OUTBOUND FL WIND 127 KT
+        om = re.search(r'MAX\s+OUTBOUND\s+FL\s+WIND\s+(\d+)\s*KT', lu)
         if om:
             max_outbound = int(om.group(1))
-        # CNTR DROPSONDE SFC WIND 335 / 7 KT or 110 / 13 KT
-        cm = re.match(r'CNTR DROPSONDE SFC WIND\s+\d+\s*/\s*(\d+)\s*KT', lu)
+        # CNTR DROPSONDE SFC WIND
+        cm = re.search(r'CNTR\s+DROPSONDE\s+SFC\s+WIND\s+\d+\s*/\s*(\d+)\s*KT', lu)
         if cm:
             cntr_sonde = int(cm.group(1))
-        # MAX SFMR SFC WIND ...
-        sm = re.match(r'MAX (?:SFMR\s+)?SFC WIND\s+(\d+)\s*KT', lu)
+        # MAX SFMR or MAX SFC WIND
+        sm = re.search(r'MAX\s+(?:SFMR\s+)?SFC\s+WIND\s+(\d+)\s*KT', lu)
         if sm:
             max_sfmr = int(sm.group(1))
 
