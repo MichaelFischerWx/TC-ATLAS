@@ -1832,9 +1832,40 @@ function _vdmFetch() {
 
 function _vdmReset() {
     _vdmRemoveFromMap();
+    _vdmCloseTextOverlay();
     vdmData = null;
     vdmLoaded = false;
 }
+
+function _vdmShowTextOverlay(rawText) {
+    _vdmCloseTextOverlay();
+    var mapEl = document.getElementById('detail-map');
+    if (!mapEl) return;
+    var container = mapEl.parentNode;
+
+    var overlay = document.createElement('div');
+    overlay.id = 'ga-vdm-text-overlay';
+    overlay.style.cssText = 'position:absolute;top:10px;right:10px;z-index:1000;' +
+        'background:rgba(15,23,42,0.95);border:1px solid rgba(239,68,68,0.4);' +
+        'border-radius:8px;padding:10px 12px;max-width:440px;max-height:360px;overflow-y:auto;';
+
+    var closeBtn = '<div style="display:flex;justify-content:flex-end;margin-bottom:4px;">' +
+        '<button onclick="_vdmCloseTextOverlay()" style="background:none;border:none;color:#f87171;' +
+        'cursor:pointer;font-size:14px;padding:0 4px;">&#10005;</button></div>';
+
+    var content = '<div style="font-family:\'JetBrains Mono\',monospace;font-size:10px;' +
+        'white-space:pre-wrap;color:#e2e8f0;line-height:1.4;">' +
+        rawText.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</div>';
+
+    overlay.innerHTML = closeBtn + content;
+    container.style.position = 'relative';
+    container.appendChild(overlay);
+}
+
+window._vdmCloseTextOverlay = function () {
+    var el = document.getElementById('ga-vdm-text-overlay');
+    if (el) el.remove();
+};
 
 function _vdmRemoveFromMap() {
     for (var i = 0; i < vdmMapLayers.length; i++) {
@@ -1878,16 +1909,10 @@ function _vdmRenderOnMap() {
             .bindTooltip(tip, { sticky: true, className: 'ga-fl-tooltip' });
         marker.on('click', function () {
             if (typeof syncIRToTime === 'function') syncIRToTime(v.time);
-            // Show decoded VDM text in a popup
+            // Show decoded VDM text in a fixed overlay (not a Leaflet popup, which
+            // would be closed by the IR hover handler's popup interactions)
             if (v.raw_text) {
-                var decoded = '<div style="font-family:\'JetBrains Mono\',monospace;font-size:10px;' +
-                    'white-space:pre-wrap;max-width:400px;max-height:300px;overflow-y:auto;' +
-                    'color:#e2e8f0;line-height:1.4;">' +
-                    v.raw_text.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</div>';
-                L.popup({ maxWidth: 420, className: 'ga-vdm-popup' })
-                    .setLatLng([v.lat, v.lon])
-                    .setContent(decoded)
-                    .openOn(detailMap);
+                _vdmShowTextOverlay(v.raw_text);
             }
         });
         marker.on('tooltipopen', function () { _gaFLTooltipOpen = true; });
