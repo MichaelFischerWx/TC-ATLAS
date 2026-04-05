@@ -5571,10 +5571,13 @@ def _parse_usaf_10sec(lines: list, col_line_idx: int) -> list:
             skip_next = True
             data_col += 1
             continue
-        # NOTE: Do NOT merge "V V" — in ARWO data files, these are two
-        # separate single-character columns (vertical velocity components)
-        # occupying two data positions.  Merging them shifts all subsequent
-        # columns (WDir, WSpd, SLP, …) by one.
+        # "V V" is a single column (vertical velocity) with ONE data value.
+        # Header has two tokens but data has one value — must merge.
+        if upper == "V" and ti + 1 < len(simple_tokens) and simple_tokens[ti + 1].upper() == "V":
+            col_idx["VV"] = data_col
+            skip_next = True
+            data_col += 1
+            continue
         if upper in ("VALID", "VALIDITY", "SOURCE", "SATCOM", "AVAPS", "DDPH", "SFMR", "FLAGS"):
             # Trailing metadata columns — stop parsing
             break

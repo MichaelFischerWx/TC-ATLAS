@@ -4606,24 +4606,68 @@ _VDM_CACHE_MAX = 50
 
 
 def _parse_vdm_position(line_b_text: str):
-    """Parse VDM position from line B (deg/min format).
+    """Parse VDM position component (lat or lon).
 
-    Examples:
-        '16 deg 46 min N' → 16.767
-        '058 deg 30 min W' → -58.5
-        '17 DEG 21 MIN N' → 17.35
+    Handles multiple formats:
+        '16 deg 46 min N'       → 16.767   (deg-min)
+        '058 deg 30 min W'      → -58.5    (deg-min)
+        '12.98 deg N'           → 12.98    (decimal deg)
+        '12.98 deg N 059.09 deg W' → 12.98 (first component only)
     """
     import re
-    m = re.match(r'\s*(\d+)\s*(?:deg|DEG)\s+(\d+)\s*(?:min|MIN)\s+([NSEW])', line_b_text.strip())
-    if not m:
-        return None
-    deg = int(m.group(1))
-    mins = int(m.group(2))
-    hemi = m.group(3).upper()
-    val = deg + mins / 60.0
-    if hemi in ('S', 'W'):
-        val = -val
-    return round(val, 3)
+    s = line_b_text.strip()
+    # Try deg-min format: "16 deg 46 min N"
+    m = re.match(r'(\d+)\s*(?:deg|DEG)\s+(\d+)\s*(?:min|MIN)\s+([NSEW])', s)
+    if m:
+        val = int(m.group(1)) + int(m.group(2)) / 60.0
+        if m.group(3).upper() in ('S', 'W'):
+            val = -val
+        return round(val, 3)
+    # Try decimal-deg format: "12.98 deg N"
+    m = re.match(r'([\d.]+)\s*(?:deg|DEG)\s+([NSEW])', s)
+    if m:
+        val = float(m.group(1))
+        if m.group(2).upper() in ('S', 'W'):
+            val = -val
+        return round(val, 3)
+    return None
+
+
+def _parse_vdm_latlon(lines: list) -> tuple:
+    """Parse lat/lon from VDM line B, handling single-line and two-line formats.
+
+    Returns (lat, lon) tuple.
+    """
+    import re
+    for i, line in enumerate(lines):
+        if not line.strip().startswith("B."):
+            continue
+        b_text = re.sub(r'^B\.\s*', '', line.strip())
+
+        # Try single-line format: "12.98 deg N 059.09 deg W"
+        m = re.findall(r'([\d.]+)\s*(?:deg|DEG)\s+(?:(\d+)\s*(?:min|MIN)\s+)?([NSEW])', b_text)
+        if len(m) >= 2:
+            lat_parts, lon_parts = m[0], m[1]
+            lat = float(lat_parts[0])
+            if lat_parts[1]:
+                lat += int(lat_parts[1]) / 60.0
+            if lat_parts[2].upper() == 'S':
+                lat = -lat
+            lon = float(lon_parts[0])
+            if lon_parts[1]:
+                lon += int(lon_parts[1]) / 60.0
+            if lon_parts[2].upper() == 'W':
+                lon = -lon
+            return (round(lat, 3), round(lon, 3))
+
+        # Try two-line format: lat on B line, lon on next
+        lat = _parse_vdm_position(b_text)
+        lon = None
+        if i + 1 < len(lines):
+            lon = _parse_vdm_position(lines[i + 1])
+        return (lat, lon)
+
+    return (None, None)
 
 
 def _parse_vdm_text(text: str, year: int) -> dict | None:
@@ -4673,18 +4717,8 @@ def _parse_vdm_text(text: str, year: int) -> dict | None:
     else:
         return None  # Can't parse time → skip
 
-    # B. Position — may span two lines
-    lat = None
-    lon = None
-    for i, line in enumerate(lines):
-        if line.strip().startswith("B."):
-            # Lat is on this line or next
-            lat_text = re.sub(r'^B\.\s*', '', line.strip())
-            lat = _parse_vdm_position(lat_text)
-            # Lon is typically next line
-            if i + 1 < len(lines):
-                lon = _parse_vdm_position(lines[i + 1])
-            break
+    # B. Position — single line or two lines
+    lat, lon = _parse_vdm_latlon(lines)
     vdm["lat"] = lat
     vdm["lon"] = lon
 
