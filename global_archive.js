@@ -10611,6 +10611,18 @@ window.gaSondeCloseSkewT = function () {
 var _gaSondeViewMode = 'skewt';
 var _gaSondeCurrentIdx = 0;
 
+// Open cross-section or radial directly from the FL controls (no sonde selection needed)
+window.gaFLOpenXSec = function () {
+    var panel = document.getElementById('ga-sonde-skewt-panel');
+    if (panel) panel.style.display = '';
+    gaSondeSetView('xsec');
+};
+window.gaFLOpenRadial = function () {
+    var panel = document.getElementById('ga-sonde-skewt-panel');
+    if (panel) panel.style.display = '';
+    gaSondeSetView('radial');
+};
+
 window.gaSondeSetView = function (mode) {
     _gaSondeViewMode = mode;
     document.getElementById('ga-sonde-view-skewt').classList.toggle('active', mode === 'skewt');
@@ -10737,6 +10749,7 @@ function _computeThetaE(tc, rh, p) {
 function _getSondeVal(prof, varName, idx) {
     if (varName === 'wspd' && prof.wspd && prof.wspd[idx] != null) return prof.wspd[idx] * 1.944;
     if (varName === 'temp' && prof.temp && prof.temp[idx] != null) return prof.temp[idx];
+    if (varName === 'rh' && prof.rh && prof.rh[idx] != null) return prof.rh[idx];
     if (varName === 'theta_e') {
         // Use stored θe if available, otherwise compute from T/RH/P
         if (prof.theta_e && prof.theta_e[idx] != null) return prof.theta_e[idx];
@@ -10774,7 +10787,8 @@ function _renderCrossSection(divId) {
     var baseDateMs = new Date(missionDate + 'T00:00:00Z').getTime();
 
     var rVals = [], altVals = [], colorVals = [], hoverTexts = [];
-    var varLabel = _xsecVar === 'wspd' ? 'Wind (kt)' : _xsecVar === 'temp' ? 'Temp (°C)' : 'θe (K)';
+    var varLabels = { wspd: 'Wind (kt)', temp: 'Temp (°C)', theta_e: 'θe (K)', rh: 'RH (%)' };
+    var varLabel = varLabels[_xsecVar] || _xsecVar;
 
     // ── Flight-level data ──
     var flObs = _gaFLData10s || [];
@@ -10797,6 +10811,7 @@ function _renderCrossSection(divId) {
         if (_xsecVar === 'wspd' && o.fl_wspd_ms != null) val = o.fl_wspd_ms * 1.944;
         else if (_xsecVar === 'temp' && o.temp_c != null) val = o.temp_c;
         else if (_xsecVar === 'theta_e' && o.theta_e != null) val = o.theta_e;
+        else if (_xsecVar === 'rh') continue;  // FL data doesn't have RH
         if (val == null) continue;
 
         rVals.push(r);
@@ -10850,6 +10865,10 @@ function _renderCrossSection(divId) {
         colorscale = [[0, '#3b82f6'], [0.3, '#22d3ee'], [0.5, '#34d399'],
                        [0.7, '#fbbf24'], [1, '#f87171']];
         cmin = -20; cmax = 30;
+    } else if (_xsecVar === 'rh') {
+        colorscale = [[0, '#f87171'], [0.3, '#fb923c'], [0.5, '#fbbf24'],
+                       [0.7, '#34d399'], [0.85, '#06b6d4'], [1, '#3b82f6']];
+        cmin = 0; cmax = 100;
     } else {
         colorscale = [[0, '#3b82f6'], [0.25, '#06b6d4'], [0.4, '#34d399'],
                        [0.6, '#fbbf24'], [0.8, '#fb923c'], [1, '#f87171']];
@@ -10944,8 +10963,10 @@ function _renderRadialProfile(divId) {
     if (!missionDate) return;
     var baseDateMs = new Date(missionDate + 'T00:00:00Z').getTime();
 
-    var varLabel = _xsecVar === 'wspd' ? 'Wind Speed (kt)' : _xsecVar === 'temp' ? 'Temperature (°C)' : 'θe (K)';
-    var varColor = _xsecVar === 'wspd' ? '#60a5fa' : _xsecVar === 'temp' ? '#f87171' : '#e879f9';
+    var varLabels2 = { wspd: 'Wind Speed (kt)', temp: 'Temperature (°C)', theta_e: 'θe (K)', rh: 'RH (%)' };
+    var varColors2 = { wspd: '#60a5fa', temp: '#f87171', theta_e: '#e879f9', rh: '#06b6d4' };
+    var varLabel = varLabels2[_xsecVar] || _xsecVar;
+    var varColor = varColors2[_xsecVar] || '#60a5fa';
 
     // ── Flight-level radial profile ──
     var flR = [], flVals = [];
@@ -10964,6 +10985,7 @@ function _renderRadialProfile(divId) {
         if (_xsecVar === 'wspd' && o.fl_wspd_ms != null) val = o.fl_wspd_ms * 1.944;
         else if (_xsecVar === 'temp' && o.temp_c != null) val = o.temp_c;
         else if (_xsecVar === 'theta_e' && o.theta_e != null) val = o.theta_e;
+        else if (_xsecVar === 'rh') continue;  // FL data doesn't have RH
         if (val == null) continue;
         flR.push(r);
         flVals.push(val);

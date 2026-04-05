@@ -515,6 +515,8 @@
                                 </label>
                                 <span style="font-size:9px;color:#64748b;">Auto</span>
                                 <button class="ga-btn ga-btn-xs" onclick="gaFLOpenTimeSeries()" title="Open time series panel" style="font-size:9px;color:#93c5fd;">&#128200; Time Series</button>
+                                <button class="ga-btn ga-btn-xs" onclick="gaFLOpenXSec()" title="Radius-height cross-section" style="font-size:9px;color:#6ee7b7;">X-Sec</button>
+                                <button class="ga-btn ga-btn-xs" onclick="gaFLOpenRadial()" title="Radial profile" style="font-size:9px;color:#6ee7b7;">Radial</button>
                                 <span id="ga-fl-frame-status" style="font-size:9px;color:#64748b;"></span>
                             </div>
                             <div id="ga-fl-legend" style="margin-top:4px;"></div>
@@ -568,6 +570,7 @@
                                 <button class="ga-btn ga-btn-xs ga-xsec-var-btn active" onclick="gaXSecSetVar('wspd')" data-var="wspd" style="font-size:9px;">Wind</button>
                                 <button class="ga-btn ga-btn-xs ga-xsec-var-btn" onclick="gaXSecSetVar('temp')" data-var="temp" style="font-size:9px;">Temp</button>
                                 <button class="ga-btn ga-btn-xs ga-xsec-var-btn" onclick="gaXSecSetVar('theta_e')" data-var="theta_e" style="font-size:9px;">&theta;e</button>
+                                <button class="ga-btn ga-btn-xs ga-xsec-var-btn" onclick="gaXSecSetVar('rh')" data-var="rh" style="font-size:9px;">RH</button>
                             </div>
                             <div style="display:flex;gap:8px;">
                                 <div id="ga-sonde-skewt" style="flex:1;height:420px;"></div>
