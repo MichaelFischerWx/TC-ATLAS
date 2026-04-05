@@ -10246,24 +10246,23 @@ function _gaSondeRenderTable() {
                 if (prof.wspd[wi] != null && (maxWspd == null || prof.wspd[wi] > maxWspd)) maxWspd = prof.wspd[wi];
             }
         }
-        // WL150: wind at ~150m altitude (must reach within 10m of surface)
+        // WL150: mean wind speed in the lowest 150m layer
+        // Only for sondes that reached within 10m of the surface
         var wl150 = null;
         if (prof.alt_km && prof.wspd && s.hit_surface) {
-            // Check if sonde reached within 10m of surface
             var minAlt = null;
             for (var ai = 0; ai < prof.alt_km.length; ai++) {
                 if (prof.alt_km[ai] != null && (minAlt == null || prof.alt_km[ai] < minAlt)) minAlt = prof.alt_km[ai];
             }
-            if (minAlt != null && minAlt <= 0.01) {  // within 10m (0.01 km) of surface
-                // Find nearest observation to 150m (0.15 km)
-                var bestDist = Infinity;
+            if (minAlt != null && minAlt <= 0.01) {
+                var wSum = 0, wCnt = 0;
                 for (var hi = 0; hi < prof.alt_km.length; hi++) {
-                    if (prof.alt_km[hi] != null && prof.wspd[hi] != null) {
-                        var dist = Math.abs(prof.alt_km[hi] - 0.15);
-                        if (dist < bestDist) { bestDist = dist; wl150 = prof.wspd[hi]; }
+                    if (prof.alt_km[hi] != null && prof.wspd[hi] != null && prof.alt_km[hi] <= 0.15) {
+                        wSum += prof.wspd[hi];
+                        wCnt++;
                     }
                 }
-                if (bestDist > 0.05) wl150 = null;  // must be within 50m of target
+                if (wCnt >= 3) wl150 = wSum / wCnt;  // require at least 3 obs in layer
             }
         }
         var psfc = s.splash_pr || s.hyd_sfcp || null;
