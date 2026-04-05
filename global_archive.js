@@ -10232,6 +10232,7 @@ function _gaSondeRenderTable() {
         '<th style="padding:2px 4px;text-align:left;">#</th>' +
         '<th style="padding:2px 4px;text-align:left;">Time</th>' +
         '<th style="padding:2px 4px;text-align:right;">Vmax</th>' +
+        '<th style="padding:2px 4px;text-align:right;">WL150</th>' +
         '<th style="padding:2px 4px;text-align:right;">Psfc</th>' +
         '<th style="padding:2px 4px;text-align:center;">Sfc</th>' +
         '<th style="padding:2px 4px;"></th></tr>';
@@ -10245,6 +10246,26 @@ function _gaSondeRenderTable() {
                 if (prof.wspd[wi] != null && (maxWspd == null || prof.wspd[wi] > maxWspd)) maxWspd = prof.wspd[wi];
             }
         }
+        // WL150: wind at ~150m altitude (must reach within 10m of surface)
+        var wl150 = null;
+        if (prof.alt_km && prof.wspd && s.hit_surface) {
+            // Check if sonde reached within 10m of surface
+            var minAlt = null;
+            for (var ai = 0; ai < prof.alt_km.length; ai++) {
+                if (prof.alt_km[ai] != null && (minAlt == null || prof.alt_km[ai] < minAlt)) minAlt = prof.alt_km[ai];
+            }
+            if (minAlt != null && minAlt <= 0.01) {  // within 10m (0.01 km) of surface
+                // Find nearest observation to 150m (0.15 km)
+                var bestDist = Infinity;
+                for (var hi = 0; hi < prof.alt_km.length; hi++) {
+                    if (prof.alt_km[hi] != null && prof.wspd[hi] != null) {
+                        var dist = Math.abs(prof.alt_km[hi] - 0.15);
+                        if (dist < bestDist) { bestDist = dist; wl150 = prof.wspd[hi]; }
+                    }
+                }
+                if (bestDist > 0.05) wl150 = null;  // must be within 50m of target
+            }
+        }
         var psfc = s.splash_pr || s.hyd_sfcp || null;
         var timeShort = (s.launch_time || '').replace(/.*T/, '').replace('Z', '').substring(0, 8);
 
@@ -10252,6 +10273,7 @@ function _gaSondeRenderTable() {
             '<td style="padding:2px 4px;color:' + _SONDE_COLORS[i % _SONDE_COLORS.length] + ';">' + (i + 1) + '</td>' +
             '<td style="padding:2px 4px;">' + timeShort + '</td>' +
             '<td style="padding:2px 4px;text-align:right;">' + (maxWspd != null ? (maxWspd * 1.944).toFixed(0) + ' kt' : '\u2014') + '</td>' +
+            '<td style="padding:2px 4px;text-align:right;">' + (wl150 != null ? (wl150 * 1.944).toFixed(0) + ' kt' : '\u2014') + '</td>' +
             '<td style="padding:2px 4px;text-align:right;">' + (psfc != null ? psfc.toFixed(0) : '\u2014') + '</td>' +
             '<td style="padding:2px 4px;text-align:center;">' + (s.hit_surface ? '\u2705' : '\u274c') + '</td>' +
             '<td style="padding:2px 4px;"><button class="ga-btn ga-btn-xs" style="font-size:8px;color:#6ee7b7;" onclick="event.stopPropagation();gaSondeShowSkewT(' + i + ')">Skew-T</button></td></tr>';
@@ -10531,7 +10553,12 @@ _gaFLRenderOnMap = function () {
         var centerLat = selectedStorm.lmi_lat || selectedStorm.genesis_lat || 0;
         var centerLon = selectedStorm.lmi_lon || selectedStorm.genesis_lon || 0;
         _gaSondeFetch(selectedStorm.name, selectedStorm.year, missionId, centerLat, centerLon);
-        _vdmFetch();
+        // Fetch VDMs if not yet loaded; re-render if already loaded
+        if (vdmLoaded && vdmData) {
+            _vdmRenderOnMap();
+        } else {
+            _vdmFetch();
+        }
     }
 };
 
