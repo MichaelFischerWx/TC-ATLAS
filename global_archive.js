@@ -9786,19 +9786,18 @@ function _gaFLSyncIRToMissionMidpoint(json) {
     var mission = _gaFLMissions[select.selectedIndex];
     if (!mission || !mission.datetime) return;
 
-    // Calculate midpoint time
+    // Calculate midpoint time, handling midnight crossings
     var st = summ.start_time.split(':');
     var et = summ.end_time.split(':');
     var startSec = parseInt(st[0]) * 3600 + parseInt(st[1]) * 60 + (parseInt(st[2]) || 0);
     var endSec = parseInt(et[0]) * 3600 + parseInt(et[1]) * 60 + (parseInt(et[2]) || 0);
     if (endSec < startSec) endSec += 86400; // crossed midnight
     var midSec = (startSec + endSec) / 2;
-    var midHH = Math.floor(midSec / 3600) % 24;
-    var midMM = Math.floor((midSec % 3600) / 60);
 
-    var midDateStr = mission.datetime + 'T' +
-        String(midHH).padStart(2, '0') + ':' + String(midMM).padStart(2, '0') + ':00Z';
-    var midDate = new Date(midDateStr);
+    // Build midpoint datetime: start from mission date, add midSec as milliseconds
+    // This correctly handles midnight crossings (midSec > 86400 → next day)
+    var baseDate = new Date(mission.datetime + 'T00:00:00Z');
+    var midDate = new Date(baseDate.getTime() + midSec * 1000);
     if (isNaN(midDate.getTime())) return;
 
     // Find nearest IR frame
@@ -10824,9 +10823,14 @@ function _gaFLRenderTimeSeries() {
                 if (_gaFLXAxisMode === 'radius' && o.r_km != null) {
                     xVal = o.r_km;
                 } else {
-                    // Trim seconds from HH:MM:SS → HH:MM for cleaner axis labels
+                    // Trim seconds and wrap hours past midnight (25:14 → 01:14)
                     var t = o.time || '';
-                    xVal = t.length > 5 ? t.substring(0, 5) : t;
+                    var hhmm = t.length > 5 ? t.substring(0, 5) : t;
+                    var hh = parseInt(hhmm.split(':')[0]);
+                    if (hh >= 24) {
+                        hhmm = String(hh - 24).padStart(2, '0') + hhmm.substring(2);
+                    }
+                    xVal = hhmm;
                 }
                 xVals.push(xVal);
                 yVals.push(val);
