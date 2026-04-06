@@ -9918,9 +9918,9 @@ function _gaFLLoadMissionData(fileUrl) {
                             if (btn1s) { btn1s.style.opacity = '1'; btn1s.textContent = '1s'; }
                             if (_gaFLResVisible['1s'] && _gaFLTSOpen) _gaFLRenderTimeSeries();
                         } else {
-                            // 1s data not available — hide button
-                            if (btn1s) { btn1s.style.display = 'none'; }
-                            json.has_1s = false;
+                            // 1s data not returned — reset button but don't hide
+                            // (might be a stale server cache; keep button visible)
+                            if (btn1s) { btn1s.style.opacity = '1'; btn1s.textContent = '1s'; }
                         }
                     })
                     .catch(function (err) {
