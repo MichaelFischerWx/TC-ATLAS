@@ -1837,6 +1837,45 @@ function _vdmReset() {
     vdmLoaded = false;
 }
 
+// ── Minute Observations (MINOB / HDOB) ─────────────────────────
+
+var minobData = null;
+var minobLoaded = false;
+
+function _minobFetch() {
+    if (!selectedStorm || minobLoaded) return;
+    // Only fetch for years with recon data (1989+)
+    if (selectedStorm.year < 1989) return;
+
+    var track = allTracks[selectedStorm.sid] || [];
+    var startDate = '', endDate = '';
+    if (track.length > 0) {
+        startDate = track[0].t.substring(0, 10);
+        endDate = track[track.length - 1].t.substring(0, 10);
+    }
+
+    var url = API_BASE + '/global/minobs?storm_name=' + encodeURIComponent(selectedStorm.name) +
+        '&year=' + selectedStorm.year;
+    if (selectedStorm.atcf_id) url += '&atcf_id=' + encodeURIComponent(selectedStorm.atcf_id);
+    if (startDate) url += '&start_date=' + startDate + '&end_date=' + endDate;
+
+    fetch(url)
+        .then(function (r) { return r.json(); })
+        .then(function (json) {
+            if (!json.success || !json.observations || json.observations.length === 0) return;
+            minobData = json.observations;
+            minobLoaded = true;
+            // Re-render FL time series if open to add MINOB overlay
+            if (_gaFLTSOpen && _gaFLData) _gaFLRenderTimeSeries();
+        })
+        .catch(function () {});
+}
+
+function _minobReset() {
+    minobData = null;
+    minobLoaded = false;
+}
+
 function _vdmShowTextOverlay(rawText) {
     _vdmCloseTextOverlay();
     var mapEl = document.getElementById('detail-map');
@@ -9555,6 +9594,7 @@ var _gaFLTooltipOpen = false;
 var _gaFLFetching = false;
 var _gaFLTSHighlight = null;
 var _gaFLResVisible = { '1s': false, '10s': true, '30s': false };
+var _gaFLMinobVisible = true;
 var _gaFLXAxisMode = 'time';
 var _gaFLTSOpen = false;
 
@@ -9672,8 +9712,9 @@ function _gaFLDiscoverMissions(storm) {
     var status = document.getElementById('ga-fl-frame-status');
     if (status) status.textContent = 'Searching\u2026';
 
-    // Start VDM fetch in parallel — VDM only needs storm info, not mission
+    // Start VDM + MINOB fetch in parallel — only needs storm info, not mission
     _vdmFetch();
+    _minobFetch();
 
     var url = API_BASE + '/global/flightlevel/missions?storm_name=' +
         encodeURIComponent(storm.name) + '&year=' + storm.year;
@@ -11486,6 +11527,7 @@ _gaFLReset = function () {
     _gaSondeRemoveFromMap();
     _gaSondeClientCache = {};
     _vdmReset();
+    _minobReset();
     _origGaFLReset();
 };
 window._gaFLReset = _gaFLReset;
@@ -11556,6 +11598,13 @@ window.gaFLToggleRes = function (res) {
         var r = b.getAttribute('data-res');
         if (r === res) b.classList.toggle('active', _gaFLResVisible[res]);
     });
+    if (_gaFLData) _gaFLRenderTimeSeries();
+};
+
+window.gaFLToggleMinob = function () {
+    _gaFLMinobVisible = !_gaFLMinobVisible;
+    var btn = document.getElementById('ga-fl-minob-btn');
+    if (btn) btn.classList.toggle('active', _gaFLMinobVisible);
     if (_gaFLData) _gaFLRenderTimeSeries();
 };
 
@@ -11789,6 +11838,95 @@ function _gaFLRenderTimeSeries() {
                 hovertemplate: '%{text}<extra></extra>',
                 text: vdmPHovers,
                 yaxis: 'y2', showlegend: true,
+            });
+        }
+    }
+
+    // ── MINOB / HDOB overlay: peak 10-sec and 30-sec avg wind ──
+    if (minobData && minobData.length > 0 && _gaFLData && _gaFLData.summary) {
+        var summ2 = _gaFLData.summary;
+        var mDate2 = '';
+        if (_gaFLMissions) {
+            var sel2 = document.getElementById('ga-fl-mission-select');
+            if (sel2 && _gaFLMissions[sel2.selectedIndex]) {
+                mDate2 = _gaFLMissions[sel2.selectedIndex].datetime;
+            }
+        }
+        var ms2 = 0, me2 = 86400;
+        if (summ2.start_time) {
+            var sp2 = summ2.start_time.split(':');
+            ms2 = parseInt(sp2[0]) * 3600 + parseInt(sp2[1]) * 60 - 1800;
+        }
+        if (summ2.end_time) {
+            var ep2 = summ2.end_time.split(':');
+            me2 = parseInt(ep2[0]) * 3600 + parseInt(ep2[1]) * 60 + 1800;
+            if (me2 < ms2) me2 += 86400;
+        }
+        var mDateNext2 = '';
+        if (mDate2) {
+            var md2 = new Date(mDate2 + 'T00:00:00Z');
+            md2.setUTCDate(md2.getUTCDate() + 1);
+            mDateNext2 = md2.toISOString().substring(0, 10);
+        }
+
+        var moTimes = [], moPeak = [], mo30s = [], moHovers = [];
+        minobData.forEach(function (ob) {
+            if (!ob.time) return;
+            var oDate = ob.time.substring(0, 10);
+            var oHH = parseInt(ob.time.substring(11, 13));
+            var oMM = parseInt(ob.time.substring(14, 16));
+            var oSec = oHH * 3600 + oMM * 60;
+
+            if (mDate2 && oDate === mDateNext2) {
+                oSec += 86400;
+            } else if (mDate2 && oDate !== mDate2) {
+                return;
+            }
+            if (oSec < ms2 || oSec > me2) return;
+
+            var displayHH2 = oHH;
+            if (oDate === mDateNext2) displayHH2 = oHH + 24;
+            var wHH = displayHH2 >= 24 ? displayHH2 - 24 : displayHH2;
+            var tLabel = String(wHH).padStart(2, '0') + ':' + String(oMM).padStart(2, '0');
+
+            var p10 = ob.peak_10s_wspd_kt;
+            var w30 = ob.wspd_30s_kt;
+            if (p10 == null && w30 == null) return;
+
+            var hov = '<b>MINOB ' + tLabel + 'Z</b>';
+            if (p10 != null) hov += '<br>Peak 10s: ' + p10 + ' kt';
+            if (w30 != null) hov += '<br>30s avg: ' + w30 + ' kt';
+            if (ob.aircraft) hov += '<br>' + ob.aircraft + ' ' + (ob.mission_id || '');
+
+            moTimes.push(tLabel);
+            moPeak.push(p10);
+            mo30s.push(w30);
+            moHovers.push(hov);
+        });
+
+        if (moTimes.length > 0) {
+            // Peak 10-sec wind — prominent orange triangles
+            traces.push({
+                x: moTimes, y: moPeak,
+                type: 'scatter', mode: 'markers',
+                name: 'MINOB Pk 10s',
+                marker: { color: '#f97316', symbol: 'triangle-up', size: 7,
+                          line: { color: '#fff', width: 0.5 } },
+                hovertemplate: '%{text}<extra></extra>',
+                text: moHovers,
+                yaxis: 'y', showlegend: true,
+                visible: _gaFLMinobVisible ? true : 'legendonly',
+            });
+            // 30-sec avg — smaller gray dots
+            traces.push({
+                x: moTimes, y: mo30s,
+                type: 'scatter', mode: 'markers',
+                name: 'MINOB 30s',
+                marker: { color: '#94a3b8', symbol: 'circle', size: 4 },
+                hovertemplate: '%{text}<extra></extra>',
+                text: moHovers,
+                yaxis: 'y', showlegend: true,
+                visible: _gaFLMinobVisible ? true : 'legendonly',
             });
         }
     }

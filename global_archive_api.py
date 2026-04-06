@@ -5303,3 +5303,482 @@ def get_vdm(
         _vdm_cache.popitem(last=False)
 
     return result
+
+
+# ── Minute Observations (MINOB / HDOB) ─────────────────────────────
+
+_minob_cache: OrderedDict = OrderedDict()
+_MINOB_CACHE_TTL = 7 * 86400
+_MINOB_CACHE_MAX = 50
+
+
+def _parse_minob_obs_legacy(fields: list) -> dict | None:
+    """Parse a single legacy MINOB/HDOB observation line (1989–2011).
+
+    Expected fields (space-split):
+      HHMM  LatH  LonH  GGGGG  XXXX  DDD  SSS  TTT  DDD2  PKT  EEEEE  FLAGS
+      0     1     2     3      4     5    6    7    8     9    10     11
+
+    Half-minute timestamps (e.g. "1704.") are supported (2003+ files).
+    """
+    if len(fields) < 10:
+        return None
+
+    # Time — HHMM or HHMM.  (the dot means +30 seconds)
+    t = fields[0].rstrip(";")
+    half_min = t.endswith(".")
+    t = t.rstrip(".")
+    if not t.isdigit() or len(t) < 4:
+        return None
+    hh, mm = int(t[:2]), int(t[2:4])
+    ss = 30 if half_min else 0
+    if hh > 47 or mm > 59:
+        return None
+
+    # Lat — e.g. "2529N" → 25.483
+    lat_s = fields[1].rstrip(";")
+    if lat_s.startswith("/"):
+        return None
+    lat_hem = lat_s[-1].upper()
+    lat_num = lat_s[:-1]
+    if len(lat_num) < 4:
+        return None
+    lat = int(lat_num[:-2]) + int(lat_num[-2:]) / 60.0
+    if lat_hem == "S":
+        lat = -lat
+
+    # Lon — e.g. "07501W" → -75.017
+    lon_s = fields[2].rstrip(";")
+    if lon_s.startswith("/"):
+        return None
+    lon_hem = lon_s[-1].upper()
+    lon_num = lon_s[:-1]
+    if len(lon_num) < 4:
+        return None
+    lon = int(lon_num[:-2]) + int(lon_num[-2:]) / 60.0
+    if lon_hem == "W":
+        lon = -lon
+
+    def _safe_int(s):
+        s = s.rstrip(";")
+        if "/" in s or not s.lstrip("-").isdigit():
+            return None
+        return int(s)
+
+    geo_alt = _safe_int(fields[3])               # geopotential height (m)
+    xxxx = _safe_int(fields[4])                   # D-value or sfc pressure
+    wdir = _safe_int(fields[5])                   # wind direction (deg)
+    wspd_30s = _safe_int(fields[6])               # 30-sec avg wind (kt)
+    temp_raw = _safe_int(fields[7])               # temp in tenths C
+    dewpt_raw = _safe_int(fields[8])              # dewpoint in tenths C
+    peak_10s = _safe_int(fields[9]) if len(fields) > 9 else None
+
+    # Decode D-value / surface pressure
+    d_value_m = None
+    sfc_pres_hpa = None
+    if xxxx is not None:
+        if xxxx >= 5000:
+            d_value_m = -(xxxx - 5000)
+        else:
+            if xxxx < 1000:
+                sfc_pres_hpa = round(1000 + xxxx / 10.0, 1)
+            else:
+                sfc_pres_hpa = round(xxxx / 10.0, 1)
+
+    # Decode temperature (tenths C, values > 500 mean negative)
+    temp_c = None
+    if temp_raw is not None:
+        if temp_raw > 500:
+            temp_c = -(temp_raw - 500) / 10.0
+        else:
+            temp_c = temp_raw / 10.0
+
+    dewpt_c = None
+    if dewpt_raw is not None:
+        if dewpt_raw > 500:
+            dewpt_c = -(dewpt_raw - 500) / 10.0
+        else:
+            dewpt_c = dewpt_raw / 10.0
+
+    return {
+        "_hh": hh, "_mm": mm, "_ss": ss,
+        "lat": round(lat, 3),
+        "lon": round(lon, 3),
+        "geo_alt_m": geo_alt,
+        "d_value_m": d_value_m,
+        "sfc_pres_hpa": sfc_pres_hpa,
+        "wdir_deg": wdir,
+        "wspd_30s_kt": wspd_30s,
+        "temp_c": round(temp_c, 1) if temp_c is not None else None,
+        "dewpt_c": round(dewpt_c, 1) if dewpt_c is not None else None,
+        "peak_10s_wspd_kt": peak_10s,
+    }
+
+
+def _parse_minob_obs_modern(fields: list) -> dict | None:
+    """Parse a modern HDOB observation line (2012+, URNT15/AHONT1 format).
+
+    Expected fields:
+      HHMMSS  LatH  LonH  PPPP  GGGGG  DDDD  sTTT  sDDD  dddSSS  PKT  SFMR  RAIN  QC
+    """
+    if len(fields) < 10:
+        return None
+
+    t = fields[0].rstrip(";")
+    if not t.isdigit() or len(t) < 6:
+        return None
+    hh, mm, ss = int(t[:2]), int(t[2:4]), int(t[4:6])
+    if hh > 47 or mm > 59:
+        return None
+
+    lat_s = fields[1].rstrip(";")
+    if lat_s.startswith("/"):
+        return None
+    lat_hem = lat_s[-1].upper()
+    lat_num = lat_s[:-1]
+    if len(lat_num) < 4:
+        return None
+    lat = int(lat_num[:-2]) + int(lat_num[-2:]) / 60.0
+    if lat_hem == "S":
+        lat = -lat
+
+    lon_s = fields[2].rstrip(";")
+    if lon_s.startswith("/"):
+        return None
+    lon_hem = lon_s[-1].upper()
+    lon_num = lon_s[:-1]
+    if len(lon_num) < 4:
+        return None
+    lon = int(lon_num[:-2]) + int(lon_num[-2:]) / 60.0
+    if lon_hem == "W":
+        lon = -lon
+
+    def _safe_int(s):
+        s = s.rstrip(";")
+        if "/" in s:
+            return None
+        try:
+            return int(s)
+        except ValueError:
+            return None
+
+    pres_raw = _safe_int(fields[3])
+    geo_alt = _safe_int(fields[4])
+    d_val_raw = _safe_int(fields[5])
+
+    try:
+        temp_c = round(int(fields[6].rstrip(";")) / 10.0, 1)
+    except (ValueError, IndexError):
+        temp_c = None
+    try:
+        dewpt_c = round(int(fields[7].rstrip(";")) / 10.0, 1)
+    except (ValueError, IndexError):
+        dewpt_c = None
+
+    # Wind — combined dddSSS (3-digit dir + 3-digit speed)
+    wind_combined = fields[8].rstrip(";") if len(fields) > 8 else ""
+    wdir = None
+    wspd_30s = None
+    if len(wind_combined) >= 6 and wind_combined.isdigit():
+        wdir = int(wind_combined[:3])
+        wspd_30s = int(wind_combined[3:])
+
+    peak_10s = _safe_int(fields[9]) if len(fields) > 9 else None
+
+    return {
+        "_hh": hh, "_mm": mm, "_ss": ss,
+        "lat": round(lat, 3),
+        "lon": round(lon, 3),
+        "geo_alt_m": geo_alt,
+        "d_value_m": d_val_raw,
+        "sfc_pres_hpa": round(pres_raw / 10.0, 1) if pres_raw is not None else None,
+        "wdir_deg": wdir,
+        "wspd_30s_kt": wspd_30s,
+        "temp_c": temp_c,
+        "dewpt_c": dewpt_c,
+        "peak_10s_wspd_kt": peak_10s,
+    }
+
+
+def _parse_minob_message(text: str, year: int, start_date: str, end_date: str,
+                         storm_filter: str = "") -> list:
+    """Parse a MINOB/HDOB text message (one or more SXXX50/URNT15 bulletins).
+
+    Returns list of message dicts, each containing header info and observations.
+    """
+    import re
+    lines = text.strip().splitlines()
+    if len(lines) < 3:
+        return []
+
+    messages = []
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+
+        # Look for WMO header (SXXX50 or URNT15)
+        if not (line.startswith("SXXX50") or line.startswith("URNT15")):
+            i += 1
+            continue
+
+        # Extract day from header timestamp (e.g., "SXXX50 KMIA 231531" → day=23)
+        hdr_parts = line.split()
+        hdr_day = None
+        if len(hdr_parts) >= 3 and len(hdr_parts[2]) >= 2:
+            try:
+                hdr_day = int(hdr_parts[2][:2])
+            except ValueError:
+                pass
+
+        # Next line: mission info
+        i += 1
+        if i >= len(lines):
+            break
+        info_line = lines[i].strip()
+        info_parts = info_line.split()
+        aircraft = info_parts[0] if len(info_parts) > 0 else ""
+        mission_id = info_parts[1] if len(info_parts) > 1 else ""
+        storm_name = ""
+        ob_number = None
+        is_modern = False
+
+        # Find MINOB/HDOB keyword
+        for k, p in enumerate(info_parts):
+            if p in ("MINOB", "HDOB"):
+                storm_name = info_parts[k - 1] if k > 1 else ""
+                ob_str = info_parts[k + 1] if k + 1 < len(info_parts) else ""
+                try:
+                    ob_number = int(ob_str)
+                except ValueError:
+                    pass
+                # Modern format has 8-digit date after ob number
+                if len(info_parts) > k + 2:
+                    date_token = info_parts[k + 2]
+                    if len(date_token) == 8 and date_token.isdigit():
+                        is_modern = True
+                break
+
+        if storm_filter and storm_name.upper() != storm_filter.upper():
+            i += 1
+            continue
+
+        # Parse observation lines
+        observations = []
+        i += 1
+        while i < len(lines):
+            ol = lines[i].strip()
+            if not ol or ol.startswith("SXXX50") or ol.startswith("URNT15") or ol == "NNNN":
+                break
+            parts = ol.split()
+            if len(parts) < 3:
+                i += 1
+                continue
+
+            obs = _parse_minob_obs_modern(parts) if is_modern else _parse_minob_obs_legacy(parts)
+
+            if obs is not None:
+                day = hdr_day
+                h, m, s = obs.pop("_hh"), obs.pop("_mm"), obs.pop("_ss")
+
+                if day is not None and start_date and end_date:
+                    from datetime import datetime, timedelta
+                    try:
+                        sd = datetime.strptime(start_date, "%Y-%m-%d")
+                        ed = datetime.strptime(end_date, "%Y-%m-%d")
+                        best = None
+                        best_dist = 999
+                        d = sd - timedelta(days=3)
+                        while d <= ed + timedelta(days=3):
+                            if d.day == day:
+                                dist = 0 if sd <= d <= ed else abs((d - sd).days if d < sd else (d - ed).days)
+                                if dist < best_dist:
+                                    best = d
+                                    best_dist = dist
+                            d += timedelta(days=1)
+                        if best:
+                            dt = best.replace(hour=h, minute=m, second=s)
+                            obs["time"] = dt.strftime("%Y-%m-%dT%H:%M:%S")
+                        else:
+                            obs["time"] = f"{year}-01-01T{h:02d}:{m:02d}:{s:02d}"
+                    except (ValueError, TypeError):
+                        obs["time"] = f"{year}-01-01T{h:02d}:{m:02d}:{s:02d}"
+                else:
+                    obs["time"] = f"{year}-01-01T{h:02d}:{m:02d}:{s:02d}"
+
+                observations.append(obs)
+            i += 1
+
+        if observations:
+            messages.append({
+                "aircraft": aircraft,
+                "mission_id": mission_id,
+                "storm_name": storm_name,
+                "ob_number": ob_number,
+                "observations": observations,
+            })
+
+    return messages
+
+
+@router.get("/minobs")
+def get_minobs(
+    storm_name: str = Query(..., description="Storm name"),
+    year: int = Query(..., ge=1989, le=2030, description="Year"),
+    atcf_id: str = Query("", description="ATCF ID for filtering"),
+    start_date: str = Query("", description="Storm start date YYYY-MM-DD"),
+    end_date: str = Query("", description="Storm end date YYYY-MM-DD"),
+):
+    """Fetch and parse MINOB/HDOB minute observations from NHC recon archive."""
+    import time as _time
+    now = _time.time()
+    cache_key = f"minob_{storm_name.lower()}_{year}"
+    if cache_key in _minob_cache:
+        cached, ts = _minob_cache[cache_key]
+        if now - ts < _MINOB_CACHE_TTL:
+            _minob_cache.move_to_end(cache_key)
+            return cached
+
+    from tc_radar_api import _hrd_fetch_text, _hrd_parse_directory
+    import re
+
+    all_messages = []
+
+    if year <= 2005:
+        # Eras 1-3: storm-specific directory with M*.txt, H*.txt, or *_HDOBS_*.txt
+        storm_dir = None
+        for name_variant in [storm_name.lower(), storm_name.upper(), storm_name.capitalize()]:
+            test_url = f"{NHC_RECON_BASE}/{year}/{name_variant}/"
+            try:
+                entries = _hrd_parse_directory(test_url)
+                if entries:
+                    storm_dir = test_url
+                    break
+            except Exception:
+                continue
+
+        if storm_dir:
+            target_files = []
+            for entry in entries:
+                e_upper = entry.upper()
+                if (e_upper.startswith("M") and len(e_upper) > 1 and e_upper[1].isdigit()
+                        and entry.lower().endswith(".txt")):
+                    target_files.append(entry)
+                elif (e_upper.startswith("H") and len(e_upper) > 1 and e_upper[1].isdigit()
+                      and entry.lower().endswith(".txt")):
+                    target_files.append(entry)
+                elif "HDOBS" in e_upper and entry.lower().endswith(".txt"):
+                    target_files.append(entry)
+
+            for fname in target_files:
+                try:
+                    text = _hrd_fetch_text(storm_dir + fname, timeout=10)
+                    msgs = _parse_minob_message(text, year, start_date, end_date,
+                                                storm_filter=storm_name)
+                    all_messages.extend(msgs)
+                except Exception as e:
+                    logger.warning(f"Failed to fetch/parse MINOB {fname}: {e}")
+
+    elif year <= 2011:
+        # Era 4 (2006-2011): HDOB/ directory
+        hdob_url = f"{NHC_RECON_BASE}/{year}/HDOB/"
+        try:
+            entries = _hrd_parse_directory(hdob_url)
+        except Exception:
+            entries = []
+
+        if start_date and end_date:
+            from datetime import datetime, timedelta
+            try:
+                sd = datetime.strptime(start_date, "%Y-%m-%d") - timedelta(days=2)
+                ed = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=2)
+            except ValueError:
+                sd = ed = None
+        else:
+            sd = ed = None
+
+        for entry in entries:
+            if not entry.lower().endswith(".txt"):
+                continue
+            dm = re.search(r'(\d{12})\.txt$', entry)
+            if not dm:
+                continue
+            if sd and ed:
+                try:
+                    fd = datetime.strptime(dm.group(1)[:8], "%Y%m%d")
+                    if not (sd <= fd <= ed):
+                        continue
+                except ValueError:
+                    pass
+            try:
+                text = _hrd_fetch_text(hdob_url + entry, timeout=10)
+                msgs = _parse_minob_message(text, year, start_date, end_date)
+                all_messages.extend(msgs)
+            except Exception as e:
+                logger.warning(f"Failed to fetch/parse HDOB {entry}: {e}")
+
+    else:
+        # Era 5 (2012+): AHONT1 (Atlantic) or AHOPN1 (Pacific)
+        basin_dir = "AHONT1"
+        if atcf_id and atcf_id.upper().startswith(("EP", "CP")):
+            basin_dir = "AHOPN1"
+        hdob_url = f"{NHC_RECON_BASE}/{year}/{basin_dir}/"
+        try:
+            entries = _hrd_parse_directory(hdob_url)
+        except Exception:
+            entries = []
+
+        if start_date and end_date:
+            from datetime import datetime, timedelta
+            try:
+                sd = datetime.strptime(start_date, "%Y-%m-%d") - timedelta(days=2)
+                ed = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=2)
+            except ValueError:
+                sd = ed = None
+        else:
+            sd = ed = None
+
+        for entry in entries:
+            if not entry.lower().endswith(".txt"):
+                continue
+            dm = re.search(r'(\d{12})\.txt$', entry)
+            if not dm:
+                continue
+            if sd and ed:
+                try:
+                    fd = datetime.strptime(dm.group(1)[:8], "%Y%m%d")
+                    if not (sd <= fd <= ed):
+                        continue
+                except ValueError:
+                    pass
+            try:
+                text = _hrd_fetch_text(hdob_url + entry, timeout=10)
+                msgs = _parse_minob_message(text, year, start_date, end_date,
+                                            storm_filter=storm_name)
+                all_messages.extend(msgs)
+            except Exception as e:
+                logger.warning(f"Failed to fetch/parse AHONT1 {entry}: {e}")
+
+    # Flatten observations with parent metadata
+    flat_obs = []
+    for msg in all_messages:
+        for obs in msg["observations"]:
+            obs["aircraft"] = msg["aircraft"]
+            obs["mission_id"] = msg["mission_id"]
+            flat_obs.append(obs)
+
+    flat_obs.sort(key=lambda o: o.get("time", ""))
+
+    result = {
+        "success": True,
+        "storm_name": storm_name,
+        "year": year,
+        "observations": flat_obs,
+        "n_obs": len(flat_obs),
+        "n_messages": len(all_messages),
+    }
+
+    _minob_cache[cache_key] = (result, now)
+    if len(_minob_cache) > _MINOB_CACHE_MAX:
+        _minob_cache.popitem(last=False)
+
+    return result
