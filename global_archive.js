@@ -9833,8 +9833,14 @@ function _gaFLLoadMissionData(fileUrl) {
                         _gaFLClientCache[fileUrl] = cached;
                         if (btn1s) { btn1s.style.opacity = '1'; btn1s.textContent = '1s'; }
                         if (_gaFLResVisible['1s'] && _gaFLTSOpen) _gaFLRenderTimeSeries();
+                    } else {
+                        if (btn1s) btn1s.style.display = 'none';
+                        cached.has_1s = false;
                     }
-                }).catch(function () {});
+                }).catch(function (err) {
+                    if (err && err.name === 'AbortError') return;
+                    if (btn1s) { btn1s.style.opacity = '1'; btn1s.textContent = '1s \u274c'; }
+                });
         }
         return;
     }
@@ -9881,12 +9887,17 @@ function _gaFLLoadMissionData(fileUrl) {
                             _gaFLData1s = json1s.obs_1s;
                             _gaFLClientCache[fileUrl] = json;
                             if (btn1s) { btn1s.style.opacity = '1'; btn1s.textContent = '1s'; }
-                            // Re-render time series if 1s is toggled on
                             if (_gaFLResVisible['1s'] && _gaFLTSOpen) _gaFLRenderTimeSeries();
+                        } else {
+                            // 1s data not available — hide button
+                            if (btn1s) { btn1s.style.display = 'none'; }
+                            json.has_1s = false;
                         }
                     })
-                    .catch(function () {
-                        if (btn1s) btn1s.style.opacity = '1';
+                    .catch(function (err) {
+                        // Aborted fetches are expected when switching missions
+                        if (err && err.name === 'AbortError') return;
+                        if (btn1s) { btn1s.style.opacity = '1'; btn1s.textContent = '1s \u274c'; }
                     });
             }
         })
