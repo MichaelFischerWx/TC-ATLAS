@@ -9795,9 +9795,11 @@ function _gaFLApplyData(json) {
     _buildFLCenterFixes();
 
     var res1sBtn = document.getElementById('ga-fl-res-1s');
+    // Show 1s button if has_1s flag is true OR if 1s summary stats exist
+    var show1s = json.has_1s || (json.summary && json.summary.max_fl_wspd_ms_1s != null);
     if (res1sBtn) {
-        res1sBtn.style.display = json.has_1s ? '' : 'none';
-        if (!json.has_1s) _gaFLResVisible['1s'] = false;
+        res1sBtn.style.display = show1s ? '' : 'none';
+        if (!show1s) _gaFLResVisible['1s'] = false;
     }
 
     if (status) {
