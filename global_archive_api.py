@@ -4294,6 +4294,10 @@ def _parse_hrd_legacy_csv(text: str) -> list:
         pres = _get("PRES")
         alt = _get("PA") or _get("GEOAL")
 
+        # Filter physically impossible wind speeds (calibration/test records)
+        if wspd is not None and wspd > 200:
+            wspd = None
+
         obs = {
             "time": f"{hh:02d}:{mm:02d}:{ss:02d}",
             "time_sec": hh * 3600 + mm * 60 + ss,
@@ -4321,7 +4325,7 @@ def _parse_hrd_legacy_csv(text: str) -> list:
     return observations
 
 
-_FL_GCS_CACHE_PREFIX = "recon/v5"  # v5: wider GPS null filter (lat/lon < 2°)
+_FL_GCS_CACHE_PREFIX = "recon/v6"  # v6: filter calibration records (wspd > 200), fix m/s unit heuristic
 
 
 def _fl_gcs_cache_key(filename: str, center_lat: float, center_lon: float) -> str:

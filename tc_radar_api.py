@@ -5880,10 +5880,13 @@ def _parse_hrd_1sec(text: str) -> list[dict]:
     # HRD files use either "m/s" or "kts"/"kt"/"knots" for WNDSP
     wspd_col = col_idx.get("WNDSP")
     wspd_in_knots = False
+    wspd_explicit_ms = False  # True when header explicitly declares m/s
     if wspd_col is not None and wspd_col < len(units_parts):
         wspd_unit = units_parts[wspd_col].lower()
         if "kt" in wspd_unit or "knot" in wspd_unit:
             wspd_in_knots = True
+        elif "m/s" in wspd_unit or "ms" in wspd_unit:
+            wspd_explicit_ms = True
 
     observations = []
     for line in lines[data_start:]:
@@ -5967,6 +5970,16 @@ def _parse_hrd_1sec(text: str) -> list[dict]:
         vt_wnd = _get("VTWND")  # m/s
         theta_e = _get("THETAE")  # deg
 
+        # Filter calibration/test records: some legacy files (e.g. 1980s NOAA P-3)
+        # contain interspersed reference records with physically impossible wind
+        # speeds (TAS ~290-400 m/s, WndSp ~290-395 m/s).  Null these out so they
+        # don't corrupt statistics or trigger the unit-detection heuristic.
+        _MAX_REALISTIC_WSPD = 200  # m/s (~389 kt) or kt; either way unreachable
+        if wspd is not None and wspd > _MAX_REALISTIC_WSPD:
+            wspd = None
+        if tas is not None and tas > _MAX_REALISTIC_WSPD:
+            tas = None
+
         obs = {
             "time": f"{hh:02d}:{mm:02d}:{ss:02d}",
             "time_sec": time_sec,
@@ -5992,10 +6005,11 @@ def _parse_hrd_1sec(text: str) -> list[dict]:
         }
         observations.append(obs)
 
-    # Heuristic check: if we didn't detect knots from the units line,
-    # check if max wind speed is unreasonably large for m/s (>120 m/s ~ 233 kt).
-    # This catches files where the units line is ambiguous.
-    if not wspd_in_knots and observations:
+    # Heuristic check: if unit detection was ambiguous (header didn't say m/s or kt),
+    # check if max wind speed looks like knots rather than m/s.
+    # Skip when the header explicitly declared m/s — bad data (calibration records)
+    # should have been nulled above, not used to override the declared units.
+    if not wspd_in_knots and not wspd_explicit_ms and observations:
         max_ws = max((o["fl_wspd_ms"] for o in observations if o["fl_wspd_ms"] is not None), default=0)
         if max_ws > 120:  # > 120 m/s is unrealistic, likely knots
             for obs in observations:
