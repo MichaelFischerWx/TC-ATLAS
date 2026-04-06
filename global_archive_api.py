@@ -4441,7 +4441,7 @@ def get_fl_data(
         logger.warning(f"Standard parser failed for {filename}: {e}")
 
     # If standard parser returned too few results, try .ten parser (USAF deg-min format)
-    if len(observations) < 10 and fmt in ("usaf_ten", "text_generic"):
+    if len(observations) < 10 and fmt in ("usaf_ten", "usaf_10sec", "text_generic"):
         try:
             from tc_radar_api import _parse_usaf_ten
             observations = _parse_usaf_ten(text)
