@@ -10040,7 +10040,8 @@ function _gaFLRenderOnMap() {
     // Wind barbs (zoom-adaptive density)
     for (var i = 0; i < obs.length; i += barbStep) {
         var o = obs[i];
-        if (o.lat == null || o.fl_wdir_deg == null || o.fl_wspd_ms == null) continue;
+        if (o.lat == null || o.fl_wdir_deg == null || o.fl_wspd_ms == null ||
+            !isFinite(o.fl_wdir_deg) || !isFinite(o.fl_wspd_ms)) continue;
         var barbHtml = _gaFLBarbSVG(o.fl_wspd_ms, o.fl_wdir_deg);
         var icon = L.divIcon({
             className: 'ga-fl-barb',

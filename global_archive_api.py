@@ -4321,7 +4321,7 @@ def _parse_hrd_legacy_csv(text: str) -> list:
     return observations
 
 
-_FL_GCS_CACHE_PREFIX = "recon/v4"  # v4: include_1s param + complete summary fields
+_FL_GCS_CACHE_PREFIX = "recon/v5"  # v5: wider GPS null filter (lat/lon < 2°)
 
 
 def _fl_gcs_cache_key(filename: str, center_lat: float, center_lon: float) -> str:

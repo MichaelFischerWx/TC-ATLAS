@@ -5940,8 +5940,8 @@ def _parse_hrd_1sec(text: str) -> list[dict]:
         lon_raw = _get("LON")
         if lat is None or lon_raw is None:
             continue
-        # Filter GPS null values (0,0 = not a real position)
-        if abs(lat) < 0.01 and abs(lon_raw) < 0.01:
+        # Filter GPS null values (near 0,0 or near 1,1 = not a real position)
+        if abs(lat) < 2.0 and abs(lon_raw) < 2.0:
             continue
         # NOAA files: "Deg W" (positive = west), negate for standard
         # USAF files: standard negative-west already
