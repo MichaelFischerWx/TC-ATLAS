@@ -4321,7 +4321,7 @@ def _parse_hrd_legacy_csv(text: str) -> list:
     return observations
 
 
-_FL_GCS_CACHE_PREFIX = "recon/v3"  # v3: filter GPS null (0,0) + midnight fix
+_FL_GCS_CACHE_PREFIX = "recon/v4"  # v4: include_1s param + complete summary fields
 
 
 def _fl_gcs_cache_key(filename: str, center_lat: float, center_lon: float) -> str:
@@ -4631,7 +4631,15 @@ def get_global_dropsondes(
                         and ('frd' in e.lower() or 'FRD' in e)]
         if mission_id:
             mid_prefix = _re.sub(r'\d+$', '', mission_id).upper()
-            frd_tarballs = [t for t in frd_tarballs if mid_prefix in t.upper()]
+            # USAF flights use "U" in FL files but "A" in AFRES sonde archives
+            alt_prefix = None
+            if mid_prefix.endswith('U'):
+                alt_prefix = mid_prefix[:-1] + 'A'
+            elif mid_prefix.endswith('A'):
+                alt_prefix = mid_prefix[:-1] + 'U'
+            frd_tarballs = [t for t in frd_tarballs
+                            if mid_prefix in t.upper() or
+                            (alt_prefix and alt_prefix in t.upper())]
         for t in frd_tarballs:
             all_tarballs.append((operproc_url, t))
 

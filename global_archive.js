@@ -9696,6 +9696,8 @@ function _gaFLDiscoverMissions(storm) {
         });
 }
 
+var _gaFLMissionStats = {};  // file_url → { maxWind, minP }
+
 function _gaFLPopulateMissionDropdown() {
     var select = document.getElementById('ga-fl-mission-select');
     if (!select || !_gaFLMissions) return;
@@ -9704,9 +9706,36 @@ function _gaFLPopulateMissionDropdown() {
         var m = _gaFLMissions[i];
         var opt = document.createElement('option');
         opt.value = m.file_url;
-        opt.textContent = m.datetime + ' ' + m.aircraft_code + m.sortie +
+        var label = m.datetime + ' ' + m.aircraft_code + m.sortie +
             ' (' + m.aircraft + ')';
+        var stats = _gaFLMissionStats[m.file_url];
+        if (stats) {
+            label += ' \u2014 ' + stats.maxWind + ' kt';
+        }
+        opt.textContent = label;
         select.appendChild(opt);
+    }
+}
+
+function _gaFLUpdateMissionStats(json) {
+    // Stash summary stats for the current mission and update dropdown label
+    if (!json || !json.source_url || !json.summary) return;
+    var summ = json.summary;
+    var maxW = summ.max_fl_wspd_ms != null ? Math.round(summ.max_fl_wspd_ms * 1.944) : null;
+    if (maxW != null) {
+        _gaFLMissionStats[json.source_url] = { maxWind: maxW };
+        // Update the dropdown option text
+        var select = document.getElementById('ga-fl-mission-select');
+        if (select) {
+            for (var i = 0; i < select.options.length; i++) {
+                if (select.options[i].value === json.source_url) {
+                    var m = _gaFLMissions[i];
+                    select.options[i].textContent = m.datetime + ' ' + m.aircraft_code + m.sortie +
+                        ' (' + m.aircraft + ') \u2014 ' + maxW + ' kt';
+                    break;
+                }
+            }
+        }
     }
 }
 
@@ -9795,6 +9824,7 @@ function _gaFLApplyData(json) {
     if (_gaSondeViewMode === 'xsec') _renderCrossSection('ga-sonde-skewt');
     else if (_gaSondeViewMode === 'radial') _renderRadialProfile('ga-sonde-skewt');
     _gaFLHighlightOnTimeline(json);
+    _gaFLUpdateMissionStats(json);
 
     if (_gaFLSyncFromFDeck) {
         _gaFLSyncFromFDeck = false;
