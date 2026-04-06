@@ -7555,15 +7555,12 @@ function _attachCompareIRHover(side) {
             return;
         }
 
-        // Mercator-corrected grid lookup (same as main viewer)
+        // Equirectangular grid lookup — Tb data has uniform lat spacing,
+        // NOT Mercator. Use geographic lat directly (same as main viewer).
         var nRows = s.tbRows, nCols = s.tbCols;
         if (!nRows || !nCols) return;
 
-        function _mercY(d) { var r = d * Math.PI / 180; return Math.log(Math.tan(Math.PI / 4 + r / 2)); }
-        var mercN = _mercY(b.getNorth());
-        var mercS = _mercY(b.getSouth());
-        var mercL = _mercY(lat);
-        var fracY = (mercN - mercL) / (mercN - mercS);
+        var fracY = (b.getNorth() - lat) / (b.getNorth() - b.getSouth());
         var fracX = (lng - b.getWest()) / (b.getEast() - b.getWest());
         var row = Math.min(Math.floor(fracY * nRows), nRows - 1);
         var col = Math.min(Math.floor(fracX * nCols), nCols - 1);

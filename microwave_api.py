@@ -1651,11 +1651,17 @@ def _regrid_swath(data: np.ndarray, lats: np.ndarray, lons: np.ndarray,
     center_lat = (lat_min + lat_max) / 2.0
     center_lon = (lon_min + lon_max) / 2.0
 
+    # Expand bounds by half a pixel so the image aligns correctly
+    # (linspace gives pixel centers, Leaflet needs pixel edges)
+    half_lat = (lat_max - lat_min) / max(n_lat - 1, 1) / 2.0
+    half_lon = (lon_max - lon_min) / max(n_lon - 1, 1) / 2.0
+
     return {
         "data": gridded,
         "center_lat": center_lat,
         "center_lon": center_lon,
-        "bounds": [[lat_min, lon_min], [lat_max, lon_max]],
+        "bounds": [[lat_min - half_lat, lon_min - half_lon],
+                    [lat_max + half_lat, lon_max + half_lon]],
         "nx": n_lon,
         "ny": n_lat,
         "dx_km": grid_res_deg * 111.0,
@@ -1727,11 +1733,16 @@ def _regrid_swath_multi(
     center_lat = (lat_min + lat_max) / 2.0
     center_lon = (lon_min + lon_max) / 2.0
 
+    # Expand bounds by half a pixel (pixel centers → pixel edges)
+    half_lat = (lat_max - lat_min) / max(n_lat - 1, 1) / 2.0
+    half_lon = (lon_max - lon_min) / max(n_lon - 1, 1) / 2.0
+
     return {
         "channels": channels,
         "center_lat": center_lat,
         "center_lon": center_lon,
-        "bounds": [[lat_min, lon_min], [lat_max, lon_max]],
+        "bounds": [[lat_min - half_lat, lon_min - half_lon],
+                    [lat_max + half_lat, lon_max + half_lon]],
         "nx": n_lon,
         "ny": n_lat,
         "dx_km": grid_res_deg * 111.0,
