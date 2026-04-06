@@ -9672,6 +9672,9 @@ function _gaFLDiscoverMissions(storm) {
     var status = document.getElementById('ga-fl-frame-status');
     if (status) status.textContent = 'Searching\u2026';
 
+    // Start VDM fetch in parallel — VDM only needs storm info, not mission
+    _vdmFetch();
+
     var url = API_BASE + '/global/flightlevel/missions?storm_name=' +
         encodeURIComponent(storm.name) + '&year=' + storm.year;
 
@@ -9687,6 +9690,8 @@ function _gaFLDiscoverMissions(storm) {
             _gaFLPopulateMissionDropdown();
             if (status) status.textContent = json.missions.length + ' mission(s)';
             _gaFLSyncToIRFrame();
+            // Fetch max wind stats for all missions (populates dropdown labels)
+            _gaFLFetchMissionStats(storm);
         })
         .catch(function (e) {
             if (status) status.textContent = 'Error: ' + e.message;
@@ -9694,6 +9699,45 @@ function _gaFLDiscoverMissions(storm) {
 }
 
 var _gaFLMissionStats = {};  // file_url → { maxWind, minP }
+
+function _gaFLFetchMissionStats(storm) {
+    var url = API_BASE + '/global/flightlevel/missions/stats?storm_name=' +
+        encodeURIComponent(storm.name) + '&year=' + storm.year;
+    fetch(url)
+        .then(function (r) { return r.json(); })
+        .then(function (json) {
+            if (!json.success || !json.stats) return;
+            var stats = json.stats;
+            var updated = false;
+            for (var fileUrl in stats) {
+                if (!_gaFLMissionStats[fileUrl]) {
+                    _gaFLMissionStats[fileUrl] = { maxWind: stats[fileUrl].max_wind_kt };
+                    updated = true;
+                }
+            }
+            if (updated) _gaFLPopulateMissionDropdown();
+            // If there are pending (uncached) missions, re-poll once after 15s
+            if (json.pending && json.pending.length > 0) {
+                setTimeout(function () {
+                    fetch(url)
+                        .then(function (r2) { return r2.json(); })
+                        .then(function (json2) {
+                            if (!json2.success || !json2.stats) return;
+                            var u2 = false;
+                            for (var fu in json2.stats) {
+                                if (!_gaFLMissionStats[fu]) {
+                                    _gaFLMissionStats[fu] = { maxWind: json2.stats[fu].max_wind_kt };
+                                    u2 = true;
+                                }
+                            }
+                            if (u2) _gaFLPopulateMissionDropdown();
+                        })
+                        .catch(function () {});
+                }, 15000);
+            }
+        })
+        .catch(function () {});
+}
 
 function _gaFLPopulateMissionDropdown() {
     var select = document.getElementById('ga-fl-mission-select');
@@ -9771,6 +9815,14 @@ function _gaFLApplyData(json) {
     _vdmCloseTextOverlay();  // close VDM text on mission change
     var status = document.getElementById('ga-fl-frame-status');
     _gaFLData = json;
+
+    // Start dropsonde fetch in parallel with map rendering (not after)
+    if (json && selectedStorm) {
+        var missionId = json.mission_id || '';
+        var centerLat = selectedStorm.lmi_lat || selectedStorm.genesis_lat || 0;
+        var centerLon = selectedStorm.lmi_lon || selectedStorm.genesis_lon || 0;
+        _gaSondeFetch(selectedStorm.name, selectedStorm.year, missionId, centerLat, centerLon);
+    }
     _gaFLData1s = json.obs_1s;
     _gaFLData10s = json.obs_10s || json.observations;
     _gaFLData30s = json.obs_30s;
@@ -10304,6 +10356,7 @@ function _gaFLHighlightOnTimeline(json) {
 
 var _gaSondeData = null;
 var _gaSondeMapLayers = [];
+var _gaSondeClientCache = {};  // "stormName_year_missionId" → dropsonde array
 var _SONDE_COLORS = [
     '#34d399','#60a5fa','#f472b6','#fbbf24','#a78bfa',
     '#fb923c','#38bdf8','#f87171','#4ade80','#e879f9',
@@ -10311,6 +10364,30 @@ var _SONDE_COLORS = [
 ];
 
 function _gaSondeFetch(stormName, year, missionId, centerLat, centerLon) {
+    var cacheKey = stormName + '_' + year + '_' + (missionId || '');
+
+    // Check client-side cache first
+    if (_gaSondeClientCache[cacheKey] !== undefined) {
+        var cached = _gaSondeClientCache[cacheKey];
+        if (cached === null) {
+            // Cached empty result
+            var el = document.getElementById('ga-sonde-info');
+            if (el) {
+                el.style.display = '';
+                var cnt = document.getElementById('ga-sonde-count');
+                if (cnt) cnt.textContent = 'No sondes for this mission';
+                var wrap = document.getElementById('ga-sonde-table-wrap');
+                if (wrap) wrap.innerHTML = '';
+            }
+            return;
+        }
+        _gaSondeData = cached;
+        _gaSondeShowUI();
+        _gaSondeRenderOnMap();
+        _gaSondeRenderTable();
+        return;
+    }
+
     var url = API_BASE + '/global/dropsondes/data?storm_name=' +
         encodeURIComponent(stormName) + '&year=' + year;
     if (missionId) url += '&mission_id=' + encodeURIComponent(missionId);
@@ -10320,7 +10397,7 @@ function _gaSondeFetch(stormName, year, missionId, centerLat, centerLon) {
         .then(function (r) { return r.json(); })
         .then(function (json) {
             if (!json.success || !json.dropsondes || json.dropsondes.length === 0) {
-                // Show "no sondes" message instead of hiding completely
+                _gaSondeClientCache[cacheKey] = null;  // cache empty result
                 var el = document.getElementById('ga-sonde-info');
                 if (el) {
                     el.style.display = '';
@@ -10331,6 +10408,7 @@ function _gaSondeFetch(stormName, year, missionId, centerLat, centerLon) {
                 }
                 return;
             }
+            _gaSondeClientCache[cacheKey] = json.dropsondes;
             _gaSondeData = json.dropsondes;
             _gaSondeShowUI();
             _gaSondeRenderOnMap();
@@ -11392,18 +11470,12 @@ var _origGaFLLoadMissionData = _gaFLLoadMissionData;
 var _origGaFLRenderOnMap = _gaFLRenderOnMap;
 _gaFLRenderOnMap = function () {
     _origGaFLRenderOnMap();
-    // After FL renders on map, auto-fetch sondes and VDMs for the same mission
+    // Render VDMs on map if already loaded (fetch started at storm selection)
     if (_gaFLData && selectedStorm) {
-        var missionId = _gaFLData.mission_id || '';
-        var centerLat = selectedStorm.lmi_lat || selectedStorm.genesis_lat || 0;
-        var centerLon = selectedStorm.lmi_lon || selectedStorm.genesis_lon || 0;
-        _gaSondeFetch(selectedStorm.name, selectedStorm.year, missionId, centerLat, centerLon);
-        // Fetch VDMs if not yet loaded; re-render if already loaded
         if (vdmLoaded && vdmData) {
             _vdmRenderOnMap();
-        } else {
-            _vdmFetch();
         }
+        // Sonde fetch is triggered from _gaFLApplyData (parallel with render)
     }
 };
 
@@ -11412,6 +11484,7 @@ var _origGaFLReset = _gaFLReset;
 _gaFLReset = function () {
     _gaSondeHideUI();
     _gaSondeRemoveFromMap();
+    _gaSondeClientCache = {};
     _vdmReset();
     _origGaFLReset();
 };

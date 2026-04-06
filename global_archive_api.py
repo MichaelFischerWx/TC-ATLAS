@@ -4392,10 +4392,11 @@ def get_fl_data(
         if now - ts < _FL_DATA_CACHE_TTL:
             _fl_data_cache.move_to_end(cache_key)
             if not include_1s:
-                resp = {k: v for k, v in cached.items() if k != "obs_1s"}
-                resp["obs_1s"] = []
-                return resp
-            return cached
+                return cached  # In-memory cache never has obs_1s (memory-efficient)
+            # 1s requested: in-memory cache doesn't store obs_1s,
+            # fall through to GCS/AOML for full data
+            if cached.get("obs_1s"):
+                return cached
 
     # Check GCS persistent cache
     gcs_result = _fl_gcs_get(filename, center_lat, center_lon)
@@ -4416,7 +4417,12 @@ def get_fl_data(
                 resp = {k: v for k, v in gcs_result.items() if k != "obs_1s"}
                 resp["obs_1s"] = []
                 return resp
-            return gcs_result
+            # If 1s requested but GCS cache has empty obs_1s (stale entry),
+            # fall through to re-fetch from AOML
+            if gcs_result.get("obs_1s"):
+                return gcs_result
+            else:
+                logger.info(f"GCS cache missing obs_1s for {filename}, re-fetching")
         else:
             logger.info(f"GCS recon cache expired ({age_days:.0f}d old): {filename}")
 
@@ -4532,10 +4538,13 @@ def get_fl_data(
     meta = _parse_fl_filename(filename, None)
     mission_id = meta["mission_id"] if meta else filename
 
+    # Always store full data (including 1s) in cache; strip obs_1s from
+    # response only — this fixes the bug where include_1s=true requests
+    # would return empty obs_1s from a cache populated by include_1s=false.
     result = {
         "success": True,
         "observations": obs_10s,  # Default resolution
-        "obs_1s": obs_1s if include_1s else [],
+        "obs_1s": obs_1s,         # Always cache full 1s data
         "obs_10s": obs_10s,
         "obs_30s": obs_30s,
         "mission_id": mission_id,
@@ -4552,12 +4561,182 @@ def get_fl_data(
         "_cached_at": now,  # epoch timestamp for GCS TTL check
     }
 
-    _fl_data_cache[cache_key] = (result, now)
+    # In-memory cache: store WITHOUT 1s data to control memory usage
+    # (1s arrays can be 10+ MB per mission). GCS stores the full result.
+    mem_result = {k: v for k, v in result.items() if k != "obs_1s"}
+    mem_result["obs_1s"] = []
+    _fl_data_cache[cache_key] = (mem_result, now)
     if len(_fl_data_cache) > _FL_DATA_CACHE_MAX:
         _fl_data_cache.popitem(last=False)
 
-    # Persist to GCS for cross-instance / cold-start cache hits
+    # Persist full result (including 1s) to GCS for cross-instance cache hits
     _fl_gcs_put(filename, center_lat, center_lon, result)
+
+    # Return without 1s data if not requested (reduces response size)
+    if not include_1s:
+        return mem_result
+
+    return result
+
+
+# ── Flight-Level Mission Stats (batch max-wind lookup) ───────────────
+
+_fl_stats_cache: OrderedDict = OrderedDict()
+_FL_STATS_CACHE_TTL = 24 * 3600   # 24 hours
+_FL_STATS_CACHE_MAX = 100
+
+
+def _extract_summary_from_caches(file_url: str) -> dict | None:
+    """Try to extract summary stats from in-memory or GCS caches."""
+    filename = file_url.rsplit("/", 1)[-1]
+    # Check in-memory cache (any center coords)
+    for ck, (cached, _ts) in _fl_data_cache.items():
+        if ck.startswith(file_url + "_"):
+            summ = cached.get("summary")
+            if summ:
+                return summ
+    # Check GCS — try common center coord (0.0, 0.0) first
+    gcs_result = _fl_gcs_get(filename, 0.0, 0.0)
+    if gcs_result and gcs_result.get("summary"):
+        return gcs_result["summary"]
+    # Try listing GCS blobs with this filename prefix
+    bucket = _get_gcs_bucket()
+    if bucket:
+        prefix = f"{_FL_GCS_CACHE_PREFIX}/{filename}_"
+        try:
+            blobs = list(bucket.list_blobs(prefix=prefix, max_results=1))
+            if blobs:
+                data = blobs[0].download_as_bytes(timeout=5)
+                parsed = json.loads(data)
+                if parsed.get("summary"):
+                    return parsed["summary"]
+        except Exception:
+            pass
+    return None
+
+
+def _quick_max_wind_from_file(file_url: str) -> dict | None:
+    """Fetch an FL file from AOML and extract only the max wind summary.
+
+    This is a lightweight alternative to full parsing — it reuses the
+    existing parser but discards observation arrays to save memory.
+    """
+    h = _load_fl_helpers()
+    if not h:
+        return None
+    try:
+        import requests as _req
+        resp = _req.get(file_url, timeout=30)
+        resp.raise_for_status()
+        text = resp.text
+    except Exception:
+        return None
+
+    filename = file_url.rsplit("/", 1)[-1]
+    fmt = _detect_fl_format(filename)
+    try:
+        if fmt == "noaa_1sec":
+            observations = h["parse_1sec"](text)
+        elif fmt in ("usaf_10sec", "usaf_01", "usaf_ten"):
+            observations = h["parse_1sec"](text)  # Unified parser handles both
+        elif fmt == "legacy_csv":
+            observations = _parse_hrd_legacy_csv(text)
+        else:
+            return None
+    except Exception:
+        return None
+
+    if not observations:
+        return None
+
+    # Compute 10s averages for operational max wind
+    obs_10s = h["avg_window"](observations, 10)
+    wspds_10s = [o["fl_wspd_ms"] for o in obs_10s if o.get("fl_wspd_ms") is not None]
+    wspds_1s = [o["fl_wspd_ms"] for o in observations if o.get("fl_wspd_ms") is not None]
+    sfcprs_10s = [o["sfcpr_hpa"] for o in obs_10s
+                  if o.get("sfcpr_hpa") is not None and 850 <= o["sfcpr_hpa"] <= 1100]
+
+    return {
+        "max_fl_wspd_ms": round(max(wspds_10s), 1) if wspds_10s else None,
+        "max_fl_wspd_ms_1s": round(max(wspds_1s), 1) if wspds_1s else None,
+        "min_sfcpr_hpa": round(min(sfcprs_10s), 1) if sfcprs_10s else None,
+    }
+
+
+@router.get("/flightlevel/missions/stats")
+def get_fl_mission_stats(
+    storm_name: str = Query(..., description="Storm name"),
+    year: int = Query(..., ge=1960, le=2030, description="Year"),
+):
+    """Return max wind stats for all missions of a storm (hybrid: cached + background fetch)."""
+    import time as _time
+    import threading
+    now = _time.time()
+
+    stats_key = f"{storm_name.lower()}_{year}"
+
+    # Check stats cache first
+    if stats_key in _fl_stats_cache:
+        cached, ts = _fl_stats_cache[stats_key]
+        if now - ts < _FL_STATS_CACHE_TTL:
+            _fl_stats_cache.move_to_end(stats_key)
+            return cached
+
+    # Get mission list (reuses the mission discovery cache)
+    missions_resp = get_fl_missions(storm_name=storm_name, year=year)
+    missions = missions_resp.get("missions", [])
+    if not missions:
+        return {"success": True, "stats": {}, "pending": []}
+
+    stats = {}
+    pending = []
+
+    for m in missions:
+        file_url = m.get("file_url", "")
+        if not file_url:
+            continue
+        summ = _extract_summary_from_caches(file_url)
+        if summ:
+            max_wind_ms = summ.get("max_fl_wspd_ms")
+            max_wind_kt = round(max_wind_ms * 1.944) if max_wind_ms is not None and max_wind_ms <= 120 else None
+            min_pres = summ.get("min_sfcpr_hpa")
+            if max_wind_kt is not None:
+                stats[file_url] = {"max_wind_kt": max_wind_kt, "min_pres_hpa": min_pres}
+            else:
+                pending.append(file_url)
+        else:
+            pending.append(file_url)
+
+    result = {"success": True, "stats": stats, "pending": pending}
+
+    # If all stats are available, cache and return
+    if not pending:
+        _fl_stats_cache[stats_key] = (result, now)
+        if len(_fl_stats_cache) > _FL_STATS_CACHE_MAX:
+            _fl_stats_cache.popitem(last=False)
+        return result
+
+    # Fire background thread to fetch uncached missions
+    def _bg_fetch():
+        for furl in pending[:20]:  # Cap at 20 to avoid overloading AOML
+            try:
+                summ = _quick_max_wind_from_file(furl)
+                if summ:
+                    max_wind_ms = summ.get("max_fl_wspd_ms")
+                    max_wind_kt = round(max_wind_ms * 1.944) if max_wind_ms is not None and max_wind_ms <= 120 else None
+                    min_pres = summ.get("min_sfcpr_hpa")
+                    if max_wind_kt is not None:
+                        stats[furl] = {"max_wind_kt": max_wind_kt, "min_pres_hpa": min_pres}
+            except Exception:
+                pass
+        # Update stats cache with completed results
+        import time as _t2
+        full_result = {"success": True, "stats": stats, "pending": []}
+        _fl_stats_cache[stats_key] = (full_result, _t2.time())
+        if len(_fl_stats_cache) > _FL_STATS_CACHE_MAX:
+            _fl_stats_cache.popitem(last=False)
+
+    threading.Thread(target=_bg_fetch, daemon=True).start()
 
     return result
 

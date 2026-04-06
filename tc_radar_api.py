@@ -7101,6 +7101,27 @@ def _resolve_hurr_season(year: int) -> Optional[str]:
     return None
 
 
+def _resolve_sonde_season_dirs(year: int) -> list[str]:
+    """
+    Resolve all valid dropsonde season directories for a given year.
+
+    Checks both HURR{YY} (NOAA) and AFRES{YY} (USAF) directories.
+    Returns list of directory names that exist on the server.
+    """
+    yy = f"{year % 100:02d}"
+    result = []
+    for prefix in ("HURR", "AFRES"):
+        season_dir = f"{prefix}{yy}"
+        season_url = f"{HRD_SONDE_BASE}/{season_dir}/"
+        try:
+            entries = _hrd_parse_directory(season_url)
+            if entries:
+                result.append(season_dir)
+        except Exception:
+            pass
+    return result
+
+
 def _resolve_sonde_storm_dir(season_dir: str, storm_name: str) -> Optional[str]:
     """
     Resolve the storm subdirectory within a HURR season for dropsonde data.
@@ -7182,6 +7203,18 @@ def _find_frd_tarball(
         f"{date_8}{aircraft.lower()}.frd.tar",  # old format (no flight#)
         f"{short_date}{aircraft.lower()}.frd.tar",  # old short format
     ]
+
+    # USAF flights use "U" in FL files but "A" in AFRES sonde archives
+    alt_aircraft = {"U": "A", "A": "U"}.get(aircraft.upper())
+    if alt_aircraft:
+        alt_daf = f"{date_8}{alt_aircraft}{flight_num}"
+        candidates.extend([
+            f"{alt_daf}_frd.tar",
+            f"{alt_daf}_dfrd.tar",
+            f"{alt_daf}.frd.tar",
+            f"{date_8}{alt_aircraft.lower()}.frd.tar",
+            f"{short_date}{alt_aircraft.lower()}.frd.tar",
+        ])
 
     for entry in entries:
         el = entry.lower().rstrip("/")
@@ -7378,10 +7411,10 @@ def get_archive_dropsondes(
     # --- Diagnostic tracking ---
     _diag = {"center_source": _center_source, "mission_id": mission_id}
 
-    # Resolve HURR season directory
-    season_dir = _resolve_hurr_season(year)
-    _diag["season_dir"] = season_dir
-    if not season_dir:
+    # Resolve dropsonde season directories — search both HURR and AFRES
+    season_dirs = _resolve_sonde_season_dirs(year)
+    _diag["season_dirs"] = season_dirs
+    if not season_dirs:
         result = {
             "success": False,
             "reason": "no_season_dir",
@@ -7393,16 +7426,25 @@ def get_archive_dropsondes(
         _hrd_sonde_cache[cache_key] = (result, now)
         return JSONResponse(result)
 
-    # Resolve storm or base directory (some years have storm subdirs, some don't)
-    base_url = _resolve_sonde_storm_dir(season_dir, storm_name)
-    _diag["storm_dir_resolved"] = base_url
-    if not base_url:
-        # Fallback: try season dir directly
-        base_url = f"{HRD_SONDE_BASE}/{season_dir}"
-        _diag["storm_dir_resolved"] = f"{base_url} (fallback)"
+    # Search each season directory (HURR, AFRES) for the mission tarball
+    tarball_url = None
+    base_url = None
+    for season_dir in season_dirs:
+        _base = _resolve_sonde_storm_dir(season_dir, storm_name)
+        if not _base:
+            _base = f"{HRD_SONDE_BASE}/{season_dir}"
+        _tb = _find_frd_tarball(_base, mission_id, year)
+        if _tb:
+            tarball_url = _tb
+            base_url = _base
+            _diag["season_dir"] = season_dir
+            break
 
-    # Find the tarball for this mission
-    tarball_url = _find_frd_tarball(base_url, mission_id, year)
+    if not base_url:
+        # Fallback: use first season dir for diagnostics
+        base_url = f"{HRD_SONDE_BASE}/{season_dirs[0]}"
+
+    _diag["storm_dir_resolved"] = base_url
     _diag["tarball_url"] = tarball_url
     _diag["operproc_url"] = f"{base_url}/operproc/"
     if not tarball_url:
