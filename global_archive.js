@@ -9825,11 +9825,11 @@ function _gaFLApplyData(json) {
     _gaFLHighlightOnTimeline(json);
     _gaFLUpdateMissionStats(json);
 
-    if (_gaFLSyncFromFDeck) {
-        _gaFLSyncFromFDeck = false;
-    } else {
-        _gaFLSyncIRToMissionMidpoint(json);
-    }
+    // Always sync IR to mission midpoint when flight data loads —
+    // the user wants to see IR matching the loaded flight, regardless
+    // of how the mission was triggered (F-Deck click, dropdown, auto-sync)
+    _gaFLSyncFromFDeck = false;
+    _gaFLSyncIRToMissionMidpoint(json);
 }
 
 function _gaFLLoadMissionData(fileUrl) {
