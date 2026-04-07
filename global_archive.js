@@ -11905,29 +11905,39 @@ function _gaFLRenderTimeSeries() {
         });
 
         if (moTimes.length > 0) {
-            // Peak 10-sec wind — prominent orange triangles
-            traces.push({
-                x: moTimes, y: moPeak,
-                type: 'scatter', mode: 'markers',
-                name: 'MINOB Pk 10s',
-                marker: { color: '#f97316', symbol: 'triangle-up', size: 7,
-                          line: { color: '#fff', width: 0.5 } },
-                hovertemplate: '%{text}<extra></extra>',
-                text: moHovers,
-                yaxis: 'y', showlegend: true,
-                visible: _gaFLMinobVisible ? true : 'legendonly',
-            });
-            // 30-sec avg — smaller gray dots
-            traces.push({
-                x: moTimes, y: mo30s,
-                type: 'scatter', mode: 'markers',
-                name: 'MINOB 30s',
-                marker: { color: '#94a3b8', symbol: 'circle', size: 4 },
-                hovertemplate: '%{text}<extra></extra>',
-                text: moHovers,
-                yaxis: 'y', showlegend: true,
-                visible: _gaFLMinobVisible ? true : 'legendonly',
-            });
+            // Show MINOB traces that match the active FL resolution:
+            //   1s or 10s FL visible → show peak 10-sec MINOB
+            //   30s FL visible → show 30-sec avg MINOB
+            var show10s = _gaFLResVisible['1s'] || _gaFLResVisible['10s'];
+            var show30s = _gaFLResVisible['30s'];
+            // If no FL resolution is active, default to peak 10s
+            if (!show10s && !show30s) show10s = true;
+
+            if (show10s) {
+                traces.push({
+                    x: moTimes, y: moPeak,
+                    type: 'scatter', mode: 'markers',
+                    name: 'MINOB Pk 10s',
+                    marker: { color: '#f97316', symbol: 'triangle-up', size: 7,
+                              line: { color: '#fff', width: 0.5 } },
+                    hovertemplate: '%{text}<extra></extra>',
+                    text: moHovers,
+                    yaxis: 'y', showlegend: true,
+                    visible: _gaFLMinobVisible ? true : 'legendonly',
+                });
+            }
+            if (show30s) {
+                traces.push({
+                    x: moTimes, y: mo30s,
+                    type: 'scatter', mode: 'markers',
+                    name: 'MINOB 30s',
+                    marker: { color: '#94a3b8', symbol: 'circle', size: 4 },
+                    hovertemplate: '%{text}<extra></extra>',
+                    text: moHovers,
+                    yaxis: 'y', showlegend: true,
+                    visible: _gaFLMinobVisible ? true : 'legendonly',
+                });
+            }
         }
     }
 
