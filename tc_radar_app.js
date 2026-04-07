@@ -430,7 +430,7 @@ function openSidePanel(caseData, fromQuickSelect) {
 
     window._lastCaseData = caseData;
 
-    // Build case nav bar (prev/next within storm)
+    // Build inline case nav (prev/next within storm)
     var caseNavHtml = '';
     if (_focusMode) {
         var stormCases = _envNavGetStormCases();
@@ -442,20 +442,20 @@ function openSidePanel(caseData, fromQuickSelect) {
             var prevDis = posIdx <= 0 ? ' disabled' : '';
             var nextDis = posIdx < 0 || posIdx >= stormCases.length - 1 ? ' disabled' : '';
             caseNavHtml =
-                '<div class="case-nav-bar">' +
+                '<span class="case-nav-bar">' +
                     '<button class="case-nav-btn" id="case-nav-prev" onclick="caseNavPrev()" title="Previous analysis (← key)"' + prevDis + '>&#9664;</button>' +
                     '<span class="case-nav-pos">' + (posIdx + 1) + ' of ' + stormCases.length + '</span>' +
                     '<button class="case-nav-btn" id="case-nav-next" onclick="caseNavNext()" title="Next analysis (→ key)"' + nextDis + '>&#9654;</button>' +
-                '</div>';
+                '</span>';
         }
     }
 
     document.getElementById('side-panel-inner').innerHTML =
         '<button id="side-panel-close" onclick="closeSidePanel()">\u2715</button>' +
         backBtnHtml +
-        caseNavHtml +
         '<div class="panel-storm-name">' + caseData.storm_name +
             (_activeDataType === 'merge' ? ' <span style="font-size:10px;background:#4f46e5;color:#fff;padding:1px 6px;border-radius:3px;vertical-align:middle;">MERGE</span>' : '') +
+            caseNavHtml +
             '<button class="cite-btn" onclick="showCiteModal()" title="How to cite TC-ATLAS &amp; TC-RADAR">\uD83D\uDCCB Cite</button>' +
             '<button class="cite-btn" onclick="copyPermalink()" title="Copy shareable link" style="margin-left:4px;">\uD83D\uDD17 Share</button>' +
         '</div>' +
