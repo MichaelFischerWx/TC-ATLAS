@@ -2377,11 +2377,94 @@ function envNavJump(val) {
 }
 
 // ── Side-panel case navigation (prev/next within storm) ─────
+
+// Snapshot the current explorer view state before panel rebuild
+function _captureViewState() {
+    var state = { hasPlot: false };
+    var epVar = document.getElementById('ep-var');
+    var epLevel = document.getElementById('ep-level');
+    var epResult = document.getElementById('ep-result');
+    if (epVar) state.variable = epVar.value;
+    if (epLevel) state.level = epLevel.value;
+    // Only restore plot if one was generated (result area has content beyond thumbnail)
+    if (epResult && epResult.innerHTML.length > 0) state.hasPlot = true;
+    var epOverlay = document.getElementById('ep-overlay');
+    if (epOverlay) state.overlay = epOverlay.value;
+    var epCmap = document.getElementById('ep-cmap');
+    if (epCmap) state.cmap = epCmap.value;
+    var epVmin = document.getElementById('ep-vmin');
+    var epVmax = document.getElementById('ep-vmax');
+    if (epVmin) state.vmin = epVmin.value;
+    if (epVmax) state.vmax = epVmax.value;
+    var epContourInt = document.getElementById('ep-contour-int');
+    if (epContourInt) state.contourInt = epContourInt.value;
+    var azCov = document.getElementById('az-coverage');
+    if (azCov) state.coverage = azCov.value;
+    var azCoord = document.getElementById('az-coord-mode');
+    if (azCoord) state.coordMode = azCoord.value;
+    // Overlay pill states
+    state.flActive = _archiveFLActive || false;
+    state.sondeActive = _archiveSondeActive || false;
+    state.barbsEnabled = _windBarbsEnabled || false;
+    state.tiltEnabled = _tiltProfileEnabled || false;
+    return state;
+}
+
+// Restore view state after panel rebuild
+function _restoreViewState(state) {
+    if (!state) return;
+    // Restore explore-data controls
+    var epVar = document.getElementById('ep-var');
+    if (epVar && state.variable) epVar.value = state.variable;
+    var epLevel = document.getElementById('ep-level');
+    var epLevelVal = document.getElementById('ep-level-val');
+    if (epLevel && state.level) {
+        epLevel.value = state.level;
+        if (epLevelVal) epLevelVal.textContent = parseFloat(state.level).toFixed(1) + ' km';
+    }
+    var epOverlay = document.getElementById('ep-overlay');
+    if (epOverlay && state.overlay) epOverlay.value = state.overlay;
+    var epCmap = document.getElementById('ep-cmap');
+    if (epCmap && state.cmap) epCmap.value = state.cmap;
+    var epVmin = document.getElementById('ep-vmin');
+    var epVmax = document.getElementById('ep-vmax');
+    if (epVmin && state.vmin) epVmin.value = state.vmin;
+    if (epVmax && state.vmax) epVmax.value = state.vmax;
+    var epContourInt = document.getElementById('ep-contour-int');
+    if (epContourInt && state.contourInt) epContourInt.value = state.contourInt;
+    var azCov = document.getElementById('az-coverage');
+    var azCovVal = document.getElementById('az-cov-val');
+    if (azCov && state.coverage) {
+        azCov.value = state.coverage;
+        if (azCovVal) azCovVal.textContent = state.coverage + '%';
+    }
+    var azCoord = document.getElementById('az-coord-mode');
+    if (azCoord && state.coordMode) azCoord.value = state.coordMode;
+    // Restore wind barbs / tilt state (globals persist, but buttons are rebuilt)
+    _windBarbsEnabled = state.barbsEnabled;
+    _tiltProfileEnabled = state.tiltEnabled;
+    var barbBtn = document.getElementById('barb-btn');
+    if (barbBtn) barbBtn.classList.toggle('active', _windBarbsEnabled);
+    var tiltBtn = document.getElementById('tilt-btn');
+    if (tiltBtn) tiltBtn.classList.toggle('active', _tiltProfileEnabled);
+    // Re-generate plan view if one was active
+    if (state.hasPlot) {
+        generateCustomPlot(function() {
+            // After plot renders, re-activate overlays that were on
+            if (state.flActive) archiveToggleFlightLevel();
+            if (state.sondeActive) archiveToggleDropsondes();
+        });
+    }
+}
+
 function navigateToCase(caseIdx) {
     var d = _getActiveData();
     if (!d) return;
     var caseData = d.cases.find(function(c) { return c.case_index === caseIdx; });
     if (!caseData) return;
+
+    // Capture current view state before rebuild
+    var viewState = _captureViewState();
 
     // Update focus marker on map
     if (_focusMode && _focusMarker) {
@@ -2397,8 +2480,9 @@ function navigateToCase(caseIdx) {
         map.setView([caseData.latitude, caseData.longitude], map.getZoom(), { animate: true });
     }
 
-    // Rebuild side panel with new case
+    // Rebuild side panel with new case, then restore view
     openSidePanel(caseData, true);
+    _restoreViewState(viewState);
 }
 
 function caseNavPrev() {
