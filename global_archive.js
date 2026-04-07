@@ -12143,8 +12143,8 @@ function _gaFLRenderTimeSeries() {
                 mDate2 = _gaFLMissions[sel2.selectedIndex].datetime;
             }
         }
-        // Use wide window: 12h before HRD start to 12h after HRD end
-        // This captures HDOB data from truncated missions where HRD only covers part of flight
+        // Use moderate window: 3h before HRD start to 3h after HRD end
+        // This captures HDOB data from truncated missions without pulling in other flights
         var hrdStart2 = 0, hrdEnd2 = 86400;
         if (summ2.start_time) {
             var sp2 = summ2.start_time.split(':');
@@ -12155,8 +12155,8 @@ function _gaFLRenderTimeSeries() {
             hrdEnd2 = parseInt(ep2[0]) * 3600 + parseInt(ep2[1]) * 60;
             if (hrdEnd2 < hrdStart2) hrdEnd2 += 86400;
         }
-        var ms2 = hrdStart2 - 43200;  // 12h before HRD
-        var me2 = hrdEnd2 + 43200;    // 12h after HRD
+        var ms2 = hrdStart2 - 10800;  // 3h before HRD
+        var me2 = hrdEnd2 + 10800;    // 3h after HRD
         var mDateNext2 = '';
         var mDatePrev2 = '';
         if (mDate2) {
@@ -12240,10 +12240,12 @@ function _gaFLRenderTimeSeries() {
             if (show10s) {
                 traces.push({
                     x: moTimes, y: moPeak,
-                    type: 'scatter', mode: 'markers',
+                    type: 'scatter', mode: 'lines+markers',
                     name: chartProdLabel + ' Pk 10s',
-                    marker: { color: '#f97316', symbol: 'triangle-up', size: 7,
+                    line: { color: '#f97316', width: 1.5 },
+                    marker: { color: '#f97316', symbol: 'triangle-up', size: 5,
                               line: { color: '#fff', width: 0.5 } },
+                    connectgaps: false,
                     hovertemplate: '%{text}<extra></extra>',
                     text: moHovers,
                     yaxis: 'y', showlegend: true,
@@ -12253,9 +12255,11 @@ function _gaFLRenderTimeSeries() {
             if (show30s) {
                 traces.push({
                     x: moTimes, y: mo30s,
-                    type: 'scatter', mode: 'markers',
+                    type: 'scatter', mode: 'lines+markers',
                     name: chartProdLabel + ' 30s',
-                    marker: { color: '#94a3b8', symbol: 'circle', size: 4 },
+                    line: { color: '#94a3b8', width: 1 },
+                    marker: { color: '#94a3b8', symbol: 'circle', size: 3 },
+                    connectgaps: false,
                     hovertemplate: '%{text}<extra></extra>',
                     text: moHovers,
                     yaxis: 'y', showlegend: true,
@@ -12267,10 +12271,12 @@ function _gaFLRenderTimeSeries() {
             if (moSfcP.some(function (v) { return v != null; }) && _gaFLVarsVisible['sfcpr_hpa']) {
                 traces.push({
                     x: moTimes, y: moSfcP,
-                    type: 'scatter', mode: 'markers',
+                    type: 'scatter', mode: 'lines+markers',
                     name: chartProdLabel + ' Sfc P',
-                    marker: { color: '#fb923c', symbol: 'diamond', size: 5,
+                    line: { color: '#fb923c', width: 1.5 },
+                    marker: { color: '#fb923c', symbol: 'diamond', size: 4,
                               line: { color: '#fff', width: 0.5 } },
+                    connectgaps: false,
                     hovertemplate: '%{text}<extra></extra>',
                     text: moHovers,
                     yaxis: 'y5', showlegend: true,
@@ -12282,10 +12288,12 @@ function _gaFLRenderTimeSeries() {
             if (moTemp.some(function (v) { return v != null; }) && _gaFLVarsVisible['temp_c']) {
                 traces.push({
                     x: moTimes, y: moTemp,
-                    type: 'scatter', mode: 'markers',
+                    type: 'scatter', mode: 'lines+markers',
                     name: chartProdLabel + ' Temp',
-                    marker: { color: '#f87171', symbol: 'circle', size: 4,
+                    line: { color: '#f87171', width: 1 },
+                    marker: { color: '#f87171', symbol: 'circle', size: 3,
                               line: { color: '#fff', width: 0.5 } },
+                    connectgaps: false,
                     hovertemplate: '%{text}<extra></extra>',
                     text: moHovers,
                     yaxis: 'y3', showlegend: true,
@@ -12297,10 +12305,12 @@ function _gaFLRenderTimeSeries() {
             if (moDewpt.some(function (v) { return v != null; }) && _gaFLVarsVisible['dewpoint_c']) {
                 traces.push({
                     x: moTimes, y: moDewpt,
-                    type: 'scatter', mode: 'markers',
+                    type: 'scatter', mode: 'lines+markers',
                     name: chartProdLabel + ' Dewpt',
-                    marker: { color: '#38bdf8', symbol: 'circle', size: 4,
+                    line: { color: '#38bdf8', width: 1 },
+                    marker: { color: '#38bdf8', symbol: 'circle', size: 3,
                               line: { color: '#fff', width: 0.5 } },
+                    connectgaps: false,
                     hovertemplate: '%{text}<extra></extra>',
                     text: moHovers,
                     yaxis: 'y3', showlegend: true,
@@ -12312,10 +12322,12 @@ function _gaFLRenderTimeSeries() {
             if (moAlt.some(function (v) { return v != null; }) && _gaFLVarsVisible['gps_alt_m']) {
                 traces.push({
                     x: moTimes, y: moAlt,
-                    type: 'scatter', mode: 'markers',
+                    type: 'scatter', mode: 'lines+markers',
                     name: chartProdLabel + ' Alt',
-                    marker: { color: '#6b7280', symbol: 'diamond', size: 4,
+                    line: { color: '#6b7280', width: 1 },
+                    marker: { color: '#6b7280', symbol: 'diamond', size: 3,
                               line: { color: '#fff', width: 0.5 } },
+                    connectgaps: false,
                     hovertemplate: '%{text}<extra></extra>',
                     text: moHovers,
                     yaxis: 'y4', showlegend: true,
@@ -12327,10 +12339,12 @@ function _gaFLRenderTimeSeries() {
             if (moStaticP.some(function (v) { return v != null; }) && _gaFLVarsVisible['static_pres_hpa']) {
                 traces.push({
                     x: moTimes, y: moStaticP,
-                    type: 'scatter', mode: 'markers',
+                    type: 'scatter', mode: 'lines+markers',
                     name: chartProdLabel + ' Static P',
-                    marker: { color: '#fbbf24', symbol: 'diamond', size: 4,
+                    line: { color: '#fbbf24', width: 1 },
+                    marker: { color: '#fbbf24', symbol: 'diamond', size: 3,
                               line: { color: '#fff', width: 0.5 } },
+                    connectgaps: false,
                     hovertemplate: '%{text}<extra></extra>',
                     text: moHovers,
                     yaxis: 'y2', showlegend: true,
