@@ -5310,7 +5310,7 @@ def get_vdm(
 _minob_cache: OrderedDict = OrderedDict()
 _MINOB_CACHE_TTL = 7 * 86400
 _MINOB_CACHE_MAX = 50
-_MINOB_GCS_PREFIX = "recon/minob/v1"
+_MINOB_GCS_PREFIX = "recon/minob/v2"
 
 
 def _minob_gcs_key(storm_name: str, year: int) -> str:
@@ -5830,8 +5830,14 @@ def get_minobs(
 
     # Flatten observations with parent metadata
     flat_obs = []
+    seen = set()
     for msg in all_messages:
         for obs in msg["observations"]:
+            # Deduplicate by time+lat+lon (archive files often contain repeated messages)
+            key = (obs.get("time", ""), obs.get("lat"), obs.get("lon"))
+            if key in seen:
+                continue
+            seen.add(key)
             obs["aircraft"] = msg["aircraft"]
             obs["mission_id"] = msg["mission_id"]
             flat_obs.append(obs)
