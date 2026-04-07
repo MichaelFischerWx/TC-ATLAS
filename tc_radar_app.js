@@ -430,9 +430,30 @@ function openSidePanel(caseData, fromQuickSelect) {
 
     window._lastCaseData = caseData;
 
+    // Build case nav bar (prev/next within storm)
+    var caseNavHtml = '';
+    if (_focusMode) {
+        var stormCases = _envNavGetStormCases();
+        if (stormCases.length > 1) {
+            var posIdx = -1;
+            for (var ci = 0; ci < stormCases.length; ci++) {
+                if (stormCases[ci].case_index === caseData.case_index) { posIdx = ci; break; }
+            }
+            var prevDis = posIdx <= 0 ? ' disabled' : '';
+            var nextDis = posIdx < 0 || posIdx >= stormCases.length - 1 ? ' disabled' : '';
+            caseNavHtml =
+                '<div class="case-nav-bar">' +
+                    '<button class="case-nav-btn" id="case-nav-prev" onclick="caseNavPrev()" title="Previous analysis (← key)"' + prevDis + '>&#9664;</button>' +
+                    '<span class="case-nav-pos">' + (posIdx + 1) + ' of ' + stormCases.length + '</span>' +
+                    '<button class="case-nav-btn" id="case-nav-next" onclick="caseNavNext()" title="Next analysis (→ key)"' + nextDis + '>&#9654;</button>' +
+                '</div>';
+        }
+    }
+
     document.getElementById('side-panel-inner').innerHTML =
         '<button id="side-panel-close" onclick="closeSidePanel()">\u2715</button>' +
         backBtnHtml +
+        caseNavHtml +
         '<div class="panel-storm-name">' + caseData.storm_name +
             (_activeDataType === 'merge' ? ' <span style="font-size:10px;background:#4f46e5;color:#fff;padding:1px 6px;border-radius:3px;vertical-align:middle;">MERGE</span>' : '') +
             '<button class="cite-btn" onclick="showCiteModal()" title="How to cite TC-ATLAS &amp; TC-RADAR">\uD83D\uDCCB Cite</button>' +
@@ -2354,6 +2375,58 @@ function envNavJump(val) {
     var idx = parseInt(val);
     if (!isNaN(idx) && idx !== currentCaseIndex) _envNavGoToCase(idx);
 }
+
+// ── Side-panel case navigation (prev/next within storm) ─────
+function navigateToCase(caseIdx) {
+    var d = _getActiveData();
+    if (!d) return;
+    var caseData = d.cases.find(function(c) { return c.case_index === caseIdx; });
+    if (!caseData) return;
+
+    // Update focus marker on map
+    if (_focusMode && _focusMarker) {
+        map.removeLayer(_focusMarker);
+        _focusMarker = null;
+        var color = getIntensityColor(caseData.vmax_kt);
+        var icon = L.divIcon({
+            className: 'custom-div-icon',
+            html: '<div class="custom-marker" style="background-color:' + color + ';width:16px;height:16px;box-shadow:0 0 0 4px rgba(37,99,235,0.35);"></div>',
+            iconSize: [16, 16], iconAnchor: [8, 8]
+        });
+        _focusMarker = L.marker([caseData.latitude, caseData.longitude], { icon: icon }).addTo(map);
+        map.setView([caseData.latitude, caseData.longitude], map.getZoom(), { animate: true });
+    }
+
+    // Rebuild side panel with new case
+    openSidePanel(caseData, true);
+}
+
+function caseNavPrev() {
+    var cases = _envNavGetStormCases();
+    var curIdx = -1;
+    for (var i = 0; i < cases.length; i++) {
+        if (cases[i].case_index === currentCaseIndex) { curIdx = i; break; }
+    }
+    if (curIdx > 0) navigateToCase(cases[curIdx - 1].case_index);
+}
+
+function caseNavNext() {
+    var cases = _envNavGetStormCases();
+    var curIdx = -1;
+    for (var i = 0; i < cases.length; i++) {
+        if (cases[i].case_index === currentCaseIndex) { curIdx = i; break; }
+    }
+    if (curIdx >= 0 && curIdx < cases.length - 1) navigateToCase(cases[curIdx + 1].case_index);
+}
+
+// Keyboard arrow navigation for case stepping
+document.addEventListener('keydown', function(e) {
+    if (!_focusMode || !currentCaseData) return;
+    var tag = (e.target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'select' || tag === 'textarea') return;
+    if (e.key === 'ArrowLeft') { e.preventDefault(); caseNavPrev(); }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); caseNavNext(); }
+});
 
 // ── ERA5 cleanup ─────────────────────────────────────────────
 function cleanupERA5() {
