@@ -5310,7 +5310,7 @@ def get_vdm(
 _minob_cache: OrderedDict = OrderedDict()
 _MINOB_CACHE_TTL = 7 * 86400
 _MINOB_CACHE_MAX = 50
-_MINOB_GCS_PREFIX = "recon/minob/v2"
+_MINOB_GCS_PREFIX = "recon/minob/v3"
 
 
 def _minob_gcs_key(storm_name: str, year: int) -> str:
@@ -5346,6 +5346,86 @@ def _minob_gcs_put(storm_name: str, year: int, result: dict):
 
     import threading
     threading.Thread(target=_upload, daemon=True).start()
+
+
+def _parse_minob_obs_urnt40(fields: list) -> dict | None:
+    """Parse a URNT40 HDOB observation line (2005-era NOAA P-3).
+
+    Format: HHMMSS  LatNN  LonNNN  Alt  ±Dval  DDDSSS  ±TTT  ±DDD  DDDPPP  SfmrKt  Rain
+    - Lat/Lon are numeric: lat*100 (N assumed), lon*100 (W assumed)
+    - Wind fields are 6-digit packed: dir(3)+speed(3)
+    - Temp/dewpoint are signed tenths °C
+    - 999 = missing
+    """
+    if len(fields) < 9:
+        return None
+
+    t = fields[0].rstrip(";")
+    if not t.isdigit() or len(t) < 6:
+        return None
+    hh, mm, ss = int(t[:2]), int(t[2:4]), int(t[4:6])
+    if hh > 47 or mm > 59:
+        return None
+
+    # Lat/Lon: numeric, implicit N/W for Atlantic
+    try:
+        lat_raw = int(fields[1].rstrip(";"))
+        lon_raw = int(fields[2].rstrip(";"))
+    except (ValueError, IndexError):
+        return None
+    lat = lat_raw / 100.0
+    lon = -(lon_raw / 100.0)  # West longitude → negative
+
+    def _safe_int(s):
+        s = s.rstrip(";")
+        if s in ("999", "9999", "/////"):
+            return None
+        try:
+            return int(s)
+        except ValueError:
+            return None
+
+    geo_alt = _safe_int(fields[3])
+
+    # D-value (signed)
+    d_val = _safe_int(fields[4])
+
+    # 30-sec wind: DDDSSS (dir 3 digits, speed 3 digits)
+    wdir, wspd_30s = None, None
+    w30_raw = fields[5].rstrip(";") if len(fields) > 5 else ""
+    if len(w30_raw) == 6 and w30_raw.isdigit():
+        wdir = int(w30_raw[:3])
+        wspd_30s = int(w30_raw[3:])
+
+    # Temp/dewpoint (signed tenths °C)
+    temp_raw = _safe_int(fields[6]) if len(fields) > 6 else None
+    dewpt_raw = _safe_int(fields[7]) if len(fields) > 7 else None
+    temp_c = round(temp_raw / 10.0, 1) if temp_raw is not None else None
+    dewpt_c = round(dewpt_raw / 10.0, 1) if dewpt_raw is not None else None
+
+    # Peak 10-sec wind: DDDPPP
+    peak_10s = None
+    pk_raw = fields[8].rstrip(";") if len(fields) > 8 else ""
+    if len(pk_raw) == 6 and pk_raw.isdigit():
+        peak_10s = int(pk_raw[3:])
+
+    # Surface pressure from D-value + geopotential height
+    sfc_pres_hpa = None
+    # (D-value encoding varies; skip sfc pressure for URNT40)
+
+    return {
+        "_hh": hh, "_mm": mm, "_ss": ss,
+        "lat": round(lat, 3),
+        "lon": round(lon, 3),
+        "geo_alt_m": geo_alt,
+        "d_value_m": d_val,
+        "sfc_pres_hpa": sfc_pres_hpa,
+        "wdir_deg": wdir,
+        "wspd_30s_kt": wspd_30s,
+        "temp_c": temp_c,
+        "dewpt_c": dewpt_c,
+        "peak_10s_wspd_kt": peak_10s,
+    }
 
 
 def _parse_minob_obs_legacy(fields: list, colatitude: bool = False) -> dict | None:
@@ -5565,13 +5645,16 @@ def _parse_minob_message(text: str, year: int, start_date: str, end_date: str,
     while i < len(lines):
         line = lines[i].strip()
 
-        # Look for WMO header (SXXX50, URNT15, or URNT50)
-        if not (line.startswith("SXXX50") or line.startswith("URNT15") or line.startswith("URNT50")):
+        # Look for WMO header (SXXX50, URNT15, URNT40, or URNT50)
+        if not (line.startswith("SXXX50") or line.startswith("URNT15")
+                or line.startswith("URNT40") or line.startswith("URNT50")):
             i += 1
             continue
 
         # URNT50 (1989 era) uses colatitude encoding for lat/lon
         is_colatitude = line.startswith("URNT50")
+        # URNT40 (2005 era, NOAA P-3) uses numeric lat/lon and packed wind fields
+        is_urnt40 = line.startswith("URNT40")
 
         # Extract day from header timestamp (e.g., "SXXX50 KMIA 231531" → day=23)
         hdr_parts = line.split()
@@ -5595,6 +5678,7 @@ def _parse_minob_message(text: str, year: int, start_date: str, end_date: str,
         is_modern = False
 
         # Find MINOB/HDOB keyword
+        found_keyword = False
         for k, p in enumerate(info_parts):
             if p in ("MINOB", "HDOB"):
                 storm_name = info_parts[k - 1] if k > 1 else ""
@@ -5608,7 +5692,12 @@ def _parse_minob_message(text: str, year: int, start_date: str, end_date: str,
                     date_token = info_parts[k + 2]
                     if len(date_token) == 8 and date_token.isdigit():
                         is_modern = True
+                found_keyword = True
                 break
+
+        # URNT40 format has no MINOB/HDOB keyword: "NOAA3 1812A KATRINA"
+        if not found_keyword and len(info_parts) >= 3:
+            storm_name = info_parts[2]
 
         if storm_filter and storm_name.upper() != storm_filter.upper():
             i += 1
@@ -5619,7 +5708,7 @@ def _parse_minob_message(text: str, year: int, start_date: str, end_date: str,
         i += 1
         while i < len(lines):
             ol = lines[i].strip()
-            if not ol or ol.startswith(("SXXX50", "URNT15", "URNT50")) or ol == "NNNN":
+            if not ol or ol.startswith(("SXXX50", "URNT15", "URNT40", "URNT50")) or ol == "NNNN":
                 break
             parts = ol.split()
             if len(parts) < 3:
@@ -5628,6 +5717,8 @@ def _parse_minob_message(text: str, year: int, start_date: str, end_date: str,
 
             if is_modern:
                 obs = _parse_minob_obs_modern(parts)
+            elif is_urnt40:
+                obs = _parse_minob_obs_urnt40(parts)
             else:
                 obs = _parse_minob_obs_legacy(parts, colatitude=is_colatitude)
 

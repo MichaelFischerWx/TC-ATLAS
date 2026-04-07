@@ -3074,9 +3074,32 @@ function loadHURSAT(storm) {
                 setIRLoadingText('Loading satellite imagery...');
             }
 
-            // Load first frame — use prefetched data if available
-            irFrameIdx = 0;
-            if (irFirstFrameCache[storm.sid]) {
+            // Determine starting frame: sync to FL mission if already loaded, else frame 0
+            var startIdx = 0;
+            if (_gaFLAutoSync && _gaFLData && _gaFLData.summary) {
+                // FL data loaded before IR — sync to mission midpoint
+                var smry = _gaFLData.summary;
+                if (smry.start_time && smry.end_time && _gaFLMissions) {
+                    var sel = document.getElementById('ga-fl-mission-select');
+                    var mis = sel ? _gaFLMissions[sel.selectedIndex] : null;
+                    if (mis && mis.datetime) {
+                        var st2 = smry.start_time.split(':'), et2 = smry.end_time.split(':');
+                        var ss2 = parseInt(st2[0]) * 3600 + parseInt(st2[1]) * 60;
+                        var es2 = parseInt(et2[0]) * 3600 + parseInt(et2[1]) * 60;
+                        if (es2 < ss2) es2 += 86400;
+                        var midMs = new Date(mis.datetime + 'T00:00:00Z').getTime() + ((ss2 + es2) / 2) * 1000;
+                        var bestD = Infinity;
+                        for (var fi = 0; fi < meta.frames.length; fi++) {
+                            if (!meta.frames[fi] || !meta.frames[fi].datetime) continue;
+                            var fd = new Date(meta.frames[fi].datetime.replace(' UTC', 'Z').replace(' ', 'T'));
+                            var dd = Math.abs(fd.getTime() - midMs);
+                            if (dd < bestD) { bestD = dd; startIdx = fi; }
+                        }
+                    }
+                }
+            }
+            irFrameIdx = startIdx;
+            if (irFirstFrameCache[storm.sid] && startIdx === 0) {
                 // First frame was already prefetched — display instantly
                 irFrames[0] = irFirstFrameCache[storm.sid];
                 delete irFirstFrameCache[storm.sid]; // Free memory
@@ -3086,7 +3109,8 @@ function loadHURSAT(storm) {
                 if (loadingEl2) loadingEl2.style.display = 'none';
                 prefetchIRFrames(0);
             } else {
-                loadIRFrame(0);
+                if (irFirstFrameCache[storm.sid]) delete irFirstFrameCache[storm.sid];
+                loadIRFrame(startIdx);
             }
 
             // Prefetching is triggered by loadIRFrame's callback (or above)
