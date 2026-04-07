@@ -10291,6 +10291,8 @@ function _gaFLRenderMinobGapFill() {
             peak_10s_kt: ob.peak_10s_wspd_kt,
             wdir: ob.wdir_deg, time: ob.time,
             wspd_ms: wspd_kt / 1.944,
+            geo_alt_m: ob.geo_alt_m, sfc_pres_hpa: ob.sfc_pres_hpa,
+            temp_c: ob.temp_c, dewpt_c: ob.dewpt_c,
             aircraft: ob.aircraft || '', mission_id: ob.mission_id || '',
             time_sec: oSec
         });
@@ -10387,8 +10389,12 @@ function _gaFLRenderMinobGapFill() {
             var tip = '<b>' + prodLabel + ' ' + timeLabel + ' UTC</b><br>' +
                 '30s avg: ' + (o.wspd_30s_kt != null ? o.wspd_30s_kt + ' kt' : '\u2014') + '<br>' +
                 'Pk 10s: ' + (o.peak_10s_kt != null ? o.peak_10s_kt + ' kt' : '\u2014') + '<br>' +
-                'Dir: ' + o.wdir + '\u00b0<br>' +
-                o.aircraft + ' ' + o.mission_id;
+                'Dir: ' + o.wdir + '\u00b0' +
+                (o.geo_alt_m != null ? '<br>Alt: ' + o.geo_alt_m + ' m' : '') +
+                (o.sfc_pres_hpa != null ? '<br>Sfc P: ' + o.sfc_pres_hpa + ' hPa' : '') +
+                (o.temp_c != null ? '<br>T: ' + o.temp_c + ' \u00b0C' : '') +
+                (o.dewpt_c != null ? '<br>Td: ' + o.dewpt_c + ' \u00b0C' : '') +
+                '<br>' + o.aircraft + ' ' + o.mission_id;
             var circle = L.circleMarker([o.lat, o.lon], {
                 radius: 4, fillColor: _gaFLWindColor(o.wspd_ms), fillOpacity: 0.7,
                 color: '#f97316', weight: 1, opacity: 0.8, pane: 'markerPane'
@@ -12142,7 +12148,8 @@ function _gaFLRenderTimeSeries() {
         // Match the HDOB mission that corresponds to this HRD flight
         var chartBestMission = _gaFLMatchMinobMission(minobData, hrdStart2, hrdEnd2,
             mDate2, mDateNext2, mDatePrev2);
-        var moTimes = [], moPeak = [], mo30s = [], moSfcP = [], moTemp = [], moDewpt = [], moHovers = [];
+        var moTimes = [], moPeak = [], mo30s = [], moSfcP = [], moTemp = [], moDewpt = [],
+            moAlt = [], moStaticP = [], moHovers = [];
         minobData.forEach(function (ob) {
             if (!ob.time) return;
             if (chartBestMission && ob.mission_id !== chartBestMission) return;
@@ -12167,11 +12174,20 @@ function _gaFLRenderTimeSeries() {
 
             var p10 = ob.peak_10s_wspd_kt;
             var w30 = ob.wspd_30s_kt;
-            if (p10 == null && w30 == null && ob.sfc_pres_hpa == null && ob.temp_c == null) return;
+            if (p10 == null && w30 == null && ob.sfc_pres_hpa == null &&
+                ob.temp_c == null && ob.geo_alt_m == null) return;
+
+            // Estimate static pressure from geopotential height using hypsometric approx
+            var staticP = null;
+            if (ob.geo_alt_m != null && ob.geo_alt_m > 0) {
+                staticP = Math.round(1013.25 * Math.pow(1 - ob.geo_alt_m / 44330, 5.255) * 10) / 10;
+            }
 
             var hov = '<b>' + chartProdLabel + ' ' + tLabel + 'Z</b>';
             if (p10 != null) hov += '<br>Peak 10s: ' + p10 + ' kt';
             if (w30 != null) hov += '<br>30s avg: ' + w30 + ' kt';
+            if (ob.geo_alt_m != null) hov += '<br>Alt: ' + ob.geo_alt_m + ' m';
+            if (staticP != null) hov += '<br>Static P: ' + staticP + ' hPa';
             if (ob.sfc_pres_hpa != null) hov += '<br>Sfc P: ' + ob.sfc_pres_hpa + ' hPa';
             if (ob.temp_c != null) hov += '<br>T: ' + ob.temp_c + ' \u00b0C';
             if (ob.dewpt_c != null) hov += '<br>Td: ' + ob.dewpt_c + ' \u00b0C';
@@ -12183,6 +12199,8 @@ function _gaFLRenderTimeSeries() {
             moSfcP.push(ob.sfc_pres_hpa);
             moTemp.push(ob.temp_c);
             moDewpt.push(ob.dewpt_c);
+            moAlt.push(ob.geo_alt_m);
+            moStaticP.push(staticP);
             moHovers.push(hov);
         });
 
@@ -12262,6 +12280,36 @@ function _gaFLRenderTimeSeries() {
                     hovertemplate: '%{text}<extra></extra>',
                     text: moHovers,
                     yaxis: 'y3', showlegend: true,
+                    visible: _gaFLMinobVisible ? true : 'legendonly',
+                });
+            }
+
+            // HDOB geopotential altitude on alt axis
+            if (moAlt.some(function (v) { return v != null; }) && _gaFLVarsVisible['gps_alt_m']) {
+                traces.push({
+                    x: moTimes, y: moAlt,
+                    type: 'scatter', mode: 'markers',
+                    name: chartProdLabel + ' Alt',
+                    marker: { color: '#6b7280', symbol: 'diamond', size: 4,
+                              line: { color: '#fff', width: 0.5 } },
+                    hovertemplate: '%{text}<extra></extra>',
+                    text: moHovers,
+                    yaxis: 'y4', showlegend: true,
+                    visible: _gaFLMinobVisible ? true : 'legendonly',
+                });
+            }
+
+            // HDOB flight-level static pressure (estimated from geo alt) on pressure axis
+            if (moStaticP.some(function (v) { return v != null; }) && _gaFLVarsVisible['static_pres_hpa']) {
+                traces.push({
+                    x: moTimes, y: moStaticP,
+                    type: 'scatter', mode: 'markers',
+                    name: chartProdLabel + ' Static P',
+                    marker: { color: '#fbbf24', symbol: 'diamond', size: 4,
+                              line: { color: '#fff', width: 0.5 } },
+                    hovertemplate: '%{text}<extra></extra>',
+                    text: moHovers,
+                    yaxis: 'y2', showlegend: true,
                     visible: _gaFLMinobVisible ? true : 'legendonly',
                 });
             }
