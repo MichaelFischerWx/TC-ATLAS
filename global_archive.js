@@ -1865,6 +1865,9 @@ function _minobFetch() {
             if (!json.success || !json.observations || json.observations.length === 0) return;
             minobData = json.observations;
             minobLoaded = true;
+            // Show MINOB button now that data is available
+            var mbtn = document.getElementById('ga-fl-minob-btn');
+            if (mbtn) mbtn.style.display = '';
             // Re-render FL time series if open to add MINOB overlay
             if (_gaFLTSOpen && _gaFLData) _gaFLRenderTimeSeries();
         })
@@ -1874,6 +1877,8 @@ function _minobFetch() {
 function _minobReset() {
     minobData = null;
     minobLoaded = false;
+    var mbtn = document.getElementById('ga-fl-minob-btn');
+    if (mbtn) mbtn.style.display = 'none';
 }
 
 function _vdmShowTextOverlay(rawText) {
