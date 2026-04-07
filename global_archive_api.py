@@ -5651,14 +5651,19 @@ def _parse_minob_message(text: str, year: int, start_date: str, end_date: str,
                                     best_dist = dist
                             d += timedelta(days=1)
                         if best:
-                            dt = best.replace(hour=h, minute=m, second=s)
+                            # Handle midnight crossing (h >= 24)
+                            dt = best.replace(hour=0, minute=m, second=s)
+                            dt += timedelta(hours=h)
                             obs["time"] = dt.strftime("%Y-%m-%dT%H:%M:%S")
                         else:
-                            obs["time"] = f"{year}-01-01T{h:02d}:{m:02d}:{s:02d}"
+                            hh_wrap = h % 24
+                            obs["time"] = f"{year}-01-01T{hh_wrap:02d}:{m:02d}:{s:02d}"
                     except (ValueError, TypeError):
-                        obs["time"] = f"{year}-01-01T{h:02d}:{m:02d}:{s:02d}"
+                        hh_wrap = h % 24
+                        obs["time"] = f"{year}-01-01T{hh_wrap:02d}:{m:02d}:{s:02d}"
                 else:
-                    obs["time"] = f"{year}-01-01T{h:02d}:{m:02d}:{s:02d}"
+                    hh_wrap = h % 24
+                    obs["time"] = f"{year}-01-01T{hh_wrap:02d}:{m:02d}:{s:02d}"
 
                 observations.append(obs)
             i += 1
