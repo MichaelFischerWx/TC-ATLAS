@@ -1865,11 +1865,19 @@ function _minobFetch() {
             if (!json.success || !json.observations || json.observations.length === 0) return;
             minobData = json.observations;
             minobLoaded = true;
-            // Show MINOB button now that data is available
+            // Show MINOB/HDOB button now that data is available
             var mbtn = document.getElementById('ga-fl-minob-btn');
-            if (mbtn) mbtn.style.display = '';
+            if (mbtn) {
+                mbtn.style.display = '';
+                mbtn.textContent = selectedStorm.year >= 1997 ? 'HDOB' : 'MINOB';
+                mbtn.title = (selectedStorm.year >= 1997
+                    ? 'HDOB high-density observations (peak 10-sec wind)'
+                    : 'MINOB minute observations (peak 10-sec wind)');
+            }
             // Re-render FL time series if open to add MINOB overlay
             if (_gaFLTSOpen && _gaFLData) _gaFLRenderTimeSeries();
+            // Re-render map to add gap-fill if HRD data is truncated
+            if (_gaFLData10s && detailMap) _gaFLRenderMinobGapFill();
         })
         .catch(function () {});
 }
@@ -10075,11 +10083,17 @@ function _gaFLSyncIRToMissionMidpoint(json) {
     }
 }
 
+var _gaFLMinobMapLayers = [];
+
 function _gaFLRemoveFromMap() {
     for (var i = 0; i < _gaFLMapLayers.length; i++) {
         if (detailMap) detailMap.removeLayer(_gaFLMapLayers[i]);
     }
     _gaFLMapLayers = [];
+    for (var i = 0; i < _gaFLMinobMapLayers.length; i++) {
+        if (detailMap) detailMap.removeLayer(_gaFLMinobMapLayers[i]);
+    }
+    _gaFLMinobMapLayers = [];
     if (_gaFLTSHighlight && detailMap) {
         detailMap.removeLayer(_gaFLTSHighlight);
         _gaFLTSHighlight = null;
@@ -10154,6 +10168,9 @@ function _gaFLRenderOnMap() {
 
     _gaFLInjectLegend();
 
+    // Gap-fill: render MINOB wind barbs after HRD truncation point
+    _gaFLRenderMinobGapFill();
+
     // Re-render markers on zoom change for adaptive density
     if (!_gaFLZoomHandler) {
         _gaFLZoomHandler = function () {
@@ -10163,6 +10180,155 @@ function _gaFLRenderOnMap() {
     }
 }
 var _gaFLZoomHandler = null;
+
+
+function _gaFLRenderMinobGapFill() {
+    // Remove previous MINOB map layers
+    for (var i = 0; i < _gaFLMinobMapLayers.length; i++) {
+        if (detailMap) detailMap.removeLayer(_gaFLMinobMapLayers[i]);
+    }
+    _gaFLMinobMapLayers = [];
+
+    if (!detailMap || !minobData || !_gaFLMinobVisible || !_gaFLData10s || _gaFLData10s.length < 2) return;
+
+    // Determine HRD end time
+    var lastHRD = _gaFLData10s[_gaFLData10s.length - 1];
+    var hrdEndSec = lastHRD.time_sec;
+
+    // Get mission date for filtering
+    var missionDate = '';
+    if (_gaFLMissions) {
+        var sel = document.getElementById('ga-fl-mission-select');
+        if (sel && _gaFLMissions[sel.selectedIndex]) {
+            missionDate = _gaFLMissions[sel.selectedIndex].datetime;
+        }
+    }
+    if (!missionDate) return;
+
+    var missionDateNext = '';
+    var md = new Date(missionDate + 'T00:00:00Z');
+    md.setUTCDate(md.getUTCDate() + 1);
+    missionDateNext = md.toISOString().substring(0, 10);
+
+    // Mission time window
+    var summ = _gaFLData.summary;
+    var mStartSec = 0, mEndSec = 86400;
+    if (summ && summ.start_time) {
+        var sp = summ.start_time.split(':');
+        mStartSec = parseInt(sp[0]) * 3600 + parseInt(sp[1]) * 60 - 1800;
+    }
+    if (summ && summ.end_time) {
+        var ep = summ.end_time.split(':');
+        mEndSec = parseInt(ep[0]) * 3600 + parseInt(ep[1]) * 60 + 1800;
+        if (mEndSec < mStartSec) mEndSec += 86400;
+    }
+
+    // Filter MINOB obs to gap portion (after HRD ends, within mission window)
+    var gapObs = [];
+    var use10sPeak = _gaFLResVisible['1s'] || _gaFLResVisible['10s'];
+    minobData.forEach(function (ob) {
+        if (!ob.time || ob.lat == null || ob.lon == null) return;
+        var oDate = ob.time.substring(0, 10);
+        var oHH = parseInt(ob.time.substring(11, 13));
+        var oMM = parseInt(ob.time.substring(14, 16));
+        var oSec = oHH * 3600 + oMM * 60;
+
+        if (oDate === missionDateNext) {
+            oSec += 86400;
+        } else if (oDate !== missionDate) {
+            return;
+        }
+        if (oSec < mStartSec || oSec > mEndSec) return;
+        if (oSec <= hrdEndSec) return;  // only gap portion
+
+        var wspd_kt = use10sPeak ? ob.peak_10s_wspd_kt : ob.wspd_30s_kt;
+        if (wspd_kt == null || ob.wdir_deg == null) return;
+
+        gapObs.push({
+            lat: ob.lat, lon: ob.lon,
+            wspd_kt: wspd_kt, wspd_30s_kt: ob.wspd_30s_kt,
+            peak_10s_kt: ob.peak_10s_wspd_kt,
+            wdir: ob.wdir_deg, time: ob.time,
+            wspd_ms: wspd_kt / 1.944,
+            aircraft: ob.aircraft || '', mission_id: ob.mission_id || '',
+            time_sec: oSec
+        });
+    });
+
+    if (gapObs.length === 0) return;
+
+    var zoom = detailMap.getZoom();
+    var barbStep = zoom >= 10 ? 1 : zoom >= 8 ? 2 : 3;
+
+    // Determine label based on storm year
+    var prodLabel = (selectedStorm && selectedStorm.year >= 1997) ? 'HDOB' : 'MINOB';
+
+    // Transition marker at first gap observation
+    var first = gapObs[0];
+    var transIcon = L.divIcon({
+        className: 'ga-fl-minob-trans',
+        html: '<div style="background:#f97316;color:#fff;font-size:9px;font-weight:bold;' +
+              'padding:1px 4px;border-radius:3px;white-space:nowrap;border:1px solid #fff;">' +
+              prodLabel + ' \u25b8</div>',
+        iconSize: [60, 16], iconAnchor: [0, 8]
+    });
+    var transMarker = L.marker([first.lat, first.lon], { icon: transIcon, interactive: true })
+        .bindTooltip('HRD flight-level data ends here.<br>Remaining track from ' + prodLabel + ' minute observations.',
+            { sticky: true, className: 'ga-fl-tooltip' });
+    transMarker.addTo(detailMap);
+    _gaFLMinobMapLayers.push(transMarker);
+
+    // Connect last HRD point to first MINOB point with dashed line
+    var dashSeg = L.polyline(
+        [[lastHRD.lat, lastHRD.lon], [first.lat, first.lon]],
+        { color: '#f97316', weight: 2.5, opacity: 0.7, dashArray: '6,4', interactive: false }
+    );
+    dashSeg.addTo(detailMap);
+    _gaFLMinobMapLayers.push(dashSeg);
+
+    // Colored track segments (dashed to distinguish from HRD)
+    for (var i = 1; i < gapObs.length; i++) {
+        var p0 = gapObs[i - 1], p1 = gapObs[i];
+        var color = _gaFLWindColor(p1.wspd_ms);
+        var seg = L.polyline([[p0.lat, p0.lon], [p1.lat, p1.lon]], {
+            color: color, weight: 3, opacity: 0.7, dashArray: '6,4', interactive: false
+        });
+        seg.addTo(detailMap);
+        _gaFLMinobMapLayers.push(seg);
+    }
+
+    // Hover circles
+    for (var i = 0; i < gapObs.length; i += barbStep) {
+        var o = gapObs[i];
+        var timeLabel = o.time.substring(11, 16);
+        var tip = '<b>' + prodLabel + ' ' + timeLabel + ' UTC</b><br>' +
+            '30s avg: ' + (o.wspd_30s_kt != null ? o.wspd_30s_kt + ' kt' : '\u2014') + '<br>' +
+            'Pk 10s: ' + (o.peak_10s_kt != null ? o.peak_10s_kt + ' kt' : '\u2014') + '<br>' +
+            'Dir: ' + o.wdir + '\u00b0<br>' +
+            o.aircraft + ' ' + o.mission_id;
+        var circle = L.circleMarker([o.lat, o.lon], {
+            radius: 4, fillColor: _gaFLWindColor(o.wspd_ms), fillOpacity: 0.7,
+            color: '#f97316', weight: 1, opacity: 0.8, pane: 'markerPane'
+        }).bindTooltip(tip, { sticky: true, pane: 'tooltipPane', className: 'ga-fl-tooltip' });
+        circle.addTo(detailMap);
+        _gaFLMinobMapLayers.push(circle);
+    }
+
+    // Wind barbs
+    for (var i = 0; i < gapObs.length; i += barbStep) {
+        var o = gapObs[i];
+        if (!isFinite(o.wdir) || !isFinite(o.wspd_ms)) continue;
+        var barbHtml = _gaFLBarbSVG(o.wspd_ms, o.wdir);
+        var icon = L.divIcon({
+            className: 'ga-fl-barb', html: barbHtml,
+            iconSize: [24, 24], iconAnchor: [12, 12]
+        });
+        var marker = L.marker([o.lat, o.lon], { icon: icon, interactive: false });
+        marker.addTo(detailMap);
+        _gaFLMinobMapLayers.push(marker);
+    }
+}
+
 
 function _gaFLBarbSVG(wspd_ms, wdir_deg) {
     var kt = wspd_ms * 1.944;
@@ -11611,6 +11777,7 @@ window.gaFLToggleMinob = function () {
     var btn = document.getElementById('ga-fl-minob-btn');
     if (btn) btn.classList.toggle('active', _gaFLMinobVisible);
     if (_gaFLData) _gaFLRenderTimeSeries();
+    if (_gaFLData10s && detailMap) _gaFLRenderMinobGapFill();
 };
 
 window.gaFLToggleXAxis = function () {
