@@ -10353,6 +10353,8 @@ function _gaFLRenderMinobGapFill() {
                 radius: 4, fillColor: _gaFLWindColor(o.wspd_ms), fillOpacity: 0.7,
                 color: '#f97316', weight: 1, opacity: 0.8, pane: 'markerPane'
             }).bindTooltip(tip, { sticky: true, pane: 'tooltipPane', className: 'ga-fl-tooltip' });
+            circle.on('tooltipopen', function () { _gaFLTooltipOpen = true; });
+            circle.on('tooltipclose', function () { _gaFLTooltipOpen = false; });
             circle.addTo(detailMap);
             _gaFLMinobMapLayers.push(circle);
 
@@ -12096,7 +12098,8 @@ function _gaFLRenderTimeSeries() {
             mDatePrev2 = mdp2.toISOString().substring(0, 10);
         }
 
-        var moTimes = [], moPeak = [], mo30s = [], moHovers = [];
+        var chartProdLabel = (selectedStorm && selectedStorm.year >= 1997) ? 'HDOB' : 'MINOB';
+        var moTimes = [], moPeak = [], mo30s = [], moSfcP = [], moTemp = [], moDewpt = [], moHovers = [];
         minobData.forEach(function (ob) {
             if (!ob.time) return;
             var oDate = ob.time.substring(0, 10);
@@ -12120,16 +12123,22 @@ function _gaFLRenderTimeSeries() {
 
             var p10 = ob.peak_10s_wspd_kt;
             var w30 = ob.wspd_30s_kt;
-            if (p10 == null && w30 == null) return;
+            if (p10 == null && w30 == null && ob.sfc_pres_hpa == null && ob.temp_c == null) return;
 
-            var hov = '<b>MINOB ' + tLabel + 'Z</b>';
+            var hov = '<b>' + chartProdLabel + ' ' + tLabel + 'Z</b>';
             if (p10 != null) hov += '<br>Peak 10s: ' + p10 + ' kt';
             if (w30 != null) hov += '<br>30s avg: ' + w30 + ' kt';
+            if (ob.sfc_pres_hpa != null) hov += '<br>Sfc P: ' + ob.sfc_pres_hpa + ' hPa';
+            if (ob.temp_c != null) hov += '<br>T: ' + ob.temp_c + ' \u00b0C';
+            if (ob.dewpt_c != null) hov += '<br>Td: ' + ob.dewpt_c + ' \u00b0C';
             if (ob.aircraft) hov += '<br>' + ob.aircraft + ' ' + (ob.mission_id || '');
 
             moTimes.push(tLabel);
             moPeak.push(p10);
             mo30s.push(w30);
+            moSfcP.push(ob.sfc_pres_hpa);
+            moTemp.push(ob.temp_c);
+            moDewpt.push(ob.dewpt_c);
             moHovers.push(hov);
         });
 
@@ -12146,7 +12155,7 @@ function _gaFLRenderTimeSeries() {
                 traces.push({
                     x: moTimes, y: moPeak,
                     type: 'scatter', mode: 'markers',
-                    name: 'MINOB Pk 10s',
+                    name: chartProdLabel + ' Pk 10s',
                     marker: { color: '#f97316', symbol: 'triangle-up', size: 7,
                               line: { color: '#fff', width: 0.5 } },
                     hovertemplate: '%{text}<extra></extra>',
@@ -12159,11 +12168,56 @@ function _gaFLRenderTimeSeries() {
                 traces.push({
                     x: moTimes, y: mo30s,
                     type: 'scatter', mode: 'markers',
-                    name: 'MINOB 30s',
+                    name: chartProdLabel + ' 30s',
                     marker: { color: '#94a3b8', symbol: 'circle', size: 4 },
                     hovertemplate: '%{text}<extra></extra>',
                     text: moHovers,
                     yaxis: 'y', showlegend: true,
+                    visible: _gaFLMinobVisible ? true : 'legendonly',
+                });
+            }
+
+            // HDOB surface pressure on pressure axis
+            if (moSfcP.some(function (v) { return v != null; }) && _gaFLVarsVisible['sfcpr_hpa']) {
+                traces.push({
+                    x: moTimes, y: moSfcP,
+                    type: 'scatter', mode: 'markers',
+                    name: chartProdLabel + ' Sfc P',
+                    marker: { color: '#fb923c', symbol: 'diamond', size: 5,
+                              line: { color: '#fff', width: 0.5 } },
+                    hovertemplate: '%{text}<extra></extra>',
+                    text: moHovers,
+                    yaxis: 'y5', showlegend: true,
+                    visible: _gaFLMinobVisible ? true : 'legendonly',
+                });
+            }
+
+            // HDOB temperature on temp axis
+            if (moTemp.some(function (v) { return v != null; }) && _gaFLVarsVisible['temp_c']) {
+                traces.push({
+                    x: moTimes, y: moTemp,
+                    type: 'scatter', mode: 'markers',
+                    name: chartProdLabel + ' Temp',
+                    marker: { color: '#f87171', symbol: 'circle', size: 4,
+                              line: { color: '#fff', width: 0.5 } },
+                    hovertemplate: '%{text}<extra></extra>',
+                    text: moHovers,
+                    yaxis: 'y3', showlegend: true,
+                    visible: _gaFLMinobVisible ? true : 'legendonly',
+                });
+            }
+
+            // HDOB dewpoint on temp axis
+            if (moDewpt.some(function (v) { return v != null; }) && _gaFLVarsVisible['dewpoint_c']) {
+                traces.push({
+                    x: moTimes, y: moDewpt,
+                    type: 'scatter', mode: 'markers',
+                    name: chartProdLabel + ' Dewpt',
+                    marker: { color: '#38bdf8', symbol: 'circle', size: 4,
+                              line: { color: '#fff', width: 0.5 } },
+                    hovertemplate: '%{text}<extra></extra>',
+                    text: moHovers,
+                    yaxis: 'y3', showlegend: true,
                     visible: _gaFLMinobVisible ? true : 'legendonly',
                 });
             }
