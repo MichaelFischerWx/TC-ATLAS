@@ -5310,6 +5310,42 @@ def get_vdm(
 _minob_cache: OrderedDict = OrderedDict()
 _MINOB_CACHE_TTL = 7 * 86400
 _MINOB_CACHE_MAX = 50
+_MINOB_GCS_PREFIX = "recon/minob/v1"
+
+
+def _minob_gcs_key(storm_name: str, year: int) -> str:
+    return f"{_MINOB_GCS_PREFIX}/{year}_{storm_name.lower()}.json"
+
+
+def _minob_gcs_get(storm_name: str, year: int):
+    bucket = _get_gcs_bucket()
+    if bucket is None:
+        return None
+    try:
+        blob = bucket.blob(_minob_gcs_key(storm_name, year))
+        data = blob.download_as_bytes(timeout=8)
+        return json.loads(data)
+    except Exception:
+        return None
+
+
+def _minob_gcs_put(storm_name: str, year: int, result: dict):
+    bucket = _get_gcs_bucket()
+    if bucket is None:
+        return
+
+    def _upload():
+        try:
+            blob = bucket.blob(_minob_gcs_key(storm_name, year))
+            blob.upload_from_string(
+                json.dumps(result, separators=(",", ":")),
+                content_type="application/json",
+            )
+        except Exception as e:
+            logger.warning(f"GCS minob cache write failed: {e}")
+
+    import threading
+    threading.Thread(target=_upload, daemon=True).start()
 
 
 def _parse_minob_obs_legacy(fields: list) -> dict | None:
@@ -5638,6 +5674,16 @@ def get_minobs(
             _minob_cache.move_to_end(cache_key)
             return cached
 
+    # Check GCS persistent cache (historical storms cached indefinitely)
+    from datetime import datetime as _dt
+    _is_historical = (year <= _dt.utcnow().year - 2)
+    gcs_result = _minob_gcs_get(storm_name, year)
+    if gcs_result is not None:
+        _minob_cache[cache_key] = (gcs_result, now)
+        if len(_minob_cache) > _MINOB_CACHE_MAX:
+            _minob_cache.popitem(last=False)
+        return gcs_result
+
     from tc_radar_api import _hrd_fetch_text, _hrd_parse_directory
     import re
 
@@ -5780,5 +5826,9 @@ def get_minobs(
     _minob_cache[cache_key] = (result, now)
     if len(_minob_cache) > _MINOB_CACHE_MAX:
         _minob_cache.popitem(last=False)
+
+    # Persist to GCS (historical storms cached indefinitely, recent 7-day)
+    if flat_obs:
+        _minob_gcs_put(storm_name, year, result)
 
     return result
