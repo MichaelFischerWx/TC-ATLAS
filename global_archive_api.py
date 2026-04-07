@@ -5348,12 +5348,16 @@ def _minob_gcs_put(storm_name: str, year: int, result: dict):
     threading.Thread(target=_upload, daemon=True).start()
 
 
-def _parse_minob_obs_legacy(fields: list) -> dict | None:
+def _parse_minob_obs_legacy(fields: list, colatitude: bool = False) -> dict | None:
     """Parse a single legacy MINOB/HDOB observation line (1989–2011).
 
-    Expected fields (space-split):
-      HHMM  LatH  LonH  GGGGG  XXXX  DDD  SSS  TTT  DDD2  PKT  EEEEE  FLAGS
-      0     1     2     3      4     5    6    7    8     9    10     11
+    Two lat/lon encodings exist:
+      SXXX50 format (1990+): HHMM DDMMH DDDMMH GeoHt ...  (hemisphere letters)
+      URNT50 format (1989):  HHMM ColLat  Lon   GeoHt ...  (colatitude, numeric-only)
+
+    When colatitude=True:
+      field 1 = (90 - lat) * 100  (colatitude in hundredths of degrees)
+      field 2 = lon * 100          (West longitude in hundredths of degrees)
 
     Half-minute timestamps (e.g. "1704.") are supported (2003+ files).
     """
@@ -5371,29 +5375,38 @@ def _parse_minob_obs_legacy(fields: list) -> dict | None:
     if hh > 47 or mm > 59:
         return None
 
-    # Lat — e.g. "2529N" → 25.483
-    lat_s = fields[1].rstrip(";")
-    if lat_s.startswith("/"):
-        return None
-    lat_hem = lat_s[-1].upper()
-    lat_num = lat_s[:-1]
-    if len(lat_num) < 4:
-        return None
-    lat = int(lat_num[:-2]) + int(lat_num[-2:]) / 60.0
-    if lat_hem == "S":
-        lat = -lat
+    if colatitude:
+        # URNT50 format: numeric colatitude/longitude in hundredths of degrees
+        try:
+            colat = int(fields[1].rstrip(";"))
+            lon_raw = int(fields[2].rstrip(";"))
+        except (ValueError, IndexError):
+            return None
+        lat = 90.0 - colat / 100.0
+        lon = -(lon_raw / 100.0)  # West longitude → negative
+    else:
+        # SXXX50 format: DDMMH hemisphere encoding
+        lat_s = fields[1].rstrip(";")
+        if lat_s.startswith("/"):
+            return None
+        lat_hem = lat_s[-1].upper()
+        lat_num = lat_s[:-1]
+        if len(lat_num) < 4:
+            return None
+        lat = int(lat_num[:-2]) + int(lat_num[-2:]) / 60.0
+        if lat_hem == "S":
+            lat = -lat
 
-    # Lon — e.g. "07501W" → -75.017
-    lon_s = fields[2].rstrip(";")
-    if lon_s.startswith("/"):
-        return None
-    lon_hem = lon_s[-1].upper()
-    lon_num = lon_s[:-1]
-    if len(lon_num) < 4:
-        return None
-    lon = int(lon_num[:-2]) + int(lon_num[-2:]) / 60.0
-    if lon_hem == "W":
-        lon = -lon
+        lon_s = fields[2].rstrip(";")
+        if lon_s.startswith("/"):
+            return None
+        lon_hem = lon_s[-1].upper()
+        lon_num = lon_s[:-1]
+        if len(lon_num) < 4:
+            return None
+        lon = int(lon_num[:-2]) + int(lon_num[-2:]) / 60.0
+        if lon_hem == "W":
+            lon = -lon
 
     def _safe_int(s):
         s = s.rstrip(";")
@@ -5552,10 +5565,13 @@ def _parse_minob_message(text: str, year: int, start_date: str, end_date: str,
     while i < len(lines):
         line = lines[i].strip()
 
-        # Look for WMO header (SXXX50 or URNT15)
-        if not (line.startswith("SXXX50") or line.startswith("URNT15")):
+        # Look for WMO header (SXXX50, URNT15, or URNT50)
+        if not (line.startswith("SXXX50") or line.startswith("URNT15") or line.startswith("URNT50")):
             i += 1
             continue
+
+        # URNT50 (1989 era) uses colatitude encoding for lat/lon
+        is_colatitude = line.startswith("URNT50")
 
         # Extract day from header timestamp (e.g., "SXXX50 KMIA 231531" → day=23)
         hdr_parts = line.split()
@@ -5603,14 +5619,17 @@ def _parse_minob_message(text: str, year: int, start_date: str, end_date: str,
         i += 1
         while i < len(lines):
             ol = lines[i].strip()
-            if not ol or ol.startswith("SXXX50") or ol.startswith("URNT15") or ol == "NNNN":
+            if not ol or ol.startswith(("SXXX50", "URNT15", "URNT50")) or ol == "NNNN":
                 break
             parts = ol.split()
             if len(parts) < 3:
                 i += 1
                 continue
 
-            obs = _parse_minob_obs_modern(parts) if is_modern else _parse_minob_obs_legacy(parts)
+            if is_modern:
+                obs = _parse_minob_obs_modern(parts)
+            else:
+                obs = _parse_minob_obs_legacy(parts, colatitude=is_colatitude)
 
             if obs is not None:
                 day = hdr_day
