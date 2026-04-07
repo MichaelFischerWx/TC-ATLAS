@@ -377,6 +377,7 @@
                                 <span id="ga-fl-status" class="ir-status"></span>
                             </div>
                         </div>
+                        <div class="detail-map-ir-row">
                         <div class="detail-map-wrap">
                             <div id="detail-map" class="detail-map-container"></div>
                             <!-- Loading spinner overlay (stays inside map) -->
@@ -485,41 +486,51 @@
                                 </div>
                             </div>
                         </div>
-                        <div id="ir-map-controls" class="ir-map-controls" style="display:none;position:relative;margin-top:4px;">
-                            <div class="ir-map-info">
-                                <span id="ir-frame-info" class="ir-frame-info"></span>
-                                <span class="panel-badge" id="ir-source-badge">HURSAT-B1</span>
+                        <div id="ir-map-controls" class="ir-map-controls ir-sidebar" style="display:none;">
+                            <div class="ir-sb-vbar">
+                                <canvas id="ir-colorbar-canvas" width="14"></canvas>
+                                <div class="ir-vbar-labels">
+                                    <span>310 K</span>
+                                    <span>240</span>
+                                    <span>170 K</span>
+                                </div>
                             </div>
-                            <div class="ir-map-playback">
-                                <button class="ga-btn ga-btn-sm ir-step-btn" onclick="stepIRFrame(-1)" title="Previous frame">&#9664;</button>
-                                <button id="ir-play-btn" class="ga-btn ga-btn-sm" onclick="toggleIRPlay()">&#9654; Play</button>
-                                <button class="ga-btn ga-btn-sm ir-step-btn" onclick="stepIRFrame(1)" title="Next frame">&#9654;</button>
-                                <span id="ir-datetime" class="ir-datetime"></span>
-                                <select id="ir-speed" class="ga-select-sm" onchange="setIRSpeed(this.value)">
-                                    <option value="1500">0.5x</option>
-                                    <option value="750" selected>1x</option>
-                                    <option value="375">2x</option>
-                                </select>
-                            </div>
-                            <div class="ir-slider-row">
-                                <input type="range" id="ir-slider" class="ga-range ir-slider" min="0" max="0" value="0" oninput="seekIRFrame(this.value)">
-                            </div>
-                            <div class="ir-map-options">
-                                <button class="ga-btn ga-btn-sm ir-opacity-btn" onclick="cycleIROpacity()" title="Adjust IR opacity">
-                                    <span id="ir-opacity-label">80%</span>
-                                </button>
-                                <button id="ir-follow-btn" class="ga-btn ga-btn-sm ir-follow-btn active" onclick="toggleIRFollow()" title="View locked to storm center (click to unlock)">
-                                    &#8982;
-                                </button>
-                                <button id="ir-track-toggle-btn" class="ga-btn ga-btn-sm ir-follow-btn active" onclick="toggleTrackOverlay()" title="Show/hide track and position marker">
-                                    &#9992;
-                                </button>
-                                <button id="ir-gif-btn" class="ga-btn ga-btn-sm ir-follow-btn" onclick="openGifSettings()" title="Export IR loop as animated GIF">
-                                    GIF
-                                </button>
-                            </div>
-                            <div class="ir-cmap-row">
-                                <span class="ir-cmap-group" title="Switch IR colormap">
+                            <div class="ir-sb-main">
+                                <div class="ir-sb-info">
+                                    <span id="ir-frame-info" class="ir-frame-info"></span>
+                                    <span class="panel-badge" id="ir-source-badge">HURSAT-B1</span>
+                                </div>
+                                <div class="ir-sb-datetime">
+                                    <span id="ir-datetime" class="ir-datetime"></span>
+                                </div>
+                                <div class="ir-sb-playback">
+                                    <button class="ga-btn ga-btn-sm ir-step-btn" onclick="stepIRFrame(-1)" title="Previous frame">&#9664;</button>
+                                    <button id="ir-play-btn" class="ga-btn ga-btn-sm" onclick="toggleIRPlay()">&#9654;</button>
+                                    <button class="ga-btn ga-btn-sm ir-step-btn" onclick="stepIRFrame(1)" title="Next frame">&#9654;</button>
+                                    <select id="ir-speed" class="ga-select-sm" onchange="setIRSpeed(this.value)" title="Playback speed">
+                                        <option value="1500">0.5x</option>
+                                        <option value="750" selected>1x</option>
+                                        <option value="375">2x</option>
+                                    </select>
+                                </div>
+                                <div class="ir-sb-slider">
+                                    <input type="range" id="ir-slider" class="ga-range ir-slider" min="0" max="0" value="0" oninput="seekIRFrame(this.value)">
+                                </div>
+                                <div class="ir-sb-opts">
+                                    <button class="ga-btn ga-btn-sm ir-opacity-btn" onclick="cycleIROpacity()" title="Adjust IR opacity">
+                                        <span id="ir-opacity-label">80%</span>
+                                    </button>
+                                    <button id="ir-follow-btn" class="ga-btn ga-btn-sm ir-follow-btn active" onclick="toggleIRFollow()" title="View locked to storm center">
+                                        &#8982;
+                                    </button>
+                                    <button id="ir-track-toggle-btn" class="ga-btn ga-btn-sm ir-follow-btn active" onclick="toggleTrackOverlay()" title="Show/hide track">
+                                        &#9992;
+                                    </button>
+                                    <button id="ir-gif-btn" class="ga-btn ga-btn-sm ir-follow-btn" onclick="openGifSettings()" title="Export GIF">
+                                        GIF
+                                    </button>
+                                </div>
+                                <div class="ir-sb-cmaps">
                                     <button class="ga-btn ga-btn-sm ir-cmap-btn active" data-cmap="enhanced" onclick="switchColormap('enhanced')">IR</button>
                                     <button class="ga-btn ga-btn-sm ir-cmap-btn" data-cmap="dvorak" onclick="switchColormap('dvorak')">BD</button>
                                     <button class="ga-btn ga-btn-sm ir-cmap-btn" data-cmap="grayscale" onclick="switchColormap('grayscale')">BW</button>
@@ -529,17 +540,10 @@
                                     <button class="ga-btn ga-btn-sm ir-cmap-btn" data-cmap="rammb" onclick="switchColormap('rammb')">RAMMB</button>
                                     <button class="ga-btn ga-btn-sm ir-cmap-btn" data-cmap="irb" onclick="switchColormap('irb')">IRB</button>
                                     <button class="ga-btn ga-btn-sm ir-cmap-btn" data-cmap="claude" onclick="switchColormap('claude')">Claude</button>
-                                </span>
-                            </div>
-                            <div class="ir-colorbar-row">
-                                <canvas id="ir-colorbar-canvas" height="8"></canvas>
-                                <div class="ir-colorbar-labels">
-                                    <span>310 K</span>
-                                    <span>240</span>
-                                    <span>170 K</span>
                                 </div>
                             </div>
                         </div>
+                        </div><!-- /detail-map-ir-row -->
                         <!-- Controls below the map so they don't cover the imagery -->
                         <div id="ga-mw-controls" style="display:none;background:rgba(15,23,42,0.92);border:1px solid rgba(251,146,60,0.3);border-radius:6px;padding:6px 10px;margin-top:4px;">
                             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">

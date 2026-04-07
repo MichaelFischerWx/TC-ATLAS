@@ -465,23 +465,44 @@ function renderColorbarCanvas(colormapName) {
     var canvas = document.getElementById('ir-colorbar-canvas');
     if (!canvas) return;
     var lut = IR_COLORMAPS[colormapName] || IR_COLORMAPS['enhanced'];
-    // Draw 255 pixels wide (one per uint8 value 1-255), warm→cold = left→right
-    canvas.width = 255;
-    canvas.height = 1;
-    var ctx = canvas.getContext('2d');
-    var imgData = ctx.createImageData(255, 1);
-    var px = imgData.data;
-    for (var x = 0; x < 255; x++) {
-        // x=0 → warmest (uint8=255=310K), x=254 → coldest (uint8=1=170K)
-        var val = 255 - x;
-        var li = val * 4;
-        var pi = x * 4;
-        px[pi]     = lut[li];
-        px[pi + 1] = lut[li + 1];
-        px[pi + 2] = lut[li + 2];
-        px[pi + 3] = 255;  // Colorbar always fully opaque
+    // Detect vertical sidebar mode vs horizontal
+    var isVertical = canvas.closest('.ir-sb-vbar') !== null;
+    if (isVertical) {
+        // Vertical: warm (310K) at top → cold (170K) at bottom
+        canvas.width = 1;
+        canvas.height = 255;
+        var ctx = canvas.getContext('2d');
+        var imgData = ctx.createImageData(1, 255);
+        var px = imgData.data;
+        for (var y = 0; y < 255; y++) {
+            // y=0 → warmest (uint8=255=310K), y=254 → coldest (uint8=1=170K)
+            var val = 255 - y;
+            var li = val * 4;
+            var pi = y * 4;
+            px[pi]     = lut[li];
+            px[pi + 1] = lut[li + 1];
+            px[pi + 2] = lut[li + 2];
+            px[pi + 3] = 255;
+        }
+        ctx.putImageData(imgData, 0, 0);
+    } else {
+        // Horizontal: warm (310K) on left → cold (170K) on right
+        canvas.width = 255;
+        canvas.height = 1;
+        var ctx = canvas.getContext('2d');
+        var imgData = ctx.createImageData(255, 1);
+        var px = imgData.data;
+        for (var x = 0; x < 255; x++) {
+            var val = 255 - x;
+            var li = val * 4;
+            var pi = x * 4;
+            px[pi]     = lut[li];
+            px[pi + 1] = lut[li + 1];
+            px[pi + 2] = lut[li + 2];
+            px[pi + 3] = 255;
+        }
+        ctx.putImageData(imgData, 0, 0);
     }
-    ctx.putImageData(imgData, 0, 0);
 }
 
 // Switch colormap and re-render current frame (no server round-trip)
@@ -3063,7 +3084,8 @@ function loadHURSAT(storm) {
             var toggleBtn = document.getElementById('ir-toggle-btn');
             toggleBtn.textContent = 'Hide IR';
             toggleBtn.classList.add('active');
-            document.getElementById('ir-map-controls').style.display = '';
+            var irCtrl = document.getElementById('ir-map-controls');
+            irCtrl.style.display = irCtrl.classList.contains('ir-sidebar') ? 'flex' : '';
 
             // Show loading state for first frame
             var loadingEl = document.getElementById('ir-frame-loading');
@@ -3157,7 +3179,7 @@ window.toggleIROverlay = function () {
     if (irOverlayVisible) {
         toggleBtn.textContent = 'Hide IR';
         toggleBtn.classList.add('active');
-        controls.style.display = '';
+        controls.style.display = controls.classList.contains('ir-sidebar') ? 'flex' : '';
         // Reposition MW controls above IR if MW is visible
         setTimeout(_repositionMWControls, 50);
         // Hide track annotation markers so they don't obscure IR
@@ -12190,6 +12212,8 @@ function _gaFLRenderTimeSeries() {
                 return;
             }
             if (oSec < ms2 || oSec > me2) return;
+            // Gap-fill only: skip obs that overlap the HRD time range
+            if (oSec >= hrdStart2 && oSec <= hrdEnd2) return;
 
             var displayHH2 = oHH;
             if (oDate === mDateNext2) displayHH2 = oHH + 24;
@@ -12240,7 +12264,7 @@ function _gaFLRenderTimeSeries() {
             if (show10s) {
                 traces.push({
                     x: moTimes, y: moPeak,
-                    type: 'scatter', mode: 'lines+markers',
+                    type: 'scatter', mode: 'lines',
                     name: chartProdLabel + ' Pk 10s',
                     line: { color: '#f97316', width: 1.5 },
                     marker: { color: '#f97316', symbol: 'triangle-up', size: 5,
@@ -12255,7 +12279,7 @@ function _gaFLRenderTimeSeries() {
             if (show30s) {
                 traces.push({
                     x: moTimes, y: mo30s,
-                    type: 'scatter', mode: 'lines+markers',
+                    type: 'scatter', mode: 'lines',
                     name: chartProdLabel + ' 30s',
                     line: { color: '#94a3b8', width: 1 },
                     marker: { color: '#94a3b8', symbol: 'circle', size: 3 },
@@ -12271,7 +12295,7 @@ function _gaFLRenderTimeSeries() {
             if (moSfcP.some(function (v) { return v != null; }) && _gaFLVarsVisible['sfcpr_hpa']) {
                 traces.push({
                     x: moTimes, y: moSfcP,
-                    type: 'scatter', mode: 'lines+markers',
+                    type: 'scatter', mode: 'lines',
                     name: chartProdLabel + ' Sfc P',
                     line: { color: '#fb923c', width: 1.5 },
                     marker: { color: '#fb923c', symbol: 'diamond', size: 4,
@@ -12288,7 +12312,7 @@ function _gaFLRenderTimeSeries() {
             if (moTemp.some(function (v) { return v != null; }) && _gaFLVarsVisible['temp_c']) {
                 traces.push({
                     x: moTimes, y: moTemp,
-                    type: 'scatter', mode: 'lines+markers',
+                    type: 'scatter', mode: 'lines',
                     name: chartProdLabel + ' Temp',
                     line: { color: '#f87171', width: 1 },
                     marker: { color: '#f87171', symbol: 'circle', size: 3,
@@ -12305,7 +12329,7 @@ function _gaFLRenderTimeSeries() {
             if (moDewpt.some(function (v) { return v != null; }) && _gaFLVarsVisible['dewpoint_c']) {
                 traces.push({
                     x: moTimes, y: moDewpt,
-                    type: 'scatter', mode: 'lines+markers',
+                    type: 'scatter', mode: 'lines',
                     name: chartProdLabel + ' Dewpt',
                     line: { color: '#38bdf8', width: 1 },
                     marker: { color: '#38bdf8', symbol: 'circle', size: 3,
@@ -12322,7 +12346,7 @@ function _gaFLRenderTimeSeries() {
             if (moAlt.some(function (v) { return v != null; }) && _gaFLVarsVisible['gps_alt_m']) {
                 traces.push({
                     x: moTimes, y: moAlt,
-                    type: 'scatter', mode: 'lines+markers',
+                    type: 'scatter', mode: 'lines',
                     name: chartProdLabel + ' Alt',
                     line: { color: '#6b7280', width: 1 },
                     marker: { color: '#6b7280', symbol: 'diamond', size: 3,
@@ -12339,7 +12363,7 @@ function _gaFLRenderTimeSeries() {
             if (moStaticP.some(function (v) { return v != null; }) && _gaFLVarsVisible['static_pres_hpa']) {
                 traces.push({
                     x: moTimes, y: moStaticP,
-                    type: 'scatter', mode: 'lines+markers',
+                    type: 'scatter', mode: 'lines',
                     name: chartProdLabel + ' Static P',
                     line: { color: '#fbbf24', width: 1 },
                     marker: { color: '#fbbf24', symbol: 'diamond', size: 3,
