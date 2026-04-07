@@ -10182,6 +10182,41 @@ function _gaFLRenderOnMap() {
 var _gaFLZoomHandler = null;
 
 
+// Find the HDOB mission_id whose time range best overlaps the HRD data
+function _gaFLMatchMinobMission(data, hrdStartSec, hrdEndSec, mDate, mDateNext, mDatePrev) {
+    if (!data || data.length === 0) return null;
+    // Group obs by mission_id and compute each mission's time range
+    var missions = {};
+    data.forEach(function (ob) {
+        if (!ob.time || !ob.mission_id) return;
+        var oDate = ob.time.substring(0, 10);
+        var oHH = parseInt(ob.time.substring(11, 13));
+        var oMM = parseInt(ob.time.substring(14, 16));
+        var oSec = oHH * 3600 + oMM * 60;
+        if (oDate === mDateNext) oSec += 86400;
+        else if (oDate === mDatePrev) oSec -= 86400;
+        else if (oDate !== mDate) return;
+        if (!missions[ob.mission_id]) missions[ob.mission_id] = { min: oSec, max: oSec, n: 0 };
+        var m = missions[ob.mission_id];
+        if (oSec < m.min) m.min = oSec;
+        if (oSec > m.max) m.max = oSec;
+        m.n++;
+    });
+    // Score each mission: overlap seconds with HRD range (higher = better match)
+    var best = null, bestScore = -Infinity;
+    Object.keys(missions).forEach(function (mid) {
+        var m = missions[mid];
+        var overlapStart = Math.max(m.min, hrdStartSec);
+        var overlapEnd = Math.min(m.max, hrdEndSec);
+        var overlap = Math.max(0, overlapEnd - overlapStart);
+        // Also consider proximity: mission whose range is closest to HRD range
+        var proximity = -Math.min(Math.abs(m.min - hrdStartSec), Math.abs(m.max - hrdEndSec));
+        var score = overlap * 1000 + proximity + m.n;
+        if (score > bestScore) { bestScore = score; best = mid; }
+    });
+    return best;
+}
+
 function _gaFLRenderMinobGapFill() {
     // Remove previous MINOB map layers
     for (var i = 0; i < _gaFLMinobMapLayers.length; i++) {
@@ -10223,11 +10258,16 @@ function _gaFLRenderMinobGapFill() {
     var gapWindowStart = hrdStartSec - 43200;  // 12 hours before HRD
     var gapWindowEnd = hrdEndSec + 43200;       // 12 hours after HRD
 
-    // Collect all MINOB obs within the wide window around the HRD data
+    // Find the HDOB mission_id that overlaps with the HRD time range
+    var bestMissionId = _gaFLMatchMinobMission(minobData, hrdStartSec, hrdEndSec,
+        missionDate, missionDateNext, missionDatePrev);
+
+    // Collect MINOB obs from the matched mission within the wide window
     var allMissionObs = [];
     var use10sPeak = _gaFLResVisible['1s'] || _gaFLResVisible['10s'];
     minobData.forEach(function (ob) {
         if (!ob.time || ob.lat == null || ob.lon == null) return;
+        if (bestMissionId && ob.mission_id !== bestMissionId) return;
         var oDate = ob.time.substring(0, 10);
         var oHH = parseInt(ob.time.substring(11, 13));
         var oMM = parseInt(ob.time.substring(14, 16));
@@ -12099,9 +12139,13 @@ function _gaFLRenderTimeSeries() {
         }
 
         var chartProdLabel = (selectedStorm && selectedStorm.year >= 1997) ? 'HDOB' : 'MINOB';
+        // Match the HDOB mission that corresponds to this HRD flight
+        var chartBestMission = _gaFLMatchMinobMission(minobData, hrdStart2, hrdEnd2,
+            mDate2, mDateNext2, mDatePrev2);
         var moTimes = [], moPeak = [], mo30s = [], moSfcP = [], moTemp = [], moDewpt = [], moHovers = [];
         minobData.forEach(function (ob) {
             if (!ob.time) return;
+            if (chartBestMission && ob.mission_id !== chartBestMission) return;
             var oDate = ob.time.substring(0, 10);
             var oHH = parseInt(ob.time.substring(11, 13));
             var oMM = parseInt(ob.time.substring(14, 16));
