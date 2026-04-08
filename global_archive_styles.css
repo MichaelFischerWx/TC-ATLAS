@@ -670,6 +670,10 @@ input[type="range"].ga-range::-moz-range-thumb {
 
 /* ── IR Sidebar (vertical, right of map) ─────────────────── */
 .ir-sidebar {
+    position: relative !important;  /* Override tc_radar_styles.css position:absolute */
+    bottom: auto !important;
+    left: auto !important;
+    z-index: auto !important;
     flex-direction: row;
     flex-shrink: 0;
     width: 150px;
