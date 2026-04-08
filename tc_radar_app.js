@@ -780,7 +780,7 @@ function openSidePanel(caseData, fromQuickSelect) {
     document.getElementById('side-panel').classList.add('open');
 
     // Fetch IR satellite data for this case
-    _irData = null; _irFrameURLs = []; _irPlotlyVisible = false; _irAllFramesLoaded = false; _irLoadedCount = 0;
+    _irData = null; _irFrameURLs = []; _irOriginalURLs = []; _irPlotlyVisible = false; _irAllFramesLoaded = false; _irLoadedCount = 0;
     _showIRLoadingIndicator();
     fetchIRData(caseData.case_index, function(data) {
         _removeIRLoadingIndicator();
@@ -2548,6 +2548,84 @@ var _tdrVisible = true;
 var _irFetching = false;
 var _irBoundsSet = false;
 var _irDecodedImages = [];
+var _irOriginalURLs = [];    // original equirectangular PNGs (for Plotly underlay)
+var _irReprojCanvas = null;  // reusable canvas for Mercator reprojection
+
+/**
+ * Reproject an equirectangular IR image to Web Mercator on a canvas.
+ * src: Image or canvas with the equirectangular PNG
+ * southLat, northLat: latitude bounds in degrees
+ * Returns a data:image/png;base64 URL of the reprojected image.
+ */
+function _mercatorReproject(src, southLat, northLat) {
+    var w = src.width || src.naturalWidth;
+    var h = src.height || src.naturalHeight;
+    if (!w || !h) return null;
+
+    // Set up source canvas to read pixels
+    var srcCvs = document.createElement('canvas');
+    srcCvs.width = w; srcCvs.height = h;
+    var srcCtx = srcCvs.getContext('2d');
+    srcCtx.drawImage(src, 0, 0);
+    var srcData = srcCtx.getImageData(0, 0, w, h);
+
+    // Reuse destination canvas
+    if (!_irReprojCanvas) _irReprojCanvas = document.createElement('canvas');
+    _irReprojCanvas.width = w; _irReprojCanvas.height = h;
+    var dstCtx = _irReprojCanvas.getContext('2d');
+    var dstImg = dstCtx.createImageData(w, h);
+
+    var toRad = Math.PI / 180;
+    // Mercator Y for south and north bounds
+    var yS = Math.log(Math.tan(Math.PI / 4 + southLat * toRad / 2));
+    var yN = Math.log(Math.tan(Math.PI / 4 + northLat * toRad / 2));
+
+    for (var row = 0; row < h; row++) {
+        // row 0 = north (top of image), row h-1 = south
+        var frac = row / (h - 1);  // 0 at top (north), 1 at bottom (south)
+        // Mercator Y for this output row (north to south)
+        var yMerc = yN + frac * (yS - yN);
+        // Convert Mercator Y back to latitude
+        var lat = (2 * Math.atan(Math.exp(yMerc)) - Math.PI / 2) / toRad;
+        // Map latitude to source row (linear in lat)
+        var srcFrac = (northLat - lat) / (northLat - southLat);
+        var srcRow = srcFrac * (h - 1);
+        // Bilinear interpolation between two source rows
+        var r0 = Math.floor(srcRow);
+        var r1 = Math.min(r0 + 1, h - 1);
+        var t = srcRow - r0;
+        for (var col = 0; col < w; col++) {
+            var di = (row * w + col) * 4;
+            var si0 = (r0 * w + col) * 4;
+            var si1 = (r1 * w + col) * 4;
+            dstImg.data[di]     = srcData.data[si0]     + t * (srcData.data[si1]     - srcData.data[si0]);
+            dstImg.data[di + 1] = srcData.data[si0 + 1] + t * (srcData.data[si1 + 1] - srcData.data[si0 + 1]);
+            dstImg.data[di + 2] = srcData.data[si0 + 2] + t * (srcData.data[si1 + 2] - srcData.data[si0 + 2]);
+            dstImg.data[di + 3] = srcData.data[si0 + 3] + t * (srcData.data[si1 + 3] - srcData.data[si0 + 3]);
+        }
+    }
+
+    dstCtx.putImageData(dstImg, 0, 0);
+    return _irReprojCanvas.toDataURL('image/png');
+}
+
+/**
+ * Reproject an IR frame data URL to Mercator. Returns the reprojected URL
+ * via callback (async because we need to load the image first).
+ */
+function _reprojectIRFrame(dataUrl, irData, callback) {
+    if (!dataUrl || !irData) { callback(dataUrl); return; }
+    var latOff = irData.lat_offsets;
+    var southLat = irData.center_lat + latOff[0];
+    var northLat = irData.center_lat + latOff[latOff.length - 1];
+    var img = new Image();
+    img.onload = function() {
+        var reprojUrl = _mercatorReproject(img, southLat, northLat);
+        callback(reprojUrl || dataUrl);
+    };
+    img.onerror = function() { callback(dataUrl); };
+    img.src = dataUrl;
+}
 
 // ── IR data fetch ────────────────────────────────────────────
 // ── IR loading indicator on map ───────────────────────────────
@@ -2597,12 +2675,19 @@ function fetchIRData(caseIndex, callback) {
             var n = data.n_frames || 9;
             _irFrameURLs = new Array(n);
             for (var i = 0; i < n; i++) _irFrameURLs[i] = null;
+            _irOriginalURLs = new Array(n);
+            for (var j = 0; j < n; j++) _irOriginalURLs[j] = null;
             if (data.frame0) {
-                _irFrameURLs[0] = data.frame0;
                 _irLoadedCount = 1;
+                _irOriginalURLs[0] = data.frame0;
+                // Reproject frame0 to Mercator, then fire callback
+                _reprojectIRFrame(data.frame0, data, function(reprojUrl) {
+                    _irFrameURLs[0] = reprojUrl;
+                    if (callback) callback(data);
+                });
+            } else {
+                if (callback) callback(data);
             }
-
-            if (callback) callback(data);
 
             // Phase 2: Fetch remaining frames in parallel
             _fetchRemainingFramesParallel(caseIndex, 1);
@@ -2635,8 +2720,17 @@ function _fetchRemainingFramesParallel(caseIndex, startIdx) {
                         // Guard: user may have navigated away
                         if (!data || !_irData || _irData.case_index !== caseIndex) return;
                         if (data.frame) {
-                            _irFrameURLs[data.lag_index] = data.frame;
+                            _irOriginalURLs[data.lag_index] = data.frame;
+                            return new Promise(function(resolve) {
+                                _reprojectIRFrame(data.frame, _irData, function(reprojUrl) {
+                                    _irFrameURLs[data.lag_index] = reprojUrl;
+                                    resolve();
+                                });
+                            });
                         }
+                    })
+                    .then(function() {
+                        if (!_irData || _irData.case_index !== caseIndex) return;
                         // Update progress as each frame lands
                         _irLoadedCount = _countLoadedFrames();
                         _updateIRLoadingLabel();
@@ -2767,7 +2861,7 @@ function removeIRMapOverlay() {
     _removeIRLoadingIndicator();
     _hideIRMapColorbar();
     if (_irMapOverlay) { map.removeLayer(_irMapOverlay); _irMapOverlay = null; }
-    _irData = null; _irFrameURLs = []; _irAnimFrame = 0; _irMapVisible = true; _irAllFramesLoaded = false; _irLoadedCount = 0; _irBoundsSet = false; _irDecodedImages = [];
+    _irData = null; _irFrameURLs = []; _irOriginalURLs = []; _irAnimFrame = 0; _irMapVisible = true; _irAllFramesLoaded = false; _irLoadedCount = 0; _irBoundsSet = false; _irDecodedImages = [];
     var ctrl = document.getElementById('ir-map-controls');
     if (ctrl) ctrl.remove();
 }
@@ -2872,8 +2966,8 @@ function _injectIRMapControls() {
 // ── Plotly IR underlay ───────────────────────────────────────
 function buildIRPlotlyImage(irData) {
     if (!irData || !_irFrameURLs.length) return null;
-    // Use the t=0 frame (index 0 in the frames array)
-    var url = _irFrameURLs[0];
+    // Use the original (equirectangular) t=0 frame for Plotly's Cartesian coords
+    var url = _irOriginalURLs[0] || _irFrameURLs[0];
     if (!url) return null;
     var latOff = irData.lat_offsets, lonOff = irData.lon_offsets;
     var centerLat = irData.center_lat;

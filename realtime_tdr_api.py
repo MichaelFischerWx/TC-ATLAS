@@ -1201,8 +1201,11 @@ _IR_META_CACHE_MAX_AGE = 300       # 5 minutes for the /ir metadata+frame0 respo
 
 def _cached_json_response(data: dict, max_age: int = _IR_CACHE_MAX_AGE) -> Response:
     """Return a JSONResponse with Cache-Control headers for browser caching."""
-    import ujson
-    body = ujson.dumps(data)
+    try:
+        import ujson as json_mod
+    except ImportError:
+        import json as json_mod
+    body = json_mod.dumps(data)
     return Response(
         content=body,
         media_type="application/json",
