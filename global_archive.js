@@ -15,10 +15,11 @@ function _ga(action, params) {
 
 // ── Configuration ────────────────────────────────────────────
 var API_BASE = 'https://tc-atlas-api-361010099051.us-east1.run.app';
-var STORMS_JSON = 'ibtracs_storms.json';
-var TRACKS_MANIFEST = 'ibtracs_tracks_manifest.json';
-var TRACKS_JSON_FALLBACK = 'ibtracs_tracks.json';  // Fallback for single-file mode
-var TC_RADAR_LOOKUP_JSON = 'tc_radar_lookup.json';
+var DATA_VER = 'v20260408';  // Cache-busting version for static JSON files
+var STORMS_JSON = 'ibtracs_storms.json?' + DATA_VER;
+var TRACKS_MANIFEST = 'ibtracs_tracks_manifest.json?' + DATA_VER;
+var TRACKS_JSON_FALLBACK = 'ibtracs_tracks.json?' + DATA_VER;  // Fallback for single-file mode
+var TC_RADAR_LOOKUP_JSON = 'tc_radar_lookup.json?' + DATA_VER;
 
 // ── State ────────────────────────────────────────────────────
 var tcRadarLookup = null;    // storm_name_year → {case, n} (loaded async)
@@ -731,7 +732,7 @@ function loadData() {
             var chunks = manifest.chunks || [];
             console.log('Loading ' + chunks.length + ' track chunks...');
             return Promise.all(chunks.map(function (chunkFile) {
-                return fetch(chunkFile).then(function (r) { return r.json(); });
+                return fetch(chunkFile + '?' + DATA_VER).then(function (r) { return r.json(); });
             }));
         })
         .then(function (chunkDataArray) {
@@ -771,7 +772,7 @@ function loadData() {
         });
 
     // Load precomputed overwater 24-h intensity change episodes
-    fetch('intensity_changes.json')
+    fetch('intensity_changes.json?' + DATA_VER)
         .then(function (r) { if (!r.ok) throw new Error('Not found'); return r.json(); })
         .then(function (data) {
             intensityChangeData = data;
