@@ -671,6 +671,7 @@ input[type="range"].ga-range::-moz-range-thumb {
 /* ── IR Sidebar (vertical, right of map) ─────────────────── */
 .ir-sidebar {
     flex-direction: row;
+    flex-shrink: 0;
     width: 150px;
     min-width: 150px;
     background: rgba(10, 22, 40, 0.95);

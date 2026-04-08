@@ -3086,6 +3086,8 @@ function loadHURSAT(storm) {
             toggleBtn.classList.add('active');
             var irCtrl = document.getElementById('ir-map-controls');
             irCtrl.style.display = irCtrl.classList.contains('ir-sidebar') ? 'flex' : '';
+            // Resize map after sidebar appears
+            if (detailMap) setTimeout(function () { detailMap.invalidateSize(); }, 50);
 
             // Show loading state for first frame
             var loadingEl = document.getElementById('ir-frame-loading');
@@ -3180,7 +3182,8 @@ window.toggleIROverlay = function () {
         toggleBtn.textContent = 'Hide IR';
         toggleBtn.classList.add('active');
         controls.style.display = controls.classList.contains('ir-sidebar') ? 'flex' : '';
-        // Reposition MW controls above IR if MW is visible
+        // Resize map after sidebar appears + reposition MW controls
+        if (detailMap) setTimeout(function () { detailMap.invalidateSize(); }, 50);
         setTimeout(_repositionMWControls, 50);
         // Hide track annotation markers so they don't obscure IR
         trackAnnotationMarkers.forEach(function (m) { if (detailMap) detailMap.removeLayer(m); });
@@ -3200,7 +3203,8 @@ window.toggleIROverlay = function () {
         toggleBtn.textContent = 'Show IR';
         toggleBtn.classList.remove('active');
         controls.style.display = 'none';
-        // Reposition MW controls back to bottom
+        // Resize map after sidebar hides + reposition MW controls
+        if (detailMap) setTimeout(function () { detailMap.invalidateSize(); }, 50);
         _repositionMWControls();
         stopIRPlayback();
         if (irOverlayLayer && detailMap) {
@@ -9977,11 +9981,12 @@ function _gaFLApplyData(json) {
     _gaFLHighlightOnTimeline(json);
     _gaFLUpdateMissionStats(json);
 
-    // Always sync IR to mission midpoint when flight data loads —
-    // the user wants to see IR matching the loaded flight, regardless
-    // of how the mission was triggered (F-Deck click, dropdown, auto-sync)
-    _gaFLSyncFromFDeck = false;
-    _gaFLSyncIRToMissionMidpoint(json);
+    // Sync IR to mission midpoint — unless user clicked a specific f-deck fix time
+    if (_gaFLSyncFromFDeck) {
+        _gaFLSyncFromFDeck = false;  // consume the flag; IR already at user's chosen fix time
+    } else {
+        _gaFLSyncIRToMissionMidpoint(json);
+    }
 }
 
 function _gaFLLoadMissionData(fileUrl) {
