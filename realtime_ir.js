@@ -418,7 +418,8 @@
     var globalAnimFrameLayers = [];   // parallel composite L.GridLayer (one per frame, opacity 0 until shown)
     var globalAnimIndex = 0;
     var globalAnimPlaying = false;
-    var globalAnimTimer = null;
+    var globalAnimTimer = null;       // rAF handle (global view)
+    var globalAnimLastTick = 0;       // timestamp of last frame advance (global view)
     var globalAnimLoaded = 0;
     var globalAnimReady = false;
     var globalAnimLoading = false;    // true while frames are being pre-loaded
@@ -442,11 +443,27 @@
     var animFrameLayers = [];  // parallel array of L.tileLayer (one per frame)
     var animIndex = 0;
     var animPlaying = false;
-    var animTimer = null;
+    var animTimer = null;       // rAF handle (detail view)
+    var animLastTick = 0;       // timestamp of last frame advance (detail view)
+    var animIntervalMs = 500;   // detail view frame interval (ms)
     var framesLoaded = 0;      // how many frames have finished loading tiles
     var framesReady = false;   // true once all frames loaded
     var validFrames = [];      // indices of frames that loaded actual tile data
     var frameHasError = [];    // parallel to animFrameLayers — true if frame had tile errors
+
+    // Cached DOM refs for animation hot path (populated on first use)
+    var _elFrameTime = null;
+    var _elSatLabel = null;
+    var _elAnimCounter = null;
+    var _elAnimSlider = null;
+    var _elAnimPlay = null;
+    function _cacheAnimEls() {
+        if (!_elFrameTime) _elFrameTime = document.getElementById('ir-frame-time');
+        if (!_elSatLabel) _elSatLabel = document.getElementById('ir-satellite-label');
+        if (!_elAnimCounter) _elAnimCounter = document.getElementById('ir-anim-counter');
+        if (!_elAnimSlider) _elAnimSlider = document.getElementById('ir-anim-slider');
+        if (!_elAnimPlay) _elAnimPlay = document.getElementById('ir-anim-play');
+    }
 
     // Product mode: 'eir' (Enhanced IR), 'geocolor', or 'vigor'
     var productMode = 'eir';
@@ -1486,6 +1503,17 @@
         showGlobalAnimFrame(prev);
     }
 
+    /** rAF tick for global animation */
+    function _globalAnimTick(ts) {
+        if (!globalAnimPlaying) return;
+        var ms = GLOBAL_ANIM_SPEEDS[globalAnimSpeedIdx].ms;
+        if (ts - globalAnimLastTick >= ms) {
+            globalAnimLastTick = ts;
+            nextGlobalFrame();
+        }
+        globalAnimTimer = requestAnimationFrame(_globalAnimTick);
+    }
+
     /** Start global animation loop */
     function startGlobalAnimation() {
         if (!globalAnimReady) {
@@ -1495,10 +1523,8 @@
         }
         globalAnimPlaying = true;
         updateGlobalAnimControls('playing');
-        var ms = GLOBAL_ANIM_SPEEDS[globalAnimSpeedIdx].ms;
-        globalAnimTimer = setInterval(function () {
-            nextGlobalFrame();
-        }, ms);
+        globalAnimLastTick = 0;
+        globalAnimTimer = requestAnimationFrame(_globalAnimTick);
     }
 
     /** Cycle to the next animation speed and restart if playing */
@@ -1506,20 +1532,13 @@
         globalAnimSpeedIdx = (globalAnimSpeedIdx + 1) % GLOBAL_ANIM_SPEEDS.length;
         var speedBtn = document.getElementById('ir-global-anim-speed');
         if (speedBtn) speedBtn.textContent = GLOBAL_ANIM_SPEEDS[globalAnimSpeedIdx].label;
-        // Restart timer with new speed if playing
-        if (globalAnimPlaying && globalAnimTimer) {
-            clearInterval(globalAnimTimer);
-            var ms = GLOBAL_ANIM_SPEEDS[globalAnimSpeedIdx].ms;
-            globalAnimTimer = setInterval(function () {
-                nextGlobalFrame();
-            }, ms);
-        }
+        // Speed change takes effect automatically on next rAF tick (no restart needed)
     }
 
     /** Stop global animation loop */
     function stopGlobalAnimation() {
         globalAnimPlaying = false;
-        if (globalAnimTimer) clearInterval(globalAnimTimer);
+        if (globalAnimTimer) cancelAnimationFrame(globalAnimTimer);
         globalAnimTimer = null;
         if (globalAnimReady) {
             updateGlobalAnimControls('ready');
@@ -2430,9 +2449,10 @@
     /** Update the overlay info with the current frame time */
     function updateFrameOverlay() {
         if (animFrameTimes.length === 0) return;
+        _cacheAnimEls();
         var timeStr = animFrameTimes[animIndex];
-        document.getElementById('ir-frame-time').textContent = fmtUTC(timeStr);
-        document.getElementById('ir-satellite-label').textContent = detailSatName || 'GIBS IR';
+        if (_elFrameTime) _elFrameTime.textContent = fmtUTC(timeStr);
+        if (_elSatLabel) _elSatLabel.textContent = detailSatName || 'GIBS IR';
     }
 
     /** Show a specific frame by toggling opacity (instant — no tile fetching) */
@@ -2473,13 +2493,14 @@
 
     /** Update the frame counter text (shows position in valid frames) */
     function updateAnimCounter() {
-        var counter = document.getElementById('ir-anim-counter');
+        _cacheAnimEls();
+        if (!_elAnimCounter) return;
         var state = activeFrameState();
         var pos = activeValidFramePos();
         if (state.valid.length > 0 && pos >= 0) {
-            counter.textContent = (pos + 1) + ' / ' + state.valid.length;
+            _elAnimCounter.textContent = (pos + 1) + ' / ' + state.valid.length;
         } else {
-            counter.textContent = (animIndex + 1) + ' / ' + state.times.length;
+            _elAnimCounter.textContent = (animIndex + 1) + ' / ' + state.times.length;
         }
     }
 
@@ -2501,7 +2522,8 @@
         var pos = activeValidFramePos();
         var nextPos = (pos + 1) % state.valid.length;
         state.showFn(state.valid[nextPos]);
-        document.getElementById('ir-anim-slider').value = nextPos;
+        _cacheAnimEls();
+        if (_elAnimSlider) _elAnimSlider.value = nextPos;
         updateAnimCounter();
     }
 
@@ -2514,7 +2536,8 @@
         var pos = activeValidFramePos();
         var prevPos = (pos - 1 + state.valid.length) % state.valid.length;
         state.showFn(state.valid[prevPos]);
-        document.getElementById('ir-anim-slider').value = prevPos;
+        _cacheAnimEls();
+        if (_elAnimSlider) _elAnimSlider.value = prevPos;
         updateAnimCounter();
     }
 
@@ -2527,31 +2550,42 @@
         }
     }
 
+    /** rAF tick for detail animation */
+    function _animTick(ts) {
+        if (!animPlaying) return;
+        if (ts - animLastTick >= animIntervalMs) {
+            animLastTick = ts;
+            nextFrame();
+        }
+        animTimer = requestAnimationFrame(_animTick);
+    }
+
     /** Start animation loop */
     function startAnimation() {
         if (productMode === 'vigor') return;
         var state = activeFrameState();
         if (state.times.length < 2 || !state.ready) return;
         animPlaying = true;
-        var btn = document.getElementById('ir-anim-play');
-        btn.innerHTML = '&#9646;&#9646;'; // pause icon
-        btn.title = 'Pause';
+        _cacheAnimEls();
+        if (_elAnimPlay) {
+            _elAnimPlay.innerHTML = '&#9646;&#9646;'; // pause icon
+            _elAnimPlay.title = 'Pause';
+        }
 
-        // Faster frame rate since all tiles are pre-loaded (no network wait)
-        animTimer = setInterval(function () {
-            nextFrame();
-        }, 500); // ~2 fps — smooth enough for convective evolution
+        // rAF-driven loop — ~2 fps via animIntervalMs (500ms)
+        animLastTick = 0;
+        animTimer = requestAnimationFrame(_animTick);
     }
 
     /** Stop animation loop */
     function stopAnimation() {
         animPlaying = false;
-        if (animTimer) clearInterval(animTimer);
+        if (animTimer) cancelAnimationFrame(animTimer);
         animTimer = null;
-        var btn = document.getElementById('ir-anim-play');
-        if (btn) {
-            btn.innerHTML = '&#9654;'; // play icon
-            btn.title = 'Play';
+        _cacheAnimEls();
+        if (_elAnimPlay) {
+            _elAnimPlay.innerHTML = '&#9654;'; // play icon
+            _elAnimPlay.title = 'Play';
         }
     }
 
@@ -3691,8 +3725,8 @@
         // Clean up timers on page unload to prevent memory leaks
         window.addEventListener('beforeunload', function () {
             if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-            if (globalAnimTimer) { clearInterval(globalAnimTimer); globalAnimTimer = null; }
-            if (animTimer) { clearInterval(animTimer); animTimer = null; }
+            if (globalAnimTimer) { cancelAnimationFrame(globalAnimTimer); globalAnimTimer = null; }
+            if (animTimer) { cancelAnimationFrame(animTimer); animTimer = null; }
             if (seasonSummaryTimer) { clearInterval(seasonSummaryTimer); seasonSummaryTimer = null; }
         });
 

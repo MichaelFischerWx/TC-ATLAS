@@ -53,8 +53,23 @@ var irPlaying = false;
 var irFrameIdx = 0;
 var irFrames = [];           // Cached frame data
 var irMeta = null;           // HURSAT metadata
-var irTimer = null;
+var irTimer = null;          // rAF handle for IR playback
+var irLastTick = 0;          // timestamp of last frame advance (rAF)
 var irSpeed = 750;           // ms per frame
+
+// Cached DOM refs for IR animation hot path (populated lazily)
+var _irElDatetime = null;
+var _irElFrameInfo = null;
+var _irElSlider = null;
+var _irElSourceBadge = null;
+var _irElPlayBtn = null;
+function _cacheIREls() {
+    if (!_irElDatetime) _irElDatetime = document.getElementById('ir-datetime');
+    if (!_irElFrameInfo) _irElFrameInfo = document.getElementById('ir-frame-info');
+    if (!_irElSlider) _irElSlider = document.getElementById('ir-slider');
+    if (!_irElSourceBadge) _irElSourceBadge = document.getElementById('ir-source-badge');
+    if (!_irElPlayBtn) _irElPlayBtn = document.getElementById('ir-play-btn');
+}
 var irOverlayLayer = null;   // L.imageOverlay on detail map
 var irPositionMarker = null; // L.circleMarker showing current storm center
 var trackAnnotationMarkers = []; // Genesis, LMI, dissipation markers (hidden during IR)
@@ -2312,7 +2327,7 @@ function renderCompareView() {
         // Stop any playing IR timers
         ['left','right'].forEach(function (side) {
             if (_cmpIR && _cmpIR[side] && _cmpIR[side].timer) {
-                clearInterval(_cmpIR[side].timer);
+                cancelAnimationFrame(_cmpIR[side].timer);
                 _cmpIR[side].timer = null;
                 _cmpIR[side].playing = false;
             }
@@ -3854,8 +3869,7 @@ function _formatIRDatetime(isoStr) {
 }
 
 function updateIRMeta(idx) {
-    var datetimeEl = document.getElementById('ir-datetime');
-    var frameInfoEl = document.getElementById('ir-frame-info');
+    _cacheIREls();
 
     var dtText = '';
     var rawDt = '';
@@ -3864,22 +3878,21 @@ function updateIRMeta(idx) {
         var sat = irMeta.frames[idx].satellite || '';
         // Format: "06 UTC 21 Oct 2025"
         dtText = _formatIRDatetime(rawDt);
-        if (datetimeEl) datetimeEl.textContent = dtText + (sat ? '  [' + sat + ']' : '');
+        if (_irElDatetime) _irElDatetime.textContent = dtText + (sat ? '  [' + sat + ']' : '');
         // Log NC file for HURSAT debugging
         var frameData = irFrames[idx];
         if (frameData && frameData.nc_file) {
             console.log('Frame ' + idx + ': ' + rawDt + ' → ' + frameData.nc_file);
         }
     }
-    if (frameInfoEl) {
-        frameInfoEl.textContent = 'Frame ' + (idx + 1) + ' / ' + (irMeta ? irMeta.n_frames : '?');
+    if (_irElFrameInfo) {
+        _irElFrameInfo.textContent = 'Frame ' + (idx + 1) + ' / ' + (irMeta ? irMeta.n_frames : '?');
     }
-    var slider = document.getElementById('ir-slider');
-    if (slider) slider.value = idx;
+    if (_irElSlider) _irElSlider.value = idx;
 
     // Update per-frame source badge (shows actual source, not planned source)
     var frameData = irFrames[idx];
-    var badgeEl = document.getElementById('ir-source-badge');
+    var badgeEl = _irElSourceBadge;
     if (badgeEl && frameData && frameData.source) {
         var actualSource = frameData.source;
         var plannedSource = irMeta ? irMeta.source : '';
@@ -3916,23 +3929,18 @@ window.toggleIRPlay = function () {
     }
 };
 
-function startIRPlayback() {
-    if (!irMeta || irMeta.n_frames === 0) return;
-    _ga('ga_ir_playback', { storm: selectedStorm ? selectedStorm.name : '', n_frames: irMeta.n_frames });
-    irPlaying = true;
-    document.getElementById('ir-play-btn').innerHTML = '&#9646;&#9646; Pause';
+/** rAF tick for IR playback */
+function _irPlaybackTick(ts) {
+    if (!irPlaying) return;
+    if (ts - irLastTick >= irSpeed) {
+        irLastTick = ts;
 
-    // Kick a prefetch burst when playback starts so the buffer fills faster
-    prefetchIRFrames(irFrameIdx);
-
-    irTimer = setInterval(function () {
         var nextIdx = (irFrameIdx + 1) % irMeta.n_frames;
 
         // If next frame isn't cached and isn't a known failure, skip forward
         // to the nearest cached frame so playback never stalls on a spinner.
         if (!irFrames[nextIdx] && !irFailedFrames[nextIdx]) {
             var skipIdx = -1;
-            // Look ahead for the next cached frame (up to full loop)
             for (var i = 1; i < irMeta.n_frames; i++) {
                 var candidate = (nextIdx + i) % irMeta.n_frames;
                 if (irFrames[candidate]) { skipIdx = candidate; break; }
@@ -3941,23 +3949,38 @@ function startIRPlayback() {
                 irFrameIdx = skipIdx;
                 displayIROnMap(irFrames[skipIdx]);
                 updateIRMeta(skipIdx);
-                // Continue prefetching ahead of where we were blocked
                 prefetchIRFrames(nextIdx);
+                irTimer = requestAnimationFrame(_irPlaybackTick);
                 return;
             }
         }
 
         irFrameIdx = nextIdx;
         loadIRFrame(irFrameIdx);
-    }, irSpeed);
+    }
+    irTimer = requestAnimationFrame(_irPlaybackTick);
+}
+
+function startIRPlayback() {
+    if (!irMeta || irMeta.n_frames === 0) return;
+    _ga('ga_ir_playback', { storm: selectedStorm ? selectedStorm.name : '', n_frames: irMeta.n_frames });
+    irPlaying = true;
+    _cacheIREls();
+    if (_irElPlayBtn) _irElPlayBtn.innerHTML = '&#9646;&#9646; Pause';
+
+    // Kick a prefetch burst when playback starts so the buffer fills faster
+    prefetchIRFrames(irFrameIdx);
+
+    irLastTick = 0;
+    irTimer = requestAnimationFrame(_irPlaybackTick);
 }
 
 function stopIRPlayback() {
     irPlaying = false;
-    if (irTimer) clearInterval(irTimer);
+    if (irTimer) cancelAnimationFrame(irTimer);
     irTimer = null;
-    var btn = document.getElementById('ir-play-btn');
-    if (btn) btn.innerHTML = '&#9654; Play';
+    _cacheIREls();
+    if (_irElPlayBtn) _irElPlayBtn.innerHTML = '&#9654; Play';
 }
 
 window.seekIRFrame = function (val) {
@@ -3973,8 +3996,8 @@ window.stepIRFrame = function (delta) {
     if (newIdx > maxIdx) newIdx = maxIdx;
     if (newIdx !== irFrameIdx) {
         irFrameIdx = newIdx;
-        var slider = document.getElementById('ir-slider');
-        if (slider) slider.value = newIdx;
+        _cacheIREls();
+        if (_irElSlider) _irElSlider.value = newIdx;
         loadIRFrame(newIdx);
     }
 };
@@ -7406,8 +7429,8 @@ function _gifCleanup() {
 // ═══════════════════════════════════════════════════════════════
 
 var _cmpIR = {
-    left:  { map: null, storm: null, meta: null, frames: [], idx: 0, overlay: null, playing: false, timer: null },
-    right: { map: null, storm: null, meta: null, frames: [], idx: 0, overlay: null, playing: false, timer: null },
+    left:  { map: null, storm: null, meta: null, frames: [], idx: 0, overlay: null, playing: false, timer: null, lastTick: 0 },
+    right: { map: null, storm: null, meta: null, frames: [], idx: 0, overlay: null, playing: false, timer: null, lastTick: 0 },
     sync: false,
     cmap: 'enhanced',
     speed: 750
@@ -7508,7 +7531,7 @@ function _loadCompareIRStorm(side, storm) {
     s.meta = null;
     s.frames = [];
     s.idx = 0;
-    if (s.timer) { clearInterval(s.timer); s.timer = null; s.playing = false; }
+    if (s.timer) { cancelAnimationFrame(s.timer); s.timer = null; s.playing = false; }
     if (s.overlay && s.map) { s.map.removeLayer(s.overlay); s.overlay = null; }
 
     var label = document.getElementById('compare-ir-' + side + '-label');
@@ -7801,36 +7824,47 @@ window.stepCompareIR = function (side, delta) {
     }
 };
 
+/** rAF tick for compare IR playback on a given side */
+function _cmpIRTick(side) {
+    return function tick(ts) {
+        var s = _cmpIR[side];
+        if (!s.playing) return;
+        if (ts - s.lastTick >= _cmpIR.speed) {
+            s.lastTick = ts;
+            stepCompareIR(side, 1);
+        }
+        s.timer = requestAnimationFrame(tick);
+    };
+}
+
 window.toggleCompareIRPlay = function (side) {
     var s = _cmpIR[side];
     if (s.playing) {
-        clearInterval(s.timer); s.timer = null; s.playing = false;
+        cancelAnimationFrame(s.timer); s.timer = null; s.playing = false;
         var btn = document.getElementById('compare-ir-play-' + side);
         if (btn) btn.innerHTML = '&#9654; Play';
         if (_cmpIR.sync) {
             var other = side === 'left' ? 'right' : 'left';
             var os = _cmpIR[other];
-            if (os.playing) { clearInterval(os.timer); os.timer = null; os.playing = false; }
+            if (os.playing) { cancelAnimationFrame(os.timer); os.timer = null; os.playing = false; }
             var obtn = document.getElementById('compare-ir-play-' + other);
             if (obtn) obtn.innerHTML = '&#9654; Play';
         }
     } else {
         s.playing = true;
+        s.lastTick = 0;
         var btn2 = document.getElementById('compare-ir-play-' + side);
         if (btn2) btn2.innerHTML = '&#9632; Stop';
-        s.timer = setInterval(function () {
-            stepCompareIR(side, 1);
-        }, _cmpIR.speed);
+        s.timer = requestAnimationFrame(_cmpIRTick(side));
 
         if (_cmpIR.sync) {
             var other2 = side === 'left' ? 'right' : 'left';
             var os2 = _cmpIR[other2];
             os2.playing = true;
+            os2.lastTick = 0;
             var obtn2 = document.getElementById('compare-ir-play-' + other2);
             if (obtn2) obtn2.innerHTML = '&#9632; Stop';
-            os2.timer = setInterval(function () {
-                stepCompareIR(other2, 1);
-            }, _cmpIR.speed);
+            os2.timer = requestAnimationFrame(_cmpIRTick(other2));
         }
     }
 };
