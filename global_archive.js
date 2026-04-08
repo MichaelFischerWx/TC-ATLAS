@@ -11882,7 +11882,7 @@ var _GA_FL_RES_STYLE = {
     '30s': { opacity: 1.0, width: 2.5, color: null },
 };
 
-var _gaFLVarsVisible = { 'fl_wspd_ms': true, 'static_pres_hpa': true, 'temp_c': false, 'dewpoint_c': false, 'theta_e': false, 'gps_alt_m': false, 'sfcpr_hpa': false, 'vert_vel_ms': false };
+var _gaFLVarsVisible = { 'fl_wspd_ms': true, 'static_pres_hpa': false, 'temp_c': false, 'dewpoint_c': false, 'theta_e': false, 'gps_alt_m': false, 'sfcpr_hpa': true, 'vert_vel_ms': false };
 
 function _gaFLUpdatePanelButtons(activeId) {
     ['ga-fl-btn-ts', 'ga-fl-btn-xsec', 'ga-fl-btn-radial'].forEach(function (id) {
@@ -11989,18 +11989,11 @@ function _gaFLRenderTimeSeries() {
             var style = _GA_FL_RES_STYLE[resKey];
             var scaleFactor = cfg.scale || 1;
             var xVals = [], yVals = [];
+            var hasAny = false;
             for (var i = 0; i < obs.length; i++) {
                 var o = obs[i];
-                var val = o[varKey];
-                if (val == null || !isFinite(val)) continue;
-                // Filter unrealistic values
-                if (varKey === 'static_pres_hpa' && (val < 100 || val > 1100)) continue;
-                if (varKey === 'sfcpr_hpa' && (val < 850 || val > 1100)) continue;
-                if (varKey === 'fl_wspd_ms' && (val < 0 || val > 150)) continue;
-                if (varKey === 'temp_c' && (val < -90 || val > 60)) continue;
-                if (varKey === 'gps_alt_m' && (val < -100 || val > 25000)) continue;
-                if (varKey === 'vert_vel_ms' && (val < -30 || val > 30)) continue;
-                val = val * scaleFactor;
+                // Always include the x position so all variables share the
+                // same category axis — push null y for missing/out-of-range data
                 var xVal;
                 if (_gaFLXAxisMode === 'radius' && o.r_km != null) {
                     xVal = o.r_km;
@@ -12009,14 +12002,29 @@ function _gaFLRenderTimeSeries() {
                     var t = o.time || '';
                     xVal = t.length > 5 ? t.substring(0, 5) : t;
                 }
+                var val = o[varKey];
+                var valid = val != null && isFinite(val);
+                // Filter unrealistic values
+                if (valid && varKey === 'static_pres_hpa' && (val < 100 || val > 1100)) valid = false;
+                if (valid && varKey === 'sfcpr_hpa' && (val < 850 || val > 1100)) valid = false;
+                if (valid && varKey === 'fl_wspd_ms' && (val < 0 || val > 150)) valid = false;
+                if (valid && varKey === 'temp_c' && (val < -90 || val > 60)) valid = false;
+                if (valid && varKey === 'gps_alt_m' && (val < -100 || val > 25000)) valid = false;
+                if (valid && varKey === 'vert_vel_ms' && (val < -30 || val > 30)) valid = false;
                 xVals.push(xVal);
-                yVals.push(val);
+                if (valid) {
+                    yVals.push(val * scaleFactor);
+                    hasAny = true;
+                } else {
+                    yVals.push(null);
+                }
             }
-            if (xVals.length === 0) return;
+            if (!hasAny) return;
 
             traces.push({
                 x: xVals, y: yVals,
                 mode: 'lines',
+                connectgaps: true,
                 name: cfg.btn + ' (' + resKey + ')',
                 line: { color: style.color || cfg.color, width: style.width, shape: 'linear' },
                 opacity: style.opacity,
@@ -12046,9 +12054,10 @@ function _gaFLRenderTimeSeries() {
             zeroline: false, side: 'left',
         },
         yaxis2: {
-            title: 'Pressure (hPa)', titlefont: { color: '#fbbf24' },
+            title: 'Static P (hPa)', titlefont: { color: '#fbbf24' },
             tickfont: { color: '#fbbf24' }, overlaying: 'y', side: 'right',
             autorange: 'reversed', showgrid: false,
+            visible: _gaFLVarsVisible['static_pres_hpa'],
         },
         yaxis3: {
             title: 'Temp (\u00b0C)', titlefont: { color: '#f87171' },
@@ -12163,8 +12172,10 @@ function _gaFLRenderTimeSeries() {
                           line: { color: '#fff', width: 1.5 } },
                 hovertemplate: '%{text}<extra></extra>',
                 text: vdmPHovers,
-                yaxis: 'y2', showlegend: true,
+                yaxis: 'y5', showlegend: true,
             });
+            // Ensure y5 axis is visible for VDM SLP even if sfcpr toggle is off
+            layout.yaxis5.visible = true;
         }
     }
 
