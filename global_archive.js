@@ -9852,7 +9852,10 @@ function _gaFLFetchMissionStats(storm) {
 function _gaFLPopulateMissionDropdown() {
     var select = document.getElementById('ga-fl-mission-select');
     if (!select || !_gaFLMissions) return;
+    // Preserve current selection across rebuild (stats update wipes innerHTML)
+    var prevUrl = select.value;
     select.innerHTML = '';
+    var restoreIdx = 0;
     for (var i = 0; i < _gaFLMissions.length; i++) {
         var m = _gaFLMissions[i];
         var opt = document.createElement('option');
@@ -9865,7 +9868,9 @@ function _gaFLPopulateMissionDropdown() {
         }
         opt.textContent = label;
         select.appendChild(opt);
+        if (m.file_url === prevUrl) restoreIdx = i;
     }
+    select.selectedIndex = restoreIdx;
 }
 
 function _gaFLUpdateMissionStats(json) {
@@ -10581,6 +10586,9 @@ window.gaFLToggleAutoSync = function () {
 };
 
 function _gaFLSyncToIRFrame() {
+    // Skip if a f-deck click is pending — _tryMatch will handle mission selection
+    if (_gaFLSyncFromFDeck) return;
+
     if (!_gaFLAutoSync || !_gaFLVisible || !_gaFLMissions || !_gaFLMissions.length) {
         if (_gaFLMissions && _gaFLMissions.length > 0 && !_gaFLData) {
             _gaFLLoadMissionData(_gaFLMissions[0].file_url);
