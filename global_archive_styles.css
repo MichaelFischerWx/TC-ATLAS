@@ -667,131 +667,79 @@ input[type="range"].ga-range::-moz-range-thumb {
     color: #fff;
 }
 
-/* ── IR Sidebar (vertical, right of map) ─────────────────── */
-.ir-sidebar {
-    position: relative !important;  /* Override tc_radar_styles.css position:absolute */
-    bottom: auto !important;
-    left: auto !important;
-    z-index: auto !important;
-    flex-direction: row;
+/* ── IR Vertical Colorbar Strip (right of map) ───────────── */
+.ir-cbar-strip {
     flex-shrink: 0;
-    width: 150px;
-    min-width: 150px;
-    height: 450px;  /* Match detail-map-container height */
+    width: 28px;
+    height: 450px;  /* Match detail-map-container */
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 4px 2px;
     background: rgba(10, 22, 40, 0.95);
     border: 1px solid rgba(255,255,255,0.08);
     border-left: none;
     border-radius: 0 6px 6px 0;
-    padding: 0;
-    margin-top: 0;
-    overflow: hidden;
-}
-.ir-sb-vbar {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    width: 32px;
-    padding: 6px 2px;
-    border-right: 1px solid rgba(255,255,255,0.06);
     gap: 2px;
-    height: 100%;
     overflow: hidden;
 }
-.ir-sb-vbar canvas {
+.ir-cbar-strip canvas {
     flex: 1;
+    width: 12px;
     min-height: 0;
-    width: 14px;
     border-radius: 3px;
     border: 1px solid rgba(255,255,255,0.15);
     image-rendering: auto;
 }
-.ir-vbar-labels {
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
-    align-items: center;
-    font-size: 0.5rem;
-    color: rgba(180, 195, 220, 0.65);
+.ir-cbar-label-top,
+.ir-cbar-label-bot {
+    font-size: 0.48rem;
+    color: rgba(180, 195, 220, 0.6);
     line-height: 1;
-    position: absolute;
-    top: 6px;
-    bottom: 6px;
-    left: 0;
-    width: 32px;
-    pointer-events: none;
+    white-space: nowrap;
 }
-.ir-sb-vbar {
-    position: relative;
+
+/* ── IR Compact Playback Bar (below map) ─────────────────── */
+.ir-bar {
+    position: relative !important;
+    bottom: auto !important;
+    left: auto !important;
+    z-index: auto !important;
+    display: block !important;
+    background: rgba(10, 22, 40, 0.95);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 6px;
+    padding: 4px 8px;
+    margin-top: 2px;
 }
-.ir-vbar-labels span {
-    background: rgba(10, 22, 40, 0.85);
-    padding: 1px 2px;
-    border-radius: 2px;
+.ir-bar-row1 {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: nowrap;
+    min-height: 22px;
 }
-.ir-sb-main {
+.ir-bar-row1 .ir-frame-info {
+    font-size: 0.7rem;
+    white-space: nowrap;
+}
+.ir-bar-slider {
     flex: 1;
-    display: flex;
-    flex-direction: column;
-    padding: 6px 6px;
-    gap: 4px;
-    min-width: 0;
-    overflow-y: auto;
-    overflow-x: hidden;
+    min-width: 60px;
 }
-.ir-sb-info {
-    display: flex;
-    align-items: center;
-    gap: 4px;
+.ir-bar-row1 .ir-datetime {
     font-size: 0.68rem;
-    flex-wrap: wrap;
+    white-space: nowrap;
 }
-.ir-sb-datetime {
-    font-size: 0.65rem;
-}
-.ir-sb-datetime .ir-datetime {
-    font-size: 0.65rem;
-}
-.ir-sb-playback {
+.ir-bar-row2 {
     display: flex;
     align-items: center;
-    gap: 3px;
-    flex-wrap: wrap;
-}
-.ir-sb-playback .ga-btn-sm {
-    font-size: 0.65rem;
-    padding: 2px 5px;
-}
-.ir-sb-playback .ga-select-sm {
-    font-size: 0.6rem;
-    padding: 1px 2px;
-    max-width: 40px;
-}
-.ir-sb-slider {
-    padding: 0;
-}
-.ir-sb-slider .ir-slider {
-    width: 100%;
-}
-.ir-sb-opts {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
     gap: 2px;
+    margin-top: 3px;
 }
-.ir-sb-opts .ga-btn-sm {
+.ir-bar-row2 .ir-cmap-btn {
     font-size: 0.65rem;
-    padding: 2px 4px;
-    text-align: center;
-}
-.ir-sb-cmaps {
-    display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
-    gap: 2px;
-}
-.ir-sb-cmaps .ir-cmap-btn {
-    font-size: 0.58rem;
-    padding: 2px 3px;
-    text-align: center;
-    min-width: 0;
+    padding: 1px 5px;
 }
 
 /* Legacy horizontal fallback classes (kept for tc_radar compat) */
@@ -1483,52 +1431,20 @@ input[type="range"].ga-range::-moz-range-thumb {
         display: none;
     }
 
-    /* ── IR sidebar → stacked on mobile ────────────────────── */
-    .detail-map-ir-row {
-        flex-direction: column;
+    /* ── IR colorbar strip: hide on mobile (colorbar goes in bar) ── */
+    .ir-cbar-strip {
+        display: none !important;
     }
-    .ir-sidebar {
-        width: 100% !important;
-        min-width: 100% !important;
-        flex-direction: column !important;
-        border-left: 1px solid rgba(255,255,255,0.08) !important;
-        border-radius: 0 0 6px 6px !important;
-        margin-top: 0;
+    .ir-bar-row1 {
+        flex-wrap: wrap;
+        gap: 4px;
     }
-    .ir-sb-vbar {
-        flex-direction: row;
-        width: 100%;
-        height: 24px;
-        padding: 2px 6px;
-        border-right: none;
-        border-bottom: 1px solid rgba(255,255,255,0.06);
-    }
-    .ir-sb-vbar canvas {
-        flex: 1;
-        height: 10px;
-        width: auto;
-    }
-    .ir-vbar-labels {
-        flex-direction: row;
-        position: static;
-        width: 100%;
-        padding: 0 4px;
-    }
-    .ir-sb-main {
-        padding: 6px 8px;
-    }
-    .ir-sb-playback .ga-btn-sm {
+    .ir-bar-row1 .ga-btn-sm {
         min-height: 32px;
         min-width: 32px;
-        padding: 4px 10px;
-        font-size: 0.82rem;
     }
-    .ir-sb-cmaps {
-        grid-template-columns: repeat(5, 1fr);
-    }
-    .ir-sb-cmaps .ir-cmap-btn {
-        min-height: 28px;
-        font-size: 0.68rem;
+    .ir-bar-row2 {
+        flex-wrap: wrap;
     }
 
     /* Legacy horizontal IR controls (tc_radar compat) */

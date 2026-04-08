@@ -466,7 +466,7 @@ function renderColorbarCanvas(colormapName) {
     if (!canvas) return;
     var lut = IR_COLORMAPS[colormapName] || IR_COLORMAPS['enhanced'];
     // Detect vertical sidebar mode vs horizontal
-    var isVertical = canvas.closest('.ir-sb-vbar') !== null;
+    var isVertical = canvas.closest('.ir-cbar-strip') !== null;
     if (isVertical) {
         // Vertical: warm (310K) at top → cold (170K) at bottom
         canvas.width = 1;
@@ -1435,6 +1435,8 @@ function renderStormDetail(storm) {
     } else {
         irToggleWrap.style.display = 'none';
         document.getElementById('ir-map-controls').style.display = 'none';
+        var irCbar4 = document.getElementById('ir-colorbar-strip');
+        if (irCbar4) irCbar4.style.display = 'none';
         stopIRPlayback();
         removeIROverlay();
     }
@@ -3085,8 +3087,9 @@ function loadHURSAT(storm) {
             toggleBtn.textContent = 'Hide IR';
             toggleBtn.classList.add('active');
             var irCtrl = document.getElementById('ir-map-controls');
-            irCtrl.style.display = irCtrl.classList.contains('ir-sidebar') ? 'flex' : '';
-            // Resize map after sidebar appears
+            irCtrl.style.display = '';
+            var irCbar = document.getElementById('ir-colorbar-strip');
+            if (irCbar) irCbar.style.display = 'flex';
             if (detailMap) setTimeout(function () { detailMap.invalidateSize(); }, 50);
 
             // Show loading state for first frame
@@ -3181,9 +3184,11 @@ window.toggleIROverlay = function () {
     if (irOverlayVisible) {
         toggleBtn.textContent = 'Hide IR';
         toggleBtn.classList.add('active');
-        controls.style.display = controls.classList.contains('ir-sidebar') ? 'flex' : '';
-        // Resize map after sidebar appears + reposition MW controls
+        controls.style.display = '';
+        var irCbar2 = document.getElementById('ir-colorbar-strip');
+        if (irCbar2) irCbar2.style.display = 'flex';
         if (detailMap) setTimeout(function () { detailMap.invalidateSize(); }, 50);
+        // Reposition MW controls
         setTimeout(_repositionMWControls, 50);
         // Hide track annotation markers so they don't obscure IR
         trackAnnotationMarkers.forEach(function (m) { if (detailMap) detailMap.removeLayer(m); });
@@ -3203,7 +3208,8 @@ window.toggleIROverlay = function () {
         toggleBtn.textContent = 'Show IR';
         toggleBtn.classList.remove('active');
         controls.style.display = 'none';
-        // Resize map after sidebar hides + reposition MW controls
+        var irCbar3 = document.getElementById('ir-colorbar-strip');
+        if (irCbar3) irCbar3.style.display = 'none';
         if (detailMap) setTimeout(function () { detailMap.invalidateSize(); }, 50);
         _repositionMWControls();
         stopIRPlayback();
