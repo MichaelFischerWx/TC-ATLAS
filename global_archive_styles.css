@@ -643,7 +643,6 @@ input[type="range"].ga-range::-moz-range-thumb {
 .detail-map-ir-row {
     display: flex;
     gap: 0;
-    align-items: stretch;
 }
 .detail-map-wrap {
     position: relative;
@@ -678,13 +677,14 @@ input[type="range"].ga-range::-moz-range-thumb {
     flex-shrink: 0;
     width: 150px;
     min-width: 150px;
+    height: 450px;  /* Match detail-map-container height */
     background: rgba(10, 22, 40, 0.95);
     border: 1px solid rgba(255,255,255,0.08);
     border-left: none;
     border-radius: 0 6px 6px 0;
     padding: 0;
     margin-top: 0;
-    overflow: visible;
+    overflow: hidden;
 }
 .ir-sb-vbar {
     display: flex;
@@ -694,9 +694,12 @@ input[type="range"].ga-range::-moz-range-thumb {
     padding: 6px 2px;
     border-right: 1px solid rgba(255,255,255,0.06);
     gap: 2px;
+    height: 100%;
+    overflow: hidden;
 }
 .ir-sb-vbar canvas {
     flex: 1;
+    min-height: 0;
     width: 14px;
     border-radius: 3px;
     border: 1px solid rgba(255,255,255,0.15);
@@ -732,7 +735,8 @@ input[type="range"].ga-range::-moz-range-thumb {
     padding: 6px 6px;
     gap: 4px;
     min-width: 0;
-    overflow: hidden;
+    overflow-y: auto;
+    overflow-x: hidden;
 }
 .ir-sb-info {
     display: flex;
