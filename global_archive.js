@@ -11997,14 +11997,9 @@ function _gaFLRenderTimeSeries() {
                 if (_gaFLXAxisMode === 'radius' && o.r_km != null) {
                     xVal = o.r_km;
                 } else {
-                    // Trim seconds and wrap hours past midnight (25:14 → 01:14)
+                    // Trim seconds; keep hours ≥24 for midnight-crossing flights
                     var t = o.time || '';
-                    var hhmm = t.length > 5 ? t.substring(0, 5) : t;
-                    var hh = parseInt(hhmm.split(':')[0]);
-                    if (hh >= 24) {
-                        hhmm = String(hh - 24).padStart(2, '0') + hhmm.substring(2);
-                    }
-                    xVal = hhmm;
+                    xVal = t.length > 5 ? t.substring(0, 5) : t;
                 }
                 xVals.push(xVal);
                 yVals.push(val);
@@ -12133,11 +12128,10 @@ function _gaFLRenderTimeSeries() {
 
             if (vSec < mStartSec || vSec > mEndSec) return;
 
-            // Wrap hours for x-axis label (match FL time series format)
+            // Keep hours ≥24 for midnight-crossing flights (consistent with HRD labels)
             var displayHH = vHH;
-            if (vDate === missionDateNext) displayHH = vHH + 24;  // keep raw for offset calc
-            var wrappedHH = displayHH >= 24 ? displayHH - 24 : displayHH;
-            var tHHMM = String(wrappedHH).padStart(2, '0') + ':' + String(vMM).padStart(2, '0');
+            if (vDate === missionDateNext) displayHH = vHH + 24;
+            var tHHMM = String(displayHH).padStart(2, '0') + ':' + String(vMM).padStart(2, '0');
             var hover = '<b>VDM OB ' + (v.ob_number || '?') + '</b><br>' +
                 (v.aircraft || '') + ' ' + (v.mission_id || '') + '<br>' +
                 'Min SLP: ' + v.min_slp_hpa + ' hPa';
@@ -12176,8 +12170,8 @@ function _gaFLRenderTimeSeries() {
                 mDate2 = _gaFLMissions[sel2.selectedIndex].datetime;
             }
         }
-        // Use moderate window: 3h before HRD start to 3h after HRD end
-        // This captures HDOB data from truncated missions without pulling in other flights
+        // Use tight window: 1h before HRD start to 1h after HRD end
+        // This captures nearby HDOB gap-fill without pulling in adjacent flights
         var hrdStart2 = 0, hrdEnd2 = 86400;
         if (summ2.start_time) {
             var sp2 = summ2.start_time.split(':');
@@ -12188,8 +12182,8 @@ function _gaFLRenderTimeSeries() {
             hrdEnd2 = parseInt(ep2[0]) * 3600 + parseInt(ep2[1]) * 60;
             if (hrdEnd2 < hrdStart2) hrdEnd2 += 86400;
         }
-        var ms2 = hrdStart2 - 10800;  // 3h before HRD
-        var me2 = hrdEnd2 + 10800;    // 3h after HRD
+        var ms2 = hrdStart2 - 3600;   // 1h before HRD
+        var me2 = hrdEnd2 + 3600;     // 1h after HRD
         var mDateNext2 = '';
         var mDatePrev2 = '';
         if (mDate2) {
@@ -12228,8 +12222,8 @@ function _gaFLRenderTimeSeries() {
 
             var displayHH2 = oHH;
             if (oDate === mDateNext2) displayHH2 = oHH + 24;
-            var wHH = displayHH2 >= 24 ? displayHH2 - 24 : displayHH2;
-            var tLabel = String(wHH).padStart(2, '0') + ':' + String(oMM).padStart(2, '0');
+            // Keep hours ≥24 for midnight-crossing flights (consistent with HRD labels)
+            var tLabel = String(displayHH2).padStart(2, '0') + ':' + String(oMM).padStart(2, '0');
 
             var p10 = ob.peak_10s_wspd_kt;
             var w30 = ob.wspd_30s_kt;
