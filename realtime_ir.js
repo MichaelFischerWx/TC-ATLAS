@@ -276,6 +276,14 @@
     /** Re-render all raw Tb frames with a new colormap (no server round-trip) */
     function recolorRawFrames() {
         if (rawTbFrames.length === 0) return;
+
+        // If animFrameLayers are still GIBS tiles (no setUrl), we need to
+        // switch to image overlays first via _applyRawTbToMap().
+        if (animFrameLayers.length > 0 && !animFrameLayers[0].setUrl) {
+            _applyRawTbToMap();
+            return;
+        }
+
         for (var i = 0; i < rawTbFrames.length; i++) {
             var frame = rawTbFrames[i];
             if (!frame || !frame.tb_data) continue;
