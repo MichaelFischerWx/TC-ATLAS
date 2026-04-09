@@ -981,3 +981,34 @@
     border-radius: 1px;
     flex-shrink: 0;
 }
+
+/* ── DeepMind Ensemble Distribution Sliders ──────────────────── */
+
+.rt-dm-slider {
+    flex: 1;
+    -webkit-appearance: none;
+    appearance: none;
+    height: 4px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 2px;
+    outline: none;
+    cursor: pointer;
+}
+.rt-dm-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #00e5ff;
+    border: 2px solid #0f172a;
+    cursor: pointer;
+}
+.rt-dm-slider::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #00e5ff;
+    border: 2px solid #0f172a;
+    cursor: pointer;
+}

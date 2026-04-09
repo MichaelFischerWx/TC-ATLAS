@@ -473,6 +473,12 @@
     var _rtWeatherlabMeanTraces = [];  // Plotly trace indices
     var _rtWeatherlabMinCat = null;    // min category filter (null = show all)
 
+    // ── DeepMind 1000-Member Ensemble Distribution State ──────
+    var _rtDmEnsData = null;           // API response from /weatherlab-ensemble
+    var _rtDmHistTauIdx = 0;           // current slider index for intensity histogram
+    var _rtDmChangeTauIdx = 4;         // current slider index for change histogram
+    var _rtDmChangeInt = 24;           // 12 or 24 hour change interval
+
     var RT_MODEL_COLORS = {
         'OFCL': '#ff4757', 'JTWC': '#ffa502',
         'AVNO': '#ff6b6b', 'AVNI': '#ff6b6b', 'GFSO': '#ff6b6b',
@@ -2428,6 +2434,7 @@
         // Load model forecasts (a-deck) and DeepMind ensemble
         _rtLoadModelForecasts(storm);
         _rtLoadWeatherlab(storm);
+        _rtLoadDmEnsemble(storm);
 
         // Fetch metadata for intensity chart
         fetchStormMetadata(atcfId, function (err, meta) {
@@ -4816,6 +4823,300 @@
     /**
      * Full cleanup of WeatherLab state.
      */
+    // ═══════════════════════════════════════════════════════════
+    //  DEEPMIND 1000-MEMBER ENSEMBLE DISTRIBUTION PANELS
+    // ═══════════════════════════════════════════════════════════
+
+    var _DM_SS_COLORS = {
+        TD: '#60a5fa', TS: '#34d399', C1: '#fbbf24', C2: '#fb923c',
+        C3: '#f87171', C4: '#ef4444', C5: '#dc2626'
+    };
+
+    /** Assign SS color to a wind speed value */
+    function _dmWindColor(w) {
+        if (w == null) return '#64748b';
+        if (w < 34) return _DM_SS_COLORS.TD;
+        if (w < 64) return _DM_SS_COLORS.TS;
+        if (w < 83) return _DM_SS_COLORS.C1;
+        if (w < 96) return _DM_SS_COLORS.C2;
+        if (w < 113) return _DM_SS_COLORS.C3;
+        if (w < 137) return _DM_SS_COLORS.C4;
+        return _DM_SS_COLORS.C5;
+    }
+
+    /**
+     * Load 1000-member ensemble data for histogram panels.
+     */
+    function _rtLoadDmEnsemble(storm) {
+        if (!storm || !storm.atcf_id) return;
+        _rtDmEnsData = null;
+
+        fetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(storm.atcf_id) + '/weatherlab-ensemble')
+            .then(function (r) {
+                if (!r.ok) throw new Error(r.status);
+                return r.json();
+            })
+            .then(function (json) {
+                _rtDmEnsData = json;
+
+                // Set up sliders
+                var taus = json.lead_times_h || [];
+                var histSlider = document.getElementById('rt-dm-hist-slider');
+                if (histSlider) {
+                    histSlider.max = taus.length - 1;
+                    histSlider.value = 0;
+                }
+                var changeSlider = document.getElementById('rt-dm-change-slider');
+                if (changeSlider) {
+                    changeSlider.max = taus.length - 1;
+                    // Default to tau=24h
+                    var idx24 = taus.indexOf(24);
+                    changeSlider.value = idx24 >= 0 ? idx24 : 4;
+                    _rtDmChangeTauIdx = changeSlider.value;
+                }
+
+                // Show panels
+                var distEl = document.getElementById('rt-dm-intensity-dist');
+                var changeEl = document.getElementById('rt-dm-change-dist');
+                if (distEl) distEl.style.display = '';
+                if (changeEl) changeEl.style.display = '';
+
+                // Render initial charts
+                _rtDmHistTauIdx = 0;
+                _rtRenderIntensityHist();
+                _rtRenderChangeHist();
+
+                console.log('[WeatherLab 1K] Loaded ' + json.n_members + ' members for histograms');
+            })
+            .catch(function () {
+                // Silent — 1000-member data may not be available
+            });
+    }
+
+    /** Slider handler for intensity histogram */
+    window._rtDmHistSlide = function (idx) {
+        _rtDmHistTauIdx = parseInt(idx);
+        _rtRenderIntensityHist();
+    };
+
+    /** Slider handler for change histogram */
+    window._rtDmChangeSlide = function (idx) {
+        _rtDmChangeTauIdx = parseInt(idx);
+        _rtRenderChangeHist();
+    };
+
+    /** Toggle 12h/24h change interval */
+    window._rtDmChangeInterval = function (hours) {
+        _rtDmChangeInt = hours;
+        var btn12 = document.getElementById('rt-dm-change-12h-btn');
+        var btn24 = document.getElementById('rt-dm-change-24h-btn');
+        if (btn12) btn12.style.background = hours === 12 ? 'rgba(0,229,255,0.2)' : '';
+        if (btn24) btn24.style.background = hours === 24 ? 'rgba(0,229,255,0.2)' : '';
+        if (btn12) btn12.classList.toggle('active', hours === 12);
+        if (btn24) btn24.classList.toggle('active', hours === 24);
+        _rtRenderChangeHist();
+    };
+
+    /**
+     * Render intensity histogram at the current slider tau.
+     */
+    function _rtRenderIntensityHist() {
+        if (!_rtDmEnsData || typeof Plotly === 'undefined') return;
+
+        var taus = _rtDmEnsData.lead_times_h || [];
+        var tau = taus[_rtDmHistTauIdx];
+        if (tau == null) return;
+
+        var label = document.getElementById('rt-dm-hist-label');
+        if (label) label.textContent = '+' + tau + 'h';
+
+        var tauKey = String(Math.round(tau));
+        var data = _rtDmEnsData.intensity[tauKey];
+        if (!data || !data.winds) return;
+
+        // Filter out nulls
+        var winds = data.winds.filter(function (w) { return w != null; });
+        if (winds.length === 0) return;
+
+        // Color each bar by SS category
+        var colors = winds.map(_dmWindColor);
+
+        // Compute percentiles
+        var sorted = winds.slice().sort(function (a, b) { return a - b; });
+        var p = function (pct) { return sorted[Math.floor(pct / 100 * (sorted.length - 1))]; };
+        var mean = winds.reduce(function (a, b) { return a + b; }, 0) / winds.length;
+
+        var chartEl = document.getElementById('rt-dm-hist-chart');
+        if (!chartEl) return;
+
+        var trace = {
+            x: winds,
+            type: 'histogram',
+            marker: { color: colors },
+            nbinsx: 30,
+            hovertemplate: '%{x:.0f} kt<br>%{y} members<extra></extra>'
+        };
+
+        // SS threshold lines
+        var shapes = [34, 64, 83, 96, 113, 137].map(function (v) {
+            return {
+                type: 'line', x0: v, x1: v, y0: 0, y1: 1, yref: 'paper',
+                line: { color: 'rgba(255,255,255,0.15)', width: 1, dash: 'dot' }
+            };
+        });
+
+        // Percentile annotations
+        var annotations = [
+            { x: p(10), y: 1, yref: 'paper', text: 'P10', showarrow: false,
+              font: { size: 8, color: '#64748b' }, yanchor: 'bottom' },
+            { x: p(50), y: 1, yref: 'paper', text: 'P50', showarrow: false,
+              font: { size: 9, color: '#e2e8f0' }, yanchor: 'bottom' },
+            { x: p(90), y: 1, yref: 'paper', text: 'P90', showarrow: false,
+              font: { size: 8, color: '#64748b' }, yanchor: 'bottom' }
+        ];
+
+        // Mean line
+        shapes.push({
+            type: 'line', x0: mean, x1: mean, y0: 0, y1: 1, yref: 'paper',
+            line: { color: '#00e5ff', width: 1.5 }
+        });
+
+        var layout = {
+            margin: { t: 20, r: 10, b: 30, l: 35 },
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: 'rgba(0,0,0,0)',
+            font: { family: 'JetBrains Mono, monospace', size: 9, color: '#94a3b8' },
+            xaxis: {
+                title: { text: 'Vmax (kt)', font: { size: 9 } },
+                gridcolor: 'rgba(255,255,255,0.05)',
+                zeroline: false
+            },
+            yaxis: {
+                title: { text: 'Members', font: { size: 9 } },
+                gridcolor: 'rgba(255,255,255,0.05)',
+                zeroline: false
+            },
+            shapes: shapes,
+            annotations: annotations,
+            bargap: 0.05
+        };
+
+        Plotly.newPlot(chartEl, [trace], layout, {
+            displayModeBar: false, responsive: true
+        });
+    }
+
+    /**
+     * Render intensity change histogram at the current slider tau.
+     */
+    function _rtRenderChangeHist() {
+        if (!_rtDmEnsData || typeof Plotly === 'undefined') return;
+
+        var taus = _rtDmEnsData.lead_times_h || [];
+        var tau = taus[_rtDmChangeTauIdx];
+        if (tau == null) return;
+
+        var label = document.getElementById('rt-dm-change-label');
+        if (label) label.textContent = '+' + tau + 'h';
+
+        var changeData = _rtDmChangeInt === 12
+            ? _rtDmEnsData.intensity_change_12h
+            : _rtDmEnsData.intensity_change_24h;
+
+        var tauKey = String(Math.round(tau));
+        var data = changeData ? changeData[tauKey] : null;
+        if (!data || !data.dv) {
+            // No change data at this tau (too early)
+            var chartEl = document.getElementById('rt-dm-change-chart');
+            if (chartEl) Plotly.purge(chartEl);
+            return;
+        }
+
+        var dv = data.dv.filter(function (v) { return v != null; });
+        if (dv.length === 0) return;
+
+        // Color: warm for intensifying (positive), cool for weakening (negative)
+        var colors = dv.map(function (v) {
+            if (v >= 30) return '#dc2626';    // RI
+            if (v >= 15) return '#fb923c';    // moderate intensification
+            if (v > 0) return '#fbbf24';      // slight intensification
+            if (v > -15) return '#60a5fa';    // slight weakening
+            return '#3b82f6';                  // rapid weakening
+        });
+
+        // RI threshold and probability
+        var riThreshold = _rtDmChangeInt === 24 ? 30 : 20;
+        var riCount = dv.filter(function (v) { return v >= riThreshold; }).length;
+        var riPct = Math.round(riCount / dv.length * 100);
+        var mean = dv.reduce(function (a, b) { return a + b; }, 0) / dv.length;
+
+        var chartEl = document.getElementById('rt-dm-change-chart');
+        if (!chartEl) return;
+
+        var trace = {
+            x: dv,
+            type: 'histogram',
+            marker: { color: colors },
+            nbinsx: 30,
+            hovertemplate: '%{x:+.0f} kt/' + _rtDmChangeInt + 'h<br>%{y} members<extra></extra>'
+        };
+
+        var shapes = [
+            // Zero line
+            { type: 'line', x0: 0, x1: 0, y0: 0, y1: 1, yref: 'paper',
+              line: { color: 'rgba(255,255,255,0.2)', width: 1 } },
+            // RI threshold
+            { type: 'line', x0: riThreshold, x1: riThreshold, y0: 0, y1: 1, yref: 'paper',
+              line: { color: '#dc2626', width: 1.5, dash: 'dash' } },
+            // Mean
+            { type: 'line', x0: mean, x1: mean, y0: 0, y1: 1, yref: 'paper',
+              line: { color: '#00e5ff', width: 1.5 } }
+        ];
+
+        var annotations = [
+            { x: riThreshold, y: 1, yref: 'paper', text: 'RI: ' + riPct + '%',
+              showarrow: false, font: { size: 9, color: '#dc2626' },
+              yanchor: 'bottom', xanchor: 'left', xshift: 4 }
+        ];
+
+        var layout = {
+            margin: { t: 20, r: 10, b: 30, l: 35 },
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: 'rgba(0,0,0,0)',
+            font: { family: 'JetBrains Mono, monospace', size: 9, color: '#94a3b8' },
+            xaxis: {
+                title: { text: '\u0394V (kt/' + _rtDmChangeInt + 'h)', font: { size: 9 } },
+                gridcolor: 'rgba(255,255,255,0.05)',
+                zeroline: false
+            },
+            yaxis: {
+                title: { text: 'Members', font: { size: 9 } },
+                gridcolor: 'rgba(255,255,255,0.05)',
+                zeroline: false
+            },
+            shapes: shapes,
+            annotations: annotations,
+            bargap: 0.05
+        };
+
+        Plotly.newPlot(chartEl, [trace], layout, {
+            displayModeBar: false, responsive: true
+        });
+    }
+
+    /** Clean up ensemble distribution panels */
+    function _rtRemoveDmEnsemble() {
+        _rtDmEnsData = null;
+        var distEl = document.getElementById('rt-dm-intensity-dist');
+        var changeEl = document.getElementById('rt-dm-change-dist');
+        if (distEl) distEl.style.display = 'none';
+        if (changeEl) changeEl.style.display = 'none';
+        var histChart = document.getElementById('rt-dm-hist-chart');
+        var changeChart = document.getElementById('rt-dm-change-chart');
+        if (histChart && typeof Plotly !== 'undefined') Plotly.purge(histChart);
+        if (changeChart && typeof Plotly !== 'undefined') Plotly.purge(changeChart);
+    }
+
     function _rtRemoveWeatherlab() {
         _rtClearWeatherlabLayers();
         _rtClearWeatherlabIntensity();
@@ -4836,6 +5137,7 @@
         _rtClearModelLayers();
         _rtClearModelIntensityTraces();
         _rtRemoveWeatherlab();
+        _rtRemoveDmEnsemble();
         _rtModelData = null;
         _rtModelActiveCycle = null;
         _rtModelLastAtcf = null;

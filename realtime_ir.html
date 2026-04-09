@@ -308,6 +308,45 @@
                     </div>
                 </div>
 
+                <!-- DeepMind Intensity Distribution (1000 members) -->
+                <div class="ir-info-section" id="rt-dm-intensity-dist" style="display:none;">
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+                        <h3 class="ir-info-heading" style="margin-bottom:0;padding-bottom:0;border-bottom:none;">
+                            Intensity Distribution
+                        </h3>
+                        <span style="font-size:0.65rem;color:#00e5ff;">DeepMind 1K</span>
+                    </div>
+                    <div id="rt-dm-hist-chart" style="height:190px;"></div>
+                    <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
+                        <span id="rt-dm-hist-label" style="font-size:0.7rem;color:#e2e8f0;font-family:'JetBrains Mono',monospace;min-width:40px;">+0h</span>
+                        <input type="range" id="rt-dm-hist-slider" min="0" max="52" value="0"
+                            oninput="window._rtDmHistSlide(this.value)"
+                            class="rt-dm-slider">
+                    </div>
+                </div>
+
+                <!-- DeepMind Intensity Change Distribution -->
+                <div class="ir-info-section" id="rt-dm-change-dist" style="display:none;">
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+                        <h3 class="ir-info-heading" style="margin-bottom:0;padding-bottom:0;border-bottom:none;">
+                            Intensity Change
+                        </h3>
+                        <div style="display:flex;gap:4px;">
+                            <button id="rt-dm-change-12h-btn" onclick="window._rtDmChangeInterval(12)"
+                                class="rt-model-filter-btn" style="font-size:8px;padding:1px 5px;">12h</button>
+                            <button id="rt-dm-change-24h-btn" onclick="window._rtDmChangeInterval(24)"
+                                class="rt-model-filter-btn active" style="font-size:8px;padding:1px 5px;background:rgba(0,229,255,0.2);">24h</button>
+                        </div>
+                    </div>
+                    <div id="rt-dm-change-chart" style="height:190px;"></div>
+                    <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
+                        <span id="rt-dm-change-label" style="font-size:0.7rem;color:#e2e8f0;font-family:'JetBrains Mono',monospace;min-width:40px;">+24h</span>
+                        <input type="range" id="rt-dm-change-slider" min="0" max="52" value="4"
+                            oninput="window._rtDmChangeSlide(this.value)"
+                            class="rt-dm-slider">
+                    </div>
+                </div>
+
                 <!-- Official forecast link -->
                 <div class="ir-info-section" id="ir-official-section" style="display:none;">
                     <a id="ir-official-link" href="#" target="_blank" rel="noopener"

@@ -1850,3 +1850,207 @@ def get_storm_weatherlab(atcf_id: str):
         },
         headers={"Cache-Control": "public, max-age=900"},
     )
+
+
+# ---------------------------------------------------------------------------
+# DeepMind 1000-Member Large Ensemble (Intensity Distributions)
+# ---------------------------------------------------------------------------
+
+_WEATHERLAB_LARGE_BASE = (
+    "https://deepmind.google.com/science/weatherlab/download/cyclones/"
+    "FNV3_LARGE_ENSEMBLE"
+)
+_weatherlab_large_cache: dict = {}  # (date, hour) -> {"data": ..., "ts": float}
+_WEATHERLAB_LARGE_CACHE_TTL = 3600  # 1 hour (large file, changes infrequently)
+
+
+def _fetch_weatherlab_large_csv(date_str: str, hour_str: str,
+                                target_track: str | None = None) -> dict | None:
+    """Fetch and parse the 1000-member ensemble CSV.
+
+    To save memory, only parses rows matching target_track if provided.
+    Returns dict keyed by track_id with per-member wind/pres arrays per tau.
+    """
+    cache_key = (date_str, hour_str, target_track or "ALL")
+    cached = _weatherlab_large_cache.get(cache_key)
+    if cached and time.time() - cached["ts"] < _WEATHERLAB_LARGE_CACHE_TTL:
+        return cached["data"]
+
+    import requests as req
+
+    date_fmt = date_str.replace("-", "_")
+    url = (
+        f"{_WEATHERLAB_LARGE_BASE}/ensemble/paired/csv/"
+        f"FNV3_LARGE_ENSEMBLE_{date_fmt}T{hour_str}_00_paired.csv"
+    )
+
+    try:
+        print(f"[WeatherLab 1K] Fetching {date_str} {hour_str}z ...")
+        resp = req.get(url, timeout=60, stream=True)
+        if resp.status_code != 200:
+            return None
+    except Exception as e:
+        print(f"[WeatherLab 1K] Fetch failed: {e}")
+        return None
+
+    # Parse: collect per-(track, member) → list of {tau, wind, pres}
+    # Then reorganise into per-track, per-tau → arrays of winds
+    track_target_upper = target_track.upper() if target_track else None
+
+    # Per-member time series: {track_id: {member_int: {tau: {wind, pres}}}}
+    member_series: dict = {}
+    header_seen = False
+
+    for line in resp.iter_lines(decode_unicode=True):
+        if not line or line.startswith("#"):
+            continue
+        if not header_seen:
+            header_seen = True
+            continue
+
+        cols = line.split(",")
+        if len(cols) < 9:
+            continue
+
+        track_id = cols[1].strip()
+        if track_target_upper and track_id != track_target_upper:
+            continue
+
+        try:
+            member = int(float(cols[2].strip()))
+            tau = _parse_lead_time(cols[4])
+            wind = round(float(cols[8]), 1) if cols[8].strip() else None
+            pres = round(float(cols[7]), 1) if cols[7].strip() else None
+        except (ValueError, IndexError):
+            continue
+
+        if track_id not in member_series:
+            member_series[track_id] = {}
+        if member not in member_series[track_id]:
+            member_series[track_id][member] = {}
+        member_series[track_id][member][tau] = {"wind": wind, "pres": pres}
+
+    # Reorganise into per-tau arrays
+    result = {}
+    for track_id, members in member_series.items():
+        all_taus = set()
+        for m_data in members.values():
+            all_taus.update(m_data.keys())
+        sorted_taus = sorted(all_taus)
+
+        # Intensity at each tau: arrays of 1000 values
+        intensity = {}
+        for tau in sorted_taus:
+            winds = []
+            pressures = []
+            for m in sorted(members.keys()):
+                pt = members[m].get(tau)
+                if pt:
+                    winds.append(pt["wind"])
+                    pressures.append(pt["pres"])
+                else:
+                    winds.append(None)
+                    pressures.append(None)
+            intensity[str(int(tau))] = {"winds": winds, "pres": pressures}
+
+        # Intensity change: dV over 12h and 24h
+        change_12h = {}
+        change_24h = {}
+        for tau in sorted_taus:
+            tau_str = str(int(tau))
+            # 12h change
+            prev_12 = tau - 12
+            if prev_12 in all_taus:
+                dv = []
+                for m in sorted(members.keys()):
+                    curr = members[m].get(tau)
+                    prev = members[m].get(prev_12)
+                    if curr and prev and curr["wind"] is not None and prev["wind"] is not None:
+                        dv.append(round(curr["wind"] - prev["wind"], 1))
+                    else:
+                        dv.append(None)
+                change_12h[tau_str] = {"dv": dv}
+            # 24h change
+            prev_24 = tau - 24
+            if prev_24 in all_taus:
+                dv = []
+                for m in sorted(members.keys()):
+                    curr = members[m].get(tau)
+                    prev = members[m].get(prev_24)
+                    if curr and prev and curr["wind"] is not None and prev["wind"] is not None:
+                        dv.append(round(curr["wind"] - prev["wind"], 1))
+                    else:
+                        dv.append(None)
+                change_24h[tau_str] = {"dv": dv}
+
+        result[track_id] = {
+            "lead_times_h": sorted_taus,
+            "n_members": len(members),
+            "intensity": intensity,
+            "intensity_change_12h": change_12h,
+            "intensity_change_24h": change_24h,
+        }
+
+    # Cache
+    _weatherlab_large_cache[cache_key] = {"data": result, "ts": time.time()}
+    # Evict oldest if too many
+    if len(_weatherlab_large_cache) > 4:
+        oldest = min(_weatherlab_large_cache,
+                     key=lambda k: _weatherlab_large_cache[k]["ts"])
+        del _weatherlab_large_cache[oldest]
+
+    print(f"[WeatherLab 1K] Parsed {len(result)} storms, "
+          f"{sum(r['n_members'] for r in result.values())} total members")
+    return result
+
+
+@router.get("/storm/{atcf_id}/weatherlab-ensemble")
+def get_storm_weatherlab_ensemble(atcf_id: str):
+    """Fetch 1000-member ensemble intensity distributions from WeatherLab.
+
+    Returns per-lead-time arrays of wind speeds and intensity changes
+    for histogram rendering. Data is cached server-side so users never
+    download the full 20MB CSV.
+    """
+    atcf_id = atcf_id.upper().strip()
+
+    now = _dt.now(timezone.utc)
+    candidates = []
+    for day_offset in (0, 1):
+        dt = now - timedelta(days=day_offset)
+        date_str = dt.strftime("%Y-%m-%d")
+        for hour in ("06", "00", "18", "12"):
+            candidates.append((date_str, hour))
+
+    data = None
+    used_date = None
+    used_hour = None
+    for date_str, hour_str in candidates:
+        data = _fetch_weatherlab_large_csv(date_str, hour_str,
+                                           target_track=atcf_id)
+        if data and atcf_id in data:
+            used_date = date_str
+            used_hour = hour_str
+            break
+
+    if not data or atcf_id not in data:
+        raise HTTPException(
+            status_code=404,
+            detail=f"WeatherLab 1000-member data not found for {atcf_id}",
+        )
+
+    storm = data[atcf_id]
+    init_time = used_date.replace("-", "") + used_hour
+
+    return JSONResponse(
+        content={
+            "model": "DeepMind FNV3 (1000 members)",
+            "init_time": init_time,
+            "n_members": storm["n_members"],
+            "lead_times_h": storm["lead_times_h"],
+            "intensity": storm["intensity"],
+            "intensity_change_12h": storm["intensity_change_12h"],
+            "intensity_change_24h": storm["intensity_change_24h"],
+        },
+        headers={"Cache-Control": "public, max-age=1800"},
+    )
