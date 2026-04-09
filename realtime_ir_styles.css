@@ -982,6 +982,14 @@
     flex-shrink: 0;
 }
 
+/* ── Raw Tb Image Overlay (crisp pixel rendering) ────────────── */
+
+.ir-raw-overlay img {
+    image-rendering: pixelated;
+    image-rendering: -moz-crisp-edges;
+    image-rendering: crisp-edges;
+}
+
 /* ── DeepMind Ensemble Distribution Sliders ──────────────────── */
 
 .rt-dm-slider {

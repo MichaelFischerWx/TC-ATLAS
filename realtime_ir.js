@@ -2938,7 +2938,9 @@
                 [frame.bounds[0][0], frame.bounds[0][1]],
                 [frame.bounds[1][0], frame.bounds[1][1]]
             );
-            var overlay = L.imageOverlay(dataUrl, bounds, { opacity: 0, pane: 'tilePane' });
+            var overlay = L.imageOverlay(dataUrl, bounds, {
+                opacity: 0, pane: 'tilePane', className: 'ir-raw-overlay'
+            });
             overlay.addTo(detailMap);
             newLayers.push(overlay);
         }
@@ -4426,7 +4428,6 @@
         if (_rtWeatherlabVisible) {
             _rtWeatherlabVisible = false;
             _rtClearWeatherlabLayers();
-            _rtClearWeatherlabLayers();
             _rtClearWeatherlabIntensity();
             if (detailMap) detailMap.off('zoomend', _rtWeatherlabOnZoom);
             if (btn) { btn.style.background = 'rgba(0,229,255,0.15)'; }
@@ -4435,6 +4436,11 @@
             _rtWeatherlabMinCat = null;
             var catSel = document.getElementById('rt-weatherlab-cat-filter');
             if (catSel) catSel.value = '';
+            // Hide distribution panels
+            var distEl = document.getElementById('rt-dm-intensity-dist');
+            var changeEl = document.getElementById('rt-dm-change-dist');
+            if (distEl) distEl.style.display = 'none';
+            if (changeEl) changeEl.style.display = 'none';
             return;
         }
 
@@ -4450,6 +4456,11 @@
         _rtRenderWeatherlab();
         _rtRenderWeatherlabIntensity();
         if (detailMap) detailMap.on('zoomend', _rtWeatherlabOnZoom);
+
+        // Show 1000-member distribution panels if data is loaded
+        if (_rtDmEnsData) {
+            _rtShowDmPanels();
+        }
     };
 
     /**
@@ -4866,35 +4877,8 @@
             })
             .then(function (json) {
                 _rtDmEnsData = json;
-
-                // Set up sliders
-                var taus = json.lead_times_h || [];
-                var histSlider = document.getElementById('rt-dm-hist-slider');
-                if (histSlider) {
-                    histSlider.max = taus.length - 1;
-                    histSlider.value = 0;
-                }
-                var changeSlider = document.getElementById('rt-dm-change-slider');
-                if (changeSlider) {
-                    changeSlider.max = taus.length - 1;
-                    // Default to tau=24h
-                    var idx24 = taus.indexOf(24);
-                    changeSlider.value = idx24 >= 0 ? idx24 : 4;
-                    _rtDmChangeTauIdx = changeSlider.value;
-                }
-
-                // Show panels
-                var distEl = document.getElementById('rt-dm-intensity-dist');
-                var changeEl = document.getElementById('rt-dm-change-dist');
-                if (distEl) distEl.style.display = '';
-                if (changeEl) changeEl.style.display = '';
-
-                // Render initial charts
-                _rtDmHistTauIdx = 0;
-                _rtRenderIntensityHist();
-                _rtRenderChangeHist();
-
-                console.log('[WeatherLab 1K] Loaded ' + json.n_members + ' members for histograms');
+                // Data cached silently — panels only shown when DeepMind toggle is activated
+                console.log('[WeatherLab 1K] Loaded ' + json.n_members + ' members (cached)');
             })
             .catch(function () {
                 // Silent — 1000-member data may not be available
@@ -4902,6 +4886,31 @@
     }
 
     /** Slider handler for intensity histogram */
+    /** Show distribution panels and initialize sliders/charts */
+    function _rtShowDmPanels() {
+        if (!_rtDmEnsData) return;
+        var taus = _rtDmEnsData.lead_times_h || [];
+
+        var histSlider = document.getElementById('rt-dm-hist-slider');
+        if (histSlider) { histSlider.max = taus.length - 1; histSlider.value = 0; }
+        var changeSlider = document.getElementById('rt-dm-change-slider');
+        if (changeSlider) {
+            changeSlider.max = taus.length - 1;
+            var idx24 = taus.indexOf(24);
+            changeSlider.value = idx24 >= 0 ? idx24 : 4;
+            _rtDmChangeTauIdx = parseInt(changeSlider.value);
+        }
+
+        var distEl = document.getElementById('rt-dm-intensity-dist');
+        var changeEl = document.getElementById('rt-dm-change-dist');
+        if (distEl) distEl.style.display = '';
+        if (changeEl) changeEl.style.display = '';
+
+        _rtDmHistTauIdx = 0;
+        _rtRenderIntensityHist();
+        _rtRenderChangeHist();
+    }
+
     window._rtDmHistSlide = function (idx) {
         _rtDmHistTauIdx = parseInt(idx);
         _rtRenderIntensityHist();
@@ -4957,29 +4966,38 @@
         var chartEl = document.getElementById('rt-dm-hist-chart');
         if (!chartEl) return;
 
+        // Use fixed 5-kt bins for consistent appearance across lead times
         var trace = {
             x: winds,
             type: 'histogram',
-            marker: { color: colors },
-            nbinsx: 30,
+            xbins: { start: 0, end: 175, size: 5 },
+            marker: {
+                color: winds.map(_dmWindColor),
+                line: { color: 'rgba(0,0,0,0.3)', width: 0.5 }
+            },
             hovertemplate: '%{x:.0f} kt<br>%{y} members<extra></extra>'
         };
 
-        // SS threshold lines
-        var shapes = [34, 64, 83, 96, 113, 137].map(function (v) {
+        // SS category threshold lines with labels
+        var ssThresholds = [
+            { v: 34, label: 'TS' }, { v: 64, label: 'C1' },
+            { v: 83, label: 'C2' }, { v: 96, label: 'C3' },
+            { v: 113, label: 'C4' }, { v: 137, label: 'C5' }
+        ];
+        var shapes = ssThresholds.map(function (t) {
             return {
-                type: 'line', x0: v, x1: v, y0: 0, y1: 1, yref: 'paper',
+                type: 'line', x0: t.v, x1: t.v, y0: 0, y1: 1, yref: 'paper',
                 line: { color: 'rgba(255,255,255,0.15)', width: 1, dash: 'dot' }
             };
         });
 
-        // Percentile annotations
+        // Percentile + mean annotations
         var annotations = [
-            { x: p(10), y: 1, yref: 'paper', text: 'P10', showarrow: false,
+            { x: p(10), y: 1.02, yref: 'paper', text: 'P10: ' + p(10).toFixed(0), showarrow: false,
               font: { size: 8, color: '#64748b' }, yanchor: 'bottom' },
-            { x: p(50), y: 1, yref: 'paper', text: 'P50', showarrow: false,
+            { x: p(50), y: 1.02, yref: 'paper', text: 'P50: ' + p(50).toFixed(0), showarrow: false,
               font: { size: 9, color: '#e2e8f0' }, yanchor: 'bottom' },
-            { x: p(90), y: 1, yref: 'paper', text: 'P90', showarrow: false,
+            { x: p(90), y: 1.02, yref: 'paper', text: 'P90: ' + p(90).toFixed(0), showarrow: false,
               font: { size: 8, color: '#64748b' }, yanchor: 'bottom' }
         ];
 
@@ -4990,23 +5008,25 @@
         });
 
         var layout = {
-            margin: { t: 20, r: 10, b: 30, l: 35 },
+            margin: { t: 25, r: 10, b: 30, l: 40 },
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: 'rgba(0,0,0,0)',
             font: { family: 'JetBrains Mono, monospace', size: 9, color: '#94a3b8' },
             xaxis: {
                 title: { text: 'Vmax (kt)', font: { size: 9 } },
+                range: [0, 175],
+                dtick: 20,
                 gridcolor: 'rgba(255,255,255,0.05)',
                 zeroline: false
             },
             yaxis: {
-                title: { text: 'Members', font: { size: 9 } },
+                title: { text: 'Count', font: { size: 9 } },
                 gridcolor: 'rgba(255,255,255,0.05)',
                 zeroline: false
             },
             shapes: shapes,
             annotations: annotations,
-            bargap: 0.05
+            bargap: 0.08
         };
 
         Plotly.newPlot(chartEl, [trace], layout, {
@@ -5043,13 +5063,15 @@
         var dv = data.dv.filter(function (v) { return v != null; });
         if (dv.length === 0) return;
 
-        // Color: warm for intensifying (positive), cool for weakening (negative)
+        // Diverging colormap: blue (weakening) → gray (neutral) → red (intensifying)
         var colors = dv.map(function (v) {
-            if (v >= 30) return '#dc2626';    // RI
-            if (v >= 15) return '#fb923c';    // moderate intensification
-            if (v > 0) return '#fbbf24';      // slight intensification
-            if (v > -15) return '#60a5fa';    // slight weakening
-            return '#3b82f6';                  // rapid weakening
+            if (v <= -30) return '#1e40af';     // rapid weakening (dark blue)
+            if (v <= -15) return '#3b82f6';     // moderate weakening
+            if (v <= -5)  return '#93c5fd';     // slight weakening (light blue)
+            if (v < 5)    return '#94a3b8';     // near-steady (gray)
+            if (v < 15)   return '#fca5a5';     // slight intensification (light red)
+            if (v < 30)   return '#ef4444';     // moderate intensification (red)
+            return '#991b1b';                    // RI (dark red)
         });
 
         // RI threshold and probability
