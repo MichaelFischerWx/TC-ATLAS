@@ -4031,6 +4031,11 @@
         if (_rtModelData) {
             _rtSyncModelCycleToIR();
         }
+
+        // Auto-activate DeepMind ensemble if data is loaded
+        if (!_rtWeatherlabVisible && (_rtWeatherlabData || _rtDmEnsData)) {
+            window._rtToggleWeatherlab();
+        }
     };
 
     /**
@@ -5023,6 +5028,7 @@
         });
 
         var layout = {
+            height: 180,
             margin: { t: 25, r: 10, b: 30, l: 40 },
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: 'rgba(0,0,0,0)',
@@ -5045,7 +5051,7 @@
         };
 
         Plotly.newPlot(chartEl, [trace], layout, {
-            displayModeBar: false, responsive: true
+            displayModeBar: false, responsive: false
         });
     }
 
@@ -5143,6 +5149,7 @@
         ];
 
         var layout = {
+            height: 180,
             margin: { t: 20, r: 10, b: 30, l: 35 },
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: 'rgba(0,0,0,0)',
@@ -5163,7 +5170,7 @@
         };
 
         Plotly.newPlot(chartEl, [trace], layout, {
-            displayModeBar: false, responsive: true
+            displayModeBar: false, responsive: false
         });
     }
 
