@@ -12224,8 +12224,8 @@ function _gaFLRenderTimeSeries() {
                 mDate2 = _gaFLMissions[sel2.selectedIndex].datetime;
             }
         }
-        // Use tight window: 1h before HRD start to 1h after HRD end
-        // This captures nearby HDOB gap-fill without pulling in adjacent flights
+        // Window: ±6h around HRD range — covers truncated missions while
+        // mission_id matching (_gaFLMatchMinobMission) ensures same-flight data
         var hrdStart2 = 0, hrdEnd2 = 86400;
         if (summ2.start_time) {
             var sp2 = summ2.start_time.split(':');
@@ -12236,8 +12236,8 @@ function _gaFLRenderTimeSeries() {
             hrdEnd2 = parseInt(ep2[0]) * 3600 + parseInt(ep2[1]) * 60;
             if (hrdEnd2 < hrdStart2) hrdEnd2 += 86400;
         }
-        var ms2 = hrdStart2 - 3600;   // 1h before HRD
-        var me2 = hrdEnd2 + 3600;     // 1h after HRD
+        var ms2 = hrdStart2 - 21600;  // 6h before HRD
+        var me2 = hrdEnd2 + 21600;    // 6h after HRD
         var mDateNext2 = '';
         var mDatePrev2 = '';
         if (mDate2) {
@@ -12271,8 +12271,6 @@ function _gaFLRenderTimeSeries() {
                 return;
             }
             if (oSec < ms2 || oSec > me2) return;
-            // Gap-fill only: skip obs that overlap the HRD time range
-            if (oSec >= hrdStart2 && oSec <= hrdEnd2) return;
 
             var displayHH2 = oHH;
             if (oDate === mDateNext2) displayHH2 = oHH + 24;
@@ -12433,6 +12431,21 @@ function _gaFLRenderTimeSeries() {
                     yaxis: 'y2', showlegend: true,
                     visible: _gaFLMinobVisible ? true : 'legendonly',
                 });
+            }
+
+            // Update dropdown max wind if HDOB peak exceeds HRD max
+            if (moPeak.length > 0) {
+                var hdobMax = 0;
+                for (var hi = 0; hi < moPeak.length; hi++) {
+                    if (moPeak[hi] != null && moPeak[hi] > hdobMax) hdobMax = moPeak[hi];
+                }
+                if (hdobMax > 0 && _gaFLData.source_url) {
+                    var curStats = _gaFLMissionStats[_gaFLData.source_url];
+                    if (!curStats || hdobMax > curStats.maxWind) {
+                        _gaFLMissionStats[_gaFLData.source_url] = { maxWind: hdobMax };
+                        _gaFLPopulateMissionDropdown();
+                    }
+                }
             }
         }
     }
