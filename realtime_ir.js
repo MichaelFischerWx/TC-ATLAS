@@ -471,6 +471,7 @@
     var _rtWeatherlabLayers = [];      // Leaflet polylines
     var _rtWeatherlabMarkers = [];     // Leaflet circle markers
     var _rtWeatherlabMeanTraces = [];  // Plotly trace indices
+    var _rtWeatherlabMinCat = null;    // min category filter (null = show all)
 
     var RT_MODEL_COLORS = {
         'OFCL': '#ff4757', 'JTWC': '#ffa502',
@@ -4410,8 +4411,15 @@
         if (_rtWeatherlabVisible) {
             _rtWeatherlabVisible = false;
             _rtClearWeatherlabLayers();
+            _rtClearWeatherlabLayers();
             _rtClearWeatherlabIntensity();
+            if (detailMap) detailMap.off('zoomend', _rtWeatherlabOnZoom);
             if (btn) { btn.style.background = 'rgba(0,229,255,0.15)'; }
+            var filterEl = document.getElementById('rt-weatherlab-filter');
+            if (filterEl) filterEl.style.display = 'none';
+            _rtWeatherlabMinCat = null;
+            var catSel = document.getElementById('rt-weatherlab-cat-filter');
+            if (catSel) catSel.value = '';
             return;
         }
 
@@ -4422,25 +4430,86 @@
 
         _rtWeatherlabVisible = true;
         if (btn) { btn.style.background = 'rgba(0,229,255,0.35)'; }
+        var filterEl = document.getElementById('rt-weatherlab-filter');
+        if (filterEl) filterEl.style.display = '';
         _rtRenderWeatherlab();
         _rtRenderWeatherlabIntensity();
+        if (detailMap) detailMap.on('zoomend', _rtWeatherlabOnZoom);
     };
 
     /**
      * Render 50 ensemble spaghetti tracks + mean on the detail map.
      */
+    /** Zoom-based scale factor for ensemble rendering.
+     *  At zoom 5 (default): 1.0x. Scales up gently at higher zooms. */
+    /** Wind speed threshold for each Saffir-Simpson category */
+    var _SS_WIND_THRESHOLDS = { 'TS': 34, 'C1': 64, 'C2': 83, 'C3': 96, 'C4': 113, 'C5': 137 };
+
+    /** Check if a member's max wind reaches at least the given category */
+    function _wlMemberReachesCat(pts, minCat) {
+        if (!minCat || !pts) return true;
+        var threshold = _SS_WIND_THRESHOLDS[minCat] || 0;
+        for (var i = 0; i < pts.length; i++) {
+            if (pts[i].wind != null && pts[i].wind >= threshold) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Filter ensemble members by max intensity category.
+     */
+    window._rtFilterWeatherlabByCat = function (cat) {
+        _rtWeatherlabMinCat = cat || null;
+        if (_rtWeatherlabVisible) {
+            _rtRenderWeatherlab();
+            _rtRenderWeatherlabIntensity();
+        }
+    };
+
+    function _wlZoomScale() {
+        if (!detailMap) return 1.0;
+        var z = detailMap.getZoom();
+        // z5=1.0, z6=1.3, z7=1.7, z8=2.1, z9=2.5
+        return 1.0 + (z - 5) * 0.35;
+    }
+
+    /** Re-scale WeatherLab layers on zoom change */
+    function _rtWeatherlabOnZoom() {
+        if (!_rtWeatherlabVisible) return;
+        var s = _wlZoomScale();
+        for (var i = 0; i < _rtWeatherlabLayers.length; i++) {
+            var lyr = _rtWeatherlabLayers[i];
+            if (lyr._isMeanLine) {
+                lyr.setStyle({ weight: 3 * s });
+            } else {
+                lyr.setStyle({ weight: Math.max(0.8, 1 * s) });
+            }
+        }
+        for (var j = 0; j < _rtWeatherlabMarkers.length; j++) {
+            var m = _rtWeatherlabMarkers[j];
+            var base = m._wlBaseRadius || 2;
+            m.setRadius(base * s);
+        }
+    }
+
     function _rtRenderWeatherlab() {
         _rtClearWeatherlabLayers();
         if (!_rtWeatherlabData || !detailMap) return;
 
+        var s = _wlZoomScale();
         var members = _rtWeatherlabData.members || {};
         var memberKeys = Object.keys(members);
+        var shownCount = 0;
 
         // Render ensemble members as thin spaghetti
         for (var mi = 0; mi < memberKeys.length; mi++) {
             var key = memberKeys[mi];
             var pts = members[key].points;
             if (!pts || pts.length < 2) continue;
+
+            // Apply intensity filter
+            if (!_wlMemberReachesCat(pts, _rtWeatherlabMinCat)) continue;
+            shownCount++;
 
             var latlngs = [];
             for (var pi = 0; pi < pts.length; pi++) {
@@ -4449,7 +4518,7 @@
 
             var line = L.polyline(latlngs, {
                 color: _WEATHERLAB_MEMBER_COLOR,
-                weight: 1,
+                weight: Math.max(0.8, 1 * s),
                 opacity: 1,
                 interactive: false
             }).addTo(detailMap);
@@ -4462,15 +4531,17 @@
 
                 var cat = windToCategory(pt.wind);
                 var color = SS_COLORS[cat] || '#64748b';
+                var baseR = pt.tau === 0 ? 3 : 2;
                 var marker = L.circleMarker([pt.lat, pt.lon], {
-                    radius: pt.tau === 0 ? 3 : 2,
+                    radius: baseR * s,
                     color: color,
                     fillColor: color,
                     fillOpacity: 0.8,
-                    weight: 0.5,
+                    weight: 0.5 * s,
                     opacity: 0.7,
                     interactive: true
                 }).addTo(detailMap);
+                marker._wlBaseRadius = baseR;
 
                 var tipHtml = '<b>Member ' + key + '</b> +' + pt.tau + 'h<br>' +
                     pt.lat.toFixed(1) + '\u00B0N ' + pt.lon.toFixed(1) + '\u00B0E<br>' +
@@ -4493,10 +4564,11 @@
 
             var meanLine = L.polyline(meanLatLngs, {
                 color: _WEATHERLAB_MEAN_COLOR,
-                weight: 3,
+                weight: 3 * s,
                 opacity: 0.95,
                 interactive: false
             }).addTo(detailMap);
+            meanLine._isMeanLine = true;
             _rtWeatherlabLayers.push(meanLine);
 
             // Markers at standard forecast hours on mean
@@ -4506,15 +4578,17 @@
 
                 var cat = windToCategory(pt.wind);
                 var color = SS_COLORS[cat] || '#64748b';
+                var baseR = pt.tau === 0 ? 5 : 4;
                 var marker = L.circleMarker([pt.lat, pt.lon], {
-                    radius: pt.tau === 0 ? 5 : 4,
+                    radius: baseR * s,
                     color: '#fff',
                     fillColor: color,
                     fillOpacity: 1,
-                    weight: 1.5,
+                    weight: 1.5 * s,
                     opacity: 1,
                     interactive: true
                 }).addTo(detailMap);
+                marker._wlBaseRadius = baseR;
 
                 var tipHtml = '<b>DeepMind Mean</b> +' + pt.tau + 'h<br>' +
                     pt.lat.toFixed(1) + '\u00B0N ' + pt.lon.toFixed(1) + '\u00B0E<br>' +
@@ -4525,6 +4599,14 @@
                 marker.bindTooltip(tipHtml, { direction: 'top', offset: [0, -6] });
                 _rtWeatherlabMarkers.push(marker);
             }
+        }
+
+        // Update filter count
+        var countEl = document.getElementById('rt-weatherlab-filter-count');
+        if (countEl) {
+            countEl.textContent = _rtWeatherlabMinCat
+                ? shownCount + '/' + memberKeys.length + ' members'
+                : memberKeys.length + ' members';
         }
     }
 
@@ -4548,12 +4630,13 @@
 
         var newTraces = [];
 
-        // Compute min/max envelope across all members
+        // Compute min/max envelope across filtered members
         var members = _rtWeatherlabData.members || {};
         var memberKeys = Object.keys(members);
         var tauMap = {};  // tau -> {winds: [], times: ISO}
         for (var mi = 0; mi < memberKeys.length; mi++) {
             var pts = members[memberKeys[mi]].points;
+            if (!_wlMemberReachesCat(pts, _rtWeatherlabMinCat)) continue;
             if (!pts) continue;
             for (var pi = 0; pi < pts.length; pi++) {
                 var pt = pts[pi];
@@ -4668,10 +4751,14 @@
     function _rtRemoveWeatherlab() {
         _rtClearWeatherlabLayers();
         _rtClearWeatherlabIntensity();
+        if (detailMap) detailMap.off('zoomend', _rtWeatherlabOnZoom);
         _rtWeatherlabData = null;
         _rtWeatherlabVisible = false;
+        _rtWeatherlabMinCat = null;
         var btn = document.getElementById('rt-weatherlab-btn');
         if (btn) { btn.style.background = 'rgba(0,229,255,0.15)'; btn.title = ''; }
+        var filterEl = document.getElementById('rt-weatherlab-filter');
+        if (filterEl) filterEl.style.display = 'none';
     }
 
     /**

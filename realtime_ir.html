@@ -289,6 +289,21 @@
                                     style="background:rgba(116,185,255,0.2);">Intensity</button>
                             </div>
                             <div id="rt-model-legend" class="rt-model-legend"></div>
+                            <!-- DeepMind ensemble filter (shown when DeepMind active) -->
+                            <div id="rt-weatherlab-filter" style="display:none;margin-top:4px;padding-top:4px;border-top:1px solid rgba(255,255,255,0.06);">
+                                <span style="font-size:9px;color:#00e5ff;">DeepMind filter:</span>
+                                <select id="rt-weatherlab-cat-filter" onchange="window._rtFilterWeatherlabByCat(this.value)"
+                                    style="font-size:9px;padding:1px 4px;border:1px solid rgba(0,229,255,0.3);border-radius:3px;background:#0f172a;color:#e2e8f0;font-family:'JetBrains Mono',monospace;margin-left:4px;">
+                                    <option value="">All members</option>
+                                    <option value="TS">Reaches TS+</option>
+                                    <option value="C1">Reaches Cat 1+</option>
+                                    <option value="C2">Reaches Cat 2+</option>
+                                    <option value="C3">Reaches Cat 3+</option>
+                                    <option value="C4">Reaches Cat 4+</option>
+                                    <option value="C5">Reaches Cat 5</option>
+                                </select>
+                                <span id="rt-weatherlab-filter-count" style="font-size:9px;color:#64748b;margin-left:4px;"></span>
+                            </div>
                         </div>
                     </div>
                 </div>
