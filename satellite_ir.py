@@ -665,24 +665,22 @@ def open_himawari_subset(s3_prefix: str, center_lat: float, center_lon: float,
     total_nlines = HIMAWARI_NLINES_PER_SEG * HIMAWARI_N_SEGMENTS  # 5500
     total_ncols = HIMAWARI_NCOLS  # 5500
 
-    # The pixel scale (radians per pixel)
-    # Full disk covers ±~0.1518 radians at 2km
-    # CFAC/LFAC for 2km: 20466275 (from JMA docs)
-    cfac = 20466275.0
+    # Pixel scale: at nadir, 1 pixel = 2 km = 2000 m
+    # IFOV = 2000 / sat_height = 5.589e-5 rad
+    # pixels_per_rad = 1 / IFOV = 17893
     coff = total_ncols / 2.0   # 2750
-    lfac = 20466275.0
     loff = total_nlines / 2.0  # 2750
+    pix_per_rad = HIMAWARI_SAT_HEIGHT / 2000.0  # 17893.01
 
     def latlon_to_pixel(lat, lon):
         """Convert lat/lon to pixel row/col in full-disk image."""
         try:
             x_m, y_m = proj(lon, lat)
-            # Convert metres to intermediate coords (per JMA formula)
             x_rad = x_m / HIMAWARI_SAT_HEIGHT
             y_rad = y_m / HIMAWARI_SAT_HEIGHT
-            col = coff + x_rad * cfac / 65536.0
-            row = loff - y_rad * lfac / 65536.0
-            return int(row), int(col)
+            col = coff + x_rad * pix_per_rad
+            row = loff - y_rad * pix_per_rad
+            return int(round(row)), int(round(col))
         except Exception:
             return None, None
 
