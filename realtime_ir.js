@@ -4552,6 +4552,40 @@
                 marker.bindTooltip(tipHtml, { direction: 'top', offset: [0, -4] });
                 _rtWeatherlabMarkers.push(marker);
             }
+
+            // LMI marker — diamond at the point of maximum intensity
+            var lmiPt = null;
+            var lmiWind = -1;
+            for (var li = 0; li < pts.length; li++) {
+                if (pts[li].wind != null && pts[li].wind > lmiWind) {
+                    lmiWind = pts[li].wind;
+                    lmiPt = pts[li];
+                }
+            }
+            if (lmiPt && lmiWind >= 34) {
+                var lmiCat = windToCategory(lmiWind);
+                var lmiColor = SS_COLORS[lmiCat] || '#64748b';
+                var lmiR = 3.5;
+                var lmiMarker = L.circleMarker([lmiPt.lat, lmiPt.lon], {
+                    radius: lmiR * s,
+                    color: '#fff',
+                    fillColor: lmiColor,
+                    fillOpacity: 1,
+                    weight: 1.2 * s,
+                    opacity: 0.9,
+                    interactive: true
+                }).addTo(detailMap);
+                lmiMarker._wlBaseRadius = lmiR;
+
+                var lmiTip = '<b>Member ' + key + ' LMI</b><br>' +
+                    '+' + lmiPt.tau + 'h \u00B7 ' + lmiWind.toFixed(0) + ' kt' +
+                    (lmiPt.pres != null ? ' \u00B7 ' + lmiPt.pres.toFixed(0) + ' hPa' : '') +
+                    '<br>' + lmiPt.lat.toFixed(1) + '\u00B0N ' + lmiPt.lon.toFixed(1) + '\u00B0E' +
+                    '<br><span style="color:' + lmiColor + ';">' + lmiCat + '</span>';
+
+                lmiMarker.bindTooltip(lmiTip, { direction: 'top', offset: [0, -5] });
+                _rtWeatherlabMarkers.push(lmiMarker);
+            }
         }
 
         // Render ensemble mean as thick line
@@ -4598,6 +4632,40 @@
 
                 marker.bindTooltip(tipHtml, { direction: 'top', offset: [0, -6] });
                 _rtWeatherlabMarkers.push(marker);
+            }
+
+            // LMI marker for ensemble mean
+            var meanLmiPt = null;
+            var meanLmiWind = -1;
+            for (var ml = 0; ml < mean.points.length; ml++) {
+                if (mean.points[ml].wind != null && mean.points[ml].wind > meanLmiWind) {
+                    meanLmiWind = mean.points[ml].wind;
+                    meanLmiPt = mean.points[ml];
+                }
+            }
+            if (meanLmiPt && meanLmiWind >= 34) {
+                var mlCat = windToCategory(meanLmiWind);
+                var mlColor = SS_COLORS[mlCat] || '#64748b';
+                var mlR = 6;
+                var mlMarker = L.circleMarker([meanLmiPt.lat, meanLmiPt.lon], {
+                    radius: mlR * s,
+                    color: '#fff',
+                    fillColor: mlColor,
+                    fillOpacity: 1,
+                    weight: 2 * s,
+                    opacity: 1,
+                    interactive: true
+                }).addTo(detailMap);
+                mlMarker._wlBaseRadius = mlR;
+
+                var mlTip = '<b>DeepMind Mean LMI</b><br>' +
+                    '+' + meanLmiPt.tau + 'h \u00B7 ' + meanLmiWind.toFixed(0) + ' kt' +
+                    (meanLmiPt.pres != null ? ' \u00B7 ' + meanLmiPt.pres.toFixed(0) + ' hPa' : '') +
+                    '<br>' + meanLmiPt.lat.toFixed(1) + '\u00B0N ' + meanLmiPt.lon.toFixed(1) + '\u00B0E' +
+                    '<br><span style="color:' + mlColor + ';">' + mlCat + '</span>';
+
+                mlMarker.bindTooltip(mlTip, { direction: 'top', offset: [0, -7] });
+                _rtWeatherlabMarkers.push(mlMarker);
             }
         }
 
