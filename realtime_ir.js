@@ -4444,8 +4444,10 @@
             // Hide distribution panels
             var distEl = document.getElementById('rt-dm-intensity-dist');
             var changeEl = document.getElementById('rt-dm-change-dist');
+            var lmiEl = document.getElementById('rt-dm-lmi-dist');
             if (distEl) distEl.style.display = 'none';
             if (changeEl) changeEl.style.display = 'none';
+            if (lmiEl) lmiEl.style.display = 'none';
             return;
         }
 
@@ -4908,12 +4910,15 @@
 
         var distEl = document.getElementById('rt-dm-intensity-dist');
         var changeEl = document.getElementById('rt-dm-change-dist');
+        var lmiEl = document.getElementById('rt-dm-lmi-dist');
         if (distEl) distEl.style.display = '';
         if (changeEl) changeEl.style.display = '';
+        if (lmiEl) lmiEl.style.display = '';
 
         _rtDmHistTauIdx = 0;
         _rtRenderIntensityHist();
         _rtRenderChangeHist();
+        _rtRenderLmiHist();
     }
 
     window._rtDmHistSlide = function (idx) {
@@ -5175,16 +5180,149 @@
     }
 
     /** Clean up ensemble distribution panels */
+    /**
+     * Render LMI distribution — histogram of each member's lifetime max wind.
+     */
+    function _rtRenderLmiHist() {
+        if (!_rtDmEnsData || typeof Plotly === 'undefined') return;
+
+        var chartEl = document.getElementById('rt-dm-lmi-chart');
+        if (!chartEl) return;
+
+        // Compute LMI for each member: max wind across all lead times
+        var intensity = _rtDmEnsData.intensity || {};
+        var taus = _rtDmEnsData.lead_times_h || [];
+        var nMembers = _rtDmEnsData.n_members || 0;
+
+        // For each member index, find the max wind across all taus
+        var lmiWinds = [];
+        for (var mi = 0; mi < nMembers; mi++) {
+            var maxW = -Infinity;
+            for (var ti = 0; ti < taus.length; ti++) {
+                var tauKey = String(Math.round(taus[ti]));
+                var data = intensity[tauKey];
+                if (data && data.winds && data.winds[mi] != null) {
+                    if (data.winds[mi] > maxW) maxW = data.winds[mi];
+                }
+            }
+            if (maxW > -Infinity) lmiWinds.push(maxW);
+        }
+
+        if (lmiWinds.length === 0) return;
+
+        // Pre-bin into 5-kt bins
+        var binSize = 5;
+        var binCenters = [];
+        var binCounts = [];
+        var binColors = [];
+        for (var b = 0; b < 185; b += binSize) {
+            var center = b + binSize / 2;
+            var count = 0;
+            for (var wi = 0; wi < lmiWinds.length; wi++) {
+                if (lmiWinds[wi] >= b && lmiWinds[wi] < b + binSize) count++;
+            }
+            if (count > 0 || (b >= 20 && b <= 160)) {
+                binCenters.push(center);
+                binCounts.push(count);
+                binColors.push(_dmWindColor(center));
+            }
+        }
+
+        // Percentiles
+        var sorted = lmiWinds.slice().sort(function (a, b) { return a - b; });
+        var p = function (pct) { return sorted[Math.floor(pct / 100 * (sorted.length - 1))]; };
+        var mean = lmiWinds.reduce(function (a, b) { return a + b; }, 0) / lmiWinds.length;
+
+        var trace = {
+            x: binCenters,
+            y: binCounts,
+            type: 'bar',
+            width: binSize * 0.9,
+            marker: {
+                color: binColors,
+                line: { color: 'rgba(0,0,0,0.3)', width: 0.5 }
+            },
+            hovertemplate: '%{x:.0f} kt<br>%{y} members<extra></extra>'
+        };
+
+        // SS threshold lines
+        var shapes = [34, 64, 83, 96, 113, 137].map(function (v) {
+            return {
+                type: 'line', x0: v, x1: v, y0: 0, y1: 1, yref: 'paper',
+                line: { color: 'rgba(255,255,255,0.15)', width: 1, dash: 'dot' }
+            };
+        });
+        // Mean line
+        shapes.push({
+            type: 'line', x0: mean, x1: mean, y0: 0, y1: 1, yref: 'paper',
+            line: { color: '#00e5ff', width: 1.5 }
+        });
+
+        var annotations = [
+            { x: p(10), y: 1.02, yref: 'paper', text: 'P10: ' + p(10).toFixed(0), showarrow: false,
+              font: { size: 8, color: '#64748b' }, yanchor: 'bottom' },
+            { x: p(50), y: 1.02, yref: 'paper', text: 'P50: ' + p(50).toFixed(0), showarrow: false,
+              font: { size: 9, color: '#e2e8f0' }, yanchor: 'bottom' },
+            { x: p(90), y: 1.02, yref: 'paper', text: 'P90: ' + p(90).toFixed(0), showarrow: false,
+              font: { size: 8, color: '#64748b' }, yanchor: 'bottom' }
+        ];
+
+        // Compute category probabilities for subtitle
+        var catProbs = {};
+        var cats = [['C1+', 64], ['C3+', 96], ['C5', 137]];
+        for (var ci = 0; ci < cats.length; ci++) {
+            var cnt = lmiWinds.filter(function (w) { return w >= cats[ci][1]; }).length;
+            catProbs[cats[ci][0]] = Math.round(cnt / lmiWinds.length * 100);
+        }
+        annotations.push({
+            x: 1, y: 1.08, xref: 'paper', yref: 'paper',
+            text: 'C1+: ' + catProbs['C1+'] + '%  C3+: ' + catProbs['C3+'] + '%  C5: ' + catProbs['C5'] + '%',
+            showarrow: false, font: { size: 8, color: '#94a3b8' },
+            xanchor: 'right', yanchor: 'bottom'
+        });
+
+        var layout = {
+            height: 180,
+            margin: { t: 30, r: 10, b: 30, l: 40 },
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: 'rgba(0,0,0,0)',
+            font: { family: 'JetBrains Mono, monospace', size: 9, color: '#94a3b8' },
+            xaxis: {
+                title: { text: 'LMI Vmax (kt)', font: { size: 9 } },
+                range: [0, 185],
+                dtick: 20,
+                gridcolor: 'rgba(255,255,255,0.05)',
+                zeroline: false
+            },
+            yaxis: {
+                title: { text: 'Count', font: { size: 9 } },
+                gridcolor: 'rgba(255,255,255,0.05)',
+                zeroline: false
+            },
+            shapes: shapes,
+            annotations: annotations,
+            bargap: 0.08
+        };
+
+        Plotly.newPlot(chartEl, [trace], layout, {
+            displayModeBar: false, responsive: false
+        });
+    }
+
     function _rtRemoveDmEnsemble() {
         _rtDmEnsData = null;
         var distEl = document.getElementById('rt-dm-intensity-dist');
         var changeEl = document.getElementById('rt-dm-change-dist');
+        var lmiEl = document.getElementById('rt-dm-lmi-dist');
         if (distEl) distEl.style.display = 'none';
         if (changeEl) changeEl.style.display = 'none';
+        if (lmiEl) lmiEl.style.display = 'none';
         var histChart = document.getElementById('rt-dm-hist-chart');
         var changeChart = document.getElementById('rt-dm-change-chart');
+        var lmiChart = document.getElementById('rt-dm-lmi-chart');
         if (histChart && typeof Plotly !== 'undefined') Plotly.purge(histChart);
         if (changeChart && typeof Plotly !== 'undefined') Plotly.purge(changeChart);
+        if (lmiChart && typeof Plotly !== 'undefined') Plotly.purge(lmiChart);
     }
 
     function _rtRemoveWeatherlab() {
