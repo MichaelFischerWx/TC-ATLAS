@@ -316,8 +316,8 @@
                         </h3>
                         <span style="font-size:0.65rem;color:#00e5ff;">DeepMind 1K</span>
                     </div>
-                    <div id="rt-dm-hist-chart"></div>
-                    <div style="display:flex;align-items:center;gap:8px;padding:4px 0;">
+                    <div id="rt-dm-hist-chart" style="width:100%;"></div>
+                    <div style="display:flex;align-items:center;gap:8px;padding:4px 0;position:relative;z-index:10;">
                         <span style="font-size:0.6rem;color:#64748b;white-space:nowrap;">Forecast hour:</span>
                         <input type="range" id="rt-dm-hist-slider" min="0" max="52" value="0"
                             oninput="window._rtDmHistSlide(this.value)"
@@ -339,8 +339,8 @@
                                 class="rt-model-filter-btn active" style="font-size:8px;padding:1px 5px;background:rgba(0,229,255,0.2);">24h</button>
                         </div>
                     </div>
-                    <div id="rt-dm-change-chart"></div>
-                    <div style="display:flex;align-items:center;gap:8px;padding:4px 0;">
+                    <div id="rt-dm-change-chart" style="width:100%;"></div>
+                    <div style="display:flex;align-items:center;gap:8px;padding:4px 0;position:relative;z-index:10;">
                         <span style="font-size:0.6rem;color:#64748b;white-space:nowrap;">Forecast hour:</span>
                         <input type="range" id="rt-dm-change-slider" min="0" max="52" value="4"
                             oninput="window._rtDmChangeSlide(this.value)"
