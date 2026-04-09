@@ -239,6 +239,57 @@
                     <div id="ir-intensity-chart" class="ir-intensity-chart"></div>
                 </div>
 
+                <!-- Model Forecast Overlay -->
+                <div class="ir-info-section" id="rt-models-section" style="display:none;">
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                        <h3 class="ir-info-heading" style="margin-bottom:0;padding-bottom:0;border-bottom:none;">Model Forecasts</h3>
+                        <div style="display:flex;align-items:center;gap:6px;">
+                            <button id="rt-models-toggle-btn" onclick="window._rtToggleModelOverlay()"
+                                class="rt-model-toggle-btn">Models</button>
+                            <span id="rt-models-status" style="font-size:0.68rem;color:#64748b;"></span>
+                        </div>
+                    </div>
+
+                    <!-- Model controls (hidden until toggle) -->
+                    <div id="rt-model-controls" style="display:none;">
+                        <div class="rt-model-controls-inner">
+                            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+                                <label style="font-size:10px;font-weight:600;color:#74b9ff;text-transform:uppercase;letter-spacing:0.5px;">Cycle</label>
+                                <select id="rt-model-cycle-select" onchange="window._rtSelectModelCycle(this.value)"
+                                    class="rt-model-cycle-select"></select>
+                                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
+                                    <input type="checkbox" id="rt-model-auto-sync" checked
+                                        onchange="window._rtToggleModelAutoSync()">
+                                    <span style="font-size:9px;color:#64748b;">Auto</span>
+                                </label>
+                            </div>
+                            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:4px;">
+                                <span style="font-size:9px;color:#64748b;">Show:</span>
+                                <button class="rt-model-filter-btn active" data-mtype="official"
+                                    onclick="window._rtToggleModelTypeFilter('official')"
+                                    style="color:#ff4757;border-color:rgba(255,71,87,0.4);background:rgba(255,71,87,0.15);">Official</button>
+                                <button class="rt-model-filter-btn active" data-mtype="dynamical"
+                                    onclick="window._rtToggleModelTypeFilter('dynamical')">Dynamical</button>
+                                <button class="rt-model-filter-btn active" data-mtype="consensus"
+                                    onclick="window._rtToggleModelTypeFilter('consensus')">Consensus</button>
+                                <button class="rt-model-filter-btn active" data-mtype="ai"
+                                    onclick="window._rtToggleModelTypeFilter('ai')"
+                                    style="color:#00ff87;border-color:rgba(0,255,135,0.4);background:rgba(0,255,135,0.15);">AI</button>
+                                <button class="rt-model-filter-btn" data-mtype="statistical"
+                                    onclick="window._rtToggleModelTypeFilter('statistical')"
+                                    style="color:#64748b;">Statistical</button>
+                                <span style="flex:1;"></span>
+                                <button id="rt-model-interp-btn" class="rt-model-filter-btn"
+                                    onclick="window._rtToggleModelInterp()">Late Cycle</button>
+                                <button id="rt-model-intensity-btn" class="rt-model-filter-btn"
+                                    onclick="window._rtToggleModelIntensity()"
+                                    style="background:rgba(116,185,255,0.2);">Intensity</button>
+                            </div>
+                            <div id="rt-model-legend" class="rt-model-legend"></div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Official forecast link -->
                 <div class="ir-info-section" id="ir-official-section" style="display:none;">
                     <a id="ir-official-link" href="#" target="_blank" rel="noopener"

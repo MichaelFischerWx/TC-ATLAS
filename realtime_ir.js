@@ -451,6 +451,46 @@
     var validFrames = [];      // indices of frames that loaded actual tile data
     var frameHasError = [];    // parallel to animFrameLayers — true if frame had tile errors
 
+    // ── Model Forecast Overlay State ──────────────────────────────
+    var _rtModelData = null;           // Full a-deck response from API
+    var _rtModelVisible = false;       // Overlay is active
+    var _rtModelAutoSync = true;       // Auto-switch cycle based on IR frame time
+    var _rtModelShowIntensity = true;  // Show intensity forecasts on chart
+    var _rtModelActiveCycle = null;    // Currently displayed init time (YYYYMMDDHH)
+    var _rtModelTrackLayers = [];      // Leaflet polylines on map
+    var _rtModelMarkerLayers = [];     // Leaflet circle markers for forecast points
+    var _rtModelLegendModels = [];     // Models visible in current cycle
+    var _rtModelLastAtcf = null;       // Last ATCF ID loaded
+    var _rtModelTypeFilters = { official: true, dynamical: true, ai: true, consensus: true, statistical: false };
+    var _rtModelShowInterp = false;    // false = show all, true = interpolated/late-cycle only
+    var _rtModelIntensityTraces = [];  // Plotly trace indices for intensity chart
+
+    var RT_MODEL_COLORS = {
+        'OFCL': '#ff4757', 'JTWC': '#ffa502',
+        'AVNO': '#ff6b6b', 'AVNI': '#ff6b6b', 'GFSO': '#ff6b6b',
+        'EMX':  '#4ecdc4', 'EMXI': '#4ecdc4', 'EEMN': '#45b7aa',
+        'CMC':  '#ffe66d', 'CMCI': '#ffe66d',
+        'UKM':  '#a29bfe', 'UKMI': '#a29bfe',
+        'NVGM': '#6c5ce7', 'NGMI': '#6c5ce7',
+        'HWRF': '#00b894', 'HWFI': '#00b894',
+        'HMON': '#e17055', 'HMNI': '#e17055',
+        'HAFS': '#00cec9', 'HAFA': '#00cec9', 'HAFB': '#81ecec',
+        'HFSA': '#00cec9', 'HFAI': '#00cec9', 'HFSB': '#81ecec', 'HFBI': '#81ecec',
+        'CTCX': '#fab1a0', 'COTC': '#fab1a0', 'COTI': '#fab1a0',
+        'GFDN': '#e17055', 'GFNI': '#e17055',
+        'AVNX': '#ff6b6b', 'NGX':  '#6c5ce7',
+        'AEMN': '#ff8a80', 'NEMN': '#b388ff', 'CEMN': '#fff176',
+        'CHIP': '#ce93d8',
+        'GENI': '#00ff87', 'GEN2': '#00ff87',
+        'GRPH': '#00e676', 'GRPI': '#00e676', 'GRP2': '#00e676',
+        'APTS': '#76ff03', 'PTSI': '#76ff03',
+        'AIFS': '#69f0ae', 'AIFI': '#69f0ae',
+        'SHIP': '#ffeaa7', 'DSHP': '#fdcb6e', 'LGEM': '#e2b04a',
+        'TVCN': '#ffffff', 'TVCA': '#ffffff', 'TVCE': '#f0f0f0', 'TVCX': '#e0e0e0',
+        'IVCN': '#dfe6e9', 'ICON': '#c8d6e5', 'FSSE': '#74b9ff',
+        'GUNA': '#b2bec3', 'CGUN': '#636e72'
+    };
+
     // Cached DOM refs for animation hot path (populated on first use)
     var _elFrameTime = null;
     var _elSatLabel = null;
@@ -2283,6 +2323,9 @@
     function openStormDetail(atcfId) {
         currentStormId = atcfId;
 
+        // Clean up model overlay from previous storm
+        _rtRemoveModelOverlay();
+
         // Stop global animation if running (frames stay in memory for return)
         stopGlobalAnimation();
 
@@ -2363,6 +2406,9 @@
         animIndex = 0;
         initDetailMap(storm);
 
+        // Load model forecasts (a-deck)
+        _rtLoadModelForecasts(storm);
+
         // Fetch metadata for intensity chart
         fetchStormMetadata(atcfId, function (err, meta) {
             if (!err && meta) {
@@ -2387,6 +2433,9 @@
     function closeStormDetail() {
         currentStormId = null;
         stopAnimation();
+
+        // Clean up model overlay
+        _rtRemoveModelOverlay();
 
         // Reset product state
         removeVigorLayer();
@@ -2468,6 +2517,11 @@
         animIndex = idx;
         animFrameLayers[idx].setOpacity(0.85);
         updateFrameOverlay();
+
+        // Sync model overlay to new frame time
+        if (_rtModelVisible && _rtModelAutoSync && _rtModelData) {
+            _rtSyncModelCycleToIR();
+        }
     }
 
     /** Find the position of animIndex within validFrames (or -1) */
@@ -3059,6 +3113,11 @@
         }
         document.getElementById('ir-satellite-label').textContent =
             'GeoColor \u2014 ' + detailSatName;
+
+        // Sync model overlay to new frame time
+        if (_rtModelVisible && _rtModelAutoSync && _rtModelData) {
+            _rtSyncModelCycleToIR();
+        }
     }
 
     // ── Client-Side Vigor Computation Helpers ────────────────
@@ -3706,6 +3765,495 @@
         }
 
         content.innerHTML = html;
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  MODEL FORECAST OVERLAY (ATCF A-DECK)
+    // ═══════════════════════════════════════════════════════════
+
+    /**
+     * Load model forecast data when a storm is selected.
+     */
+    function _rtLoadModelForecasts(storm) {
+        var section = document.getElementById('rt-models-section');
+        var statusEl = document.getElementById('rt-models-status');
+
+        var atcfId = storm.atcf_id;
+        if (!atcfId) {
+            if (section) section.style.display = 'none';
+            return;
+        }
+        if (section) section.style.display = '';
+
+        // Skip if already loaded for this storm
+        if (atcfId === _rtModelLastAtcf && _rtModelData) return;
+        _rtModelLastAtcf = atcfId;
+        _rtModelData = null;
+
+        if (statusEl) statusEl.textContent = 'Loading...';
+
+        fetch(API_BASE + '/global/adeck?atcf_id=' + encodeURIComponent(atcfId))
+            .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+            .then(function (json) {
+                _rtModelData = json;
+
+                // Populate cycle dropdown
+                var sel = document.getElementById('rt-model-cycle-select');
+                if (sel) {
+                    sel.innerHTML = '';
+                    var inits = json.init_times || [];
+                    for (var i = 0; i < inits.length; i++) {
+                        var dt = inits[i];
+                        var opt = document.createElement('option');
+                        opt.value = dt;
+                        opt.textContent = dt.substring(0,4) + '-' + dt.substring(4,6) + '-' +
+                            dt.substring(6,8) + ' ' + dt.substring(8,10) + ' UTC';
+                        sel.appendChild(opt);
+                    }
+                }
+
+                if (statusEl) statusEl.textContent = json.n_cycles + ' cycles, ' + json.models.length + ' models';
+
+                // Check if this storm has any interpolated models
+                var hasInterp = false;
+                var cycles = json.cycles || {};
+                var cKeys = Object.keys(cycles);
+                for (var ci = 0; ci < cKeys.length && !hasInterp; ci++) {
+                    var cyc = cycles[cKeys[ci]];
+                    var tKeys = Object.keys(cyc);
+                    for (var tj = 0; tj < tKeys.length; tj++) {
+                        if (cyc[tKeys[tj]].interp === true) { hasInterp = true; break; }
+                    }
+                }
+
+                var interpBtn = document.getElementById('rt-model-interp-btn');
+                _rtModelShowInterp = false;
+                if (!hasInterp) {
+                    if (interpBtn) {
+                        interpBtn.title = 'No interpolated models available for this storm era.';
+                        interpBtn.disabled = true;
+                        interpBtn.style.opacity = '0.4';
+                    }
+                } else {
+                    if (interpBtn) {
+                        interpBtn.title = 'Click to show only late-cycle (interpolated) models.';
+                        interpBtn.disabled = false;
+                        interpBtn.style.opacity = '';
+                    }
+                }
+
+                // If overlay is active, render current cycle
+                if (_rtModelVisible) {
+                    _rtSyncModelCycleToIR();
+                }
+            })
+            .catch(function (e) {
+                if (statusEl) statusEl.textContent = 'Unavailable';
+                console.warn('[RT Models] A-deck load failed', e);
+            });
+    }
+
+    /**
+     * Toggle the model forecast overlay on/off.
+     */
+    window._rtToggleModelOverlay = function () {
+        var btn = document.getElementById('rt-models-toggle-btn');
+        var controls = document.getElementById('rt-model-controls');
+
+        if (_rtModelVisible) {
+            _rtModelVisible = false;
+            if (btn) btn.textContent = 'Models';
+            if (controls) controls.style.display = 'none';
+            _rtClearModelLayers();
+            _rtClearModelIntensityTraces();
+            return;
+        }
+
+        _rtModelVisible = true;
+        if (btn) btn.textContent = 'Hide Models';
+        if (controls) controls.style.display = '';
+
+        // Update intensity button to reflect current state
+        var intBtn = document.getElementById('rt-model-intensity-btn');
+        if (intBtn) intBtn.style.background = _rtModelShowIntensity ? 'rgba(116,185,255,0.2)' : '';
+
+        if (_rtModelData) {
+            _rtSyncModelCycleToIR();
+        }
+    };
+
+    /**
+     * Toggle auto-sync of model cycle to IR frame time.
+     */
+    window._rtToggleModelAutoSync = function () {
+        _rtModelAutoSync = document.getElementById('rt-model-auto-sync').checked;
+        if (_rtModelAutoSync && _rtModelVisible) {
+            _rtSyncModelCycleToIR();
+        }
+    };
+
+    /**
+     * Manually select a forecast cycle from the dropdown.
+     */
+    window._rtSelectModelCycle = function (initTime) {
+        _rtModelAutoSync = false;
+        document.getElementById('rt-model-auto-sync').checked = false;
+        _rtRenderModelCycle(initTime);
+        if (_rtModelShowIntensity) {
+            _rtRenderModelIntensityTraces(initTime);
+        }
+    };
+
+    /**
+     * Toggle a model type filter.
+     */
+    window._rtToggleModelTypeFilter = function (mtype) {
+        _rtModelTypeFilters[mtype] = !_rtModelTypeFilters[mtype];
+
+        var _filterBtnStyles = {
+            official: { color: '#ff4757', border: 'rgba(255,71,87,0.4)', bg: 'rgba(255,71,87,0.15)' },
+            ai:       { color: '#00ff87', border: 'rgba(0,255,135,0.4)', bg: 'rgba(0,255,135,0.15)' }
+        };
+
+        document.querySelectorAll('.rt-model-filter-btn').forEach(function (btn) {
+            var t = btn.getAttribute('data-mtype');
+            if (!t) return;
+            var isActive = _rtModelTypeFilters[t];
+            btn.classList.toggle('active', isActive);
+
+            var styles = _filterBtnStyles[t];
+            if (styles) {
+                if (isActive) {
+                    btn.style.color = styles.color;
+                    btn.style.borderColor = styles.border;
+                    btn.style.background = styles.bg;
+                } else {
+                    btn.style.color = '';
+                    btn.style.borderColor = '';
+                    btn.style.background = '';
+                }
+            }
+        });
+
+        if (_rtModelVisible && _rtModelActiveCycle) {
+            _rtRenderModelCycle(_rtModelActiveCycle);
+            if (_rtModelShowIntensity) {
+                _rtRenderModelIntensityTraces(_rtModelActiveCycle);
+            }
+        }
+    };
+
+    /**
+     * Toggle interpolated-only vs all models.
+     */
+    window._rtToggleModelInterp = function () {
+        _rtModelShowInterp = !_rtModelShowInterp;
+
+        var btn = document.getElementById('rt-model-interp-btn');
+        if (btn) {
+            if (_rtModelShowInterp) {
+                btn.title = 'Filtering to late-cycle (interpolated) models only. Click to show all.';
+                btn.style.color = '#fbbf24';
+                btn.style.borderColor = 'rgba(251,191,36,0.4)';
+                btn.style.background = 'rgba(251,191,36,0.15)';
+            } else {
+                btn.title = 'Click to show only late-cycle (interpolated) models.';
+                btn.style.color = '';
+                btn.style.borderColor = '';
+                btn.style.background = '';
+            }
+        }
+
+        if (_rtModelVisible && _rtModelActiveCycle) {
+            _rtRenderModelCycle(_rtModelActiveCycle);
+            if (_rtModelShowIntensity) {
+                _rtRenderModelIntensityTraces(_rtModelActiveCycle);
+            }
+        }
+    };
+
+    /**
+     * Toggle intensity forecast traces on the chart.
+     */
+    window._rtToggleModelIntensity = function () {
+        _rtModelShowIntensity = !_rtModelShowIntensity;
+        var btn = document.getElementById('rt-model-intensity-btn');
+        if (btn) btn.style.background = _rtModelShowIntensity ? 'rgba(116,185,255,0.2)' : '';
+
+        if (_rtModelShowIntensity && _rtModelActiveCycle) {
+            _rtRenderModelIntensityTraces(_rtModelActiveCycle);
+        } else {
+            _rtClearModelIntensityTraces();
+        }
+    };
+
+    /**
+     * Find the most recent init cycle at or before the current IR frame time.
+     */
+    function _rtSyncModelCycleToIR() {
+        if (!_rtModelData || !_rtModelData.init_times || !_rtModelData.init_times.length) return;
+
+        // Get current IR datetime from the animation frame
+        var irDtStr = (animFrameTimes && animIndex >= 0 && animIndex < animFrameTimes.length)
+            ? animFrameTimes[animIndex]
+            : null;
+
+        var inits = _rtModelData.init_times;
+        var bestInit = inits[inits.length - 1]; // default to latest
+
+        if (irDtStr) {
+            var irDate = new Date(irDtStr);
+            if (!isNaN(irDate.getTime())) {
+                var irYMDH = irDate.getUTCFullYear().toString() +
+                    ('0' + (irDate.getUTCMonth() + 1)).slice(-2) +
+                    ('0' + irDate.getUTCDate()).slice(-2) +
+                    ('0' + irDate.getUTCHours()).slice(-2);
+
+                for (var i = inits.length - 1; i >= 0; i--) {
+                    if (inits[i] <= irYMDH) {
+                        bestInit = inits[i];
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Skip re-render if cycle hasn't changed
+        if (bestInit === _rtModelActiveCycle) return;
+
+        // Update dropdown
+        var sel = document.getElementById('rt-model-cycle-select');
+        if (sel) sel.value = bestInit;
+
+        _rtRenderModelCycle(bestInit);
+        if (_rtModelShowIntensity) {
+            _rtRenderModelIntensityTraces(bestInit);
+        }
+    }
+
+    /**
+     * Render forecast tracks for a given init cycle on the detail map.
+     */
+    function _rtRenderModelCycle(initTime) {
+        _rtModelActiveCycle = initTime;
+        _rtClearModelLayers();
+
+        if (!_rtModelData || !_rtModelData.cycles || !_rtModelData.cycles[initTime]) return;
+        if (!detailMap) return;
+
+        var cycle = _rtModelData.cycles[initTime];
+        var legendHtml = '';
+        var _legendSeen = {};
+        _rtModelLegendModels = [];
+
+        var initDate = new Date(
+            parseInt(initTime.substring(0,4)),
+            parseInt(initTime.substring(4,6)) - 1,
+            parseInt(initTime.substring(6,8)),
+            parseInt(initTime.substring(8,10))
+        );
+
+        var techKeys = Object.keys(cycle).sort();
+
+        for (var ti = 0; ti < techKeys.length; ti++) {
+            var tech = techKeys[ti];
+            var forecast = cycle[tech];
+
+            // Apply type filters
+            if (!_rtModelTypeFilters[forecast.type]) continue;
+            // Apply interpolation filter
+            if (_rtModelShowInterp && forecast.interp === false) continue;
+
+            var points = forecast.points;
+            if (!points || points.length < 2) continue;
+
+            var color = forecast.color || RT_MODEL_COLORS[tech] || '#888';
+            var isOfficial = forecast.type === 'official';
+            var isConsensus = forecast.type === 'consensus';
+            var weight = isOfficial ? 3.5 : (isConsensus ? 2.5 : 1.5);
+            var opacity = isOfficial ? 1.0 : (isConsensus ? 0.9 : 0.6);
+            var dashArray = (isOfficial || isConsensus) ? null : '4,3';
+
+            // Build polyline from forecast points
+            var latlngs = [];
+            for (var pi = 0; pi < points.length; pi++) {
+                latlngs.push([points[pi].lat, points[pi].lon]);
+            }
+
+            var line = L.polyline(latlngs, {
+                color: color,
+                weight: weight,
+                opacity: opacity,
+                dashArray: dashArray,
+                interactive: false
+            }).addTo(detailMap);
+            _rtModelTrackLayers.push(line);
+
+            // Add markers at tau-0 (init) and every 24h
+            for (var mi = 0; mi < points.length; mi++) {
+                var pt = points[mi];
+                var isTau0 = (pt.tau === 0);
+                var is24h = (pt.tau > 0 && pt.tau % 24 === 0);
+
+                if (isTau0 || is24h) {
+                    var mRadius = isOfficial ? (isTau0 ? 5 : 4) : (isTau0 ? 3.5 : 2.5);
+                    var mWeight = isOfficial ? 2 : (isTau0 ? 1.5 : 1);
+                    var marker = L.circleMarker([pt.lat, pt.lon], {
+                        radius: mRadius,
+                        color: isTau0 ? '#fff' : color,
+                        fillColor: color,
+                        fillOpacity: isTau0 ? 1.0 : 0.7,
+                        weight: mWeight,
+                        opacity: 0.8,
+                        interactive: true
+                    }).addTo(detailMap);
+
+                    var tauLabel = isTau0 ? forecast.name + ' init' : forecast.name + ' +' + pt.tau + 'h';
+                    if (pt.wind) tauLabel += ' \u00B7 ' + pt.wind + ' kt';
+                    marker.bindTooltip(tauLabel, { direction: 'top', offset: [0, -6] });
+
+                    _rtModelMarkerLayers.push(marker);
+                }
+            }
+
+            // Build legend entry
+            var legendKey = forecast.name + '|' + color;
+            _rtModelLegendModels.push(tech);
+            if (!_legendSeen[legendKey]) {
+                _legendSeen[legendKey] = true;
+                legendHtml += '<span class="rt-model-legend-item" style="color:' + color + ';">' +
+                    '<span class="rt-model-legend-swatch" style="background:' + color + ';"></span>' +
+                    forecast.name + '</span>';
+            }
+        }
+
+        var legendEl = document.getElementById('rt-model-legend');
+        if (legendEl) legendEl.innerHTML = legendHtml;
+    }
+
+    /**
+     * Render model intensity forecast traces on the Plotly intensity chart.
+     */
+    function _rtRenderModelIntensityTraces(initTime) {
+        _rtClearModelIntensityTraces();
+
+        if (!_rtModelData || !_rtModelData.cycles || !_rtModelData.cycles[initTime]) return;
+
+        var chartEl = document.getElementById('ir-intensity-chart');
+        if (!chartEl || !chartEl.data) return;
+
+        var cycle = _rtModelData.cycles[initTime];
+        var initDate = new Date(
+            parseInt(initTime.substring(0,4)),
+            parseInt(initTime.substring(4,6)) - 1,
+            parseInt(initTime.substring(6,8)),
+            parseInt(initTime.substring(8,10))
+        );
+
+        var newTraces = [];
+        var techKeys = Object.keys(cycle).sort();
+
+        for (var ti = 0; ti < techKeys.length; ti++) {
+            var tech = techKeys[ti];
+            var forecast = cycle[tech];
+            if (!_rtModelTypeFilters[forecast.type]) continue;
+            if (_rtModelShowInterp && forecast.interp === false) continue;
+
+            var points = forecast.points;
+            if (!points || points.length < 2) continue;
+
+            var times = [];
+            var winds = [];
+            var hasWind = false;
+            for (var pi = 0; pi < points.length; pi++) {
+                if (points[pi].wind != null) {
+                    var fDate = new Date(initDate.getTime() + points[pi].tau * 3600000);
+                    times.push(fDate.toISOString());
+                    winds.push(points[pi].wind);
+                    hasWind = true;
+                }
+            }
+
+            if (!hasWind || winds.length < 2) continue;
+
+            var color = forecast.color || RT_MODEL_COLORS[tech] || '#888';
+            var isOfficial = forecast.type === 'official';
+            var isConsensus = forecast.type === 'consensus';
+            newTraces.push({
+                x: times,
+                y: winds,
+                type: 'scatter',
+                mode: isOfficial ? 'lines+markers' : 'lines',
+                name: forecast.name,
+                line: {
+                    color: color,
+                    width: isOfficial ? 3 : (isConsensus ? 2.5 : 1.5),
+                    dash: 'solid'
+                },
+                marker: isOfficial ? { size: 5, symbol: 'diamond', color: color } : undefined,
+                opacity: isOfficial ? 1.0 : (isConsensus ? 0.85 : 0.65),
+                showlegend: false,
+                hovertemplate: forecast.name + ': %{y} kt<extra></extra>'
+            });
+        }
+
+        if (newTraces.length > 0 && typeof Plotly !== 'undefined') {
+            Plotly.addTraces(chartEl, newTraces);
+            _rtModelIntensityTraces = [];
+            var baseCount = chartEl.data.length - newTraces.length;
+            for (var i = 0; i < newTraces.length; i++) {
+                _rtModelIntensityTraces.push(baseCount + i);
+            }
+        }
+    }
+
+    /**
+     * Remove all model forecast layers from the map.
+     */
+    function _rtClearModelLayers() {
+        for (var i = 0; i < _rtModelTrackLayers.length; i++) {
+            if (detailMap) try { detailMap.removeLayer(_rtModelTrackLayers[i]); } catch (e) {}
+        }
+        _rtModelTrackLayers = [];
+        for (var j = 0; j < _rtModelMarkerLayers.length; j++) {
+            if (detailMap) try { detailMap.removeLayer(_rtModelMarkerLayers[j]); } catch (e) {}
+        }
+        _rtModelMarkerLayers = [];
+    }
+
+    /**
+     * Remove model intensity traces from the Plotly chart.
+     */
+    function _rtClearModelIntensityTraces() {
+        if (_rtModelIntensityTraces.length === 0) return;
+        var chartEl = document.getElementById('ir-intensity-chart');
+        if (!chartEl || typeof Plotly === 'undefined') return;
+
+        try {
+            var sorted = _rtModelIntensityTraces.slice().sort(function (a, b) { return b - a; });
+            Plotly.deleteTraces(chartEl, sorted);
+        } catch (e) {
+            console.warn('[RT Models] Failed to remove intensity traces', e);
+        }
+        _rtModelIntensityTraces = [];
+    }
+
+    /**
+     * Remove all model overlay state (called when switching/closing storms).
+     */
+    function _rtRemoveModelOverlay() {
+        _rtClearModelLayers();
+        _rtClearModelIntensityTraces();
+        _rtModelData = null;
+        _rtModelActiveCycle = null;
+        _rtModelLastAtcf = null;
+        _rtModelVisible = false;
+        var btn = document.getElementById('rt-models-toggle-btn');
+        if (btn) btn.textContent = 'Models';
+        var controls = document.getElementById('rt-model-controls');
+        if (controls) controls.style.display = 'none';
+        var section = document.getElementById('rt-models-section');
+        if (section) section.style.display = 'none';
     }
 
     function init() {

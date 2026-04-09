@@ -80,6 +80,11 @@ _STORM_CACHE_TTL = 300          # 5 minutes (matches Cloud Scheduler ping interv
 _IR_FRAME_CACHE_MAX = 200       # max cached IR frames (covers ~15 storms)
 _IR_FRAME_CACHE_TTL = 300       # 5 minutes per frame
 
+# Tb encoding constants (shared by /ir-raw endpoint and GCS prefetch)
+_TB_VMIN = 170.0
+_TB_VMAX = 310.0
+_TB_SCALE = 254.0 / (_TB_VMAX - _TB_VMIN)
+
 # ── GCS Raw Tb Frame Cache ──────────────────────────────────
 # Reuses the same bucket as global archive (GCS_IR_CACHE_BUCKET env var).
 # Stores raw Tb uint8 frames so subsequent colormap requests skip S3 fetches.
@@ -875,6 +880,7 @@ def _prefetch_ir_frames(storms: list):
     try:
         total_fetched = 0
         total_cached = 0
+        total_gcs_fetched = 0
         for storm in storms:
             atcf_id = storm["atcf_id"]
             center_lat = storm["lat"]
@@ -918,8 +924,67 @@ def _prefetch_ir_frames(storms: list):
             if storm_fetched:
                 print(f"[IR Pre-fetch] {atcf_id}: fetched {storm_fetched} new frames")
 
-        print(f"[IR Pre-fetch] Done — {total_fetched} new frames fetched, "
-              f"{total_cached} already cached")
+            # ── GCS raw Tb prefetch ─────────────────────────────────
+            # Proactively cache raw Tb uint8 frames to GCS so that
+            # /ir-raw requests are served instantly from the cache.
+            if _get_rt_gcs_bucket() is not None:
+                gcs_fetched = 0
+                for target_dt in reversed(frame_times):
+                    dt_str = target_dt.strftime("%Y%m%d%H%M")
+
+                    # Skip if already cached in GCS
+                    if _gcs_rt_get(atcf_id.upper(), dt_str) is not None:
+                        continue
+
+                    try:
+                        raw = fetch_ir_tb_raw(
+                            center_lat, center_lon, target_dt, box_deg
+                        )
+                    except Exception:
+                        continue
+
+                    if raw and raw.get("tb") is not None:
+                        tb = raw["tb"]
+                        arr = np.asarray(tb, dtype=np.float32)
+                        mask = ~np.isfinite(arr) | (arr <= 0)
+                        scaled = np.clip(
+                            (arr - _TB_VMIN) * _TB_SCALE + 1, 1, 255
+                        )
+                        scaled[mask] = 0
+                        encoded = scaled.astype(np.uint8)
+
+                        half = box_deg / 2.0
+                        frame_result = {
+                            "tb_data": base64.b64encode(
+                                encoded.tobytes()
+                            ).decode("ascii"),
+                            "tb_rows": encoded.shape[0],
+                            "tb_cols": encoded.shape[1],
+                            "tb_vmin": _TB_VMIN,
+                            "tb_vmax": _TB_VMAX,
+                            "datetime_utc": raw["datetime_utc"],
+                            "satellite": raw.get("satellite", ""),
+                            "bounds": raw.get("bounds", [
+                                [center_lat - half, center_lon - half],
+                                [center_lat + half, center_lon + half],
+                            ]),
+                        }
+
+                        _gcs_rt_put(atcf_id.upper(), dt_str, frame_result)
+                        gcs_fetched += 1
+
+                        del tb, arr, mask, scaled, encoded
+                        gc.collect()
+
+                    time.sleep(0.2)
+
+                if gcs_fetched:
+                    print(f"[IR Pre-fetch] {atcf_id}: cached {gcs_fetched} raw Tb frames to GCS")
+                total_gcs_fetched += gcs_fetched
+
+        print(f"[IR Pre-fetch] Done — {total_fetched} new PNG frames, "
+              f"{total_cached} already cached, "
+              f"{total_gcs_fetched} raw Tb frames cached to GCS")
     except Exception:
         traceback.print_exc()
     finally:
@@ -1135,10 +1200,6 @@ def get_storm_ir_raw(
 
     frame_times = build_frame_times(center_dt, lookback_hours, interval_min)
 
-    TB_VMIN = 170.0
-    TB_VMAX = 310.0
-    TB_SCALE = 254.0 / (TB_VMAX - TB_VMIN)
-
     frames = []
     half = box_deg / 2.0
     for target_dt in reversed(frame_times):
@@ -1156,7 +1217,7 @@ def get_storm_ir_raw(
             # Encode as uint8: 0 = invalid, 1-255 = Tb range
             arr = np.asarray(tb, dtype=np.float32)
             mask = ~np.isfinite(arr) | (arr <= 0)
-            scaled = np.clip((arr - TB_VMIN) * TB_SCALE + 1, 1, 255)
+            scaled = np.clip((arr - _TB_VMIN) * _TB_SCALE + 1, 1, 255)
             scaled[mask] = 0
             encoded = scaled.astype(np.uint8)
 
@@ -1164,8 +1225,8 @@ def get_storm_ir_raw(
                 "tb_data": base64.b64encode(encoded.tobytes()).decode("ascii"),
                 "tb_rows": encoded.shape[0],
                 "tb_cols": encoded.shape[1],
-                "tb_vmin": TB_VMIN,
-                "tb_vmax": TB_VMAX,
+                "tb_vmin": _TB_VMIN,
+                "tb_vmax": _TB_VMAX,
                 "datetime_utc": raw["datetime_utc"],
                 "satellite": raw.get("satellite", ""),
                 "bounds": raw.get("bounds", [
