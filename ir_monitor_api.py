@@ -1649,3 +1649,212 @@ def _compute_vigor_inner(
         },
         headers={"Cache-Control": "public, max-age=300"},
     )
+
+
+# ---------------------------------------------------------------------------
+# DeepMind WeatherLab Ensemble Forecasts
+# ---------------------------------------------------------------------------
+# Fetches tropical cyclone ensemble forecasts from Google DeepMind's
+# WeatherLab (FNV3 model). Public CSV endpoint, no authentication required.
+# Data includes 50 ensemble members + ensemble mean with 6-hourly positions,
+# MSLP, Vmax, RMW, and wind radii out to ~13 days.
+
+_WEATHERLAB_BASE = (
+    "https://deepmind.google.com/science/weatherlab/download/cyclones/FNV3"
+)
+_weatherlab_cache: dict = {}   # (date_str, hour_str) -> {"data": {...}, "ts": float}
+_WEATHERLAB_CACHE_TTL = 1800   # 30 minutes
+_WEATHERLAB_CACHE_MAX = 4
+
+
+def _parse_lead_time(lead_str: str) -> float:
+    """Parse WeatherLab lead_time like '2 days 06:00:00' -> tau hours."""
+    lead_str = lead_str.strip()
+    days = 0
+    time_part = lead_str
+    if "days" in lead_str or "day" in lead_str:
+        parts = lead_str.split(" ", 2)
+        days = int(parts[0])
+        time_part = parts[2] if len(parts) > 2 else "00:00:00"
+    elif lead_str.startswith("0 "):
+        time_part = lead_str.split(" ", 2)[-1]
+
+    hms = time_part.split(":")
+    hours = int(hms[0]) if hms else 0
+    return days * 24.0 + hours
+
+
+def _fetch_weatherlab_csv(date_str: str, hour_str: str) -> dict | None:
+    """Fetch and parse WeatherLab ensemble CSV for a given init time.
+
+    Returns dict keyed by track_id (ATCF ID), each containing:
+      { "members": { "0": {"points": [...]}, ... }, "ensemble_mean": {...} }
+    """
+    cache_key = (date_str, hour_str)
+    cached = _weatherlab_cache.get(cache_key)
+    if cached and time.time() - cached["ts"] < _WEATHERLAB_CACHE_TTL:
+        return cached["data"]
+
+    import requests as req
+
+    # Fetch ensemble members
+    date_fmt = date_str.replace("-", "_")
+    ens_url = (
+        f"{_WEATHERLAB_BASE}/ensemble/paired/csv/"
+        f"FNV3_{date_fmt}T{hour_str}_00_paired.csv"
+    )
+    mean_url = (
+        f"{_WEATHERLAB_BASE}/ensemble_mean/paired/csv/"
+        f"FNV3_{date_fmt}T{hour_str}_00_paired.csv"
+    )
+
+    try:
+        ens_resp = req.get(ens_url, timeout=30)
+        if ens_resp.status_code != 200:
+            return None
+        ens_text = ens_resp.text
+    except Exception as e:
+        print(f"[WeatherLab] Ensemble fetch failed: {e}")
+        return None
+
+    # Parse ensemble CSV
+    result: dict = {}
+    header = None
+    for line in ens_text.splitlines():
+        if line.startswith("#") or not line.strip():
+            continue
+        if header is None:
+            header = [h.strip() for h in line.split(",")]
+            continue
+
+        cols = line.split(",")
+        if len(cols) < 9:
+            continue
+
+        track_id = cols[1].strip()
+        sample = cols[2].strip()
+        try:
+            sample_int = int(float(sample))
+        except (ValueError, TypeError):
+            continue
+
+        tau = _parse_lead_time(cols[4])
+        try:
+            lat = round(float(cols[5]), 2)
+            lon = round(float(cols[6]), 2)
+            pres = round(float(cols[7]), 1) if cols[7].strip() else None
+            wind = round(float(cols[8]), 1) if cols[8].strip() else None
+        except (ValueError, IndexError):
+            continue
+
+        point = {"tau": tau, "lat": lat, "lon": lon, "wind": wind, "pres": pres}
+
+        if track_id not in result:
+            result[track_id] = {"members": {}, "ensemble_mean": None}
+
+        member_key = str(sample_int)
+        storm = result[track_id]
+        if member_key not in storm["members"]:
+            storm["members"][member_key] = {"points": []}
+        storm["members"][member_key]["points"].append(point)
+
+    # Fetch ensemble mean
+    try:
+        mean_resp = req.get(mean_url, timeout=20)
+        if mean_resp.status_code == 200:
+            mean_header = None
+            for line in mean_resp.text.splitlines():
+                if line.startswith("#") or not line.strip():
+                    continue
+                if mean_header is None:
+                    mean_header = True
+                    continue
+
+                cols = line.split(",")
+                if len(cols) < 9:
+                    continue
+
+                track_id = cols[1].strip()
+                tau = _parse_lead_time(cols[4])
+                try:
+                    lat = round(float(cols[5]), 2)
+                    lon = round(float(cols[6]), 2)
+                    pres = round(float(cols[7]), 1) if cols[7].strip() else None
+                    wind = round(float(cols[8]), 1) if cols[8].strip() else None
+                except (ValueError, IndexError):
+                    continue
+
+                if track_id in result:
+                    if result[track_id]["ensemble_mean"] is None:
+                        result[track_id]["ensemble_mean"] = {"points": []}
+                    result[track_id]["ensemble_mean"]["points"].append(
+                        {"tau": tau, "lat": lat, "lon": lon,
+                         "wind": wind, "pres": pres}
+                    )
+    except Exception:
+        pass
+
+    # Cache
+    _weatherlab_cache[cache_key] = {"data": result, "ts": time.time()}
+    if len(_weatherlab_cache) > _WEATHERLAB_CACHE_MAX:
+        oldest = min(_weatherlab_cache, key=lambda k: _weatherlab_cache[k]["ts"])
+        del _weatherlab_cache[oldest]
+
+    print(f"[WeatherLab] Parsed {len(result)} storms from {date_str} {hour_str}z")
+    return result
+
+
+@router.get("/storm/{atcf_id}/weatherlab")
+def get_storm_weatherlab(atcf_id: str):
+    """Fetch DeepMind WeatherLab ensemble forecasts for a storm.
+
+    Returns 50 ensemble member tracks + ensemble mean with position,
+    intensity, and pressure at 6-hourly intervals out to ~13 days.
+    """
+    atcf_id = atcf_id.upper().strip()
+
+    # Try latest available init times: today 06z, 00z, then yesterday
+    now = _dt.now(timezone.utc)
+    candidates = []
+    for day_offset in (0, 1):
+        dt = now - timedelta(days=day_offset)
+        date_str = dt.strftime("%Y-%m-%d")
+        for hour in ("06", "00", "18", "12"):
+            candidates.append((date_str, hour))
+
+    data = None
+    used_date = None
+    used_hour = None
+    for date_str, hour_str in candidates:
+        data = _fetch_weatherlab_csv(date_str, hour_str)
+        if data and atcf_id in data:
+            used_date = date_str
+            used_hour = hour_str
+            break
+
+    if not data or atcf_id not in data:
+        raise HTTPException(
+            status_code=404,
+            detail=f"WeatherLab data not found for {atcf_id}",
+        )
+
+    storm = data[atcf_id]
+    init_time = used_date.replace("-", "") + used_hour
+
+    # Build lead_times list from member 0
+    lead_times = []
+    m0 = storm["members"].get("0")
+    if m0:
+        lead_times = sorted(set(p["tau"] for p in m0["points"]))
+
+    return JSONResponse(
+        content={
+            "model": "DeepMind FNV3",
+            "init_time": init_time,
+            "members": storm["members"],
+            "ensemble_mean": storm["ensemble_mean"],
+            "n_members": len(storm["members"]),
+            "lead_times_h": lead_times,
+        },
+        headers={"Cache-Control": "public, max-age=900"},
+    )

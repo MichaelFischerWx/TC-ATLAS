@@ -465,6 +465,13 @@
     var _rtModelShowInterp = false;    // false = show all, true = interpolated/late-cycle only
     var _rtModelIntensityTraces = [];  // Plotly trace indices for intensity chart
 
+    // ── DeepMind WeatherLab Ensemble State ────────────────────
+    var _rtWeatherlabData = null;      // API response
+    var _rtWeatherlabVisible = false;  // toggle state
+    var _rtWeatherlabLayers = [];      // Leaflet polylines
+    var _rtWeatherlabMarkers = [];     // Leaflet circle markers
+    var _rtWeatherlabMeanTraces = [];  // Plotly trace indices
+
     var RT_MODEL_COLORS = {
         'OFCL': '#ff4757', 'JTWC': '#ffa502',
         'AVNO': '#ff6b6b', 'AVNI': '#ff6b6b', 'GFSO': '#ff6b6b',
@@ -2415,8 +2422,9 @@
         animIndex = 0;
         initDetailMap(storm);
 
-        // Load model forecasts (a-deck)
+        // Load model forecasts (a-deck) and DeepMind ensemble
         _rtLoadModelForecasts(storm);
+        _rtLoadWeatherlab(storm);
 
         // Fetch metadata for intensity chart
         fetchStormMetadata(atcfId, function (err, meta) {
@@ -4361,12 +4369,316 @@
         _rtModelIntensityTraces = [];
     }
 
+    // ═══════════════════════════════════════════════════════════
+    //  DEEPMIND WEATHERLAB ENSEMBLE OVERLAY
+    // ═══════════════════════════════════════════════════════════
+
+    var _WEATHERLAB_MEMBER_COLOR = 'rgba(0, 229, 255, 0.25)';
+    var _WEATHERLAB_MEAN_COLOR = '#00e5ff';
+
+    /**
+     * Load WeatherLab ensemble data for a storm (called from openStormDetail).
+     */
+    function _rtLoadWeatherlab(storm) {
+        if (!storm || !storm.atcf_id) return;
+        _rtWeatherlabData = null;
+
+        fetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(storm.atcf_id) + '/weatherlab')
+            .then(function (r) {
+                if (!r.ok) throw new Error(r.status);
+                return r.json();
+            })
+            .then(function (json) {
+                _rtWeatherlabData = json;
+                var btn = document.getElementById('rt-weatherlab-btn');
+                if (btn) btn.title = json.n_members + ' members, init ' + json.init_time;
+                console.log('[WeatherLab] Loaded ' + json.n_members + ' members for ' + storm.atcf_id);
+            })
+            .catch(function () {
+                // Silent — WeatherLab may not have data for this storm
+            });
+    }
+
+    /**
+     * Toggle DeepMind ensemble overlay on/off.
+     */
+    window._rtToggleWeatherlab = function () {
+        var btn = document.getElementById('rt-weatherlab-btn');
+
+        if (_rtWeatherlabVisible) {
+            _rtWeatherlabVisible = false;
+            _rtClearWeatherlabLayers();
+            _rtClearWeatherlabIntensity();
+            if (btn) { btn.style.background = 'rgba(0,229,255,0.15)'; }
+            return;
+        }
+
+        if (!_rtWeatherlabData) {
+            if (btn) btn.title = 'No DeepMind data available';
+            return;
+        }
+
+        _rtWeatherlabVisible = true;
+        if (btn) { btn.style.background = 'rgba(0,229,255,0.35)'; }
+        _rtRenderWeatherlab();
+        _rtRenderWeatherlabIntensity();
+    };
+
+    /**
+     * Render 50 ensemble spaghetti tracks + mean on the detail map.
+     */
+    function _rtRenderWeatherlab() {
+        _rtClearWeatherlabLayers();
+        if (!_rtWeatherlabData || !detailMap) return;
+
+        var members = _rtWeatherlabData.members || {};
+        var memberKeys = Object.keys(members);
+
+        // Render ensemble members as thin spaghetti
+        for (var mi = 0; mi < memberKeys.length; mi++) {
+            var key = memberKeys[mi];
+            var pts = members[key].points;
+            if (!pts || pts.length < 2) continue;
+
+            var latlngs = [];
+            for (var pi = 0; pi < pts.length; pi++) {
+                latlngs.push([pts[pi].lat, pts[pi].lon]);
+            }
+
+            var line = L.polyline(latlngs, {
+                color: _WEATHERLAB_MEMBER_COLOR,
+                weight: 1,
+                opacity: 1,
+                interactive: false
+            }).addTo(detailMap);
+            _rtWeatherlabLayers.push(line);
+
+            // Add markers at 24h intervals with tooltips
+            for (var pi = 0; pi < pts.length; pi++) {
+                var pt = pts[pi];
+                if (pt.tau > 0 && pt.tau % 24 !== 0) continue;
+
+                var cat = windToCategory(pt.wind);
+                var color = SS_COLORS[cat] || '#64748b';
+                var marker = L.circleMarker([pt.lat, pt.lon], {
+                    radius: pt.tau === 0 ? 3 : 2,
+                    color: color,
+                    fillColor: color,
+                    fillOpacity: 0.8,
+                    weight: 0.5,
+                    opacity: 0.7,
+                    interactive: true
+                }).addTo(detailMap);
+
+                var tipHtml = '<b>Member ' + key + '</b> +' + pt.tau + 'h<br>' +
+                    pt.lat.toFixed(1) + '\u00B0N ' + pt.lon.toFixed(1) + '\u00B0E<br>' +
+                    (pt.wind != null ? pt.wind.toFixed(0) + ' kt' : '') +
+                    (pt.pres != null ? ' \u00B7 ' + pt.pres.toFixed(0) + ' hPa' : '') +
+                    '<br><span style="color:' + color + ';">' + cat + '</span>';
+
+                marker.bindTooltip(tipHtml, { direction: 'top', offset: [0, -4] });
+                _rtWeatherlabMarkers.push(marker);
+            }
+        }
+
+        // Render ensemble mean as thick line
+        var mean = _rtWeatherlabData.ensemble_mean;
+        if (mean && mean.points && mean.points.length >= 2) {
+            var meanLatLngs = [];
+            for (var i = 0; i < mean.points.length; i++) {
+                meanLatLngs.push([mean.points[i].lat, mean.points[i].lon]);
+            }
+
+            var meanLine = L.polyline(meanLatLngs, {
+                color: _WEATHERLAB_MEAN_COLOR,
+                weight: 3,
+                opacity: 0.95,
+                interactive: false
+            }).addTo(detailMap);
+            _rtWeatherlabLayers.push(meanLine);
+
+            // Markers at standard forecast hours on mean
+            for (var i = 0; i < mean.points.length; i++) {
+                var pt = mean.points[i];
+                if (pt.tau > 0 && pt.tau % 24 !== 0) continue;
+
+                var cat = windToCategory(pt.wind);
+                var color = SS_COLORS[cat] || '#64748b';
+                var marker = L.circleMarker([pt.lat, pt.lon], {
+                    radius: pt.tau === 0 ? 5 : 4,
+                    color: '#fff',
+                    fillColor: color,
+                    fillOpacity: 1,
+                    weight: 1.5,
+                    opacity: 1,
+                    interactive: true
+                }).addTo(detailMap);
+
+                var tipHtml = '<b>DeepMind Mean</b> +' + pt.tau + 'h<br>' +
+                    pt.lat.toFixed(1) + '\u00B0N ' + pt.lon.toFixed(1) + '\u00B0E<br>' +
+                    (pt.wind != null ? pt.wind.toFixed(0) + ' kt' : '') +
+                    (pt.pres != null ? ' \u00B7 ' + pt.pres.toFixed(0) + ' hPa' : '') +
+                    '<br><span style="color:' + color + ';">' + cat + '</span>';
+
+                marker.bindTooltip(tipHtml, { direction: 'top', offset: [0, -6] });
+                _rtWeatherlabMarkers.push(marker);
+            }
+        }
+    }
+
+    /**
+     * Add ensemble mean + spread envelope to the Plotly intensity chart.
+     */
+    function _rtRenderWeatherlabIntensity() {
+        _rtClearWeatherlabIntensity();
+        if (!_rtWeatherlabData) return;
+
+        var chartEl = document.getElementById('ir-intensity-chart');
+        if (!chartEl || !chartEl.data) return;
+
+        var initTime = _rtWeatherlabData.init_time;
+        var initDate = new Date(
+            parseInt(initTime.substring(0,4)),
+            parseInt(initTime.substring(4,6)) - 1,
+            parseInt(initTime.substring(6,8)),
+            parseInt(initTime.substring(8,10))
+        );
+
+        var newTraces = [];
+
+        // Compute min/max envelope across all members
+        var members = _rtWeatherlabData.members || {};
+        var memberKeys = Object.keys(members);
+        var tauMap = {};  // tau -> {winds: [], times: ISO}
+        for (var mi = 0; mi < memberKeys.length; mi++) {
+            var pts = members[memberKeys[mi]].points;
+            if (!pts) continue;
+            for (var pi = 0; pi < pts.length; pi++) {
+                var pt = pts[pi];
+                if (pt.wind == null) continue;
+                if (!tauMap[pt.tau]) {
+                    var t = new Date(initDate.getTime() + pt.tau * 3600000);
+                    tauMap[pt.tau] = { winds: [], time: t.toISOString() };
+                }
+                tauMap[pt.tau].winds.push(pt.wind);
+            }
+        }
+
+        var taus = Object.keys(tauMap).map(Number).sort(function (a, b) { return a - b; });
+
+        // Min envelope (bottom of spread)
+        var minTimes = [];
+        var minWinds = [];
+        for (var i = 0; i < taus.length; i++) {
+            minTimes.push(tauMap[taus[i]].time);
+            minWinds.push(Math.min.apply(null, tauMap[taus[i]].winds));
+        }
+        newTraces.push({
+            x: minTimes, y: minWinds,
+            type: 'scatter', mode: 'lines',
+            name: 'DeepMind min',
+            line: { color: 'rgba(0,229,255,0.15)', width: 0 },
+            showlegend: false, hoverinfo: 'skip'
+        });
+
+        // Max envelope (top of spread, filled to min)
+        var maxTimes = [];
+        var maxWinds = [];
+        for (var i = 0; i < taus.length; i++) {
+            maxTimes.push(tauMap[taus[i]].time);
+            maxWinds.push(Math.max.apply(null, tauMap[taus[i]].winds));
+        }
+        newTraces.push({
+            x: maxTimes, y: maxWinds,
+            type: 'scatter', mode: 'lines',
+            name: 'DeepMind spread',
+            line: { color: 'rgba(0,229,255,0.15)', width: 0 },
+            fill: 'tonexty',
+            fillcolor: 'rgba(0,229,255,0.12)',
+            showlegend: false, hoverinfo: 'skip'
+        });
+
+        // Ensemble mean line
+        var mean = _rtWeatherlabData.ensemble_mean;
+        if (mean && mean.points) {
+            var meanTimes = [];
+            var meanWinds = [];
+            for (var i = 0; i < mean.points.length; i++) {
+                if (mean.points[i].wind != null) {
+                    var t = new Date(initDate.getTime() + mean.points[i].tau * 3600000);
+                    meanTimes.push(t.toISOString());
+                    meanWinds.push(mean.points[i].wind);
+                }
+            }
+            newTraces.push({
+                x: meanTimes, y: meanWinds,
+                type: 'scatter', mode: 'lines+markers',
+                name: 'DeepMind Mean',
+                line: { color: _WEATHERLAB_MEAN_COLOR, width: 2.5 },
+                marker: { size: 4, symbol: 'circle', color: _WEATHERLAB_MEAN_COLOR },
+                opacity: 0.9,
+                showlegend: false,
+                hovertemplate: 'DeepMind: %{y:.0f} kt<extra></extra>'
+            });
+        }
+
+        if (newTraces.length > 0 && typeof Plotly !== 'undefined') {
+            Plotly.addTraces(chartEl, newTraces);
+            _rtWeatherlabMeanTraces = [];
+            var baseCount = chartEl.data.length - newTraces.length;
+            for (var i = 0; i < newTraces.length; i++) {
+                _rtWeatherlabMeanTraces.push(baseCount + i);
+            }
+        }
+    }
+
+    /**
+     * Remove ensemble layers from map.
+     */
+    function _rtClearWeatherlabLayers() {
+        for (var i = 0; i < _rtWeatherlabLayers.length; i++) {
+            if (detailMap) try { detailMap.removeLayer(_rtWeatherlabLayers[i]); } catch (e) {}
+        }
+        _rtWeatherlabLayers = [];
+        for (var j = 0; j < _rtWeatherlabMarkers.length; j++) {
+            if (detailMap) try { detailMap.removeLayer(_rtWeatherlabMarkers[j]); } catch (e) {}
+        }
+        _rtWeatherlabMarkers = [];
+    }
+
+    /**
+     * Remove ensemble intensity traces from chart.
+     */
+    function _rtClearWeatherlabIntensity() {
+        if (_rtWeatherlabMeanTraces.length === 0) return;
+        var chartEl = document.getElementById('ir-intensity-chart');
+        if (!chartEl || typeof Plotly === 'undefined') return;
+        try {
+            var sorted = _rtWeatherlabMeanTraces.slice().sort(function (a, b) { return b - a; });
+            Plotly.deleteTraces(chartEl, sorted);
+        } catch (e) {}
+        _rtWeatherlabMeanTraces = [];
+    }
+
+    /**
+     * Full cleanup of WeatherLab state.
+     */
+    function _rtRemoveWeatherlab() {
+        _rtClearWeatherlabLayers();
+        _rtClearWeatherlabIntensity();
+        _rtWeatherlabData = null;
+        _rtWeatherlabVisible = false;
+        var btn = document.getElementById('rt-weatherlab-btn');
+        if (btn) { btn.style.background = 'rgba(0,229,255,0.15)'; btn.title = ''; }
+    }
+
     /**
      * Remove all model overlay state (called when switching/closing storms).
      */
     function _rtRemoveModelOverlay() {
         _rtClearModelLayers();
         _rtClearModelIntensityTraces();
+        _rtRemoveWeatherlab();
         _rtModelData = null;
         _rtModelActiveCycle = null;
         _rtModelLastAtcf = null;
