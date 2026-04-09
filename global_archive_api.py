@@ -3010,26 +3010,48 @@ def _fetch_adeck(atcf_id: str) -> dict | None:
                 break
     else:
         # JTWC-monitored basins (WP, IO, SH)
-        # A-deck data is fragmented across multiple data providers on UCAR RAL:
-        #   - adecks_open/  : HWRF and various models (comprehensive for recent storms)
-        #   - fnmoc/        : NVGM, COTC, GFDN, NAVGEM ensembles
-        #   - nrlmry/       : CTCX and other Navy models (2015+ only)
+        # A-deck data is fragmented across multiple data providers:
+        #   - UCAR real-time : best source for ACTIVE JTWC storms (comprehensive)
+        #   - NHC aid_public : sometimes mirrors JTWC active storms
+        #   - adecks_open/   : HWRF and various models (archive)
+        #   - fnmoc/         : NVGM, COTC, GFDN, NAVGEM ensembles
+        #   - nrlmry/        : CTCX and other Navy models (2015+ only)
         # We COMBINE data from all available sources for the fullest picture.
+
+        # UCAR real-time basin path mapping
+        _UCAR_RT_BASINS = {
+            "wp": "northwestpacific",
+            "io": "northindian",
+            "sh": "southernhemisphere",
+        }
 
         raw_text = None
         source = None
         combined_parts = []
         sources_used = []
 
-        # 1. Try NHC aid_public first (has all models for ACTIVE storms)
-        nhc_url = f"https://ftp.nhc.noaa.gov/atcf/aid_public/{fname}.dat.gz"
-        text = _fetch_url(nhc_url)
-        if text and len(text) > 5000:
-            # NHC aid_public for active JTWC storms is comprehensive — use it directly
-            raw_text = text
-            source = nhc_url
-        else:
-            # Historical storm — combine from multiple UCAR RAL directories
+        # 1. Try UCAR real-time first — best source for ACTIVE JTWC storms
+        ucar_rt_basin = _UCAR_RT_BASINS.get(basin)
+        if ucar_rt_basin:
+            ucar_rt_url = (
+                f"https://hurricanes.ral.ucar.edu/realtime/plots/"
+                f"{ucar_rt_basin}/{year}/{atcf_id.lower()}/{fname}.dat"
+            )
+            text = _fetch_url(ucar_rt_url)
+            if text and len(text) > 500:
+                raw_text = text
+                source = ucar_rt_url
+
+        # 2. Try NHC aid_public (sometimes mirrors JTWC active storms)
+        if not raw_text:
+            nhc_url = f"https://ftp.nhc.noaa.gov/atcf/aid_public/{fname}.dat.gz"
+            text = _fetch_url(nhc_url)
+            if text and len(text) > 5000:
+                raw_text = text
+                source = nhc_url
+
+        if not raw_text:
+            # 3. Historical storm — combine from multiple UCAR RAL directories
             ucar_sources = [
                 f"https://hurricanes.ral.ucar.edu/repository/data/adecks_open/{year}/{fname}.dat",
                 f"https://hurricanes.ral.ucar.edu/repository/data/fnmoc/{year}/{fname}.dat",
