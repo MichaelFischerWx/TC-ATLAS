@@ -2053,6 +2053,10 @@
                 // Handle deep link on first load
                 handleDeepLink();
 
+                // Pre-warm raw Tb cache for all active storms so data is
+                // ready instantly when a user clicks into the detail view.
+                _prefetchAllStormsRawTb(stormData);
+
                 _ga('ir_poll_success', { storm_count: stormData.length });
             })
             .catch(function (err) {
@@ -2296,13 +2300,10 @@
             frames: animFrameTimes.length
         });
 
-        // Default to raw Tb rendering (Enhanced colormap) — much fresher
-        // than GIBS tiles, especially for Himawari. GIBS layers remain as
-        // fallback if the API call fails or user selects "GIBS Default".
-        var cmapSelect = document.getElementById('ir-colormap-select');
-        if (cmapSelect) cmapSelect.value = 'enhanced';
-        irSelectedColormap = 'enhanced';
-        fetchRawTbFrames();
+        // Pre-fetch raw Tb frames in background so colormap switching is
+        // instant when the user selects Enhanced, Dvorak, etc.  The GIBS
+        // tiles remain the default display (full basin context).
+        _prefetchRawTbSilent();
     }
 
     /** Fetch storm metadata (intensity history, etc.) */
@@ -2795,14 +2796,176 @@
         }
     }
 
+    // ── Raw Tb pre-fetch cache (per-storm, keyed by ATCF ID) ──
+    var _rawTbCache = {};  // { atcfId: { frames: [...], rawTbFrames: [...] } }
+
+    /**
+     * Pre-fetch raw Tb frames for ALL active storms on page load.
+     * Fires sequentially (one storm at a time) to avoid hammering the API.
+     * Cached data is used by _prefetchRawTbSilent() / fetchRawTbFrames()
+     * when the user clicks into a storm detail view.
+     */
+    function _prefetchAllStormsRawTb(storms) {
+        if (!storms || storms.length === 0) return;
+        var queue = storms.slice();
+        function fetchNext() {
+            if (queue.length === 0) return;
+            var storm = queue.shift();
+            var atcfId = storm.atcf_id;
+            if (!atcfId || _rawTbCache[atcfId]) { fetchNext(); return; }
+
+            var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) + '/ir-raw'
+                + '?lookback_hours=' + DEFAULT_LOOKBACK_HOURS
+                + '&radius_deg=' + DEFAULT_RADIUS_DEG
+                + '&interval_min=30';
+
+            fetch(url)
+                .then(function (r) { return r.json(); })
+                .then(function (data) {
+                    if (data.frames && data.frames.length > 0) {
+                        var decoded = [];
+                        for (var i = 0; i < data.frames.length; i++) {
+                            var frame = data.frames[i];
+                            decoded.push({
+                                tb_data: decodeTbData(frame.tb_data),
+                                rows: frame.tb_rows,
+                                cols: frame.tb_cols,
+                                bounds: frame.bounds
+                            });
+                        }
+                        _rawTbCache[atcfId] = { frames: data.frames, rawTbFrames: decoded };
+                        console.log('[IR Pre-fetch] ' + atcfId + ': cached ' + decoded.length + ' raw Tb frames');
+                    }
+                })
+                .catch(function () {})
+                .finally(function () { fetchNext(); });
+        }
+        fetchNext();
+    }
+
     // ── Cached GIBS tile layers for switching back from raw Tb ──
     var _gibsAnimFrameLayers = null;  // stashed GIBS tile layers
 
+    /**
+     * Silently populate rawTbFrames[] from the per-storm cache (or fetch).
+     * Does NOT switch the display — GIBS tiles remain active.
+     * When the user later selects a non-GIBS colormap, rawTbFrames[]
+     * are immediately available for recoloring without another API call.
+     */
+    function _prefetchRawTbSilent() {
+        if (!currentStormId) return;
+
+        // Use pre-fetched cache from page load if available
+        var cached = _rawTbCache[currentStormId];
+        if (cached && cached.rawTbFrames && cached.rawTbFrames.length > 0) {
+            rawTbFrames = cached.rawTbFrames;
+            console.log('[IR Monitor] Loaded ' + rawTbFrames.length + ' raw Tb frames from cache');
+            return;
+        }
+
+        // Fallback: fetch directly
+        var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(currentStormId) + '/ir-raw'
+            + '?lookback_hours=' + DEFAULT_LOOKBACK_HOURS
+            + '&radius_deg=' + DEFAULT_RADIUS_DEG
+            + '&interval_min=30';
+
+        fetch(url)
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (!data.frames || data.frames.length === 0) return;
+
+                rawTbFrames = [];
+                for (var i = 0; i < data.frames.length; i++) {
+                    var frame = data.frames[i];
+                    rawTbFrames.push({
+                        tb_data: decodeTbData(frame.tb_data),
+                        rows: frame.tb_rows,
+                        cols: frame.tb_cols,
+                        bounds: frame.bounds
+                    });
+                }
+                // Also populate the per-storm cache
+                _rawTbCache[currentStormId] = { frames: data.frames, rawTbFrames: rawTbFrames };
+                console.log('[IR Monitor] Pre-fetched ' + rawTbFrames.length + ' raw Tb frames (silent)');
+            })
+            .catch(function () {});
+    }
+
     /** Fetch raw Tb frames from API and switch to client-side rendering */
+    /** Build L.imageOverlay layers from rawTbFrames[] and switch display */
+    function _applyRawTbToMap() {
+        // Stash current GIBS tile layers
+        if (!_gibsAnimFrameLayers && animFrameLayers.length > 0) {
+            _gibsAnimFrameLayers = animFrameLayers.slice();
+            for (var i = 0; i < _gibsAnimFrameLayers.length; i++) {
+                _gibsAnimFrameLayers[i].setOpacity(0);
+            }
+        }
+
+        // Create image overlay layers from rawTbFrames
+        var newLayers = [];
+        for (var i = 0; i < rawTbFrames.length; i++) {
+            var frame = rawTbFrames[i];
+            var dataUrl = renderTbToDataURI(frame.tb_data, frame.rows, frame.cols, irSelectedColormap);
+
+            var bounds = L.latLngBounds(
+                [frame.bounds[0][0], frame.bounds[0][1]],
+                [frame.bounds[1][0], frame.bounds[1][1]]
+            );
+            var overlay = L.imageOverlay(dataUrl, bounds, { opacity: 0, pane: 'tilePane' });
+            overlay.addTo(detailMap);
+            newLayers.push(overlay);
+        }
+
+        // Replace animFrameLayers with raw overlays
+        animFrameLayers = newLayers;
+        validFrames = [];
+        for (var vi = 0; vi < newLayers.length; vi++) { validFrames.push(vi); }
+        framesReady = true;
+        animIndex = newLayers.length - 1;
+
+        var slider = document.getElementById('ir-anim-slider');
+        if (slider) {
+            slider.max = validFrames.length - 1;
+            slider.value = validFrames.length - 1;
+        }
+
+        showFrame(animIndex);
+        showLoadingProgress(false);
+        renderDetailColorbar();
+
+        // Switch colorbar to canvas rendering
+        var gradBar = document.getElementById('ir-tb-legend-bar-gradient');
+        var canvasBar = document.getElementById('ir-tb-colorbar-canvas');
+        if (gradBar) gradBar.style.display = 'none';
+        if (canvasBar) canvasBar.style.display = '';
+
+        var playBtn = document.getElementById('ir-anim-play');
+        if (playBtn) playBtn.disabled = false;
+
+        if (_rtModelVisible && _rtModelAutoSync && _rtModelData) {
+            _rtSyncModelCycleToIR();
+        }
+    }
+
+    /** Fetch raw Tb frames from API (or cache) and switch to client-side rendering */
     function fetchRawTbFrames() {
         if (!currentStormId) return;
         showLoadingProgress(true, 0);
 
+        // Use pre-fetched cache if available
+        if (rawTbFrames.length > 0) {
+            _applyRawTbToMap();
+            return;
+        }
+        var cached = _rawTbCache[currentStormId];
+        if (cached && cached.rawTbFrames && cached.rawTbFrames.length > 0) {
+            rawTbFrames = cached.rawTbFrames;
+            _applyRawTbToMap();
+            return;
+        }
+
+        // Fetch from API
         var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(currentStormId) + '/ir-raw'
             + '?lookback_hours=' + DEFAULT_LOOKBACK_HOURS
             + '&radius_deg=' + DEFAULT_RADIUS_DEG
@@ -2817,81 +2980,22 @@
                     return;
                 }
 
-                // Stash current GIBS tile layers
-                if (!_gibsAnimFrameLayers && animFrameLayers.length > 0) {
-                    _gibsAnimFrameLayers = animFrameLayers.slice();
-                    // Hide GIBS layers
-                    for (var i = 0; i < _gibsAnimFrameLayers.length; i++) {
-                        _gibsAnimFrameLayers[i].setOpacity(0);
-                    }
-                }
-
-                // Create image overlay layers from raw Tb
                 rawTbFrames = [];
-                var newLayers = [];
                 for (var i = 0; i < data.frames.length; i++) {
                     var frame = data.frames[i];
-                    var tbData = decodeTbData(frame.tb_data);
-                    var dataUrl = renderTbToDataURI(tbData, frame.tb_rows, frame.tb_cols, irSelectedColormap);
-
                     rawTbFrames.push({
-                        tb_data: tbData,
+                        tb_data: decodeTbData(frame.tb_data),
                         rows: frame.tb_rows,
                         cols: frame.tb_cols,
                         bounds: frame.bounds
                     });
-
-                    // bounds from API: [[south, west], [north, east]]
-                    var bounds = L.latLngBounds(
-                        [frame.bounds[0][0], frame.bounds[0][1]],
-                        [frame.bounds[1][0], frame.bounds[1][1]]
-                    );
-                    var overlay = L.imageOverlay(dataUrl, bounds, { opacity: 0, pane: 'tilePane' });
-                    overlay.addTo(detailMap);
-                    newLayers.push(overlay);
                 }
-
-                // Replace animFrameLayers with raw overlays
-                animFrameLayers = newLayers;
-
-                // Update animation frame times to match API response
-                animFrameTimes = data.frames.map(function (f) { return f.datetime_utc; });
-                validFrames = [];
-                for (var i = 0; i < animFrameTimes.length; i++) {
-                    validFrames.push(i);
-                }
-                framesReady = true;
-                animIndex = animFrameTimes.length - 1;
-
-                // Update slider
-                var slider = document.getElementById('ir-anim-slider');
-                if (slider) {
-                    slider.max = validFrames.length - 1;
-                    slider.value = validFrames.length - 1;
-                }
-
-                showFrame(animIndex);
-                showLoadingProgress(false);
-                renderDetailColorbar();
-
-                // Switch colorbar to canvas rendering (matches raw Tb colormap)
-                var gradBar = document.getElementById('ir-tb-legend-bar-gradient');
-                var canvasBar = document.getElementById('ir-tb-colorbar-canvas');
-                if (gradBar) gradBar.style.display = 'none';
-                if (canvasBar) canvasBar.style.display = '';
-
-                var playBtn = document.getElementById('ir-anim-play');
-                if (playBtn) playBtn.disabled = false;
-
-                // Sync model overlay if active
-                if (_rtModelVisible && _rtModelAutoSync && _rtModelData) {
-                    _rtSyncModelCycleToIR();
-                }
+                _rawTbCache[currentStormId] = { frames: data.frames, rawTbFrames: rawTbFrames };
+                _applyRawTbToMap();
             })
             .catch(function (err) {
                 console.error('[IR Monitor] Raw Tb fetch failed:', err);
                 showLoadingProgress(false);
-                // Revert colormap selector to GIBS
                 var cmapSelect = document.getElementById('ir-colormap-select');
                 if (cmapSelect) cmapSelect.value = 'gibs';
             });
