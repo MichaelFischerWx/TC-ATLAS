@@ -11,7 +11,7 @@
     var API_BASE = 'https://tc-atlas-api-361010099051.us-east1.run.app';
     var POLL_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
     var DEFAULT_LOOKBACK_HOURS = 6;
-    var DEFAULT_RADIUS_DEG = 3.0;
+    var DEFAULT_RADIUS_DEG = 10.0;
 
     // ── IR Colormap LUTs (for client-side raw Tb rendering) ────
     var IR_COLORMAPS = {};

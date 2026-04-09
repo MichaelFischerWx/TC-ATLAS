@@ -865,7 +865,7 @@ def _poll_active_storms():
 # Default pre-fetch settings (match the endpoint defaults)
 _PREFETCH_LOOKBACK_HOURS = 6.0
 _PREFETCH_INTERVAL_MIN = 30
-_PREFETCH_RADIUS_DEG = 3.0
+_PREFETCH_RADIUS_DEG = 10.0
 _prefetch_lock = threading.Lock()
 
 def _prefetch_ir_frames(storms: list):
@@ -1099,7 +1099,7 @@ def get_storm_ir(
     atcf_id: str,
     product: str = Query("enhanced_ir", description="IR product type"),
     lookback_hours: float = Query(6.0, ge=1, le=24, description="Hours of lookback"),
-    radius_deg: float = Query(3.0, ge=1.0, le=8.0, description="Cutout radius in degrees"),
+    radius_deg: float = Query(10.0, ge=1.0, le=12.0, description="Cutout radius in degrees"),
     interval_min: int = Query(30, ge=10, le=60, description="Minutes between frames"),
 ):
     """
@@ -1165,7 +1165,7 @@ def get_storm_ir(
 def get_storm_ir_raw(
     atcf_id: str,
     lookback_hours: float = Query(6.0, ge=1, le=24, description="Hours of lookback"),
-    radius_deg: float = Query(3.0, ge=1.0, le=8.0, description="Cutout radius in degrees"),
+    radius_deg: float = Query(10.0, ge=1.0, le=12.0, description="Cutout radius in degrees"),
     interval_min: int = Query(30, ge=10, le=60, description="Minutes between frames"),
 ):
     """
@@ -1317,7 +1317,7 @@ def _write_geotiff_bytes(tb_array: np.ndarray, bounds: list) -> bytes:
 def get_storm_geotiff(
     atcf_id: str,
     frame_index: int = Query(0, ge=0, description="Which frame to export (0 = most recent)"),
-    radius_deg: float = Query(3.0, ge=1.0, le=8.0, description="Cutout radius in degrees"),
+    radius_deg: float = Query(10.0, ge=1.0, le=12.0, description="Cutout radius in degrees"),
 ):
     """
     Export a single IR frame as a GeoTIFF file with brightness temperature (K).
@@ -1491,7 +1491,7 @@ def get_storm_metadata(atcf_id: str):
 def get_storm_ir_vigor(
     atcf_id: str,
     lookback_hours: float = Query(4.0, ge=1, le=8, description="Hours of Tb frames for temporal average"),
-    radius_deg: float = Query(3.0, ge=1.0, le=8.0, description="Cutout radius in degrees"),
+    radius_deg: float = Query(10.0, ge=1.0, le=12.0, description="Cutout radius in degrees"),
     radius_km: float = Query(200.0, ge=50, le=600, description="Spatial radius (km) for local minimum"),
     interval_min: int = Query(30, ge=10, le=60, description="Minutes between frames"),
 ):
