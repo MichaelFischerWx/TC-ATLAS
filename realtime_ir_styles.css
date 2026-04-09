@@ -347,7 +347,7 @@
 .ir-overlay-info {
     position: absolute;
     top: 10px;
-    left: 10px;
+    left: 48px;
     display: flex;
     gap: 14px;
     align-items: center;
