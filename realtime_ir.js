@@ -1,6 +1,6 @@
 /* ═══════════════════════════════════════════════════════════════
-   Real-Time IR Monitor — realtime_ir.js
-   Self-contained IIFE for the Real-Time IR Monitor page.
+   Real-Time Monitor — realtime_ir.js
+   Self-contained IIFE for the Real-Time Monitor page.
    Provides: global map with active TC markers, click-through
    to storm detail with IR animation + intensity timeline.
    ═══════════════════════════════════════════════════════════════ */
@@ -1328,7 +1328,7 @@
                     if (r.ok) return ts;
                     return tryOffset(idx + 1);
                 }).catch(function (err) {
-                    console.warn('[IR Monitor] GIBS probe failed for', sat.layer, 'offset', offsets[idx], err.message || '');
+                    console.warn('[RT Monitor] GIBS probe failed for', sat.layer, 'offset', offsets[idx], err.message || '');
                     return tryOffset(idx + 1);
                 });
             }
@@ -1951,7 +1951,7 @@
                 if (!meta || !meta.intensity_history || meta.intensity_history.length < 2) return;
                 drawTrackOnMap(map, meta.intensity_history, storm, trackLayers);
             })
-            .catch(function (err) { console.warn('[IR Monitor] Track fetch failed:', err.message || ''); });
+            .catch(function (err) { console.warn('[RT Monitor] Track fetch failed:', err.message || ''); });
     }
 
     /** Draw a past track polyline + intensity dots on a Leaflet map */
@@ -2082,7 +2082,7 @@
                 _ga('ir_poll_success', { storm_count: stormData.length });
             })
             .catch(function (err) {
-                console.warn('[IR Monitor] Poll failed:', err.message);
+                console.warn('[RT Monitor] Poll failed:', err.message);
 
                 // Hide loader, show status
                 if (loaderEl) loaderEl.style.display = 'none';
@@ -2161,7 +2161,7 @@
                 if (playBtn) playBtn.disabled = false;
                 updateAnimCounter();
             }
-            console.log('[IR Monitor] All ' + total + ' IR frames pre-loaded (' + detailSatName + '), ' + validFrames.length + ' valid');
+            console.log('[RT Monitor] All ' + total + ' IR frames pre-loaded (' + detailSatName + '), ' + validFrames.length + ' valid');
         }
     }
 
@@ -2297,7 +2297,7 @@
         // Safety timeout: if tiles haven't all loaded within 30s, start anyway
         setTimeout(function () {
             if (!framesReady && animFrameLayers.length > 0) {
-                console.warn('[IR Monitor] Frame preload timeout — enabling animation with ' + framesLoaded + '/' + animFrameTimes.length + ' frames (' + validFrames.length + ' valid)');
+                console.warn('[RT Monitor] Frame preload timeout — enabling animation with ' + framesLoaded + '/' + animFrameTimes.length + ' frames (' + validFrames.length + ' valid)');
                 framesReady = true;
                 if (productMode === 'eir') {
                     showLoadingProgress(false);
@@ -2343,7 +2343,7 @@
                 callback(null, data);
             })
             .catch(function (err) {
-                console.warn('[IR Monitor] Metadata fetch failed:', err.message);
+                console.warn('[RT Monitor] Metadata fetch failed:', err.message);
                 callback(err);
             });
     }
@@ -2387,7 +2387,7 @@
         }
 
         if (!storm) {
-            console.warn('[IR Monitor] Storm not found:', atcfId);
+            console.warn('[RT Monitor] Storm not found:', atcfId);
             return;
         }
 
@@ -2885,7 +2885,7 @@
         var cached = _rawTbCache[currentStormId];
         if (cached && cached.rawTbFrames && cached.rawTbFrames.length > 0) {
             rawTbFrames = cached.rawTbFrames;
-            console.log('[IR Monitor] Loaded ' + rawTbFrames.length + ' raw Tb frames from cache');
+            console.log('[RT Monitor] Loaded ' + rawTbFrames.length + ' raw Tb frames from cache');
             return;
         }
 
@@ -2912,7 +2912,7 @@
                 }
                 // Also populate the per-storm cache
                 _rawTbCache[currentStormId] = { frames: data.frames, rawTbFrames: rawTbFrames };
-                console.log('[IR Monitor] Pre-fetched ' + rawTbFrames.length + ' raw Tb frames (silent)');
+                console.log('[RT Monitor] Pre-fetched ' + rawTbFrames.length + ' raw Tb frames (silent)');
             })
             .catch(function () {});
     }
@@ -3003,7 +3003,7 @@
             .then(function (r) { return r.json(); })
             .then(function (data) {
                 if (!data.frames || data.frames.length === 0) {
-                    console.warn('[IR Monitor] No raw Tb frames returned');
+                    console.warn('[RT Monitor] No raw Tb frames returned');
                     showLoadingProgress(false);
                     return;
                 }
@@ -3022,7 +3022,7 @@
                 _applyRawTbToMap();
             })
             .catch(function (err) {
-                console.error('[IR Monitor] Raw Tb fetch failed:', err);
+                console.error('[RT Monitor] Raw Tb fetch failed:', err);
                 showLoadingProgress(false);
                 var cmapSelect = document.getElementById('ir-colormap-select');
                 if (cmapSelect) cmapSelect.value = 'gibs';
@@ -3186,7 +3186,7 @@
         // Safety timeout
         setTimeout(function () {
             if (!geocolorFramesReady && geocolorFrameLayers.length > 0 && productMode === 'geocolor') {
-                console.warn('[IR Monitor] GeoColor preload timeout — enabling with ' + geocolorFramesLoaded + '/' + geocolorFrameTimes.length + ' frames');
+                console.warn('[RT Monitor] GeoColor preload timeout — enabling with ' + geocolorFramesLoaded + '/' + geocolorFrameTimes.length + ' frames');
                 geocolorFramesReady = true;
                 showLoadingProgress(false);
                 if (geoBtn) {
@@ -3586,7 +3586,7 @@
                     frames_used: result.framesUsed
                 });
             } catch (err) {
-                console.warn('[IR Monitor] Vigor computation error:', err);
+                console.warn('[RT Monitor] Vigor computation error:', err);
                 vigorFetching = false;
                 if (vigBtn) {
                     vigBtn.classList.remove('ir-vigor-loading');
@@ -3835,7 +3835,7 @@
                 renderBasinSidebar();
             })
             .catch(function (err) {
-                console.warn('[IR Monitor] Season summary fetch failed:', err.message || '');
+                console.warn('[RT Monitor] Season summary fetch failed:', err.message || '');
                 var content = document.getElementById('basin-sidebar-content');
                 if (content) content.innerHTML = '<div class="basin-sidebar-loading">Unable to load season data</div>';
             });
@@ -5236,7 +5236,7 @@
         });
 
         _ga('ir_page_load');
-        console.log('[IR Monitor] Initialized — polling every', POLL_INTERVAL_MS / 1000, 'seconds');
+        console.log('[RT Monitor] Initialized — polling every', POLL_INTERVAL_MS / 1000, 'seconds');
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -5334,7 +5334,7 @@
                 URL.revokeObjectURL(a.href);
             })
             .catch(function (err) {
-                console.warn('[IR Monitor] KML export failed:', err.message || '');
+                console.warn('[RT Monitor] KML export failed:', err.message || '');
                 alert('KML export failed — could not fetch track data');
             });
     };
@@ -5372,7 +5372,7 @@
                 if (btn) btn.innerHTML = origText;
             })
             .catch(function (err) {
-                console.warn('[IR Monitor] GeoTIFF export failed:', err.message || '');
+                console.warn('[RT Monitor] GeoTIFF export failed:', err.message || '');
                 alert('GeoTIFF export failed: ' + (err.message || 'unknown error'));
                 if (btn) btn.innerHTML = origText;
             });
