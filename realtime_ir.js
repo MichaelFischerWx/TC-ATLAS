@@ -4955,9 +4955,6 @@
         var winds = data.winds.filter(function (w) { return w != null; });
         if (winds.length === 0) return;
 
-        // Color each bar by SS category
-        var colors = winds.map(_dmWindColor);
-
         // Compute percentiles
         var sorted = winds.slice().sort(function (a, b) { return a - b; });
         var p = function (pct) { return sorted[Math.floor(pct / 100 * (sorted.length - 1))]; };
@@ -4966,13 +4963,31 @@
         var chartEl = document.getElementById('rt-dm-hist-chart');
         if (!chartEl) return;
 
-        // Use fixed 5-kt bins for consistent appearance across lead times
+        // Pre-bin into 5-kt bins with SS-colored bars
+        var binSize = 5;
+        var binCenters = [];
+        var binCounts = [];
+        var binColors = [];
+        for (var b = 0; b < 175; b += binSize) {
+            var center = b + binSize / 2;
+            var count = 0;
+            for (var wi = 0; wi < winds.length; wi++) {
+                if (winds[wi] >= b && winds[wi] < b + binSize) count++;
+            }
+            if (count > 0 || b < 170) {
+                binCenters.push(center);
+                binCounts.push(count);
+                binColors.push(_dmWindColor(center));
+            }
+        }
+
         var trace = {
-            x: winds,
-            type: 'histogram',
-            xbins: { start: 0, end: 175, size: 5 },
+            x: binCenters,
+            y: binCounts,
+            type: 'bar',
+            width: binSize * 0.9,
             marker: {
-                color: winds.map(_dmWindColor),
+                color: binColors,
                 line: { color: 'rgba(0,0,0,0.3)', width: 0.5 }
             },
             hovertemplate: '%{x:.0f} kt<br>%{y} members<extra></extra>'
@@ -5063,17 +5078,6 @@
         var dv = data.dv.filter(function (v) { return v != null; });
         if (dv.length === 0) return;
 
-        // Diverging colormap: blue (weakening) → gray (neutral) → red (intensifying)
-        var colors = dv.map(function (v) {
-            if (v <= -30) return '#1e40af';     // rapid weakening (dark blue)
-            if (v <= -15) return '#3b82f6';     // moderate weakening
-            if (v <= -5)  return '#93c5fd';     // slight weakening (light blue)
-            if (v < 5)    return '#94a3b8';     // near-steady (gray)
-            if (v < 15)   return '#fca5a5';     // slight intensification (light red)
-            if (v < 30)   return '#ef4444';     // moderate intensification (red)
-            return '#991b1b';                    // RI (dark red)
-        });
-
         // RI threshold and probability
         var riThreshold = _rtDmChangeInt === 24 ? 30 : 20;
         var riCount = dv.filter(function (v) { return v >= riThreshold; }).length;
@@ -5083,11 +5087,40 @@
         var chartEl = document.getElementById('rt-dm-change-chart');
         if (!chartEl) return;
 
+        // Pre-bin data into 5-kt bins and color by bin center value
+        var binSize = 5;
+        var dvMin = Math.floor(Math.min.apply(null, dv) / binSize) * binSize;
+        var dvMax = Math.ceil(Math.max.apply(null, dv) / binSize) * binSize;
+        var binCenters = [];
+        var binCounts = [];
+        var binColors = [];
+        for (var b = dvMin; b < dvMax; b += binSize) {
+            var center = b + binSize / 2;
+            var count = 0;
+            for (var di = 0; di < dv.length; di++) {
+                if (dv[di] >= b && dv[di] < b + binSize) count++;
+            }
+            binCenters.push(center);
+            binCounts.push(count);
+            // Diverging: blue (weakening) → gray (neutral) → red (intensifying)
+            if (center <= -30)     binColors.push('#1e40af');
+            else if (center <= -15) binColors.push('#3b82f6');
+            else if (center <= -5)  binColors.push('#93c5fd');
+            else if (center < 5)    binColors.push('#94a3b8');
+            else if (center < 15)   binColors.push('#fca5a5');
+            else if (center < 30)   binColors.push('#ef4444');
+            else                    binColors.push('#991b1b');
+        }
+
         var trace = {
-            x: dv,
-            type: 'histogram',
-            marker: { color: colors },
-            nbinsx: 30,
+            x: binCenters,
+            y: binCounts,
+            type: 'bar',
+            width: binSize * 0.9,
+            marker: {
+                color: binColors,
+                line: { color: 'rgba(0,0,0,0.3)', width: 0.5 }
+            },
             hovertemplate: '%{x:+.0f} kt/' + _rtDmChangeInt + 'h<br>%{y} members<extra></extra>'
         };
 
