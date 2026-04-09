@@ -2199,8 +2199,10 @@
         var satLayerName = GIBS_IR_LAYERS[detailSatName];
 
         // Build animation frame times (30-min steps, 6h lookback)
-        var lastFix = storm.last_fix_utc ? new Date(storm.last_fix_utc) : new Date();
-        animFrameTimes = buildFrameTimes(lastFix, DEFAULT_LOOKBACK_HOURS);
+        // Use current UTC as the end time so GIBS tiles are always fresh.
+        // Advisory last_fix_utc can be hours old between JTWC/NHC updates.
+        var nowUtc = new Date();
+        animFrameTimes = buildFrameTimes(nowUtc, DEFAULT_LOOKBACK_HOURS);
         animIndex = animFrameTimes.length - 1;
         framesLoaded = 0;
         framesReady = false;

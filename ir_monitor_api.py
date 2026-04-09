@@ -887,12 +887,8 @@ def _prefetch_ir_frames(storms: list):
             center_lon = storm["lon"]
             box_deg = _PREFETCH_RADIUS_DEG * 2
 
-            try:
-                center_dt = _dt.fromisoformat(
-                    storm["last_fix_utc"].replace("Z", "+00:00")
-                )
-            except Exception:
-                center_dt = _dt.now(timezone.utc)
+            # Always use current UTC so prefetch covers the latest imagery
+            center_dt = _dt.now(timezone.utc)
 
             frame_times = build_frame_times(
                 center_dt, _PREFETCH_LOOKBACK_HOURS, _PREFETCH_INTERVAL_MIN
@@ -1127,11 +1123,9 @@ def get_storm_ir(
     center_lon = storm["lon"]
     box_deg = radius_deg * 2
 
-    # Parse the last fix time as the animation center
-    try:
-        center_dt = _dt.fromisoformat(storm["last_fix_utc"].replace("Z", "+00:00"))
-    except Exception:
-        center_dt = _dt.now(timezone.utc)
+    # Use current UTC as the end time so imagery is always fresh.
+    # The last_fix_utc from JTWC/NHC can be hours old between advisories.
+    center_dt = _dt.now(timezone.utc)
 
     frame_times = build_frame_times(center_dt, lookback_hours, interval_min)
 
@@ -1193,10 +1187,8 @@ def get_storm_ir_raw(
     center_lon = storm["lon"]
     box_deg = radius_deg * 2
 
-    try:
-        center_dt = _dt.fromisoformat(storm["last_fix_utc"].replace("Z", "+00:00"))
-    except Exception:
-        center_dt = _dt.now(timezone.utc)
+    # Use current UTC so imagery is always fresh (not anchored to stale advisory time)
+    center_dt = _dt.now(timezone.utc)
 
     frame_times = build_frame_times(center_dt, lookback_hours, interval_min)
 
