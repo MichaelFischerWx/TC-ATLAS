@@ -2295,6 +2295,14 @@
             satellite: detailSatName,
             frames: animFrameTimes.length
         });
+
+        // Default to raw Tb rendering (Enhanced colormap) — much fresher
+        // than GIBS tiles, especially for Himawari. GIBS layers remain as
+        // fallback if the API call fails or user selects "GIBS Default".
+        var cmapSelect = document.getElementById('ir-colormap-select');
+        if (cmapSelect) cmapSelect.value = 'enhanced';
+        irSelectedColormap = 'enhanced';
+        fetchRawTbFrames();
     }
 
     /** Fetch storm metadata (intensity history, etc.) */
@@ -2866,8 +2874,19 @@
                 showLoadingProgress(false);
                 renderDetailColorbar();
 
+                // Switch colorbar to canvas rendering (matches raw Tb colormap)
+                var gradBar = document.getElementById('ir-tb-legend-bar-gradient');
+                var canvasBar = document.getElementById('ir-tb-colorbar-canvas');
+                if (gradBar) gradBar.style.display = 'none';
+                if (canvasBar) canvasBar.style.display = '';
+
                 var playBtn = document.getElementById('ir-anim-play');
                 if (playBtn) playBtn.disabled = false;
+
+                // Sync model overlay if active
+                if (_rtModelVisible && _rtModelAutoSync && _rtModelData) {
+                    _rtSyncModelCycleToIR();
+                }
             })
             .catch(function (err) {
                 console.error('[IR Monitor] Raw Tb fetch failed:', err);
