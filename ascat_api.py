@@ -199,14 +199,35 @@ def _fetch_ascat_winds(
     Subsets to the storm region and returns wind vectors as JSON-ready dict.
     """
     import xarray as xr
-
-    _setup_earthdata_auth()
+    import tempfile
+    import requests
 
     try:
-        # Try OPeNDAP first, then direct download
-        ds = xr.open_dataset(data_url, engine="netcdf4")
+        # Download the NetCDF file via HTTP to a temp file, then open with xarray.
+        # OPeNDAP URLs work as direct .nc downloads when you append ".nc" or
+        # use the raw URL.  This avoids DAP protocol issues on Cloud Run.
+        download_url = data_url
+        if "opendap.earthdata.nasa.gov" in data_url and not data_url.endswith(".nc"):
+            download_url = data_url + ".nc"
+
+        logger.info("ASCAT: downloading %s", download_url[:120])
+        resp = requests.get(download_url, timeout=45, stream=True)
+        resp.raise_for_status()
+
+        with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as tmp:
+            tmp_path = tmp.name
+            for chunk in resp.iter_content(chunk_size=1024 * 1024):
+                tmp.write(chunk)
+        file_size = os.path.getsize(tmp_path)
+        logger.info("ASCAT: downloaded %.1f MB to %s", file_size / 1e6, tmp_path)
+
+        ds = xr.open_dataset(tmp_path, engine="netcdf4")
     except Exception as e:
-        logger.warning("Failed to open %s: %s", data_url, e)
+        logger.warning("Failed to download/open %s: %s", data_url, e)
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
         return None
 
     try:
@@ -310,6 +331,12 @@ def _fetch_ascat_winds(
         del lat, lon, wspd, wdir, lat_flat, lon_flat, wspd_flat, wdir_flat
         gc.collect()
 
+        # Clean up temp file
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
         return {
             "winds": winds,
             "count": len(winds),
@@ -320,6 +347,10 @@ def _fetch_ascat_winds(
         logger.error("Error processing ASCAT data: %s", e, exc_info=True)
         try:
             ds.close()
+        except Exception:
+            pass
+        try:
+            os.unlink(tmp_path)
         except Exception:
             pass
         return None
