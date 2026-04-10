@@ -498,9 +498,19 @@ def _parse_hsd_header(data: bytes) -> dict:
         header["planck_c1"] = struct.unpack_from(f"{LE}d", data, blk5_start + 43)[0]
         header["planck_c2"] = struct.unpack_from(f"{LE}d", data, blk5_start + 51)[0]
 
-        # Direct count→Tbb speed-up coefficients (avoids radiance step)
-        header["tbb_gain"] = struct.unpack_from(f"{LE}d", data, blk5_start + 59)[0]
-        header["tbb_offset"] = struct.unpack_from(f"{LE}d", data, blk5_start + 67)[0]
+        # Central wavelength (µm) — at offset 5 in block 5
+        header["central_wavelength"] = struct.unpack_from(f"{LE}d", data, blk5_start + 5)[0]
+
+        # Planck temperature correction coefficients (offsets 59-75):
+        # Tbb_corrected = C0 + C1 * Te + C2 * Te^2
+        header["corr_c0"] = struct.unpack_from(f"{LE}d", data, blk5_start + 59)[0]
+        header["corr_c1"] = struct.unpack_from(f"{LE}d", data, blk5_start + 67)[0]
+        header["corr_c2"] = struct.unpack_from(f"{LE}d", data, blk5_start + 75)[0]
+
+        # Physical constants (offsets 83-99)
+        header["speed_of_light"] = struct.unpack_from(f"{LE}d", data, blk5_start + 83)[0]
+        header["planck_h"] = struct.unpack_from(f"{LE}d", data, blk5_start + 91)[0]
+        header["boltzmann_k"] = struct.unpack_from(f"{LE}d", data, blk5_start + 99)[0]
     except Exception as e:
         print(f"[satellite_ir] HSD calibration parse failed: {e}")
         header.setdefault("gain", 1.0)
@@ -508,8 +518,13 @@ def _parse_hsd_header(data: bytes) -> dict:
         header.setdefault("planck_c0", 0.0)
         header.setdefault("planck_c1", 0.0)
         header.setdefault("planck_c2", 0.0)
-        header.setdefault("tbb_gain", 0.0)
-        header.setdefault("tbb_offset", 0.0)
+        header.setdefault("central_wavelength", 10.4)
+        header.setdefault("corr_c0", 0.0)
+        header.setdefault("corr_c1", 1.0)
+        header.setdefault("corr_c2", 0.0)
+        header.setdefault("speed_of_light", 299792458.0)
+        header.setdefault("planck_h", 6.62607e-34)
+        header.setdefault("boltzmann_k", 1.38065e-23)
 
     # Total header length is stored in Block 1 at byte 70 (uint32)
     try:
@@ -523,7 +538,8 @@ def _parse_hsd_header(data: bytes) -> dict:
     print(f"[satellite_ir] HSD header: {header['n_columns']}x{header['n_lines']}, "
           f"data_offset={header['data_offset']}, "
           f"gain={header.get('gain', 'N/A'):.6g}, "
-          f"tbb_gain={header.get('tbb_gain', 'N/A'):.6g}")
+          f"corr_c0={header.get('corr_c0', 'N/A'):.6g}, "
+          f"corr_c1={header.get('corr_c1', 'N/A'):.6g}")
 
     return header
 
@@ -531,36 +547,41 @@ def _parse_hsd_header(data: bytes) -> dict:
 def _hsd_counts_to_tbb(counts: np.ndarray, header: dict) -> np.ndarray:
     """Convert raw HSD uint16 counts to brightness temperature (K).
 
-    Uses the direct count→Tbb speed-up coefficients if available (most
-    efficient).  Falls back to the two-step count→radiance→Tbb path
-    using Planck inversion otherwise.
+    Three-step conversion following the JMA HSD specification and satpy:
+      1. Count → Radiance:  L = gain * DN + offset   [W m⁻² sr⁻¹ µm⁻¹]
+      2. Planck inversion:  Te = hc / (kλ · ln(2hc²/(Lλ⁵·10⁶) + 1))
+      3. Correction:        Tbb = C0 + C1·Te + C2·Te²
+
+    The physical constants (h, c, k) and central wavelength come from
+    the HSD Block 5 header.  The correction coefficients C0/C1/C2
+    account for sensor spectral response.
     """
     valid = counts > 0
 
-    # Fast path: use direct count→Tbb linear coefficients
-    tbb_gain = header.get("tbb_gain", 0.0)
-    tbb_offset = header.get("tbb_offset", 0.0)
-    if tbb_gain != 0.0:
-        tbb = np.full(counts.shape, np.nan, dtype=np.float32)
-        tbb[valid] = tbb_gain * counts[valid].astype(np.float32) + tbb_offset
-        return tbb
+    # Step 1: count → spectral radiance
+    rad = np.full(counts.shape, np.nan, dtype=np.float64)
+    rad[valid] = header["gain"] * counts[valid].astype(np.float64) + header["offset"]
 
-    # Slow path: count → radiance → Tbb
-    rad = np.full(counts.shape, np.nan, dtype=np.float32)
-    rad[valid] = header["gain"] * counts[valid].astype(np.float32) + header["offset"]
+    # Step 2: Planck inversion using physical constants
+    lam = header.get("central_wavelength", 10.4) * 1e-6  # µm → m
+    h = header.get("planck_h", 6.62607e-34)
+    c = header.get("speed_of_light", 2.99792e8)
+    k = header.get("boltzmann_k", 1.38065e-23)
 
-    c0 = header.get("planck_c0", 0.0)
-    c1 = header.get("planck_c1", 0.0)
-    c2 = header.get("planck_c2", 0.0)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        # Radiance in HSD is in [W m⁻² sr⁻¹ µm⁻¹], convert to [W m⁻² sr⁻¹ m⁻¹]
+        rad_si = rad * 1e6
+        arg = 2.0 * h * c * c / (rad_si * lam**5) + 1.0
+        tbb = h * c / (k * lam * np.log(arg))
 
-    if c1 > 0 and c2 > 0:
-        with np.errstate(divide="ignore", invalid="ignore"):
-            tbb = c2 / np.log(1.0 + c1 / rad) + c0
-    else:
-        tbb = rad
+    # Step 3: apply correction coefficients
+    corr_c0 = header.get("corr_c0", 0.0)
+    corr_c1 = header.get("corr_c1", 1.0)
+    corr_c2 = header.get("corr_c2", 0.0)
+    tbb = corr_c0 + corr_c1 * tbb + corr_c2 * tbb * tbb
 
     tbb[~valid] = np.nan
-    return tbb
+    return tbb.astype(np.float32)
 
 
 def open_himawari_subset(s3_prefix: str, center_lat: float, center_lon: float,
