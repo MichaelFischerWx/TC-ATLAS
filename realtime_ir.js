@@ -370,6 +370,17 @@
         setUrl: function () {
             this.redraw();
         },
+
+        /** setOpacity — L.GridLayer doesn't have this by default (L.TileLayer does).
+         *  Needed for the animation system's show/hide frame toggling. */
+        setOpacity: function (opacity) {
+            this.options.opacity = opacity;
+            var container = this.getContainer ? this.getContainer() : this._container;
+            if (container) {
+                container.style.opacity = opacity;
+            }
+            return this;
+        },
     });
 
     /** Render the detail view Tb colorbar canvas from active colormap LUT */
