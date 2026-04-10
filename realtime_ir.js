@@ -960,20 +960,6 @@
                '/' + tileMatrix + '/' + z + '/' + y + '/' + x + '.png';
     }
 
-    /** Probe whether a GIBS frame exists at the given time by checking a
-     *  single representative tile (z3).  Returns a Promise<boolean>.
-     *  Used to skip entirely-missing frames before creating full tile layers. */
-    function probeGIBSFrame(layerName, timeStr) {
-        // Use a z3 tile near the equator — fast, small, and representative
-        var url = GIBS_BASE + '/' + layerName + '/default/' + timeStr +
-                  '/GoogleMapsCompatible_Level6/3/3/3.png';
-        return fetch(url, { method: 'HEAD', cache: 'no-store' }).then(function (r) {
-            return r.ok;
-        }).catch(function () {
-            return false;
-        });
-    }
-
     /** Create a Leaflet tile layer for a single GIBS IR product at a given time
      *  (used for storm-detail animation where only one satellite is needed).
      *  Uses a custom GridLayer with per-tile retry so that individual tiles
@@ -1820,15 +1806,18 @@
         }
     }
 
-    /** Build an array of GIBS time strings for animation (lookback_hours, every 30 min) */
-    function buildFrameTimes(centerDt, lookbackHours) {
+    /** Build an array of GIBS time strings for animation (lookback_hours, every 30 min).
+     *  @param {Date}    centerDt      - end time reference
+     *  @param {number}  lookbackHours - how many hours to look back
+     *  @param {boolean} verified      - if true, centerDt is an already-verified
+     *                                   GIBS time so skip the 15-min safety margin */
+    function buildFrameTimes(centerDt, lookbackHours, verified) {
         var times = [];
         var end = roundToGIBSInterval(centerDt);
-        // Reduced from 40 min to 15 min: findLatestGIBSTimes already probes actual
-        // availability, so the extra margin only needs to cover the 10-min GIBS
-        // rounding interval plus a small buffer.  Per-tile retry (loadImageWithRetry)
-        // handles any remaining gaps by falling back 10/20/30 min automatically.
-        end = new Date(end.getTime() - 15 * 60 * 1000);
+        if (!verified) {
+            // Apply 15-min safety margin when using unverified current time
+            end = new Date(end.getTime() - 15 * 60 * 1000);
+        }
         var start = new Date(end.getTime() - lookbackHours * 3600 * 1000);
         var step = 30 * 60 * 1000; // 30-min steps for animation (not every 10 min — too many frames)
         for (var t = start.getTime(); t <= end.getTime(); t += step) {
@@ -2299,6 +2288,7 @@
     }
 
     var _frameLoadedOnce = {};  // track which frames have fired their initial load
+    var _firstFrameShown = false;  // true once we've shown the first available frame
 
     /** Called when a single frame layer finishes loading its tiles */
     function onFrameLayerLoaded(frameIdx) {
@@ -2309,12 +2299,22 @@
         framesLoaded++;
         var total = animFrameTimes.length;
         var pct = Math.round((framesLoaded / total) * 100);
-        showLoadingProgress(true, pct);
 
         // Track this frame as valid if it didn't have tile errors
         if (!frameHasError[frameIdx]) {
             validFrames.push(frameIdx);
             validFrames.sort(function (a, b) { return a - b; });
+        }
+
+        // Show the FIRST valid frame immediately so the user sees imagery
+        // right away instead of staring at a blank map while 12 more load.
+        if (!_firstFrameShown && validFrames.length > 0 && productMode === 'eir') {
+            _firstFrameShown = true;
+            showFrame(validFrames[validFrames.length - 1]);
+            // Switch loader text to indicate remaining frames loading in background
+            showLoadingProgress(true, pct);
+        } else {
+            showLoadingProgress(true, pct);
         }
 
         if (framesLoaded >= total) {
@@ -2391,14 +2391,23 @@
         detailSatName = bestSatelliteForLon(storm.lon);
         var satLayerName = GIBS_IR_LAYERS[detailSatName];
 
-        // Build animation frame times (30-min steps, 6h lookback)
-        // Use current UTC as the end time so GIBS tiles are always fresh.
-        // Advisory last_fix_utc can be hours old between JTWC/NHC updates.
-        var nowUtc = new Date();
-        animFrameTimes = buildFrameTimes(nowUtc, DEFAULT_LOOKBACK_HOURS);
+        // Build animation frame times (30-min steps, 6h lookback).
+        // Use the already-probed GIBS time for this satellite if available
+        // (from the global map's findLatestGIBSTimes) — this avoids the
+        // 15-min guessing margin and ensures frames start from a known-good time.
+        var endTime;
+        var gibsTimeVerified = false;
+        if (latestGIBSTimes && latestGIBSTimes[detailSatName]) {
+            endTime = new Date(latestGIBSTimes[detailSatName]);
+            gibsTimeVerified = true;
+        } else {
+            endTime = new Date();  // fallback to current UTC
+        }
+        animFrameTimes = buildFrameTimes(endTime, DEFAULT_LOOKBACK_HOURS, gibsTimeVerified);
         animIndex = animFrameTimes.length - 1;
         framesLoaded = 0;
         _frameLoadedOnce = {};
+        _firstFrameShown = false;
         framesReady = false;
 
         // Disable play button until frames load
@@ -2434,48 +2443,30 @@
         var _batchAddedToMap = {};
         var _batchNextIdx = 0;  // index into loadOrder for next batch
 
-        function _addFrameToMap(fi) {
-            _batchAddedToMap[fi] = true;
-            animFrameLayers[fi].addTo(detailMap);
-
-            // Listen for tile load completion AND tile errors
-            (function (layer, idx) {
-                layer.on('tileerror', function () {
-                    frameHasError[idx] = true;
-                });
-                layer.on('load', function () {
-                    onFrameLayerLoaded(idx);
-                    // When this frame finishes, trigger next batch
-                    _addNextBatch();
-                });
-            })(animFrameLayers[fi], fi);
-        }
-
         function _addNextBatch() {
-            // Collect the next batch of frame indices to probe
-            var batch = [];
-            while (_batchNextIdx < loadOrder.length && batch.length < FRAME_BATCH_SIZE) {
+            var added = 0;
+            while (_batchNextIdx < loadOrder.length && added < FRAME_BATCH_SIZE) {
                 var fi = loadOrder[_batchNextIdx];
-                if (!_batchAddedToMap[fi]) {
-                    batch.push(fi);
-                }
                 _batchNextIdx++;
-            }
-            if (batch.length === 0) return;
+                if (_batchAddedToMap[fi]) continue;
 
-            // Probe each frame in this batch; add to map if available,
-            // mark as error + advance counter if not (avoids per-tile retry cascade)
-            batch.forEach(function (fi) {
-                probeGIBSFrame(satLayerName, animFrameTimes[fi]).then(function (ok) {
-                    if (ok) {
-                        _addFrameToMap(fi);
-                    } else {
-                        // Frame doesn't exist on GIBS — skip entirely
-                        frameHasError[fi] = true;
-                        onFrameLayerLoaded(fi);
-                    }
-                });
-            });
+                _batchAddedToMap[fi] = true;
+                animFrameLayers[fi].addTo(detailMap);
+
+                // Listen for tile load completion AND tile errors
+                (function (idx) {
+                    animFrameLayers[idx].on('tileerror', function () {
+                        frameHasError[idx] = true;
+                    });
+                    animFrameLayers[idx].on('load', function () {
+                        onFrameLayerLoaded(idx);
+                        // When this frame finishes, trigger next batch
+                        _addNextBatch();
+                    });
+                })(fi);
+
+                added++;
+            }
         }
 
         // Kick off the first batch
