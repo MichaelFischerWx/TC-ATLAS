@@ -3152,11 +3152,22 @@
     /** Fetch raw Tb frames from API and switch to client-side rendering */
     /** Build L.imageOverlay layers from rawTbFrames[] and switch display */
     function _applyRawTbToMap() {
-        // Stash current GIBS tile layers
+        // Stash current GIBS tile layers (only on first switch)
         if (!_gibsAnimFrameLayers && animFrameLayers.length > 0) {
-            _gibsAnimFrameLayers = animFrameLayers.slice();
-            for (var i = 0; i < _gibsAnimFrameLayers.length; i++) {
-                _gibsAnimFrameLayers[i].setOpacity(0);
+            // Check if current layers are GIBS tiles (not RawTbTileLayers)
+            var isGibs = !animFrameLayers[0].updateColormap;
+            if (isGibs) {
+                _gibsAnimFrameLayers = animFrameLayers.slice();
+                for (var i = 0; i < _gibsAnimFrameLayers.length; i++) {
+                    _gibsAnimFrameLayers[i].setOpacity(0);
+                }
+            }
+        }
+
+        // Remove any existing raw Tb tile layers from the map
+        for (var i = 0; i < animFrameLayers.length; i++) {
+            if (animFrameLayers[i] && animFrameLayers[i].updateColormap && detailMap) {
+                detailMap.removeLayer(animFrameLayers[i]);
             }
         }
 
