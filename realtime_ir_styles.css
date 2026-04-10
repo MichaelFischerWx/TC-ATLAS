@@ -11,6 +11,12 @@
     background-clip: text !important;
 }
 
+/* ── Raw Tb overlay (custom colormaps) — crisp nearest-neighbor ── */
+.ir-raw-overlay img {
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;  /* Firefox fallback */
+}
+
 /* ── Map ─────────────────────────────────────────────────────── */
 .ir-map {
     position: absolute;
@@ -985,6 +991,24 @@
 /* ── Raw Tb Image Overlay ─────────────────────────────────────── */
 /* At 2km resolution the image is ~1000px — browser default smooth
    interpolation looks best when displayed at screen resolution. */
+
+/* ── ASCAT Wind Barb Overlay ─────────────────────────────────── */
+.ascat-barb-icon {
+    background: none !important;
+    border: none !important;
+}
+.ascat-barb-icon svg {
+    overflow: visible;
+}
+.ascat-tooltip {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    padding: 3px 6px;
+    background: rgba(15, 23, 42, 0.9);
+    border: 1px solid rgba(116, 185, 255, 0.3);
+    color: #e2e8f0;
+    border-radius: 3px;
+}
 
 /* ── DeepMind Ensemble Distribution Sliders ──────────────────── */
 

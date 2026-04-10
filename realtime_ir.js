@@ -230,7 +230,7 @@
         return arr;
     }
 
-    /** Render raw Tb uint8 array to a data:image/png URI using canvas + colormap LUT */
+    /** Render raw Tb uint8 array to a data:image/png URI using canvas + colormap LUT. */
     function renderTbToDataURI(tbData, rows, cols, colormap) {
         if (!_irRenderCanvas) _irRenderCanvas = document.createElement('canvas');
         _irRenderCanvas.width = cols;
@@ -256,6 +256,122 @@
         return _irRenderCanvas.toDataURL('image/png');
     }
 
+    /**
+     * L.GridLayer subclass that renders raw Tb data as canvas tiles.
+     * Each tile is rendered at native zoom resolution, avoiding the
+     * upscaling blur of a single L.imageOverlay on Retina displays.
+     */
+    var RawTbTileLayer = L.GridLayer.extend({
+        initialize: function (tbData, rows, cols, bounds, colormap, options) {
+            this._tbData = tbData;
+            this._tbRows = rows;
+            this._tbCols = cols;
+            // bounds: [[south, west], [north, east]]
+            this._dataBounds = bounds;
+            this._colormap = colormap;
+            this._lut = IR_COLORMAPS[colormap] || IR_COLORMAPS['enhanced'];
+            L.GridLayer.prototype.initialize.call(this, options);
+        },
+
+        createTile: function (coords) {
+            var tile = document.createElement('canvas');
+            var tileSize = this.getTileSize();
+            var tw = tileSize.x, th = tileSize.y;
+            tile.width = tw;
+            tile.height = th;
+
+            var ctx = tile.getContext('2d');
+
+            // Data geographic bounds
+            var dataSouth = this._dataBounds[0][0], dataWest = this._dataBounds[0][1];
+            var dataNorth = this._dataBounds[1][0], dataEast = this._dataBounds[1][1];
+            var dataLatSpan = dataNorth - dataSouth;
+            var dataLonSpan = dataEast - dataWest;
+
+            var map = this._map;
+            var nwPoint = coords.scaleBy(tileSize);
+            var z = coords.z;
+
+            // Pre-compute lat for each row and lon for each column
+            // (avoids calling map.unproject for every pixel)
+            var rowLats = new Float64Array(th);
+            for (var py = 0; py < th; py++) {
+                rowLats[py] = map.unproject(L.point(nwPoint.x, nwPoint.y + py), z).lat;
+            }
+            var colLons = new Float64Array(tw);
+            for (var px = 0; px < tw; px++) {
+                colLons[px] = map.unproject(L.point(nwPoint.x + px, nwPoint.y), z).lng;
+            }
+
+            // Quick bounds check: skip tile if entirely outside data bounds
+            var tileNorth = rowLats[0], tileSouth = rowLats[th - 1];
+            var tileWest = colLons[0], tileEast = colLons[tw - 1];
+            if (tileSouth > dataNorth || tileNorth < dataSouth ||
+                tileEast < dataWest || tileWest > dataEast) {
+                return tile;  // empty tile
+            }
+
+            var imgData = ctx.createImageData(tw, th);
+            var pixels = imgData.data;
+            var lut = this._lut;
+            var tbData = this._tbData;
+            var tbRows = this._tbRows;
+            var tbCols = this._tbCols;
+            var hasData = false;
+
+            // Pre-compute data column indices for each tile column
+            var colIndices = new Int32Array(tw);
+            for (var px = 0; px < tw; px++) {
+                var colFrac = (colLons[px] - dataWest) / dataLonSpan;
+                if (colFrac < 0 || colFrac >= 1) { colIndices[px] = -1; continue; }
+                var dc = Math.floor(colFrac * tbCols);
+                colIndices[px] = (dc >= 0 && dc < tbCols) ? dc : -1;
+            }
+
+            for (var py = 0; py < th; py++) {
+                var lat = rowLats[py];
+                var rowFrac = (dataNorth - lat) / dataLatSpan;
+                if (rowFrac < 0 || rowFrac >= 1) continue;
+                var dataRow = Math.floor(rowFrac * tbRows);
+                if (dataRow < 0 || dataRow >= tbRows) continue;
+                var rowOffset = dataRow * tbCols;
+
+                for (var px = 0; px < tw; px++) {
+                    var dc = colIndices[px];
+                    if (dc < 0) continue;
+
+                    var val = tbData[rowOffset + dc];
+                    if (val === 0) continue;
+
+                    var pi = (py * tw + px) * 4;
+                    var li = val * 4;
+                    pixels[pi]     = lut[li];
+                    pixels[pi + 1] = lut[li + 1];
+                    pixels[pi + 2] = lut[li + 2];
+                    pixels[pi + 3] = lut[li + 3];
+                    hasData = true;
+                }
+            }
+
+            if (hasData) {
+                ctx.putImageData(imgData, 0, 0);
+            }
+            return tile;
+        },
+
+        /** Update colormap and redraw all tiles */
+        updateColormap: function (colormap) {
+            this._colormap = colormap;
+            this._lut = IR_COLORMAPS[colormap] || IR_COLORMAPS['enhanced'];
+            this.redraw();
+        },
+
+        /** Compatibility shim: setUrl triggers a redraw (used by recolorRawFrames) */
+        setUrl: function () {
+            this.redraw();
+        },
+    });
+
     /** Render the detail view Tb colorbar canvas from active colormap LUT */
     function renderDetailColorbar() {
         var canvas = document.getElementById('ir-tb-colorbar-canvas');
@@ -277,19 +393,17 @@
     function recolorRawFrames() {
         if (rawTbFrames.length === 0) return;
 
-        // If animFrameLayers are still GIBS tiles (no setUrl), we need to
-        // switch to image overlays first via _applyRawTbToMap().
-        if (animFrameLayers.length > 0 && !animFrameLayers[0].setUrl) {
+        // If animFrameLayers are still GIBS tiles (no updateColormap/setUrl),
+        // switch to canvas tile layers via _applyRawTbToMap().
+        if (animFrameLayers.length > 0 &&
+            !animFrameLayers[0].setUrl && !animFrameLayers[0].updateColormap) {
             _applyRawTbToMap();
             return;
         }
 
-        for (var i = 0; i < rawTbFrames.length; i++) {
-            var frame = rawTbFrames[i];
-            if (!frame || !frame.tb_data) continue;
-            var dataUrl = renderTbToDataURI(frame.tb_data, frame.rows, frame.cols, irSelectedColormap);
-            if (animFrameLayers[i] && animFrameLayers[i].setUrl) {
-                animFrameLayers[i].setUrl(dataUrl);
+        for (var i = 0; i < animFrameLayers.length; i++) {
+            if (animFrameLayers[i] && animFrameLayers[i].updateColormap) {
+                animFrameLayers[i].updateColormap(irSelectedColormap);
             }
         }
         renderDetailColorbar();
@@ -486,6 +600,13 @@
     var _rtDmHistTauIdx = 0;           // current slider index for intensity histogram
     var _rtDmChangeTauIdx = 4;         // current slider index for change histogram
     var _rtDmChangeInt = 24;           // 12 or 24 hour change interval
+
+    // ── ASCAT Wind Barb Overlay State ───────────────────────
+    var _rtAscatPasses = null;         // API response: list of passes
+    var _rtAscatVisible = false;       // overlay toggle state
+    var _rtAscatLayers = [];           // L.marker references on map
+    var _rtAscatLastAtcf = null;       // last storm we fetched passes for
+    var _rtAscatActiveUrl = null;      // currently displayed pass data URL
 
     var RT_MODEL_COLORS = {
         'OFCL': '#ff4757', 'JTWC': '#ffa502',
@@ -2258,6 +2379,11 @@
         detailMap.getPane('coastlinePane').style.pointerEvents = 'none';
         _loadCoastlineOverlay(detailMap);
 
+        // ASCAT wind barb pane — above tiles, below coastlines
+        detailMap.createPane('ascatPane');
+        detailMap.getPane('ascatPane').style.zIndex = 440;
+        detailMap.getPane('ascatPane').style.pointerEvents = 'none';
+
         // Labels on top (in overlay pane so above IR tiles)
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {
             subdomains: 'abcd', maxZoom: 19, pane: 'overlayPane'
@@ -2439,10 +2565,11 @@
         animIndex = 0;
         initDetailMap(storm);
 
-        // Load model forecasts (a-deck) and DeepMind ensemble
+        // Load model forecasts (a-deck), DeepMind ensemble, ASCAT winds
         _rtLoadModelForecasts(storm);
         _rtLoadWeatherlab(storm);
         _rtLoadDmEnsemble(storm);
+        _rtLoadAscatPasses(storm);
 
         // Fetch metadata for intensity chart
         fetchStormMetadata(atcfId, function (err, meta) {
@@ -2471,6 +2598,7 @@
 
         // Clean up model overlay
         _rtRemoveModelOverlay();
+        _rtRemoveAscatOverlay();
 
         // Reset product state
         removeVigorLayer();
@@ -2860,7 +2988,8 @@
                             });
                         }
                         _rawTbCache[atcfId] = { frames: data.frames, rawTbFrames: decoded };
-                        console.log('[IR Pre-fetch] ' + atcfId + ': cached ' + decoded.length + ' raw Tb frames');
+                        console.log('[IR Pre-fetch] ' + atcfId + ': cached ' + decoded.length + ' raw Tb frames'
+                            + (decoded.length > 0 ? ' (' + decoded[0].cols + 'x' + decoded[0].rows + ' px)' : ''));
                     }
                 })
                 .catch(function () {})
@@ -2885,7 +3014,8 @@
         var cached = _rawTbCache[currentStormId];
         if (cached && cached.rawTbFrames && cached.rawTbFrames.length > 0) {
             rawTbFrames = cached.rawTbFrames;
-            console.log('[RT Monitor] Loaded ' + rawTbFrames.length + ' raw Tb frames from cache');
+            console.log('[RT Monitor] Loaded ' + rawTbFrames.length + ' raw Tb frames from cache'
+                + (rawTbFrames.length > 0 ? ' (' + rawTbFrames[0].cols + 'x' + rawTbFrames[0].rows + ' px)' : ''));
             return;
         }
 
@@ -2928,19 +3058,15 @@
             }
         }
 
-        // Create image overlay layers from rawTbFrames
+        // Create canvas tile layers from rawTbFrames
         var newLayers = [];
         for (var i = 0; i < rawTbFrames.length; i++) {
             var frame = rawTbFrames[i];
-            var dataUrl = renderTbToDataURI(frame.tb_data, frame.rows, frame.cols, irSelectedColormap);
-
-            var bounds = L.latLngBounds(
-                [frame.bounds[0][0], frame.bounds[0][1]],
-                [frame.bounds[1][0], frame.bounds[1][1]]
+            var overlay = new RawTbTileLayer(
+                frame.tb_data, frame.rows, frame.cols,
+                frame.bounds, irSelectedColormap,
+                { opacity: 0, pane: 'tilePane', className: 'ir-raw-overlay' }
             );
-            var overlay = L.imageOverlay(dataUrl, bounds, {
-                opacity: 0, pane: 'tilePane', className: 'ir-raw-overlay'
-            });
             overlay.addTo(detailMap);
             newLayers.push(overlay);
         }
@@ -5335,6 +5461,317 @@
         if (btn) { btn.style.background = 'rgba(0,229,255,0.15)'; btn.title = ''; }
         var filterEl = document.getElementById('rt-weatherlab-filter');
         if (filterEl) filterEl.style.display = 'none';
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  ASCAT SCATTEROMETER WIND BARB OVERLAY
+    // ═══════════════════════════════════════════════════════════
+
+    /** Wind barb color scale by speed (knots) */
+    var _ASCAT_COLORS = [
+        [15,  '#60a5fa'],  // light blue: < 15 kt
+        [25,  '#22c55e'],  // green: 15-25 kt
+        [35,  '#eab308'],  // yellow: 25-35 kt
+        [50,  '#f97316'],  // orange: 35-50 kt
+        [64,  '#ef4444'],  // red: 50-64 kt
+        [999, '#c026d3'],  // purple: 64+ kt (hurricane force)
+    ];
+
+    function _ascatColor(spdKt) {
+        for (var i = 0; i < _ASCAT_COLORS.length; i++) {
+            if (spdKt < _ASCAT_COLORS[i][0]) return _ASCAT_COLORS[i][1];
+        }
+        return _ASCAT_COLORS[_ASCAT_COLORS.length - 1][1];
+    }
+
+    /**
+     * Build an SVG wind barb string for the given speed and direction.
+     * Returns an SVG element string suitable for L.divIcon html.
+     *
+     * Meteorological convention: staff points toward the direction the
+     * wind is coming FROM.  Feathers on the left side looking from base
+     * to tip.
+     */
+    function _buildWindBarbSVG(speedKt, dirDeg) {
+        var sz = 30;           // viewBox size
+        var cx = sz / 2, cy = sz / 2;
+        var staffLen = 12;     // pixels from center to tip
+        var barbLen = 5;       // feather length
+        var barbGap = 2.2;     // gap between feathers
+        var flagH = 3;         // pennant height along staff
+        var flagW = 5;         // pennant width
+
+        var color = _ascatColor(speedKt);
+
+        // Wind-from direction in radians (meteorological: 0° = from north, 90° = from east)
+        var dirRad = (dirDeg) * Math.PI / 180;
+
+        // Staff tip in the FROM direction (up = north = 0°)
+        var sinD = Math.sin(dirRad), cosD = -Math.cos(dirRad);
+        var tipX = cx + staffLen * sinD;
+        var tipY = cy + staffLen * cosD;
+
+        var paths = [];
+
+        // Staff line
+        paths.push('M' + cx.toFixed(1) + ',' + cy.toFixed(1) +
+                   'L' + tipX.toFixed(1) + ',' + tipY.toFixed(1));
+
+        // Feather encoding
+        var remaining = Math.round(speedKt / 5) * 5;
+        var nFlags = Math.floor(remaining / 50); remaining -= nFlags * 50;
+        var nFull  = Math.floor(remaining / 10); remaining -= nFull * 10;
+        var nHalf  = Math.floor(remaining / 5);
+
+        // Perpendicular direction (left side looking from base to tip)
+        var perpX = cosD;
+        var perpY = -(-sinD);  // negated because SVG y-axis is inverted
+        // Correct perpendicular: rotate staff direction 90° CCW
+        perpX = -cosD;
+        perpY = sinD;
+
+        var pos = 0;  // distance from tip along staff
+
+        // 50-kt pennant flags
+        for (var fi = 0; fi < nFlags; fi++) {
+            var frac1 = pos / staffLen;
+            var fx1 = tipX + (cx - tipX) * frac1;
+            var fy1 = tipY + (cy - tipY) * frac1;
+            var frac2 = (pos + flagH) / staffLen;
+            var fx2 = tipX + (cx - tipX) * frac2;
+            var fy2 = tipY + (cy - tipY) * frac2;
+            var midFrac = (pos + flagH * 0.5) / staffLen;
+            var mx = tipX + (cx - tipX) * midFrac;
+            var my = tipY + (cy - tipY) * midFrac;
+            var outX = mx + flagW * perpX;
+            var outY = my + flagW * perpY;
+            // Filled triangle
+            paths.push('M' + fx1.toFixed(1) + ',' + fy1.toFixed(1) +
+                       'L' + outX.toFixed(1) + ',' + outY.toFixed(1) +
+                       'L' + fx2.toFixed(1) + ',' + fy2.toFixed(1) + 'Z');
+            pos += flagH + barbGap * 0.3;
+        }
+
+        // 10-kt full barbs
+        for (var fb = 0; fb < nFull; fb++) {
+            var frac = pos / staffLen;
+            var bx = tipX + (cx - tipX) * frac;
+            var by = tipY + (cy - tipY) * frac;
+            paths.push('M' + bx.toFixed(1) + ',' + by.toFixed(1) +
+                       'L' + (bx + barbLen * perpX).toFixed(1) + ',' +
+                       (by + barbLen * perpY).toFixed(1));
+            pos += barbGap;
+        }
+
+        // 5-kt half barbs
+        for (var hb = 0; hb < nHalf; hb++) {
+            // If this is the only feather, offset it slightly from the tip
+            if (nFlags === 0 && nFull === 0 && pos === 0) pos = barbGap;
+            var frac = pos / staffLen;
+            var hx = tipX + (cx - tipX) * frac;
+            var hy = tipY + (cy - tipY) * frac;
+            paths.push('M' + hx.toFixed(1) + ',' + hy.toFixed(1) +
+                       'L' + (hx + barbLen * 0.55 * perpX).toFixed(1) + ',' +
+                       (hy + barbLen * 0.55 * perpY).toFixed(1));
+            pos += barbGap;
+        }
+
+        // Combine into SVG
+        var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + sz + '" height="' + sz +
+            '" viewBox="0 0 ' + sz + ' ' + sz + '">' +
+            '<path d="' + paths.join(' ') + '" stroke="' + color +
+            '" stroke-width="1.5" fill="' + color + '" fill-opacity="0.3" ' +
+            'stroke-linecap="round" stroke-linejoin="round"/></svg>';
+        return svg;
+    }
+
+    /**
+     * Load ASCAT pass list for a storm (called from openStormDetail).
+     */
+    function _rtLoadAscatPasses(storm) {
+        var section = document.getElementById('rt-ascat-section');
+        var statusEl = document.getElementById('rt-ascat-status');
+        var atcfId = storm.atcf_id;
+
+        if (!atcfId) {
+            if (section) section.style.display = 'none';
+            return;
+        }
+
+        // Skip if already loaded for this storm
+        if (atcfId === _rtAscatLastAtcf && _rtAscatPasses) {
+            if (section) section.style.display = '';
+            return;
+        }
+        _rtAscatLastAtcf = atcfId;
+        _rtAscatPasses = null;
+
+        if (statusEl) statusEl.textContent = 'Searching...';
+        if (section) section.style.display = '';
+
+        fetch(API_BASE + '/ascat/passes?atcf_id=' + encodeURIComponent(atcfId) + '&hours=12')
+            .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+            .then(function (json) {
+                _rtAscatPasses = json;
+
+                if (!json.passes || json.passes.length === 0) {
+                    if (statusEl) statusEl.textContent = 'No passes found';
+                    return;
+                }
+
+                if (statusEl) statusEl.textContent = json.passes.length + ' pass' + (json.passes.length > 1 ? 'es' : '');
+
+                // Populate pass dropdown
+                var sel = document.getElementById('rt-ascat-pass-select');
+                if (sel) {
+                    sel.innerHTML = '';
+                    for (var i = 0; i < json.passes.length; i++) {
+                        var p = json.passes[i];
+                        var opt = document.createElement('option');
+                        opt.value = i;
+                        opt.textContent = p.satellite + ' \u2014 ' + p.datetime_utc;
+                        sel.appendChild(opt);
+                    }
+                }
+            })
+            .catch(function (err) {
+                console.warn('[RT ASCAT] Failed to load passes:', err);
+                if (statusEl) statusEl.textContent = '';
+                if (section) section.style.display = 'none';
+            });
+    }
+
+    /**
+     * Toggle ASCAT wind barb overlay on/off.
+     */
+    window._rtToggleAscatOverlay = function () {
+        var btn = document.getElementById('rt-ascat-toggle-btn');
+        var controls = document.getElementById('rt-ascat-controls');
+
+        if (_rtAscatVisible) {
+            _rtAscatVisible = false;
+            if (btn) btn.textContent = 'ASCAT';
+            if (controls) controls.style.display = 'none';
+            _rtClearAscatLayers();
+            return;
+        }
+
+        _rtAscatVisible = true;
+        if (btn) btn.textContent = 'Hide';
+        if (controls) controls.style.display = '';
+
+        // Load winds for the selected pass
+        var sel = document.getElementById('rt-ascat-pass-select');
+        if (sel) {
+            window._rtSelectAscatPass(sel.value);
+        }
+    };
+
+    /**
+     * Select and render a specific ASCAT pass.
+     */
+    window._rtSelectAscatPass = function (idx) {
+        idx = parseInt(idx);
+        if (!_rtAscatPasses || !_rtAscatPasses.passes || isNaN(idx)) return;
+
+        var pass = _rtAscatPasses.passes[idx];
+        if (!pass) return;
+
+        var dataUrl = pass.opendap_url || pass.download_url;
+        if (!dataUrl) {
+            console.warn('[RT ASCAT] No data URL for pass', pass);
+            return;
+        }
+
+        // Skip if already showing this pass
+        if (dataUrl === _rtAscatActiveUrl && _rtAscatLayers.length > 0) return;
+
+        _rtClearAscatLayers();
+
+        var statusEl = document.getElementById('rt-ascat-status');
+        if (statusEl) statusEl.textContent = 'Loading winds...';
+
+        var lat = _rtAscatPasses.storm_lat;
+        var lon = _rtAscatPasses.storm_lon;
+
+        fetch(API_BASE + '/ascat/winds?data_url=' + encodeURIComponent(dataUrl) +
+              '&center_lat=' + lat + '&center_lon=' + lon + '&radius_deg=8')
+            .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+            .then(function (json) {
+                _rtAscatActiveUrl = dataUrl;
+
+                if (!json.winds || json.winds.length === 0) {
+                    if (statusEl) statusEl.textContent = 'No wind data in region';
+                    return;
+                }
+
+                if (statusEl) statusEl.textContent = json.count + ' obs \u00B7 ' + pass.satellite;
+
+                _rtRenderAscatWinds(json.winds);
+            })
+            .catch(function (err) {
+                console.warn('[RT ASCAT] Failed to load winds:', err);
+                if (statusEl) statusEl.textContent = 'Error loading winds';
+            });
+    };
+
+    /**
+     * Render ASCAT wind barbs as Leaflet divIcon markers.
+     */
+    function _rtRenderAscatWinds(winds) {
+        _rtClearAscatLayers();
+
+        for (var i = 0; i < winds.length; i++) {
+            var w = winds[i];
+            if (w.speed_kt < 2.5) continue;  // calm — skip
+
+            var svg = _buildWindBarbSVG(w.speed_kt, w.dir_deg);
+            var icon = L.divIcon({
+                className: 'ascat-barb-icon',
+                html: svg,
+                iconSize: [30, 30],
+                iconAnchor: [15, 15],
+            });
+
+            var marker = L.marker([w.lat, w.lon], {
+                icon: icon,
+                pane: 'ascatPane',
+                interactive: true,
+            });
+            marker.bindTooltip(
+                Math.round(w.speed_kt) + ' kt from ' + Math.round(w.dir_deg) + '\u00B0',
+                { direction: 'top', offset: [0, -12], className: 'ascat-tooltip' }
+            );
+            marker.addTo(detailMap);
+            _rtAscatLayers.push(marker);
+        }
+    }
+
+    /**
+     * Remove all ASCAT barb markers from the map.
+     */
+    function _rtClearAscatLayers() {
+        for (var i = 0; i < _rtAscatLayers.length; i++) {
+            if (detailMap) try { detailMap.removeLayer(_rtAscatLayers[i]); } catch (e) {}
+        }
+        _rtAscatLayers = [];
+    }
+
+    /**
+     * Full ASCAT overlay cleanup (called when switching/closing storms).
+     */
+    function _rtRemoveAscatOverlay() {
+        _rtClearAscatLayers();
+        _rtAscatPasses = null;
+        _rtAscatLastAtcf = null;
+        _rtAscatActiveUrl = null;
+        _rtAscatVisible = false;
+        var btn = document.getElementById('rt-ascat-toggle-btn');
+        if (btn) btn.textContent = 'ASCAT';
+        var controls = document.getElementById('rt-ascat-controls');
+        if (controls) controls.style.display = 'none';
+        var section = document.getElementById('rt-ascat-section');
+        if (section) section.style.display = 'none';
     }
 
     /**
