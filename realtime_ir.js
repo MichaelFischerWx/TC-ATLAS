@@ -2196,6 +2196,12 @@
                 // Handle deep link on first load
                 handleDeepLink();
 
+                // If viewing a storm detail, refresh the header with
+                // latest data (name changes, position updates, etc.)
+                if (currentStormId) {
+                    _refreshDetailHeader(stormData);
+                }
+
                 // Pre-warm raw Tb cache for all active storms so data is
                 // ready instantly when a user clicks into the detail view.
                 _prefetchAllStormsRawTb(stormData);
@@ -2589,6 +2595,51 @@
         });
 
         _ga('ir_open_detail', { atcf_id: atcfId, name: storm.name, category: cat });
+    }
+
+    /**
+     * Refresh the detail view header with latest storm data from a poll.
+     * Handles name changes (e.g. "Four" → "Sinlaku"), position updates,
+     * and intensity changes while the detail view is open.
+     */
+    function _refreshDetailHeader(storms) {
+        if (!currentStormId) return;
+        var storm = null;
+        for (var i = 0; i < storms.length; i++) {
+            if (storms[i].atcf_id === currentStormId) {
+                storm = storms[i];
+                break;
+            }
+        }
+        if (!storm) return;
+
+        var cat = storm.category || windToCategory(storm.vmax_kt);
+        var color = SS_COLORS[cat] || SS_COLORS.TD;
+
+        var nameEl = document.getElementById('ir-detail-name');
+        if (nameEl) nameEl.textContent = storm.name || 'UNNAMED';
+
+        var catEl = document.getElementById('ir-detail-cat');
+        if (catEl) {
+            catEl.textContent = categoryShort(cat) + (storm.vmax_kt != null ? ' \u00B7 ' + storm.vmax_kt + ' kt' : '');
+            catEl.style.background = color;
+        }
+
+        var posEl = document.getElementById('ir-info-position');
+        if (posEl) posEl.textContent = fmtLatLon(storm.lat, storm.lon);
+
+        var mslpEl = document.getElementById('ir-info-mslp');
+        if (mslpEl) mslpEl.textContent = storm.mslp_hpa != null ? storm.mslp_hpa + ' hPa' : '\u2014';
+
+        var vmaxEl = document.getElementById('ir-info-vmax');
+        if (vmaxEl) vmaxEl.textContent = storm.vmax_kt != null ? storm.vmax_kt + ' kt (' + categoryShort(cat) + ')' : '\u2014';
+
+        var fixEl = document.getElementById('ir-info-lastfix');
+        if (fixEl) fixEl.textContent = fmtUTC(storm.last_fix_utc);
+
+        var motionEl = document.getElementById('ir-info-motion');
+        if (motionEl) motionEl.textContent =
+            storm.motion_deg != null ? storm.motion_deg + '\u00B0 at ' + (storm.motion_kt || '\u2014') + ' kt' : '\u2014';
     }
 
     /** Close the detail view and return to the map */
