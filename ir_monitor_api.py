@@ -72,6 +72,9 @@ JTWC_SOURCES = [
     ("ucar", "https://hurricanes.ral.ucar.edu/repository/data/bdecks_open"),
 ]
 
+# JTWC CARQ a-deck (operational analyzed fixes — updates faster than b-deck)
+JTWC_CARQ_BASE = "https://hurricanes.ral.ucar.edu/repository/data/carq"
+
 # Basins already covered by NHC (skip in JTWC scan)
 _NHC_BASINS = {"EP", "CP", "AL"}
 
@@ -477,6 +480,29 @@ def _fetch_jtwc_bdeck(atcf_id: str, bdeck_url: Optional[str] = None) -> list:
     return []
 
 
+def _fetch_jtwc_carq(atcf_id: str) -> list:
+    """
+    Fetch JTWC CARQ a-deck (operationally-analyzed fixes) from UCAR.
+    These update faster than b-decks and provide fresher position/intensity.
+    Returns list of parsed records sorted by datetime, or empty list.
+    """
+    year_str = atcf_id[-4:]
+    url = f"{JTWC_CARQ_BASE}/{year_str}/a{atcf_id.lower()}.dat"
+    text = _http_get(url, timeout=10)
+    if not text:
+        return []
+
+    records = []
+    for line in text.strip().split("\n"):
+        rec = _parse_adeck_line(line)
+        if rec:
+            records.append(rec)
+
+    if records:
+        records.sort(key=lambda r: r["datetime"])
+    return records
+
+
 def _extract_storm_name(text: str) -> Optional[str]:
     """
     Try to extract the storm name from a B-deck file.
@@ -570,6 +596,7 @@ def _fetch_bdeck(atcf_id: str) -> list:
     """
     Fetch and parse the B-deck (best track) file.
     Tries NHC first, then JTWC sources.
+    For JTWC storms, also merges CARQ a-deck records for fresher fixes.
     Returns list of parsed records sorted by datetime.
     """
     # Try NHC B-deck
@@ -585,8 +612,22 @@ def _fetch_bdeck(atcf_id: str) -> list:
             records.sort(key=lambda r: r["datetime"])
             return records
 
-    # Fall back to JTWC B-deck
-    return _fetch_jtwc_bdeck(atcf_id)
+    # Fall back to JTWC B-deck + CARQ supplement
+    bdeck_records = _fetch_jtwc_bdeck(atcf_id)
+    carq_records = _fetch_jtwc_carq(atcf_id)
+    if not carq_records:
+        return bdeck_records
+
+    # Merge and deduplicate
+    seen_keys = set()
+    merged = []
+    for rec in bdeck_records + carq_records:
+        key = (rec["datetime"], rec["tau"], rec["tech"])
+        if key not in seen_keys:
+            seen_keys.add(key)
+            merged.append(rec)
+    merged.sort(key=lambda r: r["datetime"])
+    return merged
 
 
 def _get_latest_position(records: list) -> Optional[dict]:
@@ -804,9 +845,23 @@ def _poll_active_storms():
         if storm_id in seen_ids:
             continue
 
-        records = _fetch_jtwc_bdeck(storm_id, bdeck_url)
+        bdeck_records = _fetch_jtwc_bdeck(storm_id, bdeck_url)
+
+        # Supplement with CARQ a-deck (operational fixes — often fresher)
+        carq_records = _fetch_jtwc_carq(storm_id)
+
+        # Merge: combine both, deduplicate by (datetime, tau, tech)
+        seen_keys = set()
+        records = []
+        for rec in bdeck_records + carq_records:
+            key = (rec["datetime"], rec["tau"], rec["tech"])
+            if key not in seen_keys:
+                seen_keys.add(key)
+                records.append(rec)
+        records.sort(key=lambda r: r["datetime"])
+
         if not records:
-            print(f"[IR Monitor] JTWC {storm_id}: no B-deck records from {bdeck_url}")
+            print(f"[IR Monitor] JTWC {storm_id}: no B-deck/CARQ records")
             continue
 
         latest = _get_latest_position(records)
@@ -818,9 +873,13 @@ def _poll_active_storms():
             print(f"[IR Monitor] JTWC {storm_id}: stale — last fix {latest['datetime']} ({age} ago)")
             continue
 
-        # Try to extract storm name from the raw B-deck text
+        # Extract storm name from B-deck text (avoid re-fetch: use bdeck_url already fetched)
         raw_text = _http_get(bdeck_url, timeout=10)
         name = _extract_storm_name(raw_text) if raw_text else None
+
+        bdeck_latest = bdeck_records[-1]["datetime"].strftime("%H%MZ") if bdeck_records else "none"
+        carq_latest = carq_records[-1]["datetime"].strftime("%H%MZ") if carq_records else "none"
+        print(f"[IR Monitor] JTWC {storm_id}: B-deck latest={bdeck_latest}, CARQ latest={carq_latest}, using={latest['datetime'].strftime('%Y-%m-%d %H:%MZ')} ({latest['tech']})")
 
         entry = _build_storm_entry(storm_id, records, name=name, source="JTWC")
         if entry:

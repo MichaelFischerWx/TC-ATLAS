@@ -3108,7 +3108,14 @@
 
     function _prefetchAllStormsRawTb(storms) {
         if (!storms || storms.length === 0) return;
-        // Skip background prefetch while user is viewing a detail (prioritize foreground)
+        // Skip background prefetch while user is viewing a detail (prioritize foreground).
+        // Also defer briefly so deep-link handling can set currentStormId first.
+        if (currentStormId) return;
+        // Double-check after a microtask to catch deep-link race
+        setTimeout(function () { _prefetchAllStormsRawTbInner(storms); }, 0);
+    }
+
+    function _prefetchAllStormsRawTbInner(storms) {
         if (currentStormId) return;
         // Only prefetch the strongest storms (highest vmax_kt), capped at MAX_PREFETCH_STORMS
         var sorted = storms.slice().sort(function (a, b) {
