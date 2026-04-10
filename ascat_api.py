@@ -133,23 +133,18 @@ def _search_cmr_granules(
             except (ValueError, AttributeError):
                 continue
 
-            # Find OPeNDAP URL from links
+            # Find OPeNDAP URL from links — must contain the full
+            # collection/granule path (not just the base OPeNDAP URL)
             opendap_url = None
-            for link in entry.get("links", []):
-                href = link.get("href", "")
-                if "opendap" in href.lower() or href.endswith(".nc"):
-                    opendap_url = href
-                    break
-
-            # Also check for direct download URL as fallback
             download_url = None
             for link in entry.get("links", []):
                 href = link.get("href", "")
                 rel = link.get("rel", "")
-                if rel == "http://esipfed.org/ns/fedsearch/1.1/data#" or \
-                   (href.endswith(".nc") and "opendap" not in href.lower()):
+                if "opendap" in href.lower() and "/granules/" in href:
+                    opendap_url = href
+                elif rel == "http://esipfed.org/ns/fedsearch/1.1/data#" and \
+                     href.endswith(".nc"):
                     download_url = href
-                    break
 
             results.append({
                 "satellite": sat_name,
