@@ -8401,6 +8401,15 @@ except Exception as _nx_err:
     print(f"[nexrad] FAILED to load nexrad_api: {_nx_err}")
     traceback.print_exc()
 
+try:
+    from ascat_api import router as ascat_router
+    app.include_router(ascat_router, prefix="/ascat")
+    print("[ascat] Router mounted")
+except Exception as _asc_err:
+    import traceback
+    print(f"[ascat] FAILED to load ascat_api: {_asc_err}")
+    traceback.print_exc()
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
