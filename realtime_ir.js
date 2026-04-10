@@ -3018,33 +3018,11 @@
             var storm = queue.shift();
             var atcfId = storm.atcf_id;
             if (!atcfId || _rawTbCache[atcfId]) { fetchNext(); return; }
-
-            var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) + '/ir-raw'
-                + '?lookback_hours=' + DEFAULT_LOOKBACK_HOURS
-                + '&radius_deg=' + DEFAULT_RADIUS_DEG
-                + '&interval_min=30';
-
-            fetch(url)
-                .then(function (r) { return r.json(); })
-                .then(function (data) {
-                    if (data.frames && data.frames.length > 0) {
-                        var decoded = [];
-                        for (var i = 0; i < data.frames.length; i++) {
-                            var frame = data.frames[i];
-                            decoded.push({
-                                tb_data: decodeTbData(frame.tb_data),
-                                rows: frame.tb_rows,
-                                cols: frame.tb_cols,
-                                bounds: frame.bounds
-                            });
-                        }
-                        _rawTbCache[atcfId] = { frames: data.frames, rawTbFrames: decoded };
-                        console.log('[IR Pre-fetch] ' + atcfId + ': cached ' + decoded.length + ' raw Tb frames'
-                            + (decoded.length > 0 ? ' (' + decoded[0].cols + 'x' + decoded[0].rows + ' px)' : ''));
-                    }
-                })
-                .catch(function () {})
-                .finally(function () { fetchNext(); });
+            _fetchRawTbIncremental(atcfId, true, function () {
+                console.log('[IR Pre-fetch] ' + atcfId + ': done (' +
+                    ((_rawTbCache[atcfId] || {}).rawTbFrames || []).length + ' frames)');
+                fetchNext();
+            });
         }
         fetchNext();
     }
@@ -3058,44 +3036,99 @@
      * When the user later selects a non-GIBS colormap, rawTbFrames[]
      * are immediately available for recoloring without another API call.
      */
-    function _prefetchRawTbSilent() {
-        if (!currentStormId) return;
+    /**
+     * Fetch raw Tb frames incrementally (one at a time) using the
+     * /ir-raw-frame endpoint.  Each frame is fetched individually so
+     * partial results are available immediately and Cloud Run doesn't
+     * time out trying to generate all 13 frames in one request.
+     *
+     * @param {string} stormId - ATCF ID
+     * @param {boolean} silent - if true, don't update loading UI
+     * @param {function} onComplete - called when all frames are loaded
+     */
+    function _fetchRawTbIncremental(stormId, silent, onComplete) {
+        if (!stormId) return;
 
-        // Use pre-fetched cache from page load if available
-        var cached = _rawTbCache[currentStormId];
+        // Use cache if available
+        var cached = _rawTbCache[stormId];
         if (cached && cached.rawTbFrames && cached.rawTbFrames.length > 0) {
             rawTbFrames = cached.rawTbFrames;
-            console.log('[RT Monitor] Loaded ' + rawTbFrames.length + ' raw Tb frames from cache'
-                + (rawTbFrames.length > 0 ? ' (' + rawTbFrames[0].cols + 'x' + rawTbFrames[0].rows + ' px)' : ''));
+            console.log('[RT Monitor] Loaded ' + rawTbFrames.length + ' raw Tb frames from cache');
+            if (onComplete) onComplete();
             return;
         }
 
-        // Fallback: fetch directly
-        var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(currentStormId) + '/ir-raw'
-            + '?lookback_hours=' + DEFAULT_LOOKBACK_HOURS
-            + '&radius_deg=' + DEFAULT_RADIUS_DEG
-            + '&interval_min=30';
+        var totalFrames = 13;  // will be updated from first response
+        var loadedFrames = [];
+        var completed = 0;
+        var failed = 0;
+        var concurrency = 3;   // fetch 3 frames in parallel
 
-        fetch(url)
-            .then(function (r) { return r.json(); })
-            .then(function (data) {
-                if (!data.frames || data.frames.length === 0) return;
+        function fetchFrame(idx) {
+            if (idx >= totalFrames) return;
+            if (stormId !== currentStormId && !silent) return;  // storm changed
 
-                rawTbFrames = [];
-                for (var i = 0; i < data.frames.length; i++) {
-                    var frame = data.frames[i];
-                    rawTbFrames.push({
+            var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(stormId) + '/ir-raw-frame'
+                + '?frame_index=' + idx
+                + '&lookback_hours=' + DEFAULT_LOOKBACK_HOURS
+                + '&radius_deg=' + DEFAULT_RADIUS_DEG
+                + '&interval_min=30';
+
+            fetch(url)
+                .then(function (r) {
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    return r.json();
+                })
+                .then(function (frame) {
+                    if (frame.total_frames) totalFrames = frame.total_frames;
+
+                    loadedFrames[idx] = {
                         tb_data: decodeTbData(frame.tb_data),
                         rows: frame.tb_rows,
                         cols: frame.tb_cols,
                         bounds: frame.bounds
-                    });
-                }
-                // Also populate the per-storm cache
-                _rawTbCache[currentStormId] = { frames: data.frames, rawTbFrames: rawTbFrames };
-                console.log('[RT Monitor] Pre-fetched ' + rawTbFrames.length + ' raw Tb frames (silent)');
-            })
-            .catch(function () {});
+                    };
+                    completed++;
+
+                    if (!silent) {
+                        showLoadingProgress(true, Math.round(100 * completed / totalFrames));
+                    }
+                    console.log('[RT Monitor] Raw Tb frame ' + idx + '/' + totalFrames +
+                        ' (' + frame.tb_cols + 'x' + frame.tb_rows + ' px)');
+                })
+                .catch(function (err) {
+                    console.warn('[RT Monitor] Frame ' + idx + ' failed:', err.message);
+                    failed++;
+                    completed++;
+                })
+                .finally(function () {
+                    // Launch next frame beyond the initial concurrent batch
+                    var nextIdx = idx + concurrency;
+                    if (nextIdx < totalFrames) fetchFrame(nextIdx);
+
+                    // All done?
+                    if (completed >= totalFrames) {
+                        // Compact: remove holes from failed frames
+                        rawTbFrames = [];
+                        for (var i = 0; i < totalFrames; i++) {
+                            if (loadedFrames[i]) rawTbFrames.push(loadedFrames[i]);
+                        }
+                        _rawTbCache[stormId] = { rawTbFrames: rawTbFrames };
+                        console.log('[RT Monitor] All raw Tb frames loaded: ' +
+                            rawTbFrames.length + ' OK, ' + failed + ' failed');
+                        if (onComplete) onComplete();
+                    }
+                });
+        }
+
+        // Launch initial batch of concurrent fetches
+        for (var i = 0; i < Math.min(concurrency, totalFrames); i++) {
+            fetchFrame(i);
+        }
+    }
+
+    function _prefetchRawTbSilent() {
+        _fetchRawTbIncremental(currentStormId, true, null);
     }
 
     /** Fetch raw Tb frames from API and switch to client-side rendering */
@@ -3170,40 +3203,17 @@
             return;
         }
 
-        // Fetch from API
-        var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(currentStormId) + '/ir-raw'
-            + '?lookback_hours=' + DEFAULT_LOOKBACK_HOURS
-            + '&radius_deg=' + DEFAULT_RADIUS_DEG
-            + '&interval_min=30';
-
-        fetch(url)
-            .then(function (r) { return r.json(); })
-            .then(function (data) {
-                if (!data.frames || data.frames.length === 0) {
-                    console.warn('[RT Monitor] No raw Tb frames returned');
-                    showLoadingProgress(false);
-                    return;
-                }
-
-                rawTbFrames = [];
-                for (var i = 0; i < data.frames.length; i++) {
-                    var frame = data.frames[i];
-                    rawTbFrames.push({
-                        tb_data: decodeTbData(frame.tb_data),
-                        rows: frame.tb_rows,
-                        cols: frame.tb_cols,
-                        bounds: frame.bounds
-                    });
-                }
-                _rawTbCache[currentStormId] = { frames: data.frames, rawTbFrames: rawTbFrames };
+        // Fetch frames incrementally
+        _fetchRawTbIncremental(currentStormId, false, function () {
+            if (rawTbFrames.length > 0) {
                 _applyRawTbToMap();
-            })
-            .catch(function (err) {
-                console.error('[RT Monitor] Raw Tb fetch failed:', err);
+            } else {
+                console.warn('[RT Monitor] No raw Tb frames loaded');
                 showLoadingProgress(false);
                 var cmapSelect = document.getElementById('ir-colormap-select');
                 if (cmapSelect) cmapSelect.value = 'gibs';
-            });
+            }
+        });
     }
 
     /** Switch back to GIBS tile layers from raw Tb overlays */

@@ -1246,6 +1246,94 @@ def get_storm_ir_raw(
     )
 
 
+@router.get("/storm/{atcf_id}/ir-raw-frame")
+def get_storm_ir_raw_frame(
+    atcf_id: str,
+    frame_index: int = Query(0, ge=0, description="Frame index (0 = most recent)"),
+    lookback_hours: float = Query(6.0, ge=1, le=24),
+    radius_deg: float = Query(10.0, ge=1.0, le=12.0),
+    interval_min: int = Query(30, ge=10, le=60),
+):
+    """
+    Fetch a SINGLE raw Tb frame by index. Designed for incremental loading
+    so the frontend can display frames as they arrive instead of waiting
+    for all 13 at once.
+    """
+    _ensure_fresh_cache()
+    storm = None
+    with _active_storms_lock:
+        for s in _active_storms_cache["storms"]:
+            if s["atcf_id"].upper() == atcf_id.upper():
+                storm = dict(s)
+                break
+
+    if not storm:
+        raise HTTPException(status_code=404, detail=f"Storm {atcf_id} not found")
+
+    center_lat = storm["lat"]
+    center_lon = storm["lon"]
+    box_deg = radius_deg * 2
+    center_dt = _dt.now(timezone.utc)
+
+    frame_times = build_frame_times(center_dt, lookback_hours, interval_min)
+    frame_times = list(reversed(frame_times))  # newest first (index 0 = most recent)
+
+    if frame_index >= len(frame_times):
+        raise HTTPException(status_code=400, detail=f"frame_index {frame_index} out of range")
+
+    target_dt = frame_times[frame_index]
+    dt_str = target_dt.strftime("%Y%m%d%H%M")
+    half = box_deg / 2.0
+
+    # Check GCS cache first
+    cached = _gcs_rt_get(atcf_id.upper(), dt_str)
+    if cached is not None:
+        cached["frame_index"] = frame_index
+        cached["total_frames"] = len(frame_times)
+        return JSONResponse(
+            content=cached,
+            headers={"Cache-Control": "public, max-age=300"},
+        )
+
+    raw = fetch_ir_tb_raw(center_lat, center_lon, target_dt, box_deg)
+    if not raw or raw.get("tb") is None:
+        raise HTTPException(status_code=502, detail=f"No IR data for frame {frame_index}")
+
+    tb = raw["tb"]
+    arr = np.asarray(tb, dtype=np.float32)
+    mask = ~np.isfinite(arr) | (arr <= 0)
+    scaled = np.clip((arr - _TB_VMIN) * _TB_SCALE + 1, 1, 255)
+    scaled[mask] = 0
+    encoded = scaled.astype(np.uint8)
+
+    frame_result = {
+        "tb_data": base64.b64encode(encoded.tobytes()).decode("ascii"),
+        "tb_rows": encoded.shape[0],
+        "tb_cols": encoded.shape[1],
+        "tb_vmin": _TB_VMIN,
+        "tb_vmax": _TB_VMAX,
+        "datetime_utc": raw["datetime_utc"],
+        "satellite": raw.get("satellite", ""),
+        "bounds": raw.get("bounds", [
+            [center_lat - half, center_lon - half],
+            [center_lat + half, center_lon + half],
+        ]),
+        "frame_index": frame_index,
+        "total_frames": len(frame_times),
+    }
+
+    # Cache to GCS
+    _gcs_rt_put(atcf_id.upper(), dt_str, frame_result)
+
+    del tb, arr, mask, scaled, encoded
+    gc.collect()
+
+    return JSONResponse(
+        content=frame_result,
+        headers={"Cache-Control": "public, max-age=300"},
+    )
+
+
 def _write_geotiff_bytes(tb_array: np.ndarray, bounds: list) -> bytes:
     """
     Write a float32 brightness temperature array as a minimal GeoTIFF (WGS84).
