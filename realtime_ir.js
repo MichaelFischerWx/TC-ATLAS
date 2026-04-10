@@ -2241,6 +2241,7 @@
         animFrameLayers = [];
         animFrameTimes = [];
         framesLoaded = 0;
+        _frameLoadedOnce = {};
         framesReady = false;
         // Also clean up GeoColor frames
         cleanupGeocolorFrameLayers();
@@ -2264,8 +2265,14 @@
         }
     }
 
+    var _frameLoadedOnce = {};  // track which frames have fired their initial load
+
     /** Called when a single frame layer finishes loading its tiles */
     function onFrameLayerLoaded(frameIdx) {
+        // Ignore re-fires from zoom/pan — only count the initial load
+        if (_frameLoadedOnce[frameIdx]) return;
+        _frameLoadedOnce[frameIdx] = true;
+
         framesLoaded++;
         var total = animFrameTimes.length;
         var pct = Math.round((framesLoaded / total) * 100);
@@ -2358,6 +2365,7 @@
         animFrameTimes = buildFrameTimes(nowUtc, DEFAULT_LOOKBACK_HOURS);
         animIndex = animFrameTimes.length - 1;
         framesLoaded = 0;
+        _frameLoadedOnce = {};
         framesReady = false;
 
         // Disable play button until frames load
