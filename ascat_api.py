@@ -189,6 +189,18 @@ def _setup_earthdata_auth():
             logger.warning("Failed to create .netrc: %s", e)
 
 
+def _get_earthdata_session():
+    """Create a requests.Session with Earthdata auth for NASA data downloads."""
+    import requests
+    session = requests.Session()
+    if _EARTHDATA_USER and _EARTHDATA_PASS:
+        session.auth = (_EARTHDATA_USER, _EARTHDATA_PASS)
+        logger.info("ASCAT: using Earthdata credentials for user=%s", _EARTHDATA_USER)
+    else:
+        logger.warning("ASCAT: no Earthdata credentials set — downloads will likely fail (401)")
+    return session
+
+
 def _fetch_ascat_winds(
     data_url: str,
     center_lat: float, center_lon: float,
@@ -200,7 +212,6 @@ def _fetch_ascat_winds(
     """
     import xarray as xr
     import tempfile
-    import requests
 
     try:
         # Download the NetCDF file via HTTP to a temp file, then open with xarray.
@@ -211,7 +222,8 @@ def _fetch_ascat_winds(
             download_url = data_url + ".nc"
 
         logger.info("ASCAT: downloading %s", download_url[:120])
-        resp = requests.get(download_url, timeout=45, stream=True)
+        session = _get_earthdata_session()
+        resp = session.get(download_url, timeout=60, stream=True)
         resp.raise_for_status()
 
         with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as tmp:
