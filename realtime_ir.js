@@ -5101,14 +5101,16 @@
         if (!_rtDmEnsData) return;
         var taus = _rtDmEnsData.lead_times_h || [];
 
+        var idx24 = taus.indexOf(24);
+        var default24 = idx24 >= 0 ? idx24 : Math.min(4, taus.length - 1);
+
         var histSlider = document.getElementById('rt-dm-hist-slider');
-        if (histSlider) { histSlider.max = taus.length - 1; histSlider.value = 0; }
+        if (histSlider) { histSlider.max = taus.length - 1; histSlider.value = default24; }
         var changeSlider = document.getElementById('rt-dm-change-slider');
         if (changeSlider) {
             changeSlider.max = taus.length - 1;
-            var idx24 = taus.indexOf(24);
-            changeSlider.value = idx24 >= 0 ? idx24 : 4;
-            _rtDmChangeTauIdx = parseInt(changeSlider.value);
+            changeSlider.value = default24;
+            _rtDmChangeTauIdx = default24;
         }
 
         var distEl = document.getElementById('rt-dm-intensity-dist');
@@ -5118,7 +5120,7 @@
         if (changeEl) changeEl.style.display = '';
         if (lmiEl) lmiEl.style.display = '';
 
-        _rtDmHistTauIdx = 0;
+        _rtDmHistTauIdx = default24;
         _rtRenderIntensityHist();
         _rtRenderChangeHist();
         _rtRenderLmiHist();

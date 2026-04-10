@@ -776,7 +776,7 @@ def _build_vigor_lut() -> np.ndarray:
 _VIGOR_LUT = _build_vigor_lut()
 
 # Vigor rendering range (in Kelvin — vigor = Tb_current − local_min_avg)
-VIGOR_VMIN = -10.0   # strong deepening convection (colder than local avg min)
+VIGOR_VMIN = -20.0   # strong deepening convection (colder than local avg min)
 VIGOR_VMAX = 80.0    # clear sky well above local coldest convection
 
 
