@@ -5690,36 +5690,51 @@
         if (statusEl) statusEl.textContent = 'Searching...';
         if (section) section.style.display = '';
 
-        fetch(API_BASE + '/ascat/passes?atcf_id=' + encodeURIComponent(atcfId) + '&hours=12')
-            .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
-            .then(function (json) {
-                _rtAscatPasses = json;
-
-                if (!json.passes || json.passes.length === 0) {
-                    if (statusEl) statusEl.textContent = 'No passes found';
-                    return;
-                }
-
-                if (statusEl) statusEl.textContent = json.passes.length + ' pass' + (json.passes.length > 1 ? 'es' : '');
-
-                // Populate pass dropdown
-                var sel = document.getElementById('rt-ascat-pass-select');
-                if (sel) {
-                    sel.innerHTML = '';
-                    for (var i = 0; i < json.passes.length; i++) {
-                        var p = json.passes[i];
-                        var opt = document.createElement('option');
-                        opt.value = i;
-                        opt.textContent = p.satellite + ' \u2014 ' + p.datetime_utc;
-                        sel.appendChild(opt);
+        var retries = 0;
+        function _doFetch() {
+            fetch(API_BASE + '/ascat/passes?atcf_id=' + encodeURIComponent(atcfId) + '&hours=12')
+                .then(function (r) {
+                    // Retry on 404 — backend storm cache may not be warm yet
+                    if (r.status === 404 && retries < 2) {
+                        retries++;
+                        console.log('[RT ASCAT] Storm not in cache yet, retry ' + retries + '/2 in 5s...');
+                        setTimeout(_doFetch, 5000);
+                        return;
                     }
-                }
-            })
-            .catch(function (err) {
-                console.warn('[RT ASCAT] Failed to load passes:', err);
-                if (statusEl) statusEl.textContent = '';
-                if (section) section.style.display = 'none';
-            });
+                    if (!r.ok) throw new Error(r.status);
+                    return r.json();
+                })
+                .then(function (json) {
+                    if (!json) return;  // was a retry
+                    _rtAscatPasses = json;
+
+                    if (!json.passes || json.passes.length === 0) {
+                        if (statusEl) statusEl.textContent = 'No passes found';
+                        return;
+                    }
+
+                    if (statusEl) statusEl.textContent = json.passes.length + ' pass' + (json.passes.length > 1 ? 'es' : '');
+
+                    // Populate pass dropdown
+                    var sel = document.getElementById('rt-ascat-pass-select');
+                    if (sel) {
+                        sel.innerHTML = '';
+                        for (var i = 0; i < json.passes.length; i++) {
+                            var p = json.passes[i];
+                            var opt = document.createElement('option');
+                            opt.value = i;
+                            opt.textContent = p.satellite + ' \u2014 ' + p.datetime_utc;
+                            sel.appendChild(opt);
+                        }
+                    }
+                })
+                .catch(function (err) {
+                    console.warn('[RT ASCAT] Failed to load passes:', err);
+                    if (statusEl) statusEl.textContent = '';
+                    if (section) section.style.display = 'none';
+                });
+        }
+        _doFetch();
     }
 
     /**
