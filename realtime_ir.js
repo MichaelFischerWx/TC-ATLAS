@@ -960,6 +960,20 @@
                '/' + tileMatrix + '/' + z + '/' + y + '/' + x + '.png';
     }
 
+    /** Probe whether a GIBS frame exists at the given time by checking a
+     *  single representative tile (z3).  Returns a Promise<boolean>.
+     *  Used to skip entirely-missing frames before creating full tile layers. */
+    function probeGIBSFrame(layerName, timeStr) {
+        // Use a z3 tile near the equator — fast, small, and representative
+        var url = GIBS_BASE + '/' + layerName + '/default/' + timeStr +
+                  '/GoogleMapsCompatible_Level6/3/3/3.png';
+        return fetch(url, { method: 'HEAD', cache: 'no-store' }).then(function (r) {
+            return r.ok;
+        }).catch(function () {
+            return false;
+        });
+    }
+
     /** Create a Leaflet tile layer for a single GIBS IR product at a given time
      *  (used for storm-detail animation where only one satellite is needed).
      *  Uses a custom GridLayer with per-tile retry so that individual tiles
@@ -1444,27 +1458,42 @@
             { name: 'Himawari',  layer: GIBS_IR_LAYERS['Himawari'],  suffix: '/GoogleMapsCompatible_Level6/3/3/6.png' }
         ];
 
+        var PROBE_BATCH = 4;  // probe 4 offsets in parallel per batch
+
         function findTimeForSat(sat) {
-            function tryOffset(idx) {
-                if (idx >= offsets.length) {
+            function tryBatch(startIdx) {
+                if (startIdx >= offsets.length) {
                     // All failed — fall back to 90 min ago
                     var fb = roundToGIBSInterval(new Date());
                     fb = new Date(fb.getTime() - 90 * 60 * 1000);
                     return Promise.resolve(toGIBSTime(fb));
                 }
-                var dt = roundToGIBSInterval(new Date());
-                dt = new Date(dt.getTime() - offsets[idx] * 60 * 1000);
-                var ts = toGIBSTime(dt);
-                var url = GIBS_BASE + '/' + sat.layer + '/default/' + ts + sat.suffix;
-                return fetch(url).then(function (r) {
-                    if (r.ok) return ts;
-                    return tryOffset(idx + 1);
-                }).catch(function (err) {
-                    console.warn('[RT Monitor] GIBS probe failed for', sat.layer, 'offset', offsets[idx], err.message || '');
-                    return tryOffset(idx + 1);
+                var batch = offsets.slice(startIdx, startIdx + PROBE_BATCH);
+                var probes = batch.map(function (offset) {
+                    var dt = roundToGIBSInterval(new Date());
+                    dt = new Date(dt.getTime() - offset * 60 * 1000);
+                    var ts = toGIBSTime(dt);
+                    var url = GIBS_BASE + '/' + sat.layer + '/default/' + ts + sat.suffix;
+                    return fetch(url, { cache: 'no-store' }).then(function (r) {
+                        return r.ok ? { offset: offset, ts: ts } : null;
+                    }).catch(function () {
+                        return null;
+                    });
+                });
+                return Promise.all(probes).then(function (results) {
+                    // Pick the freshest (smallest offset) successful probe
+                    var best = null;
+                    for (var i = 0; i < results.length; i++) {
+                        if (results[i] && (!best || results[i].offset < best.offset)) {
+                            best = results[i];
+                        }
+                    }
+                    if (best) return best.ts;
+                    // None in this batch succeeded — try next batch
+                    return tryBatch(startIdx + PROBE_BATCH);
                 });
             }
-            return tryOffset(0);
+            return tryBatch(0);
         }
 
         return Promise.all(satellites.map(function (sat) {
@@ -2077,7 +2106,7 @@
     function fetchAndDrawTrack(storm) {
         var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(storm.atcf_id) + '/metadata';
 
-        fetch(url)
+        fetch(url, { cache: 'no-store' })
             .then(function (r) { return r.ok ? r.json() : null; })
             .then(function (meta) {
                 if (!meta || !meta.intensity_history || meta.intensity_history.length < 2) return;
@@ -2183,7 +2212,7 @@
         var loaderEl = document.getElementById('ir-loader');
         var noStormsEl = document.getElementById('ir-no-storms');
 
-        fetch(API_BASE + '/ir-monitor/active-storms')
+        fetch(API_BASE + '/ir-monitor/active-storms', { cache: 'no-store' })
             .then(function (r) {
                 if (!r.ok) throw new Error('HTTP ' + r.status);
                 return r.json();
@@ -2211,6 +2240,10 @@
                 // latest data (name changes, position updates, etc.)
                 if (currentStormId) {
                     _refreshDetailHeader(stormData);
+                    // Also refresh the intensity chart with latest metadata
+                    fetchStormMetadata(currentStormId, function (err, meta) {
+                        if (!err && meta) renderIntensityChart(meta);
+                    });
                 }
 
                 // Pre-warm raw Tb cache for all active storms so data is
@@ -2375,15 +2408,35 @@
         // Show loading progress
         showLoadingProgress(true, 0);
 
-        // Pre-create ALL frame tile layers (hidden at opacity 0)
+        // Create frame tile layers and add them in batches to avoid
+        // flooding GIBS with 200+ concurrent tile requests.  Layers are
+        // created upfront (cheap), but only added to the map in groups of
+        // FRAME_BATCH_SIZE, starting from the latest (most useful) frames.
+        var FRAME_BATCH_SIZE = 3;
         animFrameLayers = [];
         validFrames = [];
         frameHasError = [];
-        for (var i = 0; i < animFrameTimes.length; i++) {
+
+        // Build ordered list: latest frames first so newest imagery loads first
+        var totalFrames = animFrameTimes.length;
+        var loadOrder = [];
+        for (var k = totalFrames - 1; k >= 0; k--) loadOrder.push(k);
+
+        // Create all layers (not yet added to map)
+        for (var i = 0; i < totalFrames; i++) {
             var timeStr = animFrameTimes[i];
             var lyr = createGIBSLayer(satLayerName, timeStr, 0); // opacity 0 = hidden
-            lyr.addTo(detailMap);
             frameHasError.push(false);
+            animFrameLayers.push(lyr);
+        }
+
+        // Track which frames have been added to the map
+        var _batchAddedToMap = {};
+        var _batchNextIdx = 0;  // index into loadOrder for next batch
+
+        function _addFrameToMap(fi) {
+            _batchAddedToMap[fi] = true;
+            animFrameLayers[fi].addTo(detailMap);
 
             // Listen for tile load completion AND tile errors
             (function (layer, idx) {
@@ -2392,11 +2445,41 @@
                 });
                 layer.on('load', function () {
                     onFrameLayerLoaded(idx);
+                    // When this frame finishes, trigger next batch
+                    _addNextBatch();
                 });
-            })(lyr, i);
-
-            animFrameLayers.push(lyr);
+            })(animFrameLayers[fi], fi);
         }
+
+        function _addNextBatch() {
+            // Collect the next batch of frame indices to probe
+            var batch = [];
+            while (_batchNextIdx < loadOrder.length && batch.length < FRAME_BATCH_SIZE) {
+                var fi = loadOrder[_batchNextIdx];
+                if (!_batchAddedToMap[fi]) {
+                    batch.push(fi);
+                }
+                _batchNextIdx++;
+            }
+            if (batch.length === 0) return;
+
+            // Probe each frame in this batch; add to map if available,
+            // mark as error + advance counter if not (avoids per-tile retry cascade)
+            batch.forEach(function (fi) {
+                probeGIBSFrame(satLayerName, animFrameTimes[fi]).then(function (ok) {
+                    if (ok) {
+                        _addFrameToMap(fi);
+                    } else {
+                        // Frame doesn't exist on GIBS — skip entirely
+                        frameHasError[fi] = true;
+                        onFrameLayerLoaded(fi);
+                    }
+                });
+            });
+        }
+
+        // Kick off the first batch
+        _addNextBatch();
 
         // Coastline overlay — Natural Earth 50m black outlines (matches global archive)
         detailMap.createPane('coastlinePane');
@@ -2485,7 +2568,7 @@
     function fetchStormMetadata(atcfId, callback) {
         var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) + '/metadata';
 
-        fetch(url)
+        fetch(url, { cache: 'no-store' })
             .then(function (r) {
                 if (!r.ok) throw new Error('HTTP ' + r.status);
                 return r.json();
@@ -3021,7 +3104,8 @@
     }
 
     // ── Raw Tb pre-fetch cache (per-storm, keyed by ATCF ID) ──
-    var _rawTbCache = {};  // { atcfId: { frames: [...], rawTbFrames: [...] } }
+    var _rawTbCache = {};  // { atcfId: { rawTbFrames: [...], cachedAt: ms } }
+    var RAW_TB_CACHE_TTL_MS = POLL_INTERVAL_MS;  // invalidate after one poll cycle
 
     /**
      * Pre-fetch raw Tb frames for ALL active storms on page load.
@@ -3029,14 +3113,25 @@
      * Cached data is used by _prefetchRawTbSilent() / fetchRawTbFrames()
      * when the user clicks into a storm detail view.
      */
+    var MAX_PREFETCH_STORMS = 3;  // limit background prefetch to avoid bandwidth waste
+
     function _prefetchAllStormsRawTb(storms) {
         if (!storms || storms.length === 0) return;
-        var queue = storms.slice();
+        // Skip background prefetch while user is viewing a detail (prioritize foreground)
+        if (currentStormId) return;
+        // Only prefetch the strongest storms (highest vmax_kt), capped at MAX_PREFETCH_STORMS
+        var sorted = storms.slice().sort(function (a, b) {
+            return (b.vmax_kt || 0) - (a.vmax_kt || 0);
+        });
+        var queue = sorted.slice(0, MAX_PREFETCH_STORMS);
         function fetchNext() {
             if (queue.length === 0) return;
+            // Abort if user opened a detail view while prefetch was running
+            if (currentStormId) return;
             var storm = queue.shift();
             var atcfId = storm.atcf_id;
-            if (!atcfId || _rawTbCache[atcfId]) { fetchNext(); return; }
+            var cached = _rawTbCache[atcfId];
+            if (!atcfId || (cached && (Date.now() - cached.cachedAt) < RAW_TB_CACHE_TTL_MS)) { fetchNext(); return; }
             _fetchRawTbIncremental(atcfId, true, function () {
                 console.log('[IR Pre-fetch] ' + atcfId + ': done (' +
                     ((_rawTbCache[atcfId] || {}).rawTbFrames || []).length + ' frames)');
@@ -3068,9 +3163,10 @@
     function _fetchRawTbIncremental(stormId, silent, onComplete) {
         if (!stormId) return;
 
-        // Use cache if available
+        // Use cache if available and not expired
         var cached = _rawTbCache[stormId];
-        if (cached && cached.rawTbFrames && cached.rawTbFrames.length > 0) {
+        if (cached && cached.rawTbFrames && cached.rawTbFrames.length > 0 &&
+            (Date.now() - cached.cachedAt) < RAW_TB_CACHE_TTL_MS) {
             if (stormId === currentStormId) {
                 rawTbFrames = cached.rawTbFrames;
             }
@@ -3095,7 +3191,7 @@
                 + '&radius_deg=' + DEFAULT_RADIUS_DEG
                 + '&interval_min=30';
 
-            fetch(url)
+            fetch(url, { cache: 'no-store' })
                 .then(function (r) {
                     if (!r.ok) throw new Error('HTTP ' + r.status);
                     return r.json();
@@ -3134,7 +3230,7 @@
                         for (var i = 0; i < totalFrames; i++) {
                             if (loadedFrames[i]) result.push(loadedFrames[i]);
                         }
-                        _rawTbCache[stormId] = { rawTbFrames: result };
+                        _rawTbCache[stormId] = { rawTbFrames: result, cachedAt: Date.now() };
                         // Only update the global rawTbFrames if this is
                         // the storm currently being viewed
                         if (stormId === currentStormId) {
@@ -4049,7 +4145,7 @@
     };
 
     function fetchSeasonSummary() {
-        fetch(API_BASE + '/ir-monitor/season-summary')
+        fetch(API_BASE + '/ir-monitor/season-summary', { cache: 'no-store' })
             .then(function (r) {
                 if (!r.ok) throw new Error('HTTP ' + r.status);
                 return r.json();
@@ -4167,7 +4263,7 @@
 
         if (statusEl) statusEl.textContent = 'Loading...';
 
-        fetch(API_BASE + '/global/adeck?atcf_id=' + encodeURIComponent(atcfId))
+        fetch(API_BASE + '/global/adeck?atcf_id=' + encodeURIComponent(atcfId), { cache: 'no-store' })
             .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
             .then(function (json) {
                 _rtModelData = json;
@@ -4632,7 +4728,7 @@
         if (!storm || !storm.atcf_id) return;
         _rtWeatherlabData = null;
 
-        fetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(storm.atcf_id) + '/weatherlab')
+        fetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(storm.atcf_id) + '/weatherlab', { cache: 'no-store' })
             .then(function (r) {
                 if (!r.ok) throw new Error(r.status);
                 return r.json();
@@ -5101,7 +5197,7 @@
         if (!storm || !storm.atcf_id) return;
         _rtDmEnsData = null;
 
-        fetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(storm.atcf_id) + '/weatherlab-ensemble')
+        fetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(storm.atcf_id) + '/weatherlab-ensemble', { cache: 'no-store' })
             .then(function (r) {
                 if (!r.ok) throw new Error(r.status);
                 return r.json();
@@ -5711,7 +5807,7 @@
 
         var retries = 0;
         function _doFetch() {
-            fetch(API_BASE + '/ascat/passes?atcf_id=' + encodeURIComponent(atcfId) + '&hours=12')
+            fetch(API_BASE + '/ascat/passes?atcf_id=' + encodeURIComponent(atcfId) + '&hours=12', { cache: 'no-store' })
                 .then(function (r) {
                     // Retry on 404 — backend storm cache may not be warm yet
                     if (r.status === 404 && retries < 2) {
@@ -5810,7 +5906,7 @@
         var lon = _rtAscatPasses.storm_lon;
 
         fetch(API_BASE + '/ascat/winds?data_url=' + encodeURIComponent(dataUrl) +
-              '&center_lat=' + lat + '&center_lon=' + lon + '&radius_deg=8')
+              '&center_lat=' + lat + '&center_lon=' + lon + '&radius_deg=8', { cache: 'no-store' })
             .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
             .then(function (json) {
                 _rtAscatActiveUrl = dataUrl;
@@ -5968,7 +6064,7 @@
 
         // Fetch metadata to get the full track history
         var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(currentStormId) + '/metadata';
-        fetch(url)
+        fetch(url, { cache: 'no-store' })
             .then(function (r) { return r.ok ? r.json() : null; })
             .then(function (meta) {
                 if (!meta || !meta.intensity_history || meta.intensity_history.length === 0) {
@@ -6050,7 +6146,7 @@
         var origText = btn ? btn.innerHTML : '';
         if (btn) btn.innerHTML = '⏳ Fetching…';
 
-        fetch(url)
+        fetch(url, { cache: 'no-store' })
             .then(function (r) {
                 if (!r.ok) throw new Error('HTTP ' + r.status);
                 return r.blob();
