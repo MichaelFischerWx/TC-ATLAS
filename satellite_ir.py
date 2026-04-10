@@ -398,21 +398,20 @@ def _himawari_seg_for_lat(center_lat: float, box_deg: float) -> list:
     half = box_deg / 2.0
     total_lines = HIMAWARI_NLINES_PER_SEG * HIMAWARI_N_SEGMENTS  # 5500
 
+    # Use the same pixel coordinate formula as latlon_to_pixel()
+    # in open_himawari_subset: row = loff - (y_m / sat_height) * pix_per_rad
+    loff = total_lines / 2.0        # 2750
+    pix_per_rad = HIMAWARI_SAT_HEIGHT / 2000.0  # 17893.01
+
     segs_needed = set()
     for lat in [center_lat - half, center_lat + half, center_lat]:
-        # Clamp latitude to avoid off-disk
         lat_c = max(-80.0, min(80.0, lat))
         try:
             _, y_m = proj(HIMAWARI_LON_0, lat_c)
-            # Convert to line number (0-based from top of disk)
-            # The y coordinate in meters: positive = north.
-            # Full disk radius in meters:
-            y_rad = HIMAWARI_SAT_HEIGHT * np.sin(np.radians(80.0))
-            # Normalise to [0, 1] where 0 = north edge, 1 = south edge
-            frac = 0.5 - (y_m / (2.0 * y_rad))
-            frac = max(0.0, min(1.0, frac))
-            line = int(frac * total_lines)
-            seg = (line // HIMAWARI_NLINES_PER_SEG) + 1
+            y_angle = y_m / HIMAWARI_SAT_HEIGHT
+            row = loff - y_angle * pix_per_rad
+            row = max(0, min(total_lines - 1, int(round(row))))
+            seg = (row // HIMAWARI_NLINES_PER_SEG) + 1
             seg = max(1, min(HIMAWARI_N_SEGMENTS, seg))
             segs_needed.add(seg)
         except Exception:
