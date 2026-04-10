@@ -3109,13 +3109,18 @@
                     // All done?
                     if (completed >= totalFrames) {
                         // Compact: remove holes from failed frames
-                        rawTbFrames = [];
+                        var result = [];
                         for (var i = 0; i < totalFrames; i++) {
-                            if (loadedFrames[i]) rawTbFrames.push(loadedFrames[i]);
+                            if (loadedFrames[i]) result.push(loadedFrames[i]);
                         }
-                        _rawTbCache[stormId] = { rawTbFrames: rawTbFrames };
-                        console.log('[RT Monitor] All raw Tb frames loaded: ' +
-                            rawTbFrames.length + ' OK, ' + failed + ' failed');
+                        _rawTbCache[stormId] = { rawTbFrames: result };
+                        // Only update the global rawTbFrames if this is
+                        // the storm currently being viewed
+                        if (stormId === currentStormId) {
+                            rawTbFrames = result;
+                        }
+                        console.log('[RT Monitor] All raw Tb frames loaded for ' +
+                            stormId + ': ' + result.length + ' OK, ' + failed + ' failed');
                         if (onComplete) onComplete();
                     }
                 });
