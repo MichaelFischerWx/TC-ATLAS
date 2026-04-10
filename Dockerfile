@@ -32,6 +32,7 @@ COPY microwave_api.py .
 COPY satellite_ir.py .
 COPY ir_monitor_api.py .
 COPY nexrad_api.py .
+COPY ascat_api.py .
 COPY tc_radar_metadata.json .
 COPY tc_radar_metadata_merge.json .
 COPY climatology_hybrid.npz .
