@@ -764,6 +764,91 @@ VIGOR_VMAX = 80.0    # clear sky well above local coldest convection
 # Raw Tb Fetcher (for vigor computation)
 # ---------------------------------------------------------------------------
 
+def _reproject_geos_to_latlon(
+    tb_geo: np.ndarray, center_lat: float, center_lon: float,
+    box_deg: float, sat_height: float, lon_0: float, sweep: str
+) -> np.ndarray:
+    """
+    Reproject a geostationary fixed-grid Tb array to a regular lat/lon grid.
+
+    The input tb_geo is in geostationary pixel coordinates (rows/cols map to
+    scan angles). The output is a regular lat/lon array that can be correctly
+    displayed as an L.imageOverlay on a Mercator/equirectangular map.
+
+    Uses scipy.ndimage.map_coordinates for bilinear interpolation.
+    """
+    from scipy.ndimage import map_coordinates
+
+    pyproj = _get_pyproj()
+    if pyproj is None:
+        return tb_geo  # no reprojection possible
+
+    half = box_deg / 2.0
+    lat_min = center_lat - half
+    lat_max = center_lat + half
+    lon_min = center_lon - half
+    lon_max = center_lon + half
+
+    # Output grid: ~2km spacing in lat/lon (roughly matching input resolution)
+    # 1 degree ≈ 111 km, so 2km ≈ 0.018 degrees
+    res_deg = 0.02  # slightly coarser than native 2km for speed
+    n_lat = int(box_deg / res_deg)
+    n_lon = int(box_deg / res_deg)
+
+    # Create the geostationary projection
+    proj = pyproj.Proj(proj="geos", h=sat_height, lon_0=lon_0, sweep=sweep)
+
+    # Build the output lat/lon grid
+    lats = np.linspace(lat_max, lat_min, n_lat)  # north to south
+    lons = np.linspace(lon_min, lon_max, n_lon)
+    lon_grid, lat_grid = np.meshgrid(lons, lats)
+
+    # Project lat/lon grid to geostationary x/y (meters)
+    x_m, y_m = proj(lon_grid.ravel(), lat_grid.ravel())
+    x_m = np.array(x_m).reshape(n_lat, n_lon)
+    y_m = np.array(y_m).reshape(n_lat, n_lon)
+
+    # Convert to pixel coordinates in the input tb_geo array
+    # The input array covers the same bounding box in geostationary space
+    # We need to know the geostationary pixel coords of the input array corners
+    nrows, ncols = tb_geo.shape
+
+    # Corners of the input array in geostationary coordinates
+    x_nw, y_nw = proj(lon_min, lat_max)  # top-left
+    x_se, y_se = proj(lon_max, lat_min)  # bottom-right
+
+    # Map geostationary x/y to fractional pixel indices in tb_geo
+    # x increases left-to-right (west to east), y increases bottom-to-top
+    col_frac = (x_m - x_nw) / (x_se - x_nw) * (ncols - 1)
+    row_frac = (y_nw - y_m) / (y_nw - y_se) * (nrows - 1)
+
+    # Replace NaN/inf (off-disk points) with -1
+    invalid = ~np.isfinite(x_m) | ~np.isfinite(y_m)
+    col_frac[invalid] = -1
+    row_frac[invalid] = -1
+
+    # Replace NaN in tb_geo with a sentinel for interpolation
+    tb_filled = np.where(np.isfinite(tb_geo), tb_geo, 0)
+
+    # Bilinear interpolation
+    coords = np.array([row_frac.ravel(), col_frac.ravel()])
+    tb_out = map_coordinates(tb_filled, coords, order=1, mode='constant', cval=np.nan)
+    tb_out = tb_out.reshape(n_lat, n_lon)
+
+    # Mask invalid pixels
+    tb_out[invalid] = np.nan
+
+    # Also mask where row/col indices are out of bounds
+    oob = (row_frac < 0) | (row_frac >= nrows) | (col_frac < 0) | (col_frac >= ncols)
+    tb_out[oob] = np.nan
+
+    print(f"[satellite_ir] Reprojected {nrows}x{ncols} geos → {n_lat}x{n_lon} latlon")
+    del tb_filled, x_m, y_m, col_frac, row_frac
+    gc.collect()
+
+    return tb_out
+
+
 def fetch_ir_tb_raw(center_lat: float, center_lon: float,
                     target_dt: _dt, box_deg: float = 8.0) -> Optional[dict]:
     """
@@ -779,7 +864,13 @@ def fetch_ir_tb_raw(center_lat: float, center_lon: float,
             s3_key = find_himawari_file(target_dt)
             if not s3_key:
                 return None
-            tb = open_himawari_subset(s3_key, center_lat, center_lon, box_deg)
+            tb_geo = open_himawari_subset(s3_key, center_lat, center_lon, box_deg)
+            # Reproject from geostationary fixed-grid to regular lat/lon grid
+            tb = _reproject_geos_to_latlon(
+                tb_geo, center_lat, center_lon, box_deg,
+                HIMAWARI_SAT_HEIGHT, HIMAWARI_LON_0, HIMAWARI_SWEEP
+            )
+            del tb_geo
         else:
             s3_key = find_goes_file(bucket, target_dt)
             if not s3_key:

@@ -91,7 +91,7 @@ _TB_SCALE = 254.0 / (_TB_VMAX - _TB_VMIN)
 _GCS_IR_CACHE_BUCKET = os.environ.get("GCS_IR_CACHE_BUCKET", "")
 _gcs_rt_client = None
 _gcs_rt_bucket = None
-_GCS_RT_VERSION = "rt-v3"
+_GCS_RT_VERSION = "rt-v4"
 
 def _get_rt_gcs_bucket():
     global _gcs_rt_client, _gcs_rt_bucket
