@@ -46,7 +46,7 @@
         }
 
         function buildLUTfromTb(tbStops) {
-            var vmin = 170.0, vmax = 310.0;
+            var vmin = 160.0, vmax = 330.0;
             var fracStops = tbStops.map(function(s) {
                 return {f: 1.0 - (s.tb - vmin) / (vmax - vmin), r: s.r, g: s.g, b: s.b};
             });
@@ -91,7 +91,7 @@
 
         // BD Grayscale
         IR_COLORMAPS['grayscale'] = (function () {
-            var vmin = 170.0, vmax = 310.0;
+            var vmin = 160.0, vmax = 330.0;
             var lut = new Uint8Array(256 * 4);
             lut[0] = 0; lut[1] = 0; lut[2] = 0; lut[3] = 0;
             for (var i = 1; i <= 255; i++) {

@@ -81,8 +81,8 @@ _IR_FRAME_CACHE_MAX = 200       # max cached IR frames (covers ~15 storms)
 _IR_FRAME_CACHE_TTL = 300       # 5 minutes per frame
 
 # Tb encoding constants (shared by /ir-raw endpoint and GCS prefetch)
-_TB_VMIN = 170.0
-_TB_VMAX = 310.0
+_TB_VMIN = 160.0
+_TB_VMAX = 330.0
 _TB_SCALE = 254.0 / (_TB_VMAX - _TB_VMIN)
 
 # ── GCS Raw Tb Frame Cache ──────────────────────────────────
@@ -91,7 +91,7 @@ _TB_SCALE = 254.0 / (_TB_VMAX - _TB_VMIN)
 _GCS_IR_CACHE_BUCKET = os.environ.get("GCS_IR_CACHE_BUCKET", "")
 _gcs_rt_client = None
 _gcs_rt_bucket = None
-_GCS_RT_VERSION = "rt-v2"
+_GCS_RT_VERSION = "rt-v3"
 
 def _get_rt_gcs_bucket():
     global _gcs_rt_client, _gcs_rt_bucket
