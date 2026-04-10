@@ -1001,18 +1001,18 @@
 .rt-dm-slider::-webkit-slider-thumb {
     -webkit-appearance: none;
     appearance: none;
-    width: 10px;
-    height: 10px;
+    width: 14px;
+    height: 14px;
     border-radius: 50%;
     background: #00e5ff;
-    border: 1.5px solid #0f172a;
+    border: 2px solid #0f172a;
     cursor: pointer;
 }
 .rt-dm-slider::-moz-range-thumb {
-    width: 10px;
-    height: 10px;
+    width: 14px;
+    height: 14px;
     border-radius: 50%;
     background: #00e5ff;
-    border: 1.5px solid #0f172a;
+    border: 2px solid #0f172a;
     cursor: pointer;
 }

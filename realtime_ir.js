@@ -4855,7 +4855,7 @@
 
     var _DM_SS_COLORS = {
         TD: '#60a5fa', TS: '#34d399', C1: '#fbbf24', C2: '#fb923c',
-        C3: '#f87171', C4: '#ef4444', C5: '#dc2626'
+        C3: '#ef4444', C4: '#c430a0', C5: '#8b5cf6'
     };
 
     /** Assign SS color to a wind speed value */
@@ -5016,14 +5016,13 @@
             };
         });
 
-        // Percentile + mean annotations
+        // Percentile summary as single line (avoids overlapping labels)
+        var pctText = 'P10: ' + p(10).toFixed(0) + '  P50: ' + p(50).toFixed(0) +
+            '  P90: ' + p(90).toFixed(0) + ' kt';
         var annotations = [
-            { x: p(10), y: 1.02, yref: 'paper', text: 'P10: ' + p(10).toFixed(0), showarrow: false,
-              font: { size: 8, color: '#64748b' }, yanchor: 'bottom' },
-            { x: p(50), y: 1.02, yref: 'paper', text: 'P50: ' + p(50).toFixed(0), showarrow: false,
-              font: { size: 9, color: '#e2e8f0' }, yanchor: 'bottom' },
-            { x: p(90), y: 1.02, yref: 'paper', text: 'P90: ' + p(90).toFixed(0), showarrow: false,
-              font: { size: 8, color: '#64748b' }, yanchor: 'bottom' }
+            { x: 0, y: 1.06, xref: 'paper', yref: 'paper', text: pctText,
+              showarrow: false, font: { size: 8, color: '#94a3b8' },
+              xanchor: 'left', yanchor: 'bottom' }
         ];
 
         // Mean line
@@ -5258,28 +5257,28 @@
             line: { color: '#00e5ff', width: 1.5 }
         });
 
-        var annotations = [
-            { x: p(10), y: 1.02, yref: 'paper', text: 'P10: ' + p(10).toFixed(0), showarrow: false,
-              font: { size: 8, color: '#64748b' }, yanchor: 'bottom' },
-            { x: p(50), y: 1.02, yref: 'paper', text: 'P50: ' + p(50).toFixed(0), showarrow: false,
-              font: { size: 9, color: '#e2e8f0' }, yanchor: 'bottom' },
-            { x: p(90), y: 1.02, yref: 'paper', text: 'P90: ' + p(90).toFixed(0), showarrow: false,
-              font: { size: 8, color: '#64748b' }, yanchor: 'bottom' }
-        ];
-
-        // Compute category probabilities for subtitle
+        // Compute category probabilities
         var catProbs = {};
         var cats = [['C1+', 64], ['C3+', 96], ['C5', 137]];
         for (var ci = 0; ci < cats.length; ci++) {
             var cnt = lmiWinds.filter(function (w) { return w >= cats[ci][1]; }).length;
             catProbs[cats[ci][0]] = Math.round(cnt / lmiWinds.length * 100);
         }
-        annotations.push({
-            x: 1, y: 1.08, xref: 'paper', yref: 'paper',
-            text: 'C1+: ' + catProbs['C1+'] + '%  C3+: ' + catProbs['C3+'] + '%  C5: ' + catProbs['C5'] + '%',
-            showarrow: false, font: { size: 8, color: '#94a3b8' },
-            xanchor: 'right', yanchor: 'bottom'
-        });
+
+        // Compact summary as a single annotation at top-left (avoids overlap)
+        var summaryText = 'P10: ' + p(10).toFixed(0) + '  P50: ' + p(50).toFixed(0) +
+            '  P90: ' + p(90).toFixed(0) + ' kt';
+        var catText = 'C1+: ' + catProbs['C1+'] + '%  C3+: ' + catProbs['C3+'] +
+            '%  C5: ' + catProbs['C5'] + '%';
+
+        var annotations = [
+            { x: 0, y: 1.06, xref: 'paper', yref: 'paper', text: summaryText,
+              showarrow: false, font: { size: 8, color: '#94a3b8' },
+              xanchor: 'left', yanchor: 'bottom' },
+            { x: 1, y: 1.06, xref: 'paper', yref: 'paper', text: catText,
+              showarrow: false, font: { size: 8, color: '#94a3b8' },
+              xanchor: 'right', yanchor: 'bottom' }
+        ];
 
         var layout = {
             height: 180,
