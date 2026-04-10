@@ -3063,8 +3063,10 @@
         // Use cache if available
         var cached = _rawTbCache[stormId];
         if (cached && cached.rawTbFrames && cached.rawTbFrames.length > 0) {
-            rawTbFrames = cached.rawTbFrames;
-            console.log('[RT Monitor] Loaded ' + rawTbFrames.length + ' raw Tb frames from cache');
+            if (stormId === currentStormId) {
+                rawTbFrames = cached.rawTbFrames;
+            }
+            console.log('[RT Monitor] Loaded ' + cached.rawTbFrames.length + ' raw Tb frames from cache for ' + stormId);
             if (onComplete) onComplete();
             return;
         }
