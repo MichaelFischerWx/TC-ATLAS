@@ -982,13 +982,9 @@
     flex-shrink: 0;
 }
 
-/* ── Raw Tb Image Overlay (crisp pixel rendering) ────────────── */
-
-.ir-raw-overlay img {
-    image-rendering: pixelated;
-    image-rendering: -moz-crisp-edges;
-    image-rendering: crisp-edges;
-}
+/* ── Raw Tb Image Overlay ─────────────────────────────────────── */
+/* At 2km resolution the image is ~1000px — browser default smooth
+   interpolation looks best when displayed at screen resolution. */
 
 /* ── DeepMind Ensemble Distribution Sliders ──────────────────── */
 
@@ -1005,18 +1001,18 @@
 .rt-dm-slider::-webkit-slider-thumb {
     -webkit-appearance: none;
     appearance: none;
-    width: 14px;
-    height: 14px;
+    width: 10px;
+    height: 10px;
     border-radius: 50%;
     background: #00e5ff;
-    border: 2px solid #0f172a;
+    border: 1.5px solid #0f172a;
     cursor: pointer;
 }
 .rt-dm-slider::-moz-range-thumb {
-    width: 14px;
-    height: 14px;
+    width: 10px;
+    height: 10px;
     border-radius: 50%;
     background: #00e5ff;
-    border: 2px solid #0f172a;
+    border: 1.5px solid #0f172a;
     cursor: pointer;
 }
