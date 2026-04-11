@@ -3260,7 +3260,7 @@
         var loadedFrames = [];
         var completed = 0;
         var failed = 0;
-        var concurrency = 3;   // fetch 3 frames in parallel
+        var concurrency = 6;   // fetch 6 frames in parallel
 
         function fetchFrame(idx) {
             if (idx >= totalFrames) return;
