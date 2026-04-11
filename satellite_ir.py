@@ -1266,8 +1266,13 @@ def build_frame_times(center_dt: _dt, lookback_hours: float = 6.0,
     """
     Build list of target GOES scan times for an IR animation.
     Returns datetimes from t=0 (most recent) to t−lookback_hours.
+    Base time is rounded DOWN to the nearest interval_min so that
+    cache keys are stable across requests made at different seconds.
     """
     base = center_dt.replace(tzinfo=timezone.utc) if center_dt.tzinfo is None else center_dt
+    # Round down to nearest interval_min boundary for stable cache keys
+    base = base.replace(second=0, microsecond=0)
+    base = base.replace(minute=(base.minute // interval_min) * interval_min)
     n_frames = int(lookback_hours * 60 / interval_min) + 1
     return [base - timedelta(minutes=i * interval_min) for i in range(n_frames)]
 
