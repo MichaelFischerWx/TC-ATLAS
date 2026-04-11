@@ -187,12 +187,17 @@
             return lut;
         })();
 
-        // Visible: simple grayscale (dark=ocean, bright=clouds)
+        // Visible: inverted grayscale (bright=clouds/high reflectance, dark=ocean/low)
+        // Uint8 encoding: 1=low reflectance, 255=high reflectance
+        // Display: high reflectance should be bright white
         IR_COLORMAPS['vis'] = (function () {
             var lut = new Uint8Array(256 * 4);
             lut[0]=0;lut[1]=0;lut[2]=0;lut[3]=0;
             for (var i=1;i<=255;i++) {
-                var gray = Math.round((i-1) / 254.0 * 255);
+                // Stretch contrast: map 1-255 to full 0-255 gray range
+                // Apply gamma correction (1.5) to brighten mid-tones for dawn/dusk
+                var frac = (i - 1) / 254.0;
+                var gray = Math.round(Math.pow(frac, 0.7) * 255);
                 var idx = i*4;
                 lut[idx]=gray; lut[idx+1]=gray; lut[idx+2]=gray; lut[idx+3]=255;
             }
