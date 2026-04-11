@@ -53,6 +53,40 @@
     color: #e2e4ea;
 }
 
+/* Mobile: fix secondary bar position below taller topbar */
+@media (max-width: 768px) {
+    .ir-secondary-bar {
+        top: 108px !important;
+        height: 36px;
+        justify-content: center;
+        padding: 0 8px;
+    }
+    .ir-view-tab {
+        font-size: 13px;
+        padding: 5px 16px;
+    }
+    .ir-view-tab.active {
+        background: #4a8cff;
+        color: #fff;
+    }
+    /* Hide storm counts on mobile */
+    .ir-storm-counts {
+        display: none !important;
+    }
+    /* Adjust content top for taller topbar + secondary bar */
+    .sat-main {
+        top: 144px;
+    }
+}
+@media (max-width: 480px) {
+    .ir-secondary-bar {
+        top: 90px;
+    }
+    .sat-main {
+        top: 126px;
+    }
+}
+
 .ir-storm-counts {
     display: flex;
     gap: 14px;
