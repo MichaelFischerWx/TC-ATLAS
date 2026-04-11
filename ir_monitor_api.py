@@ -1117,6 +1117,22 @@ def _poll_active_storms():
     # since they almost certainly represent the same system post-genesis.
     storms = _filter_genesis_invests(storms)
 
+    # ── Detect position changes ──
+    moved_storms = set()
+    with _active_storms_lock:
+        old_by_id = {s["atcf_id"]: s for s in _active_storms_cache.get("storms", [])}
+        for s in storms:
+            old = old_by_id.get(s["atcf_id"])
+            if old:
+                dlat = abs(s.get("lat", 0) - old.get("lat", 0))
+                dlon = abs(s.get("lon", 0) - old.get("lon", 0))
+                if dlat > 0.3 or dlon > 0.3:
+                    moved_storms.add(s["atcf_id"])
+                    print(f"[IR Monitor] {s['atcf_id']} position shifted: "
+                          f"{old.get('lat',0):.1f},{old.get('lon',0):.1f} → "
+                          f"{s.get('lat',0):.1f},{s.get('lon',0):.1f} "
+                          f"(Δ{dlat:.1f}°lat, Δ{dlon:.1f}°lon) — will refetch frames")
+
     # ── Update cache ──
     count_by_basin: dict = {}
     for s in storms:
@@ -1130,11 +1146,17 @@ def _poll_active_storms():
 
     _last_poll_time = time.time()
     total = len(storms)
-    print(f"[IR Monitor] Total: {total} active storms worldwide — {count_by_basin}")
+    if moved_storms:
+        print(f"[IR Monitor] Total: {total} active — {count_by_basin} "
+              f"({len(moved_storms)} storm(s) moved, refetching frames)")
+    else:
+        print(f"[IR Monitor] Total: {total} active storms worldwide — {count_by_basin}")
 
     # Kick off background IR pre-fetch for all active storms
+    # Storms that moved get priority (listed first)
     if storms:
-        t = threading.Thread(target=_prefetch_ir_frames, args=(list(storms),), daemon=True)
+        ordered = sorted(storms, key=lambda s: s["atcf_id"] not in moved_storms)
+        t = threading.Thread(target=_prefetch_ir_frames, args=(list(ordered),), daemon=True)
         t.start()
 
 
