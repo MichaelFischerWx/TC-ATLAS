@@ -619,6 +619,11 @@
     var _rtAscatLastAtcf = null;       // last storm we fetched passes for
     var _rtAscatActiveUrl = null;      // currently displayed pass data URL
 
+    // ── Browser-Side Panel Cache ─────────────────────────────
+    // Per-storm cache for panel data to avoid re-fetching on back/forward.
+    var _panelCache = {};              // { atcfId: { models, weatherlab, dmEns, ascat, meta, cachedAt } }
+    var PANEL_CACHE_TTL_MS = 5 * 60 * 1000;  // 5 minutes
+
     var RT_MODEL_COLORS = {
         'OFCL': '#ff4757', 'JTWC': '#ffa502',
         'AVNO': '#ff6b6b', 'AVNI': '#ff6b6b', 'GFSO': '#ff6b6b',
@@ -2369,19 +2374,32 @@
         _rtLoadWeatherlab(storm);
         _rtLoadDmEnsemble(storm);
         _rtLoadAscatPasses(storm);
-        fetchStormMetadata(storm.atcf_id, function (err, meta) {
-            if (!err && meta) {
-                renderIntensityChart(meta);
-                if (meta.has_recon) {
-                    document.getElementById('ir-recon-section').style.display = 'block';
-                    document.getElementById('ir-recon-info').innerHTML =
-                        '<span style="color:#34d399;">\u25CF Active reconnaissance</span><br>' +
-                        '<a href="explorer.html?tab=realtime">\u2192 Open in Real-Time TDR</a>';
-                } else {
-                    document.getElementById('ir-recon-section').style.display = 'none';
-                }
+
+        // Intensity chart: check cache first
+        var atcfId = storm.atcf_id;
+        var cached = _panelCache[atcfId];
+        function _handleMeta(meta) {
+            renderIntensityChart(meta);
+            if (meta.has_recon) {
+                document.getElementById('ir-recon-section').style.display = 'block';
+                document.getElementById('ir-recon-info').innerHTML =
+                    '<span style="color:#34d399;">\u25CF Active reconnaissance</span><br>' +
+                    '<a href="explorer.html?tab=realtime">\u2192 Open in Real-Time TDR</a>';
+            } else {
+                document.getElementById('ir-recon-section').style.display = 'none';
             }
-        });
+        }
+        if (cached && cached.meta && (Date.now() - cached.cachedAt) < PANEL_CACHE_TTL_MS) {
+            _handleMeta(cached.meta);
+        } else {
+            fetchStormMetadata(atcfId, function (err, meta) {
+                if (!err && meta) {
+                    if (!_panelCache[atcfId]) _panelCache[atcfId] = { cachedAt: Date.now() };
+                    _panelCache[atcfId].meta = meta;
+                    _handleMeta(meta);
+                }
+            });
+        }
         // Raw Tb pre-fetch starts when ALL GIBS tiles finish loading
         // (see onFrameLayerLoaded). Panel requests get a natural head
         // start since they fire on the first tile, not the last.
@@ -2699,6 +2717,21 @@
             officialSection.style.display = 'none';
         }
 
+        // Show skeleton placeholders while data loads
+        var chartEl = document.getElementById('ir-intensity-chart');
+        if (chartEl) {
+            chartEl.innerHTML = '';
+            chartEl.className = 'ir-intensity-chart skeleton-pulse skeleton-chart';
+        }
+        var modelsStatus = document.getElementById('rt-models-status');
+        if (modelsStatus) modelsStatus.innerHTML = '<span class="skeleton-pulse skeleton-text"></span>';
+        var modelsSection = document.getElementById('rt-models-section');
+        if (modelsSection) modelsSection.style.display = '';
+        var ascatStatus = document.getElementById('rt-ascat-status');
+        if (ascatStatus) ascatStatus.innerHTML = '<span class="skeleton-pulse skeleton-text"></span>';
+        var ascatSection = document.getElementById('rt-ascat-section');
+        if (ascatSection) ascatSection.style.display = '';
+
         // Initialize GIBS-based IR mini-map
         stopAnimation();
         animFrameTimes = [];
@@ -2980,6 +3013,7 @@
     function renderIntensityChart(meta) {
         var chartEl = document.getElementById('ir-intensity-chart');
         if (!chartEl || typeof Plotly === 'undefined') return;
+        chartEl.className = 'ir-intensity-chart';  // remove skeleton
 
         var history = meta.intensity_history || [];
         if (history.length === 0) {
@@ -3337,6 +3371,82 @@
         if (_rtModelVisible && _rtModelAutoSync && _rtModelData) {
             _rtSyncModelCycleToIR();
         }
+
+        // Enable Tb hover readout now that raw data is available
+        _rtSetupTbHover();
+    }
+
+    // ── Tb Mouseover Hover ─────────────────────────────────
+    // Shows brightness temperature under cursor when raw Tb overlays are active.
+    var _rtTbTooltip = null;
+    var _rtTbHoverThrottled = false;
+    var _rtTbHoverActive = false;  // true when raw Tb overlays are displayed
+
+    function _rtSetupTbHover() {
+        if (!detailMap) return;
+        if (detailMap._rtTbHoverAttached) { _rtTbHoverActive = true; return; }
+
+        _rtTbTooltip = L.popup({
+            closeButton: false, autoPan: false, autoClose: false,
+            className: 'ir-tb-tooltip', offset: [12, -12]
+        });
+        detailMap.on('mousemove', _rtHandleTbMouseMove);
+        detailMap.on('mouseout', function () {
+            if (_rtTbTooltip && detailMap && detailMap.hasLayer(_rtTbTooltip)) {
+                detailMap.closePopup(_rtTbTooltip);
+            }
+        });
+        detailMap._rtTbHoverAttached = true;
+        _rtTbHoverActive = true;
+    }
+
+    function _rtHandleTbMouseMove(e) {
+        if (_rtTbHoverThrottled || !_rtTbHoverActive) return;
+        _rtTbHoverThrottled = true;
+        setTimeout(function () { _rtTbHoverThrottled = false; }, 50);
+
+        if (!rawTbFrames || rawTbFrames.length === 0 || !_rtTbTooltip || !detailMap) return;
+
+        var frame = rawTbFrames[animIndex];
+        if (!frame || !frame.tb_data || !frame.bounds) return;
+
+        var lat = e.latlng.lat;
+        var lng = e.latlng.lng;
+        var b = frame.bounds;
+        var south = b[0][0], west = b[0][1], north = b[1][0], east = b[1][1];
+
+        if (lat < south || lat > north || lng < west || lng > east) {
+            if (detailMap.hasLayer(_rtTbTooltip)) detailMap.closePopup(_rtTbTooltip);
+            return;
+        }
+
+        var fracY = (north - lat) / (north - south);
+        var fracX = (lng - west) / (east - west);
+        var row = Math.min(Math.floor(fracY * frame.rows), frame.rows - 1);
+        var col = Math.min(Math.floor(fracX * frame.cols), frame.cols - 1);
+        var rawVal = frame.tb_data[row * frame.cols + col];
+
+        if (rawVal === 0) {
+            if (detailMap.hasLayer(_rtTbTooltip)) detailMap.closePopup(_rtTbTooltip);
+            return;
+        }
+
+        // Decode uint8 to Tb Kelvin (same formula as global archive)
+        var tbVmin = frame.tb_vmin || 160.0;
+        var tbVmax = frame.tb_vmax || 330.0;
+        var tbK = tbVmin + (rawVal - 1) * (tbVmax - tbVmin) / 254.0;
+        var tbC = (tbK - 273.15).toFixed(1);
+        var latStr = Math.abs(lat).toFixed(2) + (lat >= 0 ? '\u00B0N' : '\u00B0S');
+        var lngStr = Math.abs(lng).toFixed(2) + (lng >= 0 ? '\u00B0E' : '\u00B0W');
+
+        var html = '<span class="ir-tb-val">' + tbK.toFixed(1) + ' K</span>' +
+                   '<span class="ir-tb-sep"> / </span>' +
+                   '<span class="ir-tb-val">' + tbC + ' \u00B0C</span>' +
+                   '<span class="ir-tb-sep"> &nbsp; </span>' +
+                   '<span class="ir-tb-coord">' + latStr + ', ' + lngStr + '</span>';
+
+        _rtTbTooltip.setLatLng(e.latlng).setContent(html);
+        if (!detailMap.hasLayer(_rtTbTooltip)) _rtTbTooltip.openOn(detailMap);
     }
 
     /** Fetch raw Tb frames from API (or cache) and switch to client-side rendering */
@@ -3371,6 +3481,8 @@
 
     /** Switch back to GIBS tile layers from raw Tb overlays */
     function switchToGIBSTiles() {
+        _rtTbHoverActive = false;  // disable Tb hover (no raw data in GIBS mode)
+
         // Remove raw Tb overlays from map
         for (var i = 0; i < animFrameLayers.length; i++) {
             if (animFrameLayers[i] && detailMap) {
@@ -4281,10 +4393,23 @@
         _rtModelLastAtcf = atcfId;
         _rtModelData = null;
 
-        if (statusEl) statusEl.textContent = 'Loading...';
+        // Check panel cache
+        var cached = _panelCache[atcfId];
+        var dataPromise;
+        if (cached && cached.models && (Date.now() - cached.cachedAt) < PANEL_CACHE_TTL_MS) {
+            dataPromise = Promise.resolve(cached.models);
+        } else {
+            if (statusEl) statusEl.textContent = 'Loading...';
+            dataPromise = fetch(API_BASE + '/global/adeck?atcf_id=' + encodeURIComponent(atcfId), { cache: 'no-store' })
+                .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+                .then(function (json) {
+                    if (!_panelCache[atcfId]) _panelCache[atcfId] = { cachedAt: Date.now() };
+                    _panelCache[atcfId].models = json;
+                    return json;
+                });
+        }
 
-        fetch(API_BASE + '/global/adeck?atcf_id=' + encodeURIComponent(atcfId), { cache: 'no-store' })
-            .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+        dataPromise
             .then(function (json) {
                 _rtModelData = json;
 
@@ -4746,18 +4871,29 @@
      */
     function _rtLoadWeatherlab(storm) {
         if (!storm || !storm.atcf_id) return;
+        var atcfId = storm.atcf_id;
         _rtWeatherlabData = null;
 
-        fetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(storm.atcf_id) + '/weatherlab', { cache: 'no-store' })
-            .then(function (r) {
-                if (!r.ok) throw new Error(r.status);
-                return r.json();
-            })
+        var cached = _panelCache[atcfId];
+        var dataPromise;
+        if (cached && cached.weatherlab && (Date.now() - cached.cachedAt) < PANEL_CACHE_TTL_MS) {
+            dataPromise = Promise.resolve(cached.weatherlab);
+        } else {
+            dataPromise = fetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) + '/weatherlab', { cache: 'no-store' })
+                .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+                .then(function (json) {
+                    if (!_panelCache[atcfId]) _panelCache[atcfId] = { cachedAt: Date.now() };
+                    _panelCache[atcfId].weatherlab = json;
+                    return json;
+                });
+        }
+
+        dataPromise
             .then(function (json) {
                 _rtWeatherlabData = json;
                 var btn = document.getElementById('rt-weatherlab-btn');
                 if (btn) btn.title = json.n_members + ' members, init ' + json.init_time;
-                console.log('[WeatherLab] Loaded ' + json.n_members + ' members for ' + storm.atcf_id);
+                console.log('[WeatherLab] Loaded ' + json.n_members + ' members for ' + atcfId);
             })
             .catch(function () {
                 // Silent — WeatherLab may not have data for this storm
@@ -5215,17 +5351,27 @@
      */
     function _rtLoadDmEnsemble(storm) {
         if (!storm || !storm.atcf_id) return;
+        var atcfId = storm.atcf_id;
         _rtDmEnsData = null;
 
-        fetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(storm.atcf_id) + '/weatherlab-ensemble', { cache: 'no-store' })
-            .then(function (r) {
-                if (!r.ok) throw new Error(r.status);
-                return r.json();
-            })
+        var cached = _panelCache[atcfId];
+        var dataPromise;
+        if (cached && cached.dmEns && (Date.now() - cached.cachedAt) < PANEL_CACHE_TTL_MS) {
+            dataPromise = Promise.resolve(cached.dmEns);
+        } else {
+            dataPromise = fetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) + '/weatherlab-ensemble', { cache: 'no-store' })
+                .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+                .then(function (json) {
+                    if (!_panelCache[atcfId]) _panelCache[atcfId] = { cachedAt: Date.now() };
+                    _panelCache[atcfId].dmEns = json;
+                    return json;
+                });
+        }
+
+        dataPromise
             .then(function (json) {
                 _rtDmEnsData = json;
                 console.log('[WeatherLab 1K] Loaded ' + json.n_members + ' members');
-                // If DeepMind toggle is already active, show panels immediately
                 if (_rtWeatherlabVisible) {
                     _rtShowDmPanels();
                 }
@@ -5779,12 +5925,12 @@
         layout.title = {
             text: title,
             font: { size: 16, color: textColor, family: 'JetBrains Mono, monospace' },
-            x: 0.5, xanchor: 'center', y: 0.97
+            x: 0.5, xanchor: 'center', y: 0.98
         };
         layout.paper_bgcolor = bgColor;
         layout.plot_bgcolor = bgColor;
         layout.font = { family: 'JetBrains Mono, monospace', size: 14, color: axisColor };
-        layout.margin = { t: 55, r: 25, b: 60, l: 60 };
+        layout.margin = { t: 75, r: 25, b: 60, l: 60 };
         layout.height = 576;
         layout.width = 768;
 
@@ -5810,7 +5956,7 @@
             }
         }
 
-        // Update annotation colors
+        // Update annotation colors and reposition percentile text below title
         if (layout.annotations) {
             for (var ai = 0; ai < layout.annotations.length; ai++) {
                 var ann = layout.annotations[ai];
@@ -5819,6 +5965,13 @@
                 }
                 ann.font = ann.font || {};
                 ann.font.size = Math.max((ann.font.size || 9) + 2, 10);
+                // Move percentile summary (y > 1.0) below title with centered alignment
+                if (ann.yref === 'paper' && ann.y > 1.0) {
+                    ann.x = 0.5;
+                    ann.xanchor = 'center';
+                    ann.y = 1.01;
+                    ann.font.size = 12;
+                }
             }
         }
 
@@ -6025,6 +6178,31 @@
         _rtAscatLastAtcf = atcfId;
         _rtAscatPasses = null;
 
+        // Check panel cache
+        var cached = _panelCache[atcfId];
+        if (cached && cached.ascat && (Date.now() - cached.cachedAt) < PANEL_CACHE_TTL_MS) {
+            _rtAscatPasses = cached.ascat;
+            if (section) section.style.display = '';
+            var json = cached.ascat;
+            if (!json.passes || json.passes.length === 0) {
+                if (statusEl) statusEl.textContent = 'No passes found';
+            } else {
+                if (statusEl) statusEl.textContent = json.passes.length + ' pass' + (json.passes.length > 1 ? 'es' : '');
+                var sel = document.getElementById('rt-ascat-pass-select');
+                if (sel) {
+                    sel.innerHTML = '';
+                    for (var ci = 0; ci < json.passes.length; ci++) {
+                        var cp = json.passes[ci];
+                        var copt = document.createElement('option');
+                        copt.value = ci;
+                        copt.textContent = cp.satellite + ' \u2014 ' + cp.datetime_utc;
+                        sel.appendChild(copt);
+                    }
+                }
+            }
+            return;
+        }
+
         if (statusEl) statusEl.textContent = 'Searching...';
         if (section) section.style.display = '';
 
@@ -6045,6 +6223,8 @@
                 .then(function (json) {
                     if (!json) return;  // was a retry
                     _rtAscatPasses = json;
+                    if (!_panelCache[atcfId]) _panelCache[atcfId] = { cachedAt: Date.now() };
+                    _panelCache[atcfId].ascat = json;
 
                     if (!json.passes || json.passes.length === 0) {
                         if (statusEl) statusEl.textContent = 'No passes found';
