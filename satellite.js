@@ -424,7 +424,7 @@
         var lonSpan = vb.east - vb.west;
         var gridStep = latSpan > 12 ? 5 : latSpan > 6 ? 2 : 1;
 
-        overlayCtx.strokeStyle = 'rgba(180, 180, 200, 0.15)';
+        overlayCtx.strokeStyle = 'rgba(200, 200, 220, 0.3)';
         overlayCtx.lineWidth = 1;
 
         // Latitude lines

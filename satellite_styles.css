@@ -354,9 +354,9 @@
 
 .sat-axis-label {
     font-family: 'JetBrains Mono', monospace;
-    font-size: 9px;
-    color: #5c6070;
-    text-shadow: 0 0 3px #0a0c12, 0 0 6px #0a0c12;
+    font-size: 10px;
+    color: #94a3b8;
+    text-shadow: 0 0 4px #0a0c12, 0 0 8px #0a0c12, 0 0 12px #0a0c12;
 }
 
 /* ── Hover Tooltip ──────────────────────────────────────────── */
