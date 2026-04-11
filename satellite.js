@@ -503,17 +503,41 @@
 
     // ── Save Image ──────────────────────────────────────────────
 
+    function drawColorbarToCtx(cctx, x, y, w, h, cmapName, vmin, vmax, unit) {
+        var lut = IR_COLORMAPS[cmapName] || IR_COLORMAPS['enhanced'];
+        // Draw gradient bar (left=warm, right=cold)
+        for (var bx = 0; bx < w; bx++) {
+            var val = Math.round(1 + bx / (w - 1) * 254);
+            if (val > 255) val = 255;
+            var li = val * 4;
+            cctx.fillStyle = 'rgb(' + lut[li] + ',' + lut[li+1] + ',' + lut[li+2] + ')';
+            cctx.fillRect(x + bx, y, 1, h);
+        }
+        // Border
+        cctx.strokeStyle = '#2a2d38';
+        cctx.lineWidth = 1;
+        cctx.strokeRect(x, y, w, h);
+        // Labels
+        cctx.fillStyle = '#94a3b8';
+        cctx.font = '10px sans-serif';
+        cctx.textAlign = 'left';
+        cctx.fillText(vmax + ' ' + unit, x, y + h + 12);
+        cctx.textAlign = 'right';
+        cctx.fillText(vmin + ' ' + unit, x + w, y + h + 12);
+        cctx.textAlign = 'left';
+    }
+
     function saveImage() {
         if (irFrames.length === 0) return;
         var irFrame = irFrames[animIndex];
         if (!irFrame) return;
 
-        // Create composite canvas: both panels side-by-side with labels
         var pw = irFrame.cols, ph = irFrame.rows;
         var gap = 4;
         var headerH = 28;
+        var cbH = 24;  // colorbar area height
         var totalW = pw * 2 + gap;
-        var totalH = ph + headerH;
+        var totalH = ph + headerH + cbH;
 
         var comp = document.createElement('canvas');
         comp.width = totalW;
@@ -531,7 +555,7 @@
         var cat = currentStorm ? categoryShort(currentStorm.category) : '';
         var time = irFrame.datetime_utc ? irFrame.datetime_utc.replace('T', ' ').replace('Z', ' UTC') : '';
         var sat = irFrame.satellite || '';
-        cctx.fillText(name + ' (' + cat + ')  —  ' + time + '  ' + sat, 8, 18);
+        cctx.fillText(name + ' (' + cat + ')  \u2014  ' + time + '  ' + sat, 8, 18);
 
         // Panel labels
         cctx.font = '11px sans-serif';
@@ -540,20 +564,37 @@
         var rightLabel = rightBand === 2 ? 'Visible' : 'Water Vapor';
         cctx.fillText(rightLabel, pw + gap + 8, headerH + 14);
 
-        // Draw IR canvas
+        // Draw IR canvas + overlay
         cctx.drawImage(canvasIR, 0, headerH, pw, ph);
         if (overlayIR) cctx.drawImage(overlayIR, 0, headerH, pw, ph);
 
-        // Draw right canvas
+        // Draw right canvas + overlay
         if (canvasRight && canvasRight.width > 0) {
             cctx.drawImage(canvasRight, pw + gap, headerH, pw, ph);
             if (overlayRight) cctx.drawImage(overlayRight, pw + gap, headerH, pw, ph);
         }
 
+        // IR colorbar
+        var cbY = headerH + ph + 4;
+        var cbW = pw - 80;
+        drawColorbarToCtx(cctx, 40, cbY, cbW, 8, selectedColormap, 160, 330, 'K');
+
+        // Right panel colorbar
+        var rightFrame = rightFrames[animIndex];
+        if (rightFrame) {
+            var rcmap = getRightCmap();
+            var rvmin = rightFrame.tb_vmin || 170, rvmax = rightFrame.tb_vmax || 260;
+            var runit = rightDataType === 'reflectance' ? '%' : 'K';
+            if (rightDataType === 'reflectance') { rvmin = 0; rvmax = 100; }
+            drawColorbarToCtx(cctx, pw + gap + 40, cbY, cbW, 8, rcmap, rvmin, rvmax, runit);
+        }
+
         // TC-ATLAS watermark
         cctx.fillStyle = 'rgba(255,255,255,0.3)';
         cctx.font = '10px sans-serif';
-        cctx.fillText('TC-ATLAS', totalW - 60, totalH - 6);
+        cctx.textAlign = 'right';
+        cctx.fillText('TC-ATLAS', totalW - 8, totalH - 4);
+        cctx.textAlign = 'left';
 
         // Download
         var link = document.createElement('a');
