@@ -697,6 +697,11 @@
             rightBand = sunEl > -6 ? 2 : 8;
             rightDataType = rightBand <= 6 ? 'reflectance' : 'tb';
             if (rightLabelEl) rightLabelEl.textContent = rightBand === 2 ? 'Visible' : 'Water Vapor';
+            // Update product toggle buttons
+            var pbtns = document.querySelectorAll('.sat-product-btn');
+            for (var pb = 0; pb < pbtns.length; pb++) {
+                pbtns[pb].classList.toggle('active', parseInt(pbtns[pb].getAttribute('data-band'), 10) === rightBand);
+            }
         }
         if (window.innerWidth <= 768 && sidebar) sidebar.classList.remove('open');
         noStormsEl.style.display = 'none';
@@ -731,6 +736,37 @@
         }
     }
 
+    function _refetchRightFrames(stormId) {
+        var totalFrames = 13;
+        var rightDone = 0;
+
+        function fetchOne(idx) {
+            if (idx >= totalFrames || stormId !== currentStormId) return;
+            var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(stormId) + '/band-raw-frame'
+                + '?band=' + rightBand + '&frame_index=' + idx + '&lookback_hours=' + DEFAULT_LOOKBACK_HOURS
+                + '&radius_deg=' + DEFAULT_RADIUS_DEG + '&interval_min=' + FRAME_INTERVAL_MIN;
+            fetch(url)
+                .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+                .then(function (data) {
+                    if (data.total_frames) totalFrames = data.total_frames;
+                    rightFrames[idx] = {
+                        tb_data: decodeTbData(data.tb_data), rows: data.tb_rows, cols: data.tb_cols,
+                        bounds: data.bounds, datetime_utc: data.datetime_utc,
+                        satellite: data.satellite || '', tb_vmin: data.tb_vmin, tb_vmax: data.tb_vmax,
+                        data_type: data.data_type || rightDataType
+                    };
+                    rightDone++;
+                    if (stormId === currentStormId) renderBothPanels();
+                })
+                .catch(function () { rightDone++; })
+                .finally(function () {
+                    var next = idx + FETCH_CONCURRENCY;
+                    if (next < totalFrames) fetchOne(next);
+                });
+        }
+        for (var i = 0; i < Math.min(FETCH_CONCURRENCY, totalFrames); i++) fetchOne(i);
+    }
+
     function loadFrames(stormId) {
         var totalFrames = 13;
         var irDone = 0, rightDone = 0, irFail = 0, rightFail = 0;
@@ -763,11 +799,12 @@
                         satellite: data.satellite || '', tb_vmin: data.tb_vmin || 160.0, tb_vmax: data.tb_vmax || 330.0
                     };
                     irDone++;
-                    if (idx === 0 && stormId === currentStormId) {
-                        animIndex = 0;
+                    if (stormId === currentStormId) {
                         buildValidIndices();
+                        updateSliderMax();
+                        if (idx === 0) { animIndex = 0; hideLoader(); }
                         renderBothPanels();
-                        hideLoader();
+                        updateAnimUI();
                     }
                     updateStatus();
                 })
@@ -995,6 +1032,33 @@
             rightCmapEl.addEventListener('change', function () {
                 rightColormapName = this.value;
                 renderBothPanels();
+            });
+        }
+
+        // Right-panel product toggle (WV / Vis)
+        var prodBtns = document.querySelectorAll('.sat-product-btn');
+        for (var pb = 0; pb < prodBtns.length; pb++) {
+            prodBtns[pb].addEventListener('click', function () {
+                var newBand = parseInt(this.getAttribute('data-band'), 10);
+                if (newBand === rightBand) return;
+                rightBand = newBand;
+                rightDataType = newBand <= 6 ? 'reflectance' : 'tb';
+                if (rightLabelEl) rightLabelEl.textContent = newBand === 2 ? 'Visible' : 'Water Vapor';
+                // Update active button
+                for (var k = 0; k < prodBtns.length; k++) {
+                    prodBtns[k].classList.toggle('active', parseInt(prodBtns[k].getAttribute('data-band'), 10) === newBand);
+                }
+                // Auto-select appropriate colormap
+                if (newBand === 2) rightColormapName = 'vis';
+                else if (rightColormapName === 'vis') rightColormapName = 'wv';
+                if (rightCmapEl) rightCmapEl.value = rightColormapName;
+                // Clear and refetch right frames
+                rightFrames = [];
+                renderBothPanels();
+                if (currentStormId) {
+                    // Refetch right panel frames with new band
+                    _refetchRightFrames(currentStormId);
+                }
             });
         }
 

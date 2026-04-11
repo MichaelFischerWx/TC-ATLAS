@@ -248,6 +248,37 @@
     border-color: #4a8cff;
 }
 
+.sat-product-toggle {
+    display: flex;
+    gap: 2px;
+    background: #0a0c12;
+    border-radius: 5px;
+    padding: 2px;
+    border: 1px solid #2a2d38;
+}
+
+.sat-product-btn {
+    flex: 1;
+    background: transparent;
+    color: #8b8fa4;
+    border: none;
+    border-radius: 3px;
+    padding: 5px 8px;
+    font-size: 11px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+
+.sat-product-btn:hover {
+    color: #c8cad2;
+}
+
+.sat-product-btn.active {
+    background: #2a2d38;
+    color: #e2e4ea;
+}
+
 .sat-sidebar-footer {
     padding: 8px 14px;
     border-top: 1px solid #2a2d38;
