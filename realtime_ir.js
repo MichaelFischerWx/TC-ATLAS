@@ -5202,8 +5202,11 @@
             })
             .then(function (json) {
                 _rtDmEnsData = json;
-                // Data cached silently — panels only shown when DeepMind toggle is activated
-                console.log('[WeatherLab 1K] Loaded ' + json.n_members + ' members (cached)');
+                console.log('[WeatherLab 1K] Loaded ' + json.n_members + ' members');
+                // If DeepMind toggle is already active, show panels immediately
+                if (_rtWeatherlabVisible) {
+                    _rtShowDmPanels();
+                }
             })
             .catch(function () {
                 // Silent — 1000-member data may not be available
