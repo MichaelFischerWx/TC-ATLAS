@@ -299,36 +299,30 @@
     image-rendering: auto;
 }
 
-/* ── Panel Colorbars ────────────────────────────────────────── */
+/* ── Panel Colorbars (horizontal, below image) ──────────────── */
 
-.sat-colorbar-panel {
-    position: absolute;
-    right: 6px;
-    top: 50%;
-    transform: translateY(-50%);
+.sat-colorbar-horiz {
     display: flex;
-    flex-direction: row;
-    align-items: stretch;
-    gap: 3px;
-    z-index: 5;
-    pointer-events: none;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 8px;
+    flex-shrink: 0;
 }
 
-.sat-colorbar-panel canvas {
+.sat-colorbar-horiz canvas {
+    flex: 1;
+    height: 8px;
     border-radius: 2px;
     border: 1px solid #2a2d38;
     image-rendering: auto;
 }
 
-.sat-cb-labels {
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
+.sat-cb-label-left,
+.sat-cb-label-right {
     font-size: 9px;
     font-family: 'JetBrains Mono', monospace;
     color: #8b8fa4;
-    text-shadow: 0 0 3px #0a0c12, 0 0 6px #0a0c12;
-    padding: 1px 0;
+    white-space: nowrap;
 }
 
 /* ── Lat/Lon Axes ───────────────────────────────────────────── */

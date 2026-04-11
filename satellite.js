@@ -476,7 +476,7 @@
 
     // ── Colorbar Rendering ────────────────────────────────────────
 
-    function renderColorbar(cbCanvas, cmapName, topLabel, botLabel, vmin, vmax, unit) {
+    function renderColorbar(cbCanvas, cmapName, leftLabel, rightLabel, vmin, vmax, unit) {
         if (!cbCanvas) return;
         var lut = IR_COLORMAPS[cmapName] || IR_COLORMAPS['enhanced'];
         var cbCtx = cbCanvas.getContext('2d');
@@ -484,12 +484,12 @@
         var imgData = cbCtx.createImageData(w, h);
         var pixels = imgData.data;
 
-        // Cold on top (index 255), warm on bottom (index 1)
-        for (var y = 0; y < h; y++) {
-            var val = Math.round(255 - y / (h - 1) * 254);
-            if (val < 1) val = 1;
+        // Horizontal: left=warm (index 1), right=cold (index 255)
+        for (var x = 0; x < w; x++) {
+            var val = Math.round(1 + x / (w - 1) * 254);
+            if (val > 255) val = 255;
             var li = val * 4;
-            for (var x = 0; x < w; x++) {
+            for (var y = 0; y < h; y++) {
                 var pi = (y * w + x) * 4;
                 pixels[pi] = lut[li]; pixels[pi+1] = lut[li+1];
                 pixels[pi+2] = lut[li+2]; pixels[pi+3] = 255;
@@ -497,8 +497,8 @@
         }
         cbCtx.putImageData(imgData, 0, 0);
 
-        if (topLabel) topLabel.textContent = vmin + ' ' + unit;
-        if (botLabel) botLabel.textContent = vmax + ' ' + unit;
+        if (leftLabel) leftLabel.textContent = vmax + ' ' + unit;
+        if (rightLabel) rightLabel.textContent = vmin + ' ' + unit;
     }
 
     // ── Save Image ──────────────────────────────────────────────
@@ -665,18 +665,25 @@
 
     // ── Frame Loading ───────────────────────────────────────────
 
+    // Valid frame indices (where IR loaded successfully) — used for animation
+    var validFrameIndices = [];
+
+    function buildValidIndices() {
+        validFrameIndices = [];
+        for (var i = 0; i < irFrames.length; i++) {
+            if (irFrames[i]) validFrameIndices.push(i);
+        }
+    }
+
     function loadFrames(stormId) {
-        var totalFrames = 7;
-        var irLoaded = [], rightLoaded = [];
+        var totalFrames = 13;
         var irDone = 0, rightDone = 0, irFail = 0, rightFail = 0;
 
         function updateStatus() {
             if (loadStatusEl) {
-                var irPct = totalFrames > 0 ? Math.round(100 * irDone / totalFrames) : 0;
-                var rightPct = totalFrames > 0 ? Math.round(100 * rightDone / totalFrames) : 0;
                 if (irDone < totalFrames || rightDone < totalFrames) {
-                    loadStatusEl.textContent = 'IR ' + irDone + '/' + totalFrames +
-                        ' \u00B7 ' + (rightBand === 2 ? 'Vis' : 'WV') + ' ' + rightDone + '/' + totalFrames;
+                    loadStatusEl.textContent = 'IR ' + (irDone - irFail) + '/' + totalFrames +
+                        ' \u00B7 ' + (rightBand === 2 ? 'Vis' : 'WV') + ' ' + (rightDone - rightFail) + '/' + totalFrames;
                 } else {
                     loadStatusEl.textContent = '';
                 }
@@ -693,15 +700,16 @@
                 .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
                 .then(function (data) {
                     if (data.total_frames) totalFrames = data.total_frames;
-                    irLoaded[idx] = {
+                    // Store at original index — no compaction
+                    irFrames[idx] = {
                         tb_data: decodeTbData(data.tb_data), rows: data.tb_rows, cols: data.tb_cols,
                         bounds: data.bounds, datetime_utc: data.datetime_utc,
                         satellite: data.satellite || '', tb_vmin: data.tb_vmin || 160.0, tb_vmax: data.tb_vmax || 330.0
                     };
                     irDone++;
                     if (idx === 0 && stormId === currentStormId) {
-                        irFrames[0] = irLoaded[0];
                         animIndex = 0;
+                        buildValidIndices();
                         renderBothPanels();
                         hideLoader();
                     }
@@ -711,10 +719,11 @@
                 .finally(function () {
                     var next = idx + FETCH_CONCURRENCY;
                     if (next < totalFrames) fetchIRFrame(next);
-                    if (irDone >= totalFrames) {
-                        var result = [];
-                        for (var i = 0; i < totalFrames; i++) { if (irLoaded[i]) result.push(irLoaded[i]); }
-                        if (stormId === currentStormId) { irFrames = result; updateSliderMax(); renderBothPanels(); updateAnimUI(); }
+                    if (irDone >= totalFrames && stormId === currentStormId) {
+                        buildValidIndices();
+                        updateSliderMax();
+                        renderBothPanels();
+                        updateAnimUI();
                     }
                 });
         }
@@ -729,28 +738,22 @@
                 .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
                 .then(function (data) {
                     if (data.total_frames) totalFrames = data.total_frames;
-                    rightLoaded[idx] = {
+                    // Store at original index — stays aligned with irFrames
+                    rightFrames[idx] = {
                         tb_data: decodeTbData(data.tb_data), rows: data.tb_rows, cols: data.tb_cols,
                         bounds: data.bounds, datetime_utc: data.datetime_utc,
                         satellite: data.satellite || '', tb_vmin: data.tb_vmin, tb_vmax: data.tb_vmax,
                         data_type: data.data_type || rightDataType
                     };
                     rightDone++;
-                    if (idx === 0 && stormId === currentStormId && rightFrames.length === 0) {
-                        rightFrames[0] = rightLoaded[0];
-                        renderBothPanels();
-                    }
+                    if (idx === 0 && stormId === currentStormId) renderBothPanels();
                     updateStatus();
                 })
                 .catch(function () { rightFail++; rightDone++; updateStatus(); })
                 .finally(function () {
                     var next = idx + FETCH_CONCURRENCY;
                     if (next < totalFrames) fetchRightFrame(next);
-                    if (rightDone >= totalFrames) {
-                        var result = [];
-                        for (var i = 0; i < totalFrames; i++) { if (rightLoaded[i]) result.push(rightLoaded[i]); }
-                        if (stormId === currentStormId) { rightFrames = result; renderBothPanels(); }
-                    }
+                    if (rightDone >= totalFrames && stormId === currentStormId) renderBothPanels();
                 });
         }
 
@@ -764,20 +767,30 @@
     // ── Animation ───────────────────────────────────────────────
 
     function showFrame(idx) {
-        if (idx < 0 || idx >= irFrames.length) return;
+        if (!irFrames[idx]) return;
         animIndex = idx;
         renderBothPanels();
         updateAnimUI();
     }
-    function nextFrame() { if (irFrames.length === 0) return; showFrame((animIndex + 1) % irFrames.length); }
-    function prevFrame() { if (irFrames.length === 0) return; showFrame((animIndex - 1 + irFrames.length) % irFrames.length); }
+    function nextFrame() {
+        if (validFrameIndices.length === 0) return;
+        var pos = validFrameIndices.indexOf(animIndex);
+        var next = (pos + 1) % validFrameIndices.length;
+        showFrame(validFrameIndices[next]);
+    }
+    function prevFrame() {
+        if (validFrameIndices.length === 0) return;
+        var pos = validFrameIndices.indexOf(animIndex);
+        var prev = (pos - 1 + validFrameIndices.length) % validFrameIndices.length;
+        showFrame(validFrameIndices[prev]);
+    }
 
     function animTick(ts) {
         if (!animPlaying) return;
         if (ts - animLastTick >= ANIM_SPEEDS[animSpeedIdx].ms) { animLastTick = ts; nextFrame(); }
         animTimer = requestAnimationFrame(animTick);
     }
-    function startAnimation() { if (irFrames.length < 2) return; animPlaying = true; animLastTick = 0; animTimer = requestAnimationFrame(animTick); updatePlayBtn(); }
+    function startAnimation() { if (validFrameIndices.length < 2) return; animPlaying = true; animLastTick = 0; animTimer = requestAnimationFrame(animTick); updatePlayBtn(); }
     function stopAnimation() { animPlaying = false; if (animTimer) cancelAnimationFrame(animTimer); animTimer = null; updatePlayBtn(); }
     function toggleAnimation() { if (animPlaying) stopAnimation(); else startAnimation(); }
     function cycleSpeed() { animSpeedIdx = (animSpeedIdx + 1) % ANIM_SPEEDS.length; if (speedBtn) speedBtn.textContent = ANIM_SPEEDS[animSpeedIdx].label; }
@@ -786,16 +799,17 @@
 
     function updateAnimUI() {
         var frame = irFrames[animIndex];
-        if (frameCounterEl) frameCounterEl.textContent = (irFrames.length > 0 ? (animIndex + 1) : 0) + ' / ' + irFrames.length;
+        var pos = validFrameIndices.indexOf(animIndex);
+        if (frameCounterEl) frameCounterEl.textContent = (pos >= 0 ? (pos + 1) : 0) + ' / ' + validFrameIndices.length;
         var timeStr = '';
         if (frame && frame.datetime_utc) {
             timeStr = frame.datetime_utc.replace('T', ' ').replace(/:\d{2}Z$/, ' UTC').replace('Z', ' UTC');
         }
         if (timestampEl) timestampEl.textContent = timeStr;
         if (frame && satelliteEl) satelliteEl.textContent = frame.satellite || '';
-        if (sliderEl && irFrames.length > 0) sliderEl.value = animIndex;
+        if (sliderEl) sliderEl.value = pos >= 0 ? pos : 0;
     }
-    function updateSliderMax() { if (sliderEl) sliderEl.max = Math.max(0, irFrames.length - 1); }
+    function updateSliderMax() { if (sliderEl) sliderEl.max = Math.max(0, validFrameIndices.length - 1); }
     function updatePlayBtn() {
         if (!playBtn) return;
         playBtn.textContent = animPlaying ? '\u23F8' : '\u25B6';
@@ -896,7 +910,11 @@
         document.getElementById('sat-next').addEventListener('click', function () { stopAnimation(); nextFrame(); });
         playBtn.addEventListener('click', toggleAnimation);
         speedBtn.addEventListener('click', cycleSpeed);
-        sliderEl.addEventListener('input', function () { stopAnimation(); showFrame(parseInt(this.value, 10)); });
+        sliderEl.addEventListener('input', function () {
+            stopAnimation();
+            var pos = parseInt(this.value, 10);
+            if (pos >= 0 && pos < validFrameIndices.length) showFrame(validFrameIndices[pos]);
+        });
 
         document.getElementById('sat-colormap-select').addEventListener('change', function () {
             selectedColormap = this.value;
