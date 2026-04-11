@@ -15,7 +15,7 @@
 
     // ── IR Colormap LUTs (for client-side raw Tb rendering) ────
     var IR_COLORMAPS = {};
-    var irSelectedColormap = 'enhanced';
+    var irSelectedColormap = 'claude-ir';
     var _irRenderCanvas = null;
 
     // Raw Tb frame storage — parallel to animFrameLayers
@@ -196,7 +196,7 @@
         ]);
 
         // Claude — custom TC analysis enhancement
-        IR_COLORMAPS['claude'] = buildLUTfromTb([
+        IR_COLORMAPS['claude-ir'] = buildLUTfromTb([
             {tb: 310, r:  12, g:  12, b:  22},    // warm surface: near-black
             {tb: 293, r:  70, g:  70, b:  82},    // warm: dark grey-blue
             {tb: 283, r: 120, g: 120, b: 132},    // mild: medium grey

@@ -91,7 +91,7 @@ var irCurrentTbVmin = 170.0;
 var irCurrentTbVmax = 310.0;
 var irCurrentBounds = null;  // L.latLngBounds for current IR overlay
 var irTbTooltip = null;      // L.popup for Tb hover display
-var irSelectedColormap = 'enhanced';  // Current colormap name
+var irSelectedColormap = 'claude-ir';  // Current colormap name
 
 // ── Coastline overlay cache ────────────────────────────────────────────
 // Natural Earth 110m coastlines as GeoJSON — loaded once, shared by all maps.
@@ -357,12 +357,12 @@ var IR_COLORMAPS = {};
         {tb: 173, r:   0, g:   0, b:   0}   // -100°C black
     ]);
 
-    // Claude — custom enhancement optimized for TC analysis
+    // Claude IR — custom enhancement optimized for TC analysis
     // Design: cool-toned grayscale warm side preserves cloud texture;
     // color begins at convective onset (-20°C); teal→green→amber→terracotta
-    // progression maps perceptually to intensifying convection; magenta/pink
-    // for extreme cold tops; white overshooting stands out against any band.
-    IR_COLORMAPS['claude'] = buildLUTfromTb([
+    // progression maps perceptually to intensifying convection; violet/indigo
+    // for extreme cold tops maintains contrast on overshooting structure.
+    IR_COLORMAPS['claude-ir'] = buildLUTfromTb([
         {tb: 310, r:  12, g:  12, b:  22},  // +37°C near-black (cool undertone)
         {tb: 293, r:  70, g:  70, b:  82},  // +20°C dark cool gray
         {tb: 283, r: 120, g: 120, b: 132},  // +10°C medium cool gray
@@ -379,10 +379,10 @@ var IR_COLORMAPS = {};
         {tb: 213, r: 214, g:  78, b:  56},  // -60°C terracotta
         {tb: 208, r: 180, g:  36, b:  68},  // -65°C crimson
         {tb: 203, r: 196, g:  48, b: 156},  // -70°C magenta
-        {tb: 198, r: 228, g: 112, b: 204},  // -75°C pink
-        {tb: 193, r: 248, g: 196, b: 240},  // -80°C light pink
-        {tb: 183, r: 255, g: 255, b: 255},  // -90°C white (overshooting)
-        {tb: 173, r: 240, g: 240, b: 255}   // -100°C ice white
+        {tb: 198, r: 168, g:  64, b: 200},  // -75°C purple
+        {tb: 193, r: 120, g:  48, b: 180},  // -80°C deep violet
+        {tb: 183, r:  64, g:  24, b: 140},  // -90°C indigo
+        {tb: 173, r:  28, g:  12, b:  96}   // -100°C near-black indigo
     ]);
 })();
 
@@ -7432,7 +7432,7 @@ var _cmpIR = {
     left:  { map: null, storm: null, meta: null, frames: [], idx: 0, overlay: null, playing: false, timer: null, lastTick: 0 },
     right: { map: null, storm: null, meta: null, frames: [], idx: 0, overlay: null, playing: false, timer: null, lastTick: 0 },
     sync: false,
-    cmap: 'enhanced',
+    cmap: 'claude-ir',
     speed: 750
 };
 
