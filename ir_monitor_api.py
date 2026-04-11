@@ -2261,7 +2261,7 @@ def get_storm_weatherlab(atcf_id: str):
     for day_offset in (0, 1):
         dt = now - timedelta(days=day_offset)
         date_str = dt.strftime("%Y-%m-%d")
-        for hour in ("06", "00", "18", "12"):
+        for hour in ("18", "12", "06", "00"):
             candidates.append((date_str, hour))
 
     data = None
@@ -2469,7 +2469,7 @@ def get_storm_weatherlab_ensemble(atcf_id: str):
     for day_offset in (0, 1):
         dt = now - timedelta(days=day_offset)
         date_str = dt.strftime("%Y-%m-%d")
-        for hour in ("06", "00", "18", "12"):
+        for hour in ("18", "12", "06", "00"):
             candidates.append((date_str, hour))
 
     data = None
