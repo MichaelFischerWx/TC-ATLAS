@@ -3036,6 +3036,8 @@
             y: winds,
             type: 'scatter',
             mode: 'lines+markers',
+            name: 'Best Track',
+            showlegend: false,
             line: { color: '#2e7dff', width: 2 },
             marker: { color: colors, size: 5 }
         };
