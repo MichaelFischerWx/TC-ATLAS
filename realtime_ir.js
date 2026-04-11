@@ -2413,7 +2413,11 @@
                 _batchAddedToMap[fi] = true;
                 animFrameLayers[fi].addTo(detailMap);
                 (function (idx) {
-                    animFrameLayers[idx].on('tileerror', function () { frameHasError[idx] = true; });
+                    animFrameLayers[idx].on('tileerror', function () {
+                        frameHasError[idx] = true;
+                        onFrameLayerLoaded(idx);
+                        _addNextBatch();
+                    });
                     animFrameLayers[idx].on('load', function () {
                         onFrameLayerLoaded(idx);
                         _addNextBatch();
@@ -2511,6 +2515,7 @@
         // When complete, auto-apply Enhanced IR colormap over GIBS.
         _fetchRawTbIncremental(currentStormId, true, function () {
             if (productMode === 'eir' && rawTbFrames.length > 0 && detailMap) {
+                showLoadingProgress(false);
                 _applyRawTbToMap();
                 console.log('[RT Monitor] Auto-applied Enhanced IR colormap (' + rawTbFrames.length + ' frames)');
             }
