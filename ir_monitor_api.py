@@ -1308,13 +1308,19 @@ def _prefetch_ir_frames(storms: list):
                     _prefetch_counts["band"] += 1
                     del data, arr, mask, scaled, encoded
 
-                # Submit all tasks to thread pool (8 workers — fits in 2GB RAM)
-                with ThreadPoolExecutor(max_workers=8) as pool:
+                # Visible bands have 16x larger segments — limit prefetch to
+                # the 4 most recent frames and cap workers at 4 to stay
+                # within memory.  WV uses all frames with 8 workers.
+                max_band_frames = 4 if right_band == VIS_BAND else len(frame_times)
+                max_workers = 4 if right_band == VIS_BAND else 8
+
+                with ThreadPoolExecutor(max_workers=max_workers) as pool:
                     futures = []
-                    for target_dt in reversed(frame_times):
+                    for i, target_dt in enumerate(reversed(frame_times)):
                         dt_str = target_dt.strftime("%Y%m%d%H%M")
                         futures.append(pool.submit(_fetch_and_cache_ir, target_dt, dt_str))
-                        futures.append(pool.submit(_fetch_and_cache_band, target_dt, dt_str, right_band))
+                        if i < max_band_frames:
+                            futures.append(pool.submit(_fetch_and_cache_band, target_dt, dt_str, right_band))
 
                     # Wait for all to complete
                     for fut in as_completed(futures):
