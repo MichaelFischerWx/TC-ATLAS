@@ -2345,12 +2345,6 @@
                 updateAnimCounter();
             }
             console.log('[RT Monitor] All ' + total + ' IR frames pre-loaded (' + detailSatName + '), ' + validFrames.length + ' valid');
-            // Now that the visible JPG display is ready, start background
-            // raw Tb pre-fetch for instant colormap switching
-            if (!_rawTbPrefetchStarted) {
-                _rawTbPrefetchStarted = true;
-                _prefetchRawTbSilent();
-            }
         }
     }
 
@@ -2505,123 +2499,22 @@
         // Show loading progress
         showLoadingProgress(true, 0);
 
-        // ── Image Overlay Mode (default): pre-rendered JPGs ──────
-        // Fetch frame metadata, then load each frame as a single JPG
-        // image overlay. ~60KB per frame, 1 request each — much faster
-        // than GIBS tiles (~16 tiles × ~20KB = ~320KB per frame).
-        var metaUrl = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(storm.atcf_id)
-            + '/ir-frames-meta?lookback_hours=' + DEFAULT_LOOKBACK_HOURS
-            + '&radius_deg=' + DEFAULT_RADIUS_DEG;
+        // ── GIBS tiles (immediate) ───────────────────────────
+        // Load GIBS tiles from NASA's CDN — fast, reliable, no
+        // backend dependency. User sees imagery within 3-5 seconds.
+        _initDetailMapGIBS(storm, satLayerName);
 
-        fetch(metaUrl, { cache: 'no-store' })
-            .then(function (r) {
-                if (!r.ok) throw new Error('HTTP ' + r.status);
-                return r.json();
-            })
-            .then(function (meta) {
-                if (!detailMap) return;  // detail closed while loading
-
-                var frames = meta.frames || [];
-                var bounds = meta.bounds;
-                var leafletBounds = L.latLngBounds(
-                    [bounds[0][0], bounds[0][1]],
-                    [bounds[1][0], bounds[1][1]]
-                );
-
-                // Build frame time strings from metadata
-                animFrameTimes = [];
-                for (var i = 0; i < frames.length; i++) {
-                    animFrameTimes.push(frames[i].datetime_utc);
-                }
-                animIndex = animFrameTimes.length - 1;
-                detailSatName = meta.satellite || detailSatName;
-
-                // Update slider
-                var slider = document.getElementById('ir-anim-slider');
-                if (slider) {
-                    slider.max = animFrameTimes.length - 1;
-                    slider.value = animIndex;
-                }
-                updateAnimCounter();
-                updateFrameOverlay();
-
-                // Load frames via Image objects. The latest frame loads FIRST
-                // (solo, full bandwidth) so the user sees imagery ASAP. Then
-                // remaining frames load with a concurrent pool of 4.
-                var CONCURRENT_LOADS = 4;
-                var loadOrder = [];
-                for (var k = frames.length - 1; k >= 0; k--) loadOrder.push(k);
-
-                // Pre-create placeholder overlays (transparent 1x1 pixel)
-                var BLANK_PIXEL = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
-                for (var fi = 0; fi < frames.length; fi++) {
-                    var overlay = L.imageOverlay(BLANK_PIXEL, leafletBounds, {
-                        opacity: 0,
-                        interactive: false,
-                        className: 'ir-jpg-overlay'
-                    });
-                    overlay.addTo(detailMap);
-                    animFrameLayers.push(overlay);
-                    frameHasError.push(false);
-                }
-
-                var _loadIdx = 0;
-
-                function _buildFrameUrl(idx) {
-                    return API_BASE + '/ir-monitor/storm/'
-                        + encodeURIComponent(storm.atcf_id)
-                        + '/ir-frame.jpg?frame_index=' + idx
-                        + '&lookback_hours=' + DEFAULT_LOOKBACK_HOURS
-                        + '&radius_deg=' + DEFAULT_RADIUS_DEG;
-                }
-
-                function _loadImage(idx, onDone) {
-                    var url = _buildFrameUrl(idx);
-                    var img = new Image();
-                    img.crossOrigin = 'anonymous';
-                    img.onload = function () {
-                        if (detailMap && animFrameLayers[idx]) {
-                            animFrameLayers[idx].setUrl(url);
-                        }
-                        onFrameLayerLoaded(idx);
-                        if (onDone) onDone();
-                    };
-                    img.onerror = function () {
-                        console.warn('[RT Monitor] JPG frame ' + idx + ' failed');
-                        frameHasError[idx] = true;
-                        onFrameLayerLoaded(idx);
-                        if (onDone) onDone();
-                    };
-                    img.src = url;
-                }
-
-                function _startConcurrentPool() {
-                    function _next() {
-                        if (_loadIdx >= loadOrder.length) return;
-                        var idx = loadOrder[_loadIdx++];
-                        _loadImage(idx, _next);
-                    }
-                    for (var c = 0; c < Math.min(CONCURRENT_LOADS, loadOrder.length - _loadIdx); c++) {
-                        _next();
-                    }
-                }
-
-                // Load the LATEST frame first (solo — full bandwidth)
-                if (loadOrder.length > 0) {
-                    var latestIdx = loadOrder[0];
-                    _loadIdx = 1;  // skip index 0 in the concurrent pool
-                    _loadImage(latestIdx, function () {
-                        // Latest frame is now visible — start concurrent pool for rest
-                        _startConcurrentPool();
-                    });
-                }
-            })
-            .catch(function (err) {
-                console.warn('[RT Monitor] Image overlay meta failed, falling back to GIBS tiles:', err.message);
-                _initDetailMapGIBS(storm, satLayerName);
-                // Start deferred loads immediately — don't wait for GIBS tiles
-                _triggerDeferredLoads();
-            });
+        // ── Raw Tb pre-fetch (background) ────────────────────
+        // Fetch raw brightness temperature data from our backend
+        // for client-side colormap rendering (Enhanced, Dvorak, etc.).
+        // GIBS tiles come from NASA's CDN so this doesn't compete.
+        // When complete, auto-apply Enhanced IR colormap over GIBS.
+        _fetchRawTbIncremental(currentStormId, true, function () {
+            if (productMode === 'eir' && rawTbFrames.length > 0 && detailMap) {
+                _applyRawTbToMap();
+                console.log('[RT Monitor] Auto-applied Enhanced IR colormap (' + rawTbFrames.length + ' frames)');
+            }
+        });
 
         // Coastline overlay — Natural Earth 50m black outlines (matches global archive)
         detailMap.createPane('coastlinePane');
@@ -2656,10 +2549,6 @@
             }
         });
 
-        // Note: animation controls (slider, counter, overlay) are updated
-        // inside the image overlay meta callback above, after animFrameTimes
-        // is populated from the API response.
-
         // Show IR Tb colorbar legend (vigor legend stays hidden until toggled)
         var tbLeg = document.getElementById('ir-tb-legend');
         if (tbLeg) tbLeg.style.display = 'block';
@@ -2667,7 +2556,7 @@
         // Force map resize after layout settles
         setTimeout(function () { detailMap.invalidateSize(); }, 100);
 
-        // Safety timeout: if tiles haven't all loaded within 30s, start anyway
+        // Safety timeout: if GIBS tiles haven't loaded within 30s, start anyway
         setTimeout(function () {
             if (!framesReady && animFrameLayers.length > 0) {
                 console.warn('[RT Monitor] Frame preload timeout — enabling animation with ' + framesLoaded + '/' + animFrameTimes.length + ' frames (' + validFrames.length + ' valid)');
@@ -2688,12 +2577,6 @@
                     }
                     updateAnimCounter();
                 }
-                // Start raw Tb pre-fetch if not already running
-                if (!_rawTbPrefetchStarted) {
-                    _rawTbPrefetchStarted = true;
-                    _prefetchRawTbSilent();
-                }
-                // Ensure deferred data loads have started
                 _triggerDeferredLoads();
             }
         }, 30000);
@@ -2703,10 +2586,6 @@
             satellite: detailSatName,
             frames: animFrameTimes.length
         });
-
-        // Raw Tb pre-fetch is deferred until after JPG frames finish loading
-        // (or after 30s timeout) to avoid starving the visible display path.
-        // See onFrameLayerLoaded() and the safety timeout above.
     }
 
     /** Fetch storm metadata (intensity history, etc.) */
