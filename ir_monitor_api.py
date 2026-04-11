@@ -1530,7 +1530,7 @@ def _gcs_jpg_put(atcf_id: str, dt_str: str, jpg_bytes: bytes):
     threading.Thread(target=_upload, daemon=True).start()
 
 
-def _render_ir_jpg(tb_array: np.ndarray, quality: int = 90) -> bytes | None:
+def _render_ir_jpg(tb_array: np.ndarray, quality: int = 75) -> bytes | None:
     """Render a raw Tb array to JPEG bytes using the enhanced IR colormap."""
     from PIL import Image
 

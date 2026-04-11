@@ -2504,10 +2504,9 @@
                 updateAnimCounter();
                 updateFrameOverlay();
 
-                // Load frames via simple Image objects, then create overlays
-                // with the loaded image as a data URL. This avoids Leaflet's
-                // internal image element timing issues and gives us full
-                // control over load/error handling.
+                // Load frames via Image objects. The latest frame loads FIRST
+                // (solo, full bandwidth) so the user sees imagery ASAP. Then
+                // remaining frames load with a concurrent pool of 4.
                 var CONCURRENT_LOADS = 4;
                 var loadOrder = [];
                 for (var k = frames.length - 1; k >= 0; k--) loadOrder.push(k);
@@ -2527,15 +2526,16 @@
 
                 var _loadIdx = 0;
 
-                function _loadNextImage() {
-                    if (_loadIdx >= loadOrder.length) return;
-                    var idx = loadOrder[_loadIdx++];
-                    var url = API_BASE + '/ir-monitor/storm/'
+                function _buildFrameUrl(idx) {
+                    return API_BASE + '/ir-monitor/storm/'
                         + encodeURIComponent(storm.atcf_id)
                         + '/ir-frame.jpg?frame_index=' + idx
                         + '&lookback_hours=' + DEFAULT_LOOKBACK_HOURS
                         + '&radius_deg=' + DEFAULT_RADIUS_DEG;
+                }
 
+                function _loadImage(idx, onDone) {
+                    var url = _buildFrameUrl(idx);
                     var img = new Image();
                     img.crossOrigin = 'anonymous';
                     img.onload = function () {
@@ -2543,20 +2543,36 @@
                             animFrameLayers[idx].setUrl(url);
                         }
                         onFrameLayerLoaded(idx);
-                        _loadNextImage();
+                        if (onDone) onDone();
                     };
                     img.onerror = function () {
-                        console.warn('[RT Monitor] JPG frame ' + idx + ' failed: ' + url);
+                        console.warn('[RT Monitor] JPG frame ' + idx + ' failed');
                         frameHasError[idx] = true;
                         onFrameLayerLoaded(idx);
-                        _loadNextImage();
+                        if (onDone) onDone();
                     };
                     img.src = url;
                 }
 
-                // Kick off concurrent pool
-                for (var c = 0; c < Math.min(CONCURRENT_LOADS, loadOrder.length); c++) {
-                    _loadNextImage();
+                function _startConcurrentPool() {
+                    function _next() {
+                        if (_loadIdx >= loadOrder.length) return;
+                        var idx = loadOrder[_loadIdx++];
+                        _loadImage(idx, _next);
+                    }
+                    for (var c = 0; c < Math.min(CONCURRENT_LOADS, loadOrder.length - _loadIdx); c++) {
+                        _next();
+                    }
+                }
+
+                // Load the LATEST frame first (solo — full bandwidth)
+                if (loadOrder.length > 0) {
+                    var latestIdx = loadOrder[0];
+                    _loadIdx = 1;  // skip index 0 in the concurrent pool
+                    _loadImage(latestIdx, function () {
+                        // Latest frame is now visible — start concurrent pool for rest
+                        _startConcurrentPool();
+                    });
                 }
             })
             .catch(function (err) {
