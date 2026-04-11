@@ -197,26 +197,26 @@
 
         // Claude — custom TC analysis enhancement
         IR_COLORMAPS['claude'] = buildLUTfromTb([
-            {tb: 310, r:  12, g:  12, b:  22},
-            {tb: 293, r:  70, g:  70, b:  82},
-            {tb: 283, r: 120, g: 120, b: 132},
-            {tb: 273, r: 180, g: 180, b: 192},
-            {tb: 263, r: 216, g: 218, b: 228},
-            {tb: 253, r: 140, g: 210, b: 220},
-            {tb: 248, r:  68, g: 180, b: 196},
-            {tb: 243, r:  32, g: 148, b: 166},
-            {tb: 238, r:  40, g: 178, b: 116},
-            {tb: 233, r:  96, g: 208, b:  68},
-            {tb: 228, r: 192, g: 220, b:  40},
-            {tb: 223, r: 238, g: 196, b:  48},
-            {tb: 218, r: 228, g: 132, b:  48},
-            {tb: 213, r: 214, g:  78, b:  56},
-            {tb: 208, r: 180, g:  36, b:  68},
-            {tb: 203, r: 196, g:  48, b: 156},
-            {tb: 198, r: 228, g: 112, b: 204},
-            {tb: 193, r: 248, g: 196, b: 240},
-            {tb: 183, r: 255, g: 255, b: 255},
-            {tb: 173, r: 240, g: 240, b: 255}
+            {tb: 310, r:  12, g:  12, b:  22},    // warm surface: near-black
+            {tb: 293, r:  70, g:  70, b:  82},    // warm: dark grey-blue
+            {tb: 283, r: 120, g: 120, b: 132},    // mild: medium grey
+            {tb: 273, r: 180, g: 180, b: 192},    // freezing: light grey
+            {tb: 263, r: 216, g: 218, b: 228},    // cold: pale blue-grey
+            {tb: 253, r: 140, g: 210, b: 220},    // -20°C: light teal
+            {tb: 248, r:  68, g: 180, b: 196},    // -25°C: teal
+            {tb: 243, r:  32, g: 148, b: 166},    // -30°C: deep teal
+            {tb: 238, r:  40, g: 178, b: 116},    // -35°C: teal-green
+            {tb: 233, r:  96, g: 208, b:  68},    // -40°C: green
+            {tb: 228, r: 192, g: 220, b:  40},    // -45°C: yellow-green
+            {tb: 223, r: 238, g: 196, b:  48},    // -50°C: gold
+            {tb: 218, r: 228, g: 132, b:  48},    // -55°C: orange
+            {tb: 213, r: 214, g:  78, b:  56},    // -60°C: red-orange
+            {tb: 208, r: 180, g:  36, b:  68},    // -65°C: crimson
+            {tb: 203, r: 196, g:  48, b: 156},    // -70°C: magenta
+            {tb: 198, r: 168, g:  64, b: 200},    // -75°C: purple
+            {tb: 193, r: 120, g:  48, b: 180},    // -80°C: deep violet
+            {tb: 183, r:  64, g:  24, b: 140},    // -90°C: indigo
+            {tb: 173, r:  28, g:  12, b:  96}     // -100°C: near-black indigo
         ]);
     })();
 
