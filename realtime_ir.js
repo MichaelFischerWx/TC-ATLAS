@@ -5375,7 +5375,7 @@
         };
 
         Plotly.newPlot(chartEl, [trace], layout, {
-            displayModeBar: false, responsive: false
+            displayModeBar: false, responsive: false, staticPlot: true
         });
     }
 
@@ -5494,7 +5494,7 @@
         };
 
         Plotly.newPlot(chartEl, [trace], layout, {
-            displayModeBar: false, responsive: false
+            displayModeBar: false, responsive: false, staticPlot: true
         });
     }
 
@@ -5624,7 +5624,7 @@
         };
 
         Plotly.newPlot(chartEl, [trace], layout, {
-            displayModeBar: false, responsive: false
+            displayModeBar: false, responsive: false, staticPlot: true
         });
     }
 
