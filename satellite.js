@@ -206,7 +206,8 @@
     var playBtn, speedBtn, stormListEl, rightLabelEl;
     var sidebar, sidebarToggle, sidebarClose;
     var axesYIR, axesXIR, axesYRight, axesXRight;
-    var stormHeaderEl;
+    var cbIRCanvas, cbRightCanvas, cbIRTop, cbIRBot, cbRightTop, cbRightBot;
+    var rightColormapName = 'wv';  // default WV colormap for right panel
 
     function initDOM() {
         canvasIR = document.getElementById('sat-canvas-ir');
@@ -238,7 +239,12 @@
         axesXIR = document.getElementById('sat-axes-x-ir');
         axesYRight = document.getElementById('sat-axes-y-right');
         axesXRight = document.getElementById('sat-axes-x-right');
-        stormHeaderEl = document.getElementById('sat-storm-header');
+        cbIRCanvas = document.getElementById('sat-cb-ir-canvas');
+        cbRightCanvas = document.getElementById('sat-cb-right-canvas');
+        cbIRTop = document.getElementById('sat-cb-ir-top');
+        cbIRBot = document.getElementById('sat-cb-ir-bot');
+        cbRightTop = document.getElementById('sat-cb-right-top');
+        cbRightBot = document.getElementById('sat-cb-right-bot');
     }
 
     // ── Utility ─────────────────────────────────────────────────
@@ -340,21 +346,36 @@
         ctx.putImageData(imgData, 0, 0);
     }
 
+    function getRightCmap() {
+        // Use user-selected colormap, or auto-select based on data type
+        if (rightDataType === 'reflectance' && rightColormapName === 'wv') return 'vis';
+        return rightColormapName;
+    }
+
     function renderBothPanels() {
         if (irFrames.length === 0) return;
         var irFrame = irFrames[animIndex];
         var rightFrame = rightFrames[animIndex] || null;
         var irCmap = selectedColormap;
-        var rightCmap = rightDataType === 'reflectance' ? 'vis' : 'wv';
+        var rightCmap = getRightCmap();
 
         renderFrame(canvasIR, ctxIR, irFrame, irCmap);
         if (rightFrame) {
             renderFrame(canvasRight, ctxRight, rightFrame, rightCmap);
         }
 
-        // Draw coastlines on overlay canvases
-        drawCoastlinesOnOverlay(overlayIR, overlayCtxIR, irFrame);
-        if (rightFrame) drawCoastlinesOnOverlay(overlayRight, overlayCtxRight, rightFrame);
+        // Draw overlays (grid lines + coastlines)
+        drawOverlay(overlayIR, overlayCtxIR, irFrame);
+        if (rightFrame) drawOverlay(overlayRight, overlayCtxRight, rightFrame);
+
+        // Colorbars
+        renderColorbar(cbIRCanvas, irCmap, cbIRTop, cbIRBot, 160, 330, 'K');
+        if (rightFrame) {
+            var rvmin = rightFrame.tb_vmin || 170, rvmax = rightFrame.tb_vmax || 260;
+            var runit = rightDataType === 'reflectance' ? '%' : 'K';
+            if (rightDataType === 'reflectance') { rvmin = 0; rvmax = 100; }
+            renderColorbar(cbRightCanvas, rightCmap, cbRightTop, cbRightBot, rvmin, rvmax, runit);
+        }
 
         // Update axes
         if (irFrame) {
@@ -380,49 +401,165 @@
             });
     }
 
-    function drawCoastlinesOnOverlay(overlayCanvas, overlayCtx, frame) {
-        if (!overlayCanvas || !overlayCtx || !frame || !coastlineData) return;
+    function drawOverlay(overlayCanvas, overlayCtx, frame) {
+        if (!overlayCanvas || !overlayCtx || !frame) return;
         var vb = getViewBounds(frame);
         if (!vb) return;
-        var crop = getCropIndices(frame, vb);
 
-        // Size overlay to match the data canvas
-        overlayCanvas.width = crop.cols;
-        overlayCanvas.height = crop.rows;
-        // Match CSS size to the data canvas
+        // Size overlay to match the data canvas (always full frame dimensions)
+        var w = frame.cols, h = frame.rows;
+        overlayCanvas.width = w;
+        overlayCanvas.height = h;
         overlayCanvas.style.maxWidth = '100%';
         overlayCanvas.style.maxHeight = '100%';
-        overlayCanvas.style.width = overlayCanvas.previousElementSibling.offsetWidth + 'px';
-        overlayCanvas.style.height = overlayCanvas.previousElementSibling.offsetHeight + 'px';
+        var dataCanvas = overlayCanvas.previousElementSibling;
+        if (dataCanvas) {
+            overlayCanvas.style.width = dataCanvas.offsetWidth + 'px';
+            overlayCanvas.style.height = dataCanvas.offsetHeight + 'px';
+        }
+        overlayCtx.clearRect(0, 0, w, h);
 
-        overlayCtx.clearRect(0, 0, crop.cols, crop.rows);
-        overlayCtx.strokeStyle = 'rgba(40, 40, 50, 0.7)';
+        // ── Grid lines (thin, subtle) ──
+        var latSpan = vb.north - vb.south;
+        var lonSpan = vb.east - vb.west;
+        var gridStep = latSpan > 12 ? 5 : latSpan > 6 ? 2 : 1;
+
+        overlayCtx.strokeStyle = 'rgba(180, 180, 200, 0.15)';
         overlayCtx.lineWidth = 1;
 
-        var features = coastlineData.features || [];
-        for (var f = 0; f < features.length; f++) {
-            var geom = features[f].geometry;
-            if (!geom) continue;
-            var coordSets = geom.type === 'MultiLineString' ? geom.coordinates : [geom.coordinates];
-            for (var cs = 0; cs < coordSets.length; cs++) {
-                var coords = coordSets[cs];
-                if (!coords || coords.length < 2) continue;
-                overlayCtx.beginPath();
-                var started = false;
-                for (var c = 0; c < coords.length; c++) {
-                    var lon = coords[c][0], lat = coords[c][1];
-                    if (lon < vb.west || lon > vb.east || lat < vb.south || lat > vb.north) {
-                        started = false;
-                        continue;
+        // Latitude lines
+        for (var lat = Math.ceil(vb.south / gridStep) * gridStep; lat <= vb.north; lat += gridStep) {
+            var py = (vb.north - lat) / latSpan * h;
+            overlayCtx.beginPath();
+            overlayCtx.moveTo(0, py);
+            overlayCtx.lineTo(w, py);
+            overlayCtx.stroke();
+        }
+        // Longitude lines
+        for (var lon = Math.ceil(vb.west / gridStep) * gridStep; lon <= vb.east; lon += gridStep) {
+            var px = (lon - vb.west) / lonSpan * w;
+            overlayCtx.beginPath();
+            overlayCtx.moveTo(px, 0);
+            overlayCtx.lineTo(px, h);
+            overlayCtx.stroke();
+        }
+
+        // ── Coastlines ──
+        if (coastlineData) {
+            overlayCtx.strokeStyle = 'rgba(40, 40, 50, 0.7)';
+            overlayCtx.lineWidth = 1;
+            var features = coastlineData.features || [];
+            for (var f = 0; f < features.length; f++) {
+                var geom = features[f].geometry;
+                if (!geom) continue;
+                var coordSets = geom.type === 'MultiLineString' ? geom.coordinates : [geom.coordinates];
+                for (var cs = 0; cs < coordSets.length; cs++) {
+                    var coords = coordSets[cs];
+                    if (!coords || coords.length < 2) continue;
+                    overlayCtx.beginPath();
+                    var started = false;
+                    for (var c = 0; c < coords.length; c++) {
+                        var clon = coords[c][0], clat = coords[c][1];
+                        if (clon < vb.west || clon > vb.east || clat < vb.south || clat > vb.north) {
+                            started = false; continue;
+                        }
+                        var cpx = (clon - vb.west) / lonSpan * w;
+                        var cpy = (vb.north - clat) / latSpan * h;
+                        if (!started) { overlayCtx.moveTo(cpx, cpy); started = true; }
+                        else overlayCtx.lineTo(cpx, cpy);
                     }
-                    var px = (lon - vb.west) / (vb.east - vb.west) * crop.cols;
-                    var py = (vb.north - lat) / (vb.north - vb.south) * crop.rows;
-                    if (!started) { overlayCtx.moveTo(px, py); started = true; }
-                    else overlayCtx.lineTo(px, py);
+                    overlayCtx.stroke();
                 }
-                overlayCtx.stroke();
             }
         }
+    }
+
+    // ── Colorbar Rendering ────────────────────────────────────────
+
+    function renderColorbar(cbCanvas, cmapName, topLabel, botLabel, vmin, vmax, unit) {
+        if (!cbCanvas) return;
+        var lut = IR_COLORMAPS[cmapName] || IR_COLORMAPS['enhanced'];
+        var cbCtx = cbCanvas.getContext('2d');
+        var w = cbCanvas.width, h = cbCanvas.height;
+        var imgData = cbCtx.createImageData(w, h);
+        var pixels = imgData.data;
+
+        // Cold on top (index 255), warm on bottom (index 1)
+        for (var y = 0; y < h; y++) {
+            var val = Math.round(255 - y / (h - 1) * 254);
+            if (val < 1) val = 1;
+            var li = val * 4;
+            for (var x = 0; x < w; x++) {
+                var pi = (y * w + x) * 4;
+                pixels[pi] = lut[li]; pixels[pi+1] = lut[li+1];
+                pixels[pi+2] = lut[li+2]; pixels[pi+3] = 255;
+            }
+        }
+        cbCtx.putImageData(imgData, 0, 0);
+
+        if (topLabel) topLabel.textContent = vmin + ' ' + unit;
+        if (botLabel) botLabel.textContent = vmax + ' ' + unit;
+    }
+
+    // ── Save Image ──────────────────────────────────────────────
+
+    function saveImage() {
+        if (irFrames.length === 0) return;
+        var irFrame = irFrames[animIndex];
+        if (!irFrame) return;
+
+        // Create composite canvas: both panels side-by-side with labels
+        var pw = irFrame.cols, ph = irFrame.rows;
+        var gap = 4;
+        var headerH = 28;
+        var totalW = pw * 2 + gap;
+        var totalH = ph + headerH;
+
+        var comp = document.createElement('canvas');
+        comp.width = totalW;
+        comp.height = totalH;
+        var cctx = comp.getContext('2d');
+
+        // Dark background
+        cctx.fillStyle = '#0a0c12';
+        cctx.fillRect(0, 0, totalW, totalH);
+
+        // Header text
+        cctx.fillStyle = '#e2e4ea';
+        cctx.font = '14px sans-serif';
+        var name = currentStorm ? (currentStorm.name || currentStormId) : currentStormId;
+        var cat = currentStorm ? categoryShort(currentStorm.category) : '';
+        var time = irFrame.datetime_utc ? irFrame.datetime_utc.replace('T', ' ').replace('Z', ' UTC') : '';
+        var sat = irFrame.satellite || '';
+        cctx.fillText(name + ' (' + cat + ')  —  ' + time + '  ' + sat, 8, 18);
+
+        // Panel labels
+        cctx.font = '11px sans-serif';
+        cctx.fillStyle = '#94a3b8';
+        cctx.fillText('Enhanced IR', 8, headerH + 14);
+        var rightLabel = rightBand === 2 ? 'Visible' : 'Water Vapor';
+        cctx.fillText(rightLabel, pw + gap + 8, headerH + 14);
+
+        // Draw IR canvas
+        cctx.drawImage(canvasIR, 0, headerH, pw, ph);
+        if (overlayIR) cctx.drawImage(overlayIR, 0, headerH, pw, ph);
+
+        // Draw right canvas
+        if (canvasRight && canvasRight.width > 0) {
+            cctx.drawImage(canvasRight, pw + gap, headerH, pw, ph);
+            if (overlayRight) cctx.drawImage(overlayRight, pw + gap, headerH, pw, ph);
+        }
+
+        // TC-ATLAS watermark
+        cctx.fillStyle = 'rgba(255,255,255,0.3)';
+        cctx.font = '10px sans-serif';
+        cctx.fillText('TC-ATLAS', totalW - 60, totalH - 6);
+
+        // Download
+        var link = document.createElement('a');
+        link.download = (name || 'satellite') + '_' + (irFrame.datetime_utc || '').replace(/[:\-T]/g, '').replace('Z', '') + '.png';
+        link.href = comp.toDataURL('image/png');
+        link.click();
     }
 
     // ── Lat/Lon Axes ────────────────────────────────────────────
@@ -657,13 +794,6 @@
         if (timestampEl) timestampEl.textContent = timeStr;
         if (frame && satelliteEl) satelliteEl.textContent = frame.satellite || '';
         if (sliderEl && irFrames.length > 0) sliderEl.value = animIndex;
-        // Update storm header
-        if (stormHeaderEl && currentStorm) {
-            var name = currentStorm.name || currentStormId;
-            var cat = categoryShort(currentStorm.category);
-            var wind = currentStorm.vmax_kt != null ? ' \u00B7 ' + currentStorm.vmax_kt + ' kt' : '';
-            stormHeaderEl.textContent = name + ' (' + cat + wind + ')' + (timeStr ? '  \u2014  ' + timeStr : '');
-        }
     }
     function updateSliderMax() { if (sliderEl) sliderEl.max = Math.max(0, irFrames.length - 1); }
     function updatePlayBtn() {
@@ -773,6 +903,19 @@
             renderBothPanels();
             _ga('sat_colormap', { colormap: selectedColormap });
         });
+
+        // Right-panel colormap
+        var rightCmapEl = document.getElementById('sat-right-cmap-select');
+        if (rightCmapEl) {
+            rightCmapEl.addEventListener('change', function () {
+                rightColormapName = this.value;
+                renderBothPanels();
+            });
+        }
+
+        // Save button
+        var saveBtn = document.getElementById('sat-save');
+        if (saveBtn) saveBtn.addEventListener('click', saveImage);
 
         // Zoom toggle
         var zoomBtn = document.getElementById('sat-zoom');

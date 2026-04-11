@@ -234,30 +234,6 @@
     min-height: 0;
 }
 
-/* ── Storm Header ───────────────────────────────────────────── */
-
-.sat-storm-header {
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    z-index: 8;
-    text-align: center;
-    padding: 6px 16px;
-    background: linear-gradient(to bottom, #0a0c12ee 0%, #0a0c1200 100%);
-    color: #e2e4ea;
-    font-size: 14px;
-    font-weight: 500;
-    pointer-events: none;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.sat-storm-header:empty {
-    display: none;
-}
-
 /* ── Split Panels ───────────────────────────────────────────── */
 
 .sat-split-panels {
@@ -321,6 +297,38 @@
     transform: translate(-50%, -50%);
     pointer-events: none;
     image-rendering: auto;
+}
+
+/* ── Panel Colorbars ────────────────────────────────────────── */
+
+.sat-colorbar-panel {
+    position: absolute;
+    right: 6px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    flex-direction: row;
+    align-items: stretch;
+    gap: 3px;
+    z-index: 5;
+    pointer-events: none;
+}
+
+.sat-colorbar-panel canvas {
+    border-radius: 2px;
+    border: 1px solid #2a2d38;
+    image-rendering: auto;
+}
+
+.sat-cb-labels {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    font-size: 9px;
+    font-family: 'JetBrains Mono', monospace;
+    color: #8b8fa4;
+    text-shadow: 0 0 3px #0a0c12, 0 0 6px #0a0c12;
+    padding: 1px 0;
 }
 
 /* ── Lat/Lon Axes ───────────────────────────────────────────── */

@@ -459,6 +459,16 @@
                     <option value="irb">IRB</option>
                 </select>
             </div>
+            <div class="sat-sidebar-section">
+                <label for="sat-right-cmap-select">WV / Vis Colormap</label>
+                <select id="sat-right-cmap-select">
+                    <option value="wv">WV Default</option>
+                    <option value="enhanced">Enhanced</option>
+                    <option value="grayscale">Grayscale</option>
+                    <option value="dvorak">Dvorak</option>
+                    <option value="claude-ir">Claude IR</option>
+                </select>
+            </div>
             <div class="sat-sidebar-footer">
                 <span class="sat-sidebar-hint">Arrow keys: frames &middot; Space: play</span>
             </div>
@@ -466,8 +476,6 @@
         <button id="sat-sidebar-toggle" class="sat-sidebar-toggle" title="Show storm list">&#9776; Storms</button>
         <div id="sat-canvas-wrap" class="sat-canvas-wrap">
             <div class="sat-canvas-area">
-                <!-- Storm header -->
-                <div id="sat-storm-header" class="sat-storm-header"></div>
                 <!-- Split panels -->
                 <div class="sat-split-panels">
                     <!-- Left: IR panel -->
@@ -476,6 +484,10 @@
                         <div class="sat-panel-canvas-wrap">
                             <canvas id="sat-canvas-ir"></canvas>
                             <canvas id="sat-overlay-ir" class="sat-overlay-canvas"></canvas>
+                        </div>
+                        <div class="sat-colorbar-panel" id="sat-cb-ir">
+                            <canvas id="sat-cb-ir-canvas" width="12" height="200"></canvas>
+                            <div class="sat-cb-labels"><span id="sat-cb-ir-top"></span><span id="sat-cb-ir-bot"></span></div>
                         </div>
                         <div class="sat-axes-y sat-axes-y-left" id="sat-axes-y-ir"></div>
                         <div class="sat-axes-x" id="sat-axes-x-ir"></div>
@@ -486,6 +498,10 @@
                         <div class="sat-panel-canvas-wrap">
                             <canvas id="sat-canvas-right"></canvas>
                             <canvas id="sat-overlay-right" class="sat-overlay-canvas"></canvas>
+                        </div>
+                        <div class="sat-colorbar-panel" id="sat-cb-right">
+                            <canvas id="sat-cb-right-canvas" width="12" height="200"></canvas>
+                            <div class="sat-cb-labels"><span id="sat-cb-right-top"></span><span id="sat-cb-right-bot"></span></div>
                         </div>
                         <div class="sat-axes-y sat-axes-y-right" id="sat-axes-y-right"></div>
                         <div class="sat-axes-x" id="sat-axes-x-right"></div>
@@ -514,6 +530,7 @@
                     <span id="sat-frame-counter" class="sat-frame-counter">0 / 0</span>
                     <button id="sat-speed" class="sat-anim-btn sat-speed-btn" title="Cycle animation speed">1x</button>
                     <button id="sat-zoom" class="sat-zoom-btn" title="Toggle zoom level">Zoom In</button>
+                    <button id="sat-save" class="sat-anim-btn" title="Save image">&#128190;</button>
                     <span id="sat-load-status" class="sat-load-status"></span>
                 </div>
                 <div class="sat-anim-info">
