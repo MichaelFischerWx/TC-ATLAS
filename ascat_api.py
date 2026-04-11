@@ -43,8 +43,9 @@ _CMR_COLLECTIONS = {
 _CMR_SEARCH_URL = "https://cmr.earthdata.nasa.gov/search/granules.json"
 
 # Earthdata credentials (for OPeNDAP access)
-_EARTHDATA_USER = os.environ.get("EARTHDATA_USERNAME", "")
-_EARTHDATA_PASS = os.environ.get("EARTHDATA_PASSWORD", "")
+_EARTHDATA_USER = os.environ.get("EARTHDATA_USERNAME", "") or os.environ.get("EARTHDATA_USER", "")
+_EARTHDATA_PASS = os.environ.get("EARTHDATA_PASSWORD", "") or os.environ.get("EARTHDATA_PASS", "")
+_EARTHDATA_TOKEN = os.environ.get("EARTHDATA_TOKEN", "")
 
 # Cache settings
 _PASS_CACHE_TTL = 900       # 15 minutes
@@ -195,7 +196,10 @@ def _get_earthdata_session():
     session = requests.Session()
     if _EARTHDATA_USER and _EARTHDATA_PASS:
         session.auth = (_EARTHDATA_USER, _EARTHDATA_PASS)
-        logger.info("ASCAT: using Earthdata credentials for user=%s", _EARTHDATA_USER)
+        logger.info("ASCAT: using Earthdata user/pass for user=%s", _EARTHDATA_USER)
+    elif _EARTHDATA_TOKEN:
+        session.headers.update({"Authorization": f"Bearer {_EARTHDATA_TOKEN}"})
+        logger.info("ASCAT: using Earthdata Bearer token")
     else:
         logger.warning("ASCAT: no Earthdata credentials set — downloads will likely fail (401)")
     return session
