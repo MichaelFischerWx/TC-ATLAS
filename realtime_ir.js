@@ -2290,6 +2290,8 @@
     var _frameLoadedOnce = {};  // track which frames have fired their initial load
     var _firstFrameShown = false;  // true once we've shown the first available frame
     var _rawTbPrefetchStarted = false;  // guard: only start raw Tb pre-fetch once per storm
+    var _deferredLoadsStarted = false;  // guard: only start deferred data loads once per storm
+    var _deferredStormRef = null;       // storm object for deferred loads
 
     /** Called when a single frame layer finishes loading its tiles */
     function onFrameLayerLoaded(frameIdx) {
@@ -2312,6 +2314,8 @@
         if (!_firstFrameShown && validFrames.length > 0 && productMode === 'eir') {
             _firstFrameShown = true;
             showFrame(validFrames[validFrames.length - 1]);
+            // First frame visible — start loading secondary data
+            _triggerDeferredLoads();
             // Switch loader text to indicate remaining frames loading in background
             showLoadingProgress(true, pct);
         } else {
@@ -2348,6 +2352,33 @@
                 _prefetchRawTbSilent();
             }
         }
+    }
+
+    /** Load secondary data (models, WeatherLab, ASCAT, intensity chart).
+     *  Deferred until the first IR frame is visible so the satellite
+     *  imagery gets full bandwidth priority. */
+    function _triggerDeferredLoads() {
+        if (_deferredLoadsStarted) return;
+        _deferredLoadsStarted = true;
+        var storm = _deferredStormRef;
+        if (!storm) return;
+        _rtLoadModelForecasts(storm);
+        _rtLoadWeatherlab(storm);
+        _rtLoadDmEnsemble(storm);
+        _rtLoadAscatPasses(storm);
+        fetchStormMetadata(storm.atcf_id, function (err, meta) {
+            if (!err && meta) {
+                renderIntensityChart(meta);
+                if (meta.has_recon) {
+                    document.getElementById('ir-recon-section').style.display = 'block';
+                    document.getElementById('ir-recon-info').innerHTML =
+                        '<span style="color:#34d399;">\u25CF Active reconnaissance</span><br>' +
+                        '<a href="explorer.html?tab=realtime">\u2192 Open in Real-Time TDR</a>';
+                } else {
+                    document.getElementById('ir-recon-section').style.display = 'none';
+                }
+            }
+        });
     }
 
     /** Fallback: load GIBS tile layers for animation (used when image overlay fails) */
@@ -2460,6 +2491,8 @@
         _frameLoadedOnce = {};
         _firstFrameShown = false;
         _rawTbPrefetchStarted = false;
+        _deferredLoadsStarted = false;
+        _deferredStormRef = storm;
         framesReady = false;
         animFrameLayers = [];
         validFrames = [];
@@ -2586,6 +2619,8 @@
             .catch(function (err) {
                 console.warn('[RT Monitor] Image overlay meta failed, falling back to GIBS tiles:', err.message);
                 _initDetailMapGIBS(storm, satLayerName);
+                // Start deferred loads immediately — don't wait for GIBS tiles
+                _triggerDeferredLoads();
             });
 
         // Coastline overlay — Natural Earth 50m black outlines (matches global archive)
@@ -2658,6 +2693,8 @@
                     _rawTbPrefetchStarted = true;
                     _prefetchRawTbSilent();
                 }
+                // Ensure deferred data loads have started
+                _triggerDeferredLoads();
             }
         }, 30000);
 
@@ -2781,28 +2818,9 @@
         animIndex = 0;
         initDetailMap(storm);
 
-        // Load model forecasts (a-deck), DeepMind ensemble, ASCAT winds
-        _rtLoadModelForecasts(storm);
-        _rtLoadWeatherlab(storm);
-        _rtLoadDmEnsemble(storm);
-        _rtLoadAscatPasses(storm);
-
-        // Fetch metadata for intensity chart
-        fetchStormMetadata(atcfId, function (err, meta) {
-            if (!err && meta) {
-                renderIntensityChart(meta);
-
-                // Recon cross-reference
-                if (meta.has_recon) {
-                    document.getElementById('ir-recon-section').style.display = 'block';
-                    document.getElementById('ir-recon-info').innerHTML =
-                        '<span style="color:#34d399;">\u25CF Active reconnaissance</span><br>' +
-                        '<a href="explorer.html?tab=realtime">\u2192 Open in Real-Time TDR</a>';
-                } else {
-                    document.getElementById('ir-recon-section').style.display = 'none';
-                }
-            }
-        });
+        // Secondary data (models, WeatherLab, ASCAT, intensity chart) is
+        // deferred until the first IR frame is visible — see _triggerDeferredLoads().
+        // This gives the satellite imagery full bandwidth priority.
 
         _ga('ir_open_detail', { atcf_id: atcfId, name: storm.name, category: cat });
     }

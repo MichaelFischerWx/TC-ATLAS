@@ -1084,11 +1084,13 @@ def _prefetch_ir_frames(storms: list):
             if storm_fetched:
                 print(f"[IR Pre-fetch] {atcf_id}: fetched {storm_fetched} new frames")
 
-            # ── GCS raw Tb prefetch ─────────────────────────────────
-            # Proactively cache raw Tb uint8 frames to GCS so that
-            # /ir-raw requests are served instantly from the cache.
+            # ── GCS raw Tb + JPG prefetch ──────────────────────────
+            # Proactively cache raw Tb uint8 frames AND pre-rendered
+            # JPGs to GCS so that both /ir-raw and /ir-frame.jpg
+            # requests are served instantly from cache.
             if _get_rt_gcs_bucket() is not None:
                 gcs_fetched = 0
+                jpg_cached = 0
                 for target_dt in reversed(frame_times):
                     dt_str = target_dt.strftime("%Y%m%d%H%M")
 
@@ -1104,6 +1106,12 @@ def _prefetch_ir_frames(storms: list):
                         continue
 
                     if raw and raw.get("tb") is not None:
+                        # Pre-render JPG for /ir-frame.jpg endpoint
+                        jpg_bytes = _render_ir_jpg(raw["tb"])
+                        if jpg_bytes:
+                            _gcs_jpg_put(atcf_id.upper(), dt_str, jpg_bytes)
+                            jpg_cached += 1
+
                         tb = raw["tb"]
                         arr = np.asarray(tb, dtype=np.float32)
                         mask = ~np.isfinite(arr) | (arr <= 0)
@@ -1138,8 +1146,8 @@ def _prefetch_ir_frames(storms: list):
 
                     time.sleep(0.2)
 
-                if gcs_fetched:
-                    print(f"[IR Pre-fetch] {atcf_id}: cached {gcs_fetched} raw Tb frames to GCS")
+                if gcs_fetched or jpg_cached:
+                    print(f"[IR Pre-fetch] {atcf_id}: cached {gcs_fetched} raw Tb + {jpg_cached} JPG frames to GCS")
                 total_gcs_fetched += gcs_fetched
 
         print(f"[IR Pre-fetch] Done — {total_fetched} new PNG frames, "
@@ -1678,7 +1686,24 @@ def get_ir_frame_jpg(
     if cached_jpg:
         return Response(content=cached_jpg, media_type="image/jpeg", headers=meta_headers)
 
-    # Render fresh
+    # Fallback: check if raw Tb uint8 is cached in GCS (populated by pre-fetch)
+    # and render JPG from it — avoids the S3 round-trip entirely.
+    cached_raw = _gcs_rt_get(atcf_id.upper(), dt_str)
+    if cached_raw is not None and cached_raw.get("tb_data"):
+        try:
+            encoded = np.frombuffer(
+                base64.b64decode(cached_raw["tb_data"]), dtype=np.uint8
+            ).reshape((cached_raw["tb_rows"], cached_raw["tb_cols"]))
+            decoded_tb = ((encoded.astype(np.float32) - 1) / _TB_SCALE) + _TB_VMIN
+            decoded_tb[encoded == 0] = np.nan
+            jpg_bytes = _render_ir_jpg(decoded_tb)
+            if jpg_bytes:
+                _gcs_jpg_put(atcf_id.upper(), dt_str, jpg_bytes)
+                return Response(content=jpg_bytes, media_type="image/jpeg", headers=meta_headers)
+        except Exception:
+            pass  # Fall through to S3 fetch
+
+    # Render fresh from S3 satellite data
     raw = fetch_ir_tb_raw(center_lat, center_lon, target_dt, box_deg)
     if not raw or raw.get("tb") is None:
         raise HTTPException(status_code=502, detail=f"No IR data for frame {frame_index}")
