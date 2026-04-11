@@ -1059,7 +1059,25 @@
                     storms = (data.storms || []).slice();
                     storms.sort(function (a, b) { return (b.vmax_kt || 0) - (a.vmax_kt || 0); });
                     renderStormList();
-                    if (currentStormId) currentStorm = storms.find(function (s) { return s.atcf_id === currentStormId; }) || currentStorm;
+                    if (currentStormId) {
+                        var updated = storms.find(function (s) { return s.atcf_id === currentStormId; });
+                        if (updated && currentStorm) {
+                            // Check if position shifted enough to warrant refetch
+                            var dLat = Math.abs((updated.lat || 0) - (currentStorm.lat || 0));
+                            var dLon = Math.abs((updated.lon || 0) - (currentStorm.lon || 0));
+                            if (dLat > 0.3 || dLon > 0.3) {
+                                console.log('[Satellite] Storm position shifted (' +
+                                    dLat.toFixed(1) + '\u00B0 lat, ' + dLon.toFixed(1) + '\u00B0 lon) — refetching frames');
+                                currentStorm = updated;
+                                irFrames = []; rightFrames = []; validFrameIndices = [];
+                                loadFrames(currentStormId);
+                            } else {
+                                currentStorm = updated;
+                            }
+                        } else if (updated) {
+                            currentStorm = updated;
+                        }
+                    }
                 })
                 .catch(function () {});
         }, POLL_INTERVAL_MS);
