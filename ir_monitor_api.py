@@ -394,6 +394,21 @@ def _http_get(url: str, timeout: int = 15) -> Optional[str]:
         return None
 
 
+def _http_head(url: str, timeout: int = 5) -> bool:
+    """Check if a URL exists (HTTP 200) via HEAD request."""
+    try:
+        if _requests:
+            r = _requests.head(url, timeout=timeout, allow_redirects=True)
+            return r.status_code == 200
+        else:
+            import urllib.request
+            req = urllib.request.Request(url, method="HEAD")
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.status == 200
+    except Exception:
+        return False
+
+
 # ---------------------------------------------------------------------------
 # ATCF A-deck / B-deck Parsing
 # ---------------------------------------------------------------------------
@@ -500,7 +515,43 @@ def _list_jtwc_active_storms() -> list:
 
         print(f"[IR Monitor] JTWC {source_name}: no active storms found")
 
-    return []
+    # ── Fallback: probe JTWC TCW files directly ──────────────────
+    # When both b-deck directory listings are down, probe known TCW
+    # URL patterns to discover active storms.  Parallelized to keep
+    # total probe time under ~5 seconds.
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    print("[IR Monitor] JTWC b-deck sources unavailable, probing TCW files...")
+    year_2d = str(_dt.now(timezone.utc).year)[-2:]
+    full_year = str(_dt.now(timezone.utc).year)
+    tcw_storms = []
+
+    def _probe_tcw(basin, num):
+        storm_id_lower = f"{basin}{num:02d}{year_2d}"
+        tcw_url = f"{JTWC_TCW_BASE}/{storm_id_lower}.tcw"
+        if _http_head(tcw_url, timeout=3):
+            atcf_id = f"{basin.upper()}{num:02d}{full_year}"
+            return (atcf_id, None)
+        return None
+
+    with ThreadPoolExecutor(max_workers=15) as pool:
+        futures = []
+        for basin in ["wp", "io", "sh"]:
+            for num in range(1, 31):
+                futures.append(pool.submit(_probe_tcw, basin, num))
+        for fut in as_completed(futures):
+            result = fut.result()
+            if result:
+                tcw_storms.append(result)
+                print(f"[IR Monitor] TCW probe: {result[0]} ACTIVE")
+
+    if tcw_storms:
+        print(f"[IR Monitor] TCW probe found {len(tcw_storms)} active storms: "
+              f"{[s[0] for s in tcw_storms]}")
+    else:
+        print("[IR Monitor] TCW probe: no active storms found")
+
+    return tcw_storms
 
 
 def _fetch_jtwc_bdeck(atcf_id: str, bdeck_url: Optional[str] = None) -> list:
