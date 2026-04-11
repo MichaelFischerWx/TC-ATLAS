@@ -13,7 +13,7 @@
     var DEFAULT_LOOKBACK_HOURS = 6;
     var DEFAULT_RADIUS_DEG = 10.0;
     var FRAME_INTERVAL_MIN = 30;
-    var FETCH_CONCURRENCY = 6;
+    var FETCH_CONCURRENCY = 3;
     var COASTLINE_URL = 'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_coastline.geojson';
 
     // ── State ───────────────────────────────────────────────────
@@ -782,7 +782,7 @@
             }
         }
 
-        function fetchIRFrame(idx) {
+        function fetchIRFrame(idx, retry) {
             if (idx >= totalFrames || stormId !== currentStormId) return;
             var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(stormId) + '/ir-raw-frame'
                 + '?frame_index=' + idx + '&lookback_hours=' + DEFAULT_LOOKBACK_HOURS
@@ -792,7 +792,6 @@
                 .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
                 .then(function (data) {
                     if (data.total_frames) totalFrames = data.total_frames;
-                    // Store at original index — no compaction
                     irFrames[idx] = {
                         tb_data: decodeTbData(data.tb_data), rows: data.tb_rows, cols: data.tb_cols,
                         bounds: data.bounds, datetime_utc: data.datetime_utc,
@@ -808,7 +807,14 @@
                     }
                     updateStatus();
                 })
-                .catch(function () { irFail++; irDone++; updateStatus(); })
+                .catch(function () {
+                    if (!retry && stormId === currentStormId) {
+                        // Retry once after 3 seconds
+                        setTimeout(function () { fetchIRFrame(idx, true); }, 3000);
+                    } else {
+                        irFail++; irDone++; updateStatus();
+                    }
+                })
                 .finally(function () {
                     var next = idx + FETCH_CONCURRENCY;
                     if (next < totalFrames) fetchIRFrame(next);
@@ -821,7 +827,7 @@
                 });
         }
 
-        function fetchRightFrame(idx) {
+        function fetchRightFrame(idx, retry) {
             if (idx >= totalFrames || stormId !== currentStormId) return;
             var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(stormId) + '/band-raw-frame'
                 + '?band=' + rightBand + '&frame_index=' + idx + '&lookback_hours=' + DEFAULT_LOOKBACK_HOURS
@@ -831,7 +837,6 @@
                 .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
                 .then(function (data) {
                     if (data.total_frames) totalFrames = data.total_frames;
-                    // Store at original index — stays aligned with irFrames
                     rightFrames[idx] = {
                         tb_data: decodeTbData(data.tb_data), rows: data.tb_rows, cols: data.tb_cols,
                         bounds: data.bounds, datetime_utc: data.datetime_utc,
@@ -839,10 +844,16 @@
                         data_type: data.data_type || rightDataType
                     };
                     rightDone++;
-                    if (idx === 0 && stormId === currentStormId) renderBothPanels();
+                    if (stormId === currentStormId) renderBothPanels();
                     updateStatus();
                 })
-                .catch(function () { rightFail++; rightDone++; updateStatus(); })
+                .catch(function () {
+                    if (!retry && stormId === currentStormId) {
+                        setTimeout(function () { fetchRightFrame(idx, true); }, 3000);
+                    } else {
+                        rightFail++; rightDone++; updateStatus();
+                    }
+                })
                 .finally(function () {
                     var next = idx + FETCH_CONCURRENCY;
                     if (next < totalFrames) fetchRightFrame(next);
