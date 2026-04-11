@@ -10,7 +10,7 @@
     // ── Config ──────────────────────────────────────────────────
     var API_BASE = 'https://tc-atlas-api-361010099051.us-east1.run.app';
     var POLL_INTERVAL_MS = 10 * 60 * 1000;
-    var DEFAULT_LOOKBACK_HOURS = 3;
+    var DEFAULT_LOOKBACK_HOURS = 6;
     var DEFAULT_RADIUS_DEG = 10.0;
     var FRAME_INTERVAL_MIN = 30;
     var FETCH_CONCURRENCY = 3;
@@ -206,6 +206,7 @@
     var playBtn, speedBtn, stormListEl, rightLabelEl;
     var sidebar, sidebarToggle, sidebarClose;
     var axesYIR, axesXIR, axesYRight, axesXRight;
+    var stormHeaderEl;
 
     function initDOM() {
         canvasIR = document.getElementById('sat-canvas-ir');
@@ -237,6 +238,7 @@
         axesXIR = document.getElementById('sat-axes-x-ir');
         axesYRight = document.getElementById('sat-axes-y-right');
         axesXRight = document.getElementById('sat-axes-x-right');
+        stormHeaderEl = document.getElementById('sat-storm-header');
     }
 
     // ── Utility ─────────────────────────────────────────────────
@@ -304,20 +306,31 @@
         var crop = getCropIndices(frame, vb);
         if (crop.rows <= 0 || crop.cols <= 0) return;
 
-        canvas.width = crop.cols;
-        canvas.height = crop.rows;
-        var imgData = ctx.createImageData(crop.cols, crop.rows);
+        // Always render at full data resolution, then let CSS scale
+        // Use the FULL frame dimensions so zoomed images fill the same space
+        canvas.width = frame.cols;
+        canvas.height = frame.rows;
+        var imgData = ctx.createImageData(frame.cols, frame.rows);
         var pixels = imgData.data;
 
-        for (var y = 0; y < crop.rows; y++) {
-            var srcRow = crop.r0 + y;
-            for (var x = 0; x < crop.cols; x++) {
-                var srcCol = crop.c0 + x;
+        // Fill background
+        for (var i = 0; i < pixels.length; i += 4) {
+            pixels[i] = 10; pixels[i+1] = 11; pixels[i+2] = 18; pixels[i+3] = 255;
+        }
+
+        // Render cropped region scaled to fill the full canvas
+        var scaleY = frame.rows / crop.rows;
+        var scaleX = frame.cols / crop.cols;
+
+        for (var y = 0; y < frame.rows; y++) {
+            var srcRow = crop.r0 + Math.floor(y / scaleY);
+            if (srcRow < crop.r0 || srcRow >= crop.r1) continue;
+            for (var x = 0; x < frame.cols; x++) {
+                var srcCol = crop.c0 + Math.floor(x / scaleX);
+                if (srcCol < crop.c0 || srcCol >= crop.c1) continue;
                 var val = frame.tb_data[srcRow * frame.cols + srcCol];
-                var pi = (y * crop.cols + x) * 4;
-                if (val === 0) {
-                    pixels[pi] = 10; pixels[pi+1] = 11; pixels[pi+2] = 18; pixels[pi+3] = 255;
-                } else {
+                var pi = (y * frame.cols + x) * 4;
+                if (val !== 0) {
                     var li = val * 4;
                     pixels[pi] = lut[li]; pixels[pi+1] = lut[li+1];
                     pixels[pi+2] = lut[li+2]; pixels[pi+3] = lut[li+3];
@@ -637,14 +650,26 @@
     function updateAnimUI() {
         var frame = irFrames[animIndex];
         if (frameCounterEl) frameCounterEl.textContent = (irFrames.length > 0 ? (animIndex + 1) : 0) + ' / ' + irFrames.length;
-        if (frame && timestampEl) timestampEl.textContent = (frame.datetime_utc || '').replace('T', ' ').replace(/:\d{2}Z$/, ' UTC').replace('Z', ' UTC');
+        var timeStr = '';
+        if (frame && frame.datetime_utc) {
+            timeStr = frame.datetime_utc.replace('T', ' ').replace(/:\d{2}Z$/, ' UTC').replace('Z', ' UTC');
+        }
+        if (timestampEl) timestampEl.textContent = timeStr;
         if (frame && satelliteEl) satelliteEl.textContent = frame.satellite || '';
         if (sliderEl && irFrames.length > 0) sliderEl.value = animIndex;
+        // Update storm header
+        if (stormHeaderEl && currentStorm) {
+            var name = currentStorm.name || currentStormId;
+            var cat = categoryShort(currentStorm.category);
+            var wind = currentStorm.vmax_kt != null ? ' \u00B7 ' + currentStorm.vmax_kt + ' kt' : '';
+            stormHeaderEl.textContent = name + ' (' + cat + wind + ')' + (timeStr ? '  \u2014  ' + timeStr : '');
+        }
     }
     function updateSliderMax() { if (sliderEl) sliderEl.max = Math.max(0, irFrames.length - 1); }
     function updatePlayBtn() {
         if (!playBtn) return;
-        playBtn.innerHTML = animPlaying ? '&#9646;&#9646;' : '&#9654;&#9654;';
+        playBtn.textContent = animPlaying ? '\u23F8' : '\u25B6';
+        playBtn.title = animPlaying ? 'Pause (Space)' : 'Play (Space)';
     }
     function showLoader(msg) { if (loader) loader.classList.remove('hidden'); if (loaderMsg) loaderMsg.textContent = msg || 'Loading\u2026'; }
     function hideLoader() { if (loader) loader.classList.add('hidden'); }
@@ -754,7 +779,7 @@
         if (zoomBtn) {
             zoomBtn.addEventListener('click', function () {
                 zoomed = !zoomed;
-                zoomBtn.textContent = zoomed ? '5\u00B0' : '10\u00B0';
+                zoomBtn.textContent = zoomed ? 'Zoom Out' : 'Zoom In';
                 zoomBtn.classList.toggle('active', zoomed);
                 renderBothPanels();
             });

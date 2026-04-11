@@ -234,6 +234,30 @@
     min-height: 0;
 }
 
+/* ── Storm Header ───────────────────────────────────────────── */
+
+.sat-storm-header {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 8;
+    text-align: center;
+    padding: 6px 16px;
+    background: linear-gradient(to bottom, #0a0c12ee 0%, #0a0c1200 100%);
+    color: #e2e4ea;
+    font-size: 14px;
+    font-weight: 500;
+    pointer-events: none;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.sat-storm-header:empty {
+    display: none;
+}
+
 /* ── Split Panels ───────────────────────────────────────────── */
 
 .sat-split-panels {
@@ -565,11 +589,12 @@ input[type="range"].sat-slider {
     color: #8b8fa4;
     border: 1px solid #2a2d38;
     border-radius: 4px;
-    padding: 4px 8px;
+    padding: 4px 10px;
     font-size: 11px;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: inherit;
     cursor: pointer;
     transition: background 0.15s, color 0.15s;
+    white-space: nowrap;
 }
 
 .sat-zoom-btn:hover {
