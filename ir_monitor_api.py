@@ -117,12 +117,18 @@ def _get_rt_gcs_bucket():
     except Exception:
         return None
 
-def _gcs_rt_get(atcf_id: str, dt_str: str) -> dict | None:
+def _pos_key(lat: float, lon: float) -> str:
+    """Round lat/lon to nearest degree for position-aware cache keys."""
+    return f"{round(lat)}_{round(lon)}"
+
+
+def _gcs_rt_get(atcf_id: str, dt_str: str, lat: float = 0, lon: float = 0) -> dict | None:
     """Try to read a cached raw Tb frame from GCS."""
     bucket = _get_rt_gcs_bucket()
     if bucket is None:
         return None
-    key = f"{_GCS_RT_VERSION}/ir-raw/{atcf_id}/{dt_str}.json"
+    pk = _pos_key(lat, lon)
+    key = f"{_GCS_RT_VERSION}/ir-raw/{atcf_id}/{pk}/{dt_str}.json"
     try:
         blob = bucket.blob(key)
         data = blob.download_as_bytes(timeout=5)
@@ -130,13 +136,14 @@ def _gcs_rt_get(atcf_id: str, dt_str: str) -> dict | None:
     except Exception:
         return None
 
-def _gcs_rt_put(atcf_id: str, dt_str: str, frame: dict):
+def _gcs_rt_put(atcf_id: str, dt_str: str, frame: dict, lat: float = 0, lon: float = 0):
     """Write a raw Tb frame to GCS (fire-and-forget background thread)."""
     bucket = _get_rt_gcs_bucket()
     if bucket is None:
         return
+    pk = _pos_key(lat, lon)
     def _upload():
-        key = f"{_GCS_RT_VERSION}/ir-raw/{atcf_id}/{dt_str}.json"
+        key = f"{_GCS_RT_VERSION}/ir-raw/{atcf_id}/{pk}/{dt_str}.json"
         try:
             blob = bucket.blob(key)
             blob.upload_from_string(
@@ -149,12 +156,13 @@ def _gcs_rt_put(atcf_id: str, dt_str: str, frame: dict):
     threading.Thread(target=_upload, daemon=True).start()
 
 
-def _gcs_band_get(band: int, atcf_id: str, dt_str: str) -> dict | None:
+def _gcs_band_get(band: int, atcf_id: str, dt_str: str, lat: float = 0, lon: float = 0) -> dict | None:
     """Try to read a cached band frame from GCS."""
     bucket = _get_rt_gcs_bucket()
     if bucket is None:
         return None
-    key = f"{_GCS_RT_VERSION}/band-raw/{band}/{atcf_id}/{dt_str}.json"
+    pk = _pos_key(lat, lon)
+    key = f"{_GCS_RT_VERSION}/band-raw/{band}/{atcf_id}/{pk}/{dt_str}.json"
     try:
         blob = bucket.blob(key)
         data = blob.download_as_bytes(timeout=5)
@@ -163,13 +171,14 @@ def _gcs_band_get(band: int, atcf_id: str, dt_str: str) -> dict | None:
         return None
 
 
-def _gcs_band_put(band: int, atcf_id: str, dt_str: str, frame: dict):
+def _gcs_band_put(band: int, atcf_id: str, dt_str: str, frame: dict, lat: float = 0, lon: float = 0):
     """Write a band frame to GCS (fire-and-forget background thread)."""
     bucket = _get_rt_gcs_bucket()
     if bucket is None:
         return
+    pk = _pos_key(lat, lon)
     def _upload():
-        key = f"{_GCS_RT_VERSION}/band-raw/{band}/{atcf_id}/{dt_str}.json"
+        key = f"{_GCS_RT_VERSION}/band-raw/{band}/{atcf_id}/{pk}/{dt_str}.json"
         try:
             blob = bucket.blob(key)
             blob.upload_from_string(
@@ -1207,7 +1216,7 @@ def _prefetch_ir_frames(storms: list):
 
                 def _fetch_and_cache_ir(tdt, dstr):
                     """Worker: fetch IR frame and cache to GCS."""
-                    if _gcs_rt_get(atcf_id.upper(), dstr) is not None:
+                    if _gcs_rt_get(atcf_id.upper(), dstr, lat=center_lat, lon=center_lon) is not None:
                         return
                     try:
                         raw = fetch_ir_tb_raw(center_lat, center_lon, tdt, box_deg)
@@ -1235,13 +1244,13 @@ def _prefetch_ir_frames(storms: list):
                             [center_lat - half, center_lon - half],
                             [center_lat + half, center_lon + half],
                         ]),
-                    })
+                    }, lat=center_lat, lon=center_lon)
                     _prefetch_counts["ir"] += 1
                     del tb, arr, mask, scaled, encoded
 
                 def _fetch_and_cache_band(tdt, dstr, band):
                     """Worker: fetch WV/Vis frame and cache to GCS."""
-                    if _gcs_band_get(band, atcf_id.upper(), dstr) is not None:
+                    if _gcs_band_get(band, atcf_id.upper(), dstr, lat=center_lat, lon=center_lon) is not None:
                         return
                     if band == VIS_BAND:
                         se = _solar_elevation(center_lat, center_lon, tdt)
@@ -1273,7 +1282,7 @@ def _prefetch_ir_frames(storms: list):
                             [center_lat - half, center_lon - half],
                             [center_lat + half, center_lon + half],
                         ]),
-                    })
+                    }, lat=center_lat, lon=center_lon)
                     _prefetch_counts["band"] += 1
                     del data, arr, mask, scaled, encoded
 
@@ -1577,7 +1586,7 @@ def get_storm_ir_raw(
         dt_str = target_dt.strftime("%Y%m%d%H%M")
 
         # Check GCS cache first
-        cached = _gcs_rt_get(atcf_id.upper(), dt_str)
+        cached = _gcs_rt_get(atcf_id.upper(), dt_str, lat=center_lat, lon=center_lon)
         if cached is not None:
             frames.append(cached)
             continue
@@ -1608,7 +1617,7 @@ def get_storm_ir_raw(
             frames.append(frame_result)
 
             # Cache to GCS (fire-and-forget)
-            _gcs_rt_put(atcf_id.upper(), dt_str, frame_result)
+            _gcs_rt_put(atcf_id.upper(), dt_str, frame_result, lat=center_lat, lon=center_lon)
 
             del tb, arr, mask, scaled, encoded
             gc.collect()
@@ -1665,7 +1674,7 @@ def get_storm_ir_raw_frame(
     half = box_deg / 2.0
 
     # Check GCS cache first
-    cached = _gcs_rt_get(atcf_id.upper(), dt_str)
+    cached = _gcs_rt_get(atcf_id.upper(), dt_str, lat=center_lat, lon=center_lon)
     if cached is not None:
         cached["frame_index"] = frame_index
         cached["total_frames"] = len(frame_times)
@@ -1702,7 +1711,7 @@ def get_storm_ir_raw_frame(
     }
 
     # Cache to GCS
-    _gcs_rt_put(atcf_id.upper(), dt_str, frame_result)
+    _gcs_rt_put(atcf_id.upper(), dt_str, frame_result, lat=center_lat, lon=center_lon)
 
     del tb, arr, mask, scaled, encoded
     gc.collect()
@@ -1758,7 +1767,7 @@ def get_storm_band_raw_frame(
     half = box_deg / 2.0
 
     # Check GCS cache
-    cached = _gcs_band_get(band, atcf_id.upper(), dt_str)
+    cached = _gcs_band_get(band, atcf_id.upper(), dt_str, lat=center_lat, lon=center_lon)
     if cached is not None:
         cached["frame_index"] = frame_index
         cached["total_frames"] = len(frame_times)
@@ -1803,7 +1812,7 @@ def get_storm_band_raw_frame(
     }
 
     # Cache to GCS
-    _gcs_band_put(band, atcf_id.upper(), dt_str, frame_result)
+    _gcs_band_put(band, atcf_id.upper(), dt_str, frame_result, lat=center_lat, lon=center_lon)
 
     del data, arr, mask, scaled, encoded
     gc.collect()
@@ -1996,7 +2005,7 @@ def get_ir_frame_jpg(
 
     # Fallback: check if raw Tb uint8 is cached in GCS (populated by pre-fetch)
     # and render JPG from it — avoids the S3 round-trip entirely.
-    cached_raw = _gcs_rt_get(atcf_id.upper(), dt_str)
+    cached_raw = _gcs_rt_get(atcf_id.upper(), dt_str, lat=center_lat, lon=center_lon)
     if cached_raw is not None and cached_raw.get("tb_data"):
         try:
             encoded = np.frombuffer(
