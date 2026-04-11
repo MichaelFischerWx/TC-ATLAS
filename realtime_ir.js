@@ -2289,6 +2289,7 @@
 
     var _frameLoadedOnce = {};  // track which frames have fired their initial load
     var _firstFrameShown = false;  // true once we've shown the first available frame
+    var _rawTbPrefetchStarted = false;  // guard: only start raw Tb pre-fetch once per storm
 
     /** Called when a single frame layer finishes loading its tiles */
     function onFrameLayerLoaded(frameIdx) {
@@ -2340,6 +2341,12 @@
                 updateAnimCounter();
             }
             console.log('[RT Monitor] All ' + total + ' IR frames pre-loaded (' + detailSatName + '), ' + validFrames.length + ' valid');
+            // Now that the visible JPG display is ready, start background
+            // raw Tb pre-fetch for instant colormap switching
+            if (!_rawTbPrefetchStarted) {
+                _rawTbPrefetchStarted = true;
+                _prefetchRawTbSilent();
+            }
         }
     }
 
@@ -2452,6 +2459,7 @@
         framesLoaded = 0;
         _frameLoadedOnce = {};
         _firstFrameShown = false;
+        _rawTbPrefetchStarted = false;
         framesReady = false;
         animFrameLayers = [];
         validFrames = [];
@@ -2645,6 +2653,11 @@
                     }
                     updateAnimCounter();
                 }
+                // Start raw Tb pre-fetch if not already running
+                if (!_rawTbPrefetchStarted) {
+                    _rawTbPrefetchStarted = true;
+                    _prefetchRawTbSilent();
+                }
             }
         }, 30000);
 
@@ -2654,10 +2667,9 @@
             frames: animFrameTimes.length
         });
 
-        // Pre-fetch raw Tb frames in background so colormap switching is
-        // instant when the user selects Enhanced, Dvorak, etc.  The GIBS
-        // tiles remain the default display (full basin context).
-        _prefetchRawTbSilent();
+        // Raw Tb pre-fetch is deferred until after JPG frames finish loading
+        // (or after 30s timeout) to avoid starving the visible display path.
+        // See onFrameLayerLoaded() and the safety timeout above.
     }
 
     /** Fetch storm metadata (intensity history, etc.) */
