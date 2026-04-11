@@ -2343,7 +2343,64 @@
         }
     }
 
-    /** Initialize the GIBS-based detail mini-map for a storm with PRE-LOADED frames */
+    /** Fallback: load GIBS tile layers for animation (used when image overlay fails) */
+    function _initDetailMapGIBS(storm, satLayerName) {
+        if (!detailMap) return;
+
+        var endTime;
+        var gibsTimeVerified = false;
+        if (latestGIBSTimes && latestGIBSTimes[detailSatName]) {
+            endTime = new Date(latestGIBSTimes[detailSatName]);
+            gibsTimeVerified = true;
+        } else {
+            endTime = new Date();
+        }
+        animFrameTimes = buildFrameTimes(endTime, DEFAULT_LOOKBACK_HOURS, gibsTimeVerified);
+        animIndex = animFrameTimes.length - 1;
+
+        var FRAME_BATCH_SIZE = 3;
+        var totalFrames = animFrameTimes.length;
+        var loadOrder = [];
+        for (var k = totalFrames - 1; k >= 0; k--) loadOrder.push(k);
+
+        for (var i = 0; i < totalFrames; i++) {
+            var lyr = createGIBSLayer(satLayerName, animFrameTimes[i], 0);
+            frameHasError.push(false);
+            animFrameLayers.push(lyr);
+        }
+
+        var _batchAddedToMap = {};
+        var _batchNextIdx = 0;
+
+        function _addNextBatch() {
+            var added = 0;
+            while (_batchNextIdx < loadOrder.length && added < FRAME_BATCH_SIZE) {
+                var fi = loadOrder[_batchNextIdx];
+                _batchNextIdx++;
+                if (_batchAddedToMap[fi]) continue;
+                _batchAddedToMap[fi] = true;
+                animFrameLayers[fi].addTo(detailMap);
+                (function (idx) {
+                    animFrameLayers[idx].on('tileerror', function () { frameHasError[idx] = true; });
+                    animFrameLayers[idx].on('load', function () {
+                        onFrameLayerLoaded(idx);
+                        _addNextBatch();
+                    });
+                })(fi);
+                added++;
+            }
+        }
+        _addNextBatch();
+
+        var slider = document.getElementById('ir-anim-slider');
+        if (slider) { slider.max = animFrameTimes.length - 1; slider.value = animIndex; }
+        updateAnimCounter();
+        updateFrameOverlay();
+
+        console.log('[RT Monitor] GIBS fallback: loading ' + totalFrames + ' tile layers');
+    }
+
+    /** Initialize the detail mini-map for a storm */
     function initDetailMap(storm) {
         var container = document.getElementById('ir-image-container');
 
@@ -2391,24 +2448,14 @@
         detailSatName = bestSatelliteForLon(storm.lon);
         var satLayerName = GIBS_IR_LAYERS[detailSatName];
 
-        // Build animation frame times (30-min steps, 6h lookback).
-        // Use the already-probed GIBS time for this satellite if available
-        // (from the global map's findLatestGIBSTimes) — this avoids the
-        // 15-min guessing margin and ensures frames start from a known-good time.
-        var endTime;
-        var gibsTimeVerified = false;
-        if (latestGIBSTimes && latestGIBSTimes[detailSatName]) {
-            endTime = new Date(latestGIBSTimes[detailSatName]);
-            gibsTimeVerified = true;
-        } else {
-            endTime = new Date();  // fallback to current UTC
-        }
-        animFrameTimes = buildFrameTimes(endTime, DEFAULT_LOOKBACK_HOURS, gibsTimeVerified);
-        animIndex = animFrameTimes.length - 1;
+        // Reset animation state
         framesLoaded = 0;
         _frameLoadedOnce = {};
         _firstFrameShown = false;
         framesReady = false;
+        animFrameLayers = [];
+        validFrames = [];
+        frameHasError = [];
 
         // Disable play button until frames load
         var playBtn = document.getElementById('ir-anim-play');
@@ -2417,60 +2464,102 @@
         // Show loading progress
         showLoadingProgress(true, 0);
 
-        // Create frame tile layers and add them in batches to avoid
-        // flooding GIBS with 200+ concurrent tile requests.  Layers are
-        // created upfront (cheap), but only added to the map in groups of
-        // FRAME_BATCH_SIZE, starting from the latest (most useful) frames.
-        var FRAME_BATCH_SIZE = 3;
-        animFrameLayers = [];
-        validFrames = [];
-        frameHasError = [];
+        // ── Image Overlay Mode (default): pre-rendered JPGs ──────
+        // Fetch frame metadata, then load each frame as a single JPG
+        // image overlay. ~60KB per frame, 1 request each — much faster
+        // than GIBS tiles (~16 tiles × ~20KB = ~320KB per frame).
+        var metaUrl = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(storm.atcf_id)
+            + '/ir-frames-meta?lookback_hours=' + DEFAULT_LOOKBACK_HOURS
+            + '&radius_deg=' + DEFAULT_RADIUS_DEG;
 
-        // Build ordered list: latest frames first so newest imagery loads first
-        var totalFrames = animFrameTimes.length;
-        var loadOrder = [];
-        for (var k = totalFrames - 1; k >= 0; k--) loadOrder.push(k);
+        fetch(metaUrl, { cache: 'no-store' })
+            .then(function (r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            })
+            .then(function (meta) {
+                if (!detailMap) return;  // detail closed while loading
 
-        // Create all layers (not yet added to map)
-        for (var i = 0; i < totalFrames; i++) {
-            var timeStr = animFrameTimes[i];
-            var lyr = createGIBSLayer(satLayerName, timeStr, 0); // opacity 0 = hidden
-            frameHasError.push(false);
-            animFrameLayers.push(lyr);
-        }
+                var frames = meta.frames || [];
+                var bounds = meta.bounds;
+                var leafletBounds = L.latLngBounds(
+                    [bounds[0][0], bounds[0][1]],
+                    [bounds[1][0], bounds[1][1]]
+                );
 
-        // Track which frames have been added to the map
-        var _batchAddedToMap = {};
-        var _batchNextIdx = 0;  // index into loadOrder for next batch
+                // Build frame time strings from metadata
+                animFrameTimes = [];
+                for (var i = 0; i < frames.length; i++) {
+                    animFrameTimes.push(frames[i].datetime_utc);
+                }
+                animIndex = animFrameTimes.length - 1;
+                detailSatName = meta.satellite || detailSatName;
 
-        function _addNextBatch() {
-            var added = 0;
-            while (_batchNextIdx < loadOrder.length && added < FRAME_BATCH_SIZE) {
-                var fi = loadOrder[_batchNextIdx];
-                _batchNextIdx++;
-                if (_batchAddedToMap[fi]) continue;
+                // Update slider
+                var slider = document.getElementById('ir-anim-slider');
+                if (slider) {
+                    slider.max = animFrameTimes.length - 1;
+                    slider.value = animIndex;
+                }
+                updateAnimCounter();
+                updateFrameOverlay();
 
-                _batchAddedToMap[fi] = true;
-                animFrameLayers[fi].addTo(detailMap);
+                // Create image overlays for each frame (all at opacity 0)
+                var CONCURRENT_LOADS = 4;
+                var loadQueue = [];
 
-                // Listen for tile load completion AND tile errors
-                (function (idx) {
-                    animFrameLayers[idx].on('tileerror', function () {
-                        frameHasError[idx] = true;
+                // Build load order: latest frames first
+                for (var k = frames.length - 1; k >= 0; k--) loadQueue.push(k);
+
+                for (var fi = 0; fi < frames.length; fi++) {
+                    var overlay = L.imageOverlay('', leafletBounds, {
+                        opacity: 0,
+                        interactive: false,
+                        className: 'ir-jpg-overlay'
                     });
-                    animFrameLayers[idx].on('load', function () {
+                    overlay.addTo(detailMap);
+                    animFrameLayers.push(overlay);
+                    frameHasError.push(false);
+                }
+
+                // Load images concurrently with a pool
+                var loadIdx = 0;
+
+                function loadNextImage() {
+                    if (loadIdx >= loadQueue.length) return;
+                    var idx = loadQueue[loadIdx++];
+                    var imgUrl = API_BASE + '/ir-monitor/storm/'
+                        + encodeURIComponent(storm.atcf_id)
+                        + '/ir-frame.jpg?frame_index=' + idx
+                        + '&lookback_hours=' + DEFAULT_LOOKBACK_HOURS
+                        + '&radius_deg=' + DEFAULT_RADIUS_DEG;
+
+                    var img = new Image();
+                    img.crossOrigin = 'anonymous';
+                    img.onload = function () {
+                        if (detailMap && animFrameLayers[idx]) {
+                            animFrameLayers[idx].setUrl(imgUrl);
+                        }
                         onFrameLayerLoaded(idx);
-                        // When this frame finishes, trigger next batch
-                        _addNextBatch();
-                    });
-                })(fi);
+                        loadNextImage();
+                    };
+                    img.onerror = function () {
+                        frameHasError[idx] = true;
+                        onFrameLayerLoaded(idx);
+                        loadNextImage();
+                    };
+                    img.src = imgUrl;
+                }
 
-                added++;
-            }
-        }
-
-        // Kick off the first batch
-        _addNextBatch();
+                // Kick off concurrent pool
+                for (var c = 0; c < Math.min(CONCURRENT_LOADS, loadQueue.length); c++) {
+                    loadNextImage();
+                }
+            })
+            .catch(function (err) {
+                console.warn('[RT Monitor] Image overlay meta failed, falling back to GIBS tiles:', err.message);
+                _initDetailMapGIBS(storm, satLayerName);
+            });
 
         // Coastline overlay — Natural Earth 50m black outlines (matches global archive)
         detailMap.createPane('coastlinePane');
@@ -2505,12 +2594,9 @@
             }
         });
 
-        // Update animation controls
-        var slider = document.getElementById('ir-anim-slider');
-        slider.max = animFrameTimes.length - 1;
-        slider.value = animIndex;
-        updateAnimCounter();
-        updateFrameOverlay();
+        // Note: animation controls (slider, counter, overlay) are updated
+        // inside the image overlay meta callback above, after animFrameTimes
+        // is populated from the API response.
 
         // Show IR Tb colorbar legend (vigor legend stays hidden until toggled)
         var tbLeg = document.getElementById('ir-tb-legend');

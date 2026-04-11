@@ -1498,6 +1498,204 @@ def get_storm_ir_raw_frame(
     )
 
 
+# ---------------------------------------------------------------------------
+# Pre-Rendered IR Frame JPG Endpoint (fast image-overlay animation)
+# ---------------------------------------------------------------------------
+
+def _gcs_jpg_get(atcf_id: str, dt_str: str) -> bytes | None:
+    """Try to read a cached pre-rendered JPG from GCS."""
+    bucket = _get_rt_gcs_bucket()
+    if bucket is None:
+        return None
+    key = f"{_GCS_RT_VERSION}/ir-jpg/{atcf_id}/{dt_str}.jpg"
+    try:
+        blob = bucket.blob(key)
+        return blob.download_as_bytes(timeout=5)
+    except Exception:
+        return None
+
+
+def _gcs_jpg_put(atcf_id: str, dt_str: str, jpg_bytes: bytes):
+    """Write a pre-rendered JPG to GCS (fire-and-forget)."""
+    bucket = _get_rt_gcs_bucket()
+    if bucket is None:
+        return
+    def _upload():
+        key = f"{_GCS_RT_VERSION}/ir-jpg/{atcf_id}/{dt_str}.jpg"
+        try:
+            blob = bucket.blob(key)
+            blob.upload_from_string(jpg_bytes, content_type="image/jpeg", timeout=15)
+        except Exception:
+            pass
+    threading.Thread(target=_upload, daemon=True).start()
+
+
+def _render_ir_jpg(tb_array: np.ndarray, quality: int = 90) -> bytes | None:
+    """Render a raw Tb array to JPEG bytes using the enhanced IR colormap."""
+    from PIL import Image
+
+    arr = np.asarray(tb_array, dtype=np.float32)
+    if not np.any(np.isfinite(arr)):
+        return None
+
+    # Same colormap as render_ir_png in satellite_ir.py
+    frac = 1.0 - (arr - _TB_VMIN) / (_TB_VMAX - _TB_VMIN)
+    frac = np.clip(frac, 0.0, 1.0)
+    indices = (frac * 255).astype(np.uint8)
+
+    # Use the same LUT as satellite_ir (import lazily)
+    from satellite_ir import _IR_LUT
+    rgba = _IR_LUT[indices]  # (H, W, 4)
+
+    # NaN/invalid → black (JPG has no alpha)
+    mask = ~np.isfinite(arr) | (arr <= 0)
+    rgba[mask] = [0, 0, 0, 255]
+
+    img = Image.fromarray(rgba, "RGBA").convert("RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=quality)
+    return buf.getvalue()
+
+
+@router.get("/storm/{atcf_id}/ir-frames-meta")
+def get_ir_frames_meta(
+    atcf_id: str,
+    lookback_hours: float = Query(6.0, ge=1, le=24),
+    radius_deg: float = Query(10.0, ge=1.0, le=12.0),
+    interval_min: int = Query(30, ge=10, le=60),
+):
+    """Return frame metadata (times, bounds) without image data.
+
+    Lets the frontend know how many frames exist and construct JPG URLs
+    before fetching any images.
+    """
+    _ensure_fresh_cache()
+    storm = None
+    with _active_storms_lock:
+        for s in _active_storms_cache["storms"]:
+            if s["atcf_id"].upper() == atcf_id.upper():
+                storm = dict(s)
+                break
+
+    if not storm:
+        raise HTTPException(status_code=404, detail=f"Storm {atcf_id} not found")
+
+    center_lat = storm["lat"]
+    center_lon = storm["lon"]
+    half = radius_deg
+
+    frame_times = build_frame_times(
+        _dt.now(timezone.utc), lookback_hours, interval_min
+    )
+    frame_times = list(reversed(frame_times))  # newest first
+
+    # Determine satellite
+    bucket, sat_key = select_goes_sat(center_lon, _dt.now(timezone.utc))
+
+    frames = []
+    for i, ft in enumerate(frame_times):
+        frames.append({
+            "index": i,
+            "datetime_utc": ft.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        })
+
+    return JSONResponse(
+        content={
+            "frames": frames,
+            "bounds": [
+                [center_lat - half, center_lon - half],
+                [center_lat + half, center_lon + half],
+            ],
+            "total_frames": len(frame_times),
+            "satellite": satellite_name_from_bucket(bucket),
+        },
+        headers={"Cache-Control": "public, max-age=120"},
+    )
+
+
+@router.get("/storm/{atcf_id}/ir-frame.jpg")
+def get_ir_frame_jpg(
+    atcf_id: str,
+    frame_index: int = Query(0, ge=0),
+    lookback_hours: float = Query(6.0, ge=1, le=24),
+    radius_deg: float = Query(10.0, ge=1.0, le=12.0),
+    interval_min: int = Query(30, ge=10, le=60),
+):
+    """Return a pre-rendered IR frame as a JPEG image.
+
+    Much faster than GIBS tile layers: single ~60KB image vs ~16 tiles.
+    Metadata (bounds, time, satellite) is in response headers to avoid
+    needing a separate metadata call.
+    """
+    _ensure_fresh_cache()
+    storm = None
+    with _active_storms_lock:
+        for s in _active_storms_cache["storms"]:
+            if s["atcf_id"].upper() == atcf_id.upper():
+                storm = dict(s)
+                break
+
+    if not storm:
+        raise HTTPException(status_code=404, detail=f"Storm {atcf_id} not found")
+
+    center_lat = storm["lat"]
+    center_lon = storm["lon"]
+    box_deg = radius_deg * 2
+    half = radius_deg
+
+    frame_times = build_frame_times(
+        _dt.now(timezone.utc), lookback_hours, interval_min
+    )
+    frame_times = list(reversed(frame_times))  # newest first
+
+    if frame_index >= len(frame_times):
+        raise HTTPException(status_code=400, detail=f"frame_index {frame_index} out of range")
+
+    target_dt = frame_times[frame_index]
+    dt_str = target_dt.strftime("%Y%m%d%H%M")
+
+    # Bounds for Leaflet overlay
+    bounds = [
+        [center_lat - half, center_lon - half],
+        [center_lat + half, center_lon + half],
+    ]
+    bucket, _ = select_goes_sat(center_lon, target_dt)
+    sat_name = satellite_name_from_bucket(bucket)
+
+    # Common response headers with metadata
+    meta_headers = {
+        "Cache-Control": "public, max-age=300",
+        "X-Frame-Index": str(frame_index),
+        "X-Total-Frames": str(len(frame_times)),
+        "X-Datetime": target_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "X-Satellite": sat_name,
+        "X-Bounds": json.dumps(bounds),
+        "Access-Control-Expose-Headers": "X-Frame-Index, X-Total-Frames, X-Datetime, X-Satellite, X-Bounds",
+    }
+
+    # Check GCS JPG cache
+    cached_jpg = _gcs_jpg_get(atcf_id.upper(), dt_str)
+    if cached_jpg:
+        return Response(content=cached_jpg, media_type="image/jpeg", headers=meta_headers)
+
+    # Render fresh
+    raw = fetch_ir_tb_raw(center_lat, center_lon, target_dt, box_deg)
+    if not raw or raw.get("tb") is None:
+        raise HTTPException(status_code=502, detail=f"No IR data for frame {frame_index}")
+
+    jpg_bytes = _render_ir_jpg(raw["tb"])
+    if not jpg_bytes:
+        raise HTTPException(status_code=502, detail="IR rendering failed")
+
+    # Cache to GCS
+    _gcs_jpg_put(atcf_id.upper(), dt_str, jpg_bytes)
+
+    del raw
+    gc.collect()
+
+    return Response(content=jpg_bytes, media_type="image/jpeg", headers=meta_headers)
+
+
 def _write_geotiff_bytes(tb_array: np.ndarray, bounds: list) -> bytes:
     """
     Write a float32 brightness temperature array as a minimal GeoTIFF (WGS84).
