@@ -2201,10 +2201,31 @@
     //  DATA FETCHING
     // ═══════════════════════════════════════════════════════════
 
+    var _LS_STORMS_KEY = 'tc-atlas-rt-storms';
+
     /** Poll /ir-monitor/active-storms */
     function pollActiveStorms() {
         var loaderEl = document.getElementById('ir-loader');
         var noStormsEl = document.getElementById('ir-no-storms');
+
+        // Show cached storms immediately while fresh fetch runs
+        if (stormData.length === 0) {
+            try {
+                var cached = localStorage.getItem(_LS_STORMS_KEY);
+                if (cached) {
+                    var parsed = JSON.parse(cached);
+                    if (parsed.storms && parsed.storms.length > 0) {
+                        stormData = parsed.storms;
+                        if (loaderEl) loaderEl.style.display = 'none';
+                        updateStats(parsed);
+                        renderStormMarkers(stormData);
+                        handleDeepLink();
+                        if (noStormsEl) noStormsEl.style.display = 'none';
+                        console.log('[RT Monitor] Showing ' + stormData.length + ' cached storms while fetching fresh data');
+                    }
+                }
+            } catch (e) { /* ignore localStorage errors */ }
+        }
 
         fetch(API_BASE + '/ir-monitor/active-storms', { cache: 'no-store' })
             .then(function (r) {
@@ -2213,6 +2234,9 @@
             })
             .then(function (data) {
                 stormData = data.storms || [];
+
+                // Cache to localStorage for instant display on next visit
+                try { localStorage.setItem(_LS_STORMS_KEY, JSON.stringify(data)); } catch (e) { }
 
                 // Hide loader
                 if (loaderEl) loaderEl.style.display = 'none';
