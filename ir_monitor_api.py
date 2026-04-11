@@ -1278,10 +1278,68 @@ def _prefetch_ir_frames(storms: list):
         print(f"[IR Pre-fetch] Done — {total_fetched} new PNG frames, "
               f"{total_cached} already cached, "
               f"{total_gcs_fetched} raw Tb frames cached to GCS")
+
+        # Clean up old cached frames from GCS
+        _cleanup_old_gcs_frames(storms)
+
     except Exception:
         traceback.print_exc()
     finally:
         _prefetch_lock.release()
+
+
+# Max age for cached frames (hours).  Anything older gets deleted.
+_GCS_CACHE_MAX_AGE_HOURS = 12
+
+
+def _cleanup_old_gcs_frames(active_storms: list):
+    """
+    Delete GCS-cached frames older than _GCS_CACHE_MAX_AGE_HOURS.
+    Only cleans rt-v7/ prefixes (ir-raw, ir-jpg, band-raw) for
+    currently active storm IDs — stale storms' data is cleaned entirely.
+    Runs after each prefetch cycle.
+    """
+    bucket = _get_rt_gcs_bucket()
+    if bucket is None:
+        return
+
+    cutoff = _dt.now(timezone.utc) - timedelta(hours=_GCS_CACHE_MAX_AGE_HOURS)
+    cutoff_str = cutoff.strftime("%Y%m%d%H%M")
+    active_ids = {s["atcf_id"].upper() for s in active_storms}
+    deleted = 0
+
+    # Clean each cache prefix
+    for prefix in [
+        f"{_GCS_RT_VERSION}/ir-raw/",
+        f"{_GCS_RT_VERSION}/ir-jpg/",
+        f"{_GCS_RT_VERSION}/band-raw/",
+    ]:
+        try:
+            blobs = list(bucket.list_blobs(prefix=prefix, max_results=5000))
+        except Exception:
+            continue
+
+        for blob in blobs:
+            try:
+                # Parse the datetime from the blob name
+                # Patterns:
+                #   rt-v7/ir-raw/{atcf_id}/{YYYYMMDDHHMM}.json
+                #   rt-v7/band-raw/{band}/{atcf_id}/{YYYYMMDDHHMM}.json
+                parts = blob.name.split("/")
+                filename = parts[-1]  # e.g. "202604111200.json"
+                dt_part = filename.split(".")[0]  # "202604111200"
+                atcf_id = parts[-2].upper()       # storm ID
+
+                # Delete if older than cutoff OR storm is no longer active
+                if dt_part < cutoff_str or atcf_id not in active_ids:
+                    blob.delete()
+                    deleted += 1
+            except Exception:
+                continue
+
+    if deleted:
+        print(f"[GCS Cleanup] Deleted {deleted} old cached frames "
+              f"(cutoff: {cutoff_str}, active storms: {len(active_ids)})")
 
 
 def _ensure_fresh_cache():
