@@ -2504,19 +2504,18 @@
                 updateAnimCounter();
                 updateFrameOverlay();
 
-                // Create image overlays with URLs set directly.
-                // Leaflet's L.imageOverlay handles loading internally.
-                // We load in batches (latest first) to avoid overwhelming
-                // the server and to show the newest frame ASAP.
-                var FRAME_BATCH_SIZE = 4;
-
-                // Build load order: latest frames first
+                // Load frames via simple Image objects, then create overlays
+                // with the loaded image as a data URL. This avoids Leaflet's
+                // internal image element timing issues and gives us full
+                // control over load/error handling.
+                var CONCURRENT_LOADS = 4;
                 var loadOrder = [];
                 for (var k = frames.length - 1; k >= 0; k--) loadOrder.push(k);
 
-                // Pre-create all overlays (URL empty, opacity 0)
+                // Pre-create placeholder overlays (transparent 1x1 pixel)
+                var BLANK_PIXEL = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
                 for (var fi = 0; fi < frames.length; fi++) {
-                    var overlay = L.imageOverlay('', leafletBounds, {
+                    var overlay = L.imageOverlay(BLANK_PIXEL, leafletBounds, {
                         opacity: 0,
                         interactive: false,
                         className: 'ir-jpg-overlay'
@@ -2526,63 +2525,39 @@
                     frameHasError.push(false);
                 }
 
-                // Build JPG URL for a given frame index
-                function _buildFrameUrl(idx) {
-                    return API_BASE + '/ir-monitor/storm/'
+                var _loadIdx = 0;
+
+                function _loadNextImage() {
+                    if (_loadIdx >= loadOrder.length) return;
+                    var idx = loadOrder[_loadIdx++];
+                    var url = API_BASE + '/ir-monitor/storm/'
                         + encodeURIComponent(storm.atcf_id)
                         + '/ir-frame.jpg?frame_index=' + idx
                         + '&lookback_hours=' + DEFAULT_LOOKBACK_HOURS
                         + '&radius_deg=' + DEFAULT_RADIUS_DEG;
+
+                    var img = new Image();
+                    img.crossOrigin = 'anonymous';
+                    img.onload = function () {
+                        if (detailMap && animFrameLayers[idx]) {
+                            animFrameLayers[idx].setUrl(url);
+                        }
+                        onFrameLayerLoaded(idx);
+                        _loadNextImage();
+                    };
+                    img.onerror = function () {
+                        console.warn('[RT Monitor] JPG frame ' + idx + ' failed: ' + url);
+                        frameHasError[idx] = true;
+                        onFrameLayerLoaded(idx);
+                        _loadNextImage();
+                    };
+                    img.src = url;
                 }
 
-                // Load frames in batches, triggering next batch on completion
-                var _batchIdx = 0;
-
-                function _loadNextBatch() {
-                    var loaded = 0;
-                    while (_batchIdx < loadOrder.length && loaded < FRAME_BATCH_SIZE) {
-                        var idx = loadOrder[_batchIdx++];
-                        _loadOverlayFrame(idx);
-                        loaded++;
-                    }
+                // Kick off concurrent pool
+                for (var c = 0; c < Math.min(CONCURRENT_LOADS, loadOrder.length); c++) {
+                    _loadNextImage();
                 }
-
-                function _loadOverlayFrame(idx) {
-                    var url = _buildFrameUrl(idx);
-                    var imgEl = animFrameLayers[idx].getElement
-                        ? animFrameLayers[idx].getElement() : null;
-
-                    // Set URL — Leaflet loads the image internally
-                    animFrameLayers[idx].setUrl(url);
-
-                    // Listen for the actual <img> element's load/error events
-                    var overlayImg = animFrameLayers[idx]._image;
-                    if (overlayImg) {
-                        overlayImg.onload = function () {
-                            onFrameLayerLoaded(idx);
-                            _loadNextBatch();
-                        };
-                        overlayImg.onerror = function () {
-                            frameHasError[idx] = true;
-                            onFrameLayerLoaded(idx);
-                            _loadNextBatch();
-                        };
-                    } else {
-                        // Fallback: listen via Leaflet event
-                        animFrameLayers[idx].on('load', function () {
-                            onFrameLayerLoaded(idx);
-                            _loadNextBatch();
-                        });
-                        animFrameLayers[idx].on('error', function () {
-                            frameHasError[idx] = true;
-                            onFrameLayerLoaded(idx);
-                            _loadNextBatch();
-                        });
-                    }
-                }
-
-                // Kick off first batch
-                _loadNextBatch();
             })
             .catch(function (err) {
                 console.warn('[RT Monitor] Image overlay meta failed, falling back to GIBS tiles:', err.message);
