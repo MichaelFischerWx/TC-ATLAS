@@ -699,7 +699,8 @@
 
             // Determine right panel band based on day/night at storm
             var sunEl = solarElevation(currentStorm.lat, currentStorm.lon, new Date());
-            rightBand = sunEl > -6 ? 2 : 8;
+            // Default to WV (works 24/7). User can toggle to Visible manually.
+            rightBand = 8;
             rightDataType = rightBand <= 6 ? 'reflectance' : 'tb';
             if (rightLabelEl) rightLabelEl.textContent = rightBand === 2 ? 'Visible' : 'Water Vapor';
             // Update product toggle buttons
