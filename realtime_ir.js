@@ -3067,7 +3067,8 @@
 
         var config = {
             displayModeBar: false,
-            responsive: true
+            responsive: true,
+            staticPlot: true  // disable drag/zoom — small status chart, not interactive
         };
 
         Plotly.newPlot(chartEl, [trace], layout, config);
