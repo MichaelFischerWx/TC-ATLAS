@@ -420,7 +420,7 @@
     text-align: center;
 }
 
-.sat-slider {
+input[type="range"].sat-slider {
     flex: 1;
     min-width: 80px;
     max-width: 300px;
