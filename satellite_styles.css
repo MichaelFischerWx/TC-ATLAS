@@ -4,13 +4,27 @@
    Embedded as a tab within the Real-Time Monitor page.
    ═══════════════════════════════════════════════════════════════ */
 
-/* ── View Tab Buttons ───────────────────────────────────────── */
+/* ── Secondary Bar (view tabs + storm counts) ───────────────── */
+
+.ir-secondary-bar {
+    position: fixed;
+    top: var(--topbar-h, 48px);
+    left: 0;
+    right: 0;
+    height: 32px;
+    background: #12141c;
+    border-bottom: 1px solid #2a2d38;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 16px;
+    z-index: 100;
+}
 
 .ir-view-tabs {
     display: flex;
     gap: 2px;
-    margin-left: 12px;
-    background: #12141c;
+    background: #0a0c12;
     border-radius: 5px;
     padding: 2px;
     border: 1px solid #2a2d38;
@@ -21,8 +35,8 @@
     color: #8b8fa4;
     border: none;
     border-radius: 3px;
-    padding: 3px 10px;
-    font-size: 11px;
+    padding: 4px 12px;
+    font-size: 12px;
     font-weight: 500;
     font-family: inherit;
     cursor: pointer;
@@ -39,11 +53,28 @@
     color: #e2e4ea;
 }
 
+.ir-storm-counts {
+    display: flex;
+    gap: 14px;
+    align-items: center;
+}
+
+.ir-count {
+    font-size: 11px;
+    color: #8b8fa4;
+}
+
+.ir-count-val {
+    color: #e2e4ea;
+    font-weight: 600;
+    margin-right: 2px;
+}
+
 /* ── Layout ─────────────────────────────────────────────────── */
 
 .sat-main {
     position: fixed;
-    top: var(--topbar-h, 48px);
+    top: calc(var(--topbar-h, 48px) + 33px);
     left: 0;
     right: 0;
     bottom: 0;
@@ -584,19 +615,26 @@ input[type="range"].sat-slider {
     display: none;
 }
 
-/* ── Zoom Toggle ────────────────────────────────────────────── */
+/* ── Zoom Buttons ───────────────────────────────────────────── */
+
+.sat-zoom-group {
+    display: flex;
+    gap: 1px;
+    background: #2a2d38;
+    border-radius: 4px;
+    overflow: hidden;
+    border: 1px solid #2a2d38;
+}
 
 .sat-zoom-btn {
     background: #12141c;
     color: #8b8fa4;
-    border: 1px solid #2a2d38;
-    border-radius: 4px;
-    padding: 4px 10px;
+    border: none;
+    padding: 4px 8px;
     font-size: 11px;
-    font-family: inherit;
+    font-family: 'JetBrains Mono', monospace;
     cursor: pointer;
     transition: background 0.15s, color 0.15s;
-    white-space: nowrap;
 }
 
 .sat-zoom-btn:hover {

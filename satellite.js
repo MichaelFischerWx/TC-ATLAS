@@ -32,8 +32,10 @@
     var selectedColormap = 'claude-ir';
     var rightBand = 8;        // 8=WV, 2=Vis
     var rightDataType = 'tb'; // 'tb' or 'reflectance'
-    var zoomed = false;       // false=10° radius, true=5° (crop view)
+    var zoomDeg = 10;         // view radius in degrees (10, 5, or 2)
     var coastlineData = null;
+    var frameCache = {};  // per-storm cache: { stormId: { ir: [], right: [], ts: Date.now() } }
+    var FRAME_CACHE_TTL = 10 * 60 * 1000;  // 10 min
     var irLoadedCount = 0;
     var rightLoadedCount = 0;
     var totalExpectedFrames = 7;
@@ -284,10 +286,9 @@
         if (!frame || !frame.bounds) return null;
         var b = frame.bounds;
         var south = b[0][0], west = b[0][1], north = b[1][0], east = b[1][1];
-        if (zoomed) {
+        if (zoomDeg < 10) {
             var cLat = (south + north) / 2, cLon = (west + east) / 2;
-            var halfDeg = 5.0;
-            return { south: cLat - halfDeg, north: cLat + halfDeg, west: cLon - halfDeg, east: cLon + halfDeg };
+            return { south: cLat - zoomDeg, north: cLat + zoomDeg, west: cLon - zoomDeg, east: cLon + zoomDeg };
         }
         return { south: south, north: north, west: west, east: east };
     }
@@ -699,8 +700,22 @@
         }
         if (window.innerWidth <= 768 && sidebar) sidebar.classList.remove('open');
         noStormsEl.style.display = 'none';
-        showLoader('Loading satellite data\u2026');
-        loadFrames(atcfId);
+
+        // Check browser-side cache
+        var cached = frameCache[atcfId];
+        if (cached && (Date.now() - cached.ts) < FRAME_CACHE_TTL) {
+            irFrames = cached.ir;
+            rightFrames = cached.right;
+            buildValidIndices();
+            animIndex = validFrameIndices.length > 0 ? validFrameIndices[0] : 0;
+            updateSliderMax();
+            renderBothPanels();
+            updateAnimUI();
+            console.log('[Satellite] Loaded ' + atcfId + ' from browser cache');
+        } else {
+            showLoader('Loading satellite data\u2026');
+            loadFrames(atcfId);
+        }
         _ga('sat_select_storm', { storm: atcfId });
     }
 
@@ -765,6 +780,8 @@
                         updateSliderMax();
                         renderBothPanels();
                         updateAnimUI();
+                        // Update cache (right frames may still be loading)
+                        frameCache[stormId] = { ir: irFrames, right: rightFrames, ts: Date.now() };
                     }
                 });
         }
@@ -794,7 +811,11 @@
                 .finally(function () {
                     var next = idx + FETCH_CONCURRENCY;
                     if (next < totalFrames) fetchRightFrame(next);
-                    if (rightDone >= totalFrames && stormId === currentStormId) renderBothPanels();
+                    if (rightDone >= totalFrames && stormId === currentStormId) {
+                        renderBothPanels();
+                        // Cache frames for this storm
+                        frameCache[stormId] = { ir: irFrames, right: rightFrames, ts: Date.now() };
+                    }
                 });
         }
 
@@ -979,13 +1000,14 @@
         var saveBtn = document.getElementById('sat-save');
         if (saveBtn) saveBtn.addEventListener('click', saveImage);
 
-        // Zoom toggle
-        var zoomBtn = document.getElementById('sat-zoom');
-        if (zoomBtn) {
-            zoomBtn.addEventListener('click', function () {
-                zoomed = !zoomed;
-                zoomBtn.textContent = zoomed ? 'Zoom Out' : 'Zoom In';
-                zoomBtn.classList.toggle('active', zoomed);
+        // Zoom buttons (10°, 5°, 2°)
+        var zoomBtns = document.querySelectorAll('.sat-zoom-btn');
+        for (var zi = 0; zi < zoomBtns.length; zi++) {
+            zoomBtns[zi].addEventListener('click', function () {
+                zoomDeg = parseInt(this.getAttribute('data-deg'), 10);
+                for (var zj = 0; zj < zoomBtns.length; zj++) {
+                    zoomBtns[zj].classList.toggle('active', zoomBtns[zj] === this);
+                }
                 renderBothPanels();
             });
         }

@@ -56,33 +56,6 @@
                 <div class="topbar-logo" role="heading" aria-level="1">TC-ATLAS</div>
                 <div class="topbar-divider"></div>
                 <div class="topbar-subtitle">Real-Time Monitor</div>
-                <div class="ir-view-tabs">
-                    <button class="ir-view-tab active" data-view="map" onclick="window.switchIRView('map')">Map</button>
-                    <button class="ir-view-tab" data-view="satellite" onclick="window.switchIRView('satellite')">Satellite</button>
-                </div>
-            </div>
-            <div class="topbar-stats">
-                <div class="topbar-stat">
-                    <span class="topbar-stat-val" id="stat-active">&mdash;</span>
-                    <span class="topbar-stat-label">Active</span>
-                </div>
-                <div class="topbar-stat">
-                    <span class="topbar-stat-val" id="stat-atl">&mdash;</span>
-                    <span class="topbar-stat-label">ATL</span>
-                </div>
-                <div class="topbar-stat">
-                    <span class="topbar-stat-val" id="stat-epac">&mdash;</span>
-                    <span class="topbar-stat-label">EPAC</span>
-                </div>
-                <div class="topbar-stat">
-                    <span class="topbar-stat-val" id="stat-wpac">&mdash;</span>
-                    <span class="topbar-stat-label">WPAC</span>
-                </div>
-                <div class="topbar-stat">
-                    <span class="topbar-stat-val" id="stat-shem">&mdash;</span>
-                    <span class="topbar-stat-label">SHEM</span>
-                </div>
-                <span class="topbar-version ir-version">GIBS IR</span>
             </div>
             <nav aria-label="Main navigation">
                 <ul class="topbar-nav">
@@ -98,6 +71,21 @@
             </nav>
         </div>
     </header>
+
+    <!-- ── Secondary Bar (view tabs + storm counts) ───────────── -->
+    <div class="ir-secondary-bar">
+        <div class="ir-view-tabs">
+            <button class="ir-view-tab active" data-view="map" onclick="window.switchIRView('map')">Global Map</button>
+            <button class="ir-view-tab" data-view="satellite" onclick="window.switchIRView('satellite')">Storm Satellite</button>
+        </div>
+        <div class="ir-storm-counts">
+            <span class="ir-count"><span class="ir-count-val" id="stat-active">&mdash;</span> Active</span>
+            <span class="ir-count"><span class="ir-count-val" id="stat-atl">&mdash;</span> ATL</span>
+            <span class="ir-count"><span class="ir-count-val" id="stat-epac">&mdash;</span> EPAC</span>
+            <span class="ir-count"><span class="ir-count-val" id="stat-wpac">&mdash;</span> WPAC</span>
+            <span class="ir-count"><span class="ir-count-val" id="stat-shem">&mdash;</span> SHEM</span>
+        </div>
+    </div>
 
     <!-- ── Map View ───────────────────────────────────────────── -->
     <section id="ir-main" role="main" aria-label="Real-Time Monitor">
@@ -531,7 +519,11 @@
                     <input id="sat-slider" type="range" min="0" max="0" value="0" class="sat-slider">
                     <span id="sat-frame-counter" class="sat-frame-counter">0 / 0</span>
                     <button id="sat-speed" class="sat-anim-btn sat-speed-btn" title="Cycle animation speed">1x</button>
-                    <button id="sat-zoom" class="sat-zoom-btn" title="Toggle zoom level">Zoom In</button>
+                    <div class="sat-zoom-group">
+                        <button class="sat-zoom-btn active" data-deg="10" title="Wide view (10°)">10°</button>
+                        <button class="sat-zoom-btn" data-deg="5" title="Storm view (5°)">5°</button>
+                        <button class="sat-zoom-btn" data-deg="2" title="Inner core (2°)">2°</button>
+                    </div>
                     <button id="sat-save" class="sat-anim-btn" title="Save image">&#128190;</button>
                     <span id="sat-load-status" class="sat-load-status"></span>
                 </div>
@@ -584,8 +576,7 @@
 
         // Auto-switch to Satellite tab if URL contains view=satellite
         if (window.location.hash.indexOf('view=satellite') !== -1) {
-            // Defer to after DOM + scripts finish loading
-            setTimeout(function () { window.switchIRView('satellite'); }, 100);
+            window.switchIRView('satellite');
         }
     })();
     </script>

@@ -20,7 +20,7 @@
 /* ── Map ─────────────────────────────────────────────────────── */
 .ir-map {
     position: absolute;
-    top: 52px;    /* below topbar */
+    top: 85px;    /* below topbar + secondary bar */
     left: 0;
     right: 0;
     bottom: 0;
