@@ -2345,6 +2345,14 @@
                 updateAnimCounter();
             }
             console.log('[RT Monitor] All ' + total + ' IR frames pre-loaded (' + detailSatName + '), ' + validFrames.length + ' valid');
+            // All GIBS tiles loaded — start raw Tb pre-fetch for colormap upgrade
+            _fetchRawTbIncremental(currentStormId, true, function () {
+                if (productMode === 'eir' && rawTbFrames.length > 0 && detailMap) {
+                    showLoadingProgress(false);
+                    _applyRawTbToMap();
+                    console.log('[RT Monitor] Auto-applied Enhanced IR colormap (' + rawTbFrames.length + ' frames)');
+                }
+            });
         }
     }
 
@@ -2357,7 +2365,6 @@
         var storm = _deferredStormRef;
         if (!storm) return;
 
-        // Fire all panel requests immediately — these are lightweight
         _rtLoadModelForecasts(storm);
         _rtLoadWeatherlab(storm);
         _rtLoadDmEnsemble(storm);
@@ -2375,19 +2382,9 @@
                 }
             }
         });
-
-        // Start raw Tb pre-fetch after a short delay so panel requests
-        // get processed first on the backend (same Cloud Run instance).
-        setTimeout(function () {
-            if (storm.atcf_id !== currentStormId) return;  // user navigated away
-            _fetchRawTbIncremental(currentStormId, true, function () {
-                if (productMode === 'eir' && rawTbFrames.length > 0 && detailMap) {
-                    showLoadingProgress(false);
-                    _applyRawTbToMap();
-                    console.log('[RT Monitor] Auto-applied Enhanced IR colormap (' + rawTbFrames.length + ' frames)');
-                }
-            });
-        }, 3000);
+        // Raw Tb pre-fetch starts when ALL GIBS tiles finish loading
+        // (see onFrameLayerLoaded). Panel requests get a natural head
+        // start since they fire on the first tile, not the last.
     }
 
     /** Fallback: load GIBS tile layers for animation (used when image overlay fails) */
