@@ -446,7 +446,7 @@
                 <div class="sat-loading-msg">Loading storms&hellip;</div>
             </div>
             <div class="sat-sidebar-section">
-                <label for="sat-colormap-select">Colormap</label>
+                <label for="sat-colormap-select">IR Colormap</label>
                 <select id="sat-colormap-select">
                     <option value="claude-ir">Claude IR</option>
                     <option value="enhanced">Enhanced</option>
@@ -466,24 +466,43 @@
         <button id="sat-sidebar-toggle" class="sat-sidebar-toggle" title="Show storm list">&#9776; Storms</button>
         <div id="sat-canvas-wrap" class="sat-canvas-wrap">
             <div class="sat-canvas-area">
-                <div id="sat-colorbar-wrap" class="sat-colorbar-wrap">
-                    <canvas id="sat-colorbar" width="20" height="255"></canvas>
-                    <div class="sat-colorbar-labels">
-                        <span id="sat-cb-warm"></span>
-                        <span id="sat-cb-cold"></span>
+                <!-- Split panels -->
+                <div class="sat-split-panels">
+                    <!-- Left: IR panel -->
+                    <div class="sat-panel" id="sat-panel-ir">
+                        <div class="sat-panel-label">Enhanced IR</div>
+                        <div class="sat-panel-canvas-wrap">
+                            <canvas id="sat-canvas-ir"></canvas>
+                            <canvas id="sat-overlay-ir" class="sat-overlay-canvas"></canvas>
+                        </div>
+                        <div class="sat-axes-y sat-axes-y-left" id="sat-axes-y-ir"></div>
+                        <div class="sat-axes-x" id="sat-axes-x-ir"></div>
+                    </div>
+                    <!-- Right: Vis/WV panel -->
+                    <div class="sat-panel" id="sat-panel-right">
+                        <div class="sat-panel-label" id="sat-right-label">Water Vapor</div>
+                        <div class="sat-panel-canvas-wrap">
+                            <canvas id="sat-canvas-right"></canvas>
+                            <canvas id="sat-overlay-right" class="sat-overlay-canvas"></canvas>
+                        </div>
+                        <div class="sat-axes-y sat-axes-y-right" id="sat-axes-y-right"></div>
+                        <div class="sat-axes-x" id="sat-axes-x-right"></div>
                     </div>
                 </div>
-                <canvas id="sat-canvas"></canvas>
+                <!-- Hover tooltip (shared, follows cursor) -->
                 <div id="sat-tooltip" class="sat-tooltip"></div>
+                <!-- Loading overlay -->
                 <div id="sat-loader" class="sat-loader">
                     <div class="sat-spinner"></div>
                     <div id="sat-loader-msg" class="sat-loader-msg">Loading satellite data&hellip;</div>
                 </div>
+                <!-- No-storms message -->
                 <div id="sat-no-storms" class="sat-no-storms" style="display:none;">
                     <h2>No Active Tropical Cyclones</h2>
                     <p>Check back during an active storm for satellite imagery.</p>
                 </div>
             </div>
+            <!-- Animation bar -->
             <div id="sat-anim-bar" class="sat-anim-bar">
                 <div class="sat-anim-controls">
                     <button id="sat-prev" class="sat-anim-btn" title="Previous frame (Left arrow)">&#9664;</button>
@@ -492,6 +511,8 @@
                     <input id="sat-slider" type="range" min="0" max="0" value="0" class="sat-slider">
                     <span id="sat-frame-counter" class="sat-frame-counter">0 / 0</span>
                     <button id="sat-speed" class="sat-anim-btn sat-speed-btn" title="Cycle animation speed">1x</button>
+                    <button id="sat-zoom" class="sat-zoom-btn" title="Toggle zoom (10° / 5°)">10°</button>
+                    <span id="sat-load-status" class="sat-load-status"></span>
                 </div>
                 <div class="sat-anim-info">
                     <span id="sat-timestamp" class="sat-timestamp"></span>

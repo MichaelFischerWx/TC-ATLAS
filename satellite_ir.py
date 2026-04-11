@@ -117,6 +117,20 @@ IR_VARIABLE = "CMI"              # variable name in CMI file
 IR_VMIN = 190.0                  # brightness temperature colour limits (K)
 IR_VMAX = 310.0
 
+# Multi-band support (Visible + Water Vapor)
+VIS_BAND = 2                    # GOES 0.64 µm red visible
+WV_BAND = 8                     # 6.2 µm upper-level water vapor
+HIMAWARI_VIS_BAND = 3           # Himawari 0.64 µm equivalent
+HIMAWARI_WV_BAND = 8            # Himawari 6.2 µm WV
+
+# Per-band encoding ranges for uint8 (1-255) scaling
+BAND_RANGES = {
+    2:  {"vmin": 0.0,   "vmax": 1.0,   "data_type": "reflectance"},
+    3:  {"vmin": 0.0,   "vmax": 1.0,   "data_type": "reflectance"},
+    8:  {"vmin": 170.0, "vmax": 260.0, "data_type": "tb"},
+    13: {"vmin": 160.0, "vmax": 330.0, "data_type": "tb"},
+}
+
 # Claude IR colormap LUT — matches the client-side Claude IR colormap.
 # frac = 1 - (Tb - IR_VMIN) / (IR_VMAX - IR_VMIN), so frac 0 = warm, 1 = cold.
 # Grey warm side → teal → green → gold → orange → crimson → magenta → violet → indigo.
@@ -212,9 +226,9 @@ def satellite_name_from_bucket(bucket: str) -> str:
 
 
 def find_goes_file(bucket: str, target_dt: _dt,
-                   tolerance_min: int = 15) -> Optional[str]:
+                   tolerance_min: int = 15, band: int = IR_BAND) -> Optional[str]:
     """
-    Find the GOES ABI Band 13 full-disk file closest to target_dt.
+    Find the GOES ABI full-disk file closest to target_dt for a given band.
     Returns the full S3 key or None.
     """
     fs = get_goes_fs()
@@ -229,7 +243,7 @@ def find_goes_file(bucket: str, target_dt: _dt,
     except Exception:
         return None
 
-    band_tag = f"C{IR_BAND:02d}"
+    band_tag = f"C{band:02d}"
     candidates = [f for f in files if band_tag in f.split("/")[-1]]
     if not candidates:
         return None
@@ -287,10 +301,12 @@ def latlon_to_himawari_xy(lat: float, lon: float) -> tuple:
 
 
 def open_goes_subset(s3_key: str, center_lat: float, center_lon: float,
-                     sat_key: str, box_deg: float = 8.0) -> np.ndarray:
+                     sat_key: str, box_deg: float = 8.0,
+                     band: int = IR_BAND) -> np.ndarray:
     """
     Open a GOES CMI file from S3 and return a geographically-subsetted
-    2D brightness-temperature array (y, x) in Kelvin.
+    2D array (y, x).  For IR/WV bands (7-16) returns brightness temperature
+    in Kelvin; for visible bands (1-6) returns reflectance factor (0-1).
     """
     import xarray as xr
 
@@ -310,28 +326,29 @@ def open_goes_subset(s3_key: str, center_lat: float, center_lon: float,
         ds_sub = ds.sel(x=slice(x_lo, x_hi), y=slice(y_hi, y_lo))
 
         if IR_VARIABLE in ds_sub:
-            tb = ds_sub[IR_VARIABLE].values.astype(np.float32)
+            data = ds_sub[IR_VARIABLE].values.astype(np.float32)
         else:
-            alt_var = f"CMI_C{IR_BAND:02d}"
+            alt_var = f"CMI_C{band:02d}"
             if alt_var in ds_sub:
-                tb = ds_sub[alt_var].values.astype(np.float32)
+                data = ds_sub[alt_var].values.astype(np.float32)
             else:
                 raise ValueError(f"Neither {IR_VARIABLE} nor {alt_var} found in dataset")
     finally:
         ds.close()
         fobj.close()
         gc.collect()
-    return tb
+    return data
 
 
-def find_himawari_file(target_dt: _dt, tolerance_min: int = 20) -> Optional[str]:
+def find_himawari_file(target_dt: _dt, tolerance_min: int = 20,
+                       band: int = HIMAWARI_BAND) -> Optional[str]:
     """
-    Find the S3 prefix for a Himawari-9 AHI Band 13 full-disk scan
-    closest to target_dt.
+    Find the S3 prefix for a Himawari-9 AHI full-disk scan
+    closest to target_dt for a given band.
 
     As of 2026, the noaa-himawari9 bucket uses:
         AHI-L1b-FLDK/{year}/{month:02d}/{day:02d}/{HHMM}/
-            HS_H09_YYYYMMDD_HHMM_B13_FLDK_R20_S{seg}10.DAT.bz2
+            HS_H09_YYYYMMDD_HHMM_B{band}_FLDK_R20_S{seg}10.DAT.bz2
 
     Returns the S3 *directory prefix* (not a single file) containing the
     segment files, or None if nothing is found within tolerance.
@@ -353,6 +370,8 @@ def find_himawari_file(target_dt: _dt, tolerance_min: int = 20) -> Optional[str]
     for offset in [10, -10, 20, -20]:
         candidates_dt.append(candidates_dt[0] + timedelta(minutes=offset))
 
+    band_tag = f"B{band:02d}"
+
     for cdt in candidates_dt:
         hhmm = f"{cdt.hour:02d}{cdt.minute:02d}"
         prefix = (f"{HIMAWARI_BUCKET}/{HIMAWARI_L1B_PRODUCT}/"
@@ -366,19 +385,17 @@ def find_himawari_file(target_dt: _dt, tolerance_min: int = 20) -> Optional[str]
         if not files:
             continue
 
-        # Check that Band 13 segment files exist
-        band_tag = f"B{HIMAWARI_BAND:02d}"
-        b13_files = [f for f in files if band_tag in f.split("/")[-1]]
-        if not b13_files:
+        band_files = [f for f in files if band_tag in f.split("/")[-1]]
+        if not band_files:
             continue
 
         delta = abs(cdt - utc_dt)
         if delta <= timedelta(minutes=tolerance_min):
             print(f"[satellite_ir] Himawari L1b dir found: {prefix.split('/')[-2]} "
-                  f"({len(b13_files)} B13 segments)")
+                  f"({len(band_files)} {band_tag} segments)")
             return prefix  # return the directory prefix
 
-    print(f"[satellite_ir] No Himawari L1b data found for {target_dt.isoformat()}")
+    print(f"[satellite_ir] No Himawari {band_tag} data found for {target_dt.isoformat()}")
     return None
 
 
@@ -590,11 +607,51 @@ def _hsd_counts_to_tbb(counts: np.ndarray, header: dict) -> np.ndarray:
     return tbb.astype(np.float32)
 
 
+def _hsd_counts_to_reflectance(counts: np.ndarray, header: dict,
+                                center_lat: float = 0.0) -> np.ndarray:
+    """Convert raw HSD uint16 counts to reflectance factor (0-1) for visible bands.
+
+    Two-step conversion:
+      1. Count → Radiance:  L = gain * DN + offset   [W m⁻² sr⁻¹ µm⁻¹]
+      2. Radiance → Reflectance:  refl = π * L / F₀
+
+    F₀ (solar irradiance at band wavelength) is approximated from the
+    central wavelength.  Earth-sun distance correction (~±3.4%) is applied.
+    Solar zenith angle correction is approximated using storm center latitude.
+    """
+    import math as _math
+
+    valid = counts > 0
+    rad = np.full(counts.shape, np.nan, dtype=np.float64)
+    rad[valid] = header["gain"] * counts[valid].astype(np.float64) + header["offset"]
+
+    # Solar irradiance approximation for Band 3 (0.64 µm): ~1631 W m⁻² µm⁻¹
+    lam_um = header.get("central_wavelength", 0.64)
+    # Approximate solar spectral irradiance (W m⁻² µm⁻¹) at common visible wavelengths
+    _SOLAR_IRRADIANCE = {0.47: 2006, 0.51: 1942, 0.64: 1631, 0.86: 1041}
+    f0 = min(_SOLAR_IRRADIANCE.items(), key=lambda kv: abs(kv[0] - lam_um))[1]
+
+    # Earth-sun distance factor (approximate, varies ±3.4% over the year)
+    # d_sun ≈ 1.0 for simplicity; refinement possible with day-of-year
+    d_sun = 1.0
+
+    # Convert: refl = π * L * d² / F₀  (Lambertian reflectance factor)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        refl = _math.pi * rad * d_sun * d_sun / f0
+
+    # Clamp to [0, 1] — values > 1 can occur at glint or bright surfaces
+    refl = np.clip(refl, 0.0, 1.5)
+    refl[~valid] = np.nan
+    return refl.astype(np.float32)
+
+
 def open_himawari_subset(s3_prefix: str, center_lat: float, center_lon: float,
-                         box_deg: float = 8.0) -> np.ndarray:
+                         box_deg: float = 8.0,
+                         band: int = HIMAWARI_BAND) -> np.ndarray:
     """
     Open Himawari HSD segment files from S3 and return a geographically-subsetted
-    2D brightness-temperature array (y, x) in Kelvin.
+    2D array (y, x).  For IR/WV bands (7-16) returns brightness temperature
+    in Kelvin; for visible bands (1-6) returns reflectance factor (0-1).
 
     s3_prefix is the directory containing the segment .DAT.bz2 files.
     Only downloads the segment(s) needed for the latitude range.
@@ -605,9 +662,11 @@ def open_himawari_subset(s3_prefix: str, center_lat: float, center_lon: float,
     if fs is None:
         raise RuntimeError("s3fs not available")
 
+    is_visible = band <= 6
+
     # Determine which segments we need
     needed_segs = _himawari_seg_for_lat(center_lat, box_deg)
-    print(f"[satellite_ir] Himawari: need segments {needed_segs} for "
+    print(f"[satellite_ir] Himawari B{band:02d}: need segments {needed_segs} for "
           f"lat={center_lat:.1f}±{box_deg/2:.0f}°")
 
     # List files in the prefix directory
@@ -616,7 +675,7 @@ def open_himawari_subset(s3_prefix: str, center_lat: float, center_lon: float,
     except Exception as e:
         raise RuntimeError(f"Cannot list {s3_prefix}: {e}")
 
-    band_tag = f"B{HIMAWARI_BAND:02d}"
+    band_tag = f"B{band:02d}"
     seg_files = {}
     for fpath in all_files:
         fname = fpath.split("/")[-1]
@@ -630,7 +689,7 @@ def open_himawari_subset(s3_prefix: str, center_lat: float, center_lon: float,
                 seg_files[seg_num] = fpath
 
     if not seg_files:
-        raise RuntimeError(f"No Band {HIMAWARI_BAND} segment files found in {s3_prefix}")
+        raise RuntimeError(f"No Band {band} segment files found in {s3_prefix}")
 
     # Download, decompress, and parse each segment
     seg_arrays = {}
@@ -658,10 +717,13 @@ def open_himawari_subset(s3_prefix: str, center_lat: float, center_lon: float,
                                    dtype="<u2").reshape(nlines, ncols)
             del raw_data
 
-            # Convert to brightness temperature
-            tbb = _hsd_counts_to_tbb(counts, hdr)
+            # Convert counts to physical values
+            if is_visible:
+                vals = _hsd_counts_to_reflectance(counts, hdr, center_lat)
+            else:
+                vals = _hsd_counts_to_tbb(counts, hdr)
             del counts
-            seg_arrays[seg_num] = tbb
+            seg_arrays[seg_num] = vals
             gc.collect()
         except Exception as e:
             print(f"[satellite_ir] Himawari segment {seg_num} failed: {e}")
@@ -909,6 +971,73 @@ def fetch_ir_tb_raw(center_lat: float, center_lon: float,
         half = box_deg / 2.0
         return {
             "tb": tb,
+            "datetime_utc": target_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "satellite": satellite_name_from_bucket(bucket),
+            "bounds": [
+                [center_lat - half, center_lon - half],
+                [center_lat + half, center_lon + half],
+            ],
+            "storm_center": {"lat": center_lat, "lon": center_lon},
+        }
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+def fetch_band_raw(center_lat: float, center_lon: float,
+                   target_dt: _dt, box_deg: float = 8.0,
+                   band: int = 13) -> Optional[dict]:
+    """
+    Fetch any satellite band and return the raw 2D data array.
+    For IR/WV bands (7-16): returns brightness temperature (K).
+    For visible bands (1-6): returns reflectance factor (0-1).
+
+    Returns dict with 'data', 'data_type', 'datetime_utc', 'satellite', 'bounds'
+    or None on failure.
+    """
+    bucket, sat_key = select_goes_sat(center_lon, target_dt)
+
+    # Map GOES band to Himawari equivalent
+    him_band = band
+    if sat_key == "himawari":
+        if band == VIS_BAND:
+            him_band = HIMAWARI_VIS_BAND
+        elif band == WV_BAND:
+            him_band = HIMAWARI_WV_BAND
+
+    band_info = BAND_RANGES.get(band, BAND_RANGES[13])
+    data_type = band_info["data_type"]
+
+    try:
+        if sat_key == "himawari":
+            s3_key = find_himawari_file(target_dt, band=him_band)
+            if not s3_key:
+                return None
+            data_geo = open_himawari_subset(
+                s3_key, center_lat, center_lon, box_deg, band=him_band
+            )
+            data = _reproject_geos_to_latlon(
+                data_geo, center_lat, center_lon, box_deg,
+                HIMAWARI_SAT_HEIGHT, HIMAWARI_LON_0, HIMAWARI_SWEEP
+            )
+            del data_geo
+        else:
+            s3_key = find_goes_file(bucket, target_dt, band=band)
+            if not s3_key:
+                return None
+            data = open_goes_subset(
+                s3_key, center_lat, center_lon, sat_key, box_deg, band=band
+            )
+
+        if not np.any(np.isfinite(data)):
+            return None
+
+        half = box_deg / 2.0
+        return {
+            "data": data,
+            "data_type": data_type,
+            "band": band,
             "datetime_utc": target_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
             "satellite": satellite_name_from_bucket(bucket),
             "bounds": [

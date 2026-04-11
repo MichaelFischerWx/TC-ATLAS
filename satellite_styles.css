@@ -228,13 +228,60 @@
     flex: 1;
     position: relative;
     display: flex;
-    align-items: center;
+    align-items: stretch;
     justify-content: center;
     overflow: hidden;
     min-height: 0;
 }
 
-#sat-canvas {
+/* ── Split Panels ───────────────────────────────────────────── */
+
+.sat-split-panels {
+    display: flex;
+    flex: 1;
+    gap: 2px;
+    min-height: 0;
+    padding: 0;
+}
+
+.sat-panel {
+    flex: 1;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    min-width: 0;
+}
+
+.sat-panel-label {
+    position: absolute;
+    top: 6px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 6;
+    background: #181b24cc;
+    color: #94a3b8;
+    font-size: 11px;
+    font-weight: 500;
+    padding: 2px 10px;
+    border-radius: 3px;
+    pointer-events: none;
+    white-space: nowrap;
+}
+
+.sat-panel-canvas-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+}
+
+.sat-panel canvas {
     display: block;
     max-width: 100%;
     max-height: 100%;
@@ -243,40 +290,47 @@
     cursor: crosshair;
 }
 
-/* ── Colorbar ───────────────────────────────────────────────── */
-
-.sat-colorbar-wrap {
+.sat-overlay-canvas {
     position: absolute;
-    left: 12px;
     top: 50%;
-    transform: translateY(-50%);
-    display: flex;
-    flex-direction: row;
-    align-items: stretch;
-    gap: 4px;
-    z-index: 5;
+    left: 50%;
+    transform: translate(-50%, -50%);
     pointer-events: none;
-    opacity: 0;
-    transition: opacity 0.3s;
+    image-rendering: auto;
 }
 
-.sat-colorbar-wrap.visible {
-    opacity: 1;
-}
+/* ── Lat/Lon Axes ───────────────────────────────────────────── */
 
-#sat-colorbar {
-    border-radius: 3px;
-    border: 1px solid #2a2d38;
-}
-
-.sat-colorbar-labels {
+.sat-axes-y {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 32px;
     display: flex;
     flex-direction: column;
     justify-content: space-between;
-    font-size: 10px;
+    pointer-events: none;
+    padding: 4px 0;
+}
+
+.sat-axes-y-left { left: 2px; }
+.sat-axes-y-right { right: 2px; text-align: right; }
+
+.sat-axes-x {
+    position: absolute;
+    bottom: 2px;
+    left: 32px;
+    right: 32px;
+    display: flex;
+    justify-content: space-between;
+    pointer-events: none;
+}
+
+.sat-axis-label {
     font-family: 'JetBrains Mono', monospace;
-    color: #8b8fa4;
-    padding: 1px 0;
+    font-size: 9px;
+    color: #5c6070;
+    text-shadow: 0 0 3px #0a0c12, 0 0 6px #0a0c12;
 }
 
 /* ── Hover Tooltip ──────────────────────────────────────────── */
@@ -490,6 +544,44 @@ input[type="range"].sat-slider {
     margin-left: auto;
 }
 
+/* ── Loading Status ─────────────────────────────────────────── */
+
+.sat-load-status {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: #4a8cff;
+    margin-left: 4px;
+    white-space: nowrap;
+}
+
+.sat-load-status:empty {
+    display: none;
+}
+
+/* ── Zoom Toggle ────────────────────────────────────────────── */
+
+.sat-zoom-btn {
+    background: #12141c;
+    color: #8b8fa4;
+    border: 1px solid #2a2d38;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 11px;
+    font-family: 'JetBrains Mono', monospace;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+
+.sat-zoom-btn:hover {
+    background: #1e2130;
+    color: #e2e4ea;
+}
+
+.sat-zoom-btn.active {
+    background: #2a2d38;
+    color: #7dd3fc;
+}
+
 /* ── Responsive ─────────────────────────────────────────────── */
 
 @media (max-width: 768px) {
@@ -515,8 +607,8 @@ input[type="range"].sat-slider {
         display: block;
     }
 
-    .sat-colorbar-wrap {
-        left: 8px;
+    .sat-split-panels {
+        flex-direction: column;
     }
 }
 

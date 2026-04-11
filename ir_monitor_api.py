@@ -43,8 +43,12 @@ from satellite_ir import (
     build_frame_times,
     fetch_ir_frame,
     fetch_ir_tb_raw,
+    fetch_band_raw,
     compute_ir_vigor,
     render_vigor_png,
+    BAND_RANGES,
+    VIS_BAND,
+    WV_BAND,
 )
 
 try:
@@ -143,6 +147,58 @@ def _gcs_rt_put(atcf_id: str, dt_str: str, frame: dict):
         except Exception:
             pass
     threading.Thread(target=_upload, daemon=True).start()
+
+
+def _gcs_band_get(band: int, atcf_id: str, dt_str: str) -> dict | None:
+    """Try to read a cached band frame from GCS."""
+    bucket = _get_rt_gcs_bucket()
+    if bucket is None:
+        return None
+    key = f"{_GCS_RT_VERSION}/band-raw/{band}/{atcf_id}/{dt_str}.json"
+    try:
+        blob = bucket.blob(key)
+        data = blob.download_as_bytes(timeout=5)
+        return json.loads(data)
+    except Exception:
+        return None
+
+
+def _gcs_band_put(band: int, atcf_id: str, dt_str: str, frame: dict):
+    """Write a band frame to GCS (fire-and-forget background thread)."""
+    bucket = _get_rt_gcs_bucket()
+    if bucket is None:
+        return
+    def _upload():
+        key = f"{_GCS_RT_VERSION}/band-raw/{band}/{atcf_id}/{dt_str}.json"
+        try:
+            blob = bucket.blob(key)
+            blob.upload_from_string(
+                json.dumps(frame, separators=(",", ":")),
+                content_type="application/json",
+                timeout=15,
+            )
+        except Exception:
+            pass
+    threading.Thread(target=_upload, daemon=True).start()
+
+
+def _solar_elevation(lat: float, lon: float, dt: _dt) -> float:
+    """Approximate solar elevation angle in degrees at (lat, lon, dt)."""
+    utc = dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+    day_of_year = utc.timetuple().tm_yday
+    # Solar declination (approximate)
+    decl = -23.44 * math.cos(math.radians(360 / 365 * (day_of_year + 10)))
+    # Hour angle
+    utc_hours = utc.hour + utc.minute / 60.0 + utc.second / 3600.0
+    ha = (utc_hours - 12.0) * 15.0 + lon
+    # Solar elevation
+    lat_r = math.radians(lat)
+    decl_r = math.radians(decl)
+    ha_r = math.radians(ha)
+    sin_elev = (math.sin(lat_r) * math.sin(decl_r) +
+                math.cos(lat_r) * math.cos(decl_r) * math.cos(ha_r))
+    return math.degrees(math.asin(max(-1, min(1, sin_elev))))
+
 
 # Saffir-Simpson thresholds
 _SS_THRESHOLDS = [
@@ -1150,6 +1206,75 @@ def _prefetch_ir_frames(storms: list):
                     print(f"[IR Pre-fetch] {atcf_id}: cached {gcs_fetched} raw Tb + {jpg_cached} JPG frames to GCS")
                 total_gcs_fetched += gcs_fetched
 
+            # ── Multi-band prefetch (WV + Visible) ───────────────────
+            # Cache WV (Band 8) and Visible (Band 2/3) frames to GCS
+            # so the split-panel Satellite viewer loads instantly.
+            for extra_band in [WV_BAND, VIS_BAND]:
+                band_fetched = 0
+                band_info = BAND_RANGES.get(extra_band, BAND_RANGES[13])
+                vmin, vmax = band_info["vmin"], band_info["vmax"]
+                scale = 254.0 / (vmax - vmin)
+
+                for target_dt in reversed(frame_times):
+                    dt_str = target_dt.strftime("%Y%m%d%H%M")
+
+                    # Skip if already cached
+                    if _gcs_band_get(extra_band, atcf_id.upper(), dt_str) is not None:
+                        continue
+
+                    # Skip visible at nighttime (solar elevation < -6°)
+                    if extra_band == VIS_BAND:
+                        sun_el = _solar_elevation(
+                            center_lat, center_lon, target_dt
+                        )
+                        if sun_el < -6:
+                            continue
+
+                    try:
+                        raw = fetch_band_raw(
+                            center_lat, center_lon, target_dt, box_deg,
+                            band=extra_band
+                        )
+                    except Exception:
+                        continue
+
+                    if raw and raw.get("data") is not None:
+                        data = raw["data"]
+                        arr = np.asarray(data, dtype=np.float32)
+                        mask = ~np.isfinite(arr)
+                        scaled = np.clip((arr - vmin) * scale + 1, 1, 255)
+                        scaled[mask] = 0
+                        encoded = scaled.astype(np.uint8)
+
+                        half = box_deg / 2.0
+                        frame_result = {
+                            "tb_data": base64.b64encode(
+                                encoded.tobytes()
+                            ).decode("ascii"),
+                            "tb_rows": encoded.shape[0],
+                            "tb_cols": encoded.shape[1],
+                            "tb_vmin": vmin,
+                            "tb_vmax": vmax,
+                            "band": extra_band,
+                            "data_type": band_info["data_type"],
+                            "datetime_utc": raw["datetime_utc"],
+                            "satellite": raw.get("satellite", ""),
+                            "bounds": raw.get("bounds", [
+                                [center_lat - half, center_lon - half],
+                                [center_lat + half, center_lon + half],
+                            ]),
+                        }
+                        _gcs_band_put(extra_band, atcf_id.upper(), dt_str, frame_result)
+                        band_fetched += 1
+
+                        del data, arr, mask, scaled, encoded
+                        gc.collect()
+
+                    time.sleep(0.3)
+
+                if band_fetched:
+                    print(f"[IR Pre-fetch] {atcf_id}: cached {band_fetched} Band {extra_band} frames to GCS")
+
         print(f"[IR Pre-fetch] Done — {total_fetched} new PNG frames, "
               f"{total_cached} already cached, "
               f"{total_gcs_fetched} raw Tb frames cached to GCS")
@@ -1498,6 +1623,107 @@ def get_storm_ir_raw_frame(
     _gcs_rt_put(atcf_id.upper(), dt_str, frame_result)
 
     del tb, arr, mask, scaled, encoded
+    gc.collect()
+
+    return JSONResponse(
+        content=frame_result,
+        headers={"Cache-Control": "public, max-age=300"},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Multi-Band Raw Frame Endpoint (Visible, WV, IR)
+# ---------------------------------------------------------------------------
+
+@router.get("/storm/{atcf_id}/band-raw-frame")
+def get_storm_band_raw_frame(
+    atcf_id: str,
+    band: int = Query(8, ge=1, le=16, description="ABI band number (2=Vis, 8=WV, 13=IR)"),
+    frame_index: int = Query(0, ge=0, description="Frame index (0 = most recent)"),
+    lookback_hours: float = Query(3.0, ge=1, le=12),
+    radius_deg: float = Query(10.0, ge=1.0, le=12.0),
+    interval_min: int = Query(30, ge=10, le=60),
+):
+    """
+    Fetch a single raw data frame for any satellite band.
+    Band 2/3 = Visible (reflectance 0-1), Band 8 = Water Vapor (Tb K),
+    Band 13 = Clean IR (Tb K).
+    """
+    _ensure_fresh_cache()
+    storm = None
+    with _active_storms_lock:
+        for s in _active_storms_cache["storms"]:
+            if s["atcf_id"].upper() == atcf_id.upper():
+                storm = dict(s)
+                break
+
+    if not storm:
+        raise HTTPException(status_code=404, detail=f"Storm {atcf_id} not found")
+
+    center_lat = storm["lat"]
+    center_lon = storm["lon"]
+    box_deg = radius_deg * 2
+    center_dt = _dt.now(timezone.utc)
+
+    frame_times = build_frame_times(center_dt, lookback_hours, interval_min)
+    frame_times = list(reversed(frame_times))
+
+    if frame_index >= len(frame_times):
+        raise HTTPException(status_code=400, detail=f"frame_index {frame_index} out of range")
+
+    target_dt = frame_times[frame_index]
+    dt_str = target_dt.strftime("%Y%m%d%H%M")
+    half = box_deg / 2.0
+
+    # Check GCS cache
+    cached = _gcs_band_get(band, atcf_id.upper(), dt_str)
+    if cached is not None:
+        cached["frame_index"] = frame_index
+        cached["total_frames"] = len(frame_times)
+        return JSONResponse(
+            content=cached,
+            headers={"Cache-Control": "public, max-age=300"},
+        )
+
+    # Fetch from satellite
+    raw = fetch_band_raw(center_lat, center_lon, target_dt, box_deg, band=band)
+    if not raw or raw.get("data") is None:
+        raise HTTPException(status_code=502, detail=f"No Band {band} data for frame {frame_index}")
+
+    data = raw["data"]
+    data_type = raw["data_type"]
+    band_info = BAND_RANGES.get(band, BAND_RANGES[13])
+    vmin, vmax = band_info["vmin"], band_info["vmax"]
+
+    arr = np.asarray(data, dtype=np.float32)
+    mask = ~np.isfinite(arr) | (arr < vmin * 0.5 if data_type == "tb" else arr < -0.01)
+    scale = 254.0 / (vmax - vmin)
+    scaled = np.clip((arr - vmin) * scale + 1, 1, 255)
+    scaled[mask] = 0
+    encoded = scaled.astype(np.uint8)
+
+    frame_result = {
+        "tb_data": base64.b64encode(encoded.tobytes()).decode("ascii"),
+        "tb_rows": encoded.shape[0],
+        "tb_cols": encoded.shape[1],
+        "tb_vmin": vmin,
+        "tb_vmax": vmax,
+        "band": band,
+        "data_type": data_type,
+        "datetime_utc": raw["datetime_utc"],
+        "satellite": raw.get("satellite", ""),
+        "bounds": raw.get("bounds", [
+            [center_lat - half, center_lon - half],
+            [center_lat + half, center_lon + half],
+        ]),
+        "frame_index": frame_index,
+        "total_frames": len(frame_times),
+    }
+
+    # Cache to GCS
+    _gcs_band_put(band, atcf_id.upper(), dt_str, frame_result)
+
+    del data, arr, mask, scaled, encoded
     gc.collect()
 
     return JSONResponse(
