@@ -5649,30 +5649,36 @@
 
     // ── GDMI Chart PNG Export ─────────────────────────────────
     var _exportPopup = null;  // currently visible popup element
+    var _exportTheme = 'dark';  // persistent preference
 
     function _rtDismissExportPopup() {
         if (_exportPopup && _exportPopup.parentNode) {
             _exportPopup.parentNode.removeChild(_exportPopup);
         }
         _exportPopup = null;
-        document.removeEventListener('click', _rtDismissExportPopup);
     }
 
     window._rtShowExportMenu = function (chartType, btnEl) {
+        // If popup already open for this button, close it
+        if (_exportPopup && _exportPopup.parentNode === btnEl) {
+            _rtDismissExportPopup();
+            return;
+        }
         _rtDismissExportPopup();
 
         var popup = document.createElement('div');
         popup.className = 'rt-dm-export-popup';
+        popup.onclick = function (e) { e.stopPropagation(); };
 
         var darkBtn = document.createElement('button');
         darkBtn.className = 'export-dark';
         darkBtn.textContent = 'Dark';
-        darkBtn.onclick = function (e) { e.stopPropagation(); _rtDismissExportPopup(); _rtExportDmChart(chartType, 'dark'); };
+        darkBtn.onclick = function () { _rtDismissExportPopup(); _rtExportDmChart(chartType, 'dark'); };
 
         var lightBtn = document.createElement('button');
         lightBtn.className = 'export-light';
         lightBtn.textContent = 'Light';
-        lightBtn.onclick = function (e) { e.stopPropagation(); _rtDismissExportPopup(); _rtExportDmChart(chartType, 'light'); };
+        lightBtn.onclick = function () { _rtDismissExportPopup(); _rtExportDmChart(chartType, 'light'); };
 
         popup.appendChild(darkBtn);
         popup.appendChild(lightBtn);
@@ -5682,10 +5688,16 @@
         btnEl.appendChild(popup);
         _exportPopup = popup;
 
-        // Dismiss on outside click (after current event loop)
+        // Dismiss on outside click (next tick to avoid catching the opening click)
+        function dismissHandler(e) {
+            if (!popup.contains(e.target) && e.target !== btnEl) {
+                _rtDismissExportPopup();
+                document.removeEventListener('click', dismissHandler, true);
+            }
+        }
         setTimeout(function () {
-            document.addEventListener('click', _rtDismissExportPopup);
-        }, 0);
+            document.addEventListener('click', dismissHandler, true);
+        }, 50);
     };
 
     function _rtExportDmChart(chartType, theme) {

@@ -1907,7 +1907,7 @@ _WEATHERLAB_BASE = (
     "https://deepmind.google.com/science/weatherlab/download/cyclones/FNV3"
 )
 _weatherlab_cache: dict = {}   # (date_str, hour_str) -> {"data": {...}, "ts": float}
-_WEATHERLAB_CACHE_TTL = 1800   # 30 minutes
+_WEATHERLAB_CACHE_TTL = 7200   # 2 hours (CSV only changes every 6h)
 _WEATHERLAB_CACHE_MAX = 4
 
 
@@ -2113,7 +2113,7 @@ _WEATHERLAB_LARGE_BASE = (
     "FNV3_LARGE_ENSEMBLE"
 )
 _weatherlab_large_cache: dict = {}  # (date, hour) -> {"data": ..., "ts": float}
-_WEATHERLAB_LARGE_CACHE_TTL = 3600  # 1 hour (large file, changes infrequently)
+_WEATHERLAB_LARGE_CACHE_TTL = 7200  # 2 hours (CSV only changes every 6h)
 
 
 def _fetch_weatherlab_large_csv(date_str: str, hour_str: str,
@@ -2278,8 +2278,10 @@ def get_storm_weatherlab_ensemble(atcf_id: str):
     used_date = None
     used_hour = None
     for date_str, hour_str in candidates:
+        # Fetch ALL storms (no filter) so the full CSV is cached for all
+        # subsequent per-storm requests within the TTL window.
         data = _fetch_weatherlab_large_csv(date_str, hour_str,
-                                           target_track=atcf_id)
+                                           target_track=None)
         if data and atcf_id in data:
             used_date = date_str
             used_hour = hour_str
