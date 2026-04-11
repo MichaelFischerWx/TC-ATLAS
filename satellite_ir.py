@@ -117,23 +117,29 @@ IR_VARIABLE = "CMI"              # variable name in CMI file
 IR_VMIN = 190.0                  # brightness temperature colour limits (K)
 IR_VMAX = 310.0
 
-# Enhanced IR colormap LUT (cold → bright/colourful, warm → dark grey)
+# Claude IR colormap LUT — matches the client-side Claude IR colormap.
+# frac = 1 - (Tb - IR_VMIN) / (IR_VMAX - IR_VMIN), so frac 0 = warm, 1 = cold.
+# Grey warm side → teal → green → gold → orange → crimson → magenta → violet → indigo.
 _IR_STOPS = [
-    (0.00,   8,   8,   8),
-    (0.15,  40,  40,  40),
-    (0.30,  90,  90,  90),
-    (0.40, 140, 140, 140),
-    (0.50, 200, 200, 200),
-    (0.55,   0, 180, 255),
-    (0.60,   0, 100, 255),
-    (0.65,   0, 255,   0),
-    (0.70, 255, 255,   0),
-    (0.75, 255, 180,   0),
-    (0.80, 255,  80,   0),
-    (0.85, 255,   0,   0),
-    (0.90, 180,   0, 180),
-    (0.95, 255, 180, 255),
-    (1.00, 255, 255, 255),
+    (0.000,  12,  12,  22),   # 310K  warm surface: near-black
+    (0.142,  70,  70,  82),   # 293K  dark grey-blue
+    (0.225, 120, 120, 132),   # 283K  medium grey
+    (0.308, 180, 180, 192),   # 273K  light grey (freezing)
+    (0.392, 216, 218, 228),   # 263K  pale blue-grey
+    (0.475, 140, 210, 220),   # 253K  light teal
+    (0.517,  68, 180, 196),   # 248K  teal
+    (0.558,  32, 148, 166),   # 243K  deep teal
+    (0.600,  40, 178, 116),   # 238K  teal-green
+    (0.642,  96, 208,  68),   # 233K  green
+    (0.683, 192, 220,  40),   # 228K  yellow-green
+    (0.725, 238, 196,  48),   # 223K  gold
+    (0.767, 228, 132,  48),   # 218K  orange
+    (0.808, 214,  78,  56),   # 213K  red-orange
+    (0.850, 180,  36,  68),   # 208K  crimson
+    (0.892, 196,  48, 156),   # 203K  magenta
+    (0.933, 168,  64, 200),   # 198K  purple
+    (0.975, 120,  48, 180),   # 193K  deep violet
+    (1.000,  64,  24, 140),   # 183K  indigo
 ]
 
 
