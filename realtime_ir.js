@@ -2356,6 +2356,8 @@
         _deferredLoadsStarted = true;
         var storm = _deferredStormRef;
         if (!storm) return;
+
+        // Fire all panel requests immediately — these are lightweight
         _rtLoadModelForecasts(storm);
         _rtLoadWeatherlab(storm);
         _rtLoadDmEnsemble(storm);
@@ -2373,6 +2375,19 @@
                 }
             }
         });
+
+        // Start raw Tb pre-fetch after a short delay so panel requests
+        // get processed first on the backend (same Cloud Run instance).
+        setTimeout(function () {
+            if (storm.atcf_id !== currentStormId) return;  // user navigated away
+            _fetchRawTbIncremental(currentStormId, true, function () {
+                if (productMode === 'eir' && rawTbFrames.length > 0 && detailMap) {
+                    showLoadingProgress(false);
+                    _applyRawTbToMap();
+                    console.log('[RT Monitor] Auto-applied Enhanced IR colormap (' + rawTbFrames.length + ' frames)');
+                }
+            });
+        }, 3000);
     }
 
     /** Fallback: load GIBS tile layers for animation (used when image overlay fails) */
@@ -2508,18 +2523,9 @@
         // backend dependency. User sees imagery within 3-5 seconds.
         _initDetailMapGIBS(storm, satLayerName);
 
-        // ── Raw Tb pre-fetch (background) ────────────────────
-        // Fetch raw brightness temperature data from our backend
-        // for client-side colormap rendering (Enhanced, Dvorak, etc.).
-        // GIBS tiles come from NASA's CDN so this doesn't compete.
-        // When complete, auto-apply Enhanced IR colormap over GIBS.
-        _fetchRawTbIncremental(currentStormId, true, function () {
-            if (productMode === 'eir' && rawTbFrames.length > 0 && detailMap) {
-                showLoadingProgress(false);
-                _applyRawTbToMap();
-                console.log('[RT Monitor] Auto-applied Enhanced IR colormap (' + rawTbFrames.length + ' frames)');
-            }
-        });
+        // Raw Tb pre-fetch starts inside _triggerDeferredLoads() with a
+        // 3-second delay, giving panel requests (models, WeatherLab, etc.)
+        // a head start on the backend before the heavy Tb fetches begin.
 
         // Coastline overlay — Natural Earth 50m black outlines (matches global archive)
         detailMap.createPane('coastlinePane');
