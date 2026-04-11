@@ -1058,12 +1058,6 @@
             prodBtns[pb].addEventListener('click', function () {
                 var newBand = parseInt(this.getAttribute('data-band'), 10);
                 if (newBand === rightBand) return;
-                // Himawari visible (Band 3) is 0.5km resolution — segments are
-                // 16x larger than IR and cause timeouts. Block for Himawari storms.
-                if (newBand === 2 && currentStorm && currentStorm.satellite === 'Himawari-9') {
-                    alert('Visible imagery is not yet available for Himawari storms (Western Pacific, IO, SH). Use Water Vapor instead.');
-                    return;
-                }
                 rightBand = newBand;
                 rightDataType = newBand <= 6 ? 'reflectance' : 'tb';
                 if (rightLabelEl) rightLabelEl.textContent = newBand === 2 ? 'Visible' : 'Water Vapor';

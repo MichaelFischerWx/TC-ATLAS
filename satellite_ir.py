@@ -106,6 +106,15 @@ HIMAWARI_N_SEGMENTS = 10   # full disk is split into 10 latitude segments
 HIMAWARI_NLINES_PER_SEG = 550  # lines per segment at 2km resolution
 HIMAWARI_NCOLS = 5500      # columns at 2km resolution (full disk)
 
+# Per-band resolution for Himawari AHI (native pixel size in meters)
+# Band 3 = 0.5km (R05), Band 8 = 2km (R20), Band 13 = 2km (R20)
+HIMAWARI_BAND_RES_M = {
+    1: 1000, 2: 1000, 3: 500, 4: 1000,
+    5: 2000, 6: 2000, 7: 2000, 8: 2000,
+    9: 2000, 10: 2000, 11: 2000, 12: 2000,
+    13: 2000, 14: 2000, 15: 2000, 16: 2000,
+}
+
 # ---------------------------------------------------------------------------
 # Common IR settings
 # ---------------------------------------------------------------------------
@@ -399,18 +408,17 @@ def find_himawari_file(target_dt: _dt, tolerance_min: int = 20,
     return None
 
 
-def _himawari_seg_for_lat(center_lat: float, box_deg: float) -> list:
+def _himawari_seg_for_lat(center_lat: float, box_deg: float,
+                          band: int = HIMAWARI_BAND) -> list:
     """
     Determine which Himawari segment numbers (1-10) are needed
     to cover the latitude range [center_lat ± box_deg/2].
 
-    Himawari full-disk at 2km resolution: 5500 lines, 10 segments of 550 lines.
+    Each band has a native resolution; segment dimensions scale accordingly.
     Segment 1 = top of disk (northernmost), segment 10 = bottom.
-    The full disk spans approx ±80° latitude from the sub-satellite point.
     """
     pyproj = _get_pyproj()
     if pyproj is None:
-        # Fallback: return all segments
         return list(range(1, HIMAWARI_N_SEGMENTS + 1))
 
     proj = pyproj.Proj(
@@ -418,13 +426,15 @@ def _himawari_seg_for_lat(center_lat: float, box_deg: float) -> list:
         lon_0=HIMAWARI_LON_0, sweep=HIMAWARI_SWEEP,
     )
 
-    half = box_deg / 2.0
-    total_lines = HIMAWARI_NLINES_PER_SEG * HIMAWARI_N_SEGMENTS  # 5500
+    res_m = HIMAWARI_BAND_RES_M.get(band, 2000)
+    scale = 2000 / res_m  # e.g., 4 for 0.5km bands
+    nlines_per_seg = int(HIMAWARI_NLINES_PER_SEG * scale)
 
-    # Use the same pixel coordinate formula as latlon_to_pixel()
-    # in open_himawari_subset: row = loff - (y_m / sat_height) * pix_per_rad
-    loff = total_lines / 2.0        # 2750
-    pix_per_rad = HIMAWARI_SAT_HEIGHT / 2000.0  # 17893.01
+    half = box_deg / 2.0
+    total_lines = nlines_per_seg * HIMAWARI_N_SEGMENTS
+
+    loff = total_lines / 2.0
+    pix_per_rad = HIMAWARI_SAT_HEIGHT / float(res_m)
 
     segs_needed = set()
     for lat in [center_lat - half, center_lat + half, center_lat]:
@@ -434,7 +444,7 @@ def _himawari_seg_for_lat(center_lat: float, box_deg: float) -> list:
             y_angle = y_m / HIMAWARI_SAT_HEIGHT
             row = loff - y_angle * pix_per_rad
             row = max(0, min(total_lines - 1, int(round(row))))
-            seg = (row // HIMAWARI_NLINES_PER_SEG) + 1
+            seg = (row // nlines_per_seg) + 1
             seg = max(1, min(HIMAWARI_N_SEGMENTS, seg))
             segs_needed.add(seg)
         except Exception:
@@ -663,11 +673,14 @@ def open_himawari_subset(s3_prefix: str, center_lat: float, center_lon: float,
         raise RuntimeError("s3fs not available")
 
     is_visible = band <= 6
+    res_m = HIMAWARI_BAND_RES_M.get(band, 2000)
+    scale_factor = int(2000 / res_m)  # subsample factor to get to 2km (e.g., 4 for 0.5km)
 
     # Determine which segments we need
-    needed_segs = _himawari_seg_for_lat(center_lat, box_deg)
-    print(f"[satellite_ir] Himawari B{band:02d}: need segments {needed_segs} for "
-          f"lat={center_lat:.1f}±{box_deg/2:.0f}°")
+    needed_segs = _himawari_seg_for_lat(center_lat, box_deg, band=band)
+    print(f"[satellite_ir] Himawari B{band:02d} (R{res_m//100:02d}): need segments {needed_segs} for "
+          f"lat={center_lat:.1f}±{box_deg/2:.0f}°"
+          f"{' (will subsample ' + str(scale_factor) + 'x to 2km)' if scale_factor > 1 else ''}")
 
     # List files in the prefix directory
     try:
@@ -716,6 +729,10 @@ def open_himawari_subset(s3_prefix: str, center_lat: float, center_lon: float,
             counts = np.frombuffer(raw_data[data_offset:data_offset + nlines * ncols * 2],
                                    dtype="<u2").reshape(nlines, ncols)
             del raw_data
+
+            # Subsample high-res bands to 2km immediately to save memory
+            if scale_factor > 1:
+                counts = counts[::scale_factor, ::scale_factor]
 
             # Convert counts to physical values
             if is_visible:
