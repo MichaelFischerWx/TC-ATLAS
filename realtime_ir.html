@@ -581,6 +581,12 @@
                 }, 100);
             }
         };
+
+        // Auto-switch to Satellite tab if URL contains view=satellite
+        if (window.location.hash.indexOf('view=satellite') !== -1) {
+            // Defer to after DOM + scripts finish loading
+            setTimeout(function () { window.switchIRView('satellite'); }, 100);
+        }
     })();
     </script>
 </body>

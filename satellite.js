@@ -942,7 +942,10 @@
     // ── Deep Link ───────────────────────────────────────────────
 
     function getHashStorm() { var m = window.location.hash.match(/storm=([A-Za-z0-9]+)/); return m ? m[1] : null; }
-    function updateHash(stormId) { if (stormId) history.replaceState(null, '', '#storm=' + stormId); }
+    function getHashView() { return window.location.hash.indexOf('view=satellite') !== -1; }
+    function updateHash(stormId) {
+        if (stormId) history.replaceState(null, '', '#storm=' + stormId + '&view=satellite');
+    }
 
     // ── Event Binding ───────────────────────────────────────────
 
