@@ -345,7 +345,10 @@
                         <h3 class="ir-info-heading" style="margin-bottom:0;padding-bottom:0;border-bottom:none;">
                             Intensity Distribution
                         </h3>
-                        <span style="font-size:0.65rem;color:#00e5ff;">DeepMind 1K</span>
+                        <div style="display:flex;align-items:center;gap:6px;">
+                            <span style="font-size:0.65rem;color:#00e5ff;">DeepMind 1K</span>
+                            <button class="rt-dm-export-btn" onclick="window._rtShowExportMenu('intensity', this)" title="Save as PNG">&#8681;</button>
+                        </div>
                     </div>
                     <div id="rt-dm-hist-chart" style="width:100%;"></div>
                     <div style="position:relative;z-index:10;padding:4px 0 0;">
@@ -365,7 +368,8 @@
                         <h3 class="ir-info-heading" style="margin-bottom:0;padding-bottom:0;border-bottom:none;">
                             Intensity Change
                         </h3>
-                        <div style="display:flex;gap:4px;">
+                        <div style="display:flex;gap:4px;align-items:center;">
+                            <button class="rt-dm-export-btn" onclick="window._rtShowExportMenu('change', this)" title="Save as PNG">&#8681;</button>
                             <button id="rt-dm-change-12h-btn" onclick="window._rtDmChangeInterval(12)"
                                 class="rt-model-filter-btn" style="font-size:8px;padding:1px 5px;">12h</button>
                             <button id="rt-dm-change-24h-btn" onclick="window._rtDmChangeInterval(24)"
@@ -390,7 +394,10 @@
                         <h3 class="ir-info-heading" style="margin-bottom:0;padding-bottom:0;border-bottom:none;">
                             Lifetime Max Intensity
                         </h3>
-                        <span style="font-size:0.65rem;color:#00e5ff;">DeepMind 1K</span>
+                        <div style="display:flex;align-items:center;gap:6px;">
+                            <span style="font-size:0.65rem;color:#00e5ff;">DeepMind 1K</span>
+                            <button class="rt-dm-export-btn" onclick="window._rtShowExportMenu('lmi', this)" title="Save as PNG">&#8681;</button>
+                        </div>
                     </div>
                     <div id="rt-dm-lmi-chart"></div>
                 </div>

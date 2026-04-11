@@ -5644,6 +5644,189 @@
         if (lmiChart && typeof Plotly !== 'undefined') Plotly.purge(lmiChart);
     }
 
+    // ── GDMI Chart PNG Export ─────────────────────────────────
+    var _exportPopup = null;  // currently visible popup element
+
+    function _rtDismissExportPopup() {
+        if (_exportPopup && _exportPopup.parentNode) {
+            _exportPopup.parentNode.removeChild(_exportPopup);
+        }
+        _exportPopup = null;
+        document.removeEventListener('click', _rtDismissExportPopup);
+    }
+
+    window._rtShowExportMenu = function (chartType, btnEl) {
+        _rtDismissExportPopup();
+
+        var popup = document.createElement('div');
+        popup.className = 'rt-dm-export-popup';
+
+        var darkBtn = document.createElement('button');
+        darkBtn.className = 'export-dark';
+        darkBtn.textContent = 'Dark';
+        darkBtn.onclick = function (e) { e.stopPropagation(); _rtDismissExportPopup(); _rtExportDmChart(chartType, 'dark'); };
+
+        var lightBtn = document.createElement('button');
+        lightBtn.className = 'export-light';
+        lightBtn.textContent = 'Light';
+        lightBtn.onclick = function (e) { e.stopPropagation(); _rtDismissExportPopup(); _rtExportDmChart(chartType, 'light'); };
+
+        popup.appendChild(darkBtn);
+        popup.appendChild(lightBtn);
+
+        // Position relative to button
+        btnEl.style.position = 'relative';
+        btnEl.appendChild(popup);
+        _exportPopup = popup;
+
+        // Dismiss on outside click (after current event loop)
+        setTimeout(function () {
+            document.addEventListener('click', _rtDismissExportPopup);
+        }, 0);
+    };
+
+    function _rtExportDmChart(chartType, theme) {
+        if (!_rtDmEnsData || typeof Plotly === 'undefined') return;
+
+        // Map chart type to element ID and metadata
+        var chartMap = {
+            'intensity': { el: 'rt-dm-hist-chart', label: 'Intensity Distribution' },
+            'change':    { el: 'rt-dm-change-chart', label: 'Intensity Change' },
+            'lmi':       { el: 'rt-dm-lmi-chart', label: 'Lifetime Max Intensity' }
+        };
+        var info = chartMap[chartType];
+        if (!info) return;
+
+        var chartEl = document.getElementById(info.el);
+        if (!chartEl || !chartEl.data) return;
+
+        // Build descriptive title
+        var stormName = (document.getElementById('ir-detail-name') || {}).textContent || '';
+        var stormId = currentStormId || '';
+        var initTime = _rtDmEnsData.init_time || '';
+        var initFmt = '';
+        if (initTime.length >= 10) {
+            initFmt = initTime.substring(4, 6) + '/' + initTime.substring(6, 8) + ' ' + initTime.substring(8, 10) + 'Z';
+        }
+
+        var tauStr = '';
+        if (chartType === 'intensity') {
+            var taus = _rtDmEnsData.lead_times_h || [];
+            tauStr = ' \u2014 +' + (taus[_rtDmHistTauIdx] || 0) + 'h';
+        } else if (chartType === 'change') {
+            var taus = _rtDmEnsData.lead_times_h || [];
+            tauStr = ' \u2014 +' + (taus[_rtDmChangeTauIdx] || 0) + 'h (' + _rtDmChangeInt + 'h change)';
+        }
+
+        var title = 'GDMI 1K ' + info.label + ' \u2014 ' + stormName + ' (' + stormId + ')' +
+                    (initFmt ? ' \u2014 Init ' + initFmt : '') + tauStr;
+
+        // Theme-dependent colors
+        var isDark = theme === 'dark';
+        var bgColor = isDark ? '#0f172a' : '#ffffff';
+        var textColor = isDark ? '#e2e8f0' : '#1e293b';
+        var gridColor = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)';
+        var axisColor = isDark ? '#94a3b8' : '#475569';
+        var lineColor = isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.15)';
+
+        // Clone data and layout from the live chart
+        var data = JSON.parse(JSON.stringify(chartEl.data));
+        var layout = JSON.parse(JSON.stringify(chartEl.layout));
+
+        // Apply publication overrides
+        layout.title = {
+            text: title,
+            font: { size: 13, color: textColor, family: 'JetBrains Mono, monospace' },
+            x: 0.5, xanchor: 'center', y: 0.97
+        };
+        layout.paper_bgcolor = bgColor;
+        layout.plot_bgcolor = bgColor;
+        layout.font = { family: 'JetBrains Mono, monospace', size: 11, color: axisColor };
+        layout.margin = { t: 55, r: 20, b: 50, l: 55 };
+        layout.height = 500;
+        layout.width = 800;
+
+        // Update axis styles
+        if (layout.xaxis) {
+            layout.xaxis.gridcolor = gridColor;
+            layout.xaxis.tickfont = { size: 11, color: axisColor };
+            if (layout.xaxis.title) layout.xaxis.title.font = { size: 12, color: textColor };
+        }
+        if (layout.yaxis) {
+            layout.yaxis.gridcolor = gridColor;
+            layout.yaxis.tickfont = { size: 11, color: axisColor };
+            if (layout.yaxis.title) layout.yaxis.title.font = { size: 12, color: textColor };
+        }
+
+        // Update shapes (threshold lines) colors for light theme
+        if (layout.shapes) {
+            for (var si = 0; si < layout.shapes.length; si++) {
+                var shape = layout.shapes[si];
+                if (shape.line && shape.line.color && shape.line.color.indexOf('255,255,255') >= 0) {
+                    shape.line.color = lineColor;
+                }
+            }
+        }
+
+        // Update annotation colors
+        if (layout.annotations) {
+            for (var ai = 0; ai < layout.annotations.length; ai++) {
+                var ann = layout.annotations[ai];
+                if (ann.font && ann.font.color === '#94a3b8') {
+                    ann.font.color = axisColor;
+                }
+                ann.font = ann.font || {};
+                ann.font.size = Math.max((ann.font.size || 9) + 2, 10);
+            }
+        }
+
+        // Add "TC-ATLAS" watermark
+        layout.annotations = layout.annotations || [];
+        layout.annotations.push({
+            text: 'TC-ATLAS | tc-atlas.com',
+            xref: 'paper', yref: 'paper',
+            x: 1, y: -0.12,
+            showarrow: false,
+            font: { size: 9, color: isDark ? '#475569' : '#94a3b8' },
+            xanchor: 'right', yanchor: 'top'
+        });
+
+        // Render to temporary div and export
+        var tmpDiv = document.createElement('div');
+        tmpDiv.style.cssText = 'position:absolute;left:-9999px;top:-9999px;';
+        document.body.appendChild(tmpDiv);
+
+        Plotly.newPlot(tmpDiv, data, layout, { displayModeBar: false }).then(function () {
+            return Plotly.toImage(tmpDiv, { format: 'png', width: 1600, height: 1000, scale: 1 });
+        }).then(function (dataUrl) {
+            // Trigger download
+            var filename = 'GDMI_' + stormId + '_' + chartType;
+            if (chartType !== 'lmi') {
+                var taus = _rtDmEnsData.lead_times_h || [];
+                var tau = chartType === 'intensity' ? taus[_rtDmHistTauIdx] : taus[_rtDmChangeTauIdx];
+                filename += '_' + (tau || 0) + 'h';
+            }
+            filename += '_init' + initTime + '_' + theme + '.png';
+
+            var a = document.createElement('a');
+            a.href = dataUrl;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+
+            // Clean up temp div
+            Plotly.purge(tmpDiv);
+            document.body.removeChild(tmpDiv);
+        }).catch(function (err) {
+            console.warn('[RT Monitor] Chart export failed:', err);
+            if (tmpDiv.parentNode) {
+                Plotly.purge(tmpDiv);
+                document.body.removeChild(tmpDiv);
+            }
+        });
+    }
+
     function _rtRemoveWeatherlab() {
         _rtClearWeatherlabLayers();
         _rtClearWeatherlabIntensity();
