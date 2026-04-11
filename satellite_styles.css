@@ -431,6 +431,12 @@
     border-radius: 2px;
     outline: none;
     cursor: pointer;
+    /* Override tc_radar_styles.css global input[type="range"] */
+    position: static;
+    width: auto;
+    top: auto;
+    transform: none;
+    pointer-events: auto;
 }
 
 .sat-slider::-webkit-slider-thumb {

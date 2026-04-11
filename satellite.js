@@ -9,7 +9,7 @@
     // ── Config ──────────────────────────────────────────────────
     var API_BASE = 'https://tc-atlas-api-361010099051.us-east1.run.app';
     var POLL_INTERVAL_MS = 10 * 60 * 1000;  // 10 min
-    var DEFAULT_LOOKBACK_HOURS = 6;
+    var DEFAULT_LOOKBACK_HOURS = 3;
     var DEFAULT_RADIUS_DEG = 10.0;
     var FRAME_INTERVAL_MIN = 30;
     var FETCH_CONCURRENCY = 3;
@@ -466,7 +466,7 @@
                 + '&radius_deg=' + DEFAULT_RADIUS_DEG
                 + '&interval_min=' + FRAME_INTERVAL_MIN;
 
-            fetch(url, { cache: 'no-store' })
+            fetch(url)
                 .then(function (r) {
                     if (!r.ok) throw new Error('HTTP ' + r.status);
                     return r.json();
@@ -669,6 +669,24 @@
         }
 
         var rawVal = frame.tb_data[row * frame.cols + col];
+
+        // If current pixel is empty (reprojection gap), search nearby pixels
+        if (rawVal === 0) {
+            var searchR = 3;
+            for (var sr = 1; sr <= searchR && rawVal === 0; sr++) {
+                for (var dy = -sr; dy <= sr && rawVal === 0; dy++) {
+                    for (var dx = -sr; dx <= sr && rawVal === 0; dx++) {
+                        if (Math.abs(dy) !== sr && Math.abs(dx) !== sr) continue;
+                        var nr = row + dy, nc = col + dx;
+                        if (nr >= 0 && nr < frame.rows && nc >= 0 && nc < frame.cols) {
+                            var nv = frame.tb_data[nr * frame.cols + nc];
+                            if (nv > 0) rawVal = nv;
+                        }
+                    }
+                }
+            }
+        }
+
         if (rawVal === 0) {
             tooltip.style.display = 'none';
             return;
