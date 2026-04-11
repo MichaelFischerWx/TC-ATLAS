@@ -326,11 +326,14 @@
     flex-direction: column;
     border-right: 1px solid rgba(255, 255, 255, 0.06);
     min-width: 0;
+    overflow: hidden;  /* clip Leaflet markers from bleeding into sidebar */
 }
 .ir-detail-right {
     flex: 2;
     overflow-y: auto;
     padding: 16px 20px;
+    position: relative;
+    z-index: 500;  /* above Leaflet panes (400-450) to prevent map bleed */
     min-width: 280px;
 }
 
