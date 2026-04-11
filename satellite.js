@@ -13,7 +13,7 @@
     var DEFAULT_LOOKBACK_HOURS = 6;
     var DEFAULT_RADIUS_DEG = 10.0;
     var FRAME_INTERVAL_MIN = 30;
-    var FETCH_CONCURRENCY = 3;
+    var FETCH_CONCURRENCY = 6;
     var COASTLINE_URL = 'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_coastline.geojson';
 
     // ── State ───────────────────────────────────────────────────
@@ -780,8 +780,6 @@
                         updateSliderMax();
                         renderBothPanels();
                         updateAnimUI();
-                        // Update cache (right frames may still be loading)
-                        frameCache[stormId] = { ir: irFrames, right: rightFrames, ts: Date.now() };
                     }
                 });
         }
@@ -813,8 +811,12 @@
                     if (next < totalFrames) fetchRightFrame(next);
                     if (rightDone >= totalFrames && stormId === currentStormId) {
                         renderBothPanels();
-                        // Cache frames for this storm
-                        frameCache[stormId] = { ir: irFrames, right: rightFrames, ts: Date.now() };
+                    }
+                    // Cache only when BOTH bands are fully loaded
+                    if (irDone >= totalFrames && rightDone >= totalFrames) {
+                        frameCache[stormId] = {
+                            ir: irLoaded.slice(), right: rightLoaded.slice(), ts: Date.now()
+                        };
                     }
                 });
         }
