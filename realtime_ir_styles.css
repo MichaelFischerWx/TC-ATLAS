@@ -1050,9 +1050,11 @@
     background: none;
     border: 1px solid rgba(0, 229, 255, 0.25);
     color: #00e5ff;
-    font-size: 12px;
-    width: 22px;
-    height: 22px;
+    font-size: 13px;
+    width: 28px;
+    height: 28px;
+    min-width: 28px;
+    min-height: 28px;
     border-radius: 4px;
     cursor: pointer;
     display: flex;

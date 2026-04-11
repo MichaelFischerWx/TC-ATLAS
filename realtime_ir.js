@@ -5789,6 +5789,11 @@
     function _rtExportDmChart(chartType, theme) {
         if (!_rtDmEnsData || typeof Plotly === 'undefined') return;
 
+        // Re-render the chart to ensure it matches the current slider position
+        if (chartType === 'intensity') _rtRenderIntensityHist();
+        else if (chartType === 'change') _rtRenderChangeHist();
+        else if (chartType === 'lmi') _rtRenderLmiHist();
+
         // Map chart type to element ID and metadata
         var chartMap = {
             'intensity': { el: 'rt-dm-hist-chart', label: 'Intensity Distribution' },
@@ -5834,29 +5839,29 @@
         var data = JSON.parse(JSON.stringify(chartEl.data));
         var layout = JSON.parse(JSON.stringify(chartEl.layout));
 
-        // Apply publication overrides
+        // Apply publication overrides (8" × 6" at 2x scale = 1536 × 1152)
         layout.title = {
             text: title,
-            font: { size: 13, color: textColor, family: 'JetBrains Mono, monospace' },
+            font: { size: 16, color: textColor, family: 'JetBrains Mono, monospace' },
             x: 0.5, xanchor: 'center', y: 0.97
         };
         layout.paper_bgcolor = bgColor;
         layout.plot_bgcolor = bgColor;
-        layout.font = { family: 'JetBrains Mono, monospace', size: 11, color: axisColor };
-        layout.margin = { t: 55, r: 20, b: 50, l: 55 };
-        layout.height = 500;
-        layout.width = 800;
+        layout.font = { family: 'JetBrains Mono, monospace', size: 14, color: axisColor };
+        layout.margin = { t: 55, r: 25, b: 60, l: 60 };
+        layout.height = 576;
+        layout.width = 768;
 
         // Update axis styles
         if (layout.xaxis) {
             layout.xaxis.gridcolor = gridColor;
-            layout.xaxis.tickfont = { size: 11, color: axisColor };
-            if (layout.xaxis.title) layout.xaxis.title.font = { size: 12, color: textColor };
+            layout.xaxis.tickfont = { size: 14, color: axisColor };
+            if (layout.xaxis.title) layout.xaxis.title.font = { size: 15, color: textColor };
         }
         if (layout.yaxis) {
             layout.yaxis.gridcolor = gridColor;
-            layout.yaxis.tickfont = { size: 11, color: axisColor };
-            if (layout.yaxis.title) layout.yaxis.title.font = { size: 12, color: textColor };
+            layout.yaxis.tickfont = { size: 14, color: axisColor };
+            if (layout.yaxis.title) layout.yaxis.title.font = { size: 15, color: textColor };
         }
 
         // Update shapes (threshold lines) colors for light theme
@@ -5898,7 +5903,7 @@
         document.body.appendChild(tmpDiv);
 
         Plotly.newPlot(tmpDiv, data, layout, { displayModeBar: false }).then(function () {
-            return Plotly.toImage(tmpDiv, { format: 'png', width: 1600, height: 1000, scale: 1 });
+            return Plotly.toImage(tmpDiv, { format: 'png', width: 768, height: 576, scale: 2 });
         }).then(function (dataUrl) {
             // Trigger download
             var filename = 'GDMI_' + stormId + '_' + chartType;
