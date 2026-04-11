@@ -226,8 +226,15 @@ def _fetch_ascat_winds(
             download_url = data_url + ".nc"
 
         logger.info("ASCAT: downloading %s", download_url[:120])
-        session = _get_earthdata_session()
-        resp = session.get(download_url, timeout=60, stream=True)
+        # PODAAC ASCAT L2 data is publicly accessible — try without auth first.
+        # Auth headers can cause 403 errors when requests forwards them to
+        # CloudFront CDN during redirects.
+        import requests as _req
+        resp = _req.get(download_url, timeout=60, stream=True)
+        if resp.status_code == 401:
+            logger.info("ASCAT: public download got 401, retrying with Earthdata auth")
+            session = _get_earthdata_session()
+            resp = session.get(download_url, timeout=60, stream=True)
         resp.raise_for_status()
 
         with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as tmp:
@@ -239,7 +246,7 @@ def _fetch_ascat_winds(
 
         ds = xr.open_dataset(tmp_path, engine="netcdf4")
     except Exception as e:
-        logger.warning("Failed to download/open %s: %s", data_url, e)
+        logger.warning("ASCAT: Failed to download/open %s: %s", download_url[:120], e)
         try:
             os.unlink(tmp_path)
         except Exception:
