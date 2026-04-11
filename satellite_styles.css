@@ -1,0 +1,526 @@
+/* ═══════════════════════════════════════════════════════════════
+   Satellite Viewer — satellite_styles.css
+   Lightweight plan-view satellite imagery page styles.
+   Embedded as a tab within the Real-Time Monitor page.
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── View Tab Buttons ───────────────────────────────────────── */
+
+.ir-view-tabs {
+    display: flex;
+    gap: 2px;
+    margin-left: 12px;
+    background: #12141c;
+    border-radius: 5px;
+    padding: 2px;
+    border: 1px solid #2a2d38;
+}
+
+.ir-view-tab {
+    background: transparent;
+    color: #8b8fa4;
+    border: none;
+    border-radius: 3px;
+    padding: 3px 10px;
+    font-size: 11px;
+    font-weight: 500;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+    line-height: 1.3;
+}
+
+.ir-view-tab:hover {
+    color: #c8cad2;
+}
+
+.ir-view-tab.active {
+    background: #2a2d38;
+    color: #e2e4ea;
+}
+
+/* ── Layout ─────────────────────────────────────────────────── */
+
+.sat-main {
+    position: fixed;
+    top: var(--topbar-h, 48px);
+    left: 0;
+    right: 0;
+    bottom: 0;
+    flex-direction: row;
+    background: #0f1117;
+    overflow: hidden;
+}
+
+/* ── Sidebar ────────────────────────────────────────────────── */
+
+.sat-sidebar {
+    width: 220px;
+    min-width: 220px;
+    background: #181b24;
+    border-right: 1px solid #2a2d38;
+    display: flex;
+    flex-direction: column;
+    z-index: 10;
+    overflow: hidden;
+}
+
+.sat-sidebar-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 14px 8px;
+    border-bottom: 1px solid #2a2d38;
+}
+
+.sat-sidebar-header h3 {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: #e2e4ea;
+    letter-spacing: 0.02em;
+}
+
+.sat-sidebar-close {
+    display: none;
+    background: none;
+    border: none;
+    color: #8b8fa4;
+    font-size: 18px;
+    cursor: pointer;
+    padding: 0 4px;
+    line-height: 1;
+}
+
+.sat-storm-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 6px 0;
+}
+
+.sat-loading-msg {
+    color: #8b8fa4;
+    font-size: 12px;
+    padding: 16px 14px;
+    text-align: center;
+}
+
+.sat-storm-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    cursor: pointer;
+    transition: background 0.15s;
+    border-left: 3px solid transparent;
+}
+
+.sat-storm-item:hover {
+    background: #1e2130;
+}
+
+.sat-storm-item.active {
+    background: #1e2130;
+    border-left-color: var(--storm-color, #60a5fa);
+}
+
+.sat-storm-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.sat-storm-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.sat-storm-name {
+    font-size: 13px;
+    font-weight: 500;
+    color: #e2e4ea;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.sat-storm-meta {
+    font-size: 11px;
+    color: #8b8fa4;
+    margin-top: 1px;
+}
+
+.sat-sidebar-section {
+    padding: 10px 14px;
+    border-top: 1px solid #2a2d38;
+}
+
+.sat-sidebar-section label {
+    display: block;
+    font-size: 11px;
+    font-weight: 500;
+    color: #8b8fa4;
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.sat-sidebar-section select {
+    width: 100%;
+    background: #12141c;
+    color: #e2e4ea;
+    border: 1px solid #2a2d38;
+    border-radius: 4px;
+    padding: 5px 8px;
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+    outline: none;
+}
+
+.sat-sidebar-section select:focus {
+    border-color: #4a8cff;
+}
+
+.sat-sidebar-footer {
+    padding: 8px 14px;
+    border-top: 1px solid #2a2d38;
+}
+
+.sat-sidebar-hint {
+    font-size: 10px;
+    color: #5c6070;
+    line-height: 1.4;
+}
+
+/* Sidebar toggle button (visible when sidebar is hidden on mobile) */
+.sat-sidebar-toggle {
+    display: none;
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    z-index: 25;
+    background: #181b24ee;
+    color: #e2e4ea;
+    border: 1px solid #3a3d48;
+    border-radius: 6px;
+    padding: 8px 14px;
+    font-size: 13px;
+    font-weight: 500;
+    font-family: inherit;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+}
+
+/* ── Canvas Area ────────────────────────────────────────────── */
+
+.sat-canvas-wrap {
+    flex: 1;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: #0a0c12;
+}
+
+.sat-canvas-area {
+    flex: 1;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    min-height: 0;
+}
+
+#sat-canvas {
+    display: block;
+    max-width: 100%;
+    max-height: 100%;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    cursor: crosshair;
+}
+
+/* ── Colorbar ───────────────────────────────────────────────── */
+
+.sat-colorbar-wrap {
+    position: absolute;
+    left: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    flex-direction: row;
+    align-items: stretch;
+    gap: 4px;
+    z-index: 5;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.3s;
+}
+
+.sat-colorbar-wrap.visible {
+    opacity: 1;
+}
+
+#sat-colorbar {
+    border-radius: 3px;
+    border: 1px solid #2a2d38;
+}
+
+.sat-colorbar-labels {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    font-size: 10px;
+    font-family: 'JetBrains Mono', monospace;
+    color: #8b8fa4;
+    padding: 1px 0;
+}
+
+/* ── Hover Tooltip ──────────────────────────────────────────── */
+
+.sat-tooltip {
+    position: absolute;
+    z-index: 15;
+    pointer-events: none;
+    background: #181b24ee;
+    color: #e2e4ea;
+    border: 1px solid #2a2d38;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 12px;
+    font-family: 'JetBrains Mono', monospace;
+    white-space: nowrap;
+    display: none;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+}
+
+.sat-tb-val {
+    color: #7dd3fc;
+    font-weight: 500;
+}
+
+.sat-tb-sep {
+    color: #5c6070;
+}
+
+.sat-tb-coord {
+    color: #94a3b8;
+}
+
+/* ── Loading Overlay ────────────────────────────────────────── */
+
+.sat-loader {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: #0a0c12ee;
+    z-index: 30;
+    transition: opacity 0.3s;
+}
+
+.sat-loader.hidden {
+    opacity: 0;
+    pointer-events: none;
+}
+
+.sat-spinner {
+    width: 36px;
+    height: 36px;
+    border: 3px solid #2a2d38;
+    border-top-color: #4a8cff;
+    border-radius: 50%;
+    animation: sat-spin 0.8s linear infinite;
+}
+
+@keyframes sat-spin {
+    to { transform: rotate(360deg); }
+}
+
+.sat-loader-msg {
+    margin-top: 12px;
+    color: #8b8fa4;
+    font-size: 13px;
+}
+
+/* ── No-Storms Message ──────────────────────────────────────── */
+
+.sat-no-storms {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 25;
+    text-align: center;
+    padding: 32px;
+}
+
+.sat-no-storms h2 {
+    color: #e2e4ea;
+    font-size: 20px;
+    font-weight: 600;
+    margin: 0 0 8px;
+}
+
+.sat-no-storms p {
+    color: #8b8fa4;
+    font-size: 14px;
+    margin: 0;
+}
+
+/* ── Animation Bar ──────────────────────────────────────────── */
+
+.sat-anim-bar {
+    flex-shrink: 0;
+    background: #181b24;
+    border-top: 1px solid #2a2d38;
+    padding: 6px 14px;
+    z-index: 20;
+}
+
+.sat-anim-controls {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.sat-anim-btn {
+    background: #12141c;
+    color: #e2e4ea;
+    border: 1px solid #2a2d38;
+    border-radius: 4px;
+    padding: 4px 10px;
+    font-size: 12px;
+    cursor: pointer;
+    line-height: 1;
+    transition: background 0.15s;
+    font-family: inherit;
+}
+
+.sat-anim-btn:hover {
+    background: #1e2130;
+}
+
+.sat-play-btn {
+    min-width: 36px;
+    text-align: center;
+}
+
+.sat-speed-btn {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    min-width: 32px;
+    text-align: center;
+}
+
+.sat-slider {
+    flex: 1;
+    min-width: 80px;
+    max-width: 300px;
+    height: 4px;
+    -webkit-appearance: none;
+    appearance: none;
+    background: #2a2d38;
+    border-radius: 2px;
+    outline: none;
+    cursor: pointer;
+}
+
+.sat-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    background: #4a8cff;
+    border-radius: 50%;
+    cursor: pointer;
+}
+
+.sat-slider::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    background: #4a8cff;
+    border-radius: 50%;
+    border: none;
+    cursor: pointer;
+}
+
+.sat-frame-counter {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: #8b8fa4;
+    min-width: 42px;
+    text-align: center;
+}
+
+.sat-anim-info {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 3px;
+}
+
+.sat-timestamp {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: #94a3b8;
+}
+
+.sat-satellite {
+    font-size: 11px;
+    color: #5c6070;
+}
+
+.sat-storm-label {
+    font-size: 11px;
+    font-weight: 500;
+    color: #7dd3fc;
+    margin-left: auto;
+}
+
+/* ── Responsive ─────────────────────────────────────────────── */
+
+@media (max-width: 768px) {
+    .sat-sidebar {
+        position: absolute;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        z-index: 40;
+        transform: translateX(-100%);
+        transition: transform 0.25s ease;
+    }
+
+    .sat-sidebar.open {
+        transform: translateX(0);
+    }
+
+    .sat-sidebar-close {
+        display: block;
+    }
+
+    .sat-sidebar-toggle {
+        display: block;
+    }
+
+    .sat-colorbar-wrap {
+        left: 8px;
+    }
+}
+
+@media (max-width: 480px) {
+    .sat-anim-info {
+        flex-wrap: wrap;
+        gap: 4px 10px;
+    }
+
+    .sat-slider {
+        max-width: 160px;
+    }
+}

@@ -43,6 +43,7 @@
     <!-- Styles -->
     <link rel="stylesheet" href="tc_radar_styles.css">
     <link rel="stylesheet" href="realtime_ir_styles.css?v=20260410b">
+    <link rel="stylesheet" href="satellite_styles.css?v=20260411a">
 </head>
 <body>
     <a href="#ir-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -55,6 +56,10 @@
                 <div class="topbar-logo" role="heading" aria-level="1">TC-ATLAS</div>
                 <div class="topbar-divider"></div>
                 <div class="topbar-subtitle">Real-Time Monitor</div>
+                <div class="ir-view-tabs">
+                    <button class="ir-view-tab active" data-view="map" onclick="window.switchIRView('map')">Map</button>
+                    <button class="ir-view-tab" data-view="satellite" onclick="window.switchIRView('satellite')">Satellite</button>
+                </div>
             </div>
             <div class="topbar-stats">
                 <div class="topbar-stat">
@@ -430,9 +435,111 @@
         <div class="ir-legend-row"><span class="ir-legend-dot" style="background:#dc2626;"></span> Cat 5 (137+ kt)</div>
     </div>
 
+    <!-- ── Satellite Viewer (tab) ─────────────────────────────── -->
+    <section id="sat-main" class="sat-main" style="display:none;" aria-label="Satellite Viewer">
+        <aside id="sat-sidebar" class="sat-sidebar">
+            <div class="sat-sidebar-header">
+                <h3>Active Storms</h3>
+                <button id="sat-sidebar-close" class="sat-sidebar-close" title="Close sidebar">&times;</button>
+            </div>
+            <div id="sat-storm-list" class="sat-storm-list">
+                <div class="sat-loading-msg">Loading storms&hellip;</div>
+            </div>
+            <div class="sat-sidebar-section">
+                <label for="sat-colormap-select">Colormap</label>
+                <select id="sat-colormap-select">
+                    <option value="claude-ir">Claude IR</option>
+                    <option value="enhanced">Enhanced</option>
+                    <option value="dvorak">Dvorak</option>
+                    <option value="grayscale">BD Grayscale</option>
+                    <option value="funktop">Funktop</option>
+                    <option value="avn">AVN</option>
+                    <option value="nhc">NHC</option>
+                    <option value="rammb">RAMMB</option>
+                    <option value="irb">IRB</option>
+                </select>
+            </div>
+            <div class="sat-sidebar-footer">
+                <span class="sat-sidebar-hint">Arrow keys: frames &middot; Space: play</span>
+            </div>
+        </aside>
+        <button id="sat-sidebar-toggle" class="sat-sidebar-toggle" title="Show storm list">&#9776; Storms</button>
+        <div id="sat-canvas-wrap" class="sat-canvas-wrap">
+            <div class="sat-canvas-area">
+                <div id="sat-colorbar-wrap" class="sat-colorbar-wrap">
+                    <canvas id="sat-colorbar" width="20" height="255"></canvas>
+                    <div class="sat-colorbar-labels">
+                        <span id="sat-cb-warm"></span>
+                        <span id="sat-cb-cold"></span>
+                    </div>
+                </div>
+                <canvas id="sat-canvas"></canvas>
+                <div id="sat-tooltip" class="sat-tooltip"></div>
+                <div id="sat-loader" class="sat-loader">
+                    <div class="sat-spinner"></div>
+                    <div id="sat-loader-msg" class="sat-loader-msg">Loading satellite data&hellip;</div>
+                </div>
+                <div id="sat-no-storms" class="sat-no-storms" style="display:none;">
+                    <h2>No Active Tropical Cyclones</h2>
+                    <p>Check back during an active storm for satellite imagery.</p>
+                </div>
+            </div>
+            <div id="sat-anim-bar" class="sat-anim-bar">
+                <div class="sat-anim-controls">
+                    <button id="sat-prev" class="sat-anim-btn" title="Previous frame (Left arrow)">&#9664;</button>
+                    <button id="sat-play" class="sat-anim-btn sat-play-btn" title="Play / Pause (Space)">&#9654;&#9654;</button>
+                    <button id="sat-next" class="sat-anim-btn" title="Next frame (Right arrow)">&#9654;</button>
+                    <input id="sat-slider" type="range" min="0" max="0" value="0" class="sat-slider">
+                    <span id="sat-frame-counter" class="sat-frame-counter">0 / 0</span>
+                    <button id="sat-speed" class="sat-anim-btn sat-speed-btn" title="Cycle animation speed">1x</button>
+                </div>
+                <div class="sat-anim-info">
+                    <span id="sat-timestamp" class="sat-timestamp"></span>
+                    <span id="sat-satellite" class="sat-satellite"></span>
+                    <span id="sat-storm-label" class="sat-storm-label"></span>
+                </div>
+            </div>
+        </div>
+    </section>
+
     <!-- Scripts -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
     <script src="realtime_ir.js?v=20260411a"></script>
+    <script src="satellite.js?v=20260411a"></script>
+    <script>
+    /* Tab switching between Map and Satellite views */
+    (function () {
+        var currentView = 'map';
+        window.switchIRView = function (view) {
+            if (view === currentView) return;
+            currentView = view;
+
+            var irMain = document.getElementById('ir-main');
+            var satMain = document.getElementById('sat-main');
+            var legend = document.getElementById('ir-legend');
+            var tabs = document.querySelectorAll('.ir-view-tab');
+
+            for (var i = 0; i < tabs.length; i++) {
+                tabs[i].classList.toggle('active', tabs[i].getAttribute('data-view') === view);
+            }
+
+            if (view === 'satellite') {
+                irMain.style.display = 'none';
+                if (legend) legend.style.display = 'none';
+                satMain.style.display = 'flex';
+                if (window.activateSatelliteView) window.activateSatelliteView();
+            } else {
+                satMain.style.display = 'none';
+                irMain.style.display = '';
+                if (legend) legend.style.display = '';
+                /* Leaflet needs invalidateSize after being hidden */
+                setTimeout(function () {
+                    if (window.irMap) window.irMap.invalidateSize();
+                }, 100);
+            }
+        };
+    })();
+    </script>
 </body>
 </html>
