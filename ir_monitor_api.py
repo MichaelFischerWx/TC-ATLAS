@@ -75,6 +75,9 @@ JTWC_SOURCES = [
 # JTWC CARQ a-deck (operational analyzed fixes — updates faster than b-deck)
 JTWC_CARQ_BASE = "https://hurricanes.ral.ucar.edu/repository/data/carq"
 
+# JTWC TCW (Tropical Cyclone Warning) — most real-time source for JTWC storms
+JTWC_TCW_BASE = "https://www.metoc.navy.mil/jtwc/products"
+
 # Basins already covered by NHC (skip in JTWC scan)
 _NHC_BASINS = {"EP", "CP", "AL"}
 
@@ -503,6 +506,96 @@ def _fetch_jtwc_carq(atcf_id: str) -> list:
     return records
 
 
+def _fetch_jtwc_tcw(atcf_id: str) -> tuple:
+    """
+    Fetch JTWC Tropical Cyclone Warning (TCW) and parse the T000 line.
+    TCW is the most real-time JTWC source — updates within minutes of
+    advisory issuance, while b-deck/CARQ can lag hours.
+
+    URL pattern: {JTWC_TCW_BASE}/{basin}{num}{2-digit-year}.tcw
+    Header line 3: YYYYMMDDHH {num}{basin} {name} {warn_num} ...
+    T000 line:     T000 {lat3}{N/S} {lon4}{E/W} {vmax} [wind radii...]
+
+    Returns (records, name) where records is a list with a single parsed
+    record (ATCF-compatible dict) and name is the storm name, or ([], None).
+    """
+    # Map ATCF basin prefix to TCW filename prefix
+    basin_prefix = atcf_id[:2].upper()  # e.g., "WP", "SH", "IO"
+    storm_num = atcf_id[2:4]            # e.g., "04"
+    year_4 = atcf_id[-4:]               # e.g., "2026"
+    year_2 = year_4[-2:]                # e.g., "26"
+
+    url = f"{JTWC_TCW_BASE}/{basin_prefix.lower()}{storm_num}{year_2}.tcw"
+    text = _http_get(url, timeout=8)
+    if not text:
+        return [], None
+
+    lines = text.strip().split("\n")
+    if len(lines) < 4:
+        return [], None
+
+    try:
+        # Line 3 (0-indexed line 2): "YYYYMMDDHH {storm_id} {name} ..."
+        header = lines[2].split()
+        if len(header) < 3:
+            return [], None
+        dt_str = header[0]  # e.g., "2026041018"
+        dt = _dt.strptime(dt_str, "%Y%m%d%H").replace(tzinfo=timezone.utc)
+        tcw_name = header[2].strip().title() if len(header) > 2 else None
+        if tcw_name and tcw_name.upper() in ("", "UNNAMED", "NONAME"):
+            tcw_name = None
+
+        # Find T000 line (tau=0 current position)
+        t000_line = None
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("T000 "):
+                t000_line = stripped
+                break
+
+        if not t000_line:
+            return [], tcw_name
+
+        parts = t000_line.split()
+        # T000 {lat}{N/S} {lon}{E/W} {vmax} ...
+        if len(parts) < 4:
+            return [], tcw_name
+
+        lat_str = parts[1]   # e.g., "080N" or "084S"
+        lon_str = parts[2]   # e.g., "1510E" or "1543E"
+        vmax = int(parts[3])
+
+        # Parse lat: "080N" → 8.0, "084S" → -8.4
+        lat_val = int(lat_str[:-1]) / 10.0
+        if lat_str[-1] == "S":
+            lat_val = -lat_val
+
+        # Parse lon: "1510E" → 151.0, "0691E" → 69.1
+        lon_val = int(lon_str[:-1]) / 10.0
+        if lon_str[-1] == "W":
+            lon_val = -lon_val
+
+        # Build ATCF-compatible record dict
+        # MSLP not in TCW T000 line — will be filled from b-deck/CARQ
+        record = {
+            "basin": basin_prefix,
+            "storm_num": int(storm_num),
+            "datetime": dt,
+            "tech": "JTWC",
+            "tau": 0,
+            "lat": lat_val,
+            "lon": lon_val,
+            "vmax_kt": vmax,
+            "mslp_hpa": None,
+        }
+
+        return [record], tcw_name
+
+    except (ValueError, IndexError) as e:
+        print(f"[IR Monitor] TCW parse error for {atcf_id}: {e}")
+        return [], None
+
+
 def _extract_storm_name(text: str) -> Optional[str]:
     """
     Try to extract the storm name from a B-deck file.
@@ -632,22 +725,28 @@ def _fetch_bdeck(atcf_id: str) -> list:
 
 def _get_latest_position(records: list) -> Optional[dict]:
     """
-    From A-deck records, get the most recent CARQ or OFCL fix at tau=0.
-    Falls back to the most recent tau=0 record from any technique.
+    From A-deck/B-deck/TCW records, get the most recent tau=0 fix.
+    Among records at the same datetime, prefer CARQ > JTWC > OFCL > BEST.
+    If multiple datetimes exist, always pick the most recent one regardless
+    of technique (e.g., JTWC at 18Z beats CARQ at 12Z).
     """
     # Filter to tau=0 (current position, not forecasts)
     t0_records = [r for r in records if r["tau"] == 0]
     if not t0_records:
         return None
 
-    # Prefer CARQ (combined ARQ), then OFCL (official NHC forecast)
-    for preferred_tech in ["CARQ", "OFCL"]:
-        tech_records = [r for r in t0_records if r["tech"] == preferred_tech]
-        if tech_records:
-            return tech_records[-1]  # most recent
+    # Find the most recent datetime across all techniques
+    latest_dt = max(r["datetime"] for r in t0_records)
 
-    # Fallback: most recent tau=0 from any technique
-    return t0_records[-1]
+    # Among records at the latest datetime, prefer by technique priority
+    latest_records = [r for r in t0_records if r["datetime"] == latest_dt]
+    for preferred_tech in ["CARQ", "JTWC", "OFCL", "BEST"]:
+        for r in latest_records:
+            if r["tech"] == preferred_tech:
+                return r
+
+    # Fallback: any record at the latest datetime
+    return latest_records[-1]
 
 
 def _build_storm_entry(atcf_id: str, records: list,
@@ -850,10 +949,13 @@ def _poll_active_storms():
         # Supplement with CARQ a-deck (operational fixes — often fresher)
         carq_records = _fetch_jtwc_carq(storm_id)
 
-        # Merge: combine both, deduplicate by (datetime, tau, tech)
+        # Supplement with TCW warning (most real-time JTWC source)
+        tcw_records, tcw_name = _fetch_jtwc_tcw(storm_id)
+
+        # Merge all sources, deduplicate by (datetime, tau, tech)
         seen_keys = set()
         records = []
-        for rec in bdeck_records + carq_records:
+        for rec in bdeck_records + carq_records + tcw_records:
             key = (rec["datetime"], rec["tau"], rec["tech"])
             if key not in seen_keys:
                 seen_keys.add(key)
@@ -861,7 +963,7 @@ def _poll_active_storms():
         records.sort(key=lambda r: r["datetime"])
 
         if not records:
-            print(f"[IR Monitor] JTWC {storm_id}: no B-deck/CARQ records")
+            print(f"[IR Monitor] JTWC {storm_id}: no B-deck/CARQ/TCW records")
             continue
 
         latest = _get_latest_position(records)
@@ -873,13 +975,16 @@ def _poll_active_storms():
             print(f"[IR Monitor] JTWC {storm_id}: stale — last fix {latest['datetime']} ({age} ago)")
             continue
 
-        # Extract storm name from B-deck text (avoid re-fetch: use bdeck_url already fetched)
-        raw_text = _http_get(bdeck_url, timeout=10)
-        name = _extract_storm_name(raw_text) if raw_text else None
+        # Storm name: prefer TCW (most current), fall back to b-deck text
+        name = tcw_name
+        if not name:
+            raw_text = _http_get(bdeck_url, timeout=10)
+            name = _extract_storm_name(raw_text) if raw_text else None
 
         bdeck_latest = bdeck_records[-1]["datetime"].strftime("%H%MZ") if bdeck_records else "none"
         carq_latest = carq_records[-1]["datetime"].strftime("%H%MZ") if carq_records else "none"
-        print(f"[IR Monitor] JTWC {storm_id}: B-deck latest={bdeck_latest}, CARQ latest={carq_latest}, using={latest['datetime'].strftime('%Y-%m-%d %H:%MZ')} ({latest['tech']})")
+        tcw_latest = tcw_records[-1]["datetime"].strftime("%H%MZ") if tcw_records else "none"
+        print(f"[IR Monitor] JTWC {storm_id}: B-deck={bdeck_latest}, CARQ={carq_latest}, TCW={tcw_latest}, using={latest['datetime'].strftime('%Y-%m-%d %H:%MZ')} ({latest['tech']})")
 
         entry = _build_storm_entry(storm_id, records, name=name, source="JTWC")
         if entry:
