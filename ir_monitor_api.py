@@ -1140,110 +1140,113 @@ def _prefetch_ir_frames(storms: list):
             if storm_fetched:
                 print(f"[IR Pre-fetch] {atcf_id}: fetched {storm_fetched} new frames")
 
-            # ── GCS multi-band prefetch (IR + WV + Visible) ─────────
-            # Interleaved by timestamp: for each time step, cache ALL
-            # bands before moving to the next.  Newest frames first so
-            # the Satellite viewer has the latest data ASAP.
+            # ── GCS multi-band prefetch (IR + WV/Vis) ────────────────
+            # Uses a thread pool to fetch multiple frames in parallel.
+            # Each worker fetches one (band, timestamp) pair from S3,
+            # encodes to uint8, and caches to GCS.
             if _get_rt_gcs_bucket() is not None:
-                ir_gcs_fetched = 0
-                band_gcs_fetched = 0
-                jpg_cached = 0
-                half = box_deg / 2.0
+                from concurrent.futures import ThreadPoolExecutor, as_completed
 
-                # Determine which right-panel band to prefetch
+                half = box_deg / 2.0
                 sun_el_now = _solar_elevation(
                     center_lat, center_lon, _dt.now(timezone.utc)
                 )
                 right_band = VIS_BAND if sun_el_now > -6 else WV_BAND
+                _prefetch_counts = {"ir": 0, "band": 0, "jpg": 0}
 
-                for target_dt in reversed(frame_times):
-                    dt_str = target_dt.strftime("%Y%m%d%H%M")
+                def _fetch_and_cache_ir(tdt, dstr):
+                    """Worker: fetch IR frame and cache to GCS."""
+                    if _gcs_rt_get(atcf_id.upper(), dstr) is not None:
+                        return
+                    try:
+                        raw = fetch_ir_tb_raw(center_lat, center_lon, tdt, box_deg)
+                    except Exception:
+                        return
+                    if not raw or raw.get("tb") is None:
+                        return
+                    jpg_bytes = _render_ir_jpg(raw["tb"])
+                    if jpg_bytes:
+                        _gcs_jpg_put(atcf_id.upper(), dstr, jpg_bytes)
+                        _prefetch_counts["jpg"] += 1
+                    tb = raw["tb"]
+                    arr = np.asarray(tb, dtype=np.float32)
+                    mask = ~np.isfinite(arr) | (arr <= 0)
+                    scaled = np.clip((arr - _TB_VMIN) * _TB_SCALE + 1, 1, 255)
+                    scaled[mask] = 0
+                    encoded = scaled.astype(np.uint8)
+                    _gcs_rt_put(atcf_id.upper(), dstr, {
+                        "tb_data": base64.b64encode(encoded.tobytes()).decode("ascii"),
+                        "tb_rows": encoded.shape[0], "tb_cols": encoded.shape[1],
+                        "tb_vmin": _TB_VMIN, "tb_vmax": _TB_VMAX,
+                        "datetime_utc": raw["datetime_utc"],
+                        "satellite": raw.get("satellite", ""),
+                        "bounds": raw.get("bounds", [
+                            [center_lat - half, center_lon - half],
+                            [center_lat + half, center_lon + half],
+                        ]),
+                    })
+                    _prefetch_counts["ir"] += 1
+                    del tb, arr, mask, scaled, encoded
 
-                    # ── IR (Band 13) ──
-                    if _gcs_rt_get(atcf_id.upper(), dt_str) is None:
+                def _fetch_and_cache_band(tdt, dstr, band):
+                    """Worker: fetch WV/Vis frame and cache to GCS."""
+                    if _gcs_band_get(band, atcf_id.upper(), dstr) is not None:
+                        return
+                    if band == VIS_BAND:
+                        se = _solar_elevation(center_lat, center_lon, tdt)
+                        if se < -6:
+                            return
+                    binfo = BAND_RANGES.get(band, BAND_RANGES[13])
+                    bvmin, bvmax = binfo["vmin"], binfo["vmax"]
+                    bscale = 254.0 / (bvmax - bvmin)
+                    try:
+                        raw = fetch_band_raw(center_lat, center_lon, tdt, box_deg, band=band)
+                    except Exception:
+                        return
+                    if not raw or raw.get("data") is None:
+                        return
+                    data = raw["data"]
+                    arr = np.asarray(data, dtype=np.float32)
+                    mask = ~np.isfinite(arr)
+                    scaled = np.clip((arr - bvmin) * bscale + 1, 1, 255)
+                    scaled[mask] = 0
+                    encoded = scaled.astype(np.uint8)
+                    _gcs_band_put(band, atcf_id.upper(), dstr, {
+                        "tb_data": base64.b64encode(encoded.tobytes()).decode("ascii"),
+                        "tb_rows": encoded.shape[0], "tb_cols": encoded.shape[1],
+                        "tb_vmin": bvmin, "tb_vmax": bvmax,
+                        "band": band, "data_type": binfo["data_type"],
+                        "datetime_utc": raw["datetime_utc"],
+                        "satellite": raw.get("satellite", ""),
+                        "bounds": raw.get("bounds", [
+                            [center_lat - half, center_lon - half],
+                            [center_lat + half, center_lon + half],
+                        ]),
+                    })
+                    _prefetch_counts["band"] += 1
+                    del data, arr, mask, scaled, encoded
+
+                # Submit all tasks to thread pool (8 workers — fits in 2GB RAM)
+                with ThreadPoolExecutor(max_workers=8) as pool:
+                    futures = []
+                    for target_dt in reversed(frame_times):
+                        dt_str = target_dt.strftime("%Y%m%d%H%M")
+                        futures.append(pool.submit(_fetch_and_cache_ir, target_dt, dt_str))
+                        futures.append(pool.submit(_fetch_and_cache_band, target_dt, dt_str, right_band))
+
+                    # Wait for all to complete
+                    for fut in as_completed(futures):
                         try:
-                            raw = fetch_ir_tb_raw(
-                                center_lat, center_lon, target_dt, box_deg
-                            )
+                            fut.result()
                         except Exception:
-                            raw = None
+                            pass
 
-                        if raw and raw.get("tb") is not None:
-                            jpg_bytes = _render_ir_jpg(raw["tb"])
-                            if jpg_bytes:
-                                _gcs_jpg_put(atcf_id.upper(), dt_str, jpg_bytes)
-                                jpg_cached += 1
-
-                            tb = raw["tb"]
-                            arr = np.asarray(tb, dtype=np.float32)
-                            mask = ~np.isfinite(arr) | (arr <= 0)
-                            scaled = np.clip((arr - _TB_VMIN) * _TB_SCALE + 1, 1, 255)
-                            scaled[mask] = 0
-                            encoded = scaled.astype(np.uint8)
-                            _gcs_rt_put(atcf_id.upper(), dt_str, {
-                                "tb_data": base64.b64encode(encoded.tobytes()).decode("ascii"),
-                                "tb_rows": encoded.shape[0], "tb_cols": encoded.shape[1],
-                                "tb_vmin": _TB_VMIN, "tb_vmax": _TB_VMAX,
-                                "datetime_utc": raw["datetime_utc"],
-                                "satellite": raw.get("satellite", ""),
-                                "bounds": raw.get("bounds", [
-                                    [center_lat - half, center_lon - half],
-                                    [center_lat + half, center_lon + half],
-                                ]),
-                            })
-                            ir_gcs_fetched += 1
-                            del tb, arr, mask, scaled, encoded
-                            gc.collect()
-
-                    # ── WV or Vis (right panel band) ──
-                    if _gcs_band_get(right_band, atcf_id.upper(), dt_str) is None:
-                        # Skip visible at night
-                        if right_band == VIS_BAND:
-                            sun_el = _solar_elevation(center_lat, center_lon, target_dt)
-                            if sun_el < -6:
-                                continue
-
-                        band_info = BAND_RANGES.get(right_band, BAND_RANGES[13])
-                        bvmin, bvmax = band_info["vmin"], band_info["vmax"]
-                        bscale = 254.0 / (bvmax - bvmin)
-
-                        try:
-                            raw = fetch_band_raw(
-                                center_lat, center_lon, target_dt, box_deg,
-                                band=right_band
-                            )
-                        except Exception:
-                            raw = None
-
-                        if raw and raw.get("data") is not None:
-                            data = raw["data"]
-                            arr = np.asarray(data, dtype=np.float32)
-                            mask = ~np.isfinite(arr)
-                            scaled = np.clip((arr - bvmin) * bscale + 1, 1, 255)
-                            scaled[mask] = 0
-                            encoded = scaled.astype(np.uint8)
-                            _gcs_band_put(right_band, atcf_id.upper(), dt_str, {
-                                "tb_data": base64.b64encode(encoded.tobytes()).decode("ascii"),
-                                "tb_rows": encoded.shape[0], "tb_cols": encoded.shape[1],
-                                "tb_vmin": bvmin, "tb_vmax": bvmax,
-                                "band": right_band, "data_type": band_info["data_type"],
-                                "datetime_utc": raw["datetime_utc"],
-                                "satellite": raw.get("satellite", ""),
-                                "bounds": raw.get("bounds", [
-                                    [center_lat - half, center_lon - half],
-                                    [center_lat + half, center_lon + half],
-                                ]),
-                            })
-                            band_gcs_fetched += 1
-                            del data, arr, mask, scaled, encoded
-                            gc.collect()
-
-                    time.sleep(0.2)
-
-                if ir_gcs_fetched or band_gcs_fetched or jpg_cached:
-                    print(f"[IR Pre-fetch] {atcf_id}: GCS cached {ir_gcs_fetched} IR + "
-                          f"{band_gcs_fetched} Band {right_band} + {jpg_cached} JPG frames")
-                total_gcs_fetched += ir_gcs_fetched + band_gcs_fetched
+                gc.collect()
+                c = _prefetch_counts
+                if c["ir"] or c["band"] or c["jpg"]:
+                    print(f"[IR Pre-fetch] {atcf_id}: GCS cached {c['ir']} IR + "
+                          f"{c['band']} Band {right_band} + {c['jpg']} JPG frames (parallel)")
+                total_gcs_fetched += c["ir"] + c["band"]
 
         print(f"[IR Pre-fetch] Done — {total_fetched} new PNG frames, "
               f"{total_cached} already cached, "
