@@ -401,6 +401,12 @@
             var rightFrame = rightFrames[animIndex] || null;
             var rightCmap = getRightCmap();
             if (rightFrame) {
+                // Update label with frame timestamp
+                if (rightLabelEl) {
+                    var rName = rightBand === 2 ? 'Visible' : 'Water Vapor';
+                    var rTime = rightFrame.datetime_utc ? rightFrame.datetime_utc.replace('T', ' ').replace(/:\d{2}Z$/, ' UTC').replace('Z', ' UTC') : '';
+                    rightLabelEl.textContent = rName + (rTime ? '  ' + rTime : '');
+                }
                 renderFrame(canvasRight, ctxRight, rightFrame, rightCmap);
                 if (irFrame && irFrame.center_fix && !rightFrame.center_fix) {
                     rightFrame.center_fix = irFrame.center_fix;
@@ -410,6 +416,9 @@
                 var runit = rightDataType === 'reflectance' ? '%' : 'K';
                 if (rightDataType === 'reflectance') { rvmin = 0; rvmax = 100; }
                 renderColorbar(cbRightCanvas, rightCmap, cbRightTop, cbRightBot, rvmin, rvmax, runit);
+            } else if (rightLabelEl) {
+                var rName2 = rightBand === 2 ? 'Visible' : 'Water Vapor';
+                rightLabelEl.textContent = rName2 + '  (loading\u2026)';
             }
             if (irFrame) {
                 var vb2 = getViewBounds(irFrame);
