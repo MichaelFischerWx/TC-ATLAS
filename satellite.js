@@ -827,6 +827,10 @@
                     if (irDone >= totalFrames && stormId === currentStormId) {
                         buildValidIndices();
                         updateSliderMax();
+                        // Jump to most recent frame (highest index)
+                        if (validFrameIndices.length > 0) {
+                            animIndex = validFrameIndices[validFrameIndices.length - 1];
+                        }
                         renderBothPanels();
                         updateAnimUI();
                     }
@@ -1154,6 +1158,10 @@
                                 loadFrames(currentStormId);
                             } else {
                                 currentStorm = updated;
+                                // Auto-refresh frames to pick up newest imagery
+                                console.log('[Satellite] Auto-refreshing frames for latest imagery');
+                                irFrames = []; rightFrames = []; validFrameIndices = [];
+                                loadFrames(currentStormId);
                             }
                         } else if (updated) {
                             currentStorm = updated;
