@@ -1978,12 +1978,15 @@
 
         // Fetch most recent frame (index 0) first for instant display,
         // then backfill remaining frames with concurrent pool.
+        console.log('[Satellite] loadFrames: fetching frame 0 for ' + stormId);
         fetchIRFrame(0);
         var _backfillStarted = false;
         function startBackfill() {
             if (_backfillStarted) return;
             _backfillStarted = true;
-            for (var i = 1; i < Math.min(FETCH_CONCURRENCY + 1, totalFrames); i++) {
+            var backfillCount = Math.min(FETCH_CONCURRENCY + 1, totalFrames);
+            console.log('[Satellite] startBackfill: frames 1-' + (backfillCount - 1) + ' of ' + totalFrames);
+            for (var i = 1; i < backfillCount; i++) {
                 fetchIRFrame(i);
             }
         }
