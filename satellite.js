@@ -41,6 +41,7 @@
     var totalExpectedFrames = 7;
     var viewMode = 'diagnostics';       // 'diagnostics' | 'compare-wv' | 'compare-vis'
     var showCrosshair = true;
+    var followCenter = false;
     var diagChartsInitialized = false;
     var diagUpdateDebounceTimer = null;
     var DIAG_DEBOUNCE_MS = 100;
@@ -298,6 +299,11 @@
         var south = b[0][0], west = b[0][1], north = b[1][0], east = b[1][1];
         if (zoomDeg < 10) {
             var cLat = (south + north) / 2, cLon = (west + east) / 2;
+            // Follow mode: center on IR center_fix position
+            if (followCenter && frame.center_fix && frame.center_fix.lat) {
+                cLat = frame.center_fix.lat;
+                cLon = frame.center_fix.lon;
+            }
             return { south: cLat - zoomDeg, north: cLat + zoomDeg, west: cLon - zoomDeg, east: cLon + zoomDeg };
         }
         return { south: south, north: north, west: west, east: east };
@@ -1507,6 +1513,15 @@
         if (crosshairEl) {
             crosshairEl.addEventListener('change', function () {
                 showCrosshair = this.checked;
+                renderBothPanels();
+            });
+        }
+
+        // Follow storm toggle
+        var followEl = document.getElementById('sat-follow-toggle');
+        if (followEl) {
+            followEl.addEventListener('change', function () {
+                followCenter = this.checked;
                 renderBothPanels();
             });
         }
