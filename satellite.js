@@ -468,8 +468,8 @@
 
         // ── Coastlines ──
         if (coastlineData) {
-            overlayCtx.strokeStyle = 'rgba(40, 40, 50, 0.7)';
-            overlayCtx.lineWidth = 1;
+            overlayCtx.strokeStyle = 'rgba(200, 180, 120, 0.6)';
+            overlayCtx.lineWidth = 1.5;
             var features = coastlineData.features || [];
             for (var f = 0; f < features.length; f++) {
                 var geom = features[f].geometry;
