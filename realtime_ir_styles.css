@@ -380,6 +380,53 @@
     color: rgba(255, 255, 255, 0.65);
 }
 
+/* ── IR Center Fix Badge ────────────────────────────────────── */
+.ir-center-fix-badge {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 1px 7px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: #00e5ff;
+    background: rgba(0, 229, 255, 0.12);
+    border: 1px solid rgba(0, 229, 255, 0.35);
+    border-radius: 4px;
+    letter-spacing: 0.02em;
+    cursor: default;
+    vertical-align: middle;
+}
+
+/* ── IR Center Fix Crosshair (Leaflet divIcon) ─────────────── */
+.ir-center-fix-icon {
+    width: 22px;
+    height: 22px;
+    border: 2px solid #00e5ff;
+    border-radius: 50%;
+    background: transparent;
+    box-shadow: 0 0 6px rgba(0, 229, 255, 0.5);
+    position: relative;
+}
+.ir-center-fix-icon::before,
+.ir-center-fix-icon::after {
+    content: '';
+    position: absolute;
+    background: #00e5ff;
+}
+.ir-center-fix-icon::before {
+    width: 2px;
+    height: 22px;
+    left: 50%;
+    top: 0;
+    transform: translateX(-50%);
+}
+.ir-center-fix-icon::after {
+    width: 22px;
+    height: 2px;
+    top: 50%;
+    left: 0;
+    transform: translateY(-50%);
+}
+
 /* ── Product toggle (Enhanced IR / IR Vigor) ────────────────── */
 .ir-product-toggle {
     position: absolute;

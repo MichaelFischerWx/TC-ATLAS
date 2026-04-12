@@ -619,6 +619,10 @@
     var _rtAscatLastAtcf = null;       // last storm we fetched passes for
     var _rtAscatActiveUrl = null;      // currently displayed pass data URL
 
+    // ── IR Center Fix State ────────────────────────────────
+    var _irCenterMarker = null;        // L.marker for IR-derived center crosshair
+    var _irCenterFixBadge = null;      // DOM element for info badge
+
     // ── Browser-Side Panel Cache ─────────────────────────────
     // Per-storm cache for panel data to avoid re-fetching on back/forward.
     var _panelCache = {};              // { atcfId: { models, weatherlab, dmEns, ascat, meta, cachedAt } }
@@ -2822,6 +2826,7 @@
         // Clean up model overlay
         _rtRemoveModelOverlay();
         _rtRemoveAscatOverlay();
+        _clearIRCenterFix();
 
         // Reset product state
         removeVigorLayer();
@@ -2904,10 +2909,65 @@
         animFrameLayers[idx].setOpacity(0.85);
         updateFrameOverlay();
 
+        // Update IR center fix marker for this frame
+        _updateIRCenterFix();
+
         // Sync model overlay to new frame time
         if (_rtModelVisible && _rtModelAutoSync && _rtModelData) {
             _rtSyncModelCycleToIR();
         }
+    }
+
+    // ── IR Center Fix Marker ────────────────────────────────
+    function _updateIRCenterFix() {
+        // Remove previous marker
+        if (_irCenterMarker && detailMap) {
+            detailMap.removeLayer(_irCenterMarker);
+            _irCenterMarker = null;
+        }
+
+        // Update badge
+        if (!_irCenterFixBadge) {
+            _irCenterFixBadge = document.getElementById('ir-center-fix-badge');
+        }
+
+        var frame = rawTbFrames && rawTbFrames[animIndex];
+        if (!frame || !frame.center_fix || !frame.center_fix.lat) {
+            if (_irCenterFixBadge) _irCenterFixBadge.style.display = 'none';
+            return;
+        }
+
+        var fix = frame.center_fix;
+
+        // Create crosshair marker
+        var icon = L.divIcon({
+            className: 'ir-center-fix-icon',
+            iconSize: [22, 22],
+            iconAnchor: [11, 11]
+        });
+        _irCenterMarker = L.marker([fix.lat, fix.lon], {
+            icon: icon,
+            interactive: false,
+            pane: 'markerPane'
+        }).addTo(detailMap);
+
+        // Update info badge
+        if (_irCenterFixBadge) {
+            var latStr = Math.abs(fix.lat).toFixed(1) + (fix.lat >= 0 ? 'N' : 'S');
+            var lonStr = Math.abs(fix.lon).toFixed(1) + (fix.lon >= 0 ? 'E' : 'W');
+            _irCenterFixBadge.textContent = 'IR Fix: ' + latStr + ' ' + lonStr;
+            _irCenterFixBadge.title = 'Eye score: ' + fix.eye_score +
+                ' | \u0394Tb: ' + fix.ir_rad_dif + ' K';
+            _irCenterFixBadge.style.display = '';
+        }
+    }
+
+    function _clearIRCenterFix() {
+        if (_irCenterMarker && detailMap) {
+            detailMap.removeLayer(_irCenterMarker);
+            _irCenterMarker = null;
+        }
+        if (_irCenterFixBadge) _irCenterFixBadge.style.display = 'none';
     }
 
     /** Find the position of animIndex within validFrames (or -1) */
@@ -3284,7 +3344,8 @@
                         tb_data: decodeTbData(frame.tb_data),
                         rows: frame.tb_rows,
                         cols: frame.tb_cols,
-                        bounds: frame.bounds
+                        bounds: frame.bounds,
+                        center_fix: frame.center_fix || null
                     };
                     completed++;
 

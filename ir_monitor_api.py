@@ -51,6 +51,8 @@ from satellite_ir import (
     WV_BAND,
 )
 
+from tc_center_fix import find_ir_center
+
 try:
     import requests as _requests
 except ImportError:
@@ -1722,6 +1724,26 @@ def get_storm_ir_raw_frame(
     scaled[mask] = 0
     encoded = scaled.astype(np.uint8)
 
+    # IR-based center fix for hurricanes (>= 65 kt)
+    center_fix = None
+    vmax_kt = storm.get("vmax_kt")
+    if vmax_kt is not None and vmax_kt >= 65:
+        frame_bounds = raw.get("bounds", [
+            [center_lat - half, center_lon - half],
+            [center_lat + half, center_lon + half],
+        ])
+        try:
+            cfix = find_ir_center(arr, frame_bounds, center_lat, center_lon)
+            if cfix.get("success"):
+                center_fix = {
+                    "lat": cfix["lat"],
+                    "lon": cfix["lon"],
+                    "eye_score": cfix["eye_score"],
+                    "ir_rad_dif": cfix["ir_rad_dif"],
+                }
+        except Exception:
+            pass  # center fix is best-effort; never block frame delivery
+
     frame_result = {
         "tb_data": base64.b64encode(encoded.tobytes()).decode("ascii"),
         "tb_rows": encoded.shape[0],
@@ -1736,6 +1758,7 @@ def get_storm_ir_raw_frame(
         ]),
         "frame_index": frame_index,
         "total_frames": len(frame_times),
+        "center_fix": center_fix,
     }
 
     # Cache to GCS
