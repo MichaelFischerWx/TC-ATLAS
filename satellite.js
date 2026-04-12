@@ -1050,35 +1050,68 @@
         if (!hov) { div.style.display = 'none'; return; }
         div.style.display = 'block';
 
+        // Claude IR colorscale mapped to Celsius (-100 to +40)
+        // Tb stops from claude-ir LUT converted to fraction of [-100, 40] range
+        var _hovCrange = [-100, 40], _hovSpan = _hovCrange[1] - _hovCrange[0];
+        function _tbCtoFrac(tbK) { return Math.max(0, Math.min(1, ((tbK - 273.15) - _hovCrange[0]) / _hovSpan)); }
+        var hovColorscale = [
+            [0.00,                      'rgb(28,12,96)'],    // 173K = -100C
+            [_tbCtoFrac(183),           'rgb(64,24,140)'],   // -90C
+            [_tbCtoFrac(193),           'rgb(120,48,180)'],  // -80C
+            [_tbCtoFrac(198),           'rgb(168,64,200)'],  // -75C
+            [_tbCtoFrac(203),           'rgb(196,48,156)'],  // -70C
+            [_tbCtoFrac(208),           'rgb(180,36,68)'],   // -65C
+            [_tbCtoFrac(213),           'rgb(214,78,56)'],   // -60C
+            [_tbCtoFrac(218),           'rgb(228,132,48)'],  // -55C
+            [_tbCtoFrac(223),           'rgb(238,196,48)'],  // -50C
+            [_tbCtoFrac(228),           'rgb(192,220,40)'],  // -45C
+            [_tbCtoFrac(233),           'rgb(96,208,68)'],   // -40C
+            [_tbCtoFrac(238),           'rgb(40,178,116)'],  // -35C
+            [_tbCtoFrac(243),           'rgb(32,148,166)'],  // -30C
+            [_tbCtoFrac(248),           'rgb(68,180,196)'],  // -25C
+            [_tbCtoFrac(253),           'rgb(140,210,220)'], // -20C
+            [_tbCtoFrac(263),           'rgb(216,218,228)'], // -10C
+            [_tbCtoFrac(273),           'rgb(180,180,192)'], //  0C
+            [_tbCtoFrac(283),           'rgb(120,120,132)'], // 10C
+            [_tbCtoFrac(293),           'rgb(70,70,82)'],    // 20C
+            [1.00,                      'rgb(12,12,22)']     // 310K = 37C
+        ];
+
+        // Transpose z to z[time][radius] so time is Y-axis
+        var zT = [];
+        for (var ti = 0; ti < hov.times.length; ti++) {
+            var row = [];
+            for (var ri = 0; ri < hov.radii.length; ri++) {
+                row.push(hov.z[ri][ti]);
+            }
+            zT.push(row);
+        }
+
         var traces = [{
-            x: hov.times, y: hov.radii, z: hov.z,
+            x: hov.radii, y: hov.times, z: zT,
             type: 'heatmap',
-            colorscale: [
-                [0.0, '#1e3a5f'], [0.15, '#2563eb'], [0.3, '#22d3ee'],
-                [0.45, '#86efac'], [0.55, '#fde047'], [0.7, '#fb923c'],
-                [0.85, '#ef4444'], [1.0, '#7f1d1d']
-            ],
-            zmin: -80, zmax: 30,
+            colorscale: hovColorscale,
+            zmin: _hovCrange[0], zmax: _hovCrange[1],
             colorbar: {
                 title: { text: '\u00B0C', font: { size: 10, color: '#94a3b8' } },
                 tickfont: { size: 9, family: 'JetBrains Mono, monospace', color: '#8b9ec2' },
                 thickness: 12, len: 0.9
             },
-            hovertemplate: '%{x|%H:%M}<br>%{y:.0f} km<br>%{z:.1f} \u00B0C<extra></extra>'
+            hovertemplate: '%{y|%H:%M UTC}<br>%{x:.0f} km<br>%{z:.1f} \u00B0C<extra></extra>'
         }];
 
         var layout = JSON.parse(JSON.stringify(DIAG_LAYOUT_BASE));
         layout.title = { text: 'Azimuthal-Mean Tb Hovmoller', font: { size: 12, color: '#94a3b8' } };
-        layout.xaxis = { title: { text: 'Time (UTC)', font: { size: 10 } }, gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 8, family: 'JetBrains Mono, monospace' }, tickangle: -30 };
-        layout.yaxis = { title: { text: 'Radius (km)', font: { size: 10 } }, gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 9, family: 'JetBrains Mono, monospace' } };
-        layout.margin = { t: 32, r: 60, b: 50, l: 48 };
+        layout.xaxis = { title: { text: 'Radius (km)', font: { size: 10 } }, gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 9, family: 'JetBrains Mono, monospace' } };
+        layout.yaxis = { title: { text: 'Time (UTC)', font: { size: 10 } }, gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 8, family: 'JetBrains Mono, monospace' } };
+        layout.margin = { t: 32, r: 60, b: 40, l: 70 };
 
-        // Vertical line at current frame time
+        // Horizontal line at current frame time
         var curFrame = irFrames[animIndex];
         if (curFrame && curFrame.datetime_utc) {
             layout.shapes = [{
-                type: 'line', x0: curFrame.datetime_utc, x1: curFrame.datetime_utc,
-                y0: 0, y1: 1, yref: 'paper',
+                type: 'line', y0: curFrame.datetime_utc, y1: curFrame.datetime_utc,
+                x0: 0, x1: 1, xref: 'paper',
                 line: { color: '#ffffff66', width: 1.5, dash: 'dot' }
             }];
         }
