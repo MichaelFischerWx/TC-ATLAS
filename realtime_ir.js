@@ -2926,18 +2926,29 @@
             _irCenterMarker = null;
         }
 
-        // Update badge
+        // Cache DOM refs
         if (!_irCenterFixBadge) {
             _irCenterFixBadge = document.getElementById('ir-center-fix-badge');
         }
+        var noteEl = document.getElementById('ir-center-fix-note');
 
         var frame = rawTbFrames && rawTbFrames[animIndex];
+
+        // Check if this storm is hurricane-strength (center_fix field present)
+        // center_fix is null when attempted but eye not detected, undefined when not attempted (< 65 kt)
+        var wasAttempted = frame && frame.center_fix !== undefined;
+
         if (!frame || !frame.center_fix || !frame.center_fix.lat) {
             if (_irCenterFixBadge) _irCenterFixBadge.style.display = 'none';
+            // Show "eye not detected" note only when fix was attempted but failed
+            if (noteEl) noteEl.style.display = (wasAttempted && frame.center_fix === null) ? '' : 'none';
             return;
         }
 
         var fix = frame.center_fix;
+
+        // Hide note, show badge
+        if (noteEl) noteEl.style.display = 'none';
 
         // Create crosshair marker
         var icon = L.divIcon({
@@ -2968,6 +2979,8 @@
             _irCenterMarker = null;
         }
         if (_irCenterFixBadge) _irCenterFixBadge.style.display = 'none';
+        var noteEl = document.getElementById('ir-center-fix-note');
+        if (noteEl) noteEl.style.display = 'none';
     }
 
     /** Find the position of animIndex within validFrames (or -1) */
@@ -6053,10 +6066,8 @@
                 }
                 ann.font = ann.font || {};
                 ann.font.size = Math.max((ann.font.size || 9) + 2, 10);
-                // Move percentile summary (y > 1.0) below title with centered alignment
+                // Move percentile summary (y > 1.0) below title — keep original x alignment
                 if (ann.yref === 'paper' && ann.y > 1.0) {
-                    ann.x = 0.5;
-                    ann.xanchor = 'center';
                     ann.y = 1.01;
                     ann.font.size = 12;
                 }

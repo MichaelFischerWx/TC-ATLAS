@@ -396,6 +396,15 @@
     vertical-align: middle;
 }
 
+.ir-center-fix-note {
+    display: inline-block;
+    margin-left: 8px;
+    font-size: 0.65rem;
+    color: rgba(148, 163, 184, 0.6);
+    font-style: italic;
+    vertical-align: middle;
+}
+
 /* ── IR Center Fix Crosshair (Leaflet divIcon) ─────────────── */
 .ir-center-fix-icon {
     width: 22px;

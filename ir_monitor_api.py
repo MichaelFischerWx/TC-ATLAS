@@ -158,6 +158,63 @@ def _gcs_rt_put(atcf_id: str, dt_str: str, frame: dict, lat: float = 0, lon: flo
     threading.Thread(target=_upload, daemon=True).start()
 
 
+# ── IR Center Fix Log (GCS persistent archive) ────────────────
+_CENTER_FIX_LOG_KEY = "ir-center-fix-log.txt"
+_center_fix_log_buf = []
+_center_fix_log_lock = threading.Lock()
+_CENTER_FIX_FLUSH_SIZE = 5  # flush to GCS every N entries
+
+
+def _log_center_fix(atcf_id, storm_name, frame_dt, satellite, cfix):
+    """Buffer a center-fix log entry and flush to GCS when buffer is full."""
+    now = _dt.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if cfix and cfix.get("success"):
+        line = (
+            f"{now}\t{atcf_id}\t{storm_name}\t{frame_dt}\t{satellite}"
+            f"\t{cfix['lat']}\t{cfix['lon']}"
+            f"\t{cfix['eye_score']}\t{cfix['ir_rad_dif']}\t{cfix['mean_std']}"
+        )
+    else:
+        line = (
+            f"{now}\t{atcf_id}\t{storm_name}\t{frame_dt}\t{satellite}"
+            f"\tnan\tnan\tnan\tnan\tnan"
+        )
+    with _center_fix_log_lock:
+        _center_fix_log_buf.append(line)
+        if len(_center_fix_log_buf) >= _CENTER_FIX_FLUSH_SIZE:
+            _flush_center_fix_log()
+
+
+def _flush_center_fix_log():
+    """Append buffered log lines to GCS. Called with lock held."""
+    global _center_fix_log_buf
+    if not _center_fix_log_buf:
+        return
+    lines = _center_fix_log_buf
+    _center_fix_log_buf = []
+
+    def _upload():
+        bucket = _get_rt_gcs_bucket()
+        if bucket is None:
+            return
+        try:
+            blob = bucket.blob(_CENTER_FIX_LOG_KEY)
+            # Download existing log, append new lines
+            try:
+                existing = blob.download_as_text(timeout=10)
+            except Exception:
+                existing = (
+                    "timestamp\tatcf_id\tstorm_name\tframe_dt\tsatellite"
+                    "\tfix_lat\tfix_lon\teye_score\tir_rad_dif\tmean_std\n"
+                )
+            existing += "\n".join(lines) + "\n"
+            blob.upload_from_string(existing, content_type="text/plain", timeout=15)
+        except Exception:
+            pass
+
+    threading.Thread(target=_upload, daemon=True).start()
+
+
 def _gcs_band_get(band: int, atcf_id: str, dt_str: str, lat: float = 0, lon: float = 0) -> dict | None:
     """Try to read a cached band frame from GCS."""
     bucket = _get_rt_gcs_bucket()
@@ -1726,6 +1783,7 @@ def get_storm_ir_raw_frame(
 
     # IR-based center fix for hurricanes (>= 65 kt)
     center_fix = None
+    cfix_raw = None
     vmax_kt = storm.get("vmax_kt")
     if vmax_kt is not None and vmax_kt >= 65:
         frame_bounds = raw.get("bounds", [
@@ -1733,16 +1791,28 @@ def get_storm_ir_raw_frame(
             [center_lat + half, center_lon + half],
         ])
         try:
-            cfix = find_ir_center(arr, frame_bounds, center_lat, center_lon)
-            if cfix.get("success"):
+            cfix_raw = find_ir_center(arr, frame_bounds, center_lat, center_lon)
+            if cfix_raw.get("success"):
                 center_fix = {
-                    "lat": cfix["lat"],
-                    "lon": cfix["lon"],
-                    "eye_score": cfix["eye_score"],
-                    "ir_rad_dif": cfix["ir_rad_dif"],
+                    "lat": cfix_raw["lat"],
+                    "lon": cfix_raw["lon"],
+                    "eye_score": cfix_raw["eye_score"],
+                    "ir_rad_dif": cfix_raw["ir_rad_dif"],
                 }
         except Exception:
             pass  # center fix is best-effort; never block frame delivery
+
+        # Log every center-fix attempt (success or NaN) to GCS archive
+        try:
+            _log_center_fix(
+                atcf_id.upper(),
+                storm.get("name", ""),
+                raw.get("datetime_utc", dt_str),
+                raw.get("satellite", ""),
+                cfix_raw,
+            )
+        except Exception:
+            pass
 
     frame_result = {
         "tb_data": base64.b64encode(encoded.tobytes()).decode("ascii"),
