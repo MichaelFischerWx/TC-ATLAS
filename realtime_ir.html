@@ -43,7 +43,7 @@
     <!-- Styles -->
     <link rel="stylesheet" href="tc_radar_styles.css">
     <link rel="stylesheet" href="realtime_ir_styles.css?v=20260412a">
-    <link rel="stylesheet" href="satellite_styles.css?v=20260412g">
+    <link rel="stylesheet" href="satellite_styles.css?v=20260412h">
 </head>
 <body>
     <a href="#ir-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -505,10 +505,22 @@
                     <div class="sat-panel" id="sat-panel-right" data-mode="diagnostics">
                         <!-- Diagnostics panel (default view) -->
                         <div id="sat-diag-panel" class="sat-diag-panel">
-                            <div class="sat-panel-label" id="sat-diag-label">IR Diagnostics</div>
-                            <div id="sat-diag-radial" class="sat-diag-chart"></div>
-                            <div id="sat-diag-timeseries" class="sat-diag-chart"></div>
-                            <div id="sat-diag-histogram" class="sat-diag-chart"></div>
+                            <div class="sat-diag-header">
+                                <div class="sat-diag-toggle">
+                                    <button class="sat-diag-tab active" id="sat-diag-tab-charts" data-tab="charts">Charts</button>
+                                    <button class="sat-diag-tab" id="sat-diag-tab-hovmoller" data-tab="hovmoller">Hovmoller</button>
+                                </div>
+                            </div>
+                            <!-- Charts view (default) -->
+                            <div id="sat-diag-charts" class="sat-diag-view">
+                                <div id="sat-diag-radial" class="sat-diag-chart"></div>
+                                <div id="sat-diag-timeseries" class="sat-diag-chart"></div>
+                                <div id="sat-diag-histogram" class="sat-diag-chart"></div>
+                            </div>
+                            <!-- Hovmoller view -->
+                            <div id="sat-diag-hovmoller" class="sat-diag-view" style="display:none;">
+                                <div id="sat-diag-hovmoller-chart" class="sat-diag-chart sat-diag-hovmoller-chart"></div>
+                            </div>
                             <div id="sat-diag-empty" class="sat-diag-empty" style="display:none;">
                                 No center fix available for this frame.<br>
                                 Diagnostics require a detected eye (storms &ge; 65 kt).

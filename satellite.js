@@ -45,6 +45,7 @@
     var diagChartsInitialized = false;
     var diagUpdateDebounceTimer = null;
     var DIAG_DEBOUNCE_MS = 100;
+    var diagTab = 'charts';  // 'charts' | 'hovmoller'
 
     var ANIM_SPEEDS = [
         { label: '0.5x', ms: 1200 },
@@ -976,27 +977,158 @@
         }
     }
 
+    function buildHovmollerData() {
+        var maxRadKm = 200;
+        var dr = 4; // km bin width (coarser than radial profile for cleaner heatmap)
+        var nRadBins = Math.ceil(maxRadKm / dr);
+        var times = [];
+        var profiles = []; // array of arrays, one per frame
+
+        for (var fi = irFrames.length - 1; fi >= 0; fi--) {
+            var frame = irFrames[fi];
+            if (!frame || !frame.center_fix || !frame.tb_data) continue;
+
+            var cLat = frame.center_fix.lat, cLon = frame.center_fix.lon;
+            var b = frame.bounds;
+            var south = b[0][0], west = b[0][1], north = b[1][0], east = b[1][1];
+            var rows = frame.rows, cols = frame.cols;
+            var vmin = frame.tb_vmin || 160.0, vmax = frame.tb_vmax || 330.0;
+            var cy = (north - cLat) / (north - south) * (rows - 1);
+            var cx = (cLon - west) / (east - west) * (cols - 1);
+            var cosLat = Math.cos(cLat * Math.PI / 180);
+            var dyKm = (north - south) / (rows - 1) * 111.0;
+            var dxKm = (east - west) / (cols - 1) * 111.0 * cosLat;
+
+            var sums = new Float64Array(nRadBins);
+            var counts = new Int32Array(nRadBins);
+
+            for (var r = 0; r < rows; r++) {
+                var dY = (r - cy) * dyKm;
+                for (var c = 0; c < cols; c++) {
+                    var rawVal = frame.tb_data[r * cols + c];
+                    if (rawVal === 0) continue;
+                    var dX = (c - cx) * dxKm;
+                    var dist = Math.sqrt(dY * dY + dX * dX);
+                    var bin = Math.floor(dist / dr);
+                    if (bin >= nRadBins) continue;
+                    sums[bin] += decodeTbValue(rawVal, vmin, vmax);
+                    counts[bin]++;
+                }
+            }
+
+            var profile = new Array(nRadBins);
+            for (var i = 0; i < nRadBins; i++) {
+                profile[i] = counts[i] >= 3 ? (sums[i] / counts[i]) - 273.15 : null;
+            }
+            times.push(frame.datetime_utc);
+            profiles.push(profile);
+        }
+
+        if (times.length < 2) return null;
+
+        // Build radii array
+        var radii = [];
+        for (var ri = 0; ri < nRadBins; ri++) radii.push(ri * dr + dr / 2);
+
+        // Transpose profiles to z[radius][time] for Plotly heatmap
+        var z = [];
+        for (var ri2 = 0; ri2 < nRadBins; ri2++) {
+            var row = [];
+            for (var ti = 0; ti < profiles.length; ti++) {
+                row.push(profiles[ti][ri2]);
+            }
+            z.push(row);
+        }
+
+        return { times: times, radii: radii, z: z };
+    }
+
+    function renderHovmollerChart() {
+        var div = document.getElementById('sat-diag-hovmoller-chart');
+        if (!div) return;
+        var hov = buildHovmollerData();
+        if (!hov) { div.style.display = 'none'; return; }
+        div.style.display = 'block';
+
+        var traces = [{
+            x: hov.times, y: hov.radii, z: hov.z,
+            type: 'heatmap',
+            colorscale: [
+                [0.0, '#1e3a5f'], [0.15, '#2563eb'], [0.3, '#22d3ee'],
+                [0.45, '#86efac'], [0.55, '#fde047'], [0.7, '#fb923c'],
+                [0.85, '#ef4444'], [1.0, '#7f1d1d']
+            ],
+            zmin: -80, zmax: 30,
+            colorbar: {
+                title: { text: '\u00B0C', font: { size: 10, color: '#94a3b8' } },
+                tickfont: { size: 9, family: 'JetBrains Mono, monospace', color: '#8b9ec2' },
+                thickness: 12, len: 0.9
+            },
+            hovertemplate: '%{x|%H:%M}<br>%{y:.0f} km<br>%{z:.1f} \u00B0C<extra></extra>'
+        }];
+
+        var layout = JSON.parse(JSON.stringify(DIAG_LAYOUT_BASE));
+        layout.title = { text: 'Azimuthal-Mean Tb Hovmoller', font: { size: 12, color: '#94a3b8' } };
+        layout.xaxis = { title: { text: 'Time (UTC)', font: { size: 10 } }, gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 8, family: 'JetBrains Mono, monospace' }, tickangle: -30 };
+        layout.yaxis = { title: { text: 'Radius (km)', font: { size: 10 } }, gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 9, family: 'JetBrains Mono, monospace' } };
+        layout.margin = { t: 32, r: 60, b: 50, l: 48 };
+
+        // Vertical line at current frame time
+        var curFrame = irFrames[animIndex];
+        if (curFrame && curFrame.datetime_utc) {
+            layout.shapes = [{
+                type: 'line', x0: curFrame.datetime_utc, x1: curFrame.datetime_utc,
+                y0: 0, y1: 1, yref: 'paper',
+                line: { color: '#ffffff66', width: 1.5, dash: 'dot' }
+            }];
+        }
+
+        if (div.data) {
+            Plotly.react(div, traces, layout, DIAG_CONFIG);
+        } else {
+            Plotly.newPlot(div, traces, layout, DIAG_CONFIG);
+        }
+    }
+
     function renderDiagnostics() {
         if (viewMode !== 'diagnostics') return;
         var frame = irFrames[animIndex];
         if (!frame) return;
         var emptyMsg = document.getElementById('sat-diag-empty');
-        var radialDiv = document.getElementById('sat-diag-radial');
-        var tsDiv = document.getElementById('sat-diag-timeseries');
-        var histDiv = document.getElementById('sat-diag-histogram');
+        var chartsView = document.getElementById('sat-diag-charts');
+        var hovView = document.getElementById('sat-diag-hovmoller');
 
-        if (!frame.center_fix) {
-            if (radialDiv) radialDiv.style.display = 'none';
-            if (tsDiv) tsDiv.style.display = 'none';
-            if (histDiv) histDiv.style.display = 'none';
+        // Check if any frame has center_fix
+        var hasCenterFix = false;
+        if (frame.center_fix) {
+            hasCenterFix = true;
+        } else {
+            for (var i = 0; i < irFrames.length; i++) {
+                if (irFrames[i] && irFrames[i].center_fix) { hasCenterFix = true; break; }
+            }
+        }
+
+        if (!hasCenterFix) {
+            if (chartsView) chartsView.style.display = 'none';
+            if (hovView) hovView.style.display = 'none';
             if (emptyMsg) emptyMsg.style.display = '';
             return;
         }
         if (emptyMsg) emptyMsg.style.display = 'none';
 
-        renderRadialProfileChart(frame);
-        renderCenterFixTimeSeries();
-        renderTbHistogramChart(frame);
+        if (diagTab === 'charts') {
+            if (chartsView) chartsView.style.display = '';
+            if (hovView) hovView.style.display = 'none';
+            if (frame.center_fix) {
+                renderRadialProfileChart(frame);
+                renderTbHistogramChart(frame);
+            }
+            renderCenterFixTimeSeries();
+        } else {
+            if (chartsView) chartsView.style.display = 'none';
+            if (hovView) hovView.style.display = '';
+            renderHovmollerChart();
+        }
         diagChartsInitialized = true;
     }
 
@@ -1523,6 +1655,30 @@
             followEl.addEventListener('change', function () {
                 followCenter = this.checked;
                 renderBothPanels();
+            });
+        }
+
+        // Diagnostics tab toggle (Charts / Hovmoller)
+        var diagTabs = document.querySelectorAll('.sat-diag-tab');
+        for (var dt = 0; dt < diagTabs.length; dt++) {
+            diagTabs[dt].addEventListener('click', function () {
+                var newTab = this.getAttribute('data-tab');
+                if (newTab === diagTab) return;
+                diagTab = newTab;
+                for (var dj = 0; dj < diagTabs.length; dj++) {
+                    diagTabs[dj].classList.toggle('active', diagTabs[dj].getAttribute('data-tab') === newTab);
+                }
+                // Immediately toggle view visibility
+                var chartsView = document.getElementById('sat-diag-charts');
+                var hovView = document.getElementById('sat-diag-hovmoller');
+                if (chartsView) chartsView.style.display = newTab === 'charts' ? '' : 'none';
+                if (hovView) hovView.style.display = newTab === 'hovmoller' ? '' : 'none';
+                // Render and resize after switching
+                setTimeout(function () {
+                    renderDiagnostics();
+                    var hovDiv = document.getElementById('sat-diag-hovmoller-chart');
+                    if (hovDiv && hovDiv.data) Plotly.Plots.resize(hovDiv);
+                }, 50);
             });
         }
 
