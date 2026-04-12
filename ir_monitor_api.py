@@ -1827,20 +1827,6 @@ def get_storm_ir_raw_frame(
             headers={"Cache-Control": "public, max-age=300"},
         )
 
-    # Use a recent center_fix to recenter the data fetch box when the
-    # advisory position is stale (can be 6+ hours old for JTWC).
-    for _rc_off in [1, -1, 2, -2, 3, -3, 4, -4]:
-        _rc_idx = frame_index + _rc_off
-        if _rc_idx < 0 or _rc_idx >= len(frame_times):
-            continue
-        _rc_dt = frame_times[_rc_idx].strftime("%Y%m%d%H%M")
-        _rc_cached = _gcs_rt_get(atcf_id.upper(), _rc_dt, lat=storm["lat"], lon=storm["lon"])
-        if _rc_cached and isinstance(_rc_cached.get("center_fix"), dict):
-            center_lat = _rc_cached["center_fix"]["lat"]
-            center_lon = _rc_cached["center_fix"]["lon"]
-            half = box_deg / 2.0
-            break
-
     raw = fetch_ir_tb_raw(center_lat, center_lon, target_dt, box_deg)
     if not raw or raw.get("tb") is None:
         raise HTTPException(status_code=502, detail=f"No IR data for frame {frame_index}")
