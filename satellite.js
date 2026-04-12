@@ -876,7 +876,7 @@
         var layout = JSON.parse(JSON.stringify(DIAG_LAYOUT_BASE));
         layout.title = { text: 'Azimuthal-Mean Radial Tb', font: { size: 11, color: '#94a3b8' } };
         layout.xaxis = { title: { text: 'Radius (km)', font: { size: 10 } }, gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 9, family: 'JetBrains Mono, monospace' } };
-        layout.yaxis = { title: { text: 'Tb (\u00B0C)', font: { size: 10 } }, autorange: 'reversed', range: [-100, 30], gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 9, family: 'JetBrains Mono, monospace' }, ticksuffix: '\u00B0' };
+        layout.yaxis = { title: { text: 'Tb (\u00B0C)', font: { size: 10 } }, autorange: 'reversed', range: [-100, 40], gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 9, family: 'JetBrains Mono, monospace' }, ticksuffix: '\u00B0' };
         layout.showlegend = false;
 
         if (div.data) {
