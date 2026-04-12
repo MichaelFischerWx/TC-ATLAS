@@ -559,8 +559,8 @@ def _list_jtwc_active_storms() -> list:
             storms.append((storm_id, bdeck_url))
 
         # For SH storms that straddle year boundary (Nov→Apr),
-        # also check previous year if we're in Jan-Jun
-        if _dt.now(timezone.utc).month <= 6:
+        # check previous year only in Jan-Mar when straddling is plausible
+        if _dt.now(timezone.utc).month <= 3:
             prev_year = year - 1
             if source_name == "ucar":
                 prev_url = f"{base_url}/{prev_year}/"
@@ -1126,12 +1126,19 @@ def _poll_active_storms():
         if storm_id in seen_ids:
             continue
 
+        # Fetch B-deck first and check staleness before expensive CARQ/TCW lookups
         bdeck_records = _fetch_jtwc_bdeck(storm_id, bdeck_url)
 
-        # Supplement with CARQ a-deck (operational fixes — often fresher)
-        carq_records = _fetch_jtwc_carq(storm_id)
+        # Quick staleness check on B-deck alone — skip CARQ/TCW for old storms
+        if bdeck_records:
+            bdeck_latest_dt = max(r["datetime"] for r in bdeck_records)
+            bdeck_age = now - bdeck_latest_dt
+            if bdeck_age > timedelta(hours=48):
+                print(f"[IR Monitor] JTWC {storm_id}: stale — last fix {bdeck_latest_dt} ({bdeck_age} ago)")
+                continue
 
-        # Supplement with TCW warning (most real-time JTWC source)
+        # Only fetch CARQ/TCW for potentially active storms
+        carq_records = _fetch_jtwc_carq(storm_id)
         tcw_records, tcw_name = _fetch_jtwc_tcw(storm_id)
 
         # Merge all sources, deduplicate by (datetime, tau, tech)
