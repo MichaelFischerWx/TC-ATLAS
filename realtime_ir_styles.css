@@ -407,13 +407,16 @@
 
 /* ── IR Center Fix Crosshair (Leaflet divIcon) ─────────────── */
 .ir-center-fix-icon {
-    width: 22px;
-    height: 22px;
-    border: 2px solid #00e5ff;
-    border-radius: 50%;
-    background: transparent;
-    box-shadow: 0 0 6px rgba(0, 229, 255, 0.5);
+    width: 22px !important;
+    height: 22px !important;
+    border: 2px solid #00e5ff !important;
+    border-radius: 50% !important;
+    background: transparent !important;
+    box-shadow: 0 0 8px rgba(0, 229, 255, 0.7);
     position: relative;
+    /* Override Leaflet's default leaflet-div-icon white background */
+    margin: 0 !important;
+    padding: 0 !important;
 }
 .ir-center-fix-icon::before,
 .ir-center-fix-icon::after {

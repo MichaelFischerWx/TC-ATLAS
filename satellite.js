@@ -873,7 +873,7 @@
                     // Cache only when BOTH bands are fully loaded
                     if (irDone >= totalFrames && rightDone >= totalFrames) {
                         frameCache[stormId] = {
-                            ir: irLoaded.slice(), right: rightLoaded.slice(), ts: Date.now()
+                            ir: irFrames.slice(), right: rightFrames.slice(), ts: Date.now()
                         };
                     }
                 });
