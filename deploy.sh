@@ -63,7 +63,7 @@ MAX_INSTANCES="10"                  # allow scaling during active storms
 MIN_INSTANCES="0"                   # scale to zero in off-season
                                     # set to 1 during hurricane season to
                                     # avoid cold starts
-CONCURRENCY="10"                    # requests per instance (lower = less OOM risk)
+CONCURRENCY="7"                     # requests per instance (lucky number, OOM-safe)
 TIMEOUT="300s"                      # match gunicorn timeout
 
 # ── Deploy ────────────────────────────────────────────────────
