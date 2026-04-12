@@ -89,7 +89,7 @@ _NHC_BASINS = {"EP", "CP", "AL"}
 
 # Cache settings
 _STORM_CACHE_TTL = 300          # 5 minutes (matches Cloud Scheduler ping interval)
-_IR_FRAME_CACHE_MAX = 200       # max cached IR frames (covers ~15 storms)
+_IR_FRAME_CACHE_MAX = 50        # max cached IR frames (reduced to prevent OOM at 2GB)
 _IR_FRAME_CACHE_TTL = 300       # 5 minutes per frame
 
 # Tb encoding constants (shared by /ir-raw endpoint and GCS prefetch)
@@ -1792,7 +1792,7 @@ def get_storm_ir_raw_frame(
                 ])
                 # Use adjacent frame's center_fix as initial guess if available
                 bf_guess_lat, bf_guess_lon = center_lat, center_lon
-                for bf_off in [1, -1, 2, -2]:
+                for bf_off in [1, -1]:
                     bf_adj = frame_index + bf_off
                     if bf_adj < 0 or bf_adj >= len(frame_times):
                         continue
@@ -1853,7 +1853,7 @@ def get_storm_ir_raw_frame(
         # prevents stale advisory positions (sometimes 6+ hours old) from
         # placing the search window too far from the actual eye.
         guess_lat, guess_lon = center_lat, center_lon
-        for offset in [1, -1, 2, -2]:
+        for offset in [1, -1]:
             adj_idx = frame_index + offset
             if adj_idx < 0 or adj_idx >= len(frame_times):
                 continue
