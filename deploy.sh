@@ -59,11 +59,11 @@ SERVICE_NAME="tc-atlas-api"
 REGION="us-east1"                   # close to your S3 bucket in us-east-1
 MEMORY="2Gi"                        # match your current Render plan
 CPU="1"                             # 1 vCPU per instance
-MAX_INSTANCES="5"                   # cost ceiling — adjust as needed
+MAX_INSTANCES="10"                  # allow scaling during active storms
 MIN_INSTANCES="0"                   # scale to zero in off-season
                                     # set to 1 during hurricane season to
                                     # avoid cold starts
-CONCURRENCY="20"                    # requests per instance
+CONCURRENCY="10"                    # requests per instance (lower = less OOM risk)
 TIMEOUT="300s"                      # match gunicorn timeout
 
 # ── Deploy ────────────────────────────────────────────────────
