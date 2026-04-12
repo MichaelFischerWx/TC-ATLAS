@@ -89,7 +89,7 @@ _NHC_BASINS = {"EP", "CP", "AL"}
 
 # Cache settings
 _STORM_CACHE_TTL = 300          # 5 minutes (matches Cloud Scheduler ping interval)
-_IR_FRAME_CACHE_MAX = 50        # max cached IR frames (reduced to prevent OOM at 2GB)
+_IR_FRAME_CACHE_MAX = 100       # max cached IR frames (~10 MB, covers ~7 storms)
 _IR_FRAME_CACHE_TTL = 300       # 5 minutes per frame
 
 # Tb encoding constants (shared by /ir-raw endpoint and GCS prefetch)
@@ -1227,7 +1227,8 @@ def _poll_active_storms():
 
     # Kick off background IR pre-fetch for all active storms
     # Storms that moved get priority (listed first)
-    if storms:
+    # Guard: don't spawn a new thread if prefetch is already running
+    if storms and not _prefetch_lock.locked():
         ordered = sorted(storms, key=lambda s: s["atcf_id"] not in moved_storms)
         t = threading.Thread(target=_prefetch_ir_frames, args=(list(ordered),), daemon=True)
         t.start()
@@ -1385,7 +1386,7 @@ def _prefetch_ir_frames(storms: list):
                 # the 4 most recent frames and cap workers at 4 to stay
                 # within memory.  WV uses all frames with 8 workers.
                 max_band_frames = 4 if right_band == VIS_BAND else len(frame_times)
-                max_workers = 4 if right_band == VIS_BAND else 8
+                max_workers = 2 if right_band == VIS_BAND else 4
 
                 with ThreadPoolExecutor(max_workers=max_workers) as pool:
                     futures = []
