@@ -1267,11 +1267,12 @@
     }
 
     function selectStorm(atcfId) {
-        if (currentStormId === atcfId) return;
+        var alreadySpeculative = (currentStormId === atcfId && irFrames.length > 0);
+        if (currentStormId === atcfId && !alreadySpeculative) return;
         stopAnimation();
         currentStormId = atcfId;
         currentStorm = storms.find(function (s) { return s.atcf_id === atcfId; }) || null;
-        irFrames = []; rightFrames = [];
+        if (!alreadySpeculative) { irFrames = []; rightFrames = []; }
         animIndex = 0;
         irLoadedCount = 0; rightLoadedCount = 0;
         diagChartsInitialized = false;
@@ -1317,6 +1318,9 @@
             renderBothPanels();
             updateAnimUI();
             console.log('[Satellite] Loaded ' + atcfId + ' from browser cache');
+        } else if (alreadySpeculative) {
+            // Speculative frame 0 already displayed — just backfill the rest
+            loadFrames(atcfId);
         } else {
             showLoader('Loading satellite data\u2026');
             loadFrames(atcfId);
@@ -1829,6 +1833,40 @@
     function activate() {
         if (_activated) return;
         _activated = true;
+
+        // Speculative fetch: if URL hash has a storm ID, start fetching
+        // frame 0 immediately — don't wait for the storm list API.
+        var hashStorm = getHashStorm();
+        if (hashStorm) {
+            currentStormId = hashStorm.toUpperCase();
+            showLoader('Loading satellite data\u2026');
+            var url0 = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(currentStormId) + '/ir-raw-frame'
+                + '?frame_index=0&lookback_hours=' + DEFAULT_LOOKBACK_HOURS
+                + '&radius_deg=' + DEFAULT_RADIUS_DEG + '&interval_min=' + FRAME_INTERVAL_MIN;
+            fetch(url0, { cache: 'no-store' })
+                .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+                .then(function (data) {
+                    if (currentStormId !== hashStorm.toUpperCase()) return; // storm changed
+                    irFrames[0] = {
+                        tb_data: decodeTbData(data.tb_data), rows: data.tb_rows, cols: data.tb_cols,
+                        bounds: data.bounds, datetime_utc: data.datetime_utc,
+                        satellite: data.satellite || '', tb_vmin: data.tb_vmin || 160.0, tb_vmax: data.tb_vmax || 330.0,
+                        center_fix: data.center_fix || null
+                    };
+                    if (data.total_frames) totalExpectedFrames = data.total_frames;
+                    buildValidIndices();
+                    updateSliderMax();
+                    animIndex = 0;
+                    hideLoader();
+                    renderBothPanels();
+                    updateAnimUI();
+                    console.log('[Satellite] Speculative frame 0 loaded for ' + currentStormId);
+                })
+                .catch(function () {
+                    console.log('[Satellite] Speculative fetch failed, waiting for storm list');
+                });
+        }
+
         loadStorms();
         startPolling();
         _ga('sat_page_load');
