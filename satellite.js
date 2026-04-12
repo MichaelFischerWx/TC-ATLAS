@@ -834,7 +834,8 @@
         font: { family: 'DM Sans, sans-serif', color: '#8b9ec2', size: 10 },
         margin: { t: 28, r: 12, b: 36, l: 48 }
     };
-    var DIAG_CONFIG = { displayModeBar: false, responsive: true, staticPlot: false };
+    var _isMobile = window.innerWidth <= 768;
+    var DIAG_CONFIG = { displayModeBar: false, responsive: true, staticPlot: _isMobile, scrollZoom: false };
 
     function renderRadialProfileChart(frame) {
         var div = document.getElementById('sat-diag-radial');

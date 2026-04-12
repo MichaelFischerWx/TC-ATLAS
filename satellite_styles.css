@@ -852,12 +852,32 @@ input[type="range"].sat-slider {
 }
 
 @media (max-width: 480px) {
+    .sat-anim-controls {
+        flex-wrap: wrap;
+        gap: 4px 6px;
+    }
+
+    .sat-slider {
+        max-width: 120px;
+    }
+
     .sat-anim-info {
         flex-wrap: wrap;
         gap: 4px 10px;
     }
 
-    .sat-slider {
-        max-width: 160px;
+    .sat-anim-btn {
+        padding: 4px 7px;
+        font-size: 12px;
+    }
+
+    .sat-zoom-btn {
+        padding: 3px 6px;
+        font-size: 10px;
+    }
+
+    .sat-frame-counter {
+        font-size: 10px;
+        min-width: 36px;
     }
 }
