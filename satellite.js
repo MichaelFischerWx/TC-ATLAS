@@ -1682,14 +1682,18 @@
                 }
             }
 
+            // Only refetch if band changed or no frames loaded
+            var bandChanged = newBand !== rightBand;
             rightBand = newBand;
             rightDataType = newBand <= 6 ? 'reflectance' : 'tb';
             if (rightLabelEl) rightLabelEl.textContent = newBand === 2 ? 'Visible' : 'Water Vapor';
             rightColormapName = newBand === 2 ? 'vis' : 'wv';
             var rcEl = document.getElementById('sat-right-cmap-select');
             if (rcEl) rcEl.value = rightColormapName;
-            rightFrames = [];
-            if (currentStormId) _refetchRightFrames(currentStormId);
+            if (bandChanged || rightFrames.length === 0) {
+                rightFrames = [];
+                if (currentStormId) _refetchRightFrames(currentStormId);
+            }
             renderBothPanels();
         }
 
@@ -1844,12 +1848,16 @@
                     rightDone++;
                     if (stormId === currentStormId) renderBothPanels();
                 })
-                .catch(function () { rightDone++; })
+                .catch(function (err) {
+                    console.warn('[Satellite] Right frame ' + idx + ' failed:', err.message);
+                    rightDone++;
+                })
                 .finally(function () {
                     var next = idx + FETCH_CONCURRENCY;
                     if (next < totalFrames) fetchOne(next);
                 });
         }
+        console.log('[Satellite] _refetchRightFrames: band=' + rightBand + ' storm=' + stormId + ' frames=' + Math.min(FETCH_CONCURRENCY, totalFrames));
         for (var i = 0; i < Math.min(FETCH_CONCURRENCY, totalFrames); i++) fetchOne(i);
     }
 
