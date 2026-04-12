@@ -463,6 +463,8 @@
                 <label>Right Panel</label>
                 <div class="sat-mode-toggle">
                     <button class="sat-mode-btn active" id="sat-mode-diag" data-mode="diagnostics">Diagnostics</button>
+                    <button class="sat-mode-btn" id="sat-mode-track" data-mode="track-map">Track</button>
+                    <button class="sat-mode-btn" id="sat-mode-asym" data-mode="asymmetry">Asymmetry</button>
                     <button class="sat-mode-btn" id="sat-mode-wv" data-mode="compare-wv">WV</button>
                     <button class="sat-mode-btn" id="sat-mode-vis" data-mode="compare-vis">Vis</button>
                 </div>
@@ -541,6 +543,28 @@
                             <div class="sat-axes-y sat-axes-y-right" id="sat-axes-y-right"></div>
                             <div class="sat-axes-x" id="sat-axes-x-right"></div>
                         </div>
+                        <!-- Track map panel -->
+                        <div id="sat-track-panel" class="sat-track-panel" style="display:none;">
+                            <div class="sat-panel-label">Center Fix Track</div>
+                            <div class="sat-panel-canvas-wrap">
+                                <canvas id="sat-canvas-track"></canvas>
+                            </div>
+                        </div>
+                        <!-- Asymmetry panel -->
+                        <div id="sat-asym-panel" class="sat-asym-panel" style="display:none;">
+                            <div class="sat-panel-label">IR Asymmetry (WN-1)</div>
+                            <div class="sat-panel-canvas-wrap">
+                                <canvas id="sat-canvas-asym"></canvas>
+                                <canvas id="sat-overlay-asym" class="sat-overlay-canvas"></canvas>
+                            </div>
+                            <div class="sat-colorbar-horiz" id="sat-cb-asym">
+                                <span id="sat-cb-asym-left" class="sat-cb-label-left"></span>
+                                <canvas id="sat-cb-asym-canvas" width="200" height="10"></canvas>
+                                <span id="sat-cb-asym-right" class="sat-cb-label-right"></span>
+                            </div>
+                            <div class="sat-axes-y sat-axes-y-left" id="sat-axes-y-asym"></div>
+                            <div class="sat-axes-x" id="sat-axes-x-asym"></div>
+                        </div>
                     </div>
                 </div>
                 <!-- Hover tooltip (shared, follows cursor) -->
@@ -586,7 +610,7 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
     <script src="realtime_ir.js?v=20260412c"></script>
-    <script src="satellite.js?v=20260412i"></script>
+    <script src="satellite.js?v=20260412j"></script>
     <script>
     /* Tab switching between Map and Satellite views */
     (function () {

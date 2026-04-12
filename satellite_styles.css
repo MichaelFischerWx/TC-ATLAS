@@ -307,8 +307,8 @@
     color: #8b8fa4;
     border: none;
     border-radius: 3px;
-    padding: 5px 4px;
-    font-size: 10px;
+    padding: 5px 3px;
+    font-size: 9px;
     font-family: inherit;
     cursor: pointer;
     transition: background 0.15s, color 0.15s;
@@ -427,8 +427,36 @@
 }
 
 #sat-panel-right[data-mode="compare-wv"],
-#sat-panel-right[data-mode="compare-vis"] {
+#sat-panel-right[data-mode="compare-vis"],
+#sat-panel-right[data-mode="track-map"],
+#sat-panel-right[data-mode="asymmetry"] {
     flex: 3;
+}
+
+/* ── Track Map Panel ───────────────────────────────────────── */
+
+.sat-track-panel {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+    overflow: hidden;
+}
+
+/* ── Asymmetry Panel ───────────────────────────────────────── */
+
+.sat-asym-panel {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+    overflow: hidden;
 }
 
 .sat-sidebar-footer {

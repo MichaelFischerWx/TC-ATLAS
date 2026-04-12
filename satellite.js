@@ -392,6 +392,10 @@
             } else {
                 renderDiagnostics();
             }
+        } else if (viewMode === 'track-map') {
+            renderTrackMap();
+        } else if (viewMode === 'asymmetry') {
+            if (irFrame) computeAndRenderAsymmetry(irFrame);
         } else {
             // Compare mode: render right panel canvas
             var rightFrame = rightFrames[animIndex] || null;
@@ -1165,6 +1169,411 @@
         diagChartsInitialized = true;
     }
 
+    // ── Track Map (pure canvas) ──────────────────────────────
+
+    var trackMetadata = null;
+    var canvasTrack = null, ctxTrack = null;
+
+    function loadTrackMetadata(stormId, cb) {
+        if (trackMetadata && trackMetadata._stormId === stormId) { if (cb) cb(); return; }
+        var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(stormId) + '/metadata';
+        fetch(url, { cache: 'no-store' })
+            .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+            .then(function (data) {
+                trackMetadata = data;
+                trackMetadata._stormId = stormId;
+                if (cb) cb();
+            })
+            .catch(function (err) {
+                console.warn('[Satellite] Track metadata fetch failed:', err.message);
+                if (cb) cb();
+            });
+    }
+
+    function renderTrackMap() {
+        if (!canvasTrack) {
+            canvasTrack = document.getElementById('sat-canvas-track');
+            ctxTrack = canvasTrack ? canvasTrack.getContext('2d') : null;
+        }
+        if (!ctxTrack) return;
+
+        // Collect all points to auto-fit bounds
+        var allLats = [], allLons = [];
+
+        // IR center fixes from loaded frames
+        var irFixes = [];
+        for (var i = 0; i < irFrames.length; i++) {
+            var f = irFrames[i];
+            if (f && f.center_fix && f.center_fix.lat) {
+                irFixes.push({ lat: f.center_fix.lat, lon: f.center_fix.lon, time: f.datetime_utc, score: f.center_fix.eye_score, idx: i });
+                allLats.push(f.center_fix.lat); allLons.push(f.center_fix.lon);
+            }
+        }
+
+        // Official past track
+        var pastTrack = [];
+        if (trackMetadata && trackMetadata.intensity_history) {
+            for (var j = 0; j < trackMetadata.intensity_history.length; j++) {
+                var h = trackMetadata.intensity_history[j];
+                pastTrack.push(h);
+                allLats.push(h.lat); allLons.push(h.lon);
+            }
+        }
+
+        // Forecast track
+        var fcstTrack = [];
+        if (trackMetadata && trackMetadata.forecast_track) {
+            for (var k = 0; k < trackMetadata.forecast_track.length; k++) {
+                var ft = trackMetadata.forecast_track[k];
+                fcstTrack.push(ft);
+                allLats.push(ft.lat); allLons.push(ft.lon);
+            }
+        }
+
+        // Also include current storm position
+        if (currentStorm) {
+            allLats.push(currentStorm.lat); allLons.push(currentStorm.lon);
+        }
+
+        if (allLats.length === 0) return;
+
+        // Compute bounds with padding
+        var minLat = Math.min.apply(null, allLats) - 2;
+        var maxLat = Math.max.apply(null, allLats) + 2;
+        var minLon = Math.min.apply(null, allLons) - 2;
+        var maxLon = Math.max.apply(null, allLons) + 2;
+        // Ensure minimum span
+        if (maxLat - minLat < 6) { var cLa = (minLat + maxLat) / 2; minLat = cLa - 3; maxLat = cLa + 3; }
+        if (maxLon - minLon < 6) { var cLo = (minLon + maxLon) / 2; minLon = cLo - 3; maxLon = cLo + 3; }
+        // Keep aspect ratio square-ish
+        var latSpan = maxLat - minLat, lonSpan = maxLon - minLon;
+        if (latSpan > lonSpan) { var d = (latSpan - lonSpan) / 2; minLon -= d; maxLon += d; lonSpan = maxLon - minLon; }
+        else if (lonSpan > latSpan) { var d2 = (lonSpan - latSpan) / 2; minLat -= d2; maxLat += d2; latSpan = maxLat - minLat; }
+
+        // Canvas sizing
+        var parent = canvasTrack.parentElement;
+        var pw = parent ? parent.clientWidth : 600;
+        var ph = parent ? parent.clientHeight : 600;
+        var sz = Math.min(pw, ph, 800) || 600;
+        canvasTrack.width = sz;
+        canvasTrack.height = sz;
+        canvasTrack.style.maxWidth = '100%';
+        canvasTrack.style.maxHeight = '100%';
+        var w = sz, h = sz;
+
+        function lonToPx(lon) { return (lon - minLon) / lonSpan * w; }
+        function latToPx(lat) { return (maxLat - lat) / latSpan * h; }
+
+        // Background
+        ctxTrack.fillStyle = '#0a0c12';
+        ctxTrack.fillRect(0, 0, w, h);
+
+        // Grid lines
+        var gridStep = latSpan > 12 ? 5 : latSpan > 6 ? 2 : 1;
+        ctxTrack.strokeStyle = 'rgba(200,200,220,0.15)';
+        ctxTrack.lineWidth = 0.5;
+        for (var glat = Math.ceil(minLat / gridStep) * gridStep; glat <= maxLat; glat += gridStep) {
+            var gy = latToPx(glat);
+            ctxTrack.beginPath(); ctxTrack.moveTo(0, gy); ctxTrack.lineTo(w, gy); ctxTrack.stroke();
+        }
+        for (var glon = Math.ceil(minLon / gridStep) * gridStep; glon <= maxLon; glon += gridStep) {
+            var gx = lonToPx(glon);
+            ctxTrack.beginPath(); ctxTrack.moveTo(gx, 0); ctxTrack.lineTo(gx, h); ctxTrack.stroke();
+        }
+
+        // Grid labels
+        ctxTrack.fillStyle = '#5c6070';
+        ctxTrack.font = '9px JetBrains Mono, monospace';
+        for (var glat2 = Math.ceil(minLat / gridStep) * gridStep; glat2 <= maxLat; glat2 += gridStep) {
+            ctxTrack.fillText(Math.abs(glat2) + (glat2 >= 0 ? 'N' : 'S'), 4, latToPx(glat2) - 3);
+        }
+        ctxTrack.textAlign = 'center';
+        for (var glon2 = Math.ceil(minLon / gridStep) * gridStep; glon2 <= maxLon; glon2 += gridStep) {
+            ctxTrack.fillText(Math.abs(glon2) + (glon2 >= 0 ? 'E' : 'W'), lonToPx(glon2), h - 4);
+        }
+        ctxTrack.textAlign = 'left';
+
+        // Coastlines
+        if (coastlineData) {
+            ctxTrack.strokeStyle = 'rgba(200,180,120,0.5)';
+            ctxTrack.lineWidth = 1;
+            var features = coastlineData.features || [];
+            for (var fi = 0; fi < features.length; fi++) {
+                var geom = features[fi].geometry;
+                if (!geom) continue;
+                var coordSets = geom.type === 'MultiLineString' ? geom.coordinates : [geom.coordinates];
+                for (var cs = 0; cs < coordSets.length; cs++) {
+                    var coords = coordSets[cs];
+                    if (!coords || coords.length < 2) continue;
+                    ctxTrack.beginPath();
+                    var started = false;
+                    for (var ci = 0; ci < coords.length; ci++) {
+                        var clon = coords[ci][0], clat = coords[ci][1];
+                        if (clon < minLon || clon > maxLon || clat < minLat || clat > maxLat) { started = false; continue; }
+                        var cpx = lonToPx(clon), cpy = latToPx(clat);
+                        if (!started) { ctxTrack.moveTo(cpx, cpy); started = true; } else ctxTrack.lineTo(cpx, cpy);
+                    }
+                    ctxTrack.stroke();
+                }
+            }
+        }
+
+        // Official past track
+        if (pastTrack.length > 1) {
+            ctxTrack.lineWidth = 2;
+            for (var pi = 1; pi < pastTrack.length; pi++) {
+                var p0 = pastTrack[pi - 1], p1 = pastTrack[pi];
+                var cat = p1.vmax_kt >= 137 ? 'C5' : p1.vmax_kt >= 113 ? 'C4' : p1.vmax_kt >= 96 ? 'C3' :
+                    p1.vmax_kt >= 83 ? 'C2' : p1.vmax_kt >= 64 ? 'C1' : p1.vmax_kt >= 34 ? 'TS' : 'TD';
+                ctxTrack.strokeStyle = SS_COLORS[cat] || '#60a5fa';
+                ctxTrack.beginPath();
+                ctxTrack.moveTo(lonToPx(p0.lon), latToPx(p0.lat));
+                ctxTrack.lineTo(lonToPx(p1.lon), latToPx(p1.lat));
+                ctxTrack.stroke();
+            }
+            // Dots at each fix
+            for (var pd = 0; pd < pastTrack.length; pd++) {
+                var pt = pastTrack[pd];
+                var pcat = pt.vmax_kt >= 137 ? 'C5' : pt.vmax_kt >= 113 ? 'C4' : pt.vmax_kt >= 96 ? 'C3' :
+                    pt.vmax_kt >= 83 ? 'C2' : pt.vmax_kt >= 64 ? 'C1' : pt.vmax_kt >= 34 ? 'TS' : 'TD';
+                ctxTrack.fillStyle = SS_COLORS[pcat] || '#60a5fa';
+                ctxTrack.beginPath();
+                ctxTrack.arc(lonToPx(pt.lon), latToPx(pt.lat), 3, 0, 2 * Math.PI);
+                ctxTrack.fill();
+            }
+        }
+
+        // Forecast track (dashed)
+        if (fcstTrack.length > 0) {
+            var fcstStart = pastTrack.length > 0 ? pastTrack[pastTrack.length - 1] : (currentStorm || null);
+            ctxTrack.strokeStyle = 'rgba(255,255,255,0.4)';
+            ctxTrack.lineWidth = 1.5;
+            ctxTrack.setLineDash([6, 4]);
+            ctxTrack.beginPath();
+            if (fcstStart) ctxTrack.moveTo(lonToPx(fcstStart.lon), latToPx(fcstStart.lat));
+            for (var fci = 0; fci < fcstTrack.length; fci++) {
+                ctxTrack.lineTo(lonToPx(fcstTrack[fci].lon), latToPx(fcstTrack[fci].lat));
+            }
+            ctxTrack.stroke();
+            ctxTrack.setLineDash([]);
+            // Forecast dots with tau labels
+            ctxTrack.fillStyle = 'rgba(255,255,255,0.5)';
+            ctxTrack.font = '8px JetBrains Mono, monospace';
+            for (var fdi = 0; fdi < fcstTrack.length; fdi++) {
+                var fp = fcstTrack[fdi];
+                var fpx = lonToPx(fp.lon), fpy = latToPx(fp.lat);
+                ctxTrack.beginPath();
+                ctxTrack.arc(fpx, fpy, 3, 0, 2 * Math.PI);
+                ctxTrack.fill();
+                if (fp.tau_h % 24 === 0) {
+                    ctxTrack.fillText(fp.tau_h + 'h', fpx + 5, fpy - 4);
+                }
+            }
+        }
+
+        // IR center-fix track (cyan)
+        if (irFixes.length > 1) {
+            ctxTrack.strokeStyle = '#22d3ee';
+            ctxTrack.lineWidth = 2;
+            ctxTrack.beginPath();
+            ctxTrack.moveTo(lonToPx(irFixes[0].lon), latToPx(irFixes[0].lat));
+            for (var iri = 1; iri < irFixes.length; iri++) {
+                ctxTrack.lineTo(lonToPx(irFixes[iri].lon), latToPx(irFixes[iri].lat));
+            }
+            ctxTrack.stroke();
+        }
+        // IR fix dots
+        for (var ird = 0; ird < irFixes.length; ird++) {
+            var irp = irFixes[ird];
+            var isCurrent = irp.idx === animIndex;
+            ctxTrack.fillStyle = isCurrent ? '#ffffff' : '#22d3ee';
+            ctxTrack.beginPath();
+            ctxTrack.arc(lonToPx(irp.lon), latToPx(irp.lat), isCurrent ? 6 : 3, 0, 2 * Math.PI);
+            ctxTrack.fill();
+            if (isCurrent) {
+                ctxTrack.strokeStyle = '#22d3ee';
+                ctxTrack.lineWidth = 2;
+                ctxTrack.stroke();
+            }
+        }
+
+        // Legend
+        ctxTrack.font = '9px DM Sans, sans-serif';
+        var ly = 16;
+        ctxTrack.fillStyle = '#22d3ee';
+        ctxTrack.fillRect(8, ly - 6, 12, 3); ctxTrack.fillText('IR Fix', 24, ly); ly += 14;
+        ctxTrack.fillStyle = '#60a5fa';
+        ctxTrack.fillRect(8, ly - 6, 12, 3); ctxTrack.fillText('Best Track', 24, ly); ly += 14;
+        ctxTrack.fillStyle = 'rgba(255,255,255,0.4)';
+        ctxTrack.setLineDash([4, 3]); ctxTrack.beginPath(); ctxTrack.moveTo(8, ly - 4); ctxTrack.lineTo(20, ly - 4); ctxTrack.stroke(); ctxTrack.setLineDash([]);
+        ctxTrack.fillStyle = 'rgba(255,255,255,0.5)';
+        ctxTrack.fillText('Forecast', 24, ly);
+    }
+
+    // ── IR Asymmetry (WN-1 anomaly, canvas) ─────────────────
+
+    var canvasAsym = null, ctxAsym = null;
+    var overlayAsym = null, overlayCtxAsym = null;
+    var cbAsymCanvas = null, cbAsymLeft = null, cbAsymRight = null;
+    var axesYAsym = null, axesXAsym = null;
+
+    // RdBu_r diverging colorscale LUT (blue=cold anomaly, red=warm anomaly)
+    var ASYM_LUT = (function () {
+        var stops = [
+            { f: 0.00, r: 5, g: 48, b: 97 },
+            { f: 0.10, r: 33, g: 102, b: 172 },
+            { f: 0.20, r: 67, g: 147, b: 195 },
+            { f: 0.30, r: 146, g: 197, b: 222 },
+            { f: 0.40, r: 209, g: 229, b: 240 },
+            { f: 0.50, r: 247, g: 247, b: 247 },
+            { f: 0.60, r: 253, g: 219, b: 199 },
+            { f: 0.70, r: 244, g: 165, b: 130 },
+            { f: 0.80, r: 214, g: 96, b: 77 },
+            { f: 0.90, r: 178, g: 24, b: 43 },
+            { f: 1.00, r: 103, g: 0, b: 31 }
+        ];
+        var lut = new Uint8Array(256 * 4);
+        lut[0] = 0; lut[1] = 0; lut[2] = 0; lut[3] = 0; // 0 = transparent (no data)
+        for (var i = 1; i <= 255; i++) {
+            var frac = (i - 1) / 254.0;
+            var lo = stops[0], hi = stops[stops.length - 1];
+            for (var s = 0; s < stops.length - 1; s++) {
+                if (frac >= stops[s].f && frac <= stops[s + 1].f) { lo = stops[s]; hi = stops[s + 1]; break; }
+            }
+            var t = (hi.f === lo.f) ? 0 : (frac - lo.f) / (hi.f - lo.f);
+            var idx = i * 4;
+            lut[idx] = Math.round(lo.r + t * (hi.r - lo.r));
+            lut[idx + 1] = Math.round(lo.g + t * (hi.g - lo.g));
+            lut[idx + 2] = Math.round(lo.b + t * (hi.b - lo.b));
+            lut[idx + 3] = 255;
+        }
+        return lut;
+    })();
+
+    function computeAndRenderAsymmetry(frame) {
+        if (!frame || !frame.center_fix || !frame.tb_data) return false;
+        if (!canvasAsym) {
+            canvasAsym = document.getElementById('sat-canvas-asym');
+            ctxAsym = canvasAsym ? canvasAsym.getContext('2d') : null;
+            overlayAsym = document.getElementById('sat-overlay-asym');
+            overlayCtxAsym = overlayAsym ? overlayAsym.getContext('2d') : null;
+            cbAsymCanvas = document.getElementById('sat-cb-asym-canvas');
+            cbAsymLeft = document.getElementById('sat-cb-asym-left');
+            cbAsymRight = document.getElementById('sat-cb-asym-right');
+            axesYAsym = document.getElementById('sat-axes-y-asym');
+            axesXAsym = document.getElementById('sat-axes-x-asym');
+        }
+        if (!ctxAsym) return false;
+
+        var cLat = frame.center_fix.lat, cLon = frame.center_fix.lon;
+        var b = frame.bounds;
+        var south = b[0][0], west = b[0][1], north = b[1][0], east = b[1][1];
+        var rows = frame.rows, cols = frame.cols;
+        var vmin = frame.tb_vmin || 160.0, vmax = frame.tb_vmax || 330.0;
+        var cy = (north - cLat) / (north - south) * (rows - 1);
+        var cx = (cLon - west) / (east - west) * (cols - 1);
+        var cosLat = Math.cos(cLat * Math.PI / 180);
+        var dyKm = (north - south) / (rows - 1) * 111.0;
+        var dxKm = (east - west) / (cols - 1) * 111.0 * cosLat;
+        var maxRadKm = Math.min(zoomDeg * 111.0, 500);
+        var dr = 2;
+        var nBins = Math.ceil(maxRadKm / dr);
+
+        // Pass 1: compute azimuthal-mean Tb per radial bin
+        var sums = new Float64Array(nBins);
+        var counts = new Int32Array(nBins);
+        for (var r = 0; r < rows; r++) {
+            var dY = (r - cy) * dyKm;
+            for (var c = 0; c < cols; c++) {
+                var rawVal = frame.tb_data[r * cols + c];
+                if (rawVal === 0) continue;
+                var dX = (c - cx) * dxKm;
+                var dist = Math.sqrt(dY * dY + dX * dX);
+                var bin = Math.floor(dist / dr);
+                if (bin >= nBins) continue;
+                sums[bin] += decodeTbValue(rawVal, vmin, vmax);
+                counts[bin]++;
+            }
+        }
+        var binMeans = new Float64Array(nBins);
+        for (var bi = 0; bi < nBins; bi++) {
+            binMeans[bi] = counts[bi] >= 3 ? sums[bi] / counts[bi] : NaN;
+        }
+
+        // Pass 2: render anomaly (Tb - azimuthal mean) to canvas
+        var vb = getViewBounds(frame);
+        if (!vb) return false;
+        var crop = getCropIndices(frame, vb);
+        if (crop.rows <= 0 || crop.cols <= 0) return false;
+
+        canvasAsym.width = frame.cols;
+        canvasAsym.height = frame.rows;
+        var imgData = ctxAsym.createImageData(frame.cols, frame.rows);
+        var pixels = imgData.data;
+
+        // Fill background
+        for (var p = 0; p < pixels.length; p += 4) {
+            pixels[p] = 10; pixels[p + 1] = 11; pixels[p + 2] = 18; pixels[p + 3] = 255;
+        }
+
+        var scaleY = frame.rows / crop.rows;
+        var scaleX = frame.cols / crop.cols;
+        var anomMin = -20, anomMax = 20, anomSpan = anomMax - anomMin;
+
+        for (var y = 0; y < frame.rows; y++) {
+            var srcRow = crop.r0 + Math.floor(y / scaleY);
+            if (srcRow < crop.r0 || srcRow >= crop.r1) continue;
+            for (var x = 0; x < frame.cols; x++) {
+                var srcCol = crop.c0 + Math.floor(x / scaleX);
+                if (srcCol < crop.c0 || srcCol >= crop.c1) continue;
+                var rv = frame.tb_data[srcRow * frame.cols + srcCol];
+                if (rv === 0) continue;
+                var dYa = (srcRow - cy) * dyKm;
+                var dXa = (srcCol - cx) * dxKm;
+                var distA = Math.sqrt(dYa * dYa + dXa * dXa);
+                var binA = Math.floor(distA / dr);
+                if (binA >= nBins || isNaN(binMeans[binA])) continue;
+                var tbVal = decodeTbValue(rv, vmin, vmax);
+                var anomaly = (tbVal - binMeans[binA]); // positive = warmer than mean
+                // Convert anomaly in K to Celsius anomaly (same since it's a difference)
+                var lutIdx = Math.round(Math.max(1, Math.min(255, (anomaly - anomMin) / anomSpan * 254 + 1)));
+                var pi2 = (y * frame.cols + x) * 4;
+                var li2 = lutIdx * 4;
+                pixels[pi2] = ASYM_LUT[li2]; pixels[pi2 + 1] = ASYM_LUT[li2 + 1];
+                pixels[pi2 + 2] = ASYM_LUT[li2 + 2]; pixels[pi2 + 3] = ASYM_LUT[li2 + 3];
+            }
+        }
+        ctxAsym.putImageData(imgData, 0, 0);
+
+        // Overlay (grid, coastlines, crosshair)
+        drawOverlay(overlayAsym, overlayCtxAsym, frame);
+
+        // Colorbar
+        if (cbAsymCanvas) {
+            var cbCtx = cbAsymCanvas.getContext('2d');
+            var cbW = cbAsymCanvas.width, cbH = cbAsymCanvas.height;
+            var cbImg = cbCtx.createImageData(cbW, cbH);
+            var cbPx = cbImg.data;
+            for (var cbx = 0; cbx < cbW; cbx++) {
+                var cbVal = Math.round(1 + cbx / (cbW - 1) * 254);
+                var cbLi = cbVal * 4;
+                for (var cby = 0; cby < cbH; cby++) {
+                    var cbPi = (cby * cbW + cbx) * 4;
+                    cbPx[cbPi] = ASYM_LUT[cbLi]; cbPx[cbPi + 1] = ASYM_LUT[cbLi + 1];
+                    cbPx[cbPi + 2] = ASYM_LUT[cbLi + 2]; cbPx[cbPi + 3] = 255;
+                }
+            }
+            cbCtx.putImageData(cbImg, 0, 0);
+            if (cbAsymLeft) cbAsymLeft.textContent = anomMin + ' \u00B0C';
+            if (cbAsymRight) cbAsymRight.textContent = '+' + anomMax + ' \u00B0C';
+        }
+
+        // Axes
+        if (vb) renderAxes(axesYAsym, axesXAsym, vb);
+
+        return true;
+    }
+
     // ── View Mode Toggle ───────────────────────────────────────
 
     function setViewMode(newMode) {
@@ -1175,14 +1584,20 @@
         var diagPanel = document.getElementById('sat-diag-panel');
         var comparePanel = document.getElementById('sat-compare-panel');
         var compareOptions = document.getElementById('sat-compare-options');
+        var trackPanel = document.getElementById('sat-track-panel');
+        var asymPanel = document.getElementById('sat-asym-panel');
 
         if (rightPanel) rightPanel.setAttribute('data-mode', newMode);
 
+        // Hide all panels first
+        if (diagPanel) diagPanel.style.display = 'none';
+        if (comparePanel) comparePanel.style.display = 'none';
+        if (compareOptions) compareOptions.style.display = 'none';
+        if (trackPanel) trackPanel.style.display = 'none';
+        if (asymPanel) asymPanel.style.display = 'none';
+
         if (newMode === 'diagnostics') {
             if (diagPanel) diagPanel.style.display = '';
-            if (comparePanel) comparePanel.style.display = 'none';
-            if (compareOptions) compareOptions.style.display = 'none';
-            // Plotly needs a moment to measure visible container
             setTimeout(function () {
                 var r = document.getElementById('sat-diag-radial');
                 var t = document.getElementById('sat-diag-timeseries');
@@ -1192,12 +1607,19 @@
                 if (h && h.data) Plotly.Plots.resize(h);
                 renderDiagnostics();
             }, 50);
+        } else if (newMode === 'track-map') {
+            if (trackPanel) trackPanel.style.display = '';
+            if (currentStormId) {
+                loadTrackMetadata(currentStormId, function () { renderTrackMap(); });
+            }
+        } else if (newMode === 'asymmetry') {
+            if (asymPanel) asymPanel.style.display = '';
+            var frame = irFrames[animIndex];
+            if (frame) computeAndRenderAsymmetry(frame);
         } else {
-            if (diagPanel) diagPanel.style.display = 'none';
+            // compare-wv or compare-vis
             if (comparePanel) comparePanel.style.display = '';
             if (compareOptions) compareOptions.style.display = '';
-
-            // Set band based on mode
             var newBand = (newMode === 'compare-vis') ? 2 : 8;
             rightBand = newBand;
             rightDataType = newBand <= 6 ? 'reflectance' : 'tb';
@@ -1205,8 +1627,6 @@
             rightColormapName = newBand === 2 ? 'vis' : 'wv';
             var rcEl = document.getElementById('sat-right-cmap-select');
             if (rcEl) rcEl.value = rightColormapName;
-
-            // Fetch right frames if needed
             rightFrames = [];
             if (currentStormId) _refetchRightFrames(currentStormId);
             renderBothPanels();
@@ -1276,6 +1696,7 @@
         animIndex = 0;
         irLoadedCount = 0; rightLoadedCount = 0;
         diagChartsInitialized = false;
+        trackMetadata = null;
         renderStormList();
         updateHash(atcfId);
 
