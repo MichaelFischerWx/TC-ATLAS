@@ -792,7 +792,12 @@
 
         var bands = [];
         for (var bi3 = 0; bi3 < nBands; bi3++) {
-            bands.push({ label: bandLabels[bi3], tbBins: tbBinCenters, counts: Array.from(histCounts[bi3]) });
+            var raw = histCounts[bi3];
+            var total = 0;
+            for (var ti = 0; ti < nTbBins; ti++) total += raw[ti];
+            var frac = new Array(nTbBins);
+            for (var ti2 = 0; ti2 < nTbBins; ti2++) frac[ti2] = total > 0 ? raw[ti2] / total : 0;
+            bands.push({ label: bandLabels[bi3], tbBins: tbBinCenters, fractions: frac });
         }
         return { bands: bands };
     }
@@ -906,16 +911,16 @@
         var traces = [];
         for (var i = 0; i < hist.bands.length; i++) {
             traces.push({
-                x: hist.bands[i].tbBins, y: hist.bands[i].counts,
+                x: hist.bands[i].tbBins, y: hist.bands[i].fractions,
                 type: 'bar', name: hist.bands[i].label,
                 marker: { color: colors[i], opacity: 0.65 },
-                hovertemplate: '%{x:.0f} K: %{y}<extra>' + hist.bands[i].label + '</extra>'
+                hovertemplate: '%{x:.0f} K: %{y:.1%}<extra>' + hist.bands[i].label + '</extra>'
             });
         }
         var layout = JSON.parse(JSON.stringify(DIAG_LAYOUT_BASE));
         layout.title = { text: 'Tb Distribution by Radial Band', font: { size: 11, color: '#94a3b8' } };
         layout.xaxis = { title: { text: 'Brightness Temp (K)', font: { size: 10 } }, gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 9, family: 'JetBrains Mono, monospace' } };
-        layout.yaxis = { title: { text: 'Pixel Count', font: { size: 10 } }, gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 9, family: 'JetBrains Mono, monospace' } };
+        layout.yaxis = { title: { text: 'Fraction', font: { size: 10 } }, tickformat: '.0%', gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 9, family: 'JetBrains Mono, monospace' } };
         layout.barmode = 'overlay';
         layout.legend = { x: 0, y: 1.15, orientation: 'h', font: { size: 9 } };
         layout.margin = { t: 32, r: 12, b: 44, l: 48 };
@@ -1011,7 +1016,7 @@
     // ── Storm List ──────────────────────────────────────────────
 
     function loadStorms() {
-        fetch(API_BASE + '/ir-monitor/active-storms')
+        fetch(API_BASE + '/ir-monitor/active-storms', { cache: 'no-store' })
             .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
             .then(function (data) {
                 storms = (data.storms || []).slice();
@@ -1132,7 +1137,7 @@
             var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(stormId) + '/band-raw-frame'
                 + '?band=' + rightBand + '&frame_index=' + idx + '&lookback_hours=' + DEFAULT_LOOKBACK_HOURS
                 + '&radius_deg=' + DEFAULT_RADIUS_DEG + '&interval_min=' + FRAME_INTERVAL_MIN;
-            fetch(url)
+            fetch(url, { cache: 'no-store' })
                 .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
                 .then(function (data) {
                     if (data.total_frames) totalFrames = data.total_frames;
@@ -1176,7 +1181,7 @@
                 + '?frame_index=' + idx + '&lookback_hours=' + DEFAULT_LOOKBACK_HOURS
                 + '&radius_deg=' + DEFAULT_RADIUS_DEG + '&interval_min=' + FRAME_INTERVAL_MIN;
 
-            fetch(url)
+            fetch(url, { cache: 'no-store' })
                 .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
                 .then(function (data) {
                     if (data.total_frames) totalFrames = data.total_frames;
@@ -1230,7 +1235,7 @@
                 + '?band=' + rightBand + '&frame_index=' + idx + '&lookback_hours=' + DEFAULT_LOOKBACK_HOURS
                 + '&radius_deg=' + DEFAULT_RADIUS_DEG + '&interval_min=' + FRAME_INTERVAL_MIN;
 
-            fetch(url)
+            fetch(url, { cache: 'no-store' })
                 .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
                 .then(function (data) {
                     if (data.total_frames) totalFrames = data.total_frames;
