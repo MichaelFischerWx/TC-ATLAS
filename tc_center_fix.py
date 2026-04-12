@@ -67,6 +67,16 @@ def find_ir_center(
     if rows < 10 or cols < 10:
         return {"success": False}
 
+    # Subsample large arrays — 4 km resolution is sufficient for eye-finding.
+    # Target ~500 pixels across the domain; subsample if larger.
+    _MAX_DIM = 500
+    _step = 1
+    if rows > _MAX_DIM or cols > _MAX_DIM:
+        _step = max(rows, cols) // _MAX_DIM
+        if _step > 1:
+            tb = tb[::_step, ::_step]
+            rows, cols = tb.shape
+
     south, west = bounds[0]
     north, east = bounds[1]
     lat_span = north - south

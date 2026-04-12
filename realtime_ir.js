@@ -2920,8 +2920,6 @@
 
     // ── IR Center Fix Marker ────────────────────────────────
     function _updateIRCenterFix() {
-        var frame = rawTbFrames && rawTbFrames[animIndex];
-        console.log('[IR Center Fix] frame', animIndex, 'center_fix:', frame ? frame.center_fix : 'no frame');
         // Remove previous marker
         if (_irCenterMarker && detailMap) {
             detailMap.removeLayer(_irCenterMarker);
