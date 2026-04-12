@@ -135,8 +135,15 @@ def find_ir_center(
 
     # Pre-compute a validity mask for the whole Tb field
     tb_valid_mask = np.isfinite(tb) & (tb > 0)
+    n_valid = int(np.count_nonzero(tb_valid_mask))
+    n_total = rows * cols
+    valid_frac = n_valid / n_total if n_total > 0 else 0.0
+
+    n_candidates = 0
+    n_iterations_run = 0
 
     for iteration in range(max_iterations):
+        n_iterations_run = iteration + 1
         spad = search_pix if iteration == 0 else refine_pix
         prev_y, prev_x = best_y, best_x
 
@@ -204,6 +211,7 @@ def find_ir_center(
                 ir_rad_dif = eye_mean - np.nanmin(means[valid_bins])
                 score = 100.0 * (1.0 / mean_std) ** 2 * ir_rad_dif
 
+                n_candidates += 1
                 if score > best_score:
                     best_score = score
                     best_y, best_x = yi, xi
@@ -233,4 +241,19 @@ def find_ir_center(
             "success": True,
         }
 
-    return {"success": False}
+    return {
+        "success": False,
+        "reason": (
+            "no_candidates" if n_candidates == 0
+            else "low_ir_rad_dif" if best_ir_rad_dif < min_ir_rad_dif
+            else "low_score" if best_score < min_eye_score
+            else "unknown"
+        ),
+        "best_score": round(float(best_score), 2),
+        "best_ir_rad_dif": round(float(best_ir_rad_dif), 2),
+        "best_mean_std": round(float(best_mean_std), 2),
+        "n_candidates": n_candidates,
+        "n_iterations": n_iterations_run,
+        "valid_frac": round(valid_frac, 4),
+        "grid_shape": [rows, cols],
+    }

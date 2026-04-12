@@ -175,9 +175,16 @@ def _log_center_fix(atcf_id, storm_name, frame_dt, satellite, cfix):
             f"\t{cfix['eye_score']}\t{cfix['ir_rad_dif']}\t{cfix['mean_std']}"
         )
     else:
+        # Include failure diagnostics if available
+        reason = cfix.get("reason", "unknown") if cfix else "null"
+        best_s = cfix.get("best_score", "nan") if cfix else "nan"
+        best_d = cfix.get("best_ir_rad_dif", "nan") if cfix else "nan"
+        vfrac = cfix.get("valid_frac", "nan") if cfix else "nan"
+        ncand = cfix.get("n_candidates", "nan") if cfix else "nan"
         line = (
             f"{now}\t{atcf_id}\t{storm_name}\t{frame_dt}\t{satellite}"
-            f"\tnan\tnan\tnan\tnan\tnan"
+            f"\tnan\tnan\t{best_s}\t{best_d}\tnan"
+            f"\t{reason}\t{vfrac}\t{ncand}"
         )
     with _center_fix_log_lock:
         _center_fix_log_buf.append(line)
@@ -1766,9 +1773,9 @@ def get_storm_ir_raw_frame(
         cached["frame_index"] = frame_index
         cached["total_frames"] = len(frame_times)
 
-        # Back-fill center_fix for cached frames that predate the feature
+        # Re-attempt center_fix for cached frames that are missing it or failed
         vmax_kt = storm.get("vmax_kt")
-        if "center_fix" not in cached and vmax_kt is not None and vmax_kt >= 65:
+        if cached.get("center_fix") is None and vmax_kt is not None and vmax_kt >= 65:
             try:
                 raw_u8 = np.frombuffer(
                     base64.b64decode(cached["tb_data"]),
@@ -1783,7 +1790,19 @@ def get_storm_ir_raw_frame(
                     [center_lat - half, center_lon - half],
                     [center_lat + half, center_lon + half],
                 ])
-                cfix = find_ir_center(tb_float, frame_bounds, center_lat, center_lon)
+                # Use adjacent frame's center_fix as initial guess if available
+                bf_guess_lat, bf_guess_lon = center_lat, center_lon
+                for bf_off in [1, -1, 2, -2]:
+                    bf_adj = frame_index + bf_off
+                    if bf_adj < 0 or bf_adj >= len(frame_times):
+                        continue
+                    bf_dt = frame_times[bf_adj].strftime("%Y%m%d%H%M")
+                    bf_cached = _gcs_rt_get(atcf_id.upper(), bf_dt, lat=center_lat, lon=center_lon)
+                    if bf_cached and isinstance(bf_cached.get("center_fix"), dict):
+                        bf_guess_lat = bf_cached["center_fix"]["lat"]
+                        bf_guess_lon = bf_cached["center_fix"]["lon"]
+                        break
+                cfix = find_ir_center(tb_float, frame_bounds, bf_guess_lat, bf_guess_lon)
                 if cfix.get("success"):
                     cached["center_fix"] = {
                         "lat": cfix["lat"], "lon": cfix["lon"],
@@ -1828,8 +1847,25 @@ def get_storm_ir_raw_frame(
             [center_lat - half, center_lon - half],
             [center_lat + half, center_lon + half],
         ])
+
+        # Use the nearest successful center_fix from an adjacent frame as
+        # the initial guess, falling back to the advisory position.  This
+        # prevents stale advisory positions (sometimes 6+ hours old) from
+        # placing the search window too far from the actual eye.
+        guess_lat, guess_lon = center_lat, center_lon
+        for offset in [1, -1, 2, -2]:
+            adj_idx = frame_index + offset
+            if adj_idx < 0 or adj_idx >= len(frame_times):
+                continue
+            adj_dt = frame_times[adj_idx].strftime("%Y%m%d%H%M")
+            adj_cached = _gcs_rt_get(atcf_id.upper(), adj_dt, lat=center_lat, lon=center_lon)
+            if adj_cached and isinstance(adj_cached.get("center_fix"), dict):
+                guess_lat = adj_cached["center_fix"]["lat"]
+                guess_lon = adj_cached["center_fix"]["lon"]
+                break
+
         try:
-            cfix_raw = find_ir_center(arr, frame_bounds, center_lat, center_lon)
+            cfix_raw = find_ir_center(arr, frame_bounds, guess_lat, guess_lon)
             if cfix_raw.get("success"):
                 center_fix = {
                     "lat": cfix_raw["lat"],
