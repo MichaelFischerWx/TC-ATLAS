@@ -73,17 +73,10 @@
     .ir-storm-counts {
         display: none !important;
     }
-    /* Adjust content top for taller topbar + secondary bar */
-    .sat-main {
-        top: 144px;
-    }
 }
 @media (max-width: 480px) {
     .ir-secondary-bar {
         top: 90px;
-    }
-    .sat-main {
-        top: 126px;
     }
 }
 
@@ -874,6 +867,10 @@ input[type="range"].sat-slider {
 /* ── Responsive ─────────────────────────────────────────────── */
 
 @media (max-width: 768px) {
+    .sat-main {
+        top: 144px;
+    }
+
     .sat-sidebar {
         position: absolute;
         top: 0;
@@ -902,6 +899,10 @@ input[type="range"].sat-slider {
 }
 
 @media (max-width: 480px) {
+    .sat-main {
+        top: 148px;
+    }
+
     .sat-anim-controls {
         flex-wrap: wrap;
         gap: 4px 6px;
