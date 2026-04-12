@@ -718,6 +718,7 @@
         var dr = 2; // km bin width
         var nBins = Math.ceil(maxRadKm / dr);
         var sums = new Float64Array(nBins);
+        var sumsSq = new Float64Array(nBins);
         var counts = new Int32Array(nBins);
 
         for (var r = 0; r < rows; r++) {
@@ -729,20 +730,29 @@
                 var dist = Math.sqrt(dY * dY + dX * dX);
                 var bin = Math.floor(dist / dr);
                 if (bin >= nBins) continue;
-                sums[bin] += decodeTbValue(rawVal, vmin, vmax);
+                var tbVal = decodeTbValue(rawVal, vmin, vmax);
+                sums[bin] += tbVal;
+                sumsSq[bin] += tbVal * tbVal;
                 counts[bin]++;
             }
         }
 
         var radii = [];
-        var meanTb = [];
+        var meanC = [];
+        var stdC = [];
         for (var i = 0; i < nBins; i++) {
             if (counts[i] >= 3) {
+                var mean = sums[i] / counts[i];
+                var variance = sumsSq[i] / counts[i] - mean * mean;
+                var std = Math.sqrt(Math.max(variance, 0));
+                var meanCelsius = mean - 273.15;
+                if (meanCelsius < -100) continue; // skip extremely cold bins
                 radii.push(i * dr + dr / 2);
-                meanTb.push(sums[i] / counts[i]);
+                meanC.push(meanCelsius);
+                stdC.push(std); // std same magnitude in K or C
             }
         }
-        return radii.length > 5 ? { radii: radii, meanTb: meanTb } : null;
+        return radii.length > 5 ? { radii: radii, meanC: meanC, stdC: stdC } : null;
     }
 
     function computeTbHistogram(frame) {
@@ -832,17 +842,42 @@
         if (!profile) { div.style.display = 'none'; return; }
         div.style.display = 'block';
 
-        var traces = [{
-            x: profile.radii, y: profile.meanTb,
-            type: 'scatter', mode: 'lines',
-            line: { color: '#22d3ee', width: 2 },
-            fill: 'tozeroy', fillcolor: 'rgba(34,211,238,0.06)',
-            hovertemplate: '%{x:.0f} km: %{y:.1f} K<extra></extra>'
-        }];
+        // Build std deviation shaded band (mean +/- std)
+        var upperC = [], lowerC = [];
+        for (var si = 0; si < profile.meanC.length; si++) {
+            upperC.push(profile.meanC[si] + profile.stdC[si]);
+            lowerC.push(profile.meanC[si] - profile.stdC[si]);
+        }
+
+        var traces = [
+            // Upper bound (invisible line, defines top of fill)
+            {
+                x: profile.radii, y: upperC,
+                type: 'scatter', mode: 'lines',
+                line: { width: 0 }, showlegend: false,
+                hoverinfo: 'skip'
+            },
+            // Lower bound (fill to upper)
+            {
+                x: profile.radii, y: lowerC,
+                type: 'scatter', mode: 'lines',
+                line: { width: 0 }, showlegend: false,
+                fill: 'tonexty', fillcolor: 'rgba(34,211,238,0.12)',
+                hoverinfo: 'skip'
+            },
+            // Mean line
+            {
+                x: profile.radii, y: profile.meanC,
+                type: 'scatter', mode: 'lines',
+                line: { color: '#22d3ee', width: 2 },
+                hovertemplate: '%{x:.0f} km: %{y:.1f} \u00B0C<extra></extra>'
+            }
+        ];
         var layout = JSON.parse(JSON.stringify(DIAG_LAYOUT_BASE));
         layout.title = { text: 'Azimuthal-Mean Radial Tb', font: { size: 11, color: '#94a3b8' } };
         layout.xaxis = { title: { text: 'Radius (km)', font: { size: 10 } }, gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 9, family: 'JetBrains Mono, monospace' } };
-        layout.yaxis = { title: { text: 'Tb (K)', font: { size: 10 } }, autorange: 'reversed', gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 9, family: 'JetBrains Mono, monospace' } };
+        layout.yaxis = { title: { text: 'Tb (\u00B0C)', font: { size: 10 } }, autorange: 'reversed', range: [-100, 30], gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 9, family: 'JetBrains Mono, monospace' }, ticksuffix: '\u00B0' };
+        layout.showlegend = false;
 
         if (div.data) {
             Plotly.react(div, traces, layout, DIAG_CONFIG);
