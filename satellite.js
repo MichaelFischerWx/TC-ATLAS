@@ -478,6 +478,39 @@
                 }
             }
         }
+
+        // ── IR Center Fix Crosshair ──
+        if (frame.center_fix && frame.center_fix.lat) {
+            var fix = frame.center_fix;
+            var fx = (fix.lon - vb.west) / lonSpan * w;
+            var fy = (vb.north - fix.lat) / latSpan * h;
+
+            // Only draw if within frame bounds
+            if (fx >= 0 && fx <= w && fy >= 0 && fy <= h) {
+                var r = Math.max(12, Math.round(w * 0.012));
+                var armLen = r + 4;
+
+                // Outer glow
+                overlayCtx.strokeStyle = 'rgba(0, 229, 255, 0.4)';
+                overlayCtx.lineWidth = 4;
+                overlayCtx.beginPath();
+                overlayCtx.arc(fx, fy, r, 0, 2 * Math.PI);
+                overlayCtx.stroke();
+
+                // Main circle
+                overlayCtx.strokeStyle = '#00e5ff';
+                overlayCtx.lineWidth = 2;
+                overlayCtx.beginPath();
+                overlayCtx.arc(fx, fy, r, 0, 2 * Math.PI);
+                overlayCtx.stroke();
+
+                // Cross arms
+                overlayCtx.beginPath();
+                overlayCtx.moveTo(fx, fy - armLen); overlayCtx.lineTo(fx, fy + armLen);
+                overlayCtx.moveTo(fx - armLen, fy); overlayCtx.lineTo(fx + armLen, fy);
+                overlayCtx.stroke();
+            }
+        }
     }
 
     // ── Colorbar Rendering ────────────────────────────────────────
@@ -801,7 +834,8 @@
                     irFrames[idx] = {
                         tb_data: decodeTbData(data.tb_data), rows: data.tb_rows, cols: data.tb_cols,
                         bounds: data.bounds, datetime_utc: data.datetime_utc,
-                        satellite: data.satellite || '', tb_vmin: data.tb_vmin || 160.0, tb_vmax: data.tb_vmax || 330.0
+                        satellite: data.satellite || '', tb_vmin: data.tb_vmin || 160.0, tb_vmax: data.tb_vmax || 330.0,
+                        center_fix: data.center_fix || null
                     };
                     irDone++;
                     if (stormId === currentStormId) {
