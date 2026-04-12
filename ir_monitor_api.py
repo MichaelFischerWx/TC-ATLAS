@@ -1765,6 +1765,43 @@ def get_storm_ir_raw_frame(
     if cached is not None:
         cached["frame_index"] = frame_index
         cached["total_frames"] = len(frame_times)
+
+        # Back-fill center_fix for cached frames that predate the feature
+        vmax_kt = storm.get("vmax_kt")
+        if "center_fix" not in cached and vmax_kt is not None and vmax_kt >= 65:
+            try:
+                raw_u8 = np.frombuffer(
+                    base64.b64decode(cached["tb_data"]),
+                    dtype=np.uint8,
+                ).reshape(cached["tb_rows"], cached["tb_cols"])
+                tb_float = np.where(
+                    raw_u8 > 0,
+                    _TB_VMIN + (raw_u8.astype(np.float32) - 1) * (_TB_VMAX - _TB_VMIN) / 254.0,
+                    np.nan,
+                )
+                frame_bounds = cached.get("bounds", [
+                    [center_lat - half, center_lon - half],
+                    [center_lat + half, center_lon + half],
+                ])
+                cfix = find_ir_center(tb_float, frame_bounds, center_lat, center_lon)
+                if cfix.get("success"):
+                    cached["center_fix"] = {
+                        "lat": cfix["lat"], "lon": cfix["lon"],
+                        "eye_score": cfix["eye_score"], "ir_rad_dif": cfix["ir_rad_dif"],
+                    }
+                else:
+                    cached["center_fix"] = None
+                # Re-cache with center_fix included
+                _gcs_rt_put(atcf_id.upper(), dt_str, cached, lat=center_lat, lon=center_lon)
+                # Log the result
+                _log_center_fix(
+                    atcf_id.upper(), storm.get("name", ""),
+                    cached.get("datetime_utc", dt_str),
+                    cached.get("satellite", ""), cfix,
+                )
+            except Exception:
+                cached["center_fix"] = None
+
         return JSONResponse(
             content=cached,
             headers={"Cache-Control": "public, max-age=300"},
