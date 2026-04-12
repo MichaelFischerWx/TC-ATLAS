@@ -1231,11 +1231,12 @@
                     if (stormId === currentStormId) {
                         buildValidIndices();
                         updateSliderMax();
-                        if (idx === 0) {
-                            animIndex = 0;
+                        // Show the first frame that arrives (frame 0 in priority mode)
+                        if (irDone === 1) {
+                            animIndex = idx;
                             hideLoader();
-                            startBackfill();
                         }
+                        if (idx === 0) startBackfill();
                         renderBothPanels();
                         updateAnimUI();
                     }
@@ -1251,14 +1252,18 @@
                     }
                 })
                 .finally(function () {
-                    var next = idx + FETCH_CONCURRENCY;
-                    if (next < totalFrames) fetchIRFrame(next);
+                    // Chain next frame in this concurrency slot
+                    // (frame 0 doesn't chain — backfill handles the rest)
+                    if (idx > 0) {
+                        var next = idx + FETCH_CONCURRENCY;
+                        if (next < totalFrames) fetchIRFrame(next);
+                    }
                     if (irDone >= totalFrames && stormId === currentStormId) {
                         buildValidIndices();
                         updateSliderMax();
-                        // Jump to most recent frame (highest index)
-                        if (validFrameIndices.length > 0) {
-                            animIndex = validFrameIndices[validFrameIndices.length - 1];
+                        // Stay on most recent frame (index 0) after loading completes
+                        if (validFrameIndices.length > 0 && validFrameIndices.indexOf(0) >= 0) {
+                            animIndex = 0;
                         }
                         renderBothPanels();
                         updateAnimUI();
