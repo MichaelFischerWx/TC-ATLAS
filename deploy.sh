@@ -59,12 +59,10 @@ SERVICE_NAME="tc-atlas-api"
 REGION="us-east1"                   # close to your S3 bucket in us-east-1
 MEMORY="2Gi"                        # match your current Render plan
 CPU="1"                             # 1 vCPU per instance
-MAX_INSTANCES="10"                  # allow scaling during active storms
-MIN_INSTANCES="0"                   # scale to zero in off-season
-                                    # set to 1 during hurricane season to
-                                    # avoid cold starts
-CONCURRENCY="7"                     # requests per instance (lucky number, OOM-safe)
 TIMEOUT="300s"                      # match gunicorn timeout
+# NOTE: max-instances and concurrency are managed via gcloud CLI, not
+# this script. Change them with:
+#   gcloud run services update tc-atlas-api --region us-east1 --max-instances N --concurrency N
 
 # ── Deploy ────────────────────────────────────────────────────
 echo "Deploying ${SERVICE_NAME} to Cloud Run (${REGION})..."
@@ -75,9 +73,6 @@ gcloud run deploy "${SERVICE_NAME}" \
     --platform managed \
     --memory "${MEMORY}" \
     --cpu "${CPU}" \
-    --max-instances "${MAX_INSTANCES}" \
-    --min-instances "${MIN_INSTANCES}" \
-    --concurrency "${CONCURRENCY}" \
     --timeout "${TIMEOUT}" \
     --port 8080 \
     --allow-unauthenticated \
