@@ -879,6 +879,7 @@ input[type="range"].sat-slider {
         z-index: 40;
         transform: translateX(-100%);
         transition: transform 0.25s ease;
+        overflow-y: auto;
     }
 
     .sat-sidebar.open {
