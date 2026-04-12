@@ -539,10 +539,10 @@
         var imgData = cbCtx.createImageData(w, h);
         var pixels = imgData.data;
 
-        // Horizontal: left=warm (index 1), right=cold (index 255)
+        // Horizontal: left=cold (index 255), right=warm (index 1)
         for (var x = 0; x < w; x++) {
-            var val = Math.round(1 + x / (w - 1) * 254);
-            if (val > 255) val = 255;
+            var val = Math.round(255 - x / (w - 1) * 254);
+            if (val < 1) val = 1;
             var li = val * 4;
             for (var y = 0; y < h; y++) {
                 var pi = (y * w + x) * 4;
@@ -552,18 +552,18 @@
         }
         cbCtx.putImageData(imgData, 0, 0);
 
-        if (leftLabel) leftLabel.textContent = vmax + ' ' + unit;
-        if (rightLabel) rightLabel.textContent = vmin + ' ' + unit;
+        if (leftLabel) leftLabel.textContent = vmin + ' ' + unit;
+        if (rightLabel) rightLabel.textContent = vmax + ' ' + unit;
     }
 
     // ── Save Image ──────────────────────────────────────────────
 
     function drawColorbarToCtx(cctx, x, y, w, h, cmapName, vmin, vmax, unit) {
         var lut = IR_COLORMAPS[cmapName] || IR_COLORMAPS['enhanced'];
-        // Draw gradient bar (left=warm, right=cold)
+        // Draw gradient bar (left=cold, right=warm)
         for (var bx = 0; bx < w; bx++) {
-            var val = Math.round(1 + bx / (w - 1) * 254);
-            if (val > 255) val = 255;
+            var val = Math.round(255 - bx / (w - 1) * 254);
+            if (val < 1) val = 1;
             var li = val * 4;
             cctx.fillStyle = 'rgb(' + lut[li] + ',' + lut[li+1] + ',' + lut[li+2] + ')';
             cctx.fillRect(x + bx, y, 1, h);
@@ -576,9 +576,9 @@
         cctx.fillStyle = '#94a3b8';
         cctx.font = '10px sans-serif';
         cctx.textAlign = 'left';
-        cctx.fillText(vmax + ' ' + unit, x, y + h + 12);
+        cctx.fillText(vmin + ' ' + unit, x, y + h + 12);
         cctx.textAlign = 'right';
-        cctx.fillText(vmin + ' ' + unit, x + w, y + h + 12);
+        cctx.fillText(vmax + ' ' + unit, x + w, y + h + 12);
         cctx.textAlign = 'left';
     }
 
