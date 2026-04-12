@@ -40,6 +40,7 @@
     var rightLoadedCount = 0;
     var totalExpectedFrames = 7;
     var viewMode = 'diagnostics';       // 'diagnostics' | 'compare-wv' | 'compare-vis'
+    var showCrosshair = true;
     var diagChartsInitialized = false;
     var diagUpdateDebounceTimer = null;
     var DIAG_DEBOUNCE_MS = 100;
@@ -495,7 +496,7 @@
         }
 
         // ── IR Center Fix Crosshair ──
-        if (frame.center_fix && frame.center_fix.lat) {
+        if (showCrosshair && frame.center_fix && frame.center_fix.lat) {
             var fix = frame.center_fix;
             var fx = (fix.lon - vb.west) / lonSpan * w;
             var fy = (vb.north - fix.lat) / latSpan * h;
@@ -1230,7 +1231,11 @@
                     if (stormId === currentStormId) {
                         buildValidIndices();
                         updateSliderMax();
-                        if (idx === 0) { animIndex = 0; hideLoader(); }
+                        if (idx === 0) {
+                            animIndex = 0;
+                            hideLoader();
+                            startBackfill();
+                        }
                         renderBothPanels();
                         updateAnimUI();
                     }
@@ -1242,6 +1247,7 @@
                         setTimeout(function () { fetchIRFrame(idx, true); }, 3000);
                     } else {
                         irFail++; irDone++; updateStatus();
+                        if (idx === 0) startBackfill();
                     }
                 })
                 .finally(function () {
@@ -1307,10 +1313,16 @@
                 });
         }
 
-        // Fetch IR frames only on initial load.
-        // Right-panel frames load on-demand when user enters compare mode.
-        for (var i = 0; i < Math.min(FETCH_CONCURRENCY, totalFrames); i++) {
-            fetchIRFrame(i);
+        // Fetch most recent frame (index 0) first for instant display,
+        // then backfill remaining frames with concurrent pool.
+        fetchIRFrame(0);
+        var _backfillStarted = false;
+        function startBackfill() {
+            if (_backfillStarted) return;
+            _backfillStarted = true;
+            for (var i = 1; i < Math.min(FETCH_CONCURRENCY + 1, totalFrames); i++) {
+                fetchIRFrame(i);
+            }
         }
     }
 
@@ -1480,6 +1492,15 @@
         if (rightCmapEl) {
             rightCmapEl.addEventListener('change', function () {
                 rightColormapName = this.value;
+                renderBothPanels();
+            });
+        }
+
+        // Crosshair toggle
+        var crosshairEl = document.getElementById('sat-crosshair-toggle');
+        if (crosshairEl) {
+            crosshairEl.addEventListener('change', function () {
+                showCrosshair = this.checked;
                 renderBothPanels();
             });
         }

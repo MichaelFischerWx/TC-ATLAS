@@ -43,7 +43,7 @@
     <!-- Styles -->
     <link rel="stylesheet" href="tc_radar_styles.css">
     <link rel="stylesheet" href="realtime_ir_styles.css?v=20260412a">
-    <link rel="stylesheet" href="satellite_styles.css?v=20260412e">
+    <link rel="stylesheet" href="satellite_styles.css?v=20260412f">
 </head>
 <body>
     <a href="#ir-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -449,6 +449,12 @@
                     <option value="irb">IRB</option>
                 </select>
             </div>
+            <div class="sat-sidebar-section sat-crosshair-toggle">
+                <label class="sat-checkbox-label">
+                    <input type="checkbox" id="sat-crosshair-toggle" checked>
+                    Center Fix Crosshair
+                </label>
+            </div>
             <div class="sat-sidebar-section">
                 <label>Right Panel</label>
                 <div class="sat-mode-toggle">
@@ -564,7 +570,7 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
     <script src="realtime_ir.js?v=20260412c"></script>
-    <script src="satellite.js?v=20260412e"></script>
+    <script src="satellite.js?v=20260412f"></script>
     <script>
     /* Tab switching between Map and Satellite views */
     (function () {
