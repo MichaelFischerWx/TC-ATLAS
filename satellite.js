@@ -1634,6 +1634,24 @@
             if (comparePanel) comparePanel.style.display = '';
             if (compareOptions) compareOptions.style.display = '';
             var newBand = (newMode === 'compare-vis') ? 2 : 8;
+
+            // Check for nighttime before fetching Vis
+            if (newBand === 2 && currentStorm) {
+                var sunEl = solarElevation(currentStorm.lat, currentStorm.lon, new Date());
+                if (sunEl < -6) {
+                    if (rightLabelEl) rightLabelEl.textContent = 'Visible (Nighttime \u2014 no data)';
+                    rightFrames = [];
+                    renderBothPanels();
+                    // Update button active states before returning
+                    var mbtns = document.querySelectorAll('.sat-mode-btn');
+                    for (var mi2 = 0; mi2 < mbtns.length; mi2++) {
+                        mbtns[mi2].classList.toggle('active', mbtns[mi2].getAttribute('data-mode') === newMode);
+                    }
+                    _ga('sat_view_mode', { mode: newMode });
+                    return;
+                }
+            }
+
             rightBand = newBand;
             rightDataType = newBand <= 6 ? 'reflectance' : 'tb';
             if (rightLabelEl) rightLabelEl.textContent = newBand === 2 ? 'Visible' : 'Water Vapor';
