@@ -1,8 +1,8 @@
 /* ═══════════════════════════════════════════════════════════════
    Satellite Viewer — satellite.js
-   Split-panel satellite imagery: IR + Vis/WV with coastlines,
-   lat/lon axes, hover readout, and synchronized animation.
-   No Leaflet — pure canvas rendering.
+   IR satellite imagery with diagnostics panel (radial Tb profile,
+   center-fix time series, Tb histogram) and optional WV/Vis
+   comparison.  No Leaflet — pure canvas + Plotly rendering.
    ═══════════════════════════════════════════════════════════════ */
 (function () {
     'use strict';
@@ -39,6 +39,10 @@
     var irLoadedCount = 0;
     var rightLoadedCount = 0;
     var totalExpectedFrames = 7;
+    var viewMode = 'diagnostics';       // 'diagnostics' | 'compare-wv' | 'compare-vis'
+    var diagChartsInitialized = false;
+    var diagUpdateDebounceTimer = null;
+    var DIAG_DEBOUNCE_MS = 100;
 
     var ANIM_SPEEDS = [
         { label: '0.5x', ms: 1200 },
@@ -361,39 +365,44 @@
     function renderBothPanels() {
         if (irFrames.length === 0) return;
         var irFrame = irFrames[animIndex];
-        var rightFrame = rightFrames[animIndex] || null;
         var irCmap = selectedColormap;
-        var rightCmap = getRightCmap();
 
+        // Always render IR panel
         renderFrame(canvasIR, ctxIR, irFrame, irCmap);
-        if (rightFrame) {
-            renderFrame(canvasRight, ctxRight, rightFrame, rightCmap);
-        }
-
-        // Draw overlays (grid lines + coastlines + center fix)
         drawOverlay(overlayIR, overlayCtxIR, irFrame);
-        if (rightFrame) {
-            // Pass IR center fix to the right panel so it also shows the crosshair
-            if (irFrame && irFrame.center_fix && !rightFrame.center_fix) {
-                rightFrame.center_fix = irFrame.center_fix;
-            }
-            drawOverlay(overlayRight, overlayCtxRight, rightFrame);
-        }
-
-        // Colorbars
         renderColorbar(cbIRCanvas, irCmap, cbIRTop, cbIRBot, 160, 330, 'K');
-        if (rightFrame) {
-            var rvmin = rightFrame.tb_vmin || 170, rvmax = rightFrame.tb_vmax || 260;
-            var runit = rightDataType === 'reflectance' ? '%' : 'K';
-            if (rightDataType === 'reflectance') { rvmin = 0; rvmax = 100; }
-            renderColorbar(cbRightCanvas, rightCmap, cbRightTop, cbRightBot, rvmin, rvmax, runit);
-        }
-
-        // Update axes
         if (irFrame) {
             var vb = getViewBounds(irFrame);
             renderAxes(axesYIR, axesXIR, vb);
-            renderAxes(axesYRight, axesXRight, vb);
+        }
+
+        if (viewMode === 'diagnostics') {
+            // Debounced diagnostics update during fast animation
+            if (diagUpdateDebounceTimer) clearTimeout(diagUpdateDebounceTimer);
+            if (animPlaying && animSpeedIdx >= 2) {
+                diagUpdateDebounceTimer = setTimeout(renderDiagnostics, DIAG_DEBOUNCE_MS);
+            } else {
+                renderDiagnostics();
+            }
+        } else {
+            // Compare mode: render right panel canvas
+            var rightFrame = rightFrames[animIndex] || null;
+            var rightCmap = getRightCmap();
+            if (rightFrame) {
+                renderFrame(canvasRight, ctxRight, rightFrame, rightCmap);
+                if (irFrame && irFrame.center_fix && !rightFrame.center_fix) {
+                    rightFrame.center_fix = irFrame.center_fix;
+                }
+                drawOverlay(overlayRight, overlayCtxRight, rightFrame);
+                var rvmin = rightFrame.tb_vmin || 170, rvmax = rightFrame.tb_vmax || 260;
+                var runit = rightDataType === 'reflectance' ? '%' : 'K';
+                if (rightDataType === 'reflectance') { rvmin = 0; rvmax = 100; }
+                renderColorbar(cbRightCanvas, rightCmap, cbRightTop, cbRightBot, rvmin, rvmax, runit);
+            }
+            if (irFrame) {
+                var vb2 = getViewBounds(irFrame);
+                renderAxes(axesYRight, axesXRight, vb2);
+            }
         }
     }
 
@@ -581,7 +590,8 @@
         var gap = 4;
         var headerH = 28;
         var cbH = 24;  // colorbar area height
-        var totalW = pw * 2 + gap;
+        var isCompare = viewMode !== 'diagnostics';
+        var totalW = isCompare ? pw * 2 + gap : pw;
         var totalH = ph + headerH + cbH;
 
         var comp = document.createElement('canvas');
@@ -606,15 +616,17 @@
         cctx.font = '11px sans-serif';
         cctx.fillStyle = '#94a3b8';
         cctx.fillText('Enhanced IR', 8, headerH + 14);
-        var rightLabel = rightBand === 2 ? 'Visible' : 'Water Vapor';
-        cctx.fillText(rightLabel, pw + gap + 8, headerH + 14);
+        if (isCompare) {
+            var rightLabel = rightBand === 2 ? 'Visible' : 'Water Vapor';
+            cctx.fillText(rightLabel, pw + gap + 8, headerH + 14);
+        }
 
         // Draw IR canvas + overlay
         cctx.drawImage(canvasIR, 0, headerH, pw, ph);
         if (overlayIR) cctx.drawImage(overlayIR, 0, headerH, pw, ph);
 
-        // Draw right canvas + overlay
-        if (canvasRight && canvasRight.width > 0) {
+        // Draw right canvas + overlay (compare mode only)
+        if (isCompare && canvasRight && canvasRight.width > 0) {
             cctx.drawImage(canvasRight, pw + gap, headerH, pw, ph);
             if (overlayRight) cctx.drawImage(overlayRight, pw + gap, headerH, pw, ph);
         }
@@ -624,14 +636,16 @@
         var cbW = pw - 80;
         drawColorbarToCtx(cctx, 40, cbY, cbW, 8, selectedColormap, 160, 330, 'K');
 
-        // Right panel colorbar
-        var rightFrame = rightFrames[animIndex];
-        if (rightFrame) {
-            var rcmap = getRightCmap();
-            var rvmin = rightFrame.tb_vmin || 170, rvmax = rightFrame.tb_vmax || 260;
-            var runit = rightDataType === 'reflectance' ? '%' : 'K';
-            if (rightDataType === 'reflectance') { rvmin = 0; rvmax = 100; }
-            drawColorbarToCtx(cctx, pw + gap + 40, cbY, cbW, 8, rcmap, rvmin, rvmax, runit);
+        // Right panel colorbar (compare mode only)
+        if (isCompare) {
+            var rightFrame = rightFrames[animIndex];
+            if (rightFrame) {
+                var rcmap = getRightCmap();
+                var rvmin = rightFrame.tb_vmin || 170, rvmax = rightFrame.tb_vmax || 260;
+                var runit = rightDataType === 'reflectance' ? '%' : 'K';
+                if (rightDataType === 'reflectance') { rvmin = 0; rvmax = 100; }
+                drawColorbarToCtx(cctx, pw + gap + 40, cbY, cbW, 8, rcmap, rvmin, rvmax, runit);
+            }
         }
 
         // TC-ATLAS watermark
@@ -674,6 +688,324 @@
             html += '<span class="sat-axis-label" style="position:absolute;left:' + pct2 + '%">' + label2 + '</span>';
         }
         xEl.innerHTML = html;
+    }
+
+    // ── Diagnostics: Client-Side Computation ─────────────────────
+
+    function decodeTbValue(rawVal, vmin, vmax) {
+        if (rawVal <= 0) return NaN;
+        return vmin + (rawVal - 1) * (vmax - vmin) / 254.0;
+    }
+
+    function computeRadialProfile(frame) {
+        if (!frame || !frame.center_fix || !frame.tb_data) return null;
+        var cLat = frame.center_fix.lat, cLon = frame.center_fix.lon;
+        var b = frame.bounds;
+        var south = b[0][0], west = b[0][1], north = b[1][0], east = b[1][1];
+        var rows = frame.rows, cols = frame.cols;
+        var vmin = frame.tb_vmin || 160.0, vmax = frame.tb_vmax || 330.0;
+
+        // Center pixel
+        var cy = (north - cLat) / (north - south) * (rows - 1);
+        var cx = (cLon - west) / (east - west) * (cols - 1);
+
+        // Grid spacing in km (flat-earth)
+        var cosLat = Math.cos(cLat * Math.PI / 180);
+        var dyKm = (north - south) / (rows - 1) * 111.0;
+        var dxKm = (east - west) / (cols - 1) * 111.0 * cosLat;
+
+        var maxRadKm = Math.min(zoomDeg * 111.0, 500);
+        var dr = 2; // km bin width
+        var nBins = Math.ceil(maxRadKm / dr);
+        var sums = new Float64Array(nBins);
+        var counts = new Int32Array(nBins);
+
+        for (var r = 0; r < rows; r++) {
+            var dY = (r - cy) * dyKm;
+            for (var c = 0; c < cols; c++) {
+                var rawVal = frame.tb_data[r * cols + c];
+                if (rawVal === 0) continue;
+                var dX = (c - cx) * dxKm;
+                var dist = Math.sqrt(dY * dY + dX * dX);
+                var bin = Math.floor(dist / dr);
+                if (bin >= nBins) continue;
+                sums[bin] += decodeTbValue(rawVal, vmin, vmax);
+                counts[bin]++;
+            }
+        }
+
+        var radii = [];
+        var meanTb = [];
+        for (var i = 0; i < nBins; i++) {
+            if (counts[i] >= 3) {
+                radii.push(i * dr + dr / 2);
+                meanTb.push(sums[i] / counts[i]);
+            }
+        }
+        return radii.length > 5 ? { radii: radii, meanTb: meanTb } : null;
+    }
+
+    function computeTbHistogram(frame) {
+        if (!frame || !frame.center_fix || !frame.tb_data) return null;
+        var cLat = frame.center_fix.lat, cLon = frame.center_fix.lon;
+        var b = frame.bounds;
+        var south = b[0][0], west = b[0][1], north = b[1][0], east = b[1][1];
+        var rows = frame.rows, cols = frame.cols;
+        var vmin = frame.tb_vmin || 160.0, vmax = frame.tb_vmax || 330.0;
+
+        var cy = (north - cLat) / (north - south) * (rows - 1);
+        var cx = (cLon - west) / (east - west) * (cols - 1);
+        var cosLat = Math.cos(cLat * Math.PI / 180);
+        var dyKm = (north - south) / (rows - 1) * 111.0;
+        var dxKm = (east - west) / (cols - 1) * 111.0 * cosLat;
+
+        var bandEdges = [0, 50, 100, 200, 500];
+        var bandLabels = ['0\u201350 km', '50\u2013100 km', '100\u2013200 km', '200\u2013500 km'];
+        var nBands = bandLabels.length;
+        // Tb histogram bins: 170 to 310 K, 2K steps
+        var tbMin = 170, tbMax = 310, tbStep = 2;
+        var nTbBins = Math.ceil((tbMax - tbMin) / tbStep);
+        var histCounts = [];
+        for (var bi = 0; bi < nBands; bi++) histCounts.push(new Int32Array(nTbBins));
+
+        for (var r = 0; r < rows; r++) {
+            var dY = (r - cy) * dyKm;
+            for (var c = 0; c < cols; c++) {
+                var rawVal = frame.tb_data[r * cols + c];
+                if (rawVal === 0) continue;
+                var dX = (c - cx) * dxKm;
+                var dist = Math.sqrt(dY * dY + dX * dX);
+                // Determine band
+                var band = -1;
+                for (var bi2 = 0; bi2 < nBands; bi2++) {
+                    if (dist >= bandEdges[bi2] && dist < bandEdges[bi2 + 1]) { band = bi2; break; }
+                }
+                if (band < 0) continue;
+                var tb = decodeTbValue(rawVal, vmin, vmax);
+                var tbBin = Math.floor((tb - tbMin) / tbStep);
+                if (tbBin >= 0 && tbBin < nTbBins) histCounts[band][tbBin]++;
+            }
+        }
+
+        var tbBinCenters = [];
+        for (var t = 0; t < nTbBins; t++) tbBinCenters.push(tbMin + t * tbStep + tbStep / 2);
+
+        var bands = [];
+        for (var bi3 = 0; bi3 < nBands; bi3++) {
+            bands.push({ label: bandLabels[bi3], tbBins: tbBinCenters, counts: Array.from(histCounts[bi3]) });
+        }
+        return { bands: bands };
+    }
+
+    function buildCenterFixTimeSeries() {
+        var times = [], eyeScores = [], irRadDifs = [], meanStds = [];
+        for (var i = 0; i < irFrames.length; i++) {
+            var f = irFrames[i];
+            if (!f || !f.center_fix) continue;
+            times.push(f.datetime_utc);
+            eyeScores.push(f.center_fix.eye_score);
+            irRadDifs.push(f.center_fix.ir_rad_dif);
+            meanStds.push(f.center_fix.mean_std || null);
+        }
+        return times.length >= 2 ? { times: times, eyeScores: eyeScores, irRadDifs: irRadDifs, meanStds: meanStds } : null;
+    }
+
+    // ── Diagnostics: Plotly Chart Rendering ─────────────────────
+
+    var DIAG_LAYOUT_BASE = {
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor: 'rgba(0,0,0,0)',
+        font: { family: 'DM Sans, sans-serif', color: '#8b9ec2', size: 10 },
+        margin: { t: 28, r: 12, b: 36, l: 48 }
+    };
+    var DIAG_CONFIG = { displayModeBar: false, responsive: true, staticPlot: false };
+
+    function renderRadialProfileChart(frame) {
+        var div = document.getElementById('sat-diag-radial');
+        if (!div) return;
+        var profile = computeRadialProfile(frame);
+        if (!profile) { div.style.display = 'none'; return; }
+        div.style.display = 'block';
+
+        var traces = [{
+            x: profile.radii, y: profile.meanTb,
+            type: 'scatter', mode: 'lines',
+            line: { color: '#22d3ee', width: 2 },
+            fill: 'tozeroy', fillcolor: 'rgba(34,211,238,0.06)',
+            hovertemplate: '%{x:.0f} km: %{y:.1f} K<extra></extra>'
+        }];
+        var layout = JSON.parse(JSON.stringify(DIAG_LAYOUT_BASE));
+        layout.title = { text: 'Azimuthal-Mean Radial Tb', font: { size: 11, color: '#94a3b8' } };
+        layout.xaxis = { title: { text: 'Radius (km)', font: { size: 10 } }, gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 9, family: 'JetBrains Mono, monospace' } };
+        layout.yaxis = { title: { text: 'Tb (K)', font: { size: 10 } }, autorange: 'reversed', gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 9, family: 'JetBrains Mono, monospace' } };
+
+        if (div.data) {
+            Plotly.react(div, traces, layout, DIAG_CONFIG);
+        } else {
+            Plotly.newPlot(div, traces, layout, DIAG_CONFIG);
+        }
+    }
+
+    function renderCenterFixTimeSeries() {
+        var div = document.getElementById('sat-diag-timeseries');
+        if (!div) return;
+        var ts = buildCenterFixTimeSeries();
+        if (!ts) { div.style.display = 'none'; return; }
+        div.style.display = 'block';
+
+        // Find current frame time for highlight
+        var curFrame = irFrames[animIndex];
+        var curTime = curFrame && curFrame.datetime_utc ? curFrame.datetime_utc : null;
+
+        var traces = [
+            {
+                x: ts.times, y: ts.eyeScores, type: 'scatter', mode: 'lines+markers',
+                name: 'Eye Score', line: { color: '#22d3ee', width: 2 },
+                marker: { size: 4 }, yaxis: 'y',
+                hovertemplate: 'Score: %{y:.1f}<extra></extra>'
+            },
+            {
+                x: ts.times, y: ts.irRadDifs, type: 'scatter', mode: 'lines+markers',
+                name: 'IR Rad Diff (K)', line: { color: '#a78bfa', width: 2 },
+                marker: { size: 4 }, yaxis: 'y2',
+                hovertemplate: 'ΔT: %{y:.1f} K<extra></extra>'
+            }
+        ];
+        var layout = JSON.parse(JSON.stringify(DIAG_LAYOUT_BASE));
+        layout.title = { text: 'Center Fix Time Series', font: { size: 11, color: '#94a3b8' } };
+        layout.xaxis = { gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 8, family: 'JetBrains Mono, monospace' }, tickangle: -30 };
+        layout.yaxis = { title: { text: 'Eye Score', font: { size: 9, color: '#22d3ee' } }, side: 'left', gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 9, family: 'JetBrains Mono, monospace' } };
+        layout.yaxis2 = { title: { text: 'IR Rad Diff (K)', font: { size: 9, color: '#a78bfa' } }, side: 'right', overlaying: 'y', gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 9, family: 'JetBrains Mono, monospace' } };
+        layout.legend = { x: 0, y: 1.15, orientation: 'h', font: { size: 9 } };
+        layout.margin = { t: 32, r: 48, b: 44, l: 48 };
+        layout.showlegend = true;
+
+        // Vertical line at current frame
+        if (curTime) {
+            layout.shapes = [{
+                type: 'line', x0: curTime, x1: curTime, y0: 0, y1: 1,
+                yref: 'paper', line: { color: '#ffffff44', width: 1, dash: 'dot' }
+            }];
+        }
+
+        if (div.data) {
+            Plotly.react(div, traces, layout, DIAG_CONFIG);
+        } else {
+            Plotly.newPlot(div, traces, layout, DIAG_CONFIG);
+        }
+    }
+
+    function renderTbHistogramChart(frame) {
+        var div = document.getElementById('sat-diag-histogram');
+        if (!div) return;
+        var hist = computeTbHistogram(frame);
+        if (!hist) { div.style.display = 'none'; return; }
+        div.style.display = 'block';
+
+        var colors = ['#f87171', '#fbbf24', '#34d399', '#60a5fa'];
+        var traces = [];
+        for (var i = 0; i < hist.bands.length; i++) {
+            traces.push({
+                x: hist.bands[i].tbBins, y: hist.bands[i].counts,
+                type: 'bar', name: hist.bands[i].label,
+                marker: { color: colors[i], opacity: 0.65 },
+                hovertemplate: '%{x:.0f} K: %{y}<extra>' + hist.bands[i].label + '</extra>'
+            });
+        }
+        var layout = JSON.parse(JSON.stringify(DIAG_LAYOUT_BASE));
+        layout.title = { text: 'Tb Distribution by Radial Band', font: { size: 11, color: '#94a3b8' } };
+        layout.xaxis = { title: { text: 'Brightness Temp (K)', font: { size: 10 } }, gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 9, family: 'JetBrains Mono, monospace' } };
+        layout.yaxis = { title: { text: 'Pixel Count', font: { size: 10 } }, gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 9, family: 'JetBrains Mono, monospace' } };
+        layout.barmode = 'overlay';
+        layout.legend = { x: 0, y: 1.15, orientation: 'h', font: { size: 9 } };
+        layout.margin = { t: 32, r: 12, b: 44, l: 48 };
+        layout.showlegend = true;
+
+        if (div.data) {
+            Plotly.react(div, traces, layout, DIAG_CONFIG);
+        } else {
+            Plotly.newPlot(div, traces, layout, DIAG_CONFIG);
+        }
+    }
+
+    function renderDiagnostics() {
+        if (viewMode !== 'diagnostics') return;
+        var frame = irFrames[animIndex];
+        if (!frame) return;
+        var emptyMsg = document.getElementById('sat-diag-empty');
+        var radialDiv = document.getElementById('sat-diag-radial');
+        var tsDiv = document.getElementById('sat-diag-timeseries');
+        var histDiv = document.getElementById('sat-diag-histogram');
+
+        if (!frame.center_fix) {
+            if (radialDiv) radialDiv.style.display = 'none';
+            if (tsDiv) tsDiv.style.display = 'none';
+            if (histDiv) histDiv.style.display = 'none';
+            if (emptyMsg) emptyMsg.style.display = '';
+            return;
+        }
+        if (emptyMsg) emptyMsg.style.display = 'none';
+
+        renderRadialProfileChart(frame);
+        renderCenterFixTimeSeries();
+        renderTbHistogramChart(frame);
+        diagChartsInitialized = true;
+    }
+
+    // ── View Mode Toggle ───────────────────────────────────────
+
+    function setViewMode(newMode) {
+        if (newMode === viewMode) return;
+        viewMode = newMode;
+
+        var rightPanel = document.getElementById('sat-panel-right');
+        var diagPanel = document.getElementById('sat-diag-panel');
+        var comparePanel = document.getElementById('sat-compare-panel');
+        var compareOptions = document.getElementById('sat-compare-options');
+
+        if (rightPanel) rightPanel.setAttribute('data-mode', newMode);
+
+        if (newMode === 'diagnostics') {
+            if (diagPanel) diagPanel.style.display = '';
+            if (comparePanel) comparePanel.style.display = 'none';
+            if (compareOptions) compareOptions.style.display = 'none';
+            // Plotly needs a moment to measure visible container
+            setTimeout(function () {
+                var r = document.getElementById('sat-diag-radial');
+                var t = document.getElementById('sat-diag-timeseries');
+                var h = document.getElementById('sat-diag-histogram');
+                if (r && r.data) Plotly.Plots.resize(r);
+                if (t && t.data) Plotly.Plots.resize(t);
+                if (h && h.data) Plotly.Plots.resize(h);
+                renderDiagnostics();
+            }, 50);
+        } else {
+            if (diagPanel) diagPanel.style.display = 'none';
+            if (comparePanel) comparePanel.style.display = '';
+            if (compareOptions) compareOptions.style.display = '';
+
+            // Set band based on mode
+            var newBand = (newMode === 'compare-vis') ? 2 : 8;
+            rightBand = newBand;
+            rightDataType = newBand <= 6 ? 'reflectance' : 'tb';
+            if (rightLabelEl) rightLabelEl.textContent = newBand === 2 ? 'Visible' : 'Water Vapor';
+            rightColormapName = newBand === 2 ? 'vis' : 'wv';
+            var rcEl = document.getElementById('sat-right-cmap-select');
+            if (rcEl) rcEl.value = rightColormapName;
+
+            // Fetch right frames if needed
+            rightFrames = [];
+            if (currentStormId) _refetchRightFrames(currentStormId);
+            renderBothPanels();
+        }
+
+        // Update button active states
+        var modeBtns = document.querySelectorAll('.sat-mode-btn');
+        for (var i = 0; i < modeBtns.length; i++) {
+            modeBtns[i].classList.toggle('active', modeBtns[i].getAttribute('data-mode') === newMode);
+        }
+
+        _ga('sat_view_mode', { mode: newMode });
     }
 
     // ── Storm List ──────────────────────────────────────────────
@@ -729,33 +1061,43 @@
         irFrames = []; rightFrames = [];
         animIndex = 0;
         irLoadedCount = 0; rightLoadedCount = 0;
+        diagChartsInitialized = false;
         renderStormList();
         updateHash(atcfId);
+
+        // Reset to diagnostics mode on storm change
+        if (viewMode !== 'diagnostics') {
+            viewMode = 'diagnostics';
+            var rightPanel = document.getElementById('sat-panel-right');
+            var diagPanel = document.getElementById('sat-diag-panel');
+            var comparePanel = document.getElementById('sat-compare-panel');
+            var compareOptions = document.getElementById('sat-compare-options');
+            if (rightPanel) rightPanel.setAttribute('data-mode', 'diagnostics');
+            if (diagPanel) diagPanel.style.display = '';
+            if (comparePanel) comparePanel.style.display = 'none';
+            if (compareOptions) compareOptions.style.display = 'none';
+            var modeBtns = document.querySelectorAll('.sat-mode-btn');
+            for (var mi = 0; mi < modeBtns.length; mi++) {
+                modeBtns[mi].classList.toggle('active', modeBtns[mi].getAttribute('data-mode') === 'diagnostics');
+            }
+        }
+
         if (currentStorm) {
             var color = SS_COLORS[currentStorm.category] || SS_COLORS.TD;
             stormLabelEl.textContent = (currentStorm.name || atcfId) + ' (' + categoryShort(currentStorm.category) + ')';
             stormLabelEl.style.color = color;
-
-            // Determine right panel band based on day/night at storm
-            var sunEl = solarElevation(currentStorm.lat, currentStorm.lon, new Date());
-            // Default to WV (works 24/7). User can toggle to Visible manually.
-            rightBand = 8;
-            rightDataType = rightBand <= 6 ? 'reflectance' : 'tb';
-            if (rightLabelEl) rightLabelEl.textContent = rightBand === 2 ? 'Visible' : 'Water Vapor';
-            // Update product toggle buttons
-            var pbtns = document.querySelectorAll('.sat-product-btn');
-            for (var pb = 0; pb < pbtns.length; pb++) {
-                pbtns[pb].classList.toggle('active', parseInt(pbtns[pb].getAttribute('data-band'), 10) === rightBand);
-            }
         }
         if (window.innerWidth <= 768 && sidebar) sidebar.classList.remove('open');
         noStormsEl.style.display = 'none';
 
         // Check browser-side cache
         var cached = frameCache[atcfId];
-        if (cached && (Date.now() - cached.ts) < FRAME_CACHE_TTL) {
+        if (cached && cached.ir && (Date.now() - cached.ts) < FRAME_CACHE_TTL) {
             irFrames = cached.ir;
-            rightFrames = cached.right;
+            // Restore right frames only if in compare mode and band matches
+            if (viewMode !== 'diagnostics' && cached.right && cached.rightBand === rightBand) {
+                rightFrames = cached.right;
+            }
             buildValidIndices();
             animIndex = validFrameIndices.length > 0 ? validFrameIndices[0] : 0;
             updateSliderMax();
@@ -817,13 +1159,14 @@
         var irDone = 0, rightDone = 0, irFail = 0, rightFail = 0;
 
         function updateStatus() {
-            if (loadStatusEl) {
-                if (irDone < totalFrames || rightDone < totalFrames) {
-                    loadStatusEl.textContent = 'IR ' + (irDone - irFail) + '/' + totalFrames +
-                        ' \u00B7 ' + (rightBand === 2 ? 'Vis' : 'WV') + ' ' + (rightDone - rightFail) + '/' + totalFrames;
-                } else {
-                    loadStatusEl.textContent = '';
-                }
+            if (!loadStatusEl) return;
+            if (irDone < totalFrames) {
+                loadStatusEl.textContent = 'IR ' + (irDone - irFail) + '/' + totalFrames;
+            } else if (viewMode !== 'diagnostics' && rightDone < totalFrames) {
+                var label = rightBand === 2 ? 'Vis' : 'WV';
+                loadStatusEl.textContent = label + ' ' + (rightDone - rightFail) + '/' + totalFrames;
+            } else {
+                loadStatusEl.textContent = '';
             }
         }
 
@@ -873,6 +1216,10 @@
                         }
                         renderBothPanels();
                         updateAnimUI();
+                        // Cache IR frames independently
+                        if (!frameCache[stormId]) frameCache[stormId] = { ts: Date.now() };
+                        frameCache[stormId].ir = irFrames.slice();
+                        frameCache[stormId].ts = Date.now();
                     }
                 });
         }
@@ -910,19 +1257,20 @@
                     if (rightDone >= totalFrames && stormId === currentStormId) {
                         renderBothPanels();
                     }
-                    // Cache only when BOTH bands are fully loaded
-                    if (irDone >= totalFrames && rightDone >= totalFrames) {
-                        frameCache[stormId] = {
-                            ir: irFrames.slice(), right: rightFrames.slice(), ts: Date.now()
-                        };
+                    // Cache right frames when done
+                    if (rightDone >= totalFrames && stormId === currentStormId) {
+                        if (!frameCache[stormId]) frameCache[stormId] = { ts: Date.now() };
+                        frameCache[stormId].right = rightFrames.slice();
+                        frameCache[stormId].rightBand = rightBand;
+                        frameCache[stormId].ts = Date.now();
                     }
                 });
         }
 
-        // Fetch IR and right-panel frames in parallel
+        // Fetch IR frames only on initial load.
+        // Right-panel frames load on-demand when user enters compare mode.
         for (var i = 0; i < Math.min(FETCH_CONCURRENCY, totalFrames); i++) {
             fetchIRFrame(i);
-            fetchRightFrame(i);
         }
     }
 
@@ -1096,30 +1444,11 @@
             });
         }
 
-        // Right-panel product toggle (WV / Vis)
-        var prodBtns = document.querySelectorAll('.sat-product-btn');
-        for (var pb = 0; pb < prodBtns.length; pb++) {
-            prodBtns[pb].addEventListener('click', function () {
-                var newBand = parseInt(this.getAttribute('data-band'), 10);
-                if (newBand === rightBand) return;
-                rightBand = newBand;
-                rightDataType = newBand <= 6 ? 'reflectance' : 'tb';
-                if (rightLabelEl) rightLabelEl.textContent = newBand === 2 ? 'Visible' : 'Water Vapor';
-                // Update active button
-                for (var k = 0; k < prodBtns.length; k++) {
-                    prodBtns[k].classList.toggle('active', parseInt(prodBtns[k].getAttribute('data-band'), 10) === newBand);
-                }
-                // Auto-select appropriate colormap
-                if (newBand === 2) rightColormapName = 'vis';
-                else if (rightColormapName === 'vis') rightColormapName = 'wv';
-                if (rightCmapEl) rightCmapEl.value = rightColormapName;
-                // Clear and refetch right frames
-                rightFrames = [];
-                renderBothPanels();
-                if (currentStormId) {
-                    // Refetch right panel frames with new band
-                    _refetchRightFrames(currentStormId);
-                }
+        // View mode toggle (Diagnostics / WV / Vis)
+        var modeBtns = document.querySelectorAll('.sat-mode-btn');
+        for (var mi = 0; mi < modeBtns.length; mi++) {
+            modeBtns[mi].addEventListener('click', function () {
+                setViewMode(this.getAttribute('data-mode'));
             });
         }
 
@@ -1194,13 +1523,15 @@
                                 console.log('[Satellite] Storm position shifted (' +
                                     dLat.toFixed(1) + '\u00B0 lat, ' + dLon.toFixed(1) + '\u00B0 lon) — refetching frames');
                                 currentStorm = updated;
-                                irFrames = []; rightFrames = []; validFrameIndices = [];
+                                irFrames = []; validFrameIndices = [];
+                                if (viewMode !== 'diagnostics') rightFrames = [];
                                 loadFrames(currentStormId);
                             } else {
                                 currentStorm = updated;
                                 // Auto-refresh frames to pick up newest imagery
                                 console.log('[Satellite] Auto-refreshing frames for latest imagery');
-                                irFrames = []; rightFrames = []; validFrameIndices = [];
+                                irFrames = []; validFrameIndices = [];
+                                if (viewMode !== 'diagnostics') rightFrames = [];
                                 loadFrames(currentStormId);
                             }
                         } else if (updated) {

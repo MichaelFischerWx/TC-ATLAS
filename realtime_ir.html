@@ -450,13 +450,14 @@
                 </select>
             </div>
             <div class="sat-sidebar-section">
-                <label>Right Panel Product</label>
-                <div class="sat-product-toggle">
-                    <button class="sat-product-btn" id="sat-prod-wv" data-band="8">Water Vapor</button>
-                    <button class="sat-product-btn" id="sat-prod-vis" data-band="2">Visible</button>
+                <label>Right Panel</label>
+                <div class="sat-mode-toggle">
+                    <button class="sat-mode-btn active" id="sat-mode-diag" data-mode="diagnostics">Diagnostics</button>
+                    <button class="sat-mode-btn" id="sat-mode-wv" data-mode="compare-wv">WV</button>
+                    <button class="sat-mode-btn" id="sat-mode-vis" data-mode="compare-vis">Vis</button>
                 </div>
             </div>
-            <div class="sat-sidebar-section">
+            <div class="sat-sidebar-section" id="sat-compare-options" style="display:none;">
                 <label for="sat-right-cmap-select">WV / Vis Colormap</label>
                 <select id="sat-right-cmap-select">
                     <option value="wv">WV Default</option>
@@ -490,20 +491,34 @@
                         <div class="sat-axes-y sat-axes-y-left" id="sat-axes-y-ir"></div>
                         <div class="sat-axes-x" id="sat-axes-x-ir"></div>
                     </div>
-                    <!-- Right: Vis/WV panel -->
-                    <div class="sat-panel" id="sat-panel-right">
-                        <div class="sat-panel-label" id="sat-right-label">Water Vapor</div>
-                        <div class="sat-panel-canvas-wrap">
-                            <canvas id="sat-canvas-right"></canvas>
-                            <canvas id="sat-overlay-right" class="sat-overlay-canvas"></canvas>
+                    <!-- Right: Diagnostics (default) or Vis/WV compare panel -->
+                    <div class="sat-panel" id="sat-panel-right" data-mode="diagnostics">
+                        <!-- Diagnostics panel (default view) -->
+                        <div id="sat-diag-panel" class="sat-diag-panel">
+                            <div class="sat-panel-label" id="sat-diag-label">IR Diagnostics</div>
+                            <div id="sat-diag-radial" class="sat-diag-chart"></div>
+                            <div id="sat-diag-timeseries" class="sat-diag-chart"></div>
+                            <div id="sat-diag-histogram" class="sat-diag-chart"></div>
+                            <div id="sat-diag-empty" class="sat-diag-empty" style="display:none;">
+                                No center fix available for this frame.<br>
+                                Diagnostics require a detected eye (storms &ge; 65 kt).
+                            </div>
                         </div>
-                        <div class="sat-colorbar-horiz" id="sat-cb-right">
-                            <span id="sat-cb-right-top" class="sat-cb-label-left"></span>
-                            <canvas id="sat-cb-right-canvas" width="200" height="10"></canvas>
-                            <span id="sat-cb-right-bot" class="sat-cb-label-right"></span>
+                        <!-- WV/VIS canvas (compare mode, hidden by default) -->
+                        <div id="sat-compare-panel" class="sat-compare-panel" style="display:none;">
+                            <div class="sat-panel-label" id="sat-right-label">Water Vapor</div>
+                            <div class="sat-panel-canvas-wrap">
+                                <canvas id="sat-canvas-right"></canvas>
+                                <canvas id="sat-overlay-right" class="sat-overlay-canvas"></canvas>
+                            </div>
+                            <div class="sat-colorbar-horiz" id="sat-cb-right">
+                                <span id="sat-cb-right-top" class="sat-cb-label-left"></span>
+                                <canvas id="sat-cb-right-canvas" width="200" height="10"></canvas>
+                                <span id="sat-cb-right-bot" class="sat-cb-label-right"></span>
+                            </div>
+                            <div class="sat-axes-y sat-axes-y-right" id="sat-axes-y-right"></div>
+                            <div class="sat-axes-x" id="sat-axes-x-right"></div>
                         </div>
-                        <div class="sat-axes-y sat-axes-y-right" id="sat-axes-y-right"></div>
-                        <div class="sat-axes-x" id="sat-axes-x-right"></div>
                     </div>
                 </div>
                 <!-- Hover tooltip (shared, follows cursor) -->

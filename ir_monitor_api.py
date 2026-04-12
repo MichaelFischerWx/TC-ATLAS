@@ -1788,6 +1788,7 @@ def get_storm_ir_raw_frame(
                     cached["center_fix"] = {
                         "lat": cfix["lat"], "lon": cfix["lon"],
                         "eye_score": cfix["eye_score"], "ir_rad_dif": cfix["ir_rad_dif"],
+                        "mean_std": cfix["mean_std"],
                     }
                 else:
                     cached["center_fix"] = None
@@ -1835,6 +1836,7 @@ def get_storm_ir_raw_frame(
                     "lon": cfix_raw["lon"],
                     "eye_score": cfix_raw["eye_score"],
                     "ir_rad_dif": cfix_raw["ir_rad_dif"],
+                    "mean_std": cfix_raw["mean_std"],
                 }
         except Exception:
             pass  # center fix is best-effort; never block frame delivery
