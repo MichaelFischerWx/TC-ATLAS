@@ -602,8 +602,8 @@
         var gap = 4;
         var headerH = 28;
         var cbH = 24;  // colorbar area height
-        var isCompare = viewMode !== 'diagnostics';
-        var totalW = isCompare ? pw * 2 + gap : pw;
+        var hasDualPanel = (viewMode === 'compare-wv' || viewMode === 'compare-vis' || viewMode === 'asymmetry');
+        var totalW = hasDualPanel ? pw * 2 + gap : pw;
         var totalH = ph + headerH + cbH;
 
         var comp = document.createElement('canvas');
@@ -628,17 +628,22 @@
         cctx.font = '11px sans-serif';
         cctx.fillStyle = '#94a3b8';
         cctx.fillText('Enhanced IR', 8, headerH + 14);
-        if (isCompare) {
+        if (viewMode === 'compare-wv' || viewMode === 'compare-vis') {
             var rightLabel = rightBand === 2 ? 'Visible' : 'Water Vapor';
             cctx.fillText(rightLabel, pw + gap + 8, headerH + 14);
+        } else if (viewMode === 'asymmetry') {
+            cctx.fillText('IR Asymmetry (WN-1)', pw + gap + 8, headerH + 14);
         }
 
         // Draw IR canvas + overlay
         cctx.drawImage(canvasIR, 0, headerH, pw, ph);
         if (overlayIR) cctx.drawImage(overlayIR, 0, headerH, pw, ph);
 
-        // Draw right canvas + overlay (compare mode only)
-        if (isCompare && canvasRight && canvasRight.width > 0) {
+        // Draw right panel canvas + overlay
+        if (viewMode === 'asymmetry' && canvasAsym && canvasAsym.width > 0) {
+            cctx.drawImage(canvasAsym, pw + gap, headerH, pw, ph);
+            if (overlayAsym) cctx.drawImage(overlayAsym, pw + gap, headerH, pw, ph);
+        } else if ((viewMode === 'compare-wv' || viewMode === 'compare-vis') && canvasRight && canvasRight.width > 0) {
             cctx.drawImage(canvasRight, pw + gap, headerH, pw, ph);
             if (overlayRight) cctx.drawImage(overlayRight, pw + gap, headerH, pw, ph);
         }
@@ -648,8 +653,24 @@
         var cbW = pw - 80;
         drawColorbarToCtx(cctx, 40, cbY, cbW, 8, selectedColormap, 160, 330, 'K');
 
-        // Right panel colorbar (compare mode only)
-        if (isCompare) {
+        // Right panel colorbar
+        if (viewMode === 'asymmetry') {
+            // Draw asymmetry colorbar using ASYM_LUT
+            var acbW = pw - 80;
+            var acbX = pw + gap + 40;
+            for (var abx = 0; abx < acbW; abx++) {
+                var aval = Math.round(1 + abx / (acbW - 1) * 254);
+                var ali = aval * 4;
+                cctx.fillStyle = 'rgb(' + ASYM_LUT[ali] + ',' + ASYM_LUT[ali + 1] + ',' + ASYM_LUT[ali + 2] + ')';
+                cctx.fillRect(acbX + abx, cbY, 1, 8);
+            }
+            cctx.strokeStyle = '#2a2d38'; cctx.lineWidth = 1;
+            cctx.strokeRect(acbX, cbY, acbW, 8);
+            cctx.fillStyle = '#94a3b8'; cctx.font = '10px sans-serif';
+            cctx.textAlign = 'left'; cctx.fillText('-20 \u00B0C', acbX, cbY + 20);
+            cctx.textAlign = 'right'; cctx.fillText('+20 \u00B0C', acbX + acbW, cbY + 20);
+            cctx.textAlign = 'left';
+        } else if (viewMode === 'compare-wv' || viewMode === 'compare-vis') {
             var rightFrame = rightFrames[animIndex];
             if (rightFrame) {
                 var rcmap = getRightCmap();
