@@ -2164,7 +2164,15 @@
         if (crosshairEl) {
             crosshairEl.addEventListener('change', function () {
                 showCrosshair = this.checked;
-                renderBothPanels();
+                // Redraw overlays only (fast — no need to re-render satellite data)
+                var irFrame = irFrames[animIndex];
+                if (irFrame) drawOverlay(overlayIR, overlayCtxIR, irFrame);
+                if (viewMode === 'compare-wv' || viewMode === 'compare-vis') {
+                    var rf = rightFrames[animIndex];
+                    if (rf) drawOverlay(overlayRight, overlayCtxRight, rf);
+                } else if (viewMode === 'asymmetry') {
+                    if (irFrame) drawOverlay(overlayAsym, overlayCtxAsym, irFrame);
+                }
             });
         }
 
