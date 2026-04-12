@@ -539,10 +539,10 @@
         var imgData = cbCtx.createImageData(w, h);
         var pixels = imgData.data;
 
-        // Horizontal: left=cold (index 255), right=warm (index 1)
+        // Horizontal: left=warm (index 1), right=cold (index 255)
         for (var x = 0; x < w; x++) {
-            var val = Math.round(255 - x / (w - 1) * 254);
-            if (val < 1) val = 1;
+            var val = Math.round(1 + x / (w - 1) * 254);
+            if (val > 255) val = 255;
             var li = val * 4;
             for (var y = 0; y < h; y++) {
                 var pi = (y * w + x) * 4;
@@ -560,10 +560,10 @@
 
     function drawColorbarToCtx(cctx, x, y, w, h, cmapName, vmin, vmax, unit) {
         var lut = IR_COLORMAPS[cmapName] || IR_COLORMAPS['enhanced'];
-        // Draw gradient bar (left=cold, right=warm)
+        // Draw gradient bar (left=warm, right=cold)
         for (var bx = 0; bx < w; bx++) {
-            var val = Math.round(255 - bx / (w - 1) * 254);
-            if (val < 1) val = 1;
+            var val = Math.round(1 + bx / (w - 1) * 254);
+            if (val > 255) val = 255;
             var li = val * 4;
             cctx.fillStyle = 'rgb(' + lut[li] + ',' + lut[li+1] + ',' + lut[li+2] + ')';
             cctx.fillRect(x + bx, y, 1, h);
