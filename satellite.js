@@ -370,9 +370,15 @@
             renderFrame(canvasRight, ctxRight, rightFrame, rightCmap);
         }
 
-        // Draw overlays (grid lines + coastlines)
+        // Draw overlays (grid lines + coastlines + center fix)
         drawOverlay(overlayIR, overlayCtxIR, irFrame);
-        if (rightFrame) drawOverlay(overlayRight, overlayCtxRight, rightFrame);
+        if (rightFrame) {
+            // Pass IR center fix to the right panel so it also shows the crosshair
+            if (irFrame && irFrame.center_fix && !rightFrame.center_fix) {
+                rightFrame.center_fix = irFrame.center_fix;
+            }
+            drawOverlay(overlayRight, overlayCtxRight, rightFrame);
+        }
 
         // Colorbars
         renderColorbar(cbIRCanvas, irCmap, cbIRTop, cbIRBot, 160, 330, 'K');
