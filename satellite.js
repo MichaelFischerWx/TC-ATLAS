@@ -1245,10 +1245,23 @@
         // Ensure minimum span
         if (maxLat - minLat < 6) { var cLa = (minLat + maxLat) / 2; minLat = cLa - 3; maxLat = cLa + 3; }
         if (maxLon - minLon < 6) { var cLo = (minLon + maxLon) / 2; minLon = cLo - 3; maxLon = cLo + 3; }
-        // Keep aspect ratio square-ish
-        var latSpan = maxLat - minLat, lonSpan = maxLon - minLon;
-        if (latSpan > lonSpan) { var d = (latSpan - lonSpan) / 2; minLon -= d; maxLon += d; lonSpan = maxLon - minLon; }
-        else if (lonSpan > latSpan) { var d2 = (lonSpan - latSpan) / 2; minLat -= d2; maxLat += d2; latSpan = maxLat - minLat; }
+        // Adjust aspect ratio for cos(lat) — 1° lon is shorter than 1° lat
+        var midLat = (minLat + maxLat) / 2;
+        var cosAdj = Math.cos(midLat * Math.PI / 180);
+        var latSpan = maxLat - minLat;
+        var lonSpan = maxLon - minLon;
+        // Target: lonSpan * cosAdj should equal latSpan for equidistant projection
+        var latKm = latSpan * 111;
+        var lonKm = lonSpan * 111 * cosAdj;
+        if (latKm > lonKm) {
+            var needLonDeg = latKm / (111 * cosAdj);
+            var d = (needLonDeg - lonSpan) / 2;
+            minLon -= d; maxLon += d; lonSpan = maxLon - minLon;
+        } else if (lonKm > latKm) {
+            var needLatDeg = lonKm / 111;
+            var d2 = (needLatDeg - latSpan) / 2;
+            minLat -= d2; maxLat += d2; latSpan = maxLat - minLat;
+        }
 
         // Canvas sizing
         var parent = canvasTrack.parentElement;
