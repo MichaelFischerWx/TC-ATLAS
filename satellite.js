@@ -1226,6 +1226,8 @@
         if (hovLookbackHours > 6 && hovExtFrames && hovExtStormId === currentStormId) {
             // Merge: extended frames (older) + irFrames (recent 6h)
             srcFrames = hovExtFrames.concat(irFrames);
+            console.log('[Satellite] Hovmoller merge: ' + hovExtFrames.length + ' ext + ' +
+                irFrames.length + ' ir = ' + srcFrames.length + ' total');
         }
 
         var maxRadKm = 200;
@@ -1287,6 +1289,9 @@
             times.push(frame.datetime_utc);
             profiles.push(profile);
         }
+
+        console.log('[Satellite] Hovmoller: ' + times.length + ' frames with data out of ' + srcFrames.length +
+            ' total (lookback=' + hovLookbackHours + 'h)');
 
         if (times.length < 2) return null;
 
