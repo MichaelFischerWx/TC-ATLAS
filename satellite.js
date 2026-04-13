@@ -1984,23 +1984,28 @@
                 });
         }
 
-        // Try to reuse frames already loaded by the RT Monitor
-        if (window.getRtRawTbFrames) {
-            var rtFrames = window.getRtRawTbFrames(stormId);
-            if (rtFrames && rtFrames.length > 0) {
-                console.log('[Satellite] Reusing ' + rtFrames.length + ' frames from RT Monitor cache');
-                for (var ri = 0; ri < rtFrames.length; ri++) {
-                    var rf = rtFrames[ri];
-                    if (!rf) continue;
-                    irFrames[ri] = {
-                        tb_data: decodeTbData(rf.tb_data), rows: rf.tb_rows, cols: rf.tb_cols,
-                        bounds: rf.bounds, datetime_utc: rf.datetime_utc,
-                        satellite: rf.satellite || '', tb_vmin: rf.tb_vmin || 160.0, tb_vmax: rf.tb_vmax || 330.0,
-                        center_fix: rf.center_fix || null
-                    };
-                    irDone++;
-                }
-                if (irDone > 0) {
+        // Try to reuse frames from the RT Monitor cache.
+        // The RT Monitor may still be loading, so poll a few times before
+        // falling back to independent fetches.
+        var _rtPollAttempts = 0;
+        var _rtPollMax = 8;  // poll for up to 4 seconds (8 × 500ms)
+        function _tryRtCache() {
+            if (stormId !== currentStormId) return; // storm changed
+            if (window.getRtRawTbFrames) {
+                var rtFrames = window.getRtRawTbFrames(stormId);
+                if (rtFrames && rtFrames.length > 0) {
+                    console.log('[Satellite] Reusing ' + rtFrames.length + ' frames from RT Monitor cache');
+                    for (var ri = 0; ri < rtFrames.length; ri++) {
+                        var rf = rtFrames[ri];
+                        if (!rf) continue;
+                        irFrames[ri] = {
+                            tb_data: decodeTbData(rf.tb_data), rows: rf.tb_rows, cols: rf.tb_cols,
+                            bounds: rf.bounds, datetime_utc: rf.datetime_utc,
+                            satellite: rf.satellite || '', tb_vmin: rf.tb_vmin || 160.0, tb_vmax: rf.tb_vmax || 330.0,
+                            center_fix: rf.center_fix || null
+                        };
+                        irDone++;
+                    }
                     totalFrames = Math.max(totalFrames, rtFrames.length);
                     buildValidIndices();
                     updateSliderMax();
@@ -2009,19 +2014,20 @@
                     renderBothPanels();
                     updateAnimUI();
                     updateStatus();
-                    // Cache
                     if (!frameCache[stormId]) frameCache[stormId] = { ts: Date.now() };
                     frameCache[stormId].ir = irFrames.slice();
                     frameCache[stormId].ts = Date.now();
+                    return;
                 }
-                return; // No need to fetch — RT Monitor already has everything
+            }
+            _rtPollAttempts++;
+            if (_rtPollAttempts < _rtPollMax) {
+                setTimeout(_tryRtCache, 500);
+            } else {
+                console.log('[Satellite] RT Monitor cache not ready, fetching independently');
+                _fetchIndependently();
             }
         }
-
-        // Fetch most recent frame (index 0) first for instant display,
-        // then backfill remaining frames with concurrent pool.
-        console.log('[Satellite] loadFrames: fetching frame 0 for ' + stormId);
-        fetchIRFrame(0);
         var _backfillStarted = false;
         function startBackfill() {
             if (_backfillStarted) return;
@@ -2032,6 +2038,14 @@
                 fetchIRFrame(i);
             }
         }
+
+        function _fetchIndependently() {
+            console.log('[Satellite] loadFrames: fetching frame 0 for ' + stormId);
+            fetchIRFrame(0);
+        }
+
+        // Start: try RT cache first, fall back to independent fetch
+        _tryRtCache();
     }
 
     // ── Animation ───────────────────────────────────────────────
