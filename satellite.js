@@ -1362,13 +1362,17 @@
                     };
                     completed++;
                 })
-                .catch(function () {
+                .catch(function (err) {
+                    console.warn('[Satellite] Hovmoller frame ' + idx + ' failed:', err.message || err);
                     failed++;
                     completed++;
                 })
                 .finally(function () {
                     var nextIdx = idx + concurrency;
                     if (nextIdx < totalFrames) fetchFrame(nextIdx);
+
+                    // Update loading status
+                    if (loadStatusEl) loadStatusEl.textContent = 'Hov ' + completed + '/' + (totalFrames - startIdx);
 
                     if (completed >= (totalFrames - startIdx)) {
                         // Compact and store
