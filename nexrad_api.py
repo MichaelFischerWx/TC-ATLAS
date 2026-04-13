@@ -111,7 +111,7 @@ def _cache_put(key: str, val: dict):
 _GCS_NEXRAD_BUCKET = os.environ.get("GCS_IR_CACHE_BUCKET", "")
 _gcs_client = None
 _gcs_bucket = None
-_GCS_CACHE_VERSION = "v5"
+_GCS_CACHE_VERSION = "v6"
 
 
 def _get_gcs_bucket():
@@ -132,7 +132,7 @@ def _get_gcs_bucket():
 
 
 def _gcs_cache_key(site: str, scan_key: str, product: str, tilt: int,
-                    max_range_km: int = 460) -> str:
+                    max_range_km: int = 300) -> str:
     safe_key = scan_key.replace("/", "_")
     return f"nexrad/{_GCS_CACHE_VERSION}/{site}/{safe_key}/{product}_{tilt}_{max_range_km}km.json"
 
