@@ -1829,6 +1829,18 @@
     function _refetchRightFrames(stormId) {
         var totalFrames = 13;
         var rightDone = 0;
+        var rightOk = 0;
+        var bandLabel = rightBand === 2 ? 'Vis' : 'WV';
+
+        function _updateRightStatus() {
+            if (loadStatusEl) {
+                if (rightDone < totalFrames) {
+                    loadStatusEl.textContent = bandLabel + ' ' + rightOk + '/' + totalFrames;
+                } else {
+                    loadStatusEl.textContent = '';
+                }
+            }
+        }
 
         function fetchOne(idx) {
             if (idx >= totalFrames || stormId !== currentStormId) return;
@@ -1845,19 +1857,22 @@
                         satellite: data.satellite || '', tb_vmin: data.tb_vmin, tb_vmax: data.tb_vmax,
                         data_type: data.data_type || rightDataType
                     };
-                    rightDone++;
+                    rightDone++; rightOk++;
+                    _updateRightStatus();
                     if (stormId === currentStormId) renderBothPanels();
                 })
                 .catch(function (err) {
                     console.warn('[Satellite] Right frame ' + idx + ' failed:', err.message);
                     rightDone++;
+                    _updateRightStatus();
                 })
                 .finally(function () {
                     var next = idx + FETCH_CONCURRENCY;
                     if (next < totalFrames) fetchOne(next);
                 });
         }
-        console.log('[Satellite] _refetchRightFrames: band=' + rightBand + ' storm=' + stormId + ' frames=' + Math.min(FETCH_CONCURRENCY, totalFrames));
+        console.log('[Satellite] _refetchRightFrames: band=' + rightBand + ' storm=' + stormId);
+        _updateRightStatus();
         for (var i = 0; i < Math.min(FETCH_CONCURRENCY, totalFrames); i++) fetchOne(i);
     }
 
