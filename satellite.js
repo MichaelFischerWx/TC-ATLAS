@@ -1106,11 +1106,25 @@
         var times = [];
         var profiles = []; // array of arrays, one per frame
 
+        // For Hovmoller, use advisory position as fallback when center_fix is missing.
+        // Extended frames (12h/24h) may not have center fixes computed yet.
+        var advisoryLat = currentStorm ? currentStorm.lat : null;
+        var advisoryLon = currentStorm ? currentStorm.lon : null;
+
         for (var fi = srcFrames.length - 1; fi >= 0; fi--) {
             var frame = srcFrames[fi];
-            if (!frame || !frame.center_fix || !frame.tb_data) continue;
+            if (!frame || !frame.tb_data) continue;
 
-            var cLat = frame.center_fix.lat, cLon = frame.center_fix.lon;
+            var cLat, cLon;
+            if (frame.center_fix) {
+                cLat = frame.center_fix.lat;
+                cLon = frame.center_fix.lon;
+            } else if (advisoryLat != null) {
+                cLat = advisoryLat;
+                cLon = advisoryLon;
+            } else {
+                continue;
+            }
             var b = frame.bounds;
             var south = b[0][0], west = b[0][1], north = b[1][0], east = b[1][1];
             var rows = frame.rows, cols = frame.cols;
