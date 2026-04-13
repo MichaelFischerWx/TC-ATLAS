@@ -131,16 +131,18 @@ def _get_gcs_bucket():
         return None
 
 
-def _gcs_cache_key(site: str, scan_key: str, product: str, tilt: int) -> str:
+def _gcs_cache_key(site: str, scan_key: str, product: str, tilt: int,
+                    max_range_km: int = 460) -> str:
     safe_key = scan_key.replace("/", "_")
-    return f"nexrad/{_GCS_CACHE_VERSION}/{site}/{safe_key}/{product}_{tilt}.json"
+    return f"nexrad/{_GCS_CACHE_VERSION}/{site}/{safe_key}/{product}_{tilt}_{max_range_km}km.json"
 
 
-def _gcs_get_frame(site: str, scan_key: str, product: str, tilt: int) -> dict | None:
+def _gcs_get_frame(site: str, scan_key: str, product: str, tilt: int,
+                    max_range_km: int = 460) -> dict | None:
     bucket = _get_gcs_bucket()
     if bucket is None:
         return None
-    key = _gcs_cache_key(site, scan_key, product, tilt)
+    key = _gcs_cache_key(site, scan_key, product, tilt, max_range_km)
     try:
         blob = bucket.blob(key)
         data = blob.download_as_bytes(timeout=5)
@@ -149,13 +151,14 @@ def _gcs_get_frame(site: str, scan_key: str, product: str, tilt: int) -> dict | 
         return None
 
 
-def _gcs_put_frame(site: str, scan_key: str, product: str, tilt: int, result: dict):
+def _gcs_put_frame(site: str, scan_key: str, product: str, tilt: int, result: dict,
+                    max_range_km: int = 460):
     bucket = _get_gcs_bucket()
     if bucket is None:
         return
 
     def _upload():
-        key = _gcs_cache_key(site, scan_key, product, tilt)
+        key = _gcs_cache_key(site, scan_key, product, tilt, max_range_km)
         try:
             blob = bucket.blob(key)
             blob.upload_from_string(
@@ -807,7 +810,7 @@ async def get_radar_frame(
         return JSONResponse(cached)
 
     # Check GCS cache
-    gcs_result = _gcs_get_frame(site, s3_key, product, tilt)
+    gcs_result = _gcs_get_frame(site, s3_key, product, tilt, max_range_km)
     if gcs_result:
         _cache_put(cache_key, gcs_result)
         return JSONResponse(gcs_result)
@@ -843,7 +846,7 @@ async def get_radar_frame(
 
     # Cache
     _cache_put(cache_key, result)
-    _gcs_put_frame(site, s3_key, product, tilt, result)
+    _gcs_put_frame(site, s3_key, product, tilt, result, max_range_km)
 
     return JSONResponse(result)
 
