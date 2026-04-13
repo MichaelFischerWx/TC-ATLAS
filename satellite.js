@@ -630,8 +630,15 @@
         _saveStandard(irFrame, name, cat, time, sat);
     }
 
-    /** Standard save: IR frame (+ right panel if in compare/asymmetry mode) */
-    function _saveStandard(irFrame, name, cat, time, sat) {
+    /**
+     * Build a composite canvas for the current frame state.
+     * Used by both PNG save and GIF export.
+     * @param {string} headerText - header line (storm name, time, etc.)
+     * @returns {HTMLCanvasElement}
+     */
+    function _buildCompositeFrame(headerText) {
+        var irFrame = irFrames[animIndex];
+        if (!irFrame) return null;
         var pw = irFrame.cols, ph = irFrame.rows;
         var gap = 4;
         var headerH = 28;
@@ -650,7 +657,7 @@
 
         cctx.fillStyle = '#e2e4ea';
         cctx.font = '14px sans-serif';
-        cctx.fillText(name + ' (' + cat + ')  \u2014  ' + time + '  ' + sat, 8, 18);
+        cctx.fillText(headerText, 8, 18);
 
         cctx.font = '11px sans-serif';
         cctx.fillStyle = '#94a3b8';
@@ -708,6 +715,15 @@
         cctx.textAlign = 'right';
         cctx.fillText('TC-ATLAS', totalW - 8, totalH - 4);
         cctx.textAlign = 'left';
+
+        return comp;
+    }
+
+    /** Standard save: IR frame (+ right panel if in compare/asymmetry mode) */
+    function _saveStandard(irFrame, name, cat, time, sat) {
+        var headerText = name + ' (' + cat + ')  \u2014  ' + time + '  ' + sat;
+        var comp = _buildCompositeFrame(headerText);
+        if (!comp) return;
 
         var link = document.createElement('a');
         link.download = (name || 'satellite') + '_' + (irFrame.datetime_utc || '').replace(/[:\-T]/g, '').replace('Z', '') + '.png';
@@ -783,6 +799,118 @@
                 console.warn('[Satellite] Hovmoller export failed, saving IR only:', err);
                 _saveStandard(irFrame, name, cat, time, sat);
             });
+    }
+
+    // ── GIF Export ───────────────────────────────────────────────
+
+    var _gifExporting = false;
+
+    function _ensureGifWorker(cb) {
+        if (window._gifWorkerBlobUrl) { cb(window._gifWorkerBlobUrl); return; }
+        fetch('https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js')
+            .then(function (r) { return r.text(); })
+            .then(function (src) {
+                var blob = new Blob([src], { type: 'application/javascript' });
+                window._gifWorkerBlobUrl = URL.createObjectURL(blob);
+                cb(window._gifWorkerBlobUrl);
+            })
+            .catch(function () {
+                cb('https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js');
+            });
+    }
+
+    function saveGif() {
+        if (_gifExporting || validFrameIndices.length < 2 || typeof GIF === 'undefined') return;
+        _gifExporting = true;
+
+        var name = currentStorm ? (currentStorm.name || currentStormId) : currentStormId;
+        var cat = currentStorm ? categoryShort(currentStorm.category) : '';
+        var savedAnimIndex = animIndex;
+        var delay = ANIM_SPEEDS[animSpeedIdx].ms;
+
+        // Disable buttons during export
+        var gifBtn = document.getElementById('sat-save-gif');
+        var saveBtn = document.getElementById('sat-save');
+        if (gifBtn) { gifBtn.disabled = true; gifBtn.style.opacity = '0.4'; }
+        if (saveBtn) { saveBtn.disabled = true; saveBtn.style.opacity = '0.4'; }
+
+        // Show progress in the load status area
+        if (loadStatusEl) loadStatusEl.textContent = 'GIF 0%';
+
+        _ensureGifWorker(function (workerUrl) {
+            // Determine output size from first frame
+            var sampleFrame = irFrames[validFrameIndices[0]];
+            if (!sampleFrame) { _gifCleanup(); return; }
+            var hasDualPanel = (viewMode === 'compare-wv' || viewMode === 'compare-vis' || viewMode === 'asymmetry');
+            var outW = hasDualPanel ? sampleFrame.cols * 2 + 4 : sampleFrame.cols;
+            var outH = sampleFrame.rows + 28 + 24;
+
+            var gif = new GIF({
+                workers: 2, quality: 8, width: outW, height: outH,
+                workerScript: workerUrl, transparent: null, background: '#0a0c12'
+            });
+
+            gif.on('progress', function (pct) {
+                if (loadStatusEl) loadStatusEl.textContent = 'GIF ' + Math.round(pct * 100) + '%';
+            });
+
+            gif.on('finished', function (blob) {
+                var url = URL.createObjectURL(blob);
+                var link = document.createElement('a');
+                var ts = (irFrames[validFrameIndices[0]] || {}).datetime_utc || '';
+                link.download = (name || 'satellite') + '_anim_' + ts.replace(/[:\-T]/g, '').replace('Z', '') + '.gif';
+                link.href = url;
+                link.click();
+                setTimeout(function () { URL.revokeObjectURL(url); }, 5000);
+                // Restore original frame
+                animIndex = savedAnimIndex;
+                renderBothPanels();
+                updateAnimUI();
+                _gifCleanup();
+                console.log('[Satellite] GIF export complete: ' + validFrameIndices.length + ' frames');
+            });
+
+            // Render frames sequentially to avoid blocking UI
+            var frameIdx = 0;
+            var frameList = validFrameIndices.slice(); // oldest-first order for GIF
+
+            function addNextFrame() {
+                if (frameIdx >= frameList.length) {
+                    // Add last frame again with 2x delay for a natural loop pause
+                    if (loadStatusEl) loadStatusEl.textContent = 'Encoding...';
+                    gif.render();
+                    return;
+                }
+
+                var fi = frameList[frameIdx];
+                animIndex = fi;
+                renderBothPanels();
+
+                var frame = irFrames[fi];
+                var time = frame && frame.datetime_utc ? frame.datetime_utc.replace('T', ' ').replace('Z', ' UTC') : '';
+                var sat = frame && frame.satellite ? frame.satellite : '';
+                var headerText = name + ' (' + cat + ')  \u2014  ' + time + '  ' + sat;
+                var comp = _buildCompositeFrame(headerText);
+
+                if (comp) {
+                    var frameDelay = (frameIdx === frameList.length - 1) ? delay * 2 : delay;
+                    gif.addFrame(comp.getContext('2d'), { copy: true, delay: frameDelay });
+                }
+
+                if (loadStatusEl) loadStatusEl.textContent = 'Frames ' + (frameIdx + 1) + '/' + frameList.length;
+                frameIdx++;
+                setTimeout(addNextFrame, 0); // yield to UI
+            }
+
+            addNextFrame();
+        });
+
+        function _gifCleanup() {
+            _gifExporting = false;
+            if (gifBtn) { gifBtn.disabled = false; gifBtn.style.opacity = ''; }
+            if (saveBtn) { saveBtn.disabled = false; saveBtn.style.opacity = ''; }
+            if (loadStatusEl) loadStatusEl.textContent = '';
+        }
     }
 
     // ── Lat/Lon Axes ────────────────────────────────────────────
@@ -2537,9 +2665,11 @@
             });
         }
 
-        // Save button
+        // Save buttons (PNG + GIF)
         var saveBtn = document.getElementById('sat-save');
         if (saveBtn) saveBtn.addEventListener('click', saveImage);
+        var gifBtn = document.getElementById('sat-save-gif');
+        if (gifBtn) gifBtn.addEventListener('click', saveGif);
 
         // Zoom buttons (10°, 5°, 2°)
         var zoomBtns = document.querySelectorAll('.sat-zoom-btn');
