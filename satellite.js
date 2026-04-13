@@ -710,10 +710,10 @@
             }
         }
 
-        cctx.fillStyle = 'rgba(255,255,255,0.3)';
+        cctx.fillStyle = 'rgba(255,255,255,0.25)';
         cctx.font = '10px sans-serif';
         cctx.textAlign = 'right';
-        cctx.fillText('TC-ATLAS', totalW - 8, totalH - 4);
+        cctx.fillText('TC-ATLAS', totalW - 8, 14);
         cctx.textAlign = 'left';
 
         return comp;
@@ -721,7 +721,7 @@
 
     /** Standard save: IR frame (+ right panel if in compare/asymmetry mode) */
     function _saveStandard(irFrame, name, cat, time, sat) {
-        var headerText = name + ' (' + cat + ')  \u2014  ' + time + '  ' + sat;
+        var headerText = name + '  \u2014  ' + time + '  ' + sat;
         var comp = _buildCompositeFrame(headerText);
         if (!comp) return;
 
@@ -760,7 +760,7 @@
                     // Header
                     cctx.fillStyle = '#e2e4ea';
                     cctx.font = '14px sans-serif';
-                    cctx.fillText(name + ' (' + cat + ')  \u2014  ' + time + '  ' + sat, 8, 18);
+                    cctx.fillText(name + '  \u2014  ' + time + '  ' + sat, 8, 18);
 
                     // Panel labels
                     cctx.font = '11px sans-serif';
@@ -781,10 +781,10 @@
                     cctx.drawImage(hovImg, pw + gap, headerH, hovW, hovH);
 
                     // Watermark
-                    cctx.fillStyle = 'rgba(255,255,255,0.3)';
+                    cctx.fillStyle = 'rgba(255,255,255,0.25)';
                     cctx.font = '10px sans-serif';
                     cctx.textAlign = 'right';
-                    cctx.fillText('TC-ATLAS', totalW - 8, totalH - 4);
+                    cctx.fillText('TC-ATLAS', totalW - 8, 14);
                     cctx.textAlign = 'left';
 
                     var link = document.createElement('a');
@@ -898,7 +898,7 @@
                 var frame = irFrames[fi];
                 var time = frame && frame.datetime_utc ? frame.datetime_utc.replace('T', ' ').replace('Z', ' UTC') : '';
                 var sat = frame && frame.satellite ? frame.satellite : '';
-                var headerText = name + ' (' + cat + ')  \u2014  ' + time + '  ' + sat;
+                var headerText = name + '  \u2014  ' + time + '  ' + sat;
 
                 if (includeHovmoller) {
                     // Update Hovmoller horizontal line to this frame's time, then capture
@@ -937,7 +937,7 @@
                             fctx.fillStyle = 'rgba(255,255,255,0.3)';
                             fctx.font = '10px sans-serif';
                             fctx.textAlign = 'right';
-                            fctx.fillText('TC-ATLAS', outW - 8, outH - 4);
+                            fctx.fillText('TC-ATLAS', outW - 8, 14);
                             fctx.textAlign = 'left';
 
                             var frameDelay = (frameIdx === frameList.length - 1) ? delay * 2 : delay;
