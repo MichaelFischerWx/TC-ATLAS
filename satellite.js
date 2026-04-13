@@ -51,6 +51,11 @@
     var hovExtStormId = null;    // storm ID for which extended frames were fetched
     var hovExtFetching = false;  // true while fetching extended frames
 
+    // ── Fast JPG Preview State ──────────────────────────────
+    var _previewPhase = false;   // true during JPG preview, false once raw Tb loaded
+    var _previewDone = 0;        // count of preview JPGs loaded
+    var _rawTbStarted = false;   // guard: only start raw Tb backfill once
+
     // ── 88D NEXRAD Radar Overlay State ───────────────────────
     var showRadar = false;           // overlay toggle
     var _satRadarImg = null;         // loaded Image element for current scan
@@ -349,7 +354,40 @@
     // ── Canvas Rendering ────────────────────────────────────────
 
     function renderFrame(canvas, ctx, frame, colormapName) {
-        if (!frame || !frame.tb_data || !ctx) return;
+        if (!frame || !ctx) return;
+
+        // Fast preview: draw pre-rendered JPG if raw Tb not yet available
+        if (!frame.tb_data && frame.previewImg) {
+            var iw = frame.previewImg.naturalWidth;
+            var ih = frame.previewImg.naturalHeight;
+            var vb = getViewBounds(frame);
+            if (!vb || !frame.bounds) return;
+            var b = frame.bounds;
+            var south = b[0][0], west = b[0][1], north = b[1][0], east = b[1][1];
+
+            if (zoomDeg >= 10) {
+                // Full frame — no cropping needed
+                canvas.width = iw;
+                canvas.height = ih;
+                ctx.fillStyle = '#0a0b12';
+                ctx.fillRect(0, 0, iw, ih);
+                ctx.drawImage(frame.previewImg, 0, 0);
+            } else {
+                // Zoomed — crop source image to match view bounds
+                var sx = Math.max(0, (vb.west - west) / (east - west) * iw);
+                var sy = Math.max(0, (north - vb.north) / (north - south) * ih);
+                var sw = (vb.east - vb.west) / (east - west) * iw;
+                var sh = (vb.north - vb.south) / (north - south) * ih;
+                canvas.width = iw;
+                canvas.height = ih;
+                ctx.fillStyle = '#0a0b12';
+                ctx.fillRect(0, 0, iw, ih);
+                ctx.drawImage(frame.previewImg, sx, sy, sw, sh, 0, 0, iw, ih);
+            }
+            return;
+        }
+
+        if (!frame.tb_data) return;
         var lut = IR_COLORMAPS[colormapName] || IR_COLORMAPS['enhanced'];
         var vb = getViewBounds(frame);
         if (!vb) return;
@@ -2283,6 +2321,7 @@
         diagChartsInitialized = false;
         hovExtFrames = null; hovExtStormId = null; hovExtFetching = false;
         trackMetadata = null;
+        _previewPhase = false; _previewDone = 0; _rawTbStarted = false;
         _satRemoveRadar();
         renderStormList();
         updateHash(atcfId);
@@ -2621,11 +2660,181 @@
         }
 
         function _fetchIndependently() {
-            console.log('[Satellite] loadFrames: fetching frame 0 for ' + stormId);
-            fetchIRFrame(0);
+            // Phase 1: fast JPG preview for all frames
+            _fetchPreviewFrames();
         }
 
-        // Start: try RT cache first, fall back to independent fetch
+        /**
+         * Fetch pre-rendered JPGs from /ir-frame.jpg for instant preview.
+         * Once first preview loads, show it immediately. After all previews
+         * load, kick off raw Tb backfill for hover/diagnostics/colormaps.
+         */
+        function _fetchPreviewFrames() {
+            _previewPhase = true;
+            _previewDone = 0;
+            _rawTbStarted = false;
+            var previewTotal = totalFrames;
+            console.log('[Satellite] Fetching ' + previewTotal + ' preview JPGs for ' + stormId);
+
+            function fetchPreview(idx) {
+                if (idx >= previewTotal || stormId !== currentStormId) return;
+                var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(stormId) + '/ir-frame.jpg'
+                    + '?frame_index=' + idx + '&lookback_hours=' + DEFAULT_LOOKBACK_HOURS
+                    + '&radius_deg=' + DEFAULT_RADIUS_DEG + '&interval_min=' + FRAME_INTERVAL_MIN;
+
+                fetch(url)
+                    .then(function (r) {
+                        if (!r.ok) throw new Error('HTTP ' + r.status);
+                        var hdrs = r.headers;
+                        var meta = {
+                            datetime_utc: (hdrs.get('X-Datetime') || '').replace('Z', 'Z'),
+                            satellite: hdrs.get('X-Satellite') || '',
+                            bounds: null
+                        };
+                        try { meta.bounds = JSON.parse(hdrs.get('X-Bounds')); } catch (e) {}
+                        var ft = hdrs.get('X-Total-Frames');
+                        if (ft) previewTotal = parseInt(ft, 10) || previewTotal;
+                        return r.blob().then(function (blob) { return { blob: blob, meta: meta }; });
+                    })
+                    .then(function (result) {
+                        if (stormId !== currentStormId) return;
+                        var img = new Image();
+                        img.onload = function () {
+                            // Only populate if raw Tb hasn't already arrived for this index
+                            if (!irFrames[idx] || !irFrames[idx].tb_data) {
+                                irFrames[idx] = {
+                                    previewImg: img,
+                                    tb_data: null,
+                                    rows: img.naturalHeight,
+                                    cols: img.naturalWidth,
+                                    bounds: result.meta.bounds,
+                                    datetime_utc: result.meta.datetime_utc,
+                                    satellite: result.meta.satellite,
+                                    tb_vmin: 160.0, tb_vmax: 330.0,
+                                    center_fix: null
+                                };
+                            } else {
+                                // Raw Tb already arrived — attach preview for potential fallback
+                                irFrames[idx].previewImg = img;
+                            }
+                            _previewDone++;
+                            buildValidIndices();
+                            updateSliderMax();
+
+                            // Show first preview immediately
+                            if (_previewDone === 1) {
+                                animIndex = idx;
+                                hideLoader();
+                                _satLoadRadarSites();
+                            }
+                            renderBothPanels();
+                            updateAnimUI();
+
+                            if (loadStatusEl) {
+                                loadStatusEl.textContent = _previewPhase
+                                    ? 'Preview ' + _previewDone + '/' + previewTotal
+                                    : '';
+                            }
+
+                            // All previews done — start raw Tb backfill
+                            if (_previewDone >= previewTotal && !_rawTbStarted) {
+                                _rawTbStarted = true;
+                                _previewPhase = false;
+                                console.log('[Satellite] All previews loaded, starting raw Tb backfill');
+                                _startRawTbBackfill();
+                            }
+                        };
+                        img.src = URL.createObjectURL(result.blob);
+                    })
+                    .catch(function () {
+                        _previewDone++;
+                        // If preview fails, fall back to raw Tb for this frame
+                        if (!irFrames[idx]) fetchIRFrame(idx);
+                        if (_previewDone >= previewTotal && !_rawTbStarted) {
+                            _rawTbStarted = true;
+                            _previewPhase = false;
+                            _startRawTbBackfill();
+                        }
+                    })
+                    .finally(function () {
+                        var next = idx + FETCH_CONCURRENCY;
+                        if (next < previewTotal) fetchPreview(next);
+                    });
+            }
+
+            // Launch concurrent preview fetches
+            var c = Math.min(FETCH_CONCURRENCY, previewTotal);
+            for (var i = 0; i < c; i++) fetchPreview(i);
+        }
+
+        /**
+         * Start raw Tb backfill for all frames (after previews loaded).
+         */
+        function _startRawTbBackfill() {
+            if (loadStatusEl) loadStatusEl.textContent = 'Loading Tb data...';
+            var tbDone = 0;
+            for (var i = 0; i < Math.min(FETCH_CONCURRENCY, totalFrames); i++) {
+                _fetchRawTb(i);
+            }
+
+            function _fetchRawTb(idx) {
+                if (idx >= totalFrames || stormId !== currentStormId) return;
+                var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(stormId) + '/ir-raw-frame'
+                    + '?frame_index=' + idx + '&lookback_hours=' + DEFAULT_LOOKBACK_HOURS
+                    + '&radius_deg=' + DEFAULT_RADIUS_DEG + '&interval_min=' + FRAME_INTERVAL_MIN;
+
+                fetch(url)
+                    .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+                    .then(function (data) {
+                        if (stormId !== currentStormId) return;
+                        if (data.total_frames) totalFrames = data.total_frames;
+                        // Merge raw Tb into existing frame (preserve previewImg)
+                        var existing = irFrames[idx] || {};
+                        irFrames[idx] = {
+                            previewImg: existing.previewImg || null,
+                            tb_data: decodeTbData(data.tb_data),
+                            rows: data.tb_rows,
+                            cols: data.tb_cols,
+                            bounds: data.bounds,
+                            datetime_utc: data.datetime_utc,
+                            satellite: data.satellite || '',
+                            tb_vmin: data.tb_vmin || 160.0,
+                            tb_vmax: data.tb_vmax || 330.0,
+                            center_fix: data.center_fix || null
+                        };
+                        tbDone++;
+                        irDone = tbDone;
+                        buildValidIndices();
+                        updateSliderMax();
+                        renderBothPanels();
+                        updateAnimUI();
+                        if (loadStatusEl) loadStatusEl.textContent = 'IR ' + tbDone + '/' + totalFrames;
+                    })
+                    .catch(function () {
+                        tbDone++;
+                        irDone = tbDone;
+                    })
+                    .finally(function () {
+                        var next = idx + FETCH_CONCURRENCY;
+                        if (next < totalFrames) _fetchRawTb(next);
+                        if (tbDone >= totalFrames && stormId === currentStormId) {
+                            if (loadStatusEl) loadStatusEl.textContent = '';
+                            buildValidIndices();
+                            updateSliderMax();
+                            if (validFrameIndices.length > 0 && validFrameIndices.indexOf(0) >= 0) {
+                                animIndex = 0;
+                            }
+                            renderBothPanels();
+                            updateAnimUI();
+                            if (!frameCache[stormId]) frameCache[stormId] = { ts: Date.now() };
+                            frameCache[stormId].ir = irFrames.slice();
+                            frameCache[stormId].ts = Date.now();
+                        }
+                    });
+            }
+        }
+
+        // Start: try RT cache first, fall back to preview + raw Tb
         _tryRtCache();
     }
 
