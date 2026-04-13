@@ -788,7 +788,7 @@ async def get_radar_frame(
     s3_key: str = Query(..., description="S3 key from /scans endpoint"),
     product: str = Query("reflectivity", description="reflectivity or velocity"),
     tilt: int = Query(0, description="Sweep/tilt index (0 = lowest)"),
-    max_range_km: int = Query(230, description="Max radar range in km"),
+    max_range_km: int = Query(460, description="Max radar range in km"),
     grid_spacing_m: int = Query(1000, description="Grid spacing in meters"),
 ):
     """
