@@ -3254,6 +3254,15 @@
     var _rawTbCache = {};  // { atcfId: { rawTbFrames: [...], cachedAt: ms } }
     var RAW_TB_CACHE_TTL_MS = POLL_INTERVAL_MS;  // invalidate after one poll cycle
 
+    // Expose cached raw Tb frames for the satellite viewer to reuse
+    window.getRtRawTbFrames = function (stormId) {
+        var cached = _rawTbCache[stormId];
+        if (cached && (Date.now() - cached.cachedAt) < RAW_TB_CACHE_TTL_MS) {
+            return cached.rawTbFrames;
+        }
+        return null;
+    };
+
     /**
      * Pre-fetch raw Tb frames for ALL active storms on page load.
      * Fires sequentially (one storm at a time) to avoid hammering the API.
