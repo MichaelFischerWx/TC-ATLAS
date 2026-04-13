@@ -2048,7 +2048,7 @@
                         if (!rf) continue;
                         irFrames[ri] = {
                             tb_data: (rf.tb_data instanceof Uint8Array) ? rf.tb_data : decodeTbData(rf.tb_data),
-                            rows: rf.tb_rows, cols: rf.tb_cols,
+                            rows: rf.rows || rf.tb_rows, cols: rf.cols || rf.tb_cols,
                             bounds: rf.bounds, datetime_utc: rf.datetime_utc,
                             satellite: rf.satellite || '', tb_vmin: rf.tb_vmin || 160.0, tb_vmax: rf.tb_vmax || 330.0,
                             center_fix: rf.center_fix || null
