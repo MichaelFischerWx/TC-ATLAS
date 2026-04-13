@@ -1467,7 +1467,7 @@
         var layout = JSON.parse(JSON.stringify(DIAG_LAYOUT_BASE));
         layout.title = { text: 'Azimuthal-Mean Tb Hovmoller', font: { size: 12, color: '#94a3b8' } };
         layout.xaxis = { title: { text: 'Radius (km)', font: { size: 10 } }, gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 9, family: 'JetBrains Mono, monospace' } };
-        layout.yaxis = { title: { text: 'Time (UTC)', font: { size: 10 } }, gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 8, family: 'JetBrains Mono, monospace' } };
+        layout.yaxis = { title: { text: 'Time (UTC)', font: { size: 10 } }, gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 8, family: 'JetBrains Mono, monospace' }, autorange: true };
         layout.margin = { t: 32, r: 60, b: 40, l: 70 };
 
         // Horizontal line at current frame time
@@ -1480,11 +1480,15 @@
             }];
         }
 
-        if (div.data) {
+        // Force newPlot when lookback changes to reset Y-axis range;
+        // use react for same-lookback updates (e.g. frame scrubbing).
+        var prevLookback = div._hovLookback || 0;
+        if (div.data && prevLookback === hovLookbackHours) {
             Plotly.react(div, traces, layout, DIAG_CONFIG);
         } else {
             Plotly.newPlot(div, traces, layout, DIAG_CONFIG);
         }
+        div._hovLookback = hovLookbackHours;
     }
 
     function renderDiagnostics() {
