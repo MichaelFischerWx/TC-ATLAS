@@ -2404,52 +2404,127 @@
         if (_tryRtBandCache(stormId)) return;
 
         var totalFrames = 13;
-        var rightDone = 0;
-        var rightOk = 0;
         var bandLabel = rightBand === 2 ? 'Vis' : 'WV';
+        var band = rightBand;
 
-        function _updateRightStatus() {
-            if (loadStatusEl) {
-                if (rightDone < totalFrames) {
-                    loadStatusEl.textContent = bandLabel + ' ' + rightOk + '/' + totalFrames;
-                } else {
-                    loadStatusEl.textContent = '';
-                }
-            }
+        // Phase 1: fast JPG preview for right panel
+        var previewDone = 0;
+        var rawStarted = false;
+
+        function _fetchRightPreview(idx) {
+            if (idx >= totalFrames || stormId !== currentStormId || band !== rightBand) return;
+            var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(stormId) + '/band-frame.jpg'
+                + '?band=' + band + '&frame_index=' + idx + '&lookback_hours=' + DEFAULT_LOOKBACK_HOURS
+                + '&radius_deg=' + DEFAULT_RADIUS_DEG + '&interval_min=' + FRAME_INTERVAL_MIN;
+
+            fetch(url)
+                .then(function (r) {
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    var hdrs = r.headers;
+                    var meta = {
+                        datetime_utc: (hdrs.get('X-Datetime') || ''),
+                        satellite: hdrs.get('X-Satellite') || '',
+                        bounds: null
+                    };
+                    try { meta.bounds = JSON.parse(hdrs.get('X-Bounds')); } catch (e) {}
+                    var ft = hdrs.get('X-Total-Frames');
+                    if (ft) totalFrames = parseInt(ft, 10) || totalFrames;
+                    return r.blob().then(function (blob) { return { blob: blob, meta: meta }; });
+                })
+                .then(function (result) {
+                    if (stormId !== currentStormId || band !== rightBand) return;
+                    var img = new Image();
+                    img.onload = function () {
+                        if (!rightFrames[idx] || !rightFrames[idx].tb_data) {
+                            rightFrames[idx] = {
+                                previewImg: img, tb_data: null,
+                                rows: img.naturalHeight, cols: img.naturalWidth,
+                                bounds: result.meta.bounds,
+                                datetime_utc: result.meta.datetime_utc,
+                                satellite: result.meta.satellite,
+                                tb_vmin: 170, tb_vmax: 260,
+                                data_type: rightDataType
+                            };
+                        }
+                        previewDone++;
+                        if (loadStatusEl) loadStatusEl.textContent = bandLabel + ' preview ' + previewDone + '/' + totalFrames;
+                        if (stormId === currentStormId) renderBothPanels();
+
+                        if (previewDone >= totalFrames && !rawStarted) {
+                            rawStarted = true;
+                            _startRightRawBackfill();
+                        }
+                    };
+                    img.src = URL.createObjectURL(result.blob);
+                })
+                .catch(function () {
+                    previewDone++;
+                    // Fallback: fetch raw Tb for this frame directly
+                    if (!rightFrames[idx]) _fetchRightRaw(idx);
+                    if (previewDone >= totalFrames && !rawStarted) {
+                        rawStarted = true;
+                        _startRightRawBackfill();
+                    }
+                })
+                .finally(function () {
+                    var next = idx + FETCH_CONCURRENCY;
+                    if (next < totalFrames) _fetchRightPreview(next);
+                });
         }
 
-        function fetchOne(idx) {
-            if (idx >= totalFrames || stormId !== currentStormId) return;
+        // Phase 2: raw Tb backfill for hover/colormaps
+        function _startRightRawBackfill() {
+            if (loadStatusEl) loadStatusEl.textContent = 'Loading ' + bandLabel + ' data...';
+            var tbDone = 0;
+            for (var i = 0; i < Math.min(FETCH_CONCURRENCY, totalFrames); i++) _fetchRightRaw(i);
+
+            function _onRawDone() {
+                tbDone++;
+                if (loadStatusEl) loadStatusEl.textContent = bandLabel + ' ' + tbDone + '/' + totalFrames;
+                if (tbDone >= totalFrames) {
+                    if (loadStatusEl) loadStatusEl.textContent = '';
+                    if (!frameCache[stormId]) frameCache[stormId] = { ts: Date.now() };
+                    frameCache[stormId].right = rightFrames.slice();
+                    frameCache[stormId].rightBand = band;
+                    frameCache[stormId].ts = Date.now();
+                }
+            }
+            // Attach completion handler
+            window._rightRawDone = _onRawDone;
+        }
+
+        function _fetchRightRaw(idx) {
+            if (idx >= totalFrames || stormId !== currentStormId || band !== rightBand) return;
             var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(stormId) + '/band-raw-frame'
-                + '?band=' + rightBand + '&frame_index=' + idx + '&lookback_hours=' + DEFAULT_LOOKBACK_HOURS
+                + '?band=' + band + '&frame_index=' + idx + '&lookback_hours=' + DEFAULT_LOOKBACK_HOURS
                 + '&radius_deg=' + DEFAULT_RADIUS_DEG + '&interval_min=' + FRAME_INTERVAL_MIN;
             fetch(url)
                 .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
                 .then(function (data) {
+                    if (stormId !== currentStormId || band !== rightBand) return;
                     if (data.total_frames) totalFrames = data.total_frames;
+                    var existing = rightFrames[idx] || {};
                     rightFrames[idx] = {
+                        previewImg: existing.previewImg || null,
                         tb_data: decodeTbData(data.tb_data), rows: data.tb_rows, cols: data.tb_cols,
                         bounds: data.bounds, datetime_utc: data.datetime_utc,
                         satellite: data.satellite || '', tb_vmin: data.tb_vmin, tb_vmax: data.tb_vmax,
                         data_type: data.data_type || rightDataType
                     };
-                    rightDone++; rightOk++;
-                    _updateRightStatus();
                     if (stormId === currentStormId) renderBothPanels();
                 })
                 .catch(function (err) {
                     console.warn('[Satellite] Right frame ' + idx + ' failed:', err.message);
-                    rightDone++;
-                    _updateRightStatus();
                 })
                 .finally(function () {
+                    if (window._rightRawDone) window._rightRawDone();
                     var next = idx + FETCH_CONCURRENCY;
-                    if (next < totalFrames) fetchOne(next);
+                    if (next < totalFrames) _fetchRightRaw(next);
                 });
         }
-        console.log('[Satellite] _refetchRightFrames: band=' + rightBand + ' storm=' + stormId);
-        _updateRightStatus();
-        for (var i = 0; i < Math.min(FETCH_CONCURRENCY, totalFrames); i++) fetchOne(i);
+
+        console.log('[Satellite] _refetchRightFrames: band=' + band + ' storm=' + stormId + ' (JPG preview first)');
+        for (var i = 0; i < Math.min(FETCH_CONCURRENCY, totalFrames); i++) _fetchRightPreview(i);
     }
 
     /** Try to populate rightFrames[] from the RT Monitor's band cache. */
