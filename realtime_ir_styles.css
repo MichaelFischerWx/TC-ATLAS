@@ -816,6 +816,14 @@
     .ir-map {
         top: 82px !important;
     }
+    /* Hide intensity legend on mobile — saves ~180px of screen space */
+    .ir-legend {
+        display: none !important;
+    }
+    /* Move basins button below Leaflet zoom controls */
+    .basin-sidebar-toggle {
+        top: 180px !important;
+    }
 }
 
 /* ═══════════════════════════════════════════════════════════════
