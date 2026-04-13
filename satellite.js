@@ -13,7 +13,7 @@
     var DEFAULT_LOOKBACK_HOURS = 6;
     var DEFAULT_RADIUS_DEG = 10.0;
     var FRAME_INTERVAL_MIN = 30;
-    var FETCH_CONCURRENCY = 3;
+    var FETCH_CONCURRENCY = 5;
     var COASTLINE_URL = 'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_coastline.geojson';
 
     // ── State ───────────────────────────────────────────────────
