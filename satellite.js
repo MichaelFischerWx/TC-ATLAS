@@ -1722,6 +1722,7 @@
 
         // Check if any frame has center_fix
         var hasCenterFix = false;
+        var hasRawTb = false;
         if (frame.center_fix) {
             hasCenterFix = true;
         } else {
@@ -1729,11 +1730,22 @@
                 if (irFrames[i] && irFrames[i].center_fix) { hasCenterFix = true; break; }
             }
         }
+        for (var j = 0; j < irFrames.length; j++) {
+            if (irFrames[j] && irFrames[j].tb_data) { hasRawTb = true; break; }
+        }
 
         if (!hasCenterFix) {
             if (chartsView) chartsView.style.display = 'none';
             if (hovView) hovView.style.display = 'none';
-            if (emptyMsg) emptyMsg.style.display = '';
+            if (emptyMsg) {
+                emptyMsg.style.display = '';
+                // Show loading message during preview phase (raw Tb not yet loaded)
+                if (!hasRawTb) {
+                    emptyMsg.innerHTML = 'Loading diagnostics\u2026';
+                } else {
+                    emptyMsg.innerHTML = 'No center fix available for this frame.<br>Diagnostics require a detected eye (storms \u2265 65 kt).';
+                }
+            }
             return;
         }
         if (emptyMsg) emptyMsg.style.display = 'none';
