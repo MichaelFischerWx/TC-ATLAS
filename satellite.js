@@ -636,14 +636,14 @@
      * @param {string} headerText - header line (storm name, time, etc.)
      * @returns {HTMLCanvasElement}
      */
-    function _buildCompositeFrame(headerText) {
+    function _buildCompositeFrame(headerText, irOnly) {
         var irFrame = irFrames[animIndex];
         if (!irFrame) return null;
         var pw = irFrame.cols, ph = irFrame.rows;
         var gap = 4;
         var headerH = 28;
         var cbH = 24;
-        var hasDualPanel = (viewMode === 'compare-wv' || viewMode === 'compare-vis' || viewMode === 'asymmetry');
+        var hasDualPanel = !irOnly && (viewMode === 'compare-wv' || viewMode === 'compare-vis' || viewMode === 'asymmetry');
         var totalW = hasDualPanel ? pw * 2 + gap : pw;
         var totalH = ph + headerH + cbH;
 
@@ -819,7 +819,7 @@
             });
     }
 
-    function saveGif() {
+    function saveGif(e) {
         if (_gifExporting || validFrameIndices.length < 2 || typeof GIF === 'undefined') return;
         _gifExporting = true;
 
@@ -828,22 +828,32 @@
         var savedAnimIndex = animIndex;
         var delay = ANIM_SPEEDS[animSpeedIdx].ms;
 
+        // Shift+click = include right panel (Hovmoller/WV/Vis/Asymmetry)
+        var wantDual = e && e.shiftKey;
+
+        // Detect if Hovmoller should be included
+        var hovDiv = document.getElementById('sat-diag-hovmoller-chart');
+        var includeHovmoller = wantDual && (viewMode === 'diagnostics' && diagTab === 'hovmoller' && hovDiv && hovDiv.data);
+
         // Disable buttons during export
         var gifBtn = document.getElementById('sat-save-gif');
         var saveBtn = document.getElementById('sat-save');
         if (gifBtn) { gifBtn.disabled = true; gifBtn.style.opacity = '0.4'; }
         if (saveBtn) { saveBtn.disabled = true; saveBtn.style.opacity = '0.4'; }
 
-        // Show progress in the load status area
         if (loadStatusEl) loadStatusEl.textContent = 'GIF 0%';
 
         _ensureGifWorker(function (workerUrl) {
-            // Determine output size from first frame
             var sampleFrame = irFrames[validFrameIndices[0]];
             if (!sampleFrame) { _gifCleanup(); return; }
-            var hasDualPanel = (viewMode === 'compare-wv' || viewMode === 'compare-vis' || viewMode === 'asymmetry');
-            var outW = hasDualPanel ? sampleFrame.cols * 2 + 4 : sampleFrame.cols;
-            var outH = sampleFrame.rows + 28 + 24;
+            var pw = sampleFrame.cols, ph = sampleFrame.rows;
+            var gap = 4;
+            var headerH = 28;
+            var cbH = 24;
+            var hasDualPanel = wantDual && (viewMode === 'compare-wv' || viewMode === 'compare-vis' || viewMode === 'asymmetry');
+            var hovW = includeHovmoller ? pw : 0;
+            var outW = hasDualPanel ? pw * 2 + gap : (includeHovmoller ? pw + gap + hovW : pw);
+            var outH = ph + headerH + cbH;
 
             var gif = new GIF({
                 workers: 2, quality: 8, width: outW, height: outH,
@@ -858,25 +868,24 @@
                 var url = URL.createObjectURL(blob);
                 var link = document.createElement('a');
                 var ts = (irFrames[validFrameIndices[0]] || {}).datetime_utc || '';
-                link.download = (name || 'satellite') + '_anim_' + ts.replace(/[:\-T]/g, '').replace('Z', '') + '.gif';
+                var suffix = includeHovmoller ? '_hovmoller_anim_' : '_anim_';
+                link.download = (name || 'satellite') + suffix + ts.replace(/[:\-T]/g, '').replace('Z', '') + '.gif';
                 link.href = url;
                 link.click();
                 setTimeout(function () { URL.revokeObjectURL(url); }, 5000);
-                // Restore original frame
                 animIndex = savedAnimIndex;
                 renderBothPanels();
                 updateAnimUI();
                 _gifCleanup();
-                console.log('[Satellite] GIF export complete: ' + validFrameIndices.length + ' frames');
+                console.log('[Satellite] GIF export complete: ' + validFrameIndices.length + ' frames' +
+                    (includeHovmoller ? ' (with Hovmoller)' : ''));
             });
 
-            // Render frames sequentially to avoid blocking UI
             var frameIdx = 0;
-            var frameList = validFrameIndices.slice(); // oldest-first order for GIF
+            var frameList = validFrameIndices.slice();
 
             function addNextFrame() {
                 if (frameIdx >= frameList.length) {
-                    // Add last frame again with 2x delay for a natural loop pause
                     if (loadStatusEl) loadStatusEl.textContent = 'Encoding...';
                     gif.render();
                     return;
@@ -890,16 +899,73 @@
                 var time = frame && frame.datetime_utc ? frame.datetime_utc.replace('T', ' ').replace('Z', ' UTC') : '';
                 var sat = frame && frame.satellite ? frame.satellite : '';
                 var headerText = name + ' (' + cat + ')  \u2014  ' + time + '  ' + sat;
-                var comp = _buildCompositeFrame(headerText);
 
-                if (comp) {
-                    var frameDelay = (frameIdx === frameList.length - 1) ? delay * 2 : delay;
-                    gif.addFrame(comp.getContext('2d'), { copy: true, delay: frameDelay });
+                if (includeHovmoller) {
+                    // Update Hovmoller horizontal line to this frame's time, then capture
+                    var shapes = [];
+                    if (frame && frame.datetime_utc) {
+                        shapes = [{
+                            type: 'line', y0: frame.datetime_utc, y1: frame.datetime_utc,
+                            x0: 0, x1: 1, xref: 'paper',
+                            line: { color: '#ffffff99', width: 2, dash: 'dot' }
+                        }];
+                    }
+                    Plotly.relayout(hovDiv, { shapes: shapes }).then(function () {
+                        return Plotly.toImage(hovDiv, { format: 'png', width: hovW, height: ph + cbH, scale: 1 });
+                    }).then(function (hovDataUrl) {
+                        var hovImg = new Image();
+                        hovImg.onload = function () {
+                            var irComp = _buildCompositeFrame(headerText, true);
+                            if (!irComp) { frameIdx++; setTimeout(addNextFrame, 0); return; }
+
+                            // Build wider canvas: IR left + Hovmoller right
+                            var fullComp = document.createElement('canvas');
+                            fullComp.width = outW;
+                            fullComp.height = outH;
+                            var fctx = fullComp.getContext('2d');
+                            fctx.fillStyle = '#0a0c12';
+                            fctx.fillRect(0, 0, outW, outH);
+                            // Draw IR composite on the left
+                            fctx.drawImage(irComp, 0, 0);
+                            // Draw Hovmoller on the right
+                            fctx.drawImage(hovImg, pw + gap, headerH, hovW, ph + cbH);
+                            // Label
+                            fctx.font = '11px sans-serif';
+                            fctx.fillStyle = '#94a3b8';
+                            fctx.fillText('Tb Hovmoller (' + hovLookbackHours + 'h)', pw + gap + 8, headerH + 14);
+                            // Watermark (over full width)
+                            fctx.fillStyle = 'rgba(255,255,255,0.3)';
+                            fctx.font = '10px sans-serif';
+                            fctx.textAlign = 'right';
+                            fctx.fillText('TC-ATLAS', outW - 8, outH - 4);
+                            fctx.textAlign = 'left';
+
+                            var frameDelay = (frameIdx === frameList.length - 1) ? delay * 2 : delay;
+                            gif.addFrame(fctx, { copy: true, delay: frameDelay });
+
+                            if (loadStatusEl) loadStatusEl.textContent = 'Frames ' + (frameIdx + 1) + '/' + frameList.length;
+                            frameIdx++;
+                            setTimeout(addNextFrame, 0);
+                        };
+                        hovImg.src = hovDataUrl;
+                    }).catch(function () {
+                        // Fallback: IR only for this frame
+                        var comp = _buildCompositeFrame(headerText, true);
+                        if (comp) gif.addFrame(comp.getContext('2d'), { copy: true, delay: delay });
+                        frameIdx++;
+                        setTimeout(addNextFrame, 0);
+                    });
+                } else {
+                    // Standard: IR only, or IR + right panel if shift+click in compare mode
+                    var comp = _buildCompositeFrame(headerText, !hasDualPanel);
+                    if (comp) {
+                        var frameDelay = (frameIdx === frameList.length - 1) ? delay * 2 : delay;
+                        gif.addFrame(comp.getContext('2d'), { copy: true, delay: frameDelay });
+                    }
+                    if (loadStatusEl) loadStatusEl.textContent = 'Frames ' + (frameIdx + 1) + '/' + frameList.length;
+                    frameIdx++;
+                    setTimeout(addNextFrame, 0);
                 }
-
-                if (loadStatusEl) loadStatusEl.textContent = 'Frames ' + (frameIdx + 1) + '/' + frameList.length;
-                frameIdx++;
-                setTimeout(addNextFrame, 0); // yield to UI
             }
 
             addNextFrame();
