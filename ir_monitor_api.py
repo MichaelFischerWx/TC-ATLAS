@@ -1380,6 +1380,15 @@ def _prefetch_ir_frames(storms: list):
                         ]),
                     }, lat=center_lat, lon=center_lon)
                     _prefetch_counts["band"] += 1
+                    # Also render and cache band JPG for fast preview
+                    try:
+                        jpg_bytes = _render_band_jpg(
+                            np.asarray(data, dtype=np.float32), band, bvmin, bvmax
+                        )
+                        if jpg_bytes:
+                            _gcs_jpg_put(atcf_id.upper(), dstr, jpg_bytes, band=band)
+                    except Exception:
+                        pass
                     del data, arr, mask, scaled, encoded
 
                 # Visible bands have 16x larger segments — limit prefetch to
@@ -1410,6 +1419,13 @@ def _prefetch_ir_frames(storms: list):
                           f"{c['band']} Band {right_band} + {c['jpg']} JPG frames (parallel)")
                 total_gcs_fetched += c["ir"] + c["band"]
 
+        # ── NEXRAD radar pre-fetch for storms near 88D sites ────────
+        _prefetch_nexrad_for_storms(storms, frame_times_map={
+            s["atcf_id"]: build_frame_times(
+                _dt.now(timezone.utc), _PREFETCH_LOOKBACK_HOURS, _PREFETCH_INTERVAL_MIN
+            ) for s in storms
+        })
+
         print(f"[IR Pre-fetch] Done — {total_fetched} new PNG frames, "
               f"{total_cached} already cached, "
               f"{total_gcs_fetched} raw Tb frames cached to GCS")
@@ -1421,6 +1437,151 @@ def _prefetch_ir_frames(storms: list):
         traceback.print_exc()
     finally:
         _prefetch_lock.release()
+
+
+def _prefetch_nexrad_for_storms(storms: list, frame_times_map: dict):
+    """
+    Pre-fetch NEXRAD radar frames for active storms near 88D sites.
+    Runs after the IR/band pre-fetch. For each storm within 500 km of a
+    NEXRAD site, renders ~8 key reflectivity frames spanning the 6h window
+    and caches them to GCS.
+    """
+    try:
+        from nexrad_api import (
+            NEXRAD_SITES, _haversine_km, _list_scans_s3,
+            _read_nexrad_level2, _grid_radar, _render_radar_image,
+            _encode_data_uint8, PRODUCTS, _gcs_get_frame, _gcs_put_frame,
+            _cache_put,
+        )
+    except ImportError:
+        return  # nexrad_api not available
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    MAX_RANGE_KM = 300
+    MAX_KEY_FRAMES = 8
+    SEARCH_WINDOW_MIN = 360  # 6 hours
+    CONCURRENCY = 2
+
+    total_rendered = 0
+
+    for storm in storms:
+        atcf_id = storm["atcf_id"]
+        slat = storm["lat"]
+        slon = storm["lon"]
+
+        # Find nearby sites (within 500 km)
+        nearby = []
+        for site_id, (rlat, rlon, name) in NEXRAD_SITES.items():
+            dist = _haversine_km(slat, slon, rlat, rlon)
+            if dist <= 500:
+                nearby.append((site_id, dist))
+        if not nearby:
+            continue
+
+        nearby.sort(key=lambda x: x[1])
+        # Only pre-fetch for the closest site
+        site_id = nearby[0][0]
+        site_dist = nearby[0][1]
+
+        # Get frame times for this storm
+        frame_times = frame_times_map.get(atcf_id, [])
+        if not frame_times:
+            continue
+
+        # Use the middle frame time as reference for scan search
+        mid_dt = frame_times[len(frame_times) // 2]
+
+        # Search for available scans across the full 6h window
+        try:
+            scans = _list_scans_s3(site_id, mid_dt, window_min=SEARCH_WINDOW_MIN)
+        except Exception as e:
+            print(f"[Radar Pre-fetch] {atcf_id}/{site_id}: scan search failed: {e}")
+            continue
+
+        if not scans:
+            continue
+
+        # Sort by time ascending
+        scans.sort(key=lambda s: s["scan_time"])
+
+        # Pick ~MAX_KEY_FRAMES evenly spaced scans
+        step = max(1, len(scans) // MAX_KEY_FRAMES)
+        key_scans = [scans[i] for i in range(0, len(scans), step)]
+        if key_scans[-1] != scans[-1]:
+            key_scans.append(scans[-1])
+
+        # Filter out scans already in GCS cache
+        uncached = []
+        for sc in key_scans:
+            cached = _gcs_get_frame(site_id, sc["s3_key"], "reflectivity", 0, MAX_RANGE_KM)
+            if cached is None:
+                uncached.append(sc)
+
+        if not uncached:
+            continue
+
+        print(f"[Radar Pre-fetch] {atcf_id}/{site_id} ({site_dist:.0f}km): "
+              f"rendering {len(uncached)} uncached of {len(key_scans)} key frames")
+
+        prod_cfg = PRODUCTS["reflectivity"]
+        storm_rendered = 0
+
+        def _render_one(scan):
+            nonlocal storm_rendered
+            s3_key = scan["s3_key"]
+            cache_key = f"{site_id}:{s3_key}:reflectivity:0:{MAX_RANGE_KM}:1000"
+            try:
+                radar = _read_nexrad_level2(s3_key)
+                data_2d, metadata = _grid_radar(
+                    radar, product="reflectivity", sweep=0,
+                    grid_spacing_m=1000, max_range_m=MAX_RANGE_KM * 1000,
+                )
+                radar = None
+
+                image = _render_radar_image(
+                    np.flipud(data_2d), prod_cfg["lut"],
+                    prod_cfg["vmin"], prod_cfg["vmax"], scale=1
+                )
+                hover_data = _encode_data_uint8(
+                    np.flipud(data_2d), prod_cfg["vmin"], prod_cfg["vmax"]
+                )
+
+                result = {
+                    "image": image,
+                    **hover_data,
+                    "bounds": metadata["bounds"],
+                    "site": site_id,
+                    "scan_time": metadata["scan_time"],
+                    "product": "reflectivity",
+                    "tilt": metadata["tilt"],
+                    "units": prod_cfg["units"],
+                    "label": prod_cfg["label"],
+                }
+
+                _cache_put(cache_key, result)
+                _gcs_put_frame(site_id, s3_key, "reflectivity", 0, result, MAX_RANGE_KM)
+                storm_rendered += 1
+
+                del data_2d, image, hover_data, result
+                gc.collect()
+            except Exception as e:
+                print(f"[Radar Pre-fetch] {site_id} frame failed: {e}")
+
+        with ThreadPoolExecutor(max_workers=CONCURRENCY) as pool:
+            futures = [pool.submit(_render_one, sc) for sc in uncached]
+            for fut in as_completed(futures):
+                try:
+                    fut.result()
+                except Exception:
+                    pass
+
+        if storm_rendered:
+            print(f"[Radar Pre-fetch] {atcf_id}/{site_id}: cached {storm_rendered} radar frames")
+        total_rendered += storm_rendered
+
+    if total_rendered:
+        print(f"[Radar Pre-fetch] Total: {total_rendered} radar frames cached to GCS")
 
 
 # Max age for cached frames (hours).  Anything older gets deleted.
@@ -2026,12 +2187,13 @@ def get_storm_band_raw_frame(
 # Pre-Rendered IR Frame JPG Endpoint (fast image-overlay animation)
 # ---------------------------------------------------------------------------
 
-def _gcs_jpg_get(atcf_id: str, dt_str: str) -> bytes | None:
+def _gcs_jpg_get(atcf_id: str, dt_str: str, band: int = 0) -> bytes | None:
     """Try to read a cached pre-rendered JPG from GCS."""
     bucket = _get_rt_gcs_bucket()
     if bucket is None:
         return None
-    key = f"{_GCS_RT_VERSION}/ir-jpg/{atcf_id}/{dt_str}.jpg"
+    prefix = "ir-jpg" if band == 0 else f"band{band}-jpg"
+    key = f"{_GCS_RT_VERSION}/{prefix}/{atcf_id}/{dt_str}.jpg"
     try:
         blob = bucket.blob(key)
         return blob.download_as_bytes(timeout=5)
@@ -2039,13 +2201,14 @@ def _gcs_jpg_get(atcf_id: str, dt_str: str) -> bytes | None:
         return None
 
 
-def _gcs_jpg_put(atcf_id: str, dt_str: str, jpg_bytes: bytes):
+def _gcs_jpg_put(atcf_id: str, dt_str: str, jpg_bytes: bytes, band: int = 0):
     """Write a pre-rendered JPG to GCS (fire-and-forget)."""
     bucket = _get_rt_gcs_bucket()
     if bucket is None:
         return
     def _upload():
-        key = f"{_GCS_RT_VERSION}/ir-jpg/{atcf_id}/{dt_str}.jpg"
+        prefix = "ir-jpg" if band == 0 else f"band{band}-jpg"
+        key = f"{_GCS_RT_VERSION}/{prefix}/{atcf_id}/{dt_str}.jpg"
         try:
             blob = bucket.blob(key)
             blob.upload_from_string(jpg_bytes, content_type="image/jpeg", timeout=15)
@@ -2079,6 +2242,137 @@ def _render_ir_jpg(tb_array: np.ndarray, quality: int = 75) -> bytes | None:
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=quality)
     return buf.getvalue()
+
+
+def _render_band_jpg(data_array: np.ndarray, band: int,
+                     vmin: float, vmax: float, quality: int = 75) -> bytes | None:
+    """Render a WV or Vis band array to JPEG bytes.
+    WV: dark blue→white gradient.  Vis: grayscale (dark=low reflectance).
+    """
+    from PIL import Image
+
+    arr = np.asarray(data_array, dtype=np.float32)
+    if not np.any(np.isfinite(arr)):
+        return None
+
+    # Normalize to 0–1 (inverted: cold/bright = high fraction)
+    frac = np.clip(1.0 - (arr - vmin) / (vmax - vmin), 0.0, 1.0)
+    mask = ~np.isfinite(arr)
+
+    if band == WV_BAND:
+        # Blue→white gradient (same as client 'wv' colormap)
+        r = (frac * 245 + 10).astype(np.uint8)
+        g = (frac * 245 + 10).astype(np.uint8)
+        b = (np.clip(frac * 0.6 + 0.4, 0, 1) * 245 + 10).astype(np.uint8)
+    else:
+        # Vis: simple grayscale (reflectance)
+        gray = (frac * 245 + 10).astype(np.uint8)
+        r = g = b = gray
+
+    rgb = np.stack([r, g, b], axis=-1)
+    rgb[mask] = [0, 0, 0]
+
+    img = Image.fromarray(rgb, "RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=quality)
+    return buf.getvalue()
+
+
+@router.get("/storm/{atcf_id}/band-frame.jpg")
+def get_band_frame_jpg(
+    atcf_id: str,
+    band: int = Query(8, description="Band number: 8=WV, 2=Vis"),
+    frame_index: int = Query(0, ge=0),
+    lookback_hours: float = Query(6.0, ge=1, le=24),
+    radius_deg: float = Query(10.0, ge=1.0, le=12.0),
+    interval_min: int = Query(30, ge=10, le=60),
+):
+    """Return a pre-rendered WV/Vis band frame as a JPEG image."""
+    _ensure_fresh_cache()
+    storm = None
+    with _active_storms_lock:
+        for s in _active_storms_cache["storms"]:
+            if s["atcf_id"].upper() == atcf_id.upper():
+                storm = dict(s)
+                break
+
+    if not storm:
+        raise HTTPException(status_code=404, detail=f"Storm {atcf_id} not found")
+
+    center_lat = storm["lat"]
+    center_lon = storm["lon"]
+    half = radius_deg
+    box_deg = radius_deg * 2
+
+    frame_times = build_frame_times(
+        _dt.now(timezone.utc), lookback_hours, interval_min
+    )
+    frame_times = list(reversed(frame_times))
+
+    if frame_index >= len(frame_times):
+        raise HTTPException(status_code=400, detail=f"frame_index {frame_index} out of range")
+
+    target_dt = frame_times[frame_index]
+    dt_str = target_dt.strftime("%Y%m%d%H%M")
+
+    bounds = [
+        [center_lat - half, center_lon - half],
+        [center_lat + half, center_lon + half],
+    ]
+    bucket, _ = select_goes_sat(center_lon, target_dt)
+    sat_name = satellite_name_from_bucket(bucket)
+
+    meta_headers = {
+        "Cache-Control": "public, max-age=300",
+        "X-Frame-Index": str(frame_index),
+        "X-Total-Frames": str(len(frame_times)),
+        "X-Datetime": target_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "X-Satellite": sat_name,
+        "X-Bounds": json.dumps(bounds),
+        "X-Band": str(band),
+        "Access-Control-Expose-Headers": "X-Frame-Index, X-Total-Frames, X-Datetime, X-Satellite, X-Bounds, X-Band",
+    }
+
+    # Check GCS JPG cache
+    cached_jpg = _gcs_jpg_get(atcf_id.upper(), dt_str, band=band)
+    if cached_jpg:
+        return Response(content=cached_jpg, media_type="image/jpeg", headers=meta_headers)
+
+    # Fallback: check if raw Tb is cached and render JPG from it
+    cached_raw = _gcs_band_get(band, atcf_id.upper(), dt_str, lat=center_lat, lon=center_lon)
+    if cached_raw is not None and cached_raw.get("tb_data"):
+        try:
+            binfo = BAND_RANGES.get(band, BAND_RANGES[13])
+            encoded = np.frombuffer(
+                base64.b64decode(cached_raw["tb_data"]), dtype=np.uint8
+            ).reshape((cached_raw["tb_rows"], cached_raw["tb_cols"]))
+            bvmin, bvmax = binfo["vmin"], binfo["vmax"]
+            decoded = ((encoded.astype(np.float32) - 1) / (254.0 / (bvmax - bvmin))) + bvmin
+            decoded[encoded == 0] = np.nan
+            jpg_bytes = _render_band_jpg(decoded, band, bvmin, bvmax)
+            if jpg_bytes:
+                _gcs_jpg_put(atcf_id.upper(), dt_str, jpg_bytes, band=band)
+                return Response(content=jpg_bytes, media_type="image/jpeg", headers=meta_headers)
+        except Exception:
+            pass
+
+    # Render fresh from S3
+    try:
+        raw = fetch_band_raw(center_lat, center_lon, target_dt, box_deg, band=band)
+    except Exception:
+        raise HTTPException(status_code=502, detail=f"No band {band} data")
+
+    if not raw or raw.get("data") is None:
+        raise HTTPException(status_code=502, detail=f"No band {band} data for frame {frame_index}")
+
+    binfo = BAND_RANGES.get(band, BAND_RANGES[13])
+    jpg_bytes = _render_band_jpg(raw["data"], band, binfo["vmin"], binfo["vmax"])
+    if not jpg_bytes:
+        raise HTTPException(status_code=502, detail="Band rendering failed")
+
+    _gcs_jpg_put(atcf_id.upper(), dt_str, jpg_bytes, band=band)
+    del raw
+    return Response(content=jpg_bytes, media_type="image/jpeg", headers=meta_headers)
 
 
 @router.get("/storm/{atcf_id}/ir-frames-meta")
