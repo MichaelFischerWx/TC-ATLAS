@@ -657,16 +657,25 @@
         var time = irFrame.datetime_utc ? irFrame.datetime_utc.replace('T', ' ').replace('Z', ' UTC') : '';
         var sat = irFrame.satellite || '';
 
+        // Build radar info string if radar overlay is active
+        var radarInfo = '';
+        if (showRadar && _satRadarImg) {
+            var statusEl = document.getElementById('sat-radar-frame-status');
+            if (statusEl && statusEl.textContent) {
+                radarInfo = statusEl.textContent;
+            }
+        }
+
         // Check if Hovmoller is active — if so, export it alongside the IR frame
         var hovDiv = document.getElementById('sat-diag-hovmoller-chart');
         var hovActive = (viewMode === 'diagnostics' && diagTab === 'hovmoller' && hovDiv && hovDiv.data);
 
         if (hovActive) {
-            _saveWithHovmoller(irFrame, name, cat, time, sat, hovDiv);
+            _saveWithHovmoller(irFrame, name, cat, time, sat, hovDiv, radarInfo);
             return;
         }
 
-        _saveStandard(irFrame, name, cat, time, sat);
+        _saveStandard(irFrame, name, cat, time, sat, radarInfo);
     }
 
     /**
@@ -675,12 +684,12 @@
      * @param {string} headerText - header line (storm name, time, etc.)
      * @returns {HTMLCanvasElement}
      */
-    function _buildCompositeFrame(headerText, irOnly) {
+    function _buildCompositeFrame(headerText, irOnly, radarInfo) {
         var irFrame = irFrames[animIndex];
         if (!irFrame) return null;
         var pw = irFrame.cols, ph = irFrame.rows;
         var gap = 4;
-        var headerH = 28;
+        var headerH = radarInfo ? 42 : 28;
         var cbH = 24;
         var hasDualPanel = !irOnly && (viewMode === 'compare-wv' || viewMode === 'compare-vis' || viewMode === 'asymmetry');
         var totalW = hasDualPanel ? pw * 2 + gap : pw;
@@ -697,6 +706,12 @@
         cctx.fillStyle = '#e2e4ea';
         cctx.font = '16px sans-serif';
         cctx.fillText(headerText, 8, 20);
+
+        if (radarInfo) {
+            cctx.font = '12px sans-serif';
+            cctx.fillStyle = '#86efac';
+            cctx.fillText('88D: ' + radarInfo, 8, 36);
+        }
 
         cctx.font = '13px sans-serif';
         cctx.fillStyle = '#94a3b8';
@@ -759,9 +774,9 @@
     }
 
     /** Standard save: IR frame (+ right panel if in compare/asymmetry mode) */
-    function _saveStandard(irFrame, name, cat, time, sat) {
+    function _saveStandard(irFrame, name, cat, time, sat, radarInfo) {
         var headerText = name + '  \u2014  ' + time + '  ' + sat;
-        var comp = _buildCompositeFrame(headerText);
+        var comp = _buildCompositeFrame(headerText, false, radarInfo);
         if (!comp) return;
 
         var link = document.createElement('a');
@@ -771,9 +786,9 @@
     }
 
     /** Save with Hovmoller: IR frame on left, Hovmoller chart on right */
-    function _saveWithHovmoller(irFrame, name, cat, time, sat, hovDiv) {
+    function _saveWithHovmoller(irFrame, name, cat, time, sat, hovDiv, radarInfo) {
         var pw = irFrame.cols, ph = irFrame.rows;
-        var headerH = 28;
+        var headerH = radarInfo ? 42 : 28;
         var cbH = 24;
         var gap = 4;
         // Hovmoller panel sized to match IR panel height
@@ -800,6 +815,12 @@
                     cctx.fillStyle = '#e2e4ea';
                     cctx.font = '16px sans-serif';
                     cctx.fillText(name + '  \u2014  ' + time + '  ' + sat, 8, 20);
+
+                    if (radarInfo) {
+                        cctx.font = '12px sans-serif';
+                        cctx.fillStyle = '#86efac';
+                        cctx.fillText('88D: ' + radarInfo, 8, 36);
+                    }
 
                     // Panel labels
                     cctx.font = '13px sans-serif';
