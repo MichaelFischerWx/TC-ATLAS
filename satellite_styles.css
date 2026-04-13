@@ -56,7 +56,7 @@
 /* Mobile: fix secondary bar position below taller topbar */
 @media (max-width: 768px) {
     .ir-secondary-bar {
-        top: 108px !important;
+        top: 46px !important;
         height: 36px;
         justify-content: center;
         padding: 0 8px;
@@ -69,14 +69,13 @@
         background: #4a8cff;
         color: #fff;
     }
-    /* Hide storm counts on mobile */
     .ir-storm-counts {
         display: none !important;
     }
 }
 @media (max-width: 480px) {
     .ir-secondary-bar {
-        top: 90px;
+        top: 46px !important;
     }
 }
 
@@ -917,7 +916,7 @@ input[type="range"].sat-slider {
 
 @media (max-width: 768px) {
     .sat-main {
-        top: 144px;
+        top: 82px; /* 46px topbar + 36px secondary bar */
     }
 
     .sat-sidebar {
@@ -950,7 +949,7 @@ input[type="range"].sat-slider {
 
 @media (max-width: 480px) {
     .sat-main {
-        top: 148px;
+        top: 82px;
     }
 
     .sat-anim-controls {

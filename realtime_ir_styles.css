@@ -785,7 +785,7 @@
     color: #e2e8f0 !important;
 }
 
-/* ── Mobile touch-target fixes ─────────────────────────────── */
+/* ── Mobile touch-target and layout fixes ──────────────────── */
 @media (max-width: 768px) {
     .ir-product-toggle button {
         padding: 8px 12px;
@@ -795,6 +795,26 @@
     .modebar-container,
     .modebar {
         display: none !important;
+    }
+    /* Stack the frame time and product toggle to avoid overlap */
+    .ir-overlay-info {
+        left: 8px !important;
+        top: 8px !important;
+        font-size: 0.7rem;
+        gap: 6px;
+        max-width: 55%;
+    }
+    .ir-product-toggle {
+        top: 8px !important;
+        right: 8px !important;
+    }
+    .ir-product-btn {
+        font-size: 0.6rem;
+        padding: 5px 8px;
+    }
+    /* Fix map top offset to match compact topbar + secondary bar */
+    .ir-map {
+        top: 82px !important;
     }
 }
 

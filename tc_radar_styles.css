@@ -1454,30 +1454,53 @@ footer a:hover { text-decoration: underline; }
 /* ── Nav text: full vs short labels ──────────────────────── */
 .nav-short { display: none; }
 .nav-full { display: inline; }
+.nav-hamburger { display: none; }
 
-/* ── Nav bar: wrap links and normalise sizes ─────────────── */
+/* ── Mobile nav: hamburger menu ──────────────────────────── */
 @media (max-width: 768px) {
+    .nav-hamburger {
+        display: block;
+        background: none;
+        border: 1px solid rgba(255,255,255,0.15);
+        color: #94a3b8;
+        font-size: 1.2rem;
+        padding: 4px 10px;
+        border-radius: 6px;
+        cursor: pointer;
+        line-height: 1;
+    }
+    .nav-hamburger.open { color: #e2e8f0; background: rgba(255,255,255,0.08); }
     .topbar-inner {
-        flex-wrap: wrap;
-        height: auto;
-        padding: 8px 14px;
-        gap: 6px;
+        flex-wrap: nowrap;
+        height: 46px;
+        padding: 0 14px;
+        gap: 8px;
     }
     .topbar-brand { flex: 1 1 auto; min-width: 0; }
     .topbar-nav {
+        display: none !important;
+    }
+    .topbar-nav.mobile-open {
+        display: flex !important;
+        position: absolute;
+        top: 46px;
+        left: 0;
+        right: 0;
+        background: rgba(15,23,42,0.98);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border-bottom: 1px solid rgba(255,255,255,0.08);
+        padding: 10px 14px;
         flex-wrap: wrap;
-        gap: 3px 6px;
-        order: 3;            /* push nav below brand row */
-        width: 100%;
-        padding-bottom: 4px;
+        gap: 4px 8px;
         justify-content: center;
+        z-index: 999;
     }
     .topbar-nav a {
-        font-size: 0.68rem;
-        padding: 4px 8px;
+        font-size: 0.72rem;
+        padding: 6px 10px;
         white-space: nowrap;
     }
-    /* Shorten "Real-Time TDR" to "RT TDR" on narrow screens */
     .nav-full { display: none !important; }
     .nav-short { display: inline !important; }
 }
@@ -1485,7 +1508,6 @@ footer a:hover { text-decoration: underline; }
     .topbar-logo { font-size: 1.05rem; }
     .topbar-divider { display: none; }
     .topbar-subtitle { display: none; }
-    .topbar-nav a { font-size: 0.6rem; padding: 3px 5px; }
 }
 
 /* ── Real-Time section header: tighter on mobile ─────────── */
