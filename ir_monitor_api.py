@@ -1424,7 +1424,7 @@ def _prefetch_ir_frames(storms: list):
 
 
 # Max age for cached frames (hours).  Anything older gets deleted.
-_GCS_CACHE_MAX_AGE_HOURS = 12
+_GCS_CACHE_MAX_AGE_HOURS = 24
 
 
 def _cleanup_old_gcs_frames(active_storms: list):

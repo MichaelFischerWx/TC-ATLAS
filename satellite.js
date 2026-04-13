@@ -46,6 +46,10 @@
     var diagUpdateDebounceTimer = null;
     var DIAG_DEBOUNCE_MS = 100;
     var diagTab = 'charts';  // 'charts' | 'hovmoller'
+    var hovLookbackHours = 6;    // current Hovmoller lookback (6, 12, 24)
+    var hovExtFrames = null;     // extended frames for 12h/24h (null = use irFrames)
+    var hovExtStormId = null;    // storm ID for which extended frames were fetched
+    var hovExtFetching = false;  // true while fetching extended frames
 
     var ANIM_SPEEDS = [
         { label: '0.5x', ms: 1200 },
@@ -609,10 +613,29 @@
         var irFrame = irFrames[animIndex];
         if (!irFrame) return;
 
+        var name = currentStorm ? (currentStorm.name || currentStormId) : currentStormId;
+        var cat = currentStorm ? categoryShort(currentStorm.category) : '';
+        var time = irFrame.datetime_utc ? irFrame.datetime_utc.replace('T', ' ').replace('Z', ' UTC') : '';
+        var sat = irFrame.satellite || '';
+
+        // Check if Hovmoller is active — if so, export it alongside the IR frame
+        var hovDiv = document.getElementById('sat-diag-hovmoller-chart');
+        var hovActive = (viewMode === 'diagnostics' && diagTab === 'hovmoller' && hovDiv && hovDiv.data);
+
+        if (hovActive) {
+            _saveWithHovmoller(irFrame, name, cat, time, sat, hovDiv);
+            return;
+        }
+
+        _saveStandard(irFrame, name, cat, time, sat);
+    }
+
+    /** Standard save: IR frame (+ right panel if in compare/asymmetry mode) */
+    function _saveStandard(irFrame, name, cat, time, sat) {
         var pw = irFrame.cols, ph = irFrame.rows;
         var gap = 4;
         var headerH = 28;
-        var cbH = 24;  // colorbar area height
+        var cbH = 24;
         var hasDualPanel = (viewMode === 'compare-wv' || viewMode === 'compare-vis' || viewMode === 'asymmetry');
         var totalW = hasDualPanel ? pw * 2 + gap : pw;
         var totalH = ph + headerH + cbH;
@@ -622,20 +645,13 @@
         comp.height = totalH;
         var cctx = comp.getContext('2d');
 
-        // Dark background
         cctx.fillStyle = '#0a0c12';
         cctx.fillRect(0, 0, totalW, totalH);
 
-        // Header text
         cctx.fillStyle = '#e2e4ea';
         cctx.font = '14px sans-serif';
-        var name = currentStorm ? (currentStorm.name || currentStormId) : currentStormId;
-        var cat = currentStorm ? categoryShort(currentStorm.category) : '';
-        var time = irFrame.datetime_utc ? irFrame.datetime_utc.replace('T', ' ').replace('Z', ' UTC') : '';
-        var sat = irFrame.satellite || '';
         cctx.fillText(name + ' (' + cat + ')  \u2014  ' + time + '  ' + sat, 8, 18);
 
-        // Panel labels
         cctx.font = '11px sans-serif';
         cctx.fillStyle = '#94a3b8';
         cctx.fillText('Enhanced IR', 8, headerH + 14);
@@ -646,11 +662,9 @@
             cctx.fillText('IR Asymmetry (WN-1)', pw + gap + 8, headerH + 14);
         }
 
-        // Draw IR canvas + overlay
         cctx.drawImage(canvasIR, 0, headerH, pw, ph);
         if (overlayIR) cctx.drawImage(overlayIR, 0, headerH, pw, ph);
 
-        // Draw right panel canvas + overlay
         if (viewMode === 'asymmetry' && canvasAsym && canvasAsym.width > 0) {
             cctx.drawImage(canvasAsym, pw + gap, headerH, pw, ph);
             if (overlayAsym) cctx.drawImage(overlayAsym, pw + gap, headerH, pw, ph);
@@ -659,14 +673,11 @@
             if (overlayRight) cctx.drawImage(overlayRight, pw + gap, headerH, pw, ph);
         }
 
-        // IR colorbar
         var cbY = headerH + ph + 4;
         var cbW = pw - 80;
         drawColorbarToCtx(cctx, 40, cbY, cbW, 8, selectedColormap, 160, 330, 'K');
 
-        // Right panel colorbar
         if (viewMode === 'asymmetry') {
-            // Draw asymmetry colorbar using ASYM_LUT
             var acbW = pw - 80;
             var acbX = pw + gap + 40;
             for (var abx = 0; abx < acbW; abx++) {
@@ -692,18 +703,86 @@
             }
         }
 
-        // TC-ATLAS watermark
         cctx.fillStyle = 'rgba(255,255,255,0.3)';
         cctx.font = '10px sans-serif';
         cctx.textAlign = 'right';
         cctx.fillText('TC-ATLAS', totalW - 8, totalH - 4);
         cctx.textAlign = 'left';
 
-        // Download
         var link = document.createElement('a');
         link.download = (name || 'satellite') + '_' + (irFrame.datetime_utc || '').replace(/[:\-T]/g, '').replace('Z', '') + '.png';
         link.href = comp.toDataURL('image/png');
         link.click();
+    }
+
+    /** Save with Hovmoller: IR frame on left, Hovmoller chart on right */
+    function _saveWithHovmoller(irFrame, name, cat, time, sat, hovDiv) {
+        var pw = irFrame.cols, ph = irFrame.rows;
+        var headerH = 28;
+        var cbH = 24;
+        var gap = 4;
+        // Hovmoller panel sized to match IR panel height
+        var hovW = pw;
+        var hovH = ph + cbH;
+
+        // Export Hovmoller chart as PNG via Plotly
+        Plotly.toImage(hovDiv, { format: 'png', width: hovW, height: hovH, scale: 2 })
+            .then(function (hovDataUrl) {
+                var hovImg = new Image();
+                hovImg.onload = function () {
+                    var totalW = pw + gap + hovW;
+                    var totalH = ph + headerH + cbH;
+
+                    var comp = document.createElement('canvas');
+                    comp.width = totalW;
+                    comp.height = totalH;
+                    var cctx = comp.getContext('2d');
+
+                    cctx.fillStyle = '#0a0c12';
+                    cctx.fillRect(0, 0, totalW, totalH);
+
+                    // Header
+                    cctx.fillStyle = '#e2e4ea';
+                    cctx.font = '14px sans-serif';
+                    cctx.fillText(name + ' (' + cat + ')  \u2014  ' + time + '  ' + sat, 8, 18);
+
+                    // Panel labels
+                    cctx.font = '11px sans-serif';
+                    cctx.fillStyle = '#94a3b8';
+                    cctx.fillText('Enhanced IR', 8, headerH + 14);
+                    cctx.fillText('Tb Hovmoller (' + hovLookbackHours + 'h)', pw + gap + 8, headerH + 14);
+
+                    // IR frame + overlay
+                    cctx.drawImage(canvasIR, 0, headerH, pw, ph);
+                    if (overlayIR) cctx.drawImage(overlayIR, 0, headerH, pw, ph);
+
+                    // IR colorbar
+                    var cbY = headerH + ph + 4;
+                    var cbW = pw - 80;
+                    drawColorbarToCtx(cctx, 40, cbY, cbW, 8, selectedColormap, 160, 330, 'K');
+
+                    // Hovmoller chart image
+                    cctx.drawImage(hovImg, pw + gap, headerH, hovW, hovH);
+
+                    // Watermark
+                    cctx.fillStyle = 'rgba(255,255,255,0.3)';
+                    cctx.font = '10px sans-serif';
+                    cctx.textAlign = 'right';
+                    cctx.fillText('TC-ATLAS', totalW - 8, totalH - 4);
+                    cctx.textAlign = 'left';
+
+                    var link = document.createElement('a');
+                    link.download = (name || 'satellite') + '_hovmoller_' +
+                        (irFrame.datetime_utc || '').replace(/[:\-T]/g, '').replace('Z', '') + '.png';
+                    link.href = comp.toDataURL('image/png');
+                    link.click();
+                };
+                hovImg.src = hovDataUrl;
+            })
+            .catch(function (err) {
+                console.warn('[Satellite] Hovmoller export failed, saving IR only:', err);
+                _saveStandard(irFrame, name, cat, time, sat);
+            });
     }
 
     // ── Lat/Lon Axes ────────────────────────────────────────────
@@ -1014,14 +1093,21 @@
     }
 
     function buildHovmollerData() {
+        // Use extended frames for 12h/24h lookback if available
+        var srcFrames = irFrames;
+        if (hovLookbackHours > 6 && hovExtFrames && hovExtStormId === currentStormId) {
+            // Merge: extended frames (older) + irFrames (recent 6h)
+            srcFrames = hovExtFrames.concat(irFrames);
+        }
+
         var maxRadKm = 200;
         var dr = 4; // km bin width (coarser than radial profile for cleaner heatmap)
         var nRadBins = Math.ceil(maxRadKm / dr);
         var times = [];
         var profiles = []; // array of arrays, one per frame
 
-        for (var fi = irFrames.length - 1; fi >= 0; fi--) {
-            var frame = irFrames[fi];
+        for (var fi = srcFrames.length - 1; fi >= 0; fi--) {
+            var frame = srcFrames[fi];
             if (!frame || !frame.center_fix || !frame.tb_data) continue;
 
             var cLat = frame.center_fix.lat, cLon = frame.center_fix.lon;
@@ -1077,6 +1163,97 @@
         }
 
         return { times: times, radii: radii, z: z };
+    }
+
+    /**
+     * Fetch extended IR frames for the Hovmoller (12h or 24h lookback).
+     * Fetches only the frames beyond the standard 6h set (indices 13+).
+     * Results are stored in hovExtFrames for reuse.
+     */
+    function fetchHovmollerFrames(hours) {
+        if (!currentStormId) return;
+        // Already have data for this storm + lookback?
+        if (hovExtFrames && hovExtStormId === currentStormId && hovExtFrames._hours >= hours) {
+            renderHovmollerChart();
+            return;
+        }
+
+        hovExtFetching = true;
+        hovExtStormId = currentStormId;
+        var stormId = currentStormId;
+
+        // Determine total frames for the extended lookback
+        var totalFrames = Math.floor(hours * 60 / FRAME_INTERVAL_MIN) + 1;
+        var startIdx = 13; // frames 0-12 are already in irFrames (6h)
+        var extFrames = [];
+        var completed = 0;
+        var failed = 0;
+        var concurrency = 5;
+
+        // Show loading status
+        var hovChart = document.getElementById('sat-diag-hovmoller-chart');
+        if (hovChart) hovChart.style.opacity = '0.4';
+
+        function fetchFrame(idx) {
+            if (idx >= totalFrames) return;
+            if (stormId !== currentStormId) return;
+
+            var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(stormId) + '/ir-raw-frame'
+                + '?frame_index=' + idx
+                + '&lookback_hours=' + hours
+                + '&radius_deg=' + DEFAULT_RADIUS_DEG
+                + '&interval_min=' + FRAME_INTERVAL_MIN;
+
+            fetch(url)
+                .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+                .then(function (data) {
+                    if (stormId !== currentStormId) return;
+                    if (data.total_frames) totalFrames = data.total_frames;
+                    extFrames[idx - startIdx] = {
+                        tb_data: decodeTbData(data.tb_data),
+                        rows: data.tb_rows, cols: data.tb_cols,
+                        bounds: data.bounds,
+                        datetime_utc: data.datetime_utc || '',
+                        satellite: data.satellite || '',
+                        tb_vmin: data.tb_vmin || 160.0, tb_vmax: data.tb_vmax || 330.0,
+                        center_fix: data.center_fix || null
+                    };
+                    completed++;
+                })
+                .catch(function () {
+                    failed++;
+                    completed++;
+                })
+                .finally(function () {
+                    var nextIdx = idx + concurrency;
+                    if (nextIdx < totalFrames) fetchFrame(nextIdx);
+
+                    if (completed >= (totalFrames - startIdx)) {
+                        // Compact and store
+                        var result = [];
+                        for (var i = 0; i < extFrames.length; i++) {
+                            if (extFrames[i]) result.push(extFrames[i]);
+                        }
+                        // Sort by datetime (oldest first) so concat with irFrames works
+                        result.sort(function (a, b) {
+                            return (a.datetime_utc || '').localeCompare(b.datetime_utc || '');
+                        });
+                        result._hours = hours;
+                        hovExtFrames = result;
+                        hovExtFetching = false;
+                        if (hovChart) hovChart.style.opacity = '1';
+                        console.log('[Satellite] Hovmoller extended frames loaded: ' +
+                            result.length + ' OK, ' + failed + ' failed (' + hours + 'h)');
+                        if (stormId === currentStormId) renderHovmollerChart();
+                    }
+                });
+        }
+
+        // Launch initial batch
+        var batchSize = Math.min(concurrency, totalFrames - startIdx);
+        for (var i = 0; i < batchSize; i++) {
+            fetchFrame(startIdx + i);
+        }
     }
 
     function renderHovmollerChart() {
@@ -1766,6 +1943,7 @@
         animIndex = 0;
         irLoadedCount = 0; rightLoadedCount = 0;
         diagChartsInitialized = false;
+        hovExtFrames = null; hovExtStormId = null; hovExtFetching = false;
         trackMetadata = null;
         renderStormList();
         updateHash(atcfId);
@@ -2316,6 +2494,24 @@
                     var hovDiv = document.getElementById('sat-diag-hovmoller-chart');
                     if (hovDiv && hovDiv.data) Plotly.Plots.resize(hovDiv);
                 }, 50);
+            });
+        }
+
+        // Hovmoller lookback toggle (6h / 12h / 24h)
+        var hovBtns = document.querySelectorAll('.sat-hov-lookback-btn');
+        for (var hi = 0; hi < hovBtns.length; hi++) {
+            hovBtns[hi].addEventListener('click', function () {
+                var hours = parseInt(this.getAttribute('data-hours'), 10);
+                if (hours === hovLookbackHours) return;
+                hovLookbackHours = hours;
+                for (var hj = 0; hj < hovBtns.length; hj++) {
+                    hovBtns[hj].classList.toggle('active', hovBtns[hj] === this);
+                }
+                if (hours <= 6) {
+                    renderHovmollerChart();
+                } else {
+                    fetchHovmollerFrames(hours);
+                }
             });
         }
 

@@ -383,6 +383,27 @@
     min-height: 0;
 }
 
+.sat-hov-lookback-bar {
+    display: flex;
+    justify-content: center;
+    gap: 2px;
+    padding: 2px 0 0;
+    flex-shrink: 0;
+}
+.sat-hov-lookback-btn {
+    background: transparent;
+    color: #8b8fa4;
+    border: 1px solid #2a2d38;
+    border-radius: 3px;
+    padding: 2px 10px;
+    font-size: 10px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+.sat-hov-lookback-btn:hover { color: #c8cad2; }
+.sat-hov-lookback-btn.active { background: #2a2d38; color: #e2e4ea; }
+
 .sat-diag-chart {
     min-height: 170px;
     width: 100%;
