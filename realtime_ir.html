@@ -690,6 +690,7 @@
         window.switchIRView = function (view) {
             if (view === currentView) return;
             currentView = view;
+            if (typeof gtag === 'function') try { gtag('event', 'ir_view_switch', { view: view }); } catch(e) {}
 
             var irMain = document.getElementById('ir-main');
             var satMain = document.getElementById('sat-main');

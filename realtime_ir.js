@@ -3140,6 +3140,7 @@
         var state = activeFrameState();
         if (state.times.length < 2 || !state.ready) return;
         animPlaying = true;
+        _ga('ir_animation_play');
         _cacheAnimEls();
         if (_elAnimPlay) {
             _elAnimPlay.innerHTML = '&#9646;&#9646;'; // pause icon
@@ -7127,6 +7128,7 @@
         _rtRadarVisible = true;
         if (btn) btn.textContent = 'Hide 88D';
         if (controls) controls.style.display = '';
+        _ga('ir_radar_toggle', { visible: true });
 
         if (_rtRadarMapOverlay && detailMap) _rtRadarMapOverlay.addTo(detailMap);
 
@@ -7340,6 +7342,7 @@
 
     window.downloadActiveStormKML = function () {
         if (!currentStormId) return;
+        _ga('ir_export_kml', { storm: currentStormId });
 
         // Find the storm object
         var storm = null;
@@ -7423,6 +7426,7 @@
     // ── GeoTIFF Export ──────────────────────────────────────────
     window.downloadActiveStormGeoTIFF = function () {
         if (!currentStormId) return;
+        _ga('ir_export_geotiff', { storm: currentStormId });
 
         // Use the current animation frame index (0 = newest)
         var frameIdx = animIndex || 0;

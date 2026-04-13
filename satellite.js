@@ -689,6 +689,7 @@
         if (irFrames.length === 0) return;
         var irFrame = irFrames[animIndex];
         if (!irFrame) return;
+        _ga('sat_export_png', { storm: currentStormId, mode: viewMode });
 
         var name = currentStorm ? (currentStorm.name || currentStormId) : currentStormId;
         var cat = currentStorm ? categoryShort(currentStorm.category) : '';
@@ -933,6 +934,7 @@
     function saveGif(e) {
         if (_gifExporting || validFrameIndices.length < 2 || typeof GIF === 'undefined') return;
         _gifExporting = true;
+        _ga('sat_export_gif', { storm: currentStormId, mode: viewMode });
 
         var name = currentStorm ? (currentStorm.name || currentStormId) : currentStormId;
         var cat = currentStorm ? categoryShort(currentStorm.category) : '';
@@ -2965,7 +2967,7 @@
         if (ts - animLastTick >= ANIM_SPEEDS[animSpeedIdx].ms) { animLastTick = ts; nextFrame(); }
         animTimer = requestAnimationFrame(animTick);
     }
-    function startAnimation() { if (validFrameIndices.length < 2) return; animPlaying = true; animLastTick = 0; animTimer = requestAnimationFrame(animTick); updatePlayBtn(); }
+    function startAnimation() { if (validFrameIndices.length < 2) return; animPlaying = true; _ga('sat_animation_play'); animLastTick = 0; animTimer = requestAnimationFrame(animTick); updatePlayBtn(); }
     function stopAnimation() { animPlaying = false; if (animTimer) cancelAnimationFrame(animTimer); animTimer = null; updatePlayBtn(); }
     function toggleAnimation() { if (animPlaying) stopAnimation(); else startAnimation(); }
     function cycleSpeed() { animSpeedIdx = (animSpeedIdx + 1) % ANIM_SPEEDS.length; if (speedBtn) speedBtn.textContent = ANIM_SPEEDS[animSpeedIdx].label; }
@@ -3681,6 +3683,7 @@
         if (ctrl) ctrl.style.display = showRadar ? '' : 'none';
 
         if (showRadar) {
+            _ga('sat_radar_toggle', { visible: true });
             _satLoadRadarSites();
             var siteSelect = document.getElementById('sat-radar-site-select');
             if (siteSelect && siteSelect.value) {
