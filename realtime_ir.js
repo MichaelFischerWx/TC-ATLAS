@@ -3482,6 +3482,10 @@
                         rows: frame.tb_rows,
                         cols: frame.tb_cols,
                         bounds: frame.bounds,
+                        datetime_utc: frame.datetime_utc || '',
+                        satellite: frame.satellite || '',
+                        tb_vmin: frame.tb_vmin || 160.0,
+                        tb_vmax: frame.tb_vmax || 330.0,
                         center_fix: frame.center_fix || null
                     };
                     completed++;
