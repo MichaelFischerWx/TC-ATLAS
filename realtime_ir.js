@@ -3315,6 +3315,26 @@
         return _rawTbCacheValid(stormId) ? _rawTbCache[stormId].rawTbFrames : null;
     };
 
+    // Callback registry: satellite viewer can register to be notified
+    // when raw Tb frames become available (avoids polling + duplicate fetches).
+    var _rtReadyCallbacks = {};  // { stormId: [cb, cb, ...] }
+    window.onRtRawTbReady = function (stormId, cb) {
+        // If already cached, fire immediately
+        if (_rawTbCacheValid(stormId)) { cb(_rawTbCache[stormId].rawTbFrames); return; }
+        if (!_rtReadyCallbacks[stormId]) _rtReadyCallbacks[stormId] = [];
+        _rtReadyCallbacks[stormId].push(cb);
+    };
+    function _fireRtReadyCallbacks(stormId) {
+        var cbs = _rtReadyCallbacks[stormId];
+        if (!cbs || cbs.length === 0) return;
+        var frames = _rawTbCache[stormId] ? _rawTbCache[stormId].rawTbFrames : null;
+        if (!frames) return;
+        delete _rtReadyCallbacks[stormId];
+        for (var i = 0; i < cbs.length; i++) {
+            try { cbs[i](frames); } catch (e) { console.warn('[RT Monitor] Ready callback error:', e); }
+        }
+    }
+
     // ── Raw Band (WV/Vis) pre-fetch cache ──
     // Structure: { "8": { stormId: { frames: [...], cachedAt, lat, lon } } }
     var _rawBandCache = {};
@@ -3531,6 +3551,7 @@
                         }
                         console.log('[RT Monitor] All raw Tb frames loaded for ' +
                             stormId + ': ' + result.length + ' OK, ' + failed + ' failed');
+                        _fireRtReadyCallbacks(stormId);
                         if (_rawTbAbortController === controller) _rawTbAbortController = null;
                         if (onComplete) onComplete();
                     }

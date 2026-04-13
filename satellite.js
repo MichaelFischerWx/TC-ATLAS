@@ -2489,51 +2489,62 @@
         }
 
         // Try to reuse frames from the RT Monitor cache.
-        // The RT Monitor may still be loading, so poll a few times before
-        // falling back to independent fetches.
-        var _rtPollAttempts = 0;
-        var _rtPollMax = 8;  // poll for up to 4 seconds (8 × 500ms)
+        // If not ready, register a callback AND start fetching frame 0
+        // independently for fast first-frame display. Whichever source
+        // completes all frames first wins.
+        var _rtCacheUsed = false;
+
+        function _applyRtFrames(rtFrames) {
+            if (_rtCacheUsed || stormId !== currentStormId) return;
+            _rtCacheUsed = true;
+            console.log('[Satellite] Reusing ' + rtFrames.length + ' frames from RT Monitor cache');
+            for (var ri = 0; ri < rtFrames.length; ri++) {
+                var rf = rtFrames[ri];
+                if (!rf) continue;
+                irFrames[ri] = {
+                    tb_data: (rf.tb_data instanceof Uint8Array) ? rf.tb_data : decodeTbData(rf.tb_data),
+                    rows: rf.rows || rf.tb_rows, cols: rf.cols || rf.tb_cols,
+                    bounds: rf.bounds, datetime_utc: rf.datetime_utc,
+                    satellite: rf.satellite || '', tb_vmin: rf.tb_vmin || 160.0, tb_vmax: rf.tb_vmax || 330.0,
+                    center_fix: rf.center_fix || null
+                };
+                irDone++;
+            }
+            totalFrames = Math.max(totalFrames, rtFrames.length);
+            buildValidIndices();
+            updateSliderMax();
+            animIndex = 0;
+            hideLoader();
+            renderBothPanels();
+            updateAnimUI();
+            updateStatus();
+            if (!frameCache[stormId]) frameCache[stormId] = { ts: Date.now() };
+            frameCache[stormId].ir = irFrames.slice();
+            frameCache[stormId].ts = Date.now();
+            _tryRtBandCache(stormId);
+        }
+
         function _tryRtCache() {
-            if (stormId !== currentStormId) return; // storm changed
+            if (stormId !== currentStormId) return;
+            // Check if already cached
             if (window.getRtRawTbFrames) {
                 var rtFrames = window.getRtRawTbFrames(stormId);
                 if (rtFrames && rtFrames.length > 0) {
-                    console.log('[Satellite] Reusing ' + rtFrames.length + ' frames from RT Monitor cache');
-                    for (var ri = 0; ri < rtFrames.length; ri++) {
-                        var rf = rtFrames[ri];
-                        if (!rf) continue;
-                        irFrames[ri] = {
-                            tb_data: (rf.tb_data instanceof Uint8Array) ? rf.tb_data : decodeTbData(rf.tb_data),
-                            rows: rf.rows || rf.tb_rows, cols: rf.cols || rf.tb_cols,
-                            bounds: rf.bounds, datetime_utc: rf.datetime_utc,
-                            satellite: rf.satellite || '', tb_vmin: rf.tb_vmin || 160.0, tb_vmax: rf.tb_vmax || 330.0,
-                            center_fix: rf.center_fix || null
-                        };
-                        irDone++;
-                    }
-                    totalFrames = Math.max(totalFrames, rtFrames.length);
-                    buildValidIndices();
-                    updateSliderMax();
-                    animIndex = 0;
-                    hideLoader();
-                    renderBothPanels();
-                    updateAnimUI();
-                    updateStatus();
-                    if (!frameCache[stormId]) frameCache[stormId] = { ts: Date.now() };
-                    frameCache[stormId].ir = irFrames.slice();
-                    frameCache[stormId].ts = Date.now();
-                    // Also reuse cached band (WV/Vis) frames if available
-                    _tryRtBandCache(stormId);
+                    _applyRtFrames(rtFrames);
                     return;
                 }
             }
-            _rtPollAttempts++;
-            if (_rtPollAttempts < _rtPollMax) {
-                setTimeout(_tryRtCache, 500);
-            } else {
-                console.log('[Satellite] RT Monitor cache not ready, fetching independently');
-                _fetchIndependently();
+            // Not ready — register callback for when RT Monitor finishes,
+            // and start independent fetch in parallel for fast first frame.
+            if (window.onRtRawTbReady) {
+                window.onRtRawTbReady(stormId, function (rtFrames) {
+                    if (!_rtCacheUsed && stormId === currentStormId && rtFrames && rtFrames.length > 0) {
+                        _applyRtFrames(rtFrames);
+                    }
+                });
             }
+            console.log('[Satellite] RT cache not ready, fetching independently + waiting for RT callback');
+            _fetchIndependently();
         }
         var _backfillStarted = false;
         function startBackfill() {
