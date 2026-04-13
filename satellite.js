@@ -1228,6 +1228,16 @@
             srcFrames = hovExtFrames.concat(irFrames);
             console.log('[Satellite] Hovmoller merge: ' + hovExtFrames.length + ' ext + ' +
                 irFrames.length + ' ir = ' + srcFrames.length + ' total');
+            if (hovExtFrames.length > 0) {
+                console.log('[Satellite]   ext range: ' + hovExtFrames[0].datetime_utc +
+                    ' → ' + hovExtFrames[hovExtFrames.length - 1].datetime_utc);
+            }
+            if (irFrames.length > 0) {
+                var firstIr = irFrames[irFrames.length - 1], lastIr = irFrames[0];
+                console.log('[Satellite]   ir  range: ' +
+                    (firstIr ? firstIr.datetime_utc : '?') + ' → ' +
+                    (lastIr ? lastIr.datetime_utc : '?'));
+            }
         }
 
         var maxRadKm = 200;
@@ -1392,6 +1402,12 @@
                         result._hours = hours;
                         hovExtFrames = result;
                         hovExtFetching = false;
+                        // Log time range for debugging
+                        if (result.length > 0) {
+                            console.log('[Satellite] Hovmoller ext time range: ' +
+                                result[0].datetime_utc + ' to ' +
+                                result[result.length - 1].datetime_utc);
+                        }
                         if (hovChart) hovChart.style.opacity = '1';
                         console.log('[Satellite] Hovmoller extended frames loaded: ' +
                             result.length + ' OK, ' + failed + ' failed (' + hours + 'h)');
