@@ -656,17 +656,17 @@
         cctx.fillRect(0, 0, totalW, totalH);
 
         cctx.fillStyle = '#e2e4ea';
-        cctx.font = '14px sans-serif';
-        cctx.fillText(headerText, 8, 18);
+        cctx.font = '16px sans-serif';
+        cctx.fillText(headerText, 8, 20);
 
-        cctx.font = '11px sans-serif';
+        cctx.font = '13px sans-serif';
         cctx.fillStyle = '#94a3b8';
-        cctx.fillText('Enhanced IR', 8, headerH + 14);
+        cctx.fillText('Enhanced IR', 8, headerH + 16);
         if (viewMode === 'compare-wv' || viewMode === 'compare-vis') {
             var rightLabel = rightBand === 2 ? 'Visible' : 'Water Vapor';
-            cctx.fillText(rightLabel, pw + gap + 8, headerH + 14);
+            cctx.fillText(rightLabel, pw + gap + 8, headerH + 16);
         } else if (viewMode === 'asymmetry') {
-            cctx.fillText('IR Asymmetry (WN-1)', pw + gap + 8, headerH + 14);
+            cctx.fillText('IR Asymmetry (WN-1)', pw + gap + 8, headerH + 16);
         }
 
         cctx.drawImage(canvasIR, 0, headerH, pw, ph);
@@ -759,14 +759,14 @@
 
                     // Header
                     cctx.fillStyle = '#e2e4ea';
-                    cctx.font = '14px sans-serif';
-                    cctx.fillText(name + '  \u2014  ' + time + '  ' + sat, 8, 18);
+                    cctx.font = '16px sans-serif';
+                    cctx.fillText(name + '  \u2014  ' + time + '  ' + sat, 8, 20);
 
                     // Panel labels
-                    cctx.font = '11px sans-serif';
+                    cctx.font = '13px sans-serif';
                     cctx.fillStyle = '#94a3b8';
-                    cctx.fillText('Enhanced IR', 8, headerH + 14);
-                    cctx.fillText('Tb Hovmoller (' + hovLookbackHours + 'h)', pw + gap + 8, headerH + 14);
+                    cctx.fillText('Enhanced IR', 8, headerH + 16);
+                    cctx.fillText('Tb Hovmoller (' + hovLookbackHours + 'h)', pw + gap + 8, headerH + 16);
 
                     // IR frame + overlay
                     cctx.drawImage(canvasIR, 0, headerH, pw, ph);
@@ -930,9 +930,9 @@
                             // Draw Hovmoller on the right
                             fctx.drawImage(hovImg, pw + gap, headerH, hovW, ph + cbH);
                             // Label
-                            fctx.font = '11px sans-serif';
+                            fctx.font = '13px sans-serif';
                             fctx.fillStyle = '#94a3b8';
-                            fctx.fillText('Tb Hovmoller (' + hovLookbackHours + 'h)', pw + gap + 8, headerH + 14);
+                            fctx.fillText('Tb Hovmoller (' + hovLookbackHours + 'h)', pw + gap + 8, headerH + 16);
                             // Watermark (over full width)
                             fctx.fillStyle = 'rgba(255,255,255,0.3)';
                             fctx.font = '10px sans-serif';
@@ -1585,18 +1585,18 @@
             colorscale: hovColorscale,
             zmin: _hovCrange[0], zmax: _hovCrange[1],
             colorbar: {
-                title: { text: '\u00B0C', font: { size: 10, color: '#94a3b8' } },
-                tickfont: { size: 9, family: 'JetBrains Mono, monospace', color: '#8b9ec2' },
-                thickness: 12, len: 0.9
+                title: { text: '\u00B0C', font: { size: 13, color: '#94a3b8' } },
+                tickfont: { size: 12, family: 'JetBrains Mono, monospace', color: '#8b9ec2' },
+                thickness: 14, len: 0.9
             },
             hovertemplate: '%{y|%H:%M UTC}<br>%{x:.0f} km<br>%{z:.1f} \u00B0C<extra></extra>'
         }];
 
         var layout = JSON.parse(JSON.stringify(DIAG_LAYOUT_BASE));
-        layout.title = { text: 'Azimuthal-Mean Tb Hovmoller', font: { size: 12, color: '#94a3b8' } };
-        layout.xaxis = { title: { text: 'Radius (km)', font: { size: 10 } }, gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 9, family: 'JetBrains Mono, monospace' } };
-        layout.yaxis = { title: { text: 'Time (UTC)', font: { size: 10 } }, gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 8, family: 'JetBrains Mono, monospace' }, autorange: true };
-        layout.margin = { t: 32, r: 60, b: 40, l: 70 };
+        layout.title = { text: 'Azimuthal-Mean Tb Hovmoller', font: { size: 15, color: '#94a3b8' } };
+        layout.xaxis = { title: { text: 'Radius (km)', font: { size: 13 } }, gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 12, family: 'JetBrains Mono, monospace' } };
+        layout.yaxis = { title: { text: 'Time (UTC)', font: { size: 13 } }, gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 11, family: 'JetBrains Mono, monospace' }, autorange: true };
+        layout.margin = { t: 36, r: 64, b: 44, l: 76 };
 
         // Horizontal line at current frame time
         var curFrame = irFrames[animIndex];
