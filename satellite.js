@@ -1852,7 +1852,7 @@
             var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(stormId) + '/band-raw-frame'
                 + '?band=' + rightBand + '&frame_index=' + idx + '&lookback_hours=' + DEFAULT_LOOKBACK_HOURS
                 + '&radius_deg=' + DEFAULT_RADIUS_DEG + '&interval_min=' + FRAME_INTERVAL_MIN;
-            fetch(url, { cache: 'no-store' })
+            fetch(url)
                 .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
                 .then(function (data) {
                     if (data.total_frames) totalFrames = data.total_frames;
@@ -1903,7 +1903,7 @@
                 + '?frame_index=' + idx + '&lookback_hours=' + DEFAULT_LOOKBACK_HOURS
                 + '&radius_deg=' + DEFAULT_RADIUS_DEG + '&interval_min=' + FRAME_INTERVAL_MIN;
 
-            fetch(url, { cache: 'no-store' })
+            fetch(url)
                 .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
                 .then(function (data) {
                     if (data.total_frames) totalFrames = data.total_frames;
@@ -1967,7 +1967,7 @@
                 + '?band=' + rightBand + '&frame_index=' + idx + '&lookback_hours=' + DEFAULT_LOOKBACK_HOURS
                 + '&radius_deg=' + DEFAULT_RADIUS_DEG + '&interval_min=' + FRAME_INTERVAL_MIN;
 
-            fetch(url, { cache: 'no-store' })
+            fetch(url)
                 .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
                 .then(function (data) {
                     if (data.total_frames) totalFrames = data.total_frames;
@@ -2413,7 +2413,7 @@
             var url0 = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(currentStormId) + '/ir-raw-frame'
                 + '?frame_index=0&lookback_hours=' + DEFAULT_LOOKBACK_HOURS
                 + '&radius_deg=' + DEFAULT_RADIUS_DEG + '&interval_min=' + FRAME_INTERVAL_MIN;
-            fetch(url0, { cache: 'no-store' })
+            fetch(url0)
                 .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
                 .then(function (data) {
                     if (currentStormId !== hashStorm.toUpperCase()) return; // storm changed
