@@ -630,6 +630,9 @@
     var _rtRadarBounds = null;         // L.latLngBounds
     var _rtRadarUnits = 'dBZ';
     var _rtRadarProduct = 'reflectivity';
+    var _rtRadarSiteLat = null;        // radar site latitude
+    var _rtRadarSiteLon = null;        // radar site longitude
+    var _rtRadarTilt = 0.5;            // elevation angle in degrees
     var _rtRadarLastAtcf = null;       // last storm we fetched sites for
     var _rtRadarUpdateTimer = null;    // throttle timer for frame-sync
     var _rtRadarAllScans = [];         // full scan list across 6h window
@@ -3821,7 +3824,7 @@
         var radarHit = _rtHandleRadarMouseMove(e);
         if (radarHit) {
             html += '<span class="ir-tb-sep"> &nbsp; </span>' +
-                    '<span class="ir-tb-val" style="color:#86efac;">' + radarHit.value + ' ' + radarHit.units + '</span>';
+                    '<span class="ir-tb-val" style="color:#86efac;">' + radarHit.value + ' ' + radarHit.units + (radarHit.beam || '') + '</span>';
         }
 
         _rtTbTooltip.setLatLng(e.latlng).setContent(html);
@@ -6769,6 +6772,27 @@
     // ── 88D NEXRAD RADAR OVERLAY ─────────────────────────────────
     // ═══════════════════════════════════════════════════════════════
 
+    /** Haversine distance in km between two lat/lon points. */
+    function _rtHaversineKm(lat1, lon1, lat2, lon2) {
+        var R = 6371;
+        var dLat = (lat2 - lat1) * Math.PI / 180;
+        var dLon = (lon2 - lon1) * Math.PI / 180;
+        var a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                Math.sin(dLon / 2) * Math.sin(dLon / 2);
+        return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
+
+    /**
+     * Estimated beam center height (km ARL) using 4/3 effective Earth radius.
+     */
+    function _rtBeamHeightKm(distKm, tiltDeg) {
+        var Re = 6371 * 4 / 3;
+        var r = distKm;
+        var theta = tiltDeg * Math.PI / 180;
+        return Math.sqrt(r * r + Re * Re + 2 * r * Re * Math.sin(theta)) - Re;
+    }
+
     /** Parse "YYYY-MM-DD HH:MM:SS UTC" to epoch ms */
     function _rtParseScanTime(s) {
         if (!s) return 0;
@@ -6819,8 +6843,14 @@
                     var s = json.sites[i];
                     var opt = document.createElement('option');
                     opt.value = s.site;
+                    opt.setAttribute('data-lat', s.lat);
+                    opt.setAttribute('data-lon', s.lon);
                     opt.textContent = s.site + ' \u2014 ' + s.name + ' (' + s.distance_km + ' km)';
                     siteSelect.appendChild(opt);
+                }
+                if (json.sites.length > 0) {
+                    _rtRadarSiteLat = json.sites[0].lat;
+                    _rtRadarSiteLon = json.sites[0].lon;
                 }
                 if (statusEl) statusEl.textContent = json.sites.length + ' site(s)';
 
@@ -6843,6 +6873,13 @@
         if (!siteSelect || !scanSelect || !siteSelect.value) return;
 
         var site = siteSelect.value;
+
+        // Update stored site position
+        var selOpt = siteSelect.options[siteSelect.selectedIndex];
+        if (selOpt && selOpt.getAttribute('data-lat')) {
+            _rtRadarSiteLat = parseFloat(selOpt.getAttribute('data-lat'));
+            _rtRadarSiteLon = parseFloat(selOpt.getAttribute('data-lon'));
+        }
 
         // Use middle of animation window as reference
         var midIdx = Math.floor(animFrameTimes.length / 2);
@@ -6926,6 +6963,7 @@
         _rtRadarVmin = frame.vmin;
         _rtRadarVmax = frame.vmax;
         _rtRadarUnits = frame.units;
+        _rtRadarTilt = frame.tilt || 0.5;
 
         var bounds = L.latLngBounds(
             L.latLng(frame.bounds[0][0], frame.bounds[0][1]),
@@ -6980,6 +7018,7 @@
                     vmin: json.data_vmin,
                     vmax: json.data_vmax,
                     units: json.units || 'dBZ',
+                    tilt: json.tilt || 0.5,
                     s3Key: s3Key,
                     statusText: json.site + ' ' + json.scan_time + ' \u2014 ' + json.label + ' (tilt ' + json.tilt + '\u00B0)'
                 };
@@ -7145,7 +7184,19 @@
         if (rawVal === 0) return null;
 
         var val = _rtRadarVmin + (rawVal - 1) * (_rtRadarVmax - _rtRadarVmin) / 254.0;
-        return { value: val.toFixed(1), units: _rtRadarUnits };
+
+        // Compute beam height
+        var beamStr = '';
+        if (_rtRadarSiteLat != null && _rtRadarSiteLon != null) {
+            var distKm = _rtHaversineKm(_rtRadarSiteLat, _rtRadarSiteLon, lat, lng);
+            var beamHt = _rtBeamHeightKm(distKm, _rtRadarTilt);
+            if (beamHt < 1) {
+                beamStr = ' ' + (beamHt * 1000).toFixed(0) + 'm ARL';
+            } else {
+                beamStr = ' ' + beamHt.toFixed(1) + 'km ARL';
+            }
+        }
+        return { value: val.toFixed(1), units: _rtRadarUnits, beam: beamStr };
     }
 
     /**

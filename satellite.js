@@ -65,6 +65,9 @@
     var _satRadarVmax = 95;
     var _satRadarUnits = 'dBZ';
     var _satRadarProduct = 'reflectivity';
+    var _satRadarSiteLat = null;     // radar site latitude
+    var _satRadarSiteLon = null;     // radar site longitude
+    var _satRadarTilt = 0.5;         // elevation angle in degrees
     var _satRadarAllScans = [];      // full scan list across 6h window
     var _satRadarFrameCache = {};    // { s3_key: { img, bounds, data, rows, cols, vmin, vmax, units, scanTime } }
     var _satRadarPrefetching = false;
@@ -2736,8 +2739,19 @@
                 var rv = _satRadarData[rRow * _satRadarCols + rCol];
                 if (rv > 0) {
                     var rVal = _satRadarVmin + (rv - 1) * (_satRadarVmax - _satRadarVmin) / 254.0;
+                    // Compute beam height using 4/3 Earth radius refraction model
+                    var beamStr = '';
+                    if (_satRadarSiteLat != null && _satRadarSiteLon != null) {
+                        var distKm = _haversineKm(_satRadarSiteLat, _satRadarSiteLon, lat, lon);
+                        var beamHt = _beamHeightKm(distKm, _satRadarTilt);
+                        if (beamHt < 1) {
+                            beamStr = ' ' + (beamHt * 1000).toFixed(0) + 'm ARL';
+                        } else {
+                            beamStr = ' ' + beamHt.toFixed(1) + 'km ARL';
+                        }
+                    }
                     radarHtml = '<span class="sat-tb-sep"> &nbsp; </span>' +
-                        '<span class="sat-tb-val" style="color:#86efac;">' + rVal.toFixed(1) + ' ' + _satRadarUnits + '</span>';
+                        '<span class="sat-tb-val" style="color:#86efac;">' + rVal.toFixed(1) + ' ' + _satRadarUnits + beamStr + '</span>';
                 }
             }
         }
@@ -2968,6 +2982,29 @@
     // ── 88D NEXRAD RADAR OVERLAY ─────────────────────────────────
     // ═══════════════════════════════════════════════════════════════
 
+    /** Haversine distance in km between two lat/lon points. */
+    function _haversineKm(lat1, lon1, lat2, lon2) {
+        var R = 6371;
+        var dLat = (lat2 - lat1) * Math.PI / 180;
+        var dLon = (lon2 - lon1) * Math.PI / 180;
+        var a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                Math.sin(dLon / 2) * Math.sin(dLon / 2);
+        return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
+
+    /**
+     * Estimated beam center height (km ARL) using 4/3 effective Earth radius.
+     * distKm = ground range, tiltDeg = elevation angle in degrees.
+     */
+    function _beamHeightKm(distKm, tiltDeg) {
+        var Re = 6371 * 4 / 3;  // effective Earth radius (standard refraction)
+        var r = distKm;
+        var theta = tiltDeg * Math.PI / 180;
+        // h = sqrt(r² + Re² + 2·r·Re·sin(θ)) − Re
+        return Math.sqrt(r * r + Re * Re + 2 * r * Re * Math.sin(theta)) - Re;
+    }
+
     /**
      * Search for nearby NEXRAD sites for the current storm.
      */
@@ -2999,8 +3036,15 @@
                     var s = json.sites[i];
                     var opt = document.createElement('option');
                     opt.value = s.site;
+                    opt.setAttribute('data-lat', s.lat);
+                    opt.setAttribute('data-lon', s.lon);
                     opt.textContent = s.site + ' \u2014 ' + s.name + ' (' + s.distance_km + ' km)';
                     siteSelect.appendChild(opt);
+                }
+                // Store first site's position as default
+                if (json.sites.length > 0) {
+                    _satRadarSiteLat = json.sites[0].lat;
+                    _satRadarSiteLon = json.sites[0].lon;
                 }
                 if (statusEl) statusEl.textContent = json.sites.length + ' site(s)';
 
@@ -3030,6 +3074,13 @@
         if (!siteSelect || !siteSelect.value || !scanSelect) return;
 
         var site = siteSelect.value;
+
+        // Update stored site position from selected option
+        var selOpt = siteSelect.options[siteSelect.selectedIndex];
+        if (selOpt && selOpt.getAttribute('data-lat')) {
+            _satRadarSiteLat = parseFloat(selOpt.getAttribute('data-lat'));
+            _satRadarSiteLon = parseFloat(selOpt.getAttribute('data-lon'));
+        }
 
         // Use the middle of the animation window as reference time
         var midIdx = Math.floor(irFrames.length / 2);
@@ -3122,6 +3173,7 @@
         _satRadarVmin = frame.vmin;
         _satRadarVmax = frame.vmax;
         _satRadarUnits = frame.units;
+        _satRadarTilt = frame.tilt || 0.5;
         _satRadarScanKey = frame.s3Key;
         var status = document.getElementById('sat-radar-frame-status');
         if (status) status.textContent = frame.statusText || '';
@@ -3172,6 +3224,7 @@
                         vmin: json.data_vmin,
                         vmax: json.data_vmax,
                         units: json.units || 'dBZ',
+                        tilt: json.tilt || 0.5,
                         s3Key: s3Key,
                         statusText: statusText
                     };
