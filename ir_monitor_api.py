@@ -103,7 +103,7 @@ _TB_SCALE = 254.0 / (_TB_VMAX - _TB_VMIN)
 _GCS_IR_CACHE_BUCKET = os.environ.get("GCS_IR_CACHE_BUCKET", "")
 _gcs_rt_client = None
 _gcs_rt_bucket = None
-_GCS_RT_VERSION = "rt-v8"
+_GCS_RT_VERSION = "rt-v9"
 
 def _get_rt_gcs_bucket():
     global _gcs_rt_client, _gcs_rt_bucket
@@ -2217,22 +2217,62 @@ def _gcs_jpg_put(atcf_id: str, dt_str: str, jpg_bytes: bytes, band: int = 0):
     threading.Thread(target=_upload, daemon=True).start()
 
 
+# ── Claude IR LUT for JPG rendering (matches client-side 'claude-ir') ──
+# Built from Tb stops mapped to fractions over the 160–330K uint8 encoding range.
+# This matches the client buildLUTfromTb() exactly.
+_CLAUDE_IR_TB_STOPS = [
+    (310, 12,12,22), (293, 70,70,82), (283, 120,120,132),
+    (273, 180,180,192), (263, 216,218,228), (253, 140,210,220),
+    (248, 68,180,196), (243, 32,148,166), (238, 40,178,116),
+    (233, 96,208,68), (228, 192,220,40), (223, 238,196,48),
+    (218, 228,132,48), (213, 214,78,56), (208, 180,36,68),
+    (203, 196,48,156), (198, 168,64,200), (193, 120,48,180),
+    (183, 64,24,140), (173, 28,12,96),
+]
+
+def _build_claude_ir_jpg_lut() -> np.ndarray:
+    """Build 256-entry RGBA LUT matching the client claude-ir colormap."""
+    vmin, vmax = 160.0, 330.0
+    # Convert Tb stops to fraction stops (frac = 1 - (tb-vmin)/(vmax-vmin))
+    frac_stops = []
+    for tb, r, g, b in _CLAUDE_IR_TB_STOPS:
+        f = 1.0 - (tb - vmin) / (vmax - vmin)
+        frac_stops.append((f, r, g, b))
+    frac_stops.sort(key=lambda s: s[0])
+
+    lut = np.zeros((256, 4), dtype=np.uint8)
+    for i in range(256):
+        frac = i / 255.0
+        # Find enclosing stops
+        lo, hi = frac_stops[0], frac_stops[-1]
+        for s in range(len(frac_stops) - 1):
+            if frac_stops[s][0] <= frac <= frac_stops[s + 1][0]:
+                lo, hi = frac_stops[s], frac_stops[s + 1]
+                break
+        t = 0.0 if hi[0] == lo[0] else (frac - lo[0]) / (hi[0] - lo[0])
+        t = max(0.0, min(1.0, t))
+        lut[i, 0] = int(lo[1] + t * (hi[1] - lo[1]) + 0.5)
+        lut[i, 1] = int(lo[2] + t * (hi[2] - lo[2]) + 0.5)
+        lut[i, 2] = int(lo[3] + t * (hi[3] - lo[3]) + 0.5)
+        lut[i, 3] = 255
+    return lut
+
+_CLAUDE_IR_JPG_LUT = _build_claude_ir_jpg_lut()
+
+
 def _render_ir_jpg(tb_array: np.ndarray, quality: int = 75) -> bytes | None:
-    """Render a raw Tb array to JPEG bytes using the enhanced IR colormap."""
+    """Render a raw Tb array to JPEG bytes using the Claude IR colormap."""
     from PIL import Image
 
     arr = np.asarray(tb_array, dtype=np.float32)
     if not np.any(np.isfinite(arr)):
         return None
 
-    # Same colormap as render_ir_png in satellite_ir.py
     frac = 1.0 - (arr - _TB_VMIN) / (_TB_VMAX - _TB_VMIN)
     frac = np.clip(frac, 0.0, 1.0)
     indices = (frac * 255).astype(np.uint8)
 
-    # Use the same LUT as satellite_ir (import lazily)
-    from satellite_ir import _IR_LUT
-    rgba = _IR_LUT[indices]  # (H, W, 4)
+    rgba = _CLAUDE_IR_JPG_LUT[indices]  # (H, W, 4)
 
     # NaN/invalid → black (JPG has no alpha)
     mask = ~np.isfinite(arr) | (arr <= 0)
