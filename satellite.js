@@ -1832,6 +1832,9 @@
     }
 
     function _refetchRightFrames(stormId) {
+        // Try RT Monitor band cache first
+        if (_tryRtBandCache(stormId)) return;
+
         var totalFrames = 13;
         var rightDone = 0;
         var rightOk = 0;
@@ -1879,6 +1882,31 @@
         console.log('[Satellite] _refetchRightFrames: band=' + rightBand + ' storm=' + stormId);
         _updateRightStatus();
         for (var i = 0; i < Math.min(FETCH_CONCURRENCY, totalFrames); i++) fetchOne(i);
+    }
+
+    /** Try to populate rightFrames[] from the RT Monitor's band cache. */
+    function _tryRtBandCache(stormId) {
+        if (!window.getRtRawBandFrames) return false;
+        var rtBand = window.getRtRawBandFrames(stormId, rightBand);
+        if (!rtBand || rtBand.length === 0) return false;
+        console.log('[Satellite] Reusing ' + rtBand.length + ' band ' + rightBand + ' frames from RT Monitor cache');
+        for (var i = 0; i < rtBand.length; i++) {
+            var rf = rtBand[i];
+            if (!rf) continue;
+            rightFrames[i] = {
+                tb_data: (rf.tb_data instanceof Uint8Array) ? rf.tb_data : decodeTbData(rf.tb_data),
+                rows: rf.tb_rows, cols: rf.tb_cols,
+                bounds: rf.bounds, datetime_utc: rf.datetime_utc,
+                satellite: rf.satellite || '', tb_vmin: rf.tb_vmin, tb_vmax: rf.tb_vmax,
+                data_type: rf.data_type || rightDataType
+            };
+        }
+        if (!frameCache[stormId]) frameCache[stormId] = { ts: Date.now() };
+        frameCache[stormId].right = rightFrames.slice();
+        frameCache[stormId].rightBand = rightBand;
+        frameCache[stormId].ts = Date.now();
+        renderBothPanels();
+        return true;
     }
 
     function loadFrames(stormId) {
@@ -2038,6 +2066,8 @@
                     if (!frameCache[stormId]) frameCache[stormId] = { ts: Date.now() };
                     frameCache[stormId].ir = irFrames.slice();
                     frameCache[stormId].ts = Date.now();
+                    // Also reuse cached band (WV/Vis) frames if available
+                    _tryRtBandCache(stormId);
                     return;
                 }
             }
