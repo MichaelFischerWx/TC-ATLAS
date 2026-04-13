@@ -51,6 +51,21 @@
     var hovExtStormId = null;    // storm ID for which extended frames were fetched
     var hovExtFetching = false;  // true while fetching extended frames
 
+    // ── 88D NEXRAD Radar Overlay State ───────────────────────
+    var showRadar = false;           // overlay toggle
+    var _satRadarImg = null;         // loaded Image element for current scan
+    var _satRadarBounds = null;      // [[south,west],[north,east]]
+    var _satRadarSites = null;       // API response from /nexrad/sites
+    var _satRadarLastStormId = null; // last storm we fetched sites for
+    var _satRadarScanKey = null;     // S3 key of loaded scan
+    var _satRadarData = null;        // raw uint8 hover data
+    var _satRadarRows = 0;
+    var _satRadarCols = 0;
+    var _satRadarVmin = -32;
+    var _satRadarVmax = 95;
+    var _satRadarUnits = 'dBZ';
+    var _satRadarProduct = 'reflectivity';
+
     var ANIM_SPEEDS = [
         { label: '0.5x', ms: 1200 },
         { label: '1x',   ms: 600 },
@@ -518,6 +533,23 @@
                     }
                     overlayCtx.stroke();
                 }
+            }
+        }
+
+        // ── 88D Radar Overlay ──
+        if (showRadar && _satRadarImg && _satRadarBounds) {
+            var rb = _satRadarBounds;
+            var rSouth = rb[0][0], rWest = rb[0][1], rNorth = rb[1][0], rEast = rb[1][1];
+            // Map radar geographic bounds to canvas pixels
+            var rx0 = (rWest - vb.west) / lonSpan * w;
+            var ry0 = (vb.north - rNorth) / latSpan * h;
+            var rx1 = (rEast - vb.west) / lonSpan * w;
+            var ry1 = (vb.north - rSouth) / latSpan * h;
+            var rw = rx1 - rx0, rh = ry1 - ry0;
+            if (rw > 0 && rh > 0) {
+                overlayCtx.globalAlpha = 0.7;
+                overlayCtx.drawImage(_satRadarImg, rx0, ry0, rw, rh);
+                overlayCtx.globalAlpha = 1.0;
             }
         }
 
@@ -2223,6 +2255,7 @@
         diagChartsInitialized = false;
         hovExtFrames = null; hovExtStormId = null; hovExtFetching = false;
         trackMetadata = null;
+        _satRemoveRadar();
         renderStormList();
         updateHash(atcfId);
 
@@ -2405,6 +2438,8 @@
                         if (irDone === 1) {
                             animIndex = idx;
                             hideLoader();
+                            // Deferred: search for nearby NEXRAD sites
+                            _satLoadRadarSites();
                         }
                         if (idx === 0) startBackfill();
                         renderBothPanels();
@@ -2683,7 +2718,26 @@
                 '<span class="sat-tb-sep"> / </span><span class="sat-tb-val">' + tbC + ' \u00B0C</span>';
         }
 
-        tooltip.innerHTML = valHtml +
+        // Append 88D radar readout if available
+        var radarHtml = '';
+        if (showRadar && _satRadarData && _satRadarBounds) {
+            var rb = _satRadarBounds;
+            var rS = rb[0][0], rW = rb[0][1], rN = rb[1][0], rE = rb[1][1];
+            if (lat >= rS && lat <= rN && lon >= rW && lon <= rE) {
+                var rfY = (rN - lat) / (rN - rS);
+                var rfX = (lon - rW) / (rE - rW);
+                var rRow = Math.min(Math.floor(rfY * _satRadarRows), _satRadarRows - 1);
+                var rCol = Math.min(Math.floor(rfX * _satRadarCols), _satRadarCols - 1);
+                var rv = _satRadarData[rRow * _satRadarCols + rCol];
+                if (rv > 0) {
+                    var rVal = _satRadarVmin + (rv - 1) * (_satRadarVmax - _satRadarVmin) / 254.0;
+                    radarHtml = '<span class="sat-tb-sep"> &nbsp; </span>' +
+                        '<span class="sat-tb-val" style="color:#86efac;">' + rVal.toFixed(1) + ' ' + _satRadarUnits + '</span>';
+                }
+            }
+        }
+
+        tooltip.innerHTML = valHtml + radarHtml +
             '<span class="sat-tb-sep"> &nbsp; </span>' +
             '<span class="sat-tb-coord">' + latStr + ', ' + lonStr + '</span>';
 
@@ -2903,6 +2957,244 @@
                 })
                 .catch(function () {});
         }, POLL_INTERVAL_MS);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // ── 88D NEXRAD RADAR OVERLAY ─────────────────────────────────
+    // ═══════════════════════════════════════════════════════════════
+
+    /**
+     * Search for nearby NEXRAD sites for the current storm.
+     */
+    function _satLoadRadarSites() {
+        if (!currentStorm || !currentStorm.lat || !currentStorm.lon) return;
+        if (currentStormId === _satRadarLastStormId && _satRadarSites) return;
+        _satRadarLastStormId = currentStormId;
+
+        var statusEl = document.getElementById('sat-radar-status');
+        var siteSelect = document.getElementById('sat-radar-site-select');
+        if (!siteSelect) return;
+
+        siteSelect.innerHTML = '<option value="">Searching...</option>';
+        if (statusEl) statusEl.textContent = '';
+
+        fetch(API_BASE + '/nexrad/sites?lat=' + currentStorm.lat + '&lon=' + currentStorm.lon + '&max_range_km=500', { cache: 'no-store' })
+            .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+            .then(function (json) {
+                _satRadarSites = json;
+                siteSelect.innerHTML = '';
+                if (!json.sites || json.sites.length === 0) {
+                    siteSelect.innerHTML = '<option value="">No nearby radars</option>';
+                    if (statusEl) statusEl.textContent = 'No 88D coverage';
+                    // Hide controls if no sites
+                    var ctrl = document.getElementById('sat-radar-controls');
+                    if (ctrl) ctrl.style.display = 'none';
+                    return;
+                }
+                for (var i = 0; i < json.sites.length; i++) {
+                    var s = json.sites[i];
+                    var opt = document.createElement('option');
+                    opt.value = s.site;
+                    opt.textContent = s.site + ' \u2014 ' + s.name + ' (' + s.distance_km + ' km)';
+                    siteSelect.appendChild(opt);
+                }
+                if (statusEl) statusEl.textContent = json.sites.length + ' site(s)';
+
+                // Auto-load if radar is toggled on
+                if (showRadar) _satLoadRadarScans();
+            })
+            .catch(function (e) {
+                siteSelect.innerHTML = '<option value="">Error</option>';
+                if (statusEl) statusEl.textContent = 'Error';
+            });
+    }
+
+    /**
+     * Load scans for the selected site near the current frame time.
+     */
+    window._satLoadRadarScans = function () {
+        var siteSelect = document.getElementById('sat-radar-site-select');
+        var scanSelect = document.getElementById('sat-radar-scan-select');
+        var status = document.getElementById('sat-radar-frame-status');
+        if (!siteSelect || !siteSelect.value || !scanSelect) return;
+
+        var site = siteSelect.value;
+        var refTime = (irFrames[animIndex] && irFrames[animIndex].datetime_utc) || null;
+        if (!refTime) { if (status) status.textContent = 'No frame time'; return; }
+
+        scanSelect.innerHTML = '<option value="">Loading...</option>';
+        if (status) status.textContent = 'Searching...';
+
+        fetch(API_BASE + '/nexrad/scans?site=' + encodeURIComponent(site) + '&datetime=' + encodeURIComponent(refTime) + '&window_min=90', { cache: 'no-store' })
+            .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+            .then(function (json) {
+                scanSelect.innerHTML = '';
+                if (!json.scans || json.scans.length === 0) {
+                    scanSelect.innerHTML = '<option value="">No scans</option>';
+                    if (status) status.textContent = 'No scans';
+                    return;
+                }
+                for (var i = 0; i < json.scans.length; i++) {
+                    var sc = json.scans[i];
+                    var opt = document.createElement('option');
+                    opt.value = sc.s3_key;
+                    opt.textContent = sc.scan_time + ' (\u0394' + Math.round(sc.delta_sec) + 's)';
+                    scanSelect.appendChild(opt);
+                }
+                if (status) status.textContent = json.scans.length + ' scan(s)';
+                var ci = json.closest_index || 0;
+                if (ci < scanSelect.options.length) scanSelect.selectedIndex = ci;
+                _satLoadRadarFrame();
+            })
+            .catch(function (e) {
+                scanSelect.innerHTML = '<option value="">Error</option>';
+                if (status) status.textContent = 'Error';
+            });
+    };
+
+    /**
+     * Load and display a NEXRAD radar frame as an image overlay on the canvas.
+     */
+    function _satLoadRadarFrame() {
+        var scanSelect = document.getElementById('sat-radar-scan-select');
+        var siteSelect = document.getElementById('sat-radar-site-select');
+        var prodSelect = document.getElementById('sat-radar-product-select');
+        var status = document.getElementById('sat-radar-frame-status');
+        if (!scanSelect || !scanSelect.value || !siteSelect || !siteSelect.value) return;
+
+        var s3Key = scanSelect.value;
+        var site = siteSelect.value;
+        _satRadarProduct = (prodSelect && prodSelect.value) || 'reflectivity';
+
+        if (status) status.textContent = 'Loading...';
+
+        var url = API_BASE + '/nexrad/frame?site=' + encodeURIComponent(site) +
+            '&s3_key=' + encodeURIComponent(s3Key) +
+            '&product=' + _satRadarProduct;
+
+        fetch(url, { cache: 'no-store' })
+            .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+            .then(function (json) {
+                if (!json.image || !json.bounds) {
+                    if (status) status.textContent = 'No data';
+                    return;
+                }
+
+                // Store hover data
+                if (json.data) {
+                    var raw = atob(json.data);
+                    _satRadarData = new Uint8Array(raw.length);
+                    for (var i = 0; i < raw.length; i++) _satRadarData[i] = raw.charCodeAt(i);
+                    _satRadarRows = json.data_rows;
+                    _satRadarCols = json.data_cols;
+                    _satRadarVmin = json.data_vmin;
+                    _satRadarVmax = json.data_vmax;
+                }
+                _satRadarBounds = json.bounds;
+                _satRadarUnits = json.units || 'dBZ';
+                _satRadarScanKey = json.s3_key || s3Key;
+
+                // Load image from data URI
+                var img = new Image();
+                img.onload = function () {
+                    _satRadarImg = img;
+                    renderBothPanels();
+                };
+                img.src = json.image;
+
+                if (status) status.textContent = json.site + ' ' + json.scan_time + ' \u2014 ' + json.label;
+                _satUpdateRadarColorbar();
+            })
+            .catch(function (e) {
+                if (status) status.textContent = 'Error: ' + e.message;
+            });
+    }
+    window._satLoadRadarFrame = _satLoadRadarFrame;
+
+    /**
+     * Toggle the 88D radar overlay on/off.
+     */
+    window._satToggleRadar = function () {
+        showRadar = !showRadar;
+        var cb = document.getElementById('sat-radar-toggle');
+        if (cb && cb.checked !== showRadar) cb.checked = showRadar;
+        var ctrl = document.getElementById('sat-radar-controls');
+        if (ctrl) ctrl.style.display = showRadar ? '' : 'none';
+
+        if (showRadar) {
+            // Fetch sites if not already loaded
+            _satLoadRadarSites();
+            var siteSelect = document.getElementById('sat-radar-site-select');
+            if (siteSelect && siteSelect.value) _satLoadRadarScans();
+        }
+        renderBothPanels();
+    };
+
+    /**
+     * Update the radar colorbar.
+     */
+    function _satUpdateRadarColorbar() {
+        var el = document.getElementById('sat-radar-colorbar');
+        if (!el) return;
+
+        if (_satRadarProduct === 'velocity') {
+            el.innerHTML =
+                '<div style="display:flex;height:6px;border-radius:2px;border:1px solid rgba(255,255,255,0.15);overflow:hidden;">' +
+                    '<div style="flex:1;background:#0000D0;"></div>' +
+                    '<div style="flex:1;background:#0050FF;"></div>' +
+                    '<div style="flex:1;background:#00C8FF;"></div>' +
+                    '<div style="flex:1;background:#00FF80;"></div>' +
+                    '<div style="flex:1;background:#80FF00;"></div>' +
+                    '<div style="flex:1;background:#FFFF00;"></div>' +
+                    '<div style="flex:1;background:#FF8000;"></div>' +
+                    '<div style="flex:1;background:#FF0000;"></div>' +
+                    '<div style="flex:1;background:#C80000;"></div>' +
+                '</div>' +
+                '<div style="display:flex;justify-content:space-between;font-size:7px;color:#94a3b8;margin-top:1px;">' +
+                    '<span>-50 m/s</span><span>0</span><span>+50 m/s</span>' +
+                '</div>';
+        } else {
+            el.innerHTML =
+                '<div style="display:flex;height:6px;border-radius:2px;border:1px solid rgba(255,255,255,0.15);overflow:hidden;">' +
+                    '<div style="flex:1;background:#04E9E7;"></div>' +
+                    '<div style="flex:1;background:#019FF4;"></div>' +
+                    '<div style="flex:1;background:#0300F4;"></div>' +
+                    '<div style="flex:1;background:#02FD02;"></div>' +
+                    '<div style="flex:1;background:#01C501;"></div>' +
+                    '<div style="flex:1;background:#008E00;"></div>' +
+                    '<div style="flex:1;background:#FDF802;"></div>' +
+                    '<div style="flex:1;background:#E5BC00;"></div>' +
+                    '<div style="flex:1;background:#FD9500;"></div>' +
+                    '<div style="flex:1;background:#FD0000;"></div>' +
+                    '<div style="flex:1;background:#D40000;"></div>' +
+                    '<div style="flex:1;background:#BC0000;"></div>' +
+                    '<div style="flex:1;background:#F800FD;"></div>' +
+                    '<div style="flex:1;background:#9854C6;"></div>' +
+                '</div>' +
+                '<div style="display:flex;justify-content:space-between;font-size:7px;color:#94a3b8;margin-top:1px;">' +
+                    '<span>5 dBZ</span><span>35</span><span>65</span>' +
+                '</div>';
+        }
+    }
+
+    /**
+     * Clean up radar overlay state (called on storm change).
+     */
+    function _satRemoveRadar() {
+        _satRadarImg = null;
+        _satRadarBounds = null;
+        _satRadarData = null;
+        _satRadarSites = null;
+        _satRadarLastStormId = null;
+        _satRadarScanKey = null;
+        var ctrl = document.getElementById('sat-radar-controls');
+        if (ctrl) ctrl.style.display = 'none';
+        var siteSelect = document.getElementById('sat-radar-site-select');
+        if (siteSelect) siteSelect.innerHTML = '';
+        var scanSelect = document.getElementById('sat-radar-scan-select');
+        if (scanSelect) scanSelect.innerHTML = '';
+        var status = document.getElementById('sat-radar-frame-status');
+        if (status) status.textContent = '';
     }
 
     // ── Init ────────────────────────────────────────────────────

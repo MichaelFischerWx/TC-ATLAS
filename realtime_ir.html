@@ -334,6 +334,39 @@
                     </div>
                 </div>
 
+                <!-- WSR-88D NEXRAD Radar Overlay -->
+                <div class="ir-info-section" id="rt-radar-section" style="display:none;">
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                        <h3 class="ir-info-heading" style="margin-bottom:0;padding-bottom:0;border-bottom:none;">88D Radar</h3>
+                        <div style="display:flex;align-items:center;gap:6px;">
+                            <button id="rt-radar-toggle-btn" onclick="window._rtToggleRadarOverlay()"
+                                class="rt-model-toggle-btn">88D</button>
+                            <span id="rt-radar-status" style="font-size:0.68rem;color:#64748b;"></span>
+                        </div>
+                    </div>
+                    <div id="rt-radar-controls" style="display:none;">
+                        <div class="rt-model-controls-inner">
+                            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
+                                <label style="font-size:10px;font-weight:600;color:#86efac;text-transform:uppercase;letter-spacing:0.5px;">Site</label>
+                                <select id="rt-radar-site-select" onchange="window._rtLoadRadarScans()"
+                                    class="rt-model-cycle-select" style="min-width:140px;"></select>
+                            </div>
+                            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
+                                <label style="font-size:10px;font-weight:600;color:#86efac;text-transform:uppercase;letter-spacing:0.5px;">Scan</label>
+                                <select id="rt-radar-scan-select" onchange="window._rtLoadRadarFrame()"
+                                    class="rt-model-cycle-select" style="min-width:160px;"></select>
+                                <select id="rt-radar-product-select" onchange="window._rtLoadRadarFrame()"
+                                    class="rt-model-cycle-select">
+                                    <option value="reflectivity">Reflectivity</option>
+                                    <option value="velocity">Velocity</option>
+                                </select>
+                            </div>
+                            <span id="rt-radar-frame-status" style="font-size:9px;color:#64748b;display:block;margin-bottom:4px;"></span>
+                            <div id="rt-radar-colorbar"></div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- DeepMind Intensity Distribution (1000 members) -->
                 <div class="ir-info-section" id="rt-dm-intensity-dist" style="display:none;">
                     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
@@ -458,6 +491,37 @@
                     <input type="checkbox" id="sat-follow-toggle">
                     Follow Storm (5°/2°)
                 </label>
+            </div>
+            <div class="sat-sidebar-section sat-crosshair-toggle">
+                <label class="sat-checkbox-label">
+                    <input type="checkbox" id="sat-radar-toggle" onchange="window._satToggleRadar()">
+                    88D Radar Overlay
+                </label>
+                <div id="sat-radar-controls" style="display:none;margin-top:6px;">
+                    <div style="display:flex;flex-direction:column;gap:4px;">
+                        <div style="display:flex;align-items:center;gap:4px;">
+                            <label style="font-size:9px;color:#86efac;min-width:28px;">Site</label>
+                            <select id="sat-radar-site-select" onchange="window._satLoadRadarScans()"
+                                style="flex:1;font-size:9px;padding:2px 4px;border:1px solid rgba(255,255,255,0.12);border-radius:3px;background:#0f172a;color:#e2e8f0;font-family:'JetBrains Mono',monospace;"></select>
+                        </div>
+                        <div style="display:flex;align-items:center;gap:4px;">
+                            <label style="font-size:9px;color:#86efac;min-width:28px;">Scan</label>
+                            <select id="sat-radar-scan-select" onchange="window._satLoadRadarFrame()"
+                                style="flex:1;font-size:9px;padding:2px 4px;border:1px solid rgba(255,255,255,0.12);border-radius:3px;background:#0f172a;color:#e2e8f0;font-family:'JetBrains Mono',monospace;"></select>
+                        </div>
+                        <div style="display:flex;align-items:center;gap:4px;">
+                            <label style="font-size:9px;color:#86efac;min-width:28px;">Prod</label>
+                            <select id="sat-radar-product-select" onchange="window._satLoadRadarFrame()"
+                                style="font-size:9px;padding:2px 4px;border:1px solid rgba(255,255,255,0.12);border-radius:3px;background:#0f172a;color:#e2e8f0;font-family:'JetBrains Mono',monospace;">
+                                <option value="reflectivity">Reflectivity</option>
+                                <option value="velocity">Velocity</option>
+                            </select>
+                            <span id="sat-radar-status" style="font-size:8px;color:#64748b;"></span>
+                        </div>
+                        <span id="sat-radar-frame-status" style="font-size:8px;color:#64748b;"></span>
+                        <div id="sat-radar-colorbar"></div>
+                    </div>
+                </div>
             </div>
             <div class="sat-sidebar-section">
                 <label>Right Panel</label>

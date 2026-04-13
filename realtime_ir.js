@@ -619,6 +619,20 @@
     var _rtAscatLastAtcf = null;       // last storm we fetched passes for
     var _rtAscatActiveUrl = null;      // currently displayed pass data URL
 
+    // ── 88D NEXRAD Radar Overlay State ───────────────────────
+    var _rtRadarVisible = false;       // overlay toggle state
+    var _rtRadarMapOverlay = null;     // L.imageOverlay on map
+    var _rtRadarData = null;           // raw uint8 hover data
+    var _rtRadarRows = 0;
+    var _rtRadarCols = 0;
+    var _rtRadarVmin = -32;
+    var _rtRadarVmax = 95;
+    var _rtRadarBounds = null;         // L.latLngBounds
+    var _rtRadarUnits = 'dBZ';
+    var _rtRadarLastAtcf = null;       // last storm we fetched sites for
+    var _rtRadarUpdateTimer = null;    // throttle timer for frame-sync
+    var _rtRadarLastFrameTime = null;  // last frame time we searched scans for
+
     // ── IR Center Fix State ────────────────────────────────
     var _irCenterMarker = null;        // L.marker for IR-derived center crosshair
     var _irCenterFixBadge = null;      // DOM element for info badge
@@ -2433,6 +2447,7 @@
         _rtLoadWeatherlab(storm);
         _rtLoadDmEnsemble(storm);
         _rtLoadAscatPasses(storm);
+        _rtLoadRadarSites(storm);
 
         // Intensity chart: check cache first
         var atcfId = storm.atcf_id;
@@ -2611,6 +2626,11 @@
         detailMap.createPane('ascatPane');
         detailMap.getPane('ascatPane').style.zIndex = 440;
         detailMap.getPane('ascatPane').style.pointerEvents = 'none';
+
+        // 88D NEXRAD radar pane — above ASCAT, below coastlines
+        detailMap.createPane('radarPane');
+        detailMap.getPane('radarPane').style.zIndex = 445;
+        detailMap.getPane('radarPane').style.pointerEvents = 'none';
 
         // Labels on top (in overlay pane so above IR tiles)
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {
@@ -2857,6 +2877,7 @@
         // Clean up model overlay
         _rtRemoveModelOverlay();
         _rtRemoveAscatOverlay();
+        _rtRemoveRadarOverlay();
         _clearIRCenterFix();
 
         // Reset product state
@@ -2947,6 +2968,9 @@
         if (_rtModelVisible && _rtModelAutoSync && _rtModelData) {
             _rtSyncModelCycleToIR();
         }
+
+        // Sync radar overlay scan to new frame time
+        _rtUpdateRadarForFrame();
     }
 
     // ── IR Center Fix Marker ────────────────────────────────
@@ -3789,6 +3813,13 @@
                    '<span class="ir-tb-val">' + tbC + ' \u00B0C</span>' +
                    '<span class="ir-tb-sep"> &nbsp; </span>' +
                    '<span class="ir-tb-coord">' + latStr + ', ' + lngStr + '</span>';
+
+        // Append 88D radar readout if available
+        var radarHit = _rtHandleRadarMouseMove(e);
+        if (radarHit) {
+            html += '<span class="ir-tb-sep"> &nbsp; </span>' +
+                    '<span class="ir-tb-val" style="color:#86efac;">' + radarHit.value + ' ' + radarHit.units + '</span>';
+        }
 
         _rtTbTooltip.setLatLng(e.latlng).setContent(html);
         if (!detailMap.hasLayer(_rtTbTooltip)) _rtTbTooltip.openOn(detailMap);
@@ -6729,6 +6760,345 @@
         if (controls) controls.style.display = 'none';
         var section = document.getElementById('rt-ascat-section');
         if (section) section.style.display = 'none';
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // ── 88D NEXRAD RADAR OVERLAY ─────────────────────────────────
+    // ═══════════════════════════════════════════════════════════════
+
+    /**
+     * Search for nearby NEXRAD sites for the current storm.
+     * Called from _triggerDeferredLoads() after IR frames load.
+     */
+    function _rtLoadRadarSites(storm) {
+        var section = document.getElementById('rt-radar-section');
+        var statusEl = document.getElementById('rt-radar-status');
+        var siteSelect = document.getElementById('rt-radar-site-select');
+        var atcfId = storm.atcf_id;
+        if (!atcfId || !siteSelect) {
+            if (section) section.style.display = 'none';
+            return;
+        }
+
+        // Skip if already loaded for this storm
+        if (atcfId === _rtRadarLastAtcf) {
+            if (section) section.style.display = '';
+            return;
+        }
+        _rtRadarLastAtcf = atcfId;
+
+        var lat = storm.lat;
+        var lon = storm.lon;
+        if (!lat || !lon) {
+            if (section) section.style.display = 'none';
+            return;
+        }
+
+        if (statusEl) statusEl.textContent = 'Searching...';
+        if (section) section.style.display = '';
+        siteSelect.innerHTML = '<option value="">Searching...</option>';
+
+        fetch(API_BASE + '/nexrad/sites?lat=' + lat + '&lon=' + lon + '&max_range_km=500', { cache: 'no-store' })
+            .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+            .then(function (json) {
+                siteSelect.innerHTML = '';
+                if (!json.sites || json.sites.length === 0) {
+                    siteSelect.innerHTML = '<option value="">No nearby radars</option>';
+                    if (statusEl) statusEl.textContent = 'No 88D coverage';
+                    return;
+                }
+                for (var i = 0; i < json.sites.length; i++) {
+                    var s = json.sites[i];
+                    var opt = document.createElement('option');
+                    opt.value = s.site;
+                    opt.textContent = s.site + ' \u2014 ' + s.name + ' (' + s.distance_km + ' km)';
+                    siteSelect.appendChild(opt);
+                }
+                if (statusEl) statusEl.textContent = json.sites.length + ' site(s)';
+
+                // Auto-trigger scan search if radar is already visible
+                if (_rtRadarVisible) window._rtLoadRadarScans();
+            })
+            .catch(function (e) {
+                siteSelect.innerHTML = '<option value="">Error</option>';
+                if (statusEl) statusEl.textContent = 'Error: ' + e.message;
+            });
+    }
+
+    /**
+     * Load available NEXRAD scans for the selected site near the current IR frame time.
+     */
+    window._rtLoadRadarScans = function () {
+        var siteSelect = document.getElementById('rt-radar-site-select');
+        var scanSelect = document.getElementById('rt-radar-scan-select');
+        var status = document.getElementById('rt-radar-frame-status');
+        if (!siteSelect || !scanSelect || !siteSelect.value) return;
+
+        var site = siteSelect.value;
+
+        // Use current IR frame time as reference
+        var refTime = null;
+        if (animFrameTimes && animFrameTimes.length > 0 && animIndex >= 0) {
+            refTime = animFrameTimes[animIndex];
+        }
+        if (!refTime) {
+            if (status) status.textContent = 'No frame time';
+            return;
+        }
+
+        _rtRadarLastFrameTime = refTime;
+        scanSelect.innerHTML = '<option value="">Loading...</option>';
+        if (status) status.textContent = 'Searching...';
+
+        fetch(API_BASE + '/nexrad/scans?site=' + encodeURIComponent(site) + '&datetime=' + encodeURIComponent(refTime) + '&window_min=90', { cache: 'no-store' })
+            .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+            .then(function (json) {
+                scanSelect.innerHTML = '';
+                if (!json.scans || json.scans.length === 0) {
+                    scanSelect.innerHTML = '<option value="">No scans found</option>';
+                    if (status) status.textContent = 'No scans';
+                    return;
+                }
+                for (var i = 0; i < json.scans.length; i++) {
+                    var sc = json.scans[i];
+                    var opt = document.createElement('option');
+                    opt.value = sc.s3_key;
+                    opt.textContent = sc.scan_time + ' (\u0394' + Math.round(sc.delta_sec) + 's)';
+                    scanSelect.appendChild(opt);
+                }
+                if (status) status.textContent = json.scans.length + ' scan(s)';
+
+                // Pre-select closest scan
+                var ci = json.closest_index || 0;
+                if (ci < scanSelect.options.length) scanSelect.selectedIndex = ci;
+
+                // Auto-load closest scan
+                window._rtLoadRadarFrame();
+            })
+            .catch(function (e) {
+                scanSelect.innerHTML = '<option value="">Error</option>';
+                if (status) status.textContent = 'Error: ' + e.message;
+            });
+    };
+
+    /**
+     * Load and display a NEXRAD radar frame on the detail map.
+     */
+    window._rtLoadRadarFrame = function () {
+        var scanSelect = document.getElementById('rt-radar-scan-select');
+        var siteSelect = document.getElementById('rt-radar-site-select');
+        var prodSelect = document.getElementById('rt-radar-product-select');
+        var status = document.getElementById('rt-radar-frame-status');
+        if (!scanSelect || !scanSelect.value || !siteSelect || !siteSelect.value) return;
+
+        var s3Key = scanSelect.value;
+        var site = siteSelect.value;
+        var product = (prodSelect && prodSelect.value) || 'reflectivity';
+
+        if (status) status.textContent = 'Loading ' + product + '...';
+
+        var url = API_BASE + '/nexrad/frame?site=' + encodeURIComponent(site) +
+            '&s3_key=' + encodeURIComponent(s3Key) +
+            '&product=' + product;
+
+        fetch(url, { cache: 'no-store' })
+            .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+            .then(function (json) {
+                if (!json.image || !json.bounds) {
+                    if (status) status.textContent = 'No data returned';
+                    return;
+                }
+
+                var bounds = L.latLngBounds(
+                    L.latLng(json.bounds[0][0], json.bounds[0][1]),
+                    L.latLng(json.bounds[1][0], json.bounds[1][1])
+                );
+
+                // Store hover data
+                if (json.data) {
+                    var raw = atob(json.data);
+                    _rtRadarData = new Uint8Array(raw.length);
+                    for (var i = 0; i < raw.length; i++) _rtRadarData[i] = raw.charCodeAt(i);
+                    _rtRadarRows = json.data_rows;
+                    _rtRadarCols = json.data_cols;
+                    _rtRadarVmin = json.data_vmin;
+                    _rtRadarVmax = json.data_vmax;
+                }
+                _rtRadarBounds = bounds;
+                _rtRadarUnits = json.units || 'dBZ';
+
+                // Remove previous overlay
+                if (_rtRadarMapOverlay && detailMap) {
+                    detailMap.removeLayer(_rtRadarMapOverlay);
+                }
+                _rtRadarMapOverlay = L.imageOverlay(json.image, bounds, {
+                    opacity: 0.75, interactive: false, pane: 'radarPane'
+                });
+                if (_rtRadarVisible && detailMap) _rtRadarMapOverlay.addTo(detailMap);
+
+                if (status) status.textContent = json.site + ' ' + json.scan_time + ' \u2014 ' + json.label + ' (tilt ' + json.tilt + '\u00B0)';
+
+                // Update colorbar
+                _rtUpdateRadarColorbar(product);
+            })
+            .catch(function (e) {
+                if (status) status.textContent = 'Error: ' + e.message;
+            });
+    };
+
+    /**
+     * Toggle the 88D radar overlay on/off.
+     */
+    window._rtToggleRadarOverlay = function () {
+        var btn = document.getElementById('rt-radar-toggle-btn');
+        var controls = document.getElementById('rt-radar-controls');
+
+        if (_rtRadarVisible) {
+            _rtRadarVisible = false;
+            if (btn) btn.textContent = '88D';
+            if (controls) controls.style.display = 'none';
+            if (_rtRadarMapOverlay && detailMap) detailMap.removeLayer(_rtRadarMapOverlay);
+            return;
+        }
+
+        _rtRadarVisible = true;
+        if (btn) btn.textContent = 'Hide 88D';
+        if (controls) controls.style.display = '';
+
+        // If overlay already loaded, just show it
+        if (_rtRadarMapOverlay && detailMap) _rtRadarMapOverlay.addTo(detailMap);
+
+        // Load scans for currently selected site
+        var siteSelect = document.getElementById('rt-radar-site-select');
+        if (siteSelect && siteSelect.value) {
+            window._rtLoadRadarScans();
+        }
+    };
+
+    /**
+     * Re-search scans when IR frame changes (throttled).
+     * Called from showFrame().
+     */
+    function _rtUpdateRadarForFrame() {
+        if (!_rtRadarVisible) return;
+
+        var refTime = (animFrameTimes && animFrameTimes.length > 0 && animIndex >= 0)
+            ? animFrameTimes[animIndex] : null;
+        if (!refTime || refTime === _rtRadarLastFrameTime) return;
+
+        if (_rtRadarUpdateTimer) clearTimeout(_rtRadarUpdateTimer);
+        _rtRadarUpdateTimer = setTimeout(function () {
+            window._rtLoadRadarScans();
+        }, 500);
+    }
+
+    /**
+     * Handle hover readout for NEXRAD radar data on the RT monitor.
+     * Returns { value, units } or null.
+     */
+    function _rtHandleRadarMouseMove(e) {
+        if (!_rtRadarVisible || !_rtRadarData || !_rtRadarBounds || !detailMap) return null;
+
+        var lat = e.latlng.lat;
+        var lng = e.latlng.lng;
+        var b = _rtRadarBounds;
+
+        if (lat < b.getSouth() || lat > b.getNorth() ||
+            lng < b.getWest() || lng > b.getEast()) {
+            return null;
+        }
+
+        // Mercator-corrected interpolation
+        function _latToMercY(d) {
+            var r = d * Math.PI / 180;
+            return Math.log(Math.tan(Math.PI / 4 + r / 2));
+        }
+        var mercNorth = _latToMercY(b.getNorth());
+        var mercSouth = _latToMercY(b.getSouth());
+        var mercLat   = _latToMercY(lat);
+        var fracY = (mercNorth - mercLat) / (mercNorth - mercSouth);
+        var fracX = (lng - b.getWest()) / (b.getEast() - b.getWest());
+        var row = Math.min(Math.floor(fracY * _rtRadarRows), _rtRadarRows - 1);
+        var col = Math.min(Math.floor(fracX * _rtRadarCols), _rtRadarCols - 1);
+
+        var rawVal = _rtRadarData[row * _rtRadarCols + col];
+        if (rawVal === 0) return null;
+
+        var val = _rtRadarVmin + (rawVal - 1) * (_rtRadarVmax - _rtRadarVmin) / 254.0;
+        return { value: val.toFixed(1), units: _rtRadarUnits };
+    }
+
+    /**
+     * Update the 88D colorbar in the RT radar controls.
+     */
+    function _rtUpdateRadarColorbar(product) {
+        var el = document.getElementById('rt-radar-colorbar');
+        if (!el) return;
+
+        if (product === 'velocity') {
+            el.innerHTML =
+                '<div style="display:flex;height:8px;border-radius:3px;border:1px solid rgba(255,255,255,0.15);overflow:hidden;">' +
+                    '<div style="flex:1;background:#0000D0;"></div>' +
+                    '<div style="flex:1;background:#0050FF;"></div>' +
+                    '<div style="flex:1;background:#00C8FF;"></div>' +
+                    '<div style="flex:1;background:#00FF80;"></div>' +
+                    '<div style="flex:1;background:#80FF00;"></div>' +
+                    '<div style="flex:1;background:#FFFF00;"></div>' +
+                    '<div style="flex:1;background:#FF8000;"></div>' +
+                    '<div style="flex:1;background:#FF0000;"></div>' +
+                    '<div style="flex:1;background:#C80000;"></div>' +
+                '</div>' +
+                '<div style="display:flex;justify-content:space-between;font-size:8px;color:#94a3b8;margin-top:1px;">' +
+                    '<span>-50 m/s</span><span>0</span><span>+50 m/s</span>' +
+                '</div>';
+        } else {
+            el.innerHTML =
+                '<div style="display:flex;height:8px;border-radius:3px;border:1px solid rgba(255,255,255,0.15);overflow:hidden;">' +
+                    '<div style="flex:1;background:#04E9E7;"></div>' +
+                    '<div style="flex:1;background:#019FF4;"></div>' +
+                    '<div style="flex:1;background:#0300F4;"></div>' +
+                    '<div style="flex:1;background:#02FD02;"></div>' +
+                    '<div style="flex:1;background:#01C501;"></div>' +
+                    '<div style="flex:1;background:#008E00;"></div>' +
+                    '<div style="flex:1;background:#FDF802;"></div>' +
+                    '<div style="flex:1;background:#E5BC00;"></div>' +
+                    '<div style="flex:1;background:#FD9500;"></div>' +
+                    '<div style="flex:1;background:#FD0000;"></div>' +
+                    '<div style="flex:1;background:#D40000;"></div>' +
+                    '<div style="flex:1;background:#BC0000;"></div>' +
+                    '<div style="flex:1;background:#F800FD;"></div>' +
+                    '<div style="flex:1;background:#9854C6;"></div>' +
+                '</div>' +
+                '<div style="display:flex;justify-content:space-between;font-size:8px;color:#94a3b8;margin-top:1px;">' +
+                    '<span>5 dBZ</span><span>20</span><span>35</span><span>50</span><span>65</span>' +
+                '</div>';
+        }
+    }
+
+    /**
+     * Full radar overlay cleanup (called when switching/closing storms).
+     */
+    function _rtRemoveRadarOverlay() {
+        if (_rtRadarMapOverlay && detailMap) {
+            detailMap.removeLayer(_rtRadarMapOverlay);
+            _rtRadarMapOverlay = null;
+        }
+        _rtRadarData = null;
+        _rtRadarBounds = null;
+        _rtRadarVisible = false;
+        _rtRadarLastAtcf = null;
+        _rtRadarLastFrameTime = null;
+        if (_rtRadarUpdateTimer) { clearTimeout(_rtRadarUpdateTimer); _rtRadarUpdateTimer = null; }
+        var btn = document.getElementById('rt-radar-toggle-btn');
+        if (btn) btn.textContent = '88D';
+        var controls = document.getElementById('rt-radar-controls');
+        if (controls) controls.style.display = 'none';
+        var section = document.getElementById('rt-radar-section');
+        if (section) section.style.display = 'none';
+        var siteSelect = document.getElementById('rt-radar-site-select');
+        if (siteSelect) siteSelect.innerHTML = '';
+        var scanSelect = document.getElementById('rt-radar-scan-select');
+        if (scanSelect) scanSelect.innerHTML = '';
     }
 
     /**
