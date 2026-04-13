@@ -1480,15 +1480,10 @@
             }];
         }
 
-        // Force newPlot when lookback changes to reset Y-axis range;
-        // use react for same-lookback updates (e.g. frame scrubbing).
-        var prevLookback = div._hovLookback || 0;
-        if (div.data && prevLookback === hovLookbackHours) {
-            Plotly.react(div, traces, layout, DIAG_CONFIG);
-        } else {
-            Plotly.newPlot(div, traces, layout, DIAG_CONFIG);
-        }
-        div._hovLookback = hovLookbackHours;
+        // Purge and re-create the plot to ensure Plotly picks up new
+        // Y-axis range when lookback changes (react can pin old range).
+        Plotly.purge(div);
+        Plotly.newPlot(div, traces, layout, DIAG_CONFIG);
     }
 
     function renderDiagnostics() {
