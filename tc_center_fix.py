@@ -22,7 +22,7 @@ def find_ir_center(
     center_lon,
     core_dist_km=50.0,
     eye_radius_km=10.0,
-    search_radius_km=80.0,
+    search_radius_km=150.0,
     refine_radius_km=20.0,
     max_iterations=10,
     min_ir_rad_dif=10.0,
