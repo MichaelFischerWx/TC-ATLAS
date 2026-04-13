@@ -3388,6 +3388,9 @@
     function _prefetchAllStormsBand(storms) {
         if (!storms || storms.length === 0) return;
         if (currentStormId) return;
+        // Defer band prefetch if the satellite viewer is active (it has its own fetches)
+        var satMain = document.getElementById('sat-main');
+        if (satMain && satMain.style.display !== 'none') return;
         var band = DEFAULT_PREFETCH_BAND;
         var sorted = storms.slice().sort(function (a, b) {
             return (b.vmax_kt || 0) - (a.vmax_kt || 0);
