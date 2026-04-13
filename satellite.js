@@ -751,16 +751,6 @@
             cctx.fillText('88D: ' + radarInfo, 8, 36);
         }
 
-        cctx.font = '13px sans-serif';
-        cctx.fillStyle = '#94a3b8';
-        cctx.fillText('Enhanced IR', 8, headerH + 16);
-        if (viewMode === 'compare-wv' || viewMode === 'compare-vis') {
-            var rightLabel = rightBand === 2 ? 'Visible' : 'Water Vapor';
-            cctx.fillText(rightLabel, pw + gap + 8, headerH + 16);
-        } else if (viewMode === 'asymmetry') {
-            cctx.fillText('IR Asymmetry (WN-1)', pw + gap + 8, headerH + 16);
-        }
-
         cctx.drawImage(canvasIR, 0, headerH, pw, ph);
         if (overlayIR) cctx.drawImage(overlayIR, 0, headerH, pw, ph);
 
@@ -770,6 +760,23 @@
         } else if ((viewMode === 'compare-wv' || viewMode === 'compare-vis') && canvasRight && canvasRight.width > 0) {
             cctx.drawImage(canvasRight, pw + gap, headerH, pw, ph);
             if (overlayRight) cctx.drawImage(overlayRight, pw + gap, headerH, pw, ph);
+        }
+
+        // Panel labels (drawn ON TOP of images with background pill)
+        function _drawPanelLabel(text, x, y) {
+            cctx.font = '13px sans-serif';
+            var tw = cctx.measureText(text).width;
+            cctx.fillStyle = 'rgba(10, 12, 18, 0.7)';
+            cctx.fillRect(x, y - 13, tw + 10, 18);
+            cctx.fillStyle = '#e2e8f0';
+            cctx.fillText(text, x + 5, y);
+        }
+        _drawPanelLabel('Enhanced IR', 4, headerH + 16);
+        if (viewMode === 'compare-wv' || viewMode === 'compare-vis') {
+            var rightLabel = rightBand === 2 ? 'Visible (Band 2)' : 'Water Vapor (Band 8)';
+            _drawPanelLabel(rightLabel, pw + gap + 4, headerH + 16);
+        } else if (viewMode === 'asymmetry') {
+            _drawPanelLabel('IR Asymmetry (WN-1)', pw + gap + 4, headerH + 16);
         }
 
         var cbY = headerH + ph + 4;
@@ -860,12 +867,6 @@
                         cctx.fillText('88D: ' + radarInfo, 8, 36);
                     }
 
-                    // Panel labels
-                    cctx.font = '13px sans-serif';
-                    cctx.fillStyle = '#94a3b8';
-                    cctx.fillText('Enhanced IR', 8, headerH + 16);
-                    cctx.fillText('Tb Hovmoller (' + hovLookbackHours + 'h)', pw + gap + 8, headerH + 16);
-
                     // IR frame + overlay
                     cctx.drawImage(canvasIR, 0, headerH, pw, ph);
                     if (overlayIR) cctx.drawImage(overlayIR, 0, headerH, pw, ph);
@@ -877,6 +878,18 @@
 
                     // Hovmoller chart image
                     cctx.drawImage(hovImg, pw + gap, headerH, hovW, hovH);
+
+                    // Panel labels (on top of images)
+                    function _hovLabel(text, x, y) {
+                        cctx.font = '13px sans-serif';
+                        var tw2 = cctx.measureText(text).width;
+                        cctx.fillStyle = 'rgba(10, 12, 18, 0.7)';
+                        cctx.fillRect(x, y - 13, tw2 + 10, 18);
+                        cctx.fillStyle = '#e2e8f0';
+                        cctx.fillText(text, x + 5, y);
+                    }
+                    _hovLabel('Enhanced IR', 4, headerH + 16);
+                    _hovLabel('Tb Hovmoller (' + hovLookbackHours + 'h)', pw + gap + 4, headerH + 16);
 
                     // Watermark
                     cctx.fillStyle = 'rgba(255,255,255,0.25)';
