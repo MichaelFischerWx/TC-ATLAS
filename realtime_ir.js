@@ -1445,7 +1445,7 @@
      *      oldest: ts }    // oldest across all sats (safe for animation)
      */
     function findLatestGIBSTimes() {
-        var offsets = [15, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120];
+        var ALL_OFFSETS = [15, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120];
         // Representative tiles for each satellite (z3 tiles within each footprint)
         var satellites = [
             { name: 'GOES-East', layer: GIBS_IR_LAYERS['GOES-East'], suffix: '/GoogleMapsCompatible_Level6/3/3/2.png' },
@@ -1453,9 +1453,37 @@
             { name: 'Himawari',  layer: GIBS_IR_LAYERS['Himawari'],  suffix: '/GoogleMapsCompatible_Level6/3/3/6.png' }
         ];
 
-        var PROBE_BATCH = 4;  // probe 4 offsets in parallel per batch
+        var PROBE_BATCH = 6;  // probe 6 offsets in parallel per batch
+        var GIBS_HINT_KEY = 'tc-atlas-gibs-offsets';
+
+        // Reorder offsets to start from the last-known good offset (sessionStorage hint).
+        // This lets repeat visits and poll refreshes converge in a single batch.
+        function getOffsetsForSat(satName) {
+            try {
+                var hints = JSON.parse(sessionStorage.getItem(GIBS_HINT_KEY) || '{}');
+                var lastOffset = hints[satName];
+                if (lastOffset && ALL_OFFSETS.indexOf(lastOffset) !== -1) {
+                    // Put the hint and its neighbors first, then the rest
+                    var idx = ALL_OFFSETS.indexOf(lastOffset);
+                    var start = Math.max(0, idx - 1);
+                    var priority = ALL_OFFSETS.slice(start, idx + 2);
+                    var rest = ALL_OFFSETS.filter(function (o) { return priority.indexOf(o) === -1; });
+                    return priority.concat(rest);
+                }
+            } catch (e) { /* sessionStorage unavailable */ }
+            return ALL_OFFSETS.slice();
+        }
+
+        function saveOffsetHint(satName, offset) {
+            try {
+                var hints = JSON.parse(sessionStorage.getItem(GIBS_HINT_KEY) || '{}');
+                hints[satName] = offset;
+                sessionStorage.setItem(GIBS_HINT_KEY, JSON.stringify(hints));
+            } catch (e) { /* ignore */ }
+        }
 
         function findTimeForSat(sat) {
+            var offsets = getOffsetsForSat(sat.name);
             function tryBatch(startIdx) {
                 if (startIdx >= offsets.length) {
                     // All failed — fall back to 90 min ago
@@ -1483,7 +1511,10 @@
                             best = results[i];
                         }
                     }
-                    if (best) return best.ts;
+                    if (best) {
+                        saveOffsetHint(sat.name, best.offset);
+                        return best.ts;
+                    }
                     // None in this batch succeeded — try next batch
                     return tryBatch(startIdx + PROBE_BATCH);
                 });
@@ -3251,16 +3282,37 @@
     }
 
     // ── Raw Tb pre-fetch cache (per-storm, keyed by ATCF ID) ──
-    var _rawTbCache = {};  // { atcfId: { rawTbFrames: [...], cachedAt: ms } }
+    // Each entry also stores the storm lat/lon at cache time so we can
+    // invalidate when the storm moves significantly (> 0.3 deg ≈ 33 km).
+    var _rawTbCache = {};  // { atcfId: { rawTbFrames: [...], cachedAt: ms, lat: n, lon: n } }
     var RAW_TB_CACHE_TTL_MS = POLL_INTERVAL_MS;  // invalidate after one poll cycle
+    var RAW_TB_CACHE_MOVE_DEG = 0.3;  // invalidate if storm moved more than this
+
+    function _stormPositionForId(stormId) {
+        for (var i = 0; i < stormData.length; i++) {
+            if (stormData[i].atcf_id === stormId) return stormData[i];
+        }
+        return null;
+    }
+
+    function _rawTbCacheValid(stormId) {
+        var cached = _rawTbCache[stormId];
+        if (!cached || !cached.rawTbFrames || cached.rawTbFrames.length === 0) return false;
+        if ((Date.now() - cached.cachedAt) >= RAW_TB_CACHE_TTL_MS) return false;
+        // Invalidate if storm has moved significantly since cache time
+        if (cached.lat != null) {
+            var s = _stormPositionForId(stormId);
+            if (s && (Math.abs(s.lat - cached.lat) > RAW_TB_CACHE_MOVE_DEG ||
+                      Math.abs(s.lon - cached.lon) > RAW_TB_CACHE_MOVE_DEG)) {
+                return false;
+            }
+        }
+        return true;
+    }
 
     // Expose cached raw Tb frames for the satellite viewer to reuse
     window.getRtRawTbFrames = function (stormId) {
-        var cached = _rawTbCache[stormId];
-        if (cached && (Date.now() - cached.cachedAt) < RAW_TB_CACHE_TTL_MS) {
-            return cached.rawTbFrames;
-        }
-        return null;
+        return _rawTbCacheValid(stormId) ? _rawTbCache[stormId].rawTbFrames : null;
     };
 
     /**
@@ -3293,8 +3345,7 @@
             if (currentStormId) return;
             var storm = queue.shift();
             var atcfId = storm.atcf_id;
-            var cached = _rawTbCache[atcfId];
-            if (!atcfId || (cached && (Date.now() - cached.cachedAt) < RAW_TB_CACHE_TTL_MS)) { fetchNext(); return; }
+            if (!atcfId || _rawTbCacheValid(atcfId)) { fetchNext(); return; }
             _fetchRawTbIncremental(atcfId, true, function () {
                 console.log('[IR Pre-fetch] ' + atcfId + ': done (' +
                     ((_rawTbCache[atcfId] || {}).rawTbFrames || []).length + ' frames)');
@@ -3323,20 +3374,29 @@
      * @param {boolean} silent - if true, don't update loading UI
      * @param {function} onComplete - called when all frames are loaded
      */
+    // Active AbortController for the current raw Tb fetch batch —
+    // aborted when the user switches storms to cancel in-flight requests.
+    var _rawTbAbortController = null;
+
     function _fetchRawTbIncremental(stormId, silent, onComplete) {
         if (!stormId) return;
 
-        // Use cache if available and not expired
-        var cached = _rawTbCache[stormId];
-        if (cached && cached.rawTbFrames && cached.rawTbFrames.length > 0 &&
-            (Date.now() - cached.cachedAt) < RAW_TB_CACHE_TTL_MS) {
+        // Use cache if available, not expired, and storm hasn't moved
+        if (_rawTbCacheValid(stormId)) {
             if (stormId === currentStormId) {
-                rawTbFrames = cached.rawTbFrames;
+                rawTbFrames = _rawTbCache[stormId].rawTbFrames;
             }
-            console.log('[RT Monitor] Loaded ' + cached.rawTbFrames.length + ' raw Tb frames from cache for ' + stormId);
+            console.log('[RT Monitor] Loaded ' + _rawTbCache[stormId].rawTbFrames.length + ' raw Tb frames from cache for ' + stormId);
             if (onComplete) onComplete();
             return;
         }
+
+        // Abort any previous in-flight fetch batch (e.g. user switched storms)
+        if (_rawTbAbortController && !silent) {
+            _rawTbAbortController.abort();
+        }
+        var controller = new AbortController();
+        if (!silent) _rawTbAbortController = controller;
 
         var totalFrames = 13;  // will be updated from first response
         var loadedFrames = [];
@@ -3346,7 +3406,7 @@
 
         function fetchFrame(idx) {
             if (idx >= totalFrames) return;
-            if (stormId !== currentStormId && !silent) return;  // storm changed
+            if (controller.signal.aborted) return;
 
             var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(stormId) + '/ir-raw-frame'
                 + '?frame_index=' + idx
@@ -3354,12 +3414,13 @@
                 + '&radius_deg=' + DEFAULT_RADIUS_DEG
                 + '&interval_min=30';
 
-            fetch(url, { cache: 'no-store' })
+            fetch(url, { signal: controller.signal })
                 .then(function (r) {
                     if (!r.ok) throw new Error('HTTP ' + r.status);
                     return r.json();
                 })
                 .then(function (frame) {
+                    if (controller.signal.aborted) return;
                     if (frame.total_frames) totalFrames = frame.total_frames;
 
                     loadedFrames[idx] = {
@@ -3378,11 +3439,14 @@
                         ' (' + frame.tb_cols + 'x' + frame.tb_rows + ' px)');
                 })
                 .catch(function (err) {
+                    if (err.name === 'AbortError') return;  // expected on storm switch
                     console.warn('[RT Monitor] Frame ' + idx + ' failed:', err.message);
                     failed++;
                     completed++;
                 })
                 .finally(function () {
+                    if (controller.signal.aborted) return;
+
                     // Launch next frame beyond the initial concurrent batch
                     var nextIdx = idx + concurrency;
                     if (nextIdx < totalFrames) fetchFrame(nextIdx);
@@ -3394,7 +3458,11 @@
                         for (var i = 0; i < totalFrames; i++) {
                             if (loadedFrames[i]) result.push(loadedFrames[i]);
                         }
-                        _rawTbCache[stormId] = { rawTbFrames: result, cachedAt: Date.now() };
+                        var pos = _stormPositionForId(stormId);
+                        _rawTbCache[stormId] = {
+                            rawTbFrames: result, cachedAt: Date.now(),
+                            lat: pos ? pos.lat : null, lon: pos ? pos.lon : null
+                        };
                         // Only update the global rawTbFrames if this is
                         // the storm currently being viewed
                         if (stormId === currentStormId) {
@@ -3402,6 +3470,7 @@
                         }
                         console.log('[RT Monitor] All raw Tb frames loaded for ' +
                             stormId + ': ' + result.length + ' OK, ' + failed + ' failed');
+                        if (_rawTbAbortController === controller) _rawTbAbortController = null;
                         if (onComplete) onComplete();
                     }
                 });

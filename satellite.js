@@ -337,10 +337,11 @@
         var imgData = ctx.createImageData(frame.cols, frame.rows);
         var pixels = imgData.data;
 
-        // Fill background
-        for (var i = 0; i < pixels.length; i += 4) {
-            pixels[i] = 10; pixels[i+1] = 11; pixels[i+2] = 18; pixels[i+3] = 255;
-        }
+        // Fast background fill via Uint32Array (4x fewer writes than per-channel)
+        var buf32 = new Uint32Array(pixels.buffer);
+        // ABGR little-endian for rgb(10, 11, 18) with alpha 255
+        var bgColor32 = (255 << 24) | (18 << 16) | (11 << 8) | 10;
+        for (var i = 0; i < buf32.length; i++) buf32[i] = bgColor32;
 
         // Render cropped region scaled to fill the full canvas
         var scaleY = frame.rows / crop.rows;
@@ -349,12 +350,13 @@
         for (var y = 0; y < frame.rows; y++) {
             var srcRow = crop.r0 + Math.floor(y / scaleY);
             if (srcRow < crop.r0 || srcRow >= crop.r1) continue;
+            var rowOffset = y * frame.cols;
             for (var x = 0; x < frame.cols; x++) {
                 var srcCol = crop.c0 + Math.floor(x / scaleX);
                 if (srcCol < crop.c0 || srcCol >= crop.c1) continue;
                 var val = frame.tb_data[srcRow * frame.cols + srcCol];
-                var pi = (y * frame.cols + x) * 4;
                 if (val !== 0) {
+                    var pi = (rowOffset + x) * 4;
                     var li = val * 4;
                     pixels[pi] = lut[li]; pixels[pi+1] = lut[li+1];
                     pixels[pi+2] = lut[li+2]; pixels[pi+3] = lut[li+3];
@@ -1753,7 +1755,10 @@
 
     function selectStorm(atcfId) {
         var alreadySpeculative = (currentStormId === atcfId && irFrames.length > 0);
-        if (currentStormId === atcfId && !alreadySpeculative) return;
+        // Skip re-select only if we already have frames loaded for this storm.
+        // Don't bail out when currentStormId matches but irFrames is empty —
+        // that means a prior speculative fetch failed and we need to retry.
+        if (currentStormId === atcfId && !alreadySpeculative && validFrameIndices.length > 0) return;
         stopAnimation();
         currentStormId = atcfId;
         currentStorm = storms.find(function (s) { return s.atcf_id === atcfId; }) || null;
@@ -2014,7 +2019,8 @@
                         var rf = rtFrames[ri];
                         if (!rf) continue;
                         irFrames[ri] = {
-                            tb_data: decodeTbData(rf.tb_data), rows: rf.tb_rows, cols: rf.tb_cols,
+                            tb_data: (rf.tb_data instanceof Uint8Array) ? rf.tb_data : decodeTbData(rf.tb_data),
+                            rows: rf.tb_rows, cols: rf.tb_cols,
                             bounds: rf.bounds, datetime_utc: rf.datetime_utc,
                             satellite: rf.satellite || '', tb_vmin: rf.tb_vmin || 160.0, tb_vmax: rf.tb_vmax || 330.0,
                             center_fix: rf.center_fix || null

@@ -1637,8 +1637,6 @@ def get_storm_ir(
             if len(_ir_frame_cache) > _IR_FRAME_CACHE_MAX:
                 _ir_frame_cache.popitem(last=False)
 
-        gc.collect()
-
     if not frames:
         raise HTTPException(
             status_code=502,
@@ -1722,7 +1720,6 @@ def get_storm_ir_raw(
             _gcs_rt_put(atcf_id.upper(), dt_str, frame_result, lat=center_lat, lon=center_lon)
 
             del tb, arr, mask, scaled, encoded
-            gc.collect()
 
     if not frames:
         raise HTTPException(
@@ -1918,7 +1915,6 @@ def get_storm_ir_raw_frame(
     _gcs_rt_put(atcf_id.upper(), dt_str, frame_result, lat=center_lat, lon=center_lon)
 
     del tb, arr, mask, scaled, encoded
-    gc.collect()
 
     return JSONResponse(
         content=frame_result,
@@ -2019,7 +2015,6 @@ def get_storm_band_raw_frame(
     _gcs_band_put(band, atcf_id.upper(), dt_str, frame_result, lat=center_lat, lon=center_lon)
 
     del data, arr, mask, scaled, encoded
-    gc.collect()
 
     return JSONResponse(
         content=frame_result,
@@ -2237,7 +2232,6 @@ def get_ir_frame_jpg(
     _gcs_jpg_put(atcf_id.upper(), dt_str, jpg_bytes)
 
     del raw
-    gc.collect()
 
     return Response(content=jpg_bytes, media_type="image/jpeg", headers=meta_headers)
 
@@ -2570,7 +2564,6 @@ def _compute_vigor_inner(
             fetch_errors += 1
             print(f"[ir-vigor]   frame {target_dt.strftime('%H:%MZ')}: "
                   f"ERROR {type(exc).__name__}: {exc}")
-        gc.collect()
 
     print(f"[ir-vigor] {atcf_id}: {len(raw_frames)} frames fetched, "
           f"{fetch_errors} failed")
