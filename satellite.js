@@ -1312,25 +1312,36 @@
         var times = [];
         var profiles = []; // array of arrays, one per frame
 
-        // For Hovmoller, use advisory position as fallback when center_fix is missing.
-        // Extended frames (12h/24h) may not have center fixes computed yet.
-        var advisoryLat = currentStorm ? currentStorm.lat : null;
-        var advisoryLon = currentStorm ? currentStorm.lon : null;
+        // For frames without center_fix, propagate the nearest known fix.
+        // First pass: collect all center fixes, then interpolate/extrapolate
+        // for frames that lack them.
+        var fixLat = [], fixLon = [];
+        for (var pi = 0; pi < srcFrames.length; pi++) {
+            var pf = srcFrames[pi];
+            if (pf && pf.center_fix) {
+                fixLat[pi] = pf.center_fix.lat;
+                fixLon[pi] = pf.center_fix.lon;
+            }
+        }
+        // Forward-fill: propagate last known fix forward (older → newer)
+        var lastLat = null, lastLon = null;
+        for (var fi2 = 0; fi2 < srcFrames.length; fi2++) {
+            if (fixLat[fi2] != null) { lastLat = fixLat[fi2]; lastLon = fixLon[fi2]; }
+            else if (lastLat != null) { fixLat[fi2] = lastLat; fixLon[fi2] = lastLon; }
+        }
+        // Backward-fill: propagate first known fix backward (newer → older)
+        lastLat = null; lastLon = null;
+        for (var fi3 = srcFrames.length - 1; fi3 >= 0; fi3--) {
+            if (fixLat[fi3] != null) { lastLat = fixLat[fi3]; lastLon = fixLon[fi3]; }
+            else if (lastLat != null) { fixLat[fi3] = lastLat; fixLon[fi3] = lastLon; }
+        }
 
         for (var fi = srcFrames.length - 1; fi >= 0; fi--) {
             var frame = srcFrames[fi];
             if (!frame || !frame.tb_data) continue;
 
-            var cLat, cLon;
-            if (frame.center_fix) {
-                cLat = frame.center_fix.lat;
-                cLon = frame.center_fix.lon;
-            } else if (advisoryLat != null) {
-                cLat = advisoryLat;
-                cLon = advisoryLon;
-            } else {
-                continue;
-            }
+            var cLat = fixLat[fi], cLon = fixLon[fi];
+            if (cLat == null) continue;
             var b = frame.bounds;
             var south = b[0][0], west = b[0][1], north = b[1][0], east = b[1][1];
             var rows = frame.rows, cols = frame.cols;
