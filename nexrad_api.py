@@ -282,13 +282,13 @@ def _build_reflectivity_lut() -> np.ndarray:
 def _build_velocity_lut() -> np.ndarray:
     """
     Build a 256-entry RGBA LUT for radial velocity (m/s).
-    Maps uint8 index 0 = transparent (invalid), 1-255 = -50 to +50 m/s.
+    Maps uint8 index 0 = transparent (invalid), 1-255 = -100 to +100 m/s.
     Blue = inbound (negative), Red = outbound (positive).
     """
     lut = np.zeros((256, 4), dtype=np.uint8)
     lut[0] = [0, 0, 0, 0]
 
-    vel_min, vel_max = -50.0, 50.0
+    vel_min, vel_max = -100.0, 100.0
     vel_range = vel_max - vel_min
 
     for i in range(1, 256):
@@ -340,8 +340,8 @@ PRODUCTS = {
     },
     "velocity": {
         "field": "velocity",
-        "vmin": -50.0,
-        "vmax": 50.0,
+        "vmin": -100.0,
+        "vmax": 100.0,
         "lut": _VEL_LUT,
         "units": "m/s",
         "label": "Radial Velocity",

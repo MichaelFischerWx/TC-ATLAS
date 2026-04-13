@@ -7220,7 +7220,7 @@
                     '<div style="flex:1;background:#C80000;"></div>' +
                 '</div>' +
                 '<div style="display:flex;justify-content:space-between;font-size:8px;color:#94a3b8;margin-top:1px;">' +
-                    '<span>-50 m/s</span><span>0</span><span>+50 m/s</span>' +
+                    '<span>-100 m/s</span><span>0</span><span>+100 m/s</span>' +
                 '</div>';
         } else {
             el.innerHTML =
