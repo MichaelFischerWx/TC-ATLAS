@@ -1405,9 +1405,13 @@
         hovExtStormId = currentStormId;
         var stormId = currentStormId;
 
-        // Determine total frames for the extended lookback
+        // Determine total frames for the extended lookback.
+        // The backend reverses frame_times so index 0 = oldest.
+        // With lookback_hours=12: indices 0-12 = older half (12h→6h ago),
+        // indices 13-24 = recent half (6h→now, already in irFrames).
+        // We only need the older portion: indices 0 to (totalFrames - 13 - 1).
         var totalFrames = Math.floor(hours * 60 / FRAME_INTERVAL_MIN) + 1;
-        var startIdx = 13; // frames 0-12 are already in irFrames (6h)
+        var extCount = totalFrames - 13;  // number of older frames to fetch
         var extFrames = [];
         var completed = 0;
         var failed = 0;
@@ -1418,7 +1422,7 @@
         if (hovChart) hovChart.style.opacity = '0.4';
 
         function fetchFrame(idx) {
-            if (idx >= totalFrames) return;
+            if (idx >= extCount) return;
             if (stormId !== currentStormId) return;
 
             var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(stormId) + '/ir-raw-frame'
@@ -1431,8 +1435,7 @@
                 .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
                 .then(function (data) {
                     if (stormId !== currentStormId) return;
-                    if (data.total_frames) totalFrames = data.total_frames;
-                    extFrames[idx - startIdx] = {
+                    extFrames[idx] = {
                         tb_data: decodeTbData(data.tb_data),
                         rows: data.tb_rows, cols: data.tb_cols,
                         bounds: data.bounds,
@@ -1450,12 +1453,12 @@
                 })
                 .finally(function () {
                     var nextIdx = idx + concurrency;
-                    if (nextIdx < totalFrames) fetchFrame(nextIdx);
+                    if (nextIdx < extCount) fetchFrame(nextIdx);
 
                     // Update loading status
-                    if (loadStatusEl) loadStatusEl.textContent = 'Hov ' + completed + '/' + (totalFrames - startIdx);
+                    if (loadStatusEl) loadStatusEl.textContent = 'Hov ' + completed + '/' + extCount;
 
-                    if (completed >= (totalFrames - startIdx)) {
+                    if (completed >= extCount) {
                         // Compact and store
                         var result = [];
                         for (var i = 0; i < extFrames.length; i++) {
@@ -1482,10 +1485,10 @@
                 });
         }
 
-        // Launch initial batch
-        var batchSize = Math.min(concurrency, totalFrames - startIdx);
+        // Launch initial batch (indices 0 to extCount-1 = older frames)
+        var batchSize = Math.min(concurrency, extCount);
         for (var i = 0; i < batchSize; i++) {
-            fetchFrame(startIdx + i);
+            fetchFrame(i);
         }
     }
 
