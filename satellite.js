@@ -1312,29 +1312,61 @@
         var times = [];
         var profiles = []; // array of arrays, one per frame
 
-        // For frames without center_fix, propagate the nearest known fix.
-        // First pass: collect all center fixes, then interpolate/extrapolate
-        // for frames that lack them.
-        var fixLat = [], fixLon = [];
+        // For frames without center_fix, interpolate between the nearest
+        // known fixes (or extrapolate from the closest one at the edges).
+        // This accounts for storm motion between fix points.
+        var fixLat = [], fixLon = [], nFixes = 0;
+        var knownIndices = []; // indices with real center fixes
         for (var pi = 0; pi < srcFrames.length; pi++) {
             var pf = srcFrames[pi];
             if (pf && pf.center_fix) {
                 fixLat[pi] = pf.center_fix.lat;
                 fixLon[pi] = pf.center_fix.lon;
+                knownIndices.push(pi);
+                nFixes++;
             }
         }
-        // Forward-fill: propagate last known fix forward (older → newer)
-        var lastLat = null, lastLon = null;
-        for (var fi2 = 0; fi2 < srcFrames.length; fi2++) {
-            if (fixLat[fi2] != null) { lastLat = fixLat[fi2]; lastLon = fixLon[fi2]; }
-            else if (lastLat != null) { fixLat[fi2] = lastLat; fixLon[fi2] = lastLon; }
+
+        // Interpolate/extrapolate for frames without fixes
+        if (knownIndices.length >= 2) {
+            // Linear interpolation between known fixes, linear extrapolation at edges
+            for (var ii = 0; ii < srcFrames.length; ii++) {
+                if (fixLat[ii] != null) continue;
+                // Find bounding known indices
+                var lo = -1, hi = -1;
+                for (var ki = 0; ki < knownIndices.length; ki++) {
+                    if (knownIndices[ki] <= ii) lo = ki;
+                    if (knownIndices[ki] >= ii && hi < 0) hi = ki;
+                }
+                if (lo >= 0 && hi >= 0 && lo !== hi) {
+                    // Interpolate between knownIndices[lo] and knownIndices[hi]
+                    var loIdx = knownIndices[lo], hiIdx = knownIndices[hi];
+                    var frac = (ii - loIdx) / (hiIdx - loIdx);
+                    fixLat[ii] = fixLat[loIdx] + frac * (fixLat[hiIdx] - fixLat[loIdx]);
+                    fixLon[ii] = fixLon[loIdx] + frac * (fixLon[hiIdx] - fixLon[loIdx]);
+                } else if (knownIndices.length >= 2) {
+                    // Extrapolate from the two nearest known fixes
+                    var a, b;
+                    if (lo < 0) { a = knownIndices[0]; b = knownIndices[1]; }
+                    else { a = knownIndices[knownIndices.length - 2]; b = knownIndices[knownIndices.length - 1]; }
+                    var span = b - a;
+                    if (span > 0) {
+                        var ext = (ii - a) / span;
+                        fixLat[ii] = fixLat[a] + ext * (fixLat[b] - fixLat[a]);
+                        fixLon[ii] = fixLon[a] + ext * (fixLon[b] - fixLon[a]);
+                    }
+                }
+            }
+        } else if (knownIndices.length === 1) {
+            // Only one fix — use it for all frames
+            var onlyIdx = knownIndices[0];
+            for (var si = 0; si < srcFrames.length; si++) {
+                if (fixLat[si] == null) { fixLat[si] = fixLat[onlyIdx]; fixLon[si] = fixLon[onlyIdx]; }
+            }
         }
-        // Backward-fill: propagate first known fix backward (newer → older)
-        lastLat = null; lastLon = null;
-        for (var fi3 = srcFrames.length - 1; fi3 >= 0; fi3--) {
-            if (fixLat[fi3] != null) { lastLat = fixLat[fi3]; lastLon = fixLon[fi3]; }
-            else if (lastLat != null) { fixLat[fi3] = lastLat; fixLon[fi3] = lastLon; }
-        }
+
+        console.log('[Satellite] Hovmoller centers: ' + nFixes + '/' + srcFrames.length +
+            ' frames have IR center fixes, ' + (srcFrames.length - nFixes) + ' interpolated');
 
         for (var fi = srcFrames.length - 1; fi >= 0; fi--) {
             var frame = srcFrames[fi];
