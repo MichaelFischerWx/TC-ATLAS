@@ -2169,6 +2169,13 @@ def get_storm_ir_raw_frame(
                     "best_ir_rad_dif": cfix_raw.get("best_ir_rad_dif", 0),
                     "n_candidates": cfix_raw.get("n_candidates", 0),
                 }
+                # Include position info for "too_far" failures
+                if cfix_raw.get("found_lat") is not None:
+                    center_fix["found_lat"] = cfix_raw["found_lat"]
+                    center_fix["found_lon"] = cfix_raw["found_lon"]
+                    center_fix["guess_lat"] = cfix_raw["guess_lat"]
+                    center_fix["guess_lon"] = cfix_raw["guess_lon"]
+                    center_fix["dist_deg"] = cfix_raw.get("dist_deg", 0)
         except Exception:
             pass  # center fix is best-effort; never block frame delivery
 

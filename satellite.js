@@ -1297,7 +1297,16 @@
                 failTimes.push(f.datetime_utc);
                 failScores.push(f.center_fix.best_score || 0);
                 failRadDifs.push(f.center_fix.best_ir_rad_dif || 0);
-                failReasons.push(f.center_fix.reason || 'unknown');
+                var reason = f.center_fix.reason || 'unknown';
+                // Append position info for too_far failures
+                if (reason === 'too_far' && f.center_fix.found_lat != null) {
+                    reason += ' (found ' + f.center_fix.found_lat.toFixed(1) + ',' +
+                        f.center_fix.found_lon.toFixed(1) + ' vs guess ' +
+                        f.center_fix.guess_lat.toFixed(1) + ',' +
+                        f.center_fix.guess_lon.toFixed(1) + ' d=' +
+                        (f.center_fix.dist_deg || 0).toFixed(2) + '\u00B0)';
+                }
+                failReasons.push(reason);
             }
         }
         if (times.length < 2 && failTimes.length === 0) return null;

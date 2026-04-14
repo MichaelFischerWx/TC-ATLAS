@@ -261,6 +261,10 @@ def find_ir_center(
             return {
                 "success": False,
                 "reason": "too_far",
+                "found_lat": round(float(found_lat), 3),
+                "found_lon": round(float(found_lon), 3),
+                "guess_lat": round(float(center_lat), 3),
+                "guess_lon": round(float(center_lon), 3),
                 "best_score": round(float(best_score), 2),
                 "best_ir_rad_dif": round(float(best_ir_rad_dif), 2),
                 "best_mean_std": round(float(best_mean_std), 2),
