@@ -1924,7 +1924,7 @@ def get_storm_ir_raw_frame(
     center_dt = _dt.now(timezone.utc)
 
     frame_times = build_frame_times(center_dt, lookback_hours, interval_min)
-    frame_times = list(reversed(frame_times))  # newest first (index 0 = most recent)
+    frame_times = list(reversed(frame_times))  # oldest first (index 0 = oldest, index N-1 = most recent)
 
     if frame_index >= len(frame_times):
         raise HTTPException(status_code=400, detail=f"frame_index {frame_index} out of range")
@@ -1976,7 +1976,13 @@ def get_storm_ir_raw_frame(
                         "mean_std": cfix["mean_std"],
                     }
                 else:
-                    cached["center_fix"] = None
+                    cached["center_fix"] = {
+                        "success": False,
+                        "reason": cfix.get("reason", "unknown"),
+                        "best_score": cfix.get("best_score", 0),
+                        "best_ir_rad_dif": cfix.get("best_ir_rad_dif", 0),
+                        "n_candidates": cfix.get("n_candidates", 0),
+                    }
                 # Re-cache with center_fix included
                 _gcs_rt_put(atcf_id.upper(), dt_str, cached, lat=center_lat, lon=center_lon)
                 # Log the result
@@ -2039,6 +2045,15 @@ def get_storm_ir_raw_frame(
                     "eye_score": cfix_raw["eye_score"],
                     "ir_rad_dif": cfix_raw["ir_rad_dif"],
                     "mean_std": cfix_raw["mean_std"],
+                }
+            else:
+                # Propagate failure diagnostics so the frontend can display why
+                center_fix = {
+                    "success": False,
+                    "reason": cfix_raw.get("reason", "unknown"),
+                    "best_score": cfix_raw.get("best_score", 0),
+                    "best_ir_rad_dif": cfix_raw.get("best_ir_rad_dif", 0),
+                    "n_candidates": cfix_raw.get("n_candidates", 0),
                 }
         except Exception:
             pass  # center fix is best-effort; never block frame delivery
@@ -2446,7 +2461,7 @@ def get_ir_frames_meta(
     frame_times = build_frame_times(
         _dt.now(timezone.utc), lookback_hours, interval_min
     )
-    frame_times = list(reversed(frame_times))  # newest first
+    frame_times = list(reversed(frame_times))  # oldest first (idx 0 = oldest)
 
     # Determine satellite
     bucket, sat_key = select_goes_sat(center_lon, _dt.now(timezone.utc))
@@ -2505,7 +2520,7 @@ def get_ir_frame_jpg(
     frame_times = build_frame_times(
         _dt.now(timezone.utc), lookback_hours, interval_min
     )
-    frame_times = list(reversed(frame_times))  # newest first
+    frame_times = list(reversed(frame_times))  # oldest first (idx 0 = oldest)
 
     if frame_index >= len(frame_times):
         raise HTTPException(status_code=400, detail=f"frame_index {frame_index} out of range")
@@ -2671,7 +2686,7 @@ def get_storm_geotiff(
 
     # Build frame times (30 min interval, 6h lookback)
     frame_times = build_frame_times(center_dt, 6.0, 30)
-    frame_times = list(reversed(frame_times))  # newest first
+    frame_times = list(reversed(frame_times))  # oldest first (idx 0 = oldest)
 
     if frame_index >= len(frame_times):
         raise HTTPException(status_code=400, detail=f"frame_index {frame_index} out of range (max {len(frame_times)-1})")

@@ -2996,13 +2996,31 @@
         var frame = rawTbFrames && rawTbFrames[animIndex];
 
         // Check if this storm is hurricane-strength (center_fix field present)
-        // center_fix is null when attempted but eye not detected, undefined when not attempted (< 65 kt)
+        // center_fix is null or {success:false,...} when attempted but eye not detected,
+        // undefined when not attempted (< 65 kt)
         var wasAttempted = frame && frame.center_fix !== undefined;
+        var fixFailed = wasAttempted && (!frame.center_fix || !frame.center_fix.lat);
 
         if (!frame || !frame.center_fix || !frame.center_fix.lat) {
             if (_irCenterFixBadge) _irCenterFixBadge.style.display = 'none';
             // Show "eye not detected" note only when fix was attempted but failed
-            if (noteEl) noteEl.style.display = (wasAttempted && frame.center_fix === null) ? '' : 'none';
+            if (noteEl) {
+                if (fixFailed) {
+                    var failInfo = 'Eye not detected';
+                    if (frame.center_fix && frame.center_fix.reason) {
+                        var reason = frame.center_fix.reason.replace(/_/g, ' ');
+                        failInfo += ' (' + reason;
+                        if (frame.center_fix.best_ir_rad_dif != null) {
+                            failInfo += ', \u0394T=' + frame.center_fix.best_ir_rad_dif.toFixed(1) + 'K';
+                        }
+                        failInfo += ')';
+                    }
+                    noteEl.textContent = failInfo;
+                    noteEl.style.display = '';
+                } else {
+                    noteEl.style.display = 'none';
+                }
+            }
             return;
         }
 
@@ -7428,7 +7446,7 @@
         if (!currentStormId) return;
         _ga('ir_export_geotiff', { storm: currentStormId });
 
-        // Use the current animation frame index (0 = newest)
+        // Use the current animation frame index (0 = oldest, N-1 = newest)
         var frameIdx = animIndex || 0;
 
         var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(currentStormId) +

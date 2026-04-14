@@ -1281,15 +1281,30 @@
 
     function buildCenterFixTimeSeries() {
         var times = [], eyeScores = [], irRadDifs = [], meanStds = [];
+        // Separate arrays for failed attempts (plotted as open markers)
+        var failTimes = [], failScores = [], failRadDifs = [], failReasons = [];
         for (var i = 0; i < irFrames.length; i++) {
             var f = irFrames[i];
             if (!f || !f.center_fix) continue;
-            times.push(f.datetime_utc);
-            eyeScores.push(f.center_fix.eye_score);
-            irRadDifs.push(f.center_fix.ir_rad_dif);
-            meanStds.push(f.center_fix.mean_std || null);
+            if (f.center_fix.lat) {
+                // Successful fix
+                times.push(f.datetime_utc);
+                eyeScores.push(f.center_fix.eye_score);
+                irRadDifs.push(f.center_fix.ir_rad_dif);
+                meanStds.push(f.center_fix.mean_std || null);
+            } else if (f.center_fix.success === false) {
+                // Failed attempt with diagnostics
+                failTimes.push(f.datetime_utc);
+                failScores.push(f.center_fix.best_score || 0);
+                failRadDifs.push(f.center_fix.best_ir_rad_dif || 0);
+                failReasons.push(f.center_fix.reason || 'unknown');
+            }
         }
-        return times.length >= 2 ? { times: times, eyeScores: eyeScores, irRadDifs: irRadDifs, meanStds: meanStds } : null;
+        if (times.length < 2 && failTimes.length === 0) return null;
+        return {
+            times: times, eyeScores: eyeScores, irRadDifs: irRadDifs, meanStds: meanStds,
+            failTimes: failTimes, failScores: failScores, failRadDifs: failRadDifs, failReasons: failReasons
+        };
     }
 
     // ── Diagnostics: Plotly Chart Rendering ─────────────────────
@@ -1376,9 +1391,31 @@
                 x: ts.times, y: ts.irRadDifs, type: 'scatter', mode: 'lines+markers',
                 name: 'IR Rad Diff (K)', line: { color: '#a78bfa', width: 2 },
                 marker: { size: 4 }, yaxis: 'y2',
-                hovertemplate: 'ΔT: %{y:.1f} K<extra></extra>'
+                hovertemplate: '\u0394T: %{y:.1f} K<extra></extra>'
             }
         ];
+        // Failed center-fix attempts — show as open red markers
+        if (ts.failTimes && ts.failTimes.length > 0) {
+            // Build hover text with failure reason
+            var failHoverScore = [], failHoverRad = [];
+            for (var fi = 0; fi < ts.failTimes.length; fi++) {
+                var reason = (ts.failReasons[fi] || 'unknown').replace(/_/g, ' ');
+                failHoverScore.push('FAILED: ' + reason + '<br>Best score: ' + (ts.failScores[fi] || 0).toFixed(1));
+                failHoverRad.push('FAILED: ' + reason + '<br>Best \u0394T: ' + (ts.failRadDifs[fi] || 0).toFixed(1) + ' K');
+            }
+            traces.push({
+                x: ts.failTimes, y: ts.failScores, type: 'scatter', mode: 'markers',
+                name: 'Failed (score)', marker: { size: 7, color: 'rgba(0,0,0,0)', line: { color: '#fb923c', width: 2 }, symbol: 'x' },
+                yaxis: 'y', showlegend: false,
+                hovertext: failHoverScore, hoverinfo: 'text+x'
+            });
+            traces.push({
+                x: ts.failTimes, y: ts.failRadDifs, type: 'scatter', mode: 'markers',
+                name: 'Failed (\u0394T)', marker: { size: 7, color: 'rgba(0,0,0,0)', line: { color: '#fb923c', width: 2 }, symbol: 'x' },
+                yaxis: 'y2', showlegend: false,
+                hovertext: failHoverRad, hoverinfo: 'text+x'
+            });
+        }
         var layout = JSON.parse(JSON.stringify(DIAG_LAYOUT_BASE));
         layout.title = { text: 'Center Fix Time Series', font: { size: 11, color: '#94a3b8' } };
         layout.xaxis = { gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 8, family: 'JetBrains Mono, monospace' }, tickangle: -30 };
@@ -1388,13 +1425,27 @@
         layout.margin = { t: 32, r: 48, b: 44, l: 48 };
         layout.showlegend = true;
 
-        // Vertical line at current frame
+        // Vertical line at current frame + horizontal threshold line for min_ir_rad_dif
+        layout.shapes = [];
         if (curTime) {
-            layout.shapes = [{
+            layout.shapes.push({
                 type: 'line', x0: curTime, x1: curTime, y0: 0, y1: 1,
                 yref: 'paper', line: { color: '#ffffff44', width: 1, dash: 'dot' }
-            }];
+            });
         }
+        // min_ir_rad_dif threshold (10 K) on the y2 axis
+        layout.shapes.push({
+            type: 'line', x0: 0, x1: 1, xref: 'paper',
+            y0: 10, y1: 10, yref: 'y2',
+            line: { color: '#fb923c66', width: 1, dash: 'dash' }
+        });
+        // Threshold label
+        layout.annotations = layout.annotations || [];
+        layout.annotations.push({
+            x: 1.0, xref: 'paper', y: 10, yref: 'y2',
+            text: 'min \u0394T', font: { size: 8, color: '#fb923c88' },
+            showarrow: false, xanchor: 'right', yanchor: 'bottom'
+        });
 
         if (div.data) {
             Plotly.react(div, traces, layout, DIAG_CONFIG);
@@ -1466,10 +1517,10 @@
         // known fixes (or extrapolate from the closest one at the edges).
         // This accounts for storm motion between fix points.
         var fixLat = [], fixLon = [], nFixes = 0;
-        var knownIndices = []; // indices with real center fixes
+        var knownIndices = []; // indices with real (successful) center fixes
         for (var pi = 0; pi < srcFrames.length; pi++) {
             var pf = srcFrames[pi];
-            if (pf && pf.center_fix) {
+            if (pf && pf.center_fix && pf.center_fix.lat) {
                 fixLat[pi] = pf.center_fix.lat;
                 fixLon[pi] = pf.center_fix.lon;
                 knownIndices.push(pi);
@@ -1823,7 +1874,7 @@
         if (diagTab === 'charts') {
             if (chartsView) chartsView.style.display = '';
             if (hovView) hovView.style.display = 'none';
-            if (frame.center_fix) {
+            if (frame.center_fix && frame.center_fix.lat) {
                 renderRadialProfileChart(frame);
                 renderTbHistogramChart(frame);
             }
@@ -2500,14 +2551,16 @@
             // Only one fix — use advisory position as second anchor if available,
             // otherwise fall back to the single fix for all frames
             var only = knownIndices[0];
-            if (currentStorm && currentStorm.lat &&
+            var newestIdx = frames.length - 1;
+            if (currentStorm && currentStorm.lat && newestIdx !== only &&
                 (Math.abs(currentStorm.lat - fixLat[only]) > 0.01 ||
                  Math.abs(currentStorm.lon - fixLon[only]) > 0.01)) {
-                // Advisory position differs — use it as anchor for index 0 (newest)
-                // and interpolate/extrapolate between advisory and the single fix
-                fixLat[0] = currentStorm.lat;
-                fixLon[0] = currentStorm.lon;
-                knownIndices.unshift(0);
+                // Advisory position differs — use it as anchor for the newest frame.
+                // Frame ordering: index 0 = oldest, index length-1 = newest (most recent).
+                fixLat[newestIdx] = currentStorm.lat;
+                fixLon[newestIdx] = currentStorm.lon;
+                knownIndices.push(newestIdx);
+                knownIndices.sort(function (a, b) { return a - b; });
                 // Fall through to the ≥2 fixes interpolation below
             } else {
                 for (var si = 0; si < frames.length; si++) {
@@ -2744,7 +2797,7 @@
                     if (stormId === currentStormId) {
                         buildValidIndices();
                         updateSliderMax();
-                        // Show the first frame that arrives (frame 0 in priority mode)
+                        // Show the first frame that arrives (frame 0 = oldest, fetched first)
                         if (irDone === 1) {
                             animIndex = idx;
                             hideLoader();
@@ -2776,7 +2829,7 @@
                     if (irDone >= totalFrames && stormId === currentStormId) {
                         buildValidIndices();
                         updateSliderMax();
-                        // Stay on most recent frame (index 0) after loading completes
+                        // Show oldest frame (index 0) after loading — animation plays forward in time
                         if (validFrameIndices.length > 0 && validFrameIndices.indexOf(0) >= 0) {
                             animIndex = 0;
                         }
