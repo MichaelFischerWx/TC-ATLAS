@@ -2420,7 +2420,11 @@
 
         var totalFrames = 13;
         var bandLabel = rightBand === 2 ? 'Vis' : 'WV';
+        var bandName = rightBand === 2 ? 'Visible' : 'Water Vapor';
         var band = rightBand;
+
+        // Set label immediately so user sees correct band name while loading
+        if (rightLabelEl) rightLabelEl.textContent = bandName + '  (loading\u2026)';
 
         // Phase 1: fast JPG preview for right panel
         var previewDone = 0;
