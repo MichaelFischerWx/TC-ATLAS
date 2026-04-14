@@ -1844,7 +1844,7 @@
         for (var ei = 0; ei < hov.extrapolated.length; ei++) {
             if (hov.extrapolated[ei]) {
                 layout.annotations.push({
-                    x: -4, xref: 'x',
+                    x: -2, xref: 'x',
                     y: hov.times[ei], yref: 'y',
                     text: '\u2731',
                     font: { size: 10, color: '#fb923c', family: 'sans-serif' },
