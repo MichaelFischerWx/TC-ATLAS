@@ -2295,17 +2295,18 @@ def _render_band_jpg(data_array: np.ndarray, band: int,
     if not np.any(np.isfinite(arr)):
         return None
 
-    # Normalize to 0–1 (inverted: cold/bright = high fraction)
-    frac = np.clip(1.0 - (arr - vmin) / (vmax - vmin), 0.0, 1.0)
     mask = ~np.isfinite(arr)
 
     if band == WV_BAND:
-        # Blue→white gradient (same as client 'wv' colormap)
+        # WV: invert so cold (low Tb) = bright, warm (high Tb) = dark
+        frac = np.clip(1.0 - (arr - vmin) / (vmax - vmin), 0.0, 1.0)
+        # Blue→white gradient
         r = (frac * 245 + 10).astype(np.uint8)
         g = (frac * 245 + 10).astype(np.uint8)
         b = (np.clip(frac * 0.6 + 0.4, 0, 1) * 245 + 10).astype(np.uint8)
     else:
-        # Vis: simple grayscale (reflectance)
+        # Vis: no inversion — high reflectance = bright (white clouds)
+        frac = np.clip((arr - vmin) / (vmax - vmin), 0.0, 1.0)
         gray = (frac * 245 + 10).astype(np.uint8)
         r = g = b = gray
 
