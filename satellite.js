@@ -1839,12 +1839,12 @@
             }];
         }
 
-        // Orange asterisks on Y-axis for extrapolated center positions
+        // Orange asterisks just left of data area for extrapolated center positions
         layout.annotations = layout.annotations || [];
         for (var ei = 0; ei < hov.extrapolated.length; ei++) {
             if (hov.extrapolated[ei]) {
                 layout.annotations.push({
-                    x: -0.09, xref: 'paper',
+                    x: -4, xref: 'x',
                     y: hov.times[ei], yref: 'y',
                     text: '\u2731',
                     font: { size: 10, color: '#fb923c', family: 'sans-serif' },
