@@ -604,35 +604,67 @@
         }
 
         // ── IR Center Fix Crosshair ──
-        if (showCrosshair && frame.center_fix && frame.center_fix.lat) {
-            var fix = frame.center_fix;
-            var fx = (fix.lon - vb.west) / lonSpan * w;
-            var fy = (vb.north - fix.lat) / latSpan * h;
+        var _fixSrc = null; // 'objective' or 'extrapolated'
+        var _fixLat = null, _fixLon = null;
+        if (showCrosshair) {
+            if (frame.center_fix && frame.center_fix.lat) {
+                _fixSrc = 'objective';
+                _fixLat = frame.center_fix.lat;
+                _fixLon = frame.center_fix.lon;
+            } else if (frame._interpCenter) {
+                _fixSrc = 'extrapolated';
+                _fixLat = frame._interpCenter.lat;
+                _fixLon = frame._interpCenter.lon;
+            }
+        }
+        if (_fixSrc && _fixLat != null) {
+            var fx = (_fixLon - vb.west) / lonSpan * w;
+            var fy = (vb.north - _fixLat) / latSpan * h;
 
-            // Only draw if within frame bounds
             if (fx >= 0 && fx <= w && fy >= 0 && fy <= h) {
                 var r = Math.max(12, Math.round(w * 0.012));
                 var armLen = r + 4;
 
-                // Outer glow
-                overlayCtx.strokeStyle = 'rgba(0, 229, 255, 0.4)';
-                overlayCtx.lineWidth = 4;
-                overlayCtx.beginPath();
-                overlayCtx.arc(fx, fy, r, 0, 2 * Math.PI);
-                overlayCtx.stroke();
+                if (_fixSrc === 'objective') {
+                    // Solid cyan — objective center fix
+                    overlayCtx.strokeStyle = 'rgba(0, 229, 255, 0.4)';
+                    overlayCtx.lineWidth = 4;
+                    overlayCtx.setLineDash([]);
+                    overlayCtx.beginPath();
+                    overlayCtx.arc(fx, fy, r, 0, 2 * Math.PI);
+                    overlayCtx.stroke();
 
-                // Main circle
-                overlayCtx.strokeStyle = '#00e5ff';
-                overlayCtx.lineWidth = 2;
-                overlayCtx.beginPath();
-                overlayCtx.arc(fx, fy, r, 0, 2 * Math.PI);
-                overlayCtx.stroke();
+                    overlayCtx.strokeStyle = '#00e5ff';
+                    overlayCtx.lineWidth = 2;
+                    overlayCtx.beginPath();
+                    overlayCtx.arc(fx, fy, r, 0, 2 * Math.PI);
+                    overlayCtx.stroke();
 
-                // Cross arms
-                overlayCtx.beginPath();
-                overlayCtx.moveTo(fx, fy - armLen); overlayCtx.lineTo(fx, fy + armLen);
-                overlayCtx.moveTo(fx - armLen, fy); overlayCtx.lineTo(fx + armLen, fy);
-                overlayCtx.stroke();
+                    overlayCtx.beginPath();
+                    overlayCtx.moveTo(fx, fy - armLen); overlayCtx.lineTo(fx, fy + armLen);
+                    overlayCtx.moveTo(fx - armLen, fy); overlayCtx.lineTo(fx + armLen, fy);
+                    overlayCtx.stroke();
+                } else {
+                    // Dashed orange — extrapolated/interpolated center
+                    overlayCtx.strokeStyle = 'rgba(251, 146, 60, 0.35)';
+                    overlayCtx.lineWidth = 4;
+                    overlayCtx.setLineDash([6, 4]);
+                    overlayCtx.beginPath();
+                    overlayCtx.arc(fx, fy, r, 0, 2 * Math.PI);
+                    overlayCtx.stroke();
+
+                    overlayCtx.strokeStyle = '#fb923c';
+                    overlayCtx.lineWidth = 2;
+                    overlayCtx.beginPath();
+                    overlayCtx.arc(fx, fy, r, 0, 2 * Math.PI);
+                    overlayCtx.stroke();
+
+                    overlayCtx.beginPath();
+                    overlayCtx.moveTo(fx, fy - armLen); overlayCtx.lineTo(fx, fy + armLen);
+                    overlayCtx.moveTo(fx - armLen, fy); overlayCtx.lineTo(fx + armLen, fy);
+                    overlayCtx.stroke();
+                    overlayCtx.setLineDash([]);
+                }
             }
         }
     }
