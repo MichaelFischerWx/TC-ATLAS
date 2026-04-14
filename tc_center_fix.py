@@ -215,13 +215,10 @@ def find_ir_center(
 
                 ir_rad_dif = eye_mean - np.nanmin(means[valid_bins])
 
-                # Skip candidates well below the quality-gate threshold.
+                # Skip candidates below the quality-gate threshold.
                 # Prevents the algorithm from locking onto small symmetric
                 # features (convective cells) instead of the actual eye.
-                # Use half the gate threshold as the in-loop filter to allow
-                # borderline candidates to compete on score — the full
-                # threshold is still enforced at the quality gate.
-                if ir_rad_dif < min_ir_rad_dif * 0.5:
+                if ir_rad_dif < min_ir_rad_dif:
                     continue
 
                 # Score: warm-core contrast weighted by azimuthal symmetry.
