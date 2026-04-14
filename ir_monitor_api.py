@@ -1042,9 +1042,11 @@ def _get_track_for_interp(atcf_id: str) -> list:
 
 def _interpolate_track_position(records: list, target_dt) -> tuple | None:
     """
-    Linearly interpolate best-track (lat, lon) at *target_dt*.
+    Linearly interpolate (or extrapolate) best-track (lat, lon) at *target_dt*.
     Returns (lat, lon) or None if records is empty.
-    Clamps to boundary positions for times outside the track range.
+    Uses linear extrapolation from the last two points for times beyond
+    the track range (handles B-deck lag where the latest fix may be
+    6-12 hours behind real-time).
     """
     if not records:
         return None
@@ -1056,8 +1058,34 @@ def _interpolate_track_position(records: list, target_dt) -> tuple | None:
     lon_arr = np.array([r[2] for r in records])
 
     t_q = target_dt.timestamp()
-    lat_q = float(np.interp(t_q, t_arr, lat_arr))
-    lon_q = float(np.interp(t_q, t_arr, lon_arr))
+
+    if t_q <= t_arr[-1] and t_q >= t_arr[0]:
+        # Within range — standard interpolation
+        lat_q = float(np.interp(t_q, t_arr, lat_arr))
+        lon_q = float(np.interp(t_q, t_arr, lon_arr))
+    elif t_q > t_arr[-1] and len(t_arr) >= 2:
+        # Beyond latest fix — extrapolate from last two points
+        dt = t_arr[-1] - t_arr[-2]
+        if dt > 0:
+            frac = (t_q - t_arr[-2]) / dt
+            lat_q = float(lat_arr[-2] + frac * (lat_arr[-1] - lat_arr[-2]))
+            lon_q = float(lon_arr[-2] + frac * (lon_arr[-1] - lon_arr[-2]))
+        else:
+            lat_q, lon_q = float(lat_arr[-1]), float(lon_arr[-1])
+    elif t_q < t_arr[0] and len(t_arr) >= 2:
+        # Before earliest fix — extrapolate from first two points
+        dt = t_arr[1] - t_arr[0]
+        if dt > 0:
+            frac = (t_q - t_arr[0]) / dt
+            lat_q = float(lat_arr[0] + frac * (lat_arr[1] - lat_arr[0]))
+            lon_q = float(lon_arr[0] + frac * (lon_arr[1] - lon_arr[0]))
+        else:
+            lat_q, lon_q = float(lat_arr[0]), float(lon_arr[0])
+    else:
+        # Fallback (single-point edge case handled above)
+        lat_q = float(np.interp(t_q, t_arr, lat_arr))
+        lon_q = float(np.interp(t_q, t_arr, lon_arr))
+
     return (lat_q, lon_q)
 
 
