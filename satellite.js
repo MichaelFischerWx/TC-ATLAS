@@ -1659,6 +1659,30 @@
         // We only need the older portion: indices 0 to (totalFrames - 13 - 1).
         var totalFrames = Math.floor(hours * 60 / FRAME_INTERVAL_MIN) + 1;
         var extCount = totalFrames - 13;  // number of older frames to fetch
+
+        // Reuse existing extended frames when upgrading (e.g. 12h→24h).
+        // The existing frames cover the most recent portion of the ext range;
+        // we only need to fetch the additional older frames.
+        var reusedFrames = [];
+        var fetchCount = extCount;
+        if (hovExtFrames && hovExtFrames._hours > 6 && hovExtFrames.length > 0 &&
+            hovExtStormId === stormId) {
+            reusedFrames = hovExtFrames.slice();
+            var prevTotal = Math.floor(hovExtFrames._hours * 60 / FRAME_INTERVAL_MIN) + 1;
+            var prevExtCount = prevTotal - 13;
+            fetchCount = Math.max(0, extCount - prevExtCount);
+            console.log('[Satellite] Hovmoller upgrade: reusing ' + reusedFrames.length +
+                ' frames from ' + hovExtFrames._hours + 'h, fetching ' + fetchCount + ' new');
+        }
+
+        if (fetchCount === 0) {
+            reusedFrames._hours = hours;
+            hovExtFrames = reusedFrames;
+            hovExtFetching = false;
+            renderHovmollerChart();
+            return;
+        }
+
         var extFrames = [];
         var completed = 0;
         var failed = 0;
@@ -1669,7 +1693,7 @@
         if (hovChart) hovChart.style.opacity = '0.4';
 
         function fetchFrame(idx) {
-            if (idx >= extCount) return;
+            if (idx >= fetchCount) return;
             if (stormId !== currentStormId) return;
 
             var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(stormId) + '/ir-raw-frame'
@@ -1700,17 +1724,19 @@
                 })
                 .finally(function () {
                     var nextIdx = idx + concurrency;
-                    if (nextIdx < extCount) fetchFrame(nextIdx);
+                    if (nextIdx < fetchCount) fetchFrame(nextIdx);
 
                     // Update loading status
-                    if (loadStatusEl) loadStatusEl.textContent = 'Hov ' + completed + '/' + extCount;
+                    if (loadStatusEl) loadStatusEl.textContent = 'Hov ' + completed + '/' + fetchCount;
 
-                    if (completed >= extCount) {
-                        // Compact and store
-                        var result = [];
+                    if (completed >= fetchCount) {
+                        // Compact newly fetched frames
+                        var newFrames = [];
                         for (var i = 0; i < extFrames.length; i++) {
-                            if (extFrames[i]) result.push(extFrames[i]);
+                            if (extFrames[i]) newFrames.push(extFrames[i]);
                         }
+                        // Merge with reused frames from shorter lookback
+                        var result = newFrames.concat(reusedFrames);
                         // Sort by datetime (oldest first) so concat with irFrames works
                         result.sort(function (a, b) {
                             return (a.datetime_utc || '').localeCompare(b.datetime_utc || '');
@@ -1726,14 +1752,15 @@
                         }
                         if (hovChart) hovChart.style.opacity = '1';
                         console.log('[Satellite] Hovmoller extended frames loaded: ' +
-                            result.length + ' OK, ' + failed + ' failed (' + hours + 'h)');
+                            newFrames.length + ' new + ' + reusedFrames.length +
+                            ' reused, ' + failed + ' failed (' + hours + 'h)');
                         if (stormId === currentStormId) renderHovmollerChart();
                     }
                 });
         }
 
-        // Launch initial batch (indices 0 to extCount-1 = older frames)
-        var batchSize = Math.min(concurrency, extCount);
+        // Launch initial batch — only the new older frames
+        var batchSize = Math.min(concurrency, fetchCount);
         for (var i = 0; i < batchSize; i++) {
             fetchFrame(i);
         }
