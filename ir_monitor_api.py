@@ -2082,7 +2082,8 @@ def get_storm_ir_raw_frame(
                         bf_guess_lat = bf_fix["lat"]
                         bf_guess_lon = bf_fix["lon"]
                         break
-                cfix = find_ir_center(tb_float, frame_bounds, bf_guess_lat, bf_guess_lon)
+                cfix = find_ir_center(tb_float, frame_bounds, bf_guess_lat, bf_guess_lon,
+                                     ref_lat=interp_lat, ref_lon=interp_lon)
                 if cfix.get("success"):
                     cached["center_fix"] = {
                         "lat": cfix["lat"], "lon": cfix["lon"],
@@ -2097,6 +2098,12 @@ def get_storm_ir_raw_frame(
                         "best_ir_rad_dif": cfix.get("best_ir_rad_dif", 0),
                         "n_candidates": cfix.get("n_candidates", 0),
                     }
+                    if cfix.get("found_lat") is not None:
+                        cached["center_fix"]["found_lat"] = cfix["found_lat"]
+                        cached["center_fix"]["found_lon"] = cfix["found_lon"]
+                        cached["center_fix"]["guess_lat"] = cfix["guess_lat"]
+                        cached["center_fix"]["guess_lon"] = cfix["guess_lon"]
+                        cached["center_fix"]["dist_deg"] = cfix.get("dist_deg", 0)
                 # Re-cache with center_fix included
                 _gcs_rt_put(atcf_id.upper(), dt_str, cached, lat=center_lat, lon=center_lon)
                 # Log the result
@@ -2151,7 +2158,8 @@ def get_storm_ir_raw_frame(
                 break
 
         try:
-            cfix_raw = find_ir_center(arr, frame_bounds, guess_lat, guess_lon)
+            cfix_raw = find_ir_center(arr, frame_bounds, guess_lat, guess_lon,
+                                     ref_lat=interp_lat, ref_lon=interp_lon)
             if cfix_raw.get("success"):
                 center_fix = {
                     "lat": cfix_raw["lat"],
