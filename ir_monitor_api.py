@@ -2220,6 +2220,188 @@ def get_storm_ir_raw_frame(
 
 
 # ---------------------------------------------------------------------------
+# Hovmoller Batch Endpoint — server-side radial profile computation
+# ---------------------------------------------------------------------------
+
+@router.get("/storm/{atcf_id}/hovmoller")
+def get_storm_hovmoller(
+    atcf_id: str,
+    lookback_hours: float = Query(6.0, ge=1, le=24),
+    radius_deg: float = Query(10.0, ge=1.0, le=12.0),
+    interval_min: int = Query(30, ge=10, le=60),
+):
+    """
+    Return pre-computed azimuthal-mean Tb radial profiles for all frames
+    in the lookback window.  Single request replaces 25-49 individual
+    ir-raw-frame fetches — response is ~15 KB vs ~9 MB of raw Tb data.
+    """
+    _ensure_fresh_cache()
+    storm = None
+    with _active_storms_lock:
+        for s in _active_storms_cache["storms"]:
+            if s["atcf_id"].upper() == atcf_id.upper():
+                storm = dict(s)
+                break
+    if not storm:
+        raise HTTPException(status_code=404, detail=f"Storm {atcf_id} not found")
+
+    center_lat = storm["lat"]
+    center_lon = storm["lon"]
+    half = radius_deg
+
+    frame_times = build_frame_times(_dt.now(timezone.utc), lookback_hours, interval_min)
+    frame_times = list(reversed(frame_times))  # oldest first
+
+    # Load all cached frames
+    frames = []  # list of (target_dt, cached_dict_or_None)
+    for ft in frame_times:
+        dt_str = ft.strftime("%Y%m%d%H%M")
+        cached = _gcs_rt_get(atcf_id.upper(), dt_str, lat=center_lat, lon=center_lon)
+        frames.append((ft, cached))
+
+    # Collect center positions — interpolate for missing fixes
+    track_records = _get_track_for_interp(atcf_id)
+    fix_lat = [None] * len(frames)
+    fix_lon = [None] * len(frames)
+    known_indices = []
+
+    for i, (ft, cached) in enumerate(frames):
+        if cached and isinstance(cached.get("center_fix"), dict) and cached["center_fix"].get("lat"):
+            fix_lat[i] = cached["center_fix"]["lat"]
+            fix_lon[i] = cached["center_fix"]["lon"]
+            known_indices.append(i)
+
+    # Interpolate/extrapolate between known fixes (same algorithm as frontend)
+    if len(known_indices) >= 2:
+        for i in range(len(frames)):
+            if fix_lat[i] is not None:
+                continue
+            lo, hi = -1, -1
+            for ki_idx, ki in enumerate(known_indices):
+                if ki <= i:
+                    lo = ki_idx
+                if ki >= i and hi < 0:
+                    hi = ki_idx
+            if lo >= 0 and hi >= 0 and lo != hi:
+                lo_i, hi_i = known_indices[lo], known_indices[hi]
+                frac = (i - lo_i) / (hi_i - lo_i)
+                fix_lat[i] = fix_lat[lo_i] + frac * (fix_lat[hi_i] - fix_lat[lo_i])
+                fix_lon[i] = fix_lon[lo_i] + frac * (fix_lon[hi_i] - fix_lon[lo_i])
+            elif len(known_indices) >= 2:
+                if lo < 0:
+                    a, b = known_indices[0], known_indices[1]
+                else:
+                    a, b = known_indices[-2], known_indices[-1]
+                span = b - a
+                if span > 0:
+                    ext = (i - a) / span
+                    fix_lat[i] = fix_lat[a] + ext * (fix_lat[b] - fix_lat[a])
+                    fix_lon[i] = fix_lon[a] + ext * (fix_lon[b] - fix_lon[a])
+    elif len(known_indices) == 1:
+        only = known_indices[0]
+        for i in range(len(frames)):
+            if fix_lat[i] is None:
+                fix_lat[i] = fix_lat[only]
+                fix_lon[i] = fix_lon[only]
+    else:
+        # No IR fixes — try interpolated track positions
+        for i, (ft, _) in enumerate(frames):
+            ipos = _interpolate_track_position(track_records, ft)
+            if ipos:
+                fix_lat[i], fix_lon[i] = ipos
+            else:
+                fix_lat[i], fix_lon[i] = center_lat, center_lon
+
+    # Compute radial profiles
+    max_rad_km = 200.0
+    dr = 4.0
+    n_rad_bins = int(max_rad_km / dr)
+
+    out_times = []
+    out_profiles = []
+    out_extrapolated = []
+
+    for i in range(len(frames) - 1, -1, -1):  # oldest → newest (reverse index order)
+        ft, cached = frames[i]
+        if not cached or "tb_data" not in cached:
+            continue
+
+        c_lat, c_lon = fix_lat[i], fix_lon[i]
+        if c_lat is None:
+            continue
+
+        try:
+            raw_u8 = np.frombuffer(
+                base64.b64decode(cached["tb_data"]), dtype=np.uint8
+            ).reshape(cached["tb_rows"], cached["tb_cols"])
+        except Exception:
+            continue
+
+        rows, cols = raw_u8.shape
+        bounds = cached.get("bounds", [
+            [center_lat - half, center_lon - half],
+            [center_lat + half, center_lon + half],
+        ])
+        south, west = bounds[0]
+        north, east = bounds[1]
+        lat_span = north - south
+        lon_span = east - west
+        if lat_span <= 0 or lon_span <= 0:
+            continue
+
+        vmin = cached.get("tb_vmin", _TB_VMIN)
+        vmax = cached.get("tb_vmax", _TB_VMAX)
+
+        # Center pixel
+        cy = (north - c_lat) / lat_span * (rows - 1)
+        cx = (c_lon - west) / lon_span * (cols - 1)
+        cos_lat = np.cos(np.radians(c_lat))
+        dy_km = lat_span / (rows - 1) * 111.0
+        dx_km = lon_span / (cols - 1) * 111.0 * cos_lat
+
+        # Vectorized radial binning
+        row_idx = np.arange(rows)
+        col_idx = np.arange(cols)
+        dY = (row_idx - cy) * dy_km
+        dX = (col_idx - cx) * dx_km
+        DY, DX = np.meshgrid(dY, dX, indexing='ij')
+        dist = np.sqrt(DY * DY + DX * DX)
+        bins = np.floor(dist / dr).astype(np.int32)
+
+        # Decode Tb
+        valid = raw_u8 > 0
+        tb_k = np.where(valid, vmin + (raw_u8.astype(np.float32) - 1) * (vmax - vmin) / 254.0, np.nan)
+
+        profile = [None] * n_rad_bins
+        for b in range(n_rad_bins):
+            mask = valid & (bins == b)
+            count = np.count_nonzero(mask)
+            if count >= 3:
+                profile[b] = round(float(np.mean(tb_k[mask])) - 273.15, 2)
+
+        out_times.append(cached.get("datetime_utc", ft.strftime("%Y-%m-%dT%H:%M:%SZ")))
+        out_profiles.append(profile)
+        has_fix = cached.get("center_fix") and isinstance(cached["center_fix"], dict) and cached["center_fix"].get("lat")
+        out_extrapolated.append(not bool(has_fix))
+
+    if len(out_times) < 2:
+        return JSONResponse(content={"times": [], "radii": [], "profiles": [], "extrapolated": [], "n_frames": 0})
+
+    radii = [round(b * dr + dr / 2, 1) for b in range(n_rad_bins)]
+
+    return JSONResponse(
+        content={
+            "times": out_times,
+            "radii": radii,
+            "profiles": out_profiles,
+            "extrapolated": out_extrapolated,
+            "n_frames": len(out_times),
+        },
+        headers={"Cache-Control": "public, max-age=120"},
+    )
+
+
+# ---------------------------------------------------------------------------
 # Multi-Band Raw Frame Endpoint (Visible, WV, IR)
 # ---------------------------------------------------------------------------
 

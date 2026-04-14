@@ -50,6 +50,8 @@
     var hovExtFrames = null;     // extended frames for 12h/24h (null = use irFrames)
     var hovExtStormId = null;    // storm ID for which extended frames were fetched
     var hovExtFetching = false;  // true while fetching extended frames
+    var hovServerData = null;    // server-side Hovmoller data {times, radii, profiles, extrapolated, _hours}
+    var hovServerStormId = null; // storm ID for server Hovmoller cache
 
     // ── Fast JPG Preview State ──────────────────────────────
     var _previewPhase = false;   // true during JPG preview, false once raw Tb loaded
@@ -1775,10 +1777,70 @@
         }
     }
 
+    /**
+     * Fetch pre-computed Hovmoller radial profiles from the server.
+     * Single request replaces 25-49 individual ir-raw-frame fetches.
+     */
+    function fetchHovmollerFromServer(hours) {
+        if (!currentStormId) return;
+        // Reuse cached server data if available for same storm + sufficient lookback
+        if (hovServerData && hovServerStormId === currentStormId && hovServerData._hours >= hours) {
+            renderHovmollerChart();
+            return;
+        }
+        hovExtFetching = true;
+        var stormId = currentStormId;
+        var hovChart = document.getElementById('sat-diag-hovmoller-chart');
+        if (hovChart) hovChart.style.opacity = '0.4';
+        if (loadStatusEl) loadStatusEl.textContent = 'Hov...';
+
+        var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(stormId) + '/hovmoller'
+            + '?lookback_hours=' + hours
+            + '&radius_deg=' + DEFAULT_RADIUS_DEG
+            + '&interval_min=' + FRAME_INTERVAL_MIN;
+
+        fetch(url)
+            .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+            .then(function (data) {
+                if (stormId !== currentStormId) return;
+                data._hours = hours;
+                hovServerData = data;
+                hovServerStormId = stormId;
+                hovExtFetching = false;
+                if (loadStatusEl) loadStatusEl.textContent = '';
+                if (hovChart) hovChart.style.opacity = '1';
+                console.log('[Satellite] Server Hovmoller: ' + data.n_frames + ' frames (' + hours + 'h)');
+                renderHovmollerChart();
+            })
+            .catch(function (err) {
+                console.warn('[Satellite] Server Hovmoller failed, falling back to frame fetch:', err.message);
+                hovExtFetching = false;
+                if (loadStatusEl) loadStatusEl.textContent = '';
+                if (hovChart) hovChart.style.opacity = '1';
+                // Fall back to individual frame fetches
+                fetchHovmollerFrames(hours);
+            });
+    }
+
     function renderHovmollerChart() {
         var div = document.getElementById('sat-diag-hovmoller-chart');
         if (!div) return;
-        var hov = buildHovmollerData();
+
+        // Use server-side Hovmoller data for extended lookbacks if available
+        var hov;
+        if (hovLookbackHours > 6 && hovServerData && hovServerStormId === currentStormId &&
+            hovServerData._hours >= hovLookbackHours && hovServerData.times && hovServerData.times.length >= 2) {
+            // Server data: profiles[time][radius] — already in Plotly orientation
+            hov = {
+                times: hovServerData.times,
+                radii: hovServerData.radii,
+                z: hovServerData.profiles,  // already [time][radius]
+                extrapolated: hovServerData.extrapolated,
+                _fromServer: true
+            };
+        } else {
+            hov = buildHovmollerData();
+        }
         if (!hov) { div.style.display = 'none'; return; }
         div.style.display = 'block';
 
@@ -1810,13 +1872,19 @@
         ];
 
         // Transpose z to z[time][radius] so time is Y-axis
-        var zT = [];
-        for (var ti = 0; ti < hov.times.length; ti++) {
-            var row = [];
-            for (var ri = 0; ri < hov.radii.length; ri++) {
-                row.push(hov.z[ri][ti]);
+        // Server data is already in [time][radius] orientation
+        var zT;
+        if (hov._fromServer) {
+            zT = hov.z;
+        } else {
+            zT = [];
+            for (var ti = 0; ti < hov.times.length; ti++) {
+                var row = [];
+                for (var ri = 0; ri < hov.radii.length; ri++) {
+                    row.push(hov.z[ri][ti]);
+                }
+                zT.push(row);
             }
-            zT.push(row);
         }
 
         var traces = [{
@@ -2489,6 +2557,7 @@
         irLoadedCount = 0; rightLoadedCount = 0;
         diagChartsInitialized = false;
         hovExtFrames = null; hovExtStormId = null; hovExtFetching = false;
+        hovServerData = null; hovServerStormId = null;
         trackMetadata = null;
         _previewPhase = false; _previewDone = 0; _rawTbStarted = false;
         _satRemoveRadar();
@@ -3434,7 +3503,7 @@
                 if (hours <= 6) {
                     renderHovmollerChart();
                 } else {
-                    fetchHovmollerFrames(hours);
+                    fetchHovmollerFromServer(hours);
                 }
             });
         }
