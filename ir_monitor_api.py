@@ -291,6 +291,11 @@ _last_poll_time: float = 0.0
 
 _ir_frame_cache: OrderedDict = OrderedDict()
 
+# Best-track interpolation cache for center-fix initial guess
+# Stores (datetime, lat, lon) tuples per storm for time-aware position estimates
+_track_interp_cache: dict = {}   # {ATCF_ID: {"records": [(dt, lat, lon), ...], "ts": float}}
+_TRACK_INTERP_TTL = 600          # 10 min — B-deck updates are at most 6-hourly
+
 # ---------------------------------------------------------------------------
 # Season Summary — IBTrACS-based climatology + current season stats
 # ---------------------------------------------------------------------------
@@ -987,6 +992,73 @@ def _haversine_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     # Simple Euclidean in lat/lon space with cos(lat) correction
     cos_lat = math.cos(math.radians((lat1 + lat2) / 2.0))
     return math.sqrt(dlat * dlat + (dlon * cos_lat) ** 2)
+
+
+def _get_track_for_interp(atcf_id: str) -> list:
+    """
+    Return best-track positions as [(datetime, lat, lon), ...] sorted
+    chronologically.  Cached for _TRACK_INTERP_TTL seconds.
+    """
+    key = atcf_id.upper()
+    cached = _track_interp_cache.get(key)
+    if cached and (time.time() - cached["ts"]) < _TRACK_INTERP_TTL:
+        return cached["records"]
+
+    records = _fetch_bdeck(atcf_id.lower())
+    if not records:
+        records = _fetch_adeck(atcf_id.lower())
+    if not records:
+        return []
+
+    # Filter tau=0 (best-track analysis), deduplicate by hour
+    t0 = [r for r in records if r["tau"] == 0]
+    if not t0:
+        t0 = [r for r in records if r["tech"] == "CARQ"]
+    seen: dict = {}
+    for r in t0:
+        seen[r["datetime"].strftime("%Y%m%d%H")] = r
+
+    pts = []
+    for k in sorted(seen.keys()):
+        r = seen[k]
+        pts.append((r["datetime"], r["lat"], r["lon"]))
+
+    # Segment-detection guard (reused invest numbers) — same as get_storm_metadata
+    if len(pts) >= 2:
+        _GAP_H, _MAX_JUMP = 72, 8.0
+        last_seg = 0
+        for i in range(1, len(pts)):
+            gap = (pts[i][0] - pts[i - 1][0]) > timedelta(hours=_GAP_H)
+            jump = _haversine_deg(pts[i - 1][1], pts[i - 1][2],
+                                  pts[i][1], pts[i][2]) > _MAX_JUMP
+            if gap or jump:
+                last_seg = i
+        if last_seg > 0:
+            pts = pts[last_seg:]
+
+    _track_interp_cache[key] = {"records": pts, "ts": time.time()}
+    return pts
+
+
+def _interpolate_track_position(records: list, target_dt) -> tuple | None:
+    """
+    Linearly interpolate best-track (lat, lon) at *target_dt*.
+    Returns (lat, lon) or None if records is empty.
+    Clamps to boundary positions for times outside the track range.
+    """
+    if not records:
+        return None
+    if len(records) == 1:
+        return (records[0][1], records[0][2])
+
+    t_arr = np.array([r[0].timestamp() for r in records])
+    lat_arr = np.array([r[1] for r in records])
+    lon_arr = np.array([r[2] for r in records])
+
+    t_q = target_dt.timestamp()
+    lat_q = float(np.interp(t_q, t_arr, lat_arr))
+    lon_q = float(np.interp(t_q, t_arr, lon_arr))
+    return (lat_q, lon_q)
 
 
 def _filter_genesis_invests(storms: list, radius_deg: float = 5.0,
@@ -1933,6 +2005,16 @@ def get_storm_ir_raw_frame(
     dt_str = target_dt.strftime("%Y%m%d%H%M")
     half = box_deg / 2.0
 
+    # Interpolate best-track position at frame time for center-finding.
+    # This tracks storm motion and is much better than the static advisory
+    # for older frames in the 6h lookback window.
+    track_records = _get_track_for_interp(atcf_id)
+    interp_lat, interp_lon = center_lat, center_lon  # fallback to advisory
+    if track_records:
+        _ipos = _interpolate_track_position(track_records, target_dt)
+        if _ipos:
+            interp_lat, interp_lon = _ipos
+
     # Check GCS cache first (using advisory position for cache key)
     cached = _gcs_rt_get(atcf_id.upper(), dt_str, lat=center_lat, lon=center_lon)
     if cached is not None:
@@ -1958,8 +2040,9 @@ def get_storm_ir_raw_frame(
                     [center_lat - half, center_lon - half],
                     [center_lat + half, center_lon + half],
                 ])
-                # Use adjacent frame's center_fix as initial guess if available
-                bf_guess_lat, bf_guess_lon = center_lat, center_lon
+                # Use adjacent frame's center_fix as initial guess if available,
+                # falling back to interpolated best-track position at frame time
+                bf_guess_lat, bf_guess_lon = interp_lat, interp_lon
                 for bf_off in [1, -1]:
                     bf_adj = frame_index + bf_off
                     if bf_adj < 0 or bf_adj >= len(frame_times):
@@ -2024,10 +2107,9 @@ def get_storm_ir_raw_frame(
         ])
 
         # Use the nearest successful center_fix from an adjacent frame as
-        # the initial guess, falling back to the advisory position.  This
-        # prevents stale advisory positions (sometimes 6+ hours old) from
-        # placing the search window too far from the actual eye.
-        guess_lat, guess_lon = center_lat, center_lon
+        # the initial guess, falling back to the interpolated best-track
+        # position at this frame's time (tracks storm motion over 6h window).
+        guess_lat, guess_lon = interp_lat, interp_lon
         for offset in [1, -1]:
             adj_idx = frame_index + offset
             if adj_idx < 0 or adj_idx >= len(frame_times):

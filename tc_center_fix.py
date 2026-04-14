@@ -27,7 +27,7 @@ def find_ir_center(
     max_iterations=10,
     min_ir_rad_dif=10.0,
     min_eye_score=1.0,
-    max_dist_deg=2.0,
+    max_dist_deg=1.0,
 ):
     """
     Find the TC center from a 2-D IR brightness temperature field.
