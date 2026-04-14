@@ -1941,7 +1941,9 @@ def get_storm_ir_raw_frame(
 
         # Re-attempt center_fix for cached frames that are missing it or failed
         vmax_kt = storm.get("vmax_kt")
-        if cached.get("center_fix") is None and vmax_kt is not None and vmax_kt >= 65:
+        _cfix = cached.get("center_fix")
+        _needs_retry = (_cfix is None) or (isinstance(_cfix, dict) and _cfix.get("success") is False)
+        if _needs_retry and vmax_kt is not None and vmax_kt >= 65:
             try:
                 raw_u8 = np.frombuffer(
                     base64.b64decode(cached["tb_data"]),
