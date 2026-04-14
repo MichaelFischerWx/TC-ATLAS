@@ -20,8 +20,9 @@ def find_ir_center(
     bounds,
     center_lat,
     center_lon,
-    core_dist_km=50.0,
+    core_dist_km=150.0,
     eye_radius_km=10.0,
+    std_band_km=50.0,
     search_radius_km=150.0,
     refine_radius_km=20.0,
     max_iterations=10,
@@ -45,9 +46,12 @@ def find_ir_center(
     center_lat, center_lon : float
         Initial guess for the TC center (typically the best-track fix).
     core_dist_km : float
-        Radius (km) over which radial Tb statistics are computed.
+        Maximum radius (km) for radial Tb statistics (annular bins).
     eye_radius_km : float
         Radius (km) defining the eye region for warm-core scoring.
+    std_band_km : float
+        Half-width (km) of the band around the coldest ring over which
+        azimuthal symmetry (mean_std) is evaluated.  Adapts to eye size.
     search_radius_km : float
         Search radius (km) on the first iteration.
     refine_radius_km : float
@@ -205,7 +209,21 @@ def find_ir_center(
                 )
                 stds = np.sqrt(np.maximum(variances, 0.0))
 
-                mean_std = np.nanmean(stds[valid_bins])
+                # Find coldest ring and evaluate symmetry in ±std_band_km around it
+                valid_means = means.copy()
+                valid_means[~valid_bins] = np.nan
+                coldest_bin = np.nanargmin(valid_means)
+                coldest_radius_km = coldest_bin * dr
+                band_lo = max(0, int((coldest_radius_km - std_band_km) / dr))
+                band_hi = min(n_bins, int((coldest_radius_km + std_band_km) / dr) + 1)
+                band_mask = np.zeros(n_bins, dtype=bool)
+                band_mask[band_lo:band_hi] = True
+                band_valid = valid_bins & band_mask
+                if np.sum(band_valid) < 3:
+                    # Fall back to all valid bins if band is too narrow
+                    band_valid = valid_bins
+
+                mean_std = np.nanmean(stds[band_valid])
                 if mean_std <= 0:
                     continue
 
