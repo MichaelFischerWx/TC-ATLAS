@@ -1749,7 +1749,7 @@
         layout.title = { text: 'Azimuthal-Mean Tb Hovmoller', font: { size: 15, color: '#94a3b8' } };
         layout.xaxis = { title: { text: 'Radius (km)', font: { size: 13 } }, gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 12, family: 'JetBrains Mono, monospace' } };
         layout.yaxis = { title: { text: 'Time (UTC)', font: { size: 13 } }, gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 11, family: 'JetBrains Mono, monospace' }, autorange: true };
-        layout.margin = { t: 36, r: 64, b: 44, l: 76 };
+        layout.margin = { t: 36, r: 64, b: 44, l: 84 };
 
         // Horizontal line at current frame time
         var curFrame = irFrames[animIndex];
@@ -1766,12 +1766,12 @@
         for (var ei = 0; ei < hov.extrapolated.length; ei++) {
             if (hov.extrapolated[ei]) {
                 layout.annotations.push({
-                    x: -0.02, xref: 'paper',
+                    x: -0.09, xref: 'paper',
                     y: hov.times[ei], yref: 'y',
-                    text: '*',
-                    font: { size: 16, color: '#fb923c', family: 'sans-serif' },
+                    text: '\u2731',
+                    font: { size: 10, color: '#fb923c', family: 'sans-serif' },
                     showarrow: false,
-                    xanchor: 'right'
+                    xanchor: 'center'
                 });
             }
         }
