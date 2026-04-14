@@ -214,7 +214,18 @@ def find_ir_center(
                 eye_mean = np.mean(tb_patch[eye_ok])
 
                 ir_rad_dif = eye_mean - np.nanmin(means[valid_bins])
-                score = 100.0 * (1.0 / mean_std) ** 2 * ir_rad_dif
+
+                # Skip candidates below the quality-gate threshold.
+                # Prevents the algorithm from locking onto small symmetric
+                # features (convective cells) that would fail the gate anyway.
+                if ir_rad_dif < min_ir_rad_dif:
+                    continue
+
+                # Score: warm-core contrast weighted by azimuthal symmetry.
+                # Linear 1/mean_std (not quadratic) so ir_rad_dif dominates —
+                # a Cat 4 eye with asymmetric eyewall must outscore a small
+                # symmetric convective feature.
+                score = 100.0 * (1.0 / mean_std) * ir_rad_dif
 
                 n_candidates += 1
                 if score > best_score:
