@@ -27,6 +27,7 @@ def find_ir_center(
     max_iterations=10,
     min_ir_rad_dif=10.0,
     min_eye_score=1.0,
+    max_dist_deg=1.0,
 ):
     """
     Find the TC center from a 2-D IR brightness temperature field.
@@ -56,6 +57,10 @@ def find_ir_center(
         valid fix.
     min_eye_score : float
         Minimum composite score for a valid fix.
+    max_dist_deg : float
+        Maximum allowed distance (degrees) between the found center and
+        the initial guess (center_lat/lon).  Prevents the algorithm from
+        locking onto a non-eye feature far from the storm center.
 
     Returns
     -------
@@ -232,6 +237,28 @@ def find_ir_center(
     ):
         found_lat = north - best_y * lat_span / (rows - 1)
         found_lon = west + best_x * lon_span / (cols - 1)
+
+        # Distance constraint: reject fixes too far from the initial guess
+        # (interpolated best-track position).  Prevents locking onto non-eye
+        # features (convective bursts, outer bands) far from the storm center.
+        dist_deg = np.sqrt(
+            (found_lat - center_lat) ** 2
+            + ((found_lon - center_lon) * cos_lat) ** 2
+        )
+        if max_dist_deg > 0 and dist_deg > max_dist_deg:
+            return {
+                "success": False,
+                "reason": "too_far",
+                "best_score": round(float(best_score), 2),
+                "best_ir_rad_dif": round(float(best_ir_rad_dif), 2),
+                "best_mean_std": round(float(best_mean_std), 2),
+                "n_candidates": n_candidates,
+                "n_iterations": n_iterations_run,
+                "valid_frac": round(valid_frac, 4),
+                "grid_shape": [rows, cols],
+                "dist_deg": round(float(dist_deg), 3),
+            }
+
         return {
             "lat": round(float(found_lat), 3),
             "lon": round(float(found_lon), 3),

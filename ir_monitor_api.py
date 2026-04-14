@@ -1964,9 +1964,10 @@ def get_storm_ir_raw_frame(
                         continue
                     bf_dt = frame_times[bf_adj].strftime("%Y%m%d%H%M")
                     bf_cached = _gcs_rt_get(atcf_id.upper(), bf_dt, lat=center_lat, lon=center_lon)
-                    if bf_cached and isinstance(bf_cached.get("center_fix"), dict):
-                        bf_guess_lat = bf_cached["center_fix"]["lat"]
-                        bf_guess_lon = bf_cached["center_fix"]["lon"]
+                    bf_fix = bf_cached.get("center_fix") if bf_cached else None
+                    if isinstance(bf_fix, dict) and bf_fix.get("lat") is not None:
+                        bf_guess_lat = bf_fix["lat"]
+                        bf_guess_lon = bf_fix["lon"]
                         break
                 cfix = find_ir_center(tb_float, frame_bounds, bf_guess_lat, bf_guess_lon)
                 if cfix.get("success"):
@@ -2031,9 +2032,10 @@ def get_storm_ir_raw_frame(
                 continue
             adj_dt = frame_times[adj_idx].strftime("%Y%m%d%H%M")
             adj_cached = _gcs_rt_get(atcf_id.upper(), adj_dt, lat=center_lat, lon=center_lon)
-            if adj_cached and isinstance(adj_cached.get("center_fix"), dict):
-                guess_lat = adj_cached["center_fix"]["lat"]
-                guess_lon = adj_cached["center_fix"]["lon"]
+            adj_fix = adj_cached.get("center_fix") if adj_cached else None
+            if isinstance(adj_fix, dict) and adj_fix.get("lat") is not None:
+                guess_lat = adj_fix["lat"]
+                guess_lon = adj_fix["lon"]
                 break
 
         try:
