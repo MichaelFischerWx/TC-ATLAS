@@ -331,10 +331,15 @@
         var south = b[0][0], west = b[0][1], north = b[1][0], east = b[1][1];
         if (zoomDeg < 10) {
             var cLat = (south + north) / 2, cLon = (west + east) / 2;
-            // Follow mode: center on IR center_fix position
-            if (followCenter && frame.center_fix && frame.center_fix.lat) {
-                cLat = frame.center_fix.lat;
-                cLon = frame.center_fix.lon;
+            // Follow mode: center on IR center_fix (or interpolated/extrapolated position)
+            if (followCenter) {
+                if (frame.center_fix && frame.center_fix.lat) {
+                    cLat = frame.center_fix.lat;
+                    cLon = frame.center_fix.lon;
+                } else if (frame._interpCenter) {
+                    cLat = frame._interpCenter.lat;
+                    cLon = frame._interpCenter.lon;
+                }
             }
             return { south: cLat - zoomDeg, north: cLat + zoomDeg, west: cLon - zoomDeg, east: cLon + zoomDeg };
         }
@@ -2411,6 +2416,67 @@
         validFrameIndices = [];
         for (var i = 0; i < irFrames.length; i++) {
             if (irFrames[i]) validFrameIndices.push(i);
+        }
+        _interpolateCenters(irFrames);
+    }
+
+    /**
+     * Interpolate/extrapolate center positions for frames missing center_fix.
+     * Same algorithm as buildHovmollerData uses, but stores the result on
+     * each frame as _interpCenter = { lat, lon } for use by getViewBounds.
+     */
+    function _interpolateCenters(frames) {
+        var knownIndices = [];
+        var fixLat = [], fixLon = [];
+        for (var i = 0; i < frames.length; i++) {
+            if (frames[i] && frames[i].center_fix && frames[i].center_fix.lat) {
+                fixLat[i] = frames[i].center_fix.lat;
+                fixLon[i] = frames[i].center_fix.lon;
+                knownIndices.push(i);
+            }
+            if (frames[i]) frames[i]._interpCenter = null;
+        }
+        if (knownIndices.length === 0) return;
+
+        if (knownIndices.length === 1) {
+            var only = knownIndices[0];
+            for (var si = 0; si < frames.length; si++) {
+                if (frames[si]) frames[si]._interpCenter = { lat: fixLat[only], lon: fixLon[only] };
+            }
+            return;
+        }
+
+        for (var ii = 0; ii < frames.length; ii++) {
+            if (!frames[ii]) continue;
+            if (fixLat[ii] != null) {
+                frames[ii]._interpCenter = { lat: fixLat[ii], lon: fixLon[ii] };
+                continue;
+            }
+            var lo = -1, hi = -1;
+            for (var ki = 0; ki < knownIndices.length; ki++) {
+                if (knownIndices[ki] <= ii) lo = ki;
+                if (knownIndices[ki] >= ii && hi < 0) hi = ki;
+            }
+            var cLat, cLon;
+            if (lo >= 0 && hi >= 0 && lo !== hi) {
+                var loIdx = knownIndices[lo], hiIdx = knownIndices[hi];
+                var frac = (ii - loIdx) / (hiIdx - loIdx);
+                cLat = fixLat[loIdx] + frac * (fixLat[hiIdx] - fixLat[loIdx]);
+                cLon = fixLon[loIdx] + frac * (fixLon[hiIdx] - fixLon[loIdx]);
+            } else {
+                var a, b;
+                if (lo < 0) { a = knownIndices[0]; b = knownIndices[1]; }
+                else { a = knownIndices[knownIndices.length - 2]; b = knownIndices[knownIndices.length - 1]; }
+                var span = b - a;
+                if (span > 0) {
+                    var ext = (ii - a) / span;
+                    cLat = fixLat[a] + ext * (fixLat[b] - fixLat[a]);
+                    cLon = fixLon[a] + ext * (fixLon[b] - fixLon[a]);
+                } else {
+                    cLat = fixLat[a]; cLon = fixLon[a];
+                }
+            }
+            frames[ii]._interpCenter = { lat: cLat, lon: cLon };
         }
     }
 
