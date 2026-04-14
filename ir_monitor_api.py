@@ -2260,11 +2260,38 @@ def get_storm_hovmoller(
     frame_times = build_frame_times(_dt.now(timezone.utc), lookback_hours, interval_min)
     frame_times = list(reversed(frame_times))  # oldest first
 
-    # Load all cached frames
+    # Load frames — try GCS cache first, fetch from satellite if missing
+    half = radius_deg
+    box_deg = radius_deg * 2
     frames = []  # list of (target_dt, cached_dict_or_None)
     for ft in frame_times:
         dt_str = ft.strftime("%Y%m%d%H%M")
         cached = _gcs_rt_get(atcf_id.upper(), dt_str, lat=center_lat, lon=center_lon)
+        if cached is None:
+            # Not in cache — fetch raw Tb from satellite and cache it
+            try:
+                raw = fetch_ir_tb_raw(center_lat, center_lon, ft, box_deg)
+                if raw and raw.get("tb") is not None:
+                    arr = np.asarray(raw["tb"], dtype=np.float32)
+                    mask = ~np.isfinite(arr) | (arr <= 0)
+                    scaled = np.clip((arr - _TB_VMIN) * _TB_SCALE + 1, 1, 255)
+                    scaled[mask] = 0
+                    encoded = scaled.astype(np.uint8)
+                    cached = {
+                        "tb_data": base64.b64encode(encoded.tobytes()).decode("ascii"),
+                        "tb_rows": encoded.shape[0], "tb_cols": encoded.shape[1],
+                        "tb_vmin": _TB_VMIN, "tb_vmax": _TB_VMAX,
+                        "datetime_utc": raw.get("datetime_utc", ft.strftime("%Y-%m-%dT%H:%M:%SZ")),
+                        "satellite": raw.get("satellite", ""),
+                        "bounds": raw.get("bounds", [
+                            [center_lat - half, center_lon - half],
+                            [center_lat + half, center_lon + half],
+                        ]),
+                        "center_fix": None,
+                    }
+                    _gcs_rt_put(atcf_id.upper(), dt_str, cached, lat=center_lat, lon=center_lon)
+            except Exception:
+                cached = None
         frames.append((ft, cached))
 
     # Collect center positions — interpolate for missing fixes
