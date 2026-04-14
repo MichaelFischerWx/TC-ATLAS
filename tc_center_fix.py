@@ -222,10 +222,11 @@ def find_ir_center(
                     continue
 
                 # Score: warm-core contrast weighted by azimuthal symmetry.
-                # Linear 1/mean_std (not quadratic) so ir_rad_dif dominates —
-                # a Cat 4 eye with asymmetric eyewall must outscore a small
-                # symmetric convective feature.
-                score = 100.0 * (1.0 / mean_std) * ir_rad_dif
+                # Quadratic 1/mean_std^2 strongly favors the geometric center
+                # of the eye (most symmetric point) over off-center warm spots.
+                # The ir_rad_dif >= min_ir_rad_dif filter above prevents this
+                # from locking onto small non-eye features.
+                score = 100.0 * (1.0 / mean_std) ** 2 * ir_rad_dif
 
                 n_candidates += 1
                 if score > best_score:
