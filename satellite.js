@@ -1518,6 +1518,8 @@
         console.log('[Satellite] Hovmoller centers: ' + nFixes + '/' + srcFrames.length +
             ' frames have IR center fixes, ' + (srcFrames.length - nFixes) + ' interpolated');
 
+        var extrapolated = []; // parallel to times[] — true if center was interpolated/extrapolated
+
         for (var fi = srcFrames.length - 1; fi >= 0; fi--) {
             var frame = srcFrames[fi];
             if (!frame || !frame.tb_data) continue;
@@ -1556,6 +1558,7 @@
                 profile[i] = counts[i] >= 3 ? (sums[i] / counts[i]) - 273.15 : null;
             }
             times.push(frame.datetime_utc);
+            extrapolated.push(!(frame.center_fix && frame.center_fix.lat));
             profiles.push(profile);
         }
 
@@ -1578,7 +1581,7 @@
             z.push(row);
         }
 
-        return { times: times, radii: radii, z: z };
+        return { times: times, radii: radii, z: z, extrapolated: extrapolated };
     }
 
     /**
@@ -1756,6 +1759,21 @@
                 x0: 0, x1: 1, xref: 'paper',
                 line: { color: '#ffffff66', width: 1.5, dash: 'dot' }
             }];
+        }
+
+        // Orange asterisks on Y-axis for extrapolated center positions
+        layout.annotations = layout.annotations || [];
+        for (var ei = 0; ei < hov.extrapolated.length; ei++) {
+            if (hov.extrapolated[ei]) {
+                layout.annotations.push({
+                    x: -0.02, xref: 'paper',
+                    y: hov.times[ei], yref: 'y',
+                    text: '*',
+                    font: { size: 16, color: '#fb923c', family: 'sans-serif' },
+                    showarrow: false,
+                    xanchor: 'right'
+                });
+            }
         }
 
         // Purge and re-create the plot to ensure Plotly picks up new
