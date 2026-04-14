@@ -2486,14 +2486,35 @@
             }
             if (frames[i]) frames[i]._interpCenter = null;
         }
-        if (knownIndices.length === 0) return;
-
-        if (knownIndices.length === 1) {
-            var only = knownIndices[0];
-            for (var si = 0; si < frames.length; si++) {
-                if (frames[si]) frames[si]._interpCenter = { lat: fixLat[only], lon: fixLon[only] };
+        if (knownIndices.length === 0) {
+            // No IR center fixes — use advisory position for all frames if available
+            if (currentStorm && currentStorm.lat) {
+                for (var ai = 0; ai < frames.length; ai++) {
+                    if (frames[ai]) frames[ai]._interpCenter = { lat: currentStorm.lat, lon: currentStorm.lon };
+                }
             }
             return;
+        }
+
+        if (knownIndices.length === 1) {
+            // Only one fix — use advisory position as second anchor if available,
+            // otherwise fall back to the single fix for all frames
+            var only = knownIndices[0];
+            if (currentStorm && currentStorm.lat &&
+                (Math.abs(currentStorm.lat - fixLat[only]) > 0.01 ||
+                 Math.abs(currentStorm.lon - fixLon[only]) > 0.01)) {
+                // Advisory position differs — use it as anchor for index 0 (newest)
+                // and interpolate/extrapolate between advisory and the single fix
+                fixLat[0] = currentStorm.lat;
+                fixLon[0] = currentStorm.lon;
+                knownIndices.unshift(0);
+                // Fall through to the ≥2 fixes interpolation below
+            } else {
+                for (var si = 0; si < frames.length; si++) {
+                    if (frames[si]) frames[si]._interpCenter = { lat: fixLat[only], lon: fixLon[only] };
+                }
+                return;
+            }
         }
 
         for (var ii = 0; ii < frames.length; ii++) {
