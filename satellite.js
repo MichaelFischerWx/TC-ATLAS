@@ -1695,7 +1695,7 @@
         var extFrames = [];
         var completed = 0;
         var failed = 0;
-        var concurrency = 5;
+        var concurrency = 10;
 
         // Show loading status
         var hovChart = document.getElementById('sat-diag-hovmoller-chart');
