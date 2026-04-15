@@ -40,6 +40,8 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse
 from PIL import Image
 
+from tc_center_fix import find_ir_center
+
 logger = logging.getLogger("global_archive")
 
 # ── GCS Cache ────────────────────────────────────────────────
@@ -2695,6 +2697,22 @@ def ir_hovmoller(
         if lat_span <= 0 or lon_span <= 0:
             return None
 
+        # Attempt objective IR center-finding for hurricane-strength frames
+        center_method = "track"
+        if wind is not None and wind >= 65:
+            try:
+                cfix = find_ir_center(
+                    arr, [[south, west], [north, east]],
+                    c_lat, c_lon,
+                    ref_lat=c_lat, ref_lon=c_lon,
+                )
+                if cfix.get("success") and cfix.get("lat"):
+                    c_lat = cfix["lat"]
+                    c_lon = cfix["lon"]
+                    center_method = "ir_fix"
+            except Exception:
+                pass  # fall back to best-track position
+
         # Center pixel
         cy = (north - c_lat) / lat_span * (rows - 1)
         cx = (c_lon - west) / lon_span * (cols - 1)
@@ -2725,6 +2743,7 @@ def ir_hovmoller(
             "time": dt_str,
             "profile": profile,
             "wind": wind,
+            "center": center_method,
         }
 
     # Process frames concurrently (cap at 5 workers for OOM protection)

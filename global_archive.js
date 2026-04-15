@@ -546,6 +546,10 @@ function switchColormap(name) {
     for (var i = 0; i < btns.length; i++) {
         btns[i].classList.toggle('active', btns[i].getAttribute('data-cmap') === name);
     }
+    // Re-render Hovmöller with new colorscale if visible
+    if (hovmollerVisible && hovmollerData) {
+        renderHovmoller(hovmollerData);
+    }
 }
 window.switchColormap = switchColormap;
 
@@ -1795,6 +1799,33 @@ function fetchHovmoller() {
         });
 }
 
+/** Build a Plotly colorscale from the active IR_COLORMAPS LUT.
+ *  Samples the 256-entry RGBA LUT at ~20 evenly spaced points and
+ *  maps them to the Celsius range used for the Hovmöller. */
+function _buildHovColorscale(cmapName) {
+    var TB_VMIN = 170.0, TB_VMAX = 310.0;
+    var cMin = -100, cMax = 40, cSpan = cMax - cMin;
+    var lut = IR_COLORMAPS[cmapName] || IR_COLORMAPS['claude-ir'];
+    var nStops = 20;
+    var scale = [];
+    for (var i = 0; i < nStops; i++) {
+        // Sample LUT evenly from index 255 (warm=310K) down to index 1 (cold=170K)
+        var lutIdx = Math.round(255 - i * 254 / (nStops - 1));
+        if (lutIdx < 1) lutIdx = 1;
+        var li = lutIdx * 4;
+        var r = lut[li], g = lut[li + 1], b = lut[li + 2];
+        // Map this LUT index to Tb then to Celsius fraction
+        var tbK = TB_VMIN + (lutIdx - 1) * (TB_VMAX - TB_VMIN) / 254.0;
+        var frac = Math.max(0, Math.min(1, ((tbK - 273.15) - cMin) / cSpan));
+        scale.push([frac, 'rgb(' + r + ',' + g + ',' + b + ')']);
+    }
+    // Sort by fraction and ensure endpoints
+    scale.sort(function (a, b) { return a[0] - b[0]; });
+    if (scale[0][0] > 0) scale.unshift([0, scale[0][1]]);
+    if (scale[scale.length - 1][0] < 1) scale.push([1, scale[scale.length - 1][1]]);
+    return scale;
+}
+
 function renderHovmoller(data) {
     var div = document.getElementById('hovmoller-chart');
     var scrollWrap = document.getElementById('hovmoller-scroll-wrap');
@@ -1810,32 +1841,8 @@ function renderHovmoller(data) {
     div.style.height = chartHeight + 'px';
     if (scrollWrap) scrollWrap.style.display = '';
 
-    // Claude IR colorscale mapped to Celsius (-100 to +40)
-    var cMin = -100, cMax = 40, cSpan = cMax - cMin;
-    function cFrac(tbK) { return Math.max(0, Math.min(1, ((tbK - 273.15) - cMin) / cSpan)); }
-
-    var colorscale = [
-        [0.00,          'rgb(28,12,96)'],
-        [cFrac(183),    'rgb(64,24,140)'],
-        [cFrac(193),    'rgb(120,48,180)'],
-        [cFrac(198),    'rgb(168,64,200)'],
-        [cFrac(203),    'rgb(196,48,156)'],
-        [cFrac(208),    'rgb(180,36,68)'],
-        [cFrac(213),    'rgb(214,78,56)'],
-        [cFrac(218),    'rgb(228,132,48)'],
-        [cFrac(223),    'rgb(238,196,48)'],
-        [cFrac(228),    'rgb(192,220,40)'],
-        [cFrac(233),    'rgb(96,208,68)'],
-        [cFrac(238),    'rgb(40,178,116)'],
-        [cFrac(243),    'rgb(32,148,166)'],
-        [cFrac(248),    'rgb(68,180,196)'],
-        [cFrac(253),    'rgb(140,210,220)'],
-        [cFrac(263),    'rgb(216,218,228)'],
-        [cFrac(273),    'rgb(180,180,192)'],
-        [cFrac(283),    'rgb(120,120,132)'],
-        [cFrac(293),    'rgb(70,70,82)'],
-        [1.00,          'rgb(12,12,22)']
-    ];
+    var cMin = -100, cMax = 40;
+    var colorscale = _buildHovColorscale(irSelectedColormap);
 
     // z orientation: x=radius, y=time → z[time][radius] (API already returns this)
     var nTimes = data.times.length;
