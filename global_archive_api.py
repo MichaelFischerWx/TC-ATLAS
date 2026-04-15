@@ -2488,12 +2488,15 @@ _hovmoller_cache: OrderedDict = OrderedDict()
 _HOVMOLLER_CACHE_MAX = 20
 
 
+_HOV_CACHE_VER = "v2"  # bump to invalidate GCS cache (v2 = added centers)
+
+
 def _gcs_get_hovmoller(sid: str):
     """Try loading a cached Hovmöller result from GCS."""
     bucket = _get_gcs_bucket()
     if not bucket:
         return None
-    blob_name = f"archive/hovmoller/{sid}.json"
+    blob_name = f"archive/hovmoller/{_HOV_CACHE_VER}/{sid}.json"
     try:
         blob = bucket.blob(blob_name)
         if not blob.exists():
@@ -2509,7 +2512,7 @@ def _gcs_put_hovmoller(sid: str, result: dict):
     bucket = _get_gcs_bucket()
     if not bucket:
         return
-    blob_name = f"archive/hovmoller/{sid}.json"
+    blob_name = f"archive/hovmoller/{_HOV_CACHE_VER}/{sid}.json"
     try:
         blob = bucket.blob(blob_name)
         blob.upload_from_string(
