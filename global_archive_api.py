@@ -2509,7 +2509,7 @@ _hovmoller_cache: OrderedDict = OrderedDict()
 _HOVMOLLER_CACHE_MAX = 20
 
 
-_HOV_CACHE_VER = "v3"  # v3 = disabled center-finding for speed
+_HOV_CACHE_VER = "v4"  # v4 = relaxed center-finding (no min thresholds, fast)
 
 
 def _gcs_get_hovmoller(sid: str):
@@ -2660,11 +2660,26 @@ def _precompute_hovmoller(sid: str, track_points: list, storm_lon: float = 0.0,
         if lat_span <= 0 or lon_span <= 0:
             return None
 
-        # Center-finding disabled for now — best-track interpolation is fast
-        # and sufficient for the Hovmöller. IR center-finding adds ~1-2s per
-        # frame which makes 60+ frame storms take 3+ minutes. Can be re-enabled
-        # as an optional refinement step in the future.
+        # Relaxed center-finding for Hovmöller: no minimum IR rad dif or
+        # eye score — we always want the best center even if there's no
+        # discernible eye (e.g., center of CDO). Smaller search radius and
+        # fewer iterations to keep it fast (~0.2s vs ~1.5s per frame).
         center_method = "track"
+        if wind is not None and wind >= 50:
+            try:
+                cfix = find_ir_center(
+                    arr, [[south, west], [north, east]], c_lat, c_lon,
+                    ref_lat=c_lat, ref_lon=c_lon,
+                    min_ir_rad_dif=0.0,
+                    min_eye_score=0.0,
+                    search_radius_km=80.0,
+                    max_iterations=3,
+                )
+                if cfix.get("lat") is not None:
+                    c_lat, c_lon = cfix["lat"], cfix["lon"]
+                    center_method = "ir_fix"
+            except Exception:
+                pass
 
         cy = (north - c_lat) / lat_span * (rows - 1)
         cx = (c_lon - west) / lon_span * (cols - 1)
