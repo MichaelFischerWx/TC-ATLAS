@@ -2729,7 +2729,7 @@ def _precompute_hovmoller(sid: str, track_points: list, storm_lon: float = 0.0,
 
 
 @router.api_route("/ir/hovmoller", methods=["GET", "POST"])
-def ir_hovmoller(
+async def ir_hovmoller(
     request: Request,
     sid: str = Query("", description="IBTrACS storm ID"),
     track: str = Query("", description="JSON-encoded track points (GET) or send as POST body"),
@@ -2774,9 +2774,8 @@ def ir_hovmoller(
     track_points = []
     track_str = track
     if request and request.method == "POST" and not track_str:
-        import asyncio
         try:
-            body = asyncio.get_event_loop().run_until_complete(request.body())
+            body = await request.body()
             body_json = json_mod.loads(body)
             if isinstance(body_json, list):
                 track_points = body_json
