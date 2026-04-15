@@ -508,6 +508,28 @@
 
     // ── Helpers ─────────────────────────────────────────────────
 
+    /** Split a latlng array into segments at antimeridian crossings.
+     *  Returns an array of arrays — each sub-array is a contiguous segment
+     *  that doesn't cross ±180°. Use with L.polyline(segments) for
+     *  multi-segment rendering. */
+    function splitAtAntimeridian(latlngs) {
+        if (latlngs.length < 2) return [latlngs];
+        var segments = [];
+        var current = [latlngs[0]];
+        for (var i = 1; i < latlngs.length; i++) {
+            var prevLon = latlngs[i - 1][1];
+            var curLon = latlngs[i][1];
+            // A jump > 180° in longitude indicates a dateline crossing
+            if (Math.abs(curLon - prevLon) > 180) {
+                segments.push(current);
+                current = [];
+            }
+            current.push(latlngs[i]);
+        }
+        segments.push(current);
+        return segments;
+    }
+
     /** Classify wind speed (kt) to Saffir-Simpson category key */
     function windToCategory(vmax) {
         if (vmax == null) return 'TD';
@@ -1829,9 +1851,13 @@
             // Skip segments with impossibly large spatial jumps (recycled invest IDs)
             var dlat = curr.lat - prev.lat;
             var dlon = curr.lon - prev.lon;
+            if (Math.abs(dlon) > 180) dlon = dlon - Math.sign(dlon) * 360; // antimeridian
             var cosLat = Math.cos((curr.lat + prev.lat) * 0.5 * Math.PI / 180);
             var dist = Math.sqrt(dlat * dlat + (dlon * cosLat) * (dlon * cosLat));
             if (dist > 8) continue;  // >8° (~900 km) in one fix interval = invest recycling
+
+            // Skip drawing across antimeridian (2-point segments can't wrap)
+            if (Math.abs(curr.lon - prev.lon) > 180) continue;
 
             var cat = windToCategory(curr.vmax_kt);
             var color = SS_COLORS[cat] || SS_COLORS.TD;
@@ -3956,20 +3982,24 @@
             var opacity = isOfficial ? 1.0 : (isConsensus ? 0.9 : 0.6);
             var dashArray = (isOfficial || isConsensus) ? null : '4,3';
 
-            // Build polyline from forecast points
+            // Build polyline from forecast points (split at antimeridian)
             var latlngs = [];
             for (var pi = 0; pi < points.length; pi++) {
                 latlngs.push([points[pi].lat, points[pi].lon]);
             }
 
-            var line = L.polyline(latlngs, {
-                color: color,
-                weight: weight,
-                opacity: opacity,
-                dashArray: dashArray,
-                interactive: false
-            }).addTo(detailMap);
-            _rtModelTrackLayers.push(line);
+            var segments = splitAtAntimeridian(latlngs);
+            for (var si = 0; si < segments.length; si++) {
+                if (segments[si].length < 2) continue;
+                var line = L.polyline(segments[si], {
+                    color: color,
+                    weight: weight,
+                    opacity: opacity,
+                    dashArray: dashArray,
+                    interactive: false
+                }).addTo(detailMap);
+                _rtModelTrackLayers.push(line);
+            }
 
             // Add markers at tau-0 (init) and every 24h
             for (var mi = 0; mi < points.length; mi++) {
@@ -4286,13 +4316,17 @@
                 latlngs.push([pts[pi].lat, pts[pi].lon]);
             }
 
-            var line = L.polyline(latlngs, {
-                color: _WEATHERLAB_MEMBER_COLOR,
-                weight: Math.max(0.8, 1 * s),
-                opacity: 1,
-                interactive: false
-            }).addTo(detailMap);
-            _rtWeatherlabLayers.push(line);
+            var segments = splitAtAntimeridian(latlngs);
+            for (var si = 0; si < segments.length; si++) {
+                if (segments[si].length < 2) continue;
+                var line = L.polyline(segments[si], {
+                    color: _WEATHERLAB_MEMBER_COLOR,
+                    weight: Math.max(0.8, 1 * s),
+                    opacity: 1,
+                    interactive: false
+                }).addTo(detailMap);
+                _rtWeatherlabLayers.push(line);
+            }
 
             // Add markers at 24h intervals with tooltips
             for (var pi = 0; pi < pts.length; pi++) {
@@ -4366,14 +4400,18 @@
                 meanLatLngs.push([mean.points[i].lat, mean.points[i].lon]);
             }
 
-            var meanLine = L.polyline(meanLatLngs, {
-                color: _WEATHERLAB_MEAN_COLOR,
-                weight: 3 * s,
-                opacity: 0.95,
-                interactive: false
-            }).addTo(detailMap);
-            meanLine._isMeanLine = true;
-            _rtWeatherlabLayers.push(meanLine);
+            var meanSegments = splitAtAntimeridian(meanLatLngs);
+            for (var si = 0; si < meanSegments.length; si++) {
+                if (meanSegments[si].length < 2) continue;
+                var meanLine = L.polyline(meanSegments[si], {
+                    color: _WEATHERLAB_MEAN_COLOR,
+                    weight: 3 * s,
+                    opacity: 0.95,
+                    interactive: false
+                }).addTo(detailMap);
+                meanLine._isMeanLine = true;
+                _rtWeatherlabLayers.push(meanLine);
+            }
 
             // Markers at standard forecast hours on mean
             for (var i = 0; i < mean.points.length; i++) {
