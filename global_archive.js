@@ -1821,30 +1821,20 @@ function renderHovmoller(data) {
         [1.00,          'rgb(12,12,22)']
     ];
 
-    // Transpose: API returns profiles[time][radius], Plotly needs z[radius][time]
-    // for x=time, y=radius orientation
+    // z orientation: x=radius, y=time → z[time][radius] (API already returns this)
     var nTimes = data.times.length;
     var nRadii = data.radii.length;
-    var z = [];
-    for (var ri = 0; ri < nRadii; ri++) {
-        var row = [];
-        for (var ti = 0; ti < nTimes; ti++) {
-            var val = data.profiles[ti] ? data.profiles[ti][ri] : null;
-            row.push(val);
-        }
-        z.push(row);
-    }
 
     var heatmapTrace = {
-        x: data.times,
-        y: data.radii,
-        z: z,
+        x: data.radii,
+        y: data.times,
+        z: data.profiles,
         type: 'heatmap',
         colorscale: colorscale,
         zmin: cMin,
         zmax: cMax,
         connectgaps: false,
-        hovertemplate: '%{x}<br>r = %{y} km<br>Tb = %{z:.1f} °C<extra></extra>',
+        hovertemplate: '%{y}<br>r = %{x} km<br>Tb = %{z:.1f} °C<extra></extra>',
         colorbar: {
             title: { text: '°C', font: { size: 9, color: '#8b9ec2' } },
             len: 0.8,
@@ -1855,27 +1845,27 @@ function renderHovmoller(data) {
 
     var traces = [heatmapTrace];
 
-    // Overlay wind speed trace if available
+    // Overlay wind speed trace if available (on secondary x-axis, along time)
     if (data.winds && data.winds.length === nTimes) {
         var windTrace = {
-            x: data.times,
-            y: data.winds,
+            x: data.winds,
+            y: data.times,
             type: 'scatter',
             mode: 'lines',
             line: { color: 'rgba(255,255,255,0.7)', width: 1.5, dash: 'dot' },
-            yaxis: 'y2',
-            hovertemplate: '%{x}<br>Vmax = %{y} kt<extra></extra>',
+            xaxis: 'x2',
+            hovertemplate: '%{y}<br>Vmax = %{x} kt<extra></extra>',
             showlegend: false
         };
         traces.push(windTrace);
     }
 
-    // Current IR frame marker
+    // Current IR frame marker (horizontal line since time is on Y)
     var shapes = [];
     if (_lastMarkerDt) {
         shapes.push({
-            type: 'line', xref: 'x', yref: 'paper',
-            x0: _lastMarkerDt, x1: _lastMarkerDt, y0: 0, y1: 1,
+            type: 'line', yref: 'y', xref: 'paper',
+            y0: _lastMarkerDt, y1: _lastMarkerDt, x0: 0, x1: 1,
             line: { color: 'rgba(255,200,50,0.8)', width: 2 }
         });
     }
@@ -1884,28 +1874,29 @@ function renderHovmoller(data) {
         paper_bgcolor: 'rgba(0,0,0,0)',
         plot_bgcolor: 'rgba(0,0,0,0)',
         font: { family: 'DM Sans, sans-serif', color: '#8b9ec2', size: 10 },
-        margin: { t: 10, r: 50, b: 36, l: 48 },
+        margin: { t: 10, r: 50, b: 36, l: 100 },
         xaxis: {
-            title: { text: 'Time (UTC)', font: { size: 9 } },
-            tickfont: { size: 8 },
-            gridcolor: 'rgba(255,255,255,0.05)'
-        },
-        yaxis: {
             title: { text: 'Radius (km)', font: { size: 9 } },
             tickfont: { size: 8 },
             gridcolor: 'rgba(255,255,255,0.05)',
             range: [0, 200]
         },
+        yaxis: {
+            title: { text: 'Time (UTC)', font: { size: 9 } },
+            tickfont: { size: 8 },
+            gridcolor: 'rgba(255,255,255,0.05)',
+            autorange: 'reversed'
+        },
         shapes: shapes
     };
 
-    // Secondary y-axis for wind overlay
+    // Secondary x-axis for wind overlay (top)
     if (data.winds && data.winds.length === nTimes) {
-        layout.yaxis2 = {
+        layout.xaxis2 = {
             title: { text: 'Vmax (kt)', font: { size: 9, color: 'rgba(255,255,255,0.5)' } },
             tickfont: { size: 8, color: 'rgba(255,255,255,0.4)' },
-            overlaying: 'y',
-            side: 'right',
+            overlaying: 'x',
+            side: 'top',
             showgrid: false,
             range: [0, Math.max.apply(null, data.winds.filter(function (w) { return w != null; })) * 1.2]
         };
@@ -1916,13 +1907,13 @@ function renderHovmoller(data) {
     // Click handler: sync IR to clicked time
     div.on('plotly_click', function (evtData) {
         if (evtData.points && evtData.points.length > 0) {
-            var clickedTime = evtData.points[0].x;
+            var clickedTime = evtData.points[0].y;
             syncIRToTime(clickedTime);
         }
     });
 }
 
-/** Update the Hovmöller vertical marker when IR frame changes */
+/** Update the Hovmöller horizontal marker when IR frame changes */
 function updateHovmollerMarker(dtStr) {
     if (!hovmollerVisible) return;
     var chartEl = document.getElementById('hovmoller-chart');
@@ -1931,8 +1922,8 @@ function updateHovmollerMarker(dtStr) {
     var shapes = [];
     if (dtStr) {
         shapes.push({
-            type: 'line', xref: 'x', yref: 'paper',
-            x0: dtStr, x1: dtStr, y0: 0, y1: 1,
+            type: 'line', yref: 'y', xref: 'paper',
+            y0: dtStr, y1: dtStr, x0: 0, x1: 1,
             line: { color: 'rgba(255,200,50,0.8)', width: 2 }
         });
     }
