@@ -669,6 +669,36 @@
                 }
             }
         }
+
+        // ── V2 Center Fix Crosshair (green, experimental) ──
+        if (showCrosshair && frame.center_fix_v2 && frame.center_fix_v2.lat) {
+            var v2Lat = frame.center_fix_v2.lat, v2Lon = frame.center_fix_v2.lon;
+            var gx = (v2Lon - vb.west) / lonSpan * w;
+            var gy = (vb.north - v2Lat) / latSpan * h;
+            if (gx >= 0 && gx <= w && gy >= 0 && gy <= h) {
+                var gr = Math.max(10, Math.round(w * 0.010));
+                var gArm = gr + 3;
+                // Dashed green circle + crosshair
+                overlayCtx.strokeStyle = 'rgba(52, 211, 153, 0.4)';
+                overlayCtx.lineWidth = 3;
+                overlayCtx.setLineDash([4, 3]);
+                overlayCtx.beginPath();
+                overlayCtx.arc(gx, gy, gr, 0, 2 * Math.PI);
+                overlayCtx.stroke();
+
+                overlayCtx.strokeStyle = '#34d399';
+                overlayCtx.lineWidth = 1.5;
+                overlayCtx.beginPath();
+                overlayCtx.arc(gx, gy, gr, 0, 2 * Math.PI);
+                overlayCtx.stroke();
+
+                overlayCtx.beginPath();
+                overlayCtx.moveTo(gx, gy - gArm); overlayCtx.lineTo(gx, gy + gArm);
+                overlayCtx.moveTo(gx - gArm, gy); overlayCtx.lineTo(gx + gArm, gy);
+                overlayCtx.stroke();
+                overlayCtx.setLineDash([]);
+            }
+        }
     }
 
     // ── Colorbar Rendering ────────────────────────────────────────
