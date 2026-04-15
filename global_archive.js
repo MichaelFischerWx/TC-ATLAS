@@ -1719,10 +1719,14 @@ window.toggleHovmoller = function () {
     var titleEl = document.getElementById('timeline-panel-title');
     var btn = document.getElementById('hovmoller-toggle-btn');
 
+    // Parent panel needs overflow:visible when Hovmöller is tall
+    var panel = scrollWrap ? scrollWrap.closest('.detail-panel') : null;
+
     if (hovmollerVisible) {
         // Hide Hovmöller, show intensity timeline
         hovmollerVisible = false;
         if (scrollWrap) scrollWrap.style.display = 'none';
+        if (panel) panel.style.overflow = '';
         if (timelineEl) timelineEl.style.display = '';
         if (modelCtrl && window._modelControlsWasVisible) modelCtrl.style.display = '';
         if (titleEl) titleEl.textContent = 'Intensity Timeline';
@@ -1736,6 +1740,7 @@ window.toggleHovmoller = function () {
     window._modelControlsWasVisible = modelCtrl && modelCtrl.style.display !== 'none';
     if (modelCtrl) modelCtrl.style.display = 'none';
     if (scrollWrap) scrollWrap.style.display = '';
+    if (panel) panel.style.overflow = 'visible';
     if (titleEl) titleEl.textContent = 'IR Hovmöller';
     if (btn) btn.textContent = 'Timeline';
 
