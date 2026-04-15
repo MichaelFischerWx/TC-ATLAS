@@ -382,10 +382,11 @@ class CacheHeaderMiddleware(BaseHTTPMiddleware):
     could be added.  Metadata/health get brief caching.
     """
     IMMUTABLE_PREFIXES = (
-        '/data', '/ir', '/ir_frame', '/era5',
+        '/data', '/ir_frame', '/era5',
         '/azimuthal_mean', '/quadrant_mean',
         '/cross_section', '/plot', '/volume',
         '/anomaly', '/hybrid', '/scatter', '/climatology',
+        '/ir/',  # TC-RADAR /ir/ endpoints only, NOT /ir-monitor/
     )
     SEMI_STABLE_PREFIXES = ('/composite',)
     SHORT_CACHE_PATHS = ('/health', '/metadata', '/variables', '/levels')
