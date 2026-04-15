@@ -7956,11 +7956,13 @@ function _displayCompareIR(side, data) {
     if (data.tb_data) {
         var tbArr = decodeTbData(data.tb_data);
         imageURI = renderTbToDataURI(tbArr, data.tb_rows, data.tb_cols, _cmpIR.cmap, bounds.south, bounds.north);
-        // Store Tb data for hover display
+        // Store Tb data for hover display + radial profiles
         s.tbData = tbArr;
         s.tbRows = data.tb_rows;
         s.tbCols = data.tb_cols;
         s.tbBounds = imageBounds;
+        s.tbVmin = data.tb_vmin || 170;
+        s.tbVmax = data.tb_vmax || 310;
     } else if (data.frame) {
         imageURI = data.frame;
         s.tbData = null;
@@ -8073,6 +8075,10 @@ function _updateCompareIRMeta(side, idx) {
     } else if (intensityEl) {
         intensityEl.innerHTML = '';
     }
+
+    // Sync Hovmöller marker and radial profile
+    _updateCompareHovMarker(side, dtStr);
+    _updateCompareRadialProfile();
 }
 
 /**
@@ -8218,8 +8224,363 @@ window.setCompareIRColormap = function (name) {
         if (s.frames[s.idx]) {
             _displayCompareIR(side, s.frames[s.idx]);
         }
+        // Re-render Hovmöller with new colorscale
+        if (_cmpHovVisible && s.storm && _cmpHovCache[s.storm.sid]) {
+            _renderCompareHov(side, _cmpHovCache[s.storm.sid]);
+        }
     });
 };
+
+// ── Compare Hovmöller Diagrams ──────────────────────────────
+
+var _cmpHovCache = {};       // SID → hovmoller response
+var _cmpHovVisible = false;
+var _cmpRadialVisible = false;
+
+window.toggleCompareHovmoller = function () {
+    var grid = document.getElementById('compare-hov-grid');
+    var btn = document.getElementById('compare-hov-btn');
+    if (!grid) return;
+
+    _cmpHovVisible = !_cmpHovVisible;
+    grid.style.display = _cmpHovVisible ? '' : 'none';
+    if (btn) btn.style.background = _cmpHovVisible ? 'rgba(0,229,255,0.2)' : '';
+
+    if (_cmpHovVisible) {
+        ['left', 'right'].forEach(function (side) {
+            var s = _cmpIR[side];
+            if (s.storm) _fetchCompareHov(side, s.storm);
+        });
+    }
+};
+
+window.toggleCompareRadial = function () {
+    var wrap = document.getElementById('compare-radial-wrap');
+    var btn = document.getElementById('compare-radial-btn');
+    if (!wrap) return;
+
+    _cmpRadialVisible = !_cmpRadialVisible;
+    wrap.style.display = _cmpRadialVisible ? '' : 'none';
+    if (btn) btn.style.background = _cmpRadialVisible ? 'rgba(167,139,250,0.2)' : '';
+
+    if (_cmpRadialVisible) {
+        _updateCompareRadialProfile();
+    }
+};
+
+function _fetchCompareHov(side, storm) {
+    var sid = storm.sid;
+    // Use cache if available
+    if (_cmpHovCache[sid]) {
+        _renderCompareHov(side, _cmpHovCache[sid]);
+        return;
+    }
+
+    var track = allTracks[sid] || [];
+    if (track.length < 2) return;
+
+    var div = document.getElementById('compare-hov-' + side);
+    if (div) div.innerHTML = '<div style="color:#64748b;font-size:11px;padding:20px;text-align:center;">Loading Hovmöller…</div>';
+
+    var trackJson = JSON.stringify(track.map(function (pt) {
+        return { t: pt.t, la: pt.la, lo: pt.lo, w: pt.w, p: pt.p };
+    }));
+
+    var url = API_BASE + '/global/ir/hovmoller?sid=' + encodeURIComponent(sid) +
+        '&track=' + encodeURIComponent(trackJson) +
+        '&storm_lon=' + (storm.lmi_lon || storm.genesis_lon || 0);
+
+    fetch(url, { cache: 'no-store' })
+        .then(function (r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.json();
+        })
+        .then(function (data) {
+            _cmpHovCache[sid] = data;
+            if (_cmpHovVisible && _cmpIR[side].storm && _cmpIR[side].storm.sid === sid) {
+                _renderCompareHov(side, data);
+            }
+        })
+        .catch(function (err) {
+            console.warn('[Compare] Hovmöller fetch failed for ' + sid + ':', err.message);
+            var div = document.getElementById('compare-hov-' + side);
+            if (div) div.innerHTML = '<div style="color:#f87171;font-size:11px;padding:20px;text-align:center;">Hovmöller unavailable</div>';
+        });
+}
+
+function _renderCompareHov(side, data) {
+    var div = document.getElementById('compare-hov-' + side);
+    if (!div || !data || !data.times || data.times.length < 2) return;
+
+    // Dynamic height (same px-per-hour as storm detail)
+    var PX_PER_HOUR = 4;
+    var MIN_HEIGHT = 200;
+    var t0 = new Date(data.times[0]).getTime();
+    var t1 = new Date(data.times[data.times.length - 1]).getTime();
+    var durationHours = Math.max(24, (t1 - t0) / 3600000);
+    var chartHeight = Math.max(MIN_HEIGHT, Math.round(durationHours * PX_PER_HOUR));
+    div.style.height = chartHeight + 'px';
+
+    var cMin = -100, cMax = 40;
+    var colorscale = _buildHovColorscale(_cmpIR.cmap || irSelectedColormap);
+
+    var heatmapTrace = {
+        x: data.radii,
+        y: data.times,
+        z: data.profiles,
+        type: 'heatmap',
+        colorscale: colorscale,
+        zmin: cMin, zmax: cMax,
+        connectgaps: false,
+        hovertemplate: '%{y}<br>r = %{x} km<br>Tb = %{z:.1f} °C<extra></extra>',
+        showscale: false
+    };
+
+    var traces = [heatmapTrace];
+
+    // Wind overlay
+    if (data.winds && data.winds.length === data.times.length) {
+        traces.push({
+            x: data.winds,
+            y: data.times,
+            type: 'scatter', mode: 'lines',
+            line: { color: 'rgba(255,255,255,0.6)', width: 1.2, dash: 'dot' },
+            xaxis: 'x2',
+            hovertemplate: '%{y}<br>Vmax = %{x} kt<extra></extra>',
+            showlegend: false
+        });
+    }
+
+    // Frame marker
+    var shapes = [];
+    var s = _cmpIR[side];
+    if (s.meta && s.meta.frames && s.meta.frames[s.idx]) {
+        var dt = s.meta.frames[s.idx].datetime;
+        if (dt) {
+            shapes.push({
+                type: 'line', yref: 'y', xref: 'paper',
+                y0: dt, y1: dt, x0: 0, x1: 1,
+                line: { color: 'rgba(255,200,50,0.8)', width: 1.5 }
+            });
+        }
+    }
+
+    var stormName = s.storm ? (s.storm.name || 'Storm') : side;
+
+    var layout = {
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor: 'rgba(0,0,0,0)',
+        font: { family: 'DM Sans, sans-serif', color: '#8b9ec2', size: 9 },
+        margin: { t: 22, r: 8, b: 30, l: 80 },
+        title: { text: stormName, font: { size: 10, color: '#94a3b8' }, x: 0.5, y: 0.99 },
+        xaxis: {
+            title: { text: 'Radius (km)', font: { size: 8 } },
+            tickfont: { size: 7 },
+            gridcolor: 'rgba(255,255,255,0.05)',
+            range: [0, 200]
+        },
+        yaxis: {
+            tickfont: { size: 7 },
+            gridcolor: 'rgba(255,255,255,0.05)',
+            autorange: 'reversed'
+        },
+        shapes: shapes
+    };
+
+    if (data.winds && data.winds.length === data.times.length) {
+        layout.xaxis2 = {
+            tickfont: { size: 7, color: 'rgba(255,255,255,0.3)' },
+            overlaying: 'x', side: 'top', showgrid: false,
+            range: [0, Math.max.apply(null, data.winds.filter(function (w) { return w != null; })) * 1.2]
+        };
+    }
+
+    Plotly.newPlot(div, traces, layout, PLOTLY_CONFIG);
+}
+
+function _updateCompareHovMarker(side, dtStr) {
+    if (!_cmpHovVisible) return;
+    var div = document.getElementById('compare-hov-' + side);
+    if (!div || !div.layout) return;
+    var shapes = [];
+    if (dtStr) {
+        shapes.push({
+            type: 'line', yref: 'y', xref: 'paper',
+            y0: dtStr, y1: dtStr, x0: 0, x1: 1,
+            line: { color: 'rgba(255,200,50,0.8)', width: 1.5 }
+        });
+    }
+    Plotly.relayout(div, { shapes: shapes });
+}
+
+// ── Compare Radial IR Profiles (overlaid) ───────────────────
+
+function _computeCompareRadial(side) {
+    var s = _cmpIR[side];
+    if (!s.tbData || !s.tbRows || !s.tbCols || !s.tbBounds) return null;
+
+    // Determine center: try hovmoller centers, else track interpolation
+    var cLat = null, cLon = null;
+    var dtStr = (s.meta && s.meta.frames && s.meta.frames[s.idx])
+        ? s.meta.frames[s.idx].datetime : null;
+
+    // Try Hovmöller centers
+    var hovData = s.storm ? _cmpHovCache[s.storm.sid] : null;
+    if (hovData && hovData.centers && dtStr) {
+        var targetMs = new Date(dtStr).getTime();
+        var bestIdx = -1, bestDist = Infinity;
+        for (var i = 0; i < hovData.times.length; i++) {
+            var d = Math.abs(new Date(hovData.times[i]).getTime() - targetMs);
+            if (d < bestDist) { bestDist = d; bestIdx = i; }
+        }
+        if (bestIdx >= 0 && bestDist < 3 * 3600000 && hovData.centers[bestIdx]) {
+            cLat = hovData.centers[bestIdx].lat;
+            cLon = hovData.centers[bestIdx].lon;
+        }
+    }
+
+    // Fallback: track interpolation
+    if (cLat == null && s.storm && dtStr) {
+        var track = allTracks[s.storm.sid] || [];
+        var pt = findTrackPointAtTime(track, dtStr);
+        if (pt) { cLat = pt.la; cLon = pt.lo; }
+    }
+
+    if (cLat == null || cLon == null) return null;
+
+    var rows = s.tbRows, cols = s.tbCols;
+    var b = s.tbBounds;
+    var south = b.getSouth(), north = b.getNorth();
+    var west = b.getWest(), east = b.getEast();
+    var latSpan = north - south, lonSpan = east - west;
+    if (latSpan <= 0 || lonSpan <= 0) return null;
+
+    var cy = (north - cLat) / latSpan * (rows - 1);
+    var cx = (cLon - west) / lonSpan * (cols - 1);
+    var cosLat = Math.cos(cLat * Math.PI / 180);
+    var dyKm = latSpan / (rows - 1) * 111.0;
+    var dxKm = lonSpan / (cols - 1) * 111.0 * cosLat;
+
+    var maxRadKm = 200, dr = 2;
+    var nBins = Math.ceil(maxRadKm / dr);
+    var sums = new Float64Array(nBins);
+    var sumsSq = new Float64Array(nBins);
+    var counts = new Uint32Array(nBins);
+
+    var tbData = s.tbData;
+    var vmin = s.tbVmin || 170, vmax = s.tbVmax || 310;
+
+    for (var r = 0; r < rows; r++) {
+        var dY = (r - cy) * dyKm;
+        for (var c = 0; c < cols; c++) {
+            var val = tbData[r * cols + c];
+            if (val === 0) continue;
+            var dX = (c - cx) * dxKm;
+            var dist = Math.sqrt(dY * dY + dX * dX);
+            var bin = Math.floor(dist / dr);
+            if (bin >= nBins) continue;
+            var tbK = vmin + (val - 1) * (vmax - vmin) / 254.0;
+            var tbC = tbK - 273.15;
+            sums[bin] += tbC;
+            sumsSq[bin] += tbC * tbC;
+            counts[bin]++;
+        }
+    }
+
+    var radii = [], meanC = [], stdC = [];
+    for (var i = 0; i < nBins; i++) {
+        if (counts[i] < 3) continue;
+        var mean = sums[i] / counts[i];
+        var variance = sumsSq[i] / counts[i] - mean * mean;
+        radii.push(i * dr + dr / 2);
+        meanC.push(mean);
+        stdC.push(Math.sqrt(Math.max(0, variance)));
+    }
+    return { radii: radii, meanC: meanC, stdC: stdC };
+}
+
+var _cmpRadialThrottle = false;
+
+function _updateCompareRadialProfile() {
+    if (!_cmpRadialVisible) return;
+    if (_cmpRadialThrottle) return;
+    _cmpRadialThrottle = true;
+    setTimeout(function () { _cmpRadialThrottle = false; }, 100);
+
+    var div = document.getElementById('compare-radial-chart');
+    if (!div) return;
+
+    var traces = [];
+    var sides = ['left', 'right'];
+    var colors = [COMPARE_COLORS[0] || '#60a5fa', COMPARE_COLORS[1] || '#f472b6'];
+
+    for (var si = 0; si < sides.length; si++) {
+        var side = sides[si];
+        var s = _cmpIR[side];
+        if (!s.storm) continue;
+        var profile = _computeCompareRadial(side);
+        if (!profile || profile.radii.length < 3) continue;
+
+        var name = (s.storm.name || 'Storm') + ' ' + (s.storm.year || '');
+        var color = colors[si];
+
+        // Std band (filled area)
+        var upperY = [], lowerY = [];
+        for (var i = 0; i < profile.radii.length; i++) {
+            upperY.push(profile.meanC[i] + profile.stdC[i]);
+            lowerY.push(profile.meanC[i] - profile.stdC[i]);
+        }
+        traces.push({
+            x: profile.radii.concat(profile.radii.slice().reverse()),
+            y: upperY.concat(lowerY.reverse()),
+            fill: 'toself',
+            fillcolor: color.replace(')', ',0.15)').replace('rgb(', 'rgba('),
+            line: { color: 'transparent' },
+            showlegend: false,
+            hoverinfo: 'skip',
+            type: 'scatter'
+        });
+
+        // Mean line
+        traces.push({
+            x: profile.radii,
+            y: profile.meanC,
+            type: 'scatter', mode: 'lines',
+            line: { color: color, width: 2 },
+            name: name,
+            hovertemplate: 'r = %{x} km<br>Tb = %{y:.1f} °C<extra>' + name + '</extra>'
+        });
+    }
+
+    if (traces.length === 0) {
+        if (div.data) Plotly.purge(div);
+        return;
+    }
+
+    var layout = {
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor: 'rgba(0,0,0,0)',
+        font: { family: 'DM Sans, sans-serif', color: '#8b9ec2', size: 10 },
+        margin: { t: 8, r: 12, b: 36, l: 48 },
+        xaxis: {
+            title: { text: 'Radius (km)', font: { size: 9 } },
+            tickfont: { size: 8 },
+            gridcolor: 'rgba(255,255,255,0.05)',
+            range: [0, 200]
+        },
+        yaxis: {
+            title: { text: 'Tb (°C)', font: { size: 9 } },
+            tickfont: { size: 8 },
+            gridcolor: 'rgba(255,255,255,0.05)',
+            range: [-90, 30]
+        },
+        legend: { x: 1, y: 1, xanchor: 'right', font: { size: 9 }, bgcolor: 'rgba(0,0,0,0.3)' },
+        showlegend: true
+    };
+
+    Plotly.newPlot(div, traces, layout, PLOTLY_CONFIG);
+}
+
 
 // Hook into compare rendering to auto-init IR comparison
 var _origRenderCompareTimeline = typeof renderCompareTimeline === 'function' ? renderCompareTimeline : null;

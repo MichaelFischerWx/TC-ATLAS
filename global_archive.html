@@ -814,6 +814,9 @@
                                 <span style="width:1px;height:16px;background:#555;"></span>
                                 <button class="ga-btn ga-btn-xs compare-align" id="compare-ir-peak-btn" onclick="jumpBothToPeak()" title="Jump both storms to peak intensity">&#9733; Peak</button>
                                 <button class="ga-btn ga-btn-xs compare-align" id="compare-ir-sync-btn" onclick="toggleCompareIRSync()" title="Sync playback between both viewers">&#128279; Sync</button>
+                                <span style="width:1px;height:16px;background:#555;"></span>
+                                <button class="ga-btn ga-btn-xs compare-align" id="compare-hov-btn" onclick="toggleCompareHovmoller()" title="Toggle Hovmöller diagrams" style="color:#00e5ff;border-color:rgba(0,229,255,0.4);">Hovm&ouml;ller</button>
+                                <button class="ga-btn ga-btn-xs compare-align" id="compare-radial-btn" onclick="toggleCompareRadial()" title="Toggle radial Tb profiles" style="color:#a78bfa;border-color:rgba(167,139,250,0.4);">Radial</button>
                             </div>
                         </div>
                         <!-- Colormap buttons (full row) -->
@@ -865,6 +868,21 @@
                         <div class="ir-colorbar-row" style="margin-top:8px;padding:0 12px;">
                             <canvas id="compare-ir-colorbar" height="8"></canvas>
                             <div class="ir-colorbar-labels"><span>310 K</span><span>240</span><span>170 K</span></div>
+                        </div>
+
+                        <!-- Overlaid radial IR profile -->
+                        <div id="compare-radial-wrap" style="display:none;padding:8px 12px;">
+                            <div id="compare-radial-chart" style="height:220px;"></div>
+                        </div>
+
+                        <!-- Side-by-side Hovmöller diagrams -->
+                        <div id="compare-hov-grid" class="compare-ir-grid" style="display:none;padding:0 12px 12px;">
+                            <div class="compare-ir-cell">
+                                <div id="compare-hov-left"></div>
+                            </div>
+                            <div class="compare-ir-cell">
+                                <div id="compare-hov-right"></div>
+                            </div>
                         </div>
 
                         <!-- MW Comparison Panel (hidden by default, shown when MW mode active) -->
