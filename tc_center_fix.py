@@ -22,7 +22,7 @@ def find_ir_center(
     center_lon,
     core_dist_km=150.0,
     eye_radius_km=10.0,
-    std_band_km=50.0,
+    std_band_km=20.0,
     search_radius_km=150.0,
     refine_radius_km=20.0,
     max_iterations=10,
@@ -242,13 +242,12 @@ def find_ir_center(
                     continue
 
                 # Score: warm-core contrast weighted by azimuthal symmetry.
-                # Linear 1/mean_std balances warm-core signal with symmetry.
-                # The ir_rad_dif >= 10K in-loop filter prevents non-eye features
-                # from competing; the adaptive ±50km band around the coldest ring
-                # makes mean_std a focused eyewall symmetry metric.
-                # Linear (vs quadratic) avoids over-penalizing asymmetric eyes
-                # that can pull the fix toward warm clear-air slots.
-                score = 100.0 * (1.0 / mean_std) * ir_rad_dif
+                # Quadratic 1/mean_std^2 finds the geometric center (most
+                # symmetric point). The tight ±20km band around the coldest
+                # ring focuses the symmetry metric on the eyewall itself,
+                # preventing the score from being dominated by asymmetric
+                # features outside the eyewall (warm slots, outer bands).
+                score = 100.0 * (1.0 / mean_std) ** 2 * ir_rad_dif
 
                 n_candidates += 1
                 if score > best_score:
