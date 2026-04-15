@@ -1713,7 +1713,7 @@
                 + '&radius_deg=' + DEFAULT_RADIUS_DEG
                 + '&interval_min=' + FRAME_INTERVAL_MIN;
 
-            fetch(url)
+            fetch(url, { cache: 'no-store' })
                 .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
                 .then(function (data) {
                     if (stormId !== currentStormId) return;
@@ -1799,7 +1799,7 @@
             + '&radius_deg=' + DEFAULT_RADIUS_DEG
             + '&interval_min=' + FRAME_INTERVAL_MIN;
 
-        fetch(url)
+        fetch(url, { cache: 'no-store' })
             .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
             .then(function (data) {
                 if (stormId !== currentStormId) return;
@@ -2731,7 +2731,7 @@
                 + '?band=' + band + '&frame_index=' + idx + '&lookback_hours=' + DEFAULT_LOOKBACK_HOURS
                 + '&radius_deg=' + DEFAULT_RADIUS_DEG + '&interval_min=' + FRAME_INTERVAL_MIN;
 
-            fetch(url)
+            fetch(url, { cache: 'no-store' })
                 .then(function (r) {
                     if (!r.ok) throw new Error('HTTP ' + r.status);
                     var hdrs = r.headers;
@@ -2812,7 +2812,7 @@
             var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(stormId) + '/band-raw-frame'
                 + '?band=' + band + '&frame_index=' + idx + '&lookback_hours=' + DEFAULT_LOOKBACK_HOURS
                 + '&radius_deg=' + DEFAULT_RADIUS_DEG + '&interval_min=' + FRAME_INTERVAL_MIN;
-            fetch(url)
+            fetch(url, { cache: 'no-store' })
                 .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
                 .then(function (data) {
                     if (stormId !== currentStormId || band !== rightBand) return;
@@ -2888,7 +2888,7 @@
                 + '?frame_index=' + idx + '&lookback_hours=' + DEFAULT_LOOKBACK_HOURS
                 + '&radius_deg=' + DEFAULT_RADIUS_DEG + '&interval_min=' + FRAME_INTERVAL_MIN;
 
-            fetch(url)
+            fetch(url, { cache: 'no-store' })
                 .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
                 .then(function (data) {
                     if (data.total_frames) totalFrames = data.total_frames;
@@ -2954,7 +2954,7 @@
                 + '?band=' + rightBand + '&frame_index=' + idx + '&lookback_hours=' + DEFAULT_LOOKBACK_HOURS
                 + '&radius_deg=' + DEFAULT_RADIUS_DEG + '&interval_min=' + FRAME_INTERVAL_MIN;
 
-            fetch(url)
+            fetch(url, { cache: 'no-store' })
                 .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
                 .then(function (data) {
                     if (data.total_frames) totalFrames = data.total_frames;
@@ -3083,7 +3083,7 @@
                     + '?frame_index=' + idx + '&lookback_hours=' + DEFAULT_LOOKBACK_HOURS
                     + '&radius_deg=' + DEFAULT_RADIUS_DEG + '&interval_min=' + FRAME_INTERVAL_MIN;
 
-                fetch(url)
+                fetch(url, { cache: 'no-store' })
                     .then(function (r) {
                         if (!r.ok) throw new Error('HTTP ' + r.status);
                         var hdrs = r.headers;
@@ -3184,7 +3184,7 @@
                     + '?frame_index=' + idx + '&lookback_hours=' + DEFAULT_LOOKBACK_HOURS
                     + '&radius_deg=' + DEFAULT_RADIUS_DEG + '&interval_min=' + FRAME_INTERVAL_MIN;
 
-                fetch(url)
+                fetch(url, { cache: 'no-store' })
                     .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
                     .then(function (data) {
                         if (stormId !== currentStormId) return;
@@ -3572,7 +3572,7 @@
 
     function startPolling() {
         pollTimer = setInterval(function () {
-            fetch(API_BASE + '/ir-monitor/active-storms')
+            fetch(API_BASE + '/ir-monitor/active-storms', { cache: 'no-store' })
                 .then(function (r) { return r.ok ? r.json() : null; })
                 .then(function (data) {
                     if (!data) return;
