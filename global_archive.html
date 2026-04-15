@@ -312,7 +312,13 @@
                         <!-- FL time series moves here when open (above intensity timeline) -->
                         <div id="ga-fl-ts-top-anchor"></div>
                         <div class="panel-header">
-                            <h3>Intensity Timeline</h3>
+                            <h3 id="timeline-panel-title">Intensity Timeline</h3>
+                            <div id="hovmoller-toggle-wrap" style="display:none;">
+                                <button id="hovmoller-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleHovmoller()" style="background:rgba(0,229,255,0.12);border-color:rgba(0,229,255,0.35);color:#00e5ff;">
+                                    Hovm&ouml;ller
+                                </button>
+                                <span id="hovmoller-status" class="ir-status"></span>
+                            </div>
                             <div id="fdeck-toggle-wrap" style="display:none;">
                                 <button id="fdeck-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleFDeck()">
                                     Show F-Deck
@@ -328,6 +334,7 @@
                                 </button>
                             </div>
                         </div>
+                        <div id="hovmoller-chart" class="chart-container" style="display:none;"></div>
                         <div id="timeline-chart" class="chart-container"></div>
                         <div id="model-chart-controls" style="display:none;padding:6px 12px 8px;border-top:1px solid rgba(255,255,255,0.06);">
                             <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:4px;">

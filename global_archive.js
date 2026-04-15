@@ -1457,6 +1457,22 @@ function renderStormDetail(storm) {
         removeIROverlay();
     }
 
+    // Hovmöller toggle — show when IR data is available
+    var hovToggleWrap = document.getElementById('hovmoller-toggle-wrap');
+    if (hovToggleWrap) {
+        hovToggleWrap.style.display = hasIR ? '' : 'none';
+    }
+    // Reset Hovmöller state for new storm
+    hovmollerVisible = false;
+    hovmollerData = null;
+    hovmollerSid = null;
+    var hovChart = document.getElementById('hovmoller-chart');
+    if (hovChart) hovChart.style.display = 'none';
+    var hovBtn = document.getElementById('hovmoller-toggle-btn');
+    if (hovBtn) hovBtn.textContent = 'Hovmöller';
+    var titleEl2 = document.getElementById('timeline-panel-title');
+    if (titleEl2) titleEl2.textContent = 'Intensity Timeline';
+
     // MW satellite overlay — show toggle if storm has an ATCF ID (TC-PRIMED coverage)
     var mwToggleWrap = document.getElementById('ga-mw-toggle-wrap');
     if (mwToggleWrap) {
@@ -1686,6 +1702,241 @@ function _applyIntensityMarker(dtStr) {
     }
 
     Plotly.relayout(chartEl, { shapes: baseShapes.concat(extraShapes) });
+}
+
+
+// ── Storm-Duration IR Hovmöller ─────────────────────────────
+
+var hovmollerData = null;       // cached Hovmöller response
+var hovmollerSid = null;        // SID for which data was fetched
+var hovmollerVisible = false;   // toggle state
+
+window.toggleHovmoller = function () {
+    if (!selectedStorm) return;
+    var chartEl = document.getElementById('hovmoller-chart');
+    var timelineEl = document.getElementById('timeline-chart');
+    var modelCtrl = document.getElementById('model-chart-controls');
+    var titleEl = document.getElementById('timeline-panel-title');
+    var btn = document.getElementById('hovmoller-toggle-btn');
+
+    if (hovmollerVisible) {
+        // Hide Hovmöller, show intensity timeline
+        hovmollerVisible = false;
+        if (chartEl) chartEl.style.display = 'none';
+        if (timelineEl) timelineEl.style.display = '';
+        if (modelCtrl && window._modelControlsWasVisible) modelCtrl.style.display = '';
+        if (titleEl) titleEl.textContent = 'Intensity Timeline';
+        if (btn) btn.textContent = 'Hovmöller';
+        return;
+    }
+
+    // Show Hovmöller, hide intensity timeline
+    hovmollerVisible = true;
+    if (timelineEl) timelineEl.style.display = 'none';
+    window._modelControlsWasVisible = modelCtrl && modelCtrl.style.display !== 'none';
+    if (modelCtrl) modelCtrl.style.display = 'none';
+    if (chartEl) chartEl.style.display = '';
+    if (titleEl) titleEl.textContent = 'IR Hovmöller';
+    if (btn) btn.textContent = 'Timeline';
+
+    // Fetch if not cached for this storm
+    if (hovmollerSid !== selectedStorm.sid || !hovmollerData) {
+        fetchHovmoller();
+    } else {
+        renderHovmoller(hovmollerData);
+    }
+};
+
+function fetchHovmoller() {
+    if (!selectedStorm) return;
+    var sid = selectedStorm.sid;
+    var track = allTracks[sid] || [];
+    if (track.length < 2) {
+        var statusEl = document.getElementById('hovmoller-status');
+        if (statusEl) statusEl.textContent = 'No track data';
+        return;
+    }
+
+    var btn = document.getElementById('hovmoller-toggle-btn');
+    var statusEl = document.getElementById('hovmoller-status');
+    if (btn) btn.textContent = 'Loading…';
+    if (statusEl) statusEl.textContent = '';
+
+    var trackJson = JSON.stringify(track.map(function (pt) {
+        return { t: pt.t, la: pt.la, lo: pt.lo, w: pt.w, p: pt.p };
+    }));
+
+    var url = API_BASE + '/global/ir/hovmoller?sid=' + encodeURIComponent(sid) +
+        '&track=' + encodeURIComponent(trackJson) +
+        '&storm_lon=' + (selectedStorm.lmi_lon || selectedStorm.genesis_lon || 0);
+
+    fetch(url, { cache: 'no-store' })
+        .then(function (r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.json();
+        })
+        .then(function (data) {
+            hovmollerData = data;
+            hovmollerSid = sid;
+            if (btn) btn.textContent = 'Timeline';
+            if (hovmollerVisible && selectedStorm && selectedStorm.sid === sid) {
+                renderHovmoller(data);
+            }
+        })
+        .catch(function (err) {
+            console.warn('[GA] Hovmöller fetch failed:', err.message || err);
+            if (btn) btn.textContent = 'Hovmöller';
+            if (statusEl) statusEl.textContent = 'Error';
+        });
+}
+
+function renderHovmoller(data) {
+    var div = document.getElementById('hovmoller-chart');
+    if (!div || !data || !data.times || data.times.length < 2) return;
+
+    // Claude IR colorscale mapped to Celsius (-100 to +40)
+    var cMin = -100, cMax = 40, cSpan = cMax - cMin;
+    function cFrac(tbK) { return Math.max(0, Math.min(1, ((tbK - 273.15) - cMin) / cSpan)); }
+
+    var colorscale = [
+        [0.00,          'rgb(28,12,96)'],
+        [cFrac(183),    'rgb(64,24,140)'],
+        [cFrac(193),    'rgb(120,48,180)'],
+        [cFrac(198),    'rgb(168,64,200)'],
+        [cFrac(203),    'rgb(196,48,156)'],
+        [cFrac(208),    'rgb(180,36,68)'],
+        [cFrac(213),    'rgb(214,78,56)'],
+        [cFrac(218),    'rgb(228,132,48)'],
+        [cFrac(223),    'rgb(238,196,48)'],
+        [cFrac(228),    'rgb(192,220,40)'],
+        [cFrac(233),    'rgb(96,208,68)'],
+        [cFrac(238),    'rgb(40,178,116)'],
+        [cFrac(243),    'rgb(32,148,166)'],
+        [cFrac(248),    'rgb(68,180,196)'],
+        [cFrac(253),    'rgb(140,210,220)'],
+        [cFrac(263),    'rgb(216,218,228)'],
+        [cFrac(273),    'rgb(180,180,192)'],
+        [cFrac(283),    'rgb(120,120,132)'],
+        [cFrac(293),    'rgb(70,70,82)'],
+        [1.00,          'rgb(12,12,22)']
+    ];
+
+    // Transpose: API returns profiles[time][radius], Plotly needs z[radius][time]
+    // for x=time, y=radius orientation
+    var nTimes = data.times.length;
+    var nRadii = data.radii.length;
+    var z = [];
+    for (var ri = 0; ri < nRadii; ri++) {
+        var row = [];
+        for (var ti = 0; ti < nTimes; ti++) {
+            var val = data.profiles[ti] ? data.profiles[ti][ri] : null;
+            row.push(val);
+        }
+        z.push(row);
+    }
+
+    var heatmapTrace = {
+        x: data.times,
+        y: data.radii,
+        z: z,
+        type: 'heatmap',
+        colorscale: colorscale,
+        zmin: cMin,
+        zmax: cMax,
+        connectgaps: false,
+        hovertemplate: '%{x}<br>r = %{y} km<br>Tb = %{z:.1f} °C<extra></extra>',
+        colorbar: {
+            title: { text: '°C', font: { size: 9, color: '#8b9ec2' } },
+            len: 0.8,
+            thickness: 10,
+            tickfont: { size: 8, color: '#64748b' }
+        }
+    };
+
+    var traces = [heatmapTrace];
+
+    // Overlay wind speed trace if available
+    if (data.winds && data.winds.length === nTimes) {
+        var windTrace = {
+            x: data.times,
+            y: data.winds,
+            type: 'scatter',
+            mode: 'lines',
+            line: { color: 'rgba(255,255,255,0.7)', width: 1.5, dash: 'dot' },
+            yaxis: 'y2',
+            hovertemplate: '%{x}<br>Vmax = %{y} kt<extra></extra>',
+            showlegend: false
+        };
+        traces.push(windTrace);
+    }
+
+    // Current IR frame marker
+    var shapes = [];
+    if (_lastMarkerDt) {
+        shapes.push({
+            type: 'line', xref: 'x', yref: 'paper',
+            x0: _lastMarkerDt, x1: _lastMarkerDt, y0: 0, y1: 1,
+            line: { color: 'rgba(255,200,50,0.8)', width: 2 }
+        });
+    }
+
+    var layout = {
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor: 'rgba(0,0,0,0)',
+        font: { family: 'DM Sans, sans-serif', color: '#8b9ec2', size: 10 },
+        margin: { t: 10, r: 50, b: 36, l: 48 },
+        xaxis: {
+            title: { text: 'Time (UTC)', font: { size: 9 } },
+            tickfont: { size: 8 },
+            gridcolor: 'rgba(255,255,255,0.05)'
+        },
+        yaxis: {
+            title: { text: 'Radius (km)', font: { size: 9 } },
+            tickfont: { size: 8 },
+            gridcolor: 'rgba(255,255,255,0.05)',
+            range: [0, 200]
+        },
+        shapes: shapes
+    };
+
+    // Secondary y-axis for wind overlay
+    if (data.winds && data.winds.length === nTimes) {
+        layout.yaxis2 = {
+            title: { text: 'Vmax (kt)', font: { size: 9, color: 'rgba(255,255,255,0.5)' } },
+            tickfont: { size: 8, color: 'rgba(255,255,255,0.4)' },
+            overlaying: 'y',
+            side: 'right',
+            showgrid: false,
+            range: [0, Math.max.apply(null, data.winds.filter(function (w) { return w != null; })) * 1.2]
+        };
+    }
+
+    Plotly.newPlot(div, traces, layout, PLOTLY_CONFIG);
+
+    // Click handler: sync IR to clicked time
+    div.on('plotly_click', function (evtData) {
+        if (evtData.points && evtData.points.length > 0) {
+            var clickedTime = evtData.points[0].x;
+            syncIRToTime(clickedTime);
+        }
+    });
+}
+
+/** Update the Hovmöller vertical marker when IR frame changes */
+function updateHovmollerMarker(dtStr) {
+    if (!hovmollerVisible) return;
+    var chartEl = document.getElementById('hovmoller-chart');
+    if (!chartEl || !chartEl.layout) return;
+
+    var shapes = [];
+    if (dtStr) {
+        shapes.push({
+            type: 'line', xref: 'x', yref: 'paper',
+            x0: dtStr, x1: dtStr, y0: 0, y1: 1,
+            line: { color: 'rgba(255,200,50,0.8)', width: 2 }
+        });
+    }
+    Plotly.relayout(chartEl, { shapes: shapes });
 }
 
 
@@ -3911,6 +4162,7 @@ function updateIRMeta(idx) {
 
     // Sync intensity chart marker to current IR time (use raw ISO datetime for Plotly)
     updateIntensityMarker(rawDt);
+    updateHovmollerMarker(rawDt);
 
     // Sync model forecast overlay to current IR frame time
     if (_modelVisible && _modelAutoSync && _modelData) {

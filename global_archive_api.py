@@ -2479,6 +2479,308 @@ def ir_batch(
     )
 
 
+# ── Storm-Duration Hovmöller ─────────────────────────────────
+
+# GCS + in-memory cache for Hovmöller results (keyed by SID)
+_hovmoller_cache: OrderedDict = OrderedDict()
+_HOVMOLLER_CACHE_MAX = 20
+
+
+def _gcs_get_hovmoller(sid: str):
+    """Try loading a cached Hovmöller result from GCS."""
+    bucket = _get_gcs_bucket()
+    if not bucket:
+        return None
+    blob_name = f"archive/hovmoller/{sid}.json"
+    try:
+        blob = bucket.blob(blob_name)
+        if not blob.exists():
+            return None
+        data = json.loads(blob.download_as_text())
+        return data
+    except Exception:
+        return None
+
+
+def _gcs_put_hovmoller(sid: str, result: dict):
+    """Cache Hovmöller result to GCS (fire-and-forget)."""
+    bucket = _get_gcs_bucket()
+    if not bucket:
+        return
+    blob_name = f"archive/hovmoller/{sid}.json"
+    try:
+        blob = bucket.blob(blob_name)
+        blob.upload_from_string(
+            json.dumps(result), content_type="application/json"
+        )
+    except Exception as e:
+        logger.debug(f"GCS Hovmöller put failed for {sid}: {e}")
+
+
+@router.get("/ir/hovmoller")
+def ir_hovmoller(
+    sid: str = Query(..., description="IBTrACS storm ID"),
+    track: str = Query("", description="JSON-encoded track points [{t, la, lo, w, p}, ...]"),
+    storm_lon: float = Query(0.0, description="Storm longitude for satellite selection"),
+    max_radius_km: float = Query(200.0, ge=50, le=500),
+    dr_km: float = Query(4.0, ge=2, le=20),
+):
+    """
+    Compute storm-duration azimuthal-mean Tb radial profiles (Hovmöller diagram).
+
+    Returns pre-computed profiles for all available IR frames of a historical
+    storm, centered on interpolated best-track positions.
+    """
+    import json as json_mod
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    # Check in-memory cache
+    if sid in _hovmoller_cache:
+        _hovmoller_cache.move_to_end(sid)
+        return JSONResponse(
+            _hovmoller_cache[sid],
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
+
+    # Check GCS cache
+    gcs_result = _gcs_get_hovmoller(sid)
+    if gcs_result is not None:
+        _hovmoller_cache[sid] = gcs_result
+        if len(_hovmoller_cache) > _HOVMOLLER_CACHE_MAX:
+            _hovmoller_cache.popitem(last=False)
+        return JSONResponse(
+            gcs_result,
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
+
+    # Parse track points
+    track_points = []
+    if track:
+        try:
+            track_points = json_mod.loads(track)
+        except (json_mod.JSONDecodeError, TypeError):
+            pass
+
+    if not track_points:
+        raise HTTPException(status_code=400, detail="Track data required for Hovmöller")
+
+    # Build frame list (same as ir_meta)
+    year = _parse_sid_year(sid)
+    _earthdata_configured = bool(EARTHDATA_TOKEN or EARTHDATA_USER)
+
+    if year >= MERGIR_START_YEAR and _earthdata_configured:
+        source = "mergir"
+    elif GRIDSAT_START_YEAR <= year <= GRIDSAT_END_YEAR:
+        source = "gridsat"
+    elif HURSAT_START_YEAR <= year <= HURSAT_END_YEAR:
+        source = "hursat"
+    else:
+        raise HTTPException(status_code=404, detail=f"No IR data available for year {year}")
+
+    if source in ("mergir", "gridsat"):
+        frame_list = _build_mergir_frame_list(track_points)
+    else:
+        frames = _get_extracted_frames(sid, storm_lon=storm_lon)
+        frame_list = []
+        if frames:
+            for i, ft in enumerate(frames):
+                frame_list.append({
+                    "datetime": ft[0],
+                    "lat": None, "lon": None,
+                    "_hursat_idx": i,
+                })
+
+    if not frame_list:
+        raise HTTPException(status_code=404, detail="No frames available")
+
+    # Build track interpolation arrays from track_points
+    track_times = []
+    track_lats = []
+    track_lons = []
+    track_winds = []
+    for pt in track_points:
+        if not pt.get("t") or pt.get("la") is None or pt.get("lo") is None:
+            continue
+        try:
+            dt = datetime.fromisoformat(pt["t"].replace("Z", "+00:00").split("+")[0])
+            track_times.append(dt.timestamp())
+            track_lats.append(float(pt["la"]))
+            track_lons.append(float(pt["lo"]))
+            track_winds.append(float(pt["w"]) if pt.get("w") is not None else None)
+        except (ValueError, TypeError):
+            continue
+
+    if len(track_times) < 2:
+        raise HTTPException(status_code=400, detail="Need at least 2 track points")
+
+    track_ts = np.array(track_times)
+    track_la = np.array(track_lats)
+    track_lo = np.array(track_lons)
+
+    def _interp_position(target_dt):
+        """Interpolate best-track lat/lon/wind at a target datetime."""
+        ts = target_dt.timestamp()
+        if ts < track_ts[0]:
+            ts = track_ts[0]
+        elif ts > track_ts[-1]:
+            ts = track_ts[-1]
+        lat = float(np.interp(ts, track_ts, track_la))
+        lon = float(np.interp(ts, track_ts, track_lo))
+        # Wind interpolation (handle None values)
+        wind = None
+        for i in range(len(track_times) - 1):
+            if track_ts[i] <= ts <= track_ts[i + 1]:
+                w0, w1 = track_winds[i], track_winds[i + 1]
+                if w0 is not None and w1 is not None:
+                    frac = (ts - track_ts[i]) / (track_ts[i + 1] - track_ts[i]) if track_ts[i + 1] > track_ts[i] else 0
+                    wind = round(w0 + frac * (w1 - w0))
+                elif w0 is not None:
+                    wind = w0
+                elif w1 is not None:
+                    wind = w1
+                break
+        return lat, lon, wind
+
+    # Radial profile parameters
+    n_rad_bins = int(max_radius_km / dr_km)
+
+    def _compute_profile_for_frame(frame_info):
+        """Load a single frame and compute its radial profile."""
+        try:
+            dt_str = frame_info["datetime"]
+            frame_dt = datetime.fromisoformat(
+                dt_str.replace("Z", "+00:00").split("+")[0]
+            )
+        except (ValueError, KeyError):
+            return None
+
+        c_lat, c_lon, wind = _interp_position(frame_dt)
+
+        # Load raw Tb data
+        frame_2d = None
+        ir_bounds = None
+        half_domain = GRIDSAT_HALF_DOMAIN
+
+        if source == "mergir":
+            frame_2d, ir_bounds = _load_mergir_subset(frame_dt, c_lat, c_lon)
+            half_domain = MERGIR_HALF_DOMAIN
+        if frame_2d is None and source in ("mergir", "gridsat"):
+            frame_2d, ir_bounds = _load_gridsat_subset(frame_dt, c_lat, c_lon)
+            half_domain = GRIDSAT_HALF_DOMAIN
+        if frame_2d is None and frame_info.get("_hursat_idx") is not None:
+            hursat_frames = _get_extracted_frames(sid, storm_lon=storm_lon)
+            if hursat_frames and frame_info["_hursat_idx"] < len(hursat_frames):
+                frame_2d, ir_bounds = _load_frame_from_nc(
+                    hursat_frames[frame_info["_hursat_idx"]][1]
+                )
+                half_domain = GRIDSAT_HALF_DOMAIN
+
+        if frame_2d is None:
+            return None
+
+        arr = np.asarray(frame_2d, dtype=np.float32)
+        rows, cols = arr.shape
+
+        if ir_bounds:
+            south, north = ir_bounds["south"], ir_bounds["north"]
+            west, east = ir_bounds["west"], ir_bounds["east"]
+        else:
+            south = c_lat - half_domain
+            north = c_lat + half_domain
+            west = c_lon - half_domain
+            east = c_lon + half_domain
+
+        lat_span = north - south
+        lon_span = east - west
+        if lat_span <= 0 or lon_span <= 0:
+            return None
+
+        # Center pixel
+        cy = (north - c_lat) / lat_span * (rows - 1)
+        cx = (c_lon - west) / lon_span * (cols - 1)
+        cos_lat = np.cos(np.radians(c_lat))
+        dy_km = lat_span / (rows - 1) * 111.0
+        dx_km = lon_span / (cols - 1) * 111.0 * cos_lat
+
+        # Vectorized radial binning
+        row_idx = np.arange(rows)
+        col_idx = np.arange(cols)
+        dY = (row_idx - cy) * dy_km
+        dX = (col_idx - cx) * dx_km
+        DY, DX = np.meshgrid(dY, dX, indexing='ij')
+        dist = np.sqrt(DY * DY + DX * DX)
+        bins = np.floor(dist / dr_km).astype(np.int32)
+
+        # Mask invalid pixels
+        valid = np.isfinite(arr) & (arr > 0)
+
+        profile = [None] * n_rad_bins
+        for b in range(n_rad_bins):
+            mask = valid & (bins == b)
+            count = np.count_nonzero(mask)
+            if count >= 3:
+                profile[b] = round(float(np.mean(arr[mask])) - 273.15, 2)
+
+        return {
+            "time": dt_str,
+            "profile": profile,
+            "wind": wind,
+        }
+
+    # Process frames concurrently (cap at 5 workers for OOM protection)
+    MAX_WORKERS = 5
+    results = []
+
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+        futures = {
+            pool.submit(_compute_profile_for_frame, f): i
+            for i, f in enumerate(frame_list)
+        }
+        partial_results = [None] * len(frame_list)
+        for future in as_completed(futures):
+            idx = futures[future]
+            try:
+                partial_results[idx] = future.result()
+            except Exception as e:
+                logger.debug(f"Hovmöller frame {idx} failed: {e}")
+
+    # Compact results (drop failed frames, keep order)
+    out_times = []
+    out_profiles = []
+    out_winds = []
+    for r in partial_results:
+        if r is not None:
+            out_times.append(r["time"])
+            out_profiles.append(r["profile"])
+            out_winds.append(r["wind"])
+
+    if not out_times:
+        raise HTTPException(status_code=502, detail="No frames could be processed")
+
+    radii = [round(b * dr_km + dr_km / 2, 1) for b in range(n_rad_bins)]
+
+    result = {
+        "sid": sid,
+        "source": source,
+        "times": out_times,
+        "radii": radii,
+        "profiles": out_profiles,
+        "winds": out_winds,
+        "n_frames": len(out_times),
+    }
+
+    # Cache to memory + GCS
+    _hovmoller_cache[sid] = result
+    if len(_hovmoller_cache) > _HOVMOLLER_CACHE_MAX:
+        _hovmoller_cache.popitem(last=False)
+    threading.Thread(target=_gcs_put_hovmoller, args=(sid, result), daemon=True).start()
+
+    return JSONResponse(
+        result,
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
 # ── NHC F-Deck Fix Data ──────────────────────────────────────
 
 # Cache parsed f-deck data: atcf_id -> parsed dict
