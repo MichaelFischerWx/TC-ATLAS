@@ -1466,8 +1466,8 @@ function renderStormDetail(storm) {
     hovmollerVisible = false;
     hovmollerData = null;
     hovmollerSid = null;
-    var hovChart = document.getElementById('hovmoller-chart');
-    if (hovChart) hovChart.style.display = 'none';
+    var hovScrollWrap = document.getElementById('hovmoller-scroll-wrap');
+    if (hovScrollWrap) hovScrollWrap.style.display = 'none';
     var hovBtn = document.getElementById('hovmoller-toggle-btn');
     if (hovBtn) hovBtn.textContent = 'Hovmöller';
     var titleEl2 = document.getElementById('timeline-panel-title');
@@ -1713,7 +1713,7 @@ var hovmollerVisible = false;   // toggle state
 
 window.toggleHovmoller = function () {
     if (!selectedStorm) return;
-    var chartEl = document.getElementById('hovmoller-chart');
+    var scrollWrap = document.getElementById('hovmoller-scroll-wrap');
     var timelineEl = document.getElementById('timeline-chart');
     var modelCtrl = document.getElementById('model-chart-controls');
     var titleEl = document.getElementById('timeline-panel-title');
@@ -1722,7 +1722,7 @@ window.toggleHovmoller = function () {
     if (hovmollerVisible) {
         // Hide Hovmöller, show intensity timeline
         hovmollerVisible = false;
-        if (chartEl) chartEl.style.display = 'none';
+        if (scrollWrap) scrollWrap.style.display = 'none';
         if (timelineEl) timelineEl.style.display = '';
         if (modelCtrl && window._modelControlsWasVisible) modelCtrl.style.display = '';
         if (titleEl) titleEl.textContent = 'Intensity Timeline';
@@ -1735,7 +1735,7 @@ window.toggleHovmoller = function () {
     if (timelineEl) timelineEl.style.display = 'none';
     window._modelControlsWasVisible = modelCtrl && modelCtrl.style.display !== 'none';
     if (modelCtrl) modelCtrl.style.display = 'none';
-    if (chartEl) chartEl.style.display = '';
+    if (scrollWrap) scrollWrap.style.display = '';
     if (titleEl) titleEl.textContent = 'IR Hovmöller';
     if (btn) btn.textContent = 'Timeline';
 
@@ -1792,7 +1792,18 @@ function fetchHovmoller() {
 
 function renderHovmoller(data) {
     var div = document.getElementById('hovmoller-chart');
+    var scrollWrap = document.getElementById('hovmoller-scroll-wrap');
     if (!div || !data || !data.times || data.times.length < 2) return;
+
+    // Fixed pixels-per-hour so structural features are comparable across storms
+    var PX_PER_HOUR = 4;
+    var MIN_HEIGHT = 280;
+    var t0 = new Date(data.times[0]).getTime();
+    var t1 = new Date(data.times[data.times.length - 1]).getTime();
+    var durationHours = Math.max(24, (t1 - t0) / 3600000);
+    var chartHeight = Math.max(MIN_HEIGHT, Math.round(durationHours * PX_PER_HOUR));
+    div.style.height = chartHeight + 'px';
+    if (scrollWrap) scrollWrap.style.display = '';
 
     // Claude IR colorscale mapped to Celsius (-100 to +40)
     var cMin = -100, cMax = 40, cSpan = cMax - cMin;
@@ -1837,10 +1848,10 @@ function renderHovmoller(data) {
         hovertemplate: '%{y}<br>r = %{x} km<br>Tb = %{z:.1f} °C<extra></extra>',
         colorbar: {
             title: { text: '°C', font: { size: 9, color: '#8b9ec2' } },
-            len: 0.6,
+            len: 0.7,
             thickness: 8,
             tickfont: { size: 8, color: '#64748b' },
-            y: 0.3,
+            y: 0.5,
             yanchor: 'middle'
         }
     };
