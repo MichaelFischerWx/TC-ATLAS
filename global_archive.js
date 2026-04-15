@@ -1776,10 +1776,12 @@ function fetchHovmoller() {
         return { t: pt.t, la: pt.la, lo: pt.lo, w: pt.w, p: pt.p };
     });
 
-    // Use SSE streaming to show real-time frame progress
     var url = API_BASE + '/global/ir/hovmoller?sid=' + encodeURIComponent(sid) +
-        '&storm_lon=' + (selectedStorm.lmi_lon || selectedStorm.genesis_lon || 0) +
-        '&stream=true';
+        '&storm_lon=' + (selectedStorm.lmi_lon || selectedStorm.genesis_lon || 0);
+
+    // Estimate frame count for display
+    var nFrames = Math.ceil(track.length / 2) || '?';
+    if (statusEl) statusEl.textContent = '~' + nFrames + ' frames';
 
     fetch(url, {
         method: 'POST',
@@ -1788,44 +1790,7 @@ function fetchHovmoller() {
     })
         .then(function (r) {
             if (!r.ok) throw new Error('HTTP ' + r.status);
-            var reader = r.body.getReader();
-            var decoder = new TextDecoder();
-            var buffer = '';
-            var finalData = null;
-
-            function pump() {
-                return reader.read().then(function (result) {
-                    if (result.done) return;
-                    buffer += decoder.decode(result.value, { stream: true });
-                    // SSE format: "data: {...}\n\n"
-                    var parts = buffer.split('\n\n');
-                    buffer = parts.pop();
-                    for (var i = 0; i < parts.length; i++) {
-                        var line = parts[i].replace(/^data: /, '').trim();
-                        if (!line) continue;
-                        try {
-                            var msg = JSON.parse(line);
-                            if (msg.progress != null && msg.total != null) {
-                                if (statusEl) statusEl.textContent = msg.progress + ' / ' + msg.total + ' frames';
-                            } else if (msg.profiles) {
-                                finalData = msg;
-                            }
-                        } catch (e) {}
-                    }
-                    return pump();
-                });
-            }
-
-            return pump().then(function () {
-                if (buffer.trim()) {
-                    var line = buffer.replace(/^data: /, '').trim();
-                    try {
-                        var msg = JSON.parse(line);
-                        if (msg.profiles) finalData = msg;
-                    } catch (e) {}
-                }
-                return finalData;
-            });
+            return r.json();
         })
         .then(function (data) {
             if (!data || !data.profiles) throw new Error('No result');
@@ -8324,15 +8289,15 @@ function _fetchCompareHov(side, storm) {
     if (track.length < 2) return;
 
     var div = document.getElementById('compare-hov-' + side);
-    if (div) div.innerHTML = '<div style="color:#64748b;font-size:11px;padding:20px;text-align:center;">Loading Hovmöller…</div>';
+    var nFrames = Math.ceil(track.length / 2) || '?';
+    if (div) div.innerHTML = '<div style="color:#64748b;font-size:11px;padding:20px;text-align:center;">Loading Hovmöller (~' + nFrames + ' frames)…</div>';
 
     var trackData = track.map(function (pt) {
         return { t: pt.t, la: pt.la, lo: pt.lo, w: pt.w, p: pt.p };
     });
 
     var url = API_BASE + '/global/ir/hovmoller?sid=' + encodeURIComponent(sid) +
-        '&storm_lon=' + (storm.lmi_lon || storm.genesis_lon || 0) +
-        '&stream=true';
+        '&storm_lon=' + (storm.lmi_lon || storm.genesis_lon || 0);
 
     fetch(url, {
         method: 'POST',
@@ -8341,40 +8306,7 @@ function _fetchCompareHov(side, storm) {
     })
         .then(function (r) {
             if (!r.ok) throw new Error('HTTP ' + r.status);
-            var reader = r.body.getReader();
-            var decoder = new TextDecoder();
-            var buffer = '';
-            var finalData = null;
-
-            function pump() {
-                return reader.read().then(function (result) {
-                    if (result.done) return;
-                    buffer += decoder.decode(result.value, { stream: true });
-                    var parts = buffer.split('\n\n');
-                    buffer = parts.pop();
-                    for (var i = 0; i < parts.length; i++) {
-                        var line = parts[i].replace(/^data: /, '').trim();
-                        if (!line) continue;
-                        try {
-                            var msg = JSON.parse(line);
-                            if (msg.progress != null && msg.total != null) {
-                                if (div) div.innerHTML = '<div style="color:#64748b;font-size:11px;padding:20px;text-align:center;">' + msg.progress + ' / ' + msg.total + ' frames</div>';
-                            } else if (msg.profiles) {
-                                finalData = msg;
-                            }
-                        } catch (e) {}
-                    }
-                    return pump();
-                });
-            }
-
-            return pump().then(function () {
-                if (buffer.trim()) {
-                    var line = buffer.replace(/^data: /, '').trim();
-                    try { var msg = JSON.parse(line); if (msg.profiles) finalData = msg; } catch (e) {}
-                }
-                return finalData;
-            });
+            return r.json();
         })
         .then(function (data) {
             if (!data || !data.profiles) throw new Error('No result');
