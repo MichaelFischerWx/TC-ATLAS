@@ -2509,7 +2509,7 @@ _hovmoller_cache: OrderedDict = OrderedDict()
 _HOVMOLLER_CACHE_MAX = 20
 
 
-_HOV_CACHE_VER = "v2"  # bump to invalidate GCS cache (v2 = added centers)
+_HOV_CACHE_VER = "v3"  # v3 = disabled center-finding for speed
 
 
 def _gcs_get_hovmoller(sid: str):
@@ -2660,16 +2660,11 @@ def _precompute_hovmoller(sid: str, track_points: list, storm_lon: float = 0.0,
         if lat_span <= 0 or lon_span <= 0:
             return None
 
+        # Center-finding disabled for now — best-track interpolation is fast
+        # and sufficient for the Hovmöller. IR center-finding adds ~1-2s per
+        # frame which makes 60+ frame storms take 3+ minutes. Can be re-enabled
+        # as an optional refinement step in the future.
         center_method = "track"
-        if wind is not None and wind >= 65:
-            try:
-                cfix = find_ir_center(arr, [[south, west], [north, east]], c_lat, c_lon,
-                                      ref_lat=c_lat, ref_lon=c_lon)
-                if cfix.get("success") and cfix.get("lat"):
-                    c_lat, c_lon = cfix["lat"], cfix["lon"]
-                    center_method = "ir_fix"
-            except Exception:
-                pass
 
         cy = (north - c_lat) / lat_span * (rows - 1)
         cx = (c_lon - west) / lon_span * (cols - 1)
