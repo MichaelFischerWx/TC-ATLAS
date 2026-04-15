@@ -209,21 +209,11 @@ def find_ir_center(
                 )
                 stds = np.sqrt(np.maximum(variances, 0.0))
 
-                # Find coldest ring and evaluate symmetry in ±std_band_km around it
-                valid_means = means.copy()
-                valid_means[~valid_bins] = np.nan
-                coldest_bin = np.nanargmin(valid_means)
-                coldest_radius_km = coldest_bin * dr
-                band_lo = max(0, int((coldest_radius_km - std_band_km) / dr))
-                band_hi = min(n_bins, int((coldest_radius_km + std_band_km) / dr) + 1)
-                band_mask = np.zeros(n_bins, dtype=bool)
-                band_mask[band_lo:band_hi] = True
-                band_valid = valid_bins & band_mask
-                if np.sum(band_valid) < 3:
-                    # Fall back to all valid bins if band is too narrow
-                    band_valid = valid_bins
-
-                mean_std = np.nanmean(stds[band_valid])
+                # Evaluate azimuthal symmetry across ALL radial bins (0 to 150 km).
+                # A point on the inner eyewall edge has high variance in inner
+                # bins (half eye, half eyewall) — only the true center sees
+                # symmetric rings at every radius out to the CDO edge.
+                mean_std = np.nanmean(stds[valid_bins])
                 if mean_std <= 0:
                     continue
 
