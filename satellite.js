@@ -3120,6 +3120,7 @@
             _previewPhase = true;
             _previewDone = 0;
             _rawTbStarted = false;
+            var _firstPreviewShown = false;
             var previewTotal = totalFrames;
             console.log('[Satellite] Fetching ' + previewTotal + ' preview JPGs for ' + stormId);
 
@@ -3168,8 +3169,9 @@
                             buildValidIndices();
                             updateSliderMax();
 
-                            // Show first preview immediately
-                            if (_previewDone === 1) {
+                            // Show first successful preview immediately
+                            if (!_firstPreviewShown) {
+                                _firstPreviewShown = true;
                                 animIndex = idx;
                                 hideLoader();
                                 _satLoadRadarSites();
@@ -3197,6 +3199,8 @@
                         _previewDone++;
                         // If preview fails, fall back to raw Tb for this frame
                         if (!irFrames[idx]) fetchIRFrame(idx);
+                        // Hide loader even on failure — raw Tb fallback will render
+                        if (!loader.classList.contains('hidden')) hideLoader();
                         if (_previewDone >= previewTotal && !_rawTbStarted) {
                             _rawTbStarted = true;
                             _previewPhase = false;
