@@ -669,36 +669,6 @@
                 }
             }
         }
-
-        // ── V2 Center Fix Crosshair (green, experimental) ──
-        if (showCrosshair && frame.center_fix_v2 && frame.center_fix_v2.lat) {
-            var v2Lat = frame.center_fix_v2.lat, v2Lon = frame.center_fix_v2.lon;
-            var gx = (v2Lon - vb.west) / lonSpan * w;
-            var gy = (vb.north - v2Lat) / latSpan * h;
-            if (gx >= 0 && gx <= w && gy >= 0 && gy <= h) {
-                var gr = Math.max(10, Math.round(w * 0.010));
-                var gArm = gr + 3;
-                // Dashed green circle + crosshair
-                overlayCtx.strokeStyle = 'rgba(52, 211, 153, 0.4)';
-                overlayCtx.lineWidth = 3;
-                overlayCtx.setLineDash([4, 3]);
-                overlayCtx.beginPath();
-                overlayCtx.arc(gx, gy, gr, 0, 2 * Math.PI);
-                overlayCtx.stroke();
-
-                overlayCtx.strokeStyle = '#34d399';
-                overlayCtx.lineWidth = 1.5;
-                overlayCtx.beginPath();
-                overlayCtx.arc(gx, gy, gr, 0, 2 * Math.PI);
-                overlayCtx.stroke();
-
-                overlayCtx.beginPath();
-                overlayCtx.moveTo(gx, gy - gArm); overlayCtx.lineTo(gx, gy + gArm);
-                overlayCtx.moveTo(gx - gArm, gy); overlayCtx.lineTo(gx + gArm, gy);
-                overlayCtx.stroke();
-                overlayCtx.setLineDash([]);
-            }
-        }
     }
 
     // ── Colorbar Rendering ────────────────────────────────────────
@@ -1755,7 +1725,6 @@
                         satellite: data.satellite || '',
                         tb_vmin: data.tb_vmin || 160.0, tb_vmax: data.tb_vmax || 330.0,
                         center_fix: data.center_fix || null,
-                        center_fix_v2: data.center_fix_v2 || null
                     };
                     completed++;
                 })
@@ -2928,7 +2897,6 @@
                         bounds: data.bounds, datetime_utc: data.datetime_utc,
                         satellite: data.satellite || '', tb_vmin: data.tb_vmin || 160.0, tb_vmax: data.tb_vmax || 330.0,
                         center_fix: data.center_fix || null,
-                        center_fix_v2: data.center_fix_v2 || null
                     };
                     irDone++;
                     if (stormId === currentStormId) {
@@ -3054,8 +3022,7 @@
                     rows: rf.rows || rf.tb_rows, cols: rf.cols || rf.tb_cols,
                     bounds: rf.bounds, datetime_utc: rf.datetime_utc,
                     satellite: rf.satellite || '', tb_vmin: rf.tb_vmin || 160.0, tb_vmax: rf.tb_vmax || 330.0,
-                    center_fix: rf.center_fix || null,
-                    center_fix_v2: rf.center_fix_v2 || null
+                    center_fix: rf.center_fix || null
                 };
                 irDone++;
             }
@@ -4155,7 +4122,6 @@
                         bounds: data.bounds, datetime_utc: data.datetime_utc,
                         satellite: data.satellite || '', tb_vmin: data.tb_vmin || 160.0, tb_vmax: data.tb_vmax || 330.0,
                         center_fix: data.center_fix || null,
-                        center_fix_v2: data.center_fix_v2 || null
                     };
                     if (data.total_frames) totalExpectedFrames = data.total_frames;
                     buildValidIndices();

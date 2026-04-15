@@ -51,7 +51,7 @@ from satellite_ir import (
     WV_BAND,
 )
 
-from tc_center_fix import find_ir_center, find_ir_center_v2
+from tc_center_fix import find_ir_center
 
 try:
     import requests as _requests
@@ -2187,21 +2187,6 @@ def get_storm_ir_raw_frame(
         except Exception:
             pass  # center fix is best-effort; never block frame delivery
 
-        # Run experimental v2 algorithm for comparison
-        center_fix_v2 = None
-        try:
-            cfix_v2 = find_ir_center_v2(arr, frame_bounds, guess_lat, guess_lon,
-                                        ref_lat=interp_lat, ref_lon=interp_lon)
-            if cfix_v2.get("success"):
-                center_fix_v2 = {
-                    "lat": cfix_v2["lat"], "lon": cfix_v2["lon"],
-                    "eye_score": cfix_v2["eye_score"],
-                    "ir_rad_dif": cfix_v2["ir_rad_dif"],
-                    "mean_std": cfix_v2["mean_std"],
-                }
-        except Exception:
-            pass
-
         # Log every center-fix attempt (success or NaN) to GCS archive
         try:
             _log_center_fix(
@@ -2229,7 +2214,6 @@ def get_storm_ir_raw_frame(
         "frame_index": frame_index,
         "total_frames": len(frame_times),
         "center_fix": center_fix,
-        "center_fix_v2": center_fix_v2,
     }
 
     # Cache to GCS

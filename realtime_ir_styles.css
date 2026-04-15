@@ -11,12 +11,6 @@
     background-clip: text !important;
 }
 
-/* ── Raw Tb overlay (custom colormaps) — crisp nearest-neighbor ── */
-.ir-raw-overlay img {
-    image-rendering: pixelated;
-    image-rendering: crisp-edges;  /* Firefox fallback */
-}
-
 /* ── Map ─────────────────────────────────────────────────────── */
 .ir-map {
     position: absolute;
@@ -313,6 +307,26 @@
 .ir-kml-btn:hover {
     background: rgba(255,255,255,0.25);
 }
+.ir-sat-viewer-btn {
+    color: #00e5ff;
+    border-color: rgba(0, 229, 255, 0.4);
+    background: rgba(0, 229, 255, 0.12);
+}
+.ir-sat-viewer-btn:hover {
+    background: rgba(0, 229, 255, 0.25);
+}
+
+/* ── Section divider (Observations) ──────────────────────────── */
+.ir-section-divider {
+    font-size: 0.6rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: rgba(148, 163, 184, 0.5);
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    padding-top: 12px;
+    margin: 16px 0 8px;
+}
 
 /* ── Detail body: two-panel layout ───────────────────────────── */
 .ir-detail-body {
@@ -380,66 +394,7 @@
     color: rgba(255, 255, 255, 0.65);
 }
 
-/* ── IR Center Fix Badge ────────────────────────────────────── */
-.ir-center-fix-badge {
-    display: inline-block;
-    margin-left: 8px;
-    padding: 1px 7px;
-    font-size: 0.7rem;
-    font-weight: 600;
-    color: #00e5ff;
-    background: rgba(0, 229, 255, 0.12);
-    border: 1px solid rgba(0, 229, 255, 0.35);
-    border-radius: 4px;
-    letter-spacing: 0.02em;
-    cursor: default;
-    vertical-align: middle;
-}
-
-.ir-center-fix-note {
-    display: inline-block;
-    margin-left: 8px;
-    font-size: 0.65rem;
-    color: rgba(148, 163, 184, 0.6);
-    font-style: italic;
-    vertical-align: middle;
-}
-
-/* ── IR Center Fix Crosshair (Leaflet divIcon) ─────────────── */
-.ir-center-fix-icon {
-    width: 22px !important;
-    height: 22px !important;
-    border: 2px solid #00e5ff !important;
-    border-radius: 50% !important;
-    background: transparent !important;
-    box-shadow: 0 0 8px rgba(0, 229, 255, 0.7);
-    position: relative;
-    /* Override Leaflet's default leaflet-div-icon white background */
-    margin: 0 !important;
-    padding: 0 !important;
-}
-.ir-center-fix-icon::before,
-.ir-center-fix-icon::after {
-    content: '';
-    position: absolute;
-    background: #00e5ff;
-}
-.ir-center-fix-icon::before {
-    width: 2px;
-    height: 22px;
-    left: 50%;
-    top: 0;
-    transform: translateX(-50%);
-}
-.ir-center-fix-icon::after {
-    width: 22px;
-    height: 2px;
-    top: 50%;
-    left: 0;
-    transform: translateY(-50%);
-}
-
-/* ── Product toggle (Enhanced IR / IR Vigor) ────────────────── */
+/* ── Product toggle (IR / GeoColor) ────────────────────────── */
 .ir-product-toggle {
     position: absolute;
     top: 10px;
@@ -471,7 +426,7 @@
     background: rgba(46, 125, 255, 0.25);
     color: #60a5fa;
 }
-.ir-product-btn.ir-vigor-loading {
+.ir-product-btn.ir-loading {
     color: #fbbf24;
 }
 
@@ -507,41 +462,6 @@
     );
 }
 .ir-tb-legend-labels {
-    display: flex;
-    justify-content: space-between;
-    font-size: 0.6rem;
-}
-
-/* Vigor legend overlay */
-.ir-vigor-legend {
-    position: absolute;
-    bottom: 10px;
-    left: 10px;
-    z-index: 500;
-    background: rgba(0, 0, 0, 0.65);
-    padding: 6px 10px;
-    border-radius: 4px;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.65rem;
-    color: rgba(255, 255, 255, 0.7);
-    display: none;
-}
-.ir-vigor-legend-bar {
-    width: 160px;
-    height: 10px;
-    border-radius: 2px;
-    margin: 4px 0 2px;
-    background: linear-gradient(to right,
-        rgb(10, 10, 30),
-        rgb(40, 80, 180),
-        rgb(160, 200, 240),
-        rgb(230, 230, 230),
-        rgb(255, 255, 150),
-        rgb(255, 140, 0),
-        rgb(200, 0, 150)
-    );
-}
-.ir-vigor-legend-labels {
     display: flex;
     justify-content: space-between;
     font-size: 0.6rem;
@@ -606,27 +526,6 @@
 }
 
 /* ── Info sections (right panel) ─────────────────────────────── */
-/* Tb hover tooltip (matches global archive styling) */
-.ir-tb-tooltip .leaflet-popup-content-wrapper {
-    background: rgba(10, 14, 26, 0.88);
-    border: 1px solid rgba(0, 212, 255, 0.25);
-    border-radius: 6px;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.5);
-    padding: 0;
-}
-.ir-tb-tooltip .leaflet-popup-tip { display: none; }
-.ir-tb-tooltip .leaflet-popup-content {
-    margin: 5px 9px;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.78rem;
-    line-height: 1.3;
-    white-space: nowrap;
-    color: #e0e0e0;
-}
-.ir-tb-val { color: #fff; font-weight: 600; }
-.ir-tb-sep { color: #64748b; margin: 0 1px; }
-.ir-tb-coord { color: #64748b; font-size: 0.72rem; }
-
 /* Skeleton pulse animation for loading placeholders */
 @keyframes skeleton-pulse {
     0%   { background-position: 200% 0; }

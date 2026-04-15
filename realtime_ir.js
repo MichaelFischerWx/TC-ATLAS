@@ -16,7 +16,6 @@
     // ── IR Colormap LUTs (for client-side raw Tb rendering) ────
     var IR_COLORMAPS = {};
     var irSelectedColormap = 'claude-ir';
-    var _irRenderCanvas = null;
 
     // Raw Tb frame storage — parallel to animFrameLayers
     var rawTbFrames = [];  // array of {tb_data: Uint8Array, rows, cols, bounds}
@@ -228,196 +227,6 @@
             arr[i] = binary.charCodeAt(i);
         }
         return arr;
-    }
-
-    /** Render raw Tb uint8 array to a data:image/png URI using canvas + colormap LUT. */
-    function renderTbToDataURI(tbData, rows, cols, colormap) {
-        if (!_irRenderCanvas) _irRenderCanvas = document.createElement('canvas');
-        _irRenderCanvas.width = cols;
-        _irRenderCanvas.height = rows;
-        var ctx = _irRenderCanvas.getContext('2d');
-        var imgData = ctx.createImageData(cols, rows);
-        var pixels = imgData.data;
-        var lut = IR_COLORMAPS[colormap] || IR_COLORMAPS['enhanced'];
-        for (var i = 0; i < tbData.length; i++) {
-            var val = tbData[i];
-            var pi = i * 4;
-            if (val === 0) {
-                pixels[pi] = 0; pixels[pi + 1] = 0; pixels[pi + 2] = 0; pixels[pi + 3] = 0;
-            } else {
-                var li = val * 4;
-                pixels[pi]     = lut[li];
-                pixels[pi + 1] = lut[li + 1];
-                pixels[pi + 2] = lut[li + 2];
-                pixels[pi + 3] = lut[li + 3];
-            }
-        }
-        ctx.putImageData(imgData, 0, 0);
-        return _irRenderCanvas.toDataURL('image/png');
-    }
-
-    /**
-     * L.GridLayer subclass that renders raw Tb data as canvas tiles.
-     * Each tile is rendered at native zoom resolution, avoiding the
-     * upscaling blur of a single L.imageOverlay on Retina displays.
-     */
-    var RawTbTileLayer = L.GridLayer.extend({
-        initialize: function (tbData, rows, cols, bounds, colormap, options) {
-            this._tbData = tbData;
-            this._tbRows = rows;
-            this._tbCols = cols;
-            // bounds: [[south, west], [north, east]]
-            this._dataBounds = bounds;
-            this._colormap = colormap;
-            this._lut = IR_COLORMAPS[colormap] || IR_COLORMAPS['enhanced'];
-            L.GridLayer.prototype.initialize.call(this, options);
-        },
-
-        createTile: function (coords) {
-            var tile = document.createElement('canvas');
-            var tileSize = this.getTileSize();
-            var tw = tileSize.x, th = tileSize.y;
-            tile.width = tw;
-            tile.height = th;
-
-            var ctx = tile.getContext('2d');
-
-            // Data geographic bounds
-            var dataSouth = this._dataBounds[0][0], dataWest = this._dataBounds[0][1];
-            var dataNorth = this._dataBounds[1][0], dataEast = this._dataBounds[1][1];
-            var dataLatSpan = dataNorth - dataSouth;
-            var dataLonSpan = dataEast - dataWest;
-
-            var map = this._map;
-            var nwPoint = coords.scaleBy(tileSize);
-            var z = coords.z;
-
-            // Pre-compute lat for each row and lon for each column
-            // (avoids calling map.unproject for every pixel)
-            var rowLats = new Float64Array(th);
-            for (var py = 0; py < th; py++) {
-                rowLats[py] = map.unproject(L.point(nwPoint.x, nwPoint.y + py), z).lat;
-            }
-            var colLons = new Float64Array(tw);
-            for (var px = 0; px < tw; px++) {
-                colLons[px] = map.unproject(L.point(nwPoint.x + px, nwPoint.y), z).lng;
-            }
-
-            // Quick bounds check: skip tile if entirely outside data bounds
-            var tileNorth = rowLats[0], tileSouth = rowLats[th - 1];
-            var tileWest = colLons[0], tileEast = colLons[tw - 1];
-            if (tileSouth > dataNorth || tileNorth < dataSouth ||
-                tileEast < dataWest || tileWest > dataEast) {
-                return tile;  // empty tile
-            }
-
-            var imgData = ctx.createImageData(tw, th);
-            var pixels = imgData.data;
-            var lut = this._lut;
-            var tbData = this._tbData;
-            var tbRows = this._tbRows;
-            var tbCols = this._tbCols;
-            var hasData = false;
-
-            // Pre-compute data column indices for each tile column
-            var colIndices = new Int32Array(tw);
-            for (var px = 0; px < tw; px++) {
-                var colFrac = (colLons[px] - dataWest) / dataLonSpan;
-                if (colFrac < 0 || colFrac >= 1) { colIndices[px] = -1; continue; }
-                var dc = Math.floor(colFrac * tbCols);
-                colIndices[px] = (dc >= 0 && dc < tbCols) ? dc : -1;
-            }
-
-            for (var py = 0; py < th; py++) {
-                var lat = rowLats[py];
-                var rowFrac = (dataNorth - lat) / dataLatSpan;
-                if (rowFrac < 0 || rowFrac >= 1) continue;
-                var dataRow = Math.floor(rowFrac * tbRows);
-                if (dataRow < 0 || dataRow >= tbRows) continue;
-                var rowOffset = dataRow * tbCols;
-
-                for (var px = 0; px < tw; px++) {
-                    var dc = colIndices[px];
-                    if (dc < 0) continue;
-
-                    var val = tbData[rowOffset + dc];
-                    if (val === 0) continue;
-
-                    var pi = (py * tw + px) * 4;
-                    var li = val * 4;
-                    pixels[pi]     = lut[li];
-                    pixels[pi + 1] = lut[li + 1];
-                    pixels[pi + 2] = lut[li + 2];
-                    pixels[pi + 3] = lut[li + 3];
-                    hasData = true;
-                }
-            }
-
-            if (hasData) {
-                ctx.putImageData(imgData, 0, 0);
-            }
-            return tile;
-        },
-
-        /** Update colormap and redraw all tiles */
-        updateColormap: function (colormap) {
-            this._colormap = colormap;
-            this._lut = IR_COLORMAPS[colormap] || IR_COLORMAPS['enhanced'];
-            this.redraw();
-        },
-
-        /** Compatibility shim: setUrl triggers a redraw (used by recolorRawFrames) */
-        setUrl: function () {
-            this.redraw();
-        },
-
-        /** setOpacity — L.GridLayer doesn't have this by default (L.TileLayer does).
-         *  Needed for the animation system's show/hide frame toggling. */
-        setOpacity: function (opacity) {
-            this.options.opacity = opacity;
-            var container = this.getContainer ? this.getContainer() : this._container;
-            if (container) {
-                container.style.opacity = opacity;
-            }
-            return this;
-        },
-    });
-
-    /** Render the detail view Tb colorbar canvas from active colormap LUT */
-    function renderDetailColorbar() {
-        var canvas = document.getElementById('ir-tb-colorbar-canvas');
-        if (!canvas) return;
-        var lut = IR_COLORMAPS[irSelectedColormap] || IR_COLORMAPS['enhanced'];
-        var ctx = canvas.getContext('2d');
-        var w = canvas.width, h = canvas.height;
-        for (var x = 0; x < w; x++) {
-            // Left = warm (index 255 = 310K), right = cold (index 1 = 170K)
-            var idx = Math.round(255 - x * 254 / (w - 1));
-            if (idx < 1) idx = 1;
-            var li = idx * 4;
-            ctx.fillStyle = 'rgb(' + lut[li] + ',' + lut[li + 1] + ',' + lut[li + 2] + ')';
-            ctx.fillRect(x, 0, 1, h);
-        }
-    }
-
-    /** Re-render all raw Tb frames with a new colormap (no server round-trip) */
-    function recolorRawFrames() {
-        if (rawTbFrames.length === 0) return;
-
-        // If animFrameLayers are still GIBS tiles (no updateColormap/setUrl),
-        // switch to canvas tile layers via _applyRawTbToMap().
-        if (animFrameLayers.length > 0 &&
-            !animFrameLayers[0].setUrl && !animFrameLayers[0].updateColormap) {
-            _applyRawTbToMap();
-            return;
-        }
-
-        for (var i = 0; i < animFrameLayers.length; i++) {
-            if (animFrameLayers[i] && animFrameLayers[i].updateColormap) {
-                animFrameLayers[i].updateColormap(irSelectedColormap);
-            }
-        }
-        renderDetailColorbar();
     }
 
     // ── Natural Earth coastline GeoJSON cache ──────────────────
@@ -640,8 +449,6 @@
     var _rtRadarPrefetching = false;
 
     // ── IR Center Fix State ────────────────────────────────
-    var _irCenterMarker = null;        // L.marker for IR-derived center crosshair
-    var _irCenterFixBadge = null;      // DOM element for info badge
 
     // ── Browser-Side Panel Cache ─────────────────────────────
     // Per-storm cache for panel data to avoid re-fetching on back/forward.
@@ -688,7 +495,7 @@
         if (!_elAnimPlay) _elAnimPlay = document.getElementById('ir-anim-play');
     }
 
-    // Product mode: 'eir' (Enhanced IR), 'geocolor', or 'vigor'
+    // Product mode: 'eir' (IR) or 'geocolor'
     var productMode = 'eir';
 
     // GeoColor overlay state
@@ -698,158 +505,6 @@
     var geocolorFramesReady = false;
     var geocolorValidFrames = [];
     var geocolorFrameHasError = [];
-
-    // IR Vigor overlay state
-    var vigorMode = false;          // true when vigor product is active
-    var vigorLayer = null;          // L.GridLayer for client-side vigor tiles
-    var vigorCache = {};            // keyed by atcf_id → computed vigor data
-    var vigorFetching = false;      // true while vigor computation is running
-
-    // ── GIBS Clean IR Colormap Reverse LUT ───────────────────
-    // GIBS Band 13 "Clean Infrared" uses an enhanced colormap:
-    //   warm (330K) → black/dark gray → mid gray → light gray (248K)
-    //   → cyan → blue → green → yellow → orange → red → pink → white (163K)
-    // The forward stops below were derived empirically from GIBS tile
-    // pixel data and calibrated against known meteorological Tb ranges.
-    // The reverse LUT maps any RGB → approximate Tb via nearest-colour.
-    var GIBS_TB_MIN = 163.0;        // K — coldest (white)
-    var GIBS_TB_MAX = 330.0;        // K — warmest (black)
-
-    // Forward colormap stops: [Tb_kelvin, R, G, B]
-    var GIBS_CMAP_STOPS = [
-        [330,   0,   0,   0],     // black (warmest)
-        [320,  18,  18,  18],
-        [310,  40,  40,  40],
-        [300,  68,  68,  68],     // dark gray (warm ocean surface)
-        [290, 100, 100, 100],     // mid gray (typical SST)
-        [280, 133, 133, 133],
-        [270, 165, 165, 165],
-        [260, 195, 195, 195],
-        [250, 218, 218, 218],     // light gray
-        [245,   0, 210, 240],     // light cyan (gray→colour transition)
-        [240,   0, 180, 220],     // cyan
-        [235,   0, 140, 200],     // cyan-blue
-        [230,   0, 100, 175],     // blue
-        [225,   0,  60, 150],     // dark blue
-        [220,   0,  25, 125],     // very dark blue
-        [215,   0, 100,  30],     // dark green (blue→green transition)
-        [210,   0, 200,  40],     // green
-        [205,  60, 240,   0],     // yellow-green
-        [200, 180, 255,   0],     // yellow
-        [195, 255, 220,   0],     // golden yellow
-        [190, 255, 160,   0],     // orange
-        [185, 255,  80,   0],     // red-orange
-        [180, 255,   0,   0],     // red
-        [175, 200,   0, 120],     // dark magenta
-        [170, 255, 150, 255],     // pink
-        [163, 255, 255, 255]      // white (coldest)
-    ];
-
-    // Build 512-entry forward table (Tb → RGB) by interpolating stops
-    var GIBS_FWD_LUT_SIZE = 512;
-    var GIBS_FWD_LUT = (function () {
-        var n = GIBS_FWD_LUT_SIZE;
-        var lut = new Uint8Array(n * 3); // [R,G,B, R,G,B, ...]
-        var tbArr = new Float32Array(n);
-        for (var i = 0; i < n; i++) {
-            // Map index to Tb: 0 → GIBS_TB_MAX (warm), n-1 → GIBS_TB_MIN (cold)
-            var tb = GIBS_TB_MAX - (i / (n - 1)) * (GIBS_TB_MAX - GIBS_TB_MIN);
-            tbArr[i] = tb;
-            // Find surrounding stops (stops are sorted warm→cold, descending Tb)
-            var lo = GIBS_CMAP_STOPS[0], hi = GIBS_CMAP_STOPS[GIBS_CMAP_STOPS.length - 1];
-            for (var s = 0; s < GIBS_CMAP_STOPS.length - 1; s++) {
-                if (tb <= GIBS_CMAP_STOPS[s][0] && tb >= GIBS_CMAP_STOPS[s + 1][0]) {
-                    lo = GIBS_CMAP_STOPS[s];
-                    hi = GIBS_CMAP_STOPS[s + 1];
-                    break;
-                }
-            }
-            var t = (lo[0] === hi[0]) ? 0 : (lo[0] - tb) / (lo[0] - hi[0]);
-            lut[i * 3]     = Math.round(lo[1] + t * (hi[1] - lo[1]));
-            lut[i * 3 + 1] = Math.round(lo[2] + t * (hi[2] - lo[2]));
-            lut[i * 3 + 2] = Math.round(lo[3] + t * (hi[3] - lo[3]));
-        }
-        return { rgb: lut, tb: tbArr };
-    })();
-
-    // Build 3D reverse lookup table (quantised RGB → forward LUT index → Tb)
-    // Quantise to 32 levels per channel → 32³ = 32768 entries
-    var GIBS_REV_Q = 32;
-    var GIBS_REV_SHIFT = 3; // 256 / 32 = 8, log2(8) = 3
-    var GIBS_REV_LUT = (function () {
-        var q = GIBS_REV_Q;
-        var table = new Uint16Array(q * q * q); // stores forward LUT index (0..511)
-        var fwd = GIBS_FWD_LUT.rgb;
-        var n = GIBS_FWD_LUT_SIZE;
-
-        for (var ri = 0; ri < q; ri++) {
-            var rc = ri * 8 + 4; // centre of quantisation bin
-            for (var gi = 0; gi < q; gi++) {
-                var gc = gi * 8 + 4;
-                for (var bi = 0; bi < q; bi++) {
-                    var bc = bi * 8 + 4;
-                    var bestDist = Infinity, bestIdx = 0;
-                    for (var j = 0; j < n; j++) {
-                        var dr = rc - fwd[j * 3];
-                        var dg = gc - fwd[j * 3 + 1];
-                        var db = bc - fwd[j * 3 + 2];
-                        var d = dr * dr + dg * dg + db * db;
-                        if (d < bestDist) { bestDist = d; bestIdx = j; }
-                    }
-                    table[(ri * q + gi) * q + bi] = bestIdx;
-                }
-            }
-        }
-        return table;
-    })();
-
-    // Vigor rendering range (K)
-    var VIGOR_VMIN = -10.0;         // strong deepening convection
-    var VIGOR_VMAX =  80.0;         // clear sky well above local min
-
-    // Vigor colormap stops (matches backend _VIGOR_STOPS)
-    var VIGOR_STOPS = [
-        [0.00,  10,  10,  30],
-        [0.10,  20,  40, 120],
-        [0.20,  40,  80, 180],
-        [0.30,  80, 140, 220],
-        [0.40, 160, 200, 240],
-        [0.50, 230, 230, 230],
-        [0.60, 255, 255, 150],
-        [0.70, 255, 220,  50],
-        [0.80, 255, 140,   0],
-        [0.90, 230,  50,   0],
-        [1.00, 200,   0, 150]
-    ];
-
-    // Pre-built 256-entry vigor RGBA LUT
-    var VIGOR_LUT = (function () {
-        var lut = new Uint8Array(256 * 4);
-        for (var i = 0; i < 256; i++) {
-            var frac = i / 255.0;
-            var lo = VIGOR_STOPS[0], hi = VIGOR_STOPS[VIGOR_STOPS.length - 1];
-            for (var s = 0; s < VIGOR_STOPS.length - 1; s++) {
-                if (VIGOR_STOPS[s][0] <= frac && frac <= VIGOR_STOPS[s + 1][0]) {
-                    lo = VIGOR_STOPS[s];
-                    hi = VIGOR_STOPS[s + 1];
-                    break;
-                }
-            }
-            var t = (hi[0] === lo[0]) ? 0 : (frac - lo[0]) / (hi[0] - lo[0]);
-            lut[i * 4]     = Math.round(lo[1] + t * (hi[1] - lo[1]));
-            lut[i * 4 + 1] = Math.round(lo[2] + t * (hi[2] - lo[2]));
-            lut[i * 4 + 2] = Math.round(lo[3] + t * (hi[3] - lo[3]));
-            lut[i * 4 + 3] = 255;
-        }
-        return lut;
-    })();
-
-    // Spatial min filter radius in degrees (~200 km at equator)
-    var VIGOR_RADIUS_DEG = 1.8;
-
-    // Cold-cloud Tb threshold for vigor display (only show vigor where
-    // current Tb < this value, i.e. convective cloud tops only)
-    var VIGOR_TB_THRESHOLD = 253.15;  // -20°C in Kelvin
 
     // ── Helpers ─────────────────────────────────────────────────
 
@@ -2429,12 +2084,12 @@
                 updateAnimCounter();
             }
             console.log('[RT Monitor] All ' + total + ' IR frames pre-loaded (' + detailSatName + '), ' + validFrames.length + ' valid');
-            // All GIBS tiles loaded — start raw Tb pre-fetch for colormap upgrade
+            // Pre-fetch raw Tb in background so colormap switch is instant
+            // when user selects a custom colormap. Do NOT auto-apply — keep
+            // GIBS tiles as the default display.
             _fetchRawTbIncremental(currentStormId, true, function () {
-                if (productMode === 'eir' && rawTbFrames.length > 0 && detailMap) {
-                    showLoadingProgress(false);
-                    _applyRawTbToMap();
-                    console.log('[RT Monitor] Auto-applied Enhanced IR colormap (' + rawTbFrames.length + ' frames)');
+                if (rawTbFrames.length > 0) {
+                    console.log('[RT Monitor] Raw Tb pre-fetched (' + rawTbFrames.length + ' frames, ready for colormap switch)');
                 }
             });
         }
@@ -2660,7 +2315,7 @@
             }
         });
 
-        // Show IR Tb colorbar legend (vigor legend stays hidden until toggled)
+        // Show IR Tb colorbar legend
         var tbLeg = document.getElementById('ir-tb-legend');
         if (tbLeg) tbLeg.style.display = 'block';
 
@@ -2733,18 +2388,11 @@
 
         // Reset product state for new storm
         productMode = 'eir';
-        vigorMode = false;
-        vigorFetching = false;
-        removeVigorLayer();
         cleanupGeocolorFrameLayers();
         var eirBtn = document.getElementById('ir-product-eir');
         var geoBtn = document.getElementById('ir-product-geocolor');
-        var vigBtn = document.getElementById('ir-product-vigor');
         if (eirBtn) eirBtn.classList.add('ir-product-active');
-        if (geoBtn) { geoBtn.classList.remove('ir-product-active'); geoBtn.classList.remove('ir-vigor-loading'); geoBtn.textContent = 'GeoColor'; }
-        if (vigBtn) { vigBtn.classList.remove('ir-product-active'); vigBtn.classList.remove('ir-vigor-loading'); vigBtn.textContent = 'IR Vigor'; }
-        var vigorLegend = document.getElementById('ir-vigor-legend');
-        if (vigorLegend) vigorLegend.style.display = 'none';
+        if (geoBtn) geoBtn.classList.remove('ir-product-active');
 
         // Find storm in current data
         var storm = null;
@@ -2884,32 +2532,16 @@
         _rtRemoveModelOverlay();
         _rtRemoveAscatOverlay();
         _rtRemoveRadarOverlay();
-        _clearIRCenterFix();
 
         // Reset product state
-        removeVigorLayer();
         cleanupGeocolorFrameLayers();
         rawTbFrames = [];
-        _gibsAnimFrameLayers = null;
         productMode = 'eir';
-        vigorMode = false;
-        vigorFetching = false;
 
-        // Reset colormap selector
-        var cmapSelect = document.getElementById('ir-colormap-select');
-        if (cmapSelect) cmapSelect.value = 'gibs';
-        var gradBar = document.getElementById('ir-tb-legend-bar-gradient');
-        var canvasBar = document.getElementById('ir-tb-colorbar-canvas');
-        if (gradBar) gradBar.style.display = '';
-        if (canvasBar) canvasBar.style.display = 'none';
         var eirBtn = document.getElementById('ir-product-eir');
         var geoBtn = document.getElementById('ir-product-geocolor');
-        var vigBtn = document.getElementById('ir-product-vigor');
         if (eirBtn) eirBtn.classList.add('ir-product-active');
-        if (geoBtn) { geoBtn.classList.remove('ir-product-active'); geoBtn.classList.remove('ir-vigor-loading'); geoBtn.textContent = 'GeoColor'; }
-        if (vigBtn) { vigBtn.classList.remove('ir-product-active'); vigBtn.classList.remove('ir-vigor-loading'); vigBtn.textContent = 'IR Vigor'; }
-        var vigorLegend = document.getElementById('ir-vigor-legend');
-        if (vigorLegend) vigorLegend.style.display = 'none';
+        if (geoBtn) geoBtn.classList.remove('ir-product-active');
         var tbLegend = document.getElementById('ir-tb-legend');
         if (tbLegend) tbLegend.style.display = 'none';
 
@@ -2967,9 +2599,6 @@
         animFrameLayers[idx].setOpacity(0.85);
         updateFrameOverlay();
 
-        // Update IR center fix marker for this frame
-        _updateIRCenterFix();
-
         // Sync model overlay to new frame time
         if (_rtModelVisible && _rtModelAutoSync && _rtModelData) {
             _rtSyncModelCycleToIR();
@@ -2977,89 +2606,6 @@
 
         // Sync radar overlay scan to new frame time
         _rtUpdateRadarForFrame();
-    }
-
-    // ── IR Center Fix Marker ────────────────────────────────
-    function _updateIRCenterFix() {
-        // Remove previous marker
-        if (_irCenterMarker && detailMap) {
-            detailMap.removeLayer(_irCenterMarker);
-            _irCenterMarker = null;
-        }
-
-        // Cache DOM refs
-        if (!_irCenterFixBadge) {
-            _irCenterFixBadge = document.getElementById('ir-center-fix-badge');
-        }
-        var noteEl = document.getElementById('ir-center-fix-note');
-
-        var frame = rawTbFrames && rawTbFrames[animIndex];
-
-        // Check if this storm is hurricane-strength (center_fix field present)
-        // center_fix is null or {success:false,...} when attempted but eye not detected,
-        // undefined when not attempted (< 65 kt)
-        var wasAttempted = frame && frame.center_fix !== undefined;
-        var fixFailed = wasAttempted && (!frame.center_fix || !frame.center_fix.lat);
-
-        if (!frame || !frame.center_fix || !frame.center_fix.lat) {
-            if (_irCenterFixBadge) _irCenterFixBadge.style.display = 'none';
-            // Show "eye not detected" note only when fix was attempted but failed
-            if (noteEl) {
-                if (fixFailed) {
-                    var failInfo = 'Eye not detected';
-                    if (frame.center_fix && frame.center_fix.reason) {
-                        var reason = frame.center_fix.reason.replace(/_/g, ' ');
-                        failInfo += ' (' + reason;
-                        if (frame.center_fix.best_ir_rad_dif != null) {
-                            failInfo += ', \u0394T=' + frame.center_fix.best_ir_rad_dif.toFixed(1) + 'K';
-                        }
-                        failInfo += ')';
-                    }
-                    noteEl.textContent = failInfo;
-                    noteEl.style.display = '';
-                } else {
-                    noteEl.style.display = 'none';
-                }
-            }
-            return;
-        }
-
-        var fix = frame.center_fix;
-
-        // Hide note, show badge
-        if (noteEl) noteEl.style.display = 'none';
-
-        // Create crosshair marker
-        var icon = L.divIcon({
-            className: 'ir-center-fix-icon',
-            iconSize: [22, 22],
-            iconAnchor: [11, 11]
-        });
-        _irCenterMarker = L.marker([fix.lat, fix.lon], {
-            icon: icon,
-            interactive: false,
-            pane: 'markerPane'
-        }).addTo(detailMap);
-
-        // Update info badge
-        if (_irCenterFixBadge) {
-            var latStr = Math.abs(fix.lat).toFixed(1) + (fix.lat >= 0 ? 'N' : 'S');
-            var lonStr = Math.abs(fix.lon).toFixed(1) + (fix.lon >= 0 ? 'E' : 'W');
-            _irCenterFixBadge.textContent = 'IR Fix: ' + latStr + ' ' + lonStr;
-            _irCenterFixBadge.title = 'Eye score: ' + fix.eye_score +
-                ' | \u0394Tb: ' + fix.ir_rad_dif + ' K';
-            _irCenterFixBadge.style.display = '';
-        }
-    }
-
-    function _clearIRCenterFix() {
-        if (_irCenterMarker && detailMap) {
-            detailMap.removeLayer(_irCenterMarker);
-            _irCenterMarker = null;
-        }
-        if (_irCenterFixBadge) _irCenterFixBadge.style.display = 'none';
-        var noteEl = document.getElementById('ir-center-fix-note');
-        if (noteEl) noteEl.style.display = 'none';
     }
 
     /** Find the position of animIndex within validFrames (or -1) */
@@ -3107,7 +2653,6 @@
 
     /** Step to next valid frame */
     function nextFrame() {
-        if (productMode === 'vigor') return;
         var state = activeFrameState();
         if (!state.ready) return;
         if (state.valid.length === 0) return;
@@ -3121,7 +2666,6 @@
 
     /** Step to previous valid frame */
     function prevFrame() {
-        if (productMode === 'vigor') return;
         var state = activeFrameState();
         if (!state.ready) return;
         if (state.valid.length === 0) return;
@@ -3154,7 +2698,6 @@
 
     /** Start animation loop */
     function startAnimation() {
-        if (productMode === 'vigor') return;
         var state = activeFrameState();
         if (state.times.length < 2 || !state.ready) return;
         animPlaying = true;
@@ -3254,27 +2797,22 @@
     }
 
     // ═══════════════════════════════════════════════════════════
-    //  IR VIGOR PRODUCT
+    //  PRODUCT MODE SWITCHING
     // ═══════════════════════════════════════════════════════════
 
-    /** Switch between product modes: 'eir', 'geocolor', 'vigor' */
+    /** Switch between product modes: 'eir' or 'geocolor' */
     function setProductMode(mode) {
         var prevMode = productMode;
         productMode = mode;
-        vigorMode = (mode === 'vigor');
 
         // Update toggle button active states
         var eirBtn = document.getElementById('ir-product-eir');
         var geoBtn = document.getElementById('ir-product-geocolor');
-        var vigBtn = document.getElementById('ir-product-vigor');
         if (eirBtn) eirBtn.classList.toggle('ir-product-active', mode === 'eir');
         if (geoBtn) geoBtn.classList.toggle('ir-product-active', mode === 'geocolor');
-        if (vigBtn) vigBtn.classList.toggle('ir-product-active', mode === 'vigor');
 
         // Show/hide legends
-        var vigorLeg = document.getElementById('ir-vigor-legend');
         var tbLeg = document.getElementById('ir-tb-legend');
-        if (vigorLeg) vigorLeg.style.display = (mode === 'vigor') ? 'block' : 'none';
         if (tbLeg) tbLeg.style.display = (mode === 'eir') ? 'block' : 'none';
 
         // --- Deactivate previous mode ---
@@ -3284,8 +2822,6 @@
         } else if (prevMode === 'geocolor') {
             hideAllGeocolorFrames();
             stopAnimation();
-        } else if (prevMode === 'vigor') {
-            removeVigorLayer();
         }
 
         // --- Activate new mode ---
@@ -3310,17 +2846,7 @@
             updateAnimCounter();
         } else if (mode === 'geocolor') {
             loadGeocolorFrames();
-        } else if (mode === 'vigor') {
-            hideAllAnimFrames();
-            hideAllGeocolorFrames();
-            stopAnimation();
-            fetchAndShowVigor();
         }
-    }
-
-    /** Backward-compatible wrapper for vigor toggle */
-    function setVigorMode(enabled) {
-        setProductMode(enabled ? 'vigor' : 'eir');
     }
 
     /** Hide all IR animation frame layers */
@@ -3412,7 +2938,7 @@
     /**
      * Pre-fetch raw Tb frames for ALL active storms on page load.
      * Fires sequentially (one storm at a time) to avoid hammering the API.
-     * Cached data is used by _prefetchRawTbSilent() / fetchRawTbFrames()
+     * Cached data is used by _prefetchRawTbSilent() and satellite viewer
      * when the user clicks into a storm detail view.
      */
     var MAX_PREFETCH_STORMS = 3;  // limit background prefetch to avoid bandwidth waste
@@ -3481,15 +3007,6 @@
         fetchNext();
     }
 
-    // ── Cached GIBS tile layers for switching back from raw Tb ──
-    var _gibsAnimFrameLayers = null;  // stashed GIBS tile layers
-
-    /**
-     * Silently populate rawTbFrames[] from the per-storm cache (or fetch).
-     * Does NOT switch the display — GIBS tiles remain active.
-     * When the user later selects a non-GIBS colormap, rawTbFrames[]
-     * are immediately available for recoloring without another API call.
-     */
     /**
      * Fetch raw Tb frames incrementally (one at a time) using the
      * /ir-raw-frame endpoint.  Each frame is fetched individually so
@@ -3701,220 +3218,6 @@
         }
     }
 
-    /** Fetch raw Tb frames from API and switch to client-side rendering */
-    /** Build L.imageOverlay layers from rawTbFrames[] and switch display */
-    function _applyRawTbToMap() {
-        // Stash current GIBS tile layers (only on first switch)
-        if (!_gibsAnimFrameLayers && animFrameLayers.length > 0) {
-            // Check if current layers are GIBS tiles (not RawTbTileLayers)
-            var isGibs = !animFrameLayers[0].updateColormap;
-            if (isGibs) {
-                _gibsAnimFrameLayers = animFrameLayers.slice();
-                for (var i = 0; i < _gibsAnimFrameLayers.length; i++) {
-                    _gibsAnimFrameLayers[i].setOpacity(0);
-                }
-            }
-        }
-
-        // Remove any existing raw Tb tile layers from the map
-        for (var i = 0; i < animFrameLayers.length; i++) {
-            if (animFrameLayers[i] && animFrameLayers[i].updateColormap && detailMap) {
-                detailMap.removeLayer(animFrameLayers[i]);
-            }
-        }
-
-        // Create canvas tile layers from rawTbFrames
-        var newLayers = [];
-        for (var i = 0; i < rawTbFrames.length; i++) {
-            var frame = rawTbFrames[i];
-            var overlay = new RawTbTileLayer(
-                frame.tb_data, frame.rows, frame.cols,
-                frame.bounds, irSelectedColormap,
-                { opacity: 0, pane: 'tilePane', className: 'ir-raw-overlay' }
-            );
-            overlay.addTo(detailMap);
-            newLayers.push(overlay);
-        }
-
-        // Replace animFrameLayers with raw overlays
-        animFrameLayers = newLayers;
-        validFrames = [];
-        for (var vi = 0; vi < newLayers.length; vi++) { validFrames.push(vi); }
-        framesReady = true;
-        animIndex = newLayers.length - 1;
-
-        var slider = document.getElementById('ir-anim-slider');
-        if (slider) {
-            slider.max = validFrames.length - 1;
-            slider.value = validFrames.length - 1;
-        }
-
-        showFrame(animIndex);
-        showLoadingProgress(false);
-        renderDetailColorbar();
-
-        // Switch colorbar to canvas rendering
-        var gradBar = document.getElementById('ir-tb-legend-bar-gradient');
-        var canvasBar = document.getElementById('ir-tb-colorbar-canvas');
-        if (gradBar) gradBar.style.display = 'none';
-        if (canvasBar) canvasBar.style.display = '';
-
-        var playBtn = document.getElementById('ir-anim-play');
-        if (playBtn) playBtn.disabled = false;
-
-        if (_rtModelVisible && _rtModelAutoSync && _rtModelData) {
-            _rtSyncModelCycleToIR();
-        }
-
-        // Enable Tb hover readout now that raw data is available
-        _rtSetupTbHover();
-    }
-
-    // ── Tb Mouseover Hover ─────────────────────────────────
-    // Shows brightness temperature under cursor when raw Tb overlays are active.
-    var _rtTbTooltip = null;
-    var _rtTbHoverThrottled = false;
-    var _rtTbHoverActive = false;  // true when raw Tb overlays are displayed
-
-    function _rtSetupTbHover() {
-        if (!detailMap) return;
-        if (detailMap._rtTbHoverAttached) { _rtTbHoverActive = true; return; }
-
-        _rtTbTooltip = L.popup({
-            closeButton: false, autoPan: false, autoClose: false,
-            className: 'ir-tb-tooltip', offset: [12, -12]
-        });
-        detailMap.on('mousemove', _rtHandleTbMouseMove);
-        detailMap.on('mouseout', function () {
-            if (_rtTbTooltip && detailMap && detailMap.hasLayer(_rtTbTooltip)) {
-                detailMap.closePopup(_rtTbTooltip);
-            }
-        });
-        detailMap._rtTbHoverAttached = true;
-        _rtTbHoverActive = true;
-    }
-
-    function _rtHandleTbMouseMove(e) {
-        if (_rtTbHoverThrottled || !_rtTbHoverActive) return;
-        _rtTbHoverThrottled = true;
-        setTimeout(function () { _rtTbHoverThrottled = false; }, 50);
-
-        if (!rawTbFrames || rawTbFrames.length === 0 || !_rtTbTooltip || !detailMap) return;
-
-        var frame = rawTbFrames[animIndex];
-        if (!frame || !frame.tb_data || !frame.bounds) return;
-
-        var lat = e.latlng.lat;
-        var lng = e.latlng.lng;
-        var b = frame.bounds;
-        var south = b[0][0], west = b[0][1], north = b[1][0], east = b[1][1];
-
-        if (lat < south || lat > north || lng < west || lng > east) {
-            if (detailMap.hasLayer(_rtTbTooltip)) detailMap.closePopup(_rtTbTooltip);
-            return;
-        }
-
-        var fracY = (north - lat) / (north - south);
-        var fracX = (lng - west) / (east - west);
-        var row = Math.min(Math.floor(fracY * frame.rows), frame.rows - 1);
-        var col = Math.min(Math.floor(fracX * frame.cols), frame.cols - 1);
-        var rawVal = frame.tb_data[row * frame.cols + col];
-
-        if (rawVal === 0) {
-            if (detailMap.hasLayer(_rtTbTooltip)) detailMap.closePopup(_rtTbTooltip);
-            return;
-        }
-
-        // Decode uint8 to Tb Kelvin (same formula as global archive)
-        var tbVmin = frame.tb_vmin || 160.0;
-        var tbVmax = frame.tb_vmax || 330.0;
-        var tbK = tbVmin + (rawVal - 1) * (tbVmax - tbVmin) / 254.0;
-        var tbC = (tbK - 273.15).toFixed(1);
-        var latStr = Math.abs(lat).toFixed(2) + (lat >= 0 ? '\u00B0N' : '\u00B0S');
-        var lngStr = Math.abs(lng).toFixed(2) + (lng >= 0 ? '\u00B0E' : '\u00B0W');
-
-        var html = '<span class="ir-tb-val">' + tbK.toFixed(1) + ' K</span>' +
-                   '<span class="ir-tb-sep"> / </span>' +
-                   '<span class="ir-tb-val">' + tbC + ' \u00B0C</span>' +
-                   '<span class="ir-tb-sep"> &nbsp; </span>' +
-                   '<span class="ir-tb-coord">' + latStr + ', ' + lngStr + '</span>';
-
-        // Append 88D radar readout if available
-        var radarHit = _rtHandleRadarMouseMove(e);
-        if (radarHit) {
-            html += '<span class="ir-tb-sep"> &nbsp; </span>' +
-                    '<span class="ir-tb-val" style="color:#86efac;">' + radarHit.value + ' ' + radarHit.units + (radarHit.beam || '') + '</span>';
-        }
-
-        _rtTbTooltip.setLatLng(e.latlng).setContent(html);
-        if (!detailMap.hasLayer(_rtTbTooltip)) _rtTbTooltip.openOn(detailMap);
-    }
-
-    /** Fetch raw Tb frames from API (or cache) and switch to client-side rendering */
-    function fetchRawTbFrames() {
-        if (!currentStormId) return;
-        showLoadingProgress(true, 0);
-
-        // Use pre-fetched cache if available
-        if (rawTbFrames.length > 0) {
-            _applyRawTbToMap();
-            return;
-        }
-        var cached = _rawTbCache[currentStormId];
-        if (cached && cached.rawTbFrames && cached.rawTbFrames.length > 0) {
-            rawTbFrames = cached.rawTbFrames;
-            _applyRawTbToMap();
-            return;
-        }
-
-        // Fetch frames incrementally
-        _fetchRawTbIncremental(currentStormId, false, function () {
-            if (rawTbFrames.length > 0) {
-                _applyRawTbToMap();
-            } else {
-                console.warn('[RT Monitor] No raw Tb frames loaded');
-                showLoadingProgress(false);
-                var cmapSelect = document.getElementById('ir-colormap-select');
-                if (cmapSelect) cmapSelect.value = 'gibs';
-            }
-        });
-    }
-
-    /** Switch back to GIBS tile layers from raw Tb overlays */
-    function switchToGIBSTiles() {
-        _rtTbHoverActive = false;  // disable Tb hover (no raw data in GIBS mode)
-
-        // Remove raw Tb overlays from map
-        for (var i = 0; i < animFrameLayers.length; i++) {
-            if (animFrameLayers[i] && detailMap) {
-                detailMap.removeLayer(animFrameLayers[i]);
-            }
-        }
-        rawTbFrames = [];
-
-        // Restore stashed GIBS tile layers
-        if (_gibsAnimFrameLayers) {
-            animFrameLayers = _gibsAnimFrameLayers;
-            _gibsAnimFrameLayers = null;
-
-            // Restore valid frames and show current frame
-            validFrames = [];
-            for (var i = 0; i < animFrameLayers.length; i++) {
-                if (!frameHasError[i]) validFrames.push(i);
-            }
-            if (validFrames.length > 0) {
-                animIndex = validFrames[validFrames.length - 1];
-                showFrame(animIndex);
-            }
-
-            var slider = document.getElementById('ir-anim-slider');
-            if (slider) {
-                slider.max = validFrames.length - 1;
-                slider.value = validFrames.length - 1;
-            }
-        }
-    }
-
     /** Hide all GeoColor animation frame layers */
     function hideAllGeocolorFrames() {
         for (var i = 0; i < geocolorFrameLayers.length; i++) {
@@ -3935,14 +3238,6 @@
         geocolorFrameHasError = [];
         geocolorFramesLoaded = 0;
         geocolorFramesReady = false;
-    }
-
-    /** Remove the vigor image overlay from the map */
-    function removeVigorLayer() {
-        if (vigorLayer && detailMap) {
-            detailMap.removeLayer(vigorLayer);
-            vigorLayer = null;
-        }
     }
 
     /** Load GeoColor animation frames lazily (only when user switches to GeoColor mode).
@@ -3974,7 +3269,7 @@
         var visLayerName = GIBS_GEOCOLOR_LAYERS[detailSatName] || GIBS_VIS_LAYERS[detailSatName];
         var irLayerName = GIBS_IR_LAYERS[detailSatName] || null;
         if (!visLayerName) {
-            showVigorToast('No visible imagery available for ' + detailSatName);
+            console.warn('[RT Monitor] No visible imagery available for ' + detailSatName);
             setProductMode('eir');
             return;
         }
@@ -3989,7 +3284,7 @@
         // Show loading state on the GeoColor button
         var geoBtn = document.getElementById('ir-product-geocolor');
         if (geoBtn) {
-            geoBtn.classList.add('ir-vigor-loading');
+            geoBtn.classList.add('ir-loading');
             geoBtn.textContent = 'Loading\u2026';
         }
         showLoadingProgress(true, 0);
@@ -4043,7 +3338,7 @@
                 geocolorFramesReady = true;
                 showLoadingProgress(false);
                 if (geoBtn) {
-                    geoBtn.classList.remove('ir-vigor-loading');
+                    geoBtn.classList.remove('ir-loading');
                     geoBtn.textContent = 'GeoColor';
                 }
                 var playBtn = document.getElementById('ir-anim-play');
@@ -4076,7 +3371,7 @@
             showLoadingProgress(false);
             var geoBtn = document.getElementById('ir-product-geocolor');
             if (geoBtn) {
-                geoBtn.classList.remove('ir-vigor-loading');
+                geoBtn.classList.remove('ir-loading');
                 geoBtn.textContent = 'GeoColor';
             }
 
@@ -4122,402 +3417,6 @@
         if (_rtModelVisible && _rtModelAutoSync && _rtModelData) {
             _rtSyncModelCycleToIR();
         }
-    }
-
-    // ── Client-Side Vigor Computation Helpers ────────────────
-
-    /** Convert GIBS Clean IR pixel → approximate Tb (Kelvin).
-     *  Uses the pre-computed 3D reverse LUT for O(1) nearest-colour lookup.
-     *  Handles both the grayscale (warm) and enhanced-colour (cold) regions. */
-    function gibsPixelToTb(r, g, b) {
-        var ri = r >> GIBS_REV_SHIFT;
-        var gi = g >> GIBS_REV_SHIFT;
-        var bi = b >> GIBS_REV_SHIFT;
-        var idx = GIBS_REV_LUT[(ri * GIBS_REV_Q + gi) * GIBS_REV_Q + bi];
-        return GIBS_FWD_LUT.tb[idx];
-    }
-
-    /** Read pixel data from all visible tiles in a GridLayer.
-     *  Returns { tiles: { 'z:x:y': { tb: Float32Array, w, h, coords } }, tileKeys: [] } */
-    function extractTbFromLayer(layer) {
-        var tiles = layer._tiles;
-        var result = {};
-        var keys = [];
-        if (!tiles) return { tiles: result, tileKeys: keys };
-        for (var key in tiles) {
-            if (!tiles.hasOwnProperty(key)) continue;
-            var tile = tiles[key];
-            if (!tile.el || !tile.current) continue;
-            var canvas = tile.el;
-            try {
-                var ctx = canvas.getContext('2d');
-                var imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-                var pixels = imgData.data;
-                var n = canvas.width * canvas.height;
-                var tb = new Float32Array(n);
-                for (var i = 0; i < n; i++) {
-                    var off = i * 4;
-                    if (pixels[off + 3] < 128) {
-                        tb[i] = NaN;
-                    } else {
-                        tb[i] = gibsPixelToTb(pixels[off], pixels[off + 1], pixels[off + 2]);
-                    }
-                }
-                result[key] = { tb: tb, w: canvas.width, h: canvas.height, coords: tile.coords };
-                keys.push(key);
-            } catch (e) {
-                // Cross-origin canvas or empty tile — skip
-            }
-        }
-        return { tiles: result, tileKeys: keys };
-    }
-
-    /** Stitch tile Tb arrays into a single large 2D array.
-     *  Returns { tb: Float32Array, w, h, bounds: {south,north,west,east}, tileW, tileH, grid } */
-    function stitchTileTb(tileData) {
-        var tiles = tileData.tiles;
-        var keys = tileData.tileKeys;
-        if (keys.length === 0) return null;
-
-        // Find bounding tile coords
-        var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-        var zoom = 0, tileW = 256, tileH = 256;
-        for (var i = 0; i < keys.length; i++) {
-            var t = tiles[keys[i]];
-            var c = t.coords;
-            zoom = c.z;
-            tileW = t.w;
-            tileH = t.h;
-            if (c.x < minX) minX = c.x;
-            if (c.x > maxX) maxX = c.x;
-            if (c.y < minY) minY = c.y;
-            if (c.y > maxY) maxY = c.y;
-        }
-
-        var gridW = maxX - minX + 1;
-        var gridH = maxY - minY + 1;
-        var totalW = gridW * tileW;
-        var totalH = gridH * tileH;
-        var stitched = new Float32Array(totalW * totalH);
-        stitched.fill(NaN);
-
-        // Place each tile's data
-        for (var i = 0; i < keys.length; i++) {
-            var t = tiles[keys[i]];
-            var c = t.coords;
-            var ox = (c.x - minX) * tileW;
-            var oy = (c.y - minY) * tileH;
-            for (var row = 0; row < t.h; row++) {
-                for (var col = 0; col < t.w; col++) {
-                    stitched[(oy + row) * totalW + (ox + col)] = t.tb[row * t.w + col];
-                }
-            }
-        }
-
-        // Compute geographic bounds (Web Mercator tile → lat/lon)
-        var n = Math.pow(2, zoom);
-        var west = minX / n * 360 - 180;
-        var east = (maxX + 1) / n * 360 - 180;
-        // Y → lat via Mercator inverse
-        var north = Math.atan(Math.sinh(Math.PI * (1 - 2 * minY / n))) * 180 / Math.PI;
-        var south = Math.atan(Math.sinh(Math.PI * (1 - 2 * (maxY + 1) / n))) * 180 / Math.PI;
-
-        return {
-            tb: stitched, w: totalW, h: totalH,
-            bounds: { south: south, north: north, west: west, east: east },
-            tileW: tileW, tileH: tileH,
-            grid: { minX: minX, maxX: maxX, minY: minY, maxY: maxY, zoom: zoom }
-        };
-    }
-
-    /** Compute pixel-wise temporal average across multiple stitched Tb frames.
-     *  All frames must have the same dimensions. */
-    function temporalAvgTb(stitchedFrames) {
-        if (stitchedFrames.length === 0) return null;
-        var ref = stitchedFrames[0];
-        var n = ref.w * ref.h;
-        var sum = new Float32Array(n);
-        var cnt = new Uint8Array(n);
-
-        for (var f = 0; f < stitchedFrames.length; f++) {
-            var tb = stitchedFrames[f].tb;
-            for (var i = 0; i < n; i++) {
-                if (!isNaN(tb[i])) {
-                    sum[i] += tb[i];
-                    cnt[i]++;
-                }
-            }
-        }
-        var avg = new Float32Array(n);
-        for (var i = 0; i < n; i++) {
-            avg[i] = cnt[i] > 0 ? sum[i] / cnt[i] : NaN;
-        }
-        return { tb: avg, w: ref.w, h: ref.h, bounds: ref.bounds, grid: ref.grid, tileW: ref.tileW, tileH: ref.tileH };
-    }
-
-    /** Separable 2D spatial minimum filter.
-     *  Operates on a flat Float32Array of size w×h with given pixel radius.
-     *  NaN pixels are skipped; if an entire window is NaN the output is NaN. */
-    function spatialMinFilter(tb, w, h, radius) {
-        var n = w * h;
-        var temp = new Float32Array(n);
-        var out = new Float32Array(n);
-
-        // Horizontal pass
-        for (var y = 0; y < h; y++) {
-            for (var x = 0; x < w; x++) {
-                var minVal = Infinity;
-                var x0 = Math.max(0, x - radius);
-                var x1 = Math.min(w - 1, x + radius);
-                for (var xx = x0; xx <= x1; xx++) {
-                    var v = tb[y * w + xx];
-                    if (!isNaN(v) && v < minVal) minVal = v;
-                }
-                temp[y * w + x] = (minVal === Infinity) ? NaN : minVal;
-            }
-        }
-
-        // Vertical pass
-        for (var x = 0; x < w; x++) {
-            for (var y = 0; y < h; y++) {
-                var minVal = Infinity;
-                var y0 = Math.max(0, y - radius);
-                var y1 = Math.min(h - 1, y + radius);
-                for (var yy = y0; yy <= y1; yy++) {
-                    var v = temp[yy * w + x];
-                    if (!isNaN(v) && v < minVal) minVal = v;
-                }
-                out[y * w + x] = (minVal === Infinity) ? NaN : minVal;
-            }
-        }
-        return out;
-    }
-
-    /** Map a vigor value (K) to RGBA using the pre-built LUT */
-    function vigorToRGBA(vigor) {
-        if (isNaN(vigor)) return [0, 0, 0, 0];
-        var frac = (vigor - VIGOR_VMIN) / (VIGOR_VMAX - VIGOR_VMIN);
-        frac = Math.max(0, Math.min(1, frac));
-        var idx = Math.round(frac * 255);
-        return [VIGOR_LUT[idx * 4], VIGOR_LUT[idx * 4 + 1], VIGOR_LUT[idx * 4 + 2], VIGOR_LUT[idx * 4 + 3]];
-    }
-
-    /** Compute client-side vigor from pre-loaded animation frame tile canvases.
-     *  vigor = current_Tb − domain_min(temporal_avg_Tb)
-     *
-     *  The reference is the DOMAIN-WIDE minimum of the temporal-average Tb —
-     *  a single scalar representing the coldest persistent convection in the
-     *  entire storm system.  This means only the CDO core (where current Tb
-     *  is colder than the coldest time-averaged point) can go negative.
-     *  Most grid points will be positive (warmer than the CDO reference). */
-    function computeClientVigor() {
-        if (!detailMap || animFrameLayers.length === 0 || validFrames.length === 0) return null;
-
-        console.time('[Vigor] total computation');
-
-        // Use only the latest valid frame — no temporal averaging needed.
-        // This avoids the storm-following problem: a fixed Eulerian grid
-        // smears the CDO when computing temporal averages because the storm
-        // translates through the domain over the lookback window.
-        var latestIdx = validFrames[validFrames.length - 1];
-        var layer = animFrameLayers[latestIdx];
-        var tileData = extractTbFromLayer(layer);
-        var stitched = stitchTileTb(tileData);
-        if (!stitched) {
-            console.warn('[Vigor] Could not extract Tb from latest frame');
-            return null;
-        }
-
-        console.log('[Vigor] Stitched size:', stitched.w, '×', stitched.h);
-
-        // 1. Collect all convective pixels (Tb < -20°C / 253.15 K)
-        var coldPixels = [];
-        for (var j = 0; j < stitched.tb.length; j++) {
-            var t = stitched.tb[j];
-            if (!isNaN(t) && t < VIGOR_TB_THRESHOLD) {
-                coldPixels.push(t);
-            }
-        }
-
-        if (coldPixels.length < 20) {
-            console.warn('[Vigor] Too few cold pixels:', coldPixels.length);
-            return null;
-        }
-
-        // 2. Find the 5th percentile of cold-pixel Tb (the coldest 5% of
-        //    convective cloud tops).  This is the vigor reference — robust to
-        //    single-pixel noise unlike an absolute minimum.
-        coldPixels.sort(function (a, b) { return a - b; });
-        var p05idx = Math.floor(coldPixels.length * 0.05);
-        var p05 = coldPixels[p05idx];
-
-        console.log('[Vigor] Cold pixels:', coldPixels.length,
-                     '| P05 Tb:', p05.toFixed(1), 'K (' + (p05 - 273.15).toFixed(1) + '°C)',
-                     '| Min Tb:', coldPixels[0].toFixed(1), 'K');
-
-        // 3. Compute vigor: current_Tb − P05(cold_Tb)
-        //    - Negative → colder than the 5th percentile (overshooting tops,
-        //      vigorous convective cores)
-        //    - Near zero → among the coldest sustained convection (CDO core)
-        //    - Positive → warmer than the coldest convection (thinning anvil,
-        //      outer rain bands, warming CDO)
-        //    Warm pixels (Tb >= threshold) are masked out.
-        var vigorArr = new Float32Array(stitched.w * stitched.h);
-        for (var i = 0; i < vigorArr.length; i++) {
-            var curTb = stitched.tb[i];
-            if (isNaN(curTb) || curTb >= VIGOR_TB_THRESHOLD) {
-                vigorArr[i] = NaN;
-            } else {
-                vigorArr[i] = curTb - p05;
-            }
-        }
-
-        console.timeEnd('[Vigor] total computation');
-
-        return {
-            vigor: vigorArr,
-            w: stitched.w,
-            h: stitched.h,
-            bounds: stitched.bounds,
-            grid: stitched.grid,
-            tileW: stitched.tileW,
-            tileH: stitched.tileH,
-            framesUsed: 1,
-            datetime_utc: animFrameTimes[latestIdx]
-        };
-    }
-
-    /** Compute vigor and display as tile overlay (called when vigor mode is activated) */
-    function fetchAndShowVigor() {
-        if (!currentStormId || !detailMap) return;
-
-        // Check cache first
-        if (vigorCache[currentStormId]) {
-            showVigorOverlay(vigorCache[currentStormId]);
-            return;
-        }
-
-        if (!framesReady || validFrames.length < 1) {
-            showVigorToast('IR Vigor requires at least 1 loaded animation frame. Please wait for frames to load.');
-            setVigorMode(false);
-            return;
-        }
-
-        // Show loading state
-        var vigBtn = document.getElementById('ir-product-vigor');
-        if (vigBtn) {
-            vigBtn.classList.add('ir-vigor-loading');
-            vigBtn.textContent = 'Computing\u2026';
-        }
-        vigorFetching = true;
-
-        // Run computation asynchronously (setTimeout to allow UI update)
-        setTimeout(function () {
-            try {
-                var result = computeClientVigor();
-                vigorFetching = false;
-
-                if (vigBtn) {
-                    vigBtn.classList.remove('ir-vigor-loading');
-                    vigBtn.textContent = 'IR Vigor';
-                }
-
-                if (!result) {
-                    showVigorToast('IR Vigor computation failed — not enough tile data available.');
-                    setVigorMode(false);
-                    return;
-                }
-
-                vigorCache[currentStormId] = result;
-
-                if (vigorMode) {
-                    showVigorOverlay(result);
-                }
-
-                _ga('ir_vigor_loaded', {
-                    atcf_id: currentStormId,
-                    frames_used: result.framesUsed
-                });
-            } catch (err) {
-                console.warn('[RT Monitor] Vigor computation error:', err);
-                vigorFetching = false;
-                if (vigBtn) {
-                    vigBtn.classList.remove('ir-vigor-loading');
-                    vigBtn.textContent = 'IR Vigor';
-                }
-                showVigorToast('IR Vigor computation failed: ' + err.message);
-                setVigorMode(false);
-            }
-        }, 50);
-    }
-
-    /** Show a temporary toast message */
-    function showVigorToast(msg) {
-        var toast = document.createElement('div');
-        toast.textContent = msg;
-        toast.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:rgba(180,80,20,0.95);color:#fff;padding:10px 20px;border-radius:8px;font-size:13px;z-index:10000;max-width:500px;text-align:center;box-shadow:0 4px 12px rgba(0,0,0,0.4);';
-        document.body.appendChild(toast);
-        setTimeout(function () { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 6000);
-    }
-
-    /** Render the computed vigor data as a canvas-based Leaflet ImageOverlay.
-     *  The vigor array is painted into an offscreen canvas at full tile resolution,
-     *  then displayed as an image overlay with proper geographic bounds.
-     *  This scales naturally with zoom (Leaflet handles the CSS transform). */
-    function showVigorOverlay(data) {
-        removeVigorLayer();
-        if (!detailMap || !data.vigor || !data.bounds) return;
-
-        var vigorArr = data.vigor;
-        var vw = data.w;
-        var vh = data.h;
-        var bnd = data.bounds;
-
-        // Render vigor into an offscreen canvas at full computed resolution
-        var canvas = document.createElement('canvas');
-        canvas.width = vw;
-        canvas.height = vh;
-        var ctx = canvas.getContext('2d');
-        var imgData = ctx.createImageData(vw, vh);
-        var pix = imgData.data;
-
-        for (var i = 0; i < vigorArr.length; i++) {
-            var v = vigorArr[i];
-            if (isNaN(v)) continue;
-
-            var frac = (v - VIGOR_VMIN) / (VIGOR_VMAX - VIGOR_VMIN);
-            frac = Math.max(0, Math.min(1, frac));
-            var idx = Math.round(frac * 255);
-            var off = i * 4;
-            pix[off]     = VIGOR_LUT[idx * 4];
-            pix[off + 1] = VIGOR_LUT[idx * 4 + 1];
-            pix[off + 2] = VIGOR_LUT[idx * 4 + 2];
-            pix[off + 3] = 255;
-        }
-        ctx.putImageData(imgData, 0, 0);
-
-        // Convert canvas to data URL and create image overlay
-        var dataUrl = canvas.toDataURL('image/png');
-        var bounds = L.latLngBounds(
-            L.latLng(bnd.south, bnd.west),
-            L.latLng(bnd.north, bnd.east)
-        );
-
-        vigorLayer = L.imageOverlay(dataUrl, bounds, { opacity: 0.92 });
-        vigorLayer.addTo(detailMap);
-
-        // Use crisp rendering so individual pixels stay sharp when zoomed
-        var imgEl = vigorLayer.getElement();
-        if (imgEl) {
-            imgEl.style.imageRendering = 'pixelated';
-            imgEl.style.imageRendering = '-moz-crisp-edges';
-        }
-
-        // Update the overlay info label
-        var satLabel = document.getElementById('ir-satellite-label');
-        if (satLabel) satLabel.textContent = 'IR Vigor (' + data.framesUsed + ' frames)';
-        var timeLabel = document.getElementById('ir-frame-time');
-        if (timeLabel) timeLabel.textContent = fmtUTC(data.datetime_utc);
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -4583,45 +3482,6 @@
             if (productMode === 'geocolor') return;
             setProductMode('geocolor');
         });
-        document.getElementById('ir-product-vigor').addEventListener('click', function () {
-            if (productMode === 'vigor' || vigorFetching) return;
-            setProductMode('vigor');
-        });
-
-        // Colormap selector
-        var cmapSelect = document.getElementById('ir-colormap-select');
-        if (cmapSelect) {
-            cmapSelect.addEventListener('change', function () {
-                var val = cmapSelect.value;
-                if (val === 'gibs') {
-                    // Switch back to GIBS tiles
-                    if (rawTbFrames.length > 0) {
-                        switchToGIBSTiles();
-                    }
-                    // Show gradient bar, hide canvas
-                    var gradBar = document.getElementById('ir-tb-legend-bar-gradient');
-                    var canvasBar = document.getElementById('ir-tb-colorbar-canvas');
-                    if (gradBar) gradBar.style.display = '';
-                    if (canvasBar) canvasBar.style.display = 'none';
-                } else {
-                    irSelectedColormap = val;
-                    if (rawTbFrames.length > 0) {
-                        // Already have raw data — just re-render
-                        recolorRawFrames();
-                    } else {
-                        // Need to fetch raw Tb data from API
-                        fetchRawTbFrames();
-                    }
-                    // Show canvas bar, hide gradient bar
-                    var gradBar = document.getElementById('ir-tb-legend-bar-gradient');
-                    var canvasBar = document.getElementById('ir-tb-colorbar-canvas');
-                    if (gradBar) gradBar.style.display = 'none';
-                    if (canvasBar) canvasBar.style.display = '';
-                    renderDetailColorbar();
-                }
-            });
-        }
-
         // Browser back/forward
         window.addEventListener('popstate', function () {
             var hash = window.location.hash.replace('#', '').trim();
@@ -7441,44 +6301,13 @@
             });
     };
 
-    // ── GeoTIFF Export ──────────────────────────────────────────
-    window.downloadActiveStormGeoTIFF = function () {
+    // ── Open in Satellite Viewer ──────────────────────────────
+    window.openSatelliteViewerForStorm = function () {
         if (!currentStormId) return;
-        _ga('ir_export_geotiff', { storm: currentStormId });
-
-        // Use the current animation frame index (0 = oldest, N-1 = newest)
-        var frameIdx = animIndex || 0;
-
-        var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(currentStormId) +
-            '/geotiff?frame_index=' + frameIdx;
-
-        // Show feedback
-        var btn = document.querySelector('.ir-kml-btn[onclick*="GeoTIFF"]');
-        var origText = btn ? btn.innerHTML : '';
-        if (btn) btn.innerHTML = '⏳ Fetching…';
-
-        fetch(url, { cache: 'no-store' })
-            .then(function (r) {
-                if (!r.ok) throw new Error('HTTP ' + r.status);
-                return r.blob();
-            })
-            .then(function (blob) {
-                var cd = '';  // Content-Disposition has the filename
-                var a = document.createElement('a');
-                a.href = URL.createObjectURL(blob);
-                // Extract filename from the blob or build one
-                a.download = currentStormId + '_frame' + frameIdx + '_Tb.tif';
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                URL.revokeObjectURL(a.href);
-                if (btn) btn.innerHTML = origText;
-            })
-            .catch(function (err) {
-                console.warn('[RT Monitor] GeoTIFF export failed:', err.message || '');
-                alert('GeoTIFF export failed: ' + (err.message || 'unknown error'));
-                if (btn) btn.innerHTML = origText;
-            });
+        _ga('ir_open_satellite_viewer', { storm: currentStormId });
+        // The URL hash already has the storm ID (set by openStormDetail),
+        // and the satellite viewer reads it on activation.
+        if (window.switchIRView) window.switchIRView('satellite');
     };
 
     // Boot on DOM ready

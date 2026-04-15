@@ -147,7 +147,7 @@
                 <span id="ir-detail-id" class="ir-detail-id"></span>
                 <span id="ir-detail-cat" class="ir-detail-cat"></span>
                 <button class="ir-kml-btn" onclick="downloadActiveStormKML()" title="Download track as KML for Google Earth">&#127758; KML</button>
-                <button class="ir-kml-btn" onclick="downloadActiveStormGeoTIFF()" title="Download current IR frame as GeoTIFF">&#128506; GeoTIFF</button>
+                <button class="ir-kml-btn ir-sat-viewer-btn" onclick="window.openSatelliteViewerForStorm()" title="Deep IR analysis in Satellite Viewer">&#128752; Satellite</button>
             </div>
         </div>
         <div class="ir-detail-body">
@@ -162,48 +162,20 @@
                     <div id="ir-overlay-info" class="ir-overlay-info">
                         <span id="ir-frame-time" class="ir-frame-time-label"></span>
                         <span id="ir-satellite-label" class="ir-sat-label"></span>
-                        <span id="ir-center-fix-badge" class="ir-center-fix-badge" style="display:none;"></span>
-                        <span id="ir-center-fix-note" class="ir-center-fix-note" style="display:none;">IR fix: eye not detected</span>
                     </div>
-                    <!-- Product toggle (Enhanced IR / GeoColor / IR Vigor) -->
+                    <!-- Product toggle (IR / GeoColor) -->
                     <div id="ir-product-toggle" class="ir-product-toggle">
-                        <button id="ir-product-eir" class="ir-product-btn ir-product-active" title="Enhanced Infrared">Enhanced IR</button>
+                        <button id="ir-product-eir" class="ir-product-btn ir-product-active" title="Infrared">IR</button>
                         <button id="ir-product-geocolor" class="ir-product-btn" title="GeoColor visible (day) / blended IR (night)">GeoColor</button>
-                        <button id="ir-product-vigor" class="ir-product-btn" title="IR Vigor — Tb relative to 5th percentile of convective cloud tops">IR Vigor</button>
                     </div>
-                    <!-- IR Tb colorbar legend (shown in enhanced IR mode) -->
+                    <!-- IR Tb colorbar legend -->
                     <div id="ir-tb-legend" class="ir-tb-legend">
-                        <div style="display:flex;align-items:center;gap:6px;">
-                            <span>Brightness Temp (K)</span>
-                            <select id="ir-colormap-select" title="Change IR colormap" style="background:rgba(255,255,255,0.1);color:rgba(255,255,255,0.8);border:1px solid rgba(255,255,255,0.2);border-radius:3px;font-size:0.6rem;font-family:'JetBrains Mono',monospace;padding:1px 4px;cursor:pointer;">
-                                <option value="gibs">GIBS Default</option>
-                                <option value="enhanced">Enhanced</option>
-                                <option value="dvorak">Dvorak</option>
-                                <option value="grayscale">BD Grayscale</option>
-                                <option value="funktop">Funktop</option>
-                                <option value="avn">AVN</option>
-                                <option value="nhc">NHC</option>
-                                <option value="rammb">RAMMB</option>
-                                <option value="irb">IRB</option>
-                                <option value="claude-ir">Claude IR</option>
-                            </select>
-                        </div>
-                        <canvas id="ir-tb-colorbar-canvas" width="160" height="10" style="border-radius:2px;margin:4px 0 2px;display:none;"></canvas>
+                        <span>Brightness Temp (K)</span>
                         <div class="ir-tb-legend-bar" id="ir-tb-legend-bar-gradient"></div>
                         <div class="ir-tb-legend-labels">
                             <span>330</span>
                             <span>245</span>
                             <span>160</span>
-                        </div>
-                    </div>
-                    <!-- Vigor colorbar legend (shown only in vigor mode) -->
-                    <div id="ir-vigor-legend" class="ir-vigor-legend">
-                        <div>IR Vigor (K)</div>
-                        <div class="ir-vigor-legend-bar"></div>
-                        <div class="ir-vigor-legend-labels">
-                            <span>&minus;10</span>
-                            <span>35</span>
-                            <span>80+</span>
                         </div>
                     </div>
                 </div>
@@ -217,7 +189,7 @@
                 </div>
             </div>
 
-            <!-- Right: info & diagnostics panel -->
+            <!-- Right: diagnostics panel -->
             <div class="ir-detail-right">
                 <!-- Current storm info -->
                 <div class="ir-info-section">
@@ -230,12 +202,6 @@
                         <div class="ir-info-row"><span class="ir-info-label">Vmax</span><span class="ir-info-value" id="ir-info-vmax">&mdash;</span></div>
                         <div class="ir-info-row"><span class="ir-info-label">Last Fix</span><span class="ir-info-value" id="ir-info-lastfix">&mdash;</span></div>
                     </div>
-                </div>
-
-                <!-- Intensity timeline -->
-                <div class="ir-info-section">
-                    <h3 class="ir-info-heading">Intensity History</h3>
-                    <div id="ir-intensity-chart" class="ir-intensity-chart"></div>
                 </div>
 
                 <!-- Model Forecast Overlay -->
@@ -307,6 +273,78 @@
                     </div>
                 </div>
 
+                <!-- DeepMind Intensity Distribution (1000 members) -->
+                <div class="ir-info-section" id="rt-dm-intensity-dist" style="display:none;">
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+                        <h3 class="ir-info-heading" style="margin-bottom:0;padding-bottom:0;border-bottom:none;">
+                            Intensity Distribution
+                        </h3>
+                        <div style="display:flex;align-items:center;gap:6px;">
+                            <span style="font-size:0.65rem;color:#00e5ff;">DeepMind 1K</span>
+                            <button class="rt-dm-export-btn" onclick="window._rtShowExportMenu('intensity', this)" title="Save as PNG">&#8681;</button>
+                        </div>
+                    </div>
+                    <div id="rt-dm-hist-chart" style="width:100%;overflow:hidden;"></div>
+                    <div style="position:relative;z-index:10;padding:4px 0 0;overflow:visible;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:2px;">
+                            <span style="font-size:0.6rem;color:#64748b;">Forecast hour:</span>
+                            <span id="rt-dm-hist-label" style="font-size:0.7rem;color:#00e5ff;font-family:'JetBrains Mono',monospace;">+0h</span>
+                        </div>
+                        <input type="range" id="rt-dm-hist-slider" min="0" max="52" value="0"
+                            oninput="window._rtDmHistSlide(this.value)"
+                            class="rt-dm-slider" style="width:100%;display:block;">
+                    </div>
+                </div>
+
+                <!-- DeepMind Intensity Change Distribution -->
+                <div class="ir-info-section" id="rt-dm-change-dist" style="display:none;">
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+                        <h3 class="ir-info-heading" style="margin-bottom:0;padding-bottom:0;border-bottom:none;">
+                            Intensity Change
+                        </h3>
+                        <div style="display:flex;gap:4px;align-items:center;">
+                            <button class="rt-dm-export-btn" onclick="window._rtShowExportMenu('change', this)" title="Save as PNG">&#8681;</button>
+                            <button id="rt-dm-change-12h-btn" onclick="window._rtDmChangeInterval(12)"
+                                class="rt-model-filter-btn" style="font-size:8px;padding:1px 5px;">12h</button>
+                            <button id="rt-dm-change-24h-btn" onclick="window._rtDmChangeInterval(24)"
+                                class="rt-model-filter-btn active" style="font-size:8px;padding:1px 5px;background:rgba(0,229,255,0.2);">24h</button>
+                        </div>
+                    </div>
+                    <div id="rt-dm-change-chart" style="width:100%;"></div>
+                    <div style="position:relative;z-index:10;padding:4px 0 0;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:2px;">
+                            <span style="font-size:0.6rem;color:#64748b;">Forecast hour:</span>
+                            <span id="rt-dm-change-label" style="font-size:0.7rem;color:#00e5ff;font-family:'JetBrains Mono',monospace;">+24h</span>
+                        </div>
+                        <input type="range" id="rt-dm-change-slider" min="0" max="52" value="4"
+                            oninput="window._rtDmChangeSlide(this.value)"
+                            class="rt-dm-slider" style="width:100%;display:block;">
+                    </div>
+                </div>
+
+                <!-- DeepMind LMI Distribution -->
+                <div class="ir-info-section" id="rt-dm-lmi-dist" style="display:none;">
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+                        <h3 class="ir-info-heading" style="margin-bottom:0;padding-bottom:0;border-bottom:none;">
+                            Lifetime Max Intensity
+                        </h3>
+                        <div style="display:flex;align-items:center;gap:6px;">
+                            <span style="font-size:0.65rem;color:#00e5ff;">DeepMind 1K</span>
+                            <button class="rt-dm-export-btn" onclick="window._rtShowExportMenu('lmi', this)" title="Save as PNG">&#8681;</button>
+                        </div>
+                    </div>
+                    <div id="rt-dm-lmi-chart"></div>
+                </div>
+
+                <!-- Observations divider -->
+                <div class="ir-section-divider">Observations</div>
+
+                <!-- Intensity timeline -->
+                <div class="ir-info-section">
+                    <h3 class="ir-info-heading">Intensity History</h3>
+                    <div id="ir-intensity-chart" class="ir-intensity-chart"></div>
+                </div>
+
                 <!-- ASCAT Scatterometer Winds -->
                 <div class="ir-info-section" id="rt-ascat-section" style="display:none;">
                     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
@@ -369,69 +407,6 @@
                             <div id="rt-radar-colorbar"></div>
                         </div>
                     </div>
-                </div>
-
-                <!-- DeepMind Intensity Distribution (1000 members) -->
-                <div class="ir-info-section" id="rt-dm-intensity-dist" style="display:none;">
-                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
-                        <h3 class="ir-info-heading" style="margin-bottom:0;padding-bottom:0;border-bottom:none;">
-                            Intensity Distribution
-                        </h3>
-                        <div style="display:flex;align-items:center;gap:6px;">
-                            <span style="font-size:0.65rem;color:#00e5ff;">DeepMind 1K</span>
-                            <button class="rt-dm-export-btn" onclick="window._rtShowExportMenu('intensity', this)" title="Save as PNG">&#8681;</button>
-                        </div>
-                    </div>
-                    <div id="rt-dm-hist-chart" style="width:100%;overflow:hidden;"></div>
-                    <div style="position:relative;z-index:10;padding:4px 0 0;overflow:visible;">
-                        <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:2px;">
-                            <span style="font-size:0.6rem;color:#64748b;">Forecast hour:</span>
-                            <span id="rt-dm-hist-label" style="font-size:0.7rem;color:#00e5ff;font-family:'JetBrains Mono',monospace;">+0h</span>
-                        </div>
-                        <input type="range" id="rt-dm-hist-slider" min="0" max="52" value="0"
-                            oninput="window._rtDmHistSlide(this.value)"
-                            class="rt-dm-slider" style="width:100%;display:block;">
-                    </div>
-                </div>
-
-                <!-- DeepMind Intensity Change Distribution -->
-                <div class="ir-info-section" id="rt-dm-change-dist" style="display:none;">
-                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
-                        <h3 class="ir-info-heading" style="margin-bottom:0;padding-bottom:0;border-bottom:none;">
-                            Intensity Change
-                        </h3>
-                        <div style="display:flex;gap:4px;align-items:center;">
-                            <button class="rt-dm-export-btn" onclick="window._rtShowExportMenu('change', this)" title="Save as PNG">&#8681;</button>
-                            <button id="rt-dm-change-12h-btn" onclick="window._rtDmChangeInterval(12)"
-                                class="rt-model-filter-btn" style="font-size:8px;padding:1px 5px;">12h</button>
-                            <button id="rt-dm-change-24h-btn" onclick="window._rtDmChangeInterval(24)"
-                                class="rt-model-filter-btn active" style="font-size:8px;padding:1px 5px;background:rgba(0,229,255,0.2);">24h</button>
-                        </div>
-                    </div>
-                    <div id="rt-dm-change-chart" style="width:100%;"></div>
-                    <div style="position:relative;z-index:10;padding:4px 0 0;">
-                        <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:2px;">
-                            <span style="font-size:0.6rem;color:#64748b;">Forecast hour:</span>
-                            <span id="rt-dm-change-label" style="font-size:0.7rem;color:#00e5ff;font-family:'JetBrains Mono',monospace;">+24h</span>
-                        </div>
-                        <input type="range" id="rt-dm-change-slider" min="0" max="52" value="4"
-                            oninput="window._rtDmChangeSlide(this.value)"
-                            class="rt-dm-slider" style="width:100%;display:block;">
-                    </div>
-                </div>
-
-                <!-- DeepMind LMI Distribution -->
-                <div class="ir-info-section" id="rt-dm-lmi-dist" style="display:none;">
-                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
-                        <h3 class="ir-info-heading" style="margin-bottom:0;padding-bottom:0;border-bottom:none;">
-                            Lifetime Max Intensity
-                        </h3>
-                        <div style="display:flex;align-items:center;gap:6px;">
-                            <span style="font-size:0.65rem;color:#00e5ff;">DeepMind 1K</span>
-                            <button class="rt-dm-export-btn" onclick="window._rtShowExportMenu('lmi', this)" title="Save as PNG">&#8681;</button>
-                        </div>
-                    </div>
-                    <div id="rt-dm-lmi-chart"></div>
                 </div>
 
                 <!-- Official forecast link -->
