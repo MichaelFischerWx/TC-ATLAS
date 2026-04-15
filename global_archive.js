@@ -1837,9 +1837,11 @@ function renderHovmoller(data) {
         hovertemplate: '%{y}<br>r = %{x} km<br>Tb = %{z:.1f} °C<extra></extra>',
         colorbar: {
             title: { text: '°C', font: { size: 9, color: '#8b9ec2' } },
-            len: 0.8,
-            thickness: 10,
-            tickfont: { size: 8, color: '#64748b' }
+            len: 0.6,
+            thickness: 8,
+            tickfont: { size: 8, color: '#64748b' },
+            y: 0.3,
+            yanchor: 'middle'
         }
     };
 
@@ -1874,7 +1876,7 @@ function renderHovmoller(data) {
         paper_bgcolor: 'rgba(0,0,0,0)',
         plot_bgcolor: 'rgba(0,0,0,0)',
         font: { family: 'DM Sans, sans-serif', color: '#8b9ec2', size: 10 },
-        margin: { t: 10, r: 50, b: 36, l: 100 },
+        margin: { t: 30, r: 50, b: 36, l: 100 },
         xaxis: {
             title: { text: 'Radius (km)', font: { size: 9 } },
             tickfont: { size: 8 },
