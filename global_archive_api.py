@@ -36,8 +36,8 @@ from functools import lru_cache
 
 import numpy as np
 import requests
-from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import JSONResponse, StreamingResponse
 from PIL import Image
 
 from tc_center_fix import find_ir_center
@@ -2522,19 +2522,22 @@ def _gcs_put_hovmoller(sid: str, result: dict):
         logger.debug(f"GCS Hovmöller put failed for {sid}: {e}")
 
 
-@router.get("/ir/hovmoller")
+@router.api_route("/ir/hovmoller", methods=["GET", "POST"])
 def ir_hovmoller(
+    request: "Request" = None,
     sid: str = Query(..., description="IBTrACS storm ID"),
-    track: str = Query("", description="JSON-encoded track points [{t, la, lo, w, p}, ...]"),
+    track: str = Query("", description="JSON-encoded track points (GET) or send as POST body"),
     storm_lon: float = Query(0.0, description="Storm longitude for satellite selection"),
     max_radius_km: float = Query(200.0, ge=50, le=500),
     dr_km: float = Query(4.0, ge=2, le=20),
+    stream: bool = Query(False, description="Stream progress as newline-delimited JSON"),
 ):
     """
     Compute storm-duration azimuthal-mean Tb radial profiles (Hovmöller diagram).
 
     Returns pre-computed profiles for all available IR frames of a historical
     storm, centered on interpolated best-track positions.
+    With stream=true, sends progress lines before the final JSON result.
     """
     import json as json_mod
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -2558,11 +2561,25 @@ def ir_hovmoller(
             headers={"Cache-Control": "public, max-age=86400"},
         )
 
-    # Parse track points
+    # Parse track points (from GET query param or POST body)
     track_points = []
-    if track:
+    track_str = track
+    if request and request.method == "POST" and not track_str:
+        import asyncio
         try:
-            track_points = json_mod.loads(track)
+            body = asyncio.get_event_loop().run_until_complete(request.body())
+            body_json = json_mod.loads(body)
+            if isinstance(body_json, list):
+                track_points = body_json
+            elif isinstance(body_json, dict) and "track" in body_json:
+                track_points = body_json["track"]
+                if not sid and "sid" in body_json:
+                    sid = body_json["sid"]
+        except Exception:
+            pass
+    if not track_points and track_str:
+        try:
+            track_points = json_mod.loads(track_str)
         except (json_mod.JSONDecodeError, TypeError):
             pass
 
@@ -2753,51 +2770,94 @@ def ir_hovmoller(
 
     # Process frames concurrently (cap at 5 workers for OOM protection)
     MAX_WORKERS = 5
-    results = []
+    total_frames = len(frame_list)
 
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
-        futures = {
-            pool.submit(_compute_profile_for_frame, f): i
-            for i, f in enumerate(frame_list)
+    def _process_all():
+        """Run all frames and return (partial_results, completed_count_ref)."""
+        completed = [0]  # mutable counter for progress tracking
+        partial_results = [None] * total_frames
+
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+            futures = {
+                pool.submit(_compute_profile_for_frame, f): i
+                for i, f in enumerate(frame_list)
+            }
+            for future in as_completed(futures):
+                idx = futures[future]
+                try:
+                    partial_results[idx] = future.result()
+                except Exception as e:
+                    logger.debug(f"Hovmöller frame {idx} failed: {e}")
+                completed[0] += 1
+
+        return partial_results
+
+    def _build_result(partial_results):
+        out_times, out_profiles, out_winds, out_centers = [], [], [], []
+        for r in partial_results:
+            if r is not None:
+                out_times.append(r["time"])
+                out_profiles.append(r["profile"])
+                out_winds.append(r["wind"])
+                out_centers.append({
+                    "lat": r["clat"], "lon": r["clon"],
+                    "method": r["center"],
+                })
+
+        if not out_times:
+            return None
+
+        radii = [round(b * dr_km + dr_km / 2, 1) for b in range(n_rad_bins)]
+        return {
+            "sid": sid, "source": source,
+            "times": out_times, "radii": radii,
+            "profiles": out_profiles, "winds": out_winds,
+            "centers": out_centers, "n_frames": len(out_times),
         }
-        partial_results = [None] * len(frame_list)
-        for future in as_completed(futures):
-            idx = futures[future]
-            try:
-                partial_results[idx] = future.result()
-            except Exception as e:
-                logger.debug(f"Hovmöller frame {idx} failed: {e}")
 
-    # Compact results (drop failed frames, keep order)
-    out_times = []
-    out_profiles = []
-    out_winds = []
-    out_centers = []
-    for r in partial_results:
-        if r is not None:
-            out_times.append(r["time"])
-            out_profiles.append(r["profile"])
-            out_winds.append(r["wind"])
-            out_centers.append({
-                "lat": r["clat"], "lon": r["clon"],
-                "method": r["center"],
-            })
+    if stream:
+        # Streaming mode: send progress lines, then final result
+        def _stream_generator():
+            completed = [0]
+            partial_results = [None] * total_frames
 
-    if not out_times:
+            with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+                futures = {
+                    pool.submit(_compute_profile_for_frame, f): i
+                    for i, f in enumerate(frame_list)
+                }
+                for future in as_completed(futures):
+                    idx = futures[future]
+                    try:
+                        partial_results[idx] = future.result()
+                    except Exception as e:
+                        logger.debug(f"Hovmöller frame {idx} failed: {e}")
+                    completed[0] += 1
+                    # Send progress line
+                    yield json.dumps({"progress": completed[0], "total": total_frames}) + "\n"
+
+            result = _build_result(partial_results)
+            if result:
+                _hovmoller_cache[sid] = result
+                if len(_hovmoller_cache) > _HOVMOLLER_CACHE_MAX:
+                    _hovmoller_cache.popitem(last=False)
+                threading.Thread(target=_gcs_put_hovmoller, args=(sid, result), daemon=True).start()
+                yield json.dumps(result) + "\n"
+            else:
+                yield json.dumps({"error": "No frames could be processed"}) + "\n"
+
+        return StreamingResponse(
+            _stream_generator(),
+            media_type="application/x-ndjson",
+            headers={"Cache-Control": "no-cache", "X-Content-Type-Options": "nosniff"},
+        )
+
+    # Non-streaming mode (default): process all, return JSON
+    partial_results = _process_all()
+    result = _build_result(partial_results)
+
+    if not result:
         raise HTTPException(status_code=502, detail="No frames could be processed")
-
-    radii = [round(b * dr_km + dr_km / 2, 1) for b in range(n_rad_bins)]
-
-    result = {
-        "sid": sid,
-        "source": source,
-        "times": out_times,
-        "radii": radii,
-        "profiles": out_profiles,
-        "winds": out_winds,
-        "centers": out_centers,
-        "n_frames": len(out_times),
-    }
 
     # Cache to memory + GCS
     _hovmoller_cache[sid] = result

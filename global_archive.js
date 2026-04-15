@@ -1772,23 +1772,66 @@ function fetchHovmoller() {
     if (btn) btn.textContent = 'Loading…';
     if (statusEl) statusEl.textContent = '';
 
-    var trackJson = JSON.stringify(track.map(function (pt) {
+    var trackData = track.map(function (pt) {
         return { t: pt.t, la: pt.la, lo: pt.lo, w: pt.w, p: pt.p };
-    }));
+    });
 
+    // Use POST with streaming to handle long tracks and show progress
     var url = API_BASE + '/global/ir/hovmoller?sid=' + encodeURIComponent(sid) +
-        '&track=' + encodeURIComponent(trackJson) +
-        '&storm_lon=' + (selectedStorm.lmi_lon || selectedStorm.genesis_lon || 0);
+        '&storm_lon=' + (selectedStorm.lmi_lon || selectedStorm.genesis_lon || 0) +
+        '&stream=true';
 
-    fetch(url, { cache: 'no-store' })
+    fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(trackData)
+    })
         .then(function (r) {
             if (!r.ok) throw new Error('HTTP ' + r.status);
-            return r.json();
+            // Read streaming response line by line
+            var reader = r.body.getReader();
+            var decoder = new TextDecoder();
+            var buffer = '';
+            var finalData = null;
+
+            function pump() {
+                return reader.read().then(function (result) {
+                    if (result.done) return;
+                    buffer += decoder.decode(result.value, { stream: true });
+                    var lines = buffer.split('\n');
+                    buffer = lines.pop(); // keep incomplete last line
+                    for (var i = 0; i < lines.length; i++) {
+                        if (!lines[i].trim()) continue;
+                        try {
+                            var msg = JSON.parse(lines[i]);
+                            if (msg.progress != null && msg.total != null) {
+                                if (statusEl) statusEl.textContent = msg.progress + ' / ' + msg.total + ' frames';
+                            } else if (msg.profiles) {
+                                finalData = msg;
+                            }
+                        } catch (e) {}
+                    }
+                    return pump();
+                });
+            }
+
+            return pump().then(function () {
+                // Process any remaining buffer
+                if (buffer.trim()) {
+                    try {
+                        var msg = JSON.parse(buffer);
+                        if (msg.profiles) finalData = msg;
+                    } catch (e) {}
+                }
+                return finalData;
+            });
         })
         .then(function (data) {
+            if (!data) throw new Error('No result');
             hovmollerData = data;
             hovmollerSid = sid;
             if (btn) btn.textContent = 'Timeline';
+            if (statusEl) statusEl.textContent = '';
             if (hovmollerVisible && selectedStorm && selectedStorm.sid === sid) {
                 renderHovmoller(data);
             }
@@ -8282,20 +8325,59 @@ function _fetchCompareHov(side, storm) {
     var div = document.getElementById('compare-hov-' + side);
     if (div) div.innerHTML = '<div style="color:#64748b;font-size:11px;padding:20px;text-align:center;">Loading Hovmöller…</div>';
 
-    var trackJson = JSON.stringify(track.map(function (pt) {
+    var trackData = track.map(function (pt) {
         return { t: pt.t, la: pt.la, lo: pt.lo, w: pt.w, p: pt.p };
-    }));
+    });
 
     var url = API_BASE + '/global/ir/hovmoller?sid=' + encodeURIComponent(sid) +
-        '&track=' + encodeURIComponent(trackJson) +
-        '&storm_lon=' + (storm.lmi_lon || storm.genesis_lon || 0);
+        '&storm_lon=' + (storm.lmi_lon || storm.genesis_lon || 0) +
+        '&stream=true';
 
-    fetch(url, { cache: 'no-store' })
+    fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(trackData)
+    })
         .then(function (r) {
             if (!r.ok) throw new Error('HTTP ' + r.status);
-            return r.json();
+            var reader = r.body.getReader();
+            var decoder = new TextDecoder();
+            var buffer = '';
+            var finalData = null;
+
+            function pump() {
+                return reader.read().then(function (result) {
+                    if (result.done) return;
+                    buffer += decoder.decode(result.value, { stream: true });
+                    var lines = buffer.split('\n');
+                    buffer = lines.pop();
+                    for (var i = 0; i < lines.length; i++) {
+                        if (!lines[i].trim()) continue;
+                        try {
+                            var msg = JSON.parse(lines[i]);
+                            if (msg.progress != null && msg.total != null) {
+                                if (div) div.innerHTML = '<div style="color:#64748b;font-size:11px;padding:20px;text-align:center;">Hovmöller: ' + msg.progress + ' / ' + msg.total + ' frames</div>';
+                            } else if (msg.profiles) {
+                                finalData = msg;
+                            }
+                        } catch (e) {}
+                    }
+                    return pump();
+                });
+            }
+
+            return pump().then(function () {
+                if (buffer.trim()) {
+                    try {
+                        var msg = JSON.parse(buffer);
+                        if (msg.profiles) finalData = msg;
+                    } catch (e) {}
+                }
+                return finalData;
+            });
         })
         .then(function (data) {
+            if (!data) throw new Error('No result');
             _cmpHovCache[sid] = data;
             if (_cmpHovVisible && _cmpIR[side].storm && _cmpIR[side].storm.sid === sid) {
                 _renderCompareHov(side, data);
@@ -8303,7 +8385,6 @@ function _fetchCompareHov(side, storm) {
         })
         .catch(function (err) {
             console.warn('[Compare] Hovmöller fetch failed for ' + sid + ':', err.message);
-            var div = document.getElementById('compare-hov-' + side);
             if (div) div.innerHTML = '<div style="color:#f87171;font-size:11px;padding:20px;text-align:center;">Hovmöller unavailable</div>';
         });
 }
