@@ -1920,6 +1920,27 @@ def ir_meta(
     if len(_mergir_meta_cache) > _MERGIR_META_CACHE_MAX:
         _mergir_meta_cache.popitem(last=False)
 
+    # Fire-and-forget: precompute Hovmöller in background so it's cached
+    # when the user clicks the button. Skip if already cached.
+    if result.get("available") and track and sid not in _hovmoller_cache:
+        if _gcs_get_hovmoller(sid) is None:
+            def _bg_hovmoller():
+                try:
+                    logger.info(f"[Hovmöller] Background precompute starting for {sid}")
+                    # Build a minimal mock request for the hovmoller function
+                    _track_points = []
+                    try:
+                        _track_points = json_mod.loads(track)
+                    except Exception:
+                        return
+                    if len(_track_points) < 2:
+                        return
+                    _precompute_hovmoller(sid, _track_points, storm_lon)
+                    logger.info(f"[Hovmöller] Background precompute done for {sid}")
+                except Exception as e:
+                    logger.debug(f"[Hovmöller] Background precompute failed for {sid}: {e}")
+            threading.Thread(target=_bg_hovmoller, daemon=True).start()
+
     return JSONResponse(
         result,
         headers={"Cache-Control": "public, max-age=3600"},
@@ -2522,6 +2543,191 @@ def _gcs_put_hovmoller(sid: str, result: dict):
         logger.debug(f"GCS Hovmöller put failed for {sid}: {e}")
 
 
+def _precompute_hovmoller(sid: str, track_points: list, storm_lon: float = 0.0,
+                          max_radius_km: float = 200.0, dr_km: float = 4.0):
+    """Compute Hovmöller profiles and cache to memory + GCS. Used by both
+    the endpoint and the fire-and-forget background precompute from ir_meta."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    year = _parse_sid_year(sid)
+    _earthdata_configured = bool(EARTHDATA_TOKEN or EARTHDATA_USER)
+
+    if year >= MERGIR_START_YEAR and _earthdata_configured:
+        source = "mergir"
+    elif GRIDSAT_START_YEAR <= year <= GRIDSAT_END_YEAR:
+        source = "gridsat"
+    elif HURSAT_START_YEAR <= year <= HURSAT_END_YEAR:
+        source = "hursat"
+    else:
+        return None
+
+    if source in ("mergir", "gridsat"):
+        frame_list = _build_mergir_frame_list(track_points)
+    else:
+        frames = _get_extracted_frames(sid, storm_lon=storm_lon)
+        frame_list = []
+        if frames:
+            for i, ft in enumerate(frames):
+                frame_list.append({
+                    "datetime": ft[0], "lat": None, "lon": None, "_hursat_idx": i,
+                })
+
+    if not frame_list:
+        return None
+
+    # Build track interpolation arrays
+    track_times, track_lats, track_lons, track_winds = [], [], [], []
+    for pt in track_points:
+        if not pt.get("t") or pt.get("la") is None or pt.get("lo") is None:
+            continue
+        try:
+            dt = datetime.fromisoformat(pt["t"].replace("Z", "+00:00").split("+")[0])
+            track_times.append(dt.timestamp())
+            track_lats.append(float(pt["la"]))
+            track_lons.append(float(pt["lo"]))
+            track_winds.append(float(pt["w"]) if pt.get("w") is not None else None)
+        except (ValueError, TypeError):
+            continue
+
+    if len(track_times) < 2:
+        return None
+
+    track_ts = np.array(track_times)
+    track_la = np.array(track_lats)
+    track_lo = np.array(track_lons)
+
+    def _interp_position(target_dt):
+        ts = target_dt.timestamp()
+        if ts < track_ts[0]:
+            ts = track_ts[0]
+        elif ts > track_ts[-1]:
+            ts = track_ts[-1]
+        lat = float(np.interp(ts, track_ts, track_la))
+        lon = float(np.interp(ts, track_ts, track_lo))
+        wind = None
+        for i in range(len(track_times) - 1):
+            if track_ts[i] <= ts <= track_ts[i + 1]:
+                w0, w1 = track_winds[i], track_winds[i + 1]
+                if w0 is not None and w1 is not None:
+                    frac = (ts - track_ts[i]) / (track_ts[i + 1] - track_ts[i]) if track_ts[i + 1] > track_ts[i] else 0
+                    wind = round(w0 + frac * (w1 - w0))
+                elif w0 is not None:
+                    wind = w0
+                elif w1 is not None:
+                    wind = w1
+                break
+        return lat, lon, wind
+
+    n_rad_bins = int(max_radius_km / dr_km)
+
+    def _compute_profile(frame_info):
+        try:
+            dt_str = frame_info["datetime"]
+            frame_dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00").split("+")[0])
+        except (ValueError, KeyError):
+            return None
+
+        c_lat, c_lon, wind = _interp_position(frame_dt)
+
+        frame_2d, ir_bounds = None, None
+        half_domain = GRIDSAT_HALF_DOMAIN
+
+        if source == "mergir":
+            frame_2d, ir_bounds = _load_mergir_subset(frame_dt, c_lat, c_lon)
+            half_domain = MERGIR_HALF_DOMAIN
+        if frame_2d is None and source in ("mergir", "gridsat"):
+            frame_2d, ir_bounds = _load_gridsat_subset(frame_dt, c_lat, c_lon)
+            half_domain = GRIDSAT_HALF_DOMAIN
+        if frame_2d is None and frame_info.get("_hursat_idx") is not None:
+            hursat_frames = _get_extracted_frames(sid, storm_lon=storm_lon)
+            if hursat_frames and frame_info["_hursat_idx"] < len(hursat_frames):
+                frame_2d, ir_bounds = _load_frame_from_nc(hursat_frames[frame_info["_hursat_idx"]][1])
+                half_domain = GRIDSAT_HALF_DOMAIN
+
+        if frame_2d is None:
+            return None
+
+        arr = np.asarray(frame_2d, dtype=np.float32)
+        rows, cols = arr.shape
+        if ir_bounds:
+            south, north = ir_bounds["south"], ir_bounds["north"]
+            west, east = ir_bounds["west"], ir_bounds["east"]
+        else:
+            south, north = c_lat - half_domain, c_lat + half_domain
+            west, east = c_lon - half_domain, c_lon + half_domain
+
+        lat_span, lon_span = north - south, east - west
+        if lat_span <= 0 or lon_span <= 0:
+            return None
+
+        center_method = "track"
+        if wind is not None and wind >= 65:
+            try:
+                cfix = find_ir_center(arr, [[south, west], [north, east]], c_lat, c_lon,
+                                      ref_lat=c_lat, ref_lon=c_lon)
+                if cfix.get("success") and cfix.get("lat"):
+                    c_lat, c_lon = cfix["lat"], cfix["lon"]
+                    center_method = "ir_fix"
+            except Exception:
+                pass
+
+        cy = (north - c_lat) / lat_span * (rows - 1)
+        cx = (c_lon - west) / lon_span * (cols - 1)
+        cos_lat = np.cos(np.radians(c_lat))
+        dy_km = lat_span / (rows - 1) * 111.0
+        dx_km = lon_span / (cols - 1) * 111.0 * cos_lat
+
+        row_idx, col_idx = np.arange(rows), np.arange(cols)
+        DY, DX = np.meshgrid((row_idx - cy) * dy_km, (col_idx - cx) * dx_km, indexing='ij')
+        dist = np.sqrt(DY * DY + DX * DX)
+        bins = np.floor(dist / dr_km).astype(np.int32)
+        valid = np.isfinite(arr) & (arr > 0)
+
+        profile = [None] * n_rad_bins
+        for b in range(n_rad_bins):
+            mask = valid & (bins == b)
+            if np.count_nonzero(mask) >= 3:
+                profile[b] = round(float(np.mean(arr[mask])) - 273.15, 2)
+
+        return {"time": dt_str, "profile": profile, "wind": wind,
+                "center": center_method, "clat": round(c_lat, 3), "clon": round(c_lon, 3)}
+
+    MAX_WORKERS = 5
+    partial_results = [None] * len(frame_list)
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+        futures = {pool.submit(_compute_profile, f): i for i, f in enumerate(frame_list)}
+        for future in as_completed(futures):
+            idx = futures[future]
+            try:
+                partial_results[idx] = future.result()
+            except Exception as e:
+                logger.debug(f"Hovmöller frame {idx} failed: {e}")
+
+    out_times, out_profiles, out_winds, out_centers = [], [], [], []
+    for r in partial_results:
+        if r is not None:
+            out_times.append(r["time"])
+            out_profiles.append(r["profile"])
+            out_winds.append(r["wind"])
+            out_centers.append({"lat": r["clat"], "lon": r["clon"], "method": r["center"]})
+
+    if not out_times:
+        return None
+
+    radii = [round(b * dr_km + dr_km / 2, 1) for b in range(n_rad_bins)]
+    result = {
+        "sid": sid, "source": source, "times": out_times, "radii": radii,
+        "profiles": out_profiles, "winds": out_winds, "centers": out_centers,
+        "n_frames": len(out_times),
+    }
+
+    _hovmoller_cache[sid] = result
+    if len(_hovmoller_cache) > _HOVMOLLER_CACHE_MAX:
+        _hovmoller_cache.popitem(last=False)
+    threading.Thread(target=_gcs_put_hovmoller, args=(sid, result), daemon=True).start()
+    return result
+
+
 @router.api_route("/ir/hovmoller", methods=["GET", "POST"])
 def ir_hovmoller(
     request: Request,
@@ -2855,18 +3061,11 @@ def ir_hovmoller(
             headers={"Cache-Control": "no-cache", "X-Content-Type-Options": "nosniff"},
         )
 
-    # Non-streaming mode (default): process all, return JSON
-    partial_results = _process_all()
-    result = _build_result(partial_results)
+    # Non-streaming mode (default): delegate to shared helper
+    result = _precompute_hovmoller(sid, track_points, storm_lon, max_radius_km, dr_km)
 
     if not result:
         raise HTTPException(status_code=502, detail="No frames could be processed")
-
-    # Cache to memory + GCS
-    _hovmoller_cache[sid] = result
-    if len(_hovmoller_cache) > _HOVMOLLER_CACHE_MAX:
-        _hovmoller_cache.popitem(last=False)
-    threading.Thread(target=_gcs_put_hovmoller, args=(sid, result), daemon=True).start()
 
     return JSONResponse(
         result,
