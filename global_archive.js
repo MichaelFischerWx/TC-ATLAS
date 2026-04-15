@@ -72,6 +72,7 @@ function _cacheIREls() {
 }
 var irOverlayLayer = null;   // L.imageOverlay on detail map
 var irPositionMarker = null; // L.circleMarker showing current storm center
+var hovCenterMarker = null;  // L.marker showing Hovmöller center (IR fix or best-track)
 var trackAnnotationMarkers = []; // Genesis, LMI, dissipation markers (hidden during IR)
 var irOverlayVisible = false;
 var irTrackVisible = true;       // Track + position marker visible on detail map
@@ -3200,6 +3201,7 @@ function renderDetailMap(track, storm) {
     // Destroy existing map and IR overlay references
     irOverlayLayer = null;
     irPositionMarker = null;
+    hovCenterMarker = null;
     irTrackVisible = true;
     detailTrackElements = [];
     var trackBtn = document.getElementById('ir-track-toggle-btn');
@@ -3440,12 +3442,16 @@ function removeIROverlay() {
     if (irPositionMarker && detailMap) {
         try { detailMap.removeLayer(irPositionMarker); } catch (e) {}
     }
+    if (hovCenterMarker && detailMap) {
+        try { detailMap.removeLayer(hovCenterMarker); } catch (e) {}
+    }
     // Clear intensity chart marker
     _lastMarkerDt = null;
     if (typeof updateIntensityMarker === 'function') {
         updateIntensityMarker(null);
     }
     irPositionMarker = null;
+    hovCenterMarker = null;
     irOverlayVisible = false;
     // Clear Tb hover state
     irCurrentTbData = null;
@@ -3837,6 +3843,56 @@ function updateIRPositionMarker(data) {
     }
 }
 
+/** Update the Hovmöller center crosshair on the map for the current IR frame time */
+function updateHovCenterMarker(frameDtStr) {
+    // Remove old marker
+    if (hovCenterMarker && detailMap) {
+        try { detailMap.removeLayer(hovCenterMarker); } catch (e) {}
+        hovCenterMarker = null;
+    }
+    if (!hovmollerData || !hovmollerData.centers || !frameDtStr || !detailMap) return;
+
+    // Find the Hovmöller frame closest to this IR frame time
+    var targetMs = new Date(frameDtStr).getTime();
+    var bestIdx = -1, bestDist = Infinity;
+    for (var i = 0; i < hovmollerData.times.length; i++) {
+        var d = Math.abs(new Date(hovmollerData.times[i]).getTime() - targetMs);
+        if (d < bestDist) { bestDist = d; bestIdx = i; }
+    }
+    // Only show if within 3 hours of a Hovmöller frame
+    if (bestIdx < 0 || bestDist > 3 * 3600000) return;
+
+    var c = hovmollerData.centers[bestIdx];
+    if (!c || c.lat == null) return;
+
+    var isIRFix = (c.method === 'ir_fix');
+    var color = isIRFix ? '#00e5ff' : 'rgba(255,255,255,0.5)';
+    var icon = L.divIcon({
+        className: '',
+        html: '<div style="' +
+            'width:18px;height:18px;position:relative;' +
+            '">' +
+            '<div style="position:absolute;top:50%;left:0;right:0;height:1.5px;background:' + color + ';transform:translateY(-50%);"></div>' +
+            '<div style="position:absolute;left:50%;top:0;bottom:0;width:1.5px;background:' + color + ';transform:translateX(-50%);"></div>' +
+            (isIRFix ? '<div style="position:absolute;top:50%;left:50%;width:10px;height:10px;border:1.5px solid ' + color + ';border-radius:50%;transform:translate(-50%,-50%);"></div>' : '') +
+            '</div>',
+        iconSize: [18, 18],
+        iconAnchor: [9, 9]
+    });
+
+    hovCenterMarker = L.marker([c.lat, c.lon], {
+        icon: icon,
+        interactive: true,
+        pane: 'markerPane'
+    });
+    hovCenterMarker.bindTooltip(
+        (isIRFix ? 'IR center fix' : 'Best-track interp') +
+        '<br>' + c.lat.toFixed(2) + '°, ' + c.lon.toFixed(2) + '°',
+        { className: 'track-tooltip' }
+    );
+    hovCenterMarker.addTo(detailMap);
+}
+
 function findTrackPointAtTime(track, dtStr) {
     if (!track || !track.length || !dtStr) return null;
     var targetMs = new Date(dtStr).getTime();
@@ -4179,6 +4235,7 @@ function updateIRMeta(idx) {
     // Sync intensity chart marker to current IR time (use raw ISO datetime for Plotly)
     updateIntensityMarker(rawDt);
     updateHovmollerMarker(rawDt);
+    updateHovCenterMarker(rawDt);
 
     // Sync model forecast overlay to current IR frame time
     if (_modelVisible && _modelAutoSync && _modelData) {

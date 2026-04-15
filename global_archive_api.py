@@ -2744,6 +2744,8 @@ def ir_hovmoller(
             "profile": profile,
             "wind": wind,
             "center": center_method,
+            "clat": round(c_lat, 3),
+            "clon": round(c_lon, 3),
         }
 
     # Process frames concurrently (cap at 5 workers for OOM protection)
@@ -2767,11 +2769,16 @@ def ir_hovmoller(
     out_times = []
     out_profiles = []
     out_winds = []
+    out_centers = []
     for r in partial_results:
         if r is not None:
             out_times.append(r["time"])
             out_profiles.append(r["profile"])
             out_winds.append(r["wind"])
+            out_centers.append({
+                "lat": r["clat"], "lon": r["clon"],
+                "method": r["center"],
+            })
 
     if not out_times:
         raise HTTPException(status_code=502, detail="No frames could be processed")
@@ -2785,6 +2792,7 @@ def ir_hovmoller(
         "radii": radii,
         "profiles": out_profiles,
         "winds": out_winds,
+        "centers": out_centers,
         "n_frames": len(out_times),
     }
 
