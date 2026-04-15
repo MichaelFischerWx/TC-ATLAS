@@ -2999,6 +2999,19 @@
 
         function _applyRtFrames(rtFrames) {
             if (_rtCacheUsed || stormId !== currentStormId) return;
+            // Check that the newest frame is reasonably current (within 45 min)
+            // to avoid reusing stale RT Monitor frames after auto-refresh
+            if (rtFrames.length > 0) {
+                var newest = rtFrames[rtFrames.length - 1] || rtFrames[0];
+                if (newest && newest.datetime_utc) {
+                    var ageMs = Date.now() - new Date(newest.datetime_utc).getTime();
+                    if (ageMs > 45 * 60 * 1000) {
+                        console.log('[Satellite] RT cache too stale (' + Math.round(ageMs / 60000) + ' min) — fetching fresh');
+                        _fetchIndependently();
+                        return;
+                    }
+                }
+            }
             _rtCacheUsed = true;
             console.log('[Satellite] Reusing ' + rtFrames.length + ' frames from RT Monitor cache');
             for (var ri = 0; ri < rtFrames.length; ri++) {
