@@ -3034,8 +3034,8 @@ async def ir_hovmoller(
         }
 
     if stream:
-        # Streaming mode: send progress lines, then final result
-        def _stream_generator():
+        # SSE streaming: Cloud Run doesn't buffer text/event-stream
+        def _sse_generator():
             completed = [0]
             partial_results = [None] * total_frames
 
@@ -3051,8 +3051,7 @@ async def ir_hovmoller(
                     except Exception as e:
                         logger.debug(f"Hovmöller frame {idx} failed: {e}")
                     completed[0] += 1
-                    # Send progress line
-                    yield json.dumps({"progress": completed[0], "total": total_frames}) + "\n"
+                    yield f"data: {json.dumps({'progress': completed[0], 'total': total_frames})}\n\n"
 
             result = _build_result(partial_results)
             if result:
@@ -3060,14 +3059,14 @@ async def ir_hovmoller(
                 if len(_hovmoller_cache) > _HOVMOLLER_CACHE_MAX:
                     _hovmoller_cache.popitem(last=False)
                 threading.Thread(target=_gcs_put_hovmoller, args=(sid, result), daemon=True).start()
-                yield json.dumps(result) + "\n"
+                yield f"data: {json.dumps(result)}\n\n"
             else:
-                yield json.dumps({"error": "No frames could be processed"}) + "\n"
+                yield f"data: {json.dumps({'error': 'No frames could be processed'})}\n\n"
 
         return StreamingResponse(
-            _stream_generator(),
-            media_type="application/x-ndjson",
-            headers={"Cache-Control": "no-cache", "X-Content-Type-Options": "nosniff"},
+            _sse_generator(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
     # Non-streaming mode (default): delegate to shared helper
