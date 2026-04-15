@@ -2158,32 +2158,21 @@ def get_storm_ir_raw_frame(
                 break
 
         try:
+            # Relaxed thresholds: always find the best center even
+            # without a clear eye (CDO center is still useful for
+            # Hovmöller radial profiles). Frontend decides whether
+            # to show the crosshair based on eye_score/ir_rad_dif.
             cfix_raw = find_ir_center(arr, frame_bounds, guess_lat, guess_lon,
-                                     ref_lat=interp_lat, ref_lon=interp_lon)
-            if cfix_raw.get("success"):
+                                     ref_lat=interp_lat, ref_lon=interp_lon,
+                                     min_ir_rad_dif=0.0, min_eye_score=0.0)
+            if cfix_raw.get("lat") is not None:
                 center_fix = {
                     "lat": cfix_raw["lat"],
                     "lon": cfix_raw["lon"],
-                    "eye_score": cfix_raw["eye_score"],
-                    "ir_rad_dif": cfix_raw["ir_rad_dif"],
-                    "mean_std": cfix_raw["mean_std"],
+                    "eye_score": cfix_raw.get("eye_score", 0),
+                    "ir_rad_dif": cfix_raw.get("ir_rad_dif", 0),
+                    "mean_std": cfix_raw.get("mean_std", 0),
                 }
-            else:
-                # Propagate failure diagnostics so the frontend can display why
-                center_fix = {
-                    "success": False,
-                    "reason": cfix_raw.get("reason", "unknown"),
-                    "best_score": cfix_raw.get("best_score", 0),
-                    "best_ir_rad_dif": cfix_raw.get("best_ir_rad_dif", 0),
-                    "n_candidates": cfix_raw.get("n_candidates", 0),
-                }
-                # Include position info for "too_far" failures
-                if cfix_raw.get("found_lat") is not None:
-                    center_fix["found_lat"] = cfix_raw["found_lat"]
-                    center_fix["found_lon"] = cfix_raw["found_lon"]
-                    center_fix["guess_lat"] = cfix_raw["guess_lat"]
-                    center_fix["guess_lon"] = cfix_raw["guess_lon"]
-                    center_fix["dist_deg"] = cfix_raw.get("dist_deg", 0)
         except Exception:
             pass  # center fix is best-effort; never block frame delivery
 
