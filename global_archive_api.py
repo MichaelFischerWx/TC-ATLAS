@@ -2524,8 +2524,8 @@ def _gcs_put_hovmoller(sid: str, result: dict):
 
 @router.api_route("/ir/hovmoller", methods=["GET", "POST"])
 def ir_hovmoller(
-    request: "Request" = None,
-    sid: str = Query(..., description="IBTrACS storm ID"),
+    request: Request,
+    sid: str = Query("", description="IBTrACS storm ID"),
     track: str = Query("", description="JSON-encoded track points (GET) or send as POST body"),
     storm_lon: float = Query(0.0, description="Storm longitude for satellite selection"),
     max_radius_km: float = Query(200.0, ge=50, le=500),
@@ -2541,6 +2541,9 @@ def ir_hovmoller(
     """
     import json as json_mod
     from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    if not sid:
+        raise HTTPException(status_code=400, detail="sid parameter required")
 
     # Check in-memory cache
     if sid in _hovmoller_cache:
