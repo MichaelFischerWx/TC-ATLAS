@@ -205,28 +205,27 @@ def find_ir_center(
                 )
                 stds = np.sqrt(np.maximum(variances, 0.0))
 
-                # Find coldest ring and its radius
+                # Find coldest ring
                 coldest_ring_val = np.nanmin(means[valid_bins])
-                coldest_ring_idx = np.nanargmin(means[valid_bins])
-                # Map back to actual bin index (valid_bins is a boolean mask)
-                valid_indices = np.where(valid_bins)[0]
-                coldest_ring_bin = valid_indices[coldest_ring_idx] if coldest_ring_idx < len(valid_indices) else 0
-                coldest_ring_km = coldest_ring_bin * dr
 
-                # Eyewall symmetry: std within 20-60km band only.
-                # This is where the eyewall lives — avoids contamination
-                # from the eye itself (0-20km) and outer asymmetric features (>60km).
-                ew_lo = int(20.0 / dr)
-                ew_hi = min(n_bins, int(60.0 / dr) + 1)
-                ew_bins = valid_bins.copy()
-                ew_bins[:ew_lo] = False
-                ew_bins[ew_hi:] = False
-                if np.sum(ew_bins) >= 2:
-                    mean_std = float(np.nanmean(stds[ew_bins]))
-                else:
-                    mean_std = float(np.nanmean(stds[valid_bins]))
-                if mean_std <= 0:
+                # Azimuthal std: mean of per-bin stds (measures symmetry)
+                azi_std = float(np.nanmean(stds[valid_bins]))
+                if azi_std <= 0:
                     continue
+
+                # Core std: std of ALL valid pixels within core_dist_km
+                # (measures overall Tb variability — eye vs eyewall contrast)
+                core_std = float(np.std(tb_core))
+                if core_std <= 0:
+                    continue
+
+                # Std ratio: azimuthal std normalized by core std.
+                # Low ratio = symmetric structure with high radial contrast
+                # (the eye/eyewall signature). High ratio = asymmetric or
+                # uniform (no eye). This normalization prevents uniform CDOs
+                # from getting spuriously good symmetry scores.
+                std_ratio = azi_std / core_std
+                mean_std = std_ratio  # store for output
 
                 # Eye average
                 eye_ok = vm_patch & em
@@ -239,7 +238,7 @@ def find_ir_center(
                 if ir_rad_dif < min_ir_rad_dif:
                     continue
 
-                score = 100.0 * (1.0 / mean_std) ** 2 * ir_rad_dif
+                score = (1.0 / std_ratio) ** 2 * ir_rad_dif
 
                 n_candidates += 1
                 if score > best_score:
