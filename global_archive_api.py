@@ -2509,7 +2509,7 @@ _hovmoller_cache: OrderedDict = OrderedDict()
 _HOVMOLLER_CACHE_MAX = 20
 
 
-_HOV_CACHE_VER = "v7"  # v7 = stricter quality gate (ir_rad_dif>=15K, std<15K, core Tb<=-40C)
+_HOV_CACHE_VER = "v8"  # v8 = coldest-ring gate (eyewall <= -40C from find_ir_center)
 
 
 def _gcs_get_hovmoller(sid: str):
@@ -2723,23 +2723,10 @@ def _precompute_hovmoller(sid: str, track_points: list, storm_lon: float = 0.0,
                 )
                 if (cfix.get("lat") is not None
                         and cfix.get("ir_rad_dif", 0) >= 15.0
-                        and cfix.get("mean_std", 99) < 15.0):
-                    # Check inner-core Tb: area-average within 60km of found center
-                    fix_lat, fix_lon = cfix["lat"], cfix["lon"]
-                    fy = (north - fix_lat) / lat_span * (rows - 1)
-                    fx = (fix_lon - west) / lon_span * (cols - 1)
-                    core_r_pix = int(60.0 / min(dy_km, dx_km))
-                    iy0 = max(0, int(fy) - core_r_pix)
-                    iy1 = min(rows, int(fy) + core_r_pix + 1)
-                    ix0 = max(0, int(fx) - core_r_pix)
-                    ix1 = min(cols, int(fx) + core_r_pix + 1)
-                    core_patch = arr[iy0:iy1, ix0:ix1]
-                    core_valid = core_patch[np.isfinite(core_patch) & (core_patch > 0)]
-                    core_mean_tb = float(np.mean(core_valid)) if len(core_valid) > 10 else 999.0
-
-                    if core_mean_tb <= 233.15:  # -40°C in Kelvin
-                        c_lat, c_lon = fix_lat, fix_lon
-                        center_method = "ir_fix"
+                        and cfix.get("mean_std", 99) < 15.0
+                        and cfix.get("coldest_ring", 999) <= 233.15):  # eyewall <= -40°C
+                    c_lat, c_lon = cfix["lat"], cfix["lon"]
+                    center_method = "ir_fix"
             except Exception:
                 pass
 

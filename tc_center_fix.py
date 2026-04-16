@@ -142,6 +142,7 @@ def find_ir_center(
     best_y, best_x = cy, cx
     best_ir_rad_dif = 0.0
     best_mean_std = 0.0
+    best_coldest_ring = 999.0
     n_candidates = 0
     n_iterations_run = 0
 
@@ -227,6 +228,7 @@ def find_ir_center(
                     best_y, best_x = yi, xi
                     best_ir_rad_dif = ir_rad_dif
                     best_mean_std = mean_std
+                    best_coldest_ring = float(np.nanmin(means[valid_bins]))
 
         # Convergence: best point didn't move
         if iteration > 0 and best_y == prev_y and best_x == prev_x:
@@ -275,6 +277,7 @@ def find_ir_center(
             "eye_score": round(float(best_score), 2),
             "ir_rad_dif": round(float(best_ir_rad_dif), 2),
             "mean_std": round(float(best_mean_std), 2),
+            "coldest_ring": round(float(best_coldest_ring), 2),
             "success": True,
         }
 
@@ -288,6 +291,7 @@ def find_ir_center(
             "eye_score": round(float(best_score), 2),
             "ir_rad_dif": round(float(best_ir_rad_dif), 2),
             "mean_std": round(float(best_mean_std), 2),
+            "coldest_ring": round(float(best_coldest_ring), 2),
             "success": False,
             "reason": (
                 "low_ir_rad_dif" if best_ir_rad_dif < min_ir_rad_dif

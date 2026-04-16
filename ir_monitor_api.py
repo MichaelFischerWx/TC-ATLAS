@@ -2167,29 +2167,15 @@ def get_storm_ir_raw_frame(
                                      min_ir_rad_dif=0.0, min_eye_score=0.0)
             if (cfix_raw.get("lat") is not None
                     and cfix_raw.get("ir_rad_dif", 0) >= 15.0
-                    and cfix_raw.get("mean_std", 99) < 15.0):
-                # Verify inner-core is deep convection (area-avg within 60km)
-                _south, _west = frame_bounds[0]
-                _north, _east = frame_bounds[1]
-                _rows, _cols = arr.shape
-                _fy = (_north - cfix_raw["lat"]) / (_north - _south) * (_rows - 1)
-                _fx = (cfix_raw["lon"] - _west) / (_east - _west) * (_cols - 1)
-                _dy = (_north - _south) / (_rows - 1) * 111.0
-                _dx = (_east - _west) / (_cols - 1) * 111.0 * np.cos(np.radians(cfix_raw["lat"]))
-                _cr = int(60.0 / min(_dy, _dx))
-                _patch = arr[max(0, int(_fy)-_cr):min(_rows, int(_fy)+_cr+1),
-                             max(0, int(_fx)-_cr):min(_cols, int(_fx)+_cr+1)]
-                _pv = _patch[np.isfinite(_patch) & (_patch > 0)]
-                _core_tb = float(np.mean(_pv)) if len(_pv) > 10 else 999.0
-
-                if _core_tb <= 233.15:  # -40°C
-                    center_fix = {
-                        "lat": cfix_raw["lat"],
-                        "lon": cfix_raw["lon"],
-                        "eye_score": cfix_raw.get("eye_score", 0),
-                        "ir_rad_dif": cfix_raw.get("ir_rad_dif", 0),
-                        "mean_std": cfix_raw.get("mean_std", 0),
-                    }
+                    and cfix_raw.get("mean_std", 99) < 15.0
+                    and cfix_raw.get("coldest_ring", 999) <= 233.15):  # eyewall <= -40°C
+                center_fix = {
+                    "lat": cfix_raw["lat"],
+                    "lon": cfix_raw["lon"],
+                    "eye_score": cfix_raw.get("eye_score", 0),
+                    "ir_rad_dif": cfix_raw.get("ir_rad_dif", 0),
+                    "mean_std": cfix_raw.get("mean_std", 0),
+                }
         except Exception:
             pass  # center fix is best-effort; never block frame delivery
 
