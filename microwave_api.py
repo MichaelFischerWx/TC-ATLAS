@@ -54,6 +54,78 @@ router = APIRouter()
 TCPRIMED_BUCKET = "noaa-nesdis-tcprimed-pds"
 TCPRIMED_PREFIX = "v01r01/final"
 
+# ---------------------------------------------------------------------------
+# GCS write-through cache for rendered microwave products
+# ---------------------------------------------------------------------------
+# Cache is a derived projection of TC-PRIMED rendered per (product, s3_key).
+# First request pays the S3 fetch + compute cost; subsequent requests read
+# from GCS (with CDN in front) at ~100 ms. Bump _GCS_MW_VERSION when the
+# render / compute pipeline changes and old entries must be invalidated.
+_GCS_MW_CACHE_BUCKET = os.environ.get("GCS_IR_CACHE_BUCKET", "")
+_gcs_mw_client = None
+_gcs_mw_bucket = None
+_GCS_MW_VERSION = "mw-v1"
+
+
+def _get_mw_gcs_bucket():
+    global _gcs_mw_client, _gcs_mw_bucket
+    if not _GCS_MW_CACHE_BUCKET:
+        return None
+    if _gcs_mw_bucket is not None:
+        return _gcs_mw_bucket
+    try:
+        from google.cloud import storage
+        _gcs_mw_client = storage.Client()
+        _gcs_mw_bucket = _gcs_mw_client.bucket(_GCS_MW_CACHE_BUCKET)
+        return _gcs_mw_bucket
+    except Exception:
+        return None
+
+
+def _gcs_mw_key(s3_key: str, product: str) -> str:
+    """Map a TC-PRIMED S3 key + product to a GCS object path.
+
+    The s3_key already encodes sensor/platform/orbit/timestamp/ATCF_ID,
+    so (s3_key, product) is a unique rendering identifier.
+    """
+    # Replace slashes so GCS doesn't explode this into a deep directory
+    safe = s3_key.replace("/", "__")
+    return f"{_GCS_MW_VERSION}/{product}/{safe}.json"
+
+
+def _gcs_mw_get(s3_key: str, product: str) -> Optional[dict]:
+    """Read a cached microwave product response from GCS, or None on miss."""
+    bucket = _get_mw_gcs_bucket()
+    if bucket is None:
+        return None
+    try:
+        blob = bucket.blob(_gcs_mw_key(s3_key, product))
+        data = blob.download_as_bytes(timeout=5)
+        return json.loads(data)
+    except Exception:
+        return None
+
+
+def _gcs_mw_put(s3_key: str, product: str, response: dict):
+    """Write a rendered microwave product response to GCS (fire-and-forget)."""
+    bucket = _get_mw_gcs_bucket()
+    if bucket is None:
+        return
+    key = _gcs_mw_key(s3_key, product)
+
+    def _upload():
+        try:
+            blob = bucket.blob(key)
+            blob.upload_from_string(
+                json.dumps(response, separators=(",", ":")),
+                content_type="application/json",
+                timeout=30,
+            )
+        except Exception as e:
+            logger.debug("GCS microwave cache PUT failed: %s: %s", key, e)
+
+    threading.Thread(target=_upload, daemon=True).start()
+
 # Time window (hours) for matching overpasses to TDR analyses
 OVERPASS_WINDOW_HOURS = 6
 
@@ -622,6 +694,18 @@ async def get_microwave_data(
     if product in ("37h", "37color") and not SENSOR_INFO[sensor]["has_37"]:
         raise HTTPException(400, f"Sensor {sensor} does not have 37 GHz channels")
 
+    # GCS write-through cache: first request pays the fetch+compute cost,
+    # all subsequent requests read from GCS (≤100 ms with CDN).
+    _cached_response = _gcs_mw_get(s3_key, product)
+    if _cached_response is not None:
+        return JSONResponse(
+            _cached_response,
+            headers={
+                "Cache-Control": "public, max-age=86400, s-maxage=604800, immutable",
+                "X-Cache": "GCS-HIT",
+            },
+        )
+
     try:
         # Open the NetCDF from S3 using h5netcdf to discover group structure
         import fsspec
@@ -971,7 +1055,16 @@ async def get_microwave_data(
         if storm_grid_rgb:
             response["storm_grid_rgb_b64"] = storm_grid_rgb
 
-        return JSONResponse(response)
+        # Write-through to GCS so subsequent requests skip the S3 fetch+compute.
+        _gcs_mw_put(s3_key, product, response)
+
+        return JSONResponse(
+            response,
+            headers={
+                "Cache-Control": "public, max-age=86400, s-maxage=604800, immutable",
+                "X-Cache": "MISS",
+            },
+        )
 
     except HTTPException:
         raise
