@@ -6,8 +6,8 @@ a composite score of azimuthal symmetry (low radial Tb std) and warm-eye
 signal (eye Tb minus coldest radial-mean Tb).
 
 Optimized for real-time use: pure numpy, pre-computed offset distances,
-vectorized radial statistics via np.bincount.  Typical runtime ~50-200 ms
-per frame on a ~500x500 grid.
+vectorized radial statistics via np.bincount.  Typical runtime ~20-100 ms
+per frame on a ~250x250 grid.
 
 Based on the recenter_ir algorithm by Dr. Michael Fischer (2021-2024).
 """
@@ -49,9 +49,6 @@ def find_ir_center(
         Maximum radius (km) for radial Tb statistics (annular bins).
     eye_radius_km : float
         Radius (km) defining the eye region for warm-core scoring.
-    std_band_km : float
-        Half-width (km) of the band around the coldest ring over which
-        azimuthal symmetry (mean_std) is evaluated.  Adapts to eye size.
     search_radius_km : float
         Search radius (km) on the first iteration.
     refine_radius_km : float
@@ -65,8 +62,7 @@ def find_ir_center(
         Minimum composite score for a valid fix.
     max_dist_deg : float
         Maximum allowed distance (degrees) between the found center and
-        the initial guess (center_lat/lon).  Prevents the algorithm from
-        locking onto a non-eye feature far from the storm center.
+        the initial guess (center_lat/lon).
 
     Returns
     -------
@@ -78,9 +74,9 @@ def find_ir_center(
     if rows < 10 or cols < 10:
         return {"success": False}
 
-    # Subsample large arrays — 4 km resolution is sufficient for eye-finding.
-    # Target ~500 pixels across the domain; subsample if larger.
-    _MAX_DIM = 500
+    # Subsample to ~250px max dimension for speed.
+    # 8km effective resolution is sufficient for center-finding.
+    _MAX_DIM = 250
     _step = 1
     if rows > _MAX_DIM or cols > _MAX_DIM:
         _step = max(rows, cols) // _MAX_DIM
@@ -110,8 +106,6 @@ def find_ir_center(
 
     # ------------------------------------------------------------------
     # Pre-compute offset distance matrix and radial bin assignments.
-    # These depend only on grid spacing, not on the candidate center,
-    # so they are computed once and reused for every candidate.
     # ------------------------------------------------------------------
     dr = 2.0  # km, annulus width
     radii = np.arange(0, core_dist_km + dr, dr)
@@ -123,9 +117,8 @@ def find_ir_center(
     OX, OY = np.meshgrid(ox, oy)
     offset_dist = np.sqrt((OY * dy_km) ** 2 + (OX * dx_km) ** 2)
 
-    # Bin each offset into a radial annulus
     bin_edges = radii - 0.5 * dr
-    bin_edges[0] = 0.0  # first bin starts at 0
+    bin_edges[0] = 0.0
     bin_idx = np.digitize(offset_dist, bin_edges) - 1
     bin_idx[bin_idx >= n_bins] = -1
     bin_idx[offset_dist > core_dist_km + 0.5 * dr] = -1
@@ -136,20 +129,19 @@ def find_ir_center(
     search_pix = int(np.ceil(search_radius_km / min(dy_km, dx_km)))
     refine_pix = int(np.ceil(refine_radius_km / min(dy_km, dx_km)))
 
-    # ------------------------------------------------------------------
-    # Iterative search
-    # ------------------------------------------------------------------
-    best_score = 0.0
-    best_y, best_x = cy, cx
-    best_ir_rad_dif = 0.0
-    best_mean_std = 0.0
-
-    # Pre-compute a validity mask for the whole Tb field
+    # Pre-compute validity mask
     tb_valid_mask = np.isfinite(tb) & (tb > 0)
     n_valid = int(np.count_nonzero(tb_valid_mask))
     n_total = rows * cols
     valid_frac = n_valid / n_total if n_total > 0 else 0.0
 
+    # ------------------------------------------------------------------
+    # Iterative search with coarse-to-fine strategy
+    # ------------------------------------------------------------------
+    best_score = 0.0
+    best_y, best_x = cy, cx
+    best_ir_rad_dif = 0.0
+    best_mean_std = 0.0
     n_candidates = 0
     n_iterations_run = 0
 
@@ -158,13 +150,17 @@ def find_ir_center(
         spad = search_pix if iteration == 0 else refine_pix
         prev_y, prev_x = best_y, best_x
 
+        # Coarse step on first iteration (skip every other pixel),
+        # fine step on refinement iterations
+        step = 2 if iteration == 0 and spad > 5 else 1
+
         y_lo = max(0, best_y - spad)
         y_hi = min(rows, best_y + spad + 1)
         x_lo = max(0, best_x - spad)
         x_hi = min(cols, best_x + spad + 1)
 
-        for yi in range(y_lo, y_hi):
-            for xi in range(x_lo, x_hi):
+        for yi in range(y_lo, y_hi, step):
+            for xi in range(x_lo, x_hi, step):
                 # Determine overlap between offset template and Tb array
                 oy0 = max(0, max_pix - yi)
                 oy1 = 2 * max_pix + 1 - max(0, (yi + max_pix + 1) - rows)
@@ -181,7 +177,6 @@ def find_ir_center(
                 bp = bin_idx[oy0:oy1, ox0:ox1]
                 em = eye_mask[oy0:oy1, ox0:ox1]
 
-                # Only consider valid Tb pixels inside the core
                 core_ok = vm_patch & (bp >= 0)
                 n_core = np.count_nonzero(core_ok)
                 if n_core < 20:
@@ -209,10 +204,6 @@ def find_ir_center(
                 )
                 stds = np.sqrt(np.maximum(variances, 0.0))
 
-                # Evaluate azimuthal symmetry across ALL radial bins (0 to 150 km).
-                # A point on the inner eyewall edge has high variance in inner
-                # bins (half eye, half eyewall) — only the true center sees
-                # symmetric rings at every radius out to the CDO edge.
                 mean_std = np.nanmean(stds[valid_bins])
                 if mean_std <= 0:
                     continue
@@ -225,18 +216,9 @@ def find_ir_center(
 
                 ir_rad_dif = eye_mean - np.nanmin(means[valid_bins])
 
-                # Skip candidates below the quality-gate threshold.
-                # Prevents the algorithm from locking onto small symmetric
-                # features (convective cells) instead of the actual eye.
                 if ir_rad_dif < min_ir_rad_dif:
                     continue
 
-                # Score: warm-core contrast weighted by azimuthal symmetry.
-                # Quadratic 1/mean_std^2 finds the geometric center (most
-                # symmetric point). The tight ±20km band around the coldest
-                # ring focuses the symmetry metric on the eyewall itself,
-                # preventing the score from being dominated by asymmetric
-                # features outside the eyewall (warm slots, outer bands).
                 score = 100.0 * (1.0 / mean_std) ** 2 * ir_rad_dif
 
                 n_candidates += 1
@@ -261,10 +243,6 @@ def find_ir_center(
         found_lat = north - best_y * lat_span / (rows - 1)
         found_lon = west + best_x * lon_span / (cols - 1)
 
-        # Distance constraint: reject fixes too far from the reference
-        # position (interpolated best-track).  The search may use an adjacent
-        # IR fix as starting point (center_lat/lon), but the distance check
-        # uses ref_lat/lon which follows the best-track motion.
         _ref_lat = ref_lat if ref_lat is not None else center_lat
         _ref_lon = ref_lon if ref_lon is not None else center_lon
         dist_deg = np.sqrt(
@@ -300,14 +278,28 @@ def find_ir_center(
             "success": True,
         }
 
+    # No valid fix — still return best position if we found anything
+    if n_candidates > 0 and best_score > 0:
+        found_lat = north - best_y * lat_span / (rows - 1)
+        found_lon = west + best_x * lon_span / (cols - 1)
+        return {
+            "lat": round(float(found_lat), 3),
+            "lon": round(float(found_lon), 3),
+            "eye_score": round(float(best_score), 2),
+            "ir_rad_dif": round(float(best_ir_rad_dif), 2),
+            "mean_std": round(float(best_mean_std), 2),
+            "success": False,
+            "reason": (
+                "low_ir_rad_dif" if best_ir_rad_dif < min_ir_rad_dif
+                else "low_score"
+            ),
+            "n_candidates": n_candidates,
+            "n_iterations": n_iterations_run,
+        }
+
     return {
         "success": False,
-        "reason": (
-            "no_candidates" if n_candidates == 0
-            else "low_ir_rad_dif" if best_ir_rad_dif < min_ir_rad_dif
-            else "low_score" if best_score < min_eye_score
-            else "unknown"
-        ),
+        "reason": "no_candidates",
         "best_score": round(float(best_score), 2),
         "best_ir_rad_dif": round(float(best_ir_rad_dif), 2),
         "best_mean_std": round(float(best_mean_std), 2),
@@ -315,258 +307,4 @@ def find_ir_center(
         "n_iterations": n_iterations_run,
         "valid_frac": round(valid_frac, 4),
         "grid_shape": [rows, cols],
-    }
-
-
-def find_ir_center_v2(
-    tb,
-    bounds,
-    center_lat,
-    center_lon,
-    core_dist_km=150.0,
-    eye_radius_km=10.0,
-    search_radius_km=150.0,
-    refine_radius_km=30.0,
-    min_ir_rad_dif=10.0,
-    max_dist_deg=2.0,
-    ref_lat=None,
-    ref_lon=None,
-    prev_lat=None,
-    prev_lon=None,
-    max_frame_jump_km=40.0,
-):
-    """
-    Two-phase IR center-finding algorithm (experimental).
-
-    Phase 1: Coarse search (150 km) — maximize ir_rad_dif only.
-             Finds the eye region without symmetry bias.
-    Phase 2: Refinement (±30 km) — minimize azimuthal variance at the
-             eyewall radius.  Pure symmetry scoring to find the
-             geometric center within the eye region.
-
-    Also enforces a frame-to-frame motion constraint: if prev_lat/lon
-    is provided and the found center is >max_frame_jump_km away,
-    the fix is rejected (TC can't move that far in one timestep).
-
-    Returns same dict format as find_ir_center for drop-in comparison.
-    """
-    rows, cols = tb.shape
-    if rows < 10 or cols < 10:
-        return {"success": False, "reason": "grid_too_small", "method": "v2"}
-
-    _MAX_DIM = 500
-    _step = 1
-    if rows > _MAX_DIM or cols > _MAX_DIM:
-        _step = max(rows, cols) // _MAX_DIM
-        if _step > 1:
-            tb = tb[::_step, ::_step]
-            rows, cols = tb.shape
-
-    south, west = bounds[0]
-    north, east = bounds[1]
-    lat_span = north - south
-    lon_span = east - west
-    if lat_span <= 0 or lon_span <= 0:
-        return {"success": False, "reason": "invalid_bounds", "method": "v2"}
-
-    cos_lat = np.cos(np.radians(center_lat))
-    dy_km = (lat_span / (rows - 1)) * 111.0
-    dx_km = (lon_span / (cols - 1)) * 111.0 * cos_lat
-
-    cy = int(np.clip(round((north - center_lat) / lat_span * (rows - 1)), 0, rows - 1))
-    cx = int(np.clip(round((center_lon - west) / lon_span * (cols - 1)), 0, cols - 1))
-
-    dr = 2.0
-    radii = np.arange(0, core_dist_km + dr, dr)
-    n_bins = len(radii)
-
-    max_pix = int(np.ceil(core_dist_km / min(dy_km, dx_km))) + 2
-    oy = np.arange(-max_pix, max_pix + 1)
-    ox = np.arange(-max_pix, max_pix + 1)
-    OX, OY = np.meshgrid(ox, oy)
-    offset_dist = np.sqrt((OY * dy_km) ** 2 + (OX * dx_km) ** 2)
-
-    bin_edges = radii - 0.5 * dr
-    bin_edges[0] = 0.0
-    bin_idx = np.digitize(offset_dist, bin_edges) - 1
-    bin_idx[bin_idx >= n_bins] = -1
-    bin_idx[offset_dist > core_dist_km + 0.5 * dr] = -1
-
-    eye_mask = offset_dist <= eye_radius_km
-
-    search_pix = int(np.ceil(search_radius_km / min(dy_km, dx_km)))
-    refine_pix = int(np.ceil(refine_radius_km / min(dy_km, dx_km)))
-
-    tb_valid_mask = np.isfinite(tb) & (tb > 0)
-    n_valid = int(np.count_nonzero(tb_valid_mask))
-    valid_frac = n_valid / (rows * cols) if rows * cols > 0 else 0.0
-
-    # Helper: evaluate radial stats at a candidate pixel
-    def _eval(yi, xi):
-        oy0 = max(0, max_pix - yi)
-        oy1 = 2 * max_pix + 1 - max(0, (yi + max_pix + 1) - rows)
-        ox0 = max(0, max_pix - xi)
-        ox1 = 2 * max_pix + 1 - max(0, (xi + max_pix + 1) - cols)
-        ty0, ty1 = max(0, yi - max_pix), min(rows, yi + max_pix + 1)
-        tx0, tx1 = max(0, xi - max_pix), min(cols, xi + max_pix + 1)
-
-        tb_patch = tb[ty0:ty1, tx0:tx1]
-        vm_patch = tb_valid_mask[ty0:ty1, tx0:tx1]
-        bp = bin_idx[oy0:oy1, ox0:ox1]
-        em = eye_mask[oy0:oy1, ox0:ox1]
-
-        core_ok = vm_patch & (bp >= 0)
-        if np.count_nonzero(core_ok) < 20:
-            return None
-        tb_core = tb_patch[core_ok]
-        bin_core = bp[core_ok]
-
-        counts = np.bincount(bin_core, minlength=n_bins)
-        sums = np.bincount(bin_core, weights=tb_core, minlength=n_bins)
-        sums_sq = np.bincount(bin_core, weights=tb_core * tb_core, minlength=n_bins)
-
-        vb = counts >= 3
-        if np.sum(vb) < 3:
-            return None
-
-        means = np.where(vb, sums / np.maximum(counts, 1), np.nan)
-        variances = np.where(vb, sums_sq / np.maximum(counts, 1) - means ** 2, np.nan)
-        stds = np.sqrt(np.maximum(variances, 0.0))
-
-        eye_ok = vm_patch & em
-        if np.count_nonzero(eye_ok) < 3:
-            return None
-        eye_mean = float(np.mean(tb_patch[eye_ok]))
-        ir_rad_dif = eye_mean - float(np.nanmin(means[vb]))
-
-        # Coldest ring info
-        valid_means = means.copy()
-        valid_means[~vb] = np.nan
-        coldest_bin = int(np.nanargmin(valid_means))
-
-        # Mean std in ±20 km band around coldest ring
-        band_lo = max(0, int((coldest_bin * dr - 20) / dr))
-        band_hi = min(n_bins, int((coldest_bin * dr + 20) / dr) + 1)
-        bm = np.zeros(n_bins, dtype=bool)
-        bm[band_lo:band_hi] = True
-        bv = vb & bm
-        if np.sum(bv) < 3:
-            bv = vb
-        mean_std = float(np.nanmean(stds[bv]))
-
-        return {
-            "ir_rad_dif": ir_rad_dif,
-            "eye_mean": eye_mean,
-            "mean_std": mean_std,
-            "coldest_bin": coldest_bin,
-        }
-
-    # ------------------------------------------------------------------
-    # Phase 1: Coarse search — maximize ir_rad_dif (no symmetry)
-    # ------------------------------------------------------------------
-    best_dif = 0.0
-    best_y, best_x = cy, cx
-
-    y_lo = max(0, cy - search_pix)
-    y_hi = min(rows, cy + search_pix + 1)
-    x_lo = max(0, cx - search_pix)
-    x_hi = min(cols, cx + search_pix + 1)
-
-    n_candidates = 0
-    for yi in range(y_lo, y_hi):
-        for xi in range(x_lo, x_hi):
-            r = _eval(yi, xi)
-            if r is None or r["ir_rad_dif"] < min_ir_rad_dif:
-                continue
-            n_candidates += 1
-            if r["ir_rad_dif"] > best_dif:
-                best_dif = r["ir_rad_dif"]
-                best_y, best_x = yi, xi
-
-    if best_dif < min_ir_rad_dif:
-        return {
-            "success": False, "reason": "no_candidates", "method": "v2",
-            "best_ir_rad_dif": round(best_dif, 2),
-            "n_candidates": n_candidates, "valid_frac": round(valid_frac, 4),
-        }
-
-    # ------------------------------------------------------------------
-    # Phase 2: Refinement — minimize azimuthal variance at eyewall
-    # ------------------------------------------------------------------
-    best_var_score = 1e18
-    ref_y, ref_x = best_y, best_x
-    best_result = _eval(best_y, best_x)
-
-    y_lo2 = max(0, best_y - refine_pix)
-    y_hi2 = min(rows, best_y + refine_pix + 1)
-    x_lo2 = max(0, best_x - refine_pix)
-    x_hi2 = min(cols, best_x + refine_pix + 1)
-
-    for yi in range(y_lo2, y_hi2):
-        for xi in range(x_lo2, x_hi2):
-            r = _eval(yi, xi)
-            if r is None or r["ir_rad_dif"] < min_ir_rad_dif:
-                continue
-            # Pure symmetry: lower mean_std = better center
-            if r["mean_std"] < best_var_score:
-                best_var_score = r["mean_std"]
-                ref_y, ref_x = yi, xi
-                best_result = r
-
-    if best_result is None:
-        return {
-            "success": False, "reason": "refine_failed", "method": "v2",
-            "n_candidates": n_candidates, "valid_frac": round(valid_frac, 4),
-        }
-
-    found_lat = north - ref_y * lat_span / (rows - 1)
-    found_lon = west + ref_x * lon_span / (cols - 1)
-
-    # Distance constraint
-    _ref_lat = ref_lat if ref_lat is not None else center_lat
-    _ref_lon = ref_lon if ref_lon is not None else center_lon
-    dist_deg = np.sqrt(
-        (found_lat - _ref_lat) ** 2
-        + ((found_lon - _ref_lon) * cos_lat) ** 2
-    )
-    if max_dist_deg > 0 and dist_deg > max_dist_deg:
-        return {
-            "success": False, "reason": "too_far", "method": "v2",
-            "found_lat": round(float(found_lat), 3),
-            "found_lon": round(float(found_lon), 3),
-            "dist_deg": round(float(dist_deg), 3),
-            "best_ir_rad_dif": round(best_result["ir_rad_dif"], 2),
-            "n_candidates": n_candidates,
-        }
-
-    # Frame-to-frame motion constraint
-    if prev_lat is not None and prev_lon is not None:
-        jump_km = np.sqrt(
-            ((found_lat - prev_lat) * 111.0) ** 2
-            + ((found_lon - prev_lon) * 111.0 * cos_lat) ** 2
-        )
-        if jump_km > max_frame_jump_km:
-            return {
-                "success": False, "reason": "frame_jump", "method": "v2",
-                "found_lat": round(float(found_lat), 3),
-                "found_lon": round(float(found_lon), 3),
-                "prev_lat": round(float(prev_lat), 3),
-                "prev_lon": round(float(prev_lon), 3),
-                "jump_km": round(float(jump_km), 1),
-                "best_ir_rad_dif": round(best_result["ir_rad_dif"], 2),
-                "n_candidates": n_candidates,
-            }
-
-    # Compute composite score for diagnostics (same formula as v1 for comparison)
-    eye_score = 100.0 * (1.0 / best_result["mean_std"]) ** 2 * best_result["ir_rad_dif"] \
-        if best_result["mean_std"] > 0 else 0.0
-
-    return {
-        "lat": round(float(found_lat), 3),
-        "lon": round(float(found_lon), 3),
-        "eye_score": round(float(eye_score), 2),
-        "ir_rad_dif": round(best_result["ir_rad_dif"], 2),
-        "mean_std": round(best_result["mean_std"], 2),
-        "success": True,
-        "method": "v2",
     }
