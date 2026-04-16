@@ -134,6 +134,17 @@
                 </div>
             </div>
         </div>
+        <!-- Featured Cases (shown on first load; dismissible; hides once user interacts) -->
+        <div id="featured-cases" class="featured-cases" role="region" aria-label="Featured radar cases" hidden>
+            <div class="featured-cases-header">
+                <div class="featured-cases-title">
+                    <span class="featured-cases-kicker">New here?</span>
+                    <span class="featured-cases-lead">Try one of these classic radar cases</span>
+                </div>
+                <button class="featured-cases-dismiss" type="button" onclick="dismissFeaturedCases()" aria-label="Dismiss featured cases">&times;</button>
+            </div>
+            <div class="featured-cases-grid" id="featured-cases-grid"></div>
+        </div>
         <div id="map-wrapper">
             <div id="map-container">
                 <div id="loading"><div class="spinner"></div><div>Loading TC-RADAR data&hellip;</div></div>

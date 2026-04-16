@@ -348,6 +348,9 @@ document.getElementById('storm-select').addEventListener('change', function() {
     var caseSelect = document.getElementById('case-select');
     var exploreBtn = document.getElementById('explore-btn');
 
+    // User is engaging with filters — hide the featured-cases strip
+    if (storm && typeof window.dismissFeaturedCases === 'function') window.dismissFeaturedCases();
+
     // Update map filter
     filters.stormName = storm || 'all';
     updateMarkers();
@@ -408,6 +411,10 @@ function exploreCaseGo() {
 
 // ── Side panel ───────────────────────────────────────────────
 function openSidePanel(caseData, fromQuickSelect) {
+    // Hide featured-cases strip once any case opens
+    _featuredCasesDismissed = true;
+    var _fc = document.getElementById('featured-cases');
+    if (_fc) _fc.hidden = true;
     _archiveFLReset();
     _archiveSondeReset();
     currentCaseIndex = caseData.case_index;
@@ -5357,6 +5364,103 @@ function renderQuadrantMeansInto(targetId, json, fullsize) {
     }
 }
 
+// ── Featured Cases (onboarding strip shown on first load) ────
+// Curated peak-intensity cases looked up by name+year (case_index
+// derived dynamically so this survives metadata regeneration).
+var FEATURED_CASES = [
+    { storm: 'MILTON',  year: 2024, blurb: 'Rapid intensification to Cat 5 in the Gulf' },
+    { storm: 'HELENE',  year: 2024, blurb: 'Big Bend landfall, destructive inland flood' },
+    { storm: 'IAN',     year: 2022, blurb: 'SW Florida Cat 5 landfall' },
+    { storm: 'DORIAN',  year: 2019, blurb: 'Stationary Cat 5 over Abaco' },
+    { storm: 'MICHAEL', year: 2018, blurb: 'Panhandle Cat 5 landfall' },
+    { storm: 'IRMA',    year: 2017, blurb: 'Peak-intensity Cat 5 (185 mph) approach to Leewards' }
+];
+var _featuredCasesDismissed = false;
+
+function _pickPeakCaseIndex(stormName, year) {
+    var d = _getActiveData();
+    if (!d || !d.cases) return null;
+    var best = null;
+    for (var i = 0; i < d.cases.length; i++) {
+        var c = d.cases[i];
+        if (c.storm_name !== stormName) continue;
+        if (year && c.year !== year) continue;
+        if (!best || (c.vmax_kt || 0) > (best.vmax_kt || 0)) best = c;
+    }
+    return best ? best.case_index : null;
+}
+
+function renderFeaturedCases() {
+    var host = document.getElementById('featured-cases');
+    var grid = document.getElementById('featured-cases-grid');
+    if (!host || !grid) return;
+    if (_featuredCasesDismissed) return;
+    // Hide if a case is already opened (deep link / returning user)
+    if (_focusMode || currentCaseIndex != null) { host.hidden = true; return; }
+    // Don't show until data is loaded
+    if (!_getActiveData()) { host.hidden = true; return; }
+
+    var cards = [];
+    for (var i = 0; i < FEATURED_CASES.length; i++) {
+        var f = FEATURED_CASES[i];
+        var idx = _pickPeakCaseIndex(f.storm, f.year);
+        if (idx == null) continue;
+        var c = _getActiveData().cases.find(function(x){ return x.case_index === idx; });
+        if (!c) continue;
+        var cat = getIntensityCategory(c.vmax_kt);
+        var color = getIntensityColor(c.vmax_kt);
+        var vmaxStr = c.vmax_kt != null ? Math.round(c.vmax_kt) + ' kt' : '—';
+        var stormTitle = f.storm.charAt(0) + f.storm.slice(1).toLowerCase();
+        var card = document.createElement('button');
+        card.type = 'button';
+        card.className = 'featured-case-card';
+        card.setAttribute('data-case-index', idx);
+        card.setAttribute('aria-label', 'Open ' + stormTitle + ' ' + f.year + ' radar case, peak ' + vmaxStr);
+        card.innerHTML =
+            '<div class="featured-case-top">' +
+                '<span class="featured-case-name">' + stormTitle + '</span>' +
+                '<span class="featured-case-cat" style="background:' + color + ';">' + cat + '</span>' +
+            '</div>' +
+            '<div class="featured-case-desc">' + f.blurb + '</div>' +
+            '<div class="featured-case-footer">' +
+                '<span>' + f.year + ' · ' + vmaxStr + '</span>' +
+                '<span class="featured-case-go">Explore →</span>' +
+            '</div>';
+        card.addEventListener('click', (function(caseIdx){
+            return function(){ openFeaturedCase(caseIdx); };
+        })(idx));
+        cards.push(card);
+    }
+
+    if (cards.length === 0) { host.hidden = true; return; }
+    grid.innerHTML = '';
+    cards.forEach(function(c){ grid.appendChild(c); });
+    host.hidden = false;
+}
+
+function openFeaturedCase(caseIdx) {
+    var d = _getActiveData();
+    if (!d) return;
+    var caseData = d.cases.find(function(c){ return c.case_index === caseIdx; });
+    if (!caseData) return;
+    _ga('featured_case_click', { case_index: caseIdx, storm_name: caseData.storm_name, year: caseData.year });
+    // Dismiss featured panel so it doesn't return when the side panel closes
+    _featuredCasesDismissed = true;
+    var host = document.getElementById('featured-cases');
+    if (host) host.hidden = true;
+    // Go straight into focus mode + side panel (same as exploreCaseGo)
+    enterFocusMode(caseData);
+    openSidePanel(caseData, true);
+}
+
+window.openFeaturedCase = openFeaturedCase;
+window.dismissFeaturedCases = function() {
+    _featuredCasesDismissed = true;
+    var host = document.getElementById('featured-cases');
+    if (host) host.hidden = true;
+    _ga('featured_cases_dismiss', {});
+};
+
 // ── Intensity helpers ────────────────────────────────────────
 function getIntensityColor(vmax) {
     if (!vmax) return '#6b7280'; if (vmax<34) return '#60a5fa'; if (vmax<64) return '#34d399';
@@ -5670,6 +5774,10 @@ fetch('tc_radar_metadata.json')
             map.addLayer(markers);
         }
 
+        // Show featured cases (onboarding) now that data is ready.
+        // Defer slightly so the map finishes its first render.
+        setTimeout(renderFeaturedCases, 300);
+
         // ── Compact intensity legend (collapsed by default) ──
         var legend = L.control({ position:'bottomright' });
         legend.onAdd = function() {
@@ -5805,6 +5913,8 @@ function _populateStormDropdown(yearFilter) {
 // Year dropdown change handler
 document.getElementById('year-select').addEventListener('change', function() {
     _selectedYear = this.value ? parseInt(this.value) : '';
+    // User engaged with filters → hide featured strip
+    if (this.value && typeof window.dismissFeaturedCases === 'function') window.dismissFeaturedCases();
     // Re-populate storm dropdown filtered by year
     _populateStormDropdown(_selectedYear);
     // Reset storm / case selection

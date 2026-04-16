@@ -1817,3 +1817,109 @@ footer a:hover { text-decoration: underline; }
         padding: 6px 8px;
     }
 }
+
+/* ── Featured Cases strip (TC-RADAR Explorer onboarding) ─────────── */
+.featured-cases {
+    background: linear-gradient(180deg, rgba(46,125,255,0.08) 0%, rgba(46,125,255,0.02) 100%);
+    border-bottom: 1px solid rgba(46,125,255,0.22);
+    padding: 14px 20px 16px;
+    z-index: 500;
+    animation: featuredCasesFadeIn 0.35s ease;
+}
+.featured-cases[hidden] { display: none; }
+@keyframes featuredCasesFadeIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
+.featured-cases-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 10px;
+}
+.featured-cases-title { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.featured-cases-kicker {
+    font-size: 0.7rem;
+    color: var(--cyan);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 700;
+    font-family: 'JetBrains Mono', monospace;
+}
+.featured-cases-lead { font-size: 0.9rem; color: var(--text); font-weight: 500; }
+.featured-cases-dismiss {
+    background: transparent; color: var(--slate); border: none;
+    font-size: 1.4rem; line-height: 1; cursor: pointer; padding: 2px 8px;
+    border-radius: 6px; transition: all 0.15s;
+}
+.featured-cases-dismiss:hover { color: var(--text); background: rgba(255,255,255,0.06); }
+.featured-cases-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 10px;
+}
+.featured-case-card {
+    background: rgba(20,42,82,0.55);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 8px;
+    padding: 10px 12px;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    text-align: left;
+    font-family: inherit;
+    color: var(--text);
+    transition: border-color 0.18s, background 0.18s, transform 0.18s;
+}
+.featured-case-card:hover {
+    border-color: rgba(46,125,255,0.55);
+    background: rgba(46,125,255,0.12);
+    transform: translateY(-1px);
+}
+.featured-case-card:focus-visible {
+    outline: 2px solid var(--cyan);
+    outline-offset: 2px;
+}
+.featured-case-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+.featured-case-name {
+    font-weight: 700;
+    font-size: 0.95rem;
+    letter-spacing: 0.01em;
+}
+.featured-case-year { font-size: 0.72rem; color: var(--slate); font-family: 'JetBrains Mono', monospace; }
+.featured-case-cat {
+    display: inline-block;
+    font-size: 0.65rem;
+    font-weight: 700;
+    padding: 2px 7px;
+    border-radius: 10px;
+    color: #0b1e3d;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+}
+.featured-case-desc {
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    line-height: 1.35;
+}
+.featured-case-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    margin-top: 2px;
+    font-size: 0.68rem;
+    color: var(--slate);
+    font-family: 'JetBrains Mono', monospace;
+}
+.featured-case-go { color: var(--cyan); font-weight: 600; }
+@media (max-width: 600px) {
+    .featured-cases { padding: 12px 14px 14px; }
+    .featured-cases-grid { grid-template-columns: 1fr 1fr; }
+    .featured-case-card { padding: 8px 10px; }
+    .featured-case-desc { display: none; }
+}
