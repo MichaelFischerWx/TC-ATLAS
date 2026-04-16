@@ -73,6 +73,7 @@ function _cacheIREls() {
 var irOverlayLayer = null;   // L.imageOverlay on detail map
 var irPositionMarker = null; // L.circleMarker showing current storm center
 var hovCenterMarker = null;  // L.marker showing Hovmöller center (IR fix or best-track)
+var hovRejectMarker = null;  // L.marker showing rejected IR fix candidate (orange)
 var trackAnnotationMarkers = []; // Genesis, LMI, dissipation markers (hidden during IR)
 var irOverlayVisible = false;
 var irTrackVisible = true;       // Track + position marker visible on detail map
@@ -3211,6 +3212,7 @@ function renderDetailMap(track, storm) {
     irOverlayLayer = null;
     irPositionMarker = null;
     hovCenterMarker = null;
+    hovRejectMarker = null;
     irTrackVisible = true;
     detailTrackElements = [];
     var trackBtn = document.getElementById('ir-track-toggle-btn');
@@ -3453,6 +3455,9 @@ function removeIROverlay() {
     }
     if (hovCenterMarker && detailMap) {
         try { detailMap.removeLayer(hovCenterMarker); } catch (e) {}
+    }
+    if (hovRejectMarker && detailMap) {
+        try { detailMap.removeLayer(hovRejectMarker); } catch (e) {}
     }
     // Clear intensity chart marker
     _lastMarkerDt = null;
@@ -3854,10 +3859,14 @@ function updateIRPositionMarker(data) {
 
 /** Update the Hovmöller center crosshair on the map for the current IR frame time */
 function updateHovCenterMarker(frameDtStr) {
-    // Remove old marker
+    // Remove old markers
     if (hovCenterMarker && detailMap) {
         try { detailMap.removeLayer(hovCenterMarker); } catch (e) {}
         hovCenterMarker = null;
+    }
+    if (hovRejectMarker && detailMap) {
+        try { detailMap.removeLayer(hovRejectMarker); } catch (e) {}
+        hovRejectMarker = null;
     }
     if (!hovmollerData || !hovmollerData.centers || !frameDtStr || !detailMap) return;
 
@@ -3910,6 +3919,30 @@ function updateHovCenterMarker(frameDtStr) {
     }
     hovCenterMarker.bindTooltip(tip, { className: 'track-tooltip' });
     hovCenterMarker.addTo(detailMap);
+
+    // Show rejected IR candidate as orange dashed crosshair (if different from accepted position)
+    if (!isIRFix && g && g.cand_lat != null && g.cand_lon != null) {
+        var rejColor = '#f97316';  // orange
+        var rejIcon = L.divIcon({
+            className: '',
+            html: '<div style="width:14px;height:14px;position:relative;opacity:0.7;">' +
+                '<div style="position:absolute;top:50%;left:0;right:0;height:1px;background:' + rejColor + ';transform:translateY(-50%);"></div>' +
+                '<div style="position:absolute;left:50%;top:0;bottom:0;width:1px;background:' + rejColor + ';transform:translateX(-50%);"></div>' +
+                '</div>',
+            iconSize: [14, 14],
+            iconAnchor: [7, 7]
+        });
+        hovRejectMarker = L.marker([g.cand_lat, g.cand_lon], {
+            icon: rejIcon, interactive: true, pane: 'markerPane'
+        });
+        hovRejectMarker.bindTooltip(
+            '<b style="color:#f97316;">Rejected IR candidate</b><br>' +
+            g.cand_lat.toFixed(2) + '°, ' + g.cand_lon.toFixed(2) + '°' +
+            '<br><span style="font-size:10px;color:#94a3b8;">' + tip.split('<br><span')[1],
+            { className: 'track-tooltip' }
+        );
+        hovRejectMarker.addTo(detailMap);
+    }
 }
 
 function findTrackPointAtTime(track, dtStr) {

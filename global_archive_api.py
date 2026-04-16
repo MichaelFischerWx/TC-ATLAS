@@ -2723,7 +2723,9 @@ def _precompute_hovmoller(sid: str, track_points: list, storm_lon: float = 0.0,
                     g1 = round(cfix.get("ir_rad_dif", 0), 1)
                     g2 = round(cfix.get("mean_std", 99), 3)  # std ratio
                     g3_ring = round(cfix.get("coldest_ring", 999) - 273.15, 1)  # °C
-                    gate_info = {"g1_rad_dif": g1, "g2_std_ratio": g2, "g3_ring_C": g3_ring}
+                    # Always store the candidate position + gates for diagnostics
+                    gate_info = {"g1_rad_dif": g1, "g2_std_ratio": g2, "g3_ring_C": g3_ring,
+                                 "cand_lat": cfix["lat"], "cand_lon": cfix["lon"]}
 
                     passed = (g1 >= 15.0 and g2 < 0.85
                               and g3_ring <= -60.0)
