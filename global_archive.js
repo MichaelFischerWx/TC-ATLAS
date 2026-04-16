@@ -1906,11 +1906,16 @@ function renderHovmoller(data) {
         });
     }
 
+    var stormName = selectedStorm ? (selectedStorm.name || 'UNNAMED') : '';
+    var stormYear = selectedStorm ? (selectedStorm.year || '') : '';
+    var titleText = stormName + ' ' + stormYear + ' — IR Hovmöller';
+
     var layout = {
         paper_bgcolor: 'rgba(0,0,0,0)',
         plot_bgcolor: 'rgba(0,0,0,0)',
         font: { family: 'DM Sans, sans-serif', color: '#8b9ec2', size: 10 },
-        margin: { t: 30, r: 50, b: 36, l: 100 },
+        margin: { t: 36, r: 50, b: 36, l: 100 },
+        title: { text: titleText, font: { size: 11, color: '#94a3b8' }, x: 0.5, y: 0.995 },
         xaxis: {
             title: { text: 'Radius (km)', font: { size: 9 } },
             tickfont: { size: 8 },
@@ -1938,7 +1943,16 @@ function renderHovmoller(data) {
         };
     }
 
-    Plotly.newPlot(div, traces, layout, PLOTLY_CONFIG);
+    var hovConfig = Object.assign({}, PLOTLY_CONFIG, {
+        toImageButtonOptions: {
+            format: 'png',
+            filename: 'TC-ATLAS_' + stormName.replace(/\s+/g, '_') + '_' + stormYear + '_IR_Hovmoller',
+            width: 1200,
+            height: chartHeight + 80,
+            scale: 2
+        }
+    });
+    Plotly.newPlot(div, traces, layout, hovConfig);
 
     // Click handler: sync IR to clicked time
     div.on('plotly_click', function (evtData) {
