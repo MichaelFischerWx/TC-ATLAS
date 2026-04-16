@@ -2158,14 +2158,16 @@ def get_storm_ir_raw_frame(
                 break
 
         try:
-            # Relaxed thresholds: always find the best center even
-            # without a clear eye (CDO center is still useful for
-            # Hovmöller radial profiles). Frontend decides whether
-            # to show the crosshair based on eye_score/ir_rad_dif.
+            # Relaxed search (considers all candidates), but quality-gated:
+            # only populate center_fix if ir_rad_dif >= 10K (clear eye)
+            # and mean_std < 15K (symmetric profile). Otherwise the
+            # frontend falls back to best-track / no crosshair.
             cfix_raw = find_ir_center(arr, frame_bounds, guess_lat, guess_lon,
                                      ref_lat=interp_lat, ref_lon=interp_lon,
                                      min_ir_rad_dif=0.0, min_eye_score=0.0)
-            if cfix_raw.get("lat") is not None:
+            if (cfix_raw.get("lat") is not None
+                    and cfix_raw.get("ir_rad_dif", 0) >= 10.0
+                    and cfix_raw.get("mean_std", 99) < 15.0):
                 center_fix = {
                     "lat": cfix_raw["lat"],
                     "lon": cfix_raw["lon"],
