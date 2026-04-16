@@ -2057,7 +2057,21 @@ def get_storm_ir_raw_frame(
         # Re-attempt center_fix for cached frames that are missing it or failed
         vmax_kt = storm.get("vmax_kt")
         _cfix = cached.get("center_fix")
-        _needs_retry = (_cfix is None) or (isinstance(_cfix, dict) and _cfix.get("success") is False)
+        # Trigger retry when:
+        #   - never computed, OR
+        #   - last attempt explicitly failed (success=False), OR
+        #   - cached fix was written by pre-gates code (no `gates` key) —
+        #     those bypassed g1/g2/g3 and may be spatially wrong.
+        _cfix_missing_gates = (
+            isinstance(_cfix, dict)
+            and _cfix.get("success") is not False
+            and "gates" not in _cfix
+        )
+        _needs_retry = (
+            _cfix is None
+            or (isinstance(_cfix, dict) and _cfix.get("success") is False)
+            or _cfix_missing_gates
+        )
         if _needs_retry and vmax_kt is not None and vmax_kt >= 65:
             try:
                 raw_u8 = np.frombuffer(

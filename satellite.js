@@ -3418,9 +3418,36 @@
             }
         }
 
+        // If the cursor is near the IR-center-fix crosshair, append the
+        // g1/g2/g3 quality gate diagnostics (same format as Global Archive).
+        var gateHtml = '';
+        var _fix = frame.center_fix;
+        if (_fix && _fix.lat != null && _fix.lon != null && _fix.gates) {
+            var _fxCss = (_fix.lon - vb.west) / (vb.east - vb.west) * rect.width;
+            var _fyCss = (vb.north - _fix.lat) / (vb.north - vb.south) * rect.height;
+            var _dx = (e.clientX - rect.left) - _fxCss;
+            var _dy = (e.clientY - rect.top) - _fyCss;
+            if (_dx * _dx + _dy * _dy <= 24 * 24) {
+                var _g = _fix.gates;
+                if (_g.g1_rad_dif != null || _g.g2_std_ratio != null) {
+                    var _g1Pass = _g.g1_rad_dif >= 15;
+                    var _g2Pass = _g.g2_std_ratio < 0.7;
+                    var _g3Pass = _g.g3_diff != null && _g.g3_diff <= 7;
+                    gateHtml = '<br><span style="font-size:10px;color:#94a3b8;">' +
+                        (_g1Pass ? '\u2713' : '\u2717') + ' \u0394T=' + _g.g1_rad_dif + 'K (\u226515)' +
+                        '<br>' + (_g2Pass ? '\u2713' : '\u2717') + ' \u03C3 ratio=' + _g.g2_std_ratio + ' (<0.7)' +
+                        '<br>' + (_g3Pass ? '\u2713' : '\u2717') + ' Ring=' + _g.g3_ring_C + '\u00B0C, P1=' +
+                        (_g.g3_p1_C != null ? _g.g3_p1_C : '?') + '\u00B0C (\u0394' +
+                        (_g.g3_diff != null ? _g.g3_diff : '?') + '\u22647)' +
+                        '</span>';
+                }
+            }
+        }
+
         tooltip.innerHTML = valHtml + radarHtml +
             '<span class="sat-tb-sep"> &nbsp; </span>' +
-            '<span class="sat-tb-coord">' + latStr + ', ' + lonStr + '</span>';
+            '<span class="sat-tb-coord">' + latStr + ', ' + lonStr + '</span>' +
+            gateHtml;
 
         var wrapRect = document.getElementById('sat-canvas-wrap').getBoundingClientRect();
         var tx = e.clientX - wrapRect.left + 16;
