@@ -466,6 +466,24 @@
                     <input type="checkbox" id="sat-crosshair-toggle" checked>
                     Center Fix Crosshair
                 </label>
+                <div class="sat-crosshair-legend" style="margin:4px 0 4px 20px;font-size:9px;color:#94a3b8;line-height:1.5;">
+                    <div style="display:flex;align-items:center;gap:6px;">
+                        <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+                            <circle cx="6" cy="6" r="4" fill="none" stroke="#00e5ff" stroke-width="1.5"/>
+                            <line x1="6" y1="1" x2="6" y2="11" stroke="#00e5ff" stroke-width="1"/>
+                            <line x1="1" y1="6" x2="11" y2="6" stroke="#00e5ff" stroke-width="1"/>
+                        </svg>
+                        <span>IR fix (passed gates)</span>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:6px;margin-top:2px;">
+                        <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+                            <circle cx="6" cy="6" r="4" fill="none" stroke="#fb923c" stroke-width="1.5" stroke-dasharray="2 2"/>
+                            <line x1="6" y1="1" x2="6" y2="11" stroke="#fb923c" stroke-width="1" stroke-dasharray="2 2"/>
+                            <line x1="1" y1="6" x2="11" y2="6" stroke="#fb923c" stroke-width="1" stroke-dasharray="2 2"/>
+                        </svg>
+                        <span>Best-track (no IR fix)</span>
+                    </div>
+                </div>
                 <label class="sat-checkbox-label" style="margin-top:4px;">
                     <input type="checkbox" id="sat-follow-toggle">
                     Follow Storm (5°/2°)

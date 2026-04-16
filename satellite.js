@@ -620,6 +620,10 @@
         }
 
         // ── IR Center Fix Crosshair ──
+        //   cyan solid = IR-based objective fix (passed g1/g2/g3 gates)
+        //   orange dashed = best-track / extrapolated position (no IR fix
+        //                   passed; shows where the advisory says the
+        //                   storm is so the user still has a reference)
         var _fixSrc = null; // 'objective' or 'extrapolated'
         var _fixLat = null, _fixLon = null;
         if (showCrosshair) {
@@ -631,6 +635,12 @@
                 _fixSrc = 'extrapolated';
                 _fixLat = frame._interpCenter.lat;
                 _fixLon = frame._interpCenter.lon;
+            } else if (currentStorm && currentStorm.lat != null && currentStorm.lon != null) {
+                // Last-resort fallback: advisory position, for cases where
+                // _interpolateCenters hasn't populated _interpCenter yet.
+                _fixSrc = 'extrapolated';
+                _fixLat = currentStorm.lat;
+                _fixLon = currentStorm.lon;
             }
         }
         if (_fixSrc && _fixLat != null) {
