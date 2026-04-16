@@ -2509,7 +2509,7 @@ _hovmoller_cache: OrderedDict = OrderedDict()
 _HOVMOLLER_CACHE_MAX = 20
 
 
-_HOV_CACHE_VER = "v11"  # v11 = gate diagnostics in response for tooltip display
+_HOV_CACHE_VER = "v12"  # v12 = fixed -60C coldest ring gate (was P20 percentile)
 
 
 def _gcs_get_hovmoller(sid: str):
@@ -2705,9 +2705,8 @@ def _precompute_hovmoller(sid: str, track_points: list, storm_lon: float = 0.0,
         # Center-finding with relaxed search but strict acceptance:
         # Quality gates:
         #   1. ir_rad_dif >= 15K — clear warm eye vs cold eyewall
-        #   2. mean_std < 12K — symmetric eyewall (now measured ±20km of coldest ring)
-        #   3. coldest_ring <= P20 of inner-200km Tb — eyewall is among the
-        #      coldest convection near the storm (adaptive, not fixed threshold)
+        #   2. mean_std < 12K — symmetric eyewall (20-60km band)
+        #   3. coldest_ring <= -60°C — deep convective eyewall
         center_method = "track"
         gate_info = {}  # diagnostic info for frontend tooltip
         if wind is not None and wind >= 50:
@@ -2724,23 +2723,10 @@ def _precompute_hovmoller(sid: str, track_points: list, storm_lon: float = 0.0,
                     g1 = round(cfix.get("ir_rad_dif", 0), 1)
                     g2 = round(cfix.get("mean_std", 99), 1)
                     g3_ring = round(cfix.get("coldest_ring", 999) - 273.15, 1)  # °C
-                    # Compute P20 of inner 200km Tb for gate 3
-                    cos_lat_c = np.cos(np.radians(c_lat))
-                    _dy = lat_span / (rows - 1) * 111.0
-                    _dx = lon_span / (cols - 1) * 111.0 * cos_lat_c
-                    _cy = (north - c_lat) / lat_span * (rows - 1)
-                    _cx = (c_lon - west) / lon_span * (cols - 1)
-                    _ri, _ci = np.arange(rows), np.arange(cols)
-                    _DY, _DX = np.meshgrid((_ri - _cy) * _dy, (_ci - _cx) * _dx, indexing='ij')
-                    _dist = np.sqrt(_DY**2 + _DX**2)
-                    _inner = (np.isfinite(arr) & (arr > 0) & (_dist <= 200.0))
-                    g3_p20 = round(float(np.percentile(arr[_inner], 20)) - 273.15, 1) if np.count_nonzero(_inner) > 20 else None
-                    gate_info = {"g1_rad_dif": g1, "g2_ew_std": g2,
-                                 "g3_ring_C": g3_ring, "g3_p20_C": g3_p20}
+                    gate_info = {"g1_rad_dif": g1, "g2_ew_std": g2, "g3_ring_C": g3_ring}
 
                     passed = (g1 >= 15.0 and g2 < 12.0
-                              and g3_p20 is not None
-                              and cfix.get("coldest_ring", 999) <= float(np.percentile(arr[_inner], 20)))
+                              and g3_ring <= -60.0)
                     if passed:
                         c_lat, c_lon = cfix["lat"], cfix["lon"]
                         center_method = "ir_fix"

@@ -2168,7 +2168,7 @@ def get_storm_ir_raw_frame(
             if (cfix_raw.get("lat") is not None
                     and cfix_raw.get("ir_rad_dif", 0) >= 15.0
                     and cfix_raw.get("mean_std", 99) < 12.0
-                    and cfix_raw.get("coldest_ring", 999) <= 223.15):  # eyewall <= -50°C
+                    and cfix_raw.get("coldest_ring", 999) <= 213.15):  # eyewall <= -60°C
                 center_fix = {
                     "lat": cfix_raw["lat"],
                     "lon": cfix_raw["lon"],

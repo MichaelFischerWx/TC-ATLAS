@@ -3901,13 +3901,11 @@ function updateHovCenterMarker(frameDtStr) {
     if (g && (g.g1_rad_dif != null || g.g2_ew_std != null)) {
         var g1Pass = g.g1_rad_dif >= 15;
         var g2Pass = g.g2_ew_std < 12;
-        var g3Pass = g.g3_p20_C != null && g.g3_ring_C <= g.g3_p20_C;
+        var g3Pass = g.g3_ring_C != null && g.g3_ring_C <= -60;
         tip += '<br><span style="font-size:10px;color:#94a3b8;">';
         tip += (g1Pass ? '✓' : '✗') + ' ΔT=' + g.g1_rad_dif + 'K (≥15)';
         tip += '<br>' + (g2Pass ? '✓' : '✗') + ' EW std=' + g.g2_ew_std + 'K (<12)';
-        if (g.g3_p20_C != null) {
-            tip += '<br>' + (g3Pass ? '✓' : '✗') + ' Ring=' + g.g3_ring_C + '°C ≤ P20=' + g.g3_p20_C + '°C';
-        }
+        tip += '<br>' + (g3Pass ? '✓' : '✗') + ' Ring=' + g.g3_ring_C + '°C (≤-60)';
         tip += '</span>';
     }
     hovCenterMarker.bindTooltip(tip, { className: 'track-tooltip' });
