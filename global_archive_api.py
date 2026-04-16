@@ -2509,7 +2509,7 @@ _hovmoller_cache: OrderedDict = OrderedDict()
 _HOVMOLLER_CACHE_MAX = 20
 
 
-_HOV_CACHE_VER = "v10"  # v10 = eyewall-band std (20-60km), P20 cold gate, stricter thresholds
+_HOV_CACHE_VER = "v11"  # v11 = gate diagnostics in response for tooltip display
 
 
 def _gcs_get_hovmoller(sid: str):
@@ -2709,6 +2709,7 @@ def _precompute_hovmoller(sid: str, track_points: list, storm_lon: float = 0.0,
         #   3. coldest_ring <= P20 of inner-200km Tb — eyewall is among the
         #      coldest convection near the storm (adaptive, not fixed threshold)
         center_method = "track"
+        gate_info = {}  # diagnostic info for frontend tooltip
         if wind is not None and wind >= 50:
             try:
                 cfix = find_ir_center(
@@ -2719,11 +2720,11 @@ def _precompute_hovmoller(sid: str, track_points: list, storm_lon: float = 0.0,
                     search_radius_km=80.0,
                     max_iterations=3,
                 )
-                if cfix.get("lat") is not None and cfix.get("ir_rad_dif", 0) >= 15.0 and cfix.get("mean_std", 99) < 12.0:
-                    # Percentile-based cold check: compute 10th percentile of
-                    # Tb within 200km of best-track center. The coldest ring
-                    # must be at or below this — ensures it's actually in deep
-                    # convection, not a warm feature misidentified as an eye.
+                if cfix.get("lat") is not None:
+                    g1 = round(cfix.get("ir_rad_dif", 0), 1)
+                    g2 = round(cfix.get("mean_std", 99), 1)
+                    g3_ring = round(cfix.get("coldest_ring", 999) - 273.15, 1)  # °C
+                    # Compute P20 of inner 200km Tb for gate 3
                     cos_lat_c = np.cos(np.radians(c_lat))
                     _dy = lat_span / (rows - 1) * 111.0
                     _dx = lon_span / (cols - 1) * 111.0 * cos_lat_c
@@ -2733,11 +2734,16 @@ def _precompute_hovmoller(sid: str, track_points: list, storm_lon: float = 0.0,
                     _DY, _DX = np.meshgrid((_ri - _cy) * _dy, (_ci - _cx) * _dx, indexing='ij')
                     _dist = np.sqrt(_DY**2 + _DX**2)
                     _inner = (np.isfinite(arr) & (arr > 0) & (_dist <= 200.0))
-                    if np.count_nonzero(_inner) > 20:
-                        p20 = float(np.percentile(arr[_inner], 20))
-                        if cfix.get("coldest_ring", 999) <= p20:
-                            c_lat, c_lon = cfix["lat"], cfix["lon"]
-                            center_method = "ir_fix"
+                    g3_p20 = round(float(np.percentile(arr[_inner], 20)) - 273.15, 1) if np.count_nonzero(_inner) > 20 else None
+                    gate_info = {"g1_rad_dif": g1, "g2_ew_std": g2,
+                                 "g3_ring_C": g3_ring, "g3_p20_C": g3_p20}
+
+                    passed = (g1 >= 15.0 and g2 < 12.0
+                              and g3_p20 is not None
+                              and cfix.get("coldest_ring", 999) <= float(np.percentile(arr[_inner], 20)))
+                    if passed:
+                        c_lat, c_lon = cfix["lat"], cfix["lon"]
+                        center_method = "ir_fix"
             except Exception:
                 pass
 
@@ -2769,7 +2775,8 @@ def _precompute_hovmoller(sid: str, track_points: list, storm_lon: float = 0.0,
                 profile[b] = round(float(np.mean(arr[mask])) - 273.15, 2)
 
         return {"time": dt_str, "profile": profile, "wind": wind,
-                "center": center_method, "clat": round(c_lat, 3), "clon": round(c_lon, 3)}
+                "center": center_method, "clat": round(c_lat, 3), "clon": round(c_lon, 3),
+                "gates": gate_info}
 
     MAX_WORKERS = 5
     partial_results = [None] * len(frame_list)
@@ -2788,7 +2795,8 @@ def _precompute_hovmoller(sid: str, track_points: list, storm_lon: float = 0.0,
             out_times.append(r["time"])
             out_profiles.append(r["profile"])
             out_winds.append(r["wind"])
-            out_centers.append({"lat": r["clat"], "lon": r["clon"], "method": r["center"]})
+            out_centers.append({"lat": r["clat"], "lon": r["clon"], "method": r["center"],
+                                "gates": r.get("gates", {})})
 
     if not out_times:
         return None
