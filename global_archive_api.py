@@ -2509,7 +2509,7 @@ _hovmoller_cache: OrderedDict = OrderedDict()
 _HOVMOLLER_CACHE_MAX = 20
 
 
-_HOV_CACHE_VER = "v5"  # v5 = optimized center-finding (250px, coarse-to-fine)
+_HOV_CACHE_VER = "v6"  # v6 = quality-gated center-finding (ir_rad_dif>=10K, mean_std<15K)
 
 
 def _gcs_get_hovmoller(sid: str):
@@ -2702,10 +2702,12 @@ def _precompute_hovmoller(sid: str, track_points: list, storm_lon: float = 0.0,
         if lat_span <= 0 or lon_span <= 0:
             return None
 
-        # Relaxed center-finding for Hovmöller: no minimum IR rad dif or
-        # eye score — we always want the best center even if there's no
-        # discernible eye (e.g., center of CDO). Smaller search radius and
-        # fewer iterations to keep it fast (~0.2s vs ~1.5s per frame).
+        # Center-finding with relaxed search but strict acceptance:
+        # - Search considers ALL candidates (min thresholds = 0)
+        # - Accept the fix only if it passes quality gates:
+        #   ir_rad_dif >= 10K (clear warm eye vs cold eyewall)
+        #   mean_std < 15K (reasonably symmetric radial profile)
+        # - Otherwise fall back to best-track interpolation
         center_method = "track"
         if wind is not None and wind >= 50:
             try:
@@ -2717,7 +2719,9 @@ def _precompute_hovmoller(sid: str, track_points: list, storm_lon: float = 0.0,
                     search_radius_km=80.0,
                     max_iterations=3,
                 )
-                if cfix.get("lat") is not None:
+                if (cfix.get("lat") is not None
+                        and cfix.get("ir_rad_dif", 0) >= 10.0
+                        and cfix.get("mean_std", 99) < 15.0):
                     c_lat, c_lon = cfix["lat"], cfix["lon"]
                     center_method = "ir_fix"
             except Exception:

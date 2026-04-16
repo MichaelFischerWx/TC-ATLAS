@@ -74,9 +74,9 @@ def find_ir_center(
     if rows < 10 or cols < 10:
         return {"success": False}
 
-    # Subsample to ~250px max dimension for speed.
-    # 8km effective resolution is sufficient for center-finding.
-    _MAX_DIM = 250
+    # Subsample to ~500px max dimension.
+    # ~4km effective resolution for accurate center-finding.
+    _MAX_DIM = 500
     _step = 1
     if rows > _MAX_DIM or cols > _MAX_DIM:
         _step = max(rows, cols) // _MAX_DIM
