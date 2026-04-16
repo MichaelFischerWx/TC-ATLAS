@@ -2509,7 +2509,7 @@ _hovmoller_cache: OrderedDict = OrderedDict()
 _HOVMOLLER_CACHE_MAX = 20
 
 
-_HOV_CACHE_VER = "v4"  # v4 = relaxed center-finding (no min thresholds, fast)
+_HOV_CACHE_VER = "v5"  # v5 = optimized center-finding (250px, coarse-to-fine)
 
 
 def _gcs_get_hovmoller(sid: str):
