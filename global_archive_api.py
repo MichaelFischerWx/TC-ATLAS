@@ -2509,7 +2509,7 @@ _hovmoller_cache: OrderedDict = OrderedDict()
 _HOVMOLLER_CACHE_MAX = 20
 
 
-_HOV_CACHE_VER = "v8"  # v8 = coldest-ring gate (eyewall <= -40C from find_ir_center)
+_HOV_CACHE_VER = "v9"  # v9 = inner-core data quality check (reject <70% valid within 100km)
 
 
 def _gcs_get_hovmoller(sid: str):
@@ -2741,6 +2741,15 @@ def _precompute_hovmoller(sid: str, track_points: list, storm_lon: float = 0.0,
         dist = np.sqrt(DY * DY + DX * DX)
         bins = np.floor(dist / dr_km).astype(np.int32)
         valid = np.isfinite(arr) & (arr > 0)
+
+        # Data quality check: reject frames with poor coverage in inner core.
+        # If >30% of pixels within 100km are missing/invalid, the radial
+        # profile will have gaps — likely a MergIR swath boundary or data gap.
+        inner_mask = dist <= 100.0
+        n_inner_total = np.count_nonzero(inner_mask)
+        n_inner_valid = np.count_nonzero(valid & inner_mask)
+        if n_inner_total > 0 and n_inner_valid / n_inner_total < 0.7:
+            return None  # skip this frame
 
         profile = [None] * n_rad_bins
         for b in range(n_rad_bins):
