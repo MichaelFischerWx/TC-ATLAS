@@ -96,6 +96,32 @@ def _gcs_get_frame(sid: str, frame_idx: int, source: str = "ir") -> dict | None:
         return None
 
 
+def _gcs_list_frame_indices(sid: str, source: str = "ir") -> set:
+    """List present frame indices under {version}/{source}/{sid}/ on GCS.
+
+    One LIST call replaces N GETs for Hovmöller pre-compute, where many
+    of the frames may not be cached yet. Callers can use membership tests
+    on the returned set to skip GET attempts for misses.
+    """
+    bucket = _get_gcs_bucket()
+    if bucket is None:
+        return set()
+    prefix = f"{_GCS_CACHE_VERSION}/{source}/{sid}/"
+    try:
+        present = set()
+        for blob in bucket.list_blobs(prefix=prefix, timeout=5):
+            stem = blob.name.rsplit("/", 1)[-1]
+            if not stem.endswith(".json"):
+                continue
+            try:
+                present.add(int(stem[:-5]))
+            except ValueError:
+                continue
+        return present
+    except Exception:
+        return set()
+
+
 def _gcs_put_frame(sid: str, frame_idx: int, result: dict, source: str = "ir"):
     """Write a rendered frame to GCS in a background thread (fire-and-forget)."""
     bucket = _get_gcs_bucket()
@@ -1734,7 +1760,7 @@ def ir_meta(
         _mergir_meta_cache.move_to_end(cache_key)
         return JSONResponse(
             _mergir_meta_cache[cache_key],
-            headers={"Cache-Control": "public, max-age=3600"},
+            headers={"Cache-Control": "public, max-age=3600, s-maxage=86400"},
         )
 
     year = _parse_sid_year(sid)
@@ -1922,7 +1948,9 @@ def ir_meta(
 
     # Fire-and-forget: precompute Hovmöller in background so it's cached
     # when the user clicks the button. Skip if already cached.
-    if result.get("available") and track and sid not in _hovmoller_cache:
+    with _hovmoller_cache_lock:
+        _already_cached = sid in _hovmoller_cache
+    if result.get("available") and track and not _already_cached:
         if _gcs_get_hovmoller(sid) is None:
             def _bg_hovmoller():
                 try:
@@ -1943,7 +1971,7 @@ def ir_meta(
 
     return JSONResponse(
         result,
-        headers={"Cache-Control": "public, max-age=3600"},
+        headers={"Cache-Control": "public, max-age=3600, s-maxage=86400"},
     )
 
 
@@ -2175,7 +2203,7 @@ def ir_frame(
         _maybe_heal_frame(sid, frame_idx, cached)
         return JSONResponse(
             cached,
-            headers={"Cache-Control": "public, max-age=86400", "X-Cache": "HIT"},
+            headers={"Cache-Control": "public, max-age=86400, s-maxage=604800, immutable", "X-Cache": "HIT"},
         )
 
     # Check GCS persistent cache
@@ -2189,7 +2217,7 @@ def ir_frame(
         _maybe_heal_frame(sid, frame_idx, gcs_result)
         return JSONResponse(
             gcs_result,
-            headers={"Cache-Control": "public, max-age=86400", "X-Cache": "GCS-HIT"},
+            headers={"Cache-Control": "public, max-age=86400, s-maxage=604800, immutable", "X-Cache": "GCS-HIT"},
         )
 
     # Check what source was determined for this storm.
@@ -2352,7 +2380,7 @@ def ir_frame(
 
     return JSONResponse(
         result,
-        headers={"Cache-Control": "public, max-age=86400", "X-Cache": "MISS"},
+        headers={"Cache-Control": "public, max-age=86400, s-maxage=604800, immutable", "X-Cache": "MISS"},
     )
 
 
@@ -2506,7 +2534,26 @@ def ir_batch(
 
 # GCS + in-memory cache for Hovmöller results (keyed by SID)
 _hovmoller_cache: OrderedDict = OrderedDict()
+_hovmoller_cache_lock = threading.Lock()
 _HOVMOLLER_CACHE_MAX = 20
+
+
+def _radial_profile_C(arr: np.ndarray, bins: np.ndarray,
+                      valid: np.ndarray, n_bins: int) -> list:
+    """Compute per-bin mean Tb in °C via np.bincount. Bins with <3 valid
+    pixels become None. ~10× faster than the per-bin Python loop."""
+    flat_bins = bins[valid]
+    flat_vals = arr[valid]
+    in_range = (flat_bins >= 0) & (flat_bins < n_bins)
+    flat_bins = flat_bins[in_range]
+    flat_vals = flat_vals[in_range].astype(np.float64, copy=False)
+
+    counts = np.bincount(flat_bins, minlength=n_bins)[:n_bins]
+    sums = np.bincount(flat_bins, weights=flat_vals, minlength=n_bins)[:n_bins]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        means_K = np.where(counts >= 3, sums / np.maximum(counts, 1), np.nan)
+    return [None if not np.isfinite(m) else round(float(m) - 273.15, 2)
+            for m in means_K]
 
 
 _HOV_CACHE_VER = "v15"  # v15 = gate2=0.7 std ratio, gate3=ring within 7C of P1(100km)
@@ -2624,6 +2671,13 @@ def _precompute_hovmoller(sid: str, track_points: list, storm_lon: float = 0.0,
 
     n_rad_bins = int(max_radius_km / dr_km)
 
+    # Pre-list cached frame indices once per source (single GCS LIST replaces
+    # N GET attempts for frames that haven't been cached yet).
+    _present_ir = _gcs_list_frame_indices(sid, source="ir")
+    _present_hursat = (
+        _gcs_list_frame_indices(sid, source="hursat") if source == "hursat" else set()
+    )
+
     def _compute_profile(frame_info):
         try:
             dt_str = frame_info["datetime"]
@@ -2639,8 +2693,11 @@ def _precompute_hovmoller(sid: str, track_points: list, storm_lon: float = 0.0,
         south = north = west = east = None
 
         if frame_idx is not None:
-            cached = _gcs_get_frame(sid, frame_idx, source="ir")
-            if cached is None and source == "hursat":
+            cached = (
+                _gcs_get_frame(sid, frame_idx, source="ir")
+                if frame_idx in _present_ir else None
+            )
+            if cached is None and source == "hursat" and frame_idx in _present_hursat:
                 cached = _gcs_get_frame(sid, frame_idx, source="hursat")
             if cached and cached.get("tb_data"):
                 try:
@@ -2743,11 +2800,7 @@ def _precompute_hovmoller(sid: str, track_points: list, storm_lon: float = 0.0,
         if n_inner_total > 0 and n_inner_valid / n_inner_total < 0.7:
             return None  # skip this frame
 
-        profile = [None] * n_rad_bins
-        for b in range(n_rad_bins):
-            mask = valid & (bins == b)
-            if np.count_nonzero(mask) >= 3:
-                profile[b] = round(float(np.mean(arr[mask])) - 273.15, 2)
+        profile = _radial_profile_C(arr, bins, valid, n_rad_bins)
 
         return {"time": dt_str, "profile": profile, "wind": wind,
                 "center": center_method, "clat": round(c_lat, 3), "clon": round(c_lon, 3),
@@ -2783,9 +2836,10 @@ def _precompute_hovmoller(sid: str, track_points: list, storm_lon: float = 0.0,
         "n_frames": len(out_times),
     }
 
-    _hovmoller_cache[sid] = result
-    if len(_hovmoller_cache) > _HOVMOLLER_CACHE_MAX:
-        _hovmoller_cache.popitem(last=False)
+    with _hovmoller_cache_lock:
+        _hovmoller_cache[sid] = result
+        while len(_hovmoller_cache) > _HOVMOLLER_CACHE_MAX:
+            _hovmoller_cache.popitem(last=False)
     threading.Thread(target=_gcs_put_hovmoller, args=(sid, result), daemon=True).start()
     return result
 
@@ -2814,22 +2868,26 @@ async def ir_hovmoller(
         raise HTTPException(status_code=400, detail="sid parameter required")
 
     # Check in-memory cache
-    if sid in _hovmoller_cache:
-        _hovmoller_cache.move_to_end(sid)
+    with _hovmoller_cache_lock:
+        _mem_hit = _hovmoller_cache.get(sid)
+        if _mem_hit is not None:
+            _hovmoller_cache.move_to_end(sid)
+    if _mem_hit is not None:
         return JSONResponse(
-            _hovmoller_cache[sid],
-            headers={"Cache-Control": "public, max-age=86400"},
+            _mem_hit,
+            headers={"Cache-Control": "public, max-age=86400, s-maxage=86400, immutable"},
         )
 
     # Check GCS cache
     gcs_result = _gcs_get_hovmoller(sid)
     if gcs_result is not None:
-        _hovmoller_cache[sid] = gcs_result
-        if len(_hovmoller_cache) > _HOVMOLLER_CACHE_MAX:
-            _hovmoller_cache.popitem(last=False)
+        with _hovmoller_cache_lock:
+            _hovmoller_cache[sid] = gcs_result
+            while len(_hovmoller_cache) > _HOVMOLLER_CACHE_MAX:
+                _hovmoller_cache.popitem(last=False)
         return JSONResponse(
             gcs_result,
-            headers={"Cache-Control": "public, max-age=86400"},
+            headers={"Cache-Control": "public, max-age=86400, s-maxage=86400, immutable"},
         )
 
     # Parse track points (from GET query param or POST body)
@@ -3027,12 +3085,7 @@ async def ir_hovmoller(
         # Mask invalid pixels
         valid = np.isfinite(arr) & (arr > 0)
 
-        profile = [None] * n_rad_bins
-        for b in range(n_rad_bins):
-            mask = valid & (bins == b)
-            count = np.count_nonzero(mask)
-            if count >= 3:
-                profile[b] = round(float(np.mean(arr[mask])) - 273.15, 2)
+        profile = _radial_profile_C(arr, bins, valid, n_rad_bins)
 
         return {
             "time": dt_str,
@@ -3114,9 +3167,10 @@ async def ir_hovmoller(
 
             result = _build_result(partial_results)
             if result:
-                _hovmoller_cache[sid] = result
-                if len(_hovmoller_cache) > _HOVMOLLER_CACHE_MAX:
-                    _hovmoller_cache.popitem(last=False)
+                with _hovmoller_cache_lock:
+                    _hovmoller_cache[sid] = result
+                    while len(_hovmoller_cache) > _HOVMOLLER_CACHE_MAX:
+                        _hovmoller_cache.popitem(last=False)
                 threading.Thread(target=_gcs_put_hovmoller, args=(sid, result), daemon=True).start()
                 yield f"data: {json.dumps(result)}\n\n"
             else:
@@ -3136,7 +3190,7 @@ async def ir_hovmoller(
 
     return JSONResponse(
         result,
-        headers={"Cache-Control": "public, max-age=86400"},
+        headers={"Cache-Control": "public, max-age=86400, s-maxage=604800, immutable"},
     )
 
 
