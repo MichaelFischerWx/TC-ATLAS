@@ -399,9 +399,18 @@ class CacheHeaderMiddleware(BaseHTTPMiddleware):
         # Only cache successful responses
         if response.status_code == 200:
             if any(path.startswith(p) for p in self.IMMUTABLE_PREFIXES):
-                response.headers['Cache-Control'] = 'public, max-age=86400, immutable'
+                # Immutable scientific data: browser holds 1d, CDN holds 7d.
+                # s-maxage + immutable let Cloud CDN absorb repeat hits without
+                # origin round-trips; 'immutable' skips conditional revalidation.
+                response.headers['Cache-Control'] = (
+                    'public, max-age=86400, s-maxage=604800, immutable'
+                )
             elif any(path.startswith(p) for p in self.SEMI_STABLE_PREFIXES):
-                response.headers['Cache-Control'] = 'public, max-age=3600'
+                # Composites may gain new cases; short browser TTL + longer CDN
+                # with stale-while-revalidate for smooth refresh.
+                response.headers['Cache-Control'] = (
+                    'public, max-age=3600, s-maxage=21600, stale-while-revalidate=300'
+                )
             elif path in self.SHORT_CACHE_PATHS:
                 response.headers['Cache-Control'] = 'public, max-age=300'
 
@@ -617,9 +626,11 @@ _vortex_eras_done = 0                    # how many merge eras have finished pas
 _vortex_db_means: dict = {}              # {"h1": float, "wd": float} after finalize
 _vortex_lock = threading.Lock()          # guard the counter + finalize
 _plot_cache: OrderedDict = OrderedDict()
+_plot_cache_lock = threading.Lock()
 _PLOT_CACHE_MAX = 40   # ~40 plots × ~150 KB ≈ 6 MB max (was 150)
 
 _data_cache: OrderedDict = OrderedDict()
+_data_cache_lock = threading.Lock()
 _DATA_CACHE_MAX = 20   # ~20 entries — JSON dicts can be large (was 100)
 
 # Precomputed hybrid-coordinate climatology (Fischer et al. 2025)
@@ -1112,9 +1123,12 @@ def get_data(
 
     # Serve from cache if available (instant — no S3 read or computation)
     cache_key = (case_index, variable, round(level_km, 1), data_type, overlay, wind_barbs, tilt_profile)
-    if cache_key in _data_cache:
-        _data_cache.move_to_end(cache_key)
-        return JSONResponse(_data_cache[cache_key], headers={"X-Cache": "HIT"})
+    with _data_cache_lock:
+        _cached = _data_cache.get(cache_key)
+        if _cached is not None:
+            _data_cache.move_to_end(cache_key)
+    if _cached is not None:
+        return JSONResponse(_cached, headers={"X-Cache": "HIT"})
 
     try:
         ds, local_idx = resolve_case(case_index, data_type)
@@ -1223,9 +1237,13 @@ def get_data(
             print(f"Tilt profile extraction failed: {e}")
 
     # Store in cache
-    _data_cache[cache_key] = result
-    if len(_data_cache) > _DATA_CACHE_MAX:
-        _data_cache.popitem(last=False)  # evict oldest entry
+    with _data_cache_lock:
+        _data_cache[cache_key] = result
+        _evicted = False
+        while len(_data_cache) > _DATA_CACHE_MAX:
+            _data_cache.popitem(last=False)  # evict oldest entry
+            _evicted = True
+    if _evicted:
         gc.collect()
 
     return JSONResponse(result, headers={"X-Cache": "MISS"})
@@ -5291,9 +5309,12 @@ def plot(
 
     # Serve from cache if available (instant)
     cache_key = (case_index, variable, round(level_km, 1), data_type)
-    if cache_key in _plot_cache:
-        _plot_cache.move_to_end(cache_key)
-        return Response(content=_plot_cache[cache_key], media_type="image/png",
+    with _plot_cache_lock:
+        _cached_png = _plot_cache.get(cache_key)
+        if _cached_png is not None:
+            _plot_cache.move_to_end(cache_key)
+    if _cached_png is not None:
+        return Response(content=_cached_png, media_type="image/png",
                         headers={"X-Cache": "HIT"})
 
     try:
@@ -5311,9 +5332,13 @@ def plot(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Render error: {e}")
 
-    _plot_cache[cache_key] = png
-    if len(_plot_cache) > _PLOT_CACHE_MAX:
-        _plot_cache.popitem(last=False)  # evict oldest entry
+    with _plot_cache_lock:
+        _plot_cache[cache_key] = png
+        _evicted = False
+        while len(_plot_cache) > _PLOT_CACHE_MAX:
+            _plot_cache.popitem(last=False)  # evict oldest entry
+            _evicted = True
+    if _evicted:
         gc.collect()
     return Response(content=png, media_type="image/png", headers={"X-Cache": "MISS"})
 
