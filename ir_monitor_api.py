@@ -51,7 +51,7 @@ from satellite_ir import (
     WV_BAND,
 )
 
-from tc_center_fix import find_ir_center
+from tc_center_fix import find_ir_center, apply_center_gates
 
 try:
     import requests as _requests
@@ -2082,18 +2082,18 @@ def get_storm_ir_raw_frame(
                         bf_guess_lat = bf_fix["lat"]
                         bf_guess_lon = bf_fix["lon"]
                         break
-                cfix = find_ir_center(tb_float, frame_bounds, bf_guess_lat, bf_guess_lon,
-                                     ref_lat=interp_lat, ref_lon=interp_lon)
-                if cfix.get("success"):
-                    cached["center_fix"] = {
-                        "lat": cfix["lat"], "lon": cfix["lon"],
-                        "eye_score": cfix["eye_score"], "ir_rad_dif": cfix["ir_rad_dif"],
-                        "mean_std": cfix["mean_std"],
-                    }
+                gated = apply_center_gates(
+                    tb_float, frame_bounds, bf_guess_lat, bf_guess_lon,
+                    ref_lat=interp_lat, ref_lon=interp_lon,
+                )
+                cfix = gated["cfix_raw"]
+                if gated["passed"]:
+                    cached["center_fix"] = gated["center_fix"]
                 else:
                     cached["center_fix"] = {
                         "success": False,
-                        "reason": cfix.get("reason", "unknown"),
+                        "reason": gated["gate_info"].get("reason", "unknown"),
+                        "gates": gated["gate_info"],
                         "best_score": cfix.get("best_score", 0),
                         "best_ir_rad_dif": cfix.get("best_ir_rad_dif", 0),
                         "n_candidates": cfix.get("n_candidates", 0),
@@ -2158,44 +2158,13 @@ def get_storm_ir_raw_frame(
                 break
 
         try:
-            # Relaxed search, strict acceptance:
-            # 1. ir_rad_dif >= 15K — warm eye vs cold eyewall
-            # 2. std_ratio < 0.7 — symmetric relative to core variability
-            # 3. coldest_ring within 7°C of P1(inner 100km) — in the CDO
-            cfix_raw = find_ir_center(arr, frame_bounds, guess_lat, guess_lon,
-                                     ref_lat=interp_lat, ref_lon=interp_lon,
-                                     min_ir_rad_dif=0.0, min_eye_score=0.0)
-            if (cfix_raw.get("lat") is not None
-                    and cfix_raw.get("ir_rad_dif", 0) >= 15.0
-                    and cfix_raw.get("mean_std", 99) < 0.7):
-                # Gate 3: coldest ring within 7°C of P1 in inner 100km
-                _south_b, _west_b = frame_bounds[0]
-                _north_b, _east_b = frame_bounds[1]
-                _rows_b, _cols_b = arr.shape
-                _lat_span_b = _north_b - _south_b
-                _lon_span_b = _east_b - _west_b
-                _cos = np.cos(np.radians(interp_lat))
-                _dy_b = _lat_span_b / (_rows_b - 1) * 111.0
-                _dx_b = _lon_span_b / (_cols_b - 1) * 111.0 * _cos
-                _cy_b = (_north_b - interp_lat) / _lat_span_b * (_rows_b - 1)
-                _cx_b = (interp_lon - _west_b) / _lon_span_b * (_cols_b - 1)
-                _ri_b, _ci_b = np.arange(_rows_b), np.arange(_cols_b)
-                _DY_b, _DX_b = np.meshgrid((_ri_b - _cy_b) * _dy_b, (_ci_b - _cx_b) * _dx_b, indexing='ij')
-                _dist_b = np.sqrt(_DY_b**2 + _DX_b**2)
-                _inner_b = (np.isfinite(arr) & (arr > 0) & (_dist_b <= 100.0))
-                g3_pass = False
-                if np.count_nonzero(_inner_b) > 20:
-                    p1_K = float(np.percentile(arr[_inner_b], 1))
-                    g3_pass = (cfix_raw.get("coldest_ring", 999) - p1_K) <= 7.0
-
-                if g3_pass:
-                    center_fix = {
-                        "lat": cfix_raw["lat"],
-                        "lon": cfix_raw["lon"],
-                        "eye_score": cfix_raw.get("eye_score", 0),
-                        "ir_rad_dif": cfix_raw.get("ir_rad_dif", 0),
-                        "mean_std": cfix_raw.get("mean_std", 0),
-                    }
+            gated = apply_center_gates(
+                arr, frame_bounds, guess_lat, guess_lon,
+                ref_lat=interp_lat, ref_lon=interp_lon,
+            )
+            cfix_raw = gated["cfix_raw"]
+            if gated["passed"]:
+                center_fix = gated["center_fix"]
         except Exception:
             pass  # center fix is best-effort; never block frame delivery
 

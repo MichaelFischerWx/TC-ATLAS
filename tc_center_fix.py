@@ -330,3 +330,142 @@ def find_ir_center(
         "valid_frac": round(valid_frac, 4),
         "grid_shape": [rows, cols],
     }
+
+
+# ---------------------------------------------------------------------------
+# Shared quality-gate helper
+# ---------------------------------------------------------------------------
+# Applied after find_ir_center to decide whether a candidate is trustworthy
+# enough to accept. Single source of truth used by both the Real-Time IR
+# Monitor and the Global Archive Hovmöller. A candidate must pass all three
+# gates; otherwise the best-track position is kept.
+#
+#   g1: eye-minus-coldest-ring Tb difference >= 15 K
+#       (clear warm eye vs cold eyewall)
+#   g2: azimuthal std / core std < 0.7
+#       (symmetric eyewall relative to core variability)
+#   g3: coldest radial-mean Tb is within 7 °C of the 1st percentile of Tb
+#       within 100 km of the reference (best-track) position
+#       (eyewall is part of the deepest convection, not an outer band)
+#
+# The wind-speed threshold for even attempting a fix (>= 65 kt) lives at the
+# call sites, since eligibility is a policy decision, not a math decision.
+
+
+def apply_center_gates(
+    tb,
+    bounds,
+    guess_lat,
+    guess_lon,
+    ref_lat,
+    ref_lon,
+    g1_min_rad_dif=15.0,
+    g2_max_std_ratio=0.7,
+    g3_max_ring_diff_C=7.0,
+    g3_inner_radius_km=100.0,
+    **find_kwargs,
+):
+    """Run find_ir_center and apply the shared g1/g2/g3 quality gates.
+
+    Returns a dict: {
+        "passed":     bool — True if all three gates passed
+        "center_fix": dict or None — {lat, lon, eye_score, ir_rad_dif,
+                                      mean_std, coldest_ring, gates}
+                                      populated only on pass
+        "cfix_raw":   dict — the raw find_ir_center output (for logging)
+        "gate_info":  dict — diagnostic payload for frontend tooltips
+                             {g1_rad_dif, g2_std_ratio, g3_ring_C, g3_p1_C,
+                              g3_diff, cand_lat, cand_lon, reason?}
+    }
+    """
+    # Force find_ir_center to return candidates even with weak internal
+    # thresholds, so gating decisions live in one place (here), not two.
+    find_kwargs.setdefault("min_ir_rad_dif", 0.0)
+    find_kwargs.setdefault("min_eye_score", 0.0)
+
+    cfix_raw = find_ir_center(
+        tb, bounds, guess_lat, guess_lon,
+        ref_lat=ref_lat, ref_lon=ref_lon,
+        **find_kwargs,
+    )
+
+    if cfix_raw.get("lat") is None:
+        return {
+            "passed": False,
+            "center_fix": None,
+            "cfix_raw": cfix_raw,
+            "gate_info": {"reason": cfix_raw.get("reason", "no_candidate")},
+        }
+
+    g1 = float(cfix_raw.get("ir_rad_dif", 0))
+    g2 = float(cfix_raw.get("mean_std", 99))
+    g3_ring_K = float(cfix_raw.get("coldest_ring", 999))
+    g3_ring_C = round(g3_ring_K - 273.15, 1)
+
+    # Gate 3 reference: 1st percentile of Tb within inner radius of ref position
+    south, west = bounds[0]
+    north, east = bounds[1]
+    rows, cols = tb.shape
+    lat_span = north - south
+    lon_span = east - west
+    g3_p1_C = None
+    g3_diff = None
+    if lat_span > 0 and lon_span > 0 and rows > 1 and cols > 1:
+        cos_lat = float(np.cos(np.radians(ref_lat)))
+        dy_km = lat_span / (rows - 1) * 111.0
+        dx_km = lon_span / (cols - 1) * 111.0 * cos_lat
+        cy = (north - ref_lat) / lat_span * (rows - 1)
+        cx = (ref_lon - west) / lon_span * (cols - 1)
+        ri = np.arange(rows)
+        ci = np.arange(cols)
+        DY, DX = np.meshgrid((ri - cy) * dy_km, (ci - cx) * dx_km, indexing="ij")
+        dist = np.sqrt(DY * DY + DX * DX)
+        inner = np.isfinite(tb) & (tb > 0) & (dist <= g3_inner_radius_km)
+        if int(np.count_nonzero(inner)) > 20:
+            p1_K = float(np.percentile(tb[inner], 1))
+            g3_p1_C = round(p1_K - 273.15, 1)
+            g3_diff = round(g3_ring_K - p1_K, 1)
+
+    gate_info = {
+        "g1_rad_dif": round(g1, 1),
+        "g2_std_ratio": round(g2, 3),
+        "g3_ring_C": g3_ring_C,
+        "g3_p1_C": g3_p1_C,
+        "g3_diff": g3_diff,
+        "cand_lat": cfix_raw["lat"],
+        "cand_lon": cfix_raw["lon"],
+    }
+
+    if g1 < g1_min_rad_dif:
+        gate_info["reason"] = "g1_rad_dif"
+    elif g2 >= g2_max_std_ratio:
+        gate_info["reason"] = "g2_std_ratio"
+    elif g3_diff is None:
+        gate_info["reason"] = "g3_insufficient_inner_pixels"
+    elif g3_diff > g3_max_ring_diff_C:
+        gate_info["reason"] = "g3_ring_too_warm"
+
+    passed = "reason" not in gate_info
+
+    if not passed:
+        return {
+            "passed": False,
+            "center_fix": None,
+            "cfix_raw": cfix_raw,
+            "gate_info": gate_info,
+        }
+
+    return {
+        "passed": True,
+        "center_fix": {
+            "lat": cfix_raw["lat"],
+            "lon": cfix_raw["lon"],
+            "eye_score": cfix_raw.get("eye_score", 0),
+            "ir_rad_dif": cfix_raw.get("ir_rad_dif", 0),
+            "mean_std": cfix_raw.get("mean_std", 0),
+            "coldest_ring": cfix_raw.get("coldest_ring", 0),
+            "gates": gate_info,
+        },
+        "cfix_raw": cfix_raw,
+        "gate_info": gate_info,
+    }

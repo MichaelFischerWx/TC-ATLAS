@@ -40,7 +40,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from PIL import Image
 
-from tc_center_fix import find_ir_center
+from tc_center_fix import find_ir_center, apply_center_gates
 
 logger = logging.getLogger("global_archive")
 
@@ -2702,56 +2702,23 @@ def _precompute_hovmoller(sid: str, track_points: list, storm_lon: float = 0.0,
         if lat_span <= 0 or lon_span <= 0:
             return None
 
-        # Center-finding with relaxed search but strict acceptance:
-        # Quality gates:
-        #   1. ir_rad_dif >= 15K — clear warm eye vs cold eyewall
-        #   2. std_ratio < 0.7 — symmetric relative to core variability
-        #   3. coldest_ring within 7°C of P1(inner 100km Tb) — eyewall
-        #      is part of the deepest convection, not an outer-core feature
+        # Center-finding with shared quality gates (see tc_center_fix.apply_center_gates).
+        # Attempt only at hurricane intensity (>= 65 kt) — matches the RT monitor policy.
         center_method = "track"
         gate_info = {}  # diagnostic info for frontend tooltip
-        if wind is not None and wind >= 50:
+        if wind is not None and wind >= 65:
             try:
-                cfix = find_ir_center(
+                gated = apply_center_gates(
                     arr, [[south, west], [north, east]], c_lat, c_lon,
                     ref_lat=c_lat, ref_lon=c_lon,
-                    min_ir_rad_dif=0.0,
-                    min_eye_score=0.0,
                     search_radius_km=80.0,
                     max_iterations=3,
                 )
-                if cfix.get("lat") is not None:
-                    g1 = round(cfix.get("ir_rad_dif", 0), 1)
-                    g2 = round(cfix.get("mean_std", 99), 3)  # std ratio
-                    g3_ring_K = cfix.get("coldest_ring", 999)
-                    g3_ring_C = round(g3_ring_K - 273.15, 1)
-
-                    # Compute P1 of Tb within 100km of best-track center
-                    cos_lat_c = np.cos(np.radians(c_lat))
-                    _dy = lat_span / (rows - 1) * 111.0
-                    _dx = lon_span / (cols - 1) * 111.0 * cos_lat_c
-                    _cy = (north - c_lat) / lat_span * (rows - 1)
-                    _cx = (c_lon - west) / lon_span * (cols - 1)
-                    _ri, _ci = np.arange(rows), np.arange(cols)
-                    _DY, _DX = np.meshgrid((_ri - _cy) * _dy, (_ci - _cx) * _dx, indexing='ij')
-                    _dist = np.sqrt(_DY**2 + _DX**2)
-                    _inner = (np.isfinite(arr) & (arr > 0) & (_dist <= 100.0))
-                    g3_p1_C = None
-                    g3_diff = None
-                    if np.count_nonzero(_inner) > 20:
-                        p1_K = float(np.percentile(arr[_inner], 1))
-                        g3_p1_C = round(p1_K - 273.15, 1)
-                        g3_diff = round(g3_ring_K - p1_K, 1)
-
-                    gate_info = {"g1_rad_dif": g1, "g2_std_ratio": g2,
-                                 "g3_ring_C": g3_ring_C, "g3_p1_C": g3_p1_C, "g3_diff": g3_diff,
-                                 "cand_lat": cfix["lat"], "cand_lon": cfix["lon"]}
-
-                    passed = (g1 >= 15.0 and g2 < 0.7
-                              and g3_diff is not None and g3_diff <= 7.0)
-                    if passed:
-                        c_lat, c_lon = cfix["lat"], cfix["lon"]
-                        center_method = "ir_fix"
+                gate_info = gated["gate_info"]
+                if gated["passed"]:
+                    c_lat = gated["center_fix"]["lat"]
+                    c_lon = gated["center_fix"]["lon"]
+                    center_method = "ir_fix"
             except Exception:
                 pass
 
@@ -3020,18 +2987,23 @@ async def ir_hovmoller(
         if lat_span <= 0 or lon_span <= 0:
             return None
 
-        # Attempt objective IR center-finding for hurricane-strength frames
+        # Attempt objective IR center-finding for hurricane-strength frames.
+        # Shared quality gates (g1/g2/g3) via apply_center_gates — identical
+        # policy to _precompute_hovmoller and the RT monitor.
         center_method = "track"
+        gate_info = {}
         if wind is not None and wind >= 65:
             try:
-                cfix = find_ir_center(
-                    arr, [[south, west], [north, east]],
-                    c_lat, c_lon,
+                gated = apply_center_gates(
+                    arr, [[south, west], [north, east]], c_lat, c_lon,
                     ref_lat=c_lat, ref_lon=c_lon,
+                    search_radius_km=80.0,
+                    max_iterations=3,
                 )
-                if cfix.get("success") and cfix.get("lat"):
-                    c_lat = cfix["lat"]
-                    c_lon = cfix["lon"]
+                gate_info = gated["gate_info"]
+                if gated["passed"]:
+                    c_lat = gated["center_fix"]["lat"]
+                    c_lon = gated["center_fix"]["lon"]
                     center_method = "ir_fix"
             except Exception:
                 pass  # fall back to best-track position
@@ -3069,6 +3041,7 @@ async def ir_hovmoller(
             "center": center_method,
             "clat": round(c_lat, 3),
             "clon": round(c_lon, 3),
+            "gates": gate_info,
         }
 
     # Process frames concurrently (cap at 5 workers for OOM protection)
@@ -3105,6 +3078,7 @@ async def ir_hovmoller(
                 out_centers.append({
                     "lat": r["clat"], "lon": r["clon"],
                     "method": r["center"],
+                    "gates": r.get("gates", {}),
                 })
 
         if not out_times:
