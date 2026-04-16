@@ -2109,12 +2109,16 @@ def get_storm_ir_raw_frame(
                 if gated["passed"]:
                     cached["center_fix"] = gated["center_fix"]
                 else:
+                    # find_ir_center's success return uses `eye_score` /
+                    # `ir_rad_dif`; its no-candidate return uses `best_*`.
+                    # Prefer the success keys when gates rejected a found
+                    # candidate so the diagnostic chart shows real values.
                     cached["center_fix"] = {
                         "success": False,
                         "reason": gated["gate_info"].get("reason", "unknown"),
                         "gates": gated["gate_info"],
-                        "best_score": cfix.get("best_score", 0),
-                        "best_ir_rad_dif": cfix.get("best_ir_rad_dif", 0),
+                        "best_score": cfix.get("eye_score", cfix.get("best_score", 0)),
+                        "best_ir_rad_dif": cfix.get("ir_rad_dif", cfix.get("best_ir_rad_dif", 0)),
                         "n_candidates": cfix.get("n_candidates", 0),
                     }
                     if cfix.get("found_lat") is not None:
@@ -2184,6 +2188,18 @@ def get_storm_ir_raw_frame(
             cfix_raw = gated["cfix_raw"]
             if gated["passed"]:
                 center_fix = gated["center_fix"]
+            else:
+                # Store a failure record so the diagnostic chart and tooltip
+                # can show WHY gates rejected the candidate (otherwise the
+                # frontend has nothing to display for rejected frames).
+                center_fix = {
+                    "success": False,
+                    "reason": gated["gate_info"].get("reason", "unknown"),
+                    "gates": gated["gate_info"],
+                    "best_score": cfix_raw.get("eye_score", cfix_raw.get("best_score", 0)),
+                    "best_ir_rad_dif": cfix_raw.get("ir_rad_dif", cfix_raw.get("best_ir_rad_dif", 0)),
+                    "n_candidates": cfix_raw.get("n_candidates", 0),
+                }
         except Exception:
             pass  # center fix is best-effort; never block frame delivery
 

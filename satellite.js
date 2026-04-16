@@ -1298,7 +1298,7 @@
     function buildCenterFixTimeSeries() {
         var times = [], eyeScores = [], irRadDifs = [], meanStds = [];
         // Separate arrays for failed attempts (plotted as open markers)
-        var failTimes = [], failScores = [], failRadDifs = [], failReasons = [];
+        var failTimes = [], failScores = [], failRadDifs = [], failReasons = [], failGates = [];
         for (var i = 0; i < irFrames.length; i++) {
             var f = irFrames[i];
             if (!f || !f.center_fix) continue;
@@ -1323,12 +1323,14 @@
                         (f.center_fix.dist_deg || 0).toFixed(2) + '\u00B0)';
                 }
                 failReasons.push(reason);
+                failGates.push(f.center_fix.gates || null);
             }
         }
         if (times.length < 2 && failTimes.length === 0) return null;
         return {
             times: times, eyeScores: eyeScores, irRadDifs: irRadDifs, meanStds: meanStds,
-            failTimes: failTimes, failScores: failScores, failRadDifs: failRadDifs, failReasons: failReasons
+            failTimes: failTimes, failScores: failScores, failRadDifs: failRadDifs,
+            failReasons: failReasons, failGates: failGates
         };
     }
 
@@ -1425,8 +1427,19 @@
             var failHoverScore = [], failHoverRad = [];
             for (var fi = 0; fi < ts.failTimes.length; fi++) {
                 var reason = (ts.failReasons[fi] || 'unknown').replace(/_/g, ' ');
-                failHoverScore.push('FAILED: ' + reason + '<br>Best score: ' + (ts.failScores[fi] || 0).toFixed(1));
-                failHoverRad.push('FAILED: ' + reason + '<br>Best \u0394T: ' + (ts.failRadDifs[fi] || 0).toFixed(1) + ' K');
+                var gateLine = '';
+                var gi = ts.failGates ? ts.failGates[fi] : null;
+                if (gi) {
+                    var g1Mark = (gi.g1_rad_dif >= 15) ? '\u2713' : '\u2717';
+                    var g2Mark = (gi.g2_std_ratio < 0.7) ? '\u2713' : '\u2717';
+                    var g3Mark = (gi.g3_diff != null && gi.g3_diff <= 7) ? '\u2713' : '\u2717';
+                    gateLine = '<br>' + g1Mark + ' \u0394T=' + gi.g1_rad_dif + 'K' +
+                        ' &nbsp; ' + g2Mark + ' \u03C3=' + gi.g2_std_ratio +
+                        ' &nbsp; ' + g3Mark + ' ring\u0394=' +
+                        (gi.g3_diff != null ? gi.g3_diff : '?') + 'K';
+                }
+                failHoverScore.push('FAILED: ' + reason + '<br>Best score: ' + (ts.failScores[fi] || 0).toFixed(1) + gateLine);
+                failHoverRad.push('FAILED: ' + reason + '<br>Best \u0394T: ' + (ts.failRadDifs[fi] || 0).toFixed(1) + ' K' + gateLine);
             }
             traces.push({
                 x: ts.failTimes, y: ts.failScores, type: 'scatter', mode: 'markers',
