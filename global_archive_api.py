@@ -2509,7 +2509,7 @@ _hovmoller_cache: OrderedDict = OrderedDict()
 _HOVMOLLER_CACHE_MAX = 20
 
 
-_HOV_CACHE_VER = "v14"  # v14 = std ratio gate tightened to 0.6, tooltip fix
+_HOV_CACHE_VER = "v15"  # v15 = gate2=0.7 std ratio, gate3=ring within 7C of P1(100km)
 
 
 def _gcs_get_hovmoller(sid: str):
@@ -2705,8 +2705,9 @@ def _precompute_hovmoller(sid: str, track_points: list, storm_lon: float = 0.0,
         # Center-finding with relaxed search but strict acceptance:
         # Quality gates:
         #   1. ir_rad_dif >= 15K — clear warm eye vs cold eyewall
-        #   2. std_ratio < 0.6 — symmetric relative to core variability
-        #   3. coldest_ring <= -60°C — deep convective eyewall
+        #   2. std_ratio < 0.7 — symmetric relative to core variability
+        #   3. coldest_ring within 7°C of P1(inner 100km Tb) — eyewall
+        #      is part of the deepest convection, not an outer-core feature
         center_method = "track"
         gate_info = {}  # diagnostic info for frontend tooltip
         if wind is not None and wind >= 50:
@@ -2722,13 +2723,32 @@ def _precompute_hovmoller(sid: str, track_points: list, storm_lon: float = 0.0,
                 if cfix.get("lat") is not None:
                     g1 = round(cfix.get("ir_rad_dif", 0), 1)
                     g2 = round(cfix.get("mean_std", 99), 3)  # std ratio
-                    g3_ring = round(cfix.get("coldest_ring", 999) - 273.15, 1)  # °C
-                    # Always store the candidate position + gates for diagnostics
-                    gate_info = {"g1_rad_dif": g1, "g2_std_ratio": g2, "g3_ring_C": g3_ring,
+                    g3_ring_K = cfix.get("coldest_ring", 999)
+                    g3_ring_C = round(g3_ring_K - 273.15, 1)
+
+                    # Compute P1 of Tb within 100km of best-track center
+                    cos_lat_c = np.cos(np.radians(c_lat))
+                    _dy = lat_span / (rows - 1) * 111.0
+                    _dx = lon_span / (cols - 1) * 111.0 * cos_lat_c
+                    _cy = (north - c_lat) / lat_span * (rows - 1)
+                    _cx = (c_lon - west) / lon_span * (cols - 1)
+                    _ri, _ci = np.arange(rows), np.arange(cols)
+                    _DY, _DX = np.meshgrid((_ri - _cy) * _dy, (_ci - _cx) * _dx, indexing='ij')
+                    _dist = np.sqrt(_DY**2 + _DX**2)
+                    _inner = (np.isfinite(arr) & (arr > 0) & (_dist <= 100.0))
+                    g3_p1_C = None
+                    g3_diff = None
+                    if np.count_nonzero(_inner) > 20:
+                        p1_K = float(np.percentile(arr[_inner], 1))
+                        g3_p1_C = round(p1_K - 273.15, 1)
+                        g3_diff = round(g3_ring_K - p1_K, 1)
+
+                    gate_info = {"g1_rad_dif": g1, "g2_std_ratio": g2,
+                                 "g3_ring_C": g3_ring_C, "g3_p1_C": g3_p1_C, "g3_diff": g3_diff,
                                  "cand_lat": cfix["lat"], "cand_lon": cfix["lon"]}
 
-                    passed = (g1 >= 15.0 and g2 < 0.6
-                              and g3_ring <= -60.0)
+                    passed = (g1 >= 15.0 and g2 < 0.7
+                              and g3_diff is not None and g3_diff <= 7.0)
                     if passed:
                         c_lat, c_lon = cfix["lat"], cfix["lon"]
                         center_method = "ir_fix"

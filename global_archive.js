@@ -3908,12 +3908,12 @@ function updateHovCenterMarker(frameDtStr) {
     var gateHtml = '';
     if (g && (g.g1_rad_dif != null || g.g2_std_ratio != null)) {
         var g1Pass = g.g1_rad_dif >= 15;
-        var g2Pass = g.g2_std_ratio < 0.6;
-        var g3Pass = g.g3_ring_C != null && g.g3_ring_C <= -60;
+        var g2Pass = g.g2_std_ratio < 0.7;
+        var g3Pass = g.g3_diff != null && g.g3_diff <= 7;
         gateHtml = '<br><span style="font-size:10px;color:#94a3b8;">' +
             (g1Pass ? '✓' : '✗') + ' ΔT=' + g.g1_rad_dif + 'K (≥15)' +
-            '<br>' + (g2Pass ? '✓' : '✗') + ' σ ratio=' + g.g2_std_ratio + ' (<0.6)' +
-            '<br>' + (g3Pass ? '✓' : '✗') + ' Ring=' + g.g3_ring_C + '°C (≤-60)' +
+            '<br>' + (g2Pass ? '✓' : '✗') + ' σ ratio=' + g.g2_std_ratio + ' (<0.7)' +
+            '<br>' + (g3Pass ? '✓' : '✗') + ' Ring=' + g.g3_ring_C + '°C, P1=' + (g.g3_p1_C != null ? g.g3_p1_C : '?') + '°C (Δ' + (g.g3_diff != null ? g.g3_diff : '?') + '≤7)' +
             '</span>';
     }
 
