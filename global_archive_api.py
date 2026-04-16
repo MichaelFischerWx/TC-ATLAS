@@ -2509,7 +2509,7 @@ _hovmoller_cache: OrderedDict = OrderedDict()
 _HOVMOLLER_CACHE_MAX = 20
 
 
-_HOV_CACHE_VER = "v13"  # v13 = std ratio scoring (azi_std/core_std), -60C ring gate
+_HOV_CACHE_VER = "v14"  # v14 = std ratio gate tightened to 0.6, tooltip fix
 
 
 def _gcs_get_hovmoller(sid: str):
@@ -2705,7 +2705,7 @@ def _precompute_hovmoller(sid: str, track_points: list, storm_lon: float = 0.0,
         # Center-finding with relaxed search but strict acceptance:
         # Quality gates:
         #   1. ir_rad_dif >= 15K — clear warm eye vs cold eyewall
-        #   2. std_ratio < 0.85 — symmetric relative to core variability
+        #   2. std_ratio < 0.6 — symmetric relative to core variability
         #   3. coldest_ring <= -60°C — deep convective eyewall
         center_method = "track"
         gate_info = {}  # diagnostic info for frontend tooltip
@@ -2727,7 +2727,7 @@ def _precompute_hovmoller(sid: str, track_points: list, storm_lon: float = 0.0,
                     gate_info = {"g1_rad_dif": g1, "g2_std_ratio": g2, "g3_ring_C": g3_ring,
                                  "cand_lat": cfix["lat"], "cand_lon": cfix["lon"]}
 
-                    passed = (g1 >= 15.0 and g2 < 0.85
+                    passed = (g1 >= 15.0 and g2 < 0.6
                               and g3_ring <= -60.0)
                     if passed:
                         c_lat, c_lon = cfix["lat"], cfix["lon"]

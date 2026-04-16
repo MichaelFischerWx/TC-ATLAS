@@ -3903,26 +3903,28 @@ function updateHovCenterMarker(frameDtStr) {
         interactive: true,
         pane: 'markerPane'
     });
-    // Build tooltip with gate diagnostics
-    var tip = (isIRFix ? '<b style="color:#00e5ff;">IR fix</b>' : '<b>Best-track</b>') +
-        '&nbsp; ' + c.lat.toFixed(2) + '°, ' + c.lon.toFixed(2) + '°';
+    // Build gate diagnostics string (shared between main and reject tooltips)
     var g = c.gates;
+    var gateHtml = '';
     if (g && (g.g1_rad_dif != null || g.g2_std_ratio != null)) {
         var g1Pass = g.g1_rad_dif >= 15;
-        var g2Pass = g.g2_std_ratio < 0.85;
+        var g2Pass = g.g2_std_ratio < 0.6;
         var g3Pass = g.g3_ring_C != null && g.g3_ring_C <= -60;
-        tip += '<br><span style="font-size:10px;color:#94a3b8;">';
-        tip += (g1Pass ? '✓' : '✗') + ' ΔT=' + g.g1_rad_dif + 'K (≥15)';
-        tip += '<br>' + (g2Pass ? '✓' : '✗') + ' σ ratio=' + g.g2_std_ratio + ' (<0.85)';
-        tip += '<br>' + (g3Pass ? '✓' : '✗') + ' Ring=' + g.g3_ring_C + '°C (≤-60)';
-        tip += '</span>';
+        gateHtml = '<br><span style="font-size:10px;color:#94a3b8;">' +
+            (g1Pass ? '✓' : '✗') + ' ΔT=' + g.g1_rad_dif + 'K (≥15)' +
+            '<br>' + (g2Pass ? '✓' : '✗') + ' σ ratio=' + g.g2_std_ratio + ' (<0.6)' +
+            '<br>' + (g3Pass ? '✓' : '✗') + ' Ring=' + g.g3_ring_C + '°C (≤-60)' +
+            '</span>';
     }
+
+    var tip = (isIRFix ? '<b style="color:#00e5ff;">IR fix</b>' : '<b>Best-track</b>') +
+        '&nbsp; ' + c.lat.toFixed(2) + '°, ' + c.lon.toFixed(2) + '°' + gateHtml;
     hovCenterMarker.bindTooltip(tip, { className: 'track-tooltip' });
     hovCenterMarker.addTo(detailMap);
 
-    // Show rejected IR candidate as orange dashed crosshair (if different from accepted position)
+    // Show rejected IR candidate as orange crosshair
     if (!isIRFix && g && g.cand_lat != null && g.cand_lon != null) {
-        var rejColor = '#f97316';  // orange
+        var rejColor = '#f97316';
         var rejIcon = L.divIcon({
             className: '',
             html: '<div style="width:14px;height:14px;position:relative;opacity:0.7;">' +
@@ -3935,12 +3937,9 @@ function updateHovCenterMarker(frameDtStr) {
         hovRejectMarker = L.marker([g.cand_lat, g.cand_lon], {
             icon: rejIcon, interactive: true, pane: 'markerPane'
         });
-        hovRejectMarker.bindTooltip(
-            '<b style="color:#f97316;">Rejected IR candidate</b><br>' +
-            g.cand_lat.toFixed(2) + '°, ' + g.cand_lon.toFixed(2) + '°' +
-            '<br><span style="font-size:10px;color:#94a3b8;">' + tip.split('<br><span')[1],
-            { className: 'track-tooltip' }
-        );
+        var rejTip = '<b style="color:#f97316;">Rejected IR candidate</b><br>' +
+            g.cand_lat.toFixed(2) + '°, ' + g.cand_lon.toFixed(2) + '°' + gateHtml;
+        hovRejectMarker.bindTooltip(rejTip, { className: 'track-tooltip' });
         hovRejectMarker.addTo(detailMap);
     }
 }
