@@ -2509,7 +2509,7 @@ _hovmoller_cache: OrderedDict = OrderedDict()
 _HOVMOLLER_CACHE_MAX = 20
 
 
-_HOV_CACHE_VER = "v9"  # v9 = inner-core data quality check (reject <70% valid within 100km)
+_HOV_CACHE_VER = "v10"  # v10 = eyewall-band std (20-60km), P20 cold gate, stricter thresholds
 
 
 def _gcs_get_hovmoller(sid: str):
@@ -2703,13 +2703,11 @@ def _precompute_hovmoller(sid: str, track_points: list, storm_lon: float = 0.0,
             return None
 
         # Center-finding with relaxed search but strict acceptance:
-        # - Search considers ALL candidates (min thresholds = 0)
-        # - Accept the fix only if it passes quality gates:
-        #   1. ir_rad_dif >= 10K (clear warm eye vs cold eyewall)
-        #   2. mean_std < 15K (reasonably symmetric radial profile)
-        #   3. Inner 60km area-average Tb <= 233K (-40°C) — ensures
-        #      the center is in deep convection, not clear sky
-        # - Otherwise fall back to best-track interpolation
+        # Quality gates:
+        #   1. ir_rad_dif >= 15K — clear warm eye vs cold eyewall
+        #   2. mean_std < 12K — symmetric eyewall (now measured ±20km of coldest ring)
+        #   3. coldest_ring <= P20 of inner-200km Tb — eyewall is among the
+        #      coldest convection near the storm (adaptive, not fixed threshold)
         center_method = "track"
         if wind is not None and wind >= 50:
             try:
@@ -2721,12 +2719,25 @@ def _precompute_hovmoller(sid: str, track_points: list, storm_lon: float = 0.0,
                     search_radius_km=80.0,
                     max_iterations=3,
                 )
-                if (cfix.get("lat") is not None
-                        and cfix.get("ir_rad_dif", 0) >= 15.0
-                        and cfix.get("mean_std", 99) < 15.0
-                        and cfix.get("coldest_ring", 999) <= 233.15):  # eyewall <= -40°C
-                    c_lat, c_lon = cfix["lat"], cfix["lon"]
-                    center_method = "ir_fix"
+                if cfix.get("lat") is not None and cfix.get("ir_rad_dif", 0) >= 15.0 and cfix.get("mean_std", 99) < 12.0:
+                    # Percentile-based cold check: compute 10th percentile of
+                    # Tb within 200km of best-track center. The coldest ring
+                    # must be at or below this — ensures it's actually in deep
+                    # convection, not a warm feature misidentified as an eye.
+                    cos_lat_c = np.cos(np.radians(c_lat))
+                    _dy = lat_span / (rows - 1) * 111.0
+                    _dx = lon_span / (cols - 1) * 111.0 * cos_lat_c
+                    _cy = (north - c_lat) / lat_span * (rows - 1)
+                    _cx = (c_lon - west) / lon_span * (cols - 1)
+                    _ri, _ci = np.arange(rows), np.arange(cols)
+                    _DY, _DX = np.meshgrid((_ri - _cy) * _dy, (_ci - _cx) * _dx, indexing='ij')
+                    _dist = np.sqrt(_DY**2 + _DX**2)
+                    _inner = (np.isfinite(arr) & (arr > 0) & (_dist <= 200.0))
+                    if np.count_nonzero(_inner) > 20:
+                        p20 = float(np.percentile(arr[_inner], 20))
+                        if cfix.get("coldest_ring", 999) <= p20:
+                            c_lat, c_lon = cfix["lat"], cfix["lon"]
+                            center_method = "ir_fix"
             except Exception:
                 pass
 

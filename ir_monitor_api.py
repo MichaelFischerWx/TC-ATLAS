@@ -2158,17 +2158,17 @@ def get_storm_ir_raw_frame(
                 break
 
         try:
-            # Relaxed search (considers all candidates), quality-gated:
-            # 1. ir_rad_dif >= 10K (warm eye vs cold eyewall)
-            # 2. mean_std < 15K (symmetric radial profile)
-            # 3. Inner 60km area-avg Tb <= -40°C (deep convection)
+            # Relaxed search, strict acceptance:
+            # 1. ir_rad_dif >= 15K — warm eye vs cold eyewall
+            # 2. mean_std < 12K — symmetric eyewall (20-60km band)
+            # 3. coldest_ring <= 223K (-50°C) — deep convective eyewall
             cfix_raw = find_ir_center(arr, frame_bounds, guess_lat, guess_lon,
                                      ref_lat=interp_lat, ref_lon=interp_lon,
                                      min_ir_rad_dif=0.0, min_eye_score=0.0)
             if (cfix_raw.get("lat") is not None
                     and cfix_raw.get("ir_rad_dif", 0) >= 15.0
-                    and cfix_raw.get("mean_std", 99) < 15.0
-                    and cfix_raw.get("coldest_ring", 999) <= 233.15):  # eyewall <= -40°C
+                    and cfix_raw.get("mean_std", 99) < 12.0
+                    and cfix_raw.get("coldest_ring", 999) <= 223.15):  # eyewall <= -50°C
                 center_fix = {
                     "lat": cfix_raw["lat"],
                     "lon": cfix_raw["lon"],

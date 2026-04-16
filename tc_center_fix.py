@@ -205,7 +205,26 @@ def find_ir_center(
                 )
                 stds = np.sqrt(np.maximum(variances, 0.0))
 
-                mean_std = np.nanmean(stds[valid_bins])
+                # Find coldest ring and its radius
+                coldest_ring_val = np.nanmin(means[valid_bins])
+                coldest_ring_idx = np.nanargmin(means[valid_bins])
+                # Map back to actual bin index (valid_bins is a boolean mask)
+                valid_indices = np.where(valid_bins)[0]
+                coldest_ring_bin = valid_indices[coldest_ring_idx] if coldest_ring_idx < len(valid_indices) else 0
+                coldest_ring_km = coldest_ring_bin * dr
+
+                # Eyewall symmetry: std within 20-60km band only.
+                # This is where the eyewall lives — avoids contamination
+                # from the eye itself (0-20km) and outer asymmetric features (>60km).
+                ew_lo = int(20.0 / dr)
+                ew_hi = min(n_bins, int(60.0 / dr) + 1)
+                ew_bins = valid_bins.copy()
+                ew_bins[:ew_lo] = False
+                ew_bins[ew_hi:] = False
+                if np.sum(ew_bins) >= 2:
+                    mean_std = float(np.nanmean(stds[ew_bins]))
+                else:
+                    mean_std = float(np.nanmean(stds[valid_bins]))
                 if mean_std <= 0:
                     continue
 
@@ -215,7 +234,7 @@ def find_ir_center(
                     continue
                 eye_mean = np.mean(tb_patch[eye_ok])
 
-                ir_rad_dif = eye_mean - np.nanmin(means[valid_bins])
+                ir_rad_dif = eye_mean - coldest_ring_val
 
                 if ir_rad_dif < min_ir_rad_dif:
                     continue
