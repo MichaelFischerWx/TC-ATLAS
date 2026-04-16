@@ -21,11 +21,45 @@ import base64
 import gc
 import io
 import re
+import threading
+import time
 from collections import OrderedDict
 from datetime import datetime as _dt, timedelta, timezone
 from typing import Optional
 
 import numpy as np
+
+# ---------------------------------------------------------------------------
+# fs.ls() listing cache — S3 LIST is slow and results are stable for minutes
+# ---------------------------------------------------------------------------
+
+_FS_LS_TTL_SEC = 120
+_FS_LS_MAX_ENTRIES = 512
+_fs_ls_cache: "OrderedDict[tuple, tuple[float, list]]" = OrderedDict()
+_fs_ls_lock = threading.Lock()
+
+
+def _cached_fs_ls(fs, prefix, detail=False):
+    """LRU + TTL cache wrapper around fs.ls() to cut redundant S3 LIST calls."""
+    key = (id(fs), prefix, bool(detail))
+    now = time.monotonic()
+    with _fs_ls_lock:
+        hit = _fs_ls_cache.get(key)
+        if hit is not None:
+            ts, cached = hit
+            if now - ts < _FS_LS_TTL_SEC:
+                _fs_ls_cache.move_to_end(key)
+                return cached
+            del _fs_ls_cache[key]
+
+    result = fs.ls(prefix, detail=detail)
+
+    with _fs_ls_lock:
+        _fs_ls_cache[key] = (now, result)
+        _fs_ls_cache.move_to_end(key)
+        while len(_fs_ls_cache) > _FS_LS_MAX_ENTRIES:
+            _fs_ls_cache.popitem(last=False)
+    return result
 
 # ---------------------------------------------------------------------------
 # Lazy imports (same pattern as realtime_tdr_api.py)
@@ -248,7 +282,7 @@ def find_goes_file(bucket: str, target_dt: _dt,
     prefix = f"{bucket}/{IR_PRODUCT}/{target_dt.year}/{jday:03d}/{target_dt.hour:02d}/"
 
     try:
-        files = fs.ls(prefix, detail=False)
+        files = _cached_fs_ls(fs, prefix)
     except Exception:
         return None
 
@@ -387,7 +421,7 @@ def find_himawari_file(target_dt: _dt, tolerance_min: int = 20,
                   f"{cdt.year}/{cdt.month:02d}/{cdt.day:02d}/{hhmm}/")
 
         try:
-            files = fs.ls(prefix, detail=False)
+            files = _cached_fs_ls(fs, prefix)
         except Exception:
             continue
 
@@ -684,7 +718,7 @@ def open_himawari_subset(s3_prefix: str, center_lat: float, center_lon: float,
 
     # List files in the prefix directory
     try:
-        all_files = fs.ls(s3_prefix, detail=False)
+        all_files = _cached_fs_ls(fs, s3_prefix)
     except Exception as e:
         raise RuntimeError(f"Cannot list {s3_prefix}: {e}")
 

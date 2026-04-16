@@ -290,6 +290,7 @@ _active_storms_lock = threading.Lock()
 _last_poll_time: float = 0.0
 
 _ir_frame_cache: OrderedDict = OrderedDict()
+_ir_frame_cache_lock = threading.Lock()
 
 # Best-track interpolation cache for center-fix initial guess
 # Stores (datetime, lat, lon) tuples per storm for time-aware position estimates
@@ -1373,9 +1374,10 @@ def _prefetch_ir_frames(storms: list):
             storm_fetched = 0
             for target_dt in reversed(frame_times):
                 cache_key = (atcf_id.upper(), target_dt.strftime("%Y%m%d%H%M"))
-                if cache_key in _ir_frame_cache:
-                    total_cached += 1
-                    continue
+                with _ir_frame_cache_lock:
+                    if cache_key in _ir_frame_cache:
+                        total_cached += 1
+                        continue
 
                 try:
                     frame = fetch_ir_frame(
@@ -1385,9 +1387,10 @@ def _prefetch_ir_frames(storms: list):
                     continue
 
                 if frame:
-                    _ir_frame_cache[cache_key] = frame
-                    if len(_ir_frame_cache) > _IR_FRAME_CACHE_MAX:
-                        _ir_frame_cache.popitem(last=False)
+                    with _ir_frame_cache_lock:
+                        _ir_frame_cache[cache_key] = frame
+                        while len(_ir_frame_cache) > _IR_FRAME_CACHE_MAX:
+                            _ir_frame_cache.popitem(last=False)
                     storm_fetched += 1
                     total_fetched += 1
 
@@ -1885,18 +1888,20 @@ def get_storm_ir(
     for target_dt in reversed(frame_times):
         # Check cache
         cache_key = (atcf_id.upper(), target_dt.strftime("%Y%m%d%H%M"))
-        if cache_key in _ir_frame_cache:
-            _ir_frame_cache.move_to_end(cache_key)
-            frames.append(_ir_frame_cache[cache_key])
-            continue
+        with _ir_frame_cache_lock:
+            if cache_key in _ir_frame_cache:
+                _ir_frame_cache.move_to_end(cache_key)
+                frames.append(_ir_frame_cache[cache_key])
+                continue
 
         frame = fetch_ir_frame(center_lat, center_lon, target_dt, box_deg)
         if frame:
             frames.append(frame)
             # Cache the frame
-            _ir_frame_cache[cache_key] = frame
-            if len(_ir_frame_cache) > _IR_FRAME_CACHE_MAX:
-                _ir_frame_cache.popitem(last=False)
+            with _ir_frame_cache_lock:
+                _ir_frame_cache[cache_key] = frame
+                while len(_ir_frame_cache) > _IR_FRAME_CACHE_MAX:
+                    _ir_frame_cache.popitem(last=False)
 
     if not frames:
         raise HTTPException(
@@ -1906,7 +1911,7 @@ def get_storm_ir(
 
     return JSONResponse(
         content={"frames": frames, "storm": storm},
-        headers={"Cache-Control": "public, max-age=180"},
+        headers={"Cache-Control": "public, max-age=180, s-maxage=600, stale-while-revalidate=120"},
     )
 
 
@@ -1990,7 +1995,7 @@ def get_storm_ir_raw(
 
     return JSONResponse(
         content={"frames": frames, "storm": storm},
-        headers={"Cache-Control": "public, max-age=180"},
+        headers={"Cache-Control": "public, max-age=180, s-maxage=600, stale-while-revalidate=120"},
     )
 
 
