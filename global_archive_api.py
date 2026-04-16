@@ -2563,13 +2563,17 @@ def _precompute_hovmoller(sid: str, track_points: list, storm_lon: float = 0.0,
 
     if source in ("mergir", "gridsat"):
         frame_list = _build_mergir_frame_list(track_points)
+        # Add frame indices for GCS cache lookup
+        for i, f in enumerate(frame_list):
+            f["_frame_idx"] = i
     else:
         frames = _get_extracted_frames(sid, storm_lon=storm_lon)
         frame_list = []
         if frames:
             for i, ft in enumerate(frames):
                 frame_list.append({
-                    "datetime": ft[0], "lat": None, "lon": None, "_hursat_idx": i,
+                    "datetime": ft[0], "lat": None, "lon": None,
+                    "_hursat_idx": i, "_frame_idx": i,
                 })
 
     if not frame_list:
@@ -2629,32 +2633,70 @@ def _precompute_hovmoller(sid: str, track_points: list, storm_lon: float = 0.0,
 
         c_lat, c_lon, wind = _interp_position(frame_dt)
 
-        frame_2d, ir_bounds = None, None
-        half_domain = GRIDSAT_HALF_DOMAIN
+        # Try GCS frame cache first — frames already fetched by the IR viewer
+        frame_idx = frame_info.get("_frame_idx", frame_info.get("_hursat_idx"))
+        arr = None
+        south = north = west = east = None
 
-        if source == "mergir":
-            frame_2d, ir_bounds = _load_mergir_subset(frame_dt, c_lat, c_lon)
-            half_domain = MERGIR_HALF_DOMAIN
-        if frame_2d is None and source in ("mergir", "gridsat"):
-            frame_2d, ir_bounds = _load_gridsat_subset(frame_dt, c_lat, c_lon)
+        if frame_idx is not None:
+            cached = _gcs_get_frame(sid, frame_idx, source="ir")
+            if cached is None and source == "hursat":
+                cached = _gcs_get_frame(sid, frame_idx, source="hursat")
+            if cached and cached.get("tb_data"):
+                try:
+                    import base64 as _b64
+                    raw_u8 = np.frombuffer(
+                        _b64.b64decode(cached["tb_data"]), dtype=np.uint8
+                    ).reshape(cached["tb_rows"], cached["tb_cols"])
+                    vmin = cached.get("tb_vmin", TB_VMIN)
+                    vmax = cached.get("tb_vmax", TB_VMAX)
+                    # Decode uint8 back to Tb (K)
+                    arr = np.where(raw_u8 > 0,
+                                   vmin + (raw_u8.astype(np.float32) - 1) * (vmax - vmin) / 254.0,
+                                   np.nan)
+                    bounds_c = cached.get("bounds", {})
+                    if isinstance(bounds_c, dict):
+                        south, north = bounds_c.get("south"), bounds_c.get("north")
+                        west, east = bounds_c.get("west"), bounds_c.get("east")
+                    elif isinstance(bounds_c, list) and len(bounds_c) == 2:
+                        south, west = bounds_c[0]
+                        north, east = bounds_c[1]
+                except Exception:
+                    arr = None
+
+        # Fall back to direct satellite fetch if not in cache
+        if arr is None:
+            frame_2d = None
+            ir_bounds = None
             half_domain = GRIDSAT_HALF_DOMAIN
-        if frame_2d is None and frame_info.get("_hursat_idx") is not None:
-            hursat_frames = _get_extracted_frames(sid, storm_lon=storm_lon)
-            if hursat_frames and frame_info["_hursat_idx"] < len(hursat_frames):
-                frame_2d, ir_bounds = _load_frame_from_nc(hursat_frames[frame_info["_hursat_idx"]][1])
-                half_domain = GRIDSAT_HALF_DOMAIN
 
-        if frame_2d is None:
+            if source == "mergir":
+                frame_2d, ir_bounds = _load_mergir_subset(frame_dt, c_lat, c_lon)
+                half_domain = MERGIR_HALF_DOMAIN
+            if frame_2d is None and source in ("mergir", "gridsat"):
+                frame_2d, ir_bounds = _load_gridsat_subset(frame_dt, c_lat, c_lon)
+                half_domain = GRIDSAT_HALF_DOMAIN
+            if frame_2d is None and frame_info.get("_hursat_idx") is not None:
+                hursat_frames = _get_extracted_frames(sid, storm_lon=storm_lon)
+                if hursat_frames and frame_info["_hursat_idx"] < len(hursat_frames):
+                    frame_2d, ir_bounds = _load_frame_from_nc(hursat_frames[frame_info["_hursat_idx"]][1])
+                    half_domain = GRIDSAT_HALF_DOMAIN
+
+            if frame_2d is None:
+                return None
+
+            arr = np.asarray(frame_2d, dtype=np.float32)
+            if ir_bounds:
+                south, north = ir_bounds["south"], ir_bounds["north"]
+                west, east = ir_bounds["west"], ir_bounds["east"]
+            else:
+                south, north = c_lat - half_domain, c_lat + half_domain
+                west, east = c_lon - half_domain, c_lon + half_domain
+
+        if arr is None or south is None:
             return None
 
-        arr = np.asarray(frame_2d, dtype=np.float32)
         rows, cols = arr.shape
-        if ir_bounds:
-            south, north = ir_bounds["south"], ir_bounds["north"]
-            west, east = ir_bounds["west"], ir_bounds["east"]
-        else:
-            south, north = c_lat - half_domain, c_lat + half_domain
-            west, east = c_lon - half_domain, c_lon + half_domain
 
         lat_span, lon_span = north - south, east - west
         if lat_span <= 0 or lon_span <= 0:
