@@ -6226,6 +6226,22 @@
         fetchSeasonSummary();
         seasonSummaryTimer = setInterval(fetchSeasonSummary, SEASON_SUMMARY_INTERVAL_MS);
 
+        // Pause background polling when the tab is hidden; catch up on return.
+        var _pollHiddenAt = 0;
+        document.addEventListener('visibilitychange', function () {
+            if (document.hidden) {
+                if (pollTimer || seasonSummaryTimer) _pollHiddenAt = Date.now();
+                if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+                if (seasonSummaryTimer) { clearInterval(seasonSummaryTimer); seasonSummaryTimer = null; }
+            } else {
+                var awayMs = _pollHiddenAt ? Date.now() - _pollHiddenAt : 0;
+                _pollHiddenAt = 0;
+                if (awayMs > POLL_INTERVAL_MS / 2) pollActiveStorms();
+                if (!pollTimer) pollTimer = setInterval(pollActiveStorms, POLL_INTERVAL_MS);
+                if (!seasonSummaryTimer) seasonSummaryTimer = setInterval(fetchSeasonSummary, SEASON_SUMMARY_INTERVAL_MS);
+            }
+        });
+
         // Clean up timers on page unload to prevent memory leaks
         window.addEventListener('beforeunload', function () {
             if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }

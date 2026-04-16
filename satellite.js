@@ -94,6 +94,17 @@
 
     // ── IR Colormap LUTs ────────────────────────────────────────
     var IR_COLORMAPS = {};
+    var IR_COLORMAPS_32 = {};
+
+    function getLut32(name) {
+        var cached = IR_COLORMAPS_32[name];
+        if (cached) return cached;
+        var lut = IR_COLORMAPS[name];
+        if (!lut) return null;
+        var lut32 = new Uint32Array(lut.buffer, lut.byteOffset, lut.length >> 2);
+        IR_COLORMAPS_32[name] = lut32;
+        return lut32;
+    }
 
     (function buildColormaps() {
         function buildLUT(stops) {
@@ -395,7 +406,7 @@
         }
 
         if (!frame.tb_data) return;
-        var lut = IR_COLORMAPS[colormapName] || IR_COLORMAPS['enhanced'];
+        var lut32 = getLut32(colormapName) || getLut32('enhanced');
         var vb = getViewBounds(frame);
         if (!vb) return;
         var crop = getCropIndices(frame, vb);
@@ -412,25 +423,28 @@
         var buf32 = new Uint32Array(pixels.buffer);
         // ABGR little-endian for rgb(10, 11, 18) with alpha 255
         var bgColor32 = (255 << 24) | (18 << 16) | (11 << 8) | 10;
-        for (var i = 0; i < buf32.length; i++) buf32[i] = bgColor32;
+        buf32.fill(bgColor32);
 
         // Render cropped region scaled to fill the full canvas
         var scaleY = frame.rows / crop.rows;
         var scaleX = frame.cols / crop.cols;
+        var fCols = frame.cols;
+        var tb = frame.tb_data;
+
+        // Precompute dst-col → src-col mapping once per frame
+        var colLut = new Int32Array(fCols);
+        for (var cx = 0; cx < fCols; cx++) {
+            colLut[cx] = crop.c0 + (cx / scaleX | 0);
+        }
 
         for (var y = 0; y < frame.rows; y++) {
-            var srcRow = crop.r0 + Math.floor(y / scaleY);
-            if (srcRow < crop.r0 || srcRow >= crop.r1) continue;
-            var rowOffset = y * frame.cols;
-            for (var x = 0; x < frame.cols; x++) {
-                var srcCol = crop.c0 + Math.floor(x / scaleX);
-                if (srcCol < crop.c0 || srcCol >= crop.c1) continue;
-                var val = frame.tb_data[srcRow * frame.cols + srcCol];
+            var srcRow = crop.r0 + (y / scaleY | 0);
+            var dstRowOffset = y * fCols;
+            var srcRowOffset = srcRow * fCols;
+            for (var x = 0; x < fCols; x++) {
+                var val = tb[srcRowOffset + colLut[x]];
                 if (val !== 0) {
-                    var pi = (rowOffset + x) * 4;
-                    var li = val * 4;
-                    pixels[pi] = lut[li]; pixels[pi+1] = lut[li+1];
-                    pixels[pi+2] = lut[li+2]; pixels[pi+3] = lut[li+3];
+                    buf32[dstRowOffset + x] = lut32[val];
                 }
             }
         }
@@ -1024,7 +1038,7 @@
                 link.download = (name || 'satellite') + suffix + ts.replace(/[:\-T]/g, '').replace('Z', '') + '.gif';
                 link.href = url;
                 link.click();
-                setTimeout(function () { URL.revokeObjectURL(url); }, 5000);
+                requestAnimationFrame(function () { URL.revokeObjectURL(url); });
                 animIndex = savedAnimIndex;
                 renderBothPanels();
                 updateAnimUI();
@@ -2935,8 +2949,8 @@
                         buildValidIndices();
                         updateSliderMax();
                         // Show oldest frame (index 0) after loading — animation plays forward in time
-                        if (validFrameIndices.length > 0 && validFrameIndices.indexOf(0) >= 0) {
-                            animIndex = 0;
+                        if (validFrameIndices.length > 0) {
+                            animIndex = validFrameIndices[0];
                         }
                         renderBothPanels();
                         updateAnimUI();
@@ -3239,8 +3253,8 @@
                             if (loadStatusEl) loadStatusEl.textContent = '';
                             buildValidIndices();
                             updateSliderMax();
-                            if (validFrameIndices.length > 0 && validFrameIndices.indexOf(0) >= 0) {
-                                animIndex = 0;
+                            if (validFrameIndices.length > 0) {
+                                animIndex = validFrameIndices[0];
                             }
                             renderBothPanels();
                             updateAnimUI();
@@ -3587,44 +3601,70 @@
 
     // ── Polling ─────────────────────────────────────────────────
 
-    function startPolling() {
-        pollTimer = setInterval(function () {
-            fetch(API_BASE + '/ir-monitor/active-storms', { cache: 'no-store' })
-                .then(function (r) { return r.ok ? r.json() : null; })
-                .then(function (data) {
-                    if (!data) return;
-                    storms = (data.storms || []).slice();
-                    storms.sort(function (a, b) { return (b.vmax_kt || 0) - (a.vmax_kt || 0); });
-                    renderStormList();
-                    if (currentStormId) {
-                        var updated = storms.find(function (s) { return s.atcf_id === currentStormId; });
-                        if (updated && currentStorm) {
-                            // Check if position shifted enough to warrant refetch
-                            var dLat = Math.abs((updated.lat || 0) - (currentStorm.lat || 0));
-                            var dLon = Math.abs((updated.lon || 0) - (currentStorm.lon || 0));
-                            if (dLat > 0.3 || dLon > 0.3) {
-                                console.log('[Satellite] Storm position shifted (' +
-                                    dLat.toFixed(1) + '\u00B0 lat, ' + dLon.toFixed(1) + '\u00B0 lon) — refetching frames');
-                                currentStorm = updated;
-                                irFrames = []; validFrameIndices = [];
-                                if (viewMode !== 'diagnostics') rightFrames = [];
-                                loadFrames(currentStormId);
-                            } else {
-                                currentStorm = updated;
-                                // Auto-refresh frames to pick up newest imagery
-                                console.log('[Satellite] Auto-refreshing frames for latest imagery');
-                                irFrames = []; validFrameIndices = [];
-                                if (viewMode !== 'diagnostics') rightFrames = [];
-                                loadFrames(currentStormId);
-                            }
-                        } else if (updated) {
+    var _pollHiddenAt = 0;
+
+    function _pollOnce() {
+        fetch(API_BASE + '/ir-monitor/active-storms', { cache: 'no-store' })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (data) {
+                if (!data) return;
+                storms = (data.storms || []).slice();
+                storms.sort(function (a, b) { return (b.vmax_kt || 0) - (a.vmax_kt || 0); });
+                renderStormList();
+                if (currentStormId) {
+                    var updated = storms.find(function (s) { return s.atcf_id === currentStormId; });
+                    if (updated && currentStorm) {
+                        // Check if position shifted enough to warrant refetch
+                        var dLat = Math.abs((updated.lat || 0) - (currentStorm.lat || 0));
+                        var dLon = Math.abs((updated.lon || 0) - (currentStorm.lon || 0));
+                        if (dLat > 0.3 || dLon > 0.3) {
+                            console.log('[Satellite] Storm position shifted (' +
+                                dLat.toFixed(1) + '\u00B0 lat, ' + dLon.toFixed(1) + '\u00B0 lon) — refetching frames');
                             currentStorm = updated;
+                            irFrames = []; validFrameIndices = [];
+                            if (viewMode !== 'diagnostics') rightFrames = [];
+                            loadFrames(currentStormId);
+                        } else {
+                            currentStorm = updated;
+                            // Auto-refresh frames to pick up newest imagery
+                            console.log('[Satellite] Auto-refreshing frames for latest imagery');
+                            irFrames = []; validFrameIndices = [];
+                            if (viewMode !== 'diagnostics') rightFrames = [];
+                            loadFrames(currentStormId);
                         }
+                    } else if (updated) {
+                        currentStorm = updated;
                     }
-                })
-                .catch(function () {});
-        }, POLL_INTERVAL_MS);
+                }
+            })
+            .catch(function () {});
     }
+
+    function startPolling() {
+        if (pollTimer) return;
+        pollTimer = setInterval(_pollOnce, POLL_INTERVAL_MS);
+    }
+
+    function stopPolling() {
+        if (pollTimer) {
+            clearInterval(pollTimer);
+            pollTimer = null;
+        }
+    }
+
+    document.addEventListener('visibilitychange', function () {
+        if (document.hidden) {
+            if (pollTimer) {
+                _pollHiddenAt = Date.now();
+                stopPolling();
+            }
+        } else {
+            var awayMs = _pollHiddenAt ? Date.now() - _pollHiddenAt : 0;
+            _pollHiddenAt = 0;
+            if (awayMs > POLL_INTERVAL_MS / 2) _pollOnce();
+            startPolling();
+        }
+    });
 
     // ═══════════════════════════════════════════════════════════════
     // ── 88D NEXRAD RADAR OVERLAY ─────────────────────────────────
