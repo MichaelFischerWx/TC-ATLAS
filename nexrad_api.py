@@ -84,8 +84,12 @@ def _get_nexrad_fs():
 
 
 # ── In-memory LRU cache ──────────────────────────────────────
+# Each entry is ~100-150 KB (PNG + uint8 grid + metadata), so
+# 256 entries ≈ 25-40 MB in memory. A multi-storm archive session
+# (4-5 storms × 3-4 sites × 2 products × several tilts) evicts
+# frequently at the old size of 64.
 
-_CACHE_MAX = 64
+_CACHE_MAX = 256
 _frame_cache: OrderedDict = OrderedDict()
 _cache_lock = threading.Lock()
 
@@ -555,10 +559,42 @@ def _grid_radar(radar, product: str = "reflectivity",
             raise HTTPException(404, f"Field '{product}' not in radar data. "
                                 f"Available: {list(radar.fields.keys())}")
 
-    # Dealias velocity — try region-based first, then fourdd
+    # ── Select sweep BEFORE dealiasing ──
+    # NEXRAD VCP split-cuts put reflectivity on sweep 0 and velocity on
+    # sweep 1 at the same elevation angle, so we search for the first
+    # sweep that actually contains valid data for the requested field.
+    # (Dealiasing doesn't change which rays have valid data — unwrapped
+    # values occupy the same cells as the raw velocity — so it's safe
+    # to select on the raw field.)
+    sweep_idx = min(sweep, radar.nsweeps - 1)
+    for candidate in range(sweep_idx, min(sweep_idx + 4, radar.nsweeps)):
+        s0 = radar.sweep_start_ray_index["data"][candidate]
+        s1 = radar.sweep_end_ray_index["data"][candidate]
+        check = radar.fields[field]["data"][s0:s1 + 1]
+        if hasattr(check, "count"):
+            if check.count() > 0:
+                sweep_idx = candidate
+                break
+        else:
+            if np.isfinite(np.asarray(check)).any():
+                sweep_idx = candidate
+                break
+
+    # Extract just the chosen sweep so downstream dealiasing +
+    # Cartesian gridding operate on ~1/14 of the rays. A full VCP
+    # volume has 10-14 sweeps; dealias_region_based on the full
+    # volume was the single biggest wall-time hit (3-5 s per cold
+    # velocity request in Py-ART profiling).
+    try:
+        radar = radar.extract_sweeps([sweep_idx])
+        sweep_idx = 0  # single-sweep radar — target is now at index 0
+    except Exception as e:
+        logger.warning(f"extract_sweeps failed, continuing with full volume: {e}")
+
+    # Dealias velocity — now ~10× cheaper since we only have one sweep.
+    # Region-based first, unwrap-phase as fallback.
     if product == "velocity":
         _dealiased = False
-        # Method 1: region-based (works well for most cases)
         try:
             dealiased = pyart.correct.dealias_region_based(
                 radar, vel_field=field, centered=True
@@ -568,7 +604,6 @@ def _grid_radar(radar, product: str = "reflectivity",
             _dealiased = True
         except Exception as e:
             logger.warning(f"Region-based dealiasing failed: {e}")
-        # Method 2: unwrap-based fallback
         if not _dealiased:
             try:
                 dealiased = pyart.correct.dealias_unwrap_phase(
@@ -579,25 +614,6 @@ def _grid_radar(radar, product: str = "reflectivity",
                 _dealiased = True
             except Exception as e:
                 logger.warning(f"Unwrap dealiasing also failed: {e}")
-
-    # Find a sweep that has data for the requested field.
-    # NEXRAD VCP split-cuts put reflectivity on sweep 0 and velocity on
-    # sweep 1 at the same elevation angle — we need to search for the
-    # first sweep that actually contains valid data.
-    sweep_idx = min(sweep, radar.nsweeps - 1)
-    for candidate in range(sweep_idx, min(sweep_idx + 4, radar.nsweeps)):
-        s0 = radar.sweep_start_ray_index["data"][candidate]
-        s1 = radar.sweep_end_ray_index["data"][candidate]
-        check = radar.fields[field]["data"][s0:s1 + 1]
-        if hasattr(check, "count"):
-            # masked array — count non-masked
-            if check.count() > 0:
-                sweep_idx = candidate
-                break
-        else:
-            if np.isfinite(np.asarray(check)).any():
-                sweep_idx = candidate
-                break
 
     sweep_start = radar.sweep_start_ray_index["data"][sweep_idx]
     sweep_end = radar.sweep_end_ray_index["data"][sweep_idx]
