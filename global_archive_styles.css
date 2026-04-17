@@ -770,6 +770,16 @@ input[type="range"].ga-range::-moz-range-thumb {
     font-size: 0.65rem;
     padding: 1px 5px;
 }
+.ir-peak-btn {
+    background: rgba(251,191,36,0.14);
+    border: 1px solid rgba(251,191,36,0.4);
+    color: #fde68a;
+    white-space: nowrap;
+}
+.ir-peak-btn:hover {
+    background: rgba(251,191,36,0.28);
+    border-color: rgba(251,191,36,0.65);
+}
 
 /* Legacy horizontal fallback classes (kept for tc_radar compat) */
 .ir-map-controls:not(.ir-sidebar) {

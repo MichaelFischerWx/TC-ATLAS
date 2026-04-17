@@ -4438,6 +4438,43 @@ function syncIRToTime(clickedTime) {
     loadIRFrame(bestIdx);
 }
 
+/**
+ * Jump the IR playback to the frame closest to the storm's lifetime
+ * maximum intensity (LMI). Uses the existing track-at-time lookup
+ * that the Compare Storms "peak" button uses, so Storm Detail and
+ * Compare stay consistent.
+ */
+window.jumpIRToPeak = function () {
+    if (!selectedStorm || !irMeta || !irMeta.frames || !irMeta.frames.length) {
+        if (typeof showToast === 'function') showToast('IR frames not loaded yet');
+        return;
+    }
+    var track = allTracks[selectedStorm.sid] || [];
+    if (!track.length) {
+        if (typeof showToast === 'function') showToast('No track data for peak lookup');
+        return;
+    }
+    var bestIdx = 0;
+    var bestWind = -1;
+    for (var i = 0; i < irMeta.frames.length; i++) {
+        var f = irMeta.frames[i];
+        if (!f || !f.datetime) continue;
+        var pt = findTrackPointAtTime(track, f.datetime);
+        if (pt && pt.w != null && pt.w > bestWind) {
+            bestWind = pt.w;
+            bestIdx = i;
+        }
+    }
+    _ga('ga_jump_ir_peak', { sid: selectedStorm.sid, peak_wind_kt: bestWind, frame: bestIdx });
+    irFrameIdx = bestIdx;
+    _cacheIREls();
+    if (_irElSlider) _irElSlider.value = bestIdx;
+    loadIRFrame(bestIdx);
+    if (typeof showToast === 'function') {
+        showToast('Jumped to peak intensity · ' + bestWind + ' kt');
+    }
+};
+
 // ══════════════════════════════════════════════════════════════
 //  CLIMATOLOGY TAB
 // ══════════════════════════════════════════════════════════════

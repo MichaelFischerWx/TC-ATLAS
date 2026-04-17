@@ -516,6 +516,7 @@
                                 <button class="ga-btn ga-btn-sm ir-step-btn" onclick="stepIRFrame(-1)" title="Previous frame">&#9664;</button>
                                 <button id="ir-play-btn" class="ga-btn ga-btn-sm" onclick="toggleIRPlay()">&#9654;</button>
                                 <button class="ga-btn ga-btn-sm ir-step-btn" onclick="stepIRFrame(1)" title="Next frame">&#9654;</button>
+                                <button class="ga-btn ga-btn-sm ir-step-btn ir-peak-btn" onclick="jumpIRToPeak()" title="Jump to lifetime-max-intensity frame">&#9733;&nbsp;Peak</button>
                                 <input type="range" id="ir-slider" class="ga-range ir-slider ir-bar-slider" min="0" max="0" value="0" oninput="seekIRFrame(this.value)">
                                 <span id="ir-datetime" class="ir-datetime"></span>
                                 <select id="ir-speed" class="ga-select-sm" onchange="setIRSpeed(this.value)" title="Playback speed">
