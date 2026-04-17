@@ -6,6 +6,21 @@
 (function () {
 'use strict';
 
+// ── Inline-SVG icon helper (Lucide-style). Returns SVG string for
+// use in innerHTML; each icon inherits the button's accent color
+// via stroke:currentColor. ───────────────────────────────────
+var _ICON_PATHS = {
+    plane:     '<path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2Z"/>',
+    dish:      '<path d="M4 10a7.31 7.31 0 0 0 10 10Z"/><path d="m9 15 3-3"/><path d="M17 13a6 6 0 0 0-6-6"/><path d="M21 13A10 10 0 0 0 11 3"/>',
+    chartBar:  '<line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/>',
+    radio:     '<path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/>',
+    tornado:   '<path d="M21 4H3"/><path d="M18 8H6"/><path d="M19 12H9"/><path d="M16 16h-6"/><path d="M13 20h-3"/>',
+    network:   '<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>'
+};
+function _icon(name) {
+    return '<svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (_ICON_PATHS[name] || '') + '</svg>';
+}
+
 // ── GA4 analytics helper ─────────────────────────────────────
 function _ga(action, params) {
     if (typeof gtag === 'function') {
@@ -1079,7 +1094,7 @@ function selectStorm(storm) {
         var rk = (storm.name || '').toUpperCase() + '_' + storm.year;
         var re = tcRadarLookup && tcRadarLookup[rk];
         if (re) {
-            radarValEl.innerHTML = '<span style="color:#ffad00;">🛩️ ' + re.n + ' ' + (re.n === 1 ? 'analysis' : 'analyses') + '</span>';
+            radarValEl.innerHTML = '<span style="color:#ffad00;">' + _icon('radio') + re.n + ' ' + (re.n === 1 ? 'analysis' : 'analyses') + '</span>';
             radarRowEl.style.display = '';
         } else {
             radarRowEl.style.display = 'none';
@@ -5915,7 +5930,7 @@ window.toggleGlobalMWOverlay = function () {
     if (_gaMwVisible) {
         // Hide
         _gaMwVisible = false;
-        if (btn) btn.textContent = '\uD83D\uDCE1 MW';
+        if (btn) btn.innerHTML = _icon('dish') + 'MW';
         if (controls) controls.style.display = 'none';
         if (_gaMwMapOverlay && detailMap) { detailMap.removeLayer(_gaMwMapOverlay); }
         if (_gaMwMarkers && detailMap) { detailMap.removeLayer(_gaMwMarkers); }
@@ -6058,7 +6073,7 @@ function removeGlobalMWOverlay() {
     _gaMwLastAtcf = null;
     _gaMwMarkerDt = null;
     var btn = document.getElementById('ga-mw-toggle-btn');
-    if (btn) btn.textContent = '\uD83D\uDCE1 MW';
+    if (btn) btn.innerHTML = _icon('dish') + 'MW';
     var controls = document.getElementById('ga-mw-controls');
     if (controls) controls.style.display = 'none';
 }
@@ -6300,7 +6315,7 @@ window.toggleGlobalNexradOverlay = function () {
 
     if (_gaNexradVisible) {
         _gaNexradVisible = false;
-        if (btn) btn.textContent = '\uD83C\uDF00 88D';
+        if (btn) btn.innerHTML = _icon('tornado') + '88D';
         if (controls) controls.style.display = 'none';
         if (_gaNexradMapOverlay && detailMap) detailMap.removeLayer(_gaNexradMapOverlay);
         return;
@@ -6424,7 +6439,7 @@ function removeGlobalNexradOverlay() {
     _gaNexradVisible = false;
     _gaNexradLastStormId = null;
     var btn = document.getElementById('ga-nexrad-toggle-btn');
-    if (btn) btn.textContent = '\uD83C\uDF00 88D';
+    if (btn) btn.innerHTML = _icon('tornado') + '88D';
     var controls = document.getElementById('ga-nexrad-controls');
     if (controls) controls.style.display = 'none';
     var siteSelect = document.getElementById('ga-nexrad-site-select');
@@ -6585,7 +6600,7 @@ window.toggleModelOverlay = function () {
 
     if (_modelVisible) {
         _modelVisible = false;
-        if (btn) btn.textContent = '\uD83C\uDF10 Models';
+        if (btn) btn.innerHTML = _icon('network') + 'Models';
         if (controls) controls.style.display = 'none';
         if (chartControls) chartControls.style.display = 'none';
         _clearModelLayers();
@@ -7031,7 +7046,7 @@ function removeModelOverlay() {
     _modelLastAtcf = null;
     _modelVisible = false;
     var btn = document.getElementById('ga-models-toggle-btn');
-    if (btn) btn.textContent = '\uD83C\uDF10 Models';
+    if (btn) btn.innerHTML = _icon('network') + 'Models';
     var controls = document.getElementById('ga-model-controls');
     if (controls) controls.style.display = 'none';
     var chartControls = document.getElementById('model-chart-controls');
@@ -9617,7 +9632,7 @@ window.toggleScorecard = function () {
     if (_scorecardVisible) {
         panel.style.display = '';
         btn.classList.add('active');
-        btn.textContent = '📊 Scorecard';
+        btn.innerHTML = _icon('chartBar') + 'Scorecard';
 
         // Compute scorecard if not already done
         if (!_scorecardData && _modelData && selectedStorm) {
@@ -9639,7 +9654,7 @@ window.toggleScorecard = function () {
     } else {
         panel.style.display = 'none';
         btn.classList.remove('active');
-        btn.textContent = '📊 Scorecard';
+        btn.innerHTML = _icon('chartBar') + 'Scorecard';
         removeSHIPSTraces();
     }
 };
@@ -10304,7 +10319,7 @@ function removeScorecard() {
     var btn = document.getElementById('scorecard-toggle-btn');
     if (btn) {
         btn.classList.remove('active');
-        btn.textContent = '📊 Scorecard';
+        btn.innerHTML = _icon('chartBar') + 'Scorecard';
     }
     var envBtn = document.getElementById('env-toggle-btn');
     if (envBtn) envBtn.classList.remove('active');
@@ -10473,7 +10488,7 @@ function _gaFLReset() {
     }
     _gaFLRemoveFromMap();
     var btn = document.getElementById('ga-fl-toggle-btn');
-    if (btn) btn.textContent = '\u2708 Recon';
+    if (btn) btn.innerHTML = _icon('plane') + 'Recon';
     var controls = document.getElementById('ga-fl-controls');
     if (controls) controls.style.display = 'none';
     var ts = document.getElementById('ga-fl-ts-panel');
@@ -10547,7 +10562,7 @@ window.toggleGlobalFLOverlay = function () {
 
     if (_gaFLVisible) {
         _gaFLVisible = false;
-        if (btn) btn.textContent = '\u2708 Recon';
+        if (btn) btn.innerHTML = _icon('plane') + 'Recon';
         if (controls) controls.style.display = 'none';
         _gaFLRemoveFromMap();
         return;

@@ -2256,7 +2256,7 @@
 
             var popupHtml =
                 '<div class="sonde-popup">' +
-                '<div class="sonde-title">\uD83E\uDE82 Dropsonde ' + (sonde.sonde_id || '#' + (idx + 1)) + '</div>' +
+                '<div class="sonde-title">' + _icon('parachute') + 'Dropsonde ' + (sonde.sonde_id || '#' + (idx + 1)) + '</div>' +
                 '<div class="sonde-meta">' + sonde.launch_time + ' (' + tOffStr + ' from TDR)</div>' +
                 '<div class="sonde-meta">' + (sonde.platform || '') + ' / ' + (sonde.flight || '') + '</div>' +
                 '<div class="sonde-stats">' +
@@ -3749,7 +3749,7 @@
         legend.className = 'rt-fl-legend';
         legend.innerHTML =
             '<div class="fl-legend-row">' +
-            '<span class="fl-legend-label">\u2708 ' + info.label + ' (' + info.units + ')</span>' +
+            '<span class="fl-legend-label">' + _icon('plane') + info.label + ' (' + info.units + ')</span>' +
             '<select id="rt-fl-color-var" class="fl-legend-select" onchange="rtFLChangeColor(this.value)">' +
             Object.keys(_FL_COLOR_VARS).map(function (k) {
                 var v = _FL_COLOR_VARS[k];

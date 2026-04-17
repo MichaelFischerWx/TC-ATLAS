@@ -24,7 +24,13 @@ var _ICON_PATHS = {
     activity:  '<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>',
     clipboard: '<path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/>',
     link:      '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
-    explore:   '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/><path d="M11 8v6"/><path d="M8 11h6"/>'
+    explore:   '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/><path d="M11 8v6"/><path d="M8 11h6"/>',
+    droplet:   '<path d="M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5S5 13 5 15a7 7 0 0 0 7 7z"/>',
+    chartBar:  '<line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/>',
+    map:       '<polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21"/><line x1="9" y1="3" x2="9" y2="18"/><line x1="15" y1="6" x2="15" y2="21"/>',
+    beaker:    '<path d="M9 2v7.527a2 2 0 0 1-.211.896L4.72 18.55a1 1 0 0 0 .9 1.45h12.76a1 1 0 0 0 .9-1.45l-4.069-8.127A2 2 0 0 1 15 9.527V2"/><path d="M6 2h12"/><path d="M8.5 14h7"/>',
+    waves:     '<path d="M2 6c2 0 2-1 4-1s2 1 4 1 2-1 4-1 2 1 4 1 2-1 4-1"/><path d="M2 12c2 0 2-1 4-1s2 1 4 1 2-1 4-1 2 1 4 1 2-1 4-1"/><path d="M2 18c2 0 2-1 4-1s2 1 4 1 2-1 4-1 2 1 4 1 2-1 4-1"/>',
+    thermo:    '<path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4 4 0 1 0 5 0z"/>'
 };
 function _icon(name) {
     return '<svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (_ICON_PATHS[name] || '') + '</svg>';
@@ -1131,11 +1137,11 @@ function showERA5FieldMenu() {
 
     // ── Field options ──
     var fields = [
-        { key: 'shear_mag',   label: '\uD83C\uDF2C Shear (200\u2013850 hPa)' },
-        { key: 'rh_mid',      label: '\uD83D\uDCA7 Mid-Level RH (500\u2013700)' },
+        { key: 'shear_mag',   label: 'Shear (200\u2013850 hPa)' },
+        { key: 'rh_mid',      label: 'Mid-Level RH (500\u2013700)' },
         { key: 'div200',      label: '\u2B06 200 hPa Divergence' },
-        { key: 'sst',         label: '\uD83C\uDF0A Sea Surface Temperature' },
-        { key: 'entropy_def', label: '\uD83C\uDF21 Entropy Deficit (\u03c7\u2098)' },
+        { key: 'sst',         label: 'Sea Surface Temperature' },
+        { key: 'entropy_def', label: 'Entropy Deficit (\u03c7\u2098)' },
     ];
     fields.forEach(function(f) {
         var opt = document.createElement('div');
@@ -1602,7 +1608,7 @@ function initEnvOverlay() {
         '<div class="env-box">' +
             '<div class="env-ov-header">' +
                 '<div class="env-ov-header-left">' +
-                    '<span class="env-ov-logo">\uD83C\uDF21</span> ' +
+                    '<span class="env-ov-logo">' + _icon('thermo') + '</span> ' +
                     '<span class="env-ov-title">Environmental Context</span>' +
                     '<span class="env-ov-subtitle">ERA5 Reanalysis Diagnostics</span>' +
                 '</div>' +
@@ -1617,7 +1623,7 @@ function initEnvOverlay() {
                 // ── Left: Controls ──
                 '<div class="env-ov-controls">' +
                     '<div id="env-ov-case-info" class="env-case-info" style="display:none;"></div>' +
-                    '<div class="env-section-title">\uD83C\uDF0D 2D Field Display</div>' +
+                    '<div class="env-section-title">' + _icon('globe') + '2D Field Display</div>' +
                     '<div class="env-ctrl-row"><label>Field</label>' +
                         '<select class="env-ctrl-select" id="env-ov-field" onchange="envOverlayChangeField(this.value)">' +
                             '<option value="shear_mag">Deep-Layer Shear (200\u2013850 hPa)</option>' +
@@ -1633,7 +1639,7 @@ function initEnvOverlay() {
                             '<span class="env-slider-val" id="env-ov-radius-val">500 km</span>' +
                         '</div>' +
                     '</div>' +
-                    '<div class="env-section-title" style="margin-top:18px;">\uD83D\uDCCA Scalar Domain</div>' +
+                    '<div class="env-section-title" style="margin-top:18px;">' + _icon('chartBar') + 'Scalar Domain</div>' +
                     '<div class="env-ctrl-row"><label>Inner Radius</label>' +
                         '<div class="env-slider-row">' +
                             '<input type="range" id="env-ov-inner" min="0" max="600" step="50" value="200" oninput="document.getElementById(\'env-ov-inner-val\').textContent=this.value+\' km\'">' +
@@ -1647,7 +1653,7 @@ function initEnvOverlay() {
                         '</div>' +
                     '</div>' +
                     '<button class="env-recompute-btn" id="env-ov-recompute" onclick="envOverlayRecomputeScalars()" disabled>Recompute Scalars</button>' +
-                    '<div class="env-section-title" style="margin-top:18px;">\uD83C\uDF21 Skew-T Sounding</div>' +
+                    '<div class="env-section-title" style="margin-top:18px;">' + _icon('thermo') + 'Skew-T Sounding</div>' +
                     '<div class="env-ctrl-row"><label>Averaging Radius</label>' +
                         '<div class="env-slider-row">' +
                             '<input type="range" id="env-ov-skewt-radius" min="50" max="800" step="50" value="200" oninput="envOverlaySkewTRadiusChange(this.value)">' +
@@ -1667,7 +1673,7 @@ function initEnvOverlay() {
                 // ── Right: Display area ──
                 '<div class="env-ov-display" id="env-ov-display">' +
                     '<div class="env-no-case" id="env-ov-placeholder">' +
-                        '<div class="env-no-case-icon">\uD83C\uDF0D</div>' +
+                        '<div class="env-no-case-icon">' + _icon('globe') + '</div>' +
                         '<div class="env-no-case-msg">Select a TC-RADAR case from the map and click <strong>Explore \u2192</strong> to load ERA5 environmental diagnostics.</div>' +
                     '</div>' +
                 '</div>' +
@@ -1802,13 +1808,13 @@ function renderEnvOverlay() {
             var hasStorm = document.getElementById('storm-select') && document.getElementById('storm-select').value;
             var msg, icon;
             if (!hasStorm) {
-                icon = '\uD83C\uDF0A';
+                icon = _icon('globe');
                 msg = 'Select a <strong>storm</strong> and <strong>case</strong> from the toolbar dropdowns above, then open this panel to view ERA5 environmental diagnostics.';
             } else if (!hasCase) {
-                icon = '\uD83C\uDF00';
+                icon = _icon('radio');
                 msg = 'Good \u2014 you\'ve selected a storm. Now choose a <strong>case</strong> from the toolbar dropdown, then reopen this panel.';
             } else {
-                icon = '\u26A0\uFE0F';
+                icon = '\u26A0';
                 msg = 'ERA5 data could not be loaded for this case. It may not be available in the ERA5 store.';
             }
             display.innerHTML =
@@ -1855,14 +1861,14 @@ function renderEnvOverlay() {
 
     // ── Row 2: Scalar cards ──
     html += '<div class="env-dash-card" style="margin-bottom:16px;">' +
-        '<div class="env-dash-card-header">\uD83D\uDCCA Environmental Diagnostics</div>' +
+        '<div class="env-dash-card-header">' + _icon('chartBar') + 'Environmental Diagnostics</div>' +
         '<div class="env-dash-card-body">' +
             '<div class="env-scalars-grid" id="env-ov-scalars"></div>' +
         '</div></div>';
 
     // ── Row 3: Skew-T + RH Profile ──
     html += '<div class="env-dash-row two-col">' +
-        '<div class="env-dash-card"><div class="env-dash-card-header">\uD83C\uDF21 Skew-T / Log-P Sounding</div>' +
+        '<div class="env-dash-card"><div class="env-dash-card-header">' + _icon('thermo') + 'Skew-T / Log-P Sounding</div>' +
             '<div class="env-dash-card-body"><div id="env-ov-skewt" style="height:400px;"></div></div></div>' +
         '<div class="env-dash-card"><div class="env-dash-card-header">Relative Humidity Profile</div>' +
             '<div class="env-dash-card-body"><div id="env-ov-rh-prof" style="height:400px;"></div></div></div>' +
@@ -1873,7 +1879,7 @@ function renderEnvOverlay() {
         '<div class="env-dash-card"><div class="env-dash-card-header">\u03b8 / \u03b8e Profile</div>' +
             '<div class="env-dash-card-body"><div id="env-ov-theta-prof" style="height:300px;"></div></div></div>' +
         '<div class="env-dash-card" id="env-ov-skewt-info-card">' +
-            '<div class="env-dash-card-header">\uD83D\uDCCB Sounding Info</div>' +
+            '<div class="env-dash-card-header">' + _icon('clipboard') + 'Sounding Info</div>' +
             '<div class="env-dash-card-body" id="env-ov-skewt-info" style="height:300px;font-size:12px;color:#9ca3af;overflow-y:auto;"></div>' +
         '</div>' +
     '</div>';
@@ -7568,7 +7574,7 @@ function initCompositePanel() {
             // ── Header ──
             '<div class="wizard-header">' +
                 '<div class="wizard-header-left">' +
-                    '<span class="wizard-header-logo">\uD83D\uDCCA</span>' +
+                    '<span class="wizard-header-logo">' + _icon('chartBar') + '</span>' +
                     '<span class="wizard-header-title">Composite Analysis</span>' +
                     '<span class="wizard-header-sub">Multi-case averaged fields</span>' +
                 '</div>' +
@@ -7609,7 +7615,7 @@ function initCompositePanel() {
                     '<div class="wizard-section-title">Analysis Mode</div>' +
                     '<div class="wizard-mode-cards">' +
                         '<div class="wizard-mode-card selected" id="wiz-mode-single" onclick="_wizardSetMode(\'single\')">' +
-                            '<div class="wizard-mode-icon">\uD83C\uDF00</div>' +
+                            '<div class="wizard-mode-icon">' + _icon('radio') + '</div>' +
                             '<div class="wizard-mode-title">Single Group</div>' +
                             '<div class="wizard-mode-desc">Composite one set of cases defined by filter criteria</div>' +
                         '</div>' +
@@ -7632,11 +7638,11 @@ function initCompositePanel() {
                         '</div>' +
                         '<div class="wizard-output-item" id="wiz-out-pv" onclick="_wizardToggleOutput(this, event)">' +
                             '<input type="checkbox" id="wiz-chk-pv">' +
-                            '<label for="wiz-chk-pv">\uD83D\uDDFA Plan View<small>Horizontal map at height</small></label>' +
+                            '<label for="wiz-chk-pv">' + _icon('map') + 'Plan View<small>Horizontal map at height</small></label>' +
                         '</div>' +
                         '<div class="wizard-output-item" id="wiz-out-cfad" onclick="_wizardToggleOutput(this, event)">' +
                             '<input type="checkbox" id="wiz-chk-cfad">' +
-                            '<label for="wiz-chk-cfad">\uD83D\uDCCA CFAD<small>Frequency by altitude diagram</small></label>' +
+                            '<label for="wiz-chk-cfad">' + _icon('chartBar') + 'CFAD<small>Frequency by altitude diagram</small></label>' +
                         '</div>' +
                         '<div class="wizard-output-item" id="wiz-out-anom" onclick="_wizardToggleOutput(this, event)">' +
                             '<input type="checkbox" id="wiz-chk-anom">' +
@@ -7648,11 +7654,11 @@ function initCompositePanel() {
                         '</div>' +
                     '</div>' +
 
-                    '<div class="wizard-section-title sat">\uD83D\uDEF0\uFE0F Satellite Outputs</div>' +
+                    '<div class="wizard-section-title sat">' + _icon('satellite') + 'Satellite Outputs</div>' +
                     '<div class="wizard-output-grid">' +
                         '<div class="wizard-output-item sat-item" id="wiz-out-ir-pv" onclick="_wizardToggleOutput(this, event)">' +
                             '<input type="checkbox" id="wiz-chk-ir-pv">' +
-                            '<label for="wiz-chk-ir-pv">\uD83C\uDF21 IR Plan View<small>RMW-relative brightness temp</small></label>' +
+                            '<label for="wiz-chk-ir-pv">' + _icon('satellite') + 'IR Plan View<small>RMW-relative brightness temp</small></label>' +
                         '</div>' +
                         '<div class="wizard-output-item sat-item" id="wiz-out-ir-az" onclick="_wizardToggleOutput(this, event)">' +
                             '<input type="checkbox" id="wiz-chk-ir-az">' +
@@ -7664,15 +7670,15 @@ function initCompositePanel() {
                     '<div class="wizard-output-grid">' +
                         '<div class="wizard-output-item env-item" id="wiz-out-env-pv" onclick="_wizardToggleOutput(this, event)">' +
                             '<input type="checkbox" id="wiz-chk-env-pv">' +
-                            '<label for="wiz-chk-env-pv">\uD83C\uDF0D ERA5 Plan View<small>Spatial environmental field</small></label>' +
+                            '<label for="wiz-chk-env-pv">' + _icon('globe') + 'ERA5 Plan View<small>Spatial environmental field</small></label>' +
                         '</div>' +
                         '<div class="wizard-output-item env-item" id="wiz-out-env-sc" onclick="_wizardToggleOutput(this, event)">' +
                             '<input type="checkbox" id="wiz-chk-env-sc">' +
-                            '<label for="wiz-chk-env-sc">\uD83D\uDCCA Scalar Diagnostics<small>SHIPS-style parameters</small></label>' +
+                            '<label for="wiz-chk-env-sc">' + _icon('chartBar') + 'Scalar Diagnostics<small>SHIPS-style parameters</small></label>' +
                         '</div>' +
                         '<div class="wizard-output-item env-item" id="wiz-out-env-th" onclick="_wizardToggleOutput(this, event)">' +
                             '<input type="checkbox" id="wiz-chk-env-th">' +
-                            '<label for="wiz-chk-env-th">\uD83C\uDF21 Thermo Profiles<small>Skew-T & Hodograph</small></label>' +
+                            '<label for="wiz-chk-env-th">' + _icon('thermo') + 'Thermo Profiles<small>Skew-T & Hodograph</small></label>' +
                         '</div>' +
                     '</div>' +
 
@@ -7714,7 +7720,7 @@ function initCompositePanel() {
                         // TDR config section
                         '<div class="wizard-config-section" id="wiz-cfg-tdr">' +
                             '<div class="wizard-config-section-title" onclick="_wizardToggleSection(this.parentElement)">' +
-                                '<span class="wcs-icon">\uD83C\uDF00</span> TDR Settings' +
+                                '<span class="wcs-icon">' + _icon('radio') + '</span> TDR Settings' +
                                 '<span class="wcs-toggle">\u25BC</span>' +
                             '</div>' +
                             '<div class="wizard-config-body">' +
@@ -7798,7 +7804,7 @@ function initCompositePanel() {
                                 '</div>' +
                                 // CFAD-specific options (visible only when CFAD is checked)
                                 '<div id="wiz-cfg-cfad-opts" style="display:none;border-top:1px solid rgba(255,255,255,0.06);padding-top:8px;margin-top:4px;">' +
-                                    '<div style="font-size:10px;font-weight:600;color:#22d3ee;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">\uD83D\uDCCA CFAD Options</div>' +
+                                    '<div style="font-size:10px;font-weight:600;color:#22d3ee;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">CFAD Options</div>' +
 
                                     // Bin width
                                     '<div class="wizard-config-row"><label>Bin Width</label>' +
@@ -7875,7 +7881,7 @@ function initCompositePanel() {
                         // Satellite config section (shown when IR outputs checked)
                         '<div class="wizard-config-section" id="wiz-cfg-sat" style="display:none;">' +
                             '<div class="wizard-config-section-title" onclick="_wizardToggleSection(this.parentElement)">' +
-                                '<span class="wcs-icon">\uD83D\uDEF0\uFE0F</span> Satellite Settings' +
+                                '<span class="wcs-icon">' + _icon('satellite') + '</span> Satellite Settings' +
                                 '<span class="wcs-toggle">\u25BC</span>' +
                             '</div>' +
                             '<div class="wizard-config-body">' +
@@ -7923,7 +7929,7 @@ function initCompositePanel() {
                         // Environment config section
                         '<div class="wizard-config-section" id="wiz-cfg-env">' +
                             '<div class="wizard-config-section-title" onclick="_wizardToggleSection(this.parentElement)">' +
-                                '<span class="wcs-icon">\uD83C\uDF0D</span> Environment Settings' +
+                                '<span class="wcs-icon">' + _icon('globe') + '</span> Environment Settings' +
                                 '<span class="wcs-toggle">\u25BC</span>' +
                             '</div>' +
                             '<div class="wizard-config-body">' +
@@ -7985,7 +7991,7 @@ function initCompositePanel() {
                     '</div>' +
                     '<div class="wizard-results-area" id="wizard-results-area">' +
                         '<div class="wizard-result-placeholder" id="wiz-result-placeholder">' +
-                            '<div class="wrp-icon">\uD83C\uDF00</div>' +
+                            '<div class="wrp-icon">' + _icon('radio') + '</div>' +
                             '<div class="wrp-msg">Select outputs in Step 1, set filters in Step 2, then click <strong>Generate Selected</strong> to compute composites.</div>' +
                         '</div>' +
                         // TDR result containers
@@ -8749,8 +8755,8 @@ function _buildCompToolbar() {
     return '<div class="comp-toolbar">' +
         '<button class="comp-tool-btn" onclick="_downloadCompCSV()" title="Download data as CSV">\u2B07 CSV</button>' +
         '<button class="comp-tool-btn" onclick="_downloadCompJSON()" title="Download full API response as JSON">\u2B07 JSON</button>' +
-        '<button class="comp-tool-btn" onclick="_toggleCompCaseList()" title="Show/hide cases used in this composite">\uD83D\uDCCB Cases</button>' +
-        '<button class="comp-tool-btn comp-link-btn" onclick="_copyCompPermalink()" title="Copy shareable link with current settings">\uD83D\uDD17 Copy Link</button>' +
+        '<button class="comp-tool-btn" onclick="_toggleCompCaseList()" title="Show/hide cases used in this composite">' + _icon('clipboard') + 'Cases</button>' +
+        '<button class="comp-tool-btn comp-link-btn" onclick="_copyCompPermalink()" title="Copy shareable link with current settings">' + _icon('link') + 'Copy Link</button>' +
     '</div>' +
     '<div class="comp-case-list-wrap" id="comp-case-list" style="display:none;"></div>';
 }
@@ -9069,11 +9075,11 @@ function _renderCompCaseList() {
             '<button onclick="_switchCaseListGroup(\'B\')" style="padding:3px 10px;font-size:10px;font-weight:600;border:1px solid rgba(255,255,255,0.15);border-radius:4px;cursor:pointer;font-family:\'JetBrains Mono\',monospace;' + activeB + '">Group B (' + nB + ')</button>' +
         '</div>';
         var groupColor = group === 'A' ? '#60a5fa' : '#f59e0b';
-        html += '<span class="comp-cl-title" style="color:' + groupColor + ';">\uD83D\uDCCB Group ' + group + ': ' + caseList.length + ' cases</span>';
+        html += '<span class="comp-cl-title" style="color:' + groupColor + ';">' + _icon('clipboard') + 'Group ' + group + ': ' + caseList.length + ' cases</span>';
     } else {
-        html += '<span class="comp-cl-title">\uD83D\uDCCB ' + caseList.length + ' cases used in composite</span>';
+        html += '<span class="comp-cl-title">' + _icon('clipboard') + caseList.length + ' cases used in composite</span>';
     }
-    html += '<button class="comp-tool-btn comp-cl-copy" onclick="_copyCompCaseIndices()" title="Copy case indices to clipboard">\uD83D\uDCCB Copy Indices</button>' +
+    html += '<button class="comp-tool-btn comp-cl-copy" onclick="_copyCompCaseIndices()" title="Copy case indices to clipboard">' + _icon('clipboard') + 'Copy Indices</button>' +
     '</div>' +
     '<div class="comp-cl-scroll"><table class="comp-cl-table"><thead><tr>' +
         '<th>Index</th><th>Storm</th><th>Date/Time</th><th>V<sub>max</sub> (kt)</th>' +
@@ -9535,9 +9541,9 @@ function _renderDiffAnomaly(targetId, diffJson, jsonA, jsonB, filtersA, filtersB
 
     // Create 3 stacked chart containers + toolbar
     el.innerHTML =
-        '<div style="margin-bottom:4px;padding:6px 10px;background:rgba(96,165,250,0.08);border:1px solid rgba(96,165,250,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#60a5fa;">\uD83D\uDD35 Group A</div>' +
+        '<div style="margin-bottom:4px;padding:6px 10px;background:rgba(96,165,250,0.08);border:1px solid rgba(96,165,250,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#60a5fa;">Group A</div>' +
         '<div id="comp-diff-anom-a" style="width:100%;height:460px;border-radius:8px;overflow:hidden;"></div>' +
-        '<div style="margin:12px 0 4px;padding:6px 10px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#f59e0b;">\uD83D\uDFE0 Group B</div>' +
+        '<div style="margin:12px 0 4px;padding:6px 10px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#f59e0b;">Group B</div>' +
         '<div id="comp-diff-anom-b" style="width:100%;height:460px;border-radius:8px;overflow:hidden;"></div>' +
         _buildShadingControlsRow('shd-danom-ab', {label: 'Panels A &amp; B', defaultVmin: -3, defaultVmax: 3}) +
         '<div style="margin:12px 0 4px;padding:6px 10px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#ef4444;">\u0394 Difference (A \u2212 B)</div>' +
@@ -10170,7 +10176,7 @@ function generateCompositePlanView() {
         .catch(function(err) { _showCompStatus('error', '\u2717 ' + (err.message || String(err))); })
         .finally(function() {
             if (btnPv) btnPv.disabled = false; if (btnAz) btnAz.disabled = false; if (btnSq) btnSq.disabled = false;
-            if (btnPv) btnPv.textContent = '\uD83D\uDDFA Plan View';
+            if (btnPv) btnPv.innerHTML = _icon('map') + 'Plan View';
         });
 }
 
@@ -10482,7 +10488,7 @@ function _renderIRPlanView(targetId, json, filters, pvParams) {
     var normLabel = json.normalize_rmw ? ' (RMW-norm)' : '';
     var shearLabel = json.shear_relative ? ' [Shear \u2192 Right]' : '';
     var title = _compositeFilterSummary(filters, json.n_cases) +
-                '<br>\uD83D\uDEF0\uFE0F IR Brightness Temperature' + normLabel + shearLabel;
+                '<br>IR Brightness Temperature' + normLabel + shearLabel;
 
     var shapes = [];
     var annotations = [];
@@ -10623,7 +10629,7 @@ function _renderIRAzMean(targetId, json, filters) {
 
     var normLabel = json.normalize_rmw ? ' (RMW-norm)' : '';
     var title = _compositeFilterSummary(filters, json.n_cases) +
-                '<br>\uD83D\uDEF0\uFE0F Azimuthal Mean IR Brightness Temperature' + normLabel;
+                '<br>Azimuthal Mean IR Brightness Temperature' + normLabel;
 
     var shapes = [];
     if (json.normalize_rmw) {
@@ -10750,9 +10756,9 @@ function _renderDiffIRPlanView(targetId, diffJson, jsonA, jsonB, filtersA, filte
     var diffVarInfo = diffJson.variable;
 
     el.innerHTML =
-        '<div style="margin-bottom:4px;padding:6px 10px;background:rgba(96,165,250,0.08);border:1px solid rgba(96,165,250,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#60a5fa;">\uD83D\uDD35 Group A</div>' +
+        '<div style="margin-bottom:4px;padding:6px 10px;background:rgba(96,165,250,0.08);border:1px solid rgba(96,165,250,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#60a5fa;">Group A</div>' +
         '<div id="comp-diff-irpv-a" style="width:100%;height:520px;border-radius:8px;overflow:hidden;"></div>' +
-        '<div style="margin:12px 0 4px;padding:6px 10px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#f59e0b;">\uD83D\uDFE0 Group B</div>' +
+        '<div style="margin:12px 0 4px;padding:6px 10px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#f59e0b;">Group B</div>' +
         '<div id="comp-diff-irpv-b" style="width:100%;height:520px;border-radius:8px;overflow:hidden;"></div>' +
         _buildShadingControlsRow('shd-dirpv-ab', {label: 'Panels A &amp; B', defaultVmin: varInfoA.vmin, defaultVmax: varInfoA.vmax}) +
         '<div style="margin:12px 0 4px;padding:6px 10px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#ef4444;">\u0394 Difference (A \u2212 B)</div>' +
@@ -10834,17 +10840,17 @@ function _renderDiffIRPlanView(targetId, diffJson, jsonA, jsonB, filtersA, filte
 
     // Group A
     var titleA = _compositeFilterSummary(filtersA, jsonA.n_cases) +
-                 '<br>\uD83D\uDEF0\uFE0F IR Brightness Temperature' + normLabel + shearLabel;
+                 '<br>IR Brightness Temperature' + normLabel + shearLabel;
     buildIRPvPlot('comp-diff-irpv-a', jsonA.plan_view, titleA, activeColorscale, activeVmin, activeVmax, varInfoA.units, jsonA);
 
     // Group B
     var titleB = _compositeFilterSummary(filtersB, jsonB.n_cases) +
-                 '<br>\uD83D\uDEF0\uFE0F IR Brightness Temperature' + normLabel + shearLabel;
+                 '<br>IR Brightness Temperature' + normLabel + shearLabel;
     buildIRPvPlot('comp-diff-irpv-b', jsonB.plan_view, titleB, activeColorscale, activeVmin, activeVmax, varInfoA.units, jsonB);
 
     // Difference
     var titleD = _diffFilterSummary(filtersA, filtersB, jsonA.n_cases, jsonB.n_cases) +
-                 '<br>\u0394 \uD83D\uDEF0\uFE0F IR Brightness Temperature' + normLabel + shearLabel;
+                 '<br>\u0394 IR Brightness Temperature' + normLabel + shearLabel;
     _registerShadingTargets('shd-dirpv-d', ['comp-diff-irpv-d'], _DIFF_COLORSCALE, diffVarInfo.vmin, diffVarInfo.vmax);
     buildIRPvPlot('comp-diff-irpv-d', diffJson.plan_view, titleD, _DIFF_COLORSCALE, diffVarInfo.vmin, diffVarInfo.vmax, diffVarInfo.units, null);
 }
@@ -10911,9 +10917,9 @@ function _renderDiffIRAzMean(targetId, jsonA, jsonB, diffProfile, maxAbs, filter
     var plotBg = '#0a1628';
 
     el.innerHTML =
-        '<div style="margin-bottom:4px;padding:6px 10px;background:rgba(96,165,250,0.08);border:1px solid rgba(96,165,250,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#60a5fa;">\uD83D\uDD35 Group A</div>' +
+        '<div style="margin-bottom:4px;padding:6px 10px;background:rgba(96,165,250,0.08);border:1px solid rgba(96,165,250,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#60a5fa;">Group A</div>' +
         '<div id="comp-diff-iraz-a" style="width:100%;height:360px;border-radius:8px;overflow:hidden;"></div>' +
-        '<div style="margin:12px 0 4px;padding:6px 10px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#f59e0b;">\uD83D\uDFE0 Group B</div>' +
+        '<div style="margin:12px 0 4px;padding:6px 10px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#f59e0b;">Group B</div>' +
         '<div id="comp-diff-iraz-b" style="width:100%;height:360px;border-radius:8px;overflow:hidden;"></div>' +
         '<div style="margin:12px 0 4px;padding:6px 10px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#ef4444;">\u0394 Difference (A \u2212 B)</div>' +
         '<div id="comp-diff-iraz-d" style="width:100%;height:360px;border-radius:8px;overflow:hidden;"></div>' +
@@ -10965,12 +10971,12 @@ function _renderDiffIRAzMean(targetId, jsonA, jsonB, diffProfile, maxAbs, filter
 
     // Group A
     var titleA = _compositeFilterSummary(filtersA, jsonA.n_cases) +
-                 '<br>\uD83D\uDEF0\uFE0F Azimuthal Mean IR Brightness Temperature' + normLabel;
+                 '<br>Azimuthal Mean IR Brightness Temperature' + normLabel;
     buildAzLine('comp-diff-iraz-a', jsonA.radial_profile, titleA, '#22d3ee');
 
     // Group B
     var titleB = _compositeFilterSummary(filtersB, jsonB.n_cases) +
-                 '<br>\uD83D\uDEF0\uFE0F Azimuthal Mean IR Brightness Temperature' + normLabel;
+                 '<br>Azimuthal Mean IR Brightness Temperature' + normLabel;
     buildAzLine('comp-diff-iraz-b', jsonB.radial_profile, titleB, '#f59e0b');
 
     // Difference
@@ -11173,9 +11179,9 @@ function _renderDiffAzMean(targetId, diffJson, jsonA, jsonB, filtersA, filtersB)
     var diffVarInfo = diffJson.variable;
 
     el.innerHTML =
-        '<div style="margin-bottom:4px;padding:6px 10px;background:rgba(96,165,250,0.08);border:1px solid rgba(96,165,250,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#60a5fa;">\uD83D\uDD35 Group A</div>' +
+        '<div style="margin-bottom:4px;padding:6px 10px;background:rgba(96,165,250,0.08);border:1px solid rgba(96,165,250,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#60a5fa;">Group A</div>' +
         '<div id="comp-diff-az-a" style="width:100%;height:460px;border-radius:8px;overflow:hidden;"></div>' +
-        '<div style="margin:12px 0 4px;padding:6px 10px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#f59e0b;">\uD83D\uDFE0 Group B</div>' +
+        '<div style="margin:12px 0 4px;padding:6px 10px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#f59e0b;">Group B</div>' +
         '<div id="comp-diff-az-b" style="width:100%;height:460px;border-radius:8px;overflow:hidden;"></div>' +
         _buildShadingControlsRow('shd-daz-ab', {label: 'Panels A &amp; B', defaultVmin: varInfoA.vmin, defaultVmax: varInfoA.vmax}) +
         '<div style="margin:12px 0 4px;padding:6px 10px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#ef4444;">\u0394 Difference (A \u2212 B)</div>' +
@@ -11256,9 +11262,9 @@ function _renderDiffQuadMean(targetId, diffJson, jsonA, jsonB, filtersA, filters
     var diffVarInfo = diffJson.variable;
 
     el.innerHTML =
-        '<div style="margin-bottom:4px;padding:6px 10px;background:rgba(96,165,250,0.08);border:1px solid rgba(96,165,250,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#60a5fa;">\uD83D\uDD35 Group A</div>' +
+        '<div style="margin-bottom:4px;padding:6px 10px;background:rgba(96,165,250,0.08);border:1px solid rgba(96,165,250,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#60a5fa;">Group A</div>' +
         '<div id="comp-diff-sq-a" style="width:100%;height:640px;border-radius:8px;overflow:hidden;"></div>' +
-        '<div style="margin:12px 0 4px;padding:6px 10px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#f59e0b;">\uD83D\uDFE0 Group B</div>' +
+        '<div style="margin:12px 0 4px;padding:6px 10px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#f59e0b;">Group B</div>' +
         '<div id="comp-diff-sq-b" style="width:100%;height:640px;border-radius:8px;overflow:hidden;"></div>' +
         _buildShadingControlsRow('shd-dsq-ab', {label: 'Panels A &amp; B', defaultVmin: varInfoA.vmin, defaultVmax: varInfoA.vmax}) +
         '<div style="margin:12px 0 4px;padding:6px 10px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#ef4444;">\u0394 Difference (A \u2212 B)</div>' +
@@ -11479,9 +11485,9 @@ function _renderDiffPlanView(targetId, diffJson, jsonA, jsonB, filtersA, filters
 
     // Create 3 stacked chart containers + toolbar
     el.innerHTML =
-        '<div style="margin-bottom:4px;padding:6px 10px;background:rgba(96,165,250,0.08);border:1px solid rgba(96,165,250,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#60a5fa;">\uD83D\uDD35 Group A</div>' +
+        '<div style="margin-bottom:4px;padding:6px 10px;background:rgba(96,165,250,0.08);border:1px solid rgba(96,165,250,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#60a5fa;">Group A</div>' +
         '<div id="comp-diff-pv-a" style="width:100%;height:520px;border-radius:8px;overflow:hidden;"></div>' +
-        '<div style="margin:12px 0 4px;padding:6px 10px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#f59e0b;">\uD83D\uDFE0 Group B</div>' +
+        '<div style="margin:12px 0 4px;padding:6px 10px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#f59e0b;">Group B</div>' +
         '<div id="comp-diff-pv-b" style="width:100%;height:520px;border-radius:8px;overflow:hidden;"></div>' +
         _buildShadingControlsRow('shd-dpv-ab', {label: 'Panels A &amp; B', defaultVmin: varInfoA.vmin, defaultVmax: varInfoA.vmax}) +
         '<div style="margin:12px 0 4px;padding:6px 10px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#ef4444;">\u0394 Difference (A \u2212 B)</div>' +
@@ -12128,7 +12134,7 @@ function renderEnvCompositeScalars(data) {
     if (!container || !data.scalars) return;
     container.style.display = 'block';
 
-    var html = '<div class="comp-env-section-title">\uD83D\uDCCA Scalar Diagnostics <span style="font-size:10px;color:#6b7280;">(N=' + data.n_cases + ')</span></div>';
+    var html = '<div class="comp-env-section-title">' + _icon('chartBar') + 'Scalar Diagnostics <span style="font-size:10px;color:#6b7280;">(N=' + data.n_cases + ')</span></div>';
     html += '<div class="env-comp-scalars-grid">';
 
     var order = ['shear_mag_env', 'rh_mid_env', 'sst_env', 'chi_m', 'v_pi', 'vent_index', 'div200_env', 'shear_dir_env'];
@@ -13597,7 +13603,7 @@ function _archiveRenderSondePanel(data) {
     var timeWindow = data.time_window_min ? '\u00b1' + data.time_window_min + ' min' : 'all flight';
 
     var html = '<div style="margin-bottom:6px;">' +
-        '<strong style="color:#6ee7b7;">\uD83E\uDE82 Archive Dropsondes</strong>' +
+        '<strong style="color:#6ee7b7;">' + _icon('parachute') + 'Archive Dropsondes</strong>' +
         '<span style="margin-left:8px;color:#9ca3af;">' + nSondes + ' sondes (' + timeWindow + ')</span>' +
         '<span style="margin-left:8px;color:#9ca3af;">' + nHitSfc + ' hit sfc' +
         (nEstPr > 0 ? ', ' + nEstPr + ' est P' : '') + '</span>' +
@@ -13809,7 +13815,7 @@ function archiveShowSondeSkewT(idx) {
             ' <span style="color:#34d399;">\u2713 Sfc</span>' :
             ' <span style="color:#f87171;">\u2717 No sfc</span>';
         titleEl.innerHTML =
-            '\uD83E\uDE82 ' + (stormLabel || '') +
+            _icon('parachute') + (stormLabel || '') +
             (missionLabel ? ' <span style="color:#9ca3af;">(' + missionLabel + ')</span>' : '') +
             '<br>' +
             '<span style="color:#94a3b8;">' + (sonde.sonde_id || 'Sonde ' + (idx + 1)) +
@@ -14194,7 +14200,7 @@ function archiveShowSondeWind(idx) {
             ' <span style="color:#34d399;">\u2713 Sfc</span>' :
             ' <span style="color:#f87171;">\u2717 No sfc</span>';
         titleEl.innerHTML =
-            '\uD83C\uDF2C\uFE0F ' + (stormLabel || '') +
+            _icon('wind') + (stormLabel || '') +
             (missionLabel ? ' <span style="color:#9ca3af;">(' + missionLabel + ')</span>' : '') +
             '<br>' +
             '<span style="color:#94a3b8;">' + (sonde.sonde_id || 'Sonde ' + (idx + 1)) +
@@ -15155,11 +15161,11 @@ function showCiteModal() {
     overlay.innerHTML =
         '<div class="cite-modal-box">' +
             '<button class="cite-modal-close" onclick="document.getElementById(\'cite-modal-overlay\').classList.remove(\'active\')">\u2715</button>' +
-            '<div class="cite-modal-title">\uD83D\uDCCB How to Cite</div>' +
+            '<div class="cite-modal-title">' + _icon('clipboard') + 'How to Cite</div>' +
             entriesHtml +
             '<div class="cite-bibtex-row">' +
                 '<button class="cite-bibtex-btn" onclick="(function(btn){_citeCopy(' + JSON.stringify(allBibtex) + ',btn);})(this)">' +
-                    '\uD83D\uDCCB Copy All BibTeX' +
+                    _icon('clipboard') + 'Copy All BibTeX' +
                 '</button>' +
             '</div>' +
         '</div>';
