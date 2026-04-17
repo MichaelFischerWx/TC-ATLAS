@@ -388,6 +388,82 @@
         .start-card-arrow { color: var(--blue-light); font-size: 1.1rem; flex-shrink: 0; align-self: center; opacity: 0.6; transition: opacity 0.2s, transform 0.2s; }
         .start-card:hover .start-card-arrow { opacity: 1; transform: translateX(2px); }
 
+        /* ── Changelog timeline ──────────────────────────── */
+        .changelog-list {
+            max-width: 780px;
+            margin: 0 auto;
+            position: relative;
+            padding-left: 1rem;
+        }
+        .changelog-list::before {
+            content: '';
+            position: absolute;
+            left: 6px;
+            top: 6px;
+            bottom: 6px;
+            width: 1px;
+            background: linear-gradient(180deg, rgba(0,212,255,0.6) 0%, rgba(46,125,255,0.3) 100%);
+        }
+        .changelog-entry {
+            position: relative;
+            display: grid;
+            grid-template-columns: 110px 1fr;
+            gap: 1.25rem;
+            padding: 0.75rem 0 0.75rem 1.25rem;
+            align-items: baseline;
+        }
+        .changelog-entry::before {
+            content: '';
+            position: absolute;
+            left: -0.25rem;
+            top: 1.1rem;
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            background: var(--cyan);
+            box-shadow: 0 0 0 3px var(--navy), 0 0 10px rgba(0,212,255,0.5);
+        }
+        .changelog-entry:not(:first-child)::before {
+            background: var(--slate);
+            box-shadow: 0 0 0 3px var(--navy);
+        }
+        .changelog-date {
+            font-size: 0.72rem;
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--slate);
+            letter-spacing: 0.02em;
+            text-transform: uppercase;
+            white-space: nowrap;
+        }
+        .changelog-text {
+            font-size: 0.92rem;
+            color: var(--text);
+            line-height: 1.6;
+        }
+        .changelog-text strong { color: var(--blue-light); font-weight: 600; }
+        .changelog-footer {
+            text-align: center;
+            margin-top: 1.5rem;
+            font-size: 0.82rem;
+            color: var(--slate);
+        }
+        .changelog-footer a {
+            color: var(--blue-light);
+            text-decoration: none;
+            border-bottom: 1px dotted rgba(91,156,255,0.4);
+            transition: color 0.2s, border-color 0.2s;
+        }
+        .changelog-footer a:hover { color: var(--cyan); border-color: var(--cyan); }
+        @media (max-width: 600px) {
+            .changelog-entry {
+                grid-template-columns: 1fr;
+                gap: 0.25rem;
+                padding-left: 1rem;
+            }
+            .changelog-date { font-size: 0.68rem; }
+            .changelog-text { font-size: 0.85rem; }
+        }
+
         /* ── Responsive ──────────────────────────────────── */
         @media (max-width: 1100px) {
             .platform-grid { grid-template-columns: repeat(2, 1fr); }
@@ -601,8 +677,45 @@
         </div>
     </section>
 
+    <!-- ── Recent Updates (changelog) ─────────────────────── -->
+    <section id="updates" class="section-bg">
+        <div class="content-section">
+            <h2 class="section-title">Recent <span class="accent">Updates</span></h2>
+            <p class="section-desc">TC-ATLAS is actively maintained — new data sources, analysis tools, and UI improvements are added continuously.</p>
+            <div class="changelog-list">
+                <div class="changelog-entry">
+                    <div class="changelog-date">Apr 16, 2026</div>
+                    <div class="changelog-text">Home page refresh: <strong>live activity strip</strong>, <strong>"Popular starting points"</strong> quick-start row, and <strong>featured-case onboarding</strong> on the TC-RADAR Explorer. Refined visual hierarchy and role-based color palette across the site.</div>
+                </div>
+                <div class="changelog-entry">
+                    <div class="changelog-date">Apr 15, 2026</div>
+                    <div class="changelog-text"><strong>IR Hovmöller diagrams</strong> (time × radius brightness-temperature) added to every storm in the Global Archive + Compare pages, with adjustable coverage thresholds, colormap sync, and PNG export.</div>
+                </div>
+                <div class="changelog-entry">
+                    <div class="changelog-date">Apr 14, 2026</div>
+                    <div class="changelog-text"><strong>Objective IR eye-center finding</strong> — automated center estimation with symmetry-based quality gates; rejected candidates now rendered as orange crosshairs for full diagnostic transparency.</div>
+                </div>
+                <div class="changelog-entry">
+                    <div class="changelog-date">Apr 13, 2026</div>
+                    <div class="changelog-text">Real-time <strong>NEXRAD 88D ground-radar overlay</strong> on the Real-Time Monitor and Storm Satellite views, with storm-relative reflectivity, velocity, and animated GIF export.</div>
+                </div>
+                <div class="changelog-entry">
+                    <div class="changelog-date">Apr 11, 2026</div>
+                    <div class="changelog-text"><strong>ASCAT surface-wind barbs</strong> overlaid on the Real-Time Monitor map for verified radar/microwave cross-comparison with scatterometer winds.</div>
+                </div>
+                <div class="changelog-entry">
+                    <div class="changelog-date">Apr 7, 2026</div>
+                    <div class="changelog-text"><strong>Real-time microwave Tb overlay</strong> on the Real-Time Monitor map (89 GHz PCT + 37 GHz color) pulled from TC-PRIMED overpasses.</div>
+                </div>
+            </div>
+            <div class="changelog-footer">
+                <a href="https://github.com/MichaelFischerWx/TC-ATLAS/commits/main" target="_blank" rel="noopener">View full commit history on GitHub →</a>
+            </div>
+        </div>
+    </section>
+
     <!-- ── How to Cite ──────────────────────────────────────── -->
-    <section id="cite" class="section-bg">
+    <section id="cite">
         <div class="content-section">
             <h2 class="section-title">How to <span class="accent">Cite</span></h2>
             <p class="section-desc">If you use TC-ATLAS or the underlying TC-RADAR dataset in your research, please cite the relevant publications below.</p>
