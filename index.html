@@ -75,6 +75,8 @@
         .topbar-nav a.nav-active { color: var(--text); background: rgba(46,125,255,0.15); }
         .nav-short { display: none; }
         .nav-full { display: inline; }
+        .nav-hamburger { display: none; background: none; border: 1px solid rgba(255,255,255,0.15); color: var(--slate); font-size: 1.2rem; padding: 4px 10px; border-radius: 6px; cursor: pointer; line-height: 1; min-height: 36px; }
+        .nav-hamburger.open { color: var(--text); background: rgba(255,255,255,0.08); }
 
         /* ── Hero section ────────────────────────────────── */
         .hero {
@@ -473,11 +475,29 @@
         @media (max-width: 768px) {
             .hero-title { font-size: 2.2rem; }
             .hero-desc { font-size: 0.95rem; }
-            .topbar-inner { padding: 0 16px; }
+            .topbar-inner { padding: 0 16px; gap: 8px; }
             .content-section { padding: 3rem 16px; }
             .section-title { font-size: 1.4rem; }
             .nav-full { display: none !important; }
             .nav-short { display: inline !important; }
+            .nav-hamburger { display: block; }
+            .topbar-nav { display: none !important; }
+            .topbar-nav.mobile-open {
+                display: flex !important;
+                position: absolute;
+                top: 52px;
+                left: 0;
+                right: 0;
+                background: rgba(15,23,42,0.98);
+                backdrop-filter: blur(12px);
+                -webkit-backdrop-filter: blur(12px);
+                border-bottom: 1px solid rgba(255,255,255,0.08);
+                padding: 10px 14px;
+                flex-wrap: wrap;
+                gap: 4px 8px;
+                justify-content: center;
+                z-index: 999;
+            }
             .activity-strip { font-size: 0.72rem; padding: 8px 14px; border-radius: 12px; }
             .start-here-section { padding: 0 16px 3rem; }
         }
@@ -522,6 +542,7 @@
                     <li><a href="#cite">Cite</a></li>
                 </ul>
             </nav>
+            <button class="nav-hamburger" onclick="this.classList.toggle('open');document.querySelector('.topbar-nav').classList.toggle('mobile-open')" aria-label="Menu">&#9776;</button>
         </div>
     </header>
 
