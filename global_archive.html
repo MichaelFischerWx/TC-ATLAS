@@ -112,7 +112,7 @@
             Climatology
         </button>
         <button class="ga-tab" role="tab" aria-selected="false" data-tab="compare" onclick="switchTab('compare')">
-            Compare
+            Compare Storms
         </button>
     </div>
 
@@ -290,20 +290,22 @@
         <section id="tab-detail" class="ga-tab-content" role="tabpanel">
             <div class="detail-layout">
                 <div class="detail-header">
-                    <div class="detail-header-top">
-                        <button class="ga-btn ga-btn-ghost" onclick="switchTab('browser')">← Back to Browser</button>
-                        <div class="detail-header-actions">
-                            <a id="tc-radar-link" class="ga-btn ga-btn-sm ga-btn-radar" href="#" target="_blank" style="display:none;" onclick="_ga('ga_click_tc_radar',{sid:selectedStorm&&selectedStorm.sid,storm_name:selectedStorm&&selectedStorm.name})">
-                                <svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/></svg>3D Winds Analysis
-                            </a>
-                            <button class="ga-btn ga-btn-sm ga-btn-accent" onclick="openAnalogFinder()">Find Analogs</button>
-                            <button class="ga-btn ga-btn-sm" onclick="addCurrentToCompare()">+ Compare</button>
-                            <button id="share-link-btn" class="ga-btn ga-btn-sm" onclick="copyShareLink()" title="Copy shareable link to this view">&#128279; Share</button>
-                            <button class="ga-btn ga-btn-sm" onclick="downloadStormKML()" title="Download track as KML for Google Earth">&#127758; KML</button>
+                    <div class="detail-header-row">
+                        <button class="ga-btn ga-btn-ghost detail-back-btn" onclick="switchTab('browser')">← Back to Browser</button>
+                        <div class="detail-header-title-group">
+                            <h2 id="detail-title" class="detail-storm-title"></h2>
+                            <div id="detail-subtitle" class="detail-storm-subtitle"></div>
                         </div>
                     </div>
-                    <h2 id="detail-title" class="detail-storm-title"></h2>
-                    <div id="detail-subtitle" class="detail-storm-subtitle"></div>
+                    <div class="detail-header-actions">
+                        <a id="tc-radar-link" class="ga-btn ga-btn-sm ga-btn-radar" href="#" target="_blank" style="display:none;" onclick="_ga('ga_click_tc_radar',{sid:selectedStorm&&selectedStorm.sid,storm_name:selectedStorm&&selectedStorm.name})">
+                            <svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/></svg>3D Winds Analysis
+                        </a>
+                        <button class="ga-btn ga-btn-sm ga-btn-accent" onclick="openAnalogFinder()">Find Analogs</button>
+                        <button class="ga-btn ga-btn-sm" onclick="addCurrentToCompare()">+ Compare</button>
+                        <button id="share-link-btn" class="ga-btn ga-btn-sm" onclick="copyShareLink()" title="Copy shareable link to this view"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>Share</button>
+                        <button class="ga-btn ga-btn-sm" onclick="downloadStormKML()" title="Download track as KML for Google Earth"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>KML</button>
+                    </div>
                 </div>
 
                 <div class="detail-grid">
@@ -313,24 +315,24 @@
                         <div id="ga-fl-ts-top-anchor"></div>
                         <div class="panel-header">
                             <h3 id="timeline-panel-title">Intensity Timeline</h3>
-                            <div id="hovmoller-toggle-wrap" style="display:none;">
-                                <button id="hovmoller-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleHovmoller()" style="background:rgba(0,229,255,0.12);border-color:rgba(0,229,255,0.35);color:#00e5ff;">
-                                    Hovm&ouml;ller
-                                </button>
-                                <span id="hovmoller-status" class="ir-status"></span>
-                            </div>
                             <div id="fdeck-toggle-wrap" style="display:none;">
                                 <button id="fdeck-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleFDeck()">
                                     Show F-Deck
                                 </button>
                                 <span id="fdeck-status" class="ir-status"></span>
                             </div>
+                            <div id="hovmoller-toggle-wrap" style="display:none;">
+                                <button id="hovmoller-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleHovmoller()" style="background:rgba(0,229,255,0.12);border-color:rgba(0,229,255,0.35);color:#00e5ff;">
+                                    IR Hovm&ouml;ller
+                                </button>
+                                <span id="hovmoller-status" class="ir-status"></span>
+                            </div>
                             <div id="scorecard-toggle-wrap" style="display:none;">
                                 <button id="scorecard-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleScorecard()" style="background:rgba(251,191,36,0.15);border-color:rgba(251,191,36,0.4);color:#fbbf24;">
-                                    &#128202; Scorecard
+                                    <svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg>Scorecard
                                 </button>
                                 <button id="env-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleEnvironment()" style="background:rgba(0,212,255,0.15);border-color:rgba(0,212,255,0.4);color:#00d4ff;">
-                                    &#127754; Environment
+                                    <svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>Environment
                                 </button>
                             </div>
                         </div>
@@ -348,7 +350,7 @@
                                 <button class="ga-btn ga-btn-xs model-filter-btn" data-mtype="statistical" onclick="toggleModelTypeFilter('statistical')" style="font-size:9px;">Statistical</button>
                                 <span style="flex:1;"></span>
                                 <button class="ga-btn ga-btn-xs" onclick="toggleModelInterp()" id="model-interp-btn" title="Click to show only interpolated (late cycle) models — NHC verification standard." style="font-size:9px;">Late Cycle</button>
-                                <button class="ga-btn ga-btn-xs" onclick="toggleModelIntensity()" id="model-intensity-btn2" title="Toggle intensity forecasts on chart" style="font-size:9px;color:#74b9ff;">&#128200; Intensity</button>
+                                <button class="ga-btn ga-btn-xs" onclick="toggleModelIntensity()" id="model-intensity-btn2" title="Toggle intensity forecasts on chart" style="font-size:9px;color:#74b9ff;"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>Intensity</button>
                             </div>
                             <div id="model-legend" class="model-legend"></div>
                             <div style="text-align:right;padding-top:3px;">
@@ -368,20 +370,20 @@
                                 <span id="ir-status" class="ir-status"></span>
                             </div>
                             <div id="ga-mw-toggle-wrap" style="display:none;">
-                                <button id="ga-mw-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleGlobalMWOverlay()" style="background:rgba(251,146,60,0.15);border-color:rgba(251,146,60,0.4);color:#fdba74;">
-                                    &#128225; MW
+                                <button id="ga-mw-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleGlobalMWOverlay()" title="Passive microwave satellite imagery (TC-PRIMED)" style="background:rgba(251,146,60,0.15);border-color:rgba(251,146,60,0.4);color:#fdba74;">
+                                    <svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a7.31 7.31 0 0 0 10 10Z"/><path d="m9 15 3-3"/><path d="M17 13a6 6 0 0 0-6-6"/><path d="M21 13A10 10 0 0 0 11 3"/></svg>MW
                                 </button>
                                 <span id="ga-mw-status" class="ir-status"></span>
                             </div>
                             <div id="ga-models-toggle-wrap" style="display:none;">
-                                <button id="ga-models-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleModelOverlay()" style="background:rgba(116,185,255,0.15);border-color:rgba(116,185,255,0.4);color:#74b9ff;">
-                                    &#127760; Models
+                                <button id="ga-models-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleModelOverlay()" title="Model intensity and track forecasts" style="background:rgba(116,185,255,0.15);border-color:rgba(116,185,255,0.4);color:#74b9ff;">
+                                    <svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>Models
                                 </button>
                                 <span id="ga-models-status" class="ir-status"></span>
                             </div>
                             <div id="ga-nexrad-toggle-wrap" style="display:none;">
-                                <button id="ga-nexrad-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleGlobalNexradOverlay()" style="background:rgba(34,197,94,0.15);border-color:rgba(34,197,94,0.4);color:#86efac;">
-                                    &#127744; 88D
+                                <button id="ga-nexrad-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleGlobalNexradOverlay()" title="NEXRAD WSR-88D ground-based radar" style="background:rgba(34,197,94,0.15);border-color:rgba(34,197,94,0.4);color:#86efac;">
+                                    <svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 4H3"/><path d="M18 8H6"/><path d="M19 12H9"/><path d="M16 16h-6"/><path d="M13 20h-3"/></svg>Ground Radar
                                 </button>
                                 <span id="ga-nexrad-status" class="ir-status"></span>
                             </div>
@@ -527,6 +529,7 @@
                                 <button id="ir-gif-btn" class="ga-btn ga-btn-sm ir-follow-btn" onclick="openGifSettings()" title="Export GIF">GIF</button>
                             </div>
                             <div class="ir-bar-row2">
+                                <span class="ir-cmap-label">IR Colormaps:</span>
                                 <button class="ga-btn ga-btn-sm ir-cmap-btn" data-cmap="enhanced" onclick="switchColormap('enhanced')">IR</button>
                                 <button class="ga-btn ga-btn-sm ir-cmap-btn" data-cmap="dvorak" onclick="switchColormap('dvorak')" title="Dvorak Color">BD</button>
                                 <button class="ga-btn ga-btn-sm ir-cmap-btn" data-cmap="grayscale" onclick="switchColormap('grayscale')" title="Dvorak Grayscale">BW</button>
@@ -578,7 +581,7 @@
                                     <span class="gif-toggle-slider"></span>
                                 </label>
                                 <span style="font-size:9px;color:#64748b;">Auto</span>
-                                <button id="ga-fl-btn-ts" class="ga-btn ga-btn-xs ga-fl-panel-btn" onclick="gaFLOpenTimeSeries()" title="Flight-level time series" style="font-size:9px;color:#93c5fd;">&#128200; Time Series</button>
+                                <button id="ga-fl-btn-ts" class="ga-btn ga-btn-xs ga-fl-panel-btn" onclick="gaFLOpenTimeSeries()" title="Flight-level time series" style="font-size:9px;color:#93c5fd;"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>Time Series</button>
                                 <button id="ga-fl-btn-xsec" class="ga-btn ga-btn-xs ga-fl-panel-btn" onclick="gaFLOpenXSec()" title="Radius-height cross-section (all legs composited)" style="font-size:9px;color:#6ee7b7;">X-Sec</button>
                                 <button id="ga-fl-btn-radial" class="ga-btn ga-btn-xs ga-fl-panel-btn" onclick="gaFLOpenRadial()" title="Radial profile of flight-level variable" style="font-size:9px;color:#6ee7b7;">Radial</button>
                                 <span id="ga-fl-frame-status" style="font-size:9px;color:#64748b;"></span>
@@ -594,7 +597,7 @@
                             <!-- Dropsonde info (shown when sondes found) -->
                             <div id="ga-sonde-info" style="display:none;margin-top:6px;border-top:1px solid rgba(52,211,153,0.2);padding-top:6px;">
                                 <div style="display:flex;align-items:center;gap:8px;">
-                                    <span style="font-size:10px;font-weight:600;color:#6ee7b7;text-transform:uppercase;letter-spacing:0.5px;">&#129666; Sondes</span>
+                                    <span style="font-size:10px;font-weight:600;color:#6ee7b7;text-transform:uppercase;letter-spacing:0.5px;"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12a10 10 0 0 1 20 0"/><path d="M7 12l5 9"/><path d="M17 12l-5 9"/><path d="M12 12v9"/></svg>Sondes</span>
                                     <span id="ga-sonde-count" style="font-size:9px;color:#64748b;"></span>
                                 </div>
                                 <div style="display:flex;align-items:center;gap:4px;margin-top:4px;flex-wrap:wrap;">
@@ -688,7 +691,7 @@
                 <!-- Forecast Scorecard Panel -->
                 <div id="scorecard-panel" class="detail-panel scorecard-panel" style="display:none;margin-top:16px;">
                     <div class="panel-header">
-                        <h3>&#128202; Forecast Scorecard</h3>
+                        <h3><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg>Forecast Scorecard</h3>
                         <span style="font-size:0.78rem;color:#8b9ec2;">Model forecast errors vs. best track</span>
                     </div>
                     <div id="scorecard-content" class="scorecard-content">
@@ -701,7 +704,7 @@
                 <!-- Environmental Diagnostics Panel -->
                 <div id="environment-panel" class="detail-panel scorecard-panel" style="display:none;margin-top:16px;">
                     <div class="panel-header">
-                        <h3>&#127754; Environmental Diagnostics</h3>
+                        <h3><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>Environmental Diagnostics</h3>
                         <span style="font-size:0.78rem;color:#8b9ec2;">ERA5 reanalysis via TC-PRIMED &amp; SHIPS LSDIAG</span>
                     </div>
                     <div id="environment-content">
@@ -810,12 +813,12 @@
                             <h3 id="compare-sat-title">IR Satellite Comparison</h3>
                             <div style="display:flex;gap:8px;align-items:center;">
                                 <button class="ga-btn ga-btn-xs compare-mode-btn active" id="compare-mode-ir" onclick="switchCompareMode('ir')" title="Compare IR imagery">IR</button>
-                                <button class="ga-btn ga-btn-xs compare-mode-btn" id="compare-mode-mw" onclick="switchCompareMode('mw')" title="Compare microwave imagery">&#128225; MW</button>
+                                <button class="ga-btn ga-btn-xs compare-mode-btn" id="compare-mode-mw" onclick="switchCompareMode('mw')" title="Compare microwave imagery"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a7.31 7.31 0 0 0 10 10Z"/><path d="m9 15 3-3"/><path d="M17 13a6 6 0 0 0-6-6"/><path d="M21 13A10 10 0 0 0 11 3"/></svg>MW</button>
                                 <span style="width:1px;height:16px;background:#555;"></span>
                                 <button class="ga-btn ga-btn-xs compare-align" id="compare-ir-peak-btn" onclick="jumpBothToPeak()" title="Jump both storms to peak intensity">&#9733; Peak</button>
-                                <button class="ga-btn ga-btn-xs compare-align" id="compare-ir-sync-btn" onclick="toggleCompareIRSync()" title="Sync playback between both viewers">&#128279; Sync</button>
+                                <button class="ga-btn ga-btn-xs compare-align" id="compare-ir-sync-btn" onclick="toggleCompareIRSync()" title="Sync playback between both viewers"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>Sync</button>
                                 <span style="width:1px;height:16px;background:#555;"></span>
-                                <button class="ga-btn ga-btn-xs compare-align" id="compare-hov-btn" onclick="toggleCompareHovmoller()" title="Toggle Hovmöller diagrams" style="color:#00e5ff;border-color:rgba(0,229,255,0.4);">Hovm&ouml;ller</button>
+                                <button class="ga-btn ga-btn-xs compare-align" id="compare-hov-btn" onclick="toggleCompareHovmoller()" title="Toggle IR Hovmöller diagrams" style="color:#00e5ff;border-color:rgba(0,229,255,0.4);">IR Hovm&ouml;ller</button>
                                 <button class="ga-btn ga-btn-xs compare-align" id="compare-radial-btn" onclick="toggleCompareRadial()" title="Toggle radial Tb profiles" style="color:#a78bfa;border-color:rgba(167,139,250,0.4);">Radial</button>
                             </div>
                         </div>

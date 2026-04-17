@@ -1416,8 +1416,8 @@ function renderStormDetail(storm) {
         ' <span class="intensity-badge" style="background:' + color + '">' + cat + '</span>';
     document.getElementById('detail-subtitle').textContent =
         storm.year + ' · ' + (BASIN_NAMES[storm.basin] || storm.basin) +
-        ' · Peak: ' + (storm.peak_wind_kt || '?') + ' kt / ' + (storm.min_pres_hpa || '?') + ' hPa' +
-        ' · ACE: ' + (storm.ace || 0).toFixed(1);
+        ' · Peak ' + (storm.peak_wind_kt || '?') + ' kt · ' + (storm.min_pres_hpa || '?') + ' hPa' +
+        ' · ACE ' + (storm.ace || 0).toFixed(1);
 
     // TC-RADAR cross-link — show button if this storm has airborne radar analyses
     var radarLink = document.getElementById('tc-radar-link');
@@ -3330,13 +3330,17 @@ function renderDetailMap(track, storm) {
         trackAnnotationMarkers.push(endM);
         detailTrackElements.push(endM);
 
-        // Fit bounds
-        var lats = validPts.map(function (p) { return p.la; });
-        var lons = validPts.map(function (p) { return p.lo; });
-        detailMap.fitBounds([
-            [Math.min.apply(null, lats) - 3, Math.min.apply(null, lons) - 5],
-            [Math.max.apply(null, lats) + 3, Math.max.apply(null, lons) + 5]
-        ]);
+        // Center on peak-intensity point at a fixed zoom so the storm
+        // always fills the map panel. fitBounds on a full lifecycle track
+        // (e.g. Dorian, Sandy) zooms out to hemispheric scale, leaving
+        // the storm itself as a dot; IR frame-fit will re-center on the
+        // current frame once IR loads.
+        var peakIdx = 0, peakVm = -1;
+        for (var pi = 0; pi < validPts.length; pi++) {
+            if ((validPts[pi].vm || 0) > peakVm) { peakVm = validPts[pi].vm || 0; peakIdx = pi; }
+        }
+        var peakPt = validPts[peakIdx];
+        detailMap.setView([peakPt.la, peakPt.lo], 5, { animate: false });
     }
 }
 
@@ -3715,12 +3719,11 @@ function displayIROnMap(data) {
     // Pan/zoom map based on follow mode
     if (irFollowStorm) {
         if (!irFollowZoomSet) {
-            // First frame: fitBounds to establish correct zoom level
-            var padded = imageBounds.pad(0.15);
-            detailMap.fitBounds(padded, {
-                animate: false,
-                maxZoom: 7
-            });
+            // First frame: center on storm at a fixed zoom so the storm
+            // fills most of the map panel (fitBounds on a 20° IR frame
+            // naturally picks zoom 4, leaving ~60% of the panel empty).
+            // Zoom 6 shows the storm core + eyewall at a good scale.
+            detailMap.setView(imageBounds.getCenter(), 6, { animate: false });
             irFollowZoomSet = true;
         } else {
             // Subsequent frames: panTo center at existing zoom (no zoom jitter)
