@@ -3,16 +3,10 @@
    Append these to tc_radar_styles.css (or include as a separate file)
    ══════════════════════════════════════════════════════════════ */
 
-/* ── Nav highlight for Real-Time TDR link ─────────────────── */
-.rt-nav-highlight {
-    color: var(--cyan) !important;
-    font-weight: 600 !important;
-}
-.rt-nav-highlight.active {
-    background: rgba(0, 212, 255, 0.12);
-    border-radius: 6px;
-    padding: 4px 10px !important;
-}
+/* (Former .rt-nav-highlight rule removed — nav highlighting now
+   goes through the shared .nav-active class in tc_radar_styles.css,
+   which swaps between #archive-nav-link and #rt-nav-link on tab
+   toggle.) */
 
 /* ── Section header ───────────────────────────────────────── */
 .rt-header {
@@ -255,16 +249,19 @@
 }
 
 /* ── Dropsonde toggle button ─────────────────────────────── */
+/* Blue — aircraft in-situ data, paired with FL in the role scheme.
+   `sonde-only` (user clicks again to isolate sondes) bumps the tint
+   so it's visually distinct from regular active. */
 #rt-sonde-btn.active {
-    background: rgba(168, 85, 247, 0.25) !important;
-    border-color: rgba(168, 85, 247, 0.6) !important;
-    color: #e9d5ff !important;
+    background: rgba(96, 165, 250, 0.22) !important;
+    border-color: rgba(96, 165, 250, 0.6) !important;
+    color: #bfdbfe !important;
 }
 #rt-sonde-btn.sonde-only {
-    background: rgba(168, 85, 247, 0.45) !important;
-    border-color: rgba(168, 85, 247, 0.8) !important;
+    background: rgba(96, 165, 250, 0.42) !important;
+    border-color: rgba(96, 165, 250, 0.8) !important;
     color: #fff !important;
-    box-shadow: 0 0 8px rgba(168, 85, 247, 0.3);
+    box-shadow: 0 0 8px rgba(96, 165, 250, 0.3);
 }
 
 /* Dropsonde Leaflet popup styling */

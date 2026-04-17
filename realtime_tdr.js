@@ -119,26 +119,26 @@
         var section = document.getElementById('realtime-section');
         var archiveSections = document.querySelectorAll('#map-section, #about, #features, #download, #contact, footer');
         _rtVisible = !_rtVisible;
+        var rtLink = document.getElementById('rt-nav-link');
+        var archiveLink = document.getElementById('archive-nav-link');
 
         if (_rtVisible) {
             gtag('event', 'tab_click', { tab_name: 'real_time' });
-            // Hide archive, show real-time
             archiveSections.forEach(function (el) { el.style.display = 'none'; });
             section.style.display = 'block';
-            // Update nav link style
-            var link = document.getElementById('rt-nav-link');
-            if (link) link.classList.add('active');
+            // Transfer nav-active indicator from TC-RADAR to RT TDR
+            if (archiveLink) archiveLink.classList.remove('nav-active');
+            if (rtLink) rtLink.classList.add('nav-active');
             // Load missions if not yet loaded
             if (!document.getElementById('rt-mission-select').options.length ||
                 document.getElementById('rt-mission-select').options[0].value === '') {
                 loadMissions();
             }
         } else {
-            // Show archive, hide real-time
             archiveSections.forEach(function (el) { el.style.display = ''; });
             section.style.display = 'none';
-            var link2 = document.getElementById('rt-nav-link');
-            if (link2) link2.classList.remove('active');
+            if (rtLink) rtLink.classList.remove('nav-active');
+            if (archiveLink) archiveLink.classList.add('nav-active');
         }
     };
 

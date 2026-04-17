@@ -45,9 +45,19 @@ outline-offset: 2px;
     --text-faint: #6b7280;
     --text-subtle: #64748b;
 
-    /* Sub-tool accents — one base per tool, paired with a light text
-       variant for use on translucent backgrounds. Keeps NEXRAD green,
-       MW orange, CFAD purple, etc. consistent across all widgets. */
+    /* Accent palette — grouped by DATA ROLE, not per-tool. Keep new
+       widgets aligned to one of these buckets so the visual language
+       stays legible:
+         - Cyan (--cyan)     → thermal satellite imagery (IR underlay)
+         - Blue (--blue-*)   → aircraft in-situ / recon (FL, Dropsondes)
+         - Green (--accent-nexrad)  → ground-based active radar (NEXRAD 88D)
+         - Orange (--accent-mw)     → external passive satellite sensing
+                                       (microwave, SHIPS-derived products,
+                                       shear-frame analyses)
+         - Slate (rgba 148,163,184) → neutral kinematic overlays (Barbs, Tilt)
+         - Purple/Mint/Amber → reserved tints for *derived* analytics
+                                (CFAD, Z* anomaly, VP scatter), each
+                                visually distinct to aid quick ID. */
     --accent-mw: #fb923c;
     --accent-mw-text: #fdba74;
     --accent-nexrad: #22c55e;
@@ -78,6 +88,7 @@ body { font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
 .topbar-nav { display: flex; gap: 6px; list-style: none; align-items: center; }
 .topbar-nav a { color: var(--slate); text-decoration: none; font-weight: 500; font-size: 0.8rem; padding: 6px 12px; border-radius: 6px; transition: all 0.2s; }
 .topbar-nav a:hover { color: var(--text); background: rgba(255,255,255,0.06); }
+.topbar-nav a.nav-active { color: var(--text); background: rgba(46,125,255,0.15); font-weight: 600; }
 .topbar-version { font-size: 0.65rem; color: var(--navy); background: var(--cyan); padding: 2px 8px; border-radius: 20px; font-weight: 600; letter-spacing: 0.02em; }
 
 /* ── Map section (hero) ──────────────────────────── */
@@ -392,6 +403,7 @@ a.case-meta-link:hover { color: #93c5fd; border-bottom-color: #93c5fd; }
 .vol3d-toggle-btn:hover { background: rgba(37,99,235,0.15); }
 .vol3d-toggle-btn[data-accent="cfad"]    { border-color: rgba(168,85,247,0.5); color: var(--accent-cfad-text); }
 .vol3d-toggle-btn[data-accent="anomaly"] { border-color: rgba(52,211,153,0.5); color: var(--accent-anomaly-text); }
+.vol3d-toggle-btn[data-accent="slate"]   { border-color: rgba(148,163,184,0.5); color: #cbd5e1; }
 #vol-3d-chart { flex: 1; width: 100%; min-height: 0; }
 
 /* ── IR satellite map controls ──────────────────────────────── */
