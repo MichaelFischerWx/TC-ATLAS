@@ -190,7 +190,19 @@
         .card-icon {
             font-size: 2.25rem;
             margin-bottom: 1rem;
+            line-height: 1;
         }
+        .card-icon svg {
+            width: 2.25rem;
+            height: 2.25rem;
+            stroke-width: 1.5;
+            color: var(--cyan);
+        }
+        .card-radar .card-icon svg      { color: var(--blue-light); }
+        .card-realtime .card-icon svg   { color: #fb923c; }
+        .card-ir .card-icon svg         { color: var(--cyan); }
+        .card-global .card-icon svg     { color: #34d399; }
+        .card-composites .card-icon svg { color: #c4b5fd; }
         .card-title {
             font-size: 1.2rem;
             font-weight: 700;
@@ -286,10 +298,110 @@
         footer a { color: var(--blue-light); text-decoration: none; }
         footer a:hover { text-decoration: underline; }
 
+        /* ── Live activity strip ─────────────────────────── */
+        .activity-strip {
+            display: inline-flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 10px 18px;
+            margin: 0 auto 2rem auto;
+            padding: 10px 18px;
+            background: rgba(46, 125, 255, 0.08);
+            border: 1px solid rgba(46, 125, 255, 0.25);
+            border-radius: 999px;
+            backdrop-filter: blur(8px);
+            font-size: 0.78rem;
+            color: var(--text-dim);
+            position: relative;
+            z-index: 1;
+        }
+        .activity-stat { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+        .activity-stat .dot {
+            width: 6px; height: 6px; border-radius: 50%;
+            background: var(--cyan);
+            box-shadow: 0 0 8px var(--cyan);
+        }
+        .activity-stat.is-stale .dot { background: var(--text-dim); box-shadow: none; }
+        .activity-stat-val { color: var(--text); font-weight: 600; font-family: 'JetBrains Mono', monospace; }
+        .activity-stat-sep { color: rgba(255,255,255,0.2); font-family: 'JetBrains Mono', monospace; }
+
+        /* ── Start Here: worked-example cards ────────────── */
+        .start-here-section {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 24px 4rem;
+            position: relative;
+            z-index: 1;
+        }
+        .start-here-label {
+            text-align: center;
+            font-size: 0.72rem;
+            color: var(--cyan);
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            font-weight: 700;
+            font-family: 'JetBrains Mono', monospace;
+            margin-bottom: 0.75rem;
+        }
+        .start-here-title {
+            text-align: center;
+            font-size: 1.4rem;
+            font-weight: 700;
+            color: var(--text);
+            margin-bottom: 2rem;
+            letter-spacing: -0.01em;
+        }
+        .start-here-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 1rem;
+        }
+        .start-card {
+            display: flex;
+            gap: 14px;
+            align-items: flex-start;
+            padding: 1.1rem 1.25rem;
+            background: var(--navy-mid);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            color: var(--text);
+            text-decoration: none;
+            transition: border-color 0.2s, background 0.2s, transform 0.2s;
+        }
+        .start-card:hover {
+            border-color: rgba(46,125,255,0.55);
+            background: rgba(46,125,255,0.08);
+            transform: translateY(-2px);
+        }
+        .start-card-icon {
+            flex-shrink: 0;
+            width: 36px; height: 36px;
+            display: flex; align-items: center; justify-content: center;
+            background: rgba(46,125,255,0.14);
+            border-radius: 8px;
+            color: var(--cyan);
+        }
+        .start-card-icon svg { width: 20px; height: 20px; stroke-width: 1.8; }
+        .start-card-body { min-width: 0; flex: 1; }
+        .start-card-title {
+            font-size: 0.95rem;
+            font-weight: 700;
+            color: var(--text);
+            margin-bottom: 2px;
+        }
+        .start-card-desc {
+            font-size: 0.78rem;
+            color: var(--slate);
+            line-height: 1.5;
+        }
+        .start-card-arrow { color: var(--blue-light); font-size: 1.1rem; flex-shrink: 0; align-self: center; opacity: 0.6; transition: opacity 0.2s, transform 0.2s; }
+        .start-card:hover .start-card-arrow { opacity: 1; transform: translateX(2px); }
+
         /* ── Responsive ──────────────────────────────────── */
         @media (max-width: 1100px) {
             .platform-grid { grid-template-columns: repeat(2, 1fr); }
             .platform-grid-bottom .platform-card { flex: 0 1 calc((100% - 1.5rem) / 2); }
+            .start-here-grid { grid-template-columns: 1fr; }
         }
         @media (max-width: 768px) {
             .hero-title { font-size: 2.2rem; }
@@ -299,6 +411,8 @@
             .section-title { font-size: 1.4rem; }
             .nav-full { display: none !important; }
             .nav-short { display: inline !important; }
+            .activity-strip { font-size: 0.72rem; padding: 8px 14px; border-radius: 12px; }
+            .start-here-section { padding: 0 16px 3rem; }
         }
         @media (max-width: 520px) {
             .platform-grid { grid-template-columns: 1fr; }
@@ -351,10 +465,19 @@
         <p class="hero-subtitle">Tropical Cyclone Analysis Tool for Live and Archived Structure</p>
         <p class="hero-desc">A multi-source platform for exploring tropical cyclone vortex structure. TC-ATLAS brings together airborne Doppler radar, passive microwave and infrared satellite imagery, ERA5 environmental diagnostics, dropsonde profiles, and flight-level observations into one unified interactive tool.</p>
 
+        <!-- ── Live activity strip ────────────────────────── -->
+        <div class="activity-strip" id="activity-strip" role="status" aria-label="Live activity">
+            <span class="activity-stat is-stale" id="activity-active"><span class="dot"></span><span class="activity-stat-val">—</span>&nbsp;active TCs</span>
+            <span class="activity-stat-sep">·</span>
+            <span class="activity-stat is-stale" id="activity-refresh"><span class="dot"></span>Monitor refreshed <span class="activity-stat-val">—</span></span>
+            <span class="activity-stat-sep">·</span>
+            <span class="activity-stat is-stale"><span class="dot"></span><span class="activity-stat-val">1,510</span>&nbsp;TC-RADAR analyses · 1997–2024</span>
+        </div>
+
         <!-- ── Platform cards ────────────────────────────── -->
         <div class="platform-grid" id="tools">
             <a href="explorer.html" class="platform-card card-radar">
-                <div class="card-icon">&#127744;</div>
+                <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/></svg></div>
                 <div class="card-title">TC-RADAR Archive</div>
                 <div class="card-desc">Explore 1,500+ post-processed airborne Doppler radar analyses with interactive 3D wind fields, cross-sections, azimuthal means, and multi-variable visualization spanning 1997&ndash;2024.</div>
                 <div class="card-stats">
@@ -366,7 +489,7 @@
             </a>
 
             <a href="explorer.html#rt" class="platform-card card-realtime" onclick="sessionStorage.setItem('openRT','1')">
-                <div class="card-icon">&#128745;&#65039;</div>
+                <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2Z"/></svg></div>
                 <div class="card-title">Real-Time TDR</div>
                 <div class="card-desc">Monitor active hurricane reconnaissance missions with live tail Doppler radar visualizations, flight-level data, dropsonde profiles, and SHIPS environmental diagnostics.</div>
                 <div class="card-stats">
@@ -377,7 +500,7 @@
             </a>
 
             <a href="realtime_ir.html" class="platform-card card-ir">
-                <div class="card-icon">&#128752;</div>
+                <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 7 9 3 5 7l4 4"/><path d="M17 11l4 4-4 4-4-4"/><path d="M14 14 7 21"/><path d="M3.5 13.5 10 7"/></svg></div>
                 <div class="card-title">Real-Time Monitor</div>
                 <div class="card-desc">Track all active tropical cyclones worldwide with live geostationary infrared satellite imagery from GOES-East, GOES-West, and Himawari-9.</div>
                 <div class="card-stats">
@@ -389,7 +512,7 @@
 
             <div class="platform-grid-bottom">
                 <a href="global_archive.html" class="platform-card card-global">
-                    <div class="card-icon">&#127758;</div>
+                    <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></div>
                     <div class="card-title">Global Archive</div>
                     <div class="card-desc">Browse the complete IBTrACS tropical cyclone record from 1842 to present with satellite imagery, intensity timelines, climatology, and multi-storm comparison tools.</div>
                     <div class="card-stats">
@@ -401,7 +524,7 @@
                 </a>
 
                 <a href="explorer.html#composites" class="platform-card card-composites" onclick="sessionStorage.setItem('openComposites','1')">
-                    <div class="card-icon">&#128202;</div>
+                    <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg></div>
                     <div class="card-title">Composites</div>
                     <div class="card-desc">Build custom composite analyses from the TC-RADAR database. Filter by intensity, shear, tilt, motion, and more to reveal systematic structural patterns across tropical cyclones.</div>
                     <div class="card-stats">
@@ -411,6 +534,38 @@
                     <span class="card-arrow">&rarr;</span>
                 </a>
             </div>
+        </div>
+    </section>
+
+    <!-- ── Start Here: worked examples for first-time visitors ── -->
+    <section class="start-here-section" aria-labelledby="start-here-title">
+        <div class="start-here-label">Start here</div>
+        <h2 class="start-here-title" id="start-here-title">Three ways to jump in</h2>
+        <div class="start-here-grid">
+            <a class="start-card" href="realtime_ir.html">
+                <div class="start-card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 7 9 3 5 7l4 4"/><path d="M17 11l4 4-4 4-4-4"/><path d="M14 14 7 21"/><path d="M3.5 13.5 10 7"/></svg></div>
+                <div class="start-card-body">
+                    <div class="start-card-title">See what's happening now</div>
+                    <div class="start-card-desc">Live global IR satellite composite tracking every active tropical cyclone.</div>
+                </div>
+                <span class="start-card-arrow" aria-hidden="true">→</span>
+            </a>
+            <a class="start-card" href="explorer.html#case=478">
+                <div class="start-card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/></svg></div>
+                <div class="start-card-body">
+                    <div class="start-card-title">Step inside Irma's Cat-5 eyewall</div>
+                    <div class="start-card-desc">Airborne Doppler radar · 155 kt · 2017-09-05 · full 3D wind field.</div>
+                </div>
+                <span class="start-card-arrow" aria-hidden="true">→</span>
+            </a>
+            <a class="start-card" href="global_archive.html">
+                <div class="start-card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></div>
+                <div class="start-card-body">
+                    <div class="start-card-title">Browse 14,000+ historical storms</div>
+                    <div class="start-card-desc">Every named TC since 1842 · tracks, intensity, climatology, comparison.</div>
+                </div>
+                <span class="start-card-arrow" aria-hidden="true">→</span>
+            </a>
         </div>
     </section>
 
@@ -484,7 +639,7 @@
                 </div>
             </div>
             <div style="display:flex;justify-content:center;margin-top:1.5rem;">
-                <button class="cite-bibtex-landing" onclick="landingCopyBibtex(this)">&#x1F4CB; Copy All BibTeX</button>
+                <button class="cite-bibtex-landing" onclick="landingCopyBibtex(this)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;" aria-hidden="true"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/></svg> Copy All BibTeX</button>
             </div>
         </div>
     </section>
@@ -533,6 +688,50 @@
             setTimeout(function() { btn.textContent = orig; btn.classList.remove('copied'); }, 2000);
         });
     }
+
+    // ── Live activity strip ───────────────────────────────
+    // Populates the "N active TCs · Monitor refreshed X min ago" pill
+    // from the same API endpoint the Real-Time Monitor uses. Fails
+    // silently (keeps the "—" placeholders) if offline or blocked.
+    (function () {
+        var API_BASE = 'https://tc-atlas-api-361010099051.us-east1.run.app';
+        function relTime(iso) {
+            if (!iso) return null;
+            var then = new Date(iso);
+            if (isNaN(then.getTime())) return null;
+            var delta = (Date.now() - then.getTime()) / 1000;
+            if (delta < 60)     return 'just now';
+            if (delta < 3600)   return Math.round(delta / 60) + ' min ago';
+            if (delta < 86400)  return Math.round(delta / 3600) + ' h ago';
+            return Math.round(delta / 86400) + ' d ago';
+        }
+        fetch(API_BASE + '/ir-monitor/active-storms', { cache: 'no-store' })
+            .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+            .then(function (data) {
+                var storms = (data && data.storms) || [];
+                var active = storms.length;
+                var activeEl = document.getElementById('activity-active');
+                if (activeEl) {
+                    var val = activeEl.querySelector('.activity-stat-val');
+                    if (val) val.textContent = active;
+                    activeEl.classList.remove('is-stale');
+                    if (active === 0) {
+                        // Reframe the label when no storms are active
+                        activeEl.innerHTML = '<span class="dot"></span>No active TCs';
+                    }
+                }
+                var refreshEl = document.getElementById('activity-refresh');
+                if (refreshEl) {
+                    var rel = relTime(data && data.updated_utc);
+                    if (rel) {
+                        var rval = refreshEl.querySelector('.activity-stat-val');
+                        if (rval) rval.textContent = rel;
+                        refreshEl.classList.remove('is-stale');
+                    }
+                }
+            })
+            .catch(function () { /* keep stale placeholders; no console spam */ });
+    })();
     </script>
 </body>
 </html>
