@@ -329,28 +329,19 @@
         .start-here-section {
             max-width: 1200px;
             margin: 0 auto;
-            padding: 0 24px 4rem;
+            padding: 2.5rem 24px 4rem;
             position: relative;
             z-index: 1;
         }
-        .start-here-label {
-            text-align: center;
-            font-size: 0.72rem;
-            color: var(--cyan);
-            text-transform: uppercase;
-            letter-spacing: 0.12em;
-            font-weight: 700;
-            font-family: 'JetBrains Mono', monospace;
-            margin-bottom: 0.75rem;
-        }
         .start-here-title {
             text-align: center;
-            font-size: 1.4rem;
+            font-size: 1.5rem;
             font-weight: 700;
             color: var(--text);
             margin-bottom: 2rem;
             letter-spacing: -0.01em;
         }
+        .start-here-title .accent { color: var(--cyan); }
         .start-here-grid {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
@@ -539,8 +530,7 @@
 
     <!-- ── Start Here: worked examples for first-time visitors ── -->
     <section class="start-here-section" aria-labelledby="start-here-title">
-        <div class="start-here-label">Start here</div>
-        <h2 class="start-here-title" id="start-here-title">Three ways to jump in</h2>
+        <h2 class="start-here-title" id="start-here-title">Popular <span class="accent">starting points</span></h2>
         <div class="start-here-grid">
             <a class="start-card" href="realtime_ir.html">
                 <div class="start-card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 7 9 3 5 7l4 4"/><path d="M17 11l4 4-4 4-4-4"/><path d="M14 14 7 21"/><path d="M3.5 13.5 10 7"/></svg></div>
