@@ -7,6 +7,29 @@ function _ga(action, params) {
     }
 }
 
+// ── Inline-SVG icon helper (Lucide-style; stroke:currentColor). ─
+// Returns an SVG string for use in innerHTML / template strings.
+// Each icon picks up its button's accent color via stroke:currentColor.
+var _ICON_PATHS = {
+    satellite: '<path d="M13 7 9 3 5 7l4 4"/><path d="M17 11l4 4-4 4-4-4"/><path d="M14 14 7 21"/><path d="M3.5 13.5 10 7"/>',
+    radio:     '<path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/>',
+    plane:     '<path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2Z"/>',
+    parachute: '<path d="M2 12a10 10 0 0 1 20 0"/><path d="M7 12l5 9"/><path d="M17 12l-5 9"/><path d="M12 12v9"/>',
+    wind:      '<path d="M17.7 7.7a2.5 2.5 0 1 1 1.8 4.3H2"/><path d="M9.6 4.6A2 2 0 1 1 11 8H2"/><path d="M12.6 19.4A2 2 0 1 0 14 16H2"/>',
+    target:    '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
+    globe:     '<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>',
+    dish:      '<path d="M4 10a7.31 7.31 0 0 0 10 10Z"/><path d="m9 15 3-3"/><path d="M17 13a6 6 0 0 0-6-6"/><path d="M21 13A10 10 0 0 0 11 3"/>',
+    tornado:   '<path d="M21 4H3"/><path d="M18 8H6"/><path d="M19 12H9"/><path d="M16 16h-6"/><path d="M13 20h-3"/>',
+    monitor:   '<rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/>',
+    activity:  '<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>',
+    clipboard: '<path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/>',
+    link:      '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+    explore:   '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/><path d="M11 8v6"/><path d="M8 11h6"/>'
+};
+function _icon(name) {
+    return '<svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (_ICON_PATHS[name] || '') + '</svg>';
+}
+
 // ── Deep linking: ?tab=realtime / ?tab=composites / #case=N&var=X&level=Y&dtype=Z ──
 function _updatePermalink() {
     if (currentCaseIndex === null) return;
@@ -463,8 +486,8 @@ function openSidePanel(caseData, fromQuickSelect) {
         '<div class="panel-storm-name">' + caseData.storm_name +
             (_activeDataType === 'merge' ? ' <span style="font-size:10px;background:#4f46e5;color:#fff;padding:1px 6px;border-radius:3px;vertical-align:middle;">MERGE</span>' : '') +
             caseNavHtml +
-            '<button class="cite-btn" onclick="showCiteModal()" title="How to cite TC-ATLAS &amp; TC-RADAR">\uD83D\uDCCB Cite</button>' +
-            '<button class="cite-btn" onclick="copyPermalink()" title="Copy shareable link" style="margin-left:4px;">\uD83D\uDD17 Share</button>' +
+            '<button class="cite-btn" onclick="showCiteModal()" title="How to cite TC-ATLAS &amp; TC-RADAR">' + _icon('clipboard') + 'Cite</button>' +
+            '<button class="cite-btn" onclick="copyPermalink()" title="Copy shareable link" style="margin-left:4px;">' + _icon('link') + 'Share</button>' +
         '</div>' +
         '<div class="panel-mission">' + caseData.mission_id + ' \u00b7 ' + caseData.datetime +
             (caseData.number_of_swaths ? ' \u00b7 ' + caseData.number_of_swaths + ' swaths' : '') +
@@ -489,23 +512,23 @@ function openSidePanel(caseData, fromQuickSelect) {
                 // ── OVERLAYS: compact pill toggle strip ──
                 '<div class="overlay-strip">' +
                     '<span class="overlay-strip-label">Layers</span>' +
-                    '<button class="overlay-pill" id="ir-underlay-btn" onclick="toggleIRPlotlyUnderlay()" disabled data-color="cyan" title="IR Satellite Underlay">\uD83D\uDEF0 IR</button>' +
-                    '<button class="overlay-pill active" id="tdr-toggle-btn" onclick="toggleTDRVisibility()" data-color="red" title="TDR Radar Visibility">\uD83C\uDF00 TDR</button>' +
-                    '<button class="overlay-pill" id="btn-archive-fl" onclick="archiveToggleFlightLevel()" data-color="blue" title="Flight-Level Data">\u2708 FL</button>' +
-                    '<button class="overlay-pill" id="btn-archive-sonde" onclick="archiveToggleDropsondes()" data-color="green" title="Dropsonde Data">\uD83E\uDE82 Sondes</button>' +
-                    '<button class="overlay-pill" id="barb-btn" onclick="toggleWindBarbs()" data-color="slate" title="Wind Barbs">\uD83C\uDF2C Barbs</button>' +
-                    '<button class="overlay-pill" id="tilt-btn" onclick="toggleTiltProfile()" data-color="pink" title="Vortex Tilt Profile">\uD83C\uDFAF Tilt</button>' +
-                    '<button class="overlay-pill" id="env-case-btn" onclick="toggleEnvOverlay()" data-color="emerald" title="ERA5 Environment Diagnostics">\uD83C\uDF0D Env</button>' +
-                    '<button class="overlay-pill" id="mw-overlay-btn" onclick="toggleMicrowaveOverlay()" data-color="orange" title="Microwave Satellite Overlay">\uD83D\uDCE1 MW</button>' +
-                    '<button class="overlay-pill" id="nexrad-overlay-btn" onclick="toggleNexradOverlay()" data-color="green" title="NEXRAD 88D Ground Radar">\uD83C\uDF00 88D</button>' +
+                    '<button class="overlay-pill" id="ir-underlay-btn" onclick="toggleIRPlotlyUnderlay()" disabled data-color="cyan" title="IR Satellite Underlay">' + _icon('satellite') + 'IR</button>' +
+                    '<button class="overlay-pill active" id="tdr-toggle-btn" onclick="toggleTDRVisibility()" data-color="red" title="TDR Radar Visibility">' + _icon('radio') + 'TDR</button>' +
+                    '<button class="overlay-pill" id="btn-archive-fl" onclick="archiveToggleFlightLevel()" data-color="blue" title="Flight-Level Data">' + _icon('plane') + 'FL</button>' +
+                    '<button class="overlay-pill" id="btn-archive-sonde" onclick="archiveToggleDropsondes()" data-color="blue" title="Dropsonde Data">' + _icon('parachute') + 'Sondes</button>' +
+                    '<button class="overlay-pill" id="barb-btn" onclick="toggleWindBarbs()" data-color="slate" title="Wind Barbs">' + _icon('wind') + 'Barbs</button>' +
+                    '<button class="overlay-pill" id="tilt-btn" onclick="toggleTiltProfile()" data-color="slate" title="Vortex Tilt Profile">' + _icon('target') + 'Tilt</button>' +
+                    '<button class="overlay-pill" id="env-case-btn" onclick="toggleEnvOverlay()" data-color="emerald" title="ERA5 Environment Diagnostics">' + _icon('globe') + 'Env</button>' +
+                    '<button class="overlay-pill" id="mw-overlay-btn" onclick="toggleMicrowaveOverlay()" data-color="orange" title="Microwave Satellite Overlay">' + _icon('dish') + 'MW</button>' +
+                    '<button class="overlay-pill" id="nexrad-overlay-btn" onclick="toggleNexradOverlay()" data-color="green" title="NEXRAD 88D Ground Radar">' + _icon('tornado') + '88D</button>' +
                 '</div>' +
                 // ── Microwave overpass selector (hidden by default) ──
-                '<div id="mw-overpass-panel" style="display:none;margin-top:6px;background:rgba(30,41,59,0.95);border:1px solid rgba(251,146,60,0.35);border-radius:8px;padding:8px 12px;">' +
-                    '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
-                        '<label style="font-size:10px;font-weight:600;color:#fdba74;text-transform:uppercase;letter-spacing:0.5px;">Overpass</label>' +
-                        '<select id="mw-overpass-select" onchange="loadMicrowaveOverpass()" style="flex:1;min-width:180px;font-size:10px;padding:4px 6px;border:1px solid rgba(255,255,255,0.1);border-radius:4px;background:var(--navy);color:var(--text);font-family:\'JetBrains Mono\',monospace;"></select>' +
-                        '<label style="font-size:10px;color:#9ca3af;">Product</label>' +
-                        '<select id="mw-product-select" onchange="loadMicrowaveOverpass()" style="font-size:10px;padding:4px 6px;border:1px solid rgba(255,255,255,0.1);border-radius:4px;background:var(--navy);color:var(--text);font-family:\'JetBrains Mono\',monospace;">' +
+                '<div id="mw-overpass-panel" class="rt-sub-panel accent-mw" style="display:none;">' +
+                    '<div class="rt-sub-panel-row">' +
+                        '<label class="rt-sub-panel-label">Overpass</label>' +
+                        '<select id="mw-overpass-select" class="rt-sub-panel-select is-flex" onchange="loadMicrowaveOverpass()"></select>' +
+                        '<label class="rt-sub-panel-sublabel">Product</label>' +
+                        '<select id="mw-product-select" class="rt-sub-panel-select" onchange="loadMicrowaveOverpass()" style="min-width:auto;">' +
                             '<option value="89pct">89 GHz PCT</option>' +
                             '<option value="89v">89 GHz V-pol</option>' +
                             '<option value="89h">89 GHz H-pol</option>' +
@@ -513,33 +536,33 @@ function openSidePanel(caseData, fromQuickSelect) {
                             '<option value="37v">37 GHz V-pol</option>' +
                             '<option value="37h">37 GHz H-pol</option>' +
                         '</select>' +
-                        '<span id="mw-status" style="font-size:9px;color:#64748b;"></span>' +
-                        '<span style="font-size:8px;color:#64748b;margin-left:auto;">Data: <a href="https://rammb-data.cira.colostate.edu/tcprimed/" target="_blank" rel="noopener" style="color:#94a3b8;text-decoration:none;border-bottom:1px dotted #64748b;">TC-PRIMED</a> (NOAA/CSU)</span>' +
+                        '<span id="mw-status" class="rt-sub-panel-status"></span>' +
+                        '<span class="rt-sub-panel-source">Data: <a href="https://rammb-data.cira.colostate.edu/tcprimed/" target="_blank" rel="noopener">TC-PRIMED</a> (NOAA/CSU)</span>' +
                     '</div>' +
-                    '<div style="display:flex;align-items:center;gap:6px;margin-top:5px;flex-wrap:wrap;">' +
-                        '<button id="mw-planview-btn" class="overlay-pill active" onclick="toggleMWPlanView()" style="font-size:9px;padding:2px 8px;background:rgba(251,146,60,0.2);border:1px solid rgba(251,146,60,0.4);border-radius:4px;color:#fdba74;cursor:pointer;" title="Toggle MW on Plan View">Plan View</button>' +
-                        '<label style="font-size:9px;color:#9ca3af;">Range</label>' +
-                        '<input id="mw-vmin" type="number" value="105" step="5" style="width:44px;font-size:9px;padding:2px 4px;border:1px solid rgba(255,255,255,0.1);border-radius:3px;background:var(--navy);color:var(--text);font-family:\'JetBrains Mono\',monospace;text-align:center;" onchange="updateMWColorBounds()">' +
-                        '<span style="font-size:9px;color:#64748b;">–</span>' +
-                        '<input id="mw-vmax" type="number" value="305" step="5" style="width:44px;font-size:9px;padding:2px 4px;border:1px solid rgba(255,255,255,0.1);border-radius:3px;background:var(--navy);color:var(--text);font-family:\'JetBrains Mono\',monospace;text-align:center;" onchange="updateMWColorBounds()">' +
-                        '<span style="font-size:9px;color:#64748b;">K</span>' +
+                    '<div class="rt-sub-panel-row" style="margin-top:5px;">' +
+                        '<button id="mw-planview-btn" class="rt-sub-panel-btn" onclick="toggleMWPlanView()" title="Toggle MW on Plan View">Plan View</button>' +
+                        '<label class="rt-sub-panel-sublabel">Range</label>' +
+                        '<input id="mw-vmin" type="number" value="105" step="5" class="rt-sub-panel-input" style="width:44px;text-align:center;" onchange="updateMWColorBounds()">' +
+                        '<span class="rt-sub-panel-between">–</span>' +
+                        '<input id="mw-vmax" type="number" value="305" step="5" class="rt-sub-panel-input" style="width:44px;text-align:center;" onchange="updateMWColorBounds()">' +
+                        '<span class="rt-sub-panel-between">K</span>' +
                     '</div>' +
                 '</div>' +
                 // ── NEXRAD 88D controls (hidden by default) ──
-                '<div id="nexrad-panel" style="display:none;margin-top:6px;background:rgba(30,41,59,0.95);border:1px solid rgba(34,197,94,0.35);border-radius:8px;padding:8px 12px;">' +
-                    '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
-                        '<label style="font-size:10px;font-weight:600;color:#86efac;text-transform:uppercase;letter-spacing:0.5px;">88D Site</label>' +
-                        '<select id="nexrad-site-select" onchange="loadTdrNexradScans()" style="flex:1;min-width:120px;font-size:10px;padding:4px 6px;border:1px solid rgba(255,255,255,0.1);border-radius:4px;background:var(--navy);color:var(--text);font-family:\'JetBrains Mono\',monospace;"></select>' +
-                        '<select id="nexrad-scan-select" onchange="loadTdrNexradFrame()" style="flex:1;min-width:140px;font-size:10px;padding:4px 6px;border:1px solid rgba(255,255,255,0.1);border-radius:4px;background:var(--navy);color:var(--text);font-family:\'JetBrains Mono\',monospace;"></select>' +
-                        '<select id="nexrad-product-select" onchange="loadTdrNexradFrame()" style="font-size:10px;padding:4px 6px;border:1px solid rgba(255,255,255,0.1);border-radius:4px;background:var(--navy);color:var(--text);font-family:\'JetBrains Mono\',monospace;">' +
+                '<div id="nexrad-panel" class="rt-sub-panel accent-nexrad" style="display:none;">' +
+                    '<div class="rt-sub-panel-row">' +
+                        '<label class="rt-sub-panel-label">88D Site</label>' +
+                        '<select id="nexrad-site-select" class="rt-sub-panel-select is-flex" style="min-width:120px;" onchange="loadTdrNexradScans()"></select>' +
+                        '<select id="nexrad-scan-select" class="rt-sub-panel-select is-flex" style="min-width:140px;" onchange="loadTdrNexradFrame()"></select>' +
+                        '<select id="nexrad-product-select" class="rt-sub-panel-select" style="min-width:auto;" onchange="loadTdrNexradFrame()">' +
                             '<option value="reflectivity">Reflectivity</option>' +
                             '<option value="velocity">Velocity</option>' +
                         '</select>' +
-                        '<span id="nexrad-status" style="font-size:9px;color:#64748b;"></span>' +
+                        '<span id="nexrad-status" class="rt-sub-panel-status"></span>' +
                     '</div>' +
-                    '<div style="display:flex;align-items:center;gap:6px;margin-top:5px;flex-wrap:wrap;">' +
-                        '<button id="nexrad-planview-btn" class="overlay-pill" onclick="toggleNexradPlanView()" style="font-size:9px;padding:2px 8px;background:rgba(34,197,94,0.2);border:1px solid rgba(34,197,94,0.4);border-radius:4px;color:#86efac;cursor:pointer;" title="Toggle storm-relative 88D on Plan View">Plan View</button>' +
-                        '<span style="font-size:8px;color:#64748b;margin-left:auto;">Data: <a href="https://registry.opendata.aws/noaa-nexrad/" target="_blank" rel="noopener" style="color:#94a3b8;text-decoration:none;border-bottom:1px dotted #64748b;">NOAA NEXRAD L2</a> (AWS)</span>' +
+                    '<div class="rt-sub-panel-row" style="margin-top:5px;">' +
+                        '<button id="nexrad-planview-btn" class="rt-sub-panel-btn" onclick="toggleNexradPlanView()" title="Toggle storm-relative 88D on Plan View">Plan View</button>' +
+                        '<span class="rt-sub-panel-source">Data: <a href="https://registry.opendata.aws/noaa-nexrad/" target="_blank" rel="noopener">NOAA NEXRAD L2</a> (AWS)</span>' +
                     '</div>' +
                     '<div id="nexrad-colorbar" style="margin-top:5px;"></div>' +
                 '</div>' +
@@ -551,41 +574,41 @@ function openSidePanel(caseData, fromQuickSelect) {
                         '<button class="cs-btn" id="cs-btn" onclick="toggleCrossSection()" disabled>\u2702 Cross Section</button>' +
                         '<button class="cs-btn" id="az-btn" onclick="dispatchAzimuthalMean()" disabled>\u27F3 Azim. Mean</button>' +
                         '<button class="cs-btn" id="sq-btn" onclick="fetchShearQuadrants()" disabled>\u25D1 Shear Quads</button>' +
-                        '<button class="cs-btn" id="vol-btn" onclick="fetch3DVolume()" disabled>\uD83D\uDDA5 3D Volume</button>' +
-                        '<button class="cs-btn" id="vp-scatter-btn" onclick="fetchVPScatter()" style="background:rgba(251,191,36,0.12);border-color:rgba(251,191,36,0.35);color:#fde68a;">\u2B24 VP Scatter</button>' +
-                        '<button class="cs-btn" id="anom-btn" onclick="document.getElementById(\'az-coord-mode\').value=\'anomaly\';dispatchAzimuthalMean();" disabled style="background:rgba(52,211,153,0.12);border-color:rgba(52,211,153,0.35);color:#6ee7b7;">Z* Anomaly</button>' +
-                        '<button class="cs-btn" id="cfad-btn" onclick="toggleSingleCFADConfig()" disabled style="background:rgba(168,85,247,0.12);border-color:rgba(168,85,247,0.35);color:#c4b5fd;">\u2593 CFAD</button>' +
+                        '<button class="cs-btn" id="vol-btn" onclick="fetch3DVolume()" disabled>' + _icon('monitor') + '3D Volume</button>' +
+                        '<button class="cs-btn is-tinted" data-accent="vp" id="vp-scatter-btn" onclick="fetchVPScatter()">\u2B24 VP Scatter</button>' +
+                        '<button class="cs-btn is-tinted" data-accent="anomaly" id="anom-btn" onclick="document.getElementById(\'az-coord-mode\').value=\'anomaly\';dispatchAzimuthalMean();" disabled>Z* Anomaly</button>' +
+                        '<button class="cs-btn is-tinted" data-accent="cfad" id="cfad-btn" onclick="toggleSingleCFADConfig()" disabled>\u2593 CFAD</button>' +
                     '</div>' +
                 '</div>' +
                 // ── CFAD config panel (inline, hidden by default) ──
-                '<div id="cfad-config-popover" style="display:none;margin-top:6px;background:rgba(30,41,59,0.95);border:1px solid rgba(168,85,247,0.35);border-radius:8px;padding:10px 12px;">' +
-                    '<div style="font-size:10px;font-weight:600;color:#c4b5fd;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">\u2593 CFAD Options</div>' +
-                    '<div style="display:flex;flex-wrap:wrap;gap:8px 16px;">' +
-                        '<div style="display:flex;align-items:center;gap:6px;"><label style="font-size:10px;color:#9ca3af;width:70px;flex-shrink:0;">Bin Width</label><input type="number" id="sc-cfad-bin-width" placeholder="auto" min="0.1" step="any" style="width:65px;padding:3px 6px;font-size:10px;border:1px solid rgba(255,255,255,0.1);border-radius:4px;background:var(--navy);color:var(--text);font-family:\'JetBrains Mono\',monospace;"></div>' +
-                        '<div style="display:flex;align-items:center;gap:6px;"><label style="font-size:10px;color:#9ca3af;width:50px;flex-shrink:0;"># Bins</label><input type="number" id="sc-cfad-n-bins" value="40" min="5" max="200" step="1" style="width:55px;padding:3px 6px;font-size:10px;border:1px solid rgba(255,255,255,0.1);border-radius:4px;background:var(--navy);color:var(--text);font-family:\'JetBrains Mono\',monospace;"><span style="font-size:8px;color:#6b7280;">(if no width)</span></div>' +
-                        '<div style="display:flex;align-items:center;gap:6px;"><label style="font-size:10px;color:#9ca3af;width:70px;flex-shrink:0;">Bin Range</label><input type="number" id="sc-cfad-bin-min" placeholder="auto" step="any" style="width:55px;padding:3px 6px;font-size:10px;border:1px solid rgba(255,255,255,0.1);border-radius:4px;background:var(--navy);color:var(--text);font-family:\'JetBrains Mono\',monospace;"><span style="font-size:9px;color:#6b7280;">to</span><input type="number" id="sc-cfad-bin-max" placeholder="auto" step="any" style="width:55px;padding:3px 6px;font-size:10px;border:1px solid rgba(255,255,255,0.1);border-radius:4px;background:var(--navy);color:var(--text);font-family:\'JetBrains Mono\',monospace;"></div>' +
-                        '<div style="display:flex;align-items:center;gap:6px;"><label style="font-size:10px;color:#9ca3af;width:70px;flex-shrink:0;">Normalise</label><select id="sc-cfad-normalise" style="font-size:10px;padding:3px 4px;border:1px solid rgba(255,255,255,0.1);border-radius:4px;background:var(--navy);color:var(--text);font-family:\'JetBrains Mono\',monospace;"><option value="height">% at Each Height</option><option value="total">% of Total</option><option value="raw">Raw Counts</option></select></div>' +
-                        '<div style="display:flex;align-items:center;gap:6px;"><label style="font-size:10px;color:#9ca3af;width:70px;flex-shrink:0;">Radial (km)</label><input type="number" id="sc-cfad-min-radius" value="0" min="0" max="500" step="any" style="width:55px;padding:3px 6px;font-size:10px;border:1px solid rgba(255,255,255,0.1);border-radius:4px;background:var(--navy);color:var(--text);font-family:\'JetBrains Mono\',monospace;"><span style="font-size:9px;color:#6b7280;">to</span><input type="number" id="sc-cfad-max-radius" value="200" min="0.1" max="500" step="any" style="width:55px;padding:3px 6px;font-size:10px;border:1px solid rgba(255,255,255,0.1);border-radius:4px;background:var(--navy);color:var(--text);font-family:\'JetBrains Mono\',monospace;"></div>' +
-                        '<div style="display:flex;align-items:center;gap:4px;"><input type="checkbox" id="sc-cfad-log-scale"><label for="sc-cfad-log-scale" style="font-size:10px;color:#9ca3af;">Log-scale colorbar</label></div>' +
+                '<div id="cfad-config-popover" class="rt-sub-panel accent-cfad" style="display:none;padding:10px 12px;">' +
+                    '<div class="rt-sub-panel-title">\u2593 CFAD Options</div>' +
+                    '<div class="rt-sub-panel-row" style="gap:8px 16px;">' +
+                        '<div class="rt-sub-panel-field"><label class="w-70">Bin Width</label><input type="number" id="sc-cfad-bin-width" class="rt-sub-panel-input w-65" placeholder="auto" min="0.1" step="any"></div>' +
+                        '<div class="rt-sub-panel-field"><label class="w-50"># Bins</label><input type="number" id="sc-cfad-n-bins" class="rt-sub-panel-input w-55" value="40" min="5" max="200" step="1"><span class="rt-sub-panel-hint">(if no width)</span></div>' +
+                        '<div class="rt-sub-panel-field"><label class="w-70">Bin Range</label><input type="number" id="sc-cfad-bin-min" class="rt-sub-panel-input w-55" placeholder="auto" step="any"><span class="rt-sub-panel-between">to</span><input type="number" id="sc-cfad-bin-max" class="rt-sub-panel-input w-55" placeholder="auto" step="any"></div>' +
+                        '<div class="rt-sub-panel-field"><label class="w-70">Normalise</label><select id="sc-cfad-normalise" class="rt-sub-panel-select" style="min-width:auto;padding:3px 4px;"><option value="height">% at Each Height</option><option value="total">% of Total</option><option value="raw">Raw Counts</option></select></div>' +
+                        '<div class="rt-sub-panel-field"><label class="w-70">Radial (km)</label><input type="number" id="sc-cfad-min-radius" class="rt-sub-panel-input w-55" value="0" min="0" max="500" step="any"><span class="rt-sub-panel-between">to</span><input type="number" id="sc-cfad-max-radius" class="rt-sub-panel-input w-55" value="200" min="0.1" max="500" step="any"></div>' +
+                        '<div class="rt-sub-panel-field" style="gap:4px;"><input type="checkbox" id="sc-cfad-log-scale"><label for="sc-cfad-log-scale">Log-scale colorbar</label></div>' +
                     '</div>' +
-                    '<div style="display:flex;gap:6px;margin-top:10px;">' +
-                        '<button onclick="fetchSingleCFAD()" style="padding:6px 16px;font-size:11px;font-weight:700;border:none;border-radius:5px;background:rgba(168,85,247,0.5);color:#e9d5ff;cursor:pointer;font-family:\'JetBrains Mono\',monospace;transition:background 0.2s;" onmouseover="this.style.background=\'rgba(168,85,247,0.7)\'" onmouseout="this.style.background=\'rgba(168,85,247,0.5)\'">Generate CFAD</button>' +
-                        '<button onclick="toggleSingleCFADConfig()" style="padding:6px 12px;font-size:11px;font-weight:700;border:1px solid rgba(255,255,255,0.1);border-radius:5px;background:transparent;color:#9ca3af;cursor:pointer;font-family:\'JetBrains Mono\',monospace;">Cancel</button>' +
+                    '<div class="rt-sub-panel-actions">' +
+                        '<button class="rt-sub-panel-primary" onclick="fetchSingleCFAD()">Generate CFAD</button>' +
+                        '<button class="rt-sub-panel-cancel" onclick="toggleSingleCFADConfig()">Cancel</button>' +
                     '</div>' +
                 '</div>' +
                 // ── STORM EVOLUTION: temporal context ──
                 '<div class="action-section">' +
                     '<span class="action-section-label">Storm Evolution</span>' +
                     '<div class="display-actions">' +
-                        '<button class="cs-btn" id="storm-timeline-btn" onclick="toggleStormTimeline()" style="background:rgba(0,212,255,0.12);border-color:rgba(0,212,255,0.35);color:#67e8f9;">\uD83D\uDCCA Intensity</button>' +
-                        '<button class="cs-btn" id="hovmoller-btn" onclick="toggleHovmoller()" style="background:rgba(251,146,60,0.12);border-color:rgba(251,146,60,0.35);color:#fdba74;">\u2630 Hovm\u00f6ller</button>' +
-                        '<button class="cs-btn" id="mw-timeline-btn" onclick="toggleMWTimeline()" style="background:rgba(251,146,60,0.12);border-color:rgba(251,146,60,0.35);color:#fde68a;">\uD83D\uDCE1 MW Timeline</button>' +
+                        '<button class="cs-btn is-tinted" data-accent="cyan" id="storm-timeline-btn" onclick="toggleStormTimeline()">' + _icon('activity') + 'Intensity</button>' +
+                        '<button class="cs-btn is-tinted" data-accent="mw" id="hovmoller-btn" onclick="toggleHovmoller()">\u2630 Hovm\u00f6ller</button>' +
+                        '<button class="cs-btn is-tinted" data-accent="mw" id="mw-timeline-btn" onclick="toggleMWTimeline()">' + _icon('dish') + 'MW Timeline</button>' +
                     '</div>' +
                 '</div>' +
                 // ── Storm intensity timeline (hidden by default) ──
                 '<div id="storm-timeline-panel" class="storm-timeline-panel" style="display:none;">' +
                     '<div class="fl-ts-header">' +
-                        '<span class="fl-ts-title">\uD83C\uDF00 Best-Track Intensity</span>' +
+                        '<span class="fl-ts-title">' + _icon('activity') + 'Best-Track Intensity</span>' +
                         '<div style="display:flex;align-items:center;gap:4px;">' +
                             '<button class="cs-btn" id="fdeck-archive-btn" onclick="toggleArchiveFDeck()" style="font-size:9px;padding:3px 8px;margin:0;min-width:0;flex:none;background:rgba(255,159,67,0.12);border-color:rgba(255,159,67,0.35);color:#ff9f43;">F-Deck</button>' +
                             '<span id="fdeck-archive-status" style="font-size:9px;color:#64748b;"></span>' +
@@ -618,7 +641,7 @@ function openSidePanel(caseData, fromQuickSelect) {
                 // ── MW Timeline panel (hidden by default) ──
                 '<div id="mw-timeline-panel" class="storm-timeline-panel" style="display:none;">' +
                     '<div class="fl-ts-header">' +
-                        '<span class="fl-ts-title">\uD83D\uDCE1 MW Overpass Timeline</span>' +
+                        '<span class="fl-ts-title">' + _icon('dish') + 'MW Overpass Timeline</span>' +
                         '<button onclick="closeMWTimeline()" class="fl-ts-close" title="Close">&times;</button>' +
                     '</div>' +
                     '<div id="mw-timeline-status" style="font-size:10px;color:#64748b;padding:2px 8px;"></div>' +
@@ -631,7 +654,7 @@ function openSidePanel(caseData, fromQuickSelect) {
                 // ── Pre-rendered FL time-series panel (hidden by default) ──
                 '<div id="fl-archive-ts" class="fl-archive-ts" style="display:none;">' +
                     '<div class="fl-ts-header">' +
-                        '<span class="fl-ts-title">\u2708 Along-Track Time Series</span>' +
+                        '<span class="fl-ts-title">' + _icon('plane') + 'Along-Track Time Series</span>' +
                         '<div class="fl-ts-res-group" id="arch-fl-res-group"></div>' +
                         '<button onclick="archiveSavePlotPNG(\'fl-ts-chart\',\'FL_TimeSeries\')" class="rt-save-png-btn" style="margin-left:4px;" title="Save as PNG"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg></button>' +
                         '<button onclick="archFLCloseTimeSeries()" class="fl-ts-close" title="Close">&times;</button>' +
@@ -650,7 +673,7 @@ function openSidePanel(caseData, fromQuickSelect) {
 
             // ── RIGHT: Controls panel ──
             '<div class="explorer-controls">' +
-                '<div class="explorer-title">\uD83D\uDD2C Explore Data</div>' +
+                '<div class="explorer-title">Explore Data</div>' +
                 '<div class="explorer-row"><label>Variable</label>' +
                     '<select class="explorer-select" id="ep-var">' +
                         '<optgroup label="WCM Recentered (2 km)">' +
@@ -2941,7 +2964,7 @@ function toggleIRMapVisibility() {
     if (_irMapOverlay) _irMapOverlay.setOpacity(_irMapVisible ? 0.75 : 0);
     if (_irMapVisible) { _showIRMapColorbar(); } else { _hideIRMapColorbar(); }
     var btn = document.getElementById('ir-toggle-btn');
-    if (btn) btn.textContent = _irMapVisible ? '\uD83C\uDF0D IR On' : '\uD83C\uDF11 IR Off';
+    if (btn) btn.innerHTML = _icon('satellite') + (_irMapVisible ? 'IR On' : 'IR Off');
 }
 
 function _injectIRMapControls() {
@@ -2958,7 +2981,7 @@ function _injectIRMapControls() {
     ctrl.className = 'ir-map-controls';
     ctrl.innerHTML =
         '<div class="ir-ctrl-row">' +
-            '<button class="ir-ctrl-btn" id="ir-toggle-btn" onclick="toggleIRMapVisibility()">\uD83C\uDF0D IR On</button>' +
+            '<button class="ir-ctrl-btn" id="ir-toggle-btn" onclick="toggleIRMapVisibility()">' + _icon('satellite') + 'IR On</button>' +
             '<button class="ir-ctrl-btn' + disabledCls + '" id="ir-step-back" onclick="irAnimStep(1)" title="Previous (earlier)">\u25C0</button>' +
             '<button class="ir-ctrl-btn' + disabledCls + '" id="ir-play-btn" onclick="irAnimToggle()" title="Play/Pause">\u25B6</button>' +
             '<button class="ir-ctrl-btn' + disabledCls + '" id="ir-step-fwd" onclick="irAnimStep(-1)" title="Next (later)">\u25B6</button>' +
@@ -5496,7 +5519,7 @@ function createPopupContent(caseData) {
         '<div class="popup-row"><span class="popup-label">Shear Dir:</span><span class="popup-value">' + shearDir + '</span></div>' +
         nSwathsRow +
         '<div class="popup-row"><span class="popup-label">Location:</span><span class="popup-value">' + Math.abs(caseData.latitude).toFixed(2) + '\u00b0' + (caseData.latitude>=0?'N':'S') + ', ' + Math.abs(caseData.longitude).toFixed(2) + '\u00b0' + (caseData.longitude<0?'W':'E') + '</span></div>' +
-        '<button class="popup-explore-btn" onclick="openSidePanelById(' + idx + ')">\uD83D\uDD2C View Radar & Explore Data \u2192</button>';
+        '<button class="popup-explore-btn" onclick="openSidePanelById(' + idx + ')">' + _icon('explore') + 'View Radar & Explore Data \u2192</button>';
 }
 
 function openSidePanelById(idx) { var d = _getActiveData(); if (!d) return; var caseData = d.cases.find(function(c) { return c.case_index === idx; }); if (caseData) openSidePanel(caseData); }
@@ -7008,14 +7031,14 @@ function fetch3DVolume() {
     var variable = document.getElementById('ep-var').value;
     _ga('view_3d_volume', { case_index: currentCaseIndex, variable: variable, data_type: _activeDataType });
     var btn = document.getElementById('vol-btn');
-    btn.disabled = true; btn.textContent = '\uD83D\uDDA5 Loading\u2026';
+    btn.disabled = true; btn.innerHTML = _icon('monitor') + 'Loading\u2026';
 
     // Check cache
     var cacheKey = '3d_' + _activeDataType + '_' + currentCaseIndex + '_' + variable;
     if (_dataCache[cacheKey]) {
         _last3DJson = _dataCache[cacheKey];
         open3DModal();
-        btn.disabled = false; btn.textContent = '\uD83D\uDDA5 3D Volume';
+        btn.disabled = false; btn.innerHTML = _icon('monitor') + '3D Volume';
         return;
     }
 
@@ -7033,7 +7056,7 @@ function fetch3DVolume() {
             var msg = err.name === 'AbortError' ? 'Request timed out (120s).' : err.message;
             alert('\u26A0\uFE0F 3D Volume: ' + msg);
         })
-        .finally(function() { clearTimeout(timeout); btn.disabled = false; btn.textContent = '\uD83D\uDDA5 3D Volume'; });
+        .finally(function() { clearTimeout(timeout); btn.disabled = false; btn.innerHTML = _icon('monitor') + '3D Volume'; });
 }
 
 function open3DModal() {
@@ -12838,19 +12861,19 @@ function archiveToggleFlightLevel() {
         _archiveFLActive = false;
         _archiveRemoveFLOverlay();
         _archiveHideFLTimeSeries();
-        if (btn) { btn.textContent = '\u2708 FL'; btn.classList.remove('fl-active'); btn.classList.remove('active'); }
+        if (btn) { btn.innerHTML = _icon('plane') + 'FL'; btn.classList.remove('fl-active'); btn.classList.remove('active'); }
         return;
     }
 
     // Activate: fetch FL data for current case
     if (currentCaseIndex === null) return;
     _archiveFLActive = true;
-    if (btn) { btn.textContent = '\u2708 FL'; btn.classList.add('fl-active'); btn.disabled = true; }
+    if (btn) { btn.innerHTML = _icon('plane') + 'FL'; btn.classList.add('fl-active'); btn.disabled = true; }
 
     if (_archiveFLData && _archiveFLData._caseIndex === currentCaseIndex) {
         _archiveRenderFLOverlay(_archiveFLData);
         _archiveRenderFLTimeSeries(_archiveFLData);
-        if (btn) { btn.textContent = '\u2708 FL'; btn.disabled = false; btn.classList.add('active'); }
+        if (btn) { btn.innerHTML = _icon('plane') + 'FL'; btn.disabled = false; btn.classList.add('active'); }
         return;
     }
 
@@ -12864,11 +12887,11 @@ function archiveToggleFlightLevel() {
 
             if (!json.success) {
                 var msg = json.message || 'No flight-level data available for this case.';
-                if (btn) { btn.textContent = '\u2708 FL'; btn.disabled = false; btn.classList.remove('fl-active'); btn.classList.remove('active'); }
+                if (btn) { btn.innerHTML = _icon('plane') + 'FL'; btn.disabled = false; btn.classList.remove('fl-active'); btn.classList.remove('active'); }
                 _archiveFLActive = false;
                 var flStatus = document.getElementById('fl-archive-status');
                 if (flStatus) {
-                    flStatus.textContent = '\u2708 ' + msg;
+                    flStatus.innerHTML = _icon('plane') + msg;
                     flStatus.style.display = 'block';
                     setTimeout(function() { flStatus.style.display = 'none'; }, 5000);
                 }
@@ -12877,12 +12900,12 @@ function archiveToggleFlightLevel() {
 
             _archiveRenderFLOverlay(json);
             _archiveRenderFLTimeSeries(json);
-            if (btn) { btn.textContent = '\u2708 FL'; btn.disabled = false; btn.classList.add('active'); }
+            if (btn) { btn.innerHTML = _icon('plane') + 'FL'; btn.disabled = false; btn.classList.add('active'); }
         })
         .catch(function(err) {
             console.warn('FL archive fetch error:', err);
             _archiveFLActive = false;
-            if (btn) { btn.textContent = '\u2708 FL'; btn.disabled = false; btn.classList.remove('fl-active'); btn.classList.remove('active'); }
+            if (btn) { btn.innerHTML = _icon('plane') + 'FL'; btn.disabled = false; btn.classList.remove('fl-active'); btn.classList.remove('active'); }
         });
 }
 
@@ -13364,7 +13387,7 @@ function _archiveFLReset() {
     _archiveFLData = null;
     _archiveFLTraceIndices = [];
     var btn = document.getElementById('btn-archive-fl');
-    if (btn) { btn.textContent = '\u2708 FL'; btn.classList.remove('fl-active'); btn.classList.remove('active'); btn.disabled = false; }
+    if (btn) { btn.innerHTML = _icon('plane') + 'FL'; btn.classList.remove('fl-active'); btn.classList.remove('active'); btn.disabled = false; }
     _archiveHideFLTimeSeries();
     var status = document.getElementById('fl-archive-status');
     if (status) status.style.display = 'none';
@@ -13394,18 +13417,18 @@ function archiveToggleDropsondes() {
         _archiveSondeActive = false;
         _archiveRemoveSondeOverlay();
         _archiveHideSondePanel();
-        if (btn) { btn.textContent = '\uD83E\uDE82 Sondes'; btn.classList.remove('sonde-active'); btn.classList.remove('active'); }
+        if (btn) { btn.innerHTML = _icon('parachute') + 'Sondes'; btn.classList.remove('sonde-active'); btn.classList.remove('active'); }
         return;
     }
 
     if (currentCaseIndex === null) return;
     _archiveSondeActive = true;
-    if (btn) { btn.textContent = '\uD83E\uDE82 Loading\u2026'; btn.classList.add('sonde-active'); btn.disabled = true; }
+    if (btn) { btn.innerHTML = _icon('parachute') + 'Loading\u2026'; btn.classList.add('sonde-active'); btn.disabled = true; }
 
     if (_archiveSondeData && _archiveSondeData._caseIndex === currentCaseIndex) {
         _archiveRenderSondeOverlay(_archiveSondeData);
         _archiveRenderSondePanel(_archiveSondeData);
-        if (btn) { btn.textContent = '\uD83E\uDE82 Sondes'; btn.disabled = false; btn.classList.add('active'); }
+        if (btn) { btn.innerHTML = _icon('parachute') + 'Sondes'; btn.disabled = false; btn.classList.add('active'); }
         return;
     }
 
@@ -13427,19 +13450,19 @@ function archiveToggleDropsondes() {
                 var msg = json.message || 'No dropsonde data available.';
                 if (json._diag) console.log('Sonde diag:', JSON.stringify(json._diag, null, 2));
                 var status = document.getElementById('fl-archive-status');
-                if (status) { status.textContent = '\uD83E\uDE82 ' + msg; status.style.display = 'block'; }
-                if (btn) { btn.textContent = '\uD83E\uDE82 Sondes'; btn.disabled = false; btn.classList.remove('active'); }
+                if (status) { status.innerHTML = _icon('parachute') + msg; status.style.display = 'block'; }
+                if (btn) { btn.innerHTML = _icon('parachute') + 'Sondes'; btn.disabled = false; btn.classList.remove('active'); }
                 _archiveSondeActive = false;
                 return;
             }
 
             _archiveRenderSondeOverlay(json);
             _archiveRenderSondePanel(json);
-            if (btn) { btn.textContent = '\uD83E\uDE82 Sondes'; btn.disabled = false; btn.classList.add('active'); }
+            if (btn) { btn.innerHTML = _icon('parachute') + 'Sondes'; btn.disabled = false; btn.classList.add('active'); }
         })
         .catch(function(err) {
             console.error('Archive sonde fetch error:', err);
-            if (btn) { btn.textContent = '\uD83E\uDE82 Sondes'; btn.disabled = false; btn.classList.remove('active'); }
+            if (btn) { btn.innerHTML = _icon('parachute') + 'Sondes'; btn.disabled = false; btn.classList.remove('active'); }
             _archiveSondeActive = false;
         });
 }
@@ -14297,7 +14320,7 @@ function _archiveSondeReset() {
     _archiveSondeData = null;
     _archiveSondeTraceIndices = [];
     var btn = document.getElementById('btn-archive-sonde');
-    if (btn) { btn.textContent = '\uD83E\uDE82 Sondes'; btn.classList.remove('sonde-active'); btn.classList.remove('active'); btn.disabled = false; }
+    if (btn) { btn.innerHTML = _icon('parachute') + 'Sondes'; btn.classList.remove('sonde-active'); btn.classList.remove('active'); btn.disabled = false; }
     _archiveHideSondePanel();
 }
 

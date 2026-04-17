@@ -2119,3 +2119,4 @@ footer a:hover { text-decoration: underline; }
 .cs-btn.is-tinted[data-accent="anomaly"] { background: rgba(52,211,153,0.12); border-color: rgba(52,211,153,0.35); color: var(--accent-anomaly-text); }
 .cs-btn.is-tinted[data-accent="vp"]      { background: rgba(251,191,36,0.12); border-color: rgba(251,191,36,0.35); color: var(--accent-vp-text); }
 .cs-btn.is-tinted[data-accent="cfad"]    { background: rgba(168,85,247,0.12); border-color: rgba(168,85,247,0.35); color: var(--accent-cfad-text); }
+.cs-btn.is-tinted[data-accent="cyan"]    { background: rgba(0,212,255,0.12);  border-color: rgba(0,212,255,0.35);  color: #67e8f9; }
