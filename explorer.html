@@ -200,13 +200,13 @@
                             <div id="rt-display-area"></div>
                             <div class="overlay-strip" style="margin-top:8px;">
                                 <span class="overlay-strip-label">Layers</span>
-                                <button class="overlay-pill" id="rt-ir-underlay-btn" onclick="rtToggleIRUnderlay()" disabled data-color="cyan" title="IR Satellite Underlay">🛰 IR</button>
-                                <button class="overlay-pill" id="rt-fl-btn" onclick="rtToggleFlightLevel()" disabled data-color="blue" title="Flight-Level Data">✈ FL</button>
-                                <button class="overlay-pill" id="rt-sonde-btn" onclick="rtToggleDropsondes()" disabled data-color="green" title="Dropsonde Data">🪂 Sondes</button>
-                                <button class="overlay-pill" id="rt-barb-btn" onclick="rtToggleBarbs()" disabled data-color="slate" title="Wind Barbs">🌬 Barbs</button>
-                                <button class="overlay-pill" id="rt-tilt-btn" onclick="rtToggleTilt()" disabled data-color="pink" title="Vortex Tilt Profile">🎯 Tilt</button>
-                                <button class="overlay-pill" id="rt-mw-overlay-btn" onclick="rtToggleMicrowaveOverlay()" data-color="orange" title="Microwave Satellite Overlay">📡 MW</button>
-                                <button class="overlay-pill" id="rt-nexrad-btn" onclick="rtToggleNexradOverlay()" data-color="green" title="NEXRAD 88D Ground Radar">🌀 88D</button>
+                                <button class="overlay-pill" id="rt-ir-underlay-btn" onclick="rtToggleIRUnderlay()" disabled data-color="cyan" title="IR Satellite Underlay"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 7 9 3 5 7l4 4"/><path d="M17 11l4 4-4 4-4-4"/><path d="M14 14 7 21"/><path d="M3.5 13.5 10 7"/></svg>IR</button>
+                                <button class="overlay-pill" id="rt-fl-btn" onclick="rtToggleFlightLevel()" disabled data-color="blue" title="Flight-Level Data"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2Z"/></svg>FL</button>
+                                <button class="overlay-pill" id="rt-sonde-btn" onclick="rtToggleDropsondes()" disabled data-color="green" title="Dropsonde Data"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12a10 10 0 0 1 20 0"/><path d="M7 12l5 9"/><path d="M17 12l-5 9"/><path d="M12 12v9"/></svg>Sondes</button>
+                                <button class="overlay-pill" id="rt-barb-btn" onclick="rtToggleBarbs()" disabled data-color="slate" title="Wind Barbs"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.7 7.7a2.5 2.5 0 1 1 1.8 4.3H2"/><path d="M9.6 4.6A2 2 0 1 1 11 8H2"/><path d="M12.6 19.4A2 2 0 1 0 14 16H2"/></svg>Barbs</button>
+                                <button class="overlay-pill" id="rt-tilt-btn" onclick="rtToggleTilt()" disabled data-color="pink" title="Vortex Tilt Profile"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>Tilt</button>
+                                <button class="overlay-pill" id="rt-mw-overlay-btn" onclick="rtToggleMicrowaveOverlay()" data-color="orange" title="Microwave Satellite Overlay"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a7.31 7.31 0 0 0 10 10Z"/><path d="m9 15 3-3"/><path d="M17 13a6 6 0 0 0-6-6"/><path d="M21 13A10 10 0 0 0 11 3"/></svg>MW</button>
+                                <button class="overlay-pill" id="rt-nexrad-btn" onclick="rtToggleNexradOverlay()" data-color="green" title="NEXRAD 88D Ground Radar"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 4H3"/><path d="M18 8H6"/><path d="M19 12H9"/><path d="M16 16h-6"/><path d="M13 20h-3"/></svg>88D</button>
                             </div>
                             <!-- Microwave overpass selector (hidden by default) -->
                             <div id="rt-mw-overpass-panel" class="rt-sub-panel accent-mw" style="display:none;">
@@ -244,7 +244,7 @@
                                 <button class="cs-btn" id="rt-cs-btn" onclick="rtToggleCrossSection()" disabled>✂ Cross Section</button>
                                 <button class="cs-btn" id="rt-az-btn" onclick="rtFetchAzimuthalMean()" disabled>↻ Azim. Mean</button>
                                 <button class="cs-btn is-tinted" data-accent="mw" id="rt-quad-btn" onclick="rtFetchQuadrants()" disabled>⊙ Shear Quads</button>
-                                <button class="cs-btn" id="rt-vol-btn" onclick="rtFetch3DVolume()" disabled>🖥 3D Volume</button>
+                                <button class="cs-btn" id="rt-vol-btn" onclick="rtFetch3DVolume()" disabled><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/></svg>3D Volume</button>
                                 <button class="cs-btn is-tinted" data-accent="anomaly" id="rt-anomaly-btn" onclick="rtFetchAnomaly()" disabled>Z* Anomaly</button>
                                 <button class="cs-btn is-tinted" data-accent="vp" id="rt-vp-btn" onclick="rtFetchVPScatter()" disabled>⬤ VP Scatter</button>
                                 <button class="cs-btn is-tinted" data-accent="cfad" id="rt-cfad-btn" onclick="rtToggleCFADConfig()" disabled>▓ CFAD</button>
@@ -304,7 +304,7 @@
                             <!-- Flight-Level Along-Track Time Series panel -->
                             <div id="rt-fl-timeseries-panel" style="display:none;">
                                 <div class="fl-ts-header">
-                                    <span class="fl-ts-title">✈ Along-Track Time Series</span>
+                                    <span class="fl-ts-title"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2Z"/></svg>Along-Track Time Series</span>
                                     <div class="fl-ts-controls">
                                         <div class="fl-ts-res-group">
                                             <span class="fl-ts-res-label">Avg:</span>
@@ -417,7 +417,7 @@
                                         <input type="number" id="rt-ships-stnum" min="0" max="50" value="0" placeholder="Auto" style="width:50px;padding:2px 4px;font-size:10px;border:1px solid var(--border-light);border-radius:4px;background:var(--navy);color:var(--text);">
                                     </div>
                                 </div>
-                                <button class="cs-btn is-tinted" data-accent="mw" id="rt-ships-btn" onclick="rtFetchSHIPS()" style="margin-top:4px;width:100%;">📡 Retry SHIPS</button>
+                                <button class="cs-btn is-tinted" data-accent="mw" id="rt-ships-btn" onclick="rtFetchSHIPS()" style="margin-top:4px;width:100%;"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a7.31 7.31 0 0 0 10 10Z"/><path d="m9 15 3-3"/><path d="M17 13a6 6 0 0 0-6-6"/><path d="M21 13A10 10 0 0 0 11 3"/></svg>Retry SHIPS</button>
                             </div>
 
                             <button class="generate-btn" id="rt-gen-btn" onclick="rtGeneratePlot()">Generate Plot</button>

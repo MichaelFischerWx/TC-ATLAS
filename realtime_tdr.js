@@ -13,6 +13,21 @@
 (function () {
     'use strict';
 
+    // ── Inline-SVG icon helper (Lucide-style; stroke:currentColor). ─
+    // Returns an SVG string to prepend to button labels that are
+    // dynamically updated via innerHTML. Keeps icons from being stripped
+    // when textContent used to be reassigned to emoji+label.
+    var _ICON_PATHS = {
+        satellite: '<path d="M13 7 9 3 5 7l4 4"/><path d="M17 11l4 4-4 4-4-4"/><path d="M14 14 7 21"/><path d="M3.5 13.5 10 7"/>',
+        plane:     '<path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2Z"/>',
+        parachute: '<path d="M2 12a10 10 0 0 1 20 0"/><path d="M7 12l5 9"/><path d="M17 12l-5 9"/><path d="M12 12v9"/>',
+        monitor:   '<rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/>',
+        dish:      '<path d="M4 10a7.31 7.31 0 0 0 10 10Z"/><path d="m9 15 3-3"/><path d="M17 13a6 6 0 0 0-6-6"/><path d="M21 13A10 10 0 0 0 11 3"/>'
+    };
+    function _icon(name) {
+        return '<svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (_ICON_PATHS[name] || '') + '</svg>';
+    }
+
     // ── GA4 analytics helper ────────────────────────────────────
     function _ga(action, params) {
         if (typeof gtag === 'function') {
@@ -1053,13 +1068,13 @@
         if (!_currentFileUrl) return;
         var variable = document.getElementById('rt-var').value;
         var btn = document.getElementById('rt-vol-btn');
-        btn.disabled = true; btn.textContent = '🖥 Loading…';
+        btn.disabled = true; btn.innerHTML = _icon('monitor') + 'Loading…';
 
         var cacheKey = '3d_rt_' + _currentFileUrl + '_' + variable;
         if (_rtDataCache[cacheKey]) {
             _rtLast3DJson = _rtDataCache[cacheKey];
             rtOpen3DModal();
-            btn.disabled = false; btn.textContent = '🖥 3D Volume';
+            btn.disabled = false; btn.innerHTML = _icon('monitor') + '3D Volume';
             return;
         }
 
@@ -1078,7 +1093,7 @@
                 var msg = err.name === 'AbortError' ? 'Request timed out (120s).' : err.message;
                 rtToast('3D Volume: ' + msg, 'error');
             })
-            .finally(function () { clearTimeout(timeout); btn.disabled = false; btn.textContent = '🖥 3D Volume'; });
+            .finally(function () { clearTimeout(timeout); btn.disabled = false; btn.innerHTML = _icon('monitor') + '3D Volume'; });
     };
 
     function rtOpen3DModal() {
@@ -1248,7 +1263,7 @@
             _rtMap.removeLayer(_rtIRMapOverlay);
         }
         var btn = document.getElementById('rt-map-ir-toggle');
-        if (btn) btn.textContent = _rtIRMapVisible ? '🌍 IR On' : '🌑 IR Off';
+        if (btn) btn.innerHTML = _icon('satellite') + (_rtIRMapVisible ? 'IR On' : 'IR Off');
     };
 
     window.rtMapIRAnimStep = function (dir) {
@@ -1288,7 +1303,7 @@
         ctrl.className = 'rt-map-ir-controls';
         ctrl.innerHTML =
             '<div class="ir-ctrl-row">' +
-                '<button class="ir-ctrl-btn" id="rt-map-ir-toggle" onclick="rtToggleMapIRVisibility()">🌍 IR On</button>' +
+                '<button class="ir-ctrl-btn" id="rt-map-ir-toggle" onclick="rtToggleMapIRVisibility()">' + _icon('satellite') + 'IR On</button>' +
                 '<button class="ir-ctrl-btn' + disabledCls + '" id="rt-map-ir-step-back" onclick="rtMapIRAnimStep(1)" title="Earlier">◀</button>' +
                 '<button class="ir-ctrl-btn' + disabledCls + '" id="rt-map-ir-play" onclick="rtMapIRAnimToggle()" title="Play / Pause">▶</button>' +
                 '<button class="ir-ctrl-btn' + disabledCls + '" id="rt-map-ir-step-fwd" onclick="rtMapIRAnimStep(-1)" title="Later">▶</button>' +
@@ -1679,7 +1694,7 @@
         _rtIRFetching = false;
         _rtIRMapBoundsSet = false;
         var irBtn = document.getElementById('rt-ir-underlay-btn');
-        if (irBtn) { irBtn.disabled = true; irBtn.textContent = '🛰 IR Off'; irBtn.classList.remove('active'); }
+        if (irBtn) { irBtn.disabled = true; irBtn.innerHTML = _icon('satellite') + 'IR Off'; irBtn.classList.remove('active'); }
     }
 
     // ── Helper: show IR on map, with retry if map not ready yet ──
@@ -1934,7 +1949,7 @@
         var btn = document.getElementById('rt-ir-underlay-btn');
         if (btn) {
             btn.classList.toggle('active', _rtIRPlotlyVisible);
-            btn.textContent = '\uD83D\uDEF0 IR';
+            btn.innerHTML = _icon('satellite') + 'IR';
         }
         if (_rtIRPlotlyVisible) {
             _rtApplyIRUnderlay();
@@ -2050,7 +2065,7 @@
             btn.disabled = true;
             btn.classList.remove('active');
             btn.classList.remove('sonde-only');
-            btn.textContent = '\uD83E\uDE82 Sondes Off';
+            btn.innerHTML = _icon('parachute') + 'Sondes Off';
         }
     }
 
@@ -2076,12 +2091,12 @@
         btn.classList.remove('active', 'sonde-only');
         if (_rtSondeMode === 'on') {
             btn.classList.add('active');
-            btn.textContent = '\uD83E\uDE82 Sondes' + nStr;
+            btn.innerHTML = _icon('parachute') + 'Sondes' + nStr;
         } else if (_rtSondeMode === 'only') {
             btn.classList.add('active', 'sonde-only');
-            btn.textContent = '\uD83E\uDE82 Only' + nStr;
+            btn.innerHTML = _icon('parachute') + 'Only' + nStr;
         } else {
-            btn.textContent = '\uD83E\uDE82 Sondes';
+            btn.innerHTML = _icon('parachute') + 'Sondes';
         }
     }
 
@@ -2092,7 +2107,7 @@
             // First activation: fetch data
             _rtSondeFetching = true;
             var btn = document.getElementById('rt-sonde-btn');
-            if (btn) btn.textContent = '\uD83E\uDE82 Loading\u2026';
+            if (btn) btn.innerHTML = _icon('parachute') + 'Loading\u2026';
 
             fetchWithRetry(API_BASE + RT_PREFIX + '/dropsondes?file_url=' + encodeURIComponent(_currentFileUrl))
                 .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
@@ -2110,7 +2125,7 @@
                     if (json.n_sondes === 0) {
                         rtToast('No dropsondes found within \u00b145 min of analysis time' +
                             (json.message ? ' (' + json.message + ')' : ''), 'warn', 6000);
-                        if (btn) btn.textContent = '\uD83E\uDE82 No Sondes';
+                        if (btn) btn.innerHTML = _icon('parachute') + 'No Sondes';
                         return;
                     }
 
@@ -2126,7 +2141,7 @@
                 })
                 .catch(function (err) {
                     _rtSondeFetching = false;
-                    if (btn) btn.textContent = '\uD83E\uDE82 Sondes Off';
+                    if (btn) btn.innerHTML = _icon('parachute') + 'Sondes Off';
                     rtToast('Dropsonde fetch failed: ' + err.message, 'error');
                 });
             return;
@@ -3547,7 +3562,7 @@
         _rtRemoveFLFromMap();
         _rtRemoveFLFromPlot();
         var btn = document.getElementById('rt-fl-btn');
-        if (btn) { btn.textContent = '\u2708 FL'; btn.classList.remove('active'); }
+        if (btn) { btn.innerHTML = _icon('plane') + 'FL'; btn.classList.remove('active'); }
     }
 
     // ── Leaflet Map: Render flight track ──────────────────────
@@ -3762,7 +3777,7 @@
             // First activation: fetch all 3 resolutions in parallel
             _rtFLFetching = true;
             var btn = document.getElementById('rt-fl-btn');
-            if (btn) btn.textContent = '\u2708 Loading\u2026';
+            if (btn) btn.innerHTML = _icon('plane') + 'Loading\u2026';
 
             var baseUrl = API_BASE + RT_PREFIX + '/flightlevel?file_url=' + encodeURIComponent(_currentFileUrl);
             var fetchJson = function (url) {
@@ -3784,13 +3799,13 @@
                     if (_rtFLData10s.n_obs === 0) {
                         rtToast('No flight-level data found within \u00b145 min' +
                             (_rtFLData10s.message ? ' (' + _rtFLData10s.message + ')' : ''), 'warn', 6000);
-                        if (btn) btn.textContent = '\u2708 No FL Data';
+                        if (btn) btn.innerHTML = _icon('plane') + 'No FL Data';
                         return;
                     }
 
                     _rtFLVisible = true;
                     _rtFLMode = 'on';
-                    if (btn) { btn.textContent = '\u2708 FL'; btn.classList.add('active'); }
+                    if (btn) { btn.innerHTML = _icon('plane') + 'FL'; btn.classList.add('active'); }
                     var _nTot = _rtFLData10s.n_obs_total;
                     var _maxW = _rtFLData10s.summary && _rtFLData10s.summary.max_fl_wspd_ms;
                     var _toastMsg = _nTot + ' obs \u2192 1s/' + _rtFLData1s.n_obs +
@@ -3805,7 +3820,7 @@
                 })
                 .catch(function (err) {
                     _rtFLFetching = false;
-                    if (btn) btn.textContent = '\u2708 FL';
+                    if (btn) btn.innerHTML = _icon('plane') + 'FL';
                     rtToast('Flight-level fetch failed: ' + err.message, 'error');
                 });
             return;
@@ -3819,7 +3834,7 @@
             _rtRemoveFLFromPlot();
             window.rtFLCloseTimeSeries();
             var offBtn = document.getElementById('rt-fl-btn');
-            if (offBtn) { offBtn.textContent = '\u2708 FL Off'; offBtn.classList.remove('active'); }
+            if (offBtn) { offBtn.innerHTML = _icon('plane') + 'FL Off'; offBtn.classList.remove('active'); }
         } else {
             _rtFLMode = 'on';
             _rtFLVisible = true;
@@ -3828,7 +3843,7 @@
             _rtRenderFLTimeSeries();
             var onBtn = document.getElementById('rt-fl-btn');
             if (onBtn) {
-                onBtn.textContent = '\u2708 FL On';
+                onBtn.innerHTML = _icon('plane') + 'FL On';
                 onBtn.classList.add('active');
             }
         }
@@ -4245,7 +4260,7 @@
         if (!stormName || !year || !analysisDt) {
             rtToast('Generate a plot first to get storm metadata', 'warn');
             btn.disabled = false;
-            btn.textContent = '\ud83d\udce1 Fetch SHIPS Data';
+            btn.innerHTML = _icon('dish') + 'Fetch SHIPS Data';
             _rtShipsLoading = false;
             return;
         }
@@ -4300,7 +4315,7 @@
             })
             .catch(function (err) {
                 _rtShipsLoading = false;
-                btn.textContent = '\ud83d\udce1 Fetch SHIPS Data';
+                btn.innerHTML = _icon('dish') + 'Fetch SHIPS Data';
                 btn.disabled = false;
                 rtToast('SHIPS: ' + err.message, 'error');
             });

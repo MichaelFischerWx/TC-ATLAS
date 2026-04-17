@@ -2088,6 +2088,19 @@ footer a:hover { text-decoration: underline; }
     --sub-panel-primary-text: #e9d5ff;
 }
 
+/* Inline SVG icons (Lucide-style). Size follows font-size via 1em,
+   inherits color via stroke:currentColor so pill/button accent colors
+   tint the glyph automatically. */
+.icon-inline {
+    width: 1em;
+    height: 1em;
+    display: inline-block;
+    vertical-align: -0.15em;
+    flex-shrink: 0;
+    margin-right: 4px;
+    stroke-width: 1.8;
+}
+
 /* Tinted cs-btn variants for the Analysis strip (Shear Quads, Z*,
    VP, CFAD). Replaces duplicated inline styles. */
 .cs-btn.is-tinted[data-accent="mw"]      { background: rgba(251,146,60,0.12); border-color: rgba(251,146,60,0.35); color: var(--accent-mw-text); }
