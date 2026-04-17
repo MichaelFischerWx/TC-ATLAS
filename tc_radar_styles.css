@@ -39,6 +39,25 @@ outline-offset: 2px;
     --border-light: rgba(255,255,255,0.12);
     --radius: 8px;
     --radius-lg: 12px;
+
+    /* Muted text scale (labels, hints, captions) */
+    --text-muted: #9ca3af;
+    --text-faint: #6b7280;
+    --text-subtle: #64748b;
+
+    /* Sub-tool accents — one base per tool, paired with a light text
+       variant for use on translucent backgrounds. Keeps NEXRAD green,
+       MW orange, CFAD purple, etc. consistent across all widgets. */
+    --accent-mw: #fb923c;
+    --accent-mw-text: #fdba74;
+    --accent-nexrad: #22c55e;
+    --accent-nexrad-text: #86efac;
+    --accent-cfad: #a855f7;
+    --accent-cfad-text: #c4b5fd;
+    --accent-anomaly: #34d399;
+    --accent-anomaly-text: #6ee7b7;
+    --accent-vp: #fbbf24;
+    --accent-vp-text: #fde68a;
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html { scroll-behavior: smooth; }
@@ -371,6 +390,8 @@ a.case-meta-link:hover { color: #93c5fd; border-bottom-color: #93c5fd; }
 .vol3d-toggle-btn { padding: 3px 10px; font-size: 10px; border: 1px solid var(--blue); border-radius: 4px; background: transparent; color: var(--blue-light); cursor: pointer; font-weight: 700; font-family: 'DM Sans', sans-serif; transition: all 0.15s; }
 .vol3d-toggle-btn.active { background: var(--blue); color: #fff; }
 .vol3d-toggle-btn:hover { background: rgba(37,99,235,0.15); }
+.vol3d-toggle-btn[data-accent="cfad"]    { border-color: rgba(168,85,247,0.5); color: var(--accent-cfad-text); }
+.vol3d-toggle-btn[data-accent="anomaly"] { border-color: rgba(52,211,153,0.5); color: var(--accent-anomaly-text); }
 #vol-3d-chart { flex: 1; width: 100%; min-height: 0; }
 
 /* ── IR satellite map controls ──────────────────────────────── */
@@ -1923,3 +1944,153 @@ footer a:hover { text-decoration: underline; }
     .featured-case-card { padding: 8px 10px; }
     .featured-case-desc { display: none; }
 }
+
+/* ── Overlay pill accents (extending existing data-color system) ─── */
+.overlay-pill.active[data-color="orange"] { background: rgba(251,146,60,0.18); border-color: rgba(251,146,60,0.5); color: var(--accent-mw-text); }
+.overlay-pill.active[data-color="purple"] { background: rgba(168,85,247,0.18); border-color: rgba(168,85,247,0.5); color: var(--accent-cfad-text); }
+.overlay-pill.active[data-color="yellow"] { background: rgba(251,191,36,0.18); border-color: rgba(251,191,36,0.5); color: var(--accent-vp-text); }
+
+/* ── RT Explorer sub-panels (MW / NEXRAD / CFAD) ──────────────────
+   Shared shell; variant classes pull the accent border + label color
+   from the --accent-* variable family. Keeps inline-style sprawl out
+   of explorer.html. */
+/* Panel visibility is still controlled by inline `display:none` +
+   JS toggling to 'block' (existing pattern). Class only handles looks. */
+.rt-sub-panel {
+    margin-top: 6px;
+    background: rgba(30,41,59,0.95);
+    border: 1px solid var(--sub-panel-accent, rgba(255,255,255,0.12));
+    border-radius: 8px;
+    padding: 8px 12px;
+}
+.rt-sub-panel-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.rt-sub-panel-row + .rt-sub-panel-row { margin-top: 6px; }
+.rt-sub-panel-label {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--sub-panel-label, var(--text-muted));
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+}
+.rt-sub-panel-sublabel {
+    font-size: 10px;
+    color: var(--text-muted);
+}
+.rt-sub-panel-select,
+.rt-sub-panel-input {
+    font-size: 10px;
+    padding: 4px 6px;
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 4px;
+    background: var(--navy);
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+}
+.rt-sub-panel-select { min-width: 180px; }
+.rt-sub-panel-select.is-flex { flex: 1 1 180px; }
+.rt-sub-panel-input { padding: 3px 6px; }
+.rt-sub-panel-input.w-55 { width: 55px; }
+.rt-sub-panel-input.w-65 { width: 65px; }
+.rt-sub-panel-btn {
+    font-size: 9px;
+    padding: 2px 8px;
+    background: var(--sub-panel-btn-bg, rgba(255,255,255,0.06));
+    border: 1px solid var(--sub-panel-btn-border, rgba(255,255,255,0.12));
+    border-radius: 4px;
+    color: var(--sub-panel-label, var(--text-muted));
+    cursor: pointer;
+}
+.rt-sub-panel-status { font-size: 9px; color: var(--text-subtle); }
+.rt-sub-panel-source {
+    font-size: 8px;
+    color: var(--text-subtle);
+    margin-left: auto;
+}
+.rt-sub-panel-source a {
+    color: var(--text-dim);
+    text-decoration: none;
+    border-bottom: 1px dotted var(--text-subtle);
+}
+.rt-sub-panel-hint { font-size: 8px; color: var(--text-faint); }
+.rt-sub-panel-between { font-size: 9px; color: var(--text-faint); }
+.rt-sub-panel-field {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.rt-sub-panel-field label {
+    font-size: 10px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+.rt-sub-panel-field label.w-70 { width: 70px; }
+.rt-sub-panel-field label.w-50 { width: 50px; }
+.rt-sub-panel-title {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--sub-panel-label);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 8px;
+}
+.rt-sub-panel-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 10px;
+}
+.rt-sub-panel-primary {
+    padding: 6px 16px;
+    font-size: 11px;
+    font-weight: 700;
+    border: none;
+    border-radius: 5px;
+    background: var(--sub-panel-primary-bg, var(--blue));
+    color: var(--sub-panel-primary-text, #fff);
+    cursor: pointer;
+    font-family: 'JetBrains Mono', monospace;
+    transition: background 0.2s;
+}
+.rt-sub-panel-primary:hover { background: var(--sub-panel-primary-hover, var(--blue-light)); }
+.rt-sub-panel-cancel {
+    padding: 6px 12px;
+    font-size: 11px;
+    font-weight: 700;
+    border: 1px solid var(--border-light);
+    border-radius: 5px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-family: 'JetBrains Mono', monospace;
+}
+
+/* Accent variants — set scoped vars consumed by the rules above */
+.rt-sub-panel.accent-mw {
+    --sub-panel-accent: rgba(251,146,60,0.35);
+    --sub-panel-label: var(--accent-mw-text);
+}
+.rt-sub-panel.accent-nexrad {
+    --sub-panel-accent: rgba(34,197,94,0.35);
+    --sub-panel-label: var(--accent-nexrad-text);
+    --sub-panel-btn-bg: rgba(34,197,94,0.2);
+    --sub-panel-btn-border: rgba(34,197,94,0.4);
+}
+.rt-sub-panel.accent-cfad {
+    --sub-panel-accent: rgba(168,85,247,0.35);
+    --sub-panel-label: var(--accent-cfad-text);
+    --sub-panel-primary-bg: rgba(168,85,247,0.5);
+    --sub-panel-primary-hover: rgba(168,85,247,0.7);
+    --sub-panel-primary-text: #e9d5ff;
+}
+
+/* Tinted cs-btn variants for the Analysis strip (Shear Quads, Z*,
+   VP, CFAD). Replaces duplicated inline styles. */
+.cs-btn.is-tinted[data-accent="mw"]      { background: rgba(251,146,60,0.12); border-color: rgba(251,146,60,0.35); color: var(--accent-mw-text); }
+.cs-btn.is-tinted[data-accent="anomaly"] { background: rgba(52,211,153,0.12); border-color: rgba(52,211,153,0.35); color: var(--accent-anomaly-text); }
+.cs-btn.is-tinted[data-accent="vp"]      { background: rgba(251,191,36,0.12); border-color: rgba(251,191,36,0.35); color: var(--accent-vp-text); }
+.cs-btn.is-tinted[data-accent="cfad"]    { background: rgba(168,85,247,0.12); border-color: rgba(168,85,247,0.35); color: var(--accent-cfad-text); }
