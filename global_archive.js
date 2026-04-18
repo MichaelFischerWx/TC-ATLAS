@@ -6355,14 +6355,14 @@ window.toggleGlobalNexradOverlay = function () {
 
     if (_gaNexradVisible) {
         _gaNexradVisible = false;
-        if (btn) btn.innerHTML = _icon('tornado') + '88D';
+        if (btn) btn.innerHTML = _icon('tornado') + 'Ground Radar';
         if (controls) controls.style.display = 'none';
         if (_gaNexradMapOverlay && detailMap) detailMap.removeLayer(_gaNexradMapOverlay);
         return;
     }
 
     _gaNexradVisible = true;
-    if (btn) btn.textContent = 'Hide 88D';
+    if (btn) btn.innerHTML = _icon('tornado') + 'Hide Ground Radar';
     if (controls) controls.style.display = '';
 
     // If overlay already loaded, just show it
@@ -6479,7 +6479,7 @@ function removeGlobalNexradOverlay() {
     _gaNexradVisible = false;
     _gaNexradLastStormId = null;
     var btn = document.getElementById('ga-nexrad-toggle-btn');
-    if (btn) btn.innerHTML = _icon('tornado') + '88D';
+    if (btn) btn.innerHTML = _icon('tornado') + 'Ground Radar';
     var controls = document.getElementById('ga-nexrad-controls');
     if (controls) controls.style.display = 'none';
     var siteSelect = document.getElementById('ga-nexrad-site-select');
