@@ -138,11 +138,16 @@ body { font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
 .slider-wrapper { position: relative; height: 28px; display: flex; align-items: center; }
 .slider-track { position: absolute; width: 100%; height: 4px; background: var(--navy); border-radius: 2px; top: 50%; transform: translateY(-50%); }
 .slider-range { position: absolute; height: 4px; background: linear-gradient(90deg, var(--blue), var(--cyan)); border-radius: 2px; top: 50%; transform: translateY(-50%); }
-input[type="range"] { position: absolute; width: 100%; height: 4px; background: transparent; pointer-events: none; -webkit-appearance: none; appearance: none; margin: 0; padding: 0; top: 50%; transform: translateY(-50%); }
-input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; background: var(--blue); border: 2px solid white; border-radius: 50%; cursor: pointer; pointer-events: auto; box-shadow: 0 1px 4px rgba(0,0,0,0.4); margin-top: -6px; }
-input[type="range"]::-moz-range-thumb { width: 16px; height: 16px; background: var(--blue); border: 2px solid white; border-radius: 50%; cursor: pointer; pointer-events: auto; box-shadow: 0 1px 4px rgba(0,0,0,0.4); }
-input[type="range"]::-webkit-slider-runnable-track { height: 4px; background: transparent; border-radius: 2px; }
-input[type="range"]::-moz-range-track { height: 4px; background: transparent; border-radius: 2px; }
+/* Scoped to .slider-wrapper — these rules are for the Explorer dual-handle
+   filter sliders (two stacked range inputs with a coloured between-track).
+   Without the prefix the `position: absolute; pointer-events: none` leaked
+   to every range input across the site (Climatology Globe year/month sliders
+   went invisible / detached because of this). */
+.slider-wrapper input[type="range"] { position: absolute; width: 100%; height: 4px; background: transparent; pointer-events: none; -webkit-appearance: none; appearance: none; margin: 0; padding: 0; top: 50%; transform: translateY(-50%); }
+.slider-wrapper input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; background: var(--blue); border: 2px solid white; border-radius: 50%; cursor: pointer; pointer-events: auto; box-shadow: 0 1px 4px rgba(0,0,0,0.4); margin-top: -6px; }
+.slider-wrapper input[type="range"]::-moz-range-thumb { width: 16px; height: 16px; background: var(--blue); border: 2px solid white; border-radius: 50%; cursor: pointer; pointer-events: auto; box-shadow: 0 1px 4px rgba(0,0,0,0.4); }
+.slider-wrapper input[type="range"]::-webkit-slider-runnable-track { height: 4px; background: transparent; border-radius: 2px; }
+.slider-wrapper input[type="range"]::-moz-range-track { height: 4px; background: transparent; border-radius: 2px; }
 
 /* ── Map + side panel ────────────────────────────── */
 #map-wrapper { flex: 1; display: flex; position: relative; overflow: hidden; }
