@@ -163,6 +163,101 @@ export class GifExporter {
         ctx.restore();
     }
 
+    /** Paint the colorbar panel onto the capture canvas (bottom-left).
+     *
+     *  The live colorbar lives as a separate HTML element overlaid on top
+     *  of the WebGL canvas, so a naked `drawImage(renderer.domElement, …)`
+     *  doesn't pick it up. Reads the live `#colorbar-canvas` (the gradient
+     *  strip) plus its label DOM (cb-title, cb-units, cb-min, cb-max,
+     *  cb-sub, cb-note) and re-renders them as a self-contained panel.
+     *  No-op when the colorbar isn't on screen (orbit view, hidden).
+     */
+    _drawColorbar(ctx, viewW, viewH) {
+        const cbCanvas = document.getElementById('colorbar-canvas');
+        if (!cbCanvas || cbCanvas.width === 0) return;
+        const titleEl = document.getElementById('cb-title');
+        const unitsEl = document.getElementById('cb-units');
+        const minEl = document.getElementById('cb-min');
+        const maxEl = document.getElementById('cb-max');
+        const subEl = document.getElementById('cb-sub');
+        const noteEl = document.getElementById('cb-note');
+        if (!titleEl || !minEl || !maxEl) return;
+
+        const title = (titleEl.textContent || '').trim();
+        const units = (unitsEl?.textContent || '').trim();
+        const minStr = (minEl.value || '').trim();
+        const maxStr = (maxEl.value || '').trim();
+        const subStr = (subEl && !subEl.hidden) ? (subEl.textContent || '').trim() : '';
+        const noteStr = (noteEl && !noteEl.hidden) ? (noteEl.textContent || '').trim() : '';
+
+        const padX = 14;
+        const padY = 12;
+        const cbW = 240;
+        const cbH = 12;
+        const lineHTitle = 18;
+        const lineHSub = 14;
+        const lineHTicks = 14;
+        const titleFont = 'bold 13px "DM Sans", -apple-system, sans-serif';
+        const unitsFont = '11px ui-monospace, "JetBrains Mono", Menlo, monospace';
+        const subFont   = '10px ui-monospace, "JetBrains Mono", Menlo, monospace';
+        const tickFont  = '11px ui-monospace, "JetBrains Mono", Menlo, monospace';
+
+        let panelH = padY * 2 + lineHTitle + 4 + cbH + 4 + lineHTicks;
+        if (subStr)  panelH += lineHSub + 2;
+        if (noteStr) panelH += lineHSub + 2;
+        const panelW = padX * 2 + cbW;
+
+        const x0 = 24;
+        const y0 = viewH - panelH - 24;
+
+        ctx.save();
+        ctx.fillStyle = 'rgba(12, 29, 61, 0.85)';
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.10)';
+        ctx.lineWidth = 1;
+        this._roundRect(ctx, x0, y0, panelW, panelH, 6);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.textBaseline = 'top';
+        let cy = y0 + padY;
+
+        ctx.font = titleFont;
+        ctx.fillStyle = '#f0f6f2';
+        ctx.fillText(title, x0 + padX, cy);
+        if (units) {
+            ctx.font = unitsFont;
+            ctx.fillStyle = '#8b9ec2';
+            const uw = ctx.measureText(units).width;
+            ctx.fillText(units, x0 + panelW - padX - uw, cy + 3);
+        }
+        cy += lineHTitle;
+
+        if (subStr) {
+            ctx.font = subFont;
+            ctx.fillStyle = '#8b9ec2';
+            ctx.fillText(subStr, x0 + padX, cy);
+            cy += lineHSub + 2;
+        }
+        if (noteStr) {
+            ctx.font = subFont;
+            ctx.fillStyle = '#d4a84b';
+            ctx.fillText(noteStr, x0 + padX, cy);
+            cy += lineHSub + 2;
+        }
+
+        cy += 4;
+        ctx.drawImage(cbCanvas, x0 + padX, cy, cbW, cbH);
+        cy += cbH + 4;
+
+        ctx.font = tickFont;
+        ctx.fillStyle = '#cbd5e1';
+        ctx.fillText(minStr, x0 + padX, cy);
+        const mw = ctx.measureText(maxStr).width;
+        ctx.fillText(maxStr, x0 + padX + cbW - mw, cy);
+
+        ctx.restore();
+    }
+
     /** Paint the caption ribbon onto the capture canvas (top-left). */
     _drawCaption(ctx) {
         const { title, sub } = this._buildCaption();
@@ -216,6 +311,7 @@ export class GifExporter {
         ctx.fillStyle = '#0a1a18';
         ctx.fillRect(0, 0, w, h);
         ctx.drawImage(src, 0, 0, w, h);
+        this._drawColorbar(ctx, w, h);
         this._drawCaption(ctx);
         this._drawWatermark(ctx, w, h);
         return ctx.getImageData(0, 0, w, h);
@@ -365,6 +461,7 @@ export class GifExporter {
         // Hi-quality scaling when supersampling (scale > 1).
         if (scale !== 1) ctx.imageSmoothingQuality = 'high';
         ctx.drawImage(src, 0, 0, w, h);
+        this._drawColorbar(ctx, w, h);
         this._drawCaption(ctx);
         this._drawWatermark(ctx, w, h);
         const mime = format === 'jpeg' ? 'image/jpeg' : 'image/png';
