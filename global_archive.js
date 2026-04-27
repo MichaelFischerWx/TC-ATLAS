@@ -700,6 +700,9 @@ window.switchTab = function (tabName) {
             setTimeout(function () { compareMap.invalidateSize(); }, 100);
         }
     }
+    // Environment tab is a launch card to climatology_globe.html — no
+    // dynamic boot needed (the engine lives on its own page so the
+    // vendored GC-ATLAS engine can run un-scoped).
     updateHashSilently();
 };
 
@@ -9287,6 +9290,12 @@ function restoreFromHash() {
         }
         clearInterval(_restoreInterval);
         _hashRestored = true;
+
+        // ── Restore Environment tab (climatology globe) ──
+        if (params.tab === 'environment') {
+            switchTab('environment');
+            return;
+        }
 
         // ── Restore basin filter for browser/detail tabs ──
         if (params.basin && (params.tab === 'browser' || params.tab === 'detail')) {

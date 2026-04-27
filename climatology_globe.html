@@ -1,0 +1,775 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Climatology Globe — TC-ATLAS</title>
+    <meta name="description" content="ERA5 climatology globe with IBTrACS tropical cyclone tracks overlaid. Connect environmental state (SST, shear, OHC) to actual storm tracks.">
+    <link rel="icon" type="image/png" href="tc-atlas-icon.png">
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+
+    <!-- Vendored GC-ATLAS globe styles (un-scoped, applies page-wide). Loads
+         BEFORE TC-ATLAS sheets so TC-ATLAS rules can override topbar styling
+         and re-map theme variables (--deep, --emerald, etc.) to navy/blue. -->
+    <link rel="stylesheet" href="vendor/gc-atlas/globe.css">
+    <link rel="stylesheet" href="tc_radar_styles.css">
+    <link rel="stylesheet" href="climatology_globe_styles.css?v=20260425d">
+
+    <!-- Importmap for the GC-ATLAS engine. Three.js + addons from unpkg;
+         everything else local under vendor/gc-atlas/. -->
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.163.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.163.0/examples/jsm/"
+        }
+    }
+    </script>
+</head>
+<body>
+    <a href="#globe-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
+
+    <!-- ── Topbar (TC-ATLAS pattern, matches global_archive.html) ──────── -->
+    <header class="topbar" role="banner">
+        <div class="topbar-inner">
+            <div class="topbar-brand">
+                <img src="tc-atlas-icon.png" alt="TC-ATLAS" class="topbar-icon" width="28" height="28">
+                <div class="topbar-logo" role="heading" aria-level="1">TC-ATLAS</div>
+                <div class="topbar-divider"></div>
+                <div class="topbar-subtitle">Climatology Globe</div>
+            </div>
+            <nav aria-label="Main navigation">
+                <ul class="topbar-nav">
+                    <li><a href="index.html" role="button">Home</a></li>
+                    <li><a href="explorer.html" role="button"><span class="nav-full">TC-RADAR</span><span class="nav-short">Radar</span></a></li>
+                    <li><a href="explorer.html?tab=realtime" role="button"><span class="nav-full">Real-Time TDR</span><span class="nav-short">RT TDR</span></a></li>
+                    <li><a href="realtime_ir.html" role="button"><span class="nav-full">Real-Time Monitor</span><span class="nav-short">RT Monitor</span></a></li>
+                    <li><a href="global_archive.html" role="button" class="nav-active"><span class="nav-full">Global Archive</span><span class="nav-short">Global</span></a></li>
+                    <li><a href="explorer.html?tab=composites" role="button"><span class="nav-full">Composites</span><span class="nav-short">Comp.</span></a></li>
+                    <li><a href="index.html#about" role="button">About</a></li>
+                    <li><a href="index.html#cite" role="button">Cite</a></li>
+                </ul>
+            </nav>
+            <button class="nav-hamburger" onclick="this.classList.toggle('open');document.querySelector('.topbar-nav').classList.toggle('mobile-open')" aria-label="Menu">&#9776;</button>
+        </div>
+    </header>
+
+<main class="app" id="globe-main">
+
+    <button class="hamburger" id="sidebar-toggle" type="button" aria-label="toggle controls">☰</button>
+    <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
+
+    <aside class="sidebar" id="sidebar">
+        <div class="sidebar-heading">Controls</div>
+
+        <section class="control-group">
+            <label class="field-label" for="field-select">Field</label>
+            <select id="field-select"></select>
+        </section>
+
+        <section class="control-group">
+            <label class="field-label" for="level-select" id="level-label">Pressure level</label>
+            <div class="segmented" id="vcoord-toggle" role="tablist" aria-label="Vertical coordinate"
+                 style="margin-bottom: 8px;">
+                <button type="button" data-coord="pressure" class="active">Pressure</button>
+                <button type="button" data-coord="theta">θ (isentropic)</button>
+            </div>
+            <select id="level-select"></select>
+        </section>
+
+        <section class="control-group">
+            <h4>Climatology</h4>
+            <div class="segmented kind-seg" id="kind-toggle" role="tablist" aria-label="Display mode">
+                <button type="button" data-kind="mean" class="active" title="Climatological mean">Mean</button>
+                <button type="button" data-kind="std" title="Inter-annual standard deviation across the 30-year window — highlights ENSO, monsoon variability, storm-track regions">±1σ variability</button>
+            </div>
+            <!-- Top-level mode toggle: a 30-year window, one year, or a custom range -->
+            <div class="segmented" id="time-mode-toggle" style="margin-top:10px;" role="tablist" aria-label="Time mode">
+                <button type="button" data-time-mode="climo" class="active"
+                        title="View the 30-year climatological mean for the chosen window">Climatology</button>
+                <button type="button" data-time-mode="year"
+                        title="View an individual year's snapshot from the per-year tile tree">Single year</button>
+                <button type="button" data-time-mode="range"
+                        title="Average over a custom [start, end] range of years (e.g. 2010-2024, or 1979-2000)">Custom range</button>
+            </div>
+            <!-- Climatology-mode options: which 30-year window -->
+            <div id="time-climo-options" style="margin-top:10px;">
+                <label class="field-label" for="climo-period-select" style="margin-bottom:4px; font-size:0.66rem;">Period</label>
+                <select id="climo-period-select" title="Which 30-year window to use as the active climatology — drives the Mean tile, the ±1σ tile, and the decomposition reference.">
+                    <option value="1996-2025">1996–2025</option>
+                    <option value="default" selected>1991–2020 (WMO standard)</option>
+                    <option value="1986-2015">1986–2015</option>
+                    <option value="1981-2010">1981–2010</option>
+                    <option value="1976-2005">1976–2005</option>
+                    <option value="1971-2000">1971–2000</option>
+                    <option value="1966-1995">1966–1995</option>
+                    <option value="1961-1990">1961–1990</option>
+                </select>
+            </div>
+            <!-- Single-year-mode options: slider over available years -->
+            <div id="time-year-options" hidden style="margin-top:10px;">
+                <div class="year-row">
+                    <label class="field-label" style="margin:0; font-size:0.66rem;">Year</label>
+                    <span id="year-display" class="year-display" aria-live="polite">—</span>
+                </div>
+                <!-- .slider-row is display:flex so the .slider's `flex: 1` actually
+                     expands. Upstream globe.html has the input bare here, which
+                     in some browsers makes appearance:none collapse the input
+                     to ~0 width. Wrap → flex parent → reliable expansion. -->
+                <div class="slider-row">
+                    <input id="year-slider" class="slider" type="range"
+                           min="1991" max="2026" step="1" value="2015"
+                           aria-label="scrub year"
+                           title="Drag to pick a year. ← / → keys also step through years.">
+                </div>
+            </div>
+            <!-- Custom-range-mode options: start/end year + Compute button -->
+            <div id="time-range-options" hidden style="margin-top:10px;">
+                <div class="range-row">
+                    <label class="field-label" for="range-start">Start</label>
+                    <input id="range-start" type="number" class="range-input"
+                           min="1961" max="2026" step="1" value="2010">
+                    <label class="field-label" for="range-end" style="margin-left:6px;">End</label>
+                    <input id="range-end" type="number" class="range-input"
+                           min="1961" max="2026" step="1" value="2024">
+                </div>
+                <button id="range-compute-btn" type="button" class="range-compute">
+                    <span id="range-compute-label">Compute mean</span>
+                </button>
+                <p class="field-help" id="range-status" style="margin-top:6px; line-height:1.45;">
+                    Pick a year range. "Compute mean" fetches the per-year tiles and averages them in the browser — the result acts like a climatology (can be anomaly-referenced, compared, etc.).
+                </p>
+            </div>
+            <!-- Composite builder: parametric event-year compositing from a
+                 chosen climate index + threshold. Collapsed by default so the
+                 panel stays lean for casual users. -->
+            <details id="composite-details" class="composite-details" style="margin-top:12px;">
+                <summary>Composite builder <span class="composite-badge">advanced</span></summary>
+                <div class="composite-body">
+                    <label class="field-label" for="composite-index">Index</label>
+                    <select id="composite-index"
+                            title="Which monthly climate index to threshold on. RONI is the ENSO signal with the global warming trend removed — recommended for spanning the full 1950–2026 period.">
+                        <option value="roni" selected>RONI — ENSO (detrended)</option>
+                        <option value="oni">ONI — ENSO (traditional)</option>
+                        <option value="pna">PNA — Pacific/North American</option>
+                        <option value="pdo">PDO — Pacific Decadal Oscillation</option>
+                        <option value="nao">NAO — North Atlantic Oscillation</option>
+                        <option value="ao">AO — Arctic Oscillation</option>
+                        <option value="amm">AMM — Atlantic Meridional Mode</option>
+                        <option value="pmm">PMM — Pacific Meridional Mode</option>
+                    </select>
+                    <p class="field-help" id="composite-index-desc" style="margin-top:4px;"></p>
+                    <div class="composite-thresh-row">
+                        <label class="field-label" for="composite-cmp">Keep years where index is</label>
+                        <div style="display:flex; gap:6px; align-items:center;">
+                            <select id="composite-cmp" style="flex:0 0 auto;" title="Comparison direction.">
+                                <option value="ge" selected>≥</option>
+                                <option value="le">≤</option>
+                            </select>
+                            <input id="composite-threshold" type="number" step="0.1"
+                                   class="range-input" value="1.0"
+                                   title="Threshold value in the index's native units (standardized for PNA/NAO/AO, °C for ONI/RONI).">
+                        </div>
+                    </div>
+                    <p class="field-help" style="margin-top:6px;">
+                        Threshold applies to the index value in the <strong>current Month</strong>
+                        (below). ONI/RONI are 3-month running means anchored to their central
+                        month, so e.g. <em>January</em> corresponds to DJF.
+                    </p>
+                    <label class="check" style="font-size:0.7rem; margin-top:6px;">
+                        <input type="checkbox" id="toggle-sliding-climo" checked>
+                        Best-match climo per year
+                        <span class="field-help" style="display:block; margin-left:24px; margin-top:2px; font-size:0.62rem;">
+                            Each event year subtracts its closest 30-yr climatology
+                            (8 windows, stepped 5 yr) instead of one fixed period.
+                            Removes warming-trend bias when events span many decades.
+                        </span>
+                    </label>
+                    <div class="composite-events" id="composite-events" aria-live="polite">—</div>
+                    <button id="composite-apply-btn" type="button" class="range-compute">
+                        <span id="composite-apply-label">Apply composite</span>
+                    </button>
+                    <p class="field-help" id="composite-source" style="margin-top:6px; opacity:0.7;"></p>
+                </div>
+            </details>
+        </section>
+
+        <section class="control-group">
+            <label class="field-label" for="month-select">Month</label>
+            <select id="month-select"></select>
+            <div class="slider-row">
+                <button id="month-play" class="icon-btn" type="button" aria-label="play through months" title="Play through the seasonal cycle">▶</button>
+                <input id="month-slider" class="slider" type="range" min="1" max="12" step="1" value="1" aria-label="scrub month">
+            </div>
+            <label class="toggle-row" style="margin-top:8px; display:flex; align-items:center; gap:8px; font-size:0.78rem; cursor:pointer;"
+                   title="Average the selected month with the months on either side. Jan → DJF, Jul → JJA, Dec → NDJ. Wraps through December.">
+                <input id="toggle-seasonal" type="checkbox">
+                <span>3-month seasonal mean <span id="seasonal-label" style="color: var(--sage); margin-left: 6px;"></span></span>
+            </label>
+        </section>
+
+        <section class="control-group" id="decompose-group">
+            <h4>Decomposition</h4>
+            <div class="segmented decomp-seg" role="tablist" aria-label="Field decomposition">
+                <button type="button" data-decompose="total" class="active">Total</button>
+                <button type="button" data-decompose="zonal">Zonal</button>
+                <button type="button" data-decompose="eddy">Eddy</button>
+                <button type="button" data-decompose="anomaly">Anomaly</button>
+                <button type="button" data-decompose="zscore"
+                        title="Standardized anomaly: (value − climo mean) ÷ climo σ. Unit-less z-score; |z| > 2 is unusual, > 3 is rare. Makes regions with different absolute variability (tropics vs midlatitudes) directly comparable.">σ-anom</button>
+            </div>
+            <div id="ref-period-row" hidden style="margin-top:10px;">
+                <label class="field-label" for="ref-period-select" style="margin-bottom:4px; font-size:0.66rem;">Reference period</label>
+                <select id="ref-period-select" title="Drives three things: in Anomaly mode → anomaly target (year-vs-climo, climate-change anomaly, or self); in ±1σ mode → Δσ (current σ minus reference σ); when Compare is on (Map view) → the period painted on the right half of the swipe.">
+                    <option value="default">Self · 12-month mean</option>
+                    <option value="best-match"
+                            title="Each year subtracts its closest 30-yr climatology (8 windows stepped every 5 yr). Removes warming-trend bias — e.g. 2026 vs 1996-2025 instead of always vs 1991-2020.">vs. best-match climatology</option>
+                    <option value="1991-2020">vs. 1991–2020 (WMO standard)</option>
+                    <option value="1961-1990">vs. 1961–1990 (climate change)</option>
+                </select>
+                <p class="ref-period-flash" id="ref-period-flash" hidden></p>
+            </div>
+        </section>
+
+        <section class="control-group" id="compare-group" hidden>
+            <h4>Compare <span style="color:var(--paper-dim); font-weight:400; text-transform:none; letter-spacing:0; font-size:0.7rem;">— Map view</span></h4>
+            <label class="check">
+                <input type="checkbox" id="toggle-compare">
+                Compare with...
+            </label>
+            <!-- Compare-target sub-controls — mirror the main Climatology
+                 mode toggle so users can compare two 30-year windows
+                 OR two specific years (or one of each). -->
+            <div id="compare-target" style="margin-top:8px;">
+                <div class="segmented" id="compare-mode-toggle" role="tablist" aria-label="Compare target">
+                    <button type="button" data-compare-mode="ref" class="active"
+                            title="Compare against the Reference period chosen in the Decomposition section">Reference period</button>
+                    <button type="button" data-compare-mode="year"
+                            title="Compare against a specific year — pick with the slider below">Specific year</button>
+                </div>
+                <!-- Comparison style: swipe (two halves of the same map) OR
+                     diff (single map showing active − reference). -->
+                <div class="segmented" id="compare-style-toggle" role="tablist" aria-label="Comparison style"
+                     style="margin-top:8px;">
+                    <button type="button" data-compare-style="swipe" class="active"
+                            title="Split map: left = active view, right = target. Drag on the map to slide the divider.">Swipe</button>
+                    <button type="button" data-compare-style="diff"
+                            title="Single map showing active − target as an anomaly-style field. Good for seeing the full 2-D difference pattern at a glance without dragging the divider.">Difference</button>
+                </div>
+                <div id="compare-year-options" hidden style="margin-top:8px;">
+                    <div class="year-row">
+                        <label class="field-label" style="margin:0; font-size:0.66rem;">Compare-against year</label>
+                        <span id="compare-year-display" class="year-display">—</span>
+                    </div>
+                    <input id="compare-year-slider" class="slider" type="range"
+                           min="1961" max="2026" step="1" value="2015"
+                           aria-label="compare-against year"
+                           title="Drag to pick the year painted on the right half of the swipe.">
+                </div>
+            </div>
+            <p class="field-help" style="margin-top:6px; line-height:1.45;">
+                Drag anywhere on the map to slide the divider. Left half = active view, right half = the target chosen above. Toggling Compare suppresses the climate-change anomaly and Δσ transforms (the swipe IS the comparison).
+            </p>
+            <div id="map-center-group" hidden style="margin-top:10px;">
+                <label class="field-label" for="map-center-slider" style="font-size:0.66rem; margin-bottom:4px;">
+                    Central meridian: <span id="map-center-value">0°</span>
+                </label>
+                <input id="map-center-slider" class="slider" type="range"
+                       min="-180" max="180" step="1" value="0"
+                       aria-label="central meridian">
+            </div>
+        </section>
+
+        <section class="control-group">
+            <h4>Overlays</h4>
+            <!-- TC tracks (TC-ATLAS-specific overlay; upstream Gen_Circ has no IBTrACS). -->
+            <label class="check"><input type="checkbox" id="toggle-tracks" checked> TC tracks</label>
+            <p class="field-help" style="margin: 2px 0 8px 24px; font-size:0.62rem;">
+                IBTrACS storms active during the displayed month, colored by Saffir-Simpson category.
+            </p>
+            <!-- Data overlays — change with what you're studying. -->
+            <label class="check"><input type="checkbox" id="toggle-contours"> Contours</label>
+            <div id="contour-field-row" hidden style="margin: 4px 0 8px 24px;">
+                <label class="field-label" for="contour-field-select" style="margin: 0 0 3px 0; font-size: 0.62rem;">Overlay field</label>
+                <select id="contour-field-select" style="font-size: 0.74rem; padding: 5px 8px;"
+                        title="Pick a SECOND field for the contour overlay so the heatmap shades one variable while the contours track another (e.g. shade T anomaly, contour z; shade SST, contour MSLP).">
+                    <option value="">Same as displayed</option>
+                </select>
+            </div>
+            <div class="wind-mode">
+                <div class="wind-mode-label">Wind</div>
+                <div class="segmented" role="tablist" aria-label="Wind overlay">
+                    <button type="button" data-wind-mode="off">Off</button>
+                    <button type="button" data-wind-mode="particles" class="active">Particles</button>
+                    <button type="button" data-wind-mode="barbs">Barbs</button>
+                </div>
+            </div>
+            <!-- Map chrome — set-once-and-forget toggles tucked behind a
+                 disclosure so the Overlays section keeps focus on the
+                 data-overlay choices above. -->
+            <details class="map-chrome-details" style="margin-top:10px;">
+                <summary>Map chrome</summary>
+                <div style="margin-top:8px;">
+                    <label class="check"><input type="checkbox" id="toggle-coastlines" checked> Coastlines</label>
+                    <label class="check"><input type="checkbox" id="toggle-graticule" checked> Graticule</label>
+                    <label class="check"><input type="checkbox" id="toggle-sun" checked> Sun &amp; day/night</label>
+                </div>
+            </details>
+        </section>
+
+        <section class="control-group">
+            <h4>Panels</h4>
+            <label class="check"><input type="checkbox" id="toggle-xsection"> Cross-section</label>
+            <label class="check"><input type="checkbox" id="toggle-lorenz"> Lorenz energy cycle</label>
+            <label class="check"><input type="checkbox" id="toggle-timeseries"> Area-mean time series</label>
+            <p class="mobile-panel-hint">
+                Panels render on tablets and wider. On phones, toggling a panel stores
+                the state but doesn't draw the view — rotate to landscape on a tablet,
+                or reopen on a desktop to see these diagnostics.
+            </p>
+        </section>
+
+        <section class="control-group">
+            <details class="advanced-details" id="advanced-details">
+                <summary>Advanced <span class="composite-badge">expert</span></summary>
+                <div id="parcels-section" style="margin-top:10px;">
+                    <h4 style="margin-top:0;">Parcels</h4>
+                    <p class="field-help">
+                        <span class="xs-kbd">⌥</span> + click globe to release parcels at 200 hPa.
+                        They follow the monthly-mean 3-D wind.
+                    </p>
+                    <button type="button" class="xs-reset" id="parcels-clear" style="width:100%">Clear all parcels</button>
+                </div>
+            </details>
+        </section>
+
+        <section class="control-group">
+            <h4>Share</h4>
+            <button type="button" class="xs-reset" id="export-gif" style="width:100%">Export image / GIF…</button>
+        </section>
+
+        <div class="sidebar-footer" id="sidebar-status">
+            <strong>Loading…</strong>
+            Fetching the ERA5 tile for this field.
+        </div>
+
+        <div class="sidebar-footer" style="margin-top:0; border-top:1px solid var(--border); padding-top:14px; font-size:0.72rem; line-height:1.55;">
+            <strong>Data attribution</strong>
+            Contains modified Copernicus Climate Change Service information (2026). Built on ERA5 monthly-mean reanalysis (Hersbach et al., 2020, <em>QJRMS</em> 146, 1999–2049, <a href="https://doi.org/10.1002/qj.3803" target="_blank" rel="noopener" style="color:var(--emerald-bright); text-decoration:none;">doi:10.1002/qj.3803</a>). Neither the European Commission nor ECMWF is responsible for any use of this information.
+        </div>
+    </aside>
+
+    <section class="canvas-area">
+        <div id="globe-mount"></div>
+        <div class="hover-tooltip hidden" id="hover-tooltip"></div>
+        <div class="hover-tooltip hidden" id="xs-hover"></div>
+        <div class="hover-tooltip hidden" id="ts-hover-tip"></div>
+        <!-- Swipe-compare period labels (visible only in Map view + compare on) -->
+        <div id="compare-label-left"  class="compare-label" hidden></div>
+        <div id="compare-label-right" class="compare-label compare-label--right" hidden></div>
+        <!-- Swipe-compare divider handle: arrows + drag hint, centred on the divider -->
+        <div id="compare-handle" class="compare-handle" hidden>
+            <span class="compare-handle-arrows">◀&nbsp;&nbsp;▶</span>
+            <span class="compare-handle-hint">Drag to compare</span>
+        </div>
+
+        <aside class="tips-panel" id="tips-panel">
+            <button class="tips-dismiss" id="tips-dismiss" aria-label="Dismiss tips">&times;</button>
+            <div class="tips-title" id="tips-title">Controls</div>
+            <div id="tips-content"></div>
+        </aside>
+        <button class="tips-reopen" id="tips-reopen" type="button" hidden
+                aria-label="Show controls tips"
+                title="Show controls tips">?</button>
+
+        <div class="view-toggle" role="group" aria-label="projection">
+            <button id="view-globe" class="active" type="button">Globe</button>
+            <button id="view-map" type="button">Map</button>
+            <button id="view-orbit" type="button">Orbit</button>
+        </div>
+
+        <div class="share-toolbar">
+            <button id="save-view-btn" class="share-btn" type="button"
+                    title="Save this view as a PNG or GIF">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                    <polyline points="7 10 12 15 17 10"/>
+                    <line x1="12" y1="15" x2="12" y2="3"/>
+                </svg>
+                <span>Save view</span>
+            </button>
+            <button id="share-link-btn" class="share-btn" type="button"
+                    title="Copy a URL that reproduces this exact view (field, year, month, level, compare state, …)">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;">
+                    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+                    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+                </svg>
+                <span id="share-link-label">Share link</span>
+            </button>
+        </div>
+
+        <div class="colorbar" aria-hidden="true">
+            <div class="cb-header">
+                <span id="cb-title">—</span>
+                <span id="cb-units">—</span>
+                <details class="cb-cmap-menu">
+                    <summary class="cb-cmap-btn" title="Change colormap"
+                             aria-label="Change colormap">⋯</summary>
+                    <div class="cb-cmap-pop">
+                        <label class="field-label" for="cmap-select"
+                               style="margin-bottom:4px;">Colormap</label>
+                        <select id="cmap-select"></select>
+                    </div>
+                </details>
+            </div>
+            <div id="cb-note" class="cb-note" hidden></div>
+            <div id="cb-sub" class="cb-sub" hidden></div>
+            <canvas id="colorbar-canvas" width="280" height="12"></canvas>
+            <div class="cb-ticks">
+                <input id="cb-min" class="cb-tick-input" type="text" inputmode="decimal" autocomplete="off" spellcheck="false"
+                       title="Click to override colorbar minimum. Persists across months/levels/modes; resets on field change.">
+                <button id="cb-auto" class="cb-auto" type="button"
+                        title="Reset colorbar range to auto" aria-label="Reset colorbar range to auto">↺ Auto</button>
+                <input id="cb-max" class="cb-tick-input cb-tick-input--right" type="text" inputmode="decimal" autocomplete="off" spellcheck="false"
+                       title="Click to override colorbar maximum. Persists across months/levels/modes; resets on field change.">
+            </div>
+            <div class="cb-hint">click min / max to override</div>
+        </div>
+
+        <div class="lorenz" id="lorenz-panel" hidden>
+            <div class="xs-header">
+                <span id="lorenz-title">Lorenz energy cycle · stationary eddies</span>
+                <span style="display:flex; gap:6px; align-items:center;">
+                    <button class="lz-info-btn" id="lorenz-info-btn" aria-label="About this diagnostic" title="About this diagnostic">i</button>
+                    <button class="xs-close" id="lorenz-close" aria-label="Close panel">&times;</button>
+                </span>
+            </div>
+            <div class="lz-refchoose" role="radiogroup" aria-label="Reference state">
+                <label class="lz-refopt">
+                    <input type="radio" name="lorenz-ref" value="lorenz" checked>
+                    <span>Lorenz (sorted)</span>
+                </label>
+                <label class="lz-refopt">
+                    <input type="radio" name="lorenz-ref" value="simple">
+                    <span>Area-mean</span>
+                </label>
+            </div>
+            <div class="lz-info" id="lorenz-info" hidden>
+                <p><b>Lorenz energy cycle (stationary-eddy form).</b> Four reservoirs, four conversions. Reservoirs in <b>MJ m⁻²</b>, conversions in <b>W m⁻²</b>, all mass-weighted vertically over the 12 pressure levels and area-weighted globally (cosφ).</p>
+                <p><b>Reservoirs</b> — available potential + kinetic energy, mean + eddy:</p>
+                <pre>P_M = (R/2g) ∫ T̂² / (γ p) dp        (mean APE)
+P_E = (R/2g) ∫ ⟨T*²⟩ / (γ p) dp     (eddy APE)
+K_M = (1/2g) ∫ ([u]² + [v]²) dp     (mean KE)
+K_E = (1/2g) ∫ ⟨u*² + v*²⟩ dp       (eddy KE)</pre>
+                <p style="font-size: 0.74rem;">where T̂ = [T] − T_ref (zonal-mean departure from reference), T* = T − [T] (stationary-eddy departure from zonal mean), γ(p) = κT_ref/p − ∂T_ref/∂p (static stability), [·] is zonal mean, ⟨·⟩ is global area-mean. Leading factor R/(2g) is the Holton–Hakim / Vallis form (using c_p/2g instead overshoots by ~3.5×).</p>
+                <p><b>Conversions</b> — each has a clean physical reading:</p>
+                <pre>C(P_M→P_E) = -(R/g) ∫ ⟨v*T*⟩/(γp) · ∂[T]/∂y dp
+              -(R/g) ∫ ⟨ω*T*⟩/(γp) · ∂[T]/∂p dp
+   ► baroclinic release — eddy heat flux
+     down the mean T gradient
+
+C(P_E→K_E) = -(R/g) ∫ ⟨ω*T*⟩ / p dp
+   ► eddy buoyancy flux — warm air rising,
+     cold air sinking in the eddies
+
+C(K_E→K_M) =  (1/g) ∫ ⟨u*v*⟩ cosφ · ∂([u]/cosφ)/∂y dp
+              +(1/g) ∫ ⟨u*ω*⟩ · ∂[u]/∂p dp
+   ► eddy momentum flux spinning up the
+     zonal-mean jets (barotropic)
+
+C(P_M→K_M) = -(R/g) ∫ [ω][T] / p dp
+   ► direct thermal conversion by the
+     zonal-mean meridional circulation
+     (Hadley cell drives this)</pre>
+                <p><b>Implementation notes:</b></p>
+                <ul style="margin: 4px 0 6px 16px; padding: 0; font-size: 0.74rem;">
+                    <li>Inputs are the monthly-mean u, v, ω, T fields on 12 pressure levels (10 → 1000 hPa) from ERA5.</li>
+                    <li>Vertical integration uses each level's half-distance layer (dp = (p_{k-1} + p_{k+1})/2 − (p_{k-1} + p_k)/2), one-sided at top and bottom.</li>
+                    <li>Meridional derivatives ∂/∂y use centered differences on a = 6.371·10⁶ m; vertical ∂/∂p likewise on the 12-level pressure grid.</li>
+                    <li>Global ⟨·⟩ uses a cosφ area weight over the full (181 × 360) grid, skipping NaN (land-masked) samples.</li>
+                </ul>
+                <p><b>Reference-state toggle</b> (controls T_ref, which sets γ and the T̂ used for P_M and C(P_M, K_M)):</p>
+                <ul style="margin: 4px 0 6px 16px; padding: 0; font-size: 0.74rem;">
+                    <li><b>Lorenz (sorted)</b> — the true minimum-PE reference from Lorenz (1955). Every parcel (~780k on the 12-level globe) is adiabatically re-stratified by θ, with highest θ at the top; T_ref(p) is the T at the rank where cumulative mass from the top equals (p / p_s)·total. This is the canonical "available" formulation.</li>
+                    <li><b>Area-mean</b> — T_ref(p) = global area-weighted mean of T at each pressure level. The textbook diagnostic approximation. Faster, but it overstates how much PE is "available" — a lot of the meridional T gradient it sees is actually unavailable (non-adiabatic to release).</li>
+                </ul>
+                <p><b>Why sorted ≠ area-mean, especially for C(P_M, K_M):</b> both formulations share u, v, ω, T — only T_ref (and hence T̂, γ) differ. In area-mean, T̂ still contains the full tropics-to-pole gradient, so the Hadley-cell overturning [ω] correlates strongly with T̂ and C(P_M, K_M) is large. In sorted, the reference has already absorbed most of that gradient; the "excess" T̂ is small and C(P_M, K_M) drops sharply. The factor-of-many difference you see between the two panels is Lorenz's (1955) original pedagogical point in visible form — the area-mean calc systematically overstates convertible energy.</p>
+                <p><b>Typical magnitudes (for sanity-checking):</b></p>
+                <table style="font-size: 0.72rem; margin: 4px 0 8px; border-collapse: collapse; width: 100%;">
+                    <tr style="color: var(--sage); border-bottom: 1px solid var(--border-light);">
+                        <th style="text-align: left; padding: 2px 6px;">Quantity</th>
+                        <th style="text-align: right; padding: 2px 6px;">P&amp;O total</th>
+                        <th style="text-align: right; padding: 2px 6px;">Stat-only band</th>
+                    </tr>
+                    <tr><td style="padding: 2px 6px;">P_M (MJ/m²)</td><td style="text-align: right;">4.0</td><td style="text-align: right;">~3.8-4.2 (sorted)</td></tr>
+                    <tr><td style="padding: 2px 6px;">K_M (MJ/m²)</td><td style="text-align: right;">0.8</td><td style="text-align: right;">~0.7-0.9</td></tr>
+                    <tr><td style="padding: 2px 6px;">P_E (MJ/m²)</td><td style="text-align: right;">1.5</td><td style="text-align: right;">~0.2-0.4 (stat)</td></tr>
+                    <tr><td style="padding: 2px 6px;">K_E (MJ/m²)</td><td style="text-align: right;">1.4</td><td style="text-align: right;">~0.2-0.3 (stat)</td></tr>
+                    <tr><td style="padding: 2px 6px;">C(P_M, P_E) (W/m²)</td><td style="text-align: right;">2.2</td><td style="text-align: right;">~0.7-1.1 (stat)</td></tr>
+                    <tr><td style="padding: 2px 6px;">C(P_E, K_E) (W/m²)</td><td style="text-align: right;">1.7</td><td style="text-align: right;">~0.5-0.7 (stat)</td></tr>
+                    <tr><td style="padding: 2px 6px;">C(K_E, K_M) (W/m²)</td><td style="text-align: right;">0.2</td><td style="text-align: right;">~0.06-0.12 (stat)</td></tr>
+                    <tr><td style="padding: 2px 6px;">C(P_M, K_M) (W/m²)</td><td style="text-align: right;">0.2</td><td style="text-align: right;">~0.02-0.1 (sorted, stat)</td></tr>
+                </table>
+                <p style="font-size: 0.72rem; color: var(--paper-dim);">Left column: Peixoto &amp; Oort (1992) Table 13.1 for the full circulation. Right column: the stationary-only contribution you'd expect to see here, derived from Boer (1989)'s stationary/transient decomposition (~15-30% of total for eddy quantities). DJF values are closer to the top of each band; JJA to the bottom. Reanalysis-to-reanalysis variance alone is ±15-20%, so matches within that range count as good.</p>
+                <p style="color: var(--ochre);"><b>Caveats:</b></p>
+                <ul style="margin: 4px 0 6px 16px; padding: 0; font-size: 0.74rem; color: var(--paper-dim);">
+                    <li><b>Stationary eddies only.</b> * here is the departure of the monthly-mean field from its zonal mean — it captures planetary waves locked to topography / land-sea contrast. High-frequency (sub-monthly) <i>transient</i> eddies, which dominate baroclinic conversion in published totals, need daily data (currently out of scope).</li>
+                    <li>C(P_M, P_E) here includes both the meridional <b>and</b> vertical eddy-heat-flux terms; many references quote only the meridional term.</li>
+                    <li>Expect ~3-5× smaller conversions than Peixoto-Oort "total" numbers because transients are excluded — that gap is the transient-eddy contribution, not a bug.</li>
+                </ul>
+                <p style="color: var(--paper-dim); font-size: 0.74rem;">
+                    Use the cycle to <i>illustrate</i> structure — which arrows are large, which way energy flows, how seasonal cycles shift it (swipe through months). Toggle the reference state to see how a methodology choice shifts P_M and C(P_M, K_M) by an order of magnitude — that's the pedagogy in its own right.
+                </p>
+                <p style="color: var(--paper-dim); font-size: 0.74rem;">References: Lorenz (1955, <i>Tellus</i>); Peixoto &amp; Oort (1974; 1992, <i>Physics of Climate</i>, ch. 13-14); Boer (1989, <i>JCli</i>) for the stationary/transient decomposition; Holton &amp; Hakim (textbook ch. 10) for the canonical derivation.</p>
+            </div>
+            <svg id="lorenz-svg" viewBox="0 0 360 260" xmlns="http://www.w3.org/2000/svg">
+                <!-- boxes -->
+                <g class="lz-boxes" font-family="JetBrains Mono, monospace">
+                    <rect x="30"  y="30"  width="100" height="60" rx="8" class="lz-box"/>
+                    <rect x="230" y="30"  width="100" height="60" rx="8" class="lz-box"/>
+                    <rect x="30"  y="170" width="100" height="60" rx="8" class="lz-box"/>
+                    <rect x="230" y="170" width="100" height="60" rx="8" class="lz-box"/>
+                    <text x="80"  y="48" text-anchor="middle" class="lz-name">P_M</text>
+                    <text x="80"  y="74" text-anchor="middle" class="lz-val" id="lz-PM">—</text>
+                    <text x="280" y="48" text-anchor="middle" class="lz-name">P_E</text>
+                    <text x="280" y="74" text-anchor="middle" class="lz-val" id="lz-PE">—</text>
+                    <text x="80"  y="188" text-anchor="middle" class="lz-name">K_M</text>
+                    <text x="80"  y="214" text-anchor="middle" class="lz-val" id="lz-KM">—</text>
+                    <text x="280" y="188" text-anchor="middle" class="lz-name">K_E</text>
+                    <text x="280" y="214" text-anchor="middle" class="lz-val" id="lz-KE">—</text>
+                </g>
+                <!-- arrows: P_M→P_E, P_E→K_E, K_E→K_M, P_M→K_M -->
+                <defs>
+                    <marker id="lz-arrowhead" viewBox="0 0 10 10" refX="9" refY="5"
+                            markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                        <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+                    </marker>
+                </defs>
+                <g class="lz-arrows" stroke-linecap="round" font-family="JetBrains Mono, monospace">
+                    <line id="lz-arrow-PMPE" x1="130" y1="60"  x2="230" y2="60"  marker-end="url(#lz-arrowhead)"/>
+                    <line id="lz-arrow-PEKE" x1="280" y1="90"  x2="280" y2="170" marker-end="url(#lz-arrowhead)"/>
+                    <line id="lz-arrow-KEKM" x1="230" y1="200" x2="130" y2="200" marker-end="url(#lz-arrowhead)"/>
+                    <line id="lz-arrow-PMKM" x1="80"  y1="90"  x2="80"  y2="170" marker-end="url(#lz-arrowhead)"/>
+                    <text x="180" y="50"  text-anchor="middle" class="lz-conv" id="lz-c-PMPE">—</text>
+                    <text x="295" y="135" text-anchor="start"  class="lz-conv" id="lz-c-PEKE">—</text>
+                    <text x="180" y="218" text-anchor="middle" class="lz-conv" id="lz-c-KEKM">—</text>
+                    <text x="65"  y="135" text-anchor="end"    class="lz-conv" id="lz-c-PMKM">—</text>
+                </g>
+            </svg>
+            <div class="xs-footer">
+                <span>Reservoirs: MJ m⁻²  ·  Conversions: W m⁻²  ·  Stationary eddies only</span>
+            </div>
+        </div>
+
+        <div class="xsection" id="xsection-panel" hidden>
+            <div class="xs-header">
+                <span id="xs-title">Zonal-mean cross-section</span>
+                <span style="display:flex; gap:6px; align-items:center;">
+                    <button class="lz-info-btn" id="mb-info-btn" aria-label="About this diagnostic" title="About the M-budget" hidden>i</button>
+                    <button class="xs-expand" id="xs-expand" aria-label="Expand panel" title="Expand to fullscreen">⛶</button>
+                    <button class="xs-close"  id="xs-close"  aria-label="Close panel">&times;</button>
+                </span>
+            </div>
+            <div class="lz-info" id="mb-info" hidden>
+                <p><b>Stationary-eddy angular momentum budget.</b> Per unit mass:</p>
+                <pre>∂[M]/∂t = -(1/(a cosφ))·∂([v][M] cosφ)/∂y - ∂([ω][M])/∂p   mean transport
+          -(1/(a cosφ))·∂([v*M*] cosφ)/∂y - ∂([ω*M*])/∂p   stationary eddies
+          + F_λ · a cosφ                                    friction + torque</pre>
+                <p>where M = (Ω a cosφ + [u])·a cosφ. <b>[·]</b> = zonal mean, <b>*</b> = stationary eddy departure (M* = a cosφ · u*). In monthly steady-state ∂[M]/∂t ≈ 0, so the implied surface torque (residual) is shown as the negative of the sum.</p>
+                <p><b>Display variable:</b> ∂[u]/∂t (m s⁻¹ day⁻¹) = ∂[M]/∂t / (a cosφ) — the implied zonal-wind tendency. Or ∂[M]/∂t scaled to 10⁶ m² s⁻¹ day⁻¹.</p>
+                <p><b>Aggregation modes:</b></p>
+                <ul style="margin: 4px 0 6px 16px; padding: 0; font-size: 0.74rem;">
+                    <li><b>(lat, p)</b> — full cross-section heatmap (Holton Fig 10.4 style).</li>
+                    <li><b>col-mean</b> — mass-weighted vertical mean (1/p_s)·∫T·dp. Same units as 2D, "what the column-average tendency looks like."</li>
+                    <li><b>∫dp/g</b> — vertical integral ∫T·(1/g)·dp in N/m² for ∂[u]/∂t form. Directly comparable to surface friction stress (~0.1 N/m²). This is the canonical Peixoto–Oort Fig 11.6 form.</li>
+                </ul>
+                <p style="color: var(--ochre);"><b>Stationary eddies only.</b> The transient-eddy contribution (sub-monthly variability) is excluded. Per Peixoto–Oort 1992 Table 11.1, stationary [u*v*] is roughly <i>40% of total</i> in NH winter at 200 hPa (12 vs 30 m²/s²). For SH or annual mean the stationary fraction is smaller. Implied torque magnitudes here will be off vs. published totals by the missing transient amount.</p>
+                <p><b>Friction + mountain overlays</b> (active when <code>ews</code> and <code>oro</code> tiles are built):
+                In the all-terms 1D view, two extra lines appear — friction torque
+                τ_f(φ) = -[ews] from observed surface stress, and mountain torque
+                τ_m(φ) = ⟨p_s · ∂h/∂λ⟩/a from surface pressure × orography slope.
+                Their sum is what closes the budget in steady state: <b>(friction + mountain) − (implied torque) ≈ transient-eddy convergence</b> — a direct visual measure of what we're approximating away by using monthly means.</p>
+                <p style="color: var(--paper-dim); font-size: 0.74rem;">References: Newell et al. (1972, 1974); Oort &amp; Peixoto (1983 atlas); Peixoto &amp; Oort (1992) ch. 11; Holton (textbook) ch. 10; Egger, Weickmann &amp; Hoinka (2007, <i>Rev. Geophys.</i>) for the modern AAM review.</p>
+            </div>
+            <div class="xs-diag">
+                <label class="xs-diag-label" for="xs-diag-select">Variable</label>
+                <select id="xs-diag-select">
+                    <option value="field">Field section</option>
+                    <option value="psi">ψ — Mass streamfunction</option>
+                    <option value="M">M — Angular momentum</option>
+                    <option value="ug">[u_g] — Geostrophic wind</option>
+                    <option value="N2">N² — Brunt–Väisälä (stability)</option>
+                    <option value="epflux">EP flux (stationary eddy)</option>
+                    <option value="mbudget">Angular momentum budget</option>
+                    <option value="qbudget">Moisture budget</option>
+                    <option value="hbudget">Energy budget (MSE)</option>
+                </select>
+            </div>
+            <div class="mb-controls" id="mb-controls" hidden>
+                <div class="mb-row">
+                    <span class="mb-label">Term</span>
+                    <select id="mb-term-select">
+                        <option value="total">Total convergence</option>
+                        <option value="meanY">Mean meridional</option>
+                        <option value="meanP">Mean vertical</option>
+                        <option value="eddyY">Eddy meridional</option>
+                        <option value="eddyP">Eddy vertical</option>
+                        <option value="torque">Implied surface torque</option>
+                        <option value="all">All terms (lat-only)</option>
+                    </select>
+                </div>
+                <div class="mb-row mb-row-toggles">
+                    <div class="mb-toggle-group" role="radiogroup" aria-label="Display variable">
+                        <label class="mb-toggle"><input type="radio" name="mb-form" value="u" checked><span>∂[u]/∂t</span></label>
+                        <label class="mb-toggle"><input type="radio" name="mb-form" value="M"><span>∂[M]/∂t</span></label>
+                    </div>
+                    <div class="mb-toggle-group" role="radiogroup" aria-label="Display mode" title="2D heatmap, mass-weighted column mean, or column integral (∫T·dp/g, N/m² — Peixoto–Oort Fig 11.6)">
+                        <label class="mb-toggle"><input type="radio" name="mb-mode" value="2d" checked><span>(lat, p)</span></label>
+                        <label class="mb-toggle"><input type="radio" name="mb-mode" value="1d_mean"><span>col-mean</span></label>
+                        <label class="mb-toggle"><input type="radio" name="mb-mode" value="1d_int"><span>∫dp/g</span></label>
+                    </div>
+                </div>
+            </div>
+            <div class="budget-caveat" id="budget-caveat" hidden>
+                Budget closure here has not yet been formally validated against published atlases. Spatial patterns and sign conventions are canonical and reliable for pedagogy; for quantitative research use, cross-check magnitudes against a trusted reference before citing a number.
+            </div>
+            <canvas id="xs-canvas" width="380" height="200"></canvas>
+            <div class="xs-cb-wrap">
+                <canvas id="xs-cb-canvas" class="xs-cb"></canvas>
+                <div class="xs-cb-labels">
+                    <input id="xs-cb-min" class="cb-tick-input" type="text" inputmode="decimal" autocomplete="off" spellcheck="false"
+                           title="Click to override cross-section colorbar minimum. Resets on field or diagnostic-mode change.">
+                    <span class="xs-cb-mid">
+                        <span id="xs-cb-units">—</span>
+                        <button id="xs-cb-auto" class="cb-auto" type="button"
+                                title="Reset cross-section colorbar range to auto"
+                                aria-label="Reset cross-section colorbar range to auto">↺ Auto</button>
+                    </span>
+                    <input id="xs-cb-max" class="cb-tick-input cb-tick-input--right" type="text" inputmode="decimal" autocomplete="off" spellcheck="false"
+                           title="Click to override cross-section colorbar maximum. Resets on field or diagnostic-mode change.">
+                </div>
+                <div class="cb-hint">click min / max to override</div>
+            </div>
+            <div class="xs-footer">
+                <span id="xs-hint"><span class="xs-kbd">⇧</span> + drag globe to draw an arc</span>
+                <button class="xs-reset" id="xs-reset-mid" type="button" hidden
+                        title="Unpin the midpoint and revert the arc to a straight great-circle / linear path"
+                        style="margin-right:6px;">Unpin midpoint</button>
+                <button class="xs-reset" id="xs-reset" type="button" hidden>Reset to zonal mean</button>
+            </div>
+        </div>
+
+        <!-- Area-mean time series panel -->
+        <div class="xsection timeseries" id="timeseries-panel" hidden>
+            <div class="xs-header">
+                <span id="ts-title">Area-mean time series</span>
+                <span style="display:flex; gap:6px; align-items:center;">
+                    <button class="xs-reset" id="ts-pick-btn" type="button"
+                            style="padding:4px 10px; margin:0; width:auto; font-size:0.68rem;"
+                            title="Click, then drag a rectangle on the Map view to define the area.">Pick region</button>
+                    <button class="xs-expand" id="ts-download-btn" type="button"
+                            aria-label="Download CSV" title="Download the time series as CSV">⬇</button>
+                    <button class="xs-close"  id="ts-close" aria-label="Close panel">&times;</button>
+                </span>
+            </div>
+            <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
+                <span id="ts-region-label" class="xs-kbd" style="font-size:0.66rem; letter-spacing:0.03em;">no region selected</span>
+                <div class="segmented" id="ts-mode-toggle" style="margin-left:auto; font-size:0.62rem;" role="tablist" aria-label="Series mode">
+                    <button type="button" data-ts-mode="total" class="active">Total</button>
+                    <button type="button" data-ts-mode="anomaly" title="Subtract the same-month 30-year climatology from each month">Anomaly</button>
+                </div>
+            </div>
+            <!-- Manual domain inputs — edit the bounds by typing for a
+                 precise region (e.g. Niño 3.4: lat [-5, 5], lon [-170, -120]).
+                 Press Enter or click Apply to commit. -->
+            <div class="ts-bounds-row">
+                <span class="ts-bounds-label">lat</span>
+                <input id="ts-lat1" type="number" class="range-input ts-bounds-input" step="1" aria-label="min latitude">
+                <span class="ts-bounds-sep">→</span>
+                <input id="ts-lat2" type="number" class="range-input ts-bounds-input" step="1" aria-label="max latitude">
+                <span class="ts-bounds-label" style="margin-left:6px;">lon</span>
+                <input id="ts-lon1" type="number" class="range-input ts-bounds-input" step="1" aria-label="west longitude">
+                <span class="ts-bounds-sep">→</span>
+                <input id="ts-lon2" type="number" class="range-input ts-bounds-input" step="1" aria-label="east longitude">
+                <button id="ts-bounds-apply" type="button" class="xs-reset ts-bounds-apply">Apply</button>
+            </div>
+            <div style="position:relative;">
+                <canvas id="ts-canvas" width="520" height="230"></canvas>
+                <div class="ts-loading-overlay hidden" id="ts-loading">
+                    <div class="ts-loading-spin"></div>
+                    <div id="ts-loading-text">Fetching ERA5 tiles…</div>
+                    <div class="ts-loading-bar"><div class="ts-loading-fill" id="ts-loading-fill" style="width:0%"></div></div>
+                </div>
+            </div>
+            <div class="xs-footer" style="margin-top:6px;">
+                <span id="ts-hint">Click <b>Pick region</b>, then drag on the Map view to set bounds.</span>
+                <span id="ts-stats" style="margin-left:auto;"></span>
+            </div>
+        </div>
+    </section>
+
+</main>
+
+<div class="gif-modal hidden" id="gif-modal" aria-hidden="true">
+    <div class="gif-modal-card">
+        <div class="gif-modal-head">
+            <span>Export image or GIF</span>
+            <button type="button" class="gif-close" id="gif-close" aria-label="Close">&times;</button>
+        </div>
+        <div class="gif-modal-body">
+            <label class="gif-opt">
+                <input type="radio" name="gif-mode" value="still-main" checked>
+                <div>
+                    <div class="gif-opt-title">Still image · main view (PNG)</div>
+                    <div class="gif-opt-sub">Current globe / map at native resolution, with caption ribbon. Lossless PNG.</div>
+                </div>
+            </label>
+            <label class="gif-opt" id="gif-opt-xsection">
+                <input type="radio" name="gif-mode" value="still-xsection">
+                <div>
+                    <div class="gif-opt-title">Still image · cross-section panel (PNG)</div>
+                    <div class="gif-opt-sub">Just the diagnostic panel: title + field + colorbar + caption. Panel must be open.</div>
+                    <div class="gif-opt-hint">Open the Cross-section panel first (Panels → Cross-section, or ⇧ + drag on the globe).</div>
+                </div>
+            </label>
+            <label class="gif-opt">
+                <input type="radio" name="gif-mode" value="animated">
+                <div>
+                    <div class="gif-opt-title">GIF · animation</div>
+                    <div class="gif-opt-sub">Current month · wind particles · 5 s loop</div>
+                </div>
+            </label>
+            <label class="gif-opt">
+                <input type="radio" name="gif-mode" value="annual">
+                <div>
+                    <div class="gif-opt-title">GIF · annual cycle</div>
+                    <div class="gif-opt-sub">12 months · one frame each · seasonal loop</div>
+                </div>
+            </label>
+            <label class="gif-opt" id="gif-opt-swipe">
+                <input type="radio" name="gif-mode" value="swipe-sweep">
+                <div>
+                    <div class="gif-opt-title">GIF · compare swipe sweep</div>
+                    <div class="gif-opt-sub">Divider slides W → E in 10° steps (36 frames). Map-view compare must be active.</div>
+                    <div class="gif-opt-hint">Switch to Map view and enable Compare (sidebar → Compare → Compare A vs B).</div>
+                </div>
+            </label>
+            <div class="gif-progress hidden" id="gif-progress">
+                <div class="gif-progress-bar"><div class="gif-progress-fill" id="gif-progress-fill"></div></div>
+                <div class="gif-progress-text" id="gif-progress-text">Capturing 0 / 0</div>
+            </div>
+        </div>
+        <div class="gif-modal-actions">
+            <button type="button" class="gif-btn-secondary" id="gif-cancel">Cancel</button>
+            <button type="button" class="gif-btn-primary" id="gif-start">Capture</button>
+        </div>
+    </div>
+</div>
+
+<script type="module" src="vendor/gc-atlas/globe.js"></script>
+<script type="module" src="climatology_globe.js?v=20260425g"></script>
+
+</body>
+</html>

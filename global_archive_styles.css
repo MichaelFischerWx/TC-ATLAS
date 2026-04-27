@@ -256,6 +256,99 @@ input[type="range"].ga-range::-moz-range-thumb {
 }
 
 /* ══════════════════════════════════════════════════════════════
+   TAB 5: ENVIRONMENT — launch card for climatology_globe.html
+   ══════════════════════════════════════════════════════════════
+   The full ERA5 climatology globe lives on its own page so the
+   vendored GC-ATLAS engine runs un-scoped (no #tab-environment
+   prefix work, no CSS-variable remap fights, no flex layout
+   conflicts with the outer Global Archive shell). This tab is a
+   simple landing card with an "Open Climatology Globe →" button. */
+.climgl-launch {
+    padding: 32px 24px;
+    display: flex;
+    justify-content: center;
+}
+.climgl-launch-card {
+    max-width: 760px;
+    display: flex;
+    gap: 28px;
+    align-items: flex-start;
+    padding: 28px 32px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+}
+.climgl-launch-icon {
+    flex-shrink: 0;
+    width: 96px;
+    height: 96px;
+    display: grid;
+    place-items: center;
+    border-radius: 14px;
+    background: rgba(46, 125, 255, 0.08);
+    border: 1px solid rgba(0, 212, 255, 0.25);
+}
+.climgl-launch-icon svg {
+    width: 80px;
+    height: 80px;
+}
+.climgl-launch-body {
+    flex: 1;
+    min-width: 0;
+}
+.climgl-launch-title {
+    margin: 0 0 8px;
+    font-size: 1.4rem;
+    font-weight: 600;
+    color: var(--text);
+}
+.climgl-launch-lede {
+    margin: 0 0 14px;
+    font-size: 0.92rem;
+    line-height: 1.55;
+    color: var(--text-dim);
+}
+.climgl-launch-bullets {
+    margin: 0 0 20px;
+    padding-left: 20px;
+    font-size: 0.85rem;
+    line-height: 1.6;
+    color: var(--text-dim);
+}
+.climgl-launch-bullets li {
+    margin-bottom: 4px;
+}
+.climgl-launch-btn {
+    display: inline-block;
+    padding: 10px 20px;
+    background: var(--blue);
+    color: var(--navy);
+    font-weight: 600;
+    font-size: 0.92rem;
+    letter-spacing: 0.02em;
+    text-decoration: none;
+    border-radius: 8px;
+    transition: background 0.15s, transform 0.12s, box-shadow 0.15s;
+    box-shadow: 0 0 0 0 rgba(0, 212, 255, 0);
+}
+.climgl-launch-btn:hover {
+    background: var(--cyan);
+    transform: translateY(-1px);
+    box-shadow: 0 0 0 4px rgba(0, 212, 255, 0.18);
+}
+
+@media (max-width: 640px) {
+    .climgl-launch-card {
+        flex-direction: column;
+        gap: 16px;
+        padding: 20px;
+    }
+    .climgl-launch-icon { width: 72px; height: 72px; }
+    .climgl-launch-icon svg { width: 56px; height: 56px; }
+}
+
+/* ══════════════════════════════════════════════════════════════
    TAB 1: STORM BROWSER
    ══════════════════════════════════════════════════════════════ */
 

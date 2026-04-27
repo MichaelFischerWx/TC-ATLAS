@@ -54,9 +54,8 @@
     <link rel="preconnect" href="https://tc-atlas-api-361010099051.us-east1.run.app">
     <link rel="dns-prefetch" href="https://cdnjs.cloudflare.com">
 
-    <!-- Styles -->
     <link rel="stylesheet" href="tc_radar_styles.css">
-    <link rel="stylesheet" href="global_archive_styles.css?v=20260407d">
+    <link rel="stylesheet" href="global_archive_styles.css?v=20260425c">
 </head>
 <body>
     <a href="#global-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -114,6 +113,9 @@
         </button>
         <button class="ga-tab" role="tab" aria-selected="false" data-tab="compare" onclick="switchTab('compare')">
             Compare Storms
+        </button>
+        <button class="ga-tab" role="tab" aria-selected="false" data-tab="environment" onclick="switchTab('environment')">
+            Environment
         </button>
     </div>
 
@@ -980,6 +982,46 @@
                     <div class="clim-panel clim-panel-clickable" onclick="openLMILatModal()" title="Click to explore where storms reach peak intensity">
                         <h3 class="clim-panel-title">Latitude of Peak Intensity <span class="ace-hint">Click to explore →</span></h3>
                         <div id="clim-lmi-chart" class="chart-container"></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- TAB 5: ENVIRONMENT (climatology globe + storm tracks)
+             Vendored GC-ATLAS engine (vendor/gc-atlas/) renders ERA5
+             monthly-mean fields on a 3-D globe; IBTrACS tracks (allTracks)
+             are overlaid via track_overlay.js. Sidebar is trimmed — no
+             Compare, Panels (xs/Lorenz/timeseries), Advanced (parcels),
+             Share, or Composite-builder. -->
+        <section id="tab-environment" class="ga-tab-content" role="tabpanel">
+            <!-- The full ERA5 climatology globe lives on its own page so it can run
+                 the vendored GC-ATLAS engine un-scoped (no #tab-environment CSS
+                 prefix work, no fork of url_state.js, no flexbox conflicts with the
+                 outer Global Archive shell). This tab is a launch card; the engine
+                 lives in climatology_globe.html. -->
+            <div class="climgl-launch">
+                <div class="climgl-launch-card">
+                    <div class="climgl-launch-icon" aria-hidden="true">
+                        <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+                            <defs><clipPath id="climgl-sphere"><circle cx="32" cy="32" r="28"/></clipPath></defs>
+                            <g clip-path="url(#climgl-sphere)" transform="rotate(18 32 32)">
+                                <line x1="4" y1="32" x2="60" y2="32" stroke="#5a9cff" stroke-width="1.4" opacity="0.85"/>
+                                <line x1="32" y1="4" x2="32" y2="60" stroke="#5a9cff" stroke-width="1.1" opacity="0.6"/>
+                                <line x1="12" y1="11.6" x2="52" y2="11.6" stroke="#00d4ff" stroke-width="3.4" opacity="0.95" stroke-linecap="round"/>
+                                <line x1="12" y1="52.4" x2="52" y2="52.4" stroke="#00d4ff" stroke-width="3.4" opacity="0.95" stroke-linecap="round"/>
+                            </g>
+                            <circle cx="32" cy="32" r="28" fill="none" stroke="#00d4ff" stroke-width="2"/>
+                        </svg>
+                    </div>
+                    <div class="climgl-launch-body">
+                        <h2 class="climgl-launch-title">ERA5 Climatology Globe</h2>
+                        <p class="climgl-launch-lede">Connect environmental state to actual storm tracks. ERA5 monthly-mean fields (SST, winds at every pressure level + 10m, decomposed into mean / zonal / eddy / anomaly components) on a 3D globe with IBTrACS tracks overlaid.</p>
+                        <ul class="climgl-launch-bullets">
+                            <li>Single year, custom range, or sliding-window climatology — see ENSO, AMO, climate-change anomalies in context</li>
+                            <li>Swipe and diff compare to put any two years (or a year vs. climatology) side-by-side</li>
+                            <li>13,554 IBTrACS storms colored by Saffir&ndash;Simpson, filterable by displayed month and year</li>
+                        </ul>
+                        <a href="climatology_globe.html" class="climgl-launch-btn">Open Climatology Globe &rarr;</a>
                     </div>
                 </div>
             </div>

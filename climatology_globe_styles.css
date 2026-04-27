@@ -1,0 +1,154 @@
+/* ══════════════════════════════════════════════════════════════
+   Climatology Globe — TC-ATLAS theme overrides
+   ══════════════════════════════════════════════════════════════
+   Standalone page that hosts the vendored GC-ATLAS climatology
+   engine. globe.css ships with an emerald/teal palette and a
+   GC-ATLAS topbar; this stylesheet re-maps the GC-ATLAS theme
+   variables to TC-ATLAS navy/blue/cyan and re-applies TC-ATLAS
+   topbar styling so the page sits flush with the rest of the
+   site. tc_radar_styles.css loads BETWEEN globe.css and this
+   file so its .topbar rules already win for topbar markup —
+   this file just touches the globe-engine-specific bits.
+   ══════════════════════════════════════════════════════════════ */
+
+/* ── Theme variable remap ───────────────────────────────────── */
+:root {
+    --deep:           #0c1d3d;        /* navy — body/canvas bg */
+    --thalo-dark:     #0c1d3d;        /* sidebar bg, seamless with topbar */
+    --thalo:          #142a52;        /* navy-mid */
+    --thalo-raised:   #1b3a6b;        /* navy-light — input/control surface */
+    --thalo-line:     rgba(255,255,255,0.10);
+    --emerald:        #2e7dff;        /* blue — accent/active */
+    --emerald-bright: #00d4ff;        /* cyan — highlight/thumb */
+    --emerald-glow:   rgba(46,125,255,0.25);
+    --sage:           #8b9ec2;        /* slate — labels/dim text */
+    --paper:          #e2e8f0;        /* text */
+    --paper-dim:      #94a3b8;        /* text-dim */
+}
+
+/* ── Canvas gradient retint ─────────────────────────────────── */
+/* Upstream uses emerald-glow as the radial centre, which leaks green
+   even when the foreground is fully blue. Swap for a blue glow. */
+.canvas-area {
+    background:
+        radial-gradient(ellipse at 50% 55%, rgba(46,125,255,0.10) 0%, transparent 55%),
+        var(--navy);
+}
+
+/* ── Colorbar slim + transparent ────────────────────────────── */
+/* The colorbar floats over the globe canvas. Original is opaque +
+   wide enough to cover Western Pacific tracks. Slimmer + glass-y
+   reads cleaner on top of TC tracks. */
+.colorbar {
+    background: rgba(12, 29, 61, 0.55);
+    min-width: 220px;
+    max-width: 260px;
+    padding: 10px 12px 8px;
+}
+.colorbar:hover {
+    background: rgba(12, 29, 61, 0.85);
+}
+.cb-tick-input {
+    border: 1px solid transparent;
+    background: transparent;
+}
+.cb-tick-input:hover,
+.cb-tick-input:focus {
+    border-color: rgba(255,255,255,0.15);
+    background: rgba(255,255,255,0.04);
+}
+
+/* ── Sliders: brighten track for navy sidebar ───────────────── */
+/* Upstream globe.css's track (#1b3a6b on #0c1d3d) is too low-contrast
+   against TC-ATLAS's navy sidebar — bump to translucent TC-ATLAS blue
+   with a brighter border, and swap the thumb to cyan for visibility. */
+.slider {
+    width: 100%;
+    min-width: 0;
+    height: 8px;
+    background: rgba(46, 125, 255, 0.30);
+    border: 1px solid rgba(46, 125, 255, 0.60);
+}
+.slider::-webkit-slider-thumb {
+    width: 18px;
+    height: 18px;
+    background: var(--cyan);
+    border: 2px solid var(--navy);
+    box-shadow: 0 0 0 3px rgba(0, 212, 255, 0.25);
+}
+.slider::-moz-range-thumb {
+    width: 18px;
+    height: 18px;
+    background: var(--cyan);
+    border: 2px solid var(--navy);
+}
+
+/* ── Track hover tooltip ───────────────────────────────────── */
+/* Floating panel populated by climatology_globe.js when the cursor
+   is within HOVER_MAX_KM of a visible best-track fix. */
+.track-tooltip {
+    position: fixed;
+    pointer-events: none;
+    z-index: 80;
+    min-width: 180px;
+    max-width: 280px;
+    padding: 8px 12px 10px;
+    background: rgba(12, 29, 61, 0.95);
+    border: 1px solid rgba(0, 212, 255, 0.40);
+    border-radius: 8px;
+    box-shadow: 0 6px 22px rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    color: #e2e8f0;
+    font-family: 'DM Sans', -apple-system, sans-serif;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    transition: opacity 0.08s ease-out;
+}
+.track-tooltip.hidden { opacity: 0; }
+.track-tooltip .tt-title {
+    font-weight: 700;
+    font-size: 0.92rem;
+    color: #00d4ff;
+    letter-spacing: 0.02em;
+    margin-bottom: 2px;
+}
+.track-tooltip .tt-year { color: #8b9ec2; font-weight: 500; margin-left: 4px; }
+.track-tooltip .tt-basin {
+    font-size: 0.68rem;
+    color: #8b9ec2;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 4px;
+}
+.track-tooltip .tt-row { font-family: 'JetBrains Mono', monospace; font-size: 0.74rem; }
+.track-tooltip .tt-cat { font-weight: 700; }
+.track-tooltip .tt-date {
+    margin-top: 2px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.68rem;
+    color: #94a3b8;
+}
+
+/* ── Topbar bridging ───────────────────────────────────────── */
+/* globe.css has `.topbar { backdrop-filter: ...; flex: 0 0 auto; }`
+   which globe.js's body{display:flex;flex-direction:column} relies
+   on. tc_radar_styles.css's .topbar rules win for visual styling,
+   but we keep flex-shrink intact so the topbar doesn't squash. */
+.topbar {
+    flex: 0 0 auto;
+}
+
+/* The skip-link from TC-ATLAS pages — keep it absolutely placed
+   off-screen until focused. tc_radar_styles owns this pattern so
+   we just guarantee positioning isn't broken by globe.css resets. */
+.skip-link {
+    position: absolute;
+    left: -10000px;
+    top: auto;
+}
+.skip-link:focus {
+    left: 12px;
+    top: 12px;
+    z-index: 200;
+}
