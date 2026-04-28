@@ -293,12 +293,13 @@ function _setStatus(msg) {
 
 async function _loadPerYearTilesForCurrentField(month) {
     // Walk the per-year manifest's `years` for the current field, fetch
-    // each (year, month) tile, and build [{year, values}, …]. The engine's
-    // existing fetchTile lazy-caches; we use requestField which goes
-    // through the same path.
+    // each (year, month) tile, and build [{year, values}, …]. requestField
+    // returns synchronously (cached value or null) and only kicks off the
+    // fetch — we have to wait for tiles to actually land via the
+    // onFieldLoaded subscription.
     const app = window.envGlobe;
     if (!app) return null;
-    const field = app.state.field;
+    const field = (app.state.field === 'corr') ? (_preCorrField || 'sst') : app.state.field;
     const level = app.state.level;
     const era5 = await import('./vendor/gc-atlas/era5.js');
     const mfst = era5.getManifest('per_year');
@@ -315,17 +316,55 @@ async function _loadPerYearTilesForCurrentField(month) {
         _setStatus(`Field ${field} not in per-year manifest.`);
         return null;
     }
-    const years = (varMeta.years || []).slice();
+    // Use year_months (per-month coverage) when available so we don't
+    // wait on a year that doesn't have a tile for the requested month
+    // (e.g. SST 2026/09 doesn't exist as of writing — it'd 404 and
+    // hang the wait loop until our timeout).
+    let years;
+    if (Array.isArray(varMeta.year_months) && varMeta.year_months.length) {
+        const set = new Set();
+        for (const e of varMeta.year_months) {
+            if (Array.isArray(e) && e[1] === month) set.add(e[0]);
+        }
+        years = [...set].sort((a, b) => a - b);
+    } else {
+        years = (varMeta.years || []).slice();
+    }
     if (years.length < 10) {
-        _setStatus(`Only ${years.length} years available — too few for correlation.`);
+        _setStatus(`Only ${years.length} years available for month ${month} — too few.`);
         return null;
     }
-    _setStatus(`Fetching ${years.length} per-year tiles…`);
-    // Fetch via requestField (goes through engine cache) then read via cachedMonth.
-    await Promise.all(years.map(y => era5.requestField(field, {
-        month, level, kind: 'mean', period: 'per_year', year: y,
-    })));
-    // Some may have failed (404 → cache.delete). Pull what we have.
+
+    // Subscribe BEFORE kicking off fetches so we don't miss arrivals.
+    const pending = new Set(years);
+    let resolveAll;
+    const allDone = new Promise(r => { resolveAll = r; });
+    const unsub = era5.onFieldLoaded(({ name, month: m, year, period }) => {
+        if (name !== field || m !== month || period !== 'per_year') return;
+        pending.delete(year);
+        if (pending.size === 0) resolveAll();
+    });
+
+    // Trigger fetches; remove already-cached years from the pending set.
+    for (const y of years) {
+        const cached = era5.cachedMonth(field, month, level, 'mean', 'per_year', y);
+        if (cached && cached.values) {
+            pending.delete(y);
+        } else {
+            era5.requestField(field, { month, level, kind: 'mean', period: 'per_year', year: y });
+        }
+    }
+    if (pending.size === 0) {
+        unsub();
+    } else {
+        _setStatus(`Fetching ${pending.size} of ${years.length} per-year tiles…`);
+        // Safety timeout: if some tiles 404 silently, don't hang forever.
+        const timeout = new Promise(r => setTimeout(r, 30000));
+        await Promise.race([allDone, timeout]);
+        unsub();
+    }
+
+    // Pull whatever made it into the cache.
     const grids = [];
     for (const y of years) {
         const cell = era5.cachedMonth(field, month, level, 'mean', 'per_year', y);
@@ -382,9 +421,19 @@ async function applyCorrelation() {
 
     // Remember the field we came from so the user can restore by re-picking
     // it from the dropdown. Mark correlation active.
-    if (app.state.field !== 'corr') _preCorrField = app.state.field;
+    if (app.state.field !== 'corr') {
+        _preCorrField = app.state.field;
+        // Switch to the diverging colormap. The engine doesn't auto-pick a
+        // field's preferred cmap on field change — state.cmap is sticky —
+        // so we set it explicitly. _preCorrField is restored when the user
+        // exits correlation mode via the field dropdown.
+        app.setState({ field: 'corr', cmap: 'RdBu_r' });
+    } else {
+        // Already in corr mode (e.g., recompute on month change). Force a
+        // repaint via the field-switch path so the new tile is picked up.
+        app.setState({ field: 'corr' });
+    }
     _correlationActive = true;
-    app.setState({ field: 'corr' });
 
     const ms = (performance.now() - t0).toFixed(0);
     _setStatus(`Done · ${kept.toLocaleString()} significant cells (p ≤ ${pvalThresh}) · ${ms} ms`);
@@ -406,13 +455,20 @@ function bindCorrelationPanel() {
         anomBtns.forEach(b => b.classList.toggle('active', b === btn));
     }));
     // When the user picks any non-corr field from the Field dropdown,
-    // exit correlation mode silently.
+    // exit correlation mode and restore the natural colormap for the
+    // newly-selected field (cmap is sticky across field changes by
+    // design, but for correlation the diverging cmap was unique to corr).
     const fieldSel = document.getElementById('field-select');
     if (fieldSel) {
         fieldSel.addEventListener('change', () => {
             if (fieldSel.value !== 'corr') {
                 _correlationActive = false;
                 _preCorrField = null;
+                // Restore the new field's preferred cmap if it has one.
+                import('./vendor/gc-atlas/data.js').then(({ FIELDS }) => {
+                    const m = FIELDS[fieldSel.value];
+                    if (m && m.cmap) window.envGlobe?.setState({ cmap: m.cmap });
+                });
             }
         });
     }
