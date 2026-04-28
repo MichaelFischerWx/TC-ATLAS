@@ -143,12 +143,24 @@ export function isReady(period = 'default') { return !!manifests.get(period); }
 export function getManifest(period = 'default') { return manifests.get(period) || null; }
 
 /** Return { group, meta } for a short name in a given period's manifest. */
+// Synthetic fields registered by setFieldCache that don't exist in any
+// manifest — e.g. the climatology globe's 'corr' (Pearson r maps). The
+// meta here is just enough to satisfy resolveField + requestField:
+// shape from a sample tile, units / long_name carried verbatim. Keyed
+// by name.
+const syntheticFields = new Map();
+
 function resolveField(name, period = 'default') {
     const m = manifests.get(period);
-    if (!m) return null;
-    for (const [group, vars_] of Object.entries(m.groups)) {
-        if (vars_[name]) return { group, meta: vars_[name] };
+    if (m) {
+        for (const [group, vars_] of Object.entries(m.groups)) {
+            if (vars_[name]) return { group, meta: vars_[name] };
+        }
     }
+    // Synthetic fallback — same shape as a manifest hit so the rest of
+    // the pipeline (requestField → cache lookup → return) works as-is.
+    const syn = syntheticFields.get(name);
+    if (syn) return { group: '_synthetic', meta: syn };
     return null;
 }
 
@@ -334,9 +346,18 @@ export function onFieldLoaded(fn) { subscribers.add(fn); return () => subscriber
  *  features that synthesize fields client-side (correlation maps, custom
  *  composites) so they can share the engine's colormap / contour / save
  *  / GIF pipeline without re-implementing it. vmin/vmax may be passed
- *  explicitly; if omitted, finite-range is computed here. */
+ *  explicitly; if omitted, finite-range is computed here.
+ *
+ *  Also registers a synthetic-field meta so resolveField finds the name
+ *  even though it isn't in any GCS manifest — without this, getField
+ *  returns a pendingField (isReal:false) and the loading overlay never
+ *  hides. shape / units / long_name come from FIELDS metadata if the
+ *  caller supplies them, else are inferred from the values array length.
+ */
 export function setFieldCache(name, { month, level = null, kind = 'mean', period = 'default', year = null,
-                                       values, vmin, vmax } = {}) {
+                                       values, vmin, vmax,
+                                       shape, units = '', long_name = '',
+                                       lat_descending = true } = {}) {
     if (!values) return;
     const key = keyOf(name, month, level, kind, period, year);
     if (vmin == null || vmax == null) {
@@ -350,6 +371,45 @@ export function setFieldCache(name, { month, level = null, kind = 'mean', period
         }
         if (vmin == null) vmin = Number.isFinite(lo) ? lo : 0;
         if (vmax == null) vmax = Number.isFinite(hi) ? hi : 1;
+    }
+    // Register a synthetic-field meta on first inject. Shape is taken
+    // from any concurrently-cached real field (so synthetic 'corr'
+    // inherits the active grid) or sniffed from the values length.
+    if (!syntheticFields.has(name)) {
+        let inferredShape = shape;
+        if (!inferredShape) {
+            // Sniff shape from any cached real-field tile — they all share
+            // the active grid.
+            for (const [, val] of cache) {
+                if (val && val.values && val.values.length === values.length
+                    && val._shape) {
+                    inferredShape = val._shape;
+                    break;
+                }
+            }
+            if (!inferredShape) {
+                // Last resort: derive from manifest if present.
+                const anyManifest = manifests.get('default') || manifests.get('per_year');
+                if (anyManifest) {
+                    for (const grp of Object.values(anyManifest.groups || {})) {
+                        for (const v of Object.values(grp)) {
+                            if (Array.isArray(v.shape) && v.shape[0] * v.shape[1] === values.length) {
+                                inferredShape = v.shape;
+                                break;
+                            }
+                        }
+                        if (inferredShape) break;
+                    }
+                }
+            }
+        }
+        syntheticFields.set(name, {
+            shape: inferredShape || [181, 360],
+            units, long_name, lat_descending,
+            // levels: null marks a single-level field. Synthetic fields
+            // don't currently support pressure-level injection.
+            levels: null,
+        });
     }
     cache.set(key, { values, vmin, vmax });
     for (const fn of subscribers) fn({ name, month, level, period, year });
