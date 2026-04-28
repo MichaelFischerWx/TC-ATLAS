@@ -576,7 +576,14 @@ export function getField(name, { month = 1, level = 500, coord = 'pressure', the
         && !meta.thetaOnly
         && !isenMode;
     const effPeriod = periodUnsupported ? 'default' : period;
-    const effYear = (year != null && meta.derived && !meta.thetaOnly) ? null : year;
+    // Year passes through for ALL derived fields. computeDerived handles
+    // per-year sourcing internally for wspd / dls / mse via the
+    // {period:'per_year', year} branch in its component lookups; pv is
+    // theta-only so this branch is moot. Previously this nulled year for
+    // derived non-θ-only fields, which made dls and friends silently
+    // collapse to climatology and look the same for every year in
+    // single-year mode.
+    const effYear = year;
 
     // Derived fields (e.g. wind speed, PV) — compute from component tiles.
     // refPeriod (e.g. 1961-1990) is only propagated when year is null, since

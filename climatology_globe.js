@@ -291,35 +291,48 @@ function _setStatus(msg) {
     if (el) el.textContent = msg;
 }
 
+// Returns a per-year list of {year, values} for the active field at the
+// given month + level, supporting both raw (manifest-backed) and JS-derived
+// fields (wspd, dls, mse — computed in data.js's getField from component
+// tiles). For derived fields each year requires multiple component tiles
+// (e.g. dls = |⟨V₂₀₀⟩ − ⟨V₈₅₀⟩| → 4 component tiles per year), so the wait
+// loop subscribes to ANY onFieldLoaded event and re-polls getField until
+// every year resolves to isReal:true (or timeout).
 async function _loadPerYearTilesForCurrentField(month) {
-    // Walk the per-year manifest's `years` for the current field, fetch
-    // each (year, month) tile, and build [{year, values}, …]. requestField
-    // returns synchronously (cached value or null) and only kicks off the
-    // fetch — we have to wait for tiles to actually land via the
-    // onFieldLoaded subscription.
     const app = window.envGlobe;
     if (!app) return null;
     const field = (app.state.field === 'corr') ? (_preCorrField || 'sst') : app.state.field;
     const level = app.state.level;
     const era5 = await import('./vendor/gc-atlas/era5.js');
+    const data = await import('./vendor/gc-atlas/data.js');
+    const meta = data.FIELDS[field];
+    if (!meta) {
+        _setStatus(`Field ${field} not in FIELDS.`);
+        return null;
+    }
+    const isDerived = !!meta.derived;
     const mfst = era5.getManifest('per_year');
     if (!mfst) {
         _setStatus('Per-year manifest not loaded yet — pick "Single year" once first.');
         return null;
     }
-    // Resolve var location in manifest to grab its year list.
+
+    // Year list:
+    //   raw fields → that field's own year_months filtered to the active month
+    //   derived fields → use any sample component's year_months (u for wspd
+    //                    / dls, t for mse) — they all share the same coverage
+    //                    by virtue of being downloaded together.
+    const sampleVar = isDerived
+        ? (field === 'mse' ? 't' : 'u')
+        : field;
     let varMeta = null;
     for (const grp of Object.values(mfst.groups || {})) {
-        if (grp[field]) { varMeta = grp[field]; break; }
+        if (grp[sampleVar]) { varMeta = grp[sampleVar]; break; }
     }
     if (!varMeta) {
-        _setStatus(`Field ${field} not in per-year manifest.`);
+        _setStatus(`No per-year coverage info for ${field} (sample var ${sampleVar} missing).`);
         return null;
     }
-    // Use year_months (per-month coverage) when available so we don't
-    // wait on a year that doesn't have a tile for the requested month
-    // (e.g. SST 2026/09 doesn't exist as of writing — it'd 404 and
-    // hang the wait loop until our timeout).
     let years;
     if (Array.isArray(varMeta.year_months) && varMeta.year_months.length) {
         const set = new Set();
@@ -335,51 +348,58 @@ async function _loadPerYearTilesForCurrentField(month) {
         return null;
     }
 
-    // Subscribe BEFORE kicking off fetches so we don't miss arrivals.
-    const pending = new Set(years);
-    let resolveAll;
-    const allDone = new Promise(r => { resolveAll = r; });
-    const unsub = era5.onFieldLoaded(({ name, month: m, year, period }) => {
-        if (name !== field || m !== month || period !== 'per_year') return;
-        pending.delete(year);
-        if (pending.size === 0) resolveAll();
+    // Probe-then-wait pattern. For each year, call getField — for raw
+    // fields this kicks off the per-year tile fetch and (if cached) returns
+    // immediately with isReal:true; for derived fields it kicks off the
+    // component tile fetches. We subscribe to ANY onFieldLoaded and re-poll
+    // pending years on each fire (cheap — just dict lookups).
+    const opts = (year) => ({
+        month, level, year, coord: 'pressure',
+        kind: 'mean', period: 'per_year',
     });
-
-    // Trigger fetches; remove already-cached years from the pending set.
-    // cachedMonth returns the Float32Array directly (or null) — NOT a
-    // {values, vmin, vmax} cell, despite the surrounding cache being keyed
-    // by such cells. `Array.isArray` would miss typed arrays, so check the
-    // length property — typed arrays expose it, the .values *method* on
-    // them does not.
-    for (const y of years) {
-        const cached = era5.cachedMonth(field, month, level, 'mean', 'per_year', y);
-        if (cached && cached.length > 0) {
-            pending.delete(y);
-        } else {
-            era5.requestField(field, { month, level, kind: 'mean', period: 'per_year', year: y });
-        }
-    }
-    if (pending.size === 0) {
-        unsub();
-    } else {
-        _setStatus(`Fetching ${pending.size} of ${years.length} per-year tiles…`);
-        // Safety timeout: if some tiles 404 silently, don't hang forever.
-        const timeout = new Promise(r => setTimeout(r, 30000));
-        await Promise.race([allDone, timeout]);
-        unsub();
-    }
-
-    // Pull whatever made it into the cache. cachedMonth returns the
-    // Float32Array (or null) — assign it directly to `values`, don't
-    // try to unwrap a `.values` property (Float32Array.prototype.values
-    // is an iterator METHOD, so `cell.values` would be a 0-arity function
-    // that silently passes truthy checks but has length 0 and produces
-    // empty correlation outputs — this was the original 0-cells bug).
     const grids = [];
-    for (const y of years) {
-        const values = era5.cachedMonth(field, month, level, 'mean', 'per_year', y);
-        if (values && values.length > 0) grids.push({ year: y, values });
+    const pending = new Set(years);
+    const tryAll = () => {
+        for (const y of [...pending]) {
+            const f = data.getField(field, opts(y));
+            if (f && f.isReal && f.values && f.values.length > 0) {
+                grids.push({ year: y, values: f.values });
+                pending.delete(y);
+            }
+        }
+    };
+    tryAll();
+
+    if (pending.size > 0) {
+        _setStatus(`Fetching tiles for ${pending.size} of ${years.length} years` +
+                   (isDerived ? ` (derived field — multiple tiles per year)` : '') + '…');
+        await new Promise(resolve => {
+            let lastUpdate = performance.now();
+            const unsub = era5.onFieldLoaded(() => {
+                tryAll();
+                if (pending.size === 0) {
+                    unsub();
+                    clearTimeout(to);
+                    resolve();
+                    return;
+                }
+                // Throttle status updates so we don't spam the UI on every
+                // tile arrival (could be hundreds for derived fields).
+                const now = performance.now();
+                if (now - lastUpdate > 250) {
+                    _setStatus(`Fetching tiles for ${pending.size} of ${years.length} years…`);
+                    lastUpdate = now;
+                }
+            });
+            // Safety timeout — derived fields can need 200+ tiles, so allow
+            // 90 s rather than the 30 s for raw.
+            const to = setTimeout(() => { unsub(); resolve(); }, 90000);
+        });
+        // Final pass to pick up anything that landed during the closing race.
+        tryAll();
     }
+
+    grids.sort((a, b) => a.year - b.year);
     return grids;
 }
 
