@@ -346,9 +346,14 @@ async function _loadPerYearTilesForCurrentField(month) {
     });
 
     // Trigger fetches; remove already-cached years from the pending set.
+    // cachedMonth returns the Float32Array directly (or null) — NOT a
+    // {values, vmin, vmax} cell, despite the surrounding cache being keyed
+    // by such cells. `Array.isArray` would miss typed arrays, so check the
+    // length property — typed arrays expose it, the .values *method* on
+    // them does not.
     for (const y of years) {
         const cached = era5.cachedMonth(field, month, level, 'mean', 'per_year', y);
-        if (cached && cached.values) {
+        if (cached && cached.length > 0) {
             pending.delete(y);
         } else {
             era5.requestField(field, { month, level, kind: 'mean', period: 'per_year', year: y });
@@ -364,11 +369,16 @@ async function _loadPerYearTilesForCurrentField(month) {
         unsub();
     }
 
-    // Pull whatever made it into the cache.
+    // Pull whatever made it into the cache. cachedMonth returns the
+    // Float32Array (or null) — assign it directly to `values`, don't
+    // try to unwrap a `.values` property (Float32Array.prototype.values
+    // is an iterator METHOD, so `cell.values` would be a 0-arity function
+    // that silently passes truthy checks but has length 0 and produces
+    // empty correlation outputs — this was the original 0-cells bug).
     const grids = [];
     for (const y of years) {
-        const cell = era5.cachedMonth(field, month, level, 'mean', 'per_year', y);
-        if (cell && cell.values) grids.push({ year: y, values: cell.values });
+        const values = era5.cachedMonth(field, month, level, 'mean', 'per_year', y);
+        if (values && values.length > 0) grids.push({ year: y, values });
     }
     return grids;
 }
