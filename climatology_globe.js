@@ -17,6 +17,8 @@
 
 import * as THREE from 'three';
 import { TrackOverlay, parseUTC } from './vendor/gc-atlas/track_overlay.js';
+import { setFieldCache } from './vendor/gc-atlas/era5.js';
+import { computeACE, anomalyTransform, correlate } from './correlation.js';
 
 const DATA_VER = 'v20260408';
 const TRACKS_MANIFEST = 'ibtracs_tracks_manifest.json?' + DATA_VER;
@@ -26,6 +28,9 @@ const STORMS_JSON = 'ibtracs_storms.json?' + DATA_VER;
 let _tracks = {};
 let _stormMeta = {};            // sid → { name, year, basin, peak_wind_kt, ... }
 let _overlay = null;
+let _aceByBasin = null;         // computed once tracks load: { NA: {year: ace}, ..., GLOBAL: ... }
+let _correlationActive = false; // true while displaying a correlation map; resets on field switch
+let _preCorrField = null;       // remembers the field the user came from so we can advertise restore
 
 const BASIN_NAMES = {
     NA: 'N. Atlantic', EP: 'E. Pacific', WP: 'W. Pacific',
@@ -270,6 +275,162 @@ function setupHover() {
     canvas.addEventListener('pointerdown',  () => hideTooltip(tt));
 }
 
+// ── Correlation panel ─────────────────────────────────────────
+//
+// Runs when the user clicks "Compute correlation". Loads every per-year
+// tile for the current (field, level, month), runs the anomaly transform
+// against the chosen ACE basin time series, computes Pearson r + p per
+// pixel, masks insignificant cells to NaN, and injects the result into
+// era5.js's cache as the synthetic 'corr' field. Engine then displays it
+// via the standard colormap pipeline. Switching back to any real field
+// from the Field dropdown exits correlation mode automatically.
+
+function _statusEl() { return document.getElementById('correlation-status'); }
+function _setStatus(msg) {
+    const el = _statusEl();
+    if (el) el.textContent = msg;
+}
+
+async function _loadPerYearTilesForCurrentField(month) {
+    // Walk the per-year manifest's `years` for the current field, fetch
+    // each (year, month) tile, and build [{year, values}, …]. The engine's
+    // existing fetchTile lazy-caches; we use requestField which goes
+    // through the same path.
+    const app = window.envGlobe;
+    if (!app) return null;
+    const field = app.state.field;
+    const level = app.state.level;
+    const era5 = await import('./vendor/gc-atlas/era5.js');
+    const mfst = era5.getManifest('per_year');
+    if (!mfst) {
+        _setStatus('Per-year manifest not loaded yet — pick "Single year" once first.');
+        return null;
+    }
+    // Resolve var location in manifest to grab its year list.
+    let varMeta = null;
+    for (const grp of Object.values(mfst.groups || {})) {
+        if (grp[field]) { varMeta = grp[field]; break; }
+    }
+    if (!varMeta) {
+        _setStatus(`Field ${field} not in per-year manifest.`);
+        return null;
+    }
+    const years = (varMeta.years || []).slice();
+    if (years.length < 10) {
+        _setStatus(`Only ${years.length} years available — too few for correlation.`);
+        return null;
+    }
+    _setStatus(`Fetching ${years.length} per-year tiles…`);
+    // Fetch via requestField (goes through engine cache) then read via cachedMonth.
+    await Promise.all(years.map(y => era5.requestField(field, {
+        month, level, kind: 'mean', period: 'per_year', year: y,
+    })));
+    // Some may have failed (404 → cache.delete). Pull what we have.
+    const grids = [];
+    for (const y of years) {
+        const cell = era5.cachedMonth(field, month, level, 'mean', 'per_year', y);
+        if (cell && cell.values) grids.push({ year: y, values: cell.values });
+    }
+    return grids;
+}
+
+async function applyCorrelation() {
+    const app = window.envGlobe;
+    if (!app) return;
+    if (!_aceByBasin) {
+        _setStatus('Tracks still loading — try again in a moment.');
+        return;
+    }
+    const indexEl  = document.getElementById('correlation-index');
+    const pvalEl   = document.getElementById('correlation-pval');
+    const anomBtns = document.querySelectorAll('#correlation-anom-toggle button.active');
+    const indexId = indexEl?.value || 'ace_GLOBAL';
+    const pvalThresh = Math.max(0, Math.min(1, parseFloat(pvalEl?.value || '0.05')));
+    const anomMode = anomBtns[0]?.dataset?.corrAnom || 'sliding';
+
+    // ACE index → year → value
+    const basin = indexId.replace(/^ace_/, '');
+    const indexSeries = _aceByBasin[basin];
+    if (!indexSeries) {
+        _setStatus(`Index ${indexId} unavailable.`);
+        return;
+    }
+
+    const month = app.state.month;
+    const t0 = performance.now();
+    const grids = await _loadPerYearTilesForCurrentField(month);
+    if (!grids || grids.length === 0) return;
+    _setStatus(`Computing anomalies (${anomMode})…`);
+    const anom = anomalyTransform(grids, anomMode, { fixedSpan: [1991, 2020] });
+    _setStatus(`Computing Pearson r over ${grids.length} years…`);
+    const { r, p } = correlate(anom, indexSeries);
+
+    // Hard p-mask: cells with p > threshold → NaN so engine renders transparent.
+    let kept = 0;
+    for (let i = 0; i < r.length; i++) {
+        if (!Number.isFinite(p[i]) || p[i] > pvalThresh) r[i] = NaN;
+        else kept++;
+    }
+    // Symmetric ±1 colorbar even if local extrema fall short.
+    const peak = Math.max(0.01, ...Array.from(r).filter(Number.isFinite).map(Math.abs));
+    const vmin = -peak, vmax = peak;
+
+    // Inject the synthetic 'corr' field at the current month so the engine
+    // displays it. level=null because corr is a single-level field.
+    setFieldCache('corr', { month, level: null, kind: 'mean', period: 'default', year: null,
+                            values: r, vmin, vmax });
+
+    // Remember the field we came from so the user can restore by re-picking
+    // it from the dropdown. Mark correlation active.
+    if (app.state.field !== 'corr') _preCorrField = app.state.field;
+    _correlationActive = true;
+    app.setState({ field: 'corr' });
+
+    const ms = (performance.now() - t0).toFixed(0);
+    _setStatus(`Done · ${kept.toLocaleString()} significant cells (p ≤ ${pvalThresh}) · ${ms} ms`);
+}
+
+function bindCorrelationPanel() {
+    const applyBtn = document.getElementById('correlation-apply-btn');
+    if (applyBtn) {
+        applyBtn.addEventListener('click', () => {
+            applyBtn.classList.add('is-computing');
+            applyCorrelation()
+                .catch(err => { console.error('[Correlation]', err); _setStatus('Error: ' + err.message); })
+                .finally(() => applyBtn.classList.remove('is-computing'));
+        });
+    }
+    // Anomaly-mode segmented toggle.
+    const anomBtns = document.querySelectorAll('#correlation-anom-toggle button');
+    anomBtns.forEach(btn => btn.addEventListener('click', () => {
+        anomBtns.forEach(b => b.classList.toggle('active', b === btn));
+    }));
+    // When the user picks any non-corr field from the Field dropdown,
+    // exit correlation mode silently.
+    const fieldSel = document.getElementById('field-select');
+    if (fieldSel) {
+        fieldSel.addEventListener('change', () => {
+            if (fieldSel.value !== 'corr') {
+                _correlationActive = false;
+                _preCorrField = null;
+            }
+        });
+    }
+    // Recompute on month change while correlation is active so scrubbing
+    // months stays meaningful (each month has its own correlation map).
+    const monthSel = document.getElementById('month-select');
+    if (monthSel) {
+        monthSel.addEventListener('change', () => {
+            if (_correlationActive && window.envGlobe?.state?.field === 'corr') {
+                // Run async; the engine has already fired its 'change' chain
+                // but the corr-tile for the new month doesn't exist yet, so
+                // the globe will be blank until our recompute lands.
+                applyCorrelation().catch(err => console.error('[Correlation]', err));
+            }
+        });
+    }
+}
+
 function init() {
     if (!window.envGlobe) {
         console.warn('[ClimGlobe] window.envGlobe missing — was #globe-mount in the DOM?');
@@ -296,12 +457,24 @@ function init() {
     setSelect('field-select', 'sst');
     setSelect('month-select', '9');
 
-    Promise.all([loadTracks(), loadStormMeta()]).then(refreshTracks);
+    Promise.all([loadTracks(), loadStormMeta()]).then(() => {
+        refreshTracks();
+        // ACE per (basin, year) for the Index Correlation panel. Cheap
+        // enough (~tens of ms over 13.5k tracks) to compute synchronously.
+        try {
+            _aceByBasin = computeACE(_tracks);
+            const yrs = Object.keys(_aceByBasin.GLOBAL || {}).length;
+            console.log(`[ClimGlobe] Computed ACE per basin (${yrs} years)`);
+        } catch (err) {
+            console.warn('[ClimGlobe] ACE compute failed:', err);
+        }
+    });
 
     document.addEventListener('change', (e) => {
         if (e.target && e.target.id === 'toggle-tracks') refreshTracks();
     });
 
+    bindCorrelationPanel();
     setupHover();
 }
 

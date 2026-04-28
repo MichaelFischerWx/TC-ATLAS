@@ -192,6 +192,54 @@
                     <p class="field-help" id="composite-source" style="margin-top:6px; opacity:0.7;"></p>
                 </div>
             </details>
+
+            <!-- Index correlation: per-pixel Pearson r between the displayed
+                 field's annual time series (for the current month) and a
+                 climate-index series. Detrending via raw / fixed / sliding
+                 30-yr anomalies. p-value threshold masks insignificant
+                 cells. Result is painted on the globe via a synthetic 'corr'
+                 field; restoring the original field exits correlation mode. -->
+            <details id="correlation-details" class="composite-details" style="margin-top:12px;">
+                <summary>Index correlation <span class="composite-badge">advanced</span></summary>
+                <div class="composite-body">
+                    <label class="field-label" for="correlation-index">Index</label>
+                    <select id="correlation-index" title="Climate index to correlate against the displayed field's annual time series.">
+                        <optgroup label="ACE — Accumulated Cyclone Energy">
+                            <option value="ace_GLOBAL" selected>ACE (Global)</option>
+                            <option value="ace_NH">ACE (NH)</option>
+                            <option value="ace_SH">ACE (SH)</option>
+                            <option value="ace_NA">ACE (N. Atlantic)</option>
+                            <option value="ace_EP">ACE (E. Pacific)</option>
+                            <option value="ace_WP">ACE (W. Pacific)</option>
+                            <option value="ace_NI">ACE (N. Indian)</option>
+                            <option value="ace_SI">ACE (S. Indian)</option>
+                            <option value="ace_SP">ACE (S. Pacific)</option>
+                        </optgroup>
+                    </select>
+                    <p class="field-help" style="margin-top:4px;">
+                        ACE per basin is computed from IBTrACS at 6-hourly synoptic
+                        times for fixes ≥ 34 kt. Correlated against each year's
+                        value in the <strong>currently-displayed Month</strong>.
+                    </p>
+                    <label class="field-label" style="margin-top:10px;">Anomaly mode</label>
+                    <div class="segmented" id="correlation-anom-toggle" role="tablist" aria-label="Anomaly mode">
+                        <button type="button" data-corr-anom="sliding" class="active"
+                                title="Each year subtracts its closest 30-yr climatology window. Removes the warming trend so the correlation isolates interannual variability — recommended.">Sliding</button>
+                        <button type="button" data-corr-anom="fixed"
+                                title="Subtract the 1991-2020 climatology mean once. Removes mean state but keeps multidecadal drift.">Fixed</button>
+                        <button type="button" data-corr-anom="raw"
+                                title="No detrending. Raw values include the warming trend.">Raw</button>
+                    </div>
+                    <label class="field-label" for="correlation-pval" style="margin-top:10px;">p-value threshold</label>
+                    <input id="correlation-pval" type="number" step="0.01" min="0" max="1"
+                           class="range-input" value="0.05" style="width:80px;"
+                           title="Cells with p > threshold get NaN (transparent on the globe). 0.05 is the conventional 5% significance level. Set to 1.0 to disable masking.">
+                    <p class="field-help" id="correlation-status" style="margin-top:6px;">—</p>
+                    <button id="correlation-apply-btn" type="button" class="range-compute">
+                        <span id="correlation-apply-label">Compute correlation</span>
+                    </button>
+                </div>
+            </details>
         </section>
 
         <section class="control-group">
@@ -769,7 +817,7 @@ C(P_M→K_M) = -(R/g) ∫ [ω][T] / p dp
 </div>
 
 <script type="module" src="vendor/gc-atlas/globe.js"></script>
-<script type="module" src="climatology_globe.js?v=20260425g"></script>
+<script type="module" src="climatology_globe.js?v=20260427a"></script>
 
 </body>
 </html>

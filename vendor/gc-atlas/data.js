@@ -189,6 +189,13 @@ export const FIELDS = {
             note: '|⟨V₂₀₀⟩ − ⟨V₈₅₀⟩| from monthly-mean winds. Underestimates the climatology of instantaneous shear (Jensen) — for TC-genesis thresholds use a daily-resolved product.' },
     mpi:  { type: 'sl', group: 'Derived & PV',       name: 'Max potential intensity',     units: 'm s⁻¹', cmap: 'magma',   contour: 10,
             note: 'Bister-Emanuel 2002 maximum potential intensity (VMAX). Theoretical upper bound on TC wind speed given local SST + atmospheric profile (T, q at 14 levels). NaN over land and where the algorithm fails to converge.' },
+    // Synthetic field — populated client-side by climatology_globe.js
+    // when the user runs the Index Correlation panel. Values are Pearson r
+    // in [-1, +1]; cells that fail the p-value threshold get NaN so the
+    // engine renders them transparent. Hidden from the Field dropdown
+    // (state.field is set programmatically by the correlation handler).
+    corr: { type: 'sl', group: '_internal',          name: 'Index correlation (r)',       units: '',       cmap: 'RdBu_r',  contour: 0.2, hidden: true, symmetric: true,
+            note: 'Per-pixel Pearson r against the chosen index time series. NaN cells fail the p-value threshold.' },
     sp:   { type: 'sl', group: 'Surface',            name: 'Surface pressure',         units: 'hPa',     cmap: 'plasma',  contour: 20, clamp: { lo: 0.005, hi: 0.995 } },
     blh:  { type: 'sl', group: 'Surface',            name: 'Boundary-layer height',    units: 'm',       cmap: 'plasma',  contour: 200 },
     tcwv: { type: 'sl', group: 'Moisture',           name: 'Precipitable water (TCWV)', units: 'kg m⁻²', cmap: 'thalo',   contour: 5 },

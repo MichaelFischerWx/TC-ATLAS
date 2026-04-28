@@ -329,6 +329,32 @@ function percentileBounds(values, lo, hi) {
 
 export function onFieldLoaded(fn) { subscribers.add(fn); return () => subscribers.delete(fn); }
 
+/** Inject a pre-computed Float32Array into the field cache, then notify
+ *  the same `field-loaded` subscribers a fetched tile would have. Used by
+ *  features that synthesize fields client-side (correlation maps, custom
+ *  composites) so they can share the engine's colormap / contour / save
+ *  / GIF pipeline without re-implementing it. vmin/vmax may be passed
+ *  explicitly; if omitted, finite-range is computed here. */
+export function setFieldCache(name, { month, level = null, kind = 'mean', period = 'default', year = null,
+                                       values, vmin, vmax } = {}) {
+    if (!values) return;
+    const key = keyOf(name, month, level, kind, period, year);
+    if (vmin == null || vmax == null) {
+        let lo = Infinity, hi = -Infinity;
+        for (let i = 0; i < values.length; i++) {
+            const v = values[i];
+            if (Number.isFinite(v)) {
+                if (v < lo) lo = v;
+                if (v > hi) hi = v;
+            }
+        }
+        if (vmin == null) vmin = Number.isFinite(lo) ? lo : 0;
+        if (vmax == null) vmax = Number.isFinite(hi) ? hi : 1;
+    }
+    cache.set(key, { values, vmin, vmax });
+    for (const fn of subscribers) fn({ name, month, level, period, year });
+}
+
 /** Aggregate vmin/vmax across every cached month at (name, level, kind,
  *  period, year). Restricting by year lets single-year mode pool stats
  *  across THAT year's months only — so the colorbar stops jumping as
