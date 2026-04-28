@@ -400,9 +400,30 @@ async function applyCorrelation() {
     const grids = await _loadPerYearTilesForCurrentField(month);
     if (!grids || grids.length === 0) return;
     _setStatus(`Computing anomalies (${anomMode})…`);
+    console.log('[Correlation] grids:', grids.length, 'years:',
+                grids[0].year, '→', grids[grids.length - 1].year,
+                'sample0=', grids[0].values[Math.round(grids[0].values.length / 2)]);
+    console.log('[Correlation] index basin:', basin,
+                'years available:', Object.keys(indexSeries).length,
+                'samples e.g. 2005:', indexSeries[2005],
+                '1995:', indexSeries[1995]);
+    const overlap = grids.filter(g => Number.isFinite(indexSeries[g.year])).length;
+    console.log('[Correlation] year-overlap (grid ∩ index):', overlap);
+
     const anom = anomalyTransform(grids, anomMode, { fixedSpan: [1991, 2020] });
+    const sample = anom[Math.floor(anom.length / 2)];
+    console.log('[Correlation] anom[mid].year:', sample.year,
+                'anom[mid] sample value:', sample.values[Math.round(sample.values.length / 2)]);
     _setStatus(`Computing Pearson r over ${grids.length} years…`);
-    const { r, p } = correlate(anom, indexSeries);
+    const { r, p, n } = correlate(anom, indexSeries);
+
+    let finiteR = 0, maxAbsR = 0, maxN = 0;
+    for (let i = 0; i < r.length; i++) {
+        if (Number.isFinite(r[i])) { finiteR++; maxAbsR = Math.max(maxAbsR, Math.abs(r[i])); }
+        if (n[i] > maxN) maxN = n[i];
+    }
+    console.log('[Correlation] r stats — finite:', finiteR, '/', r.length,
+                'max |r|:', maxAbsR.toFixed(3), 'max n:', maxN);
 
     // Hard p-mask: cells with p > threshold → NaN so engine renders transparent.
     let kept = 0;
@@ -413,6 +434,7 @@ async function applyCorrelation() {
     // Symmetric ±1 colorbar even if local extrema fall short.
     const peak = Math.max(0.01, ...Array.from(r).filter(Number.isFinite).map(Math.abs));
     const vmin = -peak, vmax = peak;
+    console.log('[Correlation] kept after p-mask:', kept, 'peak |r|:', peak.toFixed(3));
 
     // Inject the synthetic 'corr' field at the current month so the engine
     // displays it. level=null because corr is a single-level field.
