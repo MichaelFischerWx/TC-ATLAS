@@ -3745,12 +3745,10 @@ function displayIROnMap(data) {
     // Update storm position marker
     updateIRPositionMarker(data);
 
-    // Update NEXRAD sites/scans for current frame position (throttled)
+    // Sync NEXRAD with new IR frame: refresh sites (position-throttled) and
+    // scans (frame-time-throttled) independently.
     if (_gaNexradVisible && selectedStorm) {
-        var fm = irMeta && irMeta.frames ? irMeta.frames[irFrameIdx] : null;
-        if (fm && fm.lat != null) {
-            _updateNexradForFrame(fm.lat, fm.lon);
-        }
+        _syncNexradWithIRFrame();
     }
 }
 
@@ -6140,13 +6138,40 @@ var _gaNexradTooltip = null;
 var _gaNexradUpdateTimer = null;
 var _gaNexradLastFrameLat = null;
 var _gaNexradLastFrameLon = null;
+var _gaNexradLastFrameTime = null;
+var _gaNexradScanTimer = null;
 
 /**
- * Update NEXRAD sites and scans when IR frame position changes.
- * Throttled to avoid excessive API calls during animation.
+ * Sync NEXRAD dropdowns with the current IR frame.
+ *  - Sites are refreshed only when position moves >0.5° (slow with TC motion).
+ *  - Scans are refreshed whenever the IR frame time changes.
+ * Both paths preserve any in-flight selection so the user's choices stick.
+ */
+function _syncNexradWithIRFrame() {
+    var fm = irMeta && irMeta.frames ? irMeta.frames[irFrameIdx] : null;
+    if (!fm) return;
+
+    if (fm.lat != null && fm.lon != null) {
+        _updateNexradForFrame(fm.lat, fm.lon);
+    }
+
+    if (fm.datetime && fm.datetime !== _gaNexradLastFrameTime) {
+        _gaNexradLastFrameTime = fm.datetime;
+        var siteSelect = document.getElementById('ga-nexrad-site-select');
+        if (siteSelect && siteSelect.value) {
+            if (_gaNexradScanTimer) clearTimeout(_gaNexradScanTimer);
+            _gaNexradScanTimer = setTimeout(function () {
+                loadNexradScans();
+            }, 250);
+        }
+    }
+}
+
+/**
+ * Refresh the NEXRAD site list when storm position changes meaningfully.
+ * Throttled by >0.5° displacement to avoid hammering the API during animation.
  */
 function _updateNexradForFrame(lat, lon) {
-    // Skip if position hasn't changed significantly (>0.5°)
     if (_gaNexradLastFrameLat != null &&
         Math.abs(lat - _gaNexradLastFrameLat) < 0.5 &&
         Math.abs(lon - _gaNexradLastFrameLon) < 0.5) {
@@ -6181,8 +6206,13 @@ function loadNexradSites(storm, frameLat, frameLon) {
     }
 
     _gaNexradLastStormId = storm.sid;
-    siteSelect.innerHTML = '<option value="">Searching...</option>';
-    if (status) status.textContent = '';
+    var prevSelected = siteSelect.value;
+    var hadOptions = siteSelect.options.length > 0 &&
+                     !!siteSelect.options[0].value;
+    if (!hadOptions) {
+        siteSelect.innerHTML = '<option value="">Searching...</option>';
+    }
+    if (status) status.textContent = hadOptions ? 'Refreshing…' : '';
 
     fetch(API_BASE + '/nexrad/sites?lat=' + lat + '&lon=' + lon + '&max_range_km=500')
         .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
@@ -6202,13 +6232,30 @@ function loadNexradSites(storm, frameLat, frameLon) {
                 siteSelect.appendChild(opt);
             }
 
+            // Preserve the user's previous site selection if still in range
+            var keptSelection = false;
+            if (prevSelected) {
+                for (var j = 0; j < siteSelect.options.length; j++) {
+                    if (siteSelect.options[j].value === prevSelected) {
+                        siteSelect.selectedIndex = j;
+                        keptSelection = true;
+                        break;
+                    }
+                }
+            }
+
             if (status) status.textContent = json.sites.length + ' site(s)';
 
-            // Auto-trigger scan search if 88D is visible
-            if (_gaNexradVisible) loadNexradScans();
+            // Auto-trigger scan search if 88D is visible. If we kept the
+            // user's site, _syncNexradWithIRFrame will already handle scans
+            // on each frame change, so only fire here when the site changed.
+            if (_gaNexradVisible && !keptSelection) loadNexradScans();
         })
         .catch(function (e) {
-            siteSelect.innerHTML = '<option value="">Error</option>';
+            // Keep prior options visible on transient errors so the user can retry
+            if (!hadOptions) {
+                siteSelect.innerHTML = '<option value="">Retry on next frame</option>';
+            }
             if (status) status.textContent = 'Error: ' + e.message;
         });
 }
@@ -6248,8 +6295,12 @@ window.loadNexradScans = function () {
         return;
     }
 
-    scanSelect.innerHTML = '<option value="">Loading...</option>';
-    if (status) status.textContent = 'Searching...';
+    var hadScanOptions = scanSelect.options.length > 0 &&
+                         !!scanSelect.options[0].value;
+    if (!hadScanOptions) {
+        scanSelect.innerHTML = '<option value="">Loading...</option>';
+    }
+    if (status) status.textContent = hadScanOptions ? 'Refreshing\u2026' : 'Searching...';
 
     fetch(API_BASE + '/nexrad/scans?site=' + site + '&datetime=' + encodeURIComponent(refTime) + '&window_min=90')
         .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
@@ -6279,7 +6330,10 @@ window.loadNexradScans = function () {
             loadNexradFrame();
         })
         .catch(function (e) {
-            scanSelect.innerHTML = '<option value="">Error</option>';
+            // Keep prior options visible on transient errors
+            if (!hadScanOptions) {
+                scanSelect.innerHTML = '<option value="">Retry on next frame</option>';
+            }
             if (status) status.textContent = 'Error: ' + e.message;
         });
 };
@@ -6481,6 +6535,11 @@ function removeGlobalNexradOverlay() {
     _gaNexradBounds = null;
     _gaNexradVisible = false;
     _gaNexradLastStormId = null;
+    _gaNexradLastFrameLat = null;
+    _gaNexradLastFrameLon = null;
+    _gaNexradLastFrameTime = null;
+    if (_gaNexradScanTimer) { clearTimeout(_gaNexradScanTimer); _gaNexradScanTimer = null; }
+    if (_gaNexradUpdateTimer) { clearTimeout(_gaNexradUpdateTimer); _gaNexradUpdateTimer = null; }
     var btn = document.getElementById('ga-nexrad-toggle-btn');
     if (btn) btn.innerHTML = _icon('tornado') + 'Ground Radar';
     var controls = document.getElementById('ga-nexrad-controls');
