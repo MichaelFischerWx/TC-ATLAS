@@ -37,6 +37,15 @@ const BASIN_NAMES = {
     NI: 'N. Indian', SI: 'S. Indian', SP: 'S. Pacific', SA: 'S. Atlantic',
 };
 
+// Tiny GA wrapper — mirrors the pattern in realtime_ir.js / satellite.js so
+// climatology-globe usage shows up alongside the other pages in GA. Silent
+// no-op if gtag isn't loaded (local dev, ad-blocker, etc.).
+function _ga(action, params) {
+    if (typeof gtag === 'function') {
+        try { gtag('event', action, params || {}); } catch (e) { /* silent */ }
+    }
+}
+
 // Pre-compute the UTC year+month integer on each best-track fix once at load
 // time. Without this, every TrackOverlay.render() call re-parses ~400 k
 // timestamps via parseUTC + getUTCFullYear + getUTCMonth — the dominant cost
@@ -558,6 +567,16 @@ async function applyCorrelation() {
     const yMin = grids[0]?.year, yMax = grids[grids.length - 1]?.year;
     const spanLbl = (yMin && yMax) ? ` · ${yMin}–${yMax} (${yrs} yr)` : '';
     _setStatus(`Done · ${kept.toLocaleString()} significant cells (p ≤ ${pvalThresh})${spanLbl} · ${ms} ms`);
+    _ga('clim_globe_correlation_apply', {
+        index: indexId,
+        anom_mode: anomMode,
+        n_years: yrs,
+        year_start: yMin || null,
+        year_end: yMax || null,
+        field: app.state.field === 'corr' ? (_preCorrField || 'unknown') : app.state.field,
+        month: month,
+        significant_cells: kept,
+    });
 }
 
 function bindCorrelationPanel() {
@@ -645,6 +664,42 @@ function init() {
         }
     };
 
+    _ga('clim_globe_page_load');
+
+    // Listen for composite + field changes via the engine's emitter so we
+    // capture both UI-driven and URL-restored applies. Dedupe on the
+    // customRange shape so re-renders don't double-fire.
+    let _lastCompositeKey = null;
+    let _lastField = window.envGlobe.state?.field || null;
+    let _lastMonth = window.envGlobe.state?.month || null;
+    window.envGlobe.on('field-updated', () => {
+        const s = window.envGlobe.state || {};
+        if (s.field !== _lastField) {
+            _ga('clim_globe_field_change', { field: s.field });
+            _lastField = s.field;
+        }
+        if (s.month !== _lastMonth) {
+            _ga('clim_globe_month_change', { month: s.month });
+            _lastMonth = s.month;
+        }
+        const cr = s.customRange;
+        if (cr && Array.isArray(cr.years)) {
+            const key = (cr.mode || 'index') + '|' + cr.years.join(',') +
+                (Array.isArray(cr.months) ? '|m=' + cr.months.join(',') : '|m=' + cr.month);
+            if (key !== _lastCompositeKey) {
+                _ga('clim_globe_composite_apply', {
+                    mode: cr.mode || 'index',
+                    n_years: cr.years.length,
+                    n_months: Array.isArray(cr.months) ? cr.months.length : 1,
+                    index: cr.id || null,
+                });
+                _lastCompositeKey = key;
+            }
+        } else if (_lastCompositeKey) {
+            _lastCompositeKey = null;
+        }
+    });
+
     Promise.all([loadTracks(), loadStormMeta()]).then(() => {
         refreshTracks();
         // ACE per (basin, year) for the Index Correlation panel. Cheap
@@ -664,6 +719,10 @@ function init() {
         if (e.target && (e.target.id === 'toggle-tracks'
                       || e.target.id === 'toggle-tracks-all-months')) {
             refreshTracks(true);
+            _ga('clim_globe_tracks_toggle', {
+                id: e.target.id,
+                checked: !!e.target.checked,
+            });
         }
     });
 
