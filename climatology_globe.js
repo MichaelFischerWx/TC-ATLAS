@@ -88,24 +88,45 @@ function loadStormMeta() {
         .catch(err => console.warn('[ClimGlobe] Storm metadata load failed:', err));
 }
 
-// Track render is expensive (~400k fix iterations + per-storm Line2 build).
-// 'field-updated' fires on every field/level/colormap change too, so dedupe
-// against (year, month, visible). Field-only changes become no-ops.
+// Track render is expensive (~400k fix iterations + the merged-Line geometry
+// build). 'field-updated' fires on every field/level/colormap change too,
+// so dedupe against (yearFilter, month, visible). Field-only changes become
+// no-ops.
+//
+// When a composite is active (state.customRange.years is set), we filter
+// tracks to ONLY those event years × the composite's month — so the storms
+// shown match the years the composite was built from. This makes the
+// "RONI > 1.0 in Sep" composite, for example, light up only the storm
+// tracks from those Sep months.
 let _lastRenderKey = null;
 function refreshTracks(force) {
     if (!_overlay || !window.envGlobe) return;
     const s = window.envGlobe.state || {};
-    const year = (s.year != null && Number.isFinite(s.year)) ? s.year : null;
-    const month = s.month;
     const toggle = document.getElementById('toggle-tracks');
     const visible = toggle ? toggle.checked : true;
     _overlay.setVisible(visible);
     if (!visible) return;
 
-    const key = year + '|' + month;
-    if (!force && key === _lastRenderKey) return;  // nothing track-relevant changed
+    // Year filter: composite year-list > single year > null (any year).
+    const cr = s.customRange;
+    let yearFilter = null;
+    let monthFilter = s.month;
+    if (cr && Array.isArray(cr.years) && cr.years.length) {
+        yearFilter = cr.years;
+        // Composites are anchored on a specific month (cr.month); use that
+        // explicitly rather than s.month so the painted tracks always agree
+        // with the year list the composite was built from.
+        if (Number.isFinite(cr.month)) monthFilter = cr.month;
+    } else if (s.year != null && Number.isFinite(s.year)) {
+        yearFilter = s.year;
+    }
+
+    // Build a stable key that accounts for the year-list shape.
+    const yearKey = Array.isArray(yearFilter) ? yearFilter.join(',') : String(yearFilter);
+    const key = yearKey + '|' + monthFilter;
+    if (!force && key === _lastRenderKey) return;
     _lastRenderKey = key;
-    _overlay.render(_tracks, year, month);
+    _overlay.render(_tracks, yearFilter, monthFilter);
 }
 
 function setSelect(id, value) {
