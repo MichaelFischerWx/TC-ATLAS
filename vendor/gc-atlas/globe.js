@@ -1305,6 +1305,18 @@ class GlobeApp {
         // pass nothing) reuse the last value updateField() handed us.
         if (effCmap) this._coastEffCmap = effCmap;
         const cmap = this._coastEffCmap || this.state.cmap;
+        // Index Correlation maps have the cmap = RdBu_r (luminance > 0.45,
+        // so the default heuristic picks "bright" + black coastlines), but
+        // most of the map is NaN (cells that fail the p-test), revealing
+        // the dark sphere underneath — black coastlines disappear into it.
+        // Force the dark-bg treatment for the synthetic 'corr' field, and
+        // bump opacity / brightness so the lines actually read against the
+        // navy ocean shading.
+        if (this.state.field === 'corr') {
+            this.coastMat.color.setHex(0xffffff);
+            this.coastMat.opacity = 0.85;
+            return;
+        }
         // Match the contour-ink threshold (0.45) and palette so coastlines
         // and contour strokes stay visually consistent on every cmap.
         const darkBg = meanLuminance(cmap) < 0.45;
