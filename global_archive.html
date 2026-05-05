@@ -1,6 +1,24 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+    <!-- Redirect stubs for old Climatology / Environment deep links.
+         These tabs moved out of Global Archive into tc_climatology.html,
+         so old hash URLs (#tab=climatology, #tab=environment) jump to
+         the new page before any of this page's DOM/JS parses. We use
+         location.replace() so the old URL doesn't sit in browser history.
+         Runs synchronously in <head> — no flicker. -->
+    <script>
+        (function () {
+            var h = window.location.hash || '';
+            // Match #tab=environment or #tab=environment&… anywhere in the hash
+            if (/(?:^#|&)tab=environment(?:&|$)/.test(h)) {
+                window.location.replace('tc_climatology.html#sub=globe');
+            } else if (/(?:^#|&)tab=climatology(?:&|$)/.test(h)) {
+                window.location.replace('tc_climatology.html#sub=stats');
+            }
+        })();
+    </script>
+
     <!-- Google Analytics (GA4) -->
     <script async src="https://www.googletagmanager.com/gtag/js?id=G-EFM8GFFKLK"></script>
     <script>
