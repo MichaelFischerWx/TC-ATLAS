@@ -151,8 +151,24 @@ def parse(nc_path: Path, since: Optional[int]) -> tuple[dict, list]:
     tracks: dict[str, list] = {}
     storms: list[dict] = []
 
-    # ACE constant: 1e-4 × Σ v²(kt²) at synoptic 6-hourly fixes ≥ 34 kt.
+    # ACE constant: 1e-4 × Σ v²(kt²) at synoptic 6-hourly fixes ≥ 34 kt
+    # WHILE the storm has a tropical or subtropical designation. IBTrACS
+    # `nature` codes used here:
+    #   TS  tropical storm        TY  typhoon          TC  generic TC
+    #   HU  hurricane             ST  subtropical      SS  subtropical storm
+    #   SD  subtropical depression       TD  tropical depression
+    # Explicitly EXCLUDED (per NHC / Bell+2000 ACE convention):
+    #   ET  extratropical (post-transition)
+    #   PT  post-tropical (a synonym for ET in some agencies)
+    #   DB  disturbance (pre-genesis)         WV  tropical wave
+    #   LO  low / non-tropical        IN  inland post-landfall remnant
+    #   DS  disturbance / monsoon depression (pre-genesis)
+    #   MX  mixed / uncertain         NR  not reported (mostly pre-1950)
+    # TD is included because some agencies record sub-34kt synoptic fixes
+    # before / after a storm's TS phase under a TD designation; ACE's
+    # ≥34 kt filter already excludes those by intensity anyway.
     SYNOPTIC_HOURS = (0, 6, 12, 18)
+    TC_NATURES = {"TS", "TY", "TC", "HU", "ST", "SS", "SD", "TD"}
 
     for i in range(nstorms):
         sid = _decode_str(sids[i])
@@ -207,9 +223,13 @@ def parse(nc_path: Path, since: Optional[int]) -> tuple[dict, list]:
 
             if w is not None:
                 if peak_w is None or w > peak_w: peak_w = w
-                # ACE: synoptic + ≥ 34 kt + TC nature.
+                # ACE: synoptic 6-hourly + ≥ 34 kt + TC/subtropical nature.
+                # The nature filter is what excludes post-tropical /
+                # extratropical fixes (which can hit 34+ kt over the open
+                # ocean during a transition but aren't part of "tropical
+                # cyclone activity" by the NHC definition).
                 hh = int(t[11:13])
-                if hh in SYNOPTIC_HOURS and w >= 34:
+                if hh in SYNOPTIC_HOURS and w >= 34 and n in TC_NATURES:
                     ace += w * w
                 wind_series.append((t, w))
             if p is not None and (min_p is None or p < min_p):
@@ -316,7 +336,11 @@ def compute_intensity_changes(tracks: dict, storms_by_sid: dict) -> dict:
     from datetime import datetime
     basins: dict[str, list] = {}
     SYNOPTIC = (0, 6, 12, 18)
-    NATURE_TC = {"TS", "HU", "TY", "ST", "TC", "DS"}
+    # Same TC/subtropical filter as ACE (in parse() above) — only count
+    # 24-h Δw episodes during the storm's tropical / subtropical phase.
+    # Excludes extratropical transition (ET/PT), pre-genesis disturbance
+    # (DB/DS/WV), and post-landfall remnant (IN/LO).
+    NATURE_TC = {"TS", "TY", "TC", "HU", "ST", "SS", "SD", "TD"}
     year_min = year_max = None
     for sid, pts in tracks.items():
         meta = storms_by_sid.get(sid)
