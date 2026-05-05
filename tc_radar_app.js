@@ -322,6 +322,29 @@ function toggleFilterDrawer() {
 var _focusMode = false;
 var _focusMarker = null;
 
+// Hover tooltip for the TC-center focus marker on the Leaflet map.
+// Surfaces the case's geographic lat/lon plus storm name + analysis time.
+function _bindTCCenterTooltip(marker, caseData) {
+    if (!marker || !caseData) return;
+    var lat = caseData.latitude;
+    var lon = caseData.longitude;
+    if (lat == null || lon == null) return;
+    var nsLat = lat >= 0 ? 'N' : 'S';
+    var ewLon = lon >= 0 ? 'E' : 'W';
+    var posStr = Math.abs(lat).toFixed(3) + '°' + nsLat +
+        ', ' + Math.abs(lon).toFixed(3) + '°' + ewLon;
+    var subtitle = '';
+    if (caseData.storm_name) subtitle += caseData.storm_name;
+    if (caseData.datetime) subtitle += (subtitle ? ' · ' : '') + caseData.datetime + ' UTC';
+    var html = '<b>TC Center</b><br>' +
+        'Lat/Lon: ' + posStr +
+        (subtitle ? '<br><span style="opacity:0.75;">' + subtitle + '</span>' : '');
+    marker.bindTooltip(html, {
+        direction: 'top', offset: L.point(0, -8), sticky: false,
+        className: 'tc-center-tooltip',
+    });
+}
+
 function enterFocusMode(caseData) {
     _focusMode = true;
     if (markers) map.removeLayer(markers);
@@ -334,6 +357,7 @@ function enterFocusMode(caseData) {
         iconSize: [16, 16], iconAnchor: [8, 8]
     });
     _focusMarker = L.marker([caseData.latitude, caseData.longitude], { icon: icon }).addTo(map);
+    _bindTCCenterTooltip(_focusMarker, caseData);
     map.setView([caseData.latitude, caseData.longitude], 6, { animate: true });
     document.getElementById('map-wrapper').classList.add('focus-mode');
     document.getElementById('side-panel').classList.add('focus-panel');
@@ -2517,6 +2541,7 @@ function navigateToCase(caseIdx) {
             iconSize: [16, 16], iconAnchor: [8, 8]
         });
         _focusMarker = L.marker([caseData.latitude, caseData.longitude], { icon: icon }).addTo(map);
+        _bindTCCenterTooltip(_focusMarker, caseData);
         map.setView([caseData.latitude, caseData.longitude], map.getZoom(), { animate: true });
     }
 
@@ -12997,20 +13022,18 @@ function _archiveRenderFLOverlay(flData) {
         colors.push(ws != null ? ws : 0);
         sizes.push(ws != null ? Math.max(5, Math.min(12, ws / 5)) : 5);
 
+        // Hover keeps only the TDR comparison interpolated to FL altitude
+        // (the 0.5/2.0 km wind/W values stay in the time-series chart).
         var tdrStr = '';
         if (o.tdr_wspd_fl_alt != null) {
             var altKm = (o.gps_alt_m != null) ? (o.gps_alt_m / 1000).toFixed(2) + ' km' : '?';
-            tdrStr += 'TDR@FL (' + altKm + '): ' + o.tdr_wspd_fl_alt.toFixed(1) + ' m/s';
+            tdrStr = 'TDR@FL (' + altKm + '): ' + o.tdr_wspd_fl_alt.toFixed(1) + ' m/s';
         }
-        if (o.tdr_wspd_2km != null) tdrStr += (tdrStr ? '<br>' : '') + 'TDR 2km: ' + o.tdr_wspd_2km.toFixed(1) + ' m/s';
-        if (o.tdr_wspd_0p5km != null) tdrStr += (tdrStr ? '<br>' : '') + 'TDR 0.5km: ' + o.tdr_wspd_0p5km.toFixed(1) + ' m/s';
 
-        // Vertical velocity (FL observed + TDR-derived at three heights)
+        // Vertical velocity at FL altitude only (FL observed + TDR-interpolated)
         var wStr = '';
         if (o.vert_vel_ms != null) wStr += 'FL W: ' + o.vert_vel_ms.toFixed(1) + ' m/s';
         if (o.tdr_w_fl_alt != null) wStr += (wStr ? '<br>' : '') + 'TDR W@FL: ' + o.tdr_w_fl_alt.toFixed(1) + ' m/s';
-        if (o.tdr_w_2km != null) wStr += (wStr ? '<br>' : '') + 'TDR W 2km: ' + o.tdr_w_2km.toFixed(1) + ' m/s';
-        if (o.tdr_w_0p5km != null) wStr += (wStr ? '<br>' : '') + 'TDR W 0.5km: ' + o.tdr_w_0p5km.toFixed(1) + ' m/s';
 
         // Build time offset string, handling null/undefined
         var tOffsetMin = (o.time_offset_s != null && isFinite(o.time_offset_s)) ? (o.time_offset_s / 60) : null;

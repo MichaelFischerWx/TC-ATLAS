@@ -3668,13 +3668,13 @@
             colors.push(ws != null ? ws : 0);
             sizes.push(ws != null ? Math.max(5, Math.min(12, ws / 5)) : 5);
 
+            // Hover keeps only the TDR@FL value (0.5/2.0 km comparisons stay
+            // available in the time-series chart).
             var tdrStr = '';
             if (o.tdr_wspd_fl_alt != null) {
                 var altKm = (o.gps_alt_m != null) ? (o.gps_alt_m / 1000).toFixed(2) + ' km' : '?';
-                tdrStr += 'TDR@FL (' + altKm + '): ' + o.tdr_wspd_fl_alt.toFixed(1) + ' m/s';
+                tdrStr = 'TDR@FL (' + altKm + '): ' + o.tdr_wspd_fl_alt.toFixed(1) + ' m/s';
             }
-            if (o.tdr_wspd_0p5km != null) tdrStr += (tdrStr ? '<br>' : '') + 'TDR 0.5km: ' + o.tdr_wspd_0p5km.toFixed(1) + ' m/s';
-            if (o.tdr_wspd_2km != null) tdrStr += (tdrStr ? '<br>' : '') + 'TDR 2km: ' + o.tdr_wspd_2km.toFixed(1) + ' m/s';
 
             var tOffsetMin = (o.time_offset_s != null && isFinite(o.time_offset_s)) ? (o.time_offset_s / 60) : null;
             var timeStr = (o.time || '') + ' UTC';
