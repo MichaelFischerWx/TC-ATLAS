@@ -137,40 +137,101 @@
     margin-bottom: 14px;
 }
 
-/* ── Reanalysis Globe sub-view layout ──────────────────────── */
-/* The Featured-views gallery is the primary surface a visitor sees
-   on this sub-tab — the launcher card is supporting context. We
-   keep the DOM in semantic reading order (launcher → gallery) for
-   accessibility but flip the visual order via flex `order` so the
-   tiles render first without needing to scroll past a 5-bullet
-   launch card. */
-#tc-clim-globe {
+/* ── Reanalysis Globe sub-view: hybrid split-panel banner ─── */
+/* Compact banner that sits above the featured-views gallery: icon +
+   description on the left, prominent launch button on the right.
+   Replaces the older full-card launcher with its 5-bullet list —
+   the bullets' content is now demonstrated by the gallery tiles. */
+.tc-clim-globe-banner {
     display: flex;
-    flex-direction: column;
+    align-items: center;
+    gap: 18px;
+    padding: 18px 22px;
+    margin: 12px 0 22px;
+    background: linear-gradient(135deg,
+                rgba(46,125,255,0.10) 0%,
+                rgba(0,212,255,0.06) 100%);
+    border: 1px solid rgba(0,212,255,0.22);
+    border-radius: 10px;
 }
-#tc-clim-globe > .climgl-launch          { order: 2; }
-#tc-clim-globe > .tc-clim-gallery-heading,
-#tc-clim-globe > .tc-clim-gallery-sub,
-#tc-clim-globe > .tc-clim-gallery        { order: 1; }
-
-/* The .climgl-launch / .climgl-launch-card classes are reused
-   from global_archive_styles.css; minor tweak for tc_climatology
-   so the card sits comfortably without the storm-browser sidebar
-   chrome around it. */
-#tc-clim-globe .climgl-launch {
-    margin: 12px 0 24px;
+.tc-clim-globe-banner-icon {
+    flex: 0 0 56px;
+    width: 56px;
+    height: 56px;
     display: flex;
+    align-items: center;
     justify-content: center;
 }
-#tc-clim-globe .climgl-launch-card {
-    max-width: 760px;
+.tc-clim-globe-banner-icon svg {
+    width: 56px;
+    height: 56px;
+}
+.tc-clim-globe-banner-text {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.tc-clim-globe-banner-title {
+    margin: 0 0 4px 0;
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--text);
+}
+.tc-clim-globe-banner-lede {
+    margin: 0;
+    font-size: 0.85rem;
+    line-height: 1.45;
+    color: var(--text-dim, #94a3b8);
+}
+.tc-clim-globe-banner-btn {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 11px 20px;
+    background: linear-gradient(135deg, #2e7dff 0%, #00d4ff 100%);
+    color: #0a1628;
+    text-decoration: none;
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 700;
+    font-size: 0.92rem;
+    letter-spacing: 0.01em;
+    border-radius: 8px;
+    box-shadow: 0 4px 14px rgba(0, 212, 255, 0.20);
+    transition: transform 0.15s, box-shadow 0.15s, filter 0.15s;
+    white-space: nowrap;
+}
+.tc-clim-globe-banner-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 18px rgba(0, 212, 255, 0.35);
+    filter: brightness(1.05);
+}
+.tc-clim-globe-banner-btn:focus {
+    outline: 2px solid #00d4ff;
+    outline-offset: 3px;
+}
+.tc-clim-globe-banner-btn .tc-clim-cta-arrow {
+    font-size: 1rem;
+    line-height: 1;
+    transition: transform 0.15s;
+}
+.tc-clim-globe-banner-btn:hover .tc-clim-cta-arrow {
+    transform: translateX(3px);
 }
 
-/* When the gallery is the first thing on the page, give the
-   "Featured views" heading a hair more breathing room so it doesn't
-   crash into the sub-tab strip directly above. */
+@media (max-width: 720px) {
+    .tc-clim-globe-banner {
+        flex-wrap: wrap;
+        gap: 12px;
+        padding: 14px 16px;
+    }
+    .tc-clim-globe-banner-icon { display: none; }
+    .tc-clim-globe-banner-btn  { width: 100%; justify-content: center; }
+}
+
+/* "Featured views" heading directly under the banner — no extra
+   top margin needed since the banner already provides spacing. */
 #tc-clim-globe > .tc-clim-gallery-heading {
-    margin-top: 24px;
+    margin-top: 16px;
 }
 
 /* ── Featured-views gallery (2×3 tile grid) ──────────────── */
