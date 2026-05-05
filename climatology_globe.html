@@ -520,11 +520,23 @@
                 </p>
 
                 <strong style="display:block; margin:10px 0 4px 0;">Tropical-cyclone tracks (IBTrACS v04r01)</strong>
-                <p style="margin:0; opacity:0.9;">
+                <p style="margin:0 0 10px 0; opacity:0.9;">
                     NOAA NCEI International Best Track Archive for Climate Stewardship (Knapp et al., 2010,
                     <a href="https://doi.org/10.1175/2009BAMS2755.1" target="_blank" rel="noopener" class="ts-source-link">doi:10.1175/2009BAMS2755.1</a>;
                     Gahtan et al., 2024 v4r01,
                     <a href="https://doi.org/10.25921/82ty-9e16" target="_blank" rel="noopener" class="ts-source-link">doi:10.25921/82ty-9e16</a>).
+                </p>
+
+                <strong style="display:block; margin:10px 0 4px 0;">Derived fields</strong>
+                <p style="margin:0; opacity:0.9;">
+                    Maximum potential intensity (MPI) tiles computed offline with
+                    <a href="https://github.com/dgilford/tcpyPI" target="_blank" rel="noopener" class="ts-source-link">tcpyPI</a>
+                    (Gilford, 2021,
+                    <a href="https://doi.org/10.5194/gmd-14-2351-2021" target="_blank" rel="noopener" class="ts-source-link">doi:10.5194/gmd-14-2351-2021</a>),
+                    a vectorized Python implementation of Bister &amp; Emanuel (2002,
+                    <a href="https://doi.org/10.1029/2001JD000776" target="_blank" rel="noopener" class="ts-source-link">doi:10.1029/2001JD000776</a>).
+                    Helmholtz decomposition (ψ, χ) computed offline; wind speed, MSE, and
+                    deep-layer shear are computed in the browser from ERA5 component tiles.
                 </p>
             </div>
         </details>

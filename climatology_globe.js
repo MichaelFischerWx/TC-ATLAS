@@ -98,7 +98,8 @@ var _FIELD_INFO = {
     pv:   { short: 'Ertel potential vorticity on isentropic surfaces — a Lagrangian-conserved tracer of dynamical activity. 1 PVU = 10⁻⁶ K m² kg⁻¹ s⁻¹. Tropopause ≈ 2 PVU.', learn_url: 'https://glossary.ametsoc.org/wiki/Potential_vorticity', learn_label: 'AMS Glossary' },
     mse:  { short: 'Moist static energy / cₚ. h = cₚT + gz + Lq — conserved under adiabatic + reversible-moist processes; tracks deep-convective stability.', learn_url: 'https://glossary.ametsoc.org/wiki/Moist_static_energy', learn_label: 'AMS Glossary' },
     dls:  { short: 'Deep-layer shear computed from monthly-mean winds: |⟨V₂₀₀⟩ − ⟨V₈₅₀⟩|. Underestimates the climatology of instantaneous shear (Jensen) — for TC genesis thresholds use a daily-resolved product.', learn_url: 'https://glossary.ametsoc.org/wiki/Vertical_wind_shear', learn_label: 'AMS Glossary' },
-    mpi:  { short: 'Bister–Emanuel maximum potential intensity — theoretical upper bound on TC wind speed given local SST + atmospheric T/q profile (14 levels). NaN over land and where the algorithm fails to converge.', learn_url: 'https://doi.org/10.1029/2001JD000776', learn_label: 'Bister & Emanuel (2002)' },
+    mpi:  { short: 'Bister–Emanuel maximum potential intensity — theoretical upper bound on TC wind speed given local SST + atmospheric T/q profile (14 levels). Computed offline with Gilford\'s tcpyPI (vectorized BE-2002 in Python). NaN over land and where the algorithm fails to converge.',
+            learn_url: 'https://doi.org/10.5194/gmd-14-2351-2021', learn_label: 'Gilford (2021) — tcpyPI · GMD' },
 
     // ── Synthetic ──
     corr: { short: 'Per-pixel Pearson correlation coefficient between the active field and the chosen climate-index time series. NaN cells fail the p-value threshold.', learn_url: null, learn_label: '' },
