@@ -453,7 +453,17 @@ def main() -> int:
     ic = compute_intensity_changes(tracks, storms_by_sid)
     LOG.info(f"intensity_changes: {ic['total_episodes']} episodes, "
              f"years {ic['year_min']}-{ic['year_max']}")
-    write_outputs(tracks, storms, chunk0, chunk1, ic, ROOT)
+    # Smoke-test mode (--since): write to a sandbox dir so the production
+    # files at the repo root don't get clobbered with a partial subset.
+    # Diff from there before promoting to a full re-run.
+    if args.since is not None:
+        out = ROOT / "data" / "_ibtracs_smoketest"
+        out.mkdir(parents=True, exist_ok=True)
+        LOG.info(f"--since {args.since} → sandbox output (NOT clobbering production files)")
+        LOG.info(f"  {out.relative_to(ROOT)}/")
+    else:
+        out = ROOT
+    write_outputs(tracks, storms, chunk0, chunk1, ic, out)
     LOG.info("DONE")
     return 0
 
