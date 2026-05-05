@@ -168,14 +168,22 @@
                         <label class="field-label" for="composite-index">Index</label>
                         <select id="composite-index"
                                 title="Which monthly climate index to threshold on. RONI is the ENSO signal with the global warming trend removed — recommended for spanning the full 1950–2026 period.">
-                            <option value="roni" selected>RONI — ENSO (detrended)</option>
-                            <option value="oni">ONI — ENSO (traditional)</option>
-                            <option value="pna">PNA — Pacific/North American</option>
-                            <option value="pdo">PDO — Pacific Decadal Oscillation</option>
-                            <option value="nao">NAO — North Atlantic Oscillation</option>
-                            <option value="ao">AO — Arctic Oscillation</option>
-                            <option value="amm">AMM — Atlantic Meridional Mode</option>
-                            <option value="pmm">PMM — Pacific Meridional Mode</option>
+                            <optgroup label="Pacific / ENSO">
+                                <option value="roni" selected>RONI — ENSO (detrended)</option>
+                                <option value="oni">ONI — ENSO (traditional)</option>
+                                <option value="tni">TNI — Trans-Niño (EP vs CP ENSO)</option>
+                                <option value="pdo">PDO — Pacific Decadal Oscillation</option>
+                                <option value="npgo">NPGO — N. Pacific Gyre Oscillation</option>
+                                <option value="pmm">PMM — Pacific Meridional Mode</option>
+                                <option value="pna">PNA — Pacific/North American</option>
+                            </optgroup>
+                            <optgroup label="Atlantic">
+                                <option value="nao">NAO — North Atlantic Oscillation</option>
+                                <option value="amm">AMM — Atlantic Meridional Mode</option>
+                            </optgroup>
+                            <optgroup label="Hemispheric">
+                                <option value="ao">AO — Arctic Oscillation</option>
+                            </optgroup>
                         </select>
                         <p class="field-help" id="composite-index-desc" style="margin-top:4px;"></p>
                         <div class="composite-thresh-row">
