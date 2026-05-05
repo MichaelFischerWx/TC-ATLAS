@@ -15,5 +15,9 @@ mergir_cache/
 # Large data (tracked as split files instead)
 ibtracs_tracks.json
 
+# pipeline/refresh_ibtracs.py downloads ~600 MB of source netCDF to this dir;
+# never committed.
+data/_ibtracs_cache/
+
 # Claude Code working state
 .claude/
