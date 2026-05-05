@@ -264,6 +264,14 @@
                     <button id="composite-apply-btn" type="button" class="range-compute">
                         <span id="composite-apply-label">Apply composite</span>
                     </button>
+                    <!-- Clear-composite affordance: only visible when a
+                         composite is currently active on the globe. Reverts
+                         to the active climatology window (state.customRange
+                         and state.year both → null). -->
+                    <button id="composite-clear-btn" type="button" class="composite-clear-btn"
+                            hidden title="Remove the active composite filter and revert to the climatology mean">
+                        <span aria-hidden="true">&times;</span> Clear active composite
+                    </button>
                     <p class="field-help" id="composite-source" style="margin-top:6px; opacity:0.7;"></p>
                 </div>
             </details>

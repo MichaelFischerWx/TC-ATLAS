@@ -370,6 +370,31 @@
             color: var(--emerald-bright);
             font-weight: normal;
         }
+        .composite-clear-btn[hidden] { display: none; }
+        .composite-clear-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            margin-top: 8px;
+            padding: 5px 10px;
+            font-family: inherit;
+            font-size: 0.66rem;
+            color: var(--sage);
+            background: rgba(255,255,255,0.03);
+            border: 1px solid var(--thalo-line);
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s, border-color 0.15s;
+        }
+        .composite-clear-btn:hover {
+            color: var(--paper);
+            border-color: var(--emerald);
+            background: rgba(14,140,110,0.12);
+        }
+        .composite-clear-btn span[aria-hidden] {
+            font-size: 0.85rem;
+            line-height: 0.8;
+        }
         .composite-mode-toggle {
             display: flex;
             gap: 0;

@@ -4314,6 +4314,19 @@ class GlobeApp {
             this.refreshCompositeUI();
         }));
 
+        // Clear-active-composite button. Visibility is driven by
+        // refreshCompositeUI based on state.customRange. Click reverts
+        // both customRange and year so the globe falls back to the
+        // climatology mean (matching the "Climatology" time-mode button).
+        const clearBtn = document.getElementById('composite-clear-btn');
+        if (clearBtn) {
+            clearBtn.addEventListener('click', () => {
+                if (!this.state.customRange && this.state.year == null) return;
+                this.setState({ customRange: null, year: null });
+                this.refreshCompositeUI();
+            });
+        }
+
         this.refreshCompositeUI();
     }
 
@@ -4435,6 +4448,14 @@ class GlobeApp {
         const label     = document.getElementById('composite-apply-label');
         const eventsDiv = document.getElementById('composite-events');
         if (!btn) return;
+
+        // Show the "Clear active composite" button only when one is active.
+        // Driven from state so it reflects URL-restored composites too.
+        const clearBtn = document.getElementById('composite-clear-btn');
+        if (clearBtn) {
+            const active = !!(this.state.customRange);
+            clearBtn.hidden = !active;
+        }
 
         const mode = this._compositeMode || 'index';
         if (mode === 'selection') {
