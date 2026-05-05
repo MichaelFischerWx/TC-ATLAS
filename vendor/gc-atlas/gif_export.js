@@ -207,9 +207,38 @@ export class GifExporter {
         const subFont   = '10px ui-monospace, "JetBrains Mono", Menlo, monospace';
         const tickFont  = '11px ui-monospace, "JetBrains Mono", Menlo, monospace';
 
+        // Word-wrap a string to lines that fit `maxWidth` at the active
+        // ctx.font. Splits on whitespace; preserves single-line strings
+        // that already fit. Used for sub + note rows so long pedagogical
+        // captions (e.g. "Per-pixel Pearson r against the chosen index
+        // time series. NaN cells fail the p-value threshold.") don't
+        // spill past the right edge of the colorbar panel.
+        const wrap = (text, maxWidth) => {
+            if (!text) return [];
+            const words = text.split(/\s+/);
+            const lines = [];
+            let line = '';
+            for (const w of words) {
+                const trial = line ? line + ' ' + w : w;
+                if (ctx.measureText(trial).width <= maxWidth) {
+                    line = trial;
+                } else {
+                    if (line) lines.push(line);
+                    line = w;
+                }
+            }
+            if (line) lines.push(line);
+            return lines;
+        };
+
+        const innerW = cbW;  // text wraps to the colorbar width
+        ctx.font = subFont;  // measure with the subFont (sub + note share size)
+        const subLines  = subStr  ? wrap(subStr,  innerW) : [];
+        const noteLines = noteStr ? wrap(noteStr, innerW) : [];
+
         let panelH = padY * 2 + lineHTitle + 4 + cbH + 4 + lineHTicks;
-        if (subStr)  panelH += lineHSub + 2;
-        if (noteStr) panelH += lineHSub + 2;
+        if (subLines.length)  panelH += subLines.length  * lineHSub + 2;
+        if (noteLines.length) panelH += noteLines.length * lineHSub + 2;
         const panelW = padX * 2 + cbW;
 
         const x0 = 24;
@@ -237,17 +266,23 @@ export class GifExporter {
         }
         cy += lineHTitle;
 
-        if (subStr) {
+        if (subLines.length) {
             ctx.font = subFont;
             ctx.fillStyle = '#8b9ec2';
-            ctx.fillText(subStr, x0 + padX, cy);
-            cy += lineHSub + 2;
+            for (const ln of subLines) {
+                ctx.fillText(ln, x0 + padX, cy);
+                cy += lineHSub;
+            }
+            cy += 2;
         }
-        if (noteStr) {
+        if (noteLines.length) {
             ctx.font = subFont;
             ctx.fillStyle = '#d4a84b';
-            ctx.fillText(noteStr, x0 + padX, cy);
-            cy += lineHSub + 2;
+            for (const ln of noteLines) {
+                ctx.fillText(ln, x0 + padX, cy);
+                cy += lineHSub;
+            }
+            cy += 2;
         }
 
         cy += 4;
