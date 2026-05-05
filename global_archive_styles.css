@@ -40,6 +40,30 @@
     color: var(--cyan);
     border-bottom-color: var(--cyan);
 }
+/* Cross-page tab — TC Climatology lives on its own page, but is shown
+   here in the tab strip so users discover the destination without
+   leaving the tab metaphor. Styled subtly different so the navigation
+   nature is visible (text-decoration: none keeps it from underlining
+   like a default link). */
+.ga-tab-link {
+    text-decoration: none;
+    color: var(--slate);
+    background: transparent;
+    border-bottom: 2px solid transparent;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 10px 20px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.82rem;
+    font-weight: 600;
+    transition: all 0.2s;
+    letter-spacing: 0.01em;
+}
+.ga-tab-link:hover {
+    color: var(--text);
+    background: rgba(255,255,255,0.03);
+}
 
 /* ── Tab content ──────────────────────────────────────────── */
 .ga-tab-content {
