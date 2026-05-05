@@ -276,6 +276,20 @@
                         <button type="button" data-corr-anom="raw"
                                 title="No detrending. Raw values include the warming trend.">Raw</button>
                     </div>
+                    <label class="field-label" style="margin-top:10px;">Year range
+                        <span style="opacity:0.55; font-weight:normal;">(blank → use all available)</span>
+                    </label>
+                    <div style="display:flex; gap:6px; align-items:center; margin-top:4px;">
+                        <input id="correlation-year-start" type="number" inputmode="numeric"
+                               min="1961" max="2100" placeholder="1961"
+                               class="range-input" style="width:78px;"
+                               title="Earliest year (inclusive). Defaults to the first year with per-year ERA5 tiles available (1961). Pre-satellite ACE in EP/WP basins is biased low — consider clipping to ≥1966 for those basins.">
+                        <span style="opacity:0.6;">–</span>
+                        <input id="correlation-year-end" type="number" inputmode="numeric"
+                               min="1961" max="2100" placeholder="latest"
+                               class="range-input" style="width:78px;"
+                               title="Latest year (inclusive). Blank = use the most recent year with per-year ERA5 tiles available.">
+                    </div>
                     <label class="field-label" for="correlation-pval" style="margin-top:10px;">p-value threshold</label>
                     <input id="correlation-pval" type="number" step="0.01" min="0" max="1"
                            class="range-input" value="0.05" style="width:80px;"

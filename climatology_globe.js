@@ -370,7 +370,7 @@ function _setStatus(msg) {
 // (e.g. dls = |⟨V₂₀₀⟩ − ⟨V₈₅₀⟩| → 4 component tiles per year), so the wait
 // loop subscribes to ANY onFieldLoaded event and re-polls getField until
 // every year resolves to isReal:true (or timeout).
-async function _loadPerYearTilesForCurrentField(month) {
+async function _loadPerYearTilesForCurrentField(month, yearRange) {
     const app = window.envGlobe;
     if (!app) return null;
     const field = (app.state.field === 'corr') ? (_preCorrField || 'sst') : app.state.field;
@@ -415,8 +415,18 @@ async function _loadPerYearTilesForCurrentField(month) {
     } else {
         years = (varMeta.years || []).slice();
     }
+    // Optional user-supplied [startYear, endYear] clip — used by the
+    // correlation panel so the user can constrain the regression to a
+    // specific era (e.g., post-1966 satellite era for EP/WP ACE).
+    if (yearRange && (Number.isFinite(yearRange[0]) || Number.isFinite(yearRange[1]))) {
+        const lo = Number.isFinite(yearRange[0]) ? yearRange[0] : -Infinity;
+        const hi = Number.isFinite(yearRange[1]) ? yearRange[1] : +Infinity;
+        years = years.filter(y => y >= lo && y <= hi);
+    }
     if (years.length < 10) {
-        _setStatus(`Only ${years.length} years available for month ${month} — too few.`);
+        const span = (yearRange && (Number.isFinite(yearRange[0]) || Number.isFinite(yearRange[1])))
+            ? ` in your year range (${yearRange[0] ?? '−∞'}–${yearRange[1] ?? '+∞'})` : '';
+        _setStatus(`Only ${years.length} years available for month ${month}${span} — need ≥ 10.`);
         return null;
     }
 
@@ -498,8 +508,14 @@ async function applyCorrelation() {
     }
 
     const month = app.state.month;
+    // Optional user year-range clip from the UI inputs.
+    const yrStartEl = document.getElementById('correlation-year-start');
+    const yrEndEl   = document.getElementById('correlation-year-end');
+    const yrStart = yrStartEl && yrStartEl.value !== '' ? parseInt(yrStartEl.value, 10) : NaN;
+    const yrEnd   = yrEndEl   && yrEndEl.value   !== '' ? parseInt(yrEndEl.value,   10) : NaN;
+    const yearRange = (Number.isFinite(yrStart) || Number.isFinite(yrEnd)) ? [yrStart, yrEnd] : null;
     const t0 = performance.now();
-    const grids = await _loadPerYearTilesForCurrentField(month);
+    const grids = await _loadPerYearTilesForCurrentField(month, yearRange);
     if (!grids || grids.length === 0) return;
     _setStatus(`Computing anomalies (${anomMode})…`);
     const anom = anomalyTransform(grids, anomMode, { fixedSpan: [1991, 2020] });
@@ -538,7 +554,10 @@ async function applyCorrelation() {
     _correlationActive = true;
 
     const ms = (performance.now() - t0).toFixed(0);
-    _setStatus(`Done · ${kept.toLocaleString()} significant cells (p ≤ ${pvalThresh}) · ${ms} ms`);
+    const yrs = grids.length;
+    const yMin = grids[0]?.year, yMax = grids[grids.length - 1]?.year;
+    const spanLbl = (yMin && yMax) ? ` · ${yMin}–${yMax} (${yrs} yr)` : '';
+    _setStatus(`Done · ${kept.toLocaleString()} significant cells (p ≤ ${pvalThresh})${spanLbl} · ${ms} ms`);
 }
 
 function bindCorrelationPanel() {
@@ -614,6 +633,17 @@ function init() {
     // /month=1 defaults.
     setSelect('field-select', 'sst');
     setSelect('month-select', '9');
+
+    // Composite-builder safety hook: if the user applies a composite while
+    // the Index-Correlation overlay is active (state.field='corr'), exit
+    // correlation mode FIRST so the prefetch reads tiles for a real field
+    // instead of 404-spamming for the synthetic 'corr' tile path.
+    window.envGlobe.beforeApplyComposite = () => {
+        if (window.envGlobe.state.field === 'corr' && _preCorrField) {
+            _correlationActive = false;
+            window.envGlobe.setState({ field: _preCorrField });
+        }
+    };
 
     Promise.all([loadTracks(), loadStormMeta()]).then(() => {
         refreshTracks();

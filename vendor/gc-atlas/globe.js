@@ -4591,6 +4591,27 @@ class GlobeApp {
     }
 
     _applyComposite() {
+        // Hook for app-level field substitution. Climatology Globe uses this
+        // to exit Index-Correlation mode (state.field='corr') back to the
+        // underlying real field before compositing — otherwise the engine
+        // tries to fetch per-year tiles for the synthetic 'corr' field, all
+        // 404, and the loading spinner spins forever.
+        if (typeof this.beforeApplyComposite === 'function') {
+            try { this.beforeApplyComposite(); } catch (e) { console.warn('[composite] beforeApplyComposite hook threw:', e); }
+        }
+        // Defensive guard: refuse to compose hidden / synthetic fields. If
+        // the hook didn't (or couldn't) substitute, bail loudly instead of
+        // hanging. Hidden fields are flagged in FIELDS[name].hidden.
+        const fmeta = FIELDS[this.state.field];
+        if (fmeta?.hidden) {
+            const eventsDiv = document.getElementById('composite-events');
+            if (eventsDiv) {
+                eventsDiv.innerHTML =
+                    `<strong style="color:#fbbf24;">Cannot composite '${this.state.field}'</strong> — ` +
+                    `pick a real field (SST, MPI, etc.) first.`;
+            }
+            return;
+        }
         const mode = this._compositeMode || 'index';
         if (mode === 'selection') return this._applyCompositeSelection();
         return this._applyCompositeIndex();
