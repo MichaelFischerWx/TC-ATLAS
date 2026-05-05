@@ -107,23 +107,44 @@ function refreshTracks(force) {
     _overlay.setVisible(visible);
     if (!visible) return;
 
+    // Tracks dict isn't loaded yet — bail without writing the dedupe key
+    // so the post-load refresh actually paints (it'd otherwise see an
+    // identical key and short-circuit, leaving the globe with no tracks
+    // until the user toggled the checkbox off and on).
+    if (!_tracks || Object.keys(_tracks).length === 0) return;
+
     // Year filter: composite year-list > single year > null (any year).
     const cr = s.customRange;
     let yearFilter = null;
     let monthFilter = s.month;
+    let yearScopeActive = false;  // true when a composite or single year is active
     if (cr && Array.isArray(cr.years) && cr.years.length) {
         yearFilter = cr.years;
+        yearScopeActive = true;
         // Composites are anchored on a specific month (cr.month); use that
         // explicitly rather than s.month so the painted tracks always agree
         // with the year list the composite was built from.
         if (Number.isFinite(cr.month)) monthFilter = cr.month;
+        // Multi-month composites carry months[]; if so, use those.
+        if (Array.isArray(cr.months) && cr.months.length) monthFilter = cr.months;
     } else if (s.year != null && Number.isFinite(s.year)) {
         yearFilter = s.year;
+        yearScopeActive = true;
     }
 
+    // "Show all months in active year(s)" — when a year scope is active
+    // (composite OR single year), let the user override the month filter
+    // to null so every storm in those years paints, regardless of which
+    // month the field is displaying. No-op when no year scope is active
+    // (climatology view already shows the chosen month across all years).
+    const allMonthsCB = document.getElementById('toggle-tracks-all-months');
+    const wantAllMonths = !!(allMonthsCB && allMonthsCB.checked);
+    if (wantAllMonths && yearScopeActive) monthFilter = null;
+
     // Build a stable key that accounts for the year-list shape.
-    const yearKey = Array.isArray(yearFilter) ? yearFilter.join(',') : String(yearFilter);
-    const key = yearKey + '|' + monthFilter;
+    const yearKey  = Array.isArray(yearFilter)  ? yearFilter.join(',')  : String(yearFilter);
+    const monthKey = Array.isArray(monthFilter) ? monthFilter.join(',') : String(monthFilter);
+    const key = yearKey + '|' + monthKey;
     if (!force && key === _lastRenderKey) return;
     _lastRenderKey = key;
     _overlay.render(_tracks, yearFilter, monthFilter);
@@ -610,7 +631,10 @@ function init() {
     document.addEventListener('change', (e) => {
         // Toggle-tracks changes visibility but not (year, month), so force
         // a re-render past the dedupe guard so the lines paint immediately.
-        if (e.target && e.target.id === 'toggle-tracks') refreshTracks(true);
+        if (e.target && (e.target.id === 'toggle-tracks'
+                      || e.target.id === 'toggle-tracks-all-months')) {
+            refreshTracks(true);
+        }
     });
 
     bindCorrelationPanel();

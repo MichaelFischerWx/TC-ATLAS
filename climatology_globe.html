@@ -362,9 +362,13 @@
             <h4>Overlays</h4>
             <!-- TC tracks (TC-ATLAS-specific overlay; upstream Gen_Circ has no IBTrACS). -->
             <label class="check"><input type="checkbox" id="toggle-tracks" checked> TC tracks</label>
-            <p class="field-help" style="margin: 2px 0 8px 24px; font-size:0.62rem;">
+            <p class="field-help" style="margin: 2px 0 4px 24px; font-size:0.62rem;">
                 IBTrACS storms active during the displayed month, colored by Saffir-Simpson category.
             </p>
+            <label class="check" style="margin: 0 0 8px 24px; font-size:0.7rem;"
+                   title="Paint storm tracks for every month of the active year(s) instead of only the displayed month. Field display stays on the chosen month.">
+                <input type="checkbox" id="toggle-tracks-all-months"> Show all months in active year(s)
+            </label>
             <!-- Data overlays — change with what you're studying. -->
             <label class="check"><input type="checkbox" id="toggle-contours"> Contours</label>
             <div id="contour-field-row" hidden style="margin: 4px 0 8px 24px;">
