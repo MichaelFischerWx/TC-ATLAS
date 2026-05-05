@@ -118,15 +118,20 @@ export class GifExporter {
         ctx.closePath();
     }
 
-    /** Paint a subtle "GC-ATLAS" attribution watermark in the bottom-right
+    /** Paint a subtle "TC-ATLAS" attribution watermark in the bottom-right
      *  corner. Runs on every export path (still, animated, annual, swipe,
      *  cross-section) so attribution survives cropping and re-sharing.
      *  Includes the Copernicus credit so exported images carry the
-     *  required C3S attribution even when shared off-site. */
+     *  required C3S attribution even when shared off-site.
+     *
+     *  Note: this file is from the vendored GC-ATLAS engine, but the
+     *  brand text is overridden to TC-ATLAS because the climatology
+     *  globe is hosted under the TC-ATLAS site. If we ever resync
+     *  vendor/gc-atlas/ from upstream, re-apply this rebranding. */
     _drawWatermark(ctx, w, h) {
         const padX = 12, padY = 10;
-        const brand  = 'GC-ATLAS';
-        const site   = 'michaelfischerwx.github.io/GC-ATLAS';
+        const brand  = 'TC-ATLAS';
+        const site   = 'michaelfischerwx.github.io/TC-ATLAS';
         // Required Copernicus product-license credit — kept compact so
         // it fits comfortably on small exports; full attribution (incl.
         // disclaimer + Hersbach citation) lives in the site footer.

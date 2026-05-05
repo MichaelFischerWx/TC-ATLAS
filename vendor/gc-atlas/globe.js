@@ -5299,7 +5299,7 @@ class GlobeApp {
         const a = document.createElement('a');
         const stamp = new Date().toISOString().replace(/:/g, '-').slice(0, 19);
         a.href = url;
-        a.download = `gc-atlas-${this.state.field}-timeseries-${stamp}.csv`;
+        a.download = `tc-atlas-${this.state.field}-timeseries-${stamp}.csv`;
         document.body.appendChild(a);
         a.click();
         setTimeout(() => { a.remove(); URL.revokeObjectURL(url); }, 100);
@@ -5453,7 +5453,7 @@ class GlobeApp {
                     ? `Encoding… ${sizeMB.toFixed(1)} MB`
                     : `Saving · ${(blob.size / 1024).toFixed(0)} kB`;
                 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 16);
-                downloadBlob(blob, `gc-atlas-${mode}-${stamp}.${ext}`);
+                downloadBlob(blob, `tc-atlas-${mode}-${stamp}.${ext}`);
                 progressText.textContent = ext === 'gif'
                     ? `Done · ${sizeMB.toFixed(1)} MB`
                     : `Done · ${(blob.size / 1024).toFixed(0)} kB`;
