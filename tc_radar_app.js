@@ -3747,6 +3747,34 @@ function buildMaxAnnotation(maxInfo, units, xLabel, yLabel, fontSize) {
     };
 }
 
+// Marker at the storm-relative origin (0, 0) labeling the objectively
+// identified TC center. Hover surfaces the center's geographic lat/lon.
+// `extra` optionally merges extra trace fields (e.g. {_isMW:true} for the
+// microwave-overlay variant so it gets cleaned up with the MW layer).
+function buildTCCenterMarkerTrace(lat, lon, extra) {
+    if (lat == null || lon == null || !isFinite(lat) || !isFinite(lon)) return null;
+    var nsLat = lat >= 0 ? 'N' : 'S';
+    var ewLon = lon >= 0 ? 'E' : 'W';
+    var posStr = Math.abs(lat).toFixed(3) + '°' + nsLat +
+        ', ' + Math.abs(lon).toFixed(3) + '°' + ewLon;
+    var trace = {
+        x: [0], y: [0], type: 'scatter', mode: 'markers',
+        marker: {
+            symbol: 'cross', size: 14, color: '#ffffff',
+            line: { color: '#000000', width: 1 }
+        },
+        hovertemplate: '<b>TC Center</b><br>Lat/Lon: ' + posStr + '<extra></extra>',
+        showlegend: false,
+        name: 'TC Center',
+    };
+    if (extra) {
+        for (var k in extra) {
+            if (Object.prototype.hasOwnProperty.call(extra, k)) trace[k] = extra[k];
+        }
+    }
+    return trace;
+}
+
 function renderPlotFromJSON(json, resultDiv) {
     // Hide thumbnail, show plot in its place
     var thumbWrap = document.getElementById('thumbnail-wrap');
@@ -3866,8 +3894,14 @@ function renderPlotFromJSON(json, resultDiv) {
         dualWrap.insertAdjacentHTML('beforebegin', _metaStripHTML);
     }
 
-    Plotly.newPlot('plotly-chart', [heatmap].concat(overlayTraces).concat(maxTraces).concat(tiltTraces), smallLayout, config);
-    window._lastPlotlyData = { heatmap: heatmap, overlayTraces: overlayTraces, maxTraces: maxTraces, tiltTraces: tiltTraces, baseLayout: baseLayout, title: title, config: config, barbShapes: barbShapes };
+    // TC center marker (cross at storm-relative origin with lat/lon hover)
+    var _ccLat = (currentCaseData && currentCaseData.latitude != null) ? currentCaseData.latitude : (meta && meta.latitude);
+    var _ccLon = (currentCaseData && currentCaseData.longitude != null) ? currentCaseData.longitude : (meta && meta.longitude);
+    var centerMarkerTrace = buildTCCenterMarkerTrace(_ccLat, _ccLon);
+    var centerTraces = centerMarkerTrace ? [centerMarkerTrace] : [];
+
+    Plotly.newPlot('plotly-chart', [heatmap].concat(overlayTraces).concat(maxTraces).concat(tiltTraces).concat(centerTraces), smallLayout, config);
+    window._lastPlotlyData = { heatmap: heatmap, overlayTraces: overlayTraces, maxTraces: maxTraces, tiltTraces: tiltTraces, centerTraces: centerTraces, baseLayout: baseLayout, title: title, config: config, barbShapes: barbShapes };
 
     // Re-apply MW overlay if it was visible (e.g. was shown as standalone before TDR was generated)
     if (_mwPlanViewVisible && (_mwStormGrid || (_mwIsRGB && _mwStormGridRGBb64))) _applyMWPlanViewOverlay();
@@ -14694,9 +14728,15 @@ function _createStandaloneMWPlanView() {
     var plotBg = '#0a1628';
     var config = { responsive: true, displayModeBar: true,
         modeBarButtonsToRemove: ['lasso2d','select2d','toggleSpikelines'], displaylogo: false };
-    var centerTrace = { x: [0], y: [0], type: 'scatter', mode: 'markers',
+    // Center marker with lat/lon hover; _isMW so it's removed with the MW layer.
+    // Falls back to a silent cross if case data isn't loaded yet.
+    var _mwCcLat = (currentCaseData && currentCaseData.latitude != null) ? currentCaseData.latitude : null;
+    var _mwCcLon = (currentCaseData && currentCaseData.longitude != null) ? currentCaseData.longitude : null;
+    var centerTrace = buildTCCenterMarkerTrace(_mwCcLat, _mwCcLon, { _isMW: true }) || {
+        x: [0], y: [0], type: 'scatter', mode: 'markers',
         marker: { symbol: 'cross', size: 10, color: 'white', line: { color: 'white', width: 2 } },
-        showlegend: false, hoverinfo: 'skip', _isMW: true };
+        showlegend: false, hoverinfo: 'skip', _isMW: true,
+    };
 
     if (_mwIsRGB && _mwStormGridRGBb64) {
         var ext = (_mwStormGrid && _mwStormGrid.extent_km) || 250;
