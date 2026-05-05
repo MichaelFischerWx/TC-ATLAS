@@ -1,0 +1,99 @@
+/* ══════════════════════════════════════════════════════════════
+   TC Climatology — page-specific layout
+   ══════════════════════════════════════════════════════════════
+   Page-specific layout only. Shared chrome (topbar, basin chips,
+   .ace-modal-*, .clim-grid, .clim-panel) lives in tc_radar_styles
+   and global_archive_styles, which are loaded before this file.
+   ══════════════════════════════════════════════════════════════ */
+
+.tc-clim-main {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 24px 32px 64px;
+}
+
+@media (max-width: 720px) {
+    .tc-clim-main { padding: 16px 12px 32px; }
+}
+
+/* ── Header + sub-nav strip ────────────────────────────────── */
+.tc-clim-header {
+    margin-bottom: 18px;
+}
+.tc-clim-title-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 14px;
+}
+.tc-clim-h1 {
+    margin: 0 0 4px 0;
+    font-size: 1.5rem;
+    color: var(--text);
+    font-weight: 600;
+}
+.tc-clim-subtitle {
+    margin: 0;
+    color: var(--text-dim, #94a3b8);
+    font-size: 0.86rem;
+    line-height: 1.5;
+    max-width: 720px;
+}
+
+.tc-clim-subnav {
+    display: inline-flex;
+    gap: 0;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    background: rgba(255,255,255,0.02);
+}
+.tc-clim-subnav-btn {
+    padding: 9px 18px;
+    background: transparent;
+    color: var(--text-dim, #94a3b8);
+    border: none;
+    border-right: 1px solid var(--border);
+    font-family: inherit;
+    font-size: 0.84rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+.tc-clim-subnav-btn:last-child { border-right: none; }
+.tc-clim-subnav-btn:hover { color: var(--text); background: rgba(255,255,255,0.04); }
+.tc-clim-subnav-btn.active {
+    background: rgba(46,125,255,0.18);
+    color: var(--cyan, #00d4ff);
+}
+
+/* ── Sub-views ─────────────────────────────────────────────── */
+.tc-clim-subview { display: block; }
+.tc-clim-subview[hidden] { display: none; }
+
+/* The .clim-layout / .clim-grid / .clim-panel rules from
+   global_archive_styles.css apply directly on the Stats sub-view —
+   no duplication here. Just ensure the layout breathes when
+   embedded directly in <main> instead of inside a tab section. */
+#tc-clim-stats .clim-layout {
+    margin: 0;
+}
+#tc-clim-stats .clim-header {
+    margin-bottom: 14px;
+}
+
+/* ── Reanalysis Globe launch card ──────────────────────────── */
+/* The .climgl-launch / .climgl-launch-card classes are reused
+   from global_archive_styles.css; minor tweak for tc_climatology
+   so the card sits comfortably without the storm-browser sidebar
+   chrome around it. */
+#tc-clim-globe .climgl-launch {
+    margin: 24px 0;
+    display: flex;
+    justify-content: center;
+}
+#tc-clim-globe .climgl-launch-card {
+    max-width: 760px;
+}
