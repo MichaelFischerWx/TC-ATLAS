@@ -4245,7 +4245,111 @@ class GlobeApp {
                 this.setState({ slidingClimo: e.target.checked });
             });
         }
+
+        // Mode toggle (By index / By selection). Default is 'index'.
+        // Held on the instance instead of state because it's pure UI mode —
+        // the actual composite output (state.customRange) is what drives
+        // the engine.
+        this._compositeMode = this._compositeMode || 'index';
+        this._compositeSelectedYears = this._compositeSelectedYears || new Set();
+        const modeBtns = document.querySelectorAll('#composite-mode-toggle button');
+        const indexPane = document.getElementById('composite-mode-index');
+        const selPane   = document.getElementById('composite-mode-selection');
+        const setMode = (mode) => {
+            this._compositeMode = mode;
+            modeBtns.forEach(b => b.classList.toggle('active', b.dataset.compositeMode === mode));
+            if (indexPane) indexPane.hidden = (mode !== 'index');
+            if (selPane)   selPane.hidden   = (mode !== 'selection');
+            this.refreshCompositeUI();
+        };
+        modeBtns.forEach(b => b.addEventListener('click', () => setMode(b.dataset.compositeMode)));
+        this._setCompositeMode = setMode;
+
+        // Build year chips lazily — depends on the per-year manifest
+        // which loads async. Re-run after era5Ready in case it wasn't
+        // loaded at init time.
+        this._buildYearChips();
+        if (!era5Ready('per_year')) {
+            const tryAgain = () => {
+                if (era5Ready('per_year')) {
+                    this._buildYearChips();
+                    return;
+                }
+                setTimeout(tryAgain, 300);
+            };
+            setTimeout(tryAgain, 300);
+        }
+
+        // Quick actions for the selection pane.
+        const quickActions = document.querySelectorAll('#composite-mode-selection [data-sel-act]');
+        quickActions.forEach(b => b.addEventListener('click', () => {
+            const act = b.dataset.selAct;
+            const allChips = document.querySelectorAll('#composite-year-chips .yr-chip');
+            allChips.forEach(c => {
+                const y = Number(c.dataset.year);
+                if (act === 'all')    this._compositeSelectedYears.add(y);
+                if (act === 'none')   this._compositeSelectedYears.delete(y);
+                if (act === 'invert') {
+                    if (this._compositeSelectedYears.has(y)) this._compositeSelectedYears.delete(y);
+                    else this._compositeSelectedYears.add(y);
+                }
+                c.classList.toggle('selected', this._compositeSelectedYears.has(y));
+            });
+            this.refreshCompositeUI();
+        }));
+
         this.refreshCompositeUI();
+    }
+
+    // Populate the year-chip grid from the per_year tile manifest. Called
+    // at bind time AND once the manifest is ready (it loads async).
+    _buildYearChips() {
+        const container = document.getElementById('composite-year-chips');
+        if (!container || container.dataset.built === '1') return;
+        const mfst = getManifest('per_year');
+        let years = null;
+        for (const grp of Object.values(mfst?.groups || {})) {
+            for (const v of Object.values(grp)) {
+                if (Array.isArray(v.years) && v.years.length) { years = v.years.slice(); break; }
+            }
+            if (years) break;
+        }
+        if (!years) return;  // manifest not ready yet — caller will retry
+        years.sort((a, b) => a - b);
+        const frag = document.createDocumentFragment();
+        years.forEach(y => {
+            const chip = document.createElement('div');
+            chip.className = 'yr-chip';
+            chip.dataset.year = String(y);
+            chip.textContent = String(y);
+            chip.title = 'Click to toggle ' + y + ' in the composite';
+            chip.addEventListener('click', () => {
+                if (this._compositeSelectedYears.has(y)) this._compositeSelectedYears.delete(y);
+                else this._compositeSelectedYears.add(y);
+                chip.classList.toggle('selected', this._compositeSelectedYears.has(y));
+                this.refreshCompositeUI();
+            });
+            frag.appendChild(chip);
+        });
+        container.appendChild(frag);
+        container.dataset.built = '1';
+        // If a customRange was restored from URL with mode='selection', the
+        // chip selections need to be painted now that the chips exist.
+        this._syncYearChipsFromState();
+    }
+
+    // Mirror the active customRange.selectedYears (if any) onto the chip
+    // grid so URL-deep-linked composites visibly highlight the right cells.
+    _syncYearChipsFromState() {
+        const cr = this.state.customRange;
+        if (!cr || cr.mode !== 'selection' || !Array.isArray(cr.selectedYears)) return;
+        this._compositeSelectedYears = new Set(cr.selectedYears);
+        const chips = document.querySelectorAll('#composite-year-chips .yr-chip');
+        chips.forEach(c => {
+            const y = Number(c.dataset.year);
+            c.classList.toggle('selected', this._compositeSelectedYears.has(y));
+        });
+        if (this._setCompositeMode) this._setCompositeMode('selection');
     }
 
     // Clip a year list to those with per-year tiles available. The
@@ -4269,15 +4373,25 @@ class GlobeApp {
     }
 
     refreshCompositeUI() {
-        const sel       = document.getElementById('composite-index');
-        const cmpSel    = document.getElementById('composite-cmp');
-        const thresh    = document.getElementById('composite-threshold');
         const btn       = document.getElementById('composite-apply-btn');
         const label     = document.getElementById('composite-apply-label');
         const eventsDiv = document.getElementById('composite-events');
+        if (!btn) return;
+
+        const mode = this._compositeMode || 'index';
+        if (mode === 'selection') {
+            return this._refreshCompositeUISelection(btn, label, eventsDiv);
+        }
+        return this._refreshCompositeUIIndex(btn, label, eventsDiv);
+    }
+
+    _refreshCompositeUIIndex(btn, label, eventsDiv) {
+        const sel       = document.getElementById('composite-index');
+        const cmpSel    = document.getElementById('composite-cmp');
+        const thresh    = document.getElementById('composite-threshold');
         const descDiv   = document.getElementById('composite-index-desc');
         const srcDiv    = document.getElementById('composite-source');
-        if (!sel || !btn) return;
+        if (!sel) return;
 
         const id = sel.value;
         const ix = getIndex(id);
@@ -4343,6 +4457,53 @@ class GlobeApp {
         btn.disabled = false;
     }
 
+    _refreshCompositeUISelection(btn, label, eventsDiv) {
+        const descDiv = document.getElementById('composite-index-desc');
+        const srcDiv  = document.getElementById('composite-source');
+        if (descDiv) descDiv.textContent = '';
+        if (srcDiv)  srcDiv.textContent  = '';
+
+        const picked = Array.from(this._compositeSelectedYears).sort((a, b) => a - b);
+        const { kept: years, dropped } = this._clipToAvailableYears(picked);
+        if (years.length === 0) {
+            if (eventsDiv) {
+                eventsDiv.textContent = picked.length === 0
+                    ? 'Pick one or more years from the grid above.'
+                    : `All ${picked.length} selected year(s) predate the per-year tile tree (1961–present).`;
+            }
+            btn.disabled = true;
+            if (label) label.textContent = 'Apply composite';
+            btn.classList.remove('is-done');
+            return;
+        }
+
+        const month  = this.state.month;
+        const monLbl = MONTHS[month - 1] || String(month);
+        if (eventsDiv) {
+            const tileCount = years.length;
+            const note = dropped.length
+                ? `<div style="opacity:0.6; margin-top:4px; font-size:0.62rem;">Dropped ${dropped.length} pre-1961 year${dropped.length === 1 ? '' : 's'}: ${dropped.join(', ')}</div>`
+                : '';
+            const sizeNote = `<div style="opacity:0.55; margin-top:4px; font-size:0.62rem;">~${tileCount} tile${tileCount === 1 ? '' : 's'} fetched on Apply</div>`;
+            eventsDiv.innerHTML =
+                `<strong>${years.length} year${years.length === 1 ? '' : 's'}</strong> · ${monLbl} · ${years.join(', ')}${note}${sizeNote}`;
+        }
+
+        const active = this.state.customRange;
+        const isActive = active
+            && active.mode === 'selection'
+            && active.month === month
+            && Array.isArray(active.selectedYears)
+            && active.selectedYears.length === years.length
+            && active.selectedYears.every((y, i) => y === years[i]);
+        const lbl = `Custom · ${monLbl} · ${years.length} yr`;
+        if (label) {
+            label.textContent = isActive ? `Active · ${lbl}` : `Apply · ${lbl}`;
+        }
+        btn.classList.toggle('is-done', !!isActive);
+        btn.disabled = false;
+    }
+
     // Which ingredient fields does the active displayed field need at the
     // per-year tile level? Mirrors the dispatch in data.js's
     // computeDerived / fieldOnIsentrope so the composite Apply button
@@ -4361,6 +4522,12 @@ class GlobeApp {
     }
 
     _applyComposite() {
+        const mode = this._compositeMode || 'index';
+        if (mode === 'selection') return this._applyCompositeSelection();
+        return this._applyCompositeIndex();
+    }
+
+    _applyCompositeIndex() {
         const sel    = document.getElementById('composite-index');
         const cmpSel = document.getElementById('composite-cmp');
         const thresh = document.getElementById('composite-threshold');
@@ -4375,11 +4542,42 @@ class GlobeApp {
         const { kept: years } = this._clipToAvailableYears(
             eventYears(id, month, cmp, threshold));
         if (years.length === 0) return;
-        // Prefetch per-year ingredient tiles. For raw fields this is just
-        // the field tile at the displayed level. For derived (PV, wspd,
-        // mse, dls) and θ-coord fields the composer needs ingredient
-        // tiles at every pressure level, so kick a wider prefetch — only
-        // for the current month to avoid flooding (months scrub lazily).
+        this._prefetchCompositeYears(years, month);
+        const label = compositeLabel(id, month, cmp, threshold);
+        this.setState({
+            // `id / cmp / threshold / month` travel with customRange so
+            // refreshCompositeUI can detect when the DOM controls still
+            // describe the active composite (and show "Active · …").
+            customRange: { years, label, id, cmp, threshold, month, mode: 'index' },
+            year: null,
+        });
+        this.refreshCompositeUI();
+    }
+
+    _applyCompositeSelection() {
+        const picked = Array.from(this._compositeSelectedYears).sort((a, b) => a - b);
+        const { kept: years } = this._clipToAvailableYears(picked);
+        if (years.length === 0) return;
+        const month = this.state.month;
+        this._prefetchCompositeYears(years, month);
+        const monLbl = MONTHS[month - 1] || String(month);
+        const label = `Custom: ${years.length} yr · ${monLbl}`;
+        this.setState({
+            // selectedYears persists the user's pick so URL deep-links
+            // restore the chip selections; years is the engine-facing copy
+            // (clipped to available tiles).
+            customRange: { years, label, mode: 'selection', selectedYears: years.slice(), month },
+            year: null,
+        });
+        this.refreshCompositeUI();
+    }
+
+    // Shared per-year-tile prefetch fan-out. For raw fields this is just
+    // the field tile at the displayed level; for derived (PV, wspd, mse,
+    // dls) and θ-coord fields the composer needs ingredient tiles at every
+    // pressure level, so kick a wider prefetch — current month only to
+    // avoid flooding (months scrub lazily).
+    _prefetchCompositeYears(years, month) {
         const ingredients = this._compositeIngredientFields();
         const meta = FIELDS[this.state.field];
         const allLevels = !!(meta?.derived || this.state.vCoord === 'theta');
@@ -4389,22 +4587,13 @@ class GlobeApp {
                 for (const L of lvls) {
                     prefetchField(ing, {
                         level: L,
-                        months: [month],   // current month only — keeps the burst small
+                        months: [month],
                         period: 'per_year',
                         year: y,
                     });
                 }
             }
         }
-        const label = compositeLabel(id, month, cmp, threshold);
-        this.setState({
-            // `id / cmp / threshold / month` travel with customRange so
-            // refreshCompositeUI can detect when the DOM controls still
-            // describe the active composite (and show "Active · …").
-            customRange: { years, label, id, cmp, threshold, month },
-            year: null,
-        });
-        this.refreshCompositeUI();
     }
 
     // ── sliding-climo helper for composite anomalies ──────────────────

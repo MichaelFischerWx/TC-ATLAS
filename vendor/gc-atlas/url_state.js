@@ -43,14 +43,20 @@ const SPEC = [
             const n = Number(s); return Number.isFinite(n) ? n : undefined;
         }],
     ['customRange',        'cr',
-        // Two shapes serialize here:
-        //   contiguous range   → "2010-2024"
-        //   index composite    → "c:<id>:<cmp>:<threshold>:<month>"
-        //   e.g. "c:roni:ge:1.0:1"  →  RONI ≥ +1.0 in January
+        // Three shapes serialize here:
+        //   contiguous range     → "2010-2024"
+        //   index composite      → "c:<id>:<cmp>:<threshold>:<month>"
+        //                          e.g. "c:roni:ge:1.0:1"  →  RONI ≥ +1.0 in January
+        //   selection composite  → "s:<month>:<y1>,<y2>,<y3>,..."
+        //                          e.g. "s:9:1992,1995,2002,2017"
         // Null / unrecognized shape → omitted from URL (falls back to
         // climatology on the other side).
         v => {
             if (v == null) return null;
+            if (v.mode === 'selection' && Array.isArray(v.selectedYears)
+                && v.selectedYears.length && Number.isFinite(v.month)) {
+                return `s:${v.month}:${v.selectedYears.join(',')}`;
+            }
             if (v.id && v.cmp && Number.isFinite(v.threshold) && Number.isFinite(v.month)) {
                 return `c:${v.id}:${v.cmp}:${v.threshold}:${v.month}`;
             }
@@ -61,6 +67,18 @@ const SPEC = [
         },
         s => {
             if (!s) return undefined;
+            if (s.startsWith('s:')) {
+                // month:y1,y2,...  — years validated against per_year tiles
+                // by the engine on apply (see _clipToAvailableYears).
+                const parts = s.slice(2).split(':');
+                if (parts.length !== 2) return undefined;
+                const month = Number(parts[0]);
+                if (!Number.isFinite(month) || month < 1 || month > 12) return undefined;
+                const yrs = parts[1].split(',').map(Number).filter(n => Number.isFinite(n));
+                if (yrs.length === 0) return undefined;
+                yrs.sort((a, b) => a - b);
+                return { mode: 'selection', selectedYears: yrs, month, years: yrs.slice() };
+            }
             if (s.startsWith('c:')) {
                 // id:cmp:threshold:month — years come later once indices.json
                 // loads (see globe.js bootstrap). Frontend treats the empty
@@ -73,7 +91,7 @@ const SPEC = [
                 if (!['ge','le'].includes(cmp)) return undefined;
                 if (!Number.isFinite(threshold) || !Number.isFinite(month)) return undefined;
                 if (month < 1 || month > 12) return undefined;
-                return { id, cmp, threshold, month, years: [] };
+                return { id, cmp, threshold, month, years: [], mode: 'index' };
             }
             const m = /^(\d{4})-(\d{4})$/.exec(s);
             if (!m) return undefined;

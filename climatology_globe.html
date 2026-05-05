@@ -146,45 +146,75 @@
             <details id="composite-details" class="composite-details" style="margin-top:12px;">
                 <summary>Composite builder <span class="composite-badge">advanced</span></summary>
                 <div class="composite-body">
-                    <label class="field-label" for="composite-index">Index</label>
-                    <select id="composite-index"
-                            title="Which monthly climate index to threshold on. RONI is the ENSO signal with the global warming trend removed — recommended for spanning the full 1950–2026 period.">
-                        <option value="roni" selected>RONI — ENSO (detrended)</option>
-                        <option value="oni">ONI — ENSO (traditional)</option>
-                        <option value="pna">PNA — Pacific/North American</option>
-                        <option value="pdo">PDO — Pacific Decadal Oscillation</option>
-                        <option value="nao">NAO — North Atlantic Oscillation</option>
-                        <option value="ao">AO — Arctic Oscillation</option>
-                        <option value="amm">AMM — Atlantic Meridional Mode</option>
-                        <option value="pmm">PMM — Pacific Meridional Mode</option>
-                    </select>
-                    <p class="field-help" id="composite-index-desc" style="margin-top:4px;"></p>
-                    <div class="composite-thresh-row">
-                        <label class="field-label" for="composite-cmp">Keep years where index is</label>
-                        <div style="display:flex; gap:6px; align-items:center;">
-                            <select id="composite-cmp" style="flex:0 0 auto;" title="Comparison direction.">
-                                <option value="ge" selected>≥</option>
-                                <option value="le">≤</option>
-                            </select>
-                            <input id="composite-threshold" type="number" step="0.1"
-                                   class="range-input" value="1.0"
-                                   title="Threshold value in the index's native units (standardized for PNA/NAO/AO, °C for ONI/RONI).">
-                        </div>
+                    <!-- Mode toggle: index-driven year list vs free-form year picks.
+                         Both modes feed the same engine (state.customRange.years). -->
+                    <div id="composite-mode-toggle" class="composite-mode-toggle" role="tablist">
+                        <button type="button" class="active" data-composite-mode="index"
+                                title="Pick years where a climate index crosses a threshold.">By index</button>
+                        <button type="button" data-composite-mode="selection"
+                                title="Hand-pick any years to composite together.">By selection</button>
                     </div>
-                    <p class="field-help" style="margin-top:6px;">
-                        Threshold applies to the index value in the <strong>current Month</strong>
-                        (below). ONI/RONI are 3-month running means anchored to their central
-                        month, so e.g. <em>January</em> corresponds to DJF.
-                    </p>
-                    <label class="check" style="font-size:0.7rem; margin-top:6px;">
-                        <input type="checkbox" id="toggle-sliding-climo" checked>
-                        Best-match climo per year
-                        <span class="field-help" style="display:block; margin-left:24px; margin-top:2px; font-size:0.62rem;">
-                            Each event year subtracts its closest 30-yr climatology
-                            (8 windows, stepped 5 yr) instead of one fixed period.
-                            Removes warming-trend bias when events span many decades.
-                        </span>
-                    </label>
+
+                    <!-- Mode A: Index-driven (the original composite builder). -->
+                    <div id="composite-mode-index" class="composite-mode-pane">
+                        <label class="field-label" for="composite-index">Index</label>
+                        <select id="composite-index"
+                                title="Which monthly climate index to threshold on. RONI is the ENSO signal with the global warming trend removed — recommended for spanning the full 1950–2026 period.">
+                            <option value="roni" selected>RONI — ENSO (detrended)</option>
+                            <option value="oni">ONI — ENSO (traditional)</option>
+                            <option value="pna">PNA — Pacific/North American</option>
+                            <option value="pdo">PDO — Pacific Decadal Oscillation</option>
+                            <option value="nao">NAO — North Atlantic Oscillation</option>
+                            <option value="ao">AO — Arctic Oscillation</option>
+                            <option value="amm">AMM — Atlantic Meridional Mode</option>
+                            <option value="pmm">PMM — Pacific Meridional Mode</option>
+                        </select>
+                        <p class="field-help" id="composite-index-desc" style="margin-top:4px;"></p>
+                        <div class="composite-thresh-row">
+                            <label class="field-label" for="composite-cmp">Keep years where index is</label>
+                            <div style="display:flex; gap:6px; align-items:center;">
+                                <select id="composite-cmp" style="flex:0 0 auto;" title="Comparison direction.">
+                                    <option value="ge" selected>≥</option>
+                                    <option value="le">≤</option>
+                                </select>
+                                <input id="composite-threshold" type="number" step="0.1"
+                                       class="range-input" value="1.0"
+                                       title="Threshold value in the index's native units (standardized for PNA/NAO/AO, °C for ONI/RONI).">
+                            </div>
+                        </div>
+                        <p class="field-help" style="margin-top:6px;">
+                            Threshold applies to the index value in the <strong>current Month</strong>
+                            (below). ONI/RONI are 3-month running means anchored to their central
+                            month, so e.g. <em>January</em> corresponds to DJF.
+                        </p>
+                        <label class="check" style="font-size:0.7rem; margin-top:6px;">
+                            <input type="checkbox" id="toggle-sliding-climo" checked>
+                            Best-match climo per year
+                            <span class="field-help" style="display:block; margin-left:24px; margin-top:2px; font-size:0.62rem;">
+                                Each event year subtracts its closest 30-yr climatology
+                                (8 windows, stepped 5 yr) instead of one fixed period.
+                                Removes warming-trend bias when events span many decades.
+                            </span>
+                        </label>
+                    </div>
+
+                    <!-- Mode B: Free-form year picker. Year chips populate from
+                         the per-year tile manifest at boot. Composite uses the
+                         globally selected Month. -->
+                    <div id="composite-mode-selection" class="composite-mode-pane" hidden>
+                        <p class="field-help" style="margin-top:0;">
+                            Pick any years to composite together. The composite uses the
+                            <strong>current Month</strong> selected globally.
+                        </p>
+                        <div class="composite-quick-actions">
+                            <button type="button" data-sel-act="none">Clear</button>
+                            <button type="button" data-sel-act="all">All</button>
+                            <button type="button" data-sel-act="invert">Invert</button>
+                        </div>
+                        <div id="composite-year-chips" class="composite-year-chips" aria-label="Pick years to composite"></div>
+                    </div>
+
+                    <!-- Shared output / apply button — populated by either mode. -->
                     <div class="composite-events" id="composite-events" aria-live="polite">—</div>
                     <button id="composite-apply-btn" type="button" class="range-compute">
                         <span id="composite-apply-label">Apply composite</span>
