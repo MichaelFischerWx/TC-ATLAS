@@ -82,6 +82,9 @@ export class TrackOverlay {
 
             // Filter to fixes within the (year, month) window. For year=null
             // we accept any year. For month=null we accept any month.
+            // Prefer the pre-computed `_y` / `_m` integers attached at load
+            // time (climatology_globe.js#_annotateTracks); fall back to a
+            // live parseUTC for compatibility with un-annotated callers.
             let pts;
             if (year == null && month == null) {
                 pts = track;
@@ -89,16 +92,14 @@ export class TrackOverlay {
                 pts = [];
                 for (let j = 0; j < track.length; j++) {
                     const p = track[j];
-                    if (!p || !p.t) continue;
-                    // IBTrACS timestamps in our JSON look like
-                    // "2020-09-12T04:00" — no timezone designator. Per the
-                    // ISO 8601 spec / ECMA-262, JS treats unsuffixed
-                    // datetime strings as LOCAL time, which would shift
-                    // every fix by the user's UTC offset and could push a
-                    // fix into the wrong month near boundaries. Force UTC.
-                    const dt = parseUTC(p.t);
-                    const y = dt.getUTCFullYear();
-                    const m = dt.getUTCMonth() + 1;
+                    if (!p) continue;
+                    let y = p._y, m = p._m;
+                    if (y == null) {
+                        if (!p.t) continue;
+                        const dt = parseUTC(p.t);
+                        y = dt.getUTCFullYear();
+                        m = dt.getUTCMonth() + 1;
+                    }
                     if (year != null && y !== year) continue;
                     if (month != null && m !== month) continue;
                     pts.push(p);

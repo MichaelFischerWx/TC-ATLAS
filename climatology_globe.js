@@ -37,6 +37,25 @@ const BASIN_NAMES = {
     NI: 'N. Indian', SI: 'S. Indian', SP: 'S. Pacific', SA: 'S. Atlantic',
 };
 
+// Pre-compute the UTC year+month integer on each best-track fix once at load
+// time. Without this, every TrackOverlay.render() call re-parses ~400 k
+// timestamps via parseUTC + getUTCFullYear + getUTCMonth — the dominant cost
+// on every field/month change.
+function _annotateTracks(tracks) {
+    const sids = Object.keys(tracks);
+    for (let i = 0; i < sids.length; i++) {
+        const arr = tracks[sids[i]];
+        if (!arr) continue;
+        for (let j = 0; j < arr.length; j++) {
+            const p = arr[j];
+            if (!p || !p.t || p._y != null) continue;  // already annotated
+            const dt = parseUTC(p.t);
+            p._y = dt.getUTCFullYear();
+            p._m = dt.getUTCMonth() + 1;
+        }
+    }
+}
+
 function loadTracks() {
     return fetch(TRACKS_MANIFEST)
         .then(r => { if (!r.ok) throw new Error('manifest unavailable'); return r.json(); })
@@ -46,12 +65,14 @@ function loadTracks() {
         })
         .then(chunkArr => {
             chunkArr.forEach(c => Object.assign(_tracks, c));
+            _annotateTracks(_tracks);
             console.log('[ClimGlobe] Loaded tracks for ' + Object.keys(_tracks).length + ' storms');
         })
         .catch(() => fetch(TRACKS_JSON_FALLBACK)
             .then(r => r.json())
             .then(d => {
                 _tracks = d;
+                _annotateTracks(_tracks);
                 console.log('[ClimGlobe] Loaded tracks (single-file fallback) for ' + Object.keys(d).length + ' storms');
             })
             .catch(err => console.error('[ClimGlobe] Track load failed:', err)));
@@ -67,7 +88,11 @@ function loadStormMeta() {
         .catch(err => console.warn('[ClimGlobe] Storm metadata load failed:', err));
 }
 
-function refreshTracks() {
+// Track render is expensive (~400k fix iterations + per-storm Line2 build).
+// 'field-updated' fires on every field/level/colormap change too, so dedupe
+// against (year, month, visible). Field-only changes become no-ops.
+let _lastRenderKey = null;
+function refreshTracks(force) {
     if (!_overlay || !window.envGlobe) return;
     const s = window.envGlobe.state || {};
     const year = (s.year != null && Number.isFinite(s.year)) ? s.year : null;
@@ -75,7 +100,12 @@ function refreshTracks() {
     const toggle = document.getElementById('toggle-tracks');
     const visible = toggle ? toggle.checked : true;
     _overlay.setVisible(visible);
-    if (visible) _overlay.render(_tracks, year, month);
+    if (!visible) return;
+
+    const key = year + '|' + month;
+    if (!force && key === _lastRenderKey) return;  // nothing track-relevant changed
+    _lastRenderKey = key;
+    _overlay.render(_tracks, year, month);
 }
 
 function setSelect(id, value) {
@@ -557,7 +587,9 @@ function init() {
     });
 
     document.addEventListener('change', (e) => {
-        if (e.target && e.target.id === 'toggle-tracks') refreshTracks();
+        // Toggle-tracks changes visibility but not (year, month), so force
+        // a re-render past the dedupe guard so the lines paint immediately.
+        if (e.target && e.target.id === 'toggle-tracks') refreshTracks(true);
     });
 
     bindCorrelationPanel();
