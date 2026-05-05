@@ -76,7 +76,9 @@ export class TrackOverlay {
      * @param {number|number[]|null} year
      *        4-digit year, an array of 4-digit years (composite year set),
      *        or null for "any year"
-     * @param {number|null} month  1..12, or null for "all months"
+     * @param {number|number[]|null} month
+     *        1..12, an array of months (multi-month composite), or null
+     *        for "all months"
      */
     render(allTracks, year, month) {
         this._clear();
@@ -99,6 +101,20 @@ export class TrackOverlay {
             yearSet = new Set([year]);
         }
 
+        // Same normalization for month — multi-month composites pass an
+        // array (e.g. [7, 8, 9] for JAS). Without this the inner loop
+        // compared `m !== [7,8,9]` (always true) and painted nothing.
+        let monthSet = null;
+        if (Array.isArray(month)) {
+            if (month.length === 0) {
+                console.log('[TrackOverlay] empty month-list filter — nothing to render');
+                return;
+            }
+            monthSet = new Set(month);
+        } else if (month != null) {
+            monthSet = new Set([month]);
+        }
+
         const sids = Object.keys(allTracks);
         let kept = 0;
         // Pre-allocate growable typed-array surrogates. We don't know total
@@ -118,7 +134,7 @@ export class TrackOverlay {
             // time (climatology_globe.js#_annotateTracks); fall back to a
             // live parseUTC for compatibility with un-annotated callers.
             let pts;
-            if (yearSet == null && month == null) {
+            if (yearSet == null && monthSet == null) {
                 pts = track;
             } else {
                 pts = [];
@@ -132,8 +148,8 @@ export class TrackOverlay {
                         y = dt.getUTCFullYear();
                         m = dt.getUTCMonth() + 1;
                     }
-                    if (yearSet != null && !yearSet.has(y)) continue;
-                    if (month != null && m !== month) continue;
+                    if (yearSet  != null && !yearSet.has(y))  continue;
+                    if (monthSet != null && !monthSet.has(m)) continue;
                     pts.push(p);
                 }
             }
