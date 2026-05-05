@@ -246,7 +246,19 @@ export function requestField(name, { month, level, kind = 'mean', period = 'defa
             year,
         };
     }
-    if (!hit) fetchTile(name, r.group, r.meta, month, useLevel, kind, eff, year);
+    if (!hit) {
+        // Synthetic fields (e.g., 'corr' from the Index Correlation panel)
+        // only ever exist via setFieldCache — they're computed client-side
+        // and do not have any tile path on GCS. Skipping the fetch here
+        // avoids a 404 storm any time the cache miss matches: e.g., when
+        // the user changes the active climatology period after computing
+        // a correlation, or when the GIF exporter scrubs to a month that
+        // hasn't been computed yet (the beforeAnnualFrame hook will fill
+        // it in shortly).
+        if (r.group !== '_synthetic') {
+            fetchTile(name, r.group, r.meta, month, useLevel, kind, eff, year);
+        }
+    }
     return null;
 }
 
@@ -443,6 +455,9 @@ export function prefetchField(name, { level = null, months = [1,2,3,4,5,6,7,8,9,
     const eff = resolvePeriod(period);
     const r = resolveField(name, eff);
     if (!r) return;
+    // Synthetic fields don't have GCS tiles — never prefetch (mirror the
+    // requestField guard above).
+    if (r.group === '_synthetic') return;
     if (kind === 'std' && r.meta.has_std === false) return;
     // Derived-σ vars (wspd / mse / dls) declare has_mean: false in their
     // manifest entry — the mean is computed client-side from components,

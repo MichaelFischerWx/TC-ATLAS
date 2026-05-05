@@ -432,9 +432,13 @@
             <p class="field-help" style="margin: 2px 0 4px 24px; font-size:0.62rem;">
                 IBTrACS storms active during the displayed month, colored by Saffir-Simpson category.
             </p>
-            <label class="check" style="margin: 0 0 8px 24px; font-size:0.7rem;"
+            <label class="check" style="margin: 0 0 4px 24px; font-size:0.7rem;"
                    title="Paint storm tracks for every month of the active year(s) instead of only the displayed month. Field display stays on the chosen month.">
                 <input type="checkbox" id="toggle-tracks-all-months"> Show all months in active year(s)
+            </label>
+            <label class="check" style="margin: 0 0 8px 24px; font-size:0.7rem;"
+                   title="Restrict the track overlay to the years in the active climatology window (e.g. 1991-2020) instead of the full IBTrACS record.">
+                <input type="checkbox" id="toggle-tracks-climo-window"> Limit to the active climatology window
             </label>
             <!-- Data overlays — change with what you're studying. -->
             <label class="check"><input type="checkbox" id="toggle-contours"> Contours</label>

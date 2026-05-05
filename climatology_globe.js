@@ -214,6 +214,28 @@ function refreshTracks(force) {
     const wantAllMonths = !!(allMonthsCB && allMonthsCB.checked);
     if (wantAllMonths && yearScopeActive) monthFilter = null;
 
+    // "Limit to the active climatology window" — when no other year
+    // scope is active, restrict the track overlay to the years inside
+    // the selected 30-yr climatology window (e.g. 1991-2020). Useful
+    // when comparing a climatology field to the storms that actually
+    // occurred during the same baseline. No-op if a composite or
+    // single-year scope is already in play (those windows take
+    // precedence). The active window is encoded as "<start>-<end>"
+    // in state.climatologyPeriod, with 'default' meaning 1991-2020.
+    const climoWindowCB = document.getElementById('toggle-tracks-climo-window');
+    const wantClimoWindow = !!(climoWindowCB && climoWindowCB.checked);
+    if (wantClimoWindow && !yearScopeActive) {
+        const cp = s.climatologyPeriod || 'default';
+        const period = (cp === 'default') ? '1991-2020' : cp;
+        const m = /^(\d{4})-(\d{4})$/.exec(period);
+        if (m) {
+            const start = +m[1], end = +m[2];
+            const yrs = [];
+            for (let y = start; y <= end; y++) yrs.push(y);
+            yearFilter = yrs;
+        }
+    }
+
     // Build a stable key that accounts for the year-list shape.
     const yearKey  = Array.isArray(yearFilter)  ? yearFilter.join(',')  : String(yearFilter);
     const monthKey = Array.isArray(monthFilter) ? monthFilter.join(',') : String(monthFilter);
@@ -622,7 +644,12 @@ async function applyCorrelation() {
 
     // Inject the synthetic 'corr' field at the current month so the engine
     // displays it. level=null because corr is a single-level field.
-    setFieldCache('corr', { month, level: null, kind: 'mean', period: 'default', year: null,
+    // Cache against the ACTIVE climatology period — the engine looks up
+    // the corr tile under whichever period is selected, so writing to
+    // state.climatologyPeriod (rather than always 'default') keeps the
+    // tile visible when the user picks 1996-2025 / 1961-1990 / etc.
+    const cachePeriod = app.state.climatologyPeriod || 'default';
+    setFieldCache('corr', { month, level: null, kind: 'mean', period: cachePeriod, year: null,
                             values: r, vmin, vmax });
 
     // ── Update the corr field's display title + footnote so the
@@ -729,6 +756,20 @@ function bindCorrelationPanel() {
                 // Run async; the engine has already fired its 'change' chain
                 // but the corr-tile for the new month doesn't exist yet, so
                 // the globe will be blank until our recompute lands.
+                applyCorrelation().catch(err => console.error('[Correlation]', err));
+            }
+        });
+    }
+
+    // Same story for the climatology-period dropdown: when the user picks
+    // a different 30-yr window (e.g. 1991-2020 → 1996-2025), the engine
+    // looks up the corr cache at the new period — which was never written
+    // since correlation runs only ever cache against the active period at
+    // their compute time. Re-run applyCorrelation on the new period.
+    const climoSel = document.getElementById('climo-period-select');
+    if (climoSel) {
+        climoSel.addEventListener('change', () => {
+            if (_correlationActive && window.envGlobe?.state?.field === 'corr') {
                 applyCorrelation().catch(err => console.error('[Correlation]', err));
             }
         });
@@ -906,7 +947,9 @@ function init() {
         // Toggle-tracks changes visibility but not (year, month), so force
         // a re-render past the dedupe guard so the lines paint immediately.
         if (e.target && (e.target.id === 'toggle-tracks'
-                      || e.target.id === 'toggle-tracks-all-months')) {
+                      || e.target.id === 'toggle-tracks-all-months'
+                      || e.target.id === 'toggle-tracks-climo-window'
+                      || e.target.id === 'climo-period-select')) {
             refreshTracks(true);
             _ga('clim_globe_tracks_toggle', {
                 id: e.target.id,
