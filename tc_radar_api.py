@@ -6720,6 +6720,62 @@ def get_archive_flight_level(
                 obs.setdefault("tdr_wspd_2km", None)
                 obs.setdefault("tdr_wspd_fl_alt", None)
 
+    # ── TDR vertical-velocity interpolation (mirrors the horizontal-wind block) ──
+    # Pairs FL-observed vertical velocity (vert_vel_ms, parsed from VTWND) with
+    # TDR-derived w at 0.5 km, 2.0 km, and the aircraft's GPS altitude. Variable
+    # name depends on which Zarr was loaded (recentered for swath, merged for merge).
+    try:
+        if _tdr_ds is not None:
+            ds, local_idx = _tdr_ds, _tdr_li
+        else:
+            ds, local_idx = resolve_case(case_index, data_type)
+
+        _w_var = None
+        for cand in (
+            "recentered_upward_air_velocity",
+            "merged_upward_air_velocity",
+            "total_recentered_upward_air_velocity",
+        ):
+            if cand in ds:
+                _w_var = cand
+                break
+
+        if _w_var is not None:
+            for intv, obs_list in avg_results.items():
+                if not obs_list:
+                    continue
+                x_arr = np.array([o["x_km"] for o in obs_list], dtype=float)
+                y_arr = np.array([o["y_km"] for o in obs_list], dtype=float)
+
+                tdr_w_05 = _interp_tdr_archive(ds, local_idx, _w_var, 0.5, x_arr, y_arr)
+                tdr_w_20 = _interp_tdr_archive(ds, local_idx, _w_var, 2.0, x_arr, y_arr)
+
+                z_arr = np.array([
+                    (o.get("gps_alt_m") or 0) / 1000.0 for o in obs_list
+                ], dtype=float)
+                if np.any(z_arr > 0):
+                    tdr_w_fl = _interp_tdr_archive_3d(ds, local_idx, _w_var, x_arr, y_arr, z_arr)
+                else:
+                    tdr_w_fl = np.full(len(obs_list), np.nan)
+
+                for i, obs in enumerate(obs_list):
+                    obs["tdr_w_0p5km"] = round(float(tdr_w_05[i]), 2) if not np.isnan(tdr_w_05[i]) else None
+                    obs["tdr_w_2km"] = round(float(tdr_w_20[i]), 2) if not np.isnan(tdr_w_20[i]) else None
+                    obs["tdr_w_fl_alt"] = round(float(tdr_w_fl[i]), 2) if not np.isnan(tdr_w_fl[i]) else None
+        else:
+            for intv, obs_list in avg_results.items():
+                for obs in obs_list:
+                    obs["tdr_w_0p5km"] = None
+                    obs["tdr_w_2km"] = None
+                    obs["tdr_w_fl_alt"] = None
+    except Exception as e:
+        print(f"FL archive TDR w interpolation warning: {e}")
+        for intv, obs_list in avg_results.items():
+            for obs in obs_list:
+                obs.setdefault("tdr_w_0p5km", None)
+                obs.setdefault("tdr_w_2km", None)
+                obs.setdefault("tdr_w_fl_alt", None)
+
     # Summary statistics from raw 1-sec filtered data
     fl_wspds = [o["fl_wspd_ms"] for o in filtered if o.get("fl_wspd_ms") is not None]
     static_pres = [o["static_pres_hpa"] for o in filtered
