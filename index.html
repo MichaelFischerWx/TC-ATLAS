@@ -11,14 +11,14 @@
     </script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="TC-ATLAS: Tropical Cyclone Analysis Tool for Live and Archived Structure. A multi-source platform for exploring tropical cyclone vortex structure with radar, satellite, and environmental data.">
-    <meta name="keywords" content="tropical cyclone, hurricane, radar, TC-ATLAS, TC-RADAR, airborne Doppler, vortex structure, NOAA, HRD, satellite, microwave, IBTrACS">
+    <meta name="description" content="TC-ATLAS: Tropical Cyclone Analysis Tool for Live and Archived Structure. A multi-source platform for exploring tropical cyclone vortex structure with airborne radar, satellite IR/microwave imagery, reconnaissance, ERA5 reanalysis, and best-track climatology with composite + correlation tools.">
+    <meta name="keywords" content="tropical cyclone, hurricane, radar, TC-ATLAS, TC-RADAR, airborne Doppler, vortex structure, NOAA, HRD, satellite, microwave, IBTrACS, ERA5, reanalysis, climatology, ENSO, AMO, RONI">
     <meta name="author" content="Dr. Michael Fischer, University of Miami">
 
     <!-- Open Graph / Social Sharing -->
     <meta property="og:type" content="website">
     <meta property="og:title" content="TC-ATLAS — Tropical Cyclone Analysis Tool for Live and Archived Structure">
-    <meta property="og:description" content="Explore tropical cyclone vortex structure with airborne radar, satellite IR/MW imagery, reconnaissance flight-level data, dropsondes, vortex data messages, and environmental diagnostics.">
+    <meta property="og:description" content="Explore tropical cyclone vortex structure with airborne radar, satellite IR/MW imagery, reconnaissance, dropsondes, vortex data messages, ERA5 reanalysis, and basin-wide best-track climatology with composite + correlation tools.">
     <meta property="og:url" content="https://michaelfischerwx.github.io/TC-ATLAS/">
     <meta property="og:image" content="https://michaelfischerwx.github.io/TC-ATLAS/tc-atlas-preview.png">
     <meta property="og:image:width" content="1200">
@@ -144,19 +144,18 @@
             position: relative;
             z-index: 1;
         }
-        /* Bottom row: 2 cards offset to center-align with the 3-card top row.
-           Each top-row card spans 1/3 of the grid.  Two bottom-row cards should
-           together span 2/3, centered — so they start at column 1 offset by
-           half a column width (0.5fr).  We achieve this by placing them in a
-           nested flex container that spans all 3 columns. */
+        /* Bottom row: 3 cards (Global Archive, Composites, TC Climatology),
+           each sized 1/3 of the row to match the top-row card width. Wraps
+           to two rows at 1100px and stacks vertically at 520px. */
         .platform-grid-bottom {
             grid-column: 1 / -1;          /* span full width */
             display: flex;
+            flex-wrap: wrap;
             justify-content: center;
             gap: 1.5rem;
         }
         .platform-grid-bottom .platform-card {
-            flex: 0 1 calc((100% - 1.5rem) / 3);  /* same width as top-row cards */
+            flex: 0 1 calc((100% - 3rem) / 3);   /* 3 cards × 1/3, accounting for 2 gaps */
         }
         .platform-card {
             background: var(--surface-raised);
@@ -188,6 +187,7 @@
         .card-ir::after { background: linear-gradient(90deg, #06b6d4, #3b82f6); }
         .card-global::after { background: linear-gradient(90deg, #10b981, #06b6d4); }
         .card-composites::after { background: linear-gradient(90deg, #a855f7, #ec4899); }
+        .card-climo::after { background: linear-gradient(90deg, #14b8a6, #2dbda0); }
 
         .card-icon {
             font-size: 2.25rem;
@@ -205,6 +205,7 @@
         .card-ir .card-icon svg         { color: var(--cyan); }
         .card-global .card-icon svg     { color: #34d399; }
         .card-composites .card-icon svg { color: #c4b5fd; }
+        .card-climo .card-icon svg      { color: #2dbda0; }
         .card-title {
             font-size: 1.2rem;
             font-weight: 700;
@@ -537,6 +538,7 @@
                     <li><a href="explorer.html?tab=realtime"><span class="nav-full">Real-Time TDR</span><span class="nav-short">RT TDR</span></a></li>
                     <li><a href="realtime_ir.html"><span class="nav-full">Real-Time Monitor</span><span class="nav-short">RT Monitor</span></a></li>
                     <li><a href="global_archive.html"><span class="nav-full">Global Archive</span><span class="nav-short">Global</span></a></li>
+                    <li><a href="tc_climatology.html"><span class="nav-full">TC Climatology</span><span class="nav-short">Climo</span></a></li>
                     <li><a href="explorer.html?tab=composites"><span class="nav-full">Composites</span><span class="nav-short">Comp.</span></a></li>
                     <li><a href="#about">About</a></li>
                     <li><a href="#cite">Cite</a></li>
@@ -602,7 +604,7 @@
                 <a href="global_archive.html" class="platform-card card-global">
                     <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></div>
                     <div class="card-title">Global Archive</div>
-                    <div class="card-desc">Browse the complete IBTrACS tropical cyclone record from 1842 to present with satellite imagery, intensity timelines, climatology, and multi-storm comparison tools.</div>
+                    <div class="card-desc">Browse the complete IBTrACS tropical cyclone record from 1842 to present with satellite imagery, intensity timelines, reconnaissance, and multi-storm comparison tools.</div>
                     <div class="card-stats">
                         <div><div class="card-stat-val">14,000+</div><div class="card-stat-label">Storms</div></div>
                         <div><div class="card-stat-val">7</div><div class="card-stat-label">Basins</div></div>
@@ -618,6 +620,18 @@
                     <div class="card-stats">
                         <div><div class="card-stat-val">12+</div><div class="card-stat-label">Variables</div></div>
                         <div><div class="card-stat-val">Flexible</div><div class="card-stat-label">Filters</div></div>
+                    </div>
+                    <span class="card-arrow">&rarr;</span>
+                </a>
+
+                <a href="tc_climatology.html" class="platform-card card-climo">
+                    <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 4 9 14 14 0 0 1-4 9 14 14 0 0 1-4-9 14 14 0 0 1 4-9z"/><path d="M5 6c2 1.5 5 2.4 7 2.4S17 7.5 19 6"/><path d="M5 18c2-1.5 5-2.4 7-2.4s5 .9 7 2.4"/></svg></div>
+                    <div class="card-title">TC Climatology</div>
+                    <div class="card-desc">Best-track statistics by basin (ACE, RI, intensity, LMI, seasonal cycles) plus an interactive ERA5 reanalysis globe for compositing TC seasons by climate index, custom year/month, or per-pixel correlation.</div>
+                    <div class="card-stats">
+                        <div><div class="card-stat-val">6</div><div class="card-stat-label">Stat panels</div></div>
+                        <div><div class="card-stat-val">14</div><div class="card-stat-label">Indices</div></div>
+                        <div><div class="card-stat-val">ERA5</div><div class="card-stat-label">Reanalysis</div></div>
                     </div>
                     <span class="card-arrow">&rarr;</span>
                 </a>
@@ -675,8 +689,12 @@
                     <p>Geostationary IR brightness temperatures from GridSat-B1, MergIR, and real-time GOES ABI Band 13 imagery for cloud-top structure.</p>
                 </div>
                 <div class="source-card">
-                    <h4>Environmental Diagnostics</h4>
-                    <p>ERA5 reanalysis and operational SHIPS model parameters providing vertical wind shear, SST, moisture, and other environmental context.</p>
+                    <h4>ERA5 Reanalysis</h4>
+                    <p>Monthly-mean and per-year ERA5 fields (SST, MPI, wind, moisture, MSE, PV, deep-layer shear) on a 3D globe via the <a href="tc_climatology.html">TC Climatology</a> page. Composite TC seasons by climate index, custom year/month, or per-pixel correlation.</p>
+                </div>
+                <div class="source-card">
+                    <h4>SHIPS Diagnostics</h4>
+                    <p>Operational SHIPS model parameters — vertical wind shear, mid-level RH, ocean heat content, and forecast environment context — surfaced inline on each storm's detail card.</p>
                 </div>
                 <div class="source-card">
                     <h4>In-situ Observations</h4>
