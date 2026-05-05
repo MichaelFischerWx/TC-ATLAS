@@ -15,9 +15,13 @@ mergir_cache/
 # Large data (tracked as split files instead)
 ibtracs_tracks.json
 
-# pipeline/refresh_ibtracs.py downloads ~600 MB of source netCDF to this dir;
-# never committed.
-data/_ibtracs_cache/
+# pipeline/refresh_ibtracs.py work dirs:
+#   data/_ibtracs_cache/      — downloaded source netCDF (~600 MB)
+#   data/_ibtracs_smoketest/  — --since-flag sandbox output for diff/inspect
+# Both ephemeral; never commit. Underscore prefix marks them as private to
+# the pipeline so future data/* additions (like data/indices.json) stay
+# trackable without an explicit allow-list.
+data/_ibtracs_*/
 
 # Claude Code working state
 .claude/
