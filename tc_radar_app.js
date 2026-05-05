@@ -661,6 +661,10 @@ function openSidePanel(caseData, fromQuickSelect) {
                 '<div id="fl-archive-ts" class="fl-archive-ts" style="display:none;">' +
                     '<div class="fl-ts-header">' +
                         '<span class="fl-ts-title">' + _icon('plane') + 'Along-Track Time Series</span>' +
+                        '<div class="fl-ts-mode-group" id="arch-fl-mode-group" title="Toggle between horizontal wind and vertical velocity comparison">' +
+                            '<button class="fl-ts-mode-btn active" id="fl-ts-mode-wind" onclick="archFLSetMode(\'wind\')">Wind</button>' +
+                            '<button class="fl-ts-mode-btn" id="fl-ts-mode-w" onclick="archFLSetMode(\'w\')">W</button>' +
+                        '</div>' +
                         '<div class="fl-ts-res-group" id="arch-fl-res-group"></div>' +
                         '<button onclick="archiveSavePlotPNG(\'fl-ts-chart\',\'FL_TimeSeries\')" class="rt-save-png-btn" style="margin-left:4px;" title="Save as PNG"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg></button>' +
                         '<button onclick="archFLCloseTimeSeries()" class="fl-ts-close" title="Close">&times;</button>' +
@@ -12835,8 +12839,8 @@ var _archiveFLActive = false;
 var _archiveFLData = null;
 var _archiveFLTraceIndices = [];  // Plotly trace indices to remove
 
-// Variable config for archive time series (matches real-time _FL_TS_CONFIG)
-var _ARCH_FL_TS_CONFIG = {
+// Variable config for archive time series \u2014 horizontal wind mode (default)
+var _ARCH_FL_TS_CONFIG_WIND = {
     'fl_wspd_ms':       { label: 'FL Wind Speed',    btn: 'FL Wind',   units: 'm/s',  color: '#60a5fa', yaxis: 'y'  },
     'tdr_wspd_fl_alt':  { label: 'TDR at FL Alt',    btn: 'TDR@FL',    units: 'm/s',  color: '#f472b6', yaxis: 'y'  },
     'tdr_wspd_0p5km':   { label: 'TDR Wind 0.5 km',  btn: 'TDR 0.5km', units: 'm/s',  color: '#34d399', yaxis: 'y'  },
@@ -12848,6 +12852,18 @@ var _ARCH_FL_TS_CONFIG = {
     'theta_e':          { label: '\u03b8e',            btn: '\u03b8e',   units: 'K',    color: '#e879f9', yaxis: 'y3' },
     'gps_alt_m':        { label: 'GPS Altitude',      btn: 'Alt',       units: 'm',    color: '#6b7280', yaxis: 'y4' },
 };
+
+// Variable config for archive time series \u2014 vertical velocity (W) mode
+var _ARCH_FL_TS_CONFIG_W = {
+    'vert_vel_ms':   { label: 'FL Vert. Vel.',     btn: 'FL W',      units: 'm/s', color: '#60a5fa', yaxis: 'y' },
+    'tdr_w_fl_alt':  { label: 'TDR W at FL Alt',   btn: 'TDR@FL',    units: 'm/s', color: '#f472b6', yaxis: 'y' },
+    'tdr_w_0p5km':   { label: 'TDR W 0.5 km',      btn: 'TDR 0.5km', units: 'm/s', color: '#34d399', yaxis: 'y' },
+    'tdr_w_2km':     { label: 'TDR W 2.0 km',      btn: 'TDR 2km',   units: 'm/s', color: '#c084fc', yaxis: 'y' },
+};
+
+// Active config \u2014 swapped by archFLSetMode()
+var _ARCH_FL_TS_CONFIG = _ARCH_FL_TS_CONFIG_WIND;
+var _ARCH_FL_TS_MODE = 'wind';  // 'wind' | 'w'
 
 // Multi-resolution config (matches real-time _FL_RES_STYLE)
 var _ARCH_FL_RES_STYLE = {
@@ -12955,6 +12971,13 @@ function _archiveRenderFLOverlay(flData) {
         if (o.tdr_wspd_2km != null) tdrStr += (tdrStr ? '<br>' : '') + 'TDR 2km: ' + o.tdr_wspd_2km.toFixed(1) + ' m/s';
         if (o.tdr_wspd_0p5km != null) tdrStr += (tdrStr ? '<br>' : '') + 'TDR 0.5km: ' + o.tdr_wspd_0p5km.toFixed(1) + ' m/s';
 
+        // Vertical velocity (FL observed + TDR-derived at three heights)
+        var wStr = '';
+        if (o.vert_vel_ms != null) wStr += 'FL W: ' + o.vert_vel_ms.toFixed(1) + ' m/s';
+        if (o.tdr_w_fl_alt != null) wStr += (wStr ? '<br>' : '') + 'TDR W@FL: ' + o.tdr_w_fl_alt.toFixed(1) + ' m/s';
+        if (o.tdr_w_2km != null) wStr += (wStr ? '<br>' : '') + 'TDR W 2km: ' + o.tdr_w_2km.toFixed(1) + ' m/s';
+        if (o.tdr_w_0p5km != null) wStr += (wStr ? '<br>' : '') + 'TDR W 0.5km: ' + o.tdr_w_0p5km.toFixed(1) + ' m/s';
+
         // Build time offset string, handling null/undefined
         var tOffsetMin = (o.time_offset_s != null && isFinite(o.time_offset_s)) ? (o.time_offset_s / 60) : null;
         var timeStr = (o.time || '') + ' UTC';
@@ -12969,13 +12992,24 @@ function _archiveRenderFLOverlay(flData) {
             altStr = 'Alt: ' + o.gps_alt_m.toFixed(0) + ' m (' + altFt + ' ft)<br>';
         }
 
+        // Compass bearing from storm center (0\u00b0 = N, 90\u00b0 = E, \u2026)
+        var bearingStr = '';
+        if (o.x_km != null && o.y_km != null && (o.x_km !== 0 || o.y_km !== 0)) {
+            var bDeg = (Math.atan2(o.x_km, o.y_km) * 180 / Math.PI + 360) % 360;
+            var compass16 = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+            var cardinal = compass16[Math.floor((bDeg + 11.25) / 22.5) % 16];
+            bearingStr = 'Dir from center: ' + bDeg.toFixed(0) + '\u00b0 (' + cardinal + ')<br>';
+        }
+
         texts.push(
             '<b>\u2708 Flight Level</b><br>' +
             'Wind: ' + (ws != null ? ws.toFixed(1) + ' m/s (' + (ws * 1.94384).toFixed(0) + ' kt)' : 'N/A') + '<br>' +
-            'Dir: ' + (o.fl_wdir_deg != null ? o.fl_wdir_deg.toFixed(0) + '\u00b0' : 'N/A') + '<br>' +
+            'Wind Dir: ' + (o.fl_wdir_deg != null ? o.fl_wdir_deg.toFixed(0) + '\u00b0' : 'N/A') + '<br>' +
             altStr +
             (tdrStr ? tdrStr + '<br>' : '') +
-            'R: ' + (o.r_km != null ? o.r_km.toFixed(1) + ' km' : '') + '<br>' +
+            (wStr ? wStr + '<br>' : '') +
+            'Dist. from center: ' + (o.r_km != null ? o.r_km.toFixed(1) + ' km' : '') + '<br>' +
+            bearingStr +
             'Time: ' + timeStr
         );
     }
@@ -13076,7 +13110,9 @@ function _archivePopulateFLVarButtons(flData) {
     var el = document.getElementById('arch-fl-ts-vars');
     if (!el) return;
     var html = '';
-    var defaultActive = ['fl_wspd_ms', 'tdr_wspd_fl_alt', 'tdr_wspd_0p5km', 'tdr_wspd_2km'];
+    var defaultActive = (_ARCH_FL_TS_MODE === 'w')
+        ? ['vert_vel_ms', 'tdr_w_fl_alt', 'tdr_w_0p5km', 'tdr_w_2km']
+        : ['fl_wspd_ms', 'tdr_wspd_fl_alt', 'tdr_wspd_0p5km', 'tdr_wspd_2km'];
     var varKeys = Object.keys(_ARCH_FL_TS_CONFIG);
     for (var vi = 0; vi < varKeys.length; vi++) {
         var vk = varKeys[vi];
@@ -13120,6 +13156,25 @@ function _archFLSetXAxis(mode) {
     if (tBtn) tBtn.classList.toggle('active', mode === 'time');
     if (rBtn) rBtn.classList.toggle('active', mode === 'radius');
     if (_archiveFLData && _archiveFLData.success) _archFLTSRender(_archiveFLData);
+}
+
+// Toggle between horizontal-wind mode and vertical-velocity (W) mode.
+// Swaps the active variable config, repopulates the variable-toggle buttons
+// (so the right defaults light up), and re-renders the chart.
+function archFLSetMode(mode) {
+    if (mode !== 'wind' && mode !== 'w') return;
+    if (_ARCH_FL_TS_MODE === mode) return;
+    _ARCH_FL_TS_MODE = mode;
+    _ARCH_FL_TS_CONFIG = (mode === 'w') ? _ARCH_FL_TS_CONFIG_W : _ARCH_FL_TS_CONFIG_WIND;
+    var wBtn = document.getElementById('fl-ts-mode-wind');
+    var vBtn = document.getElementById('fl-ts-mode-w');
+    if (wBtn) wBtn.classList.toggle('active', mode === 'wind');
+    if (vBtn) vBtn.classList.toggle('active', mode === 'w');
+    _ga('fl_ts_set_mode', { mode: mode });
+    if (_archiveFLData && _archiveFLData.success) {
+        _archivePopulateFLVarButtons(_archiveFLData);
+        _archFLTSRender(_archiveFLData);
+    }
 }
 
 function archFLToggleVar(btnEl) {
@@ -13170,11 +13225,14 @@ function _archFLTSRender(flData) {
     var traces = [];
     var resKeys = ['1s', '10s', '30s'];  // render order: 1s behind, 30s on top
 
+    var inWMode = (_ARCH_FL_TS_MODE === 'w');
+
     for (var si = 0; si < selectedVars.length; si++) {
         var varName = selectedVars[si];
         var cfg = _ARCH_FL_TS_CONFIG[varName];
         if (!cfg) continue;
 
+        // "isWind" here means horizontal-wind variable (drives kt conversion in hover)
         var isWind = (varName === 'fl_wspd_ms' || varName === 'tdr_wspd_fl_alt' ||
                       varName === 'tdr_wspd_0p5km' || varName === 'tdr_wspd_2km');
 
@@ -13200,9 +13258,10 @@ function _archFLTSRender(flData) {
                 var utc = o.time || '';
                 var kt = '';
                 if (isWind && v != null && isFinite(v)) kt = (v * 1.94384).toFixed(1);
-                // For TDR at FL Alt, include the altitude in hover
+                // For TDR at FL Alt (wind or w), include the altitude in hover
                 var altStr = '';
-                if (varName === 'tdr_wspd_fl_alt' && o.gps_alt_m != null && isFinite(o.gps_alt_m)) {
+                if ((varName === 'tdr_wspd_fl_alt' || varName === 'tdr_w_fl_alt') &&
+                    o.gps_alt_m != null && isFinite(o.gps_alt_m)) {
                     altStr = (o.gps_alt_m / 1000).toFixed(2) + ' km';
                 }
                 customdata.push([utc, kt, altStr]);
@@ -13215,6 +13274,10 @@ function _archFLTSRender(flData) {
             } else if (isWind) {
                 hoverTpl = cfg.label + style.suffix + ': %{y} ' + cfg.units +
                     ' (%{customdata[1]} kt)<br>%{customdata[0]} UTC<extra></extra>';
+            } else if (varName === 'tdr_w_fl_alt') {
+                // Show altitude alongside vertical velocity at FL alt
+                hoverTpl = cfg.label + style.suffix + ': %{y} ' + cfg.units +
+                    ' @ %{customdata[2]}<br>%{customdata[0]} UTC<extra></extra>';
             } else {
                 hoverTpl = cfg.label + style.suffix + ': %{y} ' + cfg.units +
                     '<br>%{customdata[0]} UTC<extra></extra>';
@@ -13261,11 +13324,17 @@ function _archFLTSRender(flData) {
             zerolinewidth: 2,
         },
         yaxis: {
-            title: usedAxes['y'] ? { text: 'Wind Speed (m/s)', font: { size: 10, color: '#60a5fa' } } : undefined,
+            title: usedAxes['y'] ? {
+                text: inWMode ? 'Vertical Velocity (m/s)' : 'Wind Speed (m/s)',
+                font: { size: 10, color: '#60a5fa' },
+            } : undefined,
             color: '#60a5fa',
             gridcolor: gridColor,
             side: 'left',
             visible: !!usedAxes['y'],
+            zeroline: inWMode,
+            zerolinecolor: 'rgba(148,163,184,0.4)',
+            zerolinewidth: 1,
         },
         yaxis2: {
             title: usedAxes['y2'] ? { text: 'Pressure (hPa)', font: { size: 10, color: '#fbbf24' } } : undefined,
@@ -13316,7 +13385,13 @@ function _archFLTSRender(flData) {
     // Build max-wind / min-pressure inset annotation with per-resolution values
     // (matches real-time format: "FL Wind max — 1s: 98.7  10s: 83.7  30s: 78.7")
     var insetLines = [];
-    var windVars = [
+    // In W mode show max ascent (\u2191) and max descent (\u2193) instead of just max
+    var windVars = inWMode ? [
+        { key: 'vert_vel_ms',  label: 'FL W' },
+        { key: 'tdr_w_fl_alt', label: 'TDR@FL' },
+        { key: 'tdr_w_0p5km',  label: 'TDR 0.5 km' },
+        { key: 'tdr_w_2km',    label: 'TDR 2.0 km' },
+    ] : [
         { key: 'fl_wspd_ms',      label: 'FL Wind' },
         { key: 'tdr_wspd_fl_alt', label: 'TDR@FL' },
         { key: 'tdr_wspd_0p5km',  label: 'TDR 0.5 km' },
@@ -13325,23 +13400,27 @@ function _archFLTSRender(flData) {
     for (var wi = 0; wi < windVars.length; wi++) {
         var wv = windVars[wi];
         if (selectedVars.indexOf(wv.key) === -1) continue;
-        var row = [];
+        var maxRow = [], minRow = [];
         for (var wr = 0; wr < resKeys.length; wr++) {
             var wResKey = resKeys[wr];
             if (!_archFLResVisible[wResKey]) continue;
             var wObs = _archFLDataForRes(flData, wResKey);
             if (!wObs || wObs.length === 0) continue;
-            var maxVal = null;
+            var maxVal = null, minVal = null;
             for (var mi = 0; mi < wObs.length; mi++) {
                 var wval = wObs[mi][wv.key];
-                if (wval != null && (maxVal === null || wval > maxVal)) maxVal = wval;
+                if (wval == null) continue;
+                if (maxVal === null || wval > maxVal) maxVal = wval;
+                if (minVal === null || wval < minVal) minVal = wval;
             }
-            if (maxVal != null) {
-                row.push(wResKey + ': <b>' + maxVal.toFixed(1) + '</b>');
-            }
+            if (maxVal != null) maxRow.push(wResKey + ': <b>' + maxVal.toFixed(1) + '</b>');
+            if (inWMode && minVal != null) minRow.push(wResKey + ': <b>' + minVal.toFixed(1) + '</b>');
         }
-        if (row.length > 0) {
-            insetLines.push(wv.label + ' max \u2014 ' + row.join('  '));
+        if (maxRow.length > 0) {
+            insetLines.push(wv.label + (inWMode ? ' max \u2191' : ' max') + ' \u2014 ' + maxRow.join('  '));
+        }
+        if (inWMode && minRow.length > 0) {
+            insetLines.push(wv.label + ' max \u2193 \u2014 ' + minRow.join('  '));
         }
     }
     var presVars = [

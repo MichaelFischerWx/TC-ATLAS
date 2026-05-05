@@ -29,58 +29,6 @@
     margin-bottom: 14px;
 }
 
-/* Big primary CTA pinned to the right of the page title. Always points
-   at the working globe so a visitor on either sub-tab has a clear,
-   one-click entry into the most-capable surface. Cyan accent matches
-   the active sub-tab + the rest of the TC-ATLAS palette. */
-.tc-clim-cta-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 10px;
-    padding: 12px 22px;
-    background: linear-gradient(135deg, #2e7dff 0%, #00d4ff 100%);
-    color: #0a1628;
-    text-decoration: none;
-    font-family: 'DM Sans', sans-serif;
-    font-weight: 700;
-    font-size: 0.95rem;
-    letter-spacing: 0.01em;
-    border-radius: 8px;
-    box-shadow: 0 6px 18px rgba(0, 212, 255, 0.25);
-    transition: transform 0.15s, box-shadow 0.15s, filter 0.15s;
-    flex: 0 0 auto;
-}
-.tc-clim-cta-btn:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 8px 22px rgba(0, 212, 255, 0.40);
-    filter: brightness(1.05);
-}
-.tc-clim-cta-btn:focus {
-    outline: 2px solid #00d4ff;
-    outline-offset: 3px;
-}
-.tc-clim-cta-btn svg {
-    width: 22px;
-    height: 22px;
-    flex-shrink: 0;
-}
-.tc-clim-cta-arrow {
-    font-size: 1.05rem;
-    line-height: 1;
-    margin-left: -2px;
-    transition: transform 0.15s;
-}
-.tc-clim-cta-btn:hover .tc-clim-cta-arrow {
-    transform: translateX(3px);
-}
-
-@media (max-width: 720px) {
-    .tc-clim-cta-btn {
-        font-size: 0.86rem;
-        padding: 10px 16px;
-        gap: 8px;
-    }
-}
 .tc-clim-h1 {
     margin: 0 0 4px 0;
     font-size: 1.5rem;
