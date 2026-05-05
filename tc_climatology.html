@@ -164,6 +164,95 @@
                     </div>
                 </div>
             </div>
+
+            <!-- ── Featured TC-oriented views ────────────────────
+                 Each tile deep-links into climatology_globe.html with
+                 URL state pre-loaded via the engine's url_state.js
+                 encoding (?f=field&m=month&L=level&d=decompose&cr=…).
+                 Thumbnails for tiles 4–6 are TODO (will show the
+                 caption-only fallback via onerror until added). -->
+            <h3 class="tc-clim-gallery-heading">Featured views</h3>
+            <p class="tc-clim-gallery-sub">Click a tile to open the globe pre-loaded into a TC-relevant scene.</p>
+            <div class="tc-clim-gallery">
+
+                <!-- 1. Monsoon — JAS rainfall, the Atlantic seedbed -->
+                <a class="tc-clim-tile" href="climatology_globe.html#f=tp&amp;m=8"
+                   onclick="if(typeof _ga==='function')_ga('tc_clim_tile_click',{tile:'monsoon_jas'})">
+                    <div class="tc-clim-tile-thumb">
+                        <img src="assets/gallery/monsoon_example.jpg" alt=""
+                             loading="lazy" onerror="this.style.display='none'">
+                    </div>
+                    <div class="tc-clim-tile-body">
+                        <div class="tc-clim-tile-title">JAS monsoon precipitation</div>
+                        <div class="tc-clim-tile-desc">Total precipitation in August. The W. African + Indian summer monsoons — seedbed for African Easterly Waves that grow into Atlantic TCs.</div>
+                    </div>
+                </a>
+
+                <!-- 2. El Niño SST anomaly composite — Sep -->
+                <a class="tc-clim-tile" href="climatology_globe.html#f=sst&amp;d=anomaly&amp;cr=c:roni:ge:1.0:9&amp;m=9"
+                   onclick="if(typeof _ga==='function')_ga('tc_clim_tile_click',{tile:'enso_composite'})">
+                    <div class="tc-clim-tile-thumb">
+                        <img src="assets/gallery/enso_example.jpg" alt=""
+                             loading="lazy" onerror="this.style.display='none'">
+                    </div>
+                    <div class="tc-clim-tile-body">
+                        <div class="tc-clim-tile-title">El Niño SST anomaly · Sep</div>
+                        <div class="tc-clim-tile-desc">Composite of years where RONI ≥ +1.0 in September — the warm Pacific tongue + cool W. Atlantic pattern that suppresses Atlantic TC activity.</div>
+                    </div>
+                </a>
+
+                <!-- 3. Walker circulation — χ at 200 hPa -->
+                <a class="tc-clim-tile" href="climatology_globe.html#f=chi&amp;L=200&amp;m=1"
+                   onclick="if(typeof _ga==='function')_ga('tc_clim_tile_click',{tile:'walker_chi'})">
+                    <div class="tc-clim-tile-thumb">
+                        <img src="assets/gallery/walker_circulation_example.jpg" alt=""
+                             loading="lazy" onerror="this.style.display='none'">
+                    </div>
+                    <div class="tc-clim-tile-body">
+                        <div class="tc-clim-tile-title">Walker circulation · χ at 200 hPa</div>
+                        <div class="tc-clim-tile-desc">Velocity potential climatology at upper levels. Tropical large-scale rising/sinking branches that ENSO modulates — collapsed Walker → enhanced Atlantic shear.</div>
+                    </div>
+                </a>
+
+                <!-- 4. MPI climatology — Sep -->
+                <a class="tc-clim-tile" href="climatology_globe.html#f=mpi&amp;m=9"
+                   onclick="if(typeof _ga==='function')_ga('tc_clim_tile_click',{tile:'mpi_sep'})">
+                    <div class="tc-clim-tile-thumb tc-clim-tile-thumb-placeholder" data-grad="mpi">
+                        <img src="assets/gallery/mpi_sep.jpg" alt=""
+                             loading="lazy" onerror="this.style.display='none'">
+                    </div>
+                    <div class="tc-clim-tile-body">
+                        <div class="tc-clim-tile-title">Maximum potential intensity · Sep</div>
+                        <div class="tc-clim-tile-desc">Bister–Emanuel MPI from ERA5 at the Atlantic peak. Theoretical upper bound on TC wind speed given the local SST + atmospheric profile (computed via Gilford's tcpyPI).</div>
+                    </div>
+                </a>
+
+                <!-- 5. SST × Atlantic ACE correlation — June -->
+                <a class="tc-clim-tile" href="climatology_globe.html#f=sst&amp;m=6"
+                   onclick="if(typeof _ga==='function')_ga('tc_clim_tile_click',{tile:'sst_ace_corr'})">
+                    <div class="tc-clim-tile-thumb tc-clim-tile-thumb-placeholder" data-grad="corr">
+                        <img src="assets/gallery/sst_ace_corr_jun.jpg" alt=""
+                             loading="lazy" onerror="this.style.display='none'">
+                    </div>
+                    <div class="tc-clim-tile-body">
+                        <div class="tc-clim-tile-title">SST &times; Atlantic ACE — June</div>
+                        <div class="tc-clim-tile-desc">Pre-season SST as an Atlantic-ACE predictor. Land on June SST, then open <em>Index Correlation</em> in the sidebar and choose <strong>ACE — N. Atlantic</strong> to compute the per-pixel r-map.</div>
+                    </div>
+                </a>
+
+                <!-- 6. Deep-layer shear — Sep -->
+                <a class="tc-clim-tile" href="climatology_globe.html#f=dls&amp;m=9"
+                   onclick="if(typeof _ga==='function')_ga('tc_clim_tile_click',{tile:'dls_sep'})">
+                    <div class="tc-clim-tile-thumb tc-clim-tile-thumb-placeholder" data-grad="shear">
+                        <img src="assets/gallery/dls_sep.jpg" alt=""
+                             loading="lazy" onerror="this.style.display='none'">
+                    </div>
+                    <div class="tc-clim-tile-body">
+                        <div class="tc-clim-tile-title">Deep-layer shear · Sep</div>
+                        <div class="tc-clim-tile-desc">|⟨V₂₀₀⟩ − ⟨V₈₅₀⟩| from monthly-mean winds. The shear corridor over the Atlantic that limits MDR genesis and reorganizes mature TCs.</div>
+                    </div>
+                </a>
+            </div>
         </section>
     </main>
 

@@ -97,3 +97,90 @@
 #tc-clim-globe .climgl-launch-card {
     max-width: 760px;
 }
+
+/* ── Featured-views gallery (2×3 tile grid) ──────────────── */
+.tc-clim-gallery-heading {
+    margin: 36px 0 4px 0;
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--text);
+    text-align: center;
+}
+.tc-clim-gallery-sub {
+    margin: 0 0 18px 0;
+    text-align: center;
+    color: var(--text-dim, #94a3b8);
+    font-size: 0.84rem;
+}
+.tc-clim-gallery {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 18px;
+    margin-bottom: 32px;
+}
+@media (max-width: 1100px) {
+    .tc-clim-gallery { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 640px) {
+    .tc-clim-gallery { grid-template-columns: 1fr; }
+}
+
+.tc-clim-tile {
+    display: flex;
+    flex-direction: column;
+    background: var(--surface-raised, rgba(255,255,255,0.03));
+    border: 1px solid var(--border, rgba(255,255,255,0.08));
+    border-radius: 10px;
+    overflow: hidden;
+    text-decoration: none;
+    color: inherit;
+    transition: border-color 0.18s, transform 0.18s, box-shadow 0.18s;
+}
+.tc-clim-tile:hover {
+    border-color: rgba(0,212,255,0.45);
+    transform: translateY(-2px);
+    box-shadow: 0 8px 22px rgba(0,0,0,0.28);
+}
+
+.tc-clim-tile-thumb {
+    aspect-ratio: 16 / 9;
+    background: linear-gradient(135deg, #0f1d36, #142a52);
+    overflow: hidden;
+    position: relative;
+}
+.tc-clim-tile-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+/* Placeholder gradients for tiles whose thumbnails haven't been
+   captured yet. <img onerror> hides itself, leaving the gradient
+   visible underneath. data-grad swaps palettes per tile so the
+   wall-of-tiles doesn't look flat while screenshots are pending. */
+.tc-clim-tile-thumb-placeholder[data-grad="mpi"]   { background: linear-gradient(135deg, #f59e0b, #ef4444); }
+.tc-clim-tile-thumb-placeholder[data-grad="corr"]  { background: linear-gradient(135deg, #2e7dff, #ef4444); }
+.tc-clim-tile-thumb-placeholder[data-grad="shear"] { background: linear-gradient(135deg, #34d399, #fb923c); }
+.tc-clim-tile-thumb-placeholder::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(circle at 30% 25%, rgba(255,255,255,0.18) 0%, rgba(0,0,0,0) 55%);
+}
+
+.tc-clim-tile-body {
+    padding: 12px 14px 14px;
+}
+.tc-clim-tile-title {
+    font-weight: 600;
+    color: var(--text);
+    font-size: 0.92rem;
+    margin-bottom: 4px;
+}
+.tc-clim-tile-desc {
+    color: var(--text-dim, #94a3b8);
+    font-size: 0.78rem;
+    line-height: 1.45;
+}
+.tc-clim-tile-desc strong { color: var(--text); }
