@@ -84,18 +84,40 @@
     margin-bottom: 14px;
 }
 
-/* ── Reanalysis Globe launch card ──────────────────────────── */
+/* ── Reanalysis Globe sub-view layout ──────────────────────── */
+/* The Featured-views gallery is the primary surface a visitor sees
+   on this sub-tab — the launcher card is supporting context. We
+   keep the DOM in semantic reading order (launcher → gallery) for
+   accessibility but flip the visual order via flex `order` so the
+   tiles render first without needing to scroll past a 5-bullet
+   launch card. */
+#tc-clim-globe {
+    display: flex;
+    flex-direction: column;
+}
+#tc-clim-globe > .climgl-launch          { order: 2; }
+#tc-clim-globe > .tc-clim-gallery-heading,
+#tc-clim-globe > .tc-clim-gallery-sub,
+#tc-clim-globe > .tc-clim-gallery        { order: 1; }
+
 /* The .climgl-launch / .climgl-launch-card classes are reused
    from global_archive_styles.css; minor tweak for tc_climatology
    so the card sits comfortably without the storm-browser sidebar
    chrome around it. */
 #tc-clim-globe .climgl-launch {
-    margin: 24px 0;
+    margin: 12px 0 24px;
     display: flex;
     justify-content: center;
 }
 #tc-clim-globe .climgl-launch-card {
     max-width: 760px;
+}
+
+/* When the gallery is the first thing on the page, give the
+   "Featured views" heading a hair more breathing room so it doesn't
+   crash into the sub-tab strip directly above. */
+#tc-clim-globe > .tc-clim-gallery-heading {
+    margin-top: 24px;
 }
 
 /* ── Featured-views gallery (2×3 tile grid) ──────────────── */

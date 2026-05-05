@@ -1623,8 +1623,13 @@ function _readHashParams() {
 }
 
 function _applyHashParams(params) {
-    if (params.sub === 'globe') _switchSubview('globe');
-    else _switchSubview('stats');
+    // Default sub-view = globe. Reanalysis Globe has more capability
+    // (composite builder, 14 indices, correlation, IBTrACS overlay) and
+    // its featured-views gallery makes a stronger landing surface than
+    // the chart grid. Stats sub-view loads on explicit #sub=stats only,
+    // including the redirect from old global_archive.html?#tab=climatology.
+    if (params.sub === 'stats') _switchSubview('stats');
+    else _switchSubview('globe');
 
     if (params.modal) {
         var openers = {

@@ -84,13 +84,13 @@
                 </div>
             </div>
             <div class="tc-clim-subnav" role="tablist" aria-label="TC Climatology view">
-                <button type="button" class="tc-clim-subnav-btn active"
-                        data-sub="stats" role="tab" aria-selected="true"
+                <button type="button" class="tc-clim-subnav-btn"
+                        data-sub="stats" role="tab" aria-selected="false"
                         title="ACE, peak-intensity, RI, LMI distributions and seasonal cycles by basin (IBTrACS v04).">
                     Best-Track Statistics
                 </button>
-                <button type="button" class="tc-clim-subnav-btn"
-                        data-sub="globe" role="tab" aria-selected="false"
+                <button type="button" class="tc-clim-subnav-btn active"
+                        data-sub="globe" role="tab" aria-selected="true"
                         title="3D ERA5 reanalysis globe with IBTrACS overlay — composites by climate index or custom year/month, plus per-pixel index correlation maps.">
                     Reanalysis Globe
                 </button>
@@ -98,7 +98,7 @@
         </div>
 
         <!-- ── Sub-view A: Best-Track Statistics ──────────────── -->
-        <section id="tc-clim-stats" class="tc-clim-subview" role="tabpanel" aria-label="Best-Track Statistics">
+        <section id="tc-clim-stats" class="tc-clim-subview" role="tabpanel" aria-label="Best-Track Statistics" hidden>
             <div class="clim-layout">
                 <div class="clim-header">
                     <h2>Global Tropical Cyclone Climatology</h2>
@@ -133,8 +133,12 @@
             </div>
         </section>
 
-        <!-- ── Sub-view B: Reanalysis Globe (launch card) ─────── -->
-        <section id="tc-clim-globe" class="tc-clim-subview" role="tabpanel" aria-label="Reanalysis Globe" hidden>
+        <!-- ── Sub-view B: Reanalysis Globe (default sub-view) ───
+             Layout order is gallery FIRST, then the launcher card.
+             A visitor lands on the tiles directly without having to
+             scroll past a 5-bullet launch card. The launcher stays
+             below as the "if you want a blank canvas" entry point. -->
+        <section id="tc-clim-globe" class="tc-clim-subview" role="tabpanel" aria-label="Reanalysis Globe">
             <div class="climgl-launch">
                 <div class="climgl-launch-card">
                     <div class="climgl-launch-icon" aria-hidden="true">
