@@ -1070,6 +1070,7 @@ function _addTrackPolyline(coords, isTC, segColor, storm) {
 }
 
 window.setMapView = function (mode) {
+    if (mapViewMode !== mode) _ga('ga_map_view_change', { mode: mode });
     mapViewMode = mode;
     // Update toggle buttons
     document.querySelectorAll('.view-toggle-btn').forEach(function (btn) {
@@ -1764,6 +1765,7 @@ var hovmollerVisible = false;   // toggle state
 
 window.toggleHovmoller = function () {
     if (!selectedStorm) return;
+    _ga('ga_toggle_hovmoller', { sid: selectedStorm.sid, will_show: !hovmollerVisible });
     var scrollWrap = document.getElementById('hovmoller-scroll-wrap');
     var timelineEl = document.getElementById('timeline-chart');
     var modelCtrl = document.getElementById('model-chart-controls');
@@ -5269,6 +5271,7 @@ function _showCustomRange(show) {
 }
 
 window.openIntensityChangeModal = function () {
+    _ga('ga_open_ri_modal', {});
     document.getElementById('intensity-change-modal').style.display = 'flex';
     document.body.style.overflow = 'hidden';
     document.body.classList.add('modal-open');
@@ -6441,6 +6444,7 @@ window.toggleGlobalNexradOverlay = function () {
     var controls = document.getElementById('ga-nexrad-controls');
 
     if (_gaNexradVisible) {
+        _ga('ga_nexrad_toggle', { visible: false, sid: selectedStorm ? selectedStorm.sid : null });
         _gaNexradVisible = false;
         if (btn) btn.innerHTML = _icon('tornado') + 'Ground Radar';
         if (controls) controls.style.display = 'none';
@@ -6448,6 +6452,7 @@ window.toggleGlobalNexradOverlay = function () {
         return;
     }
 
+    _ga('ga_nexrad_toggle', { visible: true, sid: selectedStorm ? selectedStorm.sid : null });
     _gaNexradVisible = true;
     if (btn) btn.innerHTML = _icon('tornado') + 'Hide Ground Radar';
     if (controls) controls.style.display = '';
@@ -10699,6 +10704,7 @@ window.toggleGlobalFLOverlay = function () {
     var controls = document.getElementById('ga-fl-controls');
 
     if (_gaFLVisible) {
+        _ga('ga_fl_toggle', { visible: false, sid: selectedStorm ? selectedStorm.sid : null });
         _gaFLVisible = false;
         if (btn) btn.innerHTML = _icon('plane') + 'Recon';
         if (controls) controls.style.display = 'none';
@@ -10706,6 +10712,7 @@ window.toggleGlobalFLOverlay = function () {
         return;
     }
 
+    _ga('ga_fl_toggle', { visible: true, sid: selectedStorm ? selectedStorm.sid : null });
     _gaFLVisible = true;
     if (btn) btn.textContent = 'Hide Recon';
     if (controls) controls.style.display = '';
