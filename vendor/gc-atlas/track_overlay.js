@@ -21,7 +21,14 @@ import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { latLonToVec3, greatCircleArc } from './arc.js';
 
 const TRACK_RADIUS = 1.002;
-const SEGMENT_RES = 24;          // points per segment of the great-circle arc
+// Sub-points per fix-to-fix step. IBTrACS fixes are 6-hourly (~150–500 km
+// apart for typical storm speeds), short enough that a straight chord on
+// the sphere is visually indistinguishable from a great-circle arc at
+// globe-view zoom. SEGMENT_RES=1 → no interpolation = one GPU segment per
+// fix-step. Was 24, which spent ~95% of the GPU budget on micro-arcs that
+// didn't change a pixel — the dominant lag source for big composites
+// (30 yr × all months ≈ 2 M segments → ~96 k segments here).
+const SEGMENT_RES = 1;
 
 // Saffir-Simpson palette — must match getIntensityColor() in global_archive.js.
 function intensityColor(vmaxKt) {
