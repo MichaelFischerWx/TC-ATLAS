@@ -793,6 +793,20 @@ function init() {
         }
     };
 
+    // GIF-export per-frame hook: when an annual-cycle GIF is being
+    // captured AND the user is in correlation mode, re-run the
+    // correlation for each month before the frame is captured. Without
+    // this, only the originally-computed month had a corr tile and the
+    // other 11 frames painted empty. applyCorrelation reads state.month
+    // (which the gif exporter has already updated) so each call computes
+    // the right month's r-map.
+    window.envGlobe.beforeAnnualFrame = async () => {
+        if (window.envGlobe.state.field === 'corr' && _correlationActive) {
+            try { await applyCorrelation(); }
+            catch (err) { console.warn('[ClimGlobe] beforeAnnualFrame correlation recompute failed:', err); }
+        }
+    };
+
     _ga('clim_globe_page_load');
 
     // Listen for composite + field changes via the engine's emitter so we

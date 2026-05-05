@@ -384,7 +384,14 @@ export class GifExporter {
     }
 
     /** Capture mode = 'annual': step months 1..12 and capture one frame per
-     *  month. Waits up to 3 s per month for tiles to finish loading. */
+     *  month. Waits up to 3 s per month for tiles to finish loading.
+     *
+     *  If the app exposes an async `beforeAnnualFrame(month)` hook, it is
+     *  awaited after setState but before the tile-ready wait. Used by
+     *  the Index Correlation panel (climatology_globe.js) to recompute
+     *  the synthetic 'corr' field for each month — without the hook,
+     *  only the originally-computed month's correlation is in cache and
+     *  the other 11 frames paint empty. */
     async captureAnnual({ frameDelayMs = 220, onProgress } = {}) {
         const priorMonth = this.app.state.month;
         const imgs = [];
@@ -392,6 +399,14 @@ export class GifExporter {
         for (let i = 0; i < months.length; i++) {
             const m = months[i];
             this.app.setState({ month: m });
+            // App-level hook for per-month side-effects (e.g. recomputing
+            // a synthetic field that depends on the active month). Resolves
+            // before we start the tile-ready wait so the new field has a
+            // chance to register.
+            if (typeof this.app.beforeAnnualFrame === 'function') {
+                try { await this.app.beforeAnnualFrame(m); }
+                catch (e) { console.warn('[gif] beforeAnnualFrame hook threw:', e); }
+            }
             // Wait for tiles.
             const t0 = performance.now();
             while (!this.app.getIsReady() && performance.now() - t0 < 3000) {
@@ -404,6 +419,9 @@ export class GifExporter {
         }
         // Restore.
         this.app.setState({ month: priorMonth });
+        if (typeof this.app.beforeAnnualFrame === 'function') {
+            try { await this.app.beforeAnnualFrame(priorMonth); } catch (e) { /* ignore */ }
+        }
         return this._encode(imgs, frameDelayMs);
     }
 
