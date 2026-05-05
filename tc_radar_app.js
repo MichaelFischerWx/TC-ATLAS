@@ -13001,6 +13001,15 @@ function _archiveRenderFLOverlay(flData) {
             bearingStr = 'Dir from center: ' + bDeg.toFixed(0) + '\u00b0 (' + cardinal + ')<br>';
         }
 
+        // Aircraft position (lat/lon)
+        var posStr = '';
+        if (o.lat != null && o.lon != null && isFinite(o.lat) && isFinite(o.lon)) {
+            var nsLat = o.lat >= 0 ? 'N' : 'S';
+            var ewLon = o.lon >= 0 ? 'E' : 'W';
+            posStr = 'Lat/Lon: ' + Math.abs(o.lat).toFixed(3) + '\u00b0' + nsLat +
+                ', ' + Math.abs(o.lon).toFixed(3) + '\u00b0' + ewLon + '<br>';
+        }
+
         texts.push(
             '<b>\u2708 Flight Level</b><br>' +
             'Wind: ' + (ws != null ? ws.toFixed(1) + ' m/s (' + (ws * 1.94384).toFixed(0) + ' kt)' : 'N/A') + '<br>' +
@@ -13008,6 +13017,7 @@ function _archiveRenderFLOverlay(flData) {
             altStr +
             (tdrStr ? tdrStr + '<br>' : '') +
             (wStr ? wStr + '<br>' : '') +
+            posStr +
             'Dist. from center: ' + (o.r_km != null ? o.r_km.toFixed(1) + ' km' : '') + '<br>' +
             bearingStr +
             'Time: ' + timeStr

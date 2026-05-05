@@ -9761,10 +9761,16 @@ function _gaFLRenderOnMap() {
         if (o.lat == null) continue;
         var wspd = o.fl_wspd_ms;
         var wkt = wspd != null ? Math.round(wspd * 1.944) : '?';
+        var posStr = '';
+        if (o.lat != null && o.lon != null && isFinite(o.lat) && isFinite(o.lon)) {
+            posStr = 'Lat/Lon: ' + Math.abs(o.lat).toFixed(3) + '\u00b0' + (o.lat >= 0 ? 'N' : 'S') +
+                ', ' + Math.abs(o.lon).toFixed(3) + '\u00b0' + (o.lon >= 0 ? 'E' : 'W') + '<br>';
+        }
         var tip = '<b>' + o.time + ' UTC</b><br>' +
             'Wind: ' + (wspd != null ? wkt + ' kt' : '\u2014') + '<br>' +
-            'Dir: ' + (o.fl_wdir_deg != null ? o.fl_wdir_deg + '\u00b0' : '\u2014') + '<br>' +
+            'Wind Dir: ' + (o.fl_wdir_deg != null ? o.fl_wdir_deg + '\u00b0' : '\u2014') + '<br>' +
             'Alt: ' + (o.gps_alt_m != null ? Math.round(o.gps_alt_m) + ' m' : '\u2014') + '<br>' +
+            posStr +
             'Pres: ' + (o.static_pres_hpa != null ? o.static_pres_hpa + ' hPa' : '\u2014') + '<br>' +
             'Temp: ' + (o.temp_c != null ? o.temp_c + ' \u00b0C' : '\u2014');
         var circle = L.circleMarker([o.lat, o.lon], {

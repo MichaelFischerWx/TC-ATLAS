@@ -3685,12 +3685,20 @@
                 altStr = 'Alt: ' + o.gps_alt_m.toFixed(0) + ' m (' + Math.round(o.gps_alt_m * 3.28084) + ' ft)<br>';
             }
 
+            // Aircraft position (lat/lon)
+            var posStr = '';
+            if (o.lat != null && o.lon != null && isFinite(o.lat) && isFinite(o.lon)) {
+                posStr = 'Lat/Lon: ' + Math.abs(o.lat).toFixed(3) + '\u00b0' + (o.lat >= 0 ? 'N' : 'S') +
+                    ', ' + Math.abs(o.lon).toFixed(3) + '\u00b0' + (o.lon >= 0 ? 'E' : 'W') + '<br>';
+            }
+
             texts.push(
                 '<b>\u2708 Flight Level</b><br>' +
                 'Wind: ' + (ws != null ? ws.toFixed(1) + ' m/s (' + (ws * 1.94384).toFixed(0) + ' kt)' : 'N/A') + '<br>' +
-                'Dir: ' + (o.fl_wdir_deg != null ? o.fl_wdir_deg.toFixed(0) + '\u00b0' : 'N/A') + '<br>' +
+                'Wind Dir: ' + (o.fl_wdir_deg != null ? o.fl_wdir_deg.toFixed(0) + '\u00b0' : 'N/A') + '<br>' +
                 altStr +
                 (tdrStr ? tdrStr + '<br>' : '') +
+                posStr +
                 'Time: ' + timeStr
             );
         }
