@@ -1938,6 +1938,7 @@
     // ═══════════════════════════════════════════════════════════
 
     var _LS_STORMS_KEY = 'tc-atlas-rt-storms';
+    var _activeStormsETag = null;  // last ETag served by /active-storms
 
     /** Poll /ir-monitor/active-storms */
     function pollActiveStorms() {
@@ -1963,12 +1964,23 @@
             } catch (e) { /* ignore localStorage errors */ }
         }
 
-        fetch(API_BASE + '/ir-monitor/active-storms', { cache: 'no-store' })
+        var headers = {};
+        if (_activeStormsETag) headers['If-None-Match'] = _activeStormsETag;
+
+        fetch(API_BASE + '/ir-monitor/active-storms', { cache: 'no-store', headers: headers })
             .then(function (r) {
+                if (r.status === 304) {
+                    // Server confirms our cached payload is still current — no work to do.
+                    if (loaderEl) loaderEl.style.display = 'none';
+                    return null;
+                }
                 if (!r.ok) throw new Error('HTTP ' + r.status);
+                var et = r.headers.get('ETag');
+                if (et) _activeStormsETag = et;
                 return r.json();
             })
             .then(function (data) {
+                if (data === null) return;  // 304 — nothing changed
                 stormData = data.storms || [];
 
                 // Cache to localStorage for instant display on next visit

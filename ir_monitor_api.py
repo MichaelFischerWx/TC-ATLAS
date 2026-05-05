@@ -16,6 +16,7 @@ Indian Ocean, and Southern Hemisphere (JTWC B-deck).
 
 import base64
 import gc
+import hashlib
 import io
 import json
 import math
@@ -30,7 +31,7 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import JSONResponse, Response
 
 # Shared satellite IR module
@@ -1810,11 +1811,11 @@ def refresh_active_storms_cache():
 # ---------------------------------------------------------------------------
 
 @router.get("/active-storms")
-def get_active_storms():
+def get_active_storms(if_none_match: Optional[str] = Header(default=None)):
     """
     Return all currently active tropical cyclones worldwide.
     Data sourced from NHC ATCF A-deck (ATL + EPAC) and JTWC B-deck (WPAC, IO, SHEM).
-    Results are cached for 10 minutes.
+    Results are cached for 10 minutes; ETag/304 short-circuits unchanged polls.
     """
     _ensure_fresh_cache()
 
@@ -1825,9 +1826,23 @@ def get_active_storms():
             "count_by_basin": dict(_active_storms_cache["count_by_basin"]),
         }
 
+    # ETag derived from updated_utc + storm count (cache rebuild → new ETag).
+    # Cheap to compute and stable so long as the cache hasn't changed.
+    etag_seed = f"{data['updated_utc']}|{len(data['storms'])}"
+    etag = '"' + hashlib.sha1(etag_seed.encode("utf-8")).hexdigest()[:16] + '"'
+
+    if if_none_match and if_none_match.strip() == etag:
+        return Response(
+            status_code=304,
+            headers={"ETag": etag, "Cache-Control": "public, max-age=120"},
+        )
+
     return JSONResponse(
         content=data,
-        headers={"Cache-Control": "public, max-age=120"},
+        headers={
+            "Cache-Control": "public, max-age=120",
+            "ETag": etag,
+        },
     )
 
 

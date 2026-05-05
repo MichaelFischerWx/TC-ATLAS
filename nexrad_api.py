@@ -734,7 +734,7 @@ def _grid_radar(radar, product: str = "reflectivity",
 # ── API Endpoints ─────────────────────────────────────────────
 
 @router.get("/sites")
-async def get_nearby_sites(
+def get_nearby_sites(
     lat: float = Query(..., description="Storm center latitude"),
     lon: float = Query(..., description="Storm center longitude"),
     max_range_km: float = Query(300, description="Max distance in km"),
@@ -756,7 +756,7 @@ async def get_nearby_sites(
 
 
 @router.get("/scans")
-async def get_available_scans(
+def get_available_scans(
     site: str = Query(..., description="NEXRAD site ID (e.g., KBYX)"),
     datetime: str = Query(..., description="ISO datetime (e.g., 2022-09-28T18:00:00)"),
     window_min: int = Query(60, description="Search window in minutes"),
@@ -802,7 +802,7 @@ async def get_available_scans(
 
 
 @router.get("/frame")
-async def get_radar_frame(
+def get_radar_frame(
     site: str = Query(..., description="NEXRAD site ID"),
     s3_key: str = Query(..., description="S3 key from /scans endpoint"),
     product: str = Query("reflectivity", description="reflectivity or velocity"),
@@ -868,7 +868,7 @@ async def get_radar_frame(
 
 
 @router.get("/storm_relative")
-async def get_storm_relative_frame(
+def get_storm_relative_frame(
     site: str = Query(..., description="NEXRAD site ID"),
     s3_key: str = Query(..., description="S3 key from /scans endpoint"),
     center_lat: float = Query(..., description="Storm center latitude"),

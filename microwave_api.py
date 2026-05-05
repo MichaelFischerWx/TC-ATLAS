@@ -514,7 +514,7 @@ def start_index_build(metadata_path: str = None, ibtracs_path: str = None):
 # ---------------------------------------------------------------------------
 
 @router.get("/status")
-async def microwave_status():
+def microwave_status():
     """Check whether the overpass index has finished building."""
     ready = _index_ready.is_set()
     with _index_lock:
@@ -529,7 +529,7 @@ async def microwave_status():
 
 
 @router.get("/overpasses")
-async def get_overpasses(
+def get_overpasses(
     case_index: int = Query(..., description="TC-RADAR case index"),
 ):
     """
@@ -600,7 +600,7 @@ def _live_tcprimed_lookup(atcf_id: str, year: Optional[int] = None) -> List[dict
 
 
 @router.get("/storm_overpasses")
-async def get_storm_overpasses(
+def get_storm_overpasses(
     atcf_id: str = Query(None, description="ATCF storm ID, e.g. AL062018"),
     storm_name: str = Query(None, description="Storm name (alternative to atcf_id)"),
     year: int = Query(None, description="Storm year (required if using storm_name)"),
@@ -649,7 +649,7 @@ async def get_storm_overpasses(
 
 
 @router.get("/data")
-async def get_microwave_data(
+def get_microwave_data(
     s3_key: str = Query(..., description="Full S3 key of the TC-PRIMED NetCDF file"),
     product: str = Query("89pct", description="Product: '89pct' or '37h'"),
     center_lat: float = Query(None, description="Storm center latitude (for regridding)"),

@@ -759,7 +759,9 @@ function loadData() {
             if (_loader) _loader.innerHTML = '<div style="color:#ef4444;font-size:14px;">\u26A0 Could not load storm data. Try refreshing.</div>';
         });
 
-    // Load track data — try chunked manifest first, fall back to single file
+    // Load track data — try chunked manifest first, fall back to single file.
+    // Each chunk is rendered incrementally as it arrives so the user sees
+    // partial tracks within ~2 s instead of waiting for the full ~44 MB.
     showToast('Loading track data...');
     fetch(TRACKS_MANIFEST)
         .then(function (r) {
@@ -767,28 +769,39 @@ function loadData() {
             return r.json();
         })
         .then(function (manifest) {
-            // Load chunks in parallel
             var chunks = manifest.chunks || [];
             console.log('Loading ' + chunks.length + ' track chunks...');
-            return Promise.all(chunks.map(function (chunkFile) {
-                return fetch(chunkFile + '?' + DATA_VER).then(function (r) { return r.json(); });
-            }));
-        })
-        .then(function (chunkDataArray) {
-            // Merge all chunks into allTracks
-            chunkDataArray.forEach(function (chunk) {
-                Object.keys(chunk).forEach(function (sid) {
-                    allTracks[sid] = chunk[sid];
-                });
-            });
-            var n = Object.keys(allTracks).length;
-            console.log('Loaded tracks for ' + n + ' storms from chunks');
-            showToast('Track data ready — ' + n.toLocaleString() + ' storm tracks');
-            // Re-render tracks now that data is available (initial render may
-            // have fired before chunks finished loading)
-            if (mapViewMode === 'tracks' && filteredStorms.length) {
-                renderTracks(filteredStorms);
+
+            var loaded = 0;
+            var _renderTimer = null;
+            // Coalesce re-renders: if both chunks land within ~150 ms,
+            // we only paint once.
+            function _scheduleRender() {
+                if (_renderTimer) return;
+                _renderTimer = setTimeout(function () {
+                    _renderTimer = null;
+                    if (mapViewMode === 'tracks' && filteredStorms.length) {
+                        renderTracks(filteredStorms);
+                    }
+                }, 150);
             }
+
+            return Promise.all(chunks.map(function (chunkFile) {
+                return fetch(chunkFile + '?' + DATA_VER)
+                    .then(function (r) { return r.json(); })
+                    .then(function (chunk) {
+                        Object.keys(chunk).forEach(function (sid) {
+                            allTracks[sid] = chunk[sid];
+                        });
+                        loaded += 1;
+                        _scheduleRender();
+                        if (loaded === chunks.length) {
+                            var n = Object.keys(allTracks).length;
+                            console.log('Loaded tracks for ' + n + ' storms from chunks');
+                            showToast('Track data ready — ' + n.toLocaleString() + ' storm tracks');
+                        }
+                    });
+            }));
         })
         .catch(function (manifestErr) {
             // Fallback: try loading single combined file
@@ -810,16 +823,30 @@ function loadData() {
                 });
         });
 
-    // Load precomputed overwater 24-h intensity change episodes
-    fetch('intensity_changes.json?' + DATA_VER)
+    // intensity_changes.json (~1.3 MB) is only needed by the RI modal —
+    // lazy-load it on first modal open via _ensureIntensityChangeData().
+}
+
+var _intensityChangePromise = null;
+
+// Lazy-load intensity_changes.json. Returns a promise that resolves once
+// the data is in `intensityChangeData`. Cached after first call.
+function _ensureIntensityChangeData() {
+    if (intensityChangeData) return Promise.resolve(intensityChangeData);
+    if (_intensityChangePromise) return _intensityChangePromise;
+    _intensityChangePromise = fetch('intensity_changes.json?' + DATA_VER)
         .then(function (r) { if (!r.ok) throw new Error('Not found'); return r.json(); })
         .then(function (data) {
             intensityChangeData = data;
             console.log('Loaded intensity change data: ' + (data.total_episodes || 0) + ' episodes');
+            return data;
         })
         .catch(function (err) {
             console.warn('Intensity change data not loaded:', err);
+            _intensityChangePromise = null;  // allow retry
+            throw err;
         });
+    return _intensityChangePromise;
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -5253,7 +5280,10 @@ window.openIntensityChangeModal = function () {
     var chips = document.querySelectorAll('#ri-period-chips .basin-chip');
     chips.forEach(function (c) { c.classList.toggle('active', c.getAttribute('data-period') === 'modern'); });
     _showCustomRange(false);
-    renderRIModalCharts();
+    // Lazy-load the ~1.3 MB intensity dataset on first open, then render.
+    _ensureIntensityChangeData()
+        .then(function () { renderRIModalCharts(); })
+        .catch(function () { renderRIModalCharts(); });  // render shows empty/error gracefully
 };
 window.closeIntensityChangeModal = function () {
     document.getElementById('intensity-change-modal').style.display = 'none';

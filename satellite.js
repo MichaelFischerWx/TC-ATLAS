@@ -2537,10 +2537,21 @@
 
     // ── Storm List ──────────────────────────────────────────────
 
+    var _satActiveStormsETag = null;
+
     function loadStorms() {
-        fetch(API_BASE + '/ir-monitor/active-storms', { cache: 'no-store' })
-            .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+        var headers = {};
+        if (_satActiveStormsETag) headers['If-None-Match'] = _satActiveStormsETag;
+        fetch(API_BASE + '/ir-monitor/active-storms', { cache: 'no-store', headers: headers })
+            .then(function (r) {
+                if (r.status === 304) return null;
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                var et = r.headers.get('ETag');
+                if (et) _satActiveStormsETag = et;
+                return r.json();
+            })
             .then(function (data) {
+                if (data === null) return;  // 304 — nothing changed
                 storms = (data.storms || []).slice();
                 storms.sort(function (a, b) { return (b.vmax_kt || 0) - (a.vmax_kt || 0); });
                 renderStormList();
@@ -3654,8 +3665,16 @@
     var _pollHiddenAt = 0;
 
     function _pollOnce() {
-        fetch(API_BASE + '/ir-monitor/active-storms', { cache: 'no-store' })
-            .then(function (r) { return r.ok ? r.json() : null; })
+        var headers = {};
+        if (_satActiveStormsETag) headers['If-None-Match'] = _satActiveStormsETag;
+        fetch(API_BASE + '/ir-monitor/active-storms', { cache: 'no-store', headers: headers })
+            .then(function (r) {
+                if (r.status === 304) return null;
+                if (!r.ok) return null;
+                var et = r.headers.get('ETag');
+                if (et) _satActiveStormsETag = et;
+                return r.json();
+            })
             .then(function (data) {
                 if (!data) return;
                 storms = (data.storms || []).slice();

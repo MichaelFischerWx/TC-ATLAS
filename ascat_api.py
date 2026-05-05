@@ -382,7 +382,7 @@ def _fetch_ascat_winds(
 # ─── Endpoints ──────────────────────────────────────────────────────────
 
 @router.get("/passes")
-async def get_ascat_passes(
+def get_ascat_passes(
     atcf_id: str = Query(..., description="ATCF storm ID, e.g. WP042026"),
     hours: float = Query(12.0, ge=1.0, le=48.0, description="Lookback hours"),
 ):
@@ -431,7 +431,7 @@ async def get_ascat_passes(
 
 
 @router.get("/winds")
-async def get_ascat_winds(
+def get_ascat_winds(
     data_url: str = Query(..., description="OPeNDAP or download URL for the ASCAT granule"),
     center_lat: float = Query(..., description="Storm center latitude"),
     center_lon: float = Query(..., description="Storm center longitude"),
