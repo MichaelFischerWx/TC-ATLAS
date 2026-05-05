@@ -487,10 +487,41 @@
             Fetching the ERA5 tile for this field.
         </div>
 
-        <div class="sidebar-footer" style="margin-top:0; border-top:1px solid var(--border); padding-top:14px; font-size:0.72rem; line-height:1.55;">
-            <strong>Data attribution</strong>
-            Contains modified Copernicus Climate Change Service information (2026). Built on ERA5 monthly-mean reanalysis (Hersbach et al., 2020, <em>QJRMS</em> 146, 1999–2049, <a href="https://doi.org/10.1002/qj.3803" target="_blank" rel="noopener" style="color:var(--emerald-bright); text-decoration:none;">doi:10.1002/qj.3803</a>). Neither the European Commission nor ECMWF is responsible for any use of this information.
-        </div>
+        <details class="sidebar-footer composite-details" style="margin-top:0; border-top:1px solid var(--border); padding-top:14px; font-size:0.72rem; line-height:1.55;">
+            <summary><strong>Data sources &amp; acknowledgements</strong></summary>
+            <div style="margin-top:10px;">
+                <strong style="display:block; margin-bottom:4px;">Reanalysis fields (ERA5)</strong>
+                <p style="margin:0 0 10px 0; opacity:0.9;">
+                    Contains modified Copernicus Climate Change Service information (2026). Built on ERA5 monthly-mean reanalysis
+                    (Hersbach et al., 2020, <em>QJRMS</em> 146, 1999–2049,
+                    <a href="https://doi.org/10.1002/qj.3803" target="_blank" rel="noopener" class="ts-source-link">doi:10.1002/qj.3803</a>).
+                    Generated using Copernicus Climate Change Service information (2026); neither the European Commission nor ECMWF
+                    is responsible for any use that may be made of this information.
+                </p>
+
+                <strong style="display:block; margin-bottom:4px;">Climate indices (NOAA PSL / CPC, Met Office)</strong>
+                <p style="margin:0 0 6px 0; opacity:0.9;">
+                    Most monthly indices in the composite builder come from the
+                    <a href="https://psl.noaa.gov/data/climateindices/list/" target="_blank" rel="noopener" class="ts-source-link">NOAA Physical Sciences Laboratory</a>
+                    or
+                    <a href="https://www.cpc.ncep.noaa.gov/data/indices/" target="_blank" rel="noopener" class="ts-source-link">NOAA Climate Prediction Center</a>.
+                    Per the PSL data-use statement: <em>"Data provided by the NOAA Physical Sciences Laboratory, Boulder,
+                    Colorado, USA, from their website at https://psl.noaa.gov."</em> Specific products: AMO uses Kaplan SST V2;
+                    IOD (DMI) uses Met Office HadISST (Rayner et al., 2003,
+                    <a href="https://doi.org/10.1029/2002JD002670" target="_blank" rel="noopener" class="ts-source-link">doi:10.1029/2002JD002670</a>) under
+                    the UK Open Government Licence v3.0. Per-index provider, raw data file, and seminal-paper links appear in the
+                    composite-builder panel above when an index is selected.
+                </p>
+
+                <strong style="display:block; margin:10px 0 4px 0;">Tropical-cyclone tracks (IBTrACS v04r01)</strong>
+                <p style="margin:0; opacity:0.9;">
+                    NOAA NCEI International Best Track Archive for Climate Stewardship (Knapp et al., 2010,
+                    <a href="https://doi.org/10.1175/2009BAMS2755.1" target="_blank" rel="noopener" class="ts-source-link">doi:10.1175/2009BAMS2755.1</a>;
+                    Gahtan et al., 2024 v4r01,
+                    <a href="https://doi.org/10.25921/82ty-9e16" target="_blank" rel="noopener" class="ts-source-link">doi:10.25921/82ty-9e16</a>).
+                </p>
+            </div>
+        </details>
     </aside>
 
     <section class="canvas-area">

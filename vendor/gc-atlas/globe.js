@@ -4464,11 +4464,22 @@ class GlobeApp {
         }
         if (descDiv) descDiv.textContent = ix.description || '';
         if (srcDiv) {
-            // Clickable "Source →" link so users can read the provenance
-            // of each index (NOAA PSL / CPC pages with methodology notes).
-            const safe = String(ix.source || '').replace(/"/g, '&quot;');
-            srcDiv.innerHTML = safe
-                ? `Source: <a href="${safe}" target="_blank" rel="noopener noreferrer" class="ts-source-link">${safe}</a>`
+            // Render attribution as: "Source: <provider ↗> · raw data ↗ · <paper ↗>"
+            // Falls back to the bare data URL if the JSON entry is from an
+            // older build that lacks the provider/paper fields.
+            const _esc = s => String(s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+                                             .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            const _link = (href, text) => href
+                ? `<a href="${_esc(href)}" target="_blank" rel="noopener noreferrer" class="ts-source-link">${_esc(text)} ↗</a>`
+                : '';
+            const parts = [];
+            if (ix.provider) {
+                parts.push(_link(ix.provider_url || ix.source, ix.provider));
+            }
+            if (ix.source) parts.push(_link(ix.source, 'raw data'));
+            if (ix.paper)  parts.push(_link(ix.paper_url, ix.paper));
+            srcDiv.innerHTML = parts.length
+                ? `Source: ${parts.filter(Boolean).join(' · ')}`
                 : '';
         }
 
