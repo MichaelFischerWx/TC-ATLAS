@@ -4251,7 +4251,8 @@ class GlobeApp {
         // the actual composite output (state.customRange) is what drives
         // the engine.
         this._compositeMode = this._compositeMode || 'index';
-        this._compositeSelectedYears = this._compositeSelectedYears || new Set();
+        this._compositeSelectedYears  = this._compositeSelectedYears  || new Set();
+        this._compositeSelectedMonths = this._compositeSelectedMonths || new Set();
         const modeBtns = document.querySelectorAll('#composite-mode-toggle button');
         const indexPane = document.getElementById('composite-mode-index');
         const selPane   = document.getElementById('composite-mode-selection');
@@ -4267,8 +4268,10 @@ class GlobeApp {
 
         // Build year chips lazily — depends on the per-year manifest
         // which loads async. Re-run after era5Ready in case it wasn't
-        // loaded at init time.
+        // loaded at init time. Month chips don't need the manifest so
+        // they paint immediately.
         this._buildYearChips();
+        this._buildMonthChips();
         if (!era5Ready('per_year')) {
             const tryAgain = () => {
                 if (era5Ready('per_year')) {
@@ -4280,7 +4283,7 @@ class GlobeApp {
             setTimeout(tryAgain, 300);
         }
 
-        // Quick actions for the selection pane.
+        // Quick actions for the year-selection pane.
         const quickActions = document.querySelectorAll('#composite-mode-selection [data-sel-act]');
         quickActions.forEach(b => b.addEventListener('click', () => {
             const act = b.dataset.selAct;
@@ -4298,7 +4301,60 @@ class GlobeApp {
             this.refreshCompositeUI();
         }));
 
+        // Quick actions for the month-selection pane (Clear + season presets).
+        const monthActions = document.querySelectorAll('#composite-mode-selection [data-sel-month-act]');
+        const SEASON_PRESETS = {
+            djf: [12, 1, 2], mam: [3, 4, 5],  jja: [6, 7, 8],
+            son: [9, 10, 11], jas: [7, 8, 9], none: [],
+        };
+        monthActions.forEach(b => b.addEventListener('click', () => {
+            const preset = SEASON_PRESETS[b.dataset.selMonthAct];
+            this._compositeSelectedMonths = new Set(preset);
+            this._syncMonthChipsFromState();
+            this.refreshCompositeUI();
+        }));
+
         this.refreshCompositeUI();
+    }
+
+    // Build the 12 month chips (Jan…Dec). Independent of any tile manifest —
+    // can run synchronously at bind time.
+    _buildMonthChips() {
+        const container = document.getElementById('composite-month-chips');
+        if (!container || container.dataset.built === '1') return;
+        const frag = document.createDocumentFragment();
+        for (let m = 1; m <= 12; m++) {
+            const chip = document.createElement('div');
+            chip.className = 'mo-chip';
+            chip.dataset.month = String(m);
+            chip.textContent = MONTHS[m - 1];
+            chip.title = 'Click to toggle ' + MONTHS[m - 1] + ' in the composite';
+            chip.addEventListener('click', () => {
+                if (this._compositeSelectedMonths.has(m)) this._compositeSelectedMonths.delete(m);
+                else this._compositeSelectedMonths.add(m);
+                chip.classList.toggle('selected', this._compositeSelectedMonths.has(m));
+                this.refreshCompositeUI();
+            });
+            frag.appendChild(chip);
+        }
+        container.appendChild(frag);
+        container.dataset.built = '1';
+        this._syncMonthChipsFromState();
+    }
+
+    // Mirror the active customRange.months (if any) onto the chip grid.
+    // Called after the chips exist or when customRange changes shape (e.g.,
+    // restored from URL state).
+    _syncMonthChipsFromState() {
+        const cr = this.state.customRange;
+        if (cr && Array.isArray(cr.months) && cr.months.length) {
+            this._compositeSelectedMonths = new Set(cr.months);
+        }
+        const chips = document.querySelectorAll('#composite-month-chips .mo-chip');
+        chips.forEach(c => {
+            const m = Number(c.dataset.month);
+            c.classList.toggle('selected', this._compositeSelectedMonths.has(m));
+        });
     }
 
     // Populate the year-chip grid from the per_year tile manifest. Called
@@ -4349,6 +4405,8 @@ class GlobeApp {
             const y = Number(c.dataset.year);
             c.classList.toggle('selected', this._compositeSelectedYears.has(y));
         });
+        // Months come along for free if the URL carried a multi-month spec.
+        this._syncMonthChipsFromState();
         if (this._setCompositeMode) this._setCompositeMode('selection');
     }
 
@@ -4477,25 +4535,36 @@ class GlobeApp {
             return;
         }
 
-        const month  = this.state.month;
-        const monLbl = MONTHS[month - 1] || String(month);
+        // Resolve the month set: explicit user picks override the global
+        // Month. Empty pick → fall back to [state.month] (single month).
+        const monthsPicked = Array.from(this._compositeSelectedMonths)
+            .filter(m => Number.isFinite(m) && m >= 1 && m <= 12)
+            .sort((a, b) => a - b);
+        const months = monthsPicked.length ? monthsPicked : [this.state.month];
+        const monLbl = months.length > 1
+            ? months.map(m => MONTHS[m - 1].slice(0, 3)).join('+')
+            : (MONTHS[months[0] - 1] || String(months[0]));
+
         if (eventsDiv) {
-            const tileCount = years.length;
+            const tileCount = years.length * months.length;
             const note = dropped.length
                 ? `<div style="opacity:0.6; margin-top:4px; font-size:0.62rem;">Dropped ${dropped.length} pre-1961 year${dropped.length === 1 ? '' : 's'}: ${dropped.join(', ')}</div>`
                 : '';
-            const sizeNote = `<div style="opacity:0.55; margin-top:4px; font-size:0.62rem;">~${tileCount} tile${tileCount === 1 ? '' : 's'} fetched on Apply</div>`;
+            const sizeNote = `<div style="opacity:0.55; margin-top:4px; font-size:0.62rem;">~${tileCount} tile${tileCount === 1 ? '' : 's'} fetched on Apply (${years.length} yr × ${months.length} mo)</div>`;
             eventsDiv.innerHTML =
                 `<strong>${years.length} year${years.length === 1 ? '' : 's'}</strong> · ${monLbl} · ${years.join(', ')}${note}${sizeNote}`;
         }
 
         const active = this.state.customRange;
+        const activeMonths = active && Array.isArray(active.months) && active.months.length
+            ? active.months : (active ? [active.month] : []);
         const isActive = active
             && active.mode === 'selection'
-            && active.month === month
             && Array.isArray(active.selectedYears)
             && active.selectedYears.length === years.length
-            && active.selectedYears.every((y, i) => y === years[i]);
+            && active.selectedYears.every((y, i) => y === years[i])
+            && activeMonths.length === months.length
+            && activeMonths.every((m, i) => m === months[i]);
         const lbl = `Custom · ${monLbl} · ${years.length} yr`;
         if (label) {
             label.textContent = isActive ? `Active · ${lbl}` : `Apply · ${lbl}`;
@@ -4558,26 +4627,38 @@ class GlobeApp {
         const picked = Array.from(this._compositeSelectedYears).sort((a, b) => a - b);
         const { kept: years } = this._clipToAvailableYears(picked);
         if (years.length === 0) return;
-        const month = this.state.month;
-        this._prefetchCompositeYears(years, month);
-        const monLbl = MONTHS[month - 1] || String(month);
+        const monthsPicked = Array.from(this._compositeSelectedMonths)
+            .filter(m => Number.isFinite(m) && m >= 1 && m <= 12)
+            .sort((a, b) => a - b);
+        const months = monthsPicked.length ? monthsPicked : [this.state.month];
+        const anchorMonth = months[0];   // for legacy code that reads .month
+        this._prefetchCompositeYears(years, months);
+        const monLbl = months.length > 1
+            ? months.map(m => MONTHS[m - 1].slice(0, 3)).join('+')
+            : (MONTHS[anchorMonth - 1] || String(anchorMonth));
         const label = `Custom: ${years.length} yr · ${monLbl}`;
-        this.setState({
-            // selectedYears persists the user's pick so URL deep-links
-            // restore the chip selections; years is the engine-facing copy
-            // (clipped to available tiles).
-            customRange: { years, label, mode: 'selection', selectedYears: years.slice(), month },
-            year: null,
-        });
+        const cr = {
+            years, label, mode: 'selection',
+            selectedYears: years.slice(),
+            // .month kept for back-compat with anchor-reading code paths
+            // (e.g. refreshTracks falling back to month when months[] absent).
+            month: anchorMonth,
+        };
+        // Only attach months[] when the user actually picked a multi-month
+        // set — single-month back-compat keeps the old engine path active.
+        if (monthsPicked.length > 0) cr.months = months.slice();
+        this.setState({ customRange: cr, year: null });
         this.refreshCompositeUI();
     }
 
     // Shared per-year-tile prefetch fan-out. For raw fields this is just
     // the field tile at the displayed level; for derived (PV, wspd, mse,
     // dls) and θ-coord fields the composer needs ingredient tiles at every
-    // pressure level, so kick a wider prefetch — current month only to
-    // avoid flooding (months scrub lazily).
-    _prefetchCompositeYears(years, month) {
+    // pressure level, so kick a wider prefetch — current month set only to
+    // avoid flooding (months scrub lazily). `months` may be a single int
+    // (legacy) or an array (multi-month composite).
+    _prefetchCompositeYears(years, months) {
+        const monthList = Array.isArray(months) ? months : [months];
         const ingredients = this._compositeIngredientFields();
         const meta = FIELDS[this.state.field];
         const allLevels = !!(meta?.derived || this.state.vCoord === 'theta');
@@ -4587,7 +4668,7 @@ class GlobeApp {
                 for (const L of lvls) {
                     prefetchField(ing, {
                         level: L,
-                        months: [month],
+                        months: monthList,
                         period: 'per_year',
                         year: y,
                     });

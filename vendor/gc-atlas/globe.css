@@ -418,7 +418,8 @@
             color: var(--paper);
             border-color: var(--emerald);
         }
-        .composite-year-chips {
+        .composite-year-chips,
+        .composite-month-chips {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(50px, 1fr));
             gap: 4px;
@@ -429,7 +430,12 @@
             border-radius: 4px;
             background: rgba(0,0,0,0.15);
         }
-        .composite-year-chips .yr-chip {
+        .composite-month-chips {
+            grid-template-columns: repeat(6, 1fr);
+            max-height: none;
+        }
+        .composite-year-chips .yr-chip,
+        .composite-month-chips .mo-chip {
             padding: 3px 0;
             text-align: center;
             font-family: 'JetBrains Mono', monospace;
@@ -442,11 +448,13 @@
             user-select: none;
             transition: background 0.1s, color 0.1s, border-color 0.1s;
         }
-        .composite-year-chips .yr-chip:hover {
+        .composite-year-chips .yr-chip:hover,
+        .composite-month-chips .mo-chip:hover {
             color: var(--paper);
             border-color: var(--thalo-line);
         }
-        .composite-year-chips .yr-chip.selected {
+        .composite-year-chips .yr-chip.selected,
+        .composite-month-chips .mo-chip.selected {
             background: rgba(14,140,110,0.32);
             color: var(--emerald-bright);
             border-color: var(--emerald);

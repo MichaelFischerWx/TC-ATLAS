@@ -85,7 +85,9 @@ export function expectedTilesForView(state) {
     }
     if (contourField) n += 1;
     if (customRange?.years?.length) {
-        n += customRange.years.length * ingredients;
+        const monthMultiplier = (Array.isArray(customRange.months) && customRange.months.length)
+            ? customRange.months.length : 1;
+        n += customRange.years.length * monthMultiplier * ingredients;
     }
     return Math.max(1, n);
 }
@@ -265,26 +267,52 @@ export function customRangeYears(spec) {
 
 /** Stable cache-key suffix for a range/list spec. Separating the
  *  contiguous form ("2010-2024") from the explicit-year form
- *  ("y=1983,1998,2016,2024") avoids collisions. */
+ *  ("y=1983,1998,2016,2024") avoids collisions. Multi-month composites
+ *  append "|m=7,8,9" so JAS and the single-month-7 entries don't clash. */
 function _spanKey(spec) {
+    let base;
     if (Array.isArray(spec?.years)) {
-        return `y=${customRangeYears(spec).join(',')}`;
+        base = `y=${customRangeYears(spec).join(',')}`;
+    } else {
+        base = `${spec.start}-${spec.end}`;
     }
-    return `${spec.start}-${spec.end}`;
+    if (Array.isArray(spec?.months) && spec.months.length) {
+        base += `|m=${[...spec.months].sort((a, b) => a - b).join(',')}`;
+    }
+    return base;
+}
+
+/** Resolve the effective month list for a composite. If the spec carries
+ *  an explicit months array, use it; otherwise fall back to the singleton
+ *  month parameter (which is what every pre-multi-month caller passed). */
+function _compositeMonths(spec, fallbackMonth) {
+    if (Array.isArray(spec?.months) && spec.months.length) {
+        return [...new Set(spec.months.filter(m => Number.isFinite(m) && m >= 1 && m <= 12))]
+            .sort((a, b) => a - b);
+    }
+    return [fallbackMonth];
 }
 
 /** Compose a custom-range mean from per-year tiles. Returns
  *    { values, vmin, vmax, isReal: true }  when all tiles are cached,
  *    null when any is still loading (subscriber will re-call on arrival).
  *  `level` is the pressure level or null for single-level fields.
- *  `spec` is a { start, end } range OR a { years: [...] } list. */
+ *  `spec` is a { start, end } range OR a { years: [...] } list. When
+ *  `spec.months` is provided, the composite averages over (years × months);
+ *  otherwise the single `month` argument is used (back-compat). */
 function composeCustomRangeMean(name, month, level, spec) {
     const years = customRangeYears(spec);
     if (years.length === 0) return null;
+    const months = _compositeMonths(spec, month);
     const span = _spanKey(spec);
+    // Cache key needs the singleton month too — when spec has no months[],
+    // different fallback months must be cached separately.
+    const monthTag = (Array.isArray(spec?.months) && spec.months.length)
+        ? 'mm'             // multi-month: months baked into span via _spanKey
+        : `m${month}`;     // single-month back-compat
     const key = level == null
-        ? `${name}:sl:${month}:${span}`
-        : `${name}:${level}:${month}:${span}`;
+        ? `${name}:sl:${monthTag}:${span}`
+        : `${name}:${level}:${monthTag}:${span}`;
     const hit = _customRangeCache.get(key);
     if (hit) return hit;
     const { nlat, nlon } = GRID;
@@ -293,14 +321,16 @@ function composeCustomRangeMean(name, month, level, spec) {
     const count = new Uint16Array(N);
     let anyMissing = false;
     for (const y of years) {
-        const tile = requestEra5(name, {
-            month, level, period: 'per_year', year: y, kind: 'mean',
-        });
-        if (!tile) { anyMissing = true; continue; }   // still loading
-        const vals = tile.values;
-        for (let i = 0; i < N; i++) {
-            const v = vals[i];
-            if (Number.isFinite(v)) { sum[i] += v; count[i] += 1; }
+        for (const m of months) {
+            const tile = requestEra5(name, {
+                month: m, level, period: 'per_year', year: y, kind: 'mean',
+            });
+            if (!tile) { anyMissing = true; continue; }   // still loading
+            const vals = tile.values;
+            for (let i = 0; i < N; i++) {
+                const v = vals[i];
+                if (Number.isFinite(v)) { sum[i] += v; count[i] += 1; }
+            }
         }
     }
     if (anyMissing) return null;
@@ -357,12 +387,16 @@ function _derivedYearEval(name, opts, year) {
  *  per-year evaluation is computed (and cached) separately, then the
  *  resulting grids are averaged point-wise. NaN-skipping so years that
  *  miss the θ surface in some columns still contribute elsewhere. */
-function composeDerivedComposite(name, opts, years) {
+function composeDerivedComposite(name, opts, years, months = null) {
+    const monthList = Array.isArray(months) && months.length ? months : [opts.month];
     const grids = [];
     for (const y of years) {
-        const e = _derivedYearEval(name, opts, y);
-        if (!e || !e.values) return null;   // pending → caller re-tries
-        grids.push(e.values);
+        for (const m of monthList) {
+            const perMonthOpts = (m === opts.month) ? opts : { ...opts, month: m };
+            const e = _derivedYearEval(name, perMonthOpts, y);
+            if (!e || !e.values) return null;   // pending → caller re-tries
+            grids.push(e.values);
+        }
     }
     if (grids.length === 0) return null;
     const N = grids[0].length;
@@ -523,7 +557,9 @@ export function getField(name, { month = 1, level = 500, coord = 'pressure', the
     if (customRange && Array.isArray(customRange.years) && customRange.years.length
         && (meta.derived || (coord === 'theta' && meta.type === 'pl'))) {
         const composed = composeDerivedComposite(
-            name, { month, level, coord, theta }, customRange.years);
+            name, { month, level, coord, theta }, customRange.years,
+            Array.isArray(customRange.months) && customRange.months.length
+                ? customRange.months : null);
         if (composed) {
             const r = symmetricRange(composed.vmin, composed.vmax, meta);
             return {

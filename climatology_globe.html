@@ -198,20 +198,36 @@
                         </label>
                     </div>
 
-                    <!-- Mode B: Free-form year picker. Year chips populate from
-                         the per-year tile manifest at boot. Composite uses the
-                         globally selected Month. -->
+                    <!-- Mode B: Free-form year + month picker. Year chips
+                         populate from the per-year tile manifest at boot.
+                         Month chips: pick one (current Month wins) OR many
+                         to build a multi-month composite (e.g., JAS, DJF). -->
                     <div id="composite-mode-selection" class="composite-mode-pane" hidden>
                         <p class="field-help" style="margin-top:0;">
-                            Pick any years to composite together. The composite uses the
-                            <strong>current Month</strong> selected globally.
+                            Pick any years and months to composite together. With no months
+                            picked here, the composite uses the <strong>current Month</strong>
+                            selected globally; pick multiple months for a season composite
+                            (e.g., JAS, DJF).
                         </p>
+
+                        <label class="field-label" style="margin-top:6px;">Years</label>
                         <div class="composite-quick-actions">
                             <button type="button" data-sel-act="none">Clear</button>
                             <button type="button" data-sel-act="all">All</button>
                             <button type="button" data-sel-act="invert">Invert</button>
                         </div>
                         <div id="composite-year-chips" class="composite-year-chips" aria-label="Pick years to composite"></div>
+
+                        <label class="field-label" style="margin-top:10px;">Months <span style="opacity:0.55; font-weight:normal;">(optional — leave empty to use the global Month)</span></label>
+                        <div class="composite-quick-actions">
+                            <button type="button" data-sel-month-act="none">Clear</button>
+                            <button type="button" data-sel-month-act="djf">DJF</button>
+                            <button type="button" data-sel-month-act="mam">MAM</button>
+                            <button type="button" data-sel-month-act="jja">JJA</button>
+                            <button type="button" data-sel-month-act="son">SON</button>
+                            <button type="button" data-sel-month-act="jas">JAS</button>
+                        </div>
+                        <div id="composite-month-chips" class="composite-month-chips" aria-label="Pick months to composite"></div>
                     </div>
 
                     <!-- Shared output / apply button — populated by either mode. -->

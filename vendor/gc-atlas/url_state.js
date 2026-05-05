@@ -55,7 +55,12 @@ const SPEC = [
             if (v == null) return null;
             if (v.mode === 'selection' && Array.isArray(v.selectedYears)
                 && v.selectedYears.length && Number.isFinite(v.month)) {
-                return `s:${v.month}:${v.selectedYears.join(',')}`;
+                // Multi-month composite uses the singleton "month" slot to
+                // hold a comma list (e.g. "7,8,9") so we don't need a fourth
+                // shape — decoder splits on comma. Single-month stays bare.
+                const mTok = (Array.isArray(v.months) && v.months.length)
+                    ? v.months.join(',') : String(v.month);
+                return `s:${mTok}:${v.selectedYears.join(',')}`;
             }
             if (v.id && v.cmp && Number.isFinite(v.threshold) && Number.isFinite(v.month)) {
                 return `c:${v.id}:${v.cmp}:${v.threshold}:${v.month}`;
@@ -68,16 +73,26 @@ const SPEC = [
         s => {
             if (!s) return undefined;
             if (s.startsWith('s:')) {
-                // month:y1,y2,...  — years validated against per_year tiles
-                // by the engine on apply (see _clipToAvailableYears).
+                // month-token:y1,y2,...  — month-token is one int OR a
+                // comma list (multi-month composite). Years validated
+                // against per_year tiles by the engine on apply.
                 const parts = s.slice(2).split(':');
                 if (parts.length !== 2) return undefined;
-                const month = Number(parts[0]);
-                if (!Number.isFinite(month) || month < 1 || month > 12) return undefined;
+                const monthsAll = parts[0].split(',').map(Number)
+                    .filter(n => Number.isFinite(n) && n >= 1 && n <= 12);
+                if (monthsAll.length === 0) return undefined;
+                monthsAll.sort((a, b) => a - b);
                 const yrs = parts[1].split(',').map(Number).filter(n => Number.isFinite(n));
                 if (yrs.length === 0) return undefined;
                 yrs.sort((a, b) => a - b);
-                return { mode: 'selection', selectedYears: yrs, month, years: yrs.slice() };
+                const out = {
+                    mode: 'selection',
+                    selectedYears: yrs,
+                    month: monthsAll[0],   // anchor for legacy paths
+                    years: yrs.slice(),
+                };
+                if (monthsAll.length > 1) out.months = monthsAll.slice();
+                return out;
             }
             if (s.startsWith('c:')) {
                 // id:cmp:threshold:month — years come later once indices.json
