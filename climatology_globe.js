@@ -18,6 +18,7 @@
 import * as THREE from 'three';
 import { TrackOverlay, parseUTC } from './vendor/gc-atlas/track_overlay.js';
 import { setFieldCache } from './vendor/gc-atlas/era5.js';
+import { FIELDS } from './vendor/gc-atlas/data.js';
 import { computeACE, anomalyTransform, correlate } from './correlation.js';
 
 const DATA_VER = 'v20260408';
@@ -557,6 +558,21 @@ async function _loadPerYearTilesForCurrentField(month, yearRange) {
     return grids;
 }
 
+// Capture the corr field's original generic name + note at module load so
+// we can restore them when the user exits correlation mode. After a run,
+// applyCorrelation overrides .name with "<field> × <index>" and .note
+// with the year span / anom mode / p-threshold — those are stale once
+// the user picks a different display field.
+const _CORR_DEFAULT_NAME = (FIELDS.corr && FIELDS.corr.name) || 'Index correlation (r)';
+const _CORR_DEFAULT_NOTE = (FIELDS.corr && FIELDS.corr.note) ||
+    'Per-pixel Pearson r against the chosen index time series. NaN cells fail the p-value threshold.';
+
+function _resetCorrFieldDefaults() {
+    if (!FIELDS.corr) return;
+    FIELDS.corr.name = _CORR_DEFAULT_NAME;
+    FIELDS.corr.note = _CORR_DEFAULT_NOTE;
+}
+
 async function applyCorrelation() {
     const app = window.envGlobe;
     if (!app) return;
@@ -608,6 +624,32 @@ async function applyCorrelation() {
     // displays it. level=null because corr is a single-level field.
     setFieldCache('corr', { month, level: null, kind: 'mean', period: 'default', year: null,
                             values: r, vmin, vmax });
+
+    // ── Update the corr field's display title + footnote so the
+    // sidebar caption AND the saved-image colorbar panel say what's
+    // actually being correlated, instead of the generic
+    // "Index correlation (r)". E.g.:
+    //   name → "Sea surface temperature × ACE (N. Atlantic)"
+    //   note → "1961–2025 (65 yr) · sliding anomalies · p ≤ 0.05"
+    // FIELDS is mutated in place; the engine reads .name on every
+    // updateField pass, so the next setState below picks up the new
+    // title without any other plumbing.
+    const underlyingField = (app.state.field === 'corr')
+        ? (_preCorrField || 'sst')
+        : app.state.field;
+    const underlyingMeta = FIELDS[underlyingField] || {};
+    const fieldDisplayName = underlyingMeta.name || underlyingField.toUpperCase();
+    const indexLabel = (indexEl && indexEl.selectedIndex >= 0)
+        ? indexEl.options[indexEl.selectedIndex].text
+        : indexId;
+    const yMinNow = grids[0]?.year, yMaxNow = grids[grids.length - 1]?.year;
+    const spanForNote = (yMinNow && yMaxNow)
+        ? `${yMinNow}–${yMaxNow} (${grids.length} yr)`
+        : `${grids.length} yr`;
+    if (FIELDS.corr) {
+        FIELDS.corr.name = `${fieldDisplayName} × ${indexLabel}`;
+        FIELDS.corr.note = `${spanForNote} · ${anomMode} anomalies · p ≤ ${pvalThresh}`;
+    }
 
     // Remember the field we came from so the user can restore by re-picking
     // it from the dropdown. Mark correlation active.
@@ -667,11 +709,14 @@ function bindCorrelationPanel() {
             if (fieldSel.value !== 'corr') {
                 _correlationActive = false;
                 _preCorrField = null;
+                // Restore generic title + note on the corr field so the
+                // next correlation run starts from a clean slate (the
+                // dynamic title we set in applyCorrelation referenced a
+                // specific field × index that's no longer relevant).
+                _resetCorrFieldDefaults();
                 // Restore the new field's preferred cmap if it has one.
-                import('./vendor/gc-atlas/data.js').then(({ FIELDS }) => {
-                    const m = FIELDS[fieldSel.value];
-                    if (m && m.cmap) window.envGlobe?.setState({ cmap: m.cmap });
-                });
+                const m = FIELDS[fieldSel.value];
+                if (m && m.cmap) window.envGlobe?.setState({ cmap: m.cmap });
             }
         });
     }
@@ -789,6 +834,7 @@ function init() {
     window.envGlobe.beforeApplyComposite = () => {
         if (window.envGlobe.state.field === 'corr' && _preCorrField) {
             _correlationActive = false;
+            _resetCorrFieldDefaults();
             window.envGlobe.setState({ field: _preCorrField });
         }
     };
