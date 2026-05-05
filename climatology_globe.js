@@ -46,6 +46,68 @@ function _ga(action, params) {
     }
 }
 
+// Per-field "learn more" metadata for the ⓘ popover. Lives here (not in
+// vendor/gc-atlas/data.js) so the vendored upstream stays clean — anything
+// TC-ATLAS-specific belongs in this layer. Keyed by FIELDS[name] key.
+//
+// `short`     : one-sentence layperson description (3–4 lines max).
+// `learn_url` : link to authoritative reference (ECMWF param DB for raw
+//               ERA5 vars, DOI for derived-field seminal papers).
+// `learn_label`: link text shown in the popover.
+//
+// Raw ERA5 fields default to the Copernicus ERA5 monthly-means dataset
+// page when no explicit entry exists. Derived fields and synthetic 'corr'
+// have explicit entries so the popover never shows a stale fallback.
+var _FIELD_INFO = {
+    // ── Pressure-coord raw fields (ECMWF param DB IDs) ──
+    t:    { short: 'Air temperature on a pressure surface, from ERA5 reanalysis.',          learn_url: 'https://codes.ecmwf.int/grib/param-db/130', learn_label: 'ECMWF parameter DB' },
+    u:    { short: 'Zonal (east-positive) component of horizontal wind on a pressure surface.', learn_url: 'https://codes.ecmwf.int/grib/param-db/131', learn_label: 'ECMWF parameter DB' },
+    v:    { short: 'Meridional (north-positive) component of horizontal wind on a pressure surface.', learn_url: 'https://codes.ecmwf.int/grib/param-db/132', learn_label: 'ECMWF parameter DB' },
+    z:    { short: 'Geopotential — gravitational potential per unit mass; height of a pressure surface above the geoid.', learn_url: 'https://codes.ecmwf.int/grib/param-db/129', learn_label: 'ECMWF parameter DB' },
+    q:    { short: 'Specific humidity — mass of water vapour per unit mass of moist air.', learn_url: 'https://codes.ecmwf.int/grib/param-db/133', learn_label: 'ECMWF parameter DB' },
+    r:    { short: 'Relative humidity — water-vapour pressure as a fraction of saturation vapour pressure at the local temperature.', learn_url: 'https://codes.ecmwf.int/grib/param-db/157', learn_label: 'ECMWF parameter DB' },
+    vo:   { short: 'Relative vorticity — vertical component of curl of horizontal wind. Positive = cyclonic in the NH.', learn_url: 'https://codes.ecmwf.int/grib/param-db/138', learn_label: 'ECMWF parameter DB' },
+    d:    { short: 'Horizontal divergence — net mass flux out of a unit area; positive = upper-level outflow / lower-level mass loss.', learn_url: 'https://codes.ecmwf.int/grib/param-db/155', learn_label: 'ECMWF parameter DB' },
+    w:    { short: 'Vertical velocity in pressure coords (Pa s⁻¹). Negative = ascent.', learn_url: 'https://codes.ecmwf.int/grib/param-db/135', learn_label: 'ECMWF parameter DB' },
+
+    // ── Helmholtz decomposition (computed offline by build_helmholtz.py) ──
+    psi:  { short: 'Streamfunction — non-divergent (rotational) part of horizontal flow. ∇²ψ = ζ.',
+            learn_url: 'https://glossary.ametsoc.org/wiki/Streamfunction', learn_label: 'AMS Glossary' },
+    chi:  { short: 'Velocity potential — divergent (irrotational) part of horizontal flow. ∇²χ = δ.',
+            learn_url: 'https://glossary.ametsoc.org/wiki/Velocity_potential', learn_label: 'AMS Glossary' },
+
+    // ── Surface fields ──
+    t2m:  { short: '2-m air temperature interpolated between the surface and the lowest model level.', learn_url: 'https://codes.ecmwf.int/grib/param-db/167', learn_label: 'ECMWF parameter DB' },
+    d2m:  { short: '2-m dewpoint temperature; difference (T − Td) is a moisture deficit proxy.',    learn_url: 'https://codes.ecmwf.int/grib/param-db/168', learn_label: 'ECMWF parameter DB' },
+    sst:  { short: 'Sea-surface temperature, blended observational analysis (HadISST + OSTIA in ERA5).', learn_url: 'https://codes.ecmwf.int/grib/param-db/34',  learn_label: 'ECMWF parameter DB' },
+    msl:  { short: 'Mean sea-level pressure — surface pressure reduced to sea level using a hypsometric correction.', learn_url: 'https://codes.ecmwf.int/grib/param-db/151', learn_label: 'ECMWF parameter DB' },
+    sp:   { short: 'Surface pressure at the actual orography (no sea-level reduction).',           learn_url: 'https://codes.ecmwf.int/grib/param-db/134', learn_label: 'ECMWF parameter DB' },
+    blh:  { short: 'Boundary-layer height — depth of the well-mixed layer adjacent to the surface.', learn_url: 'https://codes.ecmwf.int/grib/param-db/159', learn_label: 'ECMWF parameter DB' },
+    tcwv: { short: 'Total column water vapour (precipitable water) — vertically integrated specific humidity.', learn_url: 'https://codes.ecmwf.int/grib/param-db/137', learn_label: 'ECMWF parameter DB' },
+    tp:   { short: 'Total precipitation rate (large-scale + convective).',                          learn_url: 'https://codes.ecmwf.int/grib/param-db/228', learn_label: 'ECMWF parameter DB' },
+    ews:  { short: 'Eastward turbulent surface wind stress (momentum flux into the surface).',     learn_url: 'https://codes.ecmwf.int/grib/param-db/180', learn_label: 'ECMWF parameter DB' },
+    sshf: { short: 'Surface sensible heat flux. Positive = upward (from surface to atmosphere).',   learn_url: 'https://codes.ecmwf.int/grib/param-db/146', learn_label: 'ECMWF parameter DB' },
+    slhf: { short: 'Surface latent heat flux. Positive = upward; evaporation cools the surface.',   learn_url: 'https://codes.ecmwf.int/grib/param-db/147', learn_label: 'ECMWF parameter DB' },
+    ssr:  { short: 'Net surface short-wave radiation (down − up).',                                  learn_url: 'https://codes.ecmwf.int/grib/param-db/176', learn_label: 'ECMWF parameter DB' },
+    str:  { short: 'Net surface long-wave radiation (down − up). Usually upward, hence negative.',  learn_url: 'https://codes.ecmwf.int/grib/param-db/177', learn_label: 'ECMWF parameter DB' },
+    tisr: { short: 'Top-of-atmosphere incoming solar radiation — pure astronomical/insolation forcing.', learn_url: 'https://codes.ecmwf.int/grib/param-db/212', learn_label: 'ECMWF parameter DB' },
+    ttr:  { short: 'Top-of-atmosphere net long-wave radiation (OLR with ERA5 sign convention).',    learn_url: 'https://codes.ecmwf.int/grib/param-db/179', learn_label: 'ECMWF parameter DB' },
+
+    // ── Derived fields (computed in browser from component tiles) ──
+    wspd: { short: 'Horizontal wind speed |V| = √(u² + v²) computed from component winds.',         learn_url: null,                                  learn_label: '' },
+    pv:   { short: 'Ertel potential vorticity on isentropic surfaces — a Lagrangian-conserved tracer of dynamical activity. 1 PVU = 10⁻⁶ K m² kg⁻¹ s⁻¹. Tropopause ≈ 2 PVU.', learn_url: 'https://glossary.ametsoc.org/wiki/Potential_vorticity', learn_label: 'AMS Glossary' },
+    mse:  { short: 'Moist static energy / cₚ. h = cₚT + gz + Lq — conserved under adiabatic + reversible-moist processes; tracks deep-convective stability.', learn_url: 'https://glossary.ametsoc.org/wiki/Moist_static_energy', learn_label: 'AMS Glossary' },
+    dls:  { short: 'Deep-layer shear computed from monthly-mean winds: |⟨V₂₀₀⟩ − ⟨V₈₅₀⟩|. Underestimates the climatology of instantaneous shear (Jensen) — for TC genesis thresholds use a daily-resolved product.', learn_url: 'https://glossary.ametsoc.org/wiki/Vertical_wind_shear', learn_label: 'AMS Glossary' },
+    mpi:  { short: 'Bister–Emanuel maximum potential intensity — theoretical upper bound on TC wind speed given local SST + atmospheric T/q profile (14 levels). NaN over land and where the algorithm fails to converge.', learn_url: 'https://doi.org/10.1029/2001JD000776', learn_label: 'Bister & Emanuel (2002)' },
+
+    // ── Synthetic ──
+    corr: { short: 'Per-pixel Pearson correlation coefficient between the active field and the chosen climate-index time series. NaN cells fail the p-value threshold.', learn_url: null, learn_label: '' },
+};
+
+// Default fallback link for any raw ERA5 field without an explicit entry.
+var _ERA5_DATASET_PRESSURE = 'https://cds.climate.copernicus.eu/datasets/reanalysis-era5-pressure-levels-monthly-means';
+var _ERA5_DATASET_SINGLE   = 'https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels-monthly-means';
+
 // Pre-compute the UTC year+month integer on each best-track fix once at load
 // time. Without this, every TrackOverlay.render() call re-parses ~400 k
 // timestamps via parseUTC + getUTCFullYear + getUTCMonth — the dominant cost
@@ -627,6 +689,72 @@ function bindCorrelationPanel() {
     }
 }
 
+// ── Field info popover ───────────────────────────────────────────────
+//
+// Renders next to the Field selector when the ⓘ button is clicked.
+// Pulls the field's name + units from FIELDS (vendored data.js) and
+// merges with our local _FIELD_INFO entry for the description + learn
+// link. Dismissed by clicking outside, hitting Esc, or re-clicking ⓘ.
+function _bindFieldInfoPopover() {
+    const btn = document.getElementById('field-info-btn');
+    const pop = document.getElementById('field-info-popover');
+    const sel = document.getElementById('field-select');
+    if (!btn || !pop || !sel) return;
+
+    const close = () => { pop.hidden = true; };
+    const open = async () => {
+        const { FIELDS } = await import('./vendor/gc-atlas/data.js');
+        const fname = sel.value;
+        const meta = FIELDS[fname] || {};
+        const info = _FIELD_INFO[fname] || {};
+        const escAttr = s => String(s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+        const escText = s => String(s || '').replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        // Default learn link for raw ERA5 fields without an explicit entry:
+        // point at the Copernicus dataset page for the appropriate level type.
+        let learnUrl   = info.learn_url || null;
+        let learnLabel = info.learn_label || 'Learn more';
+        if (!learnUrl && meta.group !== '_internal' && !meta.derived) {
+            learnUrl = (meta.type === 'pl') ? _ERA5_DATASET_PRESSURE : _ERA5_DATASET_SINGLE;
+            learnLabel = 'ERA5 dataset on CDS';
+        }
+        const noteOrShort = info.short || meta.note || '';
+        const isDerived = !!meta.derived;
+        const provider = isDerived
+            ? '<span style="opacity:0.7;">Computed in browser from ERA5 components.</span>'
+            : '<span style="opacity:0.7;">Source: ERA5 reanalysis (ECMWF / Copernicus C3S).</span>';
+        pop.innerHTML =
+            `<div class="fi-title">${escText(meta.name || fname)}` +
+                (meta.units ? ` <span class="fi-units">[${escText(meta.units)}]</span>` : '') +
+            `</div>` +
+            (noteOrShort ? `<div class="fi-body">${escText(noteOrShort)}</div>` : '') +
+            `<div class="fi-meta">${provider}</div>` +
+            (learnUrl
+                ? `<div class="fi-learn"><a href="${escAttr(learnUrl)}" target="_blank" rel="noopener noreferrer" class="ts-source-link">${escText(learnLabel)} ↗</a></div>`
+                : '');
+        pop.hidden = false;
+        _ga('clim_globe_field_info_open', { field: fname });
+    };
+
+    btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (pop.hidden) open(); else close();
+    });
+    document.addEventListener('click', (e) => {
+        if (pop.hidden) return;
+        if (pop.contains(e.target) || btn.contains(e.target)) return;
+        close();
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && !pop.hidden) close();
+    });
+    // Auto-close + re-open with fresh content if the user changes the
+    // active field while the popover is open.
+    sel.addEventListener('change', () => {
+        if (!pop.hidden) open();
+    });
+}
+
 function init() {
     if (!window.envGlobe) {
         console.warn('[ClimGlobe] window.envGlobe missing — was #globe-mount in the DOM?');
@@ -728,6 +856,7 @@ function init() {
 
     bindCorrelationPanel();
     setupHover();
+    _bindFieldInfoPopover();
 }
 
 init();

@@ -71,8 +71,14 @@
         <div class="sidebar-heading">Controls</div>
 
         <section class="control-group">
-            <label class="field-label" for="field-select">Field</label>
+            <label class="field-label" for="field-select">Field
+                <button type="button" id="field-info-btn" class="field-info-btn"
+                        aria-label="About this field" title="What is this field? Source + units + paper link.">ⓘ</button>
+            </label>
             <select id="field-select"></select>
+            <!-- Popover content rendered by climatology_globe.js when the
+                 ⓘ button is clicked. Hidden until then. -->
+            <div id="field-info-popover" class="field-info-popover" hidden role="dialog" aria-label="Field information"></div>
         </section>
 
         <section class="control-group">

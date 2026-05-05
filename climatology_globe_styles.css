@@ -152,3 +152,54 @@
     top: 12px;
     z-index: 200;
 }
+
+/* ── Field-info ⓘ button + popover ─────────────────────────── */
+.field-info-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-left: 6px;
+    padding: 0;
+    width: 18px;
+    height: 18px;
+    line-height: 1;
+    font-size: 0.85rem;
+    font-family: inherit;
+    color: var(--sage);
+    background: transparent;
+    border: none;
+    border-radius: 50%;
+    cursor: pointer;
+    vertical-align: middle;
+    transition: color 0.15s, background 0.15s;
+}
+.field-info-btn:hover  { color: var(--paper); background: rgba(255,255,255,0.06); }
+.field-info-btn:focus  { outline: none; color: var(--emerald-bright); background: rgba(14,140,110,0.18); }
+
+.field-info-popover[hidden] { display: none; }
+.field-info-popover {
+    margin-top: 6px;
+    padding: 10px 12px;
+    font-size: 0.72rem;
+    line-height: 1.5;
+    color: var(--paper);
+    background: rgba(255,255,255,0.03);
+    border: 1px solid var(--thalo-line);
+    border-left: 3px solid var(--emerald);
+    border-radius: 4px;
+}
+.field-info-popover .fi-title {
+    font-weight: 600;
+    color: var(--emerald-bright);
+    margin-bottom: 4px;
+}
+.field-info-popover .fi-units {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.66rem;
+    color: var(--sage);
+    font-weight: normal;
+    margin-left: 4px;
+}
+.field-info-popover .fi-body  { margin-bottom: 6px; }
+.field-info-popover .fi-meta  { margin-bottom: 6px; font-size: 0.66rem; }
+.field-info-popover .fi-learn a { font-size: 0.7rem; }
