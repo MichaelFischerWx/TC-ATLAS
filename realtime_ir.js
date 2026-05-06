@@ -1183,10 +1183,11 @@
             var offsets = getOffsetsForSat(sat.name);
             function tryBatch(startIdx) {
                 if (startIdx >= offsets.length) {
-                    // All failed — fall back to 90 min ago
-                    var fb = roundToGIBSInterval(new Date());
-                    fb = new Date(fb.getTime() - 90 * 60 * 1000);
-                    return Promise.resolve(toGIBSTime(fb));
+                    // Every probe in the standard window (15–120 min) returned
+                    // 404 → this satellite's GIBS feed is stale. Return null so
+                    // the caller can flag it in the staleness banner instead of
+                    // silently animating a non-existent timestamp.
+                    return Promise.resolve(null);
                 }
                 var batch = offsets.slice(startIdx, startIdx + PROBE_BATCH);
                 var probes = batch.map(function (offset) {
@@ -1226,20 +1227,51 @@
         })).then(function (results) {
             var perSat = {};
             var oldestMs = Infinity;
+            var staleSats = [];
             for (var i = 0; i < results.length; i++) {
+                if (results[i].time === null) {
+                    staleSats.push(results[i].name);
+                    continue;
+                }
                 perSat[results[i].name] = results[i].time;
                 var ms = new Date(results[i].time).getTime();
                 if (ms < oldestMs) oldestMs = ms;
             }
-            var oldest = toGIBSTime(new Date(oldestMs));
-            return { perSat: perSat, oldest: oldest };
+            // If at least one sat is fresh, animate against its time;
+            // otherwise fall back to "now rounded to 10 min" (won't render
+            // tiles, but avoids NaN dates downstream).
+            var oldest;
+            if (oldestMs !== Infinity) {
+                oldest = toGIBSTime(new Date(oldestMs));
+            } else {
+                oldest = toGIBSTime(roundToGIBSInterval(new Date()));
+            }
+            return { perSat: perSat, oldest: oldest, staleSats: staleSats };
         });
+    }
+
+    /** Update the GIBS-feed staleness banner. Show when one or more
+     *  satellites are stale; hide when all are fresh. The banner names
+     *  the affected satellites and links to NASA's outages page. */
+    function _updateFeedStalenessBanner(staleSats) {
+        var el = document.getElementById('ir-feed-banner');
+        var txt = document.getElementById('ir-feed-banner-text');
+        if (!el || !txt) return;
+        if (!staleSats || staleSats.length === 0) {
+            el.style.display = 'none';
+            return;
+        }
+        var label = staleSats.join(' & ');
+        var msg = label + ' feed delayed (NASA GIBS) — that region of the global map will appear blank until the upstream ingest catches up.';
+        txt.textContent = msg;
+        el.style.display = 'flex';
     }
 
     /** Legacy wrapper — returns the oldest satellite time (for animation compatibility) */
     function findLatestGIBSTime() {
         return findLatestGIBSTimes().then(function (result) {
             latestGIBSTimes = result.perSat;
+            _updateFeedStalenessBanner(result.staleSats);
             return result.oldest;
         });
     }
@@ -1251,11 +1283,13 @@
         findLatestGIBSTimes().then(function (result) {
             latestGIBSTimes = result.perSat;
             latestGIBSTime = result.oldest;  // animation fallback
+            _updateFeedStalenessBanner(result.staleSats);
             var lyr = createCompositeGIBSLayer(result.oldest, opacity || 0.65, result.perSat);
             lyr.addTo(targetMap);
             gibsIRLayers = [lyr];
             console.log('GIBS per-satellite times:', JSON.stringify(result.perSat),
-                        '| oldest (animation):', result.oldest);
+                        '| oldest (animation):', result.oldest,
+                        '| stale:', result.staleSats);
         });
         return []; // layers added asynchronously — gibsIRLayers updated in callback
     }

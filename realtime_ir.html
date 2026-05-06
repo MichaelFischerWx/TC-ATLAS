@@ -118,6 +118,15 @@
         <!-- Map container -->
         <div id="ir-map" class="ir-map"></div>
 
+        <!-- Satellite feed staleness banner (shown when a GIBS layer
+             has no recent tiles, e.g., GOES-West ingest stalled) -->
+        <div id="ir-feed-banner" class="ir-feed-banner" style="display:none;" role="alert">
+            <span class="ir-feed-banner-icon" aria-hidden="true">&#9888;</span>
+            <span id="ir-feed-banner-text"></span>
+            <a class="ir-feed-banner-link" href="https://www.earthdata.nasa.gov/data/alerts-outages" target="_blank" rel="noopener">NASA status</a>
+            <button class="ir-feed-banner-close" onclick="this.parentElement.style.display='none'" aria-label="Dismiss">&times;</button>
+        </div>
+
         <!-- Status bar (bottom) -->
         <div id="ir-status-bar" class="ir-status-bar">
             <span id="ir-status-text">Connecting&hellip;</span>

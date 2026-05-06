@@ -126,6 +126,53 @@
     color: #e2e8f0;
 }
 
+/* ── GIBS feed staleness banner ─────────────────────────────── */
+.ir-feed-banner {
+    position: absolute;
+    top: 14px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 500;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 14px 8px 12px;
+    background: rgba(48, 27, 8, 0.92);
+    border: 1px solid rgba(251, 146, 60, 0.45);
+    border-radius: 8px;
+    color: #fde68a;
+    font-size: 0.78rem;
+    font-weight: 500;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+    pointer-events: auto;
+    max-width: min(720px, 90vw);
+}
+.ir-feed-banner-icon {
+    color: #fb923c;
+    font-size: 1rem;
+    flex-shrink: 0;
+}
+.ir-feed-banner-link {
+    color: #93c5fd;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+.ir-feed-banner-link:hover { color: #bfdbfe; }
+.ir-feed-banner-close {
+    background: none;
+    border: none;
+    color: #94a3b8;
+    font-size: 1.1rem;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 0 0 4px;
+}
+.ir-feed-banner-close:hover { color: #e2e8f0; }
+
 /* ── Legend ───────────────────────────────────────────────────── */
 .ir-legend {
     position: fixed;
