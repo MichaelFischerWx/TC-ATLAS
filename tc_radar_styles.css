@@ -85,8 +85,9 @@ body { font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sa
 .topbar-stat { display: flex; flex-direction: column; align-items: center; line-height: 1.15; }
 .topbar-stat-val { font-size: 0.95rem; font-weight: 700; color: var(--text); font-family: 'JetBrains Mono', monospace; }
 .topbar-stat-label { font-size: 0.6rem; color: var(--slate); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 500; }
-.topbar-nav { display: flex; gap: 6px; list-style: none; align-items: center; }
-.topbar-nav a { color: var(--slate); text-decoration: none; font-weight: 500; font-size: 0.8rem; padding: 6px 12px; border-radius: 6px; transition: all 0.2s; }
+.topbar-nav { display: flex; gap: 6px; list-style: none; align-items: center; flex-wrap: nowrap; }
+.topbar-nav li { flex: 0 0 auto; }
+.topbar-nav a { color: var(--slate); text-decoration: none; font-weight: 500; font-size: 0.8rem; padding: 6px 12px; border-radius: 6px; transition: all 0.2s; white-space: nowrap; }
 .topbar-nav a:hover { color: var(--text); background: rgba(255,255,255,0.06); }
 .topbar-nav a.nav-active { color: var(--text); background: rgba(46,125,255,0.15); font-weight: 600; }
 .topbar-version { font-size: 0.65rem; color: var(--navy); background: var(--cyan); padding: 2px 8px; border-radius: 20px; font-weight: 600; letter-spacing: 0.02em; }
@@ -1522,6 +1523,17 @@ footer a:hover { text-decoration: underline; }
 .nav-short { display: none; }
 .nav-full { display: inline; }
 .nav-hamburger { display: none; }
+
+/* Intermediate desktop widths (laptop, narrow desktop): the full nav
+   labels overflow and previously wrapped each link onto two lines.
+   Switch to short labels and tighten padding/gap so all items fit
+   on one row without wrapping. */
+@media (max-width: 1600px) and (min-width: 769px) {
+    .topbar-nav { gap: 3px; }
+    .topbar-nav a { padding: 6px 9px; font-size: 0.76rem; }
+    .nav-full { display: none; }
+    .nav-short { display: inline; }
+}
 
 /* ── Mobile nav: hamburger menu ──────────────────────────── */
 @media (max-width: 768px) {

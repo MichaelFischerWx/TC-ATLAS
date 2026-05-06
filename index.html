@@ -69,12 +69,20 @@
         .topbar-brand { display: flex; align-items: center; gap: 14px; }
         .topbar-icon { width: 28px; height: 28px; border-radius: 4px; }
         .topbar-logo { font-size: 1.35rem; font-weight: 700; letter-spacing: -0.02em; white-space: nowrap; background: linear-gradient(135deg, var(--blue) 0%, var(--cyan) 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
-        .topbar-nav { display: flex; gap: 6px; list-style: none; align-items: center; }
-        .topbar-nav a { color: var(--slate); text-decoration: none; font-weight: 500; font-size: 0.8rem; padding: 6px 12px; border-radius: 6px; transition: all 0.2s; }
+        .topbar-nav { display: flex; gap: 6px; list-style: none; align-items: center; flex-wrap: nowrap; }
+        .topbar-nav li { flex: 0 0 auto; }
+        .topbar-nav a { color: var(--slate); text-decoration: none; font-weight: 500; font-size: 0.8rem; padding: 6px 12px; border-radius: 6px; transition: all 0.2s; white-space: nowrap; }
         .topbar-nav a:hover { color: var(--text); background: rgba(255,255,255,0.06); }
         .topbar-nav a.nav-active { color: var(--text); background: rgba(46,125,255,0.15); }
         .nav-short { display: none; }
         .nav-full { display: inline; }
+        /* Intermediate desktop widths: switch to short labels so the nav fits in one row. */
+        @media (max-width: 1600px) and (min-width: 769px) {
+            .topbar-nav { gap: 3px; }
+            .topbar-nav a { padding: 6px 9px; font-size: 0.76rem; }
+            .nav-full { display: none; }
+            .nav-short { display: inline; }
+        }
         .nav-hamburger { display: none; background: none; border: 1px solid rgba(255,255,255,0.15); color: var(--slate); font-size: 1.2rem; padding: 4px 10px; border-radius: 6px; cursor: pointer; line-height: 1; min-height: 36px; }
         .nav-hamburger.open { color: var(--text); background: rgba(255,255,255,0.08); }
 
