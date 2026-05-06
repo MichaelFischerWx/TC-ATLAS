@@ -56,12 +56,6 @@
                 <div class="topbar-divider"></div>
                 <div class="topbar-subtitle">Structure Analysis</div>
             </div>
-            <div class="topbar-stats">
-                <div class="topbar-stat"><span class="topbar-stat-val" id="total-cases">&mdash;</span><span class="topbar-stat-label">Analyses</span></div>
-                <div class="topbar-stat"><span class="topbar-stat-val" id="unique-storms">&mdash;</span><span class="topbar-stat-label">Storms</span></div>
-                <div class="topbar-stat"><span class="topbar-stat-val" id="year-range">&mdash;</span><span class="topbar-stat-label">Coverage</span></div>
-                <span class="topbar-version" title="TC-RADAR v3m processing pipeline — post-processed merged/swath analyses">v3m</span>
-            </div>
             <nav aria-label="Main navigation">
             <ul class="topbar-nav">
                 <li><a href="index.html" role="button">Home</a></li>
@@ -80,6 +74,14 @@
     </header>
 
     <section id="map-section" role="main" aria-label="TC-RADAR Map Explorer">
+        <div class="dataset-stats-strip" role="region" aria-label="TC-RADAR dataset overview">
+            <span class="dataset-stat"><strong id="total-cases">&mdash;</strong> analyses</span>
+            <span class="dataset-stat-sep" aria-hidden="true">·</span>
+            <span class="dataset-stat"><strong id="unique-storms">&mdash;</strong> storms</span>
+            <span class="dataset-stat-sep" aria-hidden="true">·</span>
+            <span class="dataset-stat" id="year-range">&mdash;</span>
+            <span class="dataset-version" title="TC-RADAR v3m processing pipeline — post-processed merged/swath analyses">v3m</span>
+        </div>
         <div class="map-toolbar" role="toolbar" aria-label="Case selection and filters">
             <div class="toolbar-group">
                 <label class="toolbar-label" for="year-select">Year</label>

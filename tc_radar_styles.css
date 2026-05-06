@@ -1524,15 +1524,51 @@ footer a:hover { text-decoration: underline; }
 .nav-full { display: inline; }
 .nav-hamburger { display: none; }
 
-/* Intermediate desktop widths (laptop, narrow desktop): the full nav
-   labels overflow and previously wrapped each link onto two lines.
-   Switch to short labels and tighten padding/gap so all items fit
-   on one row without wrapping. */
-@media (max-width: 1600px) and (min-width: 769px) {
+/* Intermediate desktop widths: switch to short nav labels only when the
+   topbar would otherwise overflow. With the dataset stats moved out of
+   the topbar, the nav fits comfortably down to ~1100 px. */
+@media (max-width: 1100px) and (min-width: 769px) {
     .topbar-nav { gap: 3px; }
     .topbar-nav a { padding: 6px 9px; font-size: 0.76rem; }
     .nav-full { display: none; }
     .nav-short { display: inline; }
+}
+
+/* ── Dataset stats strip (replaces in-topbar stats) ──────── */
+.dataset-stats-strip {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 5px 24px;
+    font-size: 0.72rem;
+    color: var(--slate);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    line-height: 1.4;
+}
+.dataset-stats-strip .dataset-stat strong {
+    color: var(--text);
+    font-weight: 700;
+    font-family: 'JetBrains Mono', monospace;
+    margin-right: 3px;
+}
+.dataset-stats-strip .dataset-stat-sep {
+    color: var(--border-light);
+    font-weight: 700;
+}
+.dataset-stats-strip .dataset-version {
+    margin-left: auto;
+    background: rgba(0, 229, 255, 0.15);
+    color: var(--cyan);
+    padding: 1px 8px;
+    border-radius: 10px;
+    font-size: 0.64rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+@media (max-width: 600px) {
+    .dataset-stats-strip { padding: 4px 14px; font-size: 0.68rem; gap: 6px; }
 }
 
 /* ── Mobile nav: hamburger menu ──────────────────────────── */

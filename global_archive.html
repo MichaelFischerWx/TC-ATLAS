@@ -87,21 +87,6 @@
                 <div class="topbar-divider"></div>
                 <div class="topbar-subtitle">Global TC Archive</div>
             </div>
-            <div class="topbar-stats">
-                <div class="topbar-stat">
-                    <span class="topbar-stat-val" id="stat-storms">&mdash;</span>
-                    <span class="topbar-stat-label">Storms</span>
-                </div>
-                <div class="topbar-stat">
-                    <span class="topbar-stat-val" id="stat-years">&mdash;</span>
-                    <span class="topbar-stat-label">Coverage</span>
-                </div>
-                <div class="topbar-stat">
-                    <span class="topbar-stat-val" id="stat-basins">&mdash;</span>
-                    <span class="topbar-stat-label">Basins</span>
-                </div>
-                <span class="topbar-version">IBTrACS v04</span>
-            </div>
             <nav aria-label="Main navigation">
                 <ul class="topbar-nav">
                     <li><a href="index.html" role="button">Home</a></li>
@@ -118,6 +103,15 @@
             <button class="nav-hamburger" onclick="this.classList.toggle('open');document.querySelector('.topbar-nav').classList.toggle('mobile-open')" aria-label="Menu">&#9776;</button>
         </div>
     </header>
+
+    <div class="dataset-stats-strip" role="region" aria-label="Global archive dataset overview">
+        <span class="dataset-stat"><strong id="stat-storms">&mdash;</strong> storms</span>
+        <span class="dataset-stat-sep" aria-hidden="true">·</span>
+        <span class="dataset-stat" id="stat-years">&mdash;</span>
+        <span class="dataset-stat-sep" aria-hidden="true">·</span>
+        <span class="dataset-stat"><strong id="stat-basins">&mdash;</strong> basins</span>
+        <span class="dataset-version">IBTrACS v04</span>
+    </div>
 
     <!-- ── Tab bar ────────────────────────────────────────────── -->
     <div class="ga-tabs" role="tablist" aria-label="Global archive sections">
