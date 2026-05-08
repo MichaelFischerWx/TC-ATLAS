@@ -109,6 +109,10 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    /* SVG wireframe strokes inherit this via currentColor — flips with
+       theme so the green is readable on both light + dark backgrounds.
+       In dark mode --um-green resolves to the brightened emerald. */
+    color: var(--um-green);
 }
 .tc-clim-globe-banner-icon svg {
     width: 56px;
