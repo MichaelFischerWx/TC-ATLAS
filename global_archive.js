@@ -10472,8 +10472,8 @@ function _gaSondeRenderTable() {
     var wrap = document.getElementById('ga-sonde-table-wrap');
     if (!wrap || !_gaSondeData) return;
 
-    var html = '<table style="width:100%;border-collapse:collapse;font-size:10px;font-family:\'JetBrains Mono\',monospace;">' +
-        '<tr style="color:#6ee7b7;border-bottom:1px solid rgba(15, 22, 35,0.1);">' +
+    var html = '<table style="width:100%;border-collapse:collapse;font-size:10px;font-variant-numeric:tabular-nums;color:var(--text);">' +
+        '<tr style="color:var(--um-green);border-bottom:1px solid var(--border);">' +
         '<th style="padding:3px 4px;text-align:left;">#</th>' +
         '<th style="padding:3px 4px;text-align:left;">Time</th>' +
         '<th style="padding:3px 4px;text-align:right;" title="Maximum wind speed in profile">Vmax</th>' +
@@ -10541,7 +10541,7 @@ function _gaSondeRenderTable() {
             '<td style="padding:2px 4px;text-align:right;">' + (wl150 != null ? (wl150 * 1.944).toFixed(0) + ' kt' : '\u2014') + '</td>' +
             '<td style="padding:2px 4px;text-align:right;">' + (psfc != null ? psfc.toFixed(0) : '\u2014') + '</td>' +
             '<td style="padding:2px 4px;text-align:center;">' + (s.hit_surface ? '\u2705' : '\u274c') + '</td>' +
-            '<td style="padding:2px 4px;"><button class="ga-btn ga-btn-xs" style="font-size:8px;color:#6ee7b7;" onclick="event.stopPropagation();gaSondeShowSkewT(' + i + ')">Skew-T</button></td></tr>';
+            '<td style="padding:2px 4px;"><button class="ga-btn ga-btn-xs" style="font-size:8px;color:var(--um-green);" onclick="event.stopPropagation();gaSondeShowSkewT(' + i + ')">Skew-T</button></td></tr>';
     }
     html += '</table>';
     wrap.innerHTML = html;

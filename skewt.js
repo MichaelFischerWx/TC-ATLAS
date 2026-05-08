@@ -354,6 +354,18 @@ function renderSkewT(profiles, divId) {
     var pRange = [];
     for (var pp2 = 1050; pp2 >= 100; pp2 -= 5) pRange.push(pp2);
 
+    // Reference-line colors are tuned per theme: the original alphas were
+    // calibrated against dark navy paper, where 0.20-0.25 reads clearly.
+    // On white paper those values disappear, so we deepen the colors and
+    // bump the alphas for light mode.
+    var _skewtIsDark = (typeof document !== 'undefined' &&
+                       document.documentElement.getAttribute('data-theme') === 'dark');
+    var _isothermColor = _skewtIsDark ? 'rgba(100,160,220,0.25)' : 'rgba(40,80,150,0.42)';
+    var _isothermZeroColor = _skewtIsDark ? 'rgba(100,200,255,0.5)' : 'rgba(20,90,180,0.65)';
+    var _dryAdiabatColor = _skewtIsDark ? 'rgba(200,120,80,0.22)' : 'rgba(180,80,30,0.40)';
+    var _moistAdiabatColor = _skewtIsDark ? 'rgba(80,200,120,0.22)' : 'rgba(20,140,60,0.38)';
+    var _mixRatioColor = _skewtIsDark ? 'rgba(160,120,200,0.2)' : 'rgba(110,60,160,0.38)';
+
     // Isotherms
     var isothermTraces = [];
     for (var tIso = -80; tIso <= 50; tIso += 10) {
@@ -365,7 +377,7 @@ function renderSkewT(profiles, divId) {
         if (xIso.length > 1) {
             isothermTraces.push({
                 x: xIso, y: yIso, type: 'scatter', mode: 'lines',
-                line: { color: tIso === 0 ? 'rgba(100,200,255,0.5)' : 'rgba(100,160,220,0.25)',
+                line: { color: tIso === 0 ? _isothermZeroColor : _isothermColor,
                         width: tIso === 0 ? 1.3 : 0.7,
                         dash: tIso === 0 ? 'dot' : 'solid' },
                 showlegend: false, hoverinfo: 'skip',
@@ -387,7 +399,7 @@ function renderSkewT(profiles, divId) {
         if (xDry.length > 1) {
             dryAdiabatTraces.push({
                 x: xDry, y: yDry, type: 'scatter', mode: 'lines',
-                line: { color: 'rgba(200,120,80,0.22)', width: 0.8 },
+                line: { color: _dryAdiabatColor, width: 0.8 },
                 showlegend: false, hoverinfo: 'skip',
             });
         }
@@ -407,7 +419,7 @@ function renderSkewT(profiles, divId) {
         if (xMoist.length > 2) {
             moistAdiabatTraces.push({
                 x: xMoist, y: yMoist, type: 'scatter', mode: 'lines',
-                line: { color: 'rgba(80,200,120,0.22)', width: 0.8, dash: 'dot' },
+                line: { color: _moistAdiabatColor, width: 0.8, dash: 'dot' },
                 showlegend: false, hoverinfo: 'skip',
             });
         }
@@ -434,7 +446,7 @@ function renderSkewT(profiles, divId) {
         if (xMix.length > 2) {
             mixRatioTraces.push({
                 x: xMix, y: yMix, type: 'scatter', mode: 'lines',
-                line: { color: 'rgba(160,120,200,0.2)', width: 0.6, dash: 'dash' },
+                line: { color: _mixRatioColor, width: 0.6, dash: 'dash' },
                 showlegend: false, hoverinfo: 'skip',
             });
         }
@@ -583,29 +595,34 @@ function renderSkewT(profiles, divId) {
         });
     }
 
+    var _axisCol = _skewtIsDark ? '#8b9ec2' : '#5b6573';
+    var _legendBg = _skewtIsDark ? 'rgba(0,0,0,0.4)' : 'rgba(255,255,255,0.85)';
+    var _legendText = _skewtIsDark ? '#ccc' : '#0f1623';
+    var _titleCol = _skewtIsDark ? '#00d4ff' : '#0f8a8e';
+
     var layout = {
         xaxis: {
-            title: { text: 'Temperature (\u00b0C)', font: { size: 9, color: '#8b9ec2' } },
+            title: { text: 'Temperature (\u00b0C)', font: { size: 9, color: _axisCol } },
             range: [-40, xRangeMax],
             tickvals: xTickVals, ticktext: xTickText,
-            color: '#8b9ec2', tickfont: { size: 8 },
-            zeroline: false, gridcolor: 'rgba(255,255,255,0.03)',
+            color: _axisCol, tickfont: { size: 8 },
+            zeroline: false, gridcolor: 'rgba(15,22,35,0.06)',
             showgrid: false,
         },
         yaxis: {
-            title: { text: 'Pressure (hPa)', font: { size: 9, color: '#8b9ec2' } },
+            title: { text: 'Pressure (hPa)', font: { size: 9, color: _axisCol } },
             autorange: false, type: 'log',
             range: [Math.log10(pBot), Math.log10(pMax)],
-            color: '#8b9ec2', tickfont: { size: 8 },
+            color: _axisCol, tickfont: { size: 8 },
             tickvals: [1000, 850, 700, 500, 400, 300, 200, 150, 100].filter(function (v) { return v >= pMax && v <= pBot; }),
             dtick: null,
-            zeroline: false, gridcolor: 'rgba(255,255,255,0.06)',
+            zeroline: false, gridcolor: 'rgba(15,22,35,0.10)',
         },
         paper_bgcolor: 'rgba(0,0,0,0)',
-        plot_bgcolor: 'rgba(247,248,250,0.85)',
+        plot_bgcolor: _skewtIsDark ? 'rgba(247,248,250,0.05)' : '#ffffff',
         margin: { l: 45, r: 10, t: 22, b: 35 },
-        title: { text: 'Skew-T / Log-P', font: { size: 10, color: '#00d4ff' }, x: 0.5, y: 0.98 },
-        legend: { font: { color: '#ccc', size: 9 }, x: 0.68, y: 0.98, bgcolor: 'rgba(0,0,0,0.4)' },
+        title: { text: 'Skew-T / Log-P', font: { size: 10, color: _titleCol }, x: 0.5, y: 0.98 },
+        legend: { font: { color: _legendText, size: 9 }, x: 0.68, y: 0.98, bgcolor: _legendBg, bordercolor: 'rgba(15,22,35,0.12)', borderwidth: 1 },
         showlegend: true,
         shapes: barbShapes,
     };

@@ -1899,6 +1899,21 @@ input[type="range"].ga-range::-moz-range-thumb {
     padding: 2px 8px;
     border-radius: 4px;
     width: auto;
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+}
+.ga-btn-xs:hover {
+    background: var(--surface-raised);
+    border-color: var(--border-light);
+}
+.ga-btn-xs.active,
+.ga-sonde-pv-btn.active,
+.ga-sonde-color-btn.active,
+.ga-sonde-view-btn.active {
+    background: var(--um-green-tint);
+    color: var(--um-green);
+    border-color: var(--um-green);
 }
 
 /* ── Flight-level tooltip (higher z-index than IR hover) ──── */
