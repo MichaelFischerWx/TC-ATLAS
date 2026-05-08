@@ -1625,11 +1625,16 @@ function renderIntensityTimeline(track, storm) {
     var _readVar = (window.TCATheme && window.TCATheme.readVar) ? window.TCATheme.readVar : function () { return ''; };
     var _axisColor = _readVar('--plot-axis') || '#5b6573';
     var _gridColor = _readVar('--plot-grid') || 'rgba(15,22,35,0.22)';
-    var _legendBg = _readVar('--surface-raised') || _readVar('--surface') || '#ffffff';
+    var _surfaceRaised = _readVar('--surface-raised') || '#ffffff';
     var _legendBorder = _readVar('--border') || 'rgba(15,22,35,0.12)';
     var _legendText = _readVar('--text') || '#0f1623';
 
+    // Render the intensity timeline as a slightly-raised "card" rather
+    // than the flat page bg — gives the chart visual identity in both
+    // themes (white card on light gray; near-charcoal on near-black).
     var layout = Object.assign({}, _base, {
+        paper_bgcolor: _surfaceRaised,
+        plot_bgcolor: _surfaceRaised,
         xaxis: {
             title: { text: 'Date/Time', font: { size: 11, color: _axisColor } },
             tickfont: { size: 10, color: _axisColor },
@@ -1655,7 +1660,7 @@ function renderIntensityTimeline(track, storm) {
         showlegend: true,
         legend: {
             x: 0.01, y: 0.99,
-            bgcolor: _legendBg,
+            bgcolor: _surfaceRaised,
             bordercolor: _legendBorder,
             borderwidth: 1,
             font: { size: 11, color: _legendText }
