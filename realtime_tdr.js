@@ -4433,12 +4433,12 @@
 
         var sd = data.ships_data || {};
         var vp = data.ventilation_proxy;
-        var atcfTag = data.atcf_id ? ' <span style="color:#8b9ec2;font-weight:400;">(' + data.atcf_id + ')</span>' : '';
-        var autoTag = data.auto_detected ? ' <span style="color:#34d399;font-size:9px;">auto</span>' : '';
+        var atcfTag = data.atcf_id ? ' <span style="color:var(--slate);font-weight:400;">(' + data.atcf_id + ')</span>' : '';
+        var autoTag = data.auto_detected ? ' <span style="color:var(--um-green, #005030);font-size:9px;font-weight:600;">auto</span>' : '';
 
         var rows = [
-            '<div style="font-size:11px;font-weight:600;color:#fdba74;margin-bottom:4px;">\ud83d\udce1 SHIPS Environmental Data' + atcfTag + autoTag + '</div>',
-            '<table style="width:100%;font-size:10px;color:#d1d5db;border-collapse:collapse;">',
+            '<div style="font-size:11px;font-weight:600;color:var(--um-orange, #F47321);margin-bottom:4px;">\ud83d\udce1 SHIPS Environmental Data' + atcfTag + autoTag + '</div>',
+            '<table style="width:100%;font-size:10px;color:var(--text, #0f1623);border-collapse:collapse;">',
         ];
 
         var shgcEst = data.vp_components && data.vp_components.shgc_est_kt
@@ -4464,8 +4464,8 @@
         ];
 
         fields.forEach(function (f) {
-            rows.push('<tr><td style="padding:1px 4px;color:#8b9ec2;white-space:nowrap;">' + f[0] + '</td>' +
-                '<td style="padding:1px 4px;text-align:right;font-family:JetBrains Mono,monospace;">' + f[1] + '</td></tr>');
+            rows.push('<tr><td style="padding:1px 4px;color:var(--slate);white-space:nowrap;">' + f[0] + '</td>' +
+                '<td style="padding:1px 4px;text-align:right;font-variant-numeric:tabular-nums;color:var(--text, #0f1623);">' + f[1] + '</td></tr>');
         });
 
         rows.push('</table>');
@@ -4793,7 +4793,7 @@
             _rtSaveBtnHTML('rt-anomaly-chart', 'ZstarAnomaly', 'margin-left:auto;') +
             '<button onclick="document.getElementById(\'rt-anomaly-result\').innerHTML=\'\'" class="fl-ts-close" title="Close">&times;</button>' +
             '</div>' +
-            '<div style="font-size:9px;color:#8b9ec2;padding:2px 8px;">' + climNote + '</div>' +
+            '<div style="font-size:9px;color:var(--slate);padding:2px 8px;">' + climNote + '</div>' +
             '<div id="rt-anomaly-chart" style="width:100%;height:320px;"></div>' +
             '</div>';
 
@@ -4959,7 +4959,7 @@
 
         if (withVF.length === 0) {
             container.querySelector('#rt-vp-chart').innerHTML =
-                '<div style="color:#8b9ec2;text-align:center;padding:40px;">Archive VP scatter data not yet loaded on server. Try again in ~1 min.</div>';
+                '<div style="color:var(--slate);text-align:center;padding:40px;">Archive VP scatter data not yet loaded on server. Try again in ~1 min.</div>';
             return;
         }
 
