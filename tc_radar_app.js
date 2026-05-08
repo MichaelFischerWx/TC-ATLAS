@@ -469,8 +469,10 @@ function exploreCaseGo() {
 
 // ── Side panel ───────────────────────────────────────────────
 function openSidePanel(caseData, fromQuickSelect) {
-    // Hide featured-cases strip once any case opens
+    // Hide featured-cases strip once any case opens — persist so
+    // returning users don't see the onboarding banner again.
     _featuredCasesDismissed = true;
+    _persistFeaturedDismissed();
     var _fc = document.getElementById('featured-cases');
     if (_fc) _fc.hidden = true;
     _archiveFLReset();
@@ -5535,7 +5537,18 @@ var FEATURED_CASES = [
     { storm: 'MICHAEL', year: 2018, blurb: 'Panhandle Cat 5 landfall' },
     { storm: 'IRMA',    year: 2017, blurb: 'Peak-intensity Cat 5 (185 mph) approach to Leewards' }
 ];
-var _featuredCasesDismissed = false;
+// Read persisted dismissal — once a user has clicked any featured case
+// (or otherwise engaged with the case browser), the onboarding strip
+// stays hidden on every subsequent visit. Returning users don't see it.
+var _FEATURED_LS_KEY = 'tc-atlas-featured-seen';
+var _featuredCasesDismissed = (function () {
+    try { return localStorage.getItem(_FEATURED_LS_KEY) === 'true'; }
+    catch (e) { return false; }
+})();
+
+function _persistFeaturedDismissed() {
+    try { localStorage.setItem(_FEATURED_LS_KEY, 'true'); } catch (e) {}
+}
 
 function _pickPeakCaseIndex(stormName, year) {
     var d = _getActiveData();
@@ -5604,8 +5617,10 @@ function openFeaturedCase(caseIdx) {
     var caseData = d.cases.find(function(c){ return c.case_index === caseIdx; });
     if (!caseData) return;
     _ga('featured_case_click', { case_index: caseIdx, storm_name: caseData.storm_name, year: caseData.year });
-    // Dismiss featured panel so it doesn't return when the side panel closes
+    // Dismiss featured panel so it doesn't return when the side panel
+    // closes, and persist so returning users skip the onboarding banner.
     _featuredCasesDismissed = true;
+    _persistFeaturedDismissed();
     var host = document.getElementById('featured-cases');
     if (host) host.hidden = true;
     // Go straight into focus mode + side panel (same as exploreCaseGo)
@@ -5616,6 +5631,7 @@ function openFeaturedCase(caseIdx) {
 window.openFeaturedCase = openFeaturedCase;
 window.dismissFeaturedCases = function() {
     _featuredCasesDismissed = true;
+    _persistFeaturedDismissed();
     var host = document.getElementById('featured-cases');
     if (host) host.hidden = true;
     _ga('featured_cases_dismiss', {});
