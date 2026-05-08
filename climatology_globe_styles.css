@@ -55,6 +55,40 @@
     --amber:          #F47321;
 }
 
+/* ── Direct sidebar / topbar / chrome overrides for dark mode ──
+   Belt-and-suspenders for the engine-token remap above. globe.css
+   sets these via var(--thalo-dark) etc., and the variable override
+   *should* be enough — but any stray hardcoded white in the engine
+   chrome would slip through. These rules are scoped to the dark
+   theme attribute and use !important so dark mode wins regardless
+   of cascade order with the vendored globe.css. */
+:root[data-theme="dark"] .sidebar,
+:root[data-theme="dark"] .sidebar-backdrop,
+:root[data-theme="dark"] .sidebar .panel {
+    background: #11161f !important;
+    color: #e6e8eb !important;
+}
+:root[data-theme="dark"] .sidebar .section-label,
+:root[data-theme="dark"] .sidebar label {
+    color: #8a93a4 !important;
+}
+:root[data-theme="dark"] .sidebar select,
+:root[data-theme="dark"] .sidebar input[type="text"],
+:root[data-theme="dark"] .sidebar input[type="number"],
+:root[data-theme="dark"] .sidebar .input,
+:root[data-theme="dark"] .sidebar .select,
+:root[data-theme="dark"] .sidebar .toggle-group,
+:root[data-theme="dark"] .sidebar .pill {
+    background: #1c222d !important;
+    color: #e6e8eb !important;
+    border-color: rgba(255,255,255,0.10) !important;
+}
+:root[data-theme="dark"] .sidebar-footer {
+    background: #11161f !important;
+    color: #8a93a4 !important;
+    border-top-color: rgba(255,255,255,0.08) !important;
+}
+
 /* ── Canvas area — DARK ("space") so the sun feature reads ──── */
 /* The 3D globe is rendered with a sun-position highlight that only
    makes physical sense against a dark/space background. So the
