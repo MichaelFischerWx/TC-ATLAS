@@ -271,13 +271,13 @@ function renderACEChart(minYear, maxYear) {
         xaxis: {
             title: { text: 'Year', font: { size: 11, color: '#8b9ec2' } },
             tickfont: { size: 9, color: '#8b9ec2' },
-            gridcolor: 'rgba(15, 22, 35,0.14)',
+            gridcolor: 'rgba(15, 22, 35,0.22)',
             dtick: 10
         },
         yaxis: {
             title: { text: 'ACE (10⁴ kt²)', font: { size: 11, color: '#8b9ec2' } },
             tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' },
-            gridcolor: 'rgba(15, 22, 35,0.14)'
+            gridcolor: 'rgba(15, 22, 35,0.22)'
         },
         showlegend: true,
         legend: {
@@ -322,13 +322,13 @@ function renderFrequencyChart(minYear, maxYear) {
         xaxis: {
             title: { text: 'Year', font: { size: 11, color: '#8b9ec2' } },
             tickfont: { size: 9, color: '#8b9ec2' },
-            gridcolor: 'rgba(15, 22, 35,0.14)',
+            gridcolor: 'rgba(15, 22, 35,0.22)',
             dtick: 10
         },
         yaxis: {
             title: { text: 'Storm Count', font: { size: 11, color: '#8b9ec2' } },
             tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' },
-            gridcolor: 'rgba(15, 22, 35,0.14)'
+            gridcolor: 'rgba(15, 22, 35,0.22)'
         },
         showlegend: true,
         legend: {
@@ -358,7 +358,7 @@ function renderIntensityOverview() {
         });
     });
     var layout = Object.assign({}, PLOTLY_LAYOUT_BASE, {
-        yaxis: { title: { text: 'Peak Wind (kt)', font: { size: 11, color: '#8b9ec2' } }, gridcolor: 'rgba(15, 22, 35,0.14)', tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' } },
+        yaxis: { title: { text: 'Peak Wind (kt)', font: { size: 11, color: '#8b9ec2' } }, gridcolor: 'rgba(15, 22, 35,0.22)', tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' } },
         xaxis: { tickfont: { size: 10, color: '#8b9ec2' } },
         showlegend: false,
         margin: { l: 50, r: 10, t: 10, b: 30 }
@@ -386,8 +386,8 @@ function renderIntensityChangeOverview() {
     ];
     var layout = Object.assign({}, PLOTLY_LAYOUT_BASE, {
         barmode: 'overlay',
-        xaxis: { title: { text: 'Max 24-h Wind Change (kt)', font: { size: 11, color: '#8b9ec2' } }, gridcolor: 'rgba(15, 22, 35,0.14)', tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' } },
-        yaxis: { title: { text: 'Storms', font: { size: 11, color: '#8b9ec2' } }, gridcolor: 'rgba(15, 22, 35,0.14)', tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' } },
+        xaxis: { title: { text: 'Max 24-h Wind Change (kt)', font: { size: 11, color: '#8b9ec2' } }, gridcolor: 'rgba(15, 22, 35,0.22)', tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' } },
+        yaxis: { title: { text: 'Storms', font: { size: 11, color: '#8b9ec2' } }, gridcolor: 'rgba(15, 22, 35,0.22)', tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' } },
         shapes: [
             { type: 'line', x0: 30, x1: 30, y0: 0, y1: 1, yref: 'paper', line: { color: '#fbbf24', width: 1.5, dash: 'dash' } },
             { type: 'line', x0: -30, x1: -30, y0: 0, y1: 1, yref: 'paper', line: { color: '#fbbf24', width: 1.5, dash: 'dash' } }
@@ -416,7 +416,7 @@ function renderLMILatOverview() {
         });
     });
     var layout = Object.assign({}, PLOTLY_LAYOUT_BASE, {
-        yaxis: { title: { text: '|Latitude| of LMI (\u00B0)', font: { size: 11, color: '#8b9ec2' } }, gridcolor: 'rgba(15, 22, 35,0.14)', tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' } },
+        yaxis: { title: { text: '|Latitude| of LMI (\u00B0)', font: { size: 11, color: '#8b9ec2' } }, gridcolor: 'rgba(15, 22, 35,0.22)', tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' } },
         xaxis: { tickfont: { size: 10, color: '#8b9ec2' } },
         showlegend: false,
         margin: { l: 50, r: 10, t: 10, b: 30 }
@@ -580,13 +580,13 @@ function renderACEDrillDownChart() {
         xaxis: {
             title: { text: 'Year', font: { size: 11, color: '#8b9ec2' } },
             tickfont: { size: 9, color: '#8b9ec2' },
-            gridcolor: 'rgba(15, 22, 35,0.14)',
+            gridcolor: 'rgba(15, 22, 35,0.22)',
             dtick: 10
         },
         yaxis: {
             title: { text: 'ACE (10⁴ kt²)', font: { size: 11, color: '#8b9ec2' } },
             tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' },
-            gridcolor: 'rgba(15, 22, 35,0.14)'
+            gridcolor: 'rgba(15, 22, 35,0.22)'
         },
         showlegend: true,
         legend: {
@@ -660,7 +660,7 @@ function renderACEYearDetail(year) {
         xaxis: {
             title: { text: 'ACE (10⁴ kt²)', font: { size: 11, color: '#8b9ec2' } },
             tickfont: { size: 9, color: '#8b9ec2', family: 'JetBrains Mono' },
-            gridcolor: 'rgba(15, 22, 35,0.14)'
+            gridcolor: 'rgba(15, 22, 35,0.22)'
         },
         yaxis: {
             tickfont: { size: 10, color: '#e2e8f0' },
@@ -892,8 +892,8 @@ function renderIntensityModalCharts() {
         return { type: 'line', x0: kt, x1: kt, y0: 0, y1: 1, line: { color: 'rgba(15, 22, 35,0.15)', width: 1, dash: 'dot' } };
     });
     var cdfLayout = Object.assign({}, PLOTLY_LAYOUT_BASE, {
-        xaxis: { title: { text: 'Peak Wind Speed (kt)', font: { size: 11, color: '#8b9ec2' } }, gridcolor: 'rgba(15, 22, 35,0.14)', tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' } },
-        yaxis: { title: { text: 'Cumulative Probability', font: { size: 11, color: '#8b9ec2' } }, gridcolor: 'rgba(15, 22, 35,0.14)', tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' }, range: [0, 1] },
+        xaxis: { title: { text: 'Peak Wind Speed (kt)', font: { size: 11, color: '#8b9ec2' } }, gridcolor: 'rgba(15, 22, 35,0.22)', tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' } },
+        yaxis: { title: { text: 'Cumulative Probability', font: { size: 11, color: '#8b9ec2' } }, gridcolor: 'rgba(15, 22, 35,0.22)', tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' }, range: [0, 1] },
         shapes: ssShapes,
         showlegend: true, legend: { orientation: 'h', x: 0, y: 1.15, font: { size: 10, color: '#8b9ec2' } },
         margin: { l: 55, r: 10, t: 35, b: 45 }, hovermode: 'closest'
@@ -910,7 +910,7 @@ function renderIntensityModalCharts() {
         boxTraces.push({ y: winds, name: basin, type: 'box', marker: { color: BASIN_COLORS[basin] }, boxmean: 'sd' });
     });
     var boxLayout = Object.assign({}, PLOTLY_LAYOUT_BASE, {
-        yaxis: { title: { text: 'Peak Wind (kt)', font: { size: 11, color: '#8b9ec2' } }, gridcolor: 'rgba(15, 22, 35,0.14)', tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' } },
+        yaxis: { title: { text: 'Peak Wind (kt)', font: { size: 11, color: '#8b9ec2' } }, gridcolor: 'rgba(15, 22, 35,0.22)', tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' } },
         showlegend: false, margin: { l: 55, r: 10, t: 10, b: 30 }
     });
     Plotly.newPlot('intensity-box-chart', boxTraces, boxLayout, PLOTLY_CONFIG);
@@ -1095,8 +1095,8 @@ function renderRIModalCharts() {
     if (epEl) epEl.textContent = '(' + totalEpisodes.toLocaleString() + ' episodes, ' + yrMin + '–' + yrMax + ')';
     var histLayout = Object.assign({}, PLOTLY_LAYOUT_BASE, {
         barmode: 'overlay',
-        xaxis: { title: { text: '24-h Wind Change (kt)', font: { size: 11, color: '#8b9ec2' } }, gridcolor: 'rgba(15, 22, 35,0.14)', tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' } },
-        yaxis: { title: { text: 'Number of 24-h Episodes', font: { size: 11, color: '#8b9ec2' } }, gridcolor: 'rgba(15, 22, 35,0.14)', tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' } },
+        xaxis: { title: { text: '24-h Wind Change (kt)', font: { size: 11, color: '#8b9ec2' } }, gridcolor: 'rgba(15, 22, 35,0.22)', tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' } },
+        yaxis: { title: { text: 'Number of 24-h Episodes', font: { size: 11, color: '#8b9ec2' } }, gridcolor: 'rgba(15, 22, 35,0.22)', tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' } },
         shapes: riShapes, annotations: riAnnotations,
         showlegend: true, legend: { orientation: 'h', x: 0, y: 1.08, font: { size: 10, color: '#8b9ec2' } },
         margin: { l: 55, r: 10, t: 35, b: 45 }
@@ -1118,8 +1118,8 @@ function renderRIModalCharts() {
         });
     });
     var cdfLayout = Object.assign({}, PLOTLY_LAYOUT_BASE, {
-        xaxis: { title: { text: 'Intensification Threshold (kt/24h)', font: { size: 11, color: '#8b9ec2' } }, gridcolor: 'rgba(15, 22, 35,0.14)', tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' }, range: [0, 100] },
-        yaxis: { title: { text: 'Exceedance Probability', font: { size: 11, color: '#8b9ec2' } }, gridcolor: 'rgba(15, 22, 35,0.14)', tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' }, range: [0, 1] },
+        xaxis: { title: { text: 'Intensification Threshold (kt/24h)', font: { size: 11, color: '#8b9ec2' } }, gridcolor: 'rgba(15, 22, 35,0.22)', tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' }, range: [0, 100] },
+        yaxis: { title: { text: 'Exceedance Probability', font: { size: 11, color: '#8b9ec2' } }, gridcolor: 'rgba(15, 22, 35,0.22)', tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' }, range: [0, 1] },
         shapes: [
             { type: 'line', x0: 30, x1: 30, y0: 0, y1: 1, yref: 'paper', line: { color: '#fbbf24', width: 1.5, dash: 'dash' } },
             { type: 'line', x0: 35, x1: 35, y0: 0, y1: 1, yref: 'paper', line: { color: '#f87171', width: 1.5, dash: 'dash' } },
@@ -1209,8 +1209,8 @@ function renderRIModalCharts() {
     });
 
     var trendLayout = Object.assign({}, PLOTLY_LAYOUT_BASE, {
-        xaxis: { title: { text: 'Year', font: { size: 11, color: '#8b9ec2' } }, gridcolor: 'rgba(15, 22, 35,0.14)', tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' } },
-        yaxis: { title: { text: '% of 24-h Episodes Exceeding Threshold', font: { size: 11, color: '#8b9ec2' } }, gridcolor: 'rgba(15, 22, 35,0.14)', tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' }, rangemode: 'tozero' },
+        xaxis: { title: { text: 'Year', font: { size: 11, color: '#8b9ec2' } }, gridcolor: 'rgba(15, 22, 35,0.22)', tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' } },
+        yaxis: { title: { text: '% of 24-h Episodes Exceeding Threshold', font: { size: 11, color: '#8b9ec2' } }, gridcolor: 'rgba(15, 22, 35,0.22)', tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' }, rangemode: 'tozero' },
         showlegend: true, legend: { orientation: 'h', x: 0, y: 1.08, font: { size: 10, color: '#8b9ec2' } },
         margin: { l: 55, r: 10, t: 30, b: 45 }, hovermode: 'x unified'
     });
@@ -1255,8 +1255,8 @@ function renderRIModalCharts() {
     ];
 
     var eraCdfLayout = Object.assign({}, PLOTLY_LAYOUT_BASE, {
-        xaxis: { title: { text: 'Intensification Threshold (kt/24h)', font: { size: 11, color: '#8b9ec2' } }, gridcolor: 'rgba(15, 22, 35,0.14)', tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' }, range: [0, 100] },
-        yaxis: { title: { text: 'Exceedance Probability', font: { size: 11, color: '#8b9ec2' } }, gridcolor: 'rgba(15, 22, 35,0.14)', tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' }, range: [0, 0.5] },
+        xaxis: { title: { text: 'Intensification Threshold (kt/24h)', font: { size: 11, color: '#8b9ec2' } }, gridcolor: 'rgba(15, 22, 35,0.22)', tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' }, range: [0, 100] },
+        yaxis: { title: { text: 'Exceedance Probability', font: { size: 11, color: '#8b9ec2' } }, gridcolor: 'rgba(15, 22, 35,0.22)', tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' }, range: [0, 0.5] },
         shapes: eraCdfShapes,
         showlegend: true, legend: { orientation: 'h', x: 0, y: 1.08, font: { size: 10, color: '#8b9ec2' } },
         margin: { l: 55, r: 10, t: 30, b: 45 }, hovermode: 'closest'
@@ -1348,8 +1348,8 @@ function renderSeasonalModalChart() {
     });
 
     var layout = Object.assign({}, PLOTLY_LAYOUT_BASE, {
-        xaxis: { tickfont: { size: 11, color: '#8b9ec2' }, gridcolor: 'rgba(15, 22, 35,0.14)' },
-        yaxis: { title: { text: 'Mean Storms per Month', font: { size: 11, color: '#8b9ec2' } }, gridcolor: 'rgba(15, 22, 35,0.14)', tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' } },
+        xaxis: { tickfont: { size: 11, color: '#8b9ec2' }, gridcolor: 'rgba(15, 22, 35,0.22)' },
+        yaxis: { title: { text: 'Mean Storms per Month', font: { size: 11, color: '#8b9ec2' } }, gridcolor: 'rgba(15, 22, 35,0.22)', tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' } },
         showlegend: true, legend: { orientation: 'h', x: 0, y: 1.15, font: { size: 10, color: '#8b9ec2' } },
         margin: { l: 55, r: 10, t: 35, b: 40 }, hovermode: 'x unified'
     });
@@ -1479,8 +1479,8 @@ function renderLMIModalCharts() {
     if (piEl) piEl.textContent = '(' + totalStorms.toLocaleString() + ' storms, ' + yrMin + '–' + yrMax + ')';
 
     var scatterLayout = Object.assign({}, PLOTLY_LAYOUT_BASE, {
-        xaxis: { title: { text: 'Peak Wind (kt)', font: { size: 11, color: '#8b9ec2' } }, gridcolor: 'rgba(15, 22, 35,0.14)', tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' } },
-        yaxis: { title: { text: 'LMI Latitude (\u00B0)', font: { size: 11, color: '#8b9ec2' } }, gridcolor: 'rgba(15, 22, 35,0.14)', tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' } },
+        xaxis: { title: { text: 'Peak Wind (kt)', font: { size: 11, color: '#8b9ec2' } }, gridcolor: 'rgba(15, 22, 35,0.22)', tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' } },
+        yaxis: { title: { text: 'LMI Latitude (\u00B0)', font: { size: 11, color: '#8b9ec2' } }, gridcolor: 'rgba(15, 22, 35,0.22)', tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' } },
         showlegend: true, legend: { orientation: 'h', x: 0, y: 1.08, font: { size: 10, color: '#8b9ec2' } },
         margin: { l: 55, r: 10, t: 35, b: 45 }, hovermode: 'closest'
     });
@@ -1496,7 +1496,7 @@ function renderLMIModalCharts() {
         boxTraces.push({ y: lats, name: basin, type: 'box', marker: { color: BASIN_COLORS[basin] }, boxmean: true });
     });
     var boxLayout = Object.assign({}, PLOTLY_LAYOUT_BASE, {
-        yaxis: { title: { text: 'LMI Latitude (\u00B0)', font: { size: 11, color: '#8b9ec2' } }, gridcolor: 'rgba(15, 22, 35,0.14)', tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' } },
+        yaxis: { title: { text: 'LMI Latitude (\u00B0)', font: { size: 11, color: '#8b9ec2' } }, gridcolor: 'rgba(15, 22, 35,0.22)', tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' } },
         showlegend: false, margin: { l: 55, r: 10, t: 10, b: 30 }
     });
     Plotly.newPlot('lmi-box-chart', boxTraces, boxLayout, PLOTLY_CONFIG);

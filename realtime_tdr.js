@@ -541,7 +541,7 @@
             z: zData, x: x, y: y, type: 'heatmap',
             colorscale: activeColorscale,
             zmin: activeVmin, zmax: activeVmax,
-            colorbar: { title: { text: varInfo.units, font: { color: '#ccc', size: 10 } }, tickfont: { color: '#ccc', size: 9 }, thickness: 12, len: 0.85 },
+            colorbar: { title: { text: varInfo.units, font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 }, thickness: 12, len: 0.85 },
             hovertemplate: '<b>' + varInfo.display_name + '</b>: %{z:.2f} ' + varInfo.units + '<br>X: %{x:.0f} km<br>Y: %{y:.0f} km<extra></extra>',
             hoverongaps: false
         };
@@ -1042,7 +1042,7 @@
             colorscale: csColorscale,
             zmin: av !== null ? av : vi.vmin,
             zmax: avx !== null ? avx : vi.vmax,
-            colorbar: { title: { text: vi.units, font: { color: '#ccc', size: 10 } }, tickfont: { color: '#ccc', size: 9 }, thickness: 10, len: 0.85 },
+            colorbar: { title: { text: vi.units, font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 }, thickness: 10, len: 0.85 },
             hovertemplate: '<b>' + vi.display_name + '</b>: %{z:.2f} ' + vi.units + '<br>Distance: %{x:.0f} km<br>Height: %{y:.1f} km<extra></extra>',
             hoverongaps: false
         };
@@ -1463,7 +1463,7 @@
         var av = _rtGetVmin(), avx = _rtGetVmax();
         var heatmap = { z: azData, x: radius_km, y: height_km, type: 'heatmap', colorscale: azColorscale,
             zmin: av !== null ? av : varInfo.vmin, zmax: avx !== null ? avx : varInfo.vmax,
-            colorbar: { title: { text: varInfo.units, font: { color: '#ccc', size: fontSize.cbar } }, tickfont: { color: '#ccc', size: fontSize.cbarTick }, thickness: 12, len: 0.85 },
+            colorbar: { title: { text: varInfo.units, font: { color: '#5b6573', size: fontSize.cbar } }, tickfont: { color: '#5b6573', size: fontSize.cbarTick }, thickness: 12, len: 0.85 },
             hovertemplate: '<b>' + varInfo.display_name + '</b>: %{z:.2f} ' + varInfo.units + '<br>Radius: %{x:.0f} km<br>Height: %{y:.1f} km<extra></extra>', hoverongaps: false };
 
         var covPct = Math.round((json.coverage_min || 0.5) * 100);
@@ -1589,7 +1589,7 @@
             colorscale: azColorscale,
             zmin: av !== null ? av : varInfo.vmin,
             zmax: avx !== null ? avx : varInfo.vmax,
-            colorbar: { title: { text: varInfo.units, font: { color: '#ccc', size: 10 } }, tickfont: { color: '#ccc', size: 9 }, thickness: 10, len: 0.85 },
+            colorbar: { title: { text: varInfo.units, font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 }, thickness: 10, len: 0.85 },
             hovertemplate: '<b>' + varInfo.display_name + '</b>: %{z:.2f} ' + varInfo.units + '<br>Radius: %{x:.0f} km<br>Height: %{y:.1f} km<extra></extra>',
             hoverongaps: false
         };
@@ -4608,8 +4608,8 @@
                 yaxis: 'y' + axSuffix,
                 showscale: showCbar,
                 colorbar: showCbar ? {
-                    title: { text: units, font: { color: '#ccc', size: fontSize.cbar } },
-                    tickfont: { color: '#ccc', size: fontSize.cbarTick },
+                    title: { text: units, font: { color: '#5b6573', size: fontSize.cbar } },
+                    tickfont: { color: '#5b6573', size: fontSize.cbarTick },
                     thickness: 10, len: 0.85, x: 1.02, y: 0.5
                 } : undefined,
                 hovertemplate: '<b>' + p.label + '</b><br>' + dispName + ': %{z:.2f} ' + units +
@@ -4831,8 +4831,8 @@
             colorscale: zColorscale,
             zmin: -3, zmax: 3, zmid: 0,
             colorbar: {
-                title: { text: '\u03c3', font: { color: '#ccc', size: 9 } },
-                tickfont: { color: '#ccc', size: 8 },
+                title: { text: '\u03c3', font: { color: '#5b6573', size: 9 } },
+                tickfont: { color: '#5b6573', size: 8 },
                 thickness: 10, len: 0.85,
                 tickvals: [-3, -2, -1, 0, 1, 2, 3],
             },
@@ -4998,8 +4998,8 @@
                 opacity: 0.7,
                 line: { color: 'rgba(255,255,255,0.3)', width: 0.5 },
                 colorbar: {
-                    title: { text: dvmaxLabel, font: { color: '#ccc', size: 9 } },
-                    tickfont: { color: '#ccc', size: 8 }, thickness: 10, len: 0.85
+                    title: { text: dvmaxLabel, font: { color: '#5b6573', size: 9 } },
+                    tickfont: { color: '#5b6573', size: 8 }, thickness: 10, len: 0.85
                 }
             },
             text: labels, customdata: vmaxs,
@@ -5326,8 +5326,8 @@
                 colorscale: 'Viridis', cmin: 0, cmax: 14,
                 line: { color: 'rgba(255,255,255,0.5)', width: 0.5 },
                 colorbar: {
-                    title: { text: 'Tilt Height (km)', font: { color: '#ccc', size: 9 } },
-                    tickfont: { color: '#ccc', size: 8 },
+                    title: { text: 'Tilt Height (km)', font: { color: '#5b6573', size: 9 } },
+                    tickfont: { color: '#5b6573', size: 8 },
                     thickness: 10, len: 0.30,
                     x: 1.01, xpad: 2, y: 0.02,
                     yanchor: 'bottom', outlinewidth: 0
@@ -5441,8 +5441,8 @@
                 colorscale: 'Viridis', cmin: 0, cmax: 14,
                 line: { color: 'rgba(255,255,255,0.4)', width: 0.5 },
                 colorbar: {
-                    title: { text: 'Height (km)', font: { color: '#ccc', size: 10 } },
-                    tickfont: { color: '#ccc', size: 9 },
+                    title: { text: 'Height (km)', font: { color: '#5b6573', size: 10 } },
+                    tickfont: { color: '#5b6573', size: 9 },
                     thickness: 10, len: 0.35,
                     x: 1.08, y: 0.15, xanchor: 'left'
                 }
@@ -5546,7 +5546,7 @@
                 [1.0,  '#fafafa']
             ],
             colorbar: {
-                title: { text: useLog ? 'log₁₀(' + normLabel + ')' : normLabel, font: { color: '#ccc', size: 11 } },
+                title: { text: useLog ? 'log₁₀(' + normLabel + ')' : normLabel, font: { color: '#5b6573', size: 11 } },
                 tickfont: { color: '#5b6573', size: 10 },
                 thickness: 12,
                 len: 0.7,
@@ -6163,8 +6163,8 @@
             var mwTrace = {
                 z: sg.z, x: sg.x_axis, y: sg.y_axis,
                 type: 'heatmap', colorscale: cs, zmin: json.vmin, zmax: json.vmax,
-                colorbar: { title: { text: cbarTitle, font: { color: '#ccc', size: 10 } },
-                            tickfont: { color: '#ccc', size: 9 }, thickness: 12, len: 0.85 },
+                colorbar: { title: { text: cbarTitle, font: { color: '#5b6573', size: 10 } },
+                            tickfont: { color: '#5b6573', size: 9 }, thickness: 12, len: 0.85 },
                 hovertemplate: '<b>MW %{z:.0f} K</b><br>X: %{x:.0f} km  Y: %{y:.0f} km<extra>MW</extra>',
                 hoverongaps: false, name: 'MW ' + cbarTitle.replace(' (K)', '')
             };
