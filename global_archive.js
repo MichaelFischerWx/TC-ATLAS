@@ -1912,7 +1912,7 @@ function renderHovmoller(data) {
         connectgaps: false,
         hovertemplate: '%{y}<br>r = %{x} km<br>Tb = %{z:.1f} °C<extra></extra>',
         colorbar: {
-            title: { text: '°C', font: { size: 9, color: '#8b9ec2' } },
+            title: { text: '°C', font: { size: 9, color: '#5b6573' } },
             len: 0.7,
             thickness: 8,
             tickfont: { size: 8, color: '#64748b' },
@@ -1955,7 +1955,7 @@ function renderHovmoller(data) {
     var layout = {
         paper_bgcolor: 'rgba(0,0,0,0)',
         plot_bgcolor: 'rgba(0,0,0,0)',
-        font: { family: 'DM Sans, sans-serif', color: '#8b9ec2', size: 10 },
+        font: { family: 'DM Sans, sans-serif', color: '#5b6573', size: 10 },
         margin: { t: 36, r: 50, b: 36, l: 100 },
         title: { text: titleText, font: { size: 11, color: '#94a3b8' }, x: 0.5, y: 0.995 },
         xaxis: {
@@ -2774,19 +2774,19 @@ function renderCompareTimeline() {
 
     var layout = Object.assign({}, PLOTLY_LAYOUT_BASE, {
         xaxis: {
-            title: { text: xTitle, font: { size: 11, color: '#8b9ec2' } },
-            tickfont: { size: 10, color: '#8b9ec2' },
+            title: { text: xTitle, font: { size: 11, color: '#5b6573' } },
+            tickfont: { size: 10, color: '#5b6573' },
             gridcolor: 'rgba(15, 22, 35,0.22)'
         },
         yaxis: {
             title: { text: 'Max Wind (kt)', font: { size: 11, color: '#00d4ff' } },
-            tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' },
+            tickfont: { size: 10, color: '#5b6573', family: 'JetBrains Mono' },
             gridcolor: 'rgba(15, 22, 35,0.22)',
             range: [0, Math.min(maxWind + 20, 200)]
         },
         yaxis2: {
             title: { text: 'Pressure (hPa)', font: { size: 11, color: '#a78bfa' } },
-            tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' },
+            tickfont: { size: 10, color: '#5b6573', family: 'JetBrains Mono' },
             overlaying: 'y', side: 'right',
             autorange: 'reversed', gridcolor: 'transparent'
         },
@@ -2794,10 +2794,10 @@ function renderCompareTimeline() {
         showlegend: true,
         legend: {
             x: 0.01, y: 0.99,
-            bgcolor: 'rgba(15,33,64,0.8)',
+            bgcolor: 'rgba(255,255,255,0.85)',
             bordercolor: 'rgba(15, 22, 35,0.08)',
             borderwidth: 1,
-            font: { size: 10, color: '#e2e8f0' }
+            font: { size: 10, color: '#0f1623' }
         },
         margin: { l: 55, r: 55, t: 10, b: 45 }
     });
@@ -7250,7 +7250,7 @@ function _renderCompareHov(side, data) {
     var layout = {
         paper_bgcolor: 'rgba(0,0,0,0)',
         plot_bgcolor: 'rgba(0,0,0,0)',
-        font: { family: 'DM Sans, sans-serif', color: '#8b9ec2', size: 9 },
+        font: { family: 'DM Sans, sans-serif', color: '#5b6573', size: 9 },
         margin: { t: 22, r: 8, b: 30, l: 80 },
         title: { text: stormName, font: { size: 10, color: '#94a3b8' }, x: 0.5, y: 0.99 },
         xaxis: {
@@ -7440,7 +7440,7 @@ function _updateCompareRadialProfile() {
     var layout = {
         paper_bgcolor: 'rgba(0,0,0,0)',
         plot_bgcolor: 'rgba(0,0,0,0)',
-        font: { family: 'DM Sans, sans-serif', color: '#8b9ec2', size: 10 },
+        font: { family: 'DM Sans, sans-serif', color: '#5b6573', size: 10 },
         margin: { t: 8, r: 12, b: 36, l: 48 },
         xaxis: {
             title: { text: 'Radius (km)', font: { size: 9 } },
@@ -8741,19 +8741,19 @@ function renderSHIPSChart() {
     var layout = {
         paper_bgcolor: 'rgba(0,0,0,0)',
         plot_bgcolor: 'rgba(0,0,0,0)',
-        font: { family: 'Inter, sans-serif', color: '#e2e8f0' },
+        font: { family: 'Inter, sans-serif', color: '#0f1623' },
         margin: { l: 55, r: 55, t: 10, b: 40 },
         showlegend: true,
         legend: {
             x: 0.01, y: 0.99,
-            bgcolor: 'rgba(15,33,64,0.8)',
+            bgcolor: 'rgba(255,255,255,0.85)',
             bordercolor: 'rgba(15, 22, 35,0.08)',
             borderwidth: 1,
-            font: { size: 10, color: '#e2e8f0' },
+            font: { size: 10, color: '#0f1623' },
             orientation: 'h'
         },
         xaxis: {
-            tickfont: { size: 10, color: '#8b9ec2' },
+            tickfont: { size: 10, color: '#5b6573' },
             gridcolor: 'rgba(15, 22, 35,0.22)',
             linecolor: 'rgba(15, 22, 35,0.08)'
         }
@@ -8765,8 +8765,8 @@ function renderSHIPSChart() {
         var ax = yAxes[key];
         var yKey = ax.idx === 1 ? 'yaxis' : 'yaxis' + ax.idx;
         layout[yKey] = {
-            title: { text: ax.unit, font: { size: 11, color: '#8b9ec2' } },
-            tickfont: { size: 10, color: '#8b9ec2' },
+            title: { text: ax.unit, font: { size: 11, color: '#5b6573' } },
+            tickfont: { size: 10, color: '#5b6573' },
             gridcolor: ax.idx === 1 ? 'rgba(15, 22, 35,0.22)' : 'transparent',
             side: ax.side,
             overlaying: ax.idx > 1 ? 'y' : undefined
@@ -9035,7 +9035,7 @@ function renderTCPrimedEnvChart() {
                 type: 'scatter',
                 mode: 'lines',
                 name: 'Intensity (kt)',
-                line: { color: '#e2e8f0', width: 2, dash: 'dot' },
+                line: { color: '#0f1623', width: 2, dash: 'dot' },
                 yaxis: intAxisName,
                 hovertemplate: '<b>Intensity</b><br>%{x}<br>%{y} kt<extra></extra>'
             });
@@ -9045,19 +9045,19 @@ function renderTCPrimedEnvChart() {
     var layout = {
         paper_bgcolor: 'rgba(0,0,0,0)',
         plot_bgcolor: 'rgba(0,0,0,0)',
-        font: { family: 'Inter, sans-serif', color: '#e2e8f0' },
+        font: { family: 'Inter, sans-serif', color: '#0f1623' },
         margin: { l: 55, r: 55, t: 10, b: 40 },
         showlegend: true,
         legend: {
             x: 0.01, y: 0.99,
-            bgcolor: 'rgba(15,33,64,0.8)',
+            bgcolor: 'rgba(255,255,255,0.85)',
             bordercolor: 'rgba(15, 22, 35,0.08)',
             borderwidth: 1,
-            font: { size: 10, color: '#e2e8f0' },
+            font: { size: 10, color: '#0f1623' },
             orientation: 'h'
         },
         xaxis: {
-            tickfont: { size: 10, color: '#8b9ec2' },
+            tickfont: { size: 10, color: '#5b6573' },
             gridcolor: 'rgba(15, 22, 35,0.22)',
             linecolor: 'rgba(15, 22, 35,0.08)'
         }
@@ -9068,8 +9068,8 @@ function renderTCPrimedEnvChart() {
         var ax = yAxes[key];
         var yKey = ax.idx === 1 ? 'yaxis' : 'yaxis' + ax.idx;
         layout[yKey] = {
-            title: { text: ax.unit, font: { size: 11, color: '#8b9ec2' } },
-            tickfont: { size: 10, color: '#8b9ec2' },
+            title: { text: ax.unit, font: { size: 11, color: '#5b6573' } },
+            tickfont: { size: 10, color: '#5b6573' },
             gridcolor: ax.idx === 1 ? 'rgba(15, 22, 35,0.22)' : 'transparent',
             side: ax.side,
             overlaying: ax.idx > 1 ? 'y' : undefined
@@ -10898,8 +10898,8 @@ function _renderSondeWindProfile(sonde, divId) {
             showgrid: false,
         },
         yaxis: {
-            title: { text: 'Altitude (m)', font: { size: 9, color: '#8b9ec2' } },
-            color: '#8b9ec2', tickfont: { size: 8 },
+            title: { text: 'Altitude (m)', font: { size: 9, color: '#5b6573' } },
+            color: '#5b6573', tickfont: { size: 8 },
             gridcolor: 'rgba(15, 22, 35,0.06)', zeroline: false,
             range: [0, maxAlt],
         },
@@ -11106,15 +11106,15 @@ function _renderCrossSection(divId) {
         plot_bgcolor: 'rgba(247,248,250,0.85)',
         margin: { l: 50, r: 80, t: 10, b: 40 },
         xaxis: {
-            title: { text: 'Radius from center (km)', font: { size: 9, color: '#8b9ec2' } },
-            color: '#8b9ec2', tickfont: { size: 8 },
+            title: { text: 'Radius from center (km)', font: { size: 9, color: '#5b6573' } },
+            color: '#5b6573', tickfont: { size: 8 },
             gridcolor: 'rgba(15, 22, 35,0.06)', zeroline: true,
             zerolinecolor: 'rgba(15, 22, 35,0.15)',
             range: [0, maxR],
         },
         yaxis: {
-            title: { text: 'Altitude (km)', font: { size: 9, color: '#8b9ec2' } },
-            color: '#8b9ec2', tickfont: { size: 8 },
+            title: { text: 'Altitude (km)', font: { size: 9, color: '#5b6573' } },
+            color: '#5b6573', tickfont: { size: 8 },
             gridcolor: 'rgba(15, 22, 35,0.06)', zeroline: false,
             range: [0, maxAlt],
         },
@@ -11379,8 +11379,8 @@ function _renderRadialProfile(divId) {
         plot_bgcolor: 'rgba(247,248,250,0.85)',
         margin: { l: 55, r: 15, t: 10, b: 40 },
         xaxis: {
-            title: { text: 'Radius from center (km)', font: { size: 9, color: '#8b9ec2' } },
-            color: '#8b9ec2', tickfont: { size: 8 },
+            title: { text: 'Radius from center (km)', font: { size: 9, color: '#5b6573' } },
+            color: '#5b6573', tickfont: { size: 8 },
             gridcolor: 'rgba(15, 22, 35,0.06)', zeroline: true,
             zerolinecolor: 'rgba(15, 22, 35,0.15)', range: [0, 300],
         },

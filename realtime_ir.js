@@ -2840,13 +2840,13 @@
             plot_bgcolor: 'rgba(0,0,0,0)',
             xaxis: {
                 gridcolor: 'rgba(255,255,255,0.04)',
-                tickfont: { size: 9, color: '#8b9ec2', family: 'JetBrains Mono' },
+                tickfont: { size: 9, color: '#5b6573', family: 'JetBrains Mono' },
                 tickformat: '%m/%d %Hz'
             },
             yaxis: {
-                title: { text: 'Vmax (kt)', font: { size: 10, color: '#8b9ec2' } },
+                title: { text: 'Vmax (kt)', font: { size: 10, color: '#5b6573' } },
                 gridcolor: 'rgba(255,255,255,0.04)',
-                tickfont: { size: 9, color: '#8b9ec2', family: 'JetBrains Mono' }
+                tickfont: { size: 9, color: '#5b6573', family: 'JetBrains Mono' }
             },
             // SS category shading bands
             shapes: [

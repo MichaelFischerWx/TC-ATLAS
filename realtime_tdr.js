@@ -448,7 +448,7 @@
             xref: 'paper', yref: 'paper', x: 0.01, y: -0.01,
             xanchor: 'left', yanchor: 'top',
             showarrow: false,
-            font: { color: '#d1d5db', size: fs, family: 'DM Sans, sans-serif' },
+            font: { color: '#0f1623', size: fs, family: 'DM Sans, sans-serif' },
             bgcolor: 'rgba(10,22,40,0.8)',
             borderpad: 3,
             bordercolor: 'rgba(255,255,255,0.15)',
@@ -3086,7 +3086,7 @@
                 text: '<b>WL150</b> ' + wl150.toFixed(1) + ' m/s (' + (wl150 * 1.944).toFixed(0) + ' kt)',
                 showarrow: true, arrowhead: 0, arrowcolor: '#3b82f6', ax: 40, ay: -18,
                 font: { color: '#3b82f6', size: 10 },
-                bgcolor: 'rgba(17,24,39,0.85)', bordercolor: '#3b82f6', borderwidth: 1, borderpad: 2,
+                bgcolor: 'rgba(255,255,255,0.85)', bordercolor: '#3b82f6', borderwidth: 1, borderpad: 2,
             });
         }
 
@@ -3107,7 +3107,7 @@
                 text: '<b>WL500</b> ' + wl500.toFixed(1) + ' m/s (' + (wl500 * 1.944).toFixed(0) + ' kt)',
                 showarrow: true, arrowhead: 0, arrowcolor: '#f59e0b', ax: 50, ay: -18,
                 font: { color: '#f59e0b', size: 10 },
-                bgcolor: 'rgba(17,24,39,0.85)', bordercolor: '#f59e0b', borderwidth: 1, borderpad: 2,
+                bgcolor: 'rgba(255,255,255,0.85)', bordercolor: '#f59e0b', borderwidth: 1, borderpad: 2,
             });
         }
 
@@ -3191,7 +3191,7 @@
                 showgrid: false,
             },
             margin: { l: 55, r: 55, t: 70, b: 82 },
-            legend: { x: 0.01, y: 0.01, bgcolor: 'rgba(17,24,39,0.85)', font: { color: '#d1d5db', size: 10 },
+            legend: { x: 0.01, y: 0.01, bgcolor: 'rgba(255,255,255,0.85)', font: { color: '#0f1623', size: 10 },
                       xanchor: 'left', yanchor: 'bottom' },
             showlegend: true,
             shapes: shapes,
@@ -4119,7 +4119,7 @@
                 yref: 'paper',
                 text: insetLines.join('<br>'),
                 showarrow: false,
-                font: { family: 'DM Sans, sans-serif', size: 10, color: '#cbd5e1' },
+                font: { family: 'DM Sans, sans-serif', size: 10, color: '#5b6573' },
                 align: 'left',
                 xanchor: 'left',
                 yanchor: 'top',
@@ -4848,14 +4848,14 @@
         var layout = {
             paper_bgcolor: '#ffffff', plot_bgcolor: '#ffffff',
             xaxis: {
-                title: { text: 'R\u2095 (inner: R/RMW | outer: RMW + km)', font: { size: 10, color: '#8b9ec2' } },
+                title: { text: 'R\u2095 (inner: R/RMW | outer: RMW + km)', font: { size: 10, color: '#5b6573' } },
                 tickvals: ticks.tickvals, ticktext: ticks.ticktext,
-                tickfont: { size: 9, color: '#8b9ec2' },
+                tickfont: { size: 9, color: '#5b6573' },
                 gridcolor: 'rgba(255,255,255,0.04)', zeroline: false,
             },
             yaxis: {
-                title: { text: 'Height (km)', font: { size: 10, color: '#8b9ec2' } },
-                tickfont: { size: 9, color: '#8b9ec2', family: 'JetBrains Mono' },
+                title: { text: 'Height (km)', font: { size: 10, color: '#5b6573' } },
+                tickfont: { size: 9, color: '#5b6573', family: 'JetBrains Mono' },
                 gridcolor: 'rgba(255,255,255,0.04)',
                 range: [0, 15]
             },
@@ -5146,27 +5146,27 @@
             paper_bgcolor: '#ffffff', plot_bgcolor: '#ffffff',
             // Left panel: VP vs Favorability
             xaxis: {
-                title: { text: 'Ventilation Proxy (VP)', font: { size: 10, color: '#8b9ec2' } },
-                tickfont: { size: 9, color: '#8b9ec2' },
+                title: { text: 'Ventilation Proxy (VP)', font: { size: 10, color: '#5b6573' } },
+                tickfont: { size: 9, color: '#5b6573' },
                 gridcolor: 'rgba(255,255,255,0.04)', zeroline: false,
                 domain: [0, 0.45]
             },
             yaxis: {
-                title: { text: 'Vortex Favorability (VH \u2212 VW)', font: { size: 10, color: '#8b9ec2' } },
-                tickfont: { size: 9, color: '#8b9ec2' },
+                title: { text: 'Vortex Favorability (VH \u2212 VW)', font: { size: 10, color: '#5b6573' } },
+                tickfont: { size: 9, color: '#5b6573' },
                 gridcolor: 'rgba(255,255,255,0.04)', zeroline: true,
                 zerolinecolor: 'rgba(255,255,255,0.1)',
             },
             // Right panel: Height vs Width
             xaxis2: {
-                title: { text: 'Anomalous Vortex Width (W1\u2013W2)', font: { size: 10, color: '#8b9ec2' } },
-                tickfont: { size: 9, color: '#8b9ec2' },
+                title: { text: 'Anomalous Vortex Width (W1\u2013W2)', font: { size: 10, color: '#5b6573' } },
+                tickfont: { size: 9, color: '#5b6573' },
                 gridcolor: 'rgba(255,255,255,0.04)', zeroline: false,
                 domain: [0.55, 1.0], anchor: 'y2'
             },
             yaxis2: {
-                title: { text: 'Anomalous Vortex Height (H1)', font: { size: 10, color: '#8b9ec2' } },
-                tickfont: { size: 9, color: '#8b9ec2' },
+                title: { text: 'Anomalous Vortex Height (H1)', font: { size: 10, color: '#5b6573' } },
+                tickfont: { size: 9, color: '#5b6573' },
                 gridcolor: 'rgba(255,255,255,0.04)', zeroline: false,
                 anchor: 'x2'
             },

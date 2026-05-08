@@ -1349,7 +1349,7 @@
     var DIAG_LAYOUT_BASE = {
         paper_bgcolor: 'rgba(0,0,0,0)',
         plot_bgcolor: 'rgba(0,0,0,0)',
-        font: { family: 'DM Sans, sans-serif', color: '#8b9ec2', size: 10 },
+        font: { family: 'DM Sans, sans-serif', color: '#5b6573', size: 10 },
         margin: { t: 28, r: 12, b: 36, l: 48 }
     };
     var _isMobile = window.innerWidth <= 768;
@@ -1931,7 +1931,7 @@
             zmin: _hovCrange[0], zmax: _hovCrange[1],
             colorbar: {
                 title: { text: '\u00B0C', font: { size: 13, color: '#94a3b8' } },
-                tickfont: { size: 12, family: 'JetBrains Mono, monospace', color: '#8b9ec2' },
+                tickfont: { size: 12, family: 'JetBrains Mono, monospace', color: '#5b6573' },
                 thickness: 14, len: 0.9
             },
             hovertemplate: '%{y|%H:%M UTC}<br>%{x:.0f} km<br>%{z:.1f} \u00B0C<extra></extra>'
