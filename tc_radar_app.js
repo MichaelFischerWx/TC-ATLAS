@@ -3891,7 +3891,7 @@ function renderPlotFromJSON(json, resultDiv) {
     var plotBg = '#ffffff';
     var baseLayout = { paper_bgcolor: plotBg, plot_bgcolor: plotBg, xaxis: { title: { text: 'Eastward distance (km)', font: { color: '#5b6573' } }, tickfont: { color: '#5b6573' }, gridcolor: 'rgba(15, 22, 35,0.14)', zeroline: false, scaleanchor: 'y', range: [-250, 250] }, yaxis: { title: { text: 'Northward distance (km)', font: { color: '#5b6573' } }, tickfont: { color: '#5b6573' }, gridcolor: 'rgba(15, 22, 35,0.14)', zeroline: false, range: [-250, 250] }, shapes: shapes, hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: 12 } }, showlegend: false };
     var config = { responsive: true, displayModeBar: true, modeBarButtonsToRemove: ['lasso2d','select2d','toggleSpikelines'], displaylogo: false };
-    var smallLayout = Object.assign({}, baseLayout, { title: { text: title, font: { color: '#0f1623', size: 11 }, y: 0.98, x: 0.5, xanchor: 'center', yanchor: 'top' }, margin: { l: 52, r: 16, t: json.overlay ? 72 : 60, b: 44 }, xaxis: Object.assign({}, baseLayout.xaxis, { title: { text: 'Eastward distance (km)', font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 } }), yaxis: Object.assign({}, baseLayout.yaxis, { title: { text: 'Northward distance (km)', font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 } }) });
+    var smallLayout = Object.assign({}, baseLayout, { title: { text: title, font: { color: '#0f1623', size: 11 }, y: 0.965, x: 0.5, xanchor: 'center', yanchor: 'top' }, margin: { l: 52, r: 16, t: json.overlay ? 90 : 78, b: 44 }, xaxis: Object.assign({}, baseLayout.xaxis, { title: { text: 'Eastward distance (km)', font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 } }), yaxis: Object.assign({}, baseLayout.yaxis, { title: { text: 'Northward distance (km)', font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 } }) });
 
     var overlayTraces = buildOverlayContours(json, x, y);
 
@@ -4175,11 +4175,11 @@ function _renderDualAzimuthalMean(json) {
 
     var plotBg = '#ffffff';
     var layout = {
-        title: { text: title, font: { color: '#0f1623', size: fontSize.title }, y: 0.96, x: 0.5, xanchor: 'center', yanchor: 'top' },
+        title: { text: title, font: { color: '#0f1623', size: fontSize.title }, y: 0.94, x: 0.5, xanchor: 'center', yanchor: 'top' },
         paper_bgcolor: plotBg, plot_bgcolor: plotBg,
         xaxis: { title: { text: 'Radius (km)', font: { color: '#5b6573', size: fontSize.axis } }, tickfont: { color: '#5b6573', size: fontSize.tick }, gridcolor: 'rgba(15, 22, 35,0.14)', zeroline: false },
         yaxis: { title: { text: 'Height (km)', font: { color: '#5b6573', size: fontSize.axis } }, tickfont: { color: '#5b6573', size: fontSize.tick }, gridcolor: 'rgba(15, 22, 35,0.14)', zeroline: false },
-        margin: { l: 48, r: 14, t: json.overlay ? 58 : 46, b: 44 },
+        margin: { l: 48, r: 14, t: json.overlay ? 78 : 68, b: 44 },
         shapes: shapes,
         hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: fontSize.hover } },
         showlegend: false
