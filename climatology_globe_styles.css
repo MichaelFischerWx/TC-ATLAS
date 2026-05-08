@@ -14,15 +14,16 @@
    ══════════════════════════════════════════════════════════════ */
 
 /* ── Theme variable remap ───────────────────────────────────── */
-/*  Same light-chrome / dark-canvas split as the other tool pages:
-      - Topbar, sidebar, sidebar controls   → LIGHT (consistent site)
-      - Globe canvas (3D rendered area)     → DARK (data legibility)
+/*  - Topbar, sidebar, sidebar controls   → follow site theme
+      - Globe canvas (3D rendered area)     → ALWAYS DARK (sun-feature
+        rendering only reads correctly against a dark "space" bg)
       - Floating panels OVER the canvas     → DARK (live on dark)
     GC-ATLAS engine tokens (--paper/--sage/--thalo/--emerald) are
-    remapped to the LIGHT palette so the sidebar reads correctly.
-    The dark canvas is enforced explicitly via .canvas-area below.   */
+    remapped to the active theme so the sidebar matches the rest
+    of the site. The canvas dark bg is enforced explicitly below
+    in .canvas-area regardless of theme.                            */
 :root {
-    /* GC-ATLAS engine tokens — mapped to the SITE-WIDE LIGHT palette */
+    /* GC-ATLAS engine tokens — LIGHT palette (default theme) */
     --deep:           #ffffff;             /* page bg (chrome lives here) */
     --thalo-dark:     #ffffff;             /* sidebar bg = white */
     --thalo:          #f4f6f9;             /* alt surface */
@@ -35,6 +36,57 @@
     --paper:          #0f1623;             /* primary text on light */
     --paper-dim:      #6b7385;             /* dim text */
     --amber:          #F47321;             /* legacy amber → UM orange */
+}
+/* Dark theme — matches tc_radar_styles.css's --surface / --text /
+   --slate / --border tokens so the globe sidebar reads consistently
+   with the other tool pages when the user toggles to dark. */
+:root[data-theme="dark"] {
+    --deep:           #0a0e14;
+    --thalo-dark:     #11161f;
+    --thalo:          #161b24;
+    --thalo-raised:   #1c222d;
+    --thalo-line:     rgba(255,255,255,0.08);
+    --emerald:        #4a9b6e;             /* brightened UM green for dark */
+    --emerald-bright: #F47321;
+    --emerald-glow:   rgba(74,155,110,0.16);
+    --sage:           #8a93a4;
+    --paper:          #e6e8eb;
+    --paper-dim:      #8a93a3;
+    --amber:          #F47321;
+}
+
+/* ── Direct sidebar / topbar / chrome overrides for dark mode ──
+   Belt-and-suspenders for the engine-token remap above. globe.css
+   sets these via var(--thalo-dark) etc., and the variable override
+   *should* be enough — but any stray hardcoded white in the engine
+   chrome would slip through. These rules are scoped to the dark
+   theme attribute and use !important so dark mode wins regardless
+   of cascade order with the vendored globe.css. */
+:root[data-theme="dark"] .sidebar,
+:root[data-theme="dark"] .sidebar-backdrop,
+:root[data-theme="dark"] .sidebar .panel {
+    background: #11161f !important;
+    color: #e6e8eb !important;
+}
+:root[data-theme="dark"] .sidebar .section-label,
+:root[data-theme="dark"] .sidebar label {
+    color: #8a93a4 !important;
+}
+:root[data-theme="dark"] .sidebar select,
+:root[data-theme="dark"] .sidebar input[type="text"],
+:root[data-theme="dark"] .sidebar input[type="number"],
+:root[data-theme="dark"] .sidebar .input,
+:root[data-theme="dark"] .sidebar .select,
+:root[data-theme="dark"] .sidebar .toggle-group,
+:root[data-theme="dark"] .sidebar .pill {
+    background: #1c222d !important;
+    color: #e6e8eb !important;
+    border-color: rgba(255,255,255,0.10) !important;
+}
+:root[data-theme="dark"] .sidebar-footer {
+    background: #11161f !important;
+    color: #8a93a4 !important;
+    border-top-color: rgba(255,255,255,0.08) !important;
 }
 
 /* ── Canvas area — DARK ("space") so the sun feature reads ──── */

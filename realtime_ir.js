@@ -352,6 +352,7 @@
     var gibsVisLayers = [];          // GIBS GeoColor tile layers on main map
     var latestGIBSTime = null;       // cached latest GIBS time string (oldest satellite — used for animation)
     var latestGIBSTimes = {};         // per-satellite latest times, e.g. {'GOES-East': '...', 'Himawari': '...'}
+    var staleGIBSSats = {};            // {satName: true} — satellites whose GIBS feed is currently stale; used to backfill from neighbors
 
     // Global map animation state
     var GLOBAL_ANIM_LOOKBACK_H = 4;  // 4-hour lookback for global animation
@@ -724,6 +725,7 @@
 
         for (var i = 0; i < SAT_ZONES.length; i++) {
             var sat = SAT_ZONES[i];
+            if (staleGIBSSats[sat.name]) continue;  // backfill: skip stale feeds
             var hasGeoColor = !!GIBS_GEOCOLOR_LAYERS[sat.name];
             var layerName = GIBS_GEOCOLOR_LAYERS[sat.name] || GIBS_VIS_LAYERS[sat.name];
             if (!layerName) continue;
@@ -749,12 +751,14 @@
         }
 
         if (!bestSat) {
-            var best = SAT_SUBLONS[0], bestDist = 999;
+            var best = null, bestDist = 999;
             for (var j = 0; j < SAT_SUBLONS.length; j++) {
+                if (staleGIBSSats[SAT_SUBLONS[j].name]) continue;
                 var d = Math.abs(centerLon - SAT_SUBLONS[j].sublon);
                 if (d > 180) d = 360 - d;
                 if (d < bestDist) { bestDist = d; best = SAT_SUBLONS[j]; }
             }
+            if (!best) best = SAT_SUBLONS[0];  // last-ditch: every feed stale
             var hasGC = !!GIBS_GEOCOLOR_LAYERS[best.name];
             var ln = GIBS_GEOCOLOR_LAYERS[best.name] || GIBS_VIS_LAYERS[best.name];
             bestSat = {
@@ -990,7 +994,11 @@
         var lonRange = tileLonRange(x, z);
         var centerLon = (lonRange.west + lonRange.east) / 2;
 
-        // Score each satellite by how close the tile center is to the core zone
+        // Score each satellite by how close the tile center is to the core zone.
+        // Satellites whose GIBS feed is currently stale are skipped here so a
+        // neighboring satellite's footprint backfills the gap (e.g. GOES-East
+        // covers eastern Pacific tiles when GOES-West is unavailable; Himawari
+        // covers far-western Pacific in the same scenario).
         var bestSat = null;
         var bestScore = -Infinity;
 
@@ -998,6 +1006,7 @@
             var sat = SAT_ZONES[i];
             var layerName = GIBS_IR_LAYERS[sat.name];
             if (!layerName) continue;
+            if (staleGIBSSats[sat.name]) continue;  // backfill: skip stale feeds
 
             // Score = 1.0 if inside core, ramps down with distance outside core
             var score;
@@ -1018,13 +1027,17 @@
         }
 
         // Fallback to nearest sub-satellite point if nothing scored well
+        // (also skipping stale feeds, falling through to any healthy sat).
         if (!bestSat) {
-            var best = SAT_SUBLONS[0], bestDist = 999;
+            var best = null, bestDist = 999;
             for (var j = 0; j < SAT_SUBLONS.length; j++) {
+                if (staleGIBSSats[SAT_SUBLONS[j].name]) continue;
                 var d = Math.abs(centerLon - SAT_SUBLONS[j].sublon);
                 if (d > 180) d = 360 - d;
                 if (d < bestDist) { bestDist = d; best = SAT_SUBLONS[j]; }
             }
+            // If every satellite is stale, last-ditch: ignore stale flag entirely
+            if (!best) best = SAT_SUBLONS[0];
             bestSat = { name: best.name, layerName: GIBS_IR_LAYERS[best.name], weight: 1.0 };
         }
 
@@ -1228,9 +1241,12 @@
             var perSat = {};
             var oldestMs = Infinity;
             var staleSats = [];
+            // Reset module-level stale set so backfill picks the latest state.
+            staleGIBSSats = {};
             for (var i = 0; i < results.length; i++) {
                 if (results[i].time === null) {
                     staleSats.push(results[i].name);
+                    staleGIBSSats[results[i].name] = true;
                     continue;
                 }
                 perSat[results[i].name] = results[i].time;
@@ -1262,7 +1278,7 @@
             return;
         }
         var label = staleSats.join(' & ');
-        var msg = label + ' feed delayed (NASA GIBS) — that region of the global map will appear blank until the upstream ingest catches up.';
+        var msg = label + ' feed delayed (NASA GIBS) — that region is being backfilled from the nearest available satellite (expect higher parallax) until the upstream ingest catches up.';
         txt.textContent = msg;
         el.style.display = 'flex';
     }
@@ -2840,13 +2856,13 @@
             plot_bgcolor: 'rgba(0,0,0,0)',
             xaxis: {
                 gridcolor: 'rgba(255,255,255,0.04)',
-                tickfont: { size: 9, color: '#8b9ec2', family: 'JetBrains Mono' },
+                tickfont: { size: 9, color: '#5b6573', family: 'JetBrains Mono' },
                 tickformat: '%m/%d %Hz'
             },
             yaxis: {
-                title: { text: 'Vmax (kt)', font: { size: 10, color: '#8b9ec2' } },
+                title: { text: 'Vmax (kt)', font: { size: 10, color: '#5b6573' } },
                 gridcolor: 'rgba(255,255,255,0.04)',
-                tickfont: { size: 9, color: '#8b9ec2', family: 'JetBrains Mono' }
+                tickfont: { size: 9, color: '#5b6573', family: 'JetBrains Mono' }
             },
             // SS category shading bands
             shapes: [
@@ -4857,7 +4873,7 @@
             '  P90: ' + p(90).toFixed(0) + ' kt';
         var annotations = [
             { x: 0, y: 1.06, xref: 'paper', yref: 'paper', text: pctText,
-              showarrow: false, font: { size: 8, color: '#94a3b8' },
+              showarrow: false, font: { size: 8, color: '#5b6573' },
               xanchor: 'left', yanchor: 'bottom' }
         ];
 
@@ -4872,7 +4888,7 @@
             margin: { t: 25, r: 10, b: 30, l: 40 },
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: 'rgba(0,0,0,0)',
-            font: { family: 'JetBrains Mono, monospace', size: 9, color: '#94a3b8' },
+            font: { family: 'JetBrains Mono, monospace', size: 9, color: '#5b6573' },
             xaxis: {
                 title: { text: 'Vmax (kt)', font: { size: 9 } },
                 range: [0, 175],
@@ -4993,7 +5009,7 @@
             margin: { t: 20, r: 10, b: 30, l: 35 },
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: 'rgba(0,0,0,0)',
-            font: { family: 'JetBrains Mono, monospace', size: 9, color: '#94a3b8' },
+            font: { family: 'JetBrains Mono, monospace', size: 9, color: '#5b6573' },
             xaxis: {
                 title: { text: '\u0394V (kt/' + _rtDmChangeInt + 'h)', font: { size: 9 } },
                 gridcolor: 'rgba(255,255,255,0.05)',
@@ -5109,10 +5125,10 @@
 
         var annotations = [
             { x: 0, y: 1.06, xref: 'paper', yref: 'paper', text: summaryText,
-              showarrow: false, font: { size: 8, color: '#94a3b8' },
+              showarrow: false, font: { size: 8, color: '#5b6573' },
               xanchor: 'left', yanchor: 'bottom' },
             { x: 1, y: 1.06, xref: 'paper', yref: 'paper', text: catText,
-              showarrow: false, font: { size: 8, color: '#94a3b8' },
+              showarrow: false, font: { size: 8, color: '#5b6573' },
               xanchor: 'right', yanchor: 'bottom' }
         ];
 
@@ -5121,7 +5137,7 @@
             margin: { t: 30, r: 10, b: 30, l: 40 },
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: 'rgba(0,0,0,0)',
-            font: { family: 'JetBrains Mono, monospace', size: 9, color: '#94a3b8' },
+            font: { family: 'JetBrains Mono, monospace', size: 9, color: '#5b6573' },
             xaxis: {
                 title: { text: 'LMI Vmax (kt)', font: { size: 9 } },
                 range: [0, 185],

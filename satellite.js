@@ -1349,7 +1349,7 @@
     var DIAG_LAYOUT_BASE = {
         paper_bgcolor: 'rgba(0,0,0,0)',
         plot_bgcolor: 'rgba(0,0,0,0)',
-        font: { family: 'DM Sans, sans-serif', color: '#8b9ec2', size: 10 },
+        font: { family: 'DM Sans, sans-serif', color: '#5b6573', size: 10 },
         margin: { t: 28, r: 12, b: 36, l: 48 }
     };
     var _isMobile = window.innerWidth <= 768;
@@ -1394,7 +1394,7 @@
             }
         ];
         var layout = JSON.parse(JSON.stringify(DIAG_LAYOUT_BASE));
-        layout.title = { text: 'Azimuthal-Mean Radial Tb', font: { size: 11, color: '#94a3b8' } };
+        layout.title = { text: 'Azimuthal-Mean Radial Tb', font: { size: 11, color: '#5b6573' } };
         layout.xaxis = { title: { text: 'Radius (km)', font: { size: 10 } }, gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 9, family: 'JetBrains Mono, monospace' } };
         layout.yaxis = { title: { text: 'Tb (\u00B0C)', font: { size: 10 } }, range: [40, -100], fixedrange: true, gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 9, family: 'JetBrains Mono, monospace' }, ticksuffix: '\u00B0' };
         layout.showlegend = false;
@@ -1465,7 +1465,7 @@
             });
         }
         var layout = JSON.parse(JSON.stringify(DIAG_LAYOUT_BASE));
-        layout.title = { text: 'Center Fix Time Series', font: { size: 11, color: '#94a3b8' } };
+        layout.title = { text: 'Center Fix Time Series', font: { size: 11, color: '#5b6573' } };
         layout.xaxis = { gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 8, family: 'JetBrains Mono, monospace' }, tickangle: -30 };
         layout.yaxis = { title: { text: 'Eye Score', font: { size: 9, color: '#22d3ee' } }, side: 'left', gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 9, family: 'JetBrains Mono, monospace' } };
         layout.yaxis2 = { title: { text: 'IR Rad Diff (K)', font: { size: 9, color: '#a78bfa' } }, side: 'right', overlaying: 'y', gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 9, family: 'JetBrains Mono, monospace' } };
@@ -1520,7 +1520,7 @@
             });
         }
         var layout = JSON.parse(JSON.stringify(DIAG_LAYOUT_BASE));
-        layout.title = { text: 'Tb Distribution by Radial Band', font: { size: 11, color: '#94a3b8' } };
+        layout.title = { text: 'Tb Distribution by Radial Band', font: { size: 11, color: '#5b6573' } };
         layout.xaxis = { title: { text: 'Brightness Temp (K)', font: { size: 10 } }, gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 9, family: 'JetBrains Mono, monospace' } };
         layout.yaxis = { title: { text: 'Fraction', font: { size: 10 } }, tickformat: '.0%', gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 9, family: 'JetBrains Mono, monospace' } };
         layout.barmode = 'overlay';
@@ -1930,15 +1930,15 @@
             colorscale: hovColorscale,
             zmin: _hovCrange[0], zmax: _hovCrange[1],
             colorbar: {
-                title: { text: '\u00B0C', font: { size: 13, color: '#94a3b8' } },
-                tickfont: { size: 12, family: 'JetBrains Mono, monospace', color: '#8b9ec2' },
+                title: { text: '\u00B0C', font: { size: 13, color: '#5b6573' } },
+                tickfont: { size: 12, family: 'JetBrains Mono, monospace', color: '#5b6573' },
                 thickness: 14, len: 0.9
             },
             hovertemplate: '%{y|%H:%M UTC}<br>%{x:.0f} km<br>%{z:.1f} \u00B0C<extra></extra>'
         }];
 
         var layout = JSON.parse(JSON.stringify(DIAG_LAYOUT_BASE));
-        layout.title = { text: 'Azimuthal-Mean Tb Hovmoller', font: { size: 15, color: '#94a3b8' } };
+        layout.title = { text: 'Azimuthal-Mean Tb Hovmoller', font: { size: 15, color: '#5b6573' } };
         layout.xaxis = { title: { text: 'Radius (km)', font: { size: 13 } }, gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 12, family: 'JetBrains Mono, monospace' } };
         layout.yaxis = { title: { text: 'Time (UTC)', font: { size: 13 } }, gridcolor: 'rgba(255,255,255,0.04)', tickfont: { size: 11, family: 'JetBrains Mono, monospace' }, autorange: true };
         layout.margin = { t: 36, r: 64, b: 44, l: 84 };

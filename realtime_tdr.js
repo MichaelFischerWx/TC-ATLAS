@@ -448,7 +448,7 @@
             xref: 'paper', yref: 'paper', x: 0.01, y: -0.01,
             xanchor: 'left', yanchor: 'top',
             showarrow: false,
-            font: { color: '#d1d5db', size: fs, family: 'DM Sans, sans-serif' },
+            font: { color: '#0f1623', size: fs, family: 'DM Sans, sans-serif' },
             bgcolor: 'rgba(10,22,40,0.8)',
             borderpad: 3,
             bordercolor: 'rgba(255,255,255,0.15)',
@@ -541,7 +541,7 @@
             z: zData, x: x, y: y, type: 'heatmap',
             colorscale: activeColorscale,
             zmin: activeVmin, zmax: activeVmax,
-            colorbar: { title: { text: varInfo.units, font: { color: '#ccc', size: 10 } }, tickfont: { color: '#ccc', size: 9 }, thickness: 12, len: 0.85 },
+            colorbar: { title: { text: varInfo.units, font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 }, thickness: 12, len: 0.85 },
             hovertemplate: '<b>' + varInfo.display_name + '</b>: %{z:.2f} ' + varInfo.units + '<br>X: %{x:.0f} km<br>Y: %{y:.0f} km<extra></extra>',
             hoverongaps: false
         };
@@ -1042,7 +1042,7 @@
             colorscale: csColorscale,
             zmin: av !== null ? av : vi.vmin,
             zmax: avx !== null ? avx : vi.vmax,
-            colorbar: { title: { text: vi.units, font: { color: '#ccc', size: 10 } }, tickfont: { color: '#ccc', size: 9 }, thickness: 10, len: 0.85 },
+            colorbar: { title: { text: vi.units, font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 }, thickness: 10, len: 0.85 },
             hovertemplate: '<b>' + vi.display_name + '</b>: %{z:.2f} ' + vi.units + '<br>Distance: %{x:.0f} km<br>Height: %{y:.1f} km<extra></extra>',
             hoverongaps: false
         };
@@ -1463,7 +1463,7 @@
         var av = _rtGetVmin(), avx = _rtGetVmax();
         var heatmap = { z: azData, x: radius_km, y: height_km, type: 'heatmap', colorscale: azColorscale,
             zmin: av !== null ? av : varInfo.vmin, zmax: avx !== null ? avx : varInfo.vmax,
-            colorbar: { title: { text: varInfo.units, font: { color: '#ccc', size: fontSize.cbar } }, tickfont: { color: '#ccc', size: fontSize.cbarTick }, thickness: 12, len: 0.85 },
+            colorbar: { title: { text: varInfo.units, font: { color: '#5b6573', size: fontSize.cbar } }, tickfont: { color: '#5b6573', size: fontSize.cbarTick }, thickness: 12, len: 0.85 },
             hovertemplate: '<b>' + varInfo.display_name + '</b>: %{z:.2f} ' + varInfo.units + '<br>Radius: %{x:.0f} km<br>Height: %{y:.1f} km<extra></extra>', hoverongaps: false };
 
         var covPct = Math.round((json.coverage_min || 0.5) * 100);
@@ -1589,7 +1589,7 @@
             colorscale: azColorscale,
             zmin: av !== null ? av : varInfo.vmin,
             zmax: avx !== null ? avx : varInfo.vmax,
-            colorbar: { title: { text: varInfo.units, font: { color: '#ccc', size: 10 } }, tickfont: { color: '#ccc', size: 9 }, thickness: 10, len: 0.85 },
+            colorbar: { title: { text: varInfo.units, font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 }, thickness: 10, len: 0.85 },
             hovertemplate: '<b>' + varInfo.display_name + '</b>: %{z:.2f} ' + varInfo.units + '<br>Radius: %{x:.0f} km<br>Height: %{y:.1f} km<extra></extra>',
             hoverongaps: false
         };
@@ -3086,7 +3086,7 @@
                 text: '<b>WL150</b> ' + wl150.toFixed(1) + ' m/s (' + (wl150 * 1.944).toFixed(0) + ' kt)',
                 showarrow: true, arrowhead: 0, arrowcolor: '#3b82f6', ax: 40, ay: -18,
                 font: { color: '#3b82f6', size: 10 },
-                bgcolor: 'rgba(17,24,39,0.85)', bordercolor: '#3b82f6', borderwidth: 1, borderpad: 2,
+                bgcolor: 'rgba(255,255,255,0.85)', bordercolor: '#3b82f6', borderwidth: 1, borderpad: 2,
             });
         }
 
@@ -3107,7 +3107,7 @@
                 text: '<b>WL500</b> ' + wl500.toFixed(1) + ' m/s (' + (wl500 * 1.944).toFixed(0) + ' kt)',
                 showarrow: true, arrowhead: 0, arrowcolor: '#f59e0b', ax: 50, ay: -18,
                 font: { color: '#f59e0b', size: 10 },
-                bgcolor: 'rgba(17,24,39,0.85)', bordercolor: '#f59e0b', borderwidth: 1, borderpad: 2,
+                bgcolor: 'rgba(255,255,255,0.85)', bordercolor: '#f59e0b', borderwidth: 1, borderpad: 2,
             });
         }
 
@@ -3191,7 +3191,7 @@
                 showgrid: false,
             },
             margin: { l: 55, r: 55, t: 70, b: 82 },
-            legend: { x: 0.01, y: 0.01, bgcolor: 'rgba(17,24,39,0.85)', font: { color: '#d1d5db', size: 10 },
+            legend: { x: 0.01, y: 0.01, bgcolor: 'rgba(255,255,255,0.85)', font: { color: '#0f1623', size: 10 },
                       xanchor: 'left', yanchor: 'bottom' },
             showlegend: true,
             shapes: shapes,
@@ -3209,7 +3209,7 @@
         layout.annotations.push({
             text: plotInfoParts.join(' \u00b7 '),
             xref: 'paper', yref: 'paper', x: 0.5, y: -0.18,
-            showarrow: false, font: { color: '#94a3b8', size: 9.5 }, xanchor: 'center', yanchor: 'top',
+            showarrow: false, font: { color: '#5b6573', size: 9.5 }, xanchor: 'center', yanchor: 'top',
         });
 
         Plotly.newPlot(chartDiv, traces, layout, { responsive: true, displayModeBar: false });
@@ -3984,7 +3984,7 @@
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: 'rgba(247,248,250,0.85)',
             margin: { l: 55, r: 55, t: 8, b: 40 },
-            font: { family: 'DM Sans, sans-serif', size: 11, color: '#94a3b8' },
+            font: { family: 'DM Sans, sans-serif', size: 11, color: '#5b6573' },
             legend: {
                 orientation: 'v', x: 1.0, xanchor: 'right', y: 1.0, yanchor: 'top',
                 font: { size: 9 }, bgcolor: 'rgba(10,15,25,0.7)',
@@ -3994,7 +3994,7 @@
             hovermode: 'x unified',
             xaxis: {
                 title: { text: 'Minutes from Analysis Time', font: { size: 11 } },
-                color: '#94a3b8',
+                color: '#5b6573',
                 gridcolor: gridColor,
                 zeroline: true,
                 zerolinecolor: 'rgba(96,165,250,0.5)',
@@ -4119,7 +4119,7 @@
                 yref: 'paper',
                 text: insetLines.join('<br>'),
                 showarrow: false,
-                font: { family: 'DM Sans, sans-serif', size: 10, color: '#cbd5e1' },
+                font: { family: 'DM Sans, sans-serif', size: 10, color: '#5b6573' },
                 align: 'left',
                 xanchor: 'left',
                 yanchor: 'top',
@@ -4433,12 +4433,12 @@
 
         var sd = data.ships_data || {};
         var vp = data.ventilation_proxy;
-        var atcfTag = data.atcf_id ? ' <span style="color:#8b9ec2;font-weight:400;">(' + data.atcf_id + ')</span>' : '';
-        var autoTag = data.auto_detected ? ' <span style="color:#34d399;font-size:9px;">auto</span>' : '';
+        var atcfTag = data.atcf_id ? ' <span style="color:var(--slate);font-weight:400;">(' + data.atcf_id + ')</span>' : '';
+        var autoTag = data.auto_detected ? ' <span style="color:var(--um-green, #005030);font-size:9px;font-weight:600;">auto</span>' : '';
 
         var rows = [
-            '<div style="font-size:11px;font-weight:600;color:#fdba74;margin-bottom:4px;">\ud83d\udce1 SHIPS Environmental Data' + atcfTag + autoTag + '</div>',
-            '<table style="width:100%;font-size:10px;color:#d1d5db;border-collapse:collapse;">',
+            '<div style="font-size:11px;font-weight:600;color:var(--um-orange, #F47321);margin-bottom:4px;">\ud83d\udce1 SHIPS Environmental Data' + atcfTag + autoTag + '</div>',
+            '<table style="width:100%;font-size:10px;color:var(--text, #0f1623);border-collapse:collapse;">',
         ];
 
         var shgcEst = data.vp_components && data.vp_components.shgc_est_kt
@@ -4464,8 +4464,8 @@
         ];
 
         fields.forEach(function (f) {
-            rows.push('<tr><td style="padding:1px 4px;color:#8b9ec2;white-space:nowrap;">' + f[0] + '</td>' +
-                '<td style="padding:1px 4px;text-align:right;font-family:JetBrains Mono,monospace;">' + f[1] + '</td></tr>');
+            rows.push('<tr><td style="padding:1px 4px;color:var(--slate);white-space:nowrap;">' + f[0] + '</td>' +
+                '<td style="padding:1px 4px;text-align:right;font-variant-numeric:tabular-nums;color:var(--text, #0f1623);">' + f[1] + '</td></tr>');
         });
 
         rows.push('</table>');
@@ -4608,8 +4608,8 @@
                 yaxis: 'y' + axSuffix,
                 showscale: showCbar,
                 colorbar: showCbar ? {
-                    title: { text: units, font: { color: '#ccc', size: fontSize.cbar } },
-                    tickfont: { color: '#ccc', size: fontSize.cbarTick },
+                    title: { text: units, font: { color: '#5b6573', size: fontSize.cbar } },
+                    tickfont: { color: '#5b6573', size: fontSize.cbarTick },
                     thickness: 10, len: 0.85, x: 1.02, y: 0.5
                 } : undefined,
                 hovertemplate: '<b>' + p.label + '</b><br>' + dispName + ': %{z:.2f} ' + units +
@@ -4793,7 +4793,7 @@
             _rtSaveBtnHTML('rt-anomaly-chart', 'ZstarAnomaly', 'margin-left:auto;') +
             '<button onclick="document.getElementById(\'rt-anomaly-result\').innerHTML=\'\'" class="fl-ts-close" title="Close">&times;</button>' +
             '</div>' +
-            '<div style="font-size:9px;color:#8b9ec2;padding:2px 8px;">' + climNote + '</div>' +
+            '<div style="font-size:9px;color:var(--slate);padding:2px 8px;">' + climNote + '</div>' +
             '<div id="rt-anomaly-chart" style="width:100%;height:320px;"></div>' +
             '</div>';
 
@@ -4831,8 +4831,8 @@
             colorscale: zColorscale,
             zmin: -3, zmax: 3, zmid: 0,
             colorbar: {
-                title: { text: '\u03c3', font: { color: '#ccc', size: 9 } },
-                tickfont: { color: '#ccc', size: 8 },
+                title: { text: '\u03c3', font: { color: '#5b6573', size: 9 } },
+                tickfont: { color: '#5b6573', size: 8 },
                 thickness: 10, len: 0.85,
                 tickvals: [-3, -2, -1, 0, 1, 2, 3],
             },
@@ -4848,14 +4848,14 @@
         var layout = {
             paper_bgcolor: '#ffffff', plot_bgcolor: '#ffffff',
             xaxis: {
-                title: { text: 'R\u2095 (inner: R/RMW | outer: RMW + km)', font: { size: 10, color: '#8b9ec2' } },
+                title: { text: 'R\u2095 (inner: R/RMW | outer: RMW + km)', font: { size: 10, color: '#5b6573' } },
                 tickvals: ticks.tickvals, ticktext: ticks.ticktext,
-                tickfont: { size: 9, color: '#8b9ec2' },
+                tickfont: { size: 9, color: '#5b6573' },
                 gridcolor: 'rgba(255,255,255,0.04)', zeroline: false,
             },
             yaxis: {
-                title: { text: 'Height (km)', font: { size: 10, color: '#8b9ec2' } },
-                tickfont: { size: 9, color: '#8b9ec2', family: 'JetBrains Mono' },
+                title: { text: 'Height (km)', font: { size: 10, color: '#5b6573' } },
+                tickfont: { size: 9, color: '#5b6573', family: 'JetBrains Mono' },
                 gridcolor: 'rgba(255,255,255,0.04)',
                 range: [0, 15]
             },
@@ -4959,7 +4959,7 @@
 
         if (withVF.length === 0) {
             container.querySelector('#rt-vp-chart').innerHTML =
-                '<div style="color:#8b9ec2;text-align:center;padding:40px;">Archive VP scatter data not yet loaded on server. Try again in ~1 min.</div>';
+                '<div style="color:var(--slate);text-align:center;padding:40px;">Archive VP scatter data not yet loaded on server. Try again in ~1 min.</div>';
             return;
         }
 
@@ -4998,8 +4998,8 @@
                 opacity: 0.7,
                 line: { color: 'rgba(255,255,255,0.3)', width: 0.5 },
                 colorbar: {
-                    title: { text: dvmaxLabel, font: { color: '#ccc', size: 9 } },
-                    tickfont: { color: '#ccc', size: 8 }, thickness: 10, len: 0.85
+                    title: { text: dvmaxLabel, font: { color: '#5b6573', size: 9 } },
+                    tickfont: { color: '#5b6573', size: 8 }, thickness: 10, len: 0.85
                 }
             },
             text: labels, customdata: vmaxs,
@@ -5146,27 +5146,27 @@
             paper_bgcolor: '#ffffff', plot_bgcolor: '#ffffff',
             // Left panel: VP vs Favorability
             xaxis: {
-                title: { text: 'Ventilation Proxy (VP)', font: { size: 10, color: '#8b9ec2' } },
-                tickfont: { size: 9, color: '#8b9ec2' },
+                title: { text: 'Ventilation Proxy (VP)', font: { size: 10, color: '#5b6573' } },
+                tickfont: { size: 9, color: '#5b6573' },
                 gridcolor: 'rgba(255,255,255,0.04)', zeroline: false,
                 domain: [0, 0.45]
             },
             yaxis: {
-                title: { text: 'Vortex Favorability (VH \u2212 VW)', font: { size: 10, color: '#8b9ec2' } },
-                tickfont: { size: 9, color: '#8b9ec2' },
+                title: { text: 'Vortex Favorability (VH \u2212 VW)', font: { size: 10, color: '#5b6573' } },
+                tickfont: { size: 9, color: '#5b6573' },
                 gridcolor: 'rgba(255,255,255,0.04)', zeroline: true,
                 zerolinecolor: 'rgba(255,255,255,0.1)',
             },
             // Right panel: Height vs Width
             xaxis2: {
-                title: { text: 'Anomalous Vortex Width (W1\u2013W2)', font: { size: 10, color: '#8b9ec2' } },
-                tickfont: { size: 9, color: '#8b9ec2' },
+                title: { text: 'Anomalous Vortex Width (W1\u2013W2)', font: { size: 10, color: '#5b6573' } },
+                tickfont: { size: 9, color: '#5b6573' },
                 gridcolor: 'rgba(255,255,255,0.04)', zeroline: false,
                 domain: [0.55, 1.0], anchor: 'y2'
             },
             yaxis2: {
-                title: { text: 'Anomalous Vortex Height (H1)', font: { size: 10, color: '#8b9ec2' } },
-                tickfont: { size: 9, color: '#8b9ec2' },
+                title: { text: 'Anomalous Vortex Height (H1)', font: { size: 10, color: '#5b6573' } },
+                tickfont: { size: 9, color: '#5b6573' },
                 gridcolor: 'rgba(255,255,255,0.04)', zeroline: false,
                 anchor: 'x2'
             },
@@ -5326,8 +5326,8 @@
                 colorscale: 'Viridis', cmin: 0, cmax: 14,
                 line: { color: 'rgba(255,255,255,0.5)', width: 0.5 },
                 colorbar: {
-                    title: { text: 'Tilt Height (km)', font: { color: '#ccc', size: 9 } },
-                    tickfont: { color: '#ccc', size: 8 },
+                    title: { text: 'Tilt Height (km)', font: { color: '#5b6573', size: 9 } },
+                    tickfont: { color: '#5b6573', size: 8 },
                     thickness: 10, len: 0.30,
                     x: 1.01, xpad: 2, y: 0.02,
                     yanchor: 'bottom', outlinewidth: 0
@@ -5441,8 +5441,8 @@
                 colorscale: 'Viridis', cmin: 0, cmax: 14,
                 line: { color: 'rgba(255,255,255,0.4)', width: 0.5 },
                 colorbar: {
-                    title: { text: 'Height (km)', font: { color: '#ccc', size: 10 } },
-                    tickfont: { color: '#ccc', size: 9 },
+                    title: { text: 'Height (km)', font: { color: '#5b6573', size: 10 } },
+                    tickfont: { color: '#5b6573', size: 9 },
                     thickness: 10, len: 0.35,
                     x: 1.08, y: 0.15, xanchor: 'left'
                 }
@@ -5546,7 +5546,7 @@
                 [1.0,  '#fafafa']
             ],
             colorbar: {
-                title: { text: useLog ? 'log₁₀(' + normLabel + ')' : normLabel, font: { color: '#ccc', size: 11 } },
+                title: { text: useLog ? 'log₁₀(' + normLabel + ')' : normLabel, font: { color: '#5b6573', size: 11 } },
                 tickfont: { color: '#5b6573', size: 10 },
                 thickness: 12,
                 len: 0.7,
@@ -6163,8 +6163,8 @@
             var mwTrace = {
                 z: sg.z, x: sg.x_axis, y: sg.y_axis,
                 type: 'heatmap', colorscale: cs, zmin: json.vmin, zmax: json.vmax,
-                colorbar: { title: { text: cbarTitle, font: { color: '#ccc', size: 10 } },
-                            tickfont: { color: '#ccc', size: 9 }, thickness: 12, len: 0.85 },
+                colorbar: { title: { text: cbarTitle, font: { color: '#5b6573', size: 10 } },
+                            tickfont: { color: '#5b6573', size: 9 }, thickness: 12, len: 0.85 },
                 hovertemplate: '<b>MW %{z:.0f} K</b><br>X: %{x:.0f} km  Y: %{y:.0f} km<extra>MW</extra>',
                 hoverongaps: false, name: 'MW ' + cbarTitle.replace(' (K)', '')
             };

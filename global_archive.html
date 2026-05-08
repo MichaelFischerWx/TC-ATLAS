@@ -58,7 +58,7 @@
     <link rel="apple-touch-icon" sizes="192x192" href="tc-atlas-favicon-192.png">
 
     <title>Global TC Archive — TC-ATLAS</title>
-    <script src="theme.js?v=20260507n"></script>
+    <script src="theme.js?v=20260507w"></script>
 
     <!-- Leaflet -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -76,8 +76,8 @@
     <link rel="preconnect" href="https://tc-atlas-api-361010099051.us-east1.run.app">
     <link rel="dns-prefetch" href="https://cdnjs.cloudflare.com">
 
-    <link rel="stylesheet" href="tc_radar_styles.css?v=20260507n">
-    <link rel="stylesheet" href="global_archive_styles.css?v=20260507n">
+    <link rel="stylesheet" href="tc_radar_styles.css?v=20260507w">
+    <link rel="stylesheet" href="global_archive_styles.css?v=20260507w">
 </head>
 <body>
     <a href="#global-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -367,7 +367,7 @@
                         <div id="timeline-chart" class="chart-container"></div>
                         <div id="model-chart-controls" style="display:none;padding:6px 12px 8px;border-top:1px solid rgba(255,255,255,0.06);">
                             <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:4px;">
-                                <span style="font-size:9px;color:#64748b;margin-right:2px;">Show:</span>
+                                <span style="font-size:9px;color:var(--slate);margin-right:2px;">Show:</span>
                                 <button class="ga-btn ga-btn-xs model-filter-btn active" data-mtype="official" onclick="toggleModelTypeFilter('official')">Official</button>
                                 <button class="ga-btn ga-btn-xs model-filter-btn active" data-mtype="dynamical" onclick="toggleModelTypeFilter('dynamical')" style="font-size:9px;">Dynamical</button>
                                 <button class="ga-btn ga-btn-xs model-filter-btn active" data-mtype="consensus" onclick="toggleModelTypeFilter('consensus')" style="font-size:9px;">Consensus</button>
@@ -379,7 +379,7 @@
                             </div>
                             <div id="model-legend" class="model-legend"></div>
                             <div style="text-align:right;padding-top:3px;">
-                                <a href="https://www.nhc.noaa.gov/modelsummary.shtml" target="_blank" rel="noopener" style="font-size:8.5px;color:#64748b;text-decoration:none;opacity:0.7;" onmouseover="this.style.opacity='1';this.style.color='#94a3b8'" onmouseout="this.style.opacity='0.7';this.style.color='#64748b'">Learn more about forecast models &#8599;</a>
+                                <a href="https://www.nhc.noaa.gov/modelsummary.shtml" target="_blank" rel="noopener" style="font-size:8.5px;color:var(--slate);text-decoration:none;opacity:0.7;" onmouseover="this.style.opacity='1';this.style.color='#94a3b8'" onmouseout="this.style.opacity='0.7';this.style.color='#64748b'">Learn more about forecast models &#8599;</a>
                             </div>
                         </div>
                     </div>
@@ -387,7 +387,7 @@
                     <!-- Track Map + IR Overlay -->
                     <div class="detail-panel detail-map-panel">
                         <div class="panel-header">
-                            <h3 style="font-size:11px;color:#8b9ec2;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Overlays</h3>
+                            <h3 style="font-size:11px;color:var(--slate);font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Overlays</h3>
                             <div id="ir-toggle-wrap" style="display:none;">
                                 <button id="ir-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleIROverlay()">
                                     Show IR
@@ -568,11 +568,11 @@
                             </div>
                         </div>
                         <!-- Controls below the map so they don't cover the imagery -->
-                        <div id="ga-mw-controls" style="display:none;background:#ffffff;border:1px solid rgba(251,146,60,0.3);border-radius:6px;padding:6px 10px;margin-top:4px;">
+                        <div id="ga-mw-controls" style="display:none;background:var(--surface-raised);border:1px solid rgba(251,146,60,0.3);border-radius:6px;padding:6px 10px;margin-top:4px;">
                             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                                 <label style="font-size:10px;font-weight:600;color:#b8540d;text-transform:uppercase;letter-spacing:0.5px;">MW Overpass</label>
-                                <select id="ga-mw-overpass-select" onchange="loadGlobalMWOverpass()" style="flex:1;min-width:200px;font-size:10px;padding:3px 6px;border:1px solid rgba(15,22,35,0.12);border-radius:4px;background:#ffffff;color:#0f1623;font-variant-numeric: tabular-nums;"></select>
-                                <select id="ga-mw-product-select" onchange="loadGlobalMWOverpass()" style="font-size:10px;padding:3px 6px;border:1px solid rgba(15,22,35,0.12);border-radius:4px;background:#ffffff;color:#0f1623;font-variant-numeric: tabular-nums;">
+                                <select id="ga-mw-overpass-select" onchange="loadGlobalMWOverpass()" style="flex:1;min-width:200px;font-size:10px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;background:var(--surface-raised);color:var(--text);font-variant-numeric: tabular-nums;"></select>
+                                <select id="ga-mw-product-select" onchange="loadGlobalMWOverpass()" style="font-size:10px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;background:var(--surface-raised);color:var(--text);font-variant-numeric: tabular-nums;">
                                     <option value="89pct">89 GHz PCT</option>
                                     <option value="89v">89 GHz V-pol</option>
                                     <option value="89h">89 GHz H-pol</option>
@@ -580,41 +580,41 @@
                                     <option value="37v">37 GHz V-pol</option>
                                     <option value="37h">37 GHz H-pol</option>
                                 </select>
-                                <span id="ga-mw-frame-status" style="font-size:9px;color:#64748b;"></span>
+                                <span id="ga-mw-frame-status" style="font-size:9px;color:var(--slate);"></span>
                             </div>
                         </div>
                         <!-- NEXRAD 88D ground radar controls -->
-                        <div id="ga-nexrad-controls" style="display:none;background:#ffffff;border:1px solid rgba(34,197,94,0.3);border-radius:6px;padding:6px 10px;margin-top:4px;">
+                        <div id="ga-nexrad-controls" style="display:none;background:var(--surface-raised);border:1px solid rgba(34,197,94,0.3);border-radius:6px;padding:6px 10px;margin-top:4px;">
                             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                                 <label style="font-size:10px;font-weight:600;color:#15803d;text-transform:uppercase;letter-spacing:0.5px;">88D Site</label>
-                                <select id="ga-nexrad-site-select" onchange="loadNexradScans()" style="flex:1;min-width:140px;font-size:10px;padding:3px 6px;border:1px solid rgba(15,22,35,0.12);border-radius:4px;background:#ffffff;color:#0f1623;font-variant-numeric: tabular-nums;"></select>
-                                <select id="ga-nexrad-scan-select" onchange="loadNexradFrame()" style="flex:1;min-width:160px;font-size:10px;padding:3px 6px;border:1px solid rgba(15,22,35,0.12);border-radius:4px;background:#ffffff;color:#0f1623;font-variant-numeric: tabular-nums;"></select>
-                                <select id="ga-nexrad-product-select" onchange="loadNexradFrame()" style="font-size:10px;padding:3px 6px;border:1px solid rgba(15,22,35,0.12);border-radius:4px;background:#ffffff;color:#0f1623;font-variant-numeric: tabular-nums;">
+                                <select id="ga-nexrad-site-select" onchange="loadNexradScans()" style="flex:1;min-width:140px;font-size:10px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;background:var(--surface-raised);color:var(--text);font-variant-numeric: tabular-nums;"></select>
+                                <select id="ga-nexrad-scan-select" onchange="loadNexradFrame()" style="flex:1;min-width:160px;font-size:10px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;background:var(--surface-raised);color:var(--text);font-variant-numeric: tabular-nums;"></select>
+                                <select id="ga-nexrad-product-select" onchange="loadNexradFrame()" style="font-size:10px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;background:var(--surface-raised);color:var(--text);font-variant-numeric: tabular-nums;">
                                     <option value="reflectivity">Reflectivity</option>
                                     <option value="velocity">Velocity</option>
                                 </select>
-                                <span id="ga-nexrad-frame-status" style="font-size:9px;color:#64748b;"></span>
+                                <span id="ga-nexrad-frame-status" style="font-size:9px;color:var(--slate);"></span>
                             </div>
                             <div id="ga-nexrad-colorbar" style="margin-top:4px;"></div>
                         </div>
                         <!-- Flight-level reconnaissance controls -->
-                        <div id="ga-fl-controls" style="display:none;background:#ffffff;border:1px solid rgba(96,165,250,0.3);border-radius:6px;padding:6px 10px;margin-top:4px;">
+                        <div id="ga-fl-controls" style="display:none;background:var(--surface-raised);border:1px solid rgba(96,165,250,0.3);border-radius:6px;padding:6px 10px;margin-top:4px;">
                             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                                 <label style="font-size:10px;font-weight:600;color:#1d4ed8;text-transform:uppercase;letter-spacing:0.5px;">Mission</label>
-                                <select id="ga-fl-mission-select" onchange="gaFLSelectMission()" style="flex:1;min-width:220px;font-size:10px;padding:3px 6px;border:1px solid rgba(15,22,35,0.12);border-radius:4px;background:#ffffff;color:#0f1623;font-variant-numeric: tabular-nums;"></select>
+                                <select id="ga-fl-mission-select" onchange="gaFLSelectMission()" style="flex:1;min-width:220px;font-size:10px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;background:var(--surface-raised);color:var(--text);font-variant-numeric: tabular-nums;"></select>
                                 <label class="gif-toggle" style="width:28px;height:16px;" title="Auto-sync mission to IR frame time">
                                     <input type="checkbox" id="ga-fl-auto-sync" checked onchange="gaFLToggleAutoSync()">
                                     <span class="gif-toggle-slider"></span>
                                 </label>
-                                <span style="font-size:9px;color:#64748b;">Auto</span>
+                                <span style="font-size:9px;color:var(--slate);">Auto</span>
                                 <button id="ga-fl-btn-ts" class="ga-btn ga-btn-xs ga-fl-panel-btn" onclick="gaFLOpenTimeSeries()" title="Flight-level time series" style="font-size:9px;color:#1d4ed8;"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>Time Series</button>
                                 <button id="ga-fl-btn-xsec" class="ga-btn ga-btn-xs ga-fl-panel-btn" onclick="gaFLOpenXSec()" title="Radius-height cross-section (all legs composited)" style="font-size:9px;color:#15803d;">X-Sec</button>
                                 <button id="ga-fl-btn-radial" class="ga-btn ga-btn-xs ga-fl-panel-btn" onclick="gaFLOpenRadial()" title="Radial profile of flight-level variable" style="font-size:9px;color:#15803d;">Radial</button>
-                                <span id="ga-fl-frame-status" style="font-size:9px;color:#64748b;"></span>
+                                <span id="ga-fl-frame-status" style="font-size:9px;color:var(--slate);"></span>
                             </div>
                             <div id="ga-fl-legend" style="margin-top:4px;"></div>
                             <div style="display:flex;align-items:center;gap:5px;margin-top:4px;">
-                                <span style="font-size:9px;color:#64748b;">Color by:</span>
+                                <span style="font-size:9px;color:var(--slate);">Color by:</span>
                                 <button class="ga-btn ga-btn-xs ga-fl-color-btn active" onclick="gaFLSetColorVar('fl_wspd_ms')" data-var="fl_wspd_ms" style="font-size:9px;" title="Flight-level wind speed">Wind</button>
                                 <button class="ga-btn ga-btn-xs ga-fl-color-btn" onclick="gaFLSetColorVar('temp_c')" data-var="temp_c" style="font-size:9px;" title="Air temperature">Temp</button>
                                 <button class="ga-btn ga-btn-xs ga-fl-color-btn" onclick="gaFLSetColorVar('dewpoint_c')" data-var="dewpoint_c" style="font-size:9px;" title="Dewpoint temperature">Td</button>
@@ -624,16 +624,16 @@
                             <div id="ga-sonde-info" style="display:none;margin-top:6px;border-top:1px solid rgba(52,211,153,0.2);padding-top:6px;">
                                 <div style="display:flex;align-items:center;gap:8px;">
                                     <span style="font-size:10px;font-weight:600;color:#15803d;text-transform:uppercase;letter-spacing:0.5px;"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12a10 10 0 0 1 20 0"/><path d="M7 12l5 9"/><path d="M17 12l-5 9"/><path d="M12 12v9"/></svg>Sondes</span>
-                                    <span id="ga-sonde-count" style="font-size:9px;color:#64748b;"></span>
+                                    <span id="ga-sonde-count" style="font-size:9px;color:var(--slate);"></span>
                                 </div>
                                 <div style="display:flex;align-items:center;gap:4px;margin-top:4px;flex-wrap:wrap;">
-                                    <span style="font-size:9px;color:#64748b;">Plan view:</span>
+                                    <span style="font-size:9px;color:var(--slate);">Plan view:</span>
                                     <button class="ga-btn ga-btn-xs ga-sonde-pv-btn active" onclick="gaSondePlanView(null)" data-var="" style="font-size:9px;">Off</button>
                                     <button class="ga-btn ga-btn-xs ga-sonde-pv-btn" onclick="gaSondePlanView('wspd')" data-var="wspd" style="font-size:9px;" title="Wind speed at selected level">Wind</button>
                                     <button class="ga-btn ga-btn-xs ga-sonde-pv-btn" onclick="gaSondePlanView('temp')" data-var="temp" style="font-size:9px;" title="Temperature at selected level">Temp</button>
                                     <button class="ga-btn ga-btn-xs ga-sonde-pv-btn" onclick="gaSondePlanView('theta_e')" data-var="theta_e" style="font-size:9px;" title="Equivalent potential temperature">&theta;e</button>
                                     <button class="ga-btn ga-btn-xs ga-sonde-pv-btn" onclick="gaSondePlanView('rh')" data-var="rh" style="font-size:9px;" title="Relative humidity at selected level">RH</button>
-                                    <select id="ga-sonde-pv-level" onchange="gaSondePlanViewRefresh()" style="font-size:9px;padding:2px 4px;background:#ffffff;color:#0f1623;border:1px solid rgba(15,22,35,0.12);border-radius:3px;">
+                                    <select id="ga-sonde-pv-level" onchange="gaSondePlanViewRefresh()" style="font-size:9px;padding:2px 4px;background:var(--surface-raised);color:var(--text);border:1px solid var(--border);border-radius:3px;">
                                         <option value="1000">1000</option>
                                         <option value="925">925</option>
                                         <option value="850" selected>850</option>
@@ -644,13 +644,13 @@
                                         <option value="300">300</option>
                                         <option value="200">200</option>
                                     </select>
-                                    <span style="font-size:9px;color:#64748b;">mb</span>
+                                    <span style="font-size:9px;color:var(--slate);">mb</span>
                                 </div>
                                 <div id="ga-sonde-table-wrap" style="max-height:280px;overflow-y:auto;margin-top:4px;"></div>
                             </div>
                         </div>
                         <!-- Dropsonde Skew-T display -->
-                        <div id="ga-sonde-skewt-panel" style="display:none;background:#ffffff;border:1px solid rgba(52,211,153,0.3);border-radius:8px;padding:10px 12px;margin-top:6px;">
+                        <div id="ga-sonde-skewt-panel" style="display:none;background:var(--surface-raised);border:1px solid rgba(52,211,153,0.3);border-radius:8px;padding:10px 12px;margin-top:6px;">
                             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
                                 <div id="ga-sonde-skewt-title" style="font-size:11px;font-weight:600;color:#15803d;"></div>
                                 <div style="display:flex;align-items:center;gap:6px;">
@@ -658,12 +658,12 @@
                                     <button id="ga-sonde-view-wind" class="ga-btn ga-btn-xs" onclick="gaSondeSetView('wind')" style="font-size:9px;" title="Wind speed and direction vs altitude">Wind</button>
                                     <button id="ga-sonde-view-xsec" class="ga-btn ga-btn-xs" onclick="gaSondeSetView('xsec')" style="font-size:9px;" title="Radius-height cross-section (all legs)">X-Sec</button>
                                     <button id="ga-sonde-view-radial" class="ga-btn ga-btn-xs" onclick="gaSondeSetView('radial')" style="font-size:9px;" title="Radial profile of selected variable">Radial</button>
-                                    <select id="ga-sonde-skewt-select" onchange="gaSondeShowSkewT(this.value)" style="font-size:9px;padding:2px 4px;background:#ffffff;color:#0f1623;border:1px solid rgba(15,22,35,0.12);border-radius:3px;" data-hide-in-xsec="1"></select>
+                                    <select id="ga-sonde-skewt-select" onchange="gaSondeShowSkewT(this.value)" style="font-size:9px;padding:2px 4px;background:var(--surface-raised);color:var(--text);border:1px solid var(--border);border-radius:3px;" data-hide-in-xsec="1"></select>
                                     <button class="ga-btn ga-btn-xs" onclick="gaSondeCloseSkewT()" style="font-size:9px;color:#f87171;">&#10005;</button>
                                 </div>
                             </div>
                             <div id="ga-xsec-var-row" style="display:none;margin-bottom:6px;">
-                                <span style="font-size:9px;color:#64748b;">Variable:</span>
+                                <span style="font-size:9px;color:var(--slate);">Variable:</span>
                                 <button class="ga-btn ga-btn-xs ga-xsec-var-btn active" onclick="gaXSecSetVar('wspd')" data-var="wspd" style="font-size:9px;" title="Flight-level wind speed">Wind</button>
                                 <button class="ga-btn ga-btn-xs ga-xsec-var-btn" onclick="gaXSecSetVar('temp')" data-var="temp" style="font-size:9px;" title="Air temperature">Temp</button>
                                 <button class="ga-btn ga-btn-xs ga-xsec-var-btn" onclick="gaXSecSetVar('theta_e')" data-var="theta_e" style="font-size:9px;" title="Equivalent potential temperature">&theta;e</button>
@@ -671,20 +671,20 @@
                             </div>
                             <div style="display:flex;gap:8px;">
                                 <div id="ga-sonde-skewt" style="flex:1;height:520px;"></div>
-                                <div id="ga-sonde-skewt-info" style="width:180px;font-size:10px;color:#d1d5db;overflow-y:auto;max-height:520px;"></div>
+                                <div id="ga-sonde-skewt-info" style="width:180px;font-size:10px;color:var(--text);overflow-y:auto;max-height:520px;"></div>
                             </div>
                         </div>
                         <!-- Flight-level time series side panel -->
-                        <div id="ga-fl-ts-panel" style="display:none;background:#ffffff;border:1px solid rgba(96,165,250,0.3);border-radius:8px;padding:10px 12px;margin-top:6px;">
+                        <div id="ga-fl-ts-panel" style="display:none;background:var(--surface-raised);border:1px solid rgba(96,165,250,0.3);border-radius:8px;padding:10px 12px;margin-top:6px;">
                             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
                                 <div style="font-size:11px;font-weight:600;color:#1d4ed8;">Flight-Level Time Series</div>
                                 <div style="display:flex;align-items:center;gap:6px;">
-                                    <span style="font-size:9px;color:#64748b;">Resolution:</span>
+                                    <span style="font-size:9px;color:var(--slate);">Resolution:</span>
                                     <button class="ga-btn ga-btn-xs ga-fl-res-btn active" data-res="1s" onclick="gaFLToggleRes('1s')" id="ga-fl-res-1s" style="font-size:9px;">1s</button>
                                     <button class="ga-btn ga-btn-xs ga-fl-res-btn active" data-res="10s" onclick="gaFLToggleRes('10s')" style="font-size:9px;">10s</button>
                                     <button class="ga-btn ga-btn-xs ga-fl-res-btn active" data-res="30s" onclick="gaFLToggleRes('30s')" style="font-size:9px;">30s</button>
                                     <button class="ga-btn ga-btn-xs active" id="ga-fl-minob-btn" onclick="gaFLToggleMinob()" style="display:none;font-size:9px;color:#f97316;border-color:#f97316;" title="MINOB/HDOB minute obs (peak 10-sec wind)">MINOB</button>
-                                    <span style="font-size:9px;color:#64748b;margin-left:4px;">X-axis:</span>
+                                    <span style="font-size:9px;color:var(--slate);margin-left:4px;">X-axis:</span>
                                     <button class="ga-btn ga-btn-xs" onclick="gaFLToggleXAxis()" id="ga-fl-xaxis-btn" style="font-size:9px;">Time</button>
                                     <button class="ga-btn ga-btn-xs" onclick="gaFLCloseTimeSeries()" style="font-size:9px;color:#f87171;">&#10005;</button>
                                 </div>
@@ -694,15 +694,15 @@
                             <div style="font-size:8px;color:#475569;margin-top:2px;text-align:center;">Click chart to highlight position on map &middot; Drag to zoom &middot; Double-click to reset</div>
                         </div>
                         <!-- Model forecast overlay controls -->
-                        <div id="ga-model-controls" style="display:none;background:#ffffff;border:1px solid rgba(116,185,255,0.3);border-radius:6px;padding:8px 10px;margin-top:4px;">
+                        <div id="ga-model-controls" style="display:none;background:var(--surface-raised);border:1px solid rgba(116,185,255,0.3);border-radius:6px;padding:8px 10px;margin-top:4px;">
                             <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
                                 <label style="font-size:10px;font-weight:600;color:#1d4ed8;text-transform:uppercase;letter-spacing:0.5px;">Forecast Cycle</label>
-                                <select id="model-cycle-select" onchange="selectModelCycle(this.value)" style="flex:1;min-width:140px;font-size:10px;padding:3px 6px;border:1px solid rgba(15,22,35,0.12);border-radius:4px;background:#ffffff;color:#0f1623;font-variant-numeric: tabular-nums;"></select>
+                                <select id="model-cycle-select" onchange="selectModelCycle(this.value)" style="flex:1;min-width:140px;font-size:10px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;background:var(--surface-raised);color:var(--text);font-variant-numeric: tabular-nums;"></select>
                                 <label class="gif-toggle" style="width:28px;height:16px;" title="Auto-sync cycle to IR frame time">
                                     <input type="checkbox" id="model-auto-sync" checked onchange="toggleModelAutoSync()">
                                     <span class="gif-toggle-slider"></span>
                                 </label>
-                                <span style="font-size:9px;color:#64748b;">Auto</span>
+                                <span style="font-size:9px;color:var(--slate);">Auto</span>
                             </div>
                             <div style="display:flex;align-items:center;gap:6px;">
                                 <button class="ga-btn ga-btn-xs" onclick="syncModelsToIRNow()" id="model-sync-ir-btn" title="Snap forecast cycle to current IR frame time" style="font-size:9px;color:#fbbf24;">&#8635; Sync IR</button>
@@ -718,10 +718,10 @@
                 <div id="scorecard-panel" class="detail-panel scorecard-panel" style="display:none;margin-top:16px;">
                     <div class="panel-header">
                         <h3><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg>Forecast Scorecard</h3>
-                        <span style="font-size:0.78rem;color:#8b9ec2;">Model forecast errors vs. best track</span>
+                        <span style="font-size:0.78rem;color:var(--slate);">Model forecast errors vs. best track</span>
                     </div>
                     <div id="scorecard-content" class="scorecard-content">
-                        <div style="padding:30px;text-align:center;color:#8b9ec2;">
+                        <div style="padding:30px;text-align:center;color:var(--slate);">
                             Loading scorecard...
                         </div>
                     </div>
@@ -731,10 +731,10 @@
                 <div id="environment-panel" class="detail-panel scorecard-panel" style="display:none;margin-top:16px;">
                     <div class="panel-header">
                         <h3><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>Environmental Diagnostics</h3>
-                        <span style="font-size:0.78rem;color:#8b9ec2;">ERA5 reanalysis via TC-PRIMED &amp; SHIPS LSDIAG</span>
+                        <span style="font-size:0.78rem;color:var(--slate);">ERA5 reanalysis via TC-PRIMED &amp; SHIPS LSDIAG</span>
                     </div>
                     <div id="environment-content">
-                        <div style="padding:30px;text-align:center;color:#8b9ec2;">
+                        <div style="padding:30px;text-align:center;color:var(--slate);">
                             Loading environmental data...
                         </div>
                     </div>
@@ -988,6 +988,6 @@
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
     <script src="skewt.js"></script>
-    <script src="global_archive.js?v=20260507n"></script>
+    <script src="global_archive.js?v=20260507w"></script>
 </body>
 </html>

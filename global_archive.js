@@ -646,7 +646,13 @@ function _tcaPlotlyBase() {
 Object.defineProperty(window, 'PLOTLY_LAYOUT_BASE', {
     get: _tcaPlotlyBase, configurable: true
 });
-var PLOTLY_LAYOUT_BASE = window.PLOTLY_LAYOUT_BASE;
+// NOTE: do NOT add `var PLOTLY_LAYOUT_BASE = window.PLOTLY_LAYOUT_BASE;` here.
+// Top-level var declarations are hoisted in GlobalDeclarationInstantiation,
+// which creates a non-configurable data property on window BEFORE this
+// script body runs — making the Object.defineProperty above throw
+// "Cannot redefine property: PLOTLY_LAYOUT_BASE" and aborting the rest of
+// the file. Bare `PLOTLY_LAYOUT_BASE` references below resolve to
+// window.PLOTLY_LAYOUT_BASE via the global scope chain — same behavior.
 
 var PLOTLY_CONFIG = {
     responsive: true,
@@ -911,7 +917,7 @@ function renderMarkers(storms) {
             '<div style="min-width:180px;">' +
             '<div style="font-weight:700;font-size:14px;margin-bottom:4px;">' + (s.name || 'UNNAMED') +
             ' <span class="intensity-badge" style="background:' + color + ';font-size:10px;padding:1px 6px;">' + cat + '</span></div>' +
-            '<div style="font-size:12px;color:#94a3b8;margin-bottom:6px;">' + s.year + ' &middot; ' + (BASIN_NAMES[s.basin] || s.basin) + '</div>' +
+            '<div style="font-size:12px;color:var(--slate);margin-bottom:6px;">' + s.year + ' &middot; ' + (BASIN_NAMES[s.basin] || s.basin) + '</div>' +
             '<div style="font-size:12px;"><b>Peak:</b> ' + (s.peak_wind_kt || '?') + ' kt &middot; ' + (s.min_pres_hpa || '?') + ' hPa</div>' +
             '<div style="font-size:12px;"><b>ACE:</b> ' + (s.ace || 0).toFixed(1) + '</div>' +
             '<div style="margin-top:8px;text-align:center;">' +
@@ -1619,23 +1625,38 @@ function renderIntensityTimeline(track, storm) {
 
     var maxWind = Math.max.apply(null, winds.filter(function (w) { return w != null; })) || 100;
 
-    var layout = Object.assign({}, PLOTLY_LAYOUT_BASE, {
+    // Always read theme-aware base fresh — local capture would freeze
+    // the value at script-load and miss user theme toggles.
+    var _base = (typeof _tcaPlotlyBase === 'function') ? _tcaPlotlyBase() : window.PLOTLY_LAYOUT_BASE;
+    var _readVar = (window.TCATheme && window.TCATheme.readVar) ? window.TCATheme.readVar : function () { return ''; };
+    var _axisColor = _readVar('--plot-axis') || '#5b6573';
+    var _gridColor = _readVar('--plot-grid') || 'rgba(15,22,35,0.22)';
+    var _surfaceRaised = _readVar('--surface-raised') || '#ffffff';
+    var _legendBorder = _readVar('--border') || 'rgba(15,22,35,0.12)';
+    var _legendText = _readVar('--text') || '#0f1623';
+
+    // Render the intensity timeline as a slightly-raised "card" rather
+    // than the flat page bg — gives the chart visual identity in both
+    // themes (white card on light gray; near-charcoal on near-black).
+    var layout = Object.assign({}, _base, {
+        paper_bgcolor: _surfaceRaised,
+        plot_bgcolor: _surfaceRaised,
         xaxis: {
-            title: { text: 'Date/Time', font: { size: 11, color: '#8b9ec2' } },
-            tickfont: { size: 10, color: '#8b9ec2' },
-            gridcolor: 'rgba(15, 22, 35,0.04)',
-            linecolor: 'rgba(15, 22, 35,0.08)'
+            title: { text: 'Date/Time', font: { size: 11, color: _axisColor } },
+            tickfont: { size: 10, color: _axisColor },
+            gridcolor: _gridColor,
+            linecolor: _gridColor
         },
         yaxis: {
             title: { text: 'Max Wind (kt)', font: { size: 11, color: '#00d4ff' } },
-            tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' },
-            gridcolor: 'rgba(15, 22, 35,0.04)',
+            tickfont: { size: 10, color: _axisColor, family: 'DM Sans, sans-serif' },
+            gridcolor: _gridColor,
             range: [0, Math.max(maxWind + 20, 180)],
             side: 'left'
         },
         yaxis2: {
             title: { text: 'Pressure (hPa)', font: { size: 11, color: '#a78bfa' } },
-            tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' },
+            tickfont: { size: 10, color: _axisColor, family: 'DM Sans, sans-serif' },
             overlaying: 'y',
             side: 'right',
             autorange: 'reversed',
@@ -1645,10 +1666,10 @@ function renderIntensityTimeline(track, storm) {
         showlegend: true,
         legend: {
             x: 0.01, y: 0.99,
-            bgcolor: 'rgba(15,33,64,0.8)',
-            bordercolor: 'rgba(15, 22, 35,0.08)',
+            bgcolor: _surfaceRaised,
+            bordercolor: _legendBorder,
             borderwidth: 1,
-            font: { size: 11, color: '#e2e8f0' }
+            font: { size: 11, color: _legendText }
         },
         margin: { l: 55, r: 55, t: 10, b: 45 }
     });
@@ -1897,7 +1918,7 @@ function renderHovmoller(data) {
         connectgaps: false,
         hovertemplate: '%{y}<br>r = %{x} km<br>Tb = %{z:.1f} °C<extra></extra>',
         colorbar: {
-            title: { text: '°C', font: { size: 9, color: '#8b9ec2' } },
+            title: { text: '°C', font: { size: 9, color: '#5b6573' } },
             len: 0.7,
             thickness: 8,
             tickfont: { size: 8, color: '#64748b' },
@@ -1940,9 +1961,9 @@ function renderHovmoller(data) {
     var layout = {
         paper_bgcolor: 'rgba(0,0,0,0)',
         plot_bgcolor: 'rgba(0,0,0,0)',
-        font: { family: 'DM Sans, sans-serif', color: '#8b9ec2', size: 10 },
+        font: { family: 'DM Sans, sans-serif', color: '#5b6573', size: 10 },
         margin: { t: 36, r: 50, b: 36, l: 100 },
-        title: { text: titleText, font: { size: 11, color: '#94a3b8' }, x: 0.5, y: 0.995 },
+        title: { text: titleText, font: { size: 11, color: '#5b6573' }, x: 0.5, y: 0.995 },
         xaxis: {
             title: { text: 'Radius (km)', font: { size: 9 } },
             tickfont: { size: 8 },
@@ -2301,7 +2322,7 @@ function _vdmRenderOnMap() {
         var flightDate = v.time ? v.time.substring(0, 10) : '';
 
         var tip = '<b>VDM — ' + (v.storm_name || '') + ' OB ' + (v.ob_number || '?') + '</b><br>' +
-            '<span style="color:#94a3b8;">' + acName + ' · ' + flightDate + '</span><br>' +
+            '<span style="color:var(--slate);">' + acName + ' · ' + flightDate + '</span><br>' +
             (v.time ? v.time.substring(11, 19) + ' UTC<br>' : '') +
             (v.max_fl_wind_kt != null ? 'Max FL: ' + v.max_fl_wind_kt + ' kt<br>' : '') +
             (v.min_slp_hpa != null ? 'Min SLP: ' + v.min_slp_hpa + ' hPa<br>' : '') +
@@ -2759,19 +2780,19 @@ function renderCompareTimeline() {
 
     var layout = Object.assign({}, PLOTLY_LAYOUT_BASE, {
         xaxis: {
-            title: { text: xTitle, font: { size: 11, color: '#8b9ec2' } },
-            tickfont: { size: 10, color: '#8b9ec2' },
-            gridcolor: 'rgba(15, 22, 35,0.04)'
+            title: { text: xTitle, font: { size: 11, color: '#5b6573' } },
+            tickfont: { size: 10, color: '#5b6573' },
+            gridcolor: 'rgba(15, 22, 35,0.22)'
         },
         yaxis: {
             title: { text: 'Max Wind (kt)', font: { size: 11, color: '#00d4ff' } },
-            tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' },
-            gridcolor: 'rgba(15, 22, 35,0.04)',
+            tickfont: { size: 10, color: '#5b6573', family: 'JetBrains Mono' },
+            gridcolor: 'rgba(15, 22, 35,0.22)',
             range: [0, Math.min(maxWind + 20, 200)]
         },
         yaxis2: {
             title: { text: 'Pressure (hPa)', font: { size: 11, color: '#a78bfa' } },
-            tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' },
+            tickfont: { size: 10, color: '#5b6573', family: 'JetBrains Mono' },
             overlaying: 'y', side: 'right',
             autorange: 'reversed', gridcolor: 'transparent'
         },
@@ -2779,10 +2800,10 @@ function renderCompareTimeline() {
         showlegend: true,
         legend: {
             x: 0.01, y: 0.99,
-            bgcolor: 'rgba(15,33,64,0.8)',
+            bgcolor: 'rgba(255,255,255,0.85)',
             bordercolor: 'rgba(15, 22, 35,0.08)',
             borderwidth: 1,
-            font: { size: 10, color: '#e2e8f0' }
+            font: { size: 10, color: '#0f1623' }
         },
         margin: { l: 55, r: 55, t: 10, b: 45 }
     });
@@ -3952,7 +3973,7 @@ function updateHovCenterMarker(frameDtStr) {
         var g1Pass = g.g1_rad_dif >= 15;
         var g2Pass = g.g2_std_ratio < 0.7;
         var g3Pass = g.g3_diff != null && g.g3_diff <= 7;
-        gateHtml = '<br><span style="font-size:10px;color:#94a3b8;">' +
+        gateHtml = '<br><span style="font-size:10px;color:var(--slate);">' +
             (g1Pass ? '✓' : '✗') + ' ΔT=' + g.g1_rad_dif + 'K (≥15)' +
             '<br>' + (g2Pass ? '✓' : '✗') + ' σ ratio=' + g.g2_std_ratio + ' (<0.7)' +
             '<br>' + (g3Pass ? '✓' : '✗') + ' Ring=' + g.g3_ring_C + '°C, P1=' + (g.g3_p1_C != null ? g.g3_p1_C : '?') + '°C (Δ' + (g.g3_diff != null ? g.g3_diff : '?') + '≤7)' +
@@ -5178,7 +5199,7 @@ function _updateGaNexradColorbar(product) {
                 '<div style="flex:1;background:#FF0000;"></div>' +
                 '<div style="flex:1;background:#C80000;"></div>' +
             '</div>' +
-            '<div style="display:flex;justify-content:space-between;font-size:8px;color:#94a3b8;margin-top:1px;">' +
+            '<div style="display:flex;justify-content:space-between;font-size:8px;color:var(--slate);margin-top:1px;">' +
                 '<span>-100 m/s</span><span>0</span><span>+100 m/s</span>' +
             '</div>';
     } else {
@@ -5199,7 +5220,7 @@ function _updateGaNexradColorbar(product) {
                 '<div style="flex:1;background:#F800FD;"></div>' +
                 '<div style="flex:1;background:#9854C6;"></div>' +
             '</div>' +
-            '<div style="display:flex;justify-content:space-between;font-size:8px;color:#94a3b8;margin-top:1px;">' +
+            '<div style="display:flex;justify-content:space-between;font-size:8px;color:var(--slate);margin-top:1px;">' +
                 '<span>5 dBZ</span><span>20</span><span>35</span><span>50</span><span>65</span>' +
             '</div>';
     }
@@ -7235,9 +7256,9 @@ function _renderCompareHov(side, data) {
     var layout = {
         paper_bgcolor: 'rgba(0,0,0,0)',
         plot_bgcolor: 'rgba(0,0,0,0)',
-        font: { family: 'DM Sans, sans-serif', color: '#8b9ec2', size: 9 },
+        font: { family: 'DM Sans, sans-serif', color: '#5b6573', size: 9 },
         margin: { t: 22, r: 8, b: 30, l: 80 },
-        title: { text: stormName, font: { size: 10, color: '#94a3b8' }, x: 0.5, y: 0.99 },
+        title: { text: stormName, font: { size: 10, color: '#5b6573' }, x: 0.5, y: 0.99 },
         xaxis: {
             title: { text: 'Radius (km)', font: { size: 8 } },
             tickfont: { size: 7 },
@@ -7425,7 +7446,7 @@ function _updateCompareRadialProfile() {
     var layout = {
         paper_bgcolor: 'rgba(0,0,0,0)',
         plot_bgcolor: 'rgba(0,0,0,0)',
-        font: { family: 'DM Sans, sans-serif', color: '#8b9ec2', size: 10 },
+        font: { family: 'DM Sans, sans-serif', color: '#5b6573', size: 10 },
         margin: { t: 8, r: 12, b: 36, l: 48 },
         xaxis: {
             title: { text: 'Radius (km)', font: { size: 9 } },
@@ -8726,20 +8747,20 @@ function renderSHIPSChart() {
     var layout = {
         paper_bgcolor: 'rgba(0,0,0,0)',
         plot_bgcolor: 'rgba(0,0,0,0)',
-        font: { family: 'Inter, sans-serif', color: '#e2e8f0' },
+        font: { family: 'Inter, sans-serif', color: '#0f1623' },
         margin: { l: 55, r: 55, t: 10, b: 40 },
         showlegend: true,
         legend: {
             x: 0.01, y: 0.99,
-            bgcolor: 'rgba(15,33,64,0.8)',
+            bgcolor: 'rgba(255,255,255,0.85)',
             bordercolor: 'rgba(15, 22, 35,0.08)',
             borderwidth: 1,
-            font: { size: 10, color: '#e2e8f0' },
+            font: { size: 10, color: '#0f1623' },
             orientation: 'h'
         },
         xaxis: {
-            tickfont: { size: 10, color: '#8b9ec2' },
-            gridcolor: 'rgba(15, 22, 35,0.04)',
+            tickfont: { size: 10, color: '#5b6573' },
+            gridcolor: 'rgba(15, 22, 35,0.22)',
             linecolor: 'rgba(15, 22, 35,0.08)'
         }
     };
@@ -8750,9 +8771,9 @@ function renderSHIPSChart() {
         var ax = yAxes[key];
         var yKey = ax.idx === 1 ? 'yaxis' : 'yaxis' + ax.idx;
         layout[yKey] = {
-            title: { text: ax.unit, font: { size: 11, color: '#8b9ec2' } },
-            tickfont: { size: 10, color: '#8b9ec2' },
-            gridcolor: ax.idx === 1 ? 'rgba(15, 22, 35,0.04)' : 'transparent',
+            title: { text: ax.unit, font: { size: 11, color: '#5b6573' } },
+            tickfont: { size: 10, color: '#5b6573' },
+            gridcolor: ax.idx === 1 ? 'rgba(15, 22, 35,0.22)' : 'transparent',
             side: ax.side,
             overlaying: ax.idx > 1 ? 'y' : undefined
         };
@@ -9020,7 +9041,7 @@ function renderTCPrimedEnvChart() {
                 type: 'scatter',
                 mode: 'lines',
                 name: 'Intensity (kt)',
-                line: { color: '#e2e8f0', width: 2, dash: 'dot' },
+                line: { color: '#0f1623', width: 2, dash: 'dot' },
                 yaxis: intAxisName,
                 hovertemplate: '<b>Intensity</b><br>%{x}<br>%{y} kt<extra></extra>'
             });
@@ -9030,20 +9051,20 @@ function renderTCPrimedEnvChart() {
     var layout = {
         paper_bgcolor: 'rgba(0,0,0,0)',
         plot_bgcolor: 'rgba(0,0,0,0)',
-        font: { family: 'Inter, sans-serif', color: '#e2e8f0' },
+        font: { family: 'Inter, sans-serif', color: '#0f1623' },
         margin: { l: 55, r: 55, t: 10, b: 40 },
         showlegend: true,
         legend: {
             x: 0.01, y: 0.99,
-            bgcolor: 'rgba(15,33,64,0.8)',
+            bgcolor: 'rgba(255,255,255,0.85)',
             bordercolor: 'rgba(15, 22, 35,0.08)',
             borderwidth: 1,
-            font: { size: 10, color: '#e2e8f0' },
+            font: { size: 10, color: '#0f1623' },
             orientation: 'h'
         },
         xaxis: {
-            tickfont: { size: 10, color: '#8b9ec2' },
-            gridcolor: 'rgba(15, 22, 35,0.04)',
+            tickfont: { size: 10, color: '#5b6573' },
+            gridcolor: 'rgba(15, 22, 35,0.22)',
             linecolor: 'rgba(15, 22, 35,0.08)'
         }
     };
@@ -9053,9 +9074,9 @@ function renderTCPrimedEnvChart() {
         var ax = yAxes[key];
         var yKey = ax.idx === 1 ? 'yaxis' : 'yaxis' + ax.idx;
         layout[yKey] = {
-            title: { text: ax.unit, font: { size: 11, color: '#8b9ec2' } },
-            tickfont: { size: 10, color: '#8b9ec2' },
-            gridcolor: ax.idx === 1 ? 'rgba(15, 22, 35,0.04)' : 'transparent',
+            title: { text: ax.unit, font: { size: 11, color: '#5b6573' } },
+            tickfont: { size: 10, color: '#5b6573' },
+            gridcolor: ax.idx === 1 ? 'rgba(15, 22, 35,0.22)' : 'transparent',
             side: ax.side,
             overlaying: ax.idx > 1 ? 'y' : undefined
         };
@@ -10155,7 +10176,7 @@ function _gaFLInjectLegend() {
 
     var html = '<div style="margin-top:2px;">' +
         '<div style="height:12px;border-radius:3px;background:linear-gradient(to right,' + gradStops + ');border:1px solid rgba(15, 22, 35,0.1);"></div>' +
-        '<div style="display:flex;justify-content:space-between;font-size:8px;color:#94a3b8;margin-top:1px;">';
+        '<div style="display:flex;justify-content:space-between;font-size:8px;color:var(--slate);margin-top:1px;">';
     stops.forEach(function (s) {
         html += '<span>' + (s.lbl || s.val) + '</span>';
     });
@@ -10349,6 +10370,18 @@ function _gaSondeFetch(stormName, year, missionId, centerLat, centerLon) {
     if (missionId) url += '&mission_id=' + encodeURIComponent(missionId);
     if (centerLat) url += '&center_lat=' + centerLat + '&center_lon=' + centerLon;
 
+    // Show a loading indicator immediately so the user knows sondes
+    // are being fetched (the request can take 1–3s on cold cache).
+    var _sondeInfoEl = document.getElementById('ga-sonde-info');
+    var _sondeCntEl = document.getElementById('ga-sonde-count');
+    var _sondeWrapEl = document.getElementById('ga-sonde-table-wrap');
+    if (_sondeInfoEl) _sondeInfoEl.style.display = '';
+    if (_sondeCntEl) _sondeCntEl.innerHTML =
+        '<span style="display:inline-flex;align-items:center;gap:5px;color:var(--slate);">' +
+        '<span style="display:inline-block;width:10px;height:10px;border:1.5px solid var(--border);border-top-color:var(--um-green);border-radius:50%;animation:ga-spin 0.8s linear infinite;"></span>' +
+        'Loading dropsondes…</span>';
+    if (_sondeWrapEl) _sondeWrapEl.innerHTML = '';
+
     fetch(url)
         .then(function (r) { return r.json(); })
         .then(function (json) {
@@ -10462,8 +10495,8 @@ function _gaSondeRenderTable() {
     var wrap = document.getElementById('ga-sonde-table-wrap');
     if (!wrap || !_gaSondeData) return;
 
-    var html = '<table style="width:100%;border-collapse:collapse;font-size:10px;font-family:\'JetBrains Mono\',monospace;">' +
-        '<tr style="color:#6ee7b7;border-bottom:1px solid rgba(15, 22, 35,0.1);">' +
+    var html = '<table style="width:100%;border-collapse:collapse;font-size:10px;font-variant-numeric:tabular-nums;color:var(--text);">' +
+        '<tr style="color:var(--um-green);border-bottom:1px solid var(--border);">' +
         '<th style="padding:3px 4px;text-align:left;">#</th>' +
         '<th style="padding:3px 4px;text-align:left;">Time</th>' +
         '<th style="padding:3px 4px;text-align:right;" title="Maximum wind speed in profile">Vmax</th>' +
@@ -10531,7 +10564,7 @@ function _gaSondeRenderTable() {
             '<td style="padding:2px 4px;text-align:right;">' + (wl150 != null ? (wl150 * 1.944).toFixed(0) + ' kt' : '\u2014') + '</td>' +
             '<td style="padding:2px 4px;text-align:right;">' + (psfc != null ? psfc.toFixed(0) : '\u2014') + '</td>' +
             '<td style="padding:2px 4px;text-align:center;">' + (s.hit_surface ? '\u2705' : '\u274c') + '</td>' +
-            '<td style="padding:2px 4px;"><button class="ga-btn ga-btn-xs" style="font-size:8px;color:#6ee7b7;" onclick="event.stopPropagation();gaSondeShowSkewT(' + i + ')">Skew-T</button></td></tr>';
+            '<td style="padding:2px 4px;"><button class="ga-btn ga-btn-xs" style="font-size:8px;color:var(--um-green);" onclick="event.stopPropagation();gaSondeShowSkewT(' + i + ')">Skew-T</button></td></tr>';
     }
     html += '</table>';
     wrap.innerHTML = html;
@@ -10871,12 +10904,12 @@ function _renderSondeWindProfile(sonde, divId) {
             showgrid: false,
         },
         yaxis: {
-            title: { text: 'Altitude (m)', font: { size: 9, color: '#8b9ec2' } },
-            color: '#8b9ec2', tickfont: { size: 8 },
+            title: { text: 'Altitude (m)', font: { size: 9, color: '#5b6573' } },
+            color: '#5b6573', tickfont: { size: 8 },
             gridcolor: 'rgba(15, 22, 35,0.06)', zeroline: false,
             range: [0, maxAlt],
         },
-        legend: { font: { color: '#ccc', size: 9 }, x: 0.02, y: 0.98, bgcolor: 'rgba(0,0,0,0.4)' },
+        legend: { font: { color: '#5b6573', size: 9 }, x: 0.02, y: 0.98, bgcolor: 'rgba(0,0,0,0.4)' },
         showlegend: true,
     };
 
@@ -11079,19 +11112,19 @@ function _renderCrossSection(divId) {
         plot_bgcolor: 'rgba(247,248,250,0.85)',
         margin: { l: 50, r: 80, t: 10, b: 40 },
         xaxis: {
-            title: { text: 'Radius from center (km)', font: { size: 9, color: '#8b9ec2' } },
-            color: '#8b9ec2', tickfont: { size: 8 },
+            title: { text: 'Radius from center (km)', font: { size: 9, color: '#5b6573' } },
+            color: '#5b6573', tickfont: { size: 8 },
             gridcolor: 'rgba(15, 22, 35,0.06)', zeroline: true,
             zerolinecolor: 'rgba(15, 22, 35,0.15)',
             range: [0, maxR],
         },
         yaxis: {
-            title: { text: 'Altitude (km)', font: { size: 9, color: '#8b9ec2' } },
-            color: '#8b9ec2', tickfont: { size: 8 },
+            title: { text: 'Altitude (km)', font: { size: 9, color: '#5b6573' } },
+            color: '#5b6573', tickfont: { size: 8 },
             gridcolor: 'rgba(15, 22, 35,0.06)', zeroline: false,
             range: [0, maxAlt],
         },
-        legend: { font: { color: '#ccc', size: 9 }, x: 0.02, y: 0.98, bgcolor: 'rgba(0,0,0,0.4)' },
+        legend: { font: { color: '#5b6573', size: 9 }, x: 0.02, y: 0.98, bgcolor: 'rgba(0,0,0,0.4)' },
         showlegend: true,
     };
 
@@ -11352,8 +11385,8 @@ function _renderRadialProfile(divId) {
         plot_bgcolor: 'rgba(247,248,250,0.85)',
         margin: { l: 55, r: 15, t: 10, b: 40 },
         xaxis: {
-            title: { text: 'Radius from center (km)', font: { size: 9, color: '#8b9ec2' } },
-            color: '#8b9ec2', tickfont: { size: 8 },
+            title: { text: 'Radius from center (km)', font: { size: 9, color: '#5b6573' } },
+            color: '#5b6573', tickfont: { size: 8 },
             gridcolor: 'rgba(15, 22, 35,0.06)', zeroline: true,
             zerolinecolor: 'rgba(15, 22, 35,0.15)', range: [0, 300],
         },
@@ -11362,7 +11395,7 @@ function _renderRadialProfile(divId) {
             color: varColor, tickfont: { size: 8 },
             gridcolor: 'rgba(15, 22, 35,0.06)', zeroline: false,
         },
-        legend: { font: { color: '#ccc', size: 9 }, x: 0.7, y: 0.98, bgcolor: 'rgba(0,0,0,0.4)' },
+        legend: { font: { color: '#5b6573', size: 9 }, x: 0.7, y: 0.98, bgcolor: 'rgba(0,0,0,0.4)' },
         showlegend: true,
     };
 
@@ -11377,19 +11410,19 @@ function _gaSondeRenderSkewTInfo(profiles, sonde, idx) {
     if (!el) return;
 
     var d = profiles._derived || {};
-    var html = '<div style="font-weight:600;color:#6ee7b7;margin-bottom:6px;">Derived Parameters</div>';
+    var html = '<div style="font-weight:600;color:var(--um-green);margin-bottom:6px;">Derived Parameters</div>';
     html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 8px;font-size:9px;">';
-    html += '<span style="color:#94a3b8;">CAPE:</span><span>' + (d.cape != null ? d.cape + ' J/kg' : '\u2014') + '</span>';
-    html += '<span style="color:#94a3b8;">CIN:</span><span>' + (d.cin != null ? d.cin + ' J/kg' : '\u2014') + '</span>';
-    html += '<span style="color:#94a3b8;">PWAT:</span><span>' + (d.pwat != null ? d.pwat.toFixed(1) + ' mm' : '\u2014') + '</span>';
-    html += '<span style="color:#94a3b8;">LCL:</span><span>' + (d.lcl_p != null ? d.lcl_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
-    html += '<span style="color:#94a3b8;">LFC:</span><span>' + (d.lfc_p != null ? d.lfc_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
-    html += '<span style="color:#94a3b8;">EL:</span><span>' + (d.el_p != null ? d.el_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
-    html += '<span style="color:#94a3b8;">0\u00b0C:</span><span>' + (d.freezing_p != null ? d.freezing_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
+    html += '<span style="color:var(--slate);">CAPE:</span><span>' + (d.cape != null ? d.cape + ' J/kg' : '\u2014') + '</span>';
+    html += '<span style="color:var(--slate);">CIN:</span><span>' + (d.cin != null ? d.cin + ' J/kg' : '\u2014') + '</span>';
+    html += '<span style="color:var(--slate);">PWAT:</span><span>' + (d.pwat != null ? d.pwat.toFixed(1) + ' mm' : '\u2014') + '</span>';
+    html += '<span style="color:var(--slate);">LCL:</span><span>' + (d.lcl_p != null ? d.lcl_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
+    html += '<span style="color:var(--slate);">LFC:</span><span>' + (d.lfc_p != null ? d.lfc_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
+    html += '<span style="color:var(--slate);">EL:</span><span>' + (d.el_p != null ? d.el_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
+    html += '<span style="color:var(--slate);">0\u00b0C:</span><span>' + (d.freezing_p != null ? d.freezing_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
     html += '</div>';
 
     // Surface info
-    html += '<div style="margin-top:8px;font-weight:600;color:#6ee7b7;margin-bottom:4px;">Surface</div>';
+    html += '<div style="margin-top:8px;font-weight:600;color:var(--um-green);margin-bottom:4px;">Surface</div>';
     html += '<div style="font-size:9px;">';
     html += 'Hit surface: ' + (sonde.hit_surface ? 'Yes' : 'No') + '<br>';
     if (sonde.splash_pr) html += 'Splash P: ' + sonde.splash_pr.toFixed(1) + ' hPa<br>';
@@ -11623,7 +11656,7 @@ function _gaFLRenderTimeSeries() {
         paper_bgcolor: 'rgba(0,0,0,0)',
         plot_bgcolor: 'rgba(0,0,0,0)',
         margin: { t: 10, r: 60, b: 40, l: 55 },
-        font: { family: 'DM Sans, sans-serif', color: '#94a3b8', size: 10 },
+        font: { family: 'DM Sans, sans-serif', color: '#5b6573', size: 10 },
         legend: { orientation: 'h', y: 1.12, font: { size: 9 } },
         xaxis: {
             title: _gaFLXAxisMode === 'time' ? 'Time (UTC)' : 'Radius from center (km)',
@@ -11887,8 +11920,8 @@ function _gaFLRenderTimeSeries() {
                     x: moTimes, y: mo30s,
                     type: 'scatter', mode: 'lines',
                     name: chartProdLabel + ' 30s',
-                    line: { color: '#94a3b8', width: 1 },
-                    marker: { color: '#94a3b8', symbol: 'circle', size: 3 },
+                    line: { color: '#5b6573', width: 1 },
+                    marker: { color: '#5b6573', symbol: 'circle', size: 3 },
                     connectgaps: false,
                     hovertemplate: '%{text}<extra></extra>',
                     text: moHovers,

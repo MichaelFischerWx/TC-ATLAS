@@ -348,7 +348,12 @@ function _bindTCCenterTooltip(marker, caseData) {
 function enterFocusMode(caseData) {
     _focusMode = true;
     if (markers) map.removeLayer(markers);
-    if (_trackViewLayer) map.removeLayer(_trackViewLayer);
+    if (_trackViewLayer) {
+        map.removeLayer(_trackViewLayer);
+        // Empty the layer too — if some async filter callback re-adds
+        // the layer after focus mode begins, it'll have nothing in it.
+        _trackViewLayer.clearLayers();
+    }
     if (_focusMarker) { map.removeLayer(_focusMarker); _focusMarker = null; }
     var color = getIntensityColor(caseData.vmax_kt);
     var icon = L.divIcon({
@@ -653,8 +658,8 @@ function openSidePanel(caseData, fromQuickSelect) {
                     '<div class="fl-ts-header">' +
                         '<span class="fl-ts-title">\u2630 Hovm\u00f6ller (Time \u00d7 Radius)</span>' +
                         '<div style="display:flex;align-items:center;gap:4px;margin-left:auto;">' +
-                            '<label style="font-size:9px;color:#8b9ec2;">Coverage:</label>' +
-                            '<select id="hovmoller-coverage" style="font-size:9px;background:#0f2140;color:#e2e8f0;border:1px solid rgba(15, 22, 35,0.12);border-radius:4px;padding:1px 4px;" onchange="_fetchAndRenderHovmoller()">' +
+                            '<label style="font-size:9px;color:var(--slate);">Coverage:</label>' +
+                            '<select id="hovmoller-coverage" style="font-size:9px;background:var(--surface-raised);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:1px 4px;" onchange="_fetchAndRenderHovmoller()">' +
                                 '<option value="0.0">0%</option>' +
                                 '<option value="0.1">10%</option>' +
                                 '<option value="0.25" selected>25%</option>' +
@@ -844,7 +849,7 @@ function openSidePanel(caseData, fromQuickSelect) {
     document.getElementById('side-panel').classList.add('open');
 
     // Fetch IR satellite data for this case
-    _irData = null; _irFrameURLs = []; _irOriginalURLs = []; _irPlotlyVisible = false; _irAllFramesLoaded = false; _irLoadedCount = 0;
+    _irData = null; _irFrameURLs = []; _irOriginalURLs = []; _irPlotlyVisible = false; _irUserDisabled = false; _irAllFramesLoaded = false; _irLoadedCount = 0;
     _showIRLoadingIndicator();
     fetchIRData(caseData.case_index, function(data) {
         _removeIRLoadingIndicator();
@@ -854,6 +859,12 @@ function openSidePanel(caseData, fromQuickSelect) {
             if (_focusMode) {
                 _injectIRMapControls();
                 showIRMapOverlay(0);
+            }
+            // Auto-apply IR underlay to plan view if a chart already exists
+            // and the user hasn't explicitly disabled it for this case.
+            if (!_irUserDisabled && !_irPlotlyVisible) {
+                var chartEl = document.getElementById('plotly-chart');
+                if (chartEl && chartEl.data) toggleIRPlotlyUnderlay();
             }
         }
     });
@@ -1288,12 +1299,12 @@ function renderHodograph(profiles, divId) {
         line: { color: 'rgba(15, 22, 35,0.1)', width: 1 } });
 
     var layout = {
-        xaxis: { title: { text: 'u (m/s)', font: { size: 10, color: '#8b9ec2' } },
+        xaxis: { title: { text: 'u (m/s)', font: { size: 10, color: '#5b6573' } },
             range: [-ringMax, ringMax], scaleanchor: 'y', scaleratio: 1,
-            zeroline: false, gridcolor: 'rgba(15, 22, 35,0.04)', color: '#8b9ec2', tickfont: { size: 9 } },
-        yaxis: { title: { text: 'v (m/s)', font: { size: 10, color: '#8b9ec2' } },
+            zeroline: false, gridcolor: 'rgba(15, 22, 35,0.22)', color: '#5b6573', tickfont: { size: 9 } },
+        yaxis: { title: { text: 'v (m/s)', font: { size: 10, color: '#5b6573' } },
             range: [-ringMax, ringMax],
-            zeroline: false, gridcolor: 'rgba(15, 22, 35,0.04)', color: '#8b9ec2', tickfont: { size: 9 } },
+            zeroline: false, gridcolor: 'rgba(15, 22, 35,0.22)', color: '#5b6573', tickfont: { size: 9 } },
         shapes: shapes,
         paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(247,248,250,0.85)',
         margin: { l: 40, r: 10, t: 25, b: 35 },
@@ -1317,10 +1328,10 @@ function renderRHProfile(profiles, divId) {
         hovertemplate: '%{y} hPa: %{x:.0f}%<extra>RH</extra>',
     };
     var layout = {
-        xaxis: { title: { text: 'RH (%)', font: { size: 9, color: '#8b9ec2' } },
-            range: [0, 105], color: '#8b9ec2', tickfont: { size: 8 } },
-        yaxis: { title: { text: 'Pressure (hPa)', font: { size: 9, color: '#8b9ec2' } },
-            autorange: 'reversed', type: 'log', color: '#8b9ec2', tickfont: { size: 8 },
+        xaxis: { title: { text: 'RH (%)', font: { size: 9, color: '#5b6573' } },
+            range: [0, 105], color: '#5b6573', tickfont: { size: 8 } },
+        yaxis: { title: { text: 'Pressure (hPa)', font: { size: 9, color: '#5b6573' } },
+            autorange: 'reversed', type: 'log', color: '#5b6573', tickfont: { size: 8 },
             tickvals: [1000, 850, 700, 500, 300, 200, 100] },
         paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(247,248,250,0.85)',
         margin: { l: 45, r: 5, t: 22, b: 30 },
@@ -1373,14 +1384,14 @@ function renderThetaProfile(profiles, divId) {
     if (!traces.length) return;
 
     var layout = {
-        xaxis: { title: { text: 'K', font: { size: 9, color: '#8b9ec2' } },
-            color: '#8b9ec2', tickfont: { size: 8 } },
-        yaxis: { title: '', autorange: 'reversed', type: 'log', color: '#8b9ec2', tickfont: { size: 8 },
+        xaxis: { title: { text: 'K', font: { size: 9, color: '#5b6573' } },
+            color: '#5b6573', tickfont: { size: 8 } },
+        yaxis: { title: '', autorange: 'reversed', type: 'log', color: '#5b6573', tickfont: { size: 8 },
             tickvals: [1000, 850, 700, 500, 300, 200, 100] },
         paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(247,248,250,0.85)',
         margin: { l: 30, r: 5, t: 22, b: 30 },
         title: { text: '\u03b8 / \u03b8e Profile', font: { size: 10, color: '#00d4ff' }, x: 0.5, y: 0.98 },
-        legend: { font: { color: '#ccc', size: 9 }, x: 0.02, y: 0.02, bgcolor: 'rgba(0,0,0,0.3)' },
+        legend: { font: { color: '#5b6573', size: 9 }, x: 0.02, y: 0.02, bgcolor: 'rgba(0,0,0,0.3)' },
         showlegend: true,
     };
     Plotly.newPlot(divId, traces, layout, { responsive: true, displayModeBar: false });
@@ -1585,8 +1596,8 @@ function _buildTiltProfileTrace(tiltData) {
             colorscale: 'Viridis',
             cmin: 0, cmax: 14,
             colorbar: {
-                title: { text: 'Tilt Height (km)', font: { color: '#ccc', size: 9 } },
-                tickfont: { color: '#ccc', size: 8 },
+                title: { text: 'Tilt Height (km)', font: { color: '#5b6573', size: 9 } },
+                tickfont: { color: '#5b6573', size: 8 },
                 thickness: 10, len: 0.30,
                 x: 1.01, xpad: 2, y: 0.02,
                 yanchor: 'bottom',
@@ -1976,8 +1987,8 @@ function renderEnvOverlayMap(data) {
         colorscale: data.field_config.colorscale,
         zmin: data.field_config.vmin, zmax: data.field_config.vmax,
         colorbar: {
-            title: { text: data.field_config.units, font: { size: 10, color: '#8b9ec2' } },
-            tickfont: { size: 9, color: '#8b9ec2' },
+            title: { text: data.field_config.units, font: { size: 10, color: '#5b6573' } },
+            tickfont: { size: 9, color: '#5b6573' },
             len: 0.9, thickness: 12,
         },
         hoverongaps: false,
@@ -2036,12 +2047,12 @@ function renderEnvOverlayMap(data) {
     var maxR = Math.max(Math.abs(xKm[0]), Math.abs(xKm[xKm.length-1]), Math.abs(yKm[0]), Math.abs(yKm[yKm.length-1]));
 
     var layout = {
-        xaxis: { title: { text: 'km (east)', font: { size: 10, color: '#8b9ec2' } },
+        xaxis: { title: { text: 'km (east)', font: { size: 10, color: '#5b6573' } },
             range: [-maxR, maxR], scaleanchor: 'y', scaleratio: 1,
-            zeroline: false, gridcolor: 'rgba(15, 22, 35,0.04)', color: '#8b9ec2', tickfont: { size: 9 } },
-        yaxis: { title: { text: 'km (north)', font: { size: 10, color: '#8b9ec2' } },
+            zeroline: false, gridcolor: 'rgba(15, 22, 35,0.22)', color: '#5b6573', tickfont: { size: 9 } },
+        yaxis: { title: { text: 'km (north)', font: { size: 10, color: '#5b6573' } },
             range: [-maxR, maxR],
-            zeroline: false, gridcolor: 'rgba(15, 22, 35,0.04)', color: '#8b9ec2', tickfont: { size: 9 } },
+            zeroline: false, gridcolor: 'rgba(15, 22, 35,0.22)', color: '#5b6573', tickfont: { size: 9 } },
         paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(247,248,250,0.85)',
         margin: { l: 50, r: 10, t: 10, b: 45 },
         showlegend: false,
@@ -2284,7 +2295,7 @@ function _renderSkewTInfo(profiles) {
         if (qRaw && qRaw[j] != null) {
             qDisplay = qIsGkg ? qRaw[j] : qRaw[j] * 1000.0;
         }
-        html += '<tr style="border-bottom:1px solid rgba(15, 22, 35,0.04);color:' + rowColor + ';">' +
+        html += '<tr style="border-bottom:1px solid rgba(15, 22, 35,0.22);color:' + rowColor + ';">' +
             '<td style="padding:2px 4px;">' + plev[j] + '</td>' +
             '<td style="text-align:right;padding:2px 4px;">' + (tC[j] != null ? tC[j].toFixed(1) : '\u2014') + '</td>' +
             '<td style="text-align:right;padding:2px 4px;">' + (tdC[j] != null ? tdC[j].toFixed(1) : '\u2014') + '</td>' +
@@ -2609,6 +2620,7 @@ var _irAnimTimer = null;
 var _irAnimPlaying = false;
 var _irMapVisible = true;
 var _irPlotlyVisible = false;
+var _irUserDisabled = false;  // sticky: true if user explicitly turned IR underlay off this case
 var _tdrVisible = true;
 var _irFetching = false;
 var _irBoundsSet = false;
@@ -2742,6 +2754,11 @@ function fetchIRData(caseIndex, callback) {
             for (var i = 0; i < n; i++) _irFrameURLs[i] = null;
             _irOriginalURLs = new Array(n);
             for (var j = 0; j < n; j++) _irOriginalURLs[j] = null;
+            // Pre-allocate decode-cache slots so we can populate them
+            // incrementally as each frame arrives (instead of waiting for
+            // the whole batch to land before kicking off decode).
+            _irDecodedImages = new Array(n);
+            for (var k = 0; k < n; k++) _irDecodedImages[k] = null;
             if (data.frame0) {
                 _irLoadedCount = 1;
                 _irOriginalURLs[0] = data.frame0;
@@ -2802,6 +2819,17 @@ function _fetchRemainingFramesParallel(caseIndex, startIdx) {
                         if (_irLoadedCount >= 2) {
                             _enableIRAnimControls();
                         }
+                        // Incremental pre-decode: kick off decode for THIS
+                        // frame as soon as its URL is ready, rather than
+                        // waiting for the whole batch. Avoids the playback
+                        // hitch where the first cycle has to decode each
+                        // frame on its first <img>.src swap.
+                        if (_irFrameURLs[lagIdx] && _irDecodedImages && !_irDecodedImages[lagIdx]) {
+                            var pdImg = new Image();
+                            pdImg.src = _irFrameURLs[lagIdx];
+                            if (pdImg.decode) pdImg.decode().catch(function() {});
+                            _irDecodedImages[lagIdx] = pdImg;
+                        }
                     })
                     .catch(function(err) {
                         console.warn('IR frame ' + lagIdx + ' fetch failed:', err);
@@ -2827,18 +2855,19 @@ function _fetchRemainingFramesParallel(caseIndex, startIdx) {
 // ── Pre-decoded IR frame images for smooth animation ─────────
 
 function _preDecodeIRFrames() {
-    _irDecodedImages = new Array(_irFrameURLs.length);
+    if (!_irDecodedImages || _irDecodedImages.length !== _irFrameURLs.length) {
+        _irDecodedImages = new Array(_irFrameURLs.length);
+    }
+    // Fill in any frames whose URL has landed but whose decode wasn't
+    // kicked off yet by the incremental pre-decode in the fetch chain.
     for (var i = 0; i < _irFrameURLs.length; i++) {
-        if (_irFrameURLs[i]) {
+        if (_irFrameURLs[i] && !_irDecodedImages[i]) {
             var img = new Image();
             img.src = _irFrameURLs[i];
-            // Use decode() where available to pre-decode off main thread
             if (img.decode) {
                 img.decode().catch(function() {});
             }
             _irDecodedImages[i] = img;
-        } else {
-            _irDecodedImages[i] = null;
         }
     }
 }
@@ -3052,6 +3081,8 @@ function buildIRPlotlyImage(irData) {
 
 function toggleIRPlotlyUnderlay() {
     _irPlotlyVisible = !_irPlotlyVisible;
+    // Track an explicit user-off so we don't auto-re-enable on next plot.
+    _irUserDisabled = !_irPlotlyVisible;
     var plotDiv = document.getElementById('plotly-chart');
     if (!plotDiv || !plotDiv.data) { _irPlotlyVisible = false; return; }
     if (_irPlotlyVisible && _irData) {
@@ -3764,7 +3795,7 @@ function buildMaxAnnotation(maxInfo, units, xLabel, yLabel, fontSize) {
         xref: 'paper', yref: 'paper', x: 0.01, y: -0.01,
         xanchor: 'left', yanchor: 'top',
         showarrow: false,
-        font: { color: '#d1d5db', size: fs, family: 'DM Sans, sans-serif' },
+        font: { color: '#0f1623', size: fs, family: 'DM Sans, sans-serif' },
         bgcolor: 'rgba(10,22,40,0.8)',
         borderpad: 3,
         bordercolor: 'rgba(15, 22, 35,0.15)',
@@ -3812,7 +3843,7 @@ function renderPlotFromJSON(json, resultDiv) {
                 '<div class="dual-pane-label">Plan View</div>' +
                 '<div class="dual-pane-inner" style="position:relative;">' +
                     '<div id="plotly-chart" style="width:100%;height:100%;min-height:360px;"></div>' +
-                    '<button onclick="openPlotModal()" title="Expand to fullscreen" style="position:absolute;top:6px;left:6px;z-index:10;background:rgba(15, 22, 35,0.08);border:none;color:#ccc;font-size:16px;width:28px;height:28px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background 0.2s;" onmouseover="this.style.background=\'rgba(15, 22, 35,0.2)\'" onmouseout="this.style.background=\'rgba(15, 22, 35,0.08)\'">\u26F6</button>' +
+                    '<button onclick="openPlotModal()" title="Expand to fullscreen" style="position:absolute;top:6px;left:6px;z-index:10;background:rgba(15, 22, 35,0.08);border:none;color:#5b6573;font-size:16px;width:28px;height:28px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background 0.2s;" onmouseover="this.style.background=\'rgba(15, 22, 35,0.2)\'" onmouseout="this.style.background=\'rgba(15, 22, 35,0.08)\'">\u26F6</button>' +
                 '</div>' +
             '</div>' +
             '<div class="dual-pane-divider" title="Toggle azimuthal mean panel" onclick="_toggleDualPane()"></div>' +
@@ -3830,6 +3861,34 @@ function renderPlotFromJSON(json, resultDiv) {
     if (panelInner) panelInner.scrollTop = 0;
 
     var zData = json.data, x = json.x, y = json.y, varInfo = json.variable, meta = _enrichCaseMeta(json.case_meta);
+
+    // Detect cases where the radar grid is entirely empty (no valid samples).
+    // These appear as blank plots in the dual panel; warn the user instead.
+    var _hasAnyData = false;
+    if (zData && zData.length) {
+        for (var _zi = 0; _zi < zData.length && !_hasAnyData; _zi++) {
+            var _row = zData[_zi];
+            if (!_row) continue;
+            for (var _zj = 0; _zj < _row.length; _zj++) {
+                var _v = _row[_zj];
+                if (_v !== null && _v !== undefined && !isNaN(_v)) { _hasAnyData = true; break; }
+            }
+        }
+    }
+    if (!_hasAnyData) {
+        var _stormName = (meta && meta.storm_name) || 'this case';
+        var _vname = (varInfo && varInfo.display_name) || 'the selected variable';
+        var _level = (json.actual_level_km != null) ? (' at ' + json.actual_level_km.toFixed(1) + ' km') : '';
+        resultDiv.innerHTML =
+            '<div class="explorer-status info" style="padding:18px 16px;text-align:center;line-height:1.5;">' +
+                '<div style="font-size:1.05rem;font-weight:600;color:var(--text-strong, #0f1623);margin-bottom:6px;">No radar data available</div>' +
+                '<div style="font-size:0.85rem;color:var(--slate);">' +
+                    _stormName + ' has no valid samples for <strong>' + _vname + '</strong>' + _level + '.<br>' +
+                    'Try a different height level, variable, or case.' +
+                '</div>' +
+            '</div>';
+        return;
+    }
     _currentSddc = (meta.sddc !== undefined && meta.sddc !== null && meta.sddc !== 9999) ? meta.sddc : null;
     _currentShdc = (meta.shdc !== undefined && meta.shdc !== null && meta.shdc !== 9999) ? meta.shdc : null;
     _currentMotionDir = (meta.motion_dir !== undefined && meta.motion_dir !== null && meta.motion_dir !== 9999) ? meta.motion_dir : null;
@@ -3847,14 +3906,14 @@ function renderPlotFromJSON(json, resultDiv) {
     var overlayLabel = json.overlay ? '<br><span style="font-size:0.85em;color:#9ca3af;">Contours: ' + json.overlay.display_name + ' (' + json.overlay.units + ')</span>' : '';
     var title = meta.storm_name + ' | ' + meta.datetime + vmaxStr + '<br>' + varInfo.display_name + ' @ ' + json.actual_level_km.toFixed(1) + ' km' + overlayLabel;
 
-    var heatmap = { z: zData, x: x, y: y, type: 'heatmap', colorscale: activeColorscale, zmin: activeVmin, zmax: activeVmax, colorbar: { title: { text: varInfo.units, font: { color: '#ccc', size: 10 } }, tickfont: { color: '#ccc', size: 9 }, thickness: 12, len: 0.85 }, hovertemplate: '<b>' + varInfo.display_name + '</b>: %{z:.2f} ' + varInfo.units + '<br>X: %{x:.0f} km<br>Y: %{y:.0f} km<extra></extra>', hoverongaps: false };
+    var heatmap = { z: zData, x: x, y: y, type: 'heatmap', colorscale: activeColorscale, zmin: activeVmin, zmax: activeVmax, colorbar: { title: { text: varInfo.units, font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 }, thickness: 12, len: 0.85 }, hovertemplate: '<b>' + varInfo.display_name + '</b>: %{z:.2f} ' + varInfo.units + '<br>X: %{x:.0f} km<br>Y: %{y:.0f} km<extra></extra>', hoverongaps: false };
     var shapes = [];
     if (meta.rmw_km && !isNaN(meta.rmw_km)) shapes.push({ type: 'circle', xref: 'x', yref: 'y', x0: -meta.rmw_km, y0: -meta.rmw_km, x1: meta.rmw_km, y1: meta.rmw_km, line: { color: 'white', width: 1.5, dash: 'dash' } });
 
     var plotBg = '#ffffff';
-    var baseLayout = { paper_bgcolor: plotBg, plot_bgcolor: plotBg, xaxis: { title: { text: 'Eastward distance (km)', font: { color: '#5b6573' } }, tickfont: { color: '#5b6573' }, gridcolor: 'rgba(15, 22, 35,0.04)', zeroline: false, scaleanchor: 'y', range: [-250, 250] }, yaxis: { title: { text: 'Northward distance (km)', font: { color: '#5b6573' } }, tickfont: { color: '#5b6573' }, gridcolor: 'rgba(15, 22, 35,0.04)', zeroline: false, range: [-250, 250] }, shapes: shapes, hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: 12 } }, showlegend: false };
+    var baseLayout = { paper_bgcolor: plotBg, plot_bgcolor: plotBg, xaxis: { title: { text: 'Eastward distance (km)', font: { color: '#5b6573' } }, tickfont: { color: '#5b6573' }, gridcolor: 'rgba(15, 22, 35,0.22)', zeroline: false, scaleanchor: 'y', range: [-250, 250] }, yaxis: { title: { text: 'Northward distance (km)', font: { color: '#5b6573' } }, tickfont: { color: '#5b6573' }, gridcolor: 'rgba(15, 22, 35,0.22)', zeroline: false, range: [-250, 250] }, shapes: shapes, hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: 12 } }, showlegend: false };
     var config = { responsive: true, displayModeBar: true, modeBarButtonsToRemove: ['lasso2d','select2d','toggleSpikelines'], displaylogo: false };
-    var smallLayout = Object.assign({}, baseLayout, { title: { text: title, font: { color: '#0f1623', size: 11 }, y: 0.98, x: 0.5, xanchor: 'center', yanchor: 'top' }, margin: { l: 52, r: 16, t: json.overlay ? 72 : 60, b: 44 }, xaxis: Object.assign({}, baseLayout.xaxis, { title: { text: 'Eastward distance (km)', font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 } }), yaxis: Object.assign({}, baseLayout.yaxis, { title: { text: 'Northward distance (km)', font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 } }) });
+    var smallLayout = Object.assign({}, baseLayout, { title: { text: title, font: { color: '#0f1623', size: 11 }, y: 0.965, x: 0.5, xanchor: 'center', yanchor: 'top' }, margin: { l: 52, r: 16, t: json.overlay ? 90 : 78, b: 44 }, xaxis: Object.assign({}, baseLayout.xaxis, { title: { text: 'Eastward distance (km)', font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 } }), yaxis: Object.assign({}, baseLayout.yaxis, { title: { text: 'Northward distance (km)', font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 } }) });
 
     var overlayTraces = buildOverlayContours(json, x, y);
 
@@ -3927,6 +3986,15 @@ function renderPlotFromJSON(json, resultDiv) {
 
     Plotly.newPlot('plotly-chart', [heatmap].concat(overlayTraces).concat(maxTraces).concat(tiltTraces).concat(centerTraces), smallLayout, config);
     window._lastPlotlyData = { heatmap: heatmap, overlayTraces: overlayTraces, maxTraces: maxTraces, tiltTraces: tiltTraces, centerTraces: centerTraces, baseLayout: baseLayout, title: title, config: config, barbShapes: barbShapes };
+
+    // Auto-apply IR underlay if data is loaded and user hasn't opted out
+    if (_irData && !_irUserDisabled && !_irPlotlyVisible) {
+        toggleIRPlotlyUnderlay();
+    } else if (_irPlotlyVisible) {
+        // Re-apply existing underlay onto the freshly rendered chart
+        _irPlotlyVisible = false;
+        toggleIRPlotlyUnderlay();
+    }
 
     // Re-apply MW overlay if it was visible (e.g. was shown as standalone before TDR was generated)
     if (_mwPlanViewVisible && (_mwStormGrid || (_mwIsRGB && _mwStormGridRGBb64))) _applyMWPlanViewOverlay();
@@ -4020,11 +4088,11 @@ function renderCrossSectionInto(targetId, json, fullsize) {
     var cmapSel = document.getElementById('ep-cmap');
     if (cmapSel && cmapSel.value) { try { csColorscale = JSON.parse(cmapSel.value); } catch(e) { csColorscale = cmapSel.value; } }
     var av = _getActiveVmin(), avx = _getActiveVmax();
-    var heatmap = { z: csData, x: distance_km, y: height_km, type: 'heatmap', colorscale: csColorscale, zmin: av !== null ? av : varInfo.vmin, zmax: avx !== null ? avx : varInfo.vmax, colorbar: { title: { text: varInfo.units, font: { color: '#ccc', size: fontSize.cbar } }, tickfont: { color: '#ccc', size: fontSize.cbarTick }, thickness: fullsize?14:10, len: 0.85 }, hovertemplate: '<b>' + varInfo.display_name + '</b>: %{z:.2f} ' + varInfo.units + '<br>Distance: %{x:.0f} km<br>Height: %{y:.1f} km<extra></extra>', hoverongaps: false };
+    var heatmap = { z: csData, x: distance_km, y: height_km, type: 'heatmap', colorscale: csColorscale, zmin: av !== null ? av : varInfo.vmin, zmax: avx !== null ? avx : varInfo.vmax, colorbar: { title: { text: varInfo.units, font: { color: '#5b6573', size: fontSize.cbar } }, tickfont: { color: '#5b6573', size: fontSize.cbarTick }, thickness: fullsize?14:10, len: 0.85 }, hovertemplate: '<b>' + varInfo.display_name + '</b>: %{z:.2f} ' + varInfo.units + '<br>Distance: %{x:.0f} km<br>Height: %{y:.1f} km<extra></extra>', hoverongaps: false };
     var csOverlayLabel = json.overlay ? '<br><span style="font-size:0.85em;color:#9ca3af;">Contours: ' + json.overlay.display_name + ' (' + json.overlay.units + ')</span>' : '';
     var title = 'Cross Section: (' + ep.x0.toFixed(0) + ',' + ep.y0.toFixed(0) + ') \u2192 (' + ep.x1.toFixed(0) + ',' + ep.y1.toFixed(0) + ') km' + csOverlayLabel;
     var plotBg = '#ffffff';
-    var layout = { title: { text: title, font: { color: '#0f1623', size: fontSize.title }, y: 0.97, x: 0.5, xanchor: 'center' }, paper_bgcolor: plotBg, plot_bgcolor: plotBg, xaxis: { title: { text: 'Distance along line (km)', font: { color: '#5b6573', size: fontSize.axis } }, tickfont: { color: '#5b6573', size: fontSize.tick }, gridcolor: 'rgba(15, 22, 35,0.04)', zeroline: false }, yaxis: { title: { text: 'Height (km)', font: { color: '#5b6573', size: fontSize.axis } }, tickfont: { color: '#5b6573', size: fontSize.tick }, gridcolor: 'rgba(15, 22, 35,0.04)', zeroline: false }, margin: fullsize ? { l:55,r:24,t:json.overlay?70:50,b:46 } : { l:45,r:12,t:json.overlay?62:44,b:38 }, hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: fontSize.hover } }, showlegend: false };
+    var layout = { title: { text: title, font: { color: '#0f1623', size: fontSize.title }, y: fullsize ? 0.93 : 0.96, x: 0.5, xanchor: 'center', yanchor: 'top' }, paper_bgcolor: plotBg, plot_bgcolor: plotBg, xaxis: { title: { text: 'Distance along line (km)', font: { color: '#5b6573', size: fontSize.axis } }, tickfont: { color: '#5b6573', size: fontSize.tick }, gridcolor: 'rgba(15, 22, 35,0.22)', zeroline: false }, yaxis: { title: { text: 'Height (km)', font: { color: '#5b6573', size: fontSize.axis } }, tickfont: { color: '#5b6573', size: fontSize.tick }, gridcolor: 'rgba(15, 22, 35,0.22)', zeroline: false }, margin: fullsize ? { l:55,r:24,t:json.overlay?92:78,b:46 } : { l:45,r:12,t:json.overlay?62:44,b:38 }, hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: fontSize.hover } }, showlegend: false };
     var csOverlayTraces = buildOverlayContours(json, null, null, true);
 
     // Max value marker + annotation for cross-section
@@ -4117,7 +4185,7 @@ function _renderDualAzimuthalMean(json) {
 
     var heatmap = { z: azData, x: radius_km, y: height_km, type: 'heatmap', colorscale: csColorscale,
         zmin: av !== null ? av : varInfo.vmin, zmax: avx !== null ? avx : varInfo.vmax,
-        colorbar: { title: { text: varInfo.units, font: { color: '#ccc', size: fontSize.cbar } }, tickfont: { color: '#ccc', size: fontSize.cbarTick }, thickness: 12, len: 0.85 },
+        colorbar: { title: { text: varInfo.units, font: { color: '#5b6573', size: fontSize.cbar } }, tickfont: { color: '#5b6573', size: fontSize.cbarTick }, thickness: 12, len: 0.85 },
         hovertemplate: '<b>' + varInfo.display_name + '</b>: %{z:.2f} ' + varInfo.units + '<br>Radius: %{x:.0f} km<br>Height: %{y:.1f} km<extra></extra>', hoverongaps: false };
 
     var azOverlayTraces = buildAzOverlayContours(json, radius_km, height_km);
@@ -4129,11 +4197,11 @@ function _renderDualAzimuthalMean(json) {
 
     var plotBg = '#ffffff';
     var layout = {
-        title: { text: title, font: { color: '#0f1623', size: fontSize.title }, y: 0.96, x: 0.5, xanchor: 'center', yanchor: 'top' },
+        title: { text: title, font: { color: '#0f1623', size: fontSize.title }, y: 0.94, x: 0.5, xanchor: 'center', yanchor: 'top' },
         paper_bgcolor: plotBg, plot_bgcolor: plotBg,
-        xaxis: { title: { text: 'Radius (km)', font: { color: '#5b6573', size: fontSize.axis } }, tickfont: { color: '#5b6573', size: fontSize.tick }, gridcolor: 'rgba(15, 22, 35,0.04)', zeroline: false },
-        yaxis: { title: { text: 'Height (km)', font: { color: '#5b6573', size: fontSize.axis } }, tickfont: { color: '#5b6573', size: fontSize.tick }, gridcolor: 'rgba(15, 22, 35,0.04)', zeroline: false },
-        margin: { l: 48, r: 14, t: json.overlay ? 58 : 46, b: 44 },
+        xaxis: { title: { text: 'Radius (km)', font: { color: '#5b6573', size: fontSize.axis } }, tickfont: { color: '#5b6573', size: fontSize.tick }, gridcolor: 'rgba(15, 22, 35,0.22)', zeroline: false },
+        yaxis: { title: { text: 'Height (km)', font: { color: '#5b6573', size: fontSize.axis } }, tickfont: { color: '#5b6573', size: fontSize.tick }, gridcolor: 'rgba(15, 22, 35,0.22)', zeroline: false },
+        margin: { l: 48, r: 14, t: json.overlay ? 78 : 68, b: 44 },
         shapes: shapes,
         hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: fontSize.hover } },
         showlegend: false
@@ -4271,7 +4339,7 @@ function renderAzimuthalMeanInto(targetId, json, fullsize) {
     var cmapSel = document.getElementById('ep-cmap');
     if (cmapSel && cmapSel.value) { try { csColorscale = JSON.parse(cmapSel.value); } catch(e) { csColorscale = cmapSel.value; } }
     var av = _getActiveVmin(), avx = _getActiveVmax();
-    var heatmap = { z: azData, x: radius_km, y: height_km, type: 'heatmap', colorscale: csColorscale, zmin: av !== null ? av : varInfo.vmin, zmax: avx !== null ? avx : varInfo.vmax, colorbar: { title: { text: varInfo.units, font: { color: '#ccc', size: fontSize.cbar } }, tickfont: { color: '#ccc', size: fontSize.cbarTick }, thickness: fullsize?14:10, len: 0.85 }, hovertemplate: '<b>' + varInfo.display_name + '</b>: %{z:.2f} ' + varInfo.units + '<br>Radius: %{x:.0f} km<br>Height: %{y:.1f} km<extra></extra>', hoverongaps: false };
+    var heatmap = { z: azData, x: radius_km, y: height_km, type: 'heatmap', colorscale: csColorscale, zmin: av !== null ? av : varInfo.vmin, zmax: avx !== null ? avx : varInfo.vmax, colorbar: { title: { text: varInfo.units, font: { color: '#5b6573', size: fontSize.cbar } }, tickfont: { color: '#5b6573', size: fontSize.cbarTick }, thickness: fullsize?14:10, len: 0.85 }, hovertemplate: '<b>' + varInfo.display_name + '</b>: %{z:.2f} ' + varInfo.units + '<br>Radius: %{x:.0f} km<br>Height: %{y:.1f} km<extra></extra>', hoverongaps: false };
     var azOverlayTraces = buildAzOverlayContours(json, radius_km, height_km);
     var vmaxStr = meta.vmax_kt ? ' | Vmax = ' + meta.vmax_kt + ' kt' : '';
     var covPct = Math.round((json.coverage_min || 0.5) * 100);
@@ -4280,7 +4348,7 @@ function renderAzimuthalMeanInto(targetId, json, fullsize) {
     var shapes = [];
     if (meta.rmw_km && !isNaN(meta.rmw_km)) shapes.push({ type:'line',xref:'x',yref:'paper',x0:meta.rmw_km,x1:meta.rmw_km,y0:0,y1:1,line:{color:'white',width:1.5,dash:'dash'} });
     var plotBg = '#ffffff';
-    var layout = { title: { text: title, font: { color: '#0f1623', size: fontSize.title }, y: 0.97, x: 0.5, xanchor: 'center' }, paper_bgcolor: plotBg, plot_bgcolor: plotBg, xaxis: { title: { text: 'Radius (km)', font: { color: '#5b6573', size: fontSize.axis } }, tickfont: { color: '#5b6573', size: fontSize.tick }, gridcolor: 'rgba(15, 22, 35,0.04)', zeroline: false }, yaxis: { title: { text: 'Height (km)', font: { color: '#5b6573', size: fontSize.axis } }, tickfont: { color: '#5b6573', size: fontSize.tick }, gridcolor: 'rgba(15, 22, 35,0.04)', zeroline: false }, margin: fullsize ? { l:55,r:24,t:json.overlay?96:80,b:46 } : { l:45,r:12,t:json.overlay?78:64,b:38 }, shapes: shapes, hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: fontSize.hover } }, showlegend: false };
+    var layout = { title: { text: title, font: { color: '#0f1623', size: fontSize.title }, y: fullsize ? 0.93 : 0.96, x: 0.5, xanchor: 'center', yanchor: 'top' }, paper_bgcolor: plotBg, plot_bgcolor: plotBg, xaxis: { title: { text: 'Radius (km)', font: { color: '#5b6573', size: fontSize.axis } }, tickfont: { color: '#5b6573', size: fontSize.tick }, gridcolor: 'rgba(15, 22, 35,0.22)', zeroline: false }, yaxis: { title: { text: 'Height (km)', font: { color: '#5b6573', size: fontSize.axis } }, tickfont: { color: '#5b6573', size: fontSize.tick }, gridcolor: 'rgba(15, 22, 35,0.22)', zeroline: false }, margin: fullsize ? { l:55,r:24,t:json.overlay?112:98,b:46 } : { l:45,r:12,t:json.overlay?78:64,b:38 }, shapes: shapes, hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: fontSize.hover } }, showlegend: false };
 
     // Max value marker + annotation for azimuthal mean
     var azMaxInfo = findDataMax(azData, radius_km, height_km);
@@ -4302,7 +4370,7 @@ function renderAzimuthalMeanInto(targetId, json, fullsize) {
     if (!fullsize) {
         var thumbWrap = document.getElementById('thumbnail-wrap');
         if (thumbWrap) thumbWrap.style.display = 'none';
-        el.innerHTML = '<div style="position:relative;"><div id="az-chart" style="width:100%;height:340px;border-radius:6px;overflow:hidden;"></div>' + _archSaveBtnHTML('az-chart', 'TDR_AzMean') + _archExportBtnHTML('exportAzMeanCSV','exportAzMeanJSON','az-exp-drop',74) + '<button onclick="openPlotModal()" title="Expand to fullscreen" style="position:absolute;top:6px;right:6px;z-index:10;background:rgba(15, 22, 35,0.08);border:none;color:#ccc;font-size:16px;width:30px;height:30px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;" onmouseover="this.style.background=\'rgba(15, 22, 35,0.2)\'" onmouseout="this.style.background=\'rgba(15, 22, 35,0.08)\'">\u26F6</button></div><div style="font-size:11px;color:var(--slate);text-align:center;margin-top:4px;">Hover \u00b7 zoom \u00b7 pan \u00b7 \u26F6 expand</div>';
+        el.innerHTML = '<div style="position:relative;"><div id="az-chart" style="width:100%;height:340px;border-radius:6px;overflow:hidden;"></div>' + _archSaveBtnHTML('az-chart', 'TDR_AzMean') + _archExportBtnHTML('exportAzMeanCSV','exportAzMeanJSON','az-exp-drop',74) + '<button onclick="openPlotModal()" title="Expand to fullscreen" style="position:absolute;top:6px;right:6px;z-index:10;background:rgba(15, 22, 35,0.08);border:none;color:#5b6573;font-size:16px;width:30px;height:30px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;" onmouseover="this.style.background=\'rgba(15, 22, 35,0.2)\'" onmouseout="this.style.background=\'rgba(15, 22, 35,0.08)\'">\u26F6</button></div><div style="font-size:11px;color:var(--slate);text-align:center;margin-top:4px;">Hover \u00b7 zoom \u00b7 pan \u00b7 \u26F6 expand</div>';
         Plotly.newPlot('az-chart', [heatmap].concat(azOverlayTraces).concat(azMaxTraces), layout, { responsive:true,displayModeBar:false,displaylogo:false });
         var panelInner = document.getElementById('side-panel-inner');
         if (panelInner) panelInner.scrollTop = 0;
@@ -4371,8 +4439,8 @@ function renderHybridAzimuthalMeanInto(targetId, json, fullsize) {
     var heatmap = {
         z: azData, x: xIdxArr, y: height_km, type: 'heatmap',
         colorscale: csColorscale, zmin: varInfo.vmin, zmax: varInfo.vmax,
-        colorbar: { title: { text: varInfo.units, font: { color: '#ccc', size: fontSize.cbar } },
-                    tickfont: { color: '#ccc', size: fontSize.cbarTick }, thickness: fullsize?14:10, len: 0.85 },
+        colorbar: { title: { text: varInfo.units, font: { color: '#5b6573', size: fontSize.cbar } },
+                    tickfont: { color: '#5b6573', size: fontSize.cbarTick }, thickness: fullsize?14:10, len: 0.85 },
         hoverongaps: false
     };
 
@@ -4389,16 +4457,16 @@ function renderHybridAzimuthalMeanInto(targetId, json, fullsize) {
 
     var plotBg = '#ffffff';
     var layout = {
-        title: { text: title, font: { color: '#0f1623', size: fontSize.title }, y: 0.97, x: 0.5, xanchor: 'center' },
+        title: { text: title, font: { color: '#0f1623', size: fontSize.title }, y: fullsize ? 0.93 : 0.96, x: 0.5, xanchor: 'center', yanchor: 'top' },
         paper_bgcolor: plotBg, plot_bgcolor: plotBg,
         xaxis: { title: { text: 'R\u2095 (RMW + km)', font: { color: '#5b6573', size: fontSize.axis } },
                  tickvals: ticks.tickvals, ticktext: ticks.ticktext,
                  tickfont: { color: '#5b6573', size: fontSize.tick },
-                 gridcolor: 'rgba(15, 22, 35,0.04)', zeroline: false },
+                 gridcolor: 'rgba(15, 22, 35,0.22)', zeroline: false },
         yaxis: { title: { text: 'Height (km)', font: { color: '#5b6573', size: fontSize.axis } },
                  tickfont: { color: '#5b6573', size: fontSize.tick },
-                 gridcolor: 'rgba(15, 22, 35,0.04)', zeroline: false },
-        margin: fullsize ? { l:55,r:24,t:80,b:46 } : { l:45,r:12,t:64,b:38 },
+                 gridcolor: 'rgba(15, 22, 35,0.22)', zeroline: false },
+        margin: fullsize ? { l:55,r:24,t:98,b:46 } : { l:45,r:12,t:64,b:38 },
         shapes: shapes, showlegend: false,
         annotations: [_fischerCitation]
     };
@@ -4406,7 +4474,7 @@ function renderHybridAzimuthalMeanInto(targetId, json, fullsize) {
     if (!fullsize) {
         var thumbWrap = document.getElementById('thumbnail-wrap');
         if (thumbWrap) thumbWrap.style.display = 'none';
-        el.innerHTML = '<div style="position:relative;"><div id="az-chart" style="width:100%;height:340px;border-radius:6px;overflow:hidden;"></div>' + _archSaveBtnHTML('az-chart', 'TDR_HybridAzMean') + _archExportBtnHTML('exportAzMeanCSV','exportAzMeanJSON','az-exp-drop',74) + '<button onclick="openPlotModal()" title="Expand" style="position:absolute;top:6px;right:6px;z-index:10;background:rgba(15, 22, 35,0.08);border:none;color:#ccc;font-size:16px;width:30px;height:30px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;">\u26F6</button></div>' +
+        el.innerHTML = '<div style="position:relative;"><div id="az-chart" style="width:100%;height:340px;border-radius:6px;overflow:hidden;"></div>' + _archSaveBtnHTML('az-chart', 'TDR_HybridAzMean') + _archExportBtnHTML('exportAzMeanCSV','exportAzMeanJSON','az-exp-drop',74) + '<button onclick="openPlotModal()" title="Expand" style="position:absolute;top:6px;right:6px;z-index:10;background:rgba(15, 22, 35,0.08);border:none;color:#5b6573;font-size:16px;width:30px;height:30px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;">\u26F6</button></div>' +
             '<div style="text-align:right;margin-top:3px;"><a href="https://doi.org/10.1175/MWR-D-24-0118.1" target="_blank" rel="noopener" ' +
             'style="font-size:9px;color:rgba(180,195,220,0.5);text-decoration:none;" ' +
             'title="Fischer et al. (2025, MWR)">Fischer et al. 2025</a></div>';
@@ -4460,8 +4528,8 @@ function renderAnomalyAzimuthalMeanInto(targetId, json, fullsize) {
         z: anomData, x: xIdxArr, y: height_km, type: 'heatmap',
         colorscale: anomColorscale, zmin: -3, zmax: 3, zmid: 0,
         colorbar: {
-            title: { text: '\u03c3', font: { color: '#ccc', size: fontSize.cbar } },
-            tickfont: { color: '#ccc', size: fontSize.cbarTick },
+            title: { text: '\u03c3', font: { color: '#5b6573', size: fontSize.cbar } },
+            tickfont: { color: '#5b6573', size: fontSize.cbarTick },
             thickness: fullsize?14:10, len: 0.85,
             tickvals: [-3, -2, -1, 0, 1, 2, 3],
         },
@@ -4487,16 +4555,16 @@ function renderAnomalyAzimuthalMeanInto(targetId, json, fullsize) {
 
     var plotBg = '#ffffff';
     var layout = {
-        title: { text: title, font: { color: '#0f1623', size: fontSize.title }, y: 0.97, x: 0.5, xanchor: 'center' },
+        title: { text: title, font: { color: '#0f1623', size: fontSize.title }, y: fullsize ? 0.93 : 0.96, x: 0.5, xanchor: 'center', yanchor: 'top' },
         paper_bgcolor: plotBg, plot_bgcolor: plotBg,
         xaxis: { title: { text: 'R\u2095 (RMW + km)', font: { color: '#5b6573', size: fontSize.axis } },
                  tickvals: ticks.tickvals, ticktext: ticks.ticktext,
                  tickfont: { color: '#5b6573', size: fontSize.tick },
-                 gridcolor: 'rgba(15, 22, 35,0.04)', zeroline: false },
+                 gridcolor: 'rgba(15, 22, 35,0.22)', zeroline: false },
         yaxis: { title: { text: 'Height (km)', font: { color: '#5b6573', size: fontSize.axis } },
                  tickfont: { color: '#5b6573', size: fontSize.tick },
-                 gridcolor: 'rgba(15, 22, 35,0.04)', zeroline: false },
-        margin: fullsize ? { l:55,r:24,t:96,b:46 } : { l:45,r:12,t:78,b:38 },
+                 gridcolor: 'rgba(15, 22, 35,0.22)', zeroline: false },
+        margin: fullsize ? { l:55,r:24,t:112,b:46 } : { l:45,r:12,t:78,b:38 },
         shapes: shapes, showlegend: false,
         annotations: [_fischerCitation]
     };
@@ -4504,7 +4572,7 @@ function renderAnomalyAzimuthalMeanInto(targetId, json, fullsize) {
     if (!fullsize) {
         var thumbWrap = document.getElementById('thumbnail-wrap');
         if (thumbWrap) thumbWrap.style.display = 'none';
-        el.innerHTML = '<div style="position:relative;"><div id="az-chart" style="width:100%;height:340px;border-radius:6px;overflow:hidden;"></div>' + _archSaveBtnHTML('az-chart', 'TDR_Anomaly') + _archExportBtnHTML('exportAzMeanCSV','exportAzMeanJSON','az-exp-drop',74) + '<button onclick="openPlotModal()" title="Expand" style="position:absolute;top:6px;right:6px;z-index:10;background:rgba(15, 22, 35,0.08);border:none;color:#ccc;font-size:16px;width:30px;height:30px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;">\u26F6</button></div>' +
+        el.innerHTML = '<div style="position:relative;"><div id="az-chart" style="width:100%;height:340px;border-radius:6px;overflow:hidden;"></div>' + _archSaveBtnHTML('az-chart', 'TDR_Anomaly') + _archExportBtnHTML('exportAzMeanCSV','exportAzMeanJSON','az-exp-drop',74) + '<button onclick="openPlotModal()" title="Expand" style="position:absolute;top:6px;right:6px;z-index:10;background:rgba(15, 22, 35,0.08);border:none;color:#5b6573;font-size:16px;width:30px;height:30px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;">\u26F6</button></div>' +
             '<div style="text-align:right;margin-top:3px;"><a href="https://doi.org/10.1175/MWR-D-24-0118.1" target="_blank" rel="noopener" ' +
             'style="font-size:9px;color:rgba(180,195,220,0.5);text-decoration:none;" ' +
             'title="Fischer et al. (2025, MWR)">Fischer et al. 2025</a></div>';
@@ -4562,8 +4630,8 @@ function renderVPScatterInto(targetId, json, fullsize) {
         };
         if (showColorbar) {
             m.colorbar = {
-                title: { text: dvmaxLabel, font: { color: '#ccc', size: fontSize.tick } },
-                tickfont: { color: '#ccc', size: fontSize.tick }, thickness: 12, len: 0.85
+                title: { text: dvmaxLabel, font: { color: '#5b6573', size: fontSize.tick } },
+                tickfont: { color: '#5b6573', size: fontSize.tick }, thickness: 12, len: 0.85
             };
         } else {
             m.showscale = false;
@@ -4766,7 +4834,7 @@ function renderVPScatterInto(targetId, json, fullsize) {
     if (!fullsize) {
         var thumbWrap = document.getElementById('thumbnail-wrap');
         if (thumbWrap) thumbWrap.style.display = 'none';
-        el.innerHTML = '<div style="position:relative;"><div id="az-chart" style="width:100%;height:360px;border-radius:6px;overflow:hidden;"></div>' + _archSaveBtnHTML('az-chart', 'VP_Scatter') + _archExportBtnHTML('exportVPScatterCSV','exportVPScatterJSON','vp-exp-drop',74) + '<button onclick="openPlotModal()" title="Expand" style="position:absolute;top:6px;right:6px;z-index:10;background:rgba(15, 22, 35,0.08);border:none;color:#ccc;font-size:16px;width:30px;height:30px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;">\u26F6</button></div>' +
+        el.innerHTML = '<div style="position:relative;"><div id="az-chart" style="width:100%;height:360px;border-radius:6px;overflow:hidden;"></div>' + _archSaveBtnHTML('az-chart', 'VP_Scatter') + _archExportBtnHTML('exportVPScatterCSV','exportVPScatterJSON','vp-exp-drop',74) + '<button onclick="openPlotModal()" title="Expand" style="position:absolute;top:6px;right:6px;z-index:10;background:rgba(15, 22, 35,0.08);border:none;color:#5b6573;font-size:16px;width:30px;height:30px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;">\u26F6</button></div>' +
             '<div style="display:flex;gap:6px;justify-content:center;align-items:center;margin-top:6px;">' +
             '<button class="cs-btn" onclick="fetchVPScatter(\'dvmax_12h\')" style="font-size:10px;padding:2px 8px;">12-h \u0394Vmax</button>' +
             '<button class="cs-btn" onclick="fetchVPScatter(\'dvmax_24h\')" style="font-size:10px;padding:2px 8px;">24-h \u0394Vmax</button>' +
@@ -4878,7 +4946,7 @@ function renderSingleCFADInto(targetId, json, fullsize) {
             [1.0,  '#fafafa']
         ],
         colorbar: {
-            title: { text: useLog ? 'log₁₀(' + normLabel + ')' : normLabel, font: { color: '#ccc', size: 11 } },
+            title: { text: useLog ? 'log₁₀(' + normLabel + ')' : normLabel, font: { color: '#5b6573', size: 11 } },
             tickfont: { color: '#5b6573', size: 10 },
             thickness: 12,
             len: 0.7,
@@ -4914,7 +4982,7 @@ function renderSingleCFADInto(targetId, json, fullsize) {
         if (thumbWrap) thumbWrap.style.display = 'none';
         el.innerHTML = '<div style="position:relative;"><div id="az-chart" style="width:100%;height:360px;border-radius:6px;overflow:hidden;"></div>' +
             _archExportBtnHTML('exportCFADCSV','exportCFADJSON','cfad-exp-drop',40) +
-            '<button onclick="openPlotModal()" title="Expand" style="position:absolute;top:6px;right:6px;z-index:10;background:rgba(15, 22, 35,0.08);border:none;color:#ccc;font-size:16px;width:30px;height:30px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;">\u26F6</button></div>';
+            '<button onclick="openPlotModal()" title="Expand" style="position:absolute;top:6px;right:6px;z-index:10;background:rgba(15, 22, 35,0.08);border:none;color:#5b6573;font-size:16px;width:30px;height:30px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;">\u26F6</button></div>';
         Plotly.newPlot('az-chart', [trace], layout, { responsive: true, displayModeBar: false });
     } else {
         Plotly.newPlot(targetId, [trace], layout, { responsive: true, displayModeBar: true, displaylogo: false });
@@ -5310,8 +5378,8 @@ function renderQuadrantMeansInto(targetId, json, fullsize) {
             xaxis: 'x' + axSuffix, yaxis: 'y' + axSuffix,
             showscale: showCbar,
             colorbar: showCbar ? {
-                title: { text: varInfo.units, font: { color: '#ccc', size: fontSize.cbar } },
-                tickfont: { color: '#ccc', size: fontSize.cbarTick },
+                title: { text: varInfo.units, font: { color: '#5b6573', size: fontSize.cbar } },
+                tickfont: { color: '#5b6573', size: fontSize.cbarTick },
                 thickness: fullsize ? 14 : 10, len: 0.85,
                 x: 1.02, y: 0.5
             } : undefined,
@@ -5365,14 +5433,14 @@ function renderQuadrantMeansInto(targetId, json, fullsize) {
             domain: [ac.x0, ac.x1],
             title: showXLabel ? { text: 'Radius (km)', font: { color: '#5b6573', size: fontSize.axis } } : undefined,
             tickfont: { color: '#5b6573', size: fontSize.tick },
-            gridcolor: 'rgba(15, 22, 35,0.04)', zeroline: false,
+            gridcolor: 'rgba(15, 22, 35,0.22)', zeroline: false,
             anchor: 'y' + axSuffix
         };
         layout['yaxis' + axSuffix] = {
             domain: [ac.y0, ac.y1],
             title: showYLabel ? { text: 'Height (km)', font: { color: '#5b6573', size: fontSize.axis } } : undefined,
             tickfont: { color: '#5b6573', size: fontSize.tick },
-            gridcolor: 'rgba(15, 22, 35,0.04)', zeroline: false,
+            gridcolor: 'rgba(15, 22, 35,0.22)', zeroline: false,
             anchor: 'x' + axSuffix
         };
     });
@@ -5447,7 +5515,7 @@ function renderQuadrantMeansInto(targetId, json, fullsize) {
     if (!fullsize) {
         var thumbWrap = document.getElementById('thumbnail-wrap');
         if (thumbWrap) thumbWrap.style.display = 'none';
-        el.innerHTML = '<div style="position:relative;"><div id="sq-chart" style="width:100%;height:400px;border-radius:6px;overflow:hidden;"></div>' + _archSaveBtnHTML('sq-chart', 'TDR_Profile') + '<button onclick="openPlotModal()" title="Expand to fullscreen" style="position:absolute;top:6px;right:6px;z-index:10;background:rgba(15, 22, 35,0.08);border:none;color:#ccc;font-size:16px;width:30px;height:30px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;" onmouseover="this.style.background=\'rgba(15, 22, 35,0.2)\'" onmouseout="this.style.background=\'rgba(15, 22, 35,0.08)\'">\u26F6</button></div><div style="font-size:11px;color:var(--slate);text-align:center;margin-top:4px;">Hover \u00b7 zoom \u00b7 pan \u00b7 \u26F6 expand</div>';
+        el.innerHTML = '<div style="position:relative;"><div id="sq-chart" style="width:100%;height:400px;border-radius:6px;overflow:hidden;"></div>' + _archSaveBtnHTML('sq-chart', 'TDR_Profile') + '<button onclick="openPlotModal()" title="Expand to fullscreen" style="position:absolute;top:6px;right:6px;z-index:10;background:rgba(15, 22, 35,0.08);border:none;color:#5b6573;font-size:16px;width:30px;height:30px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;" onmouseover="this.style.background=\'rgba(15, 22, 35,0.2)\'" onmouseout="this.style.background=\'rgba(15, 22, 35,0.08)\'">\u26F6</button></div><div style="font-size:11px;color:var(--slate);text-align:center;margin-top:4px;">Hover \u00b7 zoom \u00b7 pan \u00b7 \u26F6 expand</div>';
         Plotly.newPlot('sq-chart', traces, layout, { responsive:true, displayModeBar:false, displaylogo:false });
         var panelInner = document.getElementById('side-panel-inner');
         if (panelInner) panelInner.scrollTop = 0;
@@ -6256,21 +6324,21 @@ function _renderArchiveIntensityTimeline(track, storm) {
     var layout = {
         paper_bgcolor: '#ffffff', plot_bgcolor: '#ffffff',
         xaxis: {
-            title: { text: 'Date/Time', font: { size: 10, color: '#8b9ec2' } },
-            tickfont: { size: 9, color: '#8b9ec2' },
-            gridcolor: 'rgba(15, 22, 35,0.04)',
+            title: { text: 'Date/Time', font: { size: 10, color: '#5b6573' } },
+            tickfont: { size: 9, color: '#5b6573' },
+            gridcolor: 'rgba(15, 22, 35,0.22)',
             linecolor: 'rgba(15, 22, 35,0.08)'
         },
         yaxis: {
             title: { text: 'Max Wind (kt)', font: { size: 10, color: '#00d4ff' } },
-            tickfont: { size: 9, color: '#8b9ec2', family: 'JetBrains Mono' },
-            gridcolor: 'rgba(15, 22, 35,0.04)',
+            tickfont: { size: 9, color: '#5b6573', family: 'JetBrains Mono' },
+            gridcolor: 'rgba(15, 22, 35,0.22)',
             range: [0, Math.min(maxWind + 20, 200)],
             side: 'left'
         },
         yaxis2: {
             title: { text: 'Pressure (hPa)', font: { size: 10, color: '#a78bfa' } },
-            tickfont: { size: 9, color: '#8b9ec2', family: 'JetBrains Mono' },
+            tickfont: { size: 9, color: '#5b6573', family: 'JetBrains Mono' },
             overlaying: 'y', side: 'right',
             autorange: 'reversed',
             gridcolor: 'transparent'
@@ -6279,10 +6347,10 @@ function _renderArchiveIntensityTimeline(track, storm) {
         showlegend: true,
         legend: {
             x: 0.01, y: 0.99,
-            bgcolor: 'rgba(15,33,64,0.8)',
+            bgcolor: 'rgba(255,255,255,0.85)',
             bordercolor: 'rgba(15, 22, 35,0.08)',
             borderwidth: 1,
-            font: { size: 9, color: '#e2e8f0' }
+            font: { size: 9, color: '#0f1623' }
         },
         title: {
             text: stormName + ' (' + year + ')',
@@ -6532,8 +6600,8 @@ function _renderHovmoller(data) {
             size: 4,
             symbol: 'square',
             colorbar: {
-                title: { text: varInfo.units, font: { color: '#ccc', size: 9 } },
-                tickfont: { color: '#ccc', size: 8 },
+                title: { text: varInfo.units, font: { color: '#5b6573', size: 9 } },
+                tickfont: { color: '#5b6573', size: 8 },
                 thickness: 10, len: 0.85
             }
         },
@@ -6580,23 +6648,23 @@ function _renderHovmoller(data) {
             font: { color: '#0f1623', size: 11 }, x: 0.5, xanchor: 'center', y: 0.98
         },
         xaxis: {
-            title: { text: 'Date/Time', font: { size: 10, color: '#8b9ec2' } },
-            tickfont: { size: 9, color: '#8b9ec2' },
-            gridcolor: 'rgba(15, 22, 35,0.04)',
+            title: { text: 'Date/Time', font: { size: 10, color: '#5b6573' } },
+            tickfont: { size: 9, color: '#5b6573' },
+            gridcolor: 'rgba(15, 22, 35,0.22)',
             linecolor: 'rgba(15, 22, 35,0.08)'
         },
         yaxis: {
-            title: { text: 'Radius (km)', font: { size: 10, color: '#8b9ec2' } },
-            tickfont: { size: 9, color: '#8b9ec2', family: 'JetBrains Mono' },
-            gridcolor: 'rgba(15, 22, 35,0.04)',
+            title: { text: 'Radius (km)', font: { size: 10, color: '#5b6573' } },
+            tickfont: { size: 9, color: '#5b6573', family: 'JetBrains Mono' },
+            gridcolor: 'rgba(15, 22, 35,0.22)',
             range: [0, 200]
         },
         shapes: shapes,
         showlegend: true,
         legend: {
-            x: 0.01, y: 0.99, bgcolor: 'rgba(15,33,64,0.8)',
+            x: 0.01, y: 0.99, bgcolor: 'rgba(255,255,255,0.85)',
             bordercolor: 'rgba(15, 22, 35,0.08)', borderwidth: 1,
-            font: { size: 9, color: '#e2e8f0' }
+            font: { size: 9, color: '#0f1623' }
         },
         margin: { l: 45, r: 12, t: 30, b: 38 },
         hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: 11 } }
@@ -6754,6 +6822,15 @@ function _getFilteredTDRStorms() {
 
 // Main track rendering function
 function _renderArchiveTracks() {
+    // In focus mode the user is reviewing one specific case — the
+    // surrounding tracks/markers from other storms compete with the
+    // IR overlay and just look noisy. enterFocusMode removed the
+    // layer; bail out here so an async filter/tracks-load that fires
+    // after focus mode begins doesn't add it back.
+    if (_focusMode) {
+        if (_trackViewLayer) _trackViewLayer.clearLayers();
+        return;
+    }
     if (!_trackViewLayer) {
         _trackCanvasRenderer = L.canvas({ padding: 0.5 });
         _trackViewLayer = L.layerGroup();
@@ -6994,7 +7071,7 @@ function openPlotModal(csJson) {
     }
 
     var d = window._lastPlotlyData;
-    var fullLayout = Object.assign({}, d.baseLayout, { title: { text: d.title, font: { color: '#0f1623', size: 15 }, y: 0.97, x: 0.5, xanchor: 'center', yanchor: 'top' }, margin: { l:65,r:30,t:d.overlayTraces&&d.overlayTraces.length?80:64,b:55 }, xaxis: Object.assign({}, d.baseLayout.xaxis, { title: { text: 'Eastward distance (km)', font: { color: '#5b6573', size: 13 } }, tickfont: { color: '#5b6573', size: 11 } }), yaxis: Object.assign({}, d.baseLayout.yaxis, { title: { text: 'Northward distance (km)', font: { color: '#5b6573', size: 13 } }, tickfont: { color: '#5b6573', size: 11 } }) });
+    var fullLayout = Object.assign({}, d.baseLayout, { title: { text: d.title, font: { color: '#0f1623', size: 15 }, y: 0.93, x: 0.5, xanchor: 'center', yanchor: 'top' }, margin: { l:65,r:30,t:d.overlayTraces&&d.overlayTraces.length?100:88,b:55 }, xaxis: Object.assign({}, d.baseLayout.xaxis, { title: { text: 'Eastward distance (km)', font: { color: '#5b6573', size: 13 } }, tickfont: { color: '#5b6573', size: 11 } }), yaxis: Object.assign({}, d.baseLayout.yaxis, { title: { text: 'Northward distance (km)', font: { color: '#5b6573', size: 13 } }, tickfont: { color: '#5b6573', size: 11 } }) });
     // Scale up annotations for fullscreen
     if (fullLayout.annotations) {
         fullLayout.annotations = fullLayout.annotations.map(function(a) {
@@ -7002,7 +7079,7 @@ function openPlotModal(csJson) {
         });
     }
     // Shear + motion vectors now rendered as HTML compass (not in Plotly)
-    var fullCbar = { title: { text: d.heatmap.colorbar.title.text, font: { color: '#ccc', size: 13 } }, tickfont: { color: '#ccc', size: 11 }, thickness: 16, len: 0.85 };
+    var fullCbar = { title: { text: d.heatmap.colorbar.title.text, font: { color: '#5b6573', size: 13 } }, tickfont: { color: '#5b6573', size: 11 }, thickness: 16, len: 0.85 };
     if (d.tiltTraces && d.tiltTraces.length > 0) {
         fullCbar.len = 0.42;
         fullCbar.y = 0.98;
@@ -7253,8 +7330,8 @@ function render3DIsosurface() {
         cmin: isoMin,
         cmax: isoMax,
         colorbar: {
-            title: { text: vi.units, font: { color: '#ccc', size: 12 } },
-            tickfont: { color: '#ccc', size: 10 },
+            title: { text: vi.units, font: { color: '#5b6573', size: 12 } },
+            tickfont: { color: '#5b6573', size: 10 },
             thickness: 14,
             len: 0.7,
             x: 1.02
@@ -7424,8 +7501,8 @@ function _build3DTiltTraces(tiltData) {
             cmin: 0, cmax: 14,
             line: { color: 'rgba(15, 22, 35,0.4)', width: 0.5 },
             colorbar: {
-                title: { text: 'Height (km)', font: { color: '#ccc', size: 10 } },
-                tickfont: { color: '#ccc', size: 9 },
+                title: { text: 'Height (km)', font: { color: '#5b6573', size: 10 } },
+                tickfont: { color: '#5b6573', size: 9 },
                 thickness: 10, len: 0.35,
                 x: 1.08, y: 0.15,
                 xanchor: 'left'
@@ -8496,7 +8573,7 @@ function _injectCompositeStyles() {
         '.comp-status.success { background:rgba(16,185,129,0.08); color:#10b981; border:1px solid rgba(16,185,129,0.2); }' +
         '.comp-status.error { background:rgba(239,68,68,0.08); color:#ef4444; border:1px solid rgba(239,68,68,0.2); }' +
         '.comp-toolbar { display:flex; gap:8px; margin-top:10px; padding:10px 0 4px; border-top:1px solid rgba(15, 22, 35,0.06); }' +
-        '.comp-tool-btn { padding:6px 12px; font-size:11px; font-weight:600; border:1px solid rgba(15, 22, 35,0.12); border-radius:6px; background:rgba(15, 22, 35,0.04); color:#9ca3af; cursor:pointer; font-family:"JetBrains Mono",monospace; transition:all 0.15s; }' +
+        '.comp-tool-btn { padding:6px 12px; font-size:11px; font-weight:600; border:1px solid rgba(15, 22, 35,0.12); border-radius:6px; background:rgba(15, 22, 35,0.22); color:#9ca3af; cursor:pointer; font-family:"JetBrains Mono",monospace; transition:all 0.15s; }' +
         '.comp-tool-btn:hover { background:rgba(15, 22, 35,0.08); color:#e5e7eb; border-color:rgba(15, 22, 35,0.2); }' +
         '.comp-case-list-wrap { margin-top:10px; background:rgba(15, 22, 35,0.02); border:1px solid rgba(15, 22, 35,0.06); border-radius:8px; overflow:hidden; }' +
         '.comp-cl-header { display:flex; justify-content:space-between; align-items:center; padding:10px 14px; border-bottom:1px solid rgba(15, 22, 35,0.06); background:rgba(15, 22, 35,0.02); }' +
@@ -9184,7 +9261,7 @@ function renderCompositeAzMeanInto(targetId, json, filters) {
     var heatmap = {
         z: azData, x: radius, y: height_km, type: 'heatmap',
         colorscale: varInfo.colorscale, zmin: varInfo.vmin, zmax: varInfo.vmax,
-        colorbar: { title: { text: varInfo.units, font: { color:'#ccc', size:fontSize.cbar } }, tickfont: { color:'#ccc', size:fontSize.cbarTick }, thickness:14, len:0.85 },
+        colorbar: { title: { text: varInfo.units, font: { color:'#5b6573', size:fontSize.cbar } }, tickfont: { color:'#5b6573', size:fontSize.cbarTick }, thickness:14, len:0.85 },
         hovertemplate: '<b>' + varInfo.display_name + '</b>: %{z:.2f} ' + varInfo.units + '<br>' + rLabel + ': %{x:.2f}<br>Height: %{y:.1f} km<extra></extra>',
         hoverongaps: false
     };
@@ -9203,8 +9280,8 @@ function renderCompositeAzMeanInto(targetId, json, filters) {
     var layout = {
         title: { text: title, font: { color:'#0f1623', size:fontSize.title }, y:0.97, x:0.5, xanchor:'center' },
         paper_bgcolor: plotBg, plot_bgcolor: plotBg,
-        xaxis: { title: { text:rLabel, font:{color: '#5b6573',size:fontSize.axis} }, tickfont:{color: '#5b6573',size:fontSize.tick}, gridcolor:'rgba(15, 22, 35,0.04)', zeroline:false },
-        yaxis: { title: { text:'Height (km)', font:{color: '#5b6573',size:fontSize.axis} }, tickfont:{color: '#5b6573',size:fontSize.tick}, gridcolor:'rgba(15, 22, 35,0.04)', zeroline:false },
+        xaxis: { title: { text:rLabel, font:{color: '#5b6573',size:fontSize.axis} }, tickfont:{color: '#5b6573',size:fontSize.tick}, gridcolor:'rgba(15, 22, 35,0.22)', zeroline:false },
+        yaxis: { title: { text:'Height (km)', font:{color: '#5b6573',size:fontSize.axis} }, tickfont:{color: '#5b6573',size:fontSize.tick}, gridcolor:'rgba(15, 22, 35,0.22)', zeroline:false },
         margin: { l:55, r:24, t: json.overlay ? 170 : 156, b:46 }, shapes: shapes,
         hoverlabel: { bgcolor:'#ffffff', font:{color:'#0f1623',size:fontSize.hover} },
         showlegend: false
@@ -9307,7 +9384,7 @@ function renderCompositeQuadMeanInto(targetId, json, filters) {
             colorscale:varInfo.colorscale, zmin:zmin, zmax:zmax,
             xaxis:'x'+axSuffix, yaxis:'y'+axSuffix,
             showscale:showCbar,
-            colorbar: showCbar ? { title:{text:varInfo.units,font:{color:'#ccc',size:fontSize.cbar}}, tickfont:{color:'#ccc',size:fontSize.cbarTick}, thickness:14, len:0.85, x:1.02, y:0.5 } : undefined,
+            colorbar: showCbar ? { title:{text:varInfo.units,font:{color:'#5b6573',size:fontSize.cbar}}, tickfont:{color:'#5b6573',size:fontSize.cbarTick}, thickness:14, len:0.85, x:1.02, y:0.5 } : undefined,
             hovertemplate:'<b>'+p.label+'</b><br>'+varInfo.display_name+': %{z:.2f} '+varInfo.units+'<br>'+rLabel+': %{x:.2f}<br>Height: %{y:.1f} km<extra></extra>',
             hoverongaps:false
         });
@@ -9349,10 +9426,10 @@ function renderCompositeQuadMeanInto(targetId, json, filters) {
         var axSuffix = i === 0 ? '' : String(i+1);
         var isUpshear = (p.col === 0);
         var showYLabel = (p.col === 0), showXLabel = (p.row === 1);
-        var xAxisDef = { domain:[x0,x1], title:showXLabel?{text:rLabel,font:{color: '#5b6573',size:fontSize.axis}}:undefined, tickfont:{color: '#5b6573',size:fontSize.tick}, gridcolor:'rgba(15, 22, 35,0.04)', zeroline:false, anchor:'y'+axSuffix };
+        var xAxisDef = { domain:[x0,x1], title:showXLabel?{text:rLabel,font:{color: '#5b6573',size:fontSize.axis}}:undefined, tickfont:{color: '#5b6573',size:fontSize.tick}, gridcolor:'rgba(15, 22, 35,0.22)', zeroline:false, anchor:'y'+axSuffix };
         if (tcCentric && isUpshear) xAxisDef.autorange = 'reversed';
         layoutAxes['xaxis' + axSuffix] = xAxisDef;
-        layoutAxes['yaxis' + axSuffix] = { domain:[yBottom,yTop], title:showYLabel?{text:'Height (km)',font:{color: '#5b6573',size:fontSize.axis}}:undefined, tickfont:{color: '#5b6573',size:fontSize.tick}, gridcolor:'rgba(15, 22, 35,0.04)', zeroline:false, anchor:'x'+axSuffix };
+        layoutAxes['yaxis' + axSuffix] = { domain:[yBottom,yTop], title:showYLabel?{text:'Height (km)',font:{color: '#5b6573',size:fontSize.axis}}:undefined, tickfont:{color: '#5b6573',size:fontSize.tick}, gridcolor:'rgba(15, 22, 35,0.22)', zeroline:false, anchor:'x'+axSuffix };
     });
 
     var compQuadOverlay = buildCompQuadOverlayContours(json, radius, height_km, panelOrder);
@@ -9547,8 +9624,8 @@ function renderCompositeAnomalyInto(targetId, json, filters) {
         z: anomData, x: xIdxArr, y: height_km, type: 'heatmap',
         colorscale: anomColorscale, zmin: zmin, zmax: zmax, zmid: 0,
         colorbar: {
-            title: { text: cbarTitle, font: { color: '#ccc', size: fontSize.cbar } },
-            tickfont: { color: '#ccc', size: fontSize.cbarTick },
+            title: { text: cbarTitle, font: { color: '#5b6573', size: fontSize.cbar } },
+            tickfont: { color: '#5b6573', size: fontSize.cbarTick },
             thickness: 14, len: 0.85,
         },
         hoverongaps: false,
@@ -9581,10 +9658,10 @@ function renderCompositeAnomalyInto(targetId, json, filters) {
         xaxis: { title: { text: 'R\u2095 (RMW + km)', font: { color: '#5b6573', size: fontSize.axis } },
                  tickvals: ticks.tickvals, ticktext: ticks.ticktext,
                  tickfont: { color: '#5b6573', size: fontSize.tick },
-                 gridcolor: 'rgba(15, 22, 35,0.04)', zeroline: false },
+                 gridcolor: 'rgba(15, 22, 35,0.22)', zeroline: false },
         yaxis: { title: { text: 'Height (km)', font: { color: '#5b6573', size: fontSize.axis } },
                  tickfont: { color: '#5b6573', size: fontSize.tick },
-                 gridcolor: 'rgba(15, 22, 35,0.04)', zeroline: false },
+                 gridcolor: 'rgba(15, 22, 35,0.22)', zeroline: false },
         margin: { l: 55, r: 24, t: 156, b: 46 },
         shapes: shapes, showlegend: false,
         annotations: [_fischerCitation]
@@ -9640,7 +9717,7 @@ function _renderDiffAnomaly(targetId, diffJson, jsonA, jsonB, filtersA, filtersB
         var hm = {
             z: anomData, x: xIdxArr, y: height_km, type: 'heatmap',
             colorscale: colorscale, zmin: zmin, zmax: zmax, zmid: 0,
-            colorbar: { title:{text:cbarLabel,font:{color:'#ccc',size:fontSize.cbar}}, tickfont:{color:'#ccc',size:fontSize.cbarTick}, thickness:14, len:0.85 },
+            colorbar: { title:{text:cbarLabel,font:{color:'#5b6573',size:fontSize.cbar}}, tickfont:{color:'#5b6573',size:fontSize.cbarTick}, thickness:14, len:0.85 },
             hovertemplate: '<b>Z-score</b>: %{z:.2f}\u03c3<br>R\u2095: %{customdata}<br>Height: %{y:.1f} km<extra></extra>',
         customdata: height_km.map(function() { return rHAxis.map(function(v, idx) { return idx < nInner ? (v.toFixed(2) + ' R/RMW') : ('+' + v.toFixed(0) + ' km'); }); }),
             hoverongaps: false
@@ -9650,8 +9727,8 @@ function _renderDiffAnomaly(targetId, diffJson, jsonA, jsonB, filtersA, filtersB
             paper_bgcolor:plotBg, plot_bgcolor:plotBg,
             xaxis: { title:{text:'R\u2095 (RMW + km)',font:{color: '#5b6573',size:fontSize.axis}},
                      tickvals:ticks.tickvals, ticktext:ticks.ticktext,
-                     tickfont:{color: '#5b6573',size:fontSize.tick}, gridcolor:'rgba(15, 22, 35,0.04)', zeroline:false },
-            yaxis: { title:{text:'Height (km)',font:{color: '#5b6573',size:fontSize.axis}}, tickfont:{color: '#5b6573',size:fontSize.tick}, gridcolor:'rgba(15, 22, 35,0.04)', zeroline:false },
+                     tickfont:{color: '#5b6573',size:fontSize.tick}, gridcolor:'rgba(15, 22, 35,0.22)', zeroline:false },
+            yaxis: { title:{text:'Height (km)',font:{color: '#5b6573',size:fontSize.axis}}, tickfont:{color: '#5b6573',size:fontSize.tick}, gridcolor:'rgba(15, 22, 35,0.22)', zeroline:false },
             margin:{ l:55, r:24, t:116, b:42 }, shapes:rmwShape,
             hoverlabel:{ bgcolor:'#ffffff', font:{color:'#0f1623',size:fontSize.hover} },
             showlegend:false, annotations:[_fischerCitation]
@@ -9913,8 +9990,8 @@ function renderCompositeCFADInto(targetId, json, filters) {
     }
 
     var colorbar = {
-        title: { text: cbarTitle, font: { color:'#ccc', size:fontSize.cbar } },
-        tickfont: { color:'#ccc', size:fontSize.cbarTick },
+        title: { text: cbarTitle, font: { color:'#5b6573', size:fontSize.cbar } },
+        tickfont: { color:'#5b6573', size:fontSize.cbarTick },
         thickness:14, len:0.85
     };
     if (useLog && typeof tickVals !== 'undefined' && tickVals.length > 0) {
@@ -9964,8 +10041,8 @@ function renderCompositeCFADInto(targetId, json, filters) {
     var layout = {
         title: { text: title, font: { color:'#0f1623', size:fontSize.title }, y:0.97, x:0.5, xanchor:'center' },
         paper_bgcolor: plotBg, plot_bgcolor: plotBg,
-        xaxis: { title: { text: varInfo.display_name + ' (' + varInfo.units + ')', font:{color: '#5b6573',size:fontSize.axis} }, tickfont:{color: '#5b6573',size:fontSize.tick}, gridcolor:'rgba(15, 22, 35,0.04)', zeroline:false },
-        yaxis: { title: { text:'Height (km)', font:{color: '#5b6573',size:fontSize.axis} }, tickfont:{color: '#5b6573',size:fontSize.tick}, gridcolor:'rgba(15, 22, 35,0.04)', zeroline:false },
+        xaxis: { title: { text: varInfo.display_name + ' (' + varInfo.units + ')', font:{color: '#5b6573',size:fontSize.axis} }, tickfont:{color: '#5b6573',size:fontSize.tick}, gridcolor:'rgba(15, 22, 35,0.22)', zeroline:false },
+        yaxis: { title: { text:'Height (km)', font:{color: '#5b6573',size:fontSize.axis} }, tickfont:{color: '#5b6573',size:fontSize.tick}, gridcolor:'rgba(15, 22, 35,0.22)', zeroline:false },
         margin: { l:55, r:24, t:156, b:50 },
         hoverlabel: { bgcolor:'#ffffff', font:{color:'#0f1623',size:fontSize.hover} },
         showlegend: false
@@ -10069,8 +10146,8 @@ function renderCompositeCFADMultiInto(targetId, json, filters) {
         var showCbar = (si === 1);  // show colorbar on top-right panel only
 
         var colorbar = showCbar ? {
-            title: { text: cbarTitle, font: { color:'#ccc', size:fontSize.cbar } },
-            tickfont: { color:'#ccc', size:fontSize.cbarTick },
+            title: { text: cbarTitle, font: { color:'#5b6573', size:fontSize.cbar } },
+            tickfont: { color:'#5b6573', size:fontSize.cbarTick },
             thickness: 12, len: 0.9, x: 1.02
         } : null;
         if (showCbar && useLog && tickVals.length > 0) {
@@ -10139,11 +10216,11 @@ function renderCompositeCFADMultiInto(targetId, json, filters) {
         var isBottom = ai >= 2, isLeft = ai % 2 === 0;
         layout[xName] = {
             title: isBottom ? { text: varInfo.display_name + ' (' + varInfo.units + ')', font:{color: '#5b6573',size:fontSize.axis} } : undefined,
-            tickfont:{color: '#5b6573',size:fontSize.tick}, gridcolor:'rgba(15, 22, 35,0.04)', zeroline:false
+            tickfont:{color: '#5b6573',size:fontSize.tick}, gridcolor:'rgba(15, 22, 35,0.22)', zeroline:false
         };
         layout[yName] = {
             title: isLeft ? { text:'Height (km)', font:{color: '#5b6573',size:fontSize.axis} } : undefined,
-            tickfont:{color: '#5b6573',size:fontSize.tick}, gridcolor:'rgba(15, 22, 35,0.04)', zeroline:false
+            tickfont:{color: '#5b6573',size:fontSize.tick}, gridcolor:'rgba(15, 22, 35,0.22)', zeroline:false
         };
     }
 
@@ -10289,8 +10366,8 @@ function renderCompositePlanViewInto(targetId, json, filters, pvParams) {
     var heatmap = {
         z: planData, x: xAxis, y: yAxis, type: 'heatmap',
         colorscale: varInfo.colorscale, zmin: varInfo.vmin, zmax: varInfo.vmax,
-        colorbar: { title: { text: varInfo.units, font: { color:'#ccc', size:fontSize.cbar } },
-                    tickfont: { color:'#ccc', size:fontSize.cbarTick }, thickness:14, len:0.85 },
+        colorbar: { title: { text: varInfo.units, font: { color:'#5b6573', size:fontSize.cbar } },
+                    tickfont: { color:'#5b6573', size:fontSize.cbarTick }, thickness:14, len:0.85 },
         hovertemplate: '<b>' + varInfo.display_name + '</b>: %{z:.2f} ' + varInfo.units +
                        '<br>' + xLabel + ': %{x:.1f}<br>' + yLabel + ': %{y:.1f}<extra></extra>',
         hoverongaps: false
@@ -10338,12 +10415,12 @@ function renderCompositePlanViewInto(targetId, json, filters, pvParams) {
         paper_bgcolor: plotBg, plot_bgcolor: plotBg,
         xaxis: { title: { text:xLabel, font:{color: '#5b6573',size:fontSize.axis} },
                  tickfont:{color: '#5b6573',size:fontSize.tick},
-                 gridcolor:'rgba(15, 22, 35,0.04)', zeroline:true,
+                 gridcolor:'rgba(15, 22, 35,0.22)', zeroline:true,
                  zerolinecolor:'rgba(15, 22, 35,0.12)',
                  range:[ext.xMin, ext.xMax] },
         yaxis: { title: { text:yLabel, font:{color: '#5b6573',size:fontSize.axis} },
                  tickfont:{color: '#5b6573',size:fontSize.tick},
-                 gridcolor:'rgba(15, 22, 35,0.04)', zeroline:true,
+                 gridcolor:'rgba(15, 22, 35,0.22)', zeroline:true,
                  zerolinecolor:'rgba(15, 22, 35,0.12)',
                  scaleanchor:'x', scaleratio:1,
                  range:[ext.yMin, ext.yMax] },
@@ -10541,8 +10618,8 @@ function _renderIRPlanView(targetId, json, filters, pvParams) {
     var heatmap = {
         z: planData, x: xAxis, y: yAxis, type: 'heatmap',
         colorscale: varInfo.colorscale, zmin: varInfo.vmin, zmax: varInfo.vmax,
-        colorbar: { title: { text: varInfo.units, font: { color:'#ccc', size:12 } },
-                    tickfont: { color:'#ccc', size:10 }, thickness:14, len:0.85 },
+        colorbar: { title: { text: varInfo.units, font: { color:'#5b6573', size:12 } },
+                    tickfont: { color:'#5b6573', size:10 }, thickness:14, len:0.85 },
         hovertemplate: '<b>IR Tb</b>: %{z:.1f} K<br>' + xLabel + ': %{x:.1f}<br>' + yLabel + ': %{y:.1f}<extra></extra>',
         hoverongaps: false,
         reversescale: true
@@ -10610,8 +10687,8 @@ function _renderIRPlanView(targetId, json, filters, pvParams) {
                     colorscale: [[0,'#22d3ee'],[0.5,'#a855f7'],[1,'#ef4444']],
                     cmin: 0, cmax: 15,
                     colorbar: {
-                        title: { text: 'Height (km)', font: { color:'#ccc', size:10 } },
-                        tickfont: { color:'#ccc', size:9 }, thickness: 10, len: 0.4,
+                        title: { text: 'Height (km)', font: { color:'#5b6573', size:10 } },
+                        tickfont: { color:'#5b6573', size:9 }, thickness: 10, len: 0.4,
                         x: 1.12, xpad: 2, y: 0.15, yanchor: 'bottom'
                     },
                     line: { width: 1, color: 'rgba(15, 22, 35,0.6)' }
@@ -10858,7 +10935,7 @@ function _renderDiffIRPlanView(targetId, diffJson, jsonA, jsonB, filtersA, filte
         var hm = {
             z: data, x: xAxis, y: yAxis, type: 'heatmap',
             colorscale: colorscale, zmin: zmin, zmax: zmax,
-            colorbar: { title:{text:units,font:{color:'#ccc',size:11}}, tickfont:{color:'#ccc',size:10}, thickness:14, len:0.85 },
+            colorbar: { title:{text:units,font:{color:'#5b6573',size:11}}, tickfont:{color:'#5b6573',size:10}, thickness:14, len:0.85 },
             hovertemplate: '<b>IR Tb</b>: %{z:.1f} ' + units + '<br>' + xLabel + ': %{x:.1f}<br>' + yLabel + ': %{y:.1f}<extra></extra>',
             hoverongaps: false,
             reversescale: (colorscale !== _DIFF_COLORSCALE)
@@ -10878,7 +10955,7 @@ function _renderDiffIRPlanView(targetId, diffJson, jsonA, jsonB, filtersA, filte
                 traces.push({ x: tiltX, y: tiltY, type:'scatter', mode:'lines', line:{color:'rgba(15, 22, 35,0.5)',width:1.5}, showlegend:false, hoverinfo:'skip' });
                 traces.push({ x: tiltX, y: tiltY, type:'scatter', mode:'markers+text',
                     marker: { size:8, color:tiltColors, colorscale:[[0,'#22d3ee'],[0.5,'#a855f7'],[1,'#ef4444']], cmin:0, cmax:15,
-                        colorbar: { title:{text:'Height (km)',font:{color:'#ccc',size:10}}, tickfont:{color:'#ccc',size:9}, thickness:10, len:0.4, x:1.12, xpad:2, y:0.15, yanchor:'bottom' },
+                        colorbar: { title:{text:'Height (km)',font:{color:'#5b6573',size:10}}, tickfont:{color:'#5b6573',size:9}, thickness:10, len:0.4, x:1.12, xpad:2, y:0.15, yanchor:'bottom' },
                         line:{width:1,color:'rgba(15, 22, 35,0.6)'} },
                     text: tiltText, textposition:'top right', textfont:{size:8,color:'rgba(15, 22, 35,0.6)'},
                     hovertemplate: '<b>Tilt</b> at %{text}<br>X: %{x:.2f}<br>Y: %{y:.2f}<extra></extra>', name:'Vortex Tilt', showlegend:false });
@@ -10888,8 +10965,8 @@ function _renderDiffIRPlanView(targetId, diffJson, jsonA, jsonB, filtersA, filte
         var layout = {
             title: { text:titleText, font:{color:'#0f1623',size:13}, y:0.97, x:0.5, xanchor:'center' },
             paper_bgcolor:plotBg, plot_bgcolor:plotBg,
-            xaxis: { title:{text:xLabel,font:{color: '#5b6573',size:11}}, tickfont:{color: '#5b6573',size:10}, gridcolor:'rgba(15, 22, 35,0.04)', zeroline:true, zerolinecolor:'rgba(15, 22, 35,0.12)' },
-            yaxis: { title:{text:yLabel,font:{color: '#5b6573',size:11}}, tickfont:{color: '#5b6573',size:10}, gridcolor:'rgba(15, 22, 35,0.04)', zeroline:true, zerolinecolor:'rgba(15, 22, 35,0.12)', scaleanchor:'x', scaleratio:1 },
+            xaxis: { title:{text:xLabel,font:{color: '#5b6573',size:11}}, tickfont:{color: '#5b6573',size:10}, gridcolor:'rgba(15, 22, 35,0.22)', zeroline:true, zerolinecolor:'rgba(15, 22, 35,0.12)' },
+            yaxis: { title:{text:yLabel,font:{color: '#5b6573',size:11}}, tickfont:{color: '#5b6573',size:10}, gridcolor:'rgba(15, 22, 35,0.22)', zeroline:true, zerolinecolor:'rgba(15, 22, 35,0.12)', scaleanchor:'x', scaleratio:1 },
             margin:{ l:60, r:24, t:100, b:50 },
             shapes: sInset.shapes || [], annotations: sInset.annotations || [],
             showlegend:false
@@ -11269,7 +11346,7 @@ function _renderDiffAzMean(targetId, diffJson, jsonA, jsonB, filtersA, filtersB)
         var hm = {
             z: data, x: radius, y: height_km, type: 'heatmap',
             colorscale: colorscale, zmin: zmin, zmax: zmax,
-            colorbar: { title:{text:units,font:{color:'#ccc',size:fontSize.cbar}}, tickfont:{color:'#ccc',size:fontSize.cbarTick}, thickness:14, len:0.85 },
+            colorbar: { title:{text:units,font:{color:'#5b6573',size:fontSize.cbar}}, tickfont:{color:'#5b6573',size:fontSize.cbarTick}, thickness:14, len:0.85 },
             hovertemplate: '%{z:.2f} ' + units + '<br>' + rLabel + ': %{x:.2f}<br>Height: %{y:.1f} km<extra></extra>',
             hoverongaps: false
         };
@@ -11277,8 +11354,8 @@ function _renderDiffAzMean(targetId, diffJson, jsonA, jsonB, filtersA, filtersB)
         var layout = {
             title: { text:titleText, font:{color:'#0f1623',size:fontSize.title}, y:0.97, x:0.5, xanchor:'center' },
             paper_bgcolor:plotBg, plot_bgcolor:plotBg,
-            xaxis: { title:{text:rLabel,font:{color: '#5b6573',size:fontSize.axis}}, tickfont:{color: '#5b6573',size:fontSize.tick}, gridcolor:'rgba(15, 22, 35,0.04)', zeroline:false },
-            yaxis: { title:{text:'Height (km)',font:{color: '#5b6573',size:fontSize.axis}}, tickfont:{color: '#5b6573',size:fontSize.tick}, gridcolor:'rgba(15, 22, 35,0.04)', zeroline:false },
+            xaxis: { title:{text:rLabel,font:{color: '#5b6573',size:fontSize.axis}}, tickfont:{color: '#5b6573',size:fontSize.tick}, gridcolor:'rgba(15, 22, 35,0.22)', zeroline:false },
+            yaxis: { title:{text:'Height (km)',font:{color: '#5b6573',size:fontSize.axis}}, tickfont:{color: '#5b6573',size:fontSize.tick}, gridcolor:'rgba(15, 22, 35,0.22)', zeroline:false },
             margin:{ l:55, r:24, t:116, b:42 }, shapes:rmwShape,
             hoverlabel:{ bgcolor:'#ffffff', font:{color:'#0f1623',size:fontSize.hover} },
             showlegend:false
@@ -11374,7 +11451,7 @@ function _renderDiffQuadMean(targetId, diffJson, jsonA, jsonB, filtersA, filters
                 colorscale:colorscale, zmin:zmin, zmax:zmax,
                 xaxis:'x'+axSuffix, yaxis:'y'+axSuffix,
                 showscale:showCbar,
-                colorbar: showCbar ? { title:{text:units,font:{color:'#ccc',size:fontSize.cbar}}, tickfont:{color:'#ccc',size:fontSize.cbarTick}, thickness:14, len:0.85, x:1.02, y:0.5 } : undefined,
+                colorbar: showCbar ? { title:{text:units,font:{color:'#5b6573',size:fontSize.cbar}}, tickfont:{color:'#5b6573',size:fontSize.cbarTick}, thickness:14, len:0.85, x:1.02, y:0.5 } : undefined,
                 hovertemplate:'<b>'+p.label+'</b><br>%{z:.2f} '+units+'<br>'+rLabel+': %{x:.2f}<br>Height: %{y:.1f} km<extra></extra>',
                 hoverongaps:false
             });
@@ -11402,10 +11479,10 @@ function _renderDiffQuadMean(targetId, diffJson, jsonA, jsonB, filtersA, filters
             var axSuffix = i === 0 ? '' : String(i+1);
             var isUpshear = (p.col === 0);
             var showYLabel = (p.col === 0), showXLabel = (p.row === 1);
-            var xAxisDef = { domain:[x0,x1], title:showXLabel?{text:rLabel,font:{color: '#5b6573',size:fontSize.axis}}:undefined, tickfont:{color: '#5b6573',size:fontSize.tick}, gridcolor:'rgba(15, 22, 35,0.04)', zeroline:false, anchor:'y'+axSuffix };
+            var xAxisDef = { domain:[x0,x1], title:showXLabel?{text:rLabel,font:{color: '#5b6573',size:fontSize.axis}}:undefined, tickfont:{color: '#5b6573',size:fontSize.tick}, gridcolor:'rgba(15, 22, 35,0.22)', zeroline:false, anchor:'y'+axSuffix };
             if (tcCentric && isUpshear) xAxisDef.autorange = 'reversed';
             layoutAxes['xaxis' + axSuffix] = xAxisDef;
-            layoutAxes['yaxis' + axSuffix] = { domain:[yBottom,yTop], title:showYLabel?{text:'Height (km)',font:{color: '#5b6573',size:fontSize.axis}}:undefined, tickfont:{color: '#5b6573',size:fontSize.tick}, gridcolor:'rgba(15, 22, 35,0.04)', zeroline:false, anchor:'x'+axSuffix };
+            layoutAxes['yaxis' + axSuffix] = { domain:[yBottom,yTop], title:showYLabel?{text:'Height (km)',font:{color: '#5b6573',size:fontSize.axis}}:undefined, tickfont:{color: '#5b6573',size:fontSize.tick}, gridcolor:'rgba(15, 22, 35,0.22)', zeroline:false, anchor:'x'+axSuffix };
         });
 
         var layout = Object.assign({
@@ -11595,7 +11672,7 @@ function _renderDiffPlanView(targetId, diffJson, jsonA, jsonB, filtersA, filters
         var hm = {
             z: data, x: xAxis, y: yAxis, type: 'heatmap',
             colorscale: colorscale, zmin: zmin, zmax: zmax,
-            colorbar: { title:{text:units,font:{color:'#ccc',size:fontSize.cbar}}, tickfont:{color:'#ccc',size:fontSize.cbarTick}, thickness:14, len:0.85 },
+            colorbar: { title:{text:units,font:{color:'#5b6573',size:fontSize.cbar}}, tickfont:{color:'#5b6573',size:fontSize.cbarTick}, thickness:14, len:0.85 },
             hovertemplate: '%{z:.2f} ' + units + '<br>' + xLabel + ': %{x:.1f}<br>' + yLabel + ': %{y:.1f}<extra></extra>',
             hoverongaps: false
         };
@@ -11604,8 +11681,8 @@ function _renderDiffPlanView(targetId, diffJson, jsonA, jsonB, filtersA, filters
         var layout = {
             title: { text:titleText, font:{color:'#0f1623',size:fontSize.title}, y:0.97, x:0.5, xanchor:'center' },
             paper_bgcolor:plotBg, plot_bgcolor:plotBg,
-            xaxis: { title:{text:xLabel,font:{color: '#5b6573',size:fontSize.axis}}, tickfont:{color: '#5b6573',size:fontSize.tick}, gridcolor:'rgba(15, 22, 35,0.04)', zeroline:true, zerolinecolor:'rgba(15, 22, 35,0.12)', range:[ext.xMin, ext.xMax] },
-            yaxis: { title:{text:yLabel,font:{color: '#5b6573',size:fontSize.axis}}, tickfont:{color: '#5b6573',size:fontSize.tick}, gridcolor:'rgba(15, 22, 35,0.04)', zeroline:true, zerolinecolor:'rgba(15, 22, 35,0.12)', scaleanchor:'x', scaleratio:1, range:[ext.yMin, ext.yMax] },
+            xaxis: { title:{text:xLabel,font:{color: '#5b6573',size:fontSize.axis}}, tickfont:{color: '#5b6573',size:fontSize.tick}, gridcolor:'rgba(15, 22, 35,0.22)', zeroline:true, zerolinecolor:'rgba(15, 22, 35,0.12)', range:[ext.xMin, ext.xMax] },
+            yaxis: { title:{text:yLabel,font:{color: '#5b6573',size:fontSize.axis}}, tickfont:{color: '#5b6573',size:fontSize.tick}, gridcolor:'rgba(15, 22, 35,0.22)', zeroline:true, zerolinecolor:'rgba(15, 22, 35,0.12)', scaleanchor:'x', scaleratio:1, range:[ext.yMin, ext.yMax] },
             margin:{ l:60, r:24, t:140, b:50 },
             shapes: sInset.shapes || [], annotations: sInset.annotations || [],
             hoverlabel:{ bgcolor:'#ffffff', font:{color:'#0f1623',size:fontSize.hover} },
@@ -11846,19 +11923,19 @@ function _renderDiffCFAD(targetId, jsonA, jsonB, filtersA, filtersB) {
 
     // Render A
     var dataA = useLog ? _cfadApplyLog(jsonA.cfad) : jsonA.cfad;
-    var cbarA = { title:{text:cbarTitle,font:{color:'#ccc',size:fontSize.cbar}}, tickfont:{color:'#ccc',size:fontSize.cbarTick}, thickness:12, len:0.85 };
+    var cbarA = { title:{text:cbarTitle,font:{color:'#5b6573',size:fontSize.cbar}}, tickfont:{color:'#5b6573',size:fontSize.cbarTick}, thickness:12, len:0.85 };
     if (useLog && cbarTickVals) { cbarA.tickvals = cbarTickVals; cbarA.ticktext = cbarTickText; }
     var trA = _buildCfadHeatmap(dataA, binCenters, heightKm, plotZmin, plotZmax, cfadColorscale, cbarA, 'x', 'y', varInfo, normLabel, useLog ? jsonA.cfad : null, true);
     var titleA = '<span style="color:#60a5fa;">Group A</span> (N=' + jsonA.n_cases + ')' + binNote + radialNote + quadNote;
     var layA = { title:{text:titleA,font:{color:'#0f1623',size:fontSize.title},y:0.97,x:0.5,xanchor:'center'}, paper_bgcolor:plotBg, plot_bgcolor:plotBg,
-        xaxis:{title:{text:varInfo.display_name+' ('+varInfo.units+')',font:{color: '#5b6573',size:fontSize.axis}},tickfont:{color: '#5b6573',size:fontSize.tick},gridcolor:'rgba(15, 22, 35,0.04)',zeroline:false},
-        yaxis:{title:{text:'Height (km)',font:{color: '#5b6573',size:fontSize.axis}},tickfont:{color: '#5b6573',size:fontSize.tick},gridcolor:'rgba(15, 22, 35,0.04)',zeroline:false},
+        xaxis:{title:{text:varInfo.display_name+' ('+varInfo.units+')',font:{color: '#5b6573',size:fontSize.axis}},tickfont:{color: '#5b6573',size:fontSize.tick},gridcolor:'rgba(15, 22, 35,0.22)',zeroline:false},
+        yaxis:{title:{text:'Height (km)',font:{color: '#5b6573',size:fontSize.axis}},tickfont:{color: '#5b6573',size:fontSize.tick},gridcolor:'rgba(15, 22, 35,0.22)',zeroline:false},
         margin:{l:55,r:24,t:80,b:50}, hoverlabel:{bgcolor:'#ffffff',font:{color:'#0f1623',size:fontSize.hover}}, showlegend:false };
     Plotly.newPlot('comp-diff-cfad-a', [trA], layA, {responsive:true,displayModeBar:false});
 
     // Render B
     var dataB = useLog ? _cfadApplyLog(jsonB.cfad) : jsonB.cfad;
-    var cbarB = { title:{text:cbarTitle,font:{color:'#ccc',size:fontSize.cbar}}, tickfont:{color:'#ccc',size:fontSize.cbarTick}, thickness:12, len:0.85 };
+    var cbarB = { title:{text:cbarTitle,font:{color:'#5b6573',size:fontSize.cbar}}, tickfont:{color:'#5b6573',size:fontSize.cbarTick}, thickness:12, len:0.85 };
     if (useLog && cbarTickVals) { cbarB.tickvals = cbarTickVals; cbarB.ticktext = cbarTickText; }
     var trB = _buildCfadHeatmap(dataB, binCenters, heightKm, plotZmin, plotZmax, cfadColorscale, cbarB, 'x', 'y', varInfo, normLabel, useLog ? jsonB.cfad : null, true);
     var titleB = '<span style="color:#f59e0b;">Group B</span> (N=' + jsonB.n_cases + ')' + binNote + radialNote + quadNote;
@@ -11887,7 +11964,7 @@ function _renderDiffCFAD(targetId, jsonA, jsonB, filtersA, filtersB) {
         diffCbarTitle = '\u0394 ' + normLabel;
     }
 
-    var cbarD = { title:{text:diffCbarTitle,font:{color:'#ccc',size:fontSize.cbar}}, tickfont:{color:'#ccc',size:fontSize.cbarTick}, thickness:12, len:0.85 };
+    var cbarD = { title:{text:diffCbarTitle,font:{color:'#5b6573',size:fontSize.cbar}}, tickfont:{color:'#5b6573',size:fontSize.cbarTick}, thickness:12, len:0.85 };
     if (useLog) {
         var slTicks = _cfadSignedLogTicks(diffZmax);
         cbarD.tickvals = slTicks.vals; cbarD.ticktext = slTicks.text;
@@ -12055,18 +12132,18 @@ function _renderDiffCFADMulti(targetId, jsonA, jsonB, filtersA, filtersB) {
             var isBottom = ai >= 2, isLeft = ai % 2 === 0;
             layout[axNames[ai][0]] = {
                 title: isBottom ? {text:varInfo.display_name+' ('+varInfo.units+')',font:{color: '#5b6573',size:fontSize.axis}} : undefined,
-                tickfont:{color: '#5b6573',size:fontSize.tick}, gridcolor:'rgba(15, 22, 35,0.04)', zeroline:false
+                tickfont:{color: '#5b6573',size:fontSize.tick}, gridcolor:'rgba(15, 22, 35,0.22)', zeroline:false
             };
             layout[axNames[ai][1]] = {
                 title: isLeft ? {text:'Height (km)',font:{color: '#5b6573',size:fontSize.axis}} : undefined,
-                tickfont:{color: '#5b6573',size:fontSize.tick}, gridcolor:'rgba(15, 22, 35,0.04)', zeroline:false
+                tickfont:{color: '#5b6573',size:fontSize.tick}, gridcolor:'rgba(15, 22, 35,0.22)', zeroline:false
             };
         }
         Plotly.newPlot(chartId, traces, layout, {responsive:true, displayModeBar: isDiff, displaylogo:false, modeBarButtonsToRemove:['lasso2d','select2d','toggleSpikelines']});
     }
 
     // Render A
-    var cbarAB = { title:{text:cbarTitle,font:{color:'#ccc',size:fontSize.cbar}}, tickfont:{color:'#ccc',size:fontSize.cbarTick}, thickness:12, len:0.9 };
+    var cbarAB = { title:{text:cbarTitle,font:{color:'#5b6573',size:fontSize.cbar}}, tickfont:{color:'#5b6573',size:fontSize.cbarTick}, thickness:12, len:0.9 };
     if (useLog && cbarTickVals) { cbarAB.tickvals = cbarTickVals; cbarAB.ticktext = cbarTickText; }
     build2x2('comp-diff-cfadm-a', jsonA.cfad_multi,
         '<span style="color:#60a5fa;">Group A</span> (N=' + jsonA.n_cases + ') | 4-Quadrant CFAD' + binNote + radialNote,
@@ -12101,7 +12178,7 @@ function _renderDiffCFADMulti(targetId, jsonA, jsonB, filtersA, filtersB) {
         diffDZmin = -symRange; diffDZmax = symRange;
         diffCbarTitle = '\u0394 ' + normLabel;
     }
-    var cbarDiff = { title:{text:diffCbarTitle,font:{color:'#ccc',size:fontSize.cbar}}, tickfont:{color:'#ccc',size:fontSize.cbarTick}, thickness:12, len:0.9 };
+    var cbarDiff = { title:{text:diffCbarTitle,font:{color:'#5b6573',size:fontSize.cbar}}, tickfont:{color:'#5b6573',size:fontSize.cbarTick}, thickness:12, len:0.9 };
     if (diffSignedLog) {
         var slTicks = _cfadSignedLogTicks(diffDZmax);
         cbarDiff.tickvals = slTicks.vals; cbarDiff.ticktext = slTicks.text;
@@ -12253,7 +12330,7 @@ function _toggleScalarBoxWhisker(card, key) {
         pointpos: -1.5
     };
     var layout = {
-        paper_bgcolor: '#ffffff', plot_bgcolor: '#0f2140',
+        paper_bgcolor: '#ffffff', plot_bgcolor: '#ffffff',
         font: { color: '#0f1623', family: 'DM Sans, sans-serif', size: 11 },
         margin: { t: 30, b: 30, l: 50, r: 20 },
         yaxis: { title: s.display_name + ' (' + s.units + ')', gridcolor: 'rgba(15, 22, 35,0.06)' },
@@ -12338,7 +12415,7 @@ function renderEnvCompositePlanView(data, filters) {
         });
     }
     var layout = {
-        paper_bgcolor: '#ffffff', plot_bgcolor: '#0f2140',
+        paper_bgcolor: '#ffffff', plot_bgcolor: '#ffffff',
         font: { color: '#0f1623', family: 'DM Sans, sans-serif', size: 11 },
         title: { text: title, font: { size: 13 } },
         xaxis: { title: xLabel, gridcolor: 'rgba(15, 22, 35,0.06)', zeroline: true, zerolinecolor: 'rgba(15, 22, 35,0.15)' },
@@ -12479,12 +12556,12 @@ function renderCompositeSkewT(profData) {
     });
 
     var layout = {
-        paper_bgcolor: '#ffffff', plot_bgcolor: '#0f2140',
+        paper_bgcolor: '#ffffff', plot_bgcolor: '#ffffff',
         font: { color: '#0f1623', family: 'DM Sans, sans-serif', size: 10 },
         title: { text: 'Composite Skew-T (N=' + nCases + ')', font: { size: 12 } },
         xaxis: {
             range: [-40, 90], showticklabels: false,
-            gridcolor: 'rgba(15, 22, 35,0.04)', zeroline: false
+            gridcolor: 'rgba(15, 22, 35,0.22)', zeroline: false
         },
         yaxis: {
             type: 'log', autorange: 'reversed',
@@ -12584,7 +12661,7 @@ function renderCompositeHodograph(profData) {
     maxVal = Math.ceil(maxVal / 5) * 5;
 
     var layout = {
-        paper_bgcolor: '#ffffff', plot_bgcolor: '#0f2140',
+        paper_bgcolor: '#ffffff', plot_bgcolor: '#ffffff',
         font: { color: '#0f1623', family: 'DM Sans, sans-serif', size: 10 },
         title: { text: 'Composite Hodograph (N=' + nCases + ')', font: { size: 12 } },
         xaxis: {
@@ -12765,7 +12842,7 @@ function renderEnvDiffPlanView(pvA, pvB) {
 
     var title = '\u0394 ' + (cfg.display_name || pvA.field) + ' (A: N=' + pvA.n_cases + ' \u2212 B: N=' + pvB.n_cases + ')';
     Plotly.newPlot('comp-env-pv-plot', traces, {
-        paper_bgcolor: '#ffffff', plot_bgcolor: '#0f2140',
+        paper_bgcolor: '#ffffff', plot_bgcolor: '#ffffff',
         font: { color: '#0f1623', family: 'DM Sans, sans-serif', size: 11 },
         title: { text: title, font: { size: 13 } },
         xaxis: { title: 'East\u2013West (km)', gridcolor: 'rgba(15, 22, 35,0.06)', zeroline: true, zerolinecolor: 'rgba(15, 22, 35,0.15)' },
@@ -12822,10 +12899,10 @@ function renderDiffCompositeSkewT(profA, profB) {
     addProfile(profB.td.mean, '#fbbf24', 'Td (Group B)', 'dash');
 
     Plotly.newPlot('comp-env-skewt-plot', traces, {
-        paper_bgcolor: '#ffffff', plot_bgcolor: '#0f2140',
+        paper_bgcolor: '#ffffff', plot_bgcolor: '#ffffff',
         font: { color: '#0f1623', family: 'DM Sans, sans-serif', size: 10 },
         title: { text: '\u0394 Skew-T (A: N=' + profA.n_cases + ', B: N=' + profB.n_cases + ')', font: { size: 12 } },
-        xaxis: { range: [-40, 90], showticklabels: false, gridcolor: 'rgba(15, 22, 35,0.04)', zeroline: false },
+        xaxis: { range: [-40, 90], showticklabels: false, gridcolor: 'rgba(15, 22, 35,0.22)', zeroline: false },
         yaxis: {
             type: 'log', autorange: 'reversed',
             range: [Math.log10(1050), Math.log10(100)],
@@ -12879,7 +12956,7 @@ function renderDiffCompositeHodograph(profA, profB) {
     maxVal = Math.ceil(maxVal / 5) * 5;
 
     Plotly.newPlot('comp-env-hodo-plot', traces, {
-        paper_bgcolor: '#ffffff', plot_bgcolor: '#0f2140',
+        paper_bgcolor: '#ffffff', plot_bgcolor: '#ffffff',
         font: { color: '#0f1623', family: 'DM Sans, sans-serif', size: 10 },
         title: { text: '\u0394 Hodograph (A vs B)', font: { size: 12 } },
         xaxis: { title: 'u (m/s)', range: [-maxVal, maxVal], gridcolor: 'rgba(15, 22, 35,0.06)', zeroline: true, zerolinecolor: 'rgba(15, 22, 35,0.15)', scaleanchor: 'y' },
@@ -13374,7 +13451,7 @@ function _archFLTSRender(flData) {
         paper_bgcolor: 'rgba(0,0,0,0)',
         plot_bgcolor: 'rgba(247,248,250,0.85)',
         margin: { l: 55, r: 55, t: 8, b: 40 },
-        font: { family: 'DM Sans, sans-serif', size: 11, color: '#94a3b8' },
+        font: { family: 'DM Sans, sans-serif', size: 11, color: '#5b6573' },
         legend: {
             orientation: 'v', x: 1.0, xanchor: 'right', y: 1.0, yanchor: 'top',
             font: { size: 9 }, bgcolor: 'rgba(10,15,25,0.7)',
@@ -13384,7 +13461,7 @@ function _archFLTSRender(flData) {
         hovermode: 'x unified',
         xaxis: {
             title: { text: _archFLTSXAxis === 'radius' ? 'Distance from Center (km)' : 'Minutes from TDR Scan', font: { size: 11 } },
-            color: '#94a3b8',
+            color: '#5b6573',
             gridcolor: gridColor,
             zeroline: _archFLTSXAxis === 'time',
             zerolinecolor: 'rgba(96,165,250,0.5)',
@@ -13522,7 +13599,7 @@ function _archFLTSRender(flData) {
             x: 0.01, y: 0.98, xref: 'paper', yref: 'paper',
             text: insetLines.join('<br>'),
             showarrow: false,
-            font: { family: 'DM Sans, sans-serif', size: 10, color: '#cbd5e1' },
+            font: { family: 'DM Sans, sans-serif', size: 10, color: '#5b6573' },
             align: 'left', xanchor: 'left', yanchor: 'top',
             bgcolor: 'rgba(10,15,25,0.75)',
             bordercolor: 'rgba(96,165,250,0.3)',
@@ -14309,7 +14386,7 @@ function archiveShowSondeWind(idx) {
             text: '<b>WL150</b> ' + wl150.toFixed(1) + ' m/s (' + (wl150 * 1.944).toFixed(0) + ' kt)',
             showarrow: true, arrowhead: 0, arrowcolor: '#3b82f6', ax: 40, ay: -18,
             font: { color: '#3b82f6', size: 10 },
-            bgcolor: 'rgba(17,24,39,0.85)', bordercolor: '#3b82f6', borderwidth: 1, borderpad: 2,
+            bgcolor: 'rgba(255,255,255,0.85)', bordercolor: '#3b82f6', borderwidth: 1, borderpad: 2,
         });
     }
 
@@ -14331,7 +14408,7 @@ function archiveShowSondeWind(idx) {
             text: '<b>WL500</b> ' + wl500.toFixed(1) + ' m/s (' + (wl500 * 1.944).toFixed(0) + ' kt)',
             showarrow: true, arrowhead: 0, arrowcolor: '#f59e0b', ax: 50, ay: -18,
             font: { color: '#f59e0b', size: 10 },
-            bgcolor: 'rgba(17,24,39,0.85)', bordercolor: '#f59e0b', borderwidth: 1, borderpad: 2,
+            bgcolor: 'rgba(255,255,255,0.85)', bordercolor: '#f59e0b', borderwidth: 1, borderpad: 2,
         });
     }
 
@@ -14429,7 +14506,7 @@ function archiveShowSondeWind(idx) {
             showgrid: false,
         },
         margin: { l: 55, r: 55, t: 70, b: 82 },
-        legend: { x: 0.01, y: 0.01, bgcolor: 'rgba(17,24,39,0.85)', font: { color: '#d1d5db', size: 10 },
+        legend: { x: 0.01, y: 0.01, bgcolor: 'rgba(255,255,255,0.85)', font: { color: '#0f1623', size: 10 },
                   xanchor: 'left', yanchor: 'bottom' },
         showlegend: true,
         shapes: shapes,
@@ -14452,7 +14529,7 @@ function archiveShowSondeWind(idx) {
         xref: 'paper', yref: 'paper',
         x: 0.5, y: -0.18,
         showarrow: false,
-        font: { color: '#94a3b8', size: 9.5 },
+        font: { color: '#5b6573', size: 9.5 },
         xanchor: 'center', yanchor: 'top',
     });
 
@@ -14726,7 +14803,7 @@ function _createStandaloneMWPlanView() {
                     '<div class="dual-pane-label">Microwave Satellite</div>' +
                     '<div class="dual-pane-inner" style="position:relative;">' +
                         '<div id="plotly-chart" style="width:100%;height:100%;min-height:360px;"></div>' +
-                        '<button onclick="openPlotModal()" title="Expand to fullscreen" style="position:absolute;top:6px;left:6px;z-index:10;background:rgba(15, 22, 35,0.08);border:none;color:#ccc;font-size:16px;width:28px;height:28px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background 0.2s;" onmouseover="this.style.background=\'rgba(15, 22, 35,0.2)\'" onmouseout="this.style.background=\'rgba(15, 22, 35,0.08)\'">\u26F6</button>' +
+                        '<button onclick="openPlotModal()" title="Expand to fullscreen" style="position:absolute;top:6px;left:6px;z-index:10;background:rgba(15, 22, 35,0.08);border:none;color:#5b6573;font-size:16px;width:28px;height:28px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background 0.2s;" onmouseover="this.style.background=\'rgba(15, 22, 35,0.2)\'" onmouseout="this.style.background=\'rgba(15, 22, 35,0.08)\'">\u26F6</button>' +
                     '</div>' +
                 '</div>' +
                 '<div class="dual-pane-divider" title="Toggle azimuthal mean panel" onclick="_toggleDualPane()"></div>' +
@@ -14768,12 +14845,12 @@ function _createStandaloneMWPlanView() {
             paper_bgcolor: plotBg, plot_bgcolor: plotBg,
             xaxis: { title: { text: 'Eastward distance (km)', font: { color: '#5b6573', size: 10 } },
                      tickfont: { color: '#5b6573', size: 9 },
-                     gridcolor: 'rgba(15, 22, 35,0.04)', zeroline: true,
+                     gridcolor: 'rgba(15, 22, 35,0.22)', zeroline: true,
                      zerolinecolor: 'rgba(15, 22, 35,0.12)',
                      scaleanchor: 'y', range: [-ext, ext] },
             yaxis: { title: { text: 'Northward distance (km)', font: { color: '#5b6573', size: 10 } },
                      tickfont: { color: '#5b6573', size: 9 },
-                     gridcolor: 'rgba(15, 22, 35,0.04)', zeroline: true,
+                     gridcolor: 'rgba(15, 22, 35,0.22)', zeroline: true,
                      zerolinecolor: 'rgba(15, 22, 35,0.12)',
                      scaleanchor: 'x', scaleratio: 1, range: [-ext, ext] },
             margin: { l: 52, r: 16, t: 46, b: 44 },
@@ -14804,8 +14881,8 @@ function _createStandaloneMWPlanView() {
         var mwTrace = {
             z: _mwStormGrid.z, x: _mwStormGrid.x_axis, y: _mwStormGrid.y_axis,
             type: 'heatmap', colorscale: cs, zmin: _mwVmin, zmax: _mwVmax,
-            colorbar: { title: { text: cbarTitle, font: { color: '#ccc', size: 10 } },
-                        tickfont: { color: '#ccc', size: 9 }, thickness: 12, len: 0.85 },
+            colorbar: { title: { text: cbarTitle, font: { color: '#5b6573', size: 10 } },
+                        tickfont: { color: '#5b6573', size: 9 }, thickness: 12, len: 0.85 },
             hovertemplate: '<b>MW %{z:.0f} K</b><br>X: %{x:.0f} km  Y: %{y:.0f} km<extra>MW</extra>',
             hoverongaps: false, name: 'MW ' + cbarTitle.replace(' (K)', ''), _isMW: true
         };
@@ -14814,12 +14891,12 @@ function _createStandaloneMWPlanView() {
             paper_bgcolor: plotBg, plot_bgcolor: plotBg,
             xaxis: { title: { text: 'Eastward distance (km)', font: { color: '#5b6573', size: 10 } },
                      tickfont: { color: '#5b6573', size: 9 },
-                     gridcolor: 'rgba(15, 22, 35,0.04)', zeroline: true,
+                     gridcolor: 'rgba(15, 22, 35,0.22)', zeroline: true,
                      zerolinecolor: 'rgba(15, 22, 35,0.12)',
                      scaleanchor: 'y', range: [-ext2, ext2] },
             yaxis: { title: { text: 'Northward distance (km)', font: { color: '#5b6573', size: 10 } },
                      tickfont: { color: '#5b6573', size: 9 },
-                     gridcolor: 'rgba(15, 22, 35,0.04)', zeroline: true,
+                     gridcolor: 'rgba(15, 22, 35,0.22)', zeroline: true,
                      zerolinecolor: 'rgba(15, 22, 35,0.12)',
                      scaleanchor: 'x', scaleratio: 1, range: [-ext2, ext2] },
             margin: { l: 52, r: 60, t: 46, b: 44 },
@@ -15172,20 +15249,20 @@ function renderMWTimeline(overpasses) {
 
     var layout = {
         xaxis: {
-            title: { text: 'Date / Time (UTC)', font: { color: '#94a3b8', size: 10 } },
-            color: '#94a3b8',
+            title: { text: 'Date / Time (UTC)', font: { color: '#5b6573', size: 10 } },
+            color: '#5b6573',
             gridcolor: 'rgba(15, 22, 35,0.05)',
-            tickfont: { size: 9, color: '#94a3b8' },
+            tickfont: { size: 9, color: '#5b6573' },
             tickformat: '%b %d\n%Hz',
             hoverformat: '%Y-%m-%d %H:%Mz'
         },
         yaxis: {
             title: '',
-            color: '#94a3b8',
+            color: '#5b6573',
             gridcolor: 'rgba(15, 22, 35,0.06)',
             tickvals: tickvals,
             ticktext: ticktext,
-            tickfont: { size: 10, color: '#cbd5e1' },
+            tickfont: { size: 10, color: '#5b6573' },
             range: [-0.6, sensorOrder.length - 0.4],
             fixedrange: true
         },
