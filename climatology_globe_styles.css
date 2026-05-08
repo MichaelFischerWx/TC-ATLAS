@@ -62,11 +62,17 @@
    chrome would slip through. These rules are scoped to the dark
    theme attribute and use !important so dark mode wins regardless
    of cascade order with the vendored globe.css. */
-:root[data-theme="dark"] .sidebar,
+/* Use aside.sidebar#sidebar for maximum specificity (0,1,1,2 +
+   !important) — guarantees no late-loading vendor rule can win. */
+:root[data-theme="dark"] aside.sidebar#sidebar,
 :root[data-theme="dark"] .sidebar-backdrop,
-:root[data-theme="dark"] .sidebar .panel {
-    background: #11161f !important;
+:root[data-theme="dark"] aside.sidebar#sidebar * {
+    background-color: #11161f !important;
     color: #e6e8eb !important;
+}
+:root[data-theme="dark"] aside.sidebar#sidebar .panel,
+:root[data-theme="dark"] aside.sidebar#sidebar .composite-details {
+    background-color: #11161f !important;
 }
 :root[data-theme="dark"] .sidebar .section-label,
 :root[data-theme="dark"] .sidebar label {
