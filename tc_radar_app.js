@@ -4070,7 +4070,7 @@ function renderCrossSectionInto(targetId, json, fullsize) {
     var csOverlayLabel = json.overlay ? '<br><span style="font-size:0.85em;color:#9ca3af;">Contours: ' + json.overlay.display_name + ' (' + json.overlay.units + ')</span>' : '';
     var title = 'Cross Section: (' + ep.x0.toFixed(0) + ',' + ep.y0.toFixed(0) + ') \u2192 (' + ep.x1.toFixed(0) + ',' + ep.y1.toFixed(0) + ') km' + csOverlayLabel;
     var plotBg = '#ffffff';
-    var layout = { title: { text: title, font: { color: '#0f1623', size: fontSize.title }, y: 0.97, x: 0.5, xanchor: 'center' }, paper_bgcolor: plotBg, plot_bgcolor: plotBg, xaxis: { title: { text: 'Distance along line (km)', font: { color: '#5b6573', size: fontSize.axis } }, tickfont: { color: '#5b6573', size: fontSize.tick }, gridcolor: 'rgba(15, 22, 35,0.14)', zeroline: false }, yaxis: { title: { text: 'Height (km)', font: { color: '#5b6573', size: fontSize.axis } }, tickfont: { color: '#5b6573', size: fontSize.tick }, gridcolor: 'rgba(15, 22, 35,0.14)', zeroline: false }, margin: fullsize ? { l:55,r:24,t:json.overlay?70:50,b:46 } : { l:45,r:12,t:json.overlay?62:44,b:38 }, hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: fontSize.hover } }, showlegend: false };
+    var layout = { title: { text: title, font: { color: '#0f1623', size: fontSize.title }, y: fullsize ? 0.93 : 0.96, x: 0.5, xanchor: 'center', yanchor: 'top' }, paper_bgcolor: plotBg, plot_bgcolor: plotBg, xaxis: { title: { text: 'Distance along line (km)', font: { color: '#5b6573', size: fontSize.axis } }, tickfont: { color: '#5b6573', size: fontSize.tick }, gridcolor: 'rgba(15, 22, 35,0.14)', zeroline: false }, yaxis: { title: { text: 'Height (km)', font: { color: '#5b6573', size: fontSize.axis } }, tickfont: { color: '#5b6573', size: fontSize.tick }, gridcolor: 'rgba(15, 22, 35,0.14)', zeroline: false }, margin: fullsize ? { l:55,r:24,t:json.overlay?92:78,b:46 } : { l:45,r:12,t:json.overlay?62:44,b:38 }, hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: fontSize.hover } }, showlegend: false };
     var csOverlayTraces = buildOverlayContours(json, null, null, true);
 
     // Max value marker + annotation for cross-section
@@ -4326,7 +4326,7 @@ function renderAzimuthalMeanInto(targetId, json, fullsize) {
     var shapes = [];
     if (meta.rmw_km && !isNaN(meta.rmw_km)) shapes.push({ type:'line',xref:'x',yref:'paper',x0:meta.rmw_km,x1:meta.rmw_km,y0:0,y1:1,line:{color:'white',width:1.5,dash:'dash'} });
     var plotBg = '#ffffff';
-    var layout = { title: { text: title, font: { color: '#0f1623', size: fontSize.title }, y: 0.97, x: 0.5, xanchor: 'center' }, paper_bgcolor: plotBg, plot_bgcolor: plotBg, xaxis: { title: { text: 'Radius (km)', font: { color: '#5b6573', size: fontSize.axis } }, tickfont: { color: '#5b6573', size: fontSize.tick }, gridcolor: 'rgba(15, 22, 35,0.14)', zeroline: false }, yaxis: { title: { text: 'Height (km)', font: { color: '#5b6573', size: fontSize.axis } }, tickfont: { color: '#5b6573', size: fontSize.tick }, gridcolor: 'rgba(15, 22, 35,0.14)', zeroline: false }, margin: fullsize ? { l:55,r:24,t:json.overlay?96:80,b:46 } : { l:45,r:12,t:json.overlay?78:64,b:38 }, shapes: shapes, hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: fontSize.hover } }, showlegend: false };
+    var layout = { title: { text: title, font: { color: '#0f1623', size: fontSize.title }, y: fullsize ? 0.93 : 0.96, x: 0.5, xanchor: 'center', yanchor: 'top' }, paper_bgcolor: plotBg, plot_bgcolor: plotBg, xaxis: { title: { text: 'Radius (km)', font: { color: '#5b6573', size: fontSize.axis } }, tickfont: { color: '#5b6573', size: fontSize.tick }, gridcolor: 'rgba(15, 22, 35,0.14)', zeroline: false }, yaxis: { title: { text: 'Height (km)', font: { color: '#5b6573', size: fontSize.axis } }, tickfont: { color: '#5b6573', size: fontSize.tick }, gridcolor: 'rgba(15, 22, 35,0.14)', zeroline: false }, margin: fullsize ? { l:55,r:24,t:json.overlay?112:98,b:46 } : { l:45,r:12,t:json.overlay?78:64,b:38 }, shapes: shapes, hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: fontSize.hover } }, showlegend: false };
 
     // Max value marker + annotation for azimuthal mean
     var azMaxInfo = findDataMax(azData, radius_km, height_km);
@@ -4435,7 +4435,7 @@ function renderHybridAzimuthalMeanInto(targetId, json, fullsize) {
 
     var plotBg = '#ffffff';
     var layout = {
-        title: { text: title, font: { color: '#0f1623', size: fontSize.title }, y: 0.97, x: 0.5, xanchor: 'center' },
+        title: { text: title, font: { color: '#0f1623', size: fontSize.title }, y: fullsize ? 0.93 : 0.96, x: 0.5, xanchor: 'center', yanchor: 'top' },
         paper_bgcolor: plotBg, plot_bgcolor: plotBg,
         xaxis: { title: { text: 'R\u2095 (RMW + km)', font: { color: '#5b6573', size: fontSize.axis } },
                  tickvals: ticks.tickvals, ticktext: ticks.ticktext,
@@ -4444,7 +4444,7 @@ function renderHybridAzimuthalMeanInto(targetId, json, fullsize) {
         yaxis: { title: { text: 'Height (km)', font: { color: '#5b6573', size: fontSize.axis } },
                  tickfont: { color: '#5b6573', size: fontSize.tick },
                  gridcolor: 'rgba(15, 22, 35,0.14)', zeroline: false },
-        margin: fullsize ? { l:55,r:24,t:80,b:46 } : { l:45,r:12,t:64,b:38 },
+        margin: fullsize ? { l:55,r:24,t:98,b:46 } : { l:45,r:12,t:64,b:38 },
         shapes: shapes, showlegend: false,
         annotations: [_fischerCitation]
     };
@@ -4533,7 +4533,7 @@ function renderAnomalyAzimuthalMeanInto(targetId, json, fullsize) {
 
     var plotBg = '#ffffff';
     var layout = {
-        title: { text: title, font: { color: '#0f1623', size: fontSize.title }, y: 0.97, x: 0.5, xanchor: 'center' },
+        title: { text: title, font: { color: '#0f1623', size: fontSize.title }, y: fullsize ? 0.93 : 0.96, x: 0.5, xanchor: 'center', yanchor: 'top' },
         paper_bgcolor: plotBg, plot_bgcolor: plotBg,
         xaxis: { title: { text: 'R\u2095 (RMW + km)', font: { color: '#5b6573', size: fontSize.axis } },
                  tickvals: ticks.tickvals, ticktext: ticks.ticktext,
@@ -4542,7 +4542,7 @@ function renderAnomalyAzimuthalMeanInto(targetId, json, fullsize) {
         yaxis: { title: { text: 'Height (km)', font: { color: '#5b6573', size: fontSize.axis } },
                  tickfont: { color: '#5b6573', size: fontSize.tick },
                  gridcolor: 'rgba(15, 22, 35,0.14)', zeroline: false },
-        margin: fullsize ? { l:55,r:24,t:96,b:46 } : { l:45,r:12,t:78,b:38 },
+        margin: fullsize ? { l:55,r:24,t:112,b:46 } : { l:45,r:12,t:78,b:38 },
         shapes: shapes, showlegend: false,
         annotations: [_fischerCitation]
     };
@@ -7040,7 +7040,7 @@ function openPlotModal(csJson) {
     }
 
     var d = window._lastPlotlyData;
-    var fullLayout = Object.assign({}, d.baseLayout, { title: { text: d.title, font: { color: '#0f1623', size: 15 }, y: 0.97, x: 0.5, xanchor: 'center', yanchor: 'top' }, margin: { l:65,r:30,t:d.overlayTraces&&d.overlayTraces.length?80:64,b:55 }, xaxis: Object.assign({}, d.baseLayout.xaxis, { title: { text: 'Eastward distance (km)', font: { color: '#5b6573', size: 13 } }, tickfont: { color: '#5b6573', size: 11 } }), yaxis: Object.assign({}, d.baseLayout.yaxis, { title: { text: 'Northward distance (km)', font: { color: '#5b6573', size: 13 } }, tickfont: { color: '#5b6573', size: 11 } }) });
+    var fullLayout = Object.assign({}, d.baseLayout, { title: { text: d.title, font: { color: '#0f1623', size: 15 }, y: 0.93, x: 0.5, xanchor: 'center', yanchor: 'top' }, margin: { l:65,r:30,t:d.overlayTraces&&d.overlayTraces.length?100:88,b:55 }, xaxis: Object.assign({}, d.baseLayout.xaxis, { title: { text: 'Eastward distance (km)', font: { color: '#5b6573', size: 13 } }, tickfont: { color: '#5b6573', size: 11 } }), yaxis: Object.assign({}, d.baseLayout.yaxis, { title: { text: 'Northward distance (km)', font: { color: '#5b6573', size: 13 } }, tickfont: { color: '#5b6573', size: 11 } }) });
     // Scale up annotations for fullscreen
     if (fullLayout.annotations) {
         fullLayout.annotations = fullLayout.annotations.map(function(a) {
