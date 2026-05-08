@@ -109,7 +109,14 @@ function _tcaPlotlyBase() {
 Object.defineProperty(window, 'PLOTLY_LAYOUT_BASE', {
     get: _tcaPlotlyBase, configurable: true
 });
-var PLOTLY_LAYOUT_BASE = window.PLOTLY_LAYOUT_BASE;
+// NOTE: do NOT add `var PLOTLY_LAYOUT_BASE = window.PLOTLY_LAYOUT_BASE;` here.
+// Top-level var declarations are hoisted in GlobalDeclarationInstantiation,
+// which creates a non-configurable data property on window BEFORE this
+// script body runs — making the Object.defineProperty above throw
+// "Cannot redefine property: PLOTLY_LAYOUT_BASE" and aborting the rest of
+// the file (including event-listener wiring like _bindSubnav). Bare
+// `PLOTLY_LAYOUT_BASE` references below resolve to window.PLOTLY_LAYOUT_BASE
+// via the global scope chain, calling the getter — same behavior, no clash.
 
 var PLOTLY_CONFIG = {
     responsive: true,
