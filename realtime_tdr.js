@@ -3209,7 +3209,7 @@
         layout.annotations.push({
             text: plotInfoParts.join(' \u00b7 '),
             xref: 'paper', yref: 'paper', x: 0.5, y: -0.18,
-            showarrow: false, font: { color: '#94a3b8', size: 9.5 }, xanchor: 'center', yanchor: 'top',
+            showarrow: false, font: { color: '#5b6573', size: 9.5 }, xanchor: 'center', yanchor: 'top',
         });
 
         Plotly.newPlot(chartDiv, traces, layout, { responsive: true, displayModeBar: false });
@@ -3984,7 +3984,7 @@
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: 'rgba(247,248,250,0.85)',
             margin: { l: 55, r: 55, t: 8, b: 40 },
-            font: { family: 'DM Sans, sans-serif', size: 11, color: '#94a3b8' },
+            font: { family: 'DM Sans, sans-serif', size: 11, color: '#5b6573' },
             legend: {
                 orientation: 'v', x: 1.0, xanchor: 'right', y: 1.0, yanchor: 'top',
                 font: { size: 9 }, bgcolor: 'rgba(10,15,25,0.7)',
@@ -3994,7 +3994,7 @@
             hovermode: 'x unified',
             xaxis: {
                 title: { text: 'Minutes from Analysis Time', font: { size: 11 } },
-                color: '#94a3b8',
+                color: '#5b6573',
                 gridcolor: gridColor,
                 zeroline: true,
                 zerolinecolor: 'rgba(96,165,250,0.5)',

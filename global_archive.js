@@ -911,7 +911,7 @@ function renderMarkers(storms) {
             '<div style="min-width:180px;">' +
             '<div style="font-weight:700;font-size:14px;margin-bottom:4px;">' + (s.name || 'UNNAMED') +
             ' <span class="intensity-badge" style="background:' + color + ';font-size:10px;padding:1px 6px;">' + cat + '</span></div>' +
-            '<div style="font-size:12px;color:#94a3b8;margin-bottom:6px;">' + s.year + ' &middot; ' + (BASIN_NAMES[s.basin] || s.basin) + '</div>' +
+            '<div style="font-size:12px;color:var(--slate);margin-bottom:6px;">' + s.year + ' &middot; ' + (BASIN_NAMES[s.basin] || s.basin) + '</div>' +
             '<div style="font-size:12px;"><b>Peak:</b> ' + (s.peak_wind_kt || '?') + ' kt &middot; ' + (s.min_pres_hpa || '?') + ' hPa</div>' +
             '<div style="font-size:12px;"><b>ACE:</b> ' + (s.ace || 0).toFixed(1) + '</div>' +
             '<div style="margin-top:8px;text-align:center;">' +
@@ -1957,7 +1957,7 @@ function renderHovmoller(data) {
         plot_bgcolor: 'rgba(0,0,0,0)',
         font: { family: 'DM Sans, sans-serif', color: '#5b6573', size: 10 },
         margin: { t: 36, r: 50, b: 36, l: 100 },
-        title: { text: titleText, font: { size: 11, color: '#94a3b8' }, x: 0.5, y: 0.995 },
+        title: { text: titleText, font: { size: 11, color: '#5b6573' }, x: 0.5, y: 0.995 },
         xaxis: {
             title: { text: 'Radius (km)', font: { size: 9 } },
             tickfont: { size: 8 },
@@ -2316,7 +2316,7 @@ function _vdmRenderOnMap() {
         var flightDate = v.time ? v.time.substring(0, 10) : '';
 
         var tip = '<b>VDM — ' + (v.storm_name || '') + ' OB ' + (v.ob_number || '?') + '</b><br>' +
-            '<span style="color:#94a3b8;">' + acName + ' · ' + flightDate + '</span><br>' +
+            '<span style="color:var(--slate);">' + acName + ' · ' + flightDate + '</span><br>' +
             (v.time ? v.time.substring(11, 19) + ' UTC<br>' : '') +
             (v.max_fl_wind_kt != null ? 'Max FL: ' + v.max_fl_wind_kt + ' kt<br>' : '') +
             (v.min_slp_hpa != null ? 'Min SLP: ' + v.min_slp_hpa + ' hPa<br>' : '') +
@@ -3967,7 +3967,7 @@ function updateHovCenterMarker(frameDtStr) {
         var g1Pass = g.g1_rad_dif >= 15;
         var g2Pass = g.g2_std_ratio < 0.7;
         var g3Pass = g.g3_diff != null && g.g3_diff <= 7;
-        gateHtml = '<br><span style="font-size:10px;color:#94a3b8;">' +
+        gateHtml = '<br><span style="font-size:10px;color:var(--slate);">' +
             (g1Pass ? '✓' : '✗') + ' ΔT=' + g.g1_rad_dif + 'K (≥15)' +
             '<br>' + (g2Pass ? '✓' : '✗') + ' σ ratio=' + g.g2_std_ratio + ' (<0.7)' +
             '<br>' + (g3Pass ? '✓' : '✗') + ' Ring=' + g.g3_ring_C + '°C, P1=' + (g.g3_p1_C != null ? g.g3_p1_C : '?') + '°C (Δ' + (g.g3_diff != null ? g.g3_diff : '?') + '≤7)' +
@@ -5193,7 +5193,7 @@ function _updateGaNexradColorbar(product) {
                 '<div style="flex:1;background:#FF0000;"></div>' +
                 '<div style="flex:1;background:#C80000;"></div>' +
             '</div>' +
-            '<div style="display:flex;justify-content:space-between;font-size:8px;color:#94a3b8;margin-top:1px;">' +
+            '<div style="display:flex;justify-content:space-between;font-size:8px;color:var(--slate);margin-top:1px;">' +
                 '<span>-100 m/s</span><span>0</span><span>+100 m/s</span>' +
             '</div>';
     } else {
@@ -5214,7 +5214,7 @@ function _updateGaNexradColorbar(product) {
                 '<div style="flex:1;background:#F800FD;"></div>' +
                 '<div style="flex:1;background:#9854C6;"></div>' +
             '</div>' +
-            '<div style="display:flex;justify-content:space-between;font-size:8px;color:#94a3b8;margin-top:1px;">' +
+            '<div style="display:flex;justify-content:space-between;font-size:8px;color:var(--slate);margin-top:1px;">' +
                 '<span>5 dBZ</span><span>20</span><span>35</span><span>50</span><span>65</span>' +
             '</div>';
     }
@@ -7252,7 +7252,7 @@ function _renderCompareHov(side, data) {
         plot_bgcolor: 'rgba(0,0,0,0)',
         font: { family: 'DM Sans, sans-serif', color: '#5b6573', size: 9 },
         margin: { t: 22, r: 8, b: 30, l: 80 },
-        title: { text: stormName, font: { size: 10, color: '#94a3b8' }, x: 0.5, y: 0.99 },
+        title: { text: stormName, font: { size: 10, color: '#5b6573' }, x: 0.5, y: 0.99 },
         xaxis: {
             title: { text: 'Radius (km)', font: { size: 8 } },
             tickfont: { size: 7 },
@@ -10170,7 +10170,7 @@ function _gaFLInjectLegend() {
 
     var html = '<div style="margin-top:2px;">' +
         '<div style="height:12px;border-radius:3px;background:linear-gradient(to right,' + gradStops + ');border:1px solid rgba(15, 22, 35,0.1);"></div>' +
-        '<div style="display:flex;justify-content:space-between;font-size:8px;color:#94a3b8;margin-top:1px;">';
+        '<div style="display:flex;justify-content:space-between;font-size:8px;color:var(--slate);margin-top:1px;">';
     stops.forEach(function (s) {
         html += '<span>' + (s.lbl || s.val) + '</span>';
     });
@@ -11404,19 +11404,19 @@ function _gaSondeRenderSkewTInfo(profiles, sonde, idx) {
     if (!el) return;
 
     var d = profiles._derived || {};
-    var html = '<div style="font-weight:600;color:#6ee7b7;margin-bottom:6px;">Derived Parameters</div>';
+    var html = '<div style="font-weight:600;color:var(--um-green);margin-bottom:6px;">Derived Parameters</div>';
     html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 8px;font-size:9px;">';
-    html += '<span style="color:#94a3b8;">CAPE:</span><span>' + (d.cape != null ? d.cape + ' J/kg' : '\u2014') + '</span>';
-    html += '<span style="color:#94a3b8;">CIN:</span><span>' + (d.cin != null ? d.cin + ' J/kg' : '\u2014') + '</span>';
-    html += '<span style="color:#94a3b8;">PWAT:</span><span>' + (d.pwat != null ? d.pwat.toFixed(1) + ' mm' : '\u2014') + '</span>';
-    html += '<span style="color:#94a3b8;">LCL:</span><span>' + (d.lcl_p != null ? d.lcl_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
-    html += '<span style="color:#94a3b8;">LFC:</span><span>' + (d.lfc_p != null ? d.lfc_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
-    html += '<span style="color:#94a3b8;">EL:</span><span>' + (d.el_p != null ? d.el_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
-    html += '<span style="color:#94a3b8;">0\u00b0C:</span><span>' + (d.freezing_p != null ? d.freezing_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
+    html += '<span style="color:var(--slate);">CAPE:</span><span>' + (d.cape != null ? d.cape + ' J/kg' : '\u2014') + '</span>';
+    html += '<span style="color:var(--slate);">CIN:</span><span>' + (d.cin != null ? d.cin + ' J/kg' : '\u2014') + '</span>';
+    html += '<span style="color:var(--slate);">PWAT:</span><span>' + (d.pwat != null ? d.pwat.toFixed(1) + ' mm' : '\u2014') + '</span>';
+    html += '<span style="color:var(--slate);">LCL:</span><span>' + (d.lcl_p != null ? d.lcl_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
+    html += '<span style="color:var(--slate);">LFC:</span><span>' + (d.lfc_p != null ? d.lfc_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
+    html += '<span style="color:var(--slate);">EL:</span><span>' + (d.el_p != null ? d.el_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
+    html += '<span style="color:var(--slate);">0\u00b0C:</span><span>' + (d.freezing_p != null ? d.freezing_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
     html += '</div>';
 
     // Surface info
-    html += '<div style="margin-top:8px;font-weight:600;color:#6ee7b7;margin-bottom:4px;">Surface</div>';
+    html += '<div style="margin-top:8px;font-weight:600;color:var(--um-green);margin-bottom:4px;">Surface</div>';
     html += '<div style="font-size:9px;">';
     html += 'Hit surface: ' + (sonde.hit_surface ? 'Yes' : 'No') + '<br>';
     if (sonde.splash_pr) html += 'Splash P: ' + sonde.splash_pr.toFixed(1) + ' hPa<br>';
@@ -11650,7 +11650,7 @@ function _gaFLRenderTimeSeries() {
         paper_bgcolor: 'rgba(0,0,0,0)',
         plot_bgcolor: 'rgba(0,0,0,0)',
         margin: { t: 10, r: 60, b: 40, l: 55 },
-        font: { family: 'DM Sans, sans-serif', color: '#94a3b8', size: 10 },
+        font: { family: 'DM Sans, sans-serif', color: '#5b6573', size: 10 },
         legend: { orientation: 'h', y: 1.12, font: { size: 9 } },
         xaxis: {
             title: _gaFLXAxisMode === 'time' ? 'Time (UTC)' : 'Radius from center (km)',
@@ -11914,8 +11914,8 @@ function _gaFLRenderTimeSeries() {
                     x: moTimes, y: mo30s,
                     type: 'scatter', mode: 'lines',
                     name: chartProdLabel + ' 30s',
-                    line: { color: '#94a3b8', width: 1 },
-                    marker: { color: '#94a3b8', symbol: 'circle', size: 3 },
+                    line: { color: '#5b6573', width: 1 },
+                    marker: { color: '#5b6573', symbol: 'circle', size: 3 },
                     connectgaps: false,
                     hovertemplate: '%{text}<extra></extra>',
                     text: moHovers,

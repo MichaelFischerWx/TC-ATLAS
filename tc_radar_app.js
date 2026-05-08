@@ -13451,7 +13451,7 @@ function _archFLTSRender(flData) {
         paper_bgcolor: 'rgba(0,0,0,0)',
         plot_bgcolor: 'rgba(247,248,250,0.85)',
         margin: { l: 55, r: 55, t: 8, b: 40 },
-        font: { family: 'DM Sans, sans-serif', size: 11, color: '#94a3b8' },
+        font: { family: 'DM Sans, sans-serif', size: 11, color: '#5b6573' },
         legend: {
             orientation: 'v', x: 1.0, xanchor: 'right', y: 1.0, yanchor: 'top',
             font: { size: 9 }, bgcolor: 'rgba(10,15,25,0.7)',
@@ -13461,7 +13461,7 @@ function _archFLTSRender(flData) {
         hovermode: 'x unified',
         xaxis: {
             title: { text: _archFLTSXAxis === 'radius' ? 'Distance from Center (km)' : 'Minutes from TDR Scan', font: { size: 11 } },
-            color: '#94a3b8',
+            color: '#5b6573',
             gridcolor: gridColor,
             zeroline: _archFLTSXAxis === 'time',
             zerolinecolor: 'rgba(96,165,250,0.5)',
@@ -14529,7 +14529,7 @@ function archiveShowSondeWind(idx) {
         xref: 'paper', yref: 'paper',
         x: 0.5, y: -0.18,
         showarrow: false,
-        font: { color: '#94a3b8', size: 9.5 },
+        font: { color: '#5b6573', size: 9.5 },
         xanchor: 'center', yanchor: 'top',
     });
 
@@ -15249,16 +15249,16 @@ function renderMWTimeline(overpasses) {
 
     var layout = {
         xaxis: {
-            title: { text: 'Date / Time (UTC)', font: { color: '#94a3b8', size: 10 } },
-            color: '#94a3b8',
+            title: { text: 'Date / Time (UTC)', font: { color: '#5b6573', size: 10 } },
+            color: '#5b6573',
             gridcolor: 'rgba(15, 22, 35,0.05)',
-            tickfont: { size: 9, color: '#94a3b8' },
+            tickfont: { size: 9, color: '#5b6573' },
             tickformat: '%b %d\n%Hz',
             hoverformat: '%Y-%m-%d %H:%Mz'
         },
         yaxis: {
             title: '',
-            color: '#94a3b8',
+            color: '#5b6573',
             gridcolor: 'rgba(15, 22, 35,0.06)',
             tickvals: tickvals,
             ticktext: ticktext,

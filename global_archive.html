@@ -58,7 +58,7 @@
     <link rel="apple-touch-icon" sizes="192x192" href="tc-atlas-favicon-192.png">
 
     <title>Global TC Archive — TC-ATLAS</title>
-    <script src="theme.js?v=20260507s"></script>
+    <script src="theme.js?v=20260507t"></script>
 
     <!-- Leaflet -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -76,8 +76,8 @@
     <link rel="preconnect" href="https://tc-atlas-api-361010099051.us-east1.run.app">
     <link rel="dns-prefetch" href="https://cdnjs.cloudflare.com">
 
-    <link rel="stylesheet" href="tc_radar_styles.css?v=20260507s">
-    <link rel="stylesheet" href="global_archive_styles.css?v=20260507s">
+    <link rel="stylesheet" href="tc_radar_styles.css?v=20260507t">
+    <link rel="stylesheet" href="global_archive_styles.css?v=20260507t">
 </head>
 <body>
     <a href="#global-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -387,7 +387,7 @@
                     <!-- Track Map + IR Overlay -->
                     <div class="detail-panel detail-map-panel">
                         <div class="panel-header">
-                            <h3 style="font-size:11px;color:#8b9ec2;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Overlays</h3>
+                            <h3 style="font-size:11px;color:var(--slate);font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Overlays</h3>
                             <div id="ir-toggle-wrap" style="display:none;">
                                 <button id="ir-toggle-btn" class="ga-btn ga-btn-sm ir-toggle-btn" onclick="toggleIROverlay()">
                                     Show IR
@@ -568,11 +568,11 @@
                             </div>
                         </div>
                         <!-- Controls below the map so they don't cover the imagery -->
-                        <div id="ga-mw-controls" style="display:none;background:#ffffff;border:1px solid rgba(251,146,60,0.3);border-radius:6px;padding:6px 10px;margin-top:4px;">
+                        <div id="ga-mw-controls" style="display:none;background:var(--surface-raised);border:1px solid rgba(251,146,60,0.3);border-radius:6px;padding:6px 10px;margin-top:4px;">
                             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                                 <label style="font-size:10px;font-weight:600;color:#b8540d;text-transform:uppercase;letter-spacing:0.5px;">MW Overpass</label>
-                                <select id="ga-mw-overpass-select" onchange="loadGlobalMWOverpass()" style="flex:1;min-width:200px;font-size:10px;padding:3px 6px;border:1px solid rgba(15,22,35,0.12);border-radius:4px;background:#ffffff;color:#0f1623;font-variant-numeric: tabular-nums;"></select>
-                                <select id="ga-mw-product-select" onchange="loadGlobalMWOverpass()" style="font-size:10px;padding:3px 6px;border:1px solid rgba(15,22,35,0.12);border-radius:4px;background:#ffffff;color:#0f1623;font-variant-numeric: tabular-nums;">
+                                <select id="ga-mw-overpass-select" onchange="loadGlobalMWOverpass()" style="flex:1;min-width:200px;font-size:10px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;background:var(--surface-raised);color:var(--text);font-variant-numeric: tabular-nums;"></select>
+                                <select id="ga-mw-product-select" onchange="loadGlobalMWOverpass()" style="font-size:10px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;background:var(--surface-raised);color:var(--text);font-variant-numeric: tabular-nums;">
                                     <option value="89pct">89 GHz PCT</option>
                                     <option value="89v">89 GHz V-pol</option>
                                     <option value="89h">89 GHz H-pol</option>
@@ -584,12 +584,12 @@
                             </div>
                         </div>
                         <!-- NEXRAD 88D ground radar controls -->
-                        <div id="ga-nexrad-controls" style="display:none;background:#ffffff;border:1px solid rgba(34,197,94,0.3);border-radius:6px;padding:6px 10px;margin-top:4px;">
+                        <div id="ga-nexrad-controls" style="display:none;background:var(--surface-raised);border:1px solid rgba(34,197,94,0.3);border-radius:6px;padding:6px 10px;margin-top:4px;">
                             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                                 <label style="font-size:10px;font-weight:600;color:#15803d;text-transform:uppercase;letter-spacing:0.5px;">88D Site</label>
-                                <select id="ga-nexrad-site-select" onchange="loadNexradScans()" style="flex:1;min-width:140px;font-size:10px;padding:3px 6px;border:1px solid rgba(15,22,35,0.12);border-radius:4px;background:#ffffff;color:#0f1623;font-variant-numeric: tabular-nums;"></select>
-                                <select id="ga-nexrad-scan-select" onchange="loadNexradFrame()" style="flex:1;min-width:160px;font-size:10px;padding:3px 6px;border:1px solid rgba(15,22,35,0.12);border-radius:4px;background:#ffffff;color:#0f1623;font-variant-numeric: tabular-nums;"></select>
-                                <select id="ga-nexrad-product-select" onchange="loadNexradFrame()" style="font-size:10px;padding:3px 6px;border:1px solid rgba(15,22,35,0.12);border-radius:4px;background:#ffffff;color:#0f1623;font-variant-numeric: tabular-nums;">
+                                <select id="ga-nexrad-site-select" onchange="loadNexradScans()" style="flex:1;min-width:140px;font-size:10px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;background:var(--surface-raised);color:var(--text);font-variant-numeric: tabular-nums;"></select>
+                                <select id="ga-nexrad-scan-select" onchange="loadNexradFrame()" style="flex:1;min-width:160px;font-size:10px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;background:var(--surface-raised);color:var(--text);font-variant-numeric: tabular-nums;"></select>
+                                <select id="ga-nexrad-product-select" onchange="loadNexradFrame()" style="font-size:10px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;background:var(--surface-raised);color:var(--text);font-variant-numeric: tabular-nums;">
                                     <option value="reflectivity">Reflectivity</option>
                                     <option value="velocity">Velocity</option>
                                 </select>
@@ -598,10 +598,10 @@
                             <div id="ga-nexrad-colorbar" style="margin-top:4px;"></div>
                         </div>
                         <!-- Flight-level reconnaissance controls -->
-                        <div id="ga-fl-controls" style="display:none;background:#ffffff;border:1px solid rgba(96,165,250,0.3);border-radius:6px;padding:6px 10px;margin-top:4px;">
+                        <div id="ga-fl-controls" style="display:none;background:var(--surface-raised);border:1px solid rgba(96,165,250,0.3);border-radius:6px;padding:6px 10px;margin-top:4px;">
                             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                                 <label style="font-size:10px;font-weight:600;color:#1d4ed8;text-transform:uppercase;letter-spacing:0.5px;">Mission</label>
-                                <select id="ga-fl-mission-select" onchange="gaFLSelectMission()" style="flex:1;min-width:220px;font-size:10px;padding:3px 6px;border:1px solid rgba(15,22,35,0.12);border-radius:4px;background:#ffffff;color:#0f1623;font-variant-numeric: tabular-nums;"></select>
+                                <select id="ga-fl-mission-select" onchange="gaFLSelectMission()" style="flex:1;min-width:220px;font-size:10px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;background:var(--surface-raised);color:var(--text);font-variant-numeric: tabular-nums;"></select>
                                 <label class="gif-toggle" style="width:28px;height:16px;" title="Auto-sync mission to IR frame time">
                                     <input type="checkbox" id="ga-fl-auto-sync" checked onchange="gaFLToggleAutoSync()">
                                     <span class="gif-toggle-slider"></span>
@@ -650,7 +650,7 @@
                             </div>
                         </div>
                         <!-- Dropsonde Skew-T display -->
-                        <div id="ga-sonde-skewt-panel" style="display:none;background:#ffffff;border:1px solid rgba(52,211,153,0.3);border-radius:8px;padding:10px 12px;margin-top:6px;">
+                        <div id="ga-sonde-skewt-panel" style="display:none;background:var(--surface-raised);border:1px solid rgba(52,211,153,0.3);border-radius:8px;padding:10px 12px;margin-top:6px;">
                             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
                                 <div id="ga-sonde-skewt-title" style="font-size:11px;font-weight:600;color:#15803d;"></div>
                                 <div style="display:flex;align-items:center;gap:6px;">
@@ -671,11 +671,11 @@
                             </div>
                             <div style="display:flex;gap:8px;">
                                 <div id="ga-sonde-skewt" style="flex:1;height:520px;"></div>
-                                <div id="ga-sonde-skewt-info" style="width:180px;font-size:10px;color:#d1d5db;overflow-y:auto;max-height:520px;"></div>
+                                <div id="ga-sonde-skewt-info" style="width:180px;font-size:10px;color:var(--text);overflow-y:auto;max-height:520px;"></div>
                             </div>
                         </div>
                         <!-- Flight-level time series side panel -->
-                        <div id="ga-fl-ts-panel" style="display:none;background:#ffffff;border:1px solid rgba(96,165,250,0.3);border-radius:8px;padding:10px 12px;margin-top:6px;">
+                        <div id="ga-fl-ts-panel" style="display:none;background:var(--surface-raised);border:1px solid rgba(96,165,250,0.3);border-radius:8px;padding:10px 12px;margin-top:6px;">
                             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
                                 <div style="font-size:11px;font-weight:600;color:#1d4ed8;">Flight-Level Time Series</div>
                                 <div style="display:flex;align-items:center;gap:6px;">
@@ -694,10 +694,10 @@
                             <div style="font-size:8px;color:#475569;margin-top:2px;text-align:center;">Click chart to highlight position on map &middot; Drag to zoom &middot; Double-click to reset</div>
                         </div>
                         <!-- Model forecast overlay controls -->
-                        <div id="ga-model-controls" style="display:none;background:#ffffff;border:1px solid rgba(116,185,255,0.3);border-radius:6px;padding:8px 10px;margin-top:4px;">
+                        <div id="ga-model-controls" style="display:none;background:var(--surface-raised);border:1px solid rgba(116,185,255,0.3);border-radius:6px;padding:8px 10px;margin-top:4px;">
                             <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
                                 <label style="font-size:10px;font-weight:600;color:#1d4ed8;text-transform:uppercase;letter-spacing:0.5px;">Forecast Cycle</label>
-                                <select id="model-cycle-select" onchange="selectModelCycle(this.value)" style="flex:1;min-width:140px;font-size:10px;padding:3px 6px;border:1px solid rgba(15,22,35,0.12);border-radius:4px;background:#ffffff;color:#0f1623;font-variant-numeric: tabular-nums;"></select>
+                                <select id="model-cycle-select" onchange="selectModelCycle(this.value)" style="flex:1;min-width:140px;font-size:10px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;background:var(--surface-raised);color:var(--text);font-variant-numeric: tabular-nums;"></select>
                                 <label class="gif-toggle" style="width:28px;height:16px;" title="Auto-sync cycle to IR frame time">
                                     <input type="checkbox" id="model-auto-sync" checked onchange="toggleModelAutoSync()">
                                     <span class="gif-toggle-slider"></span>
@@ -718,10 +718,10 @@
                 <div id="scorecard-panel" class="detail-panel scorecard-panel" style="display:none;margin-top:16px;">
                     <div class="panel-header">
                         <h3><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg>Forecast Scorecard</h3>
-                        <span style="font-size:0.78rem;color:#8b9ec2;">Model forecast errors vs. best track</span>
+                        <span style="font-size:0.78rem;color:var(--slate);">Model forecast errors vs. best track</span>
                     </div>
                     <div id="scorecard-content" class="scorecard-content">
-                        <div style="padding:30px;text-align:center;color:#8b9ec2;">
+                        <div style="padding:30px;text-align:center;color:var(--slate);">
                             Loading scorecard...
                         </div>
                     </div>
@@ -731,10 +731,10 @@
                 <div id="environment-panel" class="detail-panel scorecard-panel" style="display:none;margin-top:16px;">
                     <div class="panel-header">
                         <h3><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>Environmental Diagnostics</h3>
-                        <span style="font-size:0.78rem;color:#8b9ec2;">ERA5 reanalysis via TC-PRIMED &amp; SHIPS LSDIAG</span>
+                        <span style="font-size:0.78rem;color:var(--slate);">ERA5 reanalysis via TC-PRIMED &amp; SHIPS LSDIAG</span>
                     </div>
                     <div id="environment-content">
-                        <div style="padding:30px;text-align:center;color:#8b9ec2;">
+                        <div style="padding:30px;text-align:center;color:var(--slate);">
                             Loading environmental data...
                         </div>
                     </div>
@@ -988,6 +988,6 @@
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
     <script src="skewt.js"></script>
-    <script src="global_archive.js?v=20260507s"></script>
+    <script src="global_archive.js?v=20260507t"></script>
 </body>
 </html>

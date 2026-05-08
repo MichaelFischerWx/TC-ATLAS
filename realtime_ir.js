@@ -4857,7 +4857,7 @@
             '  P90: ' + p(90).toFixed(0) + ' kt';
         var annotations = [
             { x: 0, y: 1.06, xref: 'paper', yref: 'paper', text: pctText,
-              showarrow: false, font: { size: 8, color: '#94a3b8' },
+              showarrow: false, font: { size: 8, color: '#5b6573' },
               xanchor: 'left', yanchor: 'bottom' }
         ];
 
@@ -4872,7 +4872,7 @@
             margin: { t: 25, r: 10, b: 30, l: 40 },
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: 'rgba(0,0,0,0)',
-            font: { family: 'JetBrains Mono, monospace', size: 9, color: '#94a3b8' },
+            font: { family: 'JetBrains Mono, monospace', size: 9, color: '#5b6573' },
             xaxis: {
                 title: { text: 'Vmax (kt)', font: { size: 9 } },
                 range: [0, 175],
@@ -4993,7 +4993,7 @@
             margin: { t: 20, r: 10, b: 30, l: 35 },
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: 'rgba(0,0,0,0)',
-            font: { family: 'JetBrains Mono, monospace', size: 9, color: '#94a3b8' },
+            font: { family: 'JetBrains Mono, monospace', size: 9, color: '#5b6573' },
             xaxis: {
                 title: { text: '\u0394V (kt/' + _rtDmChangeInt + 'h)', font: { size: 9 } },
                 gridcolor: 'rgba(255,255,255,0.05)',
@@ -5109,10 +5109,10 @@
 
         var annotations = [
             { x: 0, y: 1.06, xref: 'paper', yref: 'paper', text: summaryText,
-              showarrow: false, font: { size: 8, color: '#94a3b8' },
+              showarrow: false, font: { size: 8, color: '#5b6573' },
               xanchor: 'left', yanchor: 'bottom' },
             { x: 1, y: 1.06, xref: 'paper', yref: 'paper', text: catText,
-              showarrow: false, font: { size: 8, color: '#94a3b8' },
+              showarrow: false, font: { size: 8, color: '#5b6573' },
               xanchor: 'right', yanchor: 'bottom' }
         ];
 
@@ -5121,7 +5121,7 @@
             margin: { t: 30, r: 10, b: 30, l: 40 },
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: 'rgba(0,0,0,0)',
-            font: { family: 'JetBrains Mono, monospace', size: 9, color: '#94a3b8' },
+            font: { family: 'JetBrains Mono, monospace', size: 9, color: '#5b6573' },
             xaxis: {
                 title: { text: 'LMI Vmax (kt)', font: { size: 9 } },
                 range: [0, 185],

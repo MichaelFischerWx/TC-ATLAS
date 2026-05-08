@@ -1218,7 +1218,7 @@ function renderRIModalCharts() {
 
     // ── Exceedance CDF by Era: overlay curves for different periods ──
     var ERA_DEFS = [
-        { label: '1966–1979', range: [1966, 1979], color: '#94a3b8', dash: 'dot' },
+        { label: '1966–1979', range: [1966, 1979], color: '#5b6573', dash: 'dot' },
         { label: '1980–1994', range: [1980, 1994], color: '#60a5fa', dash: 'dash' },
         { label: '1995–2009', range: [1995, 2009], color: '#34d399', dash: 'dashdot' },
         { label: '2010–2025', range: [2010, 2025], color: '#fbbf24', dash: 'solid' }
