@@ -348,7 +348,12 @@ function _bindTCCenterTooltip(marker, caseData) {
 function enterFocusMode(caseData) {
     _focusMode = true;
     if (markers) map.removeLayer(markers);
-    if (_trackViewLayer) map.removeLayer(_trackViewLayer);
+    if (_trackViewLayer) {
+        map.removeLayer(_trackViewLayer);
+        // Empty the layer too — if some async filter callback re-adds
+        // the layer after focus mode begins, it'll have nothing in it.
+        _trackViewLayer.clearLayers();
+    }
     if (_focusMarker) { map.removeLayer(_focusMarker); _focusMarker = null; }
     var color = getIntensityColor(caseData.vmax_kt);
     var icon = L.divIcon({
@@ -6817,6 +6822,15 @@ function _getFilteredTDRStorms() {
 
 // Main track rendering function
 function _renderArchiveTracks() {
+    // In focus mode the user is reviewing one specific case — the
+    // surrounding tracks/markers from other storms compete with the
+    // IR overlay and just look noisy. enterFocusMode removed the
+    // layer; bail out here so an async filter/tracks-load that fires
+    // after focus mode begins doesn't add it back.
+    if (_focusMode) {
+        if (_trackViewLayer) _trackViewLayer.clearLayers();
+        return;
+    }
     if (!_trackViewLayer) {
         _trackCanvasRenderer = L.canvas({ padding: 0.5 });
         _trackViewLayer = L.layerGroup();
