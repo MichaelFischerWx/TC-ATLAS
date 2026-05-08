@@ -1619,23 +1619,33 @@ function renderIntensityTimeline(track, storm) {
 
     var maxWind = Math.max.apply(null, winds.filter(function (w) { return w != null; })) || 100;
 
-    var layout = Object.assign({}, PLOTLY_LAYOUT_BASE, {
+    // Always read theme-aware base fresh — local capture would freeze
+    // the value at script-load and miss user theme toggles.
+    var _base = (typeof _tcaPlotlyBase === 'function') ? _tcaPlotlyBase() : window.PLOTLY_LAYOUT_BASE;
+    var _readVar = (window.TCATheme && window.TCATheme.readVar) ? window.TCATheme.readVar : function () { return ''; };
+    var _axisColor = _readVar('--plot-axis') || '#5b6573';
+    var _gridColor = _readVar('--plot-grid') || 'rgba(15,22,35,0.22)';
+    var _legendBg = _readVar('--surface-raised') || _readVar('--surface') || '#ffffff';
+    var _legendBorder = _readVar('--border') || 'rgba(15,22,35,0.12)';
+    var _legendText = _readVar('--text') || '#0f1623';
+
+    var layout = Object.assign({}, _base, {
         xaxis: {
-            title: { text: 'Date/Time', font: { size: 11, color: '#8b9ec2' } },
-            tickfont: { size: 10, color: '#8b9ec2' },
-            gridcolor: 'rgba(15, 22, 35,0.22)',
-            linecolor: 'rgba(15, 22, 35,0.08)'
+            title: { text: 'Date/Time', font: { size: 11, color: _axisColor } },
+            tickfont: { size: 10, color: _axisColor },
+            gridcolor: _gridColor,
+            linecolor: _gridColor
         },
         yaxis: {
             title: { text: 'Max Wind (kt)', font: { size: 11, color: '#00d4ff' } },
-            tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' },
-            gridcolor: 'rgba(15, 22, 35,0.22)',
+            tickfont: { size: 10, color: _axisColor, family: 'DM Sans, sans-serif' },
+            gridcolor: _gridColor,
             range: [0, Math.max(maxWind + 20, 180)],
             side: 'left'
         },
         yaxis2: {
             title: { text: 'Pressure (hPa)', font: { size: 11, color: '#a78bfa' } },
-            tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' },
+            tickfont: { size: 10, color: _axisColor, family: 'DM Sans, sans-serif' },
             overlaying: 'y',
             side: 'right',
             autorange: 'reversed',
@@ -1645,10 +1655,10 @@ function renderIntensityTimeline(track, storm) {
         showlegend: true,
         legend: {
             x: 0.01, y: 0.99,
-            bgcolor: 'rgba(15,33,64,0.8)',
-            bordercolor: 'rgba(15, 22, 35,0.08)',
+            bgcolor: _legendBg,
+            bordercolor: _legendBorder,
             borderwidth: 1,
-            font: { size: 11, color: '#e2e8f0' }
+            font: { size: 11, color: _legendText }
         },
         margin: { l: 55, r: 55, t: 10, b: 45 }
     });
