@@ -1623,13 +1623,13 @@ function renderIntensityTimeline(track, storm) {
         xaxis: {
             title: { text: 'Date/Time', font: { size: 11, color: '#8b9ec2' } },
             tickfont: { size: 10, color: '#8b9ec2' },
-            gridcolor: 'rgba(15, 22, 35,0.04)',
+            gridcolor: 'rgba(15, 22, 35,0.14)',
             linecolor: 'rgba(15, 22, 35,0.08)'
         },
         yaxis: {
             title: { text: 'Max Wind (kt)', font: { size: 11, color: '#00d4ff' } },
             tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' },
-            gridcolor: 'rgba(15, 22, 35,0.04)',
+            gridcolor: 'rgba(15, 22, 35,0.14)',
             range: [0, Math.max(maxWind + 20, 180)],
             side: 'left'
         },
@@ -2761,12 +2761,12 @@ function renderCompareTimeline() {
         xaxis: {
             title: { text: xTitle, font: { size: 11, color: '#8b9ec2' } },
             tickfont: { size: 10, color: '#8b9ec2' },
-            gridcolor: 'rgba(15, 22, 35,0.04)'
+            gridcolor: 'rgba(15, 22, 35,0.14)'
         },
         yaxis: {
             title: { text: 'Max Wind (kt)', font: { size: 11, color: '#00d4ff' } },
             tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' },
-            gridcolor: 'rgba(15, 22, 35,0.04)',
+            gridcolor: 'rgba(15, 22, 35,0.14)',
             range: [0, Math.min(maxWind + 20, 200)]
         },
         yaxis2: {
@@ -8739,7 +8739,7 @@ function renderSHIPSChart() {
         },
         xaxis: {
             tickfont: { size: 10, color: '#8b9ec2' },
-            gridcolor: 'rgba(15, 22, 35,0.04)',
+            gridcolor: 'rgba(15, 22, 35,0.14)',
             linecolor: 'rgba(15, 22, 35,0.08)'
         }
     };
@@ -8752,7 +8752,7 @@ function renderSHIPSChart() {
         layout[yKey] = {
             title: { text: ax.unit, font: { size: 11, color: '#8b9ec2' } },
             tickfont: { size: 10, color: '#8b9ec2' },
-            gridcolor: ax.idx === 1 ? 'rgba(15, 22, 35,0.04)' : 'transparent',
+            gridcolor: ax.idx === 1 ? 'rgba(15, 22, 35,0.14)' : 'transparent',
             side: ax.side,
             overlaying: ax.idx > 1 ? 'y' : undefined
         };
@@ -9043,7 +9043,7 @@ function renderTCPrimedEnvChart() {
         },
         xaxis: {
             tickfont: { size: 10, color: '#8b9ec2' },
-            gridcolor: 'rgba(15, 22, 35,0.04)',
+            gridcolor: 'rgba(15, 22, 35,0.14)',
             linecolor: 'rgba(15, 22, 35,0.08)'
         }
     };
@@ -9055,7 +9055,7 @@ function renderTCPrimedEnvChart() {
         layout[yKey] = {
             title: { text: ax.unit, font: { size: 11, color: '#8b9ec2' } },
             tickfont: { size: 10, color: '#8b9ec2' },
-            gridcolor: ax.idx === 1 ? 'rgba(15, 22, 35,0.04)' : 'transparent',
+            gridcolor: ax.idx === 1 ? 'rgba(15, 22, 35,0.14)' : 'transparent',
             side: ax.side,
             overlaying: ax.idx > 1 ? 'y' : undefined
         };
