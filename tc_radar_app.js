@@ -402,7 +402,21 @@ function exitFocusMode() {
 
 // Storm dropdown: filters the map AND populates the case dropdown
 document.getElementById('storm-select').addEventListener('change', function() {
-    var storm = this.value;
+    // Combobox: typed value → canonical storm name. Empty / unknown
+    // text falls back to "all storms" (clears the input visually too).
+    var typed = (this.value || '').trim();
+    var resolved = _resolveStormName(typed);
+    var storm;
+    if (resolved === null) {
+        // Unknown name typed — show no-match state by clearing input.
+        this.value = '';
+        storm = '';
+    } else {
+        storm = resolved;
+        // Canonicalize visible value (e.g. "katr" → "KATRINA")
+        if (storm !== this.value) this.value = storm;
+    }
+
     var caseSelect = document.getElementById('case-select');
     var exploreBtn = document.getElementById('explore-btn');
 
@@ -6060,11 +6074,18 @@ function _populateYearDropdown() {
     });
 }
 
-// Populate storm dropdown, optionally filtered by year; show year(s) in label
+// Storm-name set kept in module scope so the change handler can
+// normalize typed input against canonical names (case-insensitive).
+var _stormNameSet = new Set();
+
+// Populate the storm-search combobox's datalist, optionally filtered
+// by year; year(s) shown as the option's label hint in the autocomplete
+// dropdown. The combobox is an <input list="storm-options"> so users
+// can either click the dropdown for the full list OR type to filter.
 function _populateStormDropdown(yearFilter) {
     var data = _getActiveData();
-    var stormSelect = document.getElementById('storm-select');
-    if (!stormSelect || !data) return;
+    var dl = document.getElementById('storm-options');
+    if (!dl || !data) return;
     var stormYears = _getStormYears(data);
     var storms;
     if (yearFilter) {
@@ -6072,18 +6093,40 @@ function _populateStormDropdown(yearFilter) {
     } else {
         storms = new Set(data.cases.map(function(c) { return c.storm_name; }));
     }
-    stormSelect.innerHTML = '<option value="">All Storms</option>';
+    dl.innerHTML = '';
     Array.from(storms).sort().forEach(function(s) {
         var o = document.createElement('option');
         o.value = s;
-        var yrs = Array.from(stormYears[s] || []).sort();
-        if (yearFilter) {
-            o.textContent = s;
-        } else {
-            o.textContent = s + ' (' + yrs.join(', ') + ')';
+        if (!yearFilter) {
+            var yrs = Array.from(stormYears[s] || []).sort();
+            // Year hint shown after the value in the browser's
+            // autocomplete dropdown (Chrome/Safari/Firefox all honor this)
+            o.label = '(' + yrs.join(', ') + ')';
         }
-        stormSelect.appendChild(o);
+        dl.appendChild(o);
     });
+    _stormNameSet = storms;
+}
+
+// Resolve typed text → canonical storm name. Empty string means "all
+// storms" (reset). Returns null if no match found.
+function _resolveStormName(typed) {
+    if (!typed) return '';
+    var upper = String(typed).trim().toUpperCase();
+    if (!upper) return '';
+    if (_stormNameSet.has(upper)) return upper;
+    // Prefix match — pick the first storm whose name starts with the
+    // typed text. Lets users type "katr" → resolves to "KATRINA".
+    var arr = Array.from(_stormNameSet).sort();
+    for (var i = 0; i < arr.length; i++) {
+        if (arr[i].indexOf(upper) === 0) return arr[i];
+    }
+    // Substring fallback — covers cases like typing the year-hint
+    // "(2017)" or partial mid-string match.
+    for (var j = 0; j < arr.length; j++) {
+        if (arr[j].indexOf(upper) >= 0) return arr[j];
+    }
+    return null;
 }
 
 // Year dropdown change handler
