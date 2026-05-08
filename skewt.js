@@ -38,7 +38,12 @@ function _buildWindBarbShapes(u, v, plev, xPos, staffLen, axRanges) {
     var gapFrac    = 0.12;
     var flagWFrac  = 0.38;
     var flagHFrac  = 0.18;
-    var lineColor  = 'rgba(220,220,240,0.85)';
+    // Wind barbs are tinted per theme: the original light gray was
+    // calibrated for navy paper. On white paper it nearly disappears,
+    // so light mode uses a near-black with mild transparency.
+    var _isDark = (typeof document !== 'undefined' &&
+                   document.documentElement.getAttribute('data-theme') === 'dark');
+    var lineColor  = _isDark ? 'rgba(220,220,240,0.85)' : 'rgba(15,22,35,0.85)';
     var lineWidth  = 1.4;
 
     for (var bi = 0; bi < barbLevels.length; bi++) {
@@ -591,7 +596,7 @@ function renderSkewT(profiles, divId) {
         barbShapes.push({
             type: 'line', xref: 'x', yref: 'y',
             x0: barbXPos - 2, y0: pBot, x1: barbXPos - 2, y1: pMax,
-            line: { color: 'rgba(255,255,255,0.08)', width: 0.5 },
+            line: { color: _skewtIsDark ? 'rgba(255,255,255,0.08)' : 'rgba(15,22,35,0.18)', width: 0.5 },
         });
     }
 

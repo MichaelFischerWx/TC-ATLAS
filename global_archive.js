@@ -10364,6 +10364,18 @@ function _gaSondeFetch(stormName, year, missionId, centerLat, centerLon) {
     if (missionId) url += '&mission_id=' + encodeURIComponent(missionId);
     if (centerLat) url += '&center_lat=' + centerLat + '&center_lon=' + centerLon;
 
+    // Show a loading indicator immediately so the user knows sondes
+    // are being fetched (the request can take 1–3s on cold cache).
+    var _sondeInfoEl = document.getElementById('ga-sonde-info');
+    var _sondeCntEl = document.getElementById('ga-sonde-count');
+    var _sondeWrapEl = document.getElementById('ga-sonde-table-wrap');
+    if (_sondeInfoEl) _sondeInfoEl.style.display = '';
+    if (_sondeCntEl) _sondeCntEl.innerHTML =
+        '<span style="display:inline-flex;align-items:center;gap:5px;color:var(--slate);">' +
+        '<span style="display:inline-block;width:10px;height:10px;border:1.5px solid var(--border);border-top-color:var(--um-green);border-radius:50%;animation:ga-spin 0.8s linear infinite;"></span>' +
+        'Loading dropsondes…</span>';
+    if (_sondeWrapEl) _sondeWrapEl.innerHTML = '';
+
     fetch(url)
         .then(function (r) { return r.json(); })
         .then(function (json) {
