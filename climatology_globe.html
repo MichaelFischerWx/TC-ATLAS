@@ -12,15 +12,19 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Climatology Globe — TC-ATLAS</title>
+    <script src="theme.js?v=20260507n"></script>
     <meta name="description" content="ERA5 climatology globe with IBTrACS tropical cyclone tracks overlaid. Connect environmental state (SST, shear, OHC) to actual storm tracks.">
-    <link rel="icon" type="image/png" href="tc-atlas-icon.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="tc-atlas-favicon-16.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="tc-atlas-favicon-32.png">
+    <link rel="icon" type="image/png" sizes="192x192" href="tc-atlas-favicon-192.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="tc-atlas-favicon-192.png">
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
 
     <!-- Vendored GC-ATLAS globe styles (un-scoped, applies page-wide). Loads
          BEFORE TC-ATLAS sheets so TC-ATLAS rules can override topbar styling
          and re-map theme variables (--deep, --emerald, etc.) to navy/blue. -->
     <link rel="stylesheet" href="vendor/gc-atlas/globe.css">
-    <link rel="stylesheet" href="tc_radar_styles.css">
+    <link rel="stylesheet" href="tc_radar_styles.css?v=20260507n">
     <link rel="stylesheet" href="climatology_globe_styles.css?v=20260425d">
 
     <!-- Importmap for the GC-ATLAS engine. Three.js + addons from unpkg;
@@ -59,6 +63,10 @@
                     <li><a href="index.html#cite" role="button">Cite</a></li>
                 </ul>
             </nav>
+                        <button class="theme-toggle" type="button" aria-label="Toggle dark mode" aria-pressed="false" title="Toggle dark mode">
+                <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+                <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+            </button>
             <button class="nav-hamburger" onclick="this.classList.toggle('open');document.querySelector('.topbar-nav').classList.toggle('mobile-open')" aria-label="Menu">&#9776;</button>
         </div>
     </header>

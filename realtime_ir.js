@@ -1615,7 +1615,7 @@
         });
 
         // Dark basemap (underneath IR) — load first for fast initial paint
-        var basemap = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
+        var basemap = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png', {
             subdomains: 'abcd',
             maxZoom: 19
         }).addTo(map);
@@ -1648,7 +1648,7 @@
         _loadCoastlineOverlay(map);
 
         // Labels on top of IR
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png', {
             attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a> | IR: <a href="https://earthdata.nasa.gov/gibs">NASA GIBS</a>',
             subdomains: 'abcd',
             maxZoom: 19,
@@ -2309,7 +2309,7 @@
         });
 
         // Dark basemap
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png', {
             subdomains: 'abcd', maxZoom: 19
         }).addTo(detailMap);
 
@@ -2366,7 +2366,7 @@
         detailMap.getPane('radarPane').style.pointerEvents = 'none';
 
         // Labels on top (in overlay pane so above IR tiles)
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png', {
             subdomains: 'abcd', maxZoom: 19, pane: 'overlayPane'
         }).addTo(detailMap);
 

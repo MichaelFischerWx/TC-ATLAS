@@ -67,7 +67,7 @@
     }
     .ir-view-tab.active {
         background: #4a8cff;
-        color: #fff;
+        color: var(--text);
     }
     .ir-storm-counts {
         display: none !important;
@@ -506,7 +506,7 @@
     font-weight: 500;
     font-family: inherit;
     cursor: pointer;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.12);
 }
 
 /* ── Canvas Area ────────────────────────────────────────────── */
@@ -558,7 +558,7 @@
     transform: translateX(-50%);
     z-index: 6;
     background: #181b24cc;
-    color: #94a3b8;
+    color: var(--text-dim);
     font-size: 11px;
     font-weight: 500;
     padding: 2px 10px;
@@ -616,7 +616,7 @@
 .sat-cb-label-left,
 .sat-cb-label-right {
     font-size: 9px;
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     color: #8b8fa4;
     white-space: nowrap;
 }
@@ -649,9 +649,9 @@
 }
 
 .sat-axis-label {
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     font-size: 10px;
-    color: #94a3b8;
+    color: var(--text-dim);
     text-shadow: 0 0 4px #0a0c12, 0 0 8px #0a0c12, 0 0 12px #0a0c12;
 }
 
@@ -667,10 +667,10 @@
     border-radius: 4px;
     padding: 4px 8px;
     font-size: 12px;
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     white-space: nowrap;
     display: none;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.12);
 }
 
 .sat-tb-val {
@@ -683,7 +683,7 @@
 }
 
 .sat-tb-coord {
-    color: #94a3b8;
+    color: var(--text-dim);
 }
 
 /* ── Loading Overlay ────────────────────────────────────────── */
@@ -790,7 +790,7 @@
 }
 
 .sat-speed-btn {
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     font-size: 11px;
     min-width: 32px;
     text-align: center;
@@ -834,7 +834,7 @@ input[type="range"].sat-slider {
 }
 
 .sat-frame-counter {
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     font-size: 11px;
     color: #8b8fa4;
     min-width: 42px;
@@ -849,9 +849,9 @@ input[type="range"].sat-slider {
 }
 
 .sat-timestamp {
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     font-size: 11px;
-    color: #94a3b8;
+    color: var(--text-dim);
 }
 
 .sat-satellite {
@@ -869,7 +869,7 @@ input[type="range"].sat-slider {
 /* ── Loading Status ─────────────────────────────────────────── */
 
 .sat-load-status {
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     font-size: 10px;
     color: #4a8cff;
     margin-left: 4px;
@@ -897,7 +897,7 @@ input[type="range"].sat-slider {
     border: none;
     padding: 4px 8px;
     font-size: 11px;
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     cursor: pointer;
     transition: background 0.15s, color 0.15s;
 }

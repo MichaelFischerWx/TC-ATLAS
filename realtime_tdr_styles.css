@@ -93,7 +93,7 @@
     z-index: 2;
     margin-top: 8px;
     /* Solid background so it doesn't overlap content transparently */
-    box-shadow: 0 -8px 12px rgba(10, 22, 40, 0.95);
+    box-shadow: 0 -8px 12px rgba(255, 255, 255, 0.95);
 }
 
 /* ── Responsive: tablet ≤1024px (35/65 split) ────────────── */
@@ -167,7 +167,7 @@
     font-size: 0.85rem;
     color: var(--text);
     font-weight: 500;
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
 }
 
 /* ── Leaflet Map (IR + Storm Context) ────────────────────── */
@@ -179,7 +179,7 @@
     border-radius: 8px;
     overflow: hidden;
     border: 1px solid var(--border);
-    background: #0a1628;
+    background: var(--surface-raised);
 }
 #rt-map {
     z-index: 1;
@@ -190,7 +190,7 @@
     left: 8px;
     right: 8px;
     z-index: 1000;
-    background: rgba(10, 22, 40, 0.88);
+    background: rgba(255, 255, 255, 0.88);
     backdrop-filter: blur(6px);
     border-radius: 6px;
     border: 1px solid rgba(96, 165, 250, 0.25);
@@ -202,8 +202,8 @@
     gap: 6px;
 }
 .ir-ctrl-btn {
-    background: rgba(255, 255, 255, 0.08);
-    border: 1px solid rgba(255, 255, 255, 0.15);
+    background: var(--border);
+    border: 1px solid rgba(15, 22, 35, 0.15);
     color: #ccc;
     font-size: 11px;
     padding: 3px 8px;
@@ -213,19 +213,19 @@
     transition: background 0.15s;
 }
 .ir-ctrl-btn:hover {
-    background: rgba(255, 255, 255, 0.18);
-    color: #fff;
+    background: rgba(15, 22, 35, 0.18);
+    color: var(--text);
 }
 .ir-slider {
     flex: 1;
     min-width: 60px;
-    accent-color: var(--cyan, #00d4ff);
+    accent-color: var(--cyan, #F47321);
     height: 4px;
 }
 .ir-label {
     font-size: 10px;
-    color: #93c5fd;
-    font-family: 'JetBrains Mono', monospace;
+    color: #1d4ed8;
+    font-variant-numeric: tabular-nums;
     white-space: nowrap;
     min-width: 100px;
     text-align: right;
@@ -274,7 +274,7 @@
 .sonde-popup .sonde-title {
     font-size: 13px;
     font-weight: 600;
-    color: #c4b5fd;
+    color: #6d28d9;
     margin-bottom: 2px;
 }
 .sonde-popup .sonde-meta {
@@ -284,7 +284,7 @@
 }
 .sonde-popup .sonde-stats {
     font-size: 11px;
-    color: #e5e7eb;
+    color: var(--text);
 }
 .sonde-popup .sonde-comment {
     font-size: 10px;
@@ -344,8 +344,8 @@
     box-shadow: none !important;
 }
 .fl-aircraft-icon div {
-    color: #fff;
-    filter: drop-shadow(0 0 3px rgba(0, 0, 0, 0.8));
+    color: var(--text);
+    filter: drop-shadow(0 0 3px rgba(0, 0, 0, 0.18));
 }
 
 /* ── FL Legend (inside map wrapper, top-right) ─── */
@@ -354,7 +354,7 @@
     top: 8px;
     right: 8px;
     z-index: 1000;
-    background: rgba(10, 22, 40, 0.88);
+    background: rgba(255, 255, 255, 0.88);
     backdrop-filter: blur(6px);
     border-radius: 6px;
     border: 1px solid rgba(96, 165, 250, 0.25);
@@ -369,14 +369,14 @@
 }
 .fl-legend-label {
     font-size: 10px;
-    color: #93c5fd;
+    color: #1d4ed8;
     font-family: 'DM Sans', sans-serif;
     font-weight: 600;
     white-space: nowrap;
 }
 .fl-legend-select {
-    background: rgba(255, 255, 255, 0.08);
-    border: 1px solid rgba(255, 255, 255, 0.15);
+    background: var(--border);
+    border: 1px solid rgba(15, 22, 35, 0.15);
     color: #ccc;
     font-size: 10px;
     padding: 2px 4px;
@@ -387,8 +387,8 @@
     max-width: 120px;
 }
 .fl-legend-select:hover {
-    background: rgba(255, 255, 255, 0.18);
-    color: #fff;
+    background: rgba(15, 22, 35, 0.18);
+    color: var(--text);
 }
 .fl-legend-bar {
     height: 6px;
@@ -408,7 +408,7 @@
     justify-content: space-between;
     font-size: 9px;
     color: #6b7280;
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
 }
 
 /* ── Flight-Level Along-Track Time Series Panel ─────── */
@@ -427,7 +427,7 @@
     border-bottom: 1px solid rgba(96, 165, 250, 0.15);
 }
 .fl-ts-title {
-    color: #93c5fd;
+    color: #1d4ed8;
     font-size: 13px;
     font-weight: 600;
     flex: 1;
@@ -474,7 +474,7 @@
     padding: 0 4px;
 }
 .fl-ts-close:hover {
-    color: #fff;
+    color: var(--text);
 }
 
 /* ── Resolution toggle button group ──────── */
@@ -496,7 +496,7 @@
     border-radius: 4px;
     color: #64748b;
     font-size: 10px;
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     padding: 2px 6px;
     cursor: pointer;
     transition: all 0.15s;
@@ -504,16 +504,16 @@
 .fl-ts-res-btn.active {
     background: rgba(96, 165, 250, 0.2);
     border-color: rgba(96, 165, 250, 0.6);
-    color: #93c5fd;
+    color: #1d4ed8;
 }
 .fl-ts-res-btn:hover {
     border-color: rgba(96, 165, 250, 0.5);
-    color: #93c5fd;
+    color: #1d4ed8;
 }
 
 /* ── PNG save button ────────────────────────── */
 .rt-save-png-btn {
-    background: rgba(255,255,255,0.08);
+    background: var(--border);
     border: none;
     color: #aab;
     width: 30px;
@@ -526,6 +526,6 @@
     transition: background 0.2s, color 0.2s;
 }
 .rt-save-png-btn:hover {
-    background: rgba(255,255,255,0.2);
-    color: #fff;
+    background: rgba(15, 22, 35,0.2);
+    color: var(--text);
 }

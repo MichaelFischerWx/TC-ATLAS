@@ -23,9 +23,13 @@
     <meta property="og:site_name" content="TC-ATLAS">
 
     <!-- Favicon -->
-    <link rel="icon" type="image/png" href="tc-atlas-icon.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="tc-atlas-favicon-16.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="tc-atlas-favicon-32.png">
+    <link rel="icon" type="image/png" sizes="192x192" href="tc-atlas-favicon-192.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="tc-atlas-favicon-192.png">
 
     <title>Real-Time Monitor — TC-ATLAS</title>
+    <script src="theme.js?v=20260507n"></script>
 
     <!-- Leaflet -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -44,7 +48,7 @@
     <script>window.__v='?v='+new Date().toISOString().slice(0,13).replace(/[-T]/g,'');</script>
 
     <!-- Styles -->
-    <link rel="stylesheet" href="tc_radar_styles.css">
+    <link rel="stylesheet" href="tc_radar_styles.css?v=20260507n">
     <script>document.write('<link rel="stylesheet" href="realtime_ir_styles.css'+window.__v+'">');</script>
     <script>document.write('<link rel="stylesheet" href="satellite_styles.css'+window.__v+'">');</script>
 </head>
@@ -73,6 +77,10 @@
                     <li><a href="index.html#cite" role="button">Cite</a></li>
                 </ul>
             </nav>
+                        <button class="theme-toggle" type="button" aria-label="Toggle dark mode" aria-pressed="false" title="Toggle dark mode">
+                <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+                <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+            </button>
             <button class="nav-hamburger" onclick="this.classList.toggle('open');document.querySelector('.topbar-nav').classList.toggle('mobile-open')" aria-label="Menu">&#9776;</button>
         </div>
     </header>
@@ -229,7 +237,7 @@
                     <div id="rt-model-controls" style="display:none;">
                         <div class="rt-model-controls-inner">
                             <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
-                                <label style="font-size:10px;font-weight:600;color:#74b9ff;text-transform:uppercase;letter-spacing:0.5px;">Cycle</label>
+                                <label style="font-size:10px;font-weight:600;color:#1d4ed8;text-transform:uppercase;letter-spacing:0.5px;">Cycle</label>
                                 <select id="rt-model-cycle-select" onchange="window._rtSelectModelCycle(this.value)"
                                     class="rt-model-cycle-select"></select>
                                 <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
@@ -268,7 +276,7 @@
                             <div id="rt-weatherlab-filter" style="display:none;margin-top:4px;padding-top:4px;border-top:1px solid rgba(255,255,255,0.06);">
                                 <span style="font-size:9px;color:#00e5ff;">DeepMind filter:</span>
                                 <select id="rt-weatherlab-cat-filter" onchange="window._rtFilterWeatherlabByCat(this.value)"
-                                    style="font-size:9px;padding:1px 4px;border:1px solid rgba(0,229,255,0.3);border-radius:3px;background:#0f172a;color:#e2e8f0;font-family:'JetBrains Mono',monospace;margin-left:4px;">
+                                    style="font-size:9px;padding:1px 4px;border:1px solid rgba(0,229,255,0.3);border-radius:3px;background:#0f172a;color:#e2e8f0;font-variant-numeric: tabular-nums;margin-left:4px;">
                                     <option value="">All members</option>
                                     <option value="TS">Reaches TS+</option>
                                     <option value="C1">Reaches Cat 1+</option>
@@ -298,7 +306,7 @@
                     <div style="position:relative;z-index:10;padding:4px 0 0;overflow:visible;">
                         <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:2px;">
                             <span style="font-size:0.6rem;color:#64748b;">Forecast hour:</span>
-                            <span id="rt-dm-hist-label" style="font-size:0.7rem;color:#00e5ff;font-family:'JetBrains Mono',monospace;">+0h</span>
+                            <span id="rt-dm-hist-label" style="font-size:0.7rem;color:#00e5ff;font-variant-numeric: tabular-nums;">+0h</span>
                         </div>
                         <input type="range" id="rt-dm-hist-slider" min="0" max="52" value="0"
                             oninput="window._rtDmHistSlide(this.value)"
@@ -324,7 +332,7 @@
                     <div style="position:relative;z-index:10;padding:4px 0 0;">
                         <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:2px;">
                             <span style="font-size:0.6rem;color:#64748b;">Forecast hour:</span>
-                            <span id="rt-dm-change-label" style="font-size:0.7rem;color:#00e5ff;font-family:'JetBrains Mono',monospace;">+24h</span>
+                            <span id="rt-dm-change-label" style="font-size:0.7rem;color:#00e5ff;font-variant-numeric: tabular-nums;">+24h</span>
                         </div>
                         <input type="range" id="rt-dm-change-slider" min="0" max="52" value="4"
                             oninput="window._rtDmChangeSlide(this.value)"
@@ -368,7 +376,7 @@
                     <div id="rt-ascat-controls" style="display:none;">
                         <div class="rt-model-controls-inner">
                             <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
-                                <label style="font-size:10px;font-weight:600;color:#74b9ff;text-transform:uppercase;letter-spacing:0.5px;">Pass</label>
+                                <label style="font-size:10px;font-weight:600;color:#1d4ed8;text-transform:uppercase;letter-spacing:0.5px;">Pass</label>
                                 <select id="rt-ascat-pass-select" onchange="window._rtSelectAscatPass(this.value)"
                                     class="rt-model-cycle-select"></select>
                             </div>
@@ -399,12 +407,12 @@
                     <div id="rt-radar-controls" style="display:none;">
                         <div class="rt-model-controls-inner">
                             <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
-                                <label style="font-size:10px;font-weight:600;color:#86efac;text-transform:uppercase;letter-spacing:0.5px;">Site</label>
+                                <label style="font-size:10px;font-weight:600;color:#15803d;text-transform:uppercase;letter-spacing:0.5px;">Site</label>
                                 <select id="rt-radar-site-select" onchange="window._rtLoadRadarScans()"
                                     class="rt-model-cycle-select" style="min-width:140px;"></select>
                             </div>
                             <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
-                                <label style="font-size:10px;font-weight:600;color:#86efac;text-transform:uppercase;letter-spacing:0.5px;">Scan</label>
+                                <label style="font-size:10px;font-weight:600;color:#15803d;text-transform:uppercase;letter-spacing:0.5px;">Scan</label>
                                 <select id="rt-radar-scan-select" onchange="window._rtLoadRadarFrame()"
                                     class="rt-model-cycle-select" style="min-width:160px;"></select>
                                 <select id="rt-radar-product-select" onchange="window._rtLoadRadarFrame()"
@@ -507,19 +515,19 @@
                 <div id="sat-radar-controls" style="display:none;margin-top:6px;">
                     <div style="display:flex;flex-direction:column;gap:4px;">
                         <div style="display:flex;align-items:center;gap:4px;">
-                            <label style="font-size:9px;color:#86efac;min-width:28px;">Site</label>
+                            <label style="font-size:9px;color:#15803d;min-width:28px;">Site</label>
                             <select id="sat-radar-site-select" onchange="window._satLoadRadarScans()"
-                                style="flex:1;font-size:9px;padding:2px 4px;border:1px solid rgba(255,255,255,0.12);border-radius:3px;background:#0f172a;color:#e2e8f0;font-family:'JetBrains Mono',monospace;"></select>
+                                style="flex:1;font-size:9px;padding:2px 4px;border:1px solid rgba(255,255,255,0.12);border-radius:3px;background:#0f172a;color:#e2e8f0;font-variant-numeric: tabular-nums;"></select>
                         </div>
                         <div style="display:flex;align-items:center;gap:4px;">
-                            <label style="font-size:9px;color:#86efac;min-width:28px;">Scan</label>
+                            <label style="font-size:9px;color:#15803d;min-width:28px;">Scan</label>
                             <select id="sat-radar-scan-select" onchange="window._satLoadRadarFrame()"
-                                style="flex:1;font-size:9px;padding:2px 4px;border:1px solid rgba(255,255,255,0.12);border-radius:3px;background:#0f172a;color:#e2e8f0;font-family:'JetBrains Mono',monospace;"></select>
+                                style="flex:1;font-size:9px;padding:2px 4px;border:1px solid rgba(255,255,255,0.12);border-radius:3px;background:#0f172a;color:#e2e8f0;font-variant-numeric: tabular-nums;"></select>
                         </div>
                         <div style="display:flex;align-items:center;gap:4px;">
-                            <label style="font-size:9px;color:#86efac;min-width:28px;">Prod</label>
+                            <label style="font-size:9px;color:#15803d;min-width:28px;">Prod</label>
                             <select id="sat-radar-product-select" onchange="window._satLoadRadarFrame()"
-                                style="font-size:9px;padding:2px 4px;border:1px solid rgba(255,255,255,0.12);border-radius:3px;background:#0f172a;color:#e2e8f0;font-family:'JetBrains Mono',monospace;">
+                                style="font-size:9px;padding:2px 4px;border:1px solid rgba(255,255,255,0.12);border-radius:3px;background:#0f172a;color:#e2e8f0;font-variant-numeric: tabular-nums;">
                                 <option value="reflectivity">Reflectivity</option>
                                 <option value="velocity">Velocity</option>
                             </select>

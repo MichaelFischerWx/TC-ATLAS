@@ -28,17 +28,17 @@
     left: 0;
     right: 0;
     height: 28px;
-    background: rgba(12, 29, 61, 0.92);
+    background: rgba(255, 255, 255, 0.92);
     backdrop-filter: blur(8px);
-    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    border-top: 1px solid var(--border);
     display: flex;
     align-items: center;
     justify-content: space-between;
     padding: 0 16px;
     font-size: 0.72rem;
-    color: #8b9ec2;
+    color: #8993a4;
     z-index: 800;
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
 }
 .ir-last-update {
     color: #64748b;
@@ -50,7 +50,7 @@
     bottom: 28px;
     left: 50%;
     transform: translateX(-50%);
-    background: rgba(12, 29, 61, 0.88);
+    background: rgba(255, 255, 255, 0.88);
     display: flex;
     flex-direction: row;
     align-items: center;
@@ -58,16 +58,16 @@
     z-index: 600;
     padding: 8px 18px;
     border-radius: 20px;
-    border: 1px solid rgba(46, 125, 255, 0.25);
+    border: 1px solid rgba(74, 155, 110, 0.25);
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
-    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
 }
 .ir-loader-spinner {
     width: 16px;
     height: 16px;
-    border: 2px solid rgba(46, 125, 255, 0.2);
-    border-top-color: #2e7dff;
+    border: 2px solid rgba(74, 155, 110, 0.2);
+    border-top-color: #4a9b6e;
     border-radius: 50%;
     animation: ir-spin 0.8s linear infinite;
     flex-shrink: 0;
@@ -76,7 +76,7 @@
     to { transform: rotate(360deg); }
 }
 .ir-loader-text {
-    color: #8b9ec2;
+    color: #8993a4;
     font-size: 0.78rem;
     font-family: 'DM Sans', sans-serif;
     white-space: nowrap;
@@ -91,9 +91,9 @@
     text-align: center;
     z-index: 500;
     padding: 10px 24px;
-    background: rgba(12, 29, 61, 0.85);
+    background: rgba(255, 255, 255, 0.85);
     backdrop-filter: blur(8px);
-    border: 1px solid rgba(255,255,255,0.1);
+    border: 1px solid rgba(15, 22, 35,0.1);
     border-radius: 10px;
     display: flex;
     align-items: center;
@@ -107,7 +107,7 @@
 .ir-no-storms-title {
     font-size: 0.82rem;
     font-weight: 600;
-    color: #e2e8f0;
+    color: var(--text);
     white-space: nowrap;
 }
 .ir-no-storms-desc {
@@ -123,7 +123,7 @@
     line-height: 1;
 }
 .ir-no-storms-close:hover {
-    color: #e2e8f0;
+    color: var(--text);
 }
 
 /* ── GIBS feed staleness banner ─────────────────────────────── */
@@ -137,15 +137,15 @@
     align-items: center;
     gap: 10px;
     padding: 8px 14px 8px 12px;
-    background: rgba(48, 27, 8, 0.92);
+    background: rgba(254, 243, 199, 0.92);
     border: 1px solid rgba(251, 146, 60, 0.45);
     border-radius: 8px;
-    color: #fde68a;
+    color: #a16207;
     font-size: 0.78rem;
     font-weight: 500;
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.1);
     pointer-events: auto;
     max-width: min(720px, 90vw);
 }
@@ -155,7 +155,7 @@
     flex-shrink: 0;
 }
 .ir-feed-banner-link {
-    color: #93c5fd;
+    color: #1d4ed8;
     text-decoration: underline;
     text-underline-offset: 2px;
     font-weight: 500;
@@ -165,41 +165,46 @@
 .ir-feed-banner-close {
     background: none;
     border: none;
-    color: #94a3b8;
+    color: var(--text-dim);
     font-size: 1.1rem;
     line-height: 1;
     cursor: pointer;
     padding: 0 0 0 4px;
 }
-.ir-feed-banner-close:hover { color: #e2e8f0; }
+.ir-feed-banner-close:hover { color: var(--text); }
 
 /* ── Legend ───────────────────────────────────────────────────── */
+/* Theme-aware glass card — uses tokens so background, header text, and
+   row text all flip cleanly between light and dark. */
 .ir-legend {
     position: fixed;
     bottom: 40px;
     right: 12px;
-    background: rgba(15, 33, 64, 0.92);
+    background: var(--surface-raised);
     backdrop-filter: blur(10px);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid var(--border-light);
     border-radius: 8px;
     padding: 10px 14px;
     z-index: 700;
     font-family: 'DM Sans', sans-serif;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+    color: var(--text);
 }
 .ir-legend h4 {
     font-size: 0.7rem;
-    font-weight: 600;
-    color: #e2e8f0;
+    font-weight: 700;
+    color: var(--text);
     margin-bottom: 6px;
     text-transform: uppercase;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.05em;
 }
 .ir-legend-row {
     display: flex;
     align-items: center;
     gap: 8px;
-    font-size: 0.72rem;
-    color: #8b9ec2;
+    font-size: 0.74rem;
+    color: var(--text);
     padding: 2px 0;
 }
 .ir-legend-dot {
@@ -216,22 +221,22 @@
 .ir-popup-name {
     font-size: 0.95rem;
     font-weight: 700;
-    color: #e2e8f0;
+    color: var(--text);
     margin-bottom: 4px;
 }
 .ir-popup-meta {
     font-size: 0.78rem;
-    color: #8b9ec2;
+    color: #8993a4;
     line-height: 1.5;
 }
 .ir-popup-meta strong {
-    color: #e2e8f0;
+    color: var(--text);
 }
 .ir-popup-btn {
     display: inline-block;
     margin-top: 8px;
-    background: linear-gradient(135deg, #2e7dff, #00d4ff);
-    color: #fff;
+    background: var(--um-green);
+    color: #ffffff;
     border: none;
     border-radius: 4px;
     padding: 5px 16px;
@@ -239,17 +244,17 @@
     font-weight: 600;
     cursor: pointer;
     font-family: 'DM Sans', sans-serif;
-    transition: opacity 0.2s;
+    transition: background 0.2s;
 }
 .ir-popup-btn:hover {
-    opacity: 0.85;
+    background: var(--um-green-deep);
 }
 
 /* ── Custom storm markers ────────────────────────────────────── */
 .ir-storm-marker {
     border-radius: 50%;
-    border: 2px solid rgba(255, 255, 255, 0.6);
-    box-shadow: 0 0 8px rgba(0, 0, 0, 0.5);
+    border: 2px solid rgba(15, 22, 35, 0.6);
+    box-shadow: 0 0 8px rgba(0, 0, 0, 0.15);
     transition: transform 0.2s;
 }
 .ir-storm-marker:hover {
@@ -285,7 +290,7 @@
     left: 0;
     right: 0;
     bottom: 0;
-    background: var(--navy, #0c1d3d);
+    background: var(--navy, #0d1318);
     z-index: 500;
     overflow: hidden;
 }
@@ -296,13 +301,13 @@
     align-items: center;
     gap: 16px;
     padding: 10px 20px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-    background: rgba(15, 33, 64, 0.95);
+    border-bottom: 1px solid var(--border);
+    background: rgba(255, 255, 255, 0.95);
 }
 .ir-back-btn {
-    background: rgba(255, 255, 255, 0.06);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    color: #8b9ec2;
+    background: var(--border);
+    border: 1px solid rgba(15, 22, 35, 0.1);
+    color: #8993a4;
     font-size: 0.8rem;
     font-weight: 500;
     padding: 6px 14px;
@@ -313,8 +318,8 @@
     white-space: nowrap;
 }
 .ir-back-btn:hover {
-    color: #e2e8f0;
-    background: rgba(255, 255, 255, 0.1);
+    color: var(--text);
+    background: rgba(15, 22, 35, 0.1);
 }
 .ir-detail-title {
     display: flex;
@@ -324,35 +329,35 @@
 .ir-detail-name {
     font-size: 1.1rem;
     font-weight: 700;
-    color: #e2e8f0;
+    color: var(--text);
 }
 .ir-detail-id {
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     font-size: 0.78rem;
     color: #64748b;
 }
 .ir-detail-cat {
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     font-size: 0.8rem;
     font-weight: 700;
     padding: 2px 10px;
     border-radius: 4px;
-    color: #fff;
+    color: var(--text);
 }
 
 .ir-kml-btn {
     font-size: 0.75rem;
     padding: 2px 8px;
     border-radius: 4px;
-    border: 1px solid rgba(255,255,255,0.3);
-    background: rgba(255,255,255,0.1);
-    color: #fff;
+    border: 1px solid rgba(15, 22, 35,0.3);
+    background: rgba(15, 22, 35,0.1);
+    color: var(--text);
     cursor: pointer;
     margin-left: 8px;
     transition: background 0.2s;
 }
 .ir-kml-btn:hover {
-    background: rgba(255,255,255,0.25);
+    background: rgba(15, 22, 35,0.25);
 }
 .ir-sat-viewer-btn {
     color: #00e5ff;
@@ -370,7 +375,7 @@
     text-transform: uppercase;
     letter-spacing: 1px;
     color: rgba(148, 163, 184, 0.5);
-    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    border-top: 1px solid var(--border);
     padding-top: 12px;
     margin: 16px 0 8px;
 }
@@ -385,7 +390,7 @@
     flex: 3;
     display: flex;
     flex-direction: column;
-    border-right: 1px solid rgba(255, 255, 255, 0.06);
+    border-right: 1px solid var(--border);
     min-width: 0;
     overflow: hidden;  /* clip Leaflet markers from bleeding into sidebar */
 }
@@ -421,15 +426,15 @@
     display: flex;
     gap: 14px;
     align-items: center;
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     font-size: 0.82rem;
-    color: #fff;
-    background: rgba(0, 0, 0, 0.7);
+    color: var(--text);
+    background: rgba(0, 0, 0, 0.18);
     padding: 6px 14px;
     border-radius: 6px;
     z-index: 500;
     pointer-events: none;
-    text-shadow: 0 1px 3px rgba(0,0,0,0.6);
+    text-shadow: 0 1px 3px rgba(0,0,0,0.18);
     transition: opacity 0.2s;
 }
 .ir-overlay-info .ir-frame-time-label {
@@ -438,7 +443,7 @@
 }
 .ir-overlay-info .ir-sat-label {
     font-size: 0.72rem;
-    color: rgba(255, 255, 255, 0.65);
+    color: rgba(15, 22, 35, 0.65);
 }
 
 /* ── Product toggle (IR / GeoColor) ────────────────────────── */
@@ -451,15 +456,15 @@
     gap: 0;
     border-radius: 5px;
     overflow: hidden;
-    border: 1px solid rgba(255, 255, 255, 0.12);
+    border: 1px solid var(--border-light);
 }
 .ir-product-btn {
     padding: 5px 12px;
     font-family: 'DM Sans', sans-serif;
     font-size: 0.7rem;
     font-weight: 500;
-    color: #8b9ec2;
-    background: rgba(15, 33, 64, 0.85);
+    color: #8993a4;
+    background: rgba(255, 255, 255, 0.85);
     border: none;
     cursor: pointer;
     transition: background 0.2s, color 0.2s;
@@ -470,7 +475,7 @@
     color: #c0d0ea;
 }
 .ir-product-btn.ir-product-active {
-    background: rgba(46, 125, 255, 0.25);
+    background: rgba(74, 155, 110, 0.25);
     color: #60a5fa;
 }
 .ir-product-btn.ir-loading {
@@ -483,12 +488,12 @@
     bottom: 10px;
     left: 10px;
     z-index: 500;
-    background: rgba(0, 0, 0, 0.65);
+    background: rgba(0, 0, 0, 0.18);
     padding: 6px 10px;
     border-radius: 4px;
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     font-size: 0.65rem;
-    color: rgba(255, 255, 255, 0.7);
+    color: rgba(15, 22, 35, 0.7);
 }
 .ir-tb-legend-bar {
     width: 160px;
@@ -520,15 +525,15 @@
     align-items: center;
     gap: 8px;
     padding: 8px 16px;
-    background: rgba(15, 33, 64, 0.95);
-    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    background: rgba(255, 255, 255, 0.95);
+    border-top: 1px solid var(--border);
 }
 .ir-anim-btn {
     width: 32px;
     height: 32px;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    background: rgba(255, 255, 255, 0.04);
-    color: #8b9ec2;
+    border: 1px solid rgba(15, 22, 35, 0.1);
+    background: rgba(15, 22, 35, 0.04);
+    color: #8993a4;
     border-radius: 4px;
     cursor: pointer;
     font-size: 0.75rem;
@@ -538,20 +543,20 @@
     transition: all 0.2s;
 }
 .ir-anim-btn:hover {
-    color: #e2e8f0;
-    background: rgba(255, 255, 255, 0.08);
+    color: var(--text);
+    background: var(--border);
 }
 .ir-anim-play {
-    background: rgba(46, 125, 255, 0.15);
-    border-color: rgba(46, 125, 255, 0.3);
-    color: #2e7dff;
+    background: rgba(74, 155, 110, 0.15);
+    border-color: rgba(74, 155, 110, 0.3);
+    color: #4a9b6e;
 }
 .ir-anim-slider {
     flex: 1;
     height: 4px;
     -webkit-appearance: none;
     appearance: none;
-    background: rgba(255, 255, 255, 0.1);
+    background: rgba(15, 22, 35, 0.1);
     border-radius: 2px;
     outline: none;
 }
@@ -560,12 +565,12 @@
     width: 14px;
     height: 14px;
     border-radius: 50%;
-    background: #2e7dff;
+    background: #4a9b6e;
     cursor: pointer;
-    border: 2px solid rgba(255, 255, 255, 0.3);
+    border: 2px solid rgba(15, 22, 35, 0.3);
 }
 .ir-anim-counter {
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     font-size: 0.72rem;
     color: #64748b;
     min-width: 50px;
@@ -579,19 +584,19 @@
     100% { background-position: -200% 0; }
 }
 .skeleton-pulse {
-    background: linear-gradient(90deg, transparent 25%, rgba(255,255,255,0.04) 50%, transparent 75%);
+    background: linear-gradient(90deg, transparent 25%, rgba(15, 22, 35,0.04) 50%, transparent 75%);
     background-size: 200% 100%;
     animation: skeleton-pulse 1.8s ease-in-out infinite;
     border-radius: 4px;
 }
 .skeleton-chart {
     height: 180px;
-    background-color: rgba(255,255,255,0.03);
+    background-color: rgba(15, 22, 35,0.03);
 }
 .skeleton-text {
     height: 14px;
     width: 120px;
-    background-color: rgba(255,255,255,0.05);
+    background-color: rgba(15, 22, 35,0.05);
     display: inline-block;
 }
 
@@ -606,7 +611,7 @@
     letter-spacing: 0.06em;
     margin-bottom: 10px;
     padding-bottom: 6px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    border-bottom: 1px solid var(--border);
 }
 .ir-info-grid {
     display: flex;
@@ -620,20 +625,20 @@
 }
 .ir-info-label {
     font-size: 0.78rem;
-    color: #8b9ec2;
+    color: #8993a4;
 }
 .ir-info-value {
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     font-size: 0.8rem;
     font-weight: 500;
-    color: #e2e8f0;
+    color: var(--text);
 }
 
 /* ── Intensity chart ─────────────────────────────────────────── */
 .ir-intensity-chart {
     width: 100%;
     height: 200px;
-    background: rgba(0, 0, 0, 0.15);
+    background: rgba(0, 0, 0, 0.1);
     border-radius: 6px;
     overflow: hidden;
 }
@@ -641,11 +646,11 @@
 /* ── Recon cross-reference ───────────────────────────────────── */
 .ir-recon-info {
     font-size: 0.82rem;
-    color: #8b9ec2;
+    color: #8993a4;
     line-height: 1.6;
 }
 .ir-recon-info a {
-    color: #00d4ff;
+    color: #F47321;
     text-decoration: none;
 }
 .ir-recon-info a:hover {
@@ -656,8 +661,8 @@
 .ir-official-link {
     display: inline-block;
     padding: 8px 16px;
-    background: rgba(46, 125, 255, 0.12);
-    border: 1px solid rgba(46, 125, 255, 0.3);
+    background: rgba(74, 155, 110, 0.12);
+    border: 1px solid rgba(74, 155, 110, 0.3);
     border-radius: 6px;
     color: #60a5fa;
     text-decoration: none;
@@ -666,8 +671,8 @@
     transition: all 0.2s;
 }
 .ir-official-link:hover {
-    background: rgba(46, 125, 255, 0.2);
-    border-color: rgba(46, 125, 255, 0.5);
+    background: rgba(74, 155, 110, 0.2);
+    border-color: rgba(74, 155, 110, 0.5);
     color: #93bbfc;
 }
 .ir-official-note {
@@ -689,7 +694,7 @@
         flex: none;
         height: 50%;
         border-right: none;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        border-bottom: 1px solid var(--border);
     }
     .ir-detail-right {
         flex: 1;
@@ -713,22 +718,22 @@
 
 /* ── Leaflet popup override for dark theme ───────────────────── */
 .leaflet-popup-content-wrapper {
-    background: rgba(15, 33, 64, 0.96) !important;
-    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    background: rgba(255, 255, 255, 0.96) !important;
+    border: 1px solid rgba(15, 22, 35, 0.1) !important;
     border-radius: 8px !important;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4) !important;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12) !important;
 }
 .leaflet-popup-tip {
-    background: rgba(15, 33, 64, 0.96) !important;
+    background: rgba(255, 255, 255, 0.96) !important;
 }
 .leaflet-popup-content {
     margin: 10px 14px !important;
 }
 .leaflet-popup-close-button {
-    color: #8b9ec2 !important;
+    color: #8993a4 !important;
 }
 .leaflet-popup-close-button:hover {
-    color: #e2e8f0 !important;
+    color: var(--text) !important;
 }
 
 /* ── Mobile touch-target and layout fixes ──────────────────── */
@@ -782,10 +787,10 @@
     left: 0;
     bottom: 28px;
     width: 270px;
-    background: rgba(12, 29, 61, 0.96);
+    background: rgba(255, 255, 255, 0.96);
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
-    border-right: 1px solid rgba(255, 255, 255, 0.08);
+    border-right: 1px solid var(--border);
     z-index: 500;
     display: flex;
     flex-direction: column;
@@ -804,7 +809,7 @@
 
 .basin-sidebar-header {
     padding: 14px 16px 10px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    border-bottom: 1px solid var(--border);
     display: flex;
     align-items: baseline;
     justify-content: space-between;
@@ -813,13 +818,13 @@
     margin: 0;
     font-size: 0.85rem;
     font-weight: 600;
-    color: #e2e8f0;
+    color: var(--text);
     letter-spacing: 0.02em;
 }
 .basin-sidebar-year {
     font-size: 0.72rem;
     color: #64748b;
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
 }
 
 .basin-sidebar-content {
@@ -830,12 +835,12 @@
 
 .basin-sidebar-footer {
     padding: 8px 16px;
-    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    border-top: 1px solid var(--border);
     font-size: 0.65rem;
     color: #475569;
 }
 .basin-sidebar-climo-label {
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
 }
 
 .basin-sidebar-loading {
@@ -847,8 +852,8 @@
 
 /* ── Basin Card ──────────────────────────────────────────────── */
 .basin-card {
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(255, 255, 255, 0.06);
+    background: rgba(15, 22, 35, 0.03);
+    border: 1px solid var(--border);
     border-radius: 8px;
     padding: 10px 12px;
     margin-bottom: 8px;
@@ -863,7 +868,7 @@
 .basin-card-name {
     font-size: 0.78rem;
     font-weight: 600;
-    color: #e2e8f0;
+    color: var(--text);
 }
 .basin-card-active {
     font-size: 0.68rem;
@@ -890,8 +895,8 @@
 .basin-stat-val {
     font-size: 0.82rem;
     font-weight: 700;
-    color: #e2e8f0;
-    font-family: 'JetBrains Mono', monospace;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
 }
 .basin-stat-label {
     font-size: 0.6rem;
@@ -908,15 +913,15 @@
 }
 .basin-ace-label {
     font-size: 0.65rem;
-    color: #8b9ec2;
+    color: #8993a4;
     white-space: nowrap;
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     min-width: 60px;
 }
 .basin-ace-bar {
     flex: 1;
     height: 6px;
-    background: rgba(255, 255, 255, 0.06);
+    background: var(--border);
     border-radius: 3px;
     overflow: hidden;
     position: relative;
@@ -929,7 +934,7 @@
 .basin-ace-pct {
     font-size: 0.62rem;
     color: #64748b;
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     min-width: 32px;
     text-align: right;
 }
@@ -940,9 +945,9 @@
     top: 132px;
     left: 10px;
     z-index: 600;
-    background: rgba(12, 29, 61, 0.88);
-    color: #8b9ec2;
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.88);
+    color: #8993a4;
+    border: 1px solid rgba(15, 22, 35, 0.1);
     border-radius: 6px;
     padding: 6px 12px;
     font-size: 0.72rem;
@@ -954,14 +959,14 @@
     transition: all 0.2s;
 }
 .basin-sidebar-toggle:hover {
-    background: rgba(12, 29, 61, 0.95);
-    color: #e2e8f0;
-    border-color: rgba(46, 125, 255, 0.3);
+    background: rgba(255, 255, 255, 0.95);
+    color: var(--text);
+    border-color: rgba(74, 155, 110, 0.3);
 }
 .basin-sidebar-toggle.active {
-    background: rgba(46, 125, 255, 0.15);
+    background: rgba(74, 155, 110, 0.15);
     color: #60a5fa;
-    border-color: rgba(46, 125, 255, 0.4);
+    border-color: rgba(74, 155, 110, 0.4);
 }
 
 /* When sidebar is open, shift the toggle button */
@@ -976,7 +981,7 @@
         bottom: auto;
         max-height: 60vh;
         border-right: none;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        border-bottom: 1px solid var(--border);
         border-radius: 0 0 12px 12px;
     }
     .ir-map.sidebar-open {
@@ -996,7 +1001,7 @@
     padding: 3px 10px;
     border: 1px solid rgba(116, 185, 255, 0.4);
     background: rgba(116, 185, 255, 0.15);
-    color: #74b9ff;
+    color: #1d4ed8;
     border-radius: 4px;
     cursor: pointer;
     font-family: 'DM Sans', sans-serif;
@@ -1007,7 +1012,7 @@
 }
 
 .rt-model-controls-inner {
-    background: rgba(15, 23, 42, 0.92);
+    background: rgba(255, 255, 255, 0.92);
     border: 1px solid rgba(116, 185, 255, 0.15);
     border-radius: 6px;
     padding: 8px 10px;
@@ -1018,19 +1023,19 @@
     min-width: 120px;
     font-size: 10px;
     padding: 3px 6px;
-    border: 1px solid rgba(255, 255, 255, 0.12);
+    border: 1px solid var(--border-light);
     border-radius: 4px;
-    background: #0f172a;
-    color: #e2e8f0;
-    font-family: 'JetBrains Mono', monospace;
+    background: var(--surface-raised);
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
 }
 
 .rt-model-filter-btn {
     font-size: 9px;
     padding: 2px 6px;
-    border: 1px solid rgba(255, 255, 255, 0.12);
+    border: 1px solid var(--border-light);
     background: transparent;
-    color: #74b9ff;
+    color: #1d4ed8;
     border-radius: 3px;
     cursor: pointer;
     font-family: 'DM Sans', sans-serif;
@@ -1055,7 +1060,7 @@
     align-items: center;
     gap: 3px;
     font-size: 0.7rem;
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     white-space: nowrap;
     line-height: 1.4;
 }
@@ -1080,12 +1085,12 @@
     overflow: visible;
 }
 .ascat-tooltip {
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     font-size: 11px;
     padding: 3px 6px;
-    background: rgba(15, 23, 42, 0.9);
+    background: rgba(255, 255, 255, 0.9);
     border: 1px solid rgba(116, 185, 255, 0.3);
-    color: #e2e8f0;
+    color: var(--text);
     border-radius: 3px;
 }
 
@@ -1096,7 +1101,7 @@
     -webkit-appearance: none;
     appearance: none;
     height: 4px;
-    background: rgba(255, 255, 255, 0.1);
+    background: rgba(15, 22, 35, 0.1);
     border-radius: 2px;
     outline: none;
     cursor: pointer;
@@ -1152,27 +1157,27 @@
     right: 0;
     top: 100%;
     margin-top: 0;
-    background: rgba(15, 23, 42, 0.95);
+    background: rgba(255, 255, 255, 0.95);
     border: 1px solid rgba(0, 229, 255, 0.2);
     border-radius: 6px;
     padding: 4px;
     display: flex;
     gap: 4px;
     z-index: 100;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 .rt-dm-export-popup button {
     font-size: 11px;
     padding: 5px 14px;
     border-radius: 4px;
-    border: 1px solid rgba(255, 255, 255, 0.15);
+    border: 1px solid rgba(15, 22, 35, 0.15);
     cursor: pointer;
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     transition: background 0.15s;
 }
 .rt-dm-export-popup .export-dark {
     background: #1e293b;
-    color: #e2e8f0;
+    color: var(--text);
 }
 .rt-dm-export-popup .export-dark:hover {
     background: #334155;
@@ -1182,5 +1187,5 @@
     color: #1e293b;
 }
 .rt-dm-export-popup .export-light:hover {
-    background: #e2e8f0;
+    background: #e6e8eb;
 }

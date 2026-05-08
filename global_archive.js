@@ -628,14 +628,25 @@ function getCatKey(vmax) {
     return 'C5';
 }
 
-// ── Plotly defaults ──────────────────────────────────────────
-var PLOTLY_LAYOUT_BASE = {
-    paper_bgcolor: '#0a1628',
-    plot_bgcolor: '#0a1628',
-    font: { family: 'DM Sans, sans-serif', color: '#e2e8f0' },
-    margin: { l: 50, r: 20, t: 10, b: 40 },
-    hoverlabel: { bgcolor: '#1f2937', font: { color: '#e5e7eb', size: 12, family: 'DM Sans' } }
-};
+// ── Plotly defaults — theme-aware ────────────────────────────
+// Pulls paper/plot/font/grid colors from CSS vars via TCATheme.plotly()
+// so charts repaint correctly when the user toggles light↔dark in the
+// topbar. Defined as a getter so every Plotly.newPlot() call reads
+// fresh values from the current theme.
+function _tcaPlotlyBase() {
+    var t = (window.TCATheme && typeof window.TCATheme.plotly === 'function')
+        ? window.TCATheme.plotly()
+        : { paper_bgcolor: '#ffffff', plot_bgcolor: '#ffffff',
+            font: { family: 'DM Sans, sans-serif', color: '#0f1623' },
+            hoverlabel: { bgcolor: '#ffffff', bordercolor: 'rgba(15,22,35,0.15)',
+                          font: { color: '#0f1623', size: 12, family: 'DM Sans' } } };
+    t.margin = { l: 50, r: 20, t: 10, b: 40 };
+    return t;
+}
+Object.defineProperty(window, 'PLOTLY_LAYOUT_BASE', {
+    get: _tcaPlotlyBase, configurable: true
+});
+var PLOTLY_LAYOUT_BASE = window.PLOTLY_LAYOUT_BASE;
 
 var PLOTLY_CONFIG = {
     responsive: true,
@@ -832,7 +843,7 @@ function initBrowserMap() {
         worldCopyJump: true
     });
 
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
         attribution: '&copy; <a href="https://carto.com/">CARTO</a>',
         subdomains: 'abcd',
         maxZoom: 12
@@ -1590,7 +1601,7 @@ function renderIntensityTimeline(track, storm) {
         mode: 'lines+markers',
         name: 'Wind (kt)',
         line: { color: '#00d4ff', width: 2.5 },
-        marker: { color: colors, size: 6, line: { color: 'rgba(255,255,255,0.3)', width: 1 } },
+        marker: { color: colors, size: 6, line: { color: 'rgba(15, 22, 35,0.3)', width: 1 } },
         hovertemplate: '<b>%{x}</b><br>Wind: %{y} kt<extra></extra>',
         yaxis: 'y'
     };
@@ -1612,13 +1623,13 @@ function renderIntensityTimeline(track, storm) {
         xaxis: {
             title: { text: 'Date/Time', font: { size: 11, color: '#8b9ec2' } },
             tickfont: { size: 10, color: '#8b9ec2' },
-            gridcolor: 'rgba(255,255,255,0.04)',
-            linecolor: 'rgba(255,255,255,0.08)'
+            gridcolor: 'rgba(15, 22, 35,0.04)',
+            linecolor: 'rgba(15, 22, 35,0.08)'
         },
         yaxis: {
             title: { text: 'Max Wind (kt)', font: { size: 11, color: '#00d4ff' } },
             tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' },
-            gridcolor: 'rgba(255,255,255,0.04)',
+            gridcolor: 'rgba(15, 22, 35,0.04)',
             range: [0, Math.max(maxWind + 20, 180)],
             side: 'left'
         },
@@ -1635,7 +1646,7 @@ function renderIntensityTimeline(track, storm) {
         legend: {
             x: 0.01, y: 0.99,
             bgcolor: 'rgba(15,33,64,0.8)',
-            bordercolor: 'rgba(255,255,255,0.08)',
+            bordercolor: 'rgba(15, 22, 35,0.08)',
             borderwidth: 1,
             font: { size: 11, color: '#e2e8f0' }
         },
@@ -1904,7 +1915,7 @@ function renderHovmoller(data) {
             y: data.times,
             type: 'scatter',
             mode: 'lines',
-            line: { color: 'rgba(255,255,255,0.7)', width: 1.5, dash: 'dot' },
+            line: { color: 'rgba(15, 22, 35,0.7)', width: 1.5, dash: 'dot' },
             xaxis: 'x2',
             hovertemplate: '%{y}<br>Vmax = %{x} kt<extra></extra>',
             showlegend: false
@@ -1935,13 +1946,13 @@ function renderHovmoller(data) {
         xaxis: {
             title: { text: 'Radius (km)', font: { size: 9 } },
             tickfont: { size: 8 },
-            gridcolor: 'rgba(255,255,255,0.05)',
+            gridcolor: 'rgba(15, 22, 35,0.05)',
             range: [0, 200]
         },
         yaxis: {
             title: { text: 'Time (UTC)', font: { size: 9 } },
             tickfont: { size: 8 },
-            gridcolor: 'rgba(255,255,255,0.05)',
+            gridcolor: 'rgba(15, 22, 35,0.05)',
             autorange: 'reversed'
         },
         shapes: shapes
@@ -1950,8 +1961,8 @@ function renderHovmoller(data) {
     // Secondary x-axis for wind overlay (top)
     if (data.winds && data.winds.length === nTimes) {
         layout.xaxis2 = {
-            title: { text: 'Vmax (kt)', font: { size: 9, color: 'rgba(255,255,255,0.5)' } },
-            tickfont: { size: 8, color: 'rgba(255,255,255,0.4)' },
+            title: { text: 'Vmax (kt)', font: { size: 9, color: 'rgba(15, 22, 35,0.5)' } },
+            tickfont: { size: 8, color: 'rgba(15, 22, 35,0.4)' },
             overlaying: 'x',
             side: 'top',
             showgrid: false,
@@ -2114,7 +2125,7 @@ function addFDeckTraces() {
                 color: style.color,
                 symbol: style.symbol,
                 size: style.size,
-                line: { color: 'rgba(255,255,255,0.5)', width: 1 }
+                line: { color: 'rgba(15, 22, 35,0.5)', width: 1 }
             },
             hovertemplate: '%{text}<extra></extra>',
             text: hovers,
@@ -2750,12 +2761,12 @@ function renderCompareTimeline() {
         xaxis: {
             title: { text: xTitle, font: { size: 11, color: '#8b9ec2' } },
             tickfont: { size: 10, color: '#8b9ec2' },
-            gridcolor: 'rgba(255,255,255,0.04)'
+            gridcolor: 'rgba(15, 22, 35,0.04)'
         },
         yaxis: {
             title: { text: 'Max Wind (kt)', font: { size: 11, color: '#00d4ff' } },
             tickfont: { size: 10, color: '#8b9ec2', family: 'JetBrains Mono' },
-            gridcolor: 'rgba(255,255,255,0.04)',
+            gridcolor: 'rgba(15, 22, 35,0.04)',
             range: [0, Math.min(maxWind + 20, 200)]
         },
         yaxis2: {
@@ -2769,7 +2780,7 @@ function renderCompareTimeline() {
         legend: {
             x: 0.01, y: 0.99,
             bgcolor: 'rgba(15,33,64,0.8)',
-            bordercolor: 'rgba(255,255,255,0.08)',
+            bordercolor: 'rgba(15, 22, 35,0.08)',
             borderwidth: 1,
             font: { size: 10, color: '#e2e8f0' }
         },
@@ -2789,7 +2800,7 @@ function renderCompareMap() {
         center: [20, -60], zoom: 3,
         zoomControl: true, worldCopyJump: true
     });
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
         attribution: '&copy; CARTO', subdomains: 'abcd', maxZoom: 12
     }).addTo(compareMap);
 
@@ -3263,7 +3274,7 @@ function renderDetailMap(track, storm) {
         worldCopyJump: true
     });
 
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
         attribution: '&copy; CARTO',
         subdomains: 'abcd',
         maxZoom: 12
@@ -3873,7 +3884,7 @@ function updateIRPositionMarker(data) {
         } else {
             irPositionMarker = L.circleMarker([lat, lon], {
                 radius: 4,
-                color: 'rgba(255,255,255,0.85)',
+                color: 'rgba(15, 22, 35,0.85)',
                 fillColor: 'transparent',
                 fillOpacity: 0,
                 weight: 1.5,
@@ -3915,7 +3926,7 @@ function updateHovCenterMarker(frameDtStr) {
     if (!c || c.lat == null) return;
 
     var isIRFix = (c.method === 'ir_fix');
-    var color = isIRFix ? '#00e5ff' : 'rgba(255,255,255,0.5)';
+    var color = isIRFix ? '#00e5ff' : 'rgba(15, 22, 35,0.5)';
     var icon = L.divIcon({
         className: '',
         html: '<div style="' +
@@ -5156,7 +5167,7 @@ function _updateGaNexradColorbar(product) {
 
     if (product === 'velocity') {
         el.innerHTML =
-            '<div style="display:flex;height:8px;border-radius:3px;border:1px solid rgba(255,255,255,0.15);overflow:hidden;">' +
+            '<div style="display:flex;height:8px;border-radius:3px;border:1px solid rgba(15, 22, 35,0.15);overflow:hidden;">' +
                 '<div style="flex:1;background:#0000D0;"></div>' +
                 '<div style="flex:1;background:#0050FF;"></div>' +
                 '<div style="flex:1;background:#00C8FF;"></div>' +
@@ -5172,7 +5183,7 @@ function _updateGaNexradColorbar(product) {
             '</div>';
     } else {
         el.innerHTML =
-            '<div style="display:flex;height:8px;border-radius:3px;border:1px solid rgba(255,255,255,0.15);overflow:hidden;">' +
+            '<div style="display:flex;height:8px;border-radius:3px;border:1px solid rgba(15, 22, 35,0.15);overflow:hidden;">' +
                 '<div style="flex:1;background:#04E9E7;"></div>' +
                 '<div style="flex:1;background:#019FF4;"></div>' +
                 '<div style="flex:1;background:#0300F4;"></div>' +
@@ -6146,7 +6157,7 @@ window.startGifExport = function () {
             // Background
             ctx.fillStyle = 'rgba(10,22,40,0.9)';
             ctx.fillRect(chartX, chartY, chartW, chartH);
-            ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+            ctx.strokeStyle = 'rgba(15, 22, 35,0.08)';
             ctx.lineWidth = 0.5;
             ctx.strokeRect(chartX, chartY, chartW, chartH);
 
@@ -6632,7 +6643,7 @@ function initCompareIR() {
             minZoom: 2, maxZoom: 10,
             scrollWheelZoom: true
         }).setView([20, -60], 4);
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png', {
             maxZoom: 18
         }).addTo(_cmpIR.left.map);
         _cmpIR.left.map.createPane('coastlines');
@@ -6648,7 +6659,7 @@ function initCompareIR() {
             minZoom: 2, maxZoom: 10,
             scrollWheelZoom: true
         }).setView([20, -60], 4);
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png', {
             maxZoom: 18
         }).addTo(_cmpIR.right.map);
         _cmpIR.right.map.createPane('coastlines');
@@ -7198,7 +7209,7 @@ function _renderCompareHov(side, data) {
             x: data.winds,
             y: data.times,
             type: 'scatter', mode: 'lines',
-            line: { color: 'rgba(255,255,255,0.6)', width: 1.2, dash: 'dot' },
+            line: { color: 'rgba(15, 22, 35,0.6)', width: 1.2, dash: 'dot' },
             xaxis: 'x2',
             hovertemplate: '%{y}<br>Vmax = %{x} kt<extra></extra>',
             showlegend: false
@@ -7230,12 +7241,12 @@ function _renderCompareHov(side, data) {
         xaxis: {
             title: { text: 'Radius (km)', font: { size: 8 } },
             tickfont: { size: 7 },
-            gridcolor: 'rgba(255,255,255,0.05)',
+            gridcolor: 'rgba(15, 22, 35,0.05)',
             range: [0, 200]
         },
         yaxis: {
             tickfont: { size: 7 },
-            gridcolor: 'rgba(255,255,255,0.05)',
+            gridcolor: 'rgba(15, 22, 35,0.05)',
             autorange: 'reversed'
         },
         shapes: shapes
@@ -7243,7 +7254,7 @@ function _renderCompareHov(side, data) {
 
     if (data.winds && data.winds.length === data.times.length) {
         layout.xaxis2 = {
-            tickfont: { size: 7, color: 'rgba(255,255,255,0.3)' },
+            tickfont: { size: 7, color: 'rgba(15, 22, 35,0.3)' },
             overlaying: 'x', side: 'top', showgrid: false,
             range: [0, Math.max.apply(null, data.winds.filter(function (w) { return w != null; })) * 1.2]
         };
@@ -7419,13 +7430,13 @@ function _updateCompareRadialProfile() {
         xaxis: {
             title: { text: 'Radius (km)', font: { size: 9 } },
             tickfont: { size: 8 },
-            gridcolor: 'rgba(255,255,255,0.05)',
+            gridcolor: 'rgba(15, 22, 35,0.05)',
             range: [0, 200]
         },
         yaxis: {
             title: { text: 'Tb (°C)', font: { size: 9 } },
             tickfont: { size: 8 },
-            gridcolor: 'rgba(255,255,255,0.05)',
+            gridcolor: 'rgba(15, 22, 35,0.05)',
             range: [-90, 30]
         },
         legend: { x: 1, y: 1, xanchor: 'right', font: { size: 9 }, bgcolor: 'rgba(0,0,0,0.3)' },
@@ -7503,7 +7514,7 @@ function initCompareMW() {
             minZoom: 2, maxZoom: 10,
             scrollWheelZoom: true
         }).setView([20, -60], 4);
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png', {
             maxZoom: 18
         }).addTo(_cmpMW.left.map);
     }
@@ -7514,7 +7525,7 @@ function initCompareMW() {
             minZoom: 2, maxZoom: 10,
             scrollWheelZoom: true
         }).setView([20, -60], 4);
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png', {
             maxZoom: 18
         }).addTo(_cmpMW.right.map);
     }
@@ -8721,15 +8732,15 @@ function renderSHIPSChart() {
         legend: {
             x: 0.01, y: 0.99,
             bgcolor: 'rgba(15,33,64,0.8)',
-            bordercolor: 'rgba(255,255,255,0.08)',
+            bordercolor: 'rgba(15, 22, 35,0.08)',
             borderwidth: 1,
             font: { size: 10, color: '#e2e8f0' },
             orientation: 'h'
         },
         xaxis: {
             tickfont: { size: 10, color: '#8b9ec2' },
-            gridcolor: 'rgba(255,255,255,0.04)',
-            linecolor: 'rgba(255,255,255,0.08)'
+            gridcolor: 'rgba(15, 22, 35,0.04)',
+            linecolor: 'rgba(15, 22, 35,0.08)'
         }
     };
 
@@ -8741,7 +8752,7 @@ function renderSHIPSChart() {
         layout[yKey] = {
             title: { text: ax.unit, font: { size: 11, color: '#8b9ec2' } },
             tickfont: { size: 10, color: '#8b9ec2' },
-            gridcolor: ax.idx === 1 ? 'rgba(255,255,255,0.04)' : 'transparent',
+            gridcolor: ax.idx === 1 ? 'rgba(15, 22, 35,0.04)' : 'transparent',
             side: ax.side,
             overlaying: ax.idx > 1 ? 'y' : undefined
         };
@@ -9025,15 +9036,15 @@ function renderTCPrimedEnvChart() {
         legend: {
             x: 0.01, y: 0.99,
             bgcolor: 'rgba(15,33,64,0.8)',
-            bordercolor: 'rgba(255,255,255,0.08)',
+            bordercolor: 'rgba(15, 22, 35,0.08)',
             borderwidth: 1,
             font: { size: 10, color: '#e2e8f0' },
             orientation: 'h'
         },
         xaxis: {
             tickfont: { size: 10, color: '#8b9ec2' },
-            gridcolor: 'rgba(255,255,255,0.04)',
-            linecolor: 'rgba(255,255,255,0.08)'
+            gridcolor: 'rgba(15, 22, 35,0.04)',
+            linecolor: 'rgba(15, 22, 35,0.08)'
         }
     };
 
@@ -9044,7 +9055,7 @@ function renderTCPrimedEnvChart() {
         layout[yKey] = {
             title: { text: ax.unit, font: { size: 11, color: '#8b9ec2' } },
             tickfont: { size: 10, color: '#8b9ec2' },
-            gridcolor: ax.idx === 1 ? 'rgba(255,255,255,0.04)' : 'transparent',
+            gridcolor: ax.idx === 1 ? 'rgba(15, 22, 35,0.04)' : 'transparent',
             side: ax.side,
             overlaying: ax.idx > 1 ? 'y' : undefined
         };
@@ -10143,7 +10154,7 @@ function _gaFLInjectLegend() {
     }).join(', ');
 
     var html = '<div style="margin-top:2px;">' +
-        '<div style="height:12px;border-radius:3px;background:linear-gradient(to right,' + gradStops + ');border:1px solid rgba(255,255,255,0.1);"></div>' +
+        '<div style="height:12px;border-radius:3px;background:linear-gradient(to right,' + gradStops + ');border:1px solid rgba(15, 22, 35,0.1);"></div>' +
         '<div style="display:flex;justify-content:space-between;font-size:8px;color:#94a3b8;margin-top:1px;">';
     stops.forEach(function (s) {
         html += '<span>' + (s.lbl || s.val) + '</span>';
@@ -10452,7 +10463,7 @@ function _gaSondeRenderTable() {
     if (!wrap || !_gaSondeData) return;
 
     var html = '<table style="width:100%;border-collapse:collapse;font-size:10px;font-family:\'JetBrains Mono\',monospace;">' +
-        '<tr style="color:#6ee7b7;border-bottom:1px solid rgba(255,255,255,0.1);">' +
+        '<tr style="color:#6ee7b7;border-bottom:1px solid rgba(15, 22, 35,0.1);">' +
         '<th style="padding:3px 4px;text-align:left;">#</th>' +
         '<th style="padding:3px 4px;text-align:left;">Time</th>' +
         '<th style="padding:3px 4px;text-align:right;" title="Maximum wind speed in profile">Vmax</th>' +
@@ -10513,7 +10524,7 @@ function _gaSondeRenderTable() {
         }
         var timeShort = (s.launch_time || '').replace(/.*T/, '').replace('Z', '').substring(0, 8);
 
-        html += '<tr style="border-bottom:1px solid rgba(255,255,255,0.05);cursor:pointer;" onclick="gaSondeShowSkewT(' + i + ')">' +
+        html += '<tr style="border-bottom:1px solid rgba(15, 22, 35,0.05);cursor:pointer;" onclick="gaSondeShowSkewT(' + i + ')">' +
             '<td style="padding:2px 4px;color:' + _SONDE_COLORS[i % _SONDE_COLORS.length] + ';">' + (i + 1) + '</td>' +
             '<td style="padding:2px 4px;">' + timeShort + '</td>' +
             '<td style="padding:2px 4px;text-align:right;">' + (maxWspd != null ? (maxWspd * 1.944).toFixed(0) + ' kt' : '\u2014') + '</td>' +
@@ -10844,12 +10855,12 @@ function _renderSondeWindProfile(sonde, divId) {
 
     var layout = {
         paper_bgcolor: 'rgba(0,0,0,0)',
-        plot_bgcolor: 'rgba(10,22,40,0.5)',
+        plot_bgcolor: 'rgba(247,248,250,0.85)',
         margin: { l: 50, r: 50, t: 35, b: 40 },
         xaxis: {
             title: { text: 'Wind Speed (kt)', font: { size: 9, color: '#60a5fa' } },
             color: '#60a5fa', tickfont: { size: 8 },
-            gridcolor: 'rgba(255,255,255,0.06)', zeroline: false,
+            gridcolor: 'rgba(15, 22, 35,0.06)', zeroline: false,
             range: [0, Math.max.apply(null, wspdVals) * 1.1],
         },
         xaxis2: {
@@ -10862,7 +10873,7 @@ function _renderSondeWindProfile(sonde, divId) {
         yaxis: {
             title: { text: 'Altitude (m)', font: { size: 9, color: '#8b9ec2' } },
             color: '#8b9ec2', tickfont: { size: 8 },
-            gridcolor: 'rgba(255,255,255,0.06)', zeroline: false,
+            gridcolor: 'rgba(15, 22, 35,0.06)', zeroline: false,
             range: [0, maxAlt],
         },
         legend: { font: { color: '#ccc', size: 9 }, x: 0.02, y: 0.98, bgcolor: 'rgba(0,0,0,0.4)' },
@@ -11065,19 +11076,19 @@ function _renderCrossSection(divId) {
 
     var layout = {
         paper_bgcolor: 'rgba(0,0,0,0)',
-        plot_bgcolor: 'rgba(10,22,40,0.5)',
+        plot_bgcolor: 'rgba(247,248,250,0.85)',
         margin: { l: 50, r: 80, t: 10, b: 40 },
         xaxis: {
             title: { text: 'Radius from center (km)', font: { size: 9, color: '#8b9ec2' } },
             color: '#8b9ec2', tickfont: { size: 8 },
-            gridcolor: 'rgba(255,255,255,0.06)', zeroline: true,
-            zerolinecolor: 'rgba(255,255,255,0.15)',
+            gridcolor: 'rgba(15, 22, 35,0.06)', zeroline: true,
+            zerolinecolor: 'rgba(15, 22, 35,0.15)',
             range: [0, maxR],
         },
         yaxis: {
             title: { text: 'Altitude (km)', font: { size: 9, color: '#8b9ec2' } },
             color: '#8b9ec2', tickfont: { size: 8 },
-            gridcolor: 'rgba(255,255,255,0.06)', zeroline: false,
+            gridcolor: 'rgba(15, 22, 35,0.06)', zeroline: false,
             range: [0, maxAlt],
         },
         legend: { font: { color: '#ccc', size: 9 }, x: 0.02, y: 0.98, bgcolor: 'rgba(0,0,0,0.4)' },
@@ -11338,18 +11349,18 @@ function _renderRadialProfile(divId) {
 
     var layout = {
         paper_bgcolor: 'rgba(0,0,0,0)',
-        plot_bgcolor: 'rgba(10,22,40,0.5)',
+        plot_bgcolor: 'rgba(247,248,250,0.85)',
         margin: { l: 55, r: 15, t: 10, b: 40 },
         xaxis: {
             title: { text: 'Radius from center (km)', font: { size: 9, color: '#8b9ec2' } },
             color: '#8b9ec2', tickfont: { size: 8 },
-            gridcolor: 'rgba(255,255,255,0.06)', zeroline: true,
-            zerolinecolor: 'rgba(255,255,255,0.15)', range: [0, 300],
+            gridcolor: 'rgba(15, 22, 35,0.06)', zeroline: true,
+            zerolinecolor: 'rgba(15, 22, 35,0.15)', range: [0, 300],
         },
         yaxis: {
             title: { text: varLabel, font: { size: 9, color: varColor } },
             color: varColor, tickfont: { size: 8 },
-            gridcolor: 'rgba(255,255,255,0.06)', zeroline: false,
+            gridcolor: 'rgba(15, 22, 35,0.06)', zeroline: false,
         },
         legend: { font: { color: '#ccc', size: 9 }, x: 0.7, y: 0.98, bgcolor: 'rgba(0,0,0,0.4)' },
         showlegend: true,
@@ -11616,14 +11627,14 @@ function _gaFLRenderTimeSeries() {
         legend: { orientation: 'h', y: 1.12, font: { size: 9 } },
         xaxis: {
             title: _gaFLXAxisMode === 'time' ? 'Time (UTC)' : 'Radius from center (km)',
-            gridcolor: 'rgba(255,255,255,0.06)',
+            gridcolor: 'rgba(15, 22, 35,0.06)',
             zeroline: false,
             nticks: 8,
             tickangle: 0,
         },
         yaxis: {
             title: 'Wind (kt)', titlefont: { color: '#60a5fa' },
-            tickfont: { color: '#60a5fa' }, gridcolor: 'rgba(255,255,255,0.06)',
+            tickfont: { color: '#60a5fa' }, gridcolor: 'rgba(15, 22, 35,0.06)',
             zeroline: false, side: 'left',
         },
         yaxis2: {

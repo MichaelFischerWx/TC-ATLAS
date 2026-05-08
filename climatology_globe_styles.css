@@ -2,37 +2,126 @@
    Climatology Globe — TC-ATLAS theme overrides
    ══════════════════════════════════════════════════════════════
    Standalone page that hosts the vendored GC-ATLAS climatology
-   engine. globe.css ships with an emerald/teal palette and a
-   GC-ATLAS topbar; this stylesheet re-maps the GC-ATLAS theme
-   variables to TC-ATLAS navy/blue/cyan and re-applies TC-ATLAS
-   topbar styling so the page sits flush with the rest of the
-   site. tc_radar_styles.css loads BETWEEN globe.css and this
-   file so its .topbar rules already win for topbar markup —
-   this file just touches the globe-engine-specific bits.
+   engine. globe.css ships with its own emerald/teal palette and
+   a GC-ATLAS topbar; this stylesheet re-maps those tokens onto
+   TC-ATLAS's UM-branded dark palette (UM green + UM orange) and
+   re-applies the TC-ATLAS topbar styling so the page sits flush
+   with the rest of the site. tc_radar_styles.css loads BETWEEN
+   globe.css and this file so its .topbar rules win for topbar
+   markup — this file just touches the globe-engine-specific bits.
+   The legacy --emerald/--sage/--paper names are kept (engine
+   reads them) but they now point to UM-palette values.
    ══════════════════════════════════════════════════════════════ */
 
 /* ── Theme variable remap ───────────────────────────────────── */
+/*  Same light-chrome / dark-canvas split as the other tool pages:
+      - Topbar, sidebar, sidebar controls   → LIGHT (consistent site)
+      - Globe canvas (3D rendered area)     → DARK (data legibility)
+      - Floating panels OVER the canvas     → DARK (live on dark)
+    GC-ATLAS engine tokens (--paper/--sage/--thalo/--emerald) are
+    remapped to the LIGHT palette so the sidebar reads correctly.
+    The dark canvas is enforced explicitly via .canvas-area below.   */
 :root {
-    --deep:           #0c1d3d;        /* navy — body/canvas bg */
-    --thalo-dark:     #0c1d3d;        /* sidebar bg, seamless with topbar */
-    --thalo:          #142a52;        /* navy-mid */
-    --thalo-raised:   #1b3a6b;        /* navy-light — input/control surface */
-    --thalo-line:     rgba(255,255,255,0.10);
-    --emerald:        #2e7dff;        /* blue — accent/active */
-    --emerald-bright: #00d4ff;        /* cyan — highlight/thumb */
-    --emerald-glow:   rgba(46,125,255,0.25);
-    --sage:           #8b9ec2;        /* slate — labels/dim text */
-    --paper:          #e2e8f0;        /* text */
-    --paper-dim:      #94a3b8;        /* text-dim */
+    /* GC-ATLAS engine tokens — mapped to the SITE-WIDE LIGHT palette */
+    --deep:           #ffffff;             /* page bg (chrome lives here) */
+    --thalo-dark:     #ffffff;             /* sidebar bg = white */
+    --thalo:          #f4f6f9;             /* alt surface */
+    --thalo-raised:   #ffffff;             /* control surface */
+    --thalo-line:     rgba(15,22,35,0.08); /* light borders */
+    --emerald:        #005030;             /* UM green accent */
+    --emerald-bright: #F47321;             /* UM orange highlight */
+    --emerald-glow:   rgba(0,80,48,0.10);
+    --sage:           #5b6573;             /* secondary text on light */
+    --paper:          #0f1623;             /* primary text on light */
+    --paper-dim:      #6b7385;             /* dim text */
+    --amber:          #F47321;             /* legacy amber → UM orange */
 }
 
-/* ── Canvas gradient retint ─────────────────────────────────── */
-/* Upstream uses emerald-glow as the radial centre, which leaks green
-   even when the foreground is fully blue. Swap for a blue glow. */
+/* ── Canvas area — DARK ("space") so the sun feature reads ──── */
+/* The 3D globe is rendered with a sun-position highlight that only
+   makes physical sense against a dark/space background. So the
+   canvas stays dark even though the rest of the site is light.
+   The chrome (sidebar, topbar) is still light per the engine
+   tokens above; only the canvas + its floating overlays go dark. */
 .canvas-area {
     background:
-        radial-gradient(ellipse at 50% 55%, rgba(46,125,255,0.10) 0%, transparent 55%),
-        var(--navy);
+        radial-gradient(ellipse at 50% 55%, rgba(74, 155, 110, 0.18) 0%, transparent 55%),
+        #0d1318;
+    color: #e6e8eb;
+}
+
+/* ── Floating overlays ON the dark canvas — soft glass ──────── */
+.canvas-area .view-toggle {
+    background: rgba(30, 42, 58, 0.62);
+    border: 1px solid rgba(255,255,255,0.14);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+}
+.canvas-area .view-toggle button {
+    color: #d8dde6;
+}
+.canvas-area .view-toggle button.active {
+    background: var(--um-green);
+    color: #ffffff;
+}
+.canvas-area .view-toggle button:hover:not(.active) {
+    color: #ffffff;
+    background: rgba(255,255,255,0.10);
+}
+
+.canvas-area .share-btn {
+    background: rgba(30, 42, 58, 0.62);
+    border: 1px solid rgba(255,255,255,0.14);
+    color: #d8dde6;
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+}
+.canvas-area .share-btn:hover {
+    color: #ffffff;
+    border-color: var(--um-orange);
+}
+
+/* "Controls" hint card bottom-right of canvas */
+.canvas-area .tips-panel {
+    background: rgba(30, 42, 58, 0.62);
+    border: 1px solid rgba(255,255,255,0.14);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    color: #e8ecf2;
+}
+.canvas-area .tips-panel .tips-title {
+    color: var(--um-orange);
+}
+.canvas-area .tips-panel .tips-title::before {
+    background: var(--um-orange);
+}
+.canvas-area .tips-panel .tips-kbd {
+    background: rgba(255,255,255,0.12);
+    color: #ffffff;
+    border: 1px solid rgba(255,255,255,0.10);
+}
+
+/* Reopen "?" button when tips are hidden */
+.canvas-area .tips-reopen {
+    background: rgba(30, 42, 58, 0.62);
+    border: 1px solid rgba(255,255,255,0.14);
+    color: #d8dde6;
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+}
+.canvas-area .tips-reopen:hover {
+    color: #ffffff;
+    border-color: var(--um-orange);
+}
+
+/* "Loading ERA5 tiles…" banner that floats over the canvas */
+.canvas-area .loading-banner,
+.canvas-area .canvas-status {
+    background: rgba(30, 42, 58, 0.62);
+    color: #ffffff;
+    border: 1px solid rgba(255,255,255,0.14);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
 }
 
 /* ── Colorbar slim + transparent ────────────────────────────── */
@@ -40,41 +129,89 @@
    wide enough to cover Western Pacific tracks. Slimmer + glass-y
    reads cleaner on top of TC tracks. */
 .colorbar {
-    background: rgba(12, 29, 61, 0.55);
+    background: rgba(30, 42, 58, 0.55);
+    border: 1px solid rgba(255,255,255,0.14);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
     min-width: 220px;
     max-width: 260px;
     padding: 10px 12px 8px;
+    color: #f1f3f7;
 }
 .colorbar:hover {
-    background: rgba(12, 29, 61, 0.85);
+    background: rgba(30, 42, 58, 0.75);
 }
-.cb-tick-input {
+
+/* Override engine text colors for elements INSIDE the dark colorbar.
+   The engine tokens (--paper, --sage) are now mapped to dark-on-light
+   for the sidebar; here we force light-on-dark since the colorbar
+   floats on the dark canvas. */
+.colorbar #cb-title  { color: #ffffff; }
+.colorbar #cb-units  { color: #c9cfd9; }
+.colorbar .cb-tick-input {
+    color: #e8ecf2;
     border: 1px solid transparent;
     background: transparent;
 }
-.cb-tick-input:hover,
-.cb-tick-input:focus {
-    border-color: rgba(255,255,255,0.15);
+.colorbar .cb-tick-input:not(:focus):not(.is-override) {
+    text-decoration-color: rgba(255,255,255,0.35);
+}
+.colorbar .cb-tick-input:hover {
+    border-color: rgba(255,255,255,0.18);
     background: rgba(255,255,255,0.04);
+}
+.colorbar .cb-tick-input:focus {
+    color: #ffffff;
+    border-color: var(--um-orange);
+    background: rgba(255,255,255,0.04);
+}
+.colorbar .cb-tick-input.is-override {
+    color: var(--um-orange);
+    border-color: rgba(244, 115, 33, 0.45);
+}
+.colorbar .cb-auto {
+    color: #c9cfd9;
+    border-color: rgba(255,255,255,0.18);
+}
+.colorbar .cb-auto:hover {
+    color: #ffffff;
+    border-color: var(--um-orange);
+}
+.colorbar .cb-auto.is-active {
+    color: var(--um-orange);
+    border-color: rgba(244, 115, 33, 0.55);
+    background: rgba(244, 115, 33, 0.10);
+}
+.colorbar .cb-hint {
+    color: #c9cfd9;
+}
+.colorbar .cb-note {
+    color: #d8dde6;
+}
+.colorbar .cb-cmap-menu > summary {
+    color: #d8dde6;
+}
+.colorbar .cb-cmap-menu > summary:hover {
+    color: #ffffff;
 }
 
 /* ── Sliders: brighten track for navy sidebar ───────────────── */
-/* Upstream globe.css's track (#1b3a6b on #0c1d3d) is too low-contrast
+/* Upstream globe.css's track (#1a2230 on #0d1318) is too low-contrast
    against TC-ATLAS's navy sidebar — bump to translucent TC-ATLAS blue
    with a brighter border, and swap the thumb to cyan for visibility. */
 .slider {
     width: 100%;
     min-width: 0;
     height: 8px;
-    background: rgba(46, 125, 255, 0.30);
-    border: 1px solid rgba(46, 125, 255, 0.60);
+    background: rgba(74, 155, 110, 0.30);
+    border: 1px solid rgba(74, 155, 110, 0.60);
 }
 .slider::-webkit-slider-thumb {
     width: 18px;
     height: 18px;
     background: var(--cyan);
     border: 2px solid var(--navy);
-    box-shadow: 0 0 0 3px rgba(0, 212, 255, 0.25);
+    box-shadow: 0 0 0 3px rgba(244, 115, 33, 0.25);
 }
 .slider::-moz-range-thumb {
     width: 18px;
@@ -93,13 +230,14 @@
     min-width: 180px;
     max-width: 280px;
     padding: 8px 12px 10px;
-    background: rgba(12, 29, 61, 0.95);
-    border: 1px solid rgba(0, 212, 255, 0.40);
+    background: rgba(13, 19, 24, 0.92);
+    border: 1px solid rgba(255,255,255,0.10);
+    border-left: 3px solid var(--um-orange);
     border-radius: 8px;
     box-shadow: 0 6px 22px rgba(0, 0, 0, 0.45);
     backdrop-filter: blur(10px);
     -webkit-backdrop-filter: blur(10px);
-    color: #e2e8f0;
+    color: #e6e8eb;
     font-family: 'DM Sans', -apple-system, sans-serif;
     font-size: 0.78rem;
     line-height: 1.4;
@@ -109,25 +247,25 @@
 .track-tooltip .tt-title {
     font-weight: 700;
     font-size: 0.92rem;
-    color: #00d4ff;
+    color: var(--um-orange);
     letter-spacing: 0.02em;
     margin-bottom: 2px;
 }
-.track-tooltip .tt-year { color: #8b9ec2; font-weight: 500; margin-left: 4px; }
+.track-tooltip .tt-year { color: #8993a4; font-weight: 500; margin-left: 4px; }
 .track-tooltip .tt-basin {
     font-size: 0.68rem;
-    color: #8b9ec2;
+    color: #8993a4;
     text-transform: uppercase;
     letter-spacing: 0.06em;
     margin-bottom: 4px;
 }
-.track-tooltip .tt-row { font-family: 'JetBrains Mono', monospace; font-size: 0.74rem; }
+.track-tooltip .tt-row { font-variant-numeric: tabular-nums; font-size: 0.74rem; }
 .track-tooltip .tt-cat { font-weight: 700; }
 .track-tooltip .tt-date {
     margin-top: 2px;
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     font-size: 0.68rem;
-    color: #94a3b8;
+    color: #8a93a3;
 }
 
 /* ── Topbar bridging ───────────────────────────────────────── */
@@ -173,7 +311,7 @@
     vertical-align: middle;
     transition: color 0.15s, background 0.15s;
 }
-.field-info-btn:hover  { color: var(--paper); background: rgba(255,255,255,0.06); }
+.field-info-btn:hover  { color: var(--paper); background: rgba(255, 255, 255,0.06); }
 .field-info-btn:focus  { outline: none; color: var(--emerald-bright); background: rgba(14,140,110,0.18); }
 
 .field-info-popover[hidden] { display: none; }
@@ -183,7 +321,7 @@
     font-size: 0.72rem;
     line-height: 1.5;
     color: var(--paper);
-    background: rgba(255,255,255,0.03);
+    background: rgba(255, 255, 255,0.03);
     border: 1px solid var(--thalo-line);
     border-left: 3px solid var(--emerald);
     border-radius: 4px;
@@ -194,7 +332,7 @@
     margin-bottom: 4px;
 }
 .field-info-popover .fi-units {
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     font-size: 0.66rem;
     color: var(--sage);
     font-weight: normal;

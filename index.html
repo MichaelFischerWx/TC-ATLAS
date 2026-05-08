@@ -33,32 +33,100 @@
     <meta name="twitter:creator" content="@mikefischerwx">
 
     <!-- Favicon -->
-    <link rel="icon" type="image/png" href="tc-atlas-icon.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="tc-atlas-favicon-16.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="tc-atlas-favicon-32.png">
+    <link rel="icon" type="image/png" sizes="192x192" href="tc-atlas-favicon-192.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="tc-atlas-favicon-192.png">
 
     <title>TC-ATLAS — Tropical Cyclone Analysis Tool for Live and Archived Structure</title>
+    <script src="theme.js?v=20260507n"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
 
     <style>
         :root {
-            --navy: #0c1d3d;
-            --navy-mid: #142a52;
-            --navy-light: #1b3a6b;
-            --blue: #2e7dff;
-            --blue-light: #5a9cff;
-            --blue-glow: rgba(46, 125, 255, 0.25);
-            --cyan: #00d4ff;
-            --slate: #8b9ec2;
-            --text: #e2e8f0;
-            --text-dim: #94a3b8;
-            --surface: #0f2140;
-            --surface-raised: #162d54;
-            --border: rgba(255,255,255,0.08);
-            --border-light: rgba(255,255,255,0.12);
-            --radius: 8px;
-            --radius-lg: 12px;
+            /* University of Miami — Hurricanes palette on light bg */
+            --navy: #ffffff;                /* page background */
+            --navy-mid: #f4f6f9;            /* alt surface (source cards) */
+            --navy-light: #eef1f5;          /* tertiary surface */
+
+            --um-green: #005030;            /* UM Pantone 3425 — institutional anchor */
+            --um-green-deep: #003a22;       /* hover / pressed */
+            --um-green-tint: rgba(0, 80, 48, 0.08);
+
+            --um-orange: #F47321;           /* UM Pantone 1665 — live / active accent */
+            --um-orange-deep: #d65f12;      /* hover / pressed */
+            --um-orange-tint: rgba(244, 115, 33, 0.10);
+
+            --blue: var(--um-green);        /* primary accent → UM green */
+            --blue-light: #2e7a5b;          /* lighter green for hover */
+            --blue-glow: var(--um-green-tint);
+            --cyan: var(--um-orange);       /* loud accent → UM orange */
+
+            --slate: #5b6573;               /* secondary text */
+            --text: #0f1623;                /* primary text */
+            --text-dim: #6b7385;            /* tertiary text */
+            --surface: #f7f8fa;             /* section-bg */
+            --surface-raised: #ffffff;      /* card background */
+            --border: rgba(15, 22, 35, 0.08);
+            --border-light: rgba(15, 22, 35, 0.14);
+            --radius: 6px;
+            --radius-lg: 8px;
         }
+
+        /* ── DARK theme override (homepage) ─────────────────── */
+        /* Neutral near-black palette so UM emerald + orange accents
+           land cleanly without a competing navy undertone. Same
+           modern dark-mode look as Linear / Vercel / GitHub. */
+        :root[data-theme="dark"] {
+            --navy: #0a0e14;
+            --navy-mid: #11161f;
+            --navy-light: #1a2230;
+            --blue: #4a9b6e;            /* emerald primary */
+            --blue-light: #6db993;
+            --blue-glow: rgba(74, 155, 110, 0.20);
+            --cyan: #F47321;            /* UM orange loud accent */
+            --slate: #8a93a4;
+            --text: #e6e8eb;
+            --text-dim: #8a93a3;
+            --surface: #11161f;
+            --surface-raised: #161b24;
+            --border: rgba(255, 255, 255, 0.06);
+            --border-light: rgba(255, 255, 255, 0.10);
+            --um-green: #4a9b6e;
+            --um-green-deep: #2e7a5b;
+            --um-green-tint: rgba(74, 155, 110, 0.16);
+        }
+        /* Smooth toggle */
+        body, .topbar, .platform-card, .activity-strip, .source-card {
+            transition: background-color 0.18s ease, color 0.18s ease,
+                        border-color 0.18s ease;
+        }
+
+        /* ── Theme toggle (sun ↔ moon) ───────────────────────── */
+        .theme-toggle {
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--slate);
+            width: 30px; height: 30px;
+            border-radius: 6px;
+            display: inline-flex; align-items: center; justify-content: center;
+            cursor: pointer; padding: 0; margin-left: 8px;
+            flex-shrink: 0;
+            transition: color 0.15s, background 0.15s, border-color 0.15s;
+        }
+        .theme-toggle:hover {
+            color: var(--text);
+            background: var(--um-green-tint);
+            border-color: var(--um-green);
+        }
+        .theme-toggle svg { width: 16px; height: 16px; display: block; }
+        /* Show DESTINATION icon: moon in light mode, sun in dark mode. */
+        .theme-toggle .icon-sun  { display: none; }
+        .theme-toggle .icon-moon { display: block; }
+        :root[data-theme="dark"] .theme-toggle .icon-moon { display: none; }
+        :root[data-theme="dark"] .theme-toggle .icon-sun  { display: block; }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         html { scroll-behavior: smooth; }
         body { font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; line-height: 1.6; color: var(--text); background: var(--navy); }
@@ -68,12 +136,12 @@
         .topbar-inner { max-width: 1200px; margin: 0 auto; padding: 0 24px; display: flex; align-items: center; justify-content: space-between; height: 52px; }
         .topbar-brand { display: flex; align-items: center; gap: 14px; }
         .topbar-icon { width: 28px; height: 28px; border-radius: 4px; }
-        .topbar-logo { font-size: 1.35rem; font-weight: 700; letter-spacing: -0.02em; white-space: nowrap; background: linear-gradient(135deg, var(--blue) 0%, var(--cyan) 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+        .topbar-logo { font-size: 1.35rem; font-weight: 700; letter-spacing: -0.02em; white-space: nowrap; color: var(--text); }
         .topbar-nav { display: flex; gap: 6px; list-style: none; align-items: center; flex-wrap: nowrap; }
         .topbar-nav li { flex: 0 0 auto; }
         .topbar-nav a { color: var(--slate); text-decoration: none; font-weight: 500; font-size: 0.8rem; padding: 6px 12px; border-radius: 6px; transition: all 0.2s; white-space: nowrap; }
-        .topbar-nav a:hover { color: var(--text); background: rgba(255,255,255,0.06); }
-        .topbar-nav a.nav-active { color: var(--text); background: rgba(46,125,255,0.15); }
+        .topbar-nav a:hover { color: var(--text); background: rgba(15,22,35,0.05); }
+        .topbar-nav a.nav-active { color: var(--blue); background: rgba(58,106,156,0.10); }
         .nav-short { display: none; }
         .nav-full { display: inline; }
         /* Intermediate desktop widths: switch to short labels so the nav fits in one row. */
@@ -83,55 +151,48 @@
             .nav-full { display: none; }
             .nav-short { display: inline; }
         }
-        .nav-hamburger { display: none; background: none; border: 1px solid rgba(255,255,255,0.15); color: var(--slate); font-size: 1.2rem; padding: 4px 10px; border-radius: 6px; cursor: pointer; line-height: 1; min-height: 36px; }
-        .nav-hamburger.open { color: var(--text); background: rgba(255,255,255,0.08); }
+        .nav-hamburger { display: none; background: none; border: 1px solid var(--border-light); color: var(--slate); font-size: 1.2rem; padding: 4px 10px; border-radius: 6px; cursor: pointer; line-height: 1; min-height: 36px; }
+        .nav-hamburger.open { color: var(--text); background: rgba(15,22,35,0.06); }
 
         /* ── Hero section ────────────────────────────────── */
         .hero {
-            min-height: calc(100vh - 52px);
             display: flex;
             flex-direction: column;
             align-items: center;
-            justify-content: center;
+            justify-content: flex-start;
             text-align: center;
-            padding: 4rem 24px;
+            padding: 3.25rem 24px 3rem;
             position: relative;
             overflow: hidden;
         }
-        .hero::before {
-            content: '';
-            position: absolute;
-            top: -50%;
-            left: -50%;
-            width: 200%;
-            height: 200%;
-            background: radial-gradient(ellipse at 50% 40%, rgba(46, 125, 255, 0.08) 0%, transparent 60%),
-                        radial-gradient(ellipse at 30% 70%, rgba(0, 212, 255, 0.05) 0%, transparent 50%);
-            pointer-events: none;
+        .hero-lockup {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 1.1rem;
+            margin-bottom: 1rem;
         }
         .hero-icon {
-            width: 96px;
-            height: 96px;
-            border-radius: 16px;
-            margin-bottom: 2rem;
-            filter: drop-shadow(0 0 30px rgba(0, 212, 255, 0.3));
+            width: 76px;
+            height: 76px;
+            border-radius: 14px;
+            margin: 0;
+            flex-shrink: 0;
         }
         .hero-title {
-            font-size: 3.5rem;
+            font-size: 4rem;
             font-weight: 700;
-            letter-spacing: -0.03em;
-            margin-bottom: 0.75rem;
-            background: linear-gradient(135deg, var(--text) 0%, var(--blue-light) 50%, var(--cyan) 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
+            letter-spacing: -0.035em;
+            margin: 0;
+            color: var(--text);
+            line-height: 1;
         }
         .hero-subtitle {
-            font-size: 1.15rem;
-            color: var(--slate);
+            font-size: 1.05rem;
+            color: var(--text-dim);
             max-width: 650px;
             margin: 0 auto 1rem auto;
-            font-style: italic;
+            font-weight: 400;
         }
         .hero-desc {
             font-size: 1.05rem;
@@ -171,6 +232,7 @@
             border-radius: var(--radius-lg);
             padding: 2rem 1.5rem 1.75rem 1.5rem;
             text-decoration: none;
+            color: var(--text);
             transition: transform 0.3s, border-color 0.3s, box-shadow 0.3s;
             display: flex;
             flex-direction: column;
@@ -178,9 +240,9 @@
             overflow: hidden;
         }
         .platform-card:hover {
-            transform: translateY(-4px);
-            border-color: var(--blue);
-            box-shadow: 0 12px 40px rgba(46, 125, 255, 0.15);
+            transform: translateY(-2px);
+            border-color: var(--border-light);
+            box-shadow: 0 4px 14px rgba(15,22,35,0.06);
         }
         .platform-card::after {
             content: '';
@@ -188,14 +250,16 @@
             top: 0;
             left: 0;
             right: 0;
-            height: 3px;
+            height: 2px;
+            background: var(--um-orange);
+            opacity: 0.85;
         }
-        .card-radar::after { background: linear-gradient(90deg, var(--blue), var(--cyan)); }
-        .card-realtime::after { background: linear-gradient(90deg, #f59e0b, #ef4444); }
-        .card-ir::after { background: linear-gradient(90deg, #06b6d4, #3b82f6); }
-        .card-global::after { background: linear-gradient(90deg, #10b981, #06b6d4); }
-        .card-composites::after { background: linear-gradient(90deg, #a855f7, #ec4899); }
-        .card-climo::after { background: linear-gradient(90deg, #14b8a6, #2dbda0); }
+        .card-radar::after,
+        .card-realtime::after,
+        .card-ir::after,
+        .card-global::after,
+        .card-composites::after,
+        .card-climo::after { background: var(--um-orange); opacity: 0.85; }
 
         .card-icon {
             font-size: 2.25rem;
@@ -206,14 +270,14 @@
             width: 2.25rem;
             height: 2.25rem;
             stroke-width: 1.5;
-            color: var(--cyan);
+            color: var(--blue);
         }
-        .card-radar .card-icon svg      { color: var(--blue-light); }
-        .card-realtime .card-icon svg   { color: #fb923c; }
-        .card-ir .card-icon svg         { color: var(--cyan); }
-        .card-global .card-icon svg     { color: #34d399; }
-        .card-composites .card-icon svg { color: #c4b5fd; }
-        .card-climo .card-icon svg      { color: #2dbda0; }
+        .card-radar .card-icon svg,
+        .card-realtime .card-icon svg,
+        .card-ir .card-icon svg,
+        .card-global .card-icon svg,
+        .card-composites .card-icon svg,
+        .card-climo .card-icon svg      { color: var(--blue); }
         .card-title {
             font-size: 1.2rem;
             font-weight: 700;
@@ -234,10 +298,11 @@
             border-top: 1px solid var(--border);
         }
         .card-stat-val {
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 0.85rem;
+            font-size: 0.95rem;
             font-weight: 700;
-            color: var(--cyan);
+            color: var(--text);
+            font-variant-numeric: tabular-nums;
+            letter-spacing: -0.01em;
         }
         .card-stat-label {
             font-size: 0.65rem;
@@ -264,7 +329,7 @@
         .content-section { max-width: 1100px; margin: 0 auto; padding: 5rem 24px; }
         .section-bg { background: var(--surface); }
         .section-title { font-size: 1.8rem; font-weight: 700; color: var(--text); margin-bottom: 1.5rem; text-align: center; letter-spacing: -0.02em; }
-        .section-title .accent { color: var(--cyan); }
+        .section-title .accent { color: var(--blue); }
         .section-desc { text-align: center; max-width: 700px; margin: 0 auto 2.5rem auto; font-size: 1rem; color: var(--slate); line-height: 1.8; }
 
         /* ── Data source grid ────────────────────────────── */
@@ -281,7 +346,7 @@
             padding: 1.5rem;
         }
         .source-card h4 {
-            color: #fdba74;
+            color: var(--text);
             margin-bottom: 0.5rem;
             font-size: 0.95rem;
         }
@@ -291,7 +356,7 @@
             line-height: 1.6;
         }
         .source-card a {
-            color: var(--blue-light);
+            color: var(--blue);
             text-decoration: none;
         }
         .source-card a:hover {
@@ -299,14 +364,14 @@
         }
 
         /* ── Contact section ─────────────────────────────── */
-        .contact-section { background: linear-gradient(135deg, var(--navy-light) 0%, var(--blue) 100%); text-align: center; padding: 4rem 24px; color: white; }
-        .contact-section .section-title { color: white; }
-        .contact-info { max-width: 500px; margin: 2rem auto; background: rgba(255,255,255,0.08); padding: 2rem; border-radius: var(--radius-lg); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.12); }
-        .contact-info a { color: var(--cyan); }
+        .contact-section { background: var(--surface); border-top: 1px solid var(--border); text-align: center; padding: 4rem 24px; color: var(--text); }
+        .contact-section .section-title { color: var(--text); }
+        .contact-info { max-width: 500px; margin: 2rem auto; background: var(--surface-raised); padding: 2rem; border-radius: var(--radius-lg); border: 1px solid var(--border); }
+        .contact-info a { color: var(--blue); }
 
         /* ── Footer ──────────────────────────────────────── */
         footer { text-align: center; padding: 2rem; font-size: 0.75rem; color: var(--text-dim); border-top: 1px solid var(--border); }
-        footer a { color: var(--blue-light); text-decoration: none; }
+        footer a { color: var(--blue); text-decoration: none; }
         footer a:hover { text-decoration: underline; }
 
         /* ── Live activity strip ─────────────────────────── */
@@ -317,10 +382,9 @@
             gap: 10px 18px;
             margin: 0 auto 2rem auto;
             padding: 10px 18px;
-            background: rgba(46, 125, 255, 0.08);
-            border: 1px solid rgba(46, 125, 255, 0.25);
+            background: var(--surface);
+            border: 1px solid var(--border);
             border-radius: 999px;
-            backdrop-filter: blur(8px);
             font-size: 0.78rem;
             color: var(--text-dim);
             position: relative;
@@ -329,12 +393,12 @@
         .activity-stat { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
         .activity-stat .dot {
             width: 6px; height: 6px; border-radius: 50%;
-            background: var(--cyan);
-            box-shadow: 0 0 8px var(--cyan);
+            background: var(--um-orange);
+            box-shadow: 0 0 0 3px var(--um-orange-tint);
         }
         .activity-stat.is-stale .dot { background: var(--text-dim); box-shadow: none; }
-        .activity-stat-val { color: var(--text); font-weight: 600; font-family: 'JetBrains Mono', monospace; }
-        .activity-stat-sep { color: rgba(255,255,255,0.2); font-family: 'JetBrains Mono', monospace; }
+        .activity-stat-val { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+        .activity-stat-sep { color: var(--border-light); }
 
         /* ── Start Here: worked-example cards ────────────── */
         .start-here-section {
@@ -413,7 +477,7 @@
             top: 6px;
             bottom: 6px;
             width: 1px;
-            background: linear-gradient(180deg, rgba(0,212,255,0.6) 0%, rgba(46,125,255,0.3) 100%);
+            background: var(--border-light);
         }
         .changelog-entry {
             position: relative;
@@ -431,8 +495,8 @@
             width: 9px;
             height: 9px;
             border-radius: 50%;
-            background: var(--cyan);
-            box-shadow: 0 0 0 3px var(--navy), 0 0 10px rgba(0,212,255,0.5);
+            background: var(--um-orange);
+            box-shadow: 0 0 0 3px var(--navy);
         }
         .changelog-entry:not(:first-child)::before {
             background: var(--slate);
@@ -440,11 +504,12 @@
         }
         .changelog-date {
             font-size: 0.72rem;
-            font-family: 'JetBrains Mono', monospace;
+            font-weight: 600;
             color: var(--slate);
-            letter-spacing: 0.02em;
+            letter-spacing: 0.06em;
             text-transform: uppercase;
             white-space: nowrap;
+            font-variant-numeric: tabular-nums;
         }
         .changelog-text {
             font-size: 0.92rem;
@@ -482,7 +547,9 @@
             .start-here-grid { grid-template-columns: 1fr; }
         }
         @media (max-width: 768px) {
-            .hero-title { font-size: 2.2rem; }
+            .hero-lockup { gap: 0.7rem; }
+            .hero-icon { width: 52px; height: 52px; border-radius: 10px; }
+            .hero-title { font-size: 2.4rem; }
             .hero-desc { font-size: 0.95rem; }
             .topbar-inner { padding: 0 16px; gap: 8px; }
             .content-section { padding: 3rem 16px; }
@@ -497,10 +564,8 @@
                 top: 52px;
                 left: 0;
                 right: 0;
-                background: rgba(15,23,42,0.98);
-                backdrop-filter: blur(12px);
-                -webkit-backdrop-filter: blur(12px);
-                border-bottom: 1px solid rgba(255,255,255,0.08);
+                background: var(--surface-raised);
+                border-bottom: 1px solid var(--border);
                 padding: 10px 14px;
                 flex-wrap: wrap;
                 gap: 4px 8px;
@@ -519,17 +584,17 @@
         /* ── Citation section ────────────────────────────── */
         .cite-list { display: flex; flex-direction: column; gap: 1rem; max-width: 840px; margin: 0 auto; }
         .cite-pub { background: var(--navy-mid); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.25rem 1.5rem; }
-        .cite-pub-label { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--cyan); margin-bottom: 0.5rem; }
+        .cite-pub-label { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); margin-bottom: 0.5rem; }
         .cite-pub-text { font-size: 0.875rem; line-height: 1.7; color: var(--slate); font-family: 'JetBrains Mono', monospace; word-break: break-word; }
-        .cite-pub-text a { color: var(--blue-light); text-decoration: none; }
+        .cite-pub-text a { color: var(--blue); text-decoration: none; }
         .cite-pub-text a:hover { text-decoration: underline; }
         .cite-pub-text em { font-style: italic; }
-        .cite-copy-landing { display: inline-flex; align-items: center; gap: 4px; margin-top: 0.75rem; padding: 4px 12px; font-size: 0.75rem; font-weight: 600; font-family: 'DM Sans', sans-serif; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.12); border-radius: 4px; color: var(--slate); cursor: pointer; transition: all 0.2s; }
-        .cite-copy-landing:hover { background: rgba(46,125,255,0.18); border-color: rgba(46,125,255,0.4); color: #93c5fd; }
-        .cite-copy-landing.copied { background: rgba(52,211,153,0.18); border-color: rgba(52,211,153,0.4); color: #6ee7b7; }
-        .cite-bibtex-landing { display: inline-flex; align-items: center; gap: 6px; padding: 8px 20px; font-size: 0.875rem; font-weight: 700; font-family: 'DM Sans', sans-serif; background: rgba(168,85,247,0.14); border: 1px solid rgba(168,85,247,0.4); border-radius: 6px; color: #c4b5fd; cursor: pointer; transition: all 0.2s; }
-        .cite-bibtex-landing:hover { background: rgba(168,85,247,0.28); border-color: rgba(168,85,247,0.65); }
-        .cite-bibtex-landing.copied { background: rgba(52,211,153,0.18); border-color: rgba(52,211,153,0.4); color: #6ee7b7; }
+        .cite-copy-landing { display: inline-flex; align-items: center; gap: 4px; margin-top: 0.75rem; padding: 4px 12px; font-size: 0.75rem; font-weight: 600; font-family: 'DM Sans', sans-serif; background: var(--surface); border: 1px solid var(--border-light); border-radius: 4px; color: var(--slate); cursor: pointer; transition: all 0.2s; }
+        .cite-copy-landing:hover { background: rgba(58,106,156,0.10); border-color: rgba(58,106,156,0.4); color: var(--blue); }
+        .cite-copy-landing.copied { background: rgba(34,150,100,0.12); border-color: rgba(34,150,100,0.4); color: #1e7a4e; }
+        .cite-bibtex-landing { display: inline-flex; align-items: center; gap: 6px; padding: 8px 20px; font-size: 0.875rem; font-weight: 700; font-family: 'DM Sans', sans-serif; background: var(--um-green); border: 1px solid var(--um-green); border-radius: 6px; color: #ffffff; cursor: pointer; transition: all 0.2s; }
+        .cite-bibtex-landing:hover { background: var(--um-green-deep); border-color: var(--um-green-deep); }
+        .cite-bibtex-landing.copied { background: rgba(34,150,100,0.12); border-color: rgba(34,150,100,0.4); color: #1e7a4e; }
     </style>
 </head>
 <body>
@@ -552,14 +617,20 @@
                     <li><a href="#cite">Cite</a></li>
                 </ul>
             </nav>
+                        <button class="theme-toggle" type="button" aria-label="Toggle dark mode" aria-pressed="false" title="Toggle dark mode">
+                <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+                <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+            </button>
             <button class="nav-hamburger" onclick="this.classList.toggle('open');document.querySelector('.topbar-nav').classList.toggle('mobile-open')" aria-label="Menu">&#9776;</button>
         </div>
     </header>
 
     <!-- ── Hero ──────────────────────────────────────────── -->
     <section class="hero">
-        <img src="tc-atlas-icon.png" alt="" class="hero-icon" aria-hidden="true">
-        <h1 class="hero-title">TC-ATLAS</h1>
+        <div class="hero-lockup">
+            <img src="tc-atlas-icon.png" alt="" class="hero-icon" aria-hidden="true">
+            <h1 class="hero-title">TC-ATLAS</h1>
+        </div>
         <p class="hero-subtitle">Tropical Cyclone Analysis Tool for Live and Archived Structure</p>
         <p class="hero-desc">A multi-source platform for exploring tropical cyclone vortex structure. TC-ATLAS brings together airborne Doppler radar, passive microwave and infrared satellite imagery, ERA5 environmental diagnostics, dropsonde profiles, and flight-level observations into one unified interactive tool.</p>
 
@@ -731,6 +802,22 @@
             <p class="section-desc">TC-ATLAS is actively maintained — new data sources, analysis tools, and UI improvements are added continuously.</p>
             <div class="changelog-list">
                 <div class="changelog-entry">
+                    <div class="changelog-date">May 7, 2026</div>
+                    <div class="changelog-text">Site-wide visual refresh: new <strong>TC-ATLAS logomark</strong> on University of Miami&rsquo;s green and orange palette, <strong>light theme</strong> by default with an optional <strong>dark mode</strong>, and a cleaner <strong>light basemap</strong> for the global storm-track maps.</div>
+                </div>
+                <div class="changelog-entry">
+                    <div class="changelog-date">May 5, 2026</div>
+                    <div class="changelog-text">New <strong>TC Climatology</strong> page brings IBTrACS best-track statistics (ACE, peak-intensity, RI, LMI, seasonal cycles by basin) together with the interactive <strong>ERA5 Reanalysis Globe</strong> — composite by 14 climate indices (RONI, ONI, AMO, NPGO, SAM, IOD…), per-pixel correlation maps, and 13,500+ IBTrACS tracks overlaid. A featured-views gallery jumps you straight into TC-relevant scenes.</div>
+                </div>
+                <div class="changelog-entry">
+                    <div class="changelog-date">May 5, 2026</div>
+                    <div class="changelog-text">TC-RADAR Explorer enhancements: <strong>TC center marker</strong> with lat/lon on hover across the plan view, <strong>aircraft Lat/Lon hover</strong> in flight-level overlays on all three TC pages, slimmer FL hover cards, and a <strong>Wind/W toggle</strong> on the FL time-series with TDR vertical-velocity interpolated to flight-level points.</div>
+                </div>
+                <div class="changelog-entry">
+                    <div class="changelog-date">Apr 27, 2026</div>
+                    <div class="changelog-text">ERA5 <strong>Reanalysis Globe</strong> extracted into its own dedicated page with a new <strong>Index Correlation panel</strong> (ACE per basin, sliding-30 anomalies, p-value masking) and improved Composite Builder with synthetic-field support.</div>
+                </div>
+                <div class="changelog-entry">
                     <div class="changelog-date">Apr 16, 2026</div>
                     <div class="changelog-text">Home page refresh: <strong>live activity strip</strong>, <strong>"Popular starting points"</strong> quick-start row, and <strong>featured-case onboarding</strong> on the TC-RADAR Explorer. Refined visual hierarchy and role-based color palette across the site.</div>
                 </div>
@@ -796,7 +883,7 @@
 
     <!-- ── Contact ───────────────────────────────────────── -->
     <section class="contact-section" id="contact">
-        <h2 class="section-title" style="color:white;">Get in Touch</h2>
+        <h2 class="section-title">Get in Touch</h2>
         <p style="font-size:1.1rem;margin-bottom:2rem;opacity:0.9;">Questions about TC-ATLAS? Contact the developer.</p>
         <div class="contact-info">
             <p style="font-size:1.15rem;margin-bottom:0.75rem;"><strong>Dr. Michael Fischer</strong></p>
@@ -808,7 +895,7 @@
     <footer>
         <div>Created by Michael S. Fischer &middot; University of Miami</div>
         <div style="margin-top:6px;">Built with assistance from <a href="https://claude.ai" target="_blank" rel="noopener">Claude</a> (Anthropic)</div>
-        <div style="margin-top:12px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.08);font-size:0.72rem;color:#64748b;max-width:700px;margin-left:auto;margin-right:auto;line-height:1.5;">
+        <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border);font-size:0.72rem;color:var(--text-dim);max-width:700px;margin-left:auto;margin-right:auto;line-height:1.5;">
             <strong>Disclaimer:</strong> TC-ATLAS is a research visualization platform developed at the University of Miami in collaboration with NOAA&rsquo;s Hurricane Research Division. It is provided for research and educational purposes only and is not intended for operational forecasting or decision-making. Data products are provided as-is without warranty. Real-time products may experience delays or interruptions. The developers assume no liability for the use or interpretation of information presented on this site.
         </div>
     </footer>

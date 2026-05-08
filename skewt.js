@@ -602,7 +602,7 @@ function renderSkewT(profiles, divId) {
             zeroline: false, gridcolor: 'rgba(255,255,255,0.06)',
         },
         paper_bgcolor: 'rgba(0,0,0,0)',
-        plot_bgcolor: 'rgba(10,22,40,0.5)',
+        plot_bgcolor: 'rgba(247,248,250,0.85)',
         margin: { l: 45, r: 10, t: 22, b: 35 },
         title: { text: 'Skew-T / Log-P', font: { size: 10, color: '#00d4ff' }, x: 0.5, y: 0.98 },
         legend: { font: { color: '#ccc', size: 9 }, x: 0.68, y: 0.98, bgcolor: 'rgba(0,0,0,0.4)' },

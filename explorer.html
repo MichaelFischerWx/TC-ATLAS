@@ -30,9 +30,13 @@
     <meta name="twitter:image" content="https://michaelfischerwx.github.io/TC-ATLAS/images/og-preview.png">
 
     <!-- Favicon -->
-    <link rel="icon" type="image/png" href="tc-atlas-icon.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="tc-atlas-favicon-16.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="tc-atlas-favicon-32.png">
+    <link rel="icon" type="image/png" sizes="192x192" href="tc-atlas-favicon-192.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="tc-atlas-favicon-192.png">
 
     <title>TC-ATLAS — Tropical Cyclone Analysis Tool for Live and Archived Structure</title>
+    <script src="theme.js?v=20260507n"></script>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
@@ -43,7 +47,7 @@
     <link rel="preconnect" href="https://unpkg.com">
     <link rel="preconnect" href="https://cdn.plot.ly">
     <link rel="preconnect" href="https://tc-atlas-api-361010099051.us-east1.run.app">
-    <link rel="stylesheet" href="tc_radar_styles.css">
+    <link rel="stylesheet" href="tc_radar_styles.css?v=20260507n">
     <link rel="stylesheet" href="realtime_tdr_styles.css">
 </head>
 <body>
@@ -69,6 +73,10 @@
                 <li><a href="index.html#cite">Cite</a></li>
             </ul>
             </nav>
+                        <button class="theme-toggle" type="button" aria-label="Toggle dark mode" aria-pressed="false" title="Toggle dark mode">
+                <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+                <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+            </button>
             <button class="nav-hamburger" onclick="this.classList.toggle('open');document.querySelector('.topbar-nav').classList.toggle('mobile-open')" aria-label="Menu">&#9776;</button>
         </div>
     </header>
@@ -270,7 +278,7 @@
                                     <button class="rt-sub-panel-cancel" onclick="rtToggleCFADConfig()">Cancel</button>
                                 </div>
                             </div>
-                            <select id="rt-sonde-select" onchange="rtSelectSonde(this.value)" disabled style="display:none; background:#1a1a2e; color:#c4b5fd; border:1px solid rgba(168,85,247,0.35); border-radius:6px; padding:4px 8px; font-size:11px; cursor:pointer; max-width:220px; margin-top:4px;">
+                            <select id="rt-sonde-select" onchange="rtSelectSonde(this.value)" disabled style="display:none; background:#1a1a2e; color:#6d28d9; border:1px solid rgba(168,85,247,0.35); border-radius:6px; padding:4px 8px; font-size:11px; cursor:pointer; max-width:220px; margin-top:4px;">
                                 <option value="">🪂 Select Sonde…</option>
                             </select>
                             <div id="rt-cs-result"></div>
@@ -295,8 +303,8 @@
                             <!-- Dropsonde Skew-T panel (shown on sonde click) -->
                             <div id="rt-sonde-skewt-panel" style="display:none;">
                                 <div style="display:flex; align-items:center; padding:6px 12px; background:rgba(168,85,247,0.08); border-top:1px solid rgba(168,85,247,0.2);">
-                                    <span id="rt-skewt-title" style="color:#c4b5fd; font-size:13px; font-weight:600; flex:1;"></span>
-                                    <select id="rt-skewt-sonde-select" onchange="rtSelectSonde(this.value)" style="background:#1a1a2e; color:#c4b5fd; border:1px solid rgba(168,85,247,0.35); border-radius:4px; padding:2px 6px; font-size:11px; cursor:pointer; margin-left:8px; max-width:180px;"></select>
+                                    <span id="rt-skewt-title" style="color:#6d28d9; font-size:13px; font-weight:600; flex:1;"></span>
+                                    <select id="rt-skewt-sonde-select" onchange="rtSelectSonde(this.value)" style="background:#1a1a2e; color:#6d28d9; border:1px solid rgba(168,85,247,0.35); border-radius:4px; padding:2px 6px; font-size:11px; cursor:pointer; margin-left:8px; max-width:180px;"></select>
                                     <button onclick="rtSavePlotPNG('rt-sonde-skewt','SkewT')" class="rt-save-png-btn" style="margin-left:6px;" title="Save as PNG"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg></button>
                                     <button onclick="rtCloseSkewT()" style="margin-left:8px; background:none; border:none; color:#888; cursor:pointer; font-size:18px; line-height:1;" title="Close Skew-T">&times;</button>
                                 </div>
@@ -324,7 +332,7 @@
                                             <button class="fl-ts-var-btn active" data-var="slp_hpa" onclick="rtFLToggleVar(this)" style="--var-color:#fbbf24">SLP</button>
                                             <button class="fl-ts-var-btn" data-var="static_pres_hpa" onclick="rtFLToggleVar(this)" style="--var-color:#fb923c">Static P</button>
                                             <button class="fl-ts-var-btn" data-var="temp_c" onclick="rtFLToggleVar(this)" style="--var-color:#f87171">Temp</button>
-                                            <button class="fl-ts-var-btn" data-var="dewpoint_c" onclick="rtFLToggleVar(this)" style="--var-color:#a78bfa">Dewpt</button>
+                                            <button class="fl-ts-var-btn" data-var="dewpoint_c" onclick="rtFLToggleVar(this)" style="--var-color:#6d28d9">Dewpt</button>
                                             <button class="fl-ts-var-btn" data-var="gps_alt_m" onclick="rtFLToggleVar(this)" style="--var-color:#6b7280">Alt</button>
                                         </div>
                                         <button onclick="rtSavePlotPNG('rt-fl-ts-plot','FL_TimeSeries')" class="rt-save-png-btn" style="margin-left:4px;" title="Save as PNG"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg></button>
@@ -442,9 +450,27 @@
             <h2 class="section-title">About <span class="accent">TC-ATLAS</span></h2>
             <p class="section-desc"><strong>TC-ATLAS</strong> &mdash; <em>Tropical Cyclone Analysis Tool for Live and Archived Structure</em> &mdash; provides a comprehensive, multi-source platform for exploring tropical cyclone vortex structure. Developed by Dr. Michael Fischer (University of Miami) in collaboration with NOAA's Hurricane Research Division, TC-ATLAS enables researchers to conduct storm-to-storm comparisons and climatological analyses of TC vortex and convective characteristics across all stages of the tropical cyclone lifecycle.</p>
             <div class="feature-grid">
-                <div class="feature-card"><div class="feature-icon">&#128752;</div><h3>Multi-Source Integration</h3><p>Combines airborne Doppler radar, passive microwave and infrared satellite imagery, ERA5 reanalysis, flight-level data, and dropsonde profiles in a unified interactive environment.</p></div>
-                <div class="feature-card"><div class="feature-icon">&#128225;</div><h3>Real-Time Monitoring</h3><p>Track active NOAA hurricane reconnaissance missions with live tail Doppler radar visualizations, flight-level observations, and environmental diagnostics as they happen.</p></div>
-                <div class="feature-card"><div class="feature-icon">&#127758;</div><h3>Global Coverage</h3><p>Browse the complete IBTrACS record of tropical cyclones from 1842 to present with satellite imagery, intensity timelines, climatology, and multi-storm comparison tools.</p></div>
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></svg>
+                    </div>
+                    <h3>Multi-Source Integration</h3>
+                    <p>Combines airborne Doppler radar, passive microwave and infrared satellite imagery, ERA5 reanalysis, flight-level data, and dropsonde profiles in a unified interactive environment.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/></svg>
+                    </div>
+                    <h3>Real-Time Monitoring</h3>
+                    <p>Track active NOAA hurricane reconnaissance missions with live tail Doppler radar visualizations, flight-level observations, and environmental diagnostics as they happen.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+                    </div>
+                    <h3>Global Coverage</h3>
+                    <p>Browse the complete IBTrACS record of tropical cyclones from 1842 to present with satellite imagery, intensity timelines, climatology, and multi-storm comparison tools.</p>
+                </div>
             </div>
         </div>
     </section>
@@ -500,23 +526,23 @@
             <h2 class="section-title">Data Sources &amp; <span class="accent">Acknowledgments</span></h2>
             <p class="section-desc">TC-ATLAS integrates data from multiple publicly available datasets. We gratefully acknowledge the following data providers.</p>
             <div class="citation-box" style="margin-top:1.5rem;">
-                <h3 style="color:#fdba74;">Passive Microwave Satellite Imagery</h3>
+                <h3 style="color:#b8540d;">Passive Microwave Satellite Imagery</h3>
                 <p><strong><a href="https://rammb-data.cira.colostate.edu/tcprimed/" target="_blank" rel="noopener" style="color:var(--blue-light);">TC-PRIMED</a></strong> &mdash; Tropical Cyclone PRecipitation, Infrared, Microwave, and Environmental Dataset (NOAA/NESDIS &amp; CSU/CIRA).</p>
                 <p style="margin-top:0.5rem;font-size:0.85rem;color:#94a3b8;">Razin, M. N., C. J. Slocum, J. A. Knaff, and P. J. Brown, 2023: Tropical Cyclone PRecipitation, Infrared, Microwave, and Environmental Dataset (TC PRIMED). V1.0. NOAA National Centers for Environmental Information. <a href="https://doi.org/10.25921/dmy1-0595" target="_blank" rel="noopener" style="color:var(--blue-light);">https://doi.org/10.25921/dmy1-0595</a></p>
             </div>
             <div class="citation-box" style="margin-top:1rem;">
-                <h3 style="color:#fdba74;">Infrared Satellite Imagery</h3>
+                <h3 style="color:#b8540d;">Infrared Satellite Imagery</h3>
                 <p><strong><a href="https://www.ncei.noaa.gov/products/gridded-geostationary-brightness-temperature" target="_blank" rel="noopener" style="color:var(--blue-light);">GridSat-B1</a></strong> &mdash; Geostationary IR Channel Brightness Temperature &mdash; Gridded Satellite Data (NOAA/NCEI CDR).</p>
                 <p style="margin-top:0.5rem;"><strong><a href="https://disc.gsfc.nasa.gov/datasets/GPM_MERGIR_1/summary" target="_blank" rel="noopener" style="color:var(--blue-light);">MergIR</a></strong> &mdash; NCEP/CPC L3 Half-Hourly Merged Global IR (NASA GES DISC).</p>
                 <p style="margin-top:0.5rem;"><strong>GOES ABI</strong> &mdash; Real-time Band 13 (10.3 &micro;m) imagery via the <a href="https://registry.opendata.aws/noaa-goes/" target="_blank" rel="noopener" style="color:var(--blue-light);">NOAA Open Data Dissemination Program</a>.</p>
             </div>
             <div class="citation-box" style="margin-top:1rem;">
-                <h3 style="color:#fdba74;">Environmental &amp; Best-Track Data</h3>
+                <h3 style="color:#b8540d;">Environmental &amp; Best-Track Data</h3>
                 <p><strong><a href="https://www.ecmwf.int/en/forecasts/dataset/ecmwf-reanalysis-v5" target="_blank" rel="noopener" style="color:var(--blue-light);">ERA5</a></strong> &mdash; ECMWF Reanalysis v5. Hersbach, H. et al., 2020. <em>Q. J. R. Meteorol. Soc.</em>, 146, 1999&ndash;2049. <a href="https://doi.org/10.1002/qj.3803" target="_blank" rel="noopener" style="color:var(--blue-light);">doi:10.1002/qj.3803</a></p>
                 <p style="margin-top:0.5rem;"><strong><a href="https://www.ncei.noaa.gov/products/international-best-track-archive" target="_blank" rel="noopener" style="color:var(--blue-light);">IBTrACS</a></strong> &mdash; International Best Track Archive for Climate Stewardship, v04 (NOAA/NCEI). Knapp, K. R. et al., 2010. <em>Bull. Amer. Meteor. Soc.</em>, 91, 363&ndash;376.</p>
             </div>
             <div class="citation-box" style="margin-top:1rem;">
-                <h3 style="color:#fdba74;">Airborne Observations</h3>
+                <h3 style="color:#b8540d;">Airborne Observations</h3>
                 <p><strong>NOAA Aircraft Operations Center</strong> &mdash; Tail Doppler radar, flight-level, and dropsonde data from NOAA P-3 and G-IV reconnaissance missions, via the <a href="https://seb.omao.noaa.gov/" target="_blank" rel="noopener" style="color:var(--blue-light);">Systems Engineering Branch (SEB)</a> archives.</p>
             </div>
             <p style="margin-top:1.5rem;font-size:0.85rem;color:#94a3b8;max-width:700px;margin-left:auto;margin-right:auto;text-align:center;">TC-ATLAS is not affiliated with or endorsed by any of the data providers listed above. All datasets are used in accordance with their respective open data policies.</p>
@@ -607,7 +633,7 @@
     <!-- ensurePlotly() kept as a no-op safety net so the JS guards don't break -->
     <script>function ensurePlotly(cb) { if (cb) cb(); }</script>
     <script src="skewt.js"></script>
-    <script src="tc_radar_app.js"></script>
-    <script src="realtime_tdr.js"></script>
+    <script src="tc_radar_app.js?v=20260507n"></script>
+    <script src="realtime_tdr.js?v=20260507n"></script>
 </body>
 </html>
