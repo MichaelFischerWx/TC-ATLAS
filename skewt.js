@@ -72,13 +72,18 @@ function _buildWindBarbShapes(u, v, plev, xPos, staffLen, axRanges) {
         var pxTip = pxBase + staffPaper * sinD;
         var pyTip = pyBase + staffPaper * cosD;
 
-        // Helper: paper → data for Plotly shape
+        // Helper: paper → data for Plotly shape. Tag each barb with
+        // _kind:'windbarb' so re-renders that need to swap the barb
+        // column (e.g. when adjusting the y-axis range) can filter
+        // them reliably without depending on the line color (which
+        // changes per theme).
         function mkLine(px0, py0, px1, py1) {
             return {
                 type: 'line', xref: 'x', yref: 'y',
                 x0: paperToX(px0), y0: Math.pow(10, paperToLogP(py0)),
                 x1: paperToX(px1), y1: Math.pow(10, paperToLogP(py1)),
                 line: { color: lineColor, width: lineWidth },
+                _kind: 'windbarb',
             };
         }
 
@@ -597,6 +602,7 @@ function renderSkewT(profiles, divId) {
             type: 'line', xref: 'x', yref: 'y',
             x0: barbXPos - 2, y0: pBot, x1: barbXPos - 2, y1: pMax,
             line: { color: _skewtIsDark ? 'rgba(255,255,255,0.08)' : 'rgba(15,22,35,0.18)', width: 0.5 },
+            _kind: 'windbarb',
         });
     }
 

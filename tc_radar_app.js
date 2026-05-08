@@ -5974,7 +5974,7 @@ fetch('tc_radar_metadata.json')
             var div = L.DomUtil.create('div','intensity-legend intensity-legend-compact');
             div.innerHTML =
                 '<div class="legend-header" onclick="this.parentNode.classList.toggle(\'expanded\')" style="cursor:pointer;display:flex;align-items:center;gap:4px;">' +
-                    '<span style="font-size:9px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:0.5px;">Intensity</span>' +
+                    '<span style="font-size:9px;font-weight:600;color:var(--slate);text-transform:uppercase;letter-spacing:0.5px;">Intensity</span>' +
                     '<span class="legend-toggle" style="font-size:8px;color:#64748b;">&#9660;</span>' +
                 '</div>' +
                 '<div class="legend-body" style="display:none;">' +
@@ -8633,10 +8633,10 @@ function _injectCompositeStyles() {
         '.comp-status.error { background:rgba(239,68,68,0.08); color:#ef4444; border:1px solid rgba(239,68,68,0.2); }' +
         '.comp-toolbar { display:flex; gap:8px; margin-top:10px; padding:10px 0 4px; border-top:1px solid rgba(15, 22, 35,0.06); }' +
         '.comp-tool-btn { padding:6px 12px; font-size:11px; font-weight:600; border:1px solid rgba(15, 22, 35,0.12); border-radius:6px; background:rgba(15, 22, 35,0.22); color:#9ca3af; cursor:pointer; font-family:"JetBrains Mono",monospace; transition:all 0.15s; }' +
-        '.comp-tool-btn:hover { background:rgba(15, 22, 35,0.08); color:#e5e7eb; border-color:rgba(15, 22, 35,0.2); }' +
+        '.comp-tool-btn:hover { background:rgba(15, 22, 35,0.08); color:var(--text); border-color:rgba(15, 22, 35,0.2); }' +
         '.comp-case-list-wrap { margin-top:10px; background:rgba(15, 22, 35,0.02); border:1px solid rgba(15, 22, 35,0.06); border-radius:8px; overflow:hidden; }' +
         '.comp-cl-header { display:flex; justify-content:space-between; align-items:center; padding:10px 14px; border-bottom:1px solid rgba(15, 22, 35,0.06); background:rgba(15, 22, 35,0.02); }' +
-        '.comp-cl-title { font-size:12px; font-weight:600; color:#e5e7eb; font-family:"JetBrains Mono",monospace; }' +
+        '.comp-cl-title { font-size:12px; font-weight:600; color:var(--text); font-family:"JetBrains Mono",monospace; }' +
         '.comp-cl-scroll { max-height:280px; overflow-y:auto; }' +
         '.comp-cl-table { width:100%; border-collapse:collapse; font-size:11px; font-family:"JetBrains Mono",monospace; }' +
         '.comp-cl-table thead { position:sticky; top:0; background:#0a1628; }' +
@@ -10239,7 +10239,7 @@ function renderCompositeCFADMultiInto(targetId, json, filters) {
             xref: xRef.replace('x', 'x') + ' domain',
             yref: yRef.replace('y', 'y') + ' domain',
             x: 0.5, y: 1.08, showarrow: false,
-            font: { size: 12, color: '#e5e7eb' },
+            font: { size: 12, color: '#0f1623' },
             xanchor: 'center', yanchor: 'bottom'
         });
     }
@@ -12174,7 +12174,7 @@ function _renderDiffCFADMulti(targetId, jsonA, jsonB, filtersA, filtersB) {
             anns.push({
                 text: '<b>' + quadLabels[qk] + '</b>', showarrow: false,
                 xref: xR + ' domain', yref: yR + ' domain',
-                x: 0.5, y: 1.08, font: {size:11, color:'#e5e7eb'}, xanchor:'center', yanchor:'bottom'
+                x: 0.5, y: 1.08, font: {size:11, color:'#0f1623'}, xanchor:'center', yanchor:'bottom'
             });
         }
         var layout = {
@@ -13867,7 +13867,7 @@ function _archiveRenderSondePanel(data) {
     if (!panel) {
         panel = document.createElement('div');
         panel.id = 'archive-sonde-panel';
-        panel.style.cssText = 'margin-top:8px;padding:8px 12px;background:rgba(6,78,59,0.15);border:1px solid rgba(52,211,153,0.3);border-radius:6px;font-size:11px;color:#d1d5db;';
+        panel.style.cssText = 'margin-top:8px;padding:8px 12px;background:rgba(6,78,59,0.15);border:1px solid rgba(52,211,153,0.3);border-radius:6px;font-size:11px;color:var(--text);';
         // Insert after the FL time series panel or after the side panel content
         var flTs = document.getElementById('fl-archive-ts');
         if (flTs && flTs.parentNode) {
@@ -14006,7 +14006,7 @@ function _archiveRenderSondePanel(data) {
     // Skew-T chart container + info panel
     html += '<div id="archive-skewt-container" style="display:none;margin-top:8px;">' +
         '<div style="display:flex;align-items:flex-start;justify-content:space-between;padding:2px 6px;">' +
-            '<div id="archive-skewt-title" style="color:#e5e7eb;font-size:11px;font-weight:600;flex:1;min-width:0;"></div>' +
+            '<div id="archive-skewt-title" style="color:var(--text);font-size:11px;font-weight:600;flex:1;min-width:0;"></div>' +
             '<div style="display:flex;align-items:center;flex-shrink:0;margin-left:4px;">' +
                 '<button onclick="archiveSaveSondePNG(\'archive-skewt-chart\',\'SkewT\')" ' +
                     'title="Save as PNG" class="rt-save-png-btn" style="margin-right:4px;">' +
@@ -14024,7 +14024,7 @@ function _archiveRenderSondePanel(data) {
     // Wind profile chart container
     html += '<div id="archive-wind-container" style="display:none;margin-top:8px;">' +
         '<div style="display:flex;align-items:flex-start;justify-content:space-between;padding:2px 6px;">' +
-            '<div id="archive-wind-title" style="color:#e5e7eb;font-size:11px;font-weight:600;flex:1;min-width:0;"></div>' +
+            '<div id="archive-wind-title" style="color:var(--text);font-size:11px;font-weight:600;flex:1;min-width:0;"></div>' +
             '<div style="display:flex;align-items:center;flex-shrink:0;margin-left:4px;">' +
                 '<button onclick="archiveSaveSondePNG(\'archive-wind-chart\',\'WindProfile\')" ' +
                     'title="Save as PNG" class="rt-save-png-btn" style="margin-right:4px;">' +
@@ -14100,7 +14100,7 @@ function archiveShowSondeSkewT(idx) {
             _icon('parachute') + (stormLabel || '') +
             (missionLabel ? ' <span style="color:#9ca3af;">(' + missionLabel + ')</span>' : '') +
             '<br>' +
-            '<span style="color:#94a3b8;">' + (sonde.sonde_id || 'Sonde ' + (idx + 1)) +
+            '<span style="color:var(--slate);">' + (sonde.sonde_id || 'Sonde ' + (idx + 1)) +
             ' \u2014 ' + sonde.launch_time + tOff + '</span>' + sfcTag;
     }
 
@@ -14146,10 +14146,16 @@ function _archiveAdjustSkewTYAxis(plev, profiles) {
             xMin: xRange[0], xMax: xRange[1],
             logPMin: newRange[0], logPMax: newRange[1],
         });
+        // Tag the new shapes too so any subsequent re-render can filter them.
+        for (var bi = 0; bi < barbShapes.length; bi++) barbShapes[bi]._kind = 'windbarb';
     }
 
+    // Filter by _kind tag (set in skewt.js _buildWindBarbShapes) instead
+    // of color-matching — the barb stroke flips between dark and light
+    // mode and color-based filtering missed the swap, leaving the old
+    // barb column on screen alongside the rebuilt one.
     var existingShapes = (el.layout.shapes || []).filter(function(s) {
-        return !(s.line && s.line.color && s.line.color.indexOf('220,220,240') >= 0);
+        return s._kind !== 'windbarb';
     });
 
     Plotly.relayout('archive-skewt-chart', {
@@ -14273,7 +14279,7 @@ function _archiveRenderSondeSkewTInfo(profiles, sonde) {
 
     if (items.length === 0) { el.innerHTML = ''; return; }
 
-    var h = '<div style="display:flex;flex-wrap:wrap;gap:4px 12px;font-size:10px;color:#94a3b8;">';
+    var h = '<div style="display:flex;flex-wrap:wrap;gap:4px 12px;font-size:10px;color:var(--slate);">';
     for (var i = 0; i < items.length; i++) {
         h += '<span><b style="color:#e2e8f0;">' + items[i][0] + ':</b> ' + items[i][1] + '</span>';
     }
@@ -14485,7 +14491,7 @@ function archiveShowSondeWind(idx) {
             _icon('wind') + (stormLabel || '') +
             (missionLabel ? ' <span style="color:#9ca3af;">(' + missionLabel + ')</span>' : '') +
             '<br>' +
-            '<span style="color:#94a3b8;">' + (sonde.sonde_id || 'Sonde ' + (idx + 1)) +
+            '<span style="color:var(--slate);">' + (sonde.sonde_id || 'Sonde ' + (idx + 1)) +
             ' \u2014 ' + sonde.launch_time + tOffStr + '</span>' + sfcTag;
     }
 
@@ -15105,11 +15111,11 @@ function _showMWMapColorbar(product, vmin, vmax) {
             '<div style="font-size:9px;font-weight:600;color:#fdba74;margin-bottom:3px;">37 GHz Color</div>' +
             '<div style="display:flex;gap:2px;align-items:center;">' +
                 '<span style="display:inline-block;width:12px;height:10px;background:#008800;border-radius:2px;" title="Ocean"></span>' +
-                '<span style="font-size:8px;color:#94a3b8;">Ocn</span>' +
+                '<span style="font-size:8px;color:var(--slate);">Ocn</span>' +
                 '<span style="display:inline-block;width:12px;height:10px;background:#00cccc;border-radius:2px;margin-left:3px;" title="Rain/Cloud"></span>' +
-                '<span style="font-size:8px;color:#94a3b8;">Rain</span>' +
+                '<span style="font-size:8px;color:var(--slate);">Rain</span>' +
                 '<span style="display:inline-block;width:12px;height:10px;background:#cc44cc;border-radius:2px;margin-left:3px;" title="Deep Convection"></span>' +
-                '<span style="font-size:8px;color:#94a3b8;">Conv</span>' +
+                '<span style="font-size:8px;color:var(--slate);">Conv</span>' +
             '</div>';
     } else {
         // Single-channel: show a gradient colorbar
@@ -15123,7 +15129,7 @@ function _showMWMapColorbar(product, vmin, vmax) {
         el.innerHTML =
             '<div style="font-size:9px;font-weight:600;color:#fdba74;margin-bottom:2px;">' + label + '</div>' +
             '<div style="width:140px;height:10px;border-radius:3px;background:' + gradientStops + ';border:1px solid rgba(15, 22, 35,0.15);"></div>' +
-            '<div style="display:flex;justify-content:space-between;font-size:8px;color:#94a3b8;margin-top:1px;">' +
+            '<div style="display:flex;justify-content:space-between;font-size:8px;color:var(--slate);margin-top:1px;">' +
                 '<span>' + vmin + ' K</span><span>' + vmax + ' K</span>' +
             '</div>';
     }
@@ -15151,7 +15157,7 @@ function _showIRMapColorbar() {
     el.innerHTML =
         '<div style="font-size:9px;font-weight:600;color:#60a5fa;margin-bottom:2px;">IR Brightness Temp</div>' +
         '<div style="width:140px;height:10px;border-radius:3px;background:' + gradientStops + ';border:1px solid rgba(15, 22, 35,0.15);"></div>' +
-        '<div style="display:flex;justify-content:space-between;font-size:8px;color:#94a3b8;margin-top:1px;">' +
+        '<div style="display:flex;justify-content:space-between;font-size:8px;color:var(--slate);margin-top:1px;">' +
             '<span>190 K</span><span>310 K</span>' +
         '</div>';
     el.style.display = 'block';
@@ -15810,7 +15816,7 @@ function _updateNexradColorbar(product) {
                 '<div style="flex:1;background:#FF0000;"></div>' +
                 '<div style="flex:1;background:#C80000;"></div>' +
             '</div>' +
-            '<div style="display:flex;justify-content:space-between;font-size:8px;color:#94a3b8;margin-top:1px;">' +
+            '<div style="display:flex;justify-content:space-between;font-size:8px;color:var(--slate);margin-top:1px;">' +
                 '<span>-50</span><span>0</span><span>+50</span>' +
             '</div>';
     } else {
@@ -15832,7 +15838,7 @@ function _updateNexradColorbar(product) {
                 '<div style="flex:1;background:#F800FD;"></div>' +
                 '<div style="flex:1;background:#9854C6;"></div>' +
             '</div>' +
-            '<div style="display:flex;justify-content:space-between;font-size:8px;color:#94a3b8;margin-top:1px;">' +
+            '<div style="display:flex;justify-content:space-between;font-size:8px;color:var(--slate);margin-top:1px;">' +
                 '<span>5</span><span>20</span><span>35</span><span>50</span><span>65</span>' +
             '</div>';
     }
