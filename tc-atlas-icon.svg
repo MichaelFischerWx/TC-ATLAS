@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="TC-ATLAS">
+  <!--
+    TC-ATLAS spiral mark — University of Miami palette.
+    Two-armed cyclone wrapping a globe.
+    Each arm = a thick stroked spiral with rounded caps; the rounded
+    inner cap reads as the arm "tucking" toward the eye, giving the
+    shape rotational momentum like the original PNG hurricane.
+  -->
+
+  <!-- Soft white plate -->
+  <rect x="2" y="2" width="60" height="60" rx="12" fill="#ffffff"/>
+  <rect x="2" y="2" width="60" height="60" rx="12" fill="none" stroke="rgba(15,22,35,0.08)" stroke-width="1"/>
+
+  <!-- Globe grid (subtle, behind the bands) -->
+  <g transform="translate(32, 32)" fill="none" stroke="#005030" stroke-linecap="round">
+    <circle cx="0" cy="0" r="25" stroke-width="1.4" opacity="0.32"/>
+    <ellipse cx="0" cy="0" rx="13" ry="25" stroke-width="0.9" opacity="0.20"/>
+    <ellipse cx="0" cy="0" rx="23" ry="9"  stroke-width="0.7" opacity="0.16"/>
+    <line x1="-25" y1="0" x2="25" y2="0" stroke-width="0.7" opacity="0.20"/>
+    <line x1="0" y1="-25" x2="0" y2="25" stroke-width="0.5" opacity="0.12"/>
+  </g>
+
+  <!--
+    Cyclone arms. Center origin (0,0) at translate(32,32).
+    Arm A (UM green):  starts outer top-right, sweeps clockwise around
+                       the right & bottom, tucks into the eye from below.
+    Arm B (UM orange): point-symmetric — outer bottom-left, sweeps
+                       clockwise around the left & top, tucks in from above.
+    Stroke width 7 + linecap:round gives the rainband feel; the rounded
+    cap visually narrows toward the eye like a tapered spiral arm.
+  -->
+  <g transform="translate(32, 32)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+
+    <!-- Arm A — UM green -->
+    <path d="M 14,-19
+             C 22,-15  26,-6   24,4
+             C 22,14   13,20   3,19
+             C -3,18  -7,15   -9,11"
+          stroke="#005030" stroke-width="7" opacity="0.95"/>
+
+    <!-- Arm B — UM orange -->
+    <path d="M -14,19
+             C -22,15  -26,6  -24,-4
+             C -22,-14 -13,-20 -3,-19
+             C 3,-18   7,-15   9,-11"
+          stroke="#F47321" stroke-width="7" opacity="0.95"/>
+
+    <!-- Eye — small dark navy point centered between the arm tips -->
+    <circle cx="0" cy="0" r="2.6" fill="#0d1318"/>
+  </g>
+</svg>

@@ -5,8 +5,8 @@
 
 /* ── Active nav highlight ─────────────────────────────────── */
 .ga-nav-active {
-    color: var(--cyan) !important;
-    background: rgba(0, 212, 255, 0.08) !important;
+    color: var(--um-green) !important;
+    background: rgba(244, 115, 33, 0.08) !important;
 }
 
 /* ── Tab bar ──────────────────────────────────────────────── */
@@ -34,11 +34,11 @@
 }
 .ga-tab:hover {
     color: var(--text);
-    background: rgba(255,255,255,0.03);
+    background: rgba(15, 22, 35,0.03);
 }
 .ga-tab.active {
-    color: var(--cyan);
-    border-bottom-color: var(--cyan);
+    color: var(--um-green);
+    border-bottom-color: var(--um-green);
 }
 /* Cross-page tab — TC Climatology lives on its own page, but is shown
    here in the tab strip so users discover the destination without
@@ -62,7 +62,7 @@
 }
 .ga-tab-link:hover {
     color: var(--text);
-    background: rgba(255,255,255,0.03);
+    background: rgba(15, 22, 35,0.03);
 }
 
 /* ── Tab content ──────────────────────────────────────────── */
@@ -157,7 +157,7 @@ input[type="range"].ga-range::-webkit-slider-thumb {
     width: 14px;
     height: 14px;
     border-radius: 50%;
-    background: var(--cyan);
+    background: var(--um-green);
     cursor: pointer;
     border: 2px solid var(--navy);
     margin-top: -5px;
@@ -166,7 +166,7 @@ input[type="range"].ga-range::-moz-range-thumb {
     width: 14px;
     height: 14px;
     border-radius: 50%;
-    background: var(--cyan);
+    background: var(--um-green);
     cursor: pointer;
     border: 2px solid var(--navy);
 }
@@ -184,10 +184,10 @@ input[type="range"].ga-range::-moz-range-thumb {
     width: 100%;
 }
 .ga-btn-primary {
-    background: linear-gradient(135deg, var(--blue) 0%, var(--cyan) 100%);
-    color: white;
+    background: var(--um-green);
+    color: #ffffff;
 }
-.ga-btn-primary:hover { opacity: 0.9; }
+.ga-btn-primary:hover { background: var(--um-green-deep); }
 .ga-btn-secondary {
     background: var(--surface);
     color: var(--slate);
@@ -219,14 +219,14 @@ input[type="range"].ga-range::-moz-range-thumb {
 }
 
 .mono {
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
 }
 
 .panel-badge {
     font-size: 0.65rem;
     font-weight: 500;
-    color: var(--cyan);
-    background: rgba(0,212,255,0.1);
+    color: var(--um-green);
+    background: rgba(244, 115, 33,0.1);
     padding: 2px 8px;
     border-radius: 10px;
     margin-left: 8px;
@@ -236,15 +236,15 @@ input[type="range"].ga-range::-moz-range-thumb {
 
 /* Per-frame IR source badges */
 .ir-source-mergir {
-    color: #00d4ff;
-    background: rgba(0,212,255,0.1);
+    color: #F47321;
+    background: rgba(244, 115, 33,0.1);
 }
 .ir-source-gridsat {
     color: #facc15;
     background: rgba(250,204,21,0.1);
 }
 .ir-source-hursat {
-    color: #a78bfa;
+    color: #6d28d9;
     background: rgba(167,139,250,0.1);
 }
 /* Pulsing border when frame fell back from preferred source */
@@ -271,7 +271,7 @@ input[type="range"].ga-range::-moz-range-thumb {
     font-size: 0.82rem;
     font-weight: 500;
     z-index: 9999;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.12);
     animation: ga-toast-in 0.3s ease;
 }
 @keyframes ga-toast-in {
@@ -301,7 +301,7 @@ input[type="range"].ga-range::-moz-range-thumb {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 14px;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
 }
 .climgl-launch-icon {
     flex-shrink: 0;
@@ -310,8 +310,8 @@ input[type="range"].ga-range::-moz-range-thumb {
     display: grid;
     place-items: center;
     border-radius: 14px;
-    background: rgba(46, 125, 255, 0.08);
-    border: 1px solid rgba(0, 212, 255, 0.25);
+    background: rgba(74, 155, 110, 0.08);
+    border: 1px solid rgba(244, 115, 33, 0.25);
 }
 .climgl-launch-icon svg {
     width: 80px;
@@ -354,12 +354,12 @@ input[type="range"].ga-range::-moz-range-thumb {
     text-decoration: none;
     border-radius: 8px;
     transition: background 0.15s, transform 0.12s, box-shadow 0.15s;
-    box-shadow: 0 0 0 0 rgba(0, 212, 255, 0);
+    box-shadow: 0 0 0 0 rgba(244, 115, 33, 0);
 }
 .climgl-launch-btn:hover {
-    background: var(--cyan);
+    background: var(--um-green);
     transform: translateY(-1px);
-    box-shadow: 0 0 0 4px rgba(0, 212, 255, 0.18);
+    box-shadow: 0 0 0 4px rgba(244, 115, 33, 0.18);
 }
 
 @media (max-width: 640px) {
@@ -486,7 +486,7 @@ input[type="range"].ga-range::-moz-range-thumb {
     position: absolute;
     transform: translateX(-50%);
     font-size: 0.62rem;
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     color: var(--text-dim);
     letter-spacing: 0;
 }
@@ -498,7 +498,7 @@ input[type="range"].ga-range::-moz-range-thumb {
 .range-label {
     font-size: 0.72rem;
     color: var(--text-dim);
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
 }
 
 .filter-actions {
@@ -517,8 +517,8 @@ input[type="range"].ga-range::-moz-range-thumb {
 .stat-highlight {
     font-size: 1.2rem;
     font-weight: 700;
-    color: var(--cyan);
-    font-family: 'JetBrains Mono', monospace;
+    color: var(--um-green);
+    font-variant-numeric: tabular-nums;
 }
 .stat-of {
     color: var(--text-dim);
@@ -556,7 +556,7 @@ input[type="range"].ga-range::-moz-range-thumb {
 .view-toggle-btn.active {
     background: var(--blue);
     border-color: var(--blue);
-    color: #fff;
+    color: #ffffff;
 }
 
 /* Floating map storm card */
@@ -565,14 +565,16 @@ input[type="range"].ga-range::-moz-range-thumb {
     bottom: 16px;
     left: 16px;
     z-index: 1000;
-    background: rgba(10, 22, 40, 0.95);
-    border: 1px solid rgba(0, 212, 255, 0.35);
+    background: rgba(255, 255, 255, 0.96);
+    border: 1px solid var(--border-light);
+    border-left: 3px solid var(--um-orange);
     border-radius: 10px;
     padding: 12px 14px 10px;
     min-width: 220px;
     max-width: 280px;
     backdrop-filter: blur(12px);
-    box-shadow: 0 4px 24px rgba(0,0,0,0.5), 0 0 12px rgba(0,180,255,0.12);
+    -webkit-backdrop-filter: blur(12px);
+    box-shadow: 0 6px 22px var(--border-light);
     animation: ga-toast-in 0.25s ease;
 }
 .map-storm-card-close {
@@ -588,7 +590,7 @@ input[type="range"].ga-range::-moz-range-thumb {
     padding: 0 4px;
 }
 .map-storm-card-close:hover {
-    color: #fff;
+    color: var(--text);
 }
 .map-storm-card-header {
     display: flex;
@@ -600,7 +602,7 @@ input[type="range"].ga-range::-moz-range-thumb {
 .map-storm-card-name {
     font-size: 1.05rem;
     font-weight: 700;
-    color: #fff;
+    color: var(--text);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -617,20 +619,20 @@ input[type="range"].ga-range::-moz-range-thumb {
     font-size: 0.75rem;
 }
 .map-card-stat-label {
-    color: var(--slate);
+    color: var(--text-dim);
     font-weight: 500;
 }
 .map-card-stat-value {
     color: var(--text);
     font-weight: 600;
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     font-size: 0.72rem;
 }
 .map-storm-card-btn {
     display: block;
     width: 100%;
-    background: linear-gradient(135deg, #2e7dff, #00d4ff);
-    color: #fff;
+    background: var(--um-green);
+    color: #ffffff;
     border: none;
     border-radius: 6px;
     padding: 8px 12px;
@@ -639,11 +641,11 @@ input[type="range"].ga-range::-moz-range-thumb {
     font-family: 'DM Sans', sans-serif;
     cursor: pointer;
     text-align: center;
-    transition: filter 0.15s, transform 0.1s;
+    transition: background 0.15s, transform 0.1s;
     letter-spacing: 0.3px;
 }
 .map-storm-card-btn:hover {
-    filter: brightness(1.15);
+    background: var(--um-green-deep);
     transform: translateY(-1px);
 }
 .map-storm-card-btn:active {
@@ -659,7 +661,7 @@ input[type="range"].ga-range::-moz-range-thumb {
 }
 @keyframes detail-btn-glow {
     0%, 100% { box-shadow: none; }
-    50% { box-shadow: 0 0 12px rgba(0, 212, 255, 0.5), 0 0 24px rgba(46, 125, 255, 0.25); }
+    50% { box-shadow: 0 0 12px rgba(244, 115, 33, 0.5), 0 0 24px rgba(74, 155, 110, 0.25); }
 }
 .storm-card-header {
     display: flex;
@@ -800,7 +802,7 @@ input[type="range"].ga-range::-moz-range-thumb {
 }
 .ir-toggle-btn.active {
     background: var(--blue);
-    color: #fff;
+    color: #ffffff;
 }
 
 /* ── IR Vertical Colorbar Strip (right of map) ───────────── */
@@ -812,8 +814,8 @@ input[type="range"].ga-range::-moz-range-thumb {
     flex-direction: column;
     align-items: center;
     padding: 4px 2px;
-    background: rgba(10, 22, 40, 0.95);
-    border: 1px solid rgba(255,255,255,0.08);
+    background: rgba(255, 255, 255, 0.95);
+    border: 1px solid var(--border);
     border-left: none;
     border-radius: 0 6px 6px 0;
     gap: 2px;
@@ -824,7 +826,7 @@ input[type="range"].ga-range::-moz-range-thumb {
     width: 12px;
     min-height: 0;
     border-radius: 3px;
-    border: 1px solid rgba(255,255,255,0.15);
+    border: 1px solid rgba(15, 22, 35,0.15);
     image-rendering: auto;
 }
 .ir-cbar-label-top,
@@ -842,8 +844,8 @@ input[type="range"].ga-range::-moz-range-thumb {
     left: auto !important;
     z-index: auto !important;
     display: block !important;
-    background: rgba(10, 22, 40, 0.95);
-    border: 1px solid rgba(255,255,255,0.08);
+    background: rgba(255, 255, 255, 0.95);
+    border: 1px solid var(--border);
     border-radius: 6px;
     padding: 4px 8px;
     margin-top: 2px;
@@ -880,7 +882,7 @@ input[type="range"].ga-range::-moz-range-thumb {
     text-transform: uppercase;
     letter-spacing: 0.06em;
     font-weight: 600;
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     margin-right: 2px;
 }
 .ir-bar-row2 .ir-cmap-btn {
@@ -890,7 +892,7 @@ input[type="range"].ga-range::-moz-range-thumb {
 .ir-peak-btn {
     background: rgba(251,191,36,0.14);
     border: 1px solid rgba(251,191,36,0.4);
-    color: #fde68a;
+    color: #a16207;
     white-space: nowrap;
 }
 .ir-peak-btn:hover {
@@ -902,9 +904,9 @@ input[type="range"].ga-range::-moz-range-thumb {
 .ir-map-controls:not(.ir-sidebar) {
     display: block !important;
     position: relative;
-    background: rgba(10, 22, 40, 0.92);
+    background: rgba(255, 255, 255, 0.92);
     padding: 8px 10px;
-    border: 1px solid rgba(255,255,255,0.08);
+    border: 1px solid var(--border);
     border-radius: 6px;
     margin-top: 4px;
     overflow: visible;
@@ -1012,7 +1014,7 @@ input[type="range"].ga-range::-moz-range-thumb {
 
 /* ── GIF Settings Panel ──────────────────────────────────── */
 .gif-settings-panel {
-    background: rgba(10, 22, 40, 0.97);
+    background: rgba(255, 255, 255, 0.97);
     border: 1px solid rgba(0, 180, 255, 0.3);
     border-radius: 10px;
     padding: 16px 20px;
@@ -1062,7 +1064,7 @@ input[type="range"].ga-range::-moz-range-thumb {
 }
 .gif-range-lbl {
     font-size: 0.65rem;
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     color: var(--slate);
     min-width: 24px;
     text-align: center;
@@ -1090,7 +1092,7 @@ input[type="range"].ga-range::-moz-range-thumb {
 .gif-toggle-slider {
     position: absolute;
     inset: 0;
-    background: rgba(255,255,255,0.1);
+    background: rgba(15, 22, 35,0.1);
     border-radius: 9px;
     cursor: pointer;
     transition: background 0.2s;
@@ -1111,7 +1113,7 @@ input[type="range"].ga-range::-moz-range-thumb {
 }
 .gif-toggle input:checked + .gif-toggle-slider::before {
     transform: translateX(14px);
-    background: var(--cyan);
+    background: var(--um-green);
 }
 .gif-toggle-label {
     font-size: 0.68rem;
@@ -1122,7 +1124,7 @@ input[type="range"].ga-range::-moz-range-thumb {
     color: var(--slate);
     text-align: center;
     margin: 8px 0 4px;
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
 }
 .gif-settings-actions {
     display: flex;
@@ -1149,7 +1151,7 @@ input[type="range"].ga-range::-moz-range-thumb {
 }
 .model-filter-btn.active {
     background: rgba(116, 185, 255, 0.15);
-    color: #74b9ff;
+    color: #1d4ed8;
     border-color: rgba(116, 185, 255, 0.4);
 }
 .model-legend {
@@ -1163,7 +1165,7 @@ input[type="range"].ga-range::-moz-range-thumb {
     align-items: center;
     gap: 3px;
     font-size: 0.7rem;
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     white-space: nowrap;
     line-height: 1.4;
 }
@@ -1187,7 +1189,7 @@ input[type="range"].ga-range::-moz-range-thumb {
     width: 100%;
     height: 10px;
     border-radius: 3px;
-    border: 1px solid rgba(255,255,255,0.15);
+    border: 1px solid rgba(15, 22, 35,0.15);
     image-rendering: auto;
     display: block;
 }
@@ -1216,7 +1218,7 @@ input[type="range"].ga-range::-moz-range-thumb {
 .ir-loading-text {
     color: var(--text-muted, #8899aa);
     font-size: 0.82rem;
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     text-align: center;
     max-width: 220px;
     line-height: 1.4;
@@ -1319,7 +1321,7 @@ input[type="range"].ga-range::-moz-range-thumb {
 .ace-modal-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.75);
+    background: rgba(0, 0, 0, 0.18);
     z-index: 100000;
     display: flex;
     align-items: center;
@@ -1339,7 +1341,7 @@ input[type="range"].ga-range::-moz-range-thumb {
     max-width: 1200px;
     max-height: 90vh;
     overflow-y: auto;
-    box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
+    box-shadow: 0 8px 40px rgba(0, 0, 0, 0.18);
     animation: ace-slide-up 0.25s ease;
 }
 @keyframes ace-slide-up {
@@ -1450,10 +1452,10 @@ input[type="range"].ga-range::-moz-range-thumb {
 .ace-year-table tbody td {
     padding: 5px 10px;
     color: var(--text);
-    border-bottom: 1px solid rgba(255,255,255,0.03);
+    border-bottom: 1px solid rgba(15, 22, 35,0.03);
 }
 .ace-year-table tbody tr:hover {
-    background: rgba(255,255,255,0.03);
+    background: rgba(15, 22, 35,0.03);
 }
 .ace-year-table .ace-bar-cell {
     position: relative;
@@ -1472,7 +1474,7 @@ input[type="range"].ga-range::-moz-range-thumb {
     transition: color 0.15s;
 }
 .ace-storm-name:hover {
-    color: var(--cyan);
+    color: var(--um-green);
 }
 
 /* Season track map inside ACE year detail */
@@ -1480,8 +1482,8 @@ input[type="range"].ga-range::-moz-range-thumb {
     height: 380px;
     border-radius: 8px;
     margin-bottom: 14px;
-    background: #0a1628;
-    border: 1px solid rgba(255,255,255,0.06);
+    background: var(--surface-raised);
+    border: 1px solid var(--border);
 }
 .ace-track-label {
     background: none !important;
@@ -1493,16 +1495,16 @@ input[type="range"].ga-range::-moz-range-thumb {
     font-size: 10px;
     font-weight: 600;
     font-family: 'DM Sans', sans-serif;
-    text-shadow: 0 0 4px rgba(0,0,0,0.9), 0 0 8px rgba(0,0,0,0.7);
+    text-shadow: 0 0 4px rgba(0,0,0,0.18), 0 0 8px rgba(0,0,0,0.18);
     pointer-events: none;
 }
 
 /* ── IR Tb hover tooltip ────────────────────────────────────── */
 .ir-tb-tooltip .leaflet-popup-content-wrapper {
     background: rgba(10, 14, 26, 0.88);
-    border: 1px solid rgba(0, 212, 255, 0.25);
+    border: 1px solid rgba(244, 115, 33, 0.25);
     border-radius: 6px;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.5);
+    box-shadow: 0 2px 10px rgba(0,0,0,0.15);
     padding: 0;
 }
 .ir-tb-tooltip .leaflet-popup-tip {
@@ -1510,14 +1512,14 @@ input[type="range"].ga-range::-moz-range-thumb {
 }
 .ir-tb-tooltip .leaflet-popup-content {
     margin: 5px 9px;
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     font-size: 0.78rem;
     line-height: 1.3;
     white-space: nowrap;
     color: #e0e0e0;
 }
 .ir-tb-val {
-    color: #fff;
+    color: var(--text);
     font-weight: 600;
 }
 .ir-tb-sep {
@@ -1729,7 +1731,7 @@ input[type="range"].ga-range::-moz-range-thumb {
     background: var(--surface-raised);
     color: var(--text);
     border-radius: var(--radius);
-    box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.12);
     border: 1px solid var(--border);
 }
 .leaflet-popup-tip {
@@ -1751,21 +1753,21 @@ input[type="range"].ga-range::-moz-range-thumb {
 
 /* Marker cluster override for dark theme */
 .marker-cluster-small {
-    background-color: rgba(46,125,255,0.3);
+    background-color: rgba(74, 155, 110,0.3);
 }
 .marker-cluster-small div {
-    background-color: rgba(46,125,255,0.6);
+    background-color: rgba(74, 155, 110,0.6);
     color: white;
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     font-weight: 600;
 }
 .marker-cluster-medium {
-    background-color: rgba(0,212,255,0.3);
+    background-color: rgba(244, 115, 33,0.3);
 }
 .marker-cluster-medium div {
-    background-color: rgba(0,212,255,0.6);
+    background-color: rgba(244, 115, 33,0.6);
     color: white;
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     font-weight: 600;
 }
 .marker-cluster-large {
@@ -1774,7 +1776,7 @@ input[type="range"].ga-range::-moz-range-thumb {
 .marker-cluster-large div {
     background-color: rgba(251,191,36,0.6);
     color: white;
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     font-weight: 600;
 }
 
@@ -1787,7 +1789,7 @@ input[type="range"].ga-range::-moz-range-thumb {
     font-family: 'DM Sans', sans-serif !important;
     font-size: 0.78rem !important;
     padding: 4px 8px !important;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.3) !important;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1) !important;
 }
 
 /* Intensity legend on map */
@@ -1796,7 +1798,7 @@ input[type="range"].ga-range::-moz-range-thumb {
     padding: 10px 14px;
     border-radius: var(--radius);
     border: 1px solid var(--border);
-    box-shadow: 0 2px 12px rgba(0,0,0,0.3);
+    box-shadow: 0 2px 12px rgba(0,0,0,0.1);
     font-size: 0.72rem;
     line-height: 1.8;
     color: var(--text);
@@ -1818,13 +1820,13 @@ input[type="range"].ga-range::-moz-range-thumb {
     width: 10px;
     height: 10px;
     border-radius: 50%;
-    border: 1.5px solid rgba(255,255,255,0.2);
+    border: 1.5px solid rgba(15, 22, 35,0.2);
     flex-shrink: 0;
 }
 
 /* ── Climatology Stats Tables (shared by all modal drill-downs) ── */
 .clim-stats-table {
-    background: rgba(255,255,255,0.02);
+    background: rgba(15, 22, 35,0.02);
     border: 1px solid var(--border);
     border-radius: 6px;
     padding: 12px;
@@ -1853,14 +1855,14 @@ input[type="range"].ga-range::-moz-range-thumb {
     padding: 5px 8px;
     color: var(--text);
     text-align: right;
-    border-bottom: 1px solid rgba(255,255,255,0.03);
+    border-bottom: 1px solid rgba(15, 22, 35,0.03);
 }
 .clim-stats-table td:first-child {
     text-align: left;
     font-weight: 500;
 }
 .clim-stats-table .mono {
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     font-size: 0.75rem;
 }
 
@@ -1872,21 +1874,21 @@ input[type="range"].ga-range::-moz-range-thumb {
     justify-content: flex-end;
 }
 .ga-btn-accent {
-    background: linear-gradient(135deg, #2e7dff, #00d4ff);
-    color: #fff;
+    background: var(--um-green);
+    color: #ffffff;
     border: none;
 }
-.ga-btn-accent:hover { opacity: 0.9; }
+.ga-btn-accent:hover { background: var(--um-green-deep); }
 .ga-btn-radar {
-    background: linear-gradient(135deg, #ff6b2e, #ffad00);
-    color: #fff;
+    background: var(--um-orange);
+    color: #ffffff;
     border: none;
     text-decoration: none;
     display: inline-flex;
     align-items: center;
     gap: 4px;
 }
-.ga-btn-radar:hover { opacity: 0.9; }
+.ga-btn-radar:hover { background: var(--um-orange-deep); }
 .ga-btn-xs {
     font-size: 0.68rem;
     padding: 2px 8px;
@@ -1897,7 +1899,7 @@ input[type="range"].ga-range::-moz-range-thumb {
 /* ── Flight-level tooltip (higher z-index than IR hover) ──── */
 .ga-fl-tooltip {
     z-index: 1000 !important;
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     font-size: 11px;
 }
 .ga-fl-barb { pointer-events: none; }
@@ -1938,7 +1940,7 @@ input[type="range"].ga-range::-moz-range-thumb {
 }
 .compare-align.active {
     background: var(--blue);
-    color: #fff;
+    color: #ffffff;
     border-color: var(--blue);
 }
 
@@ -1958,9 +1960,9 @@ input[type="range"].ga-range::-moz-range-thumb {
     border-radius: 20px;
     font-size: 0.72rem;
     font-weight: 600;
-    color: #fff;
-    background: rgba(255,255,255,0.08);
-    border: 1px solid rgba(255,255,255,0.12);
+    color: var(--text);
+    background: var(--border);
+    border: 1px solid var(--border-light);
     cursor: default;
 }
 .compare-chip-dot {
@@ -2005,17 +2007,17 @@ input[type="range"].ga-range::-moz-range-thumb {
 .compare-result-row {
     display: flex; align-items: center; gap: 10px;
     padding: 7px 12px; cursor: pointer; transition: background 0.15s;
-    border-bottom: 1px solid rgba(255,255,255,0.03);
+    border-bottom: 1px solid rgba(15, 22, 35,0.03);
     font-size: 0.78rem;
 }
 .compare-result-row:last-child { border-bottom: none; }
-.compare-result-row:hover { background: rgba(255,255,255,0.04); }
+.compare-result-row:hover { background: rgba(15, 22, 35,0.04); }
 .compare-result-row.added { opacity: 0.45; cursor: default; }
 .compare-result-row.added:hover { background: transparent; }
 .compare-result-name { font-weight: 600; color: var(--white); min-width: 90px; }
-.compare-result-meta { font-size: 0.72rem; color: var(--slate); font-family: 'JetBrains Mono', monospace; }
+.compare-result-meta { font-size: 0.72rem; color: var(--slate); font-variant-numeric: tabular-nums; }
 .basin-badge-sm {
-    background: rgba(255,255,255,0.06); padding: 1px 5px; border-radius: 3px;
+    background: var(--border); padding: 1px 5px; border-radius: 3px;
     font-size: 0.65rem; font-weight: 600; letter-spacing: 0.03em;
 }
 .cat-label-sm { font-size: 0.62rem; opacity: 0.7; }
@@ -2024,14 +2026,14 @@ input[type="range"].ga-range::-moz-range-thumb {
     border-radius: 6px; border: 1px solid var(--blue); color: var(--blue);
     background: transparent; cursor: pointer; white-space: nowrap; transition: background 0.15s;
 }
-.compare-result-add:hover { background: rgba(0,212,255,0.1); }
+.compare-result-add:hover { background: rgba(244, 115, 33,0.1); }
 .compare-result-add.added { border-color: var(--slate); color: var(--slate); cursor: default; }
 .compare-result-add.added:hover { background: transparent; }
 .compare-result-empty { text-align: center; padding: 24px; color: var(--slate); font-size: 0.8rem; }
 
 /* Inline search (when storms already selected) */
 .compare-search-inline {
-    background: rgba(255,255,255,0.02); border: 1px solid var(--border);
+    background: rgba(15, 22, 35,0.02); border: 1px solid var(--border);
     border-radius: 10px; padding: 14px; margin-bottom: 14px;
 }
 .compare-search-inline .compare-search-title { font-size: 0.9rem; margin-bottom: 8px; }
@@ -2063,8 +2065,8 @@ input[type="range"].ga-range::-moz-range-thumb {
 .compare-stats-table td {
     padding: 6px 10px;
     color: var(--white);
-    border-bottom: 1px solid rgba(255,255,255,0.03);
-    font-family: 'JetBrains Mono', monospace;
+    border-bottom: 1px solid rgba(15, 22, 35,0.03);
+    font-variant-numeric: tabular-nums;
     font-size: 0.74rem;
 }
 .compare-stats-table td:first-child {
@@ -2111,13 +2113,13 @@ input[type="range"].ga-range::-moz-range-thumb {
 }
 .compare-ir-datetime {
     font-size: 0.72rem;
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     color: var(--slate);
     margin-left: auto;
 }
 .compare-ir-intensity {
     font-size: 0.78rem;
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     color: var(--text);
     text-align: center;
     padding: 2px 0;
@@ -2142,7 +2144,7 @@ input[type="range"].ga-range::-moz-range-thumb {
     width: 100%;
     height: 10px;
     border-radius: 3px;
-    border: 1px solid rgba(255,255,255,0.15);
+    border: 1px solid rgba(15, 22, 35,0.15);
     display: block;
 }
 @media (max-width: 768px) {
@@ -2172,8 +2174,8 @@ input[type="range"].ga-range::-moz-range-thumb {
 }
 .compare-mode-btn.active {
     background: rgba(0, 180, 255, 0.2);
-    color: var(--cyan);
-    border-color: var(--cyan);
+    color: var(--um-green);
+    border-color: var(--um-green);
 }
 
 /* ── MW Compare Panel ────────────────────────────────────── */
@@ -2208,7 +2210,7 @@ input[type="range"].ga-range::-moz-range-thumb {
     border-radius: var(--radius);
     padding: 3px 6px;
     font-size: 0.7rem;
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     min-width: 0;
 }
 .compare-mw-status {
@@ -2220,7 +2222,7 @@ input[type="range"].ga-range::-moz-range-thumb {
     width: 100%;
     height: 10px;
     border-radius: 3px;
-    border: 1px solid rgba(255,255,255,0.15);
+    border: 1px solid rgba(15, 22, 35,0.15);
     display: block;
 }
 @media (max-width: 768px) {
@@ -2236,7 +2238,7 @@ input[type="range"].ga-range::-moz-range-thumb {
     gap: 8px 24px;
     margin-bottom: 16px;
     padding: 12px 16px;
-    background: rgba(255,255,255,0.02);
+    background: rgba(15, 22, 35,0.02);
     border-radius: var(--radius-lg);
     border: 1px solid var(--border);
 }
@@ -2262,7 +2264,7 @@ input[type="range"].ga-range::-moz-range-thumb {
 }
 .aw-val {
     font-size: 0.72rem;
-    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
     color: var(--blue);
     min-width: 14px;
     text-align: center;
@@ -2310,8 +2312,8 @@ input[type="range"].ga-range::-moz-range-thumb {
 .analog-results td {
     padding: 7px 8px;
     color: var(--white);
-    border-bottom: 1px solid rgba(255,255,255,0.03);
-    font-family: 'JetBrains Mono', monospace;
+    border-bottom: 1px solid rgba(15, 22, 35,0.03);
+    font-variant-numeric: tabular-nums;
     font-size: 0.72rem;
 }
 .analog-results td:nth-child(2) {
@@ -2319,7 +2321,7 @@ input[type="range"].ga-range::-moz-range-thumb {
     font-weight: 600;
 }
 .analog-results tr:hover {
-    background: rgba(46,125,255,0.06);
+    background: rgba(74, 155, 110,0.06);
 }
 .analog-results input[type="checkbox"] {
     accent-color: var(--blue);
@@ -2363,8 +2365,8 @@ input[type="range"].ga-range::-moz-range-thumb {
     margin-bottom: 10px;
 }
 .scorecard-tab {
-    background: rgba(255,255,255,0.04);
-    border: 1px solid rgba(255,255,255,0.1);
+    background: rgba(15, 22, 35,0.04);
+    border: 1px solid rgba(15, 22, 35,0.1);
     color: var(--slate);
     padding: 5px 12px;
     border-radius: 4px;
@@ -2373,7 +2375,7 @@ input[type="range"].ga-range::-moz-range-thumb {
     transition: all 0.15s;
 }
 .scorecard-tab:hover {
-    background: rgba(255,255,255,0.08);
+    background: var(--border);
 }
 .scorecard-tab.active {
     background: rgba(251,191,36,0.15);
@@ -2388,10 +2390,10 @@ input[type="range"].ga-range::-moz-range-thumb {
     width: 100%;
     border-collapse: collapse;
     font-size: 0.82rem;
-    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-variant-numeric: tabular-nums;
 }
 .scorecard-table th {
-    background: rgba(255,255,255,0.03);
+    background: rgba(15, 22, 35,0.03);
     color: var(--slate);
     font-weight: 500;
     padding: 6px 8px;
@@ -2404,11 +2406,11 @@ input[type="range"].ga-range::-moz-range-thumb {
 .scorecard-table td {
     padding: 5px 8px;
     text-align: center;
-    border-bottom: 1px solid rgba(255,255,255,0.03);
+    border-bottom: 1px solid rgba(15, 22, 35,0.03);
     color: #c8d6e5;
 }
 .scorecard-table tr:hover td {
-    background: rgba(255,255,255,0.03);
+    background: rgba(15, 22, 35,0.03);
 }
 .scorecard-model-col {
     text-align: left !important;
@@ -2477,8 +2479,8 @@ input[type="range"].ga-range::-moz-range-thumb {
     padding: 0 12px 10px;
 }
 .ships-var-btn {
-    background: rgba(255,255,255,0.04);
-    border: 1px solid rgba(255,255,255,0.15);
+    background: rgba(15, 22, 35,0.04);
+    border: 1px solid rgba(15, 22, 35,0.15);
     color: var(--slate);
     padding: 3px 10px;
     border-radius: 12px;
@@ -2487,7 +2489,7 @@ input[type="range"].ga-range::-moz-range-thumb {
     transition: all 0.15s;
 }
 .ships-var-btn:hover {
-    background: rgba(255,255,255,0.08);
+    background: var(--border);
 }
 .ships-var-btn.active {
     font-weight: 600;

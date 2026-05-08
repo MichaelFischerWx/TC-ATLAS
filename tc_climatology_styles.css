@@ -37,7 +37,7 @@
 }
 .tc-clim-subtitle {
     margin: 0;
-    color: var(--text-dim, #94a3b8);
+    color: var(--text-dim, #8a93a3);
     font-size: 0.86rem;
     line-height: 1.5;
     max-width: 720px;
@@ -49,12 +49,12 @@
     border: 1px solid var(--border);
     border-radius: 8px;
     overflow: hidden;
-    background: rgba(255,255,255,0.02);
+    background: rgba(15, 22, 35,0.02);
 }
 .tc-clim-subnav-btn {
     padding: 9px 18px;
     background: transparent;
-    color: var(--text-dim, #94a3b8);
+    color: var(--text-dim, #8a93a3);
     border: none;
     border-right: 1px solid var(--border);
     font-family: inherit;
@@ -64,10 +64,11 @@
     transition: background 0.15s, color 0.15s;
 }
 .tc-clim-subnav-btn:last-child { border-right: none; }
-.tc-clim-subnav-btn:hover { color: var(--text); background: rgba(255,255,255,0.04); }
+.tc-clim-subnav-btn:hover { color: var(--text); background: rgba(15, 22, 35,0.04); }
 .tc-clim-subnav-btn.active {
-    background: rgba(46,125,255,0.18);
-    color: var(--cyan, #00d4ff);
+    background: var(--um-green-tint);
+    color: var(--um-green);
+    font-weight: 600;
 }
 
 /* ── Sub-views ─────────────────────────────────────────────── */
@@ -96,10 +97,9 @@
     gap: 18px;
     padding: 18px 22px;
     margin: 12px 0 22px;
-    background: linear-gradient(135deg,
-                rgba(46,125,255,0.10) 0%,
-                rgba(0,212,255,0.06) 100%);
-    border: 1px solid rgba(0,212,255,0.22);
+    background: var(--surface-raised);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--um-green);
     border-radius: 10px;
 }
 .tc-clim-globe-banner-icon {
@@ -109,6 +109,10 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    /* SVG wireframe strokes inherit this via currentColor — flips with
+       theme so the green is readable on both light + dark backgrounds.
+       In dark mode --um-green resolves to the brightened emerald. */
+    color: var(--um-green);
 }
 .tc-clim-globe-banner-icon svg {
     width: 56px;
@@ -128,7 +132,7 @@
     margin: 0;
     font-size: 0.85rem;
     line-height: 1.45;
-    color: var(--text-dim, #94a3b8);
+    color: var(--text-dim, #8a93a3);
 }
 .tc-clim-globe-banner-btn {
     flex: 0 0 auto;
@@ -136,25 +140,23 @@
     align-items: center;
     gap: 8px;
     padding: 11px 20px;
-    background: linear-gradient(135deg, #2e7dff 0%, #00d4ff 100%);
-    color: #0a1628;
+    background: var(--um-green);
+    color: #ffffff;
     text-decoration: none;
     font-family: 'DM Sans', sans-serif;
     font-weight: 700;
     font-size: 0.92rem;
     letter-spacing: 0.01em;
     border-radius: 8px;
-    box-shadow: 0 4px 14px rgba(0, 212, 255, 0.20);
-    transition: transform 0.15s, box-shadow 0.15s, filter 0.15s;
+    transition: background 0.15s, transform 0.15s;
     white-space: nowrap;
 }
 .tc-clim-globe-banner-btn:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 6px 18px rgba(0, 212, 255, 0.35);
-    filter: brightness(1.05);
+    background: var(--um-green-deep);
+    transform: translateY(-1px);
 }
 .tc-clim-globe-banner-btn:focus {
-    outline: 2px solid #00d4ff;
+    outline: 2px solid var(--um-green);
     outline-offset: 3px;
 }
 .tc-clim-globe-banner-btn .tc-clim-cta-arrow {
@@ -193,7 +195,7 @@
 .tc-clim-gallery-sub {
     margin: 0 0 18px 0;
     text-align: center;
-    color: var(--text-dim, #94a3b8);
+    color: var(--text-dim, #8a93a3);
     font-size: 0.84rem;
 }
 .tc-clim-gallery {
@@ -212,8 +214,8 @@
 .tc-clim-tile {
     display: flex;
     flex-direction: column;
-    background: var(--surface-raised, rgba(255,255,255,0.03));
-    border: 1px solid var(--border, rgba(255,255,255,0.08));
+    background: var(--surface-raised, rgba(15, 22, 35,0.03));
+    border: 1px solid var(--border, var(--border));
     border-radius: 10px;
     overflow: hidden;
     text-decoration: none;
@@ -221,14 +223,14 @@
     transition: border-color 0.18s, transform 0.18s, box-shadow 0.18s;
 }
 .tc-clim-tile:hover {
-    border-color: rgba(0,212,255,0.45);
+    border-color: rgba(244, 115, 33,0.45);
     transform: translateY(-2px);
-    box-shadow: 0 8px 22px rgba(0,0,0,0.28);
+    box-shadow: 0 8px 22px rgba(0,0,0,0.1);
 }
 
 .tc-clim-tile-thumb {
     aspect-ratio: 16 / 9;
-    background: linear-gradient(135deg, #0f1d36, #142a52);
+    background: linear-gradient(135deg, #0d1318, #1a2230);
     overflow: hidden;
     position: relative;
 }
@@ -244,13 +246,13 @@
    visible underneath. data-grad swaps palettes per tile so the
    wall-of-tiles doesn't look flat while screenshots are pending. */
 .tc-clim-tile-thumb-placeholder[data-grad="mpi"]   { background: linear-gradient(135deg, #f59e0b, #ef4444); }
-.tc-clim-tile-thumb-placeholder[data-grad="corr"]  { background: linear-gradient(135deg, #2e7dff, #ef4444); }
+.tc-clim-tile-thumb-placeholder[data-grad="corr"]  { background: linear-gradient(135deg, #4a9b6e, #ef4444); }
 .tc-clim-tile-thumb-placeholder[data-grad="shear"] { background: linear-gradient(135deg, #34d399, #fb923c); }
 .tc-clim-tile-thumb-placeholder::after {
     content: '';
     position: absolute;
     inset: 0;
-    background: radial-gradient(circle at 30% 25%, rgba(255,255,255,0.18) 0%, rgba(0,0,0,0) 55%);
+    background: radial-gradient(circle at 30% 25%, rgba(15, 22, 35,0.18) 0%, rgba(0,0,0,0) 55%);
 }
 
 .tc-clim-tile-body {
@@ -263,7 +265,7 @@
     margin-bottom: 4px;
 }
 .tc-clim-tile-desc {
-    color: var(--text-dim, #94a3b8);
+    color: var(--text-dim, #8a93a3);
     font-size: 0.78rem;
     line-height: 1.45;
 }

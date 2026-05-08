@@ -546,12 +546,12 @@
             hoverongaps: false
         };
 
-        var plotBg = '#0a1628';
+        var plotBg = '#ffffff';
         var baseLayout = {
             paper_bgcolor: plotBg, plot_bgcolor: plotBg,
-            xaxis: { title: { text: 'Eastward distance (km)', font: { color: '#aaa', size: 10 } }, tickfont: { color: '#aaa', size: 9 }, gridcolor: 'rgba(255,255,255,0.04)', zeroline: false, scaleanchor: 'y', range: [-250, 250] },
-            yaxis: { title: { text: 'Northward distance (km)', font: { color: '#aaa', size: 10 } }, tickfont: { color: '#aaa', size: 9 }, gridcolor: 'rgba(255,255,255,0.04)', zeroline: false, range: [-250, 250] },
-            hoverlabel: { bgcolor: '#1f2937', font: { color: '#e5e7eb', size: 12 } },
+            xaxis: { title: { text: 'Eastward distance (km)', font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 }, gridcolor: 'rgba(255,255,255,0.04)', zeroline: false, scaleanchor: 'y', range: [-250, 250] },
+            yaxis: { title: { text: 'Northward distance (km)', font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 }, gridcolor: 'rgba(255,255,255,0.04)', zeroline: false, range: [-250, 250] },
+            hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: 12 } },
             showlegend: false
         };
         // RMW dashed circle on plan view, centered at WCM center (not grid origin)
@@ -567,7 +567,7 @@
         baseLayout.shapes = shapes;
 
         var layout = Object.assign({}, baseLayout, {
-            title: { text: title, font: { color: '#e5e7eb', size: 11 }, y: 0.96, x: 0.5, xanchor: 'center', yanchor: 'top' },
+            title: { text: title, font: { color: '#0f1623', size: 11 }, y: 0.96, x: 0.5, xanchor: 'center', yanchor: 'top' },
             margin: { l: 52, r: 16, t: json.overlay ? 58 : 46, b: 44 }
         });
 
@@ -883,7 +883,7 @@
 
         var d = _rtLastPlotlyData;
         var fullLayout = Object.assign({}, d.baseLayout, {
-            title: { text: d.title, font: { color: '#e5e7eb', size: 14 }, y: 0.97, x: 0.5, xanchor: 'center', yanchor: 'top' },
+            title: { text: d.title, font: { color: '#0f1623', size: 14 }, y: 0.97, x: 0.5, xanchor: 'center', yanchor: 'top' },
             margin: { l: 60, r: 28, t: 64, b: 52 }
         });
 
@@ -1048,14 +1048,14 @@
         };
 
         var title = 'Cross Section: (' + ep.x0.toFixed(0) + ',' + ep.y0.toFixed(0) + ') → (' + ep.x1.toFixed(0) + ',' + ep.y1.toFixed(0) + ') km';
-        var plotBg = '#0a1628';
+        var plotBg = '#ffffff';
         var layout = {
-            title: { text: title, font: { color: '#e5e7eb', size: 11 }, y: 0.97, x: 0.5, xanchor: 'center' },
+            title: { text: title, font: { color: '#0f1623', size: 11 }, y: 0.97, x: 0.5, xanchor: 'center' },
             paper_bgcolor: plotBg, plot_bgcolor: plotBg,
-            xaxis: { title: { text: 'Distance along line (km)', font: { color: '#aaa', size: 10 } }, tickfont: { color: '#aaa', size: 9 }, gridcolor: 'rgba(255,255,255,0.04)', zeroline: false },
-            yaxis: { title: { text: 'Height (km)', font: { color: '#aaa', size: 10 } }, tickfont: { color: '#aaa', size: 9 }, gridcolor: 'rgba(255,255,255,0.04)', zeroline: false },
+            xaxis: { title: { text: 'Distance along line (km)', font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 }, gridcolor: 'rgba(255,255,255,0.04)', zeroline: false },
+            yaxis: { title: { text: 'Height (km)', font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 }, gridcolor: 'rgba(255,255,255,0.04)', zeroline: false },
             margin: { l: 45, r: 12, t: 44, b: 38 },
-            hoverlabel: { bgcolor: '#1f2937', font: { color: '#e5e7eb', size: 11 } },
+            hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: 11 } },
             showlegend: false
         };
 
@@ -1154,7 +1154,7 @@
             zoomControl: true
         });
 
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
             attribution: '&copy; <a href="https://carto.com/">CARTO</a>',
             subdomains: 'abcd',
             maxZoom: 12
@@ -1473,15 +1473,15 @@
         var shapes = [];
         if (json.wcm_rmw_km && !isNaN(json.wcm_rmw_km)) shapes.push({ type:'line',xref:'x',yref:'paper',x0:json.wcm_rmw_km,x1:json.wcm_rmw_km,y0:0,y1:1,line:{color:'white',width:1.5,dash:'dash'} });
 
-        var plotBg = '#0a1628';
+        var plotBg = '#ffffff';
         var layout = {
-            title: { text: title, font: { color: '#e5e7eb', size: fontSize.title }, y: 0.96, x: 0.5, xanchor: 'center', yanchor: 'top' },
+            title: { text: title, font: { color: '#0f1623', size: fontSize.title }, y: 0.96, x: 0.5, xanchor: 'center', yanchor: 'top' },
             paper_bgcolor: plotBg, plot_bgcolor: plotBg,
-            xaxis: { title: { text: 'Radius (km)', font: { color: '#aaa', size: fontSize.axis } }, tickfont: { color: '#aaa', size: fontSize.tick }, gridcolor: 'rgba(255,255,255,0.04)', zeroline: false },
-            yaxis: { title: { text: 'Height (km)', font: { color: '#aaa', size: fontSize.axis } }, tickfont: { color: '#aaa', size: fontSize.tick }, gridcolor: 'rgba(255,255,255,0.04)', zeroline: false },
+            xaxis: { title: { text: 'Radius (km)', font: { color: '#5b6573', size: fontSize.axis } }, tickfont: { color: '#5b6573', size: fontSize.tick }, gridcolor: 'rgba(255,255,255,0.04)', zeroline: false },
+            yaxis: { title: { text: 'Height (km)', font: { color: '#5b6573', size: fontSize.axis } }, tickfont: { color: '#5b6573', size: fontSize.tick }, gridcolor: 'rgba(255,255,255,0.04)', zeroline: false },
             margin: { l: 48, r: 14, t: json.overlay ? 58 : 46, b: 44 },
             shapes: shapes,
-            hoverlabel: { bgcolor: '#1f2937', font: { color: '#e5e7eb', size: fontSize.hover } },
+            hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: fontSize.hover } },
             showlegend: false
         };
 
@@ -1598,14 +1598,14 @@
         var title = (meta.storm_name || 'Real-Time TDR') + ' | ' + (meta.datetime || '') +
             '<br>Azimuthal Mean: ' + varInfo.display_name + ' (≥' + covPct + '% coverage)' + overlayLabel;
 
-        var plotBg = '#0a1628';
+        var plotBg = '#ffffff';
         var layout = {
-            title: { text: title, font: { color: '#e5e7eb', size: 10 }, y: 0.97, x: 0.5, xanchor: 'center' },
+            title: { text: title, font: { color: '#0f1623', size: 10 }, y: 0.97, x: 0.5, xanchor: 'center' },
             paper_bgcolor: plotBg, plot_bgcolor: plotBg,
-            xaxis: { title: { text: 'Radius (km)', font: { color: '#aaa', size: 10 } }, tickfont: { color: '#aaa', size: 9 }, gridcolor: 'rgba(255,255,255,0.04)', zeroline: false },
-            yaxis: { title: { text: 'Height (km)', font: { color: '#aaa', size: 10 } }, tickfont: { color: '#aaa', size: 9 }, gridcolor: 'rgba(255,255,255,0.04)', zeroline: false },
+            xaxis: { title: { text: 'Radius (km)', font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 }, gridcolor: 'rgba(255,255,255,0.04)', zeroline: false },
+            yaxis: { title: { text: 'Height (km)', font: { color: '#5b6573', size: 10 } }, tickfont: { color: '#5b6573', size: 9 }, gridcolor: 'rgba(255,255,255,0.04)', zeroline: false },
             margin: { l: 48, r: 12, t: json.overlay ? 66 : 52, b: 38 },
-            hoverlabel: { bgcolor: '#1f2937', font: { color: '#e5e7eb', size: 12 } },
+            hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: 12 } },
             showlegend: false
         };
 
@@ -3159,8 +3159,8 @@
         }
 
         var layout = {
-            paper_bgcolor: '#111827',
-            plot_bgcolor: '#111827',
+            paper_bgcolor: '#ffffff',
+            plot_bgcolor: '#ffffff',
             xaxis: {
                 title: { text: 'Wind Speed (m/s)', font: { color: '#22c55e', size: 12 } },
                 tickfont: { color: '#22c55e', size: 10 },
@@ -3175,16 +3175,16 @@
                 side: 'top', overlaying: 'x', anchor: 'y',
             },
             yaxis: {
-                title: { text: 'Pressure (hPa)', font: { color: '#aaa', size: 12 } },
-                tickfont: { color: '#aaa', size: 10 },
+                title: { text: 'Pressure (hPa)', font: { color: '#5b6573', size: 12 } },
+                tickfont: { color: '#5b6573', size: 10 },
                 gridcolor: 'rgba(255,255,255,0.08)',
                 autorange: 'reversed', type: 'log',
                 range: [Math.log10(pMax), Math.log10(pMin)],
                 dtick: 'D1',
             },
             yaxis2: {
-                title: { text: 'Altitude (km)', font: { color: '#9ca3af', size: 11 } },
-                tickfont: { color: '#9ca3af', size: 9 },
+                title: { text: 'Altitude (km)', font: { color: '#5b6573', size: 11 } },
+                tickfont: { color: '#5b6573', size: 9 },
                 side: 'right', overlaying: 'y', type: 'log',
                 range: [Math.log10(pMax), Math.log10(pMin)],
                 tickvals: altTickVals, ticktext: altTickText,
@@ -3196,7 +3196,7 @@
             showlegend: true,
             shapes: shapes,
             annotations: annotations,
-            hoverlabel: { bgcolor: '#1f2937', font: { color: '#e5e7eb', size: 11 } },
+            hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: 11 } },
         };
 
         // On-plot title and info annotations (visible in saved PNG)
@@ -3204,7 +3204,7 @@
         layout.annotations.push({
             text: plotTitleLine,
             xref: 'paper', yref: 'paper', x: 0.5, y: 1.14,
-            showarrow: false, font: { color: '#e5e7eb', size: 11 }, xanchor: 'center',
+            showarrow: false, font: { color: '#0f1623', size: 11 }, xanchor: 'center',
         });
         layout.annotations.push({
             text: plotInfoParts.join(' \u00b7 '),
@@ -3982,7 +3982,7 @@
         var gridColor = 'rgba(148,163,184,0.08)';
         var layout = {
             paper_bgcolor: 'rgba(0,0,0,0)',
-            plot_bgcolor: 'rgba(10,15,25,0.5)',
+            plot_bgcolor: 'rgba(247,248,250,0.85)',
             margin: { l: 55, r: 55, t: 8, b: 40 },
             font: { family: 'DM Sans, sans-serif', size: 11, color: '#94a3b8' },
             legend: {
@@ -4579,13 +4579,13 @@
         var traces = [];
         var annotations = [];
         var shapes = [];
-        var plotBg = '#0a1628';
+        var plotBg = '#ffffff';
 
         var layout = {
             paper_bgcolor: plotBg, plot_bgcolor: plotBg,
             margin: { l: 45, r: 55, t: 70, b: 42 },
             showlegend: false,
-            hoverlabel: { bgcolor: '#1f2937', font: { color: '#e5e7eb', size: fontSize.hover } }
+            hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: fontSize.hover } }
         };
 
         panelOrder.forEach(function (p, i) {
@@ -4632,15 +4632,15 @@
             var showYLabel = (p.col === 0);
             layout['xaxis' + axSuffix] = {
                 domain: [ac.x0, ac.x1],
-                title: showXLabel ? { text: 'Radius (km)', font: { color: '#aaa', size: fontSize.axis } } : undefined,
-                tickfont: { color: '#aaa', size: fontSize.tick },
+                title: showXLabel ? { text: 'Radius (km)', font: { color: '#5b6573', size: fontSize.axis } } : undefined,
+                tickfont: { color: '#5b6573', size: fontSize.tick },
                 gridcolor: 'rgba(255,255,255,0.04)', zeroline: false,
                 anchor: 'y' + axSuffix
             };
             layout['yaxis' + axSuffix] = {
                 domain: [ac.y0, ac.y1],
-                title: showYLabel ? { text: 'Height (km)', font: { color: '#aaa', size: fontSize.axis } } : undefined,
-                tickfont: { color: '#aaa', size: fontSize.tick },
+                title: showYLabel ? { text: 'Height (km)', font: { color: '#5b6573', size: fontSize.axis } } : undefined,
+                tickfont: { color: '#5b6573', size: fontSize.tick },
                 gridcolor: 'rgba(255,255,255,0.04)', zeroline: false,
                 anchor: 'x' + axSuffix
             };
@@ -4683,7 +4683,7 @@
         var shearStr = (sddc !== null && sddc !== undefined && sddc !== 9999) ? ' | Shear: ' + Number(sddc).toFixed(0) + '\u00b0' : '';
         layout.title = {
             text: 'Shear-Relative Quadrant Mean: ' + dispName + shearStr,
-            font: { color: '#e5e7eb', size: fontSize.title }, y: 0.99, x: 0.5, xanchor: 'center'
+            font: { color: '#0f1623', size: fontSize.title }, y: 0.99, x: 0.5, xanchor: 'center'
         };
         layout.shapes = shapes;
         layout.annotations = annotations;
@@ -4846,7 +4846,7 @@
         };
 
         var layout = {
-            paper_bgcolor: '#0a1628', plot_bgcolor: '#0a1628',
+            paper_bgcolor: '#ffffff', plot_bgcolor: '#ffffff',
             xaxis: {
                 title: { text: 'R\u2095 (inner: R/RMW | outer: RMW + km)', font: { size: 10, color: '#8b9ec2' } },
                 tickvals: ticks.tickvals, ticktext: ticks.ticktext,
@@ -4861,7 +4861,7 @@
             },
             shapes: shapes,
             margin: { l: 45, r: 12, t: 8, b: 40 },
-            hoverlabel: { bgcolor: '#1f2937', font: { color: '#e5e7eb', size: 11 } }
+            hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: 11 } }
         };
 
         Plotly.newPlot('rt-anomaly-chart', [trace], layout, {
@@ -5143,7 +5143,7 @@
         }
 
         var layout = {
-            paper_bgcolor: '#0a1628', plot_bgcolor: '#0a1628',
+            paper_bgcolor: '#ffffff', plot_bgcolor: '#ffffff',
             // Left panel: VP vs Favorability
             xaxis: {
                 title: { text: 'Ventilation Proxy (VP)', font: { size: 10, color: '#8b9ec2' } },
@@ -5174,11 +5174,11 @@
             margin: { l: 50, r: 50, t: 30, b: 45 },
             legend: {
                 x: 0.45, y: 0.99, xanchor: 'right', yanchor: 'top',
-                font: { color: '#aaa', size: 9 },
+                font: { color: '#5b6573', size: 9 },
                 bgcolor: 'rgba(10,22,40,0.8)', bordercolor: 'rgba(255,255,255,0.1)', borderwidth: 1,
                 orientation: 'h'
             },
-            hoverlabel: { bgcolor: '#1f2937', font: { color: '#e5e7eb', size: 10 } }
+            hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: 10 } }
         };
 
         Plotly.newPlot('rt-vp-chart', traces, layout, {
@@ -5334,7 +5334,7 @@
                 }
             },
             text: hoverText, hoverinfo: 'text',
-            hoverlabel: { bgcolor: '#1f2937', font: { color: '#e5e7eb', size: 11 } },
+            hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: 11 } },
             showlegend: false
         };
 
@@ -5451,7 +5451,7 @@
             textposition: 'top right',
             textfont: { size: 8, color: 'rgba(110,231,183,0.7)' },
             hovertext: hoverText, hoverinfo: 'text',
-            hoverlabel: { bgcolor: '#1f2937', font: { color: '#e5e7eb', size: 11 } },
+            hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: 11 } },
             showlegend: false
         };
 
@@ -5547,7 +5547,7 @@
             ],
             colorbar: {
                 title: { text: useLog ? 'log₁₀(' + normLabel + ')' : normLabel, font: { color: '#ccc', size: 11 } },
-                tickfont: { color: '#aaa', size: 10 },
+                tickfont: { color: '#5b6573', size: 10 },
                 thickness: 12,
                 len: 0.7,
             },
@@ -5563,15 +5563,15 @@
         var layout = {
             title: { text: title, font: { color: '#e0e0e0', size: 13 }, x: 0.5 },
             xaxis: {
-                title: { text: varInfo.display_name + ' (' + varInfo.units + ')', font: { color: '#aaa', size: 12 } },
-                color: '#aaa', gridcolor: 'rgba(255,255,255,0.06)', zeroline: true, zerolinecolor: 'rgba(255,255,255,0.2)',
+                title: { text: varInfo.display_name + ' (' + varInfo.units + ')', font: { color: '#5b6573', size: 12 } },
+                color: '#5b6573', gridcolor: 'rgba(255,255,255,0.06)', zeroline: true, zerolinecolor: 'rgba(255,255,255,0.2)',
             },
             yaxis: {
-                title: { text: 'Height (km)', font: { color: '#aaa', size: 12 } },
-                color: '#aaa', gridcolor: 'rgba(255,255,255,0.06)',
+                title: { text: 'Height (km)', font: { color: '#5b6573', size: 12 } },
+                color: '#5b6573', gridcolor: 'rgba(255,255,255,0.06)',
             },
             paper_bgcolor: 'rgba(0,0,0,0)',
-            plot_bgcolor: '#0f172a',
+            plot_bgcolor: '#ffffff',
             margin: { t: 50, b: 45, l: 50, r: 10 },
             font: { family: 'JetBrains Mono, monospace' },
         };
@@ -6120,7 +6120,7 @@
         var product = json.product || '89pct';
         var titleText = (json.sensor || 'MW') + ' ' + (json.platform || '') +
             ' | ' + product.toUpperCase() + '<br>' + (json.datetime || '');
-        var plotBg = '#0a1628';
+        var plotBg = '#ffffff';
         var config = { responsive: true, displayModeBar: true,
             modeBarButtonsToRemove: ['lasso2d', 'select2d', 'toggleSpikelines'], displaylogo: false };
         var centerTrace = { x: [0], y: [0], type: 'scatter', mode: 'markers',
@@ -6130,14 +6130,14 @@
         if (hasRGB) {
             var ext = (json.storm_grid && json.storm_grid.extent_km) || 250;
             var layout = {
-                title: { text: titleText, font: { color: '#e5e7eb', size: 11 }, y: 0.96, x: 0.5, xanchor: 'center', yanchor: 'top' },
+                title: { text: titleText, font: { color: '#0f1623', size: 11 }, y: 0.96, x: 0.5, xanchor: 'center', yanchor: 'top' },
                 paper_bgcolor: plotBg, plot_bgcolor: plotBg,
-                xaxis: { title: { text: 'Eastward distance (km)', font: { color: '#aaa', size: 10 } },
-                         tickfont: { color: '#aaa', size: 9 }, gridcolor: 'rgba(255,255,255,0.04)',
+                xaxis: { title: { text: 'Eastward distance (km)', font: { color: '#5b6573', size: 10 } },
+                         tickfont: { color: '#5b6573', size: 9 }, gridcolor: 'rgba(255,255,255,0.04)',
                          zeroline: true, zerolinecolor: 'rgba(255,255,255,0.12)',
                          scaleanchor: 'y', range: [-ext, ext] },
-                yaxis: { title: { text: 'Northward distance (km)', font: { color: '#aaa', size: 10 } },
-                         tickfont: { color: '#aaa', size: 9 }, gridcolor: 'rgba(255,255,255,0.04)',
+                yaxis: { title: { text: 'Northward distance (km)', font: { color: '#5b6573', size: 10 } },
+                         tickfont: { color: '#5b6573', size: 9 }, gridcolor: 'rgba(255,255,255,0.04)',
                          zeroline: true, zerolinecolor: 'rgba(255,255,255,0.12)',
                          scaleanchor: 'x', scaleratio: 1, range: [-ext, ext] },
                 margin: { l: 52, r: 16, t: 46, b: 44 },
@@ -6146,7 +6146,7 @@
                     sizex: 2 * ext, sizey: 2 * ext,
                     xanchor: 'left', yanchor: 'top',
                     sizing: 'stretch', opacity: 0.95, layer: 'below' }],
-                hoverlabel: { bgcolor: '#1f2937', font: { color: '#e5e7eb', size: 12 } },
+                hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: 12 } },
                 showlegend: false
             };
             Plotly.newPlot('rt-mw-plotly-chart', [centerTrace], layout, config);
@@ -6169,18 +6169,18 @@
                 hoverongaps: false, name: 'MW ' + cbarTitle.replace(' (K)', '')
             };
             var layout2 = {
-                title: { text: titleText, font: { color: '#e5e7eb', size: 11 }, y: 0.96, x: 0.5, xanchor: 'center', yanchor: 'top' },
+                title: { text: titleText, font: { color: '#0f1623', size: 11 }, y: 0.96, x: 0.5, xanchor: 'center', yanchor: 'top' },
                 paper_bgcolor: plotBg, plot_bgcolor: plotBg,
-                xaxis: { title: { text: 'Eastward distance (km)', font: { color: '#aaa', size: 10 } },
-                         tickfont: { color: '#aaa', size: 9 }, gridcolor: 'rgba(255,255,255,0.04)',
+                xaxis: { title: { text: 'Eastward distance (km)', font: { color: '#5b6573', size: 10 } },
+                         tickfont: { color: '#5b6573', size: 9 }, gridcolor: 'rgba(255,255,255,0.04)',
                          zeroline: true, zerolinecolor: 'rgba(255,255,255,0.12)',
                          scaleanchor: 'y', range: [-ext2, ext2] },
-                yaxis: { title: { text: 'Northward distance (km)', font: { color: '#aaa', size: 10 } },
-                         tickfont: { color: '#aaa', size: 9 }, gridcolor: 'rgba(255,255,255,0.04)',
+                yaxis: { title: { text: 'Northward distance (km)', font: { color: '#5b6573', size: 10 } },
+                         tickfont: { color: '#5b6573', size: 9 }, gridcolor: 'rgba(255,255,255,0.04)',
                          zeroline: true, zerolinecolor: 'rgba(255,255,255,0.12)',
                          scaleanchor: 'x', scaleratio: 1, range: [-ext2, ext2] },
                 margin: { l: 52, r: 60, t: 46, b: 44 },
-                hoverlabel: { bgcolor: '#1f2937', font: { color: '#e5e7eb', size: 12 } },
+                hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: 12 } },
                 showlegend: false
             };
             Plotly.newPlot('rt-mw-plotly-chart', [mwTrace, centerTrace], layout2, config);

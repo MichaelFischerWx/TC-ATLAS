@@ -23,8 +23,12 @@
     <meta property="og:site_name" content="TC-ATLAS">
     <meta property="og:image" content="https://michaelfischerwx.github.io/TC-ATLAS/tc-atlas-preview.png">
 
-    <link rel="icon" type="image/png" href="tc-atlas-icon.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="tc-atlas-favicon-16.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="tc-atlas-favicon-32.png">
+    <link rel="icon" type="image/png" sizes="192x192" href="tc-atlas-favicon-192.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="tc-atlas-favicon-192.png">
     <title>TC Climatology — TC-ATLAS</title>
+    <script src="theme.js?v=20260507n"></script>
 
     <!-- Leaflet — needed by the ACE modal's per-year season map -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -41,9 +45,9 @@
          layout in tc_climatology_styles.css. global_archive_styles.css is
          loaded too because the chart-panel + modal classes (.clim-grid,
          .clim-panel, .ace-modal-*) live there and are reused as-is. -->
-    <link rel="stylesheet" href="tc_radar_styles.css">
-    <link rel="stylesheet" href="global_archive_styles.css?v=20260425c">
-    <link rel="stylesheet" href="tc_climatology_styles.css?v=20260505a">
+    <link rel="stylesheet" href="tc_radar_styles.css?v=20260507n">
+    <link rel="stylesheet" href="global_archive_styles.css?v=20260507n">
+    <link rel="stylesheet" href="tc_climatology_styles.css?v=20260507n">
 </head>
 <body>
     <a href="#tc-clim-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -70,6 +74,10 @@
                     <li><a href="index.html#cite" role="button">Cite</a></li>
                 </ul>
             </nav>
+                        <button class="theme-toggle" type="button" aria-label="Toggle dark mode" aria-pressed="false" title="Toggle dark mode">
+                <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+                <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+            </button>
             <button class="nav-hamburger" onclick="this.classList.toggle('open');document.querySelector('.topbar-nav').classList.toggle('mobile-open')" aria-label="Menu">&#9776;</button>
         </div>
     </header>
@@ -145,14 +153,32 @@
             <div class="tc-clim-globe-banner">
                 <div class="tc-clim-globe-banner-icon" aria-hidden="true">
                     <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+                        <!-- Wireframe strokes use currentColor so they pick up the
+                             parent .tc-clim-globe-banner-icon color, which is set
+                             theme-aware in CSS (UM green light / brightened emerald
+                             dark). The orange equator stays absolute since it works
+                             on both backgrounds. -->
                         <defs><clipPath id="climgl-sphere"><circle cx="32" cy="32" r="28"/></clipPath></defs>
-                        <g clip-path="url(#climgl-sphere)" transform="rotate(18 32 32)">
-                            <line x1="4" y1="32" x2="60" y2="32" stroke="#5a9cff" stroke-width="1.4" opacity="0.85"/>
-                            <line x1="32" y1="4" x2="32" y2="60" stroke="#5a9cff" stroke-width="1.1" opacity="0.6"/>
-                            <line x1="12" y1="11.6" x2="52" y2="11.6" stroke="#00d4ff" stroke-width="3.4" opacity="0.95" stroke-linecap="round"/>
-                            <line x1="12" y1="52.4" x2="52" y2="52.4" stroke="#00d4ff" stroke-width="3.4" opacity="0.95" stroke-linecap="round"/>
+                        <g clip-path="url(#climgl-sphere)" transform="rotate(15 32 32)" stroke="currentColor" fill="none">
+                            <!-- Latitude rings as foreshortened ellipses (flat ovals)
+                                 so the sphere reads as 3D rather than a flat target. -->
+                            <ellipse cx="32" cy="14" rx="28" ry="2" stroke-width="0.9" opacity="0.45"/>
+                            <ellipse cx="32" cy="22" rx="28" ry="3" stroke-width="1.0" opacity="0.60"/>
+                            <ellipse cx="32" cy="42" rx="28" ry="3" stroke-width="1.0" opacity="0.60"/>
+                            <ellipse cx="32" cy="50" rx="28" ry="2" stroke-width="0.9" opacity="0.45"/>
+
+                            <!-- Equator: bold UM orange — visual anchor + most relevant
+                                 planetary feature for TC analysis. -->
+                            <line x1="4" y1="32" x2="60" y2="32" stroke="#F47321" stroke-width="3.4" opacity="0.95" stroke-linecap="round"/>
+
+                            <!-- Meridian arcs: vertical foreshortened ellipses showing
+                                 sphere curvature pole-to-pole. -->
+                            <ellipse cx="32" cy="32" rx="9"  ry="28" stroke-width="1.0" opacity="0.55"/>
+                            <ellipse cx="32" cy="32" rx="19" ry="28" stroke-width="0.9" opacity="0.40"/>
+                            <line x1="32" y1="4" x2="32" y2="60" stroke-width="1.0" opacity="0.55"/>
                         </g>
-                        <circle cx="32" cy="32" r="28" fill="none" stroke="#00d4ff" stroke-width="2"/>
+                        <!-- Sphere outline -->
+                        <circle cx="32" cy="32" r="28" fill="none" stroke="currentColor" stroke-width="2"/>
                     </svg>
                 </div>
                 <div class="tc-clim-globe-banner-text">
@@ -358,11 +384,11 @@
                     </div>
                     <span id="ri-custom-range" style="display:none;margin-left:8px;align-items:center;gap:4px;">
                         <input id="ri-year-start" type="number" min="1850" max="2025" value="1980" step="1"
-                               style="width:60px;background:var(--bg-card);border:1px solid var(--border);color:var(--text);border-radius:4px;padding:2px 4px;font-size:0.8rem;font-family:'JetBrains Mono',monospace;"
+                               style="width:60px;background:var(--bg-card);border:1px solid var(--border);color:var(--text);border-radius:4px;padding:2px 4px;font-size:0.8rem;font-variant-numeric: tabular-nums;"
                                onchange="applyRICustomPeriod()">
                         <span style="color:var(--text-dim);font-size:0.8rem;">–</span>
                         <input id="ri-year-end" type="number" min="1850" max="2025" value="2025" step="1"
-                               style="width:60px;background:var(--bg-card);border:1px solid var(--border);color:var(--text);border-radius:4px;padding:2px 4px;font-size:0.8rem;font-family:'JetBrains Mono',monospace;"
+                               style="width:60px;background:var(--bg-card);border:1px solid var(--border);color:var(--text);border-radius:4px;padding:2px 4px;font-size:0.8rem;font-variant-numeric: tabular-nums;"
                                onchange="applyRICustomPeriod()">
                     </span>
                 </div>
@@ -451,11 +477,11 @@
                     </div>
                     <span id="lmi-custom-range" style="display:none;align-items:center;gap:4px;margin-left:8px;">
                         <input id="lmi-year-start" type="number" min="1850" max="2025" value="1980" step="1"
-                               style="width:60px;background:var(--bg-card);border:1px solid var(--border);color:var(--text);border-radius:4px;padding:2px 4px;font-size:0.8rem;font-family:'JetBrains Mono',monospace;"
+                               style="width:60px;background:var(--bg-card);border:1px solid var(--border);color:var(--text);border-radius:4px;padding:2px 4px;font-size:0.8rem;font-variant-numeric: tabular-nums;"
                                onchange="applyLMICustomPeriod()">
                         <span style="color:var(--text-dim);font-size:0.8rem;">–</span>
                         <input id="lmi-year-end" type="number" min="1850" max="2025" value="2025" step="1"
-                               style="width:60px;background:var(--bg-card);border:1px solid var(--border);color:var(--text);border-radius:4px;padding:2px 4px;font-size:0.8rem;font-family:'JetBrains Mono',monospace;"
+                               style="width:60px;background:var(--bg-card);border:1px solid var(--border);color:var(--text);border-radius:4px;padding:2px 4px;font-size:0.8rem;font-variant-numeric: tabular-nums;"
                                onchange="applyLMICustomPeriod()">
                     </span>
                 </div>
@@ -478,6 +504,6 @@
     <!-- Scripts -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
-    <script src="tc_climatology.js?v=20260505a"></script>
+    <script src="tc_climatology.js?v=20260507n"></script>
 </body>
 </html>
