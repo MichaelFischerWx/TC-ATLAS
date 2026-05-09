@@ -13998,11 +13998,15 @@ function _archiveRenderSondePanel(data) {
                       splashSource === 'hyd' ? 'Hydrostatic surface estimate' :
                       splashSource === 'est' ? 'Estimated from max profile pressure' : 'No data';
         // Sfc column: green check if hit surface, red X if not; yellow warning if no valid splash
+        // Sfc column is a single-question check: did the sonde reach the
+        // ground? Matches the simpler global-archive convention. The
+        // separate Psfc color (green/yellow/red) already carries the
+        // splash-source quality, so we don't double-encode it here \u2014
+        // doing so previously turned every "estimated Psfc" row into a
+        // yellow warning that just restated what Psfc color showed.
         var sfcIcon, sfcColor, sfcTip;
-        if (sonde.hit_surface && (splashSource === 'splash' || splashSource === 'hyd')) {
-            sfcIcon = '\u2713'; sfcColor = '#34d399'; sfcTip = 'Valid surface measurement';
-        } else if (sonde.hit_surface && splashSource === 'est') {
-            sfcIcon = '\u26A0'; sfcColor = '#fbbf24'; sfcTip = 'Hit surface but no splash pressure in metadata';
+        if (sonde.hit_surface) {
+            sfcIcon = '\u2713'; sfcColor = '#34d399'; sfcTip = 'Reached surface';
         } else {
             sfcIcon = '\u2717'; sfcColor = '#f87171'; sfcTip = 'Did not reach surface';
         }
@@ -14029,13 +14033,12 @@ function _archiveRenderSondePanel(data) {
     html += '</table></div>';
 
     // Splash/surface quality legend
-    html += '<div style="font-size:9px;color:#9ca3af;padding:2px 6px;margin-top:2px;">' +
+    html += '<div style="font-size:9px;color:var(--slate);padding:2px 6px;margin-top:2px;">' +
         'Psfc: <span style="color:#34d399;">green</span>=GPS splash, ' +
         '<span style="color:#fbbf24;">yellow</span>=hydrostatic, ' +
         '<span style="color:#f87171;">red</span>=estimated &nbsp;|&nbsp; ' +
-        'Sfc: <span style="color:#34d399;">\u2713</span>=valid splash, ' +
-        '<span style="color:#fbbf24;">\u26A0</span>=no splash data, ' +
-        '<span style="color:#f87171;">\u2717</span>=no surface' +
+        'Sfc: <span style="color:#34d399;">\u2713</span>=reached surface, ' +
+        '<span style="color:#f87171;">\u2717</span>=did not reach surface' +
         '</div>';
 
     // Skew-T chart container + info panel
