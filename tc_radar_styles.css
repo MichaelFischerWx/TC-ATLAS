@@ -45,8 +45,8 @@ outline-offset: 2px;
     --text-dim: #6b7385;
     --surface: #f7f8fa;
     --surface-raised: #ffffff;
-    --border: var(--border);
-    --border-light: var(--border-light);
+    --border: rgba(15, 22, 35, 0.06);
+    --border-light: rgba(15, 22, 35, 0.12);
     --radius: 6px;
     --radius-lg: 8px;
 

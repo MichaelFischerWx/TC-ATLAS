@@ -3805,14 +3805,21 @@ function buildMaxMarkerTrace(maxInfo, units) {
 function buildMaxAnnotation(maxInfo, units, xLabel, yLabel, fontSize) {
     if (!maxInfo) return null;
     var fs = fontSize || 9;
+    // Position at TOP-LEFT of paper (outside the plot area). Title is
+    // centered so the left margin column is empty; modebar lives at
+    // top-right so this never collides with it. Previously sat at
+    // y:-0.01 (below paper bottom) which overlapped the x-axis tick
+    // labels and the bottom of the data. Background is now white-glass
+    // with dark text so it reads cleanly on light theme; dark mode
+    // will theme via :root[data-theme="dark"] override below.
     return {
         text: '<b>Max:</b> ' + maxInfo.value.toFixed(2) + ' ' + units +
               '  @  ' + xLabel + '=' + maxInfo.x.toFixed(0) + ', ' + yLabel + '=' + (Math.abs(maxInfo.y) < 100 ? maxInfo.y.toFixed(1) : maxInfo.y.toFixed(0)),
-        xref: 'paper', yref: 'paper', x: 0.01, y: -0.01,
+        xref: 'paper', yref: 'paper', x: 0.01, y: 0.99,
         xanchor: 'left', yanchor: 'top',
         showarrow: false,
         font: { color: '#0f1623', size: fs, family: 'DM Sans, sans-serif' },
-        bgcolor: 'rgba(10,22,40,0.8)',
+        bgcolor: 'rgba(255,255,255,0.85)',
         borderpad: 3,
         bordercolor: 'rgba(15, 22, 35,0.15)',
         borderwidth: 1
@@ -13504,6 +13511,28 @@ function _archFLTSRender(flData) {
         }
     }
 
+    // Compute the max wind value across all traces on the primary y-axis
+    // so we can give the top-left max-stats annotation 35% headroom and
+    // it doesn't sit on top of the data peak.
+    var _yMaxWind = null;
+    for (var ti = 0; ti < traces.length; ti++) {
+        var tr = traces[ti];
+        if (tr.yaxis && tr.yaxis !== 'y') continue;  // primary y only
+        if (!tr.y) continue;
+        for (var yi = 0; yi < tr.y.length; yi++) {
+            var yv = tr.y[yi];
+            if (yv == null || !isFinite(yv)) continue;
+            if (_yMaxWind === null || yv > _yMaxWind) _yMaxWind = yv;
+        }
+    }
+    var _yWindRange = null;
+    if (_yMaxWind != null) {
+        // 35% headroom; clamp the floor so very weak storms still
+        // reserve enough vertical space for the annotation.
+        var headroom = Math.max(_yMaxWind * 1.35, _yMaxWind + 25);
+        _yWindRange = inWMode ? null : [0, headroom];
+    }
+
     // Layout with multi-axis support
     var gridColor = 'rgba(148,163,184,0.08)';
     var layout = {
@@ -13513,8 +13542,8 @@ function _archFLTSRender(flData) {
         font: { family: 'DM Sans, sans-serif', size: 11, color: '#5b6573' },
         legend: {
             orientation: 'v', x: 1.0, xanchor: 'right', y: 1.0, yanchor: 'top',
-            font: { size: 9 }, bgcolor: 'rgba(10,15,25,0.7)',
-            bordercolor: 'rgba(148,163,184,0.15)', borderwidth: 1,
+            font: { size: 9, color: '#0f1623' }, bgcolor: 'rgba(255,255,255,0.85)',
+            bordercolor: 'rgba(15,22,35,0.15)', borderwidth: 1,
             traceorder: 'grouped', tracegroupgap: 4,
         },
         hovermode: 'x unified',
@@ -13538,6 +13567,12 @@ function _archFLTSRender(flData) {
             zeroline: inWMode,
             zerolinecolor: 'rgba(148,163,184,0.4)',
             zerolinewidth: 1,
+            // Explicit range (with 35% headroom) so the top-left
+            // max-stats annotation has clear space above the data peak.
+            // In W mode (vertical velocity ± centered around zero) we
+            // let it autorange normally.
+            range: _yWindRange || undefined,
+            autorange: _yWindRange ? false : true,
         },
         yaxis2: {
             title: usedAxes['y2'] ? { text: 'Pressure (hPa)', font: { size: 10, color: '#fbbf24' } } : undefined,
@@ -13658,10 +13693,10 @@ function _archFLTSRender(flData) {
             x: 0.01, y: 0.98, xref: 'paper', yref: 'paper',
             text: insetLines.join('<br>'),
             showarrow: false,
-            font: { family: 'DM Sans, sans-serif', size: 10, color: '#5b6573' },
+            font: { family: 'DM Sans, sans-serif', size: 10, color: '#0f1623' },
             align: 'left', xanchor: 'left', yanchor: 'top',
-            bgcolor: 'rgba(10,15,25,0.75)',
-            bordercolor: 'rgba(96,165,250,0.3)',
+            bgcolor: 'rgba(255,255,255,0.85)',
+            bordercolor: 'rgba(96,165,250,0.30)',
             borderwidth: 1, borderpad: 6,
         });
     }
@@ -13963,11 +13998,15 @@ function _archiveRenderSondePanel(data) {
                       splashSource === 'hyd' ? 'Hydrostatic surface estimate' :
                       splashSource === 'est' ? 'Estimated from max profile pressure' : 'No data';
         // Sfc column: green check if hit surface, red X if not; yellow warning if no valid splash
+        // Sfc column is a single-question check: did the sonde reach the
+        // ground? Matches the simpler global-archive convention. The
+        // separate Psfc color (green/yellow/red) already carries the
+        // splash-source quality, so we don't double-encode it here \u2014
+        // doing so previously turned every "estimated Psfc" row into a
+        // yellow warning that just restated what Psfc color showed.
         var sfcIcon, sfcColor, sfcTip;
-        if (sonde.hit_surface && (splashSource === 'splash' || splashSource === 'hyd')) {
-            sfcIcon = '\u2713'; sfcColor = '#34d399'; sfcTip = 'Valid surface measurement';
-        } else if (sonde.hit_surface && splashSource === 'est') {
-            sfcIcon = '\u26A0'; sfcColor = '#fbbf24'; sfcTip = 'Hit surface but no splash pressure in metadata';
+        if (sonde.hit_surface) {
+            sfcIcon = '\u2713'; sfcColor = '#34d399'; sfcTip = 'Reached surface';
         } else {
             sfcIcon = '\u2717'; sfcColor = '#f87171'; sfcTip = 'Did not reach surface';
         }
@@ -13994,13 +14033,12 @@ function _archiveRenderSondePanel(data) {
     html += '</table></div>';
 
     // Splash/surface quality legend
-    html += '<div style="font-size:9px;color:#9ca3af;padding:2px 6px;margin-top:2px;">' +
+    html += '<div style="font-size:9px;color:var(--slate);padding:2px 6px;margin-top:2px;">' +
         'Psfc: <span style="color:#34d399;">green</span>=GPS splash, ' +
         '<span style="color:#fbbf24;">yellow</span>=hydrostatic, ' +
         '<span style="color:#f87171;">red</span>=estimated &nbsp;|&nbsp; ' +
-        'Sfc: <span style="color:#34d399;">\u2713</span>=valid splash, ' +
-        '<span style="color:#fbbf24;">\u26A0</span>=no splash data, ' +
-        '<span style="color:#f87171;">\u2717</span>=no surface' +
+        'Sfc: <span style="color:#34d399;">\u2713</span>=reached surface, ' +
+        '<span style="color:#f87171;">\u2717</span>=did not reach surface' +
         '</div>';
 
     // Skew-T chart container + info panel
