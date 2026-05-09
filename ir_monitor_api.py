@@ -3384,6 +3384,55 @@ def _parse_lead_time(lead_str: str) -> float:
     return days * 24.0 + hours
 
 
+def _wl_float(s: str):
+    """Parse a WeatherLab numeric column. Empty / NaN-ish → None."""
+    s = s.strip()
+    if not s:
+        return None
+    try:
+        v = float(s)
+    except (ValueError, TypeError):
+        return None
+    if v != v:  # NaN
+        return None
+    return v
+
+
+def _parse_weatherlab_size(cols: list) -> dict:
+    """Extract RMW + R34/R50/R64 quadrant radii (km) from a WeatherLab CSV row.
+
+    Column layout (0-indexed):
+        9: radius_of_maximum_winds_km
+        10–13: R34 NE/SE/SW/NW
+        14–17: R50 NE/SE/SW/NW
+        18–21: R64 NE/SE/SW/NW
+
+    Returns a flat dict suitable for json.dumps; missing columns are skipped.
+    rmw_km, r34_ne_km/se/sw/nw_km, r50_*, r64_*. Also includes a mean
+    radius per threshold (`r34_mean_km`, etc.) for compact UI summaries —
+    None if all four quadrants missing.
+    """
+    out: dict = {}
+    if len(cols) > 9:
+        rmw = _wl_float(cols[9])
+        if rmw is not None:
+            out["rmw_km"] = round(rmw, 1)
+    for thresh, base in [(34, 10), (50, 14), (64, 18)]:
+        quads = ["ne", "se", "sw", "nw"]
+        vals = []
+        for i, q in enumerate(quads):
+            idx = base + i
+            if idx >= len(cols):
+                continue
+            v = _wl_float(cols[idx])
+            if v is not None:
+                out[f"r{thresh}_{q}_km"] = round(v, 1)
+                vals.append(v)
+        if vals:
+            out[f"r{thresh}_mean_km"] = round(sum(vals) / len(vals), 1)
+    return out
+
+
 def _fetch_weatherlab_csv(date_str: str, hour_str: str) -> dict | None:
     """Fetch and parse WeatherLab ensemble CSV for a given init time.
 
@@ -3448,6 +3497,11 @@ def _fetch_weatherlab_csv(date_str: str, hour_str: str) -> dict | None:
             continue
 
         point = {"tau": tau, "lat": lat, "lon": lon, "wind": wind, "pres": pres}
+        # Parse storm-size columns (cols 9-21): RMW + R34/R50/R64 per quadrant.
+        # NaN/empty values land as None. nm conversion left to the frontend.
+        _size = _parse_weatherlab_size(cols)
+        if _size:
+            point.update(_size)
 
         if track_id not in result:
             result[track_id] = {"members": {}, "ensemble_mean": None}
@@ -3487,10 +3541,12 @@ def _fetch_weatherlab_csv(date_str: str, hour_str: str) -> dict | None:
                 if track_id in result:
                     if result[track_id]["ensemble_mean"] is None:
                         result[track_id]["ensemble_mean"] = {"points": []}
-                    result[track_id]["ensemble_mean"]["points"].append(
-                        {"tau": tau, "lat": lat, "lon": lon,
-                         "wind": wind, "pres": pres}
-                    )
+                    pt = {"tau": tau, "lat": lat, "lon": lon,
+                          "wind": wind, "pres": pres}
+                    _size = _parse_weatherlab_size(cols)
+                    if _size:
+                        pt.update(_size)
+                    result[track_id]["ensemble_mean"]["points"].append(pt)
     except Exception:
         pass
 
