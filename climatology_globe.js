@@ -236,6 +236,24 @@ function refreshTracks(force) {
         }
     }
 
+    // "Custom year range" — user-supplied [start, end] takes precedence
+    // over the climo-window option but still steps aside if a composite
+    // or single-year scope is active. Both inputs must be valid integers
+    // with start <= end; otherwise fall through to the prior yearFilter.
+    const yrRangeCB = document.getElementById('toggle-tracks-year-range');
+    const wantYrRange = !!(yrRangeCB && yrRangeCB.checked);
+    if (wantYrRange && !yearScopeActive) {
+        const yrSEl = document.getElementById('tracks-year-start');
+        const yrEEl = document.getElementById('tracks-year-end');
+        const yrS = yrSEl && yrSEl.value !== '' ? parseInt(yrSEl.value, 10) : NaN;
+        const yrE = yrEEl && yrEEl.value !== '' ? parseInt(yrEEl.value, 10) : NaN;
+        if (Number.isFinite(yrS) && Number.isFinite(yrE) && yrS <= yrE) {
+            const yrs = [];
+            for (let y = yrS; y <= yrE; y++) yrs.push(y);
+            yearFilter = yrs;
+        }
+    }
+
     // Build a stable key that accounts for the year-list shape.
     const yearKey  = Array.isArray(yearFilter)  ? yearFilter.join(',')  : String(yearFilter);
     const monthKey = Array.isArray(monthFilter) ? monthFilter.join(',') : String(monthFilter);
@@ -949,12 +967,29 @@ function init() {
         if (e.target && (e.target.id === 'toggle-tracks'
                       || e.target.id === 'toggle-tracks-all-months'
                       || e.target.id === 'toggle-tracks-climo-window'
+                      || e.target.id === 'toggle-tracks-year-range'
+                      || e.target.id === 'tracks-year-start'
+                      || e.target.id === 'tracks-year-end'
                       || e.target.id === 'climo-period-select')) {
+            // Show/hide the year-range input row based on the checkbox.
+            if (e.target.id === 'toggle-tracks-year-range') {
+                const row = document.getElementById('tracks-year-range-row');
+                if (row) row.style.display = e.target.checked ? 'flex' : 'none';
+            }
             refreshTracks(true);
             _ga('clim_globe_tracks_toggle', {
                 id: e.target.id,
                 checked: !!e.target.checked,
             });
+        }
+    });
+    // The year-range number inputs fire 'input' on every keystroke, but
+    // 'change' only fires on blur — repaint immediately on input so the
+    // user sees the year span clip live as they type.
+    document.addEventListener('input', (e) => {
+        if (e.target && (e.target.id === 'tracks-year-start' || e.target.id === 'tracks-year-end')) {
+            const cb = document.getElementById('toggle-tracks-year-range');
+            if (cb && cb.checked) refreshTracks(true);
         }
     });
 

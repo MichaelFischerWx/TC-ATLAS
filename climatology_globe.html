@@ -12,20 +12,20 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Climatology Globe — TC-ATLAS</title>
-    <script src="theme.js?v=20260508e"></script>
+    <script src="theme.js?v=20260509c"></script>
     <meta name="description" content="ERA5 climatology globe with IBTrACS tropical cyclone tracks overlaid. Connect environmental state (SST, shear, OHC) to actual storm tracks.">
     <link rel="icon" type="image/png" sizes="16x16" href="tc-atlas-favicon-16.png">
     <link rel="icon" type="image/png" sizes="32x32" href="tc-atlas-favicon-32.png">
     <link rel="icon" type="image/png" sizes="192x192" href="tc-atlas-favicon-192.png">
     <link rel="apple-touch-icon" sizes="192x192" href="tc-atlas-favicon-192.png">
-    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&display=swap" rel="stylesheet">
 
     <!-- Vendored GC-ATLAS globe styles (un-scoped, applies page-wide). Loads
          BEFORE TC-ATLAS sheets so TC-ATLAS rules can override topbar styling
          and re-map theme variables (--deep, --emerald, etc.) to navy/blue. -->
     <link rel="stylesheet" href="vendor/gc-atlas/globe.css">
-    <link rel="stylesheet" href="tc_radar_styles.css?v=20260508e">
-    <link rel="stylesheet" href="climatology_globe_styles.css?v=20260508e">
+    <link rel="stylesheet" href="tc_radar_styles.css?v=20260509c">
+    <link rel="stylesheet" href="climatology_globe_styles.css?v=20260509c">
 
     <!-- Importmap for the GC-ATLAS engine. Three.js + addons from unpkg;
          everything else local under vendor/gc-atlas/. -->
@@ -444,10 +444,21 @@
                    title="Paint storm tracks for every month of the active year(s) instead of only the displayed month. Field display stays on the chosen month.">
                 <input type="checkbox" id="toggle-tracks-all-months"> Show all months in active year(s)
             </label>
-            <label class="check" style="margin: 0 0 8px 24px; font-size:0.7rem;"
+            <label class="check" style="margin: 0 0 4px 24px; font-size:0.7rem;"
                    title="Restrict the track overlay to the years in the active climatology window (e.g. 1991-2020) instead of the full IBTrACS record.">
                 <input type="checkbox" id="toggle-tracks-climo-window"> Limit to the active climatology window
             </label>
+            <label class="check" style="margin: 0 0 4px 24px; font-size:0.7rem;"
+                   title="Restrict the track overlay to a custom year range, regardless of the active climatology window. Takes precedence over the climatology-window option above.">
+                <input type="checkbox" id="toggle-tracks-year-range"> Custom year range
+            </label>
+            <div id="tracks-year-range-row" style="display:none; margin: 0 0 8px 40px; align-items: center; gap: 6px; font-size: 0.7rem;">
+                <input type="number" id="tracks-year-start" min="1842" max="2026" step="1" placeholder="From"
+                       style="width: 70px; padding: 2px 4px; font-size: 0.7rem;">
+                <span style="opacity:0.7;">–</span>
+                <input type="number" id="tracks-year-end" min="1842" max="2026" step="1" placeholder="To"
+                       style="width: 70px; padding: 2px 4px; font-size: 0.7rem;">
+            </div>
             <!-- Data overlays — change with what you're studying. -->
             <label class="check"><input type="checkbox" id="toggle-contours"> Contours</label>
             <div id="contour-field-row" hidden style="margin: 4px 0 8px 24px;">
@@ -730,7 +741,7 @@ C(P_M→K_M) = -(R/g) ∫ [ω][T] / p dp
             </div>
             <svg id="lorenz-svg" viewBox="0 0 360 260" xmlns="http://www.w3.org/2000/svg">
                 <!-- boxes -->
-                <g class="lz-boxes" font-family="JetBrains Mono, monospace">
+                <g class="lz-boxes" font-family="DM Sans, sans-serif">
                     <rect x="30"  y="30"  width="100" height="60" rx="8" class="lz-box"/>
                     <rect x="230" y="30"  width="100" height="60" rx="8" class="lz-box"/>
                     <rect x="30"  y="170" width="100" height="60" rx="8" class="lz-box"/>
@@ -751,7 +762,7 @@ C(P_M→K_M) = -(R/g) ∫ [ω][T] / p dp
                         <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
                     </marker>
                 </defs>
-                <g class="lz-arrows" stroke-linecap="round" font-family="JetBrains Mono, monospace">
+                <g class="lz-arrows" stroke-linecap="round" font-family="DM Sans, sans-serif">
                     <line id="lz-arrow-PMPE" x1="130" y1="60"  x2="230" y2="60"  marker-end="url(#lz-arrowhead)"/>
                     <line id="lz-arrow-PEKE" x1="280" y1="90"  x2="280" y2="170" marker-end="url(#lz-arrowhead)"/>
                     <line id="lz-arrow-KEKM" x1="230" y1="200" x2="130" y2="200" marker-end="url(#lz-arrowhead)"/>
@@ -973,7 +984,7 @@ C(P_M→K_M) = -(R/g) ∫ [ω][T] / p dp
 </div>
 
 <script type="module" src="vendor/gc-atlas/globe.js"></script>
-<script type="module" src="climatology_globe.js?v=20260508e"></script>
+<script type="module" src="climatology_globe.js?v=20260509c"></script>
 
 </body>
 </html>

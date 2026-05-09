@@ -10174,14 +10174,21 @@ function _gaFLInjectLegend() {
         return s.color + ' ' + Math.round(i / (stops.length - 1) * 100) + '%';
     }).join(', ');
 
+    // Theme-aware label colors. var(--text) is too dark in dark mode (or
+    // too light in light mode); var(--slate) → #5b6573 in light is a
+    // medium gray that washes out on white. Use --text-muted-strong
+    // equivalents: darker in light, lighter in dark.
+    var labelCol = 'var(--text)';
+    var captionCol = 'var(--text)';
+    var borderCol = 'var(--border-light)';
     var html = '<div style="margin-top:2px;">' +
-        '<div style="height:12px;border-radius:3px;background:linear-gradient(to right,' + gradStops + ');border:1px solid rgba(15, 22, 35,0.1);"></div>' +
-        '<div style="display:flex;justify-content:space-between;font-size:8px;color:var(--slate);margin-top:1px;">';
+        '<div style="height:12px;border-radius:3px;background:linear-gradient(to right,' + gradStops + ');border:1px solid ' + borderCol + ';"></div>' +
+        '<div style="display:flex;justify-content:space-between;font-size:9px;font-weight:500;color:' + labelCol + ';margin-top:2px;">';
     stops.forEach(function (s) {
         html += '<span>' + (s.lbl || s.val) + '</span>';
     });
     html += '</div>' +
-        '<div style="font-size:8px;color:#64748b;text-align:center;margin-top:1px;">' + cb.label + '</div></div>';
+        '<div style="font-size:9px;font-weight:500;color:' + captionCol + ';text-align:center;margin-top:1px;">' + cb.label + '</div></div>';
     el.innerHTML = html;
 }
 
@@ -10756,6 +10763,7 @@ window.gaSondeShowSkewT = function (idx) {
         q: qArr.length > 0 ? qArr : null,
         u: prof.uwnd || null,
         v: prof.vwnd || null,
+        showParcel: _gaSondeParcelEnabled,
     };
 
     _gaSondeCurrentIdx = idx;
@@ -10808,6 +10816,18 @@ window.gaSondeCloseSkewT = function () {
 
 var _gaSondeViewMode = 'skewt';
 var _gaSondeCurrentIdx = 0;
+// Parcel-theory display is OFF by default. Parcel theory (CAPE/CIN/LCL/LFC/EL)
+// has limited utility for TC sondes: eyewall ascent is slantwise, the column
+// is near-saturated, and surface-based parcel theory implies a local-buoyancy
+// framework that doesn't apply. Users can opt in via the Parcel toggle.
+var _gaSondeParcelEnabled = false;
+
+window.gaSondeToggleParcel = function () {
+    _gaSondeParcelEnabled = !_gaSondeParcelEnabled;
+    var btn = document.getElementById('ga-sonde-toggle-parcel');
+    if (btn) btn.classList.toggle('active', _gaSondeParcelEnabled);
+    if (_gaSondeViewMode === 'skewt') gaSondeShowSkewT(_gaSondeCurrentIdx);
+};
 
 // Open cross-section or radial directly from the FL controls (no sonde selection needed)
 // Move the panel above the sonde info so it's immediately visible
@@ -11429,18 +11449,33 @@ function _gaSondeRenderSkewTInfo(profiles, sonde, idx) {
     if (!el) return;
 
     var d = profiles._derived || {};
-    var html = '<div style="font-weight:600;color:var(--um-green);margin-bottom:6px;">Derived Parameters</div>';
+    var parcelOn = profiles.showParcel === true;
+
+    // \u2500\u2500 Always-on TC-relevant column diagnostics \u2500\u2500
+    var html = '<div style="font-weight:600;color:var(--um-green);margin-bottom:6px;">Column Diagnostics</div>';
     html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 8px;font-size:9px;">';
-    html += '<span style="color:var(--slate);">CAPE:</span><span>' + (d.cape != null ? d.cape + ' J/kg' : '\u2014') + '</span>';
-    html += '<span style="color:var(--slate);">CIN:</span><span>' + (d.cin != null ? d.cin + ' J/kg' : '\u2014') + '</span>';
     html += '<span style="color:var(--slate);">PWAT:</span><span>' + (d.pwat != null ? d.pwat.toFixed(1) + ' mm' : '\u2014') + '</span>';
-    html += '<span style="color:var(--slate);">LCL:</span><span>' + (d.lcl_p != null ? d.lcl_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
-    html += '<span style="color:var(--slate);">LFC:</span><span>' + (d.lfc_p != null ? d.lfc_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
-    html += '<span style="color:var(--slate);">EL:</span><span>' + (d.el_p != null ? d.el_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
     html += '<span style="color:var(--slate);">0\u00b0C:</span><span>' + (d.freezing_p != null ? d.freezing_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
+    html += '<span style="color:var(--slate);" title="Mean equivalent potential temperature in lowest 50 hPa \u2014 boundary-layer entropy">Sfc \u03b8e:</span><span>' + (d.thetaE_sfc != null ? d.thetaE_sfc.toFixed(1) + ' K' : '\u2014') + '</span>';
+    html += '<span style="color:var(--slate);" title="Mid-level (850\u2013400 hPa) \u03b8e minimum \u2014 low values signal dry-air entrainment / downdraft potential">Mid \u03b8e min:</span><span>' + (d.thetaE_min != null ? d.thetaE_min.toFixed(1) + ' K @ ' + d.thetaE_min_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
+    html += '<span style="color:var(--slate);" title="Boundary-layer \u03b8e minus mid-level minimum \u2014 measure of conditional instability / downdraft CAPE potential">\u0394\u03b8e:</span><span>' + ((d.thetaE_sfc != null && d.thetaE_min != null) ? (d.thetaE_sfc - d.thetaE_min).toFixed(1) + ' K' : '\u2014') + '</span>';
+    html += '<span style="color:var(--slate);" title="Lowest pressure where RH first drops below 90% \u2014 depth of moist column">Sat depth:</span><span>' + (d.sat_depth_p != null ? d.sat_depth_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
     html += '</div>';
 
-    // Surface info
+    // \u2500\u2500 Parcel theory block (only when toggled on) \u2500\u2500
+    if (parcelOn) {
+        html += '<div style="margin-top:8px;font-weight:600;color:var(--um-green);margin-bottom:4px;">Parcel (surface-based)</div>';
+        html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 8px;font-size:9px;">';
+        html += '<span style="color:var(--slate);">CAPE:</span><span>' + (d.cape != null ? d.cape + ' J/kg' : '\u2014') + '</span>';
+        html += '<span style="color:var(--slate);">CIN:</span><span>' + (d.cin != null ? d.cin + ' J/kg' : '\u2014') + '</span>';
+        html += '<span style="color:var(--slate);">LCL:</span><span>' + (d.lcl_p != null ? d.lcl_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
+        html += '<span style="color:var(--slate);">LFC:</span><span>' + (d.lfc_p != null ? d.lfc_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
+        html += '<span style="color:var(--slate);">EL:</span><span>' + (d.el_p != null ? d.el_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
+        html += '</div>';
+        html += '<div style="margin-top:4px;font-size:8px;color:var(--text-dim);font-style:italic;">Parcel theory has limited utility in TC eyewall / inner-core sondes (slantwise ascent, near-saturated column).</div>';
+    }
+
+    // \u2500\u2500 Surface info \u2500\u2500
     html += '<div style="margin-top:8px;font-weight:600;color:var(--um-green);margin-bottom:4px;">Surface</div>';
     html += '<div style="font-size:9px;">';
     html += 'Hit surface: ' + (sonde.hit_surface ? 'Yes' : 'No') + '<br>';
@@ -11448,7 +11483,7 @@ function _gaSondeRenderSkewTInfo(profiles, sonde, idx) {
     if (sonde.hyd_sfcp) html += 'Hyd SfcP: ' + sonde.hyd_sfcp.toFixed(1) + ' hPa<br>';
     html += '</div>';
 
-    // Max wind in profile
+    // \u2500\u2500 Max wind in profile \u2500\u2500
     var prof = sonde.profile || {};
     if (prof.wspd) {
         var maxW = 0, maxWp = null;
@@ -11501,21 +11536,40 @@ window._gaFLReset = _gaFLReset;
 
 // ── Time Series ─────────────────────────────────────────────────
 
+// Per-variable colors. Each variable carries a {light, dark} pair so the
+// time-series traces, legend toggle pills, and Plotly y-axis labels all
+// use a darker shade in light mode (which made the original Tailwind-400
+// colors wash out on white) and the brighter shade in dark mode.
 var _GA_FL_TS_CONFIG = {
-    'fl_wspd_ms':      { label: 'FL Wind Speed',   btn: 'Wind',    units: 'kt', color: '#60a5fa', yaxis: 'y', scale: 1.944 },
-    'static_pres_hpa': { label: 'Static Pressure',  btn: 'Pres',   units: 'hPa', color: '#fbbf24', yaxis: 'y2' },
-    'sfcpr_hpa':       { label: 'Sfc Pressure',     btn: 'SfcP',   units: 'hPa', color: '#fb923c', yaxis: 'y5' },
-    'temp_c':          { label: 'Temperature',       btn: 'T',     units: '\u00b0C', color: '#f87171', yaxis: 'y3' },
-    'dewpoint_c':      { label: 'Dewpoint',          btn: 'Td',    units: '\u00b0C', color: '#a78bfa', yaxis: 'y3' },
-    'theta_e':         { label: 'Theta-E',           btn: '\u03b8e', units: 'K',   color: '#e879f9', yaxis: 'y3' },
-    'gps_alt_m':       { label: 'GPS Altitude',      btn: 'Alt',   units: 'm',   color: '#6b7280', yaxis: 'y4' },
-    'vert_vel_ms':     { label: 'Vertical Velocity', btn: 'W',     units: 'm/s', color: '#a3e635', yaxis: 'y6' },
+    'fl_wspd_ms':      { label: 'FL Wind Speed',   btn: 'Wind', units: 'kt', color: { light: '#1d4ed8', dark: '#60a5fa' }, yaxis: 'y',  scale: 1.944 },
+    'static_pres_hpa': { label: 'Static Pressure', btn: 'Pres', units: 'hPa', color: { light: '#b45309', dark: '#fbbf24' }, yaxis: 'y2' },
+    'sfcpr_hpa':       { label: 'Sfc Pressure',    btn: 'SfcP', units: 'hPa', color: { light: '#c2410c', dark: '#fb923c' }, yaxis: 'y5' },
+    'temp_c':          { label: 'Temperature',     btn: 'T',    units: '\u00b0C', color: { light: '#b91c1c', dark: '#f87171' }, yaxis: 'y3' },
+    'dewpoint_c':      { label: 'Dewpoint',        btn: 'Td',   units: '\u00b0C', color: { light: '#6d28d9', dark: '#a78bfa' }, yaxis: 'y3' },
+    'theta_e':         { label: 'Theta-E',         btn: '\u03b8e', units: 'K', color: { light: '#a21caf', dark: '#e879f9' }, yaxis: 'y3' },
+    'gps_alt_m':       { label: 'GPS Altitude',    btn: 'Alt',  units: 'm',   color: { light: '#374151', dark: '#9ca3af' }, yaxis: 'y4' },
+    'vert_vel_ms':     { label: 'Vertical Velocity', btn: 'W',  units: 'm/s', color: { light: '#4d7c0f', dark: '#a3e635' }, yaxis: 'y6' },
 };
 
+// Helper: resolve per-variable color for the active theme.
+function _gaFLColor(cfg) {
+    var c = cfg && cfg.color;
+    if (!c) return '#5b6573';
+    if (typeof c === 'string') return c;  // legacy fallback
+    var dark = document.documentElement.getAttribute('data-theme') === 'dark';
+    return dark ? c.dark : c.light;
+}
+
+// Resolution-specific opacity/width. The previous version forced 1-second
+// data to '#0891b2' (teal) regardless of variable, which made vertical-
+// velocity (and any other) 1s traces show as teal \u2014 inconsistent with
+// the variable's own color used for 10s/30s. Now we differentiate
+// resolutions by opacity + width only and let each variable keep its
+// configured color across all three resolutions.
 var _GA_FL_RES_STYLE = {
-    '1s':  { opacity: 0.5, width: 1.0, color: '#0891b2' },
-    '10s': { opacity: 0.7, width: 1.5, color: null },
-    '30s': { opacity: 1.0, width: 2.5, color: null },
+    '1s':  { opacity: 0.45, width: 1.0 },
+    '10s': { opacity: 0.85, width: 1.5 },
+    '30s': { opacity: 1.0,  width: 2.5 },
 };
 
 var _gaFLVarsVisible = { 'fl_wspd_ms': true, 'static_pres_hpa': false, 'temp_c': false, 'dewpoint_c': false, 'theta_e': false, 'gps_alt_m': false, 'sfcpr_hpa': true, 'vert_vel_ms': false };
@@ -11590,16 +11644,17 @@ function _gaFLPopulateVarToggles() {
     Object.keys(_GA_FL_TS_CONFIG).forEach(function (key) {
         var cfg = _GA_FL_TS_CONFIG[key];
         var active = _gaFLVarsVisible[key];
+        var col = _gaFLColor(cfg);
         var btn = document.createElement('button');
         btn.className = 'ga-btn ga-btn-xs' + (active ? ' active' : '');
-        btn.style.cssText = 'font-size:9px;border-color:' + cfg.color + ';color:' + cfg.color + ';' +
-            (active ? 'background:' + cfg.color + '22;' : '');
+        btn.style.cssText = 'font-size:9px;border-color:' + col + ';color:' + col + ';' +
+            (active ? 'background:' + col + '22;' : '');
         btn.textContent = cfg.btn;
         btn.title = cfg.label + ' (' + cfg.units + ')';
         btn.onclick = function () {
             _gaFLVarsVisible[key] = !_gaFLVarsVisible[key];
             btn.classList.toggle('active', _gaFLVarsVisible[key]);
-            btn.style.background = _gaFLVarsVisible[key] ? cfg.color + '22' : '';
+            btn.style.background = _gaFLVarsVisible[key] ? _gaFLColor(cfg) + '22' : '';
             if (_gaFLData) _gaFLRenderTimeSeries();
         };
         container.appendChild(btn);
@@ -11662,7 +11717,7 @@ function _gaFLRenderTimeSeries() {
                 mode: 'lines',
                 connectgaps: true,
                 name: cfg.btn + ' (' + resKey + ')',
-                line: { color: style.color || cfg.color, width: style.width, shape: 'linear' },
+                line: { color: _gaFLColor(cfg), width: style.width, shape: 'linear' },
                 opacity: style.opacity,
                 yaxis: cfg.yaxis,
                 hovertemplate: '%{y:.1f} ' + cfg.units + '<extra>' + cfg.label + ' (' + resKey + ')</extra>',
@@ -11671,51 +11726,75 @@ function _gaFLRenderTimeSeries() {
         });
     });
 
+    // Theme-aware base colors for axis labels + the per-variable color
+    // each y-axis is anchored to. Pulling the var color from cfg keeps
+    // the chart axis labels in sync with the trace colors automatically
+    // when the theme toggles.
+    var _isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    var _axisCol = _isDark ? '#8b9ec2' : '#374151';
+    var _gridCol = _isDark ? 'rgba(255,255,255,0.06)' : 'rgba(15, 22, 35, 0.08)';
+    var _wColor = _gaFLColor(_GA_FL_TS_CONFIG['fl_wspd_ms']);
+    var _pColor = _gaFLColor(_GA_FL_TS_CONFIG['static_pres_hpa']);
+    var _spColor = _gaFLColor(_GA_FL_TS_CONFIG['sfcpr_hpa']);
+    var _tColor = _gaFLColor(_GA_FL_TS_CONFIG['temp_c']);
+    var _aColor = _gaFLColor(_GA_FL_TS_CONFIG['gps_alt_m']);
+    var _vColor = _gaFLColor(_GA_FL_TS_CONFIG['vert_vel_ms']);
+    var _vZeroAlpha = _isDark ? 0.2 : 0.35;
+    function _hexToRgba(hex, a) {
+        var h = hex.replace('#', '');
+        if (h.length === 3) h = h.split('').map(function (c) { return c + c; }).join('');
+        var r = parseInt(h.slice(0, 2), 16);
+        var g = parseInt(h.slice(2, 4), 16);
+        var b = parseInt(h.slice(4, 6), 16);
+        return 'rgba(' + r + ',' + g + ',' + b + ',' + a + ')';
+    }
+
     var layout = {
         paper_bgcolor: 'rgba(0,0,0,0)',
         plot_bgcolor: 'rgba(0,0,0,0)',
         margin: { t: 10, r: 60, b: 40, l: 55 },
-        font: { family: 'DM Sans, sans-serif', color: '#5b6573', size: 10 },
-        legend: { orientation: 'h', y: 1.12, font: { size: 9 } },
+        font: { family: 'DM Sans, sans-serif', color: _axisCol, size: 10 },
+        legend: { orientation: 'h', y: 1.12, font: { size: 9, color: _axisCol } },
         xaxis: {
             title: _gaFLXAxisMode === 'time' ? 'Time (UTC)' : 'Radius from center (km)',
-            gridcolor: 'rgba(15, 22, 35,0.06)',
+            color: _axisCol,
+            gridcolor: _gridCol,
             zeroline: false,
             nticks: 8,
             tickangle: 0,
         },
         yaxis: {
-            title: 'Wind (kt)', titlefont: { color: '#60a5fa' },
-            tickfont: { color: '#60a5fa' }, gridcolor: 'rgba(15, 22, 35,0.06)',
+            title: 'Wind (kt)', titlefont: { color: _wColor },
+            tickfont: { color: _wColor }, gridcolor: _gridCol,
             zeroline: false, side: 'left',
         },
         yaxis2: {
-            title: 'Static P (hPa)', titlefont: { color: '#fbbf24' },
-            tickfont: { color: '#fbbf24' }, overlaying: 'y', side: 'right',
+            title: 'Static P (hPa)', titlefont: { color: _pColor },
+            tickfont: { color: _pColor }, overlaying: 'y', side: 'right',
             autorange: 'reversed', showgrid: false,
             visible: _gaFLVarsVisible['static_pres_hpa'],
         },
         yaxis3: {
-            title: 'Temp (\u00b0C)', titlefont: { color: '#f87171' },
-            tickfont: { color: '#f87171' }, overlaying: 'y', side: 'left',
+            title: 'Temp (\u00b0C)', titlefont: { color: _tColor },
+            tickfont: { color: _tColor }, overlaying: 'y', side: 'left',
             position: 0, showgrid: false, visible: false, anchor: 'free',
         },
         yaxis4: {
-            title: 'Alt (m)', titlefont: { color: '#6b7280' },
-            tickfont: { color: '#6b7280' }, overlaying: 'y', side: 'right',
+            title: 'Alt (m)', titlefont: { color: _aColor },
+            tickfont: { color: _aColor }, overlaying: 'y', side: 'right',
             showgrid: false, visible: false, anchor: 'free', position: 1,
         },
         yaxis5: {
-            title: 'Sfc P (hPa)', titlefont: { color: '#fb923c' },
-            tickfont: { color: '#fb923c' }, overlaying: 'y', side: 'right',
+            title: 'Sfc P (hPa)', titlefont: { color: _spColor },
+            tickfont: { color: _spColor }, overlaying: 'y', side: 'right',
             autorange: 'reversed', showgrid: false, visible: false,
             anchor: 'free', position: 0.95,
         },
         yaxis6: {
-            title: 'W (m/s)', titlefont: { color: '#a3e635' },
-            tickfont: { color: '#a3e635', size: 8 }, overlaying: 'y', side: 'right',
+            title: 'W (m/s)', titlefont: { color: _vColor },
+            tickfont: { color: _vColor, size: 8 }, overlaying: 'y', side: 'right',
             showgrid: false, visible: false, anchor: 'free', position: 0.92,
-            zeroline: true, zerolinecolor: 'rgba(163,230,53,0.2)',
+            zeroline: true, zerolinecolor: _hexToRgba(_vColor, _vZeroAlpha),
         },
     };
 

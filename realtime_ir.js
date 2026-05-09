@@ -418,6 +418,41 @@
 
     // ── DeepMind 1000-Member Ensemble Distribution State ──────
     var _rtDmEnsData = null;           // API response from /weatherlab-ensemble
+
+    // Formats WeatherLab size fields (rmw_km, r34/r50/r64 mean + per-quadrant)
+    // for tooltip / popup HTML. Returns '' if no size data is available so
+    // existing tooltips don't grow needlessly.
+    function _rtFmtSize(pt) {
+        if (!pt) return '';
+        var KM_TO_NM = 0.5399568;
+        var lines = [];
+        if (pt.rmw_km != null) {
+            lines.push('RMW: ' + Math.round(pt.rmw_km * KM_TO_NM) + ' nm');
+        }
+        function _ringLine(thresh) {
+            var k = 'r' + thresh + '_mean_km';
+            if (pt[k] == null || pt[k] === 0) return null;
+            var nm = Math.round(pt[k] * KM_TO_NM);
+            // Per-quadrant if any of the four are non-zero/distinct
+            var quads = ['ne', 'se', 'sw', 'nw'];
+            var qVals = quads.map(function (q) { return pt['r' + thresh + '_' + q + '_km']; });
+            var nonZero = qVals.filter(function (v) { return v != null && v > 0; });
+            var allEqual = nonZero.length > 0 && nonZero.every(function (v) { return Math.abs(v - nonZero[0]) < 0.5; });
+            if (nonZero.length > 1 && !allEqual) {
+                var qStr = quads.map(function (q, i) {
+                    return q.toUpperCase() + ' ' + (qVals[i] != null ? Math.round(qVals[i] * KM_TO_NM) : '—');
+                }).join(' / ');
+                return 'R' + thresh + ' (nm): ' + qStr;
+            }
+            return 'R' + thresh + ': ' + nm + ' nm';
+        }
+        ['34', '50', '64'].forEach(function (t) {
+            var line = _ringLine(t);
+            if (line) lines.push(line);
+        });
+        if (lines.length === 0) return '';
+        return '<br><span style="font-size:11px;opacity:0.85;">' + lines.join('<br>') + '</span>';
+    }
     var _rtDmHistTauIdx = 0;           // current slider index for intensity histogram
     var _rtDmChangeTauIdx = 4;         // current slider index for change histogram
     var _rtDmChangeInt = 24;           // 12 or 24 hour change interval
@@ -4498,7 +4533,8 @@
                     pt.lat.toFixed(1) + '\u00B0N ' + pt.lon.toFixed(1) + '\u00B0E<br>' +
                     (pt.wind != null ? pt.wind.toFixed(0) + ' kt' : '') +
                     (pt.pres != null ? ' \u00B7 ' + pt.pres.toFixed(0) + ' hPa' : '') +
-                    '<br><span style="color:' + color + ';">' + cat + '</span>';
+                    '<br><span style="color:' + color + ';">' + cat + '</span>' +
+                    _rtFmtSize(pt);
 
                 marker.bindTooltip(tipHtml, { direction: 'top', offset: [0, -6] });
                 _rtWeatherlabMarkers.push(marker);
@@ -4532,7 +4568,8 @@
                     '+' + meanLmiPt.tau + 'h \u00B7 ' + meanLmiWind.toFixed(0) + ' kt' +
                     (meanLmiPt.pres != null ? ' \u00B7 ' + meanLmiPt.pres.toFixed(0) + ' hPa' : '') +
                     '<br>' + meanLmiPt.lat.toFixed(1) + '\u00B0N ' + meanLmiPt.lon.toFixed(1) + '\u00B0E' +
-                    '<br><span style="color:' + mlColor + ';">' + mlCat + '</span>';
+                    '<br><span style="color:' + mlColor + ';">' + mlCat + '</span>' +
+                    _rtFmtSize(meanLmiPt);
 
                 mlMarker.bindTooltip(mlTip, { direction: 'top', offset: [0, -7] });
                 _rtWeatherlabMarkers.push(mlMarker);
