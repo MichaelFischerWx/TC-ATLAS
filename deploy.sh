@@ -136,7 +136,7 @@ gcloud run deploy "${SERVICE_NAME}" \
     --port 8080 \
     --allow-unauthenticated \
     --update-env-vars "^||^TC_RADAR_S3_BUCKET=${TC_RADAR_S3_BUCKET:-}||TC_RADAR_S3_PREFIX=${TC_RADAR_S3_PREFIX:-tc-radar}||TC_RADAR_GCS_BUCKET=${TC_RADAR_GCS_BUCKET:-}||TC_RADAR_GCS_PREFIX=${TC_RADAR_GCS_PREFIX:-tc-radar}||GCS_IR_CACHE_BUCKET=${GCS_IR_CACHE_BUCKET:-tc-atlas-ir-cache}||AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}||AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}||AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-us-east-1}||EARTHDATA_USERNAME=${EARTHDATA_USERNAME:-}||EARTHDATA_PASSWORD=${EARTHDATA_PASSWORD:-}||CORS_ORIGINS=https://michaelfischerwx.github.io,http://localhost:8000" \
-    "${ARGS_FORWARD[@]}"
+    ${ARGS_FORWARD[@]+"${ARGS_FORWARD[@]}"}
 
 echo ""
 echo "Done! Update your frontend API_BASE to the URL above."
