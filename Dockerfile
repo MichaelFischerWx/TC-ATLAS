@@ -9,7 +9,9 @@
 
 FROM python:3.11-slim
 
-# ── OS-level deps for h5py / matplotlib / Pillow / pyproj ──
+# ── OS-level deps for h5py / matplotlib / Pillow / pyproj / eccodes ──
+# eccodes-data + libeccodes are required by cfgrib for parsing the GRIB2
+# files we pull from the NOMADS GFS filter (used by the GFS shear endpoint).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libhdf5-dev \
         libgeos-dev \
@@ -17,6 +19,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         proj-data \
         libjpeg62-turbo-dev \
         libfreetype6-dev \
+        libeccodes-dev \
+        libeccodes-data \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Python deps (cached layer — only re-built when requirements.txt changes)
