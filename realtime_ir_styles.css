@@ -302,7 +302,7 @@
     gap: 16px;
     padding: 10px 20px;
     border-bottom: 1px solid var(--border);
-    background: rgba(255, 255, 255, 0.95);
+    background: var(--surface-raised);
 }
 .ir-back-btn {
     background: var(--border);
@@ -525,7 +525,7 @@
     align-items: center;
     gap: 8px;
     padding: 8px 16px;
-    background: rgba(255, 255, 255, 0.95);
+    background: var(--surface-raised);
     border-top: 1px solid var(--border);
 }
 .ir-anim-btn {
@@ -565,9 +565,30 @@
     width: 14px;
     height: 14px;
     border-radius: 50%;
-    background: #4a9b6e;
+    background: var(--um-green);
     cursor: pointer;
-    border: 2px solid rgba(15, 22, 35, 0.3);
+    border: 2px solid var(--border-light);
+}
+
+/* Dark-mode overrides — the original ir-detail-header / ir-anim-* were
+   calibrated for the light theme (low-alpha navy borders/backgrounds),
+   which become invisible on the dark surface. Flip the alpha base from
+   navy → white in dark mode for the back/kml/animation buttons + slider
+   track + frame counter. */
+[data-theme="dark"] .ir-back-btn,
+[data-theme="dark"] .ir-kml-btn,
+[data-theme="dark"] .ir-anim-btn {
+    border-color: rgba(255, 255, 255, 0.18);
+    background: rgba(255, 255, 255, 0.04);
+}
+[data-theme="dark"] .ir-back-btn:hover,
+[data-theme="dark"] .ir-kml-btn:hover,
+[data-theme="dark"] .ir-anim-btn:hover {
+    background: rgba(255, 255, 255, 0.10);
+    color: var(--text);
+}
+[data-theme="dark"] .ir-anim-slider {
+    background: rgba(255, 255, 255, 0.14);
 }
 .ir-anim-counter {
     font-variant-numeric: tabular-nums;
