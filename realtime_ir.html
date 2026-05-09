@@ -29,7 +29,7 @@
     <link rel="apple-touch-icon" sizes="192x192" href="tc-atlas-favicon-192.png">
 
     <title>Real-Time Monitor — TC-ATLAS</title>
-    <script src="theme.js?v=20260508d"></script>
+    <script src="theme.js?v=20260508e"></script>
 
     <!-- Leaflet -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -48,7 +48,7 @@
     <script>window.__v='?v='+new Date().toISOString().slice(0,13).replace(/[-T]/g,'');</script>
 
     <!-- Styles -->
-    <link rel="stylesheet" href="tc_radar_styles.css?v=20260508d">
+    <link rel="stylesheet" href="tc_radar_styles.css?v=20260508e">
     <script>document.write('<link rel="stylesheet" href="realtime_ir_styles.css'+window.__v+'">');</script>
     <script>document.write('<link rel="stylesheet" href="satellite_styles.css'+window.__v+'">');</script>
 </head>
@@ -276,7 +276,7 @@
                             <div id="rt-weatherlab-filter" style="display:none;margin-top:4px;padding-top:4px;border-top:1px solid rgba(255,255,255,0.06);">
                                 <span style="font-size:9px;color:#00e5ff;">DeepMind filter:</span>
                                 <select id="rt-weatherlab-cat-filter" onchange="window._rtFilterWeatherlabByCat(this.value)"
-                                    style="font-size:9px;padding:1px 4px;border:1px solid rgba(0,229,255,0.3);border-radius:3px;background:#0f172a;color:#e2e8f0;font-variant-numeric: tabular-nums;margin-left:4px;">
+                                    style="font-size:9px;padding:1px 4px;border:1px solid rgba(0,229,255,0.3);border-radius:3px;background:var(--surface-raised);color:var(--text);font-variant-numeric: tabular-nums;margin-left:4px;">
                                     <option value="">All members</option>
                                     <option value="TS">Reaches TS+</option>
                                     <option value="C1">Reaches Cat 1+</option>
@@ -517,17 +517,17 @@
                         <div style="display:flex;align-items:center;gap:4px;">
                             <label style="font-size:9px;color:#15803d;min-width:28px;">Site</label>
                             <select id="sat-radar-site-select" onchange="window._satLoadRadarScans()"
-                                style="flex:1;font-size:9px;padding:2px 4px;border:1px solid rgba(255,255,255,0.12);border-radius:3px;background:#0f172a;color:#e2e8f0;font-variant-numeric: tabular-nums;"></select>
+                                style="flex:1;font-size:9px;padding:2px 4px;border:1px solid rgba(255,255,255,0.12);border-radius:3px;background:var(--surface-raised);color:var(--text);font-variant-numeric: tabular-nums;"></select>
                         </div>
                         <div style="display:flex;align-items:center;gap:4px;">
                             <label style="font-size:9px;color:#15803d;min-width:28px;">Scan</label>
                             <select id="sat-radar-scan-select" onchange="window._satLoadRadarFrame()"
-                                style="flex:1;font-size:9px;padding:2px 4px;border:1px solid rgba(255,255,255,0.12);border-radius:3px;background:#0f172a;color:#e2e8f0;font-variant-numeric: tabular-nums;"></select>
+                                style="flex:1;font-size:9px;padding:2px 4px;border:1px solid rgba(255,255,255,0.12);border-radius:3px;background:var(--surface-raised);color:var(--text);font-variant-numeric: tabular-nums;"></select>
                         </div>
                         <div style="display:flex;align-items:center;gap:4px;">
                             <label style="font-size:9px;color:#15803d;min-width:28px;">Prod</label>
                             <select id="sat-radar-product-select" onchange="window._satLoadRadarFrame()"
-                                style="font-size:9px;padding:2px 4px;border:1px solid rgba(255,255,255,0.12);border-radius:3px;background:#0f172a;color:#e2e8f0;font-variant-numeric: tabular-nums;">
+                                style="font-size:9px;padding:2px 4px;border:1px solid rgba(255,255,255,0.12);border-radius:3px;background:var(--surface-raised);color:var(--text);font-variant-numeric: tabular-nums;">
                                 <option value="reflectivity">Reflectivity</option>
                                 <option value="velocity">Velocity</option>
                             </select>
