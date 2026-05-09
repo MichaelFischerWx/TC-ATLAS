@@ -54,6 +54,65 @@ if [[ -n "${MISSING}" ]]; then
     [[ $REPLY =~ ^[Yy]$ ]] || exit 1
 fi
 
+# ── Freshness check: make sure the working tree matches origin/main ──
+# `gcloud run deploy --source .` ships whatever's in the current directory.
+# A stale local checkout (forgot to `git pull` after a merge) silently
+# deploys the previous version, which presents as "deploy succeeded but
+# my new code isn't there." Surface this loudly before we waste a Cloud
+# Build run on stale source.
+#
+# Bypass with DEPLOY_SKIP_FRESHNESS_CHECK=1 or --force-stale (e.g. local
+# work-in-progress that's ahead of main and intentionally not pushed).
+FORCE_STALE=0
+ARGS_FORWARD=()
+for arg in "$@"; do
+    if [[ "$arg" == "--force-stale" ]]; then
+        FORCE_STALE=1
+    else
+        ARGS_FORWARD+=("$arg")
+    fi
+done
+
+if [[ "${DEPLOY_SKIP_FRESHNESS_CHECK:-0}" != "1" && "${FORCE_STALE}" != "1" ]]; then
+    if git -C "${SCRIPT_DIR}" rev-parse --git-dir >/dev/null 2>&1; then
+        echo "Checking source freshness vs origin/main..."
+        if ! git -C "${SCRIPT_DIR}" fetch origin main --quiet 2>/dev/null; then
+            echo "  (warning: could not fetch origin/main; skipping freshness check)"
+        else
+            HEAD_SHA=$(git -C "${SCRIPT_DIR}" rev-parse HEAD)
+            REMOTE_SHA=$(git -C "${SCRIPT_DIR}" rev-parse origin/main)
+            if [[ "${HEAD_SHA}" != "${REMOTE_SHA}" ]]; then
+                # Are we behind, ahead, or diverged?
+                BEHIND=$(git -C "${SCRIPT_DIR}" rev-list --count "${HEAD_SHA}..${REMOTE_SHA}" 2>/dev/null || echo "?")
+                AHEAD=$(git -C "${SCRIPT_DIR}" rev-list --count "${REMOTE_SHA}..${HEAD_SHA}" 2>/dev/null || echo "?")
+                echo ""
+                echo "WARNING: working tree is NOT at origin/main HEAD."
+                echo "  HEAD:        ${HEAD_SHA:0:10}"
+                echo "  origin/main: ${REMOTE_SHA:0:10}"
+                if [[ "${BEHIND}" != "0" && "${BEHIND}" != "?" ]]; then
+                    echo "  → ${BEHIND} commit(s) BEHIND origin/main."
+                    echo "    Recent commits you don't have locally:"
+                    git -C "${SCRIPT_DIR}" log --oneline "${HEAD_SHA}..${REMOTE_SHA}" 2>/dev/null | head -8 | sed 's/^/      /'
+                    echo "    To pick them up:  git pull origin main"
+                fi
+                if [[ "${AHEAD}" != "0" && "${AHEAD}" != "?" ]]; then
+                    echo "  → ${AHEAD} commit(s) AHEAD of origin/main (local-only work)."
+                fi
+                echo ""
+                echo "Deploying anyway will ship YOUR local tree, including any"
+                echo "uncommitted changes. To skip this check use --force-stale"
+                echo "or set DEPLOY_SKIP_FRESHNESS_CHECK=1."
+                echo ""
+                read -p "Deploy stale/divergent source? [y/N] " -n 1 -r
+                echo
+                [[ $REPLY =~ ^[Yy]$ ]] || exit 1
+            else
+                echo "  ✓ HEAD matches origin/main (${HEAD_SHA:0:10})"
+            fi
+        fi
+    fi
+fi
+
 # ── Configuration ─────────────────────────────────────────────
 SERVICE_NAME="tc-atlas-api"
 REGION="us-east1"                   # close to your S3 bucket in us-east-1
@@ -77,7 +136,7 @@ gcloud run deploy "${SERVICE_NAME}" \
     --port 8080 \
     --allow-unauthenticated \
     --update-env-vars "^||^TC_RADAR_S3_BUCKET=${TC_RADAR_S3_BUCKET:-}||TC_RADAR_S3_PREFIX=${TC_RADAR_S3_PREFIX:-tc-radar}||TC_RADAR_GCS_BUCKET=${TC_RADAR_GCS_BUCKET:-}||TC_RADAR_GCS_PREFIX=${TC_RADAR_GCS_PREFIX:-tc-radar}||GCS_IR_CACHE_BUCKET=${GCS_IR_CACHE_BUCKET:-tc-atlas-ir-cache}||AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}||AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}||AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-us-east-1}||EARTHDATA_USERNAME=${EARTHDATA_USERNAME:-}||EARTHDATA_PASSWORD=${EARTHDATA_PASSWORD:-}||CORS_ORIGINS=https://michaelfischerwx.github.io,http://localhost:8000" \
-    "$@"
+    "${ARGS_FORWARD[@]}"
 
 echo ""
 echo "Done! Update your frontend API_BASE to the URL above."
