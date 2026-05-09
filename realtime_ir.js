@@ -2562,6 +2562,11 @@
             storm.vmax_kt != null ? storm.vmax_kt + ' kt (' + categoryShort(cat) + ')' : '\u2014';
         document.getElementById('ir-info-lastfix').textContent = fmtUTC(storm.last_fix_utc);
 
+        // Shear from GFS analysis (lazy: fires after the IR mini-map loads)
+        var shearEl = document.getElementById('ir-info-shear');
+        if (shearEl) shearEl.innerHTML = '<span class="skeleton-pulse skeleton-text" style="width:80px;display:inline-block;">&nbsp;</span>';
+        loadStormShear(atcfId);
+
         // Official forecast link
         var officialSection = document.getElementById('ir-official-section');
         var officialLink = document.getElementById('ir-official-link');
@@ -2599,6 +2604,46 @@
         // This gives the satellite imagery full bandwidth priority.
 
         _ga('ir_open_detail', { atcf_id: atcfId, name: storm.name, category: cat });
+    }
+
+    // 16-point compass abbreviation. 0° → N, 90° → E, 180° → S, 270° → W.
+    function _compassDir(deg) {
+        if (deg == null || !isFinite(deg)) return '';
+        var dirs = ['N','NNE','NE','ENE','E','ESE','SE','SSE',
+                    'S','SSW','SW','WSW','W','WNW','NW','NNW'];
+        var idx = Math.round(((deg % 360) + 360) % 360 / 22.5) % 16;
+        return dirs[idx];
+    }
+
+    /**
+     * Fetch GFS-derived deep-layer shear for the active storm and paint
+     * the Storm Info "Shear" row. Quiet on failure — the row falls back
+     * to "—" so the rest of the panel stays clean.
+     */
+    function loadStormShear(atcfId) {
+        var el = document.getElementById('ir-info-shear');
+        if (!el) return;
+        fetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) + '/shear')
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (j) {
+                // Bail if the user navigated away while the request was in flight
+                if (!j || currentStormId !== atcfId) return;
+                var dir = _compassDir(j.heading_deg);
+                el.textContent = j.magnitude_kt.toFixed(0) + ' kt @ ' +
+                    Math.round(j.heading_deg) + '° (' + dir + ')';
+                // Hover tooltip with attribution + the per-level annular winds
+                el.title = 'GFS 0.25° analysis ' + (j.gfs_cycle_utc || '') + '\n' +
+                    '850–200 hPa shear, 200–800 km annulus\n' +
+                    'u200/v200: ' + j.u200_ms + '/' + j.v200_ms + ' m/s\n' +
+                    'u850/v850: ' + j.u850_ms + '/' + j.v850_ms + ' m/s\n' +
+                    'n grid points: ' + j.n_grid_points;
+            })
+            .catch(function () {
+                if (currentStormId === atcfId) {
+                    el.textContent = '—';
+                    el.title = 'Shear unavailable';
+                }
+            });
     }
 
     /**

@@ -3820,3 +3820,365 @@ def get_storm_weatherlab_ensemble(atcf_id: str):
         },
         headers={"Cache-Control": "public, max-age=1800"},
     )
+
+
+# ---------------------------------------------------------------------------
+# GFS Analysis Shear (200–850 hPa, 200–800 km annulus, vortex-removed)
+# ---------------------------------------------------------------------------
+# Pulls u/v at 200 and 850 hPa from the latest available GFS 0.25° analysis
+# via the NOAA NOMADS cgi-bin filter (which serves a subsetted GRIB2 byte
+# stream — typically 30–50 KB for our small box × 2 vars × 2 levels), masks
+# to the SHIPS-canonical 200–800 km annulus around the storm's current
+# best-track position, and returns the deep-layer shear vector. Cached per
+# (atcf_id, gfs_cycle) so we do at most one fetch per storm per GFS cycle.
+#
+# NOMADS OPeNDAP was retired in SCN25-81; the cgi-bin filter is the
+# recommended replacement and remains available.
+
+_GFS_FILTER_URL = "https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25.pl"
+_GFS_LATENCY_HOURS = 4.0       # NOMADS typically posts ~3.5h after cycle time
+_SHEAR_INNER_KM = 200.0        # vortex-mask inner radius
+_SHEAR_OUTER_KM = 800.0        # vortex-mask outer radius
+_SHEAR_BOX_DEG = 9.0           # subset half-width in degrees (lat ~1000 km buffer)
+_SHEAR_CACHE_TTL = 6 * 3600    # 6 hours; one GFS cycle
+_SHEAR_CACHE_VER = "shear-v1"  # bump if computation changes
+_shear_mem_cache: dict = {}    # (atcf_id, cycle_iso) → {data, ts}
+_shear_mem_lock = threading.Lock()
+_SHEAR_MEM_MAX = 200
+
+
+def _latest_available_gfs_cycle() -> tuple[str, str]:
+    """Return the latest GFS analysis cycle that should be available on NOMADS.
+
+    GFS cycles at 00/06/12/18 UTC; allow ~4h for NOMADS to publish. Returns
+    (YYYYMMDD, HH) strings.
+    """
+    now = _dt.now(timezone.utc) - timedelta(hours=_GFS_LATENCY_HOURS)
+    cyc_hour = (now.hour // 6) * 6
+    cyc_dt = now.replace(hour=cyc_hour, minute=0, second=0, microsecond=0)
+    return cyc_dt.strftime("%Y%m%d"), f"{cyc_hour:02d}"
+
+
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance in kilometers (vectorizable when given numpy arrays)."""
+    import numpy as np
+    R = 6371.0
+    lat1r = np.radians(lat1); lat2r = np.radians(lat2)
+    dlat = np.radians(lat2 - lat1)
+    dlon = np.radians(lon2 - lon1)
+    # Wrap longitude difference to ±π for dateline safety
+    dlon = np.where(dlon > np.pi, dlon - 2 * np.pi, dlon)
+    dlon = np.where(dlon < -np.pi, dlon + 2 * np.pi, dlon)
+    a = np.sin(dlat / 2) ** 2 + np.cos(lat1r) * np.cos(lat2r) * np.sin(dlon / 2) ** 2
+    return 2 * R * np.arcsin(np.minimum(np.sqrt(a), 1.0))
+
+
+def _gcs_get_shear(atcf_id: str, cycle_iso: str) -> Optional[dict]:
+    """Read a cached shear result from GCS, if present and fresh."""
+    bucket = _get_mw_gcs_bucket()
+    if bucket is None:
+        return None
+    blob_name = f"shear/{_SHEAR_CACHE_VER}/{atcf_id.upper()}/{cycle_iso}.json"
+    try:
+        blob = bucket.blob(blob_name)
+        if not blob.exists():
+            return None
+        return json.loads(blob.download_as_text())
+    except Exception as e:
+        logger.debug(f"GCS shear get failed for {atcf_id} {cycle_iso}: {e}")
+        return None
+
+
+def _gcs_put_shear(atcf_id: str, cycle_iso: str, payload: dict) -> None:
+    """Write shear result to GCS (fire-and-forget)."""
+    bucket = _get_mw_gcs_bucket()
+    if bucket is None:
+        return
+    blob_name = f"shear/{_SHEAR_CACHE_VER}/{atcf_id.upper()}/{cycle_iso}.json"
+    try:
+        blob = bucket.blob(blob_name)
+        blob.upload_from_string(
+            json.dumps(payload), content_type="application/json"
+        )
+    except Exception as e:
+        logger.debug(f"GCS shear put failed for {atcf_id} {cycle_iso}: {e}")
+
+
+def _fetch_gfs_grib2(slat: float, slon360: float, date_str: str, hour_str: str) -> Optional[bytes]:
+    """Pull a small GRIB2 slice from the NOMADS cgi-bin filter.
+
+    Subsets to a ~9° box around the storm with only u/v at 200 and 850 hPa
+    — typically 30–50 KB. Returns raw GRIB2 bytes or None on failure.
+    The cgi-bin filter expects integer lat/lon bounds clipped to ±89/0–359
+    and may return an HTML error page instead of GRIB2 if the cycle isn't
+    yet published; we detect that by checking the magic bytes.
+    """
+    import requests as _req
+
+    box = _SHEAR_BOX_DEG
+    top = min(89.0, slat + box)
+    bot = max(-89.0, slat - box)
+    # cgi-bin uses 0–360 lon convention. Split-fetch over the dateline if
+    # needed and concat the bytes (the GRIB format is a sequence of
+    # self-contained messages, so concatenation is valid).
+    lon_lo = slon360 - box
+    lon_hi = slon360 + box
+
+    def _one_fetch(left: float, right: float) -> Optional[bytes]:
+        params = {
+            "dir": f"/gfs.{date_str}/{hour_str}/atmos",
+            "file": f"gfs.t{hour_str}z.pgrb2.0p25.f000",
+            "var_UGRD": "on",
+            "var_VGRD": "on",
+            "lev_200_mb": "on",
+            "lev_850_mb": "on",
+            "subregion": "",
+            "toplat": f"{top:.2f}",
+            "leftlon": f"{left:.2f}",
+            "rightlon": f"{right:.2f}",
+            "bottomlat": f"{bot:.2f}",
+        }
+        try:
+            r = _req.get(_GFS_FILTER_URL, params=params, timeout=30,
+                         headers={"User-Agent": "TC-ATLAS/1.0"})
+            if r.status_code != 200:
+                logger.warning(f"[shear] cgi-bin HTTP {r.status_code}")
+                return None
+            data = r.content
+            if not data.startswith(b"GRIB"):
+                # cgi-bin sometimes returns an HTML 200 with an error
+                # message body when the file isn't yet on disk.
+                logger.warning(
+                    f"[shear] non-GRIB response for {date_str} {hour_str}z "
+                    f"({len(data)} bytes); first 80: {data[:80]!r}"
+                )
+                return None
+            return data
+        except Exception as e:
+            logger.warning(f"[shear] cgi-bin fetch failed: {e}")
+            return None
+
+    if lon_lo < 0 or lon_hi > 360:
+        a = _one_fetch(lon_lo % 360.0, 359.75)
+        b = _one_fetch(0.0, lon_hi % 360.0)
+        if a is None or b is None:
+            return None
+        return a + b
+    return _one_fetch(lon_lo, lon_hi)
+
+
+def _compute_gfs_shear(lat: float, lon: float, date_str: str, hour_str: str) -> Optional[dict]:
+    """Pull GFS GRIB2, vortex-mask, return shear dict. None on any failure."""
+    import os as _os
+    import tempfile
+    import numpy as np
+    import xarray as xr
+
+    slon360 = lon % 360.0
+    slat = lat
+
+    grib_bytes = _fetch_gfs_grib2(slat, slon360, date_str, hour_str)
+    if grib_bytes is None:
+        return None
+
+    # cfgrib reads from a real file on disk; use a temp file (small, ~50KB).
+    tmp_dir = tempfile.mkdtemp(prefix="tcatlas_shear_")
+    grib_path = _os.path.join(tmp_dir, "gfs_uv.grib2")
+    try:
+        with open(grib_path, "wb") as f:
+            f.write(grib_bytes)
+        try:
+            ds = xr.open_dataset(grib_path, engine="cfgrib",
+                                 backend_kwargs={"indexpath": ""})
+        except Exception as e:
+            logger.warning(f"[shear] cfgrib open failed: {e}")
+            return None
+
+        try:
+            # cfgrib names: u, v on isobaricInhPa coordinate.
+            # The filter request gives us exactly two pressure levels (200, 850).
+            u_var = ds["u"] if "u" in ds else ds.get("U")
+            v_var = ds["v"] if "v" in ds else ds.get("V")
+            if u_var is None or v_var is None:
+                logger.warning(f"[shear] u/v vars missing in GRIB2; have: {list(ds.data_vars)}")
+                return None
+
+            # Coord names in cfgrib output
+            lev_name = "isobaricInhPa" if "isobaricInhPa" in u_var.dims else "level"
+            lat_name = "latitude" if "latitude" in u_var.dims else "lat"
+            lon_name = "longitude" if "longitude" in u_var.dims else "lon"
+
+            u200 = u_var.sel({lev_name: 200}, method="nearest")
+            v200 = v_var.sel({lev_name: 200}, method="nearest")
+            u850 = u_var.sel({lev_name: 850}, method="nearest")
+            v850 = v_var.sel({lev_name: 850}, method="nearest")
+
+            lat_vals = u200[lat_name].values
+            lon_vals = u200[lon_name].values
+            # Normalize lon to 0–360 for distance math (cfgrib may return ±180)
+            lon_vals_360 = np.where(lon_vals < 0, lon_vals + 360.0, lon_vals)
+
+            lats_g, lons_g = np.meshgrid(lat_vals, lon_vals_360, indexing="ij")
+            dist_km = _haversine_km(slat, slon360, lats_g, lons_g)
+            mask = (dist_km >= _SHEAR_INNER_KM) & (dist_km <= _SHEAR_OUTER_KM)
+            n_pts = int(mask.sum())
+            if n_pts < 8:
+                logger.warning(f"[shear] mask too sparse: {n_pts} pts for {slat},{slon360}")
+                return None
+
+            def _avg(da):
+                arr = np.asarray(da.values)
+                # If the array has an extra leading dim (some cfgrib versions
+                # keep singleton time/step), squeeze it.
+                while arr.ndim > 2:
+                    arr = arr[0]
+                vals = arr[mask]
+                vals = vals[np.isfinite(vals)]
+                return float(vals.mean()) if vals.size else float("nan")
+
+            u200a = _avg(u200); v200a = _avg(v200)
+            u850a = _avg(u850); v850a = _avg(v850)
+            if any(not np.isfinite(x) for x in (u200a, v200a, u850a, v850a)):
+                logger.warning("[shear] non-finite annular averages")
+                return None
+
+            du_ms = u200a - u850a
+            dv_ms = v200a - v850a
+            mag_ms = float(np.sqrt(du_ms ** 2 + dv_ms ** 2))
+            hdg = float((np.degrees(np.arctan2(du_ms, dv_ms)) + 360.0) % 360.0)
+
+            return {
+                "magnitude_ms": round(mag_ms, 2),
+                "magnitude_kt": round(mag_ms * 1.94384, 1),
+                "heading_deg": round(hdg, 1),
+                "du_ms": round(du_ms, 2),
+                "dv_ms": round(dv_ms, 2),
+                "u200_ms": round(u200a, 2),
+                "v200_ms": round(v200a, 2),
+                "u850_ms": round(u850a, 2),
+                "v850_ms": round(v850a, 2),
+                "annulus_km": [_SHEAR_INNER_KM, _SHEAR_OUTER_KM],
+                "layer_hpa": [850, 200],
+                "n_grid_points": n_pts,
+            }
+        finally:
+            try:
+                ds.close()
+            except Exception:
+                pass
+    except Exception as e:
+        logger.warning(f"[shear] computation failed: {e}")
+        return None
+    finally:
+        try:
+            import shutil
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+
+def _resolve_storm_position(atcf_id: str) -> Optional[tuple[float, float, str]]:
+    """Return (lat, lon, last_fix_iso) for an active storm or None."""
+    aid_up = atcf_id.upper()
+    with _active_storms_lock:
+        for s in _active_storms_cache.get("storms", []):
+            if s.get("atcf_id", "").upper() == aid_up:
+                return s["lat"], s["lon"], s.get("last_fix_utc")
+    # Fall back to A/B-deck if not in active cache (storm just became inactive)
+    records = _fetch_bdeck(atcf_id.lower()) or _fetch_adeck(atcf_id.lower())
+    if not records:
+        return None
+    latest = _get_latest_position(records)
+    if not latest:
+        return None
+    return (
+        float(latest["lat"]),
+        float(latest["lon"]),
+        latest["datetime"].strftime("%Y-%m-%dT%H:%M:%SZ"),
+    )
+
+
+@router.get("/storm/{atcf_id}/shear")
+def get_storm_shear(atcf_id: str):
+    """Return deep-layer (850→200 hPa) vortex-removed shear from the latest
+    GFS 0.25° analysis at the storm's current best-track position.
+
+    Annulus 200–800 km matches the SHIPS SHRD/SHTD convention. Heading is
+    "toward" (westerly shear → 90°). Cached per (atcf_id, cycle); GFS
+    refreshes every 6 hours so a typical user hits the cache after the
+    first request of each cycle.
+    """
+    pos = _resolve_storm_position(atcf_id)
+    if pos is None:
+        raise HTTPException(status_code=404, detail=f"No position found for {atcf_id}")
+    slat, slon, last_fix = pos
+
+    date_str, hour_str = _latest_available_gfs_cycle()
+    cycle_iso = f"{date_str}T{hour_str}"
+    cache_key = (atcf_id.upper(), cycle_iso)
+
+    with _shear_mem_lock:
+        hit = _shear_mem_cache.get(cache_key)
+        if hit and time.time() - hit["ts"] < _SHEAR_CACHE_TTL:
+            return JSONResponse(
+                content=hit["data"],
+                headers={"Cache-Control": "public, max-age=1800"},
+            )
+
+    # Try GCS warm cache before hitting OPeNDAP
+    gcs_hit = _gcs_get_shear(atcf_id, cycle_iso)
+    if gcs_hit is not None:
+        with _shear_mem_lock:
+            _shear_mem_cache[cache_key] = {"data": gcs_hit, "ts": time.time()}
+            while len(_shear_mem_cache) > _SHEAR_MEM_MAX:
+                _shear_mem_cache.pop(next(iter(_shear_mem_cache)))
+        return JSONResponse(
+            content=gcs_hit,
+            headers={"Cache-Control": "public, max-age=1800"},
+        )
+
+    # Compute fresh
+    shear = _compute_gfs_shear(slat, slon, date_str, hour_str)
+    if shear is None:
+        # Fall back one cycle if NOMADS hasn't published yet
+        try:
+            cyc_dt = _dt.strptime(date_str + hour_str, "%Y%m%d%H").replace(tzinfo=timezone.utc)
+            cyc_dt -= timedelta(hours=6)
+            date_str = cyc_dt.strftime("%Y%m%d")
+            hour_str = cyc_dt.strftime("%H")
+            cycle_iso = f"{date_str}T{hour_str}"
+            cache_key = (atcf_id.upper(), cycle_iso)
+            shear = _compute_gfs_shear(slat, slon, date_str, hour_str)
+        except Exception:
+            shear = None
+
+    if shear is None:
+        raise HTTPException(
+            status_code=503,
+            detail="GFS analysis unavailable; try again shortly.",
+        )
+
+    payload = {
+        "atcf_id": atcf_id.upper(),
+        "lat": slat,
+        "lon": slon,
+        "last_fix_utc": last_fix,
+        "gfs_cycle_utc": f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}T{hour_str}:00:00Z",
+        "source": "GFS 0.25° analysis (NOMADS OPeNDAP)",
+        **shear,
+    }
+
+    with _shear_mem_lock:
+        _shear_mem_cache[cache_key] = {"data": payload, "ts": time.time()}
+        while len(_shear_mem_cache) > _SHEAR_MEM_MAX:
+            _shear_mem_cache.pop(next(iter(_shear_mem_cache)))
+    threading.Thread(
+        target=_gcs_put_shear,
+        args=(atcf_id, cycle_iso, payload),
+        daemon=True,
+    ).start()
+
+    return JSONResponse(
+        content=payload,
+        headers={"Cache-Control": "public, max-age=1800"},
+    )
