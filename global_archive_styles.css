@@ -909,7 +909,7 @@ input[type="range"].ga-range::-moz-range-thumb {
 .ir-map-controls:not(.ir-sidebar) {
     display: block !important;
     position: relative;
-    background: rgba(255, 255, 255, 0.92);
+    background: var(--surface-raised);
     padding: 8px 10px;
     border: 1px solid var(--border);
     border-radius: 6px;
