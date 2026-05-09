@@ -13,6 +13,32 @@
    reads them) but they now point to UM-palette values.
    ══════════════════════════════════════════════════════════════ */
 
+/* ── Font: replace vendored JetBrains Mono with the site's DM Sans ──
+   The upstream globe.css uses JetBrains Mono in 14 places (sidebar
+   labels, colorbar units, footer code, etc.). TC-ATLAS uses DM Sans
+   site-wide; mixing the two looks inconsistent. Override every
+   element inside the sidebar / colorbar / canvas overlays so the
+   monospace inheritance from globe.css is neutralized. The Lorenz
+   energy-cycle SVG keeps tabular-nums via font-variant-numeric. */
+.sidebar, .sidebar *,
+.colorbar, .colorbar *,
+.canvas-area .view-toggle, .canvas-area .view-toggle *,
+.canvas-area .tips-panel, .canvas-area .tips-panel *,
+.canvas-area .share-btn,
+.canvas-area .tips-reopen,
+.canvas-area .loading-banner,
+.canvas-area .canvas-status {
+    font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+    font-variant-numeric: tabular-nums;
+}
+/* Lorenz cycle SVG explicitly sets JetBrains Mono on inner <g> groups —
+   override at the SVG-element level since attribute font-family beats
+   inherited CSS. */
+.lz-boxes, .lz-boxes *, .lz-arrows, .lz-arrows * {
+    font-family: 'DM Sans', -apple-system, sans-serif !important;
+    font-variant-numeric: tabular-nums;
+}
+
 /* ── Theme variable remap ───────────────────────────────────── */
 /*  - Topbar, sidebar, sidebar controls   → follow site theme
       - Globe canvas (3D rendered area)     → ALWAYS DARK (sun-feature
@@ -93,6 +119,45 @@
     background: #11161f !important;
     color: #8a93a4 !important;
     border-top-color: rgba(255,255,255,0.08) !important;
+}
+
+/* The blanket aside.sidebar#sidebar * { background:#11161f !important }
+   rule above wins over the engine's .segmented button.active, .yr-chip
+   .selected, etc. — meaning every toggle/segmented control looked
+   identical regardless of state in dark mode. Re-establish the active
+   accent here using `background` (shorthand) to match the engine's
+   own rule and beat both the universal !important and the engine's
+   non-important shorthand. UM-green for selected/active, with white
+   text and matching border so it reads clearly against the navy
+   sidebar surface.
+
+   The `transition: none` is critical: globe.css applies a 150ms
+   `transition: background, color` to .segmented buttons. When the
+   theme switches at runtime, that transition interpolates from the
+   previous (light) emerald to the new dark value — and on certain
+   pages the transition can freeze mid-interpolation (e.g. when the
+   tab is backgrounded), leaving the active button stuck at the OLD
+   color forever. Skipping the transition for the active state means
+   theme changes flip instantly to the correct color. */
+:root[data-theme="dark"] aside.sidebar#sidebar .segmented button.active,
+:root[data-theme="dark"] aside.sidebar#sidebar .composite-mode-toggle button.active,
+:root[data-theme="dark"] aside.sidebar#sidebar .composite-year-chips .yr-chip.selected,
+:root[data-theme="dark"] aside.sidebar#sidebar .composite-month-chips .mo-chip.selected,
+:root[data-theme="dark"] aside.sidebar#sidebar .topbar-nav a.active {
+    background: #4a9b6e !important;
+    color: #ffffff !important;
+    border-color: #4a9b6e !important;
+    font-weight: 600;
+    transition: none !important;
+}
+/* Hover state on inactive items needs to be different from active
+   (otherwise the user can't tell what's hovered vs selected). */
+:root[data-theme="dark"] aside.sidebar#sidebar .segmented button:hover:not(.active),
+:root[data-theme="dark"] aside.sidebar#sidebar .composite-mode-toggle button:hover:not(.active),
+:root[data-theme="dark"] aside.sidebar#sidebar .composite-year-chips .yr-chip:hover:not(.selected),
+:root[data-theme="dark"] aside.sidebar#sidebar .composite-month-chips .mo-chip:hover:not(.selected) {
+    background: rgba(74, 155, 110, 0.15) !important;
+    color: #e6e8eb !important;
 }
 
 /* ── Canvas area — DARK ("space") so the sun feature reads ──── */
