@@ -3875,7 +3875,7 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 def _gcs_get_shear(atcf_id: str, cycle_iso: str) -> Optional[dict]:
     """Read a cached shear result from GCS, if present and fresh."""
-    bucket = _get_mw_gcs_bucket()
+    bucket = _get_rt_gcs_bucket()
     if bucket is None:
         return None
     blob_name = f"shear/{_SHEAR_CACHE_VER}/{atcf_id.upper()}/{cycle_iso}.json"
@@ -3891,7 +3891,7 @@ def _gcs_get_shear(atcf_id: str, cycle_iso: str) -> Optional[dict]:
 
 def _gcs_put_shear(atcf_id: str, cycle_iso: str, payload: dict) -> None:
     """Write shear result to GCS (fire-and-forget)."""
-    bucket = _get_mw_gcs_bucket()
+    bucket = _get_rt_gcs_bucket()
     if bucket is None:
         return
     blob_name = f"shear/{_SHEAR_CACHE_VER}/{atcf_id.upper()}/{cycle_iso}.json"
