@@ -10214,11 +10214,30 @@ function _gaFLSyncToIRFrame() {
         return;
     }
 
-    var bestIdx = 0, bestDelta = Infinity;
+    // Mission selection heuristic. Mission `.datetime` from the API is
+    // a date-only string ("YYYY-MM-DD") — we don't know exactly when
+    // the flight actually flew. Naive `noon UTC` matching can be off
+    // by 24h when the user clicked an evening peak (e.g. Milton peak
+    // at Oct 7 ~22Z would naively pick Oct 7 12Z over Oct 8 12Z, OR
+    // pick Oct 8 if the Oct 7 mission is missing — appearing as a
+    // 24h jump). Prefer an exact UTC-date match when one exists; fall
+    // back to nearest-by-noon only when no mission exists for that day.
+    var irDateStr = irTime.toISOString().slice(0, 10);  // "2024-10-08"
+    var exactIdx = -1;
     for (var i = 0; i < _gaFLMissions.length; i++) {
-        var mTime = new Date(_gaFLMissions[i].datetime + 'T12:00:00Z');
-        var delta = Math.abs(irTime - mTime);
-        if (delta < bestDelta) { bestDelta = delta; bestIdx = i; }
+        if (_gaFLMissions[i].datetime === irDateStr) { exactIdx = i; break; }
+    }
+    var bestIdx;
+    if (exactIdx >= 0) {
+        bestIdx = exactIdx;
+    } else {
+        var bestDelta = Infinity;
+        bestIdx = 0;
+        for (var j = 0; j < _gaFLMissions.length; j++) {
+            var mTime = new Date(_gaFLMissions[j].datetime + 'T12:00:00Z');
+            var delta = Math.abs(irTime - mTime);
+            if (delta < bestDelta) { bestDelta = delta; bestIdx = j; }
+        }
     }
 
     var select = document.getElementById('ga-fl-mission-select');
