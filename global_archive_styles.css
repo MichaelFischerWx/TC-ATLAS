@@ -909,7 +909,7 @@ input[type="range"].ga-range::-moz-range-thumb {
 .ir-map-controls:not(.ir-sidebar) {
     display: block !important;
     position: relative;
-    background: rgba(255, 255, 255, 0.92);
+    background: var(--surface-raised);
     padding: 8px 10px;
     border: 1px solid var(--border);
     border-radius: 6px;
@@ -1921,6 +1921,64 @@ input[type="range"].ga-range::-moz-range-thumb {
     background: var(--um-green-tint);
     color: var(--um-green);
     border-color: var(--um-green);
+}
+
+/* ── Flight-level panel buttons (Time Series / X-Sec / Radial) ──
+   Theme-aware accents + visible outlines so the action buttons read
+   on both light and dark surfaces. */
+.ga-fl-panel-btn {
+    font-size: 9px;
+    border-width: 1px;
+    border-style: solid;
+}
+#ga-fl-btn-ts {
+    color: #1d4ed8;
+    border-color: rgba(29, 78, 216, 0.45);
+    background: rgba(29, 78, 216, 0.06);
+}
+#ga-fl-btn-ts:hover { background: rgba(29, 78, 216, 0.14); }
+#ga-fl-btn-xsec,
+#ga-fl-btn-radial {
+    color: #15803d;
+    border-color: rgba(21, 128, 61, 0.45);
+    background: rgba(21, 128, 61, 0.06);
+}
+#ga-fl-btn-xsec:hover,
+#ga-fl-btn-radial:hover { background: rgba(21, 128, 61, 0.14); }
+[data-theme="dark"] #ga-fl-btn-ts {
+    color: #93c5fd;
+    border-color: rgba(147, 197, 253, 0.45);
+    background: rgba(147, 197, 253, 0.10);
+}
+[data-theme="dark"] #ga-fl-btn-ts:hover { background: rgba(147, 197, 253, 0.20); }
+[data-theme="dark"] #ga-fl-btn-xsec,
+[data-theme="dark"] #ga-fl-btn-radial {
+    color: #86efac;
+    border-color: rgba(134, 239, 172, 0.45);
+    background: rgba(134, 239, 172, 0.10);
+}
+[data-theme="dark"] #ga-fl-btn-xsec:hover,
+[data-theme="dark"] #ga-fl-btn-radial:hover { background: rgba(134, 239, 172, 0.20); }
+
+/* Color-by buttons (Wind / Temp / Td / θe) — bump outline visibility */
+.ga-fl-color-btn {
+    font-size: 9px;
+    border-color: var(--border-light);
+}
+[data-theme="dark"] .ga-fl-color-btn {
+    border-color: rgba(255, 255, 255, 0.18);
+}
+
+/* Catch-all dark-mode overrides for legacy inline color hexes used across
+   FL/NEXRAD/Sonde labels and headings. The inline styles can't be removed
+   without touching every site, so we override by attribute-selector. */
+[data-theme="dark"] [style*="color:#1d4ed8"],
+[data-theme="dark"] [style*="color: #1d4ed8"] {
+    color: #93c5fd !important;
+}
+[data-theme="dark"] [style*="color:#15803d"],
+[data-theme="dark"] [style*="color: #15803d"] {
+    color: #86efac !important;
 }
 
 /* ── Flight-level tooltip (higher z-index than IR hover) ──── */
