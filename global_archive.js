@@ -10756,6 +10756,7 @@ window.gaSondeShowSkewT = function (idx) {
         q: qArr.length > 0 ? qArr : null,
         u: prof.uwnd || null,
         v: prof.vwnd || null,
+        showParcel: _gaSondeParcelEnabled,
     };
 
     _gaSondeCurrentIdx = idx;
@@ -10808,6 +10809,18 @@ window.gaSondeCloseSkewT = function () {
 
 var _gaSondeViewMode = 'skewt';
 var _gaSondeCurrentIdx = 0;
+// Parcel-theory display is OFF by default. Parcel theory (CAPE/CIN/LCL/LFC/EL)
+// has limited utility for TC sondes: eyewall ascent is slantwise, the column
+// is near-saturated, and surface-based parcel theory implies a local-buoyancy
+// framework that doesn't apply. Users can opt in via the Parcel toggle.
+var _gaSondeParcelEnabled = false;
+
+window.gaSondeToggleParcel = function () {
+    _gaSondeParcelEnabled = !_gaSondeParcelEnabled;
+    var btn = document.getElementById('ga-sonde-toggle-parcel');
+    if (btn) btn.classList.toggle('active', _gaSondeParcelEnabled);
+    if (_gaSondeViewMode === 'skewt') gaSondeShowSkewT(_gaSondeCurrentIdx);
+};
 
 // Open cross-section or radial directly from the FL controls (no sonde selection needed)
 // Move the panel above the sonde info so it's immediately visible
@@ -11429,18 +11442,33 @@ function _gaSondeRenderSkewTInfo(profiles, sonde, idx) {
     if (!el) return;
 
     var d = profiles._derived || {};
-    var html = '<div style="font-weight:600;color:var(--um-green);margin-bottom:6px;">Derived Parameters</div>';
+    var parcelOn = profiles.showParcel === true;
+
+    // \u2500\u2500 Always-on TC-relevant column diagnostics \u2500\u2500
+    var html = '<div style="font-weight:600;color:var(--um-green);margin-bottom:6px;">Column Diagnostics</div>';
     html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 8px;font-size:9px;">';
-    html += '<span style="color:var(--slate);">CAPE:</span><span>' + (d.cape != null ? d.cape + ' J/kg' : '\u2014') + '</span>';
-    html += '<span style="color:var(--slate);">CIN:</span><span>' + (d.cin != null ? d.cin + ' J/kg' : '\u2014') + '</span>';
     html += '<span style="color:var(--slate);">PWAT:</span><span>' + (d.pwat != null ? d.pwat.toFixed(1) + ' mm' : '\u2014') + '</span>';
-    html += '<span style="color:var(--slate);">LCL:</span><span>' + (d.lcl_p != null ? d.lcl_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
-    html += '<span style="color:var(--slate);">LFC:</span><span>' + (d.lfc_p != null ? d.lfc_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
-    html += '<span style="color:var(--slate);">EL:</span><span>' + (d.el_p != null ? d.el_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
     html += '<span style="color:var(--slate);">0\u00b0C:</span><span>' + (d.freezing_p != null ? d.freezing_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
+    html += '<span style="color:var(--slate);" title="Mean equivalent potential temperature in lowest 50 hPa \u2014 boundary-layer entropy">Sfc \u03b8e:</span><span>' + (d.thetaE_sfc != null ? d.thetaE_sfc.toFixed(1) + ' K' : '\u2014') + '</span>';
+    html += '<span style="color:var(--slate);" title="Mid-level (850\u2013400 hPa) \u03b8e minimum \u2014 low values signal dry-air entrainment / downdraft potential">Mid \u03b8e min:</span><span>' + (d.thetaE_min != null ? d.thetaE_min.toFixed(1) + ' K @ ' + d.thetaE_min_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
+    html += '<span style="color:var(--slate);" title="Boundary-layer \u03b8e minus mid-level minimum \u2014 measure of conditional instability / downdraft CAPE potential">\u0394\u03b8e:</span><span>' + ((d.thetaE_sfc != null && d.thetaE_min != null) ? (d.thetaE_sfc - d.thetaE_min).toFixed(1) + ' K' : '\u2014') + '</span>';
+    html += '<span style="color:var(--slate);" title="Lowest pressure where RH first drops below 90% \u2014 depth of moist column">Sat depth:</span><span>' + (d.sat_depth_p != null ? d.sat_depth_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
     html += '</div>';
 
-    // Surface info
+    // \u2500\u2500 Parcel theory block (only when toggled on) \u2500\u2500
+    if (parcelOn) {
+        html += '<div style="margin-top:8px;font-weight:600;color:var(--um-green);margin-bottom:4px;">Parcel (surface-based)</div>';
+        html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 8px;font-size:9px;">';
+        html += '<span style="color:var(--slate);">CAPE:</span><span>' + (d.cape != null ? d.cape + ' J/kg' : '\u2014') + '</span>';
+        html += '<span style="color:var(--slate);">CIN:</span><span>' + (d.cin != null ? d.cin + ' J/kg' : '\u2014') + '</span>';
+        html += '<span style="color:var(--slate);">LCL:</span><span>' + (d.lcl_p != null ? d.lcl_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
+        html += '<span style="color:var(--slate);">LFC:</span><span>' + (d.lfc_p != null ? d.lfc_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
+        html += '<span style="color:var(--slate);">EL:</span><span>' + (d.el_p != null ? d.el_p.toFixed(0) + ' hPa' : '\u2014') + '</span>';
+        html += '</div>';
+        html += '<div style="margin-top:4px;font-size:8px;color:var(--text-dim);font-style:italic;">Parcel theory has limited utility in TC eyewall / inner-core sondes (slantwise ascent, near-saturated column).</div>';
+    }
+
+    // \u2500\u2500 Surface info \u2500\u2500
     html += '<div style="margin-top:8px;font-weight:600;color:var(--um-green);margin-bottom:4px;">Surface</div>';
     html += '<div style="font-size:9px;">';
     html += 'Hit surface: ' + (sonde.hit_surface ? 'Yes' : 'No') + '<br>';
@@ -11448,7 +11476,7 @@ function _gaSondeRenderSkewTInfo(profiles, sonde, idx) {
     if (sonde.hyd_sfcp) html += 'Hyd SfcP: ' + sonde.hyd_sfcp.toFixed(1) + ' hPa<br>';
     html += '</div>';
 
-    // Max wind in profile
+    // \u2500\u2500 Max wind in profile \u2500\u2500
     var prof = sonde.profile || {};
     if (prof.wspd) {
         var maxW = 0, maxWp = null;

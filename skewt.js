@@ -6,8 +6,15 @@
  *   renderSkewT(profiles, divId) — render a Skew-T diagram into a Plotly div
  *   _buildWindBarbShapes(u, v, plev, xPos, staffLen, axRanges) — wind barb shapes
  *
- * profiles = { plev, t (K), q (kg/kg or g/kg), u, v }
- * After rendering, profiles._derived contains: cape, cin, pwat, lcl_p, lfc_p, el_p, freezing_p
+ * profiles = { plev, t (K), q (kg/kg or g/kg), u, v, showParcel (optional) }
+ *   showParcel:
+ *     true  — render parcel curve + CAPE/CIN shading (default for backward compat)
+ *     false — hide parcel curve + shading (TC-relevant default for inner-core sondes)
+ *
+ * After rendering, profiles._derived contains:
+ *   cape, cin, pwat, lcl_p, lfc_p, el_p, freezing_p,
+ *   thetaE_sfc (K, 0-500m mean), thetaE_min, thetaE_min_p,
+ *   sat_depth_p (lowest pressure where RH first drops below 90%).
  */
 
 function _buildWindBarbShapes(u, v, plev, xPos, staffLen, axRanges) {
@@ -238,7 +245,32 @@ function renderSkewT(profiles, divId) {
     for (var sii = 0; sii < plev.length; sii++) sortedIdx.push(sii);
     sortedIdx.sort(function(a, b) { return plev[b] - plev[a]; });
 
-    var derived = { cape: null, cin: null, pwat: null, lcl_p: null, lfc_p: null, el_p: null, freezing_p: null };
+    var derived = {
+        cape: null, cin: null, pwat: null,
+        lcl_p: null, lfc_p: null, el_p: null, freezing_p: null,
+        thetaE_sfc: null, thetaE_min: null, thetaE_min_p: null,
+        sat_depth_p: null,
+    };
+
+    // ── θe profile (Bolton 1980) — always computed; the most diagnostic
+    // single curve for TC sondes. Stored on profiles._thetaE for plotting,
+    // and the surface mean / mid-level minimum / saturation depth go into
+    // the derived block.
+    var thetaE = [];
+    for (var ki = 0; ki < plev.length; ki++) {
+        var pK = plev[ki], tK_ki = tK[ki], tdK_ki = (tdC[ki] != null ? tdC[ki] + 273.15 : null);
+        if (pK == null || tK_ki == null || tdK_ki == null) { thetaE.push(null); continue; }
+        // mixing ratio from dewpoint
+        var es_ki = 6.112 * Math.exp(17.67 * (tdK_ki - 273.15) / ((tdK_ki - 273.15) + 243.5));
+        var r_ki = eps * es_ki / Math.max(pK - es_ki, 1e-3);
+        // LCL temperature (Bolton eq 15)
+        var tLcl = 1.0 / (1.0 / (tdK_ki - 56.0) + Math.log(tK_ki / tdK_ki) / 800.0) + 56.0;
+        // θe (Bolton eq 38, simplified)
+        var thE = tK_ki * Math.pow(1000.0 / pK, 0.2854 * (1 - 0.28 * r_ki))
+                * Math.exp((3.376 / tLcl - 0.00254) * r_ki * 1000.0 * (1 + 0.81 * r_ki));
+        thetaE.push(isFinite(thE) ? thE : null);
+    }
+    profiles._thetaE = thetaE;
 
     if (sfcIdx >= 0) {
         var sfcT = tC[sfcIdx], sfcTd = tdC[sfcIdx], sfcP = plev[sfcIdx];
@@ -343,6 +375,40 @@ function renderSkewT(profiles, divId) {
                 var frac = tC[fk] / (tC[fk] - tC[fk+1]);
                 derived.freezing_p = plev[fk] + frac * (plev[fk+1] - plev[fk]);
                 break;
+            }
+        }
+
+        // Surface θe = mean over lowest 50 hPa above the surface (rough proxy
+        // for the boundary-layer entropy that the TC eyewall ingests).
+        var teSfcSum = 0, teSfcN = 0;
+        for (var ts = 0; ts < plev.length; ts++) {
+            if (plev[ts] != null && plev[ts] <= sfcP && plev[ts] >= sfcP - 50 && thetaE[ts] != null) {
+                teSfcSum += thetaE[ts]; teSfcN++;
+            }
+        }
+        if (teSfcN > 0) derived.thetaE_sfc = teSfcSum / teSfcN;
+
+        // Mid-level θe minimum (between 850 and 400 hPa). Low values aloft
+        // signal downdraft potential / entrainment of dry-air mid-level air.
+        var teMin = Infinity, teMinP = null;
+        for (var tm = 0; tm < plev.length; tm++) {
+            if (plev[tm] != null && plev[tm] <= 850 && plev[tm] >= 400 && thetaE[tm] != null) {
+                if (thetaE[tm] < teMin) { teMin = thetaE[tm]; teMinP = plev[tm]; }
+            }
+        }
+        if (isFinite(teMin)) { derived.thetaE_min = teMin; derived.thetaE_min_p = teMinP; }
+
+        // Saturation depth = first pressure (descending from sfc) where RH < 90%.
+        // Proxy for depth of moist column. Computed from q (mixing ratio) vs sat.
+        for (var sd = 0; sd < sortedIdx.length; sd++) {
+            var sdi = sortedIdx[sd];
+            if (plev[sdi] == null || plev[sdi] >= sfcP) continue;
+            if (qRaw && qRaw[sdi] != null && tC[sdi] != null) {
+                var qKgSd = qIsGkg ? qRaw[sdi] / 1000.0 : qRaw[sdi];
+                var eSd = qKgSd * plev[sdi] / (eps + 0.378 * qKgSd);
+                var esSd = satVaporPres(tC[sdi]);
+                var rhSd = esSd > 0 ? 100 * eSd / esSd : 0;
+                if (rhSd < 90) { derived.sat_depth_p = plev[sdi]; break; }
             }
         }
     }
@@ -466,8 +532,14 @@ function renderSkewT(profiles, divId) {
     var traces = [];
     traces = traces.concat(isothermTraces, dryAdiabatTraces, moistAdiabatTraces, mixRatioTraces);
 
+    // Whether to display the parcel curve + CAPE/CIN shading. Defaults to
+    // true for backward compatibility with TC-RADAR; Global Archive sets it
+    // to false because parcel theory has limited utility for TC sondes
+    // (slantwise eyewall ascent, near-saturated column → not local-buoyancy).
+    var _showParcel = profiles.showParcel !== false;
+
     // CAPE / CIN shading between parcel and environment
-    if (profiles._parcelT && derived.cape > 0) {
+    if (_showParcel && profiles._parcelT && derived.cape > 0) {
         // Positive buoyancy (CAPE) shading
         var capeX = [], capeY = [], cinX = [], cinY = [];
         for (var ci = 0; ci < plev.length; ci++) {
@@ -547,8 +619,8 @@ function renderSkewT(profiles, divId) {
         }),
     });
 
-    // Parcel path (dashed purple)
-    if (profiles._parcelT) {
+    // Parcel path (dashed purple) \u2014 gated by showParcel
+    if (_showParcel && profiles._parcelT) {
         var parcelSkew = profiles._parcelT.map(function(t, idx) {
             return t != null ? skewX(t, plev[idx]) : null;
         });
@@ -561,6 +633,12 @@ function renderSkewT(profiles, divId) {
             }),
         });
     }
+
+    // \u03b8e values are surfaced via the info panel (Sfc \u03b8e, Mid \u03b8e min, \u0394\u03b8e).
+    // Plotting \u03b8e on the Skew-T would require a secondary x-axis with its
+    // own scale (~320\u2013370 K), which competes with the skewed temperature
+    // axis and overlapping wind barbs \u2014 net visual cost outweighs benefit.
+    // The diagnostic value is in the panel readouts; the curve adds noise.
 
     // ── Axis labels ──
     var xTickVals = [], xTickText = [];
