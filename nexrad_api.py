@@ -853,6 +853,8 @@ def get_radar_frame(
         **hover_data,
         "bounds": metadata["bounds"],
         "site": site,
+        "site_lat": metadata["lat_center"],
+        "site_lon": metadata["lon_center"],
         "scan_time": metadata["scan_time"],
         "product": product,
         "tilt": metadata["tilt"],
