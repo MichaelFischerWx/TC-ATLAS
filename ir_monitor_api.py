@@ -3837,14 +3837,23 @@ def get_storm_weatherlab_ensemble(atcf_id: str):
 
 _GFS_FILTER_URL = "https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25.pl"
 _GFS_LATENCY_HOURS = 4.0       # NOMADS typically posts ~3.5h after cycle time
-_SHEAR_INNER_KM = 200.0        # vortex-mask inner radius
-_SHEAR_OUTER_KM = 800.0        # vortex-mask outer radius
+_SHEAR_INNER_KM = 200.0        # SHIPS annulus inner radius
+_SHEAR_OUTER_KM = 800.0        # SHIPS annulus outer radius
 _SHEAR_BOX_DEG = 9.0           # subset half-width in degrees (lat ~1000 km buffer)
 _SHEAR_CACHE_TTL = 6 * 3600    # 6 hours; one GFS cycle
-_SHEAR_CACHE_VER = "shear-v1"  # bump if computation changes
-_shear_mem_cache: dict = {}    # (atcf_id, cycle_iso) → {data, ts}
+_SHEAR_CACHE_VER = "shear-v2"  # bumped: cache key now includes method + params
+_shear_mem_cache: dict = {}    # (atcf_id, cycle_iso, params_key) → {data, ts}
 _shear_mem_lock = threading.Lock()
 _SHEAR_MEM_MAX = 200
+
+# Davis & Ahijevych (2008) Helmholtz-decomposition defaults. The paper used
+# 900-200 hPa shear over a 5400 km domain with the disturbance mask at
+# r ≤ 900 km. We default the mask radius to 500 km (a more "storm-felt"
+# scale) but keep the layer + evaluation at storm-center per the paper.
+_DA_LAYER_LOWER_HPA = 900
+_DA_LAYER_UPPER_HPA = 200
+_DA_DEFAULT_MASK_KM = 500.0    # disturbance mask: zero div/vort outside this
+_DA_DEFAULT_EVAL_KM = 500.0    # evaluation radius: 0–eval_km area-mean of env shear
 
 
 def _latest_available_gfs_cycle() -> tuple[str, str]:
@@ -3873,47 +3882,66 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return 2 * R * np.arcsin(np.minimum(np.sqrt(a), 1.0))
 
 
-def _gcs_get_shear(atcf_id: str, cycle_iso: str) -> Optional[dict]:
-    """Read a cached shear result from GCS, if present and fresh."""
+def _gcs_get_shear(atcf_id: str, cycle_iso: str,
+                   params_key: str = "ships") -> Optional[dict]:
+    """Read a cached shear result from GCS, if present and fresh.
+
+    params_key encodes method + tunables so different invocations don't
+    cross-pollinate (e.g. helmholtz with mask_km=500 vs mask_km=900).
+    """
     bucket = _get_rt_gcs_bucket()
     if bucket is None:
         return None
-    blob_name = f"shear/{_SHEAR_CACHE_VER}/{atcf_id.upper()}/{cycle_iso}.json"
+    blob_name = (
+        f"shear/{_SHEAR_CACHE_VER}/{atcf_id.upper()}/"
+        f"{cycle_iso}_{params_key}.json"
+    )
     try:
         blob = bucket.blob(blob_name)
         if not blob.exists():
             return None
         return json.loads(blob.download_as_text())
     except Exception as e:
-        logger.debug(f"GCS shear get failed for {atcf_id} {cycle_iso}: {e}")
+        logger.debug(f"GCS shear get failed for {atcf_id} {cycle_iso} {params_key}: {e}")
         return None
 
 
-def _gcs_put_shear(atcf_id: str, cycle_iso: str, payload: dict) -> None:
+def _gcs_put_shear(atcf_id: str, cycle_iso: str, payload: dict,
+                   params_key: str = "ships") -> None:
     """Write shear result to GCS (fire-and-forget)."""
     bucket = _get_rt_gcs_bucket()
     if bucket is None:
         return
-    blob_name = f"shear/{_SHEAR_CACHE_VER}/{atcf_id.upper()}/{cycle_iso}.json"
+    blob_name = (
+        f"shear/{_SHEAR_CACHE_VER}/{atcf_id.upper()}/"
+        f"{cycle_iso}_{params_key}.json"
+    )
     try:
         blob = bucket.blob(blob_name)
         blob.upload_from_string(
             json.dumps(payload), content_type="application/json"
         )
     except Exception as e:
-        logger.debug(f"GCS shear put failed for {atcf_id} {cycle_iso}: {e}")
+        logger.debug(f"GCS shear put failed for {atcf_id} {cycle_iso} {params_key}: {e}")
 
 
-def _fetch_gfs_grib2(slat: float, slon360: float, date_str: str, hour_str: str) -> Optional[bytes]:
-    """Pull a small GRIB2 slice from the NOMADS cgi-bin filter.
+def _fetch_gfs_grib2(slat: float, slon360: float, date_str: str, hour_str: str,
+                     levels: Optional[list] = None) -> Optional[bytes]:
+    """Pull a GRIB2 slice from the NOMADS cgi-bin filter.
 
-    Subsets to a ~9° box around the storm with only u/v at 200 and 850 hPa
-    — typically 30–50 KB. Returns raw GRIB2 bytes or None on failure.
-    The cgi-bin filter expects integer lat/lon bounds clipped to ±89/0–359
-    and may return an HTML error page instead of GRIB2 if the cycle isn't
-    yet published; we detect that by checking the magic bytes.
+    Default: u/v at 200 and 850 hPa over a ~9° box (SHIPS-style shear).
+    Pass `levels=[200, 900]` (or any list of standard pressure levels) to
+    pick a different layer set — used by the Helmholtz endpoint to grab
+    900 instead of 850.
+
+    Returns raw GRIB2 bytes or None on failure. The cgi-bin filter may
+    return an HTML error page instead of GRIB2 if the cycle isn't yet
+    published; we detect that by checking the magic bytes.
     """
     import requests as _req
+
+    if not levels:
+        levels = [200, 850]
 
     box = _SHEAR_BOX_DEG
     top = min(89.0, slat + box)
@@ -3925,19 +3953,21 @@ def _fetch_gfs_grib2(slat: float, slon360: float, date_str: str, hour_str: str) 
     lon_hi = slon360 + box
 
     def _one_fetch(left: float, right: float) -> Optional[bytes]:
-        params = {
-            "dir": f"/gfs.{date_str}/{hour_str}/atmos",
-            "file": f"gfs.t{hour_str}z.pgrb2.0p25.f000",
-            "var_UGRD": "on",
-            "var_VGRD": "on",
-            "lev_200_mb": "on",
-            "lev_850_mb": "on",
-            "subregion": "",
-            "toplat": f"{top:.2f}",
-            "leftlon": f"{left:.2f}",
-            "rightlon": f"{right:.2f}",
-            "bottomlat": f"{bot:.2f}",
-        }
+        params = [
+            ("dir", f"/gfs.{date_str}/{hour_str}/atmos"),
+            ("file", f"gfs.t{hour_str}z.pgrb2.0p25.f000"),
+            ("var_UGRD", "on"),
+            ("var_VGRD", "on"),
+        ]
+        for L in levels:
+            params.append((f"lev_{int(L)}_mb", "on"))
+        params += [
+            ("subregion", ""),
+            ("toplat", f"{top:.2f}"),
+            ("leftlon", f"{left:.2f}"),
+            ("rightlon", f"{right:.2f}"),
+            ("bottomlat", f"{bot:.2f}"),
+        ]
         try:
             r = _req.get(_GFS_FILTER_URL, params=params, timeout=30,
                          headers={"User-Agent": "TC-ATLAS/1.0"})
@@ -4077,6 +4107,228 @@ def _compute_gfs_shear(lat: float, lon: float, date_str: str, hour_str: str) -> 
             pass
 
 
+def _compute_gfs_helmholtz_shear(
+    lat: float,
+    lon: float,
+    date_str: str,
+    hour_str: str,
+    mask_km: float = _DA_DEFAULT_MASK_KM,
+    eval_km: float = _DA_DEFAULT_EVAL_KM,
+) -> Optional[dict]:
+    """Davis & Ahijevych (2008) environmental shear via Helmholtz decomposition.
+
+    Procedure (paper's eqs. 1–4):
+      1. Compute total deep-layer shear field Δv = v(200) − v(900) on the
+         GFS grid surrounding the storm.
+      2. Compute differential divergence δ = ∂Δu/∂x + ∂Δv/∂y and
+         differential vorticity ζ = ∂Δv/∂x − ∂Δu/∂y via central differences.
+      3. Mask both to zero outside `mask_km` from the storm center —
+         keeps only the disturbance contribution (paper used 900 km).
+      4. Solve ∇²ψ = ζ_masked and ∇²χ = δ_masked with homogeneous
+         Dirichlet BCs (ψ = χ = 0 on box edges) via DST-I — exact O(N² log N)
+         solver for the discrete Laplacian on a uniform grid.
+      5. Reconstruct disturbance shear:
+            Δv_ψ = (-∂ψ/∂y, +∂ψ/∂x)   (rotational, vortex)
+            Δv_χ = (+∂χ/∂x, +∂χ/∂y)   (irrotational, outflow/inflow)
+      6. Environmental shear = total − Δv_ψ − Δv_χ.
+      7. Report the env shear at the storm-center grid cell AND
+         area-averaged over 0–`eval_km` (paper-equivalent "storm-felt" mean).
+
+    Returns None on any failure (fetch, GRIB parse, sparse mask).
+    """
+    import os as _os
+    import tempfile
+    import numpy as np
+    import xarray as xr
+    try:
+        from scipy.fft import dstn, idstn
+    except Exception as e:
+        logger.warning(f"[helmholtz] scipy.fft.dstn unavailable: {e}")
+        return None
+
+    slon360 = lon % 360.0
+    slat = lat
+    grib_bytes = _fetch_gfs_grib2(
+        slat, slon360, date_str, hour_str,
+        levels=[_DA_LAYER_LOWER_HPA, _DA_LAYER_UPPER_HPA],
+    )
+    if grib_bytes is None:
+        return None
+
+    tmp_dir = tempfile.mkdtemp(prefix="tcatlas_helm_")
+    grib_path = _os.path.join(tmp_dir, "gfs_uv.grib2")
+    try:
+        with open(grib_path, "wb") as f:
+            f.write(grib_bytes)
+        try:
+            ds = xr.open_dataset(grib_path, engine="cfgrib",
+                                 backend_kwargs={"indexpath": ""})
+        except Exception as e:
+            logger.warning(f"[helmholtz] cfgrib open failed: {e}")
+            return None
+
+        try:
+            u_var = ds.get("u") or ds.get("U")
+            v_var = ds.get("v") or ds.get("V")
+            if u_var is None or v_var is None:
+                logger.warning(f"[helmholtz] u/v missing; vars: {list(ds.data_vars)}")
+                return None
+
+            lev_name = "isobaricInhPa" if "isobaricInhPa" in u_var.dims else "level"
+            lat_name = "latitude" if "latitude" in u_var.dims else "lat"
+            lon_name = "longitude" if "longitude" in u_var.dims else "lon"
+
+            u_lo = u_var.sel({lev_name: _DA_LAYER_LOWER_HPA}, method="nearest").values
+            v_lo = v_var.sel({lev_name: _DA_LAYER_LOWER_HPA}, method="nearest").values
+            u_up = u_var.sel({lev_name: _DA_LAYER_UPPER_HPA}, method="nearest").values
+            v_up = v_var.sel({lev_name: _DA_LAYER_UPPER_HPA}, method="nearest").values
+            lat_v = np.asarray(u_var[lat_name].values)
+            lon_v = np.asarray(u_var[lon_name].values)
+            lon_v360 = np.where(lon_v < 0, lon_v + 360.0, lon_v)
+
+            # Squeeze any extra leading dims (some cfgrib variants keep
+            # singleton time/step axes after .sel).
+            for arr in (u_lo, v_lo, u_up, v_up):
+                pass  # arrays are already 2D after .sel().values
+            while u_lo.ndim > 2: u_lo = u_lo[0]
+            while v_lo.ndim > 2: v_lo = v_lo[0]
+            while u_up.ndim > 2: u_up = u_up[0]
+            while v_up.ndim > 2: v_up = v_up[0]
+
+            # Ensure rows are sorted by ASCENDING latitude so that ∂/∂y is
+            # northward-positive. cfgrib often returns lat descending.
+            if len(lat_v) >= 2 and lat_v[1] < lat_v[0]:
+                lat_v = lat_v[::-1]
+                u_lo = u_lo[::-1, :]; v_lo = v_lo[::-1, :]
+                u_up = u_up[::-1, :]; v_up = v_up[::-1, :]
+
+            # Local Cartesian projection. cos(slat) for the lon-stride; valid
+            # for our small box even at moderate lats. R in METERS so dx/dy
+            # come out in meters (∇² will be in 1/m²).
+            R_m = 6371.0e3
+            cos_lat0 = float(np.cos(np.radians(slat)))
+            dy = R_m * np.radians(abs(lat_v[1] - lat_v[0]))
+            dx = R_m * cos_lat0 * np.radians(abs(lon_v360[1] - lon_v360[0]))
+            Ny, Nx = u_lo.shape
+            box_km = max(Nx * dx, Ny * dy) / 1000.0
+
+            # Total deep-layer shear field (Δu, Δv = upper − lower).
+            du = u_up - u_lo
+            dv = v_up - v_lo
+
+            # Differential divergence + vorticity (central differences,
+            # zero at edges since we use [1:-1] slicing).
+            div = np.zeros_like(du)
+            vort = np.zeros_like(du)
+            div[:, 1:-1] = (du[:, 2:] - du[:, :-2]) / (2 * dx)
+            div[1:-1, :] += (dv[2:, :] - dv[:-2, :]) / (2 * dy)
+            vort[:, 1:-1] = (dv[:, 2:] - dv[:, :-2]) / (2 * dx)
+            vort[1:-1, :] -= (du[2:, :] - du[:-2, :]) / (2 * dy)
+
+            # Disturbance mask: zero δ, ζ outside mask_km from storm.
+            lats_g, lons_g = np.meshgrid(lat_v, lon_v360, indexing="ij")
+            dist = _haversine_km(slat, slon360, lats_g, lons_g)
+            mask_in = dist <= mask_km
+            n_in = int(mask_in.sum())
+            if n_in < 8:
+                logger.warning(f"[helmholtz] mask too sparse: {n_in} pts")
+                return None
+            div_m = np.where(mask_in, div, 0.0)
+            vort_m = np.where(mask_in, vort, 0.0)
+
+            # Solve Poisson via DST-I. Eigenvalues of the discrete Laplacian
+            # on Nx×Ny INTERIOR points with homogeneous Dirichlet BCs:
+            #   λ_pq = -[2(1-cos(πp/(Nx+1)))/dx² + 2(1-cos(πq/(Ny+1)))/dy²]
+            # so ψ_t = vort_t / λ → ψ = idstn(ψ_t).
+            def _poisson(rhs, dx_, dy_):
+                ny, nx = rhs.shape
+                ip = np.arange(1, ny + 1)
+                jp = np.arange(1, nx + 1)
+                ly = 2 * (1 - np.cos(np.pi * ip / (ny + 1))) / (dy_ ** 2)
+                lx = 2 * (1 - np.cos(np.pi * jp / (nx + 1))) / (dx_ ** 2)
+                Lx, Ly = np.meshgrid(lx, ly)
+                eig = -(Lx + Ly)
+                rhs_t = dstn(rhs, type=1, norm="ortho")
+                phi_t = rhs_t / eig
+                return idstn(phi_t, type=1, norm="ortho")
+
+            psi = _poisson(vort_m, dx, dy)
+            chi = _poisson(div_m, dx, dy)
+
+            # Disturbance components from gradients.
+            u_psi = np.zeros_like(psi); v_psi = np.zeros_like(psi)
+            u_chi = np.zeros_like(chi); v_chi = np.zeros_like(chi)
+            u_psi[1:-1, :] = -(psi[2:, :] - psi[:-2, :]) / (2 * dy)
+            v_psi[:, 1:-1] =  (psi[:, 2:] - psi[:, :-2]) / (2 * dx)
+            u_chi[:, 1:-1] =  (chi[:, 2:] - chi[:, :-2]) / (2 * dx)
+            v_chi[1:-1, :] =  (chi[2:, :] - chi[:-2, :]) / (2 * dy)
+            u_dist = u_psi + u_chi
+            v_dist = v_psi + v_chi
+
+            # Environmental shear field.
+            u_env = du - u_dist
+            v_env = dv - v_dist
+
+            # Storm-center grid-cell value (paper convention).
+            ic = int(np.argmin(np.abs(lat_v - slat)))
+            jc = int(np.argmin(np.abs(lon_v360 - slon360)))
+            u_env_ctr = float(u_env[ic, jc])
+            v_env_ctr = float(v_env[ic, jc])
+
+            # 0–eval_km area-mean (a useful "storm-felt" scalar summary).
+            eval_mask = dist <= eval_km
+            n_eval = int(eval_mask.sum())
+            u_env_avg = float(np.nanmean(u_env[eval_mask])) if n_eval else float("nan")
+            v_env_avg = float(np.nanmean(v_env[eval_mask])) if n_eval else float("nan")
+
+            mag_ms = float(np.sqrt(u_env_avg ** 2 + v_env_avg ** 2))
+            hdg = float((np.degrees(np.arctan2(u_env_avg, v_env_avg)) + 360.0) % 360.0)
+
+            # Diagnostic: compare against the storm-disturbance magnitude
+            # (how much the Helmholtz subtraction "took out").
+            u_dist_avg = float(np.nanmean(u_dist[eval_mask]))
+            v_dist_avg = float(np.nanmean(v_dist[eval_mask]))
+            mag_dist = float(np.sqrt(u_dist_avg ** 2 + v_dist_avg ** 2))
+
+            return {
+                "magnitude_ms": round(mag_ms, 2),
+                "magnitude_kt": round(mag_ms * 1.94384, 1),
+                "heading_deg": round(hdg, 1),
+                "du_ms": round(u_env_avg, 2),
+                "dv_ms": round(v_env_avg, 2),
+                # Center-cell value (paper's reporting convention).
+                "u_env_center_ms": round(u_env_ctr, 2),
+                "v_env_center_ms": round(v_env_ctr, 2),
+                "magnitude_center_ms": round(float(np.sqrt(u_env_ctr**2 + v_env_ctr**2)), 2),
+                "magnitude_center_kt": round(float(np.sqrt(u_env_ctr**2 + v_env_ctr**2)) * 1.94384, 1),
+                # How much of the original shear was attributed to the storm.
+                "disturbance_magnitude_ms": round(mag_dist, 2),
+                "disturbance_magnitude_kt": round(mag_dist * 1.94384, 1),
+                # Method parameters (echoed for audit).
+                "method": "helmholtz",
+                "layer_hpa": [_DA_LAYER_LOWER_HPA, _DA_LAYER_UPPER_HPA],
+                "mask_km": mask_km,
+                "eval_km": eval_km,
+                "domain_km": round(box_km, 0),
+                "n_grid_points_mask": n_in,
+                "n_grid_points_eval": n_eval,
+            }
+        finally:
+            try:
+                ds.close()
+            except Exception:
+                pass
+    except Exception as e:
+        logger.warning(f"[helmholtz] computation failed: {e}")
+        return None
+    finally:
+        try:
+            import shutil
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+
 def _resolve_storm_position(atcf_id: str) -> Optional[tuple[float, float, str]]:
     """Return (lat, lon, last_fix_iso) for an active storm or None."""
     aid_up = atcf_id.upper()
@@ -4099,15 +4351,46 @@ def _resolve_storm_position(atcf_id: str) -> Optional[tuple[float, float, str]]:
 
 
 @router.get("/storm/{atcf_id}/shear")
-def get_storm_shear(atcf_id: str):
-    """Return deep-layer (850→200 hPa) vortex-removed shear from the latest
-    GFS 0.25° analysis at the storm's current best-track position.
+def get_storm_shear(
+    atcf_id: str,
+    method: str = "ships",
+    mask_km: Optional[float] = None,
+    eval_km: Optional[float] = None,
+):
+    """Return vortex-removed deep-layer shear at the storm's current
+    best-track position from the latest GFS 0.25° analysis.
 
-    Annulus 200–800 km matches the SHIPS SHRD/SHTD convention. Heading is
-    "toward" (westerly shear → 90°). Cached per (atcf_id, cycle); GFS
-    refreshes every 6 hours so a typical user hits the cache after the
-    first request of each cycle.
+    Methods (?method=...):
+      * `ships` (default) — 200–800 km annular average of u/v at 850 +
+        200 hPa, vector difference. Matches SHIPS SHRD/SHTD.
+      * `helmholtz` — Davis & Ahijevych (2008): solve a Poisson problem
+        for the streamfunction ψ and velocity potential χ of the
+        differential vorticity / divergence field, mask the disturbance
+        within `mask_km` (default 500 km), reconstruct the rotational
+        + irrotational disturbance shear, subtract from the total. Layer
+        is 900 → 200 hPa per the paper. Result is reported as the
+        environmental shear area-averaged within `eval_km` (default
+        500 km) plus the storm-center grid-cell value.
+
+    Heading is "toward" (westerly shear → 90°). Cached per
+    (atcf_id, cycle, method, params); GFS refreshes every 6 hours.
     """
+    method = (method or "ships").lower()
+    if method not in ("ships", "helmholtz"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown method '{method}'. Valid: ships, helmholtz.",
+        )
+    if method == "helmholtz":
+        m_km = float(mask_km) if mask_km is not None else _DA_DEFAULT_MASK_KM
+        e_km = float(eval_km) if eval_km is not None else _DA_DEFAULT_EVAL_KM
+        if not (50.0 <= m_km <= 2000.0):
+            raise HTTPException(status_code=400, detail="mask_km must be in [50, 2000].")
+        if not (50.0 <= e_km <= 1500.0):
+            raise HTTPException(status_code=400, detail="eval_km must be in [50, 1500].")
+    else:
+        m_km = e_km = None  # not used for ships
+
     pos = _resolve_storm_position(atcf_id)
     if pos is None:
         raise HTTPException(status_code=404, detail=f"No position found for {atcf_id}")
@@ -4115,7 +4398,15 @@ def get_storm_shear(atcf_id: str):
 
     date_str, hour_str = _latest_available_gfs_cycle()
     cycle_iso = f"{date_str}T{hour_str}"
-    cache_key = (atcf_id.upper(), cycle_iso)
+    # Cache key includes method + params so different invocations don't
+    # cross-pollinate (different mask radii produce genuinely different
+    # results — caching them under one key would silently serve the wrong
+    # answer to the second caller).
+    if method == "helmholtz":
+        params_key = f"helmholtz:m{int(m_km)}:e{int(e_km)}"
+    else:
+        params_key = "ships"
+    cache_key = (atcf_id.upper(), cycle_iso, params_key)
 
     with _shear_mem_lock:
         hit = _shear_mem_cache.get(cache_key)
@@ -4125,8 +4416,10 @@ def get_storm_shear(atcf_id: str):
                 headers={"Cache-Control": "public, max-age=1800"},
             )
 
-    # Try GCS warm cache before hitting OPeNDAP
-    gcs_hit = _gcs_get_shear(atcf_id, cycle_iso)
+    # GCS warm cache. The helper bakes method+params into the blob name
+    # so old SHIPS-only entries (shear-v1) don't collide with the new
+    # schema (shear-v2 with method/params split).
+    gcs_hit = _gcs_get_shear(atcf_id, cycle_iso, params_key)
     if gcs_hit is not None:
         with _shear_mem_lock:
             _shear_mem_cache[cache_key] = {"data": gcs_hit, "ts": time.time()}
@@ -4137,18 +4430,27 @@ def get_storm_shear(atcf_id: str):
             headers={"Cache-Control": "public, max-age=1800"},
         )
 
-    # Compute fresh
-    shear = _compute_gfs_shear(slat, slon, date_str, hour_str)
+    # Compute fresh.
+    if method == "helmholtz":
+        shear = _compute_gfs_helmholtz_shear(slat, slon, date_str, hour_str,
+                                             mask_km=m_km, eval_km=e_km)
+    else:
+        shear = _compute_gfs_shear(slat, slon, date_str, hour_str)
+
+    # Fall back one cycle if NOMADS hasn't published yet
     if shear is None:
-        # Fall back one cycle if NOMADS hasn't published yet
         try:
             cyc_dt = _dt.strptime(date_str + hour_str, "%Y%m%d%H").replace(tzinfo=timezone.utc)
             cyc_dt -= timedelta(hours=6)
             date_str = cyc_dt.strftime("%Y%m%d")
             hour_str = cyc_dt.strftime("%H")
             cycle_iso = f"{date_str}T{hour_str}"
-            cache_key = (atcf_id.upper(), cycle_iso)
-            shear = _compute_gfs_shear(slat, slon, date_str, hour_str)
+            cache_key = (atcf_id.upper(), cycle_iso, params_key)
+            if method == "helmholtz":
+                shear = _compute_gfs_helmholtz_shear(slat, slon, date_str, hour_str,
+                                                     mask_km=m_km, eval_km=e_km)
+            else:
+                shear = _compute_gfs_shear(slat, slon, date_str, hour_str)
         except Exception:
             shear = None
 
@@ -4164,9 +4466,12 @@ def get_storm_shear(atcf_id: str):
         "lon": slon,
         "last_fix_utc": last_fix,
         "gfs_cycle_utc": f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}T{hour_str}:00:00Z",
-        "source": "GFS 0.25° analysis (NOMADS OPeNDAP)",
+        "source": "GFS 0.25° analysis (NOMADS cgi-bin filter)",
         **shear,
     }
+    # SHIPS path doesn't echo `method` in its result dict; tag it for
+    # symmetry so frontends can dispatch on the field reliably.
+    payload.setdefault("method", "ships")
 
     with _shear_mem_lock:
         _shear_mem_cache[cache_key] = {"data": payload, "ts": time.time()}
@@ -4174,7 +4479,7 @@ def get_storm_shear(atcf_id: str):
             _shear_mem_cache.pop(next(iter(_shear_mem_cache)))
     threading.Thread(
         target=_gcs_put_shear,
-        args=(atcf_id, cycle_iso, payload),
+        args=(atcf_id, cycle_iso, payload, params_key),
         daemon=True,
     ).start()
 
