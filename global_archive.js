@@ -2722,7 +2722,7 @@ function renderCompareTimeline() {
             for (var i = 0; i < track.length; i++) {
                 if (track[i].w && track[i].w > maxW) {
                     maxW = track[i].w;
-                    refTime = new Date(track[i].t).getTime();
+                    refTime = _parseUtcMs(track[i].t);
                 }
             }
         }
@@ -4007,9 +4007,26 @@ function updateHovCenterMarker(frameDtStr) {
     }
 }
 
+// Robust UTC parser. Two ambiguous formats reach this codebase:
+//   IR frame datetimes from the API:  "2024-10-08 21:00 UTC"
+//   IBTrACS track timestamps:         "2024-10-08T21:00"
+// `new Date()` of either is browser-dependent (some treat the no-tz
+// ISO form as local time, others as UTC; Safari < 17 famously
+// disagreed with Chrome). Force UTC for both by normalizing first.
+function _parseUtcMs(s) {
+    if (!s) return NaN;
+    if (typeof s !== 'string') s = String(s);
+    var iso = s.replace(' UTC', '').replace(' ', 'T');
+    // If no offset is present, append 'Z' so the spec-compliant parser
+    // resolves the timestamp as UTC regardless of host locale.
+    if (!/[Zz]|[+-]\d\d:?\d\d$/.test(iso)) iso += 'Z';
+    return Date.parse(iso);
+}
+
 function findTrackPointAtTime(track, dtStr) {
     if (!track || !track.length || !dtStr) return null;
-    var targetMs = new Date(dtStr).getTime();
+    var targetMs = _parseUtcMs(dtStr);
+    if (isNaN(targetMs)) return null;
 
     // Find the two flanking track points for interpolation
     var before = null, after = null;
@@ -4017,7 +4034,8 @@ function findTrackPointAtTime(track, dtStr) {
 
     for (var i = 0; i < track.length; i++) {
         if (!track[i].t || !track[i].la) continue;
-        var ptMs = new Date(track[i].t).getTime();
+        var ptMs = _parseUtcMs(track[i].t);
+        if (isNaN(ptMs)) continue;
 
         if (ptMs <= targetMs && ptMs > beforeMs) {
             before = track[i];
@@ -4453,12 +4471,12 @@ function syncIRToTime(clickedTime) {
     if (!irMeta || !irMeta.frames) return;
 
     // Find nearest frame to clicked time
-    var targetMs = new Date(clickedTime).getTime();
+    var targetMs = _parseUtcMs(clickedTime);
     var bestIdx = 0;
     var bestDiff = Infinity;
 
     irMeta.frames.forEach(function (f, idx) {
-        var diff = Math.abs(new Date(f.datetime).getTime() - targetMs);
+        var diff = Math.abs(_parseUtcMs(f.datetime) - targetMs);
         if (diff < bestDiff) {
             bestDiff = diff;
             bestIdx = idx;
@@ -5991,18 +6009,18 @@ function _getGifFrameRange() {
         return { startIdx: 0, endIdx: totalFrames - 1 };
     }
 
-    var peakMs = new Date(peakTime).getTime();
+    var peakMs = _parseUtcMs(peakTime);
     var windowMs = hours * 3600000;
     var startIdx = 0, endIdx = totalFrames - 1;
 
     for (var i = 0; i < totalFrames; i++) {
         if (!irMeta.frames[i] || !irMeta.frames[i].datetime) continue;
-        var fMs = new Date(irMeta.frames[i].datetime).getTime();
+        var fMs = _parseUtcMs(irMeta.frames[i].datetime);
         if (fMs >= peakMs - windowMs) { startIdx = i; break; }
     }
     for (var j = totalFrames - 1; j >= 0; j--) {
         if (!irMeta.frames[j] || !irMeta.frames[j].datetime) continue;
-        var fMs2 = new Date(irMeta.frames[j].datetime).getTime();
+        var fMs2 = _parseUtcMs(irMeta.frames[j].datetime);
         if (fMs2 <= peakMs + windowMs) { endIdx = j; break; }
     }
 
@@ -6263,8 +6281,8 @@ window.startGifExport = function () {
         // Time positions for each frame (for intensity chart marker)
         var firstDtMs = 0, spanMs2 = 1;
         if (irMeta.frames && irMeta.frames[frameIndices[0]] && irMeta.frames[frameIndices[frameIndices.length - 1]]) {
-            firstDtMs = new Date(irMeta.frames[frameIndices[0]].datetime).getTime();
-            var lastDtMs2 = new Date(irMeta.frames[frameIndices[frameIndices.length - 1]].datetime).getTime();
+            firstDtMs = _parseUtcMs(irMeta.frames[frameIndices[0]].datetime);
+            var lastDtMs2 = _parseUtcMs(irMeta.frames[frameIndices[frameIndices.length - 1]].datetime);
             spanMs2 = Math.max(1, lastDtMs2 - firstDtMs);
         }
 
@@ -6542,7 +6560,7 @@ window.startGifExport = function () {
                     var chartY = 24 + irImageH;
                     var chartX = 4;
                     var chartW = outW - 8;
-                    var fMs = irMeta.frames[fIdx] ? new Date(irMeta.frames[fIdx].datetime).getTime() : 0;
+                    var fMs = irMeta.frames[fIdx] ? _parseUtcMs(irMeta.frames[fIdx].datetime) : 0;
                     var currentFrac = (fMs - firstDtMs) / spanMs2;
                     currentFrac = Math.max(0, Math.min(1, currentFrac));
                     _drawIntensityChart(compCtx, chartX, chartY, chartW, intensityH, currentFrac);
@@ -8289,13 +8307,13 @@ function _gcDistNm(lat1, lon1, lat2, lon2) {
 function _interpBestTrack(track, targetTime) {
     if (!track || track.length === 0) return null;
 
-    var tgt = new Date(targetTime).getTime();
+    var tgt = _parseUtcMs(targetTime);
     if (isNaN(tgt)) return null;
 
     // Find bounding track points
     for (var i = 0; i < track.length - 1; i++) {
-        var t0 = new Date(track[i].t).getTime();
-        var t1 = new Date(track[i + 1].t).getTime();
+        var t0 = _parseUtcMs(track[i].t);
+        var t1 = _parseUtcMs(track[i + 1].t);
         if (isNaN(t0) || isNaN(t1)) continue;
 
         if (tgt >= t0 && tgt <= t1) {
@@ -8310,8 +8328,8 @@ function _interpBestTrack(track, targetTime) {
     }
 
     // Exact match on first or last point
-    var first = new Date(track[0].t).getTime();
-    var last = new Date(track[track.length - 1].t).getTime();
+    var first = _parseUtcMs(track[0].t);
+    var last = _parseUtcMs(track[track.length - 1].t);
     if (Math.abs(tgt - first) < 3600000) return { lat: track[0].la, lon: track[0].lo, wind: track[0].w };
     if (Math.abs(tgt - last) < 3600000) return { lat: track[track.length - 1].la, lon: track[track.length - 1].lo, wind: track[track.length - 1].w };
 
