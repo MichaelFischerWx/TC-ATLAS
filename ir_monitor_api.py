@@ -3841,7 +3841,13 @@ _SHEAR_INNER_KM = 200.0        # SHIPS annulus inner radius
 _SHEAR_OUTER_KM = 800.0        # SHIPS annulus outer radius
 _SHEAR_BOX_DEG = 9.0           # subset half-width in degrees (lat ~1000 km buffer)
 _SHEAR_CACHE_TTL = 6 * 3600    # 6 hours; one GFS cycle
-_SHEAR_CACHE_VER = "shear-v2"  # bumped: cache key now includes method + params
+# Bumped to env-v3 after the env-profile + Helmholtz merge: payload
+# combines the SHIPS deep-layer summary, the full vertical profile
+# (u, v, T, RH, q at every level for Skew-T + shear-vs-pressure),
+# and supports the Davis-Ahijevych Helmholtz method as an opt-in.
+# Cache key includes method + params so SHIPS, env-profile, and
+# Helmholtz-tuned variants don't cross-pollinate.
+_SHEAR_CACHE_VER = "env-v3"
 _shear_mem_cache: dict = {}    # (atcf_id, cycle_iso, params_key) → {data, ts}
 _shear_mem_lock = threading.Lock()
 _SHEAR_MEM_MAX = 200
@@ -3854,6 +3860,11 @@ _DA_LAYER_LOWER_HPA = 900
 _DA_LAYER_UPPER_HPA = 200
 _DA_DEFAULT_MASK_KM = 500.0    # disturbance mask: zero div/vort outside this
 _DA_DEFAULT_EVAL_KM = 500.0    # evaluation radius: 0–eval_km area-mean of env shear
+
+# Standard pressure levels we pull for the env profile + Skew-T.
+# Includes 900 (Davis-Ahijevych) and 850 (SHIPS) so a single GRIB
+# fetch services every supported method. ~400 KB GRIB2 for a 9° box.
+_GFS_PROFILE_LEVELS = [1000, 925, 900, 850, 700, 500, 400, 300, 250, 200, 150, 100]
 
 
 def _latest_available_gfs_cycle() -> tuple[str, str]:
@@ -3926,22 +3937,29 @@ def _gcs_put_shear(atcf_id: str, cycle_iso: str, payload: dict,
 
 
 def _fetch_gfs_grib2(slat: float, slon360: float, date_str: str, hour_str: str,
-                     levels: Optional[list] = None) -> Optional[bytes]:
-    """Pull a GRIB2 slice from the NOMADS cgi-bin filter.
+                     levels: Optional[list] = None,
+                     vars_: Optional[list] = None) -> Optional[bytes]:
+    """Pull a GRIB2 slice from the NOMADS cgi-bin filter covering pressure-
+    level u/v/T/RH (defaults) over a ~9° box around the storm.
 
-    Default: u/v at 200 and 850 hPa over a ~9° box (SHIPS-style shear).
-    Pass `levels=[200, 900]` (or any list of standard pressure levels) to
-    pick a different layer set — used by the Helmholtz endpoint to grab
-    900 instead of 850.
+    Defaults serve every supported shear method out of one fetch:
+      * SHIPS deep-layer (200 ↔ 850)
+      * Davis-Ahijevych Helmholtz (200 ↔ 900)
+      * Full env-profile + Skew-T (all 12 levels)
+    so we never round-trip GFS twice for the same storm/cycle.
 
-    Returns raw GRIB2 bytes or None on failure. The cgi-bin filter may
-    return an HTML error page instead of GRIB2 if the cycle isn't yet
-    published; we detect that by checking the magic bytes.
+    `levels` and `vars_` overrides are available for callers that want
+    a smaller/cheaper subset. Returns raw GRIB2 bytes or None on failure.
+    The cgi-bin filter may return an HTML error page instead of GRIB2 if
+    the cycle isn't yet published; we detect that by checking the magic
+    bytes.
     """
     import requests as _req
 
     if not levels:
-        levels = [200, 850]
+        levels = list(_GFS_PROFILE_LEVELS)
+    if not vars_:
+        vars_ = ["UGRD", "VGRD", "TMP", "RH"]
 
     box = _SHEAR_BOX_DEG
     top = min(89.0, slat + box)
@@ -3953,39 +3971,44 @@ def _fetch_gfs_grib2(slat: float, slon360: float, date_str: str, hour_str: str,
     lon_hi = slon360 + box
 
     def _one_fetch(left: float, right: float) -> Optional[bytes]:
+        # Build (varname, level) cross-product as repeated query params.
+        # cgi-bin filter accepts each var_X=on and lev_X_mb=on as on/off
+        # toggles; the filter then emits all (var × level) pairs that
+        # exist in the source GRIB2. Use a list-of-tuples (not dict) so
+        # multiple lev_X_mb=on params survive urlencoding.
         params = [
             ("dir", f"/gfs.{date_str}/{hour_str}/atmos"),
             ("file", f"gfs.t{hour_str}z.pgrb2.0p25.f000"),
-            ("var_UGRD", "on"),
-            ("var_VGRD", "on"),
         ]
+        for v in vars_:
+            params.append((f"var_{v}", "on"))
         for L in levels:
             params.append((f"lev_{int(L)}_mb", "on"))
         params += [
             ("subregion", ""),
-            ("toplat", f"{top:.2f}"),
-            ("leftlon", f"{left:.2f}"),
-            ("rightlon", f"{right:.2f}"),
+            ("toplat",    f"{top:.2f}"),
+            ("leftlon",   f"{left:.2f}"),
+            ("rightlon",  f"{right:.2f}"),
             ("bottomlat", f"{bot:.2f}"),
         ]
         try:
-            r = _req.get(_GFS_FILTER_URL, params=params, timeout=30,
+            r = _req.get(_GFS_FILTER_URL, params=params, timeout=45,
                          headers={"User-Agent": "TC-ATLAS/1.0"})
             if r.status_code != 200:
-                logger.warning(f"[shear] cgi-bin HTTP {r.status_code}")
+                logger.warning(f"[env] cgi-bin HTTP {r.status_code}")
                 return None
             data = r.content
             if not data.startswith(b"GRIB"):
                 # cgi-bin sometimes returns an HTML 200 with an error
                 # message body when the file isn't yet on disk.
                 logger.warning(
-                    f"[shear] non-GRIB response for {date_str} {hour_str}z "
+                    f"[env] non-GRIB response for {date_str} {hour_str}z "
                     f"({len(data)} bytes); first 80: {data[:80]!r}"
                 )
                 return None
             return data
         except Exception as e:
-            logger.warning(f"[shear] cgi-bin fetch failed: {e}")
+            logger.warning(f"[env] cgi-bin fetch failed: {e}")
             return None
 
     if lon_lo < 0 or lon_hi > 360:
@@ -4025,51 +4048,65 @@ def _compute_gfs_shear(lat: float, lon: float, date_str: str, hour_str: str) -> 
             return None
 
         try:
-            # cfgrib names: u, v on isobaricInhPa coordinate.
-            # The filter request gives us exactly two pressure levels (200, 850).
-            u_var = ds["u"] if "u" in ds else ds.get("U")
-            v_var = ds["v"] if "v" in ds else ds.get("V")
+            # cfgrib names: u, v, t (Kelvin), r (RH %) all on isobaricInhPa.
+            u_var = ds.get("u") or ds.get("U")
+            v_var = ds.get("v") or ds.get("V")
+            t_var = ds.get("t") or ds.get("T")
+            r_var = ds.get("r") or ds.get("R")  # RH %
             if u_var is None or v_var is None:
-                logger.warning(f"[shear] u/v vars missing in GRIB2; have: {list(ds.data_vars)}")
+                logger.warning(f"[env] u/v missing; vars: {list(ds.data_vars)}")
                 return None
 
-            # Coord names in cfgrib output
             lev_name = "isobaricInhPa" if "isobaricInhPa" in u_var.dims else "level"
             lat_name = "latitude" if "latitude" in u_var.dims else "lat"
             lon_name = "longitude" if "longitude" in u_var.dims else "lon"
 
-            u200 = u_var.sel({lev_name: 200}, method="nearest")
-            v200 = v_var.sel({lev_name: 200}, method="nearest")
-            u850 = u_var.sel({lev_name: 850}, method="nearest")
-            v850 = v_var.sel({lev_name: 850}, method="nearest")
-
-            lat_vals = u200[lat_name].values
-            lon_vals = u200[lon_name].values
-            # Normalize lon to 0–360 for distance math (cfgrib may return ±180)
+            lat_vals = u_var[lat_name].values
+            lon_vals = u_var[lon_name].values
             lon_vals_360 = np.where(lon_vals < 0, lon_vals + 360.0, lon_vals)
-
             lats_g, lons_g = np.meshgrid(lat_vals, lon_vals_360, indexing="ij")
             dist_km = _haversine_km(slat, slon360, lats_g, lons_g)
             mask = (dist_km >= _SHEAR_INNER_KM) & (dist_km <= _SHEAR_OUTER_KM)
             n_pts = int(mask.sum())
             if n_pts < 8:
-                logger.warning(f"[shear] mask too sparse: {n_pts} pts for {slat},{slon360}")
+                logger.warning(f"[env] mask too sparse: {n_pts} pts for {slat},{slon360}")
                 return None
 
-            def _avg(da):
+            def _avg2d(da):
                 arr = np.asarray(da.values)
-                # If the array has an extra leading dim (some cfgrib versions
-                # keep singleton time/step), squeeze it.
                 while arr.ndim > 2:
                     arr = arr[0]
                 vals = arr[mask]
                 vals = vals[np.isfinite(vals)]
                 return float(vals.mean()) if vals.size else float("nan")
 
-            u200a = _avg(u200); v200a = _avg(v200)
-            u850a = _avg(u850); v850a = _avg(v850)
-            if any(not np.isfinite(x) for x in (u200a, v200a, u850a, v850a)):
-                logger.warning("[shear] non-finite annular averages")
+            # Build the per-level annular profile. cfgrib presents the levels
+            # in source order (which the GFS GRIB happens to emit top-down,
+            # i.e. 100 → 1000); we sort descending pressure for a tidy profile.
+            levs_grib = list(u_var[lev_name].values)
+            order = sorted(range(len(levs_grib)), key=lambda i: -levs_grib[i])
+            plev_sorted = [int(levs_grib[i]) for i in order]
+            u_prof = []; v_prof = []; t_prof = []; rh_prof = []
+            for i in order:
+                u_prof.append(round(_avg2d(u_var.isel({lev_name: i})), 2))
+                v_prof.append(round(_avg2d(v_var.isel({lev_name: i})), 2))
+                t_prof.append(round(_avg2d(t_var.isel({lev_name: i})), 2)
+                              if t_var is not None else None)
+                rh_prof.append(round(_avg2d(r_var.isel({lev_name: i})), 1)
+                               if r_var is not None else None)
+
+            # Pull deep-layer summary from the same profile so 850→200 hPa
+            # always agrees with the levels we display in the Skew-T.
+            def _at(level):
+                if level not in plev_sorted:
+                    return None, None
+                k = plev_sorted.index(level)
+                return u_prof[k], v_prof[k]
+            u850a, v850a = _at(850)
+            u200a, v200a = _at(200)
+            if any(x is None or not np.isfinite(x)
+                   for x in (u200a, v200a, u850a, v850a)):
+                logger.warning("[env] missing 200/850 hPa in profile")
                 return None
 
             du_ms = u200a - u850a
@@ -4077,7 +4114,21 @@ def _compute_gfs_shear(lat: float, lon: float, date_str: str, hour_str: str) -> 
             mag_ms = float(np.sqrt(du_ms ** 2 + dv_ms ** 2))
             hdg = float((np.degrees(np.arctan2(du_ms, dv_ms)) + 360.0) % 360.0)
 
+            # Convert RH → specific humidity (q, kg/kg) for skewt.js so we
+            # don't have to teach it RH semantics. Bolton/Tetens for es;
+            # q = ε e / (p - 0.378 e). ε = Rd/Rv = 0.622.
+            q_prof = []
+            for k, pHpa in enumerate(plev_sorted):
+                if t_prof[k] is None or rh_prof[k] is None:
+                    q_prof.append(None); continue
+                tC = t_prof[k] - 273.15
+                es = 6.112 * np.exp(17.67 * tC / (tC + 243.5))
+                e = max(0.0, (rh_prof[k] / 100.0) * es)
+                q = 0.622 * e / max(pHpa - 0.378 * e, 1e-3)
+                q_prof.append(round(float(q), 6))
+
             return {
+                # Existing summary fields (unchanged contract).
                 "magnitude_ms": round(mag_ms, 2),
                 "magnitude_kt": round(mag_ms * 1.94384, 1),
                 "heading_deg": round(hdg, 1),
@@ -4090,6 +4141,16 @@ def _compute_gfs_shear(lat: float, lon: float, date_str: str, hour_str: str) -> 
                 "annulus_km": [_SHEAR_INNER_KM, _SHEAR_OUTER_KM],
                 "layer_hpa": [850, 200],
                 "n_grid_points": n_pts,
+                # New profile fields — annular-mean vertical structure
+                # for shear-vs-pressure plots and an environmental Skew-T.
+                "profile": {
+                    "plev_hpa": plev_sorted,
+                    "u_ms":     u_prof,
+                    "v_ms":     v_prof,
+                    "t_k":      t_prof,
+                    "rh_pct":   rh_prof,
+                    "q_kgkg":   q_prof,
+                },
             }
         finally:
             try:
