@@ -138,6 +138,28 @@ html, body { margin: 0; padding: 0; }
    not to the viewport — which put it behind the sticky topbar). */
 #ir-main { position: relative; }
 
+/* ── Env Profile toggle button (Storm Info panel) ───────────── */
+.rt-env-toggle-btn {
+    font-size: 0.7rem;
+    padding: 4px 10px;
+    border-radius: 4px;
+    border: 1px solid var(--border-light);
+    background: var(--surface);
+    color: var(--text);
+    cursor: pointer;
+    font-family: inherit;
+    transition: background 0.15s, border-color 0.15s;
+}
+.rt-env-toggle-btn:hover {
+    background: var(--surface-raised);
+    border-color: var(--um-green);
+}
+.rt-env-toggle-btn.active {
+    background: rgba(74, 155, 110, 0.15);
+    border-color: var(--um-green);
+    color: var(--um-green);
+}
+
 /* ── GIBS feed staleness banner ─────────────────────────────── */
 /* `top` is measured from #ir-main's natural-flow top, which sits
    immediately below the sticky topbar. The position:fixed secondary

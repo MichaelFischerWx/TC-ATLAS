@@ -2615,10 +2615,15 @@
         return dirs[idx];
     }
 
+    // Per-storm cache of the full /shear response (includes the new
+    // env-profile fields). Keyed by ATCF ID; reset on detail-view open.
+    var _rtEnvCache = {};
+
     /**
-     * Fetch GFS-derived deep-layer shear for the active storm and paint
-     * the Storm Info "Shear" row. Quiet on failure — the row falls back
-     * to "—" so the rest of the panel stays clean.
+     * Fetch GFS-derived shear + env profile for the active storm.
+     * Paints the Storm Info "Shear" row immediately; profile data is
+     * cached for the Env Profile reveal (Skew-T + shear-vs-pressure).
+     * Quiet on failure — the row falls back to "—".
      */
     function loadStormShear(atcfId) {
         var el = document.getElementById('ir-info-shear');
@@ -2626,17 +2631,22 @@
         fetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) + '/shear')
             .then(function (r) { return r.ok ? r.json() : null; })
             .then(function (j) {
-                // Bail if the user navigated away while the request was in flight
                 if (!j || currentStormId !== atcfId) return;
+                _rtEnvCache[atcfId] = j;
                 var dir = _compassDir(j.heading_deg);
                 el.textContent = j.magnitude_kt.toFixed(0) + ' kt @ ' +
                     Math.round(j.heading_deg) + '° (' + dir + ')';
-                // Hover tooltip with attribution + the per-level annular winds
                 el.title = 'GFS 0.25° analysis ' + (j.gfs_cycle_utc || '') + '\n' +
                     '850–200 hPa shear, 200–800 km annulus\n' +
                     'u200/v200: ' + j.u200_ms + '/' + j.v200_ms + ' m/s\n' +
                     'u850/v850: ' + j.u850_ms + '/' + j.v850_ms + ' m/s\n' +
                     'n grid points: ' + j.n_grid_points;
+                // If the user already had Env Profile open from a prior
+                // storm, re-render with the new data so it stays in sync.
+                var panel = document.getElementById('rt-env-panel');
+                if (panel && panel.style.display !== 'none') {
+                    _rtRenderEnvProfile(j);
+                }
             })
             .catch(function () {
                 if (currentStormId === atcfId) {
@@ -2645,6 +2655,105 @@
                 }
             });
     }
+
+    /**
+     * Render the env Skew-T + shear-vs-pressure plot for the
+     * cached /shear response of the active storm.
+     */
+    function _rtRenderEnvProfile(payload) {
+        if (!payload || !payload.profile) return;
+        var prof = payload.profile;
+        if (!prof.plev_hpa || !prof.plev_hpa.length) return;
+
+        // Skew-T: pressure (hPa), T (K), q (kg/kg), u/v (m/s).
+        // showParcel:false because this is an *environmental* annular
+        // profile, not a sounding — local-buoyancy parcel theory does
+        // not apply to area-averaged TC environments.
+        if (typeof renderSkewT === 'function') {
+            renderSkewT({
+                plev: prof.plev_hpa,
+                t: prof.t_k,
+                q: prof.q_kgkg,
+                u: prof.u_ms,
+                v: prof.v_ms,
+                showParcel: false,
+            }, 'rt-env-skewt');
+        }
+
+        // Shear-vs-pressure: take vector difference of u/v at each level
+        // RELATIVE TO THE SURFACE (1000 hPa) so 0 → no shear vs the
+        // boundary layer. Plot magnitude vs pressure on a log-y axis.
+        var i0 = prof.plev_hpa.indexOf(1000);
+        if (i0 < 0) i0 = 0;  // fall back to highest-pressure level
+        var u0 = prof.u_ms[i0], v0 = prof.v_ms[i0];
+        var shearMagKt = [];
+        for (var i = 0; i < prof.plev_hpa.length; i++) {
+            var du = prof.u_ms[i] - u0;
+            var dv = prof.v_ms[i] - v0;
+            var mag = Math.sqrt(du * du + dv * dv) * 1.94384;
+            shearMagKt.push(mag);
+        }
+
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var axisCol = isDark ? '#8b9ec2' : '#374151';
+        var lineCol = isDark ? '#60a5fa' : '#1d4ed8';
+        var gridCol = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(15,22,35,0.08)';
+
+        Plotly.newPlot('rt-env-shear-prof', [{
+            x: shearMagKt,
+            y: prof.plev_hpa,
+            type: 'scatter',
+            mode: 'lines+markers',
+            name: 'Shear vs sfc',
+            line: { color: lineCol, width: 2 },
+            marker: { color: lineCol, size: 5 },
+            hovertemplate: '%{x:.1f} kt @ %{y} hPa<extra></extra>',
+        }], {
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: 'rgba(0,0,0,0)',
+            margin: { l: 38, r: 8, t: 18, b: 32 },
+            font: { family: 'DM Sans, sans-serif', color: axisCol, size: 9 },
+            title: { text: '|shear| vs sfc', font: { size: 9, color: axisCol }, x: 0.5, y: 0.98 },
+            xaxis: {
+                title: { text: 'kt', font: { size: 8, color: axisCol } },
+                color: axisCol, tickfont: { size: 8 },
+                gridcolor: gridCol, zeroline: false,
+            },
+            yaxis: {
+                title: { text: 'hPa', font: { size: 8, color: axisCol } },
+                color: axisCol, tickfont: { size: 8 },
+                gridcolor: gridCol, zeroline: false,
+                type: 'log', autorange: 'reversed',
+                tickvals: [100, 150, 200, 300, 500, 700, 1000],
+            },
+            showlegend: false,
+        }, { responsive: true, displayModeBar: false });
+    }
+
+    window.toggleEnvProfile = function () {
+        var btn = document.getElementById('rt-env-toggle-btn');
+        var panel = document.getElementById('rt-env-panel');
+        var status = document.getElementById('rt-env-status');
+        if (!panel || !btn) return;
+        var open = panel.style.display === 'none';
+        if (!open) {
+            panel.style.display = 'none';
+            btn.classList.remove('active');
+            return;
+        }
+        // Open. Show the panel and try to render from cache; if the
+        // /shear request is still in flight, the loadStormShear callback
+        // will re-render once it lands.
+        panel.style.display = 'block';
+        btn.classList.add('active');
+        var cached = _rtEnvCache[currentStormId];
+        if (cached) {
+            if (status) status.textContent = '';
+            _rtRenderEnvProfile(cached);
+        } else if (status) {
+            status.textContent = 'Loading…';
+        }
+    };
 
     /**
      * Refresh the detail view header with latest storm data from a poll.
