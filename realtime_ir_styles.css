@@ -133,10 +133,20 @@ html, body { margin: 0; padding: 0; }
     color: var(--text);
 }
 
+/* The map section needs to be a positioned container so the
+   absolutely-positioned feed-staleness banner anchors to it (and
+   not to the viewport — which put it behind the sticky topbar). */
+#ir-main { position: relative; }
+
 /* ── GIBS feed staleness banner ─────────────────────────────── */
+/* `top` is measured from #ir-main's natural-flow top, which sits
+   immediately below the sticky topbar. The position:fixed secondary
+   bar overlays the upper ~36 px of that section, so the banner
+   needs to clear it (37 px secondary-bar height + a few px margin).
+   This matches the offset .ir-map uses (top: 85px from viewport). */
 .ir-feed-banner {
     position: absolute;
-    top: 14px;
+    top: 52px;
     left: 50%;
     transform: translateX(-50%);
     z-index: 500;
