@@ -2680,54 +2680,131 @@
             }, 'rt-env-skewt');
         }
 
-        // Shear-vs-pressure: take vector difference of u/v at each level
-        // RELATIVE TO THE SURFACE (1000 hPa) so 0 → no shear vs the
-        // boundary layer. Plot magnitude vs pressure on a log-y axis.
-        var i0 = prof.plev_hpa.indexOf(1000);
-        if (i0 < 0) i0 = 0;  // fall back to highest-pressure level
-        var u0 = prof.u_ms[i0], v0 = prof.v_ms[i0];
-        var shearMagKt = [];
-        for (var i = 0; i < prof.plev_hpa.length; i++) {
-            var du = prof.u_ms[i] - u0;
-            var dv = prof.v_ms[i] - v0;
-            var mag = Math.sqrt(du * du + dv * dv) * 1.94384;
-            shearMagKt.push(mag);
-        }
-
+        // Hodograph: u (eastward) on x, v (northward) on y. Connects
+        // pressure levels with a colored line so the user can read both
+        // shear vector AND directional turning at a glance. Annotate
+        // pressure labels at four landmark levels (1000/850/500/200).
         var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
         var axisCol = isDark ? '#8b9ec2' : '#374151';
         var lineCol = isDark ? '#60a5fa' : '#1d4ed8';
+        var hiLight = isDark ? '#fbbf24' : '#b45309';
         var gridCol = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(15,22,35,0.08)';
 
-        Plotly.newPlot('rt-env-shear-prof', [{
-            x: shearMagKt,
-            y: prof.plev_hpa,
-            type: 'scatter',
-            mode: 'lines+markers',
-            name: 'Shear vs sfc',
+        // Convert u/v from m/s to kt and find a symmetric square axis range
+        var uKt = prof.u_ms.map(function (u) { return u * 1.94384; });
+        var vKt = prof.v_ms.map(function (v) { return v * 1.94384; });
+        var maxAbs = Math.max(
+            Math.max.apply(null, uKt.map(Math.abs)),
+            Math.max.apply(null, vKt.map(Math.abs)),
+            5
+        );
+        var hodoLim = Math.ceil(maxAbs * 1.15 / 5) * 5;  // round to nearest 5 kt
+
+        var labelLevels = [1000, 850, 500, 200];
+        var labelText = prof.plev_hpa.map(function (p) {
+            return labelLevels.indexOf(p) >= 0 ? String(p) : '';
+        });
+
+        Plotly.newPlot('rt-env-hodograph', [{
+            x: uKt, y: vKt, mode: 'lines+markers+text',
+            text: labelText, textposition: 'top right',
+            textfont: { color: hiLight, size: 9 },
             line: { color: lineCol, width: 2 },
-            marker: { color: lineCol, size: 5 },
-            hovertemplate: '%{x:.1f} kt @ %{y} hPa<extra></extra>',
+            marker: { color: prof.plev_hpa, colorscale: 'Viridis',
+                       reversescale: true, size: 6, showscale: false,
+                       cmin: 100, cmax: 1000 },
+            hovertemplate: '%{y:.1f} v · %{x:.1f} u kt<br>%{customdata} hPa<extra></extra>',
+            customdata: prof.plev_hpa,
         }], {
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: 'rgba(0,0,0,0)',
-            margin: { l: 38, r: 8, t: 18, b: 32 },
+            margin: { l: 32, r: 8, t: 18, b: 28 },
             font: { family: 'DM Sans, sans-serif', color: axisCol, size: 9 },
-            title: { text: '|shear| vs sfc', font: { size: 9, color: axisCol }, x: 0.5, y: 0.98 },
+            title: { text: 'Hodograph (kt)', font: { size: 9, color: axisCol }, x: 0.5, y: 0.98 },
             xaxis: {
-                title: { text: 'kt', font: { size: 8, color: axisCol } },
+                title: { text: 'u', font: { size: 8, color: axisCol } },
                 color: axisCol, tickfont: { size: 8 },
-                gridcolor: gridCol, zeroline: false,
+                gridcolor: gridCol,
+                zeroline: true, zerolinecolor: gridCol, zerolinewidth: 1,
+                range: [-hodoLim, hodoLim], constrain: 'domain',
             },
             yaxis: {
-                title: { text: 'hPa', font: { size: 8, color: axisCol } },
+                title: { text: 'v', font: { size: 8, color: axisCol } },
                 color: axisCol, tickfont: { size: 8 },
-                gridcolor: gridCol, zeroline: false,
-                type: 'log', autorange: 'reversed',
-                tickvals: [100, 150, 200, 300, 500, 700, 1000],
+                gridcolor: gridCol,
+                zeroline: true, zerolinecolor: gridCol, zerolinewidth: 1,
+                range: [-hodoLim, hodoLim], scaleanchor: 'x', scaleratio: 1,
             },
             showlegend: false,
         }, { responsive: true, displayModeBar: false });
+
+        // Multi-layer shear table: standard layer choices + the maximum
+        // vector difference anywhere in the 1000–200 column. Using the
+        // annular-mean wind profile, all layer shears are vortex-removed
+        // (200–800 km annulus excludes the storm core).
+        function _at(level) {
+            var k = prof.plev_hpa.indexOf(level);
+            if (k < 0) return null;
+            return [prof.u_ms[k], prof.v_ms[k], k];
+        }
+        function _layerShear(loP, hiP) {
+            var lo = _at(loP), hi = _at(hiP);
+            if (!lo || !hi) return null;
+            var du = hi[0] - lo[0], dv = hi[1] - lo[1];
+            var mag = Math.sqrt(du * du + dv * dv) * 1.94384;
+            var hdg = (Math.atan2(du, dv) * 180 / Math.PI + 360) % 360;
+            return { magKt: mag, hdg: hdg };
+        }
+        // Maximum |Δv| over any (lower, upper) pair within 1000–200 hPa.
+        var maxShear = { magKt: 0, hdg: 0, lo: 0, hi: 0 };
+        for (var ai = 0; ai < prof.plev_hpa.length; ai++) {
+            for (var bi = 0; bi < prof.plev_hpa.length; bi++) {
+                var pa = prof.plev_hpa[ai], pb = prof.plev_hpa[bi];
+                if (pa < pb) continue;          // lower must be > upper hPa
+                if (pa > 1000 || pb < 200) continue;
+                var du = prof.u_ms[bi] - prof.u_ms[ai];
+                var dv = prof.v_ms[bi] - prof.v_ms[ai];
+                var mag = Math.sqrt(du * du + dv * dv) * 1.94384;
+                if (mag > maxShear.magKt) {
+                    maxShear.magKt = mag;
+                    maxShear.hdg = (Math.atan2(du, dv) * 180 / Math.PI + 360) % 360;
+                    maxShear.lo = pa; maxShear.hi = pb;
+                }
+            }
+        }
+
+        var rows = [];
+        var s_900_200 = _layerShear(900, 200);
+        var s_850_200 = _layerShear(850, 200);
+        var s_850_500 = _layerShear(850, 500);
+        function _row(label, s, note) {
+            if (!s) return '<tr><td>' + label + '</td><td>—</td><td>—</td></tr>';
+            var dir = _compassDir(s.hdg);
+            return '<tr>' +
+                '<td title="' + (note || '') + '">' + label + '</td>' +
+                '<td style="text-align:right;font-variant-numeric:tabular-nums;">' +
+                s.magKt.toFixed(1) + ' kt</td>' +
+                '<td style="text-align:right;font-variant-numeric:tabular-nums;color:var(--text-dim);">' +
+                Math.round(s.hdg) + '° ' + dir + '</td>' +
+                '</tr>';
+        }
+        var maxLabel = 'Max (' + maxShear.lo + '–' + maxShear.hi + ')';
+        var tableHtml =
+            '<div style="font-weight:600;color:var(--text);margin-bottom:3px;">Shear by layer</div>' +
+            '<table style="width:100%;border-collapse:collapse;font-size:0.7rem;">' +
+                '<thead><tr style="color:var(--text-dim);border-bottom:1px solid var(--border-light);">' +
+                    '<th style="text-align:left;font-weight:500;padding:2px 0;">Layer</th>' +
+                    '<th style="text-align:right;font-weight:500;padding:2px 0;">|shear|</th>' +
+                    '<th style="text-align:right;font-weight:500;padding:2px 0;">Heading</th>' +
+                '</tr></thead><tbody>' +
+                _row('900–200', s_900_200, 'Davis & Ahijevych (2008) deep-layer shear') +
+                _row('850–200', s_850_200, 'SHIPS SHRD/SHTD canonical') +
+                _row('850–500', s_850_500, 'Lower-tropospheric shear') +
+                _row(maxLabel, { magKt: maxShear.magKt, hdg: maxShear.hdg },
+                     'Maximum vector difference of any pair in 1000–200 hPa column') +
+            '</tbody></table>';
+        var tEl = document.getElementById('rt-env-shear-table');
+        if (tEl) tEl.innerHTML = tableHtml;
     }
 
     window.toggleEnvProfile = function () {
