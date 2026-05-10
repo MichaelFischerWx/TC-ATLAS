@@ -3819,9 +3819,13 @@ function _handleIRMouseMove(e) {
         if (nxOnly && irTbTooltip) {
             var latStr2 = Math.abs(e.latlng.lat).toFixed(2) + (e.latlng.lat >= 0 ? '°N' : '°S');
             var lngStr2 = Math.abs(e.latlng.lng).toFixed(2) + (e.latlng.lng >= 0 ? '°E' : '°W');
+            var beamStr2 = (nxOnly.beamKm != null)
+                ? '<span class="ir-tb-sep" style="color:#86efac;"> @ ' + nxOnly.beamKm.toFixed(1) + ' km ARL</span>'
+                : '';
             var nxHtml = '<span class="ir-tb-val" style="color:#86efac;">' +
                          nxOnly.value + ' ' + nxOnly.units + '</span>' +
                          '<span class="ir-tb-sep" style="color:#86efac;"> (88D)</span>' +
+                         beamStr2 +
                          '<span class="ir-tb-sep"> &nbsp; </span>' +
                          '<span class="ir-tb-coord">' + latStr2 + ', ' + lngStr2 + '</span>';
             irTbTooltip.setLatLng(e.latlng).setContent(nxHtml);
@@ -3885,6 +3889,10 @@ function _handleIRMouseMove(e) {
         html += '<br><span class="ir-tb-val" style="color:#86efac;">' +
                 nxHover.value + ' ' + nxHover.units + '</span>' +
                 '<span class="ir-tb-sep" style="color:#86efac;"> (88D)</span>';
+        if (nxHover.beamKm != null) {
+            html += '<span class="ir-tb-sep" style="color:#86efac;"> @ ' +
+                    nxHover.beamKm.toFixed(1) + ' km ARL</span>';
+        }
     }
 
     irTbTooltip.setLatLng(e.latlng).setContent(html);
@@ -5004,6 +5012,13 @@ var _gaNexradLastFrameLat = null;
 var _gaNexradLastFrameLon = null;
 var _gaNexradLastFrameTime = null;
 var _gaNexradScanTimer = null;
+var _gaNexradSiteLat = null;     // radar antenna lat (for beam-height calc)
+var _gaNexradSiteLon = null;     // radar antenna lon
+var _gaNexradTilt = null;        // sweep elevation angle (deg)
+var _gaNexradProduct = null;     // 'velocity' or 'reflectivity'
+var _gaNexradExtremaMarkers = []; // L.markers for min/max value labels
+var _gaNexradPrefetched = Object.create(null); // key: site|s3_key|product → 1
+var _gaNexradPrefetchInflight = 0;
 
 /**
  * Sync NEXRAD dropdowns with the current IR frame.
@@ -5247,6 +5262,10 @@ window.loadNexradFrame = function () {
             }
             _gaNexradBounds = bounds;
             _gaNexradUnits = json.units || 'dBZ';
+            _gaNexradSiteLat = (typeof json.site_lat === 'number') ? json.site_lat : null;
+            _gaNexradSiteLon = (typeof json.site_lon === 'number') ? json.site_lon : null;
+            _gaNexradTilt = (typeof json.tilt === 'number') ? json.tilt : null;
+            _gaNexradProduct = product;
 
             // Update overlay
             if (_gaNexradMapOverlay && detailMap) {
@@ -5261,11 +5280,77 @@ window.loadNexradFrame = function () {
 
             // Update colorbar
             _updateGaNexradColorbar(product);
+
+            // Drop labeled markers at min/max value locations (velocity →
+            // both, reflectivity → max only). Single-pixel spikes are
+            // filtered by requiring valid 3x3 neighbors.
+            _updateGaNexradExtremaMarkers();
+
+            // Prefetch ±2 adjacent scans so the next user step is a warm
+            // GCS hit instead of a 10-15s cold render.
+            _prefetchAdjacentNexradScans(s3Key, site, product, 2);
         })
         .catch(function (e) {
             if (status) status.textContent = 'Error: ' + e.message;
         });
 };
+
+/**
+ * Fire silent /nexrad/frame requests for scans on either side of the current
+ * one so the backend writes them to GCS. By the time the user steps to an
+ * adjacent frame the response is a warm cache hit. We discard the response —
+ * the goal is just to populate cache.
+ *
+ * Throttled to one in-flight prefetch at a time so we don't stampede Cloud Run.
+ */
+function _prefetchAdjacentNexradScans(currentS3Key, site, product, count) {
+    var scanSelect = document.getElementById('ga-nexrad-scan-select');
+    if (!scanSelect || !scanSelect.options.length) return;
+
+    var idx = -1;
+    for (var i = 0; i < scanSelect.options.length; i++) {
+        if (scanSelect.options[i].value === currentS3Key) { idx = i; break; }
+    }
+    if (idx < 0) return;
+
+    // Build interleaved [+1, -1, +2, -2, ...] order so the most likely
+    // next click is warmed first.
+    var targets = [];
+    for (var d = 1; d <= count; d++) {
+        if (idx + d < scanSelect.options.length) targets.push(scanSelect.options[idx + d].value);
+        if (idx - d >= 0) targets.push(scanSelect.options[idx - d].value);
+    }
+
+    var MAX_INFLIGHT = 2;
+    targets.forEach(function (s3Key) {
+        if (!s3Key) return;
+        var cacheKey = site + '|' + s3Key + '|' + product;
+        if (_gaNexradPrefetched[cacheKey]) return;
+        _gaNexradPrefetched[cacheKey] = 1;
+
+        var fire = function () {
+            _gaNexradPrefetchInflight++;
+            var url = API_BASE + '/nexrad/frame?site=' + encodeURIComponent(site) +
+                '&s3_key=' + encodeURIComponent(s3Key) +
+                '&product=' + product;
+            fetch(url)
+                .then(function (r) { return r.ok ? r.text() : null; })
+                .catch(function () {})
+                .then(function () { _gaNexradPrefetchInflight--; });
+        };
+
+        if (_gaNexradPrefetchInflight < MAX_INFLIGHT) {
+            fire();
+        } else {
+            // Defer — re-check shortly. Keeps queueing simple without a
+            // formal worker pool.
+            (function poll() {
+                if (_gaNexradPrefetchInflight < MAX_INFLIGHT) fire();
+                else setTimeout(poll, 400);
+            })();
+        }
+    });
+}
 
 /**
  * Toggle the NEXRAD overlay on/off.
@@ -5280,6 +5365,12 @@ window.toggleGlobalNexradOverlay = function () {
         if (btn) btn.innerHTML = _icon('tornado') + 'Ground Radar';
         if (controls) controls.style.display = 'none';
         if (_gaNexradMapOverlay && detailMap) detailMap.removeLayer(_gaNexradMapOverlay);
+        if (_gaNexradExtremaMarkers && _gaNexradExtremaMarkers.length && detailMap) {
+            for (var ei = 0; ei < _gaNexradExtremaMarkers.length; ei++) {
+                try { detailMap.removeLayer(_gaNexradExtremaMarkers[ei]); } catch (err) {}
+            }
+            _gaNexradExtremaMarkers = [];
+        }
         return;
     }
 
@@ -5290,6 +5381,9 @@ window.toggleGlobalNexradOverlay = function () {
 
     // If overlay already loaded, just show it
     if (_gaNexradMapOverlay && detailMap) _gaNexradMapOverlay.addTo(detailMap);
+
+    // Recompute extrema markers from cached grid (cheap; avoids stale state)
+    _updateGaNexradExtremaMarkers();
 
     // Search sites using current IR frame position, with LMI/genesis fallback
     if (selectedStorm) {
@@ -5342,7 +5436,108 @@ function _handleNexradMouseMove(e) {
 
     // Decode uint8 → physical value
     var val = _gaNexradVmin + (rawVal - 1) * (_gaNexradVmax - _gaNexradVmin) / 254.0;
-    return { value: val.toFixed(1), units: _gaNexradUnits };
+    var out = { value: val.toFixed(1), units: _gaNexradUnits };
+
+    // Beam height ARL using 4/3-earth-radius approximation. Only valid
+    // when we know the antenna location and sweep elevation angle.
+    if (_gaNexradSiteLat != null && _gaNexradSiteLon != null && _gaNexradTilt != null) {
+        var rangeKm = _haversineKm(_gaNexradSiteLat, _gaNexradSiteLon, lat, lng);
+        out.beamKm = _beamHeightKm(rangeKm, _gaNexradTilt);
+    }
+    return out;
+}
+
+// 4/3-earth radar beam height (km ARL). r_km = slant range, tiltDeg = elev angle.
+function _beamHeightKm(rKm, tiltDeg) {
+    var ka = (4.0/3.0) * 6371.0; // effective earth radius for refraction
+    var th = tiltDeg * Math.PI / 180;
+    return Math.sqrt(rKm*rKm + ka*ka + 2*rKm*ka*Math.sin(th)) - ka;
+}
+
+// Compute global min/max of the loaded NEXRAD grid (skipping single-pixel
+// spikes by requiring valid neighbors) and place labeled markers on the map.
+// Velocity → min (max inbound) + max (max outbound). Reflectivity → max only.
+function _updateGaNexradExtremaMarkers() {
+    // Clear any existing markers first
+    if (_gaNexradExtremaMarkers && _gaNexradExtremaMarkers.length) {
+        for (var i = 0; i < _gaNexradExtremaMarkers.length; i++) {
+            try { detailMap.removeLayer(_gaNexradExtremaMarkers[i]); } catch (err) {}
+        }
+        _gaNexradExtremaMarkers = [];
+    }
+    if (!_gaNexradVisible || !_gaNexradData || !_gaNexradBounds || !detailMap) return;
+    if (!_gaNexradRows || !_gaNexradCols) return;
+
+    var rows = _gaNexradRows, cols = _gaNexradCols, data = _gaNexradData;
+    var minRaw = 256, minRow = -1, minCol = -1;
+    var maxRaw = 0,   maxRow = -1, maxCol = -1;
+    var doMin = (_gaNexradProduct === 'velocity');
+
+    // Skip 1-px frame border (no neighbors). Require ≥3 valid 3x3 neighbors
+    // so dealiasing spikes / lone gates don't dominate.
+    for (var r = 1; r < rows - 1; r++) {
+        for (var c = 1; c < cols - 1; c++) {
+            var v = data[r * cols + c];
+            if (v === 0) continue;
+            // Count valid neighbors (skip center)
+            var nValid = 0;
+            for (var dr = -1; dr <= 1; dr++) {
+                for (var dc = -1; dc <= 1; dc++) {
+                    if (dr === 0 && dc === 0) continue;
+                    if (data[(r+dr) * cols + (c+dc)] !== 0) nValid++;
+                }
+            }
+            if (nValid < 3) continue;
+            if (v > maxRaw) { maxRaw = v; maxRow = r; maxCol = c; }
+            if (doMin && v < minRaw) { minRaw = v; minRow = r; minCol = c; }
+        }
+    }
+
+    var b = _gaNexradBounds;
+    var mercN = Math.log(Math.tan(Math.PI/4 + b.getNorth() * Math.PI/180 / 2));
+    var mercS = Math.log(Math.tan(Math.PI/4 + b.getSouth() * Math.PI/180 / 2));
+    function _cellLatLng(rr, cc) {
+        var fY = (rr + 0.5) / rows;
+        var fX = (cc + 0.5) / cols;
+        var mLat = mercN - fY * (mercN - mercS);
+        var lat = (2 * Math.atan(Math.exp(mLat)) - Math.PI/2) * 180 / Math.PI;
+        var lng = b.getWest() + fX * (b.getEast() - b.getWest());
+        return [lat, lng];
+    }
+    function _decode(raw) {
+        return _gaNexradVmin + (raw - 1) * (_gaNexradVmax - _gaNexradVmin) / 254.0;
+    }
+    function _addMarker(rr, cc, raw, color, prefix) {
+        var ll = _cellLatLng(rr, cc);
+        var val = _decode(raw);
+        var label = prefix + val.toFixed(1) + ' ' + _gaNexradUnits;
+        var dot = L.circleMarker(ll, {
+            radius: 5,
+            color: '#0f1623',
+            weight: 1.5,
+            fillColor: color,
+            fillOpacity: 1,
+            pane: 'markerPane'
+        });
+        dot.bindTooltip(label, {
+            permanent: true,
+            direction: 'top',
+            offset: [0, -6],
+            className: 'nexrad-extrema-label'
+        });
+        dot.addTo(detailMap);
+        _gaNexradExtremaMarkers.push(dot);
+    }
+
+    if (maxRow >= 0) {
+        // Max outbound (velocity) is positive away-from-radar; for reflectivity it's the heaviest echo
+        var maxColor = doMin ? '#ff3b3b' : '#ff00ff';
+        var maxPrefix = doMin ? 'Max outbound: ' : 'Max: ';
+        _addMarker(maxRow, maxCol, maxRaw, maxColor, maxPrefix);
+    }
+    if (doMin && minRow >= 0) {
+        _addMarker(minRow, minCol, minRaw, '#3b82ff', 'Max inbound: ');
+    }
 }
 
 /**
@@ -5397,13 +5592,24 @@ function _updateGaNexradColorbar(product) {
  */
 function removeGlobalNexradOverlay() {
     if (_gaNexradMapOverlay && detailMap) { detailMap.removeLayer(_gaNexradMapOverlay); _gaNexradMapOverlay = null; }
+    if (_gaNexradExtremaMarkers && _gaNexradExtremaMarkers.length && detailMap) {
+        for (var ei = 0; ei < _gaNexradExtremaMarkers.length; ei++) {
+            try { detailMap.removeLayer(_gaNexradExtremaMarkers[ei]); } catch (err) {}
+        }
+        _gaNexradExtremaMarkers = [];
+    }
     _gaNexradData = null;
     _gaNexradBounds = null;
     _gaNexradVisible = false;
+    _gaNexradSiteLat = null;
+    _gaNexradSiteLon = null;
+    _gaNexradTilt = null;
+    _gaNexradProduct = null;
     _gaNexradLastStormId = null;
     _gaNexradLastFrameLat = null;
     _gaNexradLastFrameLon = null;
     _gaNexradLastFrameTime = null;
+    _gaNexradPrefetched = Object.create(null);
     if (_gaNexradScanTimer) { clearTimeout(_gaNexradScanTimer); _gaNexradScanTimer = null; }
     if (_gaNexradUpdateTimer) { clearTimeout(_gaNexradUpdateTimer); _gaNexradUpdateTimer = null; }
     var btn = document.getElementById('ga-nexrad-toggle-btn');
