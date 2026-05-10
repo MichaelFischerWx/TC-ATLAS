@@ -19,10 +19,17 @@ import gc
 import hashlib
 import io
 import json
+import logging
 import math
 import os
 import re
 import threading
+
+# Module-level logger so the various .warning() / .debug() calls in the
+# shear endpoints (added during the env-profile + Helmholtz work) don't
+# blow up with NameError when their except branches fire. Routes Python's
+# logging through Cloud Run's default stderr capture.
+logger = logging.getLogger("ir_monitor_api")
 import time
 import traceback
 from collections import OrderedDict
@@ -4049,10 +4056,16 @@ def _compute_gfs_shear(lat: float, lon: float, date_str: str, hour_str: str) -> 
 
         try:
             # cfgrib names: u, v, t (Kelvin), r (RH %) all on isobaricInhPa.
-            u_var = ds.get("u") or ds.get("U")
-            v_var = ds.get("v") or ds.get("V")
-            t_var = ds.get("t") or ds.get("T")
-            r_var = ds.get("r") or ds.get("R")  # RH %
+            # NB: `ds.get('u') or ds.get('U')` looks idiomatic but is wrong:
+            # `or` evaluates the first operand's truthiness, and an
+            # xarray.DataArray with >1 element raises
+            # `ValueError: The truth value of an array with more than one
+            # element is ambiguous` instead of returning the array.
+            # Use explicit membership checks.
+            u_var = ds["u"] if "u" in ds else (ds["U"] if "U" in ds else None)
+            v_var = ds["v"] if "v" in ds else (ds["V"] if "V" in ds else None)
+            t_var = ds["t"] if "t" in ds else (ds["T"] if "T" in ds else None)
+            r_var = ds["r"] if "r" in ds else (ds["R"] if "R" in ds else None)  # RH %
             if u_var is None or v_var is None:
                 logger.warning(f"[env] u/v missing; vars: {list(ds.data_vars)}")
                 return None
@@ -4229,8 +4242,14 @@ def _compute_gfs_helmholtz_shear(
             return None
 
         try:
-            u_var = ds.get("u") or ds.get("U")
-            v_var = ds.get("v") or ds.get("V")
+            # NB: `ds.get('u') or ds.get('U')` looks idiomatic but is wrong:
+            # `or` evaluates the first operand's truthiness, and an
+            # xarray.DataArray with >1 element raises
+            # `ValueError: The truth value of an array with more than one
+            # element is ambiguous` instead of returning the array.
+            # Use explicit membership checks.
+            u_var = ds["u"] if "u" in ds else (ds["U"] if "U" in ds else None)
+            v_var = ds["v"] if "v" in ds else (ds["V"] if "V" in ds else None)
             if u_var is None or v_var is None:
                 logger.warning(f"[helmholtz] u/v missing; vars: {list(ds.data_vars)}")
                 return None
