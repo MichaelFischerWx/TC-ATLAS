@@ -10608,7 +10608,13 @@ function _gaSondeRenderTable() {
             '<td style="padding:2px 4px;text-align:right;">' + (wl150 != null ? (wl150 * 1.944).toFixed(0) + ' kt' : '\u2014') + '</td>' +
             '<td style="padding:2px 4px;text-align:right;">' + (psfc != null ? psfc.toFixed(0) : '\u2014') + '</td>' +
             '<td style="padding:2px 4px;text-align:center;">' + (s.hit_surface ? '\u2705' : '\u274c') + '</td>' +
-            '<td style="padding:2px 4px;"><button class="ga-btn ga-btn-xs" style="font-size:8px;color:var(--um-green);" onclick="event.stopPropagation();gaSondeShowSkewT(' + i + ')">Skew-T</button></td></tr>';
+            '<td style="padding:2px 4px;white-space:nowrap;">' +
+                '<button class="ga-btn ga-btn-xs" style="font-size:8px;color:var(--um-green);margin-right:3px;" ' +
+                  'onclick="event.stopPropagation();gaSondeShowView(' + i + ',\'skewt\')">Skew-T</button>' +
+                '<button class="ga-btn ga-btn-xs" style="font-size:8px;color:#1d4ed8;" ' +
+                  'onclick="event.stopPropagation();gaSondeShowView(' + i + ',\'wind\')" ' +
+                  'title="Wind speed + direction vs altitude">Wind</button>' +
+            '</td></tr>';
     }
     html += '</table>';
     wrap.innerHTML = html;
@@ -10740,6 +10746,23 @@ function _gaSondePlanViewRender() {
         _gaSondePlanLayers.push(marker);
     });
 }
+
+// Public helper used by the sonde-table action buttons. Lets a row's
+// "Wind" button jump straight to the wind-profile view without first
+// landing on Skew-T and then asking the user to switch tabs (the source
+// of long-running confusion about where the wind plot lives).
+window.gaSondeShowView = function (idx, mode) {
+    var m = (mode === 'wind' || mode === 'xsec' || mode === 'radial') ? mode : 'skewt';
+    _gaSondeViewMode = m;
+    _gaSondeCurrentIdx = idx;
+    // Reflect button state on the panel header pills so it's clear
+    // which view is active when the panel opens.
+    ['skewt', 'wind', 'xsec', 'radial'].forEach(function (k) {
+        var b = document.getElementById('ga-sonde-view-' + k);
+        if (b) b.classList.toggle('active', k === m);
+    });
+    gaSondeShowSkewT(idx);
+};
 
 window.gaSondeShowSkewT = function (idx) {
     if (!_gaSondeData || idx >= _gaSondeData.length) return;
@@ -10943,30 +10966,53 @@ function _renderSondeWindProfile(sonde, divId) {
 
     var maxAlt = Math.min(Math.max.apply(null, altVals) * 1.05, 16000);
 
+    // Theme-aware: the original off-white plot_bgcolor washed out badly
+    // against the dark sonde panel surface \u2014 the recurring "wind plot is
+    // hard to see in dark mode" complaint. Pull colors from the same
+    // tokens skewt.js uses so both views match each other and the page.
+    var _isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    var _spdColor = _isDark ? '#60a5fa' : '#1d4ed8';     // blue, themed
+    var _dirColor = _isDark ? '#fbbf24' : '#b45309';     // amber/orange
+    var _axisCol  = _isDark ? '#8b9ec2' : '#374151';     // axis labels
+    var _gridCol  = _isDark ? 'rgba(255,255,255,0.06)' : 'rgba(15,22,35,0.08)';
+    var _legendBg = _isDark ? 'rgba(0,0,0,0.4)' : 'rgba(255,255,255,0.85)';
+    var _legendTxt = _isDark ? '#ccc' : '#0f1623';
+
+    // Recolor the trace marker/line so they pick up the themed shades.
+    traces[0].line.color = _spdColor;
+    if (traces[1]) traces[1].line.color = _dirColor;
+
     var layout = {
         paper_bgcolor: 'rgba(0,0,0,0)',
-        plot_bgcolor: 'rgba(247,248,250,0.85)',
+        // Transparent canvas \u2014 lets the panel's own surface-raised
+        // background show through in both themes.
+        plot_bgcolor: 'rgba(0,0,0,0)',
         margin: { l: 50, r: 50, t: 35, b: 40 },
         xaxis: {
-            title: { text: 'Wind Speed (kt)', font: { size: 9, color: '#60a5fa' } },
-            color: '#60a5fa', tickfont: { size: 8 },
-            gridcolor: 'rgba(15, 22, 35,0.06)', zeroline: false,
+            title: { text: 'Wind Speed (kt)', font: { size: 9, color: _spdColor } },
+            color: _spdColor, tickfont: { size: 8 },
+            gridcolor: _gridCol, zeroline: false,
             range: [0, Math.max.apply(null, wspdVals) * 1.1],
         },
         xaxis2: {
-            title: { text: 'Direction (\u00b0)', font: { size: 9, color: '#fbbf24' } },
-            color: '#fbbf24', tickfont: { size: 8 },
+            title: { text: 'Direction (\u00b0)', font: { size: 9, color: _dirColor } },
+            color: _dirColor, tickfont: { size: 8 },
             overlaying: 'x', side: 'top',
             range: [0, 360], dtick: 90,
             showgrid: false,
         },
         yaxis: {
-            title: { text: 'Altitude (m)', font: { size: 9, color: '#5b6573' } },
-            color: '#5b6573', tickfont: { size: 8 },
-            gridcolor: 'rgba(15, 22, 35,0.06)', zeroline: false,
+            title: { text: 'Altitude (m)', font: { size: 9, color: _axisCol } },
+            color: _axisCol, tickfont: { size: 8 },
+            gridcolor: _gridCol, zeroline: false,
             range: [0, maxAlt],
         },
-        legend: { font: { color: '#5b6573', size: 9 }, x: 0.02, y: 0.98, bgcolor: 'rgba(0,0,0,0.4)' },
+        legend: {
+            font: { color: _legendTxt, size: 9 },
+            x: 0.02, y: 0.98,
+            bgcolor: _legendBg,
+            bordercolor: _gridCol, borderwidth: 1,
+        },
         showlegend: true,
     };
 
