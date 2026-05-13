@@ -287,7 +287,16 @@ def _build_velocity_lut() -> np.ndarray:
     """
     Build a 256-entry RGBA LUT for radial velocity (m/s).
     Maps uint8 index 0 = transparent (invalid), 1-255 = -100 to +100 m/s.
-    Blue = inbound (negative), Red = outbound (positive).
+
+    RadarScope-style diverging palette:
+      Inbound  (negative): green-cyan family — pale → bright green → teal → dark teal
+      Zero               : near-neutral dark grey (low chroma so 0-m/s rings don't pop)
+      Outbound (positive): pink-red family   — pale → red → hot pink → magenta
+
+    Linearly interpolated between fixed anchor points keyed to symmetric
+    velocity stops; the asymmetry between inbound/outbound hues is what
+    makes the rotation signature in a TC eyewall read at a glance (the
+    classic green-on-one-side, red-on-the-other "couplet").
     """
     lut = np.zeros((256, 4), dtype=np.uint8)
     lut[0] = [0, 0, 0, 0]
@@ -295,36 +304,43 @@ def _build_velocity_lut() -> np.ndarray:
     vel_min, vel_max = -100.0, 100.0
     vel_range = vel_max - vel_min
 
+    # (velocity m/s, R, G, B) anchors. Linearly interpolate between adjacent.
+    anchors = [
+        (-100.0,  18,  72,  92),   # deep teal
+        ( -75.0,  20, 140,  92),   # forest green
+        ( -50.0,  50, 200,  90),   # bright green
+        ( -25.0, 150, 235, 120),   # light green
+        ( -10.0, 210, 240, 200),   # very pale green
+        (  -1.0,  60,  60,  72),   # dark neutral grey (near-zero deadband)
+        (   1.0,  60,  60,  72),   # dark neutral grey
+        (  10.0, 245, 220, 220),   # very pale pink
+        (  25.0, 250, 175, 175),   # light pink
+        (  50.0, 235,  85, 105),   # bright pink-red
+        (  75.0, 190,  40, 105),   # deep magenta-red
+        ( 100.0, 145,  35, 170),   # purple
+    ]
+
+    def lerp(a, b, t):
+        return int(round(a + (b - a) * t))
+
     for i in range(1, 256):
         vel = vel_min + (i - 1) * vel_range / 254.0
-        norm = (vel - vel_min) / vel_range  # 0 to 1
-
-        if norm < 0.15:
-            r, g, b = 0, 0, int(80 + norm / 0.15 * 175)
-        elif norm < 0.3:
-            f = (norm - 0.15) / 0.15
-            r, g, b = 0, int(f * 200), 255
-        elif norm < 0.45:
-            f = (norm - 0.3) / 0.15
-            r, g, b = 0, int(200 + f * 55), int(255 - f * 55)
-        elif norm < 0.5:
-            f = (norm - 0.45) / 0.05
-            r, g, b = int(f * 128), 255, int(200 - f * 200)
-        elif norm < 0.55:
-            f = (norm - 0.5) / 0.05
-            r, g, b = int(128 + f * 127), int(255 - f * 127), 0
-        elif norm < 0.7:
-            f = (norm - 0.55) / 0.15
-            r, g, b = 255, int(128 - f * 128), 0
-        elif norm < 0.85:
-            f = (norm - 0.7) / 0.15
-            r, g, b = int(255 - f * 55), 0, 0
+        # Find the bracketing anchor pair.
+        if vel <= anchors[0][0]:
+            r, g, b = anchors[0][1:]
+        elif vel >= anchors[-1][0]:
+            r, g, b = anchors[-1][1:]
         else:
-            f = (norm - 0.85) / 0.15
-            r, g, b = int(200 - f * 80), 0, int(f * 60)
+            for k in range(len(anchors) - 1):
+                v0, r0, g0, b0 = anchors[k]
+                v1, r1, g1, b1 = anchors[k + 1]
+                if v0 <= vel <= v1:
+                    t = 0.0 if v1 == v0 else (vel - v0) / (v1 - v0)
+                    r, g, b = lerp(r0, r1, t), lerp(g0, g1, t), lerp(b0, b1, t)
+                    break
 
-        lut[i] = [min(255, max(0, r)), min(255, max(0, g)),
-                  min(255, max(0, b)), 230]
+        lut[i] = [max(0, min(255, r)), max(0, min(255, g)),
+                  max(0, min(255, b)), 230]
 
     return lut
 
