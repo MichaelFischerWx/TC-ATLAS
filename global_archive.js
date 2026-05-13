@@ -5548,17 +5548,23 @@ function _updateGaNexradColorbar(product) {
     if (!el) return;
 
     if (product === 'velocity') {
+        // Anchors match nexrad_api.py:_build_velocity_lut. Stops are
+        // (vel + 100)/200 in percent so −100 → 0%, 0 → 50%, +100 → 100%.
         el.innerHTML =
             '<div style="display:flex;height:8px;border-radius:3px;border:1px solid rgba(15, 22, 35,0.15);overflow:hidden;">' +
-                '<div style="flex:1;background:#0000D0;"></div>' +
-                '<div style="flex:1;background:#0050FF;"></div>' +
-                '<div style="flex:1;background:#00C8FF;"></div>' +
-                '<div style="flex:1;background:#00FF80;"></div>' +
-                '<div style="flex:1;background:#80FF00;"></div>' +
-                '<div style="flex:1;background:#FFFF00;"></div>' +
-                '<div style="flex:1;background:#FF8000;"></div>' +
-                '<div style="flex:1;background:#FF0000;"></div>' +
-                '<div style="flex:1;background:#C80000;"></div>' +
+                '<div style="flex:1;background:linear-gradient(to right,' +
+                    '#12485C 0%,'   +   /* −100 deep teal */
+                    '#148C5C 12.5%,'+   /* −75 forest green */
+                    '#32C85A 25%,'  +   /* −50 bright green */
+                    '#96EB78 37.5%,'+   /* −25 light green */
+                    '#D2F0C8 45%,'  +   /* −10 pale green */
+                    '#3C3C48 50%,'  +   /*   0 dark neutral grey */
+                    '#F5DCDC 55%,'  +   /* +10 pale pink */
+                    '#FAAFAF 62.5%,'+   /* +25 light pink */
+                    '#EB5569 75%,'  +   /* +50 bright pink-red */
+                    '#BE2869 87.5%,'+   /* +75 deep magenta-red */
+                    '#9123AA 100%'  +   /* +100 purple */
+                    ');"></div>' +
             '</div>' +
             '<div style="display:flex;justify-content:space-between;font-size:8px;color:var(--slate);margin-top:1px;">' +
                 '<span>-100 m/s</span><span>0</span><span>+100 m/s</span>' +
