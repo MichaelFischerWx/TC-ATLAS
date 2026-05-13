@@ -115,7 +115,7 @@ def _cache_put(key: str, val: dict):
 _GCS_NEXRAD_BUCKET = os.environ.get("GCS_IR_CACHE_BUCKET", "")
 _gcs_client = None
 _gcs_bucket = None
-_GCS_CACHE_VERSION = "v8"  # v8 = adds per-pixel gate-count grid for hover readout
+_GCS_CACHE_VERSION = "v9"  # v9 = dealias on full volume (fixes multi-fold TC velocities)
 
 
 def _get_gcs_bucket():
@@ -610,19 +610,16 @@ def _grid_radar(radar, product: str = "reflectivity",
                 sweep_idx = candidate
                 break
 
-    # Extract just the chosen sweep so downstream dealiasing +
-    # Cartesian gridding operate on ~1/14 of the rays. A full VCP
-    # volume has 10-14 sweeps; dealias_region_based on the full
-    # volume was the single biggest wall-time hit (3-5 s per cold
-    # velocity request in Py-ART profiling).
-    try:
-        radar = radar.extract_sweeps([sweep_idx])
-        sweep_idx = 0  # single-sweep radar — target is now at index 0
-    except Exception as e:
-        logger.warning(f"extract_sweeps failed, continuing with full volume: {e}")
-
-    # Dealias velocity — now ~10× cheaper since we only have one sweep.
-    # Region-based first, unwrap-phase as fallback.
+    # Dealias velocity on the FULL volume before extracting the target
+    # sweep. Py-ART's region-based algorithm seeds fold counts using the
+    # velocity from neighboring sweeps in the volume; running it on a
+    # single-sweep radar leaves it with no vertical reference and breaks
+    # down at 2-3 Nyquist folds (e.g., Laura 2020 KLCH where peak winds
+    # were ~3× the ~26 m/s Nyquist).
+    #
+    # We previously stripped to one sweep first for speed (3-5 s saved per
+    # cold velocity request), but the warm GCS cache covers repeat hits
+    # and the quality regression was visible in major-hurricane scans.
     if product == "velocity":
         _dealiased = False
         try:
@@ -644,6 +641,14 @@ def _grid_radar(radar, product: str = "reflectivity",
                 _dealiased = True
             except Exception as e:
                 logger.warning(f"Unwrap dealiasing also failed: {e}")
+
+    # Now strip the volume to the target sweep so downstream gridding
+    # only touches ~1/14 of the rays.
+    try:
+        radar = radar.extract_sweeps([sweep_idx])
+        sweep_idx = 0  # single-sweep radar — target is now at index 0
+    except Exception as e:
+        logger.warning(f"extract_sweeps failed, continuing with full volume: {e}")
 
     sweep_start = radar.sweep_start_ray_index["data"][sweep_idx]
     sweep_end = radar.sweep_end_ray_index["data"][sweep_idx]
