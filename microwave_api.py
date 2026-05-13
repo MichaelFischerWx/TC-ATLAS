@@ -1740,6 +1740,9 @@ def _regrid_swath(data: np.ndarray, lats: np.ndarray, lons: np.ndarray,
     max_dist_deg = grid_res_deg * 3.0
     far_mask = dists.reshape(gridded.shape) > max_dist_deg
     gridded[far_mask] = np.nan
+    # Fill the small interior NaN holes left by the kd-tree threshold
+    # while preserving genuine off-swath edges (large connected NaN regions).
+    gridded = _fill_speckle_holes(gridded)
 
     center_lat = (lat_min + lat_max) / 2.0
     center_lon = (lon_min + lon_max) / 2.0
@@ -1759,6 +1762,37 @@ def _regrid_swath(data: np.ndarray, lats: np.ndarray, lons: np.ndarray,
         "ny": n_lat,
         "dx_km": grid_res_deg * 111.0,
     }
+
+
+def _fill_speckle_holes(arr: np.ndarray, max_hole_pixels: int = 6) -> np.ndarray:
+    """Fill small NaN clusters in a regridded 2D array.
+
+    `griddata(method="nearest") + far_mask` produces speckle holes where
+    the regular lat/lon grid samples a cell that falls between actual
+    swath pixels and the kd-tree distance exceeds `3 * grid_res_deg`.
+    Visually these are scattered transparent dots that read as noise in
+    the overlay (the IR/ocean background shows through `set_bad(alpha=0)`).
+
+    Connected NaN components ≤ `max_hole_pixels` get filled with the
+    median of their immediate (4-connected dilated) neighbours. Larger
+    NaN regions — genuine off-swath edges, QC-flagged sectors — are
+    left untouched so they correctly disappear into the underlying
+    layer rather than being smeared across.
+    """
+    mask = np.isnan(arr)
+    if not mask.any():
+        return arr
+    from scipy.ndimage import label, binary_dilation
+    labeled, n = label(mask)
+    out = arr.copy()
+    for i in range(1, n + 1):
+        region = (labeled == i)
+        if region.sum() > max_hole_pixels:
+            continue
+        ring = binary_dilation(region) & ~mask
+        if ring.any():
+            out[region] = np.nanmedian(arr[ring])
+    return out
 
 
 def _regrid_swath_multi(
@@ -1822,6 +1856,11 @@ def _regrid_swath_multi(
     far_mask = dists.reshape(glon.shape) > max_dist_deg
     for name in channels:
         channels[name][far_mask] = np.nan
+        # Same speckle hole-fill as the single-channel path. Filling each
+        # RGB channel independently is fine — the NaN mask is identical
+        # across channels (set by the shared far_mask) so the filled
+        # values reach consistent positions.
+        channels[name] = _fill_speckle_holes(channels[name])
 
     center_lat = (lat_min + lat_max) / 2.0
     center_lon = (lon_min + lon_max) / 2.0
