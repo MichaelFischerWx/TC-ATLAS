@@ -4644,6 +4644,62 @@ var _gaMwMarkerDt = null;        // current MW overpass datetime for intensity l
 var _gaMwData = null;            // { baseBounds, scanCenter:[lat,lon], scanTime }
 
 /**
+ * Resample an equirectangular PNG (uniform-lat rows) so the rows are
+ * uniformly spaced in Web Mercator y. Returns a Promise resolving to a
+ * new data URI. Matches the warp baked into renderTbToDataURI for IR
+ * overlays — without it, Leaflet's flat corner-to-corner draw stretches
+ * the image latitudinally and the storm centre drifts away from the
+ * map's true centre coordinate (~0.5% at 16°N, growing to ~30% at 40°N).
+ *
+ * Single-row nearest-neighbour resample to keep this cheap; the input
+ * MW image is typically 200×200 px so the math runs in <10 ms.
+ */
+function mercatorWarpDataURI(srcDataURI, southLat, northLat) {
+    return new Promise(function (resolve, reject) {
+        var img = new Image();
+        img.onload = function () {
+            var cols = img.naturalWidth;
+            var rows = img.naturalHeight;
+            var srcCanvas = document.createElement('canvas');
+            srcCanvas.width = cols;
+            srcCanvas.height = rows;
+            var srcCtx = srcCanvas.getContext('2d');
+            srcCtx.drawImage(img, 0, 0);
+            var srcData = srcCtx.getImageData(0, 0, cols, rows).data;
+
+            var dstCanvas = document.createElement('canvas');
+            dstCanvas.width = cols;
+            dstCanvas.height = rows;
+            var dstCtx = dstCanvas.getContext('2d');
+            var dstImage = dstCtx.createImageData(cols, rows);
+            var dstData = dstImage.data;
+
+            var mercNorth = Math.log(Math.tan(Math.PI / 4 + northLat * Math.PI / 360));
+            var mercSouth = Math.log(Math.tan(Math.PI / 4 + southLat * Math.PI / 360));
+            var mercRange = mercNorth - mercSouth;
+            var latRange = northLat - southLat;
+
+            for (var outRow = 0; outRow < rows; outRow++) {
+                var mercY = mercNorth - (outRow / (rows - 1)) * mercRange;
+                var lat = (2 * Math.atan(Math.exp(mercY)) - Math.PI / 2) * 180 / Math.PI;
+                var srcRow = Math.round((northLat - lat) / latRange * (rows - 1));
+                if (srcRow < 0) srcRow = 0;
+                if (srcRow >= rows) srcRow = rows - 1;
+                var srcOff = srcRow * cols * 4;
+                var dstOff = outRow * cols * 4;
+                for (var c = 0, n = cols * 4; c < n; c++) {
+                    dstData[dstOff + c] = srcData[srcOff + c];
+                }
+            }
+            dstCtx.putImageData(dstImage, 0, 0);
+            resolve(dstCanvas.toDataURL('image/png'));
+        };
+        img.onerror = function () { reject(new Error('mercatorWarpDataURI: image load failed')); };
+        img.src = srcDataURI;
+    });
+}
+
+/**
  * Re-anchor the MW image overlay to match the currently-displayed frame's
  * storm centre. The server renders the swath in storm-relative km around
  * the storm's position at the MW scan time, then converts to lat/lon and
@@ -4842,27 +4898,39 @@ window.loadGlobalMWOverpass = function () {
                 L.latLng(json.bounds[0][0], json.bounds[0][1]),
                 L.latLng(json.bounds[1][0], json.bounds[1][1])
             );
-
-            if (_gaMwMapOverlay && detailMap) {
-                detailMap.removeLayer(_gaMwMapOverlay);
-            }
-            // Retain the raw response so we can re-shift the bounds when the
-            // user scrubs IR frames — the MW image was rendered storm-relative
-            // around `center_lat/lon` at scan time, but the displayed frame
-            // is typically 30–60 min off, by which time the storm has moved
-            // ~5–15 km. Applying that offset keeps the MW image anchored.
-            _gaMwData = {
-                baseBounds: bounds,
-                scanCenter: [json.center_lat, json.center_lon],
-                scanTime: json.datetime || null,
-            };
-            _gaMwMapOverlay = L.imageOverlay(imgUrl, bounds, {
-                opacity: 0.8, interactive: false, zIndex: 650
-            });
-            if (_gaMwVisible && detailMap) _gaMwMapOverlay.addTo(detailMap);
-            // Apply motion correction now (before flyTo so the recenter
-            // targets the corrected centre, not the raw scan-time centre).
-            _applyMwMotionShift();
+            // Server renders the MW swath equirectangularly (uniform-lat
+            // rows), but Leaflet draws it flat between corners in Web
+            // Mercator screen space → image stretches latitudinally. IR
+            // overlays solve this client-side in renderTbToDataURI; mirror
+            // that here. Warp is async (canvas needs Image.onload) so the
+            // overlay creation moves inside the .then().
+            mercatorWarpDataURI(imgUrl, json.bounds[0][0], json.bounds[1][0])
+                .catch(function (err) {
+                    console.warn('[MW] Mercator warp failed, falling back to raw image:', err);
+                    return imgUrl;
+                })
+                .then(function (warpedUrl) {
+                    if (_gaMwMapOverlay && detailMap) {
+                        detailMap.removeLayer(_gaMwMapOverlay);
+                    }
+                    // Retain the raw response so we can re-shift the bounds
+                    // when the user scrubs IR frames — the MW image was
+                    // rendered storm-relative around `center_lat/lon` at
+                    // scan time, but the displayed frame is typically 30–60
+                    // min off, by which time the storm has moved ~5–15 km.
+                    _gaMwData = {
+                        baseBounds: bounds,
+                        scanCenter: [json.center_lat, json.center_lon],
+                        scanTime: json.datetime || null,
+                    };
+                    _gaMwMapOverlay = L.imageOverlay(warpedUrl, bounds, {
+                        opacity: 0.8, interactive: false, zIndex: 650
+                    });
+                    if (_gaMwVisible && detailMap) _gaMwMapOverlay.addTo(detailMap);
+                    // Apply motion correction now (before flyTo so the recentre
+                    // targets the corrected centre, not the raw scan-time centre).
+                    _applyMwMotionShift();
+                });
 
             // Re-center map on the MW image so the overpass is visible
             if (detailMap && bounds.isValid()) {
