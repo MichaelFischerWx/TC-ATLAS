@@ -3780,14 +3780,12 @@ function displayIROnMap(data) {
     if (_gaNexradVisible && selectedStorm) {
         _syncNexradWithIRFrame();
     }
-
-    // Re-anchor the MW overlay to the current frame's storm centre so the
-    // microwave swath follows the storm as the user scrubs IR frames (the
-    // image was rendered storm-relative around the MW scan time, which is
-    // typically 30–60 min from any given IR frame; the storm has moved).
-    if (_gaMwVisible && _gaMwData && _gaMwMapOverlay) {
-        _applyMwMotionShift();
-    }
+    // NOTE: do NOT motion-shift the MW overlay against the IR-frame time.
+    // The MW image represents what the satellite actually saw at its
+    // scan-time geographic location; shifting it to align with a
+    // different-time IR frame would place it at a fake position. The
+    // visible offset between MW (scan time) and IR (frame time) is
+    // real physics — the storm moved between the two timestamps.
 }
 
 var _irHoverThrottled = false;
@@ -4641,8 +4639,6 @@ var _gaMwMarkerDt = null;        // current MW overpass datetime for intensity l
 // map are at the currently-displayed frame time — often 30–60 min different.
 // We re-shift the overlay's bounds on every IR-frame change so the MW image
 // stays anchored to the storm even as the user scrubs forward/backward.
-var _gaMwData = null;            // { baseBounds, scanCenter:[lat,lon], scanTime }
-
 /**
  * Resample an equirectangular PNG (uniform-lat rows) so the rows are
  * uniformly spaced in Web Mercator y. Returns a Promise resolving to a
@@ -4697,47 +4693,6 @@ function mercatorWarpDataURI(srcDataURI, southLat, northLat) {
         img.onerror = function () { reject(new Error('mercatorWarpDataURI: image load failed')); };
         img.src = srcDataURI;
     });
-}
-
-/**
- * Re-anchor the MW image overlay to match the currently-displayed frame's
- * storm centre. The server renders the swath in storm-relative km around
- * the storm's position at the MW scan time, then converts to lat/lon and
- * sends bounds. By the time the user is looking at a different IR frame
- * (typically minutes-to-hours away in time), the storm has moved and the
- * image no longer lines up with the recon track / IR cloud-top. Shifting
- * the bounds by (frame_center − scan_center) keeps the image anchored to
- * the storm rather than to the original satellite footprint.
- *
- * No-op when MW data isn't loaded, the overlay isn't on the map, or the
- * current frame's centre is unknown (in which case we leave bounds at
- * the raw scan-time values).
- */
-function _applyMwMotionShift() {
-    if (!_gaMwData || !_gaMwMapOverlay) return;
-    var frameMeta = irMeta && irMeta.frames ? irMeta.frames[irFrameIdx] : null;
-    var frameLat = (frameMeta && frameMeta.lat != null) ? frameMeta.lat : null;
-    var frameLon = (frameMeta && frameMeta.lon != null) ? frameMeta.lon : null;
-    // Fallback: interpolate the storm's best-track position at the
-    // displayed frame's time. Needed when the IR backend doesn't carry
-    // per-frame lat/lon (e.g., older GridSat domains).
-    if ((frameLat == null || frameLon == null) && selectedStorm
-            && allTracks[selectedStorm.sid] && frameMeta && frameMeta.time) {
-        var p = _interpBestTrack(allTracks[selectedStorm.sid], frameMeta.time);
-        if (p) { frameLat = p.lat; frameLon = p.lon; }
-    }
-    if (frameLat == null || frameLon == null) {
-        // Nothing to shift against — restore raw bounds.
-        _gaMwMapOverlay.setBounds(_gaMwData.baseBounds);
-        return;
-    }
-    var dLat = frameLat - _gaMwData.scanCenter[0];
-    var dLon = frameLon - _gaMwData.scanCenter[1];
-    var b = _gaMwData.baseBounds;
-    _gaMwMapOverlay.setBounds(L.latLngBounds(
-        L.latLng(b.getSouth() + dLat, b.getWest() + dLon),
-        L.latLng(b.getNorth() + dLat, b.getEast() + dLon)
-    ));
 }
 
 /**
@@ -4913,23 +4868,15 @@ window.loadGlobalMWOverpass = function () {
                     if (_gaMwMapOverlay && detailMap) {
                         detailMap.removeLayer(_gaMwMapOverlay);
                     }
-                    // Retain the raw response so we can re-shift the bounds
-                    // when the user scrubs IR frames — the MW image was
-                    // rendered storm-relative around `center_lat/lon` at
-                    // scan time, but the displayed frame is typically 30–60
-                    // min off, by which time the storm has moved ~5–15 km.
-                    _gaMwData = {
-                        baseBounds: bounds,
-                        scanCenter: [json.center_lat, json.center_lon],
-                        scanTime: json.datetime || null,
-                    };
                     _gaMwMapOverlay = L.imageOverlay(warpedUrl, bounds, {
                         opacity: 0.8, interactive: false, zIndex: 650
                     });
                     if (_gaMwVisible && detailMap) _gaMwMapOverlay.addTo(detailMap);
-                    // Apply motion correction now (before flyTo so the recentre
-                    // targets the corrected centre, not the raw scan-time centre).
-                    _applyMwMotionShift();
+                    // The MW image sits at its true geographic location
+                    // (where the satellite footprint was at scan time).
+                    // It does NOT follow the displayed IR frame — different
+                    // layers can have different timestamps and still be
+                    // correctly co-located in geographic space.
                 });
 
             // Re-center map on the MW image so the overpass is visible
