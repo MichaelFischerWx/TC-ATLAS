@@ -4764,6 +4764,32 @@ function loadGlobalMWOverpasses(storm) {
                 sel.appendChild(opt);
             }
 
+            // Default-select the overpass closest in time to the currently-
+            // displayed IR frame. The MW image and IR clouds will never line
+            // up perfectly (storms move between scans), but starting from the
+            // closest-in-time overpass minimises the visible Δt and makes the
+            // initial view useful without the user having to hunt for a
+            // matching pass. Falls through to the first option if IR isn't
+            // loaded yet (rare — MW typically arrives after IR).
+            var defaultIdx = 0;
+            var irMs = NaN;
+            if (irMeta && irMeta.frames && irMeta.frames[irFrameIdx]) {
+                irMs = _parseUtcMs(irMeta.frames[irFrameIdx].datetime);
+            }
+            if (Number.isFinite(irMs)) {
+                var bestDiff = Infinity;
+                for (var j = 0; j < _gaMwOverpassData.length; j++) {
+                    var dt = _gaMwOverpassData[j].datetime;
+                    if (!dt) continue;
+                    var opMs = _parseUtcMs(
+                        dt.replace(' UTC', '').replace(' ', 'T') + ':00');
+                    if (!Number.isFinite(opMs)) continue;
+                    var d = Math.abs(opMs - irMs);
+                    if (d < bestDiff) { bestDiff = d; defaultIdx = j; }
+                }
+            }
+            sel.value = String(defaultIdx);
+
             if (status) status.textContent = _gaMwOverpassData.length + ' overpass(es)';
         })
         .catch(function (e) {
