@@ -3780,6 +3780,14 @@ function displayIROnMap(data) {
     if (_gaNexradVisible && selectedStorm) {
         _syncNexradWithIRFrame();
     }
+
+    // Re-anchor the MW overlay to the current frame's storm centre so the
+    // microwave swath follows the storm as the user scrubs IR frames (the
+    // image was rendered storm-relative around the MW scan time, which is
+    // typically 30–60 min from any given IR frame; the storm has moved).
+    if (_gaMwVisible && _gaMwData && _gaMwMapOverlay) {
+        _applyMwMotionShift();
+    }
 }
 
 var _irHoverThrottled = false;
@@ -4628,6 +4636,53 @@ var _gaMwMapOverlay = null;      // L.imageOverlay for the current MW frame
 var _gaMwMarkers = null;         // L.layerGroup of overpass time-markers on track
 var _gaMwLastAtcf = null;        // last ATCF ID we fetched for
 var _gaMwMarkerDt = null;        // current MW overpass datetime for intensity line
+// Retained MW response for motion-corrected bounds. The MW image is georeferenced
+// to the storm center at scan time, but the recon flight track + IR frame on the
+// map are at the currently-displayed frame time — often 30–60 min different.
+// We re-shift the overlay's bounds on every IR-frame change so the MW image
+// stays anchored to the storm even as the user scrubs forward/backward.
+var _gaMwData = null;            // { baseBounds, scanCenter:[lat,lon], scanTime }
+
+/**
+ * Re-anchor the MW image overlay to match the currently-displayed frame's
+ * storm centre. The server renders the swath in storm-relative km around
+ * the storm's position at the MW scan time, then converts to lat/lon and
+ * sends bounds. By the time the user is looking at a different IR frame
+ * (typically minutes-to-hours away in time), the storm has moved and the
+ * image no longer lines up with the recon track / IR cloud-top. Shifting
+ * the bounds by (frame_center − scan_center) keeps the image anchored to
+ * the storm rather than to the original satellite footprint.
+ *
+ * No-op when MW data isn't loaded, the overlay isn't on the map, or the
+ * current frame's centre is unknown (in which case we leave bounds at
+ * the raw scan-time values).
+ */
+function _applyMwMotionShift() {
+    if (!_gaMwData || !_gaMwMapOverlay) return;
+    var frameMeta = irMeta && irMeta.frames ? irMeta.frames[irFrameIdx] : null;
+    var frameLat = (frameMeta && frameMeta.lat != null) ? frameMeta.lat : null;
+    var frameLon = (frameMeta && frameMeta.lon != null) ? frameMeta.lon : null;
+    // Fallback: interpolate the storm's best-track position at the
+    // displayed frame's time. Needed when the IR backend doesn't carry
+    // per-frame lat/lon (e.g., older GridSat domains).
+    if ((frameLat == null || frameLon == null) && selectedStorm
+            && allTracks[selectedStorm.sid] && frameMeta && frameMeta.time) {
+        var p = _interpBestTrack(allTracks[selectedStorm.sid], frameMeta.time);
+        if (p) { frameLat = p.lat; frameLon = p.lon; }
+    }
+    if (frameLat == null || frameLon == null) {
+        // Nothing to shift against — restore raw bounds.
+        _gaMwMapOverlay.setBounds(_gaMwData.baseBounds);
+        return;
+    }
+    var dLat = frameLat - _gaMwData.scanCenter[0];
+    var dLon = frameLon - _gaMwData.scanCenter[1];
+    var b = _gaMwData.baseBounds;
+    _gaMwMapOverlay.setBounds(L.latLngBounds(
+        L.latLng(b.getSouth() + dLat, b.getWest() + dLon),
+        L.latLng(b.getNorth() + dLat, b.getEast() + dLon)
+    ));
+}
 
 /**
  * Fetch all microwave overpasses for the selected storm's lifecycle.
@@ -4791,10 +4846,23 @@ window.loadGlobalMWOverpass = function () {
             if (_gaMwMapOverlay && detailMap) {
                 detailMap.removeLayer(_gaMwMapOverlay);
             }
+            // Retain the raw response so we can re-shift the bounds when the
+            // user scrubs IR frames — the MW image was rendered storm-relative
+            // around `center_lat/lon` at scan time, but the displayed frame
+            // is typically 30–60 min off, by which time the storm has moved
+            // ~5–15 km. Applying that offset keeps the MW image anchored.
+            _gaMwData = {
+                baseBounds: bounds,
+                scanCenter: [json.center_lat, json.center_lon],
+                scanTime: json.datetime || null,
+            };
             _gaMwMapOverlay = L.imageOverlay(imgUrl, bounds, {
                 opacity: 0.8, interactive: false, zIndex: 650
             });
             if (_gaMwVisible && detailMap) _gaMwMapOverlay.addTo(detailMap);
+            // Apply motion correction now (before flyTo so the recenter
+            // targets the corrected centre, not the raw scan-time centre).
+            _applyMwMotionShift();
 
             // Re-center map on the MW image so the overpass is visible
             if (detailMap && bounds.isValid()) {
