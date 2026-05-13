@@ -5017,6 +5017,7 @@ var _gaNexradSiteLon = null;     // radar antenna lon
 var _gaNexradTilt = null;        // sweep elevation angle (deg)
 var _gaNexradProduct = null;     // 'velocity' or 'reflectivity'
 var _gaNexradExtremaMarkers = []; // L.markers for min/max value labels
+var _gaNexradExtremaVisible = true; // toggled by the "Extrema" checkbox in NEXRAD controls
 var _gaNexradPrefetched = Object.create(null); // key: site|s3_key|product → 1
 var _gaNexradPrefetchInflight = 0;
 
@@ -5403,6 +5404,18 @@ window.toggleGlobalNexradOverlay = function () {
 };
 
 /**
+ * Toggle the "max inbound / max outbound" extrema markers on the radar
+ * overlay. Wired to the `Extrema` checkbox in the NEXRAD controls strip.
+ * Hides existing markers immediately; re-creates them on the next
+ * frame/site/scan/product change via _updateGaNexradExtremaMarkers().
+ */
+window.toggleGaNexradExtrema = function () {
+    var cb = document.getElementById('ga-nexrad-extrema-toggle');
+    _gaNexradExtremaVisible = !!(cb && cb.checked);
+    _updateGaNexradExtremaMarkers();
+};
+
+/**
  * Handle hover readout for NEXRAD data.
  * Called from the shared mousemove handler on detailMap.
  */
@@ -5467,6 +5480,9 @@ function _updateGaNexradExtremaMarkers() {
     }
     if (!_gaNexradVisible || !_gaNexradData || !_gaNexradBounds || !detailMap) return;
     if (!_gaNexradRows || !_gaNexradCols) return;
+    // User-controlled "Extrema" toggle — when off, we've already cleared
+    // any existing markers above and we bail before placing new ones.
+    if (!_gaNexradExtremaVisible) return;
 
     var rows = _gaNexradRows, cols = _gaNexradCols, data = _gaNexradData;
     var minRaw = 256, minRow = -1, minCol = -1;
