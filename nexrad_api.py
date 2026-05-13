@@ -115,7 +115,7 @@ def _cache_put(key: str, val: dict):
 _GCS_NEXRAD_BUCKET = os.environ.get("GCS_IR_CACHE_BUCKET", "")
 _gcs_client = None
 _gcs_bucket = None
-_GCS_CACHE_VERSION = "v7"  # bump on LUT/render changes — v7 = RadarScope-style velocity palette
+_GCS_CACHE_VERSION = "v8"  # v8 = adds per-pixel gate-count grid for hover readout
 
 
 def _get_gcs_bucket():
@@ -393,6 +393,19 @@ def _encode_data_uint8(data_2d: np.ndarray, vmin: float, vmax: float) -> dict:
     }
 
 
+def _encode_count_uint8(count_2d: np.ndarray) -> dict:
+    """
+    Encode a uint8 gate-count grid as base64 for client-side hover readout.
+    Values are already in 0-255 (0 = no data, 255 = gap-filled).
+    """
+    arr = np.ascontiguousarray(count_2d, dtype=np.uint8)
+    return {
+        "count_data": base64.b64encode(arr.tobytes()).decode("ascii"),
+        "count_rows": int(arr.shape[0]),
+        "count_cols": int(arr.shape[1]),
+    }
+
+
 def _render_radar_image(data_2d: np.ndarray, lut: np.ndarray,
                         vmin: float, vmax: float, scale: int = 1) -> str:
     """
@@ -540,14 +553,15 @@ def _read_nexrad_level2(s3_key: str):
 
 def _grid_radar(radar, product: str = "reflectivity",
                 sweep: int = 0, grid_spacing_m: int = 1000,
-                max_range_m: int = 230000) -> Tuple[np.ndarray, dict]:
+                max_range_m: int = 230000) -> Tuple[np.ndarray, np.ndarray, dict]:
     """
     Grid a single sweep of radar data to a regular lat/lon grid.
 
     Uses lightweight direct gate-to-grid binning instead of pyart.map.grid_from_radars()
     to stay within Cloud Run's 2GB memory limit.
 
-    Returns (data_2d, metadata) where metadata includes bounds and grid info.
+    Returns (data_2d, count_2d, metadata) where count_2d is the per-bin contributing
+    gate count as uint8 (0 = no data, 255 = gap-filled from neighbors).
     """
     pyart = _get_pyart()
 
@@ -679,6 +693,7 @@ def _grid_radar(radar, product: str = "reflectivity",
     # Fill single-pixel radial gaps with nearest-neighbor average.
     # Gaps appear between radar beams at far range where angular spacing
     # exceeds the grid cell size.
+    fill_mask = None
     gaps = ~mask
     if gaps.any():
         from scipy.ndimage import uniform_filter
@@ -688,6 +703,14 @@ def _grid_radar(radar, product: str = "reflectivity",
         neighbor_cnt = uniform_filter(mask.astype(np.float64), size=3, mode='constant')
         fill_mask = gaps & (neighbor_cnt > 0.2)  # at least ~2 of 9 neighbors have data
         grid_2d[fill_mask] = (neighbor_sum[fill_mask] / neighbor_cnt[fill_mask]).astype(np.float32)
+
+    # Build uint8 gate-count grid for client hover readout:
+    #   0     → no data
+    #   255   → sentinel: pixel was gap-filled from 3×3 neighbors
+    #   1-254 → actual contributing super-res gate count (clamped)
+    count_u8 = np.clip(count_2d, 0, 254).astype(np.uint8)
+    if fill_mask is not None and fill_mask.any():
+        count_u8[fill_mask] = 255
 
     # Free intermediate arrays
     del xg, yg, zg, field_data, xi, yi, xi_flat, yi_flat, data_flat
@@ -744,7 +767,7 @@ def _grid_radar(radar, product: str = "reflectivity",
         "max_range_m": max_range_m,
     }
 
-    return data_2d, metadata
+    return data_2d, count_u8, metadata
 
 
 # ── API Endpoints ─────────────────────────────────────────────
@@ -849,7 +872,7 @@ def get_radar_frame(
 
     # Read and process the radar data
     radar = _read_nexrad_level2(s3_key)
-    data_2d, metadata = _grid_radar(
+    data_2d, count_2d, metadata = _grid_radar(
         radar, product=product, sweep=tilt,
         grid_spacing_m=grid_spacing_m,
         max_range_m=max_range_km * 1000,
@@ -861,12 +884,14 @@ def get_radar_frame(
         np.flipud(data_2d), prod_cfg["lut"], prod_cfg["vmin"], prod_cfg["vmax"], scale=1
     )
 
-    # Encode raw data for hover readout (also flipped for north-at-top display)
+    # Encode raw data + gate count for hover readout (flipped to match image)
     hover_data = _encode_data_uint8(np.flipud(data_2d), prod_cfg["vmin"], prod_cfg["vmax"])
+    hover_count = _encode_count_uint8(np.flipud(count_2d))
 
     result = {
         "image": image,
         **hover_data,
+        **hover_count,
         "bounds": metadata["bounds"],
         "site": site,
         "site_lat": metadata["lat_center"],
@@ -915,7 +940,7 @@ def get_storm_relative_frame(
 
     # Read and grid to geographic coordinates
     radar = _read_nexrad_level2(s3_key)
-    data_geo, metadata = _grid_radar(
+    data_geo, _count_unused, metadata = _grid_radar(
         radar, product=product, sweep=tilt,
         grid_spacing_m=1000,  # intermediate grid (1km matches /frame default)
         max_range_m=int((domain_km + 50) * 1000),  # +50 km margin

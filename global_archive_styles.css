@@ -1542,6 +1542,16 @@ input[type="range"].ga-range::-moz-range-thumb {
     color: var(--slate);
     font-size: 0.72rem;
 }
+/* NEXRAD readout inside the IR Tb hover tooltip — theme-aware so it has
+   contrast in both light and dark modes (was hard-coded light green). */
+.ir-tb-nexrad {
+    color: var(--um-green);
+    font-weight: 600;
+}
+.ir-tb-nexrad-sep {
+    color: var(--um-green);
+    margin: 0 1px;
+}
 
 /* NEXRAD min/max value labels on the map */
 .nexrad-extrema-label {

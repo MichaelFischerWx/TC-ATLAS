@@ -3820,12 +3820,16 @@ function _handleIRMouseMove(e) {
             var latStr2 = Math.abs(e.latlng.lat).toFixed(2) + (e.latlng.lat >= 0 ? '°N' : '°S');
             var lngStr2 = Math.abs(e.latlng.lng).toFixed(2) + (e.latlng.lng >= 0 ? '°E' : '°W');
             var beamStr2 = (nxOnly.beamKm != null)
-                ? '<span class="ir-tb-sep" style="color:#86efac;"> @ ' + nxOnly.beamKm.toFixed(1) + ' km ARL</span>'
+                ? '<span class="ir-tb-nexrad-sep"> @ ' + nxOnly.beamKm.toFixed(1) + ' km ARL</span>'
                 : '';
-            var nxHtml = '<span class="ir-tb-val" style="color:#86efac;">' +
+            var gateStr2 = (nxOnly.gateCount != null)
+                ? '<span class="ir-tb-nexrad-sep"> · n=' + nxOnly.gateCount + '</span>'
+                : '';
+            var nxHtml = '<span class="ir-tb-nexrad">' +
                          nxOnly.value + ' ' + nxOnly.units + '</span>' +
-                         '<span class="ir-tb-sep" style="color:#86efac;"> (88D)</span>' +
+                         '<span class="ir-tb-nexrad-sep"> (88D)</span>' +
                          beamStr2 +
+                         gateStr2 +
                          '<span class="ir-tb-sep"> &nbsp; </span>' +
                          '<span class="ir-tb-coord">' + latStr2 + ', ' + lngStr2 + '</span>';
             irTbTooltip.setLatLng(e.latlng).setContent(nxHtml);
@@ -3886,12 +3890,15 @@ function _handleIRMouseMove(e) {
     // Append NEXRAD readout if available
     var nxHover = _handleNexradMouseMove(e);
     if (nxHover) {
-        html += '<br><span class="ir-tb-val" style="color:#86efac;">' +
+        html += '<br><span class="ir-tb-nexrad">' +
                 nxHover.value + ' ' + nxHover.units + '</span>' +
-                '<span class="ir-tb-sep" style="color:#86efac;"> (88D)</span>';
+                '<span class="ir-tb-nexrad-sep"> (88D)</span>';
         if (nxHover.beamKm != null) {
-            html += '<span class="ir-tb-sep" style="color:#86efac;"> @ ' +
+            html += '<span class="ir-tb-nexrad-sep"> @ ' +
                     nxHover.beamKm.toFixed(1) + ' km ARL</span>';
+        }
+        if (nxHover.gateCount != null) {
+            html += '<span class="ir-tb-nexrad-sep"> · n=' + nxHover.gateCount + '</span>';
         }
     }
 
@@ -5001,6 +5008,9 @@ var _gaNexradMapOverlay = null;
 var _gaNexradData = null;       // raw uint8 hover data
 var _gaNexradRows = 0;
 var _gaNexradCols = 0;
+var _gaNexradCount = null;      // per-pixel super-res gate count (uint8; 255 = gap-filled)
+var _gaNexradCountRows = 0;
+var _gaNexradCountCols = 0;
 var _gaNexradVmin = -32;
 var _gaNexradVmax = 95;
 var _gaNexradBounds = null;     // L.latLngBounds
@@ -5261,6 +5271,19 @@ window.loadNexradFrame = function () {
                 _gaNexradVmin = json.data_vmin;
                 _gaNexradVmax = json.data_vmax;
             }
+            // Store per-pixel super-res gate count (matches data grid shape).
+            // 0 = no data, 255 = gap-filled from 3×3 neighbors, 1-254 = actual count.
+            if (json.count_data) {
+                var rawC = atob(json.count_data);
+                _gaNexradCount = new Uint8Array(rawC.length);
+                for (var j = 0; j < rawC.length; j++) _gaNexradCount[j] = rawC.charCodeAt(j);
+                _gaNexradCountRows = json.count_rows;
+                _gaNexradCountCols = json.count_cols;
+            } else {
+                _gaNexradCount = null;
+                _gaNexradCountRows = 0;
+                _gaNexradCountCols = 0;
+            }
             _gaNexradBounds = bounds;
             _gaNexradUnits = json.units || 'dBZ';
             _gaNexradSiteLat = (typeof json.site_lat === 'number') ? json.site_lat : null;
@@ -5450,6 +5473,17 @@ function _handleNexradMouseMove(e) {
     // Decode uint8 → physical value
     var val = _gaNexradVmin + (rawVal - 1) * (_gaNexradVmax - _gaNexradVmin) / 254.0;
     var out = { value: val.toFixed(1), units: _gaNexradUnits };
+
+    // Per-pixel super-res gate count (server-side bin-averaging).
+    // 255 is a sentinel for pixels back-filled from 3×3 neighbors.
+    if (_gaNexradCount && _gaNexradCountRows === _gaNexradRows && _gaNexradCountCols === _gaNexradCols) {
+        var nRaw = _gaNexradCount[row * _gaNexradCountCols + col];
+        if (nRaw === 255) {
+            out.gateCount = 'interp';
+        } else if (nRaw > 0) {
+            out.gateCount = nRaw;
+        }
+    }
 
     // Beam height ARL using 4/3-earth-radius approximation. Only valid
     // when we know the antenna location and sweep elevation angle.
