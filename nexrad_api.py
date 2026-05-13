@@ -115,7 +115,7 @@ def _cache_put(key: str, val: dict):
 _GCS_NEXRAD_BUCKET = os.environ.get("GCS_IR_CACHE_BUCKET", "")
 _gcs_client = None
 _gcs_bucket = None
-_GCS_CACHE_VERSION = "v6"
+_GCS_CACHE_VERSION = "v7"  # bump on LUT/render changes — v7 = RadarScope-style velocity palette
 
 
 def _get_gcs_bucket():
