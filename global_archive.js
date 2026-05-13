@@ -3785,7 +3785,10 @@ function displayIROnMap(data) {
     // scan-time geographic location; shifting it to align with a
     // different-time IR frame would place it at a fake position. The
     // visible offset between MW (scan time) and IR (frame time) is
-    // real physics — the storm moved between the two timestamps.
+    // real physics — the storm moved between the two timestamps. We do
+    // surface that gap as "Δt = ±N min vs IR" in the MW status line so
+    // the user can interpret any spatial offset accordingly.
+    if (_gaMwVisible) _updateMwStatusDt();
 }
 
 var _irHoverThrottled = false;
@@ -4639,6 +4642,32 @@ var _gaMwMarkerDt = null;        // current MW overpass datetime for intensity l
 // map are at the currently-displayed frame time — often 30–60 min different.
 // We re-shift the overlay's bounds on every IR-frame change so the MW image
 // stays anchored to the storm even as the user scrubs forward/backward.
+// MW scan time (ms since epoch). Set when an overpass is loaded so the
+// frame-status line can show "Δt = ±N min" against whatever IR frame
+// the user is scrubbing. The visible time gap is the explanation for
+// any spatial offset between the MW image and the IR clouds.
+var _gaMwScanMs = null;
+
+/** Update #ga-mw-frame-status to reflect the time gap between MW scan
+ *  and currently-displayed IR frame. Reads the IR frame's datetime
+ *  from irMeta and computes Δt in minutes. */
+function _updateMwStatusDt() {
+    var status = document.getElementById('ga-mw-frame-status');
+    if (!status || !status.dataset.base || _gaMwScanMs == null) return;
+    var irMs = NaN;
+    if (irMeta && irMeta.frames && irMeta.frames[irFrameIdx]) {
+        irMs = _parseUtcMs(irMeta.frames[irFrameIdx].datetime);
+    }
+    var base = status.dataset.base;
+    if (!Number.isFinite(irMs)) {
+        status.textContent = base;
+        return;
+    }
+    var dtMin = Math.round((irMs - _gaMwScanMs) / 60000);
+    var sign = dtMin >= 0 ? '+' : '−';
+    status.textContent = base + '  ·  Δt = ' + sign + Math.abs(dtMin) + ' min vs IR';
+}
+
 /**
  * Resample an equirectangular PNG (uniform-lat rows) so the rows are
  * uniformly spaced in Web Mercator y. Returns a Promise resolving to a
@@ -4887,7 +4916,17 @@ window.loadGlobalMWOverpass = function () {
                 });
             }
 
-            if (status) status.textContent = json.sensor + ' ' + json.datetime;
+            if (status) {
+                // Store the base label in dataset.base; _updateMwStatusDt
+                // appends Δt against the current IR frame each time it
+                // runs (initial load + every displayIROnMap call).
+                status.dataset.base = json.sensor + ' ' + json.datetime;
+                status.textContent = status.dataset.base;
+            }
+            // Parse MW scan time once so Δt is cheap to recompute later.
+            _gaMwScanMs = json.datetime ? _parseUtcMs(
+                json.datetime.replace(' UTC', '').replace(' ', 'T') + ':00') : null;
+            _updateMwStatusDt();
 
             // Update MW marker on intensity chart
             // MW datetime is "YYYY-MM-DD HH:MM UTC" → convert to ISO for Plotly
