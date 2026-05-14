@@ -4814,6 +4814,11 @@ def _detect_fl_format(filename: str) -> str:
         return "usaf_01"
     if fl.endswith(".ten"):
         return "usaf_ten"
+    if fl.endswith(".min"):
+        # Legacy NOAA WP-3D 1-minute flight-level archive (pre-2008-ish).
+        # Same fixed-column layout as the .1sec.txt files (TIME/Lat/Lon/...)
+        # so _parse_hrd_1sec reads it directly.
+        return "noaa_1min"
     if fl.endswith(".txt"):
         return "text_generic"  # Could be NOAA, USAF, or legacy
     return "unknown"
@@ -4827,7 +4832,7 @@ def _parse_fl_filename(filename: str, year: int):
     """
     # Strip extensions to get base mission ID
     base = filename
-    for ext in [".1sec.txt", ".10sec.txt", ".sec.txt", ".1sec", ".01.txt", ".ten", ".txt"]:
+    for ext in [".1sec.txt", ".10sec.txt", ".sec.txt", ".1sec", ".01.txt", ".ten", ".min", ".txt"]:
         if base.lower().endswith(ext):
             base = base[: -len(ext)]
             break
@@ -5376,7 +5381,7 @@ def _quick_max_wind_from_file(file_url: str) -> dict | None:
     filename = file_url.rsplit("/", 1)[-1]
     fmt = _detect_fl_format(filename)
     try:
-        if fmt == "noaa_1sec":
+        if fmt in ("noaa_1sec", "noaa_1min"):
             observations = h["parse_1sec"](text)
         elif fmt in ("usaf_10sec", "usaf_01", "usaf_ten"):
             observations = h["parse_1sec"](text)  # Unified parser handles both
