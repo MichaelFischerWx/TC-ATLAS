@@ -7127,37 +7127,59 @@ window.saveCurrentFramePng = function () {
     var showModels      = isCk('gif-show-models', false);
     var includeRadar    = !!(_gaNexradVisible && _gaNexradMapOverlay && _gaNexradBounds);
 
-    // Match GIF dimension calc so PNG and GIF are layout-identical.
     var irCols = frameData.tb_cols || 200;
     var irRows = frameData.tb_rows || 200;
-    var scale  = Math.max(1, Math.floor(480 / Math.max(irCols, irRows)));
-    var irImageH = irRows * scale;
-    var outW     = irCols * scale;
-    var intensityH = showIntensity ? 60 : 0;
-    var outH = 24 + irImageH + intensityH + 24;
+
+    // Output sizing: prefer the live Leaflet viewport at 2× upscale (WYSIWYG
+    // + crisp for sharing). Fall back to full-storm GIF-style sizing if the
+    // map isn't available for some reason.
+    var EXPORT_SCALE = 2;
+    var mapSize = (detailMap && detailMap.getSize) ? detailMap.getSize() : null;
+    var viewBounds = (detailMap && detailMap.getBounds) ? detailMap.getBounds() : null;
+
+    var outW, irImageH;
+    if (mapSize && mapSize.x > 0 && mapSize.y > 0 && viewBounds) {
+        outW     = Math.round(mapSize.x * EXPORT_SCALE);
+        irImageH = Math.round(mapSize.y * EXPORT_SCALE);
+    } else {
+        var s = Math.max(1, Math.floor(480 / Math.max(irCols, irRows)));
+        outW     = irCols * s;
+        irImageH = irRows * s;
+    }
+    // Scale header / chrome heights with EXPORT_SCALE for visual balance
+    var H_HEADER = 24 * EXPORT_SCALE;
+    var H_FOOTER = 24 * EXPORT_SCALE;
+    var intensityH = showIntensity ? 60 * EXPORT_SCALE : 0;
+    var outH = H_HEADER + irImageH + intensityH + H_FOOTER;
 
     var lut = IR_COLORMAPS[irSelectedColormap] || IR_COLORMAPS['enhanced'];
 
     var frameMeta = irMeta.frames ? irMeta.frames[fIdx] : null;
-    var fCenterLat, fCenterLon;
-    if (frameMeta && frameMeta.lat != null) {
-        fCenterLat = frameMeta.lat; fCenterLon = frameMeta.lon;
-    } else if (frameData.bounds) {
-        fCenterLat = (frameData.bounds.south + frameData.bounds.north) / 2;
-        fCenterLon = (frameData.bounds.west + frameData.bounds.east) / 2;
+    // Frame bounds drive the geo→pixel projection. With a live viewport
+    // available, use exactly what's on-screen (WYSIWYG). Otherwise default
+    // to the IR data's native bounds for the full-storm fallback.
+    var frameBounds;
+    if (viewBounds) {
+        frameBounds = {
+            south: viewBounds.getSouth(),
+            north: viewBounds.getNorth(),
+            west:  viewBounds.getWest(),
+            east:  viewBounds.getEast()
+        };
+    } else if (irCurrentBounds) {
+        frameBounds = {
+            south: irCurrentBounds.getSouth(),
+            north: irCurrentBounds.getNorth(),
+            west:  irCurrentBounds.getWest(),
+            east:  irCurrentBounds.getEast()
+        };
     } else {
-        fCenterLat = selectedStorm.lmi_lat || 20;
-        fCenterLon = selectedStorm.lmi_lon || -60;
-    }
-    var frameBounds = {
-        south: fCenterLat - 10, north: fCenterLat + 10,
-        west:  fCenterLon - 10, east:  fCenterLon + 10
-    };
-    if (frameData.bounds) {
-        frameBounds.south = frameData.bounds.south;
-        frameBounds.north = frameData.bounds.north;
-        frameBounds.west  = frameData.bounds.west;
-        frameBounds.east  = frameData.bounds.east;
+        var fCenterLat = (frameMeta && frameMeta.lat != null) ? frameMeta.lat : (selectedStorm.lmi_lat || 20);
+        var fCenterLon = (frameMeta && frameMeta.lon != null) ? frameMeta.lon : (selectedStorm.lmi_lon || -60);
+        frameBounds = {
+            south: fCenterLat - 10, north: fCenterLat + 10,
+            west:  fCenterLon - 10, east:  fCenterLon + 10
+        };
     }
 
     var compCanvas = document.createElement('canvas');
@@ -7169,16 +7191,27 @@ window.saveCurrentFramePng = function () {
     var stormLabel = (selectedStorm.name || 'UNNAMED') + ' ' + selectedStorm.year;
     var cat = getIntensityCategory(selectedStorm.peak_wind_kt);
     compCtx.fillStyle = '#c8d6e5';
-    compCtx.font = 'bold 13px sans-serif';
+    compCtx.font = 'bold ' + Math.round(13 * EXPORT_SCALE) + 'px sans-serif';
     compCtx.textBaseline = 'middle';
-    compCtx.fillText(stormLabel + ' · ' + cat, 8, 12);
+    compCtx.fillText(stormLabel + ' · ' + cat, 8 * EXPORT_SCALE, H_HEADER / 2);
     var dtStr = frameMeta ? (frameMeta.datetime || '') : '';
-    compCtx.font = '11px monospace';
+    compCtx.font = Math.round(11 * EXPORT_SCALE) + 'px monospace';
     compCtx.fillStyle = '#8899aa';
     var dtW = compCtx.measureText(dtStr).width;
-    compCtx.fillText(dtStr, outW - dtW - 8, 12);
+    compCtx.fillText(dtStr, outW - dtW - 8 * EXPORT_SCALE, H_HEADER / 2);
 
-    // IR base
+    // geoToPx is shared by IR, radar, coastlines, tracks, and the storm
+    // marker — all draw into the rectangle [0, H_HEADER, outW, irImageH]
+    // using the same lat/lon → pixel projection so they stay co-registered.
+    function geoToPx(lat, lon) {
+        var xF = (lon - frameBounds.west) / (frameBounds.east - frameBounds.west);
+        var yF = (frameBounds.north - lat) / (frameBounds.north - frameBounds.south);
+        return { x: xF * outW, y: H_HEADER + yF * irImageH };
+    }
+
+    // IR base — render LUT'd Tb to its own canvas at native resolution,
+    // then draw it onto the composite with geo-aligned destination rect
+    // (driven by frameBounds), so zoom-in users get the right sub-region.
     var tbArr = decodeTbData(frameData.tb_data);
     var irCanvas = document.createElement('canvas');
     irCanvas.width = irCols; irCanvas.height = irRows;
@@ -7190,21 +7223,29 @@ window.saveCurrentFramePng = function () {
         dpx[pp] = lut[li2]; dpx[pp+1] = lut[li2+1]; dpx[pp+2] = lut[li2+2]; dpx[pp+3] = lut[li2+3];
     }
     irCtx.putImageData(imgData, 0, 0);
-    compCtx.imageSmoothingEnabled = false;
-    compCtx.drawImage(irCanvas, 0, 24, outW, irImageH);
 
-    function geoToPx(lat, lon) {
-        var xF = (lon - frameBounds.west) / (frameBounds.east - frameBounds.west);
-        var yF = (frameBounds.north - lat) / (frameBounds.north - frameBounds.south);
-        return { x: xF * outW, y: 24 + yF * irImageH };
-    }
+    var irBoundsForDraw = irCurrentBounds || L.latLngBounds(
+        L.latLng(frameBounds.south, frameBounds.west),
+        L.latLng(frameBounds.north, frameBounds.east)
+    );
+    var irNW = geoToPx(irBoundsForDraw.getNorth(), irBoundsForDraw.getWest());
+    var irSE = geoToPx(irBoundsForDraw.getSouth(), irBoundsForDraw.getEast());
+    compCtx.save();
+    compCtx.beginPath();
+    compCtx.rect(0, H_HEADER, outW, irImageH);
+    compCtx.clip();
+    compCtx.imageSmoothingEnabled = false;
+    compCtx.drawImage(irCanvas, irNW.x, irNW.y, irSE.x - irNW.x, irSE.y - irNW.y);
+    compCtx.restore();
+
+    var MAP_BOTTOM = H_HEADER + irImageH;
 
     // Coastlines
     if (showCoastlines && _coastlineGeoJSON && _coastlineGeoJSON.features) {
         compCtx.save();
-        compCtx.beginPath(); compCtx.rect(0, 24, outW, irImageH); compCtx.clip();
+        compCtx.beginPath(); compCtx.rect(0, H_HEADER, outW, irImageH); compCtx.clip();
         compCtx.strokeStyle = 'rgba(200,200,200,0.55)';
-        compCtx.lineWidth = 0.8;
+        compCtx.lineWidth = 0.8 * EXPORT_SCALE;
         var bS = frameBounds.south, bN = frameBounds.north;
         var bWest = frameBounds.west, bEast = frameBounds.east;
         for (var fii = 0; fii < _coastlineGeoJSON.features.length; fii++) {
@@ -7226,7 +7267,7 @@ window.saveCurrentFramePng = function () {
                 var started = false;
                 for (var ci2 = 0; ci2 < coords.length; ci2++) {
                     var pp2 = geoToPx(coords[ci2][1], coords[ci2][0]);
-                    if (pp2.x < -20 || pp2.x > outW + 20 || pp2.y < 4 || pp2.y > 24 + irImageH + 20) {
+                    if (pp2.x < -20 || pp2.x > outW + 20 || pp2.y < H_HEADER - 20 || pp2.y > MAP_BOTTOM + 20) {
                         started = false; continue;
                     }
                     if (!started) { compCtx.moveTo(pp2.x, pp2.y); started = true; }
@@ -7241,11 +7282,11 @@ window.saveCurrentFramePng = function () {
     // Best-track marker
     if (frameMeta && frameMeta.lat != null) {
         var sp = geoToPx(frameMeta.lat, frameMeta.lon);
-        if (sp.y >= 24 && sp.y <= 24 + irImageH) {
+        if (sp.y >= H_HEADER && sp.y <= MAP_BOTTOM && sp.x >= 0 && sp.x <= outW) {
             compCtx.beginPath();
-            compCtx.arc(sp.x, sp.y, 3, 0, Math.PI * 2);
+            compCtx.arc(sp.x, sp.y, 3 * EXPORT_SCALE, 0, Math.PI * 2);
             compCtx.strokeStyle = '#ffffff';
-            compCtx.lineWidth = 1.5;
+            compCtx.lineWidth = 1.5 * EXPORT_SCALE;
             compCtx.stroke();
         }
     }
@@ -7267,22 +7308,22 @@ window.saveCurrentFramePng = function () {
             if (tp.w != null && tp.w > maxW) maxW = tp.w;
         }
         if (maxW < 40) maxW = 80;
-        var chartY = 24 + irImageH, chartX = 4, chartW = outW - 8;
+        var chartY = MAP_BOTTOM, chartX = 4 * EXPORT_SCALE, chartW = outW - 8 * EXPORT_SCALE;
         compCtx.fillStyle = 'rgba(10,22,40,0.9)';
         compCtx.fillRect(chartX, chartY, chartW, intensityH);
         compCtx.strokeStyle = 'rgba(15, 22, 35, 0.08)';
-        compCtx.lineWidth = 0.5;
+        compCtx.lineWidth = 0.5 * EXPORT_SCALE;
         compCtx.strokeRect(chartX, chartY, chartW, intensityH);
         if (intensityPts.length > 1) {
             compCtx.beginPath();
             compCtx.strokeStyle = '#ff6b6b';
-            compCtx.lineWidth = 1.5;
+            compCtx.lineWidth = 1.5 * EXPORT_SCALE;
             var first = true;
             for (var ip = 0; ip < intensityPts.length; ip++) {
                 var ipt = intensityPts[ip];
                 if (ipt.w == null) continue;
                 var pxC = chartX + ipt.frac * chartW;
-                var pyC = chartY + intensityH - 2 - (ipt.w / maxW) * (intensityH - 4);
+                var pyC = chartY + intensityH - 2 * EXPORT_SCALE - (ipt.w / maxW) * (intensityH - 4 * EXPORT_SCALE);
                 if (first) { compCtx.moveTo(pxC, pyC); first = false; }
                 else compCtx.lineTo(pxC, pyC);
             }
@@ -7292,14 +7333,14 @@ window.saveCurrentFramePng = function () {
         var currentFrac = Math.max(0, Math.min(1, (fMs - firstMs) / spanMs));
         var markerX = chartX + currentFrac * chartW;
         compCtx.strokeStyle = 'rgba(0,180,255,0.7)';
-        compCtx.lineWidth = 1;
-        compCtx.setLineDash([2, 2]);
+        compCtx.lineWidth = 1 * EXPORT_SCALE;
+        compCtx.setLineDash([2 * EXPORT_SCALE, 2 * EXPORT_SCALE]);
         compCtx.beginPath(); compCtx.moveTo(markerX, chartY); compCtx.lineTo(markerX, chartY + intensityH); compCtx.stroke();
         compCtx.setLineDash([]);
-        compCtx.font = '7px sans-serif';
+        compCtx.font = Math.round(7 * EXPORT_SCALE) + 'px sans-serif';
         compCtx.fillStyle = 'rgba(150,170,190,0.5)';
         compCtx.textBaseline = 'top';
-        compCtx.fillText('Wind (kt)', chartX + 2, chartY + 1);
+        compCtx.fillText('Wind (kt)', chartX + 2 * EXPORT_SCALE, chartY + 1 * EXPORT_SCALE);
     }
 
     // IR colorbar in footer
@@ -7314,36 +7355,39 @@ window.saveCurrentFramePng = function () {
         cbarImg.data[cpi+2] = cbarLut[cli+2]; cbarImg.data[cpi+3] = 255;
     }
     cbarCtx.putImageData(cbarImg, 0, 0);
-    var footerY = 24 + irImageH + intensityH;
-    var cbarY = footerY + 2, cbarX2 = 30, cbarW = outW - 60;
-    compCtx.drawImage(cbarCanvas, cbarX2, cbarY, cbarW, 8);
-    compCtx.font = '9px sans-serif';
+    var footerY = MAP_BOTTOM + intensityH;
+    var cbarY = footerY + 2 * EXPORT_SCALE;
+    var cbarX2 = 30 * EXPORT_SCALE;
+    var cbarW = outW - 60 * EXPORT_SCALE;
+    compCtx.drawImage(cbarCanvas, cbarX2, cbarY, cbarW, 8 * EXPORT_SCALE);
+    compCtx.font = Math.round(9 * EXPORT_SCALE) + 'px sans-serif';
     compCtx.fillStyle = '#6b7d8e';
     compCtx.textBaseline = 'top';
-    compCtx.fillText('310 K', cbarX2, cbarY + 10);
+    compCtx.fillText('310 K', cbarX2, cbarY + 10 * EXPORT_SCALE);
     var midW2 = compCtx.measureText('240').width;
-    compCtx.fillText('240', cbarX2 + cbarW / 2 - midW2 / 2, cbarY + 10);
-    compCtx.fillText('170 K', cbarX2 + cbarW - compCtx.measureText('170 K').width, cbarY + 10);
+    compCtx.fillText('240', cbarX2 + cbarW / 2 - midW2 / 2, cbarY + 10 * EXPORT_SCALE);
+    compCtx.fillText('170 K', cbarX2 + cbarW - compCtx.measureText('170 K').width, cbarY + 10 * EXPORT_SCALE);
 
     function _finishAndDownload() {
         // Prominent watermark pill bottom-right of IR area
-        compCtx.font = 'bold 11px sans-serif';
+        var fontPx = Math.round(11 * EXPORT_SCALE);
+        compCtx.font = 'bold ' + fontPx + 'px sans-serif';
         compCtx.textBaseline = 'bottom';
         var wm = 'TC-ATLAS';
         var wmW = compCtx.measureText(wm).width;
-        var wmPad = 6;
-        var wmX = outW - wmW - wmPad - 4;
-        var wmY = 24 + irImageH - 4;
+        var wmPad = 6 * EXPORT_SCALE;
+        var wmX = outW - wmW - wmPad - 4 * EXPORT_SCALE;
+        var wmY = MAP_BOTTOM - 4 * EXPORT_SCALE;
         compCtx.fillStyle = 'rgba(10,22,40,0.55)';
-        compCtx.fillRect(wmX - wmPad, wmY - 13, wmW + 2 * wmPad, 16);
+        compCtx.fillRect(wmX - wmPad, wmY - (fontPx + 2), wmW + 2 * wmPad, fontPx + 5);
         compCtx.fillStyle = 'rgba(255,255,255,0.92)';
         compCtx.fillText(wm, wmX, wmY);
 
         // Small bottom-left attribution
-        compCtx.font = '9px sans-serif';
+        compCtx.font = Math.round(9 * EXPORT_SCALE) + 'px sans-serif';
         compCtx.fillStyle = 'rgba(100,120,140,0.6)';
         compCtx.textBaseline = 'bottom';
-        compCtx.fillText('michaelfischerwx.github.io/TC-ATLAS', 4, outH - 4);
+        compCtx.fillText('michaelfischerwx.github.io/TC-ATLAS', 4 * EXPORT_SCALE, outH - 4 * EXPORT_SCALE);
 
         compCanvas.toBlob(function (blob) {
             if (!blob) {
@@ -7391,7 +7435,7 @@ window.saveCurrentFramePng = function () {
         rdrImg.onload = function () {
             compCtx.save();
             compCtx.beginPath();
-            compCtx.rect(0, 24, outW, irImageH);
+            compCtx.rect(0, H_HEADER, outW, irImageH);
             compCtx.clip();
             compCtx.globalAlpha = 0.75;
             compCtx.imageSmoothingEnabled = false;
