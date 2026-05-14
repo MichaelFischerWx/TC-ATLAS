@@ -7094,6 +7094,318 @@ function _gifCleanup() {
 }
 
 
+// ── STATIC PNG EXPORT (current frame, IR + radar + watermark) ──────
+//
+// Mirrors the GIF composer's per-frame layout for a single frame, with
+// two additions: the live NEXRAD overlay (if active) drawn on top of the
+// IR base, and a prominent TC-ATLAS watermark. Inherits the toggle state
+// of the GIF settings panel for intensity-chart/coastlines/models so the
+// PNG matches whatever the user has set up for animated export.
+window.saveCurrentFramePng = function () {
+    if (!irMeta || !selectedStorm) { showToast('No storm loaded'); return; }
+    var fIdx = irFrameIdx;
+    var frameData = irFrames[fIdx];
+    if (!frameData || !frameData.tb_data) {
+        showToast('Current frame not loaded yet — wait for the IR overlay');
+        return;
+    }
+
+    var btn = document.getElementById('ir-png-btn');
+    if (btn) { btn.disabled = true; btn.style.opacity = '0.4'; }
+
+    function isCk(id, def) {
+        var e = document.getElementById(id);
+        return e ? e.checked : def;
+    }
+    var showIntensity   = isCk('gif-show-intensity', true);
+    var showCoastlines  = isCk('gif-show-coastlines', true);
+    var showModels      = isCk('gif-show-models', false);
+    var includeRadar    = !!(_gaNexradVisible && _gaNexradMapOverlay && _gaNexradBounds);
+
+    // Match GIF dimension calc so PNG and GIF are layout-identical.
+    var irCols = frameData.tb_cols || 200;
+    var irRows = frameData.tb_rows || 200;
+    var scale  = Math.max(1, Math.floor(480 / Math.max(irCols, irRows)));
+    var irImageH = irRows * scale;
+    var outW     = irCols * scale;
+    var intensityH = showIntensity ? 60 : 0;
+    var outH = 24 + irImageH + intensityH + 24;
+
+    var lut = IR_COLORMAPS[irSelectedColormap] || IR_COLORMAPS['enhanced'];
+
+    var frameMeta = irMeta.frames ? irMeta.frames[fIdx] : null;
+    var fCenterLat, fCenterLon;
+    if (frameMeta && frameMeta.lat != null) {
+        fCenterLat = frameMeta.lat; fCenterLon = frameMeta.lon;
+    } else if (frameData.bounds) {
+        fCenterLat = (frameData.bounds.south + frameData.bounds.north) / 2;
+        fCenterLon = (frameData.bounds.west + frameData.bounds.east) / 2;
+    } else {
+        fCenterLat = selectedStorm.lmi_lat || 20;
+        fCenterLon = selectedStorm.lmi_lon || -60;
+    }
+    var frameBounds = {
+        south: fCenterLat - 10, north: fCenterLat + 10,
+        west:  fCenterLon - 10, east:  fCenterLon + 10
+    };
+    if (frameData.bounds) {
+        frameBounds.south = frameData.bounds.south;
+        frameBounds.north = frameData.bounds.north;
+        frameBounds.west  = frameData.bounds.west;
+        frameBounds.east  = frameData.bounds.east;
+    }
+
+    var compCanvas = document.createElement('canvas');
+    compCanvas.width = outW; compCanvas.height = outH;
+    var compCtx = compCanvas.getContext('2d');
+    compCtx.fillStyle = '#0a1628';
+    compCtx.fillRect(0, 0, outW, outH);
+
+    var stormLabel = (selectedStorm.name || 'UNNAMED') + ' ' + selectedStorm.year;
+    var cat = getIntensityCategory(selectedStorm.peak_wind_kt);
+    compCtx.fillStyle = '#c8d6e5';
+    compCtx.font = 'bold 13px sans-serif';
+    compCtx.textBaseline = 'middle';
+    compCtx.fillText(stormLabel + ' · ' + cat, 8, 12);
+    var dtStr = frameMeta ? (frameMeta.datetime || '') : '';
+    compCtx.font = '11px monospace';
+    compCtx.fillStyle = '#8899aa';
+    var dtW = compCtx.measureText(dtStr).width;
+    compCtx.fillText(dtStr, outW - dtW - 8, 12);
+
+    // IR base
+    var tbArr = decodeTbData(frameData.tb_data);
+    var irCanvas = document.createElement('canvas');
+    irCanvas.width = irCols; irCanvas.height = irRows;
+    var irCtx = irCanvas.getContext('2d');
+    var imgData = irCtx.createImageData(irCols, irRows);
+    var dpx = imgData.data;
+    for (var pi = 0; pi < tbArr.length; pi++) {
+        var v = tbArr[pi]; var li2 = v * 4; var pp = pi * 4;
+        dpx[pp] = lut[li2]; dpx[pp+1] = lut[li2+1]; dpx[pp+2] = lut[li2+2]; dpx[pp+3] = lut[li2+3];
+    }
+    irCtx.putImageData(imgData, 0, 0);
+    compCtx.imageSmoothingEnabled = false;
+    compCtx.drawImage(irCanvas, 0, 24, outW, irImageH);
+
+    function geoToPx(lat, lon) {
+        var xF = (lon - frameBounds.west) / (frameBounds.east - frameBounds.west);
+        var yF = (frameBounds.north - lat) / (frameBounds.north - frameBounds.south);
+        return { x: xF * outW, y: 24 + yF * irImageH };
+    }
+
+    // Coastlines
+    if (showCoastlines && _coastlineGeoJSON && _coastlineGeoJSON.features) {
+        compCtx.save();
+        compCtx.beginPath(); compCtx.rect(0, 24, outW, irImageH); compCtx.clip();
+        compCtx.strokeStyle = 'rgba(200,200,200,0.55)';
+        compCtx.lineWidth = 0.8;
+        var bS = frameBounds.south, bN = frameBounds.north;
+        var bWest = frameBounds.west, bEast = frameBounds.east;
+        for (var fii = 0; fii < _coastlineGeoJSON.features.length; fii++) {
+            var geom = _coastlineGeoJSON.features[fii].geometry;
+            if (!geom) continue;
+            var coordSets = geom.type === 'MultiLineString' ? geom.coordinates : [geom.coordinates];
+            for (var si = 0; si < coordSets.length; si++) {
+                var coords = coordSets[si];
+                if (!coords || coords.length < 2) continue;
+                var anyIn = false;
+                for (var cci = 0; cci < coords.length; cci++) {
+                    var clon = coords[cci][0], clat = coords[cci][1];
+                    if (clat >= bS - 2 && clat <= bN + 2 && clon >= bWest - 2 && clon <= bEast + 2) {
+                        anyIn = true; break;
+                    }
+                }
+                if (!anyIn) continue;
+                compCtx.beginPath();
+                var started = false;
+                for (var ci2 = 0; ci2 < coords.length; ci2++) {
+                    var pp2 = geoToPx(coords[ci2][1], coords[ci2][0]);
+                    if (pp2.x < -20 || pp2.x > outW + 20 || pp2.y < 4 || pp2.y > 24 + irImageH + 20) {
+                        started = false; continue;
+                    }
+                    if (!started) { compCtx.moveTo(pp2.x, pp2.y); started = true; }
+                    else compCtx.lineTo(pp2.x, pp2.y);
+                }
+                compCtx.stroke();
+            }
+        }
+        compCtx.restore();
+    }
+
+    // Best-track marker
+    if (frameMeta && frameMeta.lat != null) {
+        var sp = geoToPx(frameMeta.lat, frameMeta.lon);
+        if (sp.y >= 24 && sp.y <= 24 + irImageH) {
+            compCtx.beginPath();
+            compCtx.arc(sp.x, sp.y, 3, 0, Math.PI * 2);
+            compCtx.strokeStyle = '#ffffff';
+            compCtx.lineWidth = 1.5;
+            compCtx.stroke();
+        }
+    }
+
+    // Intensity chart
+    if (showIntensity) {
+        var track = allTracks[selectedStorm.sid] || [];
+        var firstMs = (irMeta.frames && irMeta.frames[0]) ? _parseUtcMs(irMeta.frames[0].datetime) : 0;
+        var lastMs  = (irMeta.frames && irMeta.frames[irMeta.frames.length - 1]) ? _parseUtcMs(irMeta.frames[irMeta.frames.length - 1].datetime) : 1;
+        var spanMs = Math.max(1, lastMs - firstMs);
+        var intensityPts = [];
+        var maxW = 0;
+        for (var ti = 0; ti < track.length; ti++) {
+            var tp = track[ti];
+            if (!tp.t) continue;
+            var tMs = _parseUtcMs(tp.t);
+            if (tMs < firstMs || tMs > lastMs) continue;
+            intensityPts.push({ frac: (tMs - firstMs) / spanMs, w: tp.w });
+            if (tp.w != null && tp.w > maxW) maxW = tp.w;
+        }
+        if (maxW < 40) maxW = 80;
+        var chartY = 24 + irImageH, chartX = 4, chartW = outW - 8;
+        compCtx.fillStyle = 'rgba(10,22,40,0.9)';
+        compCtx.fillRect(chartX, chartY, chartW, intensityH);
+        compCtx.strokeStyle = 'rgba(15, 22, 35, 0.08)';
+        compCtx.lineWidth = 0.5;
+        compCtx.strokeRect(chartX, chartY, chartW, intensityH);
+        if (intensityPts.length > 1) {
+            compCtx.beginPath();
+            compCtx.strokeStyle = '#ff6b6b';
+            compCtx.lineWidth = 1.5;
+            var first = true;
+            for (var ip = 0; ip < intensityPts.length; ip++) {
+                var ipt = intensityPts[ip];
+                if (ipt.w == null) continue;
+                var pxC = chartX + ipt.frac * chartW;
+                var pyC = chartY + intensityH - 2 - (ipt.w / maxW) * (intensityH - 4);
+                if (first) { compCtx.moveTo(pxC, pyC); first = false; }
+                else compCtx.lineTo(pxC, pyC);
+            }
+            compCtx.stroke();
+        }
+        var fMs = frameMeta ? _parseUtcMs(frameMeta.datetime) : 0;
+        var currentFrac = Math.max(0, Math.min(1, (fMs - firstMs) / spanMs));
+        var markerX = chartX + currentFrac * chartW;
+        compCtx.strokeStyle = 'rgba(0,180,255,0.7)';
+        compCtx.lineWidth = 1;
+        compCtx.setLineDash([2, 2]);
+        compCtx.beginPath(); compCtx.moveTo(markerX, chartY); compCtx.lineTo(markerX, chartY + intensityH); compCtx.stroke();
+        compCtx.setLineDash([]);
+        compCtx.font = '7px sans-serif';
+        compCtx.fillStyle = 'rgba(150,170,190,0.5)';
+        compCtx.textBaseline = 'top';
+        compCtx.fillText('Wind (kt)', chartX + 2, chartY + 1);
+    }
+
+    // IR colorbar in footer
+    var cbarLut = lut;
+    var cbarCanvas = document.createElement('canvas');
+    cbarCanvas.width = 255; cbarCanvas.height = 1;
+    var cbarCtx = cbarCanvas.getContext('2d');
+    var cbarImg = cbarCtx.createImageData(255, 1);
+    for (var cx = 0; cx < 255; cx++) {
+        var cval = 255 - cx; var cli = cval * 4; var cpi = cx * 4;
+        cbarImg.data[cpi] = cbarLut[cli]; cbarImg.data[cpi+1] = cbarLut[cli+1];
+        cbarImg.data[cpi+2] = cbarLut[cli+2]; cbarImg.data[cpi+3] = 255;
+    }
+    cbarCtx.putImageData(cbarImg, 0, 0);
+    var footerY = 24 + irImageH + intensityH;
+    var cbarY = footerY + 2, cbarX2 = 30, cbarW = outW - 60;
+    compCtx.drawImage(cbarCanvas, cbarX2, cbarY, cbarW, 8);
+    compCtx.font = '9px sans-serif';
+    compCtx.fillStyle = '#6b7d8e';
+    compCtx.textBaseline = 'top';
+    compCtx.fillText('310 K', cbarX2, cbarY + 10);
+    var midW2 = compCtx.measureText('240').width;
+    compCtx.fillText('240', cbarX2 + cbarW / 2 - midW2 / 2, cbarY + 10);
+    compCtx.fillText('170 K', cbarX2 + cbarW - compCtx.measureText('170 K').width, cbarY + 10);
+
+    function _finishAndDownload() {
+        // Prominent watermark pill bottom-right of IR area
+        compCtx.font = 'bold 11px sans-serif';
+        compCtx.textBaseline = 'bottom';
+        var wm = 'TC-ATLAS';
+        var wmW = compCtx.measureText(wm).width;
+        var wmPad = 6;
+        var wmX = outW - wmW - wmPad - 4;
+        var wmY = 24 + irImageH - 4;
+        compCtx.fillStyle = 'rgba(10,22,40,0.55)';
+        compCtx.fillRect(wmX - wmPad, wmY - 13, wmW + 2 * wmPad, 16);
+        compCtx.fillStyle = 'rgba(255,255,255,0.92)';
+        compCtx.fillText(wm, wmX, wmY);
+
+        // Small bottom-left attribution
+        compCtx.font = '9px sans-serif';
+        compCtx.fillStyle = 'rgba(100,120,140,0.6)';
+        compCtx.textBaseline = 'bottom';
+        compCtx.fillText('michaelfischerwx.github.io/TC-ATLAS', 4, outH - 4);
+
+        compCanvas.toBlob(function (blob) {
+            if (!blob) {
+                showToast('PNG export failed');
+                if (btn) { btn.disabled = false; btn.style.opacity = ''; }
+                return;
+            }
+            var name = (selectedStorm.name || 'UNNAMED').replace(/\s+/g, '_');
+            var safeDt = (dtStr || 'frame').replace(/[^0-9A-Za-z_-]/g, '');
+            var filename = 'TC-ATLAS_' + name + '_' + selectedStorm.year + '_' + safeDt + '.png';
+            var a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(a.href);
+            showToast('PNG saved: ' + filename);
+            _ga('ga_export_png', {
+                sid: selectedStorm.sid, storm_name: selectedStorm.name,
+                cmap: irSelectedColormap, with_radar: includeRadar,
+                size_bytes: blob.size
+            });
+            if (btn) { btn.disabled = false; btn.style.opacity = ''; }
+        }, 'image/png');
+    }
+
+    if (includeRadar) {
+        // L.imageOverlay stores its source URL on `_url` (used internally
+        // for setUrl); the rendered <img> at getElement().src is the
+        // authoritative reference if _url isn't exposed in this Leaflet build.
+        var rdrEl = _gaNexradMapOverlay.getElement && _gaNexradMapOverlay.getElement();
+        var radarUrl = _gaNexradMapOverlay._url ||
+                       (_gaNexradMapOverlay.options && _gaNexradMapOverlay.options.url) ||
+                       (rdrEl && rdrEl.src);
+        if (!radarUrl) { _finishAndDownload(); return; }
+
+        var rb = _gaNexradBounds;
+        var nw = geoToPx(rb.getNorth(), rb.getWest());
+        var se = geoToPx(rb.getSouth(), rb.getEast());
+        var rx = nw.x, ry = nw.y, rw = se.x - nw.x, rh = se.y - nw.y;
+
+        var rdrImg = new Image();
+        rdrImg.crossOrigin = 'anonymous';
+        rdrImg.onload = function () {
+            compCtx.save();
+            compCtx.beginPath();
+            compCtx.rect(0, 24, outW, irImageH);
+            compCtx.clip();
+            compCtx.globalAlpha = 0.75;
+            compCtx.imageSmoothingEnabled = false;
+            compCtx.drawImage(rdrImg, rx, ry, rw, rh);
+            compCtx.globalAlpha = 1.0;
+            compCtx.restore();
+            _finishAndDownload();
+        };
+        rdrImg.onerror = function () {
+            console.warn('PNG export: radar image failed to load, continuing without overlay');
+            _finishAndDownload();
+        };
+        rdrImg.src = radarUrl;
+    } else {
+        _finishAndDownload();
+    }
+};
+
+
 // ═══════════════════════════════════════════════════════════════
 // ── SIDE-BY-SIDE IR COMPARISON ────────────────────────────────
 // ═══════════════════════════════════════════════════════════════
