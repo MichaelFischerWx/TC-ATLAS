@@ -1731,8 +1731,8 @@ function _applyIntensityMarker(dtStr) {
     var baseShapes = window._timelineBaseShapes || [];
     var extraShapes = [];
 
-    // IR vertical line (yellow/gold) — show when IR or 88D is active
-    if (dtStr && (irOverlayVisible || _gaNexradVisible)) {
+    // IR vertical line (yellow/gold) — IR overlay only
+    if (dtStr && irOverlayVisible) {
         extraShapes.push({
             type: 'line',
             xref: 'x',
@@ -1742,6 +1742,21 @@ function _applyIntensityMarker(dtStr) {
             y0: 0,
             y1: 1,
             line: { color: 'rgba(255,200,50,0.7)', width: 2, dash: 'solid' }
+        });
+    }
+
+    // NEXRAD vertical line (light green dashed) — tracks ground-radar
+    // scan time independently so it shows even when IR is hidden.
+    if (_gaNexradMarkerDt && _gaNexradVisible) {
+        extraShapes.push({
+            type: 'line',
+            xref: 'x',
+            yref: 'paper',
+            x0: _gaNexradMarkerDt,
+            x1: _gaNexradMarkerDt,
+            y0: 0,
+            y1: 1,
+            line: { color: 'rgba(120,230,140,0.85)', width: 2, dash: 'dash' }
         });
     }
 
@@ -4666,6 +4681,7 @@ var _gaMwMapOverlay = null;      // L.imageOverlay for the current MW frame
 var _gaMwMarkers = null;         // L.layerGroup of overpass time-markers on track
 var _gaMwLastAtcf = null;        // last ATCF ID we fetched for
 var _gaMwMarkerDt = null;        // current MW overpass datetime for intensity line
+var _gaNexradMarkerDt = null;    // current NEXRAD scan datetime for intensity line
 // Retained MW response for motion-corrected bounds. The MW image is georeferenced
 // to the storm center at scan time, but the recon flight track + IR frame on the
 // map are at the currently-displayed frame time — often 30–60 min different.
@@ -5316,6 +5332,16 @@ window.loadNexradFrame = function () {
 
             if (status) status.textContent = json.site + ' ' + json.scan_time + ' — ' + json.label + ' (tilt ' + json.tilt + '\u00B0)';
 
+            // Update NEXRAD vertical line on the intensity chart.
+            // Backend scan_time is "YYYY-MM-DD HH:MM:SS UTC" — coerce to
+            // an ISO string Plotly's date axis can parse directly.
+            if (json.scan_time) {
+                _gaNexradMarkerDt = json.scan_time
+                    .replace(' UTC', 'Z')
+                    .replace(' ', 'T');
+                _applyIntensityMarker(_lastMarkerDt);
+            }
+
             // Update colorbar
             _updateGaNexradColorbar(product);
 
@@ -5431,6 +5457,9 @@ window.toggleGlobalNexradOverlay = function () {
             }
             _gaNexradExtremaMarkers = [];
         }
+        // Drop the NEXRAD time line from the intensity chart.
+        _gaNexradMarkerDt = null;
+        _applyIntensityMarker(_lastMarkerDt);
         return;
     }
 
