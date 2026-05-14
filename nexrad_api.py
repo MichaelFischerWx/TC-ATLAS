@@ -115,7 +115,7 @@ def _cache_put(key: str, val: dict):
 _GCS_NEXRAD_BUCKET = os.environ.get("GCS_IR_CACHE_BUCKET", "")
 _gcs_client = None
 _gcs_bucket = None
-_GCS_CACHE_VERSION = "v13"  # v13 = 3-sweep dealias window (memory fix, was OOMing on super-res Helene KTLH)
+_GCS_CACHE_VERSION = "v14"  # v14 = beam-aware gridder for legacy (pre-2008) NEXRAD wedge gaps
 
 
 def _get_gcs_bucket():
@@ -562,6 +562,116 @@ def _read_nexrad_level2(s3_key: str):
     return radar
 
 
+# ── Legacy NEXRAD detection ──────────────────────────────────
+# Pre-2008 Build-7/8 NEXRAD data is "Legacy Resolution":
+#   - ~360 rays/sweep × 1° azimuth × 1 km range gates
+# Modern super-res (post-2008) is:
+#   - ~720 rays/sweep × 0.5° azimuth × 0.25 km range gates
+# When binned to a 1 km Cartesian grid, legacy data leaves radial wedge
+# gaps wider than the 3-cell fill kernel can bridge at far range. We
+# route legacy sweeps through pyart's beam-distance-weighted gridder
+# (option `roi_func='dist_beam'`), which paints each gate's beam
+# footprint and fills the wedges by construction. Modern super-res
+# stays on the fast nearest-neighbor binner to bound memory on big VCPs.
+
+_LEGACY_RAY_THRESHOLD = 400        # super-res ≥ ~720; legacy ≈ 360
+_LEGACY_GATE_SPACING_M = 750.0     # super-res 250 m; legacy 1000 m
+
+
+def _is_legacy_resolution(radar, sweep_idx: int = 0) -> bool:
+    """Detect pre-2008 legacy NEXRAD resolution for one sweep."""
+    try:
+        s0 = int(radar.sweep_start_ray_index["data"][sweep_idx])
+        s1 = int(radar.sweep_end_ray_index["data"][sweep_idx])
+        n_rays = s1 - s0 + 1
+    except Exception:
+        return False
+    try:
+        rng = radar.range["data"]
+        gate_spacing_m = float(rng[1] - rng[0]) if len(rng) > 1 else 0.0
+    except Exception:
+        return False
+    return n_rays < _LEGACY_RAY_THRESHOLD and gate_spacing_m >= _LEGACY_GATE_SPACING_M
+
+
+def _grid_radar_pyart_legacy(radar, field: str, max_range_m: int,
+                             grid_spacing_m: int,
+                             site_hint: Optional[str]):
+    """
+    Pyart beam-aware gridder for legacy (pre-2008) NEXRAD sweeps.
+
+    Returns (data_2d, count_u8) shaped (n_bins, n_bins) with y increasing
+    northward — same convention as the fast binner. Returns None on failure
+    so the caller can fall back.
+
+    Memory: legacy sweeps are ~360 rays × ~460 gates ≈ 166k points; the
+    output grid is ~460×460 cells. Working set is well under 100 MB —
+    the super-res OOM that motivated v13 doesn't apply here.
+    """
+    pyart = _get_pyart()
+    if pyart is None:
+        return None
+
+    # Pyart uses radar.latitude/longitude as the grid origin. Pre-2008
+    # Message Type 1 files sometimes carry 0,0 — patch from the site table
+    # before gridding so the projection lines up with the bounds calc
+    # downstream.
+    try:
+        radar_lat = float(radar.latitude["data"][0])
+        radar_lon = float(radar.longitude["data"][0])
+    except Exception:
+        radar_lat = 0.0
+        radar_lon = 0.0
+    if abs(radar_lat) < 0.01 and abs(radar_lon) < 0.01:
+        site_id = (radar.metadata.get("instrument_name") or "").upper().strip()
+        if site_id not in NEXRAD_SITES and site_hint:
+            site_id = site_hint.upper().strip()
+        if site_id in NEXRAD_SITES:
+            radar_lat, radar_lon = NEXRAD_SITES[site_id][:2]
+            radar.latitude["data"] = np.array([radar_lat], dtype=np.float64)
+            radar.longitude["data"] = np.array([radar_lon], dtype=np.float64)
+            logger.info(f"Legacy gridder: patched radar position to {site_id} "
+                        f"({radar_lat:.3f}, {radar_lon:.3f})")
+
+    n_bins = int(2 * max_range_m / grid_spacing_m)
+    half_m = float(max_range_m)
+
+    try:
+        grid = pyart.map.grid_from_radars(
+            (radar,),
+            grid_shape=(1, n_bins, n_bins),
+            grid_limits=((0.0, 1.0), (-half_m, half_m), (-half_m, half_m)),
+            fields=[field],
+            gridding_algo="map_gates_to_grid",
+            roi_func="dist_beam",
+            weighting_function="Barnes2",
+            # h_factor=(z, y, x); zero on z disables vertical weighting
+            # so we don't penalise gates by altitude in this single-sweep
+            # context. Default nb=1.5 covers a beamwidth of footprint.
+            h_factor=(0.0, 1.0, 1.0),
+            nb=1.5,
+            bsp=1.0,
+            min_radius=float(grid_spacing_m),
+        )
+    except Exception as e:
+        logger.warning(f"pyart legacy gridder failed: {e}; falling back to fast binner")
+        return None
+
+    raw = grid.fields[field]["data"][0]
+    if hasattr(raw, "filled"):
+        raw = raw.filled(np.nan)
+    data_2d = np.asarray(raw, dtype=np.float32)
+
+    # Synthetic count grid: 0 where no data, 100 where data is present.
+    # The frontend hover readout treats >0 as "valid bin"; we don't have
+    # a true per-cell gate count from pyart's mapper, so 100 is just a
+    # nonzero sentinel inside the existing 1-254 range. Wedge-filled
+    # pixels look the same as direct hits, which matches the visual
+    # intent (no more visible holes).
+    count_u8 = np.where(np.isfinite(data_2d), 100, 0).astype(np.uint8)
+    return data_2d, count_u8
+
+
 def _grid_radar(radar, product: str = "reflectivity",
                 sweep: int = 0, grid_spacing_m: int = 1000,
                 max_range_m: int = 230000,
@@ -672,85 +782,102 @@ def _grid_radar(radar, product: str = "reflectivity",
     except Exception as e:
         logger.warning(f"extract_sweeps failed, continuing with multi-sweep: {e}")
 
-    sweep_start = radar.sweep_start_ray_index["data"][sweep_idx]
-    sweep_end = radar.sweep_end_ray_index["data"][sweep_idx]
+    # ── Legacy-resolution path ──
+    # Pre-2008 NEXRAD (≤360 rays/sweep, 1 km gates) leaves visible radial
+    # wedge gaps when nearest-neighbor binned. Route those through pyart's
+    # beam-distance gridder which fills the wedges by beam footprint.
+    # Modern super-res continues on the fast binner below.
+    data_2d = None
+    count_u8 = None
+    if _is_legacy_resolution(radar, sweep_idx):
+        legacy_result = _grid_radar_pyart_legacy(
+            radar, field, max_range_m, grid_spacing_m, site_hint,
+        )
+        if legacy_result is not None:
+            data_2d, count_u8 = legacy_result
+            logger.info("Legacy NEXRAD: gridded via pyart dist_beam")
 
-    # Extract gate positions and data for this sweep only
-    # Use get_gate_x_y_z for Cartesian positions relative to radar
-    xg, yg, zg = radar.get_gate_x_y_z(sweep_idx)  # meters from radar
-    field_data = radar.fields[field]["data"][sweep_start:sweep_end + 1]
-    if hasattr(field_data, "filled"):
-        field_data = field_data.filled(np.nan)
-    field_data = np.asarray(field_data, dtype=np.float32)
+    if data_2d is None:
+        # ── Fast nearest-neighbor binning path (super-res, or legacy fallback) ──
+        sweep_start = radar.sweep_start_ray_index["data"][sweep_idx]
+        sweep_end = radar.sweep_end_ray_index["data"][sweep_idx]
 
-    # Build output grid
-    n_bins = int(2 * max_range_m / grid_spacing_m)
-    sum_2d = np.zeros((n_bins, n_bins), dtype=np.float64)
-    count_2d = np.zeros((n_bins, n_bins), dtype=np.int32)
+        # Extract gate positions and data for this sweep only
+        # Use get_gate_x_y_z for Cartesian positions relative to radar
+        xg, yg, zg = radar.get_gate_x_y_z(sweep_idx)  # meters from radar
+        field_data = radar.fields[field]["data"][sweep_start:sweep_end + 1]
+        if hasattr(field_data, "filled"):
+            field_data = field_data.filled(np.nan)
+        field_data = np.asarray(field_data, dtype=np.float32)
 
-    # Bin gate data into grid cells (nearest-neighbor binning)
-    # xg, yg are in meters; convert to grid indices
-    half = max_range_m
-    xi = ((xg + half) / grid_spacing_m).astype(np.int32)
-    yi = ((yg + half) / grid_spacing_m).astype(np.int32)
+        # Build output grid
+        n_bins = int(2 * max_range_m / grid_spacing_m)
+        sum_2d = np.zeros((n_bins, n_bins), dtype=np.float64)
+        count_2d = np.zeros((n_bins, n_bins), dtype=np.int32)
 
-    # Flatten for fast indexing
-    xi_flat = xi.ravel()
-    yi_flat = yi.ravel()
-    data_flat = field_data.ravel()
+        # Bin gate data into grid cells (nearest-neighbor binning)
+        # xg, yg are in meters; convert to grid indices
+        half = max_range_m
+        xi = ((xg + half) / grid_spacing_m).astype(np.int32)
+        yi = ((yg + half) / grid_spacing_m).astype(np.int32)
 
-    # Mask valid points (in-bounds AND finite data)
-    valid = ((xi_flat >= 0) & (xi_flat < n_bins) &
-             (yi_flat >= 0) & (yi_flat < n_bins) &
-             np.isfinite(data_flat))
+        # Flatten for fast indexing
+        xi_flat = xi.ravel()
+        yi_flat = yi.ravel()
+        data_flat = field_data.ravel()
 
-    xi_v = xi_flat[valid]
-    yi_v = yi_flat[valid]
-    dv = data_flat[valid]
+        # Mask valid points (in-bounds AND finite data)
+        valid = ((xi_flat >= 0) & (xi_flat < n_bins) &
+                 (yi_flat >= 0) & (yi_flat < n_bins) &
+                 np.isfinite(data_flat))
 
-    # Accumulate (sum + count for averaging overlapping gates)
-    np.add.at(sum_2d, (yi_v, xi_v), dv)
-    np.add.at(count_2d, (yi_v, xi_v), 1)
+        xi_v = xi_flat[valid]
+        yi_v = yi_flat[valid]
+        dv = data_flat[valid]
 
-    # Average where multiple gates fall in same bin; NaN elsewhere
-    grid_2d = np.full((n_bins, n_bins), np.nan, dtype=np.float32)
-    mask = count_2d > 0
-    grid_2d[mask] = (sum_2d[mask] / count_2d[mask]).astype(np.float32)
+        # Accumulate (sum + count for averaging overlapping gates)
+        np.add.at(sum_2d, (yi_v, xi_v), dv)
+        np.add.at(count_2d, (yi_v, xi_v), 1)
 
-    # Fill single-pixel radial gaps with nearest-neighbor average.
-    # Gaps appear between radar beams at far range where angular spacing
-    # exceeds the grid cell size.
-    fill_mask = None
-    gaps = ~mask
-    if gaps.any():
-        from scipy.ndimage import uniform_filter
-        # Compute neighborhood mean and count of valid neighbors
-        filled = np.where(mask, grid_2d, 0.0)
-        neighbor_sum = uniform_filter(filled.astype(np.float64), size=3, mode='constant')
-        neighbor_cnt = uniform_filter(mask.astype(np.float64), size=3, mode='constant')
-        # Threshold tuned to fix the "blurry over water, sharp over land"
-        # complaint: in low-return regions (water / outer rainband) almost
-        # every bin is a NaN with sparse neighbours, so a loose threshold
-        # propagates a smoothed mean across wide voids. Requiring ≥~4 of
-        # 9 neighbours keeps the obvious inter-beam gap fill we need at
-        # far range while leaving genuinely sparse regions transparent.
-        fill_mask = gaps & (neighbor_cnt > 0.4)
-        grid_2d[fill_mask] = (neighbor_sum[fill_mask] / neighbor_cnt[fill_mask]).astype(np.float32)
+        # Average where multiple gates fall in same bin; NaN elsewhere
+        grid_2d = np.full((n_bins, n_bins), np.nan, dtype=np.float32)
+        mask = count_2d > 0
+        grid_2d[mask] = (sum_2d[mask] / count_2d[mask]).astype(np.float32)
 
-    # Build uint8 gate-count grid for client hover readout:
-    #   0     → no data
-    #   255   → sentinel: pixel was gap-filled from 3×3 neighbors
-    #   1-254 → actual contributing super-res gate count (clamped)
-    count_u8 = np.clip(count_2d, 0, 254).astype(np.uint8)
-    if fill_mask is not None and fill_mask.any():
-        count_u8[fill_mask] = 255
+        # Fill single-pixel radial gaps with nearest-neighbor average.
+        # Gaps appear between radar beams at far range where angular spacing
+        # exceeds the grid cell size.
+        fill_mask = None
+        gaps = ~mask
+        if gaps.any():
+            from scipy.ndimage import uniform_filter
+            # Compute neighborhood mean and count of valid neighbors
+            filled = np.where(mask, grid_2d, 0.0)
+            neighbor_sum = uniform_filter(filled.astype(np.float64), size=3, mode='constant')
+            neighbor_cnt = uniform_filter(mask.astype(np.float64), size=3, mode='constant')
+            # Threshold tuned to fix the "blurry over water, sharp over land"
+            # complaint: in low-return regions (water / outer rainband) almost
+            # every bin is a NaN with sparse neighbours, so a loose threshold
+            # propagates a smoothed mean across wide voids. Requiring ≥~4 of
+            # 9 neighbours keeps the obvious inter-beam gap fill we need at
+            # far range while leaving genuinely sparse regions transparent.
+            fill_mask = gaps & (neighbor_cnt > 0.4)
+            grid_2d[fill_mask] = (neighbor_sum[fill_mask] / neighbor_cnt[fill_mask]).astype(np.float32)
 
-    # Free intermediate arrays
-    del xg, yg, zg, field_data, xi, yi, xi_flat, yi_flat, data_flat
+        # Build uint8 gate-count grid for client hover readout:
+        #   0     → no data
+        #   255   → sentinel: pixel was gap-filled from 3×3 neighbors
+        #   1-254 → actual contributing super-res gate count (clamped)
+        count_u8 = np.clip(count_2d, 0, 254).astype(np.uint8)
+        if fill_mask is not None and fill_mask.any():
+            count_u8[fill_mask] = 255
 
-    # Grid is in natural order: row 0 = south, row N = north
-    # (y index increases with northward distance from radar)
-    data_2d = grid_2d
+        # Free intermediate arrays
+        del xg, yg, zg, field_data, xi, yi, xi_flat, yi_flat, data_flat
+
+        # Grid is in natural order: row 0 = south, row N = north
+        # (y index increases with northward distance from radar)
+        data_2d = grid_2d
 
     # Get geographic bounds — fall back to site table if radar metadata
     # has no position (common in pre-2008 Message Type 1 files like
