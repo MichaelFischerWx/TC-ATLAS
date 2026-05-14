@@ -3313,6 +3313,15 @@ function renderDetailMap(track, storm) {
     detailMap.getPane('coastlines').style.zIndex = 450;
     detailMap.getPane('coastlines').style.pointerEvents = 'none';
 
+    // Dropsonde pane sits above the IR/MW/radar imageOverlays (which set
+    // zIndex=640-650 on their IMG elements). markerPane (z=600) was being
+    // visually occluded by the IR overlay even though it's a higher pane —
+    // the imageOverlay's per-element zIndex wins inside the overlayPane
+    // stacking context. A dedicated pane at z=660 puts sonde polylines +
+    // markers reliably on top.
+    detailMap.createPane('sondes');
+    detailMap.getPane('sondes').style.zIndex = 660;
+
     // Load Natural Earth 110m coastlines as thin dark outlines above IR
     // Source: Natural Earth via GitHub (simplified 110m resolution, ~30KB)
     _loadCoastlineOverlay(detailMap);
@@ -11366,7 +11375,8 @@ function _gaSondeRenderOnMap() {
         if (coords.length > 1) {
             var traj = L.polyline(coords, {
                 color: color, weight: 2.5, opacity: 0.8,
-                dashArray: '6,4', interactive: false
+                dashArray: '6,4', interactive: false,
+                pane: 'sondes'
             });
             traj.addTo(detailMap);
             _gaSondeMapLayers.push(traj);
@@ -11376,7 +11386,8 @@ function _gaSondeRenderOnMap() {
         if (sonde.launch && sonde.launch.lat != null) {
             var launchMarker = L.circleMarker([sonde.launch.lat, sonde.launch.lon], {
                 radius: 5, fillColor: color, fillOpacity: 0.3,
-                color: color, weight: 1.5, opacity: 0.8
+                color: color, weight: 1.5, opacity: 0.8,
+                pane: 'sondes'
             });
             launchMarker.addTo(detailMap);
             _gaSondeMapLayers.push(launchMarker);
@@ -11391,7 +11402,8 @@ function _gaSondeRenderOnMap() {
                 (sonde.splash_pr ? ' · P: ' + sonde.splash_pr.toFixed(1) + ' hPa' : '');
             var sfcMarker = L.circleMarker([sonde.surface.lat, sonde.surface.lon], {
                 radius: 6, fillColor: color, fillOpacity: 0.9,
-                color: '#fff', weight: 1, opacity: 0.8
+                color: '#fff', weight: 1, opacity: 0.8,
+                pane: 'sondes'
             }).bindTooltip(sfcTip, { sticky: true });
             // Click to show Skew-T
             (function (idx) {
