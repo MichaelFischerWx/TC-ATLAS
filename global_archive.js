@@ -108,15 +108,19 @@ var irTbTooltip = null;      // L.popup for Tb hover display
 var irSelectedColormap = 'claude-ir';  // Current colormap name
 
 // ── Coastline overlay cache ────────────────────────────────────────────
-// Natural Earth 110m coastlines as GeoJSON — loaded once, shared by all maps.
+// Natural Earth 10m coastlines as GeoJSON — loaded once, shared by all maps.
 var _coastlineGeoJSON = null;
 var _coastlineLoading = false;
 var _coastlineQueue = []; // maps waiting for coastline data
 
 /**
- * Load Natural Earth 110m coastlines and add as thin dark outlines to a map.
+ * Load Natural Earth 10m coastlines and add as thin dark outlines to a map.
  * Uses the 'coastlines' pane (z=450) so lines render above IR but below markers.
  * Caches the GeoJSON so it's only fetched once across all maps.
+ *
+ * 10m gives ~100 m positional accuracy — small enough that the overlay
+ * stays visually flush with the Carto basemap at z6-z9 zoom levels (the
+ * range where coastline mis-registration was previously visible).
  */
 function _loadCoastlineOverlay(map) {
     function _addToMap(geojson, m) {
@@ -142,9 +146,10 @@ function _loadCoastlineOverlay(map) {
     if (_coastlineLoading) return;
     _coastlineLoading = true;
 
-    // Natural Earth 50m coastlines via GitHub CDN (~150KB gzipped)
-    // 50m gives smooth coastlines at typical TC-scale zoom levels (z3-z8)
-    fetch('https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_coastline.geojson')
+    // Natural Earth 10m coastlines via GitHub CDN (~1.5 MB gzipped).
+    // One-time cost on first session; cached thereafter via the CDN +
+    // _coastlineGeoJSON module var so subsequent map inits are free.
+    fetch('https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_coastline.geojson')
         .then(function (r) { return r.json(); })
         .then(function (geojson) {
             _coastlineGeoJSON = geojson;
@@ -6359,7 +6364,7 @@ window.openGifSettings = function () {
     // Pre-load coastline GeoJSON if not already cached
     if (!_coastlineGeoJSON && !_coastlineLoading) {
         _coastlineLoading = true;
-        fetch('https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_coastline.geojson')
+        fetch('https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_coastline.geojson')
             .then(function (r) { return r.json(); })
             .then(function (geojson) { _coastlineGeoJSON = geojson; })
             .catch(function (e) { console.warn('Coastline pre-load failed:', e); })
