@@ -115,7 +115,7 @@ def _cache_put(key: str, val: dict):
 _GCS_NEXRAD_BUCKET = os.environ.get("GCS_IR_CACHE_BUCKET", "")
 _gcs_client = None
 _gcs_bucket = None
-_GCS_CACHE_VERSION = "v11"  # v11 = site-hint position fallback (fixes pre-2008 KBYX/KAMX 0,0 bounds)
+_GCS_CACHE_VERSION = "v12"  # v12 = tighter gap-fill threshold (0.2 → 0.4) for sharper low-return regions
 
 
 def _get_gcs_bucket():
@@ -718,7 +718,13 @@ def _grid_radar(radar, product: str = "reflectivity",
         filled = np.where(mask, grid_2d, 0.0)
         neighbor_sum = uniform_filter(filled.astype(np.float64), size=3, mode='constant')
         neighbor_cnt = uniform_filter(mask.astype(np.float64), size=3, mode='constant')
-        fill_mask = gaps & (neighbor_cnt > 0.2)  # at least ~2 of 9 neighbors have data
+        # Threshold tuned to fix the "blurry over water, sharp over land"
+        # complaint: in low-return regions (water / outer rainband) almost
+        # every bin is a NaN with sparse neighbours, so a loose threshold
+        # propagates a smoothed mean across wide voids. Requiring ≥~4 of
+        # 9 neighbours keeps the obvious inter-beam gap fill we need at
+        # far range while leaving genuinely sparse regions transparent.
+        fill_mask = gaps & (neighbor_cnt > 0.4)
         grid_2d[fill_mask] = (neighbor_sum[fill_mask] / neighbor_cnt[fill_mask]).astype(np.float32)
 
     # Build uint8 gate-count grid for client hover readout:
