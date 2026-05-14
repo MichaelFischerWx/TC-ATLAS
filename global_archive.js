@@ -11394,12 +11394,32 @@ function _gaSondeRenderOnMap() {
 
         var color = _SONDE_COLORS[si % _SONDE_COLORS.length];
 
+        // Establish a launch reference for filtering bogus GPS samples.
+        // Real dropsonde horizontal drift is at most ~50 km even from
+        // G-IV altitudes — anything more than ~1° from launch is corrupt
+        // .frd data (Erika 2015, Sandy 2012, etc. have stray Pacific
+        // coordinates scattered through otherwise-valid profiles).
+        var refLat = (sonde.launch && sonde.launch.lat != null) ? sonde.launch.lat : null;
+        var refLon = (sonde.launch && sonde.launch.lon != null) ? sonde.launch.lon : null;
+        if (refLat == null || refLon == null) {
+            for (var rp = 0; rp < prof.lat.length; rp++) {
+                if (prof.lat[rp] != null && prof.lon[rp] != null &&
+                    isFinite(prof.lat[rp]) && isFinite(prof.lon[rp])) {
+                    refLat = prof.lat[rp]; refLon = prof.lon[rp]; break;
+                }
+            }
+        }
+
         // Trajectory polyline
         var coords = [];
         for (var pi = 0; pi < prof.lat.length; pi++) {
-            if (prof.lat[pi] != null && prof.lon[pi] != null) {
-                coords.push([prof.lat[pi], prof.lon[pi]]);
-            }
+            var pLat = prof.lat[pi], pLon = prof.lon[pi];
+            if (pLat == null || pLon == null) continue;
+            if (!isFinite(pLat) || !isFinite(pLon)) continue;
+            if (pLat < -90 || pLat > 90 || pLon < -180 || pLon > 180) continue;
+            if (refLat != null && (Math.abs(pLat - refLat) > 1.0 ||
+                                   Math.abs(pLon - refLon) > 1.0)) continue;
+            coords.push([pLat, pLon]);
         }
         if (coords.length > 1) {
             var traj = L.polyline(coords, {
@@ -11412,7 +11432,12 @@ function _gaSondeRenderOnMap() {
         }
 
         // Launch marker (hollow circle at top)
-        if (sonde.launch && sonde.launch.lat != null) {
+        var launchOk = !!(sonde.launch && sonde.launch.lat != null &&
+                          sonde.launch.lon != null &&
+                          isFinite(sonde.launch.lat) && isFinite(sonde.launch.lon) &&
+                          Math.abs(sonde.launch.lat) <= 90 &&
+                          Math.abs(sonde.launch.lon) <= 180);
+        if (launchOk) {
             var launchMarker = L.circleMarker([sonde.launch.lat, sonde.launch.lon], {
                 radius: 5, fillColor: color, fillOpacity: 0.3,
                 color: color, weight: 1.5, opacity: 0.8,
@@ -11422,8 +11447,17 @@ function _gaSondeRenderOnMap() {
             _gaSondeMapLayers.push(launchMarker);
         }
 
-        // Surface marker (filled circle at bottom)
-        if (sonde.surface && sonde.surface.lat != null) {
+        // Surface marker (filled circle at bottom) — skip if too far from
+        // launch (same .frd-corruption guard as the polyline).
+        var surfaceOk = !!(sonde.surface && sonde.surface.lat != null &&
+                           sonde.surface.lon != null &&
+                           isFinite(sonde.surface.lat) && isFinite(sonde.surface.lon));
+        if (surfaceOk && launchOk &&
+            (Math.abs(sonde.surface.lat - sonde.launch.lat) > 1.0 ||
+             Math.abs(sonde.surface.lon - sonde.launch.lon) > 1.0)) {
+            surfaceOk = false;
+        }
+        if (surfaceOk) {
             var sfcTip = '<b>Sonde ' + (si + 1) + '</b>' +
                 (sonde.sonde_id ? ' (' + sonde.sonde_id + ')' : '') + '<br>' +
                 (sonde.launch_time || '') + '<br>' +
