@@ -115,7 +115,7 @@ def _cache_put(key: str, val: dict):
 _GCS_NEXRAD_BUCKET = os.environ.get("GCS_IR_CACHE_BUCKET", "")
 _gcs_client = None
 _gcs_bucket = None
-_GCS_CACHE_VERSION = "v12"  # v12 = tighter gap-fill threshold (0.2 → 0.4) for sharper low-return regions
+_GCS_CACHE_VERSION = "v13"  # v13 = 3-sweep dealias window (memory fix, was OOMing on super-res Helene KTLH)
 
 
 def _get_gcs_bucket():
@@ -622,17 +622,27 @@ def _grid_radar(radar, product: str = "reflectivity",
                 sweep_idx = candidate
                 break
 
-    # Dealias velocity on the FULL volume before extracting the target
-    # sweep. Py-ART's region-based algorithm seeds fold counts using the
-    # velocity from neighboring sweeps in the volume; running it on a
-    # single-sweep radar leaves it with no vertical reference and breaks
-    # down at 2-3 Nyquist folds (e.g., Laura 2020 KLCH where peak winds
-    # were ~3× the ~26 m/s Nyquist).
+    # Dealias velocity using a 3-sweep window (target ± 1 sweep) before
+    # extracting the final target. Py-ART's region-based algorithm seeds
+    # fold counts using the velocity from neighbouring sweeps in the
+    # volume; running it on a single-sweep radar leaves it with no vertical
+    # reference and breaks down at 2-3 Nyquist folds (e.g., Laura 2020
+    # KLCH where peak winds were ~3× the ~26 m/s Nyquist).
     #
-    # We previously stripped to one sweep first for speed (3-5 s saved per
-    # cold velocity request), but the warm GCS cache covers repeat hits
-    # and the quality regression was visible in major-hurricane scans.
+    # We tried full-volume dealiasing first, but on large super-res VCPs
+    # (10-14 sweeps × ~5500 rays × 1832 gates) the working-memory
+    # footprint OOM'd 2 GiB Cloud Run containers on some scans (Helene 2024
+    # KTLH 503'd). A 3-sweep window is enough vertical context for fold
+    # initialisation while keeping memory ~5× smaller than full volume.
     if product == "velocity":
+        try:
+            lo = max(0, sweep_idx - 1)
+            hi = min(radar.nsweeps - 1, sweep_idx + 1)
+            radar = radar.extract_sweeps(list(range(lo, hi + 1)))
+            sweep_idx = sweep_idx - lo  # remap index into the smaller volume
+        except Exception as e:
+            logger.warning(f"3-sweep window extract failed, continuing with full volume: {e}")
+
         _dealiased = False
         try:
             dealiased = pyart.correct.dealias_region_based(
@@ -655,12 +665,12 @@ def _grid_radar(radar, product: str = "reflectivity",
                 logger.warning(f"Unwrap dealiasing also failed: {e}")
 
     # Now strip the volume to the target sweep so downstream gridding
-    # only touches ~1/14 of the rays.
+    # only touches one sweep's worth of rays.
     try:
         radar = radar.extract_sweeps([sweep_idx])
         sweep_idx = 0  # single-sweep radar — target is now at index 0
     except Exception as e:
-        logger.warning(f"extract_sweeps failed, continuing with full volume: {e}")
+        logger.warning(f"extract_sweeps failed, continuing with multi-sweep: {e}")
 
     sweep_start = radar.sweep_start_ray_index["data"][sweep_idx]
     sweep_end = radar.sweep_end_ray_index["data"][sweep_idx]

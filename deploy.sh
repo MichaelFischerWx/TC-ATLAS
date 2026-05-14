@@ -116,8 +116,8 @@ fi
 # ── Configuration ─────────────────────────────────────────────
 SERVICE_NAME="tc-atlas-api"
 REGION="us-east1"                   # close to your S3 bucket in us-east-1
-MEMORY="2Gi"                        # match your current Render plan
-CPU="1"                             # 1 vCPU per instance
+MEMORY="4Gi"                        # 4 GiB — full-volume NEXRAD super-res VCPs (10-14 sweeps × ~5500 rays × 1832 gates) OOM at 2 GiB during region-based dealiasing
+CPU="2"                             # 2 vCPU — needed to allocate 4 GiB on Cloud Run (memory/CPU is tiered)
 TIMEOUT="300s"                      # match gunicorn timeout
 # NOTE: max-instances and concurrency are managed via gcloud CLI, not
 # this script. Change them with:
