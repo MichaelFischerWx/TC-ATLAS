@@ -5550,21 +5550,83 @@ function _updateGaNexradExtremaMarkers() {
     var maxRaw = 0,   maxRow = -1, maxCol = -1;
     var doMin = (_gaNexradProduct === 'velocity');
 
-    // Skip 1-px frame border (no neighbors). Require ≥3 valid 3x3 neighbors
-    // so dealiasing spikes / lone gates don't dominate.
+    // Filter parameters tuned to reject far-range dealiasing-error clusters
+    // and gap-filled noise (e.g., Harvey 2017 KCRP where the raw extrema
+    // landed on coherent-but-mis-folded outbound patches ~150 km from the
+    // actual eyewall).
+    //
+    //   GATE_COUNT_MIN — candidate must have ≥ this many real super-res
+    //                    gates contributing to the bin average. Excludes
+    //                    the gap-fill sentinel (255) and 1-2 gate bins.
+    //   COHERENCE_MIN  — out of 8 surrounding neighbours, this many must
+    //                    have a value within COHERENCE_TOL m/s of the
+    //                    candidate. Isolates real clusters from speckle.
+    //   COHERENCE_TOL  — ±m/s window for neighbour coherence check.
+    //   STORM_MAX_KM   — candidate must be within this distance of the
+    //                    best-track storm centre. Rejects large coherent
+    //                    mis-folded patches in the outer rainbands which
+    //                    pass the other two filters.
+    var GATE_COUNT_MIN = 4;
+    var COHERENCE_MIN  = 5;
+    var COHERENCE_TOL_MS = 10.0;
+    var STORM_MAX_KM   = 100.0;
+    var tolRaw = COHERENCE_TOL_MS / ((_gaNexradVmax - _gaNexradVmin) / 254.0);
+    var haveCount = !!(_gaNexradCount &&
+                       _gaNexradCountRows === rows &&
+                       _gaNexradCountCols === cols);
+
+    // Storm centre at this frame, used to localise the extrema search to
+    // the inner core. Falls back to the radar antenna position if the IR
+    // frame doesn't carry a best-track lat/lon (rare); fall back to no
+    // distance filter if even that is missing.
+    var stormLat = null, stormLon = null;
+    var frMeta = (irMeta && irMeta.frames) ? irMeta.frames[irFrameIdx] : null;
+    if (frMeta && typeof frMeta.lat === 'number' && typeof frMeta.lon === 'number') {
+        stormLat = frMeta.lat; stormLon = frMeta.lon;
+    } else if (_gaNexradSiteLat != null && _gaNexradSiteLon != null) {
+        stormLat = _gaNexradSiteLat; stormLon = _gaNexradSiteLon;
+    }
+
+    var b = _gaNexradBounds;
+    var mercNFilt = Math.log(Math.tan(Math.PI/4 + b.getNorth() * Math.PI/180 / 2));
+    var mercSFilt = Math.log(Math.tan(Math.PI/4 + b.getSouth() * Math.PI/180 / 2));
+    function _cellLatLngFilt(rr, cc) {
+        var fY = (rr + 0.5) / rows;
+        var fX = (cc + 0.5) / cols;
+        var mLat = mercNFilt - fY * (mercNFilt - mercSFilt);
+        var lat = (2 * Math.atan(Math.exp(mLat)) - Math.PI/2) * 180 / Math.PI;
+        var lng = b.getWest() + fX * (b.getEast() - b.getWest());
+        return [lat, lng];
+    }
+
     for (var r = 1; r < rows - 1; r++) {
         for (var c = 1; c < cols - 1; c++) {
             var v = data[r * cols + c];
             if (v === 0) continue;
-            // Count valid neighbors (skip center)
-            var nValid = 0;
+
+            if (haveCount) {
+                var nRaw = _gaNexradCount[r * cols + c];
+                // Skip gap-filled sentinel (255) and sparse-bin candidates.
+                if (nRaw === 255 || nRaw < GATE_COUNT_MIN) continue;
+            }
+
+            // Coherence: count neighbours within ±tol of the candidate.
+            var nCoh = 0;
             for (var dr = -1; dr <= 1; dr++) {
                 for (var dc = -1; dc <= 1; dc++) {
                     if (dr === 0 && dc === 0) continue;
-                    if (data[(r+dr) * cols + (c+dc)] !== 0) nValid++;
+                    var nv = data[(r+dr) * cols + (c+dc)];
+                    if (nv !== 0 && Math.abs(nv - v) <= tolRaw) nCoh++;
                 }
             }
-            if (nValid < 3) continue;
+            if (nCoh < COHERENCE_MIN) continue;
+
+            // Distance from storm centre — bounds the search to the core.
+            if (stormLat != null) {
+                var ll = _cellLatLngFilt(r, c);
+                if (_haversineKm(stormLat, stormLon, ll[0], ll[1]) > STORM_MAX_KM) continue;
+            }
+
             if (v > maxRaw) { maxRaw = v; maxRow = r; maxCol = c; }
             if (doMin && v < minRaw) { minRaw = v; minRow = r; minCol = c; }
         }
