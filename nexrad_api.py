@@ -115,7 +115,7 @@ def _cache_put(key: str, val: dict):
 _GCS_NEXRAD_BUCKET = os.environ.get("GCS_IR_CACHE_BUCKET", "")
 _gcs_client = None
 _gcs_bucket = None
-_GCS_CACHE_VERSION = "v10"  # v10 = banded velocity LUT (10 m/s discrete steps)
+_GCS_CACHE_VERSION = "v11"  # v11 = site-hint position fallback (fixes pre-2008 KBYX/KAMX 0,0 bounds)
 
 
 def _get_gcs_bucket():
@@ -564,7 +564,8 @@ def _read_nexrad_level2(s3_key: str):
 
 def _grid_radar(radar, product: str = "reflectivity",
                 sweep: int = 0, grid_spacing_m: int = 1000,
-                max_range_m: int = 230000) -> Tuple[np.ndarray, np.ndarray, dict]:
+                max_range_m: int = 230000,
+                site_hint: Optional[str] = None) -> Tuple[np.ndarray, np.ndarray, dict]:
     """
     Grid a single sweep of radar data to a regular lat/lon grid.
 
@@ -736,18 +737,25 @@ def _grid_radar(radar, product: str = "reflectivity",
     data_2d = grid_2d
 
     # Get geographic bounds — fall back to site table if radar metadata
-    # has no position (common in pre-2008 Message Type 1 files)
+    # has no position (common in pre-2008 Message Type 1 files like
+    # KBYX/KAMX Irene 1999, where lat/lon come through as 0/0 and the
+    # instrument_name field is empty or missing).
     lat_center = float(radar.latitude["data"][0])
     lon_center = float(radar.longitude["data"][0])
 
     if abs(lat_center) < 0.01 and abs(lon_center) < 0.01:
-        # Position missing — look up from site table via instrument name
-        site_id = radar.metadata.get("instrument_name", "").upper().strip()
+        # Try instrument_name first, then the explicit site hint from the
+        # request — the hint is the authoritative source since the user
+        # already picked the site, but we keep the metadata path so that
+        # internal callers without a hint still resolve correctly.
+        site_id = (radar.metadata.get("instrument_name") or "").upper().strip()
+        if site_id not in NEXRAD_SITES and site_hint:
+            site_id = site_hint.upper().strip()
         if site_id in NEXRAD_SITES:
             lat_center, lon_center = NEXRAD_SITES[site_id][:2]
             logger.info(f"Using site table position for {site_id}: {lat_center}, {lon_center}")
         else:
-            logger.warning(f"Radar position is 0,0 and site '{site_id}' not in table")
+            logger.warning(f"Radar position is 0,0 and site '{site_id}' not in table (hint={site_hint})")
 
     dy_deg = max_range_m / 111320.0
     dx_deg = max_range_m / (111320.0 * math.cos(math.radians(lat_center)))
@@ -892,6 +900,7 @@ def get_radar_frame(
         radar, product=product, sweep=tilt,
         grid_spacing_m=grid_spacing_m,
         max_range_m=max_range_km * 1000,
+        site_hint=site,
     )
     radar = None  # free memory
 
@@ -960,6 +969,7 @@ def get_storm_relative_frame(
         radar, product=product, sweep=tilt,
         grid_spacing_m=1000,  # intermediate grid (1km matches /frame default)
         max_range_m=int((domain_km + 50) * 1000),  # +50 km margin
+        site_hint=site,
     )
     radar = None
 
