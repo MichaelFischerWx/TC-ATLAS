@@ -252,7 +252,7 @@
         _coastlineQueue.push(targetMap);
         if (_coastlineLoading) return;
         _coastlineLoading = true;
-        fetch('https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_coastline.geojson')
+        fetch('https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_coastline.geojson')
             .then(function (r) { return r.json(); })
             .then(function (geojson) {
                 _coastlineGeoJSON = geojson;

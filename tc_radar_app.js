@@ -289,7 +289,7 @@ map.getPane('coastlines').style.zIndex = 450;
 map.getPane('coastlines').style.pointerEvents = 'none';
 
 (function() {
-    fetch('https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_coastline.geojson')
+    fetch('https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_coastline.geojson')
         .then(function(r) { return r.json(); })
         .then(function(geojson) {
             L.geoJSON(geojson, {
