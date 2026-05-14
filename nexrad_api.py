@@ -115,7 +115,7 @@ def _cache_put(key: str, val: dict):
 _GCS_NEXRAD_BUCKET = os.environ.get("GCS_IR_CACHE_BUCKET", "")
 _gcs_client = None
 _gcs_bucket = None
-_GCS_CACHE_VERSION = "v9"  # v9 = dealias on full volume (fixes multi-fold TC velocities)
+_GCS_CACHE_VERSION = "v10"  # v10 = banded velocity LUT (10 m/s discrete steps)
 
 
 def _get_gcs_bucket():
@@ -288,31 +288,34 @@ def _build_velocity_lut() -> np.ndarray:
     Build a 256-entry RGBA LUT for radial velocity (m/s).
     Maps uint8 index 0 = transparent (invalid), 1-255 = -100 to +100 m/s.
 
-    RadarScope-style diverging palette:
-      Inbound  (negative): green-cyan family — pale → bright green → teal → dark teal
-      Zero               : near-neutral dark grey (low chroma so 0-m/s rings don't pop)
-      Outbound (positive): pink-red family   — pale → red → hot pink → magenta
+    RadarScope-style diverging palette, quantized into discrete 10 m/s
+    bands so adjacent speeds form sharp colour steps instead of a smooth
+    gradient. This gives the user implicit iso-velocity "contours" at
+    every 10 m/s boundary — easier to read gradients off the eyewall
+    than a continuous LUT. Inbound = green family, outbound = pink/red.
 
-    Linearly interpolated between fixed anchor points keyed to symmetric
-    velocity stops; the asymmetry between inbound/outbound hues is what
-    makes the rotation signature in a TC eyewall read at a glance (the
-    classic green-on-one-side, red-on-the-other "couplet").
+    Each band's colour is picked by anchor-interpolating at the band
+    midpoint (-95, -85, ..., +95 m/s), so the overall hue progression
+    still matches the anchor palette but reads as 20 flat patches.
     """
     lut = np.zeros((256, 4), dtype=np.uint8)
     lut[0] = [0, 0, 0, 0]
 
     vel_min, vel_max = -100.0, 100.0
     vel_range = vel_max - vel_min
+    band_width = 10.0
+    n_bands = int(vel_range / band_width)  # 20
 
-    # (velocity m/s, R, G, B) anchors. Linearly interpolate between adjacent.
+    # (velocity m/s, R, G, B) anchors. Linearly interpolated between
+    # adjacent anchors to colour each band's midpoint. No -1/+1 grey
+    # deadband: with banded rendering the 0-m/s boundary is already a
+    # visible step between very-pale-green and very-pale-pink.
     anchors = [
         (-100.0,  18,  72,  92),   # deep teal
         ( -75.0,  20, 140,  92),   # forest green
         ( -50.0,  50, 200,  90),   # bright green
         ( -25.0, 150, 235, 120),   # light green
         ( -10.0, 210, 240, 200),   # very pale green
-        (  -1.0,  60,  60,  72),   # dark neutral grey (near-zero deadband)
-        (   1.0,  60,  60,  72),   # dark neutral grey
         (  10.0, 245, 220, 220),   # very pale pink
         (  25.0, 250, 175, 175),   # light pink
         (  50.0, 235,  85, 105),   # bright pink-red
@@ -323,24 +326,32 @@ def _build_velocity_lut() -> np.ndarray:
     def lerp(a, b, t):
         return int(round(a + (b - a) * t))
 
+    def color_at(vel):
+        if vel <= anchors[0][0]:
+            return anchors[0][1:]
+        if vel >= anchors[-1][0]:
+            return anchors[-1][1:]
+        for k in range(len(anchors) - 1):
+            v0, r0, g0, b0 = anchors[k]
+            v1, r1, g1, b1 = anchors[k + 1]
+            if v0 <= vel <= v1:
+                t = 0.0 if v1 == v0 else (vel - v0) / (v1 - v0)
+                return (lerp(r0, r1, t), lerp(g0, g1, t), lerp(b0, b1, t))
+        return anchors[-1][1:]
+
+    # Pre-compute band colours at midpoints, then apply per uint8 index.
+    band_colors = []
+    for b in range(n_bands):
+        mid = vel_min + b * band_width + band_width / 2.0
+        band_colors.append(color_at(mid))
+
     for i in range(1, 256):
         vel = vel_min + (i - 1) * vel_range / 254.0
-        # Find the bracketing anchor pair.
-        if vel <= anchors[0][0]:
-            r, g, b = anchors[0][1:]
-        elif vel >= anchors[-1][0]:
-            r, g, b = anchors[-1][1:]
-        else:
-            for k in range(len(anchors) - 1):
-                v0, r0, g0, b0 = anchors[k]
-                v1, r1, g1, b1 = anchors[k + 1]
-                if v0 <= vel <= v1:
-                    t = 0.0 if v1 == v0 else (vel - v0) / (v1 - v0)
-                    r, g, b = lerp(r0, r1, t), lerp(g0, g1, t), lerp(b0, b1, t)
-                    break
-
+        b = int(math.floor((vel - vel_min) / band_width))
+        b = max(0, min(n_bands - 1, b))
+        r, g, c = band_colors[b]
         lut[i] = [max(0, min(255, r)), max(0, min(255, g)),
-                  max(0, min(255, b)), 230]
+                  max(0, min(255, c)), 230]
 
     return lut
 

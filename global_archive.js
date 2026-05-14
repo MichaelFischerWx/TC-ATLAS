@@ -5313,11 +5313,33 @@ window.loadNexradFrame = function () {
             // Prefetch ±2 adjacent scans so the next user step is a warm
             // GCS hit instead of a 10-15s cold render.
             _prefetchAdjacentNexradScans(s3Key, site, product, 2);
+
+            // Also prefetch the sibling product at the SAME scan so toggling
+            // velocity ↔ reflectivity is instant.
+            var siblingProduct = (product === 'velocity') ? 'reflectivity' : 'velocity';
+            _prefetchNexradSibling(s3Key, site, siblingProduct);
         })
         .catch(function (e) {
             if (status) status.textContent = 'Error: ' + e.message;
         });
 };
+
+/**
+ * Fire-and-forget /nexrad/frame request for the OTHER product (velocity if
+ * we just loaded reflectivity, and vice versa) at the same scan timestamp.
+ * Goal: when the user toggles the product select, the response is a warm
+ * GCS cache hit instead of a 10-15s cold render. Response is discarded.
+ */
+function _prefetchNexradSibling(s3Key, site, siblingProduct) {
+    if (!s3Key || !site || !siblingProduct) return;
+    var cacheKey = site + '|' + s3Key + '|' + siblingProduct;
+    if (_gaNexradPrefetched[cacheKey]) return;
+    _gaNexradPrefetched[cacheKey] = 1;
+    var url = API_BASE + '/nexrad/frame?site=' + encodeURIComponent(site) +
+        '&s3_key=' + encodeURIComponent(s3Key) +
+        '&product=' + siblingProduct;
+    fetch(url).then(function (r) { return r.ok ? r.text() : null; }).catch(function () {});
+}
 
 /**
  * Fire silent /nexrad/frame requests for scans on either side of the current
@@ -5598,26 +5620,39 @@ function _updateGaNexradColorbar(product) {
     if (!el) return;
 
     if (product === 'velocity') {
-        // Anchors match nexrad_api.py:_build_velocity_lut. Stops are
-        // (vel + 100)/200 in percent so −100 → 0%, 0 → 50%, +100 → 100%.
+        // Discrete 10 m/s bands — must match nexrad_api.py:_build_velocity_lut.
+        // 20 flex divs, each a band midpoint colour, in order from -100 → +100.
+        var velBands = [
+            'rgb(18,86,92)',    /* -95 */
+            'rgb(19,113,92)',   /* -85 */
+            'rgb(20,140,92)',   /* -75 */
+            'rgb(32,164,91)',   /* -65 */
+            'rgb(44,188,90)',   /* -55 */
+            'rgb(70,207,96)',   /* -45 */
+            'rgb(110,221,108)', /* -35 */
+            'rgb(150,235,120)', /* -25 */
+            'rgb(190,238,173)', /* -15 */
+            'rgb(219,235,205)', /* -5  pale green-cream */
+            'rgb(236,225,215)', /* +5  pale pink-cream  */
+            'rgb(247,205,205)', /* +15 */
+            'rgb(250,175,175)', /* +25 */
+            'rgb(244,139,147)', /* +35 */
+            'rgb(238,103,119)', /* +45 */
+            'rgb(226,76,105)',  /* +55 */
+            'rgb(208,58,105)',  /* +65 */
+            'rgb(190,40,105)',  /* +75 */
+            'rgb(172,38,131)',  /* +85 */
+            'rgb(154,36,157)'   /* +95 */
+        ];
+        var velSwatchHtml = velBands.map(function (c) {
+            return '<div style="flex:1;background:' + c + ';"></div>';
+        }).join('');
         el.innerHTML =
             '<div style="display:flex;height:8px;border-radius:3px;border:1px solid rgba(15, 22, 35,0.15);overflow:hidden;">' +
-                '<div style="flex:1;background:linear-gradient(to right,' +
-                    '#12485C 0%,'   +   /* −100 deep teal */
-                    '#148C5C 12.5%,'+   /* −75 forest green */
-                    '#32C85A 25%,'  +   /* −50 bright green */
-                    '#96EB78 37.5%,'+   /* −25 light green */
-                    '#D2F0C8 45%,'  +   /* −10 pale green */
-                    '#3C3C48 50%,'  +   /*   0 dark neutral grey */
-                    '#F5DCDC 55%,'  +   /* +10 pale pink */
-                    '#FAAFAF 62.5%,'+   /* +25 light pink */
-                    '#EB5569 75%,'  +   /* +50 bright pink-red */
-                    '#BE2869 87.5%,'+   /* +75 deep magenta-red */
-                    '#9123AA 100%'  +   /* +100 purple */
-                    ');"></div>' +
+                velSwatchHtml +
             '</div>' +
             '<div style="display:flex;justify-content:space-between;font-size:8px;color:var(--slate);margin-top:1px;">' +
-                '<span>-100 m/s</span><span>0</span><span>+100 m/s</span>' +
+                '<span>-100 m/s</span><span>-50</span><span>0</span><span>+50</span><span>+100 m/s</span>' +
             '</div>';
     } else {
         el.innerHTML =
