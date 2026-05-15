@@ -1808,10 +1808,11 @@
         });
         map.addControl(new DeepMindToggle());
 
-        // FNV3 LARGE_ENSEMBLE cyclogenesis toggle — shows 1000-member
-        // pre-genesis tracks (orange to visually distinguish from the
-        // cyan paired DeepMind 10-day above).
-        var GenesisToggle = L.Control.extend({
+        // FNV3 LARGE_ENSEMBLE Genesis Forecasts menu — contains the
+        // 1000-member spaghetti toggle + 2d/7d/14d formation
+        // probability checkboxes. Orange palette to visually separate
+        // from the cyan paired DeepMind 10-day above.
+        var GenesisControl = L.Control.extend({
             options: { position: 'topright' },
             onAdd: function () {
                 var wrap = L.DomUtil.create('div', 'ir-genesis-wrap');
@@ -1820,31 +1821,29 @@
 
                 var btn = L.DomUtil.create('button', 'ir-global-toggle-btn', wrap);
                 btn.id = 'ir-genesis-toggle';
-                btn.textContent = 'Genesis 15-day';
-                btn.title = 'Overlay FNV3 LARGE_ENSEMBLE pre-genesis tracks — 1000 members thinned to 100, includes systems not yet in ATCF';
+                btn.textContent = 'Genesis Forecasts';
+                btn.title = 'FNV3 LARGE_ENSEMBLE cyclogenesis: 1000-member spaghetti + 2d/7d/14d formation probability';
                 btn.style.cssText = 'padding:6px 14px;font-family:DM Sans,sans-serif;font-size:0.72rem;font-weight:500;color:#8b9ec2;background:rgba(15,33,64,0.88);border:1px solid rgba(255,255,255,0.12);border-radius:5px;cursor:pointer;white-space:nowrap;backdrop-filter:blur(4px);';
-                btn.addEventListener('click', toggleGenesis);
+                btn.addEventListener('click', toggleGenesisMenu);
                 btn.addEventListener('mouseenter', function () {
-                    if (!_rtGenesisVisible) {
+                    if (!_rtGenesisMenuOpen) {
                         btn.style.background = 'rgba(30,60,110,0.9)';
                         btn.style.color = '#c0d0ea';
                     }
                 });
                 btn.addEventListener('mouseleave', function () {
-                    if (!_rtGenesisVisible) {
-                        btn.style.background = 'rgba(15,33,64,0.88)';
-                        btn.style.color = '#8b9ec2';
-                    }
+                    _refreshGenesisMenuStatus();
                 });
 
-                var status = L.DomUtil.create('span', 'ir-genesis-status', wrap);
-                status.id = 'ir-genesis-status';
-                status.style.cssText = 'font-family:DM Sans,sans-serif;font-size:0.62rem;color:#fbbf72;background:rgba(15,33,64,0.7);padding:2px 6px;border-radius:3px;display:none;';
+                var menu = L.DomUtil.create('div', 'ir-genesis-menu', wrap);
+                menu.id = 'ir-genesis-menu';
+                menu.style.cssText = 'display:none;min-width:260px;background:rgba(15,33,64,0.94);border:1px solid rgba(255,255,255,0.14);border-radius:6px;backdrop-filter:blur(8px);box-shadow:0 6px 20px rgba(0,0,0,0.3);';
+                menu.innerHTML = '<div style="padding:8px 10px;font-size:0.7rem;color:#94a3b8;">Loading…</div>';
 
                 return wrap;
             }
         });
-        map.addControl(new GenesisToggle());
+        map.addControl(new GenesisControl());
 
         // Environmental Analysis menu — submenu of checkable global overlays
         // (shear, mid-level RH, SST) produced by the build_env_overlays
@@ -5355,13 +5354,39 @@
             .finally(function () { _rtGenesisLoading = false; });
     }
 
+    /** Toggle just the spaghetti tracks layer (called from the menu). */
     function toggleGenesis() {
         _rtGenesisVisible = !_rtGenesisVisible;
+        if (_rtGenesisVisible) {
+            if (!_rtGenesisData) _loadGenesis(); else _renderGenesis();
+        } else {
+            _clearGenesis();
+        }
+        _refreshGenesisMenuStatus();
+    }
+    window.toggleGenesis = toggleGenesis;
+
+    /** Activate a formation-probability env layer by name. Layers are
+     *  categorized "genesis" but rendered exactly like env layers, so
+     *  we reuse `_activateEnvLayer` to get the same hover + colorbar
+     *  + opacity slider plumbing for free. */
+    function _activateGenesisProbLayer(name) {
+        var layers = (_rtEnvMetadata && _rtEnvMetadata.layers) || [];
+        var L_ = layers.filter(function (x) { return x.name === name; })[0];
+        if (L_) _activateEnvLayer(L_);
+    }
+
+    /** Open or close the Genesis Forecasts panel. */
+    var _rtGenesisMenuOpen = false;
+    function toggleGenesisMenu() {
+        _rtGenesisMenuOpen = !_rtGenesisMenuOpen;
+        var menu = document.getElementById('ir-genesis-menu');
         var btn = document.getElementById('ir-genesis-toggle');
-        var status = document.getElementById('ir-genesis-status');
         if (btn) {
-            btn.classList.toggle('active', _rtGenesisVisible);
-            if (_rtGenesisVisible) {
+            if (_rtGenesisMenuOpen || _rtGenesisVisible
+                || _rtEnvActive.genesis_prob_2d
+                || _rtEnvActive.genesis_prob_7d
+                || _rtEnvActive.genesis_prob_14d) {
                 btn.style.background = 'rgba(249, 115, 22, 0.22)';
                 btn.style.color = '#fbbf72';
                 btn.style.borderColor = 'rgba(249, 115, 22, 0.55)';
@@ -5371,50 +5396,124 @@
                 btn.style.borderColor = 'rgba(255,255,255,0.12)';
             }
         }
-        if (status) status.style.display = _rtGenesisVisible ? '' : 'none';
-        if (_rtGenesisVisible) {
-            if (!_rtGenesisData) _loadGenesis(); else _renderGenesis();
-            _pairGenesisProbLayer(true);
-        } else {
-            _clearGenesis();
-            _pairGenesisProbLayer(false);
+        if (!menu) return;
+        menu.style.display = _rtGenesisMenuOpen ? '' : 'none';
+        if (_rtGenesisMenuOpen) {
+            var first = !_rtEnvMetadata;
+            var ensureMeta = first ? _loadEnvMetadata() : Promise.resolve();
+            ensureMeta.then(function () {
+                // First-open defaults: ensemble tracks + 14-day formation
+                // probability, so users see something useful without
+                // having to hunt through checkboxes.
+                var anyOn = _rtGenesisVisible
+                    || _rtEnvActive.genesis_prob_2d
+                    || _rtEnvActive.genesis_prob_7d
+                    || _rtEnvActive.genesis_prob_14d;
+                if (!anyOn) {
+                    toggleGenesis();
+                    _activateGenesisProbLayer('genesis_prob_14d');
+                }
+                _renderGenesisMenu();
+            });
         }
     }
-    window.toggleGenesis = toggleGenesis;
+    window.toggleGenesisMenu = toggleGenesisMenu;
 
-    /**
-     * When the Genesis toggle goes on, auto-enable the 7-day cumulative
-     * probability env layer so the spaghetti has spatial context. When
-     * it goes off, dismiss the layer ONLY if we were the ones who
-     * enabled it (so a manual user-enabled layer survives).
-     */
-    function _pairGenesisProbLayer(enable) {
-        var name = _GENESIS_PAIR_LAYER;
-        if (enable) {
-            if (_rtEnvActive[name]) {
-                _genesisPairedLayerAutoOn = false;  // user already had it on
-                return;
+    function _refreshGenesisMenuStatus() {
+        // Re-paint the genesis button + checkboxes whenever an
+        // associated layer turns on/off so the UI never drifts from
+        // the layer state.
+        var menu = document.getElementById('ir-genesis-menu');
+        if (menu && menu.style.display !== 'none') _renderGenesisMenu();
+        // Re-evaluate button highlight.
+        var btn = document.getElementById('ir-genesis-toggle');
+        if (btn) {
+            var on = _rtGenesisVisible
+                || _rtEnvActive.genesis_prob_2d
+                || _rtEnvActive.genesis_prob_7d
+                || _rtEnvActive.genesis_prob_14d;
+            if (on || _rtGenesisMenuOpen) {
+                btn.style.background = 'rgba(249, 115, 22, 0.22)';
+                btn.style.color = '#fbbf72';
+                btn.style.borderColor = 'rgba(249, 115, 22, 0.55)';
+            } else {
+                btn.style.background = 'rgba(15,33,64,0.88)';
+                btn.style.color = '#8b9ec2';
+                btn.style.borderColor = 'rgba(255,255,255,0.12)';
             }
-            // Ensure env metadata is loaded so we can find the layer config.
-            var doActivate = function () {
-                var layers = (_rtEnvMetadata && _rtEnvMetadata.layers) || [];
-                var L_ = layers.filter(function (x) { return x.name === name; })[0];
-                if (!L_) return;  // probability layer not yet generated; no-op
-                _activateEnvLayer(L_);
-                _genesisPairedLayerAutoOn = true;
-                // Tick the matching checkbox in the env menu if it's open.
-                var cb = document.querySelector('input[data-env-layer="' + name + '"]');
-                if (cb) cb.checked = true;
-            };
-            if (_rtEnvMetadata) doActivate();
-            else _loadEnvMetadata().then(doActivate);
+        }
+    }
+
+    function _renderGenesisMenu() {
+        var menu = document.getElementById('ir-genesis-menu');
+        if (!menu) return;
+        var layers = (_rtEnvMetadata && _rtEnvMetadata.layers) || [];
+        var probs = layers.filter(function (L_) { return L_.category === 'genesis'; });
+
+        var trackStatusText = '';
+        if (_rtGenesisLoading) {
+            trackStatusText = 'Loading 1000-member ensemble…';
+        } else if (_rtGenesisData) {
+            var n = _rtGenesisData.n_tracks || 0;
+            var init = _rtGenesisData.init_time;
+            trackStatusText = (n === 0
+                ? 'No genesis predicted in 15 days'
+                : n + ' track' + (n === 1 ? '' : 's') +
+                  (_rtGenesisData.thinned_to
+                      ? ' · thinned to ' + _rtGenesisData.thinned_to + '/track'
+                      : '')) +
+                (init
+                    ? ' · init ' + init.slice(0, 8) + ' ' + init.slice(8) + 'Z'
+                    : '');
+        }
+
+        var html = '';
+        html += '<div style="padding:6px 10px 4px;font-size:0.62rem;color:#94a3b8;'
+              + 'text-transform:uppercase;letter-spacing:0.04em;">Ensemble tracks</div>';
+        html += '<label style="display:flex;align-items:center;gap:8px;padding:5px 10px;'
+              + 'cursor:pointer;font-size:0.72rem;color:#c7d2e0;">'
+              + '<input type="checkbox" id="ir-genesis-tracks-cb"'
+              + (_rtGenesisVisible ? ' checked' : '') + ' style="cursor:pointer;">'
+              + '<span style="flex:1;"><b>1000-member spaghetti</b>'
+              + (trackStatusText
+                  ? '<span style="font-size:0.62rem;color:#7f8a9a;display:block;">' + trackStatusText + '</span>'
+                  : '')
+              + '</span></label>';
+
+        html += '<div style="padding:6px 10px 4px;font-size:0.62rem;color:#94a3b8;'
+              + 'text-transform:uppercase;letter-spacing:0.04em;border-top:1px solid rgba(255,255,255,0.08);'
+              + 'margin-top:4px;">Formation Probability</div>';
+        if (probs.length === 0) {
+            html += '<div style="padding:5px 10px;font-size:0.7rem;color:#94a3b8;">'
+                  + 'Probability layers not available yet.</div>';
         } else {
-            if (_genesisPairedLayerAutoOn && _rtEnvActive[name]) {
-                _deactivateEnvLayer(name);
-                var cb = document.querySelector('input[data-env-layer="' + name + '"]');
-                if (cb) cb.checked = false;
+            for (var i = 0; i < probs.length; i++) {
+                var L_ = probs[i];
+                var isOn = !!_rtEnvActive[L_.name];
+                var validShort = (L_.valid_time || '').replace('T', ' ').replace(':00:00Z', 'Z');
+                html += '<label style="display:flex;align-items:center;gap:8px;padding:5px 10px;'
+                      + 'cursor:pointer;font-size:0.72rem;color:#c7d2e0;">'
+                      + '<input type="checkbox" data-genesis-layer="' + L_.name + '"'
+                      + (isOn ? ' checked' : '') + ' style="cursor:pointer;">'
+                      + '<span style="flex:1;"><b>' + L_.title.replace('TC Formation Probability — ', '') + '</b>'
+                      + '<span style="font-size:0.62rem;color:#7f8a9a;display:block;">'
+                      + 'valid ' + validShort + ' &middot; ' + L_.units + '</span>'
+                      + '</span></label>';
             }
-            _genesisPairedLayerAutoOn = false;
+        }
+
+        menu.innerHTML = html;
+
+        var tracksCb = document.getElementById('ir-genesis-tracks-cb');
+        if (tracksCb) tracksCb.addEventListener('change', function () { toggleGenesis(); });
+        var checkboxes = menu.querySelectorAll('input[data-genesis-layer]');
+        for (var j = 0; j < checkboxes.length; j++) {
+            checkboxes[j].addEventListener('change', function (e) {
+                var name = e.target.getAttribute('data-genesis-layer');
+                if (e.target.checked) _activateGenesisProbLayer(name);
+                else _deactivateEnvLayer(name);
+                _refreshGenesisMenuStatus();
+            });
         }
     }
 
