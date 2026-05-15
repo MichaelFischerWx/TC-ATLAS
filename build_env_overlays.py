@@ -399,6 +399,88 @@ def render_layer_png(field: np.ndarray, spec: LayerSpec) -> bytes:
     return _render_contour_png(field, spec)
 
 
+def render_contour_geojson(field: np.ndarray, spec: LayerSpec) -> bytes:
+    """Extract contour line segments from matplotlib's `contour()` and
+    serialize as a GeoJSON FeatureCollection of LineStrings with each
+    feature tagged by its contour level + color.
+
+    Why: contour layers rendered as raster PNG go soft when Leaflet
+    upscales them at high zoom. Vector polylines stay crisp at any
+    zoom — same as how the DeepMind track overlays look.
+
+    Each cell on the 0.25° grid maps to a lat/lon pair via:
+        lon = -180 + col * 0.25
+        lat =  +90 - row * 0.25
+    matplotlib emits segments in (col, row) pixel coords; we convert
+    once here. Segments that span > 180° of longitude (almost always
+    a false antimeridian crossing where matplotlib joined two distant
+    contour pieces) get split into two so Leaflet doesn't draw a
+    polyline across the entire globe.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    field = np.asarray(field, dtype=np.float32)
+    mask = ~np.isfinite(field)
+    if mask.any():
+        field = field.copy()
+        field[mask] = np.nan
+
+    fig = plt.figure()
+    ax = fig.add_subplot(111)
+    n_steps = int(round((spec.vmax - spec.vmin) / spec.step)) + 1
+    levels = np.linspace(spec.vmin, spec.vmax, n_steps)
+    cs = ax.contour(
+        np.arange(NX), np.arange(NY), field,
+        levels=levels,
+    )
+    plt.close(fig)
+
+    cmap = matplotlib.colormaps.get_cmap(spec.cmap)
+    span = (spec.vmax - spec.vmin) or 1.0
+
+    def _split_antimeridian(coords: list) -> list:
+        """Break a coord list anywhere it jumps > 180° in longitude."""
+        if len(coords) < 2:
+            return [coords]
+        out, cur = [], [coords[0]]
+        for i in range(1, len(coords)):
+            if abs(coords[i][0] - coords[i - 1][0]) > 180.0:
+                if len(cur) >= 2:
+                    out.append(cur)
+                cur = [coords[i]]
+            else:
+                cur.append(coords[i])
+        if len(cur) >= 2:
+            out.append(cur)
+        return out
+
+    features = []
+    for lvl_idx, segs in enumerate(cs.allsegs):
+        lvl = float(levels[lvl_idx])
+        t = max(0.0, min(1.0, (lvl - spec.vmin) / span))
+        r, g, b, _ = cmap(t)
+        color = "#{:02x}{:02x}{:02x}".format(int(r * 255), int(g * 255), int(b * 255))
+        for seg in segs:
+            if len(seg) < 2:
+                continue
+            coords = []
+            for px, py in seg:
+                lon = -180.0 + float(px) * (360.0 / NX)
+                lat = 90.0 - float(py) * (180.0 / (NY - 1))
+                coords.append([round(lon, 3), round(lat, 3)])
+            for sub in _split_antimeridian(coords):
+                features.append({
+                    "type": "Feature",
+                    "geometry": {"type": "LineString", "coordinates": sub},
+                    "properties": {"level": lvl, "color": color},
+                })
+
+    fc = {"type": "FeatureCollection", "features": features}
+    return json.dumps(fc, separators=(",", ":")).encode("utf-8")
+
+
 def render_data_png(field: np.ndarray, spec: LayerSpec) -> bytes:
     """Encode the raw field as a native-resolution 8-bit grayscale PNG
     so the frontend can read exact values on hover.
@@ -499,8 +581,19 @@ def upload_layer(spec: LayerSpec, field: np.ndarray) -> bool:
     png = render_layer_png(field, spec)
     data_png = render_data_png(field, spec)
 
+    # Contour-style layers also get a GeoJSON sidecar so Leaflet can
+    # draw them as vector polylines (crisp at every zoom). Filled
+    # layers skip this and render purely as raster.
+    geojson = None
+    if spec.render_style == "contour":
+        try:
+            geojson = render_contour_geojson(field, spec)
+        except Exception as e:
+            log.warning("Failed to render contour GeoJSON for %s: %s", spec.name, e)
+
     png_blob = bucket.blob(f"{GCS_PREFIX}/{spec.name}/latest.png")
     data_blob = bucket.blob(f"{GCS_PREFIX}/{spec.name}/latest_data.png")
+    geojson_blob = bucket.blob(f"{GCS_PREFIX}/{spec.name}/latest.geojson")
     meta_blob = bucket.blob(f"{GCS_PREFIX}/{spec.name}/metadata.json")
 
     n_steps = int(round((spec.vmax - spec.vmin) / spec.step)) + 1
@@ -526,6 +619,15 @@ def upload_layer(spec: LayerSpec, field: np.ndarray) -> bool:
         "image_url": (
             f"https://storage.googleapis.com/{GCS_BUCKET}/"
             f"{GCS_PREFIX}/{spec.name}/latest.png"
+        ),
+        # Vector GeoJSON sidecar for contour layers — crisper than the
+        # raster PNG at any zoom because the browser redraws polylines
+        # at display resolution. Filled layers don't get one because
+        # filled-region polygons would balloon JSON size.
+        "geojson_url": (
+            (f"https://storage.googleapis.com/{GCS_BUCKET}/"
+             f"{GCS_PREFIX}/{spec.name}/latest.geojson")
+            if geojson is not None else None
         ),
         # Greyscale data PNG (8-bit R channel = (value - vmin)/(vmax-vmin)
         # * 255; alpha=0 means NaN). Frontend draws to offscreen canvas
@@ -557,9 +659,12 @@ def upload_layer(spec: LayerSpec, field: np.ndarray) -> bool:
     try:
         _put(png_blob, png, "image/png")
         _put(data_blob, data_png, "image/png")
+        if geojson is not None:
+            _put(geojson_blob, geojson, "application/geo+json")
         _put(meta_blob, json.dumps(meta, indent=2), "application/json")
-        log.info("Uploaded %s: vis=%d bytes data=%d bytes",
-                 spec.name, len(png), len(data_png))
+        log.info("Uploaded %s: vis=%d bytes data=%d bytes%s",
+                 spec.name, len(png), len(data_png),
+                 f" geojson={len(geojson)} bytes" if geojson else "")
         return True
     except Exception as e:
         log.error("GCS upload failed for %s: %s", spec.name, e)

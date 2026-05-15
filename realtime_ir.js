@@ -5428,16 +5428,55 @@
     function _activateEnvLayer(layer) {
         if (!map || !layer || _rtEnvActive[layer.name]) return;
         var bounds = layer.bounds || [[-90, -180], [90, 180]];
-        // No crossOrigin flag: we only display the PNG, never read its
-        // pixels. Setting crossOrigin would force a CORS preflight that
-        // the public GCS bucket doesn't satisfy without explicit CORS
-        // config, breaking the load with no actual benefit.
-        var overlay = L.imageOverlay(layer.image_url, bounds, {
-            opacity: _rtEnvOpacity,
-            interactive: false
-        }).addTo(map);
 
-        var entry = { overlay: overlay, layer: layer, canvas: null, ctx: null };
+        // Contour layers prefer the GeoJSON sidecar (renders as SVG
+        // polylines → crisp at any zoom). Filled layers, or contour
+        // layers whose pipeline didn't emit GeoJSON yet, fall back to
+        // the raster PNG overlay.
+        var overlay;
+        var overlayKind;
+        if (layer.render_style === 'contour' && layer.geojson_url) {
+            overlay = L.geoJSON(null, {
+                style: function (feature) {
+                    return {
+                        color: feature.properties.color || '#ffffff',
+                        weight: 1.5,
+                        opacity: _rtEnvOpacity,
+                        interactive: false
+                    };
+                }
+            }).addTo(map);
+            overlayKind = 'geojson';
+            fetch(layer.geojson_url, { cache: 'no-store' })
+                .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+                .then(function (geojson) {
+                    if (!_rtEnvActive[layer.name]) return;  // user deactivated mid-fetch
+                    overlay.addData(geojson);
+                })
+                .catch(function (err) {
+                    console.warn('[Env] GeoJSON load failed for ' + layer.name + '; falling back to raster', err);
+                    if (!_rtEnvActive[layer.name]) return;
+                    map.removeLayer(overlay);
+                    overlay = L.imageOverlay(layer.image_url, bounds, {
+                        opacity: _rtEnvOpacity,
+                        interactive: false
+                    }).addTo(map);
+                    _rtEnvActive[layer.name].overlay = overlay;
+                    _rtEnvActive[layer.name].overlayKind = 'raster';
+                });
+        } else {
+            overlay = L.imageOverlay(layer.image_url, bounds, {
+                opacity: _rtEnvOpacity,
+                interactive: false
+            }).addTo(map);
+            overlayKind = 'raster';
+        }
+
+        var entry = {
+            overlay: overlay, layer: layer,
+            overlayKind: overlayKind,
+            canvas: null, ctx: null
+        };
         _rtEnvActive[layer.name] = entry;
 
         // Preload the parallel data PNG into an offscreen canvas so we
@@ -5581,7 +5620,13 @@
         _rtEnvOpacity = Math.max(0, Math.min(1, v));
         Object.keys(_rtEnvActive).forEach(function (n) {
             var entry = _rtEnvActive[n];
-            if (entry && entry.overlay) entry.overlay.setOpacity(_rtEnvOpacity);
+            if (!entry || !entry.overlay) return;
+            if (entry.overlayKind === 'geojson') {
+                // L.geoJSON applies opacity via setStyle on its child polylines.
+                entry.overlay.setStyle({ opacity: _rtEnvOpacity });
+            } else {
+                entry.overlay.setOpacity(_rtEnvOpacity);
+            }
         });
     }
 
