@@ -267,6 +267,11 @@ class LayerSpec:
     # "contour" = labelled isolines (good for smooth gradients: shear, SST)
     # "filled"  = continuous shaded field (good for noisier scalars: RH)
     render_style: str = "contour"
+    # Routes the layer into the right frontend menu. "env" = GFS/OISST
+    # diagnostics; "genesis" = FNV3 cyclogenesis ML forecasts. Filtered
+    # client-side so the Env Analysis menu doesn't mix observation
+    # diagnostics with model forecast products.
+    category: str = "env"
 
 
 # Each 0.25° cell spans ~27.8 km in the latitude direction (and at the
@@ -616,6 +621,7 @@ def upload_layer(spec: LayerSpec, field: np.ndarray) -> bool:
         "valid_time": spec.valid_time,
         "description": spec.description,
         "render_style": spec.render_style,
+        "category": spec.category,
         "image_url": (
             f"https://storage.googleapis.com/{GCS_BUCKET}/"
             f"{GCS_PREFIX}/{spec.name}/latest.png"
@@ -919,17 +925,30 @@ def fetch_cyclogenesis_csv(date_str: str, hour_str: str) -> Optional[str]:
 
 def _grid_track_probability(csv_text: str, lead_hours_max: float
                             ) -> Optional[np.ndarray]:
-    """Bin (member, lat, lon) hits from the cyclogenesis CSV onto a 0.25°
-    grid, then compute the fraction of unique members whose track passes
-    through each cell at any lead time ≤ lead_hours_max.
+    """Compute TC FORMATION probability on a 0.25° grid: the fraction of
+    1000-member ensemble realizations whose genesis (earliest tracked
+    point) falls in each cell with lead-time ≤ lead_hours_max.
 
-    Smooths with a small disc kernel so the field reads as a heatmap
-    rather than as a scatter of dots. Returns a (NY, NX) float array of
-    probabilities in [0, 1] on the same global grid + lon convention as
-    the rest of the env layers (0..360 → -180..180 after regrid).
+    Two important design choices:
+
+    1. Genesis point only (not cumulative track positions). Previously
+       we counted every track point, so the heatmap peak landed where
+       tracks recurve (~20°N for WPac) instead of where they form
+       (~12°N). The label said "Genesis Probability" but the math was
+       computing "track exposure." Now we keep only the earliest-lead
+       point per ensemble realization.
+
+    2. (track_id, sample) as the realization key. The old code keyed
+       only by sample, which collapsed N tracks × M samples into M
+       buckets — inflating probabilities by ~Nx because every cell
+       inherited multi-track unions. Each (track_id, sample) is now
+       one realization; total realizations = N × M.
+
+    Returns a (NY, NX) float array in [0, 100] on the canonical global
+    grid + 0..360 lon convention (regridded to -180..180 by the caller).
     """
-    # Per-member set of (iy, ix) cells visited at lead ≤ threshold.
-    member_cells: dict[str, set] = {}
+    # Earliest detected point per (track_id, sample) ensemble realization.
+    earliest: dict[tuple, tuple[float, int, int]] = {}  # key -> (lead_h, iy, ix)
     for line in csv_text.splitlines():
         if line.startswith("#") or not line.strip():
             continue
@@ -939,6 +958,7 @@ def _grid_track_probability(csv_text: str, lead_hours_max: float
         if len(cols) < 10:
             continue
         try:
+            track_id = cols[1].strip()
             sample = cols[2].strip()
             lead_h = float(cols[5])
             if lead_h > lead_hours_max:
@@ -947,24 +967,26 @@ def _grid_track_probability(csv_text: str, lead_hours_max: float
             lon = float(cols[7])
         except (ValueError, IndexError):
             continue
-        # Map lat -> row (NY=721, 0=+90°, 720=-90°) and lon -> col.
-        # CSV lon may be in either -180..180 or 0..360. Normalize to 0..360.
+        # CSV lon may be -180..180 or 0..360; normalize to 0..360.
         if lon < 0:
             lon += 360.0
         iy = int(round((90.0 - lat) / 0.25))
         ix = int(round(lon / 0.25)) % NX
         if iy < 0 or iy >= NY:
             continue
-        member_cells.setdefault(sample, set()).add((iy, ix))
-    if not member_cells:
+        key = (track_id, sample)
+        cur = earliest.get(key)
+        if cur is None or lead_h < cur[0]:
+            earliest[key] = (lead_h, iy, ix)
+
+    if not earliest:
         return None
 
     counts = np.zeros((NY, NX), dtype=np.float32)
-    for cells in member_cells.values():
-        for (iy, ix) in cells:
-            counts[iy, ix] += 1.0
-    n_members = len(member_cells)
-    prob = counts / max(n_members, 1)
+    for (_lead, iy, ix) in earliest.values():
+        counts[iy, ix] += 1.0
+    n_realizations = len(earliest)
+    prob = counts / max(n_realizations, 1)
 
     # ~125 km Gaussian smooth so the heatmap reads continuously instead
     # of as 0.25° pixel stippling. sigma_cells = 125 / 27.8 ≈ 4.5.
@@ -1010,21 +1032,22 @@ def build_genesis_prob(csv_text: str, lead_days: int, valid_time: str
 
     spec = LayerSpec(
         name=f"genesis_prob_{lead_days}d",
-        title=f"TC Genesis Probability — Next {lead_days} day{'s' if lead_days > 1 else ''}",
+        title=f"TC Formation Probability — Next {lead_days} day{'s' if lead_days > 1 else ''}",
         units="%",
         vmin=0,
-        vmax=40,
-        step=5,
+        vmax=8,
+        step=1,
         cmap="YlOrRd",
         valid_time=valid_time,
         description=(
-            f"Cumulative track probability over the next {lead_days} "
-            f"days, computed by binning the FNV3 LARGE_ENSEMBLE "
-            f"1000-member cyclogenesis CSV onto a 0.25° grid and "
-            f"taking (# members touching this cell) / N. ~125 km "
+            f"Fraction of FNV3 LARGE_ENSEMBLE 1000-member realizations "
+            f"whose tropical-cyclone genesis (earliest detected point) "
+            f"falls in this 0.25° cell within the next {lead_days} days. "
+            f"Each (track_id, sample) counts as one realization; ~125 km "
             f"Gaussian smooth applied for readability."
         ),
         render_style="filled",
+        category="genesis",
     )
     return field if upload_layer(spec, field) else None
 

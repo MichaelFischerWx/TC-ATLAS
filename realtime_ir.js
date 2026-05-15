@@ -5686,7 +5686,15 @@
     function _renderEnvMenu() {
         var menu = document.getElementById('ir-global-env-menu');
         if (!menu) return;
-        var layers = (_rtEnvMetadata && _rtEnvMetadata.layers) || [];
+        var allLayers = (_rtEnvMetadata && _rtEnvMetadata.layers) || [];
+        // Environmental Analysis menu = GFS/OISST diagnostics only.
+        // Model forecast products (genesis probability fields) go in
+        // the Genesis menu. Filter by either explicit category metadata
+        // (newer pipeline output) or name prefix (back-compat).
+        var layers = allLayers.filter(function (L_) {
+            if (L_.category) return L_.category === 'env';
+            return L_.name && !L_.name.startsWith('genesis_');
+        });
         if (layers.length === 0) {
             menu.innerHTML = '<div style="padding:8px 10px;font-size:0.7rem;color:#94a3b8;">'
                 + 'No env layers available yet. Pipeline runs every 6 h.</div>';

@@ -1009,7 +1009,7 @@ html, body { margin: 0; padding: 0; }
    toggle on the map's top-left. */
 .ir-legend-toggle {
     position: fixed;
-    top: 100px;
+    top: 208px;  /* below the Basins toggle (170-198) which itself sits below Leaflet zoom (95-155) */
     left: 10px;
     z-index: 600;
     background: rgba(255, 255, 255, 0.88);
@@ -1058,7 +1058,7 @@ html, body { margin: 0; padding: 0; }
 /* ── Toggle button ───────────────────────────────────────────── */
 .basin-sidebar-toggle {
     position: fixed;
-    top: 132px;
+    top: 170px;  /* sits below the Leaflet zoom controls (~95-155 px) so it doesn't cover them */
     left: 10px;
     z-index: 600;
     background: rgba(255, 255, 255, 0.88);
