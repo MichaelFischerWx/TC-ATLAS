@@ -806,6 +806,86 @@ def build_midlevel_shear(date_str: str, hour_str: str) -> Optional[bytes]:
     return shear_kt if upload_layer(spec, shear_kt) else None
 
 
+def build_vorticity(date_str: str, hour_str: str, level: int
+                    ) -> Optional[bytes]:
+    """Cyclonic-positive relative vorticity at the given pressure level
+    (e.g. 850, 700, 500 hPa) in 10⁻⁵ s⁻¹.
+
+    ζ = ∂v/∂x − ∂u/∂y computed by centered finite differences on the
+    0.25° lat/lon grid, with dx = R·cos(φ)·Δλ honoring the spherical
+    Earth so high-latitude grid spacing doesn't blow up the derivative.
+
+    Sign-adjusted by hemisphere (×sign(latitude)) so positive values
+    are cyclonic in both NH and SH — the TC-genesis-relevant signal.
+    Anticyclonic cells are masked NaN so they don't crowd the contour
+    set. u, v are 200 km disc-smoothed before differencing to suppress
+    grid noise — vorticity is small-scale, so we use a tighter kernel
+    than the 400 km shear smoothing.
+    """
+    log.info("Building vorticity: GFS %s %sZ at %d hPa",
+             date_str, hour_str, level)
+    u_grib = fetch_gfs_global(date_str, hour_str, [level], "UGRD")
+    v_grib = fetch_gfs_global(date_str, hour_str, [level], "VGRD")
+    if not u_grib or not v_grib:
+        log.error("Vorticity: GFS fetch failed at %d hPa", level)
+        return None
+
+    u = read_gfs_field(u_grib, level, "UGRD")
+    v = read_gfs_field(v_grib, level, "VGRD")
+    if u is None or v is None:
+        log.error("Vorticity: missing u/v at %d hPa", level)
+        return None
+
+    u_s = disc_smooth(u, 200.0)
+    v_s = disc_smooth(v, 200.0)
+
+    R_EARTH = 6.371e6
+    DEG_TO_RAD = np.pi / 180.0
+    dlat_m = 0.25 * DEG_TO_RAD * R_EARTH  # ≈ 27800 m
+    ny, nx = u_s.shape
+    lats = 90.0 - np.arange(ny) * 0.25
+    cos_lat = np.maximum(np.cos(lats * DEG_TO_RAD), 1e-6)
+    dx_m = dlat_m * cos_lat  # (ny,)
+
+    # ∂v/∂x — periodic in longitude.
+    dv_dx = (np.roll(v_s, -1, axis=1) - np.roll(v_s, 1, axis=1)) / (2 * dx_m[:, None])
+    # ∂u/∂y — row index increases southward, so y-derivative needs a
+    # sign flip relative to the row derivative. Leave pole rows at 0.
+    du_dy = np.zeros_like(u_s)
+    du_dy[1:-1, :] = -(u_s[2:, :] - u_s[:-2, :]) / (2 * dlat_m)
+
+    vort = dv_dx - du_dy  # ζ in s⁻¹
+    sign_lat = np.sign(lats)
+    sign_lat[sign_lat == 0] = 1.0
+    cyclonic = vort * sign_lat[:, None]
+    cyclonic *= 1e5  # → 10⁻⁵ s⁻¹
+
+    # Mask anticyclonic + sub-threshold cells so the contour set
+    # focuses on TC-relevant cyclonic features.
+    cyclonic = np.where(cyclonic > 1.0, cyclonic, np.nan).astype(np.float32)
+    cyclonic = regrid_to_global(cyclonic)
+
+    valid = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}T{hour_str}:00:00Z"
+    spec = LayerSpec(
+        name=f"vort_{level}",
+        title=f"{level} hPa Cyclonic Vorticity",
+        units="10⁻⁵ s⁻¹",
+        vmin=0,
+        vmax=30,
+        step=5,
+        cmap="Reds",
+        valid_time=valid,
+        description=(
+            f"Relative vorticity ζ at {level} hPa from the latest GFS "
+            f"analysis, after a 200 km disc smooth of u, v. Multiplied "
+            f"by sign(latitude) so positive = cyclonic globally; "
+            f"anticyclonic cells are masked to keep the contour set "
+            f"focused on TC-favorable circulation."
+        ),
+    )
+    return cyclonic if upload_layer(spec, cyclonic) else None
+
+
 def build_midlevel_rh(date_str: str, hour_str: str) -> Optional[bytes]:
     """700-400 hPa layer-averaged relative humidity (%)."""
     log.info("Building mid-level RH: GFS %s %sZ", date_str, hour_str)
@@ -926,29 +1006,31 @@ def fetch_cyclogenesis_csv(date_str: str, hour_str: str) -> Optional[str]:
 def _grid_track_probability(csv_text: str, lead_hours_max: float
                             ) -> Optional[np.ndarray]:
     """Compute TC FORMATION probability on a 0.25° grid: the fraction of
-    1000-member ensemble realizations whose genesis (earliest tracked
-    point) falls in each cell with lead-time ≤ lead_hours_max.
+    1000-member ensemble members where at least one track's GENESIS
+    (earliest detected point) lands in each cell within lead_hours_max.
 
-    Two important design choices:
+    Design:
 
     1. Genesis point only (not cumulative track positions). Previously
        we counted every track point, so the heatmap peak landed where
-       tracks recurve (~20°N for WPac) instead of where they form
-       (~12°N). The label said "Genesis Probability" but the math was
-       computing "track exposure." Now we keep only the earliest-lead
-       point per ensemble realization.
+       tracks recurve (~20°N WPac) instead of where they form (~12°N).
+       Now we keep only the earliest-lead point per (track, sample)
+       pair so the heatmap represents formation, not exposure.
 
-    2. (track_id, sample) as the realization key. The old code keyed
-       only by sample, which collapsed N tracks × M samples into M
-       buckets — inflating probabilities by ~Nx because every cell
-       inherited multi-track unions. Each (track_id, sample) is now
-       one realization; total realizations = N × M.
+    2. Probability is per ENSEMBLE MEMBER, not per (track, sample)
+       realization. The CSV's "sample" column is the FNV3 LARGE_ENSEMBLE
+       member ID (0-999); a single member can have multiple tracks
+       simultaneously (one per concurrent TC). For "P(genesis at cell X)"
+       we want: how many of the 1000 members predict any TC genesis at
+       cell X? — *not* "how many (track, sample) pairs land at cell X",
+       which inflates by an order of magnitude when many tracks share
+       the ensemble's 1000 members.
 
     Returns a (NY, NX) float array in [0, 100] on the canonical global
     grid + 0..360 lon convention (regridded to -180..180 by the caller).
     """
-    # Earliest detected point per (track_id, sample) ensemble realization.
-    earliest: dict[tuple, tuple[float, int, int]] = {}  # key -> (lead_h, iy, ix)
+    # Step 1: earliest detected point per (track_id, sample) pair.
+    earliest: dict[tuple, tuple[float, int, int]] = {}
     for line in csv_text.splitlines():
         if line.startswith("#") or not line.strip():
             continue
@@ -967,7 +1049,6 @@ def _grid_track_probability(csv_text: str, lead_hours_max: float
             lon = float(cols[7])
         except (ValueError, IndexError):
             continue
-        # CSV lon may be -180..180 or 0..360; normalize to 0..360.
         if lon < 0:
             lon += 360.0
         iy = int(round((90.0 - lat) / 0.25))
@@ -982,11 +1063,23 @@ def _grid_track_probability(csv_text: str, lead_hours_max: float
     if not earliest:
         return None
 
+    # Step 2: per ensemble member (= sample), collect set of cells
+    # where any of its tracks' genesis falls. Then each cell's count is
+    # the number of unique members predicting genesis there.
+    sample_cells: dict[str, set] = {}
+    for (_track_id, sample), (_lead, iy, ix) in earliest.items():
+        sample_cells.setdefault(sample, set()).add((iy, ix))
+
     counts = np.zeros((NY, NX), dtype=np.float32)
-    for (_lead, iy, ix) in earliest.values():
-        counts[iy, ix] += 1.0
-    n_realizations = len(earliest)
-    prob = counts / max(n_realizations, 1)
+    for cells in sample_cells.values():
+        for (iy, ix) in cells:
+            counts[iy, ix] += 1.0
+
+    # Normalize to the 1000-member ensemble size (FNV3 LARGE_ENSEMBLE
+    # documented size). Falls back to observed sample count if it's
+    # somehow larger.
+    N_MEMBERS = max(1000, len(sample_cells))
+    prob = counts / N_MEMBERS
 
     # ~125 km Gaussian smooth so the heatmap reads continuously instead
     # of as 0.25° pixel stippling. sigma_cells = 125 / 27.8 ≈ 4.5.
@@ -1084,6 +1177,9 @@ def main() -> int:
     for name, fn in [
         ("shear_200_850", lambda: build_shear(date_str, hour_str)),
         ("shear_500_850", lambda: build_midlevel_shear(date_str, hour_str)),
+        ("vort_850",      lambda: build_vorticity(date_str, hour_str, 850)),
+        ("vort_700",      lambda: build_vorticity(date_str, hour_str, 700)),
+        ("vort_500",      lambda: build_vorticity(date_str, hour_str, 500)),
         ("rh_700_400",    lambda: build_midlevel_rh(date_str, hour_str)),
         ("sst_oisst",     build_sst),
     ]:
