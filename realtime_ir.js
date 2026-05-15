@@ -441,7 +441,11 @@
     // context at once. Toggled off when the genesis toggle is dismissed
     // (only if it was auto-enabled, so we don't surprise the user by
     // killing a layer they enabled manually).
-    var _GENESIS_PAIR_LAYER = 'genesis_prob_7d';
+    // Pair the 15-day spaghetti with the 14-day probability heatmap so
+    // the horizons agree — the previous 7-day pairing made the
+    // spaghetti's days 8-15 fall outside the heatmap, which looked
+    // like a track/probability inconsistency.
+    var _GENESIS_PAIR_LAYER = 'genesis_prob_14d';
     var _genesisPairedLayerAutoOn = false;
 
     // ── Environmental Analysis Overlays (RT main map) ─────────
@@ -1881,22 +1885,40 @@
         });
         map.addControl(new EnvAnalysisControl());
 
-        // Env colorbar uses a fixed-position div (same pattern as the
-        // intensity legend) anchored above the 28-px status bar — going
-        // through Leaflet's bottomleft stack put it underneath the
-        // bottom of the map clip and the swatches got cut off when the
-        // stack ran out of room.
+        // Env colorbar — fixed-position bottom-right (where intensity
+        // legend used to live; that legend is now toggle-only). Keeps
+        // it well clear of the Brightness Temp colorbar + animation
+        // panel which both live in Leaflet's bottom-left stack.
         if (!document.getElementById('ir-global-env-cbars')) {
             var ebox = document.createElement('div');
             ebox.id = 'ir-global-env-cbars';
             ebox.style.cssText =
-                'position:fixed;left:12px;bottom:40px;display:none;' +
+                'position:fixed;right:12px;bottom:40px;display:none;' +
                 'background:rgba(15,33,64,0.92);padding:8px 12px;' +
                 'border-radius:6px;border:1px solid rgba(255,255,255,0.14);' +
                 'backdrop-filter:blur(6px);z-index:700;' +
                 'box-shadow:0 4px 14px rgba(0,0,0,0.25);' +
                 'max-width:min(90vw, 540px);';
             document.body.appendChild(ebox);
+        }
+
+        // Intensity legend toggle — small pill below the Basins button.
+        // The legend itself is hidden by default; users opt in.
+        if (!document.getElementById('ir-legend-toggle')) {
+            var ltog = document.createElement('button');
+            ltog.id = 'ir-legend-toggle';
+            ltog.className = 'ir-legend-toggle';
+            ltog.type = 'button';
+            ltog.title = 'Show / hide Saffir-Simpson intensity legend';
+            ltog.innerHTML = '✦ Legend';
+            ltog.addEventListener('click', function () {
+                var leg = document.getElementById('ir-legend');
+                if (!leg) return;
+                var on = leg.style.display === 'none' || !leg.style.display;
+                leg.style.display = on ? '' : 'none';
+                ltog.classList.toggle('active', on);
+            });
+            document.body.appendChild(ltog);
         }
 
         // Add IR Tb colorbar to global map (bottom-left, above animation panel)
@@ -5452,6 +5474,32 @@
                 .then(function (geojson) {
                     if (!_rtEnvActive[layer.name]) return;  // user deactivated mid-fetch
                     overlay.addData(geojson);
+                    // Place value labels along each non-trivial line.
+                    // SVG text would re-render at zoom (crisp) but
+                    // L.divIcon HTML inherits the site's DM Sans font.
+                    var labels = [];
+                    var features = (geojson && geojson.features) || [];
+                    for (var i = 0; i < features.length; i++) {
+                        var ft = features[i];
+                        var coords = ft.geometry && ft.geometry.coordinates;
+                        if (!coords || coords.length < 20) continue;
+                        var lvl = ft.properties && ft.properties.level;
+                        if (lvl == null) continue;
+                        var midIdx = Math.floor(coords.length / 2);
+                        var mid = coords[midIdx];
+                        var mk = L.marker([mid[1], mid[0]], {
+                            icon: L.divIcon({
+                                className: 'env-contour-label',
+                                html: '' + Math.round(lvl),
+                                iconSize: null,
+                                iconAnchor: [10, 7]
+                            }),
+                            interactive: false,
+                            keyboard: false
+                        }).addTo(map);
+                        labels.push(mk);
+                    }
+                    _rtEnvActive[layer.name].labels = labels;
                 })
                 .catch(function (err) {
                     console.warn('[Env] GeoJSON load failed for ' + layer.name + '; falling back to raster', err);
@@ -5519,6 +5567,11 @@
         var entry = _rtEnvActive[name];
         if (!entry) return;
         if (entry.overlay && map) map.removeLayer(entry.overlay);
+        if (entry.labels && map) {
+            for (var i = 0; i < entry.labels.length; i++) {
+                map.removeLayer(entry.labels[i]);
+            }
+        }
         delete _rtEnvActive[name];
         _renderEnvColorbar();
         _hideEnvHoverTip();

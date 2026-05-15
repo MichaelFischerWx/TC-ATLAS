@@ -1003,6 +1003,58 @@ html, body { margin: 0; padding: 0; }
     text-align: right;
 }
 
+/* ── Intensity legend toggle pill ────────────────────────────── */
+/* Mirrors the basin-sidebar-toggle styling but doesn't shift left when
+   active (that's a basin-sidebar-only behavior). Sits below the basin
+   toggle on the map's top-left. */
+.ir-legend-toggle {
+    position: fixed;
+    top: 100px;
+    left: 10px;
+    z-index: 600;
+    background: rgba(255, 255, 255, 0.88);
+    color: #8993a4;
+    border: 1px solid rgba(15, 22, 35, 0.1);
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-size: 0.72rem;
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 500;
+    cursor: pointer;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.ir-legend-toggle:hover {
+    background: rgba(255, 255, 255, 0.95);
+    color: var(--text);
+    border-color: rgba(74, 155, 110, 0.3);
+}
+.ir-legend-toggle.active {
+    background: rgba(74, 155, 110, 0.18);
+    color: #60a5fa;
+    border-color: rgba(74, 155, 110, 0.4);
+}
+
+/* ── Contour value labels (env GeoJSON layers) ───────────────── */
+/* L.divIcon HTML labels placed at each contour line's midpoint. They
+   inherit DM Sans, stay crisp at any zoom (browser re-renders text),
+   and have a high-contrast pill background so they read over the
+   satellite IR basemap. */
+.env-contour-label {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 10px;
+    font-weight: 600;
+    color: #0f1a2e;
+    background: rgba(255, 255, 255, 0.82);
+    border-radius: 3px;
+    padding: 0 4px;
+    pointer-events: none;
+    white-space: nowrap;
+    box-shadow: 0 0 0 1px rgba(15, 22, 35, 0.15);
+    line-height: 1.4;
+}
+
 /* ── Toggle button ───────────────────────────────────────────── */
 .basin-sidebar-toggle {
     position: fixed;
