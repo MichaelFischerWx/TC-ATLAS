@@ -419,6 +419,12 @@
     // ── DeepMind 1000-Member Ensemble Distribution State ──────
     var _rtDmEnsData = null;           // API response from /weatherlab-ensemble
 
+    // ── Global DeepMind Ensemble Overlay (RT main map) ────────
+    var _rtGlobalWLData = null;        // API response from /weatherlab-global
+    var _rtGlobalWLVisible = false;    // toggle state
+    var _rtGlobalWLLoading = false;
+    var _rtGlobalWLLayers = [];        // Leaflet polylines + markers on `map`
+
     // Formats WeatherLab size fields (rmw_km, r34/r50/r64 mean + per-quadrant)
     // for tooltip / popup HTML. Returns '' if no size data is available so
     // existing tooltips don't grow needlessly.
@@ -1736,6 +1742,41 @@
             }
         });
         map.addControl(new ProductToggle());
+
+        // DeepMind ensemble global toggle — overlay forecast tracks for
+        // every active storm/invest from the latest WeatherLab paired CSV.
+        var DeepMindToggle = L.Control.extend({
+            options: { position: 'topright' },
+            onAdd: function () {
+                var wrap = L.DomUtil.create('div', 'ir-global-wl-wrap');
+                wrap.style.cssText = 'display:flex;flex-direction:column;align-items:flex-end;gap:3px;';
+                L.DomEvent.disableClickPropagation(wrap);
+
+                var btn = L.DomUtil.create('button', 'ir-global-toggle-btn', wrap);
+                btn.id = 'ir-global-wl-toggle';
+                btn.textContent = 'DeepMind 10-day';
+                btn.title = 'Overlay 50-member WeatherLab ensemble forecast tracks for every active storm + invest';
+                btn.style.cssText = 'padding:6px 14px;font-family:DM Sans,sans-serif;font-size:0.72rem;font-weight:500;color:#8b9ec2;background:rgba(15,33,64,0.88);border:1px solid rgba(255,255,255,0.12);border-radius:5px;cursor:pointer;white-space:nowrap;backdrop-filter:blur(4px);';
+                btn.addEventListener('click', toggleGlobalWeatherlab);
+                btn.addEventListener('mouseenter', function () {
+                    btn.style.background = 'rgba(30,60,110,0.9)';
+                    btn.style.color = '#c0d0ea';
+                });
+                btn.addEventListener('mouseleave', function () {
+                    if (!btn.classList.contains('active')) {
+                        btn.style.background = 'rgba(15,33,64,0.88)';
+                        btn.style.color = '#8b9ec2';
+                    }
+                });
+
+                var status = L.DomUtil.create('span', 'ir-global-wl-status', wrap);
+                status.id = 'ir-global-wl-status';
+                status.style.cssText = 'font-family:DM Sans,sans-serif;font-size:0.62rem;color:#8b9ec2;background:rgba(15,33,64,0.7);padding:2px 6px;border-radius:3px;display:none;';
+
+                return wrap;
+            }
+        });
+        map.addControl(new DeepMindToggle());
 
         // Add IR Tb colorbar to global map (bottom-left, above animation panel)
         var TbColorbar = L.Control.extend({
@@ -4877,6 +4918,168 @@
     /**
      * Full cleanup of WeatherLab state.
      */
+    // ═══════════════════════════════════════════════════════════
+    //  GLOBAL DEEPMIND ENSEMBLE OVERLAY (RT main map)
+    // ═══════════════════════════════════════════════════════════
+    //
+    //  Renders WeatherLab ensemble forecast tracks for *every* active
+    //  storm + invest on the global RT map. WeatherLab's public CSV is
+    //  ATCF-paired only, so this surfaces invests (90-99 IDs) but not
+    //  pre-genesis disturbances that haven't been numbered yet.
+
+    function _clearGlobalWeatherlab() {
+        for (var i = 0; i < _rtGlobalWLLayers.length; i++) {
+            if (map) map.removeLayer(_rtGlobalWLLayers[i]);
+        }
+        _rtGlobalWLLayers = [];
+    }
+
+    function _renderGlobalWeatherlab() {
+        _clearGlobalWeatherlab();
+        if (!_rtGlobalWLData || !map) return;
+        var tracks = _rtGlobalWLData.tracks || [];
+        if (tracks.length === 0) return;
+
+        for (var ti = 0; ti < tracks.length; ti++) {
+            var trk = tracks[ti];
+            var trackId = trk.track_id || '';
+            var isInvest = /9[0-9](?:[A-Z]|$)/.test(trackId);  // EP952025-style invest
+            var members = trk.members || {};
+            var memberKeys = Object.keys(members);
+
+            // Thin spaghetti members
+            for (var mi = 0; mi < memberKeys.length; mi++) {
+                var pts = members[memberKeys[mi]].points;
+                if (!pts || pts.length < 2) continue;
+                var latlngs = [];
+                for (var pi = 0; pi < pts.length; pi++) {
+                    latlngs.push([pts[pi].lat, pts[pi].lon]);
+                }
+                var segs = splitAtAntimeridian(latlngs);
+                for (var si = 0; si < segs.length; si++) {
+                    if (segs[si].length < 2) continue;
+                    var line = L.polyline(segs[si], {
+                        color: _WEATHERLAB_MEMBER_COLOR,
+                        weight: 0.8,
+                        opacity: 0.55,
+                        dashArray: isInvest ? '3,3' : null,
+                        interactive: false
+                    }).addTo(map);
+                    _rtGlobalWLLayers.push(line);
+                }
+            }
+
+            // Ensemble mean — thick highlight
+            var mean = trk.ensemble_mean;
+            if (mean && mean.points && mean.points.length >= 2) {
+                var meanLatLngs = [];
+                for (var pj = 0; pj < mean.points.length; pj++) {
+                    meanLatLngs.push([mean.points[pj].lat, mean.points[pj].lon]);
+                }
+                var meanSegs = splitAtAntimeridian(meanLatLngs);
+                for (var msi = 0; msi < meanSegs.length; msi++) {
+                    if (meanSegs[msi].length < 2) continue;
+                    var meanLine = L.polyline(meanSegs[msi], {
+                        color: _WEATHERLAB_MEAN_COLOR,
+                        weight: 2.2,
+                        opacity: 0.95,
+                        dashArray: isInvest ? '6,4' : null,
+                        interactive: false
+                    }).addTo(map);
+                    _rtGlobalWLLayers.push(meanLine);
+                }
+
+                // Genesis-point marker (tau=0) labeled with track ID
+                var p0 = mean.points[0];
+                var labelHtml = '<b>' + trackId + '</b>' +
+                    (isInvest ? ' <span style="opacity:0.7">(invest)</span>' : '') +
+                    '<br>DeepMind ensemble · ' +
+                    (trk.n_members || memberKeys.length) + ' members';
+                var lmiPt = null, lmiWind = -1;
+                for (var lj = 0; lj < mean.points.length; lj++) {
+                    if (mean.points[lj].wind != null && mean.points[lj].wind > lmiWind) {
+                        lmiWind = mean.points[lj].wind;
+                        lmiPt = mean.points[lj];
+                    }
+                }
+                if (lmiPt && lmiWind >= 34) {
+                    var lmiCat = windToCategory(lmiWind);
+                    labelHtml += '<br>Peak: +' + lmiPt.tau + 'h · ' +
+                        lmiWind.toFixed(0) + ' kt · ' + lmiCat;
+                }
+
+                var startMarker = L.circleMarker([p0.lat, p0.lon], {
+                    radius: 4,
+                    color: '#fff',
+                    fillColor: _WEATHERLAB_MEAN_COLOR,
+                    fillOpacity: 1,
+                    weight: 1.5,
+                    opacity: 1,
+                    interactive: true
+                }).addTo(map);
+                startMarker.bindTooltip(labelHtml, { direction: 'top', offset: [0, -6] });
+                _rtGlobalWLLayers.push(startMarker);
+            }
+        }
+    }
+
+    function _loadGlobalWeatherlab() {
+        if (_rtGlobalWLLoading) return;
+        _rtGlobalWLLoading = true;
+        var statusEl = document.getElementById('ir-global-wl-status');
+        if (statusEl) statusEl.textContent = 'Loading…';
+
+        fetch(API_BASE + '/ir-monitor/weatherlab-global', { cache: 'no-store' })
+            .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+            .then(function (data) {
+                _rtGlobalWLData = data;
+                if (_rtGlobalWLVisible) _renderGlobalWeatherlab();
+                if (statusEl) {
+                    var n = data && data.n_tracks ? data.n_tracks : 0;
+                    statusEl.textContent = n === 0
+                        ? '0 tracks · WeatherLab paired'
+                        : n + ' track' + (n === 1 ? '' : 's') +
+                          (data.init_time ? ' · init ' + data.init_time.slice(0, 8) + ' ' + data.init_time.slice(8) + 'Z' : '');
+                }
+                _ga('rt_global_wl_loaded', { n_tracks: data && data.n_tracks });
+            })
+            .catch(function (err) {
+                console.warn('[Global WeatherLab] fetch failed', err);
+                if (statusEl) statusEl.textContent = 'Unavailable';
+            })
+            .finally(function () { _rtGlobalWLLoading = false; });
+    }
+
+    function toggleGlobalWeatherlab() {
+        _rtGlobalWLVisible = !_rtGlobalWLVisible;
+        var btn = document.getElementById('ir-global-wl-toggle');
+        var status = document.getElementById('ir-global-wl-status');
+        if (btn) {
+            btn.classList.toggle('active', _rtGlobalWLVisible);
+            // Visually echo the active state via inline styles (matches GeoColor toggle)
+            if (_rtGlobalWLVisible) {
+                btn.style.background = 'rgba(0, 229, 255, 0.2)';
+                btn.style.color = '#7fefff';
+                btn.style.borderColor = 'rgba(0, 229, 255, 0.55)';
+            } else {
+                btn.style.background = 'rgba(15,33,64,0.88)';
+                btn.style.color = '#8b9ec2';
+                btn.style.borderColor = 'rgba(255,255,255,0.12)';
+            }
+        }
+        if (status) status.style.display = _rtGlobalWLVisible ? '' : 'none';
+        if (_rtGlobalWLVisible) {
+            if (!_rtGlobalWLData) {
+                _loadGlobalWeatherlab();
+            } else {
+                _renderGlobalWeatherlab();
+            }
+        } else {
+            _clearGlobalWeatherlab();
+        }
+    }
+    window.toggleGlobalWeatherlab = toggleGlobalWeatherlab;
+
     // ═══════════════════════════════════════════════════════════
     //  DEEPMIND 1000-MEMBER ENSEMBLE DISTRIBUTION PANELS
     // ═══════════════════════════════════════════════════════════

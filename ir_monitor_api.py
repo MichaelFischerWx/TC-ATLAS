@@ -3623,6 +3623,69 @@ def get_storm_weatherlab(atcf_id: str):
     )
 
 
+@router.get("/weatherlab-global")
+def get_weatherlab_global():
+    """Latest WeatherLab ensemble forecasts for every track in the paired CSV.
+
+    Returns one entry per track (active storm or invest in ATCF) with the
+    50-member ensemble + ensemble mean. Used by the RT Monitor global map
+    to overlay 10-day forecast spaghetti across all tracked systems —
+    helpful for situational awareness in busy basins.
+
+    Note: WeatherLab's paired CSV is ATCF-paired only, so this does NOT
+    surface disturbances that haven't yet received an invest number.
+    """
+    now = _dt.now(timezone.utc)
+    candidates = []
+    for day_offset in (0, 1):
+        dt = now - timedelta(days=day_offset)
+        date_str = dt.strftime("%Y-%m-%d")
+        for hour in ("18", "12", "06", "00"):
+            candidates.append((date_str, hour))
+
+    data = None
+    used_date = None
+    used_hour = None
+    for date_str, hour_str in candidates:
+        d = _fetch_weatherlab_csv(date_str, hour_str)
+        if d:
+            data = d
+            used_date = date_str
+            used_hour = hour_str
+            break
+
+    if not data:
+        return JSONResponse(
+            content={
+                "model": "DeepMind FNV3",
+                "init_time": None,
+                "tracks": [],
+                "n_tracks": 0,
+            },
+            headers={"Cache-Control": "public, max-age=300"},
+        )
+
+    init_time = used_date.replace("-", "") + used_hour
+    tracks = []
+    for track_id, storm in data.items():
+        tracks.append({
+            "track_id": track_id,
+            "members": storm["members"],
+            "ensemble_mean": storm["ensemble_mean"],
+            "n_members": len(storm["members"]),
+        })
+
+    return JSONResponse(
+        content={
+            "model": "DeepMind FNV3",
+            "init_time": init_time,
+            "tracks": tracks,
+            "n_tracks": len(tracks),
+        },
+        headers={"Cache-Control": "public, max-age=900"},
+    )
+
+
 # ---------------------------------------------------------------------------
 # DeepMind 1000-Member Large Ensemble (Intensity Distributions)
 # ---------------------------------------------------------------------------
