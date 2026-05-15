@@ -44,10 +44,12 @@ BUCKET="${GCS_IR_CACHE_BUCKET:-tc-atlas-ir-cache}"
 
 IMAGE="gcr.io/${PROJECT}/${JOB_NAME}:latest"
 
-echo "Building env-job container..."
-gcloud builds submit \
-    --tag "${IMAGE}" \
-    --config <(cat <<EOF
+# Write the build config to a temp file. We can't use process substitution
+# (<(cat <<EOF)) here because gcloud rejects `--tag` and `--config` together —
+# the custom Dockerfile (-f Dockerfile.env) only works via --config.
+BUILD_CFG="$(mktemp -t tc-atlas-env-cloudbuild.XXXXXX.yaml)"
+trap 'rm -f "${BUILD_CFG}"' EXIT
+cat > "${BUILD_CFG}" <<EOF
 steps:
 - name: 'gcr.io/cloud-builders/docker'
   args: ['build', '-f', 'Dockerfile.env', '-t', '${IMAGE}', '.']
@@ -55,7 +57,9 @@ steps:
   args: ['push', '${IMAGE}']
 images: ['${IMAGE}']
 EOF
-)
+
+echo "Building env-job container..."
+gcloud builds submit --config "${BUILD_CFG}" .
 
 # ── Create or update the Cloud Run Job ───────────────────────────
 echo "Deploying Cloud Run Job ${JOB_NAME}..."
