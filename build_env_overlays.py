@@ -179,27 +179,35 @@ def fetch_oisst_sst() -> Optional[tuple[np.ndarray, str]]:
     """Fetch the latest NOAA OISST v2.1 daily SST. Returns (sst_array, valid_date)
     or None on failure.
 
-    OISST publishes ~1 day after the valid date. Walk back day by day
-    until we find a published file.
+    OISST runs in two stages. Recent days are served as
+    ``oisst-avhrr-v02r01.YYYYMMDD_preliminary.nc`` until QC finalizes
+    them (typically ~2 weeks); after that the file is renamed to
+    ``oisst-avhrr-v02r01.YYYYMMDD.nc``. We try the preliminary name first
+    (newer data) then fall back to the finalized one, walking back ~10
+    days until something exists.
     """
     import requests
 
     now = datetime.now(timezone.utc)
-    for back in range(1, 5):
+    for back in range(1, 10):
         d = now - timedelta(days=back)
         ymd = d.strftime("%Y%m%d")
         ym = d.strftime("%Y%m")
-        url = f"{OISST_BASE}/{ym}/oisst-avhrr-v02r01.{ymd}.nc"
-        try:
-            r = requests.get(url, timeout=120)
-            if r.status_code != 200:
-                continue
-            sst = _read_oisst_nc(r.content)
-            if sst is not None:
-                log.info("OISST: using %s", ymd)
-                return sst, ymd
-        except Exception as e:
-            log.warning("OISST fetch %s failed: %s", ymd, e)
+        for fname in (f"oisst-avhrr-v02r01.{ymd}_preliminary.nc",
+                      f"oisst-avhrr-v02r01.{ymd}.nc"):
+            url = f"{OISST_BASE}/{ym}/{fname}"
+            try:
+                r = requests.get(url, timeout=180)
+                if r.status_code != 200:
+                    continue
+                sst = _read_oisst_nc(r.content)
+                if sst is not None:
+                    log.info("OISST: using %s (%s)", ymd,
+                             "preliminary" if "_preliminary" in fname else "final")
+                    return sst, ymd
+                log.warning("OISST decode failed for %s", url)
+            except Exception as e:
+                log.warning("OISST fetch %s failed: %s", url, e)
     return None
 
 
@@ -242,42 +250,100 @@ class LayerSpec:
     name: str            # short id, e.g. "shear"
     title: str           # display label
     units: str
-    vmin: float
-    vmax: float
+    vmin: float          # colorbar / contour-range minimum
+    vmax: float          # colorbar / contour-range maximum
+    step: float          # contour interval (same units)
     cmap: str            # matplotlib colormap name
     valid_time: str      # ISO8601 string
     description: str = ""
 
 
-def render_png(field: np.ndarray, spec: LayerSpec) -> bytes:
-    """Render a 2D field to a global PNG using the given colormap.
+# Each 0.25° cell spans ~27.8 km in the latitude direction (and at the
+# equator in longitude). Used to convert "500 km" → kernel cell-radius.
+KM_PER_CELL = 27.8
 
-    Assumes `field` is shape (NY, NX) ordered north-to-south, lon -180..180.
-    Pixels are mapped via spec.vmin/vmax through the colormap. NaN/masked
-    cells become transparent so the basemap shows through (essential for
-    SST over land).
+
+def _disc_kernel(radius_cells: int) -> np.ndarray:
+    """Normalized circular disc kernel for area-average smoothing."""
+    n = 2 * radius_cells + 1
+    yy, xx = np.ogrid[-radius_cells:radius_cells + 1,
+                      -radius_cells:radius_cells + 1]
+    mask = (xx * xx + yy * yy) <= radius_cells * radius_cells
+    k = mask.astype(np.float32)
+    return k / k.sum()
+
+
+def disc_smooth(field: np.ndarray, radius_km: float) -> np.ndarray:
+    """Smooth `field` with a circular disc area-average of the given
+    physical radius. Uses wrap mode along the longitude axis so contours
+    near the dateline aren't distorted; latitude wrap is acceptable
+    cosmetically because TC activity is tropical/subtropical.
+
+    The kernel is fixed in grid cells (≈27.8 km/cell at the equator), so
+    the effective radius shrinks slightly at higher latitudes — fine for
+    TC-focused diagnostics, which live in the deep tropics where the
+    approximation holds.
+    """
+    from scipy.ndimage import convolve
+    radius_cells = max(1, int(round(radius_km / KM_PER_CELL)))
+    k = _disc_kernel(radius_cells)
+    return convolve(field, k, mode="wrap")
+
+
+def render_contour_png(field: np.ndarray, spec: LayerSpec) -> bytes:
+    """Render `field` as CIMSS-style labeled isolines on a transparent
+    background. Returns PNG bytes sized exactly NX × NY pixels so it
+    overlays the Leaflet world bounds [[-90,-180],[90,180]] cell-for-cell.
+
+    Lines are colored by value via the colormap so the colorbar legend
+    is still meaningful, and each contour level is labeled with a
+    white-haloed integer value so labels remain legible over dark IR
+    backgrounds.
     """
     import matplotlib
     matplotlib.use("Agg")
-    import matplotlib.cm as cm
-    import matplotlib.colors as mcolors
-    from PIL import Image
+    import matplotlib.patheffects as path_effects
+    import matplotlib.pyplot as plt
 
     field = np.asarray(field, dtype=np.float32)
-    norm = mcolors.Normalize(vmin=spec.vmin, vmax=spec.vmax, clip=True)
-    cmap = cm.get_cmap(spec.cmap)
-
-    rgba = cmap(norm(field))  # shape (NY, NX, 4), floats in [0,1]
-    rgba_u8 = (rgba * 255).astype(np.uint8)
-
-    # Make NaN cells transparent
+    # Replace non-finite cells so matplotlib doesn't choke on NaN at the poles.
     mask = ~np.isfinite(field)
     if mask.any():
-        rgba_u8[mask, 3] = 0
+        field = field.copy()
+        field[mask] = np.nan  # contour() treats NaN as masked
 
-    img = Image.fromarray(rgba_u8, mode="RGBA")
+    dpi = 100
+    fig = plt.figure(figsize=(NX / dpi, NY / dpi), dpi=dpi)
+    ax = fig.add_axes([0, 0, 1, 1])  # fill figure, no margin
+    ax.set_axis_off()
+    ax.set_xlim(0, NX - 1)
+    ax.set_ylim(NY - 1, 0)  # invert so row 0 sits at top of image
+
+    n_steps = int(round((spec.vmax - spec.vmin) / spec.step)) + 1
+    levels = np.linspace(spec.vmin, spec.vmax, n_steps)
+    cs = ax.contour(
+        np.arange(NX), np.arange(NY), field,
+        levels=levels,
+        cmap=spec.cmap,
+        vmin=spec.vmin, vmax=spec.vmax,
+        linewidths=1.2,
+    )
+
+    labels = ax.clabel(
+        cs, levels=levels,
+        inline=True, fontsize=7, fmt="%.0f", colors="black",
+    )
+    halo = [
+        path_effects.Stroke(linewidth=2.0, foreground="white"),
+        path_effects.Normal(),
+    ]
+    for label in labels:
+        label.set_path_effects(halo)
+
     buf = io.BytesIO()
-    img.save(buf, format="PNG", optimize=True)
+    fig.savefig(buf, format="PNG", transparent=True, dpi=dpi,
+                bbox_inches=None, pad_inches=0)
+    plt.close(fig)
     return buf.getvalue()
 
 
@@ -295,6 +361,23 @@ def build_colormap_stops(cmap_name: str, n: int = 16) -> list[dict]:
             "rgb": [int(r * 255), int(g * 255), int(b * 255)],
         })
     return stops
+
+
+def _level_colors(cmap_name: str, levels: list, vmin: float, vmax: float
+                  ) -> list[list[int]]:
+    """Return the exact RGB color (0-255) matplotlib uses for each
+    contour level, so the frontend legend swatches match the rendered
+    isolines pixel-for-pixel.
+    """
+    import matplotlib.cm as cm
+    cmap = cm.get_cmap(cmap_name)
+    span = (vmax - vmin) or 1.0
+    out = []
+    for lvl in levels:
+        t = max(0.0, min(1.0, (lvl - vmin) / span))
+        r, g, b, _ = cmap(t)
+        out.append([int(r * 255), int(g * 255), int(b * 255)])
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -319,12 +402,16 @@ def upload_layer(spec: LayerSpec, png: bytes) -> bool:
     png_blob = bucket.blob(f"{GCS_PREFIX}/{spec.name}/latest.png")
     meta_blob = bucket.blob(f"{GCS_PREFIX}/{spec.name}/metadata.json")
 
+    n_steps = int(round((spec.vmax - spec.vmin) / spec.step)) + 1
+    levels = [round(spec.vmin + i * spec.step, 2) for i in range(n_steps)]
+    level_colors = _level_colors(spec.cmap, levels, spec.vmin, spec.vmax)
     meta = {
         "name": spec.name,
         "title": spec.title,
         "units": spec.units,
         "vmin": spec.vmin,
         "vmax": spec.vmax,
+        "step": spec.step,
         "cmap": spec.cmap,
         "valid_time": spec.valid_time,
         "description": spec.description,
@@ -336,7 +423,12 @@ def upload_layer(spec: LayerSpec, png: bytes) -> bool:
         # bounds are how Leaflet's imageOverlay should anchor the PNG.
         "bounds": [[-90.0, -180.0], [90.0, 180.0]],
         "grid": {"nx": NX, "ny": NY},
+        # Continuous gradient stops (for back-compat) + discrete contour
+        # levels with the exact line color used at each level (lets the
+        # frontend draw a tick-marked legend that matches the contours).
         "colorbar_stops": build_colormap_stops(spec.cmap),
+        "levels": levels,
+        "level_colors": level_colors,
         "generated_utc": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -411,8 +503,17 @@ def build_shear(date_str: str, hour_str: str) -> Optional[bytes]:
         log.error("Shear: missing u/v level")
         return None
 
-    du = u200 - u850
-    dv = v200 - v850
+    # Disc-smooth u/v at each level over a 500 km radius before
+    # differencing so the TC vortex (and other sub-500-km features)
+    # doesn't contaminate the "environmental shear" diagnostic. Smooths
+    # in 0..360 longitude convention first to avoid edge effects at the
+    # 0/360 seam — regrid to -180..180 only after the convolution.
+    u200_s = disc_smooth(u200, 500.0)
+    v200_s = disc_smooth(v200, 500.0)
+    u850_s = disc_smooth(u850, 500.0)
+    v850_s = disc_smooth(v850, 500.0)
+    du = u200_s - u850_s
+    dv = v200_s - v850_s
     # m/s → knots: 1 m/s = 1.94384 kt
     shear_kt = np.sqrt(du * du + dv * dv) * 1.94384
     shear_kt = regrid_to_global(shear_kt)
@@ -424,14 +525,70 @@ def build_shear(date_str: str, hour_str: str) -> Optional[bytes]:
         units="kt",
         vmin=0,
         vmax=60,
+        step=10,
         cmap="turbo",
         valid_time=valid,
         description=(
-            "Magnitude of the vector difference between 200 hPa and "
-            "850 hPa winds from the latest GFS 0.25° analysis."
+            "Magnitude of the 200-850 hPa vector wind difference from "
+            "the latest GFS 0.25° analysis, after a 500 km disc area-"
+            "average of u/v at each level (suppresses TC vortices so the "
+            "shear represents the environment a storm would experience)."
         ),
     )
-    png = render_png(shear_kt, spec)
+    png = render_contour_png(shear_kt, spec)
+    return png if upload_layer(spec, png) else None
+
+
+def build_midlevel_shear(date_str: str, hour_str: str) -> Optional[bytes]:
+    """500-850 hPa wind shear magnitude (knots) — vortex-suppressed.
+
+    Mid-level shear is more relevant than the deep-layer (200-850)
+    metric for assessing the wind environment within the lower half
+    of a TC vortex, where most of the convective organization happens.
+    """
+    log.info("Building mid-level shear: GFS %s %sZ", date_str, hour_str)
+    u_grib = fetch_gfs_global(date_str, hour_str, [500, 850], "UGRD")
+    v_grib = fetch_gfs_global(date_str, hour_str, [500, 850], "VGRD")
+    if not u_grib or not v_grib:
+        log.error("Mid-level shear: GFS fetch failed")
+        return None
+
+    u500 = read_gfs_field(u_grib, 500, "UGRD")
+    u850 = read_gfs_field(u_grib, 850, "UGRD")
+    v500 = read_gfs_field(v_grib, 500, "VGRD")
+    v850 = read_gfs_field(v_grib, 850, "VGRD")
+    if any(f is None for f in (u500, u850, v500, v850)):
+        log.error("Mid-level shear: missing u/v level")
+        return None
+
+    u500_s = disc_smooth(u500, 500.0)
+    v500_s = disc_smooth(v500, 500.0)
+    u850_s = disc_smooth(u850, 500.0)
+    v850_s = disc_smooth(v850, 500.0)
+    du = u500_s - u850_s
+    dv = v500_s - v850_s
+    shear_kt = np.sqrt(du * du + dv * dv) * 1.94384
+    shear_kt = regrid_to_global(shear_kt)
+
+    valid = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}T{hour_str}:00:00Z"
+    spec = LayerSpec(
+        name="shear_500_850",
+        title="500-850 hPa Wind Shear",
+        units="kt",
+        vmin=0,
+        vmax=40,
+        step=5,
+        cmap="turbo",
+        valid_time=valid,
+        description=(
+            "Magnitude of the 500-850 hPa vector wind difference from "
+            "the latest GFS 0.25° analysis, after a 500 km disc area-"
+            "average of u/v at each level. Targets the lower half of the "
+            "TC vortex where convective organization lives — useful "
+            "alongside the deep-layer 200-850 metric."
+        ),
+    )
+    png = render_contour_png(shear_kt, spec)
     return png if upload_layer(spec, png) else None
 
 
@@ -461,8 +618,9 @@ def build_midlevel_rh(date_str: str, hour_str: str) -> Optional[bytes]:
         name="rh_700_400",
         title="700-400 hPa Mean RH",
         units="%",
-        vmin=10,
+        vmin=20,
         vmax=90,
+        step=10,
         cmap="BrBG",
         valid_time=valid,
         description=(
@@ -471,7 +629,7 @@ def build_midlevel_rh(date_str: str, hour_str: str) -> Optional[bytes]:
             "genesis."
         ),
     )
-    png = render_png(rh, spec)
+    png = render_contour_png(rh, spec)
     return png if upload_layer(spec, png) else None
 
 
@@ -499,16 +657,18 @@ def build_sst() -> Optional[bytes]:
         name="sst_oisst",
         title="Sea-Surface Temperature",
         units="degC",
-        vmin=10,
+        vmin=18,
         vmax=32,
+        step=2,
         cmap="RdYlBu_r",
         valid_time=valid,
         description=(
             "NOAA OISST v2.1 daily sea-surface temperature analysis "
-            "(0.25° resolution, optimum interpolation of AVHRR + in-situ)."
+            "(0.25° resolution, optimum interpolation of AVHRR + in-situ). "
+            "Contours every 2 degC over the TC-relevant 18-32 degC range."
         ),
     )
-    png = render_png(sst, spec)
+    png = render_contour_png(sst, spec)
     return png if upload_layer(spec, png) else None
 
 
@@ -523,6 +683,7 @@ def main() -> int:
     results = {}
     for name, fn in [
         ("shear_200_850", lambda: build_shear(date_str, hour_str)),
+        ("shear_500_850", lambda: build_midlevel_shear(date_str, hour_str)),
         ("rh_700_400",    lambda: build_midlevel_rh(date_str, hour_str)),
         ("sst_oisst",     build_sst),
     ]:

@@ -1824,13 +1824,15 @@
         });
         map.addControl(new EnvAnalysisControl());
 
-        // Colorbars for active env layers (bottom-right, above intensity legend)
+        // Colorbars for active env layers — placed bottom-left so they
+        // don't sit under the intensity legend (which is bottom-right
+        // and fixed-positioned outside the Leaflet pane stack).
         var EnvColorbars = L.Control.extend({
-            options: { position: 'bottomright' },
+            options: { position: 'bottomleft' },
             onAdd: function () {
                 var box = L.DomUtil.create('div', 'ir-global-env-cbars');
                 box.id = 'ir-global-env-cbars';
-                box.style.cssText = 'display:none;background:rgba(15,33,64,0.88);padding:6px 10px;border-radius:5px;border:1px solid rgba(255,255,255,0.12);backdrop-filter:blur(4px);margin-bottom:6px;';
+                box.style.cssText = 'display:none;background:rgba(15,33,64,0.92);padding:8px 12px;border-radius:6px;border:1px solid rgba(255,255,255,0.14);backdrop-filter:blur(6px);margin-bottom:8px;box-shadow:0 4px 14px rgba(0,0,0,0.25);';
                 L.DomEvent.disableClickPropagation(box);
                 return box;
             }
@@ -5268,17 +5270,38 @@
         var html = '';
         for (var i = 0; i < active.length; i++) {
             var L_ = active[i].layer;
-            var stops = L_.colorbar_stops || [];
-            var grad = stops.map(function (s) {
-                return 'rgb(' + s.rgb.join(',') + ') ' + Math.round(s.t * 100) + '%';
-            }).join(',');
-            html += '<div style="margin-top:6px;font-family:DM Sans,sans-serif;font-size:0.62rem;color:#c7d2e0;">'
-                + '<div style="display:flex;justify-content:space-between;margin-bottom:2px;">'
-                + '<span>' + L_.title + '</span><span>' + L_.units + '</span></div>'
-                + '<div style="width:160px;height:8px;border-radius:2px;background:linear-gradient(to right,' + grad + ');"></div>'
-                + '<div style="display:flex;justify-content:space-between;font-size:0.55rem;color:#94a3b8;">'
-                + '<span>' + L_.vmin + '</span><span>' + L_.vmax + '</span></div>'
-                + '</div>';
+            var lvls = L_.levels;
+            var lvlColors = L_.level_colors;
+            if (lvls && lvls.length && lvlColors && lvlColors.length === lvls.length) {
+                // CIMSS-style discrete legend: one swatch per contour level.
+                var swatchHtml = '';
+                for (var k = 0; k < lvls.length; k++) {
+                    var rgb = lvlColors[k];
+                    swatchHtml += '<div style="display:flex;flex-direction:column;align-items:center;">'
+                        + '<div style="width:18px;height:14px;background:rgb(' + rgb.join(',') + ');border:1px solid rgba(255,255,255,0.18);border-radius:2px;"></div>'
+                        + '<div style="font-size:0.55rem;color:#c7d2e0;margin-top:1px;">' + lvls[k] + '</div>'
+                        + '</div>';
+                }
+                html += '<div style="margin-top:6px;font-family:DM Sans,sans-serif;color:#c7d2e0;">'
+                    + '<div style="display:flex;justify-content:space-between;font-size:0.62rem;margin-bottom:4px;">'
+                    + '<span>' + L_.title + '</span><span>' + L_.units + '</span></div>'
+                    + '<div style="display:flex;gap:3px;">' + swatchHtml + '</div>'
+                    + '</div>';
+            } else {
+                // Legacy continuous-gradient fallback for layers
+                // built before discrete levels were emitted.
+                var stops = L_.colorbar_stops || [];
+                var grad = stops.map(function (s) {
+                    return 'rgb(' + s.rgb.join(',') + ') ' + Math.round(s.t * 100) + '%';
+                }).join(',');
+                html += '<div style="margin-top:6px;font-family:DM Sans,sans-serif;font-size:0.62rem;color:#c7d2e0;">'
+                    + '<div style="display:flex;justify-content:space-between;margin-bottom:2px;">'
+                    + '<span>' + L_.title + '</span><span>' + L_.units + '</span></div>'
+                    + '<div style="width:160px;height:8px;border-radius:2px;background:linear-gradient(to right,' + grad + ');"></div>'
+                    + '<div style="display:flex;justify-content:space-between;font-size:0.55rem;color:#94a3b8;">'
+                    + '<span>' + L_.vmin + '</span><span>' + L_.vmax + '</span></div>'
+                    + '</div>';
+            }
         }
         box.innerHTML = html;
     }
