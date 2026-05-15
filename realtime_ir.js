@@ -5171,10 +5171,13 @@
     function _activateEnvLayer(layer) {
         if (!map || !layer || _rtEnvActive[layer.name]) return;
         var bounds = layer.bounds || [[-90, -180], [90, 180]];
+        // No crossOrigin flag: we only display the PNG, never read its
+        // pixels. Setting crossOrigin would force a CORS preflight that
+        // the public GCS bucket doesn't satisfy without explicit CORS
+        // config, breaking the load with no actual benefit.
         var overlay = L.imageOverlay(layer.image_url, bounds, {
             opacity: _rtEnvOpacity,
-            interactive: false,
-            crossOrigin: true
+            interactive: false
         }).addTo(map);
         _rtEnvActive[layer.name] = { overlay: overlay, layer: layer };
         _renderEnvColorbar();
