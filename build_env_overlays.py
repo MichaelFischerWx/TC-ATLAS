@@ -762,6 +762,144 @@ def build_sst() -> Optional[bytes]:
 
 
 # --------------------------------------------------------------------------
+# FNV3 LARGE_ENSEMBLE cyclogenesis probability — derived from the
+# 1000-member ensemble track CSV (DeepMind also publishes pre-baked
+# NetCDF probability fields but they uncompress to ~2 GB, which exceeds
+# our Cloud Run Job memory budget. The CSV is 9 MB and the gridding is
+# straightforward.)
+# --------------------------------------------------------------------------
+
+_LARGE_ENSEMBLE_BASE = (
+    "https://deepmind.google.com/science/weatherlab/download/cyclones/"
+    "FNV3_LARGE_ENSEMBLE"
+)
+
+
+def fetch_cyclogenesis_csv(date_str: str, hour_str: str) -> Optional[str]:
+    """Pull the latest FNV3 LARGE_ENSEMBLE cyclogenesis CSV. Returns the
+    raw text or None on failure. Walks back through recent init cycles
+    if today's isn't published yet.
+    """
+    import requests
+    date_fmt = date_str.replace("-", "_")
+    url = (f"{_LARGE_ENSEMBLE_BASE}/ensemble/cyclogenesis/csv/"
+           f"FNV3_LARGE_ENSEMBLE_{date_fmt}T{hour_str}_00_cyclogenesis.csv")
+    try:
+        r = requests.get(url, timeout=120)
+        if r.status_code != 200:
+            log.warning("Cyclogenesis CSV %s HTTP %d", url, r.status_code)
+            return None
+        if not r.text.startswith("#"):
+            log.warning("Cyclogenesis CSV unexpected body for %s", url)
+            return None
+        return r.text
+    except Exception as e:
+        log.warning("Cyclogenesis CSV fetch failed: %s", e)
+        return None
+
+
+def _grid_track_probability(csv_text: str, lead_hours_max: float
+                            ) -> Optional[np.ndarray]:
+    """Bin (member, lat, lon) hits from the cyclogenesis CSV onto a 0.25°
+    grid, then compute the fraction of unique members whose track passes
+    through each cell at any lead time ≤ lead_hours_max.
+
+    Smooths with a small disc kernel so the field reads as a heatmap
+    rather than as a scatter of dots. Returns a (NY, NX) float array of
+    probabilities in [0, 1] on the same global grid + lon convention as
+    the rest of the env layers (0..360 → -180..180 after regrid).
+    """
+    # Per-member set of (iy, ix) cells visited at lead ≤ threshold.
+    member_cells: dict[str, set] = {}
+    for line in csv_text.splitlines():
+        if line.startswith("#") or not line.strip():
+            continue
+        if line.startswith("init_time"):
+            continue
+        cols = line.split(",")
+        if len(cols) < 10:
+            continue
+        try:
+            sample = cols[2].strip()
+            lead_h = float(cols[5])
+            if lead_h > lead_hours_max:
+                continue
+            lat = float(cols[6])
+            lon = float(cols[7])
+        except (ValueError, IndexError):
+            continue
+        # Map lat -> row (NY=721, 0=+90°, 720=-90°) and lon -> col.
+        # CSV lon may be in either -180..180 or 0..360. Normalize to 0..360.
+        if lon < 0:
+            lon += 360.0
+        iy = int(round((90.0 - lat) / 0.25))
+        ix = int(round(lon / 0.25)) % NX
+        if iy < 0 or iy >= NY:
+            continue
+        member_cells.setdefault(sample, set()).add((iy, ix))
+    if not member_cells:
+        return None
+
+    counts = np.zeros((NY, NX), dtype=np.float32)
+    for cells in member_cells.values():
+        for (iy, ix) in cells:
+            counts[iy, ix] += 1.0
+    n_members = len(member_cells)
+    prob = counts / max(n_members, 1)
+
+    # ~125 km Gaussian smooth so the heatmap reads continuously instead
+    # of as 0.25° pixel stippling. sigma_cells = 125 / 27.8 ≈ 4.5.
+    try:
+        from scipy.ndimage import gaussian_filter
+        # Wrap on lon (axis 1) for the global field; constant on lat
+        # (axis 0) so the poles don't bleed across the meridian. Tuple
+        # mode requires scipy >= 1.6, which our pinned base meets.
+        try:
+            prob = gaussian_filter(prob, sigma=(4.5, 4.5),
+                                   mode=("constant", "wrap"))
+        except TypeError:
+            # Older scipy fallback: use uniform 'wrap' (slight pole bleed).
+            prob = gaussian_filter(prob, sigma=4.5, mode="wrap")
+    except Exception as e:
+        log.warning("gaussian_filter unavailable, returning unsmoothed: %s", e)
+
+    return prob * 100.0  # convert to %
+
+
+def build_genesis_prob(csv_text: str, lead_days: int, valid_time: str
+                       ) -> Optional[bytes]:
+    """Build one FNV3 cyclogenesis probability env layer at the given
+    lead horizon (days). Returns None on failure.
+    """
+    log.info("Building genesis_prob_%dd", lead_days)
+    field = _grid_track_probability(csv_text, lead_hours_max=lead_days * 24.0)
+    if field is None:
+        log.warning("genesis_prob_%dd: empty CSV → no field", lead_days)
+        return None
+    field = regrid_to_global(field)
+
+    spec = LayerSpec(
+        name=f"genesis_prob_{lead_days}d",
+        title=f"TC Genesis Probability — Next {lead_days} day{'s' if lead_days > 1 else ''}",
+        units="%",
+        vmin=0,
+        vmax=40,
+        step=5,
+        cmap="YlOrRd",
+        valid_time=valid_time,
+        description=(
+            f"Cumulative track probability over the next {lead_days} "
+            f"days, computed by binning the FNV3 LARGE_ENSEMBLE "
+            f"1000-member cyclogenesis CSV onto a 0.25° grid and "
+            f"taking (# members touching this cell) / N. ~125 km "
+            f"Gaussian smooth applied for readability."
+        ),
+        render_style="filled",
+    )
+    return field if upload_layer(spec, field) else None
+
+
+# --------------------------------------------------------------------------
 # Entry point
 # --------------------------------------------------------------------------
 
@@ -769,7 +907,27 @@ def main() -> int:
     date_str, hour_str = latest_gfs_cycle()
     log.info("Latest GFS cycle: %s %sZ", date_str, hour_str)
 
-    results = {}
+    # Pull the cyclogenesis CSV ONCE up front so the three probability
+    # builders share the same payload + init cycle. Walk back if today's
+    # CSV isn't published yet.
+    genesis_csv = None
+    genesis_init = None
+    now_utc = datetime.now(timezone.utc)
+    for off in (0, 1):
+        d = (now_utc - timedelta(days=off)).strftime("%Y-%m-%d")
+        for h in ("18", "12", "06", "00"):
+            txt = fetch_cyclogenesis_csv(d, h)
+            if txt:
+                genesis_csv = txt
+                genesis_init = f"{d}T{h}:00:00Z"
+                log.info("Cyclogenesis CSV: using %s %sZ (%d bytes)",
+                         d, h, len(txt))
+                break
+        if genesis_csv:
+            break
+
+    results: dict = {}
+
     for name, fn in [
         ("shear_200_850", lambda: build_shear(date_str, hour_str)),
         ("shear_500_850", lambda: build_midlevel_shear(date_str, hour_str)),
@@ -781,6 +939,19 @@ def main() -> int:
         except Exception:
             log.error("Builder %s crashed:\n%s", name, traceback.format_exc())
             results[name] = False
+
+    if genesis_csv:
+        for days in (2, 7, 14):
+            key = f"genesis_prob_{days}d"
+            try:
+                results[key] = build_genesis_prob(
+                    genesis_csv, days, genesis_init
+                ) is not None
+            except Exception:
+                log.error("Builder %s crashed:\n%s", key, traceback.format_exc())
+                results[key] = False
+    else:
+        log.warning("Skipping genesis_prob_* layers: cyclogenesis CSV unavailable")
 
     log.info("Done. Results: %s", results)
     # Exit nonzero so Scheduler retries if every field failed, but we
