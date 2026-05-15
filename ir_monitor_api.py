@@ -3725,6 +3725,240 @@ def get_weatherlab_global():
 
 
 # ---------------------------------------------------------------------------
+# DeepMind FNV3 LARGE_ENSEMBLE Cyclogenesis (1000-member pre-genesis tracks)
+# ---------------------------------------------------------------------------
+# Unlike the paired CSV (ATCF-storms only), the cyclogenesis CSV contains
+# every TC-like feature FNV3's 1000-member ensemble detects in its
+# forecast fields — including pre-genesis disturbances NHC/JTWC haven't
+# numbered yet. Each row carries (track_id, sample, lat/lon, MSLP, wind,
+# RMW, R34/R50/R64 quadrants) at 6h cadence out to 15 days.
+
+_weatherlab_genesis_cache: dict = {}  # (date, hour) -> {"data": ..., "ts": float}
+_WEATHERLAB_GENESIS_CACHE_TTL = 7200  # 2 hours (CSV only changes every 6h)
+
+
+def _fetch_weatherlab_genesis_csv(date_str: str, hour_str: str
+                                  ) -> dict | None:
+    """Fetch and parse the FNV3 LARGE_ENSEMBLE cyclogenesis CSV for the
+    given init time. Returns dict keyed by track_id:
+        { "members": {"<sample>": {"points": [...]}, ...},
+          "ensemble_mean": {"points": [...]} }
+    with the same per-point shape as `_fetch_weatherlab_csv` so the
+    frontend can reuse its rendering logic.
+
+    Cyclogenesis CSV column layout (0-indexed):
+      0: init_time         1: track_id       2: sample
+      3: valid_time        4: lead_time      5: lead_time_hours
+      6: lat               7: lon            8: MSLP (hPa)
+      9: max_wind (kt)    10: RMW (km)      11-14: R34 NE/SE/SW/NW
+     15-18: R50 NE/SE/SW/NW    19-22: R64 NE/SE/SW/NW
+
+    (Note: paired CSV has no `lead_time_hours`, so all indices shift -1.)
+    """
+    cache_key = (date_str, hour_str)
+    cached = _weatherlab_genesis_cache.get(cache_key)
+    if cached and time.time() - cached["ts"] < _WEATHERLAB_GENESIS_CACHE_TTL:
+        return cached["data"]
+
+    import requests as req
+    date_fmt = date_str.replace("-", "_")
+    url = (f"{_WEATHERLAB_LARGE_BASE}/ensemble/cyclogenesis/csv/"
+           f"FNV3_LARGE_ENSEMBLE_{date_fmt}T{hour_str}_00_cyclogenesis.csv")
+    try:
+        r = req.get(url, timeout=60)
+        if r.status_code != 200:
+            return None
+        text = r.text
+    except Exception as e:
+        print(f"[WeatherLab Genesis] fetch failed: {e}")
+        return None
+
+    result: dict = {}
+    header_seen = False
+    for line in text.splitlines():
+        if line.startswith("#") or not line.strip():
+            continue
+        if not header_seen:
+            header_seen = True
+            continue
+
+        cols = line.split(",")
+        if len(cols) < 10:
+            continue
+
+        track_id = cols[1].strip()
+        sample = cols[2].strip()
+        try:
+            sample_int = int(float(sample))
+        except (ValueError, TypeError):
+            continue
+
+        # Prefer the explicit lead_time_hours integer when present —
+        # avoids the "N days HH:MM:SS" parsing the paired CSV needs.
+        try:
+            tau = float(cols[5])
+        except (ValueError, IndexError):
+            tau = _parse_lead_time(cols[4])
+
+        try:
+            lat = round(float(cols[6]), 2)
+            lon = round(float(cols[7]), 2)
+            pres = round(float(cols[8]), 1) if cols[8].strip() else None
+            wind = round(float(cols[9]), 1) if cols[9].strip() else None
+        except (ValueError, IndexError):
+            continue
+
+        point = {"tau": tau, "lat": lat, "lon": lon,
+                 "wind": wind, "pres": pres}
+        # Storm size columns sit one index further right than the paired
+        # CSV (because of the extra lead_time_hours column).
+        size = {}
+        if len(cols) > 10:
+            try:
+                rmw = float(cols[10]) if cols[10].strip() else None
+                if rmw is not None and rmw == rmw:  # not NaN
+                    size["rmw_km"] = round(rmw, 1)
+            except (ValueError, TypeError):
+                pass
+        for thresh, base in [(34, 11), (50, 15), (64, 19)]:
+            quads = ["ne", "se", "sw", "nw"]
+            vals = []
+            for i, q in enumerate(quads):
+                idx = base + i
+                if idx >= len(cols):
+                    continue
+                try:
+                    v = float(cols[idx])
+                    if v == v:  # not NaN
+                        size[f"r{thresh}_{q}_km"] = round(v, 1)
+                        vals.append(v)
+                except (ValueError, TypeError):
+                    continue
+            if vals:
+                size[f"r{thresh}_mean_km"] = round(sum(vals) / len(vals), 1)
+        if size:
+            point.update(size)
+
+        if track_id not in result:
+            result[track_id] = {"members": {}, "ensemble_mean": None}
+        member_key = str(sample_int)
+        if member_key not in result[track_id]["members"]:
+            result[track_id]["members"][member_key] = {"points": []}
+        result[track_id]["members"][member_key]["points"].append(point)
+
+    # Compute the ensemble mean per track: average lat/lon/wind/pres at
+    # each tau across all samples we have. DeepMind doesn't publish an
+    # ensemble_mean for the cyclogenesis CSV, so we derive it here.
+    for track_id, storm in result.items():
+        by_tau: dict = {}  # tau -> {lats:[], lons:[], winds:[], pres:[]}
+        for mkey, mem in storm["members"].items():
+            for p in mem["points"]:
+                t = p["tau"]
+                bucket = by_tau.setdefault(t, {"lat": [], "lon": [],
+                                                "wind": [], "pres": []})
+                bucket["lat"].append(p["lat"])
+                bucket["lon"].append(p["lon"])
+                if p.get("wind") is not None:
+                    bucket["wind"].append(p["wind"])
+                if p.get("pres") is not None:
+                    bucket["pres"].append(p["pres"])
+        mean_pts = []
+        for t in sorted(by_tau):
+            b = by_tau[t]
+            mean_pts.append({
+                "tau": t,
+                "lat": round(sum(b["lat"]) / len(b["lat"]), 2),
+                "lon": round(sum(b["lon"]) / len(b["lon"]), 2),
+                "wind": round(sum(b["wind"]) / len(b["wind"]), 1)
+                        if b["wind"] else None,
+                "pres": round(sum(b["pres"]) / len(b["pres"]), 1)
+                        if b["pres"] else None,
+            })
+        storm["ensemble_mean"] = {"points": mean_pts}
+
+    _weatherlab_genesis_cache[cache_key] = {"data": result, "ts": time.time()}
+    if len(_weatherlab_genesis_cache) > 4:
+        oldest = min(_weatherlab_genesis_cache,
+                     key=lambda k: _weatherlab_genesis_cache[k]["ts"])
+        del _weatherlab_genesis_cache[oldest]
+    print(f"[WeatherLab Genesis] Parsed {len(result)} tracks from "
+          f"{date_str} {hour_str}z")
+    return result
+
+
+@router.get("/weatherlab-genesis")
+def get_weatherlab_genesis(max_members: int = 100):
+    """FNV3 LARGE_ENSEMBLE cyclogenesis: all 1000-member TC predictions
+    (including pre-genesis disturbances) for the latest available init.
+
+    `max_members` (default 100) thins the per-track ensemble before
+    return — full payload is ~10 MB for ~30 tracks × 1000 samples and
+    rendering 30k polylines tanks Leaflet performance. The ensemble
+    mean is always returned in full.
+    """
+    now = _dt.now(timezone.utc)
+    candidates = []
+    for day_offset in (0, 1):
+        dt = now - timedelta(days=day_offset)
+        date_str = dt.strftime("%Y-%m-%d")
+        for hour in ("18", "12", "06", "00"):
+            candidates.append((date_str, hour))
+
+    data = None
+    used_date = None
+    used_hour = None
+    for date_str, hour_str in candidates:
+        d = _fetch_weatherlab_genesis_csv(date_str, hour_str)
+        if d is not None and len(d) >= 0:
+            data = d
+            used_date = date_str
+            used_hour = hour_str
+            if len(d) > 0:
+                break
+
+    if data is None:
+        return JSONResponse(
+            content={
+                "model": "DeepMind FNV3 LARGE_ENSEMBLE",
+                "init_time": None,
+                "tracks": [],
+                "n_tracks": 0,
+            },
+            headers={"Cache-Control": "public, max-age=300"},
+        )
+
+    init_time = used_date.replace("-", "") + used_hour
+    tracks = []
+    cap = max(1, int(max_members)) if max_members else None
+    for track_id, storm in data.items():
+        members = storm["members"]
+        total = len(members)
+        if cap and total > cap:
+            keys = sorted(members.keys(), key=lambda k: int(k))
+            stride = max(1, total // cap)
+            kept_keys = keys[::stride][:cap]
+            members = {k: members[k] for k in kept_keys}
+        tracks.append({
+            "track_id": track_id,
+            "members": members,
+            "ensemble_mean": storm["ensemble_mean"],
+            "n_members": len(members),
+            "n_members_total": total,
+        })
+
+    return JSONResponse(
+        content={
+            "model": "DeepMind FNV3 LARGE_ENSEMBLE",
+            "init_time": init_time,
+            "tracks": tracks,
+            "n_tracks": len(tracks),
+            "thinned_to": cap,
+        },
+        headers={"Cache-Control": "public, max-age=900"},
+    )
+
+
+# ---------------------------------------------------------------------------
 # DeepMind 1000-Member Large Ensemble (Intensity Distributions)
 # ---------------------------------------------------------------------------
 

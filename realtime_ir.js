@@ -425,6 +425,18 @@
     var _rtGlobalWLLoading = false;
     var _rtGlobalWLLayers = [];        // Leaflet polylines + markers on `map`
 
+    // ── FNV3 LARGE_ENSEMBLE Cyclogenesis Overlay (RT main map) ─
+    // Distinct from the paired global weatherlab toggle above: this
+    // shows the 1000-member pre-genesis tracks (no ATCF pairing
+    // required), so it surfaces forecast cyclogenesis days before NHC
+    // numbers an invest.
+    var _rtGenesisData = null;
+    var _rtGenesisVisible = false;
+    var _rtGenesisLoading = false;
+    var _rtGenesisLayers = [];
+    var _GENESIS_MEMBER_COLOR = 'rgba(249, 115, 22, 0.18)';  // soft orange
+    var _GENESIS_MEAN_COLOR = '#f97316';                      // bold orange
+
     // ── Environmental Analysis Overlays (RT main map) ─────────
     var _rtEnvMetadata = null;         // { layers: [...] } from /env/layers
     var _rtEnvLoading = false;
@@ -1784,6 +1796,44 @@
             }
         });
         map.addControl(new DeepMindToggle());
+
+        // FNV3 LARGE_ENSEMBLE cyclogenesis toggle — shows 1000-member
+        // pre-genesis tracks (orange to visually distinguish from the
+        // cyan paired DeepMind 10-day above).
+        var GenesisToggle = L.Control.extend({
+            options: { position: 'topright' },
+            onAdd: function () {
+                var wrap = L.DomUtil.create('div', 'ir-genesis-wrap');
+                wrap.style.cssText = 'display:flex;flex-direction:column;align-items:flex-end;gap:3px;';
+                L.DomEvent.disableClickPropagation(wrap);
+
+                var btn = L.DomUtil.create('button', 'ir-global-toggle-btn', wrap);
+                btn.id = 'ir-genesis-toggle';
+                btn.textContent = 'Genesis 15-day';
+                btn.title = 'Overlay FNV3 LARGE_ENSEMBLE pre-genesis tracks — 1000 members thinned to 100, includes systems not yet in ATCF';
+                btn.style.cssText = 'padding:6px 14px;font-family:DM Sans,sans-serif;font-size:0.72rem;font-weight:500;color:#8b9ec2;background:rgba(15,33,64,0.88);border:1px solid rgba(255,255,255,0.12);border-radius:5px;cursor:pointer;white-space:nowrap;backdrop-filter:blur(4px);';
+                btn.addEventListener('click', toggleGenesis);
+                btn.addEventListener('mouseenter', function () {
+                    if (!_rtGenesisVisible) {
+                        btn.style.background = 'rgba(30,60,110,0.9)';
+                        btn.style.color = '#c0d0ea';
+                    }
+                });
+                btn.addEventListener('mouseleave', function () {
+                    if (!_rtGenesisVisible) {
+                        btn.style.background = 'rgba(15,33,64,0.88)';
+                        btn.style.color = '#8b9ec2';
+                    }
+                });
+
+                var status = L.DomUtil.create('span', 'ir-genesis-status', wrap);
+                status.id = 'ir-genesis-status';
+                status.style.cssText = 'font-family:DM Sans,sans-serif;font-size:0.62rem;color:#fbbf72;background:rgba(15,33,64,0.7);padding:2px 6px;border-radius:3px;display:none;';
+
+                return wrap;
+            }
+        });
+        map.addControl(new GenesisToggle());
 
         // Environmental Analysis menu — submenu of checkable global overlays
         // (shear, mid-level RH, SST) produced by the build_env_overlays
@@ -5140,6 +5190,162 @@
         }
     }
     window.toggleGlobalWeatherlab = toggleGlobalWeatherlab;
+
+    // ═══════════════════════════════════════════════════════════
+    //  FNV3 LARGE_ENSEMBLE CYCLOGENESIS OVERLAY (RT main map)
+    // ═══════════════════════════════════════════════════════════
+    //  Same shape as the paired global weatherlab overlay above, but
+    //  rendered in orange to visually separate "ATCF storms FNV3 is
+    //  forecasting" from "pre-genesis features FNV3 predicts may
+    //  form" — the second is what's missing from the paired CSV and
+    //  what users see on WeatherNerds for the WPac genesis cluster.
+
+    function _clearGenesis() {
+        for (var i = 0; i < _rtGenesisLayers.length; i++) {
+            if (map) map.removeLayer(_rtGenesisLayers[i]);
+        }
+        _rtGenesisLayers = [];
+    }
+
+    function _renderGenesis() {
+        _clearGenesis();
+        if (!_rtGenesisData || !map) return;
+        var tracks = _rtGenesisData.tracks || [];
+        if (tracks.length === 0) return;
+
+        for (var ti = 0; ti < tracks.length; ti++) {
+            var trk = tracks[ti];
+            var trackId = trk.track_id || '';
+            var members = trk.members || {};
+            var memberKeys = Object.keys(members);
+            var totalMembers = trk.n_members_total || memberKeys.length;
+
+            // Thinned-ensemble spaghetti (backend caps at 100 by default
+            // so polyline counts stay manageable even with 30+ tracks).
+            for (var mi = 0; mi < memberKeys.length; mi++) {
+                var pts = members[memberKeys[mi]].points;
+                if (!pts || pts.length < 2) continue;
+                var latlngs = [];
+                for (var pi = 0; pi < pts.length; pi++) {
+                    latlngs.push([pts[pi].lat, pts[pi].lon]);
+                }
+                var segs = splitAtAntimeridian(latlngs);
+                for (var si = 0; si < segs.length; si++) {
+                    if (segs[si].length < 2) continue;
+                    var line = L.polyline(segs[si], {
+                        color: _GENESIS_MEMBER_COLOR,
+                        weight: 0.7,
+                        opacity: 0.55,
+                        interactive: false
+                    }).addTo(map);
+                    _rtGenesisLayers.push(line);
+                }
+            }
+
+            var mean = trk.ensemble_mean;
+            if (mean && mean.points && mean.points.length >= 2) {
+                var meanLatLngs = [];
+                for (var pj = 0; pj < mean.points.length; pj++) {
+                    meanLatLngs.push([mean.points[pj].lat, mean.points[pj].lon]);
+                }
+                var meanSegs = splitAtAntimeridian(meanLatLngs);
+                for (var msi = 0; msi < meanSegs.length; msi++) {
+                    if (meanSegs[msi].length < 2) continue;
+                    var meanLine = L.polyline(meanSegs[msi], {
+                        color: _GENESIS_MEAN_COLOR,
+                        weight: 2.4,
+                        opacity: 0.95,
+                        dashArray: '6,4',  // always dashed — these are pre-genesis
+                        interactive: false
+                    }).addTo(map);
+                    _rtGenesisLayers.push(meanLine);
+                }
+
+                var p0 = mean.points[0];
+                var lmiPt = null, lmiWind = -1;
+                for (var lj = 0; lj < mean.points.length; lj++) {
+                    if (mean.points[lj].wind != null && mean.points[lj].wind > lmiWind) {
+                        lmiWind = mean.points[lj].wind;
+                        lmiPt = mean.points[lj];
+                    }
+                }
+                var label = '<b>Genesis track ' + trackId + '</b>'
+                    + '<br>FNV3 LARGE_ENSEMBLE · '
+                    + memberKeys.length + ' of ' + totalMembers + ' members shown';
+                if (lmiPt && lmiWind >= 34) {
+                    label += '<br>Ensemble-mean peak: +' + lmiPt.tau + 'h · '
+                        + lmiWind.toFixed(0) + ' kt · ' + windToCategory(lmiWind);
+                }
+                var marker = L.circleMarker([p0.lat, p0.lon], {
+                    radius: 5,
+                    color: '#fff',
+                    fillColor: _GENESIS_MEAN_COLOR,
+                    fillOpacity: 1,
+                    weight: 1.5,
+                    opacity: 1,
+                    interactive: true
+                }).addTo(map);
+                marker.bindTooltip(label, { direction: 'top', offset: [0, -7] });
+                _rtGenesisLayers.push(marker);
+            }
+        }
+    }
+
+    function _loadGenesis() {
+        if (_rtGenesisLoading) return;
+        _rtGenesisLoading = true;
+        var statusEl = document.getElementById('ir-genesis-status');
+        if (statusEl) statusEl.textContent = 'Loading 1000-member ensemble…';
+
+        fetch(API_BASE + '/ir-monitor/weatherlab-genesis', { cache: 'no-store' })
+            .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+            .then(function (data) {
+                _rtGenesisData = data;
+                if (_rtGenesisVisible) _renderGenesis();
+                if (statusEl) {
+                    var n = data && data.n_tracks ? data.n_tracks : 0;
+                    if (n === 0) {
+                        statusEl.textContent = 'No genesis predicted in next 15 days';
+                    } else {
+                        statusEl.textContent = n + ' genesis track'
+                            + (n === 1 ? '' : 's')
+                            + (data.thinned_to ? ' · thinned to ' + data.thinned_to + '/track' : '')
+                            + (data.init_time ? ' · init ' + data.init_time.slice(0,8) + ' ' + data.init_time.slice(8) + 'Z' : '');
+                    }
+                }
+                _ga('rt_genesis_loaded', { n_tracks: data && data.n_tracks });
+            })
+            .catch(function (err) {
+                console.warn('[Genesis] fetch failed', err);
+                if (statusEl) statusEl.textContent = 'Unavailable';
+            })
+            .finally(function () { _rtGenesisLoading = false; });
+    }
+
+    function toggleGenesis() {
+        _rtGenesisVisible = !_rtGenesisVisible;
+        var btn = document.getElementById('ir-genesis-toggle');
+        var status = document.getElementById('ir-genesis-status');
+        if (btn) {
+            btn.classList.toggle('active', _rtGenesisVisible);
+            if (_rtGenesisVisible) {
+                btn.style.background = 'rgba(249, 115, 22, 0.22)';
+                btn.style.color = '#fbbf72';
+                btn.style.borderColor = 'rgba(249, 115, 22, 0.55)';
+            } else {
+                btn.style.background = 'rgba(15,33,64,0.88)';
+                btn.style.color = '#8b9ec2';
+                btn.style.borderColor = 'rgba(255,255,255,0.12)';
+            }
+        }
+        if (status) status.style.display = _rtGenesisVisible ? '' : 'none';
+        if (_rtGenesisVisible) {
+            if (!_rtGenesisData) _loadGenesis(); else _renderGenesis();
+        } else {
+            _clearGenesis();
+        }
+    }
+    window.toggleGenesis = toggleGenesis;
 
     // ═══════════════════════════════════════════════════════════
     //  ENVIRONMENTAL ANALYSIS OVERLAYS (RT main map)
