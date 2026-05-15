@@ -434,8 +434,15 @@
     var _rtGenesisVisible = false;
     var _rtGenesisLoading = false;
     var _rtGenesisLayers = [];
-    var _GENESIS_MEMBER_COLOR = 'rgba(249, 115, 22, 0.18)';  // soft orange
+    var _GENESIS_MEMBER_COLOR = 'rgba(249, 115, 22, 0.12)';  // very soft so heatmap dominates
     var _GENESIS_MEAN_COLOR = '#f97316';                      // bold orange
+    // Layer the genesis spaghetti pairs with by default — gives users
+    // both the per-track ensemble paths AND the spatial probability
+    // context at once. Toggled off when the genesis toggle is dismissed
+    // (only if it was auto-enabled, so we don't surprise the user by
+    // killing a layer they enabled manually).
+    var _GENESIS_PAIR_LAYER = 'genesis_prob_7d';
+    var _genesisPairedLayerAutoOn = false;
 
     // ── Environmental Analysis Overlays (RT main map) ─────────
     var _rtEnvMetadata = null;         // { layers: [...] } from /env/layers
@@ -1874,20 +1881,23 @@
         });
         map.addControl(new EnvAnalysisControl());
 
-        // Colorbars for active env layers — placed bottom-left so they
-        // don't sit under the intensity legend (which is bottom-right
-        // and fixed-positioned outside the Leaflet pane stack).
-        var EnvColorbars = L.Control.extend({
-            options: { position: 'bottomleft' },
-            onAdd: function () {
-                var box = L.DomUtil.create('div', 'ir-global-env-cbars');
-                box.id = 'ir-global-env-cbars';
-                box.style.cssText = 'display:none;background:rgba(15,33,64,0.92);padding:8px 12px;border-radius:6px;border:1px solid rgba(255,255,255,0.14);backdrop-filter:blur(6px);margin-bottom:8px;box-shadow:0 4px 14px rgba(0,0,0,0.25);';
-                L.DomEvent.disableClickPropagation(box);
-                return box;
-            }
-        });
-        map.addControl(new EnvColorbars());
+        // Env colorbar uses a fixed-position div (same pattern as the
+        // intensity legend) anchored above the 28-px status bar — going
+        // through Leaflet's bottomleft stack put it underneath the
+        // bottom of the map clip and the swatches got cut off when the
+        // stack ran out of room.
+        if (!document.getElementById('ir-global-env-cbars')) {
+            var ebox = document.createElement('div');
+            ebox.id = 'ir-global-env-cbars';
+            ebox.style.cssText =
+                'position:fixed;left:12px;bottom:40px;display:none;' +
+                'background:rgba(15,33,64,0.92);padding:8px 12px;' +
+                'border-radius:6px;border:1px solid rgba(255,255,255,0.14);' +
+                'backdrop-filter:blur(6px);z-index:700;' +
+                'box-shadow:0 4px 14px rgba(0,0,0,0.25);' +
+                'max-width:min(90vw, 540px);';
+            document.body.appendChild(ebox);
+        }
 
         // Add IR Tb colorbar to global map (bottom-left, above animation panel)
         var TbColorbar = L.Control.extend({
@@ -5234,8 +5244,8 @@
                     if (segs[si].length < 2) continue;
                     var line = L.polyline(segs[si], {
                         color: _GENESIS_MEMBER_COLOR,
-                        weight: 0.7,
-                        opacity: 0.55,
+                        weight: 0.6,
+                        opacity: 0.35,  // faint so heatmap dominates
                         interactive: false
                     }).addTo(map);
                     _rtGenesisLayers.push(line);
@@ -5253,9 +5263,10 @@
                     if (meanSegs[msi].length < 2) continue;
                     var meanLine = L.polyline(meanSegs[msi], {
                         color: _GENESIS_MEAN_COLOR,
-                        weight: 2.4,
-                        opacity: 0.95,
-                        dashArray: '6,4',  // always dashed — these are pre-genesis
+                        weight: 3.0,
+                        opacity: 1.0,
+                        // Solid (no dashArray) so the mean reads as a
+                        // bold spine on top of the probability heatmap.
                         interactive: false
                     }).addTo(map);
                     _rtGenesisLayers.push(meanLine);
@@ -5341,11 +5352,49 @@
         if (status) status.style.display = _rtGenesisVisible ? '' : 'none';
         if (_rtGenesisVisible) {
             if (!_rtGenesisData) _loadGenesis(); else _renderGenesis();
+            _pairGenesisProbLayer(true);
         } else {
             _clearGenesis();
+            _pairGenesisProbLayer(false);
         }
     }
     window.toggleGenesis = toggleGenesis;
+
+    /**
+     * When the Genesis toggle goes on, auto-enable the 7-day cumulative
+     * probability env layer so the spaghetti has spatial context. When
+     * it goes off, dismiss the layer ONLY if we were the ones who
+     * enabled it (so a manual user-enabled layer survives).
+     */
+    function _pairGenesisProbLayer(enable) {
+        var name = _GENESIS_PAIR_LAYER;
+        if (enable) {
+            if (_rtEnvActive[name]) {
+                _genesisPairedLayerAutoOn = false;  // user already had it on
+                return;
+            }
+            // Ensure env metadata is loaded so we can find the layer config.
+            var doActivate = function () {
+                var layers = (_rtEnvMetadata && _rtEnvMetadata.layers) || [];
+                var L_ = layers.filter(function (x) { return x.name === name; })[0];
+                if (!L_) return;  // probability layer not yet generated; no-op
+                _activateEnvLayer(L_);
+                _genesisPairedLayerAutoOn = true;
+                // Tick the matching checkbox in the env menu if it's open.
+                var cb = document.querySelector('input[data-env-layer="' + name + '"]');
+                if (cb) cb.checked = true;
+            };
+            if (_rtEnvMetadata) doActivate();
+            else _loadEnvMetadata().then(doActivate);
+        } else {
+            if (_genesisPairedLayerAutoOn && _rtEnvActive[name]) {
+                _deactivateEnvLayer(name);
+                var cb = document.querySelector('input[data-env-layer="' + name + '"]');
+                if (cb) cb.checked = false;
+            }
+            _genesisPairedLayerAutoOn = false;
+        }
+    }
 
     // ═══════════════════════════════════════════════════════════
     //  ENVIRONMENTAL ANALYSIS OVERLAYS (RT main map)

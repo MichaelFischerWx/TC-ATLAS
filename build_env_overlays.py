@@ -67,6 +67,14 @@ GCS_PREFIX = "env"  # gs://{bucket}/{GCS_PREFIX}/{field}/...
 NX = 1440
 NY = 721
 
+# Render visualization PNGs at 2× the data grid so lines and filled
+# edges stay crisp when Leaflet upscales the overlay at higher zoom
+# levels. Doubles file size (~250-500 KB → ~1-2 MB per PNG) which is
+# still very reasonable for the cadence + bandwidth we're operating at.
+RENDER_SCALE = 2
+IMG_NX = NX * RENDER_SCALE
+IMG_NY = NY * RENDER_SCALE
+
 
 # --------------------------------------------------------------------------
 # GFS access — reuse the NOMADS cgi-bin filter pattern from ir_monitor_api
@@ -278,9 +286,13 @@ def _disc_kernel(radius_cells: int) -> np.ndarray:
 
 def disc_smooth(field: np.ndarray, radius_km: float) -> np.ndarray:
     """Smooth `field` with a circular disc area-average of the given
-    physical radius. Uses wrap mode along the longitude axis so contours
-    near the dateline aren't distorted; latitude wrap is acceptable
-    cosmetically because TC activity is tropical/subtropical.
+    physical radius. Uses wrap mode along the longitude axis so the
+    field stays continuous across the prime meridian / dateline; pole
+    wrap is acceptable cosmetically because TC activity is tropical.
+
+    Default elsewhere is 400 km — a compromise between vortex/local
+    suppression (SHIPS-style env shear) and not blurring out the
+    synoptic peaks operations charts (CIMSS et al.) emphasize.
 
     The kernel is fixed in grid cells (≈27.8 km/cell at the equator), so
     the effective radius shrinks slightly at higher latitudes — fine for
@@ -300,6 +312,11 @@ def _render_contour_png(field: np.ndarray, spec: LayerSpec) -> bytes:
     time, which the Leaflet Mercator projection then stretches (badly
     at high latitudes and on zoom). The colorbar legend + hover tooltip
     handle value readout instead.
+
+    Rendered at IMG_NX × IMG_NY (2× the data grid) so contour lines
+    stay crisp when Leaflet upscales the overlay at higher zoom levels.
+    matplotlib antialiases the lines at the higher figure resolution so
+    each isoline gets sub-pixel-precise edges.
     """
     import matplotlib
     matplotlib.use("Agg")
@@ -309,10 +326,10 @@ def _render_contour_png(field: np.ndarray, spec: LayerSpec) -> bytes:
     mask = ~np.isfinite(field)
     if mask.any():
         field = field.copy()
-        field[mask] = np.nan  # contour() treats NaN as masked
+        field[mask] = np.nan
 
     dpi = 100
-    fig = plt.figure(figsize=(NX / dpi, NY / dpi), dpi=dpi)
+    fig = plt.figure(figsize=(IMG_NX / dpi, IMG_NY / dpi), dpi=dpi)
     ax = fig.add_axes([0, 0, 1, 1])
     ax.set_axis_off()
     ax.set_xlim(0, NX - 1)
@@ -325,7 +342,7 @@ def _render_contour_png(field: np.ndarray, spec: LayerSpec) -> bytes:
         levels=levels,
         cmap=spec.cmap,
         vmin=spec.vmin, vmax=spec.vmax,
-        linewidths=1.3,
+        linewidths=1.6 * RENDER_SCALE,  # scale stroke too so they don't look thread-thin
     )
 
     buf = io.BytesIO()
@@ -341,7 +358,9 @@ def _render_filled_png(field: np.ndarray, spec: LayerSpec) -> bytes:
     of as a tangle of unstable isolines.
 
     NaN cells become transparent so the basemap shows through (notably
-    over land for SST-style scalars).
+    over land for SST-style scalars). Upsamples the field to IMG_NX ×
+    IMG_NY via bilinear before mapping to colors so the gradient stays
+    smooth at zoom rather than turning into 0.25° pixel stippling.
     """
     import matplotlib
     matplotlib.use("Agg")
@@ -352,12 +371,20 @@ def _render_filled_png(field: np.ndarray, spec: LayerSpec) -> bytes:
     norm = mcolors.Normalize(vmin=spec.vmin, vmax=spec.vmax, clip=True)
     cmap = matplotlib.colormaps.get_cmap(spec.cmap)
 
-    rgba = cmap(norm(field))  # (NY, NX, 4) floats
-    rgba_u8 = (rgba * 255).astype(np.uint8)
+    # Bilinear upsample BEFORE colormapping so the gradient stays smooth
+    # at zoom. NaN cells need a sentinel that doesn't blend across the
+    # ocean/land boundary; replace with vmin then re-mask after.
+    finite_mask = np.isfinite(field)
+    work = np.where(finite_mask, field, spec.vmin)
+    img_f = Image.fromarray(work).resize((IMG_NX, IMG_NY), Image.BILINEAR)
+    img_m = Image.fromarray((finite_mask * 255).astype(np.uint8)).resize(
+        (IMG_NX, IMG_NY), Image.NEAREST)
+    big = np.asarray(img_f, dtype=np.float32)
+    big_mask = np.asarray(img_m) > 0
 
-    mask = ~np.isfinite(field)
-    if mask.any():
-        rgba_u8[mask, 3] = 0
+    rgba = cmap(norm(big))
+    rgba_u8 = (rgba * 255).astype(np.uint8)
+    rgba_u8[~big_mask, 3] = 0
 
     img = Image.fromarray(rgba_u8, mode="RGBA")
     buf = io.BytesIO()
@@ -373,47 +400,34 @@ def render_layer_png(field: np.ndarray, spec: LayerSpec) -> bytes:
 
 
 def render_data_png(field: np.ndarray, spec: LayerSpec) -> bytes:
-    """Encode the raw field as a downsampled 8-bit grayscale PNG so the
-    frontend can read values on hover.
+    """Encode the raw field as a native-resolution 8-bit grayscale PNG
+    so the frontend can read exact values on hover.
 
     Pixel intensity 0-255 maps linearly to [spec.vmin, spec.vmax]; NaN
-    cells become 0 with a fully-transparent alpha. Downsampled to 720 ×
-    361 (0.5°) — sufficient resolution for a hover readout and ~⅓ the
-    bytes of the native 0.25° grid. Frontend draws this to an offscreen
-    canvas once per layer activation and samples via getImageData on
-    mousemove (~0.1 ms per lookup).
+    cells become 0 with alpha=0 so the hover handler can skip them.
+    Kept at the data's native 1440 × 721 (0.25°) so a hover at any
+    lat/lon returns the same value the visualization is drawn from —
+    we previously block-averaged to 720 × 361 and the bilinear-
+    interpolated visualization (filled mode) sometimes disagreed with
+    the discrete hover value at sharp gradients.
+
+    File size: ~500 KB PNG-compressed per layer (8-bit greyscale of a
+    1.04 M-pixel array). Frontend draws to an offscreen canvas once
+    per layer activation and samples via getImageData(1,1) (~0.1 ms).
     """
     from PIL import Image
 
     field = np.asarray(field, dtype=np.float32)
-    # 0.5° downsample by 2-pixel block averaging. Even NX/NY ÷ 2 gives
-    # 720 × 360; we pad the last lat row so the frontend's lat→y mapping
-    # stays tidy at exactly 720 × 361.
-    if field.shape == (NY, NX):
-        ds = (field[0:NY - 1:2, 0::2] + field[1:NY:2, 0::2] +
-              field[0:NY - 1:2, 1::2] + field[1:NY:2, 1::2]) / 4.0
-        # Pad last lat row by duplicating the south-most resolved row.
-        last = field[-1, 0::2]
-        if last.shape[0] != ds.shape[1]:
-            last = last[:ds.shape[1]]
-        ds = np.vstack([ds, last[None, :]])
-    else:
-        ds = field
-
-    norm = np.clip((ds - spec.vmin) / max(spec.vmax - spec.vmin, 1e-9),
+    norm = np.clip((field - spec.vmin) / max(spec.vmax - spec.vmin, 1e-9),
                    0.0, 1.0)
     gray = (norm * 255).astype(np.uint8)
 
-    # Build an RGBA so NaN cells are transparent (alpha=0 means "no data
-    # here, don't show a hover value"). Lossless because we only use
-    # the R channel for the value lookup.
     h, w = gray.shape
     rgba = np.zeros((h, w, 4), dtype=np.uint8)
     rgba[..., 0] = gray
     rgba[..., 1] = gray
     rgba[..., 2] = gray
-    valid = np.isfinite(ds).astype(np.uint8) * 255
-    rgba[..., 3] = valid
+    rgba[..., 3] = np.isfinite(field).astype(np.uint8) * 255
 
     img = Image.fromarray(rgba, mode="RGBA")
     buf = io.BytesIO()
@@ -599,10 +613,10 @@ def build_shear(date_str: str, hour_str: str) -> Optional[bytes]:
     # doesn't contaminate the "environmental shear" diagnostic. Smooths
     # in 0..360 longitude convention first to avoid edge effects at the
     # 0/360 seam — regrid to -180..180 only after the convolution.
-    u200_s = disc_smooth(u200, 500.0)
-    v200_s = disc_smooth(v200, 500.0)
-    u850_s = disc_smooth(u850, 500.0)
-    v850_s = disc_smooth(v850, 500.0)
+    u200_s = disc_smooth(u200, 400.0)
+    v200_s = disc_smooth(v200, 400.0)
+    u850_s = disc_smooth(u850, 400.0)
+    v850_s = disc_smooth(v850, 400.0)
     du = u200_s - u850_s
     dv = v200_s - v850_s
     # m/s → knots: 1 m/s = 1.94384 kt
@@ -621,7 +635,7 @@ def build_shear(date_str: str, hour_str: str) -> Optional[bytes]:
         valid_time=valid,
         description=(
             "Magnitude of the 200-850 hPa vector wind difference from "
-            "the latest GFS 0.25° analysis, after a 500 km disc area-"
+            "the latest GFS 0.25° analysis, after a 400 km disc area-"
             "average of u/v at each level (suppresses TC vortices so the "
             "shear represents the environment a storm would experience)."
         ),
@@ -672,7 +686,7 @@ def build_midlevel_shear(date_str: str, hour_str: str) -> Optional[bytes]:
         valid_time=valid,
         description=(
             "Magnitude of the 500-850 hPa vector wind difference from "
-            "the latest GFS 0.25° analysis, after a 500 km disc area-"
+            "the latest GFS 0.25° analysis, after a 400 km disc area-"
             "average of u/v at each level. Targets the lower half of the "
             "TC vortex where convective organization lives — useful "
             "alongside the deep-layer 200-850 metric."
@@ -869,14 +883,25 @@ def _grid_track_probability(csv_text: str, lead_hours_max: float
 def build_genesis_prob(csv_text: str, lead_days: int, valid_time: str
                        ) -> Optional[bytes]:
     """Build one FNV3 cyclogenesis probability env layer at the given
-    lead horizon (days). Returns None on failure.
+    lead horizon (days). Always uploads (even when no tracks fall in
+    the lead window) so the layer is always available in the env menu —
+    quiet days just render fully transparent.
     """
     log.info("Building genesis_prob_%dd", lead_days)
     field = _grid_track_probability(csv_text, lead_hours_max=lead_days * 24.0)
     if field is None:
-        log.warning("genesis_prob_%dd: empty CSV → no field", lead_days)
-        return None
-    field = regrid_to_global(field)
+        # No genesis events within this horizon — upload a fully-NaN
+        # field so the layer still appears, just with no shading.
+        log.info("genesis_prob_%dd: no tracks in window, uploading empty layer",
+                 lead_days)
+        field = np.full((NY, NX), np.nan, dtype=np.float32)
+    else:
+        # Mask near-zero cells to NaN so the basemap shows through
+        # everywhere outside the active genesis area — keeps the focus
+        # on where TCs ARE likely to form rather than papering the
+        # whole globe in pale yellow.
+        field = np.where(field > 0.5, field, np.nan).astype(np.float32)
+        field = regrid_to_global(field)
 
     spec = LayerSpec(
         name=f"genesis_prob_{lead_days}d",
