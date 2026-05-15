@@ -1729,6 +1729,21 @@ input[type="range"].ga-range::-moz-range-thumb {
         height: 300px;
     }
 
+    /* Panel header on mobile: wrap overlay toggles (IR/MW/Models/Ground Radar/Recon)
+       onto multiple rows so they aren't clipped by .detail-panel's overflow:hidden. */
+    .panel-header {
+        flex-wrap: wrap;
+        row-gap: 6px;
+        padding: 10px 12px;
+    }
+    .panel-header h3 {
+        flex-basis: 100%;
+        margin-right: 0;
+    }
+    .panel-header > div {
+        flex-wrap: wrap;
+    }
+
     /* Detail header compact */
     .detail-header {
         flex-wrap: wrap;
