@@ -425,6 +425,13 @@
     var _rtGlobalWLLoading = false;
     var _rtGlobalWLLayers = [];        // Leaflet polylines + markers on `map`
 
+    // ── Environmental Analysis Overlays (RT main map) ─────────
+    var _rtEnvMetadata = null;         // { layers: [...] } from /env/layers
+    var _rtEnvLoading = false;
+    var _rtEnvActive = {};             // { layerName: { overlay, opacity } }
+    var _rtEnvMenuOpen = false;
+    var _rtEnvOpacity = 0.65;
+
     // Formats WeatherLab size fields (rmw_km, r34/r50/r64 mean + per-quadrant)
     // for tooltip / popup HTML. Returns '' if no size data is available so
     // existing tooltips don't grow needlessly.
@@ -1777,6 +1784,58 @@
             }
         });
         map.addControl(new DeepMindToggle());
+
+        // Environmental Analysis menu — submenu of checkable global overlays
+        // (shear, mid-level RH, SST) produced by the build_env_overlays
+        // Cloud Run Job and stored on GCS as global PNGs.
+        var EnvAnalysisControl = L.Control.extend({
+            options: { position: 'topright' },
+            onAdd: function () {
+                var wrap = L.DomUtil.create('div', 'ir-global-env-wrap');
+                wrap.style.cssText = 'display:flex;flex-direction:column;align-items:flex-end;gap:3px;';
+                L.DomEvent.disableClickPropagation(wrap);
+
+                var btn = L.DomUtil.create('button', 'ir-global-toggle-btn', wrap);
+                btn.id = 'ir-global-env-toggle';
+                btn.textContent = 'Environmental Analysis';
+                btn.title = 'Toggle GFS-derived shear, mid-level RH, and OISST SST overlays';
+                btn.style.cssText = 'padding:6px 14px;font-family:DM Sans,sans-serif;font-size:0.72rem;font-weight:500;color:#8b9ec2;background:rgba(15,33,64,0.88);border:1px solid rgba(255,255,255,0.12);border-radius:5px;cursor:pointer;white-space:nowrap;backdrop-filter:blur(4px);';
+                btn.addEventListener('click', toggleEnvMenu);
+                btn.addEventListener('mouseenter', function () {
+                    if (!_rtEnvMenuOpen) {
+                        btn.style.background = 'rgba(30,60,110,0.9)';
+                        btn.style.color = '#c0d0ea';
+                    }
+                });
+                btn.addEventListener('mouseleave', function () {
+                    if (!_rtEnvMenuOpen) {
+                        btn.style.background = 'rgba(15,33,64,0.88)';
+                        btn.style.color = '#8b9ec2';
+                    }
+                });
+
+                var menu = L.DomUtil.create('div', 'ir-global-env-menu', wrap);
+                menu.id = 'ir-global-env-menu';
+                menu.style.cssText = 'display:none;min-width:240px;background:rgba(15,33,64,0.94);border:1px solid rgba(255,255,255,0.14);border-radius:6px;backdrop-filter:blur(8px);box-shadow:0 6px 20px rgba(0,0,0,0.3);';
+                menu.innerHTML = '<div style="padding:8px 10px;font-size:0.7rem;color:#94a3b8;">Loading layers…</div>';
+
+                return wrap;
+            }
+        });
+        map.addControl(new EnvAnalysisControl());
+
+        // Colorbars for active env layers (bottom-right, above intensity legend)
+        var EnvColorbars = L.Control.extend({
+            options: { position: 'bottomright' },
+            onAdd: function () {
+                var box = L.DomUtil.create('div', 'ir-global-env-cbars');
+                box.id = 'ir-global-env-cbars';
+                box.style.cssText = 'display:none;background:rgba(15,33,64,0.88);padding:6px 10px;border-radius:5px;border:1px solid rgba(255,255,255,0.12);backdrop-filter:blur(4px);margin-bottom:6px;';
+                L.DomEvent.disableClickPropagation(box);
+                return box;
+            }
+        });
+        map.addControl(new EnvColorbars());
 
         // Add IR Tb colorbar to global map (bottom-left, above animation panel)
         var TbColorbar = L.Control.extend({
@@ -5079,6 +5138,167 @@
         }
     }
     window.toggleGlobalWeatherlab = toggleGlobalWeatherlab;
+
+    // ═══════════════════════════════════════════════════════════
+    //  ENVIRONMENTAL ANALYSIS OVERLAYS (RT main map)
+    // ═══════════════════════════════════════════════════════════
+    //
+    //  Reads /ir-monitor/env/layers (metadata.json sidecars produced by
+    //  the build_env_overlays.py Cloud Run Job) and drops each requested
+    //  layer onto the global Leaflet map as an L.imageOverlay covering
+    //  the full world. Fields:
+    //    * shear_200_850 — 200-850 hPa wind-shear magnitude (kt)
+    //    * rh_700_400    — 700-400 hPa mean RH (%)
+    //    * sst_oisst     — NOAA OISST daily SST (degC)
+
+    function _loadEnvMetadata() {
+        if (_rtEnvLoading || _rtEnvMetadata) return Promise.resolve();
+        _rtEnvLoading = true;
+        return fetch(API_BASE + '/ir-monitor/env/layers', { cache: 'no-store' })
+            .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+            .then(function (data) {
+                _rtEnvMetadata = data;
+                _renderEnvMenu();
+            })
+            .catch(function (err) {
+                console.warn('[Env] metadata fetch failed', err);
+                _rtEnvMetadata = { layers: [], error: String(err) };
+                _renderEnvMenu();
+            })
+            .finally(function () { _rtEnvLoading = false; });
+    }
+
+    function _activateEnvLayer(layer) {
+        if (!map || !layer || _rtEnvActive[layer.name]) return;
+        var bounds = layer.bounds || [[-90, -180], [90, 180]];
+        var overlay = L.imageOverlay(layer.image_url, bounds, {
+            opacity: _rtEnvOpacity,
+            interactive: false,
+            crossOrigin: true
+        }).addTo(map);
+        _rtEnvActive[layer.name] = { overlay: overlay, layer: layer };
+        _renderEnvColorbar();
+        _ga('rt_env_layer_on', { layer: layer.name });
+    }
+
+    function _deactivateEnvLayer(name) {
+        var entry = _rtEnvActive[name];
+        if (!entry) return;
+        if (entry.overlay && map) map.removeLayer(entry.overlay);
+        delete _rtEnvActive[name];
+        _renderEnvColorbar();
+        _ga('rt_env_layer_off', { layer: name });
+    }
+
+    function _setEnvOpacity(v) {
+        _rtEnvOpacity = Math.max(0, Math.min(1, v));
+        Object.keys(_rtEnvActive).forEach(function (n) {
+            var entry = _rtEnvActive[n];
+            if (entry && entry.overlay) entry.overlay.setOpacity(_rtEnvOpacity);
+        });
+    }
+
+    function _renderEnvMenu() {
+        var menu = document.getElementById('ir-global-env-menu');
+        if (!menu) return;
+        var layers = (_rtEnvMetadata && _rtEnvMetadata.layers) || [];
+        if (layers.length === 0) {
+            menu.innerHTML = '<div style="padding:8px 10px;font-size:0.7rem;color:#94a3b8;">'
+                + 'No env layers available yet. Pipeline runs every 6 h.</div>';
+            return;
+        }
+        var html = '<div style="padding:6px 10px 4px;font-size:0.62rem;color:#94a3b8;text-transform:uppercase;letter-spacing:0.04em;">Layers</div>';
+        for (var i = 0; i < layers.length; i++) {
+            var L_ = layers[i];
+            var isOn = !!_rtEnvActive[L_.name];
+            var validShort = (L_.valid_time || '').replace('T', ' ').replace(':00:00Z', 'Z');
+            html += '<label style="display:flex;align-items:center;gap:8px;padding:5px 10px;cursor:pointer;font-size:0.72rem;color:#c7d2e0;">'
+                + '<input type="checkbox" data-env-layer="' + L_.name + '"'
+                + (isOn ? ' checked' : '') + ' style="cursor:pointer;">'
+                + '<span style="flex:1;"><b>' + L_.title + '</b>'
+                + '<span style="font-size:0.62rem;color:#7f8a9a;display:block;">'
+                + 'valid ' + validShort + ' &middot; ' + L_.units + '</span>'
+                + '</span></label>';
+        }
+        html += '<div style="padding:6px 10px 8px;border-top:1px solid rgba(255,255,255,0.08);margin-top:4px;">'
+            + '<label style="display:flex;align-items:center;gap:6px;font-size:0.65rem;color:#94a3b8;">Opacity '
+            + '<input id="ir-global-env-opacity" type="range" min="0" max="100" '
+            + 'value="' + Math.round(_rtEnvOpacity * 100) + '" '
+            + 'style="flex:1;height:14px;">'
+            + '<span id="ir-global-env-opacity-val" style="width:30px;text-align:right;">' + Math.round(_rtEnvOpacity * 100) + '%</span>'
+            + '</label></div>';
+
+        menu.innerHTML = html;
+
+        // Wire up handlers
+        var checkboxes = menu.querySelectorAll('input[data-env-layer]');
+        for (var j = 0; j < checkboxes.length; j++) {
+            checkboxes[j].addEventListener('change', function (e) {
+                var name = e.target.getAttribute('data-env-layer');
+                var layer = (layers || []).filter(function (L_) { return L_.name === name; })[0];
+                if (!layer) return;
+                if (e.target.checked) _activateEnvLayer(layer);
+                else _deactivateEnvLayer(name);
+            });
+        }
+        var opacitySlider = document.getElementById('ir-global-env-opacity');
+        if (opacitySlider) {
+            opacitySlider.addEventListener('input', function (e) {
+                var v = parseInt(e.target.value, 10) / 100;
+                _setEnvOpacity(v);
+                var label = document.getElementById('ir-global-env-opacity-val');
+                if (label) label.textContent = Math.round(v * 100) + '%';
+            });
+        }
+    }
+
+    function _renderEnvColorbar() {
+        var box = document.getElementById('ir-global-env-cbars');
+        if (!box) return;
+        var active = Object.values(_rtEnvActive);
+        if (active.length === 0) {
+            box.style.display = 'none';
+            box.innerHTML = '';
+            return;
+        }
+        box.style.display = '';
+        var html = '';
+        for (var i = 0; i < active.length; i++) {
+            var L_ = active[i].layer;
+            var stops = L_.colorbar_stops || [];
+            var grad = stops.map(function (s) {
+                return 'rgb(' + s.rgb.join(',') + ') ' + Math.round(s.t * 100) + '%';
+            }).join(',');
+            html += '<div style="margin-top:6px;font-family:DM Sans,sans-serif;font-size:0.62rem;color:#c7d2e0;">'
+                + '<div style="display:flex;justify-content:space-between;margin-bottom:2px;">'
+                + '<span>' + L_.title + '</span><span>' + L_.units + '</span></div>'
+                + '<div style="width:160px;height:8px;border-radius:2px;background:linear-gradient(to right,' + grad + ');"></div>'
+                + '<div style="display:flex;justify-content:space-between;font-size:0.55rem;color:#94a3b8;">'
+                + '<span>' + L_.vmin + '</span><span>' + L_.vmax + '</span></div>'
+                + '</div>';
+        }
+        box.innerHTML = html;
+    }
+
+    function toggleEnvMenu() {
+        _rtEnvMenuOpen = !_rtEnvMenuOpen;
+        var menu = document.getElementById('ir-global-env-menu');
+        var btn = document.getElementById('ir-global-env-toggle');
+        if (menu) menu.style.display = _rtEnvMenuOpen ? '' : 'none';
+        if (btn) {
+            if (_rtEnvMenuOpen) {
+                btn.style.background = 'rgba(0, 229, 255, 0.2)';
+                btn.style.color = '#7fefff';
+                btn.style.borderColor = 'rgba(0, 229, 255, 0.55)';
+            } else {
+                btn.style.background = 'rgba(15,33,64,0.88)';
+                btn.style.color = '#8b9ec2';
+                btn.style.borderColor = 'rgba(255,255,255,0.12)';
+            }
+        }
+        if (_rtEnvMenuOpen && !_rtEnvMetadata) _loadEnvMetadata();
+    }
+    window.toggleEnvMenu = toggleEnvMenu;
 
     // ═══════════════════════════════════════════════════════════
     //  DEEPMIND 1000-MEMBER ENSEMBLE DISTRIBUTION PANELS

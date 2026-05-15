@@ -3623,6 +3623,44 @@ def get_storm_weatherlab(atcf_id: str):
     )
 
 
+@router.get("/env/layers")
+def get_env_layers():
+    """List available global environmental overlays.
+
+    Reads `metadata.json` for each layer from the GCS env/ prefix.
+    Frontend uses this to learn the PNG URL + colorbar info for each
+    available field, then drops it on the global map as L.imageOverlay.
+
+    The layers are produced by the `build_env_overlays.py` Cloud Run
+    Job (scheduled every 6 h).
+    """
+    bucket = _get_rt_gcs_bucket()
+    if bucket is None:
+        return JSONResponse(
+            content={"layers": [], "error": "GCS not configured"},
+            status_code=503,
+        )
+
+    # Known layer names — kept in code (not auto-discovered) so the
+    # endpoint stays fast and we don't enumerate the whole bucket.
+    known = ("shear_200_850", "rh_700_400", "sst_oisst")
+    layers = []
+    for name in known:
+        try:
+            blob = bucket.blob(f"env/{name}/metadata.json")
+            if not blob.exists():
+                continue
+            meta = json.loads(blob.download_as_text())
+            layers.append(meta)
+        except Exception as e:
+            logger.warning(f"env/{name}/metadata.json read failed: {e}")
+
+    return JSONResponse(
+        content={"layers": layers, "count": len(layers)},
+        headers={"Cache-Control": "public, max-age=120"},
+    )
+
+
 @router.get("/weatherlab-global")
 def get_weatherlab_global():
     """Latest WeatherLab ensemble forecasts for every track in the paired CSV.
