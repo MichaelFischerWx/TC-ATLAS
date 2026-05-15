@@ -252,10 +252,13 @@ class LayerSpec:
     units: str
     vmin: float          # colorbar / contour-range minimum
     vmax: float          # colorbar / contour-range maximum
-    step: float          # contour interval (same units)
+    step: float          # contour interval (same units, used in contour mode)
     cmap: str            # matplotlib colormap name
     valid_time: str      # ISO8601 string
     description: str = ""
+    # "contour" = labelled isolines (good for smooth gradients: shear, SST)
+    # "filled"  = continuous shaded field (good for noisier scalars: RH)
+    render_style: str = "contour"
 
 
 # Each 0.25° cell spans ~27.8 km in the latitude direction (and at the
@@ -290,23 +293,19 @@ def disc_smooth(field: np.ndarray, radius_km: float) -> np.ndarray:
     return convolve(field, k, mode="wrap")
 
 
-def render_contour_png(field: np.ndarray, spec: LayerSpec) -> bytes:
-    """Render `field` as CIMSS-style labeled isolines on a transparent
-    background. Returns PNG bytes sized exactly NX × NY pixels so it
-    overlays the Leaflet world bounds [[-90,-180],[90,180]] cell-for-cell.
+def _render_contour_png(field: np.ndarray, spec: LayerSpec) -> bytes:
+    """Render `field` as colored isolines on a transparent background.
 
-    Lines are colored by value via the colormap so the colorbar legend
-    is still meaningful, and each contour level is labeled with a
-    white-haloed integer value so labels remain legible over dark IR
-    backgrounds.
+    No inline value labels — matplotlib's text rasterizes at PNG bake
+    time, which the Leaflet Mercator projection then stretches (badly
+    at high latitudes and on zoom). The colorbar legend + hover tooltip
+    handle value readout instead.
     """
     import matplotlib
     matplotlib.use("Agg")
-    import matplotlib.patheffects as path_effects
     import matplotlib.pyplot as plt
 
     field = np.asarray(field, dtype=np.float32)
-    # Replace non-finite cells so matplotlib doesn't choke on NaN at the poles.
     mask = ~np.isfinite(field)
     if mask.any():
         field = field.copy()
@@ -314,31 +313,20 @@ def render_contour_png(field: np.ndarray, spec: LayerSpec) -> bytes:
 
     dpi = 100
     fig = plt.figure(figsize=(NX / dpi, NY / dpi), dpi=dpi)
-    ax = fig.add_axes([0, 0, 1, 1])  # fill figure, no margin
+    ax = fig.add_axes([0, 0, 1, 1])
     ax.set_axis_off()
     ax.set_xlim(0, NX - 1)
-    ax.set_ylim(NY - 1, 0)  # invert so row 0 sits at top of image
+    ax.set_ylim(NY - 1, 0)
 
     n_steps = int(round((spec.vmax - spec.vmin) / spec.step)) + 1
     levels = np.linspace(spec.vmin, spec.vmax, n_steps)
-    cs = ax.contour(
+    ax.contour(
         np.arange(NX), np.arange(NY), field,
         levels=levels,
         cmap=spec.cmap,
         vmin=spec.vmin, vmax=spec.vmax,
-        linewidths=1.2,
+        linewidths=1.3,
     )
-
-    labels = ax.clabel(
-        cs, levels=levels,
-        inline=True, fontsize=7, fmt="%.0f", colors="black",
-    )
-    halo = [
-        path_effects.Stroke(linewidth=2.0, foreground="white"),
-        path_effects.Normal(),
-    ]
-    for label in labels:
-        label.set_path_effects(halo)
 
     buf = io.BytesIO()
     fig.savefig(buf, format="PNG", transparent=True, dpi=dpi,
@@ -347,11 +335,103 @@ def render_contour_png(field: np.ndarray, spec: LayerSpec) -> bytes:
     return buf.getvalue()
 
 
+def _render_filled_png(field: np.ndarray, spec: LayerSpec) -> bytes:
+    """Render `field` as a continuous filled colormap (PIL-based) so a
+    noisy scalar like 700-400 hPa RH reads as a shaded gradient instead
+    of as a tangle of unstable isolines.
+
+    NaN cells become transparent so the basemap shows through (notably
+    over land for SST-style scalars).
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.colors as mcolors
+    from PIL import Image
+
+    field = np.asarray(field, dtype=np.float32)
+    norm = mcolors.Normalize(vmin=spec.vmin, vmax=spec.vmax, clip=True)
+    cmap = matplotlib.colormaps.get_cmap(spec.cmap)
+
+    rgba = cmap(norm(field))  # (NY, NX, 4) floats
+    rgba_u8 = (rgba * 255).astype(np.uint8)
+
+    mask = ~np.isfinite(field)
+    if mask.any():
+        rgba_u8[mask, 3] = 0
+
+    img = Image.fromarray(rgba_u8, mode="RGBA")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    return buf.getvalue()
+
+
+def render_layer_png(field: np.ndarray, spec: LayerSpec) -> bytes:
+    """Dispatch to the contour or filled renderer based on render_style."""
+    if spec.render_style == "filled":
+        return _render_filled_png(field, spec)
+    return _render_contour_png(field, spec)
+
+
+def render_data_png(field: np.ndarray, spec: LayerSpec) -> bytes:
+    """Encode the raw field as a downsampled 8-bit grayscale PNG so the
+    frontend can read values on hover.
+
+    Pixel intensity 0-255 maps linearly to [spec.vmin, spec.vmax]; NaN
+    cells become 0 with a fully-transparent alpha. Downsampled to 720 ×
+    361 (0.5°) — sufficient resolution for a hover readout and ~⅓ the
+    bytes of the native 0.25° grid. Frontend draws this to an offscreen
+    canvas once per layer activation and samples via getImageData on
+    mousemove (~0.1 ms per lookup).
+    """
+    from PIL import Image
+
+    field = np.asarray(field, dtype=np.float32)
+    # 0.5° downsample by 2-pixel block averaging. Even NX/NY ÷ 2 gives
+    # 720 × 360; we pad the last lat row so the frontend's lat→y mapping
+    # stays tidy at exactly 720 × 361.
+    if field.shape == (NY, NX):
+        ds = (field[0:NY - 1:2, 0::2] + field[1:NY:2, 0::2] +
+              field[0:NY - 1:2, 1::2] + field[1:NY:2, 1::2]) / 4.0
+        # Pad last lat row by duplicating the south-most resolved row.
+        last = field[-1, 0::2]
+        if last.shape[0] != ds.shape[1]:
+            last = last[:ds.shape[1]]
+        ds = np.vstack([ds, last[None, :]])
+    else:
+        ds = field
+
+    norm = np.clip((ds - spec.vmin) / max(spec.vmax - spec.vmin, 1e-9),
+                   0.0, 1.0)
+    gray = (norm * 255).astype(np.uint8)
+
+    # Build an RGBA so NaN cells are transparent (alpha=0 means "no data
+    # here, don't show a hover value"). Lossless because we only use
+    # the R channel for the value lookup.
+    h, w = gray.shape
+    rgba = np.zeros((h, w, 4), dtype=np.uint8)
+    rgba[..., 0] = gray
+    rgba[..., 1] = gray
+    rgba[..., 2] = gray
+    valid = np.isfinite(ds).astype(np.uint8) * 255
+    rgba[..., 3] = valid
+
+    img = Image.fromarray(rgba, mode="RGBA")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    return buf.getvalue()
+
+
+def _get_cmap(cmap_name: str):
+    """Wrapper around matplotlib's colormap accessor that uses the
+    non-deprecated `colormaps[name]` interface."""
+    import matplotlib
+    return matplotlib.colormaps.get_cmap(cmap_name)
+
+
 def build_colormap_stops(cmap_name: str, n: int = 16) -> list[dict]:
     """Sample a matplotlib colormap to N RGB stops the frontend can
     paint a colorbar with."""
-    import matplotlib.cm as cm
-    cmap = cm.get_cmap(cmap_name)
+    cmap = _get_cmap(cmap_name)
     stops = []
     for i in range(n):
         t = i / (n - 1)
@@ -369,8 +449,7 @@ def _level_colors(cmap_name: str, levels: list, vmin: float, vmax: float
     contour level, so the frontend legend swatches match the rendered
     isolines pixel-for-pixel.
     """
-    import matplotlib.cm as cm
-    cmap = cm.get_cmap(cmap_name)
+    cmap = _get_cmap(cmap_name)
     span = (vmax - vmin) or 1.0
     out = []
     for lvl in levels:
@@ -384,8 +463,12 @@ def _level_colors(cmap_name: str, levels: list, vmin: float, vmax: float
 # GCS upload
 # --------------------------------------------------------------------------
 
-def upload_layer(spec: LayerSpec, png: bytes) -> bool:
-    """Upload the PNG + metadata sidecar to GCS. Returns True on success."""
+def upload_layer(spec: LayerSpec, field: np.ndarray) -> bool:
+    """Render and upload three artifacts for a layer: the visualization
+    PNG (contour or filled), the data PNG (greyscale raw values for
+    hover), and the metadata sidecar. All marked public on the GCS
+    bucket so the frontend reads them directly.
+    """
     try:
         from google.cloud import storage
     except ImportError:
@@ -399,12 +482,22 @@ def upload_layer(spec: LayerSpec, png: bytes) -> bool:
     client = storage.Client()
     bucket = client.bucket(GCS_BUCKET)
 
+    png = render_layer_png(field, spec)
+    data_png = render_data_png(field, spec)
+
     png_blob = bucket.blob(f"{GCS_PREFIX}/{spec.name}/latest.png")
+    data_blob = bucket.blob(f"{GCS_PREFIX}/{spec.name}/latest_data.png")
     meta_blob = bucket.blob(f"{GCS_PREFIX}/{spec.name}/metadata.json")
 
     n_steps = int(round((spec.vmax - spec.vmin) / spec.step)) + 1
     levels = [round(spec.vmin + i * spec.step, 2) for i in range(n_steps)]
     level_colors = _level_colors(spec.cmap, levels, spec.vmin, spec.vmax)
+
+    # Compute the data PNG's grid (downsampled to 0.5° to keep the byte
+    # count tight) — the frontend uses these to map lat/lon → pixel.
+    data_nx = NX // 2
+    data_ny = (NY // 2) + 1  # +1 to retain the south-most row
+
     meta = {
         "name": spec.name,
         "title": spec.title,
@@ -415,46 +508,44 @@ def upload_layer(spec: LayerSpec, png: bytes) -> bool:
         "cmap": spec.cmap,
         "valid_time": spec.valid_time,
         "description": spec.description,
+        "render_style": spec.render_style,
         "image_url": (
             f"https://storage.googleapis.com/{GCS_BUCKET}/"
             f"{GCS_PREFIX}/{spec.name}/latest.png"
         ),
+        # Greyscale data PNG (8-bit R channel = (value - vmin)/(vmax-vmin)
+        # * 255; alpha=0 means NaN). Frontend draws to offscreen canvas
+        # and reads pixels on hover for instant value tooltips.
+        "data_url": (
+            f"https://storage.googleapis.com/{GCS_BUCKET}/"
+            f"{GCS_PREFIX}/{spec.name}/latest_data.png"
+        ),
+        "data_grid": {"nx": data_nx, "ny": data_ny},
         # Native grid is global 0.25° in (-180, 180) x (90, -90); these
         # bounds are how Leaflet's imageOverlay should anchor the PNG.
         "bounds": [[-90.0, -180.0], [90.0, 180.0]],
         "grid": {"nx": NX, "ny": NY},
-        # Continuous gradient stops (for back-compat) + discrete contour
-        # levels with the exact line color used at each level (lets the
-        # frontend draw a tick-marked legend that matches the contours).
         "colorbar_stops": build_colormap_stops(spec.cmap),
         "levels": levels,
         "level_colors": level_colors,
         "generated_utc": datetime.now(timezone.utc).isoformat(),
     }
 
-    try:
-        png_blob.upload_from_string(png, content_type="image/png")
-        # Short cache so a stale tile doesn't outlive the next cycle.
-        png_blob.cache_control = "public, max-age=300"
-        png_blob.patch()
-        # The bucket uses fine-grained ACLs (UBLA disabled); make the
-        # env/ artifacts public so the frontend can load them directly
-        # from storage.googleapis.com without a backend proxy hop.
+    def _put(blob, body: bytes | str, content_type: str) -> None:
+        blob.upload_from_string(body, content_type=content_type)
+        blob.cache_control = "public, max-age=300"
+        blob.patch()
         try:
-            png_blob.make_public()
+            blob.make_public()
         except Exception as e:
-            log.warning("Could not mark %s public: %s", png_blob.name, e)
+            log.warning("Could not mark %s public: %s", blob.name, e)
 
-        meta_blob.upload_from_string(
-            json.dumps(meta, indent=2), content_type="application/json"
-        )
-        meta_blob.cache_control = "public, max-age=300"
-        meta_blob.patch()
-        try:
-            meta_blob.make_public()
-        except Exception as e:
-            log.warning("Could not mark %s public: %s", meta_blob.name, e)
-        log.info("Uploaded %s: png=%d bytes", spec.name, len(png))
+    try:
+        _put(png_blob, png, "image/png")
+        _put(data_blob, data_png, "image/png")
+        _put(meta_blob, json.dumps(meta, indent=2), "application/json")
+        log.info("Uploaded %s: vis=%d bytes data=%d bytes",
+                 spec.name, len(png), len(data_png))
         return True
     except Exception as e:
         log.error("GCS upload failed for %s: %s", spec.name, e)
@@ -535,8 +626,7 @@ def build_shear(date_str: str, hour_str: str) -> Optional[bytes]:
             "shear represents the environment a storm would experience)."
         ),
     )
-    png = render_contour_png(shear_kt, spec)
-    return png if upload_layer(spec, png) else None
+    return shear_kt if upload_layer(spec, shear_kt) else None
 
 
 def build_midlevel_shear(date_str: str, hour_str: str) -> Optional[bytes]:
@@ -588,8 +678,7 @@ def build_midlevel_shear(date_str: str, hour_str: str) -> Optional[bytes]:
             "alongside the deep-layer 200-850 metric."
         ),
     )
-    png = render_contour_png(shear_kt, spec)
-    return png if upload_layer(spec, png) else None
+    return shear_kt if upload_layer(spec, shear_kt) else None
 
 
 def build_midlevel_rh(date_str: str, hour_str: str) -> Optional[bytes]:
@@ -626,11 +715,12 @@ def build_midlevel_rh(date_str: str, hour_str: str) -> Optional[bytes]:
         description=(
             "Unweighted mean of relative humidity at 700, 500, and "
             "400 hPa — a proxy for mid-level moisture relevant to TC "
-            "genesis."
+            "genesis. Rendered as a shaded gradient because contour "
+            "lines tend to tangle on a noisy small-scale scalar."
         ),
+        render_style="filled",
     )
-    png = render_contour_png(rh, spec)
-    return png if upload_layer(spec, png) else None
+    return rh if upload_layer(spec, rh) else None
 
 
 def build_sst() -> Optional[bytes]:
@@ -668,8 +758,7 @@ def build_sst() -> Optional[bytes]:
             "Contours every 2 degC over the TC-relevant 18-32 degC range."
         ),
     )
-    png = render_contour_png(sst, spec)
-    return png if upload_layer(spec, png) else None
+    return sst if upload_layer(spec, sst) else None
 
 
 # --------------------------------------------------------------------------

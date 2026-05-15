@@ -5181,7 +5181,42 @@
             opacity: _rtEnvOpacity,
             interactive: false
         }).addTo(map);
-        _rtEnvActive[layer.name] = { overlay: overlay, layer: layer };
+
+        var entry = { overlay: overlay, layer: layer, canvas: null, ctx: null };
+        _rtEnvActive[layer.name] = entry;
+
+        // Preload the parallel data PNG into an offscreen canvas so we
+        // can read raw values under the cursor for the hover tooltip.
+        // crossOrigin='anonymous' is REQUIRED here — without it the canvas
+        // becomes tainted and getImageData throws SecurityError. The bucket
+        // serves PNGs with Access-Control-Allow-Origin via gsutil cors,
+        // OR we set img.crossOrigin only on the data PNG (visualization
+        // PNG stays without crossOrigin so it loads even if CORS isn't set).
+        if (layer.data_url) {
+            var img = new Image();
+            img.crossOrigin = 'anonymous';
+            img.onload = function () {
+                try {
+                    var c = document.createElement('canvas');
+                    c.width = img.naturalWidth;
+                    c.height = img.naturalHeight;
+                    var ctx = c.getContext('2d', { willReadFrequently: true });
+                    ctx.drawImage(img, 0, 0);
+                    entry.canvas = c;
+                    entry.ctx = ctx;
+                    entry.dataW = img.naturalWidth;
+                    entry.dataH = img.naturalHeight;
+                } catch (e) {
+                    console.warn('[Env hover] canvas init failed for ' + layer.name, e);
+                }
+            };
+            img.onerror = function () {
+                console.warn('[Env hover] data PNG load failed (CORS?). Hover values disabled for ' + layer.name);
+            };
+            img.src = layer.data_url;
+        }
+
+        _ensureEnvHoverHandler();
         _renderEnvColorbar();
         _ga('rt_env_layer_on', { layer: layer.name });
     }
@@ -5192,7 +5227,99 @@
         if (entry.overlay && map) map.removeLayer(entry.overlay);
         delete _rtEnvActive[name];
         _renderEnvColorbar();
+        _hideEnvHoverTip();
         _ga('rt_env_layer_off', { layer: name });
+    }
+
+    // ── Hover tooltip ────────────────────────────────────────
+    //
+    // On mousemove anywhere on the global map, sample the data canvas
+    // for each active env layer at the cursor's lat/lon and show a
+    // DM-Sans tooltip with the readout. Sampling is O(1) — one
+    // getImageData(1,1) per active layer — so even half a dozen layers
+    // stay smooth.
+
+    var _envHoverBound = false;
+    var _envHoverTip = null;
+
+    function _envHoverTipEl() {
+        if (_envHoverTip) return _envHoverTip;
+        var el = document.createElement('div');
+        el.id = 'ir-env-hover-tip';
+        el.style.cssText =
+            'position:absolute;pointer-events:none;display:none;z-index:900;' +
+            'background:rgba(15,33,64,0.95);color:#e2e8f0;' +
+            'font-family:"DM Sans","Helvetica Neue",sans-serif;font-size:0.72rem;' +
+            'border:1px solid rgba(255,255,255,0.16);border-radius:5px;' +
+            'padding:5px 8px;backdrop-filter:blur(6px);' +
+            'box-shadow:0 4px 14px rgba(0,0,0,0.3);' +
+            'white-space:nowrap;line-height:1.35;';
+        document.body.appendChild(el);
+        _envHoverTip = el;
+        return el;
+    }
+
+    function _hideEnvHoverTip() {
+        if (_envHoverTip) _envHoverTip.style.display = 'none';
+    }
+
+    function _sampleEnvLayer(entry, lat, lon) {
+        if (!entry || !entry.ctx) return null;
+        // Bounds are [[-90,-180],[90,180]] for our globe PNGs.
+        var nx = entry.dataW, ny = entry.dataH;
+        if (lon > 180) lon -= 360;
+        if (lon < -180) lon += 360;
+        var x = Math.floor((lon + 180) / 360 * nx);
+        var y = Math.floor((90 - lat) / 180 * ny);  // y=0 at +90°
+        if (x < 0) x = 0; else if (x >= nx) x = nx - 1;
+        if (y < 0) y = 0; else if (y >= ny) y = ny - 1;
+        try {
+            var d = entry.ctx.getImageData(x, y, 1, 1).data;
+            if (d[3] === 0) return null;  // NaN cell
+            var L_ = entry.layer;
+            return L_.vmin + (d[0] / 255) * (L_.vmax - L_.vmin);
+        } catch (e) {
+            // Canvas tainted (no CORS on the data PNG) — fail silently;
+            // tooltip just hides. Visualization still works.
+            entry.ctx = null;
+            return null;
+        }
+    }
+
+    function _ensureEnvHoverHandler() {
+        if (_envHoverBound || !map) return;
+        _envHoverBound = true;
+        map.on('mousemove', function (e) {
+            var actives = Object.values(_rtEnvActive);
+            if (actives.length === 0) { _hideEnvHoverTip(); return; }
+            var lat = e.latlng.lat;
+            var lon = e.latlng.lng;
+            var lines = [];
+            for (var i = 0; i < actives.length; i++) {
+                var v = _sampleEnvLayer(actives[i], lat, lon);
+                if (v == null) continue;
+                var L_ = actives[i].layer;
+                // Format with 0-1 decimal depending on range size.
+                var span = L_.vmax - L_.vmin;
+                var nd = span >= 50 ? 0 : (span >= 10 ? 1 : 2);
+                lines.push('<b>' + L_.title + ':</b> ' + v.toFixed(nd) + ' ' + L_.units);
+            }
+            var tip = _envHoverTipEl();
+            if (lines.length === 0) { tip.style.display = 'none'; return; }
+            lines.push('<span style="color:#94a3b8;font-size:0.62rem;">'
+                + lat.toFixed(1) + '°' + (lat >= 0 ? 'N' : 'S')
+                + ' ' + Math.abs(lon).toFixed(1) + '°' + (lon >= 0 ? 'E' : 'W')
+                + '</span>');
+            tip.innerHTML = lines.join('<br>');
+            // Position near the cursor, offset to the right of the pointer.
+            var pt = e.originalEvent;
+            if (pt) {
+                tip.style.left = (pt.clientX + 14) + 'px';
+                tip.style.top = (pt.clientY + 14) + 'px';
+                tip.style.display = '';
+            }
+        });
+        map.on('mouseout', _hideEnvHoverTip);
     }
 
     function _setEnvOpacity(v) {

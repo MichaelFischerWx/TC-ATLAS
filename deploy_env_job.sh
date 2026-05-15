@@ -98,6 +98,19 @@ gcloud run jobs add-iam-policy-binding "${JOB_NAME}" \
     --role roles/run.invoker \
     --quiet || true
 
+# ── Configure bucket CORS so the frontend canvas can sample data PNGs ─
+# Required for the hover-tooltip readout: the frontend loads each layer's
+# greyscale data PNG with crossOrigin='anonymous' and reads pixel values
+# via getImageData. Without ACAO headers, the canvas becomes tainted and
+# the read throws SecurityError. Setting on the bucket is idempotent.
+CORS_JSON="$(mktemp -t tc-atlas-env-cors.XXXXXX.json)"
+trap 'rm -f "${BUILD_CFG}" "${CORS_JSON}"' EXIT
+cat > "${CORS_JSON}" <<EOF
+[{"origin":["*"],"method":["GET","HEAD"],"responseHeader":["Content-Type","Access-Control-Allow-Origin"],"maxAgeSeconds":3600}]
+EOF
+echo "Setting CORS on gs://${BUCKET}..."
+gsutil cors set "${CORS_JSON}" "gs://${BUCKET}" || echo "  (warning: CORS set failed; hover tooltips will gracefully no-op)"
+
 echo "Creating/updating Cloud Scheduler ${SCHEDULER_NAME}..."
 if gcloud scheduler jobs describe "${SCHEDULER_NAME}" --location "${REGION}" >/dev/null 2>&1; then
     gcloud scheduler jobs update http "${SCHEDULER_NAME}" \
