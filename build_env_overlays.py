@@ -861,8 +861,10 @@ def build_vorticity(date_str: str, hour_str: str, level: int
     cyclonic *= 1e5  # → 10⁻⁵ s⁻¹
 
     # Mask anticyclonic + sub-threshold cells so the contour set
-    # focuses on TC-relevant cyclonic features.
-    cyclonic = np.where(cyclonic > 1.0, cyclonic, np.nan).astype(np.float32)
+    # focuses on TC-relevant cyclonic features. Threshold matches the
+    # lowest contour level so values just-above-zero (synoptic noise)
+    # don't crowd the rendered set.
+    cyclonic = np.where(cyclonic >= 2.0, cyclonic, np.nan).astype(np.float32)
     cyclonic = regrid_to_global(cyclonic)
 
     valid = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}T{hour_str}:00:00Z"
@@ -870,17 +872,18 @@ def build_vorticity(date_str: str, hour_str: str, level: int
         name=f"vort_{level}",
         title=f"{level} hPa Cyclonic Vorticity",
         units="10⁻⁵ s⁻¹",
-        vmin=0,
+        vmin=2,
         vmax=30,
-        step=5,
+        step=4,
         cmap="Reds",
         valid_time=valid,
         description=(
             f"Relative vorticity ζ at {level} hPa from the latest GFS "
             f"analysis, after a 200 km disc smooth of u, v. Multiplied "
             f"by sign(latitude) so positive = cyclonic globally; "
-            f"anticyclonic cells are masked to keep the contour set "
-            f"focused on TC-favorable circulation."
+            f"anticyclonic cells and weak cyclonic background (< 2 × "
+            f"10⁻⁵ s⁻¹) are masked to keep the contour set focused on "
+            f"TC-favorable circulation."
         ),
     )
     return cyclonic if upload_layer(spec, cyclonic) else None
