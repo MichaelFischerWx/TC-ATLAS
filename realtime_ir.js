@@ -2317,7 +2317,6 @@
     /** Poll /ir-monitor/active-storms */
     function pollActiveStorms() {
         var loaderEl = document.getElementById('ir-loader');
-        var noStormsEl = document.getElementById('ir-no-storms');
 
         // Show cached storms immediately while fresh fetch runs
         if (stormData.length === 0) {
@@ -2331,7 +2330,6 @@
                         updateStats(parsed);
                         renderStormMarkers(stormData);
                         handleDeepLink();
-                        if (noStormsEl) noStormsEl.style.display = 'none';
                         console.log('[RT Monitor] Showing ' + stormData.length + ' cached storms while fetching fresh data');
                     }
                 }
@@ -2367,11 +2365,6 @@
                 updateStats(data);
                 renderStormMarkers(stormData);
                 fetchAllTracks(stormData);
-
-                // Show/hide no-storms message
-                if (noStormsEl) {
-                    noStormsEl.style.display = stormData.length === 0 ? 'block' : 'none';
-                }
 
                 // Handle deep link on first load
                 handleDeepLink();
@@ -5844,7 +5837,8 @@
                                 iconAnchor: [10, 7]
                             }),
                             interactive: false,
-                            keyboard: false
+                            keyboard: false,
+                            opacity: _rtEnvOpacity
                         }).addTo(map);
                         labels.push(mk);
                     }
@@ -6027,14 +6021,26 @@
         _rtEnvOpacity = Math.max(0, Math.min(1, v));
         Object.keys(_rtEnvActive).forEach(function (n) {
             var entry = _rtEnvActive[n];
-            if (!entry || !entry.overlays || entry.overlays.length === 0) return;
-            for (var k = 0; k < entry.overlays.length; k++) {
-                var ov = entry.overlays[k];
-                if (entry.overlayKind === 'geojson') {
-                    // L.geoJSON applies opacity via setStyle on its child polylines.
-                    ov.setStyle({ opacity: _rtEnvOpacity });
-                } else {
-                    ov.setOpacity(_rtEnvOpacity);
+            if (!entry) return;
+            // Fade the overlay (raster image or geojson polylines).
+            if (entry.overlays && entry.overlays.length) {
+                for (var k = 0; k < entry.overlays.length; k++) {
+                    var ov = entry.overlays[k];
+                    if (entry.overlayKind === 'geojson') {
+                        ov.setStyle({ opacity: _rtEnvOpacity });
+                    } else {
+                        ov.setOpacity(_rtEnvOpacity);
+                    }
+                }
+            }
+            // Fade the contour value labels too — without this they
+            // stay full-strength while the contour lines themselves
+            // fade, which reads as visual mismatch.
+            if (entry.labels && entry.labels.length) {
+                for (var li = 0; li < entry.labels.length; li++) {
+                    if (entry.labels[li].setOpacity) {
+                        entry.labels[li].setOpacity(_rtEnvOpacity);
+                    }
                 }
             }
         });
