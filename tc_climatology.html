@@ -391,10 +391,22 @@
                     <!-- Dials sit side-by-side in the 2-col grid (no grid-column override) -->
                     <div class="clim-panel">
                         <h3 class="clim-panel-title">
-                            <span id="sub-dial-title">TC Genesis by Phase</span>
+                            <span id="sub-dial-title">TC Activity by Phase</span>
                             <span class="ace-hint" id="sub-dial-hint" style="opacity:0.65;"></span>
                         </h3>
-                        <p class="field-help" style="margin:4px 0 8px; font-size:0.7rem;">
+                        <div style="display:flex; flex-wrap:wrap; gap:8px 14px; align-items:center; margin:4px 0 8px;">
+                            <label class="field-label" style="font-size:0.66rem; opacity:0.75; margin:0;">Metric:</label>
+                            <div class="segmented" id="sub-dial-metric-toggle" role="tablist"
+                                 aria-label="Activity metric">
+                                <button type="button" data-sub-dial-metric="genesis" class="active"
+                                        title="Number of named-storm genesis events (first fix, peak ≥ 34 kt) whose genesis date fell on a day of each phase.">Genesis count</button>
+                                <button type="button" data-sub-dial-metric="ace"
+                                        title="Accumulated Cyclone Energy (ACE = Σ v² / 10⁴) summed over synoptic-time (00/06/12/18 UTC) best-track fixes ≥ 34 kt occurring on days of each phase. Intensity-weighted activity measure.">ACE</button>
+                                <button type="button" data-sub-dial-metric="days"
+                                        title="Storm-days: count of (storm × calendar-day) pairs where the storm had any synoptic fix ≥ 34 kt that day. Phase-day count, not intensity-weighted.">Storm-days</button>
+                            </div>
+                        </div>
+                        <p class="field-help" id="sub-dial-help" style="margin:4px 0 8px; font-size:0.7rem;">
                             Bars show the number of named-storm genesis events whose first-fix date fell on a day
                             of each phase (amplitude ≥ 1). The dashed ring is the expected count if genesis were
                             uniform across phases — bars outside the ring indicate enhancement, inside indicate

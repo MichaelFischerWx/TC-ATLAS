@@ -1730,6 +1730,7 @@ var _subState = {
     season: 'all',                  // all | mjjaso | ndjfma
     mapMode: 'tracks',              // tracks | genesis | ri | dw
     mapAnomaly: false,              // false → raw values, true → (phase − across-all-phases mean) per cell
+    dialMetric: 'genesis',          // genesis | ace | days — what the left-hand polar dial plots
     yearMin: null,                  // inclusive lower bound (null → use mode's start year)
     yearMax: null,                  // inclusive upper bound (null → use mode's end year)
     riOverwater: true,              // RI panel: drop intervals where f0 or f1 is overland
@@ -1878,6 +1879,93 @@ function _countGenesisPerPhase() {
         if (!p) continue;       // null (out of range) OR 0 (inactive)
         perPhase[p - 1]++;
         total++;
+    }
+    return { perPhase: perPhase, total: total };
+}
+
+// ACE (Accumulated Cyclone Energy) per phase. Sums v² / 10⁴ over the
+// synoptic-time fixes (00/06/12/18 UTC) of named storms (≥ 34 kt) whose
+// date falls on a day of each phase. Filtering matches the other phase
+// metrics: basin, season, year, mode amplitude ≥ 1. Storm fixes from
+// subsynoptic times (e.g., 3-h or 1-h IBTrACS rows) are skipped so the
+// classical 6-h ACE definition is preserved regardless of source spacing.
+function _computeACEPerPhase() {
+    var modeRec = _subPhases && _subPhases.indices[_subState.mode];
+    if (!modeRec || Object.keys(allTracks).length === 0) {
+        return { perPhase: [0,0,0,0,0,0,0,0], total: 0 };
+    }
+    if (modeRec._startKey == null) modeRec._startKey = _dayKeyFromISO(modeRec.start_date);
+    var startKey = modeRec._startKey;
+    var endKey   = startKey + modeRec.phases.length - 1;
+    var perPhase = [0,0,0,0,0,0,0,0], total = 0;
+    var sids = Object.keys(allTracks);
+    for (var i = 0; i < sids.length; i++) {
+        var sid = sids[i];
+        var track = allTracks[sid];
+        if (!track || !track.length) continue;
+        var storm = _stormBySid[sid];
+        if (!storm) continue;
+        if (!_subBasinMatch(storm.basin)) continue;
+        for (var j = 0; j < track.length; j++) {
+            var f = track[j];
+            if (!f.t || f.w == null || f.w < 34) continue;
+            // Synoptic times only — hour ∈ {0, 6, 12, 18}. fix.t is
+            // 'YYYY-MM-DDTHH:MM'; chars 11-12 are HH.
+            var hh = f.t.length >= 13 ? +f.t.slice(11, 13) : 0;
+            if (hh !== 0 && hh !== 6 && hh !== 12 && hh !== 18) continue;
+            var iso = f.t.slice(0, 10);
+            var month = +iso.slice(5, 7);
+            if (!_subSeasonMatch(month)) continue;
+            if (!_subYearMatch(+iso.slice(0, 4))) continue;
+            var dk = _dayKeyFromISO(iso);
+            if (dk < startKey || dk > endKey) continue;
+            var p = _phaseOnDay(modeRec, dk);
+            if (!p) continue;
+            var ace = (f.w * f.w) / 10000;                 // 10⁴ kt²
+            perPhase[p - 1] += ace;
+            total += ace;
+        }
+    }
+    return { perPhase: perPhase, total: total };
+}
+
+// Storm-days per phase. Counts unique (storm, calendar-day, phase) tuples
+// where the storm had any synoptic fix ≥ 34 kt that day. Phase-day weight
+// for activity that's NOT intensity-weighted — complements ACE.
+function _computeStormDaysPerPhase() {
+    var modeRec = _subPhases && _subPhases.indices[_subState.mode];
+    if (!modeRec || Object.keys(allTracks).length === 0) {
+        return { perPhase: [0,0,0,0,0,0,0,0], total: 0 };
+    }
+    if (modeRec._startKey == null) modeRec._startKey = _dayKeyFromISO(modeRec.start_date);
+    var startKey = modeRec._startKey;
+    var endKey   = startKey + modeRec.phases.length - 1;
+    var perPhase = [0,0,0,0,0,0,0,0], total = 0;
+    var sids = Object.keys(allTracks);
+    for (var i = 0; i < sids.length; i++) {
+        var sid = sids[i];
+        var track = allTracks[sid];
+        if (!track || !track.length) continue;
+        var storm = _stormBySid[sid];
+        if (!storm) continue;
+        if (!_subBasinMatch(storm.basin)) continue;
+        var seenDay = null;
+        for (var j = 0; j < track.length; j++) {
+            var f = track[j];
+            if (!f.t || f.w == null || f.w < 34) continue;
+            var iso = f.t.slice(0, 10);
+            if (iso === seenDay) continue;
+            seenDay = iso;                                  // count each (sid, day) once
+            var month = +iso.slice(5, 7);
+            if (!_subSeasonMatch(month)) continue;
+            if (!_subYearMatch(+iso.slice(0, 4))) continue;
+            var dk = _dayKeyFromISO(iso);
+            if (dk < startKey || dk > endKey) continue;
+            var p = _phaseOnDay(modeRec, dk);
+            if (!p) continue;
+            perPhase[p - 1]++;
+            total++;
+        }
     }
     return { perPhase: perPhase, total: total };
 }
@@ -2289,27 +2377,47 @@ function _ensureStormBySid() {
 }
 
 // ── Renderers ───────────────────────────────────────────────────
-function _renderGenesisDial() {
+function _renderActivityDial() {
     var el = document.getElementById('sub-dial-chart');
     if (!el || typeof Plotly === 'undefined') return;
-    var gen = _countGenesisPerPhase();
+    var metric = _subState.dialMetric;
     var act = _countActiveDaysPerPhase();
+    var stats;
+    var nameSingular;          // hover noun (singular form, used for fractional ACE too)
+    var fmt;                   // value formatter for hover
+    var tracksRequired = (metric !== 'genesis');  // ACE + storm-days need allTracks
+    if (tracksRequired && Object.keys(allTracks).length === 0) {
+        el.innerHTML = '<div style="padding:20px; opacity:0.7; font-size:0.78rem;">Loading best-track fixes…</div>';
+        return;
+    }
+    if (metric === 'ace') {
+        stats = _computeACEPerPhase();
+        nameSingular = 'ACE';
+        fmt = function (v) { return v.toFixed(1); };
+    } else if (metric === 'days') {
+        stats = _computeStormDaysPerPhase();
+        nameSingular = 'Storm-days';
+        fmt = function (v) { return Math.round(v).toString(); };
+    } else {
+        stats = _countGenesisPerPhase();
+        nameSingular = 'Genesis';
+        fmt = function (v) { return Math.round(v).toString(); };
+    }
     var expected = act.total > 0
-        ? act.perPhase.map(function (d) { return d * gen.total / act.total; })
+        ? act.perPhase.map(function (d) { return d * stats.total / act.total; })
         : [0,0,0,0,0,0,0,0];
     var labels = ['1','2','3','4','5','6','7','8'];
-    var maxBar = Math.max.apply(null, gen.perPhase.concat([1]));
+    var maxBar = Math.max.apply(null, stats.perPhase.concat([1]));
     var maxExp = Math.max.apply(null, expected.concat([1]));
     var rmax = Math.max(maxBar, maxExp) * 1.15;
 
-    // Per-phase enhancement ratio for hover.
-    var ratios = gen.perPhase.map(function (c, i) {
+    var ratios = stats.perPhase.map(function (c, i) {
         return expected[i] > 0 ? (c / expected[i]) : null;
     });
-    var textArr = gen.perPhase.map(function (c, i) {
+    var textArr = stats.perPhase.map(function (c, i) {
         var r = ratios[i];
         var rStr = (r == null) ? 'n/a' : (r >= 1 ? '+' : '') + ((r - 1) * 100).toFixed(0) + '%';
-        return 'Phase ' + (i+1) + '<br>Genesis: ' + c
+        return 'Phase ' + (i+1) + '<br>' + nameSingular + ': ' + fmt(c)
              + '<br>Expected: ' + expected[i].toFixed(1)
              + '<br>Anomaly: ' + rStr;
     });
@@ -2317,14 +2425,13 @@ function _renderGenesisDial() {
     var traces = [
         {
             type: 'barpolar',
-            r: gen.perPhase,
+            r: stats.perPhase,
             theta: labels.map(function (l) { return (parseInt(l) - 1) * 45; }),
             width: Array(8).fill(40),
             marker: {
-                color: gen.perPhase.map(function (c, i) {
+                color: stats.perPhase.map(function (c, i) {
                     var r = ratios[i];
                     if (r == null) return 'rgba(150,150,150,0.5)';
-                    // Diverging: r<1 cool, r>1 warm
                     return r >= 1.0 ? '#ef4444' : '#60a5fa';
                 }),
                 line: { color: 'rgba(0,0,0,0.25)', width: 1 },
@@ -2332,7 +2439,7 @@ function _renderGenesisDial() {
             opacity: 0.85,
             hoverinfo: 'text',
             text: textArr,
-            name: 'Observed genesis',
+            name: 'Observed ' + nameSingular.toLowerCase(),
         },
         {
             type: 'scatterpolar',
@@ -2373,12 +2480,29 @@ function _renderGenesisDial() {
     delete layout.xaxis; delete layout.yaxis;
     Plotly.newPlot('sub-dial-chart', traces, layout, PLOTLY_CONFIG);
 
+    // Dial title + help text per metric
+    var titleEl = document.getElementById('sub-dial-title');
+    var helpEl  = document.getElementById('sub-dial-help');
+    if (titleEl) titleEl.textContent = ({
+        genesis: 'TC Genesis by Phase',
+        ace:     'Accumulated Cyclone Energy (ACE) by Phase',
+        days:    'Storm-Days by Phase',
+    })[metric];
+    if (helpEl) helpEl.textContent = ({
+        genesis: 'Bars show the number of named-storm genesis events whose first-fix date fell on a day of each phase (amplitude ≥ 1). Dashed ring = expected count if genesis were uniform across phases; bars outside the ring indicate enhancement, inside indicate suppression.',
+        ace:     'Bars show Accumulated Cyclone Energy (Σ v² / 10⁴) over synoptic-time fixes (00/06/12/18 UTC, v ≥ 34 kt) occurring on days of each phase. ACE is intensity-weighted — a phase with fewer but stronger storms can outscore one with many weak storms. Dashed ring = expected ACE if it were uniform across phases.',
+        days:    'Bars count (storm × calendar-day) pairs where the storm had any synoptic fix ≥ 34 kt that day, for days of each phase. A measure of TC persistence by phase that isn\'t intensity-weighted. Dashed ring = expected if storm-days were uniform across phases.',
+    })[metric];
+
     // Update event count line
     var countEl = document.getElementById('sub-event-count');
     if (countEl) {
         var modeLabel = (_subPhases.indices[_subState.mode] || {}).label || _subState.mode.toUpperCase();
-        countEl.textContent = gen.total + ' named-storm genesis events on ' + act.total
-            + ' active days (' + modeLabel + ')';
+        var totalStr;
+        if (metric === 'ace')   totalStr = stats.total.toFixed(1) + ' total ACE (10⁴ kt²)';
+        else if (metric === 'days') totalStr = stats.total.toLocaleString() + ' storm-days';
+        else                    totalStr = stats.total.toLocaleString() + ' named-storm genesis events';
+        countEl.textContent = totalStr + ' on ' + act.total + ' active days (' + modeLabel + ')';
     }
 }
 
@@ -2685,7 +2809,7 @@ function _renderTrackDensity() {
 // ── Public re-renderer (called by UI events) ────────────────────
 function _renderSubseasonal() {
     if (!_subPhases || !_subPhases.indices[_subState.mode]) return;
-    _renderGenesisDial();
+    _renderActivityDial();
     _updateMapPanelText();
     var isGenesis = (_subState.mapMode === 'genesis');
     var tracksEl = document.getElementById('sub-tracks-chart');
@@ -2707,6 +2831,9 @@ function _renderSubseasonal() {
             _ensureStormBySid();
             _renderTrackDensity();
             _renderIntensityDial();
+            // Re-render the activity dial — ACE and storm-days metrics
+            // need the tracks file that just arrived.
+            if (_subState.dialMetric !== 'genesis') _renderActivityDial();
         });
     } else {
         _ensureStormBySid();
@@ -3109,6 +3236,17 @@ function _initSubseasonalOnce() {
             });
             _ga('tc_clim_sub_mapmode', { mapMode: _subState.mapMode });
             _renderSubseasonal();
+        });
+    });
+    // Wire dial-metric toggle (Genesis count / ACE / Storm-days)
+    document.querySelectorAll('#sub-dial-metric-toggle button').forEach(function (b) {
+        b.addEventListener('click', function () {
+            _subState.dialMetric = b.dataset.subDialMetric;
+            document.querySelectorAll('#sub-dial-metric-toggle button').forEach(function (x) {
+                x.classList.toggle('active', x === b);
+            });
+            _ga('tc_clim_sub_dialmetric', { metric: _subState.dialMetric });
+            _renderActivityDial();
         });
     });
     // Wire anomaly-display checkbox
