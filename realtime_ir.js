@@ -1845,6 +1845,39 @@
         });
         map.addControl(new GenesisControl());
 
+        // Wind Barbs menu — separate so users can mix wind levels with
+        // env diagnostics (e.g. 850 mb vorticity + 200 mb wind barbs).
+        var WindsControl = L.Control.extend({
+            options: { position: 'topright' },
+            onAdd: function () {
+                var wrap = L.DomUtil.create('div', 'ir-winds-wrap');
+                wrap.style.cssText = 'display:flex;flex-direction:column;align-items:flex-end;gap:3px;';
+                L.DomEvent.disableClickPropagation(wrap);
+
+                var btn = L.DomUtil.create('button', 'ir-global-toggle-btn', wrap);
+                btn.id = 'ir-global-winds-toggle';
+                btn.textContent = 'Winds';
+                btn.title = 'Wind barbs at 850 / 700 / 500 / 200 hPa — open menu to pick levels';
+                btn.style.cssText = 'padding:6px 14px;font-family:DM Sans,sans-serif;font-size:0.72rem;font-weight:500;color:#8b9ec2;background:rgba(15,33,64,0.88);border:1px solid rgba(255,255,255,0.12);border-radius:5px;cursor:pointer;white-space:nowrap;backdrop-filter:blur(4px);';
+                btn.addEventListener('click', toggleWindsMenu);
+                btn.addEventListener('mouseenter', function () {
+                    if (!_rtWindsMenuOpen) {
+                        btn.style.background = 'rgba(30,60,110,0.9)';
+                        btn.style.color = '#c0d0ea';
+                    }
+                });
+                btn.addEventListener('mouseleave', _refreshWindsButton);
+
+                var menu = L.DomUtil.create('div', 'ir-global-winds-menu', wrap);
+                menu.id = 'ir-global-winds-menu';
+                menu.style.cssText = 'display:none;min-width:220px;background:rgba(15,33,64,0.94);border:1px solid rgba(255,255,255,0.14);border-radius:6px;backdrop-filter:blur(8px);box-shadow:0 6px 20px rgba(0,0,0,0.3);';
+                menu.innerHTML = '<div style="padding:8px 10px;font-size:0.7rem;color:#94a3b8;">Loading…</div>';
+
+                return wrap;
+            }
+        });
+        map.addControl(new WindsControl());
+
         // Environmental Analysis menu — submenu of checkable global overlays
         // (shear, mid-level RH, SST) produced by the build_env_overlays
         // Cloud Run Job and stored on GCS as global PNGs.
@@ -5974,36 +6007,118 @@
         });
     }
 
+    // Group definition for the Env Analysis menu — collapses the
+    // flat 11-layer list into ~4 short physical-category sections so
+    // the dropdown doesn't run past the bottom of the map.
+    var _ENV_MENU_GROUPS = [
+        {
+            label: 'Wind Shear',
+            match: function (L_) { return L_.name.indexOf('shear_') === 0; },
+            shortTitle: function (L_) {
+                return L_.title.replace(/\s*hPa Wind Shear\s*/i, ' hPa');
+            }
+        },
+        {
+            label: 'Vorticity',
+            match: function (L_) { return L_.name.indexOf('vort_') === 0; },
+            shortTitle: function (L_) {
+                return L_.title.replace(/\s*hPa Cyclonic Vorticity\s*/i, ' hPa');
+            }
+        },
+        {
+            label: 'Moisture & SST',
+            match: function (L_) {
+                return L_.name === 'rh_700_400' || L_.name === 'sst_oisst';
+            },
+            shortTitle: function (L_) {
+                if (L_.name === 'rh_700_400') return '700-400 hPa RH';
+                return 'Sea-Surface Temperature';
+            }
+        }
+        // Wind barbs intentionally live in their own dedicated menu so
+        // they can be mixed-and-matched with the diagnostics here
+        // (e.g. 850 mb vorticity + 200 mb winds together).
+    ];
+
     function _renderEnvMenu() {
         var menu = document.getElementById('ir-global-env-menu');
         if (!menu) return;
         var allLayers = (_rtEnvMetadata && _rtEnvMetadata.layers) || [];
-        // Environmental Analysis menu = GFS/OISST diagnostics only.
-        // Model forecast products (genesis probability fields) go in
-        // the Genesis menu. Filter by either explicit category metadata
-        // (newer pipeline output) or name prefix (back-compat).
         var layers = allLayers.filter(function (L_) {
-            if (L_.category) return L_.category === 'env' || L_.category === 'wind';
-            return L_.name && !L_.name.startsWith('genesis_');
+            // Env Analysis = diagnostics only. Winds → dedicated menu,
+            // genesis prob → Genesis Forecasts menu.
+            if (L_.category) return L_.category === 'env';
+            return L_.name
+                && !L_.name.startsWith('genesis_')
+                && !L_.name.startsWith('winds_');
         });
         if (layers.length === 0) {
             menu.innerHTML = '<div style="padding:8px 10px;font-size:0.7rem;color:#94a3b8;">'
                 + 'No env layers available yet. Pipeline runs every 6 h.</div>';
             return;
         }
-        var html = '<div style="padding:6px 10px 4px;font-size:0.62rem;color:#94a3b8;text-transform:uppercase;letter-spacing:0.04em;">Layers</div>';
-        for (var i = 0; i < layers.length; i++) {
-            var L_ = layers[i];
-            var isOn = !!_rtEnvActive[L_.name];
-            var validShort = (L_.valid_time || '').replace('T', ' ').replace(':00:00Z', 'Z');
-            html += '<label style="display:flex;align-items:center;gap:8px;padding:5px 10px;cursor:pointer;font-size:0.72rem;color:#c7d2e0;">'
+
+        // Compact-row HTML helper. Title is the level-only short form;
+        // units are right-aligned to declutter.
+        function rowHtml(L_, shortTitle, isOn) {
+            return '<label style="display:flex;align-items:center;gap:8px;padding:3px 10px;'
+                + 'cursor:pointer;font-size:0.72rem;color:#c7d2e0;line-height:1.25;">'
                 + '<input type="checkbox" data-env-layer="' + L_.name + '"'
                 + (isOn ? ' checked' : '') + ' style="cursor:pointer;">'
-                + '<span style="flex:1;"><b>' + L_.title + '</b>'
-                + '<span style="font-size:0.62rem;color:#7f8a9a;display:block;">'
-                + 'valid ' + validShort + ' &middot; ' + L_.units + '</span>'
-                + '</span></label>';
+                + '<span style="flex:1;">' + shortTitle + '</span>'
+                + '<span style="font-size:0.6rem;color:#7f8a9a;">' + (L_.units || '') + '</span>'
+                + '</label>';
         }
+
+        // One shared valid-time line at the top — all layers come from
+        // the same init cycle so per-row labels are redundant noise.
+        var validSamples = layers.map(function (L_) { return L_.valid_time; }).filter(Boolean);
+        var validShort = '';
+        if (validSamples.length) {
+            // Pick the most-common valid time among the layers (env all share
+            // the same GFS cycle; OISST is offset by a day but minority).
+            var counts = {};
+            for (var v of validSamples) counts[v] = (counts[v] || 0) + 1;
+            var top = Object.keys(counts).sort(function (a, b) { return counts[b] - counts[a]; })[0];
+            validShort = (top || '').replace('T', ' ').replace(':00:00Z', 'Z');
+        }
+
+        var html = '';
+        html += '<div style="padding:6px 10px 6px;font-size:0.6rem;color:#7f8a9a;'
+              + 'border-bottom:1px solid rgba(255,255,255,0.08);">'
+              + 'valid <span style="color:#c7d2e0;">' + validShort + '</span></div>';
+
+        // Render each non-empty group as a section.
+        var anyRendered = false;
+        for (var gi = 0; gi < _ENV_MENU_GROUPS.length; gi++) {
+            var grp = _ENV_MENU_GROUPS[gi];
+            var inGroup = layers.filter(grp.match);
+            if (inGroup.length === 0) continue;
+            anyRendered = true;
+            html += '<div style="padding:6px 10px 2px;font-size:0.6rem;color:#94a3b8;'
+                  + 'text-transform:uppercase;letter-spacing:0.05em;font-weight:600;">'
+                  + grp.label + '</div>';
+            for (var li = 0; li < inGroup.length; li++) {
+                var L_ = inGroup[li];
+                html += rowHtml(L_, grp.shortTitle(L_), !!_rtEnvActive[L_.name]);
+            }
+        }
+        // Any layer not matched by a group falls into "Other".
+        var ungrouped = layers.filter(function (L_) {
+            return !_ENV_MENU_GROUPS.some(function (g) { return g.match(L_); });
+        });
+        if (ungrouped.length) {
+            html += '<div style="padding:6px 10px 2px;font-size:0.6rem;color:#94a3b8;'
+                  + 'text-transform:uppercase;letter-spacing:0.05em;font-weight:600;">Other</div>';
+            for (var ui = 0; ui < ungrouped.length; ui++) {
+                var Lu = ungrouped[ui];
+                html += rowHtml(Lu, Lu.title, !!_rtEnvActive[Lu.name]);
+            }
+        }
+        if (!anyRendered && !ungrouped.length) {
+            html += '<div style="padding:8px 10px;font-size:0.7rem;color:#94a3b8;">No layers matched.</div>';
+        }
+
         html += '<div style="padding:6px 10px 8px;border-top:1px solid rgba(255,255,255,0.08);margin-top:4px;">'
             + '<label style="display:flex;align-items:center;gap:6px;font-size:0.65rem;color:#94a3b8;">Opacity '
             + '<input id="ir-global-env-opacity" type="range" min="0" max="100" '
@@ -6014,7 +6129,6 @@
 
         menu.innerHTML = html;
 
-        // Wire up handlers
         var checkboxes = menu.querySelectorAll('input[data-env-layer]');
         for (var j = 0; j < checkboxes.length; j++) {
             checkboxes[j].addEventListener('change', function (e) {
@@ -6083,6 +6197,105 @@
             }
         }
         box.innerHTML = html;
+    }
+
+    // ── Wind Barbs menu (separate from Env Analysis) ─────────
+    //
+    //  Lives in its own dropdown so users can mix-and-match wind
+    //  levels with the env diagnostics (e.g. 850 mb vorticity contours
+    //  + 200 mb wind barbs).
+
+    var _rtWindsMenuOpen = false;
+
+    function toggleWindsMenu() {
+        _rtWindsMenuOpen = !_rtWindsMenuOpen;
+        var menu = document.getElementById('ir-global-winds-menu');
+        var btn = document.getElementById('ir-global-winds-toggle');
+        if (menu) menu.style.display = _rtWindsMenuOpen ? '' : 'none';
+        if (btn) {
+            var anyOn = !!(_rtEnvActive.winds_850 || _rtEnvActive.winds_700
+                || _rtEnvActive.winds_500 || _rtEnvActive.winds_200);
+            if (_rtWindsMenuOpen || anyOn) {
+                btn.style.background = 'rgba(0, 229, 255, 0.18)';
+                btn.style.color = '#7fefff';
+                btn.style.borderColor = 'rgba(0, 229, 255, 0.50)';
+            } else {
+                btn.style.background = 'rgba(15,33,64,0.88)';
+                btn.style.color = '#8b9ec2';
+                btn.style.borderColor = 'rgba(255,255,255,0.12)';
+            }
+        }
+        if (_rtWindsMenuOpen && !_rtEnvMetadata) {
+            _loadEnvMetadata().then(_renderWindsMenu);
+        } else if (_rtWindsMenuOpen) {
+            _renderWindsMenu();
+        }
+    }
+    window.toggleWindsMenu = toggleWindsMenu;
+
+    function _renderWindsMenu() {
+        var menu = document.getElementById('ir-global-winds-menu');
+        if (!menu) return;
+        var allLayers = (_rtEnvMetadata && _rtEnvMetadata.layers) || [];
+        var winds = allLayers.filter(function (L_) {
+            if (L_.category) return L_.category === 'wind';
+            return L_.name && L_.name.startsWith('winds_');
+        });
+        if (winds.length === 0) {
+            menu.innerHTML = '<div style="padding:8px 10px;font-size:0.7rem;color:#94a3b8;">'
+                + 'No wind layers available yet.</div>';
+            return;
+        }
+
+        var html = '';
+        html += '<div style="padding:6px 10px 2px;font-size:0.6rem;color:#94a3b8;'
+              + 'text-transform:uppercase;letter-spacing:0.05em;font-weight:600;">Wind Barbs</div>';
+        for (var i = 0; i < winds.length; i++) {
+            var L_ = winds[i];
+            var isOn = !!_rtEnvActive[L_.name];
+            var levelLabel = L_.title.replace(/\s*hPa Wind Barbs\s*/i, ' hPa');
+            html += '<label style="display:flex;align-items:center;gap:8px;padding:3px 10px;'
+                  + 'cursor:pointer;font-size:0.72rem;color:#c7d2e0;line-height:1.25;">'
+                  + '<input type="checkbox" data-winds-layer="' + L_.name + '"'
+                  + (isOn ? ' checked' : '') + ' style="cursor:pointer;">'
+                  + '<span style="flex:1;">' + levelLabel + '</span>'
+                  + '<span style="font-size:0.6rem;color:#7f8a9a;">' + (L_.units || '') + '</span>'
+                  + '</label>';
+        }
+        html += '<div style="padding:4px 10px 8px;font-size:0.55rem;color:#7f8a9a;'
+              + 'border-top:1px solid rgba(255,255,255,0.08);margin-top:6px;line-height:1.4;">'
+              + 'Standard met-convention barbs: flag = 50 kt, full bar = 10 kt, '
+              + 'half bar = 5 kt. NH on left, SH on right.</div>';
+
+        menu.innerHTML = html;
+
+        var checkboxes = menu.querySelectorAll('input[data-winds-layer]');
+        for (var j = 0; j < checkboxes.length; j++) {
+            checkboxes[j].addEventListener('change', function (e) {
+                var name = e.target.getAttribute('data-winds-layer');
+                var layer = winds.filter(function (L_) { return L_.name === name; })[0];
+                if (!layer) return;
+                if (e.target.checked) _activateEnvLayer(layer);
+                else _deactivateEnvLayer(name);
+                _refreshWindsButton();
+            });
+        }
+    }
+
+    function _refreshWindsButton() {
+        var btn = document.getElementById('ir-global-winds-toggle');
+        if (!btn) return;
+        var anyOn = !!(_rtEnvActive.winds_850 || _rtEnvActive.winds_700
+            || _rtEnvActive.winds_500 || _rtEnvActive.winds_200);
+        if (_rtWindsMenuOpen || anyOn) {
+            btn.style.background = 'rgba(0, 229, 255, 0.18)';
+            btn.style.color = '#7fefff';
+            btn.style.borderColor = 'rgba(0, 229, 255, 0.50)';
+        } else {
+            btn.style.background = 'rgba(15,33,64,0.88)';
+            btn.style.color = '#8b9ec2';
+            btn.style.borderColor = 'rgba(255,255,255,0.12)';
+        }
     }
 
     function toggleEnvMenu() {

@@ -272,6 +272,11 @@ class LayerSpec:
     # client-side so the Env Analysis menu doesn't mix observation
     # diagnostics with model forecast products.
     category: str = "env"
+    # If set, overrides the linspace(vmin, vmax, step+1) contour levels.
+    # Useful for fields with a wide dynamic range (vorticity) where a
+    # finer-then-coarser ramp like [1, 2, 4, 6, 8, 10, 15, 20, 25]
+    # reads better than evenly-spaced levels.
+    levels_override: Optional[list] = None
 
 
 # Each 0.25° cell spans ~27.8 km in the latitude direction (and at the
@@ -340,8 +345,11 @@ def _render_contour_png(field: np.ndarray, spec: LayerSpec) -> bytes:
     ax.set_xlim(0, NX - 1)
     ax.set_ylim(NY - 1, 0)
 
-    n_steps = int(round((spec.vmax - spec.vmin) / spec.step)) + 1
-    levels = np.linspace(spec.vmin, spec.vmax, n_steps)
+    if spec.levels_override:
+        levels = np.asarray(spec.levels_override, dtype=np.float64)
+    else:
+        n_steps = int(round((spec.vmax - spec.vmin) / spec.step)) + 1
+        levels = np.linspace(spec.vmin, spec.vmax, n_steps)
     ax.contour(
         np.arange(NX), np.arange(NY), field,
         levels=levels,
@@ -434,8 +442,11 @@ def render_contour_geojson(field: np.ndarray, spec: LayerSpec) -> bytes:
 
     fig = plt.figure()
     ax = fig.add_subplot(111)
-    n_steps = int(round((spec.vmax - spec.vmin) / spec.step)) + 1
-    levels = np.linspace(spec.vmin, spec.vmax, n_steps)
+    if spec.levels_override:
+        levels = np.asarray(spec.levels_override, dtype=np.float64)
+    else:
+        n_steps = int(round((spec.vmax - spec.vmin) / spec.step)) + 1
+        levels = np.linspace(spec.vmin, spec.vmax, n_steps)
     cs = ax.contour(
         np.arange(NX), np.arange(NY), field,
         levels=levels,
@@ -601,8 +612,11 @@ def upload_layer(spec: LayerSpec, field: np.ndarray) -> bool:
     geojson_blob = bucket.blob(f"{GCS_PREFIX}/{spec.name}/latest.geojson")
     meta_blob = bucket.blob(f"{GCS_PREFIX}/{spec.name}/metadata.json")
 
-    n_steps = int(round((spec.vmax - spec.vmin) / spec.step)) + 1
-    levels = [round(spec.vmin + i * spec.step, 2) for i in range(n_steps)]
+    if spec.levels_override:
+        levels = [float(L) for L in spec.levels_override]
+    else:
+        n_steps = int(round((spec.vmax - spec.vmin) / spec.step)) + 1
+        levels = [round(spec.vmin + i * spec.step, 2) for i in range(n_steps)]
     level_colors = _level_colors(spec.cmap, levels, spec.vmin, spec.vmax)
 
     # Compute the data PNG's grid (downsampled to 0.5° to keep the byte
@@ -997,11 +1011,11 @@ def build_vorticity(date_str: str, hour_str: str, level: int
     cyclonic = vort * sign_lat[:, None]
     cyclonic *= 1e5  # → 10⁻⁵ s⁻¹
 
-    # Mask anticyclonic + sub-threshold cells so the contour set
-    # focuses on TC-relevant cyclonic features. Threshold matches the
-    # lowest contour level so values just-above-zero (synoptic noise)
-    # don't crowd the rendered set.
-    cyclonic = np.where(cyclonic >= 2.0, cyclonic, np.nan).astype(np.float32)
+    # Mask anticyclonic cells only — keep all positive values so the
+    # contour algorithm has cells both above and below every level
+    # (otherwise the lowest level can't be drawn because there's no
+    # transition below it).
+    cyclonic = np.where(cyclonic > 0.0, cyclonic, np.nan).astype(np.float32)
     cyclonic = regrid_to_global(cyclonic)
 
     valid = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}T{hour_str}:00:00Z"
@@ -1009,18 +1023,22 @@ def build_vorticity(date_str: str, hour_str: str, level: int
         name=f"vort_{level}",
         title=f"{level} hPa Cyclonic Vorticity",
         units="10⁻⁵ s⁻¹",
-        vmin=2,
-        vmax=30,
-        step=4,
+        vmin=0,
+        vmax=25,
+        step=5,
         cmap="Reds",
+        # Non-uniform contour ramp: tight at low end where most
+        # synoptic-scale cyclonic features live, coarser at the high
+        # end where only TC-scale vortices reach.
+        levels_override=[1, 2, 4, 6, 8, 10, 15, 20, 25],
         valid_time=valid,
         description=(
             f"Relative vorticity ζ at {level} hPa from the latest GFS "
             f"analysis, after a 200 km disc smooth of u, v. Multiplied "
             f"by sign(latitude) so positive = cyclonic globally; "
-            f"anticyclonic cells and weak cyclonic background (< 2 × "
-            f"10⁻⁵ s⁻¹) are masked to keep the contour set focused on "
-            f"TC-favorable circulation."
+            f"anticyclonic cells are masked. Contour set [1, 2, 4, 6, "
+            f"8, 10, 15, 20, 25] × 10⁻⁵ s⁻¹ — finer near synoptic "
+            f"background, coarser at TC-vortex scales."
         ),
     )
     return cyclonic if upload_layer(spec, cyclonic) else None
