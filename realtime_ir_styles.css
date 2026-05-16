@@ -1036,6 +1036,115 @@ html, body { margin: 0; padding: 0; }
     border-color: rgba(74, 155, 110, 0.4);
 }
 
+/* ── Global IR animation bar (bottom-left of RT map) ─────────── */
+/* Style mirrors the .ir-bar pattern on the Global Archive storm
+   detail page so the RT monitor's global-IR scrubber feels like
+   the rest of the site — step buttons + play + draggable slider
+   + monospace timestamp + speed pill — instead of the bespoke
+   inline-styled bar that came before. */
+.rt-anim-bar {
+    background: rgba(22, 27, 36, 0.92);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 6px;
+    padding: 5px 10px;
+    font-family: 'DM Sans', sans-serif;
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+    margin-bottom: 36px;
+    min-width: 360px;
+    max-width: min(90vw, 540px);
+}
+.rt-anim-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.rt-anim-btn {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    color: #c0d0ea;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 0.74rem;
+    line-height: 1;
+    padding: 3px 8px;
+    border-radius: 4px;
+    min-width: 24px;
+    height: 22px;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.rt-anim-btn:hover {
+    background: rgba(74, 155, 110, 0.18);
+    border-color: rgba(74, 155, 110, 0.45);
+    color: #6cb78a;
+}
+.rt-anim-play.active {
+    background: rgba(74, 155, 110, 0.22);
+    border-color: rgba(74, 155, 110, 0.55);
+    color: #6cb78a;
+}
+.rt-anim-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+.rt-anim-slider {
+    flex: 1;
+    min-width: 110px;
+    -webkit-appearance: none;
+    appearance: none;
+    height: 4px;
+    background: rgba(255, 255, 255, 0.10);
+    border-radius: 2px;
+    outline: none;
+    cursor: pointer;
+    margin: 0 4px;
+}
+.rt-anim-slider:disabled { opacity: 0.4; cursor: not-allowed; }
+.rt-anim-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #4a9b6e;
+    cursor: pointer;
+    border: 2px solid #161b24;
+    margin-top: 0;
+    transition: transform 0.12s;
+}
+.rt-anim-slider::-webkit-slider-thumb:hover { transform: scale(1.15); }
+.rt-anim-slider::-moz-range-thumb {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #4a9b6e;
+    cursor: pointer;
+    border: 2px solid #161b24;
+}
+.rt-anim-dt {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.66rem;
+    color: #e2e8f0;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
+    min-width: 102px;
+    text-align: right;
+    white-space: nowrap;
+}
+.rt-anim-speed {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.62rem;
+    font-weight: 600;
+    min-width: 32px;
+    padding: 3px 6px;
+}
+.rt-anim-status {
+    font-size: 0.62rem;
+    color: #94a3b8;
+    margin-left: 4px;
+}
+
 /* ── Contour value labels (env GeoJSON layers) ───────────────── */
 /* L.divIcon HTML labels placed at each contour line's midpoint. They
    inherit DM Sans, stay crisp at any zoom (browser re-renders text),

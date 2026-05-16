@@ -1593,6 +1593,52 @@
             timeEl.textContent = fmtUTC(globalAnimFrameTimes[idx]);
         }
 
+        _refreshAnimSlider();
+    }
+
+    /** Keep the rt-anim slider, play button, and speed pill in sync
+     *  with globalAnim* state. Called whenever a frame is shown, the
+     *  animation starts/pauses, frames finish loading, or cleanup
+     *  fires. */
+    function _refreshAnimSlider() {
+        var slider = document.getElementById('ir-global-anim-slider');
+        var playBtn = document.getElementById('ir-global-anim-play');
+        var speedBtn = document.getElementById('ir-global-anim-speed');
+        var statusEl = document.getElementById('ir-global-anim-status');
+        var timeEl = document.getElementById('ir-global-anim-time');
+
+        var nFrames = globalAnimFrameLayers.length;
+        if (slider) {
+            if (nFrames > 0) {
+                slider.disabled = false;
+                slider.max = String(nFrames - 1);
+                slider.value = String(globalAnimIndex);
+            } else {
+                slider.disabled = true;
+                slider.max = '0';
+                slider.value = '0';
+            }
+        }
+        if (playBtn) {
+            playBtn.innerHTML = globalAnimPlaying ? '&#10074;&#10074;' : '&#9654;';
+            playBtn.title = globalAnimPlaying ? 'Pause' :
+                (nFrames > 0 ? 'Resume animation' : 'Load & play global animation');
+            playBtn.classList.toggle('active', globalAnimPlaying);
+        }
+        if (speedBtn) {
+            speedBtn.textContent = GLOBAL_ANIM_SPEEDS[globalAnimSpeedIdx].label;
+        }
+        if (statusEl) {
+            if (globalAnimLoading) {
+                statusEl.textContent =
+                    'loading ' + globalAnimLoaded + '/' + globalAnimFrameTimes.length;
+            } else if (nFrames > 0) {
+                statusEl.textContent = (globalAnimIndex + 1) + '/' + nFrames;
+            } else {
+                statusEl.textContent = '';
+            }
+        }
+        if (timeEl && nFrames === 0) timeEl.textContent = '—';
     }
 
     /** Step to next global animation frame */
@@ -1636,8 +1682,7 @@
     /** Cycle to the next animation speed and restart if playing */
     function cycleGlobalAnimSpeed() {
         globalAnimSpeedIdx = (globalAnimSpeedIdx + 1) % GLOBAL_ANIM_SPEEDS.length;
-        var speedBtn = document.getElementById('ir-global-anim-speed');
-        if (speedBtn) speedBtn.textContent = GLOBAL_ANIM_SPEEDS[globalAnimSpeedIdx].label;
+        _refreshAnimSlider();
         // Speed change takes effect automatically on next rAF tick (no restart needed)
     }
 
@@ -1677,30 +1722,23 @@
         updateGlobalAnimControls('idle');
     }
 
-    /** Update the global animation control panel state.
-     *  States: 'idle', 'loading', 'ready', 'playing' */
+    /** Update the global animation control panel state. State transitions
+     *  ('idle', 'loading', 'ready', 'playing') are passed in so the
+     *  loading-pct case can show a percentage, but most of the visual
+     *  state is driven by the globalAnim* booleans via _refreshAnimSlider. */
     function updateGlobalAnimControls(state, pct) {
         var panel = document.getElementById('ir-global-anim-panel');
         if (!panel) return;
-
         var playBtn = document.getElementById('ir-global-anim-play');
-        var timeEl = document.getElementById('ir-global-anim-time');
         var statusEl = document.getElementById('ir-global-anim-status');
 
-        if (state === 'idle') {
-            if (playBtn) { playBtn.innerHTML = '&#9654;'; playBtn.title = 'Load & play global animation'; }
-            if (timeEl) timeEl.textContent = '';
-            if (statusEl) statusEl.textContent = '';
-        } else if (state === 'loading') {
+        if (state === 'loading') {
             if (playBtn) { playBtn.innerHTML = '&#8987;'; playBtn.title = 'Loading frames\u2026'; playBtn.disabled = true; }
             if (statusEl) statusEl.textContent = (pct != null ? pct + '%' : 'Loading\u2026');
-        } else if (state === 'ready') {
-            if (playBtn) { playBtn.innerHTML = '&#9654;'; playBtn.title = 'Play'; playBtn.disabled = false; }
-            if (statusEl) statusEl.textContent = (globalAnimIndex + 1) + '/' + globalAnimFrameLayers.length;
-        } else if (state === 'playing') {
-            if (playBtn) { playBtn.innerHTML = '&#9646;&#9646;'; playBtn.title = 'Pause'; playBtn.disabled = false; }
-            if (statusEl) statusEl.textContent = '';
+        } else {
+            if (playBtn) playBtn.disabled = false;
         }
+        _refreshAnimSlider();
     }
 
     /** Build an array of GIBS time strings for animation (lookback_hours, every 30 min).
@@ -2017,70 +2055,48 @@
         });
         map.addControl(new TbColorbar());
 
-        // Add global animation control panel (bottom-right, above status bar)
+        // Global IR animation slider — mirrors the .ir-bar pattern on
+        // the Global Archive storm detail page (step buttons + play +
+        // draggable scrubber + monospace timestamp + speed pill) so
+        // this scrubber feels like the rest of the site.
         var AnimPanel = L.Control.extend({
             options: { position: 'bottomleft' },
             onAdd: function () {
-                var container = L.DomUtil.create('div', 'ir-global-anim-panel');
-                container.id = 'ir-global-anim-panel';
-                container.style.cssText = 'display:flex;align-items:center;gap:6px;padding:5px 10px;font-family:DM Sans,sans-serif;font-size:0.72rem;color:#8b9ec2;background:rgba(22,27,36,0.92);border:1px solid rgba(255,255,255,0.12);border-radius:5px;backdrop-filter:blur(4px);margin-bottom:36px;';
-                L.DomEvent.disableClickPropagation(container);
+                var bar = L.DomUtil.create('div', 'rt-anim-bar');
+                bar.id = 'ir-global-anim-panel';
+                L.DomEvent.disableClickPropagation(bar);
+                L.DomEvent.disableScrollPropagation(bar);
 
-                // Prev button
-                var prevBtn = L.DomUtil.create('button', '', container);
+                var row = L.DomUtil.create('div', 'rt-anim-row', bar);
+
+                var prevBtn = L.DomUtil.create('button', 'rt-anim-btn rt-anim-step', row);
                 prevBtn.innerHTML = '&#9664;';
                 prevBtn.title = 'Previous frame';
-                prevBtn.style.cssText = 'background:none;border:none;color:#8b9ec2;cursor:pointer;font-size:0.7rem;padding:2px 4px;';
                 prevBtn.addEventListener('click', function () {
                     stopGlobalAnimation();
                     prevGlobalFrame();
                 });
 
-                // Play/Pause button
-                var playBtn = L.DomUtil.create('button', '', container);
+                var playBtn = L.DomUtil.create('button', 'rt-anim-btn rt-anim-play', row);
                 playBtn.id = 'ir-global-anim-play';
                 playBtn.innerHTML = '&#9654;';
                 playBtn.title = 'Load & play global animation';
-                playBtn.style.cssText = 'background:none;border:none;color:#60a5fa;cursor:pointer;font-size:0.85rem;padding:2px 6px;';
                 playBtn.addEventListener('click', toggleGlobalAnimation);
 
-                // Next button
-                var nextBtn = L.DomUtil.create('button', '', container);
+                var nextBtn = L.DomUtil.create('button', 'rt-anim-btn rt-anim-step', row);
                 nextBtn.innerHTML = '&#9654;';
                 nextBtn.title = 'Next frame';
-                nextBtn.style.cssText = 'background:none;border:none;color:#8b9ec2;cursor:pointer;font-size:0.7rem;padding:2px 4px;';
                 nextBtn.addEventListener('click', function () {
                     stopGlobalAnimation();
                     nextGlobalFrame();
                 });
 
-                // Time display
-                var timeSpan = L.DomUtil.create('span', '', container);
-                timeSpan.id = 'ir-global-anim-time';
-                timeSpan.style.cssText = 'color:#e2e8f0;font-weight:500;font-size:0.68rem;letter-spacing:0.03em;min-width:90px;';
-
-                // Speed toggle button
-                var speedBtn = L.DomUtil.create('button', '', container);
-                speedBtn.id = 'ir-global-anim-speed';
-                speedBtn.textContent = GLOBAL_ANIM_SPEEDS[globalAnimSpeedIdx].label;
-                speedBtn.title = 'Cycle animation speed';
-                speedBtn.style.cssText = 'background:rgba(96,165,250,0.15);border:1px solid rgba(96,165,250,0.3);color:#60a5fa;cursor:pointer;font-size:0.6rem;font-weight:600;padding:1px 6px;border-radius:3px;font-family:JetBrains Mono,monospace;';
-                speedBtn.addEventListener('click', cycleGlobalAnimSpeed);
-
-                // Status display
-                var statusSpan = L.DomUtil.create('span', '', container);
-                statusSpan.id = 'ir-global-anim-status';
-                statusSpan.style.cssText = 'color:#64748b;font-size:0.65rem;';
-
-                // Stop/reset button
-                var stopBtn = L.DomUtil.create('button', '', container);
+                var stopBtn = L.DomUtil.create('button', 'rt-anim-btn rt-anim-stop', row);
                 stopBtn.innerHTML = '&#9632;';
                 stopBtn.title = 'Stop animation and return to latest';
-                stopBtn.style.cssText = 'background:none;border:none;color:#8b9ec2;cursor:pointer;font-size:0.65rem;padding:2px 4px;';
                 stopBtn.addEventListener('click', function () {
                     if (globalAnimFrameLayers.length === 0) return;
                     cleanupGlobalAnimation();
-                    // Restore static single-frame layer (with per-satellite times for IR)
                     if (latestGIBSTime) {
                         if (globalProduct === 'geocolor') {
                             var visLyr = createCompositeGIBSLayerVis(latestGIBSTime, 0.75);
@@ -2093,9 +2109,38 @@
                             gibsIRLayers = [irLyr];
                         }
                     }
+                    _refreshAnimSlider();
                 });
 
-                return container;
+                var slider = L.DomUtil.create('input', 'rt-anim-slider', row);
+                slider.id = 'ir-global-anim-slider';
+                slider.type = 'range';
+                slider.min = '0';
+                slider.max = '0';
+                slider.value = '0';
+                slider.disabled = true;
+                slider.title = 'Scrub through loaded animation frames';
+                slider.addEventListener('input', function () {
+                    if (!globalAnimReady) return;
+                    stopGlobalAnimation();
+                    var idx = parseInt(slider.value, 10);
+                    if (!isNaN(idx)) showGlobalAnimFrame(idx);
+                });
+
+                var dt = L.DomUtil.create('span', 'rt-anim-dt', row);
+                dt.id = 'ir-global-anim-time';
+                dt.textContent = '—';
+
+                var speedBtn = L.DomUtil.create('button', 'rt-anim-btn rt-anim-speed', row);
+                speedBtn.id = 'ir-global-anim-speed';
+                speedBtn.textContent = GLOBAL_ANIM_SPEEDS[globalAnimSpeedIdx].label;
+                speedBtn.title = 'Cycle animation speed';
+                speedBtn.addEventListener('click', cycleGlobalAnimSpeed);
+
+                var statusSpan = L.DomUtil.create('span', 'rt-anim-status', row);
+                statusSpan.id = 'ir-global-anim-status';
+
+                return bar;
             }
         });
         map.addControl(new AnimPanel());
