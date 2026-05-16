@@ -474,6 +474,20 @@
                                             title="Mean signed 24-h ΔVmax per 5° bin — diverging colormap, blue = weakening tendency, red = intensification. Highlights regions where the active phase suppresses or supports growth.">Mean ΔVmax</button>
                                 </div>
                             </div>
+                            <!-- Anomaly toggle. When on, every map mode displays
+                                 (this-phase − mean-across-all-8-phases) per cell with a
+                                 diverging colormap. Reveals which phases are unusually
+                                 enhanced/suppressed at each location vs the global pattern. -->
+                            <div>
+                                <label class="field-label" style="display:block; margin-bottom:3px; font-size:0.66rem; opacity:0.75;">Display</label>
+                                <label style="display:inline-flex; align-items:center; gap:6px; cursor:pointer; font-size:0.72rem;
+                                              padding:4px 10px; border-radius:12px; background: var(--surface);
+                                              border:1px solid var(--border);"
+                                       title="Subtract the across-all-phases mean from each cell, per phase. Diverging colormap: red = above the cross-phase mean (this phase is enhanced there), blue = below (suppressed). Reveals phase-specific anomalies vs the climatological pattern.">
+                                    <input type="checkbox" id="sub-mapanom">
+                                    <span>Show as anomaly</span>
+                                </label>
+                            </div>
                             <p class="field-help" id="sub-tracks-help" style="margin:0; flex:1 1 360px; font-size:0.7rem;">
                                 Each panel shows the spatial density of 6-hourly best-track fixes (≥ 34 kt) occurring
                                 on days of that phase. Density is normalized per panel so the warmest cell in each

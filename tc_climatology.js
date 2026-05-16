@@ -1728,7 +1728,8 @@ var _subState = {
     mode: 'mjo',                    // mjo | mjo_omi | bsiso1 | bsiso2
     basin: 'ALL',                   // ALL | NA | EP | WP | NI | SI | SP
     season: 'all',                  // all | mjjaso | ndjfma
-    mapMode: 'tracks',              // tracks | genesis
+    mapMode: 'tracks',              // tracks | genesis | ri | dw
+    mapAnomaly: false,              // false → raw values, true → (phase − across-all-phases mean) per cell
     yearMin: null,                  // inclusive lower bound (null → use mode's start year)
     yearMax: null,                  // inclusive upper bound (null → use mode's end year)
     riOverwater: true,              // RI panel: drop intervals where f0 or f1 is overland
@@ -1969,6 +1970,62 @@ function _gridsToArrays(grids, BIN) {
         });
         return { lats: lats, lons: lons, cnts: cnts };
     });
+}
+
+// Convert a per-phase density array into per-phase anomalies relative to
+// the across-all-phases mean at each cell. `treatMissingAsZero`:
+//   true  → count-based fields (tracks/genesis/RI): cells absent from a
+//           phase contribute 0 to the cross-phase mean, so the anomaly
+//           there is (0 − mean) = negative. Reflects "this phase has no
+//           events at this cell while other phases do."
+//   false → mean-based fields (ΔVmax): cells absent from a phase carry
+//           no information; drop them from the mean and the per-phase
+//           output (don't fabricate zero-anomaly cells where there were
+//           no samples in the first place).
+function _applyAnomalyToDensity(density, treatMissingAsZero) {
+    if (!density) return density;
+    var union = new Map();
+    for (var p = 0; p < 8; p++) {
+        var d = density[p];
+        for (var i = 0; i < d.lats.length; i++) {
+            var key = d.lats[i] + ',' + d.lons[i];
+            var rec = union.get(key);
+            if (!rec) {
+                rec = { lat: d.lats[i], lon: d.lons[i], vals: new Array(8) };
+                union.set(key, rec);
+            }
+            rec.vals[p] = d.cnts[i];
+        }
+    }
+    var means = new Map();
+    union.forEach(function (rec, key) {
+        var sum = 0, n = 0;
+        for (var p = 0; p < 8; p++) {
+            var v = rec.vals[p];
+            if (v == null || !Number.isFinite(v)) {
+                if (treatMissingAsZero) { sum += 0; n++; }
+            } else {
+                sum += v; n++;
+            }
+        }
+        means.set(key, n > 0 ? sum / n : 0);
+    });
+    var out = [];
+    for (var pi = 0; pi < 8; pi++) {
+        var lats = [], lons = [], cnts = [];
+        union.forEach(function (rec, key) {
+            var raw = rec.vals[pi];
+            if (raw == null || !Number.isFinite(raw)) {
+                if (!treatMissingAsZero) return;
+                raw = 0;
+            }
+            lats.push(rec.lat);
+            lons.push(rec.lon);
+            cnts.push(raw - means.get(key));
+        });
+        out.push({ lats: lats, lons: lons, cnts: cnts });
+    }
+    return out;
 }
 
 // Spatial density of RI starting points per phase. Same 5° bins as the
@@ -2426,6 +2483,7 @@ function _renderTrackDensity() {
     var isGenesis = (mm === 'genesis');
     var isRI      = (mm === 'ri');
     var isDw      = (mm === 'dw');
+    var isAnom    = !!_subState.mapAnomaly;
     var density;
     if (isGenesis) density = _buildGenesisDensityPerPhase();
     else if (isRI) density = _buildRIDensityPerPhase();
@@ -2437,6 +2495,7 @@ function _renderTrackDensity() {
             + ' unavailable.</div>';
         return;
     }
+    if (isAnom) density = _applyAnomalyToDensity(density, !isDw);
     // Clear any leftover loading-placeholder DIV. Plotly.newPlot manages its
     // own subtree but does not remove siblings, so a stray Loading… div from
     // _renderSubseasonal's pre-load placeholder can persist after the plot
@@ -2501,7 +2560,35 @@ function _renderTrackDensity() {
         var cells = density[p - 1];
         if (!cells.cnts.length) continue;
         var colorscale, color, cmin, cmax, hoverText;
-        if (isDw) {
+        if (isAnom) {
+            // Diverging palette anchored at 0. Use per-mode symmetric range
+            // calibrated to the cross-panel max-abs so all 8 phases share a
+            // colorbar — phase-to-phase comparisons stay honest.
+            var absMax = 0;
+            for (var pp = 0; pp < 8; pp++) {
+                var ca = density[pp].cnts;
+                for (var ii = 0; ii < ca.length; ii++) {
+                    var av = Math.abs(ca[ii]);
+                    if (av > absMax) absMax = av;
+                }
+            }
+            if (absMax === 0) absMax = 1;                       // degenerate
+            color = cells.cnts;
+            cmin = -absMax; cmax = absMax;
+            colorscale = [
+                [0.00, 'rgba(30,64,175,0.95)'],
+                [0.30, 'rgba(96,165,250,0.70)'],
+                [0.48, 'rgba(220,220,220,0.45)'],
+                [0.52, 'rgba(220,220,220,0.45)'],
+                [0.70, 'rgba(251,191,36,0.80)'],
+                [1.00, 'rgba(220,38,38,0.95)'],
+            ];
+            var unitForMode = (isDw ? ' kt/24 h' : '');
+            hoverText = cells.cnts.map(function (v) {
+                var sign = v >= 0 ? '+' : '';
+                return sign + v.toFixed(isDw ? 1 : 2) + unitForMode + ' vs phase mean';
+            });
+        } else if (isDw) {
             // Diverging scale anchored at 0 kt. Range ±15 kt/24h covers
             // typical means; clamp outliers visually.
             var maxAbs = 15;
@@ -2633,6 +2720,7 @@ function _updateMapPanelText() {
     var titleEl = document.getElementById('sub-tracks-title');
     var helpEl  = document.getElementById('sub-tracks-help');
     var mm = _subState.mapMode;
+    var isAnom = !!_subState.mapAnomaly;
     var title, help;
     if (mm === 'genesis') {
         title = 'Genesis Point Density by Phase';
@@ -2646,6 +2734,10 @@ function _updateMapPanelText() {
     } else {
         title = 'Track-Point Density by Phase';
         help  = 'Each panel shows the spatial density of 6-hourly best-track fixes (≥ 34 kt) occurring on days of that phase. Density is normalized per panel so the warmest cell in each phase shows the relative concentration regardless of phase-day count.';
+    }
+    if (isAnom) {
+        title = 'Anomaly: ' + title.replace(' by Phase', '') + ' (vs cross-phase mean)';
+        help = 'Each panel shows the per-cell anomaly: (this-phase value) − (mean across all 8 phases). Diverging colormap: red = above the cross-phase mean (this phase is enhanced at that cell), blue = below (suppressed). Color range is symmetric and shared across panels for honest phase-to-phase comparison.';
     }
     if (titleEl) titleEl.textContent = title;
     if (helpEl)  helpEl.textContent  = help;
@@ -2734,12 +2826,14 @@ function _renderPhaseModalMap(phase) {
     var el = document.getElementById('phase-modal-map');
     if (!el || typeof Plotly === 'undefined') return;
     var mm = _subState.mapMode;
+    var isAnom = !!_subState.mapAnomaly;
     var density;
     if (mm === 'genesis') density = _buildGenesisDensityPerPhase();
     else if (mm === 'ri') density = _buildRIDensityPerPhase();
     else if (mm === 'dw') density = _buildMeanDwPerPhase();
     else                  density = _buildTrackDensityPerPhase();
     if (!density) { el.innerHTML = '<div style="padding:20px; opacity:0.6;">No data.</div>'; return; }
+    if (isAnom) density = _applyAnomalyToDensity(density, mm !== 'dw');
     var cells = density[phase - 1];
     if (typeof Plotly.purge === 'function') Plotly.purge(el);
     el.innerHTML = '';
@@ -2751,7 +2845,31 @@ function _renderPhaseModalMap(phase) {
     }
     var base = _tcaPlotlyBase();
     var colorscale, color, cmin, cmax, hoverText;
-    if (mm === 'dw') {
+    if (isAnom) {
+        var absMax = 0;
+        for (var pp = 0; pp < 8; pp++) {
+            var ca = density[pp].cnts;
+            for (var ii = 0; ii < ca.length; ii++) {
+                var av = Math.abs(ca[ii]);
+                if (av > absMax) absMax = av;
+            }
+        }
+        if (absMax === 0) absMax = 1;
+        color = cells.cnts;
+        cmin = -absMax; cmax = absMax;
+        colorscale = [
+            [0.00, 'rgba(30,64,175,0.95)'],
+            [0.30, 'rgba(96,165,250,0.70)'],
+            [0.48, 'rgba(220,220,220,0.45)'],
+            [0.52, 'rgba(220,220,220,0.45)'],
+            [0.70, 'rgba(251,191,36,0.80)'],
+            [1.00, 'rgba(220,38,38,0.95)'],
+        ];
+        var unit = (mm === 'dw' ? ' kt/24 h' : '');
+        hoverText = cells.cnts.map(function (v) {
+            return (v >= 0 ? '+' : '') + v.toFixed(mm === 'dw' ? 1 : 2) + unit + ' vs phase mean';
+        });
+    } else if (mm === 'dw') {
         var maxAbs = 15;
         color = cells.cnts;
         cmin = -maxAbs; cmax = maxAbs;
@@ -2982,7 +3100,7 @@ function _initSubseasonalOnce() {
             _renderSubseasonal();
         });
     });
-    // Wire map-content toggle (Tracks ↔ Genesis)
+    // Wire map-content toggle (Tracks ↔ Genesis ↔ RI ↔ Mean ΔVmax)
     document.querySelectorAll('#sub-mapmode-toggle button').forEach(function (b) {
         b.addEventListener('click', function () {
             _subState.mapMode = b.dataset.subMapmode;
@@ -2992,6 +3110,13 @@ function _initSubseasonalOnce() {
             _ga('tc_clim_sub_mapmode', { mapMode: _subState.mapMode });
             _renderSubseasonal();
         });
+    });
+    // Wire anomaly-display checkbox
+    var anomEl = document.getElementById('sub-mapanom');
+    if (anomEl) anomEl.addEventListener('change', function () {
+        _subState.mapAnomaly = !!anomEl.checked;
+        _ga('tc_clim_sub_mapanom', { anomaly: _subState.mapAnomaly });
+        _renderSubseasonal();
     });
     // Wire year-range inputs. Re-render is debounced so dragging a number
     // spinner doesn't fire a full RI-stats pass on every tick.
