@@ -1728,8 +1728,18 @@ var _subState = {
     mode: 'mjo',                    // mjo | bsiso1 | bsiso2
     basin: 'ALL',                   // ALL | NA | EP | WP | NI | SI | SP
     season: 'all',                  // all | mjjaso | ndjfma
+    mapMode: 'tracks',              // tracks | genesis
+    yearMin: null,                  // inclusive lower bound (null → use mode's start year)
+    yearMax: null,                  // inclusive upper bound (null → use mode's end year)
     activeDaysByPhase: null,        // populated per (mode, season, basin scope)
 };
+
+// True if year y is within the active filter window. null bounds = open.
+function _subYearMatch(y) {
+    if (_subState.yearMin != null && y < _subState.yearMin) return false;
+    if (_subState.yearMax != null && y > _subState.yearMax) return false;
+    return true;
+}
 
 // ── ISO date → days since epoch (UTC), no Date allocation per call ──
 function _dayKeyFromISO(iso) {
@@ -1798,9 +1808,10 @@ function _countActiveDaysPerPhase() {
     for (var i = 0; i < phases.length; i++) {
         var p = phases[i], a = amps[i];
         if (p == null || a == null || a < 1.0) continue;
-        // month for season filter — compute from index
+        // month + year for season + year filter — compute from index
         var d = new Date((startKey + i) * 86400000);
         if (!_subSeasonMatch(d.getUTCMonth() + 1)) continue;
+        if (!_subYearMatch(d.getUTCFullYear())) continue;
         perPhase[p - 1]++;
         total++;
     }
@@ -1825,6 +1836,7 @@ function _countGenesisPerPhase() {
         if (dk < startKey || dk > endKey) continue;
         var month = +s.start_date.slice(5,7);
         if (!_subSeasonMatch(month)) continue;
+        if (!_subYearMatch(+s.start_date.slice(0,4))) continue;
         var p = _phaseOnDay(modeRec, dk);
         if (!p) continue;       // null (out of range) OR 0 (inactive)
         perPhase[p - 1]++;
@@ -1834,7 +1846,7 @@ function _countGenesisPerPhase() {
 }
 
 // 6-hourly track-point density per phase. Keyed by (5°-binned lat, lon).
-// Returns array[8] of { keys:[latIdx,lonIdx], counts:[...] }. Coarse 5° to
+// Returns array[8] of { lats:[…], lons:[…], cnts:[…] }. Coarse 5° to
 // keep the Plotly trace size reasonable (36×72 = 2592 cells max per phase).
 function _buildTrackDensityPerPhase() {
     var modeRec = _subPhases.indices[_subState.mode];
@@ -1862,6 +1874,7 @@ function _buildTrackDensityPerPhase() {
             var iso = fix.t.slice(0, 10);
             var month = +iso.slice(5, 7);
             if (!_subSeasonMatch(month)) continue;
+            if (!_subYearMatch(+iso.slice(0,4))) continue;
             var dk = _dayKeyFromISO(iso);
             if (dk < startKey || dk > endKey) continue;
             var p = _phaseOnDay(modeRec, dk);
@@ -1873,7 +1886,43 @@ function _buildTrackDensityPerPhase() {
             g.set(key, (g.get(key) || 0) + 1);
         }
     }
-    // Convert to arrays per phase
+    return _gridsToArrays(grids, BIN);
+}
+
+// Genesis-point density per phase. Same 5° binning + return shape as the
+// track-density variant, but seeded from storm.start_date + (genesis_lat,
+// genesis_lon) — one point per storm. Doesn't need the heavy tracks file.
+function _buildGenesisDensityPerPhase() {
+    var modeRec = _subPhases.indices[_subState.mode];
+    if (!modeRec) return null;
+    var startKey = modeRec._startKey;
+    var endKey = startKey + modeRec.phases.length - 1;
+    var BIN = 5;
+    var grids = [];
+    for (var i = 0; i < 8; i++) grids.push(new Map());
+    for (var i = 0; i < allStorms.length; i++) {
+        var s = allStorms[i];
+        if (!s.start_date || !s.basin) continue;
+        if (!_subBasinMatch(s.basin)) continue;
+        if (!s.peak_wind_kt || s.peak_wind_kt < 34) continue;   // named storms only
+        if (s.genesis_lat == null || s.genesis_lon == null) continue;
+        var month = +s.start_date.slice(5, 7);
+        if (!_subSeasonMatch(month)) continue;
+        if (!_subYearMatch(+s.start_date.slice(0,4))) continue;
+        var dk = _dayKeyFromISO(s.start_date);
+        if (dk < startKey || dk > endKey) continue;
+        var p = _phaseOnDay(modeRec, dk);
+        if (!p) continue;
+        var latBin = Math.floor(s.genesis_lat / BIN);
+        var lonBin = Math.floor(s.genesis_lon / BIN);
+        var key = latBin + ',' + lonBin;
+        var g = grids[p - 1];
+        g.set(key, (g.get(key) || 0) + 1);
+    }
+    return _gridsToArrays(grids, BIN);
+}
+
+function _gridsToArrays(grids, BIN) {
     return grids.map(function (g) {
         var lats = [], lons = [], cnts = [];
         g.forEach(function (cnt, key) {
@@ -1884,6 +1933,102 @@ function _buildTrackDensityPerPhase() {
         });
         return { lats: lats, lons: lons, cnts: cnts };
     });
+}
+
+// Compute 24-h overwater intensity-change distributions per phase.
+// Returns per-phase arrays of all Δwind values + summary stats. The
+// underlying convention follows Kaplan-DeMaria (2003): RI = Δw ≥ 30 kt
+// over 24h, sampled at synoptic 6-h spacing. We require the starting
+// fix to be ≥ 35 kt (TS strength) so we don't pollute the rate with
+// pre-genesis disturbances. Mean and RI rate are summary statistics
+// per phase; the raw arrays are kept for histogram drill-in and for
+// top-RI-storm lookups in the modal.
+function _buildIntensityChangePerPhase() {
+    var modeRec = _subPhases.indices[_subState.mode];
+    if (!modeRec) return null;
+    var startKey = modeRec._startKey;
+    var endKey = startKey + modeRec.phases.length - 1;
+    var changes = [];
+    for (var i = 0; i < 8; i++) changes.push([]);          // raw Δw arrays
+    var hits = [0,0,0,0,0,0,0,0];                          // RI count (Δw ≥ 30 kt)
+    var sumDw = [0,0,0,0,0,0,0,0];                         // sum Δw (for mean)
+    var topRI = [[],[],[],[],[],[],[],[]];                 // {sid, name, year, dw, date, w0, w1} for the modal
+    var sids = Object.keys(allTracks);
+    // Synoptic spacing varies across the IBTrACS archive: modern data is
+    // often at 3-h or 1-h subsynoptic intervals; older data is 6-h or
+    // coarser. Per-fix timestamp lookup is the only reliable way to find
+    // the 24-h-later fix. Pre-extract times once per storm (string→ms is
+    // cheap but adds up across 800K+ fixes), then forward-scan.
+    for (var i = 0; i < sids.length; i++) {
+        var sid = sids[i];
+        var track = allTracks[sid];
+        if (!track || track.length < 2) continue;
+        var storm = _stormBySid[sid];
+        if (!storm) continue;
+        if (!_subBasinMatch(storm.basin)) continue;
+        var times = new Array(track.length);
+        for (var t = 0; t < track.length; t++) {
+            times[t] = track[t].t ? Date.parse(track[t].t) : NaN;
+        }
+        var k = 0;
+        for (var j = 0; j < track.length; j++) {
+            var f0 = track[j];
+            if (f0.w == null || f0.w < 35) continue;       // require TS-strength start
+            if (!Number.isFinite(times[j])) continue;
+            // Advance k forward (never backward — fixes sorted by time)
+            // to the first fix that's ≥ 21h after f0. If we walk past 27h
+            // without a hit, no valid 24-h pair exists for this f0.
+            if (k <= j) k = j + 1;
+            while (k < track.length && Number.isFinite(times[k])
+                   && (times[k] - times[j]) < 21 * 3600000) {
+                k++;
+            }
+            if (k >= track.length) break;
+            if (!Number.isFinite(times[k])) continue;
+            var dtH = (times[k] - times[j]) / 3600000;
+            if (dtH > 27) continue;                        // gap — skip but don't break (later f0 may fit)
+            var f1 = track[k];
+            if (f1.w == null) continue;
+            var iso = f0.t.slice(0, 10);
+            var month = +iso.slice(5, 7);
+            if (!_subSeasonMatch(month)) continue;
+            if (!_subYearMatch(+iso.slice(0,4))) continue;
+            var dk = _dayKeyFromISO(iso);
+            if (dk < startKey || dk > endKey) continue;
+            var p = _phaseOnDay(modeRec, dk);
+            if (!p) continue;
+            var dw = f1.w - f0.w;
+            changes[p - 1].push(dw);
+            sumDw[p - 1] += dw;
+            if (dw >= 30) {
+                hits[p - 1]++;
+                var top = topRI[p - 1];
+                top.push({
+                    sid: sid,
+                    name: storm.name || '',
+                    year: storm.year,
+                    dw: dw, w0: f0.w, w1: f1.w,
+                    date: iso,
+                });
+            }
+        }
+    }
+    // Sort each phase's top-RI list by Δw desc and trim
+    var topRITrimmed = topRI.map(function (lst) {
+        lst.sort(function (a, b) { return b.dw - a.dw; });
+        return lst.slice(0, 8);
+    });
+    var nPerPhase = changes.map(function (c) { return c.length; });
+    var meanDw = changes.map(function (c, i) { return c.length ? sumDw[i] / c.length : 0; });
+    var riRate = changes.map(function (c, i) { return c.length ? hits[i] / c.length : 0; });
+    return {
+        nPerPhase: nPerPhase,
+        riCount:   hits,
+        riRate:    riRate,             // fraction 0..1
+        meanDw:    meanDw,
+        changes:   changes,            // raw arrays per phase
+        topRI:     topRITrimmed,       // top-8 RI events per phase for modal
+    };
 }
 
 // Build a SID → storm-meta index once (for basin filter on track fixes).
@@ -1987,12 +2132,111 @@ function _renderGenesisDial() {
     }
 }
 
+function _renderIntensityDial() {
+    var el = document.getElementById('sub-ri-chart');
+    if (!el || typeof Plotly === 'undefined') return;
+    // RI stats need the 24-h fix pairs from allTracks. If tracks haven't
+    // loaded yet, show a placeholder; the panel re-renders when the
+    // tracks file resolves (kicked off by _renderSubseasonal).
+    if (Object.keys(allTracks).length === 0) {
+        el.innerHTML = '<div style="padding:20px; opacity:0.7; font-size:0.78rem;">Loading 24-h intensity-change pairs…</div>';
+        return;
+    }
+    var stats = _buildIntensityChangePerPhase();
+    if (!stats) { el.innerHTML = ''; return; }
+    var labels = ['1','2','3','4','5','6','7','8'];
+    var pcts = stats.riRate.map(function (r) { return r * 100; });
+    var totalRI = stats.riCount.reduce(function (a, b) { return a + b; }, 0);
+    var totalN  = stats.nPerPhase.reduce(function (a, b) { return a + b; }, 0);
+    var expectedPct = totalN ? (totalRI / totalN) * 100 : 0;
+    var rmax = Math.max(Math.max.apply(null, pcts.concat([1])), expectedPct) * 1.2;
+
+    var text = pcts.map(function (pct, i) {
+        var anomaly = expectedPct > 0 ? (pct / expectedPct - 1) * 100 : 0;
+        var sign = anomaly >= 0 ? '+' : '';
+        return 'Phase ' + (i+1)
+            + '<br>RI rate: ' + pct.toFixed(2) + '%'
+            + '<br>(' + stats.riCount[i] + ' RI / ' + stats.nPerPhase[i] + ' intervals)'
+            + '<br>Mean Δw: ' + stats.meanDw[i].toFixed(2) + ' kt/24 h'
+            + '<br>vs expected: ' + sign + anomaly.toFixed(0) + '%';
+    });
+
+    var traces = [
+        {
+            type: 'barpolar',
+            r: pcts,
+            theta: labels.map(function (l) { return (parseInt(l) - 1) * 45; }),
+            width: Array(8).fill(40),
+            marker: {
+                color: pcts.map(function (pct) {
+                    return pct >= expectedPct ? '#f59e0b' : '#60a5fa';
+                }),
+                line: { color: 'rgba(0,0,0,0.25)', width: 1 },
+            },
+            opacity: 0.85,
+            hoverinfo: 'text',
+            text: text,
+            name: 'RI rate',
+        },
+        {
+            type: 'scatterpolar',
+            r: Array(8).fill(expectedPct),
+            theta: labels.map(function (l) { return (parseInt(l) - 1) * 45; }),
+            mode: 'lines+markers',
+            line: { dash: 'dash', color: 'rgba(80,80,80,0.7)', width: 2 },
+            marker: { size: 5, color: 'rgba(80,80,80,0.85)' },
+            hoverinfo: 'skip',
+            name: 'Expected (' + expectedPct.toFixed(1) + '%)',
+        },
+    ];
+    var base = _tcaPlotlyBase();
+    var layout = Object.assign({}, base, {
+        polar: {
+            bgcolor: base.plot_bgcolor || '#ffffff',
+            radialaxis: {
+                range: [0, rmax],
+                tickfont: { size: 10, color: base.font ? base.font.color : '#888' },
+                gridcolor: 'rgba(128,128,128,0.25)',
+                angle: 90, tickangle: 90,
+                ticksuffix: '%',
+            },
+            angularaxis: {
+                tickmode: 'array',
+                tickvals: [0, 45, 90, 135, 180, 225, 270, 315],
+                ticktext: labels,
+                rotation: 90,
+                direction: 'counterclockwise',
+                tickfont: { size: 12, color: base.font ? base.font.color : '#888' },
+                gridcolor: 'rgba(128,128,128,0.25)',
+            },
+        },
+        showlegend: true,
+        legend: { orientation: 'h', y: -0.05 },
+        height: 460,
+        margin: { l: 30, r: 30, t: 20, b: 60 },
+    });
+    delete layout.xaxis; delete layout.yaxis;
+    Plotly.newPlot('sub-ri-chart', traces, layout, PLOTLY_CONFIG);
+
+    // Cache stats so the drill-in modal can pull from the same numbers.
+    _subState._lastRIStats = stats;
+    var hintEl = document.getElementById('sub-ri-hint');
+    if (hintEl) {
+        hintEl.textContent = totalN + ' overwater 24-h intervals · ' + totalRI + ' RI events';
+    }
+}
+
 function _renderTrackDensity() {
     var el = document.getElementById('sub-tracks-chart');
     if (!el || typeof Plotly === 'undefined') return;
-    var density = _buildTrackDensityPerPhase();
+    var isGenesis = (_subState.mapMode === 'genesis');
+    var density = isGenesis
+        ? _buildGenesisDensityPerPhase()
+        : _buildTrackDensityPerPhase();
     if (!density) {
-        el.innerHTML = '<div style="padding:20px; opacity:0.6;">Track data unavailable.</div>';
+        el.innerHTML = '<div style="padding:20px; opacity:0.6;">'
+            + (isGenesis ? 'Genesis data unavailable.' : 'Track data unavailable.')
+            + '</div>';
         return;
     }
     // Clear any leftover loading-placeholder DIV. Plotly.newPlot manages its
@@ -2067,7 +2311,13 @@ function _renderTrackDensity() {
             lon: cells.lons,
             marker: {
                 color: cells.cnts.map(function (c) { return c / max; }),
-                colorscale: [
+                colorscale: isGenesis ? [
+                    [0,    'rgba(168,139,250,0.0)'],
+                    [0.15, 'rgba(168,139,250,0.65)'],
+                    [0.40, 'rgba(52,211,153,0.80)'],
+                    [0.70, 'rgba(251,191,36,0.88)'],
+                    [1.0,  'rgba(220,38,38,0.95)'],
+                ] : [
                     [0,    'rgba(96,165,250,0.0)'],
                     [0.15, 'rgba(96,165,250,0.55)'],
                     [0.40, 'rgba(251,191,36,0.75)'],
@@ -2079,48 +2329,330 @@ function _renderTrackDensity() {
                 line: { width: 0 },
                 showscale: false,
             },
-            text: cells.cnts.map(function (c) { return c + ' fix' + (c === 1 ? '' : 'es'); }),
+            text: cells.cnts.map(function (c) {
+                var word = isGenesis ? 'genesis' : 'fix';
+                var plural = isGenesis ? 'geneses' : 'fixes';
+                return c + ' ' + (c === 1 ? word : plural);
+            }),
             hoverinfo: 'lon+lat+text',
             showlegend: false,
         });
     }
     Plotly.newPlot('sub-tracks-chart', traces, layout, PLOTLY_CONFIG);
+
+    // Hook click → open the phase drill-in modal. Plotly's plotly_click
+    // event fires per trace, not per subplot, so the trace index (one
+    // trace per phase) is the natural phase indicator. Empty phases that
+    // got no trace are skipped — clicking on the basemap of an empty
+    // panel won't open the modal, but that's an acceptable edge.
+    if (el.on) {
+        el.removeAllListeners && el.removeAllListeners('plotly_click');
+        el.on('plotly_click', function (ev) {
+            if (!ev || !ev.points || !ev.points.length) return;
+            var traceIdx = ev.points[0].curveNumber;
+            // traces array order matches phases that had data; resolve to
+            // the source phase via the trace's geo axis ("geo" → 1,
+            // "geo2" → 2, …).
+            var geoName = ev.points[0].data && ev.points[0].data.geo;
+            var phase = (geoName === 'geo') ? 1 : parseInt(geoName.replace('geo', ''), 10);
+            if (phase >= 1 && phase <= 8) _openPhaseModal(phase);
+        });
+    }
 }
 
 // ── Public re-renderer (called by UI events) ────────────────────
 function _renderSubseasonal() {
     if (!_subPhases || !_subPhases.indices[_subState.mode]) return;
     _renderGenesisDial();
-    // Track density requires the heavy tracks file. Lazy-load on first
-    // render and on every state change after it's loaded.
+    _updateMapPanelText();
+    var isGenesis = (_subState.mapMode === 'genesis');
     var tracksEl = document.getElementById('sub-tracks-chart');
+    // The RI panel and the Tracks map both need the 6-hourly fixes file.
+    // The genesis dial and the genesis-density map use storm metadata
+    // (already loaded). The RI panel always needs tracks, so we kick the
+    // lazy load unconditionally on first visit regardless of mapMode.
     if (Object.keys(allTracks).length === 0) {
-        if (tracksEl) tracksEl.innerHTML =
+        if (tracksEl && !isGenesis) tracksEl.innerHTML =
             '<div style="padding:20px; opacity:0.7; font-size:0.78rem;">Loading 6-hourly best-track fixes (~44 MB, one-time)…</div>';
+        _renderIntensityDial();      // shows its own loading placeholder
+        // Render the genesis-density map immediately if that's the active
+        // mapMode — it only needs storm metadata.
+        if (isGenesis) {
+            _ensureStormBySid();
+            _renderTrackDensity();
+        }
         _ensureTracksLoaded().then(function () {
             _ensureStormBySid();
             _renderTrackDensity();
+            _renderIntensityDial();
         });
     } else {
         _ensureStormBySid();
         _renderTrackDensity();
+        _renderIntensityDial();
     }
     _renderSubseasonalSource();
 }
 
+function _updateMapPanelText() {
+    var titleEl = document.getElementById('sub-tracks-title');
+    var helpEl  = document.getElementById('sub-tracks-help');
+    var isGenesis = (_subState.mapMode === 'genesis');
+    if (titleEl) titleEl.textContent = isGenesis
+        ? 'Genesis Point Density by Phase'
+        : 'Track-Point Density by Phase';
+    if (helpEl) helpEl.textContent = isGenesis
+        ? 'Each panel shows where named-storm genesis events (first fix, peak ≥ 34 kt) occurred on days of that phase. One point per storm. Density is normalized per panel, so the warmest cell shows the relative concentration of genesis locations regardless of how many days fell in that phase.'
+        : 'Each panel shows the spatial density of 6-hourly best-track fixes (≥ 34 kt) occurring on days of that phase. Density is normalized per panel so the warmest cell in each phase shows the relative concentration regardless of phase-day count.';
+}
+
 function _renderSubseasonalSource() {
     var el = document.getElementById('sub-source');
-    if (!el || !_subPhases) return;
+    var inlineEl = document.getElementById('sub-phase-source-inline');
+    if (!_subPhases) return;
     var rec = _subPhases.indices[_subState.mode];
-    if (!rec) { el.textContent = ''; return; }
+    if (!rec) { if (el) el.textContent = ''; return; }
     function link(href, txt) {
         if (!href) return txt;
-        return '<a href="' + href + '" target="_blank" rel="noopener noreferrer" style="color: inherit; text-decoration: underline;">' + txt + ' ↗</a>';
+        return '<a href="' + _escapeHtml(href) + '" target="_blank" rel="noopener noreferrer" style="color: inherit; text-decoration: underline;">' + _escapeHtml(txt) + ' ↗</a>';
     }
-    el.innerHTML = 'Source: ' + link(rec.provider_url || rec.source, rec.provider)
-        + ' · ' + link(rec.source, 'raw data')
-        + ' · ' + link(rec.paper_url, rec.paper)
-        + '. Coverage: ' + rec.start_date + ' to ' + rec.end_date + '.';
+    // Inline (top of section): short attribution that updates on mode change.
+    if (inlineEl) {
+        inlineEl.innerHTML = rec.label + ' from '
+            + link(rec.provider_url || rec.source, rec.provider)
+            + ' (' + rec.start_date.slice(0,4) + '–' + rec.end_date.slice(0,4) + ')';
+    }
+    // Footer (bottom of section): full attribution with paper + raw data link.
+    if (el) {
+        el.innerHTML =
+            '<strong>Phase index:</strong> ' + link(rec.provider_url || rec.source, rec.provider)
+            + ' · ' + link(rec.source, 'raw data')
+            + ' · ' + link(rec.paper_url, rec.paper)
+            + '. Coverage: ' + rec.start_date + ' to ' + rec.end_date + '.'
+            + '<br><strong>Best-track activity:</strong> '
+            + link('https://www.ncei.noaa.gov/products/international-best-track-archive', 'IBTrACS v04 (NOAA NCEI)')
+            + '. Genesis = first fix of each named storm (peak ≥ 34 kt). Track density = 6-hourly fixes ≥ 34 kt. '
+            + 'RI = Kaplan &amp; DeMaria (2003) threshold of Δw ≥ 30 kt / 24 h for storms ≥ 35 kt at the start of the interval.';
+    }
+}
+
+function _escapeHtml(s) {
+    return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+        .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// ── Phase drill-in modal ────────────────────────────────────────
+// Opened by clicking a phase tile in the 8-panel map. Shows a larger
+// single-panel map for that phase, summary stats, top-RI storm list,
+// and a histogram of 24-h intensity changes.
+window.closePhaseModal = function () {
+    var m = document.getElementById('phase-modal');
+    if (m) m.style.display = 'none';
+};
+
+function _openPhaseModal(phase) {
+    var m = document.getElementById('phase-modal');
+    if (!m) return;
+    m.style.display = 'flex';
+    _renderPhaseModal(phase);
+    _ga('tc_clim_sub_phase_drill', { mode: _subState.mode, phase: phase });
+}
+
+function _renderPhaseModal(phase) {
+    var modeRec = _subPhases.indices[_subState.mode];
+    if (!modeRec) return;
+    var modeLabel = modeRec.label;
+    var basinLabel = _subState.basin === 'ALL' ? 'all basins (excl. S. Atlantic)' : (BASIN_NAMES[_subState.basin] || _subState.basin);
+    var seasonLabel = ({all:'all months', mjjaso:'May–Oct', ndjfma:'Nov–Apr'})[_subState.season];
+
+    document.getElementById('phase-modal-title').textContent =
+        modeLabel + ' · Phase ' + phase;
+    document.getElementById('phase-modal-sub').textContent =
+        'Filtered to ' + basinLabel + ', ' + seasonLabel + '. '
+        + 'Active days only (amplitude ≥ 1). Coverage: ' + modeRec.start_date + ' to ' + modeRec.end_date + '.';
+    var mmEl = document.getElementById('phase-modal-mapmode');
+    if (mmEl) mmEl.textContent = (_subState.mapMode === 'genesis')
+        ? '— genesis points'
+        : '— 6-h track fixes';
+
+    _renderPhaseModalMap(phase);
+    _renderPhaseModalStats(phase);
+    _renderPhaseModalTopRI(phase);
+    _renderPhaseModalHistogram(phase);
+}
+
+function _renderPhaseModalMap(phase) {
+    var el = document.getElementById('phase-modal-map');
+    if (!el || typeof Plotly === 'undefined') return;
+    var density = (_subState.mapMode === 'genesis')
+        ? _buildGenesisDensityPerPhase()
+        : _buildTrackDensityPerPhase();
+    if (!density) { el.innerHTML = '<div style="padding:20px; opacity:0.6;">No data.</div>'; return; }
+    var cells = density[phase - 1];
+    if (typeof Plotly.purge === 'function') Plotly.purge(el);
+    el.innerHTML = '';
+    if (!cells || !cells.cnts.length) {
+        el.innerHTML = '<div style="padding:20px; opacity:0.6;">No '
+            + (_subState.mapMode === 'genesis' ? 'genesis events' : 'track fixes')
+            + ' in this phase for the current filter.</div>';
+        return;
+    }
+    var max = Math.max.apply(null, cells.cnts);
+    var isGenesis = (_subState.mapMode === 'genesis');
+    var base = _tcaPlotlyBase();
+    var trace = {
+        type: 'scattergeo',
+        mode: 'markers',
+        lat: cells.lats,
+        lon: cells.lons,
+        marker: {
+            color: cells.cnts.map(function (c) { return c / max; }),
+            colorscale: isGenesis ? [
+                [0,    'rgba(168,139,250,0.0)'],
+                [0.15, 'rgba(168,139,250,0.65)'],
+                [0.40, 'rgba(52,211,153,0.80)'],
+                [0.70, 'rgba(251,191,36,0.88)'],
+                [1.0,  'rgba(220,38,38,0.95)'],
+            ] : [
+                [0,    'rgba(96,165,250,0.0)'],
+                [0.15, 'rgba(96,165,250,0.55)'],
+                [0.40, 'rgba(251,191,36,0.75)'],
+                [0.70, 'rgba(248,113,113,0.85)'],
+                [1.0,  'rgba(220,38,38,0.95)'],
+            ],
+            cmin: 0, cmax: 1, size: 14, symbol: 'square',
+            line: { width: 0 }, showscale: false,
+        },
+        text: cells.cnts.map(function (c) {
+            var word = isGenesis ? 'genesis' : 'fix';
+            var plural = isGenesis ? 'geneses' : 'fixes';
+            return c + ' ' + (c === 1 ? word : plural);
+        }),
+        hoverinfo: 'lon+lat+text',
+    };
+    var layout = Object.assign({}, base, {
+        height: 380,
+        margin: { l: 0, r: 0, t: 0, b: 0 },
+        showlegend: false,
+        geo: {
+            projection: { type: 'equirectangular' },
+            showcoastlines: true,
+            coastlinecolor: 'rgba(120,120,120,0.75)',
+            coastlinewidth: 0.8,
+            showland: true,
+            landcolor: 'rgba(40,50,60,0.22)',
+            showocean: true, oceancolor: 'rgba(0,0,0,0)',
+            bgcolor: 'rgba(0,0,0,0)', showframe: false,
+            lataxis: { range: [-50, 50], showgrid: false },
+            lonaxis: { range: [-180, 180], showgrid: false },
+        },
+    });
+    delete layout.xaxis; delete layout.yaxis;
+    Plotly.newPlot('phase-modal-map', [trace], layout, PLOTLY_CONFIG);
+}
+
+function _renderPhaseModalStats(phase) {
+    var el = document.getElementById('phase-modal-stats');
+    if (!el) return;
+    // Genesis count for this phase
+    var gen = _countGenesisPerPhase();
+    var act = _countActiveDaysPerPhase();
+    var stats = _subState._lastRIStats || (Object.keys(allTracks).length > 0
+        ? _buildIntensityChangePerPhase()
+        : null);
+    var idx = phase - 1;
+    var genesisCount = gen.perPhase[idx];
+    var activeDays = act.perPhase[idx];
+    var nIntervals = stats ? stats.nPerPhase[idx] : null;
+    var riCount = stats ? stats.riCount[idx] : null;
+    var riRatePct = stats ? (stats.riRate[idx] * 100) : null;
+    var meanDw = stats ? stats.meanDw[idx] : null;
+
+    function tile(label, value, unit) {
+        return '<div style="background: var(--surface, #f7f7f7); border:1px solid var(--border, rgba(0,0,0,0.08));'
+            + 'border-radius:6px; padding:8px 10px;">'
+            + '<div style="font-size:0.66rem; opacity:0.7; text-transform:uppercase; letter-spacing:0.04em;">' + label + '</div>'
+            + '<div style="font-size:1.15rem; font-weight:600; margin-top:2px;">' + value
+            + (unit ? '<span style="font-size:0.72rem; opacity:0.7; margin-left:4px;">' + unit + '</span>' : '')
+            + '</div></div>';
+    }
+    var html = '';
+    html += tile('Active days', activeDays.toLocaleString(), 'days (amp ≥ 1)');
+    html += tile('Genesis events', genesisCount.toLocaleString(), '');
+    if (stats) {
+        html += tile('24-h intervals', nIntervals.toLocaleString(), '');
+        html += tile('RI events', riCount.toLocaleString(), '≥ 30 kt/24 h');
+        html += tile('RI rate', riRatePct.toFixed(2) + '%', '');
+        html += tile('Mean Δw', (meanDw >= 0 ? '+' : '') + meanDw.toFixed(2), 'kt/24 h');
+    } else {
+        html += tile('Intensity change', '—', 'tracks loading…');
+    }
+    el.innerHTML = html;
+}
+
+function _renderPhaseModalTopRI(phase) {
+    var el = document.getElementById('phase-modal-topri');
+    if (!el) return;
+    var stats = _subState._lastRIStats;
+    if (!stats) { el.innerHTML = '<div style="opacity:0.6; padding:8px;">Tracks loading…</div>'; return; }
+    var list = stats.topRI[phase - 1] || [];
+    if (!list.length) { el.innerHTML = '<div style="opacity:0.6; padding:8px;">No RI episodes in this phase.</div>'; return; }
+    var rows = list.map(function (e) {
+        return '<tr>'
+            + '<td>' + (e.name || '(unnamed)') + ' (' + e.year + ')</td>'
+            + '<td>' + e.date + '</td>'
+            + '<td style="text-align:right;">+' + e.dw + ' kt</td>'
+            + '<td style="text-align:right; opacity:0.7;">' + e.w0 + ' → ' + e.w1 + ' kt</td>'
+            + '</tr>';
+    }).join('');
+    el.innerHTML = '<table style="width:100%; border-collapse:collapse; font-size:0.78rem;">'
+        + '<thead><tr style="text-align:left; opacity:0.7; border-bottom:1px solid var(--border, rgba(0,0,0,0.08));">'
+        + '<th style="padding:4px 8px;">Storm</th>'
+        + '<th style="padding:4px 8px;">Start of 24-h interval</th>'
+        + '<th style="padding:4px 8px; text-align:right;">Δw</th>'
+        + '<th style="padding:4px 8px; text-align:right;">Wind</th>'
+        + '</tr></thead><tbody>' + rows + '</tbody></table>';
+}
+
+function _renderPhaseModalHistogram(phase) {
+    var el = document.getElementById('phase-modal-hist');
+    if (!el || typeof Plotly === 'undefined') return;
+    var stats = _subState._lastRIStats;
+    if (!stats) { el.innerHTML = ''; return; }
+    var arr = stats.changes[phase - 1] || [];
+    if (!arr.length) { el.innerHTML = '<div style="opacity:0.6; padding:8px;">No intervals.</div>'; return; }
+    var trace = {
+        type: 'histogram',
+        x: arr,
+        xbins: { start: -60, end: 80, size: 5 },
+        marker: { color: '#2e7dff' },
+        opacity: 0.85,
+        name: 'Δw distribution',
+        hovertemplate: 'Δw %{x} kt<br>n=%{y}<extra></extra>',
+    };
+    // Vertical RI threshold line at +30 kt.
+    var base = _tcaPlotlyBase();
+    var layout = Object.assign({}, base, {
+        height: 260,
+        margin: { l: 50, r: 20, t: 10, b: 40 },
+        xaxis: { title: '24-h Δwind (kt)', zeroline: true, zerolinecolor: 'rgba(0,0,0,0.4)' },
+        yaxis: { title: 'count' },
+        shapes: [{
+            type: 'line', xref: 'x', yref: 'paper',
+            x0: 30, x1: 30, y0: 0, y1: 1,
+            line: { color: '#ef4444', width: 2, dash: 'dash' },
+        }],
+        annotations: [{
+            x: 30, y: 1, xref: 'x', yref: 'paper',
+            text: 'RI threshold (+30 kt)', showarrow: false,
+            xanchor: 'left', yanchor: 'top',
+            font: { color: '#ef4444', size: 10 },
+            bgcolor: 'rgba(255,255,255,0.7)', borderpad: 2,
+        }],
+        showlegend: false,
+    });
+    Plotly.newPlot('phase-modal-hist', [trace], layout, PLOTLY_CONFIG);
 }
 
 // ── Init (called once on first switch to the subseasonal subview) ──
@@ -2144,6 +2676,7 @@ function _initSubseasonalOnce() {
             document.querySelectorAll('#sub-mode-toggle button').forEach(function (x) {
                 x.classList.toggle('active', x === b);
             });
+            _syncYearInputBounds();
             _ga('tc_clim_sub_mode', { mode: _subState.mode });
             _renderSubseasonal();
         });
@@ -2168,6 +2701,43 @@ function _initSubseasonalOnce() {
             _renderSubseasonal();
         });
     });
+    // Wire map-content toggle (Tracks ↔ Genesis)
+    document.querySelectorAll('#sub-mapmode-toggle button').forEach(function (b) {
+        b.addEventListener('click', function () {
+            _subState.mapMode = b.dataset.subMapmode;
+            document.querySelectorAll('#sub-mapmode-toggle button').forEach(function (x) {
+                x.classList.toggle('active', x === b);
+            });
+            _ga('tc_clim_sub_mapmode', { mapMode: _subState.mapMode });
+            _renderSubseasonal();
+        });
+    });
+    // Wire year-range inputs. Re-render is debounced so dragging a number
+    // spinner doesn't fire a full RI-stats pass on every tick.
+    var yrStart = document.getElementById('sub-year-start');
+    var yrEnd   = document.getElementById('sub-year-end');
+    var yrReset = document.getElementById('sub-year-reset');
+    var yearDebounce = null;
+    function onYearChange() {
+        if (yearDebounce) clearTimeout(yearDebounce);
+        yearDebounce = setTimeout(function () {
+            var s = yrStart && yrStart.value !== '' ? +yrStart.value : null;
+            var e = yrEnd   && yrEnd.value   !== '' ? +yrEnd.value   : null;
+            _subState.yearMin = (Number.isFinite(s) && s >= 1851) ? s : null;
+            _subState.yearMax = (Number.isFinite(e) && e >= 1851) ? e : null;
+            _ga('tc_clim_sub_year', { yearMin: _subState.yearMin, yearMax: _subState.yearMax });
+            _renderSubseasonal();
+        }, 350);
+    }
+    if (yrStart) yrStart.addEventListener('input', onYearChange);
+    if (yrEnd)   yrEnd.addEventListener('input', onYearChange);
+    if (yrReset) yrReset.addEventListener('click', function () {
+        if (yrStart) yrStart.value = '';
+        if (yrEnd)   yrEnd.value   = '';
+        _subState.yearMin = null;
+        _subState.yearMax = null;
+        _renderSubseasonal();
+    });
 
     // Storm metadata may still be loading on first visit — wait for it.
     var ready = (allStorms.length > 0)
@@ -2175,7 +2745,25 @@ function _initSubseasonalOnce() {
         : _loadStormsMetadata();
     Promise.all([ready, _loadSubPhases()]).then(function () {
         _ensureStormBySid();
+        _syncYearInputBounds();
         _renderSubseasonal();
+    });
+}
+
+// Update the year-range inputs' placeholder + min/max attributes so they
+// match the active mode's coverage. Doesn't clear user-entered values —
+// the filter functions clamp on read.
+function _syncYearInputBounds() {
+    var rec = _subPhases && _subPhases.indices[_subState.mode];
+    if (!rec) return;
+    var yMin = +rec.start_date.slice(0, 4);
+    var yMax = +rec.end_date.slice(0, 4);
+    ['sub-year-start','sub-year-end'].forEach(function (id, i) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        el.min = String(yMin);
+        el.max = String(yMax);
+        el.placeholder = String(i === 0 ? yMin : yMax);
     });
 }
 

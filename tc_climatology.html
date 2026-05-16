@@ -302,6 +302,21 @@
                     </p>
                 </div>
 
+                <!-- Inline data-sources banner. Updates dynamically when the mode
+                     changes so users always see which RMM / BSISO file feeds the
+                     active charts. Detailed source URLs are in the section footer. -->
+                <div id="sub-sources-banner"
+                     style="display:flex; flex-wrap:wrap; gap:4px 14px; align-items:baseline;
+                            padding:8px 12px; margin:4px 0 12px;
+                            border:1px solid var(--border, rgba(0,0,0,0.08));
+                            border-left: 3px solid var(--blue, #2e7dff);
+                            border-radius:6px; background: var(--surface, rgba(46,125,255,0.04));
+                            font-size:0.72rem; line-height:1.5;">
+                    <span style="font-weight:600; opacity:0.85;">Data:</span>
+                    <span><strong>Storms</strong> — IBTrACS v04 (NOAA NCEI)</span>
+                    <span><strong>Phase index</strong> — <span id="sub-phase-source-inline">…</span></span>
+                </div>
+
                 <div class="sub-controls" style="display:flex; flex-wrap:wrap; gap:14px 22px; align-items:center; margin-bottom:14px;">
                     <div>
                         <label class="field-label" style="display:block; margin-bottom:4px; font-size:0.7rem; opacity:0.75;">Mode</label>
@@ -337,6 +352,28 @@
                                     title="November–April: Southern Hemisphere TC season, MJO active phase.">Nov–Apr</button>
                         </div>
                     </div>
+                    <div>
+                        <label class="field-label" style="display:block; margin-bottom:4px; font-size:0.7rem; opacity:0.75;">
+                            Year range
+                            <span style="opacity:0.55; font-weight:normal;">(blank → all)</span>
+                        </label>
+                        <div style="display:flex; gap:6px; align-items:center;">
+                            <input id="sub-year-start" type="number" inputmode="numeric"
+                                   min="1851" max="2100" placeholder="start"
+                                   class="range-input" style="width:78px;"
+                                   title="Earliest calendar year (inclusive). Defaults to the start of the active phase index when blank.">
+                            <span style="opacity:0.6;">–</span>
+                            <input id="sub-year-end" type="number" inputmode="numeric"
+                                   min="1851" max="2100" placeholder="end"
+                                   class="range-input" style="width:78px;"
+                                   title="Latest calendar year (inclusive). Defaults to the end of the active phase index when blank.">
+                            <button id="sub-year-reset" type="button"
+                                    style="padding:4px 8px; font-size:0.66rem; border-radius:6px;
+                                           background: var(--surface); color: var(--slate);
+                                           border: 1px solid var(--border); cursor:pointer;"
+                                    title="Clear both year inputs and use the full phase-index coverage.">Reset</button>
+                        </div>
+                    </div>
                     <div style="font-size:0.7rem; opacity:0.7; max-width:260px; line-height:1.35;">
                         <span id="sub-event-count">—</span>
                     </div>
@@ -358,15 +395,40 @@
                     </div>
                     <div class="clim-panel" style="grid-column: 1 / -1;">
                         <h3 class="clim-panel-title">
-                            <span id="sub-tracks-title">Track-Point Density by Phase</span>
-                            <span class="ace-hint" style="opacity:0.65;">8 panels · 5° bins</span>
+                            <span id="sub-ri-title">Rapid Intensification (RI) Rate by Phase</span>
+                            <span class="ace-hint" id="sub-ri-hint" style="opacity:0.65;"></span>
                         </h3>
                         <p class="field-help" style="margin:4px 0 8px; font-size:0.7rem;">
-                            Each panel shows the spatial density of 6-hourly best-track fixes (≥ 34 kt) occurring
-                            on days of that phase. Density is normalized per panel so the warmest cell in each
-                            phase shows the relative concentration regardless of phase-day count. Click a phase
-                            tile to drill in.
+                            Bars show the fraction of overwater 24-h intensification episodes meeting the
+                            Kaplan–DeMaria RI threshold (Δw ≥ 30 kt / 24 h), for storms ≥ 35 kt at the start of
+                            the interval. Dashed ring is the across-all-phases mean — bars above it indicate
+                            an RI-favorable phase, below indicate suppressed RI. Click a phase tile in the
+                            map panel below to drill in.
                         </p>
+                        <div id="sub-ri-chart" class="chart-container chart-tall"></div>
+                    </div>
+
+                    <div class="clim-panel" style="grid-column: 1 / -1;">
+                        <h3 class="clim-panel-title">
+                            <span id="sub-tracks-title">Spatial Distribution by Phase</span>
+                            <span class="ace-hint" style="opacity:0.65;">8 panels · 5° bins · click to drill in</span>
+                        </h3>
+                        <div style="display:flex; flex-wrap:wrap; gap:14px 18px; align-items:center; margin:6px 0 8px;">
+                            <div>
+                                <label class="field-label" style="display:block; margin-bottom:3px; font-size:0.66rem; opacity:0.75;">Show</label>
+                                <div class="segmented" id="sub-mapmode-toggle" role="tablist" aria-label="Map content">
+                                    <button type="button" data-sub-mapmode="tracks" class="active"
+                                            title="6-hourly best-track fixes (≥ 34 kt) on days of each phase. Shows where storms travel.">Tracks</button>
+                                    <button type="button" data-sub-mapmode="genesis"
+                                            title="First-fix (genesis) point of each named storm whose genesis date fell in each phase. Shows where storms form.">Genesis</button>
+                                </div>
+                            </div>
+                            <p class="field-help" id="sub-tracks-help" style="margin:0; flex:1 1 360px; font-size:0.7rem;">
+                                Each panel shows the spatial density of 6-hourly best-track fixes (≥ 34 kt) occurring
+                                on days of that phase. Density is normalized per panel so the warmest cell in each
+                                phase shows the relative concentration regardless of phase-day count.
+                            </p>
+                        </div>
                         <div id="sub-tracks-chart" class="chart-container" style="min-height: 220px;"></div>
                     </div>
                 </div>
@@ -592,6 +654,49 @@
                     <div id="lmi-box-chart" class="chart-container"></div>
                 </div>
                 <div id="lmi-stats-table" class="clim-stats-table"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Subseasonal Phase Drill-In Modal — opened by clicking a phase tile
+         on the Subseasonal subview's 8-panel map. Surfaces a larger version
+         of that single phase's map plus per-phase stats (storm count, RI
+         rate, mean Δw, top-RI events). Reuses the ace-modal-* skeleton. -->
+    <div id="phase-modal" class="ace-modal-overlay" style="display:none;"
+         onclick="if(event.target===this)closePhaseModal()">
+        <div class="ace-modal-content">
+            <div class="ace-modal-header">
+                <h2 class="ace-modal-title" id="phase-modal-title">Phase —</h2>
+                <button class="ace-modal-close" onclick="closePhaseModal()" aria-label="Close">&times;</button>
+            </div>
+            <div class="ace-modal-body">
+                <p class="field-help" id="phase-modal-sub" style="margin-top:0; font-size:0.78rem;"></p>
+
+                <div class="ace-chart-wrap" style="margin-top:8px;">
+                    <h3 class="ace-section-title">Spatial Distribution
+                        <span class="ace-hint" id="phase-modal-mapmode" style="opacity:0.7;"></span>
+                    </h3>
+                    <div id="phase-modal-map" class="chart-container" style="min-height: 360px;"></div>
+                </div>
+
+                <div class="ace-chart-wrap" style="margin-top:12px;">
+                    <h3 class="ace-section-title">Per-Phase Statistics</h3>
+                    <div id="phase-modal-stats"
+                         style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px,1fr));
+                                gap:8px 14px; margin-top:8px;"></div>
+                </div>
+
+                <div class="ace-chart-wrap" style="margin-top:12px;">
+                    <h3 class="ace-section-title">Top RI Events
+                        <span class="ace-hint" style="opacity:0.7;">≥ 30 kt / 24 h, sorted desc</span>
+                    </h3>
+                    <div id="phase-modal-topri" class="clim-stats-table"></div>
+                </div>
+
+                <div class="ace-chart-wrap" style="margin-top:12px;">
+                    <h3 class="ace-section-title">24-h Intensity Change Distribution</h3>
+                    <div id="phase-modal-hist" class="chart-container"></div>
+                </div>
             </div>
         </div>
     </div>
