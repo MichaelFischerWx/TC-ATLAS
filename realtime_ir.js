@@ -406,6 +406,8 @@
 
     // Global map product state
     var globalProduct = 'eir';       // 'eir' or 'geocolor'
+    var _labelsLayer = null;         // CARTO place-name tile layer (toggleable)
+    var _labelsVisible = true;       // default: labels on
     var gibsVisLayers = [];          // GIBS GeoColor tile layers on main map
     var latestGIBSTime = null;       // cached latest GIBS time string (oldest satellite — used for animation)
     var latestGIBSTimes = {};         // per-satellite latest times, e.g. {'GOES-East': '...', 'Himawari': '...'}
@@ -1438,6 +1440,25 @@
     }
 
     /** Toggle the global map between IR and GeoColor */
+    /** Show / hide the CARTO place-name label tiles. The labels read
+     *  as info overload once env contour overlays are active — this
+     *  toggle lets the user clear them with one click. State is
+     *  preserved across IR/GeoColor mode flips. */
+    function toggleLabels(visible) {
+        if (typeof visible === 'boolean') _labelsVisible = visible;
+        else _labelsVisible = !_labelsVisible;
+        if (!_labelsLayer || !map) return;
+        if (_labelsVisible) {
+            if (!map.hasLayer(_labelsLayer)) _labelsLayer.addTo(map);
+        } else {
+            if (map.hasLayer(_labelsLayer)) map.removeLayer(_labelsLayer);
+        }
+        var btn = document.getElementById('ir-labels-toggle');
+        if (btn) btn.classList.toggle('active', _labelsVisible);
+        _ga('rt_labels_toggle', { on: _labelsVisible });
+    }
+    window.toggleLabels = toggleLabels;
+
     function setGlobalProduct(mode) {
         if (mode === globalProduct) return;
         globalProduct = mode;
@@ -1812,13 +1833,15 @@
         map.getPane('coastlinePane').style.pointerEvents = 'none';
         _loadCoastlineOverlay(map);
 
-        // Labels on top of IR
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png', {
+        // Labels on top of IR — stashed on `_labelsLayer` so the "Labels"
+        // toggle in the right rail can add/remove it without rebuilding.
+        _labelsLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png', {
             attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a> | IR: <a href="https://earthdata.nasa.gov/gibs">NASA GIBS</a>',
             subdomains: 'abcd',
             maxZoom: 19,
             pane: 'overlayPane'
-        }).addTo(map);
+        });
+        if (_labelsVisible) _labelsLayer.addTo(map);
 
         map.zoomControl.setPosition('topleft');
 
@@ -1862,8 +1885,10 @@
                     + '</svg>';
                 exportBtn.addEventListener('click', _exportMapPng);
 
-                // ── Compact IR/GeoColor mode switch (segmented) ─────
-                var seg = L.DomUtil.create('div', 'ir-mode-segment', wrap);
+                // ── Basemap row: [IR ⇄ GeoColor]  [Labels] ──────────
+                var basemapRow = L.DomUtil.create('div', 'ir-basemap-row', wrap);
+
+                var seg = L.DomUtil.create('div', 'ir-mode-segment', basemapRow);
                 seg.id = 'ir-mode-segment';
                 seg.innerHTML =
                       '<button type="button" class="ir-mode-btn ir-mode-active" data-mode="eir">IR</button>'
@@ -1874,6 +1899,16 @@
                         setGlobalProduct(e.target.getAttribute('data-mode'));
                     });
                 }
+
+                // Compact "Labels" toggle — flip place names on/off so
+                // they don't compete with env contour values for the eye.
+                var labelsBtn = L.DomUtil.create('button', 'ir-global-toggle-btn ir-labels-toggle', basemapRow);
+                labelsBtn.id = 'ir-labels-toggle';
+                labelsBtn.type = 'button';
+                labelsBtn.textContent = 'Labels';
+                labelsBtn.title = 'Show / hide country & city labels on the basemap';
+                if (_labelsVisible) labelsBtn.classList.add('active');
+                labelsBtn.addEventListener('click', function () { toggleLabels(); });
 
                 // ── DeepMind WeatherLab status pill ──────────────────
                 // (Previously sat under its own dedicated button.) Now

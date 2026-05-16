@@ -1695,6 +1695,20 @@ html, body { margin: 0; padding: 0; }
     color: #ffffff;
 }
 
+/* Imagery row that holds [IR ⇄ GeoColor] beside the Labels chip. */
+.ir-basemap-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+/* Compact Labels toggle — single-word chip, same dark pill as other
+   utility buttons but smaller padding so it sits flush with the
+   segmented IR/GeoColor switcher height-wise. */
+.ir-labels-toggle {
+    padding: 4px 10px;
+    font-size: 0.7rem;
+}
+
 /* The unified Layers dropdown — wider than the old single-purpose
    menus so it can hold the FORECAST / ANALYSIS / WIND BARBS sections
    side-by-side at the same panel level. Capped on tall screens so the
