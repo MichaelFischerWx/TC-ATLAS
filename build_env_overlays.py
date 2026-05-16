@@ -154,8 +154,10 @@ def read_gfs_field(grib_bytes: bytes, level: int, var: str
             backend_kwargs={"indexpath": ""},  # disable index files
             decode_timedelta=False,
         )
-        # GFS variable naming: UGRD→"u", VGRD→"v", RH→"r", TMP→"t"
-        name_map = {"UGRD": "u", "VGRD": "v", "RH": "r", "TMP": "t"}
+        # GFS variable naming: UGRD→"u", VGRD→"v", RH→"r", TMP→"t",
+        # HGT→"gh" (geopotential height in m, exposed by cfgrib as `gh`).
+        name_map = {"UGRD": "u", "VGRD": "v", "RH": "r", "TMP": "t",
+                    "HGT": "gh"}
         xname = name_map.get(var, var.lower())
         if xname not in ds.data_vars:
             log.warning("Variable %s not found in GRIB (have: %s)",
@@ -1063,6 +1065,61 @@ def build_vorticity(date_str: str, hour_str: str, level: int
     return cyclonic if upload_layer(spec, cyclonic) else None
 
 
+def build_z500_heights(date_str: str, hour_str: str) -> Optional[bytes]:
+    """500 hPa geopotential height (decameters), contoured at 3 dam.
+
+    The classic synoptic-overlay field — pairs naturally with low-level
+    vorticity (shows where the upper-level support sits relative to the
+    surface circulation) and with upper-level wind barbs (jet streaks +
+    ridges). 3 dam intervals match NHC / SPC / WPC convention.
+
+    Smoothed with a 200 km disc to suppress 0.25° grid noise without
+    softening synoptic ridges/troughs (those have wavelengths well
+    above 200 km). Cyclonic-color encoding via `viridis`: low heights
+    (cool purple) = troughs / cold lows, high heights (warm yellow) =
+    subtropical ridge.
+    """
+    log.info("Building Z500 heights: GFS %s %sZ", date_str, hour_str)
+    z_grib = fetch_gfs_global(date_str, hour_str, [500], "HGT")
+    if not z_grib:
+        log.error("Z500: GFS HGT fetch failed")
+        return None
+
+    z_m = read_gfs_field(z_grib, 500, "HGT")
+    if z_m is None:
+        log.error("Z500: missing HGT field at 500 hPa")
+        return None
+
+    z_dam = (z_m / 10.0).astype(np.float32)  # m → dam
+    z_s = disc_smooth(z_dam, 200.0)
+    z_s = regrid_to_global(z_s)
+
+    valid = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}T{hour_str}:00:00Z"
+    spec = LayerSpec(
+        name="z500_heights",
+        title="500 hPa Geopotential Height",
+        units="dam",
+        vmin=480,
+        vmax=600,
+        step=3,
+        cmap="viridis",
+        # Explicit list so contour selection doesn't drift if vmin/vmax
+        # ever change. 3 dam from 480 to 600 inclusive = 41 contours,
+        # which globally covers polar lows (~480 dam) through the deep-
+        # tropics subtropical ridge (~595 dam).
+        levels_override=list(range(480, 603, 3)),
+        valid_time=valid,
+        description=(
+            "500 hPa geopotential height from the latest GFS 0.25° "
+            "analysis (m → dam), 200 km disc-smoothed. Contoured every "
+            "3 dam — pairs naturally with low-level vorticity + upper-"
+            "level wind barbs to show ridge/trough structure relative "
+            "to the surface circulation."
+        ),
+    )
+    return z_s if upload_layer(spec, z_s) else None
+
+
 def build_midlevel_rh(date_str: str, hour_str: str) -> Optional[bytes]:
     """700-400 hPa layer-averaged relative humidity (%)."""
     log.info("Building mid-level RH: GFS %s %sZ", date_str, hour_str)
@@ -1359,6 +1416,7 @@ def main() -> int:
         ("vort_850",      lambda: build_vorticity(date_str, hour_str, 850)),
         ("vort_700",      lambda: build_vorticity(date_str, hour_str, 700)),
         ("vort_500",      lambda: build_vorticity(date_str, hour_str, 500)),
+        ("z500_heights",  lambda: build_z500_heights(date_str, hour_str)),
         ("winds_850",     lambda: build_winds(date_str, hour_str, 850)),
         ("winds_700",     lambda: build_winds(date_str, hour_str, 700)),
         ("winds_500",     lambda: build_winds(date_str, hour_str, 500)),

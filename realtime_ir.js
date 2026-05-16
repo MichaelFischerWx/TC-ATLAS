@@ -1946,6 +1946,24 @@
         });
         map.addControl(new EnvAnalysisControl());
 
+        // PNG export — captures the current map view (IR base + active
+        // env overlays + barbs + tracks) via html2canvas (lazy-loaded
+        // from a CDN on first click). Filename includes a UTC stamp so
+        // serial exports don't clobber each other.
+        var ExportControl = L.Control.extend({
+            options: { position: 'topright' },
+            onAdd: function () {
+                var btn = L.DomUtil.create('button', 'ir-global-toggle-btn');
+                btn.id = 'ir-global-export-btn';
+                btn.textContent = 'Save PNG';
+                btn.title = 'Save the current map view as a PNG image';
+                L.DomEvent.disableClickPropagation(btn);
+                btn.addEventListener('click', _exportMapPng);
+                return btn;
+            }
+        });
+        map.addControl(new ExportControl());
+
         // Env colorbar — fixed-position bottom-right (where intensity
         // legend used to live; that legend is now toggle-only). Keeps
         // it well clear of the Brightness Temp colorbar + animation
@@ -2096,6 +2114,57 @@
             }
         });
         map.addControl(new AnimPanel());
+
+        // ── Keyboard shortcuts for the global IR animation ──────
+        // ←/→  step prev/next frame   Space  play/pause
+        // +/=  speed up                -      slow down
+        // Skipped if focus is in an input/textarea/select, if the
+        // global map view is hidden (storm-detail open), or if the
+        // user is holding a modifier key (let browser shortcuts win).
+        document.addEventListener('keydown', function (e) {
+            if (e.metaKey || e.ctrlKey || e.altKey) return;
+            var t = e.target;
+            if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA'
+                || t.tagName === 'SELECT' || t.isContentEditable)) return;
+            // Only act when the global map is the visible view — bail if
+            // the storm-detail overlay is up (it covers the global anim
+            // panel, so scrubbing the unseen slider would surprise users).
+            var detail = document.getElementById('ir-detail');
+            if (detail && detail.style.display !== 'none' && detail.offsetParent !== null) return;
+            var panel = document.getElementById('ir-global-anim-panel');
+            if (!panel) return;
+
+            switch (e.key) {
+                case 'ArrowLeft':
+                    e.preventDefault();
+                    stopGlobalAnimation();
+                    prevGlobalFrame();
+                    break;
+                case 'ArrowRight':
+                    e.preventDefault();
+                    stopGlobalAnimation();
+                    nextGlobalFrame();
+                    break;
+                case ' ':
+                case 'Spacebar':
+                    e.preventDefault();
+                    toggleGlobalAnimation();
+                    break;
+                case '+':
+                case '=':
+                    e.preventDefault();
+                    cycleGlobalAnimSpeed();
+                    break;
+                case '-':
+                case '_':
+                    e.preventDefault();
+                    // Step backward through the speed list — wrap by
+                    // adding LENGTH before the modulo so −1 → last entry.
+                    globalAnimSpeedIdx = (globalAnimSpeedIdx - 1 + GLOBAL_ANIM_SPEEDS.length) % GLOBAL_ANIM_SPEEDS.length;
+                    _refreshAnimSlider();
+                    break;
+            }
+        });
     }
 
     /** Clear existing storm markers from the map */
@@ -5662,12 +5731,8 @@
 
             var ctx = this._canvas.getContext('2d');
             ctx.clearRect(0, 0, size.x, size.y);
-            // Cream "print ink" matching the climatology-globe barbs —
-            // reads warmer than pure white and stays legible over both
-            // satellite IR and the env-overlay color ranges.
-            ctx.strokeStyle = 'rgba(244, 240, 224, 0.92)';
-            ctx.fillStyle   = 'rgba(244, 240, 224, 0.92)';
-            ctx.lineWidth = 1.4;
+            // _drawWindBarb manages its own stroke/fill colors (halo +
+            // cream ink). We just set the line caps once here.
             ctx.lineCap = 'round';
             ctx.lineJoin = 'round';
 
@@ -5691,7 +5756,11 @@
 
             for (var lat = sLat; lat <= nLat; lat += spacing) {
                 for (var lon = wLon; lon <= eLon; lon += spacing) {
-                    var sx = Math.floor((lon + 180) / 360 * dw);
+                    // Wrap lon into [-180, 180) so users panning past the
+                    // dateline still sample the global UV grid (the map
+                    // tiles repeat, so barbs need to as well).
+                    var lonNorm = lon - 360 * Math.floor((lon + 180) / 360);
+                    var sx = Math.floor((lonNorm + 180) / 360 * dw);
                     var sy = Math.floor((90 - lat) / 180 * dh);
                     if (sx < 0 || sx >= dw || sy < 0 || sy >= dh) continue;
                     var idx = (sy * dw + sx) * 4;
@@ -5750,12 +5819,13 @@
         // looks wrong, the answer is "flip the sign of `side`."
         var side = isSH ? +1 : -1;
 
-        // Shaft from station (0,0) to tail (0, +STAFF) — +y is upwind
-        // in the rotated frame after the fromRot rotation above.
-        ctx.beginPath();
-        ctx.moveTo(0, 0);
-        ctx.lineTo(0, STAFF);
-        ctx.stroke();
+        // Build paths once; we then stroke/fill them twice — first as
+        // a wider dark "knockout" halo, then as the cream ink on top.
+        // Without the halo the cream barbs blend into the lightest
+        // vorticity / shear contour tones (pale pink ~ cream).
+        var lines = new Path2D();
+        lines.moveTo(0, 0);
+        lines.lineTo(0, STAFF);
 
         // Speed decomposition (rounded down to 5-kt increments).
         var kt = speed_kt;
@@ -5767,21 +5837,18 @@
         // then a half feather. pos walks from the tail back toward
         // the station along the shaft.
         var pos = STAFF;
+        var pennants = new Path2D();
 
         for (var i = 0; i < nPen; i++) {
-            ctx.beginPath();
-            ctx.moveTo(0, pos);
-            ctx.lineTo(0, pos - PEN_BASE);
-            ctx.lineTo(side * FEATHER, pos);
-            ctx.closePath();
-            ctx.fill();
+            pennants.moveTo(0, pos);
+            pennants.lineTo(0, pos - PEN_BASE);
+            pennants.lineTo(side * FEATHER, pos);
+            pennants.closePath();
             pos -= PEN_BASE + SPACING * 0.5;
         }
         for (var f = 0; f < nFull; f++) {
-            ctx.beginPath();
-            ctx.moveTo(0, pos);
-            ctx.lineTo(side * FEATHER, pos);
-            ctx.stroke();
+            lines.moveTo(0, pos);
+            lines.lineTo(side * FEATHER, pos);
             pos -= SPACING;
         }
         if (nHalf) {
@@ -5789,13 +5856,70 @@
             // (matches the climatology globe convention so it doesn't
             // ride at the very tip alone).
             if (nPen === 0 && nFull === 0) pos -= SPACING;
-            ctx.beginPath();
-            ctx.moveTo(0, pos);
-            ctx.lineTo(side * FEATHER_H, pos);
-            ctx.stroke();
+            lines.moveTo(0, pos);
+            lines.lineTo(side * FEATHER_H, pos);
         }
 
+        // Pass 1 — dark halo (slightly wider than ink stroke).
+        ctx.lineWidth = 3.0;
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.55)';
+        ctx.fillStyle   = 'rgba(0, 0, 0, 0.55)';
+        ctx.stroke(lines);
+        if (nPen) { ctx.fill(pennants); ctx.stroke(pennants); }
+
+        // Pass 2 — cream "print ink" on top (matches the climatology
+        // globe). Reads warmer than pure white and stays legible over
+        // both satellite IR and warm env-overlay tones.
+        ctx.lineWidth = 1.4;
+        ctx.strokeStyle = 'rgba(244, 240, 224, 0.95)';
+        ctx.fillStyle   = 'rgba(244, 240, 224, 0.95)';
+        ctx.stroke(lines);
+        if (nPen) { ctx.fill(pennants); ctx.stroke(pennants); }
+
         ctx.restore();
+    }
+
+    /** Return three L.imageOverlay copies at lon offsets [-360, 0, +360]
+     *  so the raster repeats when the user pans past the dateline.
+     *  Leaflet's worldCopyJump only re-centers — content layers don't
+     *  auto-wrap, so we add the copies manually. */
+    function _addRepeatingImageOverlays(image_url, bounds) {
+        var b = L.latLngBounds(bounds);
+        var sw = b.getSouthWest();
+        var ne = b.getNorthEast();
+        var copies = [];
+        for (var off = -360; off <= 360; off += 360) {
+            copies.push(L.imageOverlay(image_url, [
+                [sw.lat, sw.lng + off],
+                [ne.lat, ne.lng + off]
+            ], { opacity: _rtEnvOpacity, interactive: false }).addTo(map));
+        }
+        return copies;
+    }
+
+    /** Deep-copy a GeoJSON FeatureCollection with every coordinate's
+     *  longitude shifted by `dLon`. Used to produce ±360°-wrapped
+     *  copies of contour layers so they remain visible when the user
+     *  pans past the dateline. */
+    function _shiftGeoJsonLon(geojson, dLon) {
+        function shift(c) {
+            if (typeof c[0] === 'number') return [c[0] + dLon, c[1]];
+            var out = new Array(c.length);
+            for (var i = 0; i < c.length; i++) out[i] = shift(c[i]);
+            return out;
+        }
+        var feats = (geojson && geojson.features) || [];
+        var outFeats = [];
+        for (var i = 0; i < feats.length; i++) {
+            var f = feats[i];
+            if (!f.geometry || !f.geometry.coordinates) continue;
+            outFeats.push({
+                type: 'Feature',
+                properties: f.properties,
+                geometry: { type: f.geometry.type, coordinates: shift(f.geometry.coordinates) }
+            });
+        }
+        return { type: 'FeatureCollection', features: outFeats };
     }
 
     function _activateEnvLayer(layer) {
@@ -5803,16 +5927,18 @@
         var bounds = layer.bounds || [[-90, -180], [90, 180]];
 
         // Three render paths depending on the layer's render_style:
-        //   wind_barb   → custom WindBarbLayer (canvas, vector)
-        //   contour     → L.geoJSON if geojson_url else L.imageOverlay
-        //   filled      → L.imageOverlay (raster)
-        var overlay;
+        //   wind_barb   → custom WindBarbLayer (canvas, vector); wraps
+        //                 internally by sampling lon mod 360
+        //   contour     → L.geoJSON if geojson_url else L.imageOverlay;
+        //                 add ±360°-shifted copies so contours repeat
+        //   filled      → L.imageOverlay (raster); add ±360° copies too
+        var overlays = [];
         var overlayKind;
         if (layer.render_style === 'wind_barb') {
-            overlay = new _WindBarbLayer(layer).addTo(map);
+            overlays = [new _WindBarbLayer(layer).addTo(map)];
             overlayKind = 'wind';
         } else if (layer.render_style === 'contour' && layer.geojson_url) {
-            overlay = L.geoJSON(null, {
+            var geoLayer = L.geoJSON(null, {
                 style: function (feature) {
                     return {
                         color: feature.properties.color || '#ffffff',
@@ -5822,15 +5948,22 @@
                     };
                 }
             }).addTo(map);
+            overlays = [geoLayer];
             overlayKind = 'geojson';
             fetch(layer.geojson_url, { cache: 'no-store' })
                 .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
                 .then(function (geojson) {
                     if (!_rtEnvActive[layer.name]) return;  // user deactivated mid-fetch
-                    overlay.addData(geojson);
+                    // Add primary world + ±360° copies to the same
+                    // L.geoJSON layer so contours stay visible past
+                    // the dateline.
+                    geoLayer.addData(geojson);
+                    geoLayer.addData(_shiftGeoJsonLon(geojson, +360));
+                    geoLayer.addData(_shiftGeoJsonLon(geojson, -360));
                     // Place value labels along each non-trivial line.
-                    // SVG text would re-render at zoom (crisp) but
-                    // L.divIcon HTML inherits the site's DM Sans font.
+                    // Labels are only placed in the primary world copy
+                    // to keep the DOM marker count manageable; users
+                    // panning past the dateline still see the lines.
                     var labels = [];
                     var features = (geojson && geojson.features) || [];
                     for (var i = 0; i < features.length; i++) {
@@ -5858,24 +5991,18 @@
                 .catch(function (err) {
                     console.warn('[Env] GeoJSON load failed for ' + layer.name + '; falling back to raster', err);
                     if (!_rtEnvActive[layer.name]) return;
-                    map.removeLayer(overlay);
-                    overlay = L.imageOverlay(layer.image_url, bounds, {
-                        opacity: _rtEnvOpacity,
-                        interactive: false
-                    }).addTo(map);
-                    _rtEnvActive[layer.name].overlay = overlay;
+                    map.removeLayer(geoLayer);
+                    var rasters = _addRepeatingImageOverlays(layer.image_url, bounds);
+                    _rtEnvActive[layer.name].overlays = rasters;
                     _rtEnvActive[layer.name].overlayKind = 'raster';
                 });
         } else {
-            overlay = L.imageOverlay(layer.image_url, bounds, {
-                opacity: _rtEnvOpacity,
-                interactive: false
-            }).addTo(map);
+            overlays = _addRepeatingImageOverlays(layer.image_url, bounds);
             overlayKind = 'raster';
         }
 
         var entry = {
-            overlay: overlay, layer: layer,
+            overlays: overlays, layer: layer,
             overlayKind: overlayKind,
             canvas: null, ctx: null
         };
@@ -5920,7 +6047,11 @@
     function _deactivateEnvLayer(name) {
         var entry = _rtEnvActive[name];
         if (!entry) return;
-        if (entry.overlay && map) map.removeLayer(entry.overlay);
+        if (entry.overlays && map) {
+            for (var k = 0; k < entry.overlays.length; k++) {
+                map.removeLayer(entry.overlays[k]);
+            }
+        }
         if (entry.labels && map) {
             for (var i = 0; i < entry.labels.length; i++) {
                 map.removeLayer(entry.labels[i]);
@@ -6032,13 +6163,85 @@
         _rtEnvOpacity = Math.max(0, Math.min(1, v));
         Object.keys(_rtEnvActive).forEach(function (n) {
             var entry = _rtEnvActive[n];
-            if (!entry || !entry.overlay) return;
-            if (entry.overlayKind === 'geojson') {
-                // L.geoJSON applies opacity via setStyle on its child polylines.
-                entry.overlay.setStyle({ opacity: _rtEnvOpacity });
-            } else {
-                entry.overlay.setOpacity(_rtEnvOpacity);
+            if (!entry || !entry.overlays || entry.overlays.length === 0) return;
+            for (var k = 0; k < entry.overlays.length; k++) {
+                var ov = entry.overlays[k];
+                if (entry.overlayKind === 'geojson') {
+                    // L.geoJSON applies opacity via setStyle on its child polylines.
+                    ov.setStyle({ opacity: _rtEnvOpacity });
+                } else {
+                    ov.setOpacity(_rtEnvOpacity);
+                }
             }
+        });
+    }
+
+    // ── PNG export of current global map view ────────────────────
+    //
+    // Lazy-loads html2canvas on first click (kept off the page-load
+    // path since most users never export). Captures the #ir-map
+    // container — Leaflet's panes, our env overlays, the wind-barb
+    // canvas, the colorbar + animation panel are all DOM children of
+    // the map root, so a single capture grabs everything that's
+    // visible. NASA GIBS + our backend image overlays both serve
+    // CORS headers, so html2canvas can read them without tainting.
+
+    var _html2canvasLoadingPromise = null;
+    function _ensureHtml2canvas() {
+        if (window.html2canvas) return Promise.resolve();
+        if (_html2canvasLoadingPromise) return _html2canvasLoadingPromise;
+        _html2canvasLoadingPromise = new Promise(function (resolve, reject) {
+            var s = document.createElement('script');
+            s.src = 'https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js';
+            s.onload = function () { resolve(); };
+            s.onerror = function () { reject(new Error('Failed to load html2canvas')); };
+            document.head.appendChild(s);
+        });
+        return _html2canvasLoadingPromise;
+    }
+
+    function _exportMapPng() {
+        var btn = document.getElementById('ir-global-export-btn');
+        var orig = btn ? btn.textContent : '';
+        if (btn) { btn.textContent = 'Saving…'; btn.disabled = true; }
+
+        _ensureHtml2canvas().then(function () {
+            var node = document.getElementById('ir-map');
+            if (!node) throw new Error('Map element not found');
+            return window.html2canvas(node, {
+                useCORS: true,
+                allowTaint: false,
+                backgroundColor: null,
+                logging: false,
+                scale: window.devicePixelRatio || 1
+            });
+        }).then(function (canvas) {
+            return new Promise(function (resolve, reject) {
+                canvas.toBlob(function (blob) {
+                    if (!blob) return reject(new Error('Canvas produced no blob (likely CORS taint)'));
+                    resolve(blob);
+                }, 'image/png');
+            });
+        }).then(function (blob) {
+            // YYYYMMDDTHHMMSSZ — sortable, file-system-safe.
+            var ts = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
+            var url = URL.createObjectURL(blob);
+            var a = document.createElement('a');
+            a.href = url;
+            a.download = 'tc-atlas-rt-' + ts + '.png';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            // Hold the URL briefly so Safari has time to start the download
+            // before the blob is revoked.
+            setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+            _ga('rt_export_png', { ok: true });
+        }).catch(function (err) {
+            console.error('[Export] PNG export failed', err);
+            _ga('rt_export_png', { ok: false, msg: String(err && err.message) });
+            alert('Couldn’t save PNG: ' + (err && err.message ? err.message : err));
+        }).then(function () {
+            if (btn) { btn.textContent = orig; btn.disabled = false; }
         });
     }
 
@@ -6058,6 +6261,13 @@
             match: function (L_) { return L_.name.indexOf('vort_') === 0; },
             shortTitle: function (L_) {
                 return L_.title.replace(/\s*hPa Cyclonic Vorticity\s*/i, ' hPa');
+            }
+        },
+        {
+            label: 'Heights',
+            match: function (L_) { return L_.name.indexOf('z') === 0 && L_.name.indexOf('_heights') > 0; },
+            shortTitle: function (L_) {
+                return L_.title.replace(/\s*hPa Geopotential Height\s*/i, ' hPa');
             }
         },
         {
