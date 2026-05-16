@@ -1574,3 +1574,134 @@ html, body { margin: 0; padding: 0; }
     color: #e2e8f0;
     font-variant-numeric: tabular-nums;
 }
+
+/* Sub-headers inside the unified Layers panel — for the Wind Shear /
+   Vorticity / Heights / Moisture & SST physical-category groups
+   sitting INSIDE the larger ANALYSIS section. Tighter, dimmer than
+   the top-level .ir-global-menu-section so the hierarchy reads
+   "section → subhead → row" without competing weights. */
+.ir-global-menu-subhead {
+    padding: 4px 10px 1px;
+    font-size: 0.58rem;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 600;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   UNIFIED LAYERS PANEL  (right-rail UI shell)
+   One primary "Layers ▾" trigger replaces the old stack of DeepMind
+   / Genesis / Winds / Env Analysis pills. The redesign collapses six
+   visually-identical buttons into one labeled control + small utility
+   chips, with a count badge so users see how many overlays are on
+   without opening anything.
+   ═══════════════════════════════════════════════════════════════ */
+
+.ir-layers-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 4px;
+}
+
+.ir-layers-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+/* Primary "Layers" trigger button — slightly more emphatic than the
+   utility chips beside it (slight bg lift, label has more weight). */
+.ir-layers-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 600;
+}
+.ir-layers-toggle .ir-layers-label {
+    letter-spacing: 0.02em;
+}
+.ir-layers-toggle .ir-layers-caret {
+    font-size: 0.65rem;
+    opacity: 0.7;
+    transition: transform 0.18s;
+}
+.ir-layers-toggle.active .ir-layers-caret {
+    transform: rotate(180deg);
+}
+.ir-layers-toggle .ir-layers-count {
+    display: none;            /* hidden until JS sets has-active */
+    min-width: 16px;
+    padding: 0 5px;
+    height: 16px;
+    line-height: 16px;
+    text-align: center;
+    border-radius: 8px;
+    background: var(--um-orange, #F47321);
+    color: #ffffff;
+    font-size: 0.62rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    margin-left: 2px;
+}
+.ir-layers-toggle.has-active .ir-layers-count {
+    display: inline-block;
+}
+
+/* Icon-only utility chip (PNG export) — square footprint, same dark
+   pill base as .ir-global-toggle-btn but compact so it doesn't compete
+   with the labeled trigger. */
+.ir-layers-icon-btn {
+    width: 32px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 28px;
+}
+
+/* IR/GeoColor segmented mode switch — replaces the wide "Switch to
+   GeoColor" pill. Binary mode picker reads more clearly as two pills
+   side by side with one always lit. */
+.ir-mode-segment {
+    display: inline-flex;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 5px;
+    overflow: hidden;
+    background: rgba(22, 27, 36, 0.92);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+}
+.ir-mode-btn {
+    background: transparent;
+    border: none;
+    padding: 4px 12px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.7rem;
+    font-weight: 500;
+    color: #cbd5e1;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+    border-right: 1px solid rgba(255, 255, 255, 0.10);
+}
+.ir-mode-btn:last-child { border-right: none; }
+.ir-mode-btn:hover {
+    background: rgba(74, 155, 110, 0.18);
+    color: #ffffff;
+}
+.ir-mode-btn.ir-mode-active {
+    background: rgba(74, 155, 110, 0.32);
+    color: #ffffff;
+}
+
+/* The unified Layers dropdown — wider than the old single-purpose
+   menus so it can hold the FORECAST / ANALYSIS / WIND BARBS sections
+   side-by-side at the same panel level. Capped on tall screens so the
+   panel doesn't bleed off the bottom of the map. */
+.ir-layers-panel {
+    min-width: 280px;
+    max-width: 320px;
+    max-height: calc(100vh - 220px);
+    overflow-y: auto;
+}

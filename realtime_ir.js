@@ -1442,13 +1442,14 @@
         if (mode === globalProduct) return;
         globalProduct = mode;
 
-        // Update toggle button
-        var toggleBtn = document.getElementById('ir-global-product-toggle');
-        if (toggleBtn) {
-            toggleBtn.textContent = (mode === 'geocolor') ? 'Switch to IR' : 'Switch to GeoColor';
-            toggleBtn.title = (mode === 'geocolor')
-                ? 'Currently showing GeoColor — click to switch to Enhanced IR'
-                : 'Currently showing Enhanced IR — click to switch to GeoColor';
+        // Update IR/GeoColor segmented buttons inside the Layers panel
+        var seg = document.getElementById('ir-mode-segment');
+        if (seg) {
+            var modeBtns = seg.querySelectorAll('.ir-mode-btn');
+            for (var mi = 0; mi < modeBtns.length; mi++) {
+                modeBtns[mi].classList.toggle('ir-mode-active',
+                    modeBtns[mi].getAttribute('data-mode') === mode);
+            }
         }
 
         // Show/hide IR colorbar
@@ -1824,145 +1825,74 @@
         // Allow zoom 7 (GeoColor tiles go up to Level7)
         map.setMaxZoom(GIBS_VIS_MAX_ZOOM);
 
-        // Add IR/GeoColor toggle control (bottom-right of map)
-        var ProductToggle = L.Control.extend({
+        // ── Unified Layers panel (replaces the old stack of separate
+        //    DeepMind / Genesis / Winds / Env Analysis pills) ────────
+        // One trigger pill opens a single sectioned panel grouping
+        // FORECAST / ANALYSIS / WIND BARBS so the right rail goes from
+        // five disjointed buttons to one primary control with a count
+        // badge that tells the user how many overlays are on without
+        // having to open the panel. Save PNG sits beside it as a small
+        // utility icon. All the underlying toggles (toggleGlobalWeatherlab,
+        // toggleGenesis, _activate/_deactivateEnvLayer, _setEnvOpacity)
+        // stay as the single source of truth — this is a UI shell only.
+        var LayersControl = L.Control.extend({
             options: { position: 'topright' },
             onAdd: function () {
-                var btn = L.DomUtil.create('button', 'ir-global-toggle-btn');
-                btn.id = 'ir-global-product-toggle';
-                btn.textContent = 'Switch to GeoColor';
-                btn.title = 'Currently showing Enhanced IR — click to switch to GeoColor';
-                L.DomEvent.disableClickPropagation(btn);
-                btn.addEventListener('click', function () {
-                    setGlobalProduct(globalProduct === 'eir' ? 'geocolor' : 'eir');
-                });
-                return btn;
-            }
-        });
-        map.addControl(new ProductToggle());
-
-        // DeepMind ensemble global toggle — overlay forecast tracks for
-        // every active storm/invest from the latest WeatherLab paired CSV.
-        var DeepMindToggle = L.Control.extend({
-            options: { position: 'topright' },
-            onAdd: function () {
-                var wrap = L.DomUtil.create('div', 'ir-global-wl-wrap');
-                wrap.style.cssText = 'display:flex;flex-direction:column;align-items:flex-end;gap:3px;';
+                var wrap = L.DomUtil.create('div', 'ir-layers-wrap');
                 L.DomEvent.disableClickPropagation(wrap);
+                L.DomEvent.disableScrollPropagation(wrap);
 
-                var btn = L.DomUtil.create('button', 'ir-global-toggle-btn', wrap);
-                btn.id = 'ir-global-wl-toggle';
-                btn.textContent = 'DeepMind 10-day';
-                btn.title = 'Overlay 50-member WeatherLab ensemble forecast tracks for every active storm + invest';
-                btn.addEventListener('click', toggleGlobalWeatherlab);
+                // ── Trigger row: [Layers ▾ (N)]  [📷] ─────────────
+                var row = L.DomUtil.create('div', 'ir-layers-row', wrap);
 
+                var btn = L.DomUtil.create('button', 'ir-global-toggle-btn ir-layers-toggle', row);
+                btn.id = 'ir-layers-toggle';
+                btn.title = 'Open the layers panel — forecast tracks, env analysis, wind barbs';
+                btn.innerHTML = '<span class="ir-layers-label">Layers</span>'
+                              + '<span class="ir-layers-caret">▾</span>'
+                              + '<span class="ir-layers-count" id="ir-layers-count"></span>';
+                btn.addEventListener('click', toggleLayersPanel);
+
+                var exportBtn = L.DomUtil.create('button', 'ir-global-toggle-btn ir-layers-icon-btn', row);
+                exportBtn.id = 'ir-global-export-btn';
+                exportBtn.title = 'Save the current map view as a PNG image';
+                exportBtn.innerHTML = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">'
+                    + '<path fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"'
+                    + ' d="M3 11.5v1.5h10v-1.5M8 2.5v8M4.5 7L8 10.5L11.5 7"/>'
+                    + '</svg>';
+                exportBtn.addEventListener('click', _exportMapPng);
+
+                // ── Compact IR/GeoColor mode switch (segmented) ─────
+                var seg = L.DomUtil.create('div', 'ir-mode-segment', wrap);
+                seg.id = 'ir-mode-segment';
+                seg.innerHTML =
+                      '<button type="button" class="ir-mode-btn ir-mode-active" data-mode="eir">IR</button>'
+                    + '<button type="button" class="ir-mode-btn"               data-mode="geocolor">GeoColor</button>';
+                var modeBtns = seg.querySelectorAll('.ir-mode-btn');
+                for (var mi = 0; mi < modeBtns.length; mi++) {
+                    modeBtns[mi].addEventListener('click', function (e) {
+                        setGlobalProduct(e.target.getAttribute('data-mode'));
+                    });
+                }
+
+                // ── DeepMind WeatherLab status pill ──────────────────
+                // (Previously sat under its own dedicated button.) Now
+                // lives just below the Layers trigger so the load state
+                // is visible whenever DeepMind tracks are active.
                 var status = L.DomUtil.create('span', 'ir-global-wl-status', wrap);
                 status.id = 'ir-global-wl-status';
                 status.style.display = 'none';
 
-                return wrap;
-            }
-        });
-        map.addControl(new DeepMindToggle());
-
-        // FNV3 LARGE_ENSEMBLE Genesis Forecasts menu — contains the
-        // 1000-member spaghetti toggle + 2d/7d/14d formation
-        // probability checkboxes. Orange palette to visually separate
-        // from the cyan paired DeepMind 10-day above.
-        var GenesisControl = L.Control.extend({
-            options: { position: 'topright' },
-            onAdd: function () {
-                var wrap = L.DomUtil.create('div', 'ir-genesis-wrap');
-                wrap.style.cssText = 'display:flex;flex-direction:column;align-items:flex-end;gap:3px;';
-                L.DomEvent.disableClickPropagation(wrap);
-
-                var btn = L.DomUtil.create('button', 'ir-global-toggle-btn', wrap);
-                btn.id = 'ir-genesis-toggle';
-                btn.textContent = 'Genesis Forecasts';
-                btn.title = 'FNV3 LARGE_ENSEMBLE cyclogenesis: 1000-member spaghetti + 2d/7d/14d formation probability';
-                btn.addEventListener('click', toggleGenesisMenu);
-
-                var menu = L.DomUtil.create('div', 'ir-genesis-menu ir-global-menu', wrap);
-                menu.id = 'ir-genesis-menu';
-                menu.style.display = 'none';
-                menu.style.minWidth = '260px';
-                menu.innerHTML = '<div class="ir-global-menu-empty">Loading…</div>';
+                // ── Panel container (populated by _renderLayersPanel) ─
+                var panel = L.DomUtil.create('div', 'ir-layers-panel ir-global-menu', wrap);
+                panel.id = 'ir-layers-panel';
+                panel.style.display = 'none';
+                panel.innerHTML = '<div class="ir-global-menu-empty">Loading layers…</div>';
 
                 return wrap;
             }
         });
-        map.addControl(new GenesisControl());
-
-        // Wind Barbs menu — separate so users can mix wind levels with
-        // env diagnostics (e.g. 850 mb vorticity + 200 mb wind barbs).
-        var WindsControl = L.Control.extend({
-            options: { position: 'topright' },
-            onAdd: function () {
-                var wrap = L.DomUtil.create('div', 'ir-winds-wrap');
-                wrap.style.cssText = 'display:flex;flex-direction:column;align-items:flex-end;gap:3px;';
-                L.DomEvent.disableClickPropagation(wrap);
-
-                var btn = L.DomUtil.create('button', 'ir-global-toggle-btn', wrap);
-                btn.id = 'ir-global-winds-toggle';
-                btn.textContent = 'Winds';
-                btn.title = 'Wind barbs at 850 / 700 / 500 / 200 hPa — open menu to pick levels';
-                btn.addEventListener('click', toggleWindsMenu);
-
-                var menu = L.DomUtil.create('div', 'ir-global-winds-menu ir-global-menu', wrap);
-                menu.id = 'ir-global-winds-menu';
-                menu.style.display = 'none';
-                menu.style.minWidth = '220px';
-                menu.innerHTML = '<div class="ir-global-menu-empty">Loading…</div>';
-
-                return wrap;
-            }
-        });
-        map.addControl(new WindsControl());
-
-        // Environmental Analysis menu — submenu of checkable global overlays
-        // (shear, mid-level RH, SST) produced by the build_env_overlays
-        // Cloud Run Job and stored on GCS as global PNGs.
-        var EnvAnalysisControl = L.Control.extend({
-            options: { position: 'topright' },
-            onAdd: function () {
-                var wrap = L.DomUtil.create('div', 'ir-global-env-wrap');
-                wrap.style.cssText = 'display:flex;flex-direction:column;align-items:flex-end;gap:3px;';
-                L.DomEvent.disableClickPropagation(wrap);
-
-                var btn = L.DomUtil.create('button', 'ir-global-toggle-btn', wrap);
-                btn.id = 'ir-global-env-toggle';
-                btn.textContent = 'Environmental Analysis';
-                btn.title = 'Toggle GFS-derived shear, mid-level RH, and OISST SST overlays';
-                btn.addEventListener('click', toggleEnvMenu);
-
-                var menu = L.DomUtil.create('div', 'ir-global-env-menu ir-global-menu', wrap);
-                menu.id = 'ir-global-env-menu';
-                menu.style.display = 'none';
-                menu.style.minWidth = '240px';
-                menu.innerHTML = '<div class="ir-global-menu-empty">Loading layers…</div>';
-
-                return wrap;
-            }
-        });
-        map.addControl(new EnvAnalysisControl());
-
-        // PNG export — captures the current map view (IR base + active
-        // env overlays + barbs + tracks) via html2canvas (lazy-loaded
-        // from a CDN on first click). Filename includes a UTC stamp so
-        // serial exports don't clobber each other.
-        var ExportControl = L.Control.extend({
-            options: { position: 'topright' },
-            onAdd: function () {
-                var btn = L.DomUtil.create('button', 'ir-global-toggle-btn');
-                btn.id = 'ir-global-export-btn';
-                btn.textContent = 'Save PNG';
-                btn.title = 'Save the current map view as a PNG image';
-                L.DomEvent.disableClickPropagation(btn);
-                btn.addEventListener('click', _exportMapPng);
-                return btn;
-            }
-        });
-        map.addControl(new ExportControl());
+        map.addControl(new LayersControl());
 
         // Env colorbar — fixed-position bottom-right (where intensity
         // legend used to live; that legend is now toggle-only). Keeps
@@ -5332,9 +5262,7 @@
 
     function toggleGlobalWeatherlab() {
         _rtGlobalWLVisible = !_rtGlobalWLVisible;
-        var btn = document.getElementById('ir-global-wl-toggle');
         var status = document.getElementById('ir-global-wl-status');
-        if (btn) btn.classList.toggle('active', _rtGlobalWLVisible);
         if (status) status.style.display = _rtGlobalWLVisible ? '' : 'none';
         if (_rtGlobalWLVisible) {
             if (!_rtGlobalWLData) {
@@ -5345,6 +5273,7 @@
         } else {
             _clearGlobalWeatherlab();
         }
+        if (typeof _refreshLayersCount === 'function') _refreshLayersCount();
     }
     window.toggleGlobalWeatherlab = toggleGlobalWeatherlab;
 
@@ -5488,7 +5417,7 @@
         } else {
             _clearGenesis();
         }
-        _refreshGenesisMenuStatus();
+        if (typeof _refreshLayersCount === 'function') _refreshLayersCount();
     }
     window.toggleGenesis = toggleGenesis;
 
@@ -5502,125 +5431,20 @@
         if (L_) _activateEnvLayer(L_);
     }
 
-    /** Open or close the Genesis Forecasts panel. */
-    var _rtGenesisMenuOpen = false;
-    function toggleGenesisMenu() {
-        _rtGenesisMenuOpen = !_rtGenesisMenuOpen;
-        var menu = document.getElementById('ir-genesis-menu');
-        var btn = document.getElementById('ir-genesis-toggle');
-        if (btn) {
-            var on = _rtGenesisMenuOpen || _rtGenesisVisible
-                || _rtEnvActive.genesis_prob_2d
-                || _rtEnvActive.genesis_prob_7d
-                || _rtEnvActive.genesis_prob_14d;
-            btn.classList.toggle('active-orange', on);
-        }
-        if (!menu) return;
-        menu.style.display = _rtGenesisMenuOpen ? '' : 'none';
-        if (_rtGenesisMenuOpen) {
-            var first = !_rtEnvMetadata;
-            var ensureMeta = first ? _loadEnvMetadata() : Promise.resolve();
-            ensureMeta.then(function () {
-                // First-open defaults: ensemble tracks + 14-day formation
-                // probability, so users see something useful without
-                // having to hunt through checkboxes.
-                var anyOn = _rtGenesisVisible
-                    || _rtEnvActive.genesis_prob_2d
-                    || _rtEnvActive.genesis_prob_7d
-                    || _rtEnvActive.genesis_prob_14d;
-                if (!anyOn) {
-                    toggleGenesis();
-                    _activateGenesisProbLayer('genesis_prob_14d');
-                }
-                _renderGenesisMenu();
-            });
-        }
-    }
+    /** Legacy entry point — the dedicated Genesis dropdown is gone; the
+     *  unified Layers panel now hosts all genesis controls. Kept as a
+     *  redirect so any window.toggleGenesisMenu callers keep working. */
+    function toggleGenesisMenu() { toggleLayersPanel(); }
     window.toggleGenesisMenu = toggleGenesisMenu;
 
-    function _refreshGenesisMenuStatus() {
-        // Re-paint the genesis button + checkboxes whenever an
-        // associated layer turns on/off so the UI never drifts from
-        // the layer state.
-        var menu = document.getElementById('ir-genesis-menu');
-        if (menu && menu.style.display !== 'none') _renderGenesisMenu();
-        // Re-evaluate button highlight.
-        var btn = document.getElementById('ir-genesis-toggle');
-        if (btn) {
-            var on = _rtGenesisVisible
-                || _rtEnvActive.genesis_prob_2d
-                || _rtEnvActive.genesis_prob_7d
-                || _rtEnvActive.genesis_prob_14d;
-            btn.classList.toggle('active-orange', on || _rtGenesisMenuOpen);
-        }
-    }
+    /** Legacy state-sync hook — the unified panel auto-syncs whenever
+     *  _refreshLayersCount fires, so this is now just an alias. */
+    function _refreshGenesisMenuStatus() { _refreshLayersCount(); }
 
-    function _renderGenesisMenu() {
-        var menu = document.getElementById('ir-genesis-menu');
-        if (!menu) return;
-        var layers = (_rtEnvMetadata && _rtEnvMetadata.layers) || [];
-        var probs = layers.filter(function (L_) { return L_.category === 'genesis'; });
-
-        var trackStatusText = '';
-        if (_rtGenesisLoading) {
-            trackStatusText = 'Loading 1000-member ensemble…';
-        } else if (_rtGenesisData) {
-            var n = _rtGenesisData.n_tracks || 0;
-            var init = _rtGenesisData.init_time;
-            trackStatusText = (n === 0
-                ? 'No genesis predicted in 15 days'
-                : n + ' track' + (n === 1 ? '' : 's') +
-                  (_rtGenesisData.thinned_to
-                      ? ' · thinned to ' + _rtGenesisData.thinned_to + '/track'
-                      : '')) +
-                (init
-                    ? ' · init ' + init.slice(0, 8) + ' ' + init.slice(8) + 'Z'
-                    : '');
-        }
-
-        var html = '';
-        html += '<div class="ir-global-menu-section">Ensemble tracks</div>';
-        html += '<label class="ir-global-menu-row">'
-              + '<input type="checkbox" id="ir-genesis-tracks-cb"'
-              + (_rtGenesisVisible ? ' checked' : '') + '>'
-              + '<span class="label"><b>1000-member spaghetti</b>'
-              + (trackStatusText
-                  ? '<span class="substatus">' + trackStatusText + '</span>'
-                  : '')
-              + '</span></label>';
-
-        html += '<div class="ir-global-menu-section with-divider">Formation Probability</div>';
-        if (probs.length === 0) {
-            html += '<div class="ir-global-menu-empty">Probability layers not available yet.</div>';
-        } else {
-            for (var i = 0; i < probs.length; i++) {
-                var L_ = probs[i];
-                var isOn = !!_rtEnvActive[L_.name];
-                var validShort = (L_.valid_time || '').replace('T', ' ').replace(':00:00Z', 'Z');
-                html += '<label class="ir-global-menu-row">'
-                      + '<input type="checkbox" data-genesis-layer="' + L_.name + '"'
-                      + (isOn ? ' checked' : '') + '>'
-                      + '<span class="label"><b>' + L_.title.replace('TC Formation Probability — ', '') + '</b>'
-                      + '<span class="substatus">'
-                      + 'valid ' + validShort + ' &middot; ' + L_.units + '</span>'
-                      + '</span></label>';
-            }
-        }
-
-        menu.innerHTML = html;
-
-        var tracksCb = document.getElementById('ir-genesis-tracks-cb');
-        if (tracksCb) tracksCb.addEventListener('change', function () { toggleGenesis(); });
-        var checkboxes = menu.querySelectorAll('input[data-genesis-layer]');
-        for (var j = 0; j < checkboxes.length; j++) {
-            checkboxes[j].addEventListener('change', function (e) {
-                var name = e.target.getAttribute('data-genesis-layer');
-                if (e.target.checked) _activateGenesisProbLayer(name);
-                else _deactivateEnvLayer(name);
-                _refreshGenesisMenuStatus();
-            });
-        }
-    }
+    /** Legacy renderer — the standalone Genesis dropdown is gone.
+     *  Re-routes to the unified Layers panel so any old call site
+     *  keeps refreshing the visible UI. */
+    function _renderGenesisMenu() { _renderLayersPanel(); }
 
     // ═══════════════════════════════════════════════════════════
     //  ENVIRONMENTAL ANALYSIS OVERLAYS (RT main map)
@@ -6041,6 +5865,7 @@
 
         _ensureEnvHoverHandler();
         _renderEnvColorbar();
+        if (typeof _refreshLayersCount === 'function') _refreshLayersCount();
         _ga('rt_env_layer_on', { layer: layer.name });
     }
 
@@ -6060,6 +5885,7 @@
         delete _rtEnvActive[name];
         _renderEnvColorbar();
         _hideEnvHoverTip();
+        if (typeof _refreshLayersCount === 'function') _refreshLayersCount();
         _ga('rt_env_layer_off', { layer: name });
     }
 
@@ -6176,6 +6002,248 @@
         });
     }
 
+    // ═══════════════════════════════════════════════════════════
+    //  UNIFIED LAYERS PANEL  (right-rail UI shell)
+    // ═══════════════════════════════════════════════════════════
+    //
+    //  Single panel that owns the DeepMind / Genesis / Env Analysis /
+    //  Wind Barbs sections — previously each was its own floating pill
+    //  + dropdown, which gave the right rail no hierarchy. State is
+    //  managed by the existing toggle / activate / deactivate functions;
+    //  this layer is purely the UI shell.
+
+    var _rtLayersPanelOpen = false;
+
+    function toggleLayersPanel() {
+        _rtLayersPanelOpen = !_rtLayersPanelOpen;
+        var panel = document.getElementById('ir-layers-panel');
+        var btn = document.getElementById('ir-layers-toggle');
+        if (panel) panel.style.display = _rtLayersPanelOpen ? '' : 'none';
+        if (btn) btn.classList.toggle('active', _rtLayersPanelOpen);
+        if (_rtLayersPanelOpen) {
+            if (!_rtEnvMetadata) _loadEnvMetadata(); // _renderLayersPanel runs after the fetch
+            _renderLayersPanel();
+        }
+    }
+    window.toggleLayersPanel = toggleLayersPanel;
+
+    /** Re-render the count badge on the "Layers ▾" trigger.
+     *  Cheap O(N_layers) walk over current state; safe to call from
+     *  every toggle/activate/deactivate site. */
+    function _refreshLayersCount() {
+        var n = 0;
+        if (_rtGlobalWLVisible) n++;
+        if (_rtGenesisVisible) n++;
+        n += Object.keys(_rtEnvActive || {}).length;
+        var el = document.getElementById('ir-layers-count');
+        if (el) {
+            el.textContent = n > 0 ? n : '';
+            el.style.display = n > 0 ? '' : 'none';
+        }
+        var btn = document.getElementById('ir-layers-toggle');
+        if (btn) btn.classList.toggle('has-active', n > 0);
+        // If the panel is open, keep its checkboxes in sync with state.
+        if (_rtLayersPanelOpen) _renderLayersPanel();
+    }
+    window._refreshLayersCount = _refreshLayersCount;
+
+    /** Build the section-grouped HTML inside #ir-layers-panel. Reads
+     *  current state directly so it stays correct across reopen/redraw.
+     *  Groups are: FORECAST (DeepMind + Genesis), ANALYSIS (env layers
+     *  grouped by physical category), WIND BARBS, and a shared opacity
+     *  slider that drives every env layer. */
+    function _renderLayersPanel() {
+        var panel = document.getElementById('ir-layers-panel');
+        if (!panel) return;
+
+        var allLayers = (_rtEnvMetadata && _rtEnvMetadata.layers) || [];
+        var envLayers = allLayers.filter(function (L_) {
+            return !L_.name.startsWith('winds_') && !L_.name.startsWith('genesis_');
+        });
+        var windLayers = allLayers.filter(function (L_) {
+            return L_.name.indexOf('winds_') === 0;
+        });
+        var genesisProbLayers = allLayers.filter(function (L_) {
+            return L_.name.indexOf('genesis_') === 0;
+        });
+
+        // Shared valid-time pulled from whichever env layer reports one.
+        var validShort = '';
+        var validSamples = allLayers.map(function (L_) { return L_.valid_time; }).filter(Boolean);
+        if (validSamples.length) {
+            var counts = {};
+            for (var i = 0; i < validSamples.length; i++) counts[validSamples[i]] = (counts[validSamples[i]] || 0) + 1;
+            var top = Object.keys(counts).sort(function (a, b) { return counts[b] - counts[a]; })[0];
+            validShort = (top || '').replace('T', ' ').replace(':00:00Z', 'Z');
+        }
+
+        function row(opts) {
+            var sub = opts.substatus
+                ? '<span class="substatus">' + opts.substatus + '</span>' : '';
+            var units = opts.units
+                ? '<span class="units">' + opts.units + '</span>' : '';
+            return '<label class="ir-global-menu-row" data-action="' + opts.action + '"'
+                + (opts.dataName ? ' data-name="' + opts.dataName + '"' : '') + '>'
+                + '<input type="checkbox"' + (opts.checked ? ' checked' : '') + '>'
+                + '<span class="label">' + opts.label + sub + '</span>'
+                + units
+                + '</label>';
+        }
+
+        var html = '';
+        if (validShort) {
+            html += '<div class="ir-global-menu-valid">valid <b>' + validShort + '</b></div>';
+        }
+
+        // ── FORECAST ────────────────────────────────────────────────
+        html += '<div class="ir-global-menu-section">Forecast</div>';
+        var wlStatus = _rtGlobalWLLoading ? 'Loading 50-member tracks…' : '';
+        html += row({
+            action: 'wl',
+            label: '<b>DeepMind 10-day</b>',
+            substatus: 'WeatherLab 50-member spaghetti for every active storm/invest' + (wlStatus ? ' — ' + wlStatus : ''),
+            checked: !!_rtGlobalWLVisible
+        });
+        var genStatus = '';
+        if (_rtGenesisLoading) genStatus = 'Loading 1000 members…';
+        else if (_rtGenesisData) {
+            var nt = _rtGenesisData.n_tracks || 0;
+            genStatus = nt === 0 ? 'no genesis predicted in 15 days'
+                                  : nt + ' track' + (nt === 1 ? '' : 's');
+        }
+        html += row({
+            action: 'genesis',
+            label: '<b>Genesis spaghetti (1000)</b>',
+            substatus: 'FNV3 LARGE_ENSEMBLE cyclogenesis' + (genStatus ? ' — ' + genStatus : ''),
+            checked: !!_rtGenesisVisible
+        });
+        for (var gi = 0; gi < genesisProbLayers.length; gi++) {
+            var GL = genesisProbLayers[gi];
+            html += row({
+                action: 'genesis-prob',
+                dataName: GL.name,
+                label: GL.title.replace('TC Formation Probability — ', 'Formation prob — '),
+                units: GL.units,
+                checked: !!_rtEnvActive[GL.name]
+            });
+        }
+
+        // ── ANALYSIS (env grouped by physical category) ─────────────
+        if (envLayers.length) {
+            html += '<div class="ir-global-menu-section with-divider">Analysis</div>';
+            for (var ggi = 0; ggi < _ENV_MENU_GROUPS.length; ggi++) {
+                var grp = _ENV_MENU_GROUPS[ggi];
+                var inGroup = envLayers.filter(grp.match);
+                if (inGroup.length === 0) continue;
+                html += '<div class="ir-global-menu-subhead">' + grp.label + '</div>';
+                for (var li = 0; li < inGroup.length; li++) {
+                    var L_ = inGroup[li];
+                    html += row({
+                        action: 'env',
+                        dataName: L_.name,
+                        label: grp.shortTitle(L_),
+                        units: L_.units,
+                        checked: !!_rtEnvActive[L_.name]
+                    });
+                }
+            }
+            // Anything env-categorized that didn't match a group
+            var ungrouped = envLayers.filter(function (L_) {
+                return !_ENV_MENU_GROUPS.some(function (g) { return g.match(L_); });
+            });
+            if (ungrouped.length) {
+                html += '<div class="ir-global-menu-subhead">Other</div>';
+                for (var ui = 0; ui < ungrouped.length; ui++) {
+                    var Lu = ungrouped[ui];
+                    html += row({
+                        action: 'env',
+                        dataName: Lu.name,
+                        label: Lu.title,
+                        units: Lu.units,
+                        checked: !!_rtEnvActive[Lu.name]
+                    });
+                }
+            }
+        }
+
+        // ── WIND BARBS ──────────────────────────────────────────────
+        if (windLayers.length) {
+            html += '<div class="ir-global-menu-section with-divider">Wind Barbs</div>';
+            for (var wi = 0; wi < windLayers.length; wi++) {
+                var WL = windLayers[wi];
+                var lvl = WL.title.replace(/\s*hPa Wind Barbs\s*/i, ' hPa');
+                html += row({
+                    action: 'env',
+                    dataName: WL.name,
+                    label: lvl,
+                    units: WL.units,
+                    checked: !!_rtEnvActive[WL.name]
+                });
+            }
+        }
+
+        // ── Shared opacity slider (drives every env-style overlay) ──
+        html += '<div class="ir-global-menu-opacity-wrap">'
+              + '<label class="ir-global-menu-opacity">Opacity '
+              + '<input id="ir-layers-opacity" type="range" min="0" max="100" value="'
+              + Math.round(_rtEnvOpacity * 100) + '">'
+              + '<span class="pct" id="ir-layers-opacity-val">'
+              + Math.round(_rtEnvOpacity * 100) + '%</span>'
+              + '</label></div>';
+
+        if (allLayers.length === 0) {
+            html = '<div class="ir-global-menu-empty">Loading layers…</div>';
+        }
+
+        panel.innerHTML = html;
+
+        // ── Wire up change handlers ─────────────────────────────────
+        // The whole row is a <label> wrapping the checkbox, so any click
+        // anywhere in the row flips the checkbox and fires `change` on
+        // it exactly once — no manual label-forwarding gymnastics.
+        var rows = panel.querySelectorAll('label.ir-global-menu-row');
+        for (var r = 0; r < rows.length; r++) {
+            (function (rowEl) {
+                var cb = rowEl.querySelector('input[type="checkbox"]');
+                if (!cb) return;
+                cb.addEventListener('change', function () {
+                    _dispatchRow(rowEl, cb);
+                });
+            })(rows[r]);
+        }
+
+        var opacityEl = document.getElementById('ir-layers-opacity');
+        if (opacityEl) {
+            opacityEl.addEventListener('input', function (e) {
+                var v = parseInt(e.target.value, 10) / 100;
+                _setEnvOpacity(v);
+                var lbl = document.getElementById('ir-layers-opacity-val');
+                if (lbl) lbl.textContent = Math.round(v * 100) + '%';
+            });
+        }
+    }
+
+    function _dispatchRow(rowEl, cb) {
+        var action = rowEl.getAttribute('data-action');
+        var name = rowEl.getAttribute('data-name');
+        var on = cb.checked;
+        if (action === 'wl') {
+            if (on !== _rtGlobalWLVisible) toggleGlobalWeatherlab();
+        } else if (action === 'genesis') {
+            if (on !== _rtGenesisVisible) toggleGenesis();
+        } else if (action === 'genesis-prob') {
+            if (on) _activateGenesisProbLayer(name);
+            else _deactivateEnvLayer(name);
+        } else if (action === 'env') {
+            var layer = (_rtEnvMetadata && _rtEnvMetadata.layers || [])
+                .filter(function (L_) { return L_.name === name; })[0];
+            if (!layer) return;
+            if (on) _activateEnvLayer(layer);
+            else _deactivateEnvLayer(name);
+        }
+        _refreshLayersCount();
+    }
+
     // ── PNG export of current global map view ────────────────────
     //
     // Lazy-loads html2canvas on first click (kept off the page-load
@@ -6285,108 +6353,8 @@
         // (e.g. 850 mb vorticity + 200 mb winds together).
     ];
 
-    function _renderEnvMenu() {
-        var menu = document.getElementById('ir-global-env-menu');
-        if (!menu) return;
-        var allLayers = (_rtEnvMetadata && _rtEnvMetadata.layers) || [];
-        var layers = allLayers.filter(function (L_) {
-            // Env Analysis = diagnostics only. Winds → dedicated menu,
-            // genesis prob → Genesis Forecasts menu.
-            if (L_.category) return L_.category === 'env';
-            return L_.name
-                && !L_.name.startsWith('genesis_')
-                && !L_.name.startsWith('winds_');
-        });
-        if (layers.length === 0) {
-            menu.innerHTML = '<div class="ir-global-menu-empty">'
-                + 'No env layers available yet. Pipeline runs every 6 h.</div>';
-            return;
-        }
-
-        // Compact-row HTML helper. Title is the level-only short form;
-        // units are right-aligned to declutter.
-        function rowHtml(L_, shortTitle, isOn) {
-            return '<label class="ir-global-menu-row">'
-                + '<input type="checkbox" data-env-layer="' + L_.name + '"'
-                + (isOn ? ' checked' : '') + '>'
-                + '<span class="label">' + shortTitle + '</span>'
-                + '<span class="units">' + (L_.units || '') + '</span>'
-                + '</label>';
-        }
-
-        // One shared valid-time line at the top — all layers come from
-        // the same init cycle so per-row labels are redundant noise.
-        var validSamples = layers.map(function (L_) { return L_.valid_time; }).filter(Boolean);
-        var validShort = '';
-        if (validSamples.length) {
-            // Pick the most-common valid time among the layers (env all share
-            // the same GFS cycle; OISST is offset by a day but minority).
-            var counts = {};
-            for (var v of validSamples) counts[v] = (counts[v] || 0) + 1;
-            var top = Object.keys(counts).sort(function (a, b) { return counts[b] - counts[a]; })[0];
-            validShort = (top || '').replace('T', ' ').replace(':00:00Z', 'Z');
-        }
-
-        var html = '';
-        html += '<div class="ir-global-menu-valid">valid <b>' + validShort + '</b></div>';
-
-        // Render each non-empty group as a section.
-        var anyRendered = false;
-        for (var gi = 0; gi < _ENV_MENU_GROUPS.length; gi++) {
-            var grp = _ENV_MENU_GROUPS[gi];
-            var inGroup = layers.filter(grp.match);
-            if (inGroup.length === 0) continue;
-            anyRendered = true;
-            html += '<div class="ir-global-menu-section">' + grp.label + '</div>';
-            for (var li = 0; li < inGroup.length; li++) {
-                var L_ = inGroup[li];
-                html += rowHtml(L_, grp.shortTitle(L_), !!_rtEnvActive[L_.name]);
-            }
-        }
-        // Any layer not matched by a group falls into "Other".
-        var ungrouped = layers.filter(function (L_) {
-            return !_ENV_MENU_GROUPS.some(function (g) { return g.match(L_); });
-        });
-        if (ungrouped.length) {
-            html += '<div class="ir-global-menu-section">Other</div>';
-            for (var ui = 0; ui < ungrouped.length; ui++) {
-                var Lu = ungrouped[ui];
-                html += rowHtml(Lu, Lu.title, !!_rtEnvActive[Lu.name]);
-            }
-        }
-        if (!anyRendered && !ungrouped.length) {
-            html += '<div class="ir-global-menu-empty">No layers matched.</div>';
-        }
-
-        html += '<div class="ir-global-menu-opacity-wrap">'
-            + '<label class="ir-global-menu-opacity">Opacity '
-            + '<input id="ir-global-env-opacity" type="range" min="0" max="100" '
-            + 'value="' + Math.round(_rtEnvOpacity * 100) + '">'
-            + '<span class="pct" id="ir-global-env-opacity-val">' + Math.round(_rtEnvOpacity * 100) + '%</span>'
-            + '</label></div>';
-
-        menu.innerHTML = html;
-
-        var checkboxes = menu.querySelectorAll('input[data-env-layer]');
-        for (var j = 0; j < checkboxes.length; j++) {
-            checkboxes[j].addEventListener('change', function (e) {
-                var name = e.target.getAttribute('data-env-layer');
-                var layer = (layers || []).filter(function (L_) { return L_.name === name; })[0];
-                if (!layer) return;
-                if (e.target.checked) _activateEnvLayer(layer);
-                else _deactivateEnvLayer(name);
-            });
-        }
-        var opacitySlider = document.getElementById('ir-global-env-opacity');
-        if (opacitySlider) {
-            opacitySlider.addEventListener('input', function (e) {
-                var v = parseInt(e.target.value, 10) / 100;
-                _setEnvOpacity(v);
-                var label = document.getElementById('ir-global-env-opacity-val');
-                if (label) label.textContent = Math.round(v * 100) + '%';
-            });
-        }
-    }
+    /** Legacy renderer — superseded by the unified Layers panel. */
+    function _renderEnvMenu() { _renderLayersPanel(); }
 
     function _renderEnvColorbar() {
         var box = document.getElementById('ir-global-env-cbars');
@@ -6445,86 +6413,12 @@
 
     var _rtWindsMenuOpen = false;
 
-    function toggleWindsMenu() {
-        _rtWindsMenuOpen = !_rtWindsMenuOpen;
-        var menu = document.getElementById('ir-global-winds-menu');
-        var btn = document.getElementById('ir-global-winds-toggle');
-        if (menu) menu.style.display = _rtWindsMenuOpen ? '' : 'none';
-        if (btn) {
-            var anyOn = !!(_rtEnvActive.winds_850 || _rtEnvActive.winds_700
-                || _rtEnvActive.winds_500 || _rtEnvActive.winds_200);
-            btn.classList.toggle('active', _rtWindsMenuOpen || anyOn);
-        }
-        if (_rtWindsMenuOpen && !_rtEnvMetadata) {
-            _loadEnvMetadata().then(_renderWindsMenu);
-        } else if (_rtWindsMenuOpen) {
-            _renderWindsMenu();
-        }
-    }
+    /** Legacy entry points — superseded by the unified Layers panel. */
+    function toggleWindsMenu() { toggleLayersPanel(); }
+    function _renderWindsMenu() { _renderLayersPanel(); }
+    function _refreshWindsButton() { _refreshLayersCount(); }
+    function toggleEnvMenu() { toggleLayersPanel(); }
     window.toggleWindsMenu = toggleWindsMenu;
-
-    function _renderWindsMenu() {
-        var menu = document.getElementById('ir-global-winds-menu');
-        if (!menu) return;
-        var allLayers = (_rtEnvMetadata && _rtEnvMetadata.layers) || [];
-        var winds = allLayers.filter(function (L_) {
-            if (L_.category) return L_.category === 'wind';
-            return L_.name && L_.name.startsWith('winds_');
-        });
-        if (winds.length === 0) {
-            menu.innerHTML = '<div class="ir-global-menu-empty">'
-                + 'No wind layers available yet.</div>';
-            return;
-        }
-
-        var html = '';
-        html += '<div class="ir-global-menu-section">Wind Barbs</div>';
-        for (var i = 0; i < winds.length; i++) {
-            var L_ = winds[i];
-            var isOn = !!_rtEnvActive[L_.name];
-            var levelLabel = L_.title.replace(/\s*hPa Wind Barbs\s*/i, ' hPa');
-            html += '<label class="ir-global-menu-row">'
-                  + '<input type="checkbox" data-winds-layer="' + L_.name + '"'
-                  + (isOn ? ' checked' : '') + '>'
-                  + '<span class="label">' + levelLabel + '</span>'
-                  + '<span class="units">' + (L_.units || '') + '</span>'
-                  + '</label>';
-        }
-        html += '<div class="ir-global-menu-help">'
-              + 'Standard met-convention barbs: flag = 50 kt, full bar = 10 kt, '
-              + 'half bar = 5 kt. NH on left, SH on right.</div>';
-
-        menu.innerHTML = html;
-
-        var checkboxes = menu.querySelectorAll('input[data-winds-layer]');
-        for (var j = 0; j < checkboxes.length; j++) {
-            checkboxes[j].addEventListener('change', function (e) {
-                var name = e.target.getAttribute('data-winds-layer');
-                var layer = winds.filter(function (L_) { return L_.name === name; })[0];
-                if (!layer) return;
-                if (e.target.checked) _activateEnvLayer(layer);
-                else _deactivateEnvLayer(name);
-                _refreshWindsButton();
-            });
-        }
-    }
-
-    function _refreshWindsButton() {
-        var btn = document.getElementById('ir-global-winds-toggle');
-        if (!btn) return;
-        var anyOn = !!(_rtEnvActive.winds_850 || _rtEnvActive.winds_700
-            || _rtEnvActive.winds_500 || _rtEnvActive.winds_200);
-        btn.classList.toggle('active', _rtWindsMenuOpen || anyOn);
-    }
-
-    function toggleEnvMenu() {
-        _rtEnvMenuOpen = !_rtEnvMenuOpen;
-        var menu = document.getElementById('ir-global-env-menu');
-        var btn = document.getElementById('ir-global-env-toggle');
-        if (menu) menu.style.display = _rtEnvMenuOpen ? '' : 'none';
-        if (btn) btn.classList.toggle('active', _rtEnvMenuOpen);
-        if (_rtEnvMenuOpen && !_rtEnvMetadata) _loadEnvMetadata();
-    }
     window.toggleEnvMenu = toggleEnvMenu;
 
     // ═══════════════════════════════════════════════════════════
