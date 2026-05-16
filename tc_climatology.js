@@ -1971,6 +1971,155 @@ function _gridsToArrays(grids, BIN) {
     });
 }
 
+// Spatial density of RI starting points per phase. Same 5° bins as the
+// other density renderers. Reuses the RI dial's filter logic (Overwater,
+// TC-phase, Vmax range) so the spatial view is consistent with the rate.
+function _buildRIDensityPerPhase() {
+    var modeRec = _subPhases.indices[_subState.mode];
+    if (!modeRec) return null;
+    var startKey = modeRec._startKey;
+    var endKey = startKey + modeRec.phases.length - 1;
+    var BIN = 5;
+    var grids = [];
+    for (var i = 0; i < 8; i++) grids.push(new Map());
+    var vmin = _subState.riVmin, vmax = _subState.riVmax;
+    var needOverwater = _subState.riOverwater && _landMask;
+    var needTCPhase = _subState.riTCPhaseOnly;
+    var sids = Object.keys(allTracks);
+    for (var i = 0; i < sids.length; i++) {
+        var sid = sids[i];
+        var track = allTracks[sid];
+        if (!track || track.length < 2) continue;
+        var storm = _stormBySid[sid];
+        if (!storm) continue;
+        if (!_subBasinMatch(storm.basin)) continue;
+        var times = new Array(track.length);
+        for (var t = 0; t < track.length; t++) {
+            times[t] = track[t].t ? Date.parse(track[t].t) : NaN;
+        }
+        var k = 0;
+        for (var j = 0; j < track.length; j++) {
+            var f0 = track[j];
+            if (f0.w == null) continue;
+            if (f0.w < vmin || f0.w > vmax) continue;
+            if (!Number.isFinite(times[j])) continue;
+            if (needTCPhase && !_TC_NATURES[f0.n]) continue;
+            if (needOverwater && _isLand(f0.la, f0.lo)) continue;
+            if (k <= j) k = j + 1;
+            while (k < track.length && Number.isFinite(times[k])
+                   && (times[k] - times[j]) < 21 * 3600000) k++;
+            if (k >= track.length) break;
+            if (!Number.isFinite(times[k])) continue;
+            var dtH = (times[k] - times[j]) / 3600000;
+            if (dtH > 27) continue;
+            var f1 = track[k];
+            if (f1.w == null) continue;
+            if (needOverwater && _isLand(f1.la, f1.lo)) continue;
+            var dw = f1.w - f0.w;
+            if (dw < 30) continue;                          // RI threshold
+            var iso = f0.t.slice(0, 10);
+            var month = +iso.slice(5, 7);
+            if (!_subSeasonMatch(month)) continue;
+            if (!_subYearMatch(+iso.slice(0,4))) continue;
+            var dk = _dayKeyFromISO(iso);
+            if (dk < startKey || dk > endKey) continue;
+            var p = _phaseOnDay(modeRec, dk);
+            if (!p) continue;
+            if (f0.la == null || f0.lo == null) continue;
+            var latBin = Math.floor(f0.la / BIN);
+            var lonBin = Math.floor(f0.lo / BIN);
+            var key = latBin + ',' + lonBin;
+            var g = grids[p - 1];
+            g.set(key, (g.get(key) || 0) + 1);
+        }
+    }
+    return _gridsToArrays(grids, BIN);
+}
+
+// Mean signed 24-h Δwind per 5° bin, per phase. Diverging field —
+// negative cells = systematic weakening at that location in that phase,
+// positive = systematic intensification. Useful for spotting "RI corridors"
+// vs hostile regions. Returns same shape as the count grids but cnts[]
+// holds the mean Δw (kt) and an extra sample-size array gates rendering
+// to cells with ≥ N intervals (poor stats are masked).
+function _buildMeanDwPerPhase() {
+    var modeRec = _subPhases.indices[_subState.mode];
+    if (!modeRec) return null;
+    var startKey = modeRec._startKey;
+    var endKey = startKey + modeRec.phases.length - 1;
+    var BIN = 5;
+    var MIN_SAMPLES = 5;                                    // mask thin cells
+    var sumGrids = []; var nGrids = [];
+    for (var i = 0; i < 8; i++) {
+        sumGrids.push(new Map());
+        nGrids.push(new Map());
+    }
+    var vmin = _subState.riVmin, vmax = _subState.riVmax;
+    var needOverwater = _subState.riOverwater && _landMask;
+    var needTCPhase = _subState.riTCPhaseOnly;
+    var sids = Object.keys(allTracks);
+    for (var i = 0; i < sids.length; i++) {
+        var sid = sids[i];
+        var track = allTracks[sid];
+        if (!track || track.length < 2) continue;
+        var storm = _stormBySid[sid];
+        if (!storm) continue;
+        if (!_subBasinMatch(storm.basin)) continue;
+        var times = new Array(track.length);
+        for (var t = 0; t < track.length; t++) {
+            times[t] = track[t].t ? Date.parse(track[t].t) : NaN;
+        }
+        var k = 0;
+        for (var j = 0; j < track.length; j++) {
+            var f0 = track[j];
+            if (f0.w == null) continue;
+            if (f0.w < vmin || f0.w > vmax) continue;
+            if (!Number.isFinite(times[j])) continue;
+            if (needTCPhase && !_TC_NATURES[f0.n]) continue;
+            if (needOverwater && _isLand(f0.la, f0.lo)) continue;
+            if (k <= j) k = j + 1;
+            while (k < track.length && Number.isFinite(times[k])
+                   && (times[k] - times[j]) < 21 * 3600000) k++;
+            if (k >= track.length) break;
+            if (!Number.isFinite(times[k])) continue;
+            var dtH = (times[k] - times[j]) / 3600000;
+            if (dtH > 27) continue;
+            var f1 = track[k];
+            if (f1.w == null) continue;
+            if (needOverwater && _isLand(f1.la, f1.lo)) continue;
+            var iso = f0.t.slice(0, 10);
+            var month = +iso.slice(5, 7);
+            if (!_subSeasonMatch(month)) continue;
+            if (!_subYearMatch(+iso.slice(0,4))) continue;
+            var dk = _dayKeyFromISO(iso);
+            if (dk < startKey || dk > endKey) continue;
+            var p = _phaseOnDay(modeRec, dk);
+            if (!p) continue;
+            if (f0.la == null || f0.lo == null) continue;
+            var dw = f1.w - f0.w;
+            var latBin = Math.floor(f0.la / BIN);
+            var lonBin = Math.floor(f0.lo / BIN);
+            var key = latBin + ',' + lonBin;
+            sumGrids[p - 1].set(key, (sumGrids[p - 1].get(key) || 0) + dw);
+            nGrids[p - 1].set(key, (nGrids[p - 1].get(key) || 0) + 1);
+        }
+    }
+    // Build per-phase arrays of {lat, lon, meanDw, n} but mask cells with n < MIN_SAMPLES.
+    return sumGrids.map(function (sg, idx) {
+        var ng = nGrids[idx];
+        var lats = [], lons = [], cnts = [];
+        sg.forEach(function (sum, key) {
+            var n = ng.get(key) || 0;
+            if (n < MIN_SAMPLES) return;
+            var parts = key.split(',');
+            lats.push((+parts[0]) * BIN + BIN/2);
+            lons.push((+parts[1]) * BIN + BIN/2);
+            cnts.push(sum / n);                             // mean Δw (kt)
+        });
+        return { lats: lats, lons: lons, cnts: cnts };
+    });
+}
+
 // Compute 24-h overwater intensity-change distributions per phase.
 // Returns per-phase arrays of all Δwind values + summary stats. The
 // underlying convention follows Kaplan-DeMaria (2003): RI = Δw ≥ 30 kt
@@ -2273,14 +2422,19 @@ function _renderIntensityDial() {
 function _renderTrackDensity() {
     var el = document.getElementById('sub-tracks-chart');
     if (!el || typeof Plotly === 'undefined') return;
-    var isGenesis = (_subState.mapMode === 'genesis');
-    var density = isGenesis
-        ? _buildGenesisDensityPerPhase()
-        : _buildTrackDensityPerPhase();
+    var mm = _subState.mapMode;
+    var isGenesis = (mm === 'genesis');
+    var isRI      = (mm === 'ri');
+    var isDw      = (mm === 'dw');
+    var density;
+    if (isGenesis) density = _buildGenesisDensityPerPhase();
+    else if (isRI) density = _buildRIDensityPerPhase();
+    else if (isDw) density = _buildMeanDwPerPhase();
+    else           density = _buildTrackDensityPerPhase();
     if (!density) {
         el.innerHTML = '<div style="padding:20px; opacity:0.6;">'
-            + (isGenesis ? 'Genesis data unavailable.' : 'Track data unavailable.')
-            + '</div>';
+            + ({genesis:'Genesis data', ri:'RI data', dw:'Δw data'}[mm] || 'Track data')
+            + ' unavailable.</div>';
         return;
     }
     // Clear any leftover loading-placeholder DIV. Plotly.newPlot manages its
@@ -2346,7 +2500,60 @@ function _renderTrackDensity() {
         });
         var cells = density[p - 1];
         if (!cells.cnts.length) continue;
-        var max = Math.max.apply(null, cells.cnts);
+        var colorscale, color, cmin, cmax, hoverText;
+        if (isDw) {
+            // Diverging scale anchored at 0 kt. Range ±15 kt/24h covers
+            // typical means; clamp outliers visually.
+            var maxAbs = 15;
+            color = cells.cnts.map(function (v) { return v; });
+            cmin = -maxAbs; cmax = maxAbs;
+            colorscale = [
+                [0.00, 'rgba(30,64,175,0.95)'],   // strong weakening
+                [0.30, 'rgba(96,165,250,0.75)'],
+                [0.48, 'rgba(220,220,220,0.55)'], // near-zero
+                [0.52, 'rgba(220,220,220,0.55)'],
+                [0.70, 'rgba(251,191,36,0.80)'],
+                [1.00, 'rgba(220,38,38,0.95)'],   // strong intensification
+            ];
+            hoverText = cells.cnts.map(function (v) {
+                return (v >= 0 ? '+' : '') + v.toFixed(1) + ' kt/24 h (mean)';
+            });
+        } else {
+            var max = Math.max.apply(null, cells.cnts);
+            color = cells.cnts.map(function (c) { return c / max; });
+            cmin = 0; cmax = 1;
+            if (isGenesis) {
+                colorscale = [
+                    [0,    'rgba(168,139,250,0.0)'],
+                    [0.15, 'rgba(168,139,250,0.65)'],
+                    [0.40, 'rgba(52,211,153,0.80)'],
+                    [0.70, 'rgba(251,191,36,0.88)'],
+                    [1.0,  'rgba(220,38,38,0.95)'],
+                ];
+            } else if (isRI) {
+                // Red-orange palette so RI events read as "hot spots"
+                colorscale = [
+                    [0,    'rgba(251,146,60,0.0)'],
+                    [0.15, 'rgba(251,146,60,0.70)'],
+                    [0.40, 'rgba(248,113,113,0.85)'],
+                    [0.70, 'rgba(220,38,38,0.92)'],
+                    [1.0,  'rgba(127,29,29,0.98)'],
+                ];
+            } else {
+                colorscale = [
+                    [0,    'rgba(96,165,250,0.0)'],
+                    [0.15, 'rgba(96,165,250,0.55)'],
+                    [0.40, 'rgba(251,191,36,0.75)'],
+                    [0.70, 'rgba(248,113,113,0.85)'],
+                    [1.0,  'rgba(220,38,38,0.95)'],
+                ];
+            }
+            hoverText = cells.cnts.map(function (c) {
+                if (isGenesis) return c + ' ' + (c === 1 ? 'genesis' : 'geneses');
+                if (isRI)      return c + ' RI event' + (c === 1 ? '' : 's');
+                return c + ' fix' + (c === 1 ? '' : 'es');
+            });
+        }
         traces.push({
             type: 'scattergeo',
             geo: (p === 1) ? 'geo' : ('geo' + p),
@@ -2354,30 +2561,14 @@ function _renderTrackDensity() {
             lat: cells.lats,
             lon: cells.lons,
             marker: {
-                color: cells.cnts.map(function (c) { return c / max; }),
-                colorscale: isGenesis ? [
-                    [0,    'rgba(168,139,250,0.0)'],
-                    [0.15, 'rgba(168,139,250,0.65)'],
-                    [0.40, 'rgba(52,211,153,0.80)'],
-                    [0.70, 'rgba(251,191,36,0.88)'],
-                    [1.0,  'rgba(220,38,38,0.95)'],
-                ] : [
-                    [0,    'rgba(96,165,250,0.0)'],
-                    [0.15, 'rgba(96,165,250,0.55)'],
-                    [0.40, 'rgba(251,191,36,0.75)'],
-                    [0.70, 'rgba(248,113,113,0.85)'],
-                    [1.0,  'rgba(220,38,38,0.95)'],
-                ],
-                cmin: 0, cmax: 1,
+                color: color,
+                colorscale: colorscale,
+                cmin: cmin, cmax: cmax,
                 size: 8, symbol: 'square',
                 line: { width: 0 },
                 showscale: false,
             },
-            text: cells.cnts.map(function (c) {
-                var word = isGenesis ? 'genesis' : 'fix';
-                var plural = isGenesis ? 'geneses' : 'fixes';
-                return c + ' ' + (c === 1 ? word : plural);
-            }),
+            text: hoverText,
             hoverinfo: 'lon+lat+text',
             showlegend: false,
         });
@@ -2441,13 +2632,23 @@ function _renderSubseasonal() {
 function _updateMapPanelText() {
     var titleEl = document.getElementById('sub-tracks-title');
     var helpEl  = document.getElementById('sub-tracks-help');
-    var isGenesis = (_subState.mapMode === 'genesis');
-    if (titleEl) titleEl.textContent = isGenesis
-        ? 'Genesis Point Density by Phase'
-        : 'Track-Point Density by Phase';
-    if (helpEl) helpEl.textContent = isGenesis
-        ? 'Each panel shows where named-storm genesis events (first fix, peak ≥ 34 kt) occurred on days of that phase. One point per storm. Density is normalized per panel, so the warmest cell shows the relative concentration of genesis locations regardless of how many days fell in that phase.'
-        : 'Each panel shows the spatial density of 6-hourly best-track fixes (≥ 34 kt) occurring on days of that phase. Density is normalized per panel so the warmest cell in each phase shows the relative concentration regardless of phase-day count.';
+    var mm = _subState.mapMode;
+    var title, help;
+    if (mm === 'genesis') {
+        title = 'Genesis Point Density by Phase';
+        help  = 'Each panel shows where named-storm genesis events (first fix, peak ≥ 34 kt) occurred on days of that phase. One point per storm. Density is normalized per panel, so the warmest cell shows the relative concentration of genesis locations regardless of phase-day count.';
+    } else if (mm === 'ri') {
+        title = 'RI Event Density by Phase';
+        help  = 'Each panel shows where 24-h RI events (Δw ≥ 30 kt) started, on days of each phase. Uses the same Overwater / TC-phase / Vmax filters as the RI dial — hot spots reveal favored RI corridors for each phase.';
+    } else if (mm === 'dw') {
+        title = 'Mean 24-h Δwind by Phase';
+        help  = 'Each panel shows the mean signed 24-h Δwind per 5° bin (cells with < 5 intervals are masked). Diverging colormap: blue = systematic weakening, red = systematic intensification. Reveals whether a phase tilts the intensity tendency in a region toward growth or decay.';
+    } else {
+        title = 'Track-Point Density by Phase';
+        help  = 'Each panel shows the spatial density of 6-hourly best-track fixes (≥ 34 kt) occurring on days of that phase. Density is normalized per panel so the warmest cell in each phase shows the relative concentration regardless of phase-day count.';
+    }
+    if (titleEl) titleEl.textContent = title;
+    if (helpEl)  helpEl.textContent  = help;
 }
 
 function _renderSubseasonalSource() {
@@ -2517,9 +2718,11 @@ function _renderPhaseModal(phase) {
         'Filtered to ' + basinLabel + ', ' + seasonLabel + '. '
         + 'Active days only (amplitude ≥ 1). Coverage: ' + modeRec.start_date + ' to ' + modeRec.end_date + '.';
     var mmEl = document.getElementById('phase-modal-mapmode');
-    if (mmEl) mmEl.textContent = (_subState.mapMode === 'genesis')
-        ? '— genesis points'
-        : '— 6-h track fixes';
+    if (mmEl) mmEl.textContent = ({
+        genesis: '— genesis points',
+        ri:      '— RI event starts',
+        dw:      '— mean Δw per 5° bin',
+    })[_subState.mapMode] || '— 6-h track fixes';
 
     _renderPhaseModalMap(phase);
     _renderPhaseModalStats(phase);
@@ -2530,50 +2733,83 @@ function _renderPhaseModal(phase) {
 function _renderPhaseModalMap(phase) {
     var el = document.getElementById('phase-modal-map');
     if (!el || typeof Plotly === 'undefined') return;
-    var density = (_subState.mapMode === 'genesis')
-        ? _buildGenesisDensityPerPhase()
-        : _buildTrackDensityPerPhase();
+    var mm = _subState.mapMode;
+    var density;
+    if (mm === 'genesis') density = _buildGenesisDensityPerPhase();
+    else if (mm === 'ri') density = _buildRIDensityPerPhase();
+    else if (mm === 'dw') density = _buildMeanDwPerPhase();
+    else                  density = _buildTrackDensityPerPhase();
     if (!density) { el.innerHTML = '<div style="padding:20px; opacity:0.6;">No data.</div>'; return; }
     var cells = density[phase - 1];
     if (typeof Plotly.purge === 'function') Plotly.purge(el);
     el.innerHTML = '';
     if (!cells || !cells.cnts.length) {
+        var noun = ({genesis:'genesis events', ri:'RI events', dw:'24-h intervals with ≥ 5 samples'})[mm] || 'track fixes';
         el.innerHTML = '<div style="padding:20px; opacity:0.6;">No '
-            + (_subState.mapMode === 'genesis' ? 'genesis events' : 'track fixes')
-            + ' in this phase for the current filter.</div>';
+            + noun + ' in this phase for the current filter.</div>';
         return;
     }
-    var max = Math.max.apply(null, cells.cnts);
-    var isGenesis = (_subState.mapMode === 'genesis');
     var base = _tcaPlotlyBase();
+    var colorscale, color, cmin, cmax, hoverText;
+    if (mm === 'dw') {
+        var maxAbs = 15;
+        color = cells.cnts;
+        cmin = -maxAbs; cmax = maxAbs;
+        colorscale = [
+            [0.00, 'rgba(30,64,175,0.95)'],
+            [0.30, 'rgba(96,165,250,0.75)'],
+            [0.48, 'rgba(220,220,220,0.55)'],
+            [0.52, 'rgba(220,220,220,0.55)'],
+            [0.70, 'rgba(251,191,36,0.80)'],
+            [1.00, 'rgba(220,38,38,0.95)'],
+        ];
+        hoverText = cells.cnts.map(function (v) {
+            return (v >= 0 ? '+' : '') + v.toFixed(1) + ' kt/24 h (mean)';
+        });
+    } else {
+        var max = Math.max.apply(null, cells.cnts);
+        color = cells.cnts.map(function (c) { return c / max; });
+        cmin = 0; cmax = 1;
+        if (mm === 'genesis') colorscale = [
+            [0,    'rgba(168,139,250,0.0)'],
+            [0.15, 'rgba(168,139,250,0.65)'],
+            [0.40, 'rgba(52,211,153,0.80)'],
+            [0.70, 'rgba(251,191,36,0.88)'],
+            [1.0,  'rgba(220,38,38,0.95)'],
+        ];
+        else if (mm === 'ri') colorscale = [
+            [0,    'rgba(251,146,60,0.0)'],
+            [0.15, 'rgba(251,146,60,0.70)'],
+            [0.40, 'rgba(248,113,113,0.85)'],
+            [0.70, 'rgba(220,38,38,0.92)'],
+            [1.0,  'rgba(127,29,29,0.98)'],
+        ];
+        else colorscale = [
+            [0,    'rgba(96,165,250,0.0)'],
+            [0.15, 'rgba(96,165,250,0.55)'],
+            [0.40, 'rgba(251,191,36,0.75)'],
+            [0.70, 'rgba(248,113,113,0.85)'],
+            [1.0,  'rgba(220,38,38,0.95)'],
+        ];
+        hoverText = cells.cnts.map(function (c) {
+            if (mm === 'genesis') return c + ' ' + (c === 1 ? 'genesis' : 'geneses');
+            if (mm === 'ri')      return c + ' RI event' + (c === 1 ? '' : 's');
+            return c + ' fix' + (c === 1 ? '' : 'es');
+        });
+    }
     var trace = {
         type: 'scattergeo',
         mode: 'markers',
         lat: cells.lats,
         lon: cells.lons,
         marker: {
-            color: cells.cnts.map(function (c) { return c / max; }),
-            colorscale: isGenesis ? [
-                [0,    'rgba(168,139,250,0.0)'],
-                [0.15, 'rgba(168,139,250,0.65)'],
-                [0.40, 'rgba(52,211,153,0.80)'],
-                [0.70, 'rgba(251,191,36,0.88)'],
-                [1.0,  'rgba(220,38,38,0.95)'],
-            ] : [
-                [0,    'rgba(96,165,250,0.0)'],
-                [0.15, 'rgba(96,165,250,0.55)'],
-                [0.40, 'rgba(251,191,36,0.75)'],
-                [0.70, 'rgba(248,113,113,0.85)'],
-                [1.0,  'rgba(220,38,38,0.95)'],
-            ],
-            cmin: 0, cmax: 1, size: 14, symbol: 'square',
+            color: color,
+            colorscale: colorscale,
+            cmin: cmin, cmax: cmax,
+            size: 14, symbol: 'square',
             line: { width: 0 }, showscale: false,
         },
-        text: cells.cnts.map(function (c) {
-            var word = isGenesis ? 'genesis' : 'fix';
-            var plural = isGenesis ? 'geneses' : 'fixes';
-            return c + ' ' + (c === 1 ? word : plural);
-        }),
+        text: hoverText,
         hoverinfo: 'lon+lat+text',
     };
     var layout = Object.assign({}, base, {

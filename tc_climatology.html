@@ -302,15 +302,21 @@
                     </p>
                 </div>
 
-                <!-- Inline data-sources banner. Updates dynamically when the mode
-                     changes so users always see which RMM / BSISO file feeds the
-                     active charts. Detailed source URLs are in the section footer. -->
+                <!-- Inline data-sources banner. Sticky so the active phase-index
+                     attribution stays in view while scrolling through dials and
+                     maps. Updates dynamically when the mode changes. Detailed
+                     source URLs are in the section footer. -->
                 <div id="sub-sources-banner"
-                     style="display:flex; flex-wrap:wrap; gap:4px 14px; align-items:baseline;
+                     style="position:sticky; top:8px; z-index:5;
+                            display:flex; flex-wrap:wrap; gap:4px 14px; align-items:baseline;
                             padding:8px 12px; margin:4px 0 12px;
                             border:1px solid var(--border, rgba(0,0,0,0.08));
                             border-left: 3px solid var(--blue, #2e7dff);
-                            border-radius:6px; background: var(--surface, rgba(46,125,255,0.04));
+                            border-radius:6px;
+                            background: var(--surface, rgba(46,125,255,0.92));
+                            backdrop-filter: blur(6px);
+                            -webkit-backdrop-filter: blur(6px);
+                            box-shadow: 0 2px 8px rgba(0,0,0,0.04);
                             font-size:0.72rem; line-height:1.5;">
                     <span style="font-weight:600; opacity:0.85;">Data:</span>
                     <span><strong>Storms</strong> — IBTrACS v04 (NOAA NCEI)</span>
@@ -382,7 +388,8 @@
                 </div>
 
                 <div class="clim-grid">
-                    <div class="clim-panel" style="grid-column: 1 / -1;">
+                    <!-- Dials sit side-by-side in the 2-col grid (no grid-column override) -->
+                    <div class="clim-panel">
                         <h3 class="clim-panel-title">
                             <span id="sub-dial-title">TC Genesis by Phase</span>
                             <span class="ace-hint" id="sub-dial-hint" style="opacity:0.65;"></span>
@@ -395,7 +402,7 @@
                         </p>
                         <div id="sub-dial-chart" class="chart-container chart-tall"></div>
                     </div>
-                    <div class="clim-panel" style="grid-column: 1 / -1;">
+                    <div class="clim-panel">
                         <h3 class="clim-panel-title">
                             <span id="sub-ri-title">Rapid Intensification (RI) Rate by Phase</span>
                             <span class="ace-hint" id="sub-ri-hint" style="opacity:0.65;"></span>
@@ -461,6 +468,10 @@
                                             title="6-hourly best-track fixes (≥ 34 kt) on days of each phase. Shows where storms travel.">Tracks</button>
                                     <button type="button" data-sub-mapmode="genesis"
                                             title="First-fix (genesis) point of each named storm whose genesis date fell in each phase. Shows where storms form.">Genesis</button>
+                                    <button type="button" data-sub-mapmode="ri"
+                                            title="Where 24-h RI events (Δw ≥ 30 kt) started, on days of each phase. Uses the same Overwater / TC-phase / Vmax filters as the RI dial.">RI events</button>
+                                    <button type="button" data-sub-mapmode="dw"
+                                            title="Mean signed 24-h Δwind per 5° bin — diverging colormap, blue = weakening tendency, red = intensification. Highlights regions where the active phase suppresses or supports growth.">Mean Δw</button>
                                 </div>
                             </div>
                             <p class="field-help" id="sub-tracks-help" style="margin:0; flex:1 1 360px; font-size:0.7rem;">
