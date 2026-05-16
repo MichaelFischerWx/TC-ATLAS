@@ -1237,28 +1237,32 @@ def fetch_cyclogenesis_csv(date_str: str, hour_str: str) -> Optional[str]:
         return None
 
 
-def _grid_track_probability(csv_text: str, lead_hours_max: float
+def _grid_track_probability(csv_text: str, lead_hours_max: float,
+                            radius_km: float = 300.0
                             ) -> Optional[np.ndarray]:
     """Compute TC FORMATION probability on a 0.25° grid: the fraction of
-    1000-member ensemble members where at least one track's GENESIS
-    (earliest detected point) lands in each cell within lead_hours_max.
+    1000-member ensemble members predicting tropical-cyclogenesis within
+    `radius_km` of each cell within lead_hours_max.
 
-    Design:
+    Design (radius-integrated, NHC-TWO style):
 
-    1. Genesis point only (not cumulative track positions). Previously
-       we counted every track point, so the heatmap peak landed where
-       tracks recurve (~20°N WPac) instead of where they form (~12°N).
-       Now we keep only the earliest-lead point per (track, sample)
-       pair so the heatmap represents formation, not exposure.
+    1. Genesis point only (not cumulative track positions). Keep just
+       the earliest-lead point per (track, sample) pair so the heatmap
+       represents formation, not exposure.
 
-    2. Probability is per ENSEMBLE MEMBER, not per (track, sample)
-       realization. The CSV's "sample" column is the FNV3 LARGE_ENSEMBLE
-       member ID (0-999); a single member can have multiple tracks
-       simultaneously (one per concurrent TC). For "P(genesis at cell X)"
-       we want: how many of the 1000 members predict any TC genesis at
-       cell X? — *not* "how many (track, sample) pairs land at cell X",
-       which inflates by an order of magnitude when many tracks share
-       the ensemble's 1000 members.
+    2. Probability is per ENSEMBLE MEMBER. The CSV's `sample` column is
+       the FNV3 LARGE_ENSEMBLE member ID (0-999); a single member can
+       have multiple tracks. We count each member at most once per cell.
+
+    3. Radius integration. Counting members whose genesis lands in the
+       *exact* 0.25° cell (~28 km) underestimates the operational
+       genesis-probability metric by an order of magnitude — even an
+       active day with strong member agreement only reaches ~3-8%. NHC,
+       ECMWF, and other operational genesis products integrate over
+       ~300-400 km. Here we set radius_km=300 by default, so each cell
+       reports the fraction of members with ANY genesis predicted within
+       a 300 km disc around it. Active-cluster peaks now reach the 30-70%
+       range users expect.
 
     Returns a (NY, NX) float array in [0, 100] on the canonical global
     grid + 0..360 lon convention (regridded to -180..180 by the caller).
@@ -1297,37 +1301,55 @@ def _grid_track_probability(csv_text: str, lead_hours_max: float
     if not earliest:
         return None
 
-    # Step 2: per ensemble member (= sample), collect set of cells
-    # where any of its tracks' genesis falls. Then each cell's count is
-    # the number of unique members predicting genesis there.
+    # Step 2: per ensemble member (= sample), collect set of genesis cells.
     sample_cells: dict[str, set] = {}
     for (_track_id, sample), (_lead, iy, ix) in earliest.items():
         sample_cells.setdefault(sample, set()).add((iy, ix))
 
+    # Step 3: pre-compute the disc offsets (relative cell offsets that
+    # land within `radius_km` of a center cell). KM_PER_CELL ≈ 27.8 so
+    # 300 km → ~11 cell radius → ~380-cell disc.
+    R_cells = max(1, int(round(radius_km / KM_PER_CELL)))
+    dy_grid, dx_grid = np.ogrid[-R_cells:R_cells + 1, -R_cells:R_cells + 1]
+    disc_mask = (dy_grid * dy_grid + dx_grid * dx_grid) <= R_cells * R_cells
+    disc_dy, disc_dx = np.where(disc_mask)
+    disc_dy = disc_dy - R_cells   # shift back to relative offsets
+    disc_dx = disc_dx - R_cells
+
+    # Step 4: per member, build the union of "cells within R of any
+    # genesis", then add 1 to each such cell in `counts`. Vectorized via
+    # flat-indexed unique to keep the per-member work O(N_genesis × disc_area).
     counts = np.zeros((NY, NX), dtype=np.float32)
     for cells in sample_cells.values():
+        all_jy: list = []
+        all_jx: list = []
         for (iy, ix) in cells:
-            counts[iy, ix] += 1.0
+            all_jy.append(iy + disc_dy)
+            all_jx.append(ix + disc_dx)
+        if not all_jy:
+            continue
+        jy = np.concatenate(all_jy)
+        jx = np.concatenate(all_jx)
+        valid = (jy >= 0) & (jy < NY)
+        jy = jy[valid]
+        jx = jx[valid] % NX                    # lon wrap
+        flat = np.unique(jy * NX + jx)          # dedupe per-member
+        counts.flat[flat] += 1.0
 
     # Normalize to the 1000-member ensemble size (FNV3 LARGE_ENSEMBLE
-    # documented size). Falls back to observed sample count if it's
-    # somehow larger.
+    # documented size). Falls back to observed sample count if larger.
     N_MEMBERS = max(1000, len(sample_cells))
     prob = counts / N_MEMBERS
 
-    # ~125 km Gaussian smooth so the heatmap reads continuously instead
-    # of as 0.25° pixel stippling. sigma_cells = 125 / 27.8 ≈ 4.5.
+    # Light Gaussian smooth (σ≈55 km) so the disc edges don't read as
+    # hard rings. Most spatial smoothing now comes from the disc itself.
     try:
         from scipy.ndimage import gaussian_filter
-        # Wrap on lon (axis 1) for the global field; constant on lat
-        # (axis 0) so the poles don't bleed across the meridian. Tuple
-        # mode requires scipy >= 1.6, which our pinned base meets.
         try:
-            prob = gaussian_filter(prob, sigma=(4.5, 4.5),
+            prob = gaussian_filter(prob, sigma=(2.0, 2.0),
                                    mode=("constant", "wrap"))
         except TypeError:
-            # Older scipy fallback: use uniform 'wrap' (slight pole bleed).
-            prob = gaussian_filter(prob, sigma=4.5, mode="wrap")
+            prob = gaussian_filter(prob, sigma=2.0, mode="wrap")
     except Exception as e:
         log.warning("gaussian_filter unavailable, returning unsmoothed: %s", e)
 
@@ -1350,13 +1372,10 @@ def build_genesis_prob(csv_text: str, lead_days: int, valid_time: str
                  lead_days)
         field = np.full((NY, NX), np.nan, dtype=np.float32)
     else:
-        # Mask near-zero cells to NaN so the basemap shows through
-        # everywhere outside the active genesis area. Threshold 0.1%
-        # (not 0.5%) because Gaussian smoothing with σ=4.5 cells
-        # spreads each member's genesis impulse over ~127 cells, so
-        # post-smooth peaks for tight clusters land in the ~0.3-2%
-        # range. A 0.5% mask hid the entire signal on quieter days.
-        field = np.where(field > 0.1, field, np.nan).astype(np.float32)
+        # Mask very-low cells to NaN so the basemap shows through outside
+        # the active genesis area. Threshold 2% (radius-integrated metric
+        # has a much higher floor than the old cell-only metric).
+        field = np.where(field > 2.0, field, np.nan).astype(np.float32)
         field = regrid_to_global(field)
 
     spec = LayerSpec(
@@ -1364,16 +1383,18 @@ def build_genesis_prob(csv_text: str, lead_days: int, valid_time: str
         title=f"TC Formation Probability — Next {lead_days} day{'s' if lead_days > 1 else ''}",
         units="%",
         vmin=0,
-        vmax=8,
-        step=1,
+        vmax=60,
+        step=10,
         cmap="YlOrRd",
         valid_time=valid_time,
+        data_vmax=100,  # hover tooltip can report through to 100%
         description=(
             f"Fraction of FNV3 LARGE_ENSEMBLE 1000-member realizations "
-            f"whose tropical-cyclone genesis (earliest detected point) "
-            f"falls in this 0.25° cell within the next {lead_days} days. "
-            f"Each (track_id, sample) counts as one realization; ~125 km "
-            f"Gaussian smooth applied for readability."
+            f"predicting tropical-cyclogenesis (earliest detected point) "
+            f"within 300 km of this cell during the next {lead_days} days. "
+            f"Radius-integrated, NHC-TWO style — counts each member at "
+            f"most once per cell. Light σ≈55 km Gaussian smooth applied "
+            f"for readability."
         ),
         render_style="filled",
         category="genesis",
