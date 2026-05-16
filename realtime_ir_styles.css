@@ -1414,3 +1414,163 @@ html, body { margin: 0; padding: 0; }
 .rt-dm-export-popup .export-light:hover {
     background: #e6e8eb;
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   GLOBAL MAP TOGGLE PILLS  (top-right floating menus)
+   Switch to GeoColor / DeepMind 10-day / Genesis Forecasts /
+   Winds / Environmental Analysis — all share a dark glass-pill
+   base with UM-green hover + active. Genesis uses .active-orange
+   so "potential genesis" stays visually separated from active
+   storms (UM orange = the live/attention accent in the palette).
+   ═══════════════════════════════════════════════════════════════ */
+
+.ir-global-toggle-btn {
+    padding: 6px 14px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.72rem;
+    font-weight: 500;
+    color: #cbd5e1;
+    background: rgba(22, 27, 36, 0.92);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 5px;
+    cursor: pointer;
+    white-space: nowrap;
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.ir-global-toggle-btn:hover {
+    background: rgba(74, 155, 110, 0.22);
+    color: #ffffff;
+    border-color: rgba(74, 155, 110, 0.45);
+}
+.ir-global-toggle-btn.active {
+    background: rgba(74, 155, 110, 0.28);
+    color: #ffffff;
+    border-color: rgba(74, 155, 110, 0.65);
+}
+.ir-global-toggle-btn.active:hover {
+    background: rgba(74, 155, 110, 0.34);
+    border-color: rgba(74, 155, 110, 0.75);
+}
+.ir-global-toggle-btn.active-orange {
+    background: rgba(244, 115, 33, 0.22);
+    color: #ffd2a8;
+    border-color: rgba(244, 115, 33, 0.55);
+}
+.ir-global-toggle-btn.active-orange:hover {
+    background: rgba(244, 115, 33, 0.30);
+    color: #ffe2c2;
+    border-color: rgba(244, 115, 33, 0.70);
+}
+
+/* Status pill that sits under the DeepMind 10-day toggle */
+.ir-global-wl-status {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.62rem;
+    color: #cbd5e1;
+    background: rgba(22, 27, 36, 0.75);
+    padding: 2px 6px;
+    border-radius: 3px;
+}
+
+/* ── Dropdown menus (Genesis / Winds / Env Analysis) ────────── */
+.ir-global-menu {
+    background: rgba(22, 27, 36, 0.95);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 6px;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.30);
+    overflow: hidden;
+}
+.ir-global-menu-valid {
+    padding: 6px 10px;
+    font-size: 0.6rem;
+    color: #94a3b8;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.ir-global-menu-valid b {
+    color: #e2e8f0;
+    font-weight: 600;
+}
+.ir-global-menu-section {
+    padding: 6px 10px 2px;
+    font-size: 0.6rem;
+    color: #cbd5e1;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 600;
+}
+.ir-global-menu-section.with-divider {
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    margin-top: 4px;
+    padding-top: 6px;
+}
+.ir-global-menu-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 10px;
+    cursor: pointer;
+    font-size: 0.72rem;
+    color: #e2e8f0;
+    line-height: 1.25;
+    transition: background 0.12s;
+}
+.ir-global-menu-row:hover {
+    background: rgba(74, 155, 110, 0.10);
+}
+.ir-global-menu-row input[type="checkbox"] {
+    cursor: pointer;
+    accent-color: #4a9b6e;  /* UM green (dark-theme value reads on dark surface) */
+}
+.ir-global-menu-row .label {
+    flex: 1;
+}
+.ir-global-menu-row .units {
+    font-size: 0.6rem;
+    color: #94a3b8;
+}
+.ir-global-menu-row .substatus {
+    font-size: 0.62rem;
+    color: #94a3b8;
+    display: block;
+    margin-top: 1px;
+}
+.ir-global-menu-empty {
+    padding: 8px 10px;
+    font-size: 0.7rem;
+    color: #94a3b8;
+}
+.ir-global-menu-help {
+    padding: 6px 10px 8px;
+    font-size: 0.55rem;
+    color: #94a3b8;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    margin-top: 6px;
+    line-height: 1.4;
+}
+.ir-global-menu-opacity-wrap {
+    padding: 6px 10px 8px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    margin-top: 4px;
+}
+.ir-global-menu-opacity {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.65rem;
+    color: #cbd5e1;
+}
+.ir-global-menu-opacity input[type="range"] {
+    flex: 1;
+    height: 14px;
+    accent-color: #4a9b6e;  /* UM green slider thumb/fill */
+}
+.ir-global-menu-opacity .pct {
+    width: 30px;
+    text-align: right;
+    color: #e2e8f0;
+    font-variant-numeric: tabular-nums;
+}

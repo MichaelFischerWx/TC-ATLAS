@@ -1832,18 +1832,9 @@
                 btn.id = 'ir-global-product-toggle';
                 btn.textContent = 'Switch to GeoColor';
                 btn.title = 'Currently showing Enhanced IR — click to switch to GeoColor';
-                btn.style.cssText = 'padding:6px 14px;font-family:DM Sans,sans-serif;font-size:0.72rem;font-weight:500;color:#8b9ec2;background:rgba(22,27,36,0.92);border:1px solid rgba(255,255,255,0.12);border-radius:5px;cursor:pointer;white-space:nowrap;backdrop-filter:blur(4px);';
                 L.DomEvent.disableClickPropagation(btn);
                 btn.addEventListener('click', function () {
                     setGlobalProduct(globalProduct === 'eir' ? 'geocolor' : 'eir');
-                });
-                btn.addEventListener('mouseenter', function () {
-                    btn.style.background = 'rgba(30,60,110,0.9)';
-                    btn.style.color = '#c0d0ea';
-                });
-                btn.addEventListener('mouseleave', function () {
-                    btn.style.background = 'rgba(22,27,36,0.92)';
-                    btn.style.color = '#8b9ec2';
                 });
                 return btn;
             }
@@ -1863,22 +1854,11 @@
                 btn.id = 'ir-global-wl-toggle';
                 btn.textContent = 'DeepMind 10-day';
                 btn.title = 'Overlay 50-member WeatherLab ensemble forecast tracks for every active storm + invest';
-                btn.style.cssText = 'padding:6px 14px;font-family:DM Sans,sans-serif;font-size:0.72rem;font-weight:500;color:#8b9ec2;background:rgba(22,27,36,0.92);border:1px solid rgba(255,255,255,0.12);border-radius:5px;cursor:pointer;white-space:nowrap;backdrop-filter:blur(4px);';
                 btn.addEventListener('click', toggleGlobalWeatherlab);
-                btn.addEventListener('mouseenter', function () {
-                    btn.style.background = 'rgba(30,60,110,0.9)';
-                    btn.style.color = '#c0d0ea';
-                });
-                btn.addEventListener('mouseleave', function () {
-                    if (!btn.classList.contains('active')) {
-                        btn.style.background = 'rgba(22,27,36,0.92)';
-                        btn.style.color = '#8b9ec2';
-                    }
-                });
 
                 var status = L.DomUtil.create('span', 'ir-global-wl-status', wrap);
                 status.id = 'ir-global-wl-status';
-                status.style.cssText = 'font-family:DM Sans,sans-serif;font-size:0.62rem;color:#8b9ec2;background:rgba(22,27,36,0.75);padding:2px 6px;border-radius:3px;display:none;';
+                status.style.display = 'none';
 
                 return wrap;
             }
@@ -1900,22 +1880,13 @@
                 btn.id = 'ir-genesis-toggle';
                 btn.textContent = 'Genesis Forecasts';
                 btn.title = 'FNV3 LARGE_ENSEMBLE cyclogenesis: 1000-member spaghetti + 2d/7d/14d formation probability';
-                btn.style.cssText = 'padding:6px 14px;font-family:DM Sans,sans-serif;font-size:0.72rem;font-weight:500;color:#8b9ec2;background:rgba(22,27,36,0.92);border:1px solid rgba(255,255,255,0.12);border-radius:5px;cursor:pointer;white-space:nowrap;backdrop-filter:blur(4px);';
                 btn.addEventListener('click', toggleGenesisMenu);
-                btn.addEventListener('mouseenter', function () {
-                    if (!_rtGenesisMenuOpen) {
-                        btn.style.background = 'rgba(30,60,110,0.9)';
-                        btn.style.color = '#c0d0ea';
-                    }
-                });
-                btn.addEventListener('mouseleave', function () {
-                    _refreshGenesisMenuStatus();
-                });
 
-                var menu = L.DomUtil.create('div', 'ir-genesis-menu', wrap);
+                var menu = L.DomUtil.create('div', 'ir-genesis-menu ir-global-menu', wrap);
                 menu.id = 'ir-genesis-menu';
-                menu.style.cssText = 'display:none;min-width:260px;background:rgba(22,27,36,0.95);border:1px solid rgba(255,255,255,0.14);border-radius:6px;backdrop-filter:blur(8px);box-shadow:0 6px 20px rgba(0,0,0,0.3);';
-                menu.innerHTML = '<div style="padding:8px 10px;font-size:0.7rem;color:#94a3b8;">Loading…</div>';
+                menu.style.display = 'none';
+                menu.style.minWidth = '260px';
+                menu.innerHTML = '<div class="ir-global-menu-empty">Loading…</div>';
 
                 return wrap;
             }
@@ -1935,20 +1906,13 @@
                 btn.id = 'ir-global-winds-toggle';
                 btn.textContent = 'Winds';
                 btn.title = 'Wind barbs at 850 / 700 / 500 / 200 hPa — open menu to pick levels';
-                btn.style.cssText = 'padding:6px 14px;font-family:DM Sans,sans-serif;font-size:0.72rem;font-weight:500;color:#8b9ec2;background:rgba(22,27,36,0.92);border:1px solid rgba(255,255,255,0.12);border-radius:5px;cursor:pointer;white-space:nowrap;backdrop-filter:blur(4px);';
                 btn.addEventListener('click', toggleWindsMenu);
-                btn.addEventListener('mouseenter', function () {
-                    if (!_rtWindsMenuOpen) {
-                        btn.style.background = 'rgba(30,60,110,0.9)';
-                        btn.style.color = '#c0d0ea';
-                    }
-                });
-                btn.addEventListener('mouseleave', _refreshWindsButton);
 
-                var menu = L.DomUtil.create('div', 'ir-global-winds-menu', wrap);
+                var menu = L.DomUtil.create('div', 'ir-global-winds-menu ir-global-menu', wrap);
                 menu.id = 'ir-global-winds-menu';
-                menu.style.cssText = 'display:none;min-width:220px;background:rgba(22,27,36,0.95);border:1px solid rgba(255,255,255,0.14);border-radius:6px;backdrop-filter:blur(8px);box-shadow:0 6px 20px rgba(0,0,0,0.3);';
-                menu.innerHTML = '<div style="padding:8px 10px;font-size:0.7rem;color:#94a3b8;">Loading…</div>';
+                menu.style.display = 'none';
+                menu.style.minWidth = '220px';
+                menu.innerHTML = '<div class="ir-global-menu-empty">Loading…</div>';
 
                 return wrap;
             }
@@ -1969,25 +1933,13 @@
                 btn.id = 'ir-global-env-toggle';
                 btn.textContent = 'Environmental Analysis';
                 btn.title = 'Toggle GFS-derived shear, mid-level RH, and OISST SST overlays';
-                btn.style.cssText = 'padding:6px 14px;font-family:DM Sans,sans-serif;font-size:0.72rem;font-weight:500;color:#8b9ec2;background:rgba(22,27,36,0.92);border:1px solid rgba(255,255,255,0.12);border-radius:5px;cursor:pointer;white-space:nowrap;backdrop-filter:blur(4px);';
                 btn.addEventListener('click', toggleEnvMenu);
-                btn.addEventListener('mouseenter', function () {
-                    if (!_rtEnvMenuOpen) {
-                        btn.style.background = 'rgba(30,60,110,0.9)';
-                        btn.style.color = '#c0d0ea';
-                    }
-                });
-                btn.addEventListener('mouseleave', function () {
-                    if (!_rtEnvMenuOpen) {
-                        btn.style.background = 'rgba(22,27,36,0.92)';
-                        btn.style.color = '#8b9ec2';
-                    }
-                });
 
-                var menu = L.DomUtil.create('div', 'ir-global-env-menu', wrap);
+                var menu = L.DomUtil.create('div', 'ir-global-env-menu ir-global-menu', wrap);
                 menu.id = 'ir-global-env-menu';
-                menu.style.cssText = 'display:none;min-width:240px;background:rgba(22,27,36,0.95);border:1px solid rgba(255,255,255,0.14);border-radius:6px;backdrop-filter:blur(8px);box-shadow:0 6px 20px rgba(0,0,0,0.3);';
-                menu.innerHTML = '<div style="padding:8px 10px;font-size:0.7rem;color:#94a3b8;">Loading layers…</div>';
+                menu.style.display = 'none';
+                menu.style.minWidth = '240px';
+                menu.innerHTML = '<div class="ir-global-menu-empty">Loading layers…</div>';
 
                 return wrap;
             }
@@ -5313,19 +5265,7 @@
         _rtGlobalWLVisible = !_rtGlobalWLVisible;
         var btn = document.getElementById('ir-global-wl-toggle');
         var status = document.getElementById('ir-global-wl-status');
-        if (btn) {
-            btn.classList.toggle('active', _rtGlobalWLVisible);
-            // Visually echo the active state via inline styles (matches GeoColor toggle)
-            if (_rtGlobalWLVisible) {
-                btn.style.background = 'rgba(74, 155, 110, 0.22)';
-                btn.style.color = '#6cb78a';
-                btn.style.borderColor = 'rgba(74, 155, 110, 0.55)';
-            } else {
-                btn.style.background = 'rgba(22,27,36,0.92)';
-                btn.style.color = '#8b9ec2';
-                btn.style.borderColor = 'rgba(255,255,255,0.12)';
-            }
-        }
+        if (btn) btn.classList.toggle('active', _rtGlobalWLVisible);
         if (status) status.style.display = _rtGlobalWLVisible ? '' : 'none';
         if (_rtGlobalWLVisible) {
             if (!_rtGlobalWLData) {
@@ -5500,18 +5440,11 @@
         var menu = document.getElementById('ir-genesis-menu');
         var btn = document.getElementById('ir-genesis-toggle');
         if (btn) {
-            if (_rtGenesisMenuOpen || _rtGenesisVisible
+            var on = _rtGenesisMenuOpen || _rtGenesisVisible
                 || _rtEnvActive.genesis_prob_2d
                 || _rtEnvActive.genesis_prob_7d
-                || _rtEnvActive.genesis_prob_14d) {
-                btn.style.background = 'rgba(249, 115, 22, 0.22)';
-                btn.style.color = '#fbbf72';
-                btn.style.borderColor = 'rgba(249, 115, 22, 0.55)';
-            } else {
-                btn.style.background = 'rgba(22,27,36,0.92)';
-                btn.style.color = '#8b9ec2';
-                btn.style.borderColor = 'rgba(255,255,255,0.12)';
-            }
+                || _rtEnvActive.genesis_prob_14d;
+            btn.classList.toggle('active-orange', on);
         }
         if (!menu) return;
         menu.style.display = _rtGenesisMenuOpen ? '' : 'none';
@@ -5549,15 +5482,7 @@
                 || _rtEnvActive.genesis_prob_2d
                 || _rtEnvActive.genesis_prob_7d
                 || _rtEnvActive.genesis_prob_14d;
-            if (on || _rtGenesisMenuOpen) {
-                btn.style.background = 'rgba(249, 115, 22, 0.22)';
-                btn.style.color = '#fbbf72';
-                btn.style.borderColor = 'rgba(249, 115, 22, 0.55)';
-            } else {
-                btn.style.background = 'rgba(22,27,36,0.92)';
-                btn.style.color = '#8b9ec2';
-                btn.style.borderColor = 'rgba(255,255,255,0.12)';
-            }
+            btn.classList.toggle('active-orange', on || _rtGenesisMenuOpen);
         }
     }
 
@@ -5585,35 +5510,29 @@
         }
 
         var html = '';
-        html += '<div style="padding:6px 10px 4px;font-size:0.62rem;color:#94a3b8;'
-              + 'text-transform:uppercase;letter-spacing:0.04em;">Ensemble tracks</div>';
-        html += '<label style="display:flex;align-items:center;gap:8px;padding:5px 10px;'
-              + 'cursor:pointer;font-size:0.72rem;color:#c7d2e0;">'
+        html += '<div class="ir-global-menu-section">Ensemble tracks</div>';
+        html += '<label class="ir-global-menu-row">'
               + '<input type="checkbox" id="ir-genesis-tracks-cb"'
-              + (_rtGenesisVisible ? ' checked' : '') + ' style="cursor:pointer;">'
-              + '<span style="flex:1;"><b>1000-member spaghetti</b>'
+              + (_rtGenesisVisible ? ' checked' : '') + '>'
+              + '<span class="label"><b>1000-member spaghetti</b>'
               + (trackStatusText
-                  ? '<span style="font-size:0.62rem;color:#7f8a9a;display:block;">' + trackStatusText + '</span>'
+                  ? '<span class="substatus">' + trackStatusText + '</span>'
                   : '')
               + '</span></label>';
 
-        html += '<div style="padding:6px 10px 4px;font-size:0.62rem;color:#94a3b8;'
-              + 'text-transform:uppercase;letter-spacing:0.04em;border-top:1px solid rgba(255,255,255,0.08);'
-              + 'margin-top:4px;">Formation Probability</div>';
+        html += '<div class="ir-global-menu-section with-divider">Formation Probability</div>';
         if (probs.length === 0) {
-            html += '<div style="padding:5px 10px;font-size:0.7rem;color:#94a3b8;">'
-                  + 'Probability layers not available yet.</div>';
+            html += '<div class="ir-global-menu-empty">Probability layers not available yet.</div>';
         } else {
             for (var i = 0; i < probs.length; i++) {
                 var L_ = probs[i];
                 var isOn = !!_rtEnvActive[L_.name];
                 var validShort = (L_.valid_time || '').replace('T', ' ').replace(':00:00Z', 'Z');
-                html += '<label style="display:flex;align-items:center;gap:8px;padding:5px 10px;'
-                      + 'cursor:pointer;font-size:0.72rem;color:#c7d2e0;">'
+                html += '<label class="ir-global-menu-row">'
                       + '<input type="checkbox" data-genesis-layer="' + L_.name + '"'
-                      + (isOn ? ' checked' : '') + ' style="cursor:pointer;">'
-                      + '<span style="flex:1;"><b>' + L_.title.replace('TC Formation Probability — ', '') + '</b>'
-                      + '<span style="font-size:0.62rem;color:#7f8a9a;display:block;">'
+                      + (isOn ? ' checked' : '') + '>'
+                      + '<span class="label"><b>' + L_.title.replace('TC Formation Probability — ', '') + '</b>'
+                      + '<span class="substatus">'
                       + 'valid ' + validShort + ' &middot; ' + L_.units + '</span>'
                       + '</span></label>';
             }
@@ -6169,7 +6088,7 @@
                 && !L_.name.startsWith('winds_');
         });
         if (layers.length === 0) {
-            menu.innerHTML = '<div style="padding:8px 10px;font-size:0.7rem;color:#94a3b8;">'
+            menu.innerHTML = '<div class="ir-global-menu-empty">'
                 + 'No env layers available yet. Pipeline runs every 6 h.</div>';
             return;
         }
@@ -6177,12 +6096,11 @@
         // Compact-row HTML helper. Title is the level-only short form;
         // units are right-aligned to declutter.
         function rowHtml(L_, shortTitle, isOn) {
-            return '<label style="display:flex;align-items:center;gap:8px;padding:3px 10px;'
-                + 'cursor:pointer;font-size:0.72rem;color:#c7d2e0;line-height:1.25;">'
+            return '<label class="ir-global-menu-row">'
                 + '<input type="checkbox" data-env-layer="' + L_.name + '"'
-                + (isOn ? ' checked' : '') + ' style="cursor:pointer;">'
-                + '<span style="flex:1;">' + shortTitle + '</span>'
-                + '<span style="font-size:0.6rem;color:#7f8a9a;">' + (L_.units || '') + '</span>'
+                + (isOn ? ' checked' : '') + '>'
+                + '<span class="label">' + shortTitle + '</span>'
+                + '<span class="units">' + (L_.units || '') + '</span>'
                 + '</label>';
         }
 
@@ -6200,9 +6118,7 @@
         }
 
         var html = '';
-        html += '<div style="padding:6px 10px 6px;font-size:0.6rem;color:#7f8a9a;'
-              + 'border-bottom:1px solid rgba(255,255,255,0.08);">'
-              + 'valid <span style="color:#c7d2e0;">' + validShort + '</span></div>';
+        html += '<div class="ir-global-menu-valid">valid <b>' + validShort + '</b></div>';
 
         // Render each non-empty group as a section.
         var anyRendered = false;
@@ -6211,9 +6127,7 @@
             var inGroup = layers.filter(grp.match);
             if (inGroup.length === 0) continue;
             anyRendered = true;
-            html += '<div style="padding:6px 10px 2px;font-size:0.6rem;color:#94a3b8;'
-                  + 'text-transform:uppercase;letter-spacing:0.05em;font-weight:600;">'
-                  + grp.label + '</div>';
+            html += '<div class="ir-global-menu-section">' + grp.label + '</div>';
             for (var li = 0; li < inGroup.length; li++) {
                 var L_ = inGroup[li];
                 html += rowHtml(L_, grp.shortTitle(L_), !!_rtEnvActive[L_.name]);
@@ -6224,23 +6138,21 @@
             return !_ENV_MENU_GROUPS.some(function (g) { return g.match(L_); });
         });
         if (ungrouped.length) {
-            html += '<div style="padding:6px 10px 2px;font-size:0.6rem;color:#94a3b8;'
-                  + 'text-transform:uppercase;letter-spacing:0.05em;font-weight:600;">Other</div>';
+            html += '<div class="ir-global-menu-section">Other</div>';
             for (var ui = 0; ui < ungrouped.length; ui++) {
                 var Lu = ungrouped[ui];
                 html += rowHtml(Lu, Lu.title, !!_rtEnvActive[Lu.name]);
             }
         }
         if (!anyRendered && !ungrouped.length) {
-            html += '<div style="padding:8px 10px;font-size:0.7rem;color:#94a3b8;">No layers matched.</div>';
+            html += '<div class="ir-global-menu-empty">No layers matched.</div>';
         }
 
-        html += '<div style="padding:6px 10px 8px;border-top:1px solid rgba(255,255,255,0.08);margin-top:4px;">'
-            + '<label style="display:flex;align-items:center;gap:6px;font-size:0.65rem;color:#94a3b8;">Opacity '
+        html += '<div class="ir-global-menu-opacity-wrap">'
+            + '<label class="ir-global-menu-opacity">Opacity '
             + '<input id="ir-global-env-opacity" type="range" min="0" max="100" '
-            + 'value="' + Math.round(_rtEnvOpacity * 100) + '" '
-            + 'style="flex:1;height:14px;">'
-            + '<span id="ir-global-env-opacity-val" style="width:30px;text-align:right;">' + Math.round(_rtEnvOpacity * 100) + '%</span>'
+            + 'value="' + Math.round(_rtEnvOpacity * 100) + '">'
+            + '<span class="pct" id="ir-global-env-opacity-val">' + Math.round(_rtEnvOpacity * 100) + '%</span>'
             + '</label></div>';
 
         menu.innerHTML = html;
@@ -6331,15 +6243,7 @@
         if (btn) {
             var anyOn = !!(_rtEnvActive.winds_850 || _rtEnvActive.winds_700
                 || _rtEnvActive.winds_500 || _rtEnvActive.winds_200);
-            if (_rtWindsMenuOpen || anyOn) {
-                btn.style.background = 'rgba(74, 155, 110, 0.22)';
-                btn.style.color = '#6cb78a';
-                btn.style.borderColor = 'rgba(74, 155, 110, 0.55)';
-            } else {
-                btn.style.background = 'rgba(22,27,36,0.92)';
-                btn.style.color = '#8b9ec2';
-                btn.style.borderColor = 'rgba(255,255,255,0.12)';
-            }
+            btn.classList.toggle('active', _rtWindsMenuOpen || anyOn);
         }
         if (_rtWindsMenuOpen && !_rtEnvMetadata) {
             _loadEnvMetadata().then(_renderWindsMenu);
@@ -6358,28 +6262,25 @@
             return L_.name && L_.name.startsWith('winds_');
         });
         if (winds.length === 0) {
-            menu.innerHTML = '<div style="padding:8px 10px;font-size:0.7rem;color:#94a3b8;">'
+            menu.innerHTML = '<div class="ir-global-menu-empty">'
                 + 'No wind layers available yet.</div>';
             return;
         }
 
         var html = '';
-        html += '<div style="padding:6px 10px 2px;font-size:0.6rem;color:#94a3b8;'
-              + 'text-transform:uppercase;letter-spacing:0.05em;font-weight:600;">Wind Barbs</div>';
+        html += '<div class="ir-global-menu-section">Wind Barbs</div>';
         for (var i = 0; i < winds.length; i++) {
             var L_ = winds[i];
             var isOn = !!_rtEnvActive[L_.name];
             var levelLabel = L_.title.replace(/\s*hPa Wind Barbs\s*/i, ' hPa');
-            html += '<label style="display:flex;align-items:center;gap:8px;padding:3px 10px;'
-                  + 'cursor:pointer;font-size:0.72rem;color:#c7d2e0;line-height:1.25;">'
+            html += '<label class="ir-global-menu-row">'
                   + '<input type="checkbox" data-winds-layer="' + L_.name + '"'
-                  + (isOn ? ' checked' : '') + ' style="cursor:pointer;">'
-                  + '<span style="flex:1;">' + levelLabel + '</span>'
-                  + '<span style="font-size:0.6rem;color:#7f8a9a;">' + (L_.units || '') + '</span>'
+                  + (isOn ? ' checked' : '') + '>'
+                  + '<span class="label">' + levelLabel + '</span>'
+                  + '<span class="units">' + (L_.units || '') + '</span>'
                   + '</label>';
         }
-        html += '<div style="padding:4px 10px 8px;font-size:0.55rem;color:#7f8a9a;'
-              + 'border-top:1px solid rgba(255,255,255,0.08);margin-top:6px;line-height:1.4;">'
+        html += '<div class="ir-global-menu-help">'
               + 'Standard met-convention barbs: flag = 50 kt, full bar = 10 kt, '
               + 'half bar = 5 kt. NH on left, SH on right.</div>';
 
@@ -6403,15 +6304,7 @@
         if (!btn) return;
         var anyOn = !!(_rtEnvActive.winds_850 || _rtEnvActive.winds_700
             || _rtEnvActive.winds_500 || _rtEnvActive.winds_200);
-        if (_rtWindsMenuOpen || anyOn) {
-            btn.style.background = 'rgba(74, 155, 110, 0.22)';
-            btn.style.color = '#6cb78a';
-            btn.style.borderColor = 'rgba(74, 155, 110, 0.55)';
-        } else {
-            btn.style.background = 'rgba(22,27,36,0.92)';
-            btn.style.color = '#8b9ec2';
-            btn.style.borderColor = 'rgba(255,255,255,0.12)';
-        }
+        btn.classList.toggle('active', _rtWindsMenuOpen || anyOn);
     }
 
     function toggleEnvMenu() {
@@ -6419,17 +6312,7 @@
         var menu = document.getElementById('ir-global-env-menu');
         var btn = document.getElementById('ir-global-env-toggle');
         if (menu) menu.style.display = _rtEnvMenuOpen ? '' : 'none';
-        if (btn) {
-            if (_rtEnvMenuOpen) {
-                btn.style.background = 'rgba(74, 155, 110, 0.22)';
-                btn.style.color = '#6cb78a';
-                btn.style.borderColor = 'rgba(74, 155, 110, 0.55)';
-            } else {
-                btn.style.background = 'rgba(22,27,36,0.92)';
-                btn.style.color = '#8b9ec2';
-                btn.style.borderColor = 'rgba(255,255,255,0.12)';
-            }
-        }
+        if (btn) btn.classList.toggle('active', _rtEnvMenuOpen);
         if (_rtEnvMenuOpen && !_rtEnvMetadata) _loadEnvMetadata();
     }
     window.toggleEnvMenu = toggleEnvMenu;
