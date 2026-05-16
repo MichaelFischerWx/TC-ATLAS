@@ -5945,7 +5945,10 @@
         var el = document.createElement('div');
         el.id = 'ir-env-hover-tip';
         el.style.cssText =
-            'position:absolute;pointer-events:none;display:none;z-index:900;' +
+            // position: fixed so clientX/Y from mousemove map directly
+            // to top/left without any document-scroll math (absolute on
+            // body was occasionally landing the tip off-screen).
+            'position:fixed;pointer-events:none;display:none;z-index:900;' +
             'background:rgba(22,27,36,0.95);color:#e2e8f0;' +
             'font-family:"DM Sans","Helvetica Neue",sans-serif;font-size:0.72rem;' +
             'border:1px solid rgba(255,255,255,0.16);border-radius:5px;' +

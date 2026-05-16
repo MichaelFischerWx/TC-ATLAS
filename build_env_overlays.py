@@ -286,6 +286,13 @@ class LayerSpec:
     # need a wider hover range.
     data_vmin: Optional[float] = None
     data_vmax: Optional[float] = None
+    # When True, the filled renderer paints the field in solid color
+    # BANDS keyed off `levels` (BoundaryNorm) instead of a continuous
+    # gradient. Pairs naturally with the frontend's swatch-style legend
+    # so individual probability tiers are immediately readable
+    # (TC-RADAR radial-velocity style). Default False for back-compat
+    # with smooth shaded fields like RH / SST.
+    discrete_bins: bool = False
 
 
 # Each 0.25° cell spans ~27.8 km in the latitude direction (and at the
@@ -390,15 +397,37 @@ def _render_filled_png(field: np.ndarray, spec: LayerSpec) -> bytes:
     from PIL import Image
 
     field = np.asarray(field, dtype=np.float32)
-    norm = mcolors.Normalize(vmin=spec.vmin, vmax=spec.vmax, clip=True)
     cmap = matplotlib.colormaps.get_cmap(spec.cmap)
+
+    # Discrete bands keyed off `levels_override` (or implicit linspace
+    # via vmin/vmax/step). BoundaryNorm produces a stepped colormap so
+    # each probability tier reads as a solid band — much easier to
+    # discriminate at a glance than a smooth gradient. Frontend
+    # colorbar already swatch-renders matching bins.
+    if spec.discrete_bins:
+        if spec.levels_override:
+            bounds = list(spec.levels_override)
+        else:
+            n_steps = max(2, int(round((spec.vmax - spec.vmin) / spec.step)) + 1)
+            bounds = list(np.linspace(spec.vmin, spec.vmax, n_steps))
+        # BoundaryNorm needs len(bounds)-1 colors; sample the cmap
+        # uniformly so swatch row + raster bands stay in lock-step.
+        n_bins = max(1, len(bounds) - 1)
+        sampled = cmap(np.linspace(0.0, 1.0, n_bins))
+        cmap = mcolors.ListedColormap(sampled)
+        norm = mcolors.BoundaryNorm(bounds, n_bins, clip=True)
+    else:
+        norm = mcolors.Normalize(vmin=spec.vmin, vmax=spec.vmax, clip=True)
 
     # Bilinear upsample BEFORE colormapping so the gradient stays smooth
     # at zoom. NaN cells need a sentinel that doesn't blend across the
-    # ocean/land boundary; replace with vmin then re-mask after.
+    # ocean/land boundary; replace with vmin then re-mask after. For
+    # discrete-bins we use NEAREST to keep the band edges crisp instead
+    # of bilinear-blurring across a 5-10% probability boundary.
     finite_mask = np.isfinite(field)
     work = np.where(finite_mask, field, spec.vmin)
-    img_f = Image.fromarray(work).resize((IMG_NX, IMG_NY), Image.BILINEAR)
+    resample = Image.NEAREST if spec.discrete_bins else Image.BILINEAR
+    img_f = Image.fromarray(work).resize((IMG_NX, IMG_NY), resample)
     img_m = Image.fromarray((finite_mask * 255).astype(np.uint8)).resize(
         (IMG_NX, IMG_NY), Image.NEAREST)
     big = np.asarray(img_f, dtype=np.float32)
@@ -1388,6 +1417,12 @@ def build_genesis_prob(csv_text: str, lead_days: int, valid_time: str
         cmap="YlOrRd",
         valid_time=valid_time,
         data_vmax=100,  # hover tooltip can report through to 100%
+        # Bin edges for the discrete-band renderer + matching swatch
+        # legend. Tighter spacing at the low end so the "is this 5%
+        # or 15%?" question is easy to answer; coarser at the high
+        # end where any band > 40% is operationally "very likely".
+        levels_override=[2, 5, 10, 20, 30, 40, 50, 60],
+        discrete_bins=True,
         description=(
             f"Fraction of FNV3 LARGE_ENSEMBLE 1000-member realizations "
             f"predicting tropical-cyclogenesis (earliest detected point) "
