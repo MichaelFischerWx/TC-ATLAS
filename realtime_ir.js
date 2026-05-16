@@ -5546,17 +5546,209 @@
             .finally(function () { _rtEnvLoading = false; });
     }
 
+    // ── Wind-barb canvas layer ──────────────────────────────
+    //
+    //  Custom Leaflet layer that draws standard meteorological wind
+    //  barbs over the global map. Loads a packed (u, v) RGBA PNG into
+    //  an offscreen canvas once, then on every map move/zoom samples
+    //  u/v at zoom-appropriate grid spacing and draws barbs.
+
+    var _WindBarbLayer = L.Layer.extend({
+        initialize: function (meta) {
+            this._meta = meta;
+            this._uv = null;           // Uint8ClampedArray of RGBA pixels
+            this._dw = 0;              // source width
+            this._dh = 0;              // source height
+            this._canvas = null;       // display canvas
+            this._loaded = false;
+        },
+
+        onAdd: function (map) {
+            this._map = map;
+            var c = L.DomUtil.create('canvas', 'leaflet-wind-canvas');
+            c.style.position = 'absolute';
+            c.style.pointerEvents = 'none';
+            c.style.zIndex = 425;
+            map.getPanes().overlayPane.appendChild(c);
+            this._canvas = c;
+
+            var img = new Image();
+            img.crossOrigin = 'anonymous';
+            var self = this;
+            img.onload = function () {
+                var off = document.createElement('canvas');
+                off.width = img.naturalWidth;
+                off.height = img.naturalHeight;
+                var ictx = off.getContext('2d', { willReadFrequently: true });
+                ictx.drawImage(img, 0, 0);
+                try {
+                    self._uv = ictx.getImageData(0, 0, off.width, off.height).data;
+                    self._dw = off.width;
+                    self._dh = off.height;
+                    self._loaded = true;
+                    self._redraw();
+                } catch (e) {
+                    console.warn('[Wind] canvas tainted for ' + self._meta.name + '; barbs disabled', e);
+                }
+            };
+            img.onerror = function () {
+                console.warn('[Wind] PNG load failed for ' + self._meta.name);
+            };
+            img.src = this._meta.image_url;
+
+            map.on('moveend zoomend resize', this._redraw, this);
+            this._redraw();
+            return this;
+        },
+
+        onRemove: function (map) {
+            map.off('moveend zoomend resize', this._redraw, this);
+            if (this._canvas && this._canvas.parentNode) {
+                this._canvas.parentNode.removeChild(this._canvas);
+            }
+            this._canvas = null;
+        },
+
+        setOpacity: function (opacity) {
+            if (this._canvas) this._canvas.style.opacity = opacity;
+            return this;
+        },
+
+        _redraw: function () {
+            if (!this._map || !this._canvas) return;
+            var size = this._map.getSize();
+            this._canvas.width = size.x;
+            this._canvas.height = size.y;
+            var topLeft = this._map.containerPointToLayerPoint([0, 0]);
+            L.DomUtil.setPosition(this._canvas, topLeft);
+
+            if (!this._loaded) return;
+
+            var ctx = this._canvas.getContext('2d');
+            ctx.clearRect(0, 0, size.x, size.y);
+            ctx.strokeStyle = 'rgba(245, 245, 245, 0.95)';
+            ctx.fillStyle   = 'rgba(245, 245, 245, 0.95)';
+            ctx.lineWidth = 1.0;
+            ctx.lineCap = 'round';
+
+            // Zoom-adaptive sampling spacing. Use whole degrees so the
+            // barbs sit on a recognizable grid.
+            var z = this._map.getZoom();
+            var spacing = z <= 2 ? 8 : z <= 3 ? 5 : z <= 4 ? 3 : z <= 5 ? 1.5 : 1;
+
+            var b = this._map.getBounds();
+            var sLat = Math.floor(b.getSouth() / spacing) * spacing;
+            var nLat = Math.ceil(b.getNorth() / spacing) * spacing;
+            var wLon = Math.floor(b.getWest() / spacing) * spacing;
+            var eLon = Math.ceil(b.getEast() / spacing) * spacing;
+
+            var meta = this._meta;
+            var uSpan = (meta.u_max - meta.u_min) / 255.0;
+            var vSpan = (meta.v_max - meta.v_min) / 255.0;
+            var uv = this._uv;
+            var dw = this._dw;
+            var dh = this._dh;
+
+            for (var lat = sLat; lat <= nLat; lat += spacing) {
+                for (var lon = wLon; lon <= eLon; lon += spacing) {
+                    var sx = Math.floor((lon + 180) / 360 * dw);
+                    var sy = Math.floor((90 - lat) / 180 * dh);
+                    if (sx < 0 || sx >= dw || sy < 0 || sy >= dh) continue;
+                    var idx = (sy * dw + sx) * 4;
+                    if (uv[idx + 3] === 0) continue;
+                    var u_ms = meta.u_min + uv[idx] * uSpan;
+                    var v_ms = meta.v_min + uv[idx + 1] * vSpan;
+                    var pt = this._map.latLngToContainerPoint([lat, lon]);
+                    _drawWindBarb(ctx, pt.x, pt.y, u_ms, v_ms, lat < 0);
+                }
+            }
+        }
+    });
+
+    /** Draw a single wind barb at (x, y) given u, v in m/s.
+     *  Standard meteorological convention: barbs point toward the
+     *  direction the wind is coming FROM. Flag = 50 kt, full bar =
+     *  10 kt, half bar = 5 kt. Flags on right side (SH) or left
+     *  side (NH) — though most operational charts use a single side
+     *  globally; we follow the hemispheric convention for clarity. */
+    function _drawWindBarb(ctx, x, y, u, v, isSH) {
+        var speed_kt = Math.sqrt(u * u + v * v) * 1.94384;
+        if (speed_kt < 2.5) {
+            ctx.beginPath();
+            ctx.arc(x, y, 2.2, 0, 2 * Math.PI);
+            ctx.stroke();
+            return;
+        }
+        // Wind direction "from" angle. atan2(u, v) gives angle from
+        // north, clockwise (meteorological convention).
+        var fromAngle = Math.atan2(u, v);
+
+        ctx.save();
+        ctx.translate(x, y);
+        // Canvas y axis points DOWN. To draw the staff pointing toward
+        // upwind, we rotate so that the +y axis aligns with the
+        // direction the wind is coming FROM. Canvas rotation rotates
+        // +x to +y by +angle clockwise.
+        ctx.rotate(fromAngle);
+
+        var staffLen = 18;
+        var barbLen = 8;
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(0, -staffLen);
+        ctx.stroke();
+
+        var rounded = Math.round(speed_kt / 5) * 5;
+        var yOff = -staffLen;
+        var side = isSH ? -1 : 1;
+        var spacing = 4;
+
+        while (rounded >= 50) {
+            ctx.beginPath();
+            ctx.moveTo(0, yOff);
+            ctx.lineTo(side * barbLen, yOff);
+            ctx.lineTo(0, yOff + spacing);
+            ctx.closePath();
+            ctx.fill();
+            yOff += spacing + 1;
+            rounded -= 50;
+        }
+        var firstBar = (rounded > 0);
+        while (rounded >= 10) {
+            ctx.beginPath();
+            ctx.moveTo(0, yOff);
+            ctx.lineTo(side * barbLen, yOff - 3);
+            ctx.stroke();
+            yOff += spacing;
+            rounded -= 10;
+            firstBar = false;
+        }
+        if (rounded >= 5) {
+            // Half-barbs sit one notch in from the tip if no bars
+            // precede them (so they don't ride at the very end alone).
+            if (firstBar) yOff -= spacing * 0.5;
+            ctx.beginPath();
+            ctx.moveTo(0, yOff);
+            ctx.lineTo(side * (barbLen * 0.55), yOff - 2);
+            ctx.stroke();
+        }
+        ctx.restore();
+    }
+
     function _activateEnvLayer(layer) {
         if (!map || !layer || _rtEnvActive[layer.name]) return;
         var bounds = layer.bounds || [[-90, -180], [90, 180]];
 
-        // Contour layers prefer the GeoJSON sidecar (renders as SVG
-        // polylines → crisp at any zoom). Filled layers, or contour
-        // layers whose pipeline didn't emit GeoJSON yet, fall back to
-        // the raster PNG overlay.
+        // Three render paths depending on the layer's render_style:
+        //   wind_barb   → custom WindBarbLayer (canvas, vector)
+        //   contour     → L.geoJSON if geojson_url else L.imageOverlay
+        //   filled      → L.imageOverlay (raster)
         var overlay;
         var overlayKind;
-        if (layer.render_style === 'contour' && layer.geojson_url) {
+        if (layer.render_style === 'wind_barb') {
+            overlay = new _WindBarbLayer(layer).addTo(map);
+            overlayKind = 'wind';
+        } else if (layer.render_style === 'contour' && layer.geojson_url) {
             overlay = L.geoJSON(null, {
                 style: function (feature) {
                     return {
@@ -5791,7 +5983,7 @@
         // the Genesis menu. Filter by either explicit category metadata
         // (newer pipeline output) or name prefix (back-compat).
         var layers = allLayers.filter(function (L_) {
-            if (L_.category) return L_.category === 'env';
+            if (L_.category) return L_.category === 'env' || L_.category === 'wind';
             return L_.name && !L_.name.startsWith('genesis_');
         });
         if (layers.length === 0) {

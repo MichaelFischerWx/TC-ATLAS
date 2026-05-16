@@ -806,6 +806,143 @@ def build_midlevel_shear(date_str: str, hour_str: str) -> Optional[bytes]:
     return shear_kt if upload_layer(spec, shear_kt) else None
 
 
+# --------------------------------------------------------------------------
+# Wind component layers (u, v packed into RG channels of an 8-bit PNG)
+# --------------------------------------------------------------------------
+# Frontend renders wind barbs by loading these PNGs into an offscreen
+# canvas, sampling u/v at zoom-appropriate grid spacing, and drawing
+# standard met-conv barbs (flag/long bar/half bar) on a Leaflet
+# overlay canvas.
+
+_WIND_VMIN = -60.0  # m/s (~120 kt — wider than realistic peak so 200 hPa jets fit)
+_WIND_VMAX = 60.0
+
+
+def render_uv_png(u: np.ndarray, v: np.ndarray) -> bytes:
+    """Pack a (u, v) vector field into an 8-bit RGBA PNG.
+
+      R channel = (u - WIND_VMIN) / (WIND_VMAX - WIND_VMIN) * 255
+      G channel = same for v
+      B channel = 0 (unused)
+      A channel = 255 for valid cells, 0 for NaN
+
+    The frontend's wind-barb canvas layer loads this PNG and decodes
+    each pixel's u,v on demand. Total bytes ~500-900 KB per level
+    after PNG compression.
+    """
+    from PIL import Image
+    u = np.asarray(u, dtype=np.float32)
+    v = np.asarray(v, dtype=np.float32)
+    valid = np.isfinite(u) & np.isfinite(v)
+    span = _WIND_VMAX - _WIND_VMIN
+
+    u_clip = np.clip(u, _WIND_VMIN, _WIND_VMAX)
+    v_clip = np.clip(v, _WIND_VMIN, _WIND_VMAX)
+    u_enc = ((u_clip - _WIND_VMIN) / span * 255.0).astype(np.uint8)
+    v_enc = ((v_clip - _WIND_VMIN) / span * 255.0).astype(np.uint8)
+
+    h, w = u.shape
+    rgba = np.zeros((h, w, 4), dtype=np.uint8)
+    rgba[..., 0] = u_enc
+    rgba[..., 1] = v_enc
+    rgba[..., 2] = 0
+    rgba[..., 3] = valid.astype(np.uint8) * 255
+
+    img = Image.fromarray(rgba, mode="RGBA")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    return buf.getvalue()
+
+
+def _upload_winds(name: str, level: int, valid_time: str, png: bytes) -> bool:
+    """Upload an RG-packed wind PNG + metadata.json sidecar."""
+    try:
+        from google.cloud import storage
+    except ImportError:
+        log.error("google-cloud-storage not installed; cannot upload winds")
+        return False
+    if not GCS_BUCKET:
+        log.error("GCS_IR_CACHE_BUCKET not set; cannot upload winds")
+        return False
+
+    client = storage.Client()
+    bucket = client.bucket(GCS_BUCKET)
+    png_blob = bucket.blob(f"{GCS_PREFIX}/{name}/latest.png")
+    meta_blob = bucket.blob(f"{GCS_PREFIX}/{name}/metadata.json")
+
+    meta = {
+        "name": name,
+        "title": f"{level} hPa Wind Barbs",
+        "level": level,
+        "units": "kt",
+        "category": "wind",
+        "render_style": "wind_barb",
+        "valid_time": valid_time,
+        "image_url": (
+            f"https://storage.googleapis.com/{GCS_BUCKET}/"
+            f"{GCS_PREFIX}/{name}/latest.png"
+        ),
+        "bounds": [[-90.0, -180.0], [90.0, 180.0]],
+        "grid": {"nx": NX, "ny": NY},
+        # Decoding parameters: u = u_min + (R/255)*(u_max - u_min)
+        "u_min": _WIND_VMIN, "u_max": _WIND_VMAX,
+        "v_min": _WIND_VMIN, "v_max": _WIND_VMAX,
+        "wind_units_native": "m/s",
+        "description": (
+            f"u, v components at {level} hPa from the latest GFS "
+            f"0.25° analysis, packed as RG channels of an 8-bit PNG "
+            f"(±60 m/s range). Frontend decodes and draws standard "
+            f"meteorological wind barbs."
+        ),
+        "generated_utc": datetime.now(timezone.utc).isoformat(),
+    }
+
+    def _put(blob, body, ct):
+        blob.upload_from_string(body, content_type=ct)
+        blob.cache_control = "public, max-age=300"
+        blob.patch()
+        try:
+            blob.make_public()
+        except Exception as e:
+            log.warning("Could not mark %s public: %s", blob.name, e)
+
+    try:
+        _put(png_blob, png, "image/png")
+        _put(meta_blob, json.dumps(meta, indent=2), "application/json")
+        log.info("Uploaded %s: png=%d bytes", name, len(png))
+        return True
+    except Exception as e:
+        log.error("Wind upload failed for %s: %s", name, e)
+        return False
+
+
+def build_winds(date_str: str, hour_str: str, level: int) -> Optional[bytes]:
+    """Fetch u, v at the given pressure level and upload as a packed
+    wind-barb layer."""
+    log.info("Building winds: GFS %s %sZ at %d hPa", date_str, hour_str, level)
+    u_grib = fetch_gfs_global(date_str, hour_str, [level], "UGRD")
+    v_grib = fetch_gfs_global(date_str, hour_str, [level], "VGRD")
+    if not u_grib or not v_grib:
+        log.error("Winds: GFS fetch failed at %d hPa", level)
+        return None
+    u = read_gfs_field(u_grib, level, "UGRD")
+    v = read_gfs_field(v_grib, level, "VGRD")
+    if u is None or v is None:
+        return None
+
+    # Light smoothing only — wind barbs should reflect the actual flow,
+    # not a smeared synoptic mean. 100 km is tight enough to preserve
+    # jet structures + outflow channels.
+    u_s = disc_smooth(u, 100.0)
+    v_s = disc_smooth(v, 100.0)
+    u_s = regrid_to_global(u_s)
+    v_s = regrid_to_global(v_s)
+
+    png = render_uv_png(u_s, v_s)
+    valid = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}T{hour_str}:00:00Z"
+    return png if _upload_winds(f"winds_{level}", level, valid, png) else None
+
+
 def build_vorticity(date_str: str, hour_str: str, level: int
                     ) -> Optional[bytes]:
     """Cyclonic-positive relative vorticity at the given pressure level
@@ -1183,6 +1320,10 @@ def main() -> int:
         ("vort_850",      lambda: build_vorticity(date_str, hour_str, 850)),
         ("vort_700",      lambda: build_vorticity(date_str, hour_str, 700)),
         ("vort_500",      lambda: build_vorticity(date_str, hour_str, 500)),
+        ("winds_850",     lambda: build_winds(date_str, hour_str, 850)),
+        ("winds_700",     lambda: build_winds(date_str, hour_str, 700)),
+        ("winds_500",     lambda: build_winds(date_str, hour_str, 500)),
+        ("winds_200",     lambda: build_winds(date_str, hour_str, 200)),
         ("rh_700_400",    lambda: build_midlevel_rh(date_str, hour_str)),
         ("sst_oisst",     build_sst),
     ]:
