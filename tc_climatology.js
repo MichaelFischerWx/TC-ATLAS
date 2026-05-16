@@ -1594,26 +1594,33 @@ function _maybeRefreshSeasonMap() {
 }
 
 // ── Sub-tab switching ───────────────────────────────────────────
+var _SUBVIEWS = {
+    stats:       'tc-clim-stats',
+    globe:       'tc-clim-globe',
+    subseasonal: 'tc-clim-subseasonal',
+};
 function _switchSubview(sub) {
-    var statsView = document.getElementById('tc-clim-stats');
-    var globeView = document.getElementById('tc-clim-globe');
-    if (!statsView || !globeView) return;
-    var isStats = (sub !== 'globe');
-    statsView.hidden = !isStats;
-    globeView.hidden = isStats;
+    if (!_SUBVIEWS[sub]) sub = 'globe';
+    Object.keys(_SUBVIEWS).forEach(function (k) {
+        var el = document.getElementById(_SUBVIEWS[k]);
+        if (el) el.hidden = (k !== sub);
+    });
     document.querySelectorAll('.tc-clim-subnav-btn').forEach(function (b) {
-        var active = (b.dataset.sub === (isStats ? 'stats' : 'globe'));
+        var active = (b.dataset.sub === sub);
         b.classList.toggle('active', active);
         b.setAttribute('aria-selected', active ? 'true' : 'false');
     });
-    _ga('tc_clim_subview', { sub: isStats ? 'stats' : 'globe' });
+    _ga('tc_clim_subview', { sub: sub });
     // Stats charts may need a redraw if Plotly was sized while hidden.
-    if (isStats && climRendered && typeof Plotly !== 'undefined') {
+    if (sub === 'stats' && climRendered && typeof Plotly !== 'undefined') {
         ['clim-ace-chart','clim-freq-chart','clim-hist-chart',
          'clim-ri-chart','clim-basin-chart','clim-lmi-chart'].forEach(function (id) {
             var el = document.getElementById(id);
             if (el && el.layout) Plotly.Plots.resize(el);
         });
+    }
+    if (sub === 'subseasonal') {
+        if (typeof _initSubseasonalOnce === 'function') _initSubseasonalOnce();
     }
 }
 
@@ -1643,6 +1650,7 @@ function _applyHashParams(params) {
     // the chart grid. Stats sub-view loads on explicit #sub=stats only,
     // including the redirect from old global_archive.html?#tab=climatology.
     if (params.sub === 'stats') _switchSubview('stats');
+    else if (params.sub === 'subseasonal') _switchSubview('subseasonal');
     else _switchSubview('globe');
 
     if (params.modal) {
@@ -1702,6 +1710,473 @@ function _watchTracksReady() {
     if (_tracksLoadPromise) {
         _tracksLoadPromise.then(_maybeRefreshSeasonMap);
     }
+}
+
+// ════════════════════════════════════════════════════════════════
+//  SUBSEASONAL MODULATION (MJO / BSISO) — Tier 1+2
+//  Cross-references daily 8-phase index (data/subseasonal_phases.json)
+//  with IBTrACS genesis dates (already loaded) and 6-h fixes (lazy)
+//  to render: (a) a polar dial of genesis counts per phase, and
+//  (b) an 8-panel grid of track-point density maps. Active days only
+//  (amplitude ≥ 1). Tier 3 — ERA5 fields composited by phase — would
+//  need a daily ERA5 tile pipeline and lives in a separate plan doc.
+// ════════════════════════════════════════════════════════════════
+var _subPhases = null;              // loaded JSON payload
+var _subPhasesPromise = null;
+var _subInited = false;
+var _subState = {
+    mode: 'mjo',                    // mjo | bsiso1 | bsiso2
+    basin: 'ALL',                   // ALL | NA | EP | WP | NI | SI | SP
+    season: 'all',                  // all | mjjaso | ndjfma
+    activeDaysByPhase: null,        // populated per (mode, season, basin scope)
+};
+
+// ── ISO date → days since epoch (UTC), no Date allocation per call ──
+function _dayKeyFromISO(iso) {
+    // iso 'YYYY-MM-DD'
+    var y = +iso.slice(0,4), m = +iso.slice(5,7), d = +iso.slice(8,10);
+    return Date.UTC(y, m - 1, d) / 86400000;
+}
+function _phaseOnDay(modeRec, dayKey) {
+    var startKey = modeRec._startKey;
+    if (startKey == null) {
+        modeRec._startKey = _dayKeyFromISO(modeRec.start_date);
+        startKey = modeRec._startKey;
+    }
+    var idx = dayKey - startKey;
+    if (idx < 0 || idx >= modeRec.phases.length) return null;
+    var p = modeRec.phases[idx], a = modeRec.amplitudes[idx];
+    if (p == null || a == null) return null;
+    return (a >= 1.0) ? p : 0;     // 0 = quiescent, 1..8 = active phase
+}
+
+function _loadSubPhases() {
+    if (_subPhases) return Promise.resolve(_subPhases);
+    if (_subPhasesPromise) return _subPhasesPromise;
+    _subPhasesPromise = fetch('data/subseasonal_phases.json?' + DATA_VER)
+        .then(function (r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.json();
+        })
+        .then(function (d) {
+            _subPhases = d;
+            return d;
+        })
+        .catch(function (err) {
+            console.warn('[subseasonal] phases load failed:', err);
+            _subPhases = { indices: {} };
+            return _subPhases;
+        });
+    return _subPhasesPromise;
+}
+
+// Return true if (basinCode) is included in current selection.
+function _subBasinMatch(basin) {
+    if (_subState.basin === 'ALL') return basin !== 'SA';  // SA is too sparse
+    return basin === _subState.basin;
+}
+
+// Return true if calendar month m (1..12) is included in current season filter.
+function _subSeasonMatch(month) {
+    var s = _subState.season;
+    if (s === 'all') return true;
+    if (s === 'mjjaso') return month >= 5 && month <= 10;
+    if (s === 'ndjfma') return month <= 4 || month >= 11;
+    return true;
+}
+
+// Count active days per phase (1..8) given the current mode + season filter.
+// Used as the denominator for expected-uniform genesis and as the per-phase
+// day count for normalizing track density.
+function _countActiveDaysPerPhase() {
+    var modeRec = _subPhases && _subPhases.indices && _subPhases.indices[_subState.mode];
+    if (!modeRec) return { perPhase: [0,0,0,0,0,0,0,0], total: 0 };
+    if (modeRec._startKey == null) modeRec._startKey = _dayKeyFromISO(modeRec.start_date);
+    var startKey = modeRec._startKey;
+    var phases = modeRec.phases, amps = modeRec.amplitudes;
+    var perPhase = [0,0,0,0,0,0,0,0], total = 0;
+    for (var i = 0; i < phases.length; i++) {
+        var p = phases[i], a = amps[i];
+        if (p == null || a == null || a < 1.0) continue;
+        // month for season filter — compute from index
+        var d = new Date((startKey + i) * 86400000);
+        if (!_subSeasonMatch(d.getUTCMonth() + 1)) continue;
+        perPhase[p - 1]++;
+        total++;
+    }
+    return { perPhase: perPhase, total: total };
+}
+
+// Cross-reference IBTrACS storm genesis with the active mode phases.
+// Returns counts per phase (1..8) and the total accepted genesis count.
+function _countGenesisPerPhase() {
+    var modeRec = _subPhases.indices[_subState.mode];
+    if (!modeRec) return { perPhase: [0,0,0,0,0,0,0,0], total: 0 };
+    var startKey = modeRec._startKey != null ? modeRec._startKey : _dayKeyFromISO(modeRec.start_date);
+    modeRec._startKey = startKey;
+    var endKey = startKey + modeRec.phases.length - 1;
+    var perPhase = [0,0,0,0,0,0,0,0], total = 0;
+    for (var i = 0; i < allStorms.length; i++) {
+        var s = allStorms[i];
+        if (!s.start_date || !s.basin) continue;
+        if (!_subBasinMatch(s.basin)) continue;
+        if (!s.peak_wind_kt || s.peak_wind_kt < 34) continue;   // named storms only
+        var dk = _dayKeyFromISO(s.start_date);
+        if (dk < startKey || dk > endKey) continue;
+        var month = +s.start_date.slice(5,7);
+        if (!_subSeasonMatch(month)) continue;
+        var p = _phaseOnDay(modeRec, dk);
+        if (!p) continue;       // null (out of range) OR 0 (inactive)
+        perPhase[p - 1]++;
+        total++;
+    }
+    return { perPhase: perPhase, total: total };
+}
+
+// 6-hourly track-point density per phase. Keyed by (5°-binned lat, lon).
+// Returns array[8] of { keys:[latIdx,lonIdx], counts:[...] }. Coarse 5° to
+// keep the Plotly trace size reasonable (36×72 = 2592 cells max per phase).
+function _buildTrackDensityPerPhase() {
+    var modeRec = _subPhases.indices[_subState.mode];
+    if (!modeRec) return null;
+    var startKey = modeRec._startKey;
+    var endKey = startKey + modeRec.phases.length - 1;
+    var BIN = 5;
+    var grids = [];
+    for (var i = 0; i < 8; i++) grids.push(new Map());
+    var sids = Object.keys(allTracks);
+    for (var i = 0; i < sids.length; i++) {
+        var sid = sids[i];
+        var track = allTracks[sid];
+        if (!track || !track.length) continue;
+        // basin filter: derive basin from sid suffix or look up storm meta
+        var storm = _stormBySid[sid];
+        if (storm) {
+            if (!_subBasinMatch(storm.basin)) continue;
+        }
+        for (var j = 0; j < track.length; j++) {
+            var fix = track[j];
+            if (!fix.t || fix.la == null || fix.lo == null) continue;
+            if (!fix.w || fix.w < 34) continue;   // TS-or-stronger only
+            // fix.t is 'YYYY-MM-DDTHH:MM' — top 10 chars are the date
+            var iso = fix.t.slice(0, 10);
+            var month = +iso.slice(5, 7);
+            if (!_subSeasonMatch(month)) continue;
+            var dk = _dayKeyFromISO(iso);
+            if (dk < startKey || dk > endKey) continue;
+            var p = _phaseOnDay(modeRec, dk);
+            if (!p) continue;
+            var latBin = Math.floor(fix.la / BIN);
+            var lonBin = Math.floor(fix.lo / BIN);
+            var key = latBin + ',' + lonBin;
+            var g = grids[p - 1];
+            g.set(key, (g.get(key) || 0) + 1);
+        }
+    }
+    // Convert to arrays per phase
+    return grids.map(function (g) {
+        var lats = [], lons = [], cnts = [];
+        g.forEach(function (cnt, key) {
+            var parts = key.split(',');
+            lats.push((+parts[0]) * BIN + BIN/2);
+            lons.push((+parts[1]) * BIN + BIN/2);
+            cnts.push(cnt);
+        });
+        return { lats: lats, lons: lons, cnts: cnts };
+    });
+}
+
+// Build a SID → storm-meta index once (for basin filter on track fixes).
+var _stormBySid = null;
+function _ensureStormBySid() {
+    if (_stormBySid) return;
+    _stormBySid = {};
+    for (var i = 0; i < allStorms.length; i++) _stormBySid[allStorms[i].sid] = allStorms[i];
+}
+
+// ── Renderers ───────────────────────────────────────────────────
+function _renderGenesisDial() {
+    var el = document.getElementById('sub-dial-chart');
+    if (!el || typeof Plotly === 'undefined') return;
+    var gen = _countGenesisPerPhase();
+    var act = _countActiveDaysPerPhase();
+    var expected = act.total > 0
+        ? act.perPhase.map(function (d) { return d * gen.total / act.total; })
+        : [0,0,0,0,0,0,0,0];
+    var labels = ['1','2','3','4','5','6','7','8'];
+    var maxBar = Math.max.apply(null, gen.perPhase.concat([1]));
+    var maxExp = Math.max.apply(null, expected.concat([1]));
+    var rmax = Math.max(maxBar, maxExp) * 1.15;
+
+    // Per-phase enhancement ratio for hover.
+    var ratios = gen.perPhase.map(function (c, i) {
+        return expected[i] > 0 ? (c / expected[i]) : null;
+    });
+    var textArr = gen.perPhase.map(function (c, i) {
+        var r = ratios[i];
+        var rStr = (r == null) ? 'n/a' : (r >= 1 ? '+' : '') + ((r - 1) * 100).toFixed(0) + '%';
+        return 'Phase ' + (i+1) + '<br>Genesis: ' + c
+             + '<br>Expected: ' + expected[i].toFixed(1)
+             + '<br>Anomaly: ' + rStr;
+    });
+
+    var traces = [
+        {
+            type: 'barpolar',
+            r: gen.perPhase,
+            theta: labels.map(function (l) { return (parseInt(l) - 1) * 45; }),
+            width: Array(8).fill(40),
+            marker: {
+                color: gen.perPhase.map(function (c, i) {
+                    var r = ratios[i];
+                    if (r == null) return 'rgba(150,150,150,0.5)';
+                    // Diverging: r<1 cool, r>1 warm
+                    return r >= 1.0 ? '#ef4444' : '#60a5fa';
+                }),
+                line: { color: 'rgba(0,0,0,0.25)', width: 1 },
+            },
+            opacity: 0.85,
+            hoverinfo: 'text',
+            text: textArr,
+            name: 'Observed genesis',
+        },
+        {
+            type: 'scatterpolar',
+            r: expected,
+            theta: labels.map(function (l) { return (parseInt(l) - 1) * 45; }),
+            mode: 'lines+markers',
+            line: { dash: 'dash', color: 'rgba(80,80,80,0.7)', width: 2 },
+            marker: { size: 5, color: 'rgba(80,80,80,0.85)' },
+            hoverinfo: 'skip',
+            name: 'Expected (uniform)',
+        },
+    ];
+    var base = _tcaPlotlyBase();
+    var layout = Object.assign({}, base, {
+        polar: {
+            bgcolor: base.plot_bgcolor || '#0f1623',
+            radialaxis: {
+                range: [0, rmax],
+                tickfont: { size: 10, color: base.font ? base.font.color : '#888' },
+                gridcolor: 'rgba(128,128,128,0.25)',
+                angle: 90, tickangle: 90,
+            },
+            angularaxis: {
+                tickmode: 'array',
+                tickvals: [0, 45, 90, 135, 180, 225, 270, 315],
+                ticktext: labels,
+                rotation: 90,
+                direction: 'counterclockwise',
+                tickfont: { size: 12, color: base.font ? base.font.color : '#888' },
+                gridcolor: 'rgba(128,128,128,0.25)',
+            },
+        },
+        showlegend: true,
+        legend: { orientation: 'h', y: -0.05 },
+        height: 460,
+        margin: { l: 30, r: 30, t: 20, b: 60 },
+    });
+    delete layout.xaxis; delete layout.yaxis;
+    Plotly.newPlot('sub-dial-chart', traces, layout, PLOTLY_CONFIG);
+
+    // Update event count line
+    var countEl = document.getElementById('sub-event-count');
+    if (countEl) {
+        countEl.textContent = gen.total + ' named-storm genesis events on ' + act.total
+            + ' active days (' + _subState.mode.toUpperCase() + ')';
+    }
+}
+
+function _renderTrackDensity() {
+    var el = document.getElementById('sub-tracks-chart');
+    if (!el || typeof Plotly === 'undefined') return;
+    var density = _buildTrackDensityPerPhase();
+    if (!density) {
+        el.innerHTML = '<div style="padding:20px; opacity:0.6;">Track data unavailable.</div>';
+        return;
+    }
+    // Clear any leftover loading-placeholder DIV. Plotly.newPlot manages its
+    // own subtree but does not remove siblings, so a stray Loading… div from
+    // _renderSubseasonal's pre-load placeholder can persist after the plot
+    // mounts. Purge first, then clear, then plot.
+    if (typeof Plotly.purge === 'function') Plotly.purge(el);
+    el.innerHTML = '';
+    var base = _tcaPlotlyBase();
+    var traces = [];
+    // Adaptive layout: 2 rows × 4 cols at desktop width, 4 rows × 2 cols when
+    // narrower. Equirectangular maps clipped to ±45° lat have a 4:1 aspect
+    // ratio, so each panel's vertical space is mostly wasted unless we size
+    // the height proportionally to the panel width.
+    var containerW = el.offsetWidth || 1100;
+    var nCols = containerW < 720 ? 2 : 4;
+    var nRows = 8 / nCols;
+    // Aim ~3.6:1 map aspect so the panel is mostly map with a tiny title strip.
+    var panelW = (containerW - 16) / nCols;
+    var mapH   = panelW / 3.6;
+    var totalH = Math.round(nRows * mapH + 28 * nRows + 20);
+    var layout = Object.assign({}, base, {
+        height: totalH,
+        margin: { l: 4, r: 4, t: 6, b: 6 },
+        showlegend: false,
+        annotations: [],
+    });
+    delete layout.xaxis; delete layout.yaxis;
+
+    for (var p = 1; p <= 8; p++) {
+        var col = (p - 1) % nCols;
+        var row = Math.floor((p - 1) / nCols);
+        var xDom = [col / nCols + 0.003, (col + 1) / nCols - 0.003];
+        var yDom = [1 - (row + 1) / nRows + 0.02, 1 - row / nRows - 0.02];
+        var geoKey = (p === 1) ? 'geo' : ('geo' + p);
+        layout[geoKey] = {
+            domain: { x: xDom, y: yDom },
+            projection: { type: 'equirectangular' },
+            showcoastlines: true,
+            coastlinecolor: 'rgba(120,120,120,0.55)',
+            coastlinewidth: 0.6,
+            showland: true,
+            landcolor: 'rgba(40,50,60,0.18)',
+            showocean: true,
+            oceancolor: 'rgba(0,0,0,0)',
+            bgcolor: 'rgba(0,0,0,0)',
+            showframe: false,
+            framewidth: 0,
+            lataxis: { range: [-45, 45], showgrid: false },
+            lonaxis: { range: [-180, 180], showgrid: false },
+        };
+        // Label as in-map annotation top-left, not above (saves vertical space).
+        layout.annotations.push({
+            text: '<b>Phase ' + p + '</b>',
+            showarrow: false,
+            xref: 'paper', yref: 'paper',
+            x: xDom[0] + 0.005,
+            y: yDom[1] - 0.005,
+            xanchor: 'left', yanchor: 'top',
+            font: { size: 11, color: base.font ? base.font.color : '#fff' },
+            bgcolor: 'rgba(255,255,255,0.6)',
+            borderpad: 2,
+        });
+        var cells = density[p - 1];
+        if (!cells.cnts.length) continue;
+        var max = Math.max.apply(null, cells.cnts);
+        traces.push({
+            type: 'scattergeo',
+            geo: (p === 1) ? 'geo' : ('geo' + p),
+            mode: 'markers',
+            lat: cells.lats,
+            lon: cells.lons,
+            marker: {
+                color: cells.cnts.map(function (c) { return c / max; }),
+                colorscale: [
+                    [0,    'rgba(96,165,250,0.0)'],
+                    [0.15, 'rgba(96,165,250,0.55)'],
+                    [0.40, 'rgba(251,191,36,0.75)'],
+                    [0.70, 'rgba(248,113,113,0.85)'],
+                    [1.0,  'rgba(220,38,38,0.95)'],
+                ],
+                cmin: 0, cmax: 1,
+                size: 8, symbol: 'square',
+                line: { width: 0 },
+                showscale: false,
+            },
+            text: cells.cnts.map(function (c) { return c + ' fix' + (c === 1 ? '' : 'es'); }),
+            hoverinfo: 'lon+lat+text',
+            showlegend: false,
+        });
+    }
+    Plotly.newPlot('sub-tracks-chart', traces, layout, PLOTLY_CONFIG);
+}
+
+// ── Public re-renderer (called by UI events) ────────────────────
+function _renderSubseasonal() {
+    if (!_subPhases || !_subPhases.indices[_subState.mode]) return;
+    _renderGenesisDial();
+    // Track density requires the heavy tracks file. Lazy-load on first
+    // render and on every state change after it's loaded.
+    var tracksEl = document.getElementById('sub-tracks-chart');
+    if (Object.keys(allTracks).length === 0) {
+        if (tracksEl) tracksEl.innerHTML =
+            '<div style="padding:20px; opacity:0.7; font-size:0.78rem;">Loading 6-hourly best-track fixes (~44 MB, one-time)…</div>';
+        _ensureTracksLoaded().then(function () {
+            _ensureStormBySid();
+            _renderTrackDensity();
+        });
+    } else {
+        _ensureStormBySid();
+        _renderTrackDensity();
+    }
+    _renderSubseasonalSource();
+}
+
+function _renderSubseasonalSource() {
+    var el = document.getElementById('sub-source');
+    if (!el || !_subPhases) return;
+    var rec = _subPhases.indices[_subState.mode];
+    if (!rec) { el.textContent = ''; return; }
+    function link(href, txt) {
+        if (!href) return txt;
+        return '<a href="' + href + '" target="_blank" rel="noopener noreferrer" style="color: inherit; text-decoration: underline;">' + txt + ' ↗</a>';
+    }
+    el.innerHTML = 'Source: ' + link(rec.provider_url || rec.source, rec.provider)
+        + ' · ' + link(rec.source, 'raw data')
+        + ' · ' + link(rec.paper_url, rec.paper)
+        + '. Coverage: ' + rec.start_date + ' to ' + rec.end_date + '.';
+}
+
+// ── Init (called once on first switch to the subseasonal subview) ──
+function _initSubseasonalOnce() {
+    if (_subInited) {
+        // Subsequent visits: just resize / refresh.
+        if (typeof Plotly !== 'undefined') {
+            var d = document.getElementById('sub-dial-chart');
+            var t = document.getElementById('sub-tracks-chart');
+            if (d && d.layout) Plotly.Plots.resize(d);
+            if (t && t.layout) Plotly.Plots.resize(t);
+        }
+        return;
+    }
+    _subInited = true;
+
+    // Wire mode toggle
+    document.querySelectorAll('#sub-mode-toggle button').forEach(function (b) {
+        b.addEventListener('click', function () {
+            _subState.mode = b.dataset.subMode;
+            document.querySelectorAll('#sub-mode-toggle button').forEach(function (x) {
+                x.classList.toggle('active', x === b);
+            });
+            _ga('tc_clim_sub_mode', { mode: _subState.mode });
+            _renderSubseasonal();
+        });
+    });
+    // Wire basin chips
+    document.querySelectorAll('#sub-basin-chips .basin-chip').forEach(function (c) {
+        c.addEventListener('click', function () {
+            _subState.basin = c.dataset.basin;
+            document.querySelectorAll('#sub-basin-chips .basin-chip').forEach(function (x) {
+                x.classList.toggle('active', x === c);
+            });
+            _renderSubseasonal();
+        });
+    });
+    // Wire season toggle
+    document.querySelectorAll('#sub-season-toggle button').forEach(function (b) {
+        b.addEventListener('click', function () {
+            _subState.season = b.dataset.subSeason;
+            document.querySelectorAll('#sub-season-toggle button').forEach(function (x) {
+                x.classList.toggle('active', x === b);
+            });
+            _renderSubseasonal();
+        });
+    });
+
+    // Storm metadata may still be loading on first visit — wait for it.
+    var ready = (allStorms.length > 0)
+        ? Promise.resolve()
+        : _loadStormsMetadata();
+    Promise.all([ready, _loadSubPhases()]).then(function () {
+        _ensureStormBySid();
+        _renderSubseasonal();
+    });
 }
 
 // ── Page init ───────────────────────────────────────────────────

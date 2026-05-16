@@ -270,3 +270,34 @@
     line-height: 1.45;
 }
 .tc-clim-tile-desc strong { color: var(--text); }
+
+/* ── Subseasonal subview: segmented toggle (mode + season) ─────────
+   Matches the basin-chip visual language for consistency. The vendored
+   GC-ATLAS .segmented styles only ship on the climatology_globe page,
+   so we redefine a minimal version here. */
+#tc-clim-subseasonal .segmented {
+    display: inline-flex;
+    gap: 4px;
+    flex-wrap: wrap;
+}
+#tc-clim-subseasonal .segmented button {
+    padding: 4px 12px;
+    border-radius: 12px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.72rem;
+    font-weight: 600;
+    background: var(--surface);
+    color: var(--slate);
+    border: 1px solid var(--border);
+    cursor: pointer;
+    transition: all 0.15s;
+}
+#tc-clim-subseasonal .segmented button:hover:not(.active) {
+    border-color: var(--blue);
+    color: var(--text);
+}
+#tc-clim-subseasonal .segmented button.active {
+    background: var(--blue);
+    color: white;
+    border-color: var(--blue);
+}

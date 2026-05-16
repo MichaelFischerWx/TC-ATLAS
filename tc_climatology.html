@@ -28,7 +28,7 @@
     <link rel="icon" type="image/png" sizes="192x192" href="tc-atlas-favicon-192.png">
     <link rel="apple-touch-icon" sizes="192x192" href="tc-atlas-favicon-192.png">
     <title>TC Climatology — TC-ATLAS</title>
-    <script src="theme.js?v=20260508e"></script>
+    <script src="theme.js?v=20260516a"></script>
 
     <!-- Leaflet — needed by the ACE modal's per-year season map -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -45,9 +45,9 @@
          layout in tc_climatology_styles.css. global_archive_styles.css is
          loaded too because the chart-panel + modal classes (.clim-grid,
          .clim-panel, .ace-modal-*) live there and are reused as-is. -->
-    <link rel="stylesheet" href="tc_radar_styles.css?v=20260508e">
-    <link rel="stylesheet" href="global_archive_styles.css?v=20260508e">
-    <link rel="stylesheet" href="tc_climatology_styles.css?v=20260508e">
+    <link rel="stylesheet" href="tc_radar_styles.css?v=20260516a">
+    <link rel="stylesheet" href="global_archive_styles.css?v=20260516a">
+    <link rel="stylesheet" href="tc_climatology_styles.css?v=20260516a">
 </head>
 <body>
     <a href="#tc-clim-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -101,6 +101,11 @@
                         data-sub="globe" role="tab" aria-selected="true"
                         title="3D ERA5 reanalysis globe with IBTrACS overlay — composites by climate index or custom year/month, plus per-pixel index correlation maps.">
                     Reanalysis Globe
+                </button>
+                <button type="button" class="tc-clim-subnav-btn"
+                        data-sub="subseasonal" role="tab" aria-selected="false"
+                        title="TC genesis frequency and 6-hourly track density binned by MJO / BSISO phase (1–8). Active phases use amplitude ≥ 1.">
+                    Subseasonal (MJO/BSISO)
                 </button>
             </div>
         </div>
@@ -274,6 +279,99 @@
                         <div class="tc-clim-tile-desc">|⟨V₂₀₀⟩ − ⟨V₈₅₀⟩| from monthly-mean winds. The shear corridor over the Atlantic that limits MDR genesis and reorganizes mature TCs.</div>
                     </div>
                 </a>
+            </div>
+        </section>
+
+        <!-- ── Sub-view C: Subseasonal (MJO / BSISO) modulation ──────
+             Tier 1+2 of the phase-composite project. Bins IBTrACS
+             best-track activity (genesis dates + 6-h fixes) by the
+             daily 8-phase index for each active mode and renders:
+             (a) a polar dial of genesis frequency per phase, and
+             (b) an 8-panel grid of track-point density maps.
+             ERA5 phase composites (Tier 3) are planned separately
+             and would live on the Reanalysis Globe sub-view. -->
+        <section id="tc-clim-subseasonal" class="tc-clim-subview" role="tabpanel"
+                 aria-label="Subseasonal modulation" hidden>
+            <div class="clim-layout">
+                <div class="clim-header">
+                    <h2>Subseasonal Modulation of TC Activity</h2>
+                    <p class="clim-subtitle">
+                        TC genesis and track activity binned by daily 8-phase index. Active days (amplitude ≥ 1)
+                        only — quiescent days are excluded. Phase numbering follows Wheeler &amp; Hendon (2004) for
+                        MJO and a 45°-sector partition of the (PC1, PC2) plane for BSISO.
+                    </p>
+                </div>
+
+                <div class="sub-controls" style="display:flex; flex-wrap:wrap; gap:14px 22px; align-items:center; margin-bottom:14px;">
+                    <div>
+                        <label class="field-label" style="display:block; margin-bottom:4px; font-size:0.7rem; opacity:0.75;">Mode</label>
+                        <div class="segmented" id="sub-mode-toggle" role="tablist" aria-label="Subseasonal mode">
+                            <button type="button" data-sub-mode="mjo" class="active"
+                                    title="Madden–Julian Oscillation, Wheeler–Hendon RMM (1974–present, all year).">MJO</button>
+                            <button type="button" data-sub-mode="bsiso1"
+                                    title="Boreal Summer ISO mode 1: 30–60 d northward-propagating (1981–present, meaningful May–Oct).">BSISO1</button>
+                            <button type="button" data-sub-mode="bsiso2"
+                                    title="Boreal Summer ISO mode 2: 10–30 d NW-propagating (1981–present, meaningful May–Oct).">BSISO2</button>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="field-label" style="display:block; margin-bottom:4px; font-size:0.7rem; opacity:0.75;">Basin</label>
+                        <div class="ace-basin-chips" id="sub-basin-chips" style="margin:0;">
+                            <button class="basin-chip active" data-basin="ALL">All</button>
+                            <button class="basin-chip" data-basin="NA">N. Atlantic</button>
+                            <button class="basin-chip" data-basin="EP">E. Pacific</button>
+                            <button class="basin-chip" data-basin="WP">W. Pacific</button>
+                            <button class="basin-chip" data-basin="NI">N. Indian</button>
+                            <button class="basin-chip" data-basin="SI">S. Indian</button>
+                            <button class="basin-chip" data-basin="SP">S. Pacific</button>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="field-label" style="display:block; margin-bottom:4px; font-size:0.7rem; opacity:0.75;">Months</label>
+                        <div class="segmented" id="sub-season-toggle" role="tablist" aria-label="Season filter">
+                            <button type="button" data-sub-season="all" class="active"
+                                    title="All calendar months in each mode's available period.">All</button>
+                            <button type="button" data-sub-season="mjjaso"
+                                    title="May–October: BSISO active season. Recommended for BSISO1/BSISO2.">May–Oct</button>
+                            <button type="button" data-sub-season="ndjfma"
+                                    title="November–April: Southern Hemisphere TC season, MJO active phase.">Nov–Apr</button>
+                        </div>
+                    </div>
+                    <div style="font-size:0.7rem; opacity:0.7; max-width:260px; line-height:1.35;">
+                        <span id="sub-event-count">—</span>
+                    </div>
+                </div>
+
+                <div class="clim-grid">
+                    <div class="clim-panel" style="grid-column: 1 / -1;">
+                        <h3 class="clim-panel-title">
+                            <span id="sub-dial-title">TC Genesis by Phase</span>
+                            <span class="ace-hint" id="sub-dial-hint" style="opacity:0.65;"></span>
+                        </h3>
+                        <p class="field-help" style="margin:4px 0 8px; font-size:0.7rem;">
+                            Bars show the number of named-storm genesis events whose first-fix date fell on a day
+                            of each phase (amplitude ≥ 1). The dashed ring is the expected count if genesis were
+                            uniform across phases — bars outside the ring indicate enhancement, inside indicate
+                            suppression.
+                        </p>
+                        <div id="sub-dial-chart" class="chart-container chart-tall"></div>
+                    </div>
+                    <div class="clim-panel" style="grid-column: 1 / -1;">
+                        <h3 class="clim-panel-title">
+                            <span id="sub-tracks-title">Track-Point Density by Phase</span>
+                            <span class="ace-hint" style="opacity:0.65;">8 panels · 5° bins</span>
+                        </h3>
+                        <p class="field-help" style="margin:4px 0 8px; font-size:0.7rem;">
+                            Each panel shows the spatial density of 6-hourly best-track fixes (≥ 34 kt) occurring
+                            on days of that phase. Density is normalized per panel so the warmest cell in each
+                            phase shows the relative concentration regardless of phase-day count. Click a phase
+                            tile to drill in.
+                        </p>
+                        <div id="sub-tracks-chart" class="chart-container" style="min-height: 220px;"></div>
+                    </div>
+                </div>
+
+                <p class="field-help" id="sub-source" style="margin-top:14px; opacity:0.7; font-size:0.68rem;"></p>
             </div>
         </section>
     </main>
@@ -504,6 +602,6 @@
     <!-- Scripts -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
-    <script src="tc_climatology.js?v=20260508e"></script>
+    <script src="tc_climatology.js?v=20260516a"></script>
 </body>
 </html>
