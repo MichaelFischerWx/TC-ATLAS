@@ -277,6 +277,13 @@ class LayerSpec:
     # finer-then-coarser ramp like [1, 2, 4, 6, 8, 10, 15, 20, 25]
     # reads better than evenly-spaced levels.
     levels_override: Optional[list] = None
+    # Optional wider range for the hover data PNG so the readout can
+    # report jet-stream-magnitude shear or extreme TC vortex values
+    # without clipping at the contour vmax. Defaults to (vmin, vmax)
+    # when None, which preserves back-compat for layers that don't
+    # need a wider hover range.
+    data_vmin: Optional[float] = None
+    data_vmax: Optional[float] = None
 
 
 # Each 0.25° cell spans ~27.8 km in the latitude direction (and at the
@@ -516,7 +523,11 @@ def render_data_png(field: np.ndarray, spec: LayerSpec) -> bytes:
     from PIL import Image
 
     field = np.asarray(field, dtype=np.float32)
-    norm = np.clip((field - spec.vmin) / max(spec.vmax - spec.vmin, 1e-9),
+    # Hover-encoding range may be wider than the contour range so the
+    # tooltip can report jet-stream / extreme values without clipping.
+    dv_min = spec.data_vmin if spec.data_vmin is not None else spec.vmin
+    dv_max = spec.data_vmax if spec.data_vmax is not None else spec.vmax
+    norm = np.clip((field - dv_min) / max(dv_max - dv_min, 1e-9),
                    0.0, 1.0)
     gray = (norm * 255).astype(np.uint8)
 
@@ -619,10 +630,10 @@ def upload_layer(spec: LayerSpec, field: np.ndarray) -> bool:
         levels = [round(spec.vmin + i * spec.step, 2) for i in range(n_steps)]
     level_colors = _level_colors(spec.cmap, levels, spec.vmin, spec.vmax)
 
-    # Compute the data PNG's grid (downsampled to 0.5° to keep the byte
-    # count tight) — the frontend uses these to map lat/lon → pixel.
-    data_nx = NX // 2
-    data_ny = (NY // 2) + 1  # +1 to retain the south-most row
+    # Data PNG is at native 0.25° resolution since v4 (no downsample);
+    # the frontend uses these to map lat/lon → pixel.
+    data_nx = NX
+    data_ny = NY
 
     meta = {
         "name": spec.name,
@@ -657,6 +668,11 @@ def upload_layer(spec: LayerSpec, field: np.ndarray) -> bool:
             f"{GCS_PREFIX}/{spec.name}/latest_data.png"
         ),
         "data_grid": {"nx": data_nx, "ny": data_ny},
+        # Hover decode bounds — may be wider than vmin/vmax (contour
+        # range) so the tooltip can report values that exceed the
+        # rendered contour band without clipping.
+        "data_vmin": spec.data_vmin if spec.data_vmin is not None else spec.vmin,
+        "data_vmax": spec.data_vmax if spec.data_vmax is not None else spec.vmax,
         # Native grid is global 0.25° in (-180, 180) x (90, -90); these
         # bounds are how Leaflet's imageOverlay should anchor the PNG.
         "bounds": [[-90.0, -180.0], [90.0, 180.0]],
@@ -758,6 +774,7 @@ def build_shear(date_str: str, hour_str: str) -> Optional[bytes]:
         step=10,
         cmap="turbo",
         valid_time=valid,
+        data_vmax=150,  # let hover report jet-stream shear past the 60-kt contour cap
         description=(
             "Magnitude of the 200-850 hPa vector wind difference from "
             "the latest GFS 0.25° analysis, after a 400 km disc area-"
@@ -809,6 +826,7 @@ def build_midlevel_shear(date_str: str, hour_str: str) -> Optional[bytes]:
         step=5,
         cmap="turbo",
         valid_time=valid,
+        data_vmax=120,
         description=(
             "Magnitude of the 500-850 hPa vector wind difference from "
             "the latest GFS 0.25° analysis, after a 400 km disc area-"
@@ -1031,6 +1049,7 @@ def build_vorticity(date_str: str, hour_str: str, level: int
         # synoptic-scale cyclonic features live, coarser at the high
         # end where only TC-scale vortices reach.
         levels_override=[1, 2, 4, 6, 8, 10, 15, 20, 25],
+        data_vmax=200,  # TC inner-core vortex can hit 200+ × 10⁻⁵ s⁻¹
         valid_time=valid,
         description=(
             f"Relative vorticity ζ at {level} hPa from the latest GFS "

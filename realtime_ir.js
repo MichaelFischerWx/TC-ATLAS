@@ -5659,10 +5659,14 @@
 
             var ctx = this._canvas.getContext('2d');
             ctx.clearRect(0, 0, size.x, size.y);
-            ctx.strokeStyle = 'rgba(245, 245, 245, 0.95)';
-            ctx.fillStyle   = 'rgba(245, 245, 245, 0.95)';
-            ctx.lineWidth = 1.0;
+            // Cream "print ink" matching the climatology-globe barbs —
+            // reads warmer than pure white and stays legible over both
+            // satellite IR and the env-overlay color ranges.
+            ctx.strokeStyle = 'rgba(244, 240, 224, 0.92)';
+            ctx.fillStyle   = 'rgba(244, 240, 224, 0.92)';
+            ctx.lineWidth = 1.4;
             ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
 
             // Zoom-adaptive sampling spacing. Use whole degrees so the
             // barbs sit on a recognizable grid.
@@ -5948,7 +5952,12 @@
             var d = entry.ctx.getImageData(x, y, 1, 1).data;
             if (d[3] === 0) return null;  // NaN cell
             var L_ = entry.layer;
-            return L_.vmin + (d[0] / 255) * (L_.vmax - L_.vmin);
+            // Prefer the data-encoding range when present (wider than
+            // the contour vmin/vmax so jet-stream/extreme values aren't
+            // clipped in the hover readout).
+            var lo = (L_.data_vmin != null) ? L_.data_vmin : L_.vmin;
+            var hi = (L_.data_vmax != null) ? L_.data_vmax : L_.vmax;
+            return lo + (d[0] / 255) * (hi - lo);
         } catch (e) {
             // Canvas tainted (no CORS on the data PNG) — fail silently;
             // tooltip just hides. Visualization still works.
