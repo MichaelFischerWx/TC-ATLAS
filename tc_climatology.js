@@ -1725,14 +1725,50 @@ var _subPhases = null;              // loaded JSON payload
 var _subPhasesPromise = null;
 var _subInited = false;
 var _subState = {
-    mode: 'mjo',                    // mjo | bsiso1 | bsiso2
+    mode: 'mjo',                    // mjo | mjo_omi | bsiso1 | bsiso2
     basin: 'ALL',                   // ALL | NA | EP | WP | NI | SI | SP
     season: 'all',                  // all | mjjaso | ndjfma
     mapMode: 'tracks',              // tracks | genesis
     yearMin: null,                  // inclusive lower bound (null → use mode's start year)
     yearMax: null,                  // inclusive upper bound (null → use mode's end year)
+    riOverwater: true,              // RI panel: drop intervals where f0 or f1 is overland
+    riTCPhaseOnly: true,            // RI panel: drop ET / DB / DS / NR start-of-interval nature
+    riVmin: 35,                     // RI panel: minimum start-of-interval Vmax (kt)
+    riVmax: 200,                    // RI panel: maximum start-of-interval Vmax (kt) — MPI-proximity proxy
     activeDaysByPhase: null,        // populated per (mode, season, basin scope)
 };
+
+// ── Land mask (1° packed binary, ~64 KB) ────────────────────────
+// Loaded lazily on first use of the RI overwater filter. Cell index
+// = row*360 + col where row = floor(89.5 - lat), col = floor(lon + 179.5).
+var _landMask = null;
+var _landMaskPromise = null;
+function _loadLandMask() {
+    if (_landMask) return Promise.resolve(_landMask);
+    if (_landMaskPromise) return _landMaskPromise;
+    _landMaskPromise = fetch('data/land_mask_1deg.json?' + DATA_VER)
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) { _landMask = d; return d; })
+        .catch(function () { _landMask = null; return null; });
+    return _landMaskPromise;
+}
+function _isLand(lat, lon) {
+    if (!_landMask || lat == null || lon == null) return false;
+    if (lat >= 90 || lat <= -90) return false;
+    // Normalize longitude to [-180, 180)
+    var ln = lon;
+    while (ln >= 180) ln -= 360;
+    while (ln < -180) ln += 360;
+    var row = Math.floor(89.5 - lat);
+    var col = Math.floor(ln + 179.5);
+    if (row < 0) row = 0; else if (row > 179) row = 179;
+    if (col < 0) col = 0; else if (col > 359) col = 359;
+    return _landMask.mask.charCodeAt(row * 360 + col) === 49;  // '1'
+}
+
+// Nature classes considered "true TC" for the TC-phase filter. ET = extratropical;
+// DB/DS = disturbance; NR = not reported; MX = mixture. WV = wave (rare).
+var _TC_NATURES = { TS:1, TD:1, HU:1, TC:1, SS:1, SD:1 };
 
 // True if year y is within the active filter window. null bounds = open.
 function _subYearMatch(y) {
@@ -1971,10 +2007,16 @@ function _buildIntensityChangePerPhase() {
             times[t] = track[t].t ? Date.parse(track[t].t) : NaN;
         }
         var k = 0;
+        var vmin = _subState.riVmin, vmax = _subState.riVmax;
+        var needOverwater = _subState.riOverwater && _landMask;
+        var needTCPhase = _subState.riTCPhaseOnly;
         for (var j = 0; j < track.length; j++) {
             var f0 = track[j];
-            if (f0.w == null || f0.w < 35) continue;       // require TS-strength start
+            if (f0.w == null) continue;
+            if (f0.w < vmin || f0.w > vmax) continue;      // user-set start-Vmax window
             if (!Number.isFinite(times[j])) continue;
+            if (needTCPhase && !_TC_NATURES[f0.n]) continue;
+            if (needOverwater && _isLand(f0.la, f0.lo)) continue;
             // Advance k forward (never backward — fixes sorted by time)
             // to the first fix that's ≥ 21h after f0. If we walk past 27h
             // without a hit, no valid 24-h pair exists for this f0.
@@ -1989,6 +2031,7 @@ function _buildIntensityChangePerPhase() {
             if (dtH > 27) continue;                        // gap — skip but don't break (later f0 may fit)
             var f1 = track[k];
             if (f1.w == null) continue;
+            if (needOverwater && _isLand(f1.la, f1.lo)) continue;
             var iso = f0.t.slice(0, 10);
             var month = +iso.slice(5, 7);
             if (!_subSeasonMatch(month)) continue;
@@ -2433,7 +2476,8 @@ function _renderSubseasonalSource() {
             + '<br><strong>Best-track activity:</strong> '
             + link('https://www.ncei.noaa.gov/products/international-best-track-archive', 'IBTrACS v04 (NOAA NCEI)')
             + '. Genesis = first fix of each named storm (peak ≥ 34 kt). Track density = 6-hourly fixes ≥ 34 kt. '
-            + 'RI = Kaplan &amp; DeMaria (2003) threshold of Δw ≥ 30 kt / 24 h for storms ≥ 35 kt at the start of the interval.';
+            + 'RI = Kaplan &amp; DeMaria (2003) threshold of Δw ≥ 30 kt / 24 h, with user-controllable start-Vmax range, '
+            + 'overwater-only (1° Natural Earth land mask), and TC-phase filters.';
     }
 }
 
@@ -2740,11 +2784,58 @@ function _initSubseasonalOnce() {
         _renderSubseasonal();
     });
 
+    // Wire RI methodology controls (overwater / TC-phase / Vmax range)
+    var riOver  = document.getElementById('sub-ri-overwater');
+    var riTC    = document.getElementById('sub-ri-tcphase');
+    var riVmin  = document.getElementById('sub-ri-vmin');
+    var riVmax  = document.getElementById('sub-ri-vmax');
+    var riReset = document.getElementById('sub-ri-reset');
+    var riDebounce = null;
+    function readRIControls() {
+        if (riOver) _subState.riOverwater = !!riOver.checked;
+        if (riTC)   _subState.riTCPhaseOnly = !!riTC.checked;
+        var lo = riVmin && riVmin.value !== '' ? +riVmin.value : 35;
+        var hi = riVmax && riVmax.value !== '' ? +riVmax.value : 200;
+        if (!Number.isFinite(lo) || lo < 0) lo = 35;
+        if (!Number.isFinite(hi) || hi > 250) hi = 200;
+        if (hi < lo) { var t = lo; lo = hi; hi = t; }
+        _subState.riVmin = lo;
+        _subState.riVmax = hi;
+    }
+    function onRIChange() {
+        readRIControls();
+        // Overwater needs the land mask. If not loaded yet, fetch and re-render.
+        if (_subState.riOverwater && !_landMask) {
+            _loadLandMask().then(function () {
+                if (riDebounce) clearTimeout(riDebounce);
+                _renderIntensityDial();
+            });
+        }
+        if (riDebounce) clearTimeout(riDebounce);
+        riDebounce = setTimeout(function () {
+            _renderIntensityDial();
+        }, 200);
+    }
+    if (riOver) riOver.addEventListener('change', onRIChange);
+    if (riTC)   riTC.addEventListener('change', onRIChange);
+    if (riVmin) riVmin.addEventListener('input', onRIChange);
+    if (riVmax) riVmax.addEventListener('input', onRIChange);
+    if (riReset) riReset.addEventListener('click', function () {
+        if (riOver) riOver.checked = true;
+        if (riTC)   riTC.checked   = true;
+        if (riVmin) riVmin.value   = '';
+        if (riVmax) riVmax.value   = '';
+        readRIControls();
+        _renderIntensityDial();
+    });
+
     // Storm metadata may still be loading on first visit — wait for it.
     var ready = (allStorms.length > 0)
         ? Promise.resolve()
         : _loadStormsMetadata();
-    Promise.all([ready, _loadSubPhases()]).then(function () {
+    // Land mask fetched in parallel (small, ~64 KB). RI panel re-renders
+    // once it arrives if Overwater is checked.
+    Promise.all([ready, _loadSubPhases(), _loadLandMask()]).then(function () {
         _ensureStormBySid();
         _syncYearInputBounds();
         _renderSubseasonal();

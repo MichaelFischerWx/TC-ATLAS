@@ -401,12 +401,50 @@
                             <span class="ace-hint" id="sub-ri-hint" style="opacity:0.65;"></span>
                         </h3>
                         <p class="field-help" style="margin:4px 0 8px; font-size:0.7rem;">
-                            Bars show the fraction of overwater 24-h intensification episodes meeting the
-                            Kaplan–DeMaria RI threshold (Δw ≥ 30 kt / 24 h), for storms ≥ 35 kt at the start of
-                            the interval. Dashed ring is the across-all-phases mean — bars above it indicate
-                            an RI-favorable phase, below indicate suppressed RI. Click a phase tile in the
-                            map panel below to drill in.
+                            Bars show the fraction of 24-h intensification episodes meeting the
+                            Kaplan–DeMaria RI threshold (Δw ≥ 30 kt / 24 h). Dashed ring is the across-all-phases
+                            mean — bars above it indicate an RI-favorable phase, below indicate suppressed RI.
+                            Click a phase tile in the map panel below to drill in.
                         </p>
+                        <!-- RI methodology controls. Filtering matters: landfall cases distort
+                             the rate (storms decay over land regardless of phase), and the
+                             Vmax range lets users isolate "growth from TD/TS" (35-65 kt) vs
+                             "growth from major-hurricane base" (95+ kt) since the physics
+                             differ (and MPI-limited storms can't RI even in favorable phases). -->
+                        <div style="display:flex; flex-wrap:wrap; gap:8px 18px; align-items:center;
+                                    margin:6px 0 10px; padding:6px 10px;
+                                    background: var(--surface, rgba(46,125,255,0.04));
+                                    border:1px solid var(--border, rgba(0,0,0,0.08));
+                                    border-radius:6px; font-size:0.7rem;">
+                            <strong style="opacity:0.8;">Filter intervals:</strong>
+                            <label style="display:flex; align-items:center; gap:6px; cursor:pointer;"
+                                   title="Drop intervals where either the start or end fix is over land. Storms decay rapidly after landfall; including them biases RI rate downward in basins with frequent landfall (e.g., WP, NA).">
+                                <input type="checkbox" id="sub-ri-overwater" checked>
+                                Overwater only
+                            </label>
+                            <label style="display:flex; align-items:center; gap:6px; cursor:pointer;"
+                                   title="Drop intervals where the start fix has nature ET (extratropical) or DB/DS (disturbance). Keep TS, TD, HU, TC, SS/SD.">
+                                <input type="checkbox" id="sub-ri-tcphase" checked>
+                                TC-phase only
+                            </label>
+                            <span style="display:flex; align-items:center; gap:6px;"
+                                  title="Starting intensity range for the 24-h interval. RI from TD/TS base (35–65 kt) vs major-hurricane base (95+) has fundamentally different physics — and storms near MPI can't RI even in favorable phases.">
+                                Start Vmax:
+                                <input id="sub-ri-vmin" type="number" inputmode="numeric"
+                                       min="0" max="200" placeholder="35"
+                                       class="range-input" style="width:56px;">
+                                <span style="opacity:0.6;">–</span>
+                                <input id="sub-ri-vmax" type="number" inputmode="numeric"
+                                       min="0" max="200" placeholder="200"
+                                       class="range-input" style="width:56px;">
+                                <span style="opacity:0.6;">kt</span>
+                            </span>
+                            <button id="sub-ri-reset" type="button"
+                                    style="padding:3px 8px; font-size:0.65rem; border-radius:6px;
+                                           background: var(--surface); color: var(--slate);
+                                           border: 1px solid var(--border); cursor:pointer;"
+                                    title="Restore overwater + TC-phase + 35–200 kt defaults.">Reset</button>
+                        </div>
                         <div id="sub-ri-chart" class="chart-container chart-tall"></div>
                     </div>
 
