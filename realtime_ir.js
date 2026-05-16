@@ -1894,20 +1894,23 @@
         });
         map.addControl(new LayersControl());
 
-        // Env colorbar — fixed-position bottom-right (where intensity
-        // legend used to live; that legend is now toggle-only). Keeps
-        // it well clear of the Brightness Temp colorbar + animation
-        // panel which both live in Leaflet's bottom-left stack.
+        // Env colorbar — fixed-position bottom-LEFT, above the
+        // Brightness Temp colorbar + animation panel. Previously lived
+        // bottom-right, but the unified Layers panel claims that edge
+        // and the colorbar stack would creep up into it as more
+        // overlays were toggled on. The bottom-left is the dedicated
+        // "data legends" zone and never collides with the Layers panel.
         if (!document.getElementById('ir-global-env-cbars')) {
             var ebox = document.createElement('div');
             ebox.id = 'ir-global-env-cbars';
             ebox.style.cssText =
-                'position:fixed;right:12px;bottom:40px;display:none;' +
+                'position:fixed;left:12px;bottom:140px;display:none;' +
                 'background:rgba(22,27,36,0.93);padding:8px 12px;' +
                 'border-radius:6px;border:1px solid rgba(255,255,255,0.14);' +
                 'backdrop-filter:blur(6px);z-index:700;' +
                 'box-shadow:0 4px 14px rgba(0,0,0,0.25);' +
-                'max-width:min(90vw, 540px);';
+                'max-width:min(60vw, 420px);' +
+                'max-height:calc(100vh - 240px);overflow-y:auto;';
             document.body.appendChild(ebox);
         }
 
@@ -6356,10 +6359,21 @@
     /** Legacy renderer — superseded by the unified Layers panel. */
     function _renderEnvMenu() { _renderLayersPanel(); }
 
+    // Above this many discrete contour levels (e.g. Z500's 41 at 3-dam
+    // intervals) the swatch row becomes unreadably wide AND overflows
+    // the colorbar container. Fall back to the continuous gradient with
+    // min/mid/max ticks instead — much more compact + still legible.
+    var _ENV_CBAR_MAX_SWATCHES = 16;
+
     function _renderEnvColorbar() {
         var box = document.getElementById('ir-global-env-cbars');
         if (!box) return;
-        var active = Object.values(_rtEnvActive);
+        // Wind-barb layers don't have a continuous color scale — their
+        // info channel is the feather glyphs, not color. They were
+        // surfacing in the colorbar stack as "undefined" rows; skip them.
+        var active = Object.values(_rtEnvActive).filter(function (e) {
+            return e && e.overlayKind !== 'wind';
+        });
         if (active.length === 0) {
             box.style.display = 'none';
             box.innerHTML = '';
@@ -6371,7 +6385,10 @@
             var L_ = active[i].layer;
             var lvls = L_.levels;
             var lvlColors = L_.level_colors;
-            if (lvls && lvls.length && lvlColors && lvlColors.length === lvls.length) {
+            var useSwatches = lvls && lvls.length && lvlColors
+                && lvlColors.length === lvls.length
+                && lvls.length <= _ENV_CBAR_MAX_SWATCHES;
+            if (useSwatches) {
                 // CIMSS-style discrete legend: one swatch per contour level.
                 var swatchHtml = '';
                 for (var k = 0; k < lvls.length; k++) {
@@ -6387,18 +6404,31 @@
                     + '<div style="display:flex;gap:3px;">' + swatchHtml + '</div>'
                     + '</div>';
             } else {
-                // Legacy continuous-gradient fallback for layers
-                // built before discrete levels were emitted.
+                // Continuous-gradient rendering. Used by layers that
+                // (a) never emitted discrete `levels` (older raster fields)
+                // or (b) have too many discrete levels to fit as swatches
+                // (Z500 at 3 dam = 41 levels). Adds a min/mid/max tick
+                // row so users can still read values off the gradient.
                 var stops = L_.colorbar_stops || [];
                 var grad = stops.map(function (s) {
                     return 'rgb(' + s.rgb.join(',') + ') ' + Math.round(s.t * 100) + '%';
                 }).join(',');
+                // Fallback for layers without colorbar_stops: build a
+                // gradient from level_colors if available.
+                if (!grad && lvls && lvlColors && lvlColors.length === lvls.length) {
+                    var span = (L_.vmax - L_.vmin) || 1;
+                    grad = lvls.map(function (lvl, idx) {
+                        var t = Math.max(0, Math.min(1, (lvl - L_.vmin) / span));
+                        return 'rgb(' + lvlColors[idx].join(',') + ') ' + Math.round(t * 100) + '%';
+                    }).join(',');
+                }
+                var mid = Math.round((L_.vmin + L_.vmax) / 2);
                 html += '<div style="margin-top:6px;font-family:DM Sans,sans-serif;font-size:0.62rem;color:#c7d2e0;">'
                     + '<div style="display:flex;justify-content:space-between;margin-bottom:2px;">'
                     + '<span>' + L_.title + '</span><span>' + L_.units + '</span></div>'
                     + '<div style="width:160px;height:8px;border-radius:2px;background:linear-gradient(to right,' + grad + ');"></div>'
-                    + '<div style="display:flex;justify-content:space-between;font-size:0.55rem;color:#94a3b8;">'
-                    + '<span>' + L_.vmin + '</span><span>' + L_.vmax + '</span></div>'
+                    + '<div style="display:flex;justify-content:space-between;font-size:0.55rem;color:#94a3b8;width:160px;">'
+                    + '<span>' + L_.vmin + '</span><span>' + mid + '</span><span>' + L_.vmax + '</span></div>'
                     + '</div>';
             }
         }
