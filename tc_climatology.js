@@ -2127,8 +2127,9 @@ function _renderGenesisDial() {
     // Update event count line
     var countEl = document.getElementById('sub-event-count');
     if (countEl) {
+        var modeLabel = (_subPhases.indices[_subState.mode] || {}).label || _subState.mode.toUpperCase();
         countEl.textContent = gen.total + ' named-storm genesis events on ' + act.total
-            + ' active days (' + _subState.mode.toUpperCase() + ')';
+            + ' active days (' + modeLabel + ')';
     }
 }
 

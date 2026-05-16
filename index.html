@@ -706,11 +706,11 @@
                 <a href="tc_climatology.html" class="platform-card card-climo">
                     <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 4 9 14 14 0 0 1-4 9 14 14 0 0 1-4-9 14 14 0 0 1 4-9z"/><path d="M5 6c2 1.5 5 2.4 7 2.4S17 7.5 19 6"/><path d="M5 18c2-1.5 5-2.4 7-2.4s5 .9 7 2.4"/></svg></div>
                     <div class="card-title">TC Climatology</div>
-                    <div class="card-desc">Best-track statistics by basin (ACE, RI, intensity, LMI, seasonal cycles) plus an interactive ERA5 reanalysis globe for compositing TC seasons by climate index, custom year/month, or per-pixel correlation.</div>
+                    <div class="card-desc">Best-track statistics by basin (ACE, RI, intensity, LMI), an ERA5 reanalysis globe for compositing by climate index, and a new <strong>Subseasonal</strong> subview for binning genesis &amp; RI by MJO and BSISO phase.</div>
                     <div class="card-stats">
-                        <div><div class="card-stat-val">6</div><div class="card-stat-label">Stat panels</div></div>
-                        <div><div class="card-stat-val">14</div><div class="card-stat-label">Indices</div></div>
-                        <div><div class="card-stat-val">ERA5</div><div class="card-stat-label">Reanalysis</div></div>
+                        <div><div class="card-stat-val">3</div><div class="card-stat-label">Sub-views</div></div>
+                        <div><div class="card-stat-val">14+</div><div class="card-stat-label">Indices</div></div>
+                        <div><div class="card-stat-val">MJO/BSISO</div><div class="card-stat-label">Phase composites</div></div>
                     </div>
                     <span class="card-arrow">&rarr;</span>
                 </a>
@@ -801,6 +801,10 @@
             <h2 class="section-title">Recent <span class="accent">Updates</span></h2>
             <p class="section-desc">TC-ATLAS is actively maintained — new data sources, analysis tools, and UI improvements are added continuously.</p>
             <div class="changelog-list">
+                <div class="changelog-entry">
+                    <div class="changelog-date">May 16, 2026</div>
+                    <div class="changelog-text">New <strong>Subseasonal Modulation</strong> subview on the TC Climatology page: TC genesis frequency, track-point density, and <strong>RI rate</strong> binned by daily 8-phase MJO and BSISO indices. Switch between MJO (Wheeler&ndash;Hendon RMM) and OLR-based <strong>OMI</strong> (Kiladis 2014), or compare BSISO1 (30&ndash;60 d northward) vs BSISO2 (10&ndash;30 d NW). Click any phase tile to drill in: larger map, per-phase RI rate vs climatology, top RI episodes, and the 24-h &Delta;wind distribution. Year-range, basin, and season filters cascade through every chart. Four BSISO PC monthly indices were also added to the <a href="climatology_globe.html">Reanalysis Globe</a> composite builder.</div>
+                </div>
                 <div class="changelog-entry">
                     <div class="changelog-date">May 7, 2026</div>
                     <div class="changelog-text">Site-wide visual refresh: new <strong>TC-ATLAS logomark</strong> on University of Miami&rsquo;s green and orange palette, <strong>light theme</strong> by default with an optional <strong>dark mode</strong>, and a cleaner <strong>light basemap</strong> for the global storm-track maps.</div>
