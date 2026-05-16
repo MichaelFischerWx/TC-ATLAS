@@ -296,12 +296,69 @@
     // (the old 25° blend created a visible 40° swath of blurry dual-source
     // compositing over the western US).  The Africa/Middle East gap (no
     // Meteosat in GIBS) is handled by the nearest-satellite fallback.
-    var SAT_ZONES = [
+    //
+    // ALL longitudes here are in -180..180 convention. Himawari's coreEast
+    // can wrap past +180 (encoded as a negative number); resolveSatZones
+    // below produces the active zone list with that wrap honored when
+    // GOES-West is stale.
+    var SAT_ZONES_BASE = [
         { name: 'GOES-East', sublon: -75.2,  coreWest: -110, coreEast:   15 },
         { name: 'GOES-West', sublon: -137.2, coreWest: -180, coreEast: -110 },
         { name: 'Himawari',  sublon:  140.7, coreWest:   60, coreEast:  180 }
     ];
     var BLEND_WIDTH_DEG = 5; // narrow cross-fade to avoid blurry dual-source artifacts
+
+    /** Resolve the active satellite zones for the current stale state.
+     *
+     *  When GOES-West is healthy the three zones cover the globe with no
+     *  gap (GOES-East: -110→+15, GOES-West: -180→-110, Himawari: +60→+180).
+     *
+     *  When GOES-West is stale (frequent occurrence for the East Pac), we
+     *  extend Himawari EAST past the dateline to ~-150° and pull GOES-East
+     *  WEST to the same -150° meridian, producing a sharp Himawari/GOES-East
+     *  seam in the mid East Pacific instead of the previous gray gap.
+     *  -150° is roughly equidistant from the two sub-satellite points
+     *  (Himawari at +140.7° = 70.7° away, GOES-East at -75.2° = 74.8° away),
+     *  so neither side's parallax is dramatically worse than the other's.
+     */
+    var GW_STALE_SEAM_LON = -150;
+
+    function resolveSatZones() {
+        var goesWestStale = !!staleGIBSSats['GOES-West'];
+        if (!goesWestStale) return SAT_ZONES_BASE;
+        return [
+            { name: 'GOES-East', sublon: -75.2,  coreWest: GW_STALE_SEAM_LON, coreEast: 15 },
+            // GOES-West omitted while stale so its zone doesn't shadow the
+            // other satellites in the score loop.
+            { name: 'Himawari',  sublon: 140.7, coreWest: 60, coreEast: GW_STALE_SEAM_LON }
+            // Note: Himawari's coreEast (GW_STALE_SEAM_LON = -150) is LESS
+            // than its coreWest (+60), signalling the dateline wrap. The
+            // lonInCore helper handles that case.
+        ];
+    }
+
+    /** Is `lon` (in -180..180) inside the zone [west, east]? Handles
+     *  the wrap case where east < west (zone crosses the dateline). */
+    function lonInCore(lon, west, east) {
+        if (west <= east) return lon >= west && lon <= east;
+        return lon >= west || lon <= east;  // wrap
+    }
+
+    /** Score a satellite zone for a tile at `centerLon`. 1.0 inside the
+     *  core; negative (closer to 0 = better) outside. Uses spherical
+     *  wraparound when measuring distance so the "outside" of a wrap
+     *  zone correctly references its edges. */
+    function scoreSatForLon(zone, centerLon) {
+        if (lonInCore(centerLon, zone.coreWest, zone.coreEast)) return 1.0;
+        function angDist(a, b) {
+            var d = Math.abs(a - b);
+            return Math.min(d, 360 - d);
+        }
+        return -Math.min(
+            angDist(centerLon, zone.coreWest),
+            angDist(centerLon, zone.coreEast)
+        );
+    }
 
     // Sub-satellite longitudes for choosing best satellite per storm
     var SAT_SUBLONS = [
@@ -791,25 +848,18 @@
         var lonRange = tileLonRange(x, z);
         var centerLon = (lonRange.west + lonRange.east) / 2;
 
+        var zones = resolveSatZones();
         var bestSat = null;
         var bestScore = -Infinity;
 
-        for (var i = 0; i < SAT_ZONES.length; i++) {
-            var sat = SAT_ZONES[i];
+        for (var i = 0; i < zones.length; i++) {
+            var sat = zones[i];
             if (staleGIBSSats[sat.name]) continue;  // backfill: skip stale feeds
             var hasGeoColor = !!GIBS_GEOCOLOR_LAYERS[sat.name];
             var layerName = GIBS_GEOCOLOR_LAYERS[sat.name] || GIBS_VIS_LAYERS[sat.name];
             if (!layerName) continue;
 
-            var score;
-            if (centerLon >= sat.coreWest && centerLon <= sat.coreEast) {
-                score = 1.0;
-            } else {
-                var distW = sat.coreWest - centerLon;
-                var distE = centerLon - sat.coreEast;
-                score = -Math.min(Math.abs(distW), Math.abs(distE));
-            }
-
+            var score = scoreSatForLon(sat, centerLon);
             if (score > bestScore) {
                 bestScore = score;
                 bestSat = {
@@ -1065,32 +1115,21 @@
         var lonRange = tileLonRange(x, z);
         var centerLon = (lonRange.west + lonRange.east) / 2;
 
-        // Score each satellite by how close the tile center is to the core zone.
-        // Satellites whose GIBS feed is currently stale are skipped here so a
-        // neighboring satellite's footprint backfills the gap (e.g. GOES-East
-        // covers eastern Pacific tiles when GOES-West is unavailable; Himawari
-        // covers far-western Pacific in the same scenario).
+        // resolveSatZones reconfigures the zone list when GOES-West is
+        // stale: Himawari extends past the dateline to a sharp -150°
+        // seam with a westward-extended GOES-East. When all three sats
+        // are healthy this returns the standard non-wrap zones.
+        var zones = resolveSatZones();
         var bestSat = null;
         var bestScore = -Infinity;
 
-        for (var i = 0; i < SAT_ZONES.length; i++) {
-            var sat = SAT_ZONES[i];
+        for (var i = 0; i < zones.length; i++) {
+            var sat = zones[i];
             var layerName = GIBS_IR_LAYERS[sat.name];
             if (!layerName) continue;
             if (staleGIBSSats[sat.name]) continue;  // backfill: skip stale feeds
 
-            // Score = 1.0 if inside core, ramps down with distance outside core
-            var score;
-            if (centerLon >= sat.coreWest && centerLon <= sat.coreEast) {
-                // Inside core — score based on distance to nearest edge (prefer center)
-                score = 1.0;
-            } else {
-                // Outside core — negative distance (further = worse)
-                var distW = sat.coreWest - centerLon;
-                var distE = centerLon - sat.coreEast;
-                score = -Math.min(Math.abs(distW), Math.abs(distE));
-            }
-
+            var score = scoreSatForLon(sat, centerLon);
             if (score > bestScore) {
                 bestScore = score;
                 bestSat = { name: sat.name, layerName: layerName, weight: 1.0 };
@@ -1755,7 +1794,7 @@
                 btn.id = 'ir-global-product-toggle';
                 btn.textContent = 'Switch to GeoColor';
                 btn.title = 'Currently showing Enhanced IR — click to switch to GeoColor';
-                btn.style.cssText = 'padding:6px 14px;font-family:DM Sans,sans-serif;font-size:0.72rem;font-weight:500;color:#8b9ec2;background:rgba(15,33,64,0.88);border:1px solid rgba(255,255,255,0.12);border-radius:5px;cursor:pointer;white-space:nowrap;backdrop-filter:blur(4px);';
+                btn.style.cssText = 'padding:6px 14px;font-family:DM Sans,sans-serif;font-size:0.72rem;font-weight:500;color:#8b9ec2;background:rgba(22,27,36,0.92);border:1px solid rgba(255,255,255,0.12);border-radius:5px;cursor:pointer;white-space:nowrap;backdrop-filter:blur(4px);';
                 L.DomEvent.disableClickPropagation(btn);
                 btn.addEventListener('click', function () {
                     setGlobalProduct(globalProduct === 'eir' ? 'geocolor' : 'eir');
@@ -1765,7 +1804,7 @@
                     btn.style.color = '#c0d0ea';
                 });
                 btn.addEventListener('mouseleave', function () {
-                    btn.style.background = 'rgba(15,33,64,0.88)';
+                    btn.style.background = 'rgba(22,27,36,0.92)';
                     btn.style.color = '#8b9ec2';
                 });
                 return btn;
@@ -1786,7 +1825,7 @@
                 btn.id = 'ir-global-wl-toggle';
                 btn.textContent = 'DeepMind 10-day';
                 btn.title = 'Overlay 50-member WeatherLab ensemble forecast tracks for every active storm + invest';
-                btn.style.cssText = 'padding:6px 14px;font-family:DM Sans,sans-serif;font-size:0.72rem;font-weight:500;color:#8b9ec2;background:rgba(15,33,64,0.88);border:1px solid rgba(255,255,255,0.12);border-radius:5px;cursor:pointer;white-space:nowrap;backdrop-filter:blur(4px);';
+                btn.style.cssText = 'padding:6px 14px;font-family:DM Sans,sans-serif;font-size:0.72rem;font-weight:500;color:#8b9ec2;background:rgba(22,27,36,0.92);border:1px solid rgba(255,255,255,0.12);border-radius:5px;cursor:pointer;white-space:nowrap;backdrop-filter:blur(4px);';
                 btn.addEventListener('click', toggleGlobalWeatherlab);
                 btn.addEventListener('mouseenter', function () {
                     btn.style.background = 'rgba(30,60,110,0.9)';
@@ -1794,14 +1833,14 @@
                 });
                 btn.addEventListener('mouseleave', function () {
                     if (!btn.classList.contains('active')) {
-                        btn.style.background = 'rgba(15,33,64,0.88)';
+                        btn.style.background = 'rgba(22,27,36,0.92)';
                         btn.style.color = '#8b9ec2';
                     }
                 });
 
                 var status = L.DomUtil.create('span', 'ir-global-wl-status', wrap);
                 status.id = 'ir-global-wl-status';
-                status.style.cssText = 'font-family:DM Sans,sans-serif;font-size:0.62rem;color:#8b9ec2;background:rgba(15,33,64,0.7);padding:2px 6px;border-radius:3px;display:none;';
+                status.style.cssText = 'font-family:DM Sans,sans-serif;font-size:0.62rem;color:#8b9ec2;background:rgba(22,27,36,0.75);padding:2px 6px;border-radius:3px;display:none;';
 
                 return wrap;
             }
@@ -1823,7 +1862,7 @@
                 btn.id = 'ir-genesis-toggle';
                 btn.textContent = 'Genesis Forecasts';
                 btn.title = 'FNV3 LARGE_ENSEMBLE cyclogenesis: 1000-member spaghetti + 2d/7d/14d formation probability';
-                btn.style.cssText = 'padding:6px 14px;font-family:DM Sans,sans-serif;font-size:0.72rem;font-weight:500;color:#8b9ec2;background:rgba(15,33,64,0.88);border:1px solid rgba(255,255,255,0.12);border-radius:5px;cursor:pointer;white-space:nowrap;backdrop-filter:blur(4px);';
+                btn.style.cssText = 'padding:6px 14px;font-family:DM Sans,sans-serif;font-size:0.72rem;font-weight:500;color:#8b9ec2;background:rgba(22,27,36,0.92);border:1px solid rgba(255,255,255,0.12);border-radius:5px;cursor:pointer;white-space:nowrap;backdrop-filter:blur(4px);';
                 btn.addEventListener('click', toggleGenesisMenu);
                 btn.addEventListener('mouseenter', function () {
                     if (!_rtGenesisMenuOpen) {
@@ -1837,7 +1876,7 @@
 
                 var menu = L.DomUtil.create('div', 'ir-genesis-menu', wrap);
                 menu.id = 'ir-genesis-menu';
-                menu.style.cssText = 'display:none;min-width:260px;background:rgba(15,33,64,0.94);border:1px solid rgba(255,255,255,0.14);border-radius:6px;backdrop-filter:blur(8px);box-shadow:0 6px 20px rgba(0,0,0,0.3);';
+                menu.style.cssText = 'display:none;min-width:260px;background:rgba(22,27,36,0.95);border:1px solid rgba(255,255,255,0.14);border-radius:6px;backdrop-filter:blur(8px);box-shadow:0 6px 20px rgba(0,0,0,0.3);';
                 menu.innerHTML = '<div style="padding:8px 10px;font-size:0.7rem;color:#94a3b8;">Loading…</div>';
 
                 return wrap;
@@ -1858,7 +1897,7 @@
                 btn.id = 'ir-global-winds-toggle';
                 btn.textContent = 'Winds';
                 btn.title = 'Wind barbs at 850 / 700 / 500 / 200 hPa — open menu to pick levels';
-                btn.style.cssText = 'padding:6px 14px;font-family:DM Sans,sans-serif;font-size:0.72rem;font-weight:500;color:#8b9ec2;background:rgba(15,33,64,0.88);border:1px solid rgba(255,255,255,0.12);border-radius:5px;cursor:pointer;white-space:nowrap;backdrop-filter:blur(4px);';
+                btn.style.cssText = 'padding:6px 14px;font-family:DM Sans,sans-serif;font-size:0.72rem;font-weight:500;color:#8b9ec2;background:rgba(22,27,36,0.92);border:1px solid rgba(255,255,255,0.12);border-radius:5px;cursor:pointer;white-space:nowrap;backdrop-filter:blur(4px);';
                 btn.addEventListener('click', toggleWindsMenu);
                 btn.addEventListener('mouseenter', function () {
                     if (!_rtWindsMenuOpen) {
@@ -1870,7 +1909,7 @@
 
                 var menu = L.DomUtil.create('div', 'ir-global-winds-menu', wrap);
                 menu.id = 'ir-global-winds-menu';
-                menu.style.cssText = 'display:none;min-width:220px;background:rgba(15,33,64,0.94);border:1px solid rgba(255,255,255,0.14);border-radius:6px;backdrop-filter:blur(8px);box-shadow:0 6px 20px rgba(0,0,0,0.3);';
+                menu.style.cssText = 'display:none;min-width:220px;background:rgba(22,27,36,0.95);border:1px solid rgba(255,255,255,0.14);border-radius:6px;backdrop-filter:blur(8px);box-shadow:0 6px 20px rgba(0,0,0,0.3);';
                 menu.innerHTML = '<div style="padding:8px 10px;font-size:0.7rem;color:#94a3b8;">Loading…</div>';
 
                 return wrap;
@@ -1892,7 +1931,7 @@
                 btn.id = 'ir-global-env-toggle';
                 btn.textContent = 'Environmental Analysis';
                 btn.title = 'Toggle GFS-derived shear, mid-level RH, and OISST SST overlays';
-                btn.style.cssText = 'padding:6px 14px;font-family:DM Sans,sans-serif;font-size:0.72rem;font-weight:500;color:#8b9ec2;background:rgba(15,33,64,0.88);border:1px solid rgba(255,255,255,0.12);border-radius:5px;cursor:pointer;white-space:nowrap;backdrop-filter:blur(4px);';
+                btn.style.cssText = 'padding:6px 14px;font-family:DM Sans,sans-serif;font-size:0.72rem;font-weight:500;color:#8b9ec2;background:rgba(22,27,36,0.92);border:1px solid rgba(255,255,255,0.12);border-radius:5px;cursor:pointer;white-space:nowrap;backdrop-filter:blur(4px);';
                 btn.addEventListener('click', toggleEnvMenu);
                 btn.addEventListener('mouseenter', function () {
                     if (!_rtEnvMenuOpen) {
@@ -1902,14 +1941,14 @@
                 });
                 btn.addEventListener('mouseleave', function () {
                     if (!_rtEnvMenuOpen) {
-                        btn.style.background = 'rgba(15,33,64,0.88)';
+                        btn.style.background = 'rgba(22,27,36,0.92)';
                         btn.style.color = '#8b9ec2';
                     }
                 });
 
                 var menu = L.DomUtil.create('div', 'ir-global-env-menu', wrap);
                 menu.id = 'ir-global-env-menu';
-                menu.style.cssText = 'display:none;min-width:240px;background:rgba(15,33,64,0.94);border:1px solid rgba(255,255,255,0.14);border-radius:6px;backdrop-filter:blur(8px);box-shadow:0 6px 20px rgba(0,0,0,0.3);';
+                menu.style.cssText = 'display:none;min-width:240px;background:rgba(22,27,36,0.95);border:1px solid rgba(255,255,255,0.14);border-radius:6px;backdrop-filter:blur(8px);box-shadow:0 6px 20px rgba(0,0,0,0.3);';
                 menu.innerHTML = '<div style="padding:8px 10px;font-size:0.7rem;color:#94a3b8;">Loading layers…</div>';
 
                 return wrap;
@@ -1926,7 +1965,7 @@
             ebox.id = 'ir-global-env-cbars';
             ebox.style.cssText =
                 'position:fixed;right:12px;bottom:40px;display:none;' +
-                'background:rgba(15,33,64,0.92);padding:8px 12px;' +
+                'background:rgba(22,27,36,0.93);padding:8px 12px;' +
                 'border-radius:6px;border:1px solid rgba(255,255,255,0.14);' +
                 'backdrop-filter:blur(6px);z-index:700;' +
                 'box-shadow:0 4px 14px rgba(0,0,0,0.25);' +
@@ -1984,7 +2023,7 @@
             onAdd: function () {
                 var container = L.DomUtil.create('div', 'ir-global-anim-panel');
                 container.id = 'ir-global-anim-panel';
-                container.style.cssText = 'display:flex;align-items:center;gap:6px;padding:5px 10px;font-family:DM Sans,sans-serif;font-size:0.72rem;color:#8b9ec2;background:rgba(15,33,64,0.88);border:1px solid rgba(255,255,255,0.12);border-radius:5px;backdrop-filter:blur(4px);margin-bottom:36px;';
+                container.style.cssText = 'display:flex;align-items:center;gap:6px;padding:5px 10px;font-family:DM Sans,sans-serif;font-size:0.72rem;color:#8b9ec2;background:rgba(22,27,36,0.92);border:1px solid rgba(255,255,255,0.12);border-radius:5px;backdrop-filter:blur(4px);margin-bottom:36px;';
                 L.DomEvent.disableClickPropagation(container);
 
                 // Prev button
@@ -5237,7 +5276,7 @@
                 btn.style.color = '#6cb78a';
                 btn.style.borderColor = 'rgba(74, 155, 110, 0.55)';
             } else {
-                btn.style.background = 'rgba(15,33,64,0.88)';
+                btn.style.background = 'rgba(22,27,36,0.92)';
                 btn.style.color = '#8b9ec2';
                 btn.style.borderColor = 'rgba(255,255,255,0.12)';
             }
@@ -5424,7 +5463,7 @@
                 btn.style.color = '#fbbf72';
                 btn.style.borderColor = 'rgba(249, 115, 22, 0.55)';
             } else {
-                btn.style.background = 'rgba(15,33,64,0.88)';
+                btn.style.background = 'rgba(22,27,36,0.92)';
                 btn.style.color = '#8b9ec2';
                 btn.style.borderColor = 'rgba(255,255,255,0.12)';
             }
@@ -5470,7 +5509,7 @@
                 btn.style.color = '#fbbf72';
                 btn.style.borderColor = 'rgba(249, 115, 22, 0.55)';
             } else {
-                btn.style.background = 'rgba(15,33,64,0.88)';
+                btn.style.background = 'rgba(22,27,36,0.92)';
                 btn.style.color = '#8b9ec2';
                 btn.style.borderColor = 'rgba(255,255,255,0.12)';
             }
@@ -5740,11 +5779,12 @@
         var SPACING    = 2.4;     // tight packing (~30% of feather len)
         var PEN_BASE   = 3.5;     // pennant base along shaft
 
-        // NH: feathers on observer's LEFT when facing upwind. After
-        // rotation by atan2(u, v) above, screen-south (the observer's
-        // left for wind east, generalizing) maps to rotated +x. So
-        // NH side = +1, SH flips to -1.
-        var side = isSH ? -1 : +1;
+        // Empirical side per user feedback: my WMO derivation said
+        // NH = +1 / SH = -1, but the resulting orientation read as
+        // flipped on the live map. Inverting to NH = -1 / SH = +1
+        // (feathers on rotated -x for NH, +x for SH). If this still
+        // looks wrong, the answer is "flip the sign of `side`."
+        var side = isSH ? +1 : -1;
 
         // Shaft from station (0,0) to tail (0, +STAFF) — +y is upwind
         // in the rotated frame after the fromRot rotation above.
@@ -5945,7 +5985,7 @@
         el.id = 'ir-env-hover-tip';
         el.style.cssText =
             'position:absolute;pointer-events:none;display:none;z-index:900;' +
-            'background:rgba(15,33,64,0.95);color:#e2e8f0;' +
+            'background:rgba(22,27,36,0.95);color:#e2e8f0;' +
             'font-family:"DM Sans","Helvetica Neue",sans-serif;font-size:0.72rem;' +
             'border:1px solid rgba(255,255,255,0.16);border-radius:5px;' +
             'padding:5px 8px;backdrop-filter:blur(6px);' +
@@ -6251,7 +6291,7 @@
                 btn.style.color = '#6cb78a';
                 btn.style.borderColor = 'rgba(74, 155, 110, 0.55)';
             } else {
-                btn.style.background = 'rgba(15,33,64,0.88)';
+                btn.style.background = 'rgba(22,27,36,0.92)';
                 btn.style.color = '#8b9ec2';
                 btn.style.borderColor = 'rgba(255,255,255,0.12)';
             }
@@ -6323,7 +6363,7 @@
             btn.style.color = '#6cb78a';
             btn.style.borderColor = 'rgba(74, 155, 110, 0.55)';
         } else {
-            btn.style.background = 'rgba(15,33,64,0.88)';
+            btn.style.background = 'rgba(22,27,36,0.92)';
             btn.style.color = '#8b9ec2';
             btn.style.borderColor = 'rgba(255,255,255,0.12)';
         }
@@ -6340,7 +6380,7 @@
                 btn.style.color = '#6cb78a';
                 btn.style.borderColor = 'rgba(74, 155, 110, 0.55)';
             } else {
-                btn.style.background = 'rgba(15,33,64,0.88)';
+                btn.style.background = 'rgba(22,27,36,0.92)';
                 btn.style.color = '#8b9ec2';
                 btn.style.borderColor = 'rgba(255,255,255,0.12)';
             }
