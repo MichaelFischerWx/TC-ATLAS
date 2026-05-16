@@ -2036,11 +2036,11 @@ function _buildRIDensityPerPhase() {
     return _gridsToArrays(grids, BIN);
 }
 
-// Mean signed 24-h Δwind per 5° bin, per phase. Diverging field —
+// Mean signed 24-h ΔVmax per 5° bin, per phase. Diverging field —
 // negative cells = systematic weakening at that location in that phase,
 // positive = systematic intensification. Useful for spotting "RI corridors"
 // vs hostile regions. Returns same shape as the count grids but cnts[]
-// holds the mean Δw (kt) and an extra sample-size array gates rendering
+// holds the mean ΔVmax (kt) and an extra sample-size array gates rendering
 // to cells with ≥ N intervals (poor stats are masked).
 function _buildMeanDwPerPhase() {
     var modeRec = _subPhases.indices[_subState.mode];
@@ -2114,15 +2114,15 @@ function _buildMeanDwPerPhase() {
             var parts = key.split(',');
             lats.push((+parts[0]) * BIN + BIN/2);
             lons.push((+parts[1]) * BIN + BIN/2);
-            cnts.push(sum / n);                             // mean Δw (kt)
+            cnts.push(sum / n);                             // mean ΔVmax (kt)
         });
         return { lats: lats, lons: lons, cnts: cnts };
     });
 }
 
 // Compute 24-h overwater intensity-change distributions per phase.
-// Returns per-phase arrays of all Δwind values + summary stats. The
-// underlying convention follows Kaplan-DeMaria (2003): RI = Δw ≥ 30 kt
+// Returns per-phase arrays of all ΔVmax values + summary stats. The
+// underlying convention follows Kaplan-DeMaria (2003): RI = ΔVmax ≥ 30 kt
 // over 24h, sampled at synoptic 6-h spacing. We require the starting
 // fix to be ≥ 35 kt (TS strength) so we don't pollute the rate with
 // pre-genesis disturbances. Mean and RI rate are summary statistics
@@ -2134,9 +2134,9 @@ function _buildIntensityChangePerPhase() {
     var startKey = modeRec._startKey;
     var endKey = startKey + modeRec.phases.length - 1;
     var changes = [];
-    for (var i = 0; i < 8; i++) changes.push([]);          // raw Δw arrays
-    var hits = [0,0,0,0,0,0,0,0];                          // RI count (Δw ≥ 30 kt)
-    var sumDw = [0,0,0,0,0,0,0,0];                         // sum Δw (for mean)
+    for (var i = 0; i < 8; i++) changes.push([]);          // raw ΔVmax arrays
+    var hits = [0,0,0,0,0,0,0,0];                          // RI count (ΔVmax ≥ 30 kt)
+    var sumDw = [0,0,0,0,0,0,0,0];                         // sum ΔVmax (for mean)
     var topRI = [[],[],[],[],[],[],[],[]];                 // {sid, name, year, dw, date, w0, w1} for the modal
     var sids = Object.keys(allTracks);
     // Synoptic spacing varies across the IBTrACS archive: modern data is
@@ -2205,7 +2205,7 @@ function _buildIntensityChangePerPhase() {
             }
         }
     }
-    // Sort each phase's top-RI list by Δw desc and trim
+    // Sort each phase's top-RI list by ΔVmax desc and trim
     var topRITrimmed = topRI.map(function (lst) {
         lst.sort(function (a, b) { return b.dw - a.dw; });
         return lst.slice(0, 8);
@@ -2350,7 +2350,7 @@ function _renderIntensityDial() {
         return 'Phase ' + (i+1)
             + '<br>RI rate: ' + pct.toFixed(2) + '%'
             + '<br>(' + stats.riCount[i] + ' RI / ' + stats.nPerPhase[i] + ' intervals)'
-            + '<br>Mean Δw: ' + stats.meanDw[i].toFixed(2) + ' kt/24 h'
+            + '<br>Mean ΔVmax: ' + stats.meanDw[i].toFixed(2) + ' kt/24 h'
             + '<br>vs expected: ' + sign + anomaly.toFixed(0) + '%';
     });
 
@@ -2433,7 +2433,7 @@ function _renderTrackDensity() {
     else           density = _buildTrackDensityPerPhase();
     if (!density) {
         el.innerHTML = '<div style="padding:20px; opacity:0.6;">'
-            + ({genesis:'Genesis data', ri:'RI data', dw:'Δw data'}[mm] || 'Track data')
+            + ({genesis:'Genesis data', ri:'RI data', dw:'ΔVmax data'}[mm] || 'Track data')
             + ' unavailable.</div>';
         return;
     }
@@ -2639,10 +2639,10 @@ function _updateMapPanelText() {
         help  = 'Each panel shows where named-storm genesis events (first fix, peak ≥ 34 kt) occurred on days of that phase. One point per storm. Density is normalized per panel, so the warmest cell shows the relative concentration of genesis locations regardless of phase-day count.';
     } else if (mm === 'ri') {
         title = 'RI Event Density by Phase';
-        help  = 'Each panel shows where 24-h RI events (Δw ≥ 30 kt) started, on days of each phase. Uses the same Overwater / TC-phase / Vmax filters as the RI dial — hot spots reveal favored RI corridors for each phase.';
+        help  = 'Each panel shows where 24-h RI events (ΔVmax ≥ 30 kt) started, on days of each phase. Uses the same Overwater / TC-phase / Vmax filters as the RI dial — hot spots reveal favored RI corridors for each phase.';
     } else if (mm === 'dw') {
-        title = 'Mean 24-h Δwind by Phase';
-        help  = 'Each panel shows the mean signed 24-h Δwind per 5° bin (cells with < 5 intervals are masked). Diverging colormap: blue = systematic weakening, red = systematic intensification. Reveals whether a phase tilts the intensity tendency in a region toward growth or decay.';
+        title = 'Mean 24-h ΔVmax by Phase';
+        help  = 'Each panel shows the mean signed 24-h ΔVmax per 5° bin (cells with < 5 intervals are masked). Diverging colormap: blue = systematic weakening, red = systematic intensification. Reveals whether a phase tilts the intensity tendency in a region toward growth or decay.';
     } else {
         title = 'Track-Point Density by Phase';
         help  = 'Each panel shows the spatial density of 6-hourly best-track fixes (≥ 34 kt) occurring on days of that phase. Density is normalized per panel so the warmest cell in each phase shows the relative concentration regardless of phase-day count.';
@@ -2677,7 +2677,7 @@ function _renderSubseasonalSource() {
             + '<br><strong>Best-track activity:</strong> '
             + link('https://www.ncei.noaa.gov/products/international-best-track-archive', 'IBTrACS v04 (NOAA NCEI)')
             + '. Genesis = first fix of each named storm (peak ≥ 34 kt). Track density = 6-hourly fixes ≥ 34 kt. '
-            + 'RI = Kaplan &amp; DeMaria (2003) threshold of Δw ≥ 30 kt / 24 h, with user-controllable start-Vmax range, '
+            + 'RI = Kaplan &amp; DeMaria (2003) threshold of ΔVmax ≥ 30 kt / 24 h, with user-controllable start-Vmax range, '
             + 'overwater-only (1° Natural Earth land mask), and TC-phase filters.';
     }
 }
@@ -2721,7 +2721,7 @@ function _renderPhaseModal(phase) {
     if (mmEl) mmEl.textContent = ({
         genesis: '— genesis points',
         ri:      '— RI event starts',
-        dw:      '— mean Δw per 5° bin',
+        dw:      '— mean ΔVmax per 5° bin',
     })[_subState.mapMode] || '— 6-h track fixes';
 
     _renderPhaseModalMap(phase);
@@ -2865,7 +2865,7 @@ function _renderPhaseModalStats(phase) {
         html += tile('24-h intervals', nIntervals.toLocaleString(), '');
         html += tile('RI events', riCount.toLocaleString(), '≥ 30 kt/24 h');
         html += tile('RI rate', riRatePct.toFixed(2) + '%', '');
-        html += tile('Mean Δw', (meanDw >= 0 ? '+' : '') + meanDw.toFixed(2), 'kt/24 h');
+        html += tile('Mean ΔVmax', (meanDw >= 0 ? '+' : '') + meanDw.toFixed(2), 'kt/24 h');
     } else {
         html += tile('Intensity change', '—', 'tracks loading…');
     }
@@ -2891,7 +2891,7 @@ function _renderPhaseModalTopRI(phase) {
         + '<thead><tr style="text-align:left; opacity:0.7; border-bottom:1px solid var(--border, rgba(0,0,0,0.08));">'
         + '<th style="padding:4px 8px;">Storm</th>'
         + '<th style="padding:4px 8px;">Start of 24-h interval</th>'
-        + '<th style="padding:4px 8px; text-align:right;">Δw</th>'
+        + '<th style="padding:4px 8px; text-align:right;">ΔVmax</th>'
         + '<th style="padding:4px 8px; text-align:right;">Wind</th>'
         + '</tr></thead><tbody>' + rows + '</tbody></table>';
 }
@@ -2909,15 +2909,15 @@ function _renderPhaseModalHistogram(phase) {
         xbins: { start: -60, end: 80, size: 5 },
         marker: { color: '#2e7dff' },
         opacity: 0.85,
-        name: 'Δw distribution',
-        hovertemplate: 'Δw %{x} kt<br>n=%{y}<extra></extra>',
+        name: 'ΔVmax distribution',
+        hovertemplate: 'ΔVmax %{x} kt<br>n=%{y}<extra></extra>',
     };
     // Vertical RI threshold line at +30 kt.
     var base = _tcaPlotlyBase();
     var layout = Object.assign({}, base, {
         height: 260,
         margin: { l: 50, r: 20, t: 10, b: 40 },
-        xaxis: { title: '24-h Δwind (kt)', zeroline: true, zerolinecolor: 'rgba(0,0,0,0.4)' },
+        xaxis: { title: '24-h ΔVmax (kt)', zeroline: true, zerolinecolor: 'rgba(0,0,0,0.4)' },
         yaxis: { title: 'count' },
         shapes: [{
             type: 'line', xref: 'x', yref: 'paper',

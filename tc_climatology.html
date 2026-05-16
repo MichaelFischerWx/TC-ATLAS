@@ -409,7 +409,7 @@
                         </h3>
                         <p class="field-help" style="margin:4px 0 8px; font-size:0.7rem;">
                             Bars show the fraction of 24-h intensification episodes meeting the
-                            Kaplan–DeMaria RI threshold (Δw ≥ 30 kt / 24 h). Dashed ring is the across-all-phases
+                            Kaplan–DeMaria RI threshold (ΔVmax ≥ 30 kt / 24 h). Dashed ring is the across-all-phases
                             mean — bars above it indicate an RI-favorable phase, below indicate suppressed RI.
                             Click a phase tile in the map panel below to drill in.
                         </p>
@@ -469,9 +469,9 @@
                                     <button type="button" data-sub-mapmode="genesis"
                                             title="First-fix (genesis) point of each named storm whose genesis date fell in each phase. Shows where storms form.">Genesis</button>
                                     <button type="button" data-sub-mapmode="ri"
-                                            title="Where 24-h RI events (Δw ≥ 30 kt) started, on days of each phase. Uses the same Overwater / TC-phase / Vmax filters as the RI dial.">RI events</button>
+                                            title="Where 24-h RI events (ΔVmax ≥ 30 kt) started, on days of each phase. Uses the same Overwater / TC-phase / Vmax filters as the RI dial.">RI events</button>
                                     <button type="button" data-sub-mapmode="dw"
-                                            title="Mean signed 24-h Δwind per 5° bin — diverging colormap, blue = weakening tendency, red = intensification. Highlights regions where the active phase suppresses or supports growth.">Mean Δw</button>
+                                            title="Mean signed 24-h ΔVmax per 5° bin — diverging colormap, blue = weakening tendency, red = intensification. Highlights regions where the active phase suppresses or supports growth.">Mean ΔVmax</button>
                                 </div>
                             </div>
                             <p class="field-help" id="sub-tracks-help" style="margin:0; flex:1 1 360px; font-size:0.7rem;">
@@ -712,7 +712,7 @@
     <!-- Subseasonal Phase Drill-In Modal — opened by clicking a phase tile
          on the Subseasonal subview's 8-panel map. Surfaces a larger version
          of that single phase's map plus per-phase stats (storm count, RI
-         rate, mean Δw, top-RI events). Reuses the ace-modal-* skeleton. -->
+         rate, mean ΔVmax, top-RI events). Reuses the ace-modal-* skeleton. -->
     <div id="phase-modal" class="ace-modal-overlay" style="display:none;"
          onclick="if(event.target===this)closePhaseModal()">
         <div class="ace-modal-content">
