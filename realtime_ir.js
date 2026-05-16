@@ -1885,10 +1885,8 @@
                     + '</svg>';
                 exportBtn.addEventListener('click', _exportMapPng);
 
-                // ── Basemap row: [IR ⇄ GeoColor]  [Labels] ──────────
-                var basemapRow = L.DomUtil.create('div', 'ir-basemap-row', wrap);
-
-                var seg = L.DomUtil.create('div', 'ir-mode-segment', basemapRow);
+                // ── Compact IR/GeoColor mode switch (segmented) ─────
+                var seg = L.DomUtil.create('div', 'ir-mode-segment', wrap);
                 seg.id = 'ir-mode-segment';
                 seg.innerHTML =
                       '<button type="button" class="ir-mode-btn ir-mode-active" data-mode="eir">IR</button>'
@@ -1899,16 +1897,6 @@
                         setGlobalProduct(e.target.getAttribute('data-mode'));
                     });
                 }
-
-                // Compact "Labels" toggle — flip place names on/off so
-                // they don't compete with env contour values for the eye.
-                var labelsBtn = L.DomUtil.create('button', 'ir-global-toggle-btn ir-labels-toggle', basemapRow);
-                labelsBtn.id = 'ir-labels-toggle';
-                labelsBtn.type = 'button';
-                labelsBtn.textContent = 'Labels';
-                labelsBtn.title = 'Show / hide country & city labels on the basemap';
-                if (_labelsVisible) labelsBtn.classList.add('active');
-                labelsBtn.addEventListener('click', function () { toggleLabels(); });
 
                 // ── DeepMind WeatherLab status pill ──────────────────
                 // (Previously sat under its own dedicated button.) Now
@@ -1961,11 +1949,31 @@
             ltog.addEventListener('click', function () {
                 var leg = document.getElementById('ir-legend');
                 if (!leg) return;
-                var on = leg.style.display === 'none' || !leg.style.display;
+                // Track via the toggle's own .active class — checking
+                // leg.style.display fails after first toggle because
+                // we set it to '' (falsy), which the old code read as
+                // "hidden" and re-showed instead of hiding.
+                var on = !ltog.classList.contains('active');
                 leg.style.display = on ? '' : 'none';
                 ltog.classList.toggle('active', on);
             });
             document.body.appendChild(ltog);
+        }
+
+        // Labels toggle — sits in the top-left stack under the Legend
+        // toggle (Basins → Legend → Labels). Reuses the same pill
+        // styling so the three controls read as one column. Default
+        // ON so geographic context is visible unless the user opts out.
+        if (!document.getElementById('ir-labels-toggle')) {
+            var labtog = document.createElement('button');
+            labtog.id = 'ir-labels-toggle';
+            labtog.className = 'ir-legend-toggle ir-labels-toggle-pos';
+            labtog.type = 'button';
+            labtog.title = 'Show / hide country & city labels on the basemap';
+            labtog.innerHTML = '⌖ Labels';
+            if (_labelsVisible) labtog.classList.add('active');
+            labtog.addEventListener('click', function () { toggleLabels(); });
+            document.body.appendChild(labtog);
         }
 
         // Add IR Tb colorbar to global map (bottom-left, above animation panel)

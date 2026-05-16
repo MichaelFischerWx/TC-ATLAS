@@ -1695,18 +1695,12 @@ html, body { margin: 0; padding: 0; }
     color: #ffffff;
 }
 
-/* Imagery row that holds [IR ⇄ GeoColor] beside the Labels chip. */
-.ir-basemap-row {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-}
-/* Compact Labels toggle — single-word chip, same dark pill as other
-   utility buttons but smaller padding so it sits flush with the
-   segmented IR/GeoColor switcher height-wise. */
-.ir-labels-toggle {
-    padding: 4px 10px;
-    font-size: 0.7rem;
+/* Labels toggle position — sits in the top-left stack underneath the
+   Legend toggle (Basins 170px → Legend 208px → Labels 246px). Reuses
+   the .ir-legend-toggle pill styling for visual consistency across
+   the three buttons. */
+.ir-labels-toggle-pos {
+    top: 246px !important;
 }
 
 /* The unified Layers dropdown — wider than the old single-purpose
