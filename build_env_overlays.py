@@ -1294,10 +1294,12 @@ def build_genesis_prob(csv_text: str, lead_days: int, valid_time: str
         field = np.full((NY, NX), np.nan, dtype=np.float32)
     else:
         # Mask near-zero cells to NaN so the basemap shows through
-        # everywhere outside the active genesis area — keeps the focus
-        # on where TCs ARE likely to form rather than papering the
-        # whole globe in pale yellow.
-        field = np.where(field > 0.5, field, np.nan).astype(np.float32)
+        # everywhere outside the active genesis area. Threshold 0.1%
+        # (not 0.5%) because Gaussian smoothing with σ=4.5 cells
+        # spreads each member's genesis impulse over ~127 cells, so
+        # post-smooth peaks for tight clusters land in the ~0.3-2%
+        # range. A 0.5% mask hid the entire signal on quieter days.
+        field = np.where(field > 0.1, field, np.nan).astype(np.float32)
         field = regrid_to_global(field)
 
     spec = LayerSpec(

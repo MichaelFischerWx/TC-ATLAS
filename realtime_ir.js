@@ -5233,9 +5233,9 @@
             btn.classList.toggle('active', _rtGlobalWLVisible);
             // Visually echo the active state via inline styles (matches GeoColor toggle)
             if (_rtGlobalWLVisible) {
-                btn.style.background = 'rgba(0, 229, 255, 0.2)';
-                btn.style.color = '#7fefff';
-                btn.style.borderColor = 'rgba(0, 229, 255, 0.55)';
+                btn.style.background = 'rgba(74, 155, 110, 0.22)';
+                btn.style.color = '#6cb78a';
+                btn.style.borderColor = 'rgba(74, 155, 110, 0.55)';
             } else {
                 btn.style.background = 'rgba(15,33,64,0.88)';
                 btn.style.color = '#8b9ec2';
@@ -5702,73 +5702,95 @@
         }
     });
 
-    /** Draw a single wind barb at (x, y) given u, v in m/s.
-     *  Standard meteorological convention: barbs point toward the
-     *  direction the wind is coming FROM. Flag = 50 kt, full bar =
-     *  10 kt, half bar = 5 kt. Flags on right side (SH) or left
-     *  side (NH) — though most operational charts use a single side
-     *  globally; we follow the hemispheric convention for clarity. */
+    /**
+     * Draw a single WMO-convention wind barb at (x, y) given (u, v) in
+     * m/s. Style mirrors the climatology globe's `vendor/gc-atlas/
+     * barbs.js`: tight glyph packing, cream "print ink" color, no
+     * calm-marker circle, pennants→full feathers→half feather from
+     * the tail (upwind end). NH places feathers on the observer's
+     * LEFT when looking from station toward upwind (rotated -x);
+     * SH flips to the RIGHT per Michael's request — most operational
+     * charts use NH-only, but flipping is the geographically correct
+     * thing to do.
+     *
+     * Glyph speeds:  pennant = 50 kt, full feather = 10 kt, half = 5 kt.
+     */
     function _drawWindBarb(ctx, x, y, u, v, isSH) {
         var speed_kt = Math.sqrt(u * u + v * v) * 1.94384;
-        if (speed_kt < 2.5) {
-            ctx.beginPath();
-            ctx.arc(x, y, 2.2, 0, 2 * Math.PI);
-            ctx.stroke();
-            return;
-        }
-        // Wind direction "from" angle. atan2(u, v) gives angle from
-        // north, clockwise (meteorological convention).
-        var fromAngle = Math.atan2(u, v);
+        if (speed_kt < 3) return;  // calm — render nothing (matches climatology)
+
+        // Canvas-frame rotation that places the staff's tip (drawn at
+        // rotated +y below) in the UPWIND direction. Working from the
+        // ctx.rotate transform matrix:
+        //   screen_x = x'·cos(θ) − y'·sin(θ)
+        //   screen_y = x'·sin(θ) + y'·cos(θ)
+        // we want (0, STAFF) → upwind on screen. For wind east
+        // (u=1, v=0) upwind is west (screen −x), which requires θ=π/2
+        // = atan2(u, v). For wind north (u=0, v=1) upwind is south
+        // (screen +y), which needs θ=0 = atan2(0, 1) ✓.
+        var fromRot = Math.atan2(u, v);
 
         ctx.save();
         ctx.translate(x, y);
-        // Canvas y axis points DOWN. To draw the staff pointing toward
-        // upwind, we rotate so that the +y axis aligns with the
-        // direction the wind is coming FROM. Canvas rotation rotates
-        // +x to +y by +angle clockwise.
-        ctx.rotate(fromAngle);
+        ctx.rotate(fromRot);
 
-        var staffLen = 18;
-        var barbLen = 8;
+        var STAFF      = 20;
+        var FEATHER    = 8;
+        var FEATHER_H  = 4;
+        var SPACING    = 2.4;     // tight packing (~30% of feather len)
+        var PEN_BASE   = 3.5;     // pennant base along shaft
+
+        // NH: feathers on observer's LEFT when facing upwind. After
+        // rotation by atan2(u, v) above, screen-south (the observer's
+        // left for wind east, generalizing) maps to rotated +x. So
+        // NH side = +1, SH flips to -1.
+        var side = isSH ? -1 : +1;
+
+        // Shaft from station (0,0) to tail (0, +STAFF) — +y is upwind
+        // in the rotated frame after the fromRot rotation above.
         ctx.beginPath();
         ctx.moveTo(0, 0);
-        ctx.lineTo(0, -staffLen);
+        ctx.lineTo(0, STAFF);
         ctx.stroke();
 
-        var rounded = Math.round(speed_kt / 5) * 5;
-        var yOff = -staffLen;
-        var side = isSH ? -1 : 1;
-        var spacing = 4;
+        // Speed decomposition (rounded down to 5-kt increments).
+        var kt = speed_kt;
+        var nPen  = Math.floor(kt / 50); kt -= nPen  * 50;
+        var nFull = Math.floor(kt / 10); kt -= nFull * 10;
+        var nHalf = (kt >= 4.5) ? 1 : 0;
 
-        while (rounded >= 50) {
+        // Pennants closest to the tail (upwind tip), then feathers,
+        // then a half feather. pos walks from the tail back toward
+        // the station along the shaft.
+        var pos = STAFF;
+
+        for (var i = 0; i < nPen; i++) {
             ctx.beginPath();
-            ctx.moveTo(0, yOff);
-            ctx.lineTo(side * barbLen, yOff);
-            ctx.lineTo(0, yOff + spacing);
+            ctx.moveTo(0, pos);
+            ctx.lineTo(0, pos - PEN_BASE);
+            ctx.lineTo(side * FEATHER, pos);
             ctx.closePath();
             ctx.fill();
-            yOff += spacing + 1;
-            rounded -= 50;
+            pos -= PEN_BASE + SPACING * 0.5;
         }
-        var firstBar = (rounded > 0);
-        while (rounded >= 10) {
+        for (var f = 0; f < nFull; f++) {
             ctx.beginPath();
-            ctx.moveTo(0, yOff);
-            ctx.lineTo(side * barbLen, yOff - 3);
+            ctx.moveTo(0, pos);
+            ctx.lineTo(side * FEATHER, pos);
             ctx.stroke();
-            yOff += spacing;
-            rounded -= 10;
-            firstBar = false;
+            pos -= SPACING;
         }
-        if (rounded >= 5) {
-            // Half-barbs sit one notch in from the tip if no bars
-            // precede them (so they don't ride at the very end alone).
-            if (firstBar) yOff -= spacing * 0.5;
+        if (nHalf) {
+            // Set back one notch if the half feather is the only glyph
+            // (matches the climatology globe convention so it doesn't
+            // ride at the very tip alone).
+            if (nPen === 0 && nFull === 0) pos -= SPACING;
             ctx.beginPath();
-            ctx.moveTo(0, yOff);
-            ctx.lineTo(side * (barbLen * 0.55), yOff - 2);
+            ctx.moveTo(0, pos);
+            ctx.lineTo(side * FEATHER_H, pos);
             ctx.stroke();
         }
+
         ctx.restore();
     }
 
@@ -6225,9 +6247,9 @@
             var anyOn = !!(_rtEnvActive.winds_850 || _rtEnvActive.winds_700
                 || _rtEnvActive.winds_500 || _rtEnvActive.winds_200);
             if (_rtWindsMenuOpen || anyOn) {
-                btn.style.background = 'rgba(0, 229, 255, 0.18)';
-                btn.style.color = '#7fefff';
-                btn.style.borderColor = 'rgba(0, 229, 255, 0.50)';
+                btn.style.background = 'rgba(74, 155, 110, 0.22)';
+                btn.style.color = '#6cb78a';
+                btn.style.borderColor = 'rgba(74, 155, 110, 0.55)';
             } else {
                 btn.style.background = 'rgba(15,33,64,0.88)';
                 btn.style.color = '#8b9ec2';
@@ -6297,9 +6319,9 @@
         var anyOn = !!(_rtEnvActive.winds_850 || _rtEnvActive.winds_700
             || _rtEnvActive.winds_500 || _rtEnvActive.winds_200);
         if (_rtWindsMenuOpen || anyOn) {
-            btn.style.background = 'rgba(0, 229, 255, 0.18)';
-            btn.style.color = '#7fefff';
-            btn.style.borderColor = 'rgba(0, 229, 255, 0.50)';
+            btn.style.background = 'rgba(74, 155, 110, 0.22)';
+            btn.style.color = '#6cb78a';
+            btn.style.borderColor = 'rgba(74, 155, 110, 0.55)';
         } else {
             btn.style.background = 'rgba(15,33,64,0.88)';
             btn.style.color = '#8b9ec2';
@@ -6314,9 +6336,9 @@
         if (menu) menu.style.display = _rtEnvMenuOpen ? '' : 'none';
         if (btn) {
             if (_rtEnvMenuOpen) {
-                btn.style.background = 'rgba(0, 229, 255, 0.2)';
-                btn.style.color = '#7fefff';
-                btn.style.borderColor = 'rgba(0, 229, 255, 0.55)';
+                btn.style.background = 'rgba(74, 155, 110, 0.22)';
+                btn.style.color = '#6cb78a';
+                btn.style.borderColor = 'rgba(74, 155, 110, 0.55)';
             } else {
                 btn.style.background = 'rgba(15,33,64,0.88)';
                 btn.style.color = '#8b9ec2';

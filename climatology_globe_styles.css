@@ -464,3 +464,19 @@
 .field-info-popover .fi-body  { margin-bottom: 6px; }
 .field-info-popover .fi-meta  { margin-bottom: 6px; font-size: 0.66rem; }
 .field-info-popover .fi-learn a { font-size: 0.7rem; }
+
+/* ── GIF export modal text overrides ─────────────────────────────────
+   The vendor globe.css uses --paper / --sage for the text inside the
+   .gif-modal-card, but those engine tokens were repurposed in this
+   stylesheet to be dark-on-light (primary text on a light page bg).
+   The modal's own background is always a hardcoded dark green
+   (rgba(14, 32, 28, 0.97)) — applying dark-on-light text against it
+   gives near-zero contrast in light theme. Pin the modal text to
+   explicit light colors regardless of theme. */
+.gif-modal-card,
+.gif-modal-head,
+.gif-opt-title { color: #e6efe9 !important; }
+.gif-opt-sub   { color: #aec3b6 !important; }
+.gif-close     { color: #8bb0a1 !important; }
+.gif-close:hover { color: #e6efe9 !important; }
+.gif-opt-hint  { color: #e8c26a !important; }
