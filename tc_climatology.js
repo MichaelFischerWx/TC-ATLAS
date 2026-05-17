@@ -2475,7 +2475,7 @@ function _renderActivityDial() {
         showlegend: true,
         legend: { orientation: 'h', y: -0.05 },
         height: 460,
-        margin: { l: 30, r: 30, t: 20, b: 60 },
+        margin: { l: 30, r: 30, t: 20, b: 90 },
     });
     delete layout.xaxis; delete layout.yaxis;
     Plotly.newPlot('sub-dial-chart', traces, layout, PLOTLY_CONFIG);
@@ -2587,7 +2587,7 @@ function _renderIntensityDial() {
         showlegend: true,
         legend: { orientation: 'h', y: -0.05 },
         height: 460,
-        margin: { l: 30, r: 30, t: 20, b: 60 },
+        margin: { l: 30, r: 30, t: 20, b: 90 },
     });
     delete layout.xaxis; delete layout.yaxis;
     Plotly.newPlot('sub-ri-chart', traces, layout, PLOTLY_CONFIG);
