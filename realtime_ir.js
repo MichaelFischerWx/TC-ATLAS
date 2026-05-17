@@ -512,7 +512,14 @@
     var _rtEnvLoading = false;
     var _rtEnvActive = {};             // { layerName: { overlay, opacity } }
     var _rtEnvMenuOpen = false;
-    var _rtEnvOpacity = 0.65;
+    // Default opacity for filled raster overlays (RH, SST, MSLP, genesis_prob,
+    // divergence). 0.85 keeps the colors readable while still letting just
+    // enough of the IR underlay show through to give geographic context.
+    // 0.65 (the previous default) had too much IR bleed-through — colorful
+    // cloud-top pixels showed through under the env layer and confused the
+    // visual reading. User can drag the slider lower if they want a
+    // stronger crossfade.
+    var _rtEnvOpacity = 0.85;
 
     // Formats WeatherLab size fields (rmw_km, r34/r50/r64 mean + per-quadrant)
     // for tooltip / popup HTML. Returns '' if no size data is available so

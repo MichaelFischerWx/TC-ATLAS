@@ -451,11 +451,61 @@ def _render_filled_png(field: np.ndarray, spec: LayerSpec) -> bytes:
     return buf.getvalue()
 
 
+# Maximum latitude that Web Mercator can represent without diverging.
+# Used for the y-axis limit of warped layer PNGs so Leaflet's L.imageOverlay
+# can place them at the correct geographic latitudes on a Mercator basemap.
+WEB_MERC_LAT_MAX = 85.05112877980659  # arctan(sinh(pi)) * 180/pi
+
+def _warp_eq_to_mercator(field: np.ndarray, ny_out: Optional[int] = None
+                         ) -> np.ndarray:
+    """Re-sample an equirectangular field (lat ∈ [+90, -90], rows top→bottom)
+    onto a Web Mercator pixel grid (lat ∈ [+85.05, -85.05], rows top→bottom
+    spaced uniformly in Mercator y).
+
+    Leaflet's L.imageOverlay places an image inside lat/lon bounds by
+    CSS-stretching it linearly between the *projected* corner positions.
+    On a Mercator basemap that means an equirectangular source is
+    geographically displaced at every non-equatorial latitude — at 14°N
+    the source row representing 14° actually paints at the screen
+    position equivalent to ~26°N (a ~13° vertical shift). Pre-warping
+    the field to Mercator pixel-space makes the linear stretch correct.
+
+    NaN cells are preserved (nearest-neighbor sampling so band edges
+    don't blur across masked regions).
+    """
+    ny_in, nx_in = field.shape
+    if ny_out is None:
+        ny_out = ny_in
+    # Mercator y for the top/bottom rows of the output. We use ±MAX_LAT
+    # rather than ±90 because Mercator diverges at the poles; the GIBS
+    # tile basemap uses the same cap.
+    max_my = np.log(np.tan(np.pi/4 + np.radians(WEB_MERC_LAT_MAX) / 2))
+    # Inverse Mercator for each output row's center pixel.
+    rows_out = np.arange(ny_out, dtype=np.float64)
+    # Linear in Mercator y from +max_my (top) to -max_my (bottom).
+    merc_y = max_my - (rows_out + 0.5) / ny_out * (2 * max_my)
+    lats = np.degrees(np.arctan(np.sinh(merc_y)))
+    # Equirectangular source row for each target lat. Nearest neighbor.
+    src_rows = np.clip(np.round((90.0 - lats) / 180.0 * ny_in).astype(int),
+                       0, ny_in - 1)
+    return field[src_rows, :].copy()
+
+
 def render_layer_png(field: np.ndarray, spec: LayerSpec) -> bytes:
-    """Dispatch to the contour or filled renderer based on render_style."""
+    """Dispatch to the contour or filled renderer based on render_style.
+
+    Both variants warp the field to Web Mercator pixel-space before
+    encoding so L.imageOverlay's linear CSS-stretch produces a
+    geographically-correct display on the Mercator basemap. (Without
+    the warp, equirectangular pixels are displaced vertically — at
+    14°N the image data lands ~13° too far north on screen.) The
+    contour-layer GeoJSON sidecar uses real lat/lon polylines and is
+    already projection-correct via L.geoJSON's per-point projection;
+    this warp only matters for the raster fallback path."""
+    warped = _warp_eq_to_mercator(field)
     if spec.render_style == "filled":
-        return _render_filled_png(field, spec)
-    return _render_contour_png(field, spec)
+        return _render_filled_png(warped, spec)
+    return _render_contour_png(warped, spec)
 
 
 def render_contour_geojson(field: np.ndarray, spec: LayerSpec) -> bytes:
@@ -712,9 +762,17 @@ def upload_layer(spec: LayerSpec, field: np.ndarray) -> bool:
         # rendered contour band without clipping.
         "data_vmin": spec.data_vmin if spec.data_vmin is not None else spec.vmin,
         "data_vmax": spec.data_vmax if spec.data_vmax is not None else spec.vmax,
-        # Native grid is global 0.25° in (-180, 180) x (90, -90); these
-        # bounds are how Leaflet's imageOverlay should anchor the PNG.
-        "bounds": [[-90.0, -180.0], [90.0, 180.0]],
+        # Visualization PNG is Mercator-warped (see _warp_eq_to_mercator)
+        # so L.imageOverlay's linear stretch produces the correct
+        # geographic position on a Web Mercator basemap. Bounds anchor
+        # to the Mercator pole-cap latitude (±85.05°) — the same limit
+        # Leaflet, GIBS tiles, and EPSG:3857 use.
+        "bounds": [[-WEB_MERC_LAT_MAX, -180.0], [WEB_MERC_LAT_MAX, 180.0]],
+        # Data PNG used for hover sampling is the RAW equirectangular
+        # field at 0.25° (90→-90 lat top-to-bottom, -180→180 lon left
+        # -to-right). Frontend samples with lat → row math; do NOT
+        # apply the Mercator warp here.
+        "data_bounds": [[-90.0, -180.0], [90.0, 180.0]],
         "grid": {"nx": NX, "ny": NY},
         "colorbar_stops": build_colormap_stops(spec.cmap),
         "levels": levels,
