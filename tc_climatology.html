@@ -871,6 +871,74 @@
                     <span style="opacity:0.7;">Hover any marker for the date · click to drill that phase's composite.</span>
                 </div>
 
+                <!-- Historical-window overlay. Picks any past date range
+                     from the active mode's record and overlays its
+                     PC1/PC2 trajectory on the same diagram so users can
+                     compare today's evolution to analog events
+                     (e.g., 1997 super-El Niño, the 2015-16 MJO blitz). -->
+                <div id="sub-evo-historical-panel"
+                     style="display:flex; flex-wrap:wrap; gap:8px 14px; align-items:center;
+                            margin:6px 0 4px; padding:8px 10px;
+                            border:1px dashed var(--border, rgba(0,0,0,0.15));
+                            border-radius:6px; font-size:0.72rem;">
+                    <label class="field-label" style="margin:0; font-size:0.66rem; opacity:0.75;">
+                        Historical overlay:
+                    </label>
+                    <div style="display:flex; gap:6px; align-items:center;">
+                        <input type="date" id="sub-evo-hist-start"
+                               style="font-size:0.72rem; padding:2px 4px;" />
+                        <span style="opacity:0.6;">→</span>
+                        <input type="date" id="sub-evo-hist-end"
+                               style="font-size:0.72rem; padding:2px 4px;" />
+                    </div>
+                    <div class="segmented" id="sub-evo-hist-presets" role="group"
+                         aria-label="Historical preset"
+                         style="display:flex; flex-wrap:wrap; gap:4px;">
+                        <button type="button" data-hist-preset="1997-mam"
+                                title="Mar–Jun 1997: super-El Niño onset, very active MJO.">
+                            Mar–Jun 1997
+                        </button>
+                        <button type="button" data-hist-preset="2015-djf"
+                                title="Nov 2015 – Feb 2016: record El Niño + sustained MJO blitz.">
+                            Nov 2015–Feb 2016
+                        </button>
+                        <button type="button" data-hist-preset="2010-jas"
+                                title="Jul–Sep 2010: extreme La Niña, very active Atlantic season.">
+                            Jul–Sep 2010
+                        </button>
+                        <button type="button" data-hist-preset="2017-aso"
+                                title="Aug–Oct 2017: Harvey/Irma/Maria — slow eastward MJO + favorable Atlantic.">
+                            Aug–Oct 2017
+                        </button>
+                    </div>
+                    <button type="button" id="sub-evo-hist-apply"
+                            style="font-size:0.7rem; padding:2px 10px; cursor:pointer;">
+                        Apply
+                    </button>
+                    <button type="button" id="sub-evo-hist-clear"
+                            style="font-size:0.7rem; padding:2px 10px; cursor:pointer; opacity:0.7;">
+                        Clear
+                    </button>
+                    <span id="sub-evo-hist-status" style="opacity:0.7; font-style:italic;"></span>
+
+                    <!-- Quick-compare: reuse the recent window's calendar
+                         dates but from a user-picked year. The strongest
+                         analog comparison — same day-of-year, same
+                         seasonal cycle, just a different year. -->
+                    <span style="opacity:0.5;">|</span>
+                    <label class="field-label" style="margin:0; font-size:0.66rem; opacity:0.75;">
+                        Same dates from year:
+                    </label>
+                    <input type="number" id="sub-evo-hist-year"
+                           inputmode="numeric" min="1974" max="2026" step="1"
+                           placeholder="e.g. 1997"
+                           style="width:90px; font-size:0.72rem; padding:2px 4px;" />
+                    <button type="button" id="sub-evo-hist-year-apply"
+                            style="font-size:0.7rem; padding:2px 10px; cursor:pointer;">
+                        Apply year
+                    </button>
+                </div>
+
                 <div class="ace-chart-wrap" style="margin-top:8px;">
                     <h3 class="ace-section-title">Phase diagram (PC1, PC2)
                         <span class="ace-hint" style="opacity:0.7;">Wheeler-Hendon convention · dashed circle = amp 1 threshold</span>
@@ -892,7 +960,7 @@
     <!-- Scripts -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
-    <script src="subseasonal_clock.js?v=20260517a"></script>
-    <script src="tc_climatology.js?v=20260516a"></script>
+    <script src="subseasonal_clock.js?v=20260517b"></script>
+    <script src="tc_climatology.js?v=20260517b"></script>
 </body>
 </html>
