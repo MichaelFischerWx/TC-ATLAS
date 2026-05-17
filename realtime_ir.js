@@ -6433,6 +6433,24 @@
                 if (L_.name === 'rh_700_400') return '700-400 hPa RH';
                 return 'Sea-Surface Temperature';
             }
+        },
+        {
+            // Wheeler-Kiladis-filtered OLR overlays produced by
+            // build_subseasonal_overlays.py. Lets users layer real-time
+            // MJO / Kelvin / ER / MRG forcing on top of the IR map to
+            // contextualize active TC genesis vs the wave envelope.
+            label: 'Subseasonal Forcing',
+            match: function (L_) { return L_.category === 'subseasonal'; },
+            shortTitle: function (L_) {
+                var labels = {
+                    anomaly: 'OLR anomaly',
+                    mjo:     'MJO band (30-96 d)',
+                    kelvin:  'Kelvin band (h=8-90 m)',
+                    er:      'Equatorial Rossby (n=1)',
+                    mrg:     'MRG / TD-type (3-8 d)',
+                };
+                return labels[L_.name] || L_.title;
+            }
         }
     ];
 

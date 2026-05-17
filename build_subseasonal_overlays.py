@@ -428,37 +428,69 @@ def wk_filter(field, spec: WaveSpec):
 # Rendering
 # --------------------------------------------------------------------------
 
+WEB_MERC_LAT_MAX = 85.05112877980659  # arctan(sinh(pi)) * 180/pi
+
+
+def _warp_eq_to_mercator(field: np.ndarray, ny_out: Optional[int] = None
+                         ) -> np.ndarray:
+    """Re-sample an equirectangular field (lat ∈ [+90, -90], rows top→bottom)
+    onto a Web Mercator pixel grid (lat ∈ [+85.05, -85.05]). Mirrors the
+    helper of the same name in build_env_overlays.py; copied rather than
+    imported to keep this script self-contained for Cloud Run packaging.
+
+    Without this warp, an equirectangular source PNG dropped onto
+    Leaflet's Mercator basemap visually displaces every non-equatorial
+    latitude — at 14°N the data lands at the screen position of ~26°N.
+    """
+    ny_in, nx_in = field.shape
+    if ny_out is None:
+        ny_out = ny_in
+    max_my = np.log(np.tan(np.pi/4 + np.radians(WEB_MERC_LAT_MAX) / 2))
+    rows_out = np.arange(ny_out, dtype=np.float64)
+    merc_y = max_my - (rows_out + 0.5) / ny_out * (2 * max_my)
+    lats = np.degrees(np.arctan(np.sinh(merc_y)))
+    src_rows = np.clip(np.round((90.0 - lats) / 180.0 * ny_in).astype(int),
+                       0, ny_in - 1)
+    return field[src_rows, :].copy()
+
+
 def render_png(field2d: np.ndarray, lats: np.ndarray, lons: np.ndarray,
                spec: WaveSpec) -> bytes:
-    """Render a 2D field as a global PNG with diverging colormap.
+    """Render a 2D field as a Mercator-warped global PNG.
 
-    Output is a global equirectangular image with transparent background
-    so it composites cleanly over an L.imageOverlay. Returns PNG bytes.
+    Output is a global image in Web Mercator pixel-space (lat range
+    ±85.05°) with transparent background. The metadata bounds returned
+    by the caller must match (±WEB_MERC_LAT_MAX, ±180°) for L.imageOverlay
+    to align correctly on the Mercator basemap. Returns PNG bytes.
     """
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib.colors import TwoSlopeNorm
 
-    # Re-order so latitude is south → north (Leaflet expects [-90, 90])
-    lat_order = np.argsort(lats)
+    # Reorder lat to N→S (the convention _warp_eq_to_mercator expects)
+    lat_order = np.argsort(-lats)
     field2d = field2d[lat_order, :]
-    lats = lats[lat_order]
     # Shift longitude to [-180, 180] from [0, 360]
     lon_order = np.argsort(((lons + 180) % 360) - 180)
     field2d = field2d[:, lon_order]
-    lons_180 = ((lons[lon_order] + 180) % 360) - 180
+
+    # Apply Mercator warp so the PNG is geographically aligned when
+    # CSS-stretched between ±WEB_MERC_LAT_MAX, ±180° corners by Leaflet.
+    warped = _warp_eq_to_mercator(field2d)
 
     fig = plt.figure(figsize=(NX / 100, NY / 100), dpi=100)
     ax = fig.add_axes([0, 0, 1, 1])
     ax.set_axis_off()
     norm = TwoSlopeNorm(vcenter=0.0, vmin=spec.vmin, vmax=spec.vmax)
+    # Rows are now top→bottom = +MAX_LAT → -MAX_LAT. imshow's default
+    # origin='upper' matches that, so no flip needed.
     ax.imshow(
-        field2d,
+        warped,
         cmap=spec.cmap,
         norm=norm,
-        extent=[lons_180.min(), lons_180.max(), lats.min(), lats.max()],
-        origin="lower",
+        extent=[-180, 180, -WEB_MERC_LAT_MAX, WEB_MERC_LAT_MAX],
+        origin="upper",
         interpolation="bilinear",
         aspect="auto",
     )
@@ -469,14 +501,20 @@ def render_png(field2d: np.ndarray, lats: np.ndarray, lons: np.ndarray,
     return buf.getvalue()
 
 
-def write_local(out_dir: Path, spec: WaveSpec, png: bytes, valid_time: str,
-                bounds: dict):
-    out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / f"{spec.name}.png").write_bytes(png)
-    meta = {
+GCS_BUCKET = os.environ.get("GCS_IR_CACHE_BUCKET", "tc-atlas-ir-cache")
+GCS_PREFIX = "subseasonal"   # gs://{bucket}/{prefix}/{wave}/{latest.png|metadata.json}
+
+
+def _meta_dict(spec: WaveSpec, valid_time: str, bounds: list,
+               image_url: Optional[str] = None) -> dict:
+    """Shared metadata payload for both local + GCS outputs. The frontend
+    reads metadata.json to learn the public PNG URL, colorbar range,
+    valid date, and bounds for L.imageOverlay."""
+    d = {
         "name": spec.name,
         "title": spec.title,
         "description": spec.description,
+        "category": "subseasonal",
         "valid_time": valid_time,
         "units": "W/m²",
         "vmin": spec.vmin,
@@ -484,7 +522,54 @@ def write_local(out_dir: Path, spec: WaveSpec, png: bytes, valid_time: str,
         "cmap": spec.cmap,
         "bounds": bounds,
     }
+    if image_url:
+        d["image_url"] = image_url
+    return d
+
+
+def write_local(out_dir: Path, spec: WaveSpec, png: bytes, valid_time: str,
+                bounds: list):
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / f"{spec.name}.png").write_bytes(png)
+    meta = _meta_dict(spec, valid_time, bounds)
     (out_dir / f"{spec.name}.json").write_text(json.dumps(meta, indent=2))
+
+
+def upload_gcs(spec: WaveSpec, png: bytes, valid_time: str, bounds: list) -> bool:
+    """Upload latest.png + metadata.json to
+        gs://{GCS_BUCKET}/{GCS_PREFIX}/{spec.name}/
+
+    Mirrors the pattern of build_env_overlays.upload_layer. Returns
+    True on success. Cloud Run Job credentials are picked up via the
+    google-cloud-storage default chain.
+    """
+    try:
+        from google.cloud import storage
+    except ImportError:
+        log.error("google-cloud-storage not installed; cannot upload")
+        return False
+    if not GCS_BUCKET:
+        log.error("GCS_IR_CACHE_BUCKET not set; cannot upload")
+        return False
+
+    client = storage.Client()
+    bucket = client.bucket(GCS_BUCKET)
+    png_blob  = bucket.blob(f"{GCS_PREFIX}/{spec.name}/latest.png")
+    meta_blob = bucket.blob(f"{GCS_PREFIX}/{spec.name}/metadata.json")
+
+    image_url = (f"https://storage.googleapis.com/{GCS_BUCKET}/"
+                 f"{GCS_PREFIX}/{spec.name}/latest.png")
+    meta = _meta_dict(spec, valid_time, bounds, image_url=image_url)
+
+    png_blob.cache_control = "public, max-age=600"
+    png_blob.upload_from_string(png, content_type="image/png")
+
+    meta_blob.cache_control = "public, max-age=600"
+    meta_blob.upload_from_string(json.dumps(meta), content_type="application/json")
+
+    log.info("  uploaded gs://%s/%s/%s/{latest.png,metadata.json}",
+             GCS_BUCKET, GCS_PREFIX, spec.name)
+    return True
 
 
 # --------------------------------------------------------------------------
@@ -500,7 +585,7 @@ def main():
     parser.add_argument("--date", default=None,
                         help="Override 'today' (ISO date). Default: latest in OPeNDAP.")
     parser.add_argument("--local-only", action="store_true",
-                        help="Skip GCS upload. Always true today; reserved for parity.")
+                        help="Skip GCS upload. Outputs to --out only.")
     args = parser.parse_args()
 
     out_dir = Path(args.out)
@@ -525,11 +610,12 @@ def main():
 
     lats = anom.lat.values
     lons = anom.lon.values
-    bounds = {
-        "south": float(lats.min()), "north": float(lats.max()),
-        "west":  float(((lons.min() + 180) % 360) - 180),
-        "east":  float(((lons.max() + 180) % 360) - 180),
-    }
+    # Bounds match the rendered (Mercator-warped) PNG so L.imageOverlay
+    # aligns the image correctly on the Mercator basemap. The underlying
+    # data covers ±90° but the warp truncates to ±WEB_MERC_LAT_MAX. The
+    # array shape [[south, west], [north, east]] matches what the RT
+    # Monitor's env-layer activation reads directly from layer.bounds.
+    bounds = [[-WEB_MERC_LAT_MAX, -180.0], [WEB_MERC_LAT_MAX, 180.0]]
 
     for spec in WAVE_SPECS:
         log.info("--- Building %s overlay ---", spec.name)
@@ -549,8 +635,14 @@ def main():
         png = render_png(latest, lats, lons, spec)
         write_local(out_dir, spec, png, valid_time_iso, bounds)
         log.info("  wrote %s.png (%d bytes)", spec.name, len(png))
+        if not args.local_only:
+            try:
+                upload_gcs(spec, png, valid_time_iso, bounds)
+            except Exception as e:
+                log.exception("GCS upload failed for %s: %s", spec.name, e)
 
-    log.info("Done. Outputs in %s", out_dir)
+    log.info("Done. Outputs in %s%s",
+             out_dir, "" if args.local_only else f" + gs://{GCS_BUCKET}/{GCS_PREFIX}/")
 
 
 if __name__ == "__main__":

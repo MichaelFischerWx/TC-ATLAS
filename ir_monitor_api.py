@@ -3643,26 +3643,36 @@ def get_env_layers():
 
     # Known layer names — kept in code (not auto-discovered) so the
     # endpoint stays fast and we don't enumerate the whole bucket.
+    # Each entry is (gcs_prefix, layer_name). The metadata.json carries
+    # the `category` field which the frontend uses for menu grouping.
     known = (
-        "mslp",
-        "shear_200_850", "shear_500_850",
-        "vort_850", "vort_700", "vort_500",
-        "div_850", "div_200",
-        "z500_heights",
-        "winds_10m", "winds_850", "winds_700", "winds_500", "winds_200",
-        "rh_700_400", "sst_oisst",
-        "genesis_prob_2d", "genesis_prob_7d", "genesis_prob_14d",
+        ("env", "mslp"),
+        ("env", "shear_200_850"), ("env", "shear_500_850"),
+        ("env", "vort_850"), ("env", "vort_700"), ("env", "vort_500"),
+        ("env", "div_850"), ("env", "div_200"),
+        ("env", "z500_heights"),
+        ("env", "winds_10m"), ("env", "winds_850"),
+        ("env", "winds_700"), ("env", "winds_500"), ("env", "winds_200"),
+        ("env", "rh_700_400"), ("env", "sst_oisst"),
+        ("env", "genesis_prob_2d"), ("env", "genesis_prob_7d"), ("env", "genesis_prob_14d"),
+        # Subseasonal forcing overlays — Wheeler-Kiladis-filtered OLR
+        # (build_subseasonal_overlays.py Cloud Run Job).
+        ("subseasonal", "anomaly"),
+        ("subseasonal", "mjo"),
+        ("subseasonal", "kelvin"),
+        ("subseasonal", "er"),
+        ("subseasonal", "mrg"),
     )
     layers = []
-    for name in known:
+    for prefix, name in known:
         try:
-            blob = bucket.blob(f"env/{name}/metadata.json")
+            blob = bucket.blob(f"{prefix}/{name}/metadata.json")
             if not blob.exists():
                 continue
             meta = json.loads(blob.download_as_text())
             layers.append(meta)
         except Exception as e:
-            logger.warning(f"env/{name}/metadata.json read failed: {e}")
+            logger.warning(f"{prefix}/{name}/metadata.json read failed: {e}")
 
     return JSONResponse(
         content={"layers": layers, "count": len(layers)},
