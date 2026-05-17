@@ -6387,6 +6387,13 @@
             }
         },
         {
+            label: 'Divergence',
+            match: function (L_) { return L_.name.indexOf('div_') === 0; },
+            shortTitle: function (L_) {
+                return L_.title.replace(/\s*hPa Divergence\s*/i, ' hPa');
+            }
+        },
+        {
             label: 'Heights',
             match: function (L_) { return L_.name.indexOf('z') === 0 && L_.name.indexOf('_heights') > 0; },
             shortTitle: function (L_) {

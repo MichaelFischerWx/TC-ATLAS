@@ -1149,6 +1149,94 @@ def build_z500_heights(date_str: str, hour_str: str) -> Optional[bytes]:
     return z_s if upload_layer(spec, z_s) else None
 
 
+def build_divergence(date_str: str, hour_str: str, level: int
+                     ) -> Optional[bytes]:
+    """Horizontal mass divergence at the given pressure level (e.g. 850,
+    200 hPa) in 10⁻⁵ s⁻¹. Signed: negative = convergence, positive =
+    divergence. Pairs naturally to tell the genesis-favorable story
+    (850 mb convergence beneath 200 mb divergence).
+
+    div(V) = ∂u/∂x + ∂v/∂y, centered finite differences on the 0.25°
+    grid with dx = R·cos(φ)·Δλ to honor the spherical Earth so high-
+    latitude grid spacing doesn't blow up the derivative. u, v are
+    200 km disc-smoothed before differencing — divergence is small-
+    scale, same kernel as vorticity. No hemispheric sign flip (unlike
+    vorticity): divergence has the same physical sign in both
+    hemispheres.
+
+    Rendered with a diverging RdBu_r colormap: blue = convergence,
+    red = divergence.
+    """
+    log.info("Building divergence: GFS %s %sZ at %d hPa",
+             date_str, hour_str, level)
+    u_grib = fetch_gfs_global(date_str, hour_str, [level], "UGRD")
+    v_grib = fetch_gfs_global(date_str, hour_str, [level], "VGRD")
+    if not u_grib or not v_grib:
+        log.error("Divergence: GFS fetch failed at %d hPa", level)
+        return None
+
+    u = read_gfs_field(u_grib, level, "UGRD")
+    v = read_gfs_field(v_grib, level, "VGRD")
+    if u is None or v is None:
+        log.error("Divergence: missing u/v at %d hPa", level)
+        return None
+
+    u_s = disc_smooth(u, 200.0)
+    v_s = disc_smooth(v, 200.0)
+
+    R_EARTH = 6.371e6
+    DEG_TO_RAD = np.pi / 180.0
+    dlat_m = 0.25 * DEG_TO_RAD * R_EARTH  # ≈ 27800 m
+    ny, nx = u_s.shape
+    lats = 90.0 - np.arange(ny) * 0.25
+    cos_lat = np.maximum(np.cos(lats * DEG_TO_RAD), 1e-6)
+    dx_m = dlat_m * cos_lat  # (ny,)
+
+    # ∂u/∂x — periodic in longitude.
+    du_dx = (np.roll(u_s, -1, axis=1) - np.roll(u_s, 1, axis=1)) / (2 * dx_m[:, None])
+    # ∂v/∂y — row index increases southward, so y-derivative needs a
+    # sign flip relative to the row derivative. Leave pole rows at 0.
+    dv_dy = np.zeros_like(v_s)
+    dv_dy[1:-1, :] = -(v_s[2:, :] - v_s[:-2, :]) / (2 * dlat_m)
+
+    div = (du_dx + dv_dy) * 1e5  # → 10⁻⁵ s⁻¹
+    div = div.astype(np.float32)
+    # Mask near-zero cells to keep the contour set readable — values
+    # below ±2 × 10⁻⁵ s⁻¹ are inside the noise floor at synoptic scale.
+    div = np.where(np.abs(div) >= 1.5, div, np.nan).astype(np.float32)
+    div = regrid_to_global(div)
+
+    valid = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}T{hour_str}:00:00Z"
+    spec = LayerSpec(
+        name=f"div_{level}",
+        title=f"{level} hPa Divergence",
+        units="10⁻⁵ s⁻¹",
+        vmin=-25,
+        vmax=25,
+        step=5,
+        # Reversed RdBu so red = divergence (positive) and blue =
+        # convergence (negative) — matches NWS/SPC convention.
+        cmap="RdBu_r",
+        # Non-uniform, symmetric ramp: tighter near the noise floor
+        # where synoptic features live, coarser past ±10 where only
+        # TC-scale features reach. 12 entries → 12 colorbar swatches.
+        levels_override=[-20, -15, -10, -6, -3, -1.5, 1.5, 3, 6, 10, 15, 20],
+        data_vmin=-100,
+        data_vmax=100,
+        valid_time=valid,
+        description=(
+            f"Horizontal mass divergence at {level} hPa from the latest "
+            f"GFS 0.25° analysis, after a 200 km disc smooth of u, v. "
+            f"Sign convention: blue (negative) = convergence, red "
+            f"(positive) = divergence. For TC genesis, look for 850 hPa "
+            f"convergence under 200 hPa divergence — the classic vertically-"
+            f"coupled inflow/outflow couplet. Contour set ±[1.5, 3, 6, "
+            f"10, 15, 20] × 10⁻⁵ s⁻¹."
+        ),
+    )
+    return div if upload_layer(spec, div) else None
+
+
 def build_midlevel_rh(date_str: str, hour_str: str) -> Optional[bytes]:
     """700-400 hPa layer-averaged relative humidity (%)."""
     log.info("Building mid-level RH: GFS %s %sZ", date_str, hour_str)
@@ -1472,6 +1560,8 @@ def main() -> int:
         ("vort_850",      lambda: build_vorticity(date_str, hour_str, 850)),
         ("vort_700",      lambda: build_vorticity(date_str, hour_str, 700)),
         ("vort_500",      lambda: build_vorticity(date_str, hour_str, 500)),
+        ("div_850",       lambda: build_divergence(date_str, hour_str, 850)),
+        ("div_200",       lambda: build_divergence(date_str, hour_str, 200)),
         ("z500_heights",  lambda: build_z500_heights(date_str, hour_str)),
         ("winds_850",     lambda: build_winds(date_str, hour_str, 850)),
         ("winds_700",     lambda: build_winds(date_str, hour_str, 700)),

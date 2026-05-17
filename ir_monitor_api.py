@@ -3646,6 +3646,7 @@ def get_env_layers():
     known = (
         "shear_200_850", "shear_500_850",
         "vort_850", "vort_700", "vort_500",
+        "div_850", "div_200",
         "z500_heights",
         "winds_850", "winds_700", "winds_500", "winds_200",
         "rh_700_400", "sst_oisst",
