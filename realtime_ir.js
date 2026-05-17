@@ -6226,7 +6226,12 @@
             html += '<div class="ir-global-menu-section with-divider">Wind Barbs</div>';
             for (var wi = 0; wi < windLayers.length; wi++) {
                 var WL = windLayers[wi];
-                var lvl = WL.title.replace(/\s*hPa Wind Barbs\s*/i, ' hPa');
+                // Compact level label: strip "Wind Barbs" suffix. Handles
+                // both pressure ("850 hPa Wind Barbs" → "850 hPa") and
+                // surface ("10 m Wind Barbs" → "10 m") layers cleanly.
+                var lvl = WL.title
+                    .replace(/\s*hPa Wind Barbs\s*/i, ' hPa')
+                    .replace(/\s*Wind Barbs\s*$/i, '');
                 html += row({
                     action: 'env',
                     dataName: WL.name,
@@ -6371,7 +6376,26 @@
     // Group definition for the Env Analysis menu — collapses the
     // flat 11-layer list into ~4 short physical-category sections so
     // the dropdown doesn't run past the bottom of the map.
+    // Ordered for narrative flow: pressure surfaces (synoptic baseline)
+    // → wind dynamics (shear / vorticity / divergence) → thermodynamics
+    // (moisture + SST). MSLP + z500 are grouped under "Pressure" because
+    // they're both expressions of the pressure field (MSL scalar vs.
+    // height of a constant-pressure surface). Wind barbs live in their
+    // own dedicated menu inside the Layers panel so users can mix-and-
+    // match wind levels with any diagnostic here (e.g. 850 mb vorticity
+    // + 200 mb winds together).
     var _ENV_MENU_GROUPS = [
+        {
+            label: 'Pressure',
+            match: function (L_) {
+                return L_.name === 'mslp'
+                    || (L_.name.indexOf('z') === 0 && L_.name.indexOf('_heights') > 0);
+            },
+            shortTitle: function (L_) {
+                if (L_.name === 'mslp') return 'Mean Sea Level';
+                return L_.title.replace(/\s*hPa Geopotential Height\s*/i, ' hPa');
+            }
+        },
         {
             label: 'Wind Shear',
             match: function (L_) { return L_.name.indexOf('shear_') === 0; },
@@ -6394,13 +6418,6 @@
             }
         },
         {
-            label: 'Heights',
-            match: function (L_) { return L_.name.indexOf('z') === 0 && L_.name.indexOf('_heights') > 0; },
-            shortTitle: function (L_) {
-                return L_.title.replace(/\s*hPa Geopotential Height\s*/i, ' hPa');
-            }
-        },
-        {
             label: 'Moisture & SST',
             match: function (L_) {
                 return L_.name === 'rh_700_400' || L_.name === 'sst_oisst';
@@ -6410,9 +6427,6 @@
                 return 'Sea-Surface Temperature';
             }
         }
-        // Wind barbs intentionally live in their own dedicated menu so
-        // they can be mixed-and-matched with the diagnostics here
-        // (e.g. 850 mb vorticity + 200 mb winds together).
     ];
 
     /** Legacy renderer — superseded by the unified Layers panel. */

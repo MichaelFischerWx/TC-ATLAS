@@ -94,14 +94,16 @@ def latest_gfs_cycle() -> tuple[str, str]:
 
 
 def fetch_gfs_global(date_str: str, hour_str: str,
-                     levels: list[int], var: str) -> Optional[bytes]:
-    """Fetch a global GFS field for one variable across multiple pressure
-    levels. Returns raw GRIB2 bytes or None on failure.
+                     levels: list, var: str) -> Optional[bytes]:
+    """Fetch a global GFS field for one variable across multiple levels.
+    Returns raw GRIB2 bytes or None on failure.
 
-    The cgi-bin filter applies var_X=on and lev_X_mb=on toggles; the
-    output is a sequence of GRIB messages for every (var, level) that
-    exists. Concatenating without subsetting lat/lon gives the full
-    global 1440x721 grid per message.
+    The cgi-bin filter applies var_X=on and lev_X=on toggles; output is
+    a sequence of GRIB messages for every (var, level) that exists.
+
+    `levels` accepts:
+      - int (e.g. 850) → adds `lev_850_mb=on` (pressure level in mb)
+      - str (e.g. "mean_sea_level", "surface") → adds the raw toggle as-is
     """
     import requests
 
@@ -111,7 +113,12 @@ def fetch_gfs_global(date_str: str, hour_str: str,
         (f"var_{var}", "on"),
     ]
     for lev in levels:
-        params.append((f"lev_{lev}_mb", "on"))
+        if isinstance(lev, int):
+            params.append((f"lev_{lev}_mb", "on"))
+        else:
+            # String sentinel — NOMADS toggle name verbatim
+            # (mean_sea_level, surface, 2_m_above_ground, etc.)
+            params.append((f"lev_{lev}", "on"))
 
     # Try a couple of times — NOMADS occasionally serves 503s during peak.
     for attempt in range(3):
@@ -155,9 +162,10 @@ def read_gfs_field(grib_bytes: bytes, level: int, var: str
             decode_timedelta=False,
         )
         # GFS variable naming: UGRD→"u", VGRD→"v", RH→"r", TMP→"t",
-        # HGT→"gh" (geopotential height in m, exposed by cfgrib as `gh`).
+        # HGT→"gh" (geopotential height in m, exposed by cfgrib as `gh`),
+        # PRMSL→"prmsl" (pressure reduced to MSL).
         name_map = {"UGRD": "u", "VGRD": "v", "RH": "r", "TMP": "t",
-                    "HGT": "gh"}
+                    "HGT": "gh", "PRMSL": "prmsl"}
         xname = name_map.get(var, var.lower())
         if xname not in ds.data_vars:
             log.warning("Variable %s not found in GRIB (have: %s)",
@@ -917,8 +925,14 @@ def render_uv_png(u: np.ndarray, v: np.ndarray) -> bytes:
     return buf.getvalue()
 
 
-def _upload_winds(name: str, level: int, valid_time: str, png: bytes) -> bool:
-    """Upload an RG-packed wind PNG + metadata.json sidecar."""
+def _upload_winds(name: str, title: str, valid_time: str, png: bytes,
+                  level: Optional[int] = None,
+                  description: Optional[str] = None) -> bool:
+    """Upload an RG-packed wind PNG + metadata.json sidecar.
+
+    `title` is the user-facing label ("850 hPa Wind Barbs", "10 m Wind
+    Barbs"). `level` is optional (kept on pressure-level layers for
+    sort/filter; absent for 10-m surface winds)."""
     try:
         from google.cloud import storage
     except ImportError:
@@ -935,8 +949,7 @@ def _upload_winds(name: str, level: int, valid_time: str, png: bytes) -> bool:
 
     meta = {
         "name": name,
-        "title": f"{level} hPa Wind Barbs",
-        "level": level,
+        "title": title,
         "units": "kt",
         "category": "wind",
         "render_style": "wind_barb",
@@ -951,14 +964,16 @@ def _upload_winds(name: str, level: int, valid_time: str, png: bytes) -> bool:
         "u_min": _WIND_VMIN, "u_max": _WIND_VMAX,
         "v_min": _WIND_VMIN, "v_max": _WIND_VMAX,
         "wind_units_native": "m/s",
-        "description": (
-            f"u, v components at {level} hPa from the latest GFS "
-            f"0.25° analysis, packed as RG channels of an 8-bit PNG "
+        "description": description or (
+            f"u, v components ({title}) from the latest GFS 0.25° "
+            f"analysis, packed as RG channels of an 8-bit PNG "
             f"(±60 m/s range). Frontend decodes and draws standard "
             f"meteorological wind barbs."
         ),
         "generated_utc": datetime.now(timezone.utc).isoformat(),
     }
+    if level is not None:
+        meta["level"] = level
 
     def _put(blob, body, ct):
         blob.upload_from_string(body, content_type=ct)
@@ -1003,7 +1018,50 @@ def build_winds(date_str: str, hour_str: str, level: int) -> Optional[bytes]:
 
     png = render_uv_png(u_s, v_s)
     valid = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}T{hour_str}:00:00Z"
-    return png if _upload_winds(f"winds_{level}", level, valid, png) else None
+    title = f"{level} hPa Wind Barbs"
+    return png if _upload_winds(f"winds_{level}", title, valid, png, level=level) else None
+
+
+def build_winds_10m(date_str: str, hour_str: str) -> Optional[bytes]:
+    """Fetch u, v at 10 m above ground (the standard surface wind) and
+    upload as a packed wind-barb layer.
+
+    Pairs with MSLP to identify boundary-layer features: confluence
+    bands, frontal wind shifts, low-level inflow into developing
+    systems, and the surface circulation of TC vortices. cfgrib
+    exposes the field at typeOfLevel='heightAboveGround', level=10.
+    """
+    log.info("Building 10-m winds: GFS %s %sZ", date_str, hour_str)
+    u_grib = fetch_gfs_global(date_str, hour_str, ["10_m_above_ground"], "UGRD")
+    v_grib = fetch_gfs_global(date_str, hour_str, ["10_m_above_ground"], "VGRD")
+    if not u_grib or not v_grib:
+        log.error("10-m winds: GFS fetch failed")
+        return None
+    # read_gfs_field ignores `level` when there's no isobaricInhPa dim,
+    # which is the case for surface fields with only a single height
+    # value (10 m). Pass 10 for documentation / debug clarity.
+    u = read_gfs_field(u_grib, 10, "UGRD")
+    v = read_gfs_field(v_grib, 10, "VGRD")
+    if u is None or v is None:
+        return None
+
+    # Same light smoothing as the pressure-level wind builder so the
+    # barb spacing/density reads consistently across all wind layers.
+    u_s = disc_smooth(u, 100.0)
+    v_s = disc_smooth(v, 100.0)
+    u_s = regrid_to_global(u_s)
+    v_s = regrid_to_global(v_s)
+
+    png = render_uv_png(u_s, v_s)
+    valid = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}T{hour_str}:00:00Z"
+    description = (
+        "10-m above-ground u, v from the latest GFS 0.25° analysis, "
+        "packed as RG channels of an 8-bit PNG (±60 m/s range). "
+        "Pairs with MSLP to expose surface circulations, frontal wind "
+        "shifts, and low-level inflow into developing systems."
+    )
+    return png if _upload_winds("winds_10m", "10 m Wind Barbs", valid, png,
+                                description=description) else None
 
 
 def build_vorticity(date_str: str, hour_str: str, level: int
@@ -1235,6 +1293,65 @@ def build_divergence(date_str: str, hour_str: str, level: int
         ),
     )
     return div if upload_layer(spec, div) else None
+
+
+def build_mslp(date_str: str, hour_str: str) -> Optional[bytes]:
+    """Mean Sea Level Pressure (hPa) — the classic synoptic field.
+
+    Contours identify closed lows, ridges, troughs, and gradient
+    strength at a glance. Lighter smoothing than the upper-level
+    diagnostics because PRMSL is already a smooth field; we just want
+    to suppress 0.25° grid noise that would create wavy contours.
+
+    Rendered with a diverging RdBu colormap centered on the
+    standard-atmosphere value (~1013 hPa): low pressure (cyclones)
+    reads RED, high pressure (ridges) reads BLUE — matches the
+    informal "warm colors = stormy, cool colors = quiet" intuition.
+    """
+    log.info("Building MSLP: GFS %s %sZ", date_str, hour_str)
+    grib = fetch_gfs_global(date_str, hour_str, ["mean_sea_level"], "PRMSL")
+    if not grib:
+        log.error("MSLP: GFS PRMSL fetch failed")
+        return None
+
+    pa = read_gfs_field(grib, 0, "PRMSL")  # level arg unused for MSL
+    if pa is None:
+        log.error("MSLP: missing PRMSL field")
+        return None
+
+    hpa = (pa / 100.0).astype(np.float32)  # Pa → hPa
+    hpa_s = disc_smooth(hpa, 100.0)         # light smooth for clean contours
+    hpa_s = regrid_to_global(hpa_s)
+
+    valid = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}T{hour_str}:00:00Z"
+    spec = LayerSpec(
+        name="mslp",
+        title="Mean Sea Level Pressure",
+        units="hPa",
+        vmin=976,
+        vmax=1048,        # symmetric ±36 hPa around 1012 ≈ standard atmosphere
+        step=4,
+        cmap="RdBu",      # NOT reversed: low values (lows) get red, high get blue
+        # Explicit ramp: 4 hPa NWS-standard intervals from 976 to 1048
+        # = 19 isobars. >16 so colorbar legend falls back to gradient,
+        # which is the right look for MSLP anyway (smooth synoptic
+        # field, not categorical bands).
+        levels_override=[976, 980, 984, 988, 992, 996, 1000, 1004,
+                          1008, 1012, 1016, 1020, 1024, 1028, 1032,
+                          1036, 1040, 1044, 1048],
+        data_vmin=870,    # extreme TC inner-core min on record (~870 hPa)
+        data_vmax=1085,   # extreme winter Siberian high (~1085 hPa)
+        valid_time=valid,
+        description=(
+            "Mean Sea Level Pressure from the latest GFS 0.25° analysis "
+            "(Pa → hPa), 100 km disc-smoothed for clean contouring. "
+            "Contoured every 4 hPa — the NWS surface-analysis standard. "
+            "Diverging color scheme centered on the standard atmosphere "
+            "(~1013 hPa): RED = low pressure (cyclones), BLUE = high "
+            "pressure (subtropical ridge / cold-core surface highs)."
+        ),
+    )
+    return hpa_s if upload_layer(spec, hpa_s) else None
 
 
 def build_midlevel_rh(date_str: str, hour_str: str) -> Optional[bytes]:
@@ -1562,7 +1679,9 @@ def main() -> int:
         ("vort_500",      lambda: build_vorticity(date_str, hour_str, 500)),
         ("div_850",       lambda: build_divergence(date_str, hour_str, 850)),
         ("div_200",       lambda: build_divergence(date_str, hour_str, 200)),
+        ("mslp",          lambda: build_mslp(date_str, hour_str)),
         ("z500_heights",  lambda: build_z500_heights(date_str, hour_str)),
+        ("winds_10m",     lambda: build_winds_10m(date_str, hour_str)),
         ("winds_850",     lambda: build_winds(date_str, hour_str, 850)),
         ("winds_700",     lambda: build_winds(date_str, hour_str, 700)),
         ("winds_500",     lambda: build_winds(date_str, hour_str, 500)),

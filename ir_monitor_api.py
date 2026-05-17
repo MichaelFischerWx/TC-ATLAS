@@ -3644,11 +3644,12 @@ def get_env_layers():
     # Known layer names — kept in code (not auto-discovered) so the
     # endpoint stays fast and we don't enumerate the whole bucket.
     known = (
+        "mslp",
         "shear_200_850", "shear_500_850",
         "vort_850", "vort_700", "vort_500",
         "div_850", "div_200",
         "z500_heights",
-        "winds_850", "winds_700", "winds_500", "winds_200",
+        "winds_10m", "winds_850", "winds_700", "winds_500", "winds_200",
         "rh_700_400", "sst_oisst",
         "genesis_prob_2d", "genesis_prob_7d", "genesis_prob_14d",
     )
