@@ -627,15 +627,138 @@ def render_png(field2d: np.ndarray, lats: np.ndarray, lons: np.ndarray,
     return _render_filled_png(warped, spec)
 
 
+def _contour_level_color(L: float, max_abs: float) -> str:
+    """Hex string for a contour level — matches the per-level palette
+    used in _render_contour_png so the GeoJSON polylines, PNG fallback,
+    and frontend legend swatches all agree pixel-for-pixel."""
+    mag = abs(L) / max_abs if max_abs else 0.0
+    if L < 0:
+        r = int(round( 96 * (1 - mag) +   8 * mag))
+        g = int(round(165 * (1 - mag) +  64 * mag))
+        b = int(round(250 * (1 - mag) + 142 * mag))
+    else:
+        r = int(round(248 * (1 - mag) + 153 * mag))
+        g = int(round(113 * (1 - mag) +  17 * mag))
+        b = int(round(113 * (1 - mag) +  21 * mag))
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def render_contour_geojson(field2d: np.ndarray, lats: np.ndarray,
+                            lons: np.ndarray, spec: WaveSpec) -> Optional[bytes]:
+    """Extract contour line segments as a GeoJSON FeatureCollection of
+    LineStrings, with each feature tagged by its level + color + label.
+    Used by the frontend's L.geoJSON path so the wave envelopes draw as
+    crisp vector polylines (no pixelation at any zoom) and matplotlib
+    text labels can be placed at midpoints by the frontend.
+
+    Input is the equirectangular field (NOT Mercator-warped) — GeoJSON
+    coords are lat/lon and Leaflet reprojects them for us.
+    """
+    if not spec.contour_levels:
+        return None
+
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from scipy.ndimage import zoom, gaussian_filter
+
+    # Equirectangular orientation: row 0 = +90 (north), col 0 = -180 (west)
+    lat_order = np.argsort(-lats)
+    f = field2d[lat_order, :]
+    lon_order = np.argsort(((lons + 180) % 360) - 180)
+    f = f[:, lon_order]
+
+    # Same upsample + smoothing as the PNG renderer so the GeoJSON
+    # polylines match what the contour PNG (fallback) shows.
+    f_hi = zoom(f, zoom=5, order=3, mode="wrap")
+    f_hi = gaussian_filter(f_hi, sigma=1.5, mode="wrap")
+    ny_hi, nx_hi = f_hi.shape
+
+    fig = plt.figure()
+    ax = fig.add_subplot(111)
+    cs = ax.contour(np.arange(nx_hi), np.arange(ny_hi), f_hi,
+                    levels=list(spec.contour_levels))
+    plt.close(fig)
+
+    # (col, row) → (lon, lat) on the upsampled grid. Lon is uniform
+    # over [-180, 180); lat is uniform over [+90, -90].
+    deg_per_col = 360.0 / nx_hi
+    deg_per_row = 180.0 / max(ny_hi - 1, 1)
+    max_abs = max(abs(L) for L in spec.contour_levels)
+
+    def _split_antimeridian(coords):
+        if len(coords) < 2: return [coords]
+        out, cur = [], [coords[0]]
+        for i in range(1, len(coords)):
+            if abs(coords[i][0] - coords[i - 1][0]) > 180.0:
+                if len(cur) >= 2: out.append(cur)
+                cur = [coords[i]]
+            else:
+                cur.append(coords[i])
+        if len(cur) >= 2: out.append(cur)
+        return out
+
+    features = []
+    levels_arr = list(spec.contour_levels)
+    for lvl_idx, segs in enumerate(cs.allsegs):
+        lvl = float(levels_arr[lvl_idx])
+        color = _contour_level_color(lvl, max_abs)
+        for seg in segs:
+            if len(seg) < 2: continue
+            coords = []
+            for px, py in seg:
+                lon = -180.0 + float(px) * deg_per_col
+                lat =   90.0 - float(py) * deg_per_row
+                coords.append([round(lon, 3), round(lat, 3)])
+            for sub in _split_antimeridian(coords):
+                features.append({
+                    "type": "Feature",
+                    "geometry": {"type": "LineString", "coordinates": sub},
+                    "properties": {"level": lvl, "color": color},
+                })
+
+    fc = {"type": "FeatureCollection", "features": features}
+    return json.dumps(fc, separators=(",", ":")).encode("utf-8")
+
+
+def build_colorbar_stops(spec: WaveSpec, n: int = 16) -> list:
+    """16-stop colorbar gradient matching the per-level palette used in
+    the contour renderer. Frontend paints this as a colorbar legend."""
+    span = max(abs(spec.vmin), abs(spec.vmax)) or 1.0
+    stops = []
+    for i in range(n):
+        t = i / (n - 1)                  # 0..1
+        v = spec.vmin + t * (spec.vmax - spec.vmin)
+        color_hex = _contour_level_color(v, span)
+        r, g, b = int(color_hex[1:3], 16), int(color_hex[3:5], 16), int(color_hex[5:7], 16)
+        stops.append({"t": round(t, 4), "rgb": [r, g, b]})
+    return stops
+
+
+def build_level_colors(spec: WaveSpec) -> list:
+    """RGB triplets for each contour level — frontend uses these to
+    paint the swatch legend so the menu colors match what's drawn."""
+    if not spec.contour_levels:
+        return []
+    max_abs = max(abs(L) for L in spec.contour_levels)
+    out = []
+    for L in spec.contour_levels:
+        c = _contour_level_color(L, max_abs)
+        out.append([int(c[1:3], 16), int(c[3:5], 16), int(c[5:7], 16)])
+    return out
+
+
 GCS_BUCKET = os.environ.get("GCS_IR_CACHE_BUCKET", "tc-atlas-ir-cache")
 GCS_PREFIX = "subseasonal"   # gs://{bucket}/{prefix}/{wave}/{latest.png|metadata.json}
 
 
 def _meta_dict(spec: WaveSpec, valid_time: str, bounds: list,
-               image_url: Optional[str] = None) -> dict:
+               image_url: Optional[str] = None,
+               geojson_url: Optional[str] = None) -> dict:
     """Shared metadata payload for both local + GCS outputs. The frontend
     reads metadata.json to learn the public PNG URL, colorbar range,
-    valid date, and bounds for L.imageOverlay."""
+    valid date, and bounds for L.imageOverlay. For contour layers,
+    geojson_url enables the vector-polyline + label rendering path."""
     d = {
         "name": spec.name,
         "title": spec.title,
@@ -647,14 +770,23 @@ def _meta_dict(spec: WaveSpec, valid_time: str, bounds: list,
         "vmax": spec.vmax,
         "cmap": spec.cmap,
         # render_style routes the frontend's L.imageOverlay handling.
-        # "contour" is rendered as transparent-background isolines so
-        # the IR underlay shows through; "filled" is the standard
-        # diverging colormap shading.
+        # "contour" + geojson_url → L.geoJSON path (crisp vector polylines
+        # with value labels at midpoints, matches the other env layers).
+        # "contour" without geojson_url → L.imageOverlay raster fallback.
+        # "filled" → diverging colormap raster shading.
         "render_style": spec.render_style,
         "bounds": bounds,
+        # Colorbar legend payload — frontend paints these stops as a
+        # gradient + the per-level swatches in the layer menu. Without
+        # them the legend renders empty (the bug the user just noticed).
+        "colorbar_stops": build_colorbar_stops(spec),
+        "levels": list(spec.contour_levels) if spec.contour_levels else [],
+        "level_colors": build_level_colors(spec),
     }
     if image_url:
         d["image_url"] = image_url
+    if geojson_url:
+        d["geojson_url"] = geojson_url
     return d
 
 
@@ -666,14 +798,10 @@ def write_local(out_dir: Path, spec: WaveSpec, png: bytes, valid_time: str,
     (out_dir / f"{spec.name}.json").write_text(json.dumps(meta, indent=2))
 
 
-def upload_gcs(spec: WaveSpec, png: bytes, valid_time: str, bounds: list) -> bool:
-    """Upload latest.png + metadata.json to
-        gs://{GCS_BUCKET}/{GCS_PREFIX}/{spec.name}/
-
-    Mirrors the pattern of build_env_overlays.upload_layer. Returns
-    True on success. Cloud Run Job credentials are picked up via the
-    google-cloud-storage default chain.
-    """
+def upload_gcs(spec: WaveSpec, png: bytes, valid_time: str, bounds: list,
+                geojson: Optional[bytes] = None) -> bool:
+    """Upload latest.png (+ latest.geojson for contour layers) +
+    metadata.json to gs://{GCS_BUCKET}/{GCS_PREFIX}/{spec.name}/."""
     try:
         from google.cloud import storage
     except ImportError:
@@ -687,17 +815,16 @@ def upload_gcs(spec: WaveSpec, png: bytes, valid_time: str, bounds: list) -> boo
     bucket = client.bucket(GCS_BUCKET)
     png_blob  = bucket.blob(f"{GCS_PREFIX}/{spec.name}/latest.png")
     meta_blob = bucket.blob(f"{GCS_PREFIX}/{spec.name}/metadata.json")
+    gj_blob   = bucket.blob(f"{GCS_PREFIX}/{spec.name}/latest.geojson") if geojson else None
 
     image_url = (f"https://storage.googleapis.com/{GCS_BUCKET}/"
                  f"{GCS_PREFIX}/{spec.name}/latest.png")
-    meta = _meta_dict(spec, valid_time, bounds, image_url=image_url)
+    geojson_url = (f"https://storage.googleapis.com/{GCS_BUCKET}/"
+                   f"{GCS_PREFIX}/{spec.name}/latest.geojson") if geojson else None
+    meta = _meta_dict(spec, valid_time, bounds,
+                      image_url=image_url, geojson_url=geojson_url)
 
-    def _put(blob, body: bytes | str, content_type: str) -> None:
-        """Upload + mark public-read so anonymous browser fetches work.
-        Mirrors build_env_overlays.upload_layer's _put helper; without
-        make_public() the assets land in GCS but the frontend gets HTTP
-        403 trying to load them via L.imageOverlay (which is what was
-        happening to the subseasonal layers from the first deploy)."""
+    def _put(blob, body, content_type: str) -> None:
         blob.upload_from_string(body, content_type=content_type)
         blob.cache_control = "public, max-age=600"
         blob.patch()
@@ -707,10 +834,13 @@ def upload_gcs(spec: WaveSpec, png: bytes, valid_time: str, bounds: list) -> boo
             log.warning("Could not mark %s public: %s", blob.name, e)
 
     _put(png_blob,  png, "image/png")
+    if gj_blob is not None:
+        _put(gj_blob, geojson, "application/geo+json")
     _put(meta_blob, json.dumps(meta), "application/json")
 
-    log.info("  uploaded gs://%s/%s/%s/{latest.png,metadata.json}",
-             GCS_BUCKET, GCS_PREFIX, spec.name)
+    log.info("  uploaded gs://%s/%s/%s/{latest.png%s,metadata.json}",
+             GCS_BUCKET, GCS_PREFIX, spec.name,
+             ",latest.geojson" if geojson else "")
     return True
 
 
@@ -1117,11 +1247,24 @@ def main():
 
         latest = filtered.isel(time=-1).values
         png = render_png(latest, lats, lons, spec)
+        # Contour layers also emit a GeoJSON sidecar so the frontend's
+        # L.geoJSON path can draw crisp vector polylines + value labels
+        # (same treatment as the other env-layer contours like shear).
+        geojson = None
+        if spec.render_style == "contour":
+            try:
+                geojson = render_contour_geojson(latest, lats, lons, spec)
+            except Exception as e:
+                log.warning("GeoJSON contour render failed for %s: %s", spec.name, e)
         write_local(out_dir, spec, png, valid_time_iso, bounds)
-        log.info("  wrote %s.png (%d bytes)", spec.name, len(png))
+        if geojson:
+            (out_dir / f"{spec.name}.geojson").write_bytes(geojson)
+        log.info("  wrote %s.png (%d bytes)%s",
+                 spec.name, len(png),
+                 f" + .geojson ({len(geojson)} bytes)" if geojson else "")
         if not args.local_only:
             try:
-                upload_gcs(spec, png, valid_time_iso, bounds)
+                upload_gcs(spec, png, valid_time_iso, bounds, geojson=geojson)
             except Exception as e:
                 log.exception("GCS upload failed for %s: %s", spec.name, e)
 
