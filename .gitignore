@@ -22,6 +22,11 @@ ibtracs_tracks.json
 # the pipeline so future data/* additions (like data/indices.json) stay
 # trackable without an explicit allow-list.
 data/_ibtracs_*/
+# build_subseasonal_overlays.py work dirs:
+#   data/_olr_cache/             — cached OLR climatology netCDF
+#   data/subseasonal_overlays/   — validation PNG outputs (real artifact ships to GCS)
+data/_olr_cache/
+data/subseasonal_overlays/
 
 # Claude Code working state
 .claude/
