@@ -735,6 +735,45 @@ def _phase_from_pcs(pc1: float, pc2: float) -> int:
     return sector
 
 
+def _densify_daily(records: dict, fill=(0, 0.0, 0.0, 0.0)) -> dict:
+    """Expand a sparse {date_iso: (phase, amp, pc1, pc2)} dict into
+    DENSE daily arrays from min(date) to max(date) inclusive. Missing
+    days get `fill` so the frontend's `idx = dayKey - startKey` math
+    always lands on the right row. Returns dict suitable for merging
+    into the index entry: {start_date, end_date, phases, amplitudes,
+    pc1, pc2}.
+
+    Why: the frontend (tc_climatology.js:_phaseOnDay) assumes a dense
+    daily series. Skipping missing-value rows in the parser shifts
+    every subsequent date wrong by the cumulative gap — 290 gaps in
+    BOM RMM's pre-1979 era pushed today's MJO label back to 2025.
+    """
+    if not records:
+        return None
+    from datetime import date, timedelta
+    start = min(date.fromisoformat(k) for k in records.keys())
+    end   = max(date.fromisoformat(k) for k in records.keys())
+    n_days = (end - start).days + 1
+    phases, amps, pc1s, pc2s = [], [], [], []
+    cur = start
+    for _ in range(n_days):
+        rec = records.get(cur.isoformat())
+        if rec is None:
+            p, a, p1, p2 = fill
+        else:
+            p, a, p1, p2 = rec
+        phases.append(p)
+        amps.append(round(float(a), 4))
+        pc1s.append(round(float(p1), 4))
+        pc2s.append(round(float(p2), 4))
+        cur += timedelta(days=1)
+    return {
+        "start_date": start.isoformat(),
+        "end_date":   end.isoformat(),
+        "phases": phases, "amplitudes": amps, "pc1": pc1s, "pc2": pc2s,
+    }
+
+
 def _load_baseline_indices() -> dict:
     """Load the seed JSON. Prefer the most recent copy from GCS so we
     pick up yesterday's merged version; fall back to the container-
@@ -779,11 +818,9 @@ def _fetch_bom_rmm():
         log.warning("BOM RMM fetch failed: %s — keeping existing series", e)
         return None
 
-    phases, amps, pc1s, pc2s = [], [], [], []
-    first_date, last_date = None, None
+    records = {}
     for line in text.splitlines():
         parts = line.split()
-        # Data rows start with year (4 digits, ≥ 1974)
         if len(parts) < 7 or not parts[0].isdigit():
             continue
         try:
@@ -792,28 +829,20 @@ def _fetch_bom_rmm():
                 continue
             pc1 = float(parts[3]); pc2 = float(parts[4])
             phase = int(parts[5]); amp = float(parts[6])
-            # Missing value sentinel
+            # Missing-value sentinel — skip the row (densify pads it).
             if abs(pc1) > 1e30 or abs(pc2) > 1e30:
                 continue
         except (ValueError, IndexError):
             continue
-        d = f"{yr:04d}-{mo:02d}-{dy:02d}"
-        if first_date is None:
-            first_date = d
-        last_date = d
-        phases.append(phase)
-        amps.append(round(amp, 4))
-        pc1s.append(round(pc1, 4))
-        pc2s.append(round(pc2, 4))
+        records[f"{yr:04d}-{mo:02d}-{dy:02d}"] = (phase, amp, pc1, pc2)
 
-    if not phases:
+    out = _densify_daily(records)
+    if out is None:
         log.warning("BOM RMM parse produced 0 records — keeping existing series")
         return None
-    log.info("BOM RMM: parsed %d records (%s → %s)", len(phases), first_date, last_date)
-    return {
-        "start_date": first_date, "end_date": last_date,
-        "phases": phases, "amplitudes": amps, "pc1": pc1s, "pc2": pc2s,
-    }
+    log.info("BOM RMM: %d days (%s → %s, %d source records densified)",
+             len(out["phases"]), out["start_date"], out["end_date"], len(records))
+    return out
 
 
 def _fetch_apcc_bsiso():
@@ -827,9 +856,8 @@ def _fetch_apcc_bsiso():
         log.warning("APCC BSISO fetch failed: %s — keeping existing series", e)
         return None
 
-    out = {"bsiso1": {"phases": [], "amplitudes": [], "pc1": [], "pc2": []},
-           "bsiso2": {"phases": [], "amplitudes": [], "pc1": [], "pc2": []}}
-    first_date, last_date = None, None
+    from datetime import date, timedelta
+    rec1, rec2 = {}, {}
     for line in text.splitlines():
         parts = line.split()
         if len(parts) < 8 or not parts[0].isdigit():
@@ -843,30 +871,17 @@ def _fetch_apcc_bsiso():
             b1_amp = float(parts[6]); b2_amp = float(parts[7])
         except (ValueError, IndexError):
             continue
-        from datetime import date, timedelta
-        d = date(yr, 1, 1) + timedelta(days=doy - 1)
-        d_iso = d.isoformat()
-        if first_date is None:
-            first_date = d_iso
-        last_date = d_iso
-        out["bsiso1"]["phases"].append(_phase_from_pcs(b1_p1, b1_p2))
-        out["bsiso1"]["amplitudes"].append(round(b1_amp, 4))
-        out["bsiso1"]["pc1"].append(round(b1_p1, 4))
-        out["bsiso1"]["pc2"].append(round(b1_p2, 4))
-        out["bsiso2"]["phases"].append(_phase_from_pcs(b2_p1, b2_p2))
-        out["bsiso2"]["amplitudes"].append(round(b2_amp, 4))
-        out["bsiso2"]["pc1"].append(round(b2_p1, 4))
-        out["bsiso2"]["pc2"].append(round(b2_p2, 4))
+        d_iso = (date(yr, 1, 1) + timedelta(days=doy - 1)).isoformat()
+        rec1[d_iso] = (_phase_from_pcs(b1_p1, b1_p2), b1_amp, b1_p1, b1_p2)
+        rec2[d_iso] = (_phase_from_pcs(b2_p1, b2_p2), b2_amp, b2_p1, b2_p2)
 
-    if not out["bsiso1"]["phases"]:
+    d1 = _densify_daily(rec1); d2 = _densify_daily(rec2)
+    if d1 is None or d2 is None:
         log.warning("APCC BSISO parse produced 0 records — keeping existing")
         return None
-    log.info("APCC BSISO: parsed %d days (%s → %s)",
-             len(out["bsiso1"]["phases"]), first_date, last_date)
-    for k in ("bsiso1", "bsiso2"):
-        out[k]["start_date"] = first_date
-        out[k]["end_date"] = last_date
-    return out
+    log.info("APCC BSISO: %d days (%s → %s)",
+             len(d1["phases"]), d1["start_date"], d1["end_date"])
+    return {"bsiso1": d1, "bsiso2": d2}
 
 
 def _fetch_noaa_romi():
@@ -880,8 +895,7 @@ def _fetch_noaa_romi():
         log.warning("NOAA ROMI fetch failed: %s — keeping existing series", e)
         return None
 
-    phases, amps, pc1s, pc2s = [], [], [], []
-    first_date, last_date = None, None
+    records = {}
     for line in text.splitlines():
         parts = line.split()
         # YYYY MM DD HH PC1 PC2 amp
@@ -895,23 +909,16 @@ def _fetch_noaa_romi():
             amp = float(parts[6])
         except (ValueError, IndexError):
             continue
-        d = f"{yr:04d}-{mo:02d}-{dy:02d}"
-        if first_date is None:
-            first_date = d
-        last_date = d
-        phases.append(_phase_from_pcs(pc1, pc2))
-        amps.append(round(amp, 4))
-        pc1s.append(round(pc1, 4))
-        pc2s.append(round(pc2, 4))
+        records[f"{yr:04d}-{mo:02d}-{dy:02d}"] = (_phase_from_pcs(pc1, pc2),
+                                                  amp, pc1, pc2)
 
-    if not phases:
+    out = _densify_daily(records)
+    if out is None:
         log.warning("NOAA ROMI parse produced 0 records — keeping existing")
         return None
-    log.info("NOAA ROMI: parsed %d records (%s → %s)", len(phases), first_date, last_date)
-    return {
-        "start_date": first_date, "end_date": last_date,
-        "phases": phases, "amplitudes": amps, "pc1": pc1s, "pc2": pc2s,
-    }
+    log.info("NOAA ROMI: %d days (%s → %s)",
+             len(out["phases"]), out["start_date"], out["end_date"])
+    return out
 
 
 def refresh_indices() -> bool:
