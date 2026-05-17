@@ -3059,6 +3059,22 @@ function _renderSubseasonalNowWidget() {
 // only had derived phase + amplitude).
 var _subEvoWindow = 30;
 
+// Historical overlay window, e.g. {start: '1997-03-01', end: '1997-06-30'}.
+// When non-null, _renderSubEvolution draws a second trajectory on the
+// same phase diagram so users can compare the recent evolution against
+// an analog historical period.
+var _subEvoHistorical = null;
+
+// Quick-pick preset date ranges for the historical overlay. Tuned to
+// canonical MJO / climate-mode regimes that show up repeatedly in TC
+// research conversations. Easy to extend without breaking the layout.
+var _SUB_EVO_HIST_PRESETS = {
+    '1997-mam':  { start: '1997-03-01', end: '1997-06-30' },
+    '2015-djf':  { start: '2015-11-01', end: '2016-02-29' },
+    '2010-jas':  { start: '2010-07-01', end: '2010-09-30' },
+    '2017-aso':  { start: '2017-08-01', end: '2017-10-31' },
+};
+
 window.closeSubEvolutionModal = function () {
     var m = document.getElementById('sub-evolution-modal');
     if (m) m.style.display = 'none';
@@ -3068,9 +3084,45 @@ function _openSubEvolution() {
     if (!_subPhases || !_subPhases.indices[_subState.mode]) return;
     var m = document.getElementById('sub-evolution-modal');
     if (!m) return;
+    // Sync the historical-overlay date inputs to the active mode's
+    // coverage window each time the modal opens; keeps users from
+    // picking a date the record doesn't cover (e.g. 1975 for BSISO,
+    // which starts in 1981).
+    var rec = _subPhases.indices[_subState.mode];
+    var hs = document.getElementById('sub-evo-hist-start');
+    var he = document.getElementById('sub-evo-hist-end');
+    if (hs) { hs.min = rec.start_date; hs.max = rec.end_date; }
+    if (he) { he.min = rec.start_date; he.max = rec.end_date; }
+    if (_subEvoHistorical) {
+        if (hs) hs.value = _subEvoHistorical.start;
+        if (he) he.value = _subEvoHistorical.end;
+    }
     m.style.display = 'flex';
     _renderSubEvolution();
     _ga('tc_clim_sub_evolution_open', { mode: _subState.mode, window: _subEvoWindow });
+}
+
+// Build a per-window slice of (date, PC1, PC2, amp, phase) values from
+// a phase-index record. `startIdx`/`endIdx` are inclusive array indices.
+// Skips entries where PC1 or PC2 is null (sparse coverage at start of
+// record). Returns null if no valid samples in the window.
+function _buildEvoSeries(rec, startIdx, endIdx) {
+    var pc1 = rec.pc1, pc2 = rec.pc2;
+    var phases = rec.phases, amps = rec.amplitudes;
+    if (rec._startKey == null) rec._startKey = _dayKeyFromISO(rec.start_date);
+    var startKey = rec._startKey;
+    var dates = [], xs = [], ys = [], amplitudes = [], phasesArr = [];
+    for (var i = startIdx; i <= endIdx; i++) {
+        if (pc1[i] == null || pc2[i] == null) continue;
+        var dt = new Date((startKey + i) * 86400000);
+        dates.push(dt.toISOString().slice(0, 10));
+        xs.push(pc1[i]);
+        ys.push(pc2[i]);
+        amplitudes.push(amps[i]);
+        phasesArr.push(phases[i]);
+    }
+    if (!xs.length) return null;
+    return { dates: dates, xs: xs, ys: ys, amplitudes: amplitudes, phasesArr: phasesArr };
 }
 
 function _renderSubEvolution() {
@@ -3083,36 +3135,53 @@ function _renderSubEvolution() {
     if (!titleEl || !pcEl || !ampEl || typeof Plotly === 'undefined') return;
 
     // Find last non-null index, then walk back lookback days
-    var phases = rec.phases, amps = rec.amplitudes;
-    var pc1 = rec.pc1, pc2 = rec.pc2;
+    var phases = rec.phases;
     var lastIdx = phases.length - 1;
     while (lastIdx >= 0 && phases[lastIdx] == null) lastIdx--;
     if (lastIdx < 0) return;
     var startIdx = Math.max(0, lastIdx - _subEvoWindow + 1);
     if (rec._startKey == null) rec._startKey = _dayKeyFromISO(rec.start_date);
-    var startKey = rec._startKey;
 
-    var dates = [], xs = [], ys = [], amplitudes = [], phasesArr = [];
-    for (var i = startIdx; i <= lastIdx; i++) {
-        if (pc1[i] == null || pc2[i] == null) continue;
-        var dt = new Date((startKey + i) * 86400000);
-        dates.push(dt.toISOString().slice(0, 10));
-        xs.push(pc1[i]);
-        ys.push(pc2[i]);
-        amplitudes.push(amps[i]);
-        phasesArr.push(phases[i]);
+    var recent = _buildEvoSeries(rec, startIdx, lastIdx);
+    if (!recent) return;
+    var dates = recent.dates, xs = recent.xs, ys = recent.ys;
+    var amplitudes = recent.amplitudes, phasesArr = recent.phasesArr;
+
+    // Historical overlay (optional). Date inputs are clamped to the
+    // record's coverage; out-of-range silently degrades to "no overlay".
+    var hist = null;
+    if (_subEvoHistorical && _subEvoHistorical.start && _subEvoHistorical.end) {
+        var hStartKey = _dayKeyFromISO(_subEvoHistorical.start);
+        var hEndKey   = _dayKeyFromISO(_subEvoHistorical.end);
+        var hStartIdx = hStartKey - rec._startKey;
+        var hEndIdx   = hEndKey   - rec._startKey;
+        // Clamp to in-range; reject if the user picked end < start.
+        hStartIdx = Math.max(0, hStartIdx);
+        hEndIdx   = Math.min(phases.length - 1, hEndIdx);
+        if (hEndIdx >= hStartIdx) {
+            hist = _buildEvoSeries(rec, hStartIdx, hEndIdx);
+        }
     }
-    if (!xs.length) return;
 
     titleEl.textContent = rec.label + ' · Phase Evolution';
-    subEl.textContent = 'Last ' + xs.length + ' days · '
+    var subText = 'Last ' + xs.length + ' days · '
         + dates[0] + ' to ' + dates[dates.length - 1]
         + ' · current phase ' + phasesArr[phasesArr.length - 1]
         + ' (amp ' + amplitudes[amplitudes.length - 1].toFixed(2) + ')';
+    if (hist) {
+        subText += '<br><span style="color:#f59e0b;">Historical overlay:</span> '
+                + hist.xs.length + ' days · '
+                + hist.dates[0] + ' to ' + hist.dates[hist.dates.length - 1];
+    }
+    subEl.innerHTML = subText;
 
     // ── Phase diagram (PC1, PC2) ──
     var base = _tcaPlotlyBase();
-    var rmax = Math.max(3.5, Math.max.apply(null, xs.map(Math.abs).concat(ys.map(Math.abs))) * 1.1);
+    // Expand rmax to enclose both recent and historical extrema so the
+    // diagram doesn't clip the analog window.
+    var extrema = xs.map(Math.abs).concat(ys.map(Math.abs));
+    if (hist) extrema = extrema.concat(hist.xs.map(Math.abs)).concat(hist.ys.map(Math.abs));
+    var rmax = Math.max(3.5, Math.max.apply(null, extrema) * 1.1);
 
     // Annotations: phase numbers + region labels in each sector
     var modeStr = _subState.mode;
@@ -3217,6 +3286,60 @@ function _renderSubEvolution() {
         hoverinfo: 'skip',
         showlegend: false,
     };
+
+    // ── Historical analog traces (amber → magenta gradient) ──
+    // Visually distinct from the recent series' blue→red palette so
+    // overlapping segments stay legible. The amber line is drawn below
+    // the recent line to keep "today" the visual focus.
+    var trace_hist_line = null, trace_hist_markers = null, trace_hist_start = null;
+    if (hist) {
+        var hn = hist.xs.length;
+        var hColors = hist.xs.map(function (_, i) { return i / Math.max(1, hn - 1); });
+        var hHover = hist.xs.map(function (_, i) {
+            var sign = hist.amplitudes[i] >= 1 ? '✓ active' : '○ quiescent';
+            return '[historical] ' + hist.dates[i]
+                + '<br>Phase ' + hist.phasesArr[i]
+                + '<br>PC1=' + hist.xs[i].toFixed(2) + ', PC2=' + hist.ys[i].toFixed(2)
+                + '<br>amp=' + hist.amplitudes[i].toFixed(2) + ' (' + sign + ')';
+        });
+        trace_hist_line = {
+            type: 'scatter', mode: 'lines',
+            x: hist.xs, y: hist.ys,
+            line: { color: 'rgba(245,158,11,0.55)', width: 2, dash: 'dot' },
+            hoverinfo: 'skip',
+            name: 'Historical track',
+        };
+        trace_hist_markers = {
+            type: 'scatter', mode: 'markers',
+            x: hist.xs, y: hist.ys,
+            marker: {
+                size: 7,
+                color: hColors,
+                colorscale: [
+                    [0,    'rgba(254,243,199,0.85)'],   // pale amber
+                    [0.6,  'rgba(245,158,11,0.95)'],    // amber
+                    [1.0,  'rgba(168,85,247,1.0)'],     // purple
+                ],
+                line: { color: '#1e1b4b', width: 1 },
+                symbol: 'diamond',
+                showscale: false,
+            },
+            text: hHover,
+            hoverinfo: 'text',
+            name: 'Historical PCs',
+        };
+        trace_hist_start = {
+            type: 'scatter', mode: 'markers+text',
+            x: [hist.xs[0]], y: [hist.ys[0]],
+            marker: { size: 14, color: 'rgba(245,158,11,0.0)',
+                      line: { color: '#f59e0b', width: 2 }, symbol: 'diamond' },
+            text: [hist.dates[0].slice(0, 7)],
+            textposition: 'bottom center',
+            textfont: { size: 9, color: '#f59e0b' },
+            hoverinfo: 'skip',
+            showlegend: false,
+        };
+    }
     var layout = Object.assign({}, base, {
         xaxis: {
             title: 'PC1 (eastward propagation →)',
@@ -3238,16 +3361,28 @@ function _renderSubEvolution() {
         height: 480,
         margin: { l: 60, r: 30, t: 10, b: 50 },
     });
-    Plotly.newPlot('sub-evolution-pc-chart', [trace_line, trace_markers, trace_today],
-                   layout, PLOTLY_CONFIG);
+    // Draw recent line + markers first (under), then historical (over
+    // them), then TODAY marker on the very top. Click-drill is wired to
+    // the recent "Daily PCs" trace only; historical markers are
+    // informational hover-only.
+    var pcTraces = [trace_line, trace_markers];
+    if (hist) pcTraces.push(trace_hist_line, trace_hist_markers, trace_hist_start);
+    pcTraces.push(trace_today);
+    Plotly.newPlot('sub-evolution-pc-chart', pcTraces, layout, PLOTLY_CONFIG);
 
-    // Click → drill the matching phase modal
+    // Click → drill the matching phase modal. The recent "Daily PCs"
+    // trace is the second one (curveNumber === 1); ignore clicks on
+    // historical markers since drilling a phase composite from an
+    // analog year is conceptually different from drilling the
+    // climatology of that phase.
     var pcChart = document.getElementById('sub-evolution-pc-chart');
     if (pcChart && pcChart.on) {
         pcChart.removeAllListeners && pcChart.removeAllListeners('plotly_click');
         pcChart.on('plotly_click', function (ev) {
             if (!ev || !ev.points || !ev.points.length) return;
-            var idx = ev.points[0].pointIndex;
+            var pt = ev.points[0];
+            if (pt.curveNumber !== 1) return;             // only recent markers
+            var idx = pt.pointIndex;
             if (typeof idx !== 'number') return;
             var phase = phasesArr[idx];
             if (phase >= 1 && phase <= 8) {
@@ -3258,10 +3393,18 @@ function _renderSubEvolution() {
     }
 
     // ── Amplitude time series ──
+    // When a historical overlay is active we switch the x-axis to a
+    // day-index (Day 0 = start of each window) so the two series line
+    // up directly; that's the natural visualization for analog
+    // comparison. Otherwise we keep the calendar-date x-axis (which is
+    // the better default for the standalone "recent evolution" view).
     var ampLayout = Object.assign({}, base, {
         height: 220,
         margin: { l: 50, r: 30, t: 10, b: 40 },
-        xaxis: { title: '', tickfont: { size: 10 } },
+        xaxis: {
+            title: hist ? 'Days from window start' : '',
+            tickfont: { size: 10 },
+        },
         yaxis: { title: 'Amplitude', rangemode: 'tozero' },
         shapes: [{
             type: 'line', xref: 'paper', yref: 'y',
@@ -3274,11 +3417,15 @@ function _renderSubEvolution() {
             font: { size: 9, color: '#dc2626' },
             xanchor: 'right',
         }],
-        showlegend: false,
+        showlegend: !!hist,
+        legend: { orientation: 'h', y: -0.15, font: { size: 10 } },
     });
+    var ampX = hist
+        ? amplitudes.map(function (_, i) { return i; })
+        : dates;
     var ampTrace = {
         type: 'scatter', mode: 'lines+markers',
-        x: dates, y: amplitudes,
+        x: ampX, y: amplitudes,
         line: { color: 'rgba(46,125,255,0.7)', width: 2 },
         marker: {
             size: 6,
@@ -3289,8 +3436,31 @@ function _renderSubEvolution() {
             return d + '<br>amp ' + amplitudes[i].toFixed(2) + ' · phase ' + phasesArr[i];
         }),
         hoverinfo: 'text',
+        name: 'Recent (' + dates[0] + ' → ' + dates[dates.length - 1] + ')',
     };
-    Plotly.newPlot('sub-evolution-amp-chart', [ampTrace], ampLayout, PLOTLY_CONFIG);
+    var ampTraces = [ampTrace];
+    if (hist) {
+        ampTraces.push({
+            type: 'scatter', mode: 'lines+markers',
+            x: hist.amplitudes.map(function (_, i) { return i; }),
+            y: hist.amplitudes,
+            line: { color: 'rgba(245,158,11,0.85)', width: 2, dash: 'dot' },
+            marker: {
+                size: 6, symbol: 'diamond',
+                color: hist.amplitudes.map(function (a) {
+                    return a >= 1 ? '#f59e0b' : '#cbd5e1';
+                }),
+                line: { color: '#1e1b4b', width: 0.5 },
+            },
+            text: hist.dates.map(function (d, i) {
+                return d + '<br>amp ' + hist.amplitudes[i].toFixed(2)
+                     + ' · phase ' + hist.phasesArr[i];
+            }),
+            hoverinfo: 'text',
+            name: 'Historical (' + hist.dates[0] + ' → ' + hist.dates[hist.dates.length - 1] + ')',
+        });
+    }
+    Plotly.newPlot('sub-evolution-amp-chart', ampTraces, ampLayout, PLOTLY_CONFIG);
 }
 
 function _renderSubseasonalSource() {
@@ -3722,6 +3892,117 @@ function _initSubseasonalOnce() {
             });
             _renderSubEvolution();
         });
+    });
+
+    // ── Historical-overlay controls (date pickers + presets) ────────
+    var histStart  = document.getElementById('sub-evo-hist-start');
+    var histEnd    = document.getElementById('sub-evo-hist-end');
+    var histApply  = document.getElementById('sub-evo-hist-apply');
+    var histClear  = document.getElementById('sub-evo-hist-clear');
+    var histStatus = document.getElementById('sub-evo-hist-status');
+    var histPresets = document.querySelectorAll('#sub-evo-hist-presets button');
+
+    function _applyHistorical() {
+        if (!histStart || !histEnd) return;
+        var s = histStart.value, e = histEnd.value;
+        if (!s || !e) {
+            if (histStatus) histStatus.textContent = 'Pick a start and end date.';
+            return;
+        }
+        if (s > e) { var t = s; s = e; e = t; }
+        var rec = _subPhases && _subPhases.indices[_subState.mode];
+        if (rec && (e < rec.start_date || s > rec.end_date)) {
+            if (histStatus) histStatus.textContent =
+                'Out of range for ' + rec.label + ' (' + rec.start_date + ' to ' + rec.end_date + ').';
+            return;
+        }
+        _subEvoHistorical = { start: s, end: e };
+        if (histStatus) histStatus.textContent = '';
+        _renderSubEvolution();
+        _ga('tc_clim_sub_evolution_historical', { mode: _subState.mode, start: s, end: e });
+    }
+
+    if (histApply) histApply.addEventListener('click', _applyHistorical);
+    if (histClear) histClear.addEventListener('click', function () {
+        _subEvoHistorical = null;
+        if (histStart) histStart.value = '';
+        if (histEnd)   histEnd.value   = '';
+        if (histStatus) histStatus.textContent = '';
+        document.querySelectorAll('#sub-evo-hist-presets button.active').forEach(function (b) {
+            b.classList.remove('active');
+        });
+        _renderSubEvolution();
+    });
+    histPresets.forEach(function (b) {
+        b.addEventListener('click', function () {
+            var key = b.dataset.histPreset;
+            var range = _SUB_EVO_HIST_PRESETS[key];
+            if (!range) return;
+            if (histStart) histStart.value = range.start;
+            if (histEnd)   histEnd.value   = range.end;
+            histPresets.forEach(function (x) { x.classList.toggle('active', x === b); });
+            _applyHistorical();
+        });
+    });
+
+    // ── "Same dates from year YYYY" quick-compare ────────────────────
+    // Takes the calendar month/day of the current recent window and
+    // remaps it to the user-picked year. Handles year-crossing windows
+    // (e.g. the last 90 d in March, which reaches back to December of
+    // the prior year) by carrying the same +1 year offset between the
+    // start and end dates.
+    var histYearInput = document.getElementById('sub-evo-hist-year');
+    var histYearApply = document.getElementById('sub-evo-hist-year-apply');
+    function _applySameDatesFromYear() {
+        if (!_subPhases) return;
+        var rec = _subPhases.indices[_subState.mode];
+        if (!rec || !rec.phases) return;
+        var y = histYearInput && parseInt(histYearInput.value, 10);
+        if (!Number.isFinite(y)) {
+            if (histStatus) histStatus.textContent = 'Enter a 4-digit year.';
+            return;
+        }
+        // Reproduce _renderSubEvolution's "recent window" slice math so
+        // the calendar dates here match exactly what the diagram is
+        // drawing (don't trust the visible labels — the modal may not
+        // have rendered yet on a cold open).
+        if (rec._startKey == null) rec._startKey = _dayKeyFromISO(rec.start_date);
+        var lastIdx = rec.phases.length - 1;
+        while (lastIdx >= 0 && rec.phases[lastIdx] == null) lastIdx--;
+        if (lastIdx < 0) return;
+        var startIdx = Math.max(0, lastIdx - _subEvoWindow + 1);
+        var recentStart = new Date((rec._startKey + startIdx) * 86400000);
+        var recentEnd   = new Date((rec._startKey + lastIdx)   * 86400000);
+        var startY = recentStart.getUTCFullYear();
+        var endY   = recentEnd.getUTCFullYear();
+        // Preserve any year-crossing offset (endY - startY) when
+        // remapping into the historical year.
+        var hStartY = y;
+        var hEndY   = y + (endY - startY);
+        function fmtMD(d) {
+            return ('0' + (d.getUTCMonth() + 1)).slice(-2) + '-'
+                 + ('0' + d.getUTCDate()).slice(-2);
+        }
+        var s = hStartY + '-' + fmtMD(recentStart);
+        var e = hEndY   + '-' + fmtMD(recentEnd);
+        if (s < rec.start_date || e > rec.end_date) {
+            if (histStatus) histStatus.textContent =
+                'Year out of range for ' + rec.label
+                + ' (' + rec.start_date.slice(0,4)
+                + '–' + rec.end_date.slice(0,4) + ').';
+            return;
+        }
+        if (histStart) histStart.value = s;
+        if (histEnd)   histEnd.value   = e;
+        // Deactivate any preset highlight — this is its own analog.
+        document.querySelectorAll('#sub-evo-hist-presets button.active').forEach(function (b) {
+            b.classList.remove('active');
+        });
+        _applyHistorical();
+    }
+    if (histYearApply) histYearApply.addEventListener('click', _applySameDatesFromYear);
+    if (histYearInput) histYearInput.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter') _applySameDatesFromYear();
     });
 
     // Wire RI methodology controls (overwater / TC-phase / Vmax range)
