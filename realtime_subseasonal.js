@@ -248,6 +248,21 @@
             titleDiv.textContent = band.title;
             panel.appendChild(titleDiv);
 
+            // Save-this-panel button (left of expand). Composites the
+            // Plotly image with a title bar so the downloaded PNG is
+            // self-labeled.
+            var saveBtn = document.createElement('button');
+            saveBtn.type = 'button';
+            saveBtn.className = 'sub-hov-save-btn';
+            saveBtn.title = 'Save this panel as PNG';
+            saveBtn.setAttribute('aria-label', 'Save panel');
+            saveBtn.innerHTML = '💾';
+            saveBtn.addEventListener('click', function (e) {
+                e.stopPropagation();
+                _saveSinglePanel(panel, band.title);
+            });
+            panel.appendChild(saveBtn);
+
             // Expand/collapse button — lets users blow up a panel of
             // interest (e.g. the Kelvin band) so the time axis stretches
             // and individual wave packets are easier to read.
@@ -554,11 +569,79 @@
     }
 
     /* ── Save PNG ─────────────────────────────────────────────── */
-    // Composites the 5 Hovmöller panels + basin strip into a single
-    // PNG via Plotly.toImage. Each panel becomes one row; basin strip
-    // is the last row. TC-ATLAS watermark is already baked into each
-    // panel's layout (see annotations[] above), so the saved PNG
-    // carries attribution automatically.
+    // Shared composer used by both per-panel save and "Save All".
+    // Each panel renders as: title bar → Plotly image → spacer.
+    // TC-ATLAS watermark is baked into each Plotly layout already.
+    function _renderPanelToImage(panel) {
+        var rect = panel.getBoundingClientRect();
+        return Plotly.toImage(panel, {
+            format: 'png',
+            width: Math.round(rect.width * 2),
+            height: Math.round(rect.height * 2),
+        }).then(function (url) {
+            return new Promise(function (resolve, reject) {
+                var img = new Image();
+                img.onload = function () { resolve(img); };
+                img.onerror = reject;
+                img.src = url;
+            });
+        });
+    }
+
+    function _drawPanelTitleBar(ctx, x, y, width, title) {
+        // ~36 px tall title strip. Light background tint so the title
+        // reads cleanly across light/dark Plotly panels.
+        ctx.fillStyle = '#f1f5f9';
+        ctx.fillRect(x, y, width, 36);
+        ctx.fillStyle = '#0f172a';
+        ctx.font = 'bold 16px "DM Sans", system-ui, sans-serif';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(title, x + 16, y + 18);
+        return 36;
+    }
+
+    function _slugifyFilenameFragment(s) {
+        return (s || 'panel').toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    }
+
+    /** Save a single panel: title bar + Plotly image + footer. */
+    function _saveSinglePanel(panel, bandTitle) {
+        if (!panel || typeof Plotly === 'undefined') return;
+        _ga('rt_sub_save_png_panel', { band: bandTitle });
+        _renderPanelToImage(panel).then(function (img) {
+            var titleH = 36, footerH = 28;
+            var canvas = document.createElement('canvas');
+            canvas.width = img.width;
+            canvas.height = img.height + titleH + footerH;
+            var ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            _drawPanelTitleBar(ctx, 0, 0, canvas.width, bandTitle || 'Hovmöller');
+            ctx.drawImage(img, 0, titleH);
+            // Footer with attribution + date
+            ctx.fillStyle = '#475569';
+            ctx.font = '11px "DM Sans", system-ui, sans-serif';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('TC-ATLAS · ' + new Date().toISOString().slice(0, 10) + ' UTC',
+                         16, titleH + img.height + footerH / 2);
+            canvas.toBlob(function (blob) {
+                var u = URL.createObjectURL(blob);
+                var a = document.createElement('a');
+                a.href = u;
+                a.download = 'tc-atlas-subseasonal-' + _slugifyFilenameFragment(bandTitle)
+                    + '-' + new Date().toISOString().slice(0, 10) + '.png';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                setTimeout(function () { URL.revokeObjectURL(u); }, 1000);
+            }, 'image/png');
+        }).catch(function (err) {
+            console.error('[subseasonal-rt] per-panel save failed:', err);
+        });
+    }
+
+    /** Save the whole stack: header → (title + panel) × 5 + basin strip. */
     function _saveStackAsPNG() {
         var panels = Array.from(document.querySelectorAll('.sub-hov-panel'));
         var basinStrip = document.querySelector('.sub-hov-basin-strip');
@@ -567,69 +650,68 @@
         if (btn) { btn.disabled = true; btn.textContent = 'Rendering…'; }
         _ga('rt_sub_save_png');
 
-        // Render each panel + the basin strip to a PNG data URL at
-        // 2× device pixel ratio so the saved file is crisp on retina.
-        var targets = panels.concat(basinStrip ? [basinStrip] : []);
-        var renderPromises = targets.map(function (el) {
-            var rect = el.getBoundingClientRect();
-            return Plotly.toImage(el, {
-                format: 'png', width: Math.round(rect.width * 2),
-                height: Math.round(rect.height * 2),
-            });
-        });
+        var renderPromises = panels.map(_renderPanelToImage);
+        if (basinStrip) renderPromises.push(_renderPanelToImage(basinStrip));
 
         Promise.all(renderPromises)
-            .then(function (dataUrls) {
-                // Load all data URLs as Image objects, then composite
-                // onto a canvas at the union width / sum of heights.
-                return Promise.all(dataUrls.map(function (url) {
-                    return new Promise(function (resolve, reject) {
-                        var img = new Image();
-                        img.onload = function () { resolve(img); };
-                        img.onerror = reject;
-                        img.src = url;
-                    });
-                }));
-            })
             .then(function (imgs) {
                 var width = Math.max.apply(null, imgs.map(function (i) { return i.width; }));
-                var height = imgs.reduce(function (s, i) { return s + i.height; }, 0);
-                // Add a title bar at the top
-                var titleH = 60;
+                var titleH = 36;
+                var basinTitleH = 24;
+                var headerH = 60;
+                // Per-panel title bar above each Hovmöller (NOT the basin strip)
+                var totalHeight = headerH
+                    + panels.length * titleH
+                    + imgs.reduce(function (s, i) { return s + i.height; }, 0)
+                    + basinTitleH;     // small label above basemap strip
                 var canvas = document.createElement('canvas');
                 canvas.width = width;
-                canvas.height = height + titleH;
+                canvas.height = totalHeight;
                 var ctx = canvas.getContext('2d');
-                // White background
                 ctx.fillStyle = '#ffffff';
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
-                // Title
+                // Stack-level header
                 ctx.fillStyle = '#0f172a';
                 ctx.font = 'bold 22px "DM Sans", system-ui, sans-serif';
-                var title = 'Subseasonal State — Wheeler-Kiladis OLR Hovmöllers';
-                ctx.fillText(title, 24, 30);
+                ctx.textBaseline = 'alphabetic';
+                ctx.fillText('Subseasonal State — Wheeler-Kiladis OLR Hovmöllers',
+                             24, 30);
                 ctx.font = '13px "DM Sans", system-ui, sans-serif';
                 ctx.fillStyle = '#475569';
-                var sub = 'TC-ATLAS · '
-                    + new Date().toISOString().slice(0, 10) + ' UTC';
-                ctx.fillText(sub, 24, 50);
-                // Paste each panel image
-                var y = titleH;
-                imgs.forEach(function (img) {
+                ctx.fillText('TC-ATLAS · '
+                             + new Date().toISOString().slice(0, 10) + ' UTC',
+                             24, 50);
+                // Each Hovmöller panel gets its own title strip
+                var y = headerH;
+                imgs.forEach(function (img, i) {
+                    if (i < panels.length) {
+                        _drawPanelTitleBar(ctx, 0, y, canvas.width,
+                                           BANDS[i] ? BANDS[i].title : 'Hovmöller');
+                        y += titleH;
+                    } else {
+                        // Basin strip header
+                        ctx.fillStyle = '#f8fafc';
+                        ctx.fillRect(0, y, canvas.width, basinTitleH);
+                        ctx.fillStyle = '#475569';
+                        ctx.font = '11px "DM Sans", system-ui, sans-serif';
+                        ctx.textBaseline = 'middle';
+                        ctx.fillText('Geographic reference — 10°S to 15°N',
+                                     16, y + basinTitleH / 2);
+                        y += basinTitleH;
+                    }
                     ctx.drawImage(img, 0, y);
                     y += img.height;
                 });
-                // Trigger download
                 canvas.toBlob(function (blob) {
-                    var url = URL.createObjectURL(blob);
+                    var u = URL.createObjectURL(blob);
                     var a = document.createElement('a');
-                    a.href = url;
+                    a.href = u;
                     a.download = 'tc-atlas-subseasonal-'
                         + new Date().toISOString().slice(0, 10) + '.png';
                     document.body.appendChild(a);
                     a.click();
                     document.body.removeChild(a);
-                    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+                    setTimeout(function () { URL.revokeObjectURL(u); }, 1000);
                 }, 'image/png');
             })
             .catch(function (err) {

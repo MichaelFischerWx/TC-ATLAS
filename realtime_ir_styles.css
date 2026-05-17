@@ -2140,16 +2140,16 @@ html:not([data-view="map"]) #basin-sidebar {
        145px height against simple specificity overrides. */
     height: 380px !important;
 }
-.sub-hov-expand-btn {
+.sub-hov-expand-btn,
+.sub-hov-save-btn {
     position: absolute;
     top: 4px;
-    right: 8px;
     z-index: 3;
     width: 22px;
     height: 22px;
     padding: 0;
     line-height: 1;
-    font-size: 0.85rem;
+    font-size: 0.78rem;
     color: var(--text-dim, #64748b);
     background: rgba(255,255,255,0.7);
     border: 1px solid var(--border);
@@ -2157,12 +2157,16 @@ html:not([data-view="map"]) #basin-sidebar {
     cursor: pointer;
     transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
-.sub-hov-expand-btn:hover {
+.sub-hov-expand-btn { right: 8px; }
+.sub-hov-save-btn   { right: 34px; }
+.sub-hov-expand-btn:hover,
+.sub-hov-save-btn:hover {
     background: rgba(46,125,255,0.18);
     color: var(--text);
     border-color: rgba(46,125,255,0.45);
 }
-[data-theme="dark"] .sub-hov-expand-btn { background: rgba(22,27,36,0.72); }
+[data-theme="dark"] .sub-hov-expand-btn,
+[data-theme="dark"] .sub-hov-save-btn { background: rgba(22,27,36,0.72); }
 .sub-hov-basin-strip {
     position: relative;
     height: 60px;
