@@ -6174,16 +6174,33 @@
             validShort = (top || '').replace('T', ' ').replace(':00:00Z', 'Z');
         }
 
+        function _escAttr(s) {
+            return String(s == null ? '' : s)
+                .replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+                .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
         function row(opts) {
             var sub = opts.substatus
                 ? '<span class="substatus">' + opts.substatus + '</span>' : '';
             var units = opts.units
                 ? '<span class="units">' + opts.units + '</span>' : '';
+            // Optional per-row tooltip — used for layers whose name needs
+            // unpacking (e.g. \"MRG / TD-type\"). Renders as a small ⓘ
+            // hint at the row's end + a native title attribute so hovering
+            // anywhere on the row surfaces the full description.
+            var infoIcon = '';
+            var titleAttr = '';
+            if (opts.tooltip) {
+                titleAttr = ' title="' + _escAttr(opts.tooltip) + '"';
+                infoIcon = '<span class="ir-row-info" aria-hidden="true">ⓘ</span>';
+            }
             return '<label class="ir-global-menu-row" data-action="' + opts.action + '"'
-                + (opts.dataName ? ' data-name="' + opts.dataName + '"' : '') + '>'
+                + (opts.dataName ? ' data-name="' + opts.dataName + '"' : '')
+                + titleAttr + '>'
                 + '<input type="checkbox"' + (opts.checked ? ' checked' : '') + '>'
                 + '<span class="label">' + opts.label + sub + '</span>'
                 + units
+                + infoIcon
                 + '</label>';
         }
 
@@ -6240,6 +6257,7 @@
                         dataName: L_.name,
                         label: grp.shortTitle(L_),
                         units: L_.units,
+                        tooltip: L_.description,
                         checked: !!_rtEnvActive[L_.name]
                     });
                 }

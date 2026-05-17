@@ -1542,6 +1542,21 @@ html, body { margin: 0; padding: 0; }
     display: block;
     margin-top: 1px;
 }
+/* Small "ⓘ" hint that surfaces the row's full description via the
+   native title-attribute tooltip on hover. Used for subseasonal-forcing
+   layers whose abbreviated name (e.g. "MRG / TD-type") needs unpacking. */
+.ir-global-menu-row .ir-row-info {
+    font-size: 0.72rem;
+    color: #94a3b8;
+    opacity: 0.55;
+    margin-left: 4px;
+    flex: 0 0 auto;
+    transition: opacity 0.12s;
+}
+.ir-global-menu-row:hover .ir-row-info {
+    opacity: 1;
+    color: var(--blue, #2e7dff);
+}
 .ir-global-menu-empty {
     padding: 8px 10px;
     font-size: 0.7rem;
