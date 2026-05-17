@@ -123,6 +123,18 @@ class WaveSpec:
     # Matplotlib's "RdBu_r" delivers this orientation: r → swap so the
     # low end is blue and the high end is red.
     cmap: str = "RdBu_r"
+    # Rendering mode. "filled" = diverging color shading (good for the
+    # raw OLR anomaly, which spans 60+ W/m² with broad structure).
+    # "contour" = symmetric pos/neg isolines on a transparent background
+    # (right call for WK-filtered band products because their natural
+    # amplitude is small, equatorially-trapped, and obscured under a
+    # filled colormap). Per-band contour levels are listed below.
+    render_style: str = "filled"
+    # Contour levels in W/m². Symmetric pos/neg pairs (so -L, +L); the
+    # renderer draws negative levels in blue and positive in red,
+    # thickness scaling with magnitude. Used only when render_style ==
+    # "contour".
+    contour_levels: Optional[list] = None
 
 
 WAVE_SPECS = [
@@ -134,49 +146,70 @@ WAVE_SPECS = [
         component="raw",
         vmin=-60.0, vmax=60.0,
         cmap="RdBu_r",
+        # The raw anomaly has broad structure across ±60 W/m² and is the
+        # one product where filled-shading reads well (it's the canonical
+        # "where is convection" map). The WK-filtered bands below use
+        # contour rendering since their natural amplitude is ±5-15 W/m²
+        # — too narrow to fill cleanly without obscuring the IR underlay.
+        render_style="filled",
     ),
     WaveSpec(
         name="mjo",
         title="MJO-filtered OLR",
         description="Wheeler-Kiladis MJO band — eastward wavenumbers 1-5, "
-                    "period 30-96 d, symmetric component.",
+                    "period 30-96 d, symmetric component. Contours every "
+                    "3 W/m²; the equatorially-trapped envelope of active "
+                    "(blue) and suppressed (red) convection should be "
+                    "visible across the Indo-Pacific.",
         component="sym",
         k_lo=1, k_hi=5,
         freq_lo=1.0 / 96.0, freq_hi=1.0 / 30.0,
-        vmin=-25.0, vmax=25.0,
+        vmin=-15.0, vmax=15.0,
+        render_style="contour",
+        contour_levels=[-12, -9, -6, -3, 3, 6, 9, 12],
     ),
     WaveSpec(
         name="kelvin",
         title="Kelvin-wave filtered OLR",
         description="Wheeler-Kiladis Kelvin band — eastward wavenumbers 1-14, "
                     "equivalent depth h = 8-90 m (phase speed c = √(g·h) ≈ "
-                    "9-30 m/s eastward), symmetric component.",
+                    "9-30 m/s eastward), symmetric component. Contours every "
+                    "2 W/m²; look for discrete eastward-propagating envelopes "
+                    "near the equator on a Hovmöller animation.",
         component="sym",
         k_lo=1, k_hi=14,
         h_lo=8.0, h_hi=90.0,
-        vmin=-25.0, vmax=25.0,
+        vmin=-10.0, vmax=10.0,
+        render_style="contour",
+        contour_levels=[-8, -6, -4, -2, 2, 4, 6, 8],
     ),
     WaveSpec(
         name="er",
         title="Equatorial Rossby (n=1) OLR",
         description="Wheeler-Kiladis ER band — westward wavenumbers 1-10, "
                     "equivalent depth h = 8-90 m (phase speed c ≈ 9-30 m/s "
-                    "westward), n=1 Rossby branch, symmetric component.",
+                    "westward), n=1 Rossby branch, symmetric component. "
+                    "Contours every 2 W/m².",
         component="sym",
         k_lo=-10, k_hi=-1,
         h_lo=8.0, h_hi=90.0,
-        vmin=-20.0, vmax=20.0,
+        vmin=-10.0, vmax=10.0,
+        render_style="contour",
+        contour_levels=[-8, -6, -4, -2, 2, 4, 6, 8],
     ),
     WaveSpec(
         name="mrg",
         title="Mixed Rossby-Gravity / TD-type OLR",
         description="Wheeler-Kiladis MRG band — westward wavenumbers 1-10, "
                     "period 3-8 d, anti-symmetric component. Often the "
-                    "direct WPac / Atlantic TC genesis trigger.",
+                    "direct WPac / Atlantic TC genesis trigger. Contours "
+                    "every 2 W/m²; MRG amplitudes are typically ±2-6 W/m².",
         component="asym",
         k_lo=-10, k_hi=-1,
         freq_lo=1.0 / 8.0, freq_hi=1.0 / 3.0,
-        vmin=-20.0, vmax=20.0,
+        vmin=-6.0, vmax=6.0,
+        render_style="contour",
+        contour_levels=[-6, -4, -2, 2, 4, 6],
     ),
 ]
 
@@ -457,51 +490,122 @@ def _warp_eq_to_mercator(field: np.ndarray, ny_out: Optional[int] = None
     return field[src_rows, :].copy()
 
 
-def render_png(field2d: np.ndarray, lats: np.ndarray, lons: np.ndarray,
-               spec: WaveSpec) -> bytes:
-    """Render a 2D field as a Mercator-warped global PNG.
-
-    Output is a global image in Web Mercator pixel-space (lat range
-    ±85.05°) with transparent background. The metadata bounds returned
-    by the caller must match (±WEB_MERC_LAT_MAX, ±180°) for L.imageOverlay
-    to align correctly on the Mercator basemap. Returns PNG bytes.
+def _prepare_field_for_render(field2d: np.ndarray, lats: np.ndarray,
+                               lons: np.ndarray):
+    """Reorder lat N→S and shift lon to [-180, 180], then Mercator-warp.
+    Returns the warped 2D array ready to feed matplotlib in the
+    [-180, 180, -WEB_MERC_LAT_MAX, WEB_MERC_LAT_MAX] extent.
     """
+    lat_order = np.argsort(-lats)
+    f = field2d[lat_order, :]
+    lon_order = np.argsort(((lons + 180) % 360) - 180)
+    f = f[:, lon_order]
+    return _warp_eq_to_mercator(f)
+
+
+def _render_filled_png(field2d: np.ndarray, spec: WaveSpec) -> bytes:
+    """Filled diverging-colormap render — used for the raw OLR anomaly
+    (vmin/vmax ±60 W/m² is wide enough that the broad ITCZ + subtropical
+    pattern reads cleanly under filled shading)."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib.colors import TwoSlopeNorm
 
-    # Reorder lat to N→S (the convention _warp_eq_to_mercator expects)
-    lat_order = np.argsort(-lats)
-    field2d = field2d[lat_order, :]
-    # Shift longitude to [-180, 180] from [0, 360]
-    lon_order = np.argsort(((lons + 180) % 360) - 180)
-    field2d = field2d[:, lon_order]
-
-    # Apply Mercator warp so the PNG is geographically aligned when
-    # CSS-stretched between ±WEB_MERC_LAT_MAX, ±180° corners by Leaflet.
-    warped = _warp_eq_to_mercator(field2d)
-
     fig = plt.figure(figsize=(NX / 100, NY / 100), dpi=100)
     ax = fig.add_axes([0, 0, 1, 1])
     ax.set_axis_off()
     norm = TwoSlopeNorm(vcenter=0.0, vmin=spec.vmin, vmax=spec.vmax)
-    # Rows are now top→bottom = +MAX_LAT → -MAX_LAT. imshow's default
-    # origin='upper' matches that, so no flip needed.
     ax.imshow(
-        warped,
-        cmap=spec.cmap,
-        norm=norm,
+        field2d, cmap=spec.cmap, norm=norm,
         extent=[-180, 180, -WEB_MERC_LAT_MAX, WEB_MERC_LAT_MAX],
-        origin="upper",
-        interpolation="bilinear",
-        aspect="auto",
+        origin="upper", interpolation="bilinear", aspect="auto",
     )
     buf = io.BytesIO()
     fig.savefig(buf, format="png", transparent=True, bbox_inches="tight",
                 pad_inches=0)
     plt.close(fig)
     return buf.getvalue()
+
+
+def _render_contour_png(field2d: np.ndarray, spec: WaveSpec) -> bytes:
+    """Render `field2d` as colored isolines on a transparent background.
+
+    For WK-filtered bands whose natural amplitude is small (±2-15 W/m²),
+    filled shading reads as a near-uniform pale wash that obscures the
+    IR underlay. Line contours expose the equatorially-trapped wave
+    envelopes as discrete loops while letting the IR show through
+    everywhere outside the active signal.
+
+    Contour levels come from spec.contour_levels (symmetric ±L pairs).
+    Negative (active convection) draws in blue, positive (suppressed)
+    in red. Stroke width scales with magnitude so weak envelopes look
+    thinner. Renders at 4× the native 144×73 grid so lines stay crisp
+    when Leaflet upscales the overlay at higher map zooms.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    levels = list(spec.contour_levels or [])
+    if not levels:
+        return _render_filled_png(field2d, spec)
+
+    # Render at higher resolution than the source so antialiased contour
+    # lines look smooth instead of pixelated. ~4× the data grid:
+    out_nx, out_ny = NX * 4, NY * 4
+    dpi = 100
+
+    fig = plt.figure(figsize=(out_nx / dpi, out_ny / dpi), dpi=dpi)
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.set_axis_off()
+    # x = lon centers, y = lat (top → bottom in Mercator pixel space)
+    ny, nx = field2d.shape
+    xs = np.linspace(-180, 180, nx)
+    ys = np.linspace(WEB_MERC_LAT_MAX, -WEB_MERC_LAT_MAX, ny)
+    # Per-level color + stroke width: deeper saturation + thicker stroke
+    # for the outer (high-magnitude) contours.
+    max_abs = max(abs(l) for l in levels)
+    colors = []
+    widths = []
+    for L in levels:
+        mag = abs(L) / max_abs            # 0..1
+        # Blue (active convection, L<0) or red (suppressed, L>0). Use
+        # the magnitude to interpolate from a pale to a saturated tone.
+        if L < 0:
+            r = int(round(96  * (1 - mag) +   8 * mag))
+            g = int(round(165 * (1 - mag) +  64 * mag))
+            b = int(round(250 * (1 - mag) + 142 * mag))
+        else:
+            r = int(round(248 * (1 - mag) + 153 * mag))
+            g = int(round(113 * (1 - mag) +  17 * mag))
+            b = int(round(113 * (1 - mag) +  21 * mag))
+        colors.append((r / 255, g / 255, b / 255))
+        widths.append(0.8 + 1.8 * mag)
+    ax.contour(
+        xs, ys, field2d,
+        levels=levels, colors=colors, linewidths=widths,
+    )
+    ax.set_xlim(-180, 180)
+    ax.set_ylim(-WEB_MERC_LAT_MAX, WEB_MERC_LAT_MAX)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", transparent=True, bbox_inches=None,
+                pad_inches=0, dpi=dpi)
+    plt.close(fig)
+    return buf.getvalue()
+
+
+def render_png(field2d: np.ndarray, lats: np.ndarray, lons: np.ndarray,
+               spec: WaveSpec) -> bytes:
+    """Dispatch to the contour or filled renderer based on spec.render_style.
+    Both paths warp the field to Mercator pixel-space first so the
+    output PNG aligns correctly when overlaid on Leaflet's Web Mercator
+    basemap.
+    """
+    warped = _prepare_field_for_render(field2d, lats, lons)
+    if spec.render_style == "contour":
+        return _render_contour_png(warped, spec)
+    return _render_filled_png(warped, spec)
 
 
 GCS_BUCKET = os.environ.get("GCS_IR_CACHE_BUCKET", "tc-atlas-ir-cache")
@@ -523,6 +627,11 @@ def _meta_dict(spec: WaveSpec, valid_time: str, bounds: list,
         "vmin": spec.vmin,
         "vmax": spec.vmax,
         "cmap": spec.cmap,
+        # render_style routes the frontend's L.imageOverlay handling.
+        # "contour" is rendered as transparent-background isolines so
+        # the IR underlay shows through; "filled" is the standard
+        # diverging colormap shading.
+        "render_style": spec.render_style,
         "bounds": bounds,
     }
     if image_url:
