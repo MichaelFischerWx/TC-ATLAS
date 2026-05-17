@@ -326,14 +326,33 @@
                     tickfont: { size: 9 },
                 },
                 yaxis: {
-                    autorange: 'reversed',     // oldest top → newest bottom
+                    // Newest at top (operational convention — matches CPC,
+                    // Schreck, ECMWF daily products). User glances at the
+                    // page and sees today's wave state first. Original
+                    // Hovmöller (1949) used time-downward; modern
+                    // operational TC monitoring overwhelmingly inverts.
+                    // Side effect: eastward waves (Kelvin, MJO) now tilt
+                    // UP-AND-RIGHT instead of down-and-right; westward
+                    // (ER) tilt UP-AND-LEFT.
+                    autorange: true,
                     showgrid: false, zeroline: false,
                     tickfont: { size: 9 },
-                    // Show every ~10th day to keep readable
                     nticks: 7,
                 },
                 shapes: [],
-                annotations: [],
+                annotations: [{
+                    // Subtle watermark so saved PNGs and screenshots
+                    // carry attribution back to the source.
+                    xref: 'paper', yref: 'paper',
+                    x: 1, y: 0,
+                    xanchor: 'right', yanchor: 'bottom',
+                    text: 'TC-ATLAS · tc-atlas.com',
+                    showarrow: false,
+                    font: { size: 8, color: 'rgba(15,23,42,0.32)',
+                            family: 'DM Sans, system-ui, sans-serif' },
+                    bgcolor: 'rgba(255,255,255,0.55)',
+                    borderpad: 2,
+                }],
             };
 
             // Active-TC overlay traces: each storm's (time, lon) track
@@ -534,8 +553,100 @@
         box.innerHTML = parts.join('');
     }
 
+    /* ── Save PNG ─────────────────────────────────────────────── */
+    // Composites the 5 Hovmöller panels + basin strip into a single
+    // PNG via Plotly.toImage. Each panel becomes one row; basin strip
+    // is the last row. TC-ATLAS watermark is already baked into each
+    // panel's layout (see annotations[] above), so the saved PNG
+    // carries attribution automatically.
+    function _saveStackAsPNG() {
+        var panels = Array.from(document.querySelectorAll('.sub-hov-panel'));
+        var basinStrip = document.querySelector('.sub-hov-basin-strip');
+        if (!panels.length || typeof Plotly === 'undefined') return;
+        var btn = document.getElementById('sub-save-png-btn');
+        if (btn) { btn.disabled = true; btn.textContent = 'Rendering…'; }
+        _ga('rt_sub_save_png');
+
+        // Render each panel + the basin strip to a PNG data URL at
+        // 2× device pixel ratio so the saved file is crisp on retina.
+        var targets = panels.concat(basinStrip ? [basinStrip] : []);
+        var renderPromises = targets.map(function (el) {
+            var rect = el.getBoundingClientRect();
+            return Plotly.toImage(el, {
+                format: 'png', width: Math.round(rect.width * 2),
+                height: Math.round(rect.height * 2),
+            });
+        });
+
+        Promise.all(renderPromises)
+            .then(function (dataUrls) {
+                // Load all data URLs as Image objects, then composite
+                // onto a canvas at the union width / sum of heights.
+                return Promise.all(dataUrls.map(function (url) {
+                    return new Promise(function (resolve, reject) {
+                        var img = new Image();
+                        img.onload = function () { resolve(img); };
+                        img.onerror = reject;
+                        img.src = url;
+                    });
+                }));
+            })
+            .then(function (imgs) {
+                var width = Math.max.apply(null, imgs.map(function (i) { return i.width; }));
+                var height = imgs.reduce(function (s, i) { return s + i.height; }, 0);
+                // Add a title bar at the top
+                var titleH = 60;
+                var canvas = document.createElement('canvas');
+                canvas.width = width;
+                canvas.height = height + titleH;
+                var ctx = canvas.getContext('2d');
+                // White background
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                // Title
+                ctx.fillStyle = '#0f172a';
+                ctx.font = 'bold 22px "DM Sans", system-ui, sans-serif';
+                var title = 'Subseasonal State — Wheeler-Kiladis OLR Hovmöllers';
+                ctx.fillText(title, 24, 30);
+                ctx.font = '13px "DM Sans", system-ui, sans-serif';
+                ctx.fillStyle = '#475569';
+                var sub = 'TC-ATLAS · tc-atlas.com · '
+                    + new Date().toISOString().slice(0, 10) + ' UTC';
+                ctx.fillText(sub, 24, 50);
+                // Paste each panel image
+                var y = titleH;
+                imgs.forEach(function (img) {
+                    ctx.drawImage(img, 0, y);
+                    y += img.height;
+                });
+                // Trigger download
+                canvas.toBlob(function (blob) {
+                    var url = URL.createObjectURL(blob);
+                    var a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'tc-atlas-subseasonal-'
+                        + new Date().toISOString().slice(0, 10) + '.png';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+                }, 'image/png');
+            })
+            .catch(function (err) {
+                console.error('[subseasonal-rt] save PNG failed:', err);
+            })
+            .finally(function () {
+                if (btn) { btn.disabled = false; btn.innerHTML = '💾 Save PNG'; }
+            });
+    }
+
     /* ── Lat-band toggle ──────────────────────────────────────── */
     function _wireControls() {
+        var saveBtn = document.getElementById('sub-save-png-btn');
+        if (saveBtn && !saveBtn._wired) {
+            saveBtn._wired = true;
+            saveBtn.addEventListener('click', _saveStackAsPNG);
+        }
         var toggle = document.getElementById('sub-latband-toggle');
         if (toggle && !toggle._wired) {
             toggle._wired = true;

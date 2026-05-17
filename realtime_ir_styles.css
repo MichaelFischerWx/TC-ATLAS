@@ -2008,6 +2008,27 @@ html:not([data-view="map"]) #basin-sidebar {
     font-weight: 600;
 }
 
+.sub-save-png-btn {
+    padding: 4px 12px;
+    border: 1px solid var(--border);
+    background: rgba(46, 125, 255, 0.12);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.72rem;
+    font-weight: 600;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+.sub-save-png-btn:hover {
+    background: rgba(46, 125, 255, 0.28);
+    border-color: rgba(46, 125, 255, 0.55);
+}
+.sub-save-png-btn:disabled {
+    opacity: 0.55;
+    cursor: wait;
+}
+
 .sub-body {
     display: grid;
     grid-template-columns: minmax(320px, 380px) 1fr;
