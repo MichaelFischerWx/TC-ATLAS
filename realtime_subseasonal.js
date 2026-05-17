@@ -23,12 +23,18 @@
     var INDICES_FALLBACK = 'data/subseasonal_phases.json';
 
     // WaveSpec names must match build_subseasonal_overlays.py.
+    // forcedLatBand: pin a panel to a specific lat band regardless of
+    // the user's toggle. Used for MRG because it's antisymmetric about
+    // the equator — averaging over a symmetric band (10°S-10°N or
+    // 5°S-5°N) cancels the signal to zero by construction. The northern
+    // lobe at 5°N-15°N is where the actual MRG / TD-type variance lives.
     var BANDS = [
-        { key: 'anomaly', title: 'OLR anomaly (raw)',           vlim: 40, cmap: 'RdBu' },
-        { key: 'mjo',     title: 'MJO band (30-96 d)',          vlim: 15, cmap: 'RdBu' },
-        { key: 'kelvin',  title: 'Kelvin (eastward, ~12-25 m/s)', vlim: 12, cmap: 'RdBu' },
-        { key: 'er',      title: 'Equatorial Rossby (westward)', vlim:  8, cmap: 'RdBu' },
-        { key: 'mrg',     title: 'MRG / TD-type (3-8 d)',        vlim:  8, cmap: 'RdBu' },
+        { key: 'anomaly', title: 'OLR anomaly (raw)',             vlim: 40 },
+        { key: 'mjo',     title: 'MJO band (30-96 d)',            vlim: 15 },
+        { key: 'kelvin',  title: 'Kelvin (eastward, ~12-25 m/s)', vlim: 12 },
+        { key: 'er',      title: 'Equatorial Rossby (westward)',  vlim:  8 },
+        { key: 'mrg',     title: 'MRG / TD-type (3-8 d, 5°N-15°N)', vlim: 8,
+          forcedLatBand: 'boreal' },
     ];
 
     var TRAIL_DAYS = 15;
@@ -178,12 +184,13 @@
             container.appendChild(panel);
 
             var slab = state.slabs[band.key];
-            if (!slab || !slab.lat_bands || !slab.lat_bands[state.latBand]) {
+            var latBandKey = band.forcedLatBand || state.latBand;
+            if (!slab || !slab.lat_bands || !slab.lat_bands[latBandKey]) {
                 panel.innerHTML += '<div style="padding:24px;text-align:center;color:#94a3b8;font-size:0.75rem;">'
                     + 'No data for ' + band.title + '</div>';
                 return;
             }
-            var bandData = slab.lat_bands[state.latBand];
+            var bandData = slab.lat_bands[latBandKey];
             var norm = _normalizeLons(slab.lons, bandData.values);
             var isLast = idx === BANDS.length - 1;
 
