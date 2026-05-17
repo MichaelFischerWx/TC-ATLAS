@@ -190,6 +190,129 @@ def read_gfs_field(grib_bytes: bytes, level: int, var: str
 
 
 # --------------------------------------------------------------------------
+# Stage 1B: shared GFS fetch
+# --------------------------------------------------------------------------
+# The naïve pipeline made ~27 NOMADS round-trips per forecast hour
+# because every builder fetched its own (var, level) GRIB — UGRD@850 was
+# requested 5 times alone (shear, midlevel_shear, vort_850, div_850,
+# winds_850). `fetch_gfs_bundle()` resolves the full set in ~7 calls
+# (one per (var, typeOfLevel) group), and builders look up the
+# pre-decoded fields via `_load_fields()`.
+#
+# Builders preserve their legacy fetch path (bundle=None) so they can
+# still be invoked standalone for local testing.
+
+# Full set of (var, level) tuples the pipeline needs across all
+# GFS-driven builders. Used by `fetch_gfs_bundle` to decide what to
+# request and by `_load_fields` to error early if something is missing.
+GFS_PRESSURE_REQUESTS = {
+    "UGRD": [200, 500, 700, 850],
+    "VGRD": [200, 500, 700, 850],
+    "HGT":  [500],
+    "RH":   [700, 500, 400],
+}
+GFS_SURFACE_REQUESTS = [
+    ("UGRD",  "10_m_above_ground"),
+    ("VGRD",  "10_m_above_ground"),
+    ("PRMSL", "mean_sea_level"),
+]
+
+
+def fetch_gfs_bundle(date_str: str, hour_str: str,
+                     forecast_hour: int = 0) -> dict:
+    """Pre-fetch every (var, level) the env-overlay pipeline needs in
+    ~7 NOMADS calls per forecast hour (one per (var, typeOfLevel) group)
+    instead of the ~27 round-trips the naïve per-builder pattern made.
+
+    Returns `{(var, level): np.ndarray}` keyed exactly the way
+    `read_gfs_field` returns fields — pressure-level keys are int
+    (200, 500, 700, 850), non-pressure keys are the NOMADS sentinel
+    strings ("10_m_above_ground", "mean_sea_level"). Missing keys are
+    omitted (no exception) — builders fall back to per-builder fetch
+    if a key isn't in the bundle.
+
+    Pressure-level fetches bundle every level for a given variable into
+    one cgi-bin request (multi-level toggles); non-pressure
+    typeOfLevels are split out so each GRIB carries a single
+    typeOfLevel — keeps cfgrib happy without filter_by_keys gymnastics.
+    """
+    bundle: dict = {}
+    # Pressure-level group — one cgi-bin call per var, all levels.
+    for var, levels in GFS_PRESSURE_REQUESTS.items():
+        grib = fetch_gfs_global(date_str, hour_str, levels, var,
+                                forecast_hour=forecast_hour)
+        if grib is None:
+            log.warning("bundle: %s f%03d pressure fetch failed (levels=%s)",
+                        var, forecast_hour, levels)
+            continue
+        for lvl in levels:
+            arr = read_gfs_field(grib, lvl, var)
+            if arr is not None:
+                bundle[(var, lvl)] = arr
+    # Non-pressure single-level fetches.
+    for var, lvl in GFS_SURFACE_REQUESTS:
+        grib = fetch_gfs_global(date_str, hour_str, [lvl], var,
+                                forecast_hour=forecast_hour)
+        if grib is None:
+            log.warning("bundle: %s %s f%03d fetch failed",
+                        var, lvl, forecast_hour)
+            continue
+        # read_gfs_field's isobaricInhPa branch is bypassed for
+        # non-pressure GRIBs (no such dim); the unused `level` arg is
+        # ignored in that path.
+        arr = read_gfs_field(grib, 0, var)
+        if arr is not None:
+            bundle[(var, lvl)] = arr
+    log.info("Bundle f%03d: %d/%d fields cached",
+             forecast_hour, len(bundle),
+             sum(len(v) for v in GFS_PRESSURE_REQUESTS.values())
+             + len(GFS_SURFACE_REQUESTS))
+    return bundle
+
+
+def _load_fields(date_str: str, hour_str: str, forecast_hour: int,
+                 needs: list,
+                 bundle: Optional[dict] = None) -> Optional[dict]:
+    """Resolve a list of (var, level) requests against an optional
+    shared bundle, falling back to per-var NOMADS fetches when bundle
+    is None or missing a key. Returns `{(var, level): np.ndarray}` or
+    None on any unresolvable field.
+
+    Missing-from-bundle keys are grouped by var so one fall-back call
+    can still cover multiple levels at once.
+    """
+    out: dict = {}
+    missing: list = []
+    for var, lvl in needs:
+        if bundle is not None and (var, lvl) in bundle:
+            out[(var, lvl)] = bundle[(var, lvl)]
+        else:
+            missing.append((var, lvl))
+    if missing:
+        by_var: dict = {}
+        for var, lvl in missing:
+            by_var.setdefault(var, []).append(lvl)
+        for var, levels in by_var.items():
+            grib = fetch_gfs_global(date_str, hour_str, levels, var,
+                                    forecast_hour=forecast_hour)
+            if grib is None:
+                log.error("_load_fields: NOMADS fetch failed for %s "
+                          "levels=%s f%03d", var, levels, forecast_hour)
+                return None
+            for lvl in levels:
+                # int level → cfgrib pressure selection; str sentinel
+                # → unused (the GRIB has only one typeOfLevel anyway).
+                sel = lvl if isinstance(lvl, int) else 0
+                arr = read_gfs_field(grib, sel, var)
+                if arr is None:
+                    log.error("_load_fields: missing %s @ %s f%03d",
+                              var, lvl, forecast_hour)
+                    return None
+                out[(var, lvl)] = arr
+    return out
+
+
+# --------------------------------------------------------------------------
 # OISST access
 # --------------------------------------------------------------------------
 
@@ -997,22 +1120,19 @@ def regrid_to_global(field: np.ndarray) -> np.ndarray:
     return field
 
 
-def build_shear(date_str: str, hour_str: str, *, forecast_hour: int = 0) -> Optional[bytes]:
+def build_shear(date_str: str, hour_str: str, *, forecast_hour: int = 0,
+                bundle: Optional[dict] = None) -> Optional[bytes]:
     """200-850 hPa wind shear magnitude (knots)."""
     log.info("Building shear: GFS %s %sZ", date_str, hour_str)
-    u_grib = fetch_gfs_global(date_str, hour_str, [200, 850], "UGRD", forecast_hour=forecast_hour)
-    v_grib = fetch_gfs_global(date_str, hour_str, [200, 850], "VGRD", forecast_hour=forecast_hour)
-    if not u_grib or not v_grib:
-        log.error("Shear: GFS fetch failed")
+    fields = _load_fields(date_str, hour_str, forecast_hour,
+                          [("UGRD", 200), ("UGRD", 850),
+                           ("VGRD", 200), ("VGRD", 850)],
+                          bundle=bundle)
+    if fields is None:
+        log.error("Shear: field load failed")
         return None
-
-    u200 = read_gfs_field(u_grib, 200, "UGRD")
-    u850 = read_gfs_field(u_grib, 850, "UGRD")
-    v200 = read_gfs_field(v_grib, 200, "VGRD")
-    v850 = read_gfs_field(v_grib, 850, "VGRD")
-    if any(f is None for f in (u200, u850, v200, v850)):
-        log.error("Shear: missing u/v level")
-        return None
+    u200 = fields[("UGRD", 200)]; u850 = fields[("UGRD", 850)]
+    v200 = fields[("VGRD", 200)]; v850 = fields[("VGRD", 850)]
 
     # Disc-smooth u/v at each level over a 500 km radius before
     # differencing so the TC vortex (and other sub-500-km features)
@@ -1057,7 +1177,8 @@ def build_shear(date_str: str, hour_str: str, *, forecast_hour: int = 0) -> Opti
     return shear_kt if upload_layer(spec, shear_kt) else None
 
 
-def build_midlevel_shear(date_str: str, hour_str: str, *, forecast_hour: int = 0) -> Optional[bytes]:
+def build_midlevel_shear(date_str: str, hour_str: str, *, forecast_hour: int = 0,
+                         bundle: Optional[dict] = None) -> Optional[bytes]:
     """500-850 hPa wind shear magnitude (knots) — vortex-suppressed.
 
     Mid-level shear is more relevant than the deep-layer (200-850)
@@ -1065,19 +1186,15 @@ def build_midlevel_shear(date_str: str, hour_str: str, *, forecast_hour: int = 0
     of a TC vortex, where most of the convective organization happens.
     """
     log.info("Building mid-level shear: GFS %s %sZ", date_str, hour_str)
-    u_grib = fetch_gfs_global(date_str, hour_str, [500, 850], "UGRD", forecast_hour=forecast_hour)
-    v_grib = fetch_gfs_global(date_str, hour_str, [500, 850], "VGRD", forecast_hour=forecast_hour)
-    if not u_grib or not v_grib:
-        log.error("Mid-level shear: GFS fetch failed")
+    fields = _load_fields(date_str, hour_str, forecast_hour,
+                          [("UGRD", 500), ("UGRD", 850),
+                           ("VGRD", 500), ("VGRD", 850)],
+                          bundle=bundle)
+    if fields is None:
+        log.error("Mid-level shear: field load failed")
         return None
-
-    u500 = read_gfs_field(u_grib, 500, "UGRD")
-    u850 = read_gfs_field(u_grib, 850, "UGRD")
-    v500 = read_gfs_field(v_grib, 500, "VGRD")
-    v850 = read_gfs_field(v_grib, 850, "VGRD")
-    if any(f is None for f in (u500, u850, v500, v850)):
-        log.error("Mid-level shear: missing u/v level")
-        return None
+    u500 = fields[("UGRD", 500)]; u850 = fields[("UGRD", 850)]
+    v500 = fields[("VGRD", 500)]; v850 = fields[("VGRD", 850)]
 
     u500_s = disc_smooth(u500, 500.0)
     v500_s = disc_smooth(v500, 500.0)
@@ -1234,19 +1351,19 @@ def _upload_winds(name: str, title: str, valid_time: str, png: bytes,
         return False
 
 
-def build_winds(date_str: str, hour_str: str, level: int, *, forecast_hour: int = 0) -> Optional[bytes]:
+def build_winds(date_str: str, hour_str: str, level: int, *, forecast_hour: int = 0,
+                bundle: Optional[dict] = None) -> Optional[bytes]:
     """Fetch u, v at the given pressure level and upload as a packed
     wind-barb layer."""
     log.info("Building winds: GFS %s %sZ at %d hPa", date_str, hour_str, level)
-    u_grib = fetch_gfs_global(date_str, hour_str, [level], "UGRD", forecast_hour=forecast_hour)
-    v_grib = fetch_gfs_global(date_str, hour_str, [level], "VGRD", forecast_hour=forecast_hour)
-    if not u_grib or not v_grib:
-        log.error("Winds: GFS fetch failed at %d hPa", level)
+    fields = _load_fields(date_str, hour_str, forecast_hour,
+                          [("UGRD", level), ("VGRD", level)],
+                          bundle=bundle)
+    if fields is None:
+        log.error("Winds: field load failed at %d hPa", level)
         return None
-    u = read_gfs_field(u_grib, level, "UGRD")
-    v = read_gfs_field(v_grib, level, "VGRD")
-    if u is None or v is None:
-        return None
+    u = fields[("UGRD", level)]
+    v = fields[("VGRD", level)]
 
     # Light smoothing only — wind barbs should reflect the actual flow,
     # not a smeared synoptic mean. 100 km is tight enough to preserve
@@ -1262,7 +1379,8 @@ def build_winds(date_str: str, hour_str: str, level: int, *, forecast_hour: int 
     return png if _upload_winds(f"winds_{level}", title, valid, png, level=level) else None
 
 
-def build_winds_10m(date_str: str, hour_str: str, *, forecast_hour: int = 0) -> Optional[bytes]:
+def build_winds_10m(date_str: str, hour_str: str, *, forecast_hour: int = 0,
+                    bundle: Optional[dict] = None) -> Optional[bytes]:
     """Fetch u, v at 10 m above ground (the standard surface wind) and
     upload as a packed wind-barb layer.
 
@@ -1272,18 +1390,15 @@ def build_winds_10m(date_str: str, hour_str: str, *, forecast_hour: int = 0) -> 
     exposes the field at typeOfLevel='heightAboveGround', level=10.
     """
     log.info("Building 10-m winds: GFS %s %sZ", date_str, hour_str)
-    u_grib = fetch_gfs_global(date_str, hour_str, ["10_m_above_ground"], "UGRD", forecast_hour=forecast_hour)
-    v_grib = fetch_gfs_global(date_str, hour_str, ["10_m_above_ground"], "VGRD", forecast_hour=forecast_hour)
-    if not u_grib or not v_grib:
-        log.error("10-m winds: GFS fetch failed")
+    fields = _load_fields(date_str, hour_str, forecast_hour,
+                          [("UGRD", "10_m_above_ground"),
+                           ("VGRD", "10_m_above_ground")],
+                          bundle=bundle)
+    if fields is None:
+        log.error("10-m winds: field load failed")
         return None
-    # read_gfs_field ignores `level` when there's no isobaricInhPa dim,
-    # which is the case for surface fields with only a single height
-    # value (10 m). Pass 10 for documentation / debug clarity.
-    u = read_gfs_field(u_grib, 10, "UGRD")
-    v = read_gfs_field(v_grib, 10, "VGRD")
-    if u is None or v is None:
-        return None
+    u = fields[("UGRD", "10_m_above_ground")]
+    v = fields[("VGRD", "10_m_above_ground")]
 
     # Same light smoothing as the pressure-level wind builder so the
     # barb spacing/density reads consistently across all wind layers.
@@ -1304,7 +1419,8 @@ def build_winds_10m(date_str: str, hour_str: str, *, forecast_hour: int = 0) -> 
                                 description=description) else None
 
 
-def build_vorticity(date_str: str, hour_str: str, level: int, *, forecast_hour: int = 0) -> Optional[bytes]:
+def build_vorticity(date_str: str, hour_str: str, level: int, *, forecast_hour: int = 0,
+                    bundle: Optional[dict] = None) -> Optional[bytes]:
     """Cyclonic-positive relative vorticity at the given pressure level
     (e.g. 850, 700, 500 hPa) in 10⁻⁵ s⁻¹.
 
@@ -1321,17 +1437,14 @@ def build_vorticity(date_str: str, hour_str: str, level: int, *, forecast_hour: 
     """
     log.info("Building vorticity: GFS %s %sZ at %d hPa",
              date_str, hour_str, level)
-    u_grib = fetch_gfs_global(date_str, hour_str, [level], "UGRD", forecast_hour=forecast_hour)
-    v_grib = fetch_gfs_global(date_str, hour_str, [level], "VGRD", forecast_hour=forecast_hour)
-    if not u_grib or not v_grib:
-        log.error("Vorticity: GFS fetch failed at %d hPa", level)
+    fields = _load_fields(date_str, hour_str, forecast_hour,
+                          [("UGRD", level), ("VGRD", level)],
+                          bundle=bundle)
+    if fields is None:
+        log.error("Vorticity: field load failed at %d hPa", level)
         return None
-
-    u = read_gfs_field(u_grib, level, "UGRD")
-    v = read_gfs_field(v_grib, level, "VGRD")
-    if u is None or v is None:
-        log.error("Vorticity: missing u/v at %d hPa", level)
-        return None
+    u = fields[("UGRD", level)]
+    v = fields[("VGRD", level)]
 
     u_s = disc_smooth(u, 200.0)
     v_s = disc_smooth(v, 200.0)
@@ -1398,7 +1511,8 @@ def build_vorticity(date_str: str, hour_str: str, level: int, *, forecast_hour: 
     return cyclonic if upload_layer(spec, cyclonic) else None
 
 
-def build_z500_heights(date_str: str, hour_str: str, *, forecast_hour: int = 0) -> Optional[bytes]:
+def build_z500_heights(date_str: str, hour_str: str, *, forecast_hour: int = 0,
+                       bundle: Optional[dict] = None) -> Optional[bytes]:
     """500 hPa geopotential height (decameters), contoured at 3 dam.
 
     The classic synoptic-overlay field — pairs naturally with low-level
@@ -1413,16 +1527,12 @@ def build_z500_heights(date_str: str, hour_str: str, *, forecast_hour: int = 0) 
     subtropical ridge.
     """
     log.info("Building Z500 heights: GFS %s %sZ", date_str, hour_str)
-    z_grib = fetch_gfs_global(date_str, hour_str, [500], "HGT", forecast_hour=forecast_hour)
-    if not z_grib:
-        log.error("Z500: GFS HGT fetch failed")
+    fields = _load_fields(date_str, hour_str, forecast_hour,
+                          [("HGT", 500)], bundle=bundle)
+    if fields is None:
+        log.error("Z500: field load failed")
         return None
-
-    z_m = read_gfs_field(z_grib, 500, "HGT")
-    if z_m is None:
-        log.error("Z500: missing HGT field at 500 hPa")
-        return None
-
+    z_m = fields[("HGT", 500)]
     z_dam = (z_m / 10.0).astype(np.float32)  # m → dam
     z_s = disc_smooth(z_dam, 200.0)
     z_s = regrid_to_global(z_s)
@@ -1460,7 +1570,8 @@ def build_z500_heights(date_str: str, hour_str: str, *, forecast_hour: int = 0) 
     return z_s if upload_layer(spec, z_s) else None
 
 
-def build_divergence(date_str: str, hour_str: str, level: int, *, forecast_hour: int = 0) -> Optional[bytes]:
+def build_divergence(date_str: str, hour_str: str, level: int, *, forecast_hour: int = 0,
+                     bundle: Optional[dict] = None) -> Optional[bytes]:
     """Horizontal mass divergence at the given pressure level (e.g. 850,
     200 hPa) in 10⁻⁵ s⁻¹. Signed: negative = convergence, positive =
     divergence. Pairs naturally to tell the genesis-favorable story
@@ -1479,17 +1590,14 @@ def build_divergence(date_str: str, hour_str: str, level: int, *, forecast_hour:
     """
     log.info("Building divergence: GFS %s %sZ at %d hPa",
              date_str, hour_str, level)
-    u_grib = fetch_gfs_global(date_str, hour_str, [level], "UGRD", forecast_hour=forecast_hour)
-    v_grib = fetch_gfs_global(date_str, hour_str, [level], "VGRD", forecast_hour=forecast_hour)
-    if not u_grib or not v_grib:
-        log.error("Divergence: GFS fetch failed at %d hPa", level)
+    fields = _load_fields(date_str, hour_str, forecast_hour,
+                          [("UGRD", level), ("VGRD", level)],
+                          bundle=bundle)
+    if fields is None:
+        log.error("Divergence: field load failed at %d hPa", level)
         return None
-
-    u = read_gfs_field(u_grib, level, "UGRD")
-    v = read_gfs_field(v_grib, level, "VGRD")
-    if u is None or v is None:
-        log.error("Divergence: missing u/v at %d hPa", level)
-        return None
+    u = fields[("UGRD", level)]
+    v = fields[("VGRD", level)]
 
     u_s = disc_smooth(u, 200.0)
     v_s = disc_smooth(v, 200.0)
@@ -1571,7 +1679,8 @@ def build_divergence(date_str: str, hour_str: str, level: int, *, forecast_hour:
     return div if upload_layer(spec, div) else None
 
 
-def build_mslp(date_str: str, hour_str: str, *, forecast_hour: int = 0) -> Optional[bytes]:
+def build_mslp(date_str: str, hour_str: str, *, forecast_hour: int = 0,
+               bundle: Optional[dict] = None) -> Optional[bytes]:
     """Mean Sea Level Pressure (hPa) — the classic synoptic field.
 
     Contours identify closed lows, ridges, troughs, and gradient
@@ -1585,16 +1694,12 @@ def build_mslp(date_str: str, hour_str: str, *, forecast_hour: int = 0) -> Optio
     informal "warm colors = stormy, cool colors = quiet" intuition.
     """
     log.info("Building MSLP: GFS %s %sZ", date_str, hour_str)
-    grib = fetch_gfs_global(date_str, hour_str, ["mean_sea_level"], "PRMSL", forecast_hour=forecast_hour)
-    if not grib:
-        log.error("MSLP: GFS PRMSL fetch failed")
+    fields = _load_fields(date_str, hour_str, forecast_hour,
+                          [("PRMSL", "mean_sea_level")], bundle=bundle)
+    if fields is None:
+        log.error("MSLP: field load failed")
         return None
-
-    pa = read_gfs_field(grib, 0, "PRMSL")  # level arg unused for MSL
-    if pa is None:
-        log.error("MSLP: missing PRMSL field")
-        return None
-
+    pa = fields[("PRMSL", "mean_sea_level")]
     hpa = (pa / 100.0).astype(np.float32)  # Pa → hPa
     hpa_s = disc_smooth(hpa, 100.0)         # light smooth for clean contours
     hpa_s = regrid_to_global(hpa_s)
@@ -1637,20 +1742,19 @@ def build_mslp(date_str: str, hour_str: str, *, forecast_hour: int = 0) -> Optio
     return hpa_s if upload_layer(spec, hpa_s) else None
 
 
-def build_midlevel_rh(date_str: str, hour_str: str, *, forecast_hour: int = 0) -> Optional[bytes]:
+def build_midlevel_rh(date_str: str, hour_str: str, *, forecast_hour: int = 0,
+                      bundle: Optional[dict] = None) -> Optional[bytes]:
     """700-400 hPa layer-averaged relative humidity (%)."""
     log.info("Building mid-level RH: GFS %s %sZ", date_str, hour_str)
-    grib = fetch_gfs_global(date_str, hour_str, [700, 500, 400], "RH", forecast_hour=forecast_hour)
-    if not grib:
-        log.error("RH: GFS fetch failed")
+    fields = _load_fields(date_str, hour_str, forecast_hour,
+                          [("RH", 700), ("RH", 500), ("RH", 400)],
+                          bundle=bundle)
+    if fields is None:
+        log.error("RH: field load failed")
         return None
-
-    rh700 = read_gfs_field(grib, 700, "RH")
-    rh500 = read_gfs_field(grib, 500, "RH")
-    rh400 = read_gfs_field(grib, 400, "RH")
-    if any(f is None for f in (rh700, rh500, rh400)):
-        log.error("RH: missing level")
-        return None
+    rh700 = fields[("RH", 700)]
+    rh500 = fields[("RH", 500)]
+    rh400 = fields[("RH", 400)]
 
     # Simple unweighted mean is fine for a first pass; layer-thickness
     # weighting changes the answer by <1 % in most regimes.
@@ -2007,38 +2111,42 @@ def main() -> int:
     forecast_hours = list(range(0, fh_max + 1))
 
     # GFS-driven builders — each invoked once per forecast hour, all
-    # sharing the same init cycle. Cached GFS GRIB sharing across
-    # builders is a follow-up optimization (Stage 1B); current pattern
-    # re-fetches per builder, which is correct but inefficient.
+    # sharing the same init cycle. Stage 1B (this commit): per-hour
+    # `bundle` pre-fetches every (var, level) the pipeline needs in ~7
+    # NOMADS calls, replacing the ~27 redundant per-builder round-trips.
+    # Each lambda forwards the shared `bundle` to the builder; if the
+    # bundle pre-fetch failed for a key the builder transparently falls
+    # back to its own fetch (`_load_fields` handles that).
     gfs_builders = [
-        ("shear_200_850", lambda fh: build_shear(date_str, hour_str, forecast_hour=fh)),
-        ("shear_500_850", lambda fh: build_midlevel_shear(date_str, hour_str, forecast_hour=fh)),
-        ("vort_850",      lambda fh: build_vorticity(date_str, hour_str, 850, forecast_hour=fh)),
-        ("vort_700",      lambda fh: build_vorticity(date_str, hour_str, 700, forecast_hour=fh)),
-        ("vort_500",      lambda fh: build_vorticity(date_str, hour_str, 500, forecast_hour=fh)),
-        ("div_850",       lambda fh: build_divergence(date_str, hour_str, 850, forecast_hour=fh)),
-        ("div_200",       lambda fh: build_divergence(date_str, hour_str, 200, forecast_hour=fh)),
-        ("mslp",          lambda fh: build_mslp(date_str, hour_str, forecast_hour=fh)),
-        ("z500_heights",  lambda fh: build_z500_heights(date_str, hour_str, forecast_hour=fh)),
-        ("winds_10m",     lambda fh: build_winds_10m(date_str, hour_str, forecast_hour=fh)),
-        ("winds_850",     lambda fh: build_winds(date_str, hour_str, 850, forecast_hour=fh)),
-        ("winds_700",     lambda fh: build_winds(date_str, hour_str, 700, forecast_hour=fh)),
-        ("winds_500",     lambda fh: build_winds(date_str, hour_str, 500, forecast_hour=fh)),
-        ("winds_200",     lambda fh: build_winds(date_str, hour_str, 200, forecast_hour=fh)),
-        ("rh_700_400",    lambda fh: build_midlevel_rh(date_str, hour_str, forecast_hour=fh)),
+        ("shear_200_850", lambda fh, b: build_shear(date_str, hour_str, forecast_hour=fh, bundle=b)),
+        ("shear_500_850", lambda fh, b: build_midlevel_shear(date_str, hour_str, forecast_hour=fh, bundle=b)),
+        ("vort_850",      lambda fh, b: build_vorticity(date_str, hour_str, 850, forecast_hour=fh, bundle=b)),
+        ("vort_700",      lambda fh, b: build_vorticity(date_str, hour_str, 700, forecast_hour=fh, bundle=b)),
+        ("vort_500",      lambda fh, b: build_vorticity(date_str, hour_str, 500, forecast_hour=fh, bundle=b)),
+        ("div_850",       lambda fh, b: build_divergence(date_str, hour_str, 850, forecast_hour=fh, bundle=b)),
+        ("div_200",       lambda fh, b: build_divergence(date_str, hour_str, 200, forecast_hour=fh, bundle=b)),
+        ("mslp",          lambda fh, b: build_mslp(date_str, hour_str, forecast_hour=fh, bundle=b)),
+        ("z500_heights",  lambda fh, b: build_z500_heights(date_str, hour_str, forecast_hour=fh, bundle=b)),
+        ("winds_10m",     lambda fh, b: build_winds_10m(date_str, hour_str, forecast_hour=fh, bundle=b)),
+        ("winds_850",     lambda fh, b: build_winds(date_str, hour_str, 850, forecast_hour=fh, bundle=b)),
+        ("winds_700",     lambda fh, b: build_winds(date_str, hour_str, 700, forecast_hour=fh, bundle=b)),
+        ("winds_500",     lambda fh, b: build_winds(date_str, hour_str, 500, forecast_hour=fh, bundle=b)),
+        ("winds_200",     lambda fh, b: build_winds(date_str, hour_str, 200, forecast_hour=fh, bundle=b)),
+        ("rh_700_400",    lambda fh, b: build_midlevel_rh(date_str, hour_str, forecast_hour=fh, bundle=b)),
     ]
 
-    # Hour-major iteration: f000 for all layers, then f001 for all, etc.
-    # Future Stage 1B will share GRIB fetches across builders within
-    # each hour, which is why we group by hour first.
+    # Hour-major iteration with a shared bundle per hour: one NOMADS
+    # fetch per (var, typeOfLevel) up front, then every builder for
+    # that hour reads pre-decoded fields out of the bundle.
     for fh in forecast_hours:
         log.info("=" * 70)
         log.info("=== Forecast hour f%03d ===", fh)
         log.info("=" * 70)
+        bundle = fetch_gfs_bundle(date_str, hour_str, forecast_hour=fh)
         for name, fn in gfs_builders:
             key = f"{name}.f{fh:03d}"
             try:
-                results[key] = fn(fh) is not None
+                results[key] = fn(fh, bundle) is not None
             except Exception:
                 log.error("Builder %s crashed:\n%s",
                           key, traceback.format_exc())
