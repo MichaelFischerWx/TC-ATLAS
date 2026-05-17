@@ -10878,13 +10878,20 @@ function _gaFLRenderMinobGapFill() {
     // Find the HDOB mission_id that overlaps with the HRD time range
     var bestMissionId = _gaFLMatchMinobMission(minobData, hrdStartSec, hrdEndSec,
         missionDate, missionDateNext, missionDatePrev);
+    // HDOB-era storms always carry a mission_id per ob (1997+). MINOB-era
+    // (pre-1997) data may lack mission_id entirely — in that case we
+    // can't filter, so we show everything (no alternative). For HDOB
+    // era we strictly require ob.mission_id === bestMissionId so a
+    // failed match shows NO bleed from other flights instead of all of
+    // them, which was the source of the "different flights" confusion.
+    var hasMissionIds = minobData.some(function (ob) { return !!ob.mission_id; });
 
     // Collect MINOB obs from the matched mission within the wide window
     var allMissionObs = [];
     var use10sPeak = _gaFLResVisible['1s'] || _gaFLResVisible['10s'];
     minobData.forEach(function (ob) {
         if (!ob.time || ob.lat == null || ob.lon == null) return;
-        if (bestMissionId && ob.mission_id !== bestMissionId) return;
+        if (hasMissionIds && (!bestMissionId || ob.mission_id !== bestMissionId)) return;
         var oDate = ob.time.substring(0, 10);
         var oHH = parseInt(ob.time.substring(11, 13));
         var oMM = parseInt(ob.time.substring(14, 16));
@@ -12963,14 +12970,18 @@ function _gaFLRenderTimeSeries() {
         }
 
         var chartProdLabel = (selectedStorm && selectedStorm.year >= 1997) ? 'HDOB' : 'MINOB';
-        // Match the HDOB mission that corresponds to this HRD flight
+        // Match the HDOB mission that corresponds to this HRD flight.
+        // For HDOB era (mission_ids present) a failed match yields no
+        // overlay rather than a bleed of every flight's HDOBs — see
+        // matching call in _gaFLRenderMinobGapFill for the same logic.
         var chartBestMission = _gaFLMatchMinobMission(minobData, hrdStart2, hrdEnd2,
             mDate2, mDateNext2, mDatePrev2);
+        var chartHasMissionIds = minobData.some(function (ob) { return !!ob.mission_id; });
         var moTimes = [], moPeak = [], mo30s = [], moSfcP = [], moTemp = [], moDewpt = [],
             moAlt = [], moStaticP = [], moHovers = [];
         minobData.forEach(function (ob) {
             if (!ob.time) return;
-            if (chartBestMission && ob.mission_id !== chartBestMission) return;
+            if (chartHasMissionIds && (!chartBestMission || ob.mission_id !== chartBestMission)) return;
             var oDate = ob.time.substring(0, 10);
             var oHH = parseInt(ob.time.substring(11, 13));
             var oMM = parseInt(ob.time.substring(14, 16));
