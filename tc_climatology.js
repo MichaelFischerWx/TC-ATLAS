@@ -1662,6 +1662,18 @@ function _applyHashParams(params) {
                 if (btn) btn.click();
             }, 80);
         }
+        // evoOnly=1 / evo=1 strips all chrome and auto-opens the
+        // phase-evolution modal so this URL can be loaded inside an
+        // iframe from the RT Monitor's Subseasonal tab. Gives users
+        // the full modal experience without leaving the RT page.
+        if (params.evoOnly === '1' || params.evo === '1') {
+            document.documentElement.classList.add('evo-only-mode');
+            setTimeout(function () {
+                if (typeof window._openSubEvolutionFromHash === 'function') {
+                    window._openSubEvolutionFromHash();
+                }
+            }, 220);
+        }
     }
     else _switchSubview('globe');
 
@@ -2956,6 +2968,20 @@ var _SUB_EVO_HIST_PRESETS = {
 window.closeSubEvolutionModal = function () {
     var m = document.getElementById('sub-evolution-modal');
     if (m) m.style.display = 'none';
+};
+
+// Iframe-friendly entry point used by the RT Monitor's Subseasonal tab.
+// _subPhases loads async after _initSubseasonalOnce kicks off the
+// fetch, so this polls until the data is ready before opening the
+// modal. Gives up after ~6s — the modal silently no-ops in that case.
+window._openSubEvolutionFromHash = function (attempts) {
+    attempts = attempts || 0;
+    if (_subPhases && _subPhases.indices && _subPhases.indices[_subState.mode]) {
+        _openSubEvolution();
+        return;
+    }
+    if (attempts > 60) return;       // ~6s ceiling
+    setTimeout(function () { window._openSubEvolutionFromHash(attempts + 1); }, 100);
 };
 
 function _openSubEvolution() {

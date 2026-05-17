@@ -2144,7 +2144,7 @@ html:not([data-view="map"]) #basin-sidebar {
 [data-theme="dark"] .sub-hov-expand-btn { background: rgba(22,27,36,0.72); }
 .sub-hov-basin-strip {
     position: relative;
-    height: 38px;
+    height: 60px;
     margin-top: 4px;
 }
 .sub-hov-panel-title {
@@ -2194,4 +2194,54 @@ html:not([data-view="map"]) #basin-sidebar {
 @media (max-width: 900px) {
     .sub-body { grid-template-columns: 1fr; }
     .sub-clock-grid { grid-template-columns: 1fr 1fr; }
+}
+
+/* Phase-evolution iframe modal — opened when a user clicks a clock
+   dial. Embeds tc_climatology.html?evoOnly=1 so the full modal
+   experience renders inline without leaving the RT Monitor. */
+.rt-evo-modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    z-index: 1500;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+}
+.rt-evo-modal-content {
+    position: relative;
+    width: min(1200px, 100%);
+    height: min(900px, 100%);
+    background: var(--surface, #ffffff);
+    border-radius: 8px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+    overflow: hidden;
+}
+.rt-evo-modal-iframe {
+    width: 100%;
+    height: 100%;
+    border: 0;
+    display: block;
+    background: var(--surface, #ffffff);
+}
+.rt-evo-modal-close {
+    position: absolute;
+    top: 10px;
+    right: 14px;
+    z-index: 2;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    border: 1px solid rgba(0, 0, 0, 0.18);
+    background: rgba(255, 255, 255, 0.92);
+    color: #0f172a;
+    font-size: 1.5rem;
+    line-height: 1;
+    cursor: pointer;
+    transition: background 0.15s, transform 0.15s;
+}
+.rt-evo-modal-close:hover {
+    background: #fff;
+    transform: scale(1.05);
 }

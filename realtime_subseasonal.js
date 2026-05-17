@@ -85,14 +85,78 @@
     }
 
     function _loadActiveStorms() {
-        return _fetchJSON(API_BASE + '/ir-monitor/active-storms')
+        // Use the recent-storms endpoint so recently-dissipated TCs
+        // (e.g. Sinlaku just after dissipation) remain visible on the
+        // Hovmöllers — these storms are the whole point of the 60-day
+        // lookback window. Falls back to active-storms if the new
+        // endpoint isn't deployed yet (graceful pre-deploy).
+        return _fetchJSON(API_BASE + '/ir-monitor/recent-storms?days=60')
             .then(function (data) {
                 state.activeStorms = (data && data.storms) ? data.storms : [];
             })
             .catch(function (err) {
-                console.warn('[subseasonal-rt] active-storms failed:', err.message);
-                state.activeStorms = [];
+                console.warn('[subseasonal-rt] recent-storms failed:', err.message,
+                             '— falling back to active-storms');
+                return _fetchJSON(API_BASE + '/ir-monitor/active-storms')
+                    .then(function (data) {
+                        state.activeStorms = (data && data.storms) ? data.storms : [];
+                    })
+                    .catch(function (err2) {
+                        console.warn('[subseasonal-rt] active-storms also failed:', err2.message);
+                        state.activeStorms = [];
+                    });
             });
+    }
+
+    /* ── Phase-evolution iframe-modal ──────────────────────────── */
+    // Lazily-created overlay that embeds tc_climatology.html in
+    // evoOnly mode (chrome stripped, modal auto-opened). Keeps the
+    // user on the RT Monitor while delivering the full evolution
+    // experience that lives on the climo page.
+    function _ensureEvolutionModal() {
+        var modal = document.getElementById('rt-evo-modal');
+        if (modal) return modal;
+        modal = document.createElement('div');
+        modal.id = 'rt-evo-modal';
+        modal.className = 'rt-evo-modal';
+        modal.style.display = 'none';
+        modal.innerHTML = '<div class="rt-evo-modal-content">'
+            + '<button class="rt-evo-modal-close" type="button" '
+            + 'aria-label="Close" title="Close (Esc)">×</button>'
+            + '<iframe class="rt-evo-modal-iframe" '
+            + 'title="Phase evolution" frameborder="0"></iframe>'
+            + '</div>';
+        document.body.appendChild(modal);
+        modal.addEventListener('click', function (e) {
+            if (e.target === modal) _closeEvolutionIframe();
+        });
+        modal.querySelector('.rt-evo-modal-close').addEventListener('click', _closeEvolutionIframe);
+        // Esc-to-close
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape' && modal.style.display !== 'none') {
+                _closeEvolutionIframe();
+            }
+        });
+        return modal;
+    }
+    function _openEvolutionInIframe(mode) {
+        var modal = _ensureEvolutionModal();
+        var iframe = modal.querySelector('.rt-evo-modal-iframe');
+        iframe.src = 'tc_climatology.html#sub=subseasonal&mode='
+            + encodeURIComponent(mode) + '&evoOnly=1';
+        modal.style.display = 'flex';
+        document.body.style.overflow = 'hidden';
+    }
+    function _closeEvolutionIframe() {
+        var modal = document.getElementById('rt-evo-modal');
+        if (!modal) return;
+        modal.style.display = 'none';
+        // Drop the src so the next open re-fetches with a clean state
+        // (avoids stale iframe layout when switching modes back to back).
+        var iframe = modal.querySelector('.rt-evo-modal-iframe');
+        if (iframe) iframe.src = 'about:blank';
+        document.body.style.overflow = '';
+        _ga('rt_sub_evo_close');
     }
 
     /* ── Phase clocks ──────────────────────────────────────────── */
@@ -119,19 +183,17 @@
             });
         });
 
-        // Clicking any clock deep-links into the climo page's Subseasonal
-        // subview (which carries the full Plotly Wheeler-Hendon trajectory
-        // + composite browser). The climo page's hash router reads
-        // `sub=subseasonal&mode=<mode>` and switches both the subview and
-        // the active mode.
+        // Clicking any clock opens the full phase-evolution modal in
+        // an iframe ON THIS PAGE — same modal users see on the climo
+        // page (Wheeler-Hendon PC1/PC2 trajectory, lookback toggles,
+        // historical-analog overlays) without forcing them to leave
+        // the RT Monitor. The climo page hash router strips its chrome
+        // when `evoOnly=1` is present and floats the modal alone.
         document.querySelectorAll('.sub-clock-card').forEach(function (card) {
             card.onclick = function () {
                 var mode = card.getAttribute('data-mode');
                 _ga('rt_sub_clock_click', { mode: mode });
-                window.open(
-                    'tc_climatology.html#sub=subseasonal&mode=' + mode,
-                    '_blank'
-                );
+                _openEvolutionInIframe(mode);
             };
         });
     }
@@ -273,62 +335,71 @@
                 annotations: [],
             };
 
-            // Active-TC overlay: vertical line at each storm's current lon
+            // Active-TC overlay traces: each storm's (time, lon) track
+            // plotted as a curve over the Hovmöller. Lets users see at
+            // a glance whether a storm rode a Kelvin / MJO envelope by
+            // matching its curve slope to the wave packet slope behind
+            // it. Color-coded by intensity at each fix.
+            var overlayTraces = [];
             if (state.showTCOverlay && state.activeStorms.length) {
                 state.activeStorms.forEach(function (s) {
-                    var lon = s.lon != null ? s.lon : (s.position && s.position.lon);
-                    if (lon == null) return;
-                    var lonNorm = lon;
-                    if (lonNorm > 180) lonNorm -= 360;
-                    layout.shapes.push({
-                        type: 'line',
-                        xref: 'x', yref: 'paper',
-                        x0: lonNorm, x1: lonNorm,
-                        y0: 0, y1: 1,
-                        line: { color: '#ff9500', width: 1.5, dash: 'dot' },
-                    });
+                    var trackTraces = _buildTrackTraces(s, slab);
+                    if (trackTraces) {
+                        overlayTraces.push(trackTraces.line);
+                        overlayTraces.push(trackTraces.markers);
+                        overlayTraces.push(trackTraces.latest);
+                    }
                 });
             }
 
             var config = { displayModeBar: false, responsive: true };
-            Plotly.newPlot(panel, [trace], layout, config);
+            Plotly.newPlot(panel, [trace].concat(overlayTraces), layout, config);
         });
 
         _renderBasinStrip(container, bg, fg);
         _renderActiveTCList();
     }
 
-    /* Geographic context strip — colored bands per TC basin, aligned to
-       the same longitude axis as the Hovmöllers above. Matches the
-       panels' margin: { l: 60, r: 12 } exactly so the bands line up
-       under the heatmap pixels they label. */
+    /* Geographic context strip — pre-rendered tropical-band cartographic
+       PNG (10°S-15°N, full longitude in Plate Carrée) as a background
+       layer, with translucent basin-label callouts overlaid for
+       at-a-glance context. Aligned to the same longitude axis as the
+       Hovmöllers above via matching margin: { l: 60, r: 12 }. */
     function _renderBasinStrip(container, bg, fg) {
         var div = document.createElement('div');
         div.className = 'sub-hov-basin-strip';
         container.appendChild(div);
 
         var basins = [
-            { name: 'E Pacific',  x0: -180, x1: -100, color: 'rgba(96,165,250,0.22)' },
-            { name: 'N Atlantic', x0: -100, x1:    0, color: 'rgba(34,197,94,0.22)'  },
-            { name: 'Africa',     x0:    0, x1:   50, color: 'rgba(245,158,11,0.22)' },
-            { name: 'N Indian',   x0:   50, x1:  100, color: 'rgba(168,85,247,0.22)' },
-            { name: 'W Pacific',  x0:  100, x1:  180, color: 'rgba(239,68,68,0.22)'  },
+            { name: 'E Pacific',  x0: -180, x1: -100 },
+            { name: 'N Atlantic', x0: -100, x1:    0 },
+            { name: 'Africa',     x0:    0, x1:   50 },
+            { name: 'N Indian',   x0:   50, x1:  100 },
+            { name: 'W Pacific',  x0:  100, x1:  180 },
         ];
-        var shapes = basins.map(function (b) {
-            return {
-                type: 'rect', xref: 'x', yref: 'paper',
-                x0: b.x0, x1: b.x1, y0: 0, y1: 1,
-                fillcolor: b.color, line: { width: 0 },
-            };
-        });
         var annotations = basins.map(function (b) {
             return {
                 xref: 'x', yref: 'paper',
-                x: (b.x0 + b.x1) / 2, y: 0.5,
-                text: b.name, showarrow: false,
-                font: { size: 11, color: fg, family: 'DM Sans, system-ui, sans-serif' },
+                x: (b.x0 + b.x1) / 2, y: 0.92,
+                text: '<b>' + b.name + '</b>', showarrow: false,
+                font: { size: 10, color: fg, family: 'DM Sans, system-ui, sans-serif' },
+                bgcolor: 'rgba(255,255,255,0.78)',
+                bordercolor: 'rgba(0,0,0,0.10)', borderwidth: 0.5,
+                borderpad: 2,
             };
         });
+        // Plotly images use `sizing: stretch` to span the full lon range.
+        // The PNG is in Plate Carrée at 10°S-15°N to match the typical
+        // Kelvin/MJO Hovmöller equatorial band of interest.
+        var images = [{
+            source: 'data/tropical_basemap.png',
+            xref: 'x', yref: 'paper',
+            x: -180, y: 1,
+            sizex: 360, sizey: 1,
+            xanchor: 'left', yanchor: 'top',
+            sizing: 'stretch', layer: 'below',
+            opacity: 1,
+        }];
         Plotly.newPlot(div, [{
             type: 'scatter', x: [-180, 180], y: [0.5, 0.5],
             mode: 'markers', marker: { opacity: 0 }, hoverinfo: 'skip',
@@ -344,8 +415,81 @@
                 range: [0, 1], showticklabels: false, showgrid: false,
                 zeroline: false, fixedrange: true,
             },
-            shapes: shapes, annotations: annotations,
+            images: images, annotations: annotations,
         }, { displayModeBar: false, responsive: true });
+    }
+
+    /* Build Plotly traces for a single storm's track on a Hovmöller.
+       Returns three traces: a translucent line connecting fixes, a
+       marker per fix (sized + colored by intensity), and a final dot
+       at the latest fix with the storm name. Returns null when the
+       storm has no track data in the slab's time window. */
+    function _buildTrackTraces(storm, slab) {
+        var track = storm.track;
+        if (!track || track.length === 0) return null;
+        // Build (lon, date) pairs from the storm's track.
+        var slabDates = slab.times;
+        var slabStartDay = slabDates[0];
+        var slabEndDay   = slabDates[slabDates.length - 1];
+        var xs = [], ys = [], vmaxs = [], times = [];
+        for (var i = 0; i < track.length; i++) {
+            var t = track[i];
+            var dayKey = t.time.slice(0, 10);
+            // Skip fixes outside the slab's time range
+            if (dayKey < slabStartDay || dayKey > slabEndDay) continue;
+            var lonNorm = t.lon;
+            if (lonNorm > 180) lonNorm -= 360;
+            xs.push(lonNorm);
+            ys.push(dayKey);
+            vmaxs.push(t.vmax_kt);
+            times.push(t.time);
+        }
+        if (xs.length === 0) return null;
+        var name = storm.name || storm.atcf_id;
+        var ssColor = function (v) {
+            if (v == null) return '#888';
+            if (v < 34)  return '#5dadec';   // TD
+            if (v < 64)  return '#06d6a0';   // TS
+            if (v < 83)  return '#fbbf24';   // Cat 1
+            if (v < 96)  return '#f97316';   // Cat 2
+            if (v < 113) return '#ef4444';   // Cat 3
+            if (v < 137) return '#c026d3';   // Cat 4
+            return '#7c3aed';                // Cat 5
+        };
+        var colors = vmaxs.map(ssColor);
+        var hover = xs.map(function (_, i) {
+            return name + '<br>' + times[i] + '<br>lon ' + xs[i].toFixed(1) + '°'
+                + (vmaxs[i] != null ? '<br>' + vmaxs[i] + ' kt' : '');
+        });
+        return {
+            line: {
+                type: 'scatter', mode: 'lines',
+                x: xs, y: ys,
+                line: { color: 'rgba(15,23,42,0.55)', width: 1.5 },
+                showlegend: false, hoverinfo: 'skip',
+            },
+            markers: {
+                type: 'scatter', mode: 'markers',
+                x: xs, y: ys,
+                marker: {
+                    size: 6, color: colors,
+                    line: { color: 'rgba(15,23,42,0.85)', width: 0.8 },
+                },
+                text: hover, hoverinfo: 'text',
+                showlegend: false,
+            },
+            latest: {
+                type: 'scatter', mode: 'markers+text',
+                x: [xs[xs.length - 1]], y: [ys[ys.length - 1]],
+                marker: { size: 12, color: colors[colors.length - 1],
+                          line: { color: '#0f172a', width: 1.5 } },
+                text: [name], textposition: 'top right',
+                textfont: { size: 9, color: '#0f172a',
+                            family: 'DM Sans, system-ui, sans-serif' },
+                hoverinfo: 'skip',
+                showlegend: false,
+            },
+        };
     }
 
     function _renderActiveTCList() {
@@ -355,26 +499,32 @@
             box.innerHTML = '';
             return;
         }
+        var active = state.activeStorms.filter(function (s) { return s.active; });
+        var dissipated = state.activeStorms.filter(function (s) { return !s.active; });
         var parts = [
             '<div style="font-size:0.75rem;color:var(--text-dim,#64748b);margin-bottom:6px;">'
-            + '<strong>Active TCs on Hovmöller</strong> · vertical dotted line marks current longitude</div>',
+            + '<strong>TCs on Hovmöller (last 60 days)</strong> · '
+            + active.length + ' active, ' + dissipated.length + ' recently-dissipated · '
+            + 'colored by intensity</div>',
         ];
-        state.activeStorms.forEach(function (s) {
-            var name = s.name || s.id || '(unnamed)';
-            var lon = s.lon != null ? s.lon : (s.position && s.position.lon);
-            var lat = s.lat != null ? s.lat : (s.position && s.position.lat);
-            var vmax = s.vmax != null ? s.vmax : (s.intensity && s.intensity.vmax);
-            if (lon == null) return;
-            var lonStr = lon > 180 ? (lon - 360).toFixed(1) : lon.toFixed(1);
-            var coordStr = lonStr + '°, ' + (lat != null ? lat.toFixed(1) + '°' : '—');
-            parts.push(
-                '<div class="sub-active-tc-row">'
+        var rows = state.activeStorms.slice(0, 14).map(function (s) {
+            var name = s.name || s.atcf_id || '(unnamed)';
+            var lon = s.lon != null ? s.lon : null;
+            var lat = s.lat != null ? s.lat : null;
+            var vmax = s.vmax_kt;
+            if (lon == null) return '';
+            var lonStr = (lon > 180 ? lon - 360 : lon).toFixed(1);
+            var coordStr = lonStr + '°' + (lat != null ? (', ' + lat.toFixed(1) + '°') : '');
+            var stateLabel = s.active ? 'Active' : 'Dissipated';
+            var stateColor = s.active ? '#16a34a' : '#94a3b8';
+            return '<div class="sub-active-tc-row">'
                 + '<span class="sub-active-tc-name">' + name + '</span>'
                 + '<span class="sub-active-tc-coord">' + coordStr + '</span>'
                 + (vmax != null ? '<span class="sub-active-tc-note">' + Math.round(vmax) + ' kt</span>' : '')
-                + '</div>'
-            );
+                + '<span class="sub-active-tc-note" style="color:' + stateColor + ';">' + stateLabel + '</span>'
+                + '</div>';
         });
+        parts.push(rows.join(''));
         box.innerHTML = parts.join('');
     }
 

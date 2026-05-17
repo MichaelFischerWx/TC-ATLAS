@@ -301,3 +301,35 @@
     color: white;
     border-color: var(--blue);
 }
+
+/* ════════════════════════════════════════════════════════════════
+   Evolution-only iframe mode — applied when the URL hash contains
+   evoOnly=1 (or evo=1). Used by the RT Monitor's Subseasonal tab to
+   embed the full phase-evolution modal in an iframe without leaving
+   the RT page. Strips every chrome element so the modal floats clean
+   inside the parent iframe's bounding box.
+   ════════════════════════════════════════════════════════════════ */
+html.evo-only-mode body > *:not(#sub-evolution-modal):not(script):not(style) {
+    display: none !important;
+}
+html.evo-only-mode body {
+    margin: 0; padding: 0; background: transparent !important;
+    height: 100%; min-height: 0;
+}
+html.evo-only-mode #sub-evolution-modal {
+    position: static !important;
+    background: transparent !important;
+    display: flex !important;
+    align-items: stretch;
+    justify-content: stretch;
+    min-height: 100vh;
+}
+html.evo-only-mode #sub-evolution-modal .ace-modal-content {
+    box-shadow: none !important;
+    border: none !important;
+    border-radius: 0 !important;
+    margin: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    max-height: 100vh !important;
+}

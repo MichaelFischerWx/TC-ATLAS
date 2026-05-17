@@ -1870,6 +1870,160 @@ def get_season_summary():
     )
 
 
+# ---------------------------------------------------------------------------
+# Recent storms (active + recently-dissipated) — drives the RT Monitor's
+# Subseasonal-tab Hovmöller TC overlay so users see storms like Sinlaku
+# that just dissipated, not only those currently active.
+# ---------------------------------------------------------------------------
+
+# Cache the result to avoid re-scanning ATCF dirs on every page load.
+# 15 min is sensible since deck files refresh every 6 h.
+_recent_storms_cache: dict = {"days": None, "data": None, "ts": 0.0}
+_recent_storms_lock = threading.Lock()
+_RECENT_STORMS_TTL = 15 * 60
+
+
+def _list_recent_atcf_ids(days_back: int) -> list:
+    """Discover ATCF IDs for recently active or dissipated storms.
+    Pulls from NHC btk (best-track) + JTWC b-deck directory listings.
+    Returns sorted unique list of lowercase ATCF IDs."""
+    now = _dt.now(timezone.utc)
+    cutoff = now - timedelta(days=days_back)
+    ids = set()
+
+    # NHC btk dir keeps b-deck files for current-year ATL/EP/CP storms.
+    text = _http_get(NHC_BDECK_BASE + "/", timeout=10) or ""
+    for m in re.finditer(r'b((?:al|ep|cp)\d{2}\d{4})\.dat', text, re.IGNORECASE):
+        ids.add(m.group(1).lower())
+
+    # Also scrape NHC aid_public (a-deck) in case btk hasn't caught up
+    # yet for a storm that just transitioned from invest to named.
+    text = _http_get(NHC_ATCF_BASE + "/", timeout=10) or ""
+    for m in re.finditer(r'a((?:al|ep|cp)\d{2}\d{4})\.dat', text, re.IGNORECASE):
+        ids.add(m.group(1).lower())
+
+    # JTWC b-deck listings (current + prior year if straddling Jan-Mar).
+    for source_name, base_url in JTWC_SOURCES:
+        listing = (f"{base_url}/{now.year}/" if source_name == "ucar"
+                   else f"{base_url}/")
+        text = _http_get(listing, timeout=10) or ""
+        if not text:
+            continue
+        for yr in (now.year, now.year - 1 if now.month <= 3 else None):
+            if yr is None:
+                continue
+            pattern = rf'b((?:io|sh|wp|ep|cp)\d{{2}}{yr})\.dat'
+            for m in re.finditer(pattern, text, re.IGNORECASE):
+                sid = m.group(1).lower()
+                if sid[:2].upper() not in _NHC_BASINS:
+                    ids.add(sid)
+        if ids:
+            break  # one JTWC source succeeded; no need to try fallback
+
+    # Drop obviously-stale older-year IDs unless cutoff includes them.
+    cutoff_year = cutoff.year
+    return sorted(
+        s for s in ids
+        if int(s[-4:]) >= cutoff_year
+    )
+
+
+def _build_recent_storm_track(atcf_id: str, days_back: int) -> Optional[dict]:
+    """Fetch + filter a storm's full track to the last N days.
+    Returns None if no fixes in the lookback window."""
+    records = _fetch_bdeck(atcf_id) or _fetch_adeck(atcf_id)
+    if not records:
+        return None
+    cutoff = _dt.now(timezone.utc) - timedelta(days=days_back)
+    # tau=0 = analyzed/best-track position (not a forecast). Prefer
+    # BEST > CARQ > JTWC > OFCL when multiple techniques report the
+    # same datetime (best-track is post-storm, generally cleanest).
+    priority = {"BEST": 3, "CARQ": 2, "JTWC": 1, "OFCL": 0}
+    by_dt = {}
+    for r in records:
+        if r["tau"] != 0 or r["datetime"] < cutoff:
+            continue
+        key = r["datetime"]
+        existing = by_dt.get(key)
+        if not existing or priority.get(r["tech"], -1) > priority.get(existing["tech"], -1):
+            by_dt[key] = r
+    if not by_dt:
+        return None
+    track = sorted(by_dt.values(), key=lambda r: r["datetime"])
+    latest = track[-1]
+    now = _dt.now(timezone.utc)
+    # > 6 hours since last fix → consider dissipated. Active storms get
+    # fix updates every 6h, so this draws a clear line.
+    dissipated = (now - latest["datetime"]).total_seconds() > 6 * 3600
+    return {
+        "atcf_id": atcf_id.upper(),
+        "basin": latest["basin"],
+        "lat": latest["lat"],
+        "lon": latest["lon"],
+        "vmax_kt": latest.get("vmax_kt"),
+        "active": not dissipated,
+        "last_fix_utc": latest["datetime"].strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "track": [
+            {
+                "time": r["datetime"].strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "lat": r["lat"], "lon": r["lon"],
+                "vmax_kt": r.get("vmax_kt"),
+            } for r in track
+        ],
+    }
+
+
+def _attach_storm_names(entries: list) -> None:
+    """Enrich entries with storm names from the active-storms cache
+    (best-effort — for dissipated storms outside the cache we leave
+    name=None and the frontend falls back to the ATCF ID display)."""
+    with _active_storms_lock:
+        by_id = {s["atcf_id"].upper(): s.get("name")
+                 for s in _active_storms_cache.get("storms", [])}
+    for e in entries:
+        e["name"] = by_id.get(e["atcf_id"])
+
+
+@router.get("/recent-storms")
+def get_recent_storms(days: int = Query(60, ge=1, le=120,
+                                         description="Lookback window in days")):
+    """All storms with at least one fix in the last N days (active +
+    recently-dissipated). Includes the full track in the window so the
+    RT Monitor's Subseasonal tab can plot (time, lon) trajectories on
+    the Hovmöllers — i.e. show whether each storm rode a Kelvin or MJO
+    envelope through its lifetime."""
+    now = time.time()
+    with _recent_storms_lock:
+        cached = _recent_storms_cache
+        if (cached["days"] == days and cached["data"] is not None
+                and (now - cached["ts"]) < _RECENT_STORMS_TTL):
+            return JSONResponse(content=cached["data"],
+                                headers={"Cache-Control": "public, max-age=600"})
+
+    ids = _list_recent_atcf_ids(days)
+    entries = []
+    for atcf_id in ids:
+        try:
+            entry = _build_recent_storm_track(atcf_id, days)
+            if entry:
+                entries.append(entry)
+        except Exception as e:
+            print(f"[recent-storms] {atcf_id} failed: {e}")
+    _attach_storm_names(entries)
+    entries.sort(key=lambda s: s["last_fix_utc"], reverse=True)
+
+    payload = {
+        "storms": entries,
+        "lookback_days": days,
+        "updated_utc": _dt.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "count": len(entries),
+    }
+    with _recent_storms_lock:
+        _recent_storms_cache.update({"days": days, "data": payload, "ts": now})
+    return JSONResponse(content=payload,
+                        headers={"Cache-Control": "public, max-age=600"})
+
+
 @router.get("/storm/{atcf_id}/ir")
 def get_storm_ir(
     atcf_id: str,
