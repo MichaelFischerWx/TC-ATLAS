@@ -1800,6 +1800,14 @@
             font-size: 1.15rem;
             cursor: pointer;
             transition: background 0.15s;
+            /* iOS Safari's 300 ms double-tap delay was making this feel
+               sticky on phones. `manipulation` opts out of the delay
+               without losing pinch-zoom support elsewhere on the page. */
+            touch-action: manipulation;
+            /* JS pins the position to visualViewport when the user
+               pinch-zooms — needs an origin to translate from. */
+            transform-origin: top left;
+            will-change: transform;
         }
         .hamburger:hover { background: rgba(14, 140, 110, 0.28); }
         .sidebar-backdrop {

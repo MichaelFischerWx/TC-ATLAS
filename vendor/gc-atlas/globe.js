@@ -4221,6 +4221,38 @@ class GlobeApp {
             setDrawer(!sidebar?.classList.contains('open'));
         });
         backdrop?.addEventListener('click', () => setDrawer(false));
+
+        // ── Pin the hamburger to the visual viewport during pinch-zoom ──
+        // iOS Safari positions `position: fixed` elements relative to the
+        // LAYOUT viewport, so after a page-level pinch-zoom the hamburger
+        // can land off-screen until the user pinch-zooms back out. The
+        // visualViewport API tells us the offset/scale of the visible
+        // region; translating the hamburger by that offset keeps it
+        // anchored to where the user is actually looking. Once the user
+        // can reach the hamburger, they can either open the drawer or
+        // pinch back out — both paths recover from the zoom trap. Globe
+        // canvas pinch is handled by OrbitControls and doesn't trigger
+        // page-level zoom.
+        if (window.visualViewport && hamburger) {
+            const vv = window.visualViewport;
+            const pinToVisualViewport = () => {
+                // At scale ≈ 1 with no offset, drop the inline transform
+                // so the CSS default position wins (and any hover/focus
+                // animations still work).
+                if (vv.scale <= 1.01 && vv.offsetTop === 0 && vv.offsetLeft === 0) {
+                    hamburger.style.transform = '';
+                    return;
+                }
+                // Translate by the visual-viewport offset so the button
+                // appears glued to the visible region. Scale-compensate
+                // so the touch target stays the same physical size.
+                const inv = 1 / vv.scale;
+                hamburger.style.transform =
+                    `translate(${vv.offsetLeft}px, ${vv.offsetTop}px) scale(${inv})`;
+            };
+            vv.addEventListener('resize', pinToVisualViewport);
+            vv.addEventListener('scroll', pinToVisualViewport);
+        }
         // Auto-close on any view-mode or field change so the user sees the result.
         const closeOnSelect = () => { if (window.innerWidth <= 820) setDrawer(false); };
         btnGlobe.addEventListener('click', closeOnSelect);

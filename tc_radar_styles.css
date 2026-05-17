@@ -1752,6 +1752,8 @@ footer a:hover { text-decoration: underline; }
         border-radius: 6px;
         cursor: pointer;
         line-height: 1;
+        /* Skip iOS's 300 ms double-tap delay — common site-wide hamburger. */
+        touch-action: manipulation;
     }
     .nav-hamburger.open { color: var(--text); background: var(--border); }
     .topbar-inner {

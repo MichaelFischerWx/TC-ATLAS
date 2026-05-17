@@ -1024,6 +1024,8 @@ html, body { margin: 0; padding: 0; }
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
     transition: background 0.15s, border-color 0.15s, color 0.15s;
+    /* Skip iOS's 300 ms double-tap delay on these single-press toggles. */
+    touch-action: manipulation;
 }
 .ir-legend-toggle:hover {
     background: rgba(255, 255, 255, 0.95);
@@ -1182,6 +1184,8 @@ html, body { margin: 0; padding: 0; }
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
     transition: all 0.2s;
+    /* Skip iOS's 300 ms double-tap delay on this single-press toggle. */
+    touch-action: manipulation;
 }
 .basin-sidebar-toggle:hover {
     background: rgba(255, 255, 255, 0.95);
