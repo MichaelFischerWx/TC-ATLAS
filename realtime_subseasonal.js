@@ -46,6 +46,7 @@
         activeStorms: [],
         latBand: 'trop10',
         showTCOverlay: true,
+        expandedBands: {},          // { bandKey: bool } — sticky per-tab session
     };
 
     function _ga(eventName, params) {
@@ -177,10 +178,37 @@
             var panel = document.createElement('div');
             panel.className = 'sub-hov-panel';
             panel.id = 'sub-hov-panel-' + band.key;
+            // Restore expanded state if user previously expanded this band
+            if (state.expandedBands[band.key]) panel.classList.add('expanded');
             var titleDiv = document.createElement('div');
             titleDiv.className = 'sub-hov-panel-title';
             titleDiv.textContent = band.title;
             panel.appendChild(titleDiv);
+
+            // Expand/collapse button — lets users blow up a panel of
+            // interest (e.g. the Kelvin band) so the time axis stretches
+            // and individual wave packets are easier to read.
+            var expandBtn = document.createElement('button');
+            expandBtn.type = 'button';
+            expandBtn.className = 'sub-hov-expand-btn';
+            expandBtn.title = 'Expand / collapse this panel for a closer look';
+            expandBtn.setAttribute('aria-label', 'Expand panel');
+            expandBtn.innerHTML = state.expandedBands[band.key] ? '⤡' : '⤢';
+            expandBtn.addEventListener('click', function (e) {
+                e.stopPropagation();
+                var isExpanded = panel.classList.toggle('expanded');
+                state.expandedBands[band.key] = isExpanded;
+                expandBtn.innerHTML = isExpanded ? '⤡' : '⤢';
+                _ga('rt_sub_panel_expand', { band: band.key, expanded: isExpanded });
+                // Plotly needs a resize cue after the height change so the
+                // heatmap repaints into the new bounds rather than staying
+                // cropped to the old 145px box.
+                if (typeof Plotly !== 'undefined') {
+                    setTimeout(function () { Plotly.Plots.resize(panel); }, 50);
+                }
+            });
+            panel.appendChild(expandBtn);
+
             container.appendChild(panel);
 
             var slab = state.slabs[band.key];

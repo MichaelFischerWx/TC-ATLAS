@@ -2107,7 +2107,41 @@ html:not([data-view="map"]) #basin-sidebar {
     position: relative;
     height: 145px;       /* tall enough to fit the per-panel longitude axis */
     min-height: 130px;
+    transition: height 0.18s ease-out;
 }
+.sub-hov-panel.expanded {
+    /* Triples vertical space so individual wave packets in the time
+       dimension become easier to inspect. User per-band toggle — no
+       cap on how many can be expanded simultaneously, so two panels
+       can be put in expanded mode for side-by-side comparison.
+       !important is required because Plotly mutates the panel's
+       sizing context after newPlot in a way that pins the legacy
+       145px height against simple specificity overrides. */
+    height: 380px !important;
+}
+.sub-hov-expand-btn {
+    position: absolute;
+    top: 4px;
+    right: 8px;
+    z-index: 3;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    line-height: 1;
+    font-size: 0.85rem;
+    color: var(--text-dim, #64748b);
+    background: rgba(255,255,255,0.7);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.sub-hov-expand-btn:hover {
+    background: rgba(46,125,255,0.18);
+    color: var(--text);
+    border-color: rgba(46,125,255,0.45);
+}
+[data-theme="dark"] .sub-hov-expand-btn { background: rgba(22,27,36,0.72); }
 .sub-hov-basin-strip {
     position: relative;
     height: 38px;
