@@ -1928,12 +1928,44 @@ def _list_recent_atcf_ids(days_back: int) -> list:
     )
 
 
+def _fetch_deck_text(atcf_id: str) -> Optional[str]:
+    """Fetch raw b-deck (or a-deck fallback) text for an ATCF ID.
+    Used by /recent-storms for name extraction — _extract_storm_name
+    needs the raw CSV rather than the parsed-record list."""
+    sid = atcf_id.lower()
+    # NHC btk path
+    text = _http_get(f"{NHC_BDECK_BASE}/b{sid}.dat")
+    if text:
+        return text
+    # JTWC b-deck — try both source URLs
+    for source_name, base_url in JTWC_SOURCES:
+        yr = int(sid[-4:])
+        url = (f"{base_url}/{yr}/b{sid}.dat" if source_name == "ucar"
+               else f"{base_url}/b{sid}.dat")
+        text = _http_get(url)
+        if text:
+            return text
+    # Last resort: aid_public a-deck
+    text = _http_get(f"{NHC_ATCF_BASE}/a{sid}.dat")
+    return text
+
+
 def _build_recent_storm_track(atcf_id: str, days_back: int) -> Optional[dict]:
     """Fetch + filter a storm's full track to the last N days.
     Returns None if no fixes in the lookback window."""
-    records = _fetch_bdeck(atcf_id) or _fetch_adeck(atcf_id)
+    text = _fetch_deck_text(atcf_id)
+    if not text:
+        return None
+    records = []
+    for line in text.strip().split("\n"):
+        rec = _parse_adeck_line(line)
+        if rec:
+            records.append(rec)
+    if not records:
+        records = _fetch_adeck(atcf_id)  # JTWC carq fallback if btk gave 0 valid lines
     if not records:
         return None
+    name = _extract_storm_name(text)
     cutoff = _dt.now(timezone.utc) - timedelta(days=days_back)
     # tau=0 = analyzed/best-track position (not a forecast). Prefer
     # BEST > CARQ > JTWC > OFCL when multiple techniques report the
@@ -1957,6 +1989,7 @@ def _build_recent_storm_track(atcf_id: str, days_back: int) -> Optional[dict]:
     dissipated = (now - latest["datetime"]).total_seconds() > 6 * 3600
     return {
         "atcf_id": atcf_id.upper(),
+        "name": name,                    # may be None for early/unnamed systems
         "basin": latest["basin"],
         "lat": latest["lat"],
         "lon": latest["lon"],
@@ -1974,14 +2007,16 @@ def _build_recent_storm_track(atcf_id: str, days_back: int) -> Optional[dict]:
 
 
 def _attach_storm_names(entries: list) -> None:
-    """Enrich entries with storm names from the active-storms cache
-    (best-effort — for dissipated storms outside the cache we leave
-    name=None and the frontend falls back to the ATCF ID display)."""
+    """Fill in any missing names from the active-storms cache. Each
+    entry already tries to extract its own name from the deck file
+    (column 27); this is just a fallback for storms whose deck file
+    has UNNAMED in that field but who are known via the live cache."""
     with _active_storms_lock:
         by_id = {s["atcf_id"].upper(): s.get("name")
                  for s in _active_storms_cache.get("storms", [])}
     for e in entries:
-        e["name"] = by_id.get(e["atcf_id"])
+        if not e.get("name") and e["atcf_id"] in by_id:
+            e["name"] = by_id[e["atcf_id"]]
 
 
 @router.get("/recent-storms")
