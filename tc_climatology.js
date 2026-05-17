@@ -2942,62 +2942,90 @@ function _renderSubseasonalNowWidget() {
     if (statusEl) statusEl.innerHTML = (active ? '✓ <strong>Active</strong>' : '○ Quiescent')
         + ' · ' + (regionStr || 'unknown') + ' convective envelope';
 
-    // ── Build the SVG ──
-    var W = 120, H = 120, cx = W / 2, cy = H / 2, R = 50, RIN = 14;
+    // ── Inline Wheeler-Hendon thumbnail using PC1/PC2 ──
+    // Mirrors the detail-view geometry at 120×120: 8 sector dividers,
+    // amp=1 dashed circle, rmax bounding circle. Maps actual PC1/PC2
+    // to (x, y) so the trajectory shape matches what users see when
+    // they click in for the full Plotly version. PC1/PC2 may be absent
+    // in older JSON snapshots; fall back to sector-midpoint plotting
+    // there.
+    var W = 120, H = 120, cx = W / 2, cy = H / 2, R = 50, RIN = 6;
     var theme = (window.TCATheme && window.TCATheme.current) || 'light';
     var bgFill = theme === 'dark' ? '#161b24' : '#ffffff';
-    var stroke = theme === 'dark' ? 'rgba(255,255,255,0.35)' : 'rgba(0,0,0,0.35)';
-    var labelColor = theme === 'dark' ? '#cbd5e1' : '#475569';
+    var stroke = theme === 'dark' ? 'rgba(255,255,255,0.30)' : 'rgba(0,0,0,0.30)';
+    var labelColor = theme === 'dark' ? '#cbd5e1' : '#64748b';
+    var hasPCs = Array.isArray(rec.pc1) && Array.isArray(rec.pc2);
+    var rmax = 3.0;                                      // standard Wheeler-Hendon ±3 range
+
+    // Convert PC1/PC2 (or sector midpoint fallback) into SVG pixel coords.
+    // SVG y axis grows DOWN, so flip PC2.
+    function pcToXY(pc1v, pc2v) {
+        var x = cx + R * pc1v / rmax;
+        var y = cy - R * pc2v / rmax;
+        return { x: x, y: y };
+    }
+    function fallbackXY(phase, amp) {
+        var ang = ((phase - 1) * 45 - 180 + 22.5) * Math.PI / 180;
+        var rr = R * Math.min(amp / rmax, 1);
+        return { x: cx + rr * Math.cos(ang), y: cy + rr * Math.sin(ang) };
+    }
+
     var parts = [];
-    // Background ring
+    // Bounding circle (corresponds to amplitude = rmax)
     parts.push('<circle cx="' + cx + '" cy="' + cy + '" r="' + R + '" fill="' + bgFill + '" stroke="' + stroke + '" stroke-width="1"/>');
-    // Inner amplitude=1 ring (boundary between active and quiescent)
-    var rAmp1 = (R - RIN) * (1 / 3) + RIN;
+    // Inner amplitude=1 ring
+    var rAmp1 = R / rmax;
     parts.push('<circle cx="' + cx + '" cy="' + cy + '" r="' + rAmp1 + '" fill="none" stroke="' + stroke + '" stroke-width="0.8" stroke-dasharray="2,2"/>');
-    // 8 sector lines (every 45° starting from -180°)
+    // 8 sector dividers
     for (var k = 0; k < 8; k++) {
-        var ang = (k * 45 - 180) * Math.PI / 180;
-        var x2 = cx + R * Math.cos(ang), y2 = cy + R * Math.sin(ang);
-        var x1 = cx + RIN * Math.cos(ang), y1 = cy + RIN * Math.sin(ang);
-        parts.push('<line x1="' + x1.toFixed(1) + '" y1="' + y1.toFixed(1)
+        var ang0 = (k * 45 - 180) * Math.PI / 180;
+        var x2 = cx + R * Math.cos(ang0), y2 = cy + R * Math.sin(ang0);
+        parts.push('<line x1="' + cx + '" y1="' + cy
             + '" x2="' + x2.toFixed(1) + '" y2="' + y2.toFixed(1)
-            + '" stroke="' + stroke + '" stroke-width="0.6"/>');
+            + '" stroke="' + stroke + '" stroke-width="0.5"/>');
     }
-    // Phase labels at sector midpoints
-    for (var p = 1; p <= 8; p++) {
-        var midAng = ((p - 1) * 45 - 180 + 22.5) * Math.PI / 180;
+    // Phase labels at sector midpoints, just outside the bounding circle
+    for (var pp = 1; pp <= 8; pp++) {
+        var midAng = ((pp - 1) * 45 - 180 + 22.5) * Math.PI / 180;
         var lx = cx + (R + 7) * Math.cos(midAng);
-        var ly = cy + (R + 7) * Math.sin(midAng);
+        var ly = cy - (R + 7) * Math.sin(midAng);     // SVG y flip
         parts.push('<text x="' + lx.toFixed(1) + '" y="' + (ly + 3).toFixed(1)
-            + '" text-anchor="middle" font-size="9" fill="' + labelColor + '">' + p + '</text>');
+            + '" text-anchor="middle" font-size="9" fill="' + labelColor + '">' + pp + '</text>');
     }
-    // 7-day trail (today and back 6 days)
+    // 14-day trail with proper PC1/PC2 plotting
     var trail = [];
-    for (var d = 6; d >= 0; d--) {
+    var trailDays = 14;
+    for (var d = trailDays - 1; d >= 0; d--) {
         var ix = lastIdx - d;
         if (ix < 0) continue;
-        var pp = phases[ix], aa = amps[ix];
-        if (pp == null || aa == null) continue;
-        var ang2 = ((pp - 1) * 45 - 180 + 22.5) * Math.PI / 180;
-        var r = RIN + (R - RIN) * Math.min(aa / 3, 1);
-        var x = cx + r * Math.cos(ang2);
-        var y = cy + r * Math.sin(ang2);
-        trail.push({ x: x, y: y, age: d, amp: aa });
+        var phx = phases[ix], aax = amps[ix];
+        if (phx == null || aax == null) continue;
+        var pt;
+        if (hasPCs && rec.pc1[ix] != null && rec.pc2[ix] != null) {
+            pt = pcToXY(rec.pc1[ix], rec.pc2[ix]);
+        } else {
+            pt = fallbackXY(phx, aax);
+        }
+        pt.age = d; pt.amp = aax;
+        trail.push(pt);
     }
     // Trail line
     if (trail.length >= 2) {
         var path = 'M' + trail[0].x.toFixed(1) + ',' + trail[0].y.toFixed(1);
         for (var t = 1; t < trail.length; t++) path += ' L' + trail[t].x.toFixed(1) + ',' + trail[t].y.toFixed(1);
-        parts.push('<path d="' + path + '" fill="none" stroke="rgba(46,125,255,0.6)" stroke-width="1.5"/>');
+        parts.push('<path d="' + path + '" fill="none" stroke="rgba(46,125,255,0.55)" stroke-width="1.5"/>');
     }
-    // Trail dots (fading)
-    trail.forEach(function (pt) {
-        var op = 0.25 + 0.75 * ((6 - pt.age) / 6);
-        var sz = pt.age === 0 ? 4 : 2;
-        var fill = pt.age === 0
-            ? (pt.amp >= 1 ? '#ef4444' : '#94a3b8')
-            : 'rgba(46,125,255,' + op + ')';
-        parts.push('<circle cx="' + pt.x.toFixed(1) + '" cy="' + pt.y.toFixed(1) + '" r="' + sz + '" fill="' + fill + '"/>');
+    // Trail dots (fading); today's marker emphasized
+    trail.forEach(function (ptt) {
+        var op = 0.20 + 0.80 * ((trailDays - 1 - ptt.age) / Math.max(1, trailDays - 1));
+        if (ptt.age === 0) {
+            // Today: filled circle colored by active/quiescent, plus a halo
+            var todayFill = ptt.amp >= 1 ? '#ef4444' : '#94a3b8';
+            parts.push('<circle cx="' + ptt.x.toFixed(1) + '" cy="' + ptt.y.toFixed(1) + '" r="6" fill="rgba(239,68,68,0.18)" stroke="' + todayFill + '" stroke-width="1.2"/>');
+            parts.push('<circle cx="' + ptt.x.toFixed(1) + '" cy="' + ptt.y.toFixed(1) + '" r="3" fill="' + todayFill + '"/>');
+        } else {
+            parts.push('<circle cx="' + ptt.x.toFixed(1) + '" cy="' + ptt.y.toFixed(1) + '" r="1.8" fill="rgba(46,125,255,' + op.toFixed(2) + ')"/>');
+        }
     });
     svg.innerHTML = parts.join('');
 }
@@ -3657,23 +3685,12 @@ function _initSubseasonalOnce() {
         _renderSubseasonal();
     });
 
-    // Phase-clock widget → click opens the evolution detail modal
-    var nowWidget = document.getElementById('sub-now-widget');
-    if (nowWidget) {
-        var clockWrap = nowWidget.querySelector('#sub-now-clock');
-        if (clockWrap) {
-            clockWrap.style.cursor = 'pointer';
-            clockWrap.title = 'Click for detailed phase evolution';
-            clockWrap.addEventListener('click', _openSubEvolution);
-        }
-        // Also make the whole "Current state" badge text clickable (more
-        // discoverable than the SVG alone — small target on touch screens).
-        var stateLabel = nowWidget.querySelector('div[style*="text-transform:uppercase"]');
-        if (stateLabel) {
-            stateLabel.style.cursor = 'pointer';
-            stateLabel.title = 'Click for detailed phase evolution';
-            stateLabel.addEventListener('click', _openSubEvolution);
-        }
+    // Phase-clock widget → click opens the evolution detail modal.
+    // The whole card (SVG + readout) is wrapped in a button so any click
+    // target opens the detail view.
+    var nowTrigger = document.getElementById('sub-now-trigger');
+    if (nowTrigger) {
+        nowTrigger.addEventListener('click', _openSubEvolution);
     }
     // Lookback-window toggle in the evolution modal
     document.querySelectorAll('#sub-evolution-window-toggle button').forEach(function (b) {

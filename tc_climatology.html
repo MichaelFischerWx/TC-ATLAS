@@ -342,16 +342,33 @@
                         <div style="font-size:0.66rem; opacity:0.75; text-transform:uppercase; letter-spacing:0.04em; margin-bottom:4px;">
                             Current state · <span id="sub-now-mode">MJO (RMM)</span>
                         </div>
-                        <div style="display:flex; gap:10px; align-items:center;">
+                        <!-- Clickable card: the SVG renders an inline mini-version
+                             of the detailed phase diagram (sector regions + 14-day
+                             trajectory). Outer wrapper is a button-like card with
+                             hover affordance so the click intent is obvious. -->
+                        <button type="button" id="sub-now-trigger"
+                                aria-label="Open detailed phase evolution"
+                                style="display:flex; gap:10px; align-items:center;
+                                       width:100%; padding:6px;
+                                       background: transparent;
+                                       border:1px solid transparent;
+                                       border-radius:8px; cursor:pointer;
+                                       text-align:left; color:inherit;
+                                       transition: background 0.15s, border-color 0.15s;"
+                                onmouseover="this.style.background='rgba(46,125,255,0.06)'; this.style.borderColor='rgba(46,125,255,0.25)';"
+                                onmouseout="this.style.background='transparent'; this.style.borderColor='transparent';">
                             <svg id="sub-now-clock" width="120" height="120" viewBox="0 0 120 120"
                                  style="flex-shrink:0;" aria-label="Phase clock"></svg>
-                            <div style="font-size:0.74rem; line-height:1.45;">
+                            <div style="font-size:0.74rem; line-height:1.45; flex:1;">
                                 <div><strong id="sub-now-date">—</strong></div>
                                 <div>Phase <strong id="sub-now-phase">—</strong></div>
                                 <div>Amp <strong id="sub-now-amp">—</strong></div>
                                 <div id="sub-now-status" style="margin-top:4px; opacity:0.75; font-size:0.7rem;"></div>
+                                <div style="margin-top:6px; font-size:0.66rem; color: var(--blue, #2e7dff); font-weight:600;">
+                                    View 30-day evolution &rarr;
+                                </div>
                             </div>
-                        </div>
+                        </button>
                     </div>
                     <div>
                         <div style="font-size:0.66rem; opacity:0.75; text-transform:uppercase; letter-spacing:0.04em; margin-bottom:4px;">
