@@ -259,7 +259,7 @@
             saveBtn.className = 'sub-hov-save-btn';
             saveBtn.title = 'Save this panel as PNG';
             saveBtn.setAttribute('aria-label', 'Save panel');
-            saveBtn.innerHTML = '💾';
+            saveBtn.innerHTML = '⤓';
             saveBtn.addEventListener('click', function (e) {
                 e.stopPropagation();
                 _saveSinglePanel(panel, band.title);
@@ -744,7 +744,7 @@
                 console.error('[subseasonal-rt] save PNG failed:', err);
             })
             .finally(function () {
-                if (btn) { btn.disabled = false; btn.innerHTML = '💾 Save PNG'; }
+                if (btn) { btn.disabled = false; btn.innerHTML = '⤓ Save PNG'; }
             });
     }
 
