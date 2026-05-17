@@ -562,11 +562,22 @@ def upload_gcs(spec: WaveSpec, png: bytes, valid_time: str, bounds: list) -> boo
                  f"{GCS_PREFIX}/{spec.name}/latest.png")
     meta = _meta_dict(spec, valid_time, bounds, image_url=image_url)
 
-    png_blob.cache_control = "public, max-age=600"
-    png_blob.upload_from_string(png, content_type="image/png")
+    def _put(blob, body: bytes | str, content_type: str) -> None:
+        """Upload + mark public-read so anonymous browser fetches work.
+        Mirrors build_env_overlays.upload_layer's _put helper; without
+        make_public() the assets land in GCS but the frontend gets HTTP
+        403 trying to load them via L.imageOverlay (which is what was
+        happening to the subseasonal layers from the first deploy)."""
+        blob.upload_from_string(body, content_type=content_type)
+        blob.cache_control = "public, max-age=600"
+        blob.patch()
+        try:
+            blob.make_public()
+        except Exception as e:
+            log.warning("Could not mark %s public: %s", blob.name, e)
 
-    meta_blob.cache_control = "public, max-age=600"
-    meta_blob.upload_from_string(json.dumps(meta), content_type="application/json")
+    _put(png_blob,  png, "image/png")
+    _put(meta_blob, json.dumps(meta), "application/json")
 
     log.info("  uploaded gs://%s/%s/%s/{latest.png,metadata.json}",
              GCS_BUCKET, GCS_PREFIX, spec.name)
@@ -577,7 +588,37 @@ def upload_gcs(spec: WaveSpec, png: bytes, valid_time: str, bounds: list) -> boo
 # Main
 # --------------------------------------------------------------------------
 
+def emit_cost_telemetry(duration_s: float) -> None:
+    """Emit a structured log line with the run's compute usage + estimated
+    cost (USD), so monthly Cloud Run spend can be summed from logs without
+    needing to scrape the billing console.
+
+    Reads provisioned resources from the CR_VCPU / CR_MEM_GIB env vars
+    (set in deploy_subseasonal_job.sh / deploy_env_job.sh). Pricing
+    constants below match Cloud Run Jobs tier-1 zones as of 2026-05.
+    Aggregate via:
+      gcloud logging read \\
+          'resource.type=cloud_run_job AND textPayload:"cost_telemetry"' \\
+          --freshness=30d --format='value(textPayload)' \\
+          | awk -F'est_cost_usd=' '{print $2}' \\
+          | awk '{s+=$1} END {printf "$%.2f\\n", s}'
+    """
+    import os as _os
+    PRICE_VCPU_PER_S  = 0.000024     # USD per vCPU-second
+    PRICE_MEM_PER_S   = 0.0000025    # USD per GiB-second
+    vcpu = float(_os.environ.get("CR_VCPU", "1"))
+    mem_gib = float(_os.environ.get("CR_MEM_GIB", "1"))
+    cost = duration_s * (vcpu * PRICE_VCPU_PER_S + mem_gib * PRICE_MEM_PER_S)
+    log.info(
+        "cost_telemetry script=%s duration_s=%.1f vcpu=%s mem_gib=%s est_cost_usd=%.5f",
+        "build_subseasonal_overlays", duration_s, vcpu, mem_gib, cost,
+    )
+
+
 def main():
+    import time as _time
+    _t0 = _time.time()
+
     parser = argparse.ArgumentParser(description="Build subseasonal forcing overlays.")
     parser.add_argument("--out", default="data/subseasonal_overlays",
                         help="Local output directory.")
@@ -644,6 +685,8 @@ def main():
 
     log.info("Done. Outputs in %s%s",
              out_dir, "" if args.local_only else f" + gs://{GCS_BUCKET}/{GCS_PREFIX}/")
+
+    emit_cost_telemetry(_time.time() - _t0)
 
 
 if __name__ == "__main__":

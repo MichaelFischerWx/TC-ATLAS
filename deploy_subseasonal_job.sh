@@ -82,7 +82,7 @@ if gcloud run jobs describe "${JOB_NAME}" --region "${REGION}" >/dev/null 2>&1; 
         --cpu 2 \
         --max-retries 1 \
         --task-timeout 900 \
-        --set-env-vars "GCS_IR_CACHE_BUCKET=${BUCKET},OLR_CLIMO_START=${OLR_CLIMO_START},OLR_CLIMO_END=${OLR_CLIMO_END}"
+        --set-env-vars "GCS_IR_CACHE_BUCKET=${BUCKET},OLR_CLIMO_START=${OLR_CLIMO_START},OLR_CLIMO_END=${OLR_CLIMO_END},CR_VCPU=2,CR_MEM_GIB=4"
 else
     gcloud run jobs create "${JOB_NAME}" \
         --region "${REGION}" \
@@ -93,7 +93,7 @@ else
         --cpu 2 \
         --max-retries 1 \
         --task-timeout 900 \
-        --set-env-vars "GCS_IR_CACHE_BUCKET=${BUCKET},OLR_CLIMO_START=${OLR_CLIMO_START},OLR_CLIMO_END=${OLR_CLIMO_END}"
+        --set-env-vars "GCS_IR_CACHE_BUCKET=${BUCKET},OLR_CLIMO_START=${OLR_CLIMO_START},OLR_CLIMO_END=${OLR_CLIMO_END},CR_VCPU=2,CR_MEM_GIB=4"
 fi
 
 # ── Cloud Scheduler — invoke the Run Job daily ───────────────────

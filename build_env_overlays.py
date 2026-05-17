@@ -1947,7 +1947,33 @@ def build_genesis_prob(csv_text: str, lead_days: int, valid_time: str
 # Entry point
 # --------------------------------------------------------------------------
 
+def emit_cost_telemetry(duration_s: float, layer_count: int) -> None:
+    """Emit a structured log line for monthly Cloud Run spend tracking.
+    Aggregate via:
+      gcloud logging read \\
+          'resource.type=cloud_run_job AND textPayload:"cost_telemetry"' \\
+          --freshness=30d --format='value(textPayload)' \\
+          | awk -F'est_cost_usd=' '{print $2}' \\
+          | awk '{s+=$1} END {printf "$%.2f\\n", s}'
+
+    Pricing constants match Cloud Run Jobs tier-1 zones (2026-05).
+    Reads provisioned CR_VCPU + CR_MEM_GIB from env vars set by the
+    deploy script; defaults to 2 vCPU / 2 GiB (current env-job spec)."""
+    PRICE_VCPU_PER_S  = 0.000024
+    PRICE_MEM_PER_S   = 0.0000025
+    vcpu = float(os.environ.get("CR_VCPU", "2"))
+    mem_gib = float(os.environ.get("CR_MEM_GIB", "2"))
+    cost = duration_s * (vcpu * PRICE_VCPU_PER_S + mem_gib * PRICE_MEM_PER_S)
+    log.info(
+        "cost_telemetry script=%s duration_s=%.1f vcpu=%s mem_gib=%s "
+        "layers=%d est_cost_usd=%.5f",
+        "build_env_overlays", duration_s, vcpu, mem_gib, layer_count, cost,
+    )
+
+
 def main() -> int:
+    import time as _time
+    _t0 = _time.time()
     date_str, hour_str = latest_gfs_cycle()
     log.info("Latest GFS cycle: %s %sZ", date_str, hour_str)
 
@@ -2049,6 +2075,7 @@ def main() -> int:
         log.warning("Skipping genesis_prob_* layers: cyclogenesis CSV unavailable")
 
     log.info("Done. Results: %s", results)
+    emit_cost_telemetry(_time.time() - _t0, layer_count=len(results))
     # Exit nonzero so Scheduler retries if every field failed, but we
     # don't want one OISST hiccup to mask an otherwise-good run.
     return 0 if any(results.values()) else 1

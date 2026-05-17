@@ -71,7 +71,7 @@ if gcloud run jobs describe "${JOB_NAME}" --region "${REGION}" >/dev/null 2>&1; 
         --cpu 2 \
         --max-retries 1 \
         --task-timeout 1800 \
-        --set-env-vars "GCS_IR_CACHE_BUCKET=${BUCKET}"
+        --set-env-vars "GCS_IR_CACHE_BUCKET=${BUCKET},CR_VCPU=2,CR_MEM_GIB=2"
 else
     gcloud run jobs create "${JOB_NAME}" \
         --region "${REGION}" \
@@ -80,7 +80,7 @@ else
         --cpu 2 \
         --max-retries 1 \
         --task-timeout 1800 \
-        --set-env-vars "GCS_IR_CACHE_BUCKET=${BUCKET}"
+        --set-env-vars "GCS_IR_CACHE_BUCKET=${BUCKET},CR_VCPU=2,CR_MEM_GIB=2"
 fi
 
 # ── Cloud Scheduler — invoke the Run Job on a cadence ─────────────
