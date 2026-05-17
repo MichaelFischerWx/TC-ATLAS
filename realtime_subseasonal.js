@@ -112,14 +112,19 @@
             });
         });
 
-        // Clicking any clock deep-links into the climo page filtered to
-        // that mode — that's where the full Plotly Wheeler-Hendon
-        // trajectory + composite browser lives.
+        // Clicking any clock deep-links into the climo page's Subseasonal
+        // subview (which carries the full Plotly Wheeler-Hendon trajectory
+        // + composite browser). The climo page's hash router reads
+        // `sub=subseasonal&mode=<mode>` and switches both the subview and
+        // the active mode.
         document.querySelectorAll('.sub-clock-card').forEach(function (card) {
             card.onclick = function () {
                 var mode = card.getAttribute('data-mode');
                 _ga('rt_sub_clock_click', { mode: mode });
-                window.open('tc_climatology.html#subseasonal-' + mode, '_blank');
+                window.open(
+                    'tc_climatology.html#sub=subseasonal&mode=' + mode,
+                    '_blank'
+                );
             };
         });
     }
@@ -207,16 +212,18 @@
             };
 
             var layout = {
-                margin: { l: 60, r: 12, t: 18, b: isLast ? 32 : 6 },
+                // Every panel reserves bottom margin for longitude ticks
+                // — readers need to look up a TC's longitude on the panel
+                // they're already looking at, not have to glance down to
+                // the last one to read off the axis.
+                margin: { l: 60, r: 12, t: 18, b: 22 },
                 paper_bgcolor: bg,
                 plot_bgcolor:  bg,
                 font: { color: fg, size: 10, family: 'DM Sans, system-ui, sans-serif' },
                 xaxis: {
                     range: [-180, 180],
                     tickvals: [-180, -120, -60, 0, 60, 120, 180],
-                    ticktext: isLast
-                        ? ['180°', '120°W', '60°W', '0°', '60°E', '120°E', '180°']
-                        : ['', '', '', '', '', '', ''],
+                    ticktext: ['180°', '120°W', '60°W', '0°', '60°E', '120°E', '180°'],
                     showgrid: true, gridcolor: axisGrid, zeroline: false,
                     tickfont: { size: 9 },
                 },
@@ -252,7 +259,58 @@
             Plotly.newPlot(panel, [trace], layout, config);
         });
 
+        _renderBasinStrip(container, bg, fg);
         _renderActiveTCList();
+    }
+
+    /* Geographic context strip — colored bands per TC basin, aligned to
+       the same longitude axis as the Hovmöllers above. Matches the
+       panels' margin: { l: 60, r: 12 } exactly so the bands line up
+       under the heatmap pixels they label. */
+    function _renderBasinStrip(container, bg, fg) {
+        var div = document.createElement('div');
+        div.className = 'sub-hov-basin-strip';
+        container.appendChild(div);
+
+        var basins = [
+            { name: 'E Pacific',  x0: -180, x1: -100, color: 'rgba(96,165,250,0.22)' },
+            { name: 'N Atlantic', x0: -100, x1:    0, color: 'rgba(34,197,94,0.22)'  },
+            { name: 'Africa',     x0:    0, x1:   50, color: 'rgba(245,158,11,0.22)' },
+            { name: 'N Indian',   x0:   50, x1:  100, color: 'rgba(168,85,247,0.22)' },
+            { name: 'W Pacific',  x0:  100, x1:  180, color: 'rgba(239,68,68,0.22)'  },
+        ];
+        var shapes = basins.map(function (b) {
+            return {
+                type: 'rect', xref: 'x', yref: 'paper',
+                x0: b.x0, x1: b.x1, y0: 0, y1: 1,
+                fillcolor: b.color, line: { width: 0 },
+            };
+        });
+        var annotations = basins.map(function (b) {
+            return {
+                xref: 'x', yref: 'paper',
+                x: (b.x0 + b.x1) / 2, y: 0.5,
+                text: b.name, showarrow: false,
+                font: { size: 11, color: fg, family: 'DM Sans, system-ui, sans-serif' },
+            };
+        });
+        Plotly.newPlot(div, [{
+            type: 'scatter', x: [-180, 180], y: [0.5, 0.5],
+            mode: 'markers', marker: { opacity: 0 }, hoverinfo: 'skip',
+        }], {
+            margin: { l: 60, r: 12, t: 0, b: 0 },
+            paper_bgcolor: bg, plot_bgcolor: bg,
+            xaxis: {
+                range: [-180, 180],
+                showticklabels: false, showgrid: false, zeroline: false,
+                fixedrange: true,
+            },
+            yaxis: {
+                range: [0, 1], showticklabels: false, showgrid: false,
+                zeroline: false, fixedrange: true,
+            },
+            shapes: shapes, annotations: annotations,
+        }, { displayModeBar: false, responsive: true });
     }
 
     function _renderActiveTCList() {

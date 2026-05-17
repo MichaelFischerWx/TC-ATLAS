@@ -1650,7 +1650,19 @@ function _applyHashParams(params) {
     // the chart grid. Stats sub-view loads on explicit #sub=stats only,
     // including the redirect from old global_archive.html?#tab=climatology.
     if (params.sub === 'stats') _switchSubview('stats');
-    else if (params.sub === 'subseasonal') _switchSubview('subseasonal');
+    else if (params.sub === 'subseasonal') {
+        _switchSubview('subseasonal');
+        // Optional mode pre-select (e.g. RT Monitor's clock-click lands
+        // on `#sub=subseasonal&mode=bsiso1` so the user sees the same
+        // dial they clicked, not whatever was selected last).
+        if (params.mode && ['mjo', 'mjo_omi', 'bsiso1', 'bsiso2'].indexOf(params.mode) !== -1) {
+            // Defer until _initSubseasonalOnce has wired up the mode toggle
+            setTimeout(function () {
+                var btn = document.querySelector('#sub-mode-toggle [data-sub-mode="' + params.mode + '"]');
+                if (btn) btn.click();
+            }, 80);
+        }
+    }
     else _switchSubview('globe');
 
     if (params.modal) {
