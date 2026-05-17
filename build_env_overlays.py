@@ -428,14 +428,17 @@ def _render_filled_png(field: np.ndarray, spec: LayerSpec) -> bytes:
         norm = mcolors.Normalize(vmin=spec.vmin, vmax=spec.vmax, clip=True)
 
     # Bilinear upsample BEFORE colormapping so the gradient stays smooth
-    # at zoom. NaN cells need a sentinel that doesn't blend across the
-    # ocean/land boundary; replace with vmin then re-mask after. For
-    # discrete-bins we use NEAREST to keep the band edges crisp instead
-    # of bilinear-blurring across a 5-10% probability boundary.
+    # at zoom. For BOTH continuous and discrete-bin layers we use
+    # BILINEAR on the field — for discrete bins this is the key to
+    # smooth band boundaries: the interpolated intermediate values get
+    # snapped to the right bin by BoundaryNorm, so the band SHAPES are
+    # smooth curves rather than 0.25°-cell stairsteps. NaN cells need a
+    # sentinel that doesn't blend across the ocean/land boundary;
+    # replace with vmin then re-mask after with a NEAREST-resampled
+    # alpha so the masked-region edges stay crisp.
     finite_mask = np.isfinite(field)
     work = np.where(finite_mask, field, spec.vmin)
-    resample = Image.NEAREST if spec.discrete_bins else Image.BILINEAR
-    img_f = Image.fromarray(work).resize((IMG_NX, IMG_NY), resample)
+    img_f = Image.fromarray(work).resize((IMG_NX, IMG_NY), Image.BILINEAR)
     img_m = Image.fromarray((finite_mask * 255).astype(np.uint8)).resize(
         (IMG_NX, IMG_NY), Image.NEAREST)
     big = np.asarray(img_f, dtype=np.float32)
@@ -1643,15 +1646,19 @@ def _grid_track_probability(csv_text: str, lead_hours_max: float,
     N_MEMBERS = max(1000, len(sample_cells))
     prob = counts / N_MEMBERS
 
-    # Light Gaussian smooth (σ≈55 km) so the disc edges don't read as
-    # hard rings. Most spatial smoothing now comes from the disc itself.
+    # Gaussian smooth (σ≈110 km, 4 cells × 27.8 km/cell) so the chunked
+    # bands flow as smooth curves instead of 0.25° cell stairsteps when
+    # rendered with BoundaryNorm + bilinear-interpolated upsample. The
+    # disc-integration above already gives most of the spatial averaging
+    # but Gaussian fills in the inter-cell jaggedness that BoundaryNorm
+    # would otherwise expose.
     try:
         from scipy.ndimage import gaussian_filter
         try:
-            prob = gaussian_filter(prob, sigma=(2.0, 2.0),
+            prob = gaussian_filter(prob, sigma=(4.0, 4.0),
                                    mode=("constant", "wrap"))
         except TypeError:
-            prob = gaussian_filter(prob, sigma=2.0, mode="wrap")
+            prob = gaussian_filter(prob, sigma=4.0, mode="wrap")
     except Exception as e:
         log.warning("gaussian_filter unavailable, returning unsmoothed: %s", e)
 
