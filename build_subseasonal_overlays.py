@@ -172,12 +172,18 @@ WAVE_SPECS = [
         name="kelvin",
         title="Kelvin-wave filtered OLR",
         description="Wheeler-Kiladis Kelvin band — eastward wavenumbers 1-14, "
-                    "equivalent depth h = 8-90 m (phase speed c = √(g·h) ≈ "
-                    "9-30 m/s eastward), symmetric component. Contours every "
-                    "2 W/m²; look for discrete eastward-propagating envelopes "
-                    "near the equator on a Hovmöller animation.",
+                    "period 2.5-30 d, equivalent depth h = 8-90 m (phase speed "
+                    "c ≈ 9-30 m/s eastward), symmetric component. The period "
+                    "bound prevents MJO-band leakage into the Kelvin filter; "
+                    "the h-bound traces the dispersion curve in the (k, ω) "
+                    "domain. Contours every 2 W/m².",
         component="sym",
         k_lo=1, k_hi=14,
+        # 2.5-30 day periods (1/30 to 1/2.5 cpd). Without this bound the
+        # h-gate alone admits low-frequency power that physically belongs
+        # to the MJO band; the result is a broad smooth Kelvin field
+        # with no resolvable wave envelopes (the original bug).
+        freq_lo=1.0 / 30.0, freq_hi=1.0 / 2.5,
         h_lo=8.0, h_hi=90.0,
         vmin=-10.0, vmax=10.0,
         render_style="contour",
@@ -187,11 +193,13 @@ WAVE_SPECS = [
         name="er",
         title="Equatorial Rossby (n=1) OLR",
         description="Wheeler-Kiladis ER band — westward wavenumbers 1-10, "
-                    "equivalent depth h = 8-90 m (phase speed c ≈ 9-30 m/s "
-                    "westward), n=1 Rossby branch, symmetric component. "
-                    "Contours every 2 W/m².",
+                    "period 9-72 d, equivalent depth h = 8-90 m (phase speed "
+                    "c ≈ 9-30 m/s westward), n=1 Rossby branch, symmetric "
+                    "component. Contours every 2 W/m².",
         component="sym",
         k_lo=-10, k_hi=-1,
+        # 9-72 d period range — standard ER n=1 specification.
+        freq_lo=1.0 / 72.0, freq_hi=1.0 / 9.0,
         h_lo=8.0, h_hi=90.0,
         vmin=-10.0, vmax=10.0,
         render_style="contour",
@@ -537,32 +545,44 @@ def _render_contour_png(field2d: np.ndarray, spec: WaveSpec) -> bytes:
     envelopes as discrete loops while letting the IR show through
     everywhere outside the active signal.
 
+    Smoothing pipeline:
+    - Upsample the 2.5° native field (~144×73) by 5× via SciPy bicubic
+      so the contour algorithm has enough density to draw smooth curves
+      (instead of the chunky polygonal isolines that result when you
+      contour a sparse grid directly).
+    - Apply a light Gaussian blur (σ=1.5 cells in upsampled space) to
+      damp the residual grid-cell facets — fine for WK-filtered fields
+      which are already smooth, would over-smooth a noisy scalar.
+
     Contour levels come from spec.contour_levels (symmetric ±L pairs).
     Negative (active convection) draws in blue, positive (suppressed)
-    in red. Stroke width scales with magnitude so weak envelopes look
-    thinner. Renders at 4× the native 144×73 grid so lines stay crisp
-    when Leaflet upscales the overlay at higher map zooms.
+    in red. Stroke width scales with magnitude — weak ±2 envelopes
+    thinner than strong ±8 ones.
     """
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from scipy.ndimage import zoom, gaussian_filter
 
     levels = list(spec.contour_levels or [])
     if not levels:
         return _render_filled_png(field2d, spec)
 
-    # Render at higher resolution than the source so antialiased contour
-    # lines look smooth instead of pixelated. ~4× the data grid:
-    out_nx, out_ny = NX * 4, NY * 4
+    # 5× bicubic upsample so contour curvature is well-defined; then a
+    # small Gaussian (σ=1.5 cells in the dense field) softens the
+    # grid-cell facets that survive bicubic interpolation.
+    field_hi = zoom(field2d, zoom=5, order=3, mode="wrap")
+    field_hi = gaussian_filter(field_hi, sigma=1.5, mode="wrap")
+
+    out_nx, out_ny = field_hi.shape[1], field_hi.shape[0]
     dpi = 100
 
     fig = plt.figure(figsize=(out_nx / dpi, out_ny / dpi), dpi=dpi)
     ax = fig.add_axes([0, 0, 1, 1])
     ax.set_axis_off()
-    # x = lon centers, y = lat (top → bottom in Mercator pixel space)
-    ny, nx = field2d.shape
-    xs = np.linspace(-180, 180, nx)
-    ys = np.linspace(WEB_MERC_LAT_MAX, -WEB_MERC_LAT_MAX, ny)
+    # x = lon, y = lat (top → bottom in Mercator pixel space)
+    xs = np.linspace(-180, 180, out_nx)
+    ys = np.linspace(WEB_MERC_LAT_MAX, -WEB_MERC_LAT_MAX, out_ny)
     # Per-level color + stroke width: deeper saturation + thicker stroke
     # for the outer (high-magnitude) contours.
     max_abs = max(abs(l) for l in levels)
@@ -570,8 +590,6 @@ def _render_contour_png(field2d: np.ndarray, spec: WaveSpec) -> bytes:
     widths = []
     for L in levels:
         mag = abs(L) / max_abs            # 0..1
-        # Blue (active convection, L<0) or red (suppressed, L>0). Use
-        # the magnitude to interpolate from a pale to a saturated tone.
         if L < 0:
             r = int(round(96  * (1 - mag) +   8 * mag))
             g = int(round(165 * (1 - mag) +  64 * mag))
@@ -583,8 +601,9 @@ def _render_contour_png(field2d: np.ndarray, spec: WaveSpec) -> bytes:
         colors.append((r / 255, g / 255, b / 255))
         widths.append(0.8 + 1.8 * mag)
     ax.contour(
-        xs, ys, field2d,
+        xs, ys, field_hi,
         levels=levels, colors=colors, linewidths=widths,
+        antialiased=True,
     )
     ax.set_xlim(-180, 180)
     ax.set_ylim(-WEB_MERC_LAT_MAX, WEB_MERC_LAT_MAX)
