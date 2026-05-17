@@ -3002,6 +3002,248 @@ function _renderSubseasonalNowWidget() {
     svg.innerHTML = parts.join('');
 }
 
+// ── Phase Evolution modal ───────────────────────────────────────
+// Larger interactive Wheeler-Hendon phase diagram showing the active
+// mode's PC1/PC2 trajectory over a configurable lookback window. Opens
+// from clicking the small phase-clock widget. Uses PC1/PC2 directly
+// from subseasonal_phases.json (added 2026-05-17 — earlier versions
+// only had derived phase + amplitude).
+var _subEvoWindow = 30;
+
+window.closeSubEvolutionModal = function () {
+    var m = document.getElementById('sub-evolution-modal');
+    if (m) m.style.display = 'none';
+};
+
+function _openSubEvolution() {
+    if (!_subPhases || !_subPhases.indices[_subState.mode]) return;
+    var m = document.getElementById('sub-evolution-modal');
+    if (!m) return;
+    m.style.display = 'flex';
+    _renderSubEvolution();
+    _ga('tc_clim_sub_evolution_open', { mode: _subState.mode, window: _subEvoWindow });
+}
+
+function _renderSubEvolution() {
+    var rec = _subPhases.indices[_subState.mode];
+    if (!rec || !rec.pc1) return;                              // older JSON without PC1/PC2
+    var titleEl = document.getElementById('sub-evolution-title');
+    var subEl   = document.getElementById('sub-evolution-sub');
+    var pcEl    = document.getElementById('sub-evolution-pc-chart');
+    var ampEl   = document.getElementById('sub-evolution-amp-chart');
+    if (!titleEl || !pcEl || !ampEl || typeof Plotly === 'undefined') return;
+
+    // Find last non-null index, then walk back lookback days
+    var phases = rec.phases, amps = rec.amplitudes;
+    var pc1 = rec.pc1, pc2 = rec.pc2;
+    var lastIdx = phases.length - 1;
+    while (lastIdx >= 0 && phases[lastIdx] == null) lastIdx--;
+    if (lastIdx < 0) return;
+    var startIdx = Math.max(0, lastIdx - _subEvoWindow + 1);
+    if (rec._startKey == null) rec._startKey = _dayKeyFromISO(rec.start_date);
+    var startKey = rec._startKey;
+
+    var dates = [], xs = [], ys = [], amplitudes = [], phasesArr = [];
+    for (var i = startIdx; i <= lastIdx; i++) {
+        if (pc1[i] == null || pc2[i] == null) continue;
+        var dt = new Date((startKey + i) * 86400000);
+        dates.push(dt.toISOString().slice(0, 10));
+        xs.push(pc1[i]);
+        ys.push(pc2[i]);
+        amplitudes.push(amps[i]);
+        phasesArr.push(phases[i]);
+    }
+    if (!xs.length) return;
+
+    titleEl.textContent = rec.label + ' · Phase Evolution';
+    subEl.textContent = 'Last ' + xs.length + ' days · '
+        + dates[0] + ' to ' + dates[dates.length - 1]
+        + ' · current phase ' + phasesArr[phasesArr.length - 1]
+        + ' (amp ' + amplitudes[amplitudes.length - 1].toFixed(2) + ')';
+
+    // ── Phase diagram (PC1, PC2) ──
+    var base = _tcaPlotlyBase();
+    var rmax = Math.max(3.5, Math.max.apply(null, xs.map(Math.abs).concat(ys.map(Math.abs))) * 1.1);
+
+    // Annotations: phase numbers + region labels in each sector
+    var modeStr = _subState.mode;
+    var regions = (modeStr === 'mjo' || modeStr === 'mjo_omi') ? {
+        1: 'W Hem / Africa', 2: 'Indian Ocean', 3: 'Indian Ocean',
+        4: 'Maritime Continent', 5: 'Maritime Continent', 6: 'W Pacific',
+        7: 'W Pacific / W Hem', 8: 'W Hem',
+    } : {
+        1: 'Indian Ocean', 2: 'Eastern IO', 3: 'BoB / Maritime',
+        4: 'WPac / Philippines', 5: 'WPac', 6: 'Subtropical WPac',
+        7: 'NIO / Arabian', 8: 'Africa / IO',
+    };
+    var annotations = [];
+    var sectorR = rmax * 0.86;
+    for (var p = 1; p <= 8; p++) {
+        var ang = ((p - 1) * 45 - 180 + 22.5) * Math.PI / 180;
+        annotations.push({
+            x: sectorR * Math.cos(ang),
+            y: sectorR * Math.sin(ang),
+            xref: 'x', yref: 'y',
+            text: '<b>' + p + '</b><br><span style="font-size:0.75em; opacity:0.6;">'
+                + regions[p] + '</span>',
+            showarrow: false,
+            font: { size: 13, color: base.font ? base.font.color : '#475569' },
+            opacity: 0.7,
+            align: 'center',
+        });
+    }
+
+    // Sector dividers + unit circle as shapes (drawn behind traces)
+    var shapes = [];
+    for (var sp = 0; sp < 8; sp++) {
+        var a = (sp * 45 - 180) * Math.PI / 180;
+        shapes.push({
+            type: 'line',
+            x0: 0, y0: 0,
+            x1: rmax * Math.cos(a), y1: rmax * Math.sin(a),
+            line: { color: 'rgba(120,120,120,0.35)', width: 0.6 },
+            layer: 'below',
+        });
+    }
+    // Unit circle (amp=1)
+    shapes.push({
+        type: 'circle', xref: 'x', yref: 'y',
+        x0: -1, y0: -1, x1: 1, y1: 1,
+        line: { color: 'rgba(120,120,120,0.6)', width: 1, dash: 'dash' },
+        layer: 'below',
+    });
+    // Bounding box (rmax circle)
+    shapes.push({
+        type: 'circle', xref: 'x', yref: 'y',
+        x0: -rmax, y0: -rmax, x1: rmax, y1: rmax,
+        line: { color: 'rgba(120,120,120,0.45)', width: 0.6 },
+        layer: 'below',
+    });
+
+    // Color by recency: oldest = light gray, newest = saturated red
+    var n = xs.length;
+    var colors = xs.map(function (_, i) {
+        return i / Math.max(1, n - 1);                 // 0..1
+    });
+    var hoverText = xs.map(function (_, i) {
+        var sign = amplitudes[i] >= 1 ? '✓ active' : '○ quiescent';
+        return dates[i]
+            + '<br>Phase ' + phasesArr[i]
+            + '<br>PC1=' + xs[i].toFixed(2) + ', PC2=' + ys[i].toFixed(2)
+            + '<br>amp=' + amplitudes[i].toFixed(2) + ' (' + sign + ')';
+    });
+
+    var trace_line = {
+        type: 'scatter', mode: 'lines',
+        x: xs, y: ys,
+        line: { color: 'rgba(46,125,255,0.55)', width: 2 },
+        hoverinfo: 'skip',
+        name: 'Track',
+    };
+    var trace_markers = {
+        type: 'scatter', mode: 'markers',
+        x: xs, y: ys,
+        marker: {
+            size: xs.map(function (_, i) { return i === n - 1 ? 14 : 8; }),
+            color: colors,
+            colorscale: [
+                [0,    'rgba(200,210,220,0.85)'],
+                [0.6,  'rgba(96,165,250,0.95)'],
+                [1.0,  'rgba(220,38,38,1.0)'],
+            ],
+            line: { color: '#0f172a', width: 1 },
+            showscale: false,
+        },
+        text: hoverText,
+        hoverinfo: 'text',
+        name: 'Daily PCs',
+    };
+    var trace_today = {
+        type: 'scatter', mode: 'markers+text',
+        x: [xs[n - 1]], y: [ys[n - 1]],
+        marker: { size: 18, color: 'rgba(220,38,38,0.05)', line: { color: '#dc2626', width: 2.5 } },
+        text: ['TODAY'],
+        textposition: 'top center',
+        textfont: { size: 10, color: '#dc2626' },
+        hoverinfo: 'skip',
+        showlegend: false,
+    };
+    var layout = Object.assign({}, base, {
+        xaxis: {
+            title: 'PC1 (eastward propagation →)',
+            range: [-rmax, rmax],
+            zeroline: true, zerolinecolor: 'rgba(0,0,0,0.4)',
+            gridcolor: 'rgba(200,200,200,0.3)',
+            constrain: 'domain',
+        },
+        yaxis: {
+            title: 'PC2',
+            range: [-rmax, rmax],
+            zeroline: true, zerolinecolor: 'rgba(0,0,0,0.4)',
+            gridcolor: 'rgba(200,200,200,0.3)',
+            scaleanchor: 'x', scaleratio: 1,
+        },
+        shapes: shapes,
+        annotations: annotations,
+        showlegend: false,
+        height: 480,
+        margin: { l: 60, r: 30, t: 10, b: 50 },
+    });
+    Plotly.newPlot('sub-evolution-pc-chart', [trace_line, trace_markers, trace_today],
+                   layout, PLOTLY_CONFIG);
+
+    // Click → drill the matching phase modal
+    var pcChart = document.getElementById('sub-evolution-pc-chart');
+    if (pcChart && pcChart.on) {
+        pcChart.removeAllListeners && pcChart.removeAllListeners('plotly_click');
+        pcChart.on('plotly_click', function (ev) {
+            if (!ev || !ev.points || !ev.points.length) return;
+            var idx = ev.points[0].pointIndex;
+            if (typeof idx !== 'number') return;
+            var phase = phasesArr[idx];
+            if (phase >= 1 && phase <= 8) {
+                window.closeSubEvolutionModal();
+                _openPhaseModal(phase);
+            }
+        });
+    }
+
+    // ── Amplitude time series ──
+    var ampLayout = Object.assign({}, base, {
+        height: 220,
+        margin: { l: 50, r: 30, t: 10, b: 40 },
+        xaxis: { title: '', tickfont: { size: 10 } },
+        yaxis: { title: 'Amplitude', rangemode: 'tozero' },
+        shapes: [{
+            type: 'line', xref: 'paper', yref: 'y',
+            x0: 0, x1: 1, y0: 1, y1: 1,
+            line: { color: '#dc2626', width: 1.2, dash: 'dash' },
+        }],
+        annotations: [{
+            x: 0.99, y: 1.05, xref: 'paper', yref: 'y',
+            text: 'active threshold', showarrow: false,
+            font: { size: 9, color: '#dc2626' },
+            xanchor: 'right',
+        }],
+        showlegend: false,
+    });
+    var ampTrace = {
+        type: 'scatter', mode: 'lines+markers',
+        x: dates, y: amplitudes,
+        line: { color: 'rgba(46,125,255,0.7)', width: 2 },
+        marker: {
+            size: 6,
+            color: amplitudes.map(function (a) { return a >= 1 ? '#ef4444' : '#94a3b8'; }),
+            line: { color: '#0f172a', width: 0.5 },
+        },
+        text: dates.map(function (d, i) {
+            return d + '<br>amp ' + amplitudes[i].toFixed(2) + ' · phase ' + phasesArr[i];
+        }),
+        hoverinfo: 'text',
+    };
+    Plotly.newPlot('sub-evolution-amp-chart', [ampTrace], ampLayout, PLOTLY_CONFIG);
+}
+
 function _renderSubseasonalSource() {
     var el = document.getElementById('sub-source');
     var inlineEl = document.getElementById('sub-phase-source-inline');
@@ -3413,6 +3655,35 @@ function _initSubseasonalOnce() {
         _subState.yearMin = null;
         _subState.yearMax = null;
         _renderSubseasonal();
+    });
+
+    // Phase-clock widget → click opens the evolution detail modal
+    var nowWidget = document.getElementById('sub-now-widget');
+    if (nowWidget) {
+        var clockWrap = nowWidget.querySelector('#sub-now-clock');
+        if (clockWrap) {
+            clockWrap.style.cursor = 'pointer';
+            clockWrap.title = 'Click for detailed phase evolution';
+            clockWrap.addEventListener('click', _openSubEvolution);
+        }
+        // Also make the whole "Current state" badge text clickable (more
+        // discoverable than the SVG alone — small target on touch screens).
+        var stateLabel = nowWidget.querySelector('div[style*="text-transform:uppercase"]');
+        if (stateLabel) {
+            stateLabel.style.cursor = 'pointer';
+            stateLabel.title = 'Click for detailed phase evolution';
+            stateLabel.addEventListener('click', _openSubEvolution);
+        }
+    }
+    // Lookback-window toggle in the evolution modal
+    document.querySelectorAll('#sub-evolution-window-toggle button').forEach(function (b) {
+        b.addEventListener('click', function () {
+            _subEvoWindow = +b.dataset.subEvoWindow;
+            document.querySelectorAll('#sub-evolution-window-toggle button').forEach(function (x) {
+                x.classList.toggle('active', x === b);
+            });
+            _renderSubEvolution();
+        });
     });
 
     // Wire RI methodology controls (overwater / TC-phase / Vmax range)
