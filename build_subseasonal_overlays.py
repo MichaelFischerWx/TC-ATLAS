@@ -209,13 +209,14 @@ WAVE_SPECS = [
         name="er",
         title="Equatorial Rossby (n=1) OLR",
         description="Wheeler-Kiladis ER band — westward wavenumbers 1-10, "
-                    "period 9-72 d, equivalent depth h = 8-90 m (phase speed "
-                    "c ≈ 9-30 m/s westward), n=1 Rossby branch, symmetric "
-                    "component. Contours every 2 W/m².",
+                    "period 9.7-72 d (Kiladis 2009), equivalent depth "
+                    "h = 8-90 m (phase speed c ≈ 9-30 m/s westward), n=1 "
+                    "Rossby branch, symmetric component. Contours every 2 W/m².",
         component="sym",
         k_lo=-10, k_hi=-1,
-        # 9-72 d period range — standard ER n=1 specification.
-        freq_lo=1.0 / 72.0, freq_hi=1.0 / 9.0,
+        # 9.7-72 d period range — Kiladis et al. 2009 Rev. Geophys. canonical
+        # specification (also used by Schreck's monitor).
+        freq_lo=1.0 / 72.0, freq_hi=1.0 / 9.7,
         h_lo=8.0, h_hi=90.0,
         vmin=-10.0, vmax=10.0,
         render_style="contour",
@@ -223,17 +224,33 @@ WAVE_SPECS = [
     ),
     WaveSpec(
         name="mrg",
-        title="Mixed Rossby-Gravity / TD-type OLR",
+        title="Mixed Rossby-Gravity OLR",
         description="Wheeler-Kiladis MRG band — westward wavenumbers 1-10, "
-                    "period 3-8 d, anti-symmetric component. Often the "
-                    "direct WPac / Atlantic TC genesis trigger. Contours "
-                    "every 2 W/m²; MRG amplitudes are typically ±2-6 W/m².",
+                    "period 3-96 d, anti-symmetric component. The canonical "
+                    "MRG mode lives at the slow westward (3-25 d) branch but "
+                    "we keep the broader 3-96 d window so secondary low-freq "
+                    "MRG-like structures are visible. Contours every 2 W/m².",
         component="asym",
         k_lo=-10, k_hi=-1,
-        freq_lo=1.0 / 8.0, freq_hi=1.0 / 3.0,
+        freq_lo=1.0 / 96.0, freq_hi=1.0 / 3.0,
         vmin=-6.0, vmax=6.0,
         render_style="contour",
         contour_levels=[-6, -4, -2, 2, 4, 6],
+    ),
+    WaveSpec(
+        name="td_type",
+        title="TD-type Disturbances OLR",
+        description="Roundy & Frank (2004) TD-type band — westward "
+                    "wavenumbers 6-20, period 2.5-5 d, anti-symmetric "
+                    "component. Often the direct WPac / Atlantic TC "
+                    "genesis trigger. Contours every 1 W/m²; amplitudes "
+                    "typically ±1-4 W/m².",
+        component="asym",
+        k_lo=-20, k_hi=-6,
+        freq_lo=1.0 / 5.0, freq_hi=1.0 / 2.5,
+        vmin=-5.0, vmax=5.0,
+        render_style="contour",
+        contour_levels=[-4, -3, -2, -1, 1, 2, 3, 4],
     ),
 ]
 
@@ -407,10 +424,12 @@ def wk_filter(field, spec: WaveSpec):
     # effectively swapped, producing reverse-direction streaks.
     if spec.name in ("kelvin", "mjo"):
         direction = "east"
-    elif spec.name == "er":
+    elif spec.name in ("er", "mrg", "td_type"):
+        # ER, MRG, and TD-type all propagate westward in the physical
+        # convention. MRG/TD-type get the antisymmetric component input.
         direction = "west"
     else:
-        direction = None        # MRG handled separately; no direction filter
+        direction = None
 
     # Wavenumber filter — accept |k_bin| within the spec's magnitude range
     # for eastward/westward modes (the conjugate quadrant has k_bin of

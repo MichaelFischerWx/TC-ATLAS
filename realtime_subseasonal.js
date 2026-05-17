@@ -24,16 +24,19 @@
 
     // WaveSpec names must match build_subseasonal_overlays.py.
     // forcedLatBand: pin a panel to a specific lat band regardless of
-    // the user's toggle. Used for MRG because it's antisymmetric about
-    // the equator — averaging over a symmetric band (10°S-10°N or
-    // 5°S-5°N) cancels the signal to zero by construction. The northern
-    // lobe at 5°N-15°N is where the actual MRG / TD-type variance lives.
+    // the user's toggle. Used for MRG / TD-type because they're
+    // antisymmetric about the equator — averaging over a symmetric
+    // band (10°S-10°N or 5°S-5°N) cancels the signal to zero by
+    // construction. The northern lobe at 5°N-15°N is where the
+    // antisymmetric variance lives.
     var BANDS = [
         { key: 'anomaly', title: 'OLR anomaly (raw)',             vlim: 40 },
         { key: 'mjo',     title: 'MJO band (30-96 d)',            vlim: 15 },
         { key: 'kelvin',  title: 'Kelvin (eastward, ~12-25 m/s)', vlim: 12 },
-        { key: 'er',      title: 'Equatorial Rossby (westward)',  vlim:  8 },
-        { key: 'mrg',     title: 'MRG / TD-type (3-8 d, 5°N-15°N)', vlim: 8,
+        { key: 'er',      title: 'Equatorial Rossby (westward, 9.7-72 d)', vlim: 8 },
+        { key: 'mrg',     title: 'Mixed Rossby-Gravity (3-96 d, 5°N-15°N)', vlim: 6,
+          forcedLatBand: 'boreal' },
+        { key: 'td_type', title: 'TD-type disturbances (2.5-5 d, 5°N-15°N)', vlim: 5,
           forcedLatBand: 'boreal' },
     ];
 
