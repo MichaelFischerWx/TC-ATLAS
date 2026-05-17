@@ -6076,12 +6076,47 @@
 
     var _rtLayersPanelOpen = false;
 
+    /** Mobile-aware open/close. On ≤768 px the panel renders as a
+     *  bottom sheet driven by a CSS transform (see .ir-layers-panel
+     *  rules in the mobile media query) so the transform can animate
+     *  the slide-up. A tap-dismiss backdrop is summoned on first open. */
     function toggleLayersPanel() {
         _rtLayersPanelOpen = !_rtLayersPanelOpen;
         var panel = document.getElementById('ir-layers-panel');
         var btn = document.getElementById('ir-layers-toggle');
-        if (panel) panel.style.display = _rtLayersPanelOpen ? '' : 'none';
+        var isMobile = window.matchMedia('(max-width: 768px)').matches;
+
+        if (panel) {
+            if (isMobile) {
+                // Keep `display` empty so the transform transition can
+                // play; the slide is driven entirely by .is-open-mobile.
+                panel.style.display = '';
+                panel.classList.toggle('is-open-mobile', _rtLayersPanelOpen);
+            } else {
+                panel.style.display = _rtLayersPanelOpen ? '' : 'none';
+                panel.classList.remove('is-open-mobile');
+            }
+        }
         if (btn) btn.classList.toggle('active', _rtLayersPanelOpen);
+
+        // Body class lifts the env-cbar stack above the sheet's top edge
+        // on mobile so users can read the legend while configuring.
+        document.body.classList.toggle('rt-layers-sheet-open',
+            isMobile && _rtLayersPanelOpen);
+
+        // Lazy-create + show the tap-dismiss backdrop on mobile.
+        var bd = document.getElementById('ir-layers-backdrop');
+        if (isMobile && !bd) {
+            bd = document.createElement('div');
+            bd.id = 'ir-layers-backdrop';
+            bd.className = 'ir-layers-backdrop';
+            bd.addEventListener('click', function () {
+                if (_rtLayersPanelOpen) toggleLayersPanel();
+            });
+            document.body.appendChild(bd);
+        }
+        if (bd) bd.classList.toggle('is-active', isMobile && _rtLayersPanelOpen);
+
         if (_rtLayersPanelOpen) {
             if (!_rtEnvMetadata) _loadEnvMetadata(); // _renderLayersPanel runs after the fetch
             _renderLayersPanel();
