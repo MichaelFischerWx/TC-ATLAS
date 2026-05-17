@@ -1799,13 +1799,34 @@ function _phaseOnDay(modeRec, dayKey) {
     return (a >= 1.0) ? p : 0;     // 0 = quiescent, 1..8 = active phase
 }
 
+// Daily-refreshed copy lives in GCS (see refresh_indices() in
+// build_subseasonal_overlays.py — Cloud Run Job at 13:30 UTC). The
+// bundled data/subseasonal_phases.json is the seed / fallback for any
+// case where the GCS fetch fails (CORS hiccup, first-run-before-job,
+// network outage). GCS file always has at least as much data as the
+// bundled one, so prefer it.
+var _SUBSEASONAL_INDICES_GCS = (
+    'https://storage.googleapis.com/tc-atlas-ir-cache/subseasonal/indices/latest.json'
+);
+
 function _loadSubPhases() {
     if (_subPhases) return Promise.resolve(_subPhases);
     if (_subPhasesPromise) return _subPhasesPromise;
-    _subPhasesPromise = fetch('data/subseasonal_phases.json?' + DATA_VER)
+    var fallback = function () {
+        return fetch('data/subseasonal_phases.json?' + DATA_VER)
+            .then(function (r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            });
+    };
+    _subPhasesPromise = fetch(_SUBSEASONAL_INDICES_GCS, { cache: 'no-store' })
         .then(function (r) {
-            if (!r.ok) throw new Error('HTTP ' + r.status);
+            if (!r.ok) throw new Error('GCS HTTP ' + r.status);
             return r.json();
+        })
+        .catch(function (err) {
+            console.warn('[subseasonal] GCS load failed, falling back to bundled:', err);
+            return fallback();
         })
         .then(function (d) {
             _subPhases = d;

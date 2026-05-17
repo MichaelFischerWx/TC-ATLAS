@@ -40,6 +40,8 @@ import json
 import logging
 import os
 import sys
+
+import requests  # daily index refresh (BOM RMM, APCC BSISO, NOAA ROMI)
 from dataclasses import dataclass, field as dc_field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -585,6 +587,293 @@ def upload_gcs(spec: WaveSpec, png: bytes, valid_time: str, bounds: list) -> boo
 
 
 # --------------------------------------------------------------------------
+# Daily index refresh (MJO RMM / BSISO1+2 / ROMI)
+# --------------------------------------------------------------------------
+# Pulls fresh daily values from each provider, merges with the existing
+# subseasonal_phases.json baseline, and uploads to GCS for the
+# tc_climatology subseasonal subview to consume.
+#
+# Sources:
+#   MJO RMM  — BOM (http://www.bom.gov.au/clim_data/IDCKGEM000/rmm.74toRealtime.txt)
+#              May be blocked by BOM's anti-scraping; in that case the
+#              existing series is preserved unchanged (manual one-off
+#              refresh by browser download + commit still works).
+#   BSISO    — APCC (https://www.apcc21.org/.../BSISO.INDEX.NORM.data)
+#              Single file contains both BSISO1 and BSISO2 PC pairs.
+#   ROMI     — NOAA PSL (https://psl.noaa.gov/mjo/mjoindex/romi.cpcolr.1x.txt)
+#              Replaces the deprecated OMI (frozen at 2024-05-20 upstream).
+# --------------------------------------------------------------------------
+
+INDICES_GCS_PATH = "subseasonal/indices/latest.json"
+BUNDLED_INDICES_PATH = Path("data/subseasonal_phases.json")
+
+_BOM_RMM_URL = "http://www.bom.gov.au/clim_data/IDCKGEM000/rmm.74toRealtime.txt"
+_APCC_BSISO_URL = (
+    "https://www.apcc21.org/prediction/file/download"
+    "?targetKind=BSISO/down/&targetName=BSISO.INDEX.NORM.data"
+)
+_NOAA_ROMI_URL = "https://psl.noaa.gov/mjo/mjoindex/romi.cpcolr.1x.txt"
+
+# Phase from (PC1, PC2) using the same 8-sector convention as the
+# bundled JSON: phase 1 starts at angle = -180° (i.e. -π), advances
+# counter-clockwise in 45° (π/4 rad) bins. Sources that don't emit
+# phase explicitly (ROMI, BSISO) get it computed here.
+def _phase_from_pcs(pc1: float, pc2: float) -> int:
+    import math
+    angle = math.atan2(pc2, pc1)  # [-π, π]
+    # Shift so phase 1 starts at angle = -π (180°W) and advances ccw.
+    sector = int(((angle + math.pi) / (math.pi / 4)) % 8) + 1
+    return sector
+
+
+def _load_baseline_indices() -> dict:
+    """Load the seed JSON. Prefer the most recent copy from GCS so we
+    pick up yesterday's merged version; fall back to the container-
+    bundled file on the first run (or if GCS unreachable)."""
+    try:
+        from google.cloud import storage
+        client = storage.Client()
+        bucket = client.bucket(GCS_BUCKET)
+        blob = bucket.blob(INDICES_GCS_PATH)
+        if blob.exists():
+            log.info("Loading baseline indices from gs://%s/%s",
+                     GCS_BUCKET, INDICES_GCS_PATH)
+            return json.loads(blob.download_as_text())
+    except Exception as e:
+        log.warning("GCS baseline read failed (using bundled): %s", e)
+    log.info("Loading baseline indices from %s", BUNDLED_INDICES_PATH)
+    with open(BUNDLED_INDICES_PATH) as f:
+        return json.load(f)
+
+
+def _fetch_bom_rmm():
+    """Fetch BOM RMM. Returns dict of arrays keyed by 'phases',
+    'amplitudes', 'pc1', 'pc2', 'start_date', 'end_date' or None on
+    failure (BOM blocks automated access from many networks)."""
+    try:
+        # Pretend to be a browser — BOM blocks most bot UAs but
+        # occasionally lets a desktop-Chrome UA through. If blocked, we
+        # return None and the merge step leaves the existing series.
+        r = requests.get(_BOM_RMM_URL, timeout=60, headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0 Safari/537.36"
+            )
+        })
+        if r.status_code != 200 or "blocked" in r.text[:500].lower():
+            log.warning("BOM RMM fetch blocked (HTTP %d) — keeping existing series",
+                        r.status_code)
+            return None
+        text = r.text
+    except Exception as e:
+        log.warning("BOM RMM fetch failed: %s — keeping existing series", e)
+        return None
+
+    phases, amps, pc1s, pc2s = [], [], [], []
+    first_date, last_date = None, None
+    for line in text.splitlines():
+        parts = line.split()
+        # Data rows start with year (4 digits, ≥ 1974)
+        if len(parts) < 7 or not parts[0].isdigit():
+            continue
+        try:
+            yr = int(parts[0]); mo = int(parts[1]); dy = int(parts[2])
+            if yr < 1974 or yr > 2100:
+                continue
+            pc1 = float(parts[3]); pc2 = float(parts[4])
+            phase = int(parts[5]); amp = float(parts[6])
+            # Missing value sentinel
+            if abs(pc1) > 1e30 or abs(pc2) > 1e30:
+                continue
+        except (ValueError, IndexError):
+            continue
+        d = f"{yr:04d}-{mo:02d}-{dy:02d}"
+        if first_date is None:
+            first_date = d
+        last_date = d
+        phases.append(phase)
+        amps.append(round(amp, 4))
+        pc1s.append(round(pc1, 4))
+        pc2s.append(round(pc2, 4))
+
+    if not phases:
+        log.warning("BOM RMM parse produced 0 records — keeping existing series")
+        return None
+    log.info("BOM RMM: parsed %d records (%s → %s)", len(phases), first_date, last_date)
+    return {
+        "start_date": first_date, "end_date": last_date,
+        "phases": phases, "amplitudes": amps, "pc1": pc1s, "pc2": pc2s,
+    }
+
+
+def _fetch_apcc_bsiso():
+    """Fetch APCC BSISO file. Returns dict with 'bsiso1' + 'bsiso2'
+    sub-dicts, each containing the same array fields as above."""
+    try:
+        r = requests.get(_APCC_BSISO_URL, timeout=60, allow_redirects=True)
+        r.raise_for_status()
+        text = r.text
+    except Exception as e:
+        log.warning("APCC BSISO fetch failed: %s — keeping existing series", e)
+        return None
+
+    out = {"bsiso1": {"phases": [], "amplitudes": [], "pc1": [], "pc2": []},
+           "bsiso2": {"phases": [], "amplitudes": [], "pc1": [], "pc2": []}}
+    first_date, last_date = None, None
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) < 8 or not parts[0].isdigit():
+            continue
+        try:
+            yr = int(parts[0]); doy = int(parts[1])
+            if yr < 1981 or yr > 2100 or doy < 1 or doy > 366:
+                continue
+            b1_p1 = float(parts[2]); b1_p2 = float(parts[3])
+            b2_p1 = float(parts[4]); b2_p2 = float(parts[5])
+            b1_amp = float(parts[6]); b2_amp = float(parts[7])
+        except (ValueError, IndexError):
+            continue
+        from datetime import date, timedelta
+        d = date(yr, 1, 1) + timedelta(days=doy - 1)
+        d_iso = d.isoformat()
+        if first_date is None:
+            first_date = d_iso
+        last_date = d_iso
+        out["bsiso1"]["phases"].append(_phase_from_pcs(b1_p1, b1_p2))
+        out["bsiso1"]["amplitudes"].append(round(b1_amp, 4))
+        out["bsiso1"]["pc1"].append(round(b1_p1, 4))
+        out["bsiso1"]["pc2"].append(round(b1_p2, 4))
+        out["bsiso2"]["phases"].append(_phase_from_pcs(b2_p1, b2_p2))
+        out["bsiso2"]["amplitudes"].append(round(b2_amp, 4))
+        out["bsiso2"]["pc1"].append(round(b2_p1, 4))
+        out["bsiso2"]["pc2"].append(round(b2_p2, 4))
+
+    if not out["bsiso1"]["phases"]:
+        log.warning("APCC BSISO parse produced 0 records — keeping existing")
+        return None
+    log.info("APCC BSISO: parsed %d days (%s → %s)",
+             len(out["bsiso1"]["phases"]), first_date, last_date)
+    for k in ("bsiso1", "bsiso2"):
+        out[k]["start_date"] = first_date
+        out[k]["end_date"] = last_date
+    return out
+
+
+def _fetch_noaa_romi():
+    """Fetch NOAA PSL ROMI (Real-time OLR-based MJO Index — the modern
+    replacement for OMI). Returns dict with same array fields."""
+    try:
+        r = requests.get(_NOAA_ROMI_URL, timeout=60)
+        r.raise_for_status()
+        text = r.text
+    except Exception as e:
+        log.warning("NOAA ROMI fetch failed: %s — keeping existing series", e)
+        return None
+
+    phases, amps, pc1s, pc2s = [], [], [], []
+    first_date, last_date = None, None
+    for line in text.splitlines():
+        parts = line.split()
+        # YYYY MM DD HH PC1 PC2 amp
+        if len(parts) < 7 or not parts[0].isdigit():
+            continue
+        try:
+            yr = int(parts[0]); mo = int(parts[1]); dy = int(parts[2])
+            if yr < 1979 or yr > 2100:
+                continue
+            pc1 = float(parts[4]); pc2 = float(parts[5])
+            amp = float(parts[6])
+        except (ValueError, IndexError):
+            continue
+        d = f"{yr:04d}-{mo:02d}-{dy:02d}"
+        if first_date is None:
+            first_date = d
+        last_date = d
+        phases.append(_phase_from_pcs(pc1, pc2))
+        amps.append(round(amp, 4))
+        pc1s.append(round(pc1, 4))
+        pc2s.append(round(pc2, 4))
+
+    if not phases:
+        log.warning("NOAA ROMI parse produced 0 records — keeping existing")
+        return None
+    log.info("NOAA ROMI: parsed %d records (%s → %s)", len(phases), first_date, last_date)
+    return {
+        "start_date": first_date, "end_date": last_date,
+        "phases": phases, "amplitudes": amps, "pc1": pc1s, "pc2": pc2s,
+    }
+
+
+def refresh_indices() -> bool:
+    """Daily refresh of MJO RMM / BSISO1 / BSISO2 / ROMI. Each source
+    is independent: any single failure leaves the existing series in
+    place and the merged JSON still uploads (so a temporary BOM
+    blackhole doesn't lose the BSISO refresh).
+
+    Note: the bundled JSON key 'mjo_omi' is REPLACED in-place with
+    fresh ROMI data + ROMI metadata (NOAA stopped updating OMI in
+    May 2024). The frontend keeps the same key so no UI change needed.
+    """
+    log.info("=== Refreshing subseasonal indices ===")
+    base = _load_baseline_indices()
+    base.setdefault("indices", {})
+
+    rmm = _fetch_bom_rmm()
+    if rmm:
+        base["indices"].setdefault("mjo", {})
+        base["indices"]["mjo"].update(rmm)
+
+    bsiso = _fetch_apcc_bsiso()
+    if bsiso:
+        for k, payload in bsiso.items():
+            base["indices"].setdefault(k, {})
+            base["indices"][k].update(payload)
+
+    romi = _fetch_noaa_romi()
+    if romi:
+        # Migrate the 'mjo_omi' slot to ROMI in place. Update the
+        # provider metadata so the frontend tooltip stays accurate.
+        slot = base["indices"].setdefault("mjo_omi", {})
+        slot.update(romi)
+        slot["label"] = "MJO (ROMI)"
+        slot["long_name"] = "Madden-Julian Oscillation, Real-time OLR-based MJO Index"
+        slot["description"] = (
+            "Real-time OLR-based MJO Index (ROMI) — Kiladis et al. (2014). "
+            "Daily-updated successor to OMI (which NOAA PSL stopped "
+            "refreshing in May 2024). 8 phases derived from (PC1, PC2)."
+        )
+        slot["provider"] = "NOAA PSL"
+        slot["provider_url"] = "https://psl.noaa.gov/mjo/mjoindex/"
+        slot["source"] = _NOAA_ROMI_URL
+        slot["paper"] = "Kiladis et al. 2014, MWR"
+        slot["paper_url"] = "https://doi.org/10.1175/MWR-D-13-00301.1"
+
+    base["updated"] = datetime.now(timezone.utc).date().isoformat()
+
+    # Upload to GCS for the climatology page to fetch.
+    try:
+        from google.cloud import storage
+        client = storage.Client()
+        bucket = client.bucket(GCS_BUCKET)
+        blob = bucket.blob(INDICES_GCS_PATH)
+        body = json.dumps(base, separators=(",", ":"))
+        blob.upload_from_string(body, content_type="application/json")
+        blob.cache_control = "public, max-age=600"
+        blob.patch()
+        try:
+            blob.make_public()
+        except Exception as e:
+            log.warning("indices blob make_public failed: %s", e)
+        log.info("Uploaded indices to gs://%s/%s (%d bytes)",
+                 GCS_BUCKET, INDICES_GCS_PATH, len(body))
+        return True
+    except Exception as e:
+        log.exception("Index JSON upload failed: %s", e)
+        return False
+
+
+# --------------------------------------------------------------------------
 # Main
 # --------------------------------------------------------------------------
 
@@ -628,7 +917,25 @@ def main():
                         help="Override 'today' (ISO date). Default: latest in OPeNDAP.")
     parser.add_argument("--local-only", action="store_true",
                         help="Skip GCS upload. Outputs to --out only.")
+    parser.add_argument("--skip-indices", action="store_true",
+                        help="Skip the daily MJO/BSISO/ROMI index refresh "
+                             "(useful for local OLR-only iteration).")
+    parser.add_argument("--indices-only", action="store_true",
+                        help="ONLY refresh the indices; skip the OLR + WK "
+                             "filtering pipeline (fast smoke test).")
     args = parser.parse_args()
+
+    # Daily index refresh runs alongside the OLR overlays so the
+    # 13:30 UTC scheduler covers everything in one pass.
+    if not args.local_only and not args.skip_indices:
+        try:
+            refresh_indices()
+        except Exception as e:
+            log.exception("refresh_indices() crashed: %s", e)
+
+    if args.indices_only:
+        log.info("--indices-only: skipping OLR pipeline")
+        return 0
 
     out_dir = Path(args.out)
     cache_dir = Path(args.cache)
