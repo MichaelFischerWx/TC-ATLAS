@@ -6079,20 +6079,40 @@
     /** Mobile-aware open/close. On ≤768 px the panel renders as a
      *  bottom sheet driven by a CSS transform (see .ir-layers-panel
      *  rules in the mobile media query) so the transform can animate
-     *  the slide-up. A tap-dismiss backdrop is summoned on first open. */
+     *  the slide-up. A tap-dismiss backdrop is summoned on first open.
+     *
+     *  Critical: the panel is created inside a Leaflet topright control
+     *  wrap, and Leaflet positions controls via CSS `transform` on the
+     *  map container. `position: fixed` resolves to the nearest
+     *  transformed ancestor instead of the viewport, so the bottom-
+     *  sheet rules would otherwise collapse to the tiny topright
+     *  control box. Detach the panel to <body> on mobile-open and put
+     *  it back in the wrap on close / desktop so each path gets the
+     *  positioning it expects. */
     function toggleLayersPanel() {
         _rtLayersPanelOpen = !_rtLayersPanelOpen;
         var panel = document.getElementById('ir-layers-panel');
         var btn = document.getElementById('ir-layers-toggle');
+        var wrap = document.querySelector('.ir-layers-wrap');
         var isMobile = window.matchMedia('(max-width: 768px)').matches;
 
         if (panel) {
             if (isMobile) {
+                // Escape the Leaflet control's transform context so
+                // position:fixed actually anchors to the viewport.
+                if (panel.parentElement !== document.body) {
+                    document.body.appendChild(panel);
+                }
                 // Keep `display` empty so the transform transition can
                 // play; the slide is driven entirely by .is-open-mobile.
                 panel.style.display = '';
                 panel.classList.toggle('is-open-mobile', _rtLayersPanelOpen);
             } else {
+                // Desktop: panel belongs back inside the Leaflet wrap
+                // so it anchors below the trigger button as a dropdown.
+                if (wrap && panel.parentElement !== wrap) {
+                    wrap.appendChild(panel);
+                }
                 panel.style.display = _rtLayersPanelOpen ? '' : 'none';
                 panel.classList.remove('is-open-mobile');
             }
