@@ -70,7 +70,7 @@ if gcloud run jobs describe "${JOB_NAME}" --region "${REGION}" >/dev/null 2>&1; 
         --memory 2Gi \
         --cpu 2 \
         --max-retries 1 \
-        --task-timeout 600 \
+        --task-timeout 1800 \
         --set-env-vars "GCS_IR_CACHE_BUCKET=${BUCKET}"
 else
     gcloud run jobs create "${JOB_NAME}" \
@@ -79,7 +79,7 @@ else
         --memory 2Gi \
         --cpu 2 \
         --max-retries 1 \
-        --task-timeout 600 \
+        --task-timeout 1800 \
         --set-env-vars "GCS_IR_CACHE_BUCKET=${BUCKET}"
 fi
 
