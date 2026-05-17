@@ -147,8 +147,8 @@ WAVE_SPECS = [
         name="kelvin",
         title="Kelvin-wave filtered OLR",
         description="Wheeler-Kiladis Kelvin band — eastward wavenumbers 1-14, "
-                    "equivalent depth 8-90 m, symmetric component. "
-                    "Active envelopes propagate eastward at ~12-25 m/s.",
+                    "equivalent depth h = 8-90 m (phase speed c = √(g·h) ≈ "
+                    "9-30 m/s eastward), symmetric component.",
         component="sym",
         k_lo=1, k_hi=14,
         h_lo=8.0, h_hi=90.0,
@@ -158,7 +158,8 @@ WAVE_SPECS = [
         name="er",
         title="Equatorial Rossby (n=1) OLR",
         description="Wheeler-Kiladis ER band — westward wavenumbers 1-10, "
-                    "equivalent depth 8-90 m, n=1 Rossby branch, symmetric component.",
+                    "equivalent depth h = 8-90 m (phase speed c ≈ 9-30 m/s "
+                    "westward), n=1 Rossby branch, symmetric component.",
         component="sym",
         k_lo=-10, k_hi=-1,
         h_lo=8.0, h_hi=90.0,

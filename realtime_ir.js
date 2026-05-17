@@ -6515,11 +6515,15 @@
             label: 'Subseasonal Forcing',
             match: function (L_) { return L_.category === 'subseasonal'; },
             shortTitle: function (L_) {
+                // Period (days) where that's the natural axis, phase speed
+                // (m/s) where the dispersion-curve depth is. Hides the
+                // "h = 8-90 m equivalent depth" jargon behind the more
+                // immediately-readable wave propagation speed.
                 var labels = {
                     anomaly: 'OLR anomaly',
                     mjo:     'MJO band (30-96 d)',
-                    kelvin:  'Kelvin band (h=8-90 m)',
-                    er:      'Equatorial Rossby (n=1)',
+                    kelvin:  'Kelvin band (c ≈ 9-30 m/s east)',
+                    er:      'Equatorial Rossby (c ≈ 9-30 m/s west, n=1)',
                     mrg:     'MRG / TD-type (3-8 d)',
                 };
                 return labels[L_.name] || L_.title;
