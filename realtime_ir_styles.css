@@ -1744,6 +1744,13 @@ html, body { margin: 0; padding: 0; }
     -webkit-backdrop-filter: blur(2px);
 }
 
+/* Sheet header (drag handle + X close) is hidden on desktop — the
+   panel is a flow-positioned dropdown there, not a dismissable sheet.
+   The mobile media query overrides display: block. */
+.ir-layers-sheet-header {
+    display: none;
+}
+
 @media (max-width: 768px) {
     .ir-layers-backdrop {
         display: block;
@@ -1817,20 +1824,79 @@ html, body { margin: 0; padding: 0; }
     .ir-layers-panel.is-open-mobile {
         transform: translateY(0);
     }
-    /* Drag-handle affordance at the top of the sheet. Not a real
-       drag (would need pointer math) — just a visual cue that
-       this is a sheet and the user can tap the backdrop to close. */
-    .ir-layers-panel::before {
+    /* Sheet header — visible only on mobile. Contains the drag-handle
+       pill (tappable to dismiss) and the X close button. Sits at the
+       top of the sheet inside its own row so the content below scrolls
+       independently. */
+    .ir-layers-sheet-header {
+        display: block;
+        position: relative;
+        height: 28px;
+        flex-shrink: 0;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    }
+    /* Tappable drag-handle pill — centered visually. Click it to
+       dismiss (drag-to-dismiss would need pointer math; not done). */
+    .ir-layers-handle {
+        position: absolute;
+        top: 8px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 56px;            /* fat tap target — visual pill is 40px */
+        height: 14px;
+        padding: 0;
+        background: transparent;
+        border: none;
+        cursor: pointer;
+    }
+    .ir-layers-handle::before {
         content: '';
         position: absolute;
-        top: 6px;
+        top: 5px;
         left: 50%;
         transform: translateX(-50%);
         width: 40px;
         height: 4px;
         background: rgba(255, 255, 255, 0.30);
         border-radius: 2px;
-        pointer-events: none;
+        transition: background 0.15s;
+    }
+    .ir-layers-handle:active::before {
+        background: rgba(255, 255, 255, 0.55);
+    }
+    /* X close button — top-right corner of the sheet header. The
+       most universally-understood "dismiss" affordance for users
+       who don't know about backdrop-tap or drag handles. */
+    .ir-layers-sheet-close {
+        position: absolute;
+        top: 0;
+        right: 0;
+        width: 44px;
+        height: 44px;            /* Apple HIG min tap target */
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        background: transparent;
+        border: none;
+        color: rgba(255, 255, 255, 0.55);
+        font-size: 1.6rem;
+        line-height: 1;
+        cursor: pointer;
+        transition: color 0.15s, background 0.15s;
+    }
+    .ir-layers-sheet-close:active {
+        color: #ffffff;
+        background: rgba(255, 255, 255, 0.06);
+    }
+    /* Reset the desktop-only padding-top that used to make room for
+       the pseudo-element drag handle. The real .ir-layers-sheet-header
+       provides its own height now. */
+    .ir-layers-panel {
+        padding-top: 0 !important;
+    }
+    .ir-layers-content {
+        overflow-y: auto;
     }
     /* When the sheet is open, lift the env-colorbar stack above its
        top edge so users can read the legend they're configuring. */

@@ -1913,11 +1913,37 @@
                 status.id = 'ir-global-wl-status';
                 status.style.display = 'none';
 
-                // ── Panel container (populated by _renderLayersPanel) ─
+                // ── Panel container ───────────────────────────────────
+                //  Two persistent children:
+                //  (1) .ir-layers-sheet-header — mobile-only, holds the
+                //      drag-handle pill + X close button. Tapping either
+                //      closes the bottom sheet. Hidden on desktop.
+                //  (2) .ir-layers-content — re-rendered on every panel
+                //      open by _renderLayersPanel().
+                //  The header lives OUTSIDE the content so innerHTML
+                //  replacement in _renderLayersPanel doesn't blow it away.
                 var panel = L.DomUtil.create('div', 'ir-layers-panel ir-global-menu', wrap);
                 panel.id = 'ir-layers-panel';
                 panel.style.display = 'none';
-                panel.innerHTML = '<div class="ir-global-menu-empty">Loading layers…</div>';
+
+                var header = L.DomUtil.create('div', 'ir-layers-sheet-header', panel);
+                var handle = L.DomUtil.create('button', 'ir-layers-handle', header);
+                handle.type = 'button';
+                handle.setAttribute('aria-label', 'Close layers panel');
+                handle.addEventListener('click', function () {
+                    if (_rtLayersPanelOpen) toggleLayersPanel();
+                });
+                var closeBtn = L.DomUtil.create('button', 'ir-layers-sheet-close', header);
+                closeBtn.type = 'button';
+                closeBtn.setAttribute('aria-label', 'Close layers panel');
+                closeBtn.innerHTML = '&times;';
+                closeBtn.addEventListener('click', function () {
+                    if (_rtLayersPanelOpen) toggleLayersPanel();
+                });
+
+                var content = L.DomUtil.create('div', 'ir-layers-content', panel);
+                content.id = 'ir-layers-content';
+                content.innerHTML = '<div class="ir-global-menu-empty">Loading layers…</div>';
 
                 return wrap;
             }
@@ -6171,7 +6197,11 @@
      *  slider that drives every env layer. */
     function _renderLayersPanel() {
         var panel = document.getElementById('ir-layers-panel');
-        if (!panel) return;
+        // Write content into the dedicated sub-div so the persistent
+        // .ir-layers-sheet-header (drag handle + X close button) at the
+        // top of the panel survives across renders.
+        var content = document.getElementById('ir-layers-content') || panel;
+        if (!content) return;
 
         var allLayers = (_rtEnvMetadata && _rtEnvMetadata.layers) || [];
         var envLayers = allLayers.filter(function (L_) {
@@ -6335,13 +6365,13 @@
             html = '<div class="ir-global-menu-empty">Loading layers…</div>';
         }
 
-        panel.innerHTML = html;
+        content.innerHTML = html;
 
         // ── Wire up change handlers ─────────────────────────────────
         // The whole row is a <label> wrapping the checkbox, so any click
         // anywhere in the row flips the checkbox and fires `change` on
         // it exactly once — no manual label-forwarding gymnastics.
-        var rows = panel.querySelectorAll('label.ir-global-menu-row');
+        var rows = content.querySelectorAll('label.ir-global-menu-row');
         for (var r = 0; r < rows.length; r++) {
             (function (rowEl) {
                 var cb = rowEl.querySelector('input[type="checkbox"]');
