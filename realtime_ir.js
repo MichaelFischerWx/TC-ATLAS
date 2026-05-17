@@ -1441,7 +1441,7 @@
         for (var i = 0; i < layers.length; i++) {
             targetMap.removeLayer(layers[i]);
         }
-        var lyr = createCompositeGIBSLayer(timeStr, opacity || 0.7);
+        var lyr = createCompositeGIBSLayer(timeStr, opacity || 0.85);
         lyr.addTo(targetMap);
         return [lyr];
     }
@@ -1504,7 +1504,7 @@
             gibsVisLayers = [];
             // Use per-satellite times for static IR layer (fresher GOES tiles)
             var perSat = (Object.keys(latestGIBSTimes).length > 0) ? latestGIBSTimes : null;
-            var irLyr = createCompositeGIBSLayer(timeStr, 0.65, perSat);
+            var irLyr = createCompositeGIBSLayer(timeStr, 0.85, perSat);
             irLyr.addTo(map);
             gibsIRLayers = [irLyr];
         }
@@ -1614,7 +1614,11 @@
 
         // Show requested frame
         globalAnimIndex = idx;
-        globalAnimFrameLayers[idx].setOpacity(globalProduct === 'geocolor' ? 0.75 : 0.65);
+        // IR uses 0.85 to match the initial still-overlay opacity set in
+        // addGIBSOverlay (was 0.65 — the drop was visible the moment
+        // animation took over). GeoColor stays at 0.75 since both its
+        // still and animation paths already used that value.
+        globalAnimFrameLayers[idx].setOpacity(globalProduct === 'geocolor' ? 0.75 : 0.85);
 
         // Update time display
         var timeEl = document.getElementById('ir-global-anim-time');
@@ -2084,7 +2088,7 @@
                             gibsVisLayers = [visLyr];
                         } else {
                             var perSat = (Object.keys(latestGIBSTimes).length > 0) ? latestGIBSTimes : null;
-                            var irLyr = createCompositeGIBSLayer(latestGIBSTime, 0.65, perSat);
+                            var irLyr = createCompositeGIBSLayer(latestGIBSTime, 0.85, perSat);
                             irLyr.addTo(map);
                             gibsIRLayers = [irLyr];
                         }
