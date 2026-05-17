@@ -64,6 +64,19 @@ log = logging.getLogger("build_subseasonal_overlays")
 # real-time monitoring (and standard in the WK community).
 WINDOW_DAYS = 200
 
+# Hovmöller (time × lon) diagnostics — written per WaveSpec for the
+# Real-Time Monitor's Subseasonal tab. 60 days gives enough temporal
+# context to see two MJO cycles or a half-dozen Kelvin transits without
+# bloating page-load. Three lat bands cover the standard equatorial WK
+# average (10°S-10°N), a tighter Kelvin-favored slice (5°S-5°N), and an
+# off-equator slice that resolves MRG / TD-type signals better.
+HOVMOLLER_LOOKBACK_DAYS = 60
+HOVMOLLER_LAT_BANDS = [
+    {"key": "trop10", "lat_min": -10.0, "lat_max": 10.0, "label": "10°S-10°N"},
+    {"key": "eq5",    "lat_min":  -5.0, "lat_max":  5.0, "label":  "5°S-5°N"},
+    {"key": "boreal", "lat_min":   5.0, "lat_max": 15.0, "label": "5°N-15°N"},
+]
+
 # Climatology reference period. Long enough to be stable, recent enough
 # to reflect the current climate state. Matches what NOAA CPC uses for
 # MJO/CCEW diagnostics.
@@ -752,6 +765,91 @@ GCS_BUCKET = os.environ.get("GCS_IR_CACHE_BUCKET", "tc-atlas-ir-cache")
 GCS_PREFIX = "subseasonal"   # gs://{bucket}/{prefix}/{wave}/{latest.png|metadata.json}
 
 
+def build_hovmoller_slab(field, spec: WaveSpec, valid_time_iso: str) -> dict:
+    """Slice the full (time, lat, lon) wave-band field into a Hovmöller
+    payload: last HOVMOLLER_LOOKBACK_DAYS days, latitudinally averaged
+    over each band in HOVMOLLER_LAT_BANDS. Output is a JSON-ready dict
+    that the Real-Time Monitor's Subseasonal tab consumes directly to
+    paint a Plotly heatmap (time × lon) per band.
+
+    Values are rounded to 1 decimal place — OLR anomaly precision is
+    well under 0.1 W/m² in practice, and rounding cuts JSON payload by
+    ~2× without visible degradation.
+    """
+    lats = field.lat.values
+    lons = field.lon.values
+    last_n = min(HOVMOLLER_LOOKBACK_DAYS, field.shape[0])
+    sliced = field.isel(time=slice(-last_n, None))
+    times = [str(np.datetime64(t, "D")) for t in sliced.time.values]
+
+    out = {
+        "band": spec.name,
+        "title": spec.title,
+        "valid_time": valid_time_iso,
+        "units": "W/m²",
+        "vmin": spec.vmin,
+        "vmax": spec.vmax,
+        "lookback_days": last_n,
+        "lons": [float(x) for x in lons],
+        "times": times,
+        "lat_bands": {},
+    }
+    for band in HOVMOLLER_LAT_BANDS:
+        # Build a boolean mask on the lat axis instead of relying on
+        # xarray slice direction (NOAA OLR is descending lat).
+        mask = (lats >= band["lat_min"]) & (lats <= band["lat_max"])
+        if not mask.any():
+            log.warning("  hovmoller: no lats in band %s (%g..%g)",
+                        band["key"], band["lat_min"], band["lat_max"])
+            continue
+        hov = sliced.values[:, mask, :].mean(axis=1)   # (time, lon)
+        out["lat_bands"][band["key"]] = {
+            "lat_min": band["lat_min"],
+            "lat_max": band["lat_max"],
+            "label": band["label"],
+            "values": np.round(hov, 1).tolist(),
+        }
+    return out
+
+
+def write_hovmoller_local(out_dir: Path, spec: WaveSpec, slab: dict) -> None:
+    """Mirror the GCS path layout locally for `--local-only` debugging.
+    Writes `<spec.name>.hovmoller.json` alongside the existing PNG."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / f"{spec.name}.hovmoller.json").write_text(
+        json.dumps(slab, separators=(",", ":"))
+    )
+
+
+def upload_hovmoller_gcs(spec: WaveSpec, slab: dict) -> bool:
+    """Upload Hovmöller slab to
+    gs://{GCS_BUCKET}/{GCS_PREFIX}/{spec.name}/hovmoller.json.
+    Cache TTL matches the wave overlays (10 min) since the pipeline
+    refreshes once daily."""
+    try:
+        from google.cloud import storage
+    except ImportError:
+        log.error("google-cloud-storage not installed; cannot upload hovmoller")
+        return False
+    if not GCS_BUCKET:
+        log.error("GCS_IR_CACHE_BUCKET not set; cannot upload hovmoller")
+        return False
+    client = storage.Client()
+    bucket = client.bucket(GCS_BUCKET)
+    blob = bucket.blob(f"{GCS_PREFIX}/{spec.name}/hovmoller.json")
+    blob.upload_from_string(json.dumps(slab, separators=(",", ":")),
+                            content_type="application/json")
+    blob.cache_control = "public, max-age=600"
+    blob.patch()
+    try:
+        blob.make_public()
+    except Exception as e:
+        log.warning("Could not mark %s public: %s", blob.name, e)
+    log.info("  uploaded gs://%s/%s/%s/hovmoller.json",
+             GCS_BUCKET, GCS_PREFIX, spec.name)
+    return True
+
+
 def _meta_dict(spec: WaveSpec, valid_time: str, bounds: list,
                image_url: Optional[str] = None,
                geojson_url: Optional[str] = None) -> dict:
@@ -1256,17 +1354,36 @@ def main():
                 geojson = render_contour_geojson(latest, lats, lons, spec)
             except Exception as e:
                 log.warning("GeoJSON contour render failed for %s: %s", spec.name, e)
+
+        # Hovmöller slab (60d × 3 lat-bands) for the RT Monitor's
+        # Subseasonal tab. Built from the same WK-filtered field that
+        # feeds the latest-timestep PNG — no extra FFT cost.
+        hov_slab = None
+        try:
+            hov_slab = build_hovmoller_slab(filtered, spec, valid_time_iso)
+        except Exception as e:
+            log.warning("Hovmöller build failed for %s: %s", spec.name, e)
+
         write_local(out_dir, spec, png, valid_time_iso, bounds)
         if geojson:
             (out_dir / f"{spec.name}.geojson").write_bytes(geojson)
-        log.info("  wrote %s.png (%d bytes)%s",
+        if hov_slab:
+            write_hovmoller_local(out_dir, spec, hov_slab)
+        log.info("  wrote %s.png (%d bytes)%s%s",
                  spec.name, len(png),
-                 f" + .geojson ({len(geojson)} bytes)" if geojson else "")
+                 f" + .geojson ({len(geojson)} bytes)" if geojson else "",
+                 " + .hovmoller.json" if hov_slab else "")
         if not args.local_only:
             try:
                 upload_gcs(spec, png, valid_time_iso, bounds, geojson=geojson)
             except Exception as e:
                 log.exception("GCS upload failed for %s: %s", spec.name, e)
+            if hov_slab:
+                try:
+                    upload_hovmoller_gcs(spec, hov_slab)
+                except Exception as e:
+                    log.exception("Hovmöller GCS upload failed for %s: %s",
+                                  spec.name, e)
 
     log.info("Done. Outputs in %s%s",
              out_dir, "" if args.local_only else f" + gs://{GCS_BUCKET}/{GCS_PREFIX}/")

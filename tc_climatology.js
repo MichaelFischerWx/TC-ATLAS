@@ -2894,161 +2894,27 @@ function _updateMapPanelText() {
 }
 
 // ── "Current state" phase-clock widget ─────────────────────────
-// SVG diagram for the active mode showing the 8 sector wheel + the
-// position implied by today's phase + amplitude. We don't have raw
-// PC1/PC2 in subseasonal_phases.json (only derived phase + amplitude),
-// so the dot is plotted at the SECTOR MIDPOINT scaled by amplitude.
-// 7-day fading trail uses the same approximation. Trades some
-// positional precision for keeping the data file compact; if we ever
-// add PC1/PC2 to the JSON, this rendering picks them up trivially.
+// Delegates to the shared SubseasonalClock module so the RT Monitor's
+// Subseasonal tab can render the same dial without code duplication.
+// The 14-day trail length is the climo-page default (RT uses 15d for
+// operational context).
 function _renderSubseasonalNowWidget() {
     var svg = document.getElementById('sub-now-clock');
-    var modeEl   = document.getElementById('sub-now-mode');
-    var dateEl   = document.getElementById('sub-now-date');
-    var phaseEl  = document.getElementById('sub-now-phase');
-    var ampEl    = document.getElementById('sub-now-amp');
-    var statusEl = document.getElementById('sub-now-status');
     if (!svg || !_subPhases || !_subPhases.indices[_subState.mode]) return;
-    var rec = _subPhases.indices[_subState.mode];
-    if (modeEl) modeEl.textContent = rec.label;
-
-    // Find the most recent non-null phase in the dense array
-    var phases = rec.phases, amps = rec.amplitudes;
-    var lastIdx = phases.length - 1;
-    while (lastIdx >= 0 && (phases[lastIdx] == null || amps[lastIdx] == null)) lastIdx--;
-    if (lastIdx < 0) {
-        if (dateEl) dateEl.textContent = '(no data)';
-        return;
-    }
-    if (rec._startKey == null) rec._startKey = _dayKeyFromISO(rec.start_date);
-    var dateMs = (rec._startKey + lastIdx) * 86400000;
-    var dt = new Date(dateMs);
-    var dateISO = dt.toISOString().slice(0, 10);
-    var nowPhase = phases[lastIdx];
-    var nowAmp = amps[lastIdx];
-
-    if (dateEl)  dateEl.textContent  = dateISO;
-    if (phaseEl) phaseEl.textContent = String(nowPhase);
-    if (ampEl)   ampEl.textContent   = nowAmp.toFixed(2);
-
-    // Active-basin callout based on phase. RMM/OMI use the same
-    // longitude semantics; BSISO has its own regional interpretation
-    // (Indian Ocean genesis enhanced phases 2–4, WPac genesis 6–7).
-    var mode = _subState.mode;
-    var regionStr;
-    var active = nowAmp >= 1.0;
-    if (mode === 'mjo' || mode === 'mjo_omi') {
-        regionStr = ({
-            1: 'W Hem / Africa',
-            2: 'Indian Ocean',
-            3: 'Indian Ocean',
-            4: 'Maritime Continent',
-            5: 'Maritime Continent',
-            6: 'W Pacific',
-            7: 'W Pacific / W Hem',
-            8: 'W Hem / Africa',
-        })[nowPhase];
-    } else {
-        regionStr = ({
-            1: 'Indian Ocean (suppressed convection)',
-            2: 'Eastern IO',
-            3: 'BoB / Maritime Continent',
-            4: 'WPac / Philippines',
-            5: 'WPac (enhanced convection)',
-            6: 'Subtropical WPac',
-            7: 'NIO / Arabian Sea',
-            8: 'Africa / Indian Ocean',
-        })[nowPhase];
-    }
-    if (statusEl) statusEl.innerHTML = (active ? '✓ <strong>Active</strong>' : '○ Quiescent')
-        + ' · ' + (regionStr || 'unknown') + ' convective envelope';
-
-    // ── Inline Wheeler-Hendon thumbnail using PC1/PC2 ──
-    // Mirrors the detail-view geometry at 120×120: 8 sector dividers,
-    // amp=1 dashed circle, rmax bounding circle. Maps actual PC1/PC2
-    // to (x, y) so the trajectory shape matches what users see when
-    // they click in for the full Plotly version. PC1/PC2 may be absent
-    // in older JSON snapshots; fall back to sector-midpoint plotting
-    // there.
-    var W = 120, H = 120, cx = W / 2, cy = H / 2, R = 50, RIN = 6;
-    var theme = (window.TCATheme && window.TCATheme.current) || 'light';
-    var bgFill = theme === 'dark' ? '#161b24' : '#ffffff';
-    var stroke = theme === 'dark' ? 'rgba(255,255,255,0.30)' : 'rgba(0,0,0,0.30)';
-    var labelColor = theme === 'dark' ? '#cbd5e1' : '#64748b';
-    var hasPCs = Array.isArray(rec.pc1) && Array.isArray(rec.pc2);
-    var rmax = 3.0;                                      // standard Wheeler-Hendon ±3 range
-
-    // Convert PC1/PC2 (or sector midpoint fallback) into SVG pixel coords.
-    // SVG y axis grows DOWN, so flip PC2.
-    function pcToXY(pc1v, pc2v) {
-        var x = cx + R * pc1v / rmax;
-        var y = cy - R * pc2v / rmax;
-        return { x: x, y: y };
-    }
-    function fallbackXY(phase, amp) {
-        var ang = ((phase - 1) * 45 - 180 + 22.5) * Math.PI / 180;
-        var rr = R * Math.min(amp / rmax, 1);
-        return { x: cx + rr * Math.cos(ang), y: cy + rr * Math.sin(ang) };
-    }
-
-    var parts = [];
-    // Bounding circle (corresponds to amplitude = rmax)
-    parts.push('<circle cx="' + cx + '" cy="' + cy + '" r="' + R + '" fill="' + bgFill + '" stroke="' + stroke + '" stroke-width="1"/>');
-    // Inner amplitude=1 ring
-    var rAmp1 = R / rmax;
-    parts.push('<circle cx="' + cx + '" cy="' + cy + '" r="' + rAmp1 + '" fill="none" stroke="' + stroke + '" stroke-width="0.8" stroke-dasharray="2,2"/>');
-    // 8 sector dividers
-    for (var k = 0; k < 8; k++) {
-        var ang0 = (k * 45 - 180) * Math.PI / 180;
-        var x2 = cx + R * Math.cos(ang0), y2 = cy + R * Math.sin(ang0);
-        parts.push('<line x1="' + cx + '" y1="' + cy
-            + '" x2="' + x2.toFixed(1) + '" y2="' + y2.toFixed(1)
-            + '" stroke="' + stroke + '" stroke-width="0.5"/>');
-    }
-    // Phase labels at sector midpoints, just outside the bounding circle
-    for (var pp = 1; pp <= 8; pp++) {
-        var midAng = ((pp - 1) * 45 - 180 + 22.5) * Math.PI / 180;
-        var lx = cx + (R + 7) * Math.cos(midAng);
-        var ly = cy - (R + 7) * Math.sin(midAng);     // SVG y flip
-        parts.push('<text x="' + lx.toFixed(1) + '" y="' + (ly + 3).toFixed(1)
-            + '" text-anchor="middle" font-size="9" fill="' + labelColor + '">' + pp + '</text>');
-    }
-    // 14-day trail with proper PC1/PC2 plotting
-    var trail = [];
-    var trailDays = 14;
-    for (var d = trailDays - 1; d >= 0; d--) {
-        var ix = lastIdx - d;
-        if (ix < 0) continue;
-        var phx = phases[ix], aax = amps[ix];
-        if (phx == null || aax == null) continue;
-        var pt;
-        if (hasPCs && rec.pc1[ix] != null && rec.pc2[ix] != null) {
-            pt = pcToXY(rec.pc1[ix], rec.pc2[ix]);
-        } else {
-            pt = fallbackXY(phx, aax);
-        }
-        pt.age = d; pt.amp = aax;
-        trail.push(pt);
-    }
-    // Trail line
-    if (trail.length >= 2) {
-        var path = 'M' + trail[0].x.toFixed(1) + ',' + trail[0].y.toFixed(1);
-        for (var t = 1; t < trail.length; t++) path += ' L' + trail[t].x.toFixed(1) + ',' + trail[t].y.toFixed(1);
-        parts.push('<path d="' + path + '" fill="none" stroke="rgba(46,125,255,0.55)" stroke-width="1.5"/>');
-    }
-    // Trail dots (fading); today's marker emphasized
-    trail.forEach(function (ptt) {
-        var op = 0.20 + 0.80 * ((trailDays - 1 - ptt.age) / Math.max(1, trailDays - 1));
-        if (ptt.age === 0) {
-            // Today: filled circle colored by active/quiescent, plus a halo
-            var todayFill = ptt.amp >= 1 ? '#ef4444' : '#94a3b8';
-            parts.push('<circle cx="' + ptt.x.toFixed(1) + '" cy="' + ptt.y.toFixed(1) + '" r="6" fill="rgba(239,68,68,0.18)" stroke="' + todayFill + '" stroke-width="1.2"/>');
-            parts.push('<circle cx="' + ptt.x.toFixed(1) + '" cy="' + ptt.y.toFixed(1) + '" r="3" fill="' + todayFill + '"/>');
-        } else {
-            parts.push('<circle cx="' + ptt.x.toFixed(1) + '" cy="' + ptt.y.toFixed(1) + '" r="1.8" fill="rgba(46,125,255,' + op.toFixed(2) + ')"/>');
-        }
+    window.SubseasonalClock.render({
+        svg: svg,
+        modeRec: _subPhases.indices[_subState.mode],
+        mode: _subState.mode,
+        trailDays: 14,
+        size: 120,
+        labels: {
+            modeEl:   document.getElementById('sub-now-mode'),
+            dateEl:   document.getElementById('sub-now-date'),
+            phaseEl:  document.getElementById('sub-now-phase'),
+            ampEl:    document.getElementById('sub-now-amp'),
+            statusEl: document.getElementById('sub-now-status'),
+        },
     });
-    svg.innerHTML = parts.join('');
 }
 
 // ── Phase Evolution modal ───────────────────────────────────────

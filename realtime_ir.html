@@ -90,6 +90,7 @@
         <div class="ir-view-tabs">
             <button class="ir-view-tab active" data-view="map" onclick="window.switchIRView('map')">Global Map</button>
             <button class="ir-view-tab" data-view="satellite" onclick="window.switchIRView('satellite')">Storm Satellite</button>
+            <button class="ir-view-tab" data-view="subseasonal" onclick="window.switchIRView('subseasonal')">Subseasonal</button>
         </div>
         <div class="ir-storm-counts">
             <span class="ir-count"><span class="ir-count-val" id="stat-active">&mdash;</span> Active</span>
@@ -709,15 +710,124 @@
         </div>
     </section>
 
+    <!-- ── Subseasonal Tab ─────────────────────────────────────── -->
+    <section id="sub-main" class="sub-main" style="display:none;"
+             aria-label="Subseasonal diagnostics">
+        <div class="sub-header">
+            <div class="sub-title-block">
+                <h2 class="sub-title">Subseasonal State &amp; Tropical Convection</h2>
+                <p class="sub-sub">
+                    Current MJO / BSISO phase + 60-day Wheeler-Kiladis-filtered OLR
+                    Hovmöllers. Active TCs are projected onto each Hovmöller as a
+                    vertical longitude trace so you can see whether a storm is
+                    riding a convective envelope or wave.
+                </p>
+            </div>
+            <div class="sub-controls">
+                <label class="sub-control-label">Latitude band:</label>
+                <div class="sub-latband-toggle" id="sub-latband-toggle" role="tablist">
+                    <button class="sub-latband-btn active" data-band="trop10">10°S-10°N</button>
+                    <button class="sub-latband-btn" data-band="eq5">5°S-5°N</button>
+                    <button class="sub-latband-btn" data-band="boreal">5°N-15°N</button>
+                </div>
+                <label class="sub-control-label" style="margin-left:18px;">
+                    <input type="checkbox" id="sub-tc-overlay-toggle" checked>
+                    Active-TC overlay
+                </label>
+            </div>
+        </div>
+
+        <div class="sub-body">
+            <!-- Left column: 4 phase clocks -->
+            <aside class="sub-clocks">
+                <h3 class="sub-section-heading">Current State</h3>
+                <div class="sub-clock-grid">
+                    <div class="sub-clock-card" data-mode="mjo">
+                        <div class="sub-clock-mode">MJO (RMM)</div>
+                        <svg class="sub-clock-svg" data-clock="mjo"
+                             viewBox="0 0 140 140"></svg>
+                        <div class="sub-clock-readout">
+                            <div><span class="sub-clock-key">Date</span>
+                                 <span class="sub-clock-val" data-val="date">—</span></div>
+                            <div><span class="sub-clock-key">Phase</span>
+                                 <span class="sub-clock-val" data-val="phase">—</span></div>
+                            <div><span class="sub-clock-key">Amp</span>
+                                 <span class="sub-clock-val" data-val="amp">—</span></div>
+                        </div>
+                        <div class="sub-clock-status" data-val="status"></div>
+                    </div>
+                    <div class="sub-clock-card" data-mode="mjo_omi">
+                        <div class="sub-clock-mode">MJO (ROMI)</div>
+                        <svg class="sub-clock-svg" data-clock="mjo_omi"
+                             viewBox="0 0 140 140"></svg>
+                        <div class="sub-clock-readout">
+                            <div><span class="sub-clock-key">Date</span>
+                                 <span class="sub-clock-val" data-val="date">—</span></div>
+                            <div><span class="sub-clock-key">Phase</span>
+                                 <span class="sub-clock-val" data-val="phase">—</span></div>
+                            <div><span class="sub-clock-key">Amp</span>
+                                 <span class="sub-clock-val" data-val="amp">—</span></div>
+                        </div>
+                        <div class="sub-clock-status" data-val="status"></div>
+                    </div>
+                    <div class="sub-clock-card" data-mode="bsiso1">
+                        <div class="sub-clock-mode">BSISO1</div>
+                        <svg class="sub-clock-svg" data-clock="bsiso1"
+                             viewBox="0 0 140 140"></svg>
+                        <div class="sub-clock-readout">
+                            <div><span class="sub-clock-key">Date</span>
+                                 <span class="sub-clock-val" data-val="date">—</span></div>
+                            <div><span class="sub-clock-key">Phase</span>
+                                 <span class="sub-clock-val" data-val="phase">—</span></div>
+                            <div><span class="sub-clock-key">Amp</span>
+                                 <span class="sub-clock-val" data-val="amp">—</span></div>
+                        </div>
+                        <div class="sub-clock-status" data-val="status"></div>
+                    </div>
+                    <div class="sub-clock-card" data-mode="bsiso2">
+                        <div class="sub-clock-mode">BSISO2</div>
+                        <svg class="sub-clock-svg" data-clock="bsiso2"
+                             viewBox="0 0 140 140"></svg>
+                        <div class="sub-clock-readout">
+                            <div><span class="sub-clock-key">Date</span>
+                                 <span class="sub-clock-val" data-val="date">—</span></div>
+                            <div><span class="sub-clock-key">Phase</span>
+                                 <span class="sub-clock-val" data-val="phase">—</span></div>
+                            <div><span class="sub-clock-key">Amp</span>
+                                 <span class="sub-clock-val" data-val="amp">—</span></div>
+                        </div>
+                        <div class="sub-clock-status" data-val="status"></div>
+                    </div>
+                </div>
+                <p class="sub-clock-footnote">
+                    15-day trail · Phase advances counter-clockwise · Red dot = active
+                    (amp ≥ 1) · Click a dial to open the full phase-evolution plot
+                    on the TC&#8209;Climatology page.
+                </p>
+            </aside>
+
+            <!-- Right column: 5 stacked Hovmöllers -->
+            <section class="sub-hovs">
+                <h3 class="sub-section-heading">Tropical Convection · Last 60 Days</h3>
+                <div id="sub-hov-stack" class="sub-hov-stack">
+                    <div class="sub-hov-loading">Loading Hovmöllers…</div>
+                </div>
+                <div id="sub-active-tc-list" class="sub-active-tc-list"></div>
+            </section>
+        </div>
+    </section>
+
     <!-- Scripts -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
+    <script>document.write('<script src="subseasonal_clock.js'+window.__v+'"><\/script>');</script>
     <script>document.write('<script src="skewt.js'+window.__v+'"><\/script>');</script>
     <script>document.write('<script src="realtime_ir.js'+window.__v+'"><\/script>');</script>
     <script>document.write('<script src="satellite.js'+window.__v+'"><\/script>');</script>
+    <script>document.write('<script src="realtime_subseasonal.js'+window.__v+'"><\/script>');</script>
     <script>
-    /* Tab switching between Map and Satellite views */
+    /* Tab switching between Map, Satellite, and Subseasonal views */
     (function () {
         var currentView = 'map';
         window.switchIRView = function (view) {
@@ -727,6 +837,7 @@
 
             var irMain = document.getElementById('ir-main');
             var satMain = document.getElementById('sat-main');
+            var subMain = document.getElementById('sub-main');
             var legend = document.getElementById('ir-legend');
             var tabs = document.querySelectorAll('.ir-view-tab');
 
@@ -734,13 +845,20 @@
                 tabs[i].classList.toggle('active', tabs[i].getAttribute('data-view') === view);
             }
 
+            /* Hide all then show the active one. Keeps the switching
+               logic linear regardless of how many views we add. */
+            irMain.style.display = 'none';
+            satMain.style.display = 'none';
+            if (subMain) subMain.style.display = 'none';
+            if (legend) legend.style.display = 'none';
+
             if (view === 'satellite') {
-                irMain.style.display = 'none';
-                if (legend) legend.style.display = 'none';
                 satMain.style.display = 'flex';
                 if (window.activateSatelliteView) window.activateSatelliteView();
+            } else if (view === 'subseasonal') {
+                if (subMain) subMain.style.display = 'flex';
+                if (window.activateSubseasonalView) window.activateSubseasonalView();
             } else {
-                satMain.style.display = 'none';
                 irMain.style.display = '';
                 if (legend) legend.style.display = '';
                 /* Leaflet needs invalidateSize after being hidden */
@@ -750,9 +868,11 @@
             }
         };
 
-        // Auto-switch to Satellite tab if URL contains view=satellite
+        /* Auto-switch via URL hash */
         if (window.location.hash.indexOf('view=satellite') !== -1) {
             window.switchIRView('satellite');
+        } else if (window.location.hash.indexOf('view=subseasonal') !== -1) {
+            window.switchIRView('subseasonal');
         }
     })();
     </script>
