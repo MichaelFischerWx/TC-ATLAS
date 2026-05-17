@@ -94,7 +94,8 @@ def latest_gfs_cycle() -> tuple[str, str]:
 
 
 def fetch_gfs_global(date_str: str, hour_str: str,
-                     levels: list, var: str) -> Optional[bytes]:
+                     levels: list, var: str,
+                     forecast_hour: int = 0) -> Optional[bytes]:
     """Fetch a global GFS field for one variable across multiple levels.
     Returns raw GRIB2 bytes or None on failure.
 
@@ -104,12 +105,17 @@ def fetch_gfs_global(date_str: str, hour_str: str,
     `levels` accepts:
       - int (e.g. 850) → adds `lev_850_mb=on` (pressure level in mb)
       - str (e.g. "mean_sea_level", "surface") → adds the raw toggle as-is
+    `forecast_hour` selects the GFS forecast step (0 = analysis, 1-384 = forecast).
+    Most builders use 0 (analysis); the multi-hour pipeline iterates 0..12 so the
+    on-page valid_time can align to real-time satellite imagery instead of being
+    pinned to the 6-hourly analysis cycle.
     """
     import requests
 
+    fh_str = f"{forecast_hour:03d}"
     params: list[tuple[str, str]] = [
         ("dir", f"/gfs.{date_str}/{hour_str}/atmos"),
-        ("file", f"gfs.t{hour_str}z.pgrb2.0p25.f000"),
+        ("file", f"gfs.t{hour_str}z.pgrb2.0p25.f{fh_str}"),
         (f"var_{var}", "on"),
     ]
     for lev in levels:
@@ -301,6 +307,17 @@ class LayerSpec:
     # (TC-RADAR radial-velocity style). Default False for back-compat
     # with smooth shaded fields like RH / SST.
     discrete_bins: bool = False
+    # ── Hourly forecast architecture ──
+    # GFS-driven fields are rendered at multiple forecast hours (f000..f012)
+    # per cycle so the on-page valid_time can align to real-time satellite
+    # imagery. forecast_hour=0 = analysis (back-compat with prior single-PNG
+    # output). init_cycle = "YYYYMMDD-HH" of the GFS run we pulled from;
+    # used in the GCS path init-{cycle}/f{HH}/ to keep cycles separated.
+    # Fields without hourly forecasts (OISST, genesis_prob, subseasonal)
+    # leave both at defaults — upload_layer falls back to the single-PNG
+    # latest.png path.
+    forecast_hour: Optional[int] = None
+    init_cycle: Optional[str] = None
 
 
 # Each 0.25° cell spans ~27.8 km in the latitude direction (and at the
@@ -710,10 +727,31 @@ def upload_layer(spec: LayerSpec, field: np.ndarray) -> bool:
         except Exception as e:
             log.warning("Failed to render contour GeoJSON for %s: %s", spec.name, e)
 
-    png_blob = bucket.blob(f"{GCS_PREFIX}/{spec.name}/latest.png")
-    data_blob = bucket.blob(f"{GCS_PREFIX}/{spec.name}/latest_data.png")
-    geojson_blob = bucket.blob(f"{GCS_PREFIX}/{spec.name}/latest.geojson")
-    meta_blob = bucket.blob(f"{GCS_PREFIX}/{spec.name}/metadata.json")
+    # Decide path layout: hourly-forecast scheme when spec carries a
+    # forecast_hour + init_cycle, single-PNG legacy path otherwise.
+    # The hourly scheme writes per-hour PNG/JSON to
+    #   env/{name}/init-{cycle}/f{HH}.{png,geojson,_data.png,.json}
+    # and, when forecast_hour == 0 (the analysis), ALSO clobbers
+    # env/{name}/latest.png + metadata.json so the older frontend code
+    # (and any external consumers caching that URL) keep working.
+    is_hourly = spec.forecast_hour is not None and spec.init_cycle is not None
+    if is_hourly:
+        hh_str = f"{spec.forecast_hour:03d}"
+        per_hour_dir = f"{GCS_PREFIX}/{spec.name}/init-{spec.init_cycle}"
+        png_blob = bucket.blob(f"{per_hour_dir}/f{hh_str}.png")
+        data_blob = bucket.blob(f"{per_hour_dir}/f{hh_str}_data.png")
+        geojson_blob = bucket.blob(f"{per_hour_dir}/f{hh_str}.geojson")
+        meta_blob = bucket.blob(f"{per_hour_dir}/f{hh_str}.json")
+        # Back-compat blobs that also get written when forecast_hour == 0
+        latest_png_blob  = bucket.blob(f"{GCS_PREFIX}/{spec.name}/latest.png")
+        latest_data_blob = bucket.blob(f"{GCS_PREFIX}/{spec.name}/latest_data.png")
+        latest_gj_blob   = bucket.blob(f"{GCS_PREFIX}/{spec.name}/latest.geojson")
+        latest_meta_blob = bucket.blob(f"{GCS_PREFIX}/{spec.name}/metadata.json")
+    else:
+        png_blob = bucket.blob(f"{GCS_PREFIX}/{spec.name}/latest.png")
+        data_blob = bucket.blob(f"{GCS_PREFIX}/{spec.name}/latest_data.png")
+        geojson_blob = bucket.blob(f"{GCS_PREFIX}/{spec.name}/latest.geojson")
+        meta_blob = bucket.blob(f"{GCS_PREFIX}/{spec.name}/metadata.json")
 
     if spec.levels_override:
         levels = [float(L) for L in spec.levels_override]
@@ -727,6 +765,19 @@ def upload_layer(spec: LayerSpec, field: np.ndarray) -> bool:
     data_nx = NX
     data_ny = NY
 
+    # URL paths follow the chosen layout. The per-hour metadata.json gets
+    # the per-hour URLs; the back-compat metadata.json (at
+    # env/{name}/metadata.json, written only at forecast_hour=0) gets the
+    # legacy latest.png URLs so the existing frontend keeps working until
+    # the new picker UI lands.
+    if is_hourly:
+        base = f"https://storage.googleapis.com/{GCS_BUCKET}/{per_hour_dir}/f{hh_str}"
+        image_url_per_hour = f"{base}.png"
+        data_url_per_hour  = f"{base}_data.png"
+        geojson_url_per_hour = f"{base}.geojson" if geojson is not None else None
+    else:
+        image_url_per_hour = data_url_per_hour = geojson_url_per_hour = None
+
     meta = {
         "name": spec.name,
         "title": spec.title,
@@ -739,25 +790,33 @@ def upload_layer(spec: LayerSpec, field: np.ndarray) -> bool:
         "description": spec.description,
         "render_style": spec.render_style,
         "category": spec.category,
+        # Hourly-forecast fields are populated for layers carrying a
+        # forecast_hour. Frontend uses them to wire the auto-time picker
+        # and the optional scrubber UI.
+        "init_cycle": spec.init_cycle,
+        "forecast_hour": spec.forecast_hour,
         "image_url": (
-            f"https://storage.googleapis.com/{GCS_BUCKET}/"
-            f"{GCS_PREFIX}/{spec.name}/latest.png"
+            image_url_per_hour if is_hourly
+            else f"https://storage.googleapis.com/{GCS_BUCKET}/"
+                 f"{GCS_PREFIX}/{spec.name}/latest.png"
         ),
         # Vector GeoJSON sidecar for contour layers — crisper than the
         # raster PNG at any zoom because the browser redraws polylines
         # at display resolution. Filled layers don't get one because
         # filled-region polygons would balloon JSON size.
         "geojson_url": (
-            (f"https://storage.googleapis.com/{GCS_BUCKET}/"
-             f"{GCS_PREFIX}/{spec.name}/latest.geojson")
-            if geojson is not None else None
+            geojson_url_per_hour if is_hourly
+            else (f"https://storage.googleapis.com/{GCS_BUCKET}/"
+                  f"{GCS_PREFIX}/{spec.name}/latest.geojson"
+                  if geojson is not None else None)
         ),
         # Greyscale data PNG (8-bit R channel = (value - vmin)/(vmax-vmin)
         # * 255; alpha=0 means NaN). Frontend draws to offscreen canvas
         # and reads pixels on hover for instant value tooltips.
         "data_url": (
-            f"https://storage.googleapis.com/{GCS_BUCKET}/"
-            f"{GCS_PREFIX}/{spec.name}/latest_data.png"
+            data_url_per_hour if is_hourly
+            else f"https://storage.googleapis.com/{GCS_BUCKET}/"
+                 f"{GCS_PREFIX}/{spec.name}/latest_data.png"
         ),
         "data_grid": {"nx": data_nx, "ny": data_ny},
         # Hover decode bounds — may be wider than vmin/vmax (contour
@@ -798,8 +857,37 @@ def upload_layer(spec: LayerSpec, field: np.ndarray) -> bool:
         if geojson is not None:
             _put(geojson_blob, geojson, "application/geo+json")
         _put(meta_blob, json.dumps(meta, indent=2), "application/json")
-        log.info("Uploaded %s: vis=%d bytes data=%d bytes%s",
-                 spec.name, len(png), len(data_png),
+
+        # Back-compat layer for hourly outputs: when this is the f000
+        # analysis, also clobber env/{name}/latest.png + metadata.json
+        # with the same content + legacy URL paths. Keeps the previously-
+        # deployed frontend rendering correctly while the picker UI lands.
+        if is_hourly and spec.forecast_hour == 0:
+            legacy_meta = dict(meta)
+            legacy_meta["image_url"] = (
+                f"https://storage.googleapis.com/{GCS_BUCKET}/"
+                f"{GCS_PREFIX}/{spec.name}/latest.png"
+            )
+            legacy_meta["data_url"] = (
+                f"https://storage.googleapis.com/{GCS_BUCKET}/"
+                f"{GCS_PREFIX}/{spec.name}/latest_data.png"
+            )
+            if geojson is not None:
+                legacy_meta["geojson_url"] = (
+                    f"https://storage.googleapis.com/{GCS_BUCKET}/"
+                    f"{GCS_PREFIX}/{spec.name}/latest.geojson"
+                )
+            _put(latest_png_blob, png, "image/png")
+            _put(latest_data_blob, data_png, "image/png")
+            if geojson is not None:
+                _put(latest_gj_blob, geojson, "application/geo+json")
+            _put(latest_meta_blob, json.dumps(legacy_meta, indent=2),
+                 "application/json")
+
+        log.info("Uploaded %s%s: vis=%d bytes data=%d bytes%s",
+                 spec.name,
+                 f" (f{spec.forecast_hour:03d})" if is_hourly else "",
+                 len(png), len(data_png),
                  f" geojson={len(geojson)} bytes" if geojson else "")
         return True
     except Exception as e:
@@ -807,9 +895,86 @@ def upload_layer(spec: LayerSpec, field: np.ndarray) -> bool:
         return False
 
 
+def write_layer_indices(date_str: str, hour_str: str,
+                         forecast_hours: list, layer_names: list) -> None:
+    """For each hourly-forecast layer, write env/{name}/index.json listing
+    which (init_cycle, forecast_hour, valid_time) tuples are currently
+    available. The API endpoint reads these to enumerate hours without
+    scanning GCS prefixes — much faster than blob.list().
+
+    Per-layer index shape:
+      {
+        "name": "shear_200_850",
+        "latest_init": "20260517-12",
+        "forecast_hours": [
+          {"forecast_hour": 0, "valid_time": "2026-05-17T12:00:00Z",
+           "image_url": "...png", "data_url": "..._data.png", ...},
+          ...
+        ]
+      }
+    """
+    try:
+        from google.cloud import storage
+    except ImportError:
+        log.warning("google-cloud-storage not installed; skipping index writes")
+        return
+    if not GCS_BUCKET:
+        return
+
+    client = storage.Client()
+    bucket = client.bucket(GCS_BUCKET)
+    init_cycle = f"{date_str}-{hour_str}"
+    base_url = f"https://storage.googleapis.com/{GCS_BUCKET}"
+
+    for name in layer_names:
+        hours_meta = []
+        for fh in forecast_hours:
+            valid = compute_valid_time(date_str, hour_str, fh)
+            hh = f"{fh:03d}"
+            per_hour_dir = f"{GCS_PREFIX}/{name}/init-{init_cycle}"
+            hours_meta.append({
+                "forecast_hour": fh,
+                "valid_time": valid,
+                "image_url": f"{base_url}/{per_hour_dir}/f{hh}.png",
+                "data_url":  f"{base_url}/{per_hour_dir}/f{hh}_data.png",
+                "geojson_url": f"{base_url}/{per_hour_dir}/f{hh}.geojson",
+                "metadata_url": f"{base_url}/{per_hour_dir}/f{hh}.json",
+            })
+
+        index = {
+            "name": name,
+            "latest_init": init_cycle,
+            "forecast_hours": hours_meta,
+        }
+        blob = bucket.blob(f"{GCS_PREFIX}/{name}/index.json")
+        blob.cache_control = "public, max-age=300"
+        blob.upload_from_string(json.dumps(index, indent=2),
+                                content_type="application/json")
+        try:
+            blob.make_public()
+        except Exception:
+            pass
+        log.info("Wrote index for %s (%d hours)", name, len(hours_meta))
+
+
 # --------------------------------------------------------------------------
 # Per-field builders
 # --------------------------------------------------------------------------
+
+def compute_valid_time(date_str: str, hour_str: str, forecast_hour: int) -> str:
+    """ISO8601 valid time for a GFS (cycle, forecast_hour) pair.
+
+    cycle_dt + forecast_hour hours → "YYYY-MM-DDTHH:00:00Z". Used by every
+    GFS-driven builder to populate spec.valid_time so the per-hour
+    metadata.json carries the right timestamp for the frontend's auto-time
+    picker.
+    """
+    cycle_dt = datetime.strptime(
+        f"{date_str}{hour_str}", "%Y%m%d%H"
+    ).replace(tzinfo=timezone.utc)
+    valid_dt = cycle_dt + timedelta(hours=forecast_hour)
+    return valid_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
 
 def regrid_to_global(field: np.ndarray) -> np.ndarray:
     """Ensure the field is on the canonical 1440x721 north-to-south
@@ -832,11 +997,11 @@ def regrid_to_global(field: np.ndarray) -> np.ndarray:
     return field
 
 
-def build_shear(date_str: str, hour_str: str) -> Optional[bytes]:
+def build_shear(date_str: str, hour_str: str, *, forecast_hour: int = 0) -> Optional[bytes]:
     """200-850 hPa wind shear magnitude (knots)."""
     log.info("Building shear: GFS %s %sZ", date_str, hour_str)
-    u_grib = fetch_gfs_global(date_str, hour_str, [200, 850], "UGRD")
-    v_grib = fetch_gfs_global(date_str, hour_str, [200, 850], "VGRD")
+    u_grib = fetch_gfs_global(date_str, hour_str, [200, 850], "UGRD", forecast_hour=forecast_hour)
+    v_grib = fetch_gfs_global(date_str, hour_str, [200, 850], "VGRD", forecast_hour=forecast_hour)
     if not u_grib or not v_grib:
         log.error("Shear: GFS fetch failed")
         return None
@@ -864,7 +1029,7 @@ def build_shear(date_str: str, hour_str: str) -> Optional[bytes]:
     shear_kt = np.sqrt(du * du + dv * dv) * 1.94384
     shear_kt = regrid_to_global(shear_kt)
 
-    valid = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}T{hour_str}:00:00Z"
+    valid = compute_valid_time(date_str, hour_str, forecast_hour)
     spec = LayerSpec(
         name="shear_200_850",
         title="200-850 hPa Wind Shear",
@@ -874,6 +1039,13 @@ def build_shear(date_str: str, hour_str: str) -> Optional[bytes]:
         step=10,
         cmap="turbo",
         valid_time=valid,
+        # Hourly forecast plumbing — set on every GFS-driven layer so
+        # upload_layer routes to env/{name}/init-{cycle}/f{HH}.png and
+        # the metadata.json carries enough info for the frontend's
+        # auto-time picker. Non-GFS layers (SST, genesis_prob,
+        # subseasonal) leave both at None and fall back to latest.png.
+        forecast_hour=forecast_hour,
+        init_cycle=f"{date_str}-{hour_str}",
         data_vmax=150,  # let hover report jet-stream shear past the 60-kt contour cap
         description=(
             "Magnitude of the 200-850 hPa vector wind difference from "
@@ -885,7 +1057,7 @@ def build_shear(date_str: str, hour_str: str) -> Optional[bytes]:
     return shear_kt if upload_layer(spec, shear_kt) else None
 
 
-def build_midlevel_shear(date_str: str, hour_str: str) -> Optional[bytes]:
+def build_midlevel_shear(date_str: str, hour_str: str, *, forecast_hour: int = 0) -> Optional[bytes]:
     """500-850 hPa wind shear magnitude (knots) — vortex-suppressed.
 
     Mid-level shear is more relevant than the deep-layer (200-850)
@@ -893,8 +1065,8 @@ def build_midlevel_shear(date_str: str, hour_str: str) -> Optional[bytes]:
     of a TC vortex, where most of the convective organization happens.
     """
     log.info("Building mid-level shear: GFS %s %sZ", date_str, hour_str)
-    u_grib = fetch_gfs_global(date_str, hour_str, [500, 850], "UGRD")
-    v_grib = fetch_gfs_global(date_str, hour_str, [500, 850], "VGRD")
+    u_grib = fetch_gfs_global(date_str, hour_str, [500, 850], "UGRD", forecast_hour=forecast_hour)
+    v_grib = fetch_gfs_global(date_str, hour_str, [500, 850], "VGRD", forecast_hour=forecast_hour)
     if not u_grib or not v_grib:
         log.error("Mid-level shear: GFS fetch failed")
         return None
@@ -916,7 +1088,7 @@ def build_midlevel_shear(date_str: str, hour_str: str) -> Optional[bytes]:
     shear_kt = np.sqrt(du * du + dv * dv) * 1.94384
     shear_kt = regrid_to_global(shear_kt)
 
-    valid = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}T{hour_str}:00:00Z"
+    valid = compute_valid_time(date_str, hour_str, forecast_hour)
     spec = LayerSpec(
         name="shear_500_850",
         title="500-850 hPa Wind Shear",
@@ -926,6 +1098,13 @@ def build_midlevel_shear(date_str: str, hour_str: str) -> Optional[bytes]:
         step=5,
         cmap="turbo",
         valid_time=valid,
+        # Hourly forecast plumbing — set on every GFS-driven layer so
+        # upload_layer routes to env/{name}/init-{cycle}/f{HH}.png and
+        # the metadata.json carries enough info for the frontend's
+        # auto-time picker. Non-GFS layers (SST, genesis_prob,
+        # subseasonal) leave both at None and fall back to latest.png.
+        forecast_hour=forecast_hour,
+        init_cycle=f"{date_str}-{hour_str}",
         data_vmax=120,
         description=(
             "Magnitude of the 500-850 hPa vector wind difference from "
@@ -1055,12 +1234,12 @@ def _upload_winds(name: str, title: str, valid_time: str, png: bytes,
         return False
 
 
-def build_winds(date_str: str, hour_str: str, level: int) -> Optional[bytes]:
+def build_winds(date_str: str, hour_str: str, level: int, *, forecast_hour: int = 0) -> Optional[bytes]:
     """Fetch u, v at the given pressure level and upload as a packed
     wind-barb layer."""
     log.info("Building winds: GFS %s %sZ at %d hPa", date_str, hour_str, level)
-    u_grib = fetch_gfs_global(date_str, hour_str, [level], "UGRD")
-    v_grib = fetch_gfs_global(date_str, hour_str, [level], "VGRD")
+    u_grib = fetch_gfs_global(date_str, hour_str, [level], "UGRD", forecast_hour=forecast_hour)
+    v_grib = fetch_gfs_global(date_str, hour_str, [level], "VGRD", forecast_hour=forecast_hour)
     if not u_grib or not v_grib:
         log.error("Winds: GFS fetch failed at %d hPa", level)
         return None
@@ -1078,12 +1257,12 @@ def build_winds(date_str: str, hour_str: str, level: int) -> Optional[bytes]:
     v_s = regrid_to_global(v_s)
 
     png = render_uv_png(u_s, v_s)
-    valid = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}T{hour_str}:00:00Z"
+    valid = compute_valid_time(date_str, hour_str, forecast_hour)
     title = f"{level} hPa Wind Barbs"
     return png if _upload_winds(f"winds_{level}", title, valid, png, level=level) else None
 
 
-def build_winds_10m(date_str: str, hour_str: str) -> Optional[bytes]:
+def build_winds_10m(date_str: str, hour_str: str, *, forecast_hour: int = 0) -> Optional[bytes]:
     """Fetch u, v at 10 m above ground (the standard surface wind) and
     upload as a packed wind-barb layer.
 
@@ -1093,8 +1272,8 @@ def build_winds_10m(date_str: str, hour_str: str) -> Optional[bytes]:
     exposes the field at typeOfLevel='heightAboveGround', level=10.
     """
     log.info("Building 10-m winds: GFS %s %sZ", date_str, hour_str)
-    u_grib = fetch_gfs_global(date_str, hour_str, ["10_m_above_ground"], "UGRD")
-    v_grib = fetch_gfs_global(date_str, hour_str, ["10_m_above_ground"], "VGRD")
+    u_grib = fetch_gfs_global(date_str, hour_str, ["10_m_above_ground"], "UGRD", forecast_hour=forecast_hour)
+    v_grib = fetch_gfs_global(date_str, hour_str, ["10_m_above_ground"], "VGRD", forecast_hour=forecast_hour)
     if not u_grib or not v_grib:
         log.error("10-m winds: GFS fetch failed")
         return None
@@ -1114,7 +1293,7 @@ def build_winds_10m(date_str: str, hour_str: str) -> Optional[bytes]:
     v_s = regrid_to_global(v_s)
 
     png = render_uv_png(u_s, v_s)
-    valid = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}T{hour_str}:00:00Z"
+    valid = compute_valid_time(date_str, hour_str, forecast_hour)
     description = (
         "10-m above-ground u, v from the latest GFS 0.25° analysis, "
         "packed as RG channels of an 8-bit PNG (±60 m/s range). "
@@ -1125,8 +1304,7 @@ def build_winds_10m(date_str: str, hour_str: str) -> Optional[bytes]:
                                 description=description) else None
 
 
-def build_vorticity(date_str: str, hour_str: str, level: int
-                    ) -> Optional[bytes]:
+def build_vorticity(date_str: str, hour_str: str, level: int, *, forecast_hour: int = 0) -> Optional[bytes]:
     """Cyclonic-positive relative vorticity at the given pressure level
     (e.g. 850, 700, 500 hPa) in 10⁻⁵ s⁻¹.
 
@@ -1143,8 +1321,8 @@ def build_vorticity(date_str: str, hour_str: str, level: int
     """
     log.info("Building vorticity: GFS %s %sZ at %d hPa",
              date_str, hour_str, level)
-    u_grib = fetch_gfs_global(date_str, hour_str, [level], "UGRD")
-    v_grib = fetch_gfs_global(date_str, hour_str, [level], "VGRD")
+    u_grib = fetch_gfs_global(date_str, hour_str, [level], "UGRD", forecast_hour=forecast_hour)
+    v_grib = fetch_gfs_global(date_str, hour_str, [level], "VGRD", forecast_hour=forecast_hour)
     if not u_grib or not v_grib:
         log.error("Vorticity: GFS fetch failed at %d hPa", level)
         return None
@@ -1186,7 +1364,7 @@ def build_vorticity(date_str: str, hour_str: str, level: int
     cyclonic = np.where(cyclonic > 0.0, cyclonic, np.nan).astype(np.float32)
     cyclonic = regrid_to_global(cyclonic)
 
-    valid = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}T{hour_str}:00:00Z"
+    valid = compute_valid_time(date_str, hour_str, forecast_hour)
     spec = LayerSpec(
         name=f"vort_{level}",
         title=f"{level} hPa Cyclonic Vorticity",
@@ -1201,6 +1379,13 @@ def build_vorticity(date_str: str, hour_str: str, level: int
         levels_override=[1, 2, 4, 6, 8, 10, 15, 20, 25],
         data_vmax=200,  # TC inner-core vortex can hit 200+ × 10⁻⁵ s⁻¹
         valid_time=valid,
+        # Hourly forecast plumbing — set on every GFS-driven layer so
+        # upload_layer routes to env/{name}/init-{cycle}/f{HH}.png and
+        # the metadata.json carries enough info for the frontend's
+        # auto-time picker. Non-GFS layers (SST, genesis_prob,
+        # subseasonal) leave both at None and fall back to latest.png.
+        forecast_hour=forecast_hour,
+        init_cycle=f"{date_str}-{hour_str}",
         description=(
             f"Relative vorticity ζ at {level} hPa from the latest GFS "
             f"analysis, after a 200 km disc smooth of u, v. Multiplied "
@@ -1213,7 +1398,7 @@ def build_vorticity(date_str: str, hour_str: str, level: int
     return cyclonic if upload_layer(spec, cyclonic) else None
 
 
-def build_z500_heights(date_str: str, hour_str: str) -> Optional[bytes]:
+def build_z500_heights(date_str: str, hour_str: str, *, forecast_hour: int = 0) -> Optional[bytes]:
     """500 hPa geopotential height (decameters), contoured at 3 dam.
 
     The classic synoptic-overlay field — pairs naturally with low-level
@@ -1228,7 +1413,7 @@ def build_z500_heights(date_str: str, hour_str: str) -> Optional[bytes]:
     subtropical ridge.
     """
     log.info("Building Z500 heights: GFS %s %sZ", date_str, hour_str)
-    z_grib = fetch_gfs_global(date_str, hour_str, [500], "HGT")
+    z_grib = fetch_gfs_global(date_str, hour_str, [500], "HGT", forecast_hour=forecast_hour)
     if not z_grib:
         log.error("Z500: GFS HGT fetch failed")
         return None
@@ -1242,7 +1427,7 @@ def build_z500_heights(date_str: str, hour_str: str) -> Optional[bytes]:
     z_s = disc_smooth(z_dam, 200.0)
     z_s = regrid_to_global(z_s)
 
-    valid = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}T{hour_str}:00:00Z"
+    valid = compute_valid_time(date_str, hour_str, forecast_hour)
     spec = LayerSpec(
         name="z500_heights",
         title="500 hPa Geopotential Height",
@@ -1257,6 +1442,13 @@ def build_z500_heights(date_str: str, hour_str: str) -> Optional[bytes]:
         # tropics subtropical ridge (~595 dam).
         levels_override=list(range(480, 603, 3)),
         valid_time=valid,
+        # Hourly forecast plumbing — set on every GFS-driven layer so
+        # upload_layer routes to env/{name}/init-{cycle}/f{HH}.png and
+        # the metadata.json carries enough info for the frontend's
+        # auto-time picker. Non-GFS layers (SST, genesis_prob,
+        # subseasonal) leave both at None and fall back to latest.png.
+        forecast_hour=forecast_hour,
+        init_cycle=f"{date_str}-{hour_str}",
         description=(
             "500 hPa geopotential height from the latest GFS 0.25° "
             "analysis (m → dam), 200 km disc-smoothed. Contoured every "
@@ -1268,8 +1460,7 @@ def build_z500_heights(date_str: str, hour_str: str) -> Optional[bytes]:
     return z_s if upload_layer(spec, z_s) else None
 
 
-def build_divergence(date_str: str, hour_str: str, level: int
-                     ) -> Optional[bytes]:
+def build_divergence(date_str: str, hour_str: str, level: int, *, forecast_hour: int = 0) -> Optional[bytes]:
     """Horizontal mass divergence at the given pressure level (e.g. 850,
     200 hPa) in 10⁻⁵ s⁻¹. Signed: negative = convergence, positive =
     divergence. Pairs naturally to tell the genesis-favorable story
@@ -1288,8 +1479,8 @@ def build_divergence(date_str: str, hour_str: str, level: int
     """
     log.info("Building divergence: GFS %s %sZ at %d hPa",
              date_str, hour_str, level)
-    u_grib = fetch_gfs_global(date_str, hour_str, [level], "UGRD")
-    v_grib = fetch_gfs_global(date_str, hour_str, [level], "VGRD")
+    u_grib = fetch_gfs_global(date_str, hour_str, [level], "UGRD", forecast_hour=forecast_hour)
+    v_grib = fetch_gfs_global(date_str, hour_str, [level], "VGRD", forecast_hour=forecast_hour)
     if not u_grib or not v_grib:
         log.error("Divergence: GFS fetch failed at %d hPa", level)
         return None
@@ -1330,7 +1521,7 @@ def build_divergence(date_str: str, hour_str: str, level: int
     div = np.where(np.abs(div) >= 3.0, div, np.nan).astype(np.float32)
     div = regrid_to_global(div)
 
-    valid = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}T{hour_str}:00:00Z"
+    valid = compute_valid_time(date_str, hour_str, forecast_hour)
     spec = LayerSpec(
         name=f"div_{level}",
         title=f"{level} hPa Divergence",
@@ -1359,6 +1550,13 @@ def build_divergence(date_str: str, hour_str: str, level: int
         data_vmin=-100,
         data_vmax=100,
         valid_time=valid,
+        # Hourly forecast plumbing — set on every GFS-driven layer so
+        # upload_layer routes to env/{name}/init-{cycle}/f{HH}.png and
+        # the metadata.json carries enough info for the frontend's
+        # auto-time picker. Non-GFS layers (SST, genesis_prob,
+        # subseasonal) leave both at None and fall back to latest.png.
+        forecast_hour=forecast_hour,
+        init_cycle=f"{date_str}-{hour_str}",
         description=(
             f"Horizontal mass divergence at {level} hPa from the latest "
             f"GFS 0.25° analysis, after a 200 km disc smooth of u, v. "
@@ -1373,7 +1571,7 @@ def build_divergence(date_str: str, hour_str: str, level: int
     return div if upload_layer(spec, div) else None
 
 
-def build_mslp(date_str: str, hour_str: str) -> Optional[bytes]:
+def build_mslp(date_str: str, hour_str: str, *, forecast_hour: int = 0) -> Optional[bytes]:
     """Mean Sea Level Pressure (hPa) — the classic synoptic field.
 
     Contours identify closed lows, ridges, troughs, and gradient
@@ -1387,7 +1585,7 @@ def build_mslp(date_str: str, hour_str: str) -> Optional[bytes]:
     informal "warm colors = stormy, cool colors = quiet" intuition.
     """
     log.info("Building MSLP: GFS %s %sZ", date_str, hour_str)
-    grib = fetch_gfs_global(date_str, hour_str, ["mean_sea_level"], "PRMSL")
+    grib = fetch_gfs_global(date_str, hour_str, ["mean_sea_level"], "PRMSL", forecast_hour=forecast_hour)
     if not grib:
         log.error("MSLP: GFS PRMSL fetch failed")
         return None
@@ -1401,7 +1599,7 @@ def build_mslp(date_str: str, hour_str: str) -> Optional[bytes]:
     hpa_s = disc_smooth(hpa, 100.0)         # light smooth for clean contours
     hpa_s = regrid_to_global(hpa_s)
 
-    valid = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}T{hour_str}:00:00Z"
+    valid = compute_valid_time(date_str, hour_str, forecast_hour)
     spec = LayerSpec(
         name="mslp",
         title="Mean Sea Level Pressure",
@@ -1420,6 +1618,13 @@ def build_mslp(date_str: str, hour_str: str) -> Optional[bytes]:
         data_vmin=870,    # extreme TC inner-core min on record (~870 hPa)
         data_vmax=1085,   # extreme winter Siberian high (~1085 hPa)
         valid_time=valid,
+        # Hourly forecast plumbing — set on every GFS-driven layer so
+        # upload_layer routes to env/{name}/init-{cycle}/f{HH}.png and
+        # the metadata.json carries enough info for the frontend's
+        # auto-time picker. Non-GFS layers (SST, genesis_prob,
+        # subseasonal) leave both at None and fall back to latest.png.
+        forecast_hour=forecast_hour,
+        init_cycle=f"{date_str}-{hour_str}",
         description=(
             "Mean Sea Level Pressure from the latest GFS 0.25° analysis "
             "(Pa → hPa), 100 km disc-smoothed for clean contouring. "
@@ -1432,10 +1637,10 @@ def build_mslp(date_str: str, hour_str: str) -> Optional[bytes]:
     return hpa_s if upload_layer(spec, hpa_s) else None
 
 
-def build_midlevel_rh(date_str: str, hour_str: str) -> Optional[bytes]:
+def build_midlevel_rh(date_str: str, hour_str: str, *, forecast_hour: int = 0) -> Optional[bytes]:
     """700-400 hPa layer-averaged relative humidity (%)."""
     log.info("Building mid-level RH: GFS %s %sZ", date_str, hour_str)
-    grib = fetch_gfs_global(date_str, hour_str, [700, 500, 400], "RH")
+    grib = fetch_gfs_global(date_str, hour_str, [700, 500, 400], "RH", forecast_hour=forecast_hour)
     if not grib:
         log.error("RH: GFS fetch failed")
         return None
@@ -1453,7 +1658,7 @@ def build_midlevel_rh(date_str: str, hour_str: str) -> Optional[bytes]:
     rh = regrid_to_global(rh)
     rh = np.clip(rh, 0, 100)
 
-    valid = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}T{hour_str}:00:00Z"
+    valid = compute_valid_time(date_str, hour_str, forecast_hour)
     spec = LayerSpec(
         name="rh_700_400",
         title="700-400 hPa Mean RH",
@@ -1463,6 +1668,13 @@ def build_midlevel_rh(date_str: str, hour_str: str) -> Optional[bytes]:
         step=10,
         cmap="BrBG",
         valid_time=valid,
+        # Hourly forecast plumbing — set on every GFS-driven layer so
+        # upload_layer routes to env/{name}/init-{cycle}/f{HH}.png and
+        # the metadata.json carries enough info for the frontend's
+        # auto-time picker. Non-GFS layers (SST, genesis_prob,
+        # subseasonal) leave both at None and fall back to latest.png.
+        forecast_hour=forecast_hour,
+        init_cycle=f"{date_str}-{hour_str}",
         description=(
             "Unweighted mean of relative humidity at 700, 500, and "
             "400 hPa — a proxy for mid-level moisture relevant to TC "
@@ -1503,6 +1715,13 @@ def build_sst() -> Optional[bytes]:
         step=2,
         cmap="RdYlBu_r",
         valid_time=valid,
+        # Hourly forecast plumbing — set on every GFS-driven layer so
+        # upload_layer routes to env/{name}/init-{cycle}/f{HH}.png and
+        # the metadata.json carries enough info for the frontend's
+        # auto-time picker. Non-GFS layers (SST, genesis_prob,
+        # subseasonal) leave both at None and fall back to latest.png.
+        forecast_hour=forecast_hour,
+        init_cycle=f"{date_str}-{hour_str}",
         description=(
             "NOAA OISST v2.1 daily sea-surface temperature analysis "
             "(0.25° resolution, optimum interpolation of AVHRR + in-situ). "
@@ -1753,29 +1972,68 @@ def main() -> int:
 
     results: dict = {}
 
-    for name, fn in [
-        ("shear_200_850", lambda: build_shear(date_str, hour_str)),
-        ("shear_500_850", lambda: build_midlevel_shear(date_str, hour_str)),
-        ("vort_850",      lambda: build_vorticity(date_str, hour_str, 850)),
-        ("vort_700",      lambda: build_vorticity(date_str, hour_str, 700)),
-        ("vort_500",      lambda: build_vorticity(date_str, hour_str, 500)),
-        ("div_850",       lambda: build_divergence(date_str, hour_str, 850)),
-        ("div_200",       lambda: build_divergence(date_str, hour_str, 200)),
-        ("mslp",          lambda: build_mslp(date_str, hour_str)),
-        ("z500_heights",  lambda: build_z500_heights(date_str, hour_str)),
-        ("winds_10m",     lambda: build_winds_10m(date_str, hour_str)),
-        ("winds_850",     lambda: build_winds(date_str, hour_str, 850)),
-        ("winds_700",     lambda: build_winds(date_str, hour_str, 700)),
-        ("winds_500",     lambda: build_winds(date_str, hour_str, 500)),
-        ("winds_200",     lambda: build_winds(date_str, hour_str, 200)),
-        ("rh_700_400",    lambda: build_midlevel_rh(date_str, hour_str)),
-        ("sst_oisst",     build_sst),
-    ]:
-        try:
-            results[name] = fn() is not None
-        except Exception:
-            log.error("Builder %s crashed:\n%s", name, traceback.format_exc())
-            results[name] = False
+    # Forecast-hour window for GFS-driven layers. f000 = analysis,
+    # f001..f012 = +1h..+12h forecasts of the same init cycle. Lets the
+    # on-page valid_time align to the satellite frame instead of being
+    # pinned to the (often-6h-stale) analysis. Configurable via env var
+    # for testing.
+    fh_max = int(os.environ.get("FORECAST_HOURS_MAX", "12"))
+    forecast_hours = list(range(0, fh_max + 1))
+
+    # GFS-driven builders — each invoked once per forecast hour, all
+    # sharing the same init cycle. Cached GFS GRIB sharing across
+    # builders is a follow-up optimization (Stage 1B); current pattern
+    # re-fetches per builder, which is correct but inefficient.
+    gfs_builders = [
+        ("shear_200_850", lambda fh: build_shear(date_str, hour_str, forecast_hour=fh)),
+        ("shear_500_850", lambda fh: build_midlevel_shear(date_str, hour_str, forecast_hour=fh)),
+        ("vort_850",      lambda fh: build_vorticity(date_str, hour_str, 850, forecast_hour=fh)),
+        ("vort_700",      lambda fh: build_vorticity(date_str, hour_str, 700, forecast_hour=fh)),
+        ("vort_500",      lambda fh: build_vorticity(date_str, hour_str, 500, forecast_hour=fh)),
+        ("div_850",       lambda fh: build_divergence(date_str, hour_str, 850, forecast_hour=fh)),
+        ("div_200",       lambda fh: build_divergence(date_str, hour_str, 200, forecast_hour=fh)),
+        ("mslp",          lambda fh: build_mslp(date_str, hour_str, forecast_hour=fh)),
+        ("z500_heights",  lambda fh: build_z500_heights(date_str, hour_str, forecast_hour=fh)),
+        ("winds_10m",     lambda fh: build_winds_10m(date_str, hour_str, forecast_hour=fh)),
+        ("winds_850",     lambda fh: build_winds(date_str, hour_str, 850, forecast_hour=fh)),
+        ("winds_700",     lambda fh: build_winds(date_str, hour_str, 700, forecast_hour=fh)),
+        ("winds_500",     lambda fh: build_winds(date_str, hour_str, 500, forecast_hour=fh)),
+        ("winds_200",     lambda fh: build_winds(date_str, hour_str, 200, forecast_hour=fh)),
+        ("rh_700_400",    lambda fh: build_midlevel_rh(date_str, hour_str, forecast_hour=fh)),
+    ]
+
+    # Hour-major iteration: f000 for all layers, then f001 for all, etc.
+    # Future Stage 1B will share GRIB fetches across builders within
+    # each hour, which is why we group by hour first.
+    for fh in forecast_hours:
+        log.info("=" * 70)
+        log.info("=== Forecast hour f%03d ===", fh)
+        log.info("=" * 70)
+        for name, fn in gfs_builders:
+            key = f"{name}.f{fh:03d}"
+            try:
+                results[key] = fn(fh) is not None
+            except Exception:
+                log.error("Builder %s crashed:\n%s",
+                          key, traceback.format_exc())
+                results[key] = False
+
+    # SST runs once per scheduler invocation — OISST is observation-only
+    # daily, no forecast hours exist. Uses the legacy single-PNG path.
+    try:
+        results["sst_oisst"] = build_sst() is not None
+    except Exception:
+        log.error("Builder sst_oisst crashed:\n%s", traceback.format_exc())
+        results["sst_oisst"] = False
+
+    # After all forecast hours uploaded, write a per-layer index.json
+    # listing the available hours so the API can enumerate them without
+    # scanning GCS on every request.
+    try:
+        write_layer_indices(date_str, hour_str, forecast_hours,
+                            [b[0] for b in gfs_builders])
+    except Exception:
+        log.error("write_layer_indices failed:\n%s", traceback.format_exc())
 
     if genesis_csv:
         for days in (2, 7, 14):
