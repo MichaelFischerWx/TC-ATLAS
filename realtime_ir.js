@@ -407,7 +407,7 @@
     // Global map product state
     var globalProduct = 'eir';       // 'eir' or 'geocolor'
     var _labelsLayer = null;         // CARTO place-name tile layer (toggleable)
-    var _labelsVisible = true;       // default: labels on
+    var _labelsVisible = false;      // default: labels off (toggle in the top-left stack)
     var gibsVisLayers = [];          // GIBS GeoColor tile layers on main map
     var latestGIBSTime = null;       // cached latest GIBS time string (oldest satellite — used for animation)
     var latestGIBSTimes = {};         // per-satellite latest times, e.g. {'GOES-East': '...', 'Himawari': '...'}
@@ -1996,7 +1996,8 @@
         // Labels toggle — sits in the top-left stack under the Legend
         // toggle (Basins → Legend → Labels). Reuses the same pill
         // styling so the three controls read as one column. Default
-        // ON so geographic context is visible unless the user opts out.
+        // OFF so env-overlay colors / contours read cleanly; users can
+        // flip them on for geographic context.
         if (!document.getElementById('ir-labels-toggle')) {
             var labtog = document.createElement('button');
             labtog.id = 'ir-labels-toggle';

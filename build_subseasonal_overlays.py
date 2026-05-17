@@ -142,16 +142,19 @@ WAVE_SPECS = [
         name="anomaly",
         title="OLR Anomaly",
         description="Daily OLR anomaly vs 1991-2020 climatology. "
-                    "Negative (blue) = suppressed OLR = enhanced deep convection.",
+                    "Negative (blue) = suppressed OLR = enhanced deep convection. "
+                    "Contours every 10 W/m².",
         component="raw",
         vmin=-60.0, vmax=60.0,
         cmap="RdBu_r",
-        # The raw anomaly has broad structure across ±60 W/m² and is the
-        # one product where filled-shading reads well (it's the canonical
-        # "where is convection" map). The WK-filtered bands below use
-        # contour rendering since their natural amplitude is ±5-15 W/m²
-        # — too narrow to fill cleanly without obscuring the IR underlay.
-        render_style="filled",
+        # Contour rendering matches the rest of the site's env-overlay
+        # treatment: colored isolines on a transparent background read
+        # cleanly over the IR / GeoColor underlay instead of washing it
+        # out. Levels span ±50 W/m² in 10 W/m² steps — broad enough to
+        # capture the canonical anomaly envelope without crowding the
+        # map with isolines.
+        render_style="contour",
+        contour_levels=[-50, -40, -30, -20, -10, 10, 20, 30, 40, 50],
     ),
     WaveSpec(
         name="mjo",
