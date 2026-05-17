@@ -1795,6 +1795,7 @@ function _phaseOnDay(modeRec, dayKey) {
     if (idx < 0 || idx >= modeRec.phases.length) return null;
     var p = modeRec.phases[idx], a = modeRec.amplitudes[idx];
     if (p == null || a == null) return null;
+    if (p < 1 || p > 8) return null;            // defensive: skip pathological phase values
     return (a >= 1.0) ? p : 0;     // 0 = quiescent, 1..8 = active phase
 }
 
@@ -2841,6 +2842,7 @@ function _renderSubseasonal() {
         _renderIntensityDial();
     }
     _renderSubseasonalSource();
+    _renderSubseasonalNowWidget();
 }
 
 function _updateMapPanelText() {
@@ -2868,6 +2870,136 @@ function _updateMapPanelText() {
     }
     if (titleEl) titleEl.textContent = title;
     if (helpEl)  helpEl.textContent  = help;
+}
+
+// ── "Current state" phase-clock widget ─────────────────────────
+// SVG diagram for the active mode showing the 8 sector wheel + the
+// position implied by today's phase + amplitude. We don't have raw
+// PC1/PC2 in subseasonal_phases.json (only derived phase + amplitude),
+// so the dot is plotted at the SECTOR MIDPOINT scaled by amplitude.
+// 7-day fading trail uses the same approximation. Trades some
+// positional precision for keeping the data file compact; if we ever
+// add PC1/PC2 to the JSON, this rendering picks them up trivially.
+function _renderSubseasonalNowWidget() {
+    var svg = document.getElementById('sub-now-clock');
+    var modeEl   = document.getElementById('sub-now-mode');
+    var dateEl   = document.getElementById('sub-now-date');
+    var phaseEl  = document.getElementById('sub-now-phase');
+    var ampEl    = document.getElementById('sub-now-amp');
+    var statusEl = document.getElementById('sub-now-status');
+    if (!svg || !_subPhases || !_subPhases.indices[_subState.mode]) return;
+    var rec = _subPhases.indices[_subState.mode];
+    if (modeEl) modeEl.textContent = rec.label;
+
+    // Find the most recent non-null phase in the dense array
+    var phases = rec.phases, amps = rec.amplitudes;
+    var lastIdx = phases.length - 1;
+    while (lastIdx >= 0 && (phases[lastIdx] == null || amps[lastIdx] == null)) lastIdx--;
+    if (lastIdx < 0) {
+        if (dateEl) dateEl.textContent = '(no data)';
+        return;
+    }
+    if (rec._startKey == null) rec._startKey = _dayKeyFromISO(rec.start_date);
+    var dateMs = (rec._startKey + lastIdx) * 86400000;
+    var dt = new Date(dateMs);
+    var dateISO = dt.toISOString().slice(0, 10);
+    var nowPhase = phases[lastIdx];
+    var nowAmp = amps[lastIdx];
+
+    if (dateEl)  dateEl.textContent  = dateISO;
+    if (phaseEl) phaseEl.textContent = String(nowPhase);
+    if (ampEl)   ampEl.textContent   = nowAmp.toFixed(2);
+
+    // Active-basin callout based on phase. RMM/OMI use the same
+    // longitude semantics; BSISO has its own regional interpretation
+    // (Indian Ocean genesis enhanced phases 2–4, WPac genesis 6–7).
+    var mode = _subState.mode;
+    var regionStr;
+    var active = nowAmp >= 1.0;
+    if (mode === 'mjo' || mode === 'mjo_omi') {
+        regionStr = ({
+            1: 'W Hem / Africa',
+            2: 'Indian Ocean',
+            3: 'Indian Ocean',
+            4: 'Maritime Continent',
+            5: 'Maritime Continent',
+            6: 'W Pacific',
+            7: 'W Pacific / W Hem',
+            8: 'W Hem / Africa',
+        })[nowPhase];
+    } else {
+        regionStr = ({
+            1: 'Indian Ocean (suppressed convection)',
+            2: 'Eastern IO',
+            3: 'BoB / Maritime Continent',
+            4: 'WPac / Philippines',
+            5: 'WPac (enhanced convection)',
+            6: 'Subtropical WPac',
+            7: 'NIO / Arabian Sea',
+            8: 'Africa / Indian Ocean',
+        })[nowPhase];
+    }
+    if (statusEl) statusEl.innerHTML = (active ? '✓ <strong>Active</strong>' : '○ Quiescent')
+        + ' · ' + (regionStr || 'unknown') + ' convective envelope';
+
+    // ── Build the SVG ──
+    var W = 120, H = 120, cx = W / 2, cy = H / 2, R = 50, RIN = 14;
+    var theme = (window.TCATheme && window.TCATheme.current) || 'light';
+    var bgFill = theme === 'dark' ? '#161b24' : '#ffffff';
+    var stroke = theme === 'dark' ? 'rgba(255,255,255,0.35)' : 'rgba(0,0,0,0.35)';
+    var labelColor = theme === 'dark' ? '#cbd5e1' : '#475569';
+    var parts = [];
+    // Background ring
+    parts.push('<circle cx="' + cx + '" cy="' + cy + '" r="' + R + '" fill="' + bgFill + '" stroke="' + stroke + '" stroke-width="1"/>');
+    // Inner amplitude=1 ring (boundary between active and quiescent)
+    var rAmp1 = (R - RIN) * (1 / 3) + RIN;
+    parts.push('<circle cx="' + cx + '" cy="' + cy + '" r="' + rAmp1 + '" fill="none" stroke="' + stroke + '" stroke-width="0.8" stroke-dasharray="2,2"/>');
+    // 8 sector lines (every 45° starting from -180°)
+    for (var k = 0; k < 8; k++) {
+        var ang = (k * 45 - 180) * Math.PI / 180;
+        var x2 = cx + R * Math.cos(ang), y2 = cy + R * Math.sin(ang);
+        var x1 = cx + RIN * Math.cos(ang), y1 = cy + RIN * Math.sin(ang);
+        parts.push('<line x1="' + x1.toFixed(1) + '" y1="' + y1.toFixed(1)
+            + '" x2="' + x2.toFixed(1) + '" y2="' + y2.toFixed(1)
+            + '" stroke="' + stroke + '" stroke-width="0.6"/>');
+    }
+    // Phase labels at sector midpoints
+    for (var p = 1; p <= 8; p++) {
+        var midAng = ((p - 1) * 45 - 180 + 22.5) * Math.PI / 180;
+        var lx = cx + (R + 7) * Math.cos(midAng);
+        var ly = cy + (R + 7) * Math.sin(midAng);
+        parts.push('<text x="' + lx.toFixed(1) + '" y="' + (ly + 3).toFixed(1)
+            + '" text-anchor="middle" font-size="9" fill="' + labelColor + '">' + p + '</text>');
+    }
+    // 7-day trail (today and back 6 days)
+    var trail = [];
+    for (var d = 6; d >= 0; d--) {
+        var ix = lastIdx - d;
+        if (ix < 0) continue;
+        var pp = phases[ix], aa = amps[ix];
+        if (pp == null || aa == null) continue;
+        var ang2 = ((pp - 1) * 45 - 180 + 22.5) * Math.PI / 180;
+        var r = RIN + (R - RIN) * Math.min(aa / 3, 1);
+        var x = cx + r * Math.cos(ang2);
+        var y = cy + r * Math.sin(ang2);
+        trail.push({ x: x, y: y, age: d, amp: aa });
+    }
+    // Trail line
+    if (trail.length >= 2) {
+        var path = 'M' + trail[0].x.toFixed(1) + ',' + trail[0].y.toFixed(1);
+        for (var t = 1; t < trail.length; t++) path += ' L' + trail[t].x.toFixed(1) + ',' + trail[t].y.toFixed(1);
+        parts.push('<path d="' + path + '" fill="none" stroke="rgba(46,125,255,0.6)" stroke-width="1.5"/>');
+    }
+    // Trail dots (fading)
+    trail.forEach(function (pt) {
+        var op = 0.25 + 0.75 * ((6 - pt.age) / 6);
+        var sz = pt.age === 0 ? 4 : 2;
+        var fill = pt.age === 0
+            ? (pt.amp >= 1 ? '#ef4444' : '#94a3b8')
+            : 'rgba(46,125,255,' + op + ')';
+        parts.push('<circle cx="' + pt.x.toFixed(1) + '" cy="' + pt.y.toFixed(1) + '" r="' + sz + '" fill="' + fill + '"/>');
+    });
+    svg.innerHTML = parts.join('');
 }
 
 function _renderSubseasonalSource() {
