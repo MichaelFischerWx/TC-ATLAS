@@ -67,16 +67,21 @@ OLR_CLIMO_END="${OLR_CLIMO_END:-2020-12-31}"
 
 # ── Create or update the Cloud Run Job ───────────────────────────
 echo "Deploying Cloud Run Job ${JOB_NAME}..."
+# Memory: 30-yr climatology fetch accumulates ~1.25 GB of raw OLR
+# chunks before concat. 4 GiB gives plenty of headroom; daily warm
+# runs use far less but we provision for the cold-start case since
+# Cloud Run Job /tmp is per-task (no climo cache persistence).
+# TODO: bump back down to 1 GiB once we add GCS-side climo cache.
 if gcloud run jobs describe "${JOB_NAME}" --region "${REGION}" >/dev/null 2>&1; then
     gcloud run jobs update "${JOB_NAME}" \
         --region "${REGION}" \
         --image "${IMAGE}" \
         --command "python" \
         --args "build_subseasonal_overlays.py" \
-        --memory 1Gi \
-        --cpu 1 \
+        --memory 4Gi \
+        --cpu 2 \
         --max-retries 1 \
-        --task-timeout 600 \
+        --task-timeout 900 \
         --set-env-vars "GCS_IR_CACHE_BUCKET=${BUCKET},OLR_CLIMO_START=${OLR_CLIMO_START},OLR_CLIMO_END=${OLR_CLIMO_END}"
 else
     gcloud run jobs create "${JOB_NAME}" \
@@ -84,10 +89,10 @@ else
         --image "${IMAGE}" \
         --command "python" \
         --args "build_subseasonal_overlays.py" \
-        --memory 1Gi \
-        --cpu 1 \
+        --memory 4Gi \
+        --cpu 2 \
         --max-retries 1 \
-        --task-timeout 600 \
+        --task-timeout 900 \
         --set-env-vars "GCS_IR_CACHE_BUCKET=${BUCKET},OLR_CLIMO_START=${OLR_CLIMO_START},OLR_CLIMO_END=${OLR_CLIMO_END}"
 fi
 
