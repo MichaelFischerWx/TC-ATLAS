@@ -321,7 +321,26 @@
                 ],
                 zmin: -band.vlim,
                 zmax:  band.vlim,
-                showscale: false,
+                // Per-panel colorbar — each band has its own ± W/m² range
+                // (raw anomaly ±40, MJO ±15, Kelvin ±12, ER ±8, MRG ±6,
+                // TD ±5) so a shared bar wouldn't work. Compact vertical
+                // strip on the right; basin strip below carries matching
+                // right-margin so the heatmap longitude axes still align.
+                showscale: true,
+                colorbar: {
+                    x: 1.005,
+                    xanchor: 'left',
+                    y: 0.5,
+                    yanchor: 'middle',
+                    len: 0.92,
+                    thickness: 8,
+                    outlinewidth: 0,
+                    tickvals: [-band.vlim, 0, band.vlim],
+                    ticktext: ['−' + band.vlim, '0', '+' + band.vlim],
+                    tickfont: { size: 8, color: fg, family: 'DM Sans, system-ui, sans-serif' },
+                    title: { text: 'W/m²', side: 'top',
+                             font: { size: 8, color: fg } },
+                },
                 hovertemplate:
                     'Lon %{x:.1f}°<br>Date %{y}<br>'
                     + band.title.split(' ')[0] + ' %{z:.1f} W/m²<extra></extra>',
@@ -331,8 +350,10 @@
                 // Every panel reserves bottom margin for longitude ticks
                 // — readers need to look up a TC's longitude on the panel
                 // they're already looking at, not have to glance down to
-                // the last one to read off the axis.
-                margin: { l: 60, r: 12, t: 18, b: 22 },
+                // the last one to read off the axis. Right margin makes
+                // room for the per-panel vertical colorbar; basin strip
+                // below uses the same r value to preserve x-axis alignment.
+                margin: { l: 60, r: 55, t: 18, b: 22 },
                 paper_bgcolor: bg,
                 plot_bgcolor:  bg,
                 font: { color: fg, size: 10, family: 'DM Sans, system-ui, sans-serif' },
@@ -442,7 +463,9 @@
             type: 'scatter', x: [-180, 180], y: [0.5, 0.5],
             mode: 'markers', marker: { opacity: 0 }, hoverinfo: 'skip',
         }], {
-            margin: { l: 60, r: 12, t: 0, b: 0 },
+            // Right margin matches Hovmöller panels' colorbar reservation
+            // so longitude axes align vertically across the stack.
+            margin: { l: 60, r: 55, t: 0, b: 0 },
             paper_bgcolor: bg, plot_bgcolor: bg,
             xaxis: {
                 range: [-180, 180],
