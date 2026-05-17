@@ -397,22 +397,40 @@ def wk_filter(field, spec: WaveSpec):
     # Build mask in (time-freq, lon-wavenumber) space, broadcast over lat
     mask = np.zeros((nt, nx), dtype=bool)
 
-    # Wavenumber filter
+    # Direction convention. A physical wave x = cos(k*lon - ω*t) with
+    # k>0, ω>0 (eastward) decomposes into exp(i(klon-ωt)) and its
+    # conjugate. Under numpy's FFT convention X[m] = Σ x[n] e^{-2πi mn/N},
+    # the time factor exp(-iωt) maps to NEGATIVE freq_bin. So eastward
+    # energy lives at numpy (k_bin>0, freq_bin<0) ∪ conjugate
+    # (k_bin<0, freq_bin>0). The old code kept (k_bin>0, freq_bin>0)
+    # which is actually the conjugate of WESTWARD — Kelvin and ER were
+    # effectively swapped, producing reverse-direction streaks.
+    if spec.name in ("kelvin", "mjo"):
+        direction = "east"
+    elif spec.name == "er":
+        direction = "west"
+    else:
+        direction = None        # MRG handled separately; no direction filter
+
+    # Wavenumber filter — accept |k_bin| within the spec's magnitude range
+    # for eastward/westward modes (the conjugate quadrant has k_bin of
+    # the opposite sign). For undirected spec, fall back to signed range.
     if spec.k_lo is not None and spec.k_hi is not None:
-        # Match k values that fall in [k_lo, k_hi].
         kk = np.round(k).astype(int)
-        k_in = (kk >= spec.k_lo) & (kk <= spec.k_hi)
+        if direction in ("east", "west"):
+            k_lo_abs = min(abs(spec.k_lo), abs(spec.k_hi))
+            k_hi_abs = max(abs(spec.k_lo), abs(spec.k_hi))
+            k_in = (np.abs(kk) >= k_lo_abs) & (np.abs(kk) <= k_hi_abs)
+        else:
+            k_in = (kk >= spec.k_lo) & (kk <= spec.k_hi)
     else:
         k_in = np.ones_like(k, dtype=bool)
 
-    # Frequency filter (either freq range or h-equivalent-depth range).
-    # WK convention: eastward waves have ω > 0 with k > 0, westward have
-    # ω > 0 with k < 0. We work with the magnitude of ω here since the
-    # dispersion curves are symmetric about ω = 0.
-    omega = np.abs(freq)
-
+    # Frequency filter. WK band ranges are written for positive (cycles
+    # per day) magnitudes; the filter is symmetric in |freq_bin|.
+    omega_abs = np.abs(freq)
     if spec.freq_lo is not None and spec.freq_hi is not None:
-        f_in_basic = (omega >= spec.freq_lo) & (omega <= spec.freq_hi)
+        f_in_basic = (omega_abs >= spec.freq_lo) & (omega_abs <= spec.freq_hi)
     else:
         f_in_basic = np.ones_like(freq, dtype=bool)
 
@@ -423,50 +441,43 @@ def wk_filter(field, spec: WaveSpec):
         for xi, k_i in enumerate(k):
             if not k_in[xi]:
                 continue
+            # Direction quadrant gate. Both the primary quadrant and its
+            # conjugate are kept so the inverse FFT recovers full amplitude
+            # of the real-valued band-passed signal.
+            if direction == "east":
+                in_quadrant = (k_i > 0 and freq_i < 0) or (k_i < 0 and freq_i > 0)
+            elif direction == "west":
+                in_quadrant = (k_i < 0 and freq_i < 0) or (k_i > 0 and freq_i > 0)
+            else:
+                in_quadrant = True
+            if not in_quadrant:
+                continue
+
             keep = True
             # Optional h-equivalent-depth gate (Kelvin / ER dispersion).
+            # All sign confusion is avoided by working with |k|, |ω|; the
+            # dispersion curves are symmetric about (0,0) and the direction
+            # gate above has already constrained us to the correct half.
             if spec.h_lo is not None and spec.h_hi is not None:
-                # Dispersion: ω = sqrt(g*h) * k_phys, where k_phys is in
-                # rad/m, ω in rad/s. Convert our k (cycles per globe)
-                # and freq (cyc/day) to rad/m and rad/s respectively.
                 a = 6.371e6
-                k_rad_m = (k_i * 2 * np.pi) / (2 * np.pi * a)   # = k_i / a
-                omega_rad_s = (freq_i * 2 * np.pi) / 86400.0
-                # For positive k (eastward Kelvin): c = ω/k = sqrt(g*h).
-                # For ER (k < 0, n=1 Rossby branch), the dispersion is
-                # nonlinear: ω = −β*k / (k² + (2n+1)*β/c). Use simplified
-                # h-gate by computing c from c² = (ω/k)² for Kelvin, or
-                # via the Rossby branch fit for ER.
-                if k_i == 0:
+                k_abs = abs(k_i) / a                          # rad/m
+                omega_a = abs(freq_i) * 2 * np.pi / 86400.0   # rad/s
+                if k_abs == 0:
                     keep = False
                 elif spec.name == "kelvin":
-                    # Kelvin: c = ω / k (positive k, positive ω)
-                    if k_i > 0 and freq_i > 0:
-                        c = omega_rad_s / k_rad_m
+                    # Kelvin: |ω| = |k| * sqrt(gh) → c = |ω| / |k|
+                    c = omega_a / k_abs
+                    h = (c * c) / g
+                    keep = (spec.h_lo <= h <= spec.h_hi)
+                elif spec.name == "er":
+                    # n=1 ER (westward): |ω| = β |k| / (k² + 3β/c)
+                    # Solve: 3β/c = β |k| / |ω| − k² → c = 3β / (...)
+                    beta = 2 * 7.292e-5 / a            # ≈ 2.29e-11 m⁻¹s⁻¹
+                    denom = beta * k_abs / omega_a - k_abs * k_abs
+                    if denom > 0:
+                        c = 3 * beta / denom
                         h = (c * c) / g
                         keep = (spec.h_lo <= h <= spec.h_hi)
-                    else:
-                        keep = False
-                elif spec.name == "er":
-                    # n=1 ER (westward): use Roundy & Frank 2004 approx
-                    # ω ≈ −β k / (k² + 3β/c). Test if the (k, ω) point
-                    # is close to the dispersion curve for any c in
-                    # [c_lo, c_hi] where c = sqrt(g*h).
-                    if k_i < 0 and freq_i > 0:
-                        beta = 2 * 7.292e-5 / a            # ≈ 2.29e-11 m⁻¹s⁻¹
-                        c_lo = np.sqrt(g * spec.h_lo)
-                        c_hi = np.sqrt(g * spec.h_hi)
-                        # Solve for h that puts this (k, ω) on dispersion
-                        # ω = −β k / (k² + 3β/c). For ω>0, k<0, rearrange:
-                        # 3β/c = −β k/ω − k² → c = 3β / (−β k/ω − k²)
-                        denom = (-beta * k_rad_m / omega_rad_s
-                                 - k_rad_m * k_rad_m)
-                        if denom > 0:
-                            c = 3 * beta / denom
-                            h = (c * c) / g
-                            keep = (spec.h_lo <= h <= spec.h_hi)
-                        else:
-                            keep = False
                     else:
                         keep = False
                 else:
