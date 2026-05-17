@@ -1767,13 +1767,52 @@ html, body { margin: 0; padding: 0; }
         max-width: 100% !important;
         max-height: 65vh !important;
         border-radius: 14px 14px 0 0 !important;
+        border: 1px solid rgba(255, 255, 255, 0.10);
         border-bottom: none;
-        box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.45);
+        box-shadow: 0 -10px 28px rgba(0, 0, 0, 0.55);
         transform: translateY(100%);
         transition: transform 0.25s cubic-bezier(0.2, 0.7, 0.2, 1);
         z-index: 1100;
         padding-top: 22px;   /* room for the drag handle */
         overflow-y: auto;
+        /* The shared .ir-global-menu base is rgba(22,27,36,0.95) + an
+           8 px backdrop blur — on a phone that reads as a low-contrast
+           frosted card with the satellite imagery showing through.
+           Override to a fully opaque dark surface so text is sharp and
+           the rows pop. */
+        background: #11161f !important;
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+    }
+    /* Bump font + row padding inside the sheet so labels are
+       comfortable to read AND tap. Desktop's 0.72 rem ≈ 11.5 px is
+       too small for touch input. */
+    .ir-layers-panel .ir-global-menu-row {
+        font-size: 0.9rem;
+        padding: 10px 14px;
+    }
+    .ir-layers-panel .ir-global-menu-row .label {
+        font-size: 0.88rem;
+    }
+    .ir-layers-panel .ir-global-menu-row .units {
+        font-size: 0.7rem;
+    }
+    .ir-layers-panel .ir-global-menu-section {
+        font-size: 0.7rem;
+        padding-left: 14px;
+        padding-right: 14px;
+        padding-top: 10px;
+    }
+    .ir-layers-panel .ir-global-menu-subhead {
+        font-size: 0.62rem;
+        padding-left: 14px;
+        padding-right: 14px;
+    }
+    .ir-layers-panel .ir-global-menu-valid,
+    .ir-layers-panel .ir-global-menu-help,
+    .ir-layers-panel .ir-global-menu-opacity-wrap {
+        padding-left: 14px;
+        padding-right: 14px;
     }
     .ir-layers-panel.is-open-mobile {
         transform: translateY(0);
