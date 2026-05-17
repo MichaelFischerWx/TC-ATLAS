@@ -346,7 +346,7 @@
                     xref: 'paper', yref: 'paper',
                     x: 1, y: 0,
                     xanchor: 'right', yanchor: 'bottom',
-                    text: 'TC-ATLAS · tc-atlas.com',
+                    text: 'TC-ATLAS',
                     showarrow: false,
                     font: { size: 8, color: 'rgba(15,23,42,0.32)',
                             family: 'DM Sans, system-ui, sans-serif' },
@@ -610,7 +610,7 @@
                 ctx.fillText(title, 24, 30);
                 ctx.font = '13px "DM Sans", system-ui, sans-serif';
                 ctx.fillStyle = '#475569';
-                var sub = 'TC-ATLAS · tc-atlas.com · '
+                var sub = 'TC-ATLAS · '
                     + new Date().toISOString().slice(0, 10) + ' UTC';
                 ctx.fillText(sub, 24, 50);
                 // Paste each panel image

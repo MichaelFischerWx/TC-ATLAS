@@ -7312,7 +7312,7 @@
         // Add "TC-ATLAS" watermark
         layout.annotations = layout.annotations || [];
         layout.annotations.push({
-            text: 'TC-ATLAS | tc-atlas.com',
+            text: 'TC-ATLAS',
             xref: 'paper', yref: 'paper',
             x: 1, y: -0.12,
             showarrow: false,
