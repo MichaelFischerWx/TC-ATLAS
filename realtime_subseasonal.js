@@ -47,6 +47,7 @@
         latBand: 'trop10',
         showTCOverlay: true,
         expandedBands: {},          // { bandKey: bool } — sticky per-tab session
+        tcLoading: false,           // true while phase-2 recent-storms is in flight
     };
 
     function _ga(eventName, params) {
@@ -496,7 +497,12 @@
         var box = document.getElementById('sub-active-tc-list');
         if (!box) return;
         if (!state.showTCOverlay || !state.activeStorms.length) {
-            box.innerHTML = '';
+            if (state.tcLoading) {
+                box.innerHTML = '<div style="font-size:0.72rem;color:var(--text-dim,#64748b);">'
+                    + '<em>Loading recent TC tracks (active + recently-dissipated)…</em></div>';
+            } else {
+                box.innerHTML = '';
+            }
             return;
         }
         var active = state.activeStorms.filter(function (s) { return s.active; });
@@ -573,17 +579,38 @@
         var loading = document.querySelector('#sub-hov-stack .sub-hov-loading');
         if (loading) loading.textContent = 'Loading subseasonal data…';
 
-        Promise.all([_loadIndices(), _loadSlabs(), _loadActiveStorms()])
+        // Phase 1: load indices + wave slabs in parallel. As soon as
+        // these arrive (~1-2 s) the user sees the clocks + Hovmöllers,
+        // without the overlay. Recent-storms fetch hits NHC + JTWC
+        // deck files which can take 10+ s — we don't want it blocking
+        // the operationally-useful wave view.
+        Promise.all([_loadIndices(), _loadSlabs()])
             .then(function () {
                 _renderClocks();
                 _renderHovmollers();
             })
             .catch(function (err) {
-                console.error('[subseasonal-rt] init failed:', err);
+                console.error('[subseasonal-rt] phase-1 init failed:', err);
                 var c = _stackContainer();
                 if (c) c.innerHTML = '<div class="sub-hov-loading" style="color:#ef4444;">'
                     + 'Could not load subseasonal data. Check console for details.</div>';
             });
+
+        // Phase 2: pull recent storms in the background and re-paint
+        // the Hovmöllers (now including TC track overlays) once they
+        // land. tcLoading=true so the active-TC list shows a status
+        // pill even if Phase 1 finishes ahead of this fetch and would
+        // otherwise blank the list.
+        state.tcLoading = true;
+        _loadActiveStorms().then(function () {
+            state.tcLoading = false;
+            // Slabs may not have arrived yet — only repaint if Phase 1
+            // is done (panels exist). If Phase 1 finishes later it will
+            // pick up state.activeStorms automatically.
+            if (Object.keys(state.slabs).length) {
+                _renderHovmollers();
+            }
+        });
     };
 
     /* React to theme flips while the tab is open */
