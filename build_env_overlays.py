@@ -344,17 +344,37 @@ def fetch_oisst_sst() -> Optional[tuple[np.ndarray, str]]:
     days until something exists.
     """
     import requests
+    import time as _time
+
+    # Per-request and total-budget caps. NCEI's OISST endpoint is
+    # intermittently slow; this loop used to use a 180 s per-request
+    # timeout, which meant a hang could burn 20 × 180 s = 60 min of pure
+    # Cloud Run vCPU before giving up. 20 s per call + 90 s wall-clock
+    # cap on the whole walk-back loop bounds the worst case to ~90 s of
+    # wasted compute and lets the rest of the job continue (the prior-
+    # day SST PNG in GCS stays current as a fallback).
+    PER_REQ_TIMEOUT = 20.0
+    TOTAL_BUDGET_S  = 90.0
 
     now = datetime.now(timezone.utc)
+    started = _time.monotonic()
     for back in range(1, 10):
+        if _time.monotonic() - started > TOTAL_BUDGET_S:
+            log.warning("OISST: aborting walk-back — exceeded %.0fs total budget",
+                        TOTAL_BUDGET_S)
+            return None
         d = now - timedelta(days=back)
         ymd = d.strftime("%Y%m%d")
         ym = d.strftime("%Y%m")
         for fname in (f"oisst-avhrr-v02r01.{ymd}_preliminary.nc",
                       f"oisst-avhrr-v02r01.{ymd}.nc"):
+            if _time.monotonic() - started > TOTAL_BUDGET_S:
+                log.warning("OISST: aborting — exceeded %.0fs total budget",
+                            TOTAL_BUDGET_S)
+                return None
             url = f"{OISST_BASE}/{ym}/{fname}"
             try:
-                r = requests.get(url, timeout=180)
+                r = requests.get(url, timeout=PER_REQ_TIMEOUT)
                 if r.status_code != 200:
                     continue
                 sst = _read_oisst_nc(r.content)
