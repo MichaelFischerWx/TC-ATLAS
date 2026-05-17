@@ -167,15 +167,25 @@ def read_gfs_field(grib_bytes: bytes, level: int, var: str
             backend_kwargs={"indexpath": ""},  # disable index files
             decode_timedelta=False,
         )
-        # GFS variable naming: UGRD→"u", VGRD→"v", RH→"r", TMP→"t",
-        # HGT→"gh" (geopotential height in m, exposed by cfgrib as `gh`),
-        # PRMSL→"prmsl" (pressure reduced to MSL).
-        name_map = {"UGRD": "u", "VGRD": "v", "RH": "r", "TMP": "t",
-                    "HGT": "gh", "PRMSL": "prmsl"}
-        xname = name_map.get(var, var.lower())
-        if xname not in ds.data_vars:
-            log.warning("Variable %s not found in GRIB (have: %s)",
-                        xname, list(ds.data_vars))
+        # GFS variable naming in cfgrib varies by typeOfLevel: pressure-
+        # level u/v come out as "u"/"v" but 10-m surface winds come out
+        # as "u10"/"v10" (and 2-m temp as "t2m" vs the pressure-level
+        # "t"). We try the pressure-level name first and fall back to
+        # the surface-level alias if the GRIB only carries the surface
+        # variant — keeps a single decoder happy across both groups.
+        candidates = {
+            "UGRD":  ["u", "u10"],
+            "VGRD":  ["v", "v10"],
+            "RH":    ["r"],
+            "TMP":   ["t", "t2m"],
+            "HGT":   ["gh"],
+            "PRMSL": ["prmsl"],
+        }
+        names = candidates.get(var, [var.lower()])
+        xname = next((n for n in names if n in ds.data_vars), None)
+        if xname is None:
+            log.warning("Variable %s not found in GRIB (tried %s, have: %s)",
+                        var, names, list(ds.data_vars))
             return None
 
         da = ds[xname]
