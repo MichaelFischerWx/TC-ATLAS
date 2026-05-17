@@ -1921,6 +1921,18 @@ html, body { margin: 0; padding: 0; }
     overflow-y: auto;
 }
 
+/* Map-only floating controls — appended to <body> by realtime_ir.js
+   after the Leaflet map initializes, so they don't inherit
+   `#ir-main { display: none }`. We hide them on any non-map view via
+   the data-view attribute set by switchIRView. */
+html:not([data-view="map"]) #ir-legend-toggle,
+html:not([data-view="map"]) #ir-labels-toggle,
+html:not([data-view="map"]) #ir-legend,
+html:not([data-view="map"]) #basin-sidebar-toggle,
+html:not([data-view="map"]) #basin-sidebar {
+    display: none !important;
+}
+
 /* ════════════════════════════════════════════════════════════════
    Subseasonal tab — phase clocks (left) + Hovmöllers (right)
    ════════════════════════════════════════════════════════════════ */

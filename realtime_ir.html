@@ -830,6 +830,9 @@
     /* Tab switching between Map, Satellite, and Subseasonal views */
     (function () {
         var currentView = 'map';
+        /* Seed the data-view attribute so CSS hides map-only toggles
+           correctly even on first paint (before any user click). */
+        document.documentElement.setAttribute('data-view', 'map');
         window.switchIRView = function (view) {
             if (view === currentView) return;
             currentView = view;
@@ -844,6 +847,15 @@
             for (var i = 0; i < tabs.length; i++) {
                 tabs[i].classList.toggle('active', tabs[i].getAttribute('data-view') === view);
             }
+
+            /* Tag <html> with the active view so map-only floating
+               controls (#ir-legend-toggle, #ir-labels-toggle — appended
+               to <body> by realtime_ir.js AFTER map init) can be hidden
+               via CSS regardless of whether they exist at the moment
+               this switch fires. Without this, deep-linking straight to
+               a non-map view would call getElementById too early and
+               miss the toggle controls when they're injected later. */
+            document.documentElement.setAttribute('data-view', view);
 
             /* Hide all then show the active one. Keeps the switching
                logic linear regardless of how many views we add. */
