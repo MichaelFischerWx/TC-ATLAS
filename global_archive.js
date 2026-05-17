@@ -7246,11 +7246,15 @@ window.saveCurrentFramePng = function () {
         outW     = irCols * s;
         irImageH = irRows * s;
     }
-    // Scale header / chrome heights with EXPORT_SCALE for visual balance
+    // Scale header / chrome heights with EXPORT_SCALE for visual balance.
+    // H_FOOTER holds the IR colorbar; H_ATTRIB is its own band below so
+    // the bottom-left URL attribution doesn't run on top of the "310 K"
+    // label and the cold-end of the colorbar gradient.
     var H_HEADER = 24 * EXPORT_SCALE;
     var H_FOOTER = 24 * EXPORT_SCALE;
+    var H_ATTRIB = 14 * EXPORT_SCALE;
     var intensityH = showIntensity ? 60 * EXPORT_SCALE : 0;
-    var outH = H_HEADER + irImageH + intensityH + H_FOOTER;
+    var outH = H_HEADER + irImageH + intensityH + H_FOOTER + H_ATTRIB;
 
     var lut = IR_COLORMAPS[irSelectedColormap] || IR_COLORMAPS['enhanced'];
 
@@ -7340,14 +7344,19 @@ window.saveCurrentFramePng = function () {
 
     var MAP_BOTTOM = H_HEADER + irImageH;
 
-    // Coastlines
+    // Coastlines — two-pass halo stroke so the line reads on both dark
+    // open-ocean Tb (warm gray/black in the enhanced colormap) AND on
+    // light cold-cloud regions (white/pink in the same colormap). A
+    // single light-only stroke disappears against white cloud tops; a
+    // dark halo + light core stays visible everywhere.
     if (showCoastlines && _coastlineGeoJSON && _coastlineGeoJSON.features) {
         compCtx.save();
         compCtx.beginPath(); compCtx.rect(0, H_HEADER, outW, irImageH); compCtx.clip();
-        compCtx.strokeStyle = 'rgba(200,200,200,0.55)';
-        compCtx.lineWidth = 0.8 * EXPORT_SCALE;
         var bS = frameBounds.south, bN = frameBounds.north;
         var bWest = frameBounds.west, bEast = frameBounds.east;
+        // Pre-build the visible coastline paths once so we can stroke
+        // them twice (halo + core) without re-traversing the GeoJSON.
+        var _cstPaths = [];
         for (var fii = 0; fii < _coastlineGeoJSON.features.length; fii++) {
             var geom = _coastlineGeoJSON.features[fii].geometry;
             if (!geom) continue;
@@ -7363,10 +7372,16 @@ window.saveCurrentFramePng = function () {
                     }
                 }
                 if (!anyIn) continue;
+                _cstPaths.push(coords);
+            }
+        }
+        function _strokeCoastlinePaths() {
+            for (var pi3 = 0; pi3 < _cstPaths.length; pi3++) {
+                var pCoords = _cstPaths[pi3];
                 compCtx.beginPath();
                 var started = false;
-                for (var ci2 = 0; ci2 < coords.length; ci2++) {
-                    var pp2 = geoToPx(coords[ci2][1], coords[ci2][0]);
+                for (var ci2 = 0; ci2 < pCoords.length; ci2++) {
+                    var pp2 = geoToPx(pCoords[ci2][1], pCoords[ci2][0]);
                     if (pp2.x < -20 || pp2.x > outW + 20 || pp2.y < H_HEADER - 20 || pp2.y > MAP_BOTTOM + 20) {
                         started = false; continue;
                     }
@@ -7376,6 +7391,17 @@ window.saveCurrentFramePng = function () {
                 compCtx.stroke();
             }
         }
+        // Halo (dark, slightly thicker) → core (light, thinner). Round
+        // line-join so the halo doesn't create sharp corners at vertex
+        // angles in jagged coastlines.
+        compCtx.lineJoin = 'round';
+        compCtx.lineCap = 'round';
+        compCtx.strokeStyle = 'rgba(0,0,0,0.7)';
+        compCtx.lineWidth = 2.2 * EXPORT_SCALE;
+        _strokeCoastlinePaths();
+        compCtx.strokeStyle = 'rgba(255,255,255,0.9)';
+        compCtx.lineWidth = 1.0 * EXPORT_SCALE;
+        _strokeCoastlinePaths();
         compCtx.restore();
     }
 
