@@ -1320,11 +1320,14 @@ def build_divergence(date_str: str, hour_str: str, level: int
 
     div = (du_dx + dv_dy) * 1e5  # → 10⁻⁵ s⁻¹
     div = div.astype(np.float32)
-    # Mask the [-1, 1] noise band so it doesn't tint the IR underlay
-    # with near-white pixels everywhere. Values inside ±1 × 10⁻⁵ s⁻¹
-    # are below the synoptic-scale signal floor anyway. Hover tooltip
-    # still gracefully returns null over masked cells.
-    div = np.where(np.abs(div) >= 1.0, div, np.nan).astype(np.float32)
+    # Mask cells with |div| < 3 × 10⁻⁵ s⁻¹ so the filled-raster overlay
+    # doesn't paint a broad pale wash over the IR map. The prior 1.0
+    # threshold left near-noise values rendering as pale pinks/blues
+    # that obscured the underlying satellite imagery; 3.0 keeps only
+    # synoptic-scale signal (Hadley/Walker branch divergence, TC
+    # outflow, frontal convergence). Hover tooltip still returns null
+    # over masked cells.
+    div = np.where(np.abs(div) >= 3.0, div, np.nan).astype(np.float32)
     div = regrid_to_global(div)
 
     valid = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}T{hour_str}:00:00Z"
@@ -1345,8 +1348,12 @@ def build_divergence(date_str: str, hour_str: str, level: int
         # right at the colorbar swatch limit. Paired with filled
         # discrete bands below for instant readability vs. thin
         # contour lines.
-        levels_override=[-20, -15, -10, -7, -5, -3, -2, -1,
-                          1, 2, 3, 5, 7, 10, 15, 20],
+        # Drop the inner ±1 / ±2 bands — those values are below the new
+        # ±3 noise mask anyway, and including them in levels left the
+        # colorbar legend implying we still paint them. 11 boundaries
+        # → 10 visible bands, all well above the synoptic noise floor.
+        levels_override=[-20, -15, -10, -7, -5, -3,
+                          3, 5, 7, 10, 15, 20],
         render_style="filled",
         discrete_bins=True,
         data_vmin=-100,
@@ -1359,8 +1366,8 @@ def build_divergence(date_str: str, hour_str: str, level: int
             f"(positive) = divergence. For TC genesis, look for 850 hPa "
             f"convergence under 200 hPa divergence — the classic "
             f"vertically-coupled inflow/outflow couplet. Filled in "
-            f"15 discrete bands from ±1 (noise floor) up to ±20 "
-            f"× 10⁻⁵ s⁻¹."
+            f"10 discrete bands from ±3 (noise floor — cells inside that "
+            f"are transparent) up to ±20 × 10⁻⁵ s⁻¹."
         ),
     )
     return div if upload_layer(spec, div) else None
