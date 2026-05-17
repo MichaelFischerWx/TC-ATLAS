@@ -42,7 +42,11 @@ COPY tc_radar_metadata.json .
 COPY tc_radar_metadata_merge.json .
 COPY climatology_hybrid.npz .
 COPY ibtracs_storms.json .
-COPY ibtracs_tracks.json .
+# IBTrACS tracks ship as split chunks + manifest. The legacy combined
+# ibtracs_tracks.json is gitignored (the JSON is too large for git);
+# precache_mergir.py uses the manifest path. Frontend likewise prefers
+# the manifest, falling back to the combined file only when manifest
+# fetch fails.
 COPY ibtracs_tracks_0.json .
 COPY ibtracs_tracks_1.json .
 COPY ibtracs_tracks_manifest.json .
