@@ -184,6 +184,30 @@
     letter-spacing: 0.02em;
 }
 
+.seasonal-save-btn {
+    position: absolute;
+    top: 8px;
+    right: 10px;
+    z-index: 4;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    line-height: 1;
+    font-size: 0.95rem;
+    color: var(--text-dim, #94a3b8);
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.seasonal-save-btn:hover {
+    color: var(--text, #e0e0e0);
+    background: rgba(255,255,255,0.10);
+    border-color: rgba(255,255,255,0.30);
+}
+.seasonal-panel { position: relative; }
+
 .seasonal-panel-stub {
     flex: 1;
     display: flex;

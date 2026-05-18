@@ -91,6 +91,17 @@
         var points = { year: [], x: [], y: [], ace: [], storms: [] };
         var currentYear = (new Date()).getUTCFullYear();
         var currentPt = null;
+        var currentProj = null;
+
+        // Mapping from base variable to its "projected" sibling. Anomaly
+        // and detrended both have direct projected columns; for absolute
+        // SST the column suffix differs slightly. If the value is null
+        // (finalized rows have no projection), the projection is skipped.
+        var projVar = (state.scatter.variable === 'sst')   ? '_sst_projected'
+                    : (state.scatter.variable === 'anom')  ? '_anom_projected'
+                    : '_sst_dt_projected';
+        var projX = idx.values[state.scatter.x + projVar];
+        var projY = idx.values[state.scatter.y + projVar];
 
         for (var i = 0; i < dates.length; i++) {
             var d = dates[i];
@@ -108,6 +119,15 @@
                     preliminary: !!prelim[i],
                     n_days: nDays[i] || null,
                 };
+                // If the current-year point is preliminary and has a
+                // projected sibling, capture it for a second marker.
+                if (prelim[i] && projX && projY
+                    && projX[i] !== null && projY[i] !== null) {
+                    currentProj = {
+                        year: year, x: projX[i], y: projY[i],
+                        n_days: nDays[i] || null,
+                    };
+                }
                 continue;
             }
             points.year.push(year);
@@ -116,7 +136,70 @@
             points.ace.push(ace);
             points.storms.push(storms);
         }
-        return { points: points, current: currentPt, xKey: xKey, yKey: yKey };
+        return { points: points, current: currentPt, currentProj: currentProj,
+                 xKey: xKey, yKey: yKey };
+    }
+
+    // TC-ATLAS brand palette (mirrors the variables in tc_radar_styles.css).
+    var BRAND = {
+        orange: '#fb923c',
+        orange_dim: 'rgba(251,146,60,0.18)',
+        orange_line: 'rgba(251,146,60,0.95)',
+        green: '#22c55e',
+        green_dim: 'rgba(34,197,94,0.14)',
+        green_line: 'rgba(34,197,94,0.85)',
+        gray: 'rgba(140,148,160,0.18)',
+        text: '#e0e0e0',
+        textDim: '#a0a8b3',
+    };
+
+    // Common watermark annotation appended to every Plotly figure so the
+    // saved-as-PNG output carries attribution.
+    function _watermarkAnnotations() {
+        return [{
+            xref: 'paper', yref: 'paper',
+            x: 1, y: 1.02,
+            xanchor: 'right', yanchor: 'bottom',
+            text: 'TC-ATLAS',
+            showarrow: false,
+            font: { size: 9, color: 'rgba(140,148,160,0.65)',
+                    family: 'DM Sans, system-ui, sans-serif' },
+        }, {
+            xref: 'paper', yref: 'paper',
+            x: 1, y: -0.16,
+            xanchor: 'right', yanchor: 'bottom',
+            text: 'michaelfischerwx.github.io/TC-ATLAS',
+            showarrow: false,
+            font: { size: 8, color: 'rgba(140,148,160,0.45)',
+                    family: 'DM Sans, system-ui, sans-serif' },
+        }];
+    }
+
+    // Attach a small monochrome ⤓ button to a panel that triggers
+    // Plotly's downloadImage on the named plot.
+    function _addPlotSaveBtn(panelId, plotId, filenameBase) {
+        var panel = document.getElementById(panelId);
+        if (!panel || panel.querySelector('.seasonal-save-btn')) return;
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'seasonal-save-btn';
+        btn.title = 'Save panel as PNG';
+        btn.setAttribute('aria-label', 'Save panel as PNG');
+        btn.textContent = '⤓';
+        btn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            var plot = document.getElementById(plotId);
+            if (!plot || !window.Plotly) return;
+            var now = new Date();
+            var stamp = now.toISOString().slice(0, 16).replace(/[:T-]/g, '');
+            window.Plotly.downloadImage(plot, {
+                format: 'png',
+                filename: 'TC-ATLAS_' + filenameBase + '_' + stamp,
+                width: Math.max(plot.clientWidth, 1200),
+                height: Math.max(plot.clientHeight, 600),
+            });
+        });
+        panel.appendChild(btn);
     }
 
     var REGION_LABEL = {
@@ -190,17 +273,17 @@
 
         if (bundle.current) {
             var cur = bundle.current;
-            // Current-year star: filled when the monthly value is
-            // finalized in NOAA's product, ring-only ("star-open") when
-            // it's a partial month-to-date computed from the daily file.
-            // The label appended a ' (preliminary, N-day mean)' tag so
-            // users know they're looking at a preliminary value.
-            var prelimTag = cur.preliminary
-                ? ' (preliminary, ' + (cur.n_days || '?') + '-day mean)'
-                : '';
-            var prelimLabel = cur.preliminary ? '✦' : '';
+            var showProj = !!bundle.currentProj;
+            // Marker semantics:
+            //   - Finalized current year: solid filled star (no preliminary).
+            //   - Preliminary MTD: hollow star ("star-open") at the
+            //     month-to-date mean — what's actually been measured.
+            //   - Projected full month: solid star at the persistence-
+            //     anomaly extrapolation, shown only when both differ in
+            //     the chosen variable view (anomaly view collapses them
+            //     onto the same point).
             traces.push({
-                type: 'scatter', mode: 'markers+text',
+                type: 'scatter', mode: 'markers',
                 x: [cur.x], y: [cur.y],
                 marker: {
                     symbol: cur.preliminary ? 'star-open' : 'star',
@@ -208,14 +291,42 @@
                     color: 'rgba(255,0,255,0.95)',
                     line: { color: '#000', width: 2 },
                 },
-                text: [String(cur.year) + (cur.preliminary ? ' (P)' : '')],
-                textposition: 'top right',
-                textfont: { color: 'rgba(255,0,255,1)', size: 13, weight: 700 },
-                hovertemplate:
-                    '<b>' + cur.year + '</b> (current' + prelimTag + ')<br>' +
-                    'X: %{x:.2f}<br>Y: %{y:.2f}<extra></extra>',
-                name: String(cur.year),
+                hovertemplate: cur.preliminary
+                    ? '<b>' + cur.year + ' MTD</b> (' + (cur.n_days || '?') +
+                      '-day month-to-date)<br>X: %{x:.2f}<br>Y: %{y:.2f}<extra></extra>'
+                    : '<b>' + cur.year + '</b> (current)<br>' +
+                      'X: %{x:.2f}<br>Y: %{y:.2f}<extra></extra>',
+                showlegend: true,
+                name: cur.preliminary
+                    ? cur.year + ' month-to-date'
+                    : String(cur.year),
             });
+            if (showProj) {
+                var p = bundle.currentProj;
+                traces.push({
+                    type: 'scatter', mode: 'markers',
+                    x: [p.x], y: [p.y],
+                    marker: {
+                        symbol: 'star', size: 22,
+                        color: 'rgba(255,0,255,0.95)',
+                        line: { color: '#fff', width: 2 },
+                    },
+                    hovertemplate:
+                        '<b>' + p.year + ' projected</b> (full-month, ' +
+                        'persistence extrapolation from ' + (p.n_days || '?') +
+                        '-day MTD)<br>X: %{x:.2f}<br>Y: %{y:.2f}<extra></extra>',
+                    showlegend: true,
+                    name: p.year + ' projected full-month',
+                });
+                // Connect MTD → projected with a thin dotted line so users
+                // see at a glance how much extrapolation is happening.
+                traces.push({
+                    type: 'scatter', mode: 'lines',
+                    x: [cur.x, p.x], y: [cur.y, p.y],
+                    line: { color: 'rgba(255,0,255,0.55)', width: 1, dash: 'dot' },
+                    hoverinfo: 'skip', showlegend: false,
+                });
+            }
         }
 
         var titleVar = (state.scatter.variable === 'anom') ? 'SST anomaly'
@@ -232,13 +343,22 @@
             },
             xaxis: { title: _axisTitle(bundle.xKey, state.scatter.x), zeroline: false },
             yaxis: { title: _axisTitle(bundle.yKey, state.scatter.y), zeroline: false },
-            margin: { l: 60, r: 10, t: 40, b: 50 },
+            margin: { l: 60, r: 10, t: 60, b: 70 },
             paper_bgcolor: 'rgba(0,0,0,0)',
-            plot_bgcolor: 'rgba(255,255,255,0.02)',
-            font: { color: '#e0e0e0', size: 11 },
-            showlegend: false,
+            plot_bgcolor: 'rgba(255,255,255,0.015)',
+            font: { color: BRAND.text, family: 'DM Sans, system-ui, sans-serif',
+                    size: 11 },
+            showlegend: !!(bundle.current && bundle.current.preliminary),
+            legend: {
+                font: { size: 10 }, orientation: 'h',
+                x: 0, y: 1.10, xanchor: 'left', yanchor: 'bottom',
+                bgcolor: 'rgba(0,0,0,0)',
+            },
             hovermode: 'closest',
+            annotations: _watermarkAnnotations(),
         };
+        // Suppress legend entries from the historical-cloud trace
+        traces[0].showlegend = false;
         Plotly.react(el, traces, layout,
                      { responsive: true, displaylogo: false });
     }
@@ -316,7 +436,7 @@
         var traces = [];
         var currentYear = (new Date()).getUTCFullYear();
 
-        // ±1σ envelope (upper + lower bound, fill between)
+        // ±1σ envelope (upper + lower bound, soft green fill)
         var hasClim = bundle.climMean[0] !== null;
         if (hasClim) {
             var upper = bundle.climMean.map(function (m, i) {
@@ -327,51 +447,50 @@
             });
             traces.push({
                 type: 'scatter', mode: 'lines', x: months, y: upper,
-                line: { color: 'rgba(120,170,210,0)', width: 0 },
+                line: { color: 'transparent', width: 0 },
                 showlegend: false, hoverinfo: 'skip', name: '+1σ',
             });
             traces.push({
                 type: 'scatter', mode: 'lines', x: months, y: lower,
-                fill: 'tonexty', fillcolor: 'rgba(120,170,210,0.18)',
-                line: { color: 'rgba(120,170,210,0)', width: 0 },
-                showlegend: false, hoverinfo: 'skip', name: '−1σ',
+                fill: 'tonexty', fillcolor: BRAND.green_dim,
+                line: { color: 'transparent', width: 0 },
+                showlegend: true, hoverinfo: 'skip',
+                name: '1991-2020 ±1σ envelope',
             });
         }
 
-        // Historical years (gray, thin)
+        // Historical years (subtle gray, thin)
         var histYears = bundle.years.filter(function (y) {
             if (y === currentYear) return false;
             if (state.ts.history === 'none') return false;
             if (state.ts.history === 'recent10') return y >= currentYear - 10;
             return true;
         });
-        histYears.forEach(function (y) {
+        histYears.forEach(function (y, idx) {
             traces.push({
                 type: 'scatter', mode: 'lines', x: months, y: bundle.byYear[y],
-                line: { color: 'rgba(180,180,200,0.20)', width: 1 },
-                showlegend: false,
-                name: String(y),
+                line: { color: BRAND.gray, width: 1 },
+                showlegend: idx === 0,   // single legend entry for all hist
+                legendgroup: 'history',
+                name: 'historical years (1982-' + (currentYear - 1) + ')',
                 hovertemplate: y + ' · %{x}: %{y:.2f}<extra></extra>',
             });
         });
 
-        // Climatology mean (heavier)
+        // Climatology mean — heavier solid line in brand green
         if (hasClim) {
             traces.push({
                 type: 'scatter', mode: 'lines', x: months, y: bundle.climMean,
-                line: { color: 'rgba(80,170,230,0.95)', width: 2.5,
-                        dash: 'solid' },
+                line: { color: BRAND.green_line, width: 2.8 },
                 name: '1991-2020 mean',
-                hovertemplate: 'Climo · %{x}: %{y:.2f}<extra></extra>',
+                hovertemplate: 'Climatology · %{x}: %{y:.2f}<extra></extra>',
             });
         }
 
-        // Current year — bold colored line, marker on the final point
-        // if it's a preliminary month-to-date value.
+        // Current year — bold brand orange line.
         if (bundle.byYear[currentYear]) {
             var cur = bundle.byYear[currentYear];
             var prelim = bundle.preliminaryByYear[currentYear];
-            // Find prelim month indices for distinct markers
             var prelimMonths = [], prelimVals = [];
             for (var k = 0; k < 12; k++) {
                 if (prelim[k] && cur[k] !== null) {
@@ -382,9 +501,11 @@
             traces.push({
                 type: 'scatter', mode: 'lines+markers',
                 x: months, y: cur,
-                line: { color: 'rgba(255,0,255,0.95)', width: 2.5 },
-                marker: { size: 6, color: 'rgba(255,0,255,0.95)' },
-                name: String(currentYear),
+                line: { color: BRAND.orange_line, width: 3, shape: 'spline',
+                        smoothing: 0.3 },
+                marker: { size: 7, color: BRAND.orange,
+                          line: { color: '#1a1f25', width: 1.2 } },
+                name: String(currentYear) + ' (so far)',
                 hovertemplate: currentYear + ' · %{x}: %{y:.2f}<extra></extra>',
             });
             if (prelimMonths.length) {
@@ -392,11 +513,11 @@
                     type: 'scatter', mode: 'markers',
                     x: prelimMonths, y: prelimVals,
                     marker: {
-                        symbol: 'star-open', size: 16,
-                        color: 'rgba(255,0,255,0.95)',
-                        line: { color: '#000', width: 2 },
+                        symbol: 'star-open', size: 18,
+                        color: BRAND.orange,
+                        line: { color: BRAND.orange, width: 2.2 },
                     },
-                    name: 'preliminary',
+                    name: 'preliminary month-to-date',
                     hovertemplate: currentYear +
                         ' · %{x}: %{y:.2f} (preliminary)<extra></extra>',
                 });
@@ -408,20 +529,41 @@
                      : (state.ts.variable === 'sst_dt') ? 'detrended SST (°C)'
                      : 'SST (°C)';
         var layout = {
-            title: { text: label + ' — Monthly ' + varLabel, font: { size: 14 } },
-            xaxis: {
-                title: 'Month', tickmode: 'array', tickvals: months,
-                ticktext: monNames, zeroline: false,
+            title: {
+                text: label + ' — monthly ' + varLabel,
+                font: { size: 15, family: 'DM Sans, system-ui, sans-serif',
+                        weight: 600 },
+                xanchor: 'left', x: 0.01,
             },
-            yaxis: { title: varLabel, zeroline: state.ts.variable !== 'sst' },
-            margin: { l: 60, r: 10, t: 40, b: 50 },
+            xaxis: {
+                title: { text: 'Month',
+                         font: { size: 11, color: BRAND.textDim } },
+                tickmode: 'array', tickvals: months,
+                ticktext: monNames, zeroline: false,
+                gridcolor: 'rgba(140,148,160,0.10)',
+                tickfont: { size: 11 },
+            },
+            yaxis: {
+                title: { text: varLabel,
+                         font: { size: 11, color: BRAND.textDim } },
+                zeroline: state.ts.variable !== 'sst',
+                zerolinecolor: 'rgba(140,148,160,0.40)',
+                gridcolor: 'rgba(140,148,160,0.10)',
+                tickfont: { size: 11 },
+            },
+            margin: { l: 64, r: 18, t: 52, b: 78 },
             paper_bgcolor: 'rgba(0,0,0,0)',
-            plot_bgcolor: 'rgba(255,255,255,0.02)',
-            font: { color: '#e0e0e0', size: 11 },
+            plot_bgcolor: 'rgba(255,255,255,0.015)',
+            font: { color: BRAND.text, family: 'DM Sans, system-ui, sans-serif',
+                    size: 11 },
             hovermode: 'closest',
             showlegend: true,
-            legend: { font: { size: 10 }, orientation: 'h',
-                      yanchor: 'top', y: -0.18 },
+            legend: {
+                font: { size: 10 }, orientation: 'h',
+                yanchor: 'top', y: -0.18, x: 0, xanchor: 'left',
+                bgcolor: 'rgba(0,0,0,0)',
+            },
+            annotations: _watermarkAnnotations(),
         };
         Plotly.react(el, traces, layout,
                      { responsive: true, displaylogo: false });
@@ -651,13 +793,15 @@
             xaxis: { title: 'Date', zeroline: false },
             yaxis: { title: 'SST anomaly (°C)', zeroline: true,
                      zerolinecolor: 'rgba(255,255,255,0.18)' },
-            margin: { l: 60, r: 10, t: 40, b: 60 },
+            margin: { l: 64, r: 18, t: 52, b: 80 },
             paper_bgcolor: 'rgba(0,0,0,0)',
-            plot_bgcolor: 'rgba(255,255,255,0.02)',
-            font: { color: '#e0e0e0', size: 11 },
+            plot_bgcolor: 'rgba(255,255,255,0.015)',
+            font: { color: BRAND.text, family: 'DM Sans, system-ui, sans-serif',
+                    size: 11 },
             hovermode: 'x unified',
             legend: { font: { size: 10 }, orientation: 'h',
-                      yanchor: 'top', y: -0.18 },
+                      yanchor: 'top', y: -0.18,
+                      bgcolor: 'rgba(0,0,0,0)' },
             shapes: [
                 {type: 'line', xref: 'paper', x0: 0, x1: 1,
                  yref: 'y', y0: 0.5, y1: 0.5,
@@ -666,6 +810,7 @@
                  yref: 'y', y0: -0.5, y1: -0.5,
                  line: {color: 'rgba(80,140,210,0.35)', width: 1, dash: 'dot'}},
             ],
+            annotations: _watermarkAnnotations(),
         };
         Plotly.react(el, traces, layout,
                      { responsive: true, displaylogo: false });
@@ -989,6 +1134,12 @@
             _renderAnalogs();
             _renderIndices();
             _renderAnomMap();
+            _addPlotSaveBtn('seasonal-panel-scatter', 'seasonal-scatter-plot',
+                            'seasonal_scatter');
+            _addPlotSaveBtn('seasonal-panel-timeseries', 'seasonal-ts-plot',
+                            'seasonal_region_timeseries');
+            _addPlotSaveBtn('seasonal-panel-indices', 'seasonal-idx-plot',
+                            'seasonal_climate_indices');
         }).catch(function (e) {
             _setStatus('Failed to load seasonal data: ' + e.message, true);
         });

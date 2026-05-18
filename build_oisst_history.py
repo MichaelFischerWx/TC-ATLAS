@@ -305,14 +305,48 @@ def build_climatology(out_path: Path, monthly_path: str | None = None) -> Path:
 # Step 2: Monthly region indices (full history)
 # --------------------------------------------------------------------------
 
+def _interp_daily_clim(climo_mean: xr.DataArray, year: int, month: int,
+                       day: int) -> np.ndarray:
+    """Linearly interpolate the 12-month climatology to a specific calendar
+    day. Treats each month's value as anchored at the 15th and advances
+    fractionally toward the adjacent month's 15th."""
+    import pandas as pd
+    d = pd.Timestamp(year, month, day)
+    this_15 = pd.Timestamp(year, month, 15)
+    if d >= this_15:
+        m_lo, m_hi = month, (month % 12) + 1
+        next_15 = (pd.Timestamp(year + 1, 1, 15) if month == 12
+                   else pd.Timestamp(year, month + 1, 15))
+        frac = (d - this_15).days / (next_15 - this_15).days
+    else:
+        m_hi = month
+        m_lo = 12 if month == 1 else month - 1
+        prev_15 = (pd.Timestamp(year - 1, 12, 15) if month == 1
+                   else pd.Timestamp(year, month - 1, 15))
+        frac = (d - prev_15).days / (this_15 - prev_15).days
+    a = climo_mean.sel(month=m_lo).values
+    b = climo_mean.sel(month=m_hi).values
+    return a + (b - a) * frac
+
+
 def _fetch_current_month_preliminary(climo_mean: xr.DataArray) -> dict | None:
     """Fetch all available days of the current calendar month from PSL daily
-    OPeNDAP one timestep at a time, average them, and return a preliminary
-    row of region-mean SST + anomaly.
+    OPeNDAP one timestep at a time and return a row containing TWO sets
+    of region values:
 
-    Single-day fetches are the only reliable PSL OPeNDAP pattern (multi-day
-    slices silently return mostly-zero data) — see the project memory note.
-    Roughly ~2 s per day × 16-18 days ≈ 30-40 s for a full month-to-date.
+      `{region}_sst` / `{region}_anom`
+          Preliminary month-to-date (MTD): the mean of daily values
+          observed so far this month. Anomaly uses a proper
+          daily-climatology subtraction (sst_day - climo_day for each
+          day, then averaged) so the within-month seasonal cycle is
+          not mistaken for a real anomaly.
+
+      `{region}_sst_projected` / `{region}_anom_projected`
+          Extrapolated full-month value, assuming the days remaining in
+          the month carry the same anomaly as the days observed so far:
+          projected_full_sst = climo_full_month + mtd_anom.
+          The corresponding anomaly equals mtd_anom by construction.
+
     Returns None if the open fails or no days have finite data yet.
     """
     today = datetime.now(timezone.utc).date()
@@ -327,12 +361,12 @@ def _fetch_current_month_preliminary(climo_mean: xr.DataArray) -> dict | None:
     try:
         sub = ds.sel(lat=slice(LAT_MIN, LAT_MAX), lon=slice(LON_MIN, LON_MAX))
         all_times = sub["time"].values
-        # Day indices in the current month
-        day_idx = []
+        day_idx, day_nums = [], []
         for i, t in enumerate(all_times):
             ts = str(t)[:10]
             if ts.startswith(f"{year}-{month:02d}-"):
                 day_idx.append(i)
+                day_nums.append(int(ts[8:10]))
         if not day_idx:
             log.warning("  preliminary current-month: no days available yet")
             return None
@@ -340,14 +374,19 @@ def _fetch_current_month_preliminary(climo_mean: xr.DataArray) -> dict | None:
         lon_vals = sub["lon"].values.copy()
         log.info("  fetching %d daily slabs one-at-a-time for %d-%02d ...",
                  len(day_idx), year, month)
-        accum_sum = np.zeros((len(lat_vals), len(lon_vals)), dtype=np.float64)
-        accum_n = np.zeros((len(lat_vals), len(lon_vals)), dtype=np.int32)
-        for k in day_idx:
+        shape = (len(lat_vals), len(lon_vals))
+        accum_sst = np.zeros(shape, dtype=np.float64)
+        accum_anom = np.zeros(shape, dtype=np.float64)
+        accum_n = np.zeros(shape, dtype=np.int32)
+        for k, d in zip(day_idx, day_nums):
             slab = sub["sst"].isel(time=k).load()
             v = np.ascontiguousarray(slab.values)
             v[np.abs(v) > 50.0] = np.nan
+            climo_day = _interp_daily_clim(climo_mean, year, month, d)
+            anom = v - climo_day
             mask = np.isfinite(v)
-            accum_sum[mask] += v[mask]
+            accum_sst[mask] += v[mask]
+            accum_anom[mask] += anom[mask]
             accum_n[mask] += 1
     finally:
         ds.close()
@@ -356,23 +395,35 @@ def _fetch_current_month_preliminary(climo_mean: xr.DataArray) -> dict | None:
         log.warning("  preliminary current-month: all days returned no data")
         return None
     with np.errstate(invalid="ignore", divide="ignore"):
-        sst_m2d = np.where(accum_n > 0, accum_sum / accum_n, np.nan)
+        mtd_sst = np.where(accum_n > 0, accum_sst / accum_n, np.nan)
+        mtd_anom = np.where(accum_n > 0, accum_anom / accum_n, np.nan)
 
-    sst_da = xr.DataArray(
-        sst_m2d.astype(np.float32), dims=("lat", "lon"),
-        coords={"lat": lat_vals, "lon": lon_vals},
-        name="sst",
-    )
-    anom_da = sst_da - climo_mean.sel(month=month)
+    climo_full = climo_mean.sel(month=month).values
+    # Projected full-month SST assumes the remaining days hold the same
+    # anomaly as the days observed so far.
+    projected_sst = climo_full + mtd_anom
+
+    def _da(arr): return xr.DataArray(
+        arr.astype(np.float32), dims=("lat", "lon"),
+        coords={"lat": lat_vals, "lon": lon_vals}, name="sst")
+
+    mtd_sst_da = _da(mtd_sst)
+    mtd_anom_da = _da(mtd_anom)
+    projected_sst_da = _da(projected_sst)
+
     row = {"date": f"{year}-{month:02d}", "preliminary": True,
-           "n_days": int(len(day_idx)),
-           "as_of": today.isoformat()}
+           "n_days": int(len(day_idx)), "as_of": today.isoformat()}
     for name, box in REGIONS.items():
-        row[f"{name}_sst"]  = round(float(_region_mean(sst_da,  box).values), 4)
-        row[f"{name}_anom"] = round(float(_region_mean(anom_da, box).values), 4)
-    log.info("  %d-%02d preliminary (n=%d days): MDR anom=%+.2f, AMO anom=%+.2f, Niño3.4 anom=%+.2f",
+        row[f"{name}_sst"]            = round(float(_region_mean(mtd_sst_da,        box).values), 4)
+        row[f"{name}_anom"]           = round(float(_region_mean(mtd_anom_da,       box).values), 4)
+        row[f"{name}_sst_projected"]  = round(float(_region_mean(projected_sst_da,  box).values), 4)
+        # Projected anom equals MTD anom by construction (persistence).
+        row[f"{name}_anom_projected"] = row[f"{name}_anom"]
+    log.info("  %d-%02d preliminary (n=%d days): MDR mtd-anom=%+.2f → proj-sst=%.2f, AMO mtd-anom=%+.2f → proj-sst=%.2f, Niño3.4 mtd-anom=%+.2f → proj-sst=%.2f",
              year, month, row["n_days"],
-             row["atl_mdr_anom"], row["atl_amo_anom"], row["nino34_anom"])
+             row["atl_mdr_anom"], row["atl_mdr_sst_projected"],
+             row["atl_amo_anom"], row["atl_amo_sst_projected"],
+             row["nino34_anom"], row["nino34_sst_projected"])
     return row
 
 
@@ -420,38 +471,19 @@ def build_indices(climo_path: Path, out_path: Path,
     df["preliminary"] = False
     df["n_days"] = 0  # placeholder for finalized rows
     df["as_of"] = ""
+    # Two-marker fields for the current-year preliminary point. Filled
+    # with NaN on every finalized row; populated only for the preliminary
+    # current-month row by `_fetch_current_month_preliminary`.
+    for name in REGIONS:
+        df[f"{name}_sst_projected"] = np.nan
+        df[f"{name}_anom_projected"] = np.nan
     log.info("  built finalized indices table: %d rows × %d cols",
              len(df), len(df.columns))
 
-    # Detrended SST: per-(region, calendar-month) linear-in-year trend fit
-    # across all finalized rows, subtracted off. Result is the year's
-    # deviation from the locally-fit trend, stored as `{region}_sst_dt`.
-    # Preliminary current-month rows reuse the trend fitted on finalized
-    # data only (don't let a partial month influence the fit).
-    df["_year"] = pd.to_datetime(df["date"]).dt.year
-    df["_month"] = pd.to_datetime(df["date"]).dt.month
-    for name in REGIONS:
-        col_sst = f"{name}_sst"
-        col_dt = f"{name}_sst_dt"
-        df[col_dt] = np.nan
-        for m in range(1, 13):
-            mask = (df["_month"] == m) & (~df["preliminary"])
-            if mask.sum() < 4:
-                continue
-            ys = df.loc[mask, "_year"].values.astype(np.float64)
-            vs = df.loc[mask, col_sst].values.astype(np.float64)
-            slope, intercept = np.polyfit(ys, vs, 1)
-            # Subtract trend across ALL rows of that month (finalized + prelim)
-            full_mask = (df["_month"] == m)
-            full_ys = df.loc[full_mask, "_year"].values.astype(np.float64)
-            full_vs = df.loc[full_mask, col_sst].values.astype(np.float64)
-            df.loc[full_mask, col_dt] = np.round(
-                full_vs - (slope * full_ys + intercept), 4
-            )
-    df = df.drop(columns=["_year", "_month"])
-
     # Preliminary current-month row (if not already covered by the
-    # monthly file and the daily fetch succeeds).
+    # monthly file and the daily fetch succeeds). Append BEFORE
+    # detrending so the prelim row picks up a real `{region}_sst_dt`
+    # value from the trend fit on finalized data.
     if with_preliminary:
         today = datetime.now(timezone.utc).date()
         cur_month = f"{today.year}-{today.month:02d}"
@@ -459,15 +491,50 @@ def build_indices(climo_path: Path, out_path: Path,
             prelim = _fetch_current_month_preliminary(clim_mean)
             if prelim:
                 prelim_df = pd.DataFrame([{**prelim}])
-                # Fill any missing columns with sensible defaults so the
-                # concat is clean.
-                for col in df.columns:
-                    if col not in prelim_df.columns:
-                        prelim_df[col] = "" if df[col].dtype == object else 0
+                # Any column missing from the prelim row stays NaN (so
+                # downstream code can detect "not applicable" properly
+                # instead of seeing a misleading 0).
                 df = pd.concat([df, prelim_df], ignore_index=True)
                 df = df.sort_values("date").reset_index(drop=True)
                 log.info("  appended preliminary row for %s (n=%d days)",
                          prelim["date"], prelim["n_days"])
+
+    # Detrended SST: per-(region, calendar-month) linear-in-year trend fit
+    # across finalized rows only, subtracted off every row (finalized +
+    # preliminary). Result is the year's deviation from the locally-fit
+    # trend, stored as `{region}_sst_dt`. Done AFTER prelim append so the
+    # prelim row also gets a detrended value.
+    df["_year"] = pd.to_datetime(df["date"]).dt.year
+    df["_month"] = pd.to_datetime(df["date"]).dt.month
+    for name in REGIONS:
+        col_sst = f"{name}_sst"
+        col_dt = f"{name}_sst_dt"
+        col_sst_p = f"{name}_sst_projected"
+        col_dt_p = f"{name}_sst_dt_projected"
+        df[col_dt] = np.nan
+        df[col_dt_p] = np.nan
+        for m in range(1, 13):
+            mask = (df["_month"] == m) & (~df["preliminary"])
+            if mask.sum() < 4:
+                continue
+            ys = df.loc[mask, "_year"].values.astype(np.float64)
+            vs = df.loc[mask, col_sst].values.astype(np.float64)
+            slope, intercept = np.polyfit(ys, vs, 1)
+            full_mask = (df["_month"] == m)
+            full_ys = df.loc[full_mask, "_year"].values.astype(np.float64)
+            full_vs = df.loc[full_mask, col_sst].values.astype(np.float64)
+            df.loc[full_mask, col_dt] = np.round(
+                full_vs - (slope * full_ys + intercept), 4
+            )
+            # Apply the same trend to the projected full-month SST so
+            # the preliminary row also gets a meaningful detrended-
+            # projected value. Finalized rows have NaN here.
+            if col_sst_p in df.columns:
+                proj_vs = df.loc[full_mask, col_sst_p].values.astype(np.float64)
+                df.loc[full_mask, col_dt_p] = np.round(
+                    proj_vs - (slope * full_ys + intercept), 4
+                )
+    df = df.drop(columns=["_year", "_month"])
 
     # Frontend-friendly JSON sidecar — keeps the per-column lists plus
     # a top-level `preliminary` boolean list aligned with `dates` so the
@@ -475,10 +542,15 @@ def build_indices(climo_path: Path, out_path: Path,
     json_path = out_path.with_suffix(".json")
     value_cols = [c for c in df.columns
                   if c not in ("date", "preliminary", "n_days", "as_of")]
+
+    def _nan_to_none(s):
+        """Convert pandas series → JSON-safe list with None for NaN."""
+        return [None if pd.isna(v) else round(float(v), 3) for v in s]
+
     payload = {
         "regions": list(REGIONS.keys()),
         "dates": df["date"].tolist(),
-        "values": {col: df[col].round(3).tolist() for col in value_cols},
+        "values": {col: _nan_to_none(df[col]) for col in value_cols},
         "preliminary": df["preliminary"].astype(bool).tolist(),
         "preliminary_n_days": df["n_days"].astype(int).tolist(),
         "climatology_period": f"{CLIMO_START_YEAR}-{CLIMO_END_YEAR}",
