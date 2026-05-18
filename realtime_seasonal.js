@@ -227,6 +227,66 @@
             '  |  MDR anom ' + state.latest.indices.atl_mdr_anom.toFixed(2) + ' °C' +
             '  |  AMO anom ' + state.latest.indices.atl_amo_anom.toFixed(2) + ' °C' +
             '  |  Niño 3.4 anom ' + state.latest.indices.nino34_anom.toFixed(2) + ' °C';
+
+        // Load hover sidecar (small JSON, 1° grid of anomaly °C). Fail
+        // silently — without it, the map still renders, the tooltip just
+        // doesn't appear.
+        if (state.latest.anom_grid) {
+            _fetchData(state.latest.anom_grid).then(function (g) {
+                state.anom_grid = g;
+                _wireAnomHover();
+            }).catch(function () { state.anom_grid = null; });
+        }
+    }
+
+    function _wireAnomHover() {
+        var wrap = document.getElementById('seasonal-anom-wrap');
+        var img = document.getElementById('seasonal-anom-img');
+        var tip = document.getElementById('seasonal-anom-tooltip');
+        var g = state.anom_grid;
+        if (!wrap || !img || !tip || !g) return;
+        if (wrap._anomHoverBound) return;   // bind once
+        wrap._anomHoverBound = true;
+
+        wrap.addEventListener('mousemove', function (e) {
+            // Image rect is the actual rendered img inside the wrap;
+            // letterboxing may leave gaps. We use img.getBoundingClientRect()
+            // so out-of-image cursor positions disappear.
+            var r = img.getBoundingClientRect();
+            var x = e.clientX - r.left;
+            var y = e.clientY - r.top;
+            if (x < 0 || y < 0 || x > r.width || y > r.height) {
+                tip.classList.remove('visible'); return;
+            }
+            // Mouse → lon/lat, mapping x → [lon_min, lon_max] and
+            // y → [lat_max, lat_min] (top-down in screen space).
+            var lon = g.lon_min + (x / r.width) * (g.lon_max - g.lon_min);
+            var lat = g.lat_max - (y / r.height) * (g.lat_max - g.lat_min);
+            var i = Math.floor((lat - g.lat_min) / (g.lat_max - g.lat_min) * g.n_lat);
+            var j = Math.floor((lon - g.lon_min) / (g.lon_max - g.lon_min) * g.n_lon);
+            i = Math.max(0, Math.min(g.n_lat - 1, i));
+            j = Math.max(0, Math.min(g.n_lon - 1, j));
+            var v = g.values[i][j];
+            // Display lon as 0-360E or as °W when > 180.
+            var lonLabel = lon > 180 ? (360 - lon).toFixed(1) + '°W'
+                                     : lon.toFixed(1) + '°E';
+            var latLabel = (lat >= 0 ? lat.toFixed(1) + '°N'
+                                     : (-lat).toFixed(1) + '°S');
+            var valLabel = (v === null || v === undefined)
+                ? 'land / no data'
+                : (v >= 0 ? '+' : '') + v.toFixed(2) + ' °C anom';
+            tip.textContent = latLabel + ', ' + lonLabel + '  |  ' + valLabel;
+            // Place near cursor, clamp inside wrap bounds.
+            var wr = wrap.getBoundingClientRect();
+            var tx = e.clientX - wr.left;
+            var ty = e.clientY - wr.top;
+            tip.style.left = tx + 'px';
+            tip.style.top = ty + 'px';
+            tip.classList.add('visible');
+        });
+        wrap.addEventListener('mouseleave', function () {
+            tip.classList.remove('visible');
+        });
     }
 
     // -------------------------------------------------------------------

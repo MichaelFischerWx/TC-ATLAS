@@ -845,10 +845,11 @@
             <!-- Panel A: Live Atlantic SST anomaly map (lazy stub) -->
             <section class="seasonal-panel" id="seasonal-panel-anom-map">
                 <h3 class="seasonal-panel-title">A · Live Atlantic SST Anomaly</h3>
-                <div class="seasonal-anom-wrap">
+                <div class="seasonal-anom-wrap" id="seasonal-anom-wrap">
                     <img id="seasonal-anom-img" class="seasonal-anom-img"
                          alt="Current Atlantic SST anomaly map">
                     <div class="seasonal-anom-overlay" id="seasonal-anom-caption">—</div>
+                    <div class="seasonal-anom-tooltip" id="seasonal-anom-tooltip"></div>
                 </div>
                 <div class="seasonal-anom-legend">
                     <span>−3 °C</span>
@@ -1037,7 +1038,7 @@
     <script>document.write('<script src="satellite.js'+window.__v+'"><\/script>');</script>
     <script>document.write('<script src="realtime_subseasonal.js'+window.__v+'"><\/script>');</script>
     <script>document.write('<script src="realtime_seasonal.js'+window.__v+'"><\/script>');</script>
-    <link rel="stylesheet" href="realtime_seasonal_styles.css">
+    <script>document.write('<link rel="stylesheet" href="realtime_seasonal_styles.css'+window.__v+'">');</script>
 
     <script>
     /* Tab switching between Map, Satellite, and Subseasonal views */

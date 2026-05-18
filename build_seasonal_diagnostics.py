@@ -193,11 +193,15 @@ import pandas as pd
 
 
 def render_anomaly_png(anom: xr.DataArray, valid_time: str) -> Path:
-    """Render the Atlantic-centric anomaly PNG with a fixed diverging cmap."""
+    """Render the Atlantic-centric anomaly PNG with a fixed diverging cmap.
+
+    Also writes a small JSON sidecar (anom_<valid_time>.grid.json) holding
+    the binned anomaly grid (downsampled to 1° so the payload stays under
+    30 KB) for the frontend's mouse-hover tooltip.
+    """
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    from matplotlib.colors import Normalize
 
     sub = anom.sel(lat=slice(PNG_LAT_MIN, PNG_LAT_MAX),
                    lon=slice(PNG_LON_MIN, PNG_LON_MAX))
@@ -206,7 +210,7 @@ def render_anomaly_png(anom: xr.DataArray, valid_time: str) -> Path:
 
     # Fixed figure size keeps PNGs at a stable resolution (~800 px wide).
     fig, ax = plt.subplots(figsize=(8.0, 8.0 / aspect))
-    im = ax.imshow(
+    ax.imshow(
         sub.values, origin="lower",
         extent=[PNG_LON_MIN, PNG_LON_MAX, PNG_LAT_MIN, PNG_LAT_MAX],
         cmap="RdBu_r", vmin=PNG_VMIN, vmax=PNG_VMAX,
@@ -219,6 +223,27 @@ def render_anomaly_png(anom: xr.DataArray, valid_time: str) -> Path:
     fig.savefig(out, dpi=100, bbox_inches="tight", pad_inches=0,
                 transparent=True)
     plt.close(fig)
+
+    # Hover sidecar: 1° lat × 1° lon grid covering the same extent as the
+    # PNG. Each cell holds a 1-decimal anomaly °C, or null for land/missing.
+    # At PNG_LAT (-5..60) × PNG_LON (260..360) = 65 × 100 = 6500 cells
+    # → ~25 KB JSON.
+    coarse = sub.coarsen(lat=4, lon=4, boundary="trim").mean()
+    vals = coarse.values
+    grid_payload = {
+        "valid_time": valid_time,
+        "lat_min": PNG_LAT_MIN, "lat_max": PNG_LAT_MAX,
+        "lon_min": PNG_LON_MIN, "lon_max": PNG_LON_MAX,
+        "cell_size_deg": 1.0,
+        "n_lat": int(vals.shape[0]), "n_lon": int(vals.shape[1]),
+        # Row-major (lat × lon), south-to-north, west-to-east. Null for NaN.
+        "values": [[None if not np.isfinite(v) else round(float(v), 2)
+                    for v in row] for row in vals],
+    }
+    grid_path = WORK_DIR / f"anom_{valid_time}.grid.json"
+    grid_path.write_text(json.dumps(grid_payload, separators=(",", ":")))
+    log.info("  wrote hover sidecar %s (%.1f KB)",
+             grid_path.name, grid_path.stat().st_size / 1024.0)
     return out
 
 
@@ -262,6 +287,7 @@ def write_latest_json(row: dict, png_name: str) -> None:
     payload = {
         "valid_date": row["date"],
         "anom_png": png_name,
+        "anom_grid": png_name.replace(".png", ".grid.json"),
         "indices": {k: v for k, v in row.items() if k not in ("date", "dayofyear")},
         "generated_utc": datetime.now(timezone.utc).isoformat(),
     }
@@ -300,8 +326,13 @@ def main():
     if args.local_only:
         log.info("Local-only mode: skipping GCS uploads")
     else:
-        log.info("Uploading PNG ...")
+        log.info("Uploading PNG + hover-sidecar ...")
         _upload_blob(png_path, f"anom_png/{row['date']}.png", "image/png")
+        grid_path = WORK_DIR / f"anom_{row['date']}.grid.json"
+        if grid_path.exists():
+            _upload_blob(grid_path,
+                         f"anom_png/{row['date']}.grid.json",
+                         "application/json")
         log.info("Appending daily indices parquet ...")
         append_to_daily_parquet(row)
         log.info("Writing latest.json ...")

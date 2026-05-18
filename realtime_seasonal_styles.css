@@ -1,14 +1,21 @@
 /* Real-Time Monitor — Seasonal tab styles. */
 
 .seasonal-main {
+    /* Match the Subseasonal tab's positioning so the content sits below
+       the fixed topbar + secondary tab bar instead of sliding under
+       them when scrolled to the top. */
+    position: fixed;
+    top: calc(var(--topbar-h, 48px) + 33px);
+    left: 0;
+    right: 0;
+    bottom: 0;
     display: flex;
     flex-direction: column;
-    min-height: 0;
-    flex: 1;
     overflow: auto;
     padding: 14px 18px 28px;
     color: var(--text, #e0e0e0);
     background: var(--surface, #0d1117);
+    font-family: 'DM Sans', system-ui, sans-serif;
 }
 
 .seasonal-header {
@@ -209,7 +216,28 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    cursor: crosshair;
 }
+
+.seasonal-anom-tooltip {
+    position: absolute;
+    pointer-events: none;
+    padding: 3px 8px;
+    background: rgba(10,12,14,0.88);
+    color: #fff;
+    font: 11px/1.3 'JetBrains Mono', ui-monospace, monospace;
+    border-radius: 3px;
+    /* JS positions `left`/`top` to the cursor; this offset keeps the tip
+       a few px clear so the cursor doesn't sit on the box. */
+    transform: translate(12px, 12px);
+    opacity: 0;
+    transition: opacity 80ms ease-out;
+    white-space: nowrap;
+    z-index: 5;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+}
+
+.seasonal-anom-tooltip.visible { opacity: 1; }
 
 .seasonal-anom-img {
     max-width: 100%;
