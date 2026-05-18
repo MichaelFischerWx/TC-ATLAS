@@ -55,6 +55,45 @@
 
 .seasonal-status-error { color: #ff7066; }
 
+/* Sticky sub-nav: a row of chip-style links to each panel. Sits just
+   under the page header and stays visible while scrolling, so the page
+   never feels like an unstructured stack of figures. */
+.seasonal-subnav {
+    position: sticky;
+    top: 0;
+    z-index: 6;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 6px;
+    padding: 6px 0 10px;
+    margin: 0 0 14px;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    background: var(--surface, #0d1117);
+}
+.seasonal-subnav a {
+    flex: 0 0 auto;
+    padding: 4px 10px;
+    font-size: 0.72rem;
+    font-weight: 500;
+    color: var(--text-dim, #94a3b8);
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 14px;
+    text-decoration: none;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+    white-space: nowrap;
+}
+.seasonal-subnav a:hover {
+    color: var(--text, #e0e0e0);
+    background: rgba(251,146,60,0.10);
+    border-color: rgba(251,146,60,0.40);
+}
+.seasonal-subnav a.active {
+    color: #fb923c;
+    background: rgba(251,146,60,0.12);
+    border-color: rgba(251,146,60,0.50);
+}
+
 .seasonal-body {
     display: grid;
     grid-template-columns: 1fr 1fr;

@@ -45,6 +45,46 @@
               'nino12', 'nino3', 'nino34', 'nino4'],
     };
 
+    // Sub-nav wiring: smooth-scroll to the target panel within the
+    // seasonal-main scroll container (window scrolling is disabled by
+    // .seasonal-main {position: fixed; overflow: auto}). Also highlights
+    // the currently-visible section via IntersectionObserver.
+    function _wireSubnav() {
+        var nav = document.querySelector('.seasonal-subnav');
+        var main = document.getElementById('seasonal-main');
+        if (!nav || !main || nav._wired) return;
+        nav._wired = true;
+
+        var links = Array.from(nav.querySelectorAll('a'));
+        links.forEach(function (a) {
+            a.addEventListener('click', function (e) {
+                e.preventDefault();
+                var t = document.getElementById(a.dataset.target);
+                if (!t) return;
+                var navH = nav.getBoundingClientRect().height;
+                var top = t.offsetTop - navH - 8;
+                main.scrollTo({ top: top, behavior: 'smooth' });
+            });
+        });
+
+        // Highlight whichever panel is closest to the top of the viewport.
+        var byId = {};
+        links.forEach(function (a) { byId[a.dataset.target] = a; });
+        var observer = new IntersectionObserver(function (entries) {
+            entries.forEach(function (entry) {
+                if (entry.isIntersecting) {
+                    links.forEach(function (a) { a.classList.remove('active'); });
+                    var link = byId[entry.target.id];
+                    if (link) link.classList.add('active');
+                }
+            });
+        }, { root: main, rootMargin: '-80px 0px -70% 0px', threshold: 0 });
+        links.forEach(function (a) {
+            var t = document.getElementById(a.dataset.target);
+            if (t) observer.observe(t);
+        });
+    }
+
     function _setStatus(msg, isError) {
         var el = document.getElementById('seasonal-status');
         if (!el) return;
@@ -142,6 +182,8 @@
     }
 
     // TC-ATLAS brand palette (mirrors the variables in tc_radar_styles.css).
+    // `text`/`textDim`/`grid` swap based on the active theme so axis labels
+    // stay readable in both modes — see _refreshTheme() below.
     var BRAND = {
         orange: '#fb923c',
         orange_dim: 'rgba(251,146,60,0.18)',
@@ -150,20 +192,62 @@
         green_dim: 'rgba(34,197,94,0.14)',
         green_line: 'rgba(34,197,94,0.85)',
         gray: 'rgba(140,148,160,0.18)',
+        // Defaults reflect dark mode; replaced on activate + theme-change.
         text: '#e0e0e0',
         textDim: '#a0a8b3',
+        grid: 'rgba(140,148,160,0.14)',
+        gridZero: 'rgba(140,148,160,0.42)',
+        plotBg: 'rgba(255,255,255,0.018)',
     };
+
+    function _refreshTheme() {
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        if (isDark) {
+            BRAND.text = '#e6edf5';
+            BRAND.textDim = '#a0a8b3';
+            BRAND.grid = 'rgba(140,148,160,0.14)';
+            BRAND.gridZero = 'rgba(140,148,160,0.42)';
+            BRAND.plotBg = 'rgba(255,255,255,0.018)';
+        } else {
+            // Light mode: axis labels need to be near-black, gridlines a bit
+            // darker than dark-mode's so they're visible on white.
+            BRAND.text = '#1a1f25';
+            BRAND.textDim = '#475569';
+            BRAND.grid = 'rgba(20,30,45,0.10)';
+            BRAND.gridZero = 'rgba(20,30,45,0.35)';
+            BRAND.plotBg = 'rgba(0,0,0,0.015)';
+        }
+    }
+
+    // Re-render plots when the user toggles theme so the new colors apply.
+    function _wireThemeReactivity() {
+        if (window._seasonalThemeWired) return;
+        window._seasonalThemeWired = true;
+        var obs = new MutationObserver(function () {
+            _refreshTheme();
+            if (state.activated) {
+                _renderScatter();
+                _renderTimeSeries();
+                _renderIndices();
+            }
+        });
+        obs.observe(document.documentElement, { attributes: true,
+            attributeFilter: ['data-theme'] });
+    }
 
     // Common watermark annotation appended to every Plotly figure so the
     // saved-as-PNG output carries attribution.
     function _watermarkAnnotations() {
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var labelColor = isDark ? 'rgba(220,228,238,0.70)' : 'rgba(40,55,75,0.55)';
+        var urlColor   = isDark ? 'rgba(220,228,238,0.45)' : 'rgba(40,55,75,0.42)';
         return [{
             xref: 'paper', yref: 'paper',
             x: 1, y: 1.02,
             xanchor: 'right', yanchor: 'bottom',
             text: 'TC-ATLAS',
             showarrow: false,
-            font: { size: 9, color: 'rgba(140,148,160,0.65)',
+            font: { size: 9, color: labelColor,
                     family: 'DM Sans, system-ui, sans-serif' },
         }, {
             xref: 'paper', yref: 'paper',
@@ -171,7 +255,7 @@
             xanchor: 'right', yanchor: 'bottom',
             text: 'michaelfischerwx.github.io/TC-ATLAS',
             showarrow: false,
-            font: { size: 8, color: 'rgba(140,148,160,0.45)',
+            font: { size: 8, color: urlColor,
                     family: 'DM Sans, system-ui, sans-serif' },
         }];
     }
@@ -346,7 +430,7 @@
             yaxis: { title: _axisTitle(bundle.yKey, state.scatter.y), zeroline: false },
             margin: { l: 60, r: 10, t: 60, b: 70 },
             paper_bgcolor: 'rgba(0,0,0,0)',
-            plot_bgcolor: 'rgba(255,255,255,0.015)',
+            plot_bgcolor: BRAND.plotBg,
             font: { color: BRAND.text, family: 'DM Sans, system-ui, sans-serif',
                     size: 11 },
             showlegend: !!(bundle.current && bundle.current.preliminary),
@@ -541,20 +625,20 @@
                          font: { size: 11, color: BRAND.textDim } },
                 tickmode: 'array', tickvals: months,
                 ticktext: monNames, zeroline: false,
-                gridcolor: 'rgba(140,148,160,0.10)',
+                gridcolor: BRAND.grid,
                 tickfont: { size: 11 },
             },
             yaxis: {
                 title: { text: varLabel,
                          font: { size: 11, color: BRAND.textDim } },
                 zeroline: state.ts.variable !== 'sst',
-                zerolinecolor: 'rgba(140,148,160,0.40)',
-                gridcolor: 'rgba(140,148,160,0.10)',
+                zerolinecolor: BRAND.gridZero,
+                gridcolor: BRAND.grid,
                 tickfont: { size: 11 },
             },
             margin: { l: 64, r: 18, t: 52, b: 78 },
             paper_bgcolor: 'rgba(0,0,0,0)',
-            plot_bgcolor: 'rgba(255,255,255,0.015)',
+            plot_bgcolor: BRAND.plotBg,
             font: { color: BRAND.text, family: 'DM Sans, system-ui, sans-serif',
                     size: 11 },
             hovermode: 'closest',
@@ -881,10 +965,10 @@
             title: { text: 'Atlantic + Pacific climate indices', font: { size: 14 } },
             xaxis: { title: 'Date', zeroline: false },
             yaxis: { title: 'SST anomaly (°C)', zeroline: true,
-                     zerolinecolor: 'rgba(255,255,255,0.18)' },
+                     zerolinecolor: BRAND.gridZero },
             margin: { l: 64, r: 18, t: 52, b: 80 },
             paper_bgcolor: 'rgba(0,0,0,0)',
-            plot_bgcolor: 'rgba(255,255,255,0.015)',
+            plot_bgcolor: BRAND.plotBg,
             font: { color: BRAND.text, family: 'DM Sans, system-ui, sans-serif',
                     size: 11 },
             hovermode: 'x unified',
@@ -1035,17 +1119,18 @@
     // Panel D — anomaly-contour overlay
     // -------------------------------------------------------------------
 
-    // Style table for the six anomaly contour levels. Warm colors for
-    // positive (above-climatology SST), cool for negative. Stroke width
-    // scales with magnitude so the eye is drawn to the most impactful
-    // contours.
+    // Style table for the six anomaly contour levels. To stay readable on
+    // top of the BWR-shaded correlation field (which itself spans dark blue
+    // → white → dark red), each contour is drawn as a thick stroke in a
+    // contrasting color (black for warm, white for cool — but always with
+    // a halo of the opposite color underneath, see _drawContoursOnSVG).
     var ANOM_CONTOUR_STYLE = {
-        '-2.0': { color: '#053061', width: 2.4 },
-        '-1.0': { color: '#2166ac', width: 1.6 },
-        '-0.5': { color: '#67a9cf', width: 1.0, dash: '4 3' },
-        '+0.5': { color: '#f4a582', width: 1.0, dash: '4 3' },
-        '+1.0': { color: '#d6604d', width: 1.6 },
-        '+2.0': { color: '#67001f', width: 2.4 },
+        '-2.0': { color: '#000', halo: '#fff', width: 3.0 },
+        '-1.0': { color: '#000', halo: '#fff', width: 2.4 },
+        '-0.5': { color: '#000', halo: '#fff', width: 1.6, dash: '5 4' },
+        '+0.5': { color: '#fff', halo: '#000', width: 1.6, dash: '5 4' },
+        '+1.0': { color: '#fff', halo: '#000', width: 2.4 },
+        '+2.0': { color: '#fff', halo: '#000', width: 3.0 },
     };
 
     function _renderCorrOverlay() {
@@ -1083,31 +1168,40 @@
             '0 0 ' + (lonMax - lonMin) + ' ' + (latMax - latMin));
         svg.setAttribute('preserveAspectRatio', 'none');
         var ns = 'http://www.w3.org/2000/svg';
+        // Draw two passes: a halo pass (wider, opposite color) underneath
+        // each contour, then the main stroke on top. This makes black
+        // lines stand out from red shading and white lines stand out from
+        // blue shading — the canonical met-map "highway" look.
+        function _appendPath(d, color, width, dash, opacity) {
+            var p = document.createElementNS(ns, 'path');
+            p.setAttribute('d', d);
+            p.setAttribute('fill', 'none');
+            p.setAttribute('stroke', color);
+            p.setAttribute('stroke-width', width / 30);   // viewBox is in deg
+            p.setAttribute('stroke-linejoin', 'round');
+            p.setAttribute('stroke-linecap', 'round');
+            if (dash) p.setAttribute('stroke-dasharray',
+                dash.split(' ').map(function (n) {
+                    return (parseFloat(n) / 30).toFixed(2);
+                }).join(' '));
+            p.setAttribute('opacity', String(opacity));
+            svg.appendChild(p);
+        }
         for (var level in payload.paths) {
-            var style = ANOM_CONTOUR_STYLE[level] || { color: '#888', width: 1 };
+            var style = ANOM_CONTOUR_STYLE[level]
+                || { color: '#000', halo: '#fff', width: 1.5 };
             payload.paths[level].forEach(function (path) {
                 var d = '';
                 for (var i = 0; i < path.length; i++) {
                     var lat = path[i][0], lon = path[i][1];
-                    // Map (lat, lon) → SVG coords. x grows east, y grows
-                    // south (so invert lat).
                     var x = lon - lonMin;
                     var y = latMax - lat;
                     d += (i === 0 ? 'M' : 'L') + x.toFixed(2) + ',' + y.toFixed(2);
                 }
-                var p = document.createElementNS(ns, 'path');
-                p.setAttribute('d', d);
-                p.setAttribute('fill', 'none');
-                p.setAttribute('stroke', style.color);
-                p.setAttribute('stroke-width', style.width / 30);   // viewBox is in degrees → scale down
-                p.setAttribute('stroke-linejoin', 'round');
-                p.setAttribute('stroke-linecap', 'round');
-                if (style.dash) p.setAttribute('stroke-dasharray',
-                    style.dash.split(' ').map(function (n) {
-                        return (parseFloat(n) / 30).toFixed(2);
-                    }).join(' '));
-                p.setAttribute('opacity', '0.92');
-                svg.appendChild(p);
+                // Halo first (wider, lighter)
+                _appendPath(d, style.halo, style.width + 1.6, style.dash, 0.75);
+                // Main stroke on top
+                _appendPath(d, style.color, style.width, style.dash, 1);
             });
         }
     }
@@ -1115,9 +1209,14 @@
     function _buildOverlayLegendHTML(year, month) {
         var monLabel = ['', 'Jan','Feb','Mar','Apr','May','Jun',
                         'Jul','Aug','Sep','Oct','Nov','Dec'][month];
+        // Legend swatches use semantic red-warm / blue-cool so the sign is
+        // readable independent of the on-map black/white halo styling.
+        var SWATCH = {
+            '-2.0': '#0a3a78', '-1.0': '#2d6db3', '-0.5': '#6da8e6',
+            '+0.5': '#f4a582', '+1.0': '#c63832', '+2.0': '#7b0a18',
+        };
         var rows = ['+2.0', '+1.0', '+0.5', '-0.5', '-1.0', '-2.0'].map(function (l) {
-            var s = ANOM_CONTOUR_STYLE[l];
-            return '<div><span class="legend-line" style="color:' + s.color +
+            return '<div><span class="legend-line" style="color:' + SWATCH[l] +
                 '"></span>' + l + ' °C</div>';
         });
         return '<div style="font-weight:600;margin-bottom:2px">' +
@@ -1200,6 +1299,9 @@
             return;
         }
         state.activated = true;
+        _refreshTheme();
+        _wireThemeReactivity();
+        _wireSubnav();
         _bindScatterControls();
         _bindCorrelationControls();
         _bindTimeSeriesControls();

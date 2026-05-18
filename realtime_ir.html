@@ -840,6 +840,18 @@
             <div class="seasonal-status" id="seasonal-status">Loading…</div>
         </div>
 
+        <!-- Sub-nav: jump to each panel. Sticky so it stays accessible while
+             scrolling through the long page. -->
+        <nav class="seasonal-subnav" aria-label="Seasonal panels">
+            <a href="#seasonal-panel-anom-map" data-target="seasonal-panel-anom-map">A · Live anomaly</a>
+            <a href="#seasonal-panel-timeseries" data-target="seasonal-panel-timeseries">B · Region evolution</a>
+            <a href="#seasonal-panel-scatter" data-target="seasonal-panel-scatter">C · SST × ACE</a>
+            <a href="#seasonal-panel-correlation" data-target="seasonal-panel-correlation">D · Correlation map</a>
+            <a href="#seasonal-panel-analogs" data-target="seasonal-panel-analogs">E · Analog seasons</a>
+            <a href="#seasonal-panel-indices" data-target="seasonal-panel-indices">F · Climate indices</a>
+            <a href="#seasonal-panel-forecast" data-target="seasonal-panel-forecast">G · ACE forecast</a>
+        </nav>
+
         <div class="seasonal-body">
 
             <!-- Panel A: Live Atlantic SST anomaly map (lazy stub) -->
@@ -856,6 +868,52 @@
                     <span class="seasonal-anom-bar"></span>
                     <span>+3 °C</span>
                 </div>
+            </section>
+
+            <!-- Panel B: Region SST evolution time series -->
+            <section class="seasonal-panel" id="seasonal-panel-timeseries">
+                <h3 class="seasonal-panel-title">B · Region SST Evolution</h3>
+                <div class="seasonal-ts-controls">
+                    <label>Region
+                        <select id="seasonal-ts-region">
+                            <optgroup label="Atlantic">
+                                <option value="atl_mdr" selected>Atlantic MDR</option>
+                                <option value="atl_mdr_east">Eastern MDR</option>
+                                <option value="atl_basin">Atlantic basin</option>
+                                <option value="atl_amo">Atlantic AMO box</option>
+                                <option value="caribbean">Caribbean</option>
+                                <option value="gulf">Gulf of Mexico</option>
+                                <option value="nta">North Tropical Atlantic</option>
+                                <option value="tsa">Tropical South Atlantic</option>
+                            </optgroup>
+                            <optgroup label="Pacific MDRs">
+                                <option value="epac_mdr">East Pacific MDR</option>
+                                <option value="wpac_mdr">West Pacific MDR</option>
+                            </optgroup>
+                            <optgroup label="ENSO regions">
+                                <option value="nino12">Niño 1+2</option>
+                                <option value="nino3">Niño 3</option>
+                                <option value="nino34">Niño 3.4</option>
+                                <option value="nino4">Niño 4</option>
+                            </optgroup>
+                        </select>
+                    </label>
+                    <label>Variable
+                        <select id="seasonal-ts-var">
+                            <option value="sst" selected>SST (absolute)</option>
+                            <option value="anom">SST anomaly vs 1991-2020</option>
+                            <option value="sst_dt">SST (detrended)</option>
+                        </select>
+                    </label>
+                    <label>History
+                        <select id="seasonal-ts-history">
+                            <option value="all" selected>All years 1982-present</option>
+                            <option value="recent10">Last 10 years</option>
+                            <option value="none">Climo envelope only</option>
+                        </select>
+                    </label>
+                </div>
+                <div id="seasonal-ts-plot" class="seasonal-ts-plot"></div>
             </section>
 
             <!-- Panel C: 2D phase-space scatter (the headline feature) -->
@@ -935,52 +993,6 @@
                     </label>
                 </div>
                 <div id="seasonal-scatter-plot" class="seasonal-scatter-plot"></div>
-            </section>
-
-            <!-- Panel B: Region SST evolution time series -->
-            <section class="seasonal-panel" id="seasonal-panel-timeseries">
-                <h3 class="seasonal-panel-title">B · Region SST Evolution</h3>
-                <div class="seasonal-ts-controls">
-                    <label>Region
-                        <select id="seasonal-ts-region">
-                            <optgroup label="Atlantic">
-                                <option value="atl_mdr" selected>Atlantic MDR</option>
-                                <option value="atl_mdr_east">Eastern MDR</option>
-                                <option value="atl_basin">Atlantic basin</option>
-                                <option value="atl_amo">Atlantic AMO box</option>
-                                <option value="caribbean">Caribbean</option>
-                                <option value="gulf">Gulf of Mexico</option>
-                                <option value="nta">North Tropical Atlantic</option>
-                                <option value="tsa">Tropical South Atlantic</option>
-                            </optgroup>
-                            <optgroup label="Pacific MDRs">
-                                <option value="epac_mdr">East Pacific MDR</option>
-                                <option value="wpac_mdr">West Pacific MDR</option>
-                            </optgroup>
-                            <optgroup label="ENSO regions">
-                                <option value="nino12">Niño 1+2</option>
-                                <option value="nino3">Niño 3</option>
-                                <option value="nino34">Niño 3.4</option>
-                                <option value="nino4">Niño 4</option>
-                            </optgroup>
-                        </select>
-                    </label>
-                    <label>Variable
-                        <select id="seasonal-ts-var">
-                            <option value="sst" selected>SST (absolute)</option>
-                            <option value="anom">SST anomaly vs 1991-2020</option>
-                            <option value="sst_dt">SST (detrended)</option>
-                        </select>
-                    </label>
-                    <label>History
-                        <select id="seasonal-ts-history">
-                            <option value="all" selected>All years 1982-present</option>
-                            <option value="recent10">Last 10 years</option>
-                            <option value="none">Climo envelope only</option>
-                        </select>
-                    </label>
-                </div>
-                <div id="seasonal-ts-plot" class="seasonal-ts-plot"></div>
             </section>
 
             <!-- Panel D: ACE × SST correlation map (interactive toggle) -->
