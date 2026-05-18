@@ -252,15 +252,33 @@ def render_anomaly_png(anom: xr.DataArray, valid_time: str) -> Path:
 
 def compute_today_indices(sst: xr.DataArray, clim_mean: xr.DataArray) -> tuple:
     """Region-mean SST + anomaly for today's 2D slab. Climatology is
-    interpolated to the calendar day from the 12-month basis."""
+    interpolated to the calendar day from the 12-month basis. Also
+    computes the Vecchi-Soden relative anomaly = raw anomaly minus
+    the area-weighted 30°S-30°N anomaly (so the global trend signal
+    is removed). Returns (row, anom_raw, anom_relative)."""
     valid_date = np.datetime64(sst.attrs["time"], "D")
     clim_today = _interp_month_climatology(clim_mean, valid_date)
     anom = sst - clim_today
+
+    # Tropical-mean anomaly (matches the build_oisst_history band).
+    from build_oisst_history import (TROPICAL_MEAN_LAT_MIN,
+                                     TROPICAL_MEAN_LAT_MAX)
+    trop = anom.sel(lat=slice(TROPICAL_MEAN_LAT_MIN, TROPICAL_MEAN_LAT_MAX))
+    w = np.cos(np.deg2rad(trop.lat.values))[:, None]
+    finite = np.isfinite(trop.values)
+    w2 = np.where(finite, w * np.ones_like(trop.values), 0)
+    s2 = np.where(finite, trop.values, 0)
+    den = w2.sum()
+    trop_anom_mean = float((s2 * w2).sum() / den) if den > 0 else 0.0
+    anom_rel = anom - trop_anom_mean
+    anom_rel.attrs = dict(anom.attrs)
+
     row = {"date": sst.attrs["time"]}
     for name, box in REGIONS.items():
-        row[f"{name}_sst"]  = round(float(_region_mean(sst,  box).values), 4)
-        row[f"{name}_anom"] = round(float(_region_mean(anom, box).values), 4)
-    return row, anom
+        row[f"{name}_sst"]      = round(float(_region_mean(sst,      box).values), 4)
+        row[f"{name}_anom"]     = round(float(_region_mean(anom,     box).values), 4)
+        row[f"{name}_anom_rel"] = round(float(_region_mean(anom_rel, box).values), 4)
+    return row, anom, anom_rel
 
 
 def append_to_daily_parquet(row: dict) -> None:
@@ -286,11 +304,17 @@ def append_to_daily_parquet(row: dict) -> None:
 
 
 def write_latest_json(row: dict, png_name: str) -> None:
-    """Tiny pointer file used by the frontend for first-paint."""
+    """Tiny pointer file used by the frontend for first-paint. Now also
+    points to the Vecchi-Soden relative-anomaly PNG + grid sidecar so
+    the Panel A "Variable" selector can flip between raw and relative
+    without an extra metadata fetch."""
+    rel_png = png_name.replace(".png", "_relative.png")
     payload = {
         "valid_date": row["date"],
         "anom_png": png_name,
         "anom_grid": png_name.replace(".png", ".grid.json"),
+        "anom_png_relative": rel_png,
+        "anom_grid_relative": rel_png.replace(".png", ".grid.json"),
         "indices": {k: v for k, v in row.items() if k not in ("date", "dayofyear")},
         "generated_utc": datetime.now(timezone.utc).isoformat(),
     }
@@ -318,24 +342,28 @@ def main():
     log.info("Loading climatology ...")
     clim = load_climatology()
 
-    log.info("Computing indices + anomaly ...")
-    row, anom = compute_today_indices(sst, clim["sst_clim_mean"])
-    log.info("  date=%s, MDR anom=%+.2f °C, AMO anom=%+.2f °C, Niño3.4 anom=%+.2f °C",
-             row["date"], row["atl_mdr_anom"], row["atl_amo_anom"], row["nino34_anom"])
+    log.info("Computing indices + anomaly (raw + relative) ...")
+    row, anom, anom_rel = compute_today_indices(sst, clim["sst_clim_mean"])
+    log.info("  date=%s, MDR anom=%+.2f °C (rel %+.2f °C), AMO anom=%+.2f °C, Niño3.4 anom=%+.2f °C",
+             row["date"], row["atl_mdr_anom"], row["atl_mdr_anom_rel"],
+             row["atl_amo_anom"], row["nino34_anom"])
 
-    log.info("Rendering anomaly PNG ...")
+    log.info("Rendering anomaly PNGs (raw + relative) ...")
     png_path = render_anomaly_png(anom, row["date"])
+    png_path_rel = render_anomaly_png(anom_rel, row["date"] + "_relative")
 
     if args.local_only:
         log.info("Local-only mode: skipping GCS uploads")
     else:
-        log.info("Uploading PNG + hover-sidecar ...")
+        log.info("Uploading PNG + hover-sidecar (raw + relative) ...")
         _upload_blob(png_path, f"anom_png/{row['date']}.png", "image/png")
-        grid_path = WORK_DIR / f"anom_{row['date']}.grid.json"
-        if grid_path.exists():
-            _upload_blob(grid_path,
-                         f"anom_png/{row['date']}.grid.json",
-                         "application/json")
+        _upload_blob(png_path_rel,
+                     f"anom_png/{row['date']}_relative.png", "image/png")
+        for label in [row["date"], row["date"] + "_relative"]:
+            gp = WORK_DIR / f"anom_{label}.grid.json"
+            if gp.exists():
+                _upload_blob(gp, f"anom_png/{label}.grid.json",
+                             "application/json")
         log.info("Appending daily indices parquet ...")
         append_to_daily_parquet(row)
         log.info("Writing latest.json ...")

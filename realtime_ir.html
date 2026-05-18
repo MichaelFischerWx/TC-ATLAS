@@ -836,7 +836,6 @@
             <a href="#seasonal-panel-correlation" data-target="seasonal-panel-correlation">D · Correlation map</a>
             <a href="#seasonal-panel-analogs" data-target="seasonal-panel-analogs">E · Analog seasons</a>
             <a href="#seasonal-panel-indices" data-target="seasonal-panel-indices">F · Climate indices</a>
-            <a href="#seasonal-panel-forecast" data-target="seasonal-panel-forecast">G · ACE forecast</a>
         </nav>
 
         <div class="seasonal-header">
@@ -857,6 +856,12 @@
             <section class="seasonal-panel" id="seasonal-panel-anom-map">
                 <h3 class="seasonal-panel-title">A · Live SST Anomaly</h3>
                 <div class="seasonal-ts-controls">
+                    <label>Variable
+                        <select id="seasonal-anom-var" title="Raw = today's SST − 1991-2020 day-of-year mean. Relative = raw anomaly minus the area-weighted 30°S-30°N mean anomaly (Vecchi-Soden framework — strips out the global tropical signal, isolating differential warming).">
+                            <option value="raw" selected>Raw anomaly (today − climo)</option>
+                            <option value="relative">Relative anomaly (Vecchi-Soden 2007)</option>
+                        </select>
+                    </label>
                     <label>Zoom
                         <select id="seasonal-anom-zoom">
                             <option value="global" selected>Global (±60° lat)</option>
@@ -911,10 +916,11 @@
                         </select>
                     </label>
                     <label>Variable
-                        <select id="seasonal-ts-var">
+                        <select id="seasonal-ts-var" title="Detrending mode (see Panel C tooltip).">
                             <option value="sst" selected>SST (absolute)</option>
                             <option value="anom">SST anomaly vs 1991-2020</option>
-                            <option value="sst_dt">SST (detrended)</option>
+                            <option value="sst_dt">SST detrended</option>
+                            <option value="sst_rel">SST relative (Vecchi-Soden 2007)</option>
                         </select>
                     </label>
                     <label>History
@@ -997,10 +1003,11 @@
                         </select>
                     </label>
                     <label>Variable
-                        <select id="seasonal-scatter-var">
+                        <select id="seasonal-scatter-var" title="Choose how SST is detrended/normalized. Relative SST follows the Vecchi & Soden (2007) framing — region SST minus the contemporaneous 30°S-30°N tropical-mean SST.">
                             <option value="sst" selected>SST (absolute)</option>
                             <option value="anom">SST anomaly vs 1991-2020</option>
-                            <option value="sst_dt">SST (detrended, per-month linear-in-year)</option>
+                            <option value="sst_dt">SST detrended (per-month linear-in-year)</option>
+                            <option value="sst_rel">SST relative (Vecchi-Soden 2007, vs 30°S-30°N mean)</option>
                         </select>
                     </label>
                 </div>
@@ -1045,9 +1052,10 @@
                         </select>
                     </label>
                     <label>Detrending
-                        <select id="seasonal-corr-kind">
-                            <option value="raw" selected>Raw</option>
-                            <option value="detrended">Detrended (linear trend removed)</option>
+                        <select id="seasonal-corr-kind" title="Vecchi-Soden relative SST is the default for this panel: TC potential intensity scales with SST relative to the tropical mean, and the local detrend strips out the very differential-warming signal the literature considers dynamically meaningful.">
+                            <option value="relative" selected>Relative (Vecchi-Soden 2007 — recommended)</option>
+                            <option value="raw">Raw</option>
+                            <option value="detrended">Detrended (per-pixel linear trend)</option>
                         </select>
                     </label>
                     <label>Overlay year
@@ -1122,9 +1130,10 @@
                         </select>
                     </label>
                     <label>Detrending
-                        <select id="seasonal-an-kind">
+                        <select id="seasonal-an-kind" title="Analog matching is conventionally a local-anomaly question, so raw is the default. Toggle to detrended or Vecchi-Soden relative to see how rankings shift.">
                             <option value="raw" selected>Raw</option>
                             <option value="detrended">Detrended (linear trend removed)</option>
+                            <option value="relative">Relative (Vecchi-Soden 2007)</option>
                         </select>
                     </label>
                     <label>Region set
@@ -1187,14 +1196,11 @@
                 <div id="seasonal-idx-plot" class="seasonal-ts-plot"></div>
             </section>
 
-            <!-- Panel G: ACE forecast placeholder -->
-            <section class="seasonal-panel" id="seasonal-panel-forecast">
-                <h3 class="seasonal-panel-title">G · Seasonal ACE Forecast</h3>
-                <div class="seasonal-panel-stub seasonal-panel-stub-pending">
-                    Real-time seasonal ACE forecast — coming soon, pending
-                    peer review.
-                </div>
-            </section>
+            <!-- Panel G removed for now — pre-publication embargo on the
+                 in-prep ACE forecast work means the placeholder card
+                 implies a manuscript that isn't yet under review. Re-add
+                 only when there's an actual submission to point at.
+                 See feedback_ace_paper_embargo.md in memory. -->
 
         </div>
     </section>

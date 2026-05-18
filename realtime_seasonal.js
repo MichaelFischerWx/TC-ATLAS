@@ -26,12 +26,15 @@
         latest: null,          // parsed latest.json (may be null)
         activated: false,
         scatter: { x: 'atl_mdr', y: 'atl_amo', month: 5, variable: 'sst' },
-        corr: { basin: 'NA', month: 5, kind: 'raw', overlayYear: '' },
+        // Panel D defaults to 'relative' — Vecchi-Soden framing is what
+        // this panel is for (TC potential-intensity literature).
+        corr: { basin: 'NA', month: 5, kind: 'relative', overlayYear: '' },
         ts: { region: 'atl_mdr', variable: 'sst', history: 'all' },
         an: { year: null, month: 5, regions: 'all',
               method: 'grid_weighted', basin: 'NA', kind: 'raw' },
         idx: { window: '10' },
         anomZoom: 'global',
+        anomVar: 'raw',     // Panel A: 'raw' or 'relative'
     };
 
     // Basin-zoom presets for Panel A. Each maps to a viewport in the
@@ -200,13 +203,12 @@
         var currentPt = null;
         var currentProj = null;
 
-        // Mapping from base variable to its "projected" sibling. Anomaly
-        // and detrended both have direct projected columns; for absolute
-        // SST the column suffix differs slightly. If the value is null
-        // (finalized rows have no projection), the projection is skipped.
-        var projVar = (state.scatter.variable === 'sst')   ? '_sst_projected'
-                    : (state.scatter.variable === 'anom')  ? '_anom_projected'
-                    : '_sst_dt_projected';
+        // Mapping from base variable to its "projected" sibling.
+        var projVar =
+              state.scatter.variable === 'sst'    ? '_sst_projected'
+            : state.scatter.variable === 'anom'   ? '_anom_projected'
+            : state.scatter.variable === 'sst_rel' ? '_sst_rel_projected'
+            : '_sst_dt_projected';
         var projX = idx.values[state.scatter.x + projVar];
         var projY = idx.values[state.scatter.y + projVar];
 
@@ -380,6 +382,7 @@
         var monLabel = MONTH_LABEL[state.scatter.month];
         if (key.endsWith('_anom')) return monLabel + ' ' + label + ' SST anomaly (°C)';
         if (key.endsWith('_sst_dt')) return monLabel + ' ' + label + ' SST detrended (°C)';
+        if (key.endsWith('_sst_rel')) return monLabel + ' ' + label + ' relative SST (°C, vs 30°S-30°N)';
         return monLabel + ' ' + label + ' SST (°C)';
     }
 
@@ -482,6 +485,7 @@
 
         var titleVar = (state.scatter.variable === 'anom') ? 'SST anomaly'
                      : (state.scatter.variable === 'sst_dt') ? 'detrended SST'
+                     : (state.scatter.variable === 'sst_rel') ? 'relative SST (Vecchi-Soden)'
                      : 'SST';
         var titleX = REGION_LABEL[state.scatter.x] || state.scatter.x;
         var titleY = REGION_LABEL[state.scatter.y] || state.scatter.y;
@@ -607,11 +611,11 @@
         if (!vals) return null;
 
         // Projected (full-month extrapolated) values share the same
-        // column suffix conventions as Panel C — see the comment in
-        // _buildScatterData.
+        // column suffix conventions as Panel C.
         var projKey = state.ts.region + (
             state.ts.variable === 'sst' ? '_sst_projected' :
             state.ts.variable === 'anom' ? '_anom_projected' :
+            state.ts.variable === 'sst_rel' ? '_sst_rel_projected' :
             '_sst_dt_projected'
         );
         var projVals = idx.values[projKey] || [];
@@ -813,6 +817,7 @@
         var label = REGION_LABEL[state.ts.region] || state.ts.region;
         var varLabel = (state.ts.variable === 'anom') ? 'SST anomaly (°C)'
                      : (state.ts.variable === 'sst_dt') ? 'detrended SST (°C)'
+                     : (state.ts.variable === 'sst_rel') ? 'relative SST vs 30°S-30°N (°C)'
                      : 'SST (°C)';
         var layout = {
             title: {
@@ -922,9 +927,13 @@
             // Fall through to region method if matrix isn't loaded.
         }
 
-        // For 'detrended' kind, use *_sst_dt for anomaly (year deviation
-        // from the linear trend); for 'raw', use *_anom.
-        var valSuffix = (kind === 'detrended') ? '_sst_dt' : '_anom';
+        // Map detrending mode → column suffix for the region-based methods.
+        // 'raw'        → _anom    (anomaly vs 1991-2020 climo)
+        // 'detrended'  → _sst_dt  (year deviation from linear-in-year trend)
+        // 'relative'   → _sst_rel (region SST minus 30°S-30°N mean, Vecchi-Soden)
+        var valSuffix = (kind === 'detrended') ? '_sst_dt'
+                      : (kind === 'relative')  ? '_sst_rel'
+                      : '_anom';
 
         // Build per-year vector of (region values) for the chosen month.
         var availableYears = [];
@@ -1262,29 +1271,50 @@
         var img = document.getElementById('seasonal-anom-img');
         var cap = document.getElementById('seasonal-anom-caption');
         if (!img || !cap) return;
-        var pngName = state.latest.anom_png;
-        var url = LOCAL_BASE + '/' + pngName;
-        img.src = url;
+        var isRel = state.anomVar === 'relative';
+        var pngName = isRel
+            ? (state.latest.anom_png_relative || state.latest.anom_png)
+            : state.latest.anom_png;
+        var gridName = isRel
+            ? (state.latest.anom_grid_relative || state.latest.anom_grid)
+            : state.latest.anom_grid;
+        img.src = LOCAL_BASE + '/' + pngName;
         img.onload = function () { _applyAnomZoom(); };
         img.onerror = function () {
             img.onerror = null;
             img.src = GCS_BASE + '/' + pngName;
         };
         _applyAnomZoom();
+
+        var mdrVal = isRel && state.latest.indices.atl_mdr_anom_rel !== undefined
+                   ? state.latest.indices.atl_mdr_anom_rel
+                   : state.latest.indices.atl_mdr_anom;
+        var modeTag = isRel ? '(relative)' : '';
         cap.textContent = 'Valid ' + state.latest.valid_date +
-            '  |  MDR anom ' + state.latest.indices.atl_mdr_anom.toFixed(2) + ' °C' +
+            '  ' + modeTag +
+            '  |  MDR anom ' + (mdrVal !== undefined ? mdrVal.toFixed(2) : '?') + ' °C' +
             '  |  AMO anom ' + state.latest.indices.atl_amo_anom.toFixed(2) + ' °C' +
             '  |  Niño 3.4 anom ' + state.latest.indices.nino34_anom.toFixed(2) + ' °C';
 
         // Load hover sidecar (small JSON, 1° grid of anomaly °C). Fail
         // silently — without it, the map still renders, the tooltip just
         // doesn't appear.
-        if (state.latest.anom_grid) {
-            _fetchData(state.latest.anom_grid).then(function (g) {
+        if (gridName) {
+            _fetchData(gridName).then(function (g) {
                 state.anom_grid = g;
                 _wireAnomHover();
             }).catch(function () { state.anom_grid = null; });
         }
+    }
+
+    function _bindAnomVarControl() {
+        var sel = document.getElementById('seasonal-anom-var');
+        if (!sel || sel._bound) return;
+        sel._bound = true;
+        sel.addEventListener('change', function () {
+            state.anomVar = sel.value;
+            _renderAnomMap();
+        });
     }
 
     /* Generic map-hover wiring used by every panel that shows a 2D
@@ -1565,6 +1595,7 @@
         _bindAnalogControls();
         _bindIndexControls();
         _bindAnomZoomControl();
+        _bindAnomVarControl();
         _wireCorrHover();
         _renderCorrelation();
         _setStatus('Loading indices…');

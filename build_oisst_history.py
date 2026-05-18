@@ -263,6 +263,34 @@ def _open_monthly_oisst(local_path: str | None = None) -> xr.DataArray:
 
 
 # --------------------------------------------------------------------------
+# Helper: tropical-mean SST (for the "relative SST" detrending mode)
+# --------------------------------------------------------------------------
+
+# Vecchi & Soden (2007) tropical band. 30°S–30°N is the published choice;
+# Camargo and some genesis-index work use 20°S–20°N. Documented in the
+# Panel A/B/D/E tooltips so the audience knows which we picked.
+TROPICAL_MEAN_LAT_MIN = -30.0
+TROPICAL_MEAN_LAT_MAX = 30.0
+
+
+def _tropical_mean_sst(sst_da: xr.DataArray) -> np.ndarray:
+    """Area-weighted mean SST over TROPICAL_MEAN_LAT_MIN..MAX × LON_MIN..MAX
+    at each time step in `sst_da` (dims time × lat × lon). Returns a 1D
+    array shaped (n_time,)."""
+    sub = sst_da.sel(lat=slice(TROPICAL_MEAN_LAT_MIN, TROPICAL_MEAN_LAT_MAX))
+    w = np.cos(np.deg2rad(sub.lat.values))
+    # NaN-safe area-weighted mean across (lat, lon) at each time.
+    vals = sub.values   # (time, lat, lon)
+    finite = np.isfinite(vals)
+    w2 = w[None, :, None] * np.ones_like(vals)
+    w2 = np.where(finite, w2, 0)
+    vals0 = np.where(finite, vals, 0)
+    num = (vals0 * w2).sum(axis=(1, 2))
+    den = w2.sum(axis=(1, 2))
+    return np.where(den > 0, num / den, np.nan)
+
+
+# --------------------------------------------------------------------------
 # Step 1: Month-of-year climatology (from monthly file)
 # --------------------------------------------------------------------------
 
@@ -410,15 +438,33 @@ def _fetch_current_month_preliminary(climo_mean: xr.DataArray) -> dict | None:
     mtd_sst_da = _da(mtd_sst)
     mtd_anom_da = _da(mtd_anom)
     projected_sst_da = _da(projected_sst)
+    # Tropical-mean SST for the preliminary period (Vecchi-Soden
+    # relative-SST framework). Use the same MTD slab — area-weighted
+    # mean over 30°S-30°N within the OISST subset.
+    sub = mtd_sst_da.sel(lat=slice(TROPICAL_MEAN_LAT_MIN, TROPICAL_MEAN_LAT_MAX))
+    w = np.cos(np.deg2rad(sub.lat.values))[:, None]
+    finite = np.isfinite(sub.values)
+    w2 = np.where(finite, w * np.ones_like(sub.values), 0)
+    s2 = np.where(finite, sub.values, 0)
+    trop_mean_mtd = float((s2 * w2).sum() / w2.sum()) if w2.sum() > 0 else float("nan")
+    # Projected tropical-mean assumes persistence-anom: tropical-mean
+    # anom = mtd tropical-mean anom; full-month projected ≈ same value.
+    trop_mean_proj = trop_mean_mtd
 
     row = {"date": f"{year}-{month:02d}", "preliminary": True,
            "n_days": int(len(day_idx)), "as_of": today.isoformat()}
     for name, box in REGIONS.items():
-        row[f"{name}_sst"]            = round(float(_region_mean(mtd_sst_da,        box).values), 4)
-        row[f"{name}_anom"]           = round(float(_region_mean(mtd_anom_da,       box).values), 4)
-        row[f"{name}_sst_projected"]  = round(float(_region_mean(projected_sst_da,  box).values), 4)
+        region_sst = float(_region_mean(mtd_sst_da, box).values)
+        region_anom = float(_region_mean(mtd_anom_da, box).values)
+        region_sst_proj = float(_region_mean(projected_sst_da, box).values)
+        row[f"{name}_sst"]            = round(region_sst, 4)
+        row[f"{name}_anom"]           = round(region_anom, 4)
+        row[f"{name}_sst_projected"]  = round(region_sst_proj, 4)
         # Projected anom equals MTD anom by construction (persistence).
         row[f"{name}_anom_projected"] = row[f"{name}_anom"]
+        # Relative SST + projected.
+        row[f"{name}_sst_rel"]            = round(region_sst - trop_mean_mtd, 4)
+        row[f"{name}_sst_rel_projected"]  = round(region_sst_proj - trop_mean_proj, 4)
     log.info("  %d-%02d preliminary (n=%d days): MDR mtd-anom=%+.2f → proj-sst=%.2f, AMO mtd-anom=%+.2f → proj-sst=%.2f, Niño3.4 mtd-anom=%+.2f → proj-sst=%.2f",
              year, month, row["n_days"],
              row["atl_mdr_anom"], row["atl_mdr_sst_projected"],
@@ -460,11 +506,30 @@ def build_indices(climo_path: Path, out_path: Path,
     clim_on_axis = clim_mean.sel(month=months)
     anom = sst - clim_on_axis
 
+    # Relative SST (Vecchi & Soden 2007): region SST minus the
+    # contemporaneous 30°S-30°N tropical-mean SST. By construction this
+    # removes the global tropical warming signal, leaving only
+    # differential warming (the dynamically meaningful part for TC
+    # potential intensity work).
+    trop_mean_per_time = _tropical_mean_sst(sst)            # (n_time,)
+    # Climatological tropical-mean per calendar month.
+    trop_mean_clim = _tropical_mean_sst(clim_mean.rename({"month": "time"}))
+    log.info("  tropical-mean SST: monthly range %.2f..%.2f °C; clim min/max=%.2f/%.2f",
+             float(np.nanmin(trop_mean_per_time)),
+             float(np.nanmax(trop_mean_per_time)),
+             float(np.nanmin(trop_mean_clim)),
+             float(np.nanmax(trop_mean_clim)))
+
     rows = {"date": sst.time.values.astype("datetime64[M]").astype(str)}
     for name, box in REGIONS.items():
         log.info("  region %-10s box=%s", name, box)
-        rows[f"{name}_sst"]  = np.round(_region_mean(sst,  box).values, 4)
-        rows[f"{name}_anom"] = np.round(_region_mean(anom, box).values, 4)
+        region_sst = _region_mean(sst,  box).values
+        region_anom = _region_mean(anom, box).values
+        rows[f"{name}_sst"]  = np.round(region_sst, 4)
+        rows[f"{name}_anom"] = np.round(region_anom, 4)
+        # Relative SST: subtract contemporaneous tropical-mean from
+        # this region's monthly SST.
+        rows[f"{name}_sst_rel"] = np.round(region_sst - trop_mean_per_time, 4)
 
     import pandas as pd
     df = pd.DataFrame(rows).sort_values("date").reset_index(drop=True)
@@ -814,9 +879,10 @@ def build_correlations(out_dir: Path,
     manifest = {
         "basins": ACE_BASINS,
         "months": list(range(1, 13)),
-        "kinds": ["raw", "detrended"],
+        "kinds": ["raw", "detrended", "relative"],
         "vmin": -0.7, "vmax": 0.7,
         "extent": [LON_MIN, LON_MAX, LAT_MIN, LAT_MAX],
+        "tropical_mean_band": [TROPICAL_MEAN_LAT_MIN, TROPICAL_MEAN_LAT_MAX],
         "generated_utc": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -926,10 +992,26 @@ def build_correlations(out_dir: Path,
             return float("nan")
         return float((np.where(finite, sub, 0) * w).sum() / wsum)
 
+    # Tropical-mean SST per (year, month) — used to compute the
+    # Vecchi & Soden (2007) relative-SST field SST_rel = SST - trop_mean.
+    # Vectorized area-weighted mean over 30°S-30°N × LON_MIN..LON_MAX.
+    lat_trop_mask = (lat >= TROPICAL_MEAN_LAT_MIN) & (lat <= TROPICAL_MEAN_LAT_MAX)
+    cos_w = np.cos(np.deg2rad(lat[lat_trop_mask]))[None, :, None]
+    trop_mean_grid = np.full((len(years_all), 12), np.nan, dtype=np.float64)
+    for mm in range(12):
+        sub = sst_stack[:, mm][:, lat_trop_mask, :]
+        finite = np.isfinite(sub)
+        w2 = np.where(finite, cos_w, 0)
+        s2 = np.where(finite, sub, 0)
+        num = (s2 * w2).sum(axis=(1, 2))
+        den = w2.sum(axis=(1, 2))
+        trop_mean_grid[:, mm] = np.where(den > 0, num / den, np.nan)
+
     region_corr = {}
     # Distance matrices for the grid-based ("correlation-weighted pixel")
     # analog method on Panel E. Structure:
-    # {basin: {month: {years: [...], raw: [[..]], detrended: [[..]]}}}
+    # {basin: {month: {years: [...], raw: [[..]],
+    #                  detrended: [[..]], relative: [[..]]}}}
     distance_matrices = {}
     def _pairwise_weighted_l2(field_yx, weight_x):
         """Squared-weighted L2 distance between every pair of rows in
@@ -974,34 +1056,48 @@ def build_correlations(out_dir: Path,
             _render(r_det, f"{basin}_{month:02d}_detrended.png",
                     ACE_BASINS[basin], month, "detrended")
             _write_grid_sidecar(r_det, f"{basin}_{month:02d}_detrended.grid.json")
-            total += 2
+
+            # Relative SST correlation (Vecchi & Soden 2007): subtract
+            # the contemporaneous tropical-mean SST from each year's
+            # field, then correlate against detrended ACE. The
+            # tropical-mean subtraction removes the global warming
+            # trend by construction, so we use detrended ACE for
+            # consistency.
+            trop_v = trop_mean_grid[valid_year_mask, month - 1]
+            sst_v_rel = sst_v - trop_v[:, None, None]
+            r_rel = _corr_along_year(sst_v_rel, ace_dt)
+            _render(r_rel, f"{basin}_{month:02d}_relative.png",
+                    ACE_BASINS[basin], month, "relative")
+            _write_grid_sidecar(r_rel, f"{basin}_{month:02d}_relative.grid.json")
+            total += 3
 
             # Per-region (Panel E correlation-weighted analog weights)
             region_corr[basin][month] = {}
             for region, box in REGIONS.items():
                 r_raw_mean = _box_mean_corr(r_raw, box)
                 r_det_mean = _box_mean_corr(r_det, box)
+                r_rel_mean = _box_mean_corr(r_rel, box)
                 region_corr[basin][month][region] = {
-                    "raw": None if not np.isfinite(r_raw_mean) else round(r_raw_mean, 4),
+                    "raw":       None if not np.isfinite(r_raw_mean) else round(r_raw_mean, 4),
                     "detrended": None if not np.isfinite(r_det_mean) else round(r_det_mean, 4),
+                    "relative":  None if not np.isfinite(r_rel_mean) else round(r_rel_mean, 4),
                 }
 
-            # Grid-based analog distance matrices: pairwise weighted L2
-            # over the full SST anomaly field, where each pixel's weight
-            # is sqrt(|r(SST_pixel, ACE_basin)|). Captures actual spatial
-            # similarity in regions that historically matter for the
-            # basin's ACE — no region-overlap problem.
+            # Grid-based analog distance matrices.
             flat_raw = sst_v.reshape(sst_v.shape[0], -1)
             flat_dt = sst_dt.reshape(sst_dt.shape[0], -1)
+            flat_rel = sst_v_rel.reshape(sst_v_rel.shape[0], -1)
             d_raw = _pairwise_weighted_l2(flat_raw, r_raw.ravel())
-            d_dt = _pairwise_weighted_l2(flat_dt, r_det.ravel())
+            d_dt  = _pairwise_weighted_l2(flat_dt,  r_det.ravel())
+            d_rel = _pairwise_weighted_l2(flat_rel, r_rel.ravel())
             yr_list = years_all[valid_year_mask].tolist()
             distance_matrices[basin][month] = {
-                "years": [int(y) for y in yr_list],
+                "years":     [int(y) for y in yr_list],
                 "raw":       np.round(d_raw, 3).tolist(),
-                "detrended": np.round(d_dt, 3).tolist(),
+                "detrended": np.round(d_dt,  3).tolist(),
+                "relative":  np.round(d_rel, 3).tolist(),
             }
-        log.info("  basin %s: 24 maps", basin)
+        log.info("  basin %s: 36 maps (raw + detrended + relative)", basin)
 
     (out_dir / "region_ace_correlations.json").write_text(
         json.dumps({"basins": region_corr,
