@@ -28,7 +28,8 @@
         scatter: { x: 'atl_mdr', y: 'atl_amo', month: 5, variable: 'sst' },
         corr: { basin: 'NA', month: 5, kind: 'raw', overlayYear: '' },
         ts: { region: 'atl_mdr', variable: 'sst', history: 'all' },
-        an: { year: null, month: 5, regions: 'atlantic' },
+        an: { year: null, month: 5, regions: 'all',
+              method: 'corr_weighted', basin: 'NA', kind: 'raw' },
         idx: { window: '10' },
     };
 
@@ -590,26 +591,30 @@
     function _buildAnalogs() {
         if (!state.indices || !state.ace) return null;
         var idx = state.indices;
-        var regions = REGION_SETS[state.an.regions] || REGION_SETS.atlantic;
+        var regions = REGION_SETS[state.an.regions] || REGION_SETS.all;
         var targetYear = state.an.year;
         var month = state.an.month;
+        var kind = state.an.kind;        // 'raw' | 'detrended'
+        var method = state.an.method;    // 'corr_weighted' | 'euclidean'
+        var basin = state.an.basin;      // 'NA' | 'EP' | ...
 
-        // Build per-year vector of (region anomalies) for the chosen month.
-        var dateToIdx = {};
-        for (var i = 0; i < idx.dates.length; i++) dateToIdx[idx.dates[i]] = i;
+        // For 'detrended' kind, use *_sst_dt for anomaly (year deviation
+        // from the linear trend); for 'raw', use *_anom.
+        var valSuffix = (kind === 'detrended') ? '_sst_dt' : '_anom';
+
+        // Build per-year vector of (region values) for the chosen month.
         var availableYears = [];
         var vectors = {};
         var preliminaryFlag = {};
-        for (var k in dateToIdx) {
-            var p = k.split('-');
-            var y = parseInt(p[0], 10);
-            var m = parseInt(p[1], 10);
+        for (var i = 0; i < idx.dates.length; i++) {
+            var parts = idx.dates[i].split('-');
+            var y = parseInt(parts[0], 10);
+            var m = parseInt(parts[1], 10);
             if (m !== month) continue;
-            var i = dateToIdx[k];
             var vec = [];
             var anyNull = false;
             for (var r = 0; r < regions.length; r++) {
-                var v = idx.values[regions[r] + '_anom'][i];
+                var v = idx.values[regions[r] + valSuffix][i];
                 if (v === null || v === undefined) { anyNull = true; break; }
                 vec.push(v);
             }
@@ -620,16 +625,41 @@
         }
         if (!availableYears.includes(targetYear)) return { years: [], rows: [] };
 
+        // Build per-region weights.
+        // - Correlation-weighted: w_i = |r(SST_region_i, ACE_basin)| for the
+        //   chosen basin × month × kind. Missing weights default to 0
+        //   (region excluded).
+        // - Euclidean: w_i = 1 / N for all regions (uniform).
+        var weights = new Array(regions.length);
+        if (method === 'corr_weighted' && state.region_corr) {
+            var perRegion = (state.region_corr.basins[basin] || {})[String(month)] || {};
+            var sumW = 0;
+            for (var rr = 0; rr < regions.length; rr++) {
+                var entry = perRegion[regions[rr]];
+                var w = (entry && entry[kind] !== null && entry[kind] !== undefined)
+                    ? Math.abs(entry[kind]) : 0;
+                weights[rr] = w;
+                sumW += w;
+            }
+            // Normalize so distance magnitudes are comparable across runs.
+            if (sumW > 0) {
+                for (var rr2 = 0; rr2 < regions.length; rr2++) weights[rr2] /= sumW;
+            } else {
+                for (var rr2 = 0; rr2 < regions.length; rr2++) weights[rr2] = 1 / regions.length;
+            }
+        } else {
+            for (var rr3 = 0; rr3 < regions.length; rr3++) weights[rr3] = 1 / regions.length;
+        }
+
         var target = vectors[targetYear];
         var ranked = [];
         for (var j = 0; j < availableYears.length; j++) {
             var yy = availableYears[j];
             if (yy === targetYear) continue;
-            // Euclidean distance over the region-anomaly vector.
             var sum2 = 0;
             for (var r = 0; r < regions.length; r++) {
                 var diff = vectors[yy][r] - target[r];
-                sum2 += diff * diff;
+                sum2 += weights[r] * diff * diff;
             }
             ranked.push({ year: yy, dist: Math.sqrt(sum2) });
         }
@@ -639,12 +669,39 @@
             rows: ranked.slice(0, 10),
             targetYear: targetYear,
             targetPreliminary: preliminaryFlag[targetYear],
+            weights: weights,
+            regions: regions,
         };
     }
 
     function _renderAnalogs() {
         var tbody = document.getElementById('seasonal-an-tbody');
+        var ace_th = document.getElementById('seasonal-an-ace-th');
         if (!tbody) return;
+        var basin = state.an.basin;
+        if (ace_th) ace_th.textContent = basin + ' ACE';
+
+        // ACE source: for NA use the existing ace_annual.json (it ships
+        // storm count too); for other basins use ace_basins_annual.json
+        // and storms is unavailable.
+        var aceLookup;
+        if (basin === 'NA') {
+            aceLookup = function (y) {
+                var r = state.ace.years[y];
+                return r ? { ace: r.ace, storms: r.named_storms_contrib } : null;
+            };
+        } else if (state.ace_basins) {
+            var basinRec = state.ace_basins.basins[basin];
+            aceLookup = function (y) {
+                // JSON keys are strings; coerce.
+                var v = basinRec && basinRec.years[String(y)];
+                return (v !== undefined && v !== null)
+                    ? { ace: v, storms: null } : null;
+            };
+        } else {
+            aceLookup = function () { return null; };
+        }
+
         var bundle = _buildAnalogs();
         if (!bundle || !bundle.rows.length) {
             tbody.innerHTML =
@@ -654,21 +711,48 @@
         }
         var html = '';
         bundle.rows.forEach(function (r, i) {
-            var ace = state.ace.years[r.year];
+            var ace = aceLookup(r.year);
             var aceVal = ace ? ace.ace : null;
-            var storms = ace ? ace.named_storms_contrib : null;
+            var storms = ace ? ace.storms : null;
+            // Basin-aware "active vs quiet" thresholds (NHC uses ACE>175 for
+            // hyperactive Atlantic; other basins have different climatologies).
+            var BASIN_HI = {NA: 175, EP: 200, WP: 280, NI: 60, SI: 130, SP: 130};
+            var BASIN_LO = {NA: 60,  EP: 70,  WP: 175, NI: 15, SI: 60,  SP: 60};
             var aceCls = (aceVal === null) ? ''
-                       : (aceVal >= 175) ? ' class="an-ace-hi"'
-                       : (aceVal <= 60) ? ' class="an-ace-lo"' : '';
+                       : (aceVal >= (BASIN_HI[basin] || 175)) ? ' class="an-ace-hi"'
+                       : (aceVal <= (BASIN_LO[basin] || 60)) ? ' class="an-ace-lo"' : '';
             html += '<tr>' +
                 '<td>' + (i + 1) + '</td>' +
                 '<td>' + r.year + '</td>' +
-                '<td>' + r.dist.toFixed(2) + '</td>' +
+                '<td>' + r.dist.toFixed(3) + '</td>' +
                 '<td' + aceCls + '>' + (aceVal !== null ? aceVal.toFixed(1) : '—') + '</td>' +
-                '<td>' + (storms !== null ? storms : '—') + '</td>' +
+                '<td>' + (storms !== null && storms !== undefined ? storms : '—') + '</td>' +
                 '</tr>';
         });
         tbody.innerHTML = html;
+
+        // Update the "How analogs are computed" weights summary so the user
+        // can see what regions are dominating the current ranking.
+        var summary = document.getElementById('seasonal-an-weights-summary');
+        if (summary && bundle.weights) {
+            var pairs = bundle.regions.map(function (r, idx) {
+                return { region: r, w: bundle.weights[idx] };
+            }).filter(function (p) { return p.w > 0; });
+            pairs.sort(function (a, b) { return b.w - a.w; });
+            if (state.an.method === 'corr_weighted') {
+                var top = pairs.slice(0, 5).map(function (p) {
+                    return (REGION_LABEL[p.region] || p.region) +
+                        ' (' + (p.w * 100).toFixed(0) + '%)';
+                }).join(', ');
+                summary.innerHTML =
+                    '<strong>Top regions (current weights):</strong> ' + top;
+            } else {
+                summary.innerHTML =
+                    '<strong>Uniform weights:</strong> ' +
+                    (1 / bundle.regions.length * 100).toFixed(1) +
+                    '% per region across ' + bundle.regions.length + ' regions.';
+            }
+        }
     }
 
     function _populateAnalogYearSelector() {
@@ -699,15 +783,20 @@
                 _renderAnalogs();
             });
         };
-        bindNum('seasonal-an-year', 'year');
-        bindNum('seasonal-an-month', 'month');
-        var rsel = document.getElementById('seasonal-an-regions');
-        if (rsel) {
-            rsel.addEventListener('change', function () {
-                state.an.regions = rsel.value;
+        var bindStr = function (id, key) {
+            var el = document.getElementById(id);
+            if (!el) return;
+            el.addEventListener('change', function () {
+                state.an[key] = el.value;
                 _renderAnalogs();
             });
-        }
+        };
+        bindNum('seasonal-an-year', 'year');
+        bindNum('seasonal-an-month', 'month');
+        bindStr('seasonal-an-regions', 'regions');
+        bindStr('seasonal-an-method', 'method');
+        bindStr('seasonal-an-basin', 'basin');
+        bindStr('seasonal-an-kind', 'kind');
     }
 
     // -------------------------------------------------------------------
@@ -1125,7 +1214,15 @@
             function (j) { state.latest = j; },
             function () { state.latest = null; }   // optional
         );
-        Promise.all([p1, p2, p3]).then(function () {
+        var p4 = _fetchData('region_ace_correlations.json').then(
+            function (j) { state.region_corr = j; },
+            function () { state.region_corr = null; }
+        );
+        var p5 = _fetchData('ace_basins_annual.json').then(
+            function (j) { state.ace_basins = j; },
+            function () { state.ace_basins = null; }
+        );
+        Promise.all([p1, p2, p3, p4, p5]).then(function () {
             _setStatus('');
             _populateAnalogYearSelector();
             _populateOverlayYears();

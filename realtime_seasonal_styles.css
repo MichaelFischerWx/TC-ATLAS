@@ -309,6 +309,32 @@
 .seasonal-an-table .an-ace-hi { color: #ff7a59; font-weight: 600; }
 .seasonal-an-table .an-ace-lo { color: #6da8e6; }
 
+.seasonal-an-details {
+    margin-top: 10px;
+    font-size: 0.72rem;
+    color: var(--text-dim, #a0a8b3);
+}
+.seasonal-an-details summary {
+    cursor: pointer;
+    padding: 4px 0;
+    color: var(--text-dim, #a0a8b3);
+}
+.seasonal-an-details summary:hover { color: var(--text, #e0e0e0); }
+.seasonal-an-details-body {
+    padding: 6px 12px 8px;
+    background: rgba(255,255,255,0.025);
+    border-left: 2px solid rgba(140,148,160,0.30);
+    border-radius: 0 3px 3px 0;
+    line-height: 1.5;
+}
+.seasonal-an-details-body p { margin: 4px 0; }
+.seasonal-an-details-body code {
+    background: rgba(255,255,255,0.06);
+    padding: 1px 4px;
+    border-radius: 2px;
+    font-size: 0.85em;
+}
+
 /* Panel A anomaly map */
 .seasonal-anom-wrap {
     position: relative;

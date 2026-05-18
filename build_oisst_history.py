@@ -906,8 +906,30 @@ def build_correlations(out_dir: Path,
         (corr_dir / fname).write_text(json.dumps(grid, separators=(",", ":")))
 
 
+    # Region-mean correlation values used by the Panel E
+    # "correlation-weighted" analog method. Structure:
+    # {basin: {month: {region: {raw: r, detrended: r}}}}
+    lat_axis = sst.lat.values
+    lon_axis = sst.lon.values
+
+    def _box_mean_corr(field_2d, box):
+        """Area-weighted mean of the correlation field over a region box.
+        Returns NaN if the box covers no finite cells (e.g. land-only)."""
+        lat_s, lat_n, lon_w, lon_e = box
+        lat_mask = (lat_axis >= lat_s) & (lat_axis <= lat_n)
+        lon_mask = (lon_axis >= lon_w) & (lon_axis <= lon_e)
+        sub = field_2d[np.ix_(lat_mask, lon_mask)]
+        w = np.cos(np.deg2rad(lat_axis[lat_mask]))[:, None]
+        finite = np.isfinite(sub)
+        wsum = (w * finite).sum()
+        if wsum == 0:
+            return float("nan")
+        return float((np.where(finite, sub, 0) * w).sum() / wsum)
+
+    region_corr = {}
     total = 0
     for basin in ACE_BASINS:
+        region_corr[basin] = {}
         ace_dict = ace_all["basins"][basin]["years"]
         ace_full = np.array([ace_dict.get(y, 0.0) for y in years_all.tolist()],
                             dtype=np.float64)
@@ -934,7 +956,24 @@ def build_correlations(out_dir: Path,
                     ACE_BASINS[basin], month, "detrended")
             _write_grid_sidecar(r_det, f"{basin}_{month:02d}_detrended.grid.json")
             total += 2
+
+            # Per-region (Panel E correlation-weighted analog weights)
+            region_corr[basin][month] = {}
+            for region, box in REGIONS.items():
+                r_raw_mean = _box_mean_corr(r_raw, box)
+                r_det_mean = _box_mean_corr(r_det, box)
+                region_corr[basin][month][region] = {
+                    "raw": None if not np.isfinite(r_raw_mean) else round(r_raw_mean, 4),
+                    "detrended": None if not np.isfinite(r_det_mean) else round(r_det_mean, 4),
+                }
         log.info("  basin %s: 24 maps", basin)
+
+    (out_dir / "region_ace_correlations.json").write_text(
+        json.dumps({"basins": region_corr,
+                    "generated_utc": datetime.now(timezone.utc).isoformat()},
+                   separators=(",", ":"))
+    )
+    log.info("  wrote region_ace_correlations.json (analog-weight lookup)")
 
     (corr_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
     log.info("  wrote %d correlation PNGs + manifest.json to %s",
@@ -1058,11 +1097,12 @@ def upload_to_gcs(local_dir: Path) -> None:
     client = storage.Client()
     bucket = client.bucket(GCS_BUCKET)
     targets = [
-        ("oisst_monclim_1991_2020.nc",  "application/x-netcdf"),
-        ("indices_monthly.parquet",     "application/octet-stream"),
-        ("indices_monthly.json",        "application/json"),
-        ("ace_annual.json",             "application/json"),
-        ("ace_basins_annual.json",      "application/json"),
+        ("oisst_monclim_1991_2020.nc",   "application/x-netcdf"),
+        ("indices_monthly.parquet",      "application/octet-stream"),
+        ("indices_monthly.json",         "application/json"),
+        ("ace_annual.json",              "application/json"),
+        ("ace_basins_annual.json",       "application/json"),
+        ("region_ace_correlations.json", "application/json"),
     ]
     for fname, ctype in targets:
         src = local_dir / fname

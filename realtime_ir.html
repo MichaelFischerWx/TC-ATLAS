@@ -1049,11 +1049,14 @@
             <!-- Panel E: Analog seasons ranking -->
             <section class="seasonal-panel" id="seasonal-panel-analogs">
                 <h3 class="seasonal-panel-title">E · Analog Seasons</h3>
-                <p class="seasonal-panel-desc">
+                <p class="seasonal-panel-desc" id="seasonal-an-method-desc">
                     Top-10 historical analogs to the target year/month, ranked
-                    by Euclidean distance of region-mean SST anomalies. Useful
-                    for "what years look most like 2026 right now?" — column
-                    ACE = that analog year's annual NA ACE.
+                    by distance in region-mean SST anomaly space.
+                    <strong>Correlation-weighted</strong> (default) downweights
+                    regions that historically don't co-vary with the chosen
+                    basin's ACE, so similarity in regions that <em>matter</em>
+                    counts more. <strong>Unweighted Euclidean</strong> treats
+                    every region equally.
                 </p>
                 <div class="seasonal-ts-controls">
                     <label>Target year
@@ -1075,20 +1078,62 @@
                             <option value="12">December</option>
                         </select>
                     </label>
+                    <label>Method
+                        <select id="seasonal-an-method">
+                            <option value="corr_weighted" selected>Correlation-weighted (recommended)</option>
+                            <option value="euclidean">Unweighted Euclidean</option>
+                        </select>
+                    </label>
+                    <label>ACE basin (weights + ACE column)
+                        <select id="seasonal-an-basin">
+                            <option value="NA" selected>North Atlantic (NA)</option>
+                            <option value="EP">East Pacific (EP)</option>
+                            <option value="WP">West Pacific (WP)</option>
+                            <option value="NI">North Indian (NI)</option>
+                            <option value="SI">South Indian (SI)</option>
+                            <option value="SP">South Pacific (SP)</option>
+                        </select>
+                    </label>
+                    <label>Detrending
+                        <select id="seasonal-an-kind">
+                            <option value="raw" selected>Raw</option>
+                            <option value="detrended">Detrended (linear trend removed)</option>
+                        </select>
+                    </label>
                     <label>Region set
                         <select id="seasonal-an-regions">
-                            <option value="atlantic" selected>Atlantic only</option>
+                            <option value="all" selected>All 14 regions</option>
                             <option value="atlantic_enso">Atlantic + ENSO</option>
-                            <option value="all">All 14 regions</option>
+                            <option value="atlantic">Atlantic only</option>
                         </select>
                     </label>
                 </div>
                 <table class="seasonal-an-table" id="seasonal-an-table">
                     <thead>
-                        <tr><th>#</th><th>Year</th><th>Distance</th><th>NA ACE</th><th>Storms</th></tr>
+                        <tr><th>#</th><th>Year</th><th>Distance</th>
+                            <th id="seasonal-an-ace-th">NA ACE</th>
+                            <th>Storms</th></tr>
                     </thead>
                     <tbody id="seasonal-an-tbody"></tbody>
                 </table>
+                <details class="seasonal-an-details">
+                    <summary>How analogs are computed</summary>
+                    <div class="seasonal-an-details-body" id="seasonal-an-details-body">
+                        <p>For the selected target year + month, each historical
+                        year's region-mean SST anomaly vector is compared to
+                        the target's vector. Smaller distance = more similar
+                        SST pattern.</p>
+                        <p><strong>Correlation-weighted distance:</strong>
+                        <code>d = √Σ wᵢ · (anomᵢ - target_anomᵢ)²</code>,
+                        where the weight <code>wᵢ = |r(SST_region_i, ACE_basin)|</code>
+                        is the absolute Pearson correlation between region <em>i</em>'s
+                        monthly SST and the chosen basin's annual ACE
+                        (1982-present). Regions with little linkage to ACE
+                        (small |r|) contribute little. Weights are
+                        re-computed per basin × month × raw|detrended.</p>
+                        <p id="seasonal-an-weights-summary"></p>
+                    </div>
+                </details>
             </section>
 
             <!-- Panel F: Climate-index multi-trace time series -->
