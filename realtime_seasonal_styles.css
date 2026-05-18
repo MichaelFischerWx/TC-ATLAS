@@ -1,0 +1,249 @@
+/* Real-Time Monitor — Seasonal tab styles. */
+
+.seasonal-main {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    flex: 1;
+    overflow: auto;
+    padding: 14px 18px 28px;
+    color: var(--text, #e0e0e0);
+    background: var(--surface, #0d1117);
+}
+
+.seasonal-header {
+    display: flex;
+    flex-direction: row;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 24px;
+    margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+
+.seasonal-title-block { flex: 1; }
+
+.seasonal-title {
+    margin: 0 0 4px;
+    font-size: 1.15rem;
+    color: var(--text, #e0e0e0);
+}
+
+.seasonal-sub {
+    margin: 0;
+    font-size: 0.78rem;
+    line-height: 1.45;
+    color: var(--text-dim, #a0a8b3);
+    max-width: 860px;
+}
+
+.seasonal-status {
+    font-size: 0.72rem;
+    color: var(--text-dim, #a0a8b3);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    white-space: nowrap;
+}
+
+.seasonal-status-error { color: #ff7066; }
+
+.seasonal-body {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    grid-auto-rows: minmax(280px, auto);
+}
+
+@media (max-width: 980px) {
+    .seasonal-body { grid-template-columns: 1fr; }
+}
+
+.seasonal-panel {
+    display: flex;
+    flex-direction: column;
+    background: var(--surface-raised, #161b22);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 6px;
+    padding: 10px 12px 12px;
+    min-height: 0;
+}
+
+#seasonal-panel-scatter { grid-column: 1 / -1; }
+#seasonal-panel-correlation { grid-column: 1 / -1; }
+
+.seasonal-panel-desc {
+    margin: 0 0 10px;
+    font-size: 0.74rem;
+    line-height: 1.45;
+    color: var(--text-dim, #a0a8b3);
+    max-width: 900px;
+}
+
+.seasonal-corr-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px 18px;
+    margin-bottom: 10px;
+    font-size: 0.75rem;
+    color: var(--text-dim, #a0a8b3);
+}
+
+.seasonal-corr-controls label {
+    display: flex; align-items: center; gap: 6px;
+}
+
+.seasonal-corr-controls select {
+    font-size: 0.75rem;
+    padding: 2px 6px;
+    background: var(--surface, #0d1117);
+    color: var(--text, #e0e0e0);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 3px;
+}
+
+.seasonal-corr-wrap {
+    position: relative;
+    background: rgba(0,0,0,0.25);
+    border-radius: 4px;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    /* Aspect matches our SST subset: (LON_MAX-LON_MIN)/(LAT_MAX-LAT_MIN)
+       = 260/85 ≈ 3.06. */
+    aspect-ratio: 3.06;
+}
+
+.seasonal-corr-img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    display: block;
+}
+
+.seasonal-corr-legend {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 6px;
+    font-size: 0.7rem;
+    color: var(--text-dim, #a0a8b3);
+}
+
+.seasonal-corr-bar {
+    flex: 1;
+    height: 8px;
+    border-radius: 2px;
+    background: linear-gradient(to right,
+        #053061 0%, #2166ac 14%, #4393c3 28%, #92c5de 42%,
+        #f7f7f7 50%,
+        #f4a582 58%, #d6604d 72%, #b2182b 86%, #67001f 100%);
+}
+
+.seasonal-panel-title {
+    margin: 0 0 8px;
+    font-size: 0.85rem;
+    color: var(--text, #e0e0e0);
+    letter-spacing: 0.02em;
+}
+
+.seasonal-panel-stub {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-dim, #8892a0);
+    font-size: 0.78rem;
+    font-style: italic;
+    padding: 24px 18px;
+    text-align: center;
+}
+
+.seasonal-panel-stub-pending {
+    background: rgba(0,229,255,0.04);
+    border: 1px dashed rgba(0,229,255,0.18);
+    border-radius: 4px;
+    color: rgba(0,229,255,0.85);
+    font-style: normal;
+}
+
+/* Panel C scatter controls */
+.seasonal-scatter-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px 18px;
+    margin-bottom: 8px;
+    font-size: 0.75rem;
+    color: var(--text-dim, #a0a8b3);
+}
+
+.seasonal-scatter-controls label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.seasonal-scatter-controls select {
+    font-size: 0.75rem;
+    padding: 2px 6px;
+    background: var(--surface, #0d1117);
+    color: var(--text, #e0e0e0);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 3px;
+}
+
+.seasonal-scatter-plot {
+    width: 100%;
+    flex: 1;
+    min-height: 480px;
+}
+
+/* Panel A anomaly map */
+.seasonal-anom-wrap {
+    position: relative;
+    background: rgba(0,0,0,0.25);
+    border-radius: 4px;
+    overflow: hidden;
+    aspect-ratio: 1.55;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.seasonal-anom-img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    display: block;
+}
+
+.seasonal-anom-overlay {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    padding: 4px 8px;
+    background: linear-gradient(to top, rgba(0,0,0,0.72), rgba(0,0,0,0));
+    font-size: 0.7rem;
+    color: #fff;
+    font-variant-numeric: tabular-nums;
+}
+
+.seasonal-anom-legend {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 6px;
+    font-size: 0.7rem;
+    color: var(--text-dim, #a0a8b3);
+}
+
+.seasonal-anom-bar {
+    flex: 1;
+    height: 8px;
+    border-radius: 2px;
+    background: linear-gradient(to right,
+        #0571b0 0%, #92c5de 25%, #f7f7f7 50%,
+        #f4a582 75%, #ca0020 100%);
+}

@@ -27,6 +27,11 @@ data/_ibtracs_*/
 #   data/subseasonal_overlays/   — validation PNG outputs (real artifact ships to GCS)
 data/_olr_cache/
 data/subseasonal_overlays/
+# build_oisst_history.py / build_seasonal_diagnostics.py work dirs:
+#   data/seasonal/               — local validation copies of OISST seasonal
+#     blobs (climatology netCDF, indices JSON/parquet, ACE history, anomaly
+#     PNGs, correlation maps). Real artifacts ship to gs://tc-atlas-ir-cache/seasonal/.
+data/seasonal/
 
 # Claude Code working state
 .claude/
