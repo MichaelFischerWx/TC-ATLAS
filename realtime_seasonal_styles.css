@@ -298,6 +298,27 @@
     min-height: 480px;
 }
 
+/* Tiny world-map inset that highlights the two selected region boxes
+   for the Panel C scatter, so users have geographic context for what
+   "Atl. MDR vs Niño 3.4" actually means without leaving the page. */
+.seasonal-scatter-inset {
+    position: absolute;
+    top: 56px;
+    right: 14px;
+    width: 240px;
+    height: 110px;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(140,148,160,0.20);
+    border-radius: 4px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.18);
+    pointer-events: none;
+    z-index: 3;
+    overflow: hidden;
+}
+[data-theme="dark"] .seasonal-scatter-inset {
+    background: rgba(10,15,22,0.65);
+}
+
 /* Panel B — region time series */
 .seasonal-ts-controls {
     display: flex;

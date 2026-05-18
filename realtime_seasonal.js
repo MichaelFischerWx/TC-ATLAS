@@ -33,6 +33,26 @@
         idx: { window: '10' },
     };
 
+    // Region lat/lon bounding boxes (mirrors the REGIONS dict in
+    // build_oisst_history.py). Used by the Panel C inset map.
+    // Format: [lat_s, lat_n, lon_w, lon_e], lon in 0..360.
+    var REGION_BOX = {
+        atl_basin:    [5.0,  30.0,  280.0, 350.0],
+        atl_mdr:      [10.0, 20.0,  275.0, 340.0],
+        atl_mdr_east: [10.0, 20.0,  320.0, 340.0],
+        atl_amo:      [10.0, 50.0,  330.0, 340.0],
+        caribbean:    [10.0, 22.0,  275.0, 300.0],
+        gulf:         [20.0, 30.0,  262.0, 282.0],
+        nta:          [5.0,  25.0,  305.0, 345.0],
+        tsa:          [-20.0, 0.0,  330.0, 350.0],
+        epac_mdr:     [10.0, 20.0,  230.0, 270.0],
+        wpac_mdr:     [5.0,  20.0,  130.0, 170.0],
+        nino12:       [-10.0, 0.0,  270.0, 280.0],
+        nino3:        [-5.0,  5.0,  210.0, 270.0],
+        nino34:       [-5.0,  5.0,  190.0, 240.0],
+        nino4:        [-5.0,  5.0,  160.0, 210.0],
+    };
+
     var REGION_SETS = {
         atlantic: ['atl_basin', 'atl_mdr', 'atl_mdr_east', 'atl_amo',
                    'caribbean', 'gulf', 'nta', 'tsa'],
@@ -226,7 +246,7 @@
         var obs = new MutationObserver(function () {
             _refreshTheme();
             if (state.activated) {
-                _renderScatter();
+                _renderScatter();   // triggers inset re-render too
                 _renderTimeSeries();
                 _renderIndices();
             }
@@ -446,6 +466,65 @@
         traces[0].showlegend = false;
         Plotly.react(el, traces, layout,
                      { responsive: true, displaylogo: false });
+        _renderScatterInset();
+    }
+
+    // Renders a small Plotly geo inset for Panel C showing the X-axis
+    // (orange) and Y-axis (green) region boxes on a world map. Plotly's
+    // `scattergeo` projection handles coastlines + land shading natively
+    // so the inset is self-contained — no external map data required.
+    function _renderScatterInset() {
+        var el = document.getElementById('seasonal-scatter-inset');
+        if (!el || !window.Plotly) return;
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        function boxTrace(boxArr, color, fillRGBA, label) {
+            if (!boxArr) return null;
+            var ls = boxArr[0], ln = boxArr[1], lw = boxArr[2], le = boxArr[3];
+            // Convert 0-360 → -180..180 for Plotly geo.
+            var conv = function (lo) { return lo > 180 ? lo - 360 : lo; };
+            // If the box straddles the antimeridian (lw < 180 < le) we'd
+            // need two polygons; none of our regions do, so a single
+            // 5-point polygon is enough.
+            var lons = [conv(lw), conv(le), conv(le), conv(lw), conv(lw)];
+            var lats = [ls, ls, ln, ln, ls];
+            return {
+                type: 'scattergeo', mode: 'lines',
+                lon: lons, lat: lats,
+                line: { color: color, width: 2 },
+                fill: 'toself', fillcolor: fillRGBA,
+                name: label, hoverinfo: 'name',
+            };
+        }
+        var xLabel = 'X · ' + (REGION_LABEL[state.scatter.x] || state.scatter.x);
+        var yLabel = 'Y · ' + (REGION_LABEL[state.scatter.y] || state.scatter.y);
+        var traces = [
+            boxTrace(REGION_BOX[state.scatter.x], BRAND.orange,
+                     'rgba(251,146,60,0.30)', xLabel),
+            boxTrace(REGION_BOX[state.scatter.y], BRAND.green,
+                     'rgba(34,197,94,0.30)', yLabel),
+        ].filter(Boolean);
+        var layout = {
+            geo: {
+                projection: { type: 'equirectangular' },
+                showland: true,
+                landcolor: isDark ? 'rgba(85,95,108,0.55)' : 'rgba(180,188,200,0.65)',
+                showocean: true,
+                oceancolor: isDark ? 'rgba(15,22,35,0.50)' : 'rgba(220,228,238,0.55)',
+                showcountries: false,
+                showcoastlines: true,
+                coastlinecolor: isDark ? 'rgba(180,190,205,0.40)' : 'rgba(85,95,108,0.55)',
+                coastlinewidth: 0.5,
+                lonaxis: { showgrid: false, range: [-180, 180] },
+                lataxis: { showgrid: false, range: [-65, 75] },
+                bgcolor: 'rgba(0,0,0,0)',
+                resolution: 110,
+            },
+            margin: { l: 0, r: 0, t: 0, b: 0 },
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            showlegend: false,
+        };
+        Plotly.react(el, traces, layout,
+                     { responsive: true, displayModeBar: false, staticPlot: true });
     }
 
     // -------------------------------------------------------------------
