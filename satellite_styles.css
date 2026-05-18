@@ -4,14 +4,30 @@
    Embedded as a tab within the Real-Time Monitor page.
    ═══════════════════════════════════════════════════════════════ */
 
+/* ── Shared chrome geometry ─────────────────────────────────── */
+
+/* Topbar + secondary bar heights — INCLUDING their 1px bottom
+   borders — so consumers (sat-main, sub-main, seasonal-main) can
+   stack their `top:` cleanly via calc(). Override per breakpoint. */
+:root {
+    --topbar-h: 53px;          /* .topbar-inner 52px + 1px border */
+    --secondary-bar-h: 32px;
+}
+@media (max-width: 768px) {
+    :root {
+        --topbar-h: 47px;      /* .topbar-inner 46px + 1px border */
+        --secondary-bar-h: 36px;
+    }
+}
+
 /* ── Secondary Bar (view tabs + storm counts) ───────────────── */
 
 .ir-secondary-bar {
     position: fixed;
-    top: var(--topbar-h, 48px);
+    top: var(--topbar-h);
     left: 0;
     right: 0;
-    height: 32px;
+    height: var(--secondary-bar-h);
     background: #12141c;
     border-bottom: 1px solid #2a2d38;
     display: flex;
@@ -19,9 +35,9 @@
     justify-content: space-between;
     padding: 0 16px;
     z-index: 100;
-    /* Include the 1px bottom border in the 32px height. The 1px
-       top padding compensates for the bottom border so flex children
-       are centered against the visible bar, not the content box. */
+    /* Include the 1px bottom border in the bar height so flex children
+       center inside the visible bar, not the content box. The 1px
+       top padding compensates for the bottom border. */
     box-sizing: border-box;
     padding-top: 1px;
 }
@@ -54,15 +70,16 @@
 }
 
 .ir-view-tab.active {
-    background: #2a2d38;
-    color: #e2e4ea;
+    /* Brand orange tint — clearly distinguishable on the dark bar
+       (the prior #2a2d38 was nearly invisible against #12141c). */
+    background: rgba(251, 146, 60, 0.22);
+    color: #fdbb74;
+    box-shadow: inset 0 -2px 0 #fb923c;
 }
 
-/* Mobile: fix secondary bar position below taller topbar */
+/* Mobile tweaks — vars in :root already widen the bar to 36px. */
 @media (max-width: 768px) {
     .ir-secondary-bar {
-        top: 46px !important;
-        height: 36px;
         justify-content: center;
         padding: 0 8px;
     }
@@ -70,17 +87,8 @@
         font-size: 13px;
         padding: 5px 16px;
     }
-    .ir-view-tab.active {
-        background: #4a8cff;
-        color: var(--text);
-    }
     .ir-storm-counts {
         display: none !important;
-    }
-}
-@media (max-width: 480px) {
-    .ir-secondary-bar {
-        top: 46px !important;
     }
 }
 
@@ -105,7 +113,7 @@
 
 .sat-main {
     position: fixed;
-    top: calc(var(--topbar-h, 48px) + 33px);
+    top: calc(var(--topbar-h) + var(--secondary-bar-h));
     left: 0;
     right: 0;
     bottom: 0;
@@ -920,9 +928,8 @@ input[type="range"].sat-slider {
 /* ── Responsive ─────────────────────────────────────────────── */
 
 @media (max-width: 768px) {
-    .sat-main {
-        top: 82px; /* 46px topbar + 36px secondary bar */
-    }
+    /* .sat-main top is already correct via var(--topbar-h) +
+       var(--secondary-bar-h) — no override needed. */
 
     .sat-sidebar {
         position: absolute;
@@ -953,10 +960,6 @@ input[type="range"].sat-slider {
 }
 
 @media (max-width: 480px) {
-    .sat-main {
-        top: 82px;
-    }
-
     .sat-anim-controls {
         flex-wrap: wrap;
         gap: 4px 6px;

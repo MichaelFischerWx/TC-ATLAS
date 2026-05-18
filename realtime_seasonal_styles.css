@@ -5,7 +5,7 @@
        the fixed topbar + secondary tab bar instead of sliding under
        them when scrolled to the top. */
     position: fixed;
-    top: calc(var(--topbar-h, 48px) + 33px);
+    top: calc(var(--topbar-h, 53px) + var(--secondary-bar-h, 32px));
     left: 0;
     right: 0;
     bottom: 0;
