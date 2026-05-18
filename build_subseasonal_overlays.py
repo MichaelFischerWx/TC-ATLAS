@@ -808,6 +808,14 @@ def build_hovmoller_slab(field, spec: WaveSpec, valid_time_iso: str) -> dict:
     Values are rounded to 1 decimal place — OLR anomaly precision is
     well under 0.1 W/m² in practice, and rounding cuts JSON payload by
     ~2× without visible degradation.
+
+    Colormap range is dynamic: vmin/vmax track the 95th percentile of
+    |values| across all rendered bands in the window, clamped to
+    [spec.vmax × 0.30, spec.vmax × 1.5] so off-season low-amplitude
+    bands (e.g. TD-type in May) read pale instead of saturating the
+    fixed ±spec.vmax scale on background noise, while strong-season
+    activity still reaches full saturation without single-cell
+    outliers stretching the scale unreasonably.
     """
     lats = field.lat.values
     lons = field.lon.values
@@ -820,13 +828,18 @@ def build_hovmoller_slab(field, spec: WaveSpec, valid_time_iso: str) -> dict:
         "title": spec.title,
         "valid_time": valid_time_iso,
         "units": "W/m²",
+        # vmin/vmax filled in after the per-band loop so we can derive
+        # them from the actual rendered values across all bands.
         "vmin": spec.vmin,
         "vmax": spec.vmax,
+        "vmin_fixed": spec.vmin,        # spec defaults exposed for the
+        "vmax_fixed": spec.vmax,        # frontend if it wants to override
         "lookback_days": last_n,
         "lons": [float(x) for x in lons],
         "times": times,
         "lat_bands": {},
     }
+    all_vals = []
     for band in HOVMOLLER_LAT_BANDS:
         # Build a boolean mask on the lat axis instead of relying on
         # xarray slice direction (NOAA OLR is descending lat).
@@ -836,12 +849,29 @@ def build_hovmoller_slab(field, spec: WaveSpec, valid_time_iso: str) -> dict:
                         band["key"], band["lat_min"], band["lat_max"])
             continue
         hov = sliced.values[:, mask, :].mean(axis=1)   # (time, lon)
+        all_vals.append(hov)
         out["lat_bands"][band["key"]] = {
             "lat_min": band["lat_min"],
             "lat_max": band["lat_max"],
             "label": band["label"],
             "values": np.round(hov, 1).tolist(),
         }
+
+    if all_vals:
+        stacked = np.concatenate([v.ravel() for v in all_vals])
+        finite = stacked[np.isfinite(stacked)]
+        if finite.size:
+            # 95th percentile of |values| as the symmetric colormap
+            # range. Clamp lower bound so off-season tiny-amplitude
+            # noise doesn't over-zoom into apparent waves; clamp upper
+            # bound so a single rogue cell doesn't wash out the rest.
+            p95 = float(np.percentile(np.abs(finite), 95))
+            lo_floor = float(spec.vmax) * 0.30
+            hi_ceil  = float(spec.vmax) * 1.50
+            dyn_vmax = max(lo_floor, min(p95, hi_ceil))
+            out["vmin"] = round(-dyn_vmax, 2)
+            out["vmax"] = round( dyn_vmax, 2)
+            out["scale_p95"] = round(p95, 2)
     return out
 
 
