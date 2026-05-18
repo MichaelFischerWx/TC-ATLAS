@@ -1,0 +1,505 @@
+/* Real-Time Monitor — Seasonal tab styles. */
+
+.seasonal-main {
+    /* Match the Subseasonal tab's positioning so the content sits below
+       the fixed topbar + secondary tab bar instead of sliding under
+       them when scrolled to the top. */
+    position: fixed;
+    top: calc(var(--topbar-h, 48px) + 33px);
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: auto;
+    padding: 14px 18px 28px;
+    color: var(--text, #e0e0e0);
+    background: var(--surface, #0d1117);
+    font-family: 'DM Sans', system-ui, sans-serif;
+}
+
+.seasonal-header {
+    display: flex;
+    flex-direction: row;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 24px;
+    margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+
+.seasonal-title-block { flex: 1; }
+
+.seasonal-title {
+    margin: 0 0 4px;
+    font-size: 1.15rem;
+    color: var(--text, #e0e0e0);
+}
+
+.seasonal-sub {
+    margin: 0;
+    font-size: 0.78rem;
+    line-height: 1.45;
+    color: var(--text-dim, #a0a8b3);
+    max-width: 860px;
+}
+
+.seasonal-status {
+    font-size: 0.72rem;
+    color: var(--text-dim, #a0a8b3);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    white-space: nowrap;
+}
+
+.seasonal-status-error { color: #ff7066; }
+
+/* Sticky sub-nav: a row of chip-style links to each panel. Negative
+   top/margins escape the .seasonal-main padding so the nav sits flush
+   against the secondary tab bar above it (no awkward gap), and so the
+   sticky-pinned state at scroll-top doesn't reveal padding behind. */
+.seasonal-subnav {
+    position: sticky;
+    top: -14px;          /* matches .seasonal-main padding-top so the
+                            sticky pin tucks the bar right against the
+                            secondary tab bar instead of leaving a gap */
+    z-index: 6;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 6px;
+    margin: -14px -18px 14px;  /* escape seasonal-main horizontal padding */
+    padding: 10px 18px 10px;    /* re-apply via own padding so chips don't
+                                   touch the viewport edge */
+    border-bottom: 1px solid rgba(140,148,160,0.20);
+    background: var(--surface, #0d1117);
+}
+.seasonal-subnav a {
+    flex: 0 0 auto;
+    padding: 4px 10px;
+    font-size: 0.72rem;
+    font-weight: 500;
+    color: var(--text-dim, #94a3b8);
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 14px;
+    text-decoration: none;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+    white-space: nowrap;
+}
+.seasonal-subnav a:hover {
+    color: var(--text, #e0e0e0);
+    background: rgba(251,146,60,0.10);
+    border-color: rgba(251,146,60,0.40);
+}
+.seasonal-subnav a.active {
+    color: #fb923c;
+    background: rgba(251,146,60,0.12);
+    border-color: rgba(251,146,60,0.50);
+}
+
+.seasonal-body {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    grid-auto-rows: minmax(280px, auto);
+    /* Each panel sizes to its own content — without this, a short panel
+       in a row (e.g. Panel E with N=3 analogs) lets its tall row-mate
+       (Panel F) overflow its own border because the grid cell collapses
+       to the shorter content. */
+    align-items: start;
+}
+
+@media (max-width: 980px) {
+    .seasonal-body { grid-template-columns: 1fr; }
+}
+
+.seasonal-panel {
+    display: flex;
+    flex-direction: column;
+    background: var(--surface-raised, #161b22);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 6px;
+    padding: 10px 12px 12px;
+    min-height: 0;
+}
+
+#seasonal-panel-scatter { grid-column: 1 / -1; }
+#seasonal-panel-correlation { grid-column: 1 / -1; }
+
+.seasonal-panel-desc {
+    margin: 0 0 10px;
+    font-size: 0.74rem;
+    line-height: 1.45;
+    color: var(--text-dim, #a0a8b3);
+    max-width: 900px;
+}
+
+.seasonal-corr-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px 18px;
+    margin-bottom: 10px;
+    font-size: 0.75rem;
+    color: var(--text-dim, #a0a8b3);
+}
+
+.seasonal-corr-controls label {
+    display: flex; align-items: center; gap: 6px;
+}
+
+.seasonal-corr-controls select {
+    font-size: 0.75rem;
+    padding: 2px 6px;
+    background: var(--surface, #0d1117);
+    color: var(--text, #e0e0e0);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 3px;
+}
+
+.seasonal-corr-wrap {
+    position: relative;
+    background: rgba(0,0,0,0.25);
+    border-radius: 4px;
+    overflow: hidden;
+    /* Aspect matches our SST subset: (LON_MAX-LON_MIN)/(LAT_MAX-LAT_MIN)
+       = 260/120 ≈ 2.17 at the ±60° extent. */
+    aspect-ratio: 2.17;
+    cursor: crosshair;
+}
+
+.seasonal-corr-img {
+    /* Fill the wrap edge-to-edge. The wrap already enforces the right
+       aspect ratio via aspect-ratio, and the PNG is the same aspect
+       (1600×740 ≈ 2.17 at ±60° extent), so this won't distort. */
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.seasonal-corr-overlay {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+}
+
+.seasonal-corr-overlay-legend {
+    position: absolute;
+    right: 8px;
+    bottom: 8px;
+    padding: 4px 8px;
+    background: rgba(10,12,14,0.78);
+    border-radius: 3px;
+    color: #fff;
+    font: 10.5px/1.4 'DM Sans', system-ui, sans-serif;
+    pointer-events: none;
+    display: none;
+    z-index: 4;
+}
+.seasonal-corr-overlay-legend.visible { display: block; }
+.seasonal-corr-overlay-legend .legend-line {
+    display: inline-block; vertical-align: middle;
+    width: 18px; height: 0;
+    border-bottom: 2px solid currentColor; margin-right: 4px;
+}
+
+.seasonal-corr-legend {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 6px;
+    font-size: 0.7rem;
+    color: var(--text-dim, #a0a8b3);
+}
+
+.seasonal-corr-bar {
+    flex: 1;
+    height: 8px;
+    border-radius: 2px;
+    background: linear-gradient(to right,
+        #053061 0%, #2166ac 14%, #4393c3 28%, #92c5de 42%,
+        #f7f7f7 50%,
+        #f4a582 58%, #d6604d 72%, #b2182b 86%, #67001f 100%);
+}
+
+.seasonal-panel-title {
+    margin: 0 0 8px;
+    font-size: 0.85rem;
+    color: var(--text, #e0e0e0);
+    letter-spacing: 0.02em;
+}
+
+.seasonal-save-btn {
+    position: absolute;
+    top: 8px;
+    right: 10px;
+    z-index: 4;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    line-height: 1;
+    font-size: 0.95rem;
+    color: var(--text-dim, #94a3b8);
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.seasonal-save-btn:hover {
+    color: var(--text, #e0e0e0);
+    background: rgba(255,255,255,0.10);
+    border-color: rgba(255,255,255,0.30);
+}
+.seasonal-panel { position: relative; }
+
+.seasonal-panel-stub {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-dim, #8892a0);
+    font-size: 0.78rem;
+    font-style: italic;
+    padding: 24px 18px;
+    text-align: center;
+}
+
+.seasonal-panel-stub-pending {
+    background: rgba(0,229,255,0.04);
+    border: 1px dashed rgba(0,229,255,0.18);
+    border-radius: 4px;
+    color: rgba(0,229,255,0.85);
+    font-style: normal;
+}
+
+/* Panel C scatter controls */
+.seasonal-scatter-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px 18px;
+    margin-bottom: 8px;
+    font-size: 0.75rem;
+    color: var(--text-dim, #a0a8b3);
+}
+
+.seasonal-scatter-controls label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.seasonal-scatter-controls select {
+    font-size: 0.75rem;
+    padding: 2px 6px;
+    background: var(--surface, #0d1117);
+    color: var(--text, #e0e0e0);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 3px;
+}
+
+.seasonal-scatter-plot {
+    width: 100%;
+    flex: 1;
+    min-height: 480px;
+}
+
+/* Inset map for Panel C is now drawn INSIDE the Plotly figure as a
+   second `geo` subplot — that way it saves with the PNG export and
+   never overlaps Plotly's modebar (which sits at the figure's
+   top-right). See _renderScatter() in realtime_seasonal.js. */
+
+/* Panel B — region time series */
+.seasonal-ts-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px 18px;
+    margin-bottom: 8px;
+    font-size: 0.75rem;
+    color: var(--text-dim, #a0a8b3);
+}
+.seasonal-ts-controls label { display: flex; align-items: center; gap: 6px; }
+.seasonal-ts-controls select {
+    font-size: 0.75rem;
+    padding: 2px 6px;
+    background: var(--surface, #0d1117);
+    color: var(--text, #e0e0e0);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 3px;
+}
+.seasonal-ts-plot {
+    width: 100%;
+    flex: 1;
+    min-height: 340px;
+}
+
+/* Panel E — analog table */
+.seasonal-an-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.78rem;
+    color: var(--text, #e0e0e0);
+    margin-top: 6px;
+}
+.seasonal-an-table th {
+    text-align: left;
+    padding: 6px 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.18);
+    color: var(--text-dim, #a0a8b3);
+    font-weight: 500;
+}
+.seasonal-an-table td {
+    padding: 6px 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    font-variant-numeric: tabular-nums;
+}
+.seasonal-an-table tbody tr:hover {
+    background: rgba(120,170,210,0.10);
+}
+.seasonal-an-table .an-ace-hi { color: #ff7a59; font-weight: 600; }
+.seasonal-an-table .an-ace-lo { color: #6da8e6; }
+
+/* Bottom "Average" row: bolded, with a top border to separate from the
+   ranking rows above. The arithmetic mean of the top-10 analogs serves
+   as the analog method's point forecast of the target year's ACE. */
+.seasonal-an-table tr.an-avg-row td {
+    border-top: 2px solid rgba(140,148,160,0.55);
+    padding-top: 8px;
+    font-weight: 700;
+    color: var(--text, #e0e0e0);
+}
+
+/* Leave-one-out skill summary that sits below the table. Color band
+   tells the user at a glance how well the current settings forecast
+   ACE historically (vs predicting climatology every year). */
+.seasonal-an-skill {
+    margin-top: 10px;
+    font-size: 0.72rem;
+    color: var(--text-dim, #a0a8b3);
+    line-height: 1.5;
+}
+.seasonal-an-skill .an-skill-good {
+    padding: 6px 10px;
+    background: rgba(34,197,94,0.10);
+    border-left: 3px solid rgba(34,197,94,0.60);
+    border-radius: 0 3px 3px 0;
+}
+.seasonal-an-skill .an-skill-ok {
+    padding: 6px 10px;
+    background: rgba(251,146,60,0.10);
+    border-left: 3px solid rgba(251,146,60,0.55);
+    border-radius: 0 3px 3px 0;
+}
+.seasonal-an-skill .an-skill-poor {
+    padding: 6px 10px;
+    background: rgba(233,85,79,0.10);
+    border-left: 3px solid rgba(233,85,79,0.55);
+    border-radius: 0 3px 3px 0;
+}
+.seasonal-an-skill strong { color: var(--text, #e0e0e0); }
+
+.seasonal-an-details {
+    margin-top: 10px;
+    font-size: 0.72rem;
+    color: var(--text-dim, #a0a8b3);
+}
+.seasonal-an-details summary {
+    cursor: pointer;
+    padding: 4px 0;
+    color: var(--text-dim, #a0a8b3);
+}
+.seasonal-an-details summary:hover { color: var(--text, #e0e0e0); }
+.seasonal-an-details-body {
+    padding: 6px 12px 8px;
+    background: rgba(255,255,255,0.025);
+    border-left: 2px solid rgba(140,148,160,0.30);
+    border-radius: 0 3px 3px 0;
+    line-height: 1.5;
+}
+.seasonal-an-details-body p { margin: 4px 0; }
+.seasonal-an-details-body code {
+    background: rgba(255,255,255,0.06);
+    padding: 1px 4px;
+    border-radius: 2px;
+    font-size: 0.85em;
+}
+
+/* Panel A anomaly map */
+.seasonal-anom-wrap {
+    position: relative;
+    background: rgba(0,0,0,0.25);
+    border-radius: 4px;
+    overflow: hidden;
+    /* Global view: lon 100-360 × lat -60..60 → 260/120 = 2.17. */
+    aspect-ratio: 2.17;
+    cursor: crosshair;
+}
+
+/* Inner clip element: the img is positioned/scaled inside this. JS sets
+   the transform when the user selects a basin zoom so we crop to a
+   specific lat/lon window without re-fetching the image. */
+.seasonal-anom-clip {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+}
+
+.seasonal-anom-tooltip {
+    position: absolute;
+    pointer-events: none;
+    padding: 3px 8px;
+    background: rgba(10,12,14,0.88);
+    color: #fff;
+    font: 11px/1.35 'DM Sans', system-ui, sans-serif;
+    border-radius: 3px;
+    /* JS positions `left`/`top` to the cursor; this offset keeps the tip
+       a few px clear so the cursor doesn't sit on the box. */
+    transform: translate(12px, 12px);
+    opacity: 0;
+    transition: opacity 80ms ease-out;
+    white-space: nowrap;
+    z-index: 5;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+}
+
+.seasonal-anom-tooltip.visible { opacity: 1; }
+
+.seasonal-anom-img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    display: block;
+}
+
+.seasonal-anom-overlay {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    padding: 4px 8px;
+    background: linear-gradient(to top, rgba(0,0,0,0.72), rgba(0,0,0,0));
+    font-size: 0.7rem;
+    color: #fff;
+    font-variant-numeric: tabular-nums;
+}
+
+.seasonal-anom-legend {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 6px;
+    font-size: 0.7rem;
+    color: var(--text-dim, #a0a8b3);
+}
+
+.seasonal-anom-bar {
+    flex: 1;
+    height: 8px;
+    border-radius: 2px;
+    background: linear-gradient(to right,
+        #0571b0 0%, #92c5de 25%, #f7f7f7 50%,
+        #f4a582 75%, #ca0020 100%);
+}
