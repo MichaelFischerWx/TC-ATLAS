@@ -30,7 +30,7 @@
         // this panel is for (TC potential-intensity literature).
         corr: { basin: 'NA', month: 5, kind: 'relative',
                 stat: 'pearson', overlayYear: '' },
-        ts: { region: 'atl_mdr', variable: 'sst', history: 'all' },
+        ts: { region: 'atl_mdr', variable: 'sst', history: 'all', highlight: 'none' },
         an: { year: null, month: 5, regions: 'all',
               method: 'grid_weighted', basin: 'NA', kind: 'raw',
               stat: 'pearson', topN: 'auto' },
@@ -262,6 +262,9 @@
         green_dim: 'rgba(34,197,94,0.14)',
         green_line: 'rgba(34,197,94,0.85)',
         gray: 'rgba(140,148,160,0.18)',
+        // Distinct blue for the user-picked highlight year on Panel B —
+        // sits between the gray history band and the orange current year.
+        highlight: '#3a8dde',
         // Defaults reflect dark mode; replaced on activate + theme-change.
         text: '#e0e0e0',
         textDim: '#a0a8b3',
@@ -754,9 +757,18 @@
             });
         }
 
-        // Historical years (subtle gray, thin)
+        // Populate the highlight-year picker (lazily — only once data
+        // exists and only when the select still has just the "None" stub).
+        _populateHighlightYears(bundle.years, currentYear);
+
+        var highlightYear = parseInt(state.ts.highlight, 10);
+        var hasHighlight = !isNaN(highlightYear) && bundle.byYear[highlightYear];
+
+        // Historical years (subtle gray, thin) — exclude current year AND
+        // the user-picked highlight year (drawn separately, bolder).
         var histYears = bundle.years.filter(function (y) {
             if (y === currentYear) return false;
+            if (hasHighlight && y === highlightYear) return false;
             if (state.ts.history === 'none') return false;
             if (state.ts.history === 'recent10') return y >= currentYear - 10;
             return true;
@@ -771,6 +783,20 @@
                 hovertemplate: y + ' · %{x}: %{y:.2f}<extra></extra>',
             });
         });
+
+        // Highlighted historical year — bold blue line above the gray
+        // background, below the current-year orange.
+        if (hasHighlight) {
+            traces.push({
+                type: 'scatter', mode: 'lines+markers',
+                x: months, y: bundle.byYear[highlightYear],
+                line: { color: BRAND.highlight, width: 2.8 },
+                marker: { size: 6, color: BRAND.highlight,
+                          line: { color: '#1a1f25', width: 1 } },
+                name: String(highlightYear) + ' (highlighted)',
+                hovertemplate: highlightYear + ' · %{x}: %{y:.2f}<extra></extra>',
+            });
+        }
 
         // Climatology mean — heavier solid line in brand green
         if (hasClim) {
@@ -924,6 +950,23 @@
         bind('seasonal-ts-region', 'region');
         bind('seasonal-ts-var', 'variable');
         bind('seasonal-ts-history', 'history');
+        bind('seasonal-ts-highlight', 'highlight');
+    }
+
+    function _populateHighlightYears(years, currentYear) {
+        var sel = document.getElementById('seasonal-ts-highlight');
+        if (!sel || sel.options.length > 1) return;
+        var frag = document.createDocumentFragment();
+        // Newest → oldest, exclude the current (in-progress) year.
+        var sorted = years.slice().sort(function (a, b) { return b - a; });
+        for (var i = 0; i < sorted.length; i++) {
+            if (sorted[i] === currentYear) continue;
+            var opt = document.createElement('option');
+            opt.value = String(sorted[i]);
+            opt.textContent = String(sorted[i]);
+            frag.appendChild(opt);
+        }
+        sel.appendChild(frag);
     }
 
     // -------------------------------------------------------------------
@@ -1694,10 +1737,10 @@
         var layout = {
             title: { text: 'Atlantic + Pacific climate indices' + titleTag,
                      font: { size: 14 } },
-            xaxis: { title: 'Date', zeroline: false },
+            xaxis: { zeroline: false },
             yaxis: { title: 'SST ' + vLabel, zeroline: true,
                      zerolinecolor: BRAND.gridZero },
-            margin: { l: 64, r: 18, t: 52, b: 80 },
+            margin: { l: 64, r: 18, t: 52, b: 60 },
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: BRAND.plotBg,
             font: { color: BRAND.text, family: 'DM Sans, system-ui, sans-serif',

@@ -117,6 +117,9 @@
     border-radius: 6px;
     padding: 10px 12px 12px;
     min-height: 0;
+    /* Defensive clip — Plotly's responsive sizing has briefly nudged
+       SVGs past the panel border when the parent grid row stretches. */
+    overflow: hidden;
 }
 
 #seasonal-panel-scatter { grid-column: 1 / -1; }
@@ -329,6 +332,10 @@
     width: 100%;
     flex: 1;
     min-height: 340px;
+    /* Stop the plot from stretching unbounded when its grid-row partner
+       (e.g. Panel E's analog table) gets tall — keeps the time series at
+       a reasonable aspect for ~12-month x range. */
+    max-height: 520px;
 }
 
 /* Panel E — analog table */
