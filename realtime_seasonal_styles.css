@@ -189,7 +189,7 @@
     background: rgba(10,12,14,0.78);
     border-radius: 3px;
     color: #fff;
-    font: 10px/1.4 'JetBrains Mono', ui-monospace, monospace;
+    font: 10.5px/1.4 'DM Sans', system-ui, sans-serif;
     pointer-events: none;
     display: none;
     z-index: 4;
@@ -357,6 +357,45 @@
 .seasonal-an-table .an-ace-hi { color: #ff7a59; font-weight: 600; }
 .seasonal-an-table .an-ace-lo { color: #6da8e6; }
 
+/* Bottom "Average" row: bolded, with a top border to separate from the
+   ranking rows above. The arithmetic mean of the top-10 analogs serves
+   as the analog method's point forecast of the target year's ACE. */
+.seasonal-an-table tr.an-avg-row td {
+    border-top: 2px solid rgba(140,148,160,0.55);
+    padding-top: 8px;
+    font-weight: 700;
+    color: var(--text, #e0e0e0);
+}
+
+/* Leave-one-out skill summary that sits below the table. Color band
+   tells the user at a glance how well the current settings forecast
+   ACE historically (vs predicting climatology every year). */
+.seasonal-an-skill {
+    margin-top: 10px;
+    font-size: 0.72rem;
+    color: var(--text-dim, #a0a8b3);
+    line-height: 1.5;
+}
+.seasonal-an-skill .an-skill-good {
+    padding: 6px 10px;
+    background: rgba(34,197,94,0.10);
+    border-left: 3px solid rgba(34,197,94,0.60);
+    border-radius: 0 3px 3px 0;
+}
+.seasonal-an-skill .an-skill-ok {
+    padding: 6px 10px;
+    background: rgba(251,146,60,0.10);
+    border-left: 3px solid rgba(251,146,60,0.55);
+    border-radius: 0 3px 3px 0;
+}
+.seasonal-an-skill .an-skill-poor {
+    padding: 6px 10px;
+    background: rgba(233,85,79,0.10);
+    border-left: 3px solid rgba(233,85,79,0.55);
+    border-radius: 0 3px 3px 0;
+}
+.seasonal-an-skill strong { color: var(--text, #e0e0e0); }
+
 .seasonal-an-details {
     margin-top: 10px;
     font-size: 0.72rem;
@@ -409,7 +448,7 @@
     padding: 3px 8px;
     background: rgba(10,12,14,0.88);
     color: #fff;
-    font: 11px/1.3 'JetBrains Mono', ui-monospace, monospace;
+    font: 11px/1.35 'DM Sans', system-ui, sans-serif;
     border-radius: 3px;
     /* JS positions `left`/`top` to the cursor; this offset keeps the tip
        a few px clear so the cursor doesn't sit on the box. */

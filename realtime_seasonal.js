@@ -345,11 +345,49 @@
             if (!plot || !window.Plotly) return;
             var now = new Date();
             var stamp = now.toISOString().slice(0, 16).replace(/[:T-]/g, '');
-            window.Plotly.downloadImage(plot, {
-                format: 'png',
-                filename: 'TC-ATLAS_' + filenameBase + '_' + stamp,
-                width: Math.max(plot.clientWidth, 1200),
-                height: Math.max(plot.clientHeight, 600),
+            // Saved PNGs should always render with a light background +
+            // dark text regardless of the user's current theme (a dark-mode
+            // figure pasted into a Word doc / paper is unreadable). Swap
+            // the layout to "light publication" colors, take the snapshot,
+            // then restore the live theme so the on-page view doesn't
+            // flicker permanently.
+            var current = plot._fullLayout || {};
+            var saveOverride = {
+                paper_bgcolor: '#ffffff',
+                plot_bgcolor:  '#ffffff',
+                'font.color':  '#1a1f25',
+                'xaxis.gridcolor':     'rgba(20,30,45,0.10)',
+                'xaxis.zerolinecolor': 'rgba(20,30,45,0.35)',
+                'xaxis.tickfont.color': '#1a1f25',
+                'xaxis.title.font.color': '#475569',
+                'yaxis.gridcolor':     'rgba(20,30,45,0.10)',
+                'yaxis.zerolinecolor': 'rgba(20,30,45,0.35)',
+                'yaxis.tickfont.color': '#1a1f25',
+                'yaxis.title.font.color': '#475569',
+                'title.font.color': '#1a1f25',
+                'legend.font.color': '#1a1f25',
+            };
+            // Geo inset (Panel C) also needs light land/ocean.
+            if (current.geo2) {
+                saveOverride['geo2.landcolor']      = 'rgba(170,180,194,0.75)';
+                saveOverride['geo2.oceancolor']     = 'rgba(225,232,242,0.85)';
+                saveOverride['geo2.coastlinecolor'] = 'rgba(85,95,108,0.65)';
+                saveOverride['geo2.bgcolor']        = 'rgba(255,255,255,0.90)';
+            }
+            window.Plotly.relayout(plot, saveOverride).then(function () {
+                window.Plotly.downloadImage(plot, {
+                    format: 'png',
+                    filename: 'TC-ATLAS_' + filenameBase + '_' + stamp,
+                    width: Math.max(plot.clientWidth, 1200),
+                    height: Math.max(plot.clientHeight, 600),
+                }).then(function () {
+                    // Restore the live theme — _refreshTheme + re-render
+                    // is the cleanest way to undo every override.
+                    _refreshTheme();
+                    _renderScatter();
+                    _renderTimeSeries();
+                    _renderIndices();
+                });
             });
         });
         panel.appendChild(btn);
@@ -519,7 +557,7 @@
         // the scatter for PNG export + avoids modebar conflict.
         var insetTraces = _scatterInsetBuildTraces();
         var allTraces = traces.concat(insetTraces);
-        layout.geo2 = _scatterInsetGeoLayout();
+        layout.geo2 = _insetGeoLayout();
         Plotly.react(el, allTraces, layout,
                      { responsive: true, displaylogo: false });
     }
@@ -532,55 +570,59 @@
     // fill-rendering Plotly does for scattergeo `fill: toself`
     // polygons (which made the Y-axis box look like it covered most
     // of the globe).
-    function _scatterInsetBuildTraces() {
-        function boxTrace(boxArr, color, label) {
-            if (!boxArr) return null;
-            var ls = boxArr[0], ln = boxArr[1], lw = boxArr[2], le = boxArr[3];
-            // 0-360 → -180..180. No region crosses the antimeridian.
-            var conv = function (lo) { return lo > 180 ? lo - 360 : lo; };
-            var lonW = conv(lw), lonE = conv(le);
-            // Densify latitude edges so the parallels don't bow under
-            // great-circle interpolation. Meridian edges are 2-point
-            // (a meridian IS its own great circle).
-            var STEPS = 24;
-            var lons = [], lats = [];
-            for (var i = 0; i <= STEPS; i++) {
-                lons.push(lonW + (i / STEPS) * (lonE - lonW));
-                lats.push(ls);
-            }
-            lons.push(lonE); lats.push(ln);
-            for (var j = 1; j <= STEPS; j++) {
-                lons.push(lonE - (j / STEPS) * (lonE - lonW));
-                lats.push(ln);
-            }
-            lons.push(lonW); lats.push(ls);
-            return {
-                type: 'scattergeo', mode: 'lines',
-                geo: 'geo2',                      // bind to the inset axis
-                lon: lons, lat: lats,
-                line: { color: color, width: 2.5 },
-                // Deliberately no fill — Plotly mis-resolves which side
-                // of a great-circle-interpolated polygon is "inside"
-                // for some boxes, producing the spurious whole-globe
-                // shading Mike spotted.
-                name: label, hoverinfo: 'skip',
-                showlegend: false,
-            };
+    function _regionBoxTrace(boxArr, color, label, geoAxis) {
+        if (!boxArr) return null;
+        var ls = boxArr[0], ln = boxArr[1], lw = boxArr[2], le = boxArr[3];
+        var conv = function (lo) { return lo > 180 ? lo - 360 : lo; };
+        var lonW = conv(lw), lonE = conv(le);
+        // Densify latitude edges so the parallels don't bow under
+        // great-circle interpolation. Meridian edges are 2-point.
+        var STEPS = 24;
+        var lons = [], lats = [];
+        for (var i = 0; i <= STEPS; i++) {
+            lons.push(lonW + (i / STEPS) * (lonE - lonW));
+            lats.push(ls);
         }
+        lons.push(lonE); lats.push(ln);
+        for (var j = 1; j <= STEPS; j++) {
+            lons.push(lonE - (j / STEPS) * (lonE - lonW));
+            lats.push(ln);
+        }
+        lons.push(lonW); lats.push(ls);
+        return {
+            type: 'scattergeo', mode: 'lines',
+            geo: geoAxis || 'geo2',
+            lon: lons, lat: lats,
+            line: { color: color, width: 2.5 },
+            name: label, hoverinfo: 'skip',
+            showlegend: false,
+        };
+    }
+
+    function _scatterInsetBuildTraces() {
         var xLabel = 'X · ' + (REGION_LABEL[state.scatter.x] || state.scatter.x);
         var yLabel = 'Y · ' + (REGION_LABEL[state.scatter.y] || state.scatter.y);
         return [
-            boxTrace(REGION_BOX[state.scatter.x], BRAND.orange, xLabel),
-            boxTrace(REGION_BOX[state.scatter.y], BRAND.green,  yLabel),
+            _regionBoxTrace(REGION_BOX[state.scatter.x], BRAND.orange, xLabel, 'geo2'),
+            _regionBoxTrace(REGION_BOX[state.scatter.y], BRAND.green,  yLabel, 'geo2'),
         ].filter(Boolean);
     }
 
-    function _scatterInsetGeoLayout() {
+    function _timeSeriesInsetBuildTraces() {
+        // Single-region inset for Panel B — just the selected region in
+        // brand orange (matches the current-year time-series color).
+        var label = REGION_LABEL[state.ts.region] || state.ts.region;
+        return [
+            _regionBoxTrace(REGION_BOX[state.ts.region], BRAND.orange, label, 'geo2'),
+        ].filter(Boolean);
+    }
+
+    function _insetGeoLayout(domain) {
         var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        // Default domain = Panel C's original top-left placement.
+        var dom = domain || { x: [0.005, 0.245], y: [0.74, 1.005] };
         return {
-            // Top-left corner of the figure. 24% wide × 28% tall — big
-            // enough to read, small enough to leave the scatter clear.
-            domain: { x: [0.005, 0.245], y: [0.74, 1.005] },
+            domain: dom,
             projection: { type: 'equirectangular' },
             showland: true,
             landcolor: isDark ? 'rgba(85,95,108,0.65)' : 'rgba(170,180,194,0.75)',
@@ -856,7 +898,15 @@
             },
             annotations: _watermarkAnnotations(),
         };
-        Plotly.react(el, traces, layout,
+        // Region inset — mirrors Panel C. Top-right corner so it doesn't
+        // sit on top of the current-year line which usually hugs the
+        // left half of the chart (Jan-Jun); also dodges the modebar
+        // since the modebar is hover-only and positioned over the inset
+        // anyway.
+        var insetTraces = _timeSeriesInsetBuildTraces();
+        var allTraces = traces.concat(insetTraces);
+        layout.geo2 = _insetGeoLayout({ x: [0.76, 1.0], y: [0.74, 1.005] });
+        Plotly.react(el, allTraces, layout,
                      { responsive: true, displaylogo: false });
     }
 
@@ -1007,6 +1057,222 @@
         };
     }
 
+    // ------------------------------------------------------------------
+    // Leave-one-out skill for the current Panel E settings.
+    //
+    // For each historical year Y in the corpus:
+    //   - drop Y, find its top-10 analogs using the SAME method/basin/
+    //     kind/region-set the user has selected
+    //   - predict Y's ACE = mean ACE of those analogs
+    //   - error = predicted - actual
+    // MAE / RMSE / bias of these errors describe the skill of the
+    // analog-averaging method as a forecast tool at this month. Lets
+    // users compare e.g. May raw vs May relative vs Aug raw and see
+    // that mid-season SST patterns predict ACE much better than
+    // pre-season ones.
+    // ------------------------------------------------------------------
+    function _computeAnalogSkill(aceLookup) {
+        var basin = state.an.basin;
+        var month = state.an.month;
+        var kind = state.an.kind;
+        var method = state.an.method;
+        var topN = 10;
+
+        // Build the list of historical years with both anomaly data
+        // and basin ACE available.
+        var years = [];
+        var aceVec = {};
+        // Source the year list from the distance-matrix when available
+        // (grid_weighted), else from the indices.
+        var seed = (state.distance_matrices
+                    && state.distance_matrices.basins[basin]
+                    && state.distance_matrices.basins[basin][String(month)])
+                 || null;
+        var seedYears = seed ? seed.years : null;
+        if (seedYears) {
+            seedYears.forEach(function (y) {
+                var rec = aceLookup(y);
+                if (rec && rec.ace !== null && rec.ace !== undefined) {
+                    years.push(y);
+                    aceVec[y] = rec.ace;
+                }
+            });
+        }
+        if (!years.length) return null;
+
+        // Compute pairwise distance for the chosen method.
+        // For grid_weighted: read the precomputed matrix row.
+        // For region methods: replicate the loop in _buildAnalogs but
+        // for every year (LOO is trivial — each year is the "target"
+        // in turn).
+        function distRowGrid(yi) {
+            var m = seed[kind];
+            if (!m) return null;
+            return m[yi];
+        }
+
+        function distRowRegion(yi) {
+            // Reproduce the region-vector and weight setup used by
+            // _buildAnalogs. For LOO we recompute distances from years[yi]
+            // to all other years using the SAME method/weight set.
+            var regions = REGION_SETS[state.an.regions] || REGION_SETS.all;
+            var valSuffix = (kind === 'detrended') ? '_sst_dt'
+                          : (kind === 'relative')  ? '_sst_rel'
+                          : '_anom';
+            var idx = state.indices;
+            // Cache vectors per year.
+            if (!_cachedRegionVecs ||
+                _cachedRegionVecs.month !== month ||
+                _cachedRegionVecs.regions !== state.an.regions ||
+                _cachedRegionVecs.kind !== kind) {
+                var v = {};
+                for (var i = 0; i < idx.dates.length; i++) {
+                    var parts = idx.dates[i].split('-');
+                    var y = parseInt(parts[0], 10);
+                    var mm = parseInt(parts[1], 10);
+                    if (mm !== month) continue;
+                    var vec = [];
+                    var anyNull = false;
+                    for (var r = 0; r < regions.length; r++) {
+                        var val = idx.values[regions[r] + valSuffix][i];
+                        if (val === null || val === undefined) { anyNull = true; break; }
+                        vec.push(val);
+                    }
+                    if (!anyNull) v[y] = vec;
+                }
+                _cachedRegionVecs = { month: month, regions: state.an.regions,
+                                     kind: kind, vecs: v };
+            }
+            // Weights
+            var ws = new Array(regions.length);
+            if (method === 'corr_weighted' && state.region_corr) {
+                var perRegion = (state.region_corr.basins[basin] || {})[String(month)] || {};
+                var sumW = 0;
+                for (var k = 0; k < regions.length; k++) {
+                    var entry = perRegion[regions[k]];
+                    var w = (entry && entry[kind] !== null && entry[kind] !== undefined)
+                        ? Math.abs(entry[kind]) : 0;
+                    ws[k] = w; sumW += w;
+                }
+                if (sumW > 0) {
+                    for (var k2 = 0; k2 < regions.length; k2++) ws[k2] /= sumW;
+                } else {
+                    for (var k3 = 0; k3 < regions.length; k3++) ws[k3] = 1 / regions.length;
+                }
+            } else {
+                for (var k4 = 0; k4 < regions.length; k4++) ws[k4] = 1 / regions.length;
+            }
+            var Y = years[yi];
+            var t = _cachedRegionVecs.vecs[Y];
+            if (!t) return null;
+            var out = new Array(years.length);
+            for (var jj = 0; jj < years.length; jj++) {
+                var Yj = years[jj];
+                if (Yj === Y) { out[jj] = 0; continue; }
+                var vj = _cachedRegionVecs.vecs[Yj];
+                if (!vj) { out[jj] = NaN; continue; }
+                var s2 = 0;
+                for (var rr = 0; rr < regions.length; rr++) {
+                    var d = vj[rr] - t[rr];
+                    s2 += ws[rr] * d * d;
+                }
+                out[jj] = Math.sqrt(s2);
+            }
+            return out;
+        }
+
+        var errs = [];
+        var bias = 0;
+        for (var i = 0; i < years.length; i++) {
+            var row;
+            if (method === 'grid_weighted') {
+                row = distRowGrid(seedYears.indexOf(years[i]));
+                if (!row) continue;
+                // Map back to year list (might differ from seedYears if
+                // some seeded years had no ACE).
+                var pairs = [];
+                for (var k = 0; k < seedYears.length; k++) {
+                    if (seedYears[k] === years[i]) continue;
+                    if (aceVec[seedYears[k]] === undefined) continue;
+                    pairs.push({ year: seedYears[k], dist: row[k] });
+                }
+                pairs.sort(function (a, b) { return a.dist - b.dist; });
+                var picked = pairs.slice(0, topN);
+                if (picked.length < topN / 2) continue;
+                var sum = 0;
+                for (var p = 0; p < picked.length; p++) sum += aceVec[picked[p].year];
+                var pred = sum / picked.length;
+                var err = pred - aceVec[years[i]];
+                errs.push(err);
+                bias += err;
+            } else {
+                row = distRowRegion(i);
+                if (!row) continue;
+                var pairs2 = [];
+                for (var k2 = 0; k2 < years.length; k2++) {
+                    if (k2 === i) continue;
+                    if (!isFinite(row[k2])) continue;
+                    if (aceVec[years[k2]] === undefined) continue;
+                    pairs2.push({ year: years[k2], dist: row[k2] });
+                }
+                pairs2.sort(function (a, b) { return a.dist - b.dist; });
+                var picked2 = pairs2.slice(0, topN);
+                if (picked2.length < topN / 2) continue;
+                var sum2 = 0;
+                for (var p2 = 0; p2 < picked2.length; p2++) sum2 += aceVec[picked2[p2].year];
+                var pred2 = sum2 / picked2.length;
+                var err2 = pred2 - aceVec[years[i]];
+                errs.push(err2);
+                bias += err2;
+            }
+        }
+        if (!errs.length) return null;
+        bias = bias / errs.length;
+        var abs = 0, sq = 0;
+        for (var e = 0; e < errs.length; e++) {
+            abs += Math.abs(errs[e]); sq += errs[e] * errs[e];
+        }
+        return {
+            n: errs.length,
+            mae: abs / errs.length,
+            rmse: Math.sqrt(sq / errs.length),
+            bias: bias,
+            // Persistence baseline: mean ACE (in this corpus). MAE_clim
+            // is what you'd get by always predicting the mean.
+            mae_climo: (function () {
+                var mean = 0, m = 0;
+                for (var k in aceVec) { mean += aceVec[k]; m += 1; }
+                mean = mean / m;
+                var a = 0;
+                for (var kk in aceVec) a += Math.abs(aceVec[kk] - mean);
+                return a / m;
+            })(),
+        };
+    }
+    var _cachedRegionVecs = null;
+
+    function _renderAnalogSkill(bundle, aceLookup) {
+        var el = document.getElementById('seasonal-an-skill');
+        if (!el) return;
+        var skill = _computeAnalogSkill(aceLookup);
+        if (!skill) { el.innerHTML = ''; return; }
+        // Skill score relative to climatology: 1 - MAE / MAE_climo.
+        // Positive = beats climatology; 0 = tied; negative = worse.
+        var ss = 1 - skill.mae / skill.mae_climo;
+        var ssCls = ss > 0.15 ? 'an-skill-good'
+                  : ss > 0.0  ? 'an-skill-ok' : 'an-skill-poor';
+        el.innerHTML =
+            '<div class="' + ssCls + '">' +
+            '<strong>Top-10 analog forecast skill</strong> ' +
+            '(leave-one-out over ' + skill.n + ' years): ' +
+            'MAE ' + skill.mae.toFixed(1) +
+            ' · RMSE ' + skill.rmse.toFixed(1) +
+            ' · bias ' + (skill.bias >= 0 ? '+' : '') + skill.bias.toFixed(1) +
+            ' · skill-vs-climo <strong>' + (ss * 100).toFixed(0) + '%</strong> ' +
+            '(climo MAE ' + skill.mae_climo.toFixed(1) + '). ' +
+            'Toggle method/kind/month to compare.</div>';
+    }
+
     function _renderAnalogs() {
         var tbody = document.getElementById('seasonal-an-tbody');
         var ace_th = document.getElementById('seasonal-an-ace-th');
@@ -1048,6 +1314,8 @@
             return;
         }
         var html = '';
+        var distAcc = 0, aceAcc = 0, stormAcc = 0;
+        var aceN = 0, stormN = 0;
         bundle.rows.forEach(function (r, i) {
             var ace = aceLookup(r.year);
             var aceVal = ace ? ace.ace : null;
@@ -1066,8 +1334,50 @@
                 '<td' + aceCls + '>' + (aceVal !== null ? aceVal.toFixed(1) : '—') + '</td>' +
                 '<td>' + (storms !== null && storms !== undefined ? storms : '—') + '</td>' +
                 '</tr>';
+            distAcc += r.dist;
+            if (aceVal !== null && aceVal !== undefined) {
+                aceAcc += aceVal; aceN += 1;
+            }
+            if (storms !== null && storms !== undefined) {
+                stormAcc += storms; stormN += 1;
+            }
         });
+
+        // Bottom "Average" row: arithmetic mean of the top-10 analogs.
+        // The ACE mean is also the analog method's point forecast of
+        // the target year's ACE; LOO skill below quantifies how good
+        // that forecast is historically.
+        if (bundle.rows.length) {
+            var n = bundle.rows.length;
+            var meanAce = aceN ? (aceAcc / aceN).toFixed(1) : '—';
+            var meanStorms = stormN ? (stormAcc / stormN).toFixed(1) : '—';
+            html += '<tr class="an-avg-row">' +
+                '<td>—</td>' +
+                '<td>Average (top ' + n + ')</td>' +
+                '<td>' + (distAcc / n).toFixed(3) + '</td>' +
+                '<td>' + meanAce + '</td>' +
+                '<td>' + meanStorms + '</td>' +
+                '</tr>';
+        }
         tbody.innerHTML = html;
+
+        // Disable/enable the region-set dropdown depending on method.
+        // Grid-weighted uses the full 0.25° SST anomaly field, so the
+        // 14-region partition isn't applicable.
+        var rsel = document.getElementById('seasonal-an-regions');
+        if (rsel) {
+            var isGrid = (state.an.method === 'grid_weighted');
+            rsel.disabled = isGrid;
+            rsel.title = isGrid
+                ? 'Grid-weighted method uses the full 0.25° global SST field — no region partition.'
+                : 'Restrict the region-mean vector to a subset of regions.';
+            var rlabel = rsel.parentElement;
+            if (rlabel) rlabel.style.opacity = isGrid ? 0.4 : '';
+        }
+
+        // Compute + render leave-one-out skill so users can compare
+        // analog methods on the same footing.
+        _renderAnalogSkill(bundle, aceLookup);
 
         // Update the "How analogs are computed" weights summary so the user
         // can see what regions/pixels are dominating the current ranking.
@@ -1411,13 +1721,16 @@
     // → white → dark red), each contour is drawn as a thick stroke in a
     // contrasting color (black for warm, white for cool — but always with
     // a halo of the opposite color underneath, see _drawContoursOnSVG).
+    // Saturated, env-overlay-style contour palette. Each contour is
+    // drawn as a thick saturated stroke (cool blues for negative,
+    // warm reds for positive) over a wider opposite-color halo for
+    // contrast against the BWR-shaded correlation field. ±0.5 levels
+    // dropped — they were noise; ±1 and ±2 carry the signal.
     var ANOM_CONTOUR_STYLE = {
-        '-2.0': { color: '#000', halo: '#fff', width: 3.0 },
-        '-1.0': { color: '#000', halo: '#fff', width: 2.4 },
-        '-0.5': { color: '#000', halo: '#fff', width: 1.6, dash: '5 4' },
-        '+0.5': { color: '#fff', halo: '#000', width: 1.6, dash: '5 4' },
-        '+1.0': { color: '#fff', halo: '#000', width: 2.4 },
-        '+2.0': { color: '#fff', halo: '#000', width: 3.0 },
+        '-2.0': { color: '#08306b', halo: '#fff', width: 4.5 },
+        '-1.0': { color: '#3a78c2', halo: '#fff', width: 3.5 },
+        '+1.0': { color: '#cf2222', halo: '#fff', width: 3.5 },
+        '+2.0': { color: '#67000d', halo: '#fff', width: 4.5 },
     };
 
     function _renderCorrOverlay() {
@@ -1475,8 +1788,10 @@
             svg.appendChild(p);
         }
         for (var level in payload.paths) {
-            var style = ANOM_CONTOUR_STYLE[level]
-                || { color: '#000', halo: '#fff', width: 1.5 };
+            // Only render the levels we have explicit styles for —
+            // drops ±0.5 which were too noisy to be readable.
+            var style = ANOM_CONTOUR_STYLE[level];
+            if (!style) continue;
             payload.paths[level].forEach(function (path) {
                 var d = '';
                 for (var i = 0; i < path.length; i++) {
@@ -1496,14 +1811,9 @@
     function _buildOverlayLegendHTML(year, month) {
         var monLabel = ['', 'Jan','Feb','Mar','Apr','May','Jun',
                         'Jul','Aug','Sep','Oct','Nov','Dec'][month];
-        // Legend swatches use semantic red-warm / blue-cool so the sign is
-        // readable independent of the on-map black/white halo styling.
-        var SWATCH = {
-            '-2.0': '#0a3a78', '-1.0': '#2d6db3', '-0.5': '#6da8e6',
-            '+0.5': '#f4a582', '+1.0': '#c63832', '+2.0': '#7b0a18',
-        };
-        var rows = ['+2.0', '+1.0', '+0.5', '-0.5', '-1.0', '-2.0'].map(function (l) {
-            return '<div><span class="legend-line" style="color:' + SWATCH[l] +
+        var rows = ['+2.0', '+1.0', '-1.0', '-2.0'].map(function (l) {
+            var s = ANOM_CONTOUR_STYLE[l];
+            return '<div><span class="legend-line" style="color:' + s.color +
                 '"></span>' + l + ' °C</div>';
         });
         return '<div style="font-weight:600;margin-bottom:2px">' +
