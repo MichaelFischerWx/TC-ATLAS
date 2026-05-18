@@ -1254,15 +1254,37 @@
     <script>document.write('<link rel="stylesheet" href="realtime_seasonal_styles.css'+window.__v+'">');</script>
 
     <script>
-    /* Tab switching between Map, Satellite, and Subseasonal views */
+    /* Tab switching between Map, Satellite, Subseasonal, and Seasonal views */
     (function () {
         var currentView = 'map';
+        var VALID_VIEWS = { map: 1, satellite: 1, subseasonal: 1, seasonal: 1 };
         /* Seed the data-view attribute so CSS hides map-only toggles
            correctly even on first paint (before any user click). */
         document.documentElement.setAttribute('data-view', 'map');
+
+        /* Keep the URL hash in sync with the active view so users can
+           bookmark / share direct links (e.g. realtime_ir.html#seasonal).
+           Preserves any panel sub-anchor (#seasonal-panel-anom-map etc.)
+           by passing it through. */
+        function _syncHash(view) {
+            try {
+                var cur = (window.location.hash || '').replace(/^#/, '');
+                // Preserve panel deep-links like "seasonal-panel-anom-map"
+                // — only overwrite if the current hash doesn't already
+                // point to the same view (so explicit panel anchors keep
+                // working for scroll-into-view).
+                if (cur === view) return;
+                if (cur.indexOf(view + '-') === 0) return;
+                var newHash = (view === 'map') ? '' : '#' + view;
+                history.replaceState(null, '',
+                    window.location.pathname + window.location.search + newHash);
+            } catch (e) { /* old browsers — silently skip */ }
+        }
+
         window.switchIRView = function (view) {
-            if (view === currentView) return;
+            if (view === currentView) { _syncHash(view); return; }
             currentView = view;
+            _syncHash(view);
             if (typeof gtag === 'function') try { gtag('event', 'ir_view_switch', { view: view }); } catch(e) {}
 
             var irMain = document.getElementById('ir-main');
@@ -1312,12 +1334,32 @@
             }
         };
 
-        /* Auto-switch via URL hash */
-        if (window.location.hash.indexOf('view=satellite') !== -1) {
-            window.switchIRView('satellite');
-        } else if (window.location.hash.indexOf('view=subseasonal') !== -1) {
-            window.switchIRView('subseasonal');
+        /* Auto-switch via URL hash. Supports both:
+           - short form: #seasonal, #subseasonal, #satellite, #map
+           - legacy:     #view=seasonal, etc.
+           - panel deep-links: #seasonal-panel-anom-map → seasonal tab */
+        function _viewFromHash() {
+            var h = (window.location.hash || '').replace(/^#/, '');
+            if (!h) return null;
+            // legacy "view=X" form
+            var m = h.match(/^view=([a-z]+)/);
+            if (m && VALID_VIEWS[m[1]]) return m[1];
+            // bare short form
+            if (VALID_VIEWS[h]) return h;
+            // panel deep-link: seasonal-panel-..., subseasonal-..., etc.
+            for (var v in VALID_VIEWS) {
+                if (h === v || h.indexOf(v + '-') === 0) return v;
+            }
+            return null;
         }
+        var initialView = _viewFromHash();
+        if (initialView && initialView !== 'map') window.switchIRView(initialView);
+
+        /* Respond to back/forward navigation too */
+        window.addEventListener('hashchange', function () {
+            var v = _viewFromHash();
+            if (v) window.switchIRView(v);
+        });
     })();
     </script>
 </body>

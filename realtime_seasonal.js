@@ -387,11 +387,17 @@
                 saveOverride['geo2.bgcolor']        = 'rgba(255,255,255,0.90)';
             }
             window.Plotly.relayout(plot, saveOverride).then(function () {
+                // scale: 2 gives ~2× the on-screen pixel density — usable
+                // for both web sharing and 6-inch print at 200+ DPI.
+                // Min width 1400 / height 800 ensures we never ship a
+                // sub-publication-quality snapshot even from a small
+                // viewport.
                 window.Plotly.downloadImage(plot, {
                     format: 'png',
                     filename: 'TC-ATLAS_' + filenameBase + '_' + stamp,
-                    width: Math.max(plot.clientWidth, 1200),
-                    height: Math.max(plot.clientHeight, 600),
+                    width: Math.max(plot.clientWidth, 1400),
+                    height: Math.max(plot.clientHeight, 800),
+                    scale: 2,
                 }).then(function () {
                     // Restore the live theme — _refreshTheme + re-render
                     // is the cleanest way to undo every override.
@@ -651,15 +657,18 @@
             },
             xaxis: { title: _axisTitle(bundle.xKey, state.scatter.x), zeroline: false },
             yaxis: { title: _axisTitle(bundle.yKey, state.scatter.y), zeroline: false },
-            margin: { l: 60, r: 10, t: 60, b: 70 },
+            margin: { l: 60, r: 10, t: 60, b: 100 },
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: BRAND.plotBg,
             font: { color: BRAND.text, family: 'DM Sans, system-ui, sans-serif',
                     size: 11 },
             showlegend: !!(bundle.current && bundle.current.preliminary),
+            // Legend below the plot — on narrow viewports the title wraps
+            // onto a second line and would collide with a top-anchored
+            // legend (matches the Panels B / F convention).
             legend: {
                 font: { size: 10 }, orientation: 'h',
-                x: 0, y: 1.10, xanchor: 'left', yanchor: 'bottom',
+                x: 0, y: -0.22, xanchor: 'left', yanchor: 'top',
                 bgcolor: 'rgba(0,0,0,0)',
             },
             hovermode: 'closest',
