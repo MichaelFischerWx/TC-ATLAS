@@ -19,6 +19,11 @@
     justify-content: space-between;
     padding: 0 16px;
     z-index: 100;
+    /* Include the 1px bottom border in the 32px height. The 1px
+       top padding compensates for the bottom border so flex children
+       are centered against the visible bar, not the content box. */
+    box-sizing: border-box;
+    padding-top: 1px;
 }
 
 .ir-view-tabs {

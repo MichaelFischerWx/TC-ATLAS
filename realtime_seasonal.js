@@ -405,6 +405,109 @@
         panel.appendChild(btn);
     }
 
+    // Lazy-load html2canvas for the image/HTML panels (A, D, E). Mirrors
+    // the loader in realtime_ir.js so cold first click is a single CDN
+    // fetch; subsequent saves are instant.
+    function _ensureHtml2canvas() {
+        if (window.html2canvas) return Promise.resolve();
+        if (window._html2canvasPending) return window._html2canvasPending;
+        window._html2canvasPending = new Promise(function (resolve, reject) {
+            var s = document.createElement('script');
+            s.src = 'https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js';
+            s.onload = function () { resolve(); };
+            s.onerror = function () { reject(new Error('html2canvas load failed')); };
+            document.head.appendChild(s);
+        });
+        return window._html2canvasPending;
+    }
+
+    function _stampTcAtlasWatermark(canvas, panelWidthPx) {
+        var ctx = canvas.getContext('2d');
+        var scale = canvas.width / Math.max(1, panelWidthPx);
+        var pad = Math.round(12 * scale);
+        ctx.save();
+        // html2canvas leaves a non-identity transform on the context
+        // (scale + translation matching the captured DOM region) — drop
+        // it so our watermark coords are interpreted in raw canvas pixels.
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.textAlign = 'right';
+        ctx.fillStyle = 'rgba(40,55,75,0.55)';
+        ctx.font = '600 ' + Math.round(11 * scale) +
+                   'px "DM Sans", system-ui, sans-serif';
+        ctx.textBaseline = 'top';
+        ctx.fillText('TC-ATLAS', canvas.width - pad, pad);
+        ctx.fillStyle = 'rgba(40,55,75,0.42)';
+        ctx.font = '400 ' + Math.round(9 * scale) +
+                   'px "DM Sans", system-ui, sans-serif';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText('michaelfischerwx.github.io/TC-ATLAS',
+                     canvas.width - pad, canvas.height - pad / 2);
+        ctx.restore();
+    }
+
+    // Save-button for image/HTML panels (A, D, E) — uses html2canvas to
+    // rasterize the whole .seasonal-panel (minus the button itself), then
+    // bakes the TC-ATLAS watermark onto the canvas. Matches the look of
+    // the Plotly-panel save (B, C, F).
+    function _addPanelImageSaveBtn(panelId, filenameBase) {
+        var panel = document.getElementById(panelId);
+        if (!panel || panel.querySelector('.seasonal-save-btn')) return;
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'seasonal-save-btn';
+        btn.title = 'Save panel as PNG';
+        btn.setAttribute('aria-label', 'Save panel as PNG');
+        btn.textContent = '⤓';
+        btn.setAttribute('data-html2canvas-ignore', 'true');
+        btn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            _ga('rt_seasonal_save_png', { panel: filenameBase });
+            var origLabel = btn.textContent;
+            btn.textContent = '…';
+            btn.disabled = true;
+            _ensureHtml2canvas().then(function () {
+                return window.html2canvas(panel, {
+                    useCORS: true,
+                    allowTaint: false,
+                    backgroundColor: '#ffffff',
+                    logging: false,
+                    scale: 2,
+                    ignoreElements: function (el) {
+                        return el.classList &&
+                               el.classList.contains('seasonal-save-btn');
+                    },
+                });
+            }).then(function (canvas) {
+                _stampTcAtlasWatermark(canvas, panel.offsetWidth);
+                return new Promise(function (resolve, reject) {
+                    canvas.toBlob(function (blob) {
+                        if (!blob) return reject(
+                            new Error('Canvas produced no blob (CORS taint?)'));
+                        resolve(blob);
+                    }, 'image/png');
+                });
+            }).then(function (blob) {
+                var ts = new Date().toISOString()
+                    .replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
+                var url = URL.createObjectURL(blob);
+                var a = document.createElement('a');
+                a.href = url;
+                a.download = filenameBase + '_' + ts + '.png';
+                document.body.appendChild(a); a.click();
+                document.body.removeChild(a);
+                setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+            }).catch(function (err) {
+                console.error('[seasonal] save failed', err);
+                alert("Couldn't save PNG: " +
+                      (err && err.message ? err.message : err));
+            }).then(function () {
+                btn.textContent = origLabel;
+                btn.disabled = false;
+            });
+        });
+        panel.appendChild(btn);
+    }
+
     var REGION_LABEL = {
         // Atlantic
         atl_basin: 'Atl. basin',
@@ -2199,6 +2302,12 @@
                             'seasonal_region_timeseries');
             _addPlotSaveBtn('seasonal-panel-indices', 'seasonal-idx-plot',
                             'seasonal_climate_indices');
+            _addPanelImageSaveBtn('seasonal-panel-anom-map',
+                                  'seasonal_live_anomaly');
+            _addPanelImageSaveBtn('seasonal-panel-correlation',
+                                  'seasonal_correlation_map');
+            _addPanelImageSaveBtn('seasonal-panel-analogs',
+                                  'seasonal_analog_seasons');
         }).catch(function (e) {
             _setStatus('Failed to load seasonal data: ' + e.message, true);
         });
