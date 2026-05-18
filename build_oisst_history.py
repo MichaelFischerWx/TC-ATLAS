@@ -879,7 +879,8 @@ def build_correlations(out_dir: Path,
     manifest = {
         "basins": ACE_BASINS,
         "months": list(range(1, 13)),
-        "kinds": ["raw", "detrended", "relative"],
+        "kinds": ["raw", "detrended", "relative",
+                  "raw_spearman", "detrended_spearman", "relative_spearman"],
         "vmin": -0.7, "vmax": 0.7,
         "extent": [LON_MIN, LON_MAX, LAT_MIN, LAT_MAX],
         "tropical_mean_band": [TROPICAL_MEAN_LAT_MIN, TROPICAL_MEAN_LAT_MAX],
@@ -929,6 +930,25 @@ def build_correlations(out_dir: Path,
         with np.errstate(invalid="ignore", divide="ignore"):
             r = num / denom
         return r.astype(np.float32)
+
+    def _spearman_along_year(sst_ym, ace_ts):
+        """Spearman rank correlation along axis 0 = Pearson on ranks.
+        Robust to outliers and to non-linear-but-monotonic relationships.
+        Useful here because ACE is heavily right-skewed (a few
+        hyperactive seasons dominate Pearson). Pixels that are NaN
+        every year (land) return NaN; everywhere else we get a proper
+        rank correlation."""
+        s = sst_ym.astype(np.float64)
+        # `argsort(axis=0).argsort(axis=0)` gives ranks 0..n-1 along
+        # the year axis. NaN cells get a deterministic-but-meaningless
+        # rank; the final NaN-mask below sets those to NaN.
+        sst_ranks = s.argsort(axis=0).argsort(axis=0).astype(np.float64)
+        ace_ranks = ace_ts.argsort().argsort().astype(np.float64)
+        r = _corr_along_year(sst_ranks, ace_ranks)
+        # Force land/all-NaN cells back to NaN.
+        all_nan_mask = ~np.isfinite(s).any(axis=0)
+        r[all_nan_mask] = np.nan
+        return r
 
     def _render(corr_2d, fname, basin_name, month, kind):
         # Native subset is 340 × 1040 cells (lat × lon). Render at
@@ -1045,59 +1065,72 @@ def build_correlations(out_dir: Path,
             sst_v = sst_ym[valid_year_mask]
             ace_v = ace_full[valid_year_mask]
             # Raw correlation
-            r_raw = _corr_along_year(sst_v, ace_v)
+            # Pearson + Spearman correlation in parallel for each kind.
+            # Spearman is robust to ACE outliers (1990 WP, 2005 NA, 2018
+            # EP …); useful as an option but Pearson stays default since
+            # it matches the standard convention in the literature.
+            r_raw  = _corr_along_year(sst_v, ace_v)
+            r_raw_s = _spearman_along_year(sst_v, ace_v)
             _render(r_raw, f"{basin}_{month:02d}_raw.png",
                     ACE_BASINS[basin], month, "raw")
+            _render(r_raw_s, f"{basin}_{month:02d}_raw_spearman.png",
+                    ACE_BASINS[basin], month, "raw_spearman")
             _write_grid_sidecar(r_raw, f"{basin}_{month:02d}_raw.grid.json")
-            # Detrended correlation (linear-in-year removed from BOTH series)
+            _write_grid_sidecar(r_raw_s, f"{basin}_{month:02d}_raw_spearman.grid.json")
+            # Detrended (linear-in-year removed from both SST and ACE)
             ace_dt = _detrend(ace_v.reshape(-1, 1)).ravel()
             sst_dt = _detrend(sst_v)
-            r_det = _corr_along_year(sst_dt, ace_dt)
+            r_det  = _corr_along_year(sst_dt, ace_dt)
+            r_det_s = _spearman_along_year(sst_dt, ace_dt)
             _render(r_det, f"{basin}_{month:02d}_detrended.png",
                     ACE_BASINS[basin], month, "detrended")
+            _render(r_det_s, f"{basin}_{month:02d}_detrended_spearman.png",
+                    ACE_BASINS[basin], month, "detrended_spearman")
             _write_grid_sidecar(r_det, f"{basin}_{month:02d}_detrended.grid.json")
-
-            # Relative SST correlation (Vecchi & Soden 2007): subtract
-            # the contemporaneous tropical-mean SST from each year's
-            # field, then correlate against detrended ACE. The
-            # tropical-mean subtraction removes the global warming
-            # trend by construction, so we use detrended ACE for
-            # consistency.
+            _write_grid_sidecar(r_det_s, f"{basin}_{month:02d}_detrended_spearman.grid.json")
+            # Relative SST (Vecchi-Soden); ACE detrended for consistency.
             trop_v = trop_mean_grid[valid_year_mask, month - 1]
             sst_v_rel = sst_v - trop_v[:, None, None]
-            r_rel = _corr_along_year(sst_v_rel, ace_dt)
+            r_rel  = _corr_along_year(sst_v_rel, ace_dt)
+            r_rel_s = _spearman_along_year(sst_v_rel, ace_dt)
             _render(r_rel, f"{basin}_{month:02d}_relative.png",
                     ACE_BASINS[basin], month, "relative")
+            _render(r_rel_s, f"{basin}_{month:02d}_relative_spearman.png",
+                    ACE_BASINS[basin], month, "relative_spearman")
             _write_grid_sidecar(r_rel, f"{basin}_{month:02d}_relative.grid.json")
-            total += 3
+            _write_grid_sidecar(r_rel_s, f"{basin}_{month:02d}_relative_spearman.grid.json")
+            total += 6
 
-            # Per-region (Panel E correlation-weighted analog weights)
+            # Per-region analog weights — Pearson + Spearman both.
             region_corr[basin][month] = {}
             for region, box in REGIONS.items():
-                r_raw_mean = _box_mean_corr(r_raw, box)
-                r_det_mean = _box_mean_corr(r_det, box)
-                r_rel_mean = _box_mean_corr(r_rel, box)
+                def _maybe(val):
+                    return None if not np.isfinite(val) else round(val, 4)
                 region_corr[basin][month][region] = {
-                    "raw":       None if not np.isfinite(r_raw_mean) else round(r_raw_mean, 4),
-                    "detrended": None if not np.isfinite(r_det_mean) else round(r_det_mean, 4),
-                    "relative":  None if not np.isfinite(r_rel_mean) else round(r_rel_mean, 4),
+                    "raw":              _maybe(_box_mean_corr(r_raw,  box)),
+                    "raw_spearman":     _maybe(_box_mean_corr(r_raw_s, box)),
+                    "detrended":        _maybe(_box_mean_corr(r_det,  box)),
+                    "detrended_spearman": _maybe(_box_mean_corr(r_det_s, box)),
+                    "relative":         _maybe(_box_mean_corr(r_rel,  box)),
+                    "relative_spearman": _maybe(_box_mean_corr(r_rel_s, box)),
                 }
 
-            # Grid-based analog distance matrices.
+            # Grid-based analog distance matrices — Pearson + Spearman.
             flat_raw = sst_v.reshape(sst_v.shape[0], -1)
             flat_dt = sst_dt.reshape(sst_dt.shape[0], -1)
             flat_rel = sst_v_rel.reshape(sst_v_rel.shape[0], -1)
-            d_raw = _pairwise_weighted_l2(flat_raw, r_raw.ravel())
-            d_dt  = _pairwise_weighted_l2(flat_dt,  r_det.ravel())
-            d_rel = _pairwise_weighted_l2(flat_rel, r_rel.ravel())
             yr_list = years_all[valid_year_mask].tolist()
             distance_matrices[basin][month] = {
-                "years":     [int(y) for y in yr_list],
-                "raw":       np.round(d_raw, 3).tolist(),
-                "detrended": np.round(d_dt,  3).tolist(),
-                "relative":  np.round(d_rel, 3).tolist(),
+                "years":               [int(y) for y in yr_list],
+                "raw":                 np.round(_pairwise_weighted_l2(flat_raw, r_raw.ravel()),  3).tolist(),
+                "raw_spearman":        np.round(_pairwise_weighted_l2(flat_raw, r_raw_s.ravel()), 3).tolist(),
+                "detrended":           np.round(_pairwise_weighted_l2(flat_dt,  r_det.ravel()),  3).tolist(),
+                "detrended_spearman":  np.round(_pairwise_weighted_l2(flat_dt,  r_det_s.ravel()), 3).tolist(),
+                "relative":            np.round(_pairwise_weighted_l2(flat_rel, r_rel.ravel()),  3).tolist(),
+                "relative_spearman":   np.round(_pairwise_weighted_l2(flat_rel, r_rel_s.ravel()), 3).tolist(),
             }
-        log.info("  basin %s: 36 maps (raw + detrended + relative)", basin)
+        log.info("  basin %s: %d maps (raw/detrended/relative × pearson+spearman)",
+                 basin, 36)
 
     (out_dir / "region_ace_correlations.json").write_text(
         json.dumps({"basins": region_corr,
@@ -1204,9 +1237,24 @@ def build_anomaly_contours(out_dir: Path, climo_path: Path,
                     paths_by_level[label] = paths
         finally:
             plt.close(fig_h)
-        out_obj = {"year": y, "month": m,
-                   "extent": [LON_MIN, LON_MAX, LAT_MIN, LAT_MAX],
-                   "paths": paths_by_level}
+        # Also embed the binned anomaly grid (same coarsening) so the
+        # Panel D hover tooltip can report this year's anomaly value at
+        # the cursor alongside the correlation r — single fetch covers
+        # both. Coarse grid is ~70 KB additional JSON.
+        grid_vals = [[None if not np.isfinite(v) else round(float(v), 2)
+                      for v in row] for row in anom_coarse]
+        out_obj = {
+            "year": y, "month": m,
+            "extent": [LON_MIN, LON_MAX, LAT_MIN, LAT_MAX],
+            "paths": paths_by_level,
+            "grid": {
+                "lat_min": LAT_MIN, "lat_max": LAT_MIN + h2 * 1.0,
+                "lon_min": LON_MIN, "lon_max": LON_MIN + w2 * 1.0,
+                "cell_size_deg": 1.0,
+                "n_lat": int(h2), "n_lon": int(w2),
+                "values": grid_vals,
+            },
+        }
         (cdir / f"{y}_{m:02d}.json").write_text(
             json.dumps(out_obj, separators=(",", ":")))
         years_seen.add(y)

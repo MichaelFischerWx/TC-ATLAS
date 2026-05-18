@@ -28,10 +28,12 @@
         scatter: { x: 'atl_mdr', y: 'atl_amo', month: 5, variable: 'sst' },
         // Panel D defaults to 'relative' — Vecchi-Soden framing is what
         // this panel is for (TC potential-intensity literature).
-        corr: { basin: 'NA', month: 5, kind: 'relative', overlayYear: '' },
+        corr: { basin: 'NA', month: 5, kind: 'relative',
+                stat: 'pearson', overlayYear: '' },
         ts: { region: 'atl_mdr', variable: 'sst', history: 'all' },
         an: { year: null, month: 5, regions: 'all',
-              method: 'grid_weighted', basin: 'NA', kind: 'raw' },
+              method: 'grid_weighted', basin: 'NA', kind: 'raw',
+              stat: 'pearson' },
         idx: { window: '10' },
         anomZoom: 'global',
         anomVar: 'raw',     // Panel A: 'raw' or 'relative'
@@ -938,15 +940,11 @@
         var method = state.an.method;    // 'grid_weighted' | 'corr_weighted' | 'euclidean'
         var basin = state.an.basin;      // 'NA' | 'EP' | ...
 
+        // Distance/weight key combines kind + stat (Pearson vs Spearman).
+        var matrixKey = kind + (state.an.stat === 'spearman' ? '_spearman' : '');
+
         // --- Grid-weighted (default): use the precomputed n_year × n_year
         //     pairwise distance matrix from analog_distance_matrices.json.
-        //     Each pixel's weight is sqrt(|r(SST_pixel, ACE_basin)|), so
-        //     this is similarity in the actual spatial anomaly pattern
-        //     restricted (by weight) to regions that historically matter
-        //     for the basin's ACE. No region overlap problem.
-        //     Caveat: only available for finalized years (matrix is
-        //     precomputed); for the current preliminary year we fall
-        //     back to the region-based correlation-weighted method.
         if (method === 'grid_weighted' && state.distance_matrices) {
             var dm = state.distance_matrices.basins[basin];
             var mEntry = dm && dm[String(month)];
@@ -962,7 +960,7 @@
                                  mEntry.years[mEntry.years.length - 1] +
                                  ') or switch to a region method.' };
                 }
-                var distRow = mEntry[kind][idxOfYear];
+                var distRow = mEntry[matrixKey][idxOfYear];
                 var ranked = mEntry.years.map(function (y, i) {
                     return { year: y, dist: distRow[i] };
                 }).filter(function (r) { return r.year !== targetYear; });
@@ -1019,8 +1017,8 @@
             var sumW = 0;
             for (var rr = 0; rr < regions.length; rr++) {
                 var entry = perRegion[regions[rr]];
-                var w = (entry && entry[kind] !== null && entry[kind] !== undefined)
-                    ? Math.abs(entry[kind]) : 0;
+                var w = (entry && entry[matrixKey] !== null && entry[matrixKey] !== undefined)
+                    ? Math.abs(entry[matrixKey]) : 0;
                 weights[rr] = w;
                 sumW += w;
             }
@@ -1105,8 +1103,10 @@
         // For region methods: replicate the loop in _buildAnalogs but
         // for every year (LOO is trivial — each year is the "target"
         // in turn).
+        var matKey = kind + (state.an.stat === 'spearman' ? '_spearman' : '');
+
         function distRowGrid(yi) {
-            var m = seed[kind];
+            var m = seed[matKey];
             if (!m) return null;
             return m[yi];
         }
@@ -1150,8 +1150,8 @@
                 var sumW = 0;
                 for (var k = 0; k < regions.length; k++) {
                     var entry = perRegion[regions[k]];
-                    var w = (entry && entry[kind] !== null && entry[kind] !== undefined)
-                        ? Math.abs(entry[kind]) : 0;
+                    var w = (entry && entry[matKey] !== null && entry[matKey] !== undefined)
+                        ? Math.abs(entry[matKey]) : 0;
                     ws[k] = w; sumW += w;
                 }
                 if (sumW > 0) {
@@ -1455,6 +1455,7 @@
         bindStr('seasonal-an-method', 'method');
         bindStr('seasonal-an-basin', 'basin');
         bindStr('seasonal-an-kind', 'kind');
+        bindStr('seasonal-an-stat', 'stat');
     }
 
     // -------------------------------------------------------------------
@@ -1633,13 +1634,23 @@
      * grid on selector change without re-binding listeners), and
      * `formatValue()` controls the readout (°C anomaly vs Pearson r etc).
      */
-    function _wireMapHover(wrapId, imgId, tipId, getGrid, formatValue) {
+    function _wireMapHover(wrapId, imgId, tipId, getGrid, formatValue,
+                           getAuxGrid, formatAux) {
         var wrap = document.getElementById(wrapId);
         var img = document.getElementById(imgId);
         var tip = document.getElementById(tipId);
         if (!wrap || !img || !tip) return;
         if (wrap._mapHoverBound) return;
         wrap._mapHoverBound = true;
+
+        function _readCell(g, lat, lon) {
+            // Returns the value (or null) at (lat, lon) in grid `g`.
+            var i = Math.floor((lat - g.lat_min) / (g.lat_max - g.lat_min) * g.n_lat);
+            var j = Math.floor((lon - g.lon_min) / (g.lon_max - g.lon_min) * g.n_lon);
+            i = Math.max(0, Math.min(g.n_lat - 1, i));
+            j = Math.max(0, Math.min(g.n_lon - 1, j));
+            return g.values[i][j];
+        }
 
         wrap.addEventListener('mousemove', function (e) {
             var g = getGrid();
@@ -1652,16 +1663,19 @@
             }
             var lon = g.lon_min + (x / r.width) * (g.lon_max - g.lon_min);
             var lat = g.lat_max - (y / r.height) * (g.lat_max - g.lat_min);
-            var i = Math.floor((lat - g.lat_min) / (g.lat_max - g.lat_min) * g.n_lat);
-            var j = Math.floor((lon - g.lon_min) / (g.lon_max - g.lon_min) * g.n_lon);
-            i = Math.max(0, Math.min(g.n_lat - 1, i));
-            j = Math.max(0, Math.min(g.n_lon - 1, j));
-            var v = g.values[i][j];
+            var v = _readCell(g, lat, lon);
             var lonLabel = lon > 180 ? (360 - lon).toFixed(1) + '°W'
                                      : lon.toFixed(1) + '°E';
             var latLabel = (lat >= 0 ? lat.toFixed(1) + '°N'
                                      : (-lat).toFixed(1) + '°S');
-            tip.textContent = latLabel + ', ' + lonLabel + '  |  ' + formatValue(v);
+            var line = latLabel + ', ' + lonLabel + '  |  ' + formatValue(v);
+            // Optional second value (e.g., year-anomaly on Panel D when
+            // an overlay year is active).
+            var auxGrid = getAuxGrid ? getAuxGrid() : null;
+            if (auxGrid) {
+                line += '  |  ' + formatAux(_readCell(auxGrid, lat, lon));
+            }
+            tip.textContent = line;
             var wr = wrap.getBoundingClientRect();
             tip.style.left = (e.clientX - wr.left) + 'px';
             tip.style.top = (e.clientY - wr.top) + 'px';
@@ -1693,19 +1707,20 @@
         if (!img) return;
         var c = state.corr;
         var mm = (c.month < 10 ? '0' : '') + c.month;
-        var stem = 'correlations/' + c.basin + '_' + mm + '_' + c.kind;
+        // Compose the file key — Spearman files carry an extra
+        // `_spearman` suffix; Pearson keeps the original (no suffix).
+        var kindKey = c.kind + (c.stat === 'spearman' ? '_spearman' : '');
+        var stem = 'correlations/' + c.basin + '_' + mm + '_' + kindKey;
         var pngName = stem + '.png';
         var gridName = stem + '.grid.json';
-        // Local-first, GCS fallback (same pattern as Panel A).
         img.src = LOCAL_BASE + '/' + pngName;
         img.onerror = function () {
             img.onerror = null;
             img.src = GCS_BASE + '/' + pngName;
         };
-        img.alt = c.basin + ' ACE × SST correlation, month ' + c.month +
-                  ', ' + c.kind;
-        // Swap the hover grid; bound listener (see _wireCorrHover) reads
-        // state.corr_grid each frame.
+        img.alt = c.basin + ' ACE × SST ' +
+                  (c.stat === 'spearman' ? 'Spearman ρ' : 'Pearson r') +
+                  ', month ' + c.month + ', ' + c.kind;
         state.corr_grid = null;
         _fetchData(gridName).then(function (g) { state.corr_grid = g; })
             .catch(function () { state.corr_grid = null; });
@@ -1727,10 +1742,10 @@
     // contrast against the BWR-shaded correlation field. ±0.5 levels
     // dropped — they were noise; ±1 and ±2 carry the signal.
     var ANOM_CONTOUR_STYLE = {
-        '-2.0': { color: '#08306b', halo: '#fff', width: 4.5 },
-        '-1.0': { color: '#3a78c2', halo: '#fff', width: 3.5 },
-        '+1.0': { color: '#cf2222', halo: '#fff', width: 3.5 },
-        '+2.0': { color: '#67000d', halo: '#fff', width: 4.5 },
+        '-2.0': { color: '#08306b', halo: '#fff', width: 6.5 },
+        '-1.0': { color: '#3a78c2', halo: '#fff', width: 5.0 },
+        '+1.0': { color: '#cf2222', halo: '#fff', width: 5.0 },
+        '+2.0': { color: '#67000d', halo: '#fff', width: 6.5 },
     };
 
     function _renderCorrOverlay() {
@@ -1740,6 +1755,9 @@
         // Reset
         while (svg.firstChild) svg.removeChild(svg.firstChild);
         legend.classList.remove('visible');
+        // Clear the cached year-anomaly grid so hover stops showing
+        // stale numbers between toggles.
+        state.corr_anom_grid = null;
         var y = state.corr.overlayYear;
         if (!y) return;
 
@@ -1749,8 +1767,10 @@
             _drawContoursOnSVG(j, svg);
             legend.innerHTML = _buildOverlayLegendHTML(y, state.corr.month);
             legend.classList.add('visible');
+            // Cache the embedded anomaly grid so the hover handler can
+            // show the year's anomaly value at the cursor alongside r.
+            state.corr_anom_grid = j.grid || null;
         }).catch(function () {
-            // Missing month for the year (e.g., 2026-08 doesn't exist yet)
             legend.innerHTML = '<em>No anomaly data for ' + y + '-' + mm + '</em>';
             legend.classList.add('visible');
         });
@@ -1835,13 +1855,25 @@
     }
 
     function _wireCorrHover() {
+        var statLabel = function () {
+            return state.corr.stat === 'spearman' ? 'ρ' : 'r';
+        };
         _wireMapHover(
             'seasonal-corr-wrap', 'seasonal-corr-img', 'seasonal-corr-tooltip',
             function () { return state.corr_grid; },
             function (v) {
                 return (v === null || v === undefined)
                     ? 'land / no data'
-                    : 'r = ' + (v >= 0 ? '+' : '') + v.toFixed(2);
+                    : statLabel() + ' = ' + (v >= 0 ? '+' : '') + v.toFixed(2);
+            },
+            // Second value: the selected overlay-year SST anomaly at the
+            // cursor. Only present when overlayYear is set.
+            function () { return state.corr_anom_grid; },
+            function (v) {
+                if (v === null || v === undefined) return 'land / no data';
+                var year = state.corr.overlayYear || '?';
+                return year + ' anom ' +
+                    (v >= 0 ? '+' : '') + v.toFixed(2) + ' °C';
             }
         );
     }
@@ -1858,6 +1890,7 @@
         bind('seasonal-corr-basin', 'basin');
         bind('seasonal-corr-month', 'month', function (v) { return parseInt(v, 10); });
         bind('seasonal-corr-kind', 'kind');
+        bind('seasonal-corr-stat', 'stat');
         // Overlay year: keep separate so we only redraw the SVG, not the
         // PNG (avoids re-fetching the correlation image).
         var oy = document.getElementById('seasonal-corr-overlay-year');

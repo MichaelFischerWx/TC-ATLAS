@@ -1058,6 +1058,12 @@
                             <option value="detrended">Detrended (per-pixel linear trend)</option>
                         </select>
                     </label>
+                    <label>Statistic
+                        <select id="seasonal-corr-stat" title="Pearson is the literature convention (linear correlation). Spearman = correlation of ranks — robust to outlier years like 2005 NA, 1990 WP, 2018 EP, and captures monotonic-but-nonlinear SST↔ACE coupling.">
+                            <option value="pearson" selected>Pearson r (linear)</option>
+                            <option value="spearman">Spearman ρ (rank, robust)</option>
+                        </select>
+                    </label>
                     <label>Overlay year
                         <select id="seasonal-corr-overlay-year"></select>
                     </label>
@@ -1134,6 +1140,12 @@
                             <option value="raw" selected>Raw</option>
                             <option value="detrended">Detrended (linear trend removed)</option>
                             <option value="relative">Relative (Vecchi-Soden 2007)</option>
+                        </select>
+                    </label>
+                    <label>Statistic
+                        <select id="seasonal-an-stat" title="Pearson r weights linear SST↔ACE coupling. Spearman ρ uses rank-correlation: robust to outlier seasons and captures monotonic-but-nonlinear coupling. Toggle to compare LOO skill at the bottom of the table.">
+                            <option value="pearson" selected>Pearson r</option>
+                            <option value="spearman">Spearman ρ</option>
                         </select>
                     </label>
                     <label>Region set
