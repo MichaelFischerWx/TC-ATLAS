@@ -510,90 +510,89 @@
         };
         // Suppress legend entries from the historical-cloud trace
         traces[0].showlegend = false;
-        Plotly.react(el, traces, layout,
+        // Inset map: region boxes drawn on a second `geo` subplot
+        // (geo2) embedded in the top-left of the figure. Lives with
+        // the scatter for PNG export + avoids modebar conflict.
+        var insetTraces = _scatterInsetBuildTraces();
+        var allTraces = traces.concat(insetTraces);
+        layout.geo2 = _scatterInsetGeoLayout();
+        Plotly.react(el, allTraces, layout,
                      { responsive: true, displaylogo: false });
-        _renderScatterInset();
     }
 
-    // Renders a small Plotly geo inset for Panel C showing the X-axis
-    // (orange) and Y-axis (green) region boxes on a world map. Plotly's
-    // `scattergeo` projection handles coastlines + land shading natively
-    // so the inset is self-contained — no external map data required.
-    function _renderScatterInset() {
-        var el = document.getElementById('seasonal-scatter-inset');
-        if (!el || !window.Plotly) return;
-        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-        // Plotly's scattergeo connects points along great-circle arcs by
-        // default — a 4-corner rectangle therefore has its latitude
-        // edges bow toward the equator (most visible on wide boxes like
-        // Atl MDR, lon -85..-20). We side-step that by densifying each
-        // latitude edge with many intermediate points at constant lat —
-        // those points hug the parallel exactly. Meridian edges are
-        // already great circles (they ARE meridians) so 2 points each
-        // is enough.
-        function boxTrace(boxArr, color, fillRGBA, label) {
+    // Builds the inset-map traces + geo subplot layout for Panel C.
+    // The inset is now drawn inside the main scatter figure as a
+    // secondary `geo` subplot pinned to the top-left corner, so it
+    // (a) doesn't conflict with Plotly's modebar in the top-right,
+    // (b) saves into the PNG export, and (c) avoids the wrong-side
+    // fill-rendering Plotly does for scattergeo `fill: toself`
+    // polygons (which made the Y-axis box look like it covered most
+    // of the globe).
+    function _scatterInsetBuildTraces() {
+        function boxTrace(boxArr, color, label) {
             if (!boxArr) return null;
             var ls = boxArr[0], ln = boxArr[1], lw = boxArr[2], le = boxArr[3];
-            // Convert 0-360 → -180..180. None of our regions cross the
-            // antimeridian so a single closed polygon works.
+            // 0-360 → -180..180. No region crosses the antimeridian.
             var conv = function (lo) { return lo > 180 ? lo - 360 : lo; };
             var lonW = conv(lw), lonE = conv(le);
+            // Densify latitude edges so the parallels don't bow under
+            // great-circle interpolation. Meridian edges are 2-point
+            // (a meridian IS its own great circle).
+            var STEPS = 24;
             var lons = [], lats = [];
-            // South edge: west → east at lat=ls (parallel, densified)
-            var STEPS = 32;
             for (var i = 0; i <= STEPS; i++) {
-                var f = i / STEPS;
-                lons.push(lonW + f * (lonE - lonW));
+                lons.push(lonW + (i / STEPS) * (lonE - lonW));
                 lats.push(ls);
             }
-            // East edge: south → north at lon=le (meridian, straight)
             lons.push(lonE); lats.push(ln);
-            // North edge: east → west at lat=ln (parallel, densified)
             for (var j = 1; j <= STEPS; j++) {
-                var g = j / STEPS;
-                lons.push(lonE - g * (lonE - lonW));
+                lons.push(lonE - (j / STEPS) * (lonE - lonW));
                 lats.push(ln);
             }
-            // West edge: north → south at lon=lw (meridian)
             lons.push(lonW); lats.push(ls);
             return {
                 type: 'scattergeo', mode: 'lines',
+                geo: 'geo2',                      // bind to the inset axis
                 lon: lons, lat: lats,
-                line: { color: color, width: 2 },
-                fill: 'toself', fillcolor: fillRGBA,
+                line: { color: color, width: 2.5 },
+                // Deliberately no fill — Plotly mis-resolves which side
+                // of a great-circle-interpolated polygon is "inside"
+                // for some boxes, producing the spurious whole-globe
+                // shading Mike spotted.
                 name: label, hoverinfo: 'skip',
+                showlegend: false,
             };
         }
         var xLabel = 'X · ' + (REGION_LABEL[state.scatter.x] || state.scatter.x);
         var yLabel = 'Y · ' + (REGION_LABEL[state.scatter.y] || state.scatter.y);
-        var traces = [
-            boxTrace(REGION_BOX[state.scatter.x], BRAND.orange,
-                     'rgba(251,146,60,0.30)', xLabel),
-            boxTrace(REGION_BOX[state.scatter.y], BRAND.green,
-                     'rgba(34,197,94,0.30)', yLabel),
+        return [
+            boxTrace(REGION_BOX[state.scatter.x], BRAND.orange, xLabel),
+            boxTrace(REGION_BOX[state.scatter.y], BRAND.green,  yLabel),
         ].filter(Boolean);
-        var layout = {
-            geo: {
-                projection: { type: 'equirectangular' },
-                showland: true,
-                landcolor: isDark ? 'rgba(85,95,108,0.55)' : 'rgba(180,188,200,0.65)',
-                showocean: true,
-                oceancolor: isDark ? 'rgba(15,22,35,0.50)' : 'rgba(220,228,238,0.55)',
-                showcountries: false,
-                showcoastlines: true,
-                coastlinecolor: isDark ? 'rgba(180,190,205,0.40)' : 'rgba(85,95,108,0.55)',
-                coastlinewidth: 0.5,
-                lonaxis: { showgrid: false, range: [-180, 180] },
-                lataxis: { showgrid: false, range: [-65, 75] },
-                bgcolor: 'rgba(0,0,0,0)',
-                resolution: 110,
-            },
-            margin: { l: 0, r: 0, t: 0, b: 0 },
-            paper_bgcolor: 'rgba(0,0,0,0)',
-            showlegend: false,
+    }
+
+    function _scatterInsetGeoLayout() {
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        return {
+            // Top-left corner of the figure. 24% wide × 28% tall — big
+            // enough to read, small enough to leave the scatter clear.
+            domain: { x: [0.005, 0.245], y: [0.74, 1.005] },
+            projection: { type: 'equirectangular' },
+            showland: true,
+            landcolor: isDark ? 'rgba(85,95,108,0.65)' : 'rgba(170,180,194,0.75)',
+            showocean: true,
+            oceancolor: isDark ? 'rgba(15,22,35,0.75)' : 'rgba(225,232,242,0.85)',
+            showcountries: false,
+            showcoastlines: true,
+            coastlinecolor: isDark ? 'rgba(180,190,205,0.50)' : 'rgba(85,95,108,0.65)',
+            coastlinewidth: 0.5,
+            lonaxis: { showgrid: false, range: [-180, 180] },
+            lataxis: { showgrid: false, range: [-65, 75] },
+            bgcolor: isDark ? 'rgba(13,17,23,0.85)' : 'rgba(255,255,255,0.90)',
+            resolution: 110,
+            framecolor: 'rgba(140,148,160,0.40)',
+            framewidth: 1,
         };
-        Plotly.react(el, traces, layout,
-                     { responsive: true, displayModeBar: false, staticPlot: true });
     }
 
     // -------------------------------------------------------------------
@@ -607,8 +606,19 @@
         var vals = idx.values[key];
         if (!vals) return null;
 
+        // Projected (full-month extrapolated) values share the same
+        // column suffix conventions as Panel C — see the comment in
+        // _buildScatterData.
+        var projKey = state.ts.region + (
+            state.ts.variable === 'sst' ? '_sst_projected' :
+            state.ts.variable === 'anom' ? '_anom_projected' :
+            '_sst_dt_projected'
+        );
+        var projVals = idx.values[projKey] || [];
+
         // Bucket monthly values by year (12 entries per year, NaN where missing).
         var byYear = {};
+        var projByYear = {};
         var preliminaryByYear = {};
         for (var i = 0; i < idx.dates.length; i++) {
             var parts = idx.dates[i].split('-');
@@ -617,10 +627,13 @@
             if (!(y in byYear)) {
                 byYear[y] = [null, null, null, null, null, null,
                              null, null, null, null, null, null];
+                projByYear[y] = [null, null, null, null, null, null,
+                                 null, null, null, null, null, null];
                 preliminaryByYear[y] = [false, false, false, false, false, false,
                                         false, false, false, false, false, false];
             }
             byYear[y][m - 1] = vals[i];
+            projByYear[y][m - 1] = projVals[i] !== undefined ? projVals[i] : null;
             preliminaryByYear[y][m - 1] = !!(idx.preliminary && idx.preliminary[i]);
         }
 
@@ -648,6 +661,7 @@
         var years = Object.keys(byYear).map(Number).sort(function (a, b) { return a - b; });
         return {
             byYear: byYear,
+            projByYear: projByYear,
             preliminaryByYear: preliminaryByYear,
             years: years,
             climMean: climMean,
@@ -723,12 +737,22 @@
         // Current year — bold brand orange line.
         if (bundle.byYear[currentYear]) {
             var cur = bundle.byYear[currentYear];
+            var proj = bundle.projByYear[currentYear] || [];
             var prelim = bundle.preliminaryByYear[currentYear];
             var prelimMonths = [], prelimVals = [];
+            var projMonths = [], projVals = [];
             for (var k = 0; k < 12; k++) {
                 if (prelim[k] && cur[k] !== null) {
                     prelimMonths.push(k + 1);
                     prelimVals.push(cur[k]);
+                }
+                if (prelim[k] && proj[k] !== null && proj[k] !== undefined
+                    && cur[k] !== null && Math.abs(proj[k] - cur[k]) > 0.0001) {
+                    // Only show the projected marker when it diverges
+                    // from MTD (anomaly view collapses them; absolute
+                    // SST and detrended differ).
+                    projMonths.push(k + 1);
+                    projVals.push(proj[k]);
                 }
             }
             traces.push({
@@ -752,8 +776,37 @@
                     },
                     name: 'preliminary month-to-date',
                     hovertemplate: currentYear +
-                        ' · %{x}: %{y:.2f} (preliminary)<extra></extra>',
+                        ' · %{x}: %{y:.2f} (MTD)<extra></extra>',
                 });
+            }
+            if (projMonths.length) {
+                // Filled magenta-style star at the projected full-month
+                // value — matches the marker convention used on Panel C.
+                traces.push({
+                    type: 'scatter', mode: 'markers',
+                    x: projMonths, y: projVals,
+                    marker: {
+                        symbol: 'star', size: 18,
+                        color: BRAND.orange,
+                        line: { color: '#fff', width: 2 },
+                    },
+                    name: 'projected full-month',
+                    hovertemplate: currentYear +
+                        ' · %{x}: %{y:.2f} (projected, persistence-anom extrapolation)<extra></extra>',
+                });
+                // Thin dotted connector MTD ↔ projected, exactly like
+                // Panel C does, so the magnitude of extrapolation is
+                // visible at a glance.
+                for (var pm = 0; pm < projMonths.length; pm++) {
+                    traces.push({
+                        type: 'scatter', mode: 'lines',
+                        x: [projMonths[pm], projMonths[pm]],
+                        y: [prelimVals[pm] !== undefined
+                              ? prelimVals[pm] : null, projVals[pm]],
+                        line: { color: 'rgba(251,146,60,0.55)', width: 1, dash: 'dot' },
+                        hoverinfo: 'skip', showlegend: false,
+                    });
+                }
             }
         }
 
