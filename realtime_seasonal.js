@@ -74,6 +74,10 @@
         img.style.objectFit = 'fill';
     }
 
+    function _ga(eventName, params) {
+        try { if (typeof gtag === 'function') gtag('event', eventName, params || {}); } catch (e) {}
+    }
+
     function _bindAnomZoomControl() {
         var sel = document.getElementById('seasonal-anom-zoom');
         if (!sel || sel._bound) return;
@@ -81,6 +85,7 @@
         sel.addEventListener('change', function () {
             state.anomZoom = sel.value;
             _applyAnomZoom();
+            _ga('rt_seasonal_anom_zoom', { zoom: sel.value });
         });
     }
 
@@ -135,6 +140,7 @@
                 var navH = nav.getBoundingClientRect().height;
                 var top = t.offsetTop - navH - 8;
                 main.scrollTo({ top: top, behavior: 'smooth' });
+                _ga('rt_seasonal_subnav', { panel: a.dataset.target });
             });
         });
 
@@ -348,6 +354,7 @@
             e.stopPropagation();
             var plot = document.getElementById(plotId);
             if (!plot || !window.Plotly) return;
+            _ga('rt_seasonal_save_png', { panel: filenameBase });
             var now = new Date();
             var stamp = now.toISOString().slice(0, 16).replace(/[:T-]/g, '');
             // Saved PNGs should always render with a light background +
@@ -945,6 +952,7 @@
             el.addEventListener('change', function () {
                 state.ts[key] = el.value;
                 _renderTimeSeries();
+                _ga('rt_seasonal_ts', { key: key, value: el.value });
             });
         };
         bind('seasonal-ts-region', 'region');
@@ -1576,6 +1584,7 @@
             el.addEventListener('change', function () {
                 state.an[key] = parseInt(el.value, 10);
                 _renderAnalogs();
+                _ga('rt_seasonal_analog', { key: key, value: el.value });
             });
         };
         var bindStr = function (id, key) {
@@ -1584,6 +1593,7 @@
             el.addEventListener('change', function () {
                 state.an[key] = el.value;
                 _renderAnalogs();
+                _ga('rt_seasonal_analog', { key: key, value: el.value });
             });
         };
         bindNum('seasonal-an-year', 'year');
@@ -1770,6 +1780,7 @@
             el.addEventListener('change', function () {
                 state.idx[key] = el.value;
                 _renderIndices();
+                _ga('rt_seasonal_idx', { key: key, value: el.value });
             });
         };
         bindOne('seasonal-idx-window', 'window');
@@ -1828,6 +1839,7 @@
         sel.addEventListener('change', function () {
             state.anomVar = sel.value;
             _renderAnomMap();
+            _ga('rt_seasonal_anom_var', { variable: sel.value });
         });
     }
 
@@ -2088,19 +2100,19 @@
             el.addEventListener('change', function () {
                 state.corr[key] = parse ? parse(el.value) : el.value;
                 _renderCorrelation();
+                _ga('rt_seasonal_corr', { key: key, value: String(el.value) });
             });
         };
         bind('seasonal-corr-basin', 'basin');
         bind('seasonal-corr-month', 'month', function (v) { return parseInt(v, 10); });
         bind('seasonal-corr-kind', 'kind');
         bind('seasonal-corr-stat', 'stat');
-        // Overlay year: keep separate so we only redraw the SVG, not the
-        // PNG (avoids re-fetching the correlation image).
         var oy = document.getElementById('seasonal-corr-overlay-year');
         if (oy) {
             oy.addEventListener('change', function () {
                 state.corr.overlayYear = oy.value;
                 _renderCorrOverlay();
+                _ga('rt_seasonal_corr', { key: 'overlayYear', value: oy.value });
             });
         }
     }
@@ -2116,6 +2128,7 @@
             el.addEventListener('change', function () {
                 state.scatter[key] = parse ? parse(el.value) : el.value;
                 _renderScatter();
+                _ga('rt_seasonal_scatter', { key: key, value: String(el.value) });
             });
         };
         bind('seasonal-scatter-x', 'x');
@@ -2126,12 +2139,13 @@
 
     function _activate() {
         if (state.activated) {
-            // Re-render in case the user came back to it
+            _ga('rt_seasonal_open', { first: 0 });
             _renderScatter();
             _renderAnomMap();
             return;
         }
         state.activated = true;
+        _ga('rt_seasonal_open', { first: 1 });
         _refreshTheme();
         _wireThemeReactivity();
         _wireSubnav();
