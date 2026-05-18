@@ -239,27 +239,29 @@
         }
     }
 
-    function _wireAnomHover() {
-        var wrap = document.getElementById('seasonal-anom-wrap');
-        var img = document.getElementById('seasonal-anom-img');
-        var tip = document.getElementById('seasonal-anom-tooltip');
-        var g = state.anom_grid;
-        if (!wrap || !img || !tip || !g) return;
-        if (wrap._anomHoverBound) return;   // bind once
-        wrap._anomHoverBound = true;
+    /* Generic map-hover wiring used by every panel that shows a 2D
+     * geographic image with a lat/lon grid sidecar. `getGrid()` returns
+     * the current grid (so panels with toggle-able maps can swap the
+     * grid on selector change without re-binding listeners), and
+     * `formatValue()` controls the readout (°C anomaly vs Pearson r etc).
+     */
+    function _wireMapHover(wrapId, imgId, tipId, getGrid, formatValue) {
+        var wrap = document.getElementById(wrapId);
+        var img = document.getElementById(imgId);
+        var tip = document.getElementById(tipId);
+        if (!wrap || !img || !tip) return;
+        if (wrap._mapHoverBound) return;
+        wrap._mapHoverBound = true;
 
         wrap.addEventListener('mousemove', function (e) {
-            // Image rect is the actual rendered img inside the wrap;
-            // letterboxing may leave gaps. We use img.getBoundingClientRect()
-            // so out-of-image cursor positions disappear.
+            var g = getGrid();
+            if (!g) { tip.classList.remove('visible'); return; }
             var r = img.getBoundingClientRect();
             var x = e.clientX - r.left;
             var y = e.clientY - r.top;
             if (x < 0 || y < 0 || x > r.width || y > r.height) {
                 tip.classList.remove('visible'); return;
             }
-            // Mouse → lon/lat, mapping x → [lon_min, lon_max] and
-            // y → [lat_max, lat_min] (top-down in screen space).
             var lon = g.lon_min + (x / r.width) * (g.lon_max - g.lon_min);
             var lat = g.lat_max - (y / r.height) * (g.lat_max - g.lat_min);
             var i = Math.floor((lat - g.lat_min) / (g.lat_max - g.lat_min) * g.n_lat);
@@ -267,26 +269,31 @@
             i = Math.max(0, Math.min(g.n_lat - 1, i));
             j = Math.max(0, Math.min(g.n_lon - 1, j));
             var v = g.values[i][j];
-            // Display lon as 0-360E or as °W when > 180.
             var lonLabel = lon > 180 ? (360 - lon).toFixed(1) + '°W'
                                      : lon.toFixed(1) + '°E';
             var latLabel = (lat >= 0 ? lat.toFixed(1) + '°N'
                                      : (-lat).toFixed(1) + '°S');
-            var valLabel = (v === null || v === undefined)
-                ? 'land / no data'
-                : (v >= 0 ? '+' : '') + v.toFixed(2) + ' °C anom';
-            tip.textContent = latLabel + ', ' + lonLabel + '  |  ' + valLabel;
-            // Place near cursor, clamp inside wrap bounds.
+            tip.textContent = latLabel + ', ' + lonLabel + '  |  ' + formatValue(v);
             var wr = wrap.getBoundingClientRect();
-            var tx = e.clientX - wr.left;
-            var ty = e.clientY - wr.top;
-            tip.style.left = tx + 'px';
-            tip.style.top = ty + 'px';
+            tip.style.left = (e.clientX - wr.left) + 'px';
+            tip.style.top = (e.clientY - wr.top) + 'px';
             tip.classList.add('visible');
         });
         wrap.addEventListener('mouseleave', function () {
             tip.classList.remove('visible');
         });
+    }
+
+    function _wireAnomHover() {
+        _wireMapHover(
+            'seasonal-anom-wrap', 'seasonal-anom-img', 'seasonal-anom-tooltip',
+            function () { return state.anom_grid; },
+            function (v) {
+                return (v === null || v === undefined)
+                    ? 'land / no data'
+                    : (v >= 0 ? '+' : '') + v.toFixed(2) + ' °C anom';
+            }
+        );
     }
 
     // -------------------------------------------------------------------
@@ -298,15 +305,34 @@
         if (!img) return;
         var c = state.corr;
         var mm = (c.month < 10 ? '0' : '') + c.month;
-        var name = 'correlations/' + c.basin + '_' + mm + '_' + c.kind + '.png';
+        var stem = 'correlations/' + c.basin + '_' + mm + '_' + c.kind;
+        var pngName = stem + '.png';
+        var gridName = stem + '.grid.json';
         // Local-first, GCS fallback (same pattern as Panel A).
-        img.src = LOCAL_BASE + '/' + name;
+        img.src = LOCAL_BASE + '/' + pngName;
         img.onerror = function () {
             img.onerror = null;
-            img.src = GCS_BASE + '/' + name;
+            img.src = GCS_BASE + '/' + pngName;
         };
         img.alt = c.basin + ' ACE × SST correlation, month ' + c.month +
                   ', ' + c.kind;
+        // Swap the hover grid; bound listener (see _wireCorrHover) reads
+        // state.corr_grid each frame.
+        state.corr_grid = null;
+        _fetchData(gridName).then(function (g) { state.corr_grid = g; })
+            .catch(function () { state.corr_grid = null; });
+    }
+
+    function _wireCorrHover() {
+        _wireMapHover(
+            'seasonal-corr-wrap', 'seasonal-corr-img', 'seasonal-corr-tooltip',
+            function () { return state.corr_grid; },
+            function (v) {
+                return (v === null || v === undefined)
+                    ? 'land / no data'
+                    : 'r = ' + (v >= 0 ? '+' : '') + v.toFixed(2);
+            }
+        );
     }
 
     function _bindCorrelationControls() {
@@ -352,6 +378,7 @@
         state.activated = true;
         _bindScatterControls();
         _bindCorrelationControls();
+        _wireCorrHover();
         _renderCorrelation();
         _setStatus('Loading indices…');
         var p1 = _fetchData('indices_monthly.json').then(function (j) { state.indices = j; });

@@ -675,6 +675,26 @@ def build_correlations(out_dir: Path,
                     pad_inches=0, transparent=True)
         plt.close(fig)
 
+    def _write_grid_sidecar(corr_2d, fname):
+        """1° lat/lon binned correlation grid for the frontend hover
+        tooltip. Coarsening from native 0.25° to 1° drops payload from
+        ~1.4 MB to ~30 KB per map, more than enough for tooltip resolution."""
+        block = 4   # 0.25° → 1°
+        H, W = corr_2d.shape
+        h2, w2 = H // block, W // block
+        c = corr_2d[:h2 * block, :w2 * block].reshape(h2, block, w2, block)
+        with np.errstate(invalid="ignore"):
+            coarse = np.nanmean(c, axis=(1, 3))
+        grid = {
+            "lat_min": LAT_MIN, "lat_max": LAT_MIN + h2 * 1.0,
+            "lon_min": LON_MIN, "lon_max": LON_MIN + w2 * 1.0,
+            "cell_size_deg": 1.0,
+            "n_lat": int(h2), "n_lon": int(w2),
+            "values": [[None if not np.isfinite(v) else round(float(v), 3)
+                        for v in row] for row in coarse],
+        }
+        (corr_dir / fname).write_text(json.dumps(grid, separators=(",", ":")))
+
     total = 0
     for basin in ACE_BASINS:
         ace_dict = ace_all["basins"][basin]["years"]
@@ -694,12 +714,14 @@ def build_correlations(out_dir: Path,
             r_raw = _corr_along_year(sst_v, ace_v)
             _render(r_raw, f"{basin}_{month:02d}_raw.png",
                     ACE_BASINS[basin], month, "raw")
+            _write_grid_sidecar(r_raw, f"{basin}_{month:02d}_raw.grid.json")
             # Detrended correlation (linear-in-year removed from BOTH series)
             ace_dt = _detrend(ace_v.reshape(-1, 1)).ravel()
             sst_dt = _detrend(sst_v)
             r_det = _corr_along_year(sst_dt, ace_dt)
             _render(r_det, f"{basin}_{month:02d}_detrended.png",
                     ACE_BASINS[basin], month, "detrended")
+            _write_grid_sidecar(r_det, f"{basin}_{month:02d}_detrended.grid.json")
             total += 2
         log.info("  basin %s: 24 maps", basin)
 

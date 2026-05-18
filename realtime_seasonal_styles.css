@@ -114,18 +114,21 @@
     background: rgba(0,0,0,0.25);
     border-radius: 4px;
     overflow: hidden;
-    display: flex;
-    align-items: center;
-    justify-content: center;
     /* Aspect matches our SST subset: (LON_MAX-LON_MIN)/(LAT_MAX-LAT_MIN)
        = 260/85 ≈ 3.06. */
     aspect-ratio: 3.06;
+    cursor: crosshair;
 }
 
 .seasonal-corr-img {
-    max-width: 100%;
-    max-height: 100%;
-    object-fit: contain;
+    /* Fill the wrap edge-to-edge. The wrap already enforces the right
+       aspect ratio via aspect-ratio, and the PNG is the same aspect
+       (640×209 ≈ 3.06), so this won't distort. Using width/height
+       100% rather than max-* lets the image scale UP past its 640 px
+       native size on wide panels. */
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
     display: block;
 }
 
