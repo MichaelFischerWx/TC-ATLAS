@@ -10,7 +10,7 @@ global PNG of the *filtered* OLR anomaly (W/m²) at today's date:
     - "mrg"      : Mixed Rossby–Gravity   (period 3–8 d, anti-symmetric)
 
 Negative anomaly = enhanced convection (suppressed OLR). Diverging
-colormap: blue = enhanced convection, red = suppressed.
+colormap: green = enhanced convection (forced ascent), brown = suppressed.
 
 Uses Wheeler & Kiladis (1999) space–time spectral filtering. Symmetric
 and anti-symmetric components are decomposed about the equator before
@@ -131,11 +131,13 @@ class WaveSpec:
     # Visualization
     vmin: float = -40.0      # W/m² — typical OLR-anomaly range
     vmax: float = 40.0
-    # Wheeler-Kiladis convention: BLUE = active convection (negative OLR
-    # anomaly, cold cloud tops), RED = suppressed (positive anomaly, dry/warm).
-    # Matplotlib's "RdBu_r" delivers this orientation: r → swap so the
-    # low end is blue and the high end is red.
-    cmap: str = "RdBu_r"
+    # CPC convention: GREEN = active convection (negative OLR anomaly,
+    # cold cloud tops, forced ascent), BROWN = suppressed (positive
+    # anomaly, dry/warm). Matplotlib's "BrBG_r" delivers this orientation:
+    # low end green, high end brown. More intuitive than diverging red-blue,
+    # which clashes with the temperature / vorticity palettes used in the
+    # rest of the env-overlay stack.
+    cmap: str = "BrBG_r"
     # Rendering mode. "filled" = diverging color shading (good for the
     # raw OLR anomaly, which spans 60+ W/m² with broad structure).
     # "contour" = symmetric pos/neg isolines on a transparent background
@@ -144,7 +146,7 @@ class WaveSpec:
     # filled colormap). Per-band contour levels are listed below.
     render_style: str = "filled"
     # Contour levels in W/m². Symmetric pos/neg pairs (so -L, +L); the
-    # renderer draws negative levels in blue and positive in red,
+    # renderer draws negative levels in green and positive in brown,
     # thickness scaling with magnitude. Used only when render_style ==
     # "contour".
     contour_levels: Optional[list] = None
@@ -155,11 +157,11 @@ WAVE_SPECS = [
         name="anomaly",
         title="OLR Anomaly",
         description="Daily OLR anomaly vs 1991-2020 climatology. "
-                    "Negative (blue) = suppressed OLR = enhanced deep convection. "
+                    "Negative (green) = suppressed OLR = enhanced deep convection. "
                     "Contours every 10 W/m².",
         component="raw",
         vmin=-60.0, vmax=60.0,
-        cmap="RdBu_r",
+        cmap="BrBG_r",
         # Contour rendering matches the rest of the site's env-overlay
         # treatment: colored isolines on a transparent background read
         # cleanly over the IR / GeoColor underlay instead of washing it
@@ -175,7 +177,7 @@ WAVE_SPECS = [
         description="Wheeler-Kiladis MJO band — eastward wavenumbers 1-5, "
                     "period 30-96 d, symmetric component. Contours every "
                     "3 W/m²; the equatorially-trapped envelope of active "
-                    "(blue) and suppressed (red) convection should be "
+                    "(green) and suppressed (brown) convection should be "
                     "visible across the Indo-Pacific.",
         component="sym",
         k_lo=1, k_hi=5,
@@ -601,9 +603,9 @@ def _render_contour_png(field2d: np.ndarray, spec: WaveSpec) -> bytes:
       which are already smooth, would over-smooth a noisy scalar.
 
     Contour levels come from spec.contour_levels (symmetric ±L pairs).
-    Negative (active convection) draws in blue, positive (suppressed)
-    in red. Stroke width scales with magnitude — weak ±2 envelopes
-    thinner than strong ±8 ones.
+    Negative (active convection / forced ascent) draws in green,
+    positive (suppressed) in brown. Stroke width scales with magnitude
+    — weak ±2 envelopes thinner than strong ±8 ones.
     """
     import matplotlib
     matplotlib.use("Agg")
@@ -636,14 +638,19 @@ def _render_contour_png(field2d: np.ndarray, spec: WaveSpec) -> bytes:
     widths = []
     for L in levels:
         mag = abs(L) / max_abs            # 0..1
+        # CPC BrBG palette: negative (ascent) green, positive (subsidence)
+        # brown. Endpoints picked from ColorBrewer BrBG so the visual
+        # intensity ramp matches the heatmap on the Subseasonal tab.
         if L < 0:
-            r = int(round(96  * (1 - mag) +   8 * mag))
-            g = int(round(165 * (1 - mag) +  64 * mag))
-            b = int(round(250 * (1 - mag) + 142 * mag))
+            # mag=0 → #80cdc1 (pale teal-green); mag=1 → #01665e (deep green)
+            r = int(round(128 * (1 - mag) +   1 * mag))
+            g = int(round(205 * (1 - mag) + 102 * mag))
+            b = int(round(193 * (1 - mag) +  94 * mag))
         else:
-            r = int(round(248 * (1 - mag) + 153 * mag))
-            g = int(round(113 * (1 - mag) +  17 * mag))
-            b = int(round(113 * (1 - mag) +  21 * mag))
+            # mag=0 → #dfc27d (pale tan); mag=1 → #8c510a (saddle brown)
+            r = int(round(223 * (1 - mag) + 140 * mag))
+            g = int(round(194 * (1 - mag) +  81 * mag))
+            b = int(round(125 * (1 - mag) +  10 * mag))
         colors.append((r / 255, g / 255, b / 255))
         widths.append(0.8 + 1.8 * mag)
     ax.contour(
@@ -678,14 +685,18 @@ def _contour_level_color(L: float, max_abs: float) -> str:
     used in _render_contour_png so the GeoJSON polylines, PNG fallback,
     and frontend legend swatches all agree pixel-for-pixel."""
     mag = abs(L) / max_abs if max_abs else 0.0
+    # Mirror the BrBG endpoints used in _render_contour_png so the
+    # GeoJSON polylines, PNG fallback, and frontend legend swatches agree.
     if L < 0:
-        r = int(round( 96 * (1 - mag) +   8 * mag))
-        g = int(round(165 * (1 - mag) +  64 * mag))
-        b = int(round(250 * (1 - mag) + 142 * mag))
+        # mag=0 → #80cdc1 (pale teal-green); mag=1 → #01665e (deep green)
+        r = int(round(128 * (1 - mag) +   1 * mag))
+        g = int(round(205 * (1 - mag) + 102 * mag))
+        b = int(round(193 * (1 - mag) +  94 * mag))
     else:
-        r = int(round(248 * (1 - mag) + 153 * mag))
-        g = int(round(113 * (1 - mag) +  17 * mag))
-        b = int(round(113 * (1 - mag) +  21 * mag))
+        # mag=0 → #dfc27d (pale tan); mag=1 → #8c510a (saddle brown)
+        r = int(round(223 * (1 - mag) + 140 * mag))
+        g = int(round(194 * (1 - mag) +  81 * mag))
+        b = int(round(125 * (1 - mag) +  10 * mag))
     return f"#{r:02x}{g:02x}{b:02x}"
 
 

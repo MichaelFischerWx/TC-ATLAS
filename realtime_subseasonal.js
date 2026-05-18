@@ -311,13 +311,18 @@
                 y: slab.times,
                 z: norm.values,
                 colorscale: [
-                    [0,     '#053061'],    // strongly negative = enhanced convection
-                    [0.25,  '#2166ac'],
-                    [0.45,  '#92c5de'],
-                    [0.50,  isDark ? '#1e293b' : '#f7f7f7'],
-                    [0.55,  '#fddbc7'],
-                    [0.75,  '#d6604d'],
-                    [1,     '#67001f'],
+                    // CPC-style BrBG: green = forced ascent / enhanced
+                    // convection (negative OLR anomaly), brown = suppressed
+                    // (positive). More intuitive than diverging red-blue,
+                    // which conflicts with temperature / vorticity palettes
+                    // used elsewhere on the site.
+                    [0,     '#003c30'],    // strongly negative = enhanced convection (deep green)
+                    [0.25,  '#01665e'],
+                    [0.45,  '#80cdc1'],
+                    [0.50,  isDark ? '#1e293b' : '#f5f5f5'],
+                    [0.55,  '#dfc27d'],
+                    [0.75,  '#8c510a'],
+                    [1,     '#543005'],    // strongly positive = suppressed (deep brown)
                 ],
                 zmin: -band.vlim,
                 zmax:  band.vlim,
