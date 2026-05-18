@@ -664,15 +664,24 @@ def build_correlations(out_dir: Path,
         return r.astype(np.float32)
 
     def _render(corr_2d, fname, basin_name, month, kind):
-        fig, ax = plt.subplots(figsize=(8, 8 * (LAT_MAX - LAT_MIN) / (LON_MAX - LON_MIN)))
+        # Native subset is 340 × 1040 cells (lat × lon). Render at
+        # 1600 × 520 (1.5× native lon, ample for browser display) so
+        # the PNG stays sharp on wide monitors without ballooning file
+        # size. dpi=200 with the standard 8-in figure width hits that
+        # spot exactly; bbox_inches removed so output dims are
+        # deterministic.
+        fig_w = 8
+        fig, ax = plt.subplots(
+            figsize=(fig_w, fig_w * (LAT_MAX - LAT_MIN) / (LON_MAX - LON_MIN))
+        )
         ax.imshow(corr_2d, origin="lower",
                   extent=[LON_MIN, LON_MAX, LAT_MIN, LAT_MAX],
                   cmap="RdBu_r", vmin=-0.7, vmax=0.7,
                   interpolation="bilinear")
         ax.set_axis_off()
         fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
-        fig.savefig(corr_dir / fname, dpi=80, bbox_inches="tight",
-                    pad_inches=0, transparent=True)
+        fig.savefig(corr_dir / fname, dpi=200, pad_inches=0,
+                    transparent=True)
         plt.close(fig)
 
     def _write_grid_sidecar(corr_2d, fname):

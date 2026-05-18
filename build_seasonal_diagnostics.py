@@ -208,7 +208,10 @@ def render_anomaly_png(anom: xr.DataArray, valid_time: str) -> Path:
     h, w = sub.shape
     aspect = w / h
 
-    # Fixed figure size keeps PNGs at a stable resolution (~800 px wide).
+    # Native OISST 0.25° subset is 400 × 260 cells. Render at 1600 × 1040
+    # (4× native, 2× retina) so the browser never has to upscale and the
+    # PNG stays crisp on wide monitors. Switch to dpi=200 + drop the
+    # "tight" bbox so the output dims are deterministic (figsize × dpi).
     fig, ax = plt.subplots(figsize=(8.0, 8.0 / aspect))
     ax.imshow(
         sub.values, origin="lower",
@@ -220,8 +223,7 @@ def render_anomaly_png(anom: xr.DataArray, valid_time: str) -> Path:
     fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
     out = WORK_DIR / f"anom_{valid_time}.png"
     out.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out, dpi=100, bbox_inches="tight", pad_inches=0,
-                transparent=True)
+    fig.savefig(out, dpi=200, pad_inches=0, transparent=True)
     plt.close(fig)
 
     # Hover sidecar: 1° lat × 1° lon grid covering the same extent as the
