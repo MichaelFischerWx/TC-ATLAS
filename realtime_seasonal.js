@@ -162,6 +162,16 @@
         });
     }
 
+    // Remove any "No data." / "Plotly not loaded." stub left behind by an
+    // earlier (pre-data) render. Plotly.react reuses existing Plotly DOM
+    // but doesn't touch siblings the app injected via innerHTML, so the
+    // stub would otherwise float in front of the freshly drawn chart.
+    function _clearStub(el) {
+        if (!el) return;
+        var stub = el.querySelector('.seasonal-panel-stub');
+        if (stub) stub.remove();
+    }
+
     function _setStatus(msg, isError) {
         var el = document.getElementById('seasonal-status');
         if (!el) return;
@@ -554,6 +564,9 @@
             el.innerHTML = '<div class="seasonal-panel-stub">No data.</div>';
             return;
         }
+        // Plotly.react reuses existing Plotly DOM but doesn't wipe an
+        // app-injected stub — clear it here before painting fresh.
+        _clearStub(el);
 
         var hist = {
             type: 'scatter', mode: 'markers',
@@ -851,6 +864,7 @@
             el.innerHTML = '<div class="seasonal-panel-stub">No data.</div>';
             return;
         }
+        _clearStub(el);
         var months = [1,2,3,4,5,6,7,8,9,10,11,12];
         var monNames = ['Jan','Feb','Mar','Apr','May','Jun',
                         'Jul','Aug','Sep','Oct','Nov','Dec'];
