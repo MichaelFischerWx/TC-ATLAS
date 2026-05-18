@@ -287,6 +287,9 @@
             BRAND.grid = 'rgba(140,148,160,0.14)';
             BRAND.gridZero = 'rgba(140,148,160,0.42)';
             BRAND.plotBg = 'rgba(255,255,255,0.018)';
+            BRAND.hoverBg = 'rgba(20,25,32,0.94)';
+            BRAND.hoverBorder = 'rgba(140,148,160,0.40)';
+            BRAND.hoverText = '#e6edf5';
         } else {
             // Light mode: axis labels need to be near-black, gridlines a bit
             // darker than dark-mode's so they're visible on white.
@@ -295,6 +298,9 @@
             BRAND.grid = 'rgba(20,30,45,0.10)';
             BRAND.gridZero = 'rgba(20,30,45,0.35)';
             BRAND.plotBg = 'rgba(0,0,0,0.015)';
+            BRAND.hoverBg = 'rgba(255,255,255,0.96)';
+            BRAND.hoverBorder = 'rgba(20,30,45,0.20)';
+            BRAND.hoverText = '#1a1f25';
         }
     }
 
@@ -672,6 +678,13 @@
                 bgcolor: 'rgba(0,0,0,0)',
             },
             hovermode: 'closest',
+            hoverlabel: {
+                bgcolor: BRAND.hoverBg,
+                bordercolor: BRAND.hoverBorder,
+                font: { color: BRAND.hoverText,
+                        family: 'DM Sans, system-ui, sans-serif',
+                        size: 11 },
+            },
             annotations: _watermarkAnnotations(),
         };
         // Suppress legend entries from the historical-cloud trace
@@ -1037,6 +1050,13 @@
             font: { color: BRAND.text, family: 'DM Sans, system-ui, sans-serif',
                     size: 11 },
             hovermode: 'closest',
+            hoverlabel: {
+                bgcolor: BRAND.hoverBg,
+                bordercolor: BRAND.hoverBorder,
+                font: { color: BRAND.hoverText,
+                        family: 'DM Sans, system-ui, sans-serif',
+                        size: 11 },
+            },
             showlegend: true,
             legend: {
                 font: { size: 10 }, orientation: 'h',
@@ -1868,6 +1888,15 @@
             font: { color: BRAND.text, family: 'DM Sans, system-ui, sans-serif',
                     size: 11 },
             hovermode: 'x unified',
+            // x-unified mode puts every trace's value into one tooltip;
+            // Plotly's default light bg was unreadable in dark theme.
+            hoverlabel: {
+                bgcolor: BRAND.hoverBg,
+                bordercolor: BRAND.hoverBorder,
+                font: { color: BRAND.hoverText,
+                        family: 'DM Sans, system-ui, sans-serif',
+                        size: 11 },
+            },
             legend: { font: { size: 10 }, orientation: 'h',
                       yanchor: 'top', y: -0.18,
                       bgcolor: 'rgba(0,0,0,0)' },
