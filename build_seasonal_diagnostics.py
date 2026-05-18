@@ -92,8 +92,15 @@ def _download_blob(name: str, dest: Path) -> bool:
 
 def _upload_blob(src: Path, name: str, content_type: str) -> None:
     blob = _gcs_blob(name)
-    blob.upload_from_filename(str(src), content_type=content_type)
-    log.info("  uploaded gs://%s/%s/%s (%.1f KB)",
+    # predefined_acl="publicRead" — the frontend fetches these blobs
+    # directly via storage.googleapis.com, no auth header. Without this
+    # the bucket-default private ACL applies and anon GETs 403.
+    blob.upload_from_filename(
+        str(src),
+        content_type=content_type,
+        predefined_acl="publicRead",
+    )
+    log.info("  uploaded gs://%s/%s/%s (%.1f KB, public-read)",
              GCS_BUCKET, GCS_PREFIX, name, src.stat().st_size / 1024.0)
 
 
