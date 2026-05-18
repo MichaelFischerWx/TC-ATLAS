@@ -1026,11 +1026,18 @@
                             <option value="detrended">Detrended (linear trend removed)</option>
                         </select>
                     </label>
+                    <label>Overlay year
+                        <select id="seasonal-corr-overlay-year"></select>
+                    </label>
                 </div>
                 <div class="seasonal-corr-wrap" id="seasonal-corr-wrap">
                     <img id="seasonal-corr-img" class="seasonal-corr-img"
                          alt="ACE × SST correlation map">
+                    <svg id="seasonal-corr-overlay" class="seasonal-corr-overlay"
+                         xmlns="http://www.w3.org/2000/svg"
+                         preserveAspectRatio="none"></svg>
                     <div class="seasonal-anom-tooltip" id="seasonal-corr-tooltip"></div>
+                    <div class="seasonal-corr-overlay-legend" id="seasonal-corr-overlay-legend"></div>
                 </div>
                 <div class="seasonal-corr-legend">
                     <span>r = −0.7</span>

@@ -67,15 +67,12 @@ OISST_OPENDAP_TMPL = OISST_DOWNLOAD_TMPL   # kept for back-compat with importers
 OISST_LOCAL_CACHE = Path(os.environ.get(
     "OISST_LOCAL_CACHE", "/Users/mfischer/Data/OISST_daily"))
 
-# Atlantic + tropics + Pacific MDRs subset. Wide enough to cover:
-#   - Atlantic basin / MDR (full + east) / Caribbean / Gulf / AMO box
-#   - Tropical South Atlantic (down to ~25°S)
-#   - Niño 1+2 (down to 10°S), Niño 3, 3.4, 4
-#   - Eastern Pacific MDR (10-20°N, 90-130°W)
-#   - Western Pacific MDR (5-20°N, 130-170°E)
-# Keeping the subset small minimizes OPeNDAP transfer; OISST is 0.25° so the
-# global grid is 1440x720 — our subset is ~340x1040, roughly 1/3 the size.
-LAT_MIN, LAT_MAX = -25.0, 60.0
+# Global SST subset spanning ±60°N (covers all 7 TC basins incl. SH).
+# Lat range chosen so Southern Hemisphere TC corridors (10-30°S Atlantic
+# coast, SI 5-25°S, SP 5-25°S) are fully visible on Panel D correlation
+# maps. OISST is 0.25° so the global grid is 1440x720 — our subset is
+# ~480x1040, roughly 49% of the full globe.
+LAT_MIN, LAT_MAX = -60.0, 60.0
 LON_MIN, LON_MAX = 100.0, 360.0   # OISST is 0-360E
 
 # Climatology reference period. 1991-2020 matches WMO standard normals and
@@ -836,6 +833,7 @@ def build_correlations(out_dir: Path,
         }
         (corr_dir / fname).write_text(json.dumps(grid, separators=(",", ":")))
 
+
     total = 0
     for basin in ACE_BASINS:
         ace_dict = ace_all["basins"][basin]["years"]
@@ -870,6 +868,103 @@ def build_correlations(out_dir: Path,
     log.info("  wrote %d correlation PNGs + manifest.json to %s",
              total, corr_dir)
     return corr_dir
+
+
+# --------------------------------------------------------------------------
+# Step 3d: Per-(year, month) anomaly contour paths (for Panel D overlay)
+# --------------------------------------------------------------------------
+
+def build_anomaly_contours(out_dir: Path, climo_path: Path,
+                            monthly_path: str | None = None) -> Path:
+    """Emit JSON contour-path files for the monthly SST anomaly field of
+    each (year, month) in the record. Output:
+
+        out_dir/anomaly_contours/{YYYY}_{MM}.json
+        out_dir/anomaly_contours/manifest.json
+
+    Each per-year-month file is a small JSON of the form
+    {"levels": ["-2.0", "-1.0", "-0.5", "+0.5", "+1.0", "+2.0"],
+     "paths": {"+1.0": [[[lat, lon], ...], ...], ...}}
+
+    Used by the Panel D year-overlay feature: the frontend draws these
+    polylines as SVG on top of the correlation shading, so the user can
+    see at a glance whether the year's anomaly aligns with the
+    historically-significant correlation pattern.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    if not climo_path.exists():
+        raise FileNotFoundError(
+            f"Climatology not found at {climo_path}. Run --step monthly_climatology first."
+        )
+    clim_mean = xr.open_dataset(climo_path)["sst_clim_mean"]   # (month, lat, lon)
+
+    log.info("Building per-(year, month) SST anomaly contour JSON ...")
+    sst = _open_monthly_oisst(monthly_path)
+
+    LEVELS = [-2.0, -1.0, -0.5, 0.5, 1.0, 2.0]
+    cdir = out_dir / "anomaly_contours"
+    cdir.mkdir(parents=True, exist_ok=True)
+
+    manifest = {
+        "levels": [f"{L:+.1f}" for L in LEVELS],
+        "extent": [LON_MIN, LON_MAX, LAT_MIN, LAT_MAX],
+        "years": [],
+        "generated_utc": datetime.now(timezone.utc).isoformat(),
+    }
+
+    # Per-file size budget: downsample the anomaly field from 0.25° native
+    # to 1° before contouring. Contour-path vertices scale roughly with
+    # length, so 4× coarser sampling gives ~16× shorter total path length
+    # → ~70 KB per file vs ~1.1 MB at native resolution. Visually
+    # indistinguishable at the panel's display scale.
+    COARSEN = 4
+    n = 0
+    years_seen = set()
+    for t in range(sst.sizes["time"]):
+        ts = sst.time.values[t]
+        y = int(str(ts)[:4]); m = int(str(ts)[5:7])
+        anom = sst.values[t] - clim_mean.sel(month=m).values
+        # Block-mean coarsen
+        H, W = anom.shape
+        h2, w2 = H // COARSEN, W // COARSEN
+        anom = anom[:h2 * COARSEN, :w2 * COARSEN].reshape(
+            h2, COARSEN, w2, COARSEN)
+        with np.errstate(invalid="ignore"):
+            anom_coarse = np.nanmean(anom, axis=(1, 3))
+        fig_h, ax_h = plt.subplots()
+        try:
+            cs = ax_h.contour(anom_coarse, levels=LEVELS,
+                              extent=[LON_MIN, LON_MAX, LAT_MIN, LAT_MAX],
+                              origin="lower")
+            paths_by_level = {}
+            for level, segs in zip(cs.levels, cs.allsegs):
+                label = f"{level:+.1f}"
+                paths = []
+                for seg in segs:
+                    if len(seg) < 2:
+                        continue
+                    pts = [[round(float(p[1]), 2), round(float(p[0]), 2)]
+                           for p in seg]
+                    paths.append(pts)
+                if paths:
+                    paths_by_level[label] = paths
+        finally:
+            plt.close(fig_h)
+        out_obj = {"year": y, "month": m,
+                   "extent": [LON_MIN, LON_MAX, LAT_MIN, LAT_MAX],
+                   "paths": paths_by_level}
+        (cdir / f"{y}_{m:02d}.json").write_text(
+            json.dumps(out_obj, separators=(",", ":")))
+        years_seen.add(y)
+        n += 1
+    manifest["years"] = sorted(years_seen)
+    (cdir / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    log.info("  wrote %d anomaly-contour files (%d years) to %s",
+             n, len(years_seen), cdir)
+    return cdir
 
 
 # --------------------------------------------------------------------------
@@ -920,6 +1015,18 @@ def upload_to_gcs(local_dir: Path) -> None:
         log.info("  uploaded %d files under gs://%s/%s/correlations/",
                  n, GCS_BUCKET, GCS_PREFIX)
 
+    # Anomaly contour overlays for Panel D year toggle.
+    ac_dir = local_dir / "anomaly_contours"
+    if ac_dir.is_dir():
+        n = 0
+        for p in sorted(ac_dir.iterdir()):
+            if p.is_file() and p.suffix == ".json":
+                bucket.blob(f"{GCS_PREFIX}/anomaly_contours/{p.name}").upload_from_filename(
+                    str(p), content_type="application/json")
+                n += 1
+        log.info("  uploaded %d files under gs://%s/%s/anomaly_contours/",
+                 n, GCS_BUCKET, GCS_PREFIX)
+
 
 # --------------------------------------------------------------------------
 # CLI
@@ -929,7 +1036,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--step",
                     choices=["monthly_climatology", "monthly_indices",
-                             "ace", "correlations", "upload", "all"],
+                             "ace", "correlations", "anomaly_contours",
+                             "upload", "all"],
                     default="all",
                     help="Which step to run (default: all)")
     ap.add_argument("--out", default="data/seasonal",
@@ -968,6 +1076,9 @@ def main():
 
     if args.step in ("correlations", "all"):
         build_correlations(out_dir, monthly_path=args.monthly_file)
+
+    if args.step in ("anomaly_contours", "all"):
+        build_anomaly_contours(out_dir, climo_path, monthly_path=args.monthly_file)
 
     if args.step in ("upload", "all"):
         upload_to_gcs(out_dir)

@@ -26,7 +26,7 @@
         latest: null,          // parsed latest.json (may be null)
         activated: false,
         scatter: { x: 'atl_mdr', y: 'atl_amo', month: 5, variable: 'sst' },
-        corr: { basin: 'NA', month: 5, kind: 'raw' },
+        corr: { basin: 'NA', month: 5, kind: 'raw', overlayYear: '' },
         ts: { region: 'atl_mdr', variable: 'sst', history: 'all' },
         an: { year: null, month: 5, regions: 'atlantic' },
         idx: { window: '10' },
@@ -794,6 +794,114 @@
         state.corr_grid = null;
         _fetchData(gridName).then(function (g) { state.corr_grid = g; })
             .catch(function () { state.corr_grid = null; });
+        _renderCorrOverlay();
+    }
+
+    // -------------------------------------------------------------------
+    // Panel D — anomaly-contour overlay
+    // -------------------------------------------------------------------
+
+    // Style table for the six anomaly contour levels. Warm colors for
+    // positive (above-climatology SST), cool for negative. Stroke width
+    // scales with magnitude so the eye is drawn to the most impactful
+    // contours.
+    var ANOM_CONTOUR_STYLE = {
+        '-2.0': { color: '#053061', width: 2.4 },
+        '-1.0': { color: '#2166ac', width: 1.6 },
+        '-0.5': { color: '#67a9cf', width: 1.0, dash: '4 3' },
+        '+0.5': { color: '#f4a582', width: 1.0, dash: '4 3' },
+        '+1.0': { color: '#d6604d', width: 1.6 },
+        '+2.0': { color: '#67001f', width: 2.4 },
+    };
+
+    function _renderCorrOverlay() {
+        var svg = document.getElementById('seasonal-corr-overlay');
+        var legend = document.getElementById('seasonal-corr-overlay-legend');
+        if (!svg) return;
+        // Reset
+        while (svg.firstChild) svg.removeChild(svg.firstChild);
+        legend.classList.remove('visible');
+        var y = state.corr.overlayYear;
+        if (!y) return;
+
+        var mm = (state.corr.month < 10 ? '0' : '') + state.corr.month;
+        var name = 'anomaly_contours/' + y + '_' + mm + '.json';
+        _fetchData(name).then(function (j) {
+            _drawContoursOnSVG(j, svg);
+            legend.innerHTML = _buildOverlayLegendHTML(y, state.corr.month);
+            legend.classList.add('visible');
+        }).catch(function () {
+            // Missing month for the year (e.g., 2026-08 doesn't exist yet)
+            legend.innerHTML = '<em>No anomaly data for ' + y + '-' + mm + '</em>';
+            legend.classList.add('visible');
+        });
+    }
+
+    function _drawContoursOnSVG(payload, svg) {
+        if (!payload || !payload.paths) return;
+        var extent = payload.extent || [100, 360, -60, 60];   // lon_min, lon_max, lat_min, lat_max
+        // Use viewBox so paths are in (lat-lon) data space and scale to
+        // fit the SVG box. preserveAspectRatio="none" lets the SVG
+        // stretch to match the image edges.
+        var lonMin = extent[0], lonMax = extent[1];
+        var latMin = extent[2], latMax = extent[3];
+        svg.setAttribute('viewBox',
+            '0 0 ' + (lonMax - lonMin) + ' ' + (latMax - latMin));
+        svg.setAttribute('preserveAspectRatio', 'none');
+        var ns = 'http://www.w3.org/2000/svg';
+        for (var level in payload.paths) {
+            var style = ANOM_CONTOUR_STYLE[level] || { color: '#888', width: 1 };
+            payload.paths[level].forEach(function (path) {
+                var d = '';
+                for (var i = 0; i < path.length; i++) {
+                    var lat = path[i][0], lon = path[i][1];
+                    // Map (lat, lon) → SVG coords. x grows east, y grows
+                    // south (so invert lat).
+                    var x = lon - lonMin;
+                    var y = latMax - lat;
+                    d += (i === 0 ? 'M' : 'L') + x.toFixed(2) + ',' + y.toFixed(2);
+                }
+                var p = document.createElementNS(ns, 'path');
+                p.setAttribute('d', d);
+                p.setAttribute('fill', 'none');
+                p.setAttribute('stroke', style.color);
+                p.setAttribute('stroke-width', style.width / 30);   // viewBox is in degrees → scale down
+                p.setAttribute('stroke-linejoin', 'round');
+                p.setAttribute('stroke-linecap', 'round');
+                if (style.dash) p.setAttribute('stroke-dasharray',
+                    style.dash.split(' ').map(function (n) {
+                        return (parseFloat(n) / 30).toFixed(2);
+                    }).join(' '));
+                p.setAttribute('opacity', '0.92');
+                svg.appendChild(p);
+            });
+        }
+    }
+
+    function _buildOverlayLegendHTML(year, month) {
+        var monLabel = ['', 'Jan','Feb','Mar','Apr','May','Jun',
+                        'Jul','Aug','Sep','Oct','Nov','Dec'][month];
+        var rows = ['+2.0', '+1.0', '+0.5', '-0.5', '-1.0', '-2.0'].map(function (l) {
+            var s = ANOM_CONTOUR_STYLE[l];
+            return '<div><span class="legend-line" style="color:' + s.color +
+                '"></span>' + l + ' °C</div>';
+        });
+        return '<div style="font-weight:600;margin-bottom:2px">' +
+            year + ' ' + monLabel + ' SST anom</div>' + rows.join('');
+    }
+
+    function _populateOverlayYears() {
+        if (!state.indices) return;
+        var sel = document.getElementById('seasonal-corr-overlay-year');
+        if (!sel || sel.options.length) return;
+        var yearsSet = {};
+        state.indices.dates.forEach(function (d) {
+            yearsSet[parseInt(d.split('-')[0], 10)] = true;
+        });
+        var years = Object.keys(yearsSet).map(Number).sort(function (a, b) { return b - a; });
+        var opts = ['<option value="">— off —</option>'];
+        years.forEach(function (y) { opts.push('<option value="' + y + '">' + y + '</option>'); });
+        sel.innerHTML = opts.join('');
     }
 
     function _wireCorrHover() {
@@ -820,6 +928,15 @@
         bind('seasonal-corr-basin', 'basin');
         bind('seasonal-corr-month', 'month', function (v) { return parseInt(v, 10); });
         bind('seasonal-corr-kind', 'kind');
+        // Overlay year: keep separate so we only redraw the SVG, not the
+        // PNG (avoids re-fetching the correlation image).
+        var oy = document.getElementById('seasonal-corr-overlay-year');
+        if (oy) {
+            oy.addEventListener('change', function () {
+                state.corr.overlayYear = oy.value;
+                _renderCorrOverlay();
+            });
+        }
     }
 
     // -------------------------------------------------------------------
@@ -866,6 +983,7 @@
         Promise.all([p1, p2, p3]).then(function () {
             _setStatus('');
             _populateAnalogYearSelector();
+            _populateOverlayYears();
             _renderScatter();
             _renderTimeSeries();
             _renderAnalogs();
