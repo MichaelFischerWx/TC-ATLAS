@@ -33,7 +33,7 @@
         ts: { region: 'atl_mdr', variable: 'sst', history: 'all' },
         an: { year: null, month: 5, regions: 'all',
               method: 'grid_weighted', basin: 'NA', kind: 'raw',
-              stat: 'pearson' },
+              stat: 'pearson', topN: 'auto' },
         idx: { window: '10' },
         anomZoom: 'global',
         anomVar: 'raw',     // Panel A: 'raw' or 'relative'
@@ -951,6 +951,35 @@
             if (mEntry) {
                 var idxOfYear = mEntry.years.indexOf(targetYear);
                 if (idxOfYear < 0) {
+                    // Fallback: when target is the LIVE preliminary year
+                    // for the LIVE month, the daily cron has written a
+                    // distance vector from MTD anomaly → every historical
+                    // year. Use it so users see real rankings instead of
+                    // "no data" the moment they pick 2026 in May.
+                    var prelim = state.prelim_distances;
+                    if (prelim && prelim.year === targetYear &&
+                        prelim.month === month) {
+                        var pBasin = prelim.basins[basin];
+                        var pVec = pBasin && pBasin[matrixKey];
+                        if (pVec) {
+                            var pranked = Object.keys(pVec).map(function (k) {
+                                return { year: parseInt(k, 10), dist: pVec[k] };
+                            });
+                            pranked.sort(function (a, b) { return a.dist - b.dist; });
+                            return {
+                                years: pranked.map(function (r) { return r.year; }).concat([targetYear]),
+                                rows: pranked.slice(0, (state.an.resolvedTopN || 10)),
+                                targetYear: targetYear,
+                                method: 'grid_weighted',
+                                preliminary: true,
+                                preliminary_note:
+                                    'Distances computed from this month\'s ' +
+                                    'partial-month-to-date anomaly via the ' +
+                                    'persistence-anomaly extrapolation. ' +
+                                    'Updates daily as new days come in.',
+                            };
+                        }
+                    }
                     return { years: mEntry.years, rows: [],
                              unavailableReason:
                                  'Target year ' + targetYear +
@@ -967,7 +996,7 @@
                 ranked.sort(function (a, b) { return a.dist - b.dist; });
                 return {
                     years: mEntry.years,
-                    rows: ranked.slice(0, 10),
+                    rows: ranked.slice(0, (state.an.resolvedTopN || 10)),
                     targetYear: targetYear,
                     method: 'grid_weighted',
                 };
@@ -1047,7 +1076,7 @@
         ranked.sort(function (a, b) { return a.dist - b.dist; });
         return {
             years: availableYears,
-            rows: ranked.slice(0, 10),
+            rows: ranked.slice(0, (state.an.resolvedTopN || 10)),
             targetYear: targetYear,
             targetPreliminary: preliminaryFlag[targetYear],
             weights: weights,
@@ -1181,72 +1210,92 @@
             return out;
         }
 
-        var errs = [];
-        var bias = 0;
+        // Step 1: build a sorted-pairs list for each year (Y → candidate
+        // analogs ranked by distance). Each pair has {year, dist} and
+        // dist > 0 since the target year is filtered out.
+        var sortedPairsByYear = [];
         for (var i = 0; i < years.length; i++) {
-            var row;
+            var rowI, pairsI;
             if (method === 'grid_weighted') {
-                row = distRowGrid(seedYears.indexOf(years[i]));
-                if (!row) continue;
-                // Map back to year list (might differ from seedYears if
-                // some seeded years had no ACE).
-                var pairs = [];
+                rowI = distRowGrid(seedYears.indexOf(years[i]));
+                if (!rowI) { sortedPairsByYear.push(null); continue; }
+                pairsI = [];
                 for (var k = 0; k < seedYears.length; k++) {
                     if (seedYears[k] === years[i]) continue;
                     if (aceVec[seedYears[k]] === undefined) continue;
-                    pairs.push({ year: seedYears[k], dist: row[k] });
+                    pairsI.push({ year: seedYears[k], dist: rowI[k] });
                 }
-                pairs.sort(function (a, b) { return a.dist - b.dist; });
-                var picked = pairs.slice(0, topN);
-                if (picked.length < topN / 2) continue;
-                var sum = 0;
-                for (var p = 0; p < picked.length; p++) sum += aceVec[picked[p].year];
-                var pred = sum / picked.length;
-                var err = pred - aceVec[years[i]];
-                errs.push(err);
-                bias += err;
             } else {
-                row = distRowRegion(i);
-                if (!row) continue;
-                var pairs2 = [];
+                rowI = distRowRegion(i);
+                if (!rowI) { sortedPairsByYear.push(null); continue; }
+                pairsI = [];
                 for (var k2 = 0; k2 < years.length; k2++) {
                     if (k2 === i) continue;
-                    if (!isFinite(row[k2])) continue;
+                    if (!isFinite(rowI[k2])) continue;
                     if (aceVec[years[k2]] === undefined) continue;
-                    pairs2.push({ year: years[k2], dist: row[k2] });
+                    pairsI.push({ year: years[k2], dist: rowI[k2] });
                 }
-                pairs2.sort(function (a, b) { return a.dist - b.dist; });
-                var picked2 = pairs2.slice(0, topN);
-                if (picked2.length < topN / 2) continue;
-                var sum2 = 0;
-                for (var p2 = 0; p2 < picked2.length; p2++) sum2 += aceVec[picked2[p2].year];
-                var pred2 = sum2 / picked2.length;
-                var err2 = pred2 - aceVec[years[i]];
-                errs.push(err2);
-                bias += err2;
             }
+            pairsI.sort(function (a, b) { return a.dist - b.dist; });
+            sortedPairsByYear.push(pairsI);
         }
-        if (!errs.length) return null;
-        bias = bias / errs.length;
-        var abs = 0, sq = 0;
-        for (var e = 0; e < errs.length; e++) {
-            abs += Math.abs(errs[e]); sq += errs[e] * errs[e];
+
+        // Step 2: sweep N from 3..20 and pick the lowest LOO MAE. This
+        // gives the user an empirical answer to "is top-10 better than
+        // top-5 for this combination?" — usually different across
+        // basin/month/kind. Pre-sorted pairs make this cheap: O(N×Y).
+        var Ns = [3, 5, 7, 10, 15, 20];
+        var perN = {};
+        for (var ni = 0; ni < Ns.length; ni++) {
+            var nVal = Ns[ni];
+            var errs = [], bias = 0;
+            for (var ii = 0; ii < years.length; ii++) {
+                var ps = sortedPairsByYear[ii];
+                if (!ps || ps.length < nVal / 2) continue;
+                var picked = ps.slice(0, nVal);
+                var sumA = 0;
+                for (var pi = 0; pi < picked.length; pi++) sumA += aceVec[picked[pi].year];
+                var pred = sumA / picked.length;
+                var err = pred - aceVec[years[ii]];
+                errs.push(err);
+                bias += err;
+            }
+            if (!errs.length) continue;
+            bias = bias / errs.length;
+            var abs = 0, sq = 0;
+            for (var e = 0; e < errs.length; e++) {
+                abs += Math.abs(errs[e]); sq += errs[e] * errs[e];
+            }
+            perN[nVal] = {
+                n: errs.length,
+                mae: abs / errs.length,
+                rmse: Math.sqrt(sq / errs.length),
+                bias: bias,
+            };
         }
+        if (!Object.keys(perN).length) return null;
+
+        // Climatology baseline (constant: always predict the mean).
+        var mean = 0, mn = 0;
+        for (var kk in aceVec) { mean += aceVec[kk]; mn += 1; }
+        mean = mean / mn;
+        var ac = 0;
+        for (var kkk in aceVec) ac += Math.abs(aceVec[kkk] - mean);
+        var maeClimo = ac / mn;
+
+        // Best N by MAE.
+        var bestN = null, bestMae = Infinity;
+        Ns.forEach(function (n) {
+            if (perN[n] && perN[n].mae < bestMae) {
+                bestN = n; bestMae = perN[n].mae;
+            }
+        });
+
         return {
-            n: errs.length,
-            mae: abs / errs.length,
-            rmse: Math.sqrt(sq / errs.length),
-            bias: bias,
-            // Persistence baseline: mean ACE (in this corpus). MAE_clim
-            // is what you'd get by always predicting the mean.
-            mae_climo: (function () {
-                var mean = 0, m = 0;
-                for (var k in aceVec) { mean += aceVec[k]; m += 1; }
-                mean = mean / m;
-                var a = 0;
-                for (var kk in aceVec) a += Math.abs(aceVec[kk] - mean);
-                return a / m;
-            })(),
+            perN: perN,
+            Ns: Ns,
+            bestN: bestN,
+            mae_climo: maeClimo,
         };
     }
     var _cachedRegionVecs = null;
@@ -1255,22 +1304,53 @@
         var el = document.getElementById('seasonal-an-skill');
         if (!el) return;
         var skill = _computeAnalogSkill(aceLookup);
-        if (!skill) { el.innerHTML = ''; return; }
-        // Skill score relative to climatology: 1 - MAE / MAE_climo.
-        // Positive = beats climatology; 0 = tied; negative = worse.
-        var ss = 1 - skill.mae / skill.mae_climo;
+        if (!skill) {
+            el.innerHTML = '';
+            state.an.resolvedTopN = 10;
+            return;
+        }
+        // Resolve which N the table is actually displaying.
+        var chosenN = (state.an.topN === 'auto')
+            ? skill.bestN
+            : parseInt(state.an.topN, 10);
+        state.an.resolvedTopN = chosenN;
+        var chosen = skill.perN[chosenN] || skill.perN[skill.bestN];
+        var ss = 1 - chosen.mae / skill.mae_climo;
         var ssCls = ss > 0.15 ? 'an-skill-good'
                   : ss > 0.0  ? 'an-skill-ok' : 'an-skill-poor';
+
+        // Per-N comparison sparkline: show MAE at each N so the user
+        // can SEE that top-3 vs top-10 vs top-20 differ.
+        var bestN = skill.bestN;
+        var perNHtml = skill.Ns.filter(function (n) { return skill.perN[n]; })
+            .map(function (n) {
+                var s = skill.perN[n];
+                var pct = (1 - s.mae / skill.mae_climo) * 100;
+                var mark = (n === bestN) ? '<strong>' : '';
+                var emark = (n === bestN) ? '</strong>' : '';
+                return mark + 'N=' + n + ': MAE ' + s.mae.toFixed(1) +
+                       ' (' + (pct >= 0 ? '+' : '') + pct.toFixed(0) + '%)' +
+                       emark;
+            }).join(' · ');
+
+        var bestNote = (state.an.topN === 'auto')
+            ? 'Auto-selected <strong>N=' + bestN + '</strong> (lowest MAE).'
+            : (chosenN === bestN
+                 ? '<strong>N=' + chosenN + '</strong> is also the best LOO MAE for this combination.'
+                 : 'Best LOO MAE at <strong>N=' + bestN + '</strong> (MAE ' +
+                   skill.perN[bestN].mae.toFixed(1) + '). Set N to "Auto" to use it.');
+
         el.innerHTML =
             '<div class="' + ssCls + '">' +
-            '<strong>Top-10 analog forecast skill</strong> ' +
-            '(leave-one-out over ' + skill.n + ' years): ' +
-            'MAE ' + skill.mae.toFixed(1) +
-            ' · RMSE ' + skill.rmse.toFixed(1) +
-            ' · bias ' + (skill.bias >= 0 ? '+' : '') + skill.bias.toFixed(1) +
+            '<strong>Top-' + chosenN + ' analog forecast skill</strong> ' +
+            '(leave-one-out, ' + chosen.n + ' years): ' +
+            'MAE ' + chosen.mae.toFixed(1) +
+            ' · RMSE ' + chosen.rmse.toFixed(1) +
+            ' · bias ' + (chosen.bias >= 0 ? '+' : '') + chosen.bias.toFixed(1) +
             ' · skill-vs-climo <strong>' + (ss * 100).toFixed(0) + '%</strong> ' +
-            '(climo MAE ' + skill.mae_climo.toFixed(1) + '). ' +
-            'Toggle method/kind/month to compare.</div>';
+            '(climo MAE ' + skill.mae_climo.toFixed(1) + ').<br>' +
+            '<span style="opacity:.8">Across N: ' + perNHtml + '</span><br>' +
+            bestNote + '</div>';
     }
 
     function _renderAnalogs() {
@@ -1299,6 +1379,20 @@
             };
         } else {
             aceLookup = function () { return null; };
+        }
+
+        // Resolve N BEFORE building analogs, so the table reflects the
+        // user-selected N (or the auto-best N from LOO sweep). The
+        // skill function itself doesn't depend on resolvedTopN; we
+        // peek at its result, set state.an.resolvedTopN, then build.
+        var skillPre = _computeAnalogSkill(aceLookup);
+        if (skillPre) {
+            state.an.resolvedTopN = (state.an.topN === 'auto')
+                ? skillPre.bestN
+                : parseInt(state.an.topN, 10);
+        } else {
+            state.an.resolvedTopN = (state.an.topN === 'auto') ? 10
+                : parseInt(state.an.topN, 10);
         }
 
         var bundle = _buildAnalogs();
@@ -1456,6 +1550,7 @@
         bindStr('seasonal-an-basin', 'basin');
         bindStr('seasonal-an-kind', 'kind');
         bindStr('seasonal-an-stat', 'stat');
+        bindStr('seasonal-an-topn', 'topN');
     }
 
     // -------------------------------------------------------------------
@@ -1960,7 +2055,14 @@
             function (j) { state.distance_matrices = j; },
             function () { state.distance_matrices = null; }
         );
-        Promise.all([p1, p2, p3, p4, p5, p6]).then(function () {
+        // Optional preliminary-year distance vector. If present, the
+        // grid-weighted analog method can produce real rankings for
+        // the current year on the current month instead of "no data".
+        var p7 = _fetchData('analog_preliminary_distances.json').then(
+            function (j) { state.prelim_distances = j; },
+            function () { state.prelim_distances = null; }
+        );
+        Promise.all([p1, p2, p3, p4, p5, p6, p7]).then(function () {
             _setStatus('');
             _populateAnalogYearSelector();
             _populateOverlayYears();

@@ -281,6 +281,144 @@ def compute_today_indices(sst: xr.DataArray, clim_mean: xr.DataArray) -> tuple:
     return row, anom, anom_rel
 
 
+def compute_preliminary_analog_distances(
+        anom_raw: xr.DataArray,
+        anom_rel: xr.DataArray,
+        ace_basins: dict,
+) -> dict:
+    """Compute grid-weighted L2 distance from the live preliminary
+    current-month anomaly field to each historical year for every
+    (basin, kind, stat) combination. Lets Panel E's grid-weighted
+    method return real analogs for the current year instead of
+    "no data" — the frontend falls back here when the precomputed
+    distance matrix has no row for the target year.
+
+    By construction (persistence-anomaly extrapolation), the projected
+    full-month anomaly equals the MTD anomaly, so we use the MTD
+    anomaly field directly. The weighting is shaped by the precomputed
+    correlation field at 1° (we read the grid sidecars Panel D already
+    emits). Output JSON shape:
+
+      {basin: {kind+stat: {year: distance, ...}}}
+
+    where kind+stat ∈ {raw, raw_spearman, detrended, detrended_spearman,
+                       relative, relative_spearman}.
+    """
+    from build_oisst_history import ACE_BASINS
+
+    today = datetime.now(timezone.utc).date()
+    year = today.year
+    month = today.month
+    mm = f"{month:02d}"
+
+    # ---- Coarsen the preliminary anomaly fields to the 1° grid used by
+    # the correlation sidecars + the anomaly-contour grids. We need
+    # numpy arrays at that resolution to compute distances.
+    def _coarsen_1deg(da, kind_name):
+        # Native is 0.25° → 1° coarsening = 4× in each dim.
+        H, W = da.shape
+        h2, w2 = H // 4, W // 4
+        block = da.values[:h2 * 4, :w2 * 4].reshape(h2, 4, w2, 4)
+        with np.errstate(invalid="ignore"):
+            return np.nanmean(block, axis=(1, 3))
+    prelim_raw_1deg = _coarsen_1deg(anom_raw, "raw")
+    prelim_rel_1deg = _coarsen_1deg(anom_rel, "rel")
+    # "Detrended" preliminary anomaly: persistence anom is itself
+    # already the deviation from climo; for distance purposes the
+    # detrended anomaly = MTD anomaly with the long-term trend at
+    # current_year subtracted. But the linear trend is a constant
+    # offset per pixel — it shifts each year uniformly. Pairwise
+    # distances over the trend-removed field equal pairwise distances
+    # over the raw anomaly field (constants cancel). So we can reuse
+    # prelim_raw_1deg for detrended too without loss.
+    prelim_by_kind = {
+        'raw':       prelim_raw_1deg,
+        'detrended': prelim_raw_1deg,
+        'relative':  prelim_rel_1deg,
+    }
+    out = {"month": month, "year": year, "basins": {}}
+
+    for basin in ACE_BASINS:
+        out["basins"][basin] = {}
+        for kind in ('raw', 'detrended', 'relative'):
+            prelim = prelim_by_kind[kind]
+            for stat in ('pearson', 'spearman'):
+                stat_suffix = ('_spearman' if stat == 'spearman' else '')
+                key = kind + stat_suffix
+                # Load correlation 1° grid (small JSON).
+                corr_name = (f"correlations/{basin}_{mm}_{kind}"
+                             f"{stat_suffix}.grid.json")
+                try:
+                    cfile = WORK_DIR / corr_name
+                    if cfile.exists():
+                        cgrid = json.loads(cfile.read_text())
+                    else:
+                        ok = _download_blob(corr_name, cfile)
+                        if not ok:
+                            continue
+                        cgrid = json.loads(cfile.read_text())
+                except Exception as e:
+                    log.warning("  prelim distances: failed to load %s: %s",
+                                corr_name, e)
+                    continue
+                cvals = np.array(cgrid["values"], dtype=np.float64)
+                # Weight per pixel = sqrt(|r|).
+                w = np.sqrt(np.where(np.isfinite(cvals), np.abs(cvals), 0))
+                # Loop over historical years' anomaly grids (embedded in
+                # anomaly_contours/{year}_{MM}.json).
+                dists = {}
+                # 1982 .. current_year-1 is the conservative range; we
+                # take what's there.
+                for yh in range(1982, year):
+                    yhname = f"anomaly_contours/{yh}_{mm}.json"
+                    cache = WORK_DIR / yhname
+                    if not cache.exists():
+                        _download_blob(yhname, cache)
+                    if not cache.exists():
+                        continue
+                    try:
+                        ydata = json.loads(cache.read_text())
+                    except Exception:
+                        continue
+                    ygrid = ydata.get("grid")
+                    if not ygrid:
+                        continue
+                    yvals = np.array(ygrid["values"], dtype=np.float64)
+                    # For 'relative' kind, we need each historical year's
+                    # SST minus that year's tropical-mean anomaly. The
+                    # contour JSON has raw anomaly only — approximate
+                    # 'relative' by subtracting that year's 30°S-30°N
+                    # mean anomaly (matches what compute_today_indices
+                    # does for the live frame). For 'raw' and 'detrended',
+                    # use the year-anomaly directly (constants cancel).
+                    if kind == 'relative':
+                        lat_axis = np.linspace(ygrid["lat_min"] + 0.5,
+                                                ygrid["lat_max"] - 0.5,
+                                                ygrid["n_lat"])
+                        trop_mask = (lat_axis >= -30.0) & (lat_axis <= 30.0)
+                        if trop_mask.any():
+                            cosw = np.cos(np.deg2rad(lat_axis[trop_mask]))[:, None]
+                            sub = yvals[trop_mask, :]
+                            finite = np.isfinite(sub)
+                            wsum = np.where(finite, cosw, 0)
+                            ssum = np.where(finite, sub, 0)
+                            denom = wsum.sum()
+                            mean_ya = float((ssum * wsum).sum() / denom) if denom > 0 else 0
+                            ya = yvals - mean_ya
+                        else:
+                            ya = yvals
+                    else:
+                        ya = yvals
+                    # Pairwise distance: sqrt(sum(w² · (prelim - ya)²)).
+                    diff = prelim - ya
+                    sq = np.where(np.isfinite(diff), diff * diff, 0)
+                    d = float(np.sqrt(np.sum(w * w * sq)))
+                    dists[yh] = round(d, 3)
+                if dists:
+                    out["basins"][basin][key] = dists
+    return out
+
+
 def append_to_daily_parquet(row: dict) -> None:
     """Append today's row to the current-year daily indices parquet on GCS.
     Replaces any existing row for the same date so reruns are idempotent.
@@ -368,6 +506,19 @@ def main():
         append_to_daily_parquet(row)
         log.info("Writing latest.json ...")
         write_latest_json(row, f"anom_png/{row['date']}.png")
+
+    log.info("Computing preliminary analog distances for Panel E ...")
+    try:
+        prelim_dist = compute_preliminary_analog_distances(anom, anom_rel, None)
+        out_local = WORK_DIR / "analog_preliminary_distances.json"
+        out_local.write_text(json.dumps(prelim_dist, separators=(",", ":")))
+        if not args.local_only:
+            _upload_blob(out_local, "analog_preliminary_distances.json",
+                         "application/json")
+        log.info("  wrote analog_preliminary_distances.json (%.1f KB)",
+                 out_local.stat().st_size / 1024.0)
+    except Exception as e:
+        log.warning("  preliminary distances failed: %s", e)
 
     log.info("Done in %.1f s.", time.time() - t0)
 

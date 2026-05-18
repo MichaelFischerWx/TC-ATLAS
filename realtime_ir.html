@@ -1148,6 +1148,17 @@
                             <option value="spearman">Spearman ρ</option>
                         </select>
                     </label>
+                    <label>N analogs
+                        <select id="seasonal-an-topn" title="How many of the closest historical years to average. 'Auto' sweeps 3-20 and picks the N with the lowest leave-one-out MAE for the current basin × month × kind × stat combination.">
+                            <option value="auto" selected>Auto (best LOO MAE)</option>
+                            <option value="3">3</option>
+                            <option value="5">5</option>
+                            <option value="7">7</option>
+                            <option value="10">10</option>
+                            <option value="15">15</option>
+                            <option value="20">20</option>
+                        </select>
+                    </label>
                     <label>Region set
                         <select id="seasonal-an-regions">
                             <option value="all" selected>All 14 regions</option>
