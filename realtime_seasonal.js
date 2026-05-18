@@ -34,7 +34,7 @@
         an: { year: null, month: 5, regions: 'all',
               method: 'grid_weighted', basin: 'NA', kind: 'raw',
               stat: 'pearson', topN: 'auto' },
-        idx: { window: '10' },
+        idx: { window: '10', variable: 'anom' },
         anomZoom: 'global',
         anomVar: 'raw',     // Panel A: 'raw' or 'relative'
     };
@@ -1557,23 +1557,74 @@
     // Panel F — Climate-index dashboard (multi-trace time series)
     // -------------------------------------------------------------------
 
+    // Helper: anomaly of relative SST for a region — subtract the
+    // 1991-2020 month-of-year mean of `{region}_sst_rel` so we get a
+    // proper "differential anomaly" comparable to anom / sst_dt.
+    // Without this step, `_sst_rel` carries the seasonal cycle of
+    // (region SST − tropical-mean SST), which swamps the year-to-year
+    // signal users want to see on Panel F.
+    function _relativeAnomalySeries(region) {
+        var idx = state.indices;
+        var rel = idx.values[region + '_sst_rel'];
+        if (!rel) return null;
+        var prelim = idx.preliminary || [];
+        // Per-month 1991-2020 climo
+        var climSum = [0,0,0,0,0,0,0,0,0,0,0,0];
+        var climN = [0,0,0,0,0,0,0,0,0,0,0,0];
+        for (var i = 0; i < idx.dates.length; i++) {
+            var parts = idx.dates[i].split('-');
+            var y = parseInt(parts[0], 10);
+            var m = parseInt(parts[1], 10);
+            if (y < 1991 || y > 2020) continue;
+            if (prelim[i]) continue;
+            if (rel[i] === null || rel[i] === undefined) continue;
+            climSum[m - 1] += rel[i]; climN[m - 1] += 1;
+        }
+        var clim = climSum.map(function (s, k) {
+            return climN[k] > 0 ? s / climN[k] : 0;
+        });
+        return rel.map(function (v, i) {
+            if (v === null || v === undefined) return null;
+            var m = parseInt(idx.dates[i].split('-')[1], 10);
+            return v - clim[m - 1];
+        });
+    }
+
     function _renderIndices() {
         var el = document.getElementById('seasonal-idx-plot');
         if (!el || typeof Plotly === 'undefined' || !state.indices) return;
         var idx = state.indices;
         var dates = idx.dates;
-        var nino34 = idx.values.nino34_anom;
-        var amo = idx.values.atl_amo_anom;
-        var nta = idx.values.nta_anom;
-        var tsa = idx.values.tsa_anom;
+
+        // Pick the column suffix that matches the chosen variable.
+        // For "relative" we have to derive the anomaly client-side
+        // because the raw `_sst_rel` column carries the seasonal cycle.
+        var v = state.idx.variable;
+        var nino34, amo, nta, tsa;
+        if (v === 'sst_dt') {
+            nino34 = idx.values.nino34_sst_dt;
+            amo = idx.values.atl_amo_sst_dt;
+            nta = idx.values.nta_sst_dt;
+            tsa = idx.values.tsa_sst_dt;
+        } else if (v === 'sst_rel') {
+            nino34 = _relativeAnomalySeries('nino34');
+            amo = _relativeAnomalySeries('atl_amo');
+            nta = _relativeAnomalySeries('nta');
+            tsa = _relativeAnomalySeries('tsa');
+        } else {
+            nino34 = idx.values.nino34_anom;
+            amo = idx.values.atl_amo_anom;
+            nta = idx.values.nta_anom;
+            tsa = idx.values.tsa_anom;
+        }
         var prelim = idx.preliminary || [];
 
         // AMM proxy: NTA - TSA (Vimont/Kossin sign convention; positive
         // means warmer northern tropical Atlantic, favorable for
         // intensification + northward TC track displacement).
-        var amm = nta.map(function (v, i) {
-            if (v === null || tsa[i] === null) return null;
-            return v - tsa[i];
+        var amm = nta.map(function (val, i) {
+            if (val === null || tsa[i] === null) return null;
+            return val - tsa[i];
         });
 
         // Window selector
@@ -1630,11 +1681,21 @@
             .concat(styledTrace('AMO box',  '#3a8dde', slice(amo)))
             .concat(styledTrace('AMM (NTA−TSA)', '#5db95d', amm.slice(iStart)));
 
-        // ENSO threshold reference lines at ±0.5 °C
+        var vLabel = (v === 'sst_dt') ? 'detrended (°C)'
+                   : (v === 'sst_rel') ? 'relative-SST anomaly (°C, Vecchi-Soden)'
+                   : 'anomaly vs 1991-2020 (°C)';
+        var titleTag = (v === 'sst_dt') ? ' — detrended'
+                     : (v === 'sst_rel') ? ' — relative SST'
+                     : '';
+        // ENSO ±0.5 °C reference lines stay regardless of mode — they're
+        // useful eyeballing thresholds in any anomaly framing, even if
+        // they're literally the El Niño / La Niña convention only in
+        // the raw anomaly mode.
         var layout = {
-            title: { text: 'Atlantic + Pacific climate indices', font: { size: 14 } },
+            title: { text: 'Atlantic + Pacific climate indices' + titleTag,
+                     font: { size: 14 } },
             xaxis: { title: 'Date', zeroline: false },
-            yaxis: { title: 'SST anomaly (°C)', zeroline: true,
+            yaxis: { title: 'SST ' + vLabel, zeroline: true,
                      zerolinecolor: BRAND.gridZero },
             margin: { l: 64, r: 18, t: 52, b: 80 },
             paper_bgcolor: 'rgba(0,0,0,0)',
@@ -1660,12 +1721,16 @@
     }
 
     function _bindIndexControls() {
-        var el = document.getElementById('seasonal-idx-window');
-        if (!el) return;
-        el.addEventListener('change', function () {
-            state.idx.window = el.value;
-            _renderIndices();
-        });
+        var bindOne = function (id, key) {
+            var el = document.getElementById(id);
+            if (!el) return;
+            el.addEventListener('change', function () {
+                state.idx[key] = el.value;
+                _renderIndices();
+            });
+        };
+        bindOne('seasonal-idx-window', 'window');
+        bindOne('seasonal-idx-var', 'variable');
     }
 
     // -------------------------------------------------------------------

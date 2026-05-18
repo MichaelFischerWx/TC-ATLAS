@@ -1208,6 +1208,13 @@
                     Vimont &amp; Kossin 2007).
                 </p>
                 <div class="seasonal-ts-controls">
+                    <label>Variable
+                        <select id="seasonal-idx-var" title="Same convention as the other Seasonal-tab panels. Raw anomaly = monthly SST minus 1991-2020 climo. Detrended = year-deviation from a per-(region, month) linear-in-year trend. Relative (Vecchi-Soden 2007) = anomaly of (region SST − 30°S-30°N mean SST), so the global tropical warming signal is removed.">
+                            <option value="anom" selected>Raw anomaly vs 1991-2020</option>
+                            <option value="sst_dt">Detrended (per-month linear-in-year)</option>
+                            <option value="sst_rel">Relative anomaly (Vecchi-Soden 2007)</option>
+                        </select>
+                    </label>
                     <label>Window
                         <select id="seasonal-idx-window">
                             <option value="5">Last 5 years</option>
