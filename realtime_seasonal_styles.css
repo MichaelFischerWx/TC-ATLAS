@@ -209,6 +209,56 @@
     min-height: 480px;
 }
 
+/* Panel B — region time series */
+.seasonal-ts-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px 18px;
+    margin-bottom: 8px;
+    font-size: 0.75rem;
+    color: var(--text-dim, #a0a8b3);
+}
+.seasonal-ts-controls label { display: flex; align-items: center; gap: 6px; }
+.seasonal-ts-controls select {
+    font-size: 0.75rem;
+    padding: 2px 6px;
+    background: var(--surface, #0d1117);
+    color: var(--text, #e0e0e0);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 3px;
+}
+.seasonal-ts-plot {
+    width: 100%;
+    flex: 1;
+    min-height: 340px;
+}
+
+/* Panel E — analog table */
+.seasonal-an-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.78rem;
+    color: var(--text, #e0e0e0);
+    margin-top: 6px;
+}
+.seasonal-an-table th {
+    text-align: left;
+    padding: 6px 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.18);
+    color: var(--text-dim, #a0a8b3);
+    font-weight: 500;
+}
+.seasonal-an-table td {
+    padding: 6px 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    font-variant-numeric: tabular-nums;
+}
+.seasonal-an-table tbody tr:hover {
+    background: rgba(120,170,210,0.10);
+}
+.seasonal-an-table .an-ace-hi { color: #ff7a59; font-weight: 600; }
+.seasonal-an-table .an-ace-lo { color: #6da8e6; }
+
 /* Panel A anomaly map */
 .seasonal-anom-wrap {
     position: relative;

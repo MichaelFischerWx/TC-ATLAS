@@ -90,7 +90,7 @@ INDICES_START_YEAR = 1982
 # current. The full historical climatology + monthly indices are computed
 # from this file — daily PSL fetches are reserved for the live tab. The
 # file is updated by NOAA roughly mid-month for the prior month.
-OISST_MONTHLY_LOCAL_DEFAULT = "/Users/mfischer/Data/ACE/sst.mon.mean_jul_2025.nc"
+OISST_MONTHLY_LOCAL_DEFAULT = "/Users/mfischer/Data/ACE/sst.mon.mean_may_2026.nc"
 OISST_MONTHLY_URL = (
     "https://psl.noaa.gov/thredds/fileServer/Datasets/noaa.oisst.v2.highres/"
     "sst.mon.mean.nc"
@@ -308,12 +308,90 @@ def build_climatology(out_path: Path, monthly_path: str | None = None) -> Path:
 # Step 2: Monthly region indices (full history)
 # --------------------------------------------------------------------------
 
+def _fetch_current_month_preliminary(climo_mean: xr.DataArray) -> dict | None:
+    """Fetch all available days of the current calendar month from PSL daily
+    OPeNDAP one timestep at a time, average them, and return a preliminary
+    row of region-mean SST + anomaly.
+
+    Single-day fetches are the only reliable PSL OPeNDAP pattern (multi-day
+    slices silently return mostly-zero data) — see the project memory note.
+    Roughly ~2 s per day × 16-18 days ≈ 30-40 s for a full month-to-date.
+    Returns None if the open fails or no days have finite data yet.
+    """
+    today = datetime.now(timezone.utc).date()
+    year, month = today.year, today.month
+    url = ("https://psl.noaa.gov/thredds/dodsC/Datasets/noaa.oisst.v2.highres/"
+           f"sst.day.mean.{year}.nc")
+    try:
+        ds = xr.open_dataset(url)
+    except Exception as e:
+        log.warning("  preliminary current-month fetch failed (open): %s", e)
+        return None
+    try:
+        sub = ds.sel(lat=slice(LAT_MIN, LAT_MAX), lon=slice(LON_MIN, LON_MAX))
+        all_times = sub["time"].values
+        # Day indices in the current month
+        day_idx = []
+        for i, t in enumerate(all_times):
+            ts = str(t)[:10]
+            if ts.startswith(f"{year}-{month:02d}-"):
+                day_idx.append(i)
+        if not day_idx:
+            log.warning("  preliminary current-month: no days available yet")
+            return None
+        lat_vals = sub["lat"].values.copy()
+        lon_vals = sub["lon"].values.copy()
+        log.info("  fetching %d daily slabs one-at-a-time for %d-%02d ...",
+                 len(day_idx), year, month)
+        accum_sum = np.zeros((len(lat_vals), len(lon_vals)), dtype=np.float64)
+        accum_n = np.zeros((len(lat_vals), len(lon_vals)), dtype=np.int32)
+        for k in day_idx:
+            slab = sub["sst"].isel(time=k).load()
+            v = np.ascontiguousarray(slab.values)
+            v[np.abs(v) > 50.0] = np.nan
+            mask = np.isfinite(v)
+            accum_sum[mask] += v[mask]
+            accum_n[mask] += 1
+    finally:
+        ds.close()
+
+    if accum_n.max() == 0:
+        log.warning("  preliminary current-month: all days returned no data")
+        return None
+    with np.errstate(invalid="ignore", divide="ignore"):
+        sst_m2d = np.where(accum_n > 0, accum_sum / accum_n, np.nan)
+
+    sst_da = xr.DataArray(
+        sst_m2d.astype(np.float32), dims=("lat", "lon"),
+        coords={"lat": lat_vals, "lon": lon_vals},
+        name="sst",
+    )
+    anom_da = sst_da - climo_mean.sel(month=month)
+    row = {"date": f"{year}-{month:02d}", "preliminary": True,
+           "n_days": int(len(day_idx)),
+           "as_of": today.isoformat()}
+    for name, box in REGIONS.items():
+        row[f"{name}_sst"]  = round(float(_region_mean(sst_da,  box).values), 4)
+        row[f"{name}_anom"] = round(float(_region_mean(anom_da, box).values), 4)
+    log.info("  %d-%02d preliminary (n=%d days): MDR anom=%+.2f, AMO anom=%+.2f, Niño3.4 anom=%+.2f",
+             year, month, row["n_days"],
+             row["atl_mdr_anom"], row["atl_amo_anom"], row["nino34_anom"])
+    return row
+
+
 def build_indices(climo_path: Path, out_path: Path,
                   year_start: int = INDICES_START_YEAR,
                   year_end: int | None = None,
-                  monthly_path: str | None = None) -> Path:
+                  monthly_path: str | None = None,
+                  with_preliminary: bool = True) -> Path:
     """Compute monthly region-mean SST and SST anomalies from the monthly
     OISST file. Writes a parquet keyed by (year, month).
+
+    If `with_preliminary` is set and the current calendar month is not
+    already in the file, also tries to fetch the partial-month daily
+    average from PSL OPeNDAP and appends it as a row flagged
+    `preliminary=True`. This keeps the scatter able to plot the current
+    year/month before NOAA finalizes the monthly file.
     """
     log.info("Building monthly region indices %d-present ...", year_start)
     if not climo_path.exists():
@@ -342,16 +420,70 @@ def build_indices(climo_path: Path, out_path: Path,
 
     import pandas as pd
     df = pd.DataFrame(rows).sort_values("date").reset_index(drop=True)
-    log.info("  built indices table: %d rows × %d cols", len(df), len(df.columns))
+    df["preliminary"] = False
+    df["n_days"] = 0  # placeholder for finalized rows
+    df["as_of"] = ""
+    log.info("  built finalized indices table: %d rows × %d cols",
+             len(df), len(df.columns))
 
-    # Frontend-friendly JSON sidecar (smaller, browser-readable without
-    # parquet support). Same data; column-major layout for compact load.
+    # Detrended SST: per-(region, calendar-month) linear-in-year trend fit
+    # across all finalized rows, subtracted off. Result is the year's
+    # deviation from the locally-fit trend, stored as `{region}_sst_dt`.
+    # Preliminary current-month rows reuse the trend fitted on finalized
+    # data only (don't let a partial month influence the fit).
+    df["_year"] = pd.to_datetime(df["date"]).dt.year
+    df["_month"] = pd.to_datetime(df["date"]).dt.month
+    for name in REGIONS:
+        col_sst = f"{name}_sst"
+        col_dt = f"{name}_sst_dt"
+        df[col_dt] = np.nan
+        for m in range(1, 13):
+            mask = (df["_month"] == m) & (~df["preliminary"])
+            if mask.sum() < 4:
+                continue
+            ys = df.loc[mask, "_year"].values.astype(np.float64)
+            vs = df.loc[mask, col_sst].values.astype(np.float64)
+            slope, intercept = np.polyfit(ys, vs, 1)
+            # Subtract trend across ALL rows of that month (finalized + prelim)
+            full_mask = (df["_month"] == m)
+            full_ys = df.loc[full_mask, "_year"].values.astype(np.float64)
+            full_vs = df.loc[full_mask, col_sst].values.astype(np.float64)
+            df.loc[full_mask, col_dt] = np.round(
+                full_vs - (slope * full_ys + intercept), 4
+            )
+    df = df.drop(columns=["_year", "_month"])
+
+    # Preliminary current-month row (if not already covered by the
+    # monthly file and the daily fetch succeeds).
+    if with_preliminary:
+        today = datetime.now(timezone.utc).date()
+        cur_month = f"{today.year}-{today.month:02d}"
+        if cur_month not in set(df["date"]):
+            prelim = _fetch_current_month_preliminary(clim_mean)
+            if prelim:
+                prelim_df = pd.DataFrame([{**prelim}])
+                # Fill any missing columns with sensible defaults so the
+                # concat is clean.
+                for col in df.columns:
+                    if col not in prelim_df.columns:
+                        prelim_df[col] = "" if df[col].dtype == object else 0
+                df = pd.concat([df, prelim_df], ignore_index=True)
+                df = df.sort_values("date").reset_index(drop=True)
+                log.info("  appended preliminary row for %s (n=%d days)",
+                         prelim["date"], prelim["n_days"])
+
+    # Frontend-friendly JSON sidecar — keeps the per-column lists plus
+    # a top-level `preliminary` boolean list aligned with `dates` so the
+    # scatter renderer can pick out partial-month points.
     json_path = out_path.with_suffix(".json")
+    value_cols = [c for c in df.columns
+                  if c not in ("date", "preliminary", "n_days", "as_of")]
     payload = {
         "regions": list(REGIONS.keys()),
         "dates": df["date"].tolist(),
-        "values": {col: df[col].round(3).tolist()
-                   for col in df.columns if col != "date"},
+        "values": {col: df[col].round(3).tolist() for col in value_cols},
+        "preliminary": df["preliminary"].astype(bool).tolist(),
+        "preliminary_n_days": df["n_days"].astype(int).tolist(),
         "climatology_period": f"{CLIMO_START_YEAR}-{CLIMO_END_YEAR}",
         "generated_utc": datetime.now(timezone.utc).isoformat(),
     }

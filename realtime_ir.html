@@ -930,19 +930,57 @@
                         <select id="seasonal-scatter-var">
                             <option value="sst" selected>SST (absolute)</option>
                             <option value="anom">SST anomaly vs 1991-2020</option>
+                            <option value="sst_dt">SST (detrended, per-month linear-in-year)</option>
                         </select>
                     </label>
                 </div>
                 <div id="seasonal-scatter-plot" class="seasonal-scatter-plot"></div>
             </section>
 
-            <!-- Panel B: Region time series (lazy stub) -->
+            <!-- Panel B: Region SST evolution time series -->
             <section class="seasonal-panel" id="seasonal-panel-timeseries">
                 <h3 class="seasonal-panel-title">B · Region SST Evolution</h3>
-                <div class="seasonal-panel-stub">
-                    Monthly basin/MDR/AMO/Niño 3.4 time series with climo
-                    envelope and analog overlays — coming next.
+                <div class="seasonal-ts-controls">
+                    <label>Region
+                        <select id="seasonal-ts-region">
+                            <optgroup label="Atlantic">
+                                <option value="atl_mdr" selected>Atlantic MDR</option>
+                                <option value="atl_mdr_east">Eastern MDR</option>
+                                <option value="atl_basin">Atlantic basin</option>
+                                <option value="atl_amo">Atlantic AMO box</option>
+                                <option value="caribbean">Caribbean</option>
+                                <option value="gulf">Gulf of Mexico</option>
+                                <option value="nta">North Tropical Atlantic</option>
+                                <option value="tsa">Tropical South Atlantic</option>
+                            </optgroup>
+                            <optgroup label="Pacific MDRs">
+                                <option value="epac_mdr">East Pacific MDR</option>
+                                <option value="wpac_mdr">West Pacific MDR</option>
+                            </optgroup>
+                            <optgroup label="ENSO regions">
+                                <option value="nino12">Niño 1+2</option>
+                                <option value="nino3">Niño 3</option>
+                                <option value="nino34">Niño 3.4</option>
+                                <option value="nino4">Niño 4</option>
+                            </optgroup>
+                        </select>
+                    </label>
+                    <label>Variable
+                        <select id="seasonal-ts-var">
+                            <option value="sst" selected>SST (absolute)</option>
+                            <option value="anom">SST anomaly vs 1991-2020</option>
+                            <option value="sst_dt">SST (detrended)</option>
+                        </select>
+                    </label>
+                    <label>History
+                        <select id="seasonal-ts-history">
+                            <option value="all" selected>All years 1982-present</option>
+                            <option value="recent10">Last 10 years</option>
+                            <option value="none">Climo envelope only</option>
+                        </select>
+                    </label>
                 </div>
+                <div id="seasonal-ts-plot" class="seasonal-ts-plot"></div>
             </section>
 
             <!-- Panel D: ACE × SST correlation map (interactive toggle) -->
@@ -1001,20 +1039,73 @@
                 </div>
             </section>
 
-            <!-- Panel E: Analog ranking (lazy stub) -->
+            <!-- Panel E: Analog seasons ranking -->
             <section class="seasonal-panel" id="seasonal-panel-analogs">
                 <h3 class="seasonal-panel-title">E · Analog Seasons</h3>
-                <div class="seasonal-panel-stub">
-                    Top-N pattern-correlation analog years (rank, r, annual ACE) — coming next.
+                <p class="seasonal-panel-desc">
+                    Top-10 historical analogs to the target year/month, ranked
+                    by Euclidean distance of region-mean SST anomalies. Useful
+                    for "what years look most like 2026 right now?" — column
+                    ACE = that analog year's annual NA ACE.
+                </p>
+                <div class="seasonal-ts-controls">
+                    <label>Target year
+                        <select id="seasonal-an-year"></select>
+                    </label>
+                    <label>Target month
+                        <select id="seasonal-an-month">
+                            <option value="1">January</option>
+                            <option value="2">February</option>
+                            <option value="3">March</option>
+                            <option value="4">April</option>
+                            <option value="5" selected>May</option>
+                            <option value="6">June</option>
+                            <option value="7">July</option>
+                            <option value="8">August</option>
+                            <option value="9">September</option>
+                            <option value="10">October</option>
+                            <option value="11">November</option>
+                            <option value="12">December</option>
+                        </select>
+                    </label>
+                    <label>Region set
+                        <select id="seasonal-an-regions">
+                            <option value="atlantic" selected>Atlantic only</option>
+                            <option value="atlantic_enso">Atlantic + ENSO</option>
+                            <option value="all">All 14 regions</option>
+                        </select>
+                    </label>
                 </div>
+                <table class="seasonal-an-table" id="seasonal-an-table">
+                    <thead>
+                        <tr><th>#</th><th>Year</th><th>Distance</th><th>NA ACE</th><th>Storms</th></tr>
+                    </thead>
+                    <tbody id="seasonal-an-tbody"></tbody>
+                </table>
             </section>
 
-            <!-- Panel F: Public climate indices (lazy stub) -->
+            <!-- Panel F: Climate-index multi-trace time series -->
             <section class="seasonal-panel" id="seasonal-panel-indices">
                 <h3 class="seasonal-panel-title">F · Climate Indices</h3>
-                <div class="seasonal-panel-stub">
-                    AMM, Niño 3.4, NAO — historical percentile dashboard — coming next.
+                <p class="seasonal-panel-desc">
+                    Derived from the same OISST record as Panels A-E. ENSO
+                    horizontal markers at ±0.5 °C anomaly are the
+                    conventional El Niño / La Niña thresholds. AMM proxy =
+                    North Tropical Atlantic SST anomaly − Tropical South
+                    Atlantic SST anomaly (sign-of-the-gradient version of
+                    Vimont &amp; Kossin 2007).
+                </p>
+                <div class="seasonal-ts-controls">
+                    <label>Window
+                        <select id="seasonal-idx-window">
+                            <option value="5">Last 5 years</option>
+                            <option value="10" selected>Last 10 years</option>
+                            <option value="20">Last 20 years</option>
+                            <option value="all">Full record 1982-present</option>
+                        </select>
+                    </label>
                 </div>
+                <div id="seasonal-idx-plot" class="seasonal-ts-plot"></div>
             </section>
 
             <!-- Panel G: ACE forecast placeholder -->
