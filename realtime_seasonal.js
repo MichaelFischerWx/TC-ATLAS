@@ -363,35 +363,16 @@
             _ga('rt_seasonal_save_png', { panel: filenameBase });
             var now = new Date();
             var stamp = now.toISOString().slice(0, 16).replace(/[:T-]/g, '');
-            // Saved PNGs should always render with a light background +
-            // dark text regardless of the user's current theme (a dark-mode
-            // figure pasted into a Word doc / paper is unreadable). Swap
-            // the layout to "light publication" colors, take the snapshot,
-            // then restore the live theme so the on-page view doesn't
-            // flicker permanently.
-            var current = plot._fullLayout || {};
-            var saveOverride = {
-                paper_bgcolor: '#ffffff',
-                plot_bgcolor:  '#ffffff',
-                'font.color':  '#1a1f25',
-                'xaxis.gridcolor':     'rgba(20,30,45,0.10)',
-                'xaxis.zerolinecolor': 'rgba(20,30,45,0.35)',
-                'xaxis.tickfont.color': '#1a1f25',
-                'xaxis.title.font.color': '#475569',
-                'yaxis.gridcolor':     'rgba(20,30,45,0.10)',
-                'yaxis.zerolinecolor': 'rgba(20,30,45,0.35)',
-                'yaxis.tickfont.color': '#1a1f25',
-                'yaxis.title.font.color': '#475569',
-                'title.font.color': '#1a1f25',
-                'legend.font.color': '#1a1f25',
-            };
-            // Geo inset (Panel C) also needs light land/ocean.
-            if (current.geo2) {
-                saveOverride['geo2.landcolor']      = 'rgba(170,180,194,0.75)';
-                saveOverride['geo2.oceancolor']     = 'rgba(225,232,242,0.85)';
-                saveOverride['geo2.coastlinecolor'] = 'rgba(85,95,108,0.65)';
-                saveOverride['geo2.bgcolor']        = 'rgba(255,255,255,0.90)';
-            }
+            // Saved PNG matches the user's current viewing theme.
+            // Dark-mode users get a dark figure (often desired for
+            // social/Slack sharing); light-mode users get the publication
+            // look. We force an opaque paper bg for the snapshot so the
+            // PNG isn't transparent (otherwise it'd composite onto
+            // whatever app's background the user pastes into).
+            var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+            var saveOverride = isDark
+                ? { paper_bgcolor: '#0d1117', plot_bgcolor: '#0d1117' }
+                : { paper_bgcolor: '#ffffff', plot_bgcolor: '#ffffff' };
             window.Plotly.relayout(plot, saveOverride).then(function () {
                 // scale: 2 gives ~2× the on-screen pixel density — usable
                 // for both web sharing and 6-inch print at 200+ DPI.
@@ -437,18 +418,23 @@
         var ctx = canvas.getContext('2d');
         var scale = canvas.width / Math.max(1, panelWidthPx);
         var pad = Math.round(12 * scale);
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        // Dark-on-light in light mode, light-on-dark in dark mode — same
+        // semantics as the Plotly watermark annotations.
+        var brand = isDark ? 'rgba(220,228,238,0.70)' : 'rgba(40,55,75,0.55)';
+        var url   = isDark ? 'rgba(220,228,238,0.45)' : 'rgba(40,55,75,0.42)';
         ctx.save();
         // html2canvas leaves a non-identity transform on the context
         // (scale + translation matching the captured DOM region) — drop
         // it so our watermark coords are interpreted in raw canvas pixels.
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.textAlign = 'right';
-        ctx.fillStyle = 'rgba(40,55,75,0.55)';
+        ctx.fillStyle = brand;
         ctx.font = '600 ' + Math.round(11 * scale) +
                    'px "DM Sans", system-ui, sans-serif';
         ctx.textBaseline = 'top';
         ctx.fillText('TC-ATLAS', canvas.width - pad, pad);
-        ctx.fillStyle = 'rgba(40,55,75,0.42)';
+        ctx.fillStyle = url;
         ctx.font = '400 ' + Math.round(9 * scale) +
                    'px "DM Sans", system-ui, sans-serif';
         ctx.textBaseline = 'bottom';
@@ -477,11 +463,16 @@
             var origLabel = btn.textContent;
             btn.textContent = '…';
             btn.disabled = true;
+            // Capture the saved image in the current viewing theme so a
+            // dark-mode user gets a dark figure and a light-mode user
+            // gets a light one. (#0d1117 mirrors the seasonal-main
+            // surface in dark mode; #ffffff for the light theme.)
+            var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
             _ensureHtml2canvas().then(function () {
                 return window.html2canvas(panel, {
                     useCORS: true,
                     allowTaint: false,
-                    backgroundColor: '#ffffff',
+                    backgroundColor: isDark ? '#0d1117' : '#ffffff',
                     logging: false,
                     scale: 2,
                     ignoreElements: function (el) {
