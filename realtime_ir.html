@@ -1076,13 +1076,15 @@
             <section class="seasonal-panel" id="seasonal-panel-analogs">
                 <h3 class="seasonal-panel-title">E · Analog Seasons</h3>
                 <p class="seasonal-panel-desc" id="seasonal-an-method-desc">
-                    Top-10 historical analogs to the target year/month, ranked
-                    by distance in region-mean SST anomaly space.
-                    <strong>Correlation-weighted</strong> (default) downweights
-                    regions that historically don't co-vary with the chosen
-                    basin's ACE, so similarity in regions that <em>matter</em>
-                    counts more. <strong>Unweighted Euclidean</strong> treats
-                    every region equally.
+                    Top-10 historical analogs to the target year/month.
+                    <strong>Grid-weighted by |r|</strong> (default and
+                    recommended) compares the full SST anomaly field
+                    pixel-by-pixel, weighting each pixel by its absolute
+                    correlation with the chosen basin's ACE — no region
+                    definitions and no overlap. The other two methods
+                    operate on the 14 fixed region-mean values (which
+                    have some overlap, e.g. Atl basin contains MDR); use
+                    them if you want a faster mental model or to compare.
                 </p>
                 <div class="seasonal-ts-controls">
                     <label>Target year
@@ -1106,8 +1108,9 @@
                     </label>
                     <label>Method
                         <select id="seasonal-an-method">
-                            <option value="corr_weighted" selected>Correlation-weighted (recommended)</option>
-                            <option value="euclidean">Unweighted Euclidean</option>
+                            <option value="grid_weighted" selected>Grid-weighted by |r| (recommended)</option>
+                            <option value="corr_weighted">Correlation-weighted region means</option>
+                            <option value="euclidean">Unweighted region-mean Euclidean</option>
                         </select>
                     </label>
                     <label>ACE basin (weights + ACE column)

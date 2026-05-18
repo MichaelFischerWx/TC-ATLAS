@@ -29,7 +29,7 @@
         corr: { basin: 'NA', month: 5, kind: 'raw', overlayYear: '' },
         ts: { region: 'atl_mdr', variable: 'sst', history: 'all' },
         an: { year: null, month: 5, regions: 'all',
-              method: 'corr_weighted', basin: 'NA', kind: 'raw' },
+              method: 'grid_weighted', basin: 'NA', kind: 'raw' },
         idx: { window: '10' },
         anomZoom: 'global',
     };
@@ -827,8 +827,47 @@
         var targetYear = state.an.year;
         var month = state.an.month;
         var kind = state.an.kind;        // 'raw' | 'detrended'
-        var method = state.an.method;    // 'corr_weighted' | 'euclidean'
+        var method = state.an.method;    // 'grid_weighted' | 'corr_weighted' | 'euclidean'
         var basin = state.an.basin;      // 'NA' | 'EP' | ...
+
+        // --- Grid-weighted (default): use the precomputed n_year × n_year
+        //     pairwise distance matrix from analog_distance_matrices.json.
+        //     Each pixel's weight is sqrt(|r(SST_pixel, ACE_basin)|), so
+        //     this is similarity in the actual spatial anomaly pattern
+        //     restricted (by weight) to regions that historically matter
+        //     for the basin's ACE. No region overlap problem.
+        //     Caveat: only available for finalized years (matrix is
+        //     precomputed); for the current preliminary year we fall
+        //     back to the region-based correlation-weighted method.
+        if (method === 'grid_weighted' && state.distance_matrices) {
+            var dm = state.distance_matrices.basins[basin];
+            var mEntry = dm && dm[String(month)];
+            if (mEntry) {
+                var idxOfYear = mEntry.years.indexOf(targetYear);
+                if (idxOfYear < 0) {
+                    return { years: mEntry.years, rows: [],
+                             unavailableReason:
+                                 'Target year ' + targetYear +
+                                 ' has no finalized SST for ' + month +
+                                 '; pick a finalized year (' +
+                                 mEntry.years[0] + '-' +
+                                 mEntry.years[mEntry.years.length - 1] +
+                                 ') or switch to a region method.' };
+                }
+                var distRow = mEntry[kind][idxOfYear];
+                var ranked = mEntry.years.map(function (y, i) {
+                    return { year: y, dist: distRow[i] };
+                }).filter(function (r) { return r.year !== targetYear; });
+                ranked.sort(function (a, b) { return a.dist - b.dist; });
+                return {
+                    years: mEntry.years,
+                    rows: ranked.slice(0, 10),
+                    targetYear: targetYear,
+                    method: 'grid_weighted',
+                };
+            }
+            // Fall through to region method if matrix isn't loaded.
+        }
 
         // For 'detrended' kind, use *_sst_dt for anomaly (year deviation
         // from the linear trend); for 'raw', use *_anom.
@@ -936,9 +975,14 @@
 
         var bundle = _buildAnalogs();
         if (!bundle || !bundle.rows.length) {
+            var msg = (bundle && bundle.unavailableReason)
+                ? bundle.unavailableReason
+                : 'No analogs available for the selected target.';
             tbody.innerHTML =
-                '<tr><td colspan="5" style="opacity:.6">' +
-                'No analogs available for the selected target.</td></tr>';
+                '<tr><td colspan="5" style="opacity:.6">' + msg + '</td></tr>';
+            // Clear weights summary too
+            var summary0 = document.getElementById('seasonal-an-weights-summary');
+            if (summary0) summary0.innerHTML = '';
             return;
         }
         var html = '';
@@ -964,25 +1008,35 @@
         tbody.innerHTML = html;
 
         // Update the "How analogs are computed" weights summary so the user
-        // can see what regions are dominating the current ranking.
+        // can see what regions/pixels are dominating the current ranking.
         var summary = document.getElementById('seasonal-an-weights-summary');
-        if (summary && bundle.weights) {
-            var pairs = bundle.regions.map(function (r, idx) {
-                return { region: r, w: bundle.weights[idx] };
-            }).filter(function (p) { return p.w > 0; });
-            pairs.sort(function (a, b) { return b.w - a.w; });
-            if (state.an.method === 'corr_weighted') {
-                var top = pairs.slice(0, 5).map(function (p) {
-                    return (REGION_LABEL[p.region] || p.region) +
-                        ' (' + (p.w * 100).toFixed(0) + '%)';
-                }).join(', ');
+        if (summary) {
+            if (state.an.method === 'grid_weighted') {
                 summary.innerHTML =
-                    '<strong>Top regions (current weights):</strong> ' + top;
-            } else {
-                summary.innerHTML =
-                    '<strong>Uniform weights:</strong> ' +
-                    (1 / bundle.regions.length * 100).toFixed(1) +
-                    '% per region across ' + bundle.regions.length + ' regions.';
+                    '<strong>Pixel-weighted distance</strong> over the full ' +
+                    '0.25° SST anomaly field. Each cell\'s weight = ' +
+                    '|r(SST<sub>cell</sub>, ' + state.an.basin + ' ACE)| at ' +
+                    'month ' + state.an.month + ' (' +
+                    (state.an.kind === 'detrended' ? 'detrended' : 'raw') +
+                    '). Land/NaN cells contribute zero.';
+            } else if (bundle.weights) {
+                var pairs = bundle.regions.map(function (r, idx) {
+                    return { region: r, w: bundle.weights[idx] };
+                }).filter(function (p) { return p.w > 0; });
+                pairs.sort(function (a, b) { return b.w - a.w; });
+                if (state.an.method === 'corr_weighted') {
+                    var top = pairs.slice(0, 5).map(function (p) {
+                        return (REGION_LABEL[p.region] || p.region) +
+                            ' (' + (p.w * 100).toFixed(0) + '%)';
+                    }).join(', ');
+                    summary.innerHTML =
+                        '<strong>Top regions (current weights):</strong> ' + top;
+                } else {
+                    summary.innerHTML =
+                        '<strong>Uniform weights:</strong> ' +
+                        (1 / bundle.regions.length * 100).toFixed(1) +
+                        '% per region across ' + bundle.regions.length + ' regions.';
+                }
             }
         }
     }
@@ -1475,7 +1529,11 @@
             function (j) { state.ace_basins = j; },
             function () { state.ace_basins = null; }
         );
-        Promise.all([p1, p2, p3, p4, p5]).then(function () {
+        var p6 = _fetchData('analog_distance_matrices.json').then(
+            function (j) { state.distance_matrices = j; },
+            function () { state.distance_matrices = null; }
+        );
+        Promise.all([p1, p2, p3, p4, p5, p6]).then(function () {
             _setStatus('');
             _populateAnalogYearSelector();
             _populateOverlayYears();

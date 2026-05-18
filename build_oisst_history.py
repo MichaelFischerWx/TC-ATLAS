@@ -927,9 +927,28 @@ def build_correlations(out_dir: Path,
         return float((np.where(finite, sub, 0) * w).sum() / wsum)
 
     region_corr = {}
+    # Distance matrices for the grid-based ("correlation-weighted pixel")
+    # analog method on Panel E. Structure:
+    # {basin: {month: {years: [...], raw: [[..]], detrended: [[..]]}}}
+    distance_matrices = {}
+    def _pairwise_weighted_l2(field_yx, weight_x):
+        """Squared-weighted L2 distance between every pair of rows in
+        `field_yx` (shape n_years × n_pix), using `weight_x` (n_pix)
+        as the per-pixel weight. NaN pixels are treated as zero (so
+        land/missing cells contribute nothing rather than poisoning
+        the sum)."""
+        w = np.sqrt(np.abs(weight_x))
+        # NaN-safe: zero out non-finite cells before weighting.
+        finite = np.isfinite(field_yx) & np.isfinite(w)[None, :]
+        weighted = np.where(finite, field_yx * w[None, :], 0).astype(np.float64)
+        sq = np.sum(weighted * weighted, axis=1)
+        gram = weighted @ weighted.T
+        dist2 = sq[:, None] + sq[None, :] - 2 * gram
+        return np.sqrt(np.maximum(dist2, 0))
     total = 0
     for basin in ACE_BASINS:
         region_corr[basin] = {}
+        distance_matrices[basin] = {}
         ace_dict = ace_all["basins"][basin]["years"]
         ace_full = np.array([ace_dict.get(y, 0.0) for y in years_all.tolist()],
                             dtype=np.float64)
@@ -966,6 +985,22 @@ def build_correlations(out_dir: Path,
                     "raw": None if not np.isfinite(r_raw_mean) else round(r_raw_mean, 4),
                     "detrended": None if not np.isfinite(r_det_mean) else round(r_det_mean, 4),
                 }
+
+            # Grid-based analog distance matrices: pairwise weighted L2
+            # over the full SST anomaly field, where each pixel's weight
+            # is sqrt(|r(SST_pixel, ACE_basin)|). Captures actual spatial
+            # similarity in regions that historically matter for the
+            # basin's ACE — no region-overlap problem.
+            flat_raw = sst_v.reshape(sst_v.shape[0], -1)
+            flat_dt = sst_dt.reshape(sst_dt.shape[0], -1)
+            d_raw = _pairwise_weighted_l2(flat_raw, r_raw.ravel())
+            d_dt = _pairwise_weighted_l2(flat_dt, r_det.ravel())
+            yr_list = years_all[valid_year_mask].tolist()
+            distance_matrices[basin][month] = {
+                "years": [int(y) for y in yr_list],
+                "raw":       np.round(d_raw, 3).tolist(),
+                "detrended": np.round(d_dt, 3).tolist(),
+            }
         log.info("  basin %s: 24 maps", basin)
 
     (out_dir / "region_ace_correlations.json").write_text(
@@ -974,6 +1009,15 @@ def build_correlations(out_dir: Path,
                    separators=(",", ":"))
     )
     log.info("  wrote region_ace_correlations.json (analog-weight lookup)")
+
+    (out_dir / "analog_distance_matrices.json").write_text(
+        json.dumps({"basins": distance_matrices,
+                    "generated_utc": datetime.now(timezone.utc).isoformat()},
+                   separators=(",", ":"))
+    )
+    sz = (out_dir / "analog_distance_matrices.json").stat().st_size
+    log.info("  wrote analog_distance_matrices.json (%.2f MB, grid-based analog lookup)",
+             sz / 1e6)
 
     (corr_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
     log.info("  wrote %d correlation PNGs + manifest.json to %s",
@@ -1103,6 +1147,7 @@ def upload_to_gcs(local_dir: Path) -> None:
         ("ace_annual.json",              "application/json"),
         ("ace_basins_annual.json",       "application/json"),
         ("region_ace_correlations.json", "application/json"),
+        ("analog_distance_matrices.json", "application/json"),
     ]
     for fname, ctype in targets:
         src = local_dir / fname
