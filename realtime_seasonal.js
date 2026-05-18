@@ -453,6 +453,39 @@
         ctx.restore();
     }
 
+    // Replace every <select> in the cloned doc with a <span> showing its
+    // selected option text. html2canvas runs against this clone so the
+    // live DOM is untouched. Without this, the saved PNG renders empty/
+    // truncated dropdown boxes (the browser owns the value text via the
+    // UA shadow tree, which html2canvas can't see).
+    function _swapSelectsForCapture(clonedDoc) {
+        var selects = clonedDoc.querySelectorAll('select');
+        for (var i = 0; i < selects.length; i++) {
+            var sel = selects[i];
+            var opt = sel.options[sel.selectedIndex];
+            var label = opt ? opt.textContent : '';
+            var span = clonedDoc.createElement('span');
+            span.textContent = label;
+            // Inline styling so we don't depend on global CSS that
+            // html2canvas may interpret differently. Mirrors the look
+            // of the existing <select> styling on the live page.
+            span.style.cssText = [
+                'display:inline-block',
+                'min-width:120px',
+                'padding:4px 10px',
+                'font-size:0.75rem',
+                'font-weight:500',
+                'border:1px solid rgba(140,148,160,0.35)',
+                'border-radius:4px',
+                'background:rgba(255,255,255,0.04)',
+                'color:inherit',
+                'white-space:nowrap',
+                'vertical-align:middle',
+            ].join(';');
+            sel.parentNode.replaceChild(span, sel);
+        }
+    }
+
     // Save-button for image/HTML panels (A, D, E) — uses html2canvas to
     // rasterize the whole .seasonal-panel (minus the button itself), then
     // bakes the TC-ATLAS watermark onto the canvas. Matches the look of
@@ -489,6 +522,14 @@
                         return el.classList &&
                                el.classList.contains('seasonal-save-btn');
                     },
+                    // html2canvas can't render the text inside native
+                    // <select> widgets — the dropdown value comes from
+                    // the browser's UA shadow tree. We use the onclone
+                    // hook (which mutates a forked DOM that won't touch
+                    // the live page) to swap each <select> with a styled
+                    // <span> containing its currently-selected option's
+                    // text, so the saved PNG legibly shows the config.
+                    onclone: _swapSelectsForCapture,
                 });
             }).then(function (canvas) {
                 _stampTcAtlasWatermark(canvas, panel.offsetWidth);
