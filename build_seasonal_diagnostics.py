@@ -57,10 +57,11 @@ GCS_PREFIX = "seasonal"
 # Local working directory inside the Cloud Run container.
 WORK_DIR = Path(os.environ.get("SEASONAL_WORK_DIR", "/tmp/seasonal_work"))
 
-# Atlantic-centric render box (PNG only — the indices use the wider box
-# defined in build_oisst_history.py).
-PNG_LAT_MIN, PNG_LAT_MAX = -5.0, 60.0
-PNG_LON_MIN, PNG_LON_MAX = 260.0, 360.0   # 100°W .. 0°
+# Global render box — full ±60° lat × 100..360°E so all 7 TC basins
+# show up at once. The frontend can CSS-crop into individual basins
+# via a "Zoom" selector without needing per-basin PNGs.
+PNG_LAT_MIN, PNG_LAT_MAX = LAT_MIN, LAT_MAX
+PNG_LON_MIN, PNG_LON_MAX = LON_MIN, LON_MAX
 PNG_VMIN, PNG_VMAX = -3.0, 3.0            # °C, symmetric
 
 

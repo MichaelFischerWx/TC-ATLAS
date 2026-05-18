@@ -31,7 +31,53 @@
         an: { year: null, month: 5, regions: 'all',
               method: 'corr_weighted', basin: 'NA', kind: 'raw' },
         idx: { window: '10' },
+        anomZoom: 'global',
     };
+
+    // Basin-zoom presets for Panel A. Each maps to a viewport in the
+    // image's native lat/lon space (±60° × 100..360E). Values are
+    // expressed as fractions [0..1] of the image dimensions:
+    //   x_frac = (lon - 100) / 260, y_frac = (60 - lat) / 120
+    var ANOM_ZOOMS = {
+        global:   { x: 0,    y: 0,    w: 1,    h: 1    },
+        atlantic: { x: 0.65, y: 0,    w: 0.35, h: 0.55 }, // lon 269-360, lat 6-60
+        epac:     { x: 0.42, y: 0.04, w: 0.36, h: 0.50 }, // lon 209-302, lat 0-55
+        wpac:     { x: 0.04, y: 0.04, w: 0.34, h: 0.50 }, // lon 109-197, lat 0-55
+        enso:     { x: 0.20, y: 0.42, w: 0.55, h: 0.16 }, // lon 152-300, lat -10..10
+    };
+
+    function _applyAnomZoom() {
+        var img = document.getElementById('seasonal-anom-img');
+        var clip = document.getElementById('seasonal-anom-clip');
+        if (!img || !clip) return;
+        var z = ANOM_ZOOMS[state.anomZoom] || ANOM_ZOOMS.global;
+        // The clip is the visible window; we scale the img so the
+        // (z.x, z.y) corner aligns with (0,0) and the (z.w, z.h) box
+        // fills the clip. img is `position: absolute` inside the clip.
+        var scale = 1 / Math.min(z.w, z.h);
+        // Calculate translate-to-fill: image natural size × clip size.
+        // We use background-image-like positioning by setting img width
+        // = clip width / z.w and height = clip height / z.h, then
+        // translating left = -z.x * (clip_width / z.w) etc.
+        img.style.position = 'absolute';
+        img.style.left = (-z.x / z.w * 100) + '%';
+        img.style.top = (-z.y / z.h * 100) + '%';
+        img.style.width = (100 / z.w) + '%';
+        img.style.height = (100 / z.h) + '%';
+        img.style.maxWidth = 'none';
+        img.style.maxHeight = 'none';
+        img.style.objectFit = 'fill';
+    }
+
+    function _bindAnomZoomControl() {
+        var sel = document.getElementById('seasonal-anom-zoom');
+        if (!sel || sel._bound) return;
+        sel._bound = true;
+        sel.addEventListener('change', function () {
+            state.anomZoom = sel.value;
+            _applyAnomZoom();
+        });
+    }
 
     // Region lat/lon bounding boxes (mirrors the REGIONS dict in
     // build_oisst_history.py). Used by the Panel C inset map.
@@ -477,22 +523,45 @@
         var el = document.getElementById('seasonal-scatter-inset');
         if (!el || !window.Plotly) return;
         var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        // Plotly's scattergeo connects points along great-circle arcs by
+        // default — a 4-corner rectangle therefore has its latitude
+        // edges bow toward the equator (most visible on wide boxes like
+        // Atl MDR, lon -85..-20). We side-step that by densifying each
+        // latitude edge with many intermediate points at constant lat —
+        // those points hug the parallel exactly. Meridian edges are
+        // already great circles (they ARE meridians) so 2 points each
+        // is enough.
         function boxTrace(boxArr, color, fillRGBA, label) {
             if (!boxArr) return null;
             var ls = boxArr[0], ln = boxArr[1], lw = boxArr[2], le = boxArr[3];
-            // Convert 0-360 → -180..180 for Plotly geo.
+            // Convert 0-360 → -180..180. None of our regions cross the
+            // antimeridian so a single closed polygon works.
             var conv = function (lo) { return lo > 180 ? lo - 360 : lo; };
-            // If the box straddles the antimeridian (lw < 180 < le) we'd
-            // need two polygons; none of our regions do, so a single
-            // 5-point polygon is enough.
-            var lons = [conv(lw), conv(le), conv(le), conv(lw), conv(lw)];
-            var lats = [ls, ls, ln, ln, ls];
+            var lonW = conv(lw), lonE = conv(le);
+            var lons = [], lats = [];
+            // South edge: west → east at lat=ls (parallel, densified)
+            var STEPS = 32;
+            for (var i = 0; i <= STEPS; i++) {
+                var f = i / STEPS;
+                lons.push(lonW + f * (lonE - lonW));
+                lats.push(ls);
+            }
+            // East edge: south → north at lon=le (meridian, straight)
+            lons.push(lonE); lats.push(ln);
+            // North edge: east → west at lat=ln (parallel, densified)
+            for (var j = 1; j <= STEPS; j++) {
+                var g = j / STEPS;
+                lons.push(lonE - g * (lonE - lonW));
+                lats.push(ln);
+            }
+            // West edge: north → south at lon=lw (meridian)
+            lons.push(lonW); lats.push(ls);
             return {
                 type: 'scattergeo', mode: 'lines',
                 lon: lons, lat: lats,
                 line: { color: color, width: 2 },
                 fill: 'toself', fillcolor: fillRGBA,
-                name: label, hoverinfo: 'name',
+                name: label, hoverinfo: 'skip',
             };
         }
         var xLabel = 'X · ' + (REGION_LABEL[state.scatter.x] || state.scatter.x);
@@ -1089,10 +1158,12 @@
         var pngName = state.latest.anom_png;
         var url = LOCAL_BASE + '/' + pngName;
         img.src = url;
+        img.onload = function () { _applyAnomZoom(); };
         img.onerror = function () {
             img.onerror = null;
             img.src = GCS_BASE + '/' + pngName;
         };
+        _applyAnomZoom();
         cap.textContent = 'Valid ' + state.latest.valid_date +
             '  |  MDR anom ' + state.latest.indices.atl_mdr_anom.toFixed(2) + ' °C' +
             '  |  AMO anom ' + state.latest.indices.atl_amo_anom.toFixed(2) + ' °C' +
@@ -1386,6 +1457,7 @@
         _bindTimeSeriesControls();
         _bindAnalogControls();
         _bindIndexControls();
+        _bindAnomZoomControl();
         _wireCorrHover();
         _renderCorrelation();
         _setStatus('Loading indices…');

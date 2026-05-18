@@ -55,19 +55,23 @@
 
 .seasonal-status-error { color: #ff7066; }
 
-/* Sticky sub-nav: a row of chip-style links to each panel. Sits just
-   under the page header and stays visible while scrolling, so the page
-   never feels like an unstructured stack of figures. */
+/* Sticky sub-nav: a row of chip-style links to each panel. Negative
+   top/margins escape the .seasonal-main padding so the nav sits flush
+   against the secondary tab bar above it (no awkward gap), and so the
+   sticky-pinned state at scroll-top doesn't reveal padding behind. */
 .seasonal-subnav {
     position: sticky;
-    top: 0;
+    top: -14px;          /* matches .seasonal-main padding-top so the
+                            sticky pin tucks the bar right against the
+                            secondary tab bar instead of leaving a gap */
     z-index: 6;
     display: flex;
     flex-wrap: wrap;
     gap: 4px 6px;
-    padding: 6px 0 10px;
-    margin: 0 0 14px;
-    border-bottom: 1px solid rgba(255,255,255,0.08);
+    margin: -14px -18px 14px;  /* escape seasonal-main horizontal padding */
+    padding: 10px 18px 10px;    /* re-apply via own padding so chips don't
+                                   touch the viewport edge */
+    border-bottom: 1px solid rgba(140,148,160,0.20);
     background: var(--surface, #0d1117);
 }
 .seasonal-subnav a {
@@ -401,11 +405,18 @@
     background: rgba(0,0,0,0.25);
     border-radius: 4px;
     overflow: hidden;
-    aspect-ratio: 1.55;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    /* Global view: lon 100-360 × lat -60..60 → 260/120 = 2.17. */
+    aspect-ratio: 2.17;
     cursor: crosshair;
+}
+
+/* Inner clip element: the img is positioned/scaled inside this. JS sets
+   the transform when the user selects a basin zoom so we crop to a
+   specific lat/lon window without re-fetching the image. */
+.seasonal-anom-clip {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
 }
 
 .seasonal-anom-tooltip {

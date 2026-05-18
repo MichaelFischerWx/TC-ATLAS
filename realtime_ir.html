@@ -826,22 +826,9 @@
     <!-- ── Seasonal Tab ─────────────────────────────────────────── -->
     <section id="seasonal-main" class="seasonal-main" style="display:none;"
              aria-label="Seasonal SST + ACE diagnostics">
-        <div class="seasonal-header">
-            <div class="seasonal-title-block">
-                <h2 class="seasonal-title">Seasonal SST &amp; ACE Diagnostics</h2>
-                <p class="seasonal-sub">
-                    Pre-season and intra-season Atlantic SST evolution from
-                    OISST v2.1, anchored against the 1991-2020 climatology
-                    and historical annual ACE (1982-present, NHC). Hover any
-                    historical year on the scatter to see its track record;
-                    click to load that year into the time-series panel.
-                </p>
-            </div>
-            <div class="seasonal-status" id="seasonal-status">Loading…</div>
-        </div>
-
-        <!-- Sub-nav: jump to each panel. Sticky so it stays accessible while
-             scrolling through the long page. -->
+        <!-- Sub-nav comes first so it sits flush against the main TC-ATLAS
+             secondary tab bar above (no gap from a header in between).
+             Sticky pinned so it stays accessible as the user scrolls. -->
         <nav class="seasonal-subnav" aria-label="Seasonal panels">
             <a href="#seasonal-panel-anom-map" data-target="seasonal-panel-anom-map">A · Live anomaly</a>
             <a href="#seasonal-panel-timeseries" data-target="seasonal-panel-timeseries">B · Region evolution</a>
@@ -852,14 +839,39 @@
             <a href="#seasonal-panel-forecast" data-target="seasonal-panel-forecast">G · ACE forecast</a>
         </nav>
 
+        <div class="seasonal-header">
+            <div class="seasonal-title-block">
+                <h2 class="seasonal-title">Seasonal SST &amp; ACE Diagnostics</h2>
+                <p class="seasonal-sub">
+                    Pre-season and intra-season SST evolution from OISST v2.1,
+                    anchored against the 1991-2020 climatology and historical
+                    annual ACE (1982-present, NHC).
+                </p>
+            </div>
+            <div class="seasonal-status" id="seasonal-status">Loading…</div>
+        </div>
+
         <div class="seasonal-body">
 
-            <!-- Panel A: Live Atlantic SST anomaly map (lazy stub) -->
+            <!-- Panel A: Live SST anomaly map (global by default) -->
             <section class="seasonal-panel" id="seasonal-panel-anom-map">
-                <h3 class="seasonal-panel-title">A · Live Atlantic SST Anomaly</h3>
+                <h3 class="seasonal-panel-title">A · Live SST Anomaly</h3>
+                <div class="seasonal-ts-controls">
+                    <label>Zoom
+                        <select id="seasonal-anom-zoom">
+                            <option value="global" selected>Global (±60° lat)</option>
+                            <option value="atlantic">North Atlantic basin</option>
+                            <option value="epac">East Pacific basin</option>
+                            <option value="wpac">West Pacific basin</option>
+                            <option value="enso">ENSO regions (equatorial Pacific)</option>
+                        </select>
+                    </label>
+                </div>
                 <div class="seasonal-anom-wrap" id="seasonal-anom-wrap">
-                    <img id="seasonal-anom-img" class="seasonal-anom-img"
-                         alt="Current Atlantic SST anomaly map">
+                    <div class="seasonal-anom-clip" id="seasonal-anom-clip">
+                        <img id="seasonal-anom-img" class="seasonal-anom-img"
+                             alt="Current SST anomaly map">
+                    </div>
                     <div class="seasonal-anom-overlay" id="seasonal-anom-caption">—</div>
                     <div class="seasonal-anom-tooltip" id="seasonal-anom-tooltip"></div>
                 </div>
