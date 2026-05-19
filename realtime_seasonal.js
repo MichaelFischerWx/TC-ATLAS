@@ -916,7 +916,22 @@
     // when the user toggles the new resolution control. Daily is async
     // because the first render fetches the climatology + trend + live
     // current-year JSONs from GCS.
+    //
+    // Plotly.react has trouble going from the monthly 50+ traces (with
+    // an inset geo2) to the daily 6 traces (also with an inset geo2):
+    // it accepts the new data into `_fullData` but doesn't repaint the
+    // DOM children, leaving an empty chart with the right state. Force
+    // a clean purge whenever resolution changes — fast, and only fires
+    // on the toggle itself (not on every region/variable change).
     function _renderTimeSeries() {
+        var el = document.getElementById('seasonal-ts-plot');
+        if (el && state.ts._lastResolution &&
+            state.ts._lastResolution !== state.ts.resolution &&
+            el.classList.contains('js-plotly-plot') &&
+            typeof Plotly !== 'undefined') {
+            Plotly.purge(el);
+        }
+        state.ts._lastResolution = state.ts.resolution;
         if (state.ts.resolution === 'daily') {
             return _renderTimeSeriesDaily();
         }
@@ -1494,16 +1509,36 @@
                 cySrc = _yearSeriesToLeapAxis(cyDates,
                     cy.values[colName] || []);
             }
-            // Identify "finalized" vs "preliminary tail" via the last 2
-            // populated DOYs — OISST reprocessing can still touch those.
+            // Preliminary tail: every day within OISST's ~14-day
+            // finalization window may still be revised by NOAA's
+            // re-analysis. The cutoff is computed against the JSON
+            // sidecar's `as_of` timestamp (not "today") so a stale
+            // cron doesn't make a day that's already been finalized
+            // look preliminary. Conservative by design: any day past
+            // the cutoff is dotted, even if it happens to have come
+            // from the final endpoint already.
+            var PRELIM_LAG_DAYS = 14;
+            var asOfMs = (cy && cy.as_of)
+                ? Date.parse(cy.as_of)
+                : Date.now();
+            var cutoffMs = asOfMs - PRELIM_LAG_DAYS * 86400000;
+            var cutoffD = new Date(cutoffMs);
+            var cutoffDoy = _leapDoy(cutoffD.getUTCMonth() + 1,
+                                     cutoffD.getUTCDate());
             var populated = [];
             for (var pi = 0; pi < 366; pi++) {
                 if (cySrc[pi] !== null && cySrc[pi] !== undefined) {
                     populated.push(pi);
                 }
             }
-            var prelimDoys = populated.slice(-2);    // last two
-            var finalDoys  = populated.slice(0, populated.length - 2);
+            // populated stores zero-based indices; cutoffDoy is 1-based.
+            // A day is preliminary iff its leap-DOY (pi + 1) > cutoffDoy.
+            var prelimDoys = populated.filter(function (pi) {
+                return (pi + 1) > cutoffDoy;
+            });
+            var finalDoys = populated.filter(function (pi) {
+                return (pi + 1) <= cutoffDoy;
+            });
             var finalY = new Array(366).fill(null);
             var prelimY = new Array(366).fill(null);
             for (var fi = 0; fi < finalDoys.length; fi++) {
@@ -1531,9 +1566,9 @@
                     line: { color: BRAND.orange_line, width: 2.6,
                             dash: 'dot' },
                     opacity: 0.7,
-                    name: 'last 2 days (preliminary)',
+                    name: 'last ~14 days (preliminary, OISST may revise)',
                     hovertemplate: currentYear +
-                        ' · DOY %{x}: %{y:.2f} (prelim)<extra></extra>',
+                        ' · DOY %{x}: %{y:.2f} (preliminary)<extra></extra>',
                     connectgaps: false,
                 });
             }
