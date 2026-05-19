@@ -447,6 +447,21 @@ def append_to_daily_parquet(row: dict) -> None:
     df.to_parquet(local, compression="snappy", index=False)
     _upload_blob(local, name, "application/octet-stream")
 
+    # JSON sidecar: same content in a browser-friendly shape so Panel B's
+    # Daily view never touches parquet client-side. ~15 KB on the wire.
+    json_name = "indices_daily_current_year.json"
+    json_local = WORK_DIR / json_name
+    payload = {
+        "version": 1,
+        "year": int(row["date"][:4]),
+        "as_of": datetime.now(timezone.utc).isoformat(),
+        "dates": df["date"].tolist(),
+        "values": {col: df[col].tolist()
+                   for col in df.columns if col != "date"},
+    }
+    json_local.write_text(json.dumps(payload, separators=(",", ":")))
+    _upload_blob(json_local, json_name, "application/json")
+
 
 def write_latest_json(row: dict, png_name: str) -> None:
     """Tiny pointer file used by the frontend for first-paint. Now also

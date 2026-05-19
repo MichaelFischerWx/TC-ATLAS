@@ -18,6 +18,20 @@
 
     var GCS_BASE = 'https://storage.googleapis.com/tc-atlas-ir-cache/seasonal';
     var LOCAL_BASE = 'data/seasonal';
+    // Same hostname realtime_ir.js uses for /ir-monitor/* endpoints; we
+    // call /seasonal/daily off it for the Daily Panel B view.
+    var API_BASE = 'https://tc-atlas-api-361010099051.us-east1.run.app';
+
+    // Per-region cache for the Daily view. clim + trend + currentYear are
+    // small enough to keep loaded for the session; the heavier region
+    // all-years payload is fetched lazily and keyed by region.
+    var dailyCache = {
+        clim: null,            // clim_daily_1991_2020.json
+        trend: null,           // trend_daily_1982_present.json
+        currentYear: null,     // indices_daily_current_year.json
+        regionAll: {},         // { atl_mdr: { dates, sst, anom, anom_rel } }
+        regionAllInFlight: {}, // dedup concurrent fetches
+    };
 
     // State, populated by the first activation
     var state = {
@@ -30,7 +44,8 @@
         // this panel is for (TC potential-intensity literature).
         corr: { basin: 'NA', month: 5, kind: 'relative',
                 stat: 'pearson', overlayYear: '' },
-        ts: { region: 'atl_mdr', variable: 'sst', history: 'all', highlight: 'none' },
+        ts: { region: 'atl_mdr', variable: 'sst', history: 'all',
+              highlight: 'none', resolution: 'monthly' },
         an: { year: null, month: 5, regions: 'all',
               method: 'grid_weighted', basin: 'NA', kind: 'raw',
               stat: 'pearson', topN: 'auto' },
@@ -897,7 +912,18 @@
         };
     }
 
+    // Dispatcher: monthly is the historical default; daily kicks in
+    // when the user toggles the new resolution control. Daily is async
+    // because the first render fetches the climatology + trend + live
+    // current-year JSONs from GCS.
     function _renderTimeSeries() {
+        if (state.ts.resolution === 'daily') {
+            return _renderTimeSeriesDaily();
+        }
+        return _renderTimeSeriesMonthly();
+    }
+
+    function _renderTimeSeriesMonthly() {
         var el = document.getElementById('seasonal-ts-plot');
         if (!el || typeof Plotly === 'undefined') return;
         var bundle = _buildTimeSeriesData();
@@ -1123,6 +1149,461 @@
                      { responsive: true, displaylogo: false });
     }
 
+    // -------------------------------------------------------------------
+    // Panel B — DAILY view (day-of-year evolution across the calendar year)
+    // -------------------------------------------------------------------
+
+    // Cumulative days in a leap year through end of previous month.
+    // Jan = 0, Feb = 31, Mar = 60, ..., Dec = 335. _leapDoy(month, day) =
+    // _LEAP_DOY_CUM[month - 1] + day. Matches the Python helper of the
+    // same name in build_oisst_history.py.
+    var _LEAP_DOY_CUM = [0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335];
+
+    function _leapDoy(month, day) {
+        return _LEAP_DOY_CUM[month - 1] + day;
+    }
+
+    function _isLeapYear(y) {
+        return (y % 4 === 0) && (y % 100 !== 0 || y % 400 === 0);
+    }
+
+    // X-axis tick anchors. First-of-month in leap-year frame; non-leap
+    // years from Mar onward sit one DOY shy (handled per-trace).
+    var _MONTH_TICK_LEAP = [1, 32, 61, 92, 122, 153, 183, 214, 245, 275, 306, 336];
+    var _MONTH_NAMES_FULL = ['Jan','Feb','Mar','Apr','May','Jun',
+                             'Jul','Aug','Sep','Oct','Nov','Dec'];
+
+    function _doysForYear(year, dateStrs) {
+        // Map a list of YYYY-MM-DD strings to the leap-year DOY axis. In
+        // a non-leap year, March 1 = leap-DOY 61 (not 60), so the curve
+        // simply has no point at leap-DOY 60.
+        var out = new Array(dateStrs.length);
+        for (var i = 0; i < dateStrs.length; i++) {
+            var s = dateStrs[i];
+            var m = parseInt(s.substring(5, 7), 10);
+            var d = parseInt(s.substring(8, 10), 10);
+            out[i] = _leapDoy(m, d);
+        }
+        return out;
+    }
+
+    function _fetchSeasonalDailyClim() {
+        if (dailyCache.clim) return Promise.resolve(dailyCache.clim);
+        return _fetchData('clim_daily_1991_2020.json').then(function (j) {
+            dailyCache.clim = j;
+            return j;
+        });
+    }
+
+    function _fetchSeasonalDailyTrend() {
+        if (dailyCache.trend) return Promise.resolve(dailyCache.trend);
+        return _fetchData('trend_daily_1982_present.json').then(function (j) {
+            dailyCache.trend = j;
+            return j;
+        });
+    }
+
+    function _fetchSeasonalDailyCurrentYear() {
+        if (dailyCache.currentYear) return Promise.resolve(dailyCache.currentYear);
+        return _fetchData('indices_daily_current_year.json').then(function (j) {
+            dailyCache.currentYear = j;
+            return j;
+        });
+    }
+
+    // Per-region full-history slice. Goes through the API — the parquet
+    // stays server-side. Returns the same shape regardless of region:
+    // { dates: [], sst: [], anom: [], anom_rel: [] }
+    function _fetchSeasonalDailyRegionAll(region) {
+        if (dailyCache.regionAll[region]) {
+            return Promise.resolve(dailyCache.regionAll[region]);
+        }
+        if (dailyCache.regionAllInFlight[region]) {
+            return dailyCache.regionAllInFlight[region];
+        }
+        var url = API_BASE + '/ir-monitor/seasonal/daily?region=' +
+                  encodeURIComponent(region) + '&year=all';
+        var p = fetch(url, { cache: 'no-store' }).then(function (r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + url);
+            return r.json();
+        }).then(function (j) {
+            dailyCache.regionAll[region] = j;
+            delete dailyCache.regionAllInFlight[region];
+            return j;
+        }).catch(function (e) {
+            delete dailyCache.regionAllInFlight[region];
+            throw e;
+        });
+        dailyCache.regionAllInFlight[region] = p;
+        return p;
+    }
+
+    // For each (region, variable, year), produce a numeric values array
+    // aligned to the leap-year DOY axis (366 long). Missing days are
+    // `null` so Plotly draws gaps; non-leap-year DOY-60 is always null.
+    function _yearSeriesToLeapAxis(dates, values) {
+        var out = new Array(366);
+        for (var i = 0; i < 366; i++) out[i] = null;
+        for (var k = 0; k < dates.length; k++) {
+            var s = dates[k];
+            var m = parseInt(s.substring(5, 7), 10);
+            var d = parseInt(s.substring(8, 10), 10);
+            var ld = _leapDoy(m, d);
+            // Each year contributes ≤ 1 value per DOY, so direct assign.
+            out[ld - 1] = (values[k] === undefined) ? null : values[k];
+        }
+        return out;
+    }
+
+    // Group an all-years payload (flat dates[] + var arrays) into a
+    // per-year matrix: { year: { sst: [366], anom: [366], anom_rel: [366] } }.
+    function _groupRegionAllByYear(payload) {
+        var byYear = {};
+        var dates = payload.dates || [];
+        for (var i = 0; i < dates.length; i++) {
+            var y = parseInt(dates[i].substring(0, 4), 10);
+            if (!byYear[y]) {
+                byYear[y] = { dates: [], sst: [], anom: [], anom_rel: [] };
+            }
+            byYear[y].dates.push(dates[i]);
+            byYear[y].sst.push(payload.sst ? payload.sst[i] : null);
+            byYear[y].anom.push(payload.anom ? payload.anom[i] : null);
+            byYear[y].anom_rel.push(
+                payload.anom_rel ? payload.anom_rel[i] : null);
+        }
+        var leap = {};
+        Object.keys(byYear).forEach(function (yk) {
+            var y = parseInt(yk, 10);
+            leap[y] = {
+                sst:      _yearSeriesToLeapAxis(byYear[y].dates, byYear[y].sst),
+                anom:     _yearSeriesToLeapAxis(byYear[y].dates, byYear[y].anom),
+                anom_rel: _yearSeriesToLeapAxis(byYear[y].dates, byYear[y].anom_rel),
+            };
+        });
+        return { byYear: byYear, leap: leap };
+    }
+
+    // Detrended SST = sst - (slope * year + intercept), using per-DOY
+    // smoothed trend coefficients. Returns a leap-axis-aligned array.
+    function _detrendedLeapSeries(year, sstLeap, trendForRegion) {
+        var slope = trendForRegion && trendForRegion.sst && trendForRegion.sst.slope;
+        var intercept = trendForRegion && trendForRegion.sst &&
+                        trendForRegion.sst.intercept;
+        if (!slope || !intercept) return new Array(366).fill(null);
+        var out = new Array(366);
+        for (var i = 0; i < 366; i++) {
+            var s = sstLeap[i];
+            var sl = slope[i];
+            var it = intercept[i];
+            if (s === null || s === undefined ||
+                sl === null || sl === undefined ||
+                it === null || it === undefined) {
+                out[i] = null;
+            } else {
+                out[i] = s - (sl * year + it);
+            }
+        }
+        return out;
+    }
+
+    // Variable → column-name picker for the JSON payloads we fetch.
+    // Note `sst_rel` in the frontend maps to `anom_rel` server-side
+    // (matches the parquet schema).
+    function _dailyVarKey(variable) {
+        if (variable === 'sst')     return 'sst';
+        if (variable === 'anom')    return 'anom';
+        if (variable === 'sst_rel') return 'anom_rel';
+        if (variable === 'sst_dt')  return null;   // computed client-side
+        return 'sst';
+    }
+
+    function _renderTimeSeriesDaily() {
+        var el = document.getElementById('seasonal-ts-plot');
+        if (!el || typeof Plotly === 'undefined') return;
+        // First-paint stub while the small JSONs load.
+        if (!dailyCache.clim || !dailyCache.currentYear) {
+            el.innerHTML =
+                '<div class="seasonal-panel-stub">Loading daily climatology…</div>';
+        }
+
+        var region = state.ts.region;
+        var variable = state.ts.variable;
+        var wantHistory = state.ts.history !== 'none';
+
+        var loaders = [
+            _fetchSeasonalDailyClim(),
+            _fetchSeasonalDailyCurrentYear(),
+            _fetchSeasonalDailyTrend(),
+        ];
+        if (wantHistory || state.ts.highlight !== 'none') {
+            loaders.push(_fetchSeasonalDailyRegionAll(region));
+        }
+
+        Promise.all(loaders).then(function (results) {
+            // Re-check selections in case the user changed them while
+            // the fetch was in flight; if so, defer to the newer render.
+            if (state.ts.region !== region || state.ts.variable !== variable ||
+                state.ts.resolution !== 'daily') {
+                return;
+            }
+            var clim = results[0], cy = results[1], trend = results[2];
+            var regionAll = (results.length >= 4)
+                ? _groupRegionAllByYear(results[3]) : null;
+
+            _drawDailyChart(el, region, variable, clim, cy, trend, regionAll);
+        }).catch(function (e) {
+            // Don't trample the panel if the user already switched back
+            // to Monthly (or to a different region/variable) while the
+            // failed fetch was in flight.
+            if (state.ts.resolution !== 'daily' ||
+                state.ts.region !== region ||
+                state.ts.variable !== variable) {
+                return;
+            }
+            el.innerHTML =
+                '<div class="seasonal-panel-stub seasonal-status-error">' +
+                'Failed to load daily data: ' + e.message + '</div>';
+        });
+    }
+
+    function _drawDailyChart(el, region, variable, clim, cy, trend, regionAll) {
+        _clearStub(el);
+        var traces = [];
+        var currentYear = (new Date()).getUTCFullYear();
+        var doys = [];
+        for (var i = 1; i <= 366; i++) doys.push(i);
+
+        var varKey = _dailyVarKey(variable);          // 'sst' | 'anom' | 'anom_rel' | null
+        var isDetrended = (variable === 'sst_dt');
+
+        // ----- Climatology envelope (±1σ around mean) -----
+        var climReg = clim.values[region];
+        var climMean = null, climStd = null;
+        if (isDetrended) {
+            // Detrended mean is identically zero by construction; std is
+            // precomputed in the trend blob (per-DOY detrended std).
+            var trReg = trend.values[region];
+            if (trReg && trReg.sst && trReg.sst.detrended_std) {
+                climMean = new Array(366).fill(0);
+                climStd  = trReg.sst.detrended_std;
+            }
+        } else if (climReg && climReg[varKey]) {
+            climMean = climReg[varKey].mean;
+            climStd  = climReg[varKey].std;
+        }
+
+        var hasClim = !!(climMean && climStd);
+        if (hasClim) {
+            var upper = climMean.map(function (m, i) {
+                if (m === null || climStd[i] === null) return null;
+                return m + climStd[i];
+            });
+            var lower = climMean.map(function (m, i) {
+                if (m === null || climStd[i] === null) return null;
+                return m - climStd[i];
+            });
+            traces.push({
+                type: 'scatter', mode: 'lines', x: doys, y: upper,
+                line: { color: 'transparent', width: 0 },
+                showlegend: false, hoverinfo: 'skip',
+                connectgaps: false,
+            });
+            traces.push({
+                type: 'scatter', mode: 'lines', x: doys, y: lower,
+                fill: 'tonexty', fillcolor: BRAND.green_dim,
+                line: { color: 'transparent', width: 0 },
+                showlegend: true, hoverinfo: 'skip',
+                connectgaps: false,
+                name: '1991-2020 ±1σ envelope (7-day smooth)',
+            });
+        }
+
+        var highlightYear = parseInt(state.ts.highlight, 10);
+        var hasHighlight = !isNaN(highlightYear);
+
+        // ----- Historical years (gray spaghetti) -----
+        if (regionAll && state.ts.history !== 'none') {
+            var years = Object.keys(regionAll.leap).map(Number)
+                            .sort(function (a, b) { return a - b; });
+            var minYear = state.ts.history === 'recent10'
+                ? currentYear - 10 : -Infinity;
+            var firstShown = true;
+            for (var yi = 0; yi < years.length; yi++) {
+                var y = years[yi];
+                if (y === currentYear) continue;
+                if (hasHighlight && y === highlightYear) continue;
+                if (y < minYear) continue;
+                var ya = regionAll.leap[y];
+                var yVals;
+                if (isDetrended) {
+                    yVals = _detrendedLeapSeries(y, ya.sst, trend.values[region]);
+                } else {
+                    yVals = ya[varKey];
+                }
+                traces.push({
+                    type: 'scatter', mode: 'lines', x: doys, y: yVals,
+                    line: { color: BRAND.gray, width: 1 },
+                    showlegend: firstShown,
+                    legendgroup: 'history',
+                    name: 'historical years (1982-' + (currentYear - 1) + ')',
+                    hovertemplate: y + ' · DOY %{x}: %{y:.2f}<extra></extra>',
+                    connectgaps: false,
+                });
+                firstShown = false;
+            }
+        }
+
+        // ----- Highlight year (bold blue line) -----
+        if (hasHighlight && regionAll && regionAll.leap[highlightYear]) {
+            var ha = regionAll.leap[highlightYear];
+            var hVals = isDetrended
+                ? _detrendedLeapSeries(highlightYear, ha.sst, trend.values[region])
+                : ha[varKey];
+            traces.push({
+                type: 'scatter', mode: 'lines', x: doys, y: hVals,
+                line: { color: BRAND.highlight, width: 2.4 },
+                name: String(highlightYear) + ' (highlighted)',
+                hovertemplate: highlightYear +
+                    ' · DOY %{x}: %{y:.2f}<extra></extra>',
+                connectgaps: false,
+            });
+        }
+
+        // ----- Climatology mean line -----
+        if (hasClim) {
+            traces.push({
+                type: 'scatter', mode: 'lines', x: doys, y: climMean,
+                line: { color: BRAND.green_line, width: 2.5 },
+                name: '1991-2020 mean',
+                hovertemplate: 'Climatology · DOY %{x}: %{y:.2f}<extra></extra>',
+                connectgaps: false,
+            });
+        }
+
+        // ----- Current year (orange), with preliminary tail -----
+        if (cy && cy.values && cy.dates && cy.dates.length) {
+            var cyDates = cy.dates;
+            var cySrc;
+            if (isDetrended) {
+                var sstLeap = _yearSeriesToLeapAxis(cyDates,
+                    cy.values[region + '_sst'] || []);
+                cySrc = _detrendedLeapSeries(currentYear, sstLeap,
+                                             trend.values[region]);
+            } else {
+                var colName = region + '_' + varKey;
+                cySrc = _yearSeriesToLeapAxis(cyDates,
+                    cy.values[colName] || []);
+            }
+            // Identify "finalized" vs "preliminary tail" via the last 2
+            // populated DOYs — OISST reprocessing can still touch those.
+            var populated = [];
+            for (var pi = 0; pi < 366; pi++) {
+                if (cySrc[pi] !== null && cySrc[pi] !== undefined) {
+                    populated.push(pi);
+                }
+            }
+            var prelimDoys = populated.slice(-2);    // last two
+            var finalDoys  = populated.slice(0, populated.length - 2);
+            var finalY = new Array(366).fill(null);
+            var prelimY = new Array(366).fill(null);
+            for (var fi = 0; fi < finalDoys.length; fi++) {
+                finalY[finalDoys[fi]] = cySrc[finalDoys[fi]];
+            }
+            // Include the join point in the preliminary trace so the
+            // line is visually continuous.
+            var joinIdx = finalDoys.length
+                ? finalDoys[finalDoys.length - 1] : -1;
+            if (joinIdx >= 0) prelimY[joinIdx] = cySrc[joinIdx];
+            for (var pi2 = 0; pi2 < prelimDoys.length; pi2++) {
+                prelimY[prelimDoys[pi2]] = cySrc[prelimDoys[pi2]];
+            }
+            traces.push({
+                type: 'scatter', mode: 'lines', x: doys, y: finalY,
+                line: { color: BRAND.orange_line, width: 2.6 },
+                name: String(currentYear) + ' (so far)',
+                hovertemplate: currentYear +
+                    ' · DOY %{x}: %{y:.2f}<extra></extra>',
+                connectgaps: false,
+            });
+            if (prelimDoys.length) {
+                traces.push({
+                    type: 'scatter', mode: 'lines', x: doys, y: prelimY,
+                    line: { color: BRAND.orange_line, width: 2.6,
+                            dash: 'dot' },
+                    opacity: 0.7,
+                    name: 'last 2 days (preliminary)',
+                    hovertemplate: currentYear +
+                        ' · DOY %{x}: %{y:.2f} (prelim)<extra></extra>',
+                    connectgaps: false,
+                });
+            }
+        }
+
+        // ----- Layout -----
+        var label = REGION_LABEL[region] || region;
+        var varLabel =
+              variable === 'anom'    ? 'SST anomaly (°C)'
+            : variable === 'sst_dt'  ? 'detrended SST (°C)'
+            : variable === 'sst_rel' ? 'relative SST vs 30°S-30°N (°C)'
+            :                          'SST (°C)';
+        // Tick positions: leap-frame first-of-month anchors. In a
+        // non-leap year, March-onward x labels visually represent the
+        // same calendar day; the leap-DOY=60 gap is invisible at the
+        // chart's display resolution.
+        var layout = {
+            title: {
+                text: label + ' — daily ' + varLabel +
+                      ' (' + currentYear + ' vs 1982-' + (currentYear - 1) + ')',
+                font: { size: 15, family: 'DM Sans, system-ui, sans-serif',
+                        weight: 600 },
+                xanchor: 'left', x: 0.01,
+            },
+            xaxis: {
+                title: { text: 'Day of year',
+                         font: { size: 11, color: BRAND.textDim } },
+                tickmode: 'array',
+                tickvals: _MONTH_TICK_LEAP,
+                ticktext: _MONTH_NAMES_FULL,
+                range: [1, 366],
+                zeroline: false,
+                gridcolor: BRAND.grid,
+                tickfont: { size: 11 },
+            },
+            yaxis: {
+                title: { text: varLabel,
+                         font: { size: 11, color: BRAND.textDim } },
+                zeroline: variable !== 'sst',
+                zerolinecolor: BRAND.gridZero,
+                gridcolor: BRAND.grid,
+                tickfont: { size: 11 },
+            },
+            margin: { l: 64, r: 18, t: 52, b: 78 },
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: BRAND.plotBg,
+            font: { color: BRAND.text, family: 'DM Sans, system-ui, sans-serif',
+                    size: 11 },
+            hovermode: 'closest',
+            hoverlabel: {
+                bgcolor: BRAND.hoverBg,
+                bordercolor: BRAND.hoverBorder,
+                font: { color: BRAND.hoverText,
+                        family: 'DM Sans, system-ui, sans-serif',
+                        size: 11 },
+            },
+            showlegend: true,
+            legend: {
+                font: { size: 10 }, orientation: 'h',
+                yanchor: 'top', y: -0.18, x: 0, xanchor: 'left',
+                bgcolor: 'rgba(0,0,0,0)',
+            },
+            annotations: _watermarkAnnotations(),
+        };
+        var insetTraces = _timeSeriesInsetBuildTraces();
+        layout.geo2 = _insetGeoLayout({ x: [0.76, 1.0], y: [0.74, 1.005] });
+        Plotly.react(el, traces.concat(insetTraces), layout,
+                     { responsive: true, displaylogo: false });
+    }
+
     function _bindTimeSeriesControls() {
         var bind = function (id, key) {
             var el = document.getElementById(id);
@@ -1137,6 +1618,7 @@
         bind('seasonal-ts-var', 'variable');
         bind('seasonal-ts-history', 'history');
         bind('seasonal-ts-highlight', 'highlight');
+        bind('seasonal-ts-resolution', 'resolution');
     }
 
     function _populateHighlightYears(years, currentYear) {

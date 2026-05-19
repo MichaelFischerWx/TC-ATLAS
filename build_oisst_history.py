@@ -49,17 +49,42 @@ log = logging.getLogger("build_oisst_history")
 # Configuration
 # --------------------------------------------------------------------------
 
-# NOAA OISST v2.1 high-resolution (0.25°) daily SST. Per-year files; PSL
-# provides the current year as a partial file refreshed daily. We download
-# the full file rather than using OPeNDAP because PSL's THREDDS OPeNDAP
-# endpoint silently returns mostly-zero data when chunked-read patterns hit
-# its request-size limits (~500 MB). Direct download is ~120 MB/yr — fast,
-# reliable, and matches what's already used elsewhere in the project.
+# NOAA OISST v2.1 high-resolution (0.25°) daily SST.
+#
+# Source priority:
+#   1. NCEI per-day HTTPS — small (~1.7 MB/file), reliable, parallelizable.
+#      Per-year backfill = 365 concurrent fetches → ~30 s/year wall time.
+#   2. PSL per-year HTTPS (kept as fallback) — ~480 MB/year. Some networks
+#      cap connection size at ~10-25 MB; in that case PSL is unusable and
+#      NCEI is the only option.
+#
+# We assemble the NCEI per-day files into a per-year NetCDF in the same
+# (time, lat, lon) layout the rest of the pipeline expects, so callers see
+# one file per year regardless of which source it came from.
+# AWS Open-Data S3 mirror of NCEI per-day OISST. Anonymous read, no
+# concurrency throttle (verified: ~13× faster than NCEI HTTPS for the
+# same 8-way concurrent workload on the dev network).
+OISST_S3_DAY_TMPL = (
+    "https://noaa-cdr-sea-surface-temp-optimum-interpolation-pds.s3."
+    "amazonaws.com/data/v2.1/avhrr/{yyyymm}/oisst-avhrr-v02r01.{yyyymmdd}.nc"
+)
+# NCEI per-day HTTPS — used only as a last-resort per-file fallback if
+# the S3 mirror is missing a date or unreachable. Throttles concurrent
+# requests on some networks (~11 s per file at 8-way concurrency), so
+# do NOT use as primary.
+OISST_NCEI_DAY_TMPL = (
+    "https://www.ncei.noaa.gov/data/sea-surface-temperature-optimum-"
+    "interpolation/v2.1/access/avhrr/{yyyymm}/oisst-avhrr-v02r01.{yyyymmdd}.nc"
+)
 OISST_DOWNLOAD_TMPL = (
     "https://psl.noaa.gov/thredds/fileServer/Datasets/noaa.oisst.v2.highres/"
     "sst.day.mean.{year}.nc"
 )
 OISST_OPENDAP_TMPL = OISST_DOWNLOAD_TMPL   # kept for back-compat with importers
+# Number of concurrent per-day fetches against NCEI. 8 is comfortably below
+# any rate limit and saturates a typical home connection on the small-file
+# workload.
+OISST_NCEI_CONCURRENCY = int(os.environ.get("OISST_NCEI_CONCURRENCY", "8"))
 
 # Local cache for the downloaded per-year files. Deleted after processing
 # unless --keep-cache is set. Re-uses /Users/mfischer/Data/ACE/ if files
@@ -162,8 +187,126 @@ GCS_PREFIX = "seasonal"
 # Helpers
 # --------------------------------------------------------------------------
 
-def _download_oisst_year(year: int) -> Path:
-    """Mirror sst.day.mean.{year}.nc from PSL to the local cache.
+def _oisst_fetch_one_day(date_str: str, dest: Path,
+                         max_attempts: int = 4) -> bool:
+    """Pull one day's OISST NetCDF to `dest`. Returns True on success.
+
+    Tries the AWS S3 public mirror first (no concurrency throttle); on
+    repeated failure, falls back to NCEI HTTPS for that single day.
+    Per-day files are ~1.7 MB so a single GET completes in one shot.
+    """
+    import requests
+    if dest.exists() and dest.stat().st_size > 100_000:
+        return True
+    yyyymm = date_str[:6]
+    s3_url   = OISST_S3_DAY_TMPL.format(yyyymm=yyyymm, yyyymmdd=date_str)
+    ncei_url = OISST_NCEI_DAY_TMPL.format(yyyymm=yyyymm, yyyymmdd=date_str)
+    for url in (s3_url, ncei_url):
+        for attempt in range(1, max_attempts + 1):
+            try:
+                r = requests.get(url, timeout=(15, 60))
+                r.raise_for_status()
+                tmp = dest.with_suffix(dest.suffix + ".tmp")
+                with open(tmp, "wb") as fout:
+                    fout.write(r.content)
+                tmp.replace(dest)
+                return True
+            except Exception as e:
+                if attempt == max_attempts:
+                    log.warning("    %s %s failed after %d attempts: %s",
+                                "S3" if url is s3_url else "NCEI",
+                                date_str, max_attempts, e)
+                    break
+                time.sleep(0.5 * attempt)
+    return False
+
+
+def _download_oisst_year_via_ncei(year: int) -> Path:
+    """Build a per-year NetCDF for `year` by fetching the 365/366 per-day
+    files (S3 mirror primary, NCEI fallback) in parallel and concatenating
+    along the time axis. Output matches the PSL per-year layout (variable
+    `sst`, dims time × lat × lon) so downstream callers see a uniform shape.
+    """
+    import pandas as pd
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    OISST_LOCAL_CACHE.mkdir(parents=True, exist_ok=True)
+    local = OISST_LOCAL_CACHE / f"sst.day.mean.{year}.nc"
+    # Per-day staging dir — kept across runs so partial-year retries are
+    # cheap. Cleaned up after the per-year assembly succeeds.
+    stage_dir = OISST_LOCAL_CACHE / f"_ncei_stage_{year}"
+    stage_dir.mkdir(parents=True, exist_ok=True)
+
+    # Build the list of days to fetch. For the current year, only days up
+    # to (today − 2) — the OISST mirror publishes after a 1-2 day lag.
+    today = datetime.now(timezone.utc).date()
+    end = pd.Timestamp(year, 12, 31)
+    if year == today.year:
+        end = min(end, pd.Timestamp(today) - pd.Timedelta(days=2))
+    start = pd.Timestamp(year, 1, 1)
+    days = pd.date_range(start, end, freq="D")
+    log.info("  S3+NCEI fetch %d: %d daily files (concurrency=%d)",
+             year, len(days), OISST_NCEI_CONCURRENCY)
+
+    targets = []
+    for d in days:
+        ds_str = d.strftime("%Y%m%d")
+        targets.append((ds_str, stage_dir / f"oisst-{ds_str}.nc"))
+
+    n_ok, n_fail = 0, 0
+    t0 = time.time()
+    with ThreadPoolExecutor(max_workers=OISST_NCEI_CONCURRENCY) as ex:
+        futures = {ex.submit(_oisst_fetch_one_day, ds, dest): ds
+                   for ds, dest in targets}
+        for fut in as_completed(futures):
+            ok = fut.result()
+            if ok:
+                n_ok += 1
+            else:
+                n_fail += 1
+            if (n_ok + n_fail) % 50 == 0:
+                log.info("    %d: %d/%d (%.1f s elapsed)",
+                         year, n_ok + n_fail, len(targets),
+                         time.time() - t0)
+    log.info("  %d: %d ok, %d failed in %.1f s",
+             year, n_ok, n_fail, time.time() - t0)
+    if n_ok == 0:
+        raise IOError(f"S3+NCEI fetched 0 days for {year}")
+
+    # Open all the per-day files, concat on time, write a single per-year
+    # NetCDF in the (time, lat, lon) layout the rest of the code expects.
+    paths = sorted(p for _, p in targets if p.exists() and p.stat().st_size > 100_000)
+    log.info("  assembling %d per-day files into %s", len(paths), local.name)
+    arrays = []
+    for p in paths:
+        with xr.open_dataset(p) as ds:
+            # Drop singleton zlev only — KEEP time as a coord so the
+            # concat preserves real timestamps (squeezing time also
+            # drops the coord, leaving 0..N-1 integer indices and a
+            # downstream parsing crash). Mirrors what
+            # `_open_monthly_oisst` does to keep `time` intact.
+            da = ds["sst"].squeeze("zlev", drop=True)
+            arrays.append(da.load())
+    combined = xr.concat(arrays, dim="time")
+    out = xr.Dataset({"sst": combined})
+    tmp = local.with_suffix(local.suffix + ".tmp")
+    out.to_netcdf(tmp)
+    tmp.replace(local)
+    log.info("  cached %.1f MB at %s", local.stat().st_size / 1e6, local)
+    # Clean staging dir on success.
+    shutil.rmtree(stage_dir, ignore_errors=True)
+    return local
+
+
+def _download_oisst_year(year: int,
+                         max_attempts: int = 40,
+                         base_backoff_s: float = 2.0) -> Path:
+    """Mirror sst.day.mean.{year}.nc to the local cache.
+
+    Tries NCEI per-day fetches first (small, parallelizable, ~30 s/year).
+    Falls back to PSL per-year HTTPS with Range-request resume only if
+    NCEI is unavailable — PSL's 480 MB transfers are unreliable on some
+    networks (consistent ~10-25 MB connection cap).
 
     Idempotent: if the file already exists and is plausibly complete
     (size > 1 MB), returns the cached path unchanged. The current-year
@@ -177,24 +320,94 @@ def _download_oisst_year(year: int) -> Path:
         if year < datetime.now(timezone.utc).year or age_hrs < 18:
             return local
         log.info("  %s is %.1f h old; refreshing", local.name, age_hrs)
+
+    # Primary path: NCEI per-day, concurrent.
+    try:
+        return _download_oisst_year_via_ncei(year)
+    except Exception as e:
+        log.warning("  NCEI fetch for %d failed (%s); falling back to PSL",
+                    year, e)
+
+    # Fallback path: PSL per-year with Range-resume.
     url = OISST_DOWNLOAD_TMPL.format(year=year)
-    log.info("  downloading %s", url)
     tmp = local.with_suffix(local.suffix + ".tmp")
     import requests
-    with requests.get(url, stream=True, timeout=(30, 600)) as r:
-        r.raise_for_status()
-        expected = int(r.headers.get("Content-Length", "0"))
-        written = 0
-        with open(tmp, "wb") as fout:
-            for chunk in r.iter_content(chunk_size=1 << 20):  # 1 MB chunks
-                if chunk:
-                    fout.write(chunk)
-                    written += len(chunk)
-        if expected and written != expected:
-            tmp.unlink()
+    import random
+
+    # Learn the expected file size via HEAD. Some servers don't expose
+    # this on HEAD (return 0); if so, we fall back to letting the GET
+    # report it on the first successful Range response.
+    try:
+        h = requests.head(url, timeout=30, allow_redirects=True)
+        h.raise_for_status()
+        expected = int(h.headers.get("Content-Length", "0"))
+    except Exception as e:
+        log.warning("  HEAD for %s failed (%s); will infer size from GET", url, e)
+        expected = 0
+
+    log.info("  downloading %s (expected %.1f MB)",
+             url, expected / 1e6 if expected else 0)
+    attempt = 0
+    last_progress_log = 0
+    while True:
+        attempt += 1
+        if attempt > max_attempts:
             raise IOError(
-                f"truncated download for {year}: got {written} bytes, expected {expected}"
+                f"giving up on {year} after {max_attempts} attempts; "
+                f"tmp has {tmp.stat().st_size if tmp.exists() else 0} bytes"
             )
+        have = tmp.stat().st_size if tmp.exists() else 0
+        if expected and have >= expected:
+            break
+        headers = {"Range": f"bytes={have}-"} if have > 0 else {}
+        try:
+            with requests.get(url, stream=True,
+                              timeout=(30, 120),
+                              headers=headers) as r:
+                # 206 = partial content (Range succeeded); 200 = full body
+                # (server ignored Range — start over).
+                if have > 0 and r.status_code == 200:
+                    log.warning("  server ignored Range; restarting from 0")
+                    tmp.unlink(missing_ok=True)
+                    have = 0
+                elif r.status_code not in (200, 206):
+                    r.raise_for_status()
+                if not expected:
+                    # First successful response — capture full size from
+                    # Content-Range (206) or Content-Length (200).
+                    cr = r.headers.get("Content-Range", "")
+                    if cr and "/" in cr:
+                        expected = int(cr.split("/")[-1])
+                    else:
+                        expected = int(r.headers.get("Content-Length", "0"))
+                with open(tmp, "ab" if have > 0 else "wb") as fout:
+                    for chunk in r.iter_content(chunk_size=1 << 20):
+                        if chunk:
+                            fout.write(chunk)
+                            have += len(chunk)
+                            # Throttle progress logs to every ~50 MB.
+                            if have - last_progress_log >= 50 * (1 << 20):
+                                log.info("    %d: %.1f / %.1f MB",
+                                         year, have / 1e6, expected / 1e6)
+                                last_progress_log = have
+            # Loop top will re-check have vs expected.
+        except (requests.exceptions.RequestException, IOError) as e:
+            # Sleep with jitter, then retry from the new offset.
+            wait = base_backoff_s * (1.5 ** min(attempt - 1, 8))
+            wait += random.uniform(0, 0.5)
+            have_now = tmp.stat().st_size if tmp.exists() else 0
+            log.warning(
+                "  %d attempt %d: %s; have %.1f MB, retrying in %.1f s",
+                year, attempt, e, have_now / 1e6, wait,
+            )
+            time.sleep(wait)
+
+    # Sanity-check final size.
+    final = tmp.stat().st_size
+    if expected and final != expected:
+        raise IOError(
+            f"size mismatch for {year}: got {final}, expected {expected}"
+        )
     tmp.replace(local)
     log.info("  cached %.1f MB at %s", local.stat().st_size / 1e6, local)
     return local
@@ -1267,6 +1480,516 @@ def build_anomaly_contours(out_dir: Path, climo_path: Path,
 
 
 # --------------------------------------------------------------------------
+# Step 3b: Daily indices (full-history backfill) + daily climatology + trend
+# --------------------------------------------------------------------------
+#
+# These are the three blobs the RT Monitor Seasonal Panel B "Daily" view
+# reads. They are one-time backfills, written locally from the per-year
+# OISST files in OISST_LOCAL_CACHE and uploaded to GCS once. The daily
+# Cloud Run Job (build_seasonal_diagnostics.py) does NOT touch them in
+# steady state — it only appends to indices_daily_current_year.parquet.
+#
+# Schema of indices_daily_full.parquet:
+#   date              YYYY-MM-DD
+#   {region}_sst      area-weighted region-mean SST (°C)
+#   {region}_anom     anomaly vs the per-DOY climatology
+#   {region}_anom_rel Vecchi-Soden relative: anom − 30°S-30°N anom that day
+#
+# Matches the schema the daily job writes to indices_daily_current_year.parquet,
+# so the two can be concat'd on the fly.
+
+# Cumulative day-of-year (leap-year reference frame) at end of each prior month.
+# Jan 1 = leap-DOY 1, Feb 1 = 32, Mar 1 = 61, ..., Dec 31 = 366.
+_LEAP_DOY_CUM = (0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335, 366)
+
+
+def _is_leap(year: int) -> bool:
+    return year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+
+
+def _leap_doy(month: int, day: int) -> int:
+    """Day-of-year in a leap-year reference frame (1..366).
+
+    Jan 1 = 1, Feb 28 = 59, Feb 29 = 60, Mar 1 = 61, Dec 31 = 366. This is
+    the indexing the daily climatology + trend blobs use, and the indexing
+    the frontend uses on its x-axis. In non-leap years, no data lands on
+    leap-DOY 60 — Feb 28 → 59, Mar 1 → 61.
+    """
+    return _LEAP_DOY_CUM[month - 1] + day
+
+
+def _ld_to_md(ld: int) -> tuple[int, int]:
+    """Inverse of _leap_doy: leap-DOY (1..366) → (month, day)."""
+    for m in range(12):
+        if _LEAP_DOY_CUM[m] < ld <= _LEAP_DOY_CUM[m + 1]:
+            return m + 1, ld - _LEAP_DOY_CUM[m]
+    raise ValueError(f"leap-DOY out of range: {ld}")
+
+
+def _build_daily_climo_grid(clim_mean: xr.DataArray) -> np.ndarray:
+    """(366, n_lat, n_lon) interpolated daily climatology in the leap-year
+    frame. Uses the existing 12-month basis + the same fractional-month
+    interpolation as `_interp_daily_clim` (anchored at the 15th)."""
+    n_lat = clim_mean.sizes["lat"]
+    n_lon = clim_mean.sizes["lon"]
+    out = np.empty((366, n_lat, n_lon), dtype=np.float32)
+    for ld in range(1, 367):
+        month, day = _ld_to_md(ld)
+        # Year 2000 (a leap year) gives the interpolation helper a valid
+        # Feb 29 anchor. The interpolation is year-independent in practice.
+        out[ld - 1] = _interp_daily_clim(clim_mean, 2000, month, day)
+    return out
+
+
+def _build_daily_trop_climo(daily_climo_grid: np.ndarray,
+                            lat_vals: np.ndarray) -> np.ndarray:
+    """(366,) area-weighted tropical-mean climatology in the leap-year frame.
+    Used to convert today's tropical-mean SST into today's tropical-mean
+    anomaly when computing the Vecchi-Soden relative SST."""
+    trop_mask = (lat_vals >= TROPICAL_MEAN_LAT_MIN) & (lat_vals <= TROPICAL_MEAN_LAT_MAX)
+    w = np.cos(np.deg2rad(lat_vals[trop_mask]))[:, None]
+    out = np.empty(366, dtype=np.float64)
+    for ld in range(366):
+        slab = daily_climo_grid[ld][trop_mask, :]
+        finite = np.isfinite(slab)
+        w2 = np.where(finite, w * np.ones_like(slab), 0)
+        s2 = np.where(finite, slab, 0)
+        denom = w2.sum()
+        out[ld] = (s2 * w2).sum() / denom if denom > 0 else np.nan
+    return out
+
+
+def _build_region_index(lat_vals: np.ndarray, lon_vals: np.ndarray) -> dict:
+    """Precompute per-region (lat_idx_slice, lon_idx_slice, cos-lat weights)
+    so the per-day inner loop is plain numpy slicing + a weighted mean."""
+    out = {}
+    for name, (lat_s, lat_n, lon_w, lon_e) in REGIONS.items():
+        lat_idx = np.where((lat_vals >= lat_s) & (lat_vals <= lat_n))[0]
+        lon_idx = np.where((lon_vals >= lon_w) & (lon_vals <= lon_e))[0]
+        if len(lat_idx) == 0 or len(lon_idx) == 0:
+            raise ValueError(f"region {name} has empty footprint within OISST subset")
+        w = np.cos(np.deg2rad(lat_vals[lat_idx]))[:, None]   # (n_lat_sub, 1)
+        out[name] = (slice(lat_idx[0], lat_idx[-1] + 1),
+                     slice(lon_idx[0], lon_idx[-1] + 1),
+                     w)
+    return out
+
+
+def _region_mean_2d(slab: np.ndarray, region_entry: tuple) -> float:
+    """NaN-safe area-weighted mean of a 2D (lat, lon) slab over a region."""
+    lat_sl, lon_sl, w = region_entry
+    sub = slab[lat_sl, lon_sl]
+    finite = np.isfinite(sub)
+    if not finite.any():
+        return float("nan")
+    w2 = np.where(finite, w * np.ones_like(sub), 0)
+    s2 = np.where(finite, sub, 0)
+    denom = w2.sum()
+    return float((s2 * w2).sum() / denom) if denom > 0 else float("nan")
+
+
+def _trop_mean_2d(slab: np.ndarray, lat_vals: np.ndarray) -> float:
+    """NaN-safe area-weighted 30°S–30°N mean of a 2D (lat, lon) slab."""
+    trop_mask = (lat_vals >= TROPICAL_MEAN_LAT_MIN) & (lat_vals <= TROPICAL_MEAN_LAT_MAX)
+    sub = slab[trop_mask, :]
+    w = np.cos(np.deg2rad(lat_vals[trop_mask]))[:, None]
+    finite = np.isfinite(sub)
+    if not finite.any():
+        return float("nan")
+    w2 = np.where(finite, w * np.ones_like(sub), 0)
+    s2 = np.where(finite, sub, 0)
+    denom = w2.sum()
+    return float((s2 * w2).sum() / denom) if denom > 0 else float("nan")
+
+
+def _compute_year_daily_rows(sst_da: xr.DataArray,
+                             daily_climo_grid: np.ndarray,
+                             daily_trop_climo: np.ndarray,
+                             region_index: dict,
+                             lat_vals: np.ndarray) -> list[dict]:
+    """Return one row per day for `sst_da` (time × lat × lon). Each row has
+    `date`, `{region}_sst`, `{region}_anom`, `{region}_anom_rel`."""
+    times = sst_da["time"].values   # datetime64[ns]
+    # Sanity-check: time coord must be datetime-like, not integers. If a
+    # caller passed an array of 0..N-1 (the symptom of an over-eager
+    # `.squeeze(drop=True)` upstream), the per-row parse below would die
+    # with an opaque "invalid literal for int() with base 10: ''" error
+    # several frames deep; surface it here instead.
+    if not np.issubdtype(times.dtype, np.datetime64):
+        raise TypeError(
+            f"sst_da.time must be datetime64; got dtype={times.dtype}"
+        )
+    vals  = sst_da.values           # (n_days, n_lat, n_lon)
+    n_days = vals.shape[0]
+    rows = []
+    for i in range(n_days):
+        ts = times[i]
+        # numpy.datetime64 → date string + (month, day)
+        s = str(ts)[:10]
+        year_i  = int(s[0:4])
+        month_i = int(s[5:7])
+        day_i   = int(s[8:10])
+        ld = _leap_doy(month_i, day_i)
+        slab = vals[i]
+        clim_slab = daily_climo_grid[ld - 1]
+        anom_slab = slab - clim_slab
+        trop_today = _trop_mean_2d(slab, lat_vals)
+        trop_clim_today = float(daily_trop_climo[ld - 1])
+        trop_anom_today = (trop_today - trop_clim_today
+                           if np.isfinite(trop_today) and np.isfinite(trop_clim_today)
+                           else float("nan"))
+        row = {"date": s}
+        for name, entry in region_index.items():
+            r_sst  = _region_mean_2d(slab,      entry)
+            r_anom = _region_mean_2d(anom_slab, entry)
+            row[f"{name}_sst"]      = round(r_sst,  4) if np.isfinite(r_sst)  else None
+            row[f"{name}_anom"]     = round(r_anom, 4) if np.isfinite(r_anom) else None
+            if np.isfinite(r_anom) and np.isfinite(trop_anom_today):
+                row[f"{name}_anom_rel"] = round(r_anom - trop_anom_today, 4)
+            else:
+                row[f"{name}_anom_rel"] = None
+        rows.append(row)
+    return rows
+
+
+def build_daily_indices_full(climo_path: Path,
+                             out_path: Path,
+                             year_start: int = INDICES_START_YEAR,
+                             year_end: int | None = None) -> Path:
+    """Build the 1982-present per-day region-mean SST + anomaly + relative
+    anomaly parquet. Idempotent and resumable: existing year-rows are
+    preserved; only years missing or partial are recomputed. The current
+    calendar year is always recomputed (its row count grows daily anyway).
+
+    Source: per-year OISST files in `OISST_LOCAL_CACHE`. `_open_oisst_year`
+    pulls anything missing from PSL on first use and caches the NetCDF;
+    subsequent runs are local-only and fast (~5-10 s/year).
+    """
+    import pandas as pd
+    if not climo_path.exists():
+        raise FileNotFoundError(
+            f"Climatology not found at {climo_path}. "
+            f"Run --step monthly_climatology first."
+        )
+    if year_end is None:
+        year_end = datetime.now(timezone.utc).year
+
+    log.info("Building daily indices %d-%d ...", year_start, year_end)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Load existing parquet (if any) to support resume.
+    if out_path.exists():
+        existing_df = pd.read_parquet(out_path)
+        log.info("  found existing %s (%d rows); will resume",
+                 out_path.name, len(existing_df))
+    else:
+        existing_df = pd.DataFrame()
+
+    complete_years = set()
+    if len(existing_df):
+        existing_years = existing_df["date"].str.slice(0, 4).astype(int)
+        current_year = datetime.now(timezone.utc).year
+        for y, n_rows in existing_years.value_counts().items():
+            if y >= current_year:
+                continue   # always refresh the live year
+            expected = 366 if _is_leap(int(y)) else 365
+            # Allow a 2-day slack in case a year has a missing day at the
+            # edge from earlier reprocessing.
+            if n_rows >= expected - 2:
+                complete_years.add(int(y))
+
+    # Open the monthly climatology once and precompute the 366-day grid.
+    log.info("  loading monthly climatology + precomputing 366-day grid")
+    clim_ds = xr.open_dataset(climo_path)
+    clim_mean = clim_ds["sst_clim_mean"]   # (month, lat, lon)
+    lat_vals = clim_mean["lat"].values
+    lon_vals = clim_mean["lon"].values
+    daily_climo_grid = _build_daily_climo_grid(clim_mean)
+    daily_trop_climo = _build_daily_trop_climo(daily_climo_grid, lat_vals)
+    region_index = _build_region_index(lat_vals, lon_vals)
+    clim_ds.close()
+
+    new_chunks = [existing_df] if len(existing_df) else []
+    for year in range(year_start, year_end + 1):
+        if year in complete_years:
+            log.info("  year %d: already complete; skipping", year)
+            continue
+        try:
+            sst_da = _open_oisst_year(year)
+        except Exception as e:
+            log.warning("  year %d: failed to open (%s); skipping", year, e)
+            continue
+        t0 = time.time()
+        rows = _compute_year_daily_rows(sst_da, daily_climo_grid,
+                                        daily_trop_climo, region_index,
+                                        lat_vals)
+        log.info("  year %d: %d daily rows in %.1f s",
+                 year, len(rows), time.time() - t0)
+
+        # Drop any pre-existing rows from this year before appending.
+        if len(existing_df):
+            existing_df = existing_df[
+                ~existing_df["date"].str.startswith(f"{year}-")
+            ].reset_index(drop=True)
+            new_chunks = [existing_df]
+        new_chunks.append(pd.DataFrame(rows))
+
+        # Spill to disk every year so a crash leaves progress.
+        df_so_far = pd.concat(new_chunks, ignore_index=True)
+        df_so_far = (df_so_far
+                     .drop_duplicates(subset=["date"], keep="last")
+                     .sort_values("date")
+                     .reset_index(drop=True))
+        df_so_far.to_parquet(out_path, compression="snappy", index=False)
+        existing_df = df_so_far
+        new_chunks = [existing_df]
+        log.info("  year %d: parquet now %d rows (%.1f MB)",
+                 year, len(df_so_far),
+                 out_path.stat().st_size / 1e6)
+
+    log.info("Done: %s", out_path)
+    return out_path
+
+
+def _rolling_circular_mean(arr: np.ndarray, window: int) -> np.ndarray:
+    """Centered rolling mean along a 1D length-366 array with wraparound
+    at the year boundary. Window must be odd. NaN-safe (NaN cells are
+    excluded from their window)."""
+    if window % 2 == 0:
+        raise ValueError("window must be odd")
+    n = arr.shape[0]
+    half = window // 2
+    out = np.empty(n, dtype=np.float64)
+    for i in range(n):
+        idx = [(i + d) % n for d in range(-half, half + 1)]
+        sub = arr[idx]
+        finite = np.isfinite(sub)
+        out[i] = sub[finite].mean() if finite.any() else np.nan
+    return out
+
+
+def build_daily_climatology(daily_path: Path, out_path: Path,
+                            climo_start: int = CLIMO_START_YEAR,
+                            climo_end: int = CLIMO_END_YEAR,
+                            smoothing_days: int = 7) -> Path:
+    """Per-region, per-leap-DOY mean + std of SST, anom, and anom_rel across
+    the 1991-2020 climatology window. 7-day circular rolling smoother
+    applied to both mean and std so the curves don't show 30-sample noise.
+
+    Reads from `indices_daily_full.parquet`. Output is a single small JSON.
+    """
+    import pandas as pd
+    if not daily_path.exists():
+        raise FileNotFoundError(
+            f"{daily_path} not found. Run --step daily_indices first."
+        )
+    log.info("Building daily climatology %d-%d (smoothing=%d-day) ...",
+             climo_start, climo_end, smoothing_days)
+    df = pd.read_parquet(daily_path)
+    year = df["date"].str.slice(0, 4).astype(int)
+    mask = (year >= climo_start) & (year <= climo_end)
+    df = df.loc[mask].reset_index(drop=True)
+    log.info("  using %d daily rows from climo window", len(df))
+
+    # Pre-compute leap-DOY for every row.
+    months = df["date"].str.slice(5, 7).astype(int).to_numpy()
+    days   = df["date"].str.slice(8, 10).astype(int).to_numpy()
+    ld = np.fromiter((_leap_doy(m, d) for m, d in zip(months, days)),
+                     dtype=np.int32, count=len(df))
+
+    variables = ("sst", "anom", "anom_rel")
+    payload = {
+        "version": 1,
+        "climo_window": [climo_start, climo_end],
+        "smoothing": f"{smoothing_days}-day-circular-rolling",
+        "doys": list(range(1, 367)),
+        "regions": list(REGIONS.keys()),
+        "values": {},
+    }
+    # Group rows by leap-DOY once → array of row-indices per DOY.
+    by_doy = [[] for _ in range(367)]
+    for i, d in enumerate(ld):
+        by_doy[d].append(i)
+
+    for region in REGIONS:
+        payload["values"][region] = {}
+        for var in variables:
+            col = f"{region}_{var}"
+            if col not in df.columns:
+                continue
+            vals = df[col].to_numpy(dtype=np.float64)
+            mean_arr = np.full(366, np.nan, dtype=np.float64)
+            std_arr  = np.full(366, np.nan, dtype=np.float64)
+            for d in range(1, 367):
+                idxs = by_doy[d]
+                if not idxs:
+                    continue
+                v = vals[idxs]
+                finite = np.isfinite(v)
+                if not finite.any():
+                    continue
+                vf = v[finite]
+                mean_arr[d - 1] = vf.mean()
+                std_arr[d - 1]  = vf.std(ddof=0)
+            mean_smooth = _rolling_circular_mean(mean_arr, smoothing_days)
+            std_smooth  = _rolling_circular_mean(std_arr,  smoothing_days)
+            payload["values"][region][var] = {
+                "mean": [None if not np.isfinite(v) else round(float(v), 4)
+                         for v in mean_smooth],
+                "std":  [None if not np.isfinite(v) else round(float(v), 4)
+                         for v in std_smooth],
+            }
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(payload, separators=(",", ":")))
+    log.info("Done: %s (%.1f KB)", out_path, out_path.stat().st_size / 1024.0)
+    return out_path
+
+
+def build_daily_trend(daily_path: Path, out_path: Path,
+                      year_start: int = INDICES_START_YEAR,
+                      year_end: int | None = None,
+                      smoothing_days: int = 7) -> Path:
+    """Per-region per-leap-DOY linear-in-year trend coefficients (slope °C/yr,
+    intercept °C) fit on the SST column, plus the std of the per-DOY
+    detrended series. Used by the frontend to compute the `sst_dt`
+    (detrended SST) variant on the daily axis without needing the full
+    parquet client-side.
+
+    Trend is fit on years [year_start, year_end-1] (the current year is
+    almost always incomplete, so excluded). Smoothed with the same 7-day
+    circular roller as the climatology so coefficients don't have day-to-
+    day noise.
+    """
+    import pandas as pd
+    if not daily_path.exists():
+        raise FileNotFoundError(
+            f"{daily_path} not found. Run --step daily_indices first."
+        )
+    if year_end is None:
+        year_end = datetime.now(timezone.utc).year   # exclusive upper bound
+    log.info("Building daily trend %d..%d (excl) (smoothing=%d-day) ...",
+             year_start, year_end, smoothing_days)
+    df = pd.read_parquet(daily_path)
+    year_col = df["date"].str.slice(0, 4).astype(int)
+    mask = (year_col >= year_start) & (year_col < year_end)
+    df = df.loc[mask].reset_index(drop=True)
+    year_arr = df["date"].str.slice(0, 4).astype(int).to_numpy()
+    log.info("  using %d daily rows for trend fit", len(df))
+
+    months = df["date"].str.slice(5, 7).astype(int).to_numpy()
+    days   = df["date"].str.slice(8, 10).astype(int).to_numpy()
+    ld = np.fromiter((_leap_doy(m, d) for m, d in zip(months, days)),
+                     dtype=np.int32, count=len(df))
+    by_doy = [[] for _ in range(367)]
+    for i, d in enumerate(ld):
+        by_doy[d].append(i)
+
+    payload = {
+        "version": 1,
+        "fit_window": [year_start, year_end - 1],
+        "smoothing": f"{smoothing_days}-day-circular-rolling",
+        "doys": list(range(1, 367)),
+        "regions": list(REGIONS.keys()),
+        "values": {},
+    }
+    for region in REGIONS:
+        col = f"{region}_sst"
+        if col not in df.columns:
+            continue
+        sst_arr = df[col].to_numpy(dtype=np.float64)
+        slope_arr  = np.full(366, np.nan, dtype=np.float64)
+        intercept_arr = np.full(366, np.nan, dtype=np.float64)
+        dt_std_arr = np.full(366, np.nan, dtype=np.float64)
+        for d in range(1, 367):
+            idxs = by_doy[d]
+            if not idxs:
+                continue
+            y_vals = year_arr[idxs].astype(np.float64)
+            s_vals = sst_arr[idxs]
+            finite = np.isfinite(s_vals)
+            if finite.sum() < 5:   # too few points to fit
+                continue
+            yf = y_vals[finite]
+            sf = s_vals[finite]
+            slope, intercept = np.polyfit(yf, sf, 1)
+            detrended = sf - (slope * yf + intercept)
+            slope_arr[d - 1] = slope
+            intercept_arr[d - 1] = intercept
+            dt_std_arr[d - 1] = detrended.std(ddof=0)
+        slope_smooth = _rolling_circular_mean(slope_arr, smoothing_days)
+        # Intercept is sensitive to slope-smoothing rounding; refit
+        # intercept after smoothing slope so the (smoothed) line still
+        # passes through the centroid of the data. Equivalent to
+        # recomputing intercept = mean(sst) - smoothed_slope * mean(year).
+        intercept_smooth = np.full(366, np.nan, dtype=np.float64)
+        for d in range(1, 367):
+            idxs = by_doy[d]
+            if not idxs or not np.isfinite(slope_smooth[d - 1]):
+                continue
+            y_vals = year_arr[idxs].astype(np.float64)
+            s_vals = sst_arr[idxs]
+            finite = np.isfinite(s_vals)
+            if finite.sum() < 5:
+                continue
+            yf = y_vals[finite]
+            sf = s_vals[finite]
+            intercept_smooth[d - 1] = sf.mean() - slope_smooth[d - 1] * yf.mean()
+        dt_std_smooth = _rolling_circular_mean(dt_std_arr, smoothing_days)
+        payload["values"][region] = {
+            "sst": {
+                "slope":     [None if not np.isfinite(v) else round(float(v), 6)
+                              for v in slope_smooth],
+                "intercept": [None if not np.isfinite(v) else round(float(v), 4)
+                              for v in intercept_smooth],
+                "detrended_std": [None if not np.isfinite(v) else round(float(v), 4)
+                                  for v in dt_std_smooth],
+            },
+        }
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(payload, separators=(",", ":")))
+    log.info("Done: %s (%.1f KB)", out_path, out_path.stat().st_size / 1024.0)
+    return out_path
+
+
+def build_current_year_sidecar(daily_path: Path, out_path: Path,
+                               year: int | None = None) -> Path:
+    """Slice the current calendar year out of `indices_daily_full.parquet`
+    and write a JSON sidecar in the same shape the daily Cloud Run Job
+    produces (`indices_daily_current_year.json`). Useful for local
+    previews when you've built the full-history parquet but don't want
+    to run `build_seasonal_diagnostics.py` against PSL just to get the
+    live-year JSON. The shape matches `_fetchData('indices_daily_current_year.json')`
+    on the frontend exactly.
+    """
+    import pandas as pd
+    if not daily_path.exists():
+        raise FileNotFoundError(
+            f"{daily_path} not found. Run --step daily_indices first."
+        )
+    if year is None:
+        year = datetime.now(timezone.utc).year
+    df = pd.read_parquet(daily_path)
+    sub = df[df["date"].str.startswith(f"{year}-")].reset_index(drop=True)
+    if len(sub) == 0:
+        log.warning("  no rows for %d in %s — sidecar will be empty",
+                    year, daily_path.name)
+    payload = {
+        "version": 1,
+        "year": int(year),
+        "as_of": datetime.now(timezone.utc).isoformat(),
+        "dates": sub["date"].tolist(),
+        "values": {col: sub[col].tolist()
+                   for col in sub.columns if col != "date"},
+    }
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(payload, separators=(",", ":")))
+    log.info("Done: %s (%d rows, %.1f KB)",
+             out_path, len(sub), out_path.stat().st_size / 1024.0)
+    return out_path
+
+
+# --------------------------------------------------------------------------
 # Step 4: Upload to GCS
 # --------------------------------------------------------------------------
 
@@ -1292,6 +2015,10 @@ def upload_to_gcs(local_dir: Path) -> None:
         ("ace_basins_annual.json",       "application/json"),
         ("region_ace_correlations.json", "application/json"),
         ("analog_distance_matrices.json", "application/json"),
+        # Daily Panel B view (RT Monitor Seasonal tab).
+        ("indices_daily_full.parquet",   "application/octet-stream"),
+        ("clim_daily_1991_2020.json",    "application/json"),
+        ("trend_daily_1982_present.json", "application/json"),
     ]
     for fname, ctype in targets:
         src = local_dir / fname
@@ -1299,8 +2026,12 @@ def upload_to_gcs(local_dir: Path) -> None:
             log.warning("  skip %s (not present locally)", fname)
             continue
         blob = bucket.blob(f"{GCS_PREFIX}/{fname}")
-        blob.upload_from_filename(str(src), content_type=ctype)
-        log.info("  uploaded gs://%s/%s/%s (%.2f MB)",
+        # publicRead matches build_seasonal_diagnostics._upload_blob:
+        # the frontend pulls these blobs anonymously over
+        # storage.googleapis.com, so each new blob needs the ACL.
+        blob.upload_from_filename(str(src), content_type=ctype,
+                                  predefined_acl="publicRead")
+        log.info("  uploaded gs://%s/%s/%s (%.2f MB, public-read)",
                  GCS_BUCKET, GCS_PREFIX, fname, src.stat().st_size / 1e6)
 
     # Correlation maps: bulk-upload everything under correlations/.
@@ -1338,9 +2069,15 @@ def main():
     ap.add_argument("--step",
                     choices=["monthly_climatology", "monthly_indices",
                              "ace", "correlations", "anomaly_contours",
+                             "daily_indices", "daily_climatology",
+                             "daily_trend", "daily_current_year",
+                             "daily_all", "daily_local",
                              "upload", "all"],
                     default="all",
-                    help="Which step to run (default: all)")
+                    help="Which step to run (default: all). "
+                         "`daily_all` = full backfill + upload to GCS. "
+                         "`daily_local` = same builds, no upload — useful "
+                         "for `python3 -m http.server 8000` previews.")
     ap.add_argument("--out", default="data/seasonal",
                     help="Local output directory")
     ap.add_argument("--monthly-file", default=None,
@@ -1357,6 +2094,10 @@ def main():
     climo_path = out_dir / "oisst_monclim_1991_2020.nc"
     indices_path = out_dir / "indices_monthly.parquet"
     ace_path = out_dir / "ace_annual.json"
+    daily_full_path     = out_dir / "indices_daily_full.parquet"
+    daily_climo_path    = out_dir / "clim_daily_1991_2020.json"
+    daily_trend_path    = out_dir / "trend_daily_1982_present.json"
+    daily_cy_path       = out_dir / "indices_daily_current_year.json"
 
     t0 = time.time()
     if args.step in ("monthly_climatology", "all"):
@@ -1381,7 +2122,20 @@ def main():
     if args.step in ("anomaly_contours", "all"):
         build_anomaly_contours(out_dir, climo_path, monthly_path=args.monthly_file)
 
-    if args.step in ("upload", "all"):
+    # Daily-resolution backfill (Panel B Daily view on the RT Monitor
+    # Seasonal tab). Not in the default "all" run because it needs
+    # /Users/mfischer/Data/OISST_daily/ populated and takes ~5-8 minutes.
+    if args.step in ("daily_indices", "daily_all", "daily_local"):
+        build_daily_indices_full(climo_path, daily_full_path,
+                                 year_end=args.year_end)
+    if args.step in ("daily_climatology", "daily_all", "daily_local"):
+        build_daily_climatology(daily_full_path, daily_climo_path)
+    if args.step in ("daily_trend", "daily_all", "daily_local"):
+        build_daily_trend(daily_full_path, daily_trend_path)
+    if args.step in ("daily_current_year", "daily_all", "daily_local"):
+        build_current_year_sidecar(daily_full_path, daily_cy_path)
+
+    if args.step in ("upload", "all", "daily_all"):
         upload_to_gcs(out_dir)
 
     log.info("Done in %.1f min.", (time.time() - t0) / 60.0)
