@@ -191,20 +191,34 @@ def _oisst_fetch_one_day(date_str: str, dest: Path,
                          max_attempts: int = 4) -> bool:
     """Pull one day's OISST NetCDF to `dest`. Returns True on success.
 
-    Tries the AWS S3 public mirror first (no concurrency throttle); on
-    repeated failure, falls back to NCEI HTTPS for that single day.
-    Per-day files are ~1.7 MB so a single GET completes in one shot.
+    Source order: S3 final → S3 preliminary → NCEI final → NCEI prelim.
+    OISST has a ~14-day finalization lag; the `_preliminary.nc` variant
+    sits in the public mirrors during that window, so consult it before
+    giving up. Per-day files are ~1.7 MB so a single GET completes in
+    one shot; we retry transient errors but not 404s (404 on the final
+    is the normal signal to drop to preliminary).
     """
     import requests
     if dest.exists() and dest.stat().st_size > 100_000:
         return True
     yyyymm = date_str[:6]
-    s3_url   = OISST_S3_DAY_TMPL.format(yyyymm=yyyymm, yyyymmdd=date_str)
-    ncei_url = OISST_NCEI_DAY_TMPL.format(yyyymm=yyyymm, yyyymmdd=date_str)
-    for url in (s3_url, ncei_url):
+    # Ordered fallbacks. (label, url) pairs.
+    sources = [
+        ("S3 final",      OISST_S3_DAY_TMPL.format(yyyymm=yyyymm, yyyymmdd=date_str)),
+        ("S3 prelim",     OISST_S3_DAY_TMPL.format(yyyymm=yyyymm, yyyymmdd=date_str)
+                              .replace(".nc", "_preliminary.nc")),
+        ("NCEI final",    OISST_NCEI_DAY_TMPL.format(yyyymm=yyyymm, yyyymmdd=date_str)),
+        ("NCEI prelim",   OISST_NCEI_DAY_TMPL.format(yyyymm=yyyymm, yyyymmdd=date_str)
+                              .replace(".nc", "_preliminary.nc")),
+    ]
+    for label, url in sources:
         for attempt in range(1, max_attempts + 1):
             try:
                 r = requests.get(url, timeout=(15, 60))
+                if r.status_code == 404:
+                    # Don't keep retrying a 404 — fall through to next
+                    # source. Transient errors (5xx, timeouts) still retry.
+                    break
                 r.raise_for_status()
                 tmp = dest.with_suffix(dest.suffix + ".tmp")
                 with open(tmp, "wb") as fout:
@@ -214,8 +228,7 @@ def _oisst_fetch_one_day(date_str: str, dest: Path,
             except Exception as e:
                 if attempt == max_attempts:
                     log.warning("    %s %s failed after %d attempts: %s",
-                                "S3" if url is s3_url else "NCEI",
-                                date_str, max_attempts, e)
+                                label, date_str, max_attempts, e)
                     break
                 time.sleep(0.5 * attempt)
     return False
@@ -2019,6 +2032,11 @@ def upload_to_gcs(local_dir: Path) -> None:
         ("indices_daily_full.parquet",   "application/octet-stream"),
         ("clim_daily_1991_2020.json",    "application/json"),
         ("trend_daily_1982_present.json", "application/json"),
+        # The current-year sidecar is normally written by the daily
+        # Cloud Run Job (build_seasonal_diagnostics.py), but we also
+        # upload it from the backfill so the very first deploy has a
+        # live-year curve before the cron's next tick.
+        ("indices_daily_current_year.json", "application/json"),
     ]
     for fname, ctype in targets:
         src = local_dir / fname
