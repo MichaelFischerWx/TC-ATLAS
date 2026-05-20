@@ -9044,6 +9044,19 @@ function _buildCompPermalinkHash() {
     if (filters.max_shear_mag < 100)   params.max_shear_mag = filters.max_shear_mag;
     if (filters.min_shear_dir > 0)     params.min_shear_dir = filters.min_shear_dir;
     if (filters.max_shear_dir < 360)   params.max_shear_dir = filters.max_shear_dir;
+    if (filters.min_dtl > 0)           params.min_dtl = filters.min_dtl;
+    if (filters.dtl_window && filters.dtl_window !== '24h') params.dtl_window = filters.dtl_window;
+    // Environment (SHIPS) — only emit non-default ranges
+    if (filters.min_vmpi > 0)          params.min_vmpi = filters.min_vmpi;
+    if (filters.max_vmpi < 250)        params.max_vmpi = filters.max_vmpi;
+    if (filters.min_sst > 0)           params.min_sst = filters.min_sst;
+    if (filters.max_sst < 35)          params.max_sst = filters.max_sst;
+    if (filters.min_rhlo > 0)          params.min_rhlo = filters.min_rhlo;
+    if (filters.max_rhlo < 100)        params.max_rhlo = filters.max_rhlo;
+    if (filters.min_rhmd > 0)          params.min_rhmd = filters.min_rhmd;
+    if (filters.max_rhmd < 100)        params.max_rhmd = filters.max_rhmd;
+    if (filters.min_vp > 0)            params.min_vp = filters.min_vp;
+    if (filters.max_vp < 5)            params.max_vp = filters.max_vp;
     // Variable, data type, coverage, overlay
     var variable = document.getElementById('comp-var');
     if (variable && variable.value !== 'recentered_tangential_wind') params.variable = variable.value;
@@ -9183,6 +9196,9 @@ function _applyCompHashParams(params) {
     } else if (params.view === 'pv') {
         _wizardGoToStep(4);
         setTimeout(generateCompositePlanView, 600);
+    } else if (params.view === 'cfad') {
+        _wizardGoToStep(4);
+        setTimeout(generateCompositeCFAD, 600);
     }
     return true;
 }
@@ -10679,6 +10695,53 @@ function _symmetricRange(data2d) {
     return Math.ceil(maxAbs / mag) * mag;
 }
 
+// Build a per-bin significance mask for a difference composite (A - B) using
+// the per-group bootstrap standard errors. Approximates a two-sample z-test
+// (Welch-style) on the difference of means: |diff| / sqrt(SE_A^2 + SE_B^2)
+// > 1.96 marks the bin significant at alpha = 0.05 two-sided.
+// Returns null if either SE field is missing — caller should skip stippling.
+function _buildSigMask(diffData, seA, seB) {
+    if (!seA || !seB) return null;
+    var Z_CRIT = 1.96;
+    var mask = new Array(diffData.length);
+    for (var r = 0; r < diffData.length; r++) {
+        mask[r] = new Array(diffData[r].length);
+        for (var c = 0; c < diffData[r].length; c++) {
+            var d = diffData[r][c], a = (seA[r] || [])[c], b = (seB[r] || [])[c];
+            if (d == null || a == null || b == null) { mask[r][c] = null; continue; }
+            var sePool = Math.sqrt(a*a + b*b);
+            mask[r][c] = sePool > 0 && Math.abs(d) / sePool > Z_CRIT;
+        }
+    }
+    return mask;
+}
+
+// Build a Plotly scatter trace of small dots positioned at the centers of
+// bins where sigMask is FALSE (i.e., not significant). Pass to Plotly.newPlot
+// as an additional trace on top of the heatmap.
+function _stippleTrace(sigMask, xCoords, yCoords) {
+    if (!sigMask) return null;
+    var xs = [], ys = [];
+    for (var r = 0; r < sigMask.length; r++) {
+        for (var c = 0; c < (sigMask[r] || []).length; c++) {
+            if (sigMask[r][c] === false) {
+                // sigMask is indexed [height_idx][radius_idx] to match the
+                // heatmap z array shape.
+                xs.push(xCoords[c]);
+                ys.push(yCoords[r]);
+            }
+        }
+    }
+    if (!xs.length) return null;
+    return {
+        type: 'scatter', mode: 'markers',
+        x: xs, y: ys,
+        marker: { size: 3, color: 'rgba(15,22,35,0.55)', symbol: 'circle' },
+        hoverinfo: 'skip', showlegend: false,
+        name: 'not significant (p≥0.05)',
+    };
+}
+
 // ---------------------------------------------------------------------------
 // IR Satellite Composite generation & rendering
 // ---------------------------------------------------------------------------
@@ -11271,8 +11334,11 @@ function generateCompDiffAzMean() {
     var baseQS = '&variable=' + encodeURIComponent(variable) + '&data_type=' + dataType + '&coverage_min=' + coverage +
         '&normalize_rmw=' + (normRmw ? 'true' : 'false') + '&max_r_rmw=' + maxRRmw + '&dr_rmw=' + drRmw;
     if (overlay) baseQS += '&overlay=' + encodeURIComponent(overlay);
-    var urlA = API_BASE + '/composite/azimuthal_mean?' + _compositeQueryString(filtersA) + baseQS;
-    var urlB = API_BASE + '/composite/azimuthal_mean?' + _compositeQueryString(filtersB) + baseQS;
+    // Request bootstrap SE so we can stipple non-significant bins on the
+    // difference plot (two-sample z-test on Welch-combined SEs).
+    var bootQS = '&bootstrap=true&n_iter=300';
+    var urlA = API_BASE + '/composite/azimuthal_mean?' + _compositeQueryString(filtersA) + baseQS + bootQS;
+    var urlB = API_BASE + '/composite/azimuthal_mean?' + _compositeQueryString(filtersB) + baseQS + bootQS;
 
     // Sequential streaming: fetch Group A first, then Group B, to avoid
     // doubling memory/thread pressure on the server.
@@ -11284,6 +11350,7 @@ function generateCompDiffAzMean() {
     }).then(function(jsonB) {
         var diffData = _subtractArrays2D(jsonA.azimuthal_mean, jsonB.azimuthal_mean);
         var symRange = _symmetricRange(diffData);
+        var sigMask = _buildSigMask(diffData, jsonA.se_bootstrap, jsonB.se_bootstrap);
 
         // Build a synthetic json for the renderer
         var diffJson = {
@@ -11301,6 +11368,7 @@ function generateCompDiffAzMean() {
             _nB: jsonB.n_cases,
             _filtersA: filtersA,
             _filtersB: filtersB,
+            _sigMask: sigMask,
             variable: {
                 key: jsonA.variable.key,
                 display_name: '\u0394 ' + jsonA.variable.display_name,
@@ -11508,6 +11576,12 @@ function _renderDiffAzMean(targetId, diffJson, jsonA, jsonB, filtersA, filtersB)
 
     _registerShadingTargets('shd-daz-d', ['comp-diff-az-d'], _DIFF_COLORSCALE, diffVarInfo.vmin, diffVarInfo.vmax);
     buildAzPlot('comp-diff-az-d', diffJson.azimuthal_mean, titleD, _DIFF_COLORSCALE, diffVarInfo.vmin, diffVarInfo.vmax, diffVarInfo.units, diffJson);
+
+    // Stipple non-significant bins on the difference panel (two-sample z-test
+    // on bootstrap SEs). Added as an extra trace via Plotly.addTraces so the
+    // heatmap/overlay rendering above isn't touched.
+    var stipple = _stippleTrace(diffJson._sigMask, radius, height_km);
+    if (stipple) Plotly.addTraces('comp-diff-az-d', [stipple]);
 }
 
 function _renderDiffQuadMean(targetId, diffJson, jsonA, jsonB, filtersA, filtersB) {

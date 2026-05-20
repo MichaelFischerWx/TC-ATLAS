@@ -3426,6 +3426,8 @@ def composite_azimuthal_mean(
     dr_rmw:        float = Query(0.25,  ge=0.05, le=2,  description="Radial bin width in R/RMW (or km when normalize_rmw=false)"),
     coverage_min:  float = Query(0.25,  ge=0.0, le=1.0),
     stream:        bool  = Query(False,                  description="Stream NDJSON progress events"),
+    bootstrap:     bool  = Query(False,                  description="Return per-bin bootstrap standard error (~5x slower)"),
+    n_iter:        int   = Query(500,   ge=100, le=5000, description="Bootstrap iterations (used when bootstrap=true)"),
     min_intensity:  float = Query(0),    max_intensity:  float = Query(200),
     min_vmax_change:float = Query(-100), max_vmax_change:float = Query(85),
     min_tilt:       float = Query(0),    max_tilt:       float = Query(200),
@@ -3503,6 +3505,9 @@ def composite_azimuthal_mean(
         r_centers = None
         n_processed = 0
         processed_indices = []
+        # Only retain per-case 2D stack when bootstrap SE is requested — costs
+        # ~4 MB per 1000 cases on a typical (r, z) grid.
+        per_case_stack = [] if bootstrap else None
 
         def _accum_az(result):
             nonlocal accum_sum, accum_count, ov_accum_sum, ov_accum_count
@@ -3522,6 +3527,8 @@ def composite_azimuthal_mean(
                 ov_valid = ~np.isnan(ov_az)
                 ov_accum_sum[ov_valid] += ov_az[ov_valid]
                 ov_accum_count[ov_valid] += 1
+            if per_case_stack is not None:
+                per_case_stack.append(az_mean.astype(np.float32))
             n_processed += 1
             processed_indices.append(case_idx)
 
@@ -3535,6 +3542,21 @@ def composite_azimuthal_mean(
 
         min_cases = max(3, int(np.ceil(0.33 * n_processed)))
         composite = np.where(accum_count >= min_cases, accum_sum / accum_count, np.nan)
+
+        # Bootstrap standard error: resample cases with replacement, take the
+        # per-bin std of the resampled means. Used downstream by the frontend
+        # as input to a two-sample z-test for difference-of-means stippling.
+        se_bootstrap = None
+        if per_case_stack is not None and n_processed >= 5:
+            stack = np.stack(per_case_stack, axis=0)  # (n_cases, n_h, n_r)
+            rng = np.random.default_rng(seed=42)
+            boot_means = np.empty((n_iter,) + composite.shape, dtype=np.float32)
+            for i in range(n_iter):
+                idx = rng.integers(0, n_processed, n_processed)
+                boot_means[i] = np.nanmean(stack[idx], axis=0)
+            se_bootstrap = np.nanstd(boot_means, axis=0)
+            # Mask bins where the original composite was masked (under min_cases)
+            se_bootstrap = np.where(np.isnan(composite), np.nan, se_bootstrap)
 
         result = {
             "azimuthal_mean": _clean_2d(composite),
@@ -3564,6 +3586,10 @@ def composite_azimuthal_mean(
                 "shear_dir": [min_shear_dir, max_shear_dir],
             },
         }
+
+        if se_bootstrap is not None:
+            result["se_bootstrap"] = _clean_2d(se_bootstrap)
+            result["bootstrap_n_iter"] = n_iter
 
         if overlay and ov_accum_sum is not None:
             ov_composite = np.where(ov_accum_count >= min_cases, ov_accum_sum / ov_accum_count, np.nan)
