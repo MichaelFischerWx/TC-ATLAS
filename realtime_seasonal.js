@@ -59,7 +59,10 @@
               stat: 'pearson', topN: 'auto' },
         idx: { window: '10', variable: 'anom' },
         anomZoom: 'global',
-        anomVar: 'raw',     // Panel A: 'raw' or 'relative'
+        anomVar: 'raw',     // Panel A: 'raw' | 'relative' | 'shear_climo'
+        // Calendar month for ERA5 climatology view. Defaults to UTC
+        // "now"; user-selectable when in shear_climo mode.
+        anomMonth: (new Date()).getUTCMonth() + 1,
     };
 
     // Basin-zoom presets for Panel A. Each maps to a viewport in the
@@ -2706,8 +2709,10 @@
             return;
         }
         // SST family — restore the legend to °C labels + RdBu_r gradient
-        // in case the user just toggled away from Atmosphere mode.
+        // and hide the Month selector (SST is "today", not a specific
+        // calendar month).
         _applyAnomLegend('sst');
+        _setAnomMonthVisible(false);
         if (!state.latest) return;
         var isRel = state.anomVar === 'relative';
         var pngName = isRel
@@ -2764,13 +2769,14 @@
         return _shearClimoManifestPromise;
     }
     function _renderShearClimoMap(img, cap) {
-        var monthNow = (new Date()).getUTCMonth() + 1;
+        var monthNow = state.anomMonth || ((new Date()).getUTCMonth() + 1);
         var mm = (monthNow < 10 ? '0' : '') + monthNow;
         var pngUrl  = ERA5_CLIMO_BASE + '/shear_' + mm + '.png';
         var gridUrl = ERA5_CLIMO_BASE + '/shear_' + mm + '.grid.json';
 
         cap.textContent = 'Loading ERA5 climatology…';
         _applyAnomLegend('shear');
+        _setAnomMonthVisible(true);
 
         _loadShearClimoManifest().then(function (manifest) {
             var months = manifest && manifest.months_rendered;
@@ -2824,6 +2830,24 @@
             _renderAnomMap();
             _ga('rt_seasonal_anom_var', { variable: sel.value });
         });
+        // Month selector — only active in Atmosphere (shear_climo) mode.
+        var msel = document.getElementById('seasonal-anom-month');
+        if (msel && !msel._bound) {
+            msel._bound = true;
+            msel.value = String(state.anomMonth);
+            msel.addEventListener('change', function () {
+                state.anomMonth = parseInt(msel.value, 10);
+                _renderAnomMap();
+                _ga('rt_seasonal_anom_month', { month: state.anomMonth });
+            });
+        }
+    }
+
+    // Toggle the Month selector visibility (CSS display) — shown only
+    // when Panel A is in Atmosphere (shear_climo) mode.
+    function _setAnomMonthVisible(show) {
+        var lbl = document.getElementById('seasonal-anom-month-label');
+        if (lbl) lbl.style.display = show ? '' : 'none';
     }
 
     /* Generic map-hover wiring used by every panel that shows a 2D
@@ -2889,6 +2913,14 @@
             'seasonal-anom-wrap', 'seasonal-anom-img', 'seasonal-anom-tooltip',
             function () { return state.anom_grid; },
             function (v) {
+                // Per-mode formatter — _wireMapHover binds the formatter
+                // closure once, but `state.anomVar` is read fresh on each
+                // mousemove so the units flip with the variable selector.
+                if (state.anomVar === 'shear_climo') {
+                    return (v === null || v === undefined)
+                        ? 'no data'
+                        : v.toFixed(1) + ' m/s shear';
+                }
                 return (v === null || v === undefined)
                     ? 'land / no data'
                     : (v >= 0 ? '+' : '') + v.toFixed(2) + ' °C anom';

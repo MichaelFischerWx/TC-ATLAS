@@ -189,19 +189,30 @@ def render_shear_png(monthly_clim: np.ndarray, month: int) -> bytes:
 
 
 def render_grid_sidecar(monthly_clim: np.ndarray) -> bytes:
-    """Hover-tooltip values at 1° lat × 1° lon. Stored Pacific-centered
-    (lon 100..459°) to match the PNG frame and the OISST grid sidecars
-    that Panel A's hover machinery was built against. The frontend
-    looks up by (lat, lon) → idx using lat_first/lon_first."""
-    rolled = _roll_to_pacific_centered(monthly_clim)
+    """Hover-tooltip values at 1° lat × 1° lon, matching the SST
+    sidecar format (build_seasonal_diagnostics.render_anomaly_png) so
+    Panel A's existing hover machinery (_wireAnomHover) can read this
+    grid with the same lat_min/lat_max/lon_min/lon_max/n_lat/n_lon
+    convention.
+
+    Orientation: south-to-north (values[0] = lat_min). West-to-east
+    in the Pacific-centered frame (values[i][0] = lon 100°E).
+    Cropped to the visible 100°-360°E PNG window (cols 0..260 of
+    the rolled array).
+    """
+    rolled = _roll_to_pacific_centered(monthly_clim)          # (121, 360), N→S, lon 100..459
+    visible = rolled[:, : int(PNG_LON_MAX - PNG_LON_MIN) + 1]  # cols 0..260, lons 100..360
+    south_to_north = visible[::-1, :]                          # flip lat so row 0 = -60
+    n_lat, n_lon = south_to_north.shape
     payload = {
-        "lat_first": PNG_LAT_MAX, "lat_last": PNG_LAT_MIN, "lat_step": -1.0,
-        "lon_first": PNG_LON_MIN, "lon_last": PNG_LON_MAX, "lon_step": 1.0,
-        "shape": [NY, NX],
+        "lat_min": PNG_LAT_MIN, "lat_max": PNG_LAT_MAX,
+        "lon_min": PNG_LON_MIN, "lon_max": PNG_LON_MAX,
+        "cell_size_deg": 1.0,
+        "n_lat": int(n_lat), "n_lon": int(n_lon),
         "units": "m s-1",
         "values": [
             [round(float(v), 3) if np.isfinite(v) else None for v in row]
-            for row in rolled
+            for row in south_to_north
         ],
     }
     return json.dumps(payload, separators=(",", ":")).encode()
