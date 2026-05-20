@@ -47,7 +47,7 @@
         ts: { region: 'atl_mdr', variable: 'sst', history: 'all',
               highlight: 'none', resolution: 'monthly' },
         an: { year: null, month: 5, regions: 'all',
-              method: 'grid_weighted', basin: 'NA', kind: 'raw',
+              method: 'grid_weighted', basin: 'NA', kind: 'relative',
               stat: 'pearson', topN: 'auto' },
         idx: { window: '10', variable: 'anom' },
         anomZoom: 'global',
@@ -2231,12 +2231,14 @@
         var summary = document.getElementById('seasonal-an-weights-summary');
         if (summary) {
             if (state.an.method === 'grid_weighted') {
+                var kindLabel = (state.an.kind === 'detrended') ? 'detrended'
+                              : (state.an.kind === 'relative')  ? 'relative (Vecchi-Soden)'
+                              : 'raw';
                 summary.innerHTML =
                     '<strong>Pixel-weighted distance</strong> over the full ' +
                     '0.25° SST anomaly field. Each cell\'s weight = ' +
                     '|r(SST<sub>cell</sub>, ' + state.an.basin + ' ACE)| at ' +
-                    'month ' + state.an.month + ' (' +
-                    (state.an.kind === 'detrended' ? 'detrended' : 'raw') +
+                    'month ' + state.an.month + ' (' + kindLabel +
                     '). Land/NaN cells contribute zero.';
             } else if (bundle.weights) {
                 var pairs = bundle.regions.map(function (r, idx) {
