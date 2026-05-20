@@ -1204,7 +1204,89 @@ def build_shear(date_str: str, hour_str: str, *, forecast_hour: int = 0,
             "shear represents the environment a storm would experience)."
         ),
     )
+    # Side-effect: capture per-region shear means and append to the
+    # tc-atlas-ir-cache/seasonal/shear_mtd_current_year.parquet that
+    # Panel B's Atmosphere mode reads. See append_gfs_shear_regions().
+    try:
+        append_gfs_shear_regions(date_str, hour_str, forecast_hour, shear_kt)
+    except Exception as e:
+        log.warning("  region-mean shear append failed (non-fatal): %s", e)
     return shear_kt if upload_layer(spec, shear_kt) else None
+
+
+def append_gfs_shear_regions(date_str: str, hour_str: str,
+                             forecast_hour: int, shear_global_kt: np.ndarray) -> None:
+    """Feed Panel B (Seasonal · Atmosphere mode) and Panel A's
+    trailing-30-day current-anomaly view. Pulls per-region cos(lat)-
+    weighted shear means out of the freshly-computed global GFS field,
+    converts to m/s (to match ERA5 conventions) and upserts one row per
+    (date, cycle, fh) into the seasonal/shear daily store on GCS.
+
+    The cron writes a per-day mean across all of that day's f000 cycles
+    so the downstream MTD / trailing-30-day calculations stay simple
+    (one value per region per day) while the underlying cycle/fh rows
+    preserve provenance.
+    """
+    # Lazy imports — keep build_env_overlays.py importable without these
+    # if a user runs a single layer locally.
+    from build_oisst_history import REGIONS    # noqa: WPS433
+    import pandas as pd                         # noqa: WPS433
+
+    # shear_global_kt is on the regrid_to_global() grid: 1° global,
+    # lats descending 90..-90 (181 rows), lons -180..179 (360 cols).
+    lats = np.arange(90.0, -90.5, -1.0)
+    cos_lat = np.cos(np.deg2rad(lats))
+    shear_mps = shear_global_kt / 1.94384      # back to m/s
+
+    row = {
+        "date": date_str,
+        "cycle": hour_str,
+        "fh": int(forecast_hour),
+    }
+    for name, (lat_s, lat_n, lon_w, lon_e) in REGIONS.items():
+        # REGIONS use 0..360 longitudes; the global grid is -180..180.
+        lw = lon_w - 360.0 if lon_w > 180.0 else lon_w
+        le = lon_e - 360.0 if lon_e > 180.0 else lon_e
+        lat_mask = (lats >= lat_s) & (lats <= lat_n)
+        lons = np.arange(-180.0, 180.0, 1.0)
+        if lw <= le:
+            lon_mask = (lons >= lw) & (lons <= le)
+        else:
+            lon_mask = (lons >= lw) | (lons <= le)
+        sub = shear_mps[lat_mask][:, lon_mask]
+        w = cos_lat[lat_mask][:, None] * np.ones_like(sub)
+        finite = np.isfinite(sub)
+        w = np.where(finite, w, 0.0)
+        s = np.where(finite, sub, 0.0)
+        den = float(w.sum())
+        row[f"{name}_shear"] = round(float((s * w).sum() / den), 4) if den > 0 else None
+
+    # Idempotent append into a small parquet on GCS — same bucket the
+    # env-overlay layers already live in, under a /seasonal/ prefix.
+    if not GCS_BUCKET:
+        log.info("  GCS_IR_CACHE_BUCKET not set; skipping shear append")
+        return
+    blob_name = "seasonal/shear_mtd_current_year.parquet"
+    bucket = storage.Client().bucket(GCS_BUCKET)
+    blob = bucket.blob(blob_name)
+    if blob.exists():
+        buf = io.BytesIO(blob.download_as_bytes())
+        df = pd.read_parquet(buf)
+    else:
+        df = pd.DataFrame(columns=list(row.keys()))
+    # Upsert by (date, cycle, fh) — re-runs of the cron overwrite.
+    mask = ((df["date"] == row["date"])
+            & (df["cycle"] == row["cycle"])
+            & (df["fh"] == row["fh"]))
+    if mask.any():
+        df = df[~mask]
+    df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
+    df.sort_values(["date", "cycle", "fh"], inplace=True)
+    df.reset_index(drop=True, inplace=True)
+    out = io.BytesIO()
+    df.to_parquet(out, compression="snappy", index=False)
+    blob.cache_control = "no-cache, max-age=60"
+    blob.upload_from_string(out.getvalue(), content_type="application/octet-stream")
 
 
 def build_midlevel_shear(date_str: str, hour_str: str, *, forecast_hour: int = 0,
