@@ -463,6 +463,83 @@ def append_to_daily_parquet(row: dict) -> None:
     _upload_blob(json_local, json_name, "application/json")
 
 
+def refresh_monthly_preliminary(climo_mean: xr.DataArray) -> None:
+    """Patch the current-month preliminary row in indices_monthly.parquet
+    so Panel C stays current between manual `build_oisst_history --step
+    monthly_indices` runs. Without this, Panel C only refreshes when
+    someone manually re-runs the backfill — the daily cron previously
+    only touched the daily files, never the monthly one.
+
+    Process: pull the existing parquet from GCS → compute a fresh
+    preliminary row via `_fetch_current_month_preliminary` (same OPeNDAP
+    logic the backfill uses) → drop any old preliminary for this month →
+    splice the fresh row in → upload parquet + JSON sidecar.
+
+    Note: the `{region}_sst_dt` (detrended) column for the preliminary
+    row is left as NaN here. Computing the per-region linear-in-year
+    trend would require iterating all finalized rows of this month,
+    region-by-region. For tonight, Panel C's `Variable=SST detrended`
+    selector simply won't have a preliminary star for the current month
+    until the next full backfill; raw SST / anom / rel-anom are all
+    fresh.
+    """
+    import pandas as pd
+    from build_oisst_history import (_fetch_current_month_preliminary,
+                                     REGIONS,
+                                     CLIMO_START_YEAR, CLIMO_END_YEAR)
+
+    name = "indices_monthly.parquet"
+    local = WORK_DIR / name
+    if not _download_blob(name, local):
+        log.warning("  no indices_monthly.parquet on GCS; skipping monthly refresh")
+        return
+    df = pd.read_parquet(local)
+
+    today = datetime.now(timezone.utc).date()
+    cur_month = f"{today.year}-{today.month:02d}"
+    log.info("  fetching preliminary month-to-date for %s ...", cur_month)
+    prelim = _fetch_current_month_preliminary(climo_mean)
+    if prelim is None:
+        log.warning("  preliminary fetch returned None; skipping monthly refresh")
+        return
+
+    # Drop any existing row for this month (finalized or preliminary).
+    df = df[df["date"] != cur_month]
+    # Build the new row, aligned to the parquet schema (missing cols → NaN).
+    new_row = pd.DataFrame([prelim])
+    for col in df.columns:
+        if col not in new_row.columns:
+            new_row[col] = pd.NA
+    new_row = new_row[df.columns]
+    df = pd.concat([df, new_row], ignore_index=True)
+    df = df.sort_values("date").reset_index(drop=True)
+
+    df.to_parquet(local, compression="snappy", index=False)
+    _upload_blob(local, name, "application/octet-stream")
+
+    # JSON sidecar in the same shape build_indices writes.
+    value_cols = [c for c in df.columns
+                  if c not in ("date", "preliminary", "n_days", "as_of")]
+
+    def _to_jsonable(s):
+        return [None if pd.isna(v) else round(float(v), 3) for v in s]
+
+    payload = {
+        "regions": list(REGIONS.keys()),
+        "dates": df["date"].tolist(),
+        "values": {col: _to_jsonable(df[col]) for col in value_cols},
+        "preliminary": df["preliminary"].astype(bool).tolist(),
+        "preliminary_n_days": df["n_days"].astype(int).tolist(),
+        "climatology_period": f"{CLIMO_START_YEAR}-{CLIMO_END_YEAR}",
+        "generated_utc": datetime.now(timezone.utc).isoformat(),
+    }
+    json_local = WORK_DIR / "indices_monthly.json"
+    json_local.write_text(json.dumps(payload, separators=(",", ":")))
+    _upload_blob(json_local, "indices_monthly.json", "application/json")
+    log.info("  refreshed monthly preliminary %s (n_days=%d)",
+             cur_month, int(prelim.get("n_days", 0)))
+
+
 def write_latest_json(row: dict, png_name: str) -> None:
     """Tiny pointer file used by the frontend for first-paint. Now also
     points to the Vecchi-Soden relative-anomaly PNG + grid sidecar so
@@ -526,6 +603,13 @@ def main():
                              "application/json")
         log.info("Appending daily indices parquet ...")
         append_to_daily_parquet(row)
+        log.info("Refreshing monthly preliminary row (Panel C) ...")
+        try:
+            refresh_monthly_preliminary(clim["sst_clim_mean"])
+        except Exception as e:
+            # Don't let a monthly-refresh failure block the rest of the
+            # daily run; the manual backfill still works as a fallback.
+            log.warning("  monthly refresh failed: %s", e)
         log.info("Writing latest.json ...")
         write_latest_json(row, f"anom_png/{row['date']}.png")
 

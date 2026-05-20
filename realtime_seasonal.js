@@ -1421,14 +1421,14 @@
                 type: 'scatter', mode: 'lines', x: doys, y: upper,
                 line: { color: 'transparent', width: 0 },
                 showlegend: false, hoverinfo: 'skip',
-                connectgaps: false,
+                connectgaps: true,   // bridge leap-DOY 60 in non-leap years
             });
             traces.push({
                 type: 'scatter', mode: 'lines', x: doys, y: lower,
                 fill: 'tonexty', fillcolor: BRAND.green_dim,
                 line: { color: 'transparent', width: 0 },
                 showlegend: true, hoverinfo: 'skip',
-                connectgaps: false,
+                connectgaps: true,   // bridge leap-DOY 60 in non-leap years
                 name: '1991-2020 ±1σ envelope (7-day smooth)',
             });
         }
@@ -1462,7 +1462,7 @@
                     legendgroup: 'history',
                     name: 'historical years (1982-' + (currentYear - 1) + ')',
                     hovertemplate: y + ' · DOY %{x}: %{y:.2f}<extra></extra>',
-                    connectgaps: false,
+                    connectgaps: true,   // bridge leap-DOY 60 in non-leap years
                 });
                 firstShown = false;
             }
@@ -1480,7 +1480,7 @@
                 name: String(highlightYear) + ' (highlighted)',
                 hovertemplate: highlightYear +
                     ' · DOY %{x}: %{y:.2f}<extra></extra>',
-                connectgaps: false,
+                connectgaps: true,   // bridge leap-DOY 60 in non-leap years
             });
         }
 
@@ -1491,7 +1491,7 @@
                 line: { color: BRAND.green_line, width: 2.5 },
                 name: '1991-2020 mean',
                 hovertemplate: 'Climatology · DOY %{x}: %{y:.2f}<extra></extra>',
-                connectgaps: false,
+                connectgaps: true,   // bridge leap-DOY 60 in non-leap years
             });
         }
 
@@ -1558,7 +1558,7 @@
                 name: String(currentYear) + ' (so far)',
                 hovertemplate: currentYear +
                     ' · DOY %{x}: %{y:.2f}<extra></extra>',
-                connectgaps: false,
+                connectgaps: true,   // bridge leap-DOY 60 in non-leap years
             });
             if (prelimDoys.length) {
                 traces.push({
@@ -1569,7 +1569,7 @@
                     name: 'last ~14 days (preliminary)',
                     hovertemplate: currentYear +
                         ' · DOY %{x}: %{y:.2f} (preliminary — OISST may revise)<extra></extra>',
-                    connectgaps: false,
+                    connectgaps: true,   // bridge leap-DOY 60 in non-leap years
                 });
             }
         }
