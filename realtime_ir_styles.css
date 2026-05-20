@@ -1929,7 +1929,12 @@ html:not([data-view="map"]) #ir-legend-toggle,
 html:not([data-view="map"]) #ir-labels-toggle,
 html:not([data-view="map"]) #ir-legend,
 html:not([data-view="map"]) #basin-sidebar-toggle,
-html:not([data-view="map"]) #basin-sidebar {
+html:not([data-view="map"]) #basin-sidebar,
+/* Env-overlay colorbar stack: also position:fixed on <body>, so hiding
+   #ir-main isn't enough. Toggling on a Global Map overlay and switching
+   to Subseasonal/Seasonal would otherwise leave the colorbar floating
+   over the new view. */
+html:not([data-view="map"]) #ir-global-env-cbars {
     display: none !important;
 }
 
