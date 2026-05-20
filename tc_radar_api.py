@@ -3546,14 +3546,45 @@ def composite_azimuthal_mean(
         # Bootstrap standard error: resample cases with replacement, take the
         # per-bin std of the resampled means. Used downstream by the frontend
         # as input to a two-sample z-test for difference-of-means stippling.
+        #
+        # Vectorized formulation: a bootstrap mean is equivalent to a weighted
+        # mean where the weights are multinomial counts of how many times each
+        # case was drawn. So we generate all n_iter weight vectors at once and
+        # reduce the entire bootstrap to a single BLAS matmul — typically
+        # 20-50x faster than a Python loop over n_iter, parallelized across
+        # vCPU cores by the underlying BLAS without explicit threading.
+        #
+        # NaN handling: zero out NaNs in the stack, but count valid samples
+        # per bin per iteration via a matching valid-mask matmul, then divide
+        # weighted sums by weighted valid-counts.
         se_bootstrap = None
         if per_case_stack is not None and n_processed >= 5:
-            stack = np.stack(per_case_stack, axis=0)  # (n_cases, n_h, n_r)
+            stack = np.stack(per_case_stack, axis=0)        # (n, h, r), float32
+            n = n_processed
+            n_h, n_r = stack.shape[1], stack.shape[2]
+
+            valid = (~np.isnan(stack)).astype(np.float32)
+            stack_zero = np.where(valid > 0, stack, 0.0).astype(np.float32)
+            stack_flat = stack_zero.reshape(n, n_h * n_r)
+            valid_flat = valid.reshape(n, n_h * n_r)
+
             rng = np.random.default_rng(seed=42)
-            boot_means = np.empty((n_iter,) + composite.shape, dtype=np.float32)
-            for i in range(n_iter):
-                idx = rng.integers(0, n_processed, n_processed)
-                boot_means[i] = np.nanmean(stack[idx], axis=0)
+            # int16 is plenty: each count is bounded by n <= _COMPOSITE_MAX_CASES
+            # (currently 1000), well under int16's 32k limit. Halves the W
+            # footprint vs float32. Cast to float32 only for the matmul.
+            W = rng.multinomial(n, [1.0 / n] * n, size=n_iter).astype(np.int16)
+            W_f = W.astype(np.float32)
+
+            weighted_sums   = W_f @ stack_flat              # (n_iter, h*r)
+            weighted_counts = W_f @ valid_flat              # (n_iter, h*r)
+
+            with np.errstate(invalid="ignore", divide="ignore"):
+                boot_means = np.where(
+                    weighted_counts > 0,
+                    weighted_sums / weighted_counts,
+                    np.nan,
+                ).reshape(n_iter, n_h, n_r)
+
             se_bootstrap = np.nanstd(boot_means, axis=0)
             # Mask bins where the original composite was masked (under min_cases)
             se_bootstrap = np.where(np.isnan(composite), np.nan, se_bootstrap)
