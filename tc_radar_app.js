@@ -30,7 +30,8 @@ var _ICON_PATHS = {
     map:       '<polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21"/><line x1="9" y1="3" x2="9" y2="18"/><line x1="15" y1="6" x2="15" y2="21"/>',
     beaker:    '<path d="M9 2v7.527a2 2 0 0 1-.211.896L4.72 18.55a1 1 0 0 0 .9 1.45h12.76a1 1 0 0 0 .9-1.45l-4.069-8.127A2 2 0 0 1 15 9.527V2"/><path d="M6 2h12"/><path d="M8.5 14h7"/>',
     waves:     '<path d="M2 6c2 0 2-1 4-1s2 1 4 1 2-1 4-1 2 1 4 1 2-1 4-1"/><path d="M2 12c2 0 2-1 4-1s2 1 4 1 2-1 4-1 2 1 4 1 2-1 4-1"/><path d="M2 18c2 0 2-1 4-1s2 1 4 1 2-1 4-1 2 1 4 1 2-1 4-1"/>',
-    thermo:    '<path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4 4 0 1 0 5 0z"/>'
+    thermo:    '<path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4 4 0 1 0 5 0z"/>',
+    download:  '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>'
 };
 function _icon(name) {
     return '<svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (_ICON_PATHS[name] || '') + '</svg>';
@@ -10716,6 +10717,126 @@ function _buildSigMask(diffData, seA, seB) {
     return mask;
 }
 
+// Toolbar above a diff result: layout toggle (stacked / side-by-side) + a
+// "Save composite PNG" button that grabs all panels via Plotly.toImage and
+// stacks them onto a single canvas in the active layout. Returns the HTML to
+// inject; pair with `_initDiffPanelToolbar(toolbarId, gridId, panelIds)` after
+// rendering. Designed so any diff renderer can adopt it by:
+//   1. Wrapping its panel divs in <div class="diff-panel-grid" id="...">
+//   2. Prepending _buildDiffPanelToolbar(...)
+//   3. Calling _initDiffPanelToolbar(...) after Plotly.newPlot
+function _buildDiffPanelToolbar(toolbarId) {
+    return '<div class="diff-panel-toolbar" id="' + toolbarId + '">' +
+        '<span class="dpt-label">Layout</span>' +
+        '<button class="dpt-btn dpt-mode-stacked is-active" data-mode="stacked" title="Stacked rows">≡ Stacked</button>' +
+        '<button class="dpt-btn dpt-mode-cols"             data-mode="cols"    title="Side-by-side columns">⦀ Side-by-side</button>' +
+        '<span class="dpt-spacer"></span>' +
+        '<button class="dpt-btn dpt-save-composite" title="Combine all panels into one PNG">' + _icon('download') + ' Save composite PNG</button>' +
+    '</div>';
+}
+
+function _initDiffPanelToolbar(toolbarId, gridId, panelIds, fileStem) {
+    var bar = document.getElementById(toolbarId);
+    var grid = document.getElementById(gridId);
+    if (!bar || !grid) return;
+
+    function setMode(mode) {
+        grid.classList.toggle('diff-cols', mode === 'cols');
+        bar.querySelectorAll('.dpt-btn[data-mode]').forEach(function(b) {
+            b.classList.toggle('is-active', b.getAttribute('data-mode') === mode);
+        });
+        // Plotly's autosize sets inline width on each chart div, which then
+        // sticks across grid-template changes (first track grabs everything).
+        // Clear the inline width AND the internal Plotly autosize cache so the
+        // chart picks up the new grid cell dimensions on resize.
+        panelIds.forEach(function(id) {
+            var el = document.getElementById(id);
+            if (el) el.style.width = '';
+        });
+        // setTimeout(0) lets the layout flush before measuring + resizing.
+        setTimeout(function() {
+            panelIds.forEach(function(id) {
+                var el = document.getElementById(id);
+                if (el && el._fullLayout && window.Plotly) Plotly.Plots.resize(el);
+            });
+        }, 0);
+    }
+
+    bar.querySelectorAll('.dpt-btn[data-mode]').forEach(function(b) {
+        b.addEventListener('click', function() { setMode(b.getAttribute('data-mode')); });
+    });
+    var save = bar.querySelector('.dpt-save-composite');
+    if (save) save.addEventListener('click', function() {
+        var mode = grid.classList.contains('diff-cols') ? 'cols' : 'stacked';
+        _saveDiffComposite(panelIds, fileStem, mode, save);
+    });
+}
+
+// Composite N Plotly panels into a single PNG matching the active layout.
+// Reads each panel's actual on-screen size so the composite respects whatever
+// the user has done with the shading controls / window resize.
+function _saveDiffComposite(panelIds, fileStem, mode, btn) {
+    if (!window.Plotly) return;
+    var scale = 2;  // 2x retina for figure-quality output
+    if (btn) { var orig = btn.innerHTML; btn.innerHTML = 'Rendering…'; btn.disabled = true; }
+    // Snapshot each panel as a data URL at its current pixel size
+    var snaps = panelIds.map(function(id) {
+        var el = document.getElementById(id);
+        if (!el) return Promise.resolve(null);
+        var rect = el.getBoundingClientRect();
+        var w = Math.max(400, Math.round(rect.width));
+        var h = Math.max(300, Math.round(rect.height));
+        return Plotly.toImage(el, { format: 'png', width: w, height: h, scale: scale })
+            .then(function(url) { return { url: url, w: w * scale, h: h * scale }; });
+    });
+    return Promise.all(snaps).then(function(items) {
+        items = items.filter(function(x) { return x != null; });
+        return Promise.all(items.map(function(it) {
+            return new Promise(function(resolve, reject) {
+                var img = new Image();
+                img.onload  = function() { resolve({ img: img, w: it.w, h: it.h }); };
+                img.onerror = reject;
+                img.src = it.url;
+            });
+        }));
+    }).then(function(imgs) {
+        var canvas = document.createElement('canvas');
+        var ctx;
+        if (mode === 'cols') {
+            // Pad each panel to the max height; lay out left-to-right
+            var totalW = imgs.reduce(function(a, i) { return a + i.w; }, 0);
+            var maxH   = imgs.reduce(function(a, i) { return Math.max(a, i.h); }, 0);
+            canvas.width = totalW; canvas.height = maxH;
+            ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+            var x = 0;
+            imgs.forEach(function(it) { ctx.drawImage(it.img, x, 0, it.w, it.h); x += it.w; });
+        } else {
+            // Stacked: pad each panel to the max width; lay out top-to-bottom
+            var maxW   = imgs.reduce(function(a, i) { return Math.max(a, i.w); }, 0);
+            var totalH = imgs.reduce(function(a, i) { return a + i.h; }, 0);
+            canvas.width = maxW; canvas.height = totalH;
+            ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+            var y = 0;
+            imgs.forEach(function(it) { ctx.drawImage(it.img, 0, y, it.w, it.h); y += it.h; });
+        }
+        return new Promise(function(resolve) {
+            canvas.toBlob(function(blob) {
+                var ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+                var name = (fileStem || 'tc_radar_composite') + '_' + ts + '.png';
+                _triggerDownload(blob, name, 'image/png');
+                if (btn) { btn.innerHTML = orig; btn.disabled = false; }
+                resolve();
+            }, 'image/png');
+        });
+    }).catch(function(err) {
+        console.error('Composite save failed:', err);
+        if (btn) { btn.innerHTML = orig; btn.disabled = false; }
+        alert('Could not render composite PNG: ' + (err && err.message ? err.message : err));
+    });
+}
+
 // Build a Plotly scatter trace of small dots positioned at the centers of
 // bins where sigMask is FALSE (i.e., not significant). Pass to Plotly.newPlot
 // as an additional trace on top of the heatmap.
@@ -12095,17 +12216,19 @@ function _renderDiffCFAD(targetId, jsonA, jsonB, filtersA, filtersB) {
     if (jsonA.quadrants && jsonA.quadrants.length > 0) quadNote = ' | ' + jsonA.quadrants.join('+');
     var binNote = ' | Bin=' + jsonA.bin_width + ' ' + varInfo.units;
 
-    // Build 3 panels: A, B, Difference
+    // Build 3 panels: A, B, Difference (wrapped in a diff-panel-grid so the
+    // layout toggle can flip stacked ↔ side-by-side with one class change)
     var panels = ['A', 'B', 'Diff'];
-    var panelHtml = '';
+    var panelHtml = '<div class="diff-panel-grid" id="diff-grid-cfad">';
     for (var pi = 0; pi < 3; pi++) {
-        panelHtml += '<div id="comp-diff-cfad-' + panels[pi].toLowerCase() + '" style="width:100%;height:460px;border-radius:8px;overflow:hidden;margin-bottom:8px;"></div>';
+        panelHtml += '<div id="comp-diff-cfad-' + panels[pi].toLowerCase() + '" class="diff-panel-cell" style="width:100%;min-height:460px;border-radius:8px;overflow:hidden;"></div>';
     }
+    panelHtml += '</div>';
 
     el.style.display = 'block';
     jsonA._isDiff = true; jsonA.case_list_b = jsonB.case_list; jsonA._nA = jsonA.n_cases; jsonA._nB = jsonB.n_cases;
     _lastCompJson = jsonA; _lastCompType = 'cfad_diff';
-    el.innerHTML = panelHtml +
+    el.innerHTML = _buildDiffPanelToolbar('diff-toolbar-cfad') + panelHtml +
         _buildShadingControlsRow('shd-dcfad-ab', {label: 'Panels A &amp; B', defaultVmin: plotZmin, defaultVmax: plotZmax}) +
         _buildShadingControlsRow('shd-dcfad-d', {label: 'Difference', defaultVmin: 'min', defaultVmax: 'max'}) +
         _buildCompToolbar();
@@ -12122,7 +12245,7 @@ function _renderDiffCFAD(targetId, jsonA, jsonB, filtersA, filtersB) {
         xaxis:{title:{text:varInfo.display_name+' ('+varInfo.units+')',font:{color: '#5b6573',size:fontSize.axis}},tickfont:{color: '#5b6573',size:fontSize.tick},gridcolor:'rgba(15, 22, 35,0.22)',zeroline:false},
         yaxis:{title:{text:'Height (km)',font:{color: '#5b6573',size:fontSize.axis}},tickfont:{color: '#5b6573',size:fontSize.tick},gridcolor:'rgba(15, 22, 35,0.22)',zeroline:false},
         margin:{l:55,r:24,t:80,b:50}, hoverlabel:{bgcolor:'#ffffff',font:{color:'#0f1623',size:fontSize.hover}}, showlegend:false };
-    Plotly.newPlot('comp-diff-cfad-a', [trA], layA, {responsive:true,displayModeBar:false});
+    Plotly.newPlot('comp-diff-cfad-a', [trA], layA, {responsive:true,displayModeBar:true,displaylogo:false,modeBarButtonsToRemove:['lasso2d','select2d','toggleSpikelines']});
 
     // Render B
     var dataB = useLog ? _cfadApplyLog(jsonB.cfad) : jsonB.cfad;
@@ -12132,7 +12255,7 @@ function _renderDiffCFAD(targetId, jsonA, jsonB, filtersA, filtersB) {
     var titleB = '<span style="color:#f59e0b;">Group B</span> (N=' + jsonB.n_cases + ')' + binNote + radialNote + quadNote;
     var layB = JSON.parse(JSON.stringify(layA));
     layB.title.text = titleB;
-    Plotly.newPlot('comp-diff-cfad-b', [trB], layB, {responsive:true,displayModeBar:false});
+    Plotly.newPlot('comp-diff-cfad-b', [trB], layB, {responsive:true,displayModeBar:true,displaylogo:false,modeBarButtonsToRemove:['lasso2d','select2d','toggleSpikelines']});
 
     // Render Difference — apply signed log transform if log-scale enabled
     var diffPlotData, diffZmin, diffZmax, diffCbarTitle, diffCustomData = null;
@@ -12169,6 +12292,10 @@ function _renderDiffCFAD(targetId, jsonA, jsonB, filtersA, filtersB) {
 
     _registerShadingTargets('shd-dcfad-d', ['comp-diff-cfad-diff'], _DIFF_COLORSCALE, diffZmin, diffZmax);
     Plotly.newPlot('comp-diff-cfad-diff', [trD], layD, {responsive:true,displayModeBar:true,displaylogo:false,modeBarButtonsToRemove:['lasso2d','select2d','toggleSpikelines']});
+
+    _initDiffPanelToolbar('diff-toolbar-cfad', 'diff-grid-cfad',
+        ['comp-diff-cfad-a', 'comp-diff-cfad-b', 'comp-diff-cfad-diff'],
+        'tc_radar_cfad_diff');
 }
 
 function _renderDiffCFADMulti(targetId, jsonA, jsonB, filtersA, filtersB) {

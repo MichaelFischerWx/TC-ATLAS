@@ -1183,6 +1183,60 @@ footer a:hover { text-decoration: underline; }
     color: #94a3b8; margin: 12px 0 6px; padding-top: 8px;
     border-top: 1px dashed rgba(148, 163, 184, 0.25); cursor: help;
 }
+
+/* Diff-result panel layout: grid of A / B / Δ panels. Default = stacked rows;
+   .diff-cols flips to side-by-side 3-column layout. */
+.diff-panel-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+.diff-panel-grid.diff-cols {
+    /* minmax(0, 1fr) overrides the implicit min-content floor so Plotly
+       charts can shrink with the column instead of pushing siblings to 0px. */
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
+}
+.diff-panel-grid.diff-cols .diff-panel-cell {
+    min-height: 400px;
+    min-width: 0;
+}
+
+/* Toolbar above the diff-panel grid: layout toggle + composite export */
+.diff-panel-toolbar {
+    display: flex; align-items: center; gap: 6px;
+    padding: 6px 10px; margin: 0 0 8px;
+    background: rgba(15, 22, 35, 0.04);
+    border: 1px solid rgba(15, 22, 35, 0.08);
+    border-radius: 8px;
+    font: 600 11px 'JetBrains Mono', monospace;
+}
+.diff-panel-toolbar .dpt-label {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.06em;
+    text-transform: uppercase; color: #94a3b8;
+}
+.diff-panel-toolbar .dpt-btn {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 4px 10px; font: 600 11px 'JetBrains Mono', monospace;
+    background: #ffffff; color: var(--slate);
+    border: 1px solid rgba(15, 22, 35, 0.12); border-radius: 6px;
+    cursor: pointer; transition: all 0.12s;
+}
+.diff-panel-toolbar .dpt-btn:hover:not(:disabled) {
+    background: rgba(34, 211, 238, 0.08);
+    border-color: rgba(34, 211, 238, 0.4);
+    color: #0891b2;
+}
+.diff-panel-toolbar .dpt-btn.is-active {
+    background: rgba(34, 211, 238, 0.15);
+    border-color: rgba(34, 211, 238, 0.5);
+    color: #0e7490;
+}
+.diff-panel-toolbar .dpt-btn:disabled { opacity: 0.6; cursor: wait; }
+.diff-panel-toolbar .dpt-spacer { flex: 1; }
+.diff-panel-toolbar .dpt-btn .icon-inline {
+    width: 13px; height: 13px;
+}
 .wizard-case-count {
     margin-top: 14px; padding: 12px; text-align: center;
     background: rgba(34,211,238,0.05); border: 1px solid rgba(34,211,238,0.15);
