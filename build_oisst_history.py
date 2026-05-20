@@ -1999,6 +1999,14 @@ def build_current_year_sidecar(daily_path: Path, out_path: Path,
     out_path.write_text(json.dumps(payload, separators=(",", ":")))
     log.info("Done: %s (%d rows, %.1f KB)",
              out_path, len(sub), out_path.stat().st_size / 1024.0)
+    # Also write the matching parquet — the daily Cloud Run Job reads
+    # this file on each tick and appends the new day. Seeding it with
+    # the full year-to-date prevents the cron from clobbering the
+    # sidecar with a 2-row file the first time it runs.
+    parq_path = out_path.with_suffix(".parquet")
+    sub.to_parquet(parq_path, compression="snappy", index=False)
+    log.info("Done: %s (%d rows, %.1f KB)",
+             parq_path, len(sub), parq_path.stat().st_size / 1024.0)
     return out_path
 
 
@@ -2032,11 +2040,14 @@ def upload_to_gcs(local_dir: Path) -> None:
         ("indices_daily_full.parquet",   "application/octet-stream"),
         ("clim_daily_1991_2020.json",    "application/json"),
         ("trend_daily_1982_present.json", "application/json"),
-        # The current-year sidecar is normally written by the daily
-        # Cloud Run Job (build_seasonal_diagnostics.py), but we also
-        # upload it from the backfill so the very first deploy has a
-        # live-year curve before the cron's next tick.
-        ("indices_daily_current_year.json", "application/json"),
+        # The current-year sidecar + parquet are normally appended-to by
+        # the daily Cloud Run Job (build_seasonal_diagnostics.py), but
+        # we also upload both from the backfill so the very first deploy
+        # has a live-year curve AND the cron's parquet has a proper base
+        # to grow from (the cron only appends one row per tick — without
+        # this seed it would take ~5 months to reach a full-year window).
+        ("indices_daily_current_year.parquet", "application/octet-stream"),
+        ("indices_daily_current_year.json",    "application/json"),
     ]
     for fname, ctype in targets:
         src = local_dir / fname
