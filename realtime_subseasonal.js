@@ -683,12 +683,12 @@
             // contour trace per signed pair so each can carry its own
             // dash style. Negative = solid (enhanced convection),
             // positive = dashed (suppressed).
-            // Legend label includes the actual contour magnitudes
-            // (and the lat-band note for off-equator panels) so the
-            // reader sees what amplitude each band's lines correspond
-            // to without an extra colorbar.
+            // Legend label includes the actual contour magnitudes and
+            // their units so the reader sees what amplitude each band's
+            // lines correspond to without an extra colorbar. Off-equator
+            // bands carry a `(5-15°N)` lat-band note.
             var legendName = ov.label + ' ±' + ov.levels.join(', ±')
-                + (ov.latNote ? ' (' + ov.latNote + ')' : '');
+                + ' W/m²' + (ov.latNote ? ' (' + ov.latNote + ')' : '');
             var initialVisibility = ov.defaultVisible === false ? 'legendonly' : true;
             ov.levels.forEach(function (lev, levIdx) {
                 [-lev, +lev].forEach(function (signedLev) {
@@ -746,34 +746,22 @@
                 tickfont: { size: 10 },
                 nticks: 14,
             },
-            shapes: (function () {
-                // Horizontal "today" rule at the most-recent timestep so
-                // the reader can immediately anchor which row is today
-                // without scanning the y-axis ticks.
-                var times = anomSlab.times || [];
-                if (!times.length) return [];
-                return [{
-                    type: 'line',
-                    xref: 'paper', x0: 0, x1: 1,
-                    yref: 'y',
-                    y0: times[times.length - 1], y1: times[times.length - 1],
-                    line: { color: '#ef4444', width: 1.2, dash: 'dot' },
-                    layer: 'above',
-                }];
-            })(),
-            annotations: (function () {
-                var times = anomSlab.times || [];
-                if (!times.length) return [];
-                return [{
-                    xref: 'paper', x: 0.005, xanchor: 'left',
-                    yref: 'y', y: times[times.length - 1], yanchor: 'bottom',
-                    text: 'today', showarrow: false,
-                    font: { size: 9, color: '#ef4444',
-                            family: 'DM Sans, system-ui, sans-serif' },
-                    bgcolor: isDark ? 'rgba(15,23,30,0.65)' : 'rgba(255,255,255,0.75)',
-                    borderpad: 2,
-                }];
-            })(),
+            shapes: [],
+            // "↑ Time" indicator just above the y-axis date column —
+            // tells the reader the temporal axis runs upward (most
+            // recent at top), which isn't otherwise obvious to someone
+            // who hasn't looked at many Hovmöllers. Replaces the prior
+            // red "today" rule, which was visually noisy and redundant
+            // with the topmost date tick.
+            annotations: [{
+                xref: 'paper', yref: 'paper',
+                x: 0, y: 1.005,
+                xanchor: 'right', yanchor: 'bottom',
+                text: '↑ Time',
+                showarrow: false,
+                font: { size: 10, color: fg,
+                        family: 'DM Sans, system-ui, sans-serif' },
+            }],
             legend: {
                 orientation: 'h',
                 x: 0, y: 1.04, xanchor: 'left', yanchor: 'bottom',
@@ -796,6 +784,16 @@
 
         var config = { displayModeBar: false, responsive: true };
         Plotly.newPlot(panel, [baseTrace].concat(overlayTraces), layout, config);
+
+        // Small caption directly below the combined panel hinting at
+        // the legend-click affordance. Outside the Plotly figure (DOM
+        // sibling, not an annotation), so it never appears in saved
+        // PNGs — those are static and the hint would just be noise.
+        var tip = document.createElement('div');
+        tip.className = 'sub-hov-combined-tip';
+        tip.innerHTML = 'Tip: click a band in the legend to toggle its '
+            + 'contours on or off; double-click to isolate that band.';
+        container.appendChild(tip);
     }
 
     /* Geographic context strip — pre-rendered tropical-band cartographic
