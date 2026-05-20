@@ -2643,10 +2643,17 @@
     // -------------------------------------------------------------------
 
     function _renderAnomMap() {
-        if (!state.latest) return;
         var img = document.getElementById('seasonal-anom-img');
         var cap = document.getElementById('seasonal-anom-caption');
         if (!img || !cap) return;
+        // Atmosphere path: ERA5 climatology shear PNG for the current
+        // calendar month, generated offline by build_era5_climo_pngs.py
+        // and served from gs://${GCS_IR_CACHE_BUCKET}/era5_climo/.
+        if (state.anomVar === 'shear_climo') {
+            _renderShearClimoMap(img, cap);
+            return;
+        }
+        if (!state.latest) return;
         var isRel = state.anomVar === 'relative';
         var pngName = isRel
             ? (state.latest.anom_png_relative || state.latest.anom_png)
@@ -2681,6 +2688,75 @@
                 _wireAnomHover();
             }).catch(function () { state.anom_grid = null; });
         }
+    }
+
+    // ── Atmosphere path: ERA5 shear climatology PNG + region-mean
+    //    caption. The PNG / grid sidecar / region-mean caption file are
+    //    all written by build_era5_climo_pngs.py once the daily-archive
+    //    backfill (build_era5_daily_archive.py) has completed. Before
+    //    they exist we render a graceful "pending" placeholder so the
+    //    panel is honest about the data-source state.
+    var ERA5_CLIMO_BASE = 'https://storage.googleapis.com/tc-atlas-ir-cache/era5_climo';
+    var _shearClimoManifestPromise = null;
+    function _loadShearClimoManifest() {
+        if (state.shearClimoManifest) return Promise.resolve(state.shearClimoManifest);
+        if (_shearClimoManifestPromise) return _shearClimoManifestPromise;
+        _shearClimoManifestPromise = fetch(ERA5_CLIMO_BASE + '/manifest.json',
+                                           { cache: 'no-cache' })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (j) { state.shearClimoManifest = j; return j; })
+            .catch(function () { state.shearClimoManifest = null; return null; });
+        return _shearClimoManifestPromise;
+    }
+    function _renderShearClimoMap(img, cap) {
+        var monthNow = (new Date()).getUTCMonth() + 1;
+        var mm = (monthNow < 10 ? '0' : '') + monthNow;
+        var pngUrl  = ERA5_CLIMO_BASE + '/shear_' + mm + '.png';
+        var gridUrl = ERA5_CLIMO_BASE + '/shear_' + mm + '.grid.json';
+
+        cap.textContent = 'Loading ERA5 climatology…';
+
+        _loadShearClimoManifest().then(function (manifest) {
+            var months = manifest && manifest.months_rendered;
+            if (!months || months.indexOf(monthNow) === -1) {
+                // Climatology PNGs not yet generated — show a placeholder.
+                // Hide the img to avoid a broken-image icon.
+                img.removeAttribute('src');
+                img.style.opacity = '0';
+                cap.innerHTML = '<em>ERA5 deep-layer shear climatology for the '
+                    + 'current calendar month is not yet published. '
+                    + 'After the daily-archive backfill completes, run '
+                    + '<code>python build_era5_climo_pngs.py</code> to '
+                    + 'render the 12 monthly PNGs.</em>';
+                return;
+            }
+            img.style.opacity = '';
+            img.src = pngUrl;
+            img.onload = function () { _applyAnomZoom(); };
+            img.onerror = function () {
+                img.onerror = null;
+                cap.textContent = 'Failed to load ' + pngUrl;
+            };
+            _applyAnomZoom();
+            // Hover sidecar — same wiring pattern as the SST anomaly grid.
+            fetch(gridUrl).then(function (r) { return r.ok ? r.json() : null; })
+                .then(function (g) {
+                    state.anom_grid = g;
+                    _wireAnomHover();
+                }).catch(function () { state.anom_grid = null; });
+            // Caption: regional climatological shear values.
+            var rm = manifest.region_means || {};
+            var atlMdr = (rm.atl_mdr || [])[monthNow - 1];
+            var epacMdr = (rm.epac_mdr || [])[monthNow - 1];
+            var wpacMdr = (rm.wpac_mdr || [])[monthNow - 1];
+            var monthNames = ['Jan','Feb','Mar','Apr','May','Jun',
+                              'Jul','Aug','Sep','Oct','Nov','Dec'];
+            cap.textContent = monthNames[monthNow - 1] + ' climatology '
+                + '(ERA5 1991-2020, mean of daily |V₂₀₀ − V₈₅₀|)'
+                + (atlMdr  != null ? '  |  ATL MDR '  + atlMdr.toFixed(1)  + ' m/s' : '')
+                + (epacMdr != null ? '  |  EPAC MDR ' + epacMdr.toFixed(1) + ' m/s' : '')
+                + (wpacMdr != null ? '  |  WPAC MDR ' + wpacMdr.toFixed(1) + ' m/s' : '');
+        });
     }
 
     function _bindAnomVarControl() {
