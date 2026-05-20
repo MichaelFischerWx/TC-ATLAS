@@ -392,29 +392,42 @@ def wk_filter(field, spec: WaveSpec):
     arr = field.values  # (time, lat, lon)
     nt, ny, nx = arr.shape
 
-    # Taper the time series with a Hanning window at each end (10% per
-    # end) to reduce spectral leakage from the finite record. Mean is
-    # removed before FFT so taper doesn't bias the low-freq bin.
+    # Mean-remove before FFT so the cosine taper doesn't bias the DC bin.
     arr = arr - np.nanmean(arr, axis=0, keepdims=True)
-    taper = np.ones(nt)
     n_taper = max(2, int(0.10 * nt))
+
+    # Reflect-pad each pixel's time series by n_taper days at both ends
+    # so the Hanning taper sits entirely on synthetic (reflected) data,
+    # not on real OLR. Without this pad the most recent n_taper days
+    # come back amplitude-attenuated in the filtered output — exactly
+    # the "quiet top of the Hovmöller" symptom for recent days.
+    # Reflection preserves zero-DC across the boundary and is the
+    # standard fix for FFT-based band-pass filtering at finite-record
+    # edges.
+    arr_padded = np.pad(arr, ((n_taper, n_taper), (0, 0), (0, 0)),
+                        mode='reflect')
+    nt_padded = nt + 2 * n_taper
+
+    taper = np.ones(nt_padded)
     half = np.hanning(2 * n_taper)
     taper[:n_taper] = half[:n_taper]
     taper[-n_taper:] = half[-n_taper:]
-    arr = arr * taper[:, None, None]
+    arr_padded = arr_padded * taper[:, None, None]
 
     # FFT in (time, lon). real → complex.
     # Convention: positive frequency = eastward wavenumber × positive
     # time-frequency. Using numpy's standard FFT, fft2 yields k indices
     # 0..nx/2 for positive (eastward) wavenumbers, then nx-1 .. nx/2+1
     # for negative (westward). Same idea on the freq axis.
-    F = np.fft.fft2(arr, axes=(0, 2))
+    F = np.fft.fft2(arr_padded, axes=(0, 2))
 
-    # Wavenumber and frequency coordinates
-    freq = np.fft.fftfreq(nt, d=1.0)         # cycles per day, time spacing 1 d
+    # Wavenumber and frequency coordinates — built on the *padded* length
+    # so the WK gates pick up the right physical (cycles/day, cycles/globe)
+    # bins after padding.
+    freq = np.fft.fftfreq(nt_padded, d=1.0)  # cycles per day, time spacing 1 d
     k    = np.fft.fftfreq(nx, d=1.0/nx)      # zonal wavenumber (cycles around globe)
     # Build mask in (time-freq, lon-wavenumber) space, broadcast over lat
-    mask = np.zeros((nt, nx), dtype=bool)
+    mask = np.zeros((nt_padded, nx), dtype=bool)
 
     # Direction convention. A physical wave x = cos(k*lon - ω*t) with
     # k>0, ω>0 (eastward) decomposes into exp(i(klon-ωt)) and its
@@ -509,10 +522,11 @@ def wk_filter(field, spec: WaveSpec):
              spec.name, mask.sum(), mask.size)
 
     F_filtered = F * mask[:, None, :]
-    out = np.real(np.fft.ifft2(F_filtered, axes=(0, 2)))
-    # Un-taper would distort the signal asymmetrically; the canonical
-    # WK output keeps the tapered amplitude. Frontend doesn't need un-tapering
-    # because we use a fixed colormap, not absolute amplitude.
+    out_padded = np.real(np.fft.ifft2(F_filtered, axes=(0, 2)))
+    # Strip the reflected pad so the returned array matches `field` in
+    # shape. The real-data portion is now amplitude-preserved end-to-end
+    # because the taper only attenuated the reflected synthetic samples.
+    out = out_padded[n_taper:-n_taper]
     return field.copy(data=out)
 
 
