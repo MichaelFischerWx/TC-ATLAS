@@ -57,8 +57,15 @@ COS_LAT = np.cos(np.deg2rad(LATS))
 CLIM_START = 1991
 CLIM_END   = 2020
 
-# Mercator clamp same as the OISST anomaly PNG.
-WEB_MERC_LAT_MAX = 85.05112877980659
+# Shear PNGs use the same Pacific-centered lon framing as the OISST
+# anomaly PNG (LON_MIN=100, LON_MAX=360 in build_oisst_history.py) so
+# Panel A's basin-zoom presets crop correctly. Lat-extent likewise
+# matches OISST's ±60° box rather than Mercator-clamped, since this
+# panel uses an equirectangular (not Mercator) overlay aspect.
+PNG_LAT_MIN, PNG_LAT_MAX = -60.0, 60.0
+PNG_LON_MIN, PNG_LON_MAX = 100.0, 360.0
+PNG_VMAX_SHEAR = 30.0   # m/s color saturation upper bound
+PNG_VCENTER_SHEAR = 12.0  # operational TC-genesis threshold
 
 
 def _http_get(url: str) -> bytes | None:
@@ -117,73 +124,84 @@ def fetch_monthly_shear(year: int, month: int, manifest: dict, local_only: bool
     return arr.reshape(n_days, NY, NX)
 
 
-# ── Mercator warp (matches build_subseasonal_overlays._warp_eq_to_mercator) ──
-def warp_to_mercator(field: np.ndarray, ny_out: int | None = None) -> np.ndarray:
-    """Re-sample a 60°S-60°N field onto a Web Mercator pixel grid bounded
-    by ±WEB_MERC_LAT_MAX so it overlays cleanly on the Panel A image
-    framing. We pad with NaN above/below the source range."""
-    ny_in, nx = field.shape
-    ny_out = ny_out or ny_in * 2
-    # Source lats (descending 60 → -60).
-    src_lats = LATS
-    # Target lats — equispaced Mercator pixels.
-    y_pix = np.linspace(0, 1, ny_out)
-    target_lats = np.degrees(
-        np.arctan(np.sinh((1 - 2 * y_pix) * np.pi)))
-    # For each target row, snap to nearest source row by latitude.
-    src_idx = np.zeros(ny_out, dtype=np.int32)
-    out_of_range = np.zeros(ny_out, dtype=bool)
-    for i, lat in enumerate(target_lats):
-        if lat > LAT_N or lat < LAT_S:
-            out_of_range[i] = True
-            src_idx[i] = 0   # placeholder
-        else:
-            src_idx[i] = int(round(LAT_N - lat))
-            src_idx[i] = max(0, min(ny_in - 1, src_idx[i]))
-    out = field[src_idx]
-    out[out_of_range] = np.nan
-    return out
-
-
 # ── PNG rendering ────────────────────────────────────────────────────
+def _roll_to_pacific_centered(field: np.ndarray) -> np.ndarray:
+    """Source `field` columns are at lons -180..179 (Atlantic-centered).
+    Roll so column 0 → lon 100 (Pacific-centered, matches OISST PNG).
+    Column 0 in the rolled array corresponds to lon = -180 + 280 = 100;
+    column 359 corresponds to lon = 459 ≡ 99°. So extent=[100, 460]."""
+    return np.roll(field, -280, axis=-1)
+
+
 def render_shear_png(monthly_clim: np.ndarray, month: int) -> bytes:
-    """Diverging-around-12 m/s palette: low shear (favorable) in cool
-    blues, high shear (suppressive) in hot reds. Centerpoint at 12 m/s
-    matches the operational TC-genesis "shear less than 12 m/s favorable"
-    rule of thumb."""
+    """Equirectangular shear-climatology PNG with cartopy coastlines.
+    Diverging colormap centered at 12 m/s — operational TC-genesis
+    "shear ≲ 12 m/s favorable" threshold. Pacific-centered framing
+    matches the OISST anomaly PNG so Panel A's basin-zoom presets
+    crop both kinds of maps consistently."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib.colors import TwoSlopeNorm
+    import cartopy.crs as ccrs
+    import cartopy.feature as cfeature
 
-    warped = warp_to_mercator(monthly_clim, ny_out=monthly_clim.shape[0] * 4)
-    fig, ax = plt.subplots(figsize=(16, 6), dpi=100)
-    ax.axis("off")
-    norm = TwoSlopeNorm(vmin=0, vcenter=12.0, vmax=30.0)
+    # Pacific-centered rotation.
+    field = _roll_to_pacific_centered(monthly_clim)
+
+    # Equirectangular projection on a Pacific-centered globe so
+    # cartopy lines up coastlines correctly with the lon 100..460 frame.
+    fig = plt.figure(figsize=(8.0, 8.0 * 120 / 260), dpi=200)
+    ax = fig.add_subplot(1, 1, 1,
+                         projection=ccrs.PlateCarree(central_longitude=180))
+    ax.set_extent([PNG_LON_MIN, PNG_LON_MAX, PNG_LAT_MIN, PNG_LAT_MAX],
+                  crs=ccrs.PlateCarree())
+    norm = TwoSlopeNorm(vmin=0, vcenter=PNG_VCENTER_SHEAR, vmax=PNG_VMAX_SHEAR)
+    # `field` is the rolled array: column 0 → lon 100°, column 359 →
+    # lon 459°. So imshow extent must span 100..460 (not 100..360!) so
+    # the 360 cells cover a full 360° of longitude. The axis is then
+    # cropped to set_extent([100, 360]) — same range, just naming the
+    # visible window.
     ax.imshow(
-        warped, cmap="RdYlBu_r", norm=norm,
-        extent=[-180, 180, -WEB_MERC_LAT_MAX, WEB_MERC_LAT_MAX],
-        origin="upper", interpolation="bilinear", aspect="auto",
+        field,
+        cmap="RdYlBu_r", norm=norm,
+        extent=[PNG_LON_MIN, PNG_LON_MAX + 100.0, PNG_LAT_MIN, PNG_LAT_MAX],
+        origin="upper", interpolation="bilinear",
+        transform=ccrs.PlateCarree(),
+        zorder=1,
     )
+    # Continents fill + coastlines + borders — enough visual weight to
+    # see where you are against the diverging shear palette. Light gray
+    # land fill at low alpha avoids smothering coastal shear features.
+    ax.add_feature(cfeature.LAND, facecolor="#9ca3af", alpha=0.18,
+                   zorder=2)
+    ax.add_feature(cfeature.COASTLINE, linewidth=0.8, edgecolor="#0f172a",
+                   zorder=3)
+    ax.add_feature(cfeature.BORDERS, linewidth=0.3, edgecolor="#475569",
+                   linestyle=":", zorder=3)
+    ax.set_axis_off()
     fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", transparent=True, bbox_inches="tight",
-                pad_inches=0)
+    fig.savefig(buf, format="png", transparent=True, pad_inches=0,
+                bbox_inches="tight")
     plt.close(fig)
     return buf.getvalue()
 
 
 def render_grid_sidecar(monthly_clim: np.ndarray) -> bytes:
-    """Hover-tooltip values at 1° lat × 1° lon. Same shape/orientation as
-    the input climatology grid — frontend looks up by (lat, lon) → idx."""
+    """Hover-tooltip values at 1° lat × 1° lon. Stored Pacific-centered
+    (lon 100..459°) to match the PNG frame and the OISST grid sidecars
+    that Panel A's hover machinery was built against. The frontend
+    looks up by (lat, lon) → idx using lat_first/lon_first."""
+    rolled = _roll_to_pacific_centered(monthly_clim)
     payload = {
-        "lat_first": LAT_N, "lat_last": LAT_S, "lat_step": -1.0,
-        "lon_first": -180.0, "lon_last": 179.0, "lon_step": 1.0,
+        "lat_first": PNG_LAT_MAX, "lat_last": PNG_LAT_MIN, "lat_step": -1.0,
+        "lon_first": PNG_LON_MIN, "lon_last": PNG_LON_MAX, "lon_step": 1.0,
         "shape": [NY, NX],
         "units": "m s-1",
         "values": [
             [round(float(v), 3) if np.isfinite(v) else None for v in row]
-            for row in monthly_clim
+            for row in rolled
         ],
     }
     return json.dumps(payload, separators=(",", ":")).encode()
@@ -233,11 +251,21 @@ def main() -> None:
         "metadata": {
             "clim_window": [CLIM_START, CLIM_END],
             "shape": [NY, NX],
-            "lat_first": LAT_N, "lat_last": LAT_S,
-            "lon_first": -180.0, "lon_last": 179.0,
-            "centerpoint_m_per_s": 12.0,
+            "lat_first": PNG_LAT_MAX, "lat_last": PNG_LAT_MIN,
+            "lon_first": PNG_LON_MIN, "lon_last": PNG_LON_MAX,
             "source": "ERA5 daily 6-hr winds → daily |V₂₀₀ − V₈₅₀| → monthly mean → "
                       "1991-2020 climatological mean",
+            # Colorbar spec consumed by the frontend so Panel A's legend
+            # gradient + tick labels swap automatically in Atmosphere mode.
+            "colorbar": {
+                "label": "Deep-layer shear (m/s)",
+                "vmin": 0.0,
+                "vcenter": PNG_VCENTER_SHEAR,
+                "vmax": PNG_VMAX_SHEAR,
+                "units": "m/s",
+                "stops": ["#313695", "#74add1", "#fed98e", "#f46d43", "#a50026"],
+                "stop_positions": [0.0, 0.4, 0.5, 0.7, 1.0],
+            },
         },
         "months_rendered": [],
         "region_means": {},

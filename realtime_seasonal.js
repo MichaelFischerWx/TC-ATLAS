@@ -2642,6 +2642,38 @@
     // Panel A — Live anomaly PNG (from latest.json)
     // -------------------------------------------------------------------
 
+    // Legend below Panel A's image. We swap labels + gradient depending
+    // on what's being shown: SST anomaly (°C, RdBu_r ±3) vs. shear
+    // climatology (m/s, RdYlBu_r 0→30 with center at 12). Reads from
+    // the static SST defaults baked into the HTML/CSS, or from the
+    // climo manifest's colorbar spec for Atmosphere mode.
+    function _applyAnomLegend(mode) {
+        var legend = document.querySelector('.seasonal-anom-legend');
+        var bar    = document.querySelector('.seasonal-anom-bar');
+        if (!legend || !bar) return;
+        var spans = legend.querySelectorAll('span:not(.seasonal-anom-bar)');
+        if (mode === 'shear') {
+            // Match build_era5_climo_pngs.py's RdYlBu_r-style stops
+            // centered at 12 m/s.
+            bar.style.background = 'linear-gradient(to right, '
+                + '#313695 0%, #74add1 25%, #fed98e 50%, '
+                + '#f46d43 70%, #a50026 100%)';
+            if (spans.length >= 2) {
+                spans[0].textContent = '0 m/s';
+                spans[1].textContent = '30 m/s';
+            }
+            legend.setAttribute('data-mode', 'shear');
+        } else {
+            // Reset to the SST defaults (matches the CSS rule + HTML).
+            bar.style.background = '';
+            if (spans.length >= 2) {
+                spans[0].textContent = '−3 °C';
+                spans[1].textContent = '+3 °C';
+            }
+            legend.removeAttribute('data-mode');
+        }
+    }
+
     function _renderAnomMap() {
         var img = document.getElementById('seasonal-anom-img');
         var cap = document.getElementById('seasonal-anom-caption');
@@ -2653,6 +2685,9 @@
             _renderShearClimoMap(img, cap);
             return;
         }
+        // SST family — restore the legend to °C labels + RdBu_r gradient
+        // in case the user just toggled away from Atmosphere mode.
+        _applyAnomLegend('sst');
         if (!state.latest) return;
         var isRel = state.anomVar === 'relative';
         var pngName = isRel
@@ -2715,6 +2750,7 @@
         var gridUrl = ERA5_CLIMO_BASE + '/shear_' + mm + '.grid.json';
 
         cap.textContent = 'Loading ERA5 climatology…';
+        _applyAnomLegend('shear');
 
         _loadShearClimoManifest().then(function (manifest) {
             var months = manifest && manifest.months_rendered;
