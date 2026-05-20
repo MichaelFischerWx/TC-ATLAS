@@ -37,5 +37,12 @@ requests>=2.31
 # Google Cloud Storage (IR frame cache)
 google-cloud-storage>=2.14
 
+# RT Seasonal Panel B Daily view — /seasonal/daily endpoint reads
+# indices_daily_full.parquet from GCS via pandas.read_parquet, which
+# requires a parquet engine (pyarrow is what the matching daily Cloud
+# Run Job already uses).
+pandas>=2.0
+pyarrow>=15.0
+
 # ASGI
 gunicorn>=21.2
