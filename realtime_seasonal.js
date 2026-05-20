@@ -1634,7 +1634,14 @@
             annotations: _watermarkAnnotations(),
         };
         var insetTraces = _timeSeriesInsetBuildTraces();
-        layout.geo2 = _insetGeoLayout({ x: [0.76, 1.0], y: [0.74, 1.005] });
+        // Daily view: 12 months of data across the chart, so the upper-
+        // right corner (Aug-Oct) is exactly where late-season SST peaks
+        // and warm-anomaly highlight years (e.g. 2023) cluster. Tuck the
+        // inset into the upper-LEFT — early-Jan to mid-Feb is the
+        // sparsest region for both `sst` (winter minimum at the bottom
+        // of the chart) and the anomaly variants (most years near zero
+        // and concentrated below the inset's y range).
+        layout.geo2 = _insetGeoLayout({ x: [0.005, 0.22], y: [0.78, 1.005] });
         Plotly.react(el, traces.concat(insetTraces), layout,
                      { responsive: true, displaylogo: false });
     }
