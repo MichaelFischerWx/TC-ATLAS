@@ -11624,14 +11624,31 @@ function _renderDiffAzMean(targetId, diffJson, jsonA, jsonB, filtersA, filtersB)
     var varInfoA = jsonA.variable;
     var diffVarInfo = diffJson.variable;
 
+    // Group panels in a diff-panel-grid so the layout toggle can flip
+    // stacked \u2194 side-by-side. Each grid cell carries its own colored label
+    // header so the A/B/\u0394 context travels with the chart in 3-col mode.
+    var labelStyleA = 'margin-bottom:4px;padding:6px 10px;background:rgba(96,165,250,0.08);border:1px solid rgba(96,165,250,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#60a5fa;';
+    var labelStyleB = 'margin-bottom:4px;padding:6px 10px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#f59e0b;';
+    var labelStyleD = 'margin-bottom:4px;padding:6px 10px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#ef4444;';
+    var chartStyle  = 'width:100%;min-height:400px;height:460px;border-radius:8px;overflow:hidden;';
+
     el.innerHTML =
-        '<div style="margin-bottom:4px;padding:6px 10px;background:rgba(96,165,250,0.08);border:1px solid rgba(96,165,250,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#60a5fa;">Group A</div>' +
-        '<div id="comp-diff-az-a" style="width:100%;height:460px;border-radius:8px;overflow:hidden;"></div>' +
-        '<div style="margin:12px 0 4px;padding:6px 10px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#f59e0b;">Group B</div>' +
-        '<div id="comp-diff-az-b" style="width:100%;height:460px;border-radius:8px;overflow:hidden;"></div>' +
+        _buildDiffPanelToolbar('diff-toolbar-az') +
+        '<div class="diff-panel-grid" id="diff-grid-az">' +
+            '<div class="diff-panel-cell">' +
+                '<div style="' + labelStyleA + '">Group A</div>' +
+                '<div id="comp-diff-az-a" style="' + chartStyle + '"></div>' +
+            '</div>' +
+            '<div class="diff-panel-cell">' +
+                '<div style="' + labelStyleB + '">Group B</div>' +
+                '<div id="comp-diff-az-b" style="' + chartStyle + '"></div>' +
+            '</div>' +
+            '<div class="diff-panel-cell">' +
+                '<div style="' + labelStyleD + '">\u0394 Difference (A \u2212 B)</div>' +
+                '<div id="comp-diff-az-d" style="' + chartStyle + '"></div>' +
+            '</div>' +
+        '</div>' +
         _buildShadingControlsRow('shd-daz-ab', {label: 'Panels A &amp; B', defaultVmin: varInfoA.vmin, defaultVmax: varInfoA.vmax}) +
-        '<div style="margin:12px 0 4px;padding:6px 10px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#ef4444;">\u0394 Difference (A \u2212 B)</div>' +
-        '<div id="comp-diff-az-d" style="width:100%;height:460px;border-radius:8px;overflow:hidden;"></div>' +
         _buildShadingControlsRow('shd-daz-d', {label: 'Difference', defaultVmin: diffVarInfo.vmin, defaultVmax: diffVarInfo.vmax}) +
         _buildCompToolbar();
 
@@ -11703,6 +11720,10 @@ function _renderDiffAzMean(targetId, diffJson, jsonA, jsonB, filtersA, filtersB)
     // heatmap/overlay rendering above isn't touched.
     var stipple = _stippleTrace(diffJson._sigMask, radius, height_km);
     if (stipple) Plotly.addTraces('comp-diff-az-d', [stipple]);
+
+    _initDiffPanelToolbar('diff-toolbar-az', 'diff-grid-az',
+        ['comp-diff-az-a', 'comp-diff-az-b', 'comp-diff-az-d'],
+        'tc_radar_az_diff');
 }
 
 function _renderDiffQuadMean(targetId, diffJson, jsonA, jsonB, filtersA, filtersB) {
@@ -11713,14 +11734,18 @@ function _renderDiffQuadMean(targetId, diffJson, jsonA, jsonB, filtersA, filters
     var varInfoA = jsonA.variable;
     var diffVarInfo = diffJson.variable;
 
+    var labelStyleA = 'margin-bottom:4px;padding:6px 10px;background:rgba(96,165,250,0.08);border:1px solid rgba(96,165,250,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#60a5fa;';
+    var labelStyleB = 'margin-bottom:4px;padding:6px 10px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#f59e0b;';
+    var labelStyleD = 'margin-bottom:4px;padding:6px 10px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#ef4444;';
+    var chartStyle  = 'width:100%;min-height:560px;height:640px;border-radius:8px;overflow:hidden;';
     el.innerHTML =
-        '<div style="margin-bottom:4px;padding:6px 10px;background:rgba(96,165,250,0.08);border:1px solid rgba(96,165,250,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#60a5fa;">Group A</div>' +
-        '<div id="comp-diff-sq-a" style="width:100%;height:640px;border-radius:8px;overflow:hidden;"></div>' +
-        '<div style="margin:12px 0 4px;padding:6px 10px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#f59e0b;">Group B</div>' +
-        '<div id="comp-diff-sq-b" style="width:100%;height:640px;border-radius:8px;overflow:hidden;"></div>' +
+        _buildDiffPanelToolbar('diff-toolbar-sq') +
+        '<div class="diff-panel-grid" id="diff-grid-sq">' +
+            '<div class="diff-panel-cell"><div style="' + labelStyleA + '">Group A</div><div id="comp-diff-sq-a" style="' + chartStyle + '"></div></div>' +
+            '<div class="diff-panel-cell"><div style="' + labelStyleB + '">Group B</div><div id="comp-diff-sq-b" style="' + chartStyle + '"></div></div>' +
+            '<div class="diff-panel-cell"><div style="' + labelStyleD + '">\u0394 Difference (A \u2212 B)</div><div id="comp-diff-sq-d" style="' + chartStyle + '"></div></div>' +
+        '</div>' +
         _buildShadingControlsRow('shd-dsq-ab', {label: 'Panels A &amp; B', defaultVmin: varInfoA.vmin, defaultVmax: varInfoA.vmax}) +
-        '<div style="margin:12px 0 4px;padding:6px 10px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#ef4444;">\u0394 Difference (A \u2212 B)</div>' +
-        '<div id="comp-diff-sq-d" style="width:100%;height:640px;border-radius:8px;overflow:hidden;"></div>' +
         _buildShadingControlsRow('shd-dsq-d', {label: 'Difference', defaultVmin: diffVarInfo.vmin, defaultVmax: diffVarInfo.vmax}) +
         _buildCompToolbar() + _buildQuadLayoutToggle();
 
@@ -11841,6 +11866,10 @@ function _renderDiffQuadMean(targetId, diffJson, jsonA, jsonB, filtersA, filters
 
     _registerShadingTargets('shd-dsq-d', ['comp-diff-sq-d'], _DIFF_COLORSCALE, diffVarInfo.vmin, diffVarInfo.vmax);
     buildQuadPlot('comp-diff-sq-d', diffJson.quadrant_means, titleD, _DIFF_COLORSCALE, diffVarInfo.vmin, diffVarInfo.vmax, diffVarInfo.units, diffJson);
+
+    _initDiffPanelToolbar('diff-toolbar-sq', 'diff-grid-sq',
+        ['comp-diff-sq-a', 'comp-diff-sq-b', 'comp-diff-sq-d'],
+        'tc_radar_quadrant_diff');
 }
 
 // ── Composite Difference Plan View ──────────────────
@@ -11935,15 +11964,18 @@ function _renderDiffPlanView(targetId, diffJson, jsonA, jsonB, filtersA, filters
     var varInfoA = jsonA.variable;
     var diffVarInfo = diffJson.variable;
 
-    // Create 3 stacked chart containers + toolbar
+    var labelStyleA = 'margin-bottom:4px;padding:6px 10px;background:rgba(96,165,250,0.08);border:1px solid rgba(96,165,250,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#60a5fa;';
+    var labelStyleB = 'margin-bottom:4px;padding:6px 10px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#f59e0b;';
+    var labelStyleD = 'margin-bottom:4px;padding:6px 10px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#ef4444;';
+    var chartStyle  = 'width:100%;min-height:440px;height:520px;border-radius:8px;overflow:hidden;';
     el.innerHTML =
-        '<div style="margin-bottom:4px;padding:6px 10px;background:rgba(96,165,250,0.08);border:1px solid rgba(96,165,250,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#60a5fa;">Group A</div>' +
-        '<div id="comp-diff-pv-a" style="width:100%;height:520px;border-radius:8px;overflow:hidden;"></div>' +
-        '<div style="margin:12px 0 4px;padding:6px 10px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#f59e0b;">Group B</div>' +
-        '<div id="comp-diff-pv-b" style="width:100%;height:520px;border-radius:8px;overflow:hidden;"></div>' +
+        _buildDiffPanelToolbar('diff-toolbar-pv') +
+        '<div class="diff-panel-grid" id="diff-grid-pv">' +
+            '<div class="diff-panel-cell"><div style="' + labelStyleA + '">Group A</div><div id="comp-diff-pv-a" style="' + chartStyle + '"></div></div>' +
+            '<div class="diff-panel-cell"><div style="' + labelStyleB + '">Group B</div><div id="comp-diff-pv-b" style="' + chartStyle + '"></div></div>' +
+            '<div class="diff-panel-cell"><div style="' + labelStyleD + '">\u0394 Difference (A \u2212 B)</div><div id="comp-diff-pv-d" style="' + chartStyle + '"></div></div>' +
+        '</div>' +
         _buildShadingControlsRow('shd-dpv-ab', {label: 'Panels A &amp; B', defaultVmin: varInfoA.vmin, defaultVmax: varInfoA.vmax}) +
-        '<div style="margin:12px 0 4px;padding:6px 10px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);border-radius:6px;font:600 11px \'JetBrains Mono\',monospace;color:#ef4444;">\u0394 Difference (A \u2212 B)</div>' +
-        '<div id="comp-diff-pv-d" style="width:100%;height:520px;border-radius:8px;overflow:hidden;"></div>' +
         _buildShadingControlsRow('shd-dpv-d', {label: 'Difference', defaultVmin: diffVarInfo.vmin, defaultVmax: diffVarInfo.vmax}) +
         _buildCompToolbar();
 
@@ -12034,6 +12066,10 @@ function _renderDiffPlanView(targetId, diffJson, jsonA, jsonB, filtersA, filters
 
     _registerShadingTargets('shd-dpv-d', ['comp-diff-pv-d'], _DIFF_COLORSCALE, diffVarInfo.vmin, diffVarInfo.vmax);
     buildPvPlot('comp-diff-pv-d', diffJson.plan_view, titleD, _DIFF_COLORSCALE, diffVarInfo.vmin, diffVarInfo.vmax, diffVarInfo.units, diffJson);
+
+    _initDiffPanelToolbar('diff-toolbar-pv', 'diff-grid-pv',
+        ['comp-diff-pv-a', 'comp-diff-pv-b', 'comp-diff-pv-d'],
+        'tc_radar_planview_diff');
 }
 
 // ── CFAD Difference ──
@@ -12382,11 +12418,15 @@ function _renderDiffCFADMulti(targetId, jsonA, jsonB, filtersA, filtersB) {
     el.style.display = 'block';
     jsonA._isDiff = true; jsonA.case_list_b = jsonB.case_list; jsonA._nA = jsonA.n_cases; jsonA._nB = jsonB.n_cases;
     _lastCompJson = jsonA; _lastCompType = 'cfad_diff_multi';
+    var cfadmChartStyle = 'width:100%;min-height:620px;height:720px;border-radius:8px;overflow:hidden;';
     el.innerHTML =
-        '<div id="comp-diff-cfadm-a" style="width:100%;height:720px;border-radius:8px;overflow:hidden;margin-bottom:8px;"></div>' +
-        '<div id="comp-diff-cfadm-b" style="width:100%;height:720px;border-radius:8px;overflow:hidden;margin-bottom:8px;"></div>' +
+        _buildDiffPanelToolbar('diff-toolbar-cfadm') +
+        '<div class="diff-panel-grid" id="diff-grid-cfadm">' +
+            '<div id="comp-diff-cfadm-a"    class="diff-panel-cell" style="' + cfadmChartStyle + '"></div>' +
+            '<div id="comp-diff-cfadm-b"    class="diff-panel-cell" style="' + cfadmChartStyle + '"></div>' +
+            '<div id="comp-diff-cfadm-diff" class="diff-panel-cell" style="' + cfadmChartStyle + '"></div>' +
+        '</div>' +
         _buildShadingControlsRow('shd-dcfadm-ab', {label: 'Panels A &amp; B', defaultVmin: plotZmin, defaultVmax: plotZmax}) +
-        '<div id="comp-diff-cfadm-diff" style="width:100%;height:720px;border-radius:8px;overflow:hidden;margin-bottom:8px;"></div>' +
         _buildShadingControlsRow('shd-dcfadm-d', {label: 'Difference', defaultVmin: 'min', defaultVmax: 'max'}) +
         _buildCompToolbar();
 
@@ -12506,6 +12546,10 @@ function _renderDiffCFADMulti(targetId, jsonA, jsonB, filtersA, filtersB) {
     build2x2('comp-diff-cfadm-diff', diffMulti,
         _diffFilterSummary(filtersA, filtersB, jsonA.n_cases, jsonB.n_cases) + '<br>\u0394 4-Quadrant CFAD: ' + varInfo.display_name + binNote + radialNote + (diffSignedLog ? ' (signed log)' : ''),
         _DIFF_COLORSCALE, diffDZmin, diffDZmax, cbarDiff, false, true, diffSignedLog);
+
+    _initDiffPanelToolbar('diff-toolbar-cfadm', 'diff-grid-cfadm',
+        ['comp-diff-cfadm-a', 'comp-diff-cfadm-b', 'comp-diff-cfadm-diff'],
+        'tc_radar_cfad_quad_diff');
 }
 
 // ══════════════════════════════════════════════════════════════
