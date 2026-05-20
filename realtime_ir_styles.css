@@ -2149,6 +2149,28 @@ html:not([data-view="map"]) #basin-sidebar {
     min-height: 14px;
     line-height: 1.3;
 }
+
+/* Per-mode genesis enhancement readout: "ATL 1.6× · EP 0.9× · WP 1.0×".
+   Color-coded per basin (green = enhanced, red = suppressed, gray = near
+   climatology). Quiescent days show "phase amp < 1 · no modulation". */
+.sub-clock-genesis {
+    margin-top: 4px;
+    font-size: 0.62rem;
+    color: var(--text-dim, #64748b);
+    text-align: center;
+    min-height: 14px;
+    line-height: 1.3;
+    font-variant-numeric: tabular-nums;
+}
+.sub-clock-genesis .sub-gen-basin {
+    white-space: nowrap;
+    margin: 0 2px;
+}
+.sub-clock-genesis .sub-gen-up   { color: #16a34a; font-weight: 600; }
+.sub-clock-genesis .sub-gen-down { color: #dc2626; font-weight: 600; }
+.sub-clock-genesis .sub-gen-neutral { color: var(--text-dim, #64748b); }
+[data-theme="dark"] .sub-clock-genesis .sub-gen-up   { color: #4ade80; }
+[data-theme="dark"] .sub-clock-genesis .sub-gen-down { color: #f87171; }
 .sub-clock-footnote {
     margin: 6px 4px 0;
     font-size: 0.65rem;

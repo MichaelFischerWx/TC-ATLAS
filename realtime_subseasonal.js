@@ -349,6 +349,78 @@
         _ga('rt_sub_evo_close');
     }
 
+    /* ── Genesis enhancement factors (per mode × basin × phase) ─── */
+    // Precomputed offline by build_subseasonal_genesis_factors.py from
+    // IBTrACS + subseasonal_phases.json. Tiny (~3 KB) so we just ship as
+    // a static asset; refresh after each TC season.
+    var GENESIS_FACTORS_URL = 'data/subseasonal_genesis_factors.json';
+    var _genesisFactorsPromise = null;
+    function _loadGenesisFactors() {
+        if (state.genesisFactors) return Promise.resolve(state.genesisFactors);
+        if (_genesisFactorsPromise) return _genesisFactorsPromise;
+        _genesisFactorsPromise = _fetchJSON(GENESIS_FACTORS_URL + '?v=' + (window.__v || ''))
+            .then(function (d) { state.genesisFactors = d; return d; })
+            .catch(function (e) {
+                console.warn('[subseasonal-rt] genesis factors fetch failed:', e.message);
+                state.genesisFactors = null;
+                return null;
+            });
+        return _genesisFactorsPromise;
+    }
+
+    // Format a per-basin enhancement value as a colored span.
+    // > 1.15 = enhanced (green), < 0.85 = suppressed (red), else neutral.
+    function _formatGenesisBasin(basin, val) {
+        if (val == null) return '';
+        var klass = (val >= 1.15) ? 'sub-gen-up'
+                  : (val <= 0.85) ? 'sub-gen-down'
+                  : 'sub-gen-neutral';
+        return '<span class="sub-gen-basin"><span class="' + klass
+             + '">' + basin + ' ' + val.toFixed(2) + '×</span></span>';
+    }
+
+    // Populate the per-clock genesis-enhancement readout. Active phase
+    // (amp ≥ 1) → "ATL 1.64× · EP 0.85× · WP 0.95×". Quiescent →
+    // greyed "phase amp < 1 · no modulation" so the user sees the
+    // affordance but knows it doesn't apply right now.
+    function _renderGenesisIndicators() {
+        if (!state.genesisFactors || !state.indices) return;
+        var factors = state.genesisFactors.modes || {};
+        // Three most-watched basins for compactness. Operational users
+        // tracking other basins can read the value from a full dial
+        // (Climatology page) — this is a one-line "is it favorable?" cue.
+        var shownBasins = ['NA', 'EP', 'WP'];
+        ['mjo', 'mjo_omi', 'bsiso1', 'bsiso2'].forEach(function (mode) {
+            var el = document.querySelector(
+                '.sub-clock-card[data-mode="' + mode + '"] [data-val="genesis"]');
+            if (!el) return;
+            var modeRec = state.indices.indices && state.indices.indices[mode];
+            var modeFactors = factors[mode];
+            if (!modeRec || !modeFactors) { el.innerHTML = ''; return; }
+            // Today's active phase = last entry where amp ≥ 1.
+            var phases = modeRec.phases || [];
+            var amps   = modeRec.amplitudes || [];
+            var i = phases.length - 1;
+            var phase = phases[i], amp = amps[i];
+            if (phase == null || amp == null || amp < 1.0) {
+                el.innerHTML = '<span style="opacity:0.7;">phase amp &lt; 1 · '
+                    + 'no modulation</span>';
+                return;
+            }
+            var p = phase - 1;  // phases stored 1..8; arrays indexed 0..7
+            var parts = shownBasins.map(function (b) {
+                var eh = modeFactors.enhancement && modeFactors.enhancement[b];
+                if (!eh) return '';
+                var v = eh[p];
+                if (v == null) return '';
+                var label = (b === 'NA') ? 'ATL' : b;
+                return _formatGenesisBasin(label, v);
+            }).filter(Boolean);
+            if (!parts.length) { el.innerHTML = ''; return; }
+            el.innerHTML = parts.join(' <span style="opacity:0.45;">·</span> ');
+        });
+    }
+
     /* ── Phase clocks ──────────────────────────────────────────── */
     function _renderClocks() {
         if (!state.indices || !window.SubseasonalClock) return;
@@ -1348,6 +1420,7 @@
             /* Re-render in case theme changed or storms refreshed since
                last activation. Cheap — just SVG + Plotly redraws. */
             _renderClocks();
+            _renderGenesisIndicators();
             _renderHovmollers();
             return;
         }
@@ -1357,14 +1430,20 @@
         var loading = document.querySelector('#sub-hov-stack .sub-hov-loading');
         if (loading) loading.textContent = 'Loading subseasonal data…';
 
+        // Genesis factors are static (~3 KB) so we kick the fetch off
+        // in parallel with the larger Hovmöller load — by the time the
+        // clocks paint, the genesis line is ready to populate.
+        _loadGenesisFactors();
+
         // Phase 1: load indices + wave slabs in parallel. As soon as
         // these arrive (~1-2 s) the user sees the clocks + Hovmöllers,
         // without the overlay. Recent-storms fetch hits NHC + JTWC
         // deck files which can take 10+ s — we don't want it blocking
         // the operationally-useful wave view.
-        Promise.all([_loadIndices(), _loadSlabs()])
+        Promise.all([_loadIndices(), _loadSlabs(), _loadGenesisFactors()])
             .then(function () {
                 _renderClocks();
+                _renderGenesisIndicators();
                 _renderHovmollers();
             })
             .catch(function (err) {
