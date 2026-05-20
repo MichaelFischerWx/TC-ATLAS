@@ -853,10 +853,11 @@
         <nav class="seasonal-subnav" aria-label="Seasonal panels">
             <a href="#seasonal-panel-anom-map" data-target="seasonal-panel-anom-map">A · Live anomaly</a>
             <a href="#seasonal-panel-timeseries" data-target="seasonal-panel-timeseries">B · Region evolution</a>
-            <a href="#seasonal-panel-scatter" data-target="seasonal-panel-scatter">C · SST × ACE</a>
-            <a href="#seasonal-panel-correlation" data-target="seasonal-panel-correlation">D · Correlation map</a>
-            <a href="#seasonal-panel-analogs" data-target="seasonal-panel-analogs">E · Analog seasons</a>
-            <a href="#seasonal-panel-indices" data-target="seasonal-panel-indices">F · Climate indices</a>
+            <a href="#seasonal-panel-evolution" data-target="seasonal-panel-evolution">C · Seasonal evolution</a>
+            <a href="#seasonal-panel-scatter" data-target="seasonal-panel-scatter">D · SST × ACE</a>
+            <a href="#seasonal-panel-correlation" data-target="seasonal-panel-correlation">E · Correlation map</a>
+            <a href="#seasonal-panel-analogs" data-target="seasonal-panel-analogs">F · Analog seasons</a>
+            <a href="#seasonal-panel-indices" data-target="seasonal-panel-indices">G · Climate indices</a>
         </nav>
 
         <div class="seasonal-header">
@@ -998,9 +999,82 @@
                 <div id="seasonal-ts-plot" class="seasonal-ts-plot"></div>
             </section>
 
-            <!-- Panel C: 2D phase-space scatter (the headline feature) -->
+            <!-- Panel C: Seasonal Evolution animation. Scrubs through
+                 any past season's ERA5 environmental field with IBTrACS
+                 TC tracks overlaid, materializing as the slider advances.
+                 Stage 1: deep-layer shear only (raw or 1991-2020 anomaly).
+                 Field tiles come from the era5_daily archive built by
+                 build_era5_daily_archive.py; tracks come from the same
+                 ibtracs_storms.json the TC Climatology page already loads. -->
+            <section class="seasonal-panel" id="seasonal-panel-evolution">
+                <h3 class="seasonal-panel-title">C · Seasonal Evolution</h3>
+                <p class="seasonal-panel-desc">
+                    Scrub through any past TC season with the chosen ERA5
+                    environmental field underneath and IBTrACS storm
+                    tracks materializing as the time slider advances.
+                    Storms remain on the map after landfall as long as
+                    they retain a true-TC nature (TS/TD/HU/TC/SS/SD) —
+                    they fade once classified extratropical or
+                    dissipated. Anomaly mode subtracts the 1991-2020
+                    climatology so you see how a given season's
+                    environment compared to normal at each time step.
+                </p>
+                <div class="seasonal-ts-controls">
+                    <label>Year
+                        <select id="seasonal-evo-year"
+                                title="Calendar year to animate. Years populate from the era5_daily archive manifest."></select>
+                    </label>
+                    <label>Variable
+                        <select id="seasonal-evo-var" title="Field shown in the background. Phase 1 ships shear; future variables (MPI, χ200, RH700, ζ850, TCWV) light up as additional daily-archive variables are backfilled.">
+                            <option value="shear" selected>Deep-layer shear (200-850)</option>
+                        </select>
+                    </label>
+                    <label>Display
+                        <select id="seasonal-evo-mode" title="Raw shows the absolute field for the selected year/month. Anomaly subtracts the same calendar month's 1991-2020 climatology, so red = stronger than normal, blue = weaker. For shear that means red = more suppressive, blue = more favorable.">
+                            <option value="anomaly" selected>Anomaly vs 1991-2020</option>
+                            <option value="raw">Raw values</option>
+                        </select>
+                    </label>
+                    <label>Track basin
+                        <select id="seasonal-evo-basin" title="IBTrACS storm filter. NA = North Atlantic, EP = East Pacific, WP = West Pacific, NI = North Indian, SI = South Indian, SP = South Pacific.">
+                            <option value="ALL">All basins</option>
+                            <option value="NA" selected>North Atlantic</option>
+                            <option value="EP">East Pacific</option>
+                            <option value="WP">West Pacific</option>
+                            <option value="NI">North Indian</option>
+                            <option value="SI">South Indian</option>
+                            <option value="SP">South Pacific</option>
+                        </select>
+                    </label>
+                    <label>Track depth
+                        <select id="seasonal-evo-track-depth" title="How many days of TC track to show at each frame.">
+                            <option value="cumulative" selected>Cumulative this season</option>
+                            <option value="trailing15">Trailing 15 days</option>
+                            <option value="active">Active on this date only</option>
+                        </select>
+                    </label>
+                </div>
+                <div class="seasonal-evo-wrap" id="seasonal-evo-wrap">
+                    <div id="seasonal-evo-map" class="seasonal-evo-map"></div>
+                </div>
+                <div class="seasonal-evo-slider-row" id="seasonal-evo-slider-row">
+                    <button type="button" id="seasonal-evo-play" class="seasonal-evo-btn"
+                            title="Play / pause the animation">▶</button>
+                    <div class="seasonal-evo-slider" id="seasonal-evo-slider"></div>
+                    <span class="seasonal-evo-date" id="seasonal-evo-date">—</span>
+                    <select id="seasonal-evo-speed" class="seasonal-evo-speed"
+                            title="Frame interval during playback">
+                        <option value="800">1×</option>
+                        <option value="400" selected>2×</option>
+                        <option value="200">4×</option>
+                    </select>
+                </div>
+                <div class="seasonal-evo-legend" id="seasonal-evo-legend"></div>
+            </section>
+
+            <!-- Panel D: 2D phase-space scatter (the headline feature) -->
             <section class="seasonal-panel" id="seasonal-panel-scatter">
-                <h3 class="seasonal-panel-title">C · Pre-season SST × Annual ACE</h3>
+                <h3 class="seasonal-panel-title">D · Pre-season SST × Annual ACE</h3>
                 <div class="seasonal-scatter-controls">
                     <label>X-axis
                         <select id="seasonal-scatter-x">
@@ -1078,9 +1152,9 @@
                 <div id="seasonal-scatter-plot" class="seasonal-scatter-plot"></div>
             </section>
 
-            <!-- Panel D: ACE × SST correlation map (interactive toggle) -->
+            <!-- Panel E: ACE × SST correlation map (interactive toggle) -->
             <section class="seasonal-panel" id="seasonal-panel-correlation">
-                <h3 class="seasonal-panel-title">D · ACE × SST Correlation</h3>
+                <h3 class="seasonal-panel-title">E · ACE × SST Correlation</h3>
                 <p class="seasonal-panel-desc">
                     Pixel-wise Pearson correlation between monthly SST and
                     annual basin ACE (1982-present). Red = warm SST coincides
@@ -1148,9 +1222,9 @@
                 </div>
             </section>
 
-            <!-- Panel E: Analog seasons ranking -->
+            <!-- Panel F: Analog seasons ranking -->
             <section class="seasonal-panel" id="seasonal-panel-analogs">
-                <h3 class="seasonal-panel-title">E · Analog Seasons</h3>
+                <h3 class="seasonal-panel-title">F · Analog Seasons</h3>
                 <p class="seasonal-panel-desc" id="seasonal-an-method-desc">
                     Top-10 historical analogs to the target year/month.
                     <strong>Grid-weighted by |r|</strong> (default and
@@ -1260,9 +1334,9 @@
                 </details>
             </section>
 
-            <!-- Panel F: Climate-index multi-trace time series -->
+            <!-- Panel G: Climate-index multi-trace time series -->
             <section class="seasonal-panel" id="seasonal-panel-indices">
-                <h3 class="seasonal-panel-title">F · Climate Indices</h3>
+                <h3 class="seasonal-panel-title">G · Climate Indices</h3>
                 <p class="seasonal-panel-desc">
                     Derived from the same OISST record as Panels A-E. ENSO
                     horizontal markers at ±0.5 °C anomaly are the

@@ -2656,6 +2656,430 @@
                      { responsive: true, displaylogo: false });
     }
 
+    // -------------------------------------------------------------------
+    // Panel C — Seasonal Evolution animation
+    //
+    // Stage 1: monthly-resolution scrub through a chosen year's ERA5
+    // deep-layer shear field. Raw or anomaly-vs-1991-2020 climatology.
+    // IBTrACS tracks overlay coming in the next commit.
+    //
+    // Tile format: matches build_era5_daily_archive.py — gzip'd uint16
+    // streams with per-tile (vmin, vmax) recorded in the manifest. Decoded
+    // client-side via DecompressionStream + Uint16Array dequantization
+    // (same pattern as vendor/gc-atlas/era5.js).
+    // -------------------------------------------------------------------
+    var EVO_ARCHIVE_BASE = 'https://storage.googleapis.com/tc-atlas-ir-cache/era5_daily';
+    var EVO_CLIMO_BASE   = 'https://storage.googleapis.com/tc-atlas-ir-cache/era5_climo';
+    var EVO_GRID_NY = 121;    // 60S..60N at 1° (matches archive)
+    var EVO_GRID_NX = 360;    // -180..179 at 1°
+    var EVO_LATS = (function () {
+        var a = []; for (var lat = 60; lat >= -60; lat--) a.push(lat); return a;
+    })();
+    var EVO_LONS = (function () {
+        var a = []; for (var lon = -180; lon < 180; lon++) a.push(lon); return a;
+    })();
+
+    var _evoState = {
+        manifest: null,
+        manifestPromise: null,
+        climoManifest: null,
+        climoManifestPromise: null,
+        year: null,
+        variable: 'shear',
+        mode: 'anomaly',         // 'anomaly' | 'raw'
+        basin: 'NA',
+        trackDepth: 'cumulative',
+        frames: null,            // array of {month, z[NY][NX]}
+        climo: null,             // {month → climo z[NY][NX]} for anomaly mode
+        currentFrameIdx: 0,
+        playing: false,
+        playTimer: null,
+    };
+
+    function _evoLoadManifest() {
+        if (_evoState.manifest) return Promise.resolve(_evoState.manifest);
+        if (_evoState.manifestPromise) return _evoState.manifestPromise;
+        _evoState.manifestPromise = fetch(EVO_ARCHIVE_BASE + '/manifest.json',
+                                          { cache: 'no-cache' })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (j) { _evoState.manifest = j; return j; })
+            .catch(function () { return null; });
+        return _evoState.manifestPromise;
+    }
+
+    function _evoLoadClimoManifest() {
+        if (_evoState.climoManifest) return Promise.resolve(_evoState.climoManifest);
+        if (_evoState.climoManifestPromise) return _evoState.climoManifestPromise;
+        _evoState.climoManifestPromise = fetch(EVO_CLIMO_BASE + '/manifest.json',
+                                               { cache: 'no-cache' })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (j) { _evoState.climoManifest = j; return j; })
+            .catch(function () { return null; });
+        return _evoState.climoManifestPromise;
+    }
+
+    // Decode an era5_daily/shear/{YYYY}_{MM}.bin.gz into a Float32Array
+    // of shape (n_days * NY * NX). NaN sentinel = 0xFFFF.
+    function _evoDecodeTile(arrayBuffer, tileMeta) {
+        var u16 = new Uint16Array(arrayBuffer);
+        var range = (tileMeta.vmax - tileMeta.vmin) / 65534.0;
+        var out = new Float32Array(u16.length);
+        for (var i = 0; i < u16.length; i++) {
+            out[i] = u16[i] === 0xFFFF
+                ? NaN
+                : tileMeta.vmin + u16[i] * range;
+        }
+        return out;
+    }
+
+    function _evoFetchShearTile(year, month) {
+        var url = EVO_ARCHIVE_BASE + '/shear/' + year + '_'
+            + (month < 10 ? '0' : '') + month + '.bin.gz';
+        return fetch(url)
+            .then(function (r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                // Streaming gunzip via DecompressionStream.
+                var decompressed = r.body.pipeThrough(new DecompressionStream('gzip'));
+                return new Response(decompressed).arrayBuffer();
+            })
+            .then(function (buf) {
+                var meta = _evoState.manifest.tiles['shear/'
+                    + year + '_' + (month < 10 ? '0' : '') + month];
+                if (!meta) throw new Error('no manifest entry');
+                var values = _evoDecodeTile(buf, meta);
+                var nDays = meta.n_days || (values.length / (EVO_GRID_NY * EVO_GRID_NX));
+                return { values: values, n_days: nDays, valid_dates: meta.valid_dates };
+            });
+    }
+
+    // Monthly mean of daily shear at each grid cell.
+    function _evoMonthlyMean(tile) {
+        var nDays = tile.n_days;
+        var stride = EVO_GRID_NY * EVO_GRID_NX;
+        var sum = new Float32Array(stride);
+        var count = new Int32Array(stride);
+        for (var d = 0; d < nDays; d++) {
+            var base = d * stride;
+            for (var k = 0; k < stride; k++) {
+                var v = tile.values[base + k];
+                if (Number.isFinite(v)) {
+                    sum[k] += v;
+                    count[k]++;
+                }
+            }
+        }
+        var mean = new Array(EVO_GRID_NY);
+        for (var i = 0; i < EVO_GRID_NY; i++) {
+            var row = new Array(EVO_GRID_NX);
+            for (var j = 0; j < EVO_GRID_NX; j++) {
+                var idx = i * EVO_GRID_NX + j;
+                row[j] = count[idx] > 0 ? sum[idx] / count[idx] : null;
+            }
+            mean[i] = row;
+        }
+        return mean;
+    }
+
+    // Pull the climatology values for a calendar month from the
+    // era5_climo grid sidecars (which are south-to-north, 0..260 cols
+    // covering lons 100..360). Convert into the Pacific-centered 360-col
+    // grid the daily tiles use (col 0 = lon -180 = +180 in Pacific frame
+    // post-conversion). We keep things on the daily-tile grid for
+    // straightforward subtraction.
+    function _evoLoadClimoForMonth(month) {
+        var mm = (month < 10 ? '0' : '') + month;
+        return fetch(EVO_CLIMO_BASE + '/shear_' + mm + '.grid.json')
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (g) {
+                if (!g) return null;
+                // grid g is south-to-north, lon_min=100, lon_max=360,
+                // n_lat=121, n_lon=261. Pad to 360 cols + flip lats to
+                // match the daily tile's N→S × lon -180..179 frame.
+                var ny = g.n_lat, nx = g.n_lon;
+                // Daily tile is N→S (LATS goes 60..-60). Climo grid is
+                // S→N (g.values[0] = lat -60). Need to flip rows.
+                // Daily tile lon -180..179; climo grid lon 100..360
+                // (which is the rolled Pacific-centered view of the
+                // same lons modulo 360). To express climo on the
+                // daily-tile's lon axis, place climo col k (lon 100+k)
+                // into daily col ((100 + k + 180) mod 360) = ((280 + k) mod 360).
+                var out = new Array(EVO_GRID_NY);
+                for (var i = 0; i < EVO_GRID_NY; i++) {
+                    out[i] = new Array(EVO_GRID_NX).fill(null);
+                }
+                // Map each climo cell.
+                for (var iC = 0; iC < ny; iC++) {
+                    // climo row iC = lat -60 + iC (S→N).
+                    // daily row at the same lat: 60 - (-60 + iC) = 120 - iC.
+                    var iD = 120 - iC;
+                    if (iD < 0 || iD >= EVO_GRID_NY) continue;
+                    for (var jC = 0; jC < nx; jC++) {
+                        // climo col jC = lon (100 + jC).
+                        // daily col: ((100 + jC) + 180) mod 360 = (280 + jC) mod 360.
+                        var jD = (280 + jC) % 360;
+                        out[iD][jD] = g.values[iC][jC];
+                    }
+                }
+                return out;
+            })
+            .catch(function () { return null; });
+    }
+
+    function _evoFetchYear(year) {
+        // Returns Promise<frames[]> for the 12 months of `year`.
+        // Skips months with missing tiles (gappy years near the
+        // present where ERA5T hasn't published yet).
+        return _evoLoadManifest().then(function (m) {
+            if (!m) throw new Error('archive manifest unavailable');
+            var monthPromises = [];
+            for (var month = 1; month <= 12; month++) {
+                (function (mo) {
+                    monthPromises.push(
+                        _evoFetchShearTile(year, mo)
+                            .then(function (tile) {
+                                return { month: mo, z: _evoMonthlyMean(tile) };
+                            })
+                            .catch(function () { return null; })
+                    );
+                })(month);
+            }
+            return Promise.all(monthPromises).then(function (frames) {
+                return frames.filter(function (f) { return f != null; });
+            });
+        });
+    }
+
+    function _evoFetchClimoForFrames(frames) {
+        // Fetch climo for each month present in `frames`. Cached.
+        if (_evoState.climo && _evoState.climo.year_for === _evoState.year) {
+            return Promise.resolve(_evoState.climo);
+        }
+        var pending = frames.map(function (f) {
+            return _evoLoadClimoForMonth(f.month).then(function (clim) {
+                return { month: f.month, clim: clim };
+            });
+        });
+        return Promise.all(pending).then(function (results) {
+            var byMonth = {};
+            results.forEach(function (r) {
+                if (r.clim) byMonth[r.month] = r.clim;
+            });
+            _evoState.climo = byMonth;
+            _evoState.climo.year_for = _evoState.year;
+            return byMonth;
+        });
+    }
+
+    function _evoBuildPlotlyTraces(frames) {
+        // Returns the initial trace + frames[] for Plotly.newPlot with
+        // animation. We build one heatmap trace per frame so the slider
+        // can swap z arrays cleanly.
+        var modeIsAnom = _evoState.mode === 'anomaly';
+        var climo = modeIsAnom ? _evoState.climo : null;
+        var monthNames = ['Jan','Feb','Mar','Apr','May','Jun',
+                          'Jul','Aug','Sep','Oct','Nov','Dec'];
+
+        // Anomaly mode: subtract climo per-cell. Raw mode: identity.
+        function frameZ(f) {
+            if (!modeIsAnom) return f.z;
+            var clim = climo && climo[f.month];
+            if (!clim) return f.z;   // fallback to raw if climo missing
+            var ny = f.z.length, nx = f.z[0].length;
+            var out = new Array(ny);
+            for (var i = 0; i < ny; i++) {
+                var row = new Array(nx);
+                var fr = f.z[i], cr = clim[i];
+                for (var j = 0; j < nx; j++) {
+                    var a = fr[j], b = cr ? cr[j] : null;
+                    row[j] = (a == null || b == null) ? null : a - b;
+                }
+                out[i] = row;
+            }
+            return out;
+        }
+
+        var colorscale, zmin, zmax;
+        if (modeIsAnom) {
+            // Diverging around 0 — anomaly is symmetric.
+            colorscale = 'RdBu_r';
+            zmin = -10; zmax = 10;
+        } else {
+            // Raw shear — same palette as the climo PNG, but defined
+            // for Plotly. RdYlBu_r centered at 12 m/s.
+            colorscale = [
+                [0.0,  '#313695'], [0.40, '#74add1'],
+                [0.50, '#fed98e'], [0.70, '#f46d43'],
+                [1.0,  '#a50026'],
+            ];
+            zmin = 0; zmax = 30;
+        }
+
+        var baseTrace = {
+            type: 'heatmap',
+            x: EVO_LONS, y: EVO_LATS, z: frameZ(frames[0]),
+            colorscale: colorscale, zmin: zmin, zmax: zmax,
+            zsmooth: 'best',
+            colorbar: {
+                title: { text: modeIsAnom ? 'Shear anom (m/s)' : 'Shear (m/s)' },
+                thickness: 10,
+            },
+            hovertemplate: 'lat %{y}°, lon %{x}°<br>'
+                + (modeIsAnom ? 'anom %{z:.1f} m/s' : 'shear %{z:.1f} m/s')
+                + '<extra></extra>',
+        };
+
+        var plotlyFrames = frames.map(function (f) {
+            return {
+                name: String(f.month),
+                data: [{ z: frameZ(f) }],
+            };
+        });
+
+        var sliderSteps = frames.map(function (f) {
+            return {
+                label: monthNames[f.month - 1],
+                method: 'animate',
+                args: [[String(f.month)], {
+                    mode: 'immediate',
+                    transition: { duration: 0 },
+                    frame: { duration: 0, redraw: true },
+                }],
+            };
+        });
+
+        return { trace: baseTrace, frames: plotlyFrames, sliderSteps: sliderSteps };
+    }
+
+    function _evoRender() {
+        var el = document.getElementById('seasonal-evo-map');
+        if (!el || typeof Plotly === 'undefined') return;
+        el.innerHTML = '<div class="seasonal-panel-stub" style="padding:80px;'
+            + 'text-align:center;">Loading ' + _evoState.year + ' shear archive…</div>';
+        var year = _evoState.year;
+        _evoFetchYear(year).then(function (frames) {
+            if (_evoState.year !== year) return;     // user moved on
+            if (!frames || !frames.length) {
+                el.innerHTML = '<div class="seasonal-panel-stub" style="padding:80px;'
+                    + 'text-align:center;">No archive data for ' + year + '.</div>';
+                return;
+            }
+            _evoState.frames = frames;
+            var prep = _evoState.mode === 'anomaly'
+                ? _evoFetchClimoForFrames(frames)
+                : Promise.resolve(null);
+            return prep.then(function () { _evoDrawPlotly(el, frames); });
+        }).catch(function (e) {
+            console.warn('[seasonal-evo] year fetch failed:', e);
+            el.innerHTML = '<div class="seasonal-panel-stub" style="padding:80px;'
+                + 'text-align:center;color:#ef4444;">Failed to load '
+                + year + ': ' + e.message + '</div>';
+        });
+    }
+
+    function _evoDrawPlotly(el, frames) {
+        var built = _evoBuildPlotlyTraces(frames);
+        var layout = {
+            margin: { l: 50, r: 70, t: 10, b: 30 },
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: 'rgba(0,0,0,0)',
+            xaxis: { range: [-100, 0], showgrid: false,
+                     title: { text: 'Longitude', font: { size: 10 } } },
+            yaxis: { range: [-60, 60], showgrid: false,
+                     title: { text: 'Latitude', font: { size: 10 } } },
+            font: { family: 'DM Sans, system-ui, sans-serif', size: 10,
+                    color: 'rgba(220,228,238,0.85)' },
+            sliders: [{
+                pad: { t: 30 }, len: 0.85, x: 0.05, y: -0.05,
+                currentvalue: { visible: false },
+                steps: built.sliderSteps,
+            }],
+        };
+        Plotly.newPlot(el, [built.trace], layout, {
+            displayModeBar: false, responsive: true,
+        }).then(function () {
+            return Plotly.addFrames(el, built.frames);
+        });
+        // Update the friendly date label below the map.
+        var dateEl = document.getElementById('seasonal-evo-date');
+        if (dateEl) dateEl.textContent = _evoState.year + ' · '
+            + ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][
+                frames[0].month - 1];
+    }
+
+    function _evoPopulateYearPicker() {
+        var sel = document.getElementById('seasonal-evo-year');
+        if (!sel || sel._populated) return;
+        _evoLoadManifest().then(function (m) {
+            if (!m || !m.tiles) {
+                sel.innerHTML = '<option>no archive</option>';
+                return;
+            }
+            var years = {};
+            Object.keys(m.tiles).forEach(function (k) {
+                if (k.indexOf('shear/') === 0) {
+                    var y = parseInt(k.split('/')[1].split('_')[0], 10);
+                    if (Number.isFinite(y)) years[y] = true;
+                }
+            });
+            var sorted = Object.keys(years).map(Number)
+                                .sort(function (a, b) { return b - a; });
+            sel.innerHTML = sorted.map(function (y) {
+                return '<option value="' + y + '">' + y + '</option>';
+            }).join('');
+            sel._populated = true;
+            // Default: most-recent year.
+            _evoState.year = sorted[0];
+            sel.value = String(sorted[0]);
+            _evoRender();
+        });
+    }
+
+    function _evoBindControls() {
+        var bind = function (id, key, parse) {
+            var el = document.getElementById(id);
+            if (!el || el._evoBound) return;
+            el._evoBound = true;
+            el.addEventListener('change', function () {
+                _evoState[key] = parse ? parse(el.value) : el.value;
+                if (key === 'year' || key === 'mode' || key === 'variable') {
+                    // Re-fetch / re-render with new selection.
+                    _evoState.frames = null;
+                    _evoRender();
+                }
+                _ga('rt_seasonal_evo', { key: key, value: el.value });
+            });
+        };
+        bind('seasonal-evo-year', 'year', function (v) { return parseInt(v, 10); });
+        bind('seasonal-evo-var',  'variable');
+        bind('seasonal-evo-mode', 'mode');
+        bind('seasonal-evo-basin', 'basin');
+        bind('seasonal-evo-track-depth', 'trackDepth');
+        // Play / pause is its own thing — TODO Phase 1b
+        var play = document.getElementById('seasonal-evo-play');
+        if (play && !play._evoBound) {
+            play._evoBound = true;
+            play.addEventListener('click', function () {
+                var el = document.getElementById('seasonal-evo-map');
+                if (!el || !_evoState.frames) return;
+                _evoState.playing = !_evoState.playing;
+                play.textContent = _evoState.playing ? '⏸' : '▶';
+                if (_evoState.playing) {
+                    var speed = parseInt(
+                        document.getElementById('seasonal-evo-speed').value, 10);
+                    Plotly.animate(el, null, {
+                        frame: { duration: speed, redraw: true },
+                        transition: { duration: 0 },
+                        mode: 'immediate',
+                    });
+                    // Plotly emits 'plotly_animated' once the cycle ends;
+                    // for now we just let the user toggle pause.
+                } else {
+                    Plotly.animate(el, [null], { mode: 'next' }); // stop
+                }
+            });
+        }
+    }
+
     function _bindIndexControls() {
         var bindOne = function (id, key) {
             var el = document.getElementById(id);
@@ -3182,6 +3606,11 @@
         _bindAnomVarControl();
         _wireCorrHover();
         _renderCorrelation();
+        // New Panel C — seasonal evolution animation. Self-contained:
+        // pulls its own manifests + tiles, populates the year picker
+        // from what's actually in the era5_daily archive on GCS.
+        _evoBindControls();
+        _evoPopulateYearPicker();
         _setStatus('Loading indices…');
         var p1 = _fetchData('indices_monthly.json').then(function (j) { state.indices = j; });
         var p2 = _fetchData('ace_annual.json').then(function (j) { state.ace = j; });
