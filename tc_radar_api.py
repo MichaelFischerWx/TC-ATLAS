@@ -833,6 +833,12 @@ def _filter_cases_for_composite(
     min_dtl: float = 0,
     dtl_window: str = "24h",
     data_type: str = "swath",
+    # Environment filters (SHIPS-derived, precomputed into metadata JSON):
+    min_vmpi: float = 0,    max_vmpi: float = 250,   # MPI (kt)
+    min_sst:  float = 0,    max_sst:  float = 35,    # SST (°C)
+    min_rhlo: float = 0,    max_rhlo: float = 100,   # 850–700 hPa RH (%)
+    min_rhmd: float = 0,    max_rhmd: float = 100,   # 700–500 hPa RH (%)
+    min_vp:   float = 0,    max_vp:   float = 1000,  # ventilation proxy (unitless)
 ) -> list[int]:
     """Return list of case_index values that pass all composite filters."""
     cache = _merge_metadata_cache if data_type == "merge" else _metadata_cache
@@ -888,6 +894,29 @@ def _filter_cases_for_composite(
             dtl_key = "dtl_min_24h" if dtl_window == "24h" else "dtl_min_12h"
             dtl_val = meta.get(dtl_key)
             if dtl_val is None or dtl_val < min_dtl:
+                continue
+
+        # Environment filters — each is a no-op at its default range, so cases
+        # missing the field only get excluded when the user actually narrows.
+        if min_vmpi > 0 or max_vmpi < 250:
+            v = meta.get("vmpi")
+            if v is None or v < min_vmpi or v > max_vmpi:
+                continue
+        if min_sst > 0 or max_sst < 35:
+            v = meta.get("sst")
+            if v is None or v < min_sst or v > max_sst:
+                continue
+        if min_rhlo > 0 or max_rhlo < 100:
+            v = meta.get("rhlo")
+            if v is None or v < min_rhlo or v > max_rhlo:
+                continue
+        if min_rhmd > 0 or max_rhmd < 100:
+            v = meta.get("rhmd")
+            if v is None or v < min_rhmd or v > max_rhmd:
+                continue
+        if min_vp > 0 or max_vp < 1000:
+            v = meta.get("vp")
+            if v is None or v < min_vp or v > max_vp:
                 continue
 
         matching.append(idx)
@@ -3063,6 +3092,17 @@ def _composite_filter_params(
     max_shear_dir:  float = Query(360,  ge=0,   le=360,  description="Max shear direction (deg)"),
     min_dtl:        float = Query(0,    ge=0,   le=9999, description="Min distance-to-land (km); 0 = no filter"),
     dtl_window:     str   = Query("24h",                 description="DTL forecast window: '12h' or '24h'"),
+    # Environment filters (SHIPS-derived, precomputed):
+    min_vmpi:       float = Query(0,    ge=0,   le=250,  description="Min MPI (kt)"),
+    max_vmpi:       float = Query(250,  ge=0,   le=250,  description="Max MPI (kt)"),
+    min_sst:        float = Query(0,    ge=0,   le=35,   description="Min SST (°C)"),
+    max_sst:        float = Query(35,   ge=0,   le=35,   description="Max SST (°C)"),
+    min_rhlo:       float = Query(0,    ge=0,   le=100,  description="Min 850–700 hPa RH (%)"),
+    max_rhlo:       float = Query(100,  ge=0,   le=100,  description="Max 850–700 hPa RH (%)"),
+    min_rhmd:       float = Query(0,    ge=0,   le=100,  description="Min 700–500 hPa RH (%)"),
+    max_rhmd:       float = Query(100,  ge=0,   le=100,  description="Max 700–500 hPa RH (%)"),
+    min_vp:         float = Query(0,    ge=0,   le=1000, description="Min ventilation proxy"),
+    max_vp:         float = Query(1000, ge=0,   le=1000, description="Max ventilation proxy"),
 ):
     return dict(
         min_intensity=min_intensity, max_intensity=max_intensity,
@@ -3072,6 +3112,11 @@ def _composite_filter_params(
         min_shear_mag=min_shear_mag, max_shear_mag=max_shear_mag,
         min_shear_dir=min_shear_dir, max_shear_dir=max_shear_dir,
         min_dtl=min_dtl, dtl_window=dtl_window,
+        min_vmpi=min_vmpi, max_vmpi=max_vmpi,
+        min_sst=min_sst,   max_sst=max_sst,
+        min_rhlo=min_rhlo, max_rhlo=max_rhlo,
+        min_rhmd=min_rhmd, max_rhmd=max_rhmd,
+        min_vp=min_vp,     max_vp=max_vp,
     )
 
 
@@ -3343,6 +3388,12 @@ def composite_count(
     max_shear_dir:  float = Query(360,  ge=0,   le=360),
     min_dtl:        float = Query(0,    ge=0,   le=9999),
     dtl_window:     str   = Query("24h"),
+    # Environment filters (SHIPS-derived, precomputed):
+    min_vmpi:  float = Query(0),    max_vmpi:  float = Query(250),
+    min_sst:   float = Query(0),    max_sst:   float = Query(35),
+    min_rhlo:  float = Query(0),    max_rhlo:  float = Query(100),
+    min_rhmd:  float = Query(0),    max_rhmd:  float = Query(100),
+    min_vp:    float = Query(0),    max_vp:    float = Query(1000),
 ):
     """Quick endpoint to get case count for given filter criteria (no data loading)."""
     cases = _filter_cases_for_composite(
@@ -3350,6 +3401,11 @@ def composite_count(
         min_tilt, max_tilt, min_year, max_year,
         min_shear_mag, max_shear_mag, min_shear_dir, max_shear_dir,
         min_dtl=min_dtl, dtl_window=dtl_window,
+        min_vmpi=min_vmpi, max_vmpi=max_vmpi,
+        min_sst=min_sst,   max_sst=max_sst,
+        min_rhlo=min_rhlo, max_rhlo=max_rhlo,
+        min_rhmd=min_rhmd, max_rhmd=max_rhmd,
+        min_vp=min_vp,     max_vp=max_vp,
         data_type=data_type,
     )
     return {
@@ -3377,6 +3433,12 @@ def composite_azimuthal_mean(
     min_shear_mag:  float = Query(0),    max_shear_mag:  float = Query(100),
     min_shear_dir:  float = Query(0),    max_shear_dir:  float = Query(360),
     min_dtl:        float = Query(0),    dtl_window:     str   = Query("24h"),
+    # Environment filters (SHIPS-derived, precomputed):
+    min_vmpi:  float = Query(0),    max_vmpi:  float = Query(250),
+    min_sst:   float = Query(0),    max_sst:   float = Query(35),
+    min_rhlo:  float = Query(0),    max_rhlo:  float = Query(100),
+    min_rhmd:  float = Query(0),    max_rhmd:  float = Query(100),
+    min_vp:    float = Query(0),    max_vp:    float = Query(1000),
 ):
     """Compute composite azimuthal mean across matching cases, optionally RMW-normalised."""
     if variable not in VARIABLES:
@@ -3392,6 +3454,11 @@ def composite_azimuthal_mean(
         min_tilt, max_tilt, min_year, max_year,
         min_shear_mag, max_shear_mag, min_shear_dir, max_shear_dir,
         min_dtl=min_dtl, dtl_window=dtl_window,
+        min_vmpi=min_vmpi, max_vmpi=max_vmpi,
+        min_sst=min_sst,   max_sst=max_sst,
+        min_rhlo=min_rhlo, max_rhlo=max_rhlo,
+        min_rhmd=min_rhmd, max_rhmd=max_rhmd,
+        min_vp=min_vp,     max_vp=max_vp,
         data_type=data_type,
     )
     if not matching:
@@ -3534,6 +3601,12 @@ def composite_quadrant_mean(
     min_shear_mag:  float = Query(0),    max_shear_mag:  float = Query(100),
     min_shear_dir:  float = Query(0),    max_shear_dir:  float = Query(360),
     min_dtl:        float = Query(0),    dtl_window:     str   = Query("24h"),
+    # Environment filters (SHIPS-derived, precomputed):
+    min_vmpi:  float = Query(0),    max_vmpi:  float = Query(250),
+    min_sst:   float = Query(0),    max_sst:   float = Query(35),
+    min_rhlo:  float = Query(0),    max_rhlo:  float = Query(100),
+    min_rhmd:  float = Query(0),    max_rhmd:  float = Query(100),
+    min_vp:    float = Query(0),    max_vp:    float = Query(1000),
 ):
     """Compute RMW-normalised composite shear-relative quadrant means."""
     if variable not in VARIABLES:
@@ -3549,6 +3622,11 @@ def composite_quadrant_mean(
         min_tilt, max_tilt, min_year, max_year,
         min_shear_mag, max_shear_mag, min_shear_dir, max_shear_dir,
         min_dtl=min_dtl, dtl_window=dtl_window,
+        min_vmpi=min_vmpi, max_vmpi=max_vmpi,
+        min_sst=min_sst,   max_sst=max_sst,
+        min_rhlo=min_rhlo, max_rhlo=max_rhlo,
+        min_rhmd=min_rhmd, max_rhmd=max_rhmd,
+        min_vp=min_vp,     max_vp=max_vp,
         data_type=data_type,
     )
     if not matching:
@@ -3704,6 +3782,12 @@ def composite_plan_view(
     min_shear_mag:  float = Query(0),    max_shear_mag:  float = Query(100),
     min_shear_dir:  float = Query(0),    max_shear_dir:  float = Query(360),
     min_dtl:        float = Query(0),    dtl_window:     str   = Query("24h"),
+    # Environment filters (SHIPS-derived, precomputed):
+    min_vmpi:  float = Query(0),    max_vmpi:  float = Query(250),
+    min_sst:   float = Query(0),    max_sst:   float = Query(35),
+    min_rhlo:  float = Query(0),    max_rhlo:  float = Query(100),
+    min_rhmd:  float = Query(0),    max_rhmd:  float = Query(100),
+    min_vp:    float = Query(0),    max_vp:    float = Query(1000),
 ):
     """Compute a composite plan-view mean at a specified height level."""
 
@@ -3721,6 +3805,11 @@ def composite_plan_view(
         min_tilt, max_tilt, min_year, max_year,
         min_shear_mag, max_shear_mag, min_shear_dir, max_shear_dir,
         min_dtl=min_dtl, dtl_window=dtl_window,
+        min_vmpi=min_vmpi, max_vmpi=max_vmpi,
+        min_sst=min_sst,   max_sst=max_sst,
+        min_rhlo=min_rhlo, max_rhlo=max_rhlo,
+        min_rhmd=min_rhmd, max_rhmd=max_rhmd,
+        min_vp=min_vp,     max_vp=max_vp,
         data_type=data_type,
     )
     if not matching:
@@ -4092,6 +4181,12 @@ def composite_ir_plan_view(
     min_shear_mag:  float = Query(0),    max_shear_mag:  float = Query(100),
     min_shear_dir:  float = Query(0),    max_shear_dir:  float = Query(360),
     min_dtl:        float = Query(0),    dtl_window:     str   = Query("24h"),
+    # Environment filters (SHIPS-derived, precomputed):
+    min_vmpi:  float = Query(0),    max_vmpi:  float = Query(250),
+    min_sst:   float = Query(0),    max_sst:   float = Query(35),
+    min_rhlo:  float = Query(0),    max_rhlo:  float = Query(100),
+    min_rhmd:  float = Query(0),    max_rhmd:  float = Query(100),
+    min_vp:    float = Query(0),    max_vp:    float = Query(1000),
 ):
     """Composite plan-view mean of IR brightness temperature."""
 
@@ -4111,6 +4206,11 @@ def composite_ir_plan_view(
         min_tilt, max_tilt, min_year, max_year,
         min_shear_mag, max_shear_mag, min_shear_dir, max_shear_dir,
         min_dtl=min_dtl, dtl_window=dtl_window,
+        min_vmpi=min_vmpi, max_vmpi=max_vmpi,
+        min_sst=min_sst,   max_sst=max_sst,
+        min_rhlo=min_rhlo, max_rhlo=max_rhlo,
+        min_rhmd=min_rhmd, max_rhmd=max_rhmd,
+        min_vp=min_vp,     max_vp=max_vp,
         data_type=data_type,
     )
     if not matching:
@@ -4311,6 +4411,12 @@ def composite_ir_azimuthal_mean(
     min_shear_mag:  float = Query(0),    max_shear_mag:  float = Query(100),
     min_shear_dir:  float = Query(0),    max_shear_dir:  float = Query(360),
     min_dtl:        float = Query(0),    dtl_window:     str   = Query("24h"),
+    # Environment filters (SHIPS-derived, precomputed):
+    min_vmpi:  float = Query(0),    max_vmpi:  float = Query(250),
+    min_sst:   float = Query(0),    max_sst:   float = Query(35),
+    min_rhlo:  float = Query(0),    max_rhlo:  float = Query(100),
+    min_rhmd:  float = Query(0),    max_rhmd:  float = Query(100),
+    min_vp:    float = Query(0),    max_vp:    float = Query(1000),
 ):
     """Composite azimuthal-mean of IR brightness temperature."""
 
@@ -4330,6 +4436,11 @@ def composite_ir_azimuthal_mean(
         min_tilt, max_tilt, min_year, max_year,
         min_shear_mag, max_shear_mag, min_shear_dir, max_shear_dir,
         min_dtl=min_dtl, dtl_window=dtl_window,
+        min_vmpi=min_vmpi, max_vmpi=max_vmpi,
+        min_sst=min_sst,   max_sst=max_sst,
+        min_rhlo=min_rhlo, max_rhlo=max_rhlo,
+        min_rhmd=min_rhmd, max_rhmd=max_rhmd,
+        min_vp=min_vp,     max_vp=max_vp,
         data_type=data_type,
     )
     if not matching:
@@ -4592,6 +4703,12 @@ def composite_cfad(
     min_shear_mag:  float = Query(0),    max_shear_mag:  float = Query(100),
     min_shear_dir:  float = Query(0),    max_shear_dir:  float = Query(360),
     min_dtl:        float = Query(0),    dtl_window:     str   = Query("24h"),
+    # Environment filters (SHIPS-derived, precomputed):
+    min_vmpi:  float = Query(0),    max_vmpi:  float = Query(250),
+    min_sst:   float = Query(0),    max_sst:   float = Query(35),
+    min_rhlo:  float = Query(0),    max_rhlo:  float = Query(100),
+    min_rhmd:  float = Query(0),    max_rhmd:  float = Query(100),
+    min_vp:    float = Query(0),    max_vp:    float = Query(1000),
 ):
     """Compute a Contoured Frequency by Altitude Diagram across matching cases."""
     if variable not in VARIABLES:
@@ -4618,6 +4735,11 @@ def composite_cfad(
         min_tilt, max_tilt, min_year, max_year,
         min_shear_mag, max_shear_mag, min_shear_dir, max_shear_dir,
         min_dtl=min_dtl, dtl_window=dtl_window,
+        min_vmpi=min_vmpi, max_vmpi=max_vmpi,
+        min_sst=min_sst,   max_sst=max_sst,
+        min_rhlo=min_rhlo, max_rhlo=max_rhlo,
+        min_rhmd=min_rhmd, max_rhmd=max_rhmd,
+        min_vp=min_vp,     max_vp=max_vp,
         data_type=data_type,
     )
     if not matching:
@@ -7808,6 +7930,12 @@ def composite_anomaly_azimuthal_mean(
     min_shear_mag:  float = Query(0),    max_shear_mag:  float = Query(100),
     min_shear_dir:  float = Query(0),    max_shear_dir:  float = Query(360),
     min_dtl:        float = Query(0),    dtl_window:     str   = Query("24h"),
+    # Environment filters (SHIPS-derived, precomputed):
+    min_vmpi:  float = Query(0),    max_vmpi:  float = Query(250),
+    min_sst:   float = Query(0),    max_sst:   float = Query(35),
+    min_rhlo:  float = Query(0),    max_rhlo:  float = Query(100),
+    min_rhmd:  float = Query(0),    max_rhmd:  float = Query(100),
+    min_vp:    float = Query(0),    max_vp:    float = Query(1000),
 ):
     """
     Composite Z-score anomaly on the hybrid R_H coordinate (Fischer et al. 2025).
@@ -7823,6 +7951,11 @@ def composite_anomaly_azimuthal_mean(
         min_tilt, max_tilt, min_year, max_year,
         min_shear_mag, max_shear_mag, min_shear_dir, max_shear_dir,
         min_dtl=min_dtl, dtl_window=dtl_window,
+        min_vmpi=min_vmpi, max_vmpi=max_vmpi,
+        min_sst=min_sst,   max_sst=max_sst,
+        min_rhlo=min_rhlo, max_rhlo=max_rhlo,
+        min_rhmd=min_rhmd, max_rhmd=max_rhmd,
+        min_vp=min_vp,     max_vp=max_vp,
         data_type=data_type,
     )
     if not matching:

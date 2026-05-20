@@ -7772,7 +7772,14 @@ function initCompositePanel() {
                     '<option value="12h">0\u201312 h</option>' +
                     '<option value="24h" selected>0\u201324 h</option>' +
                 '</select>' +
-            '</div>';
+            '</div>' +
+            // \u2500\u2500 Environment (SHIPS-derived) \u2500\u2500
+            '<div class="wf-section-hdr" title="SHIPS-derived environmental variables sampled at the analysis time of each TC-RADAR case.">Environment (SHIPS)</div>' +
+            wfRow('MPI',          prefix + '-vmpi', 0, 250, 5,   0, 250, 'kt') +
+            wfRow('SST',          prefix + '-sst',  0, 35,  0.5, 0, 35,  '\u00b0C') +
+            wfRow('RH 850\u2013700', prefix + '-rhlo', 0, 100, 5,   0, 100, '%') +
+            wfRow('RH 700\u2013500', prefix + '-rhmd', 0, 100, 5,   0, 100, '%') +
+            wfRow('Vent Idx',     prefix + '-vp',   0, 5,   0.1, 0, 5,   '');
     }
 
     overlay.innerHTML =
@@ -8685,21 +8692,48 @@ function toggleCompositePanel() {
 
 
 function _getCompositeFilters() {
+    return _readCompositeFilters('comp');
+}
+
+function _readCompositeFilters(prefix) {
+    function num(id, dflt) {
+        var el = document.getElementById(prefix + id);
+        if (!el) return dflt;
+        var v = parseFloat(el.value);
+        return isNaN(v) ? dflt : v;
+    }
+    function intval(id, dflt) {
+        var el = document.getElementById(prefix + id);
+        if (!el) return dflt;
+        var v = parseInt(el.value);
+        return isNaN(v) ? dflt : v;
+    }
     return {
-        min_intensity:   parseFloat(document.getElementById('comp-int-min').value) || 0,
-        max_intensity:   parseFloat(document.getElementById('comp-int-max').value) || 200,
-        min_vmax_change: parseFloat(document.getElementById('comp-dv-min').value) || -100,
-        max_vmax_change: parseFloat(document.getElementById('comp-dv-max').value) || 85,
-        min_tilt:        parseFloat(document.getElementById('comp-tilt-min').value) || 0,
-        max_tilt:        parseFloat(document.getElementById('comp-tilt-max').value) || 200,
-        min_year:        parseInt(document.getElementById('comp-year-min').value) || 1997,
-        max_year:        parseInt(document.getElementById('comp-year-max').value) || 2024,
-        min_shear_mag:   parseFloat(document.getElementById('comp-shrmag-min').value) || 0,
-        max_shear_mag:   parseFloat(document.getElementById('comp-shrmag-max').value) || 100,
-        min_shear_dir:   parseFloat(document.getElementById('comp-shrdir-min').value) || 0,
-        max_shear_dir:   parseFloat(document.getElementById('comp-shrdir-max').value) || 360,
-        min_dtl:         parseFloat(document.getElementById('comp-dtl-min').value) || 0,
-        dtl_window:      document.getElementById('comp-dtl-win').value || '24h',
+        min_intensity:   num('-int-min', 0),
+        max_intensity:   num('-int-max', 200),
+        min_vmax_change: num('-dv-min', -100),
+        max_vmax_change: num('-dv-max', 85),
+        min_tilt:        num('-tilt-min', 0),
+        max_tilt:        num('-tilt-max', 200),
+        min_year:        intval('-year-min', 1997),
+        max_year:        intval('-year-max', 2024),
+        min_shear_mag:   num('-shrmag-min', 0),
+        max_shear_mag:   num('-shrmag-max', 100),
+        min_shear_dir:   num('-shrdir-min', 0),
+        max_shear_dir:   num('-shrdir-max', 360),
+        min_dtl:         num('-dtl-min', 0),
+        dtl_window:      (document.getElementById(prefix + '-dtl-win') || {}).value || '24h',
+        // Environment (SHIPS-derived)
+        min_vmpi:        num('-vmpi-min', 0),
+        max_vmpi:        num('-vmpi-max', 250),
+        min_sst:         num('-sst-min', 0),
+        max_sst:         num('-sst-max', 35),
+        min_rhlo:        num('-rhlo-min', 0),
+        max_rhlo:        num('-rhlo-max', 100),
+        min_rhmd:        num('-rhmd-min', 0),
+        max_rhmd:        num('-rhmd-max', 100),
+        min_vp:          num('-vp-min', 0),
+        max_vp:          num('-vp-max', 5),
     };
 }
 
@@ -8756,6 +8790,16 @@ function _compositeFilterSummary(filters, nCases) {
         parts.push('Dir ' + filters.min_shear_dir + '\u2013' + filters.max_shear_dir + '\u00b0');
     if (filters.min_dtl > 0)
         parts.push('DTL \u2265 ' + filters.min_dtl + ' km (' + (filters.dtl_window || '24h') + ')');
+    if (filters.min_vmpi > 0 || filters.max_vmpi < 250)
+        parts.push('MPI ' + filters.min_vmpi + '\u2013' + filters.max_vmpi + ' kt');
+    if (filters.min_sst > 0 || filters.max_sst < 35)
+        parts.push('SST ' + filters.min_sst + '\u2013' + filters.max_sst + ' \u00b0C');
+    if (filters.min_rhlo > 0 || filters.max_rhlo < 100)
+        parts.push('RH\u2097\u2092 ' + filters.min_rhlo + '\u2013' + filters.max_rhlo + ' %');
+    if (filters.min_rhmd > 0 || filters.max_rhmd < 100)
+        parts.push('RH\u2098\u1d62d ' + filters.min_rhmd + '\u2013' + filters.max_rhmd + ' %');
+    if (filters.min_vp > 0 || filters.max_vp < 5)
+        parts.push('VI ' + filters.min_vp + '\u2013' + filters.max_vp);
     var summary = parts.length > 0 ? parts.join(' | ') : 'All cases';
     return 'Composite (N=' + nCases + ') | ' + summary;
 }
@@ -8793,6 +8837,22 @@ function _computeCompositeMeanVmax(filters) {
             var dtlKey = filters.dtl_window === '12h' ? 'dtl_min_12h' : 'dtl_min_24h';
             var dtlVal = c[dtlKey];
             if (dtlVal == null || dtlVal < filters.min_dtl) return;
+        }
+        // Environment (SHIPS) — fields present in metadata JSON after precompute
+        if (filters.min_vmpi > 0 || filters.max_vmpi < 250) {
+            if (c.vmpi == null || c.vmpi < filters.min_vmpi || c.vmpi > filters.max_vmpi) return;
+        }
+        if (filters.min_sst > 0 || filters.max_sst < 35) {
+            if (c.sst == null || c.sst < filters.min_sst || c.sst > filters.max_sst) return;
+        }
+        if (filters.min_rhlo > 0 || filters.max_rhlo < 100) {
+            if (c.rhlo == null || c.rhlo < filters.min_rhlo || c.rhlo > filters.max_rhlo) return;
+        }
+        if (filters.min_rhmd > 0 || filters.max_rhmd < 100) {
+            if (c.rhmd == null || c.rhmd < filters.min_rhmd || c.rhmd > filters.max_rhmd) return;
+        }
+        if (filters.min_vp > 0 || filters.max_vp < 5) {
+            if (c.vp == null || c.vp < filters.min_vp || c.vp > filters.max_vp) return;
         }
         sum += v; count++;
     });
@@ -9043,7 +9103,13 @@ function _applyCompHashParams(params) {
         min_tilt: 'comp-tilt-min', max_tilt: 'comp-tilt-max',
         min_year: 'comp-year-min', max_year: 'comp-year-max',
         min_shear_mag: 'comp-shrmag-min', max_shear_mag: 'comp-shrmag-max',
-        min_shear_dir: 'comp-shrdir-min', max_shear_dir: 'comp-shrdir-max'
+        min_shear_dir: 'comp-shrdir-min', max_shear_dir: 'comp-shrdir-max',
+        min_dtl: 'comp-dtl-min', dtl_window: 'comp-dtl-win',
+        min_vmpi: 'comp-vmpi-min', max_vmpi: 'comp-vmpi-max',
+        min_sst:  'comp-sst-min',  max_sst:  'comp-sst-max',
+        min_rhlo: 'comp-rhlo-min', max_rhlo: 'comp-rhlo-max',
+        min_rhmd: 'comp-rhmd-min', max_rhmd: 'comp-rhmd-max',
+        min_vp:   'comp-vp-min',   max_vp:   'comp-vp-max'
     };
     for (var key in fieldMap) {
         if (params[key] !== undefined) {
@@ -10542,22 +10608,7 @@ function _toggleDiffMode() {
 }
 
 function _getCompGroupBFilters() {
-    return {
-        min_intensity:   parseFloat(document.getElementById('compb-int-min').value) || 0,
-        max_intensity:   parseFloat(document.getElementById('compb-int-max').value) || 200,
-        min_vmax_change: parseFloat(document.getElementById('compb-dv-min').value) || -100,
-        max_vmax_change: parseFloat(document.getElementById('compb-dv-max').value) || 85,
-        min_tilt:        parseFloat(document.getElementById('compb-tilt-min').value) || 0,
-        max_tilt:        parseFloat(document.getElementById('compb-tilt-max').value) || 200,
-        min_year:        parseInt(document.getElementById('compb-year-min').value) || 1997,
-        max_year:        parseInt(document.getElementById('compb-year-max').value) || 2024,
-        min_shear_mag:   parseFloat(document.getElementById('compb-shrmag-min').value) || 0,
-        max_shear_mag:   parseFloat(document.getElementById('compb-shrmag-max').value) || 100,
-        min_shear_dir:   parseFloat(document.getElementById('compb-shrdir-min').value) || 0,
-        max_shear_dir:   parseFloat(document.getElementById('compb-shrdir-max').value) || 360,
-        min_dtl:         parseFloat(document.getElementById('compb-dtl-min').value) || 0,
-        dtl_window:      document.getElementById('compb-dtl-win').value || '24h',
-    };
+    return _readCompositeFilters('compb');
 }
 
 function _debouncedGroupBCount() {

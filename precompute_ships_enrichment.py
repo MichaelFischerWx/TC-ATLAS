@@ -72,6 +72,9 @@ def enrich(cases_by_ci, data_type):
         # Vectorized reads: one GCS fetch per variable per era
         vmpi = _read_lag_slice(ds, "mpi_ships", SHIPS_T0_IDX)
         rhlo = _read_lag_slice(ds, "rhlo_ships", SHIPS_T0_IDX)
+        rhmd = _read_lag_slice(ds, "rhmd_ships", SHIPS_T0_IDX)
+        rhhi = _read_lag_slice(ds, "rhhi_ships", SHIPS_T0_IDX)
+        sst  = _read_lag_slice(ds, "sst_ships",  SHIPS_T0_IDX)
         shgc = _read_lag_slice(ds, "shgc_ships", SHIPS_T0_IDX)
         vmax_t0 = _read_lag_slice(ds, "vmax_ships", SHIPS_T0_IDX)
         vmax_t12 = _read_lag_slice(ds, "vmax_ships", SHIPS_T12_IDX)
@@ -97,6 +100,12 @@ def enrich(cases_by_ci, data_type):
                 entry["vmpi"] = _rounded(vmpi[local_idx])
             if rhlo is not None and not np.isnan(rhlo[local_idx]):
                 entry["rhlo"] = _rounded(rhlo[local_idx])
+            if rhmd is not None and not np.isnan(rhmd[local_idx]):
+                entry["rhmd"] = _rounded(rhmd[local_idx])
+            if rhhi is not None and not np.isnan(rhhi[local_idx]):
+                entry["rhhi"] = _rounded(rhhi[local_idx])
+            if sst is not None and not np.isnan(sst[local_idx]):
+                entry["sst"] = _rounded(sst[local_idx])
             if shgc is not None and not np.isnan(shgc[local_idx]):
                 entry["shgc"] = _rounded(shgc[local_idx])
             if not np.isnan(vp[local_idx]):
@@ -131,7 +140,11 @@ for data_type, path in (("swath", Path("tc_radar_metadata.json")),
 
     n_vp = sum(1 for c in cases if c.get("vp") is not None)
     n_dvmax = sum(1 for c in cases if c.get("dvmax_12h") is not None)
-    print(f"  after: {n_vp}/{len(cases)} cases have vp, {n_dvmax} have dvmax_12h")
+    n_sst = sum(1 for c in cases if c.get("sst") is not None)
+    n_rhmd = sum(1 for c in cases if c.get("rhmd") is not None)
+    n_vmpi = sum(1 for c in cases if c.get("vmpi") is not None)
+    print(f"  after: {n_vp}/{len(cases)} have vp, {n_dvmax} dvmax_12h, "
+          f"{n_sst} sst, {n_rhmd} rhmd, {n_vmpi} vmpi")
 
     with open(path, "w") as f:
         json.dump(data, f, indent=2)
