@@ -44,14 +44,15 @@
         // this panel is for (TC potential-intensity literature).
         corr: { basin: 'NA', month: 5, kind: 'relative',
                 stat: 'pearson', overlayYear: '' },
-        // Default to Daily resolution with `recent10` history — Daily is
-        // the more informative view for TC research (~13 extra days of
-        // detail near "now", true climatology shape, sub-monthly anomaly
-        // events visible). `recent10` keeps the gray spaghetti legible
-        // and avoids fetching the 44-year region all-years payload on
-        // first paint (~70 KB → 0 KB; the full backdrop is one click
-        // away via the History selector).
-        ts: { region: 'atl_mdr', variable: 'sst', history: 'recent10',
+        // Default to Daily resolution with all-years history — Daily is
+        // the more informative view for TC research (sub-monthly anomaly
+        // events, ~13 extra days of detail near "now", true climatology
+        // shape), and the full 1982-present gray spaghetti gives the
+        // user the visual context for where this year sits across the
+        // historical envelope. The all-years payload is ~70 KB gzip
+        // through the /seasonal/daily API — fine within broadband
+        // budget on first paint.
+        ts: { region: 'atl_mdr', variable: 'sst', history: 'all',
               highlight: 'none', resolution: 'daily' },
         an: { year: null, month: 5, regions: 'all',
               method: 'grid_weighted', basin: 'NA', kind: 'relative',
