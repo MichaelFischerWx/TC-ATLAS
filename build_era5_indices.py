@@ -213,11 +213,18 @@ def fetch_field_grid(manifest: dict, manifest_var: str, level: int | None,
     url = tile_url(group, manifest_var, level, month, kind=kind)
     tk = tile_meta_key(level, month)
     if kind == "std":
-        t_vmin = meta.get("std_vmin"); t_vmax = meta.get("std_vmax")
-        # Some manifests store per-tile std ranges keyed std_MM/std_LEVEL_MM.
-        std_tiles = meta.get("std_tiles") or {}
-        if tk in std_tiles:
-            t_vmin = std_tiles[tk]["vmin"]; t_vmax = std_tiles[tk]["vmax"]
+        # Per-tile std metadata lives in the SAME `tiles` dict under
+        # keys std_LEVEL_MM (pressure-level) or std_MM (single-level).
+        # The top-level `std_vmin` / `std_vmax` on the manifest entry
+        # are the ERA5 fill-value sentinel range (~±3.4e38) and must
+        # NOT be used for dequantization — doing so injects sentinel-
+        # scaled values into the std grid and poisons every region
+        # mean derived from it.
+        std_tk = "std_" + tk
+        t = meta.get("tiles", {}).get(std_tk)
+        if not t:
+            return None
+        t_vmin = t["vmin"]; t_vmax = t["vmax"]
     else:
         t = meta.get("tiles", {}).get(tk)
         if not t:
