@@ -2694,7 +2694,131 @@
         currentFrameIdx: 0,
         playing: false,
         playTimer: null,
+        // IBTrACS overlay state — lazy-loaded chunk-1 (1977-present)
+        // covers everything the era5_daily archive will ever have.
+        tracks: null,            // SID → array of fixes
+        tracksPromise: null,
+        storms: null,            // SID → storm metadata (basin, year, name…)
+        stormsPromise: null,
     };
+
+    // True-TC natures per user instruction: keep storms visible on the
+    // map as long as they retain one of these. Drop fix once nature
+    // transitions to ET, DS, DB, NR, MX, etc.
+    var _EVO_TC_NATURES = { TS: 1, TD: 1, HU: 1, TC: 1, SS: 1, SD: 1 };
+
+    // Normalize a storm-track longitude to the [-180, 180) frame the
+    // Plotly heatmap uses. IBTrACS publishes lons in 0..360 historically.
+    function _evoNormLon(lon) {
+        if (lon == null) return null;
+        return lon > 180 ? lon - 360 : lon;
+    }
+
+    function _evoLoadStorms() {
+        if (_evoState.storms) return Promise.resolve(_evoState.storms);
+        if (_evoState.stormsPromise) return _evoState.stormsPromise;
+        _evoState.stormsPromise = fetch('ibtracs_storms.json?' + (window.__v || ''))
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (j) {
+                if (!j || !j.storms) { _evoState.storms = {}; return {}; }
+                var bySid = {};
+                j.storms.forEach(function (s) { bySid[s.sid] = s; });
+                _evoState.storms = bySid;
+                return bySid;
+            })
+            .catch(function () { _evoState.storms = {}; return {}; });
+        return _evoState.stormsPromise;
+    }
+
+    function _evoLoadTracks() {
+        // Chunk 1 (1977-present) is enough — era5_daily archive starts 1991.
+        if (_evoState.tracks) return Promise.resolve(_evoState.tracks);
+        if (_evoState.tracksPromise) return _evoState.tracksPromise;
+        _evoState.tracksPromise = fetch('ibtracs_tracks_1.json?' + (window.__v || ''))
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (j) {
+                _evoState.tracks = j || {};
+                return _evoState.tracks;
+            })
+            .catch(function () { _evoState.tracks = {}; return {}; });
+        return _evoState.tracksPromise;
+    }
+
+    // Build a scatter trace's worth of TC-track points for a given
+    // frame (month). Returns {linesX, linesY, markersX, markersY,
+    // markersC, markersS, hoverTexts}. Polylines are NaN-separated so
+    // a single Plotly scatter trace draws all storms.
+    function _evoBuildTracksForFrame(monthIdx) {
+        var year = _evoState.year;
+        var basin = _evoState.basin;
+        var depth = _evoState.trackDepth;
+        var storms = _evoState.storms || {};
+        var tracks = _evoState.tracks || {};
+        var linesX = [], linesY = [];
+        var mX = [], mY = [], mC = [], mS = [], mT = [];
+
+        var monthEnd = Date.UTC(year, monthIdx, 0) + 86399000;     // last second of monthIdx
+        var monthStart = Date.UTC(year, monthIdx - 1, 1);
+        var trail15Start = monthEnd - 15 * 86400000;
+
+        // Iterate only over storms whose metadata says they're in the
+        // selected year — avoids walking all 13k tracks per frame.
+        for (var sid in storms) {
+            var s = storms[sid];
+            if (!s || s.year !== year) continue;
+            if (basin !== 'ALL' && s.basin !== basin) continue;
+            var fixes = tracks[sid];
+            if (!fixes || !fixes.length) continue;
+            var frameFixes = [];
+            for (var i = 0; i < fixes.length; i++) {
+                var f = fixes[i];
+                if (!f.t || f.la == null || f.lo == null) continue;
+                if (!_EVO_TC_NATURES[f.n]) continue;            // true-TC only
+                var t = Date.parse(f.t + 'Z');                  // ISO without Z by default
+                if (!Number.isFinite(t)) continue;
+                if (t > monthEnd) break;                        // fixes are time-sorted
+                if (depth === 'trailing15' && t < trail15Start) continue;
+                if (depth === 'active' && t < monthStart) continue;
+                frameFixes.push(f);
+            }
+            if (!frameFixes.length) continue;
+            // Add NaN separator between storms.
+            if (linesX.length) { linesX.push(null); linesY.push(null); }
+            for (var k = 0; k < frameFixes.length; k++) {
+                var ff = frameFixes[k];
+                var lon = _evoNormLon(ff.lo);
+                linesX.push(lon); linesY.push(ff.la);
+                mX.push(lon); mY.push(ff.la);
+                var w = ff.w;
+                mC.push(_evoIntensityColor(w));
+                mS.push(_evoIntensitySize(w));
+                mT.push(s.name + ' · ' + ff.t.slice(0, 10)
+                        + (w != null ? ' · ' + Math.round(w) + ' kt' : ''));
+            }
+        }
+        return {
+            linesX: linesX, linesY: linesY,
+            markersX: mX, markersY: mY,
+            markersC: mC, markersS: mS, markersT: mT,
+        };
+    }
+
+    // Saffir-Simpson + TS palette. Matches the NHC color convention
+    // operational forecasters expect.
+    function _evoIntensityColor(w) {
+        if (w == null)        return '#94a3b8';   // unknown intensity
+        if (w < 34)           return '#5eead4';   // tropical depression
+        if (w < 64)           return '#22c55e';   // tropical storm
+        if (w < 83)           return '#fbbf24';   // Cat 1
+        if (w < 96)           return '#f97316';   // Cat 2
+        if (w < 113)          return '#ef4444';   // Cat 3
+        if (w < 137)          return '#dc2626';   // Cat 4
+        return '#7f1d1d';                         // Cat 5
+    }
+    function _evoIntensitySize(w) {
+        if (w == null) return 4;
+        return Math.max(4, Math.min(12, 4 + (w - 30) * 0.08));
+    }
 
     function _evoLoadManifest() {
         if (_evoState.manifest) return Promise.resolve(_evoState.manifest);
@@ -2872,8 +2996,9 @@
 
     function _evoBuildPlotlyTraces(frames) {
         // Returns the initial trace + frames[] for Plotly.newPlot with
-        // animation. We build one heatmap trace per frame so the slider
-        // can swap z arrays cleanly.
+        // animation. We build one heatmap trace + one combined-tracks
+        // scatter trace + one combined-tracks marker trace per frame
+        // so the slider can swap z arrays + track polylines cleanly.
         var modeIsAnom = _evoState.mode === 'anomaly';
         var climo = modeIsAnom ? _evoState.climo : null;
         var monthNames = ['Jan','Feb','Mar','Apr','May','Jun',
@@ -2929,9 +3054,17 @@
         };
 
         var plotlyFrames = frames.map(function (f) {
+            var tracks = _evoBuildTracksForFrame(f.month);
             return {
                 name: String(f.month),
-                data: [{ z: frameZ(f) }],
+                data: [
+                    { z: frameZ(f) },
+                    { x: tracks.linesX, y: tracks.linesY },
+                    { x: tracks.markersX, y: tracks.markersY,
+                      marker: { color: tracks.markersC, size: tracks.markersS,
+                                line: { color: 'rgba(15,23,42,0.7)', width: 0.5 } },
+                      text: tracks.markersT },
+                ],
             };
         });
 
@@ -2947,7 +3080,34 @@
             };
         });
 
-        return { trace: baseTrace, frames: plotlyFrames, sliderSteps: sliderSteps };
+        // Initial track traces for the first frame.
+        var initialTracks = _evoBuildTracksForFrame(frames[0].month);
+        var lineTrace = {
+            type: 'scatter', mode: 'lines',
+            x: initialTracks.linesX, y: initialTracks.linesY,
+            line: { color: 'rgba(255,255,255,0.7)', width: 1 },
+            hoverinfo: 'skip', showlegend: false,
+            name: 'TC tracks',
+        };
+        var markerTrace = {
+            type: 'scatter', mode: 'markers',
+            x: initialTracks.markersX, y: initialTracks.markersY,
+            text: initialTracks.markersT,
+            marker: {
+                color: initialTracks.markersC,
+                size: initialTracks.markersS,
+                line: { color: 'rgba(15,23,42,0.7)', width: 0.5 },
+            },
+            hovertemplate: '%{text}<extra></extra>',
+            showlegend: false,
+            name: 'TC fixes',
+        };
+
+        return {
+            traces: [baseTrace, lineTrace, markerTrace],
+            frames: plotlyFrames,
+            sliderSteps: sliderSteps,
+        };
     }
 
     function _evoRender() {
@@ -2956,7 +3116,13 @@
         el.innerHTML = '<div class="seasonal-panel-stub" style="padding:80px;'
             + 'text-align:center;">Loading ' + _evoState.year + ' shear archive…</div>';
         var year = _evoState.year;
-        _evoFetchYear(year).then(function (frames) {
+        // Fan out: field tiles + climo (if anomaly mode) + IBTrACS metadata
+        // + IBTrACS tracks all in parallel. Tracks are heavy (~22 MB) but
+        // load once per session and stay cached for subsequent year changes.
+        var fieldP = _evoFetchYear(year);
+        var stormsP = _evoLoadStorms();
+        var tracksP = _evoLoadTracks();
+        fieldP.then(function (frames) {
             if (_evoState.year !== year) return;     // user moved on
             if (!frames || !frames.length) {
                 el.innerHTML = '<div class="seasonal-panel-stub" style="padding:80px;'
@@ -2964,16 +3130,30 @@
                 return;
             }
             _evoState.frames = frames;
-            var prep = _evoState.mode === 'anomaly'
-                ? _evoFetchClimoForFrames(frames)
-                : Promise.resolve(null);
-            return prep.then(function () { _evoDrawPlotly(el, frames); });
+            var prep = [stormsP, tracksP];
+            if (_evoState.mode === 'anomaly') prep.push(_evoFetchClimoForFrames(frames));
+            return Promise.all(prep).then(function () {
+                if (_evoState.year !== year) return;
+                _evoDrawPlotly(el, frames);
+            });
         }).catch(function (e) {
             console.warn('[seasonal-evo] year fetch failed:', e);
             el.innerHTML = '<div class="seasonal-panel-stub" style="padding:80px;'
                 + 'text-align:center;color:#ef4444;">Failed to load '
                 + year + ': ' + e.message + '</div>';
         });
+    }
+
+    // Light re-render when basin or track-depth changes — no tile/track
+    // re-fetch needed, just rebuild the scatter trace data + reapply via
+    // Plotly.animate so the slider state is preserved.
+    function _evoRerenderTracksOnly() {
+        var el = document.getElementById('seasonal-evo-map');
+        if (!el || !_evoState.frames || !el.classList.contains('js-plotly-plot')) return;
+        // Re-run the trace builder against the cached frames+tracks
+        // state. We can just call _evoDrawPlotly which is idempotent
+        // (Plotly.newPlot replaces the existing chart).
+        _evoDrawPlotly(el, _evoState.frames);
     }
 
     function _evoDrawPlotly(el, frames) {
@@ -2994,16 +3174,44 @@
                 steps: built.sliderSteps,
             }],
         };
-        Plotly.newPlot(el, [built.trace], layout, {
+        // Clear any leftover "Loading…" stub the renderer parked here
+        // before Plotly's first paint. newPlot replaces innerHTML on
+        // first draw but a stub div parented to el remains visible until
+        // Plotly takes over fully.
+        var stub = el.querySelector('.seasonal-panel-stub');
+        if (stub) stub.remove();
+        Plotly.newPlot(el, built.traces, layout, {
             displayModeBar: false, responsive: true,
         }).then(function () {
-            return Plotly.addFrames(el, built.frames);
+            Plotly.addFrames(el, built.frames);
+            // Update the friendly date label as the user scrubs. Plotly
+            // fires 'plotly_animatingframe' on slider drag + during play.
+            var monthNames = ['Jan','Feb','Mar','Apr','May','Jun',
+                              'Jul','Aug','Sep','Oct','Nov','Dec'];
+            var dateEl = document.getElementById('seasonal-evo-date');
+            function setDate(monthIdx) {
+                if (dateEl) {
+                    dateEl.textContent = _evoState.year + ' · '
+                        + monthNames[Math.max(0, monthIdx - 1)];
+                }
+            }
+            setDate(frames[0].month);
+            // plotly_sliderchange fires on user-driven slider scrubs;
+            // plotly_animatingframe fires during programmatic play
+            // (when the play button is held). Bind both so the date
+            // label tracks whichever path the user takes.
+            if (el.on) {
+                el.on('plotly_sliderchange', function (e) {
+                    var step = e && e.step;
+                    var name = step && step.args && step.args[0] && step.args[0][0];
+                    if (name) setDate(parseInt(name, 10));
+                });
+                el.on('plotly_animatingframe', function (e) {
+                    var name = e && e.frame && e.frame.name;
+                    if (name) setDate(parseInt(name, 10));
+                });
+            }
         });
-        // Update the friendly date label below the map.
-        var dateEl = document.getElementById('seasonal-evo-date');
-        if (dateEl) dateEl.textContent = _evoState.year + ' · '
-            + ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][
-                frames[0].month - 1];
     }
 
     function _evoPopulateYearPicker() {
@@ -3041,10 +3249,16 @@
             el._evoBound = true;
             el.addEventListener('change', function () {
                 _evoState[key] = parse ? parse(el.value) : el.value;
-                if (key === 'year' || key === 'mode' || key === 'variable') {
-                    // Re-fetch / re-render with new selection.
+                if (key === 'year' || key === 'variable') {
+                    // Year/var change needs fresh tile fetches.
                     _evoState.frames = null;
                     _evoRender();
+                } else if (key === 'mode') {
+                    // Mode change re-uses cached frames; just rebuild traces.
+                    _evoRerenderTracksOnly();
+                } else if (key === 'basin' || key === 'trackDepth') {
+                    // Track filter change — no field re-fetch needed.
+                    _evoRerenderTracksOnly();
                 }
                 _ga('rt_seasonal_evo', { key: key, value: el.value });
             });
