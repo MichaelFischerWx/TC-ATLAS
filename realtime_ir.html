@@ -857,7 +857,6 @@
             <a href="#seasonal-panel-correlation" data-target="seasonal-panel-correlation">D · Correlation map</a>
             <a href="#seasonal-panel-analogs" data-target="seasonal-panel-analogs">E · Analog seasons</a>
             <a href="#seasonal-panel-indices" data-target="seasonal-panel-indices">F · Climate indices</a>
-            <a href="#seasonal-panel-era5" data-target="seasonal-panel-era5">G · ERA5 environment</a>
         </nav>
 
         <div class="seasonal-header">
@@ -938,11 +937,21 @@
                         </select>
                     </label>
                     <label>Variable
-                        <select id="seasonal-ts-var" title="Detrending mode (see Panel C tooltip).">
-                            <option value="sst" selected>SST (absolute)</option>
-                            <option value="anom">SST anomaly vs 1991-2020</option>
-                            <option value="sst_dt">SST detrended</option>
-                            <option value="sst_rel">SST relative (Vecchi-Soden 2007)</option>
+                        <select id="seasonal-ts-var" title="SST family from OISST (top group) or ERA5 monthly-mean diagnostics (bottom group, served from the gc-atlas tile catalog). All variables share the same climatology envelope + highlight-year machinery.">
+                            <optgroup label="SST (OISST 1982-present)">
+                                <option value="sst" selected>SST (absolute)</option>
+                                <option value="anom">SST anomaly vs 1991-2020</option>
+                                <option value="sst_dt">SST detrended</option>
+                                <option value="sst_rel">SST relative (Vecchi-Soden 2007)</option>
+                            </optgroup>
+                            <optgroup label="ERA5 environment (monthly mean, 1991-present)">
+                                <option value="shear" title="Mean of daily |V₂₀₀ − V₈₅₀|, computed from ERA5 4×daily winds and averaged to monthly — the operational mean-of-magnitudes shear (Jensen-corrected vs the GC-ATLAS |⟨V⟩| product).">Deep-layer shear (200-850, daily-derived)</option>
+                                <option value="mpi">Max potential intensity (MPI)</option>
+                                <option value="rh700">Mid-level RH (700 hPa)</option>
+                                <option value="chi200">Velocity potential (χ200)</option>
+                                <option value="vo850">Low-level vorticity (ζ850)</option>
+                                <option value="tcwv">Precipitable water (TCWV)</option>
+                            </optgroup>
                         </select>
                     </label>
                     <label>History
@@ -1260,28 +1269,10 @@
                 <div id="seasonal-idx-plot" class="seasonal-ts-plot"></div>
             </section>
 
-            <!-- Panel G — ERA5 environmental context. Deep-links into the
-                 existing TC Climatology globe (vendored GC-ATLAS) for the
-                 most TC-relevant monthly-climatology fields the user
-                 already hosts on gs://gc-atlas-era5. Each card carries
-                 the current calendar month so a click opens the globe
-                 with that month preselected; modify the URL hash to
-                 jump to any other month / year / level. -->
-            <section class="seasonal-panel" id="seasonal-panel-era5">
-                <h3 class="seasonal-panel-title">G · ERA5 Environmental Context</h3>
-                <p class="seasonal-panel-desc">
-                    Direct links into the TC Climatology globe for the
-                    TC-relevant ERA5 monthly fields, prefilled with the
-                    current calendar month. Use these to compare the
-                    contemporary SST diagnostics above against the
-                    canonical TC-genesis controls (potential intensity,
-                    deep-layer shear, mid-level humidity, upper-level
-                    divergence) at 1° monthly-mean resolution.
-                </p>
-                <div class="seasonal-era5-grid" id="seasonal-era5-grid"></div>
-            </section>
-
-            <!-- Pre-publication ACE-forecast panel intentionally left out;
+            <!-- ERA5 environmental variables are surfaced *inside*
+                 Panel B's Variable dropdown (MPI / DLS / RH700 / χ200 /
+                 ζ850 / TCWV) — see indices_monthly_era5.json. Pre-pub
+                 ACE-forecast panel intentionally left out;
                  see feedback_ace_paper_embargo.md in memory. -->
 
         </div>

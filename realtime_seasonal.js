@@ -850,7 +850,50 @@
     // Panel B — Region SST evolution time series
     // -------------------------------------------------------------------
 
+    // ERA5 path: data already in the per-year / climatology shape from
+    // build_era5_indices.py. We just bucket it into the same shape
+    // the renderer expects (byYear[y] = [12], climMean[12], climStd[12]).
+    function _buildEra5TimeSeriesData() {
+        if (!state.era5) return null;
+        var e = state.era5;
+        var key = state.ts.region + '_' + state.ts.variable;
+
+        var byYear = {};
+        var projByYear = {};
+        var preliminaryByYear = {};
+        var years = Object.keys(e.by_year || {})
+            .map(Number).sort(function (a, b) { return a - b; });
+        years.forEach(function (y) {
+            var row = e.by_year[String(y)] && e.by_year[String(y)][key];
+            if (!row) return;
+            byYear[y] = row.slice();
+            projByYear[y] = [null,null,null,null,null,null,null,null,null,null,null,null];
+            preliminaryByYear[y] = [false,false,false,false,false,false,false,false,false,false,false,false];
+        });
+
+        var climMean = (e.values && e.values[key])
+            ? e.values[key].slice() : [null,null,null,null,null,null,null,null,null,null,null,null];
+        var climStd  = (e.std && e.std[key])
+            ? e.std[key].slice()    : [null,null,null,null,null,null,null,null,null,null,null,null];
+
+        return {
+            byYear: byYear,
+            projByYear: projByYear,
+            preliminaryByYear: preliminaryByYear,
+            years: years.filter(function (y) { return byYear[y]; }),
+            climMean: climMean,
+            climStd: climStd,
+        };
+    }
+
     function _buildTimeSeriesData() {
+        // ERA5 monthly variables (MPI, DLS, RH700, χ200, ζ850, TCWV)
+        // come from a separate precomputed payload; the shape is
+        // different (by-year buckets + climo mean/std already split out)
+        // so dispatch to a dedicated builder.
+        if (_isEra5Var(state.ts.variable)) {
+            return _buildEra5TimeSeriesData();
+        }
         if (!state.indices) return null;
         var idx = state.indices;
         var key = state.ts.region + '_' + state.ts.variable;
@@ -933,6 +976,24 @@
     // on the toggle itself (not on every region/variable change).
     function _renderTimeSeries() {
         var el = document.getElementById('seasonal-ts-plot');
+        // ERA5 monthly variables are precomputed offline (build_era5_indices.py)
+        // — lazy-load the JSON the first time the user picks one. While the
+        // fetch is in flight, paint a small placeholder so the panel doesn't
+        // look broken.
+        if (_isEra5Var(state.ts.variable) && !state.era5) {
+            if (el) {
+                el.innerHTML = '<div class="seasonal-panel-stub">'
+                    + 'Loading ERA5 monthly indices…</div>';
+            }
+            return _loadEra5Indices().then(function () { _renderTimeSeries(); });
+        }
+        // ERA5 fields ship as monthly only — force the resolution toggle
+        // to Monthly if the user lands on an ERA5 var while in Daily.
+        if (_isEra5Var(state.ts.variable) && state.ts.resolution === 'daily') {
+            state.ts.resolution = 'monthly';
+            var sel = document.getElementById('seasonal-ts-resolution');
+            if (sel) sel.value = 'monthly';
+        }
         if (el && state.ts._lastResolution &&
             state.ts._lastResolution !== state.ts.resolution &&
             el.classList.contains('js-plotly-plot') &&
@@ -1112,10 +1173,17 @@
         }
 
         var label = REGION_LABEL[state.ts.region] || state.ts.region;
-        var varLabel = (state.ts.variable === 'anom') ? 'SST anomaly (°C)'
+        var era5Meta = state.era5 && state.era5.fields
+            && state.era5.fields[state.ts.variable];
+        var varLabel;
+        if (era5Meta) {
+            varLabel = era5Meta.long_name + ' (' + era5Meta.units + ')';
+        } else {
+            varLabel = (state.ts.variable === 'anom') ? 'SST anomaly (°C)'
                      : (state.ts.variable === 'sst_dt') ? 'detrended SST (°C)'
                      : (state.ts.variable === 'sst_rel') ? 'relative SST vs 30°S-30°N (°C)'
                      : 'SST (°C)';
+        }
         var layout = {
             title: {
                 text: label + ' — monthly ' + varLabel,
@@ -2290,99 +2358,65 @@
     }
 
     // -------------------------------------------------------------------
-    // Panel G — ERA5 environmental context (deep links into the TC
-    // Climatology globe). Builds a small card grid pointing at the most
-    // TC-relevant ERA5 monthly fields. Each card opens the existing
-    // climatology globe with field/level/month preselected via the
-    // hash-state plumbing (vendor/gc-atlas/url_state.js).
+    // ERA5 monthly diagnostics — lazy-loaded indices file.
+    //
+    // build_era5_indices.py precomputes monthly region-mean MPI, DLS,
+    // RH700, χ200, ζ850, and TCWV from the gc-atlas tile catalog into a
+    // single JSON with the same key conventions as indices_monthly.json
+    // (`{region}_{variable}`). Loaded on demand the first time the user
+    // picks an ERA5 variable from Panel B's dropdown — keeps the
+    // default SST page-load small.
     // -------------------------------------------------------------------
-    var ERA5_CARDS = [
-        {
-            field: 'mpi', level: null,
-            title: 'Maximum Potential Intensity',
-            blurb: 'Bister-Emanuel theoretical upper bound on TC wind given local SST + atmospheric profile.',
-            badge: 'MPI',
-            tone: 'red',
-        },
-        {
-            field: 'dls', level: null,
-            title: 'Deep-layer wind shear',
-            blurb: '|⟨V₂₀₀⟩ − ⟨V₈₅₀⟩| from monthly-mean winds — the canonical TC-genesis shear diagnostic.',
-            badge: 'DLS',
-            tone: 'orange',
-        },
-        {
-            field: 'r', level: 700,
-            title: 'Mid-level relative humidity (700 hPa)',
-            blurb: 'Dry-air entrainment proxy — low values suppress TC intensification (SHIPS-style RH).',
-            badge: 'RH700',
-            tone: 'green',
-        },
-        {
-            field: 'chi', level: 200,
-            title: 'Velocity potential (χ200)',
-            blurb: 'Upper-level divergence pattern — direct tracer of large-scale convective envelopes / MJO.',
-            badge: 'χ200',
-            tone: 'blue',
-        },
-        {
-            field: 'tcwv', level: null,
-            title: 'Precipitable water (TCWV)',
-            blurb: 'Column-integrated water vapor — moisture envelope around developing systems.',
-            badge: 'TCWV',
-            tone: 'teal',
-        },
-        {
-            field: 'vo', level: 850,
-            title: 'Low-level relative vorticity (ζ850)',
-            blurb: 'Background rotation in the lower troposphere — the cyclonic-spin TC-genesis ingredient.',
-            badge: 'ζ850',
-            tone: 'purple',
-        },
-    ];
-
-    var MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-
-    function _renderEra5Grid() {
-        var grid = document.getElementById('seasonal-era5-grid');
-        if (!grid) return;
-        var month = (new Date()).getUTCMonth() + 1;
-        var monthName = MONTH_NAMES[month - 1];
-        var year = (new Date()).getUTCFullYear();
-        // Per-card URL builds the GC-ATLAS hash-state convention:
-        //   f=<field>, m=<month>, L=<level>, v=g (globe view)
-        // Year is intentionally omitted so the link lands on the
-        // 1991-2020 climatology by default — clicking "Per-year" inside
-        // the globe UI lets the user inspect any specific year.
-        var cards = ERA5_CARDS.map(function (c) {
-            var hash = 'f=' + encodeURIComponent(c.field)
-                + '&m=' + month
-                + (c.level != null ? '&L=' + c.level : '')
-                + '&v=g';
-            var url = 'climatology_globe.html#' + hash;
-            return '<a class="seasonal-era5-card seasonal-era5-tone-' + c.tone + '" '
-                + 'href="' + url + '" target="_blank" rel="noopener" '
-                + 'data-field="' + c.field + '">'
-                + '  <div class="seasonal-era5-badge">' + c.badge + '</div>'
-                + '  <div class="seasonal-era5-title">' + c.title + '</div>'
-                + '  <div class="seasonal-era5-blurb">' + c.blurb + '</div>'
-                + '  <div class="seasonal-era5-footer">'
-                + '    <span class="seasonal-era5-month">' + monthName + ' '
-                + '(' + year + ' climo opens)</span>'
-                + '    <span class="seasonal-era5-cta">Open in globe ↗</span>'
-                + '  </div>'
-                + '</a>';
-        });
-        grid.innerHTML = cards.join('');
-        // Track click analytics so we can see which env layers are
-        // most-used from the seasonal page.
-        grid.querySelectorAll('.seasonal-era5-card').forEach(function (a) {
-            a.addEventListener('click', function () {
-                _ga('rt_seasonal_era5_open', {
-                    field: a.getAttribute('data-field'),
-                });
+    // 'shear' is the Phase-1 daily-derived product (build_era5_shear_indices.py)
+    // shipped in its own JSON. The other five variables live in the
+    // monthly-derived indices_monthly_era5.json — same loader interface,
+    // different file. Merged into a single in-memory `state.era5` so the
+    // downstream byYear / climMean / climStd code is variable-agnostic.
+    var ERA5_VAR_KEYS = ['shear', 'mpi', 'rh700', 'chi200', 'vo850', 'tcwv'];
+    function _isEra5Var(v) { return ERA5_VAR_KEYS.indexOf(v) !== -1; }
+    var _era5Promise = null;
+    function _mergeEra5Payload(target, src) {
+        if (!src) return target;
+        target = target || { fields: {}, regions: {}, values: {}, std: {}, by_year: {} };
+        if (src.fields)  Object.assign(target.fields,  src.fields);
+        if (src.regions) Object.assign(target.regions, src.regions);
+        if (src.values)  Object.assign(target.values,  src.values);
+        if (src.std)     Object.assign(target.std,     src.std);
+        if (src.by_year) {
+            Object.keys(src.by_year).forEach(function (y) {
+                target.by_year[y] = Object.assign(target.by_year[y] || {}, src.by_year[y]);
             });
+        }
+        return target;
+    }
+    function _loadEra5Indices() {
+        if (state.era5 && state.era5.values
+            && Object.keys(state.era5.values).length > 0) {
+            return Promise.resolve(state.era5);
+        }
+        if (_era5Promise) return _era5Promise;
+        _era5Promise = Promise.all([
+            _fetchData('indices_monthly_era5.json').catch(function () { return null; }),
+            _fetchData('indices_monthly_era5_shear.json').catch(function () { return null; }),
+        ]).then(function (results) {
+            var merged = null;
+            results.forEach(function (r) { merged = _mergeEra5Payload(merged, r); });
+            // Shear payload doesn't ship a `fields` dict (single-variable
+            // file); inject the metadata so the y-axis label code finds it.
+            if (merged && !merged.fields.shear) {
+                merged.fields.shear = {
+                    units: 'm s⁻¹',
+                    long_name: 'Deep-layer shear (|V₂₀₀ − V₈₅₀|, daily-derived)',
+                };
+            }
+            state.era5 = merged;
+            return merged;
+        }).catch(function (err) {
+            console.warn('[seasonal] ERA5 indices fetch failed:', err);
+            state.era5 = null;
+            return null;
         });
+        return _era5Promise;
     }
 
     function _bindAnalogControls() {
@@ -2975,7 +3009,6 @@
         _bindAnomVarControl();
         _wireCorrHover();
         _renderCorrelation();
-        _renderEra5Grid();
         _setStatus('Loading indices…');
         var p1 = _fetchData('indices_monthly.json').then(function (j) { state.indices = j; });
         var p2 = _fetchData('ace_annual.json').then(function (j) { state.ace = j; });
