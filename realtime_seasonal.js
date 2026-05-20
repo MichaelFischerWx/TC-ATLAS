@@ -1193,14 +1193,28 @@
         var label = REGION_LABEL[state.ts.region] || state.ts.region;
         var era5Meta = state.era5 && state.era5.fields
             && state.era5.fields[state.ts.variable];
-        var varLabel;
+        // Compact y-axis labels per ERA5 variable. The full long_name +
+        // units gets too long for the axis (e.g., "Max potential intensity
+        // (Bister-Emanuel) (m s⁻¹)") and crowds the plot. Keep the long
+        // name in the title; use a short tag on the y-axis.
+        var ERA5_Y_LABELS = {
+            mpi:    'MPI (m s⁻¹)',
+            rh700:  '700-hPa RH (%)',
+            chi200: 'χ at 200 hPa (10⁶ m² s⁻¹)',
+            vo850:  'ζ at 850 hPa (10⁻⁵ s⁻¹)',
+            tcwv:   'TCWV (kg m⁻²)',
+            shear:  'Deep-layer shear (m s⁻¹)',
+        };
+        var varLabel, yLabel;
         if (era5Meta) {
             varLabel = era5Meta.long_name + ' (' + era5Meta.units + ')';
+            yLabel = ERA5_Y_LABELS[state.ts.variable] || varLabel;
         } else {
             varLabel = (state.ts.variable === 'anom') ? 'SST anomaly (°C)'
                      : (state.ts.variable === 'sst_dt') ? 'detrended SST (°C)'
                      : (state.ts.variable === 'sst_rel') ? 'relative SST vs 30°S-30°N (°C)'
                      : 'SST (°C)';
+            yLabel = varLabel;
         }
         var layout = {
             title: {
@@ -1218,7 +1232,7 @@
                 tickfont: { size: 11 },
             },
             yaxis: {
-                title: { text: varLabel,
+                title: { text: yLabel,
                          font: { size: 11, color: BRAND.textDim } },
                 zeroline: state.ts.variable !== 'sst',
                 zerolinecolor: BRAND.gridZero,
@@ -1253,7 +1267,11 @@
         // anyway.
         var insetTraces = _timeSeriesInsetBuildTraces();
         var allTraces = traces.concat(insetTraces);
-        layout.geo2 = _insetGeoLayout({ x: [0.76, 1.0], y: [0.74, 1.005] });
+        // Upper-LEFT placement keeps the inset off the Aug-Nov peak
+        // region that every TC-relevant variable (SST, MPI, RH700, TCWV)
+        // climbs into, and matches the Daily-mode placement at line ~1747
+        // for consistency across resolutions.
+        layout.geo2 = _insetGeoLayout({ x: [0.005, 0.22], y: [0.78, 1.005] });
         Plotly.react(el, allTraces, layout,
                      { responsive: true, displaylogo: false });
     }
