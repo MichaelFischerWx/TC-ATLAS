@@ -2289,6 +2289,102 @@
         state.an.year = defaultYear;
     }
 
+    // -------------------------------------------------------------------
+    // Panel G — ERA5 environmental context (deep links into the TC
+    // Climatology globe). Builds a small card grid pointing at the most
+    // TC-relevant ERA5 monthly fields. Each card opens the existing
+    // climatology globe with field/level/month preselected via the
+    // hash-state plumbing (vendor/gc-atlas/url_state.js).
+    // -------------------------------------------------------------------
+    var ERA5_CARDS = [
+        {
+            field: 'mpi', level: null,
+            title: 'Maximum Potential Intensity',
+            blurb: 'Bister-Emanuel theoretical upper bound on TC wind given local SST + atmospheric profile.',
+            badge: 'MPI',
+            tone: 'red',
+        },
+        {
+            field: 'dls', level: null,
+            title: 'Deep-layer wind shear',
+            blurb: '|⟨V₂₀₀⟩ − ⟨V₈₅₀⟩| from monthly-mean winds — the canonical TC-genesis shear diagnostic.',
+            badge: 'DLS',
+            tone: 'orange',
+        },
+        {
+            field: 'r', level: 700,
+            title: 'Mid-level relative humidity (700 hPa)',
+            blurb: 'Dry-air entrainment proxy — low values suppress TC intensification (SHIPS-style RH).',
+            badge: 'RH700',
+            tone: 'green',
+        },
+        {
+            field: 'chi', level: 200,
+            title: 'Velocity potential (χ200)',
+            blurb: 'Upper-level divergence pattern — direct tracer of large-scale convective envelopes / MJO.',
+            badge: 'χ200',
+            tone: 'blue',
+        },
+        {
+            field: 'tcwv', level: null,
+            title: 'Precipitable water (TCWV)',
+            blurb: 'Column-integrated water vapor — moisture envelope around developing systems.',
+            badge: 'TCWV',
+            tone: 'teal',
+        },
+        {
+            field: 'vo', level: 850,
+            title: 'Low-level relative vorticity (ζ850)',
+            blurb: 'Background rotation in the lower troposphere — the cyclonic-spin TC-genesis ingredient.',
+            badge: 'ζ850',
+            tone: 'purple',
+        },
+    ];
+
+    var MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+    function _renderEra5Grid() {
+        var grid = document.getElementById('seasonal-era5-grid');
+        if (!grid) return;
+        var month = (new Date()).getUTCMonth() + 1;
+        var monthName = MONTH_NAMES[month - 1];
+        var year = (new Date()).getUTCFullYear();
+        // Per-card URL builds the GC-ATLAS hash-state convention:
+        //   f=<field>, m=<month>, L=<level>, v=g (globe view)
+        // Year is intentionally omitted so the link lands on the
+        // 1991-2020 climatology by default — clicking "Per-year" inside
+        // the globe UI lets the user inspect any specific year.
+        var cards = ERA5_CARDS.map(function (c) {
+            var hash = 'f=' + encodeURIComponent(c.field)
+                + '&m=' + month
+                + (c.level != null ? '&L=' + c.level : '')
+                + '&v=g';
+            var url = 'climatology_globe.html#' + hash;
+            return '<a class="seasonal-era5-card seasonal-era5-tone-' + c.tone + '" '
+                + 'href="' + url + '" target="_blank" rel="noopener" '
+                + 'data-field="' + c.field + '">'
+                + '  <div class="seasonal-era5-badge">' + c.badge + '</div>'
+                + '  <div class="seasonal-era5-title">' + c.title + '</div>'
+                + '  <div class="seasonal-era5-blurb">' + c.blurb + '</div>'
+                + '  <div class="seasonal-era5-footer">'
+                + '    <span class="seasonal-era5-month">' + monthName + ' '
+                + '(' + year + ' climo opens)</span>'
+                + '    <span class="seasonal-era5-cta">Open in globe ↗</span>'
+                + '  </div>'
+                + '</a>';
+        });
+        grid.innerHTML = cards.join('');
+        // Track click analytics so we can see which env layers are
+        // most-used from the seasonal page.
+        grid.querySelectorAll('.seasonal-era5-card').forEach(function (a) {
+            a.addEventListener('click', function () {
+                _ga('rt_seasonal_era5_open', {
+                    field: a.getAttribute('data-field'),
+                });
+            });
+        });
+    }
+
     function _bindAnalogControls() {
         var bindNum = function (id, key) {
             var el = document.getElementById(id);
@@ -2879,6 +2975,7 @@
         _bindAnomVarControl();
         _wireCorrHover();
         _renderCorrelation();
+        _renderEra5Grid();
         _setStatus('Loading indices…');
         var p1 = _fetchData('indices_monthly.json').then(function (j) { state.indices = j; });
         var p2 = _fetchData('ace_annual.json').then(function (j) { state.ace = j; });
