@@ -976,23 +976,38 @@
     // on the toggle itself (not on every region/variable change).
     function _renderTimeSeries() {
         var el = document.getElementById('seasonal-ts-plot');
-        // ERA5 monthly variables are precomputed offline (build_era5_indices.py)
-        // — lazy-load the JSON the first time the user picks one. While the
-        // fetch is in flight, paint a small placeholder so the panel doesn't
-        // look broken.
-        if (_isEra5Var(state.ts.variable) && !state.era5) {
+        // ERA5 fields are monthly only — switch the resolution toggle
+        // *before* the lazy-load decision so the post-load re-entry
+        // doesn't go down the daily code path on a stale resolution.
+        if (_isEra5Var(state.ts.variable) && state.ts.resolution === 'daily') {
+            state.ts.resolution = 'monthly';
+            var sel = document.getElementById('seasonal-ts-resolution');
+            if (sel) sel.value = 'monthly';
+        }
+        // ERA5 monthly variables are precomputed offline (build_era5_indices.py
+        // + build_era5_shear_indices.py). Lazy-load the JSON the first time
+        // the user picks one. Guard the recursion with `_era5LoadAttempted`:
+        // a failed load sets state.era5 = null, and without this flag we'd
+        // re-trigger the load on every render attempt and lock the page
+        // in an infinite loop (Chrome kills the tab after ~10 seconds).
+        if (_isEra5Var(state.ts.variable) && !state.era5 && !_era5LoadAttempted) {
+            _era5LoadAttempted = true;
             if (el) {
                 el.innerHTML = '<div class="seasonal-panel-stub">'
                     + 'Loading ERA5 monthly indices…</div>';
             }
             return _loadEra5Indices().then(function () { _renderTimeSeries(); });
         }
-        // ERA5 fields ship as monthly only — force the resolution toggle
-        // to Monthly if the user lands on an ERA5 var while in Daily.
-        if (_isEra5Var(state.ts.variable) && state.ts.resolution === 'daily') {
-            state.ts.resolution = 'monthly';
-            var sel = document.getElementById('seasonal-ts-resolution');
-            if (sel) sel.value = 'monthly';
+        // If the ERA5 load already failed, paint a clear error stub and
+        // stop. Don't try to render — the downstream _buildEra5TimeSeriesData
+        // would just return null repeatedly.
+        if (_isEra5Var(state.ts.variable) && !state.era5 && _era5LoadAttempted) {
+            if (el) {
+                el.innerHTML = '<div class="seasonal-panel-stub">'
+                    + 'ERA5 monthly indices not available '
+                    + '(data/indices_monthly_era5_shear.json not deployed yet).</div>';
+            }
+            return;
         }
         if (el && state.ts._lastResolution &&
             state.ts._lastResolution !== state.ts.resolution &&
@@ -2375,6 +2390,11 @@
     var ERA5_VAR_KEYS = ['shear', 'mpi', 'rh700', 'chi200', 'vo850', 'tcwv'];
     function _isEra5Var(v) { return ERA5_VAR_KEYS.indexOf(v) !== -1; }
     var _era5Promise = null;
+    // Single-attempt guard: if the lazy ERA5 fetch fails (404 because
+    // build_era5_shear_indices.py hasn't run on the deployed branch
+    // yet, network glitch, etc.) we set this flag so subsequent
+    // _renderTimeSeries calls don't retry indefinitely.
+    var _era5LoadAttempted = false;
     function _mergeEra5Payload(target, src) {
         if (!src) return target;
         target = target || { fields: {}, regions: {}, values: {}, std: {}, by_year: {} };
