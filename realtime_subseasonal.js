@@ -49,6 +49,24 @@
 
     var TRAIL_DAYS = 15;
 
+    // First-visit default is the combined view (Peyrille-style — matches
+    // the operational TC-monitoring convention and surfaces the punchline
+    // in one figure). Returning users keep whatever they last picked,
+    // remembered across sessions via localStorage.
+    var VIEW_MODE_STORAGE_KEY = 'tcatlas-sub-viewmode';
+    function _loadStoredViewMode() {
+        try {
+            var v = window.localStorage && localStorage.getItem(VIEW_MODE_STORAGE_KEY);
+            if (v === 'stacked' || v === 'combined') return v;
+        } catch (e) {}
+        return 'combined';
+    }
+    function _storeViewMode(v) {
+        try {
+            if (window.localStorage) localStorage.setItem(VIEW_MODE_STORAGE_KEY, v);
+        } catch (e) {}
+    }
+
     var state = {
         initialized: false,
         indices: null,
@@ -58,7 +76,7 @@
         showTCOverlay: true,
         expandedBands: {},          // { bandKey: bool } — sticky per-tab session
         tcLoading: false,           // true while phase-2 recent-storms is in flight
-        viewMode: 'stacked',        // 'stacked' (per-band heatmaps) | 'combined' (OLR + wave contours)
+        viewMode: _loadStoredViewMode(),
         combinedSmoothDays: 5,      // OLR base smoothing in combined view: 1 (raw), 3, or 5 days
     };
 
@@ -730,7 +748,12 @@
         });
 
         var layout = {
-            margin: { l: 60, r: 80, t: 30, b: 32 },
+            // Left margin needs room for the y-axis date labels at the
+            // 1.8× scaled fonts used during PNG export. "Mar 22 2026"
+            // wraps to two lines so the column needs to accommodate the
+            // longer of those plus the "↑ Time" annotation that sits in
+            // the same margin band.
+            margin: { l: 90, r: 90, t: 38, b: 36 },
             paper_bgcolor: bg, plot_bgcolor: bg,
             font: { color: fg, size: 10, family: 'DM Sans, system-ui, sans-serif' },
             xaxis: {
@@ -1261,12 +1284,20 @@
         var viewToggle = document.getElementById('sub-view-toggle');
         if (viewToggle && !viewToggle._wired) {
             viewToggle._wired = true;
+            // Sync the active-button class from state on first wire-up so
+            // the markup's default-active button doesn't override the
+            // persisted choice loaded from localStorage.
+            viewToggle.querySelectorAll('.sub-view-btn').forEach(function (b) {
+                b.classList.toggle('active',
+                    b.getAttribute('data-view') === state.viewMode);
+            });
             viewToggle.addEventListener('click', function (e) {
                 var btn = e.target.closest('.sub-view-btn');
                 if (!btn) return;
                 var view = btn.getAttribute('data-view');
                 if (!view || view === state.viewMode) return;
                 state.viewMode = view;
+                _storeViewMode(view);
                 viewToggle.querySelectorAll('.sub-view-btn').forEach(function (b) {
                     b.classList.toggle('active', b === btn);
                 });
