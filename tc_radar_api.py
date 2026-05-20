@@ -439,29 +439,49 @@ app.add_middleware(CompositeGCMiddleware)
 # Dataset loading
 # ---------------------------------------------------------------------------
 
+# Per-process chunk cache budgets (bytes). Sized for Cloud Run 4 GB instances:
+# 4 caches × ≤150 MB = 600 MB ceiling = ~15% of allocation. The TC-RADAR cache
+# pays off the most (hit by every composite endpoint when users iterate on
+# env filters). zarr's LRUStoreCache is process-local, so each Cloud Run
+# instance maintains its own cache — works well under session affinity.
+_TC_RADAR_CHUNK_CACHE_BYTES = 150 * 1024 * 1024
+_IR_CHUNK_CACHE_BYTES       = 150 * 1024 * 1024
+_ERA5_CHUNK_CACHE_BYTES     = 150 * 1024 * 1024
+
+
+def _wrap_lru(store, max_bytes: int):
+    """Wrap a MutableMapping store with an in-process LRU chunk cache."""
+    import zarr
+    return zarr.storage.LRUStoreCache(store, max_size=max_bytes)
+
+
 @lru_cache(maxsize=2)
 def get_dataset(data_type: str, era: str) -> xr.Dataset:
     """
     Open a TC-RADAR dataset.
 
     Priority: GCS Zarr (free egress) > S3 Zarr > AOML NetCDF (slow fallback)
+    Chunks are cached in-process via zarr.LRUStoreCache so repeated env-narrowed
+    composites that revisit the same cases skip the GCS roundtrip entirely.
     """
     key = (data_type, era)
     if USE_GCS_ZARR and key in GCS_PATHS:
         import gcsfs
         path = GCS_PATHS[key]
         fs = gcsfs.GCSFileSystem()
-        store = gcsfs.GCSMap(root=path, gcs=fs, check=False)
+        store = _wrap_lru(gcsfs.GCSMap(root=path, gcs=fs, check=False),
+                          _TC_RADAR_CHUNK_CACHE_BYTES)
         ds = xr.open_zarr(store, consolidated=True)
-        print(f"Opened Zarr from GCS: {path}")
+        print(f"Opened Zarr from GCS (LRU {_TC_RADAR_CHUNK_CACHE_BYTES//1024//1024} MB): {path}")
         return ds
     if USE_S3:
         import s3fs
         path = S3_PATHS[key]
         fs   = s3fs.S3FileSystem(anon=False, client_kwargs={"region_name": AWS_REGION})
-        store = s3fs.S3Map(root=path, s3=fs, check=False)
+        store = _wrap_lru(s3fs.S3Map(root=path, s3=fs, check=False),
+                          _TC_RADAR_CHUNK_CACHE_BYTES)
         ds = xr.open_zarr(store, consolidated=True)
-        print(f"Opened Zarr from S3: {path}")
+        print(f"Opened Zarr from S3 (LRU {_TC_RADAR_CHUNK_CACHE_BYTES//1024//1024} MB): {path}")
         return ds
     url = AOML_FILES[key]
     of  = fsspec.open(url, "rb")
@@ -478,14 +498,16 @@ def get_ir_dataset():
     if USE_GCS_ZARR and IR_GCS_PATH:
         import gcsfs
         fs = gcsfs.GCSFileSystem()
-        store = gcsfs.GCSMap(root=IR_GCS_PATH, gcs=fs, check=False)
-        print(f"Opened MergIR Zarr from GCS: {IR_GCS_PATH}")
+        store = _wrap_lru(gcsfs.GCSMap(root=IR_GCS_PATH, gcs=fs, check=False),
+                          _IR_CHUNK_CACHE_BYTES)
+        print(f"Opened MergIR Zarr from GCS (LRU {_IR_CHUNK_CACHE_BYTES//1024//1024} MB): {IR_GCS_PATH}")
         return zarr.open(store, mode='r')
     if USE_S3 and IR_S3_PATH:
         import s3fs
         fs = s3fs.S3FileSystem(anon=False, client_kwargs={"region_name": AWS_REGION})
-        store = s3fs.S3Map(root=IR_S3_PATH, s3=fs, check=False)
-        print(f"Opened MergIR Zarr from S3: {IR_S3_PATH}")
+        store = _wrap_lru(s3fs.S3Map(root=IR_S3_PATH, s3=fs, check=False),
+                          _IR_CHUNK_CACHE_BYTES)
+        print(f"Opened MergIR Zarr from S3 (LRU {_IR_CHUNK_CACHE_BYTES//1024//1024} MB): {IR_S3_PATH}")
         return zarr.open(store, mode='r')
     return None
 
@@ -497,14 +519,16 @@ def get_era5_dataset():
     if USE_GCS_ZARR and ERA5_GCS_PATH:
         import gcsfs
         fs = gcsfs.GCSFileSystem()
-        store = gcsfs.GCSMap(root=ERA5_GCS_PATH, gcs=fs, check=False)
-        print(f"Opened ERA5 Zarr from GCS: {ERA5_GCS_PATH}")
+        store = _wrap_lru(gcsfs.GCSMap(root=ERA5_GCS_PATH, gcs=fs, check=False),
+                          _ERA5_CHUNK_CACHE_BYTES)
+        print(f"Opened ERA5 Zarr from GCS (LRU {_ERA5_CHUNK_CACHE_BYTES//1024//1024} MB): {ERA5_GCS_PATH}")
         return zarr.open(store, mode='r')
     if USE_S3 and ERA5_S3_PATH:
         import s3fs
         fs = s3fs.S3FileSystem(anon=False, client_kwargs={"region_name": AWS_REGION})
-        store = s3fs.S3Map(root=ERA5_S3_PATH, s3=fs, check=False)
-        print(f"Opened ERA5 Zarr from S3: {ERA5_S3_PATH}")
+        store = _wrap_lru(s3fs.S3Map(root=ERA5_S3_PATH, s3=fs, check=False),
+                          _ERA5_CHUNK_CACHE_BYTES)
+        print(f"Opened ERA5 Zarr from S3 (LRU {_ERA5_CHUNK_CACHE_BYTES//1024//1024} MB): {ERA5_S3_PATH}")
         return zarr.open(store, mode='r')
     return None
 
@@ -4792,6 +4816,8 @@ def composite_cfad(
     quadrants:     str   = Query("",                     description="Shear-relative quadrant filter: comma-separated from DSL,DSR,USL,USR (empty = all)"),
     normalise:     str   = Query("height",               description="'height' = % at each level (standard CFAD); 'total' = % of all pixels; 'raw' = counts"),
     stream:        bool  = Query(False,                  description="Stream NDJSON progress events"),
+    bootstrap:     bool  = Query(False,                  description="Return per-bin bootstrap standard error (single-quadrant CFAD only)"),
+    n_iter:        int   = Query(500,   ge=100, le=5000, description="Bootstrap iterations (used when bootstrap=true)"),
     min_intensity:  float = Query(0),    max_intensity:  float = Query(200),
     min_vmax_change:float = Query(-100), max_vmax_change:float = Query(85),
     min_tilt:       float = Query(0),    max_tilt:       float = Query(200),
@@ -4928,6 +4954,10 @@ def composite_cfad(
                 processed_indices.append(case_idx)
         else:
             accum = None
+            # Only retain per-case stack when bootstrap is requested AND we're
+            # in single-quadrant mode (multi mode bootstrap is more involved;
+            # skip for now). ~5 MB per 1000 cases on a 32 x 40 grid.
+            per_case_stack = [] if (bootstrap and not multi_mode) else None
 
             def _accum_cfad(result):
                 nonlocal accum, n_processed
@@ -4935,6 +4965,8 @@ def composite_cfad(
                 if accum is None:
                     accum = np.zeros_like(hist_2d)
                 accum += hist_2d
+                if per_case_stack is not None:
+                    per_case_stack.append(hist_2d.astype(np.float32))
                 n_processed += 1
                 processed_indices.append(case_idx)
 
@@ -4991,6 +5023,38 @@ def composite_cfad(
             base_result["multi"] = False
             base_result["quadrants"] = quad_list or []
             base_result["cfad"] = _clean_2d(_normalise_array(accum))
+
+            # Bootstrap SE in single-CFAD mode: resample cases with replacement
+            # via multinomial weights (one matmul), re-normalize each bootstrap
+            # realization the same way the displayed CFAD was, then take the
+            # per-bin std of the resampled, normalized arrays. Output is on the
+            # same scale as the displayed cfad ("% at each level" etc.).
+            if per_case_stack is not None and n_processed >= 5:
+                stack = np.stack(per_case_stack, axis=0)    # (n, h, b), float32
+                n = n_processed
+                n_h, n_b = stack.shape[1], stack.shape[2]
+
+                stack_flat = stack.reshape(n, n_h * n_b)
+                rng = np.random.default_rng(seed=42)
+                W = rng.multinomial(n, [1.0 / n] * n, size=n_iter).astype(np.float32)
+                boot_sums = (W @ stack_flat).reshape(n_iter, n_h, n_b)
+
+                # Apply the same normalization to each bootstrap realization
+                with np.errstate(invalid="ignore", divide="ignore"):
+                    if normalise == "total":
+                        totals = boot_sums.sum(axis=(1, 2), keepdims=True)
+                        totals = np.where(totals > 0, totals, 1)
+                        boot_means = (boot_sums / totals) * 100.0
+                    elif normalise == "height":
+                        rows = boot_sums.sum(axis=2, keepdims=True)
+                        rows = np.where(rows > 0, rows, 1)
+                        boot_means = (boot_sums / rows) * 100.0
+                    else:  # raw
+                        boot_means = boot_sums
+
+                se_bootstrap = np.nanstd(boot_means, axis=0)
+                base_result["se_bootstrap"] = _clean_2d(se_bootstrap)
+                base_result["bootstrap_n_iter"] = n_iter
 
         return base_result
 

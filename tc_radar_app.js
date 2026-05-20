@@ -9022,10 +9022,48 @@ function _buildCompToolbar() {
     return '<div class="comp-toolbar">' +
         '<button class="comp-tool-btn" onclick="_downloadCompCSV()" title="Download data as CSV">\u2B07 CSV</button>' +
         '<button class="comp-tool-btn" onclick="_downloadCompJSON()" title="Download full API response as JSON">\u2B07 JSON</button>' +
+        '<button class="comp-tool-btn comp-save-png-btn" onclick="_saveCompChartsPng(this)" title="Save chart(s) as a high-quality (2\u00D7 retina) PNG">' + _icon('download') + 'PNG</button>' +
         '<button class="comp-tool-btn" onclick="_toggleCompCaseList()" title="Show/hide cases used in this composite">' + _icon('clipboard') + 'Cases</button>' +
         '<button class="comp-tool-btn comp-link-btn" onclick="_copyCompPermalink()" title="Copy shareable link with current settings">' + _icon('link') + 'Copy Link</button>' +
     '</div>' +
     '<div class="comp-case-list-wrap" id="comp-case-list" style="display:none;"></div>';
+}
+
+// Map composite-type \u2192 list of Plotly chart div IDs to snapshot when the
+// user clicks "PNG". For single composites: one chart. For diffs: the entire
+// 3-panel grid \u2014 the helper composites the panels respecting the active
+// layout (stacked / side-by-side) just like the diff toolbar's save button.
+function _resolveCompChartIds() {
+    var t = _lastCompType;
+    // Single-composite views
+    if (t === 'az')              return { ids: ['comp-az-chart'],             stem: 'tc_radar_az_mean' };
+    if (t === 'sq')              return { ids: ['comp-sq-chart'],             stem: 'tc_radar_quadrant_mean' };
+    if (t === 'pv')              return { ids: ['comp-pv-chart'],             stem: 'tc_radar_planview' };
+    if (t === 'cfad')            return { ids: ['comp-cfad-chart'],           stem: 'tc_radar_cfad' };
+    if (t === 'anom')            return { ids: ['comp-anom-chart'],           stem: 'tc_radar_anomaly' };
+    // Diff views \u2014 reuse the same composite-PNG path
+    if (t === 'cfad_diff')       return { ids: ['comp-diff-cfad-a','comp-diff-cfad-b','comp-diff-cfad-diff'],
+                                           stem: 'tc_radar_cfad_diff', gridId: 'diff-grid-cfad' };
+    if (t === 'cfad_diff_multi') return { ids: ['comp-diff-cfadm-a','comp-diff-cfadm-b','comp-diff-cfadm-diff'],
+                                           stem: 'tc_radar_cfad_quad_diff', gridId: 'diff-grid-cfadm' };
+    return null;
+}
+
+function _saveCompChartsPng(btn) {
+    var info = _resolveCompChartIds();
+    if (!info) {
+        if (window._showCompStatus) _showCompStatus('error', 'Save PNG: no active composite to capture.');
+        return;
+    }
+    // For single-chart composites we still want 2\u00D7 retina output, which is
+    // better than Plotly's default modebar download. Reuse _saveDiffComposite
+    // (it handles 1..N panels and matches the active layout).
+    var mode = 'stacked';
+    if (info.gridId) {
+        var g = document.getElementById(info.gridId);
+        if (g && g.classList.contains('diff-cols')) mode = 'cols';
+    }
+    _saveDiffComposite(info.ids, info.stem, mode, btn);
 }
 
 // ── Permalink: encode/decode composite state in URL hash ────
@@ -12107,8 +12145,10 @@ function generateCompDiffCFAD() {
         cfadQS += '&quadrants=' + encodeURIComponent(quadrants.join(','));
     }
 
-    var urlA = API_BASE + '/composite/cfad?' + _compositeQueryString(filtersA) + cfadQS;
-    var urlB = API_BASE + '/composite/cfad?' + _compositeQueryString(filtersB) + cfadQS;
+    // Bootstrap SE only supported in single-quadrant (non-MULTI) CFAD mode
+    var bootQS = isMulti ? '' : '&bootstrap=true&n_iter=300';
+    var urlA = API_BASE + '/composite/cfad?' + _compositeQueryString(filtersA) + cfadQS + bootQS;
+    var urlB = API_BASE + '/composite/cfad?' + _compositeQueryString(filtersB) + cfadQS + bootQS;
 
     var jsonA;
     return _fetchCompositeStream(urlA, 'Group A CFAD').then(function(result) {
@@ -12205,6 +12245,9 @@ function _renderDiffCFAD(targetId, jsonA, jsonB, filtersA, filtersB) {
     // Compute difference (no log for diff — subtract raw percentages)
     var diffData = _subtractArrays2D(jsonA.cfad, jsonB.cfad);
     var symRange = _symmetricRange(diffData);
+    // Two-sample z-test stippling using the per-group bootstrap SEs.
+    // Null when bootstrap wasn't requested (e.g., MULTI-quadrant mode).
+    var sigMask = _buildSigMask(diffData, jsonA.se_bootstrap, jsonB.se_bootstrap);
 
     // For groups A and B, find shared z range
     var gZmax = 0, gZminPos = Infinity;
@@ -12328,6 +12371,13 @@ function _renderDiffCFAD(targetId, jsonA, jsonB, filtersA, filtersB) {
 
     _registerShadingTargets('shd-dcfad-d', ['comp-diff-cfad-diff'], _DIFF_COLORSCALE, diffZmin, diffZmax);
     Plotly.newPlot('comp-diff-cfad-diff', [trD], layD, {responsive:true,displayModeBar:true,displaylogo:false,modeBarButtonsToRemove:['lasso2d','select2d','toggleSpikelines']});
+
+    // Stipple non-significant bins on the CFAD difference (two-sample z-test
+    // on per-group bootstrap SEs). sigMask is null when bootstrap wasn't run
+    // (e.g., MULTI-quadrant mode), in which case _stippleTrace returns null
+    // and addTraces is skipped.
+    var stipple = _stippleTrace(sigMask, binCenters, heightKm);
+    if (stipple) Plotly.addTraces('comp-diff-cfad-diff', [stipple]);
 
     _initDiffPanelToolbar('diff-toolbar-cfad', 'diff-grid-cfad',
         ['comp-diff-cfad-a', 'comp-diff-cfad-b', 'comp-diff-cfad-diff'],
