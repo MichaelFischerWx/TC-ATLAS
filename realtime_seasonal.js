@@ -1566,9 +1566,9 @@
                     line: { color: BRAND.orange_line, width: 2.6,
                             dash: 'dot' },
                     opacity: 0.7,
-                    name: 'last ~14 days (preliminary, OISST may revise)',
+                    name: 'last ~14 days (preliminary)',
                     hovertemplate: currentYear +
-                        ' · DOY %{x}: %{y:.2f} (preliminary)<extra></extra>',
+                        ' · DOY %{x}: %{y:.2f} (preliminary — OISST may revise)<extra></extra>',
                     connectgaps: false,
                 });
             }
