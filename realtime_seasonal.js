@@ -2745,24 +2745,26 @@
     }
 
     // Build a scatter trace's worth of TC-track points for a given
-    // frame (month). Returns {linesX, linesY, markersX, markersY,
-    // markersC, markersS, hoverTexts}. Polylines are NaN-separated so
-    // a single Plotly scatter trace draws all storms.
+    // frame (month). Returns separate line, marker, and named-storm
+    // label arrays. Polylines are NaN-separated so a single Plotly
+    // scatter trace draws all storms.
     function _evoBuildTracksForFrame(monthIdx) {
         var year = _evoState.year;
         var basin = _evoState.basin;
         var depth = _evoState.trackDepth;
         var storms = _evoState.storms || {};
         var tracks = _evoState.tracks || {};
-        var linesX = [], linesY = [];
+        // Unnamed storms get muted styling so named storms (Andrew, etc.)
+        // dominate the visual hierarchy. Tracks split into two pools.
+        var namedLineX = [], namedLineY = [];
+        var unnamedLineX = [], unnamedLineY = [];
         var mX = [], mY = [], mC = [], mS = [], mT = [];
+        var labels = [];   // { x, y, name, cat }, drawn as annotations at latest fix
 
-        var monthEnd = Date.UTC(year, monthIdx, 0) + 86399000;     // last second of monthIdx
+        var monthEnd = Date.UTC(year, monthIdx, 0) + 86399000;
         var monthStart = Date.UTC(year, monthIdx - 1, 1);
         var trail15Start = monthEnd - 15 * 86400000;
 
-        // Iterate only over storms whose metadata says they're in the
-        // selected year — avoids walking all 13k tracks per frame.
         for (var sid in storms) {
             var s = storms[sid];
             if (!s || s.year !== year) continue;
@@ -2773,33 +2775,49 @@
             for (var i = 0; i < fixes.length; i++) {
                 var f = fixes[i];
                 if (!f.t || f.la == null || f.lo == null) continue;
-                if (!_EVO_TC_NATURES[f.n]) continue;            // true-TC only
-                var t = Date.parse(f.t + 'Z');                  // ISO without Z by default
+                if (!_EVO_TC_NATURES[f.n]) continue;
+                var t = Date.parse(f.t + 'Z');
                 if (!Number.isFinite(t)) continue;
-                if (t > monthEnd) break;                        // fixes are time-sorted
+                if (t > monthEnd) break;
                 if (depth === 'trailing15' && t < trail15Start) continue;
                 if (depth === 'active' && t < monthStart) continue;
                 frameFixes.push(f);
             }
             if (!frameFixes.length) continue;
-            // Add NaN separator between storms.
-            if (linesX.length) { linesX.push(null); linesY.push(null); }
+            var isNamed = s.name && s.name !== 'UNNAMED' && s.name !== 'NOT_NAMED';
+            var lineX = isNamed ? namedLineX : unnamedLineX;
+            var lineY = isNamed ? namedLineY : unnamedLineY;
+            if (lineX.length) { lineX.push(null); lineY.push(null); }
             for (var k = 0; k < frameFixes.length; k++) {
                 var ff = frameFixes[k];
                 var lon = _evoNormLon(ff.lo);
-                linesX.push(lon); linesY.push(ff.la);
+                lineX.push(lon); lineY.push(ff.la);
                 mX.push(lon); mY.push(ff.la);
                 var w = ff.w;
                 mC.push(_evoIntensityColor(w));
-                mS.push(_evoIntensitySize(w));
-                mT.push(s.name + ' · ' + ff.t.slice(0, 10)
+                // Named storms get slightly larger markers so they
+                // pop against the unnamed-system clutter.
+                mS.push(_evoIntensitySize(w) * (isNamed ? 1.2 : 0.75));
+                mT.push((s.name || '?') + ' · ' + ff.t.slice(0, 10)
                         + (w != null ? ' · ' + Math.round(w) + ' kt' : ''));
+            }
+            // Label the named storm at its latest visible fix.
+            if (isNamed) {
+                var last = frameFixes[frameFixes.length - 1];
+                labels.push({
+                    x: _evoNormLon(last.lo),
+                    y: last.la,
+                    name: s.name,
+                    cat: s.cat || '',
+                });
             }
         }
         return {
-            linesX: linesX, linesY: linesY,
+            namedLineX: namedLineX, namedLineY: namedLineY,
+            unnamedLineX: unnamedLineX, unnamedLineY: unnamedLineY,
             markersX: mX, markersY: mY,
             markersC: mC, markersS: mS, markersT: mT,
+            labels: labels,
         };
     }
 
@@ -3059,12 +3077,35 @@
                 name: String(f.month),
                 data: [
                     { z: frameZ(f) },
-                    { x: tracks.linesX, y: tracks.linesY },
+                    { x: tracks.unnamedLineX, y: tracks.unnamedLineY },
+                    { x: tracks.namedLineX,   y: tracks.namedLineY },
                     { x: tracks.markersX, y: tracks.markersY,
                       marker: { color: tracks.markersC, size: tracks.markersS,
                                 line: { color: 'rgba(15,23,42,0.7)', width: 0.5 } },
                       text: tracks.markersT },
                 ],
+                // Storm-name labels rendered via the layout's
+                // `annotations` array (Plotly's frames can swap that
+                // alongside the trace data — drives the per-frame
+                // "ANDREW · Cat 5" label appearing at his current
+                // location).
+                layout: {
+                    annotations: tracks.labels.map(function (l) {
+                        return {
+                            x: l.x, y: l.y, xref: 'x', yref: 'y',
+                            text: l.name + (l.cat ? ' · ' + l.cat : ''),
+                            showarrow: false,
+                            xanchor: 'left', yanchor: 'bottom',
+                            xshift: 6, yshift: 4,
+                            font: { size: 10, color: '#0f172a',
+                                    family: 'DM Sans, system-ui, sans-serif',
+                                    weight: 600 },
+                            bgcolor: 'rgba(255,255,255,0.82)',
+                            bordercolor: 'rgba(15,23,42,0.4)',
+                            borderwidth: 0.5, borderpad: 2,
+                        };
+                    }),
+                },
             };
         });
 
@@ -3080,14 +3121,23 @@
             };
         });
 
-        // Initial track traces for the first frame.
+        // Initial traces for the first frame. Two line traces (unnamed
+        // muted, named bright) draw under the markers; the markers
+        // carry the per-fix Saffir-Simpson color.
         var initialTracks = _evoBuildTracksForFrame(frames[0].month);
-        var lineTrace = {
+        var unnamedLineTrace = {
             type: 'scatter', mode: 'lines',
-            x: initialTracks.linesX, y: initialTracks.linesY,
-            line: { color: 'rgba(255,255,255,0.7)', width: 1 },
+            x: initialTracks.unnamedLineX, y: initialTracks.unnamedLineY,
+            line: { color: 'rgba(255,255,255,0.25)', width: 1, dash: 'dot' },
             hoverinfo: 'skip', showlegend: false,
-            name: 'TC tracks',
+            name: 'Unnamed system tracks',
+        };
+        var namedLineTrace = {
+            type: 'scatter', mode: 'lines',
+            x: initialTracks.namedLineX, y: initialTracks.namedLineY,
+            line: { color: 'rgba(255,255,255,0.85)', width: 1.6 },
+            hoverinfo: 'skip', showlegend: false,
+            name: 'Named storm tracks',
         };
         var markerTrace = {
             type: 'scatter', mode: 'markers',
@@ -3102,11 +3152,28 @@
             showlegend: false,
             name: 'TC fixes',
         };
+        // Initial label annotations for frame 0.
+        var initialLabels = initialTracks.labels.map(function (l) {
+            return {
+                x: l.x, y: l.y, xref: 'x', yref: 'y',
+                text: l.name + (l.cat ? ' · ' + l.cat : ''),
+                showarrow: false,
+                xanchor: 'left', yanchor: 'bottom',
+                xshift: 6, yshift: 4,
+                font: { size: 10, color: '#0f172a',
+                        family: 'DM Sans, system-ui, sans-serif',
+                        weight: 600 },
+                bgcolor: 'rgba(255,255,255,0.82)',
+                bordercolor: 'rgba(15,23,42,0.4)',
+                borderwidth: 0.5, borderpad: 2,
+            };
+        });
 
         return {
-            traces: [baseTrace, lineTrace, markerTrace],
+            traces: [baseTrace, unnamedLineTrace, namedLineTrace, markerTrace],
             frames: plotlyFrames,
             sliderSteps: sliderSteps,
+            initialLabels: initialLabels,
         };
     }
 
@@ -3173,6 +3240,7 @@
                 currentvalue: { visible: false },
                 steps: built.sliderSteps,
             }],
+            annotations: built.initialLabels || [],
         };
         // Clear any leftover "Loading…" stub the renderer parked here
         // before Plotly's first paint. newPlot replaces innerHTML on
