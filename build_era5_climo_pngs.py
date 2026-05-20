@@ -70,12 +70,23 @@ def _http_get(url: str) -> bytes | None:
     return r.content
 
 
+_gcs_bucket = None
+def _bucket():
+    global _gcs_bucket
+    if _gcs_bucket is None:
+        from google.cloud import storage   # type: ignore
+        _gcs_bucket = storage.Client().bucket(GCS_BUCKET)
+    return _gcs_bucket
+
+
 def load_manifest(local_only: bool) -> dict:
     if local_only:
         p = Path("era5_daily/manifest.json")
         return json.loads(p.read_text()) if p.exists() else {}
-    body = _http_get(f"https://storage.googleapis.com/{GCS_BUCKET}/{ARCHIVE_PREFIX}/manifest.json")
-    return json.loads(body) if body else {}
+    blob = _bucket().blob(f"{ARCHIVE_PREFIX}/manifest.json")
+    if not blob.exists():
+        return {}
+    return json.loads(blob.download_as_text())
 
 
 def fetch_monthly_shear(year: int, month: int, manifest: dict, local_only: bool
@@ -91,11 +102,10 @@ def fetch_monthly_shear(year: int, month: int, manifest: dict, local_only: bool
             return None
         raw = gzip.decompress(p.read_bytes())
     else:
-        body = _http_get(f"https://storage.googleapis.com/{GCS_BUCKET}/"
-                         f"{ARCHIVE_PREFIX}/shear/{year}_{month:02d}.bin.gz")
-        if body is None:
+        blob = _bucket().blob(f"{ARCHIVE_PREFIX}/shear/{year}_{month:02d}.bin.gz")
+        if not blob.exists():
             return None
-        raw = gzip.decompress(body)
+        raw = gzip.decompress(blob.download_as_bytes())
     u16 = np.frombuffer(raw, dtype=np.uint16)
     n_days = int(meta["n_days"])
     if u16.size != n_days * NY * NX:
@@ -192,6 +202,10 @@ def upload(blob_path: str, body: bytes, content_type: str, local_only: bool) -> 
     blob = bucket.blob(blob_path)
     blob.cache_control = "public, max-age=86400"
     blob.upload_from_string(body, content_type=content_type)
+    try:
+        blob.make_public()
+    except Exception as e:
+        log.warning("  could not make %s public: %s", blob.name, e)
     log.info("  uploaded gs://%s/%s (%d bytes)", GCS_BUCKET, blob_path, len(body))
 
 
@@ -201,6 +215,11 @@ def main() -> None:
                     help="Read from ./era5_daily/, write to ./era5_climo/")
     ap.add_argument("--month", type=int, default=None,
                     help="Render only this calendar month (debug)")
+    ap.add_argument("--min-years", type=int, default=5,
+                    help="Minimum n_years to render a calendar month "
+                         "(default 5; lower this during backfill for "
+                         "early-preview maps with the right spatial "
+                         "pattern but noisy magnitudes)")
     args = ap.parse_args()
 
     manifest = load_manifest(args.local_only)
@@ -240,9 +259,14 @@ def main() -> None:
             sum_field[mask] += mm[mask]
             count_field[mask] += 1
             n_years += 1
-        if n_years < 5:
-            log.warning("  month %02d: only %d years available — skipping", month, n_years)
+        if n_years < args.min_years:
+            log.warning("  month %02d: only %d years available — skipping "
+                        "(below --min-years=%d)",
+                        month, n_years, args.min_years)
             continue
+        # Record n_years in the per-month entry of the output manifest so
+        # the frontend can label preview-quality maps honestly.
+        output_manifest.setdefault("n_years_per_month", {})[str(month)] = n_years
         clim = np.where(count_field > 0, sum_field / np.maximum(count_field, 1), np.nan)
 
         # Render + upload.

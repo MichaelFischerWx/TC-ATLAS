@@ -303,6 +303,12 @@ class StorageWriter:
         blob = self._gcs_bucket().blob(f"{GCS_PREFIX}/{key}")
         blob.cache_control = "public, max-age=86400"
         blob.upload_from_string(body, content_type=content_type)
+        # Match the rest of tc-atlas-ir-cache: objects are publicly
+        # readable so the static frontend can fetch them without auth.
+        try:
+            blob.make_public()
+        except Exception as e:
+            log.warning("  could not make %s public: %s", blob.name, e)
         log.info("  uploaded gs://%s/%s/%s (%d bytes)",
                  GCS_BUCKET, GCS_PREFIX, key, len(body))
 

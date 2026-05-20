@@ -55,15 +55,26 @@ NY, NX = LATS.size, LONS.size
 COS_LAT = np.cos(np.deg2rad(LATS))
 
 
+_gcs_bucket = None
+def _bucket():
+    """Lazy GCS client — authenticated reads work regardless of per-blob
+    public ACL state, which matters because the daily-archive backfill
+    races us when running concurrently."""
+    global _gcs_bucket
+    if _gcs_bucket is None:
+        from google.cloud import storage   # type: ignore
+        _gcs_bucket = storage.Client().bucket(GCS_BUCKET)
+    return _gcs_bucket
+
+
 def fetch_manifest(local_only: bool) -> dict:
     if local_only:
         p = LOCAL_BASE / "manifest.json"
         return json.loads(p.read_text()) if p.exists() else {}
-    r = requests.get(f"{ARCHIVE_BASE}/manifest.json", timeout=30)
-    if r.status_code == 404:
+    blob = _bucket().blob("era5_daily/manifest.json")
+    if not blob.exists():
         return {}
-    r.raise_for_status()
-    return r.json()
+    return json.loads(blob.download_as_text())
 
 
 def fetch_monthly_shear(year: int, month: int, manifest: dict,
@@ -80,12 +91,10 @@ def fetch_monthly_shear(year: int, month: int, manifest: dict,
             return None
         raw = gzip.decompress(p.read_bytes())
     else:
-        url = f"{ARCHIVE_BASE}/shear/{year}_{month:02d}.bin.gz"
-        r = requests.get(url, timeout=60)
-        if r.status_code == 404:
+        blob = _bucket().blob(f"era5_daily/shear/{year}_{month:02d}.bin.gz")
+        if not blob.exists():
             return None
-        r.raise_for_status()
-        raw = gzip.decompress(r.content)
+        raw = gzip.decompress(blob.download_as_bytes())
     u16 = np.frombuffer(raw, dtype=np.uint16)
     n_days = int(meta["n_days"])
     expected = n_days * NY * NX
