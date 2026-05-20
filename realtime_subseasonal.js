@@ -29,14 +29,21 @@
     // band (10°S-10°N or 5°S-5°N) cancels the signal to zero by
     // construction. The northern lobe at 5°N-15°N is where the
     // antisymmetric variance lives.
+    // vlim ≈ p98 of the panel's active lat band (trop10 for symmetric
+    // bands; boreal for MRG/TD-type which are antisymmetric about the
+    // equator). Older saturate-the-extremes choices (Kelvin ±12, ER ±8,
+    // MRG ±6, TD ±5) clipped roughly half the strong-wave pixels because
+    // they were anchored closer to p50-p75; bumping to p98 keeps the
+    // colorbar useful for typical events while preserving visible
+    // saturation at the rare ±2σ tails.
     var BANDS = [
         { key: 'anomaly', title: 'OLR anomaly (raw)',             vlim: 40 },
         { key: 'mjo',     title: 'MJO band (30-96 d)',            vlim: 15 },
-        { key: 'kelvin',  title: 'Kelvin (eastward, ~12-25 m/s)', vlim: 12 },
-        { key: 'er',      title: 'Equatorial Rossby (westward, 9.7-72 d)', vlim: 8 },
-        { key: 'mrg',     title: 'Mixed Rossby-Gravity (3-96 d, 5°N-15°N)', vlim: 6,
+        { key: 'kelvin',  title: 'Kelvin (eastward, ~12-25 m/s)', vlim: 22 },
+        { key: 'er',      title: 'Equatorial Rossby (westward, 9.7-72 d)', vlim: 15 },
+        { key: 'mrg',     title: 'Mixed Rossby-Gravity (3-96 d, 5°N-15°N)', vlim: 20,
           forcedLatBand: 'boreal' },
-        { key: 'td_type', title: 'TD-type disturbances (2.5-5 d, 5°N-15°N)', vlim: 5,
+        { key: 'td_type', title: 'TD-type disturbances (2.5-5 d, 5°N-15°N)', vlim: 7,
           forcedLatBand: 'boreal' },
     ];
 
@@ -51,10 +58,171 @@
         showTCOverlay: true,
         expandedBands: {},          // { bandKey: bool } — sticky per-tab session
         tcLoading: false,           // true while phase-2 recent-storms is in flight
+        viewMode: 'stacked',        // 'stacked' (per-band heatmaps) | 'combined' (OLR + wave contours)
+        combinedSmoothDays: 5,      // OLR base smoothing in combined view: 1 (raw), 3, or 5 days
     };
+
+    // Per-band contour styling for the combined view. Colors are chosen
+    // for legibility on top of the BrBG OLR base (dark green ↔ tan ↔ deep
+    // brown), so no green or brown hue is used: MJO black, Kelvin blue,
+    // ER red, MRG magenta, TD-type cyan. Two levels per band keeps the
+    // figure readable even when several modes are active.
+    var COMBINED_OVERLAYS = [
+        { key: 'mjo',     label: 'MJO',     color: '#000000', levels: [7, 12] },
+        { key: 'kelvin',  label: 'Kelvin',  color: '#1e40af', levels: [12, 20] },
+        { key: 'er',      label: 'ER',      color: '#dc2626', levels: [8, 14] },
+        // MRG and TD-type are forced to the boreal lat band (5-15°N),
+        // which doesn't match the symmetric base the user picked. Start
+        // hidden so the figure stays focused; user can click the legend
+        // to toggle them on.
+        { key: 'mrg',     label: 'MRG',     color: '#c026d3', levels: [11, 17],
+          latNote: '5-15°N', defaultVisible: false },
+        { key: 'td_type', label: 'TD-type', color: '#0ea5e9', levels: [4, 6],
+          latNote: '5-15°N', defaultVisible: false },
+    ];
+
+    // NaN-safe centered boxcar smoothing in time. `values` is a 2D
+    // [time][lon] array; `halfWindow` is the half-width in timesteps
+    // (so a 5-day boxcar is halfWindow = 2). Cheap — ~50 KB of float
+    // ops per combined render — so we do it client-side instead of
+    // shipping a separate smoothed slab.
+    function _smoothInTime(values, halfWindow) {
+        if (!halfWindow || halfWindow < 1 || !values || !values.length) return values;
+        var nt = values.length;
+        var nx = values[0].length;
+        var out = new Array(nt);
+        for (var t = 0; t < nt; t++) {
+            var lo = Math.max(0, t - halfWindow);
+            var hi = Math.min(nt - 1, t + halfWindow);
+            var row = new Array(nx);
+            for (var x = 0; x < nx; x++) {
+                var s = 0, n = 0;
+                for (var k = lo; k <= hi; k++) {
+                    var v = values[k][x];
+                    if (v != null && isFinite(v)) { s += v; n++; }
+                }
+                row[x] = n > 0 ? s / n : null;
+            }
+            out[t] = row;
+        }
+        return out;
+    }
 
     function _ga(eventName, params) {
         try { if (typeof gtag === 'function') gtag('event', eventName, params || {}); } catch (e) {}
+    }
+
+    // Hovmöller watermark — label + canonical TC-ATLAS URL so saved PNGs
+    // and screenshots carry attribution. Compact two-line block in the
+    // bottom-right corner; theme-aware so it stays legible against both
+    // the dark and light heatmap palettes. Font size scales for the
+    // 2× export raster (live view never displays this).
+    function _watermarkAnnotation() {
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var fg = isDark ? 'rgba(220,228,238,0.78)' : 'rgba(15,23,42,0.55)';
+        var bg = isDark ? 'rgba(15,23,30,0.55)'   : 'rgba(255,255,255,0.65)';
+        return {
+            xref: 'paper', yref: 'paper',
+            x: 1, y: 0,
+            xanchor: 'right', yanchor: 'bottom',
+            text: 'TC-ATLAS<br>michaelfischerwx.github.io/TC-ATLAS',
+            align: 'right',
+            showarrow: false,
+            font: { size: 14, color: fg,
+                    family: 'DM Sans, system-ui, sans-serif' },
+            bgcolor: bg,
+            borderpad: 4,
+        };
+    }
+
+    // Plotly's font sizes are in absolute CSS pixels, so when we
+    // rasterize at 2× scale the figure grows 2× but text glyph height
+    // stays put — making axis ticks, legend, colorbar, and annotations
+    // look ~half their on-screen relative size in the saved PNG. This
+    // helper temporarily scales the relevant text attributes up by
+    // `scale`, runs `work()`, and reverts in `.finally`. Returns
+    // whatever `work()` resolves to.
+    function _withScaledExportText(panel, scale, work) {
+        if (!panel || !panel.layout || scale === 1
+            || !(Plotly.relayout && Plotly.restyle)) {
+            return Promise.resolve().then(function () { return work(); });
+        }
+        var layout = panel.layout;
+        function val(obj, path, dflt) {
+            var p = path.split('.'), v = obj;
+            for (var i = 0; i < p.length; i++) {
+                if (v == null) return dflt;
+                v = v[p[i]];
+            }
+            return v == null ? dflt : v;
+        }
+        var orig = {
+            fontSize:        val(layout, 'font.size', 10),
+            legendFontSize:  val(layout, 'legend.font.size', 10),
+            xaxisTickSize:   val(layout, 'xaxis.tickfont.size', 10),
+            yaxisTickSize:   val(layout, 'yaxis.tickfont.size', 10),
+        };
+        var origAnns = (layout.annotations || []).map(function (a) {
+            return a && a.font ? a.font.size : null;
+        });
+        var scaledLayout = {
+            'font.size':            orig.fontSize * scale,
+            'legend.font.size':     Math.round(orig.legendFontSize * scale),
+            'xaxis.tickfont.size':  Math.round(orig.xaxisTickSize * scale),
+            'yaxis.tickfont.size':  Math.round(orig.yaxisTickSize * scale),
+        };
+        var scaledAnns = (layout.annotations || []).map(function (a) {
+            if (!a) return a;
+            var size = (a.font && a.font.size) || 10;
+            return Object.assign({}, a, {
+                font: Object.assign({}, a.font || {}, { size: Math.round(size * scale) }),
+            });
+        });
+        if (scaledAnns.length) scaledLayout.annotations = scaledAnns;
+
+        // Colorbar fonts live on traces, not on the layout — bump via restyle.
+        var traceColorbarOrig = [];
+        (panel.data || []).forEach(function (t, i) {
+            if (t.colorbar) {
+                traceColorbarOrig.push({
+                    idx: i,
+                    tick: (t.colorbar.tickfont && t.colorbar.tickfont.size) || 9,
+                    title: (t.colorbar.title && t.colorbar.title.font
+                            && t.colorbar.title.font.size) || 8,
+                });
+            }
+        });
+
+        return Plotly.relayout(panel, scaledLayout).then(function () {
+            return Promise.all(traceColorbarOrig.map(function (c) {
+                return Plotly.restyle(panel, {
+                    'colorbar.tickfont.size': Math.round(c.tick * scale),
+                    'colorbar.title.font.size': Math.round(c.title * scale),
+                }, [c.idx]);
+            }));
+        }).then(function () { return work(); }).finally(function () {
+            var revertLayout = {
+                'font.size':            orig.fontSize,
+                'legend.font.size':     orig.legendFontSize,
+                'xaxis.tickfont.size':  orig.xaxisTickSize,
+                'yaxis.tickfont.size':  orig.yaxisTickSize,
+            };
+            // Restore original annotations array exactly.
+            revertLayout.annotations = (layout.annotations || []).map(function (a, i) {
+                if (!a || origAnns[i] == null) return a;
+                return Object.assign({}, a, {
+                    font: Object.assign({}, a.font || {}, { size: origAnns[i] }),
+                });
+            });
+            return Plotly.relayout(panel, revertLayout).then(function () {
+                return Promise.all(traceColorbarOrig.map(function (c) {
+                    return Plotly.restyle(panel, {
+                        'colorbar.tickfont.size': c.tick,
+                        'colorbar.title.font.size': c.title,
+                    }, [c.idx]);
+                }));
+            }).catch(function () {});
+        });
     }
 
     function _fetchJSON(url, opts) {
@@ -240,6 +408,13 @@
         var fg = isDark ? '#cbd5e1' : '#0f172a';
         var axisGrid = isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.06)';
 
+        if (state.viewMode === 'combined') {
+            _renderCombinedHovmoller(container, bg, fg, axisGrid, isDark);
+            _renderBasinStrip(container, bg, fg);
+            _renderActiveTCList();
+            return;
+        }
+
         BANDS.forEach(function (band, idx) {
             var panel = document.createElement('div');
             panel.className = 'sub-hov-panel';
@@ -327,8 +502,9 @@
                 zmin: -band.vlim,
                 zmax:  band.vlim,
                 // Per-panel colorbar — each band has its own ± W/m² range
-                // (raw anomaly ±40, MJO ±15, Kelvin ±12, ER ±8, MRG ±6,
-                // TD ±5) so a shared bar wouldn't work. Compact vertical
+                // (raw anomaly ±40, MJO ±15, Kelvin ±22, ER ±15, MRG ±20,
+                // TD ±7; see BANDS for derivation) so a shared bar wouldn't
+                // work. Compact vertical
                 // strip on the right; basin strip below carries matching
                 // right-margin so the heatmap longitude axes still align.
                 showscale: true,
@@ -384,19 +560,11 @@
                     nticks: 7,
                 },
                 shapes: [],
-                annotations: [{
-                    // Subtle watermark so saved PNGs and screenshots
-                    // carry attribution back to the source.
-                    xref: 'paper', yref: 'paper',
-                    x: 1, y: 0,
-                    xanchor: 'right', yanchor: 'bottom',
-                    text: 'TC-ATLAS',
-                    showarrow: false,
-                    font: { size: 8, color: 'rgba(15,23,42,0.32)',
-                            family: 'DM Sans, system-ui, sans-serif' },
-                    bgcolor: 'rgba(255,255,255,0.55)',
-                    borderpad: 2,
-                }],
+                // Watermark is intentionally NOT baked into the live
+                // layout — it would crowd the small panels. It is added
+                // transiently by _renderPanelToImage at save time so
+                // exported PNGs still carry attribution.
+                annotations: [],
             };
 
             // Active-TC overlay traces: each storm's (time, lon) track
@@ -422,6 +590,212 @@
 
         _renderBasinStrip(container, bg, fg);
         _renderActiveTCList();
+    }
+
+    // -------------------------------------------------------------------
+    // Combined view — raw OLR anomaly as the shaded base, with each
+    // WK-filtered band overlaid as colored contours (Peyrille-style).
+    // One tall figure replaces the six stacked panels. Legend entries
+    // are clickable, so users can isolate any single overlay.
+    // -------------------------------------------------------------------
+    function _renderCombinedHovmoller(container, bg, fg, axisGrid, isDark) {
+        var anomSlab = state.slabs.anomaly;
+        if (!anomSlab || !anomSlab.lat_bands || !anomSlab.lat_bands[state.latBand]) {
+            container.innerHTML = '<div style="padding:24px;text-align:center;color:#94a3b8;font-size:0.85rem;">'
+                + 'No OLR anomaly data available for the combined view.</div>';
+            return;
+        }
+
+        var panel = document.createElement('div');
+        panel.className = 'sub-hov-combined';
+        panel.id = 'sub-hov-combined-panel';
+
+        var saveBtn = document.createElement('button');
+        saveBtn.type = 'button';
+        saveBtn.className = 'sub-hov-save-btn';
+        saveBtn.title = 'Save the combined OLR + waves Hovmöller as PNG';
+        saveBtn.setAttribute('aria-label', 'Save combined Hovmöller');
+        saveBtn.innerHTML = '⤓';
+        saveBtn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            _saveSinglePanel(panel, 'Combined OLR + WK Waves');
+        });
+        panel.appendChild(saveBtn);
+
+        container.appendChild(panel);
+
+        var anomBand = anomSlab.lat_bands[state.latBand];
+        var anomNorm = _normalizeLons(anomSlab.lons, anomBand.values);
+        // Time-smooth the base so it shares a timescale with the
+        // WK-filtered contour overlays. User-selectable: 1 (raw),
+        // 3, or 5 days. Wave-band contours always use raw filtered
+        // amplitudes, so the toggle is purely cosmetic for the base.
+        var smoothDays = state.combinedSmoothDays || 1;
+        var smoothHalf = Math.floor(smoothDays / 2);
+        var anomSmoothZ = smoothHalf > 0
+            ? _smoothInTime(anomNorm.values, smoothHalf)
+            : anomNorm.values;
+        var baseName = smoothDays > 1
+            ? 'OLR anomaly (' + smoothDays + '-day mean)'
+            : 'OLR anomaly (raw)';
+
+        var baseTrace = {
+            type: 'heatmap',
+            name: baseName,
+            x: anomNorm.lons,
+            y: anomSlab.times,
+            z: anomSmoothZ,
+            colorscale: [
+                [0,     '#003c30'], [0.25, '#01665e'], [0.45, '#80cdc1'],
+                [0.50,  isDark ? '#1e293b' : '#f5f5f5'],
+                [0.55,  '#dfc27d'], [0.75, '#8c510a'], [1, '#543005'],
+            ],
+            zmin: -40, zmax: 40,
+            showscale: true,
+            colorbar: {
+                x: 1.005, xanchor: 'left', y: 0.5, yanchor: 'middle',
+                len: 0.92, thickness: 8, outlinewidth: 0,
+                tickvals: [-40, 0, 40], ticktext: ['−40', '0', '+40'],
+                tickfont: { size: 9, color: fg, family: 'DM Sans, system-ui, sans-serif' },
+                title: { text: 'OLR anom<br>(W/m²)', side: 'top',
+                         font: { size: 8, color: fg } },
+            },
+            hoverlabel: { bgcolor: bg, font: { color: fg } },
+            hovertemplate: 'Lon %{x:.1f}°<br>Date %{y}<br>OLR anomaly %{z:.1f} W/m²<extra></extra>',
+            showlegend: false,
+        };
+
+        // Build a contour trace per wave band. Negative levels = enhanced
+        // convection (drawn solid); positive = suppressed (drawn dashed),
+        // matching the operational convention for OLR-anomaly waves.
+        var overlayTraces = [];
+        COMBINED_OVERLAYS.forEach(function (ov) {
+            var slab = state.slabs[ov.key];
+            if (!slab || !slab.lat_bands) return;
+            var bandSpec = BANDS.find(function (b) { return b.key === ov.key; });
+            var latBandKey = (bandSpec && bandSpec.forcedLatBand) || state.latBand;
+            var lb = slab.lat_bands[latBandKey];
+            if (!lb) return;
+            var norm = _normalizeLons(slab.lons, lb.values);
+
+            // Plotly contour `contours.start/end/size` only supports a
+            // uniform spacing — for our 3-level scheme we emit one
+            // contour trace per signed pair so each can carry its own
+            // dash style. Negative = solid (enhanced convection),
+            // positive = dashed (suppressed).
+            // Legend label includes the actual contour magnitudes
+            // (and the lat-band note for off-equator panels) so the
+            // reader sees what amplitude each band's lines correspond
+            // to without an extra colorbar.
+            var legendName = ov.label + ' ±' + ov.levels.join(', ±')
+                + (ov.latNote ? ' (' + ov.latNote + ')' : '');
+            var initialVisibility = ov.defaultVisible === false ? 'legendonly' : true;
+            ov.levels.forEach(function (lev, levIdx) {
+                [-lev, +lev].forEach(function (signedLev) {
+                    overlayTraces.push({
+                        type: 'contour',
+                        name: legendName,
+                        legendgroup: 'ov-' + ov.key,
+                        showlegend: levIdx === 0 && signedLev < 0,
+                        visible: initialVisibility,
+                        x: norm.lons,
+                        y: slab.times,
+                        z: norm.values,
+                        // Uniform single-color colorscale: with
+                        // contours.coloring='lines', the line color
+                        // tracks the colorscale rather than line.color,
+                        // so this is how we paint each band in its own
+                        // color.
+                        colorscale: [[0, ov.color], [1, ov.color]],
+                        autocolorscale: false,
+                        contours: {
+                            coloring: 'lines',
+                            start: signedLev, end: signedLev,
+                            size: 1,
+                            showlabels: false,
+                        },
+                        line: {
+                            color: ov.color,
+                            width: 1.6 + 0.8 * levIdx,
+                            dash: signedLev < 0 ? 'solid' : 'dot',
+                            smoothing: 1.0,
+                        },
+                        // Hide the per-trace colorbar; only the OLR
+                        // shading carries one.
+                        showscale: false,
+                        hoverinfo: 'skip',
+                    });
+                });
+            });
+        });
+
+        var layout = {
+            margin: { l: 60, r: 80, t: 30, b: 32 },
+            paper_bgcolor: bg, plot_bgcolor: bg,
+            font: { color: fg, size: 10, family: 'DM Sans, system-ui, sans-serif' },
+            xaxis: {
+                range: [-180, 180],
+                tickvals: [-180, -120, -60, 0, 60, 120, 180],
+                ticktext: ['180°', '120°W', '60°W', '0°', '60°E', '120°E', '180°'],
+                showgrid: true, gridcolor: axisGrid, zeroline: false,
+                tickfont: { size: 10 },
+            },
+            yaxis: {
+                autorange: true,
+                showgrid: false, zeroline: false,
+                tickfont: { size: 10 },
+                nticks: 14,
+            },
+            shapes: (function () {
+                // Horizontal "today" rule at the most-recent timestep so
+                // the reader can immediately anchor which row is today
+                // without scanning the y-axis ticks.
+                var times = anomSlab.times || [];
+                if (!times.length) return [];
+                return [{
+                    type: 'line',
+                    xref: 'paper', x0: 0, x1: 1,
+                    yref: 'y',
+                    y0: times[times.length - 1], y1: times[times.length - 1],
+                    line: { color: '#ef4444', width: 1.2, dash: 'dot' },
+                    layer: 'above',
+                }];
+            })(),
+            annotations: (function () {
+                var times = anomSlab.times || [];
+                if (!times.length) return [];
+                return [{
+                    xref: 'paper', x: 0.005, xanchor: 'left',
+                    yref: 'y', y: times[times.length - 1], yanchor: 'bottom',
+                    text: 'today', showarrow: false,
+                    font: { size: 9, color: '#ef4444',
+                            family: 'DM Sans, system-ui, sans-serif' },
+                    bgcolor: isDark ? 'rgba(15,23,30,0.65)' : 'rgba(255,255,255,0.75)',
+                    borderpad: 2,
+                }];
+            })(),
+            legend: {
+                orientation: 'h',
+                x: 0, y: 1.04, xanchor: 'left', yanchor: 'bottom',
+                font: { size: 10, color: fg },
+                bgcolor: 'rgba(0,0,0,0)',
+            },
+        };
+
+        // Active TC overlay tracks — same as stacked view; drawn on top.
+        if (state.showTCOverlay && state.activeStorms.length) {
+            state.activeStorms.forEach(function (s) {
+                var tt = _buildTrackTraces(s, anomSlab);
+                if (tt) {
+                    overlayTraces.push(tt.line);
+                    overlayTraces.push(tt.markers);
+                    overlayTraces.push(tt.latest);
+                }
+            });
+        }
+
+        var config = { displayModeBar: false, responsive: true };
+        Plotly.newPlot(panel, [baseTrace].concat(overlayTraces), layout, config);
     }
 
     /* Geographic context strip — pre-rendered tropical-band cartographic
@@ -602,13 +976,41 @@
     /* ── Save PNG ─────────────────────────────────────────────── */
     // Shared composer used by both per-panel save and "Save All".
     // Each panel renders as: title bar → Plotly image → spacer.
-    // TC-ATLAS watermark is baked into each Plotly layout already.
+    // Live view skips the watermark to avoid crowding the short panels;
+    // we transiently relayout the panel to inject it before rasterizing
+    // and then strip it back out so the on-page render is unchanged.
     function _renderPanelToImage(panel) {
         var rect = panel.getBoundingClientRect();
-        return Plotly.toImage(panel, {
-            format: 'png',
-            width: Math.round(rect.width * 2),
-            height: Math.round(rect.height * 2),
+        var addWatermark = panel.id && (
+            panel.id.indexOf('sub-hov-panel-') === 0 ||
+            panel.id === 'sub-hov-combined-panel'
+        );
+        function exportImage() {
+            return Plotly.toImage(panel, {
+                format: 'png',
+                width: Math.round(rect.width * 2),
+                height: Math.round(rect.height * 2),
+            });
+        }
+        var EXPORT_FONT_SCALE = 1.8;  // see _withScaledExportText.
+        return _withScaledExportText(panel, EXPORT_FONT_SCALE, function () {
+            // The watermark annotation is added *after* the font scale-up,
+            // so it gets its own already-large size (set in
+            // _watermarkAnnotation) rather than the layout default. Keep
+            // any existing annotations the layout had at relayout-time
+            // (the scaled-up "today" annotation, etc.).
+            if (addWatermark && typeof Plotly.relayout === 'function') {
+                var existing = (panel.layout && panel.layout.annotations) || [];
+                return Plotly.relayout(panel, {
+                    annotations: existing.concat([_watermarkAnnotation()]),
+                }).then(function () { return exportImage(); })
+                  .finally(function () {
+                      // Strip just the watermark — the font-scale revert
+                      // happens in the outer _withScaledExportText.
+                      Plotly.relayout(panel, { annotations: existing }).catch(function () {});
+                  });
+            }
+            return exportImage();
         }).then(function (url) {
             return new Promise(function (resolve, reject) {
                 var img = new Image();
@@ -620,15 +1022,17 @@
     }
 
     function _drawPanelTitleBar(ctx, x, y, width, title) {
-        // ~36 px tall title strip. Light background tint so the title
-        // reads cleanly across light/dark Plotly panels.
+        // The composite canvas matches the 2× toImage raster, so we draw
+        // text at 2× CSS pixel sizes for an even visual weight against
+        // the (also-2×) Plotly figure.
+        var H = 56;
         ctx.fillStyle = '#f1f5f9';
-        ctx.fillRect(x, y, width, 36);
+        ctx.fillRect(x, y, width, H);
         ctx.fillStyle = '#0f172a';
-        ctx.font = 'bold 16px "DM Sans", system-ui, sans-serif';
+        ctx.font = 'bold 26px "DM Sans", system-ui, sans-serif';
         ctx.textBaseline = 'middle';
-        ctx.fillText(title, x + 16, y + 18);
-        return 36;
+        ctx.fillText(title, x + 24, y + H / 2);
+        return H;
     }
 
     function _slugifyFilenameFragment(s) {
@@ -636,26 +1040,85 @@
             .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
     }
 
-    /** Save a single panel: title bar + Plotly image + footer. */
+    // Temporarily switch a Hovmöller panel to its expanded (380px)
+    // layout, let Plotly re-flow into the larger box, run `work`, and
+    // revert. Used by the save paths so exported PNGs are rendered at
+    // the larger inspect-mode height regardless of the panel's current
+    // on-screen state. No-op if the panel is already expanded.
+    function _withExpandedPanel(panel, work) {
+        var isBandPanel = panel && panel.id && panel.id.indexOf('sub-hov-panel-') === 0;
+        if (!isBandPanel || panel.classList.contains('expanded')
+            || !(Plotly.Plots && Plotly.Plots.resize)) {
+            return Promise.resolve().then(function () { return work(); });
+        }
+        panel.classList.add('expanded');
+        return Plotly.Plots.resize(panel)
+            .then(function () { return work(); })
+            .finally(function () {
+                panel.classList.remove('expanded');
+                Plotly.Plots.resize(panel).catch(function () {});
+            });
+    }
+
+    /** Save a single panel: title bar + Plotly image + basin reference strip + footer. */
     function _saveSinglePanel(panel, bandTitle) {
         if (!panel || typeof Plotly === 'undefined') return;
         _ga('rt_sub_save_png_panel', { band: bandTitle });
-        _renderPanelToImage(panel).then(function (img) {
-            var titleH = 36, footerH = 28;
+        var basinStrip = document.querySelector('.sub-hov-basin-strip');
+        // Render the band panel (expanded + watermarked) and the basin
+        // strip in parallel so per-panel PNGs carry the same geographic
+        // reference that the stack-save composite already shows.
+        var renderPanel = _withExpandedPanel(panel, function () {
+            return _renderPanelToImage(panel);
+        });
+        var renderBasin = basinStrip
+            ? _renderPanelToImage(basinStrip).catch(function () { return null; })
+            : Promise.resolve(null);
+        Promise.all([renderPanel, renderBasin]).then(function (results) {
+            var img = results[0];
+            var basinImg = results[1];
+            var titleH = 56, footerH = 44;
+            var basinTitleH = basinImg ? 36 : 0;
+            var basinH = basinImg ? basinImg.height : 0;
             var canvas = document.createElement('canvas');
             canvas.width = img.width;
-            canvas.height = img.height + titleH + footerH;
+            canvas.height = titleH + img.height + basinTitleH + basinH + footerH;
             var ctx = canvas.getContext('2d');
             ctx.fillStyle = '#ffffff';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             _drawPanelTitleBar(ctx, 0, 0, canvas.width, bandTitle || 'Hovmöller');
             ctx.drawImage(img, 0, titleH);
-            // Footer with attribution + date
+            var y = titleH + img.height;
+            if (basinImg) {
+                // Slim caption strip above the basemap, matching the
+                // stack-save composite for consistency. 2× text sizes
+                // for parity with the 2× toImage raster.
+                ctx.fillStyle = '#f8fafc';
+                ctx.fillRect(0, y, canvas.width, basinTitleH);
+                ctx.fillStyle = '#475569';
+                ctx.font = '18px "DM Sans", system-ui, sans-serif';
+                ctx.textBaseline = 'middle';
+                ctx.fillText('Geographic reference — 10°S to 15°N',
+                             24, y + basinTitleH / 2);
+                y += basinTitleH;
+                // Scale to match the panel width if the basin strip was
+                // rendered at a different pixel width (different right
+                // margin etc.). Aspect ratio preserved.
+                if (basinImg.width !== canvas.width) {
+                    var bH = Math.round(basinImg.height * canvas.width / basinImg.width);
+                    ctx.drawImage(basinImg, 0, y, canvas.width, bH);
+                    y += bH;
+                } else {
+                    ctx.drawImage(basinImg, 0, y);
+                    y += basinImg.height;
+                }
+            }
+            // Footer with attribution + date — 2× sizes for export parity.
             ctx.fillStyle = '#475569';
-            ctx.font = '11px "DM Sans", system-ui, sans-serif';
+            ctx.font = '18px "DM Sans", system-ui, sans-serif';
             ctx.textBaseline = 'middle';
             ctx.fillText('TC-ATLAS · ' + new Date().toISOString().slice(0, 10) + ' UTC',
-                         16, titleH + img.height + footerH / 2);
+                         24, y + footerH / 2);
             canvas.toBlob(function (blob) {
                 var u = URL.createObjectURL(blob);
                 var a = document.createElement('a');
@@ -672,8 +1135,15 @@
         });
     }
 
-    /** Save the whole stack: header → (title + panel) × 5 + basin strip. */
+    /** Save the whole stack: header → (title + panel) × 5 + basin strip.
+     *  In combined view, defers to the single-panel save path for the
+     *  one combined Hovmöller so the user always gets a useful PNG. */
     function _saveStackAsPNG() {
+        if (state.viewMode === 'combined') {
+            var combined = document.getElementById('sub-hov-combined-panel');
+            if (combined) _saveSinglePanel(combined, 'Combined OLR + WK Waves');
+            return;
+        }
         var panels = Array.from(document.querySelectorAll('.sub-hov-panel'));
         var basinStrip = document.querySelector('.sub-hov-basin-strip');
         if (!panels.length || typeof Plotly === 'undefined') return;
@@ -681,20 +1151,26 @@
         if (btn) { btn.disabled = true; btn.textContent = 'Rendering…'; }
         _ga('rt_sub_save_png');
 
-        var renderPromises = panels.map(_renderPanelToImage);
+        // Render each band panel in its expanded (380px) layout so the
+        // stitched stack matches the inspect-mode view. Basin reference
+        // strip stays at its native height (it's the geographic key, not
+        // a wave panel).
+        var renderPromises = panels.map(function (p) {
+            return _withExpandedPanel(p, function () { return _renderPanelToImage(p); });
+        });
         if (basinStrip) renderPromises.push(_renderPanelToImage(basinStrip));
 
         Promise.all(renderPromises)
             .then(function (imgs) {
                 var width = Math.max.apply(null, imgs.map(function (i) { return i.width; }));
-                var titleH = 36;
-                var basinTitleH = 24;
-                var headerH = 60;
-                // Per-panel title bar above each Hovmöller (NOT the basin strip)
+                // 2× text sizes for parity with the 2× toImage raster.
+                var titleH = 56;       // per-panel title bar height
+                var basinTitleH = 36;  // basemap caption strip height
+                var headerH = 96;      // composite-level header height
                 var totalHeight = headerH
                     + panels.length * titleH
                     + imgs.reduce(function (s, i) { return s + i.height; }, 0)
-                    + basinTitleH;     // small label above basemap strip
+                    + basinTitleH;
                 var canvas = document.createElement('canvas');
                 canvas.width = width;
                 canvas.height = totalHeight;
@@ -703,15 +1179,15 @@
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
                 // Stack-level header
                 ctx.fillStyle = '#0f172a';
-                ctx.font = 'bold 22px "DM Sans", system-ui, sans-serif';
+                ctx.font = 'bold 36px "DM Sans", system-ui, sans-serif';
                 ctx.textBaseline = 'alphabetic';
                 ctx.fillText('Subseasonal State — Wheeler-Kiladis OLR Hovmöllers',
-                             24, 30);
-                ctx.font = '13px "DM Sans", system-ui, sans-serif';
+                             36, 48);
+                ctx.font = '20px "DM Sans", system-ui, sans-serif';
                 ctx.fillStyle = '#475569';
                 ctx.fillText('TC-ATLAS · '
                              + new Date().toISOString().slice(0, 10) + ' UTC',
-                             24, 50);
+                             36, 80);
                 // Each Hovmöller panel gets its own title strip
                 var y = headerH;
                 imgs.forEach(function (img, i) {
@@ -720,14 +1196,13 @@
                                            BANDS[i] ? BANDS[i].title : 'Hovmöller');
                         y += titleH;
                     } else {
-                        // Basin strip header
                         ctx.fillStyle = '#f8fafc';
                         ctx.fillRect(0, y, canvas.width, basinTitleH);
                         ctx.fillStyle = '#475569';
-                        ctx.font = '11px "DM Sans", system-ui, sans-serif';
+                        ctx.font = '18px "DM Sans", system-ui, sans-serif';
                         ctx.textBaseline = 'middle';
                         ctx.fillText('Geographic reference — 10°S to 15°N',
-                                     16, y + basinTitleH / 2);
+                                     24, y + basinTitleH / 2);
                         y += basinTitleH;
                     }
                     ctx.drawImage(img, 0, y);
@@ -785,6 +1260,56 @@
                 _renderHovmollers();
             });
         }
+        var viewToggle = document.getElementById('sub-view-toggle');
+        if (viewToggle && !viewToggle._wired) {
+            viewToggle._wired = true;
+            viewToggle.addEventListener('click', function (e) {
+                var btn = e.target.closest('.sub-view-btn');
+                if (!btn) return;
+                var view = btn.getAttribute('data-view');
+                if (!view || view === state.viewMode) return;
+                state.viewMode = view;
+                viewToggle.querySelectorAll('.sub-view-btn').forEach(function (b) {
+                    b.classList.toggle('active', b === btn);
+                });
+                _updateSmoothToggleVisibility();
+                _ga('rt_sub_view_mode', { view: view });
+                _renderHovmollers();
+            });
+        }
+        var smoothToggle = document.getElementById('sub-smooth-toggle');
+        if (smoothToggle && !smoothToggle._wired) {
+            smoothToggle._wired = true;
+            smoothToggle.addEventListener('click', function (e) {
+                var btn = e.target.closest('.sub-view-btn');
+                if (!btn) return;
+                var days = parseInt(btn.getAttribute('data-smooth'), 10);
+                if (!days || days === state.combinedSmoothDays) return;
+                state.combinedSmoothDays = days;
+                smoothToggle.querySelectorAll('.sub-view-btn').forEach(function (b) {
+                    b.classList.toggle('active', b === btn);
+                });
+                _ga('rt_sub_combined_smooth', { days: days });
+                if (state.viewMode === 'combined') _renderHovmollers();
+            });
+        }
+        _updateSmoothToggleVisibility();
+    }
+
+    // The OLR-base smoothing toggle only affects the combined view, but
+    // we keep it in the layout flow at all times so switching views
+    // doesn't shuffle the rest of the controls bar to the right. In
+    // stacked view we just dim + disable it via a `hidden-by-mode`
+    // attribute that CSS hooks into.
+    function _updateSmoothToggleVisibility() {
+        var lbl = document.getElementById('sub-smooth-label');
+        var tog = document.getElementById('sub-smooth-toggle');
+        var dim = (state.viewMode !== 'combined');
+        [lbl, tog].forEach(function (el) {
+            if (!el) return;
+            if (dim) el.setAttribute('hidden-by-mode', '');
+            else el.removeAttribute('hidden-by-mode');
+        });
     }
 
     /* ── Public entry point ───────────────────────────────────── */

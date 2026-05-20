@@ -2008,6 +2008,44 @@ html:not([data-view="map"]) #basin-sidebar {
     font-weight: 600;
 }
 
+/* View-mode toggle (Stacked | Combined) — same styling as latband. */
+.sub-view-toggle { display: inline-flex; gap: 0; }
+.sub-view-btn {
+    padding: 4px 10px;
+    border: 1px solid var(--border);
+    background: var(--surface-raised, #ffffff);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.72rem;
+    cursor: pointer;
+    border-right: none;
+}
+.sub-view-btn:first-child { border-top-left-radius: 4px; border-bottom-left-radius: 4px; }
+.sub-view-btn:last-child  { border-top-right-radius: 4px; border-bottom-right-radius: 4px; border-right: 1px solid var(--border); }
+.sub-view-btn.active {
+    background: rgba(46, 125, 255, 0.18);
+    color: var(--text);
+    font-weight: 600;
+}
+
+/* Combined Hovmöller panel — single tall figure that replaces the
+   stacked panels when the user picks "Combined". */
+.sub-hov-combined {
+    position: relative;
+    width: 100%;
+    height: 620px;
+    margin-bottom: 10px;
+}
+
+/* OLR-base smoothing toggle is only meaningful in combined view. We
+   keep it in the DOM and reserve its space at all times — switching
+   `display` would shuffle the rest of the controls bar around — and
+   visually dim it + block interaction in stacked view instead. */
+.sub-smooth-control[hidden-by-mode] {
+    opacity: 0.32;
+    pointer-events: none;
+}
+
 .sub-save-png-btn {
     padding: 4px 12px;
     border: 1px solid var(--border);

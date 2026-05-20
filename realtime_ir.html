@@ -731,6 +731,19 @@
                     <button class="sub-latband-btn" data-band="eq5">5°S-5°N</button>
                     <button class="sub-latband-btn" data-band="boreal">5°N-15°N</button>
                 </div>
+                <label class="sub-control-label" style="margin-left:18px;">View:</label>
+                <div class="sub-view-toggle" id="sub-view-toggle" role="tablist"
+                     title="Stacked shows one heatmap per WK-filtered band. Combined overlays each band as colored contours on top of the raw OLR anomaly — the Peyrille-style view.">
+                    <button class="sub-view-btn active" data-view="stacked">Stacked</button>
+                    <button class="sub-view-btn" data-view="combined">Combined</button>
+                </div>
+                <label class="sub-control-label sub-smooth-control" id="sub-smooth-label" style="margin-left:18px;">Base:</label>
+                <div class="sub-view-toggle sub-smooth-control" id="sub-smooth-toggle" role="tablist"
+                     title="Temporal smoothing applied to the OLR-anomaly background in the combined view. Wave-band contours always use raw data. 5-day is the canonical pentad; 3-day preserves more short-period structure; Raw shows daily OLR.">
+                    <button class="sub-view-btn" data-smooth="1">Raw</button>
+                    <button class="sub-view-btn" data-smooth="3">3-day</button>
+                    <button class="sub-view-btn active" data-smooth="5">5-day</button>
+                </div>
                 <label class="sub-control-label" style="margin-left:18px;">
                     <input type="checkbox" id="sub-tc-overlay-toggle" checked>
                     Active-TC overlay
@@ -1147,10 +1160,10 @@
                         </select>
                     </label>
                     <label>Detrending
-                        <select id="seasonal-an-kind" title="Analog matching is conventionally a local-anomaly question, so raw is the default. Toggle to detrended or Vecchi-Soden relative to see how rankings shift.">
-                            <option value="raw" selected>Raw</option>
+                        <select id="seasonal-an-kind" title="Vecchi-Soden relative SST (region anomaly minus tropical mean) tends to yield higher analog-LOO skill than raw or detrended for ACE forecasting, so it's the default. Toggle to compare.">
+                            <option value="raw">Raw</option>
                             <option value="detrended">Detrended (linear trend removed)</option>
-                            <option value="relative">Relative (Vecchi-Soden 2007)</option>
+                            <option value="relative" selected>Relative (Vecchi-Soden 2007)</option>
                         </select>
                     </label>
                     <label>Statistic
