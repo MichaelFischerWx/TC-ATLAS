@@ -3812,6 +3812,169 @@ def get_storm_weatherlab(atcf_id: str):
     )
 
 
+# --------------------------------------------------------------------------
+# Seasonal tab: daily indices slice (Panel B Daily view)
+# --------------------------------------------------------------------------
+#
+# Reads gs://{GCS_IR_CACHE_BUCKET}/seasonal/indices_daily_full.parquet once
+# (~2 MB, ~16 k rows × 43 cols), keeps it in-process for 24 h, and serves
+# region-by-year slices as JSON to the RT Monitor Seasonal tab.
+# (threading + io are imported at the top of the module.)
+
+_SEASONAL_DAILY_LOCK = threading.Lock()
+_SEASONAL_DAILY_CACHE: dict = {
+    "df": None,
+    "loaded_at": 0.0,
+    "concat_year": None,   # which year of indices_daily_current_year was merged
+}
+_SEASONAL_DAILY_TTL_S = 24 * 3600
+
+
+def _load_seasonal_daily_df():
+    """Load (or return cached) DataFrame of daily indices. Concatenates
+    the in-progress current-year rows so requests for `year=<this_year>`
+    return live data without waiting on the next backfill rebuild."""
+    import time as _time
+    import pandas as pd
+
+    now = _time.time()
+    with _SEASONAL_DAILY_LOCK:
+        df = _SEASONAL_DAILY_CACHE.get("df")
+        loaded_at = _SEASONAL_DAILY_CACHE.get("loaded_at", 0.0)
+        if df is not None and (now - loaded_at) < _SEASONAL_DAILY_TTL_S:
+            return df
+
+        bucket = _get_rt_gcs_bucket()
+        if bucket is None:
+            return None
+        try:
+            blob = bucket.blob("seasonal/indices_daily_full.parquet")
+            if not blob.exists():
+                logger.warning("seasonal/indices_daily_full.parquet not found")
+                return None
+            data = blob.download_as_bytes()
+            df_full = pd.read_parquet(io.BytesIO(data))
+        except Exception as e:
+            logger.warning(f"failed to load indices_daily_full.parquet: {e}")
+            return None
+
+        # Optionally splice the current-year live rows in. Lets the API
+        # serve `year=<this_year>` accurately between full-history rebuilds.
+        try:
+            cy_blob = bucket.blob("seasonal/indices_daily_current_year.parquet")
+            if cy_blob.exists():
+                cy_data = cy_blob.download_as_bytes()
+                df_cy = pd.read_parquet(io.BytesIO(cy_data))
+                # Keep only columns the full table has, drop the rest.
+                keep_cols = [c for c in df_cy.columns if c in df_full.columns]
+                df_cy = df_cy[keep_cols]
+                # Replace any full-history rows for the current year with
+                # the live ones.
+                if len(df_cy):
+                    live_year = df_cy["date"].iloc[0][:4]
+                    df_full = df_full[
+                        ~df_full["date"].str.startswith(live_year + "-")
+                    ]
+                    df_full = pd.concat([df_full, df_cy], ignore_index=True)
+                    df_full = (df_full
+                               .drop_duplicates(subset=["date"], keep="last")
+                               .sort_values("date")
+                               .reset_index(drop=True))
+        except Exception as e:
+            logger.warning(f"current-year splice skipped: {e}")
+
+        _SEASONAL_DAILY_CACHE["df"] = df_full
+        _SEASONAL_DAILY_CACHE["loaded_at"] = now
+        logger.info(
+            f"loaded indices_daily_full.parquet: {len(df_full)} rows, "
+            f"{len(df_full.columns)} cols"
+        )
+        return df_full
+
+
+# Region names accepted by /seasonal/daily. Mirrors REGIONS in
+# build_oisst_history.py — kept here as a frozen set so we don't import
+# the full backfill module into the API container.
+_SEASONAL_DAILY_REGIONS = frozenset({
+    "atl_basin", "atl_mdr", "atl_mdr_east", "atl_amo",
+    "caribbean", "gulf", "nta", "tsa",
+    "epac_mdr", "wpac_mdr",
+    "nino12", "nino3", "nino34", "nino4",
+})
+
+
+@router.get("/seasonal/daily")
+def get_seasonal_daily(
+    region: str = Query(..., description="Region key, e.g. atl_mdr"),
+    year: str = Query("all", description="4-digit year, or 'all' for full history"),
+):
+    """Slice of `indices_daily_full.parquet` for one region.
+
+    Returns daily-resolution arrays of SST, anomaly, and Vecchi-Soden
+    relative anomaly for the requested region (and year). Used by the
+    RT Monitor Seasonal tab Panel B "Daily" view to fill the gray
+    historical-year spaghetti and any selected highlight year.
+
+    The current calendar year always reflects the latest live OISST
+    values via splice with `indices_daily_current_year.parquet`.
+    """
+    if region not in _SEASONAL_DAILY_REGIONS:
+        return JSONResponse(
+            content={"error": f"unknown region '{region}'"},
+            status_code=400,
+        )
+    df = _load_seasonal_daily_df()
+    if df is None:
+        return JSONResponse(
+            content={"error": "daily indices unavailable"},
+            status_code=503,
+        )
+
+    cols = ["date", f"{region}_sst", f"{region}_anom", f"{region}_anom_rel"]
+    missing = [c for c in cols if c not in df.columns]
+    if missing:
+        return JSONResponse(
+            content={"error": f"columns not in parquet: {missing}"},
+            status_code=500,
+        )
+    sub = df[cols]
+    if year != "all":
+        if not (year.isdigit() and len(year) == 4):
+            return JSONResponse(
+                content={"error": f"bad year '{year}'"},
+                status_code=400,
+            )
+        sub = sub[sub["date"].str.startswith(year + "-")]
+    sub = sub.reset_index(drop=True)
+
+    # NaN → null in JSON. pandas will already serialize NaN as null when
+    # values are tolist()'d through a generic encoder, but we round-trip
+    # via numpy explicitly so the JSON is small and stable.
+    def _col(name):
+        import numpy as _np
+        arr = sub[name].to_numpy()
+        out = [None if (isinstance(v, float) and _np.isnan(v)) else
+               (float(v) if isinstance(v, (int, float)) else v)
+               for v in arr]
+        return out
+
+    payload = {
+        "region": region,
+        "year": year,
+        "n_rows": len(sub),
+        "dates":     sub["date"].tolist(),
+        "sst":       _col(f"{region}_sst"),
+        "anom":      _col(f"{region}_anom"),
+        "anom_rel":  _col(f"{region}_anom_rel"),
+    }
+    return JSONResponse(
+        content=payload,
+        # Historical years are immutable; current year refreshes daily.
+        # 1 h public cache hits the sweet spot for both.
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
 @router.get("/env/layers")
 def get_env_layers():
     """List available global environmental overlays.
