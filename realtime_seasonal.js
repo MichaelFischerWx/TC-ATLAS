@@ -1482,6 +1482,15 @@
         var doys = [];
         for (var i = 1; i <= 366; i++) doys.push(i);
 
+        // Populate the highlight-year picker from the daily payload's
+        // year coverage. _populateHighlightYears is the same function the
+        // monthly path uses; it no-ops if already populated, so calling it
+        // here is safe regardless of which mode the user enters first.
+        if (regionAll && regionAll.leap) {
+            var availableYears = Object.keys(regionAll.leap).map(Number);
+            _populateHighlightYears(availableYears, currentYear);
+        }
+
         var varKey = _dailyVarKey(variable);          // 'sst' | 'anom' | 'anom_rel' | null
         var isDetrended = (variable === 'sst_dt');
 
