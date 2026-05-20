@@ -2800,25 +2800,44 @@
     }
 
     // Build a scatter trace's worth of TC-track points for a given
-    // frame (month). Returns separate line, marker, and named-storm
-    // label arrays. Polylines are NaN-separated so a single Plotly
-    // scatter trace draws all storms.
-    function _evoBuildTracksForFrame(monthIdx) {
+    // frame. Accepts either a frame object {epochDay, month, day?}
+    // (preferred) or a bare monthIdx int (legacy path — interprets as
+    // end-of-month for that calendar month). Returns separate line,
+    // marker, and named-storm label arrays. Polylines are NaN-
+    // separated so a single Plotly scatter trace draws all storms.
+    function _evoBuildTracksForFrame(frameOrMonth) {
         var year = _evoState.year;
         var basin = _evoState.basin;
         var depth = _evoState.trackDepth;
         var storms = _evoState.storms || {};
         var tracks = _evoState.tracks || {};
-        // Unnamed storms get muted styling so named storms (Andrew, etc.)
-        // dominate the visual hierarchy. Tracks split into two pools.
         var namedLineX = [], namedLineY = [];
         var unnamedLineX = [], unnamedLineY = [];
         var mX = [], mY = [], mC = [], mS = [], mT = [];
-        var labels = [];   // { x, y, name, cat }, drawn as annotations at latest fix
+        var labels = [];
 
-        var monthEnd = Date.UTC(year, monthIdx, 0) + 86399000;
-        var monthStart = Date.UTC(year, monthIdx - 1, 1);
-        var trail15Start = monthEnd - 15 * 86400000;
+        // Resolve the frame to (frameTime, activeStart):
+        //   frameTime = end-of-day for daily mode, end-of-month for monthly.
+        //   activeStart = start of that same window.
+        var frameTime, activeStart;
+        if (frameOrMonth && typeof frameOrMonth === 'object') {
+            // Frame mode — epochDay defines end-of-day, regardless of
+            // resolution. For monthly frames epochDay = last day of month.
+            frameTime = frameOrMonth.epochDay * 86400000 + 86399000;
+            if (frameOrMonth.day != null) {
+                // Daily — active window = start of this day.
+                activeStart = frameOrMonth.epochDay * 86400000;
+            } else {
+                // Monthly — active window = start of this month.
+                activeStart = Date.UTC(year, frameOrMonth.month - 1, 1);
+            }
+        } else {
+            // Legacy path — monthIdx int.
+            var monthIdx = frameOrMonth;
+            frameTime = Date.UTC(year, monthIdx, 0) + 86399000;
+            activeStart = Date.UTC(year, monthIdx - 1, 1);
+        }
+        var trail15Start = frameTime - 15 * 86400000;
 
         for (var sid in storms) {
             var s = storms[sid];
@@ -2833,9 +2852,9 @@
                 if (!_EVO_TC_NATURES[f.n]) continue;
                 var t = Date.parse(f.t + 'Z');
                 if (!Number.isFinite(t)) continue;
-                if (t > monthEnd) break;
+                if (t > frameTime) break;
                 if (depth === 'trailing15' && t < trail15Start) continue;
-                if (depth === 'active' && t < monthStart) continue;
+                if (depth === 'active' && t < activeStart) continue;
                 frameFixes.push(f);
             }
             if (!frameFixes.length) continue;
@@ -2850,8 +2869,6 @@
                 mX.push(lon); mY.push(ff.la);
                 var w = ff.w;
                 mC.push(_evoIntensityColor(w));
-                // Named storms get slightly larger markers so they
-                // pop against the unnamed-system clutter.
                 mS.push(_evoIntensitySize(w) * (isNamed ? 1.2 : 0.75));
                 mT.push((s.name || '?') + ' · ' + ff.t.slice(0, 10)
                         + (w != null ? ' · ' + Math.round(w) + ' kt' : ''));
@@ -2977,6 +2994,32 @@
         return mean;
     }
 
+    // Extract one day's slice from a monthly tile as a (NY, NX) array.
+    function _evoExtractDayGrid(tile, dayIdx) {
+        var stride = EVO_GRID_NY * EVO_GRID_NX;
+        var base = dayIdx * stride;
+        var out = new Array(EVO_GRID_NY);
+        for (var i = 0; i < EVO_GRID_NY; i++) {
+            var row = new Array(EVO_GRID_NX);
+            for (var j = 0; j < EVO_GRID_NX; j++) {
+                var v = tile.values[base + i * EVO_GRID_NX + j];
+                row[j] = Number.isFinite(v) ? v : null;
+            }
+            out[i] = row;
+        }
+        return out;
+    }
+
+    // Month abbreviations used everywhere we label a frame.
+    var _EVO_MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun',
+                            'Jul','Aug','Sep','Oct','Nov','Dec'];
+
+    // Days in calendar month for any year (year-aware so Feb 28 vs 29
+    // works correctly).
+    function _evoDaysInMonth(year, month) {
+        return new Date(Date.UTC(year, month, 0)).getUTCDate();
+    }
+
     // Pull the climatology values for a calendar month from the
     // era5_climo grid sidecars (which are south-to-north, 0..260 cols
     // covering lons 100..360). Convert into the Pacific-centered 360-col
@@ -3023,9 +3066,12 @@
     }
 
     function _evoFetchYear(year) {
-        // Returns Promise<frames[]> for the 12 months of `year`.
-        // Skips months with missing tiles (gappy years near the
-        // present where ERA5T hasn't published yet).
+        // Returns Promise<frames[]>. Frame shape:
+        //   { month, day?, epochDay, label, z[NY][NX] }
+        // Monthly mode: 12 frames (one per month) with z = monthly mean.
+        // Daily mode:   ~365 frames (one per day) with z = daily slice.
+        // Frames sorted by epochDay so the slider scrubs naturally.
+        var resolution = _evoState.resolution || 'monthly';
         return _evoLoadManifest().then(function (m) {
             if (!m) throw new Error('archive manifest unavailable');
             var monthPromises = [];
@@ -3034,26 +3080,52 @@
                     monthPromises.push(
                         _evoFetchShearTile(year, mo)
                             .then(function (tile) {
-                                return { month: mo, z: _evoMonthlyMean(tile) };
+                                if (resolution === 'daily') {
+                                    var frames = [];
+                                    for (var d = 0; d < tile.n_days; d++) {
+                                        var dayNo = d + 1;   // 1-indexed
+                                        frames.push({
+                                            month: mo, day: dayNo,
+                                            epochDay: Date.UTC(year, mo - 1, dayNo) / 86400000,
+                                            label: _EVO_MONTH_NAMES[mo - 1] + ' ' + dayNo,
+                                            z: _evoExtractDayGrid(tile, d),
+                                        });
+                                    }
+                                    return frames;
+                                }
+                                return [{
+                                    month: mo,
+                                    epochDay: Date.UTC(year, mo, 0) / 86400000,  // last day of month
+                                    label: _EVO_MONTH_NAMES[mo - 1],
+                                    z: _evoMonthlyMean(tile),
+                                }];
                             })
-                            .catch(function () { return null; })
+                            .catch(function () { return []; })
                     );
                 })(month);
             }
-            return Promise.all(monthPromises).then(function (frames) {
-                return frames.filter(function (f) { return f != null; });
+            return Promise.all(monthPromises).then(function (chunks) {
+                var all = [];
+                chunks.forEach(function (c) { c.forEach(function (f) { all.push(f); }); });
+                all.sort(function (a, b) { return a.epochDay - b.epochDay; });
+                return all;
             });
         });
     }
 
     function _evoFetchClimoForFrames(frames) {
-        // Fetch climo for each month present in `frames`. Cached.
+        // Fetch climo for each unique calendar month present in `frames`
+        // (daily mode has 30+ frames per month — collapse before fetch).
+        // Cached per (year, mode) combo.
         if (_evoState.climo && _evoState.climo.year_for === _evoState.year) {
             return Promise.resolve(_evoState.climo);
         }
-        var pending = frames.map(function (f) {
-            return _evoLoadClimoForMonth(f.month).then(function (clim) {
-                return { month: f.month, clim: clim };
+        var monthsSeen = {};
+        frames.forEach(function (f) { monthsSeen[f.month] = true; });
+        var pending = Object.keys(monthsSeen).map(function (m) {
+            var mo = parseInt(m, 10);
+            return _evoLoadClimoForMonth(mo).then(function (clim) {
+                return { month: mo, clim: clim };
             });
         });
         return Promise.all(pending).then(function (results) {
@@ -3077,7 +3149,10 @@
         var monthNames = ['Jan','Feb','Mar','Apr','May','Jun',
                           'Jul','Aug','Sep','Oct','Nov','Dec'];
 
-        // Anomaly mode: subtract climo per-cell. Raw mode: identity.
+        // Anomaly mode: subtract climo per-cell. Daily frames still
+        // anchor against the monthly climo for their calendar month
+        // (we don't have day-of-year ERA5 climo yet — see PLAN doc).
+        // Raw mode: identity.
         function frameZ(f) {
             if (!modeIsAnom) return f.z;
             var clim = climo && climo[f.month];
@@ -3126,10 +3201,15 @@
                 + '<extra></extra>',
         };
 
-        var plotlyFrames = frames.map(function (f) {
-            var tracks = _evoBuildTracksForFrame(f.month);
+        var plotlyFrames = frames.map(function (f, idx) {
+            var tracks = _evoBuildTracksForFrame(f);
+            // Frame name uses a stable string per epoch day. Monthly
+            // frames keep their month-string name (1..12) for back-compat
+            // with prior slider steps; daily frames use the epoch-day
+            // integer.
+            var name = (f.day != null) ? 'd' + f.epochDay : String(f.month);
             return {
-                name: String(f.month),
+                name: name,
                 // Use `traces: [0, 2, 3, 4]` to apply this frame's data
                 // ONLY to heatmap + track traces. Trace 1 is the static
                 // coastlines layer and stays unchanged across frames.
@@ -3168,11 +3248,22 @@
             };
         });
 
+        // Slider step per frame. For daily mode (365 steps) we only
+        // label the 1st of each month so the slider axis stays readable;
+        // monthly mode labels every step.
         var sliderSteps = frames.map(function (f) {
+            var name = (f.day != null) ? 'd' + f.epochDay : String(f.month);
+            var stepLabel;
+            if (f.day != null) {
+                // Only label new months (day == 1) in daily mode.
+                stepLabel = (f.day === 1) ? monthNames[f.month - 1] : '';
+            } else {
+                stepLabel = monthNames[f.month - 1];
+            }
             return {
-                label: monthNames[f.month - 1],
+                label: stepLabel,
                 method: 'animate',
-                args: [[String(f.month)], {
+                args: [[name], {
                     mode: 'immediate',
                     transition: { duration: 0 },
                     frame: { duration: 0, redraw: true },
@@ -3325,31 +3416,34 @@
             displayModeBar: false, responsive: true,
         }).then(function () {
             Plotly.addFrames(el, built.frames);
-            // Update the friendly date label as the user scrubs. Plotly
-            // fires 'plotly_animatingframe' on slider drag + during play.
-            var monthNames = ['Jan','Feb','Mar','Apr','May','Jun',
-                              'Jul','Aug','Sep','Oct','Nov','Dec'];
+            // Build a name → friendly label map for the date readout.
+            // Daily-mode frames have names like 'd<epochDay>'; monthly
+            // have '1'..'12'. The frame's own `.label` is the human form.
+            var labelByName = {};
+            frames.forEach(function (f) {
+                var name = (f.day != null) ? 'd' + f.epochDay : String(f.month);
+                labelByName[name] = f.label;
+            });
             var dateEl = document.getElementById('seasonal-evo-date');
-            function setDate(monthIdx) {
+            function setDate(frameName) {
                 if (dateEl) {
-                    dateEl.textContent = _evoState.year + ' · '
-                        + monthNames[Math.max(0, monthIdx - 1)];
+                    var lab = labelByName[frameName] || frameName;
+                    dateEl.textContent = _evoState.year + ' · ' + lab;
                 }
             }
-            setDate(frames[0].month);
-            // plotly_sliderchange fires on user-driven slider scrubs;
-            // plotly_animatingframe fires during programmatic play
-            // (when the play button is held). Bind both so the date
-            // label tracks whichever path the user takes.
+            // Initial frame label.
+            var firstName = (frames[0].day != null)
+                ? 'd' + frames[0].epochDay : String(frames[0].month);
+            setDate(firstName);
             if (el.on) {
                 el.on('plotly_sliderchange', function (e) {
                     var step = e && e.step;
                     var name = step && step.args && step.args[0] && step.args[0][0];
-                    if (name) setDate(parseInt(name, 10));
+                    if (name) setDate(name);
                 });
                 el.on('plotly_animatingframe', function (e) {
                     var name = e && e.frame && e.frame.name;
-                    if (name) setDate(parseInt(name, 10));
+                    if (name) setDate(name);
                 });
             }
         });
@@ -3390,15 +3484,15 @@
             el._evoBound = true;
             el.addEventListener('change', function () {
                 _evoState[key] = parse ? parse(el.value) : el.value;
-                if (key === 'year' || key === 'variable') {
-                    // Year/var change needs fresh tile fetches.
+                if (key === 'year' || key === 'variable' || key === 'resolution') {
+                    // Year/var/resolution change needs fresh frame build.
+                    // Resolution flip reshapes 12 → 365 frames (or back),
+                    // so we go through the full _evoRender path.
                     _evoState.frames = null;
                     _evoRender();
                 } else if (key === 'mode') {
-                    // Mode change re-uses cached frames; just rebuild traces.
                     _evoRerenderTracksOnly();
                 } else if (key === 'basin' || key === 'trackDepth') {
-                    // Track filter change — no field re-fetch needed.
                     _evoRerenderTracksOnly();
                 }
                 _ga('rt_seasonal_evo', { key: key, value: el.value });
@@ -3409,6 +3503,7 @@
         bind('seasonal-evo-mode', 'mode');
         bind('seasonal-evo-basin', 'basin');
         bind('seasonal-evo-track-depth', 'trackDepth');
+        bind('seasonal-evo-resolution', 'resolution');
         // Play / pause is its own thing — TODO Phase 1b
         var play = document.getElementById('seasonal-evo-play');
         if (play && !play._evoBound) {
