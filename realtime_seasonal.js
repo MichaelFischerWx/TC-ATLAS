@@ -2707,18 +2707,55 @@
         mode: 'anomaly',         // 'anomaly' | 'raw'
         basin: 'NA',
         trackDepth: 'cumulative',
-        frames: null,            // array of {month, z[NY][NX]}
+        resolution: 'monthly',   // 'monthly' (12 frames) | 'daily' (365)
+        frames: null,            // array of {month, day?, z[NY][NX]}
         climo: null,             // {month → climo z[NY][NX]} for anomaly mode
-        currentFrameIdx: 0,
-        playing: false,
-        playTimer: null,
         // IBTrACS overlay state — lazy-loaded chunk-1 (1977-present)
         // covers everything the era5_daily archive will ever have.
-        tracks: null,            // SID → array of fixes
+        tracks: null,
         tracksPromise: null,
-        storms: null,            // SID → storm metadata (basin, year, name…)
+        storms: null,
         stormsPromise: null,
+        // Coastline polyline (one NaN-separated polyline trace under
+        // the storm-track scatter). Loaded once from
+        // vendor/gc-atlas/assets/coastlines/ne_50m_coastline.geojson.
+        coastlines: null,
+        coastlinesPromise: null,
     };
+
+    function _evoLoadCoastlines() {
+        if (_evoState.coastlines) return Promise.resolve(_evoState.coastlines);
+        if (_evoState.coastlinesPromise) return _evoState.coastlinesPromise;
+        _evoState.coastlinesPromise = fetch(
+                'vendor/gc-atlas/assets/coastlines/ne_50m_coastline.geojson',
+                { cache: 'default' })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (gj) {
+                if (!gj || !gj.features) {
+                    _evoState.coastlines = { x: [], y: [] };
+                    return _evoState.coastlines;
+                }
+                // Flatten 1428 LineString features into a single NaN-
+                // separated polyline so we ship one Plotly scatter trace.
+                var xs = [], ys = [];
+                gj.features.forEach(function (f) {
+                    var coords = f.geometry && f.geometry.coordinates;
+                    if (!coords || !coords.length) return;
+                    if (xs.length) { xs.push(null); ys.push(null); }
+                    for (var i = 0; i < coords.length; i++) {
+                        xs.push(coords[i][0]);
+                        ys.push(coords[i][1]);
+                    }
+                });
+                _evoState.coastlines = { x: xs, y: ys };
+                return _evoState.coastlines;
+            })
+            .catch(function () {
+                _evoState.coastlines = { x: [], y: [] };
+                return _evoState.coastlines;
+            });
+        return _evoState.coastlinesPromise;
+    }
 
     // True-TC natures per user instruction: keep storms visible on the
     // map as long as they retain one of these. Drop fix once nature
@@ -3093,6 +3130,10 @@
             var tracks = _evoBuildTracksForFrame(f.month);
             return {
                 name: String(f.month),
+                // Use `traces: [0, 2, 3, 4]` to apply this frame's data
+                // ONLY to heatmap + track traces. Trace 1 is the static
+                // coastlines layer and stays unchanged across frames.
+                traces: [0, 2, 3, 4],
                 data: [
                     { z: frameZ(f) },
                     { x: tracks.unnamedLineX, y: tracks.unnamedLineY },
@@ -3138,6 +3179,19 @@
                 }],
             };
         });
+
+        // Static coastline overlay — sits between the heatmap and the
+        // storm tracks so countries are visible without obscuring TC
+        // markers. Lazy-loaded once per session; frames skip this
+        // trace via the `traces: [0, 2, 3, 4]` indexing above.
+        var coastlines = _evoState.coastlines || { x: [], y: [] };
+        var coastlineTrace = {
+            type: 'scatter', mode: 'lines',
+            x: coastlines.x, y: coastlines.y,
+            line: { color: 'rgba(255,255,255,0.55)', width: 0.6 },
+            hoverinfo: 'skip', showlegend: false,
+            name: 'coastlines',
+        };
 
         // Initial traces for the first frame. Two line traces (unnamed
         // muted, named bright) draw under the markers; the markers
@@ -3188,7 +3242,8 @@
         });
 
         return {
-            traces: [baseTrace, unnamedLineTrace, namedLineTrace, markerTrace],
+            traces: [baseTrace, coastlineTrace,
+                     unnamedLineTrace, namedLineTrace, markerTrace],
             frames: plotlyFrames,
             sliderSteps: sliderSteps,
             initialLabels: initialLabels,
@@ -3215,7 +3270,7 @@
                 return;
             }
             _evoState.frames = frames;
-            var prep = [stormsP, tracksP];
+            var prep = [stormsP, tracksP, _evoLoadCoastlines()];
             if (_evoState.mode === 'anomaly') prep.push(_evoFetchClimoForFrames(frames));
             return Promise.all(prep).then(function () {
                 if (_evoState.year !== year) return;

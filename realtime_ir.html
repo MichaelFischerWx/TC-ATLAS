@@ -1053,6 +1053,12 @@
                             <option value="active">Active on this date only</option>
                         </select>
                     </label>
+                    <label>Resolution
+                        <select id="seasonal-evo-resolution" title="Monthly: 12 frames per year, monthly-mean shear underneath. Daily: 365 frames per year, daily shear underneath (~63 MB in browser memory). Pick Daily for synoptic-scale evolution; Monthly for season-overview.">
+                            <option value="monthly" selected>Monthly (12 frames)</option>
+                            <option value="daily">Daily (365 frames)</option>
+                        </select>
+                    </label>
                 </div>
                 <div class="seasonal-evo-wrap" id="seasonal-evo-wrap">
                     <div id="seasonal-evo-map" class="seasonal-evo-map"></div>
