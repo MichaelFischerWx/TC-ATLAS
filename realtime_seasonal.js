@@ -44,8 +44,15 @@
         // this panel is for (TC potential-intensity literature).
         corr: { basin: 'NA', month: 5, kind: 'relative',
                 stat: 'pearson', overlayYear: '' },
-        ts: { region: 'atl_mdr', variable: 'sst', history: 'all',
-              highlight: 'none', resolution: 'monthly' },
+        // Default to Daily resolution with `recent10` history — Daily is
+        // the more informative view for TC research (~13 extra days of
+        // detail near "now", true climatology shape, sub-monthly anomaly
+        // events visible). `recent10` keeps the gray spaghetti legible
+        // and avoids fetching the 44-year region all-years payload on
+        // first paint (~70 KB → 0 KB; the full backdrop is one click
+        // away via the History selector).
+        ts: { region: 'atl_mdr', variable: 'sst', history: 'recent10',
+              highlight: 'none', resolution: 'daily' },
         an: { year: null, month: 5, regions: 'all',
               method: 'grid_weighted', basin: 'NA', kind: 'relative',
               stat: 'pearson', topN: 'auto' },
