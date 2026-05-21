@@ -2811,7 +2811,11 @@
     function _evoComputeEffectiveHd(viewport) {
         var variable = _evoState.variable || 'shear';
         if (_evoIsMonthlyOnly(variable)) return false;
-        if (_evoState.resolution === 'daily') return false;  // mem ceiling
+        // HD + daily is allowed for non-ALL basins now — viewport
+        // cropping bounds peak memory at ~550 MB even with 365 daily
+        // frames at 0.25°. ALL basin in daily-HD would still blow
+        // past the mobile-Safari ceiling (no crop), so we keep that
+        // gate.
         if (_evoState.basin === 'ALL') return false;          // needs crop
         var mode = _evoState.hdMode || 'auto';
         if (mode === '1deg') return false;
@@ -4240,11 +4244,32 @@
         var lifeFade = _EVO_PCL_FADE_OUT;
         var birthFade = _EVO_PCL_FADE_IN;
         var speedNorm = _EVO_PCL_SPEED_NORM_MS;
+
+        // Clip to the Plotly data area so particles that drift past
+        // the axis edges (or that get projected into the figure's
+        // margin band by a stale viewport) don't draw on the outer
+        // strip. We pull the data-area rect from xa._offset /
+        // ya._offset; the erase pass above ran without the clip so
+        // old margin pixels still fade out cleanly.
+        var mapEl = document.getElementById('seasonal-evo-map');
+        var clipRect = null;
+        if (mapEl && mapEl._fullLayout) {
+            var xa = mapEl._fullLayout.xaxis;
+            var ya = mapEl._fullLayout.yaxis;
+            if (xa && ya && isFinite(xa._offset) && isFinite(ya._offset)) {
+                clipRect = { x: xa._offset, y: ya._offset,
+                             w: xa._length, h: ya._length };
+            }
+        }
+        if (clipRect) {
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(clipRect.x, clipRect.y, clipRect.w, clipRect.h);
+            ctx.clip();
+        }
+
         // Batch all stroke calls into one path per "alpha bucket" so
-        // ~700 particles × 8 segments stays well under 1 ms/frame.
-        // Two buckets — fast (full opacity head) and slow (faded) —
-        // keep the visual gradient without paying per-segment state
-        // changes.
+        // ~450 particles × 7 segments stays well under 1 ms/frame.
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
         ctx.lineWidth = 1.1;
@@ -4313,6 +4338,7 @@
         // (Head dots removed — at 450 particles the trail strokes
         // already terminate in a 1.1 px round-cap, which reads as a
         // bright head without doubling the per-frame draw cost.)
+        if (clipRect) ctx.restore();
 
         p.rafId = requestAnimationFrame(_evoParticleTick);
     }
@@ -5756,7 +5782,6 @@
         var btn = document.getElementById('seasonal-evo-toggle-hd');
         if (!btn) return;
         var hdAllowedAtAll = _evoState.basin !== 'ALL'
-            && _evoState.resolution !== 'daily'
             && !_evoIsMonthlyOnly(_evoState.variable);
         var mode = _evoState.hdMode || 'auto';
         // If the user's lock points at HD but the combo can't deliver
@@ -5775,7 +5800,6 @@
         btn.textContent = labelByMode[mode] || 'Res: Auto';
         var reasons = [];
         if (_evoState.basin === 'ALL') reasons.push('basin = ALL');
-        if (_evoState.resolution === 'daily') reasons.push('resolution = daily');
         if (_evoIsMonthlyOnly(_evoState.variable))
             reasons.push('variable ships at 1°');
         var hdAvailForYear = _evoHdAvailableFor(_evoState.year);
@@ -5891,11 +5915,6 @@
                                 _evoState.resolution = _evoState._lastResolution;
                             }
                         }
-                    }
-                    // Resolution=daily must disable HD (mem ceiling).
-                    if (key === 'resolution' && _evoState.resolution === 'daily'
-                            && _evoState.hd) {
-                        _evoState.hd = false;
                     }
                     _evoUpdateHdButton();
                     _evoRender();
