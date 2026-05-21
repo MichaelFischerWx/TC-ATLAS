@@ -1025,8 +1025,10 @@
                                 title="Calendar year to animate. Years populate from the era5_daily archive manifest."></select>
                     </label>
                     <label>Variable
-                        <select id="seasonal-evo-var" title="Field shown in the background. Phase 1 ships shear; future variables (MPI, χ200, RH700, ζ850, TCWV) light up as additional daily-archive variables are backfilled.">
+                        <select id="seasonal-evo-var" title="Field shown in the background. All three options carry wind barbs: shear shows the |V₂₀₀ − V₈₅₀| vector; the upper-/lower-tropospheric wind options show the level's actual wind.">
                             <option value="shear" selected>Deep-layer shear (200-850)</option>
+                            <option value="wind200">Wind at 200 hPa</option>
+                            <option value="wind850">Wind at 850 hPa</option>
                         </select>
                     </label>
                     <label>Display

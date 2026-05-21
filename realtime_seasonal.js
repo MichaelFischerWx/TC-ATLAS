@@ -2962,24 +2962,27 @@
         return out;
     }
 
-    function _evoFetchShearTile(year, month) {
-        var url = EVO_ARCHIVE_BASE + '/shear/' + year + '_'
-            + (month < 10 ? '0' : '') + month + '.bin.gz';
+    // Generic tile fetcher for any field in era5_daily — u200, v200,
+    // u850, v850, shear. Returns the decoded daily values + metadata.
+    function _evoFetchFieldTile(field, year, month) {
+        var monthStr = (month < 10 ? '0' : '') + month;
+        var url = EVO_ARCHIVE_BASE + '/' + field + '/' + year + '_' + monthStr + '.bin.gz';
         return fetch(url)
             .then(function (r) {
                 if (!r.ok) throw new Error('HTTP ' + r.status);
-                // Streaming gunzip via DecompressionStream.
                 var decompressed = r.body.pipeThrough(new DecompressionStream('gzip'));
                 return new Response(decompressed).arrayBuffer();
             })
             .then(function (buf) {
-                var meta = _evoState.manifest.tiles['shear/'
-                    + year + '_' + (month < 10 ? '0' : '') + month];
-                if (!meta) throw new Error('no manifest entry');
+                var meta = _evoState.manifest.tiles[field + '/' + year + '_' + monthStr];
+                if (!meta) throw new Error('no manifest entry for ' + field);
                 var values = _evoDecodeTile(buf, meta);
                 var nDays = meta.n_days || (values.length / (EVO_GRID_NY * EVO_GRID_NX));
                 return { values: values, n_days: nDays, valid_dates: meta.valid_dates };
             });
+    }
+    function _evoFetchShearTile(year, month) {
+        return _evoFetchFieldTile('shear', year, month);
     }
 
     // Monthly mean of daily shear at each grid cell.
@@ -3036,6 +3039,117 @@
         return new Date(Date.UTC(year, month, 0)).getUTCDate();
     }
 
+    // ── Wind-barb rendering ──────────────────────────────────────────
+    // Standard WMO convention: shaft points DOWNWIND from the station;
+    // pennants/full feathers/half feathers on the upwind (right) side
+    // of the shaft encode speed in 50/10/5 kt increments. We sample on
+    // a regular (lat, lon) grid and emit one big NaN-separated polyline
+    // — single Plotly scatter trace covers ~600 barbs cheaply.
+    var _EVO_BARB_LAT_STEP = 6;     // °
+    var _EVO_BARB_LON_STEP = 6;     // °
+    var _EVO_MS_TO_KT = 1.94384;
+    var _EVO_SHAFT_DEG = 3.0;       // shaft length in lat/lon degrees
+    var _EVO_FEATHER_DEG = 1.4;     // perpendicular feather length
+    var _EVO_HALF_DEG = 0.7;
+    var _EVO_SPACING_DEG = 0.5;     // along-shaft spacing between glyphs
+    var _EVO_PENNANT_W_DEG = 0.6;   // base width of pennant triangle
+
+    // Build a (linesX, linesY) polyline-pair representing WMO barbs for
+    // a u/v field sampled on the EVO 1° grid. NaN separators between
+    // adjacent barb pieces so Plotly draws them as disjoint lines.
+    function _evoBuildBarbs(uGrid, vGrid) {
+        if (!uGrid || !vGrid) return { x: [], y: [] };
+        var xs = [], ys = [];
+        // Skip cells where speed is tiny so the figure isn't cluttered
+        // with no-info barbs over the deep tropics under shear-zero.
+        var SPEED_THRESHOLD_KT = 5;
+        for (var iLat = 0; iLat < EVO_GRID_NY; iLat += _EVO_BARB_LAT_STEP) {
+            for (var iLon = 0; iLon < EVO_GRID_NX; iLon += _EVO_BARB_LON_STEP) {
+                var u = uGrid[iLat] && uGrid[iLat][iLon];
+                var v = vGrid[iLat] && vGrid[iLat][iLon];
+                if (u == null || v == null) continue;
+                var spd_kt = Math.sqrt(u * u + v * v) * _EVO_MS_TO_KT;
+                if (spd_kt < SPEED_THRESHOLD_KT) continue;
+                var stationLon = EVO_LONS[iLon];
+                var stationLat = EVO_LATS[iLat];
+                _evoAppendBarb(xs, ys, stationLon, stationLat, u, v, spd_kt);
+            }
+        }
+        return { x: xs, y: ys };
+    }
+
+    // Append a single WMO barb's polyline segments to xs/ys.
+    function _evoAppendBarb(xs, ys, lon, lat, u, v, spd_kt) {
+        // Wind unit vector in the (lon, lat) coord — we IGNORE the
+        // cos(lat) factor here because the Plotly axis is direct
+        // lat-lon (no projection), so a straight u/v vector renders
+        // correctly as wind direction in the plotted frame.
+        var mag = Math.sqrt(u * u + v * v);
+        if (mag === 0) return;
+        var dx = u / mag, dy = v / mag;           // along-wind unit
+        var px = -dy, py = dx;                    // 90° counter-clockwise (left side)
+        // Shaft from station toward the direction the wind is going
+        // (standard WMO convention: barb shaft points downwind).
+        var tipX = lon + dx * _EVO_SHAFT_DEG;
+        var tipY = lat + dy * _EVO_SHAFT_DEG;
+        // Helper to push a line segment with a NaN separator.
+        function seg(x1, y1, x2, y2) {
+            if (xs.length) { xs.push(null); ys.push(null); }
+            xs.push(x1, x2); ys.push(y1, y2);
+        }
+        // Shaft.
+        seg(lon, lat, tipX, tipY);
+        // Round to nearest 5 kt for glyph allocation.
+        var rounded = Math.round(spd_kt / 5) * 5;
+        var nPennants  = Math.floor(rounded / 50);
+        var rem        = rounded - nPennants * 50;
+        var nFull      = Math.floor(rem / 10);
+        var rem2       = rem - nFull * 10;
+        var nHalf      = Math.floor(rem2 / 5);
+        // Walk down the shaft from the tip — pennants first, then full,
+        // then half. We're decorating the LEFT side (px/py rotation).
+        var pos = _EVO_SHAFT_DEG;  // along-shaft distance from station
+        for (var p = 0; p < nPennants; p++) {
+            // Pennant = filled triangle with base along the shaft and
+            // apex on the upwind side. Draw as 3 segments (closing the
+            // triangle visually — Plotly scatter can't fill a polygon
+            // segment trivially, so we just stroke the outline).
+            var baseAhead  = pos;
+            var baseBehind = pos - _EVO_PENNANT_W_DEG;
+            var apexX = lon + dx * baseAhead + px * _EVO_FEATHER_DEG;
+            var apexY = lat + dy * baseAhead + py * _EVO_FEATHER_DEG;
+            var baseAheadX  = lon + dx * baseAhead;
+            var baseAheadY  = lat + dy * baseAhead;
+            var baseBehindX = lon + dx * baseBehind;
+            var baseBehindY = lat + dy * baseBehind;
+            seg(baseAheadX, baseAheadY, apexX, apexY);
+            seg(apexX, apexY, baseBehindX, baseBehindY);
+            seg(baseBehindX, baseBehindY, baseAheadX, baseAheadY);
+            pos -= _EVO_PENNANT_W_DEG + _EVO_SPACING_DEG;
+        }
+        for (var f = 0; f < nFull; f++) {
+            var baseX = lon + dx * pos;
+            var baseY = lat + dy * pos;
+            var tipFX = baseX + px * _EVO_FEATHER_DEG
+                              + dx * (_EVO_FEATHER_DEG * 0.35);  // angled forward
+            var tipFY = baseY + py * _EVO_FEATHER_DEG
+                              + dy * (_EVO_FEATHER_DEG * 0.35);
+            seg(baseX, baseY, tipFX, tipFY);
+            pos -= _EVO_SPACING_DEG;
+        }
+        for (var h = 0; h < nHalf; h++) {
+            // Half feathers — same shape as full but length × 0.5.
+            var bX = lon + dx * pos;
+            var bY = lat + dy * pos;
+            var tHX = bX + px * _EVO_HALF_DEG
+                          + dx * (_EVO_HALF_DEG * 0.35);
+            var tHY = bY + py * _EVO_HALF_DEG
+                          + dy * (_EVO_HALF_DEG * 0.35);
+            seg(bX, bY, tHX, tHY);
+            pos -= _EVO_SPACING_DEG;
+        }
+    }
+
     // Pull the climatology values for a calendar month from the
     // era5_climo grid sidecars (which are south-to-north, 0..260 cols
     // covering lons 100..360). Convert into the Pacific-centered 360-col
@@ -3081,43 +3195,116 @@
             .catch(function () { return null; });
     }
 
+    // Pointwise vector-magnitude grid (each cell = sqrt(a^2 + b^2)).
+    function _evoMag(aGrid, bGrid) {
+        var out = new Array(EVO_GRID_NY);
+        for (var i = 0; i < EVO_GRID_NY; i++) {
+            var row = new Array(EVO_GRID_NX);
+            var ar = aGrid[i], br = bGrid[i];
+            for (var j = 0; j < EVO_GRID_NX; j++) {
+                var a = ar[j], b = br[j];
+                row[j] = (a == null || b == null) ? null : Math.sqrt(a * a + b * b);
+            }
+            out[i] = row;
+        }
+        return out;
+    }
+    function _evoSub(aGrid, bGrid) {
+        var out = new Array(EVO_GRID_NY);
+        for (var i = 0; i < EVO_GRID_NY; i++) {
+            var row = new Array(EVO_GRID_NX);
+            var ar = aGrid[i], br = bGrid[i];
+            for (var j = 0; j < EVO_GRID_NX; j++) {
+                var a = ar[j], b = br[j];
+                row[j] = (a == null || b == null) ? null : a - b;
+            }
+            out[i] = row;
+        }
+        return out;
+    }
+
+    // Returns the u/v field-name pair the current variable depends on.
+    function _evoVectorFieldsFor(variable) {
+        if (variable === 'wind200') return { u: 'u200', v: 'v200', combine: 'level' };
+        if (variable === 'wind850') return { u: 'u850', v: 'v850', combine: 'level' };
+        // Default: shear — needs both levels.
+        return { u200: 'u200', v200: 'v200', u850: 'u850', v850: 'v850', combine: 'shear' };
+    }
+
     function _evoFetchYear(year) {
         // Returns Promise<frames[]>. Frame shape:
-        //   { month, day?, epochDay, label, z[NY][NX] }
-        // Monthly mode: 12 frames (one per month) with z = monthly mean.
-        // Daily mode:   ~365 frames (one per day) with z = daily slice.
-        // Frames sorted by epochDay so the slider scrubs naturally.
+        //   { month, day?, epochDay, label, z[NY][NX], u[NY][NX], v[NY][NX] }
+        // z is the colormap background; u/v drive the barb overlay.
+        // Per-variable derivation:
+        //   shear  → z = |V200 − V850|, u/v = V200 − V850
+        //   wind200 → z = |V200|,        u/v = V200
+        //   wind850 → z = |V850|,        u/v = V850
         var resolution = _evoState.resolution || 'monthly';
+        var variable   = _evoState.variable || 'shear';
         return _evoLoadManifest().then(function (m) {
             if (!m) throw new Error('archive manifest unavailable');
+            // Decide which raw u/v tiles to pull per month.
+            var fields = (variable === 'wind200') ? ['u200', 'v200']
+                       : (variable === 'wind850') ? ['u850', 'v850']
+                       : ['u200', 'v200', 'u850', 'v850'];
             var monthPromises = [];
             for (var month = 1; month <= 12; month++) {
                 (function (mo) {
-                    monthPromises.push(
-                        _evoFetchShearTile(year, mo)
-                            .then(function (tile) {
-                                if (resolution === 'daily') {
-                                    var frames = [];
-                                    for (var d = 0; d < tile.n_days; d++) {
-                                        var dayNo = d + 1;   // 1-indexed
-                                        frames.push({
-                                            month: mo, day: dayNo,
-                                            epochDay: Date.UTC(year, mo - 1, dayNo) / 86400000,
-                                            label: _EVO_MONTH_NAMES[mo - 1] + ' ' + dayNo,
-                                            z: _evoExtractDayGrid(tile, d),
-                                        });
-                                    }
-                                    return frames;
-                                }
-                                return [{
-                                    month: mo,
-                                    epochDay: Date.UTC(year, mo, 0) / 86400000,  // last day of month
-                                    label: _EVO_MONTH_NAMES[mo - 1],
-                                    z: _evoMonthlyMean(tile),
-                                }];
-                            })
-                            .catch(function () { return []; })
-                    );
+                    var fieldFetches = fields.map(function (f) {
+                        return _evoFetchFieldTile(f, year, mo)
+                            .then(function (tile) { return { field: f, tile: tile }; })
+                            .catch(function () { return null; });
+                    });
+                    monthPromises.push(Promise.all(fieldFetches).then(function (results) {
+                        // Bail if any required tile is missing for this month.
+                        var byField = {};
+                        for (var k = 0; k < results.length; k++) {
+                            if (!results[k]) return [];
+                            byField[results[k].field] = results[k].tile;
+                        }
+                        // Build per-day or per-month grids of u, v.
+                        var nDays = byField[fields[0]].n_days;
+                        var slices = [];   // [{ dayIdx?, monthMean?, uGrid, vGrid, zGrid }, ...]
+                        function extractGrid(tile, dayIdx) {
+                            return (dayIdx == null)
+                                ? _evoMonthlyMean(tile)
+                                : _evoExtractDayGrid(tile, dayIdx);
+                        }
+                        var indices = (resolution === 'daily')
+                            ? Array.from({ length: nDays }, function (_, i) { return i; })
+                            : [null];   // monthly mode = single mean
+                        indices.forEach(function (dIdx) {
+                            var uGrid, vGrid;
+                            if (variable === 'wind200' || variable === 'wind850') {
+                                var fU = (variable === 'wind200') ? 'u200' : 'u850';
+                                var fV = (variable === 'wind200') ? 'v200' : 'v850';
+                                uGrid = extractGrid(byField[fU], dIdx);
+                                vGrid = extractGrid(byField[fV], dIdx);
+                            } else {
+                                // shear vector = (u200 - u850, v200 - v850).
+                                var u200 = extractGrid(byField.u200, dIdx);
+                                var v200 = extractGrid(byField.v200, dIdx);
+                                var u850 = extractGrid(byField.u850, dIdx);
+                                var v850 = extractGrid(byField.v850, dIdx);
+                                uGrid = _evoSub(u200, u850);
+                                vGrid = _evoSub(v200, v850);
+                            }
+                            var zGrid = _evoMag(uGrid, vGrid);
+                            var dayNo = dIdx == null ? null : (dIdx + 1);
+                            var epochDay = dayNo == null
+                                ? Date.UTC(year, mo, 0) / 86400000
+                                : Date.UTC(year, mo - 1, dayNo) / 86400000;
+                            slices.push({
+                                month: mo, day: dayNo,
+                                epochDay: epochDay,
+                                label: dayNo == null
+                                    ? _EVO_MONTH_NAMES[mo - 1]
+                                    : _EVO_MONTH_NAMES[mo - 1] + ' ' + dayNo,
+                                z: zGrid, u: uGrid, v: vGrid,
+                            });
+                        });
+                        return slices;
+                    }));
                 })(month);
             }
             return Promise.all(monthPromises).then(function (chunks) {
@@ -3160,7 +3347,11 @@
         // animation. We build one heatmap trace + one combined-tracks
         // scatter trace + one combined-tracks marker trace per frame
         // so the slider can swap z arrays + track polylines cleanly.
-        var modeIsAnom = _evoState.mode === 'anomaly';
+        var variable = _evoState.variable || 'shear';
+        var isWind = (variable === 'wind200' || variable === 'wind850');
+        // Anomaly currently only has climo for shear. For wind variables
+        // we silently fall back to raw mode so the heatmap stays meaningful.
+        var modeIsAnom = (_evoState.mode === 'anomaly') && !isWind;
         var climo = modeIsAnom ? _evoState.climo : null;
         var monthNames = ['Jan','Feb','Mar','Apr','May','Jun',
                           'Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -3187,11 +3378,32 @@
             return out;
         }
 
+        // Per-variable colorbar label and raw-mode range. Wind speed ranges
+        // are bigger than shear (jet streaks routinely 60+ m/s at 200 mb).
+        var varLabel = (variable === 'wind200') ? '200 mb wind'
+                     : (variable === 'wind850') ? '850 mb wind'
+                     : 'Shear';
         var colorscale, zmin, zmax;
         if (modeIsAnom) {
             // Diverging around 0 — anomaly is symmetric.
             colorscale = 'RdBu_r';
             zmin = -10; zmax = 10;
+        } else if (variable === 'wind200') {
+            // 200-mb wind: ~5–80 m/s in the upper-level jet.
+            colorscale = [
+                [0.0,  '#313695'], [0.30, '#74add1'],
+                [0.50, '#fed98e'], [0.75, '#f46d43'],
+                [1.0,  '#a50026'],
+            ];
+            zmin = 0; zmax = 60;
+        } else if (variable === 'wind850') {
+            // 850-mb wind: typically calmer, big lower-trop jets ~30 m/s.
+            colorscale = [
+                [0.0,  '#313695'], [0.30, '#74add1'],
+                [0.50, '#fed98e'], [0.75, '#f46d43'],
+                [1.0,  '#a50026'],
+            ];
+            zmin = 0; zmax = 30;
         } else {
             // Raw shear — same palette as the climo PNG, but defined
             // for Plotly. RdYlBu_r centered at 12 m/s.
@@ -3203,17 +3415,22 @@
             zmin = 0; zmax = 30;
         }
 
+        var colorbarTitle = modeIsAnom
+            ? (varLabel + ' anom (m/s)')
+            : (varLabel + ' (m/s)');
+        var hoverField = modeIsAnom ? 'anom' : varLabel.toLowerCase();
+
         var baseTrace = {
             type: 'heatmap',
             x: EVO_LONS, y: EVO_LATS, z: frameZ(frames[0]),
             colorscale: colorscale, zmin: zmin, zmax: zmax,
             zsmooth: 'best',
             colorbar: {
-                title: { text: modeIsAnom ? 'Shear anom (m/s)' : 'Shear (m/s)' },
+                title: { text: colorbarTitle },
                 thickness: 10,
             },
             hovertemplate: 'lat %{y}°, lon %{x}°<br>'
-                + (modeIsAnom ? 'anom %{z:.1f} m/s' : 'shear %{z:.1f} m/s')
+                + hoverField + ' %{z:.1f} m/s'
                 + '<extra></extra>',
         };
 
@@ -3224,12 +3441,14 @@
             // with prior slider steps; daily frames use the epoch-day
             // integer.
             var name = (f.day != null) ? 'd' + f.epochDay : String(f.month);
+            var barbs = _evoBuildBarbs(f.u, f.v);
             return {
                 name: name,
-                // Use `traces: [0, 2, 3, 4]` to apply this frame's data
-                // ONLY to heatmap + track traces. Trace 1 is the static
-                // coastlines layer and stays unchanged across frames.
-                traces: [0, 2, 3, 4],
+                // Use `traces: [0, 2, 3, 4, 5]` to apply this frame's
+                // data to heatmap + track traces + barb overlay. Trace 1
+                // is the static coastlines layer and stays unchanged
+                // across frames.
+                traces: [0, 2, 3, 4, 5],
                 data: [
                     { z: frameZ(f) },
                     { x: tracks.unnamedLineX, y: tracks.unnamedLineY },
@@ -3238,6 +3457,7 @@
                       marker: { color: tracks.markersC, size: tracks.markersS,
                                 line: { color: 'rgba(15,23,42,0.7)', width: 0.5 } },
                       text: tracks.markersT },
+                    { x: barbs.x, y: barbs.y },
                 ],
                 // Storm-name labels rendered via the layout's
                 // `annotations` array (Plotly's frames can swap that
@@ -3348,9 +3568,21 @@
             };
         });
 
+        // Wind barbs overlay — drawn last so the WMO glyphs sit on top of
+        // the heatmap and storm tracks. Color chosen to read clearly over
+        // both light and dark areas of the colormap.
+        var initialBarbs = _evoBuildBarbs(frames[0].u, frames[0].v);
+        var barbTrace = {
+            type: 'scatter', mode: 'lines',
+            x: initialBarbs.x, y: initialBarbs.y,
+            line: { color: 'rgba(15,23,42,0.85)', width: 0.9 },
+            hoverinfo: 'skip', showlegend: false,
+            name: 'Wind barbs',
+        };
+
         return {
             traces: [baseTrace, coastlineTrace,
-                     unnamedLineTrace, namedLineTrace, markerTrace],
+                     unnamedLineTrace, namedLineTrace, markerTrace, barbTrace],
             frames: plotlyFrames,
             sliderSteps: sliderSteps,
             initialLabels: initialLabels,
@@ -3360,8 +3592,13 @@
     function _evoRender() {
         var el = document.getElementById('seasonal-evo-map');
         if (!el || typeof Plotly === 'undefined') return;
+        var variable = _evoState.variable || 'shear';
+        var loadLabel = (variable === 'wind200') ? '200 mb wind'
+                      : (variable === 'wind850') ? '850 mb wind'
+                      : 'shear';
         el.innerHTML = '<div class="seasonal-panel-stub" style="padding:80px;'
-            + 'text-align:center;">Loading ' + _evoState.year + ' shear archive…</div>';
+            + 'text-align:center;">Loading ' + _evoState.year + ' '
+            + loadLabel + ' archive…</div>';
         var year = _evoState.year;
         // Fan out: field tiles + climo (if anomaly mode) + IBTrACS metadata
         // + IBTrACS tracks all in parallel. Tracks are heavy (~22 MB) but
@@ -3657,8 +3894,11 @@
                 if (key === 'year' || key === 'variable' || key === 'resolution') {
                     // Year/var/resolution change needs fresh frame build.
                     // Resolution flip reshapes 12 → 365 frames (or back),
-                    // so we go through the full _evoRender path.
+                    // so we go through the full _evoRender path. Variable
+                    // change also invalidates the climo cache because the
+                    // climo is keyed by variable (currently shear-only).
                     _evoState.frames = null;
+                    if (key === 'variable') _evoState.climo = null;
                     _evoRender();
                 } else if (key === 'mode') {
                     _evoRerenderTracksOnly();
