@@ -863,6 +863,9 @@ def _filter_cases_for_composite(
     min_rhlo: float = 0,    max_rhlo: float = 100,   # 850–700 hPa RH (%)
     min_rhmd: float = 0,    max_rhmd: float = 100,   # 700–500 hPa RH (%)
     min_vp:   float = 0,    max_vp:   float = 1000,  # ventilation proxy (unitless)
+    # Relative SST (Vecchi & Soden 2007): storm SST minus contemporaneous
+    # 30°S-30°N tropical-mean SST. Removes global warming trend by construction.
+    min_sst_rel: float = -20, max_sst_rel: float = 10,  # °C above/below tropical mean
 ) -> list[int]:
     """Return list of case_index values that pass all composite filters."""
     cache = _merge_metadata_cache if data_type == "merge" else _metadata_cache
@@ -941,6 +944,10 @@ def _filter_cases_for_composite(
         if min_vp > 0 or max_vp < 1000:
             v = meta.get("vp")
             if v is None or v < min_vp or v > max_vp:
+                continue
+        if min_sst_rel > -20 or max_sst_rel < 10:
+            v = meta.get("sst_rel")
+            if v is None or v < min_sst_rel or v > max_sst_rel:
                 continue
 
         matching.append(idx)
@@ -3166,6 +3173,8 @@ def _composite_filter_params(
     max_rhmd:       float = Query(100,  ge=0,   le=100,  description="Max 700–500 hPa RH (%)"),
     min_vp:         float = Query(0,    ge=0,   le=1000, description="Min ventilation proxy"),
     max_vp:         float = Query(1000, ge=0,   le=1000, description="Max ventilation proxy"),
+    min_sst_rel:    float = Query(-20,  ge=-20, le=10,   description="Min relative SST (Vecchi-Soden, °C)"),
+    max_sst_rel:    float = Query(10,   ge=-20, le=10,   description="Max relative SST (Vecchi-Soden, °C)"),
 ):
     return dict(
         min_intensity=min_intensity, max_intensity=max_intensity,
@@ -3180,6 +3189,7 @@ def _composite_filter_params(
         min_rhlo=min_rhlo, max_rhlo=max_rhlo,
         min_rhmd=min_rhmd, max_rhmd=max_rhmd,
         min_vp=min_vp,     max_vp=max_vp,
+        min_sst_rel=min_sst_rel, max_sst_rel=max_sst_rel,
     )
 
 
@@ -3260,6 +3270,118 @@ def _regrid_to_rmw_normalized(data_2d, x_phys, y_phys, rmw,
 # read is ~10–15 MB, so peak thread memory ≈ 8 × 15 MB ≈ 120 MB, well
 # within the ~1.5 GB headroom after base app footprint (~300 MB).
 _COMPOSITE_WORKERS = 16  # I/O-bound on GCS — threads >> vCPU helps wall time
+
+
+def _composite_result_to_netcdf(result: dict, kind: str, filename: str) -> Response:
+    """
+    Serialize a composite result dict to a CF-flavored NetCDF file and return
+    it as a FastAPI Response with attachment headers. Used by the format=nc
+    branch of the composite endpoints.
+
+    `kind` selects the output schema:
+      - "az"   → (height, radius) 2D for /composite/azimuthal_mean
+      - "cfad" → (height, bin) 2D for /composite/cfad single-quadrant
+      - "pv"   → (y, x) 2D for /composite/plan_view
+    """
+    import io
+    var = result.get("variable", {}) or {}
+    common_attrs = {
+        "title":     f"TC-RADAR composite ({kind})",
+        "source":    "tc-atlas-api (https://tc-atlas.org)",
+        "n_cases":   result.get("n_cases"),
+        "n_matched": result.get("n_matched"),
+        "platform_version": "1.0",
+        "variable_key":  var.get("key", ""),
+        "display_name":  var.get("display_name", ""),
+        "units":         var.get("units", ""),
+    }
+
+    def _to_array(field):
+        if field is None: return None
+        arr = np.array(field, dtype=np.float32)
+        # JSON nulls came through as Python None → NaN
+        return arr
+
+    if kind == "az":
+        composite = _to_array(result.get("azimuthal_mean"))
+        height    = np.array(result["height_km"], dtype=np.float32)
+        radius    = np.array(result.get("radius_rrmw") or result.get("radius_km"), dtype=np.float32)
+        r_units   = "R/RMW" if result.get("normalized") else "km"
+        ds = xr.Dataset(
+            data_vars={
+                "azimuthal_mean": (("height", "radius"), composite,
+                    {"units": var.get("units", ""), "long_name": f"Composite azimuthal mean — {var.get('display_name','')}"}),
+            },
+            coords={
+                "height": ("height", height, {"units": "km", "long_name": "Height"}),
+                "radius": ("radius", radius, {"units": r_units, "long_name": "Radius"}),
+            },
+            attrs=common_attrs,
+        )
+        if result.get("se_bootstrap") is not None:
+            ds["se_bootstrap"] = (("height", "radius"), _to_array(result["se_bootstrap"]),
+                {"units": var.get("units", ""), "long_name": "Bootstrap standard error"})
+            ds["se_bootstrap"].attrs["bootstrap_n_iter"] = result.get("bootstrap_n_iter", 0)
+
+    elif kind == "cfad":
+        cfad      = _to_array(result.get("cfad"))
+        height    = np.array(result["height_km"], dtype=np.float32)
+        bins      = np.array(result["bin_centers"], dtype=np.float32)
+        ds = xr.Dataset(
+            data_vars={
+                "cfad": (("height", "bin"), cfad,
+                    {"units": result.get("norm_label", ""), "long_name": "Contoured frequency by altitude"}),
+            },
+            coords={
+                "height": ("height", height, {"units": "km", "long_name": "Height"}),
+                "bin":    ("bin",    bins,   {"units": var.get("units", ""), "long_name": var.get("display_name", "")}),
+            },
+            attrs={**common_attrs,
+                   "bin_width":    result.get("bin_width"),
+                   "normalise":    result.get("normalise"),
+                   "use_rmw":      int(bool(result.get("use_rmw"))),
+                   "radial_domain_min": (result.get("radial_domain") or [None, None])[0],
+                   "radial_domain_max": (result.get("radial_domain") or [None, None])[1]},
+        )
+        if result.get("se_bootstrap") is not None:
+            ds["se_bootstrap"] = (("height", "bin"), _to_array(result["se_bootstrap"]),
+                {"units": result.get("norm_label", ""), "long_name": "Bootstrap standard error"})
+            ds["se_bootstrap"].attrs["bootstrap_n_iter"] = result.get("bootstrap_n_iter", 0)
+
+    elif kind == "pv":
+        composite = _to_array(result.get("plan_view"))
+        x_axis    = np.array(result["x_axis"], dtype=np.float32)
+        y_axis    = np.array(result["y_axis"], dtype=np.float32)
+        x_units   = "RMW" if result.get("normalize_rmw") else "km"
+        y_units   = x_units
+        ds = xr.Dataset(
+            data_vars={
+                "plan_view": (("y", "x"), composite,
+                    {"units": var.get("units", ""), "long_name": f"Composite plan view — {var.get('display_name','')}"}),
+            },
+            coords={
+                "y": ("y", y_axis, {"units": y_units, "long_name": result.get("y_label", "")}),
+                "x": ("x", x_axis, {"units": x_units, "long_name": result.get("x_label", "")}),
+            },
+            attrs={**common_attrs,
+                   "level_km":       result.get("level_km"),
+                   "shear_relative": int(bool(result.get("shear_relative")))},
+        )
+        if result.get("se_bootstrap") is not None:
+            ds["se_bootstrap"] = (("y", "x"), _to_array(result["se_bootstrap"]),
+                {"units": var.get("units", ""), "long_name": "Bootstrap standard error"})
+            ds["se_bootstrap"].attrs["bootstrap_n_iter"] = result.get("bootstrap_n_iter", 0)
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown export kind: {kind}")
+
+    buf = io.BytesIO()
+    ds.to_netcdf(buf, format="NETCDF4", engine="h5netcdf")
+    buf.seek(0)
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/x-netcdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 # Batch size for composite processing — process this many cases at a time,
 # then lightweight GC between batches to keep peak memory bounded.
@@ -3457,6 +3579,7 @@ def composite_count(
     min_rhlo:  float = Query(0),    max_rhlo:  float = Query(100),
     min_rhmd:  float = Query(0),    max_rhmd:  float = Query(100),
     min_vp:    float = Query(0),    max_vp:    float = Query(1000),
+    min_sst_rel: float = Query(-20), max_sst_rel: float = Query(10),
 ):
     """Quick endpoint to get case count for given filter criteria (no data loading)."""
     cases = _filter_cases_for_composite(
@@ -3469,6 +3592,7 @@ def composite_count(
         min_rhlo=min_rhlo, max_rhlo=max_rhlo,
         min_rhmd=min_rhmd, max_rhmd=max_rhmd,
         min_vp=min_vp,     max_vp=max_vp,
+        min_sst_rel=min_sst_rel, max_sst_rel=max_sst_rel,
         data_type=data_type,
     )
     return {
@@ -3489,6 +3613,7 @@ def composite_azimuthal_mean(
     dr_rmw:        float = Query(0.25,  ge=0.05, le=2,  description="Radial bin width in R/RMW (or km when normalize_rmw=false)"),
     coverage_min:  float = Query(0.25,  ge=0.0, le=1.0),
     stream:        bool  = Query(False,                  description="Stream NDJSON progress events"),
+    export_format: str   = Query("json", alias="format",  description="'json' (default) or 'nc' for NetCDF download"),
     bootstrap:     bool  = Query(False,                  description="Return per-bin bootstrap standard error (~5x slower)"),
     n_iter:        int   = Query(500,   ge=100, le=5000, description="Bootstrap iterations (used when bootstrap=true)"),
     min_intensity:  float = Query(0),    max_intensity:  float = Query(200),
@@ -3504,6 +3629,7 @@ def composite_azimuthal_mean(
     min_rhlo:  float = Query(0),    max_rhlo:  float = Query(100),
     min_rhmd:  float = Query(0),    max_rhmd:  float = Query(100),
     min_vp:    float = Query(0),    max_vp:    float = Query(1000),
+    min_sst_rel: float = Query(-20), max_sst_rel: float = Query(10),
 ):
     """Compute composite azimuthal mean across matching cases, optionally RMW-normalised."""
     if variable not in VARIABLES:
@@ -3524,6 +3650,7 @@ def composite_azimuthal_mean(
         min_rhlo=min_rhlo, max_rhlo=max_rhlo,
         min_rhmd=min_rhmd, max_rhmd=max_rhmd,
         min_vp=min_vp,     max_vp=max_vp,
+        min_sst_rel=min_sst_rel, max_sst_rel=max_sst_rel,
         data_type=data_type,
     )
     if not matching:
@@ -3702,7 +3829,13 @@ def composite_azimuthal_mean(
 
     if stream:
         return _streaming_composite_response(_compute)
-    return JSONResponse(_compute())
+    result = _compute()
+    if export_format == "nc":
+        from datetime import datetime, timezone
+        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        return _composite_result_to_netcdf(result, kind="az",
+            filename=f"tc_radar_az_mean_{variable}_{ts}.nc")
+    return JSONResponse(result)
 
 
 @app.get("/composite/quadrant_mean")
@@ -3727,6 +3860,7 @@ def composite_quadrant_mean(
     min_rhlo:  float = Query(0),    max_rhlo:  float = Query(100),
     min_rhmd:  float = Query(0),    max_rhmd:  float = Query(100),
     min_vp:    float = Query(0),    max_vp:    float = Query(1000),
+    min_sst_rel: float = Query(-20), max_sst_rel: float = Query(10),
 ):
     """Compute RMW-normalised composite shear-relative quadrant means."""
     if variable not in VARIABLES:
@@ -3747,6 +3881,7 @@ def composite_quadrant_mean(
         min_rhlo=min_rhlo, max_rhlo=max_rhlo,
         min_rhmd=min_rhmd, max_rhmd=max_rhmd,
         min_vp=min_vp,     max_vp=max_vp,
+        min_sst_rel=min_sst_rel, max_sst_rel=max_sst_rel,
         data_type=data_type,
     )
     if not matching:
@@ -3895,6 +4030,9 @@ def composite_plan_view(
     shear_relative: bool  = Query(False,                   description="Rotate to shear-relative frame?"),
     coverage_min:   float = Query(0.25, ge=0.0,  le=1.0,  description="Min coverage fraction"),
     stream:         bool  = Query(False,                  description="Stream NDJSON progress events"),
+    export_format:  str   = Query("json", alias="format",  description="'json' (default) or 'nc' for NetCDF download"),
+    bootstrap:      bool  = Query(False,                  description="Return per-pixel bootstrap SE for difference stippling"),
+    n_iter:         int   = Query(500,  ge=100, le=5000,  description="Bootstrap iterations"),
     min_intensity:  float = Query(0),    max_intensity:  float = Query(200),
     min_vmax_change:float = Query(-100), max_vmax_change:float = Query(85),
     min_tilt:       float = Query(0),    max_tilt:       float = Query(200),
@@ -3908,6 +4046,7 @@ def composite_plan_view(
     min_rhlo:  float = Query(0),    max_rhlo:  float = Query(100),
     min_rhmd:  float = Query(0),    max_rhmd:  float = Query(100),
     min_vp:    float = Query(0),    max_vp:    float = Query(1000),
+    min_sst_rel: float = Query(-20), max_sst_rel: float = Query(10),
 ):
     """Compute a composite plan-view mean at a specified height level."""
 
@@ -3930,6 +4069,7 @@ def composite_plan_view(
         min_rhlo=min_rhlo, max_rhlo=max_rhlo,
         min_rhmd=min_rhmd, max_rhmd=max_rhmd,
         min_vp=min_vp,     max_vp=max_vp,
+        min_sst_rel=min_sst_rel, max_sst_rel=max_sst_rel,
         data_type=data_type,
     )
     if not matching:
@@ -3997,6 +4137,9 @@ def composite_plan_view(
         ov_accum_count = None
         n_processed = 0
         processed_indices: list[int] = []
+        # Retain per-case (y, x) plan-view stack only when bootstrap requested.
+        # ~4 MB per 1000 cases on a typical 100x100 grid.
+        per_case_stack = [] if bootstrap else None
 
         def _accum_pv(result):
             nonlocal accum_sum, accum_count, ov_accum_sum, ov_accum_count, n_processed
@@ -4014,6 +4157,8 @@ def composite_plan_view(
                 ov_valid = ~np.isnan(ov_2d)
                 ov_accum_sum[ov_valid] += ov_2d[ov_valid]
                 ov_accum_count[ov_valid] += 1
+            if per_case_stack is not None:
+                per_case_stack.append(plan_2d.astype(np.float32))
             n_processed += 1
             processed_indices.append(ci)
 
@@ -4027,6 +4172,28 @@ def composite_plan_view(
 
         min_cases = max(3, int(np.ceil(0.33 * n_processed)))
         composite = np.where(accum_count >= min_cases, accum_sum / accum_count, np.nan)
+
+        # Bootstrap SE via the standard multinomial-weight matmul; identical
+        # math to the az-mean and CFAD paths. Output shape matches composite.
+        se_bootstrap = None
+        if per_case_stack is not None and n_processed >= 5:
+            stack = np.stack(per_case_stack, axis=0)  # (n, ny, nx)
+            n = n_processed
+            n_y, n_x = stack.shape[1], stack.shape[2]
+            valid = (~np.isnan(stack)).astype(np.float32)
+            stack_zero = np.where(valid > 0, stack, 0.0).astype(np.float32)
+            stack_flat = stack_zero.reshape(n, n_y * n_x)
+            valid_flat = valid.reshape(n, n_y * n_x)
+            rng = np.random.default_rng(seed=42)
+            W_f = rng.multinomial(n, [1.0 / n] * n, size=n_iter).astype(np.float32)
+            with np.errstate(invalid="ignore", divide="ignore"):
+                boot_means = np.where(
+                    (W_f @ valid_flat) > 0,
+                    (W_f @ stack_flat) / (W_f @ valid_flat),
+                    np.nan,
+                ).reshape(n_iter, n_y, n_x)
+            se_bootstrap = np.nanstd(boot_means, axis=0)
+            se_bootstrap = np.where(np.isnan(composite), np.nan, se_bootstrap)
 
         if normalize_rmw:
             half_n = int(round(max_r_rmw / dr_rmw))
@@ -4073,6 +4240,10 @@ def composite_plan_view(
             },
         }
 
+        if se_bootstrap is not None:
+            result["se_bootstrap"] = _clean_2d(se_bootstrap)
+            result["bootstrap_n_iter"] = n_iter
+
         if overlay and ov_accum_sum is not None:
             ov_composite = np.where(
                 ov_accum_count >= min_cases, ov_accum_sum / ov_accum_count, np.nan
@@ -4092,7 +4263,13 @@ def composite_plan_view(
 
     if stream:
         return _streaming_composite_response(_compute)
-    return JSONResponse(_compute())
+    result = _compute()
+    if export_format == "nc":
+        from datetime import datetime, timezone
+        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        return _composite_result_to_netcdf(result, kind="pv",
+            filename=f"tc_radar_plan_view_{variable}_{ts}.nc")
+    return JSONResponse(result)
 
 
 # ---------------------------------------------------------------------------
@@ -4307,6 +4484,7 @@ def composite_ir_plan_view(
     min_rhlo:  float = Query(0),    max_rhlo:  float = Query(100),
     min_rhmd:  float = Query(0),    max_rhmd:  float = Query(100),
     min_vp:    float = Query(0),    max_vp:    float = Query(1000),
+    min_sst_rel: float = Query(-20), max_sst_rel: float = Query(10),
 ):
     """Composite plan-view mean of IR brightness temperature."""
 
@@ -4331,6 +4509,7 @@ def composite_ir_plan_view(
         min_rhlo=min_rhlo, max_rhlo=max_rhlo,
         min_rhmd=min_rhmd, max_rhmd=max_rhmd,
         min_vp=min_vp,     max_vp=max_vp,
+        min_sst_rel=min_sst_rel, max_sst_rel=max_sst_rel,
         data_type=data_type,
     )
     if not matching:
@@ -4537,6 +4716,7 @@ def composite_ir_azimuthal_mean(
     min_rhlo:  float = Query(0),    max_rhlo:  float = Query(100),
     min_rhmd:  float = Query(0),    max_rhmd:  float = Query(100),
     min_vp:    float = Query(0),    max_vp:    float = Query(1000),
+    min_sst_rel: float = Query(-20), max_sst_rel: float = Query(10),
 ):
     """Composite azimuthal-mean of IR brightness temperature."""
 
@@ -4561,6 +4741,7 @@ def composite_ir_azimuthal_mean(
         min_rhlo=min_rhlo, max_rhlo=max_rhlo,
         min_rhmd=min_rhmd, max_rhmd=max_rhmd,
         min_vp=min_vp,     max_vp=max_vp,
+        min_sst_rel=min_sst_rel, max_sst_rel=max_sst_rel,
         data_type=data_type,
     )
     if not matching:
@@ -4816,6 +4997,7 @@ def composite_cfad(
     quadrants:     str   = Query("",                     description="Shear-relative quadrant filter: comma-separated from DSL,DSR,USL,USR (empty = all)"),
     normalise:     str   = Query("height",               description="'height' = % at each level (standard CFAD); 'total' = % of all pixels; 'raw' = counts"),
     stream:        bool  = Query(False,                  description="Stream NDJSON progress events"),
+    export_format: str   = Query("json", alias="format",  description="'json' (default) or 'nc' for NetCDF download"),
     bootstrap:     bool  = Query(False,                  description="Return per-bin bootstrap standard error (single-quadrant CFAD only)"),
     n_iter:        int   = Query(500,   ge=100, le=5000, description="Bootstrap iterations (used when bootstrap=true)"),
     min_intensity:  float = Query(0),    max_intensity:  float = Query(200),
@@ -4831,6 +5013,7 @@ def composite_cfad(
     min_rhlo:  float = Query(0),    max_rhlo:  float = Query(100),
     min_rhmd:  float = Query(0),    max_rhmd:  float = Query(100),
     min_vp:    float = Query(0),    max_vp:    float = Query(1000),
+    min_sst_rel: float = Query(-20), max_sst_rel: float = Query(10),
 ):
     """Compute a Contoured Frequency by Altitude Diagram across matching cases."""
     if variable not in VARIABLES:
@@ -4862,6 +5045,7 @@ def composite_cfad(
         min_rhlo=min_rhlo, max_rhlo=max_rhlo,
         min_rhmd=min_rhmd, max_rhmd=max_rhmd,
         min_vp=min_vp,     max_vp=max_vp,
+        min_sst_rel=min_sst_rel, max_sst_rel=max_sst_rel,
         data_type=data_type,
     )
     if not matching:
@@ -4942,6 +5126,9 @@ def composite_cfad(
 
         if multi_mode:
             accum_multi = {}  # {qname: ndarray}
+            # Per-case histogram stack per quadrant for bootstrap.
+            # ~20 MB per 1000 cases (4 quadrants × 32 × 40 × 4 bytes).
+            per_case_stack_multi = {} if bootstrap else None
 
             def _accum_cfad(result):
                 nonlocal n_processed
@@ -4950,13 +5137,14 @@ def composite_cfad(
                     if qname not in accum_multi:
                         accum_multi[qname] = np.zeros_like(hist_2d)
                     accum_multi[qname] += hist_2d
+                    if per_case_stack_multi is not None:
+                        per_case_stack_multi.setdefault(qname, []).append(hist_2d.astype(np.float32))
                 n_processed += 1
                 processed_indices.append(case_idx)
         else:
             accum = None
-            # Only retain per-case stack when bootstrap is requested AND we're
-            # in single-quadrant mode (multi mode bootstrap is more involved;
-            # skip for now). ~5 MB per 1000 cases on a 32 x 40 grid.
+            # Per-case histogram stack for bootstrap (single-quadrant mode).
+            # ~5 MB per 1000 cases on a 32 x 40 grid.
             per_case_stack = [] if (bootstrap and not multi_mode) else None
 
             def _accum_cfad(result):
@@ -5019,6 +5207,42 @@ def composite_cfad(
                 qname: _clean_2d(_normalise_array(arr))
                 for qname, arr in accum_multi.items()
             }
+
+            # Per-quadrant bootstrap. Each quadrant gets the same multinomial
+            # treatment as the single-quadrant CFAD branch — re-sum the per-case
+            # histograms with multinomial weights, re-normalize the same way as
+            # the displayed CFAD, and take per-bin std across resamples.
+            if per_case_stack_multi is not None and n_processed >= 5:
+                se_bootstrap_multi = {}
+                rng = np.random.default_rng(seed=42)
+                # Use one shared multinomial draw across quadrants so SEs are
+                # comparable (same bootstrap sample applied to each quadrant).
+                W = rng.multinomial(n_processed, [1.0 / n_processed] * n_processed,
+                                    size=n_iter).astype(np.float32)
+                for qname, stacks in per_case_stack_multi.items():
+                    if len(stacks) != n_processed:
+                        # Some cases lack this quadrant — skip rather than emit
+                        # a misleading SE on a non-aligned stack.
+                        continue
+                    stack = np.stack(stacks, axis=0)
+                    n_h, n_b = stack.shape[1], stack.shape[2]
+                    stack_flat = stack.reshape(n_processed, n_h * n_b)
+                    boot_sums = (W @ stack_flat).reshape(n_iter, n_h, n_b)
+                    with np.errstate(invalid="ignore", divide="ignore"):
+                        if normalise == "total":
+                            totals = boot_sums.sum(axis=(1, 2), keepdims=True)
+                            totals = np.where(totals > 0, totals, 1)
+                            boot_means = (boot_sums / totals) * 100.0
+                        elif normalise == "height":
+                            rows = boot_sums.sum(axis=2, keepdims=True)
+                            rows = np.where(rows > 0, rows, 1)
+                            boot_means = (boot_sums / rows) * 100.0
+                        else:
+                            boot_means = boot_sums
+                    se_bootstrap_multi[qname] = _clean_2d(np.nanstd(boot_means, axis=0))
+                if se_bootstrap_multi:
+                    base_result["se_bootstrap_multi"] = se_bootstrap_multi
+                    base_result["bootstrap_n_iter"] = n_iter
         else:
             base_result["multi"] = False
             base_result["quadrants"] = quad_list or []
@@ -5060,7 +5284,16 @@ def composite_cfad(
 
     if stream:
         return _streaming_composite_response(_compute)
-    return JSONResponse(_compute())
+    result = _compute()
+    if export_format == "nc":
+        if result.get("multi"):
+            raise HTTPException(status_code=400,
+                detail="NetCDF export of MULTI-quadrant CFAD not yet supported")
+        from datetime import datetime, timezone
+        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        return _composite_result_to_netcdf(result, kind="cfad",
+            filename=f"tc_radar_cfad_{variable}_{ts}.nc")
+    return JSONResponse(result)
 
 
 # ---------------------------------------------------------------------------
@@ -8096,6 +8329,7 @@ def composite_anomaly_azimuthal_mean(
     min_rhlo:  float = Query(0),    max_rhlo:  float = Query(100),
     min_rhmd:  float = Query(0),    max_rhmd:  float = Query(100),
     min_vp:    float = Query(0),    max_vp:    float = Query(1000),
+    min_sst_rel: float = Query(-20), max_sst_rel: float = Query(10),
 ):
     """
     Composite Z-score anomaly on the hybrid R_H coordinate (Fischer et al. 2025).
@@ -8116,6 +8350,7 @@ def composite_anomaly_azimuthal_mean(
         min_rhlo=min_rhlo, max_rhlo=max_rhlo,
         min_rhmd=min_rhmd, max_rhmd=max_rhmd,
         min_vp=min_vp,     max_vp=max_vp,
+        min_sst_rel=min_sst_rel, max_sst_rel=max_sst_rel,
         data_type=data_type,
     )
     if not matching:

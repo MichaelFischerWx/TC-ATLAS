@@ -7780,7 +7780,8 @@ function initCompositePanel() {
             wfRow('SST',          prefix + '-sst',  0, 35,  0.5, 0, 35,  '\u00b0C') +
             wfRow('RH 850\u2013700', prefix + '-rhlo', 0, 100, 5,   0, 100, '%') +
             wfRow('RH 700\u2013500', prefix + '-rhmd', 0, 100, 5,   0, 100, '%') +
-            wfRow('Vent Idx',     prefix + '-vp',   0, 5,   0.1, 0, 5,   '');
+            wfRow('Vent Idx',     prefix + '-vp',   0, 5,   0.1, 0, 5,   '') +
+            wfRow('SST \u2212 Trop',  prefix + '-sst_rel', -10, 6, 0.25, -10, 6, '\u00b0C');
     }
 
     overlay.innerHTML =
@@ -8735,6 +8736,8 @@ function _readCompositeFilters(prefix) {
         max_rhmd:        num('-rhmd-max', 100),
         min_vp:          num('-vp-min', 0),
         max_vp:          num('-vp-max', 5),
+        min_sst_rel:     num('-sst_rel-min', -10),
+        max_sst_rel:     num('-sst_rel-max', 6),
     };
 }
 
@@ -8801,6 +8804,8 @@ function _compositeFilterSummary(filters, nCases) {
         parts.push('RH\u2098\u1d62d ' + filters.min_rhmd + '\u2013' + filters.max_rhmd + ' %');
     if (filters.min_vp > 0 || filters.max_vp < 5)
         parts.push('VI ' + filters.min_vp + '\u2013' + filters.max_vp);
+    if (filters.min_sst_rel > -10 || filters.max_sst_rel < 6)
+        parts.push('SST\u2212Trop ' + filters.min_sst_rel + '\u2013' + filters.max_sst_rel + ' \u00b0C');
     var summary = parts.length > 0 ? parts.join(' | ') : 'All cases';
     return 'Composite (N=' + nCases + ') | ' + summary;
 }
@@ -8854,6 +8859,9 @@ function _computeCompositeMeanVmax(filters) {
         }
         if (filters.min_vp > 0 || filters.max_vp < 5) {
             if (c.vp == null || c.vp < filters.min_vp || c.vp > filters.max_vp) return;
+        }
+        if (filters.min_sst_rel > -10 || filters.max_sst_rel < 6) {
+            if (c.sst_rel == null || c.sst_rel < filters.min_sst_rel || c.sst_rel > filters.max_sst_rel) return;
         }
         sum += v; count++;
     });
@@ -9022,6 +9030,7 @@ function _buildCompToolbar() {
     return '<div class="comp-toolbar">' +
         '<button class="comp-tool-btn" onclick="_downloadCompCSV()" title="Download data as CSV">\u2B07 CSV</button>' +
         '<button class="comp-tool-btn" onclick="_downloadCompJSON()" title="Download full API response as JSON">\u2B07 JSON</button>' +
+        '<button class="comp-tool-btn" onclick="_downloadCompNetCDF(this)" title="Download as CF-flavored NetCDF (xarray-ready)">\u2B07 NetCDF</button>' +
         '<button class="comp-tool-btn comp-save-png-btn" onclick="_saveCompChartsPng(this)" title="Save chart(s) as a high-quality (2\u00D7 retina) PNG">' + _icon('download') + 'PNG</button>' +
         '<button class="comp-tool-btn" onclick="_toggleCompCaseList()" title="Show/hide cases used in this composite">' + _icon('clipboard') + 'Cases</button>' +
         '<button class="comp-tool-btn comp-link-btn" onclick="_copyCompPermalink()" title="Copy shareable link with current settings">' + _icon('link') + 'Copy Link</button>' +
@@ -9047,6 +9056,56 @@ function _resolveCompChartIds() {
     if (t === 'cfad_diff_multi') return { ids: ['comp-diff-cfadm-a','comp-diff-cfadm-b','comp-diff-cfadm-diff'],
                                            stem: 'tc_radar_cfad_quad_diff', gridId: 'diff-grid-cfadm' };
     return null;
+}
+
+// NetCDF download: re-request the active composite with format=nc and
+// trigger a browser download. Only supports the three Section-7 workhorses
+// (az-mean, plan-view, single-quadrant CFAD). Other view types show a toast.
+function _downloadCompNetCDF(btn) {
+    var t = _lastCompType;
+    var endpoint, label;
+    if (t === 'az')        { endpoint = 'azimuthal_mean'; label = 'az_mean'; }
+    else if (t === 'pv')   { endpoint = 'plan_view';      label = 'plan_view'; }
+    else if (t === 'cfad') { endpoint = 'cfad';           label = 'cfad'; }
+    else {
+        if (window._showCompStatus) {
+            _showCompStatus('error', 'NetCDF export not yet supported for this view type.');
+        }
+        return;
+    }
+    var filters = _getCompositeFilters();
+    var variable = (document.getElementById('comp-var') || {}).value || 'recentered_tangential_wind';
+    var dataType = (document.getElementById('comp-dtype') || {}).value || 'swath';
+    var qs = _compositeQueryString(filters)
+        + '&variable=' + encodeURIComponent(variable)
+        + '&data_type=' + dataType
+        + '&format=nc';
+    // Carry over view-specific config from the last result so the export
+    // matches what's currently on screen.
+    if (t === 'az' || t === 'pv') {
+        var pv = _getCompositePlanViewParams ? _getCompositePlanViewParams() : null;
+        if (pv) {
+            if (pv.level_km != null && t === 'pv') qs += '&level_km=' + pv.level_km;
+            if (pv.max_r_rmw) qs += '&max_r_rmw=' + pv.max_r_rmw;
+            if (pv.dr_rmw)    qs += '&dr_rmw=' + pv.dr_rmw;
+            if (pv.normalize_rmw) qs += '&normalize_rmw=true';
+            if (pv.shear_relative) qs += '&shear_relative=true';
+        }
+    }
+    var origText = btn ? btn.innerHTML : null;
+    if (btn) { btn.innerHTML = '⏳ Building…'; btn.disabled = true; }
+    var url = API_BASE + '/composite/' + endpoint + '?' + qs;
+    fetch(url).then(function(r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        var disp = r.headers.get('content-disposition') || '';
+        var m = /filename="([^"]+)"/.exec(disp);
+        var filename = m ? m[1] : ('tc_radar_' + label + '.nc');
+        return r.blob().then(function(blob) { _triggerDownload(blob, filename, 'application/x-netcdf'); });
+    }).catch(function(err) {
+        if (window._showCompStatus) _showCompStatus('error', 'NetCDF export failed: ' + (err.message || err));
+    }).finally(function() {
+        if (btn && origText !== null) { btn.innerHTML = origText; btn.disabled = false; }
+    });
 }
 
 function _saveCompChartsPng(btn) {
@@ -9096,6 +9155,8 @@ function _buildCompPermalinkHash() {
     if (filters.max_rhmd < 100)        params.max_rhmd = filters.max_rhmd;
     if (filters.min_vp > 0)            params.min_vp = filters.min_vp;
     if (filters.max_vp < 5)            params.max_vp = filters.max_vp;
+    if (filters.min_sst_rel > -10)     params.min_sst_rel = filters.min_sst_rel;
+    if (filters.max_sst_rel < 6)       params.max_sst_rel = filters.max_sst_rel;
     // Variable, data type, coverage, overlay
     var variable = document.getElementById('comp-var');
     if (variable && variable.value !== 'recentered_tangential_wind') params.variable = variable.value;
@@ -9161,7 +9222,8 @@ function _applyCompHashParams(params) {
         min_sst:  'comp-sst-min',  max_sst:  'comp-sst-max',
         min_rhlo: 'comp-rhlo-min', max_rhlo: 'comp-rhlo-max',
         min_rhmd: 'comp-rhmd-min', max_rhmd: 'comp-rhmd-max',
-        min_vp:   'comp-vp-min',   max_vp:   'comp-vp-max'
+        min_vp:   'comp-vp-min',   max_vp:   'comp-vp-max',
+        min_sst_rel: 'comp-sst_rel-min', max_sst_rel: 'comp-sst_rel-max'
     };
     for (var key in fieldMap) {
         if (params[key] !== undefined) {
@@ -11932,8 +11994,10 @@ function generateCompDiffPlanView() {
         '&dr_rmw=' + pvParams.dr_rmw +
         '&shear_relative=' + (pvParams.shear_relative ? 'true' : 'false');
     if (overlay) baseQS += '&overlay=' + encodeURIComponent(overlay);
-    var urlA = API_BASE + '/composite/plan_view?' + _compositeQueryString(filtersA) + baseQS;
-    var urlB = API_BASE + '/composite/plan_view?' + _compositeQueryString(filtersB) + baseQS;
+    // Bootstrap SE so we can stipple non-significant pixels on the diff plot
+    var bootQS = '&bootstrap=true&n_iter=300';
+    var urlA = API_BASE + '/composite/plan_view?' + _compositeQueryString(filtersA) + baseQS + bootQS;
+    var urlB = API_BASE + '/composite/plan_view?' + _compositeQueryString(filtersB) + baseQS + bootQS;
 
     // Sequential streaming: fetch Group A first, then Group B, to avoid
     // doubling memory/thread pressure on the server.
@@ -11945,9 +12009,11 @@ function generateCompDiffPlanView() {
     }).then(function(jsonB) {
         var diffData = _subtractArrays2D(jsonA.plan_view, jsonB.plan_view);
         var symRange = _symmetricRange(diffData);
+        var sigMask = _buildSigMask(diffData, jsonA.se_bootstrap, jsonB.se_bootstrap);
 
         var diffJson = {
             plan_view: diffData,
+            _sigMask: sigMask,
             x_axis: jsonA.x_axis,
             y_axis: jsonA.y_axis,
             x_label: jsonA.x_label,
@@ -12105,6 +12171,11 @@ function _renderDiffPlanView(targetId, diffJson, jsonA, jsonB, filtersA, filters
     _registerShadingTargets('shd-dpv-d', ['comp-diff-pv-d'], _DIFF_COLORSCALE, diffVarInfo.vmin, diffVarInfo.vmax);
     buildPvPlot('comp-diff-pv-d', diffJson.plan_view, titleD, _DIFF_COLORSCALE, diffVarInfo.vmin, diffVarInfo.vmax, diffVarInfo.units, diffJson);
 
+    // Stipple non-significant pixels on the difference panel (two-sample
+    // z-test on per-group bootstrap SEs). Plotly expects x=xAxis, y=yAxis.
+    var stipple = _stippleTrace(diffJson._sigMask, jsonA.x_axis, jsonA.y_axis);
+    if (stipple) Plotly.addTraces('comp-diff-pv-d', [stipple]);
+
     _initDiffPanelToolbar('diff-toolbar-pv', 'diff-grid-pv',
         ['comp-diff-pv-a', 'comp-diff-pv-b', 'comp-diff-pv-d'],
         'tc_radar_planview_diff');
@@ -12145,8 +12216,9 @@ function generateCompDiffCFAD() {
         cfadQS += '&quadrants=' + encodeURIComponent(quadrants.join(','));
     }
 
-    // Bootstrap SE only supported in single-quadrant (non-MULTI) CFAD mode
-    var bootQS = isMulti ? '' : '&bootstrap=true&n_iter=300';
+    // Bootstrap SE supported in both single-quadrant and MULTI mode now.
+    // Single returns se_bootstrap (2D); MULTI returns se_bootstrap_multi (dict).
+    var bootQS = '&bootstrap=true&n_iter=300';
     var urlA = API_BASE + '/composite/cfad?' + _compositeQueryString(filtersA) + cfadQS + bootQS;
     var urlB = API_BASE + '/composite/cfad?' + _compositeQueryString(filtersB) + cfadQS + bootQS;
 
@@ -12397,12 +12469,18 @@ function _renderDiffCFADMulti(targetId, jsonA, jsonB, filtersA, filtersB) {
     var quadOrder = ['USL', 'DSL', 'USR', 'DSR'];
     var quadLabels = { 'USL': 'Upshear Left', 'USR': 'Upshear Right', 'DSL': 'Downshear Left', 'DSR': 'Downshear Right' };
 
-    // Compute differences per quadrant
+    // Compute differences per quadrant + per-quadrant significance masks
     var diffMulti = {};
+    var sigMultiDiff = {};
+    var seA = jsonA.se_bootstrap_multi || {};
+    var seB = jsonB.se_bootstrap_multi || {};
     for (var qi = 0; qi < quadOrder.length; qi++) {
         var qn = quadOrder[qi];
         if (jsonA.cfad_multi[qn] && jsonB.cfad_multi[qn]) {
             diffMulti[qn] = _subtractArrays2D(jsonA.cfad_multi[qn], jsonB.cfad_multi[qn]);
+            if (seA[qn] && seB[qn]) {
+                sigMultiDiff[qn] = _buildSigMask(diffMulti[qn], seA[qn], seB[qn]);
+            }
         }
     }
 
@@ -12484,7 +12562,7 @@ function _renderDiffCFADMulti(targetId, jsonA, jsonB, filtersA, filtersB) {
 
     // Helper: build 2x2 subplot for a set of 4 quadrant CFADs
     // diffSignedLog: if true, apply signed log transform to data and use custom ticks
-    function build2x2(chartId, multiData, titleText, colorscale, zMin, zMax, cbarObj, isLog, isDiff, diffSignedLog) {
+    function build2x2(chartId, multiData, titleText, colorscale, zMin, zMax, cbarObj, isLog, isDiff, diffSignedLog, sigMaskByQuad) {
         var traces = [];
         var anns = [];
         for (var si = 0; si < quadOrder.length; si++) {
@@ -12503,6 +12581,16 @@ function _renderDiffCFADMulti(targetId, jsonA, jsonB, filtersA, filtersB) {
             }
             var xR = 'x' + (si === 0 ? '' : String(si + 1));
             var yR = 'y' + (si === 0 ? '' : String(si + 1));
+            // Stipple non-significant bins per quadrant on the diff panel
+            if (sigMaskByQuad && sigMaskByQuad[qk]) {
+                var st = _stippleTrace(sigMaskByQuad[qk], binCenters, heightKm);
+                if (st) {
+                    st.xaxis = xR;
+                    st.yaxis = yR;
+                    st.marker = { size: 2.5, color: 'rgba(15,22,35,0.55)', symbol: 'circle' };
+                    traces.push(st);
+                }
+            }
             var showCbar = (si === 1);
             var cb = showCbar ? JSON.parse(JSON.stringify(cbarObj)) : null;
             var tr = {
@@ -12595,7 +12683,7 @@ function _renderDiffCFADMulti(targetId, jsonA, jsonB, filtersA, filtersB) {
     _registerShadingTargets('shd-dcfadm-d', ['comp-diff-cfadm-diff'], _DIFF_COLORSCALE, diffDZmin, diffDZmax);
     build2x2('comp-diff-cfadm-diff', diffMulti,
         _diffFilterSummary(filtersA, filtersB, jsonA.n_cases, jsonB.n_cases) + '<br>\u0394 4-Quadrant CFAD: ' + varInfo.display_name + binNote + radialNote + (diffSignedLog ? ' (signed log)' : ''),
-        _DIFF_COLORSCALE, diffDZmin, diffDZmax, cbarDiff, false, true, diffSignedLog);
+        _DIFF_COLORSCALE, diffDZmin, diffDZmax, cbarDiff, false, true, diffSignedLog, sigMultiDiff);
 
     _initDiffPanelToolbar('diff-toolbar-cfadm', 'diff-grid-cfadm',
         ['comp-diff-cfadm-a', 'comp-diff-cfadm-b', 'comp-diff-cfadm-diff'],
