@@ -2779,16 +2779,29 @@
                     _evoState.coastlines = { x: [], y: [] };
                     return _evoState.coastlines;
                 }
-                // Flatten 1428 LineString features into a single NaN-
-                // separated polyline so we ship one Plotly scatter trace.
+                // Flatten 1428 features (mix of LineString and
+                // MultiLineString — Europe/Africa/most large continents
+                // ship as MultiLineString) into a single NaN-separated
+                // polyline so Panel C carries one Plotly scatter trace.
                 var xs = [], ys = [];
-                gj.features.forEach(function (f) {
-                    var coords = f.geometry && f.geometry.coordinates;
+                function pushLine(coords) {
                     if (!coords || !coords.length) return;
                     if (xs.length) { xs.push(null); ys.push(null); }
                     for (var i = 0; i < coords.length; i++) {
                         xs.push(coords[i][0]);
                         ys.push(coords[i][1]);
+                    }
+                }
+                gj.features.forEach(function (f) {
+                    var g = f.geometry;
+                    if (!g) return;
+                    if (g.type === 'LineString') {
+                        pushLine(g.coordinates);
+                    } else if (g.type === 'MultiLineString') {
+                        // coordinates: [[[lon, lat], ...], [[lon, lat], ...]]
+                        for (var k = 0; k < g.coordinates.length; k++) {
+                            pushLine(g.coordinates[k]);
+                        }
                     }
                 });
                 _evoState.coastlines = { x: xs, y: ys };
