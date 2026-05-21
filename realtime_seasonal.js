@@ -3878,6 +3878,351 @@
         return { x: lineX, y: lineY };
     }
 
+    // ── Animated particle overlay (Canvas2D) ───────────────────────
+    // Replaces the static streamline polylines (formerly traces 9-10)
+    // with continuously-advected particles, matching the TC Climatology
+    // page's globe particle view. Particles are seeded uniformly over
+    // the visible viewport, integrated forward-Euler on the current
+    // frame's (u, v), and rendered as short fading trails on a Canvas2D
+    // layer that sits above the Plotly heatmap. The canvas is sized +
+    // positioned per Plotly's data area on every relayout.
+    var _EVO_PCL_N         = 450;     // particle count
+    var _EVO_PCL_TRAIL     = 8;       // history positions per particle
+    var _EVO_PCL_MAX_AGE   = 140;     // frames until respawn (~4.5 s @ 30 fps)
+    var _EVO_PCL_AGE_JIT   = 0.35;    // ±jitter on lifetime so deaths desync
+    var _EVO_PCL_SPEED_DEG = 0.05;    // deg/frame per (m/s); tuned for 30 fps
+    var _EVO_PCL_MIN_KT    = 1.5;     // calm cut-off — respawn under this
+    var _EVO_PCL_FADE_IN   = 10;      // head opacity ramp from 0 on birth
+    var _EVO_PCL_FADE_OUT  = 14;      // tail-end fade before death
+    var _EVO_PCL_SPEED_NORM_MS = 22;  // m/s that saturates head opacity
+    var _EVO_PCL_ERASE_ALPHA = 0.28;  // per-frame trail decay (higher → shorter persistence)
+    var _evoParticles = {
+        canvas: null, ctx: null, dpr: 1,
+        // Flat per-particle arrays so we avoid the GC churn of object
+        // allocations inside the hot RAF tick. lat/lon/age/lifetime are
+        // primitives, trail is a packed lat/lon ring buffer.
+        lat: null, lon: null, age: null, life: null,
+        trailLat: null, trailLon: null, trailHead: null,
+        rafId: 0, running: false,
+        lastTickMs: 0,
+        // Current frame's u/v grids (Array<Float32Array>). Swapped on
+        // plotly_sliderchange / plotly_animated so the particles advect
+        // on the displayed flow field, not a stale one.
+        uGrid: null, vGrid: null,
+        // Viewport ranges + per-grid coverage cached at start time so
+        // uvAt doesn't have to recompute every tick.
+        viewport: null,
+        gridCfg: null,
+    };
+
+    function _evoParticleResize() {
+        var el = document.getElementById('seasonal-evo-map');
+        var c = _evoParticles.canvas;
+        if (!el || !c) return;
+        var rect = el.getBoundingClientRect();
+        var dpr = window.devicePixelRatio || 1;
+        var w = Math.max(1, Math.round(rect.width));
+        var h = Math.max(1, Math.round(rect.height));
+        if (c.width !== w * dpr || c.height !== h * dpr) {
+            c.width  = w * dpr;
+            c.height = h * dpr;
+            c.style.width  = w + 'px';
+            c.style.height = h + 'px';
+            _evoParticles.dpr = dpr;
+            _evoParticles.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        }
+    }
+
+    // Project (lat, lon) → canvas-pixel (x, y) using Plotly's live axis
+    // offsets. Returns null when the projection falls outside the data
+    // area (so the particle's trail segment can be skipped instead of
+    // drawn at a stale on-screen position when it has drifted off-map).
+    function _evoParticleProject(lat, lon) {
+        var el = document.getElementById('seasonal-evo-map');
+        if (!el || !el._fullLayout) return null;
+        var xa = el._fullLayout.xaxis;
+        var ya = el._fullLayout.yaxis;
+        if (!xa || !ya || !xa.l2p) return null;
+        var px = xa.l2p(lon);
+        var py = ya.l2p(lat);
+        if (!isFinite(px) || !isFinite(py)) return null;
+        return { x: xa._offset + px, y: ya._offset + py };
+    }
+
+    // Spawn / respawn one particle at a random valid location inside
+    // the viewport (and where the flow field is finite + non-calm).
+    function _evoParticleSpawn(i, viewport) {
+        var p = _evoParticles;
+        var xMin = viewport.x[0], xMax = viewport.x[1];
+        var yMin = viewport.y[0], yMax = viewport.y[1];
+        for (var attempts = 0; attempts < 8; attempts++) {
+            var lat = yMin + Math.random() * (yMax - yMin);
+            var lon = xMin + Math.random() * (xMax - xMin);
+            var uv = _evoParticleUvAt(lon, lat);
+            if (uv && uv.spdKt >= _EVO_PCL_MIN_KT) {
+                p.lat[i] = lat; p.lon[i] = lon; p.age[i] = 0;
+                p.life[i] = _EVO_PCL_MAX_AGE
+                    * (1 + (Math.random() - 0.5) * 2 * _EVO_PCL_AGE_JIT);
+                // Pre-fill the trail with the spawn point — drawing
+                // skips trail edges until age > 1 so the new particle
+                // doesn't flash a zero-length segment.
+                var base = i * _EVO_PCL_TRAIL;
+                for (var k = 0; k < _EVO_PCL_TRAIL; k++) {
+                    p.trailLat[base + k] = lat;
+                    p.trailLon[base + k] = lon;
+                }
+                p.trailHead[i] = 0;
+                return true;
+            }
+        }
+        // No valid spot found after 8 tries — park the particle and
+        // try again next frame.
+        p.lat[i] = NaN; p.lon[i] = NaN;
+        p.age[i] = _EVO_PCL_MAX_AGE + 1;   // will respawn on next tick
+        return false;
+    }
+
+    // Bilinear (u, v) interpolation on the active grid — matches the
+    // logic in _evoBuildStreamlines but reads from cached gridCfg.
+    function _evoParticleUvAt(lon, lat) {
+        var p = _evoParticles;
+        var uGrid = p.uGrid, vGrid = p.vGrid;
+        if (!uGrid || !vGrid) return null;
+        var g = p.gridCfg;
+        if (lat > g.latMax || lat < g.latMin) return null;
+        if (!g.lonWraps && (lon < g.lonMin || lon > g.lonMax)) return null;
+        var iF = (g.latMax - lat) / g.cell;
+        var jRaw;
+        if (g.lonWraps) {
+            jRaw = ((lon - g.lonMin) % 360 + 360) % 360 / g.cell;
+        } else {
+            jRaw = (lon - g.lonMin) / g.cell;
+        }
+        var i0 = Math.floor(iF);
+        var i1 = Math.min(i0 + 1, g.ny - 1);
+        var j0 = Math.floor(jRaw);
+        var j1 = g.lonWraps ? ((j0 + 1) % g.nx) : Math.min(j0 + 1, g.nx - 1);
+        if (i0 < 0 || i0 >= g.ny || j0 < 0 || j0 >= g.nx) return null;
+        var fi = iF - i0, fj = jRaw - Math.floor(jRaw);
+        var u00 = uGrid[i0][j0], u01 = uGrid[i0][j1];
+        var u10 = uGrid[i1][j0], u11 = uGrid[i1][j1];
+        var v00 = vGrid[i0][j0], v01 = vGrid[i0][j1];
+        var v10 = vGrid[i1][j0], v11 = vGrid[i1][j1];
+        if (!Number.isFinite(u00) || !Number.isFinite(u01)
+            || !Number.isFinite(u10) || !Number.isFinite(u11)
+            || !Number.isFinite(v00) || !Number.isFinite(v01)
+            || !Number.isFinite(v10) || !Number.isFinite(v11)) return null;
+        var u = (1-fi)*(1-fj)*u00 + (1-fi)*fj*u01 + fi*(1-fj)*u10 + fi*fj*u11;
+        var v = (1-fi)*(1-fj)*v00 + (1-fi)*fj*v01 + fi*(1-fj)*v10 + fi*fj*v11;
+        var mag_ms = Math.sqrt(u*u + v*v);
+        return { u: u, v: v, mag_ms: mag_ms, spdKt: mag_ms * _EVO_MS_TO_KT };
+    }
+
+    // Capture the active grid descriptor (covers HD / 1° / monthly all
+    // the same way) so uvAt stays cheap.
+    function _evoParticleCaptureGridCfg() {
+        var ny = EVO_LATS.length, nx = EVO_LONS.length;
+        var cell = (ny >= 2) ? Math.abs(EVO_LATS[0] - EVO_LATS[1]) : 1.0;
+        var lonMin = EVO_LONS[0], lonMax = EVO_LONS[nx - 1];
+        var lonWraps = (lonMax - lonMin) >= 359;
+        return {
+            ny: ny, nx: nx, cell: cell,
+            latMax: EVO_LATS[0], latMin: EVO_LATS[ny - 1],
+            lonMin: lonMin, lonMax: lonMax, lonWraps: lonWraps,
+        };
+    }
+
+    function _evoParticleInit() {
+        var p = _evoParticles;
+        if (p.lat) return;       // already initialized
+        p.canvas = document.getElementById('seasonal-evo-particles');
+        if (!p.canvas) return;
+        p.ctx = p.canvas.getContext('2d', { alpha: true });
+        var n = _EVO_PCL_N;
+        p.lat       = new Float32Array(n);
+        p.lon       = new Float32Array(n);
+        p.age       = new Float32Array(n);
+        p.life      = new Float32Array(n);
+        p.trailLat  = new Float32Array(n * _EVO_PCL_TRAIL);
+        p.trailLon  = new Float32Array(n * _EVO_PCL_TRAIL);
+        p.trailHead = new Int16Array(n);
+        for (var i = 0; i < n; i++) { p.age[i] = _EVO_PCL_MAX_AGE + 1; }
+        // Window-resize keeps the backing buffer aligned with the
+        // Plotly data area when the user resizes the browser; the
+        // RAF tick itself queries xa._offset live so positioning
+        // self-corrects after Plotly's responsive relayout.
+        window.addEventListener('resize', _evoParticleResize);
+        // Page Visibility — pause the animation while the tab is
+        // hidden so we don't burn cycles on an offscreen canvas.
+        document.addEventListener('visibilitychange', function () {
+            if (!_evoParticles.running) return;
+            if (document.hidden) {
+                cancelAnimationFrame(_evoParticles.rafId);
+                _evoParticles.rafId = 0;
+            } else if (!_evoParticles.rafId) {
+                _evoParticles.lastTickMs = performance.now();
+                _evoParticles.rafId = requestAnimationFrame(_evoParticleTick);
+            }
+        });
+    }
+
+    // Refresh the field grids + grid descriptor from the current frame.
+    // Called when the particles start AND on every frame swap (so the
+    // animation tracks slider scrubs through the year).
+    function _evoParticleSyncField() {
+        var p = _evoParticles;
+        if (!_evoState.frames || !_evoState.overlayCtx) return;
+        var idx = _evoState.currentFrameIdx || 0;
+        var f = _evoState.frames[idx];
+        if (!f) return;
+        var uv = _evoFrameBarbUV(f, _evoState.overlayCtx);
+        p.uGrid = uv.u;
+        p.vGrid = uv.v;
+        p.gridCfg = _evoParticleCaptureGridCfg();
+        p.viewport = _evoComputeViewport(document.getElementById('seasonal-evo-map'));
+    }
+
+    function _evoParticleStart() {
+        _evoParticleInit();
+        var p = _evoParticles;
+        if (!p.ctx) return;
+        _evoParticleResize();
+        _evoParticleSyncField();
+        if (!p.viewport || !p.uGrid) return;
+        for (var i = 0; i < _EVO_PCL_N; i++) {
+            _evoParticleSpawn(i, p.viewport);
+        }
+        p.canvas.classList.add('is-active');
+        p.running = true;
+        p.lastTickMs = performance.now();
+        cancelAnimationFrame(p.rafId);
+        p.rafId = requestAnimationFrame(_evoParticleTick);
+    }
+
+    function _evoParticleStop() {
+        var p = _evoParticles;
+        p.running = false;
+        cancelAnimationFrame(p.rafId);
+        p.rafId = 0;
+        if (p.canvas) {
+            p.canvas.classList.remove('is-active');
+            if (p.ctx) {
+                var w = p.canvas.width, h = p.canvas.height;
+                p.ctx.setTransform(1, 0, 0, 1, 0, 0);
+                p.ctx.clearRect(0, 0, w, h);
+                p.ctx.setTransform(p.dpr, 0, 0, p.dpr, 0, 0);
+            }
+        }
+    }
+
+    function _evoParticleTick(timestamp) {
+        var p = _evoParticles;
+        if (!p.running || !p.ctx || !p.uGrid) return;
+        // Frame-rate cap at ~30 fps so a 120 Hz display doesn't burn
+        // 4× the work for no visual gain.
+        var dt = timestamp - p.lastTickMs;
+        if (dt < 28) {
+            p.rafId = requestAnimationFrame(_evoParticleTick);
+            return;
+        }
+        p.lastTickMs = timestamp;
+
+        var ctx = p.ctx;
+        var canvasW = p.canvas.width / p.dpr;
+        var canvasH = p.canvas.height / p.dpr;
+        // Motion-trail erase: alpha-blend a translucent panel-bg over
+        // the previous frame so old trails fade out smoothly instead
+        // of staying as bright streaks. The bg color is intentionally
+        // transparent so the underlying Plotly heatmap shines through;
+        // the trail-decay rate is set by globalCompositeOperation +
+        // alpha together.
+        ctx.globalCompositeOperation = 'destination-out';
+        ctx.fillStyle = 'rgba(0, 0, 0, ' + _EVO_PCL_ERASE_ALPHA + ')';
+        ctx.fillRect(0, 0, canvasW, canvasH);
+        ctx.globalCompositeOperation = 'source-over';
+
+        var viewport = p.viewport;
+        var stepDeg = _EVO_PCL_SPEED_DEG;
+        var lifeFade = _EVO_PCL_FADE_OUT;
+        var birthFade = _EVO_PCL_FADE_IN;
+        var speedNorm = _EVO_PCL_SPEED_NORM_MS;
+        // Batch all stroke calls into one path per "alpha bucket" so
+        // ~700 particles × 8 segments stays well under 1 ms/frame.
+        // Two buckets — fast (full opacity head) and slow (faded) —
+        // keep the visual gradient without paying per-segment state
+        // changes.
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.lineWidth = 1.1;
+        ctx.strokeStyle = 'rgba(244,240,224,0.95)';
+        ctx.beginPath();
+        for (var i = 0; i < _EVO_PCL_N; i++) {
+            var age = p.age[i];
+            var life = p.life[i];
+            if (!isFinite(p.lat[i]) || age >= life) {
+                _evoParticleSpawn(i, viewport);
+                continue;
+            }
+            var lat = p.lat[i], lon = p.lon[i];
+            var uv = _evoParticleUvAt(lon, lat);
+            if (!uv || uv.spdKt < _EVO_PCL_MIN_KT) {
+                _evoParticleSpawn(i, viewport);
+                continue;
+            }
+            // Forward-Euler step. cos(lat) correction so Δlon scales
+            // up at higher latitudes (degrees of longitude shrink as
+            // we leave the equator).
+            var cosL = Math.cos(lat * _EVO_DEG_TO_RAD);
+            if (Math.abs(cosL) < 0.05) cosL = 0.05;
+            var dLon = (uv.u / cosL) * stepDeg;
+            var dLat = uv.v * stepDeg;
+            var newLat = lat + dLat;
+            var newLon = lon + dLon;
+            if (newLat > viewport.y[1] + 4 || newLat < viewport.y[0] - 4
+                || newLon > viewport.x[1] + 4 || newLon < viewport.x[0] - 4) {
+                _evoParticleSpawn(i, viewport);
+                continue;
+            }
+            // Append to trail ring buffer.
+            var head = (p.trailHead[i] + 1) % _EVO_PCL_TRAIL;
+            p.trailHead[i] = head;
+            var tBase = i * _EVO_PCL_TRAIL;
+            p.trailLat[tBase + head] = newLat;
+            p.trailLon[tBase + head] = newLon;
+            p.lat[i] = newLat;
+            p.lon[i] = newLon;
+            p.age[i] = age + 1;
+
+            // Project + draw the trail. We walk backward from head
+            // through TRAIL-1 prior positions, building short line
+            // segments. Per-particle opacity scales with speed +
+            // life-phase so calm + dying particles fade smoothly.
+            var headPt = _evoParticleProject(newLat, newLon);
+            if (!headPt) continue;
+            var prev = headPt;
+            var ageNorm = Math.min(1.0, age / birthFade);
+            var deathNorm = Math.min(1.0, (life - age) / lifeFade);
+            var lifeAlpha = Math.min(ageNorm, deathNorm);
+            if (lifeAlpha <= 0) continue;
+            // Build the segment list — we'll stroke once at the end.
+            for (var k = 1; k < _EVO_PCL_TRAIL; k++) {
+                var idx = (head - k + _EVO_PCL_TRAIL) % _EVO_PCL_TRAIL;
+                var pt = _evoParticleProject(p.trailLat[tBase + idx],
+                                              p.trailLon[tBase + idx]);
+                if (!pt) break;
+                ctx.moveTo(prev.x, prev.y);
+                ctx.lineTo(pt.x, pt.y);
+                prev = pt;
+            }
+        }
+        ctx.stroke();
+        // (Head dots removed — at 450 particles the trail strokes
+        // already terminate in a 1.1 px round-cap, which reads as a
+        // bright head without doubling the per-frame draw cost.)
+
+        p.rafId = requestAnimationFrame(_evoParticleTick);
+    }
+
     function _evoBuildBarbs(uGrid, vGrid, opts) {
         var empty = { lineX: [], lineY: [], pennX: [], pennY: [] };
         if (!uGrid || !vGrid) return empty;
@@ -4360,24 +4705,28 @@
         if (!f) return;
         var viewport = _evoComputeViewport(el);
         var bStep = _evoComputeStep(viewport, _EVO_BARB_TARGET_PER_AXIS);
-        var sStep = _evoComputeStep(viewport, _EVO_STREAM_TARGET_PER_AXIS);
         var uv = _evoFrameBarbUV(f, _evoState.overlayCtx);
         var barbs = _evoState.showBarbs
             ? _evoBuildBarbs(uv.u, uv.v,
                 { latStep: bStep.latStep, lonStep: bStep.lonStep, viewport: viewport })
             : { lineX: [], lineY: [], pennX: [], pennY: [] };
-        var streams = _evoState.showStreamlines
-            ? _evoBuildStreamlines(uv.u, uv.v,
-                { latStep: sStep.latStep, lonStep: sStep.lonStep, viewport: viewport })
-            : { x: [], y: [] };
-        // Restyle the four barb traces + two streamline traces. Plotly
-        // requires array-of-arrays for the per-trace value lists.
+        // Restyle the four barb traces. Streamline traces (9, 10) are
+        // permanently empty + hidden — the particle canvas owns the
+        // flow visualization now.
         Plotly.restyle(el, {
-            x: [barbs.lineX, barbs.lineX, barbs.pennX, barbs.pennX,
-                streams.x, streams.x],
-            y: [barbs.lineY, barbs.lineY, barbs.pennY, barbs.pennY,
-                streams.y, streams.y],
-        }, [5, 6, 7, 8, 9, 10]);
+            x: [barbs.lineX, barbs.lineX, barbs.pennX, barbs.pennX],
+            y: [barbs.lineY, barbs.lineY, barbs.pennY, barbs.pennY],
+        }, [5, 6, 7, 8]);
+        // Particles, when active, advect on this frame's u/v + the
+        // current viewport — keep them in sync with whatever the user
+        // is viewing.
+        if (_evoState.showStreamlines && _evoParticles.running) {
+            _evoParticles.uGrid = uv.u;
+            _evoParticles.vGrid = uv.v;
+            _evoParticles.viewport = viewport;
+            _evoParticles.gridCfg = _evoParticleCaptureGridCfg();
+            _evoParticleResize();
+        }
         // Update the sampling pill (lives next to the date readout).
         var pill = document.getElementById('seasonal-evo-sampling');
         if (pill) {
@@ -4743,19 +5092,19 @@
             : { x: [], y: [] };
         var streamHalo = {
             type: 'scatter', mode: 'lines',
-            x: initialStreams.x, y: initialStreams.y,
+            x: [], y: [],
             line: { color: 'rgba(15,23,42,0.55)', width: 2.4, shape: 'spline' },
             hoverinfo: 'skip', showlegend: false,
-            name: 'Streamlines (halo)',
-            visible: _evoState.showStreamlines,
+            name: 'Streamlines (halo, legacy — superseded by particle canvas)',
+            visible: false,
         };
         var streamInk = {
             type: 'scatter', mode: 'lines',
-            x: initialStreams.x, y: initialStreams.y,
+            x: [], y: [],
             line: { color: 'rgba(244,240,224,0.9)', width: 1.0, shape: 'spline' },
             hoverinfo: 'skip', showlegend: false,
-            name: 'Streamlines',
-            visible: _evoState.showStreamlines,
+            name: 'Streamlines (legacy — superseded by particle canvas)',
+            visible: false,
         };
         // Apply state-driven visibility to barb + track traces too.
         barbHalo.visible    = _evoState.showBarbs;
@@ -5535,8 +5884,11 @@
                 { visible: _evoState.showTracks }, [2, 3, 4]);
             Plotly.restyle(el,
                 { visible: _evoState.showBarbs }, [5, 6, 7, 8]);
-            Plotly.restyle(el,
-                { visible: _evoState.showStreamlines }, [9, 10]);
+            // Static streamline traces (9, 10) are permanently hidden
+            // now — the animated particle canvas (#seasonal-evo-
+            // particles) replaces them. Driven by _evoParticleStart /
+            // _evoParticleStop from the toggle click handler below.
+            Plotly.restyle(el, { visible: false }, [9, 10]);
             // Re-flow annotations: storm names follow the tracks toggle.
             // Pull labels off the CURRENT frame's annotations if possible;
             // otherwise leave them — the next frame swap will reapply.
@@ -5569,13 +5921,32 @@
                     _evoState[b.mutex] = false;
                 }
                 applyOverlayState();
-                // Barb/streamline data lives outside frame swaps now —
-                // recompute when toggling on (so the data populates at
-                // the current viewport's sampling) or off (drop arrays
-                // to release memory).
-                if (b.key === 'showBarbs' || b.key === 'showStreamlines') {
+                // Barb data lives outside frame swaps now — recompute
+                // when toggling on (so the data populates at the
+                // current viewport's sampling) or off (drop arrays
+                // to release memory). Streamlines now drive an
+                // animated particle field instead of static traces.
+                if (b.key === 'showBarbs') {
                     var mapEl = document.getElementById('seasonal-evo-map');
                     _evoUpdateOverlays(mapEl);
+                }
+                if (b.key === 'showStreamlines') {
+                    // Mutex with barbs: turning particles ON drops the
+                    // barb overlay; turning them OFF stops the RAF +
+                    // clears the canvas. The trace-5..10 visibility
+                    // toggle was already handled in applyOverlayState
+                    // above; here we just drive the canvas animation.
+                    if (_evoState.showStreamlines) {
+                        _evoParticleStart();
+                    } else {
+                        _evoParticleStop();
+                    }
+                    if (_evoState.showStreamlines === false) {
+                        // Drop the barb-trace's stale data so the
+                        // hidden traces don't hold pre-toggle state.
+                        var mapEl2 = document.getElementById('seasonal-evo-map');
+                        _evoUpdateOverlays(mapEl2);
+                    }
                 }
             });
         });

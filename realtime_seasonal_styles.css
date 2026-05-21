@@ -144,6 +144,20 @@
     margin-top: 4px;
 }
 .seasonal-evo-map { width: 100%; height: 100%; }
+/* Animated wind-particle overlay (drawn by _evoParticles*). Positioned
+   to fully cover the parent wrap; the JS resizes the backing buffer to
+   the Plotly data area on every relayout. pointer-events:none keeps
+   hover routed to the underlying heatmap. */
+.seasonal-evo-particles {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 4;
+    display: none;
+}
+.seasonal-evo-particles.is-active { display: block; }
 .seasonal-evo-slider-row {
     display: flex;
     align-items: center;

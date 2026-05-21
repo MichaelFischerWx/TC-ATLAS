@@ -1100,12 +1100,20 @@
                                     title="Show / hide WMO wind barbs. Mutually exclusive with streamlines.">Barbs</button>
                             <button type="button" id="seasonal-evo-toggle-streams"
                                     class="seasonal-evo-toggle"
-                                    title="Show / hide flow streamlines integrated from the u/v field. Mutually exclusive with barbs.">Streamlines</button>
+                                    title="Animated flow particles advected on the u/v field — matches the TC Climatology globe's particle view. Mutually exclusive with barbs.">Particles</button>
                         </span>
                     </label>
                 </div>
                 <div class="seasonal-evo-wrap" id="seasonal-evo-wrap">
                     <div id="seasonal-evo-map" class="seasonal-evo-map"></div>
+                    <!-- Animated wind-particle overlay (Canvas2D). The
+                         canvas sits on top of the Plotly heatmap, sized +
+                         positioned to match the data area on every
+                         relayout. Pointer-events:none so it doesn't eat
+                         hover events; visible only when the Particles
+                         toggle is active. -->
+                    <canvas id="seasonal-evo-particles"
+                            class="seasonal-evo-particles" aria-hidden="true"></canvas>
                 </div>
                 <div class="seasonal-evo-slider-row" id="seasonal-evo-slider-row">
                     <button type="button" id="seasonal-evo-play" class="seasonal-evo-btn"
