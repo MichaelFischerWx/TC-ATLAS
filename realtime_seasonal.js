@@ -1019,12 +1019,23 @@
     // DOM children, leaving an empty chart with the right state. Force
     // a clean purge whenever resolution changes — fast, and only fires
     // on the toggle itself (not on every region/variable change).
+    // ERA5 variables that have a daily-resolution backend (built from the
+    // era5_daily_1deg archive). Shear is Phase-1; wind200/wind850/RH700/etc.
+    // can be added incrementally as their daily builders ship.
+    var ERA5_DAILY_CAPABLE = ['shear'];
+    function _isEra5DailyCapable(v) {
+        return ERA5_DAILY_CAPABLE.indexOf(v) !== -1;
+    }
     function _renderTimeSeries() {
         var el = document.getElementById('seasonal-ts-plot');
-        // ERA5 fields are monthly only — switch the resolution toggle
-        // *before* the lazy-load decision so the post-load re-entry
-        // doesn't go down the daily code path on a stale resolution.
-        if (_isEra5Var(state.ts.variable) && state.ts.resolution === 'daily') {
+        // ERA5 monthly-only fields can't render in daily mode — switch
+        // the resolution toggle *before* the lazy-load decision so the
+        // post-load re-entry doesn't go down the daily code path on a
+        // stale resolution. Shear (and any other daily-capable ERA5 var)
+        // is exempt — it has a real daily-resolution data source.
+        if (_isEra5Var(state.ts.variable)
+                && !_isEra5DailyCapable(state.ts.variable)
+                && state.ts.resolution === 'daily') {
             state.ts.resolution = 'monthly';
             var sel = document.getElementById('seasonal-ts-resolution');
             if (sel) sel.value = 'monthly';
@@ -1062,6 +1073,13 @@
         }
         state.ts._lastResolution = state.ts.resolution;
         if (state.ts.resolution === 'daily') {
+            // ERA5 daily-capable variables (currently just shear) have
+            // their own daily endpoint + renderer — the SST-flavored
+            // _renderTimeSeriesDaily would try to read clim/cy/trend
+            // payloads it shouldn't.
+            if (_isEra5DailyCapable(state.ts.variable)) {
+                return _renderTimeSeriesDailyShear();
+            }
             return _renderTimeSeriesDaily();
         }
         return _renderTimeSeriesMonthly();
@@ -1808,6 +1826,296 @@
         // and concentrated below the inset's y range).
         layout.geo2 = _insetGeoLayout(_pickInsetDomain());
         Plotly.react(el, traces.concat(insetTraces), layout,
+                     { responsive: true, displaylogo: false });
+    }
+
+    // -------------------------------------------------------------------
+    // Panel B Daily — ERA5 shear path
+    // -------------------------------------------------------------------
+    // Backed by GET /seasonal/daily/shear?region=X&year=all → a flat
+    // {dates[], shear[]} payload sourced from indices_daily_shear.parquet
+    // (built by build_era5_daily_shear_indices.py from the era5_daily_1deg
+    // archive). Climatology + envelope are computed CLIENT-SIDE from the
+    // payload's 1991-2020 window — keeps the API surface to one endpoint
+    // and the parquet to one file, vs. the SST path's three-blob layout
+    // (clim_daily / current_year / trend_daily). For ~13 k float rows
+    // the client-side aggregation is trivial (~5 ms).
+    // -------------------------------------------------------------------
+    var _dailyShearCache = {
+        regionAll: {},          // region → { dates, shear }
+        regionAllInFlight: {},  // region → Promise<...>
+    };
+
+    function _fetchSeasonalDailyShearRegionAll(region) {
+        if (_dailyShearCache.regionAll[region]) {
+            return Promise.resolve(_dailyShearCache.regionAll[region]);
+        }
+        if (_dailyShearCache.regionAllInFlight[region]) {
+            return _dailyShearCache.regionAllInFlight[region];
+        }
+        var url = API_BASE + '/ir-monitor/seasonal/daily/shear?region='
+                  + encodeURIComponent(region) + '&year=all';
+        var p = fetch(url, { cache: 'no-store' }).then(function (r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + url);
+            return r.json();
+        }).then(function (j) {
+            _dailyShearCache.regionAll[region] = j;
+            delete _dailyShearCache.regionAllInFlight[region];
+            return j;
+        }).catch(function (e) {
+            delete _dailyShearCache.regionAllInFlight[region];
+            throw e;
+        });
+        _dailyShearCache.regionAllInFlight[region] = p;
+        return p;
+    }
+
+    // Group the flat shear payload into per-year leap-axis arrays, the
+    // same shape _groupRegionAllByYear produces for SST. Each year ends
+    // up as a length-366 array indexed by leap-DOY so the spaghetti
+    // overlays line up across leap/non-leap years.
+    function _groupShearRegionAllByYear(payload) {
+        var dates = payload.dates || [];
+        var shear = payload.shear || [];
+        var byYear = {};
+        var leap = {};
+        for (var i = 0; i < dates.length; i++) {
+            var s = dates[i];
+            var y = parseInt(s.substring(0, 4), 10);
+            if (!byYear[y]) byYear[y] = { dates: [], shear: [] };
+            byYear[y].dates.push(s);
+            byYear[y].shear.push(shear[i] == null ? null : shear[i]);
+        }
+        Object.keys(byYear).forEach(function (yk) {
+            var y = parseInt(yk, 10);
+            leap[y] = {
+                shear: _yearSeriesToLeapAxis(byYear[y].dates,
+                                             byYear[y].shear),
+            };
+        });
+        return { byYear: byYear, leap: leap };
+    }
+
+    // Per-DOY mean + std across 1991-2020 (TC-ATLAS climo window).
+    // Operates on the leap-axis arrays so DOY 60 in non-leap years
+    // is consistently `null` and gets skipped by both stats.
+    function _computeShearClimo(regionAll) {
+        var climStart = 1991, climEnd = 2020;
+        var means = new Array(366);
+        var stds  = new Array(366);
+        for (var d = 0; d < 366; d++) {
+            var samples = [];
+            for (var y = climStart; y <= climEnd; y++) {
+                var ya = regionAll.leap[y];
+                if (!ya || !ya.shear) continue;
+                var v = ya.shear[d];
+                if (v == null || !isFinite(v)) continue;
+                samples.push(v);
+            }
+            if (!samples.length) { means[d] = null; stds[d] = null; continue; }
+            var m = 0;
+            for (var i = 0; i < samples.length; i++) m += samples[i];
+            m /= samples.length;
+            var v2 = 0;
+            for (var j = 0; j < samples.length; j++) {
+                v2 += (samples[j] - m) * (samples[j] - m);
+            }
+            // Sample std (Bessel-corrected), matching the SST climo's
+            // convention.
+            means[d] = m;
+            stds[d]  = samples.length > 1
+                ? Math.sqrt(v2 / (samples.length - 1))
+                : 0;
+        }
+        return { mean: means, std: stds };
+    }
+
+    function _renderTimeSeriesDailyShear() {
+        var el = document.getElementById('seasonal-ts-plot');
+        if (!el || typeof Plotly === 'undefined') return;
+        var region = state.ts.region;
+        var variable = state.ts.variable;
+        if (!dailyShearStubShown(el)) {
+            el.innerHTML =
+                '<div class="seasonal-panel-stub">Loading daily shear…</div>';
+        }
+        _fetchSeasonalDailyShearRegionAll(region).then(function (payload) {
+            // Bail if the user switched away while the fetch was in flight.
+            if (state.ts.region !== region
+                    || state.ts.variable !== variable
+                    || state.ts.resolution !== 'daily') {
+                return;
+            }
+            var regionAll = _groupShearRegionAllByYear(payload);
+            var climo = _computeShearClimo(regionAll);
+            _drawDailyShearChart(el, region, regionAll, climo);
+        }).catch(function (e) {
+            if (state.ts.resolution !== 'daily'
+                    || state.ts.region !== region
+                    || state.ts.variable !== variable) {
+                return;
+            }
+            el.innerHTML =
+                '<div class="seasonal-panel-stub seasonal-status-error">'
+                + 'Failed to load daily shear: ' + e.message + '. '
+                + 'If you just deployed, the parquet may still be uploading — '
+                + 'run <code>python build_era5_daily_shear_indices.py</code>.'
+                + '</div>';
+        });
+    }
+
+    // Tiny helper: avoid re-painting the loading stub if the panel
+    // already shows a fresh Plotly chart (otherwise a region toggle
+    // flashes "Loading…" between two cached payloads).
+    function dailyShearStubShown(el) {
+        return el.classList.contains('js-plotly-plot');
+    }
+
+    function _drawDailyShearChart(el, region, regionAll, climo) {
+        _clearStub(el);
+        var traces = [];
+        var doys = [];
+        for (var i = 1; i <= 366; i++) doys.push(i);
+        var currentYear = (new Date()).getUTCFullYear();
+
+        // Populate the highlight-year picker (same as the SST path).
+        if (regionAll && regionAll.leap) {
+            var availYears = Object.keys(regionAll.leap).map(Number);
+            _populateHighlightYears(availYears, currentYear);
+        }
+
+        // ----- ±1σ envelope -----
+        var hasClim = climo && climo.mean && climo.mean[0] != null;
+        if (hasClim) {
+            var upper = climo.mean.map(function (m, i) {
+                if (m == null || climo.std[i] == null) return null;
+                return m + climo.std[i];
+            });
+            var lower = climo.mean.map(function (m, i) {
+                if (m == null || climo.std[i] == null) return null;
+                return m - climo.std[i];
+            });
+            traces.push({
+                type: 'scatter', mode: 'lines', x: doys, y: upper,
+                line: { color: 'transparent', width: 0 },
+                showlegend: false, hoverinfo: 'skip',
+                connectgaps: true,
+            });
+            traces.push({
+                type: 'scatter', mode: 'lines', x: doys, y: lower,
+                fill: 'tonexty', fillcolor: BRAND.green_dim,
+                line: { color: 'transparent', width: 0 },
+                showlegend: true, hoverinfo: 'skip',
+                connectgaps: true,
+                name: '1991-2020 ±1σ envelope',
+            });
+        }
+
+        var highlightYear = parseInt(state.ts.highlight, 10);
+        var hasHighlight = !isNaN(highlightYear);
+
+        // ----- Historical spaghetti -----
+        if (state.ts.history !== 'none' && regionAll) {
+            var years = Object.keys(regionAll.leap).map(Number)
+                            .sort(function (a, b) { return a - b; });
+            var minYear = state.ts.history === 'recent10'
+                ? currentYear - 10 : -Infinity;
+            var firstShown = true;
+            for (var yi = 0; yi < years.length; yi++) {
+                var y = years[yi];
+                if (y === currentYear) continue;
+                if (hasHighlight && y === highlightYear) continue;
+                if (y < minYear) continue;
+                var ya = regionAll.leap[y];
+                if (!ya || !ya.shear) continue;
+                traces.push({
+                    type: 'scatter', mode: 'lines', x: doys, y: ya.shear,
+                    line: { color: BRAND.gray, width: 1 },
+                    showlegend: firstShown,
+                    legendgroup: 'history',
+                    name: 'historical years (1991-' + (currentYear - 1) + ')',
+                    hovertemplate: y + ' · DOY %{x}: %{y:.1f} m/s<extra></extra>',
+                    connectgaps: true,
+                });
+                firstShown = false;
+            }
+        }
+
+        // ----- Highlight year -----
+        if (hasHighlight && regionAll.leap[highlightYear]
+                && regionAll.leap[highlightYear].shear) {
+            traces.push({
+                type: 'scatter', mode: 'lines', x: doys,
+                y: regionAll.leap[highlightYear].shear,
+                line: { color: BRAND.highlight, width: 2.4 },
+                name: String(highlightYear) + ' (highlighted)',
+                hovertemplate: highlightYear
+                    + ' · DOY %{x}: %{y:.1f} m/s<extra></extra>',
+                connectgaps: true,
+            });
+        }
+
+        // ----- Current year (bold blue) -----
+        if (regionAll.leap[currentYear]
+                && regionAll.leap[currentYear].shear) {
+            traces.push({
+                type: 'scatter', mode: 'lines', x: doys,
+                y: regionAll.leap[currentYear].shear,
+                line: { color: BRAND.blueDeep, width: 2.6 },
+                name: String(currentYear) + ' (live ERA5)',
+                hovertemplate: currentYear
+                    + ' · DOY %{x}: %{y:.1f} m/s<extra></extra>',
+                connectgaps: true,
+            });
+        }
+
+        // ----- Climatology mean (dashed) -----
+        if (hasClim) {
+            traces.push({
+                type: 'scatter', mode: 'lines', x: doys, y: climo.mean,
+                line: { color: BRAND.green, width: 1.4, dash: 'dash' },
+                name: '1991-2020 mean',
+                hovertemplate: 'DOY %{x}: %{y:.1f} m/s<extra></extra>',
+                connectgaps: true,
+            });
+        }
+
+        // Month-name ticks at the start of each calendar month (DOY
+        // values on the leap-year axis: 1, 32, 61, 92, 122, ...).
+        var monthStartDoy = [1, 32, 61, 92, 122, 153, 183, 214, 245, 275,
+                             306, 336];
+        var monthNames = ['Jan','Feb','Mar','Apr','May','Jun',
+                          'Jul','Aug','Sep','Oct','Nov','Dec'];
+
+        var layout = {
+            margin: { l: 60, r: 30, t: 30, b: 50 },
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: BRAND.plotBg,
+            xaxis: {
+                title: { text: 'Day of year', font: { color: BRAND.text } },
+                tickmode: 'array', tickvals: monthStartDoy,
+                ticktext: monthNames,
+                tickfont: { color: BRAND.text },
+                gridcolor: BRAND.grid,
+            },
+            yaxis: {
+                title: { text: '200-850 hPa shear (m s⁻¹)',
+                         font: { color: BRAND.text } },
+                tickfont: { color: BRAND.text },
+                gridcolor: BRAND.grid,
+                zerolinecolor: BRAND.gridZero,
+            },
+            legend: { orientation: 'h', x: 0, y: -0.18,
+                      font: { color: BRAND.text } },
+            font: { family: 'DM Sans, system-ui, sans-serif',
+                    color: BRAND.text },
+            hoverlabel: {
+                bgcolor: BRAND.hoverBg,
+                bordercolor: BRAND.hoverBorder,
+                font: { color: BRAND.hoverText, size: 12 },
+            },
+        };
+        Plotly.react(el, traces, layout,
                      { responsive: true, displaylogo: false });
     }
 

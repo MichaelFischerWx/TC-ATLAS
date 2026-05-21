@@ -40,8 +40,18 @@ sys.path.insert(0, str(REPO))
 from build_oisst_history import REGIONS  # type: ignore  # noqa: E402
 
 GCS_BUCKET = os.environ.get("GCS_IR_CACHE_BUCKET", "tc-atlas-ir-cache")
-ARCHIVE_BASE = f"https://storage.googleapis.com/{GCS_BUCKET}/era5_daily"
+# Pull from the NEW 00Z × 0.25°-source decimated 1° archive
+# (era5_daily_1deg/, built by build_era5_daily_archive.py).
+# The LEGACY era5_daily/ archive (4×-daily-mean) stopped at 2023/04,
+# so reading from there silently dropped 2024+ from Panel B's monthly
+# shear time series. The 00Z snapshot picks up the small Jensen-style
+# bias the 4×-daily mean smoothed away (~3-7% lower shear magnitudes)
+# but is internally consistent across the full 1991-2026 record.
+ARCHIVE_BASE = f"https://storage.googleapis.com/{GCS_BUCKET}/era5_daily_1deg"
 LOCAL_BASE   = Path("era5_daily")   # fallback for --local archives
+# GCS path prefix for the manifest + per-month tile blobs. Kept as a
+# constant so the GCS client reads use the same prefix as the HTTP one.
+GCS_PREFIX   = "era5_daily_1deg"
 
 CLIM_START = 1991
 CLIM_END   = 2020
@@ -71,7 +81,7 @@ def fetch_manifest(local_only: bool) -> dict:
     if local_only:
         p = LOCAL_BASE / "manifest.json"
         return json.loads(p.read_text()) if p.exists() else {}
-    blob = _bucket().blob("era5_daily/manifest.json")
+    blob = _bucket().blob(f"{GCS_PREFIX}/manifest.json")
     if not blob.exists():
         return {}
     return json.loads(blob.download_as_text())
@@ -91,7 +101,7 @@ def fetch_monthly_shear(year: int, month: int, manifest: dict,
             return None
         raw = gzip.decompress(p.read_bytes())
     else:
-        blob = _bucket().blob(f"era5_daily/shear/{year}_{month:02d}.bin.gz")
+        blob = _bucket().blob(f"{GCS_PREFIX}/shear/{year}_{month:02d}.bin.gz")
         if not blob.exists():
             return None
         raw = gzip.decompress(blob.download_as_bytes())

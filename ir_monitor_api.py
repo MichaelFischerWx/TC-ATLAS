@@ -3975,6 +3975,125 @@ def get_seasonal_daily(
     )
 
 
+# ------------------------------------------------------------------
+# /seasonal/daily/shear — daily region-mean shear time series.
+# Built by build_era5_daily_shear_indices.py and uploaded to
+# gs://${GCS_IR_CACHE_BUCKET}/seasonal/indices_daily_shear.parquet.
+# Schema: date + {region}_shear column per region in _SEASONAL_DAILY_REGIONS.
+# ------------------------------------------------------------------
+_SEASONAL_DAILY_SHEAR_LOCK = threading.Lock()
+_SEASONAL_DAILY_SHEAR_CACHE: dict = {
+    "df": None,
+    "loaded_at": 0.0,
+}
+_SEASONAL_DAILY_SHEAR_TTL_S = 24 * 3600
+
+
+def _load_seasonal_daily_shear_df():
+    """Load (or return cached) daily-shear DataFrame. Mirrors the SST
+    daily loader (_load_seasonal_daily_df) but reads the separate
+    indices_daily_shear.parquet — keeping it out of the SST table lets
+    the two pipelines update independently.
+    """
+    import time as _time
+    import pandas as pd
+
+    now = _time.time()
+    with _SEASONAL_DAILY_SHEAR_LOCK:
+        df = _SEASONAL_DAILY_SHEAR_CACHE.get("df")
+        loaded_at = _SEASONAL_DAILY_SHEAR_CACHE.get("loaded_at", 0.0)
+        if df is not None and (now - loaded_at) < _SEASONAL_DAILY_SHEAR_TTL_S:
+            return df
+
+        bucket = _get_rt_gcs_bucket()
+        if bucket is None:
+            return None
+        try:
+            blob = bucket.blob("seasonal/indices_daily_shear.parquet")
+            if not blob.exists():
+                logger.warning("seasonal/indices_daily_shear.parquet not found")
+                return None
+            data = blob.download_as_bytes()
+            df = pd.read_parquet(io.BytesIO(data))
+        except Exception as e:
+            logger.warning(f"failed to load indices_daily_shear.parquet: {e}")
+            return None
+
+        _SEASONAL_DAILY_SHEAR_CACHE["df"] = df
+        _SEASONAL_DAILY_SHEAR_CACHE["loaded_at"] = now
+        logger.info(
+            f"loaded indices_daily_shear.parquet: {len(df)} rows, "
+            f"{len(df.columns)} cols"
+        )
+        return df
+
+
+@router.get("/seasonal/daily/shear")
+def get_seasonal_daily_shear(
+    region: str = Query(..., description="Region key, e.g. atl_mdr"),
+    year: str = Query("all", description="4-digit year, or 'all' for full history"),
+):
+    """Slice of `indices_daily_shear.parquet` for one region.
+
+    Returns daily-resolution ⟨|V₂₀₀ − V₈₅₀|⟩ (m/s) cos(lat)-weighted
+    over the requested region. Sibling of /seasonal/daily but for the
+    atmospheric (shear) panel — Panel B Daily-mode rendering reuses
+    the same spaghetti / climatology / highlight-year framework as the
+    SST view.
+
+    Source: ERA5 daily archive (era5_daily_1deg/, 00Z snapshot, 1° from
+    0.25° native), aggregated nightly by build_era5_daily_shear_indices.
+    """
+    if region not in _SEASONAL_DAILY_REGIONS:
+        return JSONResponse(
+            content={"error": f"unknown region '{region}'"},
+            status_code=400,
+        )
+    df = _load_seasonal_daily_shear_df()
+    if df is None:
+        return JSONResponse(
+            content={"error": "daily shear indices unavailable"},
+            status_code=503,
+        )
+
+    col = f"{region}_shear"
+    if col not in df.columns:
+        return JSONResponse(
+            content={"error": f"column not in parquet: {col}"},
+            status_code=500,
+        )
+    sub = df[["date", col]]
+    if year != "all":
+        if not (year.isdigit() and len(year) == 4):
+            return JSONResponse(
+                content={"error": f"bad year '{year}'"},
+                status_code=400,
+            )
+        sub = sub[sub["date"].str.startswith(year + "-")]
+    sub = sub.reset_index(drop=True)
+
+    def _col(name):
+        import numpy as _np
+        arr = sub[name].to_numpy()
+        return [None if (isinstance(v, float) and _np.isnan(v)) else
+                (float(v) if isinstance(v, (int, float)) else v)
+                for v in arr]
+
+    payload = {
+        "region": region,
+        "year": year,
+        "variable": "shear",
+        "units": "m s-1",
+        "n_rows": len(sub),
+        "dates": sub["date"].tolist(),
+        "shear": _col(col),
+    }
+    return JSONResponse(
+        content=payload,
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
 @router.get("/env/layers")
 def get_env_layers():
     """List available global environmental overlays.
