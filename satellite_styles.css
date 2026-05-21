@@ -43,38 +43,51 @@
 }
 
 .ir-view-tabs {
+    /* Flat-with-underline submenu — matches the Global Archive's
+       .ga-tabs treatment for a consistent navigation feel across
+       pages. No background container; tabs sit directly on the
+       .ir-secondary-bar's dark surface. */
     display: flex;
     gap: 2px;
-    background: #0a0c12;
-    border-radius: 5px;
-    padding: 2px;
-    border: 1px solid #2a2d38;
+    background: transparent;
+    border-radius: 0;
+    padding: 0;
+    border: none;
+    /* Align tabs to the bottom edge of the bar so the active
+       underline meets the bar's bottom border seamlessly. */
+    align-self: stretch;
+    align-items: flex-end;
 }
 
 .ir-view-tab {
     background: transparent;
     color: #8b8fa4;
     border: none;
-    border-radius: 3px;
-    padding: 4px 12px;
-    font-size: 12px;
-    font-weight: 500;
+    border-radius: 0;
+    /* Match .ga-tab proportions: taller padding, slightly larger
+       font, and a 2 px transparent bottom-border slot that turns
+       solid on active so the layout doesn't shift when tabs flip. */
+    padding: 8px 18px;
+    font-size: 13px;
+    font-weight: 600;
     font-family: inherit;
     cursor: pointer;
-    transition: background 0.15s, color 0.15s;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
     line-height: 1.3;
+    letter-spacing: 0.01em;
+    border-bottom: 2px solid transparent;
 }
 
 .ir-view-tab:hover {
-    color: #c8cad2;
+    color: #e0e0e0;
+    background: rgba(255, 255, 255, 0.03);
 }
 
 .ir-view-tab.active {
-    /* Brand orange tint — clearly distinguishable on the dark bar
-       (the prior #2a2d38 was nearly invisible against #12141c). */
-    background: rgba(251, 146, 60, 0.22);
-    color: #fdbb74;
-    box-shadow: inset 0 -2px 0 #fb923c;
+    color: #fb923c;
+    border-bottom-color: #fb923c;
+    background: transparent;
+    box-shadow: none;
 }
 
 /* Mobile tweaks — vars in :root already widen the bar to 36px. */
@@ -85,7 +98,7 @@
     }
     .ir-view-tab {
         font-size: 13px;
-        padding: 5px 16px;
+        padding: 7px 14px;
     }
     .ir-storm-counts {
         display: none !important;
