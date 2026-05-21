@@ -4923,11 +4923,10 @@
         var variable = _evoState.variable || 'shear';
         var isWind = (variable === 'wind200' || variable === 'wind850');
         var isMonthly = _evoIsMonthlyOnly(variable);
-        // Anomaly works for shear (climo grid sidecar) and any GC-ATLAS
-        // monthly variable (the source ships a 1991-2020 climo tile per
-        // calendar month). Daily-archive wind variables fall back to raw
-        // because we haven't built a level-wind climo grid yet.
-        var modeIsAnom = (_evoState.mode === 'anomaly') && !isWind;
+        // Anomaly mode now works for ALL daily-archive variables —
+        // shear (climo grid sidecar), derived ζ/δ (on-the-fly), AND
+        // wind200/wind850 (computed from windClimo's u/v components).
+        var modeIsAnom = (_evoState.mode === 'anomaly');
         var climo = modeIsAnom ? _evoState.climo : null;
         var monthNames = ['Jan','Feb','Mar','Apr','May','Jun',
                           'Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -4953,11 +4952,28 @@
                 : _evoComputeDivergence(uClim, vClim);
             return derivedClimo[month];
         }
+        // Wind-magnitude climo: |V_climo| at the specified level for
+        // a calendar month. Cached so playback doesn't re-mag the
+        // same grid every frame swap.
+        var windMagClimo = {};
+        function _windMagClimoFor(month) {
+            if (!isWind || !_evoState.windClimo) return null;
+            if (windMagClimo[month]) return windMagClimo[month];
+            var wc = _evoState.windClimo[month];
+            if (!wc) return null;
+            var lvl = (variable === 'wind200') ? 200 : 850;
+            var u = wc['u' + lvl], v = wc['v' + lvl];
+            if (!u || !v) return null;
+            windMagClimo[month] = _evoMag(u, v);
+            return windMagClimo[month];
+        }
         function frameZ(f) {
             if (!modeIsAnom) return f.z;
             var clim;
             if (derivedSpec) {
                 clim = _derivedClimoFor(f.month);
+            } else if (isWind) {
+                clim = _windMagClimoFor(f.month);
             } else {
                 clim = climo && climo[f.month];
             }
@@ -5022,7 +5038,17 @@
         } else if (modeIsAnom) {
             // Diverging around 0 — anomaly is symmetric.
             colorscale = 'RdBu_r';
-            zmin = -10; zmax = 10;
+            // wind200 anomalies: ±25 m/s captures jet-stream
+            // displacement signals. wind850 anomalies: ±15 m/s for
+            // low-level jet variability. shear anomaly: ±10 m/s
+            // (typical synoptic-scale departure from climo).
+            if (variable === 'wind200') {
+                zmin = -25; zmax = 25;
+            } else if (variable === 'wind850') {
+                zmin = -15; zmax = 15;
+            } else {
+                zmin = -10; zmax = 10;
+            }
         } else if (isMonthly) {
             colorscale = monthlySpec.colorscale;
             zmin = monthlySpec.zmin;
@@ -5391,28 +5417,26 @@
                 _evoState.climo = null;
                 _evoState.windClimo = null;
             }
-            // Wind variables (wind200, wind850) always render raw —
-            // _evoBuildPlotlyTraces sets `modeIsAnom = isAnom && !isWind`,
-            // so the climo would be fetched and immediately ignored.
-            // Skip the fetch entirely to save ~48 HTTP requests + the
-            // climo-grid decode pass per render.
             var isWindVar = (_evoState.variable === 'wind200'
                           || _evoState.variable === 'wind850');
-            if (_evoState.mode === 'anomaly' && !hd && !isWindVar) {
-                // GC-ATLAS-backed variables fetch their climo from the
-                // same source; daily-archive variables (shear / derived
-                // vorticity / divergence) keep using the era5_climo
-                // grid sidecars.
+            if (_evoState.mode === 'anomaly' && !hd) {
                 if (_evoIsMonthlyOnly(_evoState.variable)) {
+                    // GC-ATLAS-backed variables fetch their climo from
+                    // the same source.
                     prep.push(_evoFetchGcAtlasClimoForFrames(frames)
                         .then(function (c) { _evoState.climo = c; }));
+                } else if (isWindVar) {
+                    // Wind anomaly = |V_now| − |V_climo|. Need ONLY
+                    // the wind-component climo (u, v at the relevant
+                    // level); the shear-magnitude grid sidecar isn't
+                    // applicable here. _windMagClimoFor in
+                    // _evoBuildPlotlyTraces computes |V_climo| lazily.
+                    prep.push(_evoFetchWindClimoForFrames(frames));
                 } else {
+                    // shear (and derived ζ/δ): need both the shear-
+                    // magnitude climo grid AND the level-wind climo
+                    // (the latter for the anomalous-barb vector).
                     prep.push(_evoFetchClimoForFrames(frames));
-                    // Anomalous barbs: subtract climo u/v at 200/850 so
-                    // the glyph shows the *anomalous* shear vector
-                    // instead of the raw vector — which in anomaly mode
-                    // would be miscalibrated against the heatmap's
-                    // "anomaly of magnitude" signal.
                     prep.push(_evoFetchWindClimoForFrames(frames));
                 }
             }
@@ -6194,11 +6218,62 @@
                                 _evoState.resolution = _evoState._lastResolution;
                             }
                         }
+                        // Wind variables read more naturally in RAW
+                        // mode — the absolute wind speed (m/s, 0..80)
+                        // with the white→cyan TC palette is what
+                        // forecasters actually want to see. Anomaly
+                        // mode still works for wind (computes
+                        // |V_now| − |V_climo|), but raw is the better
+                        // default landing. Only auto-flip the mode if
+                        // the user hasn't already explicitly chosen a
+                        // mode this session (so we don't fight a
+                        // power user who wants anomaly).
+                        if ((_evoState.variable === 'wind200'
+                                || _evoState.variable === 'wind850')
+                                && _evoState.mode === 'anomaly'
+                                && !_evoState._userPickedMode) {
+                            _evoState.mode = 'raw';
+                            var modeSel = document.getElementById('seasonal-evo-mode');
+                            if (modeSel) modeSel.value = 'raw';
+                        }
                     }
                     _evoUpdateHdButton();
                     _evoRender();
                 } else if (key === 'mode') {
-                    _evoRerenderTracksOnly();
+                    // User explicitly picked a mode — suppress the
+                    // wind-variable auto-flip-to-raw on subsequent
+                    // variable changes this session.
+                    _evoState._userPickedMode = true;
+                    // Anomaly needs the right climo cached. The
+                    // initial render only fetches climo when mode is
+                    // already anomaly — flipping raw → anomaly later
+                    // would otherwise leave frameZ falling through to
+                    // raw silently. Detect when we need a climo we
+                    // don't have and force a full re-render (which
+                    // walks the proper prep promise chain). The
+                    // (year, hd, basin, daily/monthly, variable) cache
+                    // means the field tiles themselves are cache-hit
+                    // and the full render is ~1 sec, not 15.
+                    var isWindNow = (_evoState.variable === 'wind200'
+                                  || _evoState.variable === 'wind850');
+                    var requiredClimo = isWindNow
+                        ? _evoState.windClimo
+                        : _evoState.climo;
+                    var needsFullRender = _evoState.mode === 'anomaly'
+                        && _evoState.frames
+                        && !_evoIsMonthlyOnly(_evoState.variable)
+                        && !_evoState.effectiveHd
+                        && !requiredClimo;
+                    if (needsFullRender) {
+                        _evoState._pendingFrameEpoch
+                            = _evoState.frames[_evoState.currentFrameIdx || 0]
+                            && _evoState.frames[_evoState.currentFrameIdx || 0].epochDay;
+                        _evoState._pendingViewport = _evoComputeViewport(
+                            document.getElementById('seasonal-evo-map'));
+                        _evoRender();
+                    } else {
+                        _evoRerenderTracksOnly();
+                    }
                 } else if (key === 'basin') {
                     // Pan/zoom the map AND rebuild track filter. Also
                     // retune the wrap's aspect ratio so the new basin's
