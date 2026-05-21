@@ -3156,6 +3156,23 @@
             anomZmax: 8,
             colorscale: 'RdBu_r',
         },
+        sst: {
+            // ERA5 SST (monthly mean). NOT NOAA OISST — the daily
+            // satellite-blended OISST product needs its own gridded
+            // archive (see project memory). ERA5 SST is the IFS-blended
+            // analysis SST and is fine for monthly TC-environment work.
+            group: 'single_levels', name: 'sst', level: null,
+            // ERA5 SST tiles are in Kelvin. Convert to °C in display.
+            transform: function (v) { return v == null ? null : v - 273.15; },
+            label: 'SST', units: '°C',
+            zmin: 14, zmax: 32, divergent: false,
+            anomZmax: 3,
+            colorscale: [
+                [0.0,  '#053061'], [0.20, '#2166ac'],
+                [0.45, '#92c5de'], [0.60, '#fddbc7'],
+                [0.80, '#f4a582'], [1.0,  '#67001f'],
+            ],
+        },
     };
     function _evoIsMonthlyOnly(variable) {
         return Object.prototype.hasOwnProperty.call(
@@ -3412,11 +3429,13 @@
     }
 
     // ── Wind-barb rendering ──────────────────────────────────────────
-    // Standard WMO convention: shaft points DOWNWIND from the station;
-    // pennants/full feathers/half feathers on the upwind (right) side
-    // of the shaft encode speed in 50/10/5 kt increments. We sample on
-    // a regular (lat, lon) grid and emit one big NaN-separated polyline
-    // — single Plotly scatter trace covers ~600 barbs cheaply.
+    // Standard WMO convention (matches realtime_ir.js _drawWindBarb):
+    // the SHAFT points UPWIND from the station — i.e., toward the
+    // direction the wind is coming FROM — with feathers/pennants
+    // clustered at the upwind tip. Looking from station out along the
+    // shaft, feathers are on the OBSERVER'S LEFT in the NH and right
+    // in the SH (Coriolis-rotated convention used by the climatology
+    // globe). Pennant=50 kt, full feather=10 kt, half feather=5 kt.
     // Geometry constants mirror vendor/gc-atlas/barbs.js's published-chart
     // proportions (Tropical Tidbits / WPC style): tight glyph packing,
     // filled pennants. Sizes are in lat/lon degrees because Plotly's
@@ -3469,11 +3488,20 @@
                             lon, lat, u, v, spd_kt) {
         var mag = Math.sqrt(u * u + v * v);
         if (mag === 0) return;
+        // (dx, dy) is the downwind unit vector (toward the direction
+        // the wind is BLOWING). The shaft extends UPWIND from the
+        // station — opposite of (dx, dy) — so the upwind unit (ux, uy)
+        // is the vector we walk along when placing tip + feathers.
         var dx = u / mag, dy = v / mag;
-        var sideSign = (lat < 0) ? +1 : -1;   // flip for SH
-        var px = -dy * sideSign, py = dx * sideSign;
-        var tipX = lon + dx * _EVO_SHAFT_DEG;
-        var tipY = lat + dy * _EVO_SHAFT_DEG;
+        var ux = -dx, uy = -dy;
+        // Perpendicular to the shaft. NH places feathers on the
+        // observer's LEFT when looking from station outward along the
+        // shaft; SH flips per the climatology-globe Coriolis convention.
+        // The +1/-1 sign here mirrors realtime_ir.js _drawWindBarb.
+        var sideSign = (lat < 0) ? +1 : -1;
+        var px = -uy * sideSign, py = ux * sideSign;
+        var tipX = lon + ux * _EVO_SHAFT_DEG;
+        var tipY = lat + uy * _EVO_SHAFT_DEG;
         function seg(arrX, arrY, x1, y1, x2, y2) {
             if (arrX.length) { arrX.push(null); arrY.push(null); }
             arrX.push(x1, x2); arrY.push(y1, y2);
@@ -3487,45 +3515,46 @@
         var nFull = Math.floor(rem / 10);
         var rem2 = rem - nFull * 10;
         var nHalf = (rem2 >= 5) ? 1 : 0;
-        // Walk pos from the upwind tip back toward the station. Pennants
-        // first (closest to the tail), then full feathers, then a half.
+        // pos = signed distance along the upwind unit (ux, uy) from
+        // the station. Pennants ride closest to the upwind tip; full
+        // feathers come next; a half feather (if any) is closest to the
+        // station. We walk pos down toward the station between glyphs.
         var pos = _EVO_SHAFT_DEG;
         for (var p = 0; p < nPennants; p++) {
-            // Filled triangle: tip-end base point → apex → behind base.
+            // Filled triangle: tip-end base → apex (perpendicular out
+            // by FEATHER_DEG) → behind-end base, closed.
             var baseAhead = pos;
             var baseBehind = pos - _EVO_PENNANT_W_DEG;
-            var ax = lon + dx * baseAhead;
-            var ay = lat + dy * baseAhead;
-            var bx = lon + dx * baseAhead + px * _EVO_FEATHER_DEG;
-            var by = lat + dy * baseAhead + py * _EVO_FEATHER_DEG;
-            var cx = lon + dx * baseBehind;
-            var cy = lat + dy * baseBehind;
+            var ax = lon + ux * baseAhead;
+            var ay = lat + uy * baseAhead;
+            var bx = lon + ux * baseAhead + px * _EVO_FEATHER_DEG;
+            var by = lat + uy * baseAhead + py * _EVO_FEATHER_DEG;
+            var cx = lon + ux * baseBehind;
+            var cy = lat + uy * baseBehind;
             if (pennX.length) { pennX.push(null); pennY.push(null); }
-            // Closed polygon — Plotly fill:'toself' closes from last to
-            // first vertex, but explicit close avoids degenerate visuals.
             pennX.push(ax, bx, cx, ax);
             pennY.push(ay, by, cy, ay);
             pos -= _EVO_PENNANT_W_DEG + _EVO_SPACING_DEG * 0.5;
         }
         for (var f = 0; f < nFull; f++) {
-            var bX = lon + dx * pos;
-            var bY = lat + dy * pos;
-            // Feathers angled slightly forward (toward the upwind tip) so
-            // the glyph reads as a sweeping arrow rather than a "T".
-            var tX = bX + px * _EVO_FEATHER_DEG + dx * (_EVO_FEATHER_DEG * 0.35);
-            var tY = bY + py * _EVO_FEATHER_DEG + dy * (_EVO_FEATHER_DEG * 0.35);
+            var bX = lon + ux * pos;
+            var bY = lat + uy * pos;
+            // Feathers angled slightly forward (toward the upwind tip)
+            // so the glyph reads as a sweeping arrow rather than a "T".
+            var tX = bX + px * _EVO_FEATHER_DEG + ux * (_EVO_FEATHER_DEG * 0.35);
+            var tY = bY + py * _EVO_FEATHER_DEG + uy * (_EVO_FEATHER_DEG * 0.35);
             seg(lineX, lineY, bX, bY, tX, tY);
             pos -= _EVO_SPACING_DEG;
         }
         if (nHalf) {
-            // If the half is the *only* glyph, set it back one notch so
-            // it doesn't ride at the very tip alone (matches gc-atlas
-            // globe behavior).
+            // If the half is the *only* glyph, set it back one notch
+            // so it doesn't ride at the very tip alone (matches the
+            // gc-atlas climatology globe behavior).
             if (nPennants === 0 && nFull === 0) pos -= _EVO_SPACING_DEG;
-            var bhX = lon + dx * pos;
-            var bhY = lat + dy * pos;
-            var thX = bhX + px * _EVO_HALF_DEG + dx * (_EVO_HALF_DEG * 0.35);
-            var thY = bhY + py * _EVO_HALF_DEG + dy * (_EVO_HALF_DEG * 0.35);
+            var bhX = lon + ux * pos;
+            var bhY = lat + uy * pos;
+            var thX = bhX + px * _EVO_HALF_DEG + ux * (_EVO_HALF_DEG * 0.35);
+            var thY = bhY + py * _EVO_HALF_DEG + uy * (_EVO_HALF_DEG * 0.35);
             seg(lineX, lineY, bhX, bhY, thX, thY);
         }
     }
@@ -4198,6 +4227,36 @@
         });
     }
 
+    // Render the Plotly figure to a PNG URL with the animation slider +
+    // play button hidden (a clean publication-style frame). Returns a
+    // Promise<dataUrl>. We Plotly.relayout to drop the sliders before
+    // toImage, then restore. opts.scale is the linear pixel multiplier
+    // (3 for research-quality saves; 1.5 for GIF frames).
+    function _evoToImageNoSlider(opts) {
+        var el = document.getElementById('seasonal-evo-map');
+        if (!el || !el._fullLayout) {
+            return Promise.reject(new Error('plot not initialized'));
+        }
+        // Stash + strip the sliders block. Plotly.relayout returns a
+        // promise we chain on so toImage runs after the redraw lands.
+        var origSliders = el._fullLayout.sliders
+            ? el._fullLayout.sliders.map(function (s) { return s; })
+            : null;
+        return Plotly.relayout(el, { sliders: [] })
+            .then(function () { return Plotly.toImage(el, opts); })
+            .then(function (url) {
+                // Restore the slider — fire-and-forget; the URL is
+                // already captured, no need to wait for redraw to
+                // resolve before returning to the caller.
+                if (origSliders) Plotly.relayout(el, { sliders: origSliders });
+                return url;
+            })
+            .catch(function (e) {
+                if (origSliders) Plotly.relayout(el, { sliders: origSliders });
+                throw e;
+            });
+    }
+
     // PNG export of the current frame — composes a small title bar
     // above + an attribution footer below the rasterized Plotly figure.
     function _evoSavePng() {
@@ -4206,12 +4265,20 @@
         var rect = el.getBoundingClientRect();
         var dateLabel = (document.getElementById('seasonal-evo-date') || {}).textContent
                         || ('' + _evoState.year);
+        var variable = _evoState.variable || 'shear';
+        var monthlySpec = EVO_MONTHLY_VARS[variable];
+        var varDisplay = monthlySpec ? monthlySpec.label
+                       : (variable === 'wind200') ? '200 mb wind'
+                       : (variable === 'wind850') ? '850 mb wind'
+                       : 'Deep-layer shear';
         var modeLabel = _evoState.mode === 'anomaly'
-            ? 'Shear anomaly vs 1991-2020' : 'Raw shear';
-        Plotly.toImage(el, {
+            ? (varDisplay + ' anomaly vs 1991-2020')
+            : ('Raw ' + varDisplay.toLowerCase());
+        _evoToImageNoSlider({
             format: 'png',
-            width: Math.round(rect.width * 2),
-            height: Math.round(rect.height * 2),
+            width: Math.round(rect.width),
+            height: Math.round(rect.height),
+            scale: 3,
         }).then(function (url) {
             var img = new Image();
             img.onload = function () {
@@ -4269,8 +4336,13 @@
             (document.getElementById('seasonal-evo-speed') || { value: '400' }).value,
             10);
         var delayCs = Math.max(4, Math.round(speed / 10));
-        var width = Math.round(el.getBoundingClientRect().width);
-        var height = Math.round(el.getBoundingClientRect().height);
+        // GIF native size: 1.5× the rendered figure. Bigger than 1× so
+        // the barbs and coastlines stay legible after palette
+        // quantization; not 3× because GIF byte size grows quadratically
+        // and 365-frame animations get large fast.
+        var GIF_SCALE = 1.5;
+        var width  = Math.round(el.getBoundingClientRect().width  * GIF_SCALE);
+        var height = Math.round(el.getBoundingClientRect().height * GIF_SCALE);
 
         import('https://unpkg.com/gifenc@1.0.3/dist/gifenc.esm.js')
             .then(function (mod) {
@@ -4306,9 +4378,13 @@
                         mode: 'immediate', transition: { duration: 0 },
                         frame: { duration: 0, redraw: true },
                     }).then(function () {
-                        return Plotly.toImage(el, {
+                        // Slider gets stripped per-frame and restored on
+                        // export finish so the GIF never shows the
+                        // animation chrome — pure data frames only.
+                        return _evoToImageNoSlider({
                             format: 'png',
                             width: width, height: height,
+                            scale: 1,
                         });
                     }).then(function (url) {
                         // Decode the PNG data URL into ImageData via off-screen canvas.
@@ -4479,27 +4555,91 @@
                 _ga('rt_seasonal_evo_save_gif');
             });
         }
-        // Play / pause is its own thing — TODO Phase 1b
+        // Play / pause + keyboard controls.
         var play = document.getElementById('seasonal-evo-play');
+        function togglePlay() {
+            var el = document.getElementById('seasonal-evo-map');
+            if (!el || !_evoState.frames) return;
+            _evoState.playing = !_evoState.playing;
+            if (play) play.textContent = _evoState.playing ? '⏸' : '▶';
+            if (_evoState.playing) {
+                var speed = parseInt(
+                    document.getElementById('seasonal-evo-speed').value, 10);
+                Plotly.animate(el, null, {
+                    frame: { duration: speed, redraw: true },
+                    transition: { duration: 0 },
+                    mode: 'immediate',
+                });
+            } else {
+                Plotly.animate(el, [null], { mode: 'next' });
+            }
+        }
+        function gotoFrame(idx) {
+            var el = document.getElementById('seasonal-evo-map');
+            if (!el || !_evoState.frames || !_evoState.frames.length) return;
+            var n = _evoState.frames.length;
+            idx = ((idx % n) + n) % n;     // wrap
+            var f = _evoState.frames[idx];
+            var name = (f.day != null) ? 'd' + f.epochDay : String(f.month);
+            // If we're playing, pausing first feels right before scrubbing.
+            if (_evoState.playing) {
+                _evoState.playing = false;
+                if (play) play.textContent = '▶';
+                Plotly.animate(el, [null], { mode: 'next' });
+            }
+            Plotly.animate(el, [name], {
+                mode: 'immediate', transition: { duration: 0 },
+                frame: { duration: 0, redraw: true },
+            });
+        }
+        function currentFrameIndex() {
+            // Plotly stores the current animated frame name on the gd's
+            // _transitioningFrame / context; safer to read the slider's
+            // active step value via the slider control. Pull it from the
+            // figure's layout snapshot.
+            var el = document.getElementById('seasonal-evo-map');
+            if (!el || !el._fullLayout || !el._fullLayout.sliders) return 0;
+            var s = el._fullLayout.sliders[0];
+            return s && typeof s.active === 'number' ? s.active : 0;
+        }
         if (play && !play._evoBound) {
             play._evoBound = true;
-            play.addEventListener('click', function () {
-                var el = document.getElementById('seasonal-evo-map');
-                if (!el || !_evoState.frames) return;
-                _evoState.playing = !_evoState.playing;
-                play.textContent = _evoState.playing ? '⏸' : '▶';
-                if (_evoState.playing) {
-                    var speed = parseInt(
-                        document.getElementById('seasonal-evo-speed').value, 10);
-                    Plotly.animate(el, null, {
-                        frame: { duration: speed, redraw: true },
-                        transition: { duration: 0 },
-                        mode: 'immediate',
-                    });
-                    // Plotly emits 'plotly_animated' once the cycle ends;
-                    // for now we just let the user toggle pause.
-                } else {
-                    Plotly.animate(el, [null], { mode: 'next' }); // stop
+            play.addEventListener('click', togglePlay);
+        }
+        // Keyboard controls — bind once at document level. Active only
+        // when the user is focused on Panel C (no <input> / <textarea>
+        // in focus) and the map is in the viewport. ← / → step a frame,
+        // Space toggles play, Home / End jump to first / last frame.
+        if (!document._evoKbBound) {
+            document._evoKbBound = true;
+            document.addEventListener('keydown', function (ev) {
+                // Skip while user is typing somewhere.
+                var t = ev.target;
+                if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA'
+                          || t.tagName === 'SELECT' || t.isContentEditable)) {
+                    return;
+                }
+                var mapEl = document.getElementById('seasonal-evo-map');
+                if (!mapEl || !mapEl.classList.contains('js-plotly-plot')) return;
+                // Only consume keystrokes when Panel C is visible.
+                var r = mapEl.getBoundingClientRect();
+                var inView = r.bottom > 0 && r.top < window.innerHeight;
+                if (!inView) return;
+                if (ev.key === 'ArrowLeft') {
+                    gotoFrame(currentFrameIndex() - 1);
+                    ev.preventDefault();
+                } else if (ev.key === 'ArrowRight') {
+                    gotoFrame(currentFrameIndex() + 1);
+                    ev.preventDefault();
+                } else if (ev.key === ' ' || ev.code === 'Space') {
+                    togglePlay();
+                    ev.preventDefault();
+                } else if (ev.key === 'Home') {
+                    gotoFrame(0);
+                    ev.preventDefault();
+                } else if (ev.key === 'End') {
+                    gotoFrame(_evoState.frames ? _evoState.frames.length - 1 : 0);
+                    ev.preventDefault();
                 }
             });
         }
