@@ -1204,6 +1204,8 @@
             vo850:  'ζ at 850 hPa (10⁻⁵ s⁻¹)',
             tcwv:   'TCWV (kg m⁻²)',
             shear:  'Deep-layer shear (m s⁻¹)',
+            u200:   'u at 200 hPa (m s⁻¹)',
+            u850:   'u at 850 hPa (m s⁻¹)',
         };
         var varLabel, yLabel;
         if (era5Meta) {
@@ -2417,7 +2419,7 @@
     // monthly-derived indices_monthly_era5.json — same loader interface,
     // different file. Merged into a single in-memory `state.era5` so the
     // downstream byYear / climMean / climStd code is variable-agnostic.
-    var ERA5_VAR_KEYS = ['shear', 'mpi', 'rh700', 'chi200', 'vo850', 'tcwv'];
+    var ERA5_VAR_KEYS = ['shear', 'mpi', 'rh700', 'chi200', 'vo850', 'tcwv', 'u200', 'u850'];
     function _isEra5Var(v) { return ERA5_VAR_KEYS.indexOf(v) !== -1; }
     var _era5Promise = null;
     // Single-attempt guard: if the lazy ERA5 fetch fails (404 because
@@ -2985,6 +2987,240 @@
         return _evoFetchFieldTile('shear', year, month);
     }
 
+    // -------------------------------------------------------------------
+    // GC-ATLAS monthly tile fetcher — used by the "Monthly ERA5" Panel C
+    // variables (MPI / RH700 / χ200 / ζ850 / TCWV / u200_m / u850_m).
+    // GC-ATLAS hosts a global 181×360 1°-monthly catalog at
+    // gs://gc-atlas-era5/{tiles,tiles_per_year} with the same f16-gz
+    // encoding the daily archive uses. We subset rows 30..150 to match
+    // the EVO 60°S–60°N × 360-col grid Panel C is built around.
+    // -------------------------------------------------------------------
+    var EVO_GC_ATLAS_BASE = 'https://storage.googleapis.com/gc-atlas-era5';
+    var _evoGcAtlasManifestP = null;
+    var _evoGcAtlasPerYearManifestP = null;
+    // Per-variable display config + GC-ATLAS group/name/level mapping.
+    // Each entry mirrors the corresponding FIELDS row in
+    // build_era5_indices.py so the Panel C surface stays in sync with
+    // the Panel B time series.
+    var EVO_MONTHLY_VARS = {
+        mpi: {
+            group: 'single_levels', name: 'mpi', level: null,
+            label: 'MPI', units: 'm s⁻¹',
+            zmin: 0, zmax: 100, divergent: false,
+            anomZmax: 15,
+            colorscale: [
+                [0.0, '#053061'], [0.30, '#74add1'],
+                [0.55, '#fed98e'], [0.80, '#f46d43'],
+                [1.0, '#67001f'],
+            ],
+        },
+        rh700: {
+            group: 'pressure_levels', name: 'r', level: 700,
+            label: '700 hPa RH', units: '%',
+            zmin: 0, zmax: 100, divergent: false,
+            anomZmax: 25,
+            colorscale: [
+                [0.0, '#8c510a'], [0.25, '#dfc27d'],
+                [0.50, '#f6e8c3'], [0.75, '#80cdc1'],
+                [1.0, '#01665e'],
+            ],
+        },
+        chi200: {
+            group: 'pressure_levels', name: 'chi', level: 200,
+            label: 'χ at 200 hPa', units: '10⁶ m² s⁻¹',
+            transform: function (v) { return v == null ? null : v / 1e6; },
+            zmin: -15, zmax: 15, divergent: true,
+            anomZmax: 8,
+            colorscale: 'RdBu_r',
+        },
+        vo850: {
+            group: 'pressure_levels', name: 'vo', level: 850,
+            label: 'ζ at 850 hPa', units: '10⁻⁵ s⁻¹',
+            transform: function (v) { return v == null ? null : v * 1e5; },
+            zmin: -10, zmax: 10, divergent: true,
+            anomZmax: 6,
+            colorscale: 'RdBu_r',
+        },
+        tcwv: {
+            group: 'single_levels', name: 'tcwv', level: null,
+            label: 'TCWV', units: 'kg m⁻²',
+            zmin: 0, zmax: 75, divergent: false,
+            anomZmax: 10,
+            colorscale: [
+                [0.0, '#fff7bc'], [0.30, '#fec44f'],
+                [0.55, '#74c476'], [0.80, '#2171b5'],
+                [1.0, '#08306b'],
+            ],
+        },
+        u200_m: {
+            group: 'pressure_levels', name: 'u', level: 200,
+            label: 'u at 200 hPa', units: 'm s⁻¹',
+            zmin: -40, zmax: 40, divergent: true,
+            anomZmax: 12,
+            colorscale: 'RdBu_r',
+        },
+        u850_m: {
+            group: 'pressure_levels', name: 'u', level: 850,
+            label: 'u at 850 hPa', units: 'm s⁻¹',
+            zmin: -20, zmax: 20, divergent: true,
+            anomZmax: 8,
+            colorscale: 'RdBu_r',
+        },
+    };
+    function _evoIsMonthlyOnly(variable) {
+        return Object.prototype.hasOwnProperty.call(
+            EVO_MONTHLY_VARS, variable || '');
+    }
+
+    function _evoLoadGcAtlasManifest() {
+        if (_evoGcAtlasManifestP) return _evoGcAtlasManifestP;
+        _evoGcAtlasManifestP = fetch(EVO_GC_ATLAS_BASE + '/tiles/manifest.json')
+            .then(function (r) {
+                if (!r.ok) throw new Error('GC-ATLAS climo manifest HTTP ' + r.status);
+                return r.json();
+            });
+        return _evoGcAtlasManifestP;
+    }
+    function _evoLoadGcAtlasPerYearManifest() {
+        if (_evoGcAtlasPerYearManifestP) return _evoGcAtlasPerYearManifestP;
+        _evoGcAtlasPerYearManifestP = fetch(
+            EVO_GC_ATLAS_BASE + '/tiles_per_year/manifest.json')
+            .then(function (r) {
+                if (!r.ok) throw new Error('GC-ATLAS per-year manifest HTTP ' + r.status);
+                return r.json();
+            });
+        return _evoGcAtlasPerYearManifestP;
+    }
+
+    // Decode a GC-ATLAS f16-gz tile (181×360, lat 90..-90, lon -180..179)
+    // and return the 121×360 60°S..60°N subset as Array<Array<number|null>>
+    // so it lines up with the EVO grid + frame[].z conventions.
+    function _evoDecodeGcAtlasTile(arrayBuffer, vmin, vmax, transform) {
+        var u16 = new Uint16Array(arrayBuffer);
+        var srcNy = 181, nx = EVO_GRID_NX;   // 360
+        var range = (vmax - vmin) / 65534.0;
+        // EVO grid covers lat 60..-60 → rows 30..150 in the 181-row tile.
+        var out = new Array(EVO_GRID_NY);
+        for (var i = 0; i < EVO_GRID_NY; i++) {
+            var srcRow = i + 30;
+            var row = new Array(nx);
+            for (var j = 0; j < nx; j++) {
+                var v = u16[srcRow * nx + j];
+                if (v === 0xFFFF) {
+                    row[j] = null;
+                } else {
+                    var f = vmin + v * range;
+                    row[j] = transform ? transform(f) : f;
+                }
+            }
+            out[i] = row;
+        }
+        return out;
+    }
+
+    // Per-year monthly mean tile.
+    function _evoFetchGcAtlasYearTile(spec, year, month) {
+        var monthStr = (month < 10 ? '0' : '') + month;
+        var levPref = spec.level == null ? '' : (spec.level + '_');
+        var path = '/tiles_per_year/' + spec.group + '/' + spec.name + '/'
+                 + levPref + year + '_' + monthStr + '.bin.gz';
+        var tileKey = levPref + year + '_' + monthStr;
+        return _evoLoadGcAtlasPerYearManifest().then(function (m) {
+            var meta = m.groups && m.groups[spec.group]
+                    && m.groups[spec.group][spec.name]
+                    && m.groups[spec.group][spec.name].tiles
+                    && m.groups[spec.group][spec.name].tiles[tileKey];
+            if (!meta) throw new Error('GC-ATLAS per-year missing ' + path);
+            return fetch(EVO_GC_ATLAS_BASE + path).then(function (r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + path);
+                var decompressed = r.body.pipeThrough(new DecompressionStream('gzip'));
+                return new Response(decompressed).arrayBuffer();
+            }).then(function (buf) {
+                return _evoDecodeGcAtlasTile(buf, meta.vmin, meta.vmax, spec.transform);
+            });
+        });
+    }
+    // 1991-2020 climatology mean tile (one per calendar month).
+    function _evoFetchGcAtlasClimoTile(spec, month) {
+        var monthStr = (month < 10 ? '0' : '') + month;
+        var levPref = spec.level == null ? '' : (spec.level + '_');
+        var path = '/tiles/' + spec.group + '/' + spec.name + '/'
+                 + levPref + monthStr + '.bin.gz';
+        var tileKey = levPref + monthStr;
+        return _evoLoadGcAtlasManifest().then(function (m) {
+            var meta = m.groups && m.groups[spec.group]
+                    && m.groups[spec.group][spec.name]
+                    && m.groups[spec.group][spec.name].tiles
+                    && m.groups[spec.group][spec.name].tiles[tileKey];
+            if (!meta) throw new Error('GC-ATLAS climo missing ' + path);
+            return fetch(EVO_GC_ATLAS_BASE + path).then(function (r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + path);
+                var decompressed = r.body.pipeThrough(new DecompressionStream('gzip'));
+                return new Response(decompressed).arrayBuffer();
+            }).then(function (buf) {
+                return _evoDecodeGcAtlasTile(buf, meta.vmin, meta.vmax, spec.transform);
+            });
+        });
+    }
+
+    // Build 12 monthly frames for a GC-ATLAS-backed variable.
+    function _evoFetchYearMonthlyOnly(year) {
+        var variable = _evoState.variable || 'shear';
+        var spec = EVO_MONTHLY_VARS[variable];
+        if (!spec) {
+            return Promise.reject(new Error('no GC-ATLAS spec for ' + variable));
+        }
+        var monthPromises = [];
+        for (var month = 1; month <= 12; month++) {
+            (function (mo) {
+                monthPromises.push(
+                    _evoFetchGcAtlasYearTile(spec, year, mo)
+                        .then(function (grid) {
+                            return {
+                                month: mo, day: null,
+                                epochDay: Date.UTC(year, mo, 0) / 86400000,
+                                label: _EVO_MONTH_NAMES[mo - 1],
+                                z: grid, u: null, v: null,
+                            };
+                        })
+                        .catch(function (e) {
+                            console.warn('[seasonal-evo] GC-ATLAS month skip',
+                                         year, mo, variable, e.message);
+                            return null;
+                        }));
+            })(month);
+        }
+        return Promise.all(monthPromises).then(function (slices) {
+            return slices.filter(Boolean).sort(function (a, b) {
+                return a.epochDay - b.epochDay;
+            });
+        });
+    }
+
+    // Build {month → climo grid} dict for a GC-ATLAS-backed variable.
+    function _evoFetchGcAtlasClimoForFrames(frames) {
+        var variable = _evoState.variable || 'shear';
+        var spec = EVO_MONTHLY_VARS[variable];
+        if (!spec) return Promise.resolve({});
+        var monthsSeen = {};
+        frames.forEach(function (f) { monthsSeen[f.month] = true; });
+        var pending = Object.keys(monthsSeen).map(function (m) {
+            var mo = parseInt(m, 10);
+            return _evoFetchGcAtlasClimoTile(spec, mo)
+                .then(function (g) { return { month: mo, clim: g }; })
+                .catch(function (e) {
+                    console.warn('[seasonal-evo] climo miss', mo, variable, e.message);
+                    return { month: mo, clim: null };
+                });
+        });
+        return Promise.all(pending).then(function (results) {
+            var byMonth = {};
+            results.forEach(function (r) { if (r.clim) byMonth[r.month] = r.clim; });
+            byMonth.year_for = _evoState.year;
+            return byMonth;
+        });
+    }
+
     // Monthly mean of daily shear at each grid cell.
     function _evoMonthlyMean(tile) {
         var nDays = tile.n_days;
@@ -3234,13 +3470,19 @@
     function _evoFetchYear(year) {
         // Returns Promise<frames[]>. Frame shape:
         //   { month, day?, epochDay, label, z[NY][NX], u[NY][NX], v[NY][NX] }
-        // z is the colormap background; u/v drive the barb overlay.
+        // z is the colormap background; u/v drive the barb overlay (null
+        // for GC-ATLAS scalar variables — they don't carry a wind vector).
         // Per-variable derivation:
-        //   shear  → z = |V200 − V850|, u/v = V200 − V850
-        //   wind200 → z = |V200|,        u/v = V200
-        //   wind850 → z = |V850|,        u/v = V850
+        //   shear  → z = |V200 − V850|, u/v = V200 − V850   (daily archive)
+        //   wind200 → z = |V200|,        u/v = V200          (daily archive)
+        //   wind850 → z = |V850|,        u/v = V850          (daily archive)
+        //   mpi / rh700 / chi200 / vo850 / tcwv / u200_m / u850_m
+        //                                                    (GC-ATLAS monthly)
         var resolution = _evoState.resolution || 'monthly';
         var variable   = _evoState.variable || 'shear';
+        if (_evoIsMonthlyOnly(variable)) {
+            return _evoFetchYearMonthlyOnly(year);
+        }
         return _evoLoadManifest().then(function (m) {
             if (!m) throw new Error('archive manifest unavailable');
             // Decide which raw u/v tiles to pull per month.
@@ -3349,8 +3591,11 @@
         // so the slider can swap z arrays + track polylines cleanly.
         var variable = _evoState.variable || 'shear';
         var isWind = (variable === 'wind200' || variable === 'wind850');
-        // Anomaly currently only has climo for shear. For wind variables
-        // we silently fall back to raw mode so the heatmap stays meaningful.
+        var isMonthly = _evoIsMonthlyOnly(variable);
+        // Anomaly works for shear (climo grid sidecar) and any GC-ATLAS
+        // monthly variable (the source ships a 1991-2020 climo tile per
+        // calendar month). Daily-archive wind variables fall back to raw
+        // because we haven't built a level-wind climo grid yet.
         var modeIsAnom = (_evoState.mode === 'anomaly') && !isWind;
         var climo = modeIsAnom ? _evoState.climo : null;
         var monthNames = ['Jan','Feb','Mar','Apr','May','Jun',
@@ -3378,16 +3623,32 @@
             return out;
         }
 
-        // Per-variable colorbar label and raw-mode range. Wind speed ranges
-        // are bigger than shear (jet streaks routinely 60+ m/s at 200 mb).
-        var varLabel = (variable === 'wind200') ? '200 mb wind'
+        // Per-variable colorbar label and raw-mode range. GC-ATLAS-backed
+        // monthly variables carry their own colorscale + range in the
+        // EVO_MONTHLY_VARS spec; daily-archive shear/wind speeds use the
+        // hand-tuned palettes below.
+        var monthlySpec = isMonthly ? EVO_MONTHLY_VARS[variable] : null;
+        var varLabel = monthlySpec ? monthlySpec.label
+                     : (variable === 'wind200') ? '200 mb wind'
                      : (variable === 'wind850') ? '850 mb wind'
                      : 'Shear';
+        var varUnits = monthlySpec ? monthlySpec.units : 'm/s';
         var colorscale, zmin, zmax;
-        if (modeIsAnom) {
+        if (modeIsAnom && isMonthly) {
+            // GC-ATLAS variables get a per-variable anomaly range so the
+            // diverging palette doesn't saturate (e.g., χ200 anomalies
+            // swing ±5×10⁶ m² s⁻¹; RH700 anomalies ±20%).
+            colorscale = 'RdBu_r';
+            var anomR = monthlySpec.anomZmax || 10;
+            zmin = -anomR; zmax = anomR;
+        } else if (modeIsAnom) {
             // Diverging around 0 — anomaly is symmetric.
             colorscale = 'RdBu_r';
             zmin = -10; zmax = 10;
+        } else if (isMonthly) {
+            colorscale = monthlySpec.colorscale;
+            zmin = monthlySpec.zmin;
+            zmax = monthlySpec.zmax;
         } else if (variable === 'wind200') {
             // 200-mb wind: ~5–80 m/s in the upper-level jet.
             colorscale = [
@@ -3416,8 +3677,8 @@
         }
 
         var colorbarTitle = modeIsAnom
-            ? (varLabel + ' anom (m/s)')
-            : (varLabel + ' (m/s)');
+            ? (varLabel + ' anom (' + varUnits + ')')
+            : (varLabel + ' (' + varUnits + ')');
         var hoverField = modeIsAnom ? 'anom' : varLabel.toLowerCase();
 
         var baseTrace = {
@@ -3430,7 +3691,7 @@
                 thickness: 10,
             },
             hovertemplate: 'lat %{y}°, lon %{x}°<br>'
-                + hoverField + ' %{z:.1f} m/s'
+                + hoverField + ' %{z:.2f} ' + varUnits
                 + '<extra></extra>',
         };
 
@@ -3593,7 +3854,9 @@
         var el = document.getElementById('seasonal-evo-map');
         if (!el || typeof Plotly === 'undefined') return;
         var variable = _evoState.variable || 'shear';
-        var loadLabel = (variable === 'wind200') ? '200 mb wind'
+        var monthlySpec = EVO_MONTHLY_VARS[variable];
+        var loadLabel = monthlySpec ? monthlySpec.label
+                      : (variable === 'wind200') ? '200 mb wind'
                       : (variable === 'wind850') ? '850 mb wind'
                       : 'shear';
         el.innerHTML = '<div class="seasonal-panel-stub" style="padding:80px;'
@@ -3615,7 +3878,17 @@
             }
             _evoState.frames = frames;
             var prep = [stormsP, tracksP, _evoLoadCoastlines()];
-            if (_evoState.mode === 'anomaly') prep.push(_evoFetchClimoForFrames(frames));
+            if (_evoState.mode === 'anomaly') {
+                // GC-ATLAS-backed variables fetch their climo from the
+                // same source; daily-archive variables (shear/wind200/
+                // wind850) keep using the era5_climo grid sidecars.
+                if (_evoIsMonthlyOnly(_evoState.variable)) {
+                    prep.push(_evoFetchGcAtlasClimoForFrames(frames)
+                        .then(function (c) { _evoState.climo = c; }));
+                } else {
+                    prep.push(_evoFetchClimoForFrames(frames));
+                }
+            }
             return Promise.all(prep).then(function () {
                 if (_evoState.year !== year) return;
                 _evoDrawPlotly(el, frames);
@@ -3859,28 +4132,47 @@
     function _evoPopulateYearPicker() {
         var sel = document.getElementById('seasonal-evo-year');
         if (!sel || sel._populated) return;
-        _evoLoadManifest().then(function (m) {
-            if (!m || !m.tiles) {
+        // Union of (a) era5_daily archive years and (b) GC-ATLAS per-year
+        // years so all variable choices can find data. The two catalogs
+        // overlap (1991-present today; GC-ATLAS extends back to 1961).
+        Promise.all([
+            _evoLoadManifest(),
+            _evoLoadGcAtlasPerYearManifest().catch(function () { return null; }),
+        ]).then(function (results) {
+            var dailyM = results[0];
+            var gcM    = results[1];
+            var years = {};
+            if (dailyM && dailyM.tiles) {
+                Object.keys(dailyM.tiles).forEach(function (k) {
+                    if (k.indexOf('shear/') === 0) {
+                        var y = parseInt(k.split('/')[1].split('_')[0], 10);
+                        if (Number.isFinite(y)) years[y] = true;
+                    }
+                });
+            }
+            if (gcM && gcM.groups && gcM.groups.single_levels
+                && gcM.groups.single_levels.mpi
+                && gcM.groups.single_levels.mpi.years) {
+                gcM.groups.single_levels.mpi.years.forEach(function (y) {
+                    if (Number.isFinite(y)) years[y] = true;
+                });
+            }
+            if (!Object.keys(years).length) {
                 sel.innerHTML = '<option>no archive</option>';
                 return;
             }
-            var years = {};
-            Object.keys(m.tiles).forEach(function (k) {
-                if (k.indexOf('shear/') === 0) {
-                    var y = parseInt(k.split('/')[1].split('_')[0], 10);
-                    if (Number.isFinite(y)) years[y] = true;
-                }
-            });
             var sorted = Object.keys(years).map(Number)
                                 .sort(function (a, b) { return b - a; });
             sel.innerHTML = sorted.map(function (y) {
                 return '<option value="' + y + '">' + y + '</option>';
             }).join('');
             sel._populated = true;
-            // Default: most-recent year.
             _evoState.year = sorted[0];
             sel.value = String(sorted[0]);
             _evoRender();
+        }).catch(function (e) {
+            console.warn('[seasonal-evo] year picker init failed:', e);
+            sel.innerHTML = '<option>no archive</option>';
         });
     }
 
@@ -3895,10 +4187,30 @@
                     // Year/var/resolution change needs fresh frame build.
                     // Resolution flip reshapes 12 → 365 frames (or back),
                     // so we go through the full _evoRender path. Variable
-                    // change also invalidates the climo cache because the
-                    // climo is keyed by variable (currently shear-only).
+                    // change also invalidates the climo cache (the climo
+                    // is variable-specific). GC-ATLAS monthly-only
+                    // variables snap the resolution selector to monthly
+                    // and disable the picker; flipping back to a daily-
+                    // archive variable restores the user's last choice.
                     _evoState.frames = null;
-                    if (key === 'variable') _evoState.climo = null;
+                    if (key === 'variable') {
+                        _evoState.climo = null;
+                        var resSel = document.getElementById('seasonal-evo-resolution');
+                        if (_evoIsMonthlyOnly(_evoState.variable)) {
+                            if (resSel) {
+                                _evoState._lastResolution = _evoState.resolution || 'monthly';
+                                resSel.value = 'monthly';
+                                resSel.disabled = true;
+                            }
+                            _evoState.resolution = 'monthly';
+                        } else if (resSel && resSel.disabled) {
+                            resSel.disabled = false;
+                            if (_evoState._lastResolution) {
+                                resSel.value = _evoState._lastResolution;
+                                _evoState.resolution = _evoState._lastResolution;
+                            }
+                        }
+                    }
                     _evoRender();
                 } else if (key === 'mode') {
                     _evoRerenderTracksOnly();

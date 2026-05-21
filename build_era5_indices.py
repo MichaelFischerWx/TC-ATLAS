@@ -88,6 +88,14 @@ FIELDS: dict[str, dict] = {
         "name": "tcwv", "level": None, "units_out": "kg m⁻²",
         "long_name": "Total column water vapor",
     },
+    "u200": {
+        "name": "u", "level": 200, "units_out": "m s⁻¹",
+        "long_name": "Zonal wind at 200 hPa",
+    },
+    "u850": {
+        "name": "u", "level": 850, "units_out": "m s⁻¹",
+        "long_name": "Zonal wind at 850 hPa",
+    },
     "dls": {
         "name": None, "level": None, "units_out": "m s⁻¹",
         "long_name": "Deep-layer shear (|⟨V₂₀₀⟩−⟨V₈₅₀⟩|)",

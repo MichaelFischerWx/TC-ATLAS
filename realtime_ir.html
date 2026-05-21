@@ -974,6 +974,8 @@
                                 <option value="chi200">Velocity potential (χ200)</option>
                                 <option value="vo850">Low-level vorticity (ζ850)</option>
                                 <option value="tcwv">Precipitable water (TCWV)</option>
+                                <option value="u200" title="Monthly-mean 200-hPa zonal wind from GC-ATLAS. Negative = easterlies (a TC-favorable upper-trop pattern in many basins), positive = westerlies.">Zonal wind at 200 hPa</option>
+                                <option value="u850" title="Monthly-mean 850-hPa zonal wind from GC-ATLAS. Negative = easterlies (trade flow), positive = westerlies.">Zonal wind at 850 hPa</option>
                             </optgroup>
                         </select>
                     </label>
@@ -1025,10 +1027,21 @@
                                 title="Calendar year to animate. Years populate from the era5_daily archive manifest."></select>
                     </label>
                     <label>Variable
-                        <select id="seasonal-evo-var" title="Field shown in the background. All three options carry wind barbs: shear shows the |V₂₀₀ − V₈₅₀| vector; the upper-/lower-tropospheric wind options show the level's actual wind.">
-                            <option value="shear" selected>Deep-layer shear (200-850)</option>
-                            <option value="wind200">Wind at 200 hPa</option>
-                            <option value="wind850">Wind at 850 hPa</option>
+                        <select id="seasonal-evo-var" title="Daily-resolution options (shear / wind200 / wind850) come from the era5_daily archive with wind barbs overlaid; monthly-only options come from the GC-ATLAS monthly tile catalog (same source as Panel B) and snap the resolution to monthly.">
+                            <optgroup label="Daily archive (shear + level winds, with barbs)">
+                                <option value="shear" selected>Deep-layer shear (200-850)</option>
+                                <option value="wind200">Wind at 200 hPa</option>
+                                <option value="wind850">Wind at 850 hPa</option>
+                            </optgroup>
+                            <optgroup label="Monthly ERA5 (GC-ATLAS, no barbs)">
+                                <option value="mpi">Max potential intensity (MPI)</option>
+                                <option value="rh700">Mid-level RH (700 hPa)</option>
+                                <option value="chi200">Velocity potential (χ200)</option>
+                                <option value="vo850">Low-level vorticity (ζ850)</option>
+                                <option value="tcwv">Precipitable water (TCWV)</option>
+                                <option value="u200_m">Zonal wind at 200 hPa (monthly)</option>
+                                <option value="u850_m">Zonal wind at 850 hPa (monthly)</option>
+                            </optgroup>
                         </select>
                     </label>
                     <label>Display
