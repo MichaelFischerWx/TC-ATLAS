@@ -1487,6 +1487,7 @@ def append_gfs_shear_regions(date_str: str, hour_str: str,
         log.info("  GCS_IR_CACHE_BUCKET not set; skipping shear append")
         return
     blob_name = "seasonal/shear_mtd_current_year.parquet"
+    from google.cloud import storage   # match the lazy-import pattern
     bucket = storage.Client().bucket(GCS_BUCKET)
     blob = bucket.blob(blob_name)
     if blob.exists():

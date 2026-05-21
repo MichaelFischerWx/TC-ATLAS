@@ -3642,11 +3642,12 @@
         v850: { group: 'pressure_levels', name: 'v', level: 850 },
     };
     function _evoFetchWindClimoForFrames(frames) {
-        // Returns Promise<{month → {u200, v200, u850, v850}}>. Cached on
-        // _evoState.windClimo keyed by month — different from
-        // _evoState.climo (which holds the |shear| magnitude climo).
-        if (_evoState.windClimo
-            && _evoState.windClimo.year_for === _evoState.year) {
+        // Returns Promise<{month → {u200, v200, u850, v850}}>. Cached
+        // on _evoState.windClimo keyed by month. Climatology is 1991-
+        // 2020 — year-independent, so the cache persists across year
+        // switches (only invalidated on variable change in the bind
+        // handler, since climo grid SHAPE depends on resolution).
+        if (_evoState.windClimo) {
             return Promise.resolve(_evoState.windClimo);
         }
         var monthsSeen = {};
@@ -3665,7 +3666,7 @@
             });
         });
         return Promise.all(pending).then(function (results) {
-            var byMonth = { year_for: _evoState.year };
+            var byMonth = {};
             results.forEach(function (r) {
                 if (!r || !r.grid) return;
                 byMonth[r.month] = byMonth[r.month] || {};
@@ -3695,7 +3696,6 @@
         return Promise.all(pending).then(function (results) {
             var byMonth = {};
             results.forEach(function (r) { if (r.clim) byMonth[r.month] = r.clim; });
-            byMonth.year_for = _evoState.year;
             return byMonth;
         });
     }
@@ -4034,23 +4034,57 @@
             c.style.height = h + 'px';
             _evoParticles.dpr = dpr;
             _evoParticles.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            // Resize already wipes the canvas. Setting backing-buffer
+            // dimensions resets pixel data to transparent, so margin
+            // pixels from the prior viewport (if any) are clean.
         }
     }
 
-    // Project (lat, lon) → canvas-pixel (x, y) using Plotly's live axis
-    // offsets. Returns null when the projection falls outside the data
-    // area (so the particle's trail segment can be skipped instead of
-    // drawn at a stale on-screen position when it has drifted off-map).
-    function _evoParticleProject(lat, lon) {
+    // Cached Plotly axis references. Refreshed by
+    // _evoParticleCacheProjection() on every plotly_relayout (and at
+    // particle start). Reading these out of Plotly's _fullLayout per
+    // RAF tick burns ~108K getElementById + dict-lookup calls/sec at
+    // 30 fps × 450 particles × 8 trail steps — caching drops that to
+    // O(1) per relayout. The l2p closure references the live Plotly
+    // axis state internally, so the cached function reflects the
+    // current zoom/pan automatically without further re-caching.
+    var _evoProj = {
+        xa: null, ya: null,
+        xOffset: 0, yOffset: 0,
+        l2pX: null, l2pY: null,
+    };
+    function _evoParticleCacheProjection() {
         var el = document.getElementById('seasonal-evo-map');
-        if (!el || !el._fullLayout) return null;
+        if (!el || !el._fullLayout) {
+            _evoProj.l2pX = null;
+            _evoProj.l2pY = null;
+            return;
+        }
         var xa = el._fullLayout.xaxis;
         var ya = el._fullLayout.yaxis;
-        if (!xa || !ya || !xa.l2p) return null;
-        var px = xa.l2p(lon);
-        var py = ya.l2p(lat);
+        if (!xa || !ya || !xa.l2p) {
+            _evoProj.l2pX = null;
+            _evoProj.l2pY = null;
+            return;
+        }
+        _evoProj.xa = xa;
+        _evoProj.ya = ya;
+        _evoProj.xOffset = xa._offset;
+        _evoProj.yOffset = ya._offset;
+        _evoProj.l2pX = xa.l2p;
+        _evoProj.l2pY = ya.l2p;
+    }
+    // Single shared result object so we don't allocate {x, y} per
+    // call (~3600 calls/tick × 30 fps = ~100K allocations/sec).
+    var _evoProjOut = { x: 0, y: 0 };
+    function _evoParticleProject(lat, lon) {
+        if (!_evoProj.l2pX) return null;
+        var px = _evoProj.l2pX.call(_evoProj.xa, lon);
+        var py = _evoProj.l2pY.call(_evoProj.ya, lat);
         if (!isFinite(px) || !isFinite(py)) return null;
-        return { x: xa._offset + px, y: ya._offset + py };
+        _evoProjOut.x = _evoProj.xOffset + px;
+        _evoProjOut.y = _evoProj.yOffset + py;
+        return _evoProjOut;
     }
 
     // Spawn / respawn one particle at a random valid location inside
@@ -4192,6 +4226,7 @@
         if (!p.ctx) return;
         _evoParticleResize();
         _evoParticleSyncField();
+        _evoParticleCacheProjection();
         if (!p.viewport || !p.uGrid) return;
         for (var i = 0; i < _EVO_PCL_N; i++) {
             _evoParticleSpawn(i, p.viewport);
@@ -4235,14 +4270,18 @@
         var canvasW = p.canvas.width / p.dpr;
         var canvasH = p.canvas.height / p.dpr;
         // Motion-trail erase: alpha-blend a translucent panel-bg over
-        // the previous frame so old trails fade out smoothly instead
-        // of staying as bright streaks. The bg color is intentionally
-        // transparent so the underlying Plotly heatmap shines through;
-        // the trail-decay rate is set by globalCompositeOperation +
-        // alpha together.
+        // the previous frame so old trails fade out smoothly. We fade
+        // only the data-area rect (where trails actually live) — the
+        // margin band gets a single full clear per resize via
+        // _evoParticleClearMargins. At 4K display × 30 fps that
+        // shaves ~250 MP/sec of unnecessary fill work.
+        var fadeRect = (_evoProj.l2pX)
+            ? { x: _evoProj.xOffset, y: _evoProj.yOffset,
+                w: _evoProj.xa._length, h: _evoProj.ya._length }
+            : { x: 0, y: 0, w: canvasW, h: canvasH };
         ctx.globalCompositeOperation = 'destination-out';
         ctx.fillStyle = 'rgba(0, 0, 0, ' + _EVO_PCL_ERASE_ALPHA + ')';
-        ctx.fillRect(0, 0, canvasW, canvasH);
+        ctx.fillRect(fadeRect.x, fadeRect.y, fadeRect.w, fadeRect.h);
         ctx.globalCompositeOperation = 'source-over';
 
         var viewport = p.viewport;
@@ -4252,21 +4291,14 @@
         var speedNorm = _EVO_PCL_SPEED_NORM_MS;
 
         // Clip to the Plotly data area so particles that drift past
-        // the axis edges (or that get projected into the figure's
-        // margin band by a stale viewport) don't draw on the outer
-        // strip. We pull the data-area rect from xa._offset /
-        // ya._offset; the erase pass above ran without the clip so
-        // old margin pixels still fade out cleanly.
-        var mapEl = document.getElementById('seasonal-evo-map');
-        var clipRect = null;
-        if (mapEl && mapEl._fullLayout) {
-            var xa = mapEl._fullLayout.xaxis;
-            var ya = mapEl._fullLayout.yaxis;
-            if (xa && ya && isFinite(xa._offset) && isFinite(ya._offset)) {
-                clipRect = { x: xa._offset, y: ya._offset,
-                             w: xa._length, h: ya._length };
-            }
-        }
+        // the axis edges don't draw on the margin. clipRect is
+        // refreshed by _evoParticleCacheProjection on plotly_relayout;
+        // reading it once per frame here is one struct lookup vs the
+        // ~3600 _fullLayout dives the original implementation had.
+        var clipRect = _evoProj.l2pX
+            ? { x: _evoProj.xOffset, y: _evoProj.yOffset,
+                w: _evoProj.xa._length, h: _evoProj.ya._length }
+            : null;
         if (clipRect) {
             ctx.save();
             ctx.beginPath();
@@ -4320,24 +4352,26 @@
 
             // Project + draw the trail. We walk backward from head
             // through TRAIL-1 prior positions, building short line
-            // segments. Per-particle opacity scales with speed +
-            // life-phase so calm + dying particles fade smoothly.
+            // segments. _evoParticleProject returns a shared output
+            // buffer to avoid per-call object allocation; save its
+            // x/y as primitives BEFORE the next call mutates the
+            // buffer (the trail loop would alias prev → pt otherwise).
+            // Skip drawing entirely while the particle is in its very
+            // first frames (age < 1) — the trail ring buffer is still
+            // pre-filled with the spawn point, so segments would
+            // collapse to zero length.
+            if (age < 1) continue;
             var headPt = _evoParticleProject(newLat, newLon);
             if (!headPt) continue;
-            var prev = headPt;
-            var ageNorm = Math.min(1.0, age / birthFade);
-            var deathNorm = Math.min(1.0, (life - age) / lifeFade);
-            var lifeAlpha = Math.min(ageNorm, deathNorm);
-            if (lifeAlpha <= 0) continue;
-            // Build the segment list — we'll stroke once at the end.
+            var prevX = headPt.x, prevY = headPt.y;
             for (var k = 1; k < _EVO_PCL_TRAIL; k++) {
                 var idx = (head - k + _EVO_PCL_TRAIL) % _EVO_PCL_TRAIL;
                 var pt = _evoParticleProject(p.trailLat[tBase + idx],
                                               p.trailLon[tBase + idx]);
                 if (!pt) break;
-                ctx.moveTo(prev.x, prev.y);
+                ctx.moveTo(prevX, prevY);
                 ctx.lineTo(pt.x, pt.y);
-                prev = pt;
+                prevX = pt.x; prevY = pt.y;
             }
         }
         ctx.stroke();
@@ -4755,10 +4789,12 @@
     }
 
     function _evoFetchClimoForFrames(frames) {
-        // Fetch climo for each unique calendar month present in `frames`
-        // (daily mode has 30+ frames per month — collapse before fetch).
-        // Cached per (year, mode) combo.
-        if (_evoState.climo && _evoState.climo.year_for === _evoState.year) {
+        // Fetch climo for each unique calendar month present in
+        // `frames`. The 1991-2020 climatology is year-independent, so
+        // the cache persists across year switches; the bind handler
+        // invalidates it on variable / resolution changes (those
+        // affect grid SHAPE).
+        if (_evoState.climo) {
             return Promise.resolve(_evoState.climo);
         }
         var monthsSeen = {};
@@ -4775,7 +4811,6 @@
                 if (r.clim) byMonth[r.month] = r.clim;
             });
             _evoState.climo = byMonth;
-            _evoState.climo.year_for = _evoState.year;
             return byMonth;
         });
     }
@@ -4800,8 +4835,17 @@
         var climU, climV;
         var variable = ctx.variable;
         if (variable === 'shear') {
-            climU = _evoSub(wc.u200, wc.u850);
-            climV = _evoSub(wc.v200, wc.v850);
+            // Memoize the (u200 − u850) and (v200 − v850) climo arrays
+            // per month — playback at 30 fps was burning ~21 MB/sec of
+            // Float32Array allocations re-doing the subtraction every
+            // frame swap. Stash on the wc object so the cache survives
+            // alongside the climo's per-month entry.
+            if (!wc._climU_shear) {
+                wc._climU_shear = _evoSub(wc.u200, wc.u850);
+                wc._climV_shear = _evoSub(wc.v200, wc.v850);
+            }
+            climU = wc._climU_shear;
+            climV = wc._climV_shear;
         } else if (variable === 'wind200') {
             climU = wc.u200; climV = wc.v200;
         } else if (variable === 'wind850') {
@@ -4852,6 +4896,10 @@
             _evoParticles.viewport = viewport;
             _evoParticles.gridCfg = _evoParticleCaptureGridCfg();
             _evoParticleResize();
+            // Refresh the cached Plotly axis offsets so the RAF tick's
+            // projection function picks up the new zoom/pan without
+            // doing per-particle _fullLayout dives.
+            _evoParticleCacheProjection();
         }
         // Update the sampling pill (lives next to the date readout).
         var pill = document.getElementById('seasonal-evo-sampling');
@@ -5331,20 +5379,28 @@
                 _evoState.climo = null;
                 _evoState.windClimo = null;
             }
-            if (_evoState.mode === 'anomaly' && !hd) {
+            // Wind variables (wind200, wind850) always render raw —
+            // _evoBuildPlotlyTraces sets `modeIsAnom = isAnom && !isWind`,
+            // so the climo would be fetched and immediately ignored.
+            // Skip the fetch entirely to save ~48 HTTP requests + the
+            // climo-grid decode pass per render.
+            var isWindVar = (_evoState.variable === 'wind200'
+                          || _evoState.variable === 'wind850');
+            if (_evoState.mode === 'anomaly' && !hd && !isWindVar) {
                 // GC-ATLAS-backed variables fetch their climo from the
-                // same source; daily-archive variables (shear/wind200/
-                // wind850) keep using the era5_climo grid sidecars.
+                // same source; daily-archive variables (shear / derived
+                // vorticity / divergence) keep using the era5_climo
+                // grid sidecars.
                 if (_evoIsMonthlyOnly(_evoState.variable)) {
                     prep.push(_evoFetchGcAtlasClimoForFrames(frames)
                         .then(function (c) { _evoState.climo = c; }));
                 } else {
                     prep.push(_evoFetchClimoForFrames(frames));
                     // Anomalous barbs: subtract climo u/v at 200/850 so
-                    // the glyph shows the *anomalous* shear (or level
-                    // wind) vector instead of the raw vector — which in
-                    // anomaly mode would be miscalibrated against the
-                    // heatmap's "anomaly of magnitude" signal.
+                    // the glyph shows the *anomalous* shear vector
+                    // instead of the raw vector — which in anomaly mode
+                    // would be miscalibrated against the heatmap's
+                    // "anomaly of magnitude" signal.
                     prep.push(_evoFetchWindClimoForFrames(frames));
                 }
             }
@@ -5863,6 +5919,14 @@
         // res, basin) cache for the new resolution if available.
         _evoState.climo = null;
         _evoState.windClimo = null;
+        // Cancel any pending 80 ms overlay refresh — _evoRender's
+        // newPlot will fully replace the figure's overlay state, so
+        // the queued restyle would just be wasted work overwritten
+        // moments later.
+        if (_evoState._overlayDebounce) {
+            clearTimeout(_evoState._overlayDebounce);
+            _evoState._overlayDebounce = null;
+        }
         _evoRender();
     }
 
@@ -6076,6 +6140,12 @@
             Plotly.animate(el, [name], {
                 mode: 'immediate', transition: { duration: 0 },
                 frame: { duration: 0, redraw: true },
+            }).then(function () {
+                // Plotly's frame swap doesn't fire plotly_sliderchange
+                // for programmatic animate calls (arrow keys / step
+                // buttons), so barbs + particles would desync from
+                // the displayed frame. Manually re-sync.
+                _evoUpdateOverlays(el);
             });
         }
         function currentFrameIndex() {
@@ -6143,10 +6213,43 @@
             // _evoParticleStop from the toggle click handler below.
             Plotly.restyle(el, { visible: false }, [9, 10]);
             // Re-flow annotations: storm names follow the tracks toggle.
-            // Pull labels off the CURRENT frame's annotations if possible;
-            // otherwise leave them — the next frame swap will reapply.
+            // Off → clear. On → rebuild from the current frame so the
+            // labels reappear immediately (instead of waiting for the
+            // next frame swap, which on a paused slider never comes).
+            // Slider's `active` is the authoritative current-frame
+            // index — _evoState.currentFrameIdx can lag behind because
+            // Plotly.animate doesn't always fire plotly_animatingframe
+            // for programmatic calls (pre-existing quirk).
             if (!_evoState.showTracks) {
                 Plotly.relayout(el, { annotations: [] });
+            } else if (_evoState.frames) {
+                var sliderActive = el._fullLayout
+                    && el._fullLayout.sliders
+                    && el._fullLayout.sliders[0]
+                    && el._fullLayout.sliders[0].active;
+                var fIdx = (typeof sliderActive === 'number')
+                    ? sliderActive
+                    : (_evoState.currentFrameIdx || 0);
+                var f = _evoState.frames[fIdx];
+                if (f) {
+                    var tracks = _evoBuildTracksForFrame(f);
+                    var anns = (tracks.labels || []).map(function (l) {
+                        return {
+                            x: l.x, y: l.y, xref: 'x', yref: 'y',
+                            text: l.name + (l.cat ? ' · ' + l.cat : ''),
+                            showarrow: false,
+                            xanchor: 'left', yanchor: 'bottom',
+                            xshift: 6, yshift: 4,
+                            font: { size: 10, color: '#0f172a',
+                                    family: 'DM Sans, system-ui, sans-serif',
+                                    weight: 600 },
+                            bgcolor: 'rgba(255,255,255,0.82)',
+                            bordercolor: 'rgba(15,23,42,0.4)',
+                            borderwidth: 0.5, borderpad: 2,
+                        };
+                    });
+                    Plotly.relayout(el, { annotations: anns });
+                }
             }
             // Update the button active classes.
             ['tracks','barbs','streams'].forEach(function (k) {
