@@ -6121,14 +6121,29 @@
         // res, basin) cache for the new resolution if available.
         _evoState.climo = null;
         _evoState.windClimo = null;
-        // Preserve the user's zoom across the resolution swap.
-        // Without this, _evoDrawPlotly would snap back to the basin's
-        // default viewport (e.g. NA = [-100..20, 0..50]) every time
-        // auto-HD fires — defeating the "I just zoomed in" intent.
+        // Preserve the user's zoom AND the currently-viewed frame
+        // across the resolution swap. Without these, _evoDrawPlotly
+        // snaps back to (basin default viewport, Jan 1) every time
+        // auto-HD fires — defeating both "I just zoomed in" and
+        // "I'm looking at Aug 28 of the season" intents.
         _evoState._pendingViewport = {
             x: viewport.x.slice(),
             y: viewport.y.slice(),
         };
+        // Read the live slider position as the authoritative current
+        // frame — _evoState.currentFrameIdx can lag behind for
+        // programmatic Plotly.animate calls (pre-existing quirk).
+        var sliderActive = el._fullLayout
+            && el._fullLayout.sliders
+            && el._fullLayout.sliders[0]
+            && el._fullLayout.sliders[0].active;
+        var curIdx = (typeof sliderActive === 'number')
+            ? sliderActive
+            : (_evoState.currentFrameIdx || 0);
+        var curFrame = _evoState.frames && _evoState.frames[curIdx];
+        if (curFrame && typeof curFrame.epochDay === 'number') {
+            _evoState._pendingFrameEpoch = curFrame.epochDay;
+        }
         // Cancel any pending 80 ms overlay refresh — _evoRender's
         // newPlot will fully replace the figure's overlay state, so
         // the queued restyle would just be wasted work overwritten
