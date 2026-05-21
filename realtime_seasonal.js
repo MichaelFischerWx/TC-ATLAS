@@ -5636,6 +5636,19 @@
                         _evoMaybePromoteResolution(el);
                     }, 600);
                 });
+                // Particle canvas sits above Plotly's SVG (z-index: 4)
+                // so its trails overdraw the hover tooltip. Fade the
+                // canvas while a hover is active and restore on leave
+                // — the tooltip becomes immediately readable, and the
+                // particle animation snaps back when the user moves on.
+                el.on('plotly_hover', function () {
+                    var c = _evoParticles && _evoParticles.canvas;
+                    if (c) c.classList.add('hover-fade');
+                });
+                el.on('plotly_unhover', function () {
+                    var c = _evoParticles && _evoParticles.canvas;
+                    if (c) c.classList.remove('hover-fade');
+                });
             }
         });
     }

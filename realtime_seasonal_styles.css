@@ -158,6 +158,13 @@
     display: none;
 }
 .seasonal-evo-particles.is-active { display: block; }
+/* Drop particle opacity while the user is hovering a data point so
+   Plotly's hover tooltip (rendered inside the SVG, beneath the
+   higher-z-index canvas) is readable instead of stippled with
+   trail strokes. ~150ms transition smooths the fade so the
+   animation doesn't jump abruptly. */
+.seasonal-evo-particles.hover-fade { opacity: 0.18; }
+.seasonal-evo-particles { transition: opacity 0.15s ease-out; }
 .seasonal-evo-slider-row {
     display: flex;
     align-items: center;
