@@ -5151,13 +5151,21 @@
             : (varLabel + ' (' + varUnits + ')');
         var hoverField = modeIsAnom ? 'anom' : varLabel.toLowerCase();
 
+        // Theme-aware text color for the colorbar — Plotly's
+        // layout.font.color doesn't cascade into colorbar.title.font,
+        // so we pin it explicitly. Same pattern used on the axis
+        // titles in _evoDrawPlotly.
+        var _cbDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var _cbColor = _cbDark ? '#dfe6f0' : '#1f2937';
+
         var baseTrace = {
             type: 'heatmap',
             x: EVO_LONS, y: EVO_LATS, z: frameZ(frames[0]),
             colorscale: colorscale, zmin: zmin, zmax: zmax,
             zsmooth: 'best',
             colorbar: {
-                title: { text: colorbarTitle },
+                title: { text: colorbarTitle, font: { color: _cbColor } },
+                tickfont: { color: _cbColor },
                 thickness: 10,
             },
             hovertemplate: 'lat %{y}°, lon %{x}°<br>'
@@ -5623,6 +5631,18 @@
             || { x: _evoViewForBasin(_evoState.basin).x.slice(),
                  y: _evoViewForBasin(_evoState.basin).y.slice() };
         _evoState._pendingViewport = null;
+        // Theme-aware text color. Plotly's font.color on layout does NOT
+        // cascade to nested font specs that override OTHER properties
+        // (e.g., title.font = {size: 10} drops the inherited color and
+        // falls back to Plotly's default #444 — black on dark bg). So
+        // we explicitly pin the same color on every nested font.
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var textColor = isDark ? '#dfe6f0' : '#1f2937';
+        // Tick / line / zeroline colors. Axis ticks inherit from the
+        // layout font.color via Plotly's defaults, but the axis LINE
+        // color doesn't — leave it transparent (no axis line drawn,
+        // map sits in a borderless frame) to keep dark + light modes
+        // looking equivalent.
         var layout = {
             margin: { l: 50, r: 70, t: 10, b: 30 },
             paper_bgcolor: 'rgba(0,0,0,0)',
@@ -5631,15 +5651,18 @@
             // isn't horizontally squashed by the wrapping div.
             xaxis: { range: initialView.x.slice(),
                      showgrid: false,
-                     title: { text: 'Longitude', font: { size: 10 } },
+                     title: { text: 'Longitude',
+                              font: { size: 10, color: textColor } },
+                     tickfont: { color: textColor },
                      scaleanchor: 'y', scaleratio: 1, constrain: 'domain' },
             yaxis: { range: initialView.y.slice(),
                      showgrid: false,
-                     title: { text: 'Latitude', font: { size: 10 } },
+                     title: { text: 'Latitude',
+                              font: { size: 10, color: textColor } },
+                     tickfont: { color: textColor },
                      constrain: 'domain' },
             font: { family: 'DM Sans, system-ui, sans-serif', size: 11,
-                    color: (document.documentElement.getAttribute('data-theme')
-                            === 'dark') ? '#dfe6f0' : '#1f2937' },
+                    color: textColor },
             sliders: [{
                 pad: { t: 30 }, len: 0.85, x: 0.05, y: -0.05,
                 currentvalue: { visible: false },
