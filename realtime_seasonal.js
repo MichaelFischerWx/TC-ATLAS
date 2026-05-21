@@ -2737,7 +2737,20 @@
     // against SHIPS climos, gsutil-rename era5_daily/ → era5_daily_legacy/
     // and era5_daily_1deg/ → era5_daily/ to cut over atomically (no JS
     // change needed at swap time).
-    var EVO_ARCHIVE_BASE = 'https://storage.googleapis.com/tc-atlas-ir-cache/era5_daily';
+    // Two archives Panel C may read from per tile:
+    //   1. era5_daily_1deg/ — the NEW 00Z × 0.25°-source decimated 1° tiles
+    //      from build_era5_daily_archive.py (project_era5_archive_00z).
+    //   2. era5_daily/     — the LEGACY 4×-daily-mean 1° tiles. Used as
+    //      a fallback while the 00Z backfill is in flight, so months
+    //      that haven't been re-fetched yet still render.
+    // _evoFetchFieldTile prefers (1) and falls back to (2) per (field,
+    // year, month). Once the 00Z backfill completes and the rename
+    // swap is performed (era5_daily → era5_daily_legacy, era5_daily_1deg
+    // → era5_daily), both URLs collapse onto the same prefix and the
+    // fallback is a no-op.
+    var EVO_ARCHIVE_BASE_NEW    = 'https://storage.googleapis.com/tc-atlas-ir-cache/era5_daily_1deg';
+    var EVO_ARCHIVE_BASE_LEGACY = 'https://storage.googleapis.com/tc-atlas-ir-cache/era5_daily';
+    var EVO_ARCHIVE_BASE = EVO_ARCHIVE_BASE_LEGACY;   // legacy alias kept for the existing module
     var EVO_CLIMO_BASE   = 'https://storage.googleapis.com/tc-atlas-ir-cache/era5_climo';
     var EVO_GRID_NY = 121;    // 60S..60N at 1° (matches archive)
     var EVO_GRID_NX = 360;    // -180..179 at 1°
@@ -3018,14 +3031,44 @@
         return Math.max(4, Math.min(12, 4 + (w - 30) * 0.08));
     }
 
+    // Load BOTH manifests (new 00Z 1° and legacy 4×daily). The two are
+    // merged into _evoState.manifest with a per-tile `source` field
+    // pointing at whichever archive base the consumer should hit:
+    //   manifest.tiles[key] = { vmin, vmax, n_days, ..., source: 'new'|'legacy' }
+    // _evoState.manifest_new and .manifest_legacy keep the raw versions
+    // for downstream consumers (the year picker unions both).
     function _evoLoadManifest() {
         if (_evoState.manifest) return Promise.resolve(_evoState.manifest);
         if (_evoState.manifestPromise) return _evoState.manifestPromise;
-        _evoState.manifestPromise = fetch(EVO_ARCHIVE_BASE + '/manifest.json',
-                                          { cache: 'no-cache' })
-            .then(function (r) { return r.ok ? r.json() : null; })
-            .then(function (j) { _evoState.manifest = j; return j; })
-            .catch(function () { return null; });
+        function fetchOne(base) {
+            return fetch(base + '/manifest.json', { cache: 'no-cache' })
+                .then(function (r) { return r.ok ? r.json() : null; })
+                .catch(function () { return null; });
+        }
+        _evoState.manifestPromise = Promise.all([
+            fetchOne(EVO_ARCHIVE_BASE_NEW),
+            fetchOne(EVO_ARCHIVE_BASE_LEGACY),
+        ]).then(function (results) {
+            var mNew = results[0], mLegacy = results[1];
+            _evoState.manifest_new    = mNew;
+            _evoState.manifest_legacy = mLegacy;
+            // Merge tiles: new wins, legacy fills the gaps.
+            var merged = { metadata: (mNew && mNew.metadata)
+                                  || (mLegacy && mLegacy.metadata) || {},
+                           tiles: {} };
+            var legacyTiles = (mLegacy && mLegacy.tiles) || {};
+            Object.keys(legacyTiles).forEach(function (k) {
+                merged.tiles[k] = Object.assign({}, legacyTiles[k],
+                                                { source: 'legacy' });
+            });
+            var newTiles = (mNew && mNew.tiles) || {};
+            Object.keys(newTiles).forEach(function (k) {
+                merged.tiles[k] = Object.assign({}, newTiles[k],
+                                                { source: 'new' });
+            });
+            _evoState.manifest = merged;
+            return merged;
+        });
         return _evoState.manifestPromise;
     }
 
@@ -3055,22 +3098,31 @@
     }
 
     // Generic tile fetcher for any field in era5_daily — u200, v200,
-    // u850, v850, shear. Returns the decoded daily values + metadata.
+    // u850, v850, shear. Picks the new 00Z archive when that tile is
+    // present in the merged manifest, otherwise falls back to legacy.
     function _evoFetchFieldTile(field, year, month) {
         var monthStr = (month < 10 ? '0' : '') + month;
-        var url = EVO_ARCHIVE_BASE + '/' + field + '/' + year + '_' + monthStr + '.bin.gz';
+        var key = field + '/' + year + '_' + monthStr;
+        var meta = _evoState.manifest && _evoState.manifest.tiles[key];
+        if (!meta) {
+            return Promise.reject(new Error('no manifest entry for ' + key));
+        }
+        var base = meta.source === 'new'
+            ? EVO_ARCHIVE_BASE_NEW
+            : EVO_ARCHIVE_BASE_LEGACY;
+        var url = base + '/' + field + '/' + year + '_' + monthStr + '.bin.gz';
         return fetch(url)
             .then(function (r) {
-                if (!r.ok) throw new Error('HTTP ' + r.status);
+                if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + url);
                 var decompressed = r.body.pipeThrough(new DecompressionStream('gzip'));
                 return new Response(decompressed).arrayBuffer();
             })
             .then(function (buf) {
-                var meta = _evoState.manifest.tiles[field + '/' + year + '_' + monthStr];
-                if (!meta) throw new Error('no manifest entry for ' + field);
                 var values = _evoDecodeTile(buf, meta);
                 var nDays = meta.n_days || (values.length / (EVO_GRID_NY * EVO_GRID_NX));
-                return { values: values, n_days: nDays, valid_dates: meta.valid_dates };
+                return { values: values, n_days: nDays,
+                         valid_dates: meta.valid_dates,
+                         source: meta.source };
             });
     }
     function _evoFetchShearTile(year, month) {
@@ -3642,6 +3694,79 @@
         return { u200: 'u200', v200: 'v200', u850: 'u850', v850: 'v850', combine: 'shear' };
     }
 
+    // ── Vorticity & divergence (daily, derived from u/v) ─────────────
+    // Computed on-the-fly in the browser via centered differences on
+    // the 1° lat-lon grid. We sit one cell in from each edge and wrap
+    // longitudes. Spherical-earth scaling: x = a·cos(φ)·λ, y = a·φ.
+    // Display units: ζ → 10⁻⁵ s⁻¹ (matches Panel B's vo850 monthly
+    // product); δ → 10⁻⁶ s⁻¹.
+    var _EVO_EARTH_RADIUS_M = 6.371e6;
+    var _EVO_DEG_TO_RAD = Math.PI / 180;
+    function _evoComputeVorticity(uGrid, vGrid) {
+        var out = new Array(EVO_GRID_NY);
+        for (var i = 0; i < EVO_GRID_NY; i++) {
+            out[i] = new Array(EVO_GRID_NX).fill(null);
+        }
+        var dy = _EVO_EARTH_RADIUS_M * _EVO_DEG_TO_RAD;   // metres per 1° lat
+        for (var i2 = 1; i2 < EVO_GRID_NY - 1; i2++) {
+            var lat = EVO_LATS[i2];
+            var cosLat = Math.cos(lat * _EVO_DEG_TO_RAD);
+            if (Math.abs(cosLat) < 1e-3) continue;
+            var dx = _EVO_EARTH_RADIUS_M * _EVO_DEG_TO_RAD * cosLat;
+            for (var j = 0; j < EVO_GRID_NX; j++) {
+                var jE = (j + 1) % EVO_GRID_NX;
+                var jW = (j - 1 + EVO_GRID_NX) % EVO_GRID_NX;
+                var vE = vGrid[i2][jE], vW = vGrid[i2][jW];
+                // i2-1 is one row north (EVO_LATS descending), i2+1 one row south.
+                var uN = uGrid[i2 - 1][j], uS = uGrid[i2 + 1][j];
+                if (vE == null || vW == null || uN == null || uS == null
+                    || isNaN(vE) || isNaN(vW) || isNaN(uN) || isNaN(uS)) continue;
+                var dvdx = (vE - vW) / (2 * dx);
+                var dudy = (uN - uS) / (2 * dy);   // (north - south) over 2Δy
+                out[i2][j] = (dvdx - dudy) * 1e5;
+            }
+        }
+        return out;
+    }
+    function _evoComputeDivergence(uGrid, vGrid) {
+        var out = new Array(EVO_GRID_NY);
+        for (var i = 0; i < EVO_GRID_NY; i++) {
+            out[i] = new Array(EVO_GRID_NX).fill(null);
+        }
+        var dy = _EVO_EARTH_RADIUS_M * _EVO_DEG_TO_RAD;
+        for (var i2 = 1; i2 < EVO_GRID_NY - 1; i2++) {
+            var lat = EVO_LATS[i2];
+            var cosLat = Math.cos(lat * _EVO_DEG_TO_RAD);
+            if (Math.abs(cosLat) < 1e-3) continue;
+            var dx = _EVO_EARTH_RADIUS_M * _EVO_DEG_TO_RAD * cosLat;
+            for (var j = 0; j < EVO_GRID_NX; j++) {
+                var jE = (j + 1) % EVO_GRID_NX;
+                var jW = (j - 1 + EVO_GRID_NX) % EVO_GRID_NX;
+                var uE = uGrid[i2][jE], uW = uGrid[i2][jW];
+                var vN = vGrid[i2 - 1][j], vS = vGrid[i2 + 1][j];
+                if (uE == null || uW == null || vN == null || vS == null
+                    || isNaN(uE) || isNaN(uW) || isNaN(vN) || isNaN(vS)) continue;
+                var dudx = (uE - uW) / (2 * dx);
+                var dvdy = (vN - vS) / (2 * dy);
+                out[i2][j] = (dudx + dvdy) * 1e6;
+            }
+        }
+        return out;
+    }
+    // Variables that derive z from u/v at a single level via the
+    // helpers above. Each entry maps the picker value → which level's
+    // wind tiles to fetch and which derivation to apply.
+    var EVO_DERIVED_VARS = {
+        vo200_d:  { level: 200, kind: 'vorticity'  },
+        vo850_d:  { level: 850, kind: 'vorticity'  },
+        div200_d: { level: 200, kind: 'divergence' },
+        div850_d: { level: 850, kind: 'divergence' },
+    };
+    function _evoIsDerivedVar(variable) {
+        return Object.prototype.hasOwnProperty.call(
+            EVO_DERIVED_VARS, variable || '');
+    }
+
     function _evoFetchYear(year) {
         // Returns Promise<frames[]>. Frame shape:
         //   { month, day?, epochDay, label, z[NY][NX], u[NY][NX], v[NY][NX] }
@@ -3661,9 +3786,20 @@
         return _evoLoadManifest().then(function (m) {
             if (!m) throw new Error('archive manifest unavailable');
             // Decide which raw u/v tiles to pull per month.
-            var fields = (variable === 'wind200') ? ['u200', 'v200']
-                       : (variable === 'wind850') ? ['u850', 'v850']
-                       : ['u200', 'v200', 'u850', 'v850'];
+            // vo*_d / div*_d use the level's u + v tiles only.
+            var derivedSpec = EVO_DERIVED_VARS[variable];
+            var fields;
+            if (derivedSpec) {
+                fields = (derivedSpec.level === 200)
+                    ? ['u200', 'v200']
+                    : ['u850', 'v850'];
+            } else if (variable === 'wind200') {
+                fields = ['u200', 'v200'];
+            } else if (variable === 'wind850') {
+                fields = ['u850', 'v850'];
+            } else {
+                fields = ['u200', 'v200', 'u850', 'v850'];
+            }
             var monthPromises = [];
             for (var month = 1; month <= 12; month++) {
                 (function (mo) {
@@ -3692,7 +3828,15 @@
                             : [null];   // monthly mode = single mean
                         indices.forEach(function (dIdx) {
                             var uGrid, vGrid;
-                            if (variable === 'wind200' || variable === 'wind850') {
+                            if (derivedSpec) {
+                                // ζ/δ variables: pull the level u, v; the
+                                // u/v stay on the frame as the level wind
+                                // (so barbs read as that level's wind);
+                                // z = vorticity or divergence.
+                                var lvl = derivedSpec.level;
+                                uGrid = extractGrid(byField['u' + lvl], dIdx);
+                                vGrid = extractGrid(byField['v' + lvl], dIdx);
+                            } else if (variable === 'wind200' || variable === 'wind850') {
                                 var fU = (variable === 'wind200') ? 'u200' : 'u850';
                                 var fV = (variable === 'wind200') ? 'v200' : 'v850';
                                 uGrid = extractGrid(byField[fU], dIdx);
@@ -3706,7 +3850,14 @@
                                 uGrid = _evoSub(u200, u850);
                                 vGrid = _evoSub(v200, v850);
                             }
-                            var zGrid = _evoMag(uGrid, vGrid);
+                            var zGrid;
+                            if (derivedSpec) {
+                                zGrid = (derivedSpec.kind === 'vorticity')
+                                    ? _evoComputeVorticity(uGrid, vGrid)
+                                    : _evoComputeDivergence(uGrid, vGrid);
+                            } else {
+                                zGrid = _evoMag(uGrid, vGrid);
+                            }
                             var dayNo = dIdx == null ? null : (dIdx + 1);
                             var epochDay = dayNo == null
                                 ? Date.UTC(year, mo, 0) / 86400000
@@ -3780,9 +3931,31 @@
         // anchor against the monthly climo for their calendar month
         // (we don't have day-of-year ERA5 climo yet — see PLAN doc).
         // Raw mode: identity.
+        // For derived (ζ/δ) variables, the climo grid is computed
+        // on-demand from windClimo[month].{uLLL, vLLL} using the same
+        // helper that built f.z — cached per month for cheapness.
+        var derivedClimo = {};
+        function _derivedClimoFor(month) {
+            if (!derivedSpec || !_evoState.windClimo) return null;
+            if (derivedClimo[month]) return derivedClimo[month];
+            var wc = _evoState.windClimo[month];
+            if (!wc) return null;
+            var lvl = derivedSpec.level;
+            var uClim = wc['u' + lvl], vClim = wc['v' + lvl];
+            if (!uClim || !vClim) return null;
+            derivedClimo[month] = (derivedSpec.kind === 'vorticity')
+                ? _evoComputeVorticity(uClim, vClim)
+                : _evoComputeDivergence(uClim, vClim);
+            return derivedClimo[month];
+        }
         function frameZ(f) {
             if (!modeIsAnom) return f.z;
-            var clim = climo && climo[f.month];
+            var clim;
+            if (derivedSpec) {
+                clim = _derivedClimoFor(f.month);
+            } else {
+                clim = climo && climo[f.month];
+            }
             if (!clim) return f.z;   // fallback to raw if climo missing
             var ny = f.z.length, nx = f.z[0].length;
             var out = new Array(ny);
@@ -3803,11 +3976,18 @@
         // EVO_MONTHLY_VARS spec; daily-archive shear/wind speeds use the
         // hand-tuned palettes below.
         var monthlySpec = isMonthly ? EVO_MONTHLY_VARS[variable] : null;
+        var derivedSpec = EVO_DERIVED_VARS[variable];
         var varLabel = monthlySpec ? monthlySpec.label
+                     : derivedSpec ? (
+                         (derivedSpec.kind === 'vorticity'
+                            ? 'ζ at ' : 'δ at ') + derivedSpec.level + ' hPa')
                      : (variable === 'wind200') ? '200 mb wind'
                      : (variable === 'wind850') ? '850 mb wind'
                      : 'Shear';
-        var varUnits = monthlySpec ? monthlySpec.units : 'm/s';
+        var varUnits = monthlySpec ? monthlySpec.units
+                     : derivedSpec ? (derivedSpec.kind === 'vorticity'
+                                        ? '10⁻⁵ s⁻¹' : '10⁻⁶ s⁻¹')
+                     : 'm/s';
         var colorscale, zmin, zmax;
         if (modeIsAnom && isMonthly) {
             // GC-ATLAS variables get a per-variable anomaly range so the
@@ -3816,6 +3996,24 @@
             colorscale = 'RdBu_r';
             var anomR = monthlySpec.anomZmax || 10;
             zmin = -anomR; zmax = anomR;
+        } else if (derivedSpec) {
+            // ζ/δ: always diverging around 0 (raw and anomaly both
+            // signed). Pick a saturation that captures synoptic-scale
+            // features without saturating in the deep tropics.
+            colorscale = 'RdBu_r';
+            if (derivedSpec.kind === 'vorticity') {
+                // Typical synoptic ζ scale: ±5 × 10⁻⁵ s⁻¹ for the
+                // upper trop, ±2 × 10⁻⁵ s⁻¹ for the boundary layer
+                // (low-level cyclonic eddies show up nicely there).
+                var z = derivedSpec.level === 200 ? 5 : 3;
+                zmin = -z; zmax = z;
+            } else {
+                // Divergence: roughly ±5 × 10⁻⁶ s⁻¹ for the upper trop
+                // (where Hadley/Walker outflow lives), ±2 × 10⁻⁶ s⁻¹ at
+                // 850 (boundary-layer convergence into ITCZ).
+                var z2 = derivedSpec.level === 200 ? 5 : 2;
+                zmin = -z2; zmax = z2;
+            }
         } else if (modeIsAnom) {
             // Diverging around 0 — anomaly is symmetric.
             colorscale = 'RdBu_r';
@@ -3895,6 +4093,13 @@
                 climU = wc.u200; climV = wc.v200;
             } else if (variable === 'wind850') {
                 climU = wc.u850; climV = wc.v850;
+            } else if (derivedSpec) {
+                // ζ/δ variables: barbs show the LEVEL wind anomaly
+                // (V_level − V_level_climo), since the heatmap is the
+                // anomalous vorticity/divergence at that level.
+                var lvl = derivedSpec.level;
+                climU = wc['u' + lvl]; climV = wc['v' + lvl];
+                if (!climU || !climV) return { u: f.u, v: f.v };
             } else {
                 return { u: f.u, v: f.v };
             }

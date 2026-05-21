@@ -1032,6 +1032,10 @@
                                 <option value="shear" selected>Deep-layer shear (200-850)</option>
                                 <option value="wind200">Wind at 200 hPa</option>
                                 <option value="wind850">Wind at 850 hPa</option>
+                                <option value="vo200_d" title="Relative vorticity at 200 hPa, derived from the daily archive's u, v tiles via centered differences (∂v/∂x − ∂u/∂y). Anomaly mode subtracts the climo ζ computed the same way.">Vorticity at 200 hPa (ζ200)</option>
+                                <option value="vo850_d" title="Relative vorticity at 850 hPa (lower-tropospheric cyclonic eddies, monsoon trough). Derived from daily u, v tiles.">Vorticity at 850 hPa (ζ850)</option>
+                                <option value="div200_d" title="Divergence at 200 hPa (upper-tropospheric outflow). Derived from daily u, v tiles via ∂u/∂x + ∂v/∂y.">Divergence at 200 hPa (δ200)</option>
+                                <option value="div850_d" title="Divergence at 850 hPa (boundary-layer convergence, ITCZ). Derived from daily u, v tiles.">Divergence at 850 hPa (δ850)</option>
                             </optgroup>
                             <optgroup label="Monthly ERA5 (GC-ATLAS, no barbs)">
                                 <option value="sst" title="ERA5 monthly-mean SST in °C (the IFS-blended analysis SST). Daily-resolution NOAA OISST gridded animation requires a separate archive — planned, not yet built.">Sea surface temperature (SST)</option>
