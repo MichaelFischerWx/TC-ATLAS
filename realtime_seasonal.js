@@ -4671,7 +4671,7 @@
             EVO_DERIVED_VARS, variable || '');
     }
 
-    function _evoFetchYear(year) {
+    function _evoFetchYear(year, opts) {
         // Returns Promise<frames[]>. Frame shape:
         //   { month, day?, epochDay, label, z[NY][NX], u[NY][NX], v[NY][NX] }
         // z is the colormap background; u/v drive the barb overlay (null
@@ -4682,6 +4682,17 @@
         //   wind850 → z = |V850|,        u/v = V850          (daily archive)
         //   mpi / rh700 / chi200 / vo850 / tcwv / u200_m / u850_m
         //                                                    (GC-ATLAS monthly)
+        //
+        // Optional progressive loading: opts = { priorityMonth, onPriorityReady }.
+        // If priorityMonth is set, that month's tiles are fetched FIRST
+        // (sequentially) before the remaining months kick off in parallel,
+        // and onPriorityReady(slices) fires as soon as the priority month's
+        // slices are built. This lets the caller paint the user's
+        // currently-viewed month immediately on auto-HD promotion instead
+        // of waiting for the full ~12-month decode.
+        opts = opts || {};
+        var priorityMonth   = opts.priorityMonth;
+        var onPriorityReady = opts.onPriorityReady;
         var resolution = _evoState.resolution || 'monthly';
         var variable   = _evoState.variable || 'shear';
         if (_evoIsMonthlyOnly(variable)) {
@@ -4704,87 +4715,145 @@
             } else {
                 fields = ['u200', 'v200', 'u850', 'v850'];
             }
-            var monthPromises = [];
-            for (var month = 1; month <= 12; month++) {
-                (function (mo) {
-                    var fieldFetches = fields.map(function (f) {
-                        return _evoFetchFieldTile(f, year, mo)
-                            .then(function (tile) { return { field: f, tile: tile }; })
-                            .catch(function () { return null; });
-                    });
-                    monthPromises.push(Promise.all(fieldFetches).then(function (results) {
-                        // Bail if any required tile is missing for this month.
-                        var byField = {};
-                        for (var k = 0; k < results.length; k++) {
-                            if (!results[k]) return [];
-                            byField[results[k].field] = results[k].tile;
+            // Per-month fetch + slice builder, factored into a helper so
+            // the priority-month path can call it first and fire the
+            // onPriorityReady callback for progressive rendering.
+            function fetchMonth(mo) {
+                var fieldFetches = fields.map(function (f) {
+                    return _evoFetchFieldTile(f, year, mo)
+                        .then(function (tile) { return { field: f, tile: tile }; })
+                        .catch(function () { return null; });
+                });
+                return Promise.all(fieldFetches).then(function (results) {
+                    // Bail if any required tile is missing for this month.
+                    var byField = {};
+                    for (var k = 0; k < results.length; k++) {
+                        if (!results[k]) return [];
+                        byField[results[k].field] = results[k].tile;
+                    }
+                    // Build per-day or per-month grids of u, v.
+                    var nDays = byField[fields[0]].n_days;
+                    var slices = [];   // [{ dayIdx?, monthMean?, uGrid, vGrid, zGrid }, ...]
+                    function extractGrid(tile, dayIdx) {
+                        return (dayIdx == null)
+                            ? _evoMonthlyMean(tile)
+                            : _evoExtractDayGrid(tile, dayIdx);
+                    }
+                    var indices = (resolution === 'daily')
+                        ? Array.from({ length: nDays }, function (_, i) { return i; })
+                        : [null];   // monthly mode = single mean
+                    indices.forEach(function (dIdx) {
+                        var uGrid, vGrid;
+                        if (derivedSpec) {
+                            // ζ/δ variables: pull the level u, v; the
+                            // u/v stay on the frame as the level wind
+                            // (so barbs read as that level's wind);
+                            // z = vorticity or divergence.
+                            var lvl = derivedSpec.level;
+                            uGrid = extractGrid(byField['u' + lvl], dIdx);
+                            vGrid = extractGrid(byField['v' + lvl], dIdx);
+                        } else if (variable === 'wind200' || variable === 'wind850') {
+                            var fU = (variable === 'wind200') ? 'u200' : 'u850';
+                            var fV = (variable === 'wind200') ? 'v200' : 'v850';
+                            uGrid = extractGrid(byField[fU], dIdx);
+                            vGrid = extractGrid(byField[fV], dIdx);
+                        } else {
+                            // shear vector = (u200 - u850, v200 - v850).
+                            var u200 = extractGrid(byField.u200, dIdx);
+                            var v200 = extractGrid(byField.v200, dIdx);
+                            var u850 = extractGrid(byField.u850, dIdx);
+                            var v850 = extractGrid(byField.v850, dIdx);
+                            uGrid = _evoSub(u200, u850);
+                            vGrid = _evoSub(v200, v850);
                         }
-                        // Build per-day or per-month grids of u, v.
-                        var nDays = byField[fields[0]].n_days;
-                        var slices = [];   // [{ dayIdx?, monthMean?, uGrid, vGrid, zGrid }, ...]
-                        function extractGrid(tile, dayIdx) {
-                            return (dayIdx == null)
-                                ? _evoMonthlyMean(tile)
-                                : _evoExtractDayGrid(tile, dayIdx);
+                        var zGrid;
+                        if (derivedSpec) {
+                            zGrid = (derivedSpec.kind === 'vorticity')
+                                ? _evoComputeVorticity(uGrid, vGrid)
+                                : _evoComputeDivergence(uGrid, vGrid);
+                        } else {
+                            zGrid = _evoMag(uGrid, vGrid);
                         }
-                        var indices = (resolution === 'daily')
-                            ? Array.from({ length: nDays }, function (_, i) { return i; })
-                            : [null];   // monthly mode = single mean
-                        indices.forEach(function (dIdx) {
-                            var uGrid, vGrid;
-                            if (derivedSpec) {
-                                // ζ/δ variables: pull the level u, v; the
-                                // u/v stay on the frame as the level wind
-                                // (so barbs read as that level's wind);
-                                // z = vorticity or divergence.
-                                var lvl = derivedSpec.level;
-                                uGrid = extractGrid(byField['u' + lvl], dIdx);
-                                vGrid = extractGrid(byField['v' + lvl], dIdx);
-                            } else if (variable === 'wind200' || variable === 'wind850') {
-                                var fU = (variable === 'wind200') ? 'u200' : 'u850';
-                                var fV = (variable === 'wind200') ? 'v200' : 'v850';
-                                uGrid = extractGrid(byField[fU], dIdx);
-                                vGrid = extractGrid(byField[fV], dIdx);
-                            } else {
-                                // shear vector = (u200 - u850, v200 - v850).
-                                var u200 = extractGrid(byField.u200, dIdx);
-                                var v200 = extractGrid(byField.v200, dIdx);
-                                var u850 = extractGrid(byField.u850, dIdx);
-                                var v850 = extractGrid(byField.v850, dIdx);
-                                uGrid = _evoSub(u200, u850);
-                                vGrid = _evoSub(v200, v850);
-                            }
-                            var zGrid;
-                            if (derivedSpec) {
-                                zGrid = (derivedSpec.kind === 'vorticity')
-                                    ? _evoComputeVorticity(uGrid, vGrid)
-                                    : _evoComputeDivergence(uGrid, vGrid);
-                            } else {
-                                zGrid = _evoMag(uGrid, vGrid);
-                            }
-                            var dayNo = dIdx == null ? null : (dIdx + 1);
-                            var epochDay = dayNo == null
-                                ? Date.UTC(year, mo, 0) / 86400000
-                                : Date.UTC(year, mo - 1, dayNo) / 86400000;
-                            slices.push({
-                                month: mo, day: dayNo,
-                                epochDay: epochDay,
-                                label: dayNo == null
-                                    ? _EVO_MONTH_NAMES[mo - 1]
-                                    : _EVO_MONTH_NAMES[mo - 1] + ' ' + dayNo,
-                                z: zGrid, u: uGrid, v: vGrid,
-                            });
+                        var dayNo = dIdx == null ? null : (dIdx + 1);
+                        var epochDay = dayNo == null
+                            ? Date.UTC(year, mo, 0) / 86400000
+                            : Date.UTC(year, mo - 1, dayNo) / 86400000;
+                        slices.push({
+                            month: mo, day: dayNo,
+                            epochDay: epochDay,
+                            label: dayNo == null
+                                ? _EVO_MONTH_NAMES[mo - 1]
+                                : _EVO_MONTH_NAMES[mo - 1] + ' ' + dayNo,
+                            z: zGrid, u: uGrid, v: vGrid,
                         });
-                        return slices;
-                    }));
-                })(month);
+                    });
+                    return slices;
+                });
             }
-            return Promise.all(monthPromises).then(function (chunks) {
-                var all = [];
-                chunks.forEach(function (c) { c.forEach(function (f) { all.push(f); }); });
-                all.sort(function (a, b) { return a.epochDay - b.epochDay; });
-                return all;
-            });
+            var hasPriority = (typeof priorityMonth === 'number'
+                            && priorityMonth >= 1 && priorityMonth <= 12);
+            // Build the list of remaining months ordered by ABSOLUTE
+            // calendar distance from the priority month, so that as the
+            // browser drains its connection pool, the months adjacent to
+            // the user's currently-viewed month decode first (the most
+            // likely next-navigation targets). Without priority, we just
+            // do 1..12 in calendar order.
+            var remainingMonths = [];
+            for (var month = 1; month <= 12; month++) {
+                if (hasPriority && month === priorityMonth) continue;
+                remainingMonths.push(month);
+            }
+            if (hasPriority) {
+                remainingMonths.sort(function (a, b) {
+                    return Math.abs(a - priorityMonth)
+                         - Math.abs(b - priorityMonth);
+                });
+            }
+            function fetchRest() {
+                // Parallel fan-out over the remaining months. Their
+                // ordering matters for browser queue behavior under
+                // HTTP/2 stream prioritization (the first-pushed gets
+                // a slightly earlier slot when connection limits bind).
+                return Promise.all(remainingMonths.map(fetchMonth));
+            }
+            // Sequencing:
+            //   priority month first (so it's not fighting 44+ sibling
+            //     fetches for connection slots) →
+            //   fire onPriorityReady so the caller can paint →
+            //   then kick off the remaining months in parallel.
+            // This means the user sees their current month appear as
+            // soon as its tiles decode, with adjacent months filling
+            // in behind it instead of all 12 fighting for bandwidth.
+            if (hasPriority) {
+                return fetchMonth(priorityMonth).then(function (priorSlices) {
+                    if (typeof onPriorityReady === 'function') {
+                        try { onPriorityReady(priorSlices); }
+                        catch (e) {
+                            console.warn('[seasonal-evo] onPriorityReady threw:', e);
+                        }
+                    }
+                    return fetchRest().then(function (restChunks) {
+                        var all = priorSlices ? priorSlices.slice() : [];
+                        restChunks.forEach(function (c) {
+                            c.forEach(function (f) { all.push(f); });
+                        });
+                        all.sort(function (a, b) {
+                            return a.epochDay - b.epochDay;
+                        });
+                        return all;
+                    });
+                });
+            }
+            // Non-priority path: all months in parallel, original behavior.
+            return Promise.all(remainingMonths.map(fetchMonth))
+                .then(function (chunks) {
+                    var all = [];
+                    chunks.forEach(function (c) {
+                        c.forEach(function (f) { all.push(f); });
+                    });
+                    all.sort(function (a, b) { return a.epochDay - b.epochDay; });
+                    return all;
+                });
         });
     }
 
@@ -5380,7 +5449,84 @@
                 + loadLabel
                 + (hd ? ' (HD 0.25°)' : '')
                 + ' archive…</div>';
-            fieldP = _evoFetchYear(year).then(function (frames) {
+            // Progressive HD loading: when in HD mode (where the per-
+            // month decode is ~2-3× heavier than 1°), paint the user's
+            // currently-viewed month BEFORE the remaining months finish
+            // loading. This trims the perceived wait from ~12 months'
+            // worth of decode to ~1 month's worth. We scope to HD only
+            // because (a) it's where the wait is long enough to matter,
+            // and (b) HD already skips climo subtraction so the partial
+            // draw doesn't need a parallel climo fetch.
+            var fetchOpts = {};
+            if (hd && !_evoIsMonthlyOnly(variable)) {
+                var priorityMonth = null;
+                // 1) Pending frame epoch — set by resolution-flip /
+                //    auto-HD-promote handlers when the user was already
+                //    viewing a specific frame.
+                if (typeof _evoState._pendingFrameEpoch === 'number') {
+                    var pd = new Date(_evoState._pendingFrameEpoch * 86400000);
+                    priorityMonth = pd.getUTCMonth() + 1;
+                } else if (_evoState.frames && _evoState.frames.length) {
+                    // 2) Live current frame from the previous render.
+                    var curIdx = _evoState.currentFrameIdx || 0;
+                    var curF = _evoState.frames[curIdx];
+                    if (curF && typeof curF.month === 'number') {
+                        priorityMonth = curF.month;
+                    }
+                }
+                if (priorityMonth != null) {
+                    fetchOpts.priorityMonth = priorityMonth;
+                    fetchOpts.onPriorityReady = function (priorSlices) {
+                        // Bail if a newer render has started, or the
+                        // user moved to a different year. Also bail if
+                        // a later full-fetch already populated frames
+                        // (shouldn't happen — onPriorityReady fires
+                        // BEFORE the full Promise resolves — but be
+                        // defensive across future refactors).
+                        if (_evoState._renderToken !== myToken) return;
+                        if (_evoState.year !== year) return;
+                        if (!priorSlices || !priorSlices.length) return;
+                        if (_evoState._progressivePartialDrawn) return;
+                        _evoState._progressivePartialDrawn = true;
+                        // Sort the (potentially many days of) slices
+                        // by epochDay so the slider reads left-to-right.
+                        var partialFrames = priorSlices.slice().sort(
+                            function (a, b) { return a.epochDay - b.epochDay; });
+                        _evoState.frames = partialFrames;
+                        // _pendingFrameEpoch is consumed by _evoDrawPlotly's
+                        // startIdx selector — keep it set so the partial
+                        // draw lands on the right frame, then re-set it
+                        // here so the FULL draw can land on it too.
+                        var savedEpoch = _evoState._pendingFrameEpoch;
+                        var savedViewport = _evoState._pendingViewport;
+                        _evoDrawPlotly(el, partialFrames);
+                        // _evoDrawPlotly nulls _pendingViewport; restore
+                        // it for the full-frame draw that follows. The
+                        // frame epoch is restored from the saved value
+                        // (the partial draw consumed it).
+                        if (savedEpoch != null) {
+                            _evoState._pendingFrameEpoch = savedEpoch;
+                        } else if (partialFrames[0]) {
+                            // Stash the first partial frame's epochDay
+                            // so the full draw lands back on roughly
+                            // the same time. The startIdx selector will
+                            // match calendar month for monthly mode.
+                            _evoState._pendingFrameEpoch = partialFrames[0].epochDay;
+                        }
+                        if (savedViewport) {
+                            _evoState._pendingViewport = {
+                                x: savedViewport.x.slice(),
+                                y: savedViewport.y.slice(),
+                            };
+                        }
+                    };
+                }
+            }
+            // Reset the partial-drawn guard for THIS render. Without
+            // this, a 2nd HD render in the same session would skip its
+            // own partial draw because the flag was sticky.
+            _evoState._progressivePartialDrawn = false;
+            fieldP = _evoFetchYear(year, fetchOpts).then(function (frames) {
                 if (frames && frames.length) {
                     _evoFramesCacheSet(cacheKey, frames);
                 }
