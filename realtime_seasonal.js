@@ -2730,6 +2730,13 @@
     // client-side via DecompressionStream + Uint16Array dequantization
     // (same pattern as vendor/gc-atlas/era5.js).
     // -------------------------------------------------------------------
+    // Panel C reads the 1°-decimated mirror of the 00Z × 0.25° archive
+    // (build_era5_daily_archive.py writes both prefixes). We keep this
+    // URL at era5_daily/ throughout the transition so Panel C never
+    // breaks during the 00Z backfill — once the new archive validates
+    // against SHIPS climos, gsutil-rename era5_daily/ → era5_daily_legacy/
+    // and era5_daily_1deg/ → era5_daily/ to cut over atomically (no JS
+    // change needed at swap time).
     var EVO_ARCHIVE_BASE = 'https://storage.googleapis.com/tc-atlas-ir-cache/era5_daily';
     var EVO_CLIMO_BASE   = 'https://storage.googleapis.com/tc-atlas-ir-cache/era5_climo';
     var EVO_GRID_NY = 121;    // 60S..60N at 1° (matches archive)

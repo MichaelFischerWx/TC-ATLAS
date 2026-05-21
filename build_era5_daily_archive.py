@@ -69,16 +69,39 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s")
 
 # ── Configuration ───────────────────────────────────────────────────────
 GCS_BUCKET = os.environ.get("GCS_IR_CACHE_BUCKET", "tc-atlas-ir-cache")
-GCS_PREFIX = "era5_daily"
+# Default to the 00Z × 0.25° archive (project decision 2026-05-20, see
+# project_era5_archive_00z memory). The legacy 4×-daily 1° archive
+# remains at era5_daily/ for reference until the 00Z product validates.
+GCS_PREFIX = os.environ.get("ERA5_DAILY_PREFIX", "era5_daily_00z")
+# Companion prefix for the 1°-decimated mirror Panel C reads to keep
+# browser memory ~ 60 MB at 365 frames/year. Same encoding, just every
+# 4th cell averaged into a (121, 360) tile.
+DECIMATED_PREFIX = "era5_daily_1deg"
 
-# 60°S to 60°N at 1° resolution — symmetric with the Panel D correlation
-# map framing. lat values written descending (90...-90 convention used by
-# gc-atlas-era5 tiles), but we trim to the tropical/sub-tropical box.
+# 60°S to 60°N. NATIVE grid is 0.25° (matches ERA5's native publication
+# grid + SHIPS environmental shear product). The 1° decimated grid (121
+# × 360, lat 60..−60, lon −180..179) is preserved for backward compat
+# with Panel C's existing memory budget.
 LAT_N, LAT_S =  60.0, -60.0
-LON_W, LON_E = -180.0, 179.0
-LATS = np.arange(LAT_N, LAT_S - 0.5, -1.0)        # descending: 60, 59, …, -60 (121 values)
-LONS = np.arange(LON_W, LON_E + 0.5, 1.0)         # ascending: -180, …, 179 (360 values)
-NY, NX = LATS.size, LONS.size
+LON_W = -180.0
+NATIVE_RES = 0.25
+# Native 0.25° grid: lat 60..-60 inclusive (481 cells), lon -180..179.75
+# inclusive (1440 cells — the cell at 180° is identified with -180°).
+LATS_NATIVE = np.arange(LAT_N, LAT_S - NATIVE_RES * 0.5, -NATIVE_RES)   # 481 values
+LONS_NATIVE = LON_W + NATIVE_RES * np.arange(1440)                     # -180..179.75
+NY_NATIVE, NX_NATIVE = LATS_NATIVE.size, LONS_NATIVE.size
+# 1° decimated grid for Panel C: lat 60..-60 (121 cells), lon -180..179 (360).
+LATS_1DEG = np.arange(LAT_N, LAT_S - 0.5, -1.0)                          # 121 values
+LONS_1DEG = LON_W + 1.0 * np.arange(360)                                 # -180..179
+# Back-compat: legacy CDS area request uses [N, W, S, E] — give it the
+# eastern edge that matches the native grid's last col.
+LON_E = float(LONS_NATIVE[-1] + NATIVE_RES)                              # 180.0
+NY_1DEG, NX_1DEG = LATS_1DEG.size, LONS_1DEG.size
+# Back-compat aliases used by load_monthly_winds and downstream callers
+# that don't care which grid they're on. Set at runtime from CLI flags.
+LATS = LATS_NATIVE
+LONS = LONS_NATIVE
+NY, NX = NY_NATIVE, NX_NATIVE
 
 # Local cache + working dir
 WORK_DIR = Path(os.environ.get("ERA5_DAILY_WORK", "/tmp/_era5_daily"))
@@ -146,9 +169,12 @@ def fetch_daily_winds_for_month(year: int, month: int,
         "year": str(year),
         "month": f"{month:02d}",
         "day": [f"{d:02d}" for d in range(1, _days_in_month(year, month) + 1)],
-        "time": ["00:00", "06:00", "12:00", "18:00"],   # 4× daily, hourly is overkill for env diagnostics
+        # 00Z analysis snapshot — preserves synoptic structure (no
+        # diurnal smearing) and matches SHIPS environmental-shear
+        # sampling. See project_era5_archive_00z memory note.
+        "time": ["00:00"],
         "area": [LAT_N, LON_W, LAT_S, LON_E],            # [N, W, S, E]
-        "grid": [1.0, 1.0],                              # native to our archive grid
+        "grid": [NATIVE_RES, NATIVE_RES],                # 0.25° native
     }
     last_err: Exception | None = None
     for attempt in range(retry):
@@ -166,11 +192,20 @@ def fetch_daily_winds_for_month(year: int, month: int,
 
 
 def hourly_to_daily(values: np.ndarray) -> np.ndarray:
-    """Collapse (time, …) of 4× daily samples to (day, …) means.
-    Expects time stride 6h, starting at 00 UTC. Trailing partial-day
-    samples (rare; usually only at-month-end if CDS clamps the response)
-    are averaged as-is over the available timesteps."""
+    """In 00Z snapshot mode (current), each CDS request returns one
+    timestep per day already, so this is a near-identity. We still
+    keep the function in the pipeline as a single hook in case we
+    later switch back to multi-timestep snapshots or want to average
+    a different sub-daily window. Validates `values` already has one
+    sample per day; falls back to the 4× collapse path if not (so the
+    legacy 4× build still works if invoked from an old workflow)."""
     nt = values.shape[0]
+    # If samples-per-day looks like 1 (00Z only), straight passthrough.
+    # CDS always returns timesteps in chronological order with one entry
+    # per (day, time) combo, so nt == n_days for 00Z-only.
+    if nt <= 31:
+        return values
+    # Legacy fallback: 4× daily means.
     n_days = nt // 4
     leftover = nt % 4
     full = values[: n_days * 4].reshape(n_days, 4, *values.shape[1:])
@@ -179,6 +214,29 @@ def hourly_to_daily(values: np.ndarray) -> np.ndarray:
         tail = np.nanmean(values[n_days * 4:], axis=0, keepdims=True)
         daily = np.concatenate([daily, tail], axis=0)
     return daily
+
+
+def decimate_to_1deg(values_native: np.ndarray) -> np.ndarray:
+    """4×4 block-mean the (T, 481, 1440) native 0.25° array down to
+    (T, 121, 360) 1°. Edge handling: the native grid is lat 60..-60
+    at 0.25° (481 lats — 480 = 120×4, plus the lat 60 endpoint), and
+    lon -180..179.75 (1440 = 360×4). We take cell (i, j) of the 1°
+    output as the mean of native rows [4i .. 4i+3] (clipped to NY_NATIVE)
+    and cols [4j .. 4j+3]. Row 120 (lat -60) reads the single native
+    row 480 since 4×120+0 = 480 is the last index. NaN-aware mean."""
+    n_t = values_native.shape[0]
+    out = np.full((n_t, NY_1DEG, NX_1DEG), np.nan, dtype=np.float32)
+    for i in range(NY_1DEG):
+        r0 = min(4 * i,     NY_NATIVE - 1)
+        r1 = min(4 * i + 4, NY_NATIVE)
+        for j in range(NX_1DEG):
+            c0 = 4 * j
+            c1 = 4 * j + 4
+            block = values_native[:, r0:r1, c0:c1]
+            # nanmean over (lat-block, lon-block) → single value per t.
+            with np.errstate(invalid='ignore'):
+                out[:, i, j] = np.nanmean(block.reshape(n_t, -1), axis=1)
+    return out
 
 
 def open_cds_netcdf(local: Path) -> "xr.Dataset":  # noqa: F821
@@ -281,10 +339,13 @@ def encode_f16_gz(values: np.ndarray) -> tuple[bytes, float, float]:
 
 # ── GCS / local-file output ────────────────────────────────────────
 class StorageWriter:
-    """Uploads to gs://${GCS_BUCKET}/${GCS_PREFIX}/... when local_only is
-    False; otherwise writes to ./era5_daily/ for inspection."""
-    def __init__(self, local_only: bool = False):
+    """Uploads to gs://${GCS_BUCKET}/${prefix}/... when local_only is
+    False; otherwise writes to ./{prefix}/ for inspection. `prefix` is
+    parameterized so the same writer instance can target the native
+    archive and the 1°-decimated mirror."""
+    def __init__(self, local_only: bool = False, prefix: str = GCS_PREFIX):
         self.local_only = local_only
+        self.prefix = prefix
         self._bucket = None
 
     def _gcs_bucket(self):
@@ -295,12 +356,12 @@ class StorageWriter:
 
     def put(self, key: str, body: bytes, content_type: str = "application/octet-stream"):
         if self.local_only:
-            p = Path("era5_daily") / key
+            p = Path(self.prefix) / key
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_bytes(body)
             log.info("  wrote local %s (%d bytes)", p, len(body))
             return
-        blob = self._gcs_bucket().blob(f"{GCS_PREFIX}/{key}")
+        blob = self._gcs_bucket().blob(f"{self.prefix}/{key}")
         blob.cache_control = "public, max-age=86400"
         blob.upload_from_string(body, content_type=content_type)
         # Match the rest of tc-atlas-ir-cache: objects are publicly
@@ -310,35 +371,53 @@ class StorageWriter:
         except Exception as e:
             log.warning("  could not make %s public: %s", blob.name, e)
         log.info("  uploaded gs://%s/%s/%s (%d bytes)",
-                 GCS_BUCKET, GCS_PREFIX, key, len(body))
+                 GCS_BUCKET, self.prefix, key, len(body))
 
     def fetch_manifest(self) -> dict:
         """Load the current manifest.json from GCS (or local). Returns
         {} if it doesn't yet exist (first-time backfill)."""
         if self.local_only:
-            p = Path("era5_daily/manifest.json")
+            p = Path(self.prefix) / "manifest.json"
             return json.loads(p.read_text()) if p.exists() else {}
         from google.cloud import storage   # type: ignore  # noqa: F401
-        blob = self._gcs_bucket().blob(f"{GCS_PREFIX}/manifest.json")
+        blob = self._gcs_bucket().blob(f"{self.prefix}/manifest.json")
         if not blob.exists():
             return {}
         return json.loads(blob.download_as_text())
 
 
 def write_monthly_bundles(writer: StorageWriter, bundles: dict[str, MonthlyBundle],
-                          manifest: dict) -> None:
+                          manifest: dict, *, grid: str = "native") -> None:
     """Encode each MonthlyBundle as a single .bin.gz file and update the
-    manifest with per-file vmin/vmax + valid date list."""
-    manifest.setdefault("metadata", {
-        "lat_first": LAT_N, "lat_last": LAT_S, "lat_step": -1.0,
-        "lon_first": LON_W, "lon_last": LON_E, "lon_step": 1.0,
-        "shape": [NY, NX],
+    manifest with per-file vmin/vmax + valid date list. `grid` is one of
+    "native" (0.25°, 481×1440) or "1deg" (121×360); only used to fill
+    the per-archive `metadata` block with the right shape on first
+    write."""
+    if grid == "native":
+        meta = {
+            "lat_first": LAT_N, "lat_last": LAT_S, "lat_step": -NATIVE_RES,
+            "lon_first": LON_W, "lon_last": LON_E, "lon_step": NATIVE_RES,
+            "shape": [NY_NATIVE, NX_NATIVE],
+            "frame_shape_per_day": [NY_NATIVE, NX_NATIVE],
+            "source": ("ERA5 reanalysis 00Z analysis snapshot, "
+                       "60°S-60°N at 0.25° native"),
+        }
+    else:
+        meta = {
+            "lat_first": LAT_N, "lat_last": LAT_S, "lat_step": -1.0,
+            "lon_first": LON_W, "lon_last": LON_E, "lon_step": 1.0,
+            "shape": [NY_1DEG, NX_1DEG],
+            "frame_shape_per_day": [NY_1DEG, NX_1DEG],
+            "source": ("ERA5 reanalysis 00Z analysis snapshot, "
+                       "60°S-60°N at 1° (4×4 block-mean decimation "
+                       "from native 0.25°)"),
+        }
+    meta.update({
         "nan_sentinel": 0xFFFF,
         "encoding": "f16-gz",
-        "frame_shape_per_day": [NY, NX],
-        "source": "ERA5 reanalysis daily means (6-hr → daily), 60°S-60°N at 1°",
         "fetched_via": "Copernicus CDS API",
     })
+    manifest.setdefault("metadata", meta)
     manifest.setdefault("tiles", {})
     for short, b in bundles.items():
         # Flatten (n_days, ny, nx) → (n_days*ny*nx,) so a single
@@ -361,45 +440,66 @@ def write_manifest(writer: StorageWriter, manifest: dict) -> None:
 
 
 # ── Top-level workflow ──────────────────────────────────────────────
-def process_month(writer: StorageWriter, manifest: dict, year: int, month: int) -> None:
+def process_month(writer_native: StorageWriter, writer_1deg: StorageWriter,
+                  manifest_native: dict, manifest_1deg: dict,
+                  year: int, month: int) -> None:
     log.info("== %d-%02d ==", year, month)
     work = _ensure_work_dir()
     bundles = load_monthly_winds(year, month, work)
-    write_monthly_bundles(writer, bundles, manifest)
+    # Native 0.25° archive: upload directly.
+    write_monthly_bundles(writer_native, bundles, manifest_native, grid="native")
+    # 1°-decimated mirror for Panel C's browser memory budget. Build a
+    # second set of bundles with block-mean values and the same valid
+    # dates / field names.
+    dec_bundles = {}
+    for short, b in bundles.items():
+        dec_values = decimate_to_1deg(b.values)
+        dec_bundles[short] = MonthlyBundle(
+            year=b.year, month=b.month, field=b.field,
+            values=dec_values.astype(np.float32),
+            valid_dates=list(b.valid_dates),
+        )
+    write_monthly_bundles(writer_1deg, dec_bundles, manifest_1deg, grid="1deg")
 
 
-def backfill_years(writer: StorageWriter, year_lo: int, year_hi: int) -> None:
-    manifest = writer.fetch_manifest()
+def backfill_years(writer_native: StorageWriter, writer_1deg: StorageWriter,
+                   year_lo: int, year_hi: int) -> None:
+    manifest_native = writer_native.fetch_manifest()
+    manifest_1deg = writer_1deg.fetch_manifest()
     for year in range(year_lo, year_hi + 1):
         for month in range(1, 13):
             tile_key = f"u200/{year}_{month:02d}"
-            if tile_key in manifest.get("tiles", {}):
-                log.info("  skip %d-%02d (already in manifest)", year, month)
+            have_native = tile_key in manifest_native.get("tiles", {})
+            have_1deg   = tile_key in manifest_1deg.get("tiles", {})
+            if have_native and have_1deg:
+                log.info("  skip %d-%02d (already in both manifests)", year, month)
                 continue
             try:
-                process_month(writer, manifest, year, month)
-                write_manifest(writer, manifest)   # checkpoint after each month
+                process_month(writer_native, writer_1deg,
+                              manifest_native, manifest_1deg, year, month)
+                write_manifest(writer_native, manifest_native)
+                write_manifest(writer_1deg, manifest_1deg)
             except Exception as e:
                 log.error("FAILED %d-%02d: %s", year, month, e)
-                # Keep going — partial archive is still useful.
                 continue
 
 
-def incremental_latest(writer: StorageWriter) -> None:
+def incremental_latest(writer_native: StorageWriter,
+                       writer_1deg: StorageWriter) -> None:
     """Fetch the most recently completed month (today − ~1 month) and
     overwrite if already present. Idempotent — re-running on the same
     day is a no-op except for the final manifest write."""
     today = datetime.now(timezone.utc).date()
-    # Most-recent fully-closed month: subtract 1 from the month, with
-    # year wrap. We give ERA5T a 7-day window after month-end before
-    # we trust it.
     target = today.replace(day=1)
     target = (target.replace(month=target.month - 1) if target.month > 1
               else target.replace(year=target.year - 1, month=12))
     year, month = target.year, target.month
-    manifest = writer.fetch_manifest()
-    process_month(writer, manifest, year, month)
-    write_manifest(writer, manifest)
+    manifest_native = writer_native.fetch_manifest()
+    manifest_1deg = writer_1deg.fetch_manifest()
+    process_month(writer_native, writer_1deg,
+                  manifest_native, manifest_1deg, year, month)
+    write_manifest(writer_native, manifest_native)
+    write_manifest(writer_1deg, manifest_1deg)
 
 
 def parse_years(s: str) -> tuple[int, int]:
@@ -424,14 +524,15 @@ def main() -> None:
         ap.print_help(sys.stderr)
         sys.exit(2)
 
-    writer = StorageWriter(local_only=args.local_only)
+    writer_native = StorageWriter(local_only=args.local_only, prefix=GCS_PREFIX)
+    writer_1deg   = StorageWriter(local_only=args.local_only, prefix=DECIMATED_PREFIX)
     if args.backfill:
         if not args.years:
             ap.error("--backfill requires --years")
         lo, hi = parse_years(args.years)
-        backfill_years(writer, lo, hi)
+        backfill_years(writer_native, writer_1deg, lo, hi)
     else:
-        incremental_latest(writer)
+        incremental_latest(writer_native, writer_1deg)
 
 
 if __name__ == "__main__":
