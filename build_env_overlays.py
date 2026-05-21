@@ -1371,6 +1371,57 @@ def build_shear_anomaly(date_str: str, hour_str: str, *,
     return anom_kt if ok else None
 
 
+def _render_panel_a_anom_png(anom_kt: np.ndarray) -> bytes:
+    """Equirectangular shear-anomaly PNG with cartopy coastlines.
+    Matches build_era5_climo_pngs.render_shear_climo_png's geographic
+    treatment so Panel A's two atmosphere views (climo + current
+    anomaly) share the same look. Diverging RdBu_r centered at 0 kt
+    so blue = below-normal (favorable for TCs), red = above-normal.
+    Coverage: ±60° lat × −180..180° lon.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import Normalize
+    import cartopy.crs as ccrs
+    import cartopy.feature as cfeature
+
+    # Build the ±60° slice from the GFS native 721×1440 grid (lat
+    # 90..-90 N→S at 0.25°). ±60° = rows 120..600 inclusive (481
+    # rows). Same lon coverage as the full grid (-180..180-ε).
+    lat_full = np.linspace(90.0, -90.0, NY, dtype=np.float32)
+    mask = (lat_full <= 60.0) & (lat_full >= -60.0)
+    sub = anom_kt[mask, :]
+
+    fig = plt.figure(figsize=(8.0, 8.0 * 120 / 360), dpi=200)
+    ax = fig.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
+    ax.set_extent([-180.0, 180.0, -60.0, 60.0], crs=ccrs.PlateCarree())
+    norm = Normalize(vmin=-30.0, vmax=30.0, clip=True)
+    ax.imshow(
+        sub,
+        cmap="RdBu_r", norm=norm,
+        extent=[-180.0, 180.0, -60.0, 60.0],
+        origin="upper", interpolation="bilinear",
+        transform=ccrs.PlateCarree(),
+        zorder=1,
+    )
+    # Same continent + coastline + borders treatment as the climo
+    # PNG so the two Atmosphere views read consistently.
+    ax.add_feature(cfeature.LAND, facecolor="#9ca3af", alpha=0.18,
+                   zorder=2)
+    ax.add_feature(cfeature.COASTLINE, linewidth=0.8, edgecolor="#0f172a",
+                   zorder=3)
+    ax.add_feature(cfeature.BORDERS, linewidth=0.3, edgecolor="#475569",
+                   linestyle=":", zorder=3)
+    ax.set_axis_off()
+    fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", transparent=True, pad_inches=0,
+                bbox_inches="tight")
+    plt.close(fig)
+    return buf.getvalue()
+
+
 def _upload_shear_anom_panel_a(anom_kt: np.ndarray, spec: LayerSpec,
                               valid_time: str) -> None:
     """Render the equirectangular colored PNG + grid JSON Panel A needs
@@ -1386,7 +1437,9 @@ def _upload_shear_anom_panel_a(anom_kt: np.ndarray, spec: LayerSpec,
     if not GCS_BUCKET:
         return
     try:
-        png_bytes = _render_filled_png(anom_kt, spec)
+        # Cartopy-based render so the anomaly pattern sits over visible
+        # coastlines + light land tint — matches the climo Panel-A view.
+        png_bytes = _render_panel_a_anom_png(anom_kt)
     except Exception as e:
         log.warning("Panel-A equirect PNG render failed: %s", e)
         return
