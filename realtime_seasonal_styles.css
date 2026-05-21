@@ -135,13 +135,12 @@
     background: transparent;
     border-radius: 4px;
     overflow: hidden;
-    /* Aspect tuned for the Atlantic-and-Africa default extent
-       (-100..+40° lon × -60..+60° lat = 140°×120° geographic) plus
-       small margin for the axis labels + colorbar. Plotly's
-       xaxis.scaleanchor:'y' locks the 1°-lon = 1°-lat aspect of the
-       data, so the wrap shape just sets how much white margin the
-       map sits in. */
-    aspect-ratio: 1.4;
+    /* Aspect is computed per-basin at render time from the viewport's
+       (lon width)/(lat height) ratio, plus a small allowance for the
+       axis labels + colorbar. See _evoApplyWrapAspect in
+       realtime_seasonal.js. Default below is the all-basins extent;
+       basin-specific renders override via inline style. */
+    aspect-ratio: 4.5;
     margin-top: 4px;
 }
 .seasonal-evo-map { width: 100%; height: 100%; }

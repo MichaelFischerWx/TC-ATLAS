@@ -2822,6 +2822,29 @@
         return _EVO_BASIN_VIEWS[basin] || _EVO_BASIN_VIEWS.NA;
     }
 
+    // Tune the .seasonal-evo-wrap aspect ratio to the current basin's
+    // viewport so we don't leave huge whitespace bands above/below the
+    // map. Plotly's xaxis.scaleanchor:'y' locks 1°-lon = 1°-lat in
+    // data space, so the wrap shape just sets how much margin the
+    // figure sits in. We add a small geometric pad for the colorbar
+    // (~70 px) and axis labels (~30 px each side); empirically a
+    // multiplier of 1.05 over (lonWidth/latHeight) lands close to
+    // "data fills the wrap" without clipping the colorbar.
+    function _evoApplyWrapAspect(basin) {
+        var wrap = document.getElementById('seasonal-evo-wrap');
+        if (!wrap) return;
+        var v = _evoViewForBasin(basin);
+        var lonW = Math.abs(v.x[1] - v.x[0]);
+        var latH = Math.abs(v.y[1] - v.y[0]);
+        if (!lonW || !latH) return;
+        var ratio = (lonW / latH) * 1.05;
+        // Clamp so we don't produce pathologically tall or wide boxes
+        // on extreme basin choices (e.g., SP is ~80° wide × 35° tall).
+        if (ratio < 1.4) ratio = 1.4;
+        if (ratio > 5.0) ratio = 5.0;
+        wrap.style.aspectRatio = String(ratio);
+    }
+
     // Normalize a storm-track longitude to the [-180, 180) frame the
     // Plotly heatmap uses. IBTrACS publishes lons in 0..360 historically.
     function _evoNormLon(lon) {
@@ -3996,6 +4019,7 @@
     }
 
     function _evoDrawPlotly(el, frames) {
+        _evoApplyWrapAspect(_evoState.basin);
         var built = _evoBuildPlotlyTraces(frames);
         var layout = {
             margin: { l: 50, r: 70, t: 10, b: 30 },
@@ -4297,8 +4321,12 @@
                 } else if (key === 'mode') {
                     _evoRerenderTracksOnly();
                 } else if (key === 'basin') {
-                    // Pan/zoom the map AND rebuild track filter.
+                    // Pan/zoom the map AND rebuild track filter. Also
+                    // retune the wrap's aspect ratio so the new basin's
+                    // viewport fills the box without huge whitespace
+                    // bands above/below.
                     var view = _evoViewForBasin(_evoState.basin);
+                    _evoApplyWrapAspect(_evoState.basin);
                     var mapEl = document.getElementById('seasonal-evo-map');
                     if (mapEl && mapEl.classList.contains('js-plotly-plot')) {
                         Plotly.relayout(mapEl, {
