@@ -5304,6 +5304,14 @@
     function _evoRender() {
         var el = document.getElementById('seasonal-evo-map');
         if (!el || typeof Plotly === 'undefined') return;
+        // Render-token: cancel any in-flight render when a new one
+        // starts. A rapid sequence (e.g., zoom auto-HD + resolution
+        // change firing within <1 s) would otherwise race — the
+        // first-to-finish would consume _pendingViewport /
+        // _pendingFrameEpoch, leaving the later (correct) render
+        // with empty pendings + a snap to defaults.
+        var myToken = (_evoState._renderToken || 0) + 1;
+        _evoState._renderToken = myToken;
         // Configure the source-grid + viewport crop BEFORE any tile
         // decode. EVO_GRID_NY/NX/LATS/LONS get re-derived from
         // (resolution, basin, hd) so all downstream iterators see a
@@ -5359,6 +5367,10 @@
         var stormsP = _evoLoadStorms();
         var tracksP = _evoLoadTracks();
         fieldP.then(function (frames) {
+            // Superseded by a newer render? Bail without consuming the
+            // pending viewport / frame-epoch state — those are intended
+            // for the most-recent caller, not us.
+            if (_evoState._renderToken !== myToken) return;
             if (_evoState.year !== year) return;     // user moved on
             if (!frames || !frames.length) {
                 el.innerHTML = '<div class="seasonal-panel-stub" style="padding:80px;'
@@ -5526,16 +5538,47 @@
                 dateJumpEl.addEventListener('change', function () {
                     var parts = dateJumpEl.value.split('-');
                     if (parts.length !== 3) return;
-                    var pickedEpoch = Date.UTC(
-                        parseInt(parts[0], 10),
-                        parseInt(parts[1], 10) - 1,
-                        parseInt(parts[2], 10)) / 86400000;
+                    var pickedYear = parseInt(parts[0], 10);
+                    var pickedMonth = parseInt(parts[1], 10);  // 1-12
+                    var pickedDay = parseInt(parts[2], 10);
+                    var pickedEpoch = Date.UTC(pickedYear,
+                        pickedMonth - 1, pickedDay) / 86400000;
                     var bestIdx = 0;
                     var bestDist = Infinity;
                     var fr = _evoState.frames || [];
-                    for (var i = 0; i < fr.length; i++) {
-                        var d = Math.abs(fr[i].epochDay - pickedEpoch);
-                        if (d < bestDist) { bestDist = d; bestIdx = i; }
+                    // Monthly-mode matching: pick the frame whose
+                    // CALENDAR MONTH equals the picked month. Without
+                    // this, the user picks "Aug 15" and the closest-
+                    // epochDay match is the Jul-end-of-month frame
+                    // (epochDay = Jul 31, only 10 days from Aug 15;
+                    // Aug-end-of-month at Aug 31 is 21 days away).
+                    // Daily mode keeps the closest-day match.
+                    var monthlyMode = fr.length > 0 && fr[0].day == null;
+                    if (monthlyMode) {
+                        for (var i = 0; i < fr.length; i++) {
+                            if (fr[i].month === pickedMonth) {
+                                bestIdx = i;
+                                bestDist = 0;
+                                break;
+                            }
+                        }
+                        // Fallback to nearest-month if the exact
+                        // calendar month isn't in the active frame set.
+                        if (bestDist > 0) {
+                            for (var i2 = 0; i2 < fr.length; i2++) {
+                                var d2 = Math.abs(fr[i2].month - pickedMonth);
+                                if (d2 < bestDist) {
+                                    bestDist = d2; bestIdx = i2;
+                                }
+                            }
+                        }
+                    } else {
+                        for (var i3 = 0; i3 < fr.length; i3++) {
+                            var d3 = Math.abs(fr[i3].epochDay - pickedEpoch);
+                            if (d3 < bestDist) {
+                                bestDist = d3; bestIdx = i3;
+                            }
+                        }
                     }
                     if (fr[bestIdx]) {
                         var elMap = document.getElementById('seasonal-evo-map');
@@ -5565,12 +5608,52 @@
                         { date: dateJumpEl.value });
                 });
             }
-            // Initial frame label.
-            var firstName = (frames[0].day != null)
-                ? 'd' + frames[0].epochDay : String(frames[0].month);
+            // Pick the initial frame. Default is frame 0, but if a
+            // _pendingFrameEpoch was stashed (e.g., resolution swap),
+            // snap to the frame matching the same calendar time so the
+            // user keeps viewing the same point in time. For daily
+            // frames we match by closest epochDay. For monthly frames
+            // we match by calendar month — landing on the same month
+            // is more intuitive than the closest end-of-month epoch
+            // (which can snap backward by ~half a month).
+            var startIdx = 0;
+            if (typeof _evoState._pendingFrameEpoch === 'number') {
+                var targetEpoch = _evoState._pendingFrameEpoch;
+                var targetDate = new Date(targetEpoch * 86400000);
+                var targetMonth = targetDate.getUTCMonth() + 1;  // 1-12
+                var monthlyFrames = frames.length > 0
+                    && frames[0].day == null;
+                if (monthlyFrames) {
+                    for (var sIdx = 0; sIdx < frames.length; sIdx++) {
+                        if (frames[sIdx].month === targetMonth) {
+                            startIdx = sIdx;
+                            break;
+                        }
+                    }
+                } else {
+                    var bestDist = Infinity;
+                    for (var sIdx2 = 0; sIdx2 < frames.length; sIdx2++) {
+                        var d = Math.abs(frames[sIdx2].epochDay - targetEpoch);
+                        if (d < bestDist) { bestDist = d; startIdx = sIdx2; }
+                    }
+                }
+                _evoState._pendingFrameEpoch = null;
+            }
+            var firstFrame = frames[startIdx];
+            var firstName = (firstFrame.day != null)
+                ? 'd' + firstFrame.epochDay : String(firstFrame.month);
             setDate(firstName);
-            // Fresh figure → reset our slider bookkeeping to frame 0.
-            _evoState.currentFrameIdx = 0;
+            _evoState.currentFrameIdx = startIdx;
+            // If we landed on a non-zero frame, sync the slider + the
+            // heatmap to that frame (the initial trace data already
+            // has frame 0's z baked in — Plotly.animate swaps to the
+            // right one).
+            if (startIdx !== 0) {
+                Plotly.animate(el, [firstName], {
+                    mode: 'immediate', transition: { duration: 0 },
+                    frame: { duration: 0, redraw: true },
+                }).catch(function () { /* swallow — Plotly oddity */ });
+            }
             // Initial pass — populate the sampling pill + resample
             // barbs/streams against the current viewport.
             _evoUpdateOverlays(el);
@@ -6062,6 +6145,28 @@
             el.addEventListener('change', function () {
                 _evoState[key] = parse ? parse(el.value) : el.value;
                 if (key === 'year' || key === 'variable' || key === 'resolution') {
+                    // Resolution swap: preserve the user's currently-
+                    // viewed date + viewport across the re-render so
+                    // a monthly → daily flip lands on a daily frame in
+                    // the SAME month (instead of snapping back to Jan
+                    // 1 + the basin default). _pendingFrameEpoch is
+                    // consumed by _evoDrawPlotly's newPlot.then once
+                    // the new frame set lands.
+                    if (key === 'resolution' && _evoState.frames) {
+                        var curIdx = _evoState.currentFrameIdx || 0;
+                        var curMap = document.getElementById('seasonal-evo-map');
+                        if (curMap && curMap._fullLayout
+                                && curMap._fullLayout.sliders
+                                && typeof curMap._fullLayout.sliders[0].active === 'number') {
+                            curIdx = curMap._fullLayout.sliders[0].active;
+                        }
+                        var curFrame = _evoState.frames[curIdx];
+                        if (curFrame && typeof curFrame.epochDay === 'number') {
+                            _evoState._pendingFrameEpoch = curFrame.epochDay;
+                        }
+                        _evoState._pendingViewport
+                            = _evoComputeViewport(curMap);
+                    }
                     // Year/var/resolution change needs fresh frame build.
                     // Resolution flip reshapes 12 → 365 frames (or back),
                     // so we go through the full _evoRender path. Variable
