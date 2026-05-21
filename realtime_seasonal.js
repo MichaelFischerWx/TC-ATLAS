@@ -1973,6 +1973,18 @@
 
     function _drawDailyShearChart(el, region, regionAll, climo) {
         _clearStub(el);
+        // Purge any prior Plotly state before drawing. Without this, when
+        // the user is in Daily mode on SST and switches Variable → shear,
+        // the previous _drawDailyChart left behind layout.geo2 (the inset
+        // map) and a different trace topology. Plotly.react CAN handle
+        // those swaps in theory, but the inset's `geo2` axis sticking
+        // around with no associated traces was causing the entire chart
+        // to render blank in production (SVG element existed but had no
+        // visible content). A clean purge sidesteps the whole problem.
+        if (typeof Plotly !== 'undefined'
+                && el.classList.contains('js-plotly-plot')) {
+            Plotly.purge(el);
+        }
         var traces = [];
         var doys = [];
         for (var i = 1; i <= 366; i++) doys.push(i);
@@ -2115,8 +2127,12 @@
                 font: { color: BRAND.hoverText, size: 12 },
             },
         };
-        Plotly.react(el, traces, layout,
-                     { responsive: true, displaylogo: false });
+        // After the purge above, el is a clean div — newPlot is the
+        // right primitive (react on a purged div technically works but
+        // emits a "Plotly.react: missing layout" defensive warning on
+        // some plotly.js versions).
+        Plotly.newPlot(el, traces, layout,
+                       { responsive: true, displaylogo: false });
     }
 
     function _bindTimeSeriesControls() {
