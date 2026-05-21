@@ -4462,12 +4462,38 @@
             });
     }
 
+    // Fixed CSS-pixel base width for saved figures — keeps mobile vs
+    // desktop output identical regardless of viewport. Height is
+    // computed from the current basin's lon/lat aspect so the saved
+    // image matches what the user sees on screen but at consistent
+    // resolution. PNG_SAVE_SCALE = 2 gives a 3600-px-wide output.
+    var EVO_PNG_BASE_W = 1800;
+    var EVO_PNG_SAVE_SCALE = 2;
+    var EVO_GIF_BASE_W = 1200;
+    function _evoSaveDimensions() {
+        var view = _evoViewForBasin(_evoState.basin);
+        var lonW = Math.abs(view.x[1] - view.x[0]);
+        var latH = Math.abs(view.y[1] - view.y[0]);
+        // Plotly's margin: l=50, r=70, t=10, b=30 (see _evoDrawPlotly)
+        // — add 1.05 padding for axis labels + colorbar so the figure
+        // aspect matches what the user sees on screen.
+        var dataAspect = (lonW / latH) * 1.05;
+        return {
+            png: { width: EVO_PNG_BASE_W,
+                   height: Math.round(EVO_PNG_BASE_W / Math.max(dataAspect, 1.0)) },
+            gif: { width: EVO_GIF_BASE_W,
+                   height: Math.round(EVO_GIF_BASE_W / Math.max(dataAspect, 1.0)) },
+        };
+    }
+
     // PNG export of the current frame — composes a small title bar
     // above + an attribution footer below the rasterized Plotly figure.
+    // Output dimensions are FIXED (independent of viewport) so mobile
+    // and desktop saves are identical pixel-for-pixel.
     function _evoSavePng() {
         var el = document.getElementById('seasonal-evo-map');
         if (!el || typeof Plotly === 'undefined') return;
-        var rect = el.getBoundingClientRect();
+        var dim = _evoSaveDimensions().png;
         var dateLabel = (document.getElementById('seasonal-evo-date') || {}).textContent
                         || ('' + _evoState.year);
         var variable = _evoState.variable || 'shear';
@@ -4481,13 +4507,19 @@
             : ('Raw ' + varDisplay.toLowerCase());
         _evoToImageNoSlider({
             format: 'png',
-            width: Math.round(rect.width),
-            height: Math.round(rect.height),
-            scale: 3,
+            width: dim.width,
+            height: dim.height,
+            scale: EVO_PNG_SAVE_SCALE,
         }).then(function (url) {
             var img = new Image();
             img.onload = function () {
-                var titleH = 56, footerH = 32;
+                // Title + footer scale with the image width so research-
+                // sized exports don't get a thin strip of text up top.
+                var titleH    = Math.max(60, Math.round(img.width * 0.035));
+                var footerH   = Math.max(36, Math.round(img.width * 0.022));
+                var titleFont = Math.max(26, Math.round(img.width * 0.018));
+                var footerFont= Math.max(16, Math.round(img.width * 0.011));
+                var padLeft   = Math.max(24, Math.round(img.width * 0.013));
                 var canvas = document.createElement('canvas');
                 canvas.width = img.width;
                 canvas.height = img.height + titleH + footerH;
@@ -4495,16 +4527,16 @@
                 ctx.fillStyle = '#ffffff';
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
                 ctx.fillStyle = '#0f172a';
-                ctx.font = 'bold 26px "DM Sans", system-ui, sans-serif';
+                ctx.font = 'bold ' + titleFont + 'px "DM Sans", system-ui, sans-serif';
                 ctx.textBaseline = 'middle';
                 ctx.fillText('Seasonal Evolution — ' + dateLabel
                              + '  ·  ' + modeLabel,
-                             24, titleH / 2);
+                             padLeft, titleH / 2);
                 ctx.drawImage(img, 0, titleH);
                 ctx.fillStyle = '#475569';
-                ctx.font = '16px "DM Sans", system-ui, sans-serif';
+                ctx.font = footerFont + 'px "DM Sans", system-ui, sans-serif';
                 ctx.fillText('TC-ATLAS · ' + new Date().toISOString().slice(0, 10) + ' UTC',
-                             24, titleH + img.height + footerH / 2);
+                             padLeft, titleH + img.height + footerH / 2);
                 canvas.toBlob(function (blob) {
                     var u = URL.createObjectURL(blob);
                     var a = document.createElement('a');
@@ -4541,13 +4573,14 @@
             (document.getElementById('seasonal-evo-speed') || { value: '400' }).value,
             10);
         var delayCs = Math.max(4, Math.round(speed / 10));
-        // GIF native size: 1.5× the rendered figure. Bigger than 1× so
-        // the barbs and coastlines stay legible after palette
-        // quantization; not 3× because GIF byte size grows quadratically
-        // and 365-frame animations get large fast.
-        var GIF_SCALE = 1.5;
-        var width  = Math.round(el.getBoundingClientRect().width  * GIF_SCALE);
-        var height = Math.round(el.getBoundingClientRect().height * GIF_SCALE);
+        // GIF export uses the same FIXED CSS-pixel base as PNG so the
+        // output is identical on mobile vs desktop. Width is fixed by
+        // EVO_GIF_BASE_W; height comes from the basin's lon/lat aspect.
+        // Smaller than PNG because GIF byte size grows quadratically and
+        // 365-frame animations get large fast.
+        var gifDim = _evoSaveDimensions().gif;
+        var width  = gifDim.width;
+        var height = gifDim.height;
 
         import('https://unpkg.com/gifenc@1.0.3/dist/gifenc.esm.js')
             .then(function (mod) {
