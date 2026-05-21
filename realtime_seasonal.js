@@ -6330,14 +6330,22 @@
             el.addEventListener('change', function () {
                 _evoState[key] = parse ? parse(el.value) : el.value;
                 if (key === 'year' || key === 'variable' || key === 'resolution') {
-                    // Resolution swap: preserve the user's currently-
-                    // viewed date + viewport across the re-render so
-                    // a monthly → daily flip lands on a daily frame in
-                    // the SAME month (instead of snapping back to Jan
-                    // 1 + the basin default). _pendingFrameEpoch is
-                    // consumed by _evoDrawPlotly's newPlot.then once
+                    // Preserve the user's currently-viewed date +
+                    // viewport across the re-render so a swap of any
+                    // axis (year → year, shear → wind850, monthly →
+                    // daily) lands on the same calendar position +
+                    // map domain instead of snapping back to Jan 1 +
+                    // the basin default. _pendingFrameEpoch / _pendingViewport
+                    // are consumed by _evoDrawPlotly's newPlot.then once
                     // the new frame set lands.
-                    if (key === 'resolution' && _evoState.frames) {
+                    //
+                    // Originally only resolution flips preserved state;
+                    // user feedback: "Basically keep the domain and
+                    // date at all changes". The downstream startIdx
+                    // selector handles monthly↔daily epoch matching by
+                    // falling back to calendar-month equality, so the
+                    // same stash works across all three axes.
+                    if (_evoState.frames) {
                         var curIdx = _evoState.currentFrameIdx || 0;
                         var curMap = document.getElementById('seasonal-evo-map');
                         if (curMap && curMap._fullLayout
@@ -6349,8 +6357,13 @@
                         if (curFrame && typeof curFrame.epochDay === 'number') {
                             _evoState._pendingFrameEpoch = curFrame.epochDay;
                         }
-                        _evoState._pendingViewport
-                            = _evoComputeViewport(curMap);
+                        var vp = _evoComputeViewport(curMap);
+                        if (vp) {
+                            _evoState._pendingViewport = {
+                                x: vp.x.slice(),
+                                y: vp.y.slice(),
+                            };
+                        }
                     }
                     // Year/var/resolution change needs fresh frame build.
                     // Resolution flip reshapes 12 → 365 frames (or back),

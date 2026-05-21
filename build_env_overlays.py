@@ -1377,7 +1377,15 @@ def _render_panel_a_anom_png(anom_kt: np.ndarray) -> bytes:
     treatment so Panel A's two atmosphere views (climo + current
     anomaly) share the same look. Diverging RdBu_r centered at 0 kt
     so blue = below-normal (favorable for TCs), red = above-normal.
-    Coverage: ±60° lat × −180..180° lon.
+
+    Coverage: ±60° lat × 100..360°E lon, Pacific-centered. This
+    matches the OISST and ERA5 climo PNGs that Panel A's basin-zoom
+    presets (ANOM_ZOOMS in realtime_seasonal.js) are calibrated for:
+        atlantic → x_frac 0.65, w 0.35 → lon 269..360 (NAtl basin)
+        epac     → x_frac 0.42, w 0.36 → lon 209..302
+        wpac     → x_frac 0.04, w 0.34 → lon 109..197
+    Without the Pacific-centered roll, x_frac 0.65 of a -180..180
+    image lands on lon 54°E (Asia) — that's the bug this addresses.
     """
     import matplotlib
     matplotlib.use("Agg")
@@ -1392,15 +1400,28 @@ def _render_panel_a_anom_png(anom_kt: np.ndarray) -> bytes:
     lat_full = np.linspace(90.0, -90.0, NY, dtype=np.float32)
     mask = (lat_full <= 60.0) & (lat_full >= -60.0)
     sub = anom_kt[mask, :]
+    # Roll lon axis so column 0 → lon 100°E. GFS native lon convention
+    # is -180..180-ε at 0.25° (1440 cols). To put lon 100 at col 0,
+    # we shift left by (100 - (-180)) / 0.25 = 1120 columns; or
+    # equivalently the right side wraps. np.roll with -1120 == +320.
+    shift_cols = int(280.0 / 0.25)  # 1120 columns
+    sub = np.roll(sub, -shift_cols, axis=1)
+    # After the roll: col 0 → lon 100°E, col 1439 → lon 459.75°E.
 
-    fig = plt.figure(figsize=(8.0, 8.0 * 120 / 360), dpi=200)
-    ax = fig.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
-    ax.set_extent([-180.0, 180.0, -60.0, 60.0], crs=ccrs.PlateCarree())
+    fig = plt.figure(figsize=(8.0, 8.0 * 120 / 260), dpi=200)
+    ax = fig.add_subplot(1, 1, 1,
+                         projection=ccrs.PlateCarree(central_longitude=180))
+    # Visible window is 100..360°E (260° wide), matching the other
+    # Panel-A PNGs.
+    ax.set_extent([100.0, 360.0, -60.0, 60.0], crs=ccrs.PlateCarree())
     norm = Normalize(vmin=-30.0, vmax=30.0, clip=True)
+    # imshow extent spans the FULL 360° of rolled data (100..460) so
+    # the 1440 cells cover the whole globe; set_extent above crops to
+    # the visible 100..360 window.
     ax.imshow(
         sub,
         cmap="RdBu_r", norm=norm,
-        extent=[-180.0, 180.0, -60.0, 60.0],
+        extent=[100.0, 460.0, -60.0, 60.0],
         origin="upper", interpolation="bilinear",
         transform=ccrs.PlateCarree(),
         zorder=1,
@@ -1453,17 +1474,30 @@ def _upload_shear_anom_panel_a(anom_kt: np.ndarray, spec: LayerSpec,
         mask = (lat_full <= 60.0) & (lat_full >= -60.0)
         rows = np.where(mask)[0]
         # We have 481 rows in ±60° at 0.25°; decimate 4× to 1°.
-        deci = anom_kt[rows[::4], ::4]  # ~121 × 360
+        deci = anom_kt[rows[::4], ::4]  # ~121 × 360, lon -180..179
         if deci.shape[0] != 121 or deci.shape[1] != 360:
             log.warning("Panel-A: unexpected decimate shape %s", deci.shape)
             return
+        # Roll to Pacific-centered (lon 100..360, with the dateline-
+        # crossing tail covering 0..99 ≡ 360..459) so the grid axes
+        # line up with the PNG and with the other Panel-A grids
+        # (build_era5_climo_pngs.render_grid_sidecar). Shift = 280 cols
+        # at 1° → col 0 = lon 100, col 259 = lon 359, col 260+ wraps
+        # back into 0..99. We crop to the visible 100..360 window so
+        # the frontend hover handler — which assumes lon_min..lon_max
+        # is a contiguous span — doesn't see the wrap.
+        rolled = np.roll(deci, -280, axis=1)         # 121 × 360
+        visible = rolled[:, : 261]                    # cols 0..260 → lon 100..360
+        if visible.shape[1] != 261:
+            log.warning("Panel-A: unexpected visible shape %s", visible.shape)
+            return
         grid = {
             "lat_min": -60.0, "lat_max": 60.0,
-            "lon_min": -180.0, "lon_max": 179.0,
+            "lon_min": 100.0, "lon_max": 360.0,
             "cell_size_deg": 1.0,
-            "n_lat": 121, "n_lon": 360,
+            "n_lat": 121, "n_lon": 261,
             "lat_first": 60.0, "lat_last": -60.0,
-            "lon_first": -180.0, "lon_last": 179.0,
+            "lon_first": 100.0, "lon_last": 360.0,
             "units": "kt",
             "valid_time": valid_time,
             "kind": "shear_anom_200_850",
@@ -1471,7 +1505,7 @@ def _upload_shear_anom_panel_a(anom_kt: np.ndarray, spec: LayerSpec,
             "values": [
                 [None if not np.isfinite(v) else round(float(v), 3)
                  for v in row]
-                for row in deci
+                for row in visible
             ],
         }
         from google.cloud import storage
