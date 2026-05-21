@@ -203,6 +203,29 @@
     white-space: nowrap;
 }
 .seasonal-evo-sampling:empty { display: none; }
+/* Active-resolution indicator chip — sibling of the sampling pill.
+   Reads "1° auto", "0.25° auto", "1° locked", "0.25° locked", or
+   "1° (HD unavailable)" depending on the mode + availability state.
+   Color-coded subtly: green tint when on HD, neutral when at 1°. */
+.seasonal-evo-resolution-chip {
+    display: inline-block;
+    min-width: 70px;
+    padding: 1px 6px;
+    border-radius: 8px;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.12);
+    color: var(--text-dim, #94a3b8);
+    font-size: 0.65rem;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.4;
+    white-space: nowrap;
+}
+.seasonal-evo-resolution-chip:empty { display: none; }
+.seasonal-evo-resolution-chip[data-resolution="hd"] {
+    background: rgba(74,222,128,0.10);
+    border-color: rgba(74,222,128,0.30);
+    color: #4ade80;
+}
 .seasonal-evo-speed {
     background: var(--surface-raised, #1a1f25);
     color: var(--text);

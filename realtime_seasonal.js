@@ -2785,6 +2785,73 @@
         if (hd) return EVO_ARCHIVE_BASE_HD;
         return source === 'new' ? EVO_ARCHIVE_BASE_NEW : EVO_ARCHIVE_BASE_LEGACY;
     }
+    // Area below which Auto-mode promotes to HD. NA basin default is
+    // 120 × 50 = 6000 sq°; this puts the trigger at "user has zoomed
+    // into roughly half a basin" — the scale at which 1° cells start
+    // to read as visible pixel blocks instead of a smooth field.
+    var _EVO_HD_AREA_THRESHOLD = 3000;   // sq° (lon × lat)
+    // Returns true iff HD tiles exist for `year` in the era5_daily_00z
+    // manifest. Used to gate Auto-mode silently — if HD isn't published
+    // for the active year (e.g., 2024 isn't backfilled yet), we stay at
+    // 1° instead of failing the fetch.
+    function _evoHdAvailableFor(year) {
+        var m = _evoState.manifest_hd;
+        if (!m || !m.tiles) return false;
+        // Quick check: any field's tile for any month of `year`.
+        var prefix = 'shear/' + year + '_';
+        for (var k in m.tiles) {
+            if (k.indexOf(prefix) === 0) return true;
+        }
+        return false;
+    }
+    // The single source of truth for "should this render use 0.25°?".
+    // Combines manual override, viewport area, and HD-tile availability.
+    // GC-ATLAS monthly-only variables are always 1° (they don't have
+    // 0.25° source tiles — gc-atlas's catalog is 1° everywhere).
+    function _evoComputeEffectiveHd(viewport) {
+        var variable = _evoState.variable || 'shear';
+        if (_evoIsMonthlyOnly(variable)) return false;
+        if (_evoState.resolution === 'daily') return false;  // mem ceiling
+        if (_evoState.basin === 'ALL') return false;          // needs crop
+        var mode = _evoState.hdMode || 'auto';
+        if (mode === '1deg') return false;
+        var year = _evoState.year;
+        if (!_evoHdAvailableFor(year)) return false;
+        if (mode === 'hd') return true;
+        // Auto path — area-based promotion.
+        if (!viewport) viewport = _evoViewForBasin(_evoState.basin);
+        var area = Math.abs(viewport.x[1] - viewport.x[0])
+                 * Math.abs(viewport.y[1] - viewport.y[0]);
+        return area < _EVO_HD_AREA_THRESHOLD;
+    }
+    // Cache key for the per-(year, resolution, basin) frames lookup.
+    function _evoCacheKey(year, hd, basin) {
+        return year + '@' + (hd ? 'hd' : '1deg') + '@' + basin;
+    }
+    // LRU storage for decoded frames. Entries hold the heavy Float32
+    // arrays; we cap at 4 entries (≈ 140 MB worst-case w/ daily HD)
+    // and evict the least-recently-used on insert.
+    var _EVO_FRAMES_CACHE_CAP = 4;
+    function _evoFramesCacheGet(key) {
+        var c = _evoState.framesCache;
+        if (!c) return null;
+        var entry = c.get(key);
+        if (!entry) return null;
+        // Touch (re-insert) to mark as most-recently-used.
+        c.delete(key);
+        c.set(key, entry);
+        return entry;
+    }
+    function _evoFramesCacheSet(key, frames) {
+        if (!_evoState.framesCache) _evoState.framesCache = new Map();
+        var c = _evoState.framesCache;
+        if (c.has(key)) c.delete(key);
+        c.set(key, frames);
+        while (c.size > _EVO_FRAMES_CACHE_CAP) {
+            var oldestKey = c.keys().next().value;
+            c.delete(oldestKey);
+        }
+    }
     // Compute the crop spec into the source grid for a given basin.
     // In 1° mode this just returns the full globe (rowStart=0..srcNy).
     // In HD mode we crop to the basin viewport so the decoded
@@ -2846,11 +2913,24 @@
         basin: 'NA',
         trackDepth: 'cumulative',
         resolution: 'monthly',   // 'monthly' (12 frames) | 'daily' (365)
-        // High-resolution (0.25° native era5_daily_00z) opt-in.
-        // Allowed only in monthly mode + non-ALL basins; UI gates
-        // the toggle. Daily-HD or ALL-HD = guaranteed memory crash
-        // until viewport-stream-decode lands (future work).
-        hd: false,
+        // Resolution mode (slippy-map style progressive enhancement):
+        //   'auto' (default) — viewport area decides: 1° at season-
+        //          scale views, 0.25° when the user zooms into a sub-
+        //          basin. Map "just gets sharper" as the user zooms,
+        //          matching the Google-Maps mental model.
+        //   '1deg' — user forced 1° (Auto override).
+        //   'hd'   — user forced 0.25° native (Auto override).
+        // The legacy boolean `hd` is now derived (computed below).
+        hdMode: 'auto',
+        // Effective resolution after the current viewport / year /
+        // variable evaluation. Refreshed every render so all the
+        // downstream paths (fetch, decode, grid shape) agree.
+        effectiveHd: false,
+        // Frame cache keyed by `${year}@${resolution}@${basin}` so a
+        // zoom-out → zoom-in round trip doesn't re-download tiles.
+        // LRU capacity intentionally small (4) to keep total memory
+        // bounded at ~140 MB even with HD entries.
+        framesCache: null,
         srcCfg: null,           // captured in _evoRender for downstream
         crop: null,             // viewport crop into the source grid
         frames: null,            // array of {month, day?, z[NY][NX]}
@@ -3133,39 +3213,49 @@
     //   manifest.tiles[key] = { vmin, vmax, n_days, ..., source: 'new'|'legacy' }
     // _evoState.manifest_new and .manifest_legacy keep the raw versions
     // for downstream consumers (the year picker unions both).
-    function _evoLoadManifest() {
-        // In HD mode the manifest comes ONLY from era5_daily_00z (the
-        // native 0.25° archive). The 1° fallback chain doesn't apply
-        // here — if a tile is missing at 0.25°, HD render fails. The
-        // manifest cache is keyed by HD state so toggling between
-        // resolutions re-fetches the right manifest.
-        if (_evoState.hd) {
-            if (_evoState.manifest_hd) return Promise.resolve(_evoState.manifest_hd);
-            if (_evoState.manifestPromise_hd) return _evoState.manifestPromise_hd;
-            _evoState.manifestPromise_hd = fetch(
-                    EVO_ARCHIVE_BASE_HD + '/manifest.json',
-                    { cache: 'no-cache' })
-                .then(function (r) { return r.ok ? r.json() : null; })
-                .then(function (m) {
-                    if (!m || !m.tiles) {
-                        throw new Error('era5_daily_00z manifest unavailable');
-                    }
-                    // Stamp every tile with source='hd' so _evoArchiveBase
-                    // routes them to the 0.25° archive in HD mode.
-                    var out = { metadata: m.metadata || {}, tiles: {} };
-                    Object.keys(m.tiles).forEach(function (k) {
-                        out.tiles[k] = Object.assign({}, m.tiles[k],
-                                                     { source: 'hd' });
-                    });
-                    _evoState.manifest_hd = out;
-                    _evoState.manifest = out;   // active alias
-                    return out;
-                })
-                .catch(function (e) {
-                    _evoState.manifestPromise_hd = null;
-                    throw e;
+    // HD manifest loader — pre-fetched eagerly even when the user is
+    // in 1° mode so the Auto-promotion check (_evoHdAvailableFor)
+    // knows whether to escalate without an extra round-trip on the
+    // user's first zoom-in. ~1 MB JSON, cached for the session.
+    function _evoLoadHdManifest() {
+        if (_evoState.manifest_hd) return Promise.resolve(_evoState.manifest_hd);
+        if (_evoState.manifestPromise_hd) return _evoState.manifestPromise_hd;
+        _evoState.manifestPromise_hd = fetch(
+                EVO_ARCHIVE_BASE_HD + '/manifest.json',
+                { cache: 'no-cache' })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (m) {
+                if (!m || !m.tiles) {
+                    _evoState.manifest_hd = { metadata: {}, tiles: {} };
+                    return _evoState.manifest_hd;
+                }
+                var out = { metadata: m.metadata || {}, tiles: {} };
+                Object.keys(m.tiles).forEach(function (k) {
+                    out.tiles[k] = Object.assign({}, m.tiles[k],
+                                                 { source: 'hd' });
                 });
-            return _evoState.manifestPromise_hd;
+                _evoState.manifest_hd = out;
+                return out;
+            })
+            .catch(function (e) {
+                _evoState.manifestPromise_hd = null;
+                _evoState.manifest_hd = { metadata: {}, tiles: {} };
+                return _evoState.manifest_hd;
+            });
+        return _evoState.manifestPromise_hd;
+    }
+
+    function _evoLoadManifest() {
+        // The active "current render" manifest. In HD mode it's the
+        // 0.25° catalog; in 1° mode it's the 1°-decimated + legacy
+        // merge. The HD catalog is ALSO eagerly loaded by
+        // _evoLoadHdManifest so the Auto-promotion path can consult
+        // it without a network round-trip.
+        if (_evoState.effectiveHd) {
+            return _evoLoadHdManifest().then(function (m) {
+                _evoState.manifest = m;
+                return m;
+            });
         }
         if (_evoState.manifest) return Promise.resolve(_evoState.manifest);
         if (_evoState.manifestPromise) return _evoState.manifestPromise;
@@ -3275,7 +3365,7 @@
         if (!meta) {
             return Promise.reject(new Error('no manifest entry for ' + key));
         }
-        var base = _evoArchiveBase(_evoState.hd, meta.source);
+        var base = _evoArchiveBase(_evoState.effectiveHd, meta.source);
         var url = base + '/' + field + '/' + year + '_' + monthStr + '.bin.gz';
         var srcShape = _evoState.srcCfg
             ? { ny: _evoState.srcCfg.ny, nx: _evoState.srcCfg.nx }
@@ -5139,27 +5229,52 @@
         // (resolution, basin, hd) so all downstream iterators see a
         // consistent shape. GC-ATLAS monthly variables ignore HD (they
         // ship at 1° only) and always fall back to the 1° source cfg.
-        var hd = !!(_evoState.hd && !_evoIsMonthlyOnly(_evoState.variable));
+        // Effective HD is computed from (hdMode, viewport, year) — see
+        // _evoComputeEffectiveHd. Both _evoState.hd and .effectiveHd
+        // get set so legacy hd-reading code keeps working while the
+        // new viewport-driven path uses the same source of truth.
+        var liveViewport = _evoComputeViewport(el);
+        var hd = _evoComputeEffectiveHd(liveViewport);
+        _evoState.effectiveHd = hd;
+        _evoState.hd = hd;
         _evoState.srcCfg = _evoSrcConfig(hd);
         _evoState.crop = _evoCropForBasin(_evoState.srcCfg,
                                           _evoState.basin, hd);
         _evoApplyGridShape(_evoState.srcCfg, _evoState.crop);
+        _evoUpdateHdButton();
+        _evoUpdateResolutionChip();
         var variable = _evoState.variable || 'shear';
         var monthlySpec = EVO_MONTHLY_VARS[variable];
         var loadLabel = monthlySpec ? monthlySpec.label
                       : (variable === 'wind200') ? '200 mb wind'
                       : (variable === 'wind850') ? '850 mb wind'
                       : 'shear';
-        el.innerHTML = '<div class="seasonal-panel-stub" style="padding:80px;'
-            + 'text-align:center;">Loading ' + _evoState.year + ' '
-            + loadLabel
-            + (hd ? ' (HD 0.25°)' : '')
-            + ' archive…</div>';
         var year = _evoState.year;
+        // Fast path — cache hit. Skip the network round-trip entirely
+        // when the user toggles back to a (year, resolution, basin)
+        // triple they've already viewed this session.
+        var cacheKey = _evoCacheKey(year, hd, _evoState.basin);
+        var cachedFrames = _evoFramesCacheGet(cacheKey);
+        var fieldP;
+        if (cachedFrames) {
+            fieldP = Promise.resolve(cachedFrames);
+            // No stub — frames are already in hand.
+        } else {
+            el.innerHTML = '<div class="seasonal-panel-stub" style="padding:80px;'
+                + 'text-align:center;">Loading ' + _evoState.year + ' '
+                + loadLabel
+                + (hd ? ' (HD 0.25°)' : '')
+                + ' archive…</div>';
+            fieldP = _evoFetchYear(year).then(function (frames) {
+                if (frames && frames.length) {
+                    _evoFramesCacheSet(cacheKey, frames);
+                }
+                return frames;
+            });
+        }
         // Fan out: field tiles + climo (if anomaly mode) + IBTrACS metadata
         // + IBTrACS tracks all in parallel. Tracks are heavy (~22 MB) but
         // load once per session and stay cached for subsequent year changes.
-        var fieldP = _evoFetchYear(year);
         var stormsP = _evoLoadStorms();
         var tracksP = _evoLoadTracks();
         fieldP.then(function (frames) {
@@ -5328,6 +5443,9 @@
                         || ev['xaxis.autorange'] != null
                         || ev['yaxis.autorange'] != null;
                     if (!touched) return;
+                    // Fast pass — barb / particle resampling at the
+                    // new viewport. Debounced 80 ms so a continuous
+                    // pinch doesn't fire 60 builds/sec.
                     if (_evoState._overlayDebounce) {
                         clearTimeout(_evoState._overlayDebounce);
                     }
@@ -5335,6 +5453,17 @@
                         _evoState._overlayDebounce = null;
                         _evoUpdateOverlays(el);
                     }, 80);
+                    // Resolution check — slippy-map style auto-
+                    // promotion. Settles longer (600 ms) so a rapid
+                    // zoom doesn't kick off three HD fetches; the
+                    // single fetch fires once the user stops moving.
+                    if (_evoState._resCheckDebounce) {
+                        clearTimeout(_evoState._resCheckDebounce);
+                    }
+                    _evoState._resCheckDebounce = setTimeout(function () {
+                        _evoState._resCheckDebounce = null;
+                        _evoMaybePromoteResolution(el);
+                    }, 600);
                 });
             }
         });
@@ -5576,6 +5705,10 @@
         Promise.all([
             _evoLoadManifest(),
             _evoLoadGcAtlasPerYearManifest().catch(function () { return null; }),
+            // Eagerly pre-fetch the HD manifest so the Auto-promotion
+            // path can consult it without a network round-trip on the
+            // user's first zoom-in. Small (~1 MB), worth the cost.
+            _evoLoadHdManifest().catch(function () { return null; }),
         ]).then(function (results) {
             var dailyM = results[0];
             var gcM    = results[1];
@@ -5614,39 +5747,113 @@
         });
     }
 
-    // Keep the HD button's enabled / active state in sync with the
-    // current (basin, resolution, variable) combo. Called whenever any
-    // of those change, plus on the initial bind. Gates HD off when:
-    //   - basin === 'ALL'              (no viewport crop → would crash)
-    //   - resolution === 'daily'       (12 × 30 × 481 × 1440 ≈ crash)
-    //   - variable is monthly-only     (GC-ATLAS tiles are 1° anyway)
-    // Sets aria-disabled rather than `.disabled` so the title tooltip
-    // still appears on hover (explains WHY the button is gated).
+    // Keep the resolution-mode button label + tooltip in sync with the
+    // current hdMode and the (basin, resolution, variable) gating. The
+    // button cycles Auto → 1° lock → HD lock → Auto on click. Auto is
+    // the default and the recommended mode — it promotes to 0.25° when
+    // the viewport gets small enough that 1° starts to look chunky.
     function _evoUpdateHdButton() {
         var btn = document.getElementById('seasonal-evo-toggle-hd');
         if (!btn) return;
-        var allowed = _evoState.basin !== 'ALL'
+        var hdAllowedAtAll = _evoState.basin !== 'ALL'
             && _evoState.resolution !== 'daily'
             && !_evoIsMonthlyOnly(_evoState.variable);
-        if (!allowed && _evoState.hd) {
-            // Combo became invalid while HD was on — silently drop it.
-            _evoState.hd = false;
+        var mode = _evoState.hdMode || 'auto';
+        // If the user's lock points at HD but the combo can't deliver
+        // HD, silently drop back to Auto so the next render uses 1°.
+        if (!hdAllowedAtAll && mode === 'hd') {
+            mode = 'auto';
+            _evoState.hdMode = 'auto';
         }
-        btn.setAttribute('aria-disabled', allowed ? 'false' : 'true');
-        btn.classList.toggle('active', !!_evoState.hd && allowed);
+        btn.setAttribute('data-hd-mode', mode);
+        btn.classList.toggle('active',
+            (mode === 'hd' && hdAllowedAtAll)
+            || (mode === 'auto' && _evoState.effectiveHd));
+        btn.setAttribute('aria-disabled',
+            (mode === 'hd' && !hdAllowedAtAll) ? 'true' : 'false');
+        var labelByMode = { auto: 'Res: Auto', '1deg': 'Res: 1°', hd: 'Res: HD' };
+        btn.textContent = labelByMode[mode] || 'Res: Auto';
         var reasons = [];
         if (_evoState.basin === 'ALL') reasons.push('basin = ALL');
         if (_evoState.resolution === 'daily') reasons.push('resolution = daily');
         if (_evoIsMonthlyOnly(_evoState.variable))
             reasons.push('variable ships at 1°');
-        btn.title = allowed
-            ? 'High-resolution mode — reads era5_daily_00z (0.25° '
-              + 'native, ~4× finer than the 1° default). Currently '
-              + (_evoState.hd ? 'ON.' : 'OFF.')
-            : 'HD unavailable: ' + reasons.join(', ') + '. '
-              + 'HD needs a viewport-cropped monthly render of an '
-              + 'era5_daily field (the 0.25° decode is too big without '
-              + 'a basin crop or a monthly mean).';
+        var hdAvailForYear = _evoHdAvailableFor(_evoState.year);
+        var modeBlurb;
+        if (mode === 'auto') {
+            modeBlurb = 'Auto-selects 0.25° when you zoom in past '
+                + '~3000 sq° of viewport; otherwise stays at 1°. '
+                + 'Click to lock to 1°.';
+        } else if (mode === '1deg') {
+            modeBlurb = 'Locked at 1° (no auto-upgrade). '
+                + 'Click to lock at HD.';
+        } else {
+            modeBlurb = 'Locked at 0.25° native HD '
+                + '(era5_daily_00z). Click to return to Auto.';
+        }
+        if (!hdAllowedAtAll) {
+            btn.title = 'HD unavailable: ' + reasons.join(', ') + '. '
+                + 'The Auto / 1° / HD cycle stays effective at 1°.';
+        } else if (!hdAvailForYear && (mode === 'auto' || mode === 'hd')) {
+            btn.title = modeBlurb
+                + '\nHD tiles for ' + _evoState.year + ' are not yet '
+                + 'in era5_daily_00z (backfill stops at 2010); render '
+                + 'falls back to 1°.';
+        } else {
+            btn.title = modeBlurb;
+        }
+    }
+
+    // After the viewport settles post-zoom/pan, evaluate whether the
+    // effective resolution should change. If yes, fire a re-render
+    // (which will hit the per-(year, resolution, basin) frame cache
+    // on the second visit, so the zoom-out → zoom-in round-trip is
+    // instant after the first HD load).
+    //
+    // The visible "Loading…" stub still appears on the very first HD
+    // promotion for a given year — that's a deliberate trade-off in
+    // this phase. A future polish pass could background-fetch + swap
+    // (no stub) using Plotly.restyle on the heatmap z; for now the
+    // cache keeps it from being painful on repeat zooms.
+    function _evoMaybePromoteResolution(el) {
+        if (!el || !el._fullLayout) return;
+        if (!_evoState.frames) return;        // no data loaded yet
+        var viewport = _evoComputeViewport(el);
+        var wantedHd = _evoComputeEffectiveHd(viewport);
+        if (wantedHd === _evoState.effectiveHd) {
+            // No change — just keep the chip in sync (the viewport
+            // moved within the same band) and bail.
+            _evoUpdateResolutionChip();
+            return;
+        }
+        // Resolution flip needed. Burn the climo cache (its grid
+        // shape is tied to the old resolution) but keep the active
+        // frames as-is — _evoRender will pull from the per-(year,
+        // res, basin) cache for the new resolution if available.
+        _evoState.climo = null;
+        _evoState.windClimo = null;
+        _evoRender();
+    }
+
+    // Live data-resolution indicator next to the date / sampling pill.
+    // Reads e.g. "1° auto", "0.25° auto", "1° locked", "HD locked".
+    // Color tint flips when HD is effective so the user can see the
+    // resolution change at a glance after a zoom.
+    function _evoUpdateResolutionChip() {
+        var chip = document.getElementById('seasonal-evo-resolution-chip');
+        if (!chip) return;
+        var mode = _evoState.hdMode || 'auto';
+        var hd = !!_evoState.effectiveHd;
+        var label;
+        if (mode === 'auto') {
+            label = hd ? '0.25° auto' : '1° auto';
+        } else if (mode === '1deg') {
+            label = '1° locked';
+        } else {
+            label = hd ? '0.25° locked' : '1° (HD unavail.)';
+        }
+        chip.textContent = label;
+        chip.setAttribute('data-resolution', hd ? 'hd' : '1deg');
     }
 
     function _evoBindControls() {
@@ -5746,19 +5953,27 @@
             hdBtn._evoBound = true;
             hdBtn.addEventListener('click', function () {
                 if (hdBtn.getAttribute('aria-disabled') === 'true') return;
-                _evoState.hd = !_evoState.hd;
-                _evoState.frames = null;
-                // Invalidate climo / windClimo too: in HD we don't
-                // fetch climo (yet); in 1° we DO and the cache is
-                // resolution-specific (0.25° vs 1° grids differ).
+                // Cycle Auto → 1° lock → HD lock → Auto. The Auto
+                // setting drives the slippy-map style progressive-
+                // enhancement: viewport area decides the resolution
+                // automatically (see _evoComputeEffectiveHd).
+                var cur = _evoState.hdMode || 'auto';
+                var next = (cur === 'auto') ? '1deg'
+                         : (cur === '1deg') ? 'hd'
+                         :                    'auto';
+                _evoState.hdMode = next;
+                // Invalidate climo / windClimo: if the next render
+                // ends up at a different effective HD than the cache
+                // was built for, the climo grid shape would mismatch.
                 _evoState.climo = null;
                 _evoState.windClimo = null;
                 _evoUpdateHdButton();
                 _evoRender();
-                _ga('rt_seasonal_evo_hd', { hd: _evoState.hd });
+                _ga('rt_seasonal_evo_hd', { hdMode: next });
             });
         }
         _evoUpdateHdButton();
+        _evoUpdateResolutionChip();
         // Save PNG of the current frame — simplest export path,
         // a single Plotly.toImage call on the live figure.
         var savePng = document.getElementById('seasonal-evo-save-png');

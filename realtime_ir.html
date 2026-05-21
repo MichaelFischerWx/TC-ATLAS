@@ -1088,7 +1088,8 @@
                         </select>
                         <button type="button" id="seasonal-evo-toggle-hd"
                                 class="seasonal-evo-toggle seasonal-evo-hd-btn"
-                                title="High-resolution mode — reads era5_daily_00z (0.25° native, ~4× finer than the 1° default). Only available in monthly mode + non-ALL basins; daily-HD would exhaust browser memory.">HD</button>
+                                data-hd-mode="auto"
+                                title="Resolution selection — click to cycle Auto → 1° lock → HD lock → Auto. Auto promotes to 0.25° native when you zoom in below ~3000 sq° of viewport; otherwise stays at 1°. Locks override the auto-selection.">Res: Auto</button>
                     </label>
                     <label>Overlays
                         <span class="seasonal-evo-toggle-group" id="seasonal-evo-overlays">
@@ -1122,6 +1123,9 @@
                     <span class="seasonal-evo-date" id="seasonal-evo-date">—</span>
                     <span class="seasonal-evo-sampling" id="seasonal-evo-sampling"
                           title="Wind-barb sampling adapts to the zoom level."></span>
+                    <span class="seasonal-evo-resolution-chip"
+                          id="seasonal-evo-resolution-chip"
+                          title="Active data resolution — Auto upgrades to 0.25° native when you zoom in past ~3000 sq° of viewport; otherwise stays at 1°."></span>
                     <select id="seasonal-evo-speed" class="seasonal-evo-speed"
                             title="Frame interval during playback">
                         <option value="800">1×</option>
