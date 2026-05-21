@@ -825,6 +825,48 @@
         ].filter(Boolean);
     }
 
+    // Pick a non-overlapping inset corner for Panel B based on where the
+    // current region/variable's climatological peak lives in the calendar.
+    // Variables whose peak falls in late summer-autumn (SST, MPI, RH, TCWV,
+    // ζ850) keep the original upper-LEFT placement so the inset sits over
+    // the sparser Jan-Feb portion of the chart. Variables whose peak falls
+    // in winter (shear, u200, u850) swap to upper-RIGHT so the inset sits
+    // over the (low-data) summer trough months instead.
+    function _pickInsetDomain() {
+        var DEFAULT_LEFT  = { x: [0.005, 0.22],  y: [0.78, 1.005] };
+        var DEFAULT_RIGHT = { x: [0.78,  0.995], y: [0.78, 1.005] };
+        var region = state.ts.region;
+        var variable = state.ts.variable;
+        // Resolve which monthly climatology series to inspect. ERA5 vars
+        // live in state.era5; SST vars in state.indices.
+        var clim = null;
+        if (_isEra5Var(variable) && state.era5) {
+            var src = state.era5;
+            clim = (src.values || {})[region + '_' + variable];
+        } else if (state.indices && state.indices.values) {
+            // Maps frontend `sst_rel` → server `anom_rel`; same for `anom`.
+            var key = (variable === 'anom')     ? '_anom'
+                    : (variable === 'sst_rel')  ? '_anom_rel'
+                    : (variable === 'sst_dt')   ? '_anom'   // detrended uses anom climo
+                    :                              '_sst';
+            clim = state.indices.values[region + key];
+        }
+        if (!Array.isArray(clim)) return DEFAULT_LEFT;
+        // Find the month (1..12) with the highest |value| — what would
+        // collide with an upper-corner inset.
+        var peakMo = 1, peakAbs = -1;
+        for (var i = 0; i < 12; i++) {
+            var v = clim[i];
+            if (v == null) continue;
+            var a = Math.abs(v);
+            if (a > peakAbs) { peakAbs = a; peakMo = i + 1; }
+        }
+        // Peak Jan-Jun → place inset on the RIGHT (chart's right side is
+        // the safer Jul-Dec for these variables). Peak Jul-Dec → keep
+        // LEFT (safer Jan-Jun side).
+        return (peakMo <= 6) ? DEFAULT_RIGHT : DEFAULT_LEFT;
+    }
+
     function _insetGeoLayout(domain) {
         var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
         // Default domain = Panel C's original top-left placement.
@@ -1273,7 +1315,7 @@
         // region that every TC-relevant variable (SST, MPI, RH700, TCWV)
         // climbs into, and matches the Daily-mode placement at line ~1747
         // for consistency across resolutions.
-        layout.geo2 = _insetGeoLayout({ x: [0.005, 0.22], y: [0.78, 1.005] });
+        layout.geo2 = _insetGeoLayout(_pickInsetDomain());
         Plotly.react(el, allTraces, layout,
                      { responsive: true, displaylogo: false });
     }
@@ -1764,7 +1806,7 @@
         // sparsest region for both `sst` (winter minimum at the bottom
         // of the chart) and the anomaly variants (most years near zero
         // and concentrated below the inset's y range).
-        layout.geo2 = _insetGeoLayout({ x: [0.005, 0.22], y: [0.78, 1.005] });
+        layout.geo2 = _insetGeoLayout(_pickInsetDomain());
         Plotly.react(el, traces.concat(insetTraces), layout,
                      { responsive: true, displaylogo: false });
     }
@@ -3281,152 +3323,162 @@
     // of the shaft encode speed in 50/10/5 kt increments. We sample on
     // a regular (lat, lon) grid and emit one big NaN-separated polyline
     // — single Plotly scatter trace covers ~600 barbs cheaply.
-    var _EVO_BARB_LAT_STEP = 6;     // °
-    var _EVO_BARB_LON_STEP = 6;     // °
+    // Geometry constants mirror vendor/gc-atlas/barbs.js's published-chart
+    // proportions (Tropical Tidbits / WPC style): tight glyph packing,
+    // filled pennants. Sizes are in lat/lon degrees because Plotly's
+    // x/y axes for Panel C are direct lat-lon (scaleanchor:'y' locks
+    // 1°-x = 1°-y on screen, so degrees behave like world units).
+    var _EVO_BARB_LAT_STEP = 8;     // ° between barb rows
+    var _EVO_BARB_LON_STEP = 8;     // ° between barb cols
     var _EVO_MS_TO_KT = 1.94384;
-    var _EVO_SHAFT_DEG = 3.0;       // shaft length in lat/lon degrees
+    var _EVO_SHAFT_DEG = 3.4;       // shaft length
     var _EVO_FEATHER_DEG = 1.4;     // perpendicular feather length
     var _EVO_HALF_DEG = 0.7;
-    var _EVO_SPACING_DEG = 0.5;     // along-shaft spacing between glyphs
-    var _EVO_PENNANT_W_DEG = 0.6;   // base width of pennant triangle
+    var _EVO_SPACING_DEG = 0.28;    // along-shaft gap between glyphs (~20% of feather)
+    var _EVO_PENNANT_W_DEG = 0.56;  // pennant base along shaft
 
-    // Build a (linesX, linesY) polyline-pair representing WMO barbs for
-    // a u/v field sampled on the EVO 1° grid. NaN separators between
-    // adjacent barb pieces so Plotly draws them as disjoint lines.
+    // Build WMO barb glyphs for a u/v field on the EVO 1° grid.
+    // Returns four polyline/polygon arrays:
+    //   lineX, lineY  — shaft + feather strokes (NaN-separated)
+    //   pennX, pennY  — filled pennant triangles (NaN-separated)
+    // Two traces consume these (one stroke trace, one filled trace);
+    // each is drawn twice in _evoBuildPlotlyTraces (dark halo + cream
+    // ink on top) to match the Global Map's two-pass print look.
     function _evoBuildBarbs(uGrid, vGrid) {
-        if (!uGrid || !vGrid) return { x: [], y: [] };
-        var xs = [], ys = [];
-        // Skip cells where speed is tiny so the figure isn't cluttered
-        // with no-info barbs over the deep tropics under shear-zero.
-        var SPEED_THRESHOLD_KT = 5;
+        var empty = { lineX: [], lineY: [], pennX: [], pennY: [] };
+        if (!uGrid || !vGrid) return empty;
+        var lineX = [], lineY = [], pennX = [], pennY = [];
+        // Skip cells below the published calm threshold (≈ 3 kt). Matches
+        // the Global Map renderer in realtime_ir.js _drawWindBarb.
+        var SPEED_THRESHOLD_KT = 3;
         for (var iLat = 0; iLat < EVO_GRID_NY; iLat += _EVO_BARB_LAT_STEP) {
             for (var iLon = 0; iLon < EVO_GRID_NX; iLon += _EVO_BARB_LON_STEP) {
                 var u = uGrid[iLat] && uGrid[iLat][iLon];
                 var v = vGrid[iLat] && vGrid[iLat][iLon];
-                if (u == null || v == null) continue;
+                // Tile decoders set NaN, not null, so guard both.
+                if (u == null || v == null || isNaN(u) || isNaN(v)) continue;
                 var spd_kt = Math.sqrt(u * u + v * v) * _EVO_MS_TO_KT;
                 if (spd_kt < SPEED_THRESHOLD_KT) continue;
-                var stationLon = EVO_LONS[iLon];
-                var stationLat = EVO_LATS[iLat];
-                _evoAppendBarb(xs, ys, stationLon, stationLat, u, v, spd_kt);
+                _evoAppendBarb(lineX, lineY, pennX, pennY,
+                               EVO_LONS[iLon], EVO_LATS[iLat], u, v, spd_kt);
             }
         }
-        return { x: xs, y: ys };
+        return { lineX: lineX, lineY: lineY, pennX: pennX, pennY: pennY };
     }
 
-    // Append a single WMO barb's polyline segments to xs/ys.
-    function _evoAppendBarb(xs, ys, lon, lat, u, v, spd_kt) {
-        // Wind unit vector in the (lon, lat) coord — we IGNORE the
-        // cos(lat) factor here because the Plotly axis is direct
-        // lat-lon (no projection), so a straight u/v vector renders
-        // correctly as wind direction in the plotted frame.
+    // Append one barb's strokes (shaft + feathers) and pennant triangles
+    // to the destination arrays. Feathers/pennants sit on the LEFT of the
+    // staff when looking downwind in the NH; per the climatology globe
+    // convention we flip to the right in the SH so the glyph reads
+    // correctly under coriolis-rotated rendering.
+    function _evoAppendBarb(lineX, lineY, pennX, pennY,
+                            lon, lat, u, v, spd_kt) {
         var mag = Math.sqrt(u * u + v * v);
         if (mag === 0) return;
-        var dx = u / mag, dy = v / mag;           // along-wind unit
-        var px = -dy, py = dx;                    // 90° counter-clockwise (left side)
-        // Shaft from station toward the direction the wind is going
-        // (standard WMO convention: barb shaft points downwind).
+        var dx = u / mag, dy = v / mag;
+        var sideSign = (lat < 0) ? +1 : -1;   // flip for SH
+        var px = -dy * sideSign, py = dx * sideSign;
         var tipX = lon + dx * _EVO_SHAFT_DEG;
         var tipY = lat + dy * _EVO_SHAFT_DEG;
-        // Helper to push a line segment with a NaN separator.
-        function seg(x1, y1, x2, y2) {
-            if (xs.length) { xs.push(null); ys.push(null); }
-            xs.push(x1, x2); ys.push(y1, y2);
+        function seg(arrX, arrY, x1, y1, x2, y2) {
+            if (arrX.length) { arrX.push(null); arrY.push(null); }
+            arrX.push(x1, x2); arrY.push(y1, y2);
         }
         // Shaft.
-        seg(lon, lat, tipX, tipY);
-        // Round to nearest 5 kt for glyph allocation.
+        seg(lineX, lineY, lon, lat, tipX, tipY);
+        // Round-to-5-kt glyph allocation.
         var rounded = Math.round(spd_kt / 5) * 5;
-        var nPennants  = Math.floor(rounded / 50);
-        var rem        = rounded - nPennants * 50;
-        var nFull      = Math.floor(rem / 10);
-        var rem2       = rem - nFull * 10;
-        var nHalf      = Math.floor(rem2 / 5);
-        // Walk down the shaft from the tip — pennants first, then full,
-        // then half. We're decorating the LEFT side (px/py rotation).
-        var pos = _EVO_SHAFT_DEG;  // along-shaft distance from station
+        var nPennants = Math.floor(rounded / 50);
+        var rem = rounded - nPennants * 50;
+        var nFull = Math.floor(rem / 10);
+        var rem2 = rem - nFull * 10;
+        var nHalf = (rem2 >= 5) ? 1 : 0;
+        // Walk pos from the upwind tip back toward the station. Pennants
+        // first (closest to the tail), then full feathers, then a half.
+        var pos = _EVO_SHAFT_DEG;
         for (var p = 0; p < nPennants; p++) {
-            // Pennant = filled triangle with base along the shaft and
-            // apex on the upwind side. Draw as 3 segments (closing the
-            // triangle visually — Plotly scatter can't fill a polygon
-            // segment trivially, so we just stroke the outline).
-            var baseAhead  = pos;
+            // Filled triangle: tip-end base point → apex → behind base.
+            var baseAhead = pos;
             var baseBehind = pos - _EVO_PENNANT_W_DEG;
-            var apexX = lon + dx * baseAhead + px * _EVO_FEATHER_DEG;
-            var apexY = lat + dy * baseAhead + py * _EVO_FEATHER_DEG;
-            var baseAheadX  = lon + dx * baseAhead;
-            var baseAheadY  = lat + dy * baseAhead;
-            var baseBehindX = lon + dx * baseBehind;
-            var baseBehindY = lat + dy * baseBehind;
-            seg(baseAheadX, baseAheadY, apexX, apexY);
-            seg(apexX, apexY, baseBehindX, baseBehindY);
-            seg(baseBehindX, baseBehindY, baseAheadX, baseAheadY);
-            pos -= _EVO_PENNANT_W_DEG + _EVO_SPACING_DEG;
+            var ax = lon + dx * baseAhead;
+            var ay = lat + dy * baseAhead;
+            var bx = lon + dx * baseAhead + px * _EVO_FEATHER_DEG;
+            var by = lat + dy * baseAhead + py * _EVO_FEATHER_DEG;
+            var cx = lon + dx * baseBehind;
+            var cy = lat + dy * baseBehind;
+            if (pennX.length) { pennX.push(null); pennY.push(null); }
+            // Closed polygon — Plotly fill:'toself' closes from last to
+            // first vertex, but explicit close avoids degenerate visuals.
+            pennX.push(ax, bx, cx, ax);
+            pennY.push(ay, by, cy, ay);
+            pos -= _EVO_PENNANT_W_DEG + _EVO_SPACING_DEG * 0.5;
         }
         for (var f = 0; f < nFull; f++) {
-            var baseX = lon + dx * pos;
-            var baseY = lat + dy * pos;
-            var tipFX = baseX + px * _EVO_FEATHER_DEG
-                              + dx * (_EVO_FEATHER_DEG * 0.35);  // angled forward
-            var tipFY = baseY + py * _EVO_FEATHER_DEG
-                              + dy * (_EVO_FEATHER_DEG * 0.35);
-            seg(baseX, baseY, tipFX, tipFY);
-            pos -= _EVO_SPACING_DEG;
-        }
-        for (var h = 0; h < nHalf; h++) {
-            // Half feathers — same shape as full but length × 0.5.
             var bX = lon + dx * pos;
             var bY = lat + dy * pos;
-            var tHX = bX + px * _EVO_HALF_DEG
-                          + dx * (_EVO_HALF_DEG * 0.35);
-            var tHY = bY + py * _EVO_HALF_DEG
-                          + dy * (_EVO_HALF_DEG * 0.35);
-            seg(bX, bY, tHX, tHY);
+            // Feathers angled slightly forward (toward the upwind tip) so
+            // the glyph reads as a sweeping arrow rather than a "T".
+            var tX = bX + px * _EVO_FEATHER_DEG + dx * (_EVO_FEATHER_DEG * 0.35);
+            var tY = bY + py * _EVO_FEATHER_DEG + dy * (_EVO_FEATHER_DEG * 0.35);
+            seg(lineX, lineY, bX, bY, tX, tY);
             pos -= _EVO_SPACING_DEG;
+        }
+        if (nHalf) {
+            // If the half is the *only* glyph, set it back one notch so
+            // it doesn't ride at the very tip alone (matches gc-atlas
+            // globe behavior).
+            if (nPennants === 0 && nFull === 0) pos -= _EVO_SPACING_DEG;
+            var bhX = lon + dx * pos;
+            var bhY = lat + dy * pos;
+            var thX = bhX + px * _EVO_HALF_DEG + dx * (_EVO_HALF_DEG * 0.35);
+            var thY = bhY + py * _EVO_HALF_DEG + dy * (_EVO_HALF_DEG * 0.35);
+            seg(lineX, lineY, bhX, bhY, thX, thY);
         }
     }
 
     // Pull the climatology values for a calendar month from the
-    // era5_climo grid sidecars (which are south-to-north, 0..260 cols
-    // covering lons 100..360). Convert into the Pacific-centered 360-col
-    // grid the daily tiles use (col 0 = lon -180 = +180 in Pacific frame
-    // post-conversion). We keep things on the daily-tile grid for
-    // straightforward subtraction.
+    // era5_climo grid sidecars. We prefer the global 360-col sidecar
+    // (shear_NN.global.grid.json) which matches the daily-archive frame
+    // exactly — no remapping needed. If that file isn't deployed yet
+    // (older build_era5_climo_pngs.py run), fall back to the legacy
+    // Pacific-centered 261-col file and roll it into the daily-tile
+    // frame, accepting the lon 1..99 cutoff that introduces.
     function _evoLoadClimoForMonth(month) {
         var mm = (month < 10 ? '0' : '') + month;
-        return fetch(EVO_CLIMO_BASE + '/shear_' + mm + '.grid.json')
+        var globalUrl = EVO_CLIMO_BASE + '/shear_' + mm + '.global.grid.json';
+        var pacUrl    = EVO_CLIMO_BASE + '/shear_' + mm + '.grid.json';
+        // Try global first.
+        return fetch(globalUrl)
             .then(function (r) { return r.ok ? r.json() : null; })
             .then(function (g) {
-                if (!g) return null;
-                // grid g is south-to-north, lon_min=100, lon_max=360,
-                // n_lat=121, n_lon=261. Pad to 360 cols + flip lats to
-                // match the daily tile's N→S × lon -180..179 frame.
-                var ny = g.n_lat, nx = g.n_lon;
-                // Daily tile is N→S (LATS goes 60..-60). Climo grid is
-                // S→N (g.values[0] = lat -60). Need to flip rows.
-                // Daily tile lon -180..179; climo grid lon 100..360
-                // (which is the rolled Pacific-centered view of the
-                // same lons modulo 360). To express climo on the
-                // daily-tile's lon axis, place climo col k (lon 100+k)
-                // into daily col ((100 + k + 180) mod 360) = ((280 + k) mod 360).
-                var out = new Array(EVO_GRID_NY);
-                for (var i = 0; i < EVO_GRID_NY; i++) {
-                    out[i] = new Array(EVO_GRID_NX).fill(null);
+                if (g && g.values && g.n_lon === EVO_GRID_NX
+                    && g.n_lat === EVO_GRID_NY) {
+                    // Already in N→S × lon -180..179 frame — straight copy.
+                    return g.values.map(function (row) { return row.slice(); });
                 }
-                // Map each climo cell.
-                for (var iC = 0; iC < ny; iC++) {
-                    // climo row iC = lat -60 + iC (S→N).
-                    // daily row at the same lat: 60 - (-60 + iC) = 120 - iC.
-                    var iD = 120 - iC;
-                    if (iD < 0 || iD >= EVO_GRID_NY) continue;
-                    for (var jC = 0; jC < nx; jC++) {
-                        // climo col jC = lon (100 + jC).
-                        // daily col: ((100 + jC) + 180) mod 360 = (280 + jC) mod 360.
-                        var jD = (280 + jC) % 360;
-                        out[iD][jD] = g.values[iC][jC];
-                    }
-                }
-                return out;
+                // Fall back to the Pacific-centered 261-col sidecar.
+                return fetch(pacUrl)
+                    .then(function (r2) { return r2.ok ? r2.json() : null; })
+                    .then(function (p) {
+                        if (!p) return null;
+                        // p is south-to-north, lon_min=100, lon_max=360,
+                        // n_lat=121, n_lon=261. Flip lats + roll lons into
+                        // the daily-tile N→S × lon -180..179 frame.
+                        var ny = p.n_lat, nx = p.n_lon;
+                        var out = new Array(EVO_GRID_NY);
+                        for (var i = 0; i < EVO_GRID_NY; i++) {
+                            out[i] = new Array(EVO_GRID_NX).fill(null);
+                        }
+                        for (var iC = 0; iC < ny; iC++) {
+                            var iD = 120 - iC;
+                            if (iD < 0 || iD >= EVO_GRID_NY) continue;
+                            for (var jC = 0; jC < nx; jC++) {
+                                var jD = (280 + jC) % 360;
+                                out[iD][jD] = p.values[iC][jC];
+                            }
+                        }
+                        return out;
+                    });
             })
             .catch(function () { return null; });
     }
@@ -3705,11 +3757,11 @@
             var barbs = _evoBuildBarbs(f.u, f.v);
             return {
                 name: name,
-                // Use `traces: [0, 2, 3, 4, 5]` to apply this frame's
-                // data to heatmap + track traces + barb overlay. Trace 1
-                // is the static coastlines layer and stays unchanged
-                // across frames.
-                traces: [0, 2, 3, 4, 5],
+                // Trace order: 0=heatmap, 1=coastlines (static), 2=unnamed
+                // tracks, 3=named tracks, 4=fix markers, 5=barb halo,
+                // 6=barb ink, 7=pennant halo, 8=pennant ink. Frames swap
+                // every dynamic trace; only coastlines (1) stays put.
+                traces: [0, 2, 3, 4, 5, 6, 7, 8],
                 data: [
                     { z: frameZ(f) },
                     { x: tracks.unnamedLineX, y: tracks.unnamedLineY },
@@ -3718,7 +3770,10 @@
                       marker: { color: tracks.markersC, size: tracks.markersS,
                                 line: { color: 'rgba(15,23,42,0.7)', width: 0.5 } },
                       text: tracks.markersT },
-                    { x: barbs.x, y: barbs.y },
+                    { x: barbs.lineX, y: barbs.lineY },
+                    { x: barbs.lineX, y: barbs.lineY },
+                    { x: barbs.pennX, y: barbs.pennY },
+                    { x: barbs.pennX, y: barbs.pennY },
                 ],
                 // Storm-name labels rendered via the layout's
                 // `annotations` array (Plotly's frames can swap that
@@ -3776,7 +3831,7 @@
         var coastlineTrace = {
             type: 'scatter', mode: 'lines',
             x: coastlines.x, y: coastlines.y,
-            line: { color: 'rgba(255,255,255,0.55)', width: 0.6 },
+            line: { color: 'rgba(248,250,252,0.9)', width: 1.1 },
             hoverinfo: 'skip', showlegend: false,
             name: 'coastlines',
         };
@@ -3829,21 +3884,48 @@
             };
         });
 
-        // Wind barbs overlay — drawn last so the WMO glyphs sit on top of
-        // the heatmap and storm tracks. Color chosen to read clearly over
-        // both light and dark areas of the colormap.
+        // Wind barbs — drawn in two passes per WMO publication style:
+        // a wider dark halo underneath, then a cream "print ink" stroke
+        // on top. Pennants render as the same two-pass treatment via a
+        // pair of filled scatter traces with fill:'toself'. Order in the
+        // figure: shaft+feather halo → ink → pennant halo → pennant ink,
+        // so the cream ink sits on top everywhere.
         var initialBarbs = _evoBuildBarbs(frames[0].u, frames[0].v);
-        var barbTrace = {
+        var barbHalo = {
             type: 'scatter', mode: 'lines',
-            x: initialBarbs.x, y: initialBarbs.y,
-            line: { color: 'rgba(15,23,42,0.85)', width: 0.9 },
+            x: initialBarbs.lineX, y: initialBarbs.lineY,
+            line: { color: 'rgba(15,23,42,0.7)', width: 2.6 },
+            hoverinfo: 'skip', showlegend: false,
+            name: 'Wind barbs (halo)',
+        };
+        var barbInk = {
+            type: 'scatter', mode: 'lines',
+            x: initialBarbs.lineX, y: initialBarbs.lineY,
+            line: { color: 'rgba(244,240,224,0.95)', width: 1.1 },
             hoverinfo: 'skip', showlegend: false,
             name: 'Wind barbs',
+        };
+        var pennantHalo = {
+            type: 'scatter', mode: 'lines',
+            x: initialBarbs.pennX, y: initialBarbs.pennY,
+            line: { color: 'rgba(15,23,42,0.7)', width: 2.6 },
+            fill: 'toself', fillcolor: 'rgba(15,23,42,0.7)',
+            hoverinfo: 'skip', showlegend: false,
+            name: 'Pennants (halo)',
+        };
+        var pennantInk = {
+            type: 'scatter', mode: 'lines',
+            x: initialBarbs.pennX, y: initialBarbs.pennY,
+            line: { color: 'rgba(244,240,224,0.95)', width: 1.1 },
+            fill: 'toself', fillcolor: 'rgba(244,240,224,0.95)',
+            hoverinfo: 'skip', showlegend: false,
+            name: 'Pennants',
         };
 
         return {
             traces: [baseTrace, coastlineTrace,
-                     unnamedLineTrace, namedLineTrace, markerTrace, barbTrace],
+                     unnamedLineTrace, namedLineTrace, markerTrace,
+                     barbHalo, barbInk, pennantHalo, pennantInk],
             frames: plotlyFrames,
             sliderSteps: sliderSteps,
             initialLabels: initialLabels,

@@ -218,6 +218,33 @@ def render_grid_sidecar(monthly_clim: np.ndarray) -> bytes:
     return json.dumps(payload, separators=(",", ":")).encode()
 
 
+def render_global_grid_sidecar(monthly_clim: np.ndarray) -> bytes:
+    """Global 360-col climatology grid (lon -180..179), matching the
+    daily-archive tile layout exactly. Panel C's anomaly-mode renderer
+    subtracts this from the per-year monthly mean, so we want full lon
+    coverage (no Pacific-centered cropping).
+
+    Orientation: north-to-south (values[0] = lat_max = +60), to match
+    the daily-tile and EVO_LATS frame so Panel C's _evoLoadClimoForMonth
+    can index without flipping rows. West-to-east lon -180..179.
+    """
+    n_lat, n_lon = monthly_clim.shape    # already (121, 360), N→S, lon -180..179
+    payload = {
+        "lat_min": PNG_LAT_MIN, "lat_max": PNG_LAT_MAX,
+        "lon_min": -180.0,      "lon_max": 179.0,
+        "cell_size_deg": 1.0,
+        "n_lat": int(n_lat), "n_lon": int(n_lon),
+        "lat_first": PNG_LAT_MAX, "lat_last": PNG_LAT_MIN,    # explicit N→S
+        "lon_first": -180.0,      "lon_last":  179.0,
+        "units": "m s-1",
+        "values": [
+            [round(float(v), 3) if np.isfinite(v) else None for v in row]
+            for row in monthly_clim
+        ],
+    }
+    return json.dumps(payload, separators=(",", ":")).encode()
+
+
 # ── Top-level workflow ───────────────────────────────────────────────
 def upload(blob_path: str, body: bytes, content_type: str, local_only: bool) -> None:
     if local_only:
@@ -311,8 +338,10 @@ def main() -> None:
         # Render + upload.
         png_body = render_shear_png(clim, month)
         grid_body = render_grid_sidecar(clim)
+        global_grid_body = render_global_grid_sidecar(clim)
         upload(f"{OUTPUT_PREFIX}/shear_{month:02d}.png", png_body, "image/png", args.local_only)
         upload(f"{OUTPUT_PREFIX}/shear_{month:02d}.grid.json", grid_body, "application/json", args.local_only)
+        upload(f"{OUTPUT_PREFIX}/shear_{month:02d}.global.grid.json", global_grid_body, "application/json", args.local_only)
         output_manifest["months_rendered"].append(month)
 
         # Caption-helper region means.
