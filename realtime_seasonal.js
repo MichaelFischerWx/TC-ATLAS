@@ -188,6 +188,102 @@
         });
     }
 
+    // -------------------------------------------------------------------
+    // Panel maximize-to-fullscreen affordance (mobile UX V1).
+    // Each .seasonal-panel gets a small ⛶ button in its top-right corner
+    // (sits next to the existing save / download button). Tap → the panel
+    // becomes position: fixed and covers the viewport with a close (×)
+    // button. The panel's DOM stays in place — only CSS changes — so all
+    // event handlers, Plotly state, and the user's scroll position in the
+    // background stack are preserved across maximize ↔ restore. On
+    // restore, any Plotly chart inside is force-resized to pick up the
+    // new container dimensions.
+    // -------------------------------------------------------------------
+    var _MAXIMIZE_ICON_SVG =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+        + 'stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">'
+        + '<polyline points="15 3 21 3 21 9"/>'
+        + '<polyline points="9 21 3 21 3 15"/>'
+        + '<line x1="21" y1="3" x2="14" y2="10"/>'
+        + '<line x1="3" y1="21" x2="10" y2="14"/>'
+        + '</svg>';
+    var _MAXIMIZE_CLOSE_GLYPH = '✕';   // ✕ — unicode multiplication X
+
+    function _injectMaximizeButtons() {
+        var panels = document.querySelectorAll('.seasonal-panel');
+        panels.forEach(function (panel) {
+            if (panel._maximizeWired) return;
+            panel._maximizeWired = true;
+            var btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'seasonal-maximize-btn';
+            btn.title = 'Expand panel to full screen';
+            btn.setAttribute('aria-label', 'Expand panel to full screen');
+            btn.innerHTML = _MAXIMIZE_ICON_SVG;
+            btn.addEventListener('click', function (e) {
+                e.stopPropagation();
+                _toggleMaximize(panel);
+            });
+            panel.appendChild(btn);
+        });
+        // Esc closes the maximized panel — bind once.
+        if (!document._seasonalEscBound) {
+            document._seasonalEscBound = true;
+            document.addEventListener('keydown', function (e) {
+                if (e.key !== 'Escape') return;
+                var open = document.querySelector(
+                    '.seasonal-panel--maximized');
+                if (open) _toggleMaximize(open);
+            });
+        }
+    }
+
+    function _toggleMaximize(panel) {
+        var isMax = panel.classList.contains('seasonal-panel--maximized');
+        if (!isMax) {
+            // Close any other currently-maximized panel first (only one
+            // at a time — keeps z-index + body-scroll lock simple).
+            var prev = document.querySelector('.seasonal-panel--maximized');
+            if (prev && prev !== panel) prev.classList.remove(
+                'seasonal-panel--maximized');
+            panel.classList.add('seasonal-panel--maximized');
+            document.body.classList.add('seasonal-maximized');
+            // Swap the icon to a close (×) glyph + update aria.
+            var btn = panel.querySelector('.seasonal-maximize-btn');
+            if (btn) {
+                btn._iconHtml = btn.innerHTML;
+                btn.textContent = _MAXIMIZE_CLOSE_GLYPH;
+                btn.title = 'Close fullscreen (Esc)';
+                btn.setAttribute('aria-label', 'Close fullscreen');
+            }
+        } else {
+            panel.classList.remove('seasonal-panel--maximized');
+            if (!document.querySelector('.seasonal-panel--maximized')) {
+                document.body.classList.remove('seasonal-maximized');
+            }
+            var btn2 = panel.querySelector('.seasonal-maximize-btn');
+            if (btn2) {
+                btn2.innerHTML = btn2._iconHtml || _MAXIMIZE_ICON_SVG;
+                btn2.title = 'Expand panel to full screen';
+                btn2.setAttribute('aria-label', 'Expand panel to full screen');
+            }
+        }
+        // Force Plotly to re-measure after the size change. Plotly's
+        // responsive auto-resize only fires on window resize events, not
+        // on programmatic container size changes. Two ticks: one for the
+        // CSS transition to settle, one to issue the resize.
+        setTimeout(function () {
+            if (typeof Plotly === 'undefined') return;
+            var plots = panel.querySelectorAll('.js-plotly-plot');
+            plots.forEach(function (p) {
+                try { Plotly.Plots.resize(p); }
+                catch (e) { /* swallow — chart may not be ready */ }
+            });
+        }, 60);
+        _ga('rt_seasonal_panel_maximize',
+            { panel: panel.id, action: isMax ? 'restore' : 'expand' });
+    }
+
     // Remove any "No data." / "Plotly not loaded." stub left behind by an
     // earlier (pre-data) render. Plotly.react reuses existing Plotly DOM
     // but doesn't touch siblings the app injected via innerHTML, so the
@@ -7761,6 +7857,7 @@
         _refreshTheme();
         _wireThemeReactivity();
         _wireSubnav();
+        _injectMaximizeButtons();
         _bindScatterControls();
         _bindCorrelationControls();
         _bindTimeSeriesControls();

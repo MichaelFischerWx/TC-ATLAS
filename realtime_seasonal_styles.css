@@ -98,9 +98,169 @@
     border-color: rgba(251,146,60,0.50);
 }
 
+/* Narrow viewports: switch the subnav from wrap → horizontal scroll
+   so the 7 chips don't form a 3-row mess that eats half the screen
+   before the user can see any data. The scrollbar is hidden visually
+   but native momentum scrolling is preserved. */
+@media (max-width: 640px) {
+    .seasonal-subnav {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        overflow-y: hidden;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+        padding: 8px 12px;
+        margin: -14px -12px 10px;
+    }
+    .seasonal-subnav::-webkit-scrollbar { display: none; }
+    .seasonal-subnav a {
+        padding: 6px 12px;
+        font-size: 0.75rem;
+        min-height: 28px;
+        display: inline-flex;
+        align-items: center;
+    }
+}
+
+/* ----- Panel "maximize" affordance + fullscreen mode -----
+   Each .seasonal-panel gets a small ⛶ button (injected by JS) that
+   pops the panel into a full-viewport sheet. Below the maximize-class
+   rule positions the panel as fixed and gives it room to breathe so
+   the figure inside fills the screen. */
+.seasonal-maximize-btn {
+    position: absolute;
+    top: 8px;
+    right: 42px;        /* sits left of .seasonal-save-btn (right: 10px,
+                           width: 24px → ends at right: 34px; +8px gap) */
+    z-index: 5;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    line-height: 1;
+    font-size: 0.95rem;
+    color: var(--text-dim, #94a3b8);
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s,
+                transform 0.12s;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+.seasonal-maximize-btn:hover {
+    color: var(--text, #e0e0e0);
+    background: rgba(255,255,255,0.10);
+    border-color: rgba(255,255,255,0.30);
+}
+.seasonal-maximize-btn:active { transform: scale(0.95); }
+.seasonal-maximize-btn svg { width: 13px; height: 13px; }
+
+/* In fullscreen mode the maximize button becomes a close (×) button
+   in the top-right of the panel — wider so it's an easier tap target. */
+.seasonal-panel--maximized .seasonal-maximize-btn {
+    top: 14px;
+    right: 14px;
+    width: 36px;
+    height: 36px;
+    font-size: 1.25rem;
+    background: rgba(255,255,255,0.10);
+    border-color: rgba(255,255,255,0.30);
+    color: var(--text, #e0e0e0);
+}
+.seasonal-panel--maximized .seasonal-save-btn {
+    /* Tuck the download button next to the close on the maximize bar. */
+    right: 60px;
+    top: 18px;
+    width: 28px;
+    height: 28px;
+}
+
+/* The maximized panel covers the viewport with a generous safe-area
+   for the maximize/close bar. We use position: fixed + inset so the
+   panel "lifts" out of the grid without disrupting other panels'
+   scroll position — the user returns to where they were on close.
+   Compound selector (`.seasonal-panel.seasonal-panel--maximized`)
+   bumps specificity above the later `.seasonal-panel { position:
+   relative; }` rule that would otherwise win. */
+.seasonal-panel.seasonal-panel--maximized {
+    position: fixed;
+    inset: 0;
+    z-index: 9000;
+    margin: 0;
+    border-radius: 0;
+    padding: 56px 18px 18px;        /* extra top for the close-bar */
+    background: var(--surface, #0d1117);
+    overflow-y: auto;
+    overflow-x: hidden;
+    /* The internal figure can grow to fill — scroll if it overflows. */
+    -webkit-overflow-scrolling: touch;
+}
+
+/* When ANY panel is maximized, hide the page chrome that would
+   otherwise paint above the panel. The topbar uses backdrop-filter
+   which creates a stacking context that competes with our position:
+   fixed + z-index 9000 panel in non-trivial ways across browsers.
+   Just hide it — the panel's own close (✕) button is the only nav
+   the user needs in fullscreen mode. Set on <body> by JS — see
+   _toggleMaximize. */
+body.seasonal-maximized {
+    overflow: hidden;        /* lock background scroll while modal open */
+}
+body.seasonal-maximized .topbar,
+body.seasonal-maximized .ir-secondary-bar,
+body.seasonal-maximized .ir-view-tabs,
+body.seasonal-maximized .seasonal-subnav,
+body.seasonal-maximized .seasonal-header {
+    display: none;
+}
+
+/* Slightly heavier card border + soft shadow so each panel reads as
+   a discrete artifact instead of blurring into the next. Most visible
+   on mobile where panels stack at full width. */
+.seasonal-panel {
+    box-shadow: 0 1px 0 rgba(255,255,255,0.02) inset,
+                0 1px 3px rgba(0,0,0,0.18);
+}
+
+/* Mobile-only: stronger card definition + a bit more breathing room
+   between cards in the single-column stack. */
+@media (max-width: 980px) {
+    .seasonal-body { gap: 18px; }
+    .seasonal-panel {
+        border-color: rgba(255,255,255,0.10);
+        box-shadow: 0 2px 6px rgba(0,0,0,0.22);
+    }
+    .seasonal-panel-title { font-size: 0.95rem; }
+}
+
+/* Mobile-only: enlarge the maximize button so it's a comfortable
+   touch target (44×44 recommended; we go 32 since the panel header
+   is compact and 44 would look heavy on desktop). */
+@media (max-width: 640px) {
+    .seasonal-maximize-btn {
+        width: 32px;
+        height: 32px;
+        top: 6px;
+        right: 46px;
+    }
+    .seasonal-maximize-btn svg { width: 16px; height: 16px; }
+    .seasonal-save-btn {
+        width: 32px;
+        height: 32px;
+        top: 6px;
+        right: 8px;
+    }
+}
+
 .seasonal-body {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    /* minmax(0, 1fr) instead of bare 1fr: prevents the column from
+       expanding to fit a child's intrinsic min-width. Without this, a
+       wide Plotly chart pushes the column to ~900 px on a 375-px
+       phone viewport, breaking the entire mobile layout. */
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     gap: 14px;
     grid-auto-rows: minmax(280px, auto);
     /* Each panel sizes to its own content — without this, a short panel
@@ -111,7 +271,7 @@
 }
 
 @media (max-width: 980px) {
-    .seasonal-body { grid-template-columns: 1fr; }
+    .seasonal-body { grid-template-columns: minmax(0, 1fr); }
 }
 
 .seasonal-panel {
@@ -122,6 +282,10 @@
     border-radius: 6px;
     padding: 10px 12px 12px;
     min-height: 0;
+    /* Pair with the grid's minmax(0, 1fr) — without min-width: 0 the
+       panel still claims its content's intrinsic min-width and pushes
+       the grid open. Both pieces are required for mobile to behave. */
+    min-width: 0;
 }
 
 #seasonal-panel-scatter { grid-column: 1 / -1; }
