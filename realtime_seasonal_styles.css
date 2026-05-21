@@ -189,6 +189,25 @@
 /* Live wind-barb sampling readout — populated by _evoUpdateOverlays
    whenever the viewport changes (zoom/pan/basin). Tiny monospace pill
    next to the date so users know the barb density isn't fixed at 8°. */
+/* Quick-jump date picker next to the date readout. Maps an ISO date
+   to the closest available frame (epochDay match in daily mode, first-
+   of-month in monthly mode). Tight surface to keep the slider row
+   from growing on narrow viewports. */
+.seasonal-evo-date-jump {
+    background: var(--surface-raised, #1a1f25);
+    color: var(--text, #d5dbe5);
+    border: 1px solid var(--border, rgba(255,255,255,0.18));
+    border-radius: 3px;
+    padding: 1px 4px;
+    font-size: 0.7rem;
+    font-family: inherit;
+    color-scheme: dark light;
+    min-width: 110px;
+}
+.seasonal-evo-date-jump::-webkit-calendar-picker-indicator {
+    filter: invert(0.6);
+    cursor: pointer;
+}
 .seasonal-evo-sampling {
     display: inline-block;
     min-width: 44px;

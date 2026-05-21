@@ -5431,18 +5431,27 @@
     function _evoDrawPlotly(el, frames) {
         _evoApplyWrapAspect(_evoState.basin);
         var built = _evoBuildPlotlyTraces(frames);
+        // Choose the initial xaxis/yaxis range. If the caller stashed
+        // a _pendingViewport (e.g., auto-HD promotion preserving the
+        // user's zoom), honor it. Otherwise fall back to the basin's
+        // default viewport. _pendingViewport is consumed on use so
+        // a subsequent basin-change render still picks the new basin
+        // default.
+        var initialView = _evoState._pendingViewport
+            || { x: _evoViewForBasin(_evoState.basin).x.slice(),
+                 y: _evoViewForBasin(_evoState.basin).y.slice() };
+        _evoState._pendingViewport = null;
         var layout = {
             margin: { l: 50, r: 70, t: 10, b: 30 },
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: 'rgba(0,0,0,0)',
-            // Per-basin viewport. scaleanchor locks the 1°-lon = 1°-lat
-            // aspect so the map isn't horizontally squashed by the
-            // wrapping div's aspect ratio.
-            xaxis: { range: _evoViewForBasin(_evoState.basin).x.slice(),
+            // scaleanchor locks the 1°-lon = 1°-lat aspect so the map
+            // isn't horizontally squashed by the wrapping div.
+            xaxis: { range: initialView.x.slice(),
                      showgrid: false,
                      title: { text: 'Longitude', font: { size: 10 } },
                      scaleanchor: 'y', scaleratio: 1, constrain: 'domain' },
-            yaxis: { range: _evoViewForBasin(_evoState.basin).y.slice(),
+            yaxis: { range: initialView.y.slice(),
                      showgrid: false,
                      title: { text: 'Latitude', font: { size: 10 } },
                      constrain: 'domain' },
@@ -5477,11 +5486,84 @@
                 indexByName[name] = i;
             });
             var dateEl = document.getElementById('seasonal-evo-date');
+            var dateJumpEl = document.getElementById('seasonal-evo-date-jump');
+            // Set the date input's min/max to the year range so the
+            // calendar widget only offers valid dates. Min = Jan 1 of
+            // the active year, max = Dec 31. The "Jump" handler then
+            // snaps the picked date to the nearest available frame.
+            if (dateJumpEl) {
+                var yr = _evoState.year;
+                dateJumpEl.min = yr + '-01-01';
+                dateJumpEl.max = yr + '-12-31';
+            }
+            // Sync the date-jump input's value to the current frame's
+            // epoch day so the calendar opens on the right month.
+            function _syncDateJump(frameName) {
+                if (!dateJumpEl) return;
+                var f = _evoState.frames
+                    && _evoState.frames[indexByName[frameName] || 0];
+                if (!f) return;
+                var d = new Date(f.epochDay * 86400000);
+                var iso = d.getUTCFullYear() + '-'
+                    + String(d.getUTCMonth() + 1).padStart(2, '0') + '-'
+                    + String(d.getUTCDate()).padStart(2, '0');
+                if (dateJumpEl.value !== iso) dateJumpEl.value = iso;
+            }
             function setDate(frameName) {
                 if (dateEl) {
                     var lab = labelByName[frameName] || frameName;
                     dateEl.textContent = _evoState.year + ' · ' + lab;
                 }
+                _syncDateJump(frameName);
+            }
+            // Bind the date-jump input → find the closest frame by
+            // epochDay and navigate. In monthly mode any date in a
+            // month maps to that month's frame; in daily mode any
+            // date maps to its calendar day (or the closest available
+            // if the user picks a day outside the cached range).
+            if (dateJumpEl && !dateJumpEl._evoBound) {
+                dateJumpEl._evoBound = true;
+                dateJumpEl.addEventListener('change', function () {
+                    var parts = dateJumpEl.value.split('-');
+                    if (parts.length !== 3) return;
+                    var pickedEpoch = Date.UTC(
+                        parseInt(parts[0], 10),
+                        parseInt(parts[1], 10) - 1,
+                        parseInt(parts[2], 10)) / 86400000;
+                    var bestIdx = 0;
+                    var bestDist = Infinity;
+                    var fr = _evoState.frames || [];
+                    for (var i = 0; i < fr.length; i++) {
+                        var d = Math.abs(fr[i].epochDay - pickedEpoch);
+                        if (d < bestDist) { bestDist = d; bestIdx = i; }
+                    }
+                    if (fr[bestIdx]) {
+                        var elMap = document.getElementById('seasonal-evo-map');
+                        var f = fr[bestIdx];
+                        var nm = (f.day != null)
+                            ? 'd' + f.epochDay : String(f.month);
+                        _evoState.currentFrameIdx = bestIdx;
+                        if (elMap) {
+                            Plotly.animate(elMap, [nm], {
+                                mode: 'immediate',
+                                transition: { duration: 0 },
+                                frame: { duration: 0, redraw: true },
+                            }).then(function () { _evoUpdateOverlays(elMap); });
+                        }
+                        // Read directly from f.label rather than the
+                        // closure-captured labelByName lookup — across
+                        // HD-promote re-renders the date-jump listener
+                        // stays bound to the FIRST closure, so its
+                        // labelByName can lag the live data. f.label
+                        // is on the live _evoState.frames entry.
+                        if (dateEl) {
+                            dateEl.textContent = _evoState.year + ' · '
+                                + (f.label || nm);
+                        }
+                    }
+                    _ga('rt_seasonal_evo_date_jump',
+                        { date: dateJumpEl.value });
+                });
             }
             // Initial frame label.
             var firstName = (frames[0].day != null)
@@ -5919,6 +6001,14 @@
         // res, basin) cache for the new resolution if available.
         _evoState.climo = null;
         _evoState.windClimo = null;
+        // Preserve the user's zoom across the resolution swap.
+        // Without this, _evoDrawPlotly would snap back to the basin's
+        // default viewport (e.g. NA = [-100..20, 0..50]) every time
+        // auto-HD fires — defeating the "I just zoomed in" intent.
+        _evoState._pendingViewport = {
+            x: viewport.x.slice(),
+            y: viewport.y.slice(),
+        };
         // Cancel any pending 80 ms overlay refresh — _evoRender's
         // newPlot will fully replace the figure's overlay state, so
         // the queued restyle would just be wasted work overwritten
