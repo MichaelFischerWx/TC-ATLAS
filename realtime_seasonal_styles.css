@@ -186,6 +186,62 @@
     color: var(--text-dim, #94a3b8);
 }
 
+/* Subtitle pill in the C · Seasonal Evolution header — flags the
+   00Z synoptic-snapshot source so the title visibly distinguishes
+   from the legacy 4×-daily-mean build. */
+.seasonal-panel-subtitle {
+    margin-left: 10px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgba(46,125,255,0.16);
+    color: var(--text-dim, #94a3b8);
+    font-size: 0.7rem;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    vertical-align: middle;
+}
+
+/* Step-buttons row tucked below the slider for tap-friendly frame
+   navigation on mobile (and ←/→ keyboard fallback on desktop). */
+.seasonal-evo-step-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    margin-top: 4px;
+    flex-wrap: wrap;
+}
+.seasonal-evo-step-btn {
+    background: rgba(46,125,255,0.18);
+    color: var(--text, #d5dbe5);
+    border: 1px solid var(--border, rgba(255,255,255,0.18));
+    border-radius: 4px;
+    padding: 6px 12px;
+    font-size: 0.85rem;
+    font-family: inherit;
+    cursor: pointer;
+    line-height: 1;
+    min-width: 64px;
+    touch-action: manipulation;
+}
+.seasonal-evo-step-btn:hover { background: rgba(46,125,255,0.32); }
+.seasonal-evo-step-btn:active { background: rgba(46,125,255,0.45); }
+
+/* Mobile: the wrap div's aspect-ratio drives a small height when the
+   viewport is narrow. Override to a minimum height so Panel C stays
+   readable on phones — coastlines, barbs, and the colorbar all need
+   ~360 px vertical to render legibly. */
+@media (max-width: 720px) {
+    .seasonal-evo-wrap {
+        min-height: 360px;
+    }
+    .seasonal-evo-step-btn {
+        padding: 8px 14px;
+        font-size: 0.95rem;
+        min-width: 72px;
+    }
+}
+
 .seasonal-panel-desc {
     margin: 0 0 10px;
     font-size: 0.74rem;

@@ -1009,17 +1009,24 @@
                  build_era5_daily_archive.py; tracks come from the same
                  ibtracs_storms.json the TC Climatology page already loads. -->
             <section class="seasonal-panel" id="seasonal-panel-evolution">
-                <h3 class="seasonal-panel-title">C · Seasonal Evolution</h3>
+                <h3 class="seasonal-panel-title">
+                    C · Seasonal Evolution
+                    <span class="seasonal-panel-subtitle">ERA5 00Z analysis snapshot</span>
+                </h3>
                 <p class="seasonal-panel-desc">
                     Scrub through any past TC season with the chosen ERA5
                     environmental field underneath and IBTrACS storm
                     tracks materializing as the time slider advances.
-                    Storms remain on the map after landfall as long as
-                    they retain a true-TC nature (TS/TD/HU/TC/SS/SD) —
-                    they fade once classified extratropical or
-                    dissipated. Anomaly mode subtracts the 1991-2020
-                    climatology so you see how a given season's
-                    environment compared to normal at each time step.
+                    All daily-archive variables (shear, level winds,
+                    vorticity, divergence) read the 00Z synoptic
+                    snapshot — no daily-mean smearing of transient
+                    features. Storms remain on the map after landfall as
+                    long as they retain a true-TC nature
+                    (TS/TD/HU/TC/SS/SD); they fade once classified
+                    extratropical or dissipated. Anomaly mode subtracts
+                    the 1991-2020 climatology so you see how a given
+                    season's environment compared to normal at each
+                    time step.
                 </p>
                 <div class="seasonal-ts-controls">
                     <label>Year
@@ -1098,6 +1105,24 @@
                             title="Save the current frame as a PNG">⤓ PNG</button>
                     <button type="button" id="seasonal-evo-save-gif" class="seasonal-evo-btn"
                             title="Render the entire animation as a GIF. Heavy — can take 30-90 seconds.">⤓ GIF</button>
+                </div>
+                <!-- Step buttons for tap-friendly navigation; ←/→ keyboard
+                     does the same on desktop. Month-step jumps to the
+                     1st of the previous/next month in daily mode and a
+                     month step in monthly mode. -->
+                <div class="seasonal-evo-step-row" id="seasonal-evo-step-row">
+                    <button type="button" class="seasonal-evo-step-btn"
+                            id="seasonal-evo-step-month-back"
+                            title="One month back (or Home for first frame)">«</button>
+                    <button type="button" class="seasonal-evo-step-btn"
+                            id="seasonal-evo-step-day-back"
+                            title="One frame back (←)">‹ Prev</button>
+                    <button type="button" class="seasonal-evo-step-btn"
+                            id="seasonal-evo-step-day-fwd"
+                            title="One frame forward (→)">Next ›</button>
+                    <button type="button" class="seasonal-evo-step-btn"
+                            id="seasonal-evo-step-month-fwd"
+                            title="One month forward (or End for last frame)">»</button>
                 </div>
                 <div class="seasonal-evo-legend" id="seasonal-evo-legend"></div>
             </section>

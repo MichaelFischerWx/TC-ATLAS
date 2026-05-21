@@ -4380,8 +4380,9 @@
                      showgrid: false,
                      title: { text: 'Latitude', font: { size: 10 } },
                      constrain: 'domain' },
-            font: { family: 'DM Sans, system-ui, sans-serif', size: 10,
-                    color: 'rgba(220,228,238,0.85)' },
+            font: { family: 'DM Sans, system-ui, sans-serif', size: 11,
+                    color: (document.documentElement.getAttribute('data-theme')
+                            === 'dark') ? '#dfe6f0' : '#1f2937' },
             sliders: [{
                 pad: { t: 30 }, len: 0.85, x: 0.05, y: -0.05,
                 currentvalue: { visible: false },
@@ -4844,6 +4845,36 @@
             play._evoBound = true;
             play.addEventListener('click', togglePlay);
         }
+        // Step jump (one month) — skip 30 frames in daily mode (close
+        // enough to a calendar month) or 1 frame in monthly mode.
+        function stepMonth(direction) {
+            var frames = _evoState.frames;
+            if (!frames || !frames.length) return;
+            var cur = currentFrameIndex();
+            var jump = (frames[0].day != null) ? 30 : 1;
+            gotoFrame(cur + direction * jump);
+        }
+        var stepBindings = [
+            { id: 'seasonal-evo-step-day-back',    handler: function () {
+                gotoFrame(currentFrameIndex() - 1);
+            }},
+            { id: 'seasonal-evo-step-day-fwd',     handler: function () {
+                gotoFrame(currentFrameIndex() + 1);
+            }},
+            { id: 'seasonal-evo-step-month-back',  handler: function () {
+                stepMonth(-1);
+            }},
+            { id: 'seasonal-evo-step-month-fwd',   handler: function () {
+                stepMonth(+1);
+            }},
+        ];
+        stepBindings.forEach(function (b) {
+            var btn = document.getElementById(b.id);
+            if (btn && !btn._evoBound) {
+                btn._evoBound = true;
+                btn.addEventListener('click', b.handler);
+            }
+        });
         // Keyboard controls — bind once at document level. Active only
         // when the user is focused on Panel C (no <input> / <textarea>
         // in focus) and the map is in the viewport. ← / → step a frame,
