@@ -2828,9 +2828,15 @@
                  * Math.abs(viewport.y[1] - viewport.y[0]);
         return area < _EVO_HD_AREA_THRESHOLD;
     }
-    // Cache key for the per-(year, resolution, basin) frames lookup.
-    function _evoCacheKey(year, hd, basin) {
-        return year + '@' + (hd ? 'hd' : '1deg') + '@' + basin;
+    // Cache key for the per-(year, spatial-res, basin, temporal-res,
+    // variable) frames lookup. Each independent dimension goes in so a
+    // monthly-then-daily flip (or shear-then-wind200 swap) doesn't
+    // return stale frames from a prior axis.
+    function _evoCacheKey(year, hd, basin, temporalRes, variable) {
+        return year + '@' + (hd ? 'hd' : '1deg')
+             + '@' + basin
+             + '@' + (temporalRes || 'monthly')
+             + '@' + (variable || 'shear');
     }
     // LRU storage for decoded frames. Entries hold the heavy Float32
     // arrays; we cap at 4 entries (≈ 140 MB worst-case w/ daily HD)
@@ -5279,7 +5285,8 @@
         // Fast path — cache hit. Skip the network round-trip entirely
         // when the user toggles back to a (year, resolution, basin)
         // triple they've already viewed this session.
-        var cacheKey = _evoCacheKey(year, hd, _evoState.basin);
+        var cacheKey = _evoCacheKey(year, hd, _evoState.basin,
+                                    _evoState.resolution, variable);
         var cachedFrames = _evoFramesCacheGet(cacheKey);
         var fieldP;
         if (cachedFrames) {
