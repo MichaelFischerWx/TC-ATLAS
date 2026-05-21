@@ -2865,8 +2865,12 @@
         // streamlines are mutually exclusive (turning one on flips the
         // other off). Updated via the toggle buttons in HTML.
         showTracks: true,
-        showBarbs: true,
-        showStreamlines: false,
+        // Particles are the default flow overlay — they read more
+        // naturally than static barbs at most viewport scales and
+        // match the TC Climatology globe's look. The mutex still
+        // applies; user can flip to barbs anytime.
+        showBarbs: false,
+        showStreamlines: true,
         // IBTrACS overlay state — lazy-loaded chunk-1 (1977-present)
         // covers everything the era5_daily archive will ever have.
         tracks: null,
@@ -5284,6 +5288,14 @@
             // Initial pass — populate the sampling pill + resample
             // barbs/streams against the current viewport.
             _evoUpdateOverlays(el);
+            // Auto-start the particle RAF if particles are the active
+            // overlay (they are by default). _evoUpdateOverlays above
+            // already pushed the current frame's u/v into the cache,
+            // so _evoParticleStart's initial spawn loop has a valid
+            // field to project against.
+            if (_evoState.showStreamlines && !_evoParticles.running) {
+                _evoParticleStart();
+            }
             if (el.on) {
                 el.on('plotly_sliderchange', function (e) {
                     var step = e && e.step;
