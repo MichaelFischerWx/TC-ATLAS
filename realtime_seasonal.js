@@ -6148,7 +6148,7 @@
     //    metadata.json}. The equirect.png is an un-warped colored RGBA
     //    that mirrors the existing era5_climo PNG schema so this panel
     //    can display it flat without Mercator distortion.
-    var ENV_OVERLAY_BASE = 'https://storage.googleapis.com/tc-atlas-ir-cache/rt-v7/env';
+    var ENV_OVERLAY_BASE = 'https://storage.googleapis.com/tc-atlas-ir-cache/env';
     function _renderShearAnomMap(img, cap) {
         var pngUrl  = ENV_OVERLAY_BASE + '/shear_anom_200_850/equirect.png';
         var gridUrl = ENV_OVERLAY_BASE + '/shear_anom_200_850/equirect.grid.json';
