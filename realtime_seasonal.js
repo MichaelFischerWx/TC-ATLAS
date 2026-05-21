@@ -3504,8 +3504,67 @@
     // filled pennants. Sizes are in lat/lon degrees because Plotly's
     // x/y axes for Panel C are direct lat-lon (scaleanchor:'y' locks
     // 1°-x = 1°-y on screen, so degrees behave like world units).
+    // Default (fallback) barb sampling — used when no viewport is
+    // available yet. The live sampling adapts to the visible viewport
+    // via _evoComputeBarbStep below, targeting ~12-15 glyphs per axis.
     var _EVO_BARB_LAT_STEP = 8;     // ° between barb rows
     var _EVO_BARB_LON_STEP = 8;     // ° between barb cols
+    // Target ~N glyphs per axis when sampling adaptively. Sub-pixel
+    // glyph density looks busy; sparser than this leaves blank regions
+    // at high zoom. Clamp the step into [_EVO_STEP_MIN, _EVO_STEP_MAX]
+    // so we never explode the barb count on extreme global views or
+    // degenerate to a single barb on a 5°-wide pinch zoom.
+    var _EVO_BARB_TARGET_PER_AXIS = 13;
+    var _EVO_STREAM_TARGET_PER_AXIS = 16;
+    var _EVO_STEP_MIN = 1;
+    var _EVO_STEP_MAX = 12;
+    function _evoComputeViewport(el) {
+        // Pull live ranges off Plotly's internal layout. Falls back to
+        // the basin default if the plot hasn't drawn yet.
+        if (el && el._fullLayout && el._fullLayout.xaxis && el._fullLayout.yaxis) {
+            var xr = el._fullLayout.xaxis.range;
+            var yr = el._fullLayout.yaxis.range;
+            if (xr && yr && xr.length === 2 && yr.length === 2) {
+                var xMin = Math.min(xr[0], xr[1]);
+                var xMax = Math.max(xr[0], xr[1]);
+                var yMin = Math.min(yr[0], yr[1]);
+                var yMax = Math.max(yr[0], yr[1]);
+                return { x: [xMin, xMax], y: [yMin, yMax] };
+            }
+        }
+        var v = _evoViewForBasin(_evoState.basin);
+        return { x: v.x.slice(), y: v.y.slice() };
+    }
+    function _evoComputeStep(viewport, target) {
+        var lonW = Math.max(1, Math.abs(viewport.x[1] - viewport.x[0]));
+        var latH = Math.max(1, Math.abs(viewport.y[1] - viewport.y[0]));
+        var lonStep = Math.round(lonW / target);
+        var latStep = Math.round(latH / target);
+        if (lonStep < _EVO_STEP_MIN) lonStep = _EVO_STEP_MIN;
+        if (latStep < _EVO_STEP_MIN) latStep = _EVO_STEP_MIN;
+        if (lonStep > _EVO_STEP_MAX) lonStep = _EVO_STEP_MAX;
+        if (latStep > _EVO_STEP_MAX) latStep = _EVO_STEP_MAX;
+        return { latStep: latStep, lonStep: lonStep };
+    }
+    // Vibrant TC-style wind palette — white at calm, sweeping through
+    // green-yellow-orange-red-purple-cyan to peak. Used for raw
+    // wind200, wind850, and shear heatmaps. Cyan at the top mirrors
+    // the published Knaff-style intensity plot the user wanted to
+    // match; the white floor keeps light winds visually subdued so
+    // peak winds dominate the eye.
+    var _EVO_WIND_COLORSCALE = [
+        [0.00, '#ffffff'],
+        [0.08, '#d4f0d8'],
+        [0.18, '#7dd483'],
+        [0.28, '#cfe24a'],
+        [0.38, '#f4cd25'],
+        [0.48, '#f5921e'],
+        [0.58, '#e3401f'],
+        [0.68, '#a01837'],
+        [0.78, '#5c1163'],
+        [0.88, '#2d2d8e'],
+        [1.00, '#5fd6ff'],
+    ];
     var _EVO_MS_TO_KT = 1.94384;
     var _EVO_SHAFT_DEG = 3.4;       // shaft length
     var _EVO_FEATHER_DEG = 1.4;     // perpendicular feather length
@@ -3528,13 +3587,24 @@
     // correction so trajectories don't bunch near the poles. The
     // integration stops when a parcel exits the 60°S-60°N box, hits a
     // NaN, or the cell speed falls below the calm threshold.
-    var _EVO_STREAM_SEED_LAT_STEP = 6;   // ° between seeds
+    var _EVO_STREAM_SEED_LAT_STEP = 6;   // ° between seeds (fallback)
     var _EVO_STREAM_SEED_LON_STEP = 6;
     var _EVO_STREAM_STEP_DEG = 0.7;      // along-trajectory step size
     var _EVO_STREAM_MAX_STEPS = 60;      // half-length each direction
     var _EVO_STREAM_MIN_KT = 3;          // calm cut-off
-    function _evoBuildStreamlines(uGrid, vGrid) {
+    function _evoBuildStreamlines(uGrid, vGrid, opts) {
         if (!uGrid || !vGrid) return { x: [], y: [] };
+        opts = opts || {};
+        var latStep = opts.latStep || _EVO_STREAM_SEED_LAT_STEP;
+        var lonStep = opts.lonStep || _EVO_STREAM_SEED_LON_STEP;
+        // Optional viewport clip — only seed inside the visible box
+        // (plus a small pad so integrated polylines can drift slightly
+        // outside without their seeds being culled).
+        var vp = opts.viewport;
+        var xMin = vp ? vp.x[0] - 4 : -Infinity;
+        var xMax = vp ? vp.x[1] + 4 :  Infinity;
+        var yMin = vp ? vp.y[0] - 4 : -Infinity;
+        var yMax = vp ? vp.y[1] + 4 :  Infinity;
         function uvAt(lon, lat) {
             if (lat > 60 || lat < -60) return null;
             var iF = (60 - lat);
@@ -3581,9 +3651,10 @@
             return pts;
         }
         var lineX = [], lineY = [];
-        for (var iLat = 0; iLat < EVO_GRID_NY; iLat += _EVO_STREAM_SEED_LAT_STEP) {
-            for (var iLon = 0; iLon < EVO_GRID_NX; iLon += _EVO_STREAM_SEED_LON_STEP) {
+        for (var iLat = 0; iLat < EVO_GRID_NY; iLat += latStep) {
+            for (var iLon = 0; iLon < EVO_GRID_NX; iLon += lonStep) {
                 var lon0 = EVO_LONS[iLon], lat0 = EVO_LATS[iLat];
+                if (lon0 < xMin || lon0 > xMax || lat0 < yMin || lat0 > yMax) continue;
                 if (!uvAt(lon0, lat0)) continue;
                 var bw = trace(lon0, lat0, -1);
                 bw.reverse();
@@ -3600,15 +3671,28 @@
         return { x: lineX, y: lineY };
     }
 
-    function _evoBuildBarbs(uGrid, vGrid) {
+    function _evoBuildBarbs(uGrid, vGrid, opts) {
         var empty = { lineX: [], lineY: [], pennX: [], pennY: [] };
         if (!uGrid || !vGrid) return empty;
+        opts = opts || {};
+        var latStep = opts.latStep || _EVO_BARB_LAT_STEP;
+        var lonStep = opts.lonStep || _EVO_BARB_LON_STEP;
+        // Optional viewport clip — skip cells outside the visible box
+        // (pad by the glyph half-length so barbs near the edge still
+        // draw their tail inside the viewport).
+        var vp = opts.viewport;
+        var xMin = vp ? vp.x[0] - _EVO_SHAFT_DEG : -Infinity;
+        var xMax = vp ? vp.x[1] + _EVO_SHAFT_DEG :  Infinity;
+        var yMin = vp ? vp.y[0] - _EVO_SHAFT_DEG : -Infinity;
+        var yMax = vp ? vp.y[1] + _EVO_SHAFT_DEG :  Infinity;
         var lineX = [], lineY = [], pennX = [], pennY = [];
         // Skip cells below the published calm threshold (≈ 3 kt). Matches
         // the Global Map renderer in realtime_ir.js _drawWindBarb.
         var SPEED_THRESHOLD_KT = 3;
-        for (var iLat = 0; iLat < EVO_GRID_NY; iLat += _EVO_BARB_LAT_STEP) {
-            for (var iLon = 0; iLon < EVO_GRID_NX; iLon += _EVO_BARB_LON_STEP) {
+        for (var iLat = 0; iLat < EVO_GRID_NY; iLat += latStep) {
+            for (var iLon = 0; iLon < EVO_GRID_NX; iLon += lonStep) {
+                var lon = EVO_LONS[iLon], lat = EVO_LATS[iLat];
+                if (lon < xMin || lon > xMax || lat < yMin || lat > yMax) continue;
                 var u = uGrid[iLat] && uGrid[iLat][iLon];
                 var v = vGrid[iLat] && vGrid[iLat][iLon];
                 // Tile decoders set NaN, not null, so guard both.
@@ -3616,7 +3700,7 @@
                 var spd_kt = Math.sqrt(u * u + v * v) * _EVO_MS_TO_KT;
                 if (spd_kt < SPEED_THRESHOLD_KT) continue;
                 _evoAppendBarb(lineX, lineY, pennX, pennY,
-                               EVO_LONS[iLon], EVO_LATS[iLat], u, v, spd_kt);
+                               lon, lat, u, v, spd_kt);
             }
         }
         return { lineX: lineX, lineY: lineY, pennX: pennX, pennY: pennY };
@@ -4001,6 +4085,85 @@
         });
     }
 
+    // Resolve the barb (u, v) vectors for a frame given an overlay
+    // context (built by _evoBuildPlotlyTraces and stashed on
+    // _evoState.overlayCtx so live updates can call this from outside
+    // the trace builder). In raw mode this is just frame.u / frame.v;
+    // in anomaly mode we subtract the climo wind at the relevant
+    // level(s) so the glyph reads as the anomaly of the vector — not
+    // the raw V, which in the upper trop is dominated by the jet
+    // regardless of season.
+    function _evoFrameBarbUV(f, ctx) {
+        if (!ctx) return { u: f && f.u, v: f && f.v };
+        if (!ctx.modeIsAnom || ctx.isMonthly || !f || !f.u || !f.v) {
+            return { u: f && f.u, v: f && f.v };
+        }
+        var wc = _evoState.windClimo && _evoState.windClimo[f.month];
+        if (!wc || !wc.u200 || !wc.v200 || !wc.u850 || !wc.v850) {
+            return { u: f.u, v: f.v };
+        }
+        var climU, climV;
+        var variable = ctx.variable;
+        if (variable === 'shear') {
+            climU = _evoSub(wc.u200, wc.u850);
+            climV = _evoSub(wc.v200, wc.v850);
+        } else if (variable === 'wind200') {
+            climU = wc.u200; climV = wc.v200;
+        } else if (variable === 'wind850') {
+            climU = wc.u850; climV = wc.v850;
+        } else if (ctx.derivedSpec) {
+            var lvl = ctx.derivedSpec.level;
+            climU = wc['u' + lvl]; climV = wc['v' + lvl];
+            if (!climU || !climV) return { u: f.u, v: f.v };
+        } else {
+            return { u: f.u, v: f.v };
+        }
+        return { u: _evoSub(f.u, climU), v: _evoSub(f.v, climV) };
+    }
+
+    // Recompute wind barbs (and streamlines if enabled) for the
+    // current frame at the current viewport's sampling density, then
+    // Plotly.restyle the overlay traces (indices 5-10). Cheap enough
+    // to run on every frame tick + every zoom/pan; the sampling step
+    // adapts via _evoComputeStep so a pinched-in Caribbean view gets
+    // ~12 barbs per axis instead of the 4-5 that fixed 8°-stride
+    // sampling produces. Also updates the "Sampling" pill so the user
+    // sees what density they're getting.
+    function _evoUpdateOverlays(el) {
+        if (!el || !el._fullData || !_evoState.frames || !_evoState.overlayCtx) return;
+        var idx = _evoState.currentFrameIdx || 0;
+        var f = _evoState.frames[idx];
+        if (!f) return;
+        var viewport = _evoComputeViewport(el);
+        var bStep = _evoComputeStep(viewport, _EVO_BARB_TARGET_PER_AXIS);
+        var sStep = _evoComputeStep(viewport, _EVO_STREAM_TARGET_PER_AXIS);
+        var uv = _evoFrameBarbUV(f, _evoState.overlayCtx);
+        var barbs = _evoState.showBarbs
+            ? _evoBuildBarbs(uv.u, uv.v,
+                { latStep: bStep.latStep, lonStep: bStep.lonStep, viewport: viewport })
+            : { lineX: [], lineY: [], pennX: [], pennY: [] };
+        var streams = _evoState.showStreamlines
+            ? _evoBuildStreamlines(uv.u, uv.v,
+                { latStep: sStep.latStep, lonStep: sStep.lonStep, viewport: viewport })
+            : { x: [], y: [] };
+        // Restyle the four barb traces + two streamline traces. Plotly
+        // requires array-of-arrays for the per-trace value lists.
+        Plotly.restyle(el, {
+            x: [barbs.lineX, barbs.lineX, barbs.pennX, barbs.pennX,
+                streams.x, streams.x],
+            y: [barbs.lineY, barbs.lineY, barbs.pennY, barbs.pennY,
+                streams.y, streams.y],
+        }, [5, 6, 7, 8, 9, 10]);
+        // Update the sampling pill (lives next to the date readout).
+        var pill = document.getElementById('seasonal-evo-sampling');
+        if (pill) {
+            pill.textContent = bStep.lonStep + '°×' + bStep.latStep + '°';
+            pill.title = 'Wind-barb sampling — adapts to the zoom level. '
+                + 'Currently ' + bStep.lonStep + '° lon × ' + bStep.latStep
+                + '° lat between glyphs.';
+        }
+    }
+
     function _evoBuildPlotlyTraces(frames) {
         // Returns the initial trace + frames[] for Plotly.newPlot with
         // animation. We build one heatmap trace + one combined-tracks
@@ -4114,29 +4277,21 @@
             zmin = monthlySpec.zmin;
             zmax = monthlySpec.zmax;
         } else if (variable === 'wind200') {
-            // 200-mb wind: ~5–80 m/s in the upper-level jet.
-            colorscale = [
-                [0.0,  '#313695'], [0.30, '#74add1'],
-                [0.50, '#fed98e'], [0.75, '#f46d43'],
-                [1.0,  '#a50026'],
-            ];
+            // Vibrant TC-intensity palette: white at calm, sweeping
+            // through green-yellow-orange-red-purple to cyan at peak.
+            // Modeled on the Knaff axisymmetric V_rot palette so the
+            // colors emphasize peak winds the way TC forecasters read
+            // intensity plots. Maps 0..60 m/s (~0..115 kt).
+            colorscale = _EVO_WIND_COLORSCALE;
             zmin = 0; zmax = 60;
         } else if (variable === 'wind850') {
-            // 850-mb wind: typically calmer, big lower-trop jets ~30 m/s.
-            colorscale = [
-                [0.0,  '#313695'], [0.30, '#74add1'],
-                [0.50, '#fed98e'], [0.75, '#f46d43'],
-                [1.0,  '#a50026'],
-            ];
+            // 850-mb wind: TC-intensity palette over 0..30 m/s.
+            colorscale = _EVO_WIND_COLORSCALE;
             zmin = 0; zmax = 30;
         } else {
-            // Raw shear — same palette as the climo PNG, but defined
-            // for Plotly. RdYlBu_r centered at 12 m/s.
-            colorscale = [
-                [0.0,  '#313695'], [0.40, '#74add1'],
-                [0.50, '#fed98e'], [0.70, '#f46d43'],
-                [1.0,  '#a50026'],
-            ];
+            // Raw shear — TC-intensity palette over 0..30 m/s. White
+            // (favorable, weak shear) → cyan (extremely sheared).
+            colorscale = _EVO_WIND_COLORSCALE;
             zmin = 0; zmax = 30;
         }
 
@@ -4159,43 +4314,18 @@
                 + '<extra></extra>',
         };
 
-        // Resolve the barb (u, v) vectors for a frame. In raw mode this
-        // is just frame.u / frame.v (already V-V_shear or V_level from
-        // _evoFetchYear). In anomaly mode we subtract the climo wind at
-        // the relevant level(s) so the glyph reads as the anomaly of
-        // the vector — not the raw V, which in the upper troposphere
-        // is dominated by the jet regardless of season.
-        function frameBarbUV(f) {
-            if (!modeIsAnom || isMonthly || !f.u || !f.v) {
-                return { u: f.u, v: f.v };
-            }
-            var wc = _evoState.windClimo && _evoState.windClimo[f.month];
-            if (!wc || !wc.u200 || !wc.v200 || !wc.u850 || !wc.v850) {
-                return { u: f.u, v: f.v };
-            }
-            // f.u/f.v are already V200−V850 (shear) or V200 (wind200) or
-            // V850 (wind850), per _evoFetchYear. Build the equivalent
-            // climo vector at the same composition, then subtract.
-            var climU, climV;
-            if (variable === 'shear') {
-                climU = _evoSub(wc.u200, wc.u850);
-                climV = _evoSub(wc.v200, wc.v850);
-            } else if (variable === 'wind200') {
-                climU = wc.u200; climV = wc.v200;
-            } else if (variable === 'wind850') {
-                climU = wc.u850; climV = wc.v850;
-            } else if (derivedSpec) {
-                // ζ/δ variables: barbs show the LEVEL wind anomaly
-                // (V_level − V_level_climo), since the heatmap is the
-                // anomalous vorticity/divergence at that level.
-                var lvl = derivedSpec.level;
-                climU = wc['u' + lvl]; climV = wc['v' + lvl];
-                if (!climU || !climV) return { u: f.u, v: f.v };
-            } else {
-                return { u: f.u, v: f.v };
-            }
-            return { u: _evoSub(f.u, climU), v: _evoSub(f.v, climV) };
-        }
+        // Build a minimal context so the live overlay-update path
+        // (_evoUpdateOverlays) can derive barb/stream u/v from a frame
+        // without rebuilding the entire trace spec. Stashed on
+        // _evoState so frame/zoom/pan events can recompute overlays
+        // for the current frame at the current viewport's sampling.
+        _evoState.overlayCtx = {
+            variable: variable,
+            modeIsAnom: modeIsAnom,
+            isMonthly: isMonthly,
+            derivedSpec: derivedSpec || null,
+        };
+        function frameBarbUV(f) { return _evoFrameBarbUV(f, _evoState.overlayCtx); }
 
         var plotlyFrames = frames.map(function (f, idx) {
             var tracks = _evoBuildTracksForFrame(f);
@@ -4204,21 +4334,16 @@
             // with prior slider steps; daily frames use the epoch-day
             // integer.
             var name = (f.day != null) ? 'd' + f.epochDay : String(f.month);
-            var barbUV = frameBarbUV(f);
-            var barbs = _evoBuildBarbs(barbUV.u, barbUV.v);
-            // Streamlines: only computed when the overlay is on (their
-            // ~50 ms / frame cost is non-trivial; skip when hidden).
-            var streamData = _evoState.showStreamlines
-                ? _evoBuildStreamlines(barbUV.u, barbUV.v)
-                : { x: [], y: [] };
+            // Barb (5-8) + streamline (9-10) traces are NOT swapped
+            // on frame change — _evoUpdateOverlays rebuilds them with
+            // viewport-aware sampling on plotly_sliderchange,
+            // plotly_relayout, basin change, and toggle clicks. Baking
+            // them into per-frame data would lock them to one sampling
+            // density and cause inconsistency between the frame the
+            // user scrubs to and the visible overlay.
             return {
                 name: name,
-                // Trace order: 0=heatmap, 1=coastlines (static),
-                // 2=unnamed tracks, 3=named tracks, 4=fix markers,
-                // 5=barb halo, 6=barb ink, 7=pennant halo, 8=pennant
-                // ink, 9=streamline halo, 10=streamline ink. Frames
-                // swap every dynamic trace; only coastlines (1) stays.
-                traces: [0, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+                traces: [0, 2, 3, 4],
                 data: [
                     { z: frameZ(f) },
                     { x: tracks.unnamedLineX, y: tracks.unnamedLineY },
@@ -4227,12 +4352,6 @@
                       marker: { color: tracks.markersC, size: tracks.markersS,
                                 line: { color: 'rgba(15,23,42,0.7)', width: 0.5 } },
                       text: tracks.markersT },
-                    { x: barbs.lineX, y: barbs.lineY },
-                    { x: barbs.lineX, y: barbs.lineY },
-                    { x: barbs.pennX, y: barbs.pennY },
-                    { x: barbs.pennX, y: barbs.pennY },
-                    { x: streamData.x, y: streamData.y },
-                    { x: streamData.x, y: streamData.y },
                 ],
                 // Storm-name labels rendered via the layout's
                 // `annotations` array (Plotly's frames can swap that
@@ -4537,9 +4656,11 @@
             // Daily-mode frames have names like 'd<epochDay>'; monthly
             // have '1'..'12'. The frame's own `.label` is the human form.
             var labelByName = {};
-            frames.forEach(function (f) {
+            var indexByName = {};
+            frames.forEach(function (f, i) {
                 var name = (f.day != null) ? 'd' + f.epochDay : String(f.month);
                 labelByName[name] = f.label;
+                indexByName[name] = i;
             });
             var dateEl = document.getElementById('seasonal-evo-date');
             function setDate(frameName) {
@@ -4552,24 +4673,52 @@
             var firstName = (frames[0].day != null)
                 ? 'd' + frames[0].epochDay : String(frames[0].month);
             setDate(firstName);
+            // Fresh figure → reset our slider bookkeeping to frame 0.
+            _evoState.currentFrameIdx = 0;
+            // Initial pass — populate the sampling pill + resample
+            // barbs/streams against the current viewport.
+            _evoUpdateOverlays(el);
             if (el.on) {
                 el.on('plotly_sliderchange', function (e) {
                     var step = e && e.step;
                     var name = step && step.args && step.args[0] && step.args[0][0];
                     if (name) setDate(name);
-                    // Track the user's slider drag so keyboard / step
-                    // buttons advance from where they actually are.
                     if (typeof e.step.index === 'number') {
                         _evoState.currentFrameIdx = e.step.index;
+                    } else if (name && indexByName[name] != null) {
+                        _evoState.currentFrameIdx = indexByName[name];
                     }
+                    _evoUpdateOverlays(el);
                 });
                 el.on('plotly_animatingframe', function (e) {
                     var name = e && e.frame && e.frame.name;
                     if (name) setDate(name);
                 });
+                // Zoom / pan — rebuild barb + streamline traces at the
+                // new viewport's sampling density. Debounced so a
+                // continuous drag doesn't fire a build every 16 ms.
+                // 80 ms keeps the response feeling immediate while
+                // collapsing the burst into a single restyle.
+                el.on('plotly_relayout', function (ev) {
+                    if (!ev) return;
+                    var touched = ('xaxis.range[0]' in ev)
+                        || ('xaxis.range[1]' in ev)
+                        || ('yaxis.range[0]' in ev)
+                        || ('yaxis.range[1]' in ev)
+                        || ('xaxis.range' in ev)
+                        || ('yaxis.range' in ev)
+                        || ev['xaxis.autorange'] != null
+                        || ev['yaxis.autorange'] != null;
+                    if (!touched) return;
+                    if (_evoState._overlayDebounce) {
+                        clearTimeout(_evoState._overlayDebounce);
+                    }
+                    _evoState._overlayDebounce = setTimeout(function () {
+                        _evoState._overlayDebounce = null;
+                        _evoUpdateOverlays(el);
+                    }, 80);
+                });
             }
-            // Fresh figure → reset our slider bookkeeping to frame 0.
-            _evoState.currentFrameIdx = 0;
         });
     }
 
@@ -4938,13 +5087,29 @@
         var play = document.getElementById('seasonal-evo-play');
         function togglePlay() {
             var el = document.getElementById('seasonal-evo-map');
-            if (!el || !_evoState.frames) return;
+            if (!el || !_evoState.frames || !_evoState.frames.length) return;
             _evoState.playing = !_evoState.playing;
             if (play) play.textContent = _evoState.playing ? '⏸' : '▶';
             if (_evoState.playing) {
                 var speed = parseInt(
                     document.getElementById('seasonal-evo-speed').value, 10);
-                Plotly.animate(el, null, {
+                // Resume from the user's currently-selected frame, not
+                // from frame 0. Plotly.animate(el, null, …) walks the
+                // figure's frames in their stored order starting at the
+                // beginning; passing an explicit name list lets us
+                // rotate the playback to begin at currentFrameIdx and
+                // wrap around through the end of the year. Without this,
+                // play always snaps back to Jan which is jarring when
+                // the user has scrubbed to a peak-season frame.
+                var n = _evoState.frames.length;
+                var idx = _evoState.currentFrameIdx || 0;
+                if (idx < 0 || idx >= n) idx = 0;
+                var order = new Array(n);
+                for (var k = 0; k < n; k++) {
+                    var f = _evoState.frames[(idx + k) % n];
+                    order[k] = (f.day != null) ? 'd' + f.epochDay : String(f.month);
+                }
+                Plotly.animate(el, order, {
                     frame: { duration: speed, redraw: true },
                     transition: { duration: 0 },
                     mode: 'immediate',
@@ -5057,11 +5222,7 @@
             { id: 'seasonal-evo-toggle-barbs',   key: 'showBarbs',
               mutex: 'showStreamlines' },
             { id: 'seasonal-evo-toggle-streams', key: 'showStreamlines',
-              mutex: 'showBarbs',
-              // Toggling streamlines on triggers a full rebuild so we
-              // get the integrated polylines into the frame data; the
-              // builder skips computation when the overlay is off.
-              fullRebuild: true },
+              mutex: 'showBarbs' },
         ];
         toggleBindings.forEach(function (b) {
             var btn = document.getElementById(b.id);
@@ -5072,13 +5233,14 @@
                 if (b.mutex && _evoState[b.key]) {
                     _evoState[b.mutex] = false;
                 }
-                if (b.fullRebuild) {
-                    // Re-render with the new overlay state so frames
-                    // get the streamline polylines (or empty arrays
-                    // when turned off, releasing the memory).
-                    _evoRerenderTracksOnly();
-                } else {
-                    applyOverlayState();
+                applyOverlayState();
+                // Barb/streamline data lives outside frame swaps now —
+                // recompute when toggling on (so the data populates at
+                // the current viewport's sampling) or off (drop arrays
+                // to release memory).
+                if (b.key === 'showBarbs' || b.key === 'showStreamlines') {
+                    var mapEl = document.getElementById('seasonal-evo-map');
+                    _evoUpdateOverlays(mapEl);
                 }
             });
         });

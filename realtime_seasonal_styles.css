@@ -172,6 +172,23 @@
     font-variant-numeric: tabular-nums;
     color: var(--text-dim, #94a3b8);
 }
+/* Live wind-barb sampling readout — populated by _evoUpdateOverlays
+   whenever the viewport changes (zoom/pan/basin). Tiny monospace pill
+   next to the date so users know the barb density isn't fixed at 8°. */
+.seasonal-evo-sampling {
+    display: inline-block;
+    min-width: 44px;
+    padding: 1px 6px;
+    border-radius: 8px;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.12);
+    color: var(--text-dim, #94a3b8);
+    font-size: 0.65rem;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.4;
+    white-space: nowrap;
+}
+.seasonal-evo-sampling:empty { display: none; }
 .seasonal-evo-speed {
     background: var(--surface-raised, #1a1f25);
     color: var(--text);
@@ -206,11 +223,14 @@
     line-height: 1;
     touch-action: manipulation;
 }
-.seasonal-evo-toggle:hover { background: rgba(46,125,255,0.12); }
+.seasonal-evo-toggle:hover {
+    background: rgba(251,146,60,0.10);
+    border-color: rgba(251,146,60,0.40);
+}
 .seasonal-evo-toggle.active {
-    background: rgba(46,125,255,0.28);
-    color: var(--text, #d5dbe5);
-    border-color: rgba(46,125,255,0.5);
+    background: rgba(251,146,60,0.18);
+    color: #fb923c;
+    border-color: rgba(251,146,60,0.55);
 }
 
 /* Subtitle pill in the C · Seasonal Evolution header — flags the
