@@ -1254,6 +1254,14 @@ def _load_shear_climo_kt(month: int) -> Optional[np.ndarray]:
     if not GCS_BUCKET:
         log.warning("Shear-anom: GCS_IR_CACHE_BUCKET not set")
         return None
+    # google.cloud.storage is imported lazily inside each builder
+    # (matches the pattern in upload_layer etc.) — there's no module-
+    # level `import storage`, so we need to bring it in here too.
+    try:
+        from google.cloud import storage
+    except ImportError:
+        log.warning("Shear-anom: google-cloud-storage not installed")
+        return None
     blob_path = f"era5_climo/shear_{month:02d}.global.grid.json"
     try:
         bucket = storage.Client().bucket(GCS_BUCKET)
@@ -1413,6 +1421,7 @@ def _upload_shear_anom_panel_a(anom_kt: np.ndarray, spec: LayerSpec,
                 for row in deci
             ],
         }
+        from google.cloud import storage
         client = storage.Client()
         bucket = client.bucket(GCS_BUCKET)
         png_blob = bucket.blob(f"{GCS_PREFIX}/{spec.name}/equirect.png")

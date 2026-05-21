@@ -744,7 +744,7 @@
             // onto a second line and would collide with a top-anchored
             // legend (matches the Panels B / F convention).
             legend: {
-                font: { size: 10 }, orientation: 'h',
+                font: { size: 13 }, orientation: 'h',
                 x: 0, y: -0.22, xanchor: 'left', yanchor: 'top',
                 bgcolor: 'rgba(0,0,0,0)',
             },
@@ -1298,7 +1298,7 @@
             },
             showlegend: true,
             legend: {
-                font: { size: 10 }, orientation: 'h',
+                font: { size: 13 }, orientation: 'h',
                 yanchor: 'top', y: -0.18, x: 0, xanchor: 'left',
                 bgcolor: 'rgba(0,0,0,0)',
             },
@@ -1792,7 +1792,7 @@
             },
             showlegend: true,
             legend: {
-                font: { size: 10 }, orientation: 'h',
+                font: { size: 13 }, orientation: 'h',
                 yanchor: 'top', y: -0.18, x: 0, xanchor: 'left',
                 bgcolor: 'rgba(0,0,0,0)',
             },
@@ -2701,7 +2701,7 @@
                         family: 'DM Sans, system-ui, sans-serif',
                         size: 11 },
             },
-            legend: { font: { size: 10 }, orientation: 'h',
+            legend: { font: { size: 13 }, orientation: 'h',
                       yanchor: 'top', y: -0.18,
                       bgcolor: 'rgba(0,0,0,0)' },
             shapes: [
