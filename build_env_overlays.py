@@ -2205,13 +2205,13 @@ def build_sst() -> Optional[bytes]:
         step=2,
         cmap="RdYlBu_r",
         valid_time=valid,
-        # Hourly forecast plumbing — set on every GFS-driven layer so
-        # upload_layer routes to env/{name}/init-{cycle}/f{HH}.png and
-        # the metadata.json carries enough info for the frontend's
-        # auto-time picker. Non-GFS layers (SST, genesis_prob,
-        # subseasonal) leave both at None and fall back to latest.png.
-        forecast_hour=forecast_hour,
-        init_cycle=f"{date_str}-{hour_str}",
+        # OISST is observation-only daily — no GFS init cycle, no
+        # forecast hour. LayerSpec defaults (forecast_hour=None,
+        # init_cycle=None) route the upload through the legacy
+        # latest.png single-PNG path. The pre-edit version of this
+        # spec referenced `forecast_hour` and `f"{date_str}-{hour_str}"`
+        # which aren't in scope inside build_sst() — every cycle's
+        # sst_oisst builder was crashing with NameError.
         description=(
             "NOAA OISST v2.1 daily sea-surface temperature analysis "
             "(0.25° resolution, optimum interpolation of AVHRR + in-situ). "
