@@ -879,12 +879,13 @@
                 <h3 class="seasonal-panel-title">A · Live SST &amp; Atmosphere</h3>
                 <div class="seasonal-ts-controls">
                     <label>Variable
-                        <select id="seasonal-anom-var" title="SST family (OISST today − climo, raw or Vecchi-Soden) vs the atmospheric ERA5 climatology for the current calendar month.">
+                        <select id="seasonal-anom-var" title="SST and atmospheric anomalies — both relative to the same 1991-2020 climatology. SST uses today's OISST; the atmosphere uses the latest GFS analysis cycle.">
                             <optgroup label="SST (OISST today − climo)">
                                 <option value="raw" selected>Raw SST anomaly</option>
                                 <option value="relative">Relative SST anomaly (Vecchi-Soden 2007)</option>
                             </optgroup>
-                            <optgroup label="Atmosphere (ERA5 1991-2020 climatology)">
+                            <optgroup label="Atmosphere (latest GFS − ERA5 climo)">
+                                <option value="shear_anom">Deep-layer shear anomaly (current)</option>
                                 <option value="shear_climo">Deep-layer shear climatology (this calendar month)</option>
                             </optgroup>
                         </select>

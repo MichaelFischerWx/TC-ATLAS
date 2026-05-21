@@ -1150,21 +1150,30 @@ def regrid_to_global(field: np.ndarray) -> np.ndarray:
     return field
 
 
-def build_shear(date_str: str, hour_str: str, *, forecast_hour: int = 0,
-                bundle: Optional[dict] = None) -> Optional[bytes]:
-    """200-850 hPa wind shear magnitude (knots)."""
-    log.info("Building shear: GFS %s %sZ", date_str, hour_str)
+def _compute_smoothed_shear_kt(date_str: str, hour_str: str,
+                              forecast_hour: int,
+                              bundle: Optional[dict]) -> Optional[np.ndarray]:
+    """Shared shear computation extracted so build_shear and
+    build_shear_anomaly can reuse one result per (cycle, fh) without
+    paying the disc_smooth cost twice. Returns the canonical-global
+    (NY×NX) shear field in kt, or None on failure.
+
+    Result is cached on the bundle under sentinel key ("__shear_kt", 0)
+    so the second call within the same forecast hour reads from memory.
+    """
+    if bundle is not None:
+        cached = bundle.get(("__shear_kt", 0))
+        if cached is not None:
+            return cached
     fields = _load_fields(date_str, hour_str, forecast_hour,
                           [("UGRD", 200), ("UGRD", 850),
                            ("VGRD", 200), ("VGRD", 850)],
                           bundle=bundle)
     if fields is None:
-        log.error("Shear: field load failed")
         return None
     u200 = fields[("UGRD", 200)]; u850 = fields[("UGRD", 850)]
     v200 = fields[("VGRD", 200)]; v850 = fields[("VGRD", 850)]
-
-    # Disc-smooth u/v at each level over a 500 km radius before
+    # Disc-smooth u/v at each level over a 400 km radius before
     # differencing so the TC vortex (and other sub-500-km features)
     # doesn't contaminate the "environmental shear" diagnostic. Smooths
     # in 0..360 longitude convention first to avoid edge effects at the
@@ -1178,6 +1187,20 @@ def build_shear(date_str: str, hour_str: str, *, forecast_hour: int = 0,
     # m/s → knots: 1 m/s = 1.94384 kt
     shear_kt = np.sqrt(du * du + dv * dv) * 1.94384
     shear_kt = regrid_to_global(shear_kt)
+    if bundle is not None:
+        bundle[("__shear_kt", 0)] = shear_kt
+    return shear_kt
+
+
+def build_shear(date_str: str, hour_str: str, *, forecast_hour: int = 0,
+                bundle: Optional[dict] = None) -> Optional[bytes]:
+    """200-850 hPa wind shear magnitude (knots)."""
+    log.info("Building shear: GFS %s %sZ", date_str, hour_str)
+    shear_kt = _compute_smoothed_shear_kt(date_str, hour_str,
+                                          forecast_hour, bundle)
+    if shear_kt is None:
+        log.error("Shear: field load failed")
+        return None
 
     valid = compute_valid_time(date_str, hour_str, forecast_hour)
     spec = LayerSpec(
@@ -1212,6 +1235,194 @@ def build_shear(date_str: str, hour_str: str, *, forecast_hour: int = 0,
     except Exception as e:
         log.warning("  region-mean shear append failed (non-fatal): %s", e)
     return shear_kt if upload_layer(spec, shear_kt) else None
+
+
+# Cached ERA5 climatology grids — fetched lazily per calendar month
+# and reused across cycles inside one job invocation. Keyed by month
+# (1-12). Values are (121, 360) float32 arrays in kt, N→S, lon -180..179.
+_SHEAR_CLIMO_KT_CACHE: dict = {}
+
+
+def _load_shear_climo_kt(month: int) -> Optional[np.ndarray]:
+    """Fetch the ERA5 1991-2020 climatology grid for `month` from
+    gs://${GCS_IR_CACHE_BUCKET}/era5_climo/shear_{MM}.global.grid.json
+    and return it in knots (matching build_shear's unit choice).
+    Cached for the process lifetime — twelve months × a few KB each.
+    """
+    if month in _SHEAR_CLIMO_KT_CACHE:
+        return _SHEAR_CLIMO_KT_CACHE[month]
+    if not GCS_BUCKET:
+        log.warning("Shear-anom: GCS_IR_CACHE_BUCKET not set")
+        return None
+    blob_path = f"era5_climo/shear_{month:02d}.global.grid.json"
+    try:
+        bucket = storage.Client().bucket(GCS_BUCKET)
+        blob = bucket.blob(blob_path)
+        if not blob.exists():
+            log.warning("Shear-anom: climo grid missing at %s", blob_path)
+            return None
+        data = json.loads(blob.download_as_bytes())
+    except Exception as e:
+        log.warning("Shear-anom: climo fetch failed: %s", e)
+        return None
+    vals = np.array(data["values"], dtype=np.float32)
+    if vals.shape != (121, 360):
+        log.warning("Shear-anom: unexpected climo shape %s for %s",
+                    vals.shape, blob_path)
+        return None
+    kt = vals * 1.94384  # m/s → kt
+    _SHEAR_CLIMO_KT_CACHE[month] = kt
+    return kt
+
+
+def _climo_to_gfs_grid(climo_kt: np.ndarray) -> np.ndarray:
+    """Bilinearly interpolate the 121×360 ERA5 climo grid (lat 60..-60,
+    lon -180..179, 1°) onto the canonical NY×NX GFS grid (lat 90..-90,
+    lon -180..179.75, 0.25°). Returns NaN outside the ±60° climo
+    coverage so the anomaly field also goes NaN there — keeps users
+    from misreading 0-kt cells at the poles as "no anomaly".
+    """
+    from scipy.interpolate import RegularGridInterpolator
+    src_lat = np.linspace(60.0, -60.0, 121, dtype=np.float64)
+    src_lon = np.linspace(-180.0, 179.0, 360, dtype=np.float64)
+    # RegularGridInterpolator wants ascending coords — flip lat axis.
+    interp = RegularGridInterpolator(
+        (src_lat[::-1], src_lon),
+        climo_kt[::-1, :],
+        method="linear", bounds_error=False, fill_value=np.nan,
+    )
+    dst_lat = np.linspace(90.0, -90.0, NY, dtype=np.float64)
+    dst_lon = np.linspace(-180.0, 179.75, NX, dtype=np.float64)
+    lat_mesh, lon_mesh = np.meshgrid(dst_lat, dst_lon, indexing="ij")
+    pts = np.stack([lat_mesh.ravel(), lon_mesh.ravel()], axis=-1)
+    out = interp(pts).reshape(NY, NX).astype(np.float32)
+    return out
+
+
+def build_shear_anomaly(date_str: str, hour_str: str, *,
+                       forecast_hour: int = 0,
+                       bundle: Optional[dict] = None) -> Optional[bytes]:
+    """Current GFS 200-850 hPa shear ANOMALY vs ERA5 1991-2020 climo.
+
+    Feeds Panel A's Atmosphere mode so the atmospheric panel matches
+    the SST panel's "current anomaly" framing — users see where shear
+    is currently above/below normal for the calendar month, not the
+    long-term mean. Anomaly = (current GFS-derived |V200-V850|) −
+    (ERA5 1991-2020 monthly-mean |V200-V850|) at GFS 0.25° resolution.
+    The climo is bilinearly upscaled to match.
+
+    Sign convention: positive = above-normal shear (suppressive for
+    TCs); negative = below-normal (favorable). Plotted with RdBu_r so
+    red = bad, blue = good — matches forecaster intuition.
+    """
+    log.info("Building shear anomaly: GFS %s %sZ f%03d",
+             date_str, hour_str, forecast_hour)
+    shear_kt = _compute_smoothed_shear_kt(date_str, hour_str,
+                                          forecast_hour, bundle)
+    if shear_kt is None:
+        log.error("Shear-anom: shear field unavailable")
+        return None
+    valid = compute_valid_time(date_str, hour_str, forecast_hour)
+    # Use the VALID time's calendar month for the climo — at month
+    # boundaries f012 may roll into the next month, and the user wants
+    # to compare against the climo for the forecast valid time.
+    month = int(valid[5:7])
+    climo_kt_src = _load_shear_climo_kt(month)
+    if climo_kt_src is None:
+        log.warning("Shear-anom: skipping (no climo for month %d)", month)
+        return None
+    climo_on_gfs = _climo_to_gfs_grid(climo_kt_src)
+    anom_kt = shear_kt - climo_on_gfs
+    spec = LayerSpec(
+        name="shear_anom_200_850",
+        title="200-850 hPa Shear Anomaly",
+        units="kt",
+        vmin=-30, vmax=30, step=5,
+        cmap="RdBu_r",
+        render_style="filled",
+        valid_time=valid,
+        forecast_hour=forecast_hour,
+        init_cycle=f"{date_str}-{hour_str}",
+        data_vmin=-80, data_vmax=80,
+        description=(
+            "Current GFS-derived 200-850 hPa shear minus the ERA5 "
+            "1991-2020 climatological mean for the same calendar "
+            "month, after a 400 km disc smooth of u/v at each level. "
+            "Blue = below-normal shear (favorable for TCs); red = "
+            "above-normal (suppressive)."
+        ),
+    )
+    ok = upload_layer(spec, anom_kt)
+    # Panel A consumes a FLAT equirectangular colored PNG + grid sidecar
+    # (the env-overlay Mercator warp would distort the rectangular
+    # display in the seasonal page). Write those alongside the standard
+    # env-overlay artifacts so Panel A can find the latest cycle by
+    # reading env/shear_anom_200_850/metadata.json (already written by
+    # upload_layer) and then loading the equirect.png sibling.
+    _upload_shear_anom_panel_a(anom_kt, spec, valid)
+    return anom_kt if ok else None
+
+
+def _upload_shear_anom_panel_a(anom_kt: np.ndarray, spec: LayerSpec,
+                              valid_time: str) -> None:
+    """Render the equirectangular colored PNG + grid JSON Panel A needs
+    (Seasonal tab > Live anomaly > Atmosphere mode). Writes alongside
+    the env-overlay artifacts at env/shear_anom_200_850/. Failures are
+    logged and swallowed — the primary env-overlay upload still ships.
+
+    The equirectangular PNG mirrors the era5_climo PNGs the panel was
+    already shaped to consume; the grid JSON shares the same schema as
+    era5_climo/shear_MM.global.grid.json so the existing hover wiring
+    in realtime_seasonal.js needs only a URL swap.
+    """
+    if not GCS_BUCKET:
+        return
+    try:
+        png_bytes = _render_filled_png(anom_kt, spec)
+    except Exception as e:
+        log.warning("Panel-A equirect PNG render failed: %s", e)
+        return
+    # Downsample 721×1440 → 121×360 (1° lat × 1° lon, matching the
+    # existing era5_climo grid JSON schema the frontend hover code
+    # already supports). Block-average to preserve magnitudes through
+    # the decimation; NaN values propagate as NaN.
+    try:
+        lat_full = np.linspace(90.0, -90.0, NY, dtype=np.float32)
+        # Slice to ±60° (climo coverage) — every 6th row gives 1°.
+        mask = (lat_full <= 60.0) & (lat_full >= -60.0)
+        rows = np.where(mask)[0]
+        # We have 481 rows in ±60° at 0.25°; decimate 4× to 1°.
+        deci = anom_kt[rows[::4], ::4]  # ~121 × 360
+        if deci.shape[0] != 121 or deci.shape[1] != 360:
+            log.warning("Panel-A: unexpected decimate shape %s", deci.shape)
+            return
+        grid = {
+            "lat_min": -60.0, "lat_max": 60.0,
+            "lon_min": -180.0, "lon_max": 179.0,
+            "cell_size_deg": 1.0,
+            "n_lat": 121, "n_lon": 360,
+            "lat_first": 60.0, "lat_last": -60.0,
+            "lon_first": -180.0, "lon_last": 179.0,
+            "units": "kt",
+            "valid_time": valid_time,
+            "kind": "shear_anom_200_850",
+            # NaN → null so JSON.parse can roundtrip.
+            "values": [
+                [None if not np.isfinite(v) else round(float(v), 3)
+                 for v in row]
+                for row in deci
+            ],
+        }
+        client = storage.Client()
+        bucket = client.bucket(GCS_BUCKET)
+        png_blob = bucket.blob(f"{GCS_PREFIX}/{spec.name}/equirect.png")
+        png_blob.upload_from_string(png_bytes, content_type="image/png")
+        grid_blob = bucket.blob(f"{GCS_PREFIX}/{spec.name}/equirect.grid.json")
+        grid_blob.upload_from_string(json.dumps(grid),
+                                     content_type="application/json")
+        log.info("Panel-A equirect artifacts uploaded for %s", spec.name)
+    except Exception as e:
+        log.warning("Panel-A equirect upload failed: %s", e)
 
 
 def append_gfs_shear_regions(date_str: str, hour_str: str,
@@ -2231,6 +2442,11 @@ def main() -> int:
     # back to its own fetch (`_load_fields` handles that).
     gfs_builders = [
         ("shear_200_850", lambda fh, b: build_shear(date_str, hour_str, forecast_hour=fh, bundle=b)),
+        # Runs right after shear_200_850 in the same forecast hour so
+        # the cached smoothed-shear field on the bundle is reused (the
+        # second _compute_smoothed_shear_kt call short-circuits via
+        # bundle[("__shear_kt", 0)] — no double disc_smooth cost).
+        ("shear_anom_200_850", lambda fh, b: build_shear_anomaly(date_str, hour_str, forecast_hour=fh, bundle=b)),
         ("shear_500_850", lambda fh, b: build_midlevel_shear(date_str, hour_str, forecast_hour=fh, bundle=b)),
         ("vort_850",      lambda fh, b: build_vorticity(date_str, hour_str, 850, forecast_hour=fh, bundle=b)),
         ("vort_700",      lambda fh, b: build_vorticity(date_str, hour_str, 700, forecast_hour=fh, bundle=b)),

@@ -3999,7 +3999,8 @@ def get_env_layers():
     # the `category` field which the frontend uses for menu grouping.
     known = (
         ("env", "mslp"),
-        ("env", "shear_200_850"), ("env", "shear_500_850"),
+        ("env", "shear_200_850"), ("env", "shear_anom_200_850"),
+        ("env", "shear_500_850"),
         ("env", "vort_850"), ("env", "vort_700"), ("env", "vort_500"),
         ("env", "div_850"), ("env", "div_200"),
         ("env", "z500_heights"),

@@ -5322,6 +5322,19 @@
                 spans[1].textContent = '30 m/s';
             }
             legend.setAttribute('data-mode', 'shear');
+        } else if (mode === 'shear_anom') {
+            // Diverging RdBu_r centered at 0 kt — matches build_env_overlays
+            // build_shear_anomaly's LayerSpec (vmin=-30, vmax=+30 kt).
+            // Blue = below-normal shear (favorable for TCs); red =
+            // above-normal (suppressive).
+            bar.style.background = 'linear-gradient(to right, '
+                + '#2166ac 0%, #67a9cf 25%, #f7f7f7 50%, '
+                + '#ef8a62 75%, #b2182b 100%)';
+            if (spans.length >= 2) {
+                spans[0].textContent = '−30 kt';
+                spans[1].textContent = '+30 kt';
+            }
+            legend.setAttribute('data-mode', 'shear_anom');
         } else {
             // Reset to the SST defaults (matches the CSS rule + HTML).
             bar.style.background = '';
@@ -5337,9 +5350,15 @@
         var img = document.getElementById('seasonal-anom-img');
         var cap = document.getElementById('seasonal-anom-caption');
         if (!img || !cap) return;
-        // Atmosphere path: ERA5 climatology shear PNG for the current
-        // calendar month, generated offline by build_era5_climo_pngs.py
-        // and served from gs://${GCS_IR_CACHE_BUCKET}/era5_climo/.
+        // Atmosphere paths: "shear_anom" = current GFS-derived shear
+        // minus the ERA5 1991-2020 monthly climo (the SST-parity view
+        // — both panels now anchored to the same 1991-2020 baseline).
+        // "shear_climo" = the long-term climo mean for the current
+        // calendar month (kept as a secondary "what's normal?" view).
+        if (state.anomVar === 'shear_anom') {
+            _renderShearAnomMap(img, cap);
+            return;
+        }
         if (state.anomVar === 'shear_climo') {
             _renderShearClimoMap(img, cap);
             return;
@@ -5404,6 +5423,77 @@
             .catch(function () { state.shearClimoManifest = null; return null; });
         return _shearClimoManifestPromise;
     }
+    // ── Atmosphere path: current GFS-derived shear anomaly vs ERA5
+    //    1991-2020 climo. Produced every 6 h by build_env_overlays.py
+    //    (build_shear_anomaly) and uploaded to
+    //    env/shear_anom_200_850/{equirect.png, equirect.grid.json,
+    //    metadata.json}. The equirect.png is an un-warped colored RGBA
+    //    that mirrors the existing era5_climo PNG schema so this panel
+    //    can display it flat without Mercator distortion.
+    var ENV_OVERLAY_BASE = 'https://storage.googleapis.com/tc-atlas-ir-cache/rt-v7/env';
+    function _renderShearAnomMap(img, cap) {
+        var pngUrl  = ENV_OVERLAY_BASE + '/shear_anom_200_850/equirect.png';
+        var gridUrl = ENV_OVERLAY_BASE + '/shear_anom_200_850/equirect.grid.json';
+        var metaUrl = ENV_OVERLAY_BASE + '/shear_anom_200_850/metadata.json';
+
+        cap.textContent = 'Loading current GFS shear anomaly…';
+        _applyAnomLegend('shear_anom');
+        // The "Month" selector is for selecting which calendar-month
+        // climo to view — only meaningful in the static-climo mode.
+        // For the live anomaly we always anchor to the cycle's valid
+        // month, so hide the picker here.
+        _setAnomMonthVisible(false);
+        // Drop any leftover grid from the prior mode so the hover
+        // formatter doesn't show stale °C / m/s values while the kt
+        // anomaly grid loads. The fetch below repopulates on success.
+        state.anom_grid = null;
+
+        // Cache-bust by appending the current minute so a freshly-built
+        // cycle replaces the stale image immediately. Cycles land every
+        // 6h with f000..f012 — the equirect.png clobbers each cycle.
+        var bust = '?ts=' + Math.floor(Date.now() / 60000);
+        img.style.opacity = '';
+        img.src = pngUrl + bust;
+        img.onload = function () { _applyAnomZoom(); };
+        img.onerror = function () {
+            img.onerror = null;
+            img.removeAttribute('src');
+            img.style.opacity = '0';
+            cap.innerHTML = '<em>Current shear-anomaly PNG not yet '
+                + 'published. After build_env_overlays.py runs at the '
+                + 'next GFS cycle, this map will show the latest 200-850 '
+                + 'hPa shear anomaly vs the ERA5 1991-2020 climo.</em>';
+        };
+        _applyAnomZoom();
+
+        // Hover sidecar — same JSON schema as era5_climo/shear_MM.grid.json
+        // so the existing _wireAnomHover code-path works unchanged.
+        fetch(gridUrl + bust).then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (g) {
+                state.anom_grid = g;
+                _wireAnomHover();
+            }).catch(function () { state.anom_grid = null; });
+
+        // Caption: pull the cycle's valid_time from the metadata.json
+        // upload_layer wrote, fall back to the grid's valid_time if the
+        // env-overlay metadata fetch fails.
+        fetch(metaUrl + bust).then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (m) {
+                var validIso = (m && m.valid_time)
+                    || (state.anom_grid && state.anom_grid.valid_time)
+                    || null;
+                var validLabel = validIso
+                    ? validIso.replace('T', ' ').replace(/:\d{2}(?:\.\d+)?Z?$/, 'Z')
+                    : 'latest cycle';
+                cap.textContent = 'Current 200-850 hPa shear anomaly '
+                    + '(GFS analysis − ERA5 1991-2020 climo)'
+                    + '  |  Valid ' + validLabel;
+            }).catch(function () {
+                cap.textContent = 'Current 200-850 hPa shear anomaly '
+                    + '(GFS analysis − ERA5 1991-2020 climo)';
+            });
+    }
+
     function _renderShearClimoMap(img, cap) {
         var monthNow = state.anomMonth || ((new Date()).getUTCMonth() + 1);
         var mm = (monthNow < 10 ? '0' : '') + monthNow;
@@ -5556,6 +5646,11 @@
                     return (v === null || v === undefined)
                         ? 'no data'
                         : v.toFixed(1) + ' m/s shear';
+                }
+                if (state.anomVar === 'shear_anom') {
+                    return (v === null || v === undefined)
+                        ? 'no data'
+                        : (v >= 0 ? '+' : '') + v.toFixed(1) + ' kt anom';
                 }
                 return (v === null || v === undefined)
                     ? 'land / no data'
