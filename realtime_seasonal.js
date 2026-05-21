@@ -2945,18 +2945,22 @@
         var labels = [];
 
         // Resolve the frame to (frameTime, activeStart):
-        //   frameTime = end-of-day for daily mode, end-of-month for monthly.
-        //   activeStart = start of that same window.
+        // Daily mode: frameTime = 00Z of the displayed day (matches the
+        //   00Z analysis snapshot the env field carries — was previously
+        //   end-of-day, which let track lines run 18 h past the field).
+        // Monthly mode: frameTime = end-of-month so tracks accumulate
+        //   through the whole month (env field is a monthly mean).
         var frameTime, activeStart;
         if (frameOrMonth && typeof frameOrMonth === 'object') {
-            // Frame mode — epochDay defines end-of-day, regardless of
-            // resolution. For monthly frames epochDay = last day of month.
-            frameTime = frameOrMonth.epochDay * 86400000 + 86399000;
             if (frameOrMonth.day != null) {
-                // Daily — active window = start of this day.
-                activeStart = frameOrMonth.epochDay * 86400000;
+                // Daily — clip the track end to the same 00Z timestamp
+                // the env field is valid at.
+                frameTime = frameOrMonth.epochDay * 86400000;
+                activeStart = frameTime;       // 00Z exact
             } else {
-                // Monthly — active window = start of this month.
+                // Monthly — frameTime is end-of-month for cumulation;
+                // activeStart is start-of-month.
+                frameTime = frameOrMonth.epochDay * 86400000 + 86399000;
                 activeStart = Date.UTC(year, frameOrMonth.month - 1, 1);
             }
         } else {
