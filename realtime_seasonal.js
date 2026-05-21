@@ -3393,10 +3393,15 @@
             margin: { l: 50, r: 70, t: 10, b: 30 },
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: 'rgba(0,0,0,0)',
-            xaxis: { range: [-100, 0], showgrid: false,
-                     title: { text: 'Longitude', font: { size: 10 } } },
+            // Atlantic-and-Africa default extent. scaleanchor locks the
+            // 1° lon = 1° lat aspect so the map isn't horizontally
+            // squashed by whatever the wrapping div's aspect ratio is.
+            xaxis: { range: [-100, 40], showgrid: false,
+                     title: { text: 'Longitude', font: { size: 10 } },
+                     scaleanchor: 'y', scaleratio: 1, constrain: 'domain' },
             yaxis: { range: [-60, 60], showgrid: false,
-                     title: { text: 'Latitude', font: { size: 10 } } },
+                     title: { text: 'Latitude', font: { size: 10 } },
+                     constrain: 'domain' },
             font: { family: 'DM Sans, system-ui, sans-serif', size: 10,
                     color: 'rgba(220,228,238,0.85)' },
             sliders: [{
@@ -3447,6 +3452,153 @@
                 });
             }
         });
+    }
+
+    // PNG export of the current frame — composes a small title bar
+    // above + an attribution footer below the rasterized Plotly figure.
+    function _evoSavePng() {
+        var el = document.getElementById('seasonal-evo-map');
+        if (!el || typeof Plotly === 'undefined') return;
+        var rect = el.getBoundingClientRect();
+        var dateLabel = (document.getElementById('seasonal-evo-date') || {}).textContent
+                        || ('' + _evoState.year);
+        var modeLabel = _evoState.mode === 'anomaly'
+            ? 'Shear anomaly vs 1991-2020' : 'Raw shear';
+        Plotly.toImage(el, {
+            format: 'png',
+            width: Math.round(rect.width * 2),
+            height: Math.round(rect.height * 2),
+        }).then(function (url) {
+            var img = new Image();
+            img.onload = function () {
+                var titleH = 56, footerH = 32;
+                var canvas = document.createElement('canvas');
+                canvas.width = img.width;
+                canvas.height = img.height + titleH + footerH;
+                var ctx = canvas.getContext('2d');
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = '#0f172a';
+                ctx.font = 'bold 26px "DM Sans", system-ui, sans-serif';
+                ctx.textBaseline = 'middle';
+                ctx.fillText('Seasonal Evolution — ' + dateLabel
+                             + '  ·  ' + modeLabel,
+                             24, titleH / 2);
+                ctx.drawImage(img, 0, titleH);
+                ctx.fillStyle = '#475569';
+                ctx.font = '16px "DM Sans", system-ui, sans-serif';
+                ctx.fillText('TC-ATLAS · ' + new Date().toISOString().slice(0, 10) + ' UTC',
+                             24, titleH + img.height + footerH / 2);
+                canvas.toBlob(function (blob) {
+                    var u = URL.createObjectURL(blob);
+                    var a = document.createElement('a');
+                    a.href = u;
+                    a.download = 'tc-atlas-seasonal-evo-' + _evoState.year
+                        + '-' + dateLabel.replace(/[^a-zA-Z0-9]+/g, '_')
+                        + '.png';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    setTimeout(function () { URL.revokeObjectURL(u); }, 1000);
+                }, 'image/png');
+            };
+            img.src = url;
+        }).catch(function (err) {
+            console.warn('[seasonal-evo] PNG save failed:', err);
+        });
+    }
+
+    // GIF export of the full animation. Walks every frame, scrubs the
+    // plot to it, captures via Plotly.toImage, decodes into ImageData,
+    // feeds to gifenc. Output is a Blob downloaded as .gif.
+    function _evoSaveGif(buttonEl) {
+        var el = document.getElementById('seasonal-evo-map');
+        var frames = _evoState.frames;
+        if (!el || !frames || !frames.length || typeof Plotly === 'undefined') return;
+        var originalLabel = buttonEl ? buttonEl.textContent : '';
+        if (buttonEl) {
+            buttonEl.disabled = true;
+            buttonEl.textContent = 'Rendering 0/' + frames.length + '…';
+        }
+        // Per-frame delay in the encoded GIF (centiseconds).
+        var speed = parseInt(
+            (document.getElementById('seasonal-evo-speed') || { value: '400' }).value,
+            10);
+        var delayCs = Math.max(4, Math.round(speed / 10));
+        var width = Math.round(el.getBoundingClientRect().width);
+        var height = Math.round(el.getBoundingClientRect().height);
+
+        import('https://unpkg.com/gifenc@1.0.3/dist/gifenc.esm.js')
+            .then(function (mod) {
+                var gif = mod.GIFEncoder();
+
+                function captureFrame(i) {
+                    if (i >= frames.length) {
+                        // Finalize.
+                        gif.finish();
+                        var bytes = gif.bytes();
+                        var blob = new Blob([bytes], { type: 'image/gif' });
+                        var u = URL.createObjectURL(blob);
+                        var a = document.createElement('a');
+                        a.href = u;
+                        a.download = 'tc-atlas-seasonal-evo-' + _evoState.year + '.gif';
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        setTimeout(function () { URL.revokeObjectURL(u); }, 1500);
+                        if (buttonEl) {
+                            buttonEl.disabled = false;
+                            buttonEl.textContent = originalLabel;
+                        }
+                        return;
+                    }
+                    if (buttonEl) {
+                        buttonEl.textContent = 'Rendering ' + (i + 1)
+                            + '/' + frames.length + '…';
+                    }
+                    var name = (frames[i].day != null)
+                        ? 'd' + frames[i].epochDay : String(frames[i].month);
+                    Plotly.animate(el, [name], {
+                        mode: 'immediate', transition: { duration: 0 },
+                        frame: { duration: 0, redraw: true },
+                    }).then(function () {
+                        return Plotly.toImage(el, {
+                            format: 'png',
+                            width: width, height: height,
+                        });
+                    }).then(function (url) {
+                        // Decode the PNG data URL into ImageData via off-screen canvas.
+                        var img = new Image();
+                        img.onload = function () {
+                            var c = document.createElement('canvas');
+                            c.width = width; c.height = height;
+                            var cx = c.getContext('2d');
+                            cx.fillStyle = '#ffffff';
+                            cx.fillRect(0, 0, width, height);
+                            cx.drawImage(img, 0, 0, width, height);
+                            var rgba = cx.getImageData(0, 0, width, height).data;
+                            var palette = mod.quantize(rgba, 256);
+                            var indexed = mod.applyPalette(rgba, palette);
+                            gif.writeFrame(indexed, width, height, {
+                                palette: palette, delay: delayCs,
+                            });
+                            captureFrame(i + 1);
+                        };
+                        img.src = url;
+                    }).catch(function (e) {
+                        console.warn('[seasonal-evo] frame capture failed:', e);
+                        captureFrame(i + 1);   // skip bad frame
+                    });
+                }
+                captureFrame(0);
+            })
+            .catch(function (e) {
+                console.warn('[seasonal-evo] gifenc load failed:', e);
+                if (buttonEl) {
+                    buttonEl.disabled = false;
+                    buttonEl.textContent = originalLabel;
+                }
+            });
     }
 
     function _evoPopulateYearPicker() {
@@ -3504,6 +3656,26 @@
         bind('seasonal-evo-basin', 'basin');
         bind('seasonal-evo-track-depth', 'trackDepth');
         bind('seasonal-evo-resolution', 'resolution');
+        // Save PNG of the current frame — simplest export path,
+        // a single Plotly.toImage call on the live figure.
+        var savePng = document.getElementById('seasonal-evo-save-png');
+        if (savePng && !savePng._evoBound) {
+            savePng._evoBound = true;
+            savePng.addEventListener('click', function () {
+                _evoSavePng();
+                _ga('rt_seasonal_evo_save_png');
+            });
+        }
+        // Save GIF — iterates every frame, captures each, encodes via
+        // gifenc. Heavy work, gated behind a "Rendering…" button state.
+        var saveGif = document.getElementById('seasonal-evo-save-gif');
+        if (saveGif && !saveGif._evoBound) {
+            saveGif._evoBound = true;
+            saveGif.addEventListener('click', function () {
+                _evoSaveGif(saveGif);
+                _ga('rt_seasonal_evo_save_gif');
+            });
+        }
         // Play / pause is its own thing — TODO Phase 1b
         var play = document.getElementById('seasonal-evo-play');
         if (play && !play._evoBound) {
