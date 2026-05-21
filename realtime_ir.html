@@ -1086,6 +1086,19 @@
                             <option value="daily">Daily (365 frames)</option>
                         </select>
                     </label>
+                    <label>Overlays
+                        <span class="seasonal-evo-toggle-group" id="seasonal-evo-overlays">
+                            <button type="button" id="seasonal-evo-toggle-tracks"
+                                    class="seasonal-evo-toggle active"
+                                    title="Show / hide IBTrACS storm tracks + intensity markers.">Tracks</button>
+                            <button type="button" id="seasonal-evo-toggle-barbs"
+                                    class="seasonal-evo-toggle active"
+                                    title="Show / hide WMO wind barbs. Mutually exclusive with streamlines.">Barbs</button>
+                            <button type="button" id="seasonal-evo-toggle-streams"
+                                    class="seasonal-evo-toggle"
+                                    title="Show / hide flow streamlines integrated from the u/v field. Mutually exclusive with barbs.">Streamlines</button>
+                        </span>
+                    </label>
                 </div>
                 <div class="seasonal-evo-wrap" id="seasonal-evo-wrap">
                     <div id="seasonal-evo-map" class="seasonal-evo-map"></div>

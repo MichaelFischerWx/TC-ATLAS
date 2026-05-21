@@ -186,6 +186,33 @@
     color: var(--text-dim, #94a3b8);
 }
 
+/* Overlay-toggle button group on Panel C — one button per overlay
+   (Tracks / Barbs / Streamlines). Active state is highlighted; toggle
+   handlers in realtime_seasonal.js flip the trace visibilities. */
+.seasonal-evo-toggle-group {
+    display: inline-flex;
+    gap: 4px;
+    margin-top: 2px;
+}
+.seasonal-evo-toggle {
+    background: transparent;
+    color: var(--text-dim, #94a3b8);
+    border: 1px solid var(--border, rgba(255,255,255,0.18));
+    border-radius: 3px;
+    padding: 3px 8px;
+    font-size: 0.72rem;
+    font-family: inherit;
+    cursor: pointer;
+    line-height: 1;
+    touch-action: manipulation;
+}
+.seasonal-evo-toggle:hover { background: rgba(46,125,255,0.12); }
+.seasonal-evo-toggle.active {
+    background: rgba(46,125,255,0.28);
+    color: var(--text, #d5dbe5);
+    border-color: rgba(46,125,255,0.5);
+}
+
 /* Subtitle pill in the C · Seasonal Evolution header — flags the
    00Z synoptic-snapshot source so the title visibly distinguishes
    from the legacy 4×-daily-mean build. */

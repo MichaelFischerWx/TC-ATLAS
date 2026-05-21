@@ -2779,6 +2779,13 @@
         // |V|. Fetched from GC-ATLAS lazily when shear/wind200/wind850
         // is rendered in anomaly mode.
         windClimo: null,
+        // Overlay visibility — toggle group on Panel C. Barbs default on,
+        // streamlines default off, tracks default on. Barbs and
+        // streamlines are mutually exclusive (turning one on flips the
+        // other off). Updated via the toggle buttons in HTML.
+        showTracks: true,
+        showBarbs: true,
+        showStreamlines: false,
         // IBTrACS overlay state — lazy-loaded chunk-1 (1977-present)
         // covers everything the era5_daily archive will ever have.
         tracks: null,
@@ -3509,6 +3516,86 @@
     // Two traces consume these (one stroke trace, one filled trace);
     // each is drawn twice in _evoBuildPlotlyTraces (dark halo + cream
     // ink on top) to match the Global Map's two-pass print look.
+    // Streamline builder — integrates u/v from a regular seed lattice
+    // via forward-Euler and emits NaN-separated polylines for a single
+    // Plotly scatter trace. Mutually exclusive with the wind-barb
+    // overlay (the user toggles between them). At each step we scale
+    // the wind into (Δlon, Δlat) deg per step, with a cos(lat)
+    // correction so trajectories don't bunch near the poles. The
+    // integration stops when a parcel exits the 60°S-60°N box, hits a
+    // NaN, or the cell speed falls below the calm threshold.
+    var _EVO_STREAM_SEED_LAT_STEP = 6;   // ° between seeds
+    var _EVO_STREAM_SEED_LON_STEP = 6;
+    var _EVO_STREAM_STEP_DEG = 0.7;      // along-trajectory step size
+    var _EVO_STREAM_MAX_STEPS = 60;      // half-length each direction
+    var _EVO_STREAM_MIN_KT = 3;          // calm cut-off
+    function _evoBuildStreamlines(uGrid, vGrid) {
+        if (!uGrid || !vGrid) return { x: [], y: [] };
+        function uvAt(lon, lat) {
+            if (lat > 60 || lat < -60) return null;
+            var iF = (60 - lat);
+            var jF = ((lon + 180) % 360 + 360) % 360;
+            var i0 = Math.floor(iF);
+            var i1 = Math.min(i0 + 1, EVO_GRID_NY - 1);
+            var j0 = Math.floor(jF) % EVO_GRID_NX;
+            var j1 = (j0 + 1) % EVO_GRID_NX;
+            if (i0 < 0 || i0 >= EVO_GRID_NY) return null;
+            var fi = iF - Math.floor(iF), fj = jF - Math.floor(jF);
+            var u00 = uGrid[i0][j0], u01 = uGrid[i0][j1];
+            var u10 = uGrid[i1][j0], u11 = uGrid[i1][j1];
+            var v00 = vGrid[i0][j0], v01 = vGrid[i0][j1];
+            var v10 = vGrid[i1][j0], v11 = vGrid[i1][j1];
+            if (u00 == null || u01 == null || u10 == null || u11 == null
+                || v00 == null || v01 == null || v10 == null || v11 == null
+                || isNaN(u00) || isNaN(u01) || isNaN(u10) || isNaN(u11)
+                || isNaN(v00) || isNaN(v01) || isNaN(v10) || isNaN(v11)) return null;
+            var u = (1-fi)*(1-fj)*u00 + (1-fi)*fj*u01 + fi*(1-fj)*u10 + fi*fj*u11;
+            var v = (1-fi)*(1-fj)*v00 + (1-fi)*fj*v01 + fi*(1-fj)*v10 + fi*fj*v11;
+            var spd_kt = Math.sqrt(u*u + v*v) * _EVO_MS_TO_KT;
+            if (spd_kt < _EVO_STREAM_MIN_KT) return null;
+            return { u: u, v: v, mag: Math.sqrt(u*u + v*v) };
+        }
+        function trace(lon0, lat0, dir) {
+            var pts = [[lon0, lat0]];
+            var lon = lon0, lat = lat0;
+            for (var s = 0; s < _EVO_STREAM_MAX_STEPS; s++) {
+                var d = uvAt(lon, lat);
+                if (!d) break;
+                // Convert (u, v) m/s to (Δlon, Δlat) per step. Δlat /
+                // Δlon * step magnitude follows the wind direction; the
+                // cos(lat) factor on Δlon keeps trajectories from
+                // wrapping faster near the poles.
+                var cosL = Math.cos(lat * _EVO_DEG_TO_RAD);
+                if (Math.abs(cosL) < 0.05) cosL = 0.05;
+                var dirLon = (d.u / d.mag) / cosL;
+                var dirLat = (d.v / d.mag);
+                lon += dir * dirLon * _EVO_STREAM_STEP_DEG;
+                lat += dir * dirLat * _EVO_STREAM_STEP_DEG;
+                if (lat > 60 || lat < -60) break;
+                pts.push([lon, lat]);
+            }
+            return pts;
+        }
+        var lineX = [], lineY = [];
+        for (var iLat = 0; iLat < EVO_GRID_NY; iLat += _EVO_STREAM_SEED_LAT_STEP) {
+            for (var iLon = 0; iLon < EVO_GRID_NX; iLon += _EVO_STREAM_SEED_LON_STEP) {
+                var lon0 = EVO_LONS[iLon], lat0 = EVO_LATS[iLat];
+                if (!uvAt(lon0, lat0)) continue;
+                var bw = trace(lon0, lat0, -1);
+                bw.reverse();
+                var fw = trace(lon0, lat0, +1).slice(1);
+                var allPts = bw.concat(fw);
+                if (allPts.length < 3) continue;
+                if (lineX.length) { lineX.push(null); lineY.push(null); }
+                for (var k = 0; k < allPts.length; k++) {
+                    lineX.push(allPts[k][0]);
+                    lineY.push(allPts[k][1]);
+                }
+            }
+        }
+        return { x: lineX, y: lineY };
+    }
+
     function _evoBuildBarbs(uGrid, vGrid) {
         var empty = { lineX: [], lineY: [], pennX: [], pennY: [] };
         if (!uGrid || !vGrid) return empty;
@@ -4115,13 +4202,19 @@
             var name = (f.day != null) ? 'd' + f.epochDay : String(f.month);
             var barbUV = frameBarbUV(f);
             var barbs = _evoBuildBarbs(barbUV.u, barbUV.v);
+            // Streamlines: only computed when the overlay is on (their
+            // ~50 ms / frame cost is non-trivial; skip when hidden).
+            var streamData = _evoState.showStreamlines
+                ? _evoBuildStreamlines(barbUV.u, barbUV.v)
+                : { x: [], y: [] };
             return {
                 name: name,
-                // Trace order: 0=heatmap, 1=coastlines (static), 2=unnamed
-                // tracks, 3=named tracks, 4=fix markers, 5=barb halo,
-                // 6=barb ink, 7=pennant halo, 8=pennant ink. Frames swap
-                // every dynamic trace; only coastlines (1) stays put.
-                traces: [0, 2, 3, 4, 5, 6, 7, 8],
+                // Trace order: 0=heatmap, 1=coastlines (static),
+                // 2=unnamed tracks, 3=named tracks, 4=fix markers,
+                // 5=barb halo, 6=barb ink, 7=pennant halo, 8=pennant
+                // ink, 9=streamline halo, 10=streamline ink. Frames
+                // swap every dynamic trace; only coastlines (1) stays.
+                traces: [0, 2, 3, 4, 5, 6, 7, 8, 9, 10],
                 data: [
                     { z: frameZ(f) },
                     { x: tracks.unnamedLineX, y: tracks.unnamedLineY },
@@ -4134,6 +4227,8 @@
                     { x: barbs.lineX, y: barbs.lineY },
                     { x: barbs.pennX, y: barbs.pennY },
                     { x: barbs.pennX, y: barbs.pennY },
+                    { x: streamData.x, y: streamData.y },
+                    { x: streamData.x, y: streamData.y },
                 ],
                 // Storm-name labels rendered via the layout's
                 // `annotations` array (Plotly's frames can swap that
@@ -4283,13 +4378,47 @@
             name: 'Pennants',
         };
 
+        // Streamlines (mutually exclusive with barbs). Same two-pass
+        // halo + ink rendering so they read on light + dark heatmap
+        // colors. We only seed-trace when the overlay is on, since
+        // the integration is non-trivial per frame.
+        var initialStreams = _evoState.showStreamlines
+            ? _evoBuildStreamlines(initialBarbUV.u, initialBarbUV.v)
+            : { x: [], y: [] };
+        var streamHalo = {
+            type: 'scatter', mode: 'lines',
+            x: initialStreams.x, y: initialStreams.y,
+            line: { color: 'rgba(15,23,42,0.55)', width: 2.4, shape: 'spline' },
+            hoverinfo: 'skip', showlegend: false,
+            name: 'Streamlines (halo)',
+            visible: _evoState.showStreamlines,
+        };
+        var streamInk = {
+            type: 'scatter', mode: 'lines',
+            x: initialStreams.x, y: initialStreams.y,
+            line: { color: 'rgba(244,240,224,0.9)', width: 1.0, shape: 'spline' },
+            hoverinfo: 'skip', showlegend: false,
+            name: 'Streamlines',
+            visible: _evoState.showStreamlines,
+        };
+        // Apply state-driven visibility to barb + track traces too.
+        barbHalo.visible    = _evoState.showBarbs;
+        barbInk.visible     = _evoState.showBarbs;
+        pennantHalo.visible = _evoState.showBarbs;
+        pennantInk.visible  = _evoState.showBarbs;
+        unnamedLineTrace.visible = _evoState.showTracks;
+        namedLineTrace.visible   = _evoState.showTracks;
+        markerTrace.visible      = _evoState.showTracks;
+
         return {
             traces: [baseTrace, coastlineTrace,
                      unnamedLineTrace, namedLineTrace, markerTrace,
-                     barbHalo, barbInk, pennantHalo, pennantInk],
+                     barbHalo, barbInk, pennantHalo, pennantInk,
+                     streamHalo, streamInk],
             frames: plotlyFrames,
             sliderSteps: sliderSteps,
-            initialLabels: initialLabels,
+            // Strip storm labels if tracks are hidden.
+            initialLabels: _evoState.showTracks ? initialLabels : [],
         };
     }
 
@@ -4424,12 +4553,19 @@
                     var step = e && e.step;
                     var name = step && step.args && step.args[0] && step.args[0][0];
                     if (name) setDate(name);
+                    // Track the user's slider drag so keyboard / step
+                    // buttons advance from where they actually are.
+                    if (typeof e.step.index === 'number') {
+                        _evoState.currentFrameIdx = e.step.index;
+                    }
                 });
                 el.on('plotly_animatingframe', function (e) {
                     var name = e && e.frame && e.frame.name;
                     if (name) setDate(name);
                 });
             }
+            // Fresh figure → reset our slider bookkeeping to frame 0.
+            _evoState.currentFrameIdx = 0;
         });
     }
 
@@ -4818,24 +4954,32 @@
             if (!el || !_evoState.frames || !_evoState.frames.length) return;
             var n = _evoState.frames.length;
             idx = ((idx % n) + n) % n;     // wrap
+            _evoState.currentFrameIdx = idx;   // stash for our own bookkeeping
             var f = _evoState.frames[idx];
             var name = (f.day != null) ? 'd' + f.epochDay : String(f.month);
-            // If we're playing, pausing first feels right before scrubbing.
+            // If we're playing, pause first.
             if (_evoState.playing) {
                 _evoState.playing = false;
                 if (play) play.textContent = '▶';
                 Plotly.animate(el, [null], { mode: 'next' });
             }
+            // Plotly.animate auto-syncs the slider's active step when
+            // the named frame matches a slider-step args[0][0]. No
+            // explicit relayout needed (and one would race the
+            // animate, leaving the slider moved but data stale).
             Plotly.animate(el, [name], {
                 mode: 'immediate', transition: { duration: 0 },
                 frame: { duration: 0, redraw: true },
             });
         }
         function currentFrameIndex() {
-            // Plotly stores the current animated frame name on the gd's
-            // _transitioningFrame / context; safer to read the slider's
-            // active step value via the slider control. Pull it from the
-            // figure's layout snapshot.
+            // We bookkeep _evoState.currentFrameIdx on every gotoFrame()
+            // (Plotly.animate alone doesn't update the slider's active
+            // step). Fall back to the slider's `active` value if the
+            // user dragged the slider directly.
+            if (typeof _evoState.currentFrameIdx === 'number') {
+                return _evoState.currentFrameIdx;
+            }
             var el = document.getElementById('seasonal-evo-map');
             if (!el || !el._fullLayout || !el._fullLayout.sliders) return 0;
             var s = el._fullLayout.sliders[0];
@@ -4874,6 +5018,65 @@
                 btn._evoBound = true;
                 btn.addEventListener('click', b.handler);
             }
+        });
+        // Overlay toggles. Tracks toggles 3 traces + the storm-name
+        // annotations layout block; barbs toggles 4 traces; streamlines
+        // toggles 2 traces. Barbs ↔ streamlines are mutually exclusive
+        // (turning one on flips the other off); both can be off.
+        function applyOverlayState() {
+            var el = document.getElementById('seasonal-evo-map');
+            if (!el || !el._fullData) return;
+            // visible flips per trace index.
+            Plotly.restyle(el,
+                { visible: _evoState.showTracks }, [2, 3, 4]);
+            Plotly.restyle(el,
+                { visible: _evoState.showBarbs }, [5, 6, 7, 8]);
+            Plotly.restyle(el,
+                { visible: _evoState.showStreamlines }, [9, 10]);
+            // Re-flow annotations: storm names follow the tracks toggle.
+            // Pull labels off the CURRENT frame's annotations if possible;
+            // otherwise leave them — the next frame swap will reapply.
+            if (!_evoState.showTracks) {
+                Plotly.relayout(el, { annotations: [] });
+            }
+            // Update the button active classes.
+            ['tracks','barbs','streams'].forEach(function (k) {
+                var btn = document.getElementById('seasonal-evo-toggle-' + k);
+                var state = (k === 'tracks') ? _evoState.showTracks
+                          : (k === 'barbs')  ? _evoState.showBarbs
+                          :                    _evoState.showStreamlines;
+                if (btn) btn.classList.toggle('active', !!state);
+            });
+        }
+        var toggleBindings = [
+            { id: 'seasonal-evo-toggle-tracks',  key: 'showTracks' },
+            { id: 'seasonal-evo-toggle-barbs',   key: 'showBarbs',
+              mutex: 'showStreamlines' },
+            { id: 'seasonal-evo-toggle-streams', key: 'showStreamlines',
+              mutex: 'showBarbs',
+              // Toggling streamlines on triggers a full rebuild so we
+              // get the integrated polylines into the frame data; the
+              // builder skips computation when the overlay is off.
+              fullRebuild: true },
+        ];
+        toggleBindings.forEach(function (b) {
+            var btn = document.getElementById(b.id);
+            if (!btn || btn._evoBound) return;
+            btn._evoBound = true;
+            btn.addEventListener('click', function () {
+                _evoState[b.key] = !_evoState[b.key];
+                if (b.mutex && _evoState[b.key]) {
+                    _evoState[b.mutex] = false;
+                }
+                if (b.fullRebuild) {
+                    // Re-render with the new overlay state so frames
+                    // get the streamline polylines (or empty arrays
+                    // when turned off, releasing the memory).
+                    _evoRerenderTracksOnly();
+                } else {
+                    applyOverlayState();
+                }
+            });
         });
         // Keyboard controls — bind once at document level. Active only
         // when the user is focused on Panel C (no <input> / <textarea>
