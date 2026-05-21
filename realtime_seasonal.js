@@ -4509,13 +4509,18 @@
             // through green-yellow-orange-red-purple to cyan at peak.
             // Modeled on the Knaff axisymmetric V_rot palette so the
             // colors emphasize peak winds the way TC forecasters read
-            // intensity plots. Maps 0..60 m/s (~0..115 kt).
+            // intensity plots. Maps 0..80 m/s (~0..155 kt) so the
+            // strongest jet cores hit the cyan saturation band.
             colorscale = _EVO_WIND_COLORSCALE;
-            zmin = 0; zmax = 60;
+            zmin = 0; zmax = 80;
         } else if (variable === 'wind850') {
-            // 850-mb wind: TC-intensity palette over 0..30 m/s.
+            // 850-mb wind: TC-intensity palette. Upper bound bumped
+            // from 30 → 50 m/s so peak Atlantic low-level jets +
+            // strong TC inner-core winds reach the cyan band — at
+            // 30 the palette saturated too early and the peaks
+            // turned into a uniform red blob.
             colorscale = _EVO_WIND_COLORSCALE;
-            zmin = 0; zmax = 30;
+            zmin = 0; zmax = 50;
         } else {
             // Raw shear — TC-intensity palette over 0..30 m/s. White
             // (favorable, weak shear) → cyan (extremely sheared).
