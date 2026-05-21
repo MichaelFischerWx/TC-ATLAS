@@ -2762,6 +2762,22 @@
     // transitions to ET, DS, DB, NR, MX, etc.
     var _EVO_TC_NATURES = { TS: 1, TD: 1, HU: 1, TC: 1, SS: 1, SD: 1 };
 
+    // Per-basin xaxis/yaxis viewport for the seasonal-evolution map.
+    // Matches the conventional TC-monitoring viewports operational
+    // forecasters expect. ALL = global tropics (current default).
+    var _EVO_BASIN_VIEWS = {
+        ALL: { x: [-180, 180], y: [-40, 40] },
+        NA:  { x: [-100,  20], y: [  0, 50] },
+        EP:  { x: [-160, -80], y: [  0, 35] },
+        WP:  { x: [ 100, 180], y: [  0, 45] },
+        NI:  { x: [  40, 105], y: [  0, 30] },
+        SI:  { x: [  30, 110], y: [-35,  0] },
+        SP:  { x: [ 140, 220], y: [-35,  0] },   // wrapped — Pacific antimeridian
+    };
+    function _evoViewForBasin(basin) {
+        return _EVO_BASIN_VIEWS[basin] || _EVO_BASIN_VIEWS.NA;
+    }
+
     // Normalize a storm-track longitude to the [-180, 180) frame the
     // Plotly heatmap uses. IBTrACS publishes lons in 0..360 historically.
     function _evoNormLon(lon) {
@@ -3393,13 +3409,15 @@
             margin: { l: 50, r: 70, t: 10, b: 30 },
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: 'rgba(0,0,0,0)',
-            // Atlantic-and-Africa default extent. scaleanchor locks the
-            // 1° lon = 1° lat aspect so the map isn't horizontally
-            // squashed by whatever the wrapping div's aspect ratio is.
-            xaxis: { range: [-100, 40], showgrid: false,
+            // Per-basin viewport. scaleanchor locks the 1°-lon = 1°-lat
+            // aspect so the map isn't horizontally squashed by the
+            // wrapping div's aspect ratio.
+            xaxis: { range: _evoViewForBasin(_evoState.basin).x.slice(),
+                     showgrid: false,
                      title: { text: 'Longitude', font: { size: 10 } },
                      scaleanchor: 'y', scaleratio: 1, constrain: 'domain' },
-            yaxis: { range: [-60, 60], showgrid: false,
+            yaxis: { range: _evoViewForBasin(_evoState.basin).y.slice(),
+                     showgrid: false,
                      title: { text: 'Latitude', font: { size: 10 } },
                      constrain: 'domain' },
             font: { family: 'DM Sans, system-ui, sans-serif', size: 10,
@@ -3644,7 +3662,19 @@
                     _evoRender();
                 } else if (key === 'mode') {
                     _evoRerenderTracksOnly();
-                } else if (key === 'basin' || key === 'trackDepth') {
+                } else if (key === 'basin') {
+                    // Pan/zoom the map AND rebuild track filter.
+                    var view = _evoViewForBasin(_evoState.basin);
+                    var mapEl = document.getElementById('seasonal-evo-map');
+                    if (mapEl && mapEl.classList.contains('js-plotly-plot')) {
+                        Plotly.relayout(mapEl, {
+                            'xaxis.range': view.x.slice(),
+                            'yaxis.range': view.y.slice(),
+                        }).then(function () { _evoRerenderTracksOnly(); });
+                    } else {
+                        _evoRerenderTracksOnly();
+                    }
+                } else if (key === 'trackDepth') {
                     _evoRerenderTracksOnly();
                 }
                 _ga('rt_seasonal_evo', { key: key, value: el.value });
