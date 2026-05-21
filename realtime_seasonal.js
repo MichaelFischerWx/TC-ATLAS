@@ -3270,14 +3270,18 @@
         var srcNy = 181, nx = EVO_GRID_NX;   // 360
         var range = (vmax - vmin) / 65534.0;
         // EVO grid covers lat 60..-60 → rows 30..150 in the 181-row tile.
+        // Returns Array<Float32Array> with NaN for missing cells —
+        // matches the era5_daily decoder's typed-array convention so
+        // _evoMag / _evoSub / frameZ etc. can operate on the same
+        // shape without nested-Array fallbacks.
         var out = new Array(EVO_GRID_NY);
         for (var i = 0; i < EVO_GRID_NY; i++) {
             var srcRow = i + 30;
-            var row = new Array(nx);
+            var row = new Float32Array(nx);
             for (var j = 0; j < nx; j++) {
                 var v = u16[srcRow * nx + j];
                 if (v === 0xFFFF) {
-                    row[j] = null;
+                    row[j] = NaN;
                 } else {
                     var f = vmin + v * range;
                     row[j] = transform ? transform(f) : f;
@@ -3437,7 +3441,13 @@
         });
     }
 
-    // Monthly mean of daily shear at each grid cell.
+    // Monthly mean of daily shear at each grid cell. Returns
+    // Array<Float32Array> (length EVO_GRID_NY, each inner row a
+    // Float32Array(EVO_GRID_NX)) so each frame's storage is ~4 bytes
+    // per cell instead of the ~24-byte JS Number objects nested
+    // Array<Array<number|null>> used. Missing cells = NaN (Float32Array
+    // supports NaN natively); arithmetic on NaN propagates so the
+    // explicit null guards downstream collapsed to isNaN.
     function _evoMonthlyMean(tile) {
         var nDays = tile.n_days;
         var stride = EVO_GRID_NY * EVO_GRID_NX;
@@ -3455,28 +3465,31 @@
         }
         var mean = new Array(EVO_GRID_NY);
         for (var i = 0; i < EVO_GRID_NY; i++) {
-            var row = new Array(EVO_GRID_NX);
+            var row = new Float32Array(EVO_GRID_NX);
             for (var j = 0; j < EVO_GRID_NX; j++) {
                 var idx = i * EVO_GRID_NX + j;
-                row[j] = count[idx] > 0 ? sum[idx] / count[idx] : null;
+                row[j] = count[idx] > 0 ? sum[idx] / count[idx] : NaN;
             }
             mean[i] = row;
         }
         return mean;
     }
 
-    // Extract one day's slice from a monthly tile as a (NY, NX) array.
+    // Extract one day's slice from a monthly tile as a (NY, NX) array
+    // of Float32Array rows. Missing values = NaN (preserved from the
+    // tile's 0xFFFF sentinel via _evoDecodeTile).
     function _evoExtractDayGrid(tile, dayIdx) {
         var stride = EVO_GRID_NY * EVO_GRID_NX;
         var base = dayIdx * stride;
         var out = new Array(EVO_GRID_NY);
         for (var i = 0; i < EVO_GRID_NY; i++) {
-            var row = new Array(EVO_GRID_NX);
-            for (var j = 0; j < EVO_GRID_NX; j++) {
-                var v = tile.values[base + i * EVO_GRID_NX + j];
-                row[j] = Number.isFinite(v) ? v : null;
-            }
-            out[i] = row;
+            // .subarray() returns a view, not a copy — frame grids and
+            // tile.values share the same backing buffer for the lifetime
+            // of the tile. _evoMag/_evoSub etc. only READ; they
+            // allocate fresh Float32Array rows for their output.
+            out[i] = tile.values.subarray(
+                base + i * EVO_GRID_NX,
+                base + (i + 1) * EVO_GRID_NX);
         }
         return out;
     }
@@ -3619,10 +3632,10 @@
             var u10 = uGrid[i1][j0], u11 = uGrid[i1][j1];
             var v00 = vGrid[i0][j0], v01 = vGrid[i0][j1];
             var v10 = vGrid[i1][j0], v11 = vGrid[i1][j1];
-            if (u00 == null || u01 == null || u10 == null || u11 == null
-                || v00 == null || v01 == null || v10 == null || v11 == null
-                || isNaN(u00) || isNaN(u01) || isNaN(u10) || isNaN(u11)
-                || isNaN(v00) || isNaN(v01) || isNaN(v10) || isNaN(v11)) return null;
+            if (!Number.isFinite(u00) || !Number.isFinite(u01)
+                || !Number.isFinite(u10) || !Number.isFinite(u11)
+                || !Number.isFinite(v00) || !Number.isFinite(v01)
+                || !Number.isFinite(v10) || !Number.isFinite(v11)) return null;
             var u = (1-fi)*(1-fj)*u00 + (1-fi)*fj*u01 + fi*(1-fj)*u10 + fi*fj*u11;
             var v = (1-fi)*(1-fj)*v00 + (1-fi)*fj*v01 + fi*(1-fj)*v10 + fi*fj*v11;
             var spd_kt = Math.sqrt(u*u + v*v) * _EVO_MS_TO_KT;
@@ -3693,10 +3706,10 @@
             for (var iLon = 0; iLon < EVO_GRID_NX; iLon += lonStep) {
                 var lon = EVO_LONS[iLon], lat = EVO_LATS[iLat];
                 if (lon < xMin || lon > xMax || lat < yMin || lat > yMax) continue;
-                var u = uGrid[iLat] && uGrid[iLat][iLon];
-                var v = vGrid[iLat] && vGrid[iLat][iLon];
-                // Tile decoders set NaN, not null, so guard both.
-                if (u == null || v == null || isNaN(u) || isNaN(v)) continue;
+                var uRow = uGrid[iLat], vRow = vGrid[iLat];
+                if (!uRow || !vRow) continue;
+                var u = uRow[iLon], v = vRow[iLon];
+                if (!Number.isFinite(u) || !Number.isFinite(v)) continue;
                 var spd_kt = Math.sqrt(u * u + v * v) * _EVO_MS_TO_KT;
                 if (spd_kt < SPEED_THRESHOLD_KT) continue;
                 _evoAppendBarb(lineX, lineY, pennX, pennY,
@@ -3803,8 +3816,17 @@
             .then(function (g) {
                 if (g && g.values && g.n_lon === EVO_GRID_NX
                     && g.n_lat === EVO_GRID_NY) {
-                    // Already in N→S × lon -180..179 frame — straight copy.
-                    return g.values.map(function (row) { return row.slice(); });
+                    // Already in N→S × lon -180..179 frame.
+                    // Convert each row to Float32Array so it matches
+                    // the typed-array convention of frame/decoder
+                    // outputs (cheaper memory, NaN-safe arithmetic).
+                    return g.values.map(function (row) {
+                        var t = new Float32Array(EVO_GRID_NX);
+                        for (var k = 0; k < EVO_GRID_NX; k++) {
+                            t[k] = (row[k] == null) ? NaN : row[k];
+                        }
+                        return t;
+                    });
                 }
                 // Fall back to the Pacific-centered 261-col sidecar.
                 return fetch(pacUrl)
@@ -3817,14 +3839,16 @@
                         var ny = p.n_lat, nx = p.n_lon;
                         var out = new Array(EVO_GRID_NY);
                         for (var i = 0; i < EVO_GRID_NY; i++) {
-                            out[i] = new Array(EVO_GRID_NX).fill(null);
+                            out[i] = new Float32Array(EVO_GRID_NX);
+                            out[i].fill(NaN);
                         }
                         for (var iC = 0; iC < ny; iC++) {
                             var iD = 120 - iC;
                             if (iD < 0 || iD >= EVO_GRID_NY) continue;
                             for (var jC = 0; jC < nx; jC++) {
                                 var jD = (280 + jC) % 360;
-                                out[iD][jD] = p.values[iC][jC];
+                                var v = p.values[iC][jC];
+                                out[iD][jD] = (v == null) ? NaN : v;
                             }
                         }
                         return out;
@@ -3833,28 +3857,31 @@
             .catch(function () { return null; });
     }
 
-    // Pointwise vector-magnitude grid (each cell = sqrt(a^2 + b^2)).
+    // Pointwise vector-magnitude grid. Returns Array<Float32Array>.
+    // NaN in either input propagates through Math.sqrt(NaN) → NaN, so
+    // no explicit missing-value guard is needed.
     function _evoMag(aGrid, bGrid) {
-        var out = new Array(EVO_GRID_NY);
-        for (var i = 0; i < EVO_GRID_NY; i++) {
-            var row = new Array(EVO_GRID_NX);
+        var ny = aGrid.length, nx = aGrid[0].length;
+        var out = new Array(ny);
+        for (var i = 0; i < ny; i++) {
+            var row = new Float32Array(nx);
             var ar = aGrid[i], br = bGrid[i];
-            for (var j = 0; j < EVO_GRID_NX; j++) {
+            for (var j = 0; j < nx; j++) {
                 var a = ar[j], b = br[j];
-                row[j] = (a == null || b == null) ? null : Math.sqrt(a * a + b * b);
+                row[j] = Math.sqrt(a * a + b * b);
             }
             out[i] = row;
         }
         return out;
     }
     function _evoSub(aGrid, bGrid) {
-        var out = new Array(EVO_GRID_NY);
-        for (var i = 0; i < EVO_GRID_NY; i++) {
-            var row = new Array(EVO_GRID_NX);
+        var ny = aGrid.length, nx = aGrid[0].length;
+        var out = new Array(ny);
+        for (var i = 0; i < ny; i++) {
+            var row = new Float32Array(nx);
             var ar = aGrid[i], br = bGrid[i];
-            for (var j = 0; j < EVO_GRID_NX; j++) {
-                var a = ar[j], b = br[j];
-                row[j] = (a == null || b == null) ? null : a - b;
+            for (var j = 0; j < nx; j++) {
+                row[j] = ar[j] - br[j];
             }
             out[i] = row;
         }
@@ -3878,49 +3905,52 @@
     var _EVO_EARTH_RADIUS_M = 6.371e6;
     var _EVO_DEG_TO_RAD = Math.PI / 180;
     function _evoComputeVorticity(uGrid, vGrid) {
-        var out = new Array(EVO_GRID_NY);
-        for (var i = 0; i < EVO_GRID_NY; i++) {
-            out[i] = new Array(EVO_GRID_NX).fill(null);
+        var ny = uGrid.length, nx = uGrid[0].length;
+        var out = new Array(ny);
+        for (var i = 0; i < ny; i++) {
+            out[i] = new Float32Array(nx);
+            out[i].fill(NaN);
         }
         var dy = _EVO_EARTH_RADIUS_M * _EVO_DEG_TO_RAD;   // metres per 1° lat
-        for (var i2 = 1; i2 < EVO_GRID_NY - 1; i2++) {
+        for (var i2 = 1; i2 < ny - 1; i2++) {
             var lat = EVO_LATS[i2];
             var cosLat = Math.cos(lat * _EVO_DEG_TO_RAD);
             if (Math.abs(cosLat) < 1e-3) continue;
             var dx = _EVO_EARTH_RADIUS_M * _EVO_DEG_TO_RAD * cosLat;
-            for (var j = 0; j < EVO_GRID_NX; j++) {
-                var jE = (j + 1) % EVO_GRID_NX;
-                var jW = (j - 1 + EVO_GRID_NX) % EVO_GRID_NX;
+            for (var j = 0; j < nx; j++) {
+                var jE = (j + 1) % nx;
+                var jW = (j - 1 + nx) % nx;
                 var vE = vGrid[i2][jE], vW = vGrid[i2][jW];
                 // i2-1 is one row north (EVO_LATS descending), i2+1 one row south.
                 var uN = uGrid[i2 - 1][j], uS = uGrid[i2 + 1][j];
-                if (vE == null || vW == null || uN == null || uS == null
-                    || isNaN(vE) || isNaN(vW) || isNaN(uN) || isNaN(uS)) continue;
+                // NaN propagates through subtraction/division so the
+                // explicit guard isn't needed — the resulting NaN
+                // assignment is fine (Float32Array stores it natively).
                 var dvdx = (vE - vW) / (2 * dx);
-                var dudy = (uN - uS) / (2 * dy);   // (north - south) over 2Δy
+                var dudy = (uN - uS) / (2 * dy);
                 out[i2][j] = (dvdx - dudy) * 1e5;
             }
         }
         return out;
     }
     function _evoComputeDivergence(uGrid, vGrid) {
-        var out = new Array(EVO_GRID_NY);
-        for (var i = 0; i < EVO_GRID_NY; i++) {
-            out[i] = new Array(EVO_GRID_NX).fill(null);
+        var ny = uGrid.length, nx = uGrid[0].length;
+        var out = new Array(ny);
+        for (var i = 0; i < ny; i++) {
+            out[i] = new Float32Array(nx);
+            out[i].fill(NaN);
         }
         var dy = _EVO_EARTH_RADIUS_M * _EVO_DEG_TO_RAD;
-        for (var i2 = 1; i2 < EVO_GRID_NY - 1; i2++) {
+        for (var i2 = 1; i2 < ny - 1; i2++) {
             var lat = EVO_LATS[i2];
             var cosLat = Math.cos(lat * _EVO_DEG_TO_RAD);
             if (Math.abs(cosLat) < 1e-3) continue;
             var dx = _EVO_EARTH_RADIUS_M * _EVO_DEG_TO_RAD * cosLat;
-            for (var j = 0; j < EVO_GRID_NX; j++) {
-                var jE = (j + 1) % EVO_GRID_NX;
-                var jW = (j - 1 + EVO_GRID_NX) % EVO_GRID_NX;
+            for (var j = 0; j < nx; j++) {
+                var jE = (j + 1) % nx;
+                var jW = (j - 1 + nx) % nx;
                 var uE = uGrid[i2][jE], uW = uGrid[i2][jW];
                 var vN = vGrid[i2 - 1][j], vS = vGrid[i2 + 1][j];
-                if (uE == null || uW == null || vN == null || vS == null
-                    || isNaN(uE) || isNaN(uW) || isNaN(vN) || isNaN(vS)) continue;
                 var dudx = (uE - uW) / (2 * dx);
                 var dvdy = (vN - vS) / (2 * dy);
                 out[i2][j] = (dudx + dvdy) * 1e6;
@@ -4214,11 +4244,11 @@
             var ny = f.z.length, nx = f.z[0].length;
             var out = new Array(ny);
             for (var i = 0; i < ny; i++) {
-                var row = new Array(nx);
+                var row = new Float32Array(nx);
                 var fr = f.z[i], cr = clim[i];
+                if (!cr) { row.fill(NaN); out[i] = row; continue; }
                 for (var j = 0; j < nx; j++) {
-                    var a = fr[j], b = cr ? cr[j] : null;
-                    row[j] = (a == null || b == null) ? null : a - b;
+                    row[j] = fr[j] - cr[j];   // NaN propagates
                 }
                 out[i] = row;
             }
