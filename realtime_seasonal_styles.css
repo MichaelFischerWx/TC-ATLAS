@@ -232,6 +232,20 @@
     color: #fb923c;
     border-color: rgba(251,146,60,0.55);
 }
+/* Disabled state for the HD toggle when the current basin / resolution
+   combo can't safely render 0.25° native (memory ceiling). */
+.seasonal-evo-toggle:disabled,
+.seasonal-evo-toggle[aria-disabled="true"] {
+    opacity: 0.45;
+    cursor: not-allowed;
+    background: transparent;
+    border-color: var(--border, rgba(255,255,255,0.12));
+    color: var(--text-dim, #6b7280);
+}
+.seasonal-evo-hd-btn {
+    margin-left: 6px;
+    font-variant-numeric: tabular-nums;
+}
 
 /* Subtitle pill in the C · Seasonal Evolution header — flags the
    00Z synoptic-snapshot source so the title visibly distinguishes

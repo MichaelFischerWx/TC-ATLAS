@@ -2750,8 +2750,17 @@
     // fallback is a no-op.
     var EVO_ARCHIVE_BASE_NEW    = 'https://storage.googleapis.com/tc-atlas-ir-cache/era5_daily_1deg';
     var EVO_ARCHIVE_BASE_LEGACY = 'https://storage.googleapis.com/tc-atlas-ir-cache/era5_daily';
+    // 0.25° native archive — opt-in via the HD toggle. Tiles here are
+    // ~70× the byte count of the 1° decimated tiles per month, so HD
+    // is gated to monthly mode + non-ALL basins and decoded with a
+    // viewport crop (see _evoSrcConfig / _evoDecodeTile).
+    var EVO_ARCHIVE_BASE_HD     = 'https://storage.googleapis.com/tc-atlas-ir-cache/era5_daily_00z';
     var EVO_ARCHIVE_BASE = EVO_ARCHIVE_BASE_LEGACY;   // legacy alias kept for the existing module
     var EVO_CLIMO_BASE   = 'https://storage.googleapis.com/tc-atlas-ir-cache/era5_climo';
+    // EVO_GRID_NY / NX / LATS / LONS describe the DECODED grid (after
+    // viewport cropping in HD mode) — they're recomputed every
+    // _evoRender() based on resolution + basin. The 1° defaults below
+    // are the historical "global 121×360" used everywhere not in HD.
     var EVO_GRID_NY = 121;    // 60S..60N at 1° (matches archive)
     var EVO_GRID_NX = 360;    // -180..179 at 1°
     var EVO_LATS = (function () {
@@ -2760,6 +2769,71 @@
     var EVO_LONS = (function () {
         var a = []; for (var lon = -180; lon < 180; lon++) a.push(lon); return a;
     })();
+    // Source-grid descriptor used to decode era5_daily tiles — depends
+    // on (hd, archive) but NOT on basin. The decode crop spec mediates
+    // between the source grid and the (basin-cropped) EVO grid.
+    function _evoSrcConfig(hd) {
+        if (hd) {
+            return { ny: 481, nx: 1440, latMax: 60.0, latMin: -60.0,
+                     lonMin: -180.0, cellSize: 0.25 };
+        }
+        return { ny: 121, nx: 360, latMax: 60.0, latMin: -60.0,
+                 lonMin: -180.0, cellSize: 1.0 };
+    }
+    // Pick the right archive base for the current (hd, source) state.
+    function _evoArchiveBase(hd, source) {
+        if (hd) return EVO_ARCHIVE_BASE_HD;
+        return source === 'new' ? EVO_ARCHIVE_BASE_NEW : EVO_ARCHIVE_BASE_LEGACY;
+    }
+    // Compute the crop spec into the source grid for a given basin.
+    // In 1° mode this just returns the full globe (rowStart=0..srcNy).
+    // In HD mode we crop to the basin viewport so the decoded
+    // Float32Array fits in memory (NA basin at 0.25° = ~96000 cells per
+    // day vs the full ~692640 — a 7× shrink, vital for staying under
+    // the mobile-Safari ~2 GB ceiling).
+    function _evoCropForBasin(srcCfg, basin, hd) {
+        if (!hd || basin === 'ALL') {
+            return { rowStart: 0, rowEnd: srcCfg.ny,
+                     colStart: 0, colEnd: srcCfg.nx };
+        }
+        var view = _evoViewForBasin(basin);
+        // Pad the crop by 2° so barb glyphs near the viewport edge
+        // (shaft length ~3.4°) still have data underneath.
+        var padDeg = 2.0;
+        var latHi = Math.min(srcCfg.latMax, view.y[1] + padDeg);
+        var latLo = Math.max(srcCfg.latMin, view.y[0] - padDeg);
+        var lonLo = view.x[0] - padDeg;
+        var lonHi = view.x[1] + padDeg;
+        // Clamp lon to the source's -180..180 frame — SP basin's
+        // 140..220 wraps the antimeridian; we don't yet support
+        // wraparound cropping, so cap at 180 and accept the visible
+        // edge clipping in HD mode (1° mode covers it via the full
+        // global grid).
+        if (lonLo < -180) lonLo = -180;
+        if (lonHi > 179.75) lonHi = 179.75;
+        var rs = Math.max(0, Math.floor((srcCfg.latMax - latHi) / srcCfg.cellSize));
+        var re = Math.min(srcCfg.ny,
+                          Math.ceil((srcCfg.latMax - latLo) / srcCfg.cellSize) + 1);
+        var cs = Math.max(0, Math.floor((lonLo - srcCfg.lonMin) / srcCfg.cellSize));
+        var ce = Math.min(srcCfg.nx,
+                          Math.ceil((lonHi - srcCfg.lonMin) / srcCfg.cellSize) + 1);
+        return { rowStart: rs, rowEnd: re, colStart: cs, colEnd: ce };
+    }
+    // Re-derive EVO_GRID_NY/NX/LATS/LONS from (srcCfg, crop). Called by
+    // _evoRender before any tile decode so all downstream iterators
+    // (decoders, _evoMag, _evoBuildBarbs, etc.) see the cropped shape.
+    function _evoApplyGridShape(srcCfg, crop) {
+        EVO_GRID_NY = crop.rowEnd - crop.rowStart;
+        EVO_GRID_NX = crop.colEnd - crop.colStart;
+        EVO_LATS = new Array(EVO_GRID_NY);
+        for (var i = 0; i < EVO_GRID_NY; i++) {
+            EVO_LATS[i] = srcCfg.latMax - (crop.rowStart + i) * srcCfg.cellSize;
+        }
+        EVO_LONS = new Array(EVO_GRID_NX);
+        for (var j = 0; j < EVO_GRID_NX; j++) {
+            EVO_LONS[j] = srcCfg.lonMin + (crop.colStart + j) * srcCfg.cellSize;
+        }
+    }
 
     var _evoState = {
         manifest: null,
@@ -2772,6 +2846,13 @@
         basin: 'NA',
         trackDepth: 'cumulative',
         resolution: 'monthly',   // 'monthly' (12 frames) | 'daily' (365)
+        // High-resolution (0.25° native era5_daily_00z) opt-in.
+        // Allowed only in monthly mode + non-ALL basins; UI gates
+        // the toggle. Daily-HD or ALL-HD = guaranteed memory crash
+        // until viewport-stream-decode lands (future work).
+        hd: false,
+        srcCfg: null,           // captured in _evoRender for downstream
+        crop: null,             // viewport crop into the source grid
         frames: null,            // array of {month, day?, z[NY][NX]}
         climo: null,             // {month → climo z[NY][NX]} for anomaly mode
         // Separate from `climo` because barbs need the climo wind
@@ -3049,6 +3130,39 @@
     // _evoState.manifest_new and .manifest_legacy keep the raw versions
     // for downstream consumers (the year picker unions both).
     function _evoLoadManifest() {
+        // In HD mode the manifest comes ONLY from era5_daily_00z (the
+        // native 0.25° archive). The 1° fallback chain doesn't apply
+        // here — if a tile is missing at 0.25°, HD render fails. The
+        // manifest cache is keyed by HD state so toggling between
+        // resolutions re-fetches the right manifest.
+        if (_evoState.hd) {
+            if (_evoState.manifest_hd) return Promise.resolve(_evoState.manifest_hd);
+            if (_evoState.manifestPromise_hd) return _evoState.manifestPromise_hd;
+            _evoState.manifestPromise_hd = fetch(
+                    EVO_ARCHIVE_BASE_HD + '/manifest.json',
+                    { cache: 'no-cache' })
+                .then(function (r) { return r.ok ? r.json() : null; })
+                .then(function (m) {
+                    if (!m || !m.tiles) {
+                        throw new Error('era5_daily_00z manifest unavailable');
+                    }
+                    // Stamp every tile with source='hd' so _evoArchiveBase
+                    // routes them to the 0.25° archive in HD mode.
+                    var out = { metadata: m.metadata || {}, tiles: {} };
+                    Object.keys(m.tiles).forEach(function (k) {
+                        out.tiles[k] = Object.assign({}, m.tiles[k],
+                                                     { source: 'hd' });
+                    });
+                    _evoState.manifest_hd = out;
+                    _evoState.manifest = out;   // active alias
+                    return out;
+                })
+                .catch(function (e) {
+                    _evoState.manifestPromise_hd = null;
+                    throw e;
+                });
+            return _evoState.manifestPromise_hd;
+        }
         if (_evoState.manifest) return Promise.resolve(_evoState.manifest);
         if (_evoState.manifestPromise) return _evoState.manifestPromise;
         function fetchOne(base) {
@@ -3094,18 +3208,57 @@
         return _evoState.climoManifestPromise;
     }
 
-    // Decode an era5_daily/shear/{YYYY}_{MM}.bin.gz into a Float32Array
-    // of shape (n_days * NY * NX). NaN sentinel = 0xFFFF.
-    function _evoDecodeTile(arrayBuffer, tileMeta) {
+    // Decode an era5_daily tile into a Float32Array.
+    // - Without srcShape/crop: full-tile decode (legacy behavior at 1°).
+    // - With srcShape={ny, nx} + crop={rowStart, rowEnd, colStart, colEnd}:
+    //   decode ONLY the cropped (basin) region for each day. The output
+    //   has shape (n_days * cropNy * cropNx) which is critical at 0.25°
+    //   where a global month-tile is ~85 MB but a basin viewport is
+    //   ~10 MB — without this crop, HD mode allocates ~4 GB across
+    //   12 month × 4 field tile fetches and crashes the tab.
+    function _evoDecodeTile(arrayBuffer, tileMeta, srcShape, crop) {
         var u16 = new Uint16Array(arrayBuffer);
         var range = (tileMeta.vmax - tileMeta.vmin) / 65534.0;
-        var out = new Float32Array(u16.length);
-        for (var i = 0; i < u16.length; i++) {
-            out[i] = u16[i] === 0xFFFF
-                ? NaN
-                : tileMeta.vmin + u16[i] * range;
+        if (!srcShape || !crop
+                || (crop.rowStart === 0 && crop.colStart === 0
+                    && crop.rowEnd === srcShape.ny
+                    && crop.colEnd === srcShape.nx)) {
+            // Full-tile fast path — same as the prior implementation.
+            var out = new Float32Array(u16.length);
+            for (var i = 0; i < u16.length; i++) {
+                out[i] = u16[i] === 0xFFFF
+                    ? NaN
+                    : tileMeta.vmin + u16[i] * range;
+            }
+            return out;
         }
-        return out;
+        // Cropped decode. Iterate day-major to match the source's
+        // (day, lat, lon) ordering.
+        var nDays = tileMeta.n_days
+            || Math.floor(u16.length / (srcShape.ny * srcShape.nx));
+        var srcStride = srcShape.ny * srcShape.nx;
+        var srcNx = srcShape.nx;
+        var rs = crop.rowStart, re = crop.rowEnd;
+        var cs = crop.colStart, ce = crop.colEnd;
+        var cropNy = re - rs;
+        var cropNx = ce - cs;
+        var cropStride = cropNy * cropNx;
+        var outC = new Float32Array(nDays * cropStride);
+        for (var d = 0; d < nDays; d++) {
+            var srcBase = d * srcStride;
+            var dstBase = d * cropStride;
+            for (var ri = 0; ri < cropNy; ri++) {
+                var srcRow = srcBase + (rs + ri) * srcNx + cs;
+                var dstRow = dstBase + ri * cropNx;
+                for (var ci = 0; ci < cropNx; ci++) {
+                    var v = u16[srcRow + ci];
+                    outC[dstRow + ci] = v === 0xFFFF
+                        ? NaN
+                        : tileMeta.vmin + v * range;
+                }
+            }
+        }
+        return outC;
     }
 
     // Generic tile fetcher for any field in era5_daily — u200, v200,
@@ -3118,10 +3271,12 @@
         if (!meta) {
             return Promise.reject(new Error('no manifest entry for ' + key));
         }
-        var base = meta.source === 'new'
-            ? EVO_ARCHIVE_BASE_NEW
-            : EVO_ARCHIVE_BASE_LEGACY;
+        var base = _evoArchiveBase(_evoState.hd, meta.source);
         var url = base + '/' + field + '/' + year + '_' + monthStr + '.bin.gz';
+        var srcShape = _evoState.srcCfg
+            ? { ny: _evoState.srcCfg.ny, nx: _evoState.srcCfg.nx }
+            : null;
+        var crop = _evoState.crop || null;
         return fetch(url)
             .then(function (r) {
                 if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + url);
@@ -3129,7 +3284,7 @@
                 return new Response(decompressed).arrayBuffer();
             })
             .then(function (buf) {
-                var values = _evoDecodeTile(buf, meta);
+                var values = _evoDecodeTile(buf, meta, srcShape, crop);
                 var nDays = meta.n_days || (values.length / (EVO_GRID_NY * EVO_GRID_NX));
                 return { values: values, n_days: nDays,
                          valid_dates: meta.valid_dates,
@@ -3548,16 +3703,33 @@
         var v = _evoViewForBasin(_evoState.basin);
         return { x: v.x.slice(), y: v.y.slice() };
     }
+    // Compute the barb / streamline sampling step in GRID-CELL units.
+    // The viewport's lat/lon WIDTH (in degrees) is divided by `target`
+    // glyphs-per-axis to get the desired degree spacing, then divided
+    // by the live grid's cellSize (1° at 1°, 0.25° at HD) to get the
+    // cell-index step the iterators consume. At HD this puts barbs
+    // ~13 to a side instead of 52 to a side. The returned `lonDeg /
+    // latDeg` fields surface the human-friendly degree spacing for the
+    // sampling pill so it can render "9°×4°" regardless of resolution.
     function _evoComputeStep(viewport, target) {
         var lonW = Math.max(1, Math.abs(viewport.x[1] - viewport.x[0]));
         var latH = Math.max(1, Math.abs(viewport.y[1] - viewport.y[0]));
-        var lonStep = Math.round(lonW / target);
-        var latStep = Math.round(latH / target);
-        if (lonStep < _EVO_STEP_MIN) lonStep = _EVO_STEP_MIN;
-        if (latStep < _EVO_STEP_MIN) latStep = _EVO_STEP_MIN;
-        if (lonStep > _EVO_STEP_MAX) lonStep = _EVO_STEP_MAX;
-        if (latStep > _EVO_STEP_MAX) latStep = _EVO_STEP_MAX;
-        return { latStep: latStep, lonStep: lonStep };
+        var cellLat = (EVO_LATS && EVO_LATS.length >= 2)
+            ? Math.abs(EVO_LATS[0] - EVO_LATS[1]) : 1.0;
+        var cellLon = (EVO_LONS && EVO_LONS.length >= 2)
+            ? Math.abs(EVO_LONS[1] - EVO_LONS[0]) : 1.0;
+        var lonDeg = Math.max(cellLon, Math.round(lonW / target));
+        var latDeg = Math.max(cellLat, Math.round(latH / target));
+        // Clamp the human-facing degree spacing into [STEP_MIN, MAX].
+        if (lonDeg < _EVO_STEP_MIN) lonDeg = _EVO_STEP_MIN;
+        if (latDeg < _EVO_STEP_MIN) latDeg = _EVO_STEP_MIN;
+        if (lonDeg > _EVO_STEP_MAX) lonDeg = _EVO_STEP_MAX;
+        if (latDeg > _EVO_STEP_MAX) latDeg = _EVO_STEP_MAX;
+        // Convert degrees → cell-index step, never below 1.
+        var lonStep = Math.max(1, Math.round(lonDeg / cellLon));
+        var latStep = Math.max(1, Math.round(latDeg / cellLat));
+        return { latStep: latStep, lonStep: lonStep,
+                 latDeg: latDeg, lonDeg: lonDeg };
     }
     // Vibrant TC-style wind palette — white at calm, sweeping through
     // green-yellow-orange-red-purple-cyan to peak. Used for raw
@@ -3618,16 +3790,38 @@
         var xMax = vp ? vp.x[1] + 4 :  Infinity;
         var yMin = vp ? vp.y[0] - 4 : -Infinity;
         var yMax = vp ? vp.y[1] + 4 :  Infinity;
+        // Use the live grid's lat/lon coverage rather than the
+        // legacy hardcoded ±60° / -180..180 / 1° so HD-cropped basin
+        // viewports decode correctly (their EVO_LATS / LONS span a
+        // subset of the globe at 0.25°).
+        var sLatMax = EVO_LATS[0];
+        var sLatMin = EVO_LATS[EVO_LATS.length - 1];
+        var sLonMin = EVO_LONS[0];
+        var sLonMax = EVO_LONS[EVO_LONS.length - 1];
+        var sCell = (EVO_LATS.length >= 2)
+            ? Math.abs(EVO_LATS[0] - EVO_LATS[1]) : 1.0;
+        // Detect a globe-wrapping lon span — in 1° non-HD mode the
+        // longitude axis covers -180..179 so streamline integration can
+        // wrap; in a cropped HD viewport it can't.
+        var lonWraps = (sLonMax - sLonMin) >= 359;
         function uvAt(lon, lat) {
-            if (lat > 60 || lat < -60) return null;
-            var iF = (60 - lat);
-            var jF = ((lon + 180) % 360 + 360) % 360;
+            if (lat > sLatMax || lat < sLatMin) return null;
+            if (!lonWraps && (lon < sLonMin || lon > sLonMax)) return null;
+            var iF = (sLatMax - lat) / sCell;
+            var jRaw;
+            if (lonWraps) {
+                jRaw = ((lon - sLonMin) % 360 + 360) % 360 / sCell;
+            } else {
+                jRaw = (lon - sLonMin) / sCell;
+            }
             var i0 = Math.floor(iF);
             var i1 = Math.min(i0 + 1, EVO_GRID_NY - 1);
-            var j0 = Math.floor(jF) % EVO_GRID_NX;
-            var j1 = (j0 + 1) % EVO_GRID_NX;
+            var j0 = Math.floor(jRaw);
+            var j1 = lonWraps ? ((j0 + 1) % EVO_GRID_NX)
+                              : Math.min(j0 + 1, EVO_GRID_NX - 1);
             if (i0 < 0 || i0 >= EVO_GRID_NY) return null;
-            var fi = iF - Math.floor(iF), fj = jF - Math.floor(jF);
+            if (j0 < 0 || j0 >= EVO_GRID_NX) return null;
+            var fi = iF - Math.floor(iF), fj = jRaw - Math.floor(jRaw);
             var u00 = uGrid[i0][j0], u01 = uGrid[i0][j1];
             var u10 = uGrid[i1][j0], u11 = uGrid[i1][j1];
             var v00 = vGrid[i0][j0], v01 = vGrid[i0][j1];
@@ -4187,9 +4381,13 @@
         // Update the sampling pill (lives next to the date readout).
         var pill = document.getElementById('seasonal-evo-sampling');
         if (pill) {
-            pill.textContent = bStep.lonStep + '°×' + bStep.latStep + '°';
+            // Display the human-readable degree spacing (lonDeg/latDeg)
+            // rather than the cell-index step — at HD the cell step is
+            // 4× larger for the same visual density, but the user
+            // thinks in degrees, not cells.
+            pill.textContent = bStep.lonDeg + '°×' + bStep.latDeg + '°';
             pill.title = 'Wind-barb sampling — adapts to the zoom level. '
-                + 'Currently ' + bStep.lonStep + '° lon × ' + bStep.latStep
+                + 'Currently ' + bStep.lonDeg + '° lon × ' + bStep.latDeg
                 + '° lat between glyphs.';
         }
     }
@@ -4578,6 +4776,16 @@
     function _evoRender() {
         var el = document.getElementById('seasonal-evo-map');
         if (!el || typeof Plotly === 'undefined') return;
+        // Configure the source-grid + viewport crop BEFORE any tile
+        // decode. EVO_GRID_NY/NX/LATS/LONS get re-derived from
+        // (resolution, basin, hd) so all downstream iterators see a
+        // consistent shape. GC-ATLAS monthly variables ignore HD (they
+        // ship at 1° only) and always fall back to the 1° source cfg.
+        var hd = !!(_evoState.hd && !_evoIsMonthlyOnly(_evoState.variable));
+        _evoState.srcCfg = _evoSrcConfig(hd);
+        _evoState.crop = _evoCropForBasin(_evoState.srcCfg,
+                                          _evoState.basin, hd);
+        _evoApplyGridShape(_evoState.srcCfg, _evoState.crop);
         var variable = _evoState.variable || 'shear';
         var monthlySpec = EVO_MONTHLY_VARS[variable];
         var loadLabel = monthlySpec ? monthlySpec.label
@@ -4586,7 +4794,9 @@
                       : 'shear';
         el.innerHTML = '<div class="seasonal-panel-stub" style="padding:80px;'
             + 'text-align:center;">Loading ' + _evoState.year + ' '
-            + loadLabel + ' archive…</div>';
+            + loadLabel
+            + (hd ? ' (HD 0.25°)' : '')
+            + ' archive…</div>';
         var year = _evoState.year;
         // Fan out: field tiles + climo (if anomaly mode) + IBTrACS metadata
         // + IBTrACS tracks all in parallel. Tracks are heavy (~22 MB) but
@@ -4603,7 +4813,19 @@
             }
             _evoState.frames = frames;
             var prep = [stormsP, tracksP, _evoLoadCoastlines()];
-            if (_evoState.mode === 'anomaly') {
+            // HD mode + era5_daily variables: skip climo fetch. The
+            // climo grid sidecar is 1° / 121×360 globe and would need
+            // bilinear interpolation onto the HD-cropped 0.25° grid
+            // to subtract correctly. For v1 we just render raw in HD
+            // (the heatmap still shows the current shear / wind field,
+            // just without the climo subtraction overlay).
+            if (_evoState.mode === 'anomaly' && hd) {
+                // Drop any stale climo from a previous non-HD render
+                // so frameZ takes the raw path in _evoBuildPlotlyTraces.
+                _evoState.climo = null;
+                _evoState.windClimo = null;
+            }
+            if (_evoState.mode === 'anomaly' && !hd) {
                 // GC-ATLAS-backed variables fetch their climo from the
                 // same source; daily-archive variables (shear/wind200/
                 // wind850) keep using the era5_climo grid sidecars.
@@ -5026,6 +5248,41 @@
         });
     }
 
+    // Keep the HD button's enabled / active state in sync with the
+    // current (basin, resolution, variable) combo. Called whenever any
+    // of those change, plus on the initial bind. Gates HD off when:
+    //   - basin === 'ALL'              (no viewport crop → would crash)
+    //   - resolution === 'daily'       (12 × 30 × 481 × 1440 ≈ crash)
+    //   - variable is monthly-only     (GC-ATLAS tiles are 1° anyway)
+    // Sets aria-disabled rather than `.disabled` so the title tooltip
+    // still appears on hover (explains WHY the button is gated).
+    function _evoUpdateHdButton() {
+        var btn = document.getElementById('seasonal-evo-toggle-hd');
+        if (!btn) return;
+        var allowed = _evoState.basin !== 'ALL'
+            && _evoState.resolution !== 'daily'
+            && !_evoIsMonthlyOnly(_evoState.variable);
+        if (!allowed && _evoState.hd) {
+            // Combo became invalid while HD was on — silently drop it.
+            _evoState.hd = false;
+        }
+        btn.setAttribute('aria-disabled', allowed ? 'false' : 'true');
+        btn.classList.toggle('active', !!_evoState.hd && allowed);
+        var reasons = [];
+        if (_evoState.basin === 'ALL') reasons.push('basin = ALL');
+        if (_evoState.resolution === 'daily') reasons.push('resolution = daily');
+        if (_evoIsMonthlyOnly(_evoState.variable))
+            reasons.push('variable ships at 1°');
+        btn.title = allowed
+            ? 'High-resolution mode — reads era5_daily_00z (0.25° '
+              + 'native, ~4× finer than the 1° default). Currently '
+              + (_evoState.hd ? 'ON.' : 'OFF.')
+            : 'HD unavailable: ' + reasons.join(', ') + '. '
+              + 'HD needs a viewport-cropped monthly render of an '
+              + 'era5_daily field (the 0.25° decode is too big without '
+              + 'a basin crop or a monthly mean).';
+    }
+
     function _evoBindControls() {
         var bind = function (id, key, parse) {
             var el = document.getElementById(id);
@@ -5062,6 +5319,12 @@
                             }
                         }
                     }
+                    // Resolution=daily must disable HD (mem ceiling).
+                    if (key === 'resolution' && _evoState.resolution === 'daily'
+                            && _evoState.hd) {
+                        _evoState.hd = false;
+                    }
+                    _evoUpdateHdButton();
                     _evoRender();
                 } else if (key === 'mode') {
                     _evoRerenderTracksOnly();
@@ -5072,14 +5335,29 @@
                     // bands above/below.
                     var view = _evoViewForBasin(_evoState.basin);
                     _evoApplyWrapAspect(_evoState.basin);
-                    var mapEl = document.getElementById('seasonal-evo-map');
-                    if (mapEl && mapEl.classList.contains('js-plotly-plot')) {
-                        Plotly.relayout(mapEl, {
-                            'xaxis.range': view.x.slice(),
-                            'yaxis.range': view.y.slice(),
-                        }).then(function () { _evoRerenderTracksOnly(); });
+                    // ALL basin must disable HD (no viewport crop → mem
+                    // ceiling crash).
+                    if (_evoState.basin === 'ALL' && _evoState.hd) {
+                        _evoState.hd = false;
+                    }
+                    _evoUpdateHdButton();
+                    // In HD mode the crop region depends on the basin
+                    // viewport, so we need a full _evoRender to re-crop
+                    // and re-fetch tiles. In 1° mode the basin change
+                    // is just a viewport relayout — much cheaper.
+                    if (_evoState.hd) {
+                        _evoState.frames = null;
+                        _evoRender();
                     } else {
-                        _evoRerenderTracksOnly();
+                        var mapEl = document.getElementById('seasonal-evo-map');
+                        if (mapEl && mapEl.classList.contains('js-plotly-plot')) {
+                            Plotly.relayout(mapEl, {
+                                'xaxis.range': view.x.slice(),
+                                'yaxis.range': view.y.slice(),
+                            }).then(function () { _evoRerenderTracksOnly(); });
+                        } else {
+                            _evoRerenderTracksOnly();
+                        }
                     }
                 } else if (key === 'trackDepth') {
                     _evoRerenderTracksOnly();
@@ -5093,6 +5371,28 @@
         bind('seasonal-evo-basin', 'basin');
         bind('seasonal-evo-track-depth', 'trackDepth');
         bind('seasonal-evo-resolution', 'resolution');
+        // HD toggle — opt-in 0.25° native era5_daily_00z source with
+        // viewport-cropped decode. Gated to monthly + non-ALL because
+        // those guards keep the cropped Float32Array small enough to
+        // live in browser memory.
+        var hdBtn = document.getElementById('seasonal-evo-toggle-hd');
+        if (hdBtn && !hdBtn._evoBound) {
+            hdBtn._evoBound = true;
+            hdBtn.addEventListener('click', function () {
+                if (hdBtn.getAttribute('aria-disabled') === 'true') return;
+                _evoState.hd = !_evoState.hd;
+                _evoState.frames = null;
+                // Invalidate climo / windClimo too: in HD we don't
+                // fetch climo (yet); in 1° we DO and the cache is
+                // resolution-specific (0.25° vs 1° grids differ).
+                _evoState.climo = null;
+                _evoState.windClimo = null;
+                _evoUpdateHdButton();
+                _evoRender();
+                _ga('rt_seasonal_evo_hd', { hd: _evoState.hd });
+            });
+        }
+        _evoUpdateHdButton();
         // Save PNG of the current frame — simplest export path,
         // a single Plotly.toImage call on the live figure.
         var savePng = document.getElementById('seasonal-evo-save-png');
