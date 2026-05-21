@@ -2761,6 +2761,11 @@
         resolution: 'monthly',   // 'monthly' (12 frames) | 'daily' (365)
         frames: null,            // array of {month, day?, z[NY][NX]}
         climo: null,             // {month → climo z[NY][NX]} for anomaly mode
+        // Separate from `climo` because barbs need the climo wind
+        // components (u200, v200, u850, v850) — not the climo of
+        // |V|. Fetched from GC-ATLAS lazily when shear/wind200/wind850
+        // is rendered in anomaly mode.
+        windClimo: null,
         // IBTrACS overlay state — lazy-loaded chunk-1 (1977-present)
         // covers everything the era5_daily archive will ever have.
         tracks: null,
@@ -3282,6 +3287,52 @@
         });
     }
 
+    // GC-ATLAS climo specs for u/v at 200 and 850 hPa — used by the
+    // daily-archive variables (shear / wind200 / wind850) to render
+    // anomalous wind barbs in anomaly mode (so the barb shows V_now
+    // − V_clim instead of the raw V, which is dominated by the upper-
+    // tropospheric jet and reads as a 200-mb wind regardless).
+    var _EVO_WIND_CLIMO_SPECS = {
+        u200: { group: 'pressure_levels', name: 'u', level: 200 },
+        v200: { group: 'pressure_levels', name: 'v', level: 200 },
+        u850: { group: 'pressure_levels', name: 'u', level: 850 },
+        v850: { group: 'pressure_levels', name: 'v', level: 850 },
+    };
+    function _evoFetchWindClimoForFrames(frames) {
+        // Returns Promise<{month → {u200, v200, u850, v850}}>. Cached on
+        // _evoState.windClimo keyed by month — different from
+        // _evoState.climo (which holds the |shear| magnitude climo).
+        if (_evoState.windClimo
+            && _evoState.windClimo.year_for === _evoState.year) {
+            return Promise.resolve(_evoState.windClimo);
+        }
+        var monthsSeen = {};
+        frames.forEach(function (f) { monthsSeen[f.month] = true; });
+        var pending = [];
+        Object.keys(monthsSeen).forEach(function (mStr) {
+            var mo = parseInt(mStr, 10);
+            Object.keys(_EVO_WIND_CLIMO_SPECS).forEach(function (field) {
+                pending.push(
+                    _evoFetchGcAtlasClimoTile(_EVO_WIND_CLIMO_SPECS[field], mo)
+                        .then(function (g) {
+                            return { month: mo, field: field, grid: g };
+                        })
+                        .catch(function () { return null; })
+                );
+            });
+        });
+        return Promise.all(pending).then(function (results) {
+            var byMonth = { year_for: _evoState.year };
+            results.forEach(function (r) {
+                if (!r || !r.grid) return;
+                byMonth[r.month] = byMonth[r.month] || {};
+                byMonth[r.month][r.field] = r.grid;
+            });
+            _evoState.windClimo = byMonth;
+            return byMonth;
+        });
+    }
+
     // Build {month → climo grid} dict for a GC-ATLAS-backed variable.
     function _evoFetchGcAtlasClimoForFrames(frames) {
         var variable = _evoState.variable || 'shear';
@@ -3790,6 +3841,37 @@
                 + '<extra></extra>',
         };
 
+        // Resolve the barb (u, v) vectors for a frame. In raw mode this
+        // is just frame.u / frame.v (already V-V_shear or V_level from
+        // _evoFetchYear). In anomaly mode we subtract the climo wind at
+        // the relevant level(s) so the glyph reads as the anomaly of
+        // the vector — not the raw V, which in the upper troposphere
+        // is dominated by the jet regardless of season.
+        function frameBarbUV(f) {
+            if (!modeIsAnom || isMonthly || !f.u || !f.v) {
+                return { u: f.u, v: f.v };
+            }
+            var wc = _evoState.windClimo && _evoState.windClimo[f.month];
+            if (!wc || !wc.u200 || !wc.v200 || !wc.u850 || !wc.v850) {
+                return { u: f.u, v: f.v };
+            }
+            // f.u/f.v are already V200−V850 (shear) or V200 (wind200) or
+            // V850 (wind850), per _evoFetchYear. Build the equivalent
+            // climo vector at the same composition, then subtract.
+            var climU, climV;
+            if (variable === 'shear') {
+                climU = _evoSub(wc.u200, wc.u850);
+                climV = _evoSub(wc.v200, wc.v850);
+            } else if (variable === 'wind200') {
+                climU = wc.u200; climV = wc.v200;
+            } else if (variable === 'wind850') {
+                climU = wc.u850; climV = wc.v850;
+            } else {
+                return { u: f.u, v: f.v };
+            }
+            return { u: _evoSub(f.u, climU), v: _evoSub(f.v, climV) };
+        }
+
         var plotlyFrames = frames.map(function (f, idx) {
             var tracks = _evoBuildTracksForFrame(f);
             // Frame name uses a stable string per epoch day. Monthly
@@ -3797,7 +3879,8 @@
             // with prior slider steps; daily frames use the epoch-day
             // integer.
             var name = (f.day != null) ? 'd' + f.epochDay : String(f.month);
-            var barbs = _evoBuildBarbs(f.u, f.v);
+            var barbUV = frameBarbUV(f);
+            var barbs = _evoBuildBarbs(barbUV.u, barbUV.v);
             return {
                 name: name,
                 // Trace order: 0=heatmap, 1=coastlines (static), 2=unnamed
@@ -3933,7 +4016,8 @@
         // pair of filled scatter traces with fill:'toself'. Order in the
         // figure: shaft+feather halo → ink → pennant halo → pennant ink,
         // so the cream ink sits on top everywhere.
-        var initialBarbs = _evoBuildBarbs(frames[0].u, frames[0].v);
+        var initialBarbUV = frameBarbUV(frames[0]);
+        var initialBarbs = _evoBuildBarbs(initialBarbUV.u, initialBarbUV.v);
         var barbHalo = {
             type: 'scatter', mode: 'lines',
             x: initialBarbs.lineX, y: initialBarbs.lineY,
@@ -4012,6 +4096,12 @@
                         .then(function (c) { _evoState.climo = c; }));
                 } else {
                     prep.push(_evoFetchClimoForFrames(frames));
+                    // Anomalous barbs: subtract climo u/v at 200/850 so
+                    // the glyph shows the *anomalous* shear (or level
+                    // wind) vector instead of the raw vector — which in
+                    // anomaly mode would be miscalibrated against the
+                    // heatmap's "anomaly of magnitude" signal.
+                    prep.push(_evoFetchWindClimoForFrames(frames));
                 }
             }
             return Promise.all(prep).then(function () {
@@ -4321,6 +4411,7 @@
                     _evoState.frames = null;
                     if (key === 'variable') {
                         _evoState.climo = null;
+                        _evoState.windClimo = null;
                         var resSel = document.getElementById('seasonal-evo-resolution');
                         if (_evoIsMonthlyOnly(_evoState.variable)) {
                             if (resSel) {
