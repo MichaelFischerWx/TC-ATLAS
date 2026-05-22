@@ -3169,7 +3169,16 @@
         // Hide detail, show map
         document.getElementById('ir-detail').style.display = 'none';
         document.getElementById('ir-main').style.display = 'block';
-        document.getElementById('ir-legend').style.display = 'block';
+        // Restore legend visibility to whatever the toggle button reflects
+        // (off by default; on only if the user explicitly opted in via the
+        // ✦ Legend pill). Force-showing on detail-close used to cover the
+        // env-overlay menu when no storms were active.
+        var _legBtn = document.getElementById('ir-legend-toggle');
+        var _legEl  = document.getElementById('ir-legend');
+        if (_legEl) {
+            _legEl.style.display = (_legBtn && _legBtn.classList.contains('active'))
+                ? '' : 'none';
+        }
 
         // Resize map (in case container changed)
         if (map) map.invalidateSize();
