@@ -248,22 +248,34 @@
                 'seasonal-panel--maximized');
             panel.classList.add('seasonal-panel--maximized');
             document.body.classList.add('seasonal-maximized');
-            // Swap the icon to a close (×) glyph + update aria.
+            // Update title + aria — visual "✕ Close" pill is handled
+            // entirely by CSS (.seasonal-maximize-btn::after content +
+            // SVG hide rule in .seasonal-panel--maximized .seasonal-
+            // maximize-btn svg{display:none}). Keeping the SVG in the
+            // DOM means restore just removes the class and the icon
+            // reappears — no innerHTML thrash.
             var btn = panel.querySelector('.seasonal-maximize-btn');
             if (btn) {
-                btn._iconHtml = btn.innerHTML;
-                btn.textContent = _MAXIMIZE_CLOSE_GLYPH;
                 btn.title = 'Close fullscreen (Esc)';
                 btn.setAttribute('aria-label', 'Close fullscreen');
             }
+            // Wire swipe-down to dismiss — primarily a mobile gesture
+            // (mouse drag also works for desktop accessibility). The
+            // user pulls the top of the panel down; release past 30%
+            // of viewport height triggers the close.
+            _wireMaximizedSwipeToClose(panel);
         } else {
             panel.classList.remove('seasonal-panel--maximized');
             if (!document.querySelector('.seasonal-panel--maximized')) {
                 document.body.classList.remove('seasonal-maximized');
             }
+            // Clean up transform/swipe state left over from a gesture
+            // that didn't quite meet the close threshold.
+            panel.style.transform = '';
+            panel.style.transition = '';
+            _unwireMaximizedSwipeToClose(panel);
             var btn2 = panel.querySelector('.seasonal-maximize-btn');
             if (btn2) {
-                btn2.innerHTML = btn2._iconHtml || _MAXIMIZE_ICON_SVG;
                 btn2.title = 'Expand panel to full screen';
                 btn2.setAttribute('aria-label', 'Expand panel to full screen');
             }
@@ -282,6 +294,98 @@
         }, 60);
         _ga('rt_seasonal_panel_maximize',
             { panel: panel.id, action: isMax ? 'restore' : 'expand' });
+    }
+
+    // ----- Swipe-down to dismiss a maximized panel -----
+    // Touch-first gesture targeting mobile users (the "Close" pill is
+    // discoverable but a downward swipe from the panel header is the
+    // dominant iOS modal-dismiss pattern; users reach for it instinctively).
+    // Threshold: release past 30% of viewport height OR fast downward
+    // flick (vy > 0.6 px/ms) → close. Anything below threshold snaps
+    // back via CSS transition. Listens at the panel's TOP 80 px only
+    // so taps in the chart body don't get hijacked. Mouse drag also
+    // wired so the gesture is reachable for desktop accessibility.
+    function _wireMaximizedSwipeToClose(panel) {
+        if (panel._swipeHandlers) return;
+        var state = { down: false, startY: 0, startT: 0, dy: 0 };
+        var GESTURE_ZONE_PX = 80;     // top strip where swipe starts
+        var CLOSE_FRAC = 0.30;        // release past 30% vh → close
+        var FAST_FLICK_VY = 0.6;      // px/ms downward = always close
+
+        function start(y, e) {
+            // Only start gesture in the top strip (where the figure
+            // controls / panel title live, NOT where the user pans the
+            // Plotly chart in the body).
+            var rect = panel.getBoundingClientRect();
+            if (y - rect.top > GESTURE_ZONE_PX) return;
+            state.down = true;
+            state.startY = y;
+            state.startT = Date.now();
+            state.dy = 0;
+            panel.style.transition = 'none';
+        }
+        function move(y, e) {
+            if (!state.down) return;
+            state.dy = y - state.startY;
+            if (state.dy < 0) state.dy = 0;   // only downward movement
+            panel.style.transform = 'translateY(' + state.dy + 'px)';
+            // Fade slightly so the user feels the dismiss "engaging."
+            var op = Math.max(0.5, 1 - state.dy / window.innerHeight * 1.2);
+            panel.style.opacity = String(op);
+        }
+        function end(e) {
+            if (!state.down) return;
+            state.down = false;
+            var dt = Date.now() - state.startT;
+            var vy = dt > 0 ? state.dy / dt : 0;
+            var threshold = window.innerHeight * CLOSE_FRAC;
+            var shouldClose = (state.dy >= threshold) || (vy >= FAST_FLICK_VY);
+            panel.style.transition = 'transform 0.18s ease-out, opacity 0.18s';
+            if (shouldClose) {
+                // Animate off-screen then close.
+                panel.style.transform = 'translateY(' + window.innerHeight + 'px)';
+                panel.style.opacity = '0';
+                setTimeout(function () { _toggleMaximize(panel); }, 180);
+            } else {
+                panel.style.transform = '';
+                panel.style.opacity = '';
+            }
+        }
+        var handlers = {
+            touchstart: function (e) { start(e.touches[0].clientY, e); },
+            touchmove:  function (e) { if (state.down) {
+                                          move(e.touches[0].clientY, e);
+                                          e.preventDefault();
+                                      } },
+            touchend:   function (e) { end(e); },
+            touchcancel:function (e) { end(e); },
+            mousedown:  function (e) { start(e.clientY, e); },
+            mousemove:  function (e) { if (state.down) move(e.clientY, e); },
+            mouseup:    function (e) { end(e); },
+        };
+        // {passive: false} on touchmove so preventDefault() works
+        // (without it iOS scrolls the page during the gesture).
+        panel.addEventListener('touchstart',  handlers.touchstart,  { passive: true });
+        panel.addEventListener('touchmove',   handlers.touchmove,   { passive: false });
+        panel.addEventListener('touchend',    handlers.touchend);
+        panel.addEventListener('touchcancel', handlers.touchcancel);
+        panel.addEventListener('mousedown',   handlers.mousedown);
+        document.addEventListener('mousemove', handlers.mousemove);
+        document.addEventListener('mouseup',   handlers.mouseup);
+        panel._swipeHandlers = handlers;
+    }
+    function _unwireMaximizedSwipeToClose(panel) {
+        var h = panel._swipeHandlers;
+        if (!h) return;
+        panel.removeEventListener('touchstart',  h.touchstart);
+        panel.removeEventListener('touchmove',   h.touchmove);
+        panel.removeEventListener('touchend',    h.touchend);
+        panel.removeEventListener('touchcancel', h.touchcancel);
+        panel.removeEventListener('mousedown',   h.mousedown);
+        document.removeEventListener('mousemove', h.mousemove);
+        document.removeEventListener('mouseup',   h.mouseup);
+        panel._swipeHandlers = null;
+        panel.style.opacity = '';
     }
 
     // Remove any "No data." / "Plotly not loaded." stub left behind by an

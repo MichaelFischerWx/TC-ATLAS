@@ -157,24 +157,64 @@
 .seasonal-maximize-btn:active { transform: scale(0.95); }
 .seasonal-maximize-btn svg { width: 13px; height: 13px; }
 
-/* In fullscreen mode the maximize button becomes a close (×) button
-   in the top-right of the panel — wider so it's an easier tap target. */
+/* In fullscreen mode the maximize button becomes a close (✕ Close)
+   button — sticky to the panel viewport so it stays visible even as
+   the user scrolls the figure content beneath. Pill-shaped with a
+   text label rather than a bare ✕ glyph so mobile users see at a
+   glance how to exit the expanded view (the bare glyph was easy to
+   miss when the figure dominated the screen). */
 .seasonal-panel--maximized .seasonal-maximize-btn {
-    top: 14px;
-    right: 14px;
-    width: 36px;
-    height: 36px;
-    font-size: 1.25rem;
-    background: rgba(255,255,255,0.10);
-    border-color: rgba(255,255,255,0.30);
-    color: var(--text, #e0e0e0);
+    position: fixed;        /* anchored to viewport — doesn't scroll away */
+    top: 12px;
+    right: 12px;
+    z-index: 9010;          /* above the maximized panel (z 9000) */
+    width: auto;             /* let text drive the size */
+    min-width: 44px;        /* iOS HIG touch target */
+    height: 44px;
+    padding: 0 14px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    /* High-contrast pill — bright orange on dark, dark on light, so
+       the close affordance is impossible to miss against the panel's
+       white-ish background or dark-mode surface. */
+    background: rgba(251,146,60,0.95);
+    border-color: rgba(251,146,60,0.95);
+    color: #1a1f25;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+    border-radius: 22px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+/* Hide the expand SVG when maximized — the ::after text label
+   ("✕ Close") replaces it. Without this, the original 13×13 icon
+   would sit next to the text and look like a typo. */
+.seasonal-panel--maximized .seasonal-maximize-btn svg { display: none; }
+.seasonal-panel--maximized .seasonal-maximize-btn::after {
+    content: "✕  Close";
+    font-family: 'DM Sans', system-ui, sans-serif;
+}
+.seasonal-panel--maximized .seasonal-maximize-btn:hover {
+    background: rgba(251,146,60,1.0);
+    border-color: rgba(251,146,60,1.0);
+    color: #1a1f25;
 }
 .seasonal-panel--maximized .seasonal-save-btn {
-    /* Tuck the download button next to the close on the maximize bar. */
-    right: 60px;
-    top: 18px;
-    width: 28px;
-    height: 28px;
+    /* Tuck the download button next to the close bar, also sticky-
+       fixed so it doesn't scroll away. */
+    position: fixed;
+    top: 12px;
+    right: 96px;     /* close-pill ~74 px wide + 12 px right + 10 px gap */
+    z-index: 9010;
+    width: 44px;
+    height: 44px;
+    background: rgba(20,28,42,0.85);
+    border-color: rgba(140,148,160,0.40);
+    color: var(--text, #e6edf5);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+    border-radius: 22px;
+    font-size: 1.05rem;
 }
 
 /* The maximized panel covers the viewport with a generous safe-area
@@ -190,12 +230,36 @@
     z-index: 9000;
     margin: 0;
     border-radius: 0;
-    padding: 56px 18px 18px;        /* extra top for the close-bar */
+    padding: 64px 18px 18px;        /* extra top for close-bar + swipe handle */
     background: var(--surface, #0d1117);
     overflow-y: auto;
     overflow-x: hidden;
     /* The internal figure can grow to fill — scroll if it overflows. */
     -webkit-overflow-scrolling: touch;
+}
+
+/* Swipe-handle indicator at the top of the maximized panel — gives
+   users a visual cue that they can pull the panel down to dismiss.
+   The handle is purely decorative; the actual touch zone is the
+   panel's top 80 px (see _wireMaximizedSwipeToClose). Hidden on
+   wide desktops where the gesture isn't the primary affordance. */
+.seasonal-panel--maximized::before {
+    content: "";
+    position: fixed;
+    top: 6px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 9009;
+    width: 44px;
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(140,148,160,0.50);
+    pointer-events: none;
+}
+/* Hide swipe handle on desktops — swipe-via-mouse-drag still works
+   for accessibility but the visual handle would look out of place. */
+@media (min-width: 769px) and (hover: hover) {
+    .seasonal-panel--maximized::before { display: none; }
 }
 
 /* When ANY panel is maximized, hide the page chrome that would
