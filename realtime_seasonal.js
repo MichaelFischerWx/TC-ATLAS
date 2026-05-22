@@ -3979,7 +3979,12 @@
         climoManifestPromise: null,
         year: null,
         variable: 'shear',
-        mode: 'anomaly',         // 'anomaly' | 'raw'
+        mode: 'raw',             // 'anomaly' | 'raw' — raw is the
+                                 // default landing for every variable;
+                                 // forecasters generally want absolute
+                                 // values first (SST in °C, shear in
+                                 // m/s, TCWV in kg/m²) and opt in to
+                                 // anomaly only when comparing seasons.
         basin: 'NA',
         trackDepth: 'cumulative',
         resolution: 'monthly',   // 'monthly' (12 frames) | 'daily' (365)
@@ -7758,24 +7763,12 @@
                                 _evoState.resolution = _evoState._lastResolution;
                             }
                         }
-                        // Wind variables read more naturally in RAW
-                        // mode — the absolute wind speed (m/s, 0..80)
-                        // with the white→cyan TC palette is what
-                        // forecasters actually want to see. Anomaly
-                        // mode still works for wind (computes
-                        // |V_now| − |V_climo|), but raw is the better
-                        // default landing. Only auto-flip the mode if
-                        // the user hasn't already explicitly chosen a
-                        // mode this session (so we don't fight a
-                        // power user who wants anomaly).
-                        if ((_evoState.variable === 'wind200'
-                                || _evoState.variable === 'wind850')
-                                && _evoState.mode === 'anomaly'
-                                && !_evoState._userPickedMode) {
-                            _evoState.mode = 'raw';
-                            var modeSel = document.getElementById('seasonal-evo-mode');
-                            if (modeSel) modeSel.value = 'raw';
-                        }
+                        // (Previously: a wind-variable-only auto-flip
+                        // from anomaly→raw on variable change. Now that
+                        // raw is the default mode for every variable
+                        // and `_userPickedMode` gets set whenever the
+                        // user picks anomaly explicitly, the auto-flip
+                        // is unreachable — removed.)
                     }
                     _evoUpdateHdButton();
                     _evoRender();
