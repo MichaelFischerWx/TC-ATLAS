@@ -1349,11 +1349,13 @@
         var label = REGION_LABEL[state.ts.region] || state.ts.region;
         var era5Meta = state.era5 && state.era5.fields
             && state.era5.fields[state.ts.variable];
-        // Compact y-axis labels per ERA5 variable. The full long_name +
-        // units gets too long for the axis (e.g., "Max potential intensity
-        // (Bister-Emanuel) (m s⁻¹)") and crowds the plot. Keep the long
-        // name in the title; use a short tag on the y-axis.
-        var ERA5_Y_LABELS = {
+        // Compact labels per ERA5 variable. The full long_name + units
+        // gets too long for the y-axis (and the chart title) — e.g.,
+        // "Saturation entropy deficit χ_m (Emanuel/Tang, ventilation
+        // index) (1)" wraps awkwardly and crowds the data. Use the same
+        // short label in BOTH the y-axis title and the chart title so
+        // they stay legible across all ERA5 variables.
+        var ERA5_LABELS = {
             mpi:    'MPI (m s⁻¹)',
             rh700:  '700-hPa RH (%)',
             chi200: 'χ at 200 hPa (10⁶ m² s⁻¹)',
@@ -1362,11 +1364,23 @@
             shear:  'Deep-layer shear (m s⁻¹)',
             u200:   'u at 200 hPa (m s⁻¹)',
             u850:   'u at 850 hPa (m s⁻¹)',
+            chi_m:  'Sat. entropy deficit χ_m',          // dimensionless
+            s_b:    's_b at 1000 hPa (J kg⁻¹ K⁻¹)',
+            s_m:    's_m at 700 hPa  (J kg⁻¹ K⁻¹)',
         };
         var varLabel, yLabel;
         if (era5Meta) {
-            varLabel = era5Meta.long_name + ' (' + era5Meta.units + ')';
-            yLabel = ERA5_Y_LABELS[state.ts.variable] || varLabel;
+            // Short label for both title and axis when available; fall
+            // back to long_name + units for variables we haven't
+            // explicitly compact-labeled.
+            var shortLabel = ERA5_LABELS[state.ts.variable];
+            if (shortLabel) {
+                varLabel = shortLabel;
+                yLabel = shortLabel;
+            } else {
+                varLabel = era5Meta.long_name + ' (' + era5Meta.units + ')';
+                yLabel = varLabel;
+            }
         } else {
             varLabel = (state.ts.variable === 'anom') ? 'SST anomaly (°C)'
                      : (state.ts.variable === 'sst_dt') ? 'detrended SST (°C)'
@@ -1397,7 +1411,11 @@
                 gridcolor: BRAND.grid,
                 tickfont: { size: 11 },
             },
-            margin: { l: 64, r: 18, t: 52, b: 78 },
+            // Bottom margin needs to hold: xaxis tick labels + "Month"
+            // axis title + 2-row wrapped horizontal legend. Previous 78 px
+            // left the "Month" title sitting on top of the legend's
+            // second wrap row.
+            margin: { l: 64, r: 18, t: 52, b: 105 },
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: BRAND.plotBg,
             font: { color: BRAND.text, family: 'DM Sans, system-ui, sans-serif',
@@ -1412,8 +1430,10 @@
             },
             showlegend: true,
             legend: {
+                // y=-0.28 (was -0.18) sits the legend below the xaxis
+                // title with a small gap. Pairs with margin.b above.
                 font: { size: 13 }, orientation: 'h',
-                yanchor: 'top', y: -0.18, x: 0, xanchor: 'left',
+                yanchor: 'top', y: -0.28, x: 0, xanchor: 'left',
                 bgcolor: 'rgba(0,0,0,0)',
             },
             annotations: _watermarkAnnotations(),
@@ -1891,7 +1911,11 @@
                 gridcolor: BRAND.grid,
                 tickfont: { size: 11 },
             },
-            margin: { l: 64, r: 18, t: 52, b: 78 },
+            // Bottom margin needs to hold: xaxis tick labels + "Month"
+            // axis title + 2-row wrapped horizontal legend. Previous 78 px
+            // left the "Month" title sitting on top of the legend's
+            // second wrap row.
+            margin: { l: 64, r: 18, t: 52, b: 105 },
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: BRAND.plotBg,
             font: { color: BRAND.text, family: 'DM Sans, system-ui, sans-serif',
@@ -1906,8 +1930,10 @@
             },
             showlegend: true,
             legend: {
+                // y=-0.28 (was -0.18) sits the legend below the xaxis
+                // title with a small gap. Pairs with margin.b above.
                 font: { size: 13 }, orientation: 'h',
-                yanchor: 'top', y: -0.18, x: 0, xanchor: 'left',
+                yanchor: 'top', y: -0.28, x: 0, xanchor: 'left',
                 bgcolor: 'rgba(0,0,0,0)',
             },
             annotations: _watermarkAnnotations(),
