@@ -150,6 +150,27 @@ class WaveSpec:
     # thickness scaling with magnitude. Used only when render_style ==
     # "contour".
     contour_levels: Optional[list] = None
+    # Meridional projection onto the n-th parabolic cylinder function
+    # (PCF). Pure (k, ω) WK filtering leaves the band amplitude defined
+    # at every latitude, which yields physically meaningless extratropical
+    # contours for equatorially-trapped wave modes. Projecting the
+    # filtered field onto the canonical equatorial-wave meridional
+    # eigenstructure (Matsuno 1966 / Yang, Hoskins & Slingo 2003) confines
+    # the signal to its theoretical envelope. n=0 → D₀ = exp(-y²/2L²)
+    # (Kelvin, ER symmetric); n=1 → D₁ = (y/L)·exp(-y²/2L²) (MRG, TD-type
+    # antisymmetric, peaks off-equator at y=L). None → no projection.
+    merid_pcf_n: Optional[int] = None
+    # Equatorial trapping scale (degrees latitude). Yang, Hoskins & Slingo
+    # (2003) fit L≈6° to wind fields, which gives a cleaner Matsuno
+    # structure than is appropriate for OLR. The observed Kelvin/ER OLR
+    # envelopes in Kiladis (2009 §3.2, Fig. 5) and Straub & Kiladis (2003)
+    # are noticeably broader — convective coupling plus the h=8-90m
+    # equivalent-depth spread broadens the meridional envelope vs the
+    # single-mode theoretical decay. L=8° puts the outer ±2 W/m² contour
+    # at ~±15° latitude (peak ~12 W/m²), matching the canonical observed
+    # CCEW width. MJO is genuinely broader (±15-20°) and overrides this
+    # to L=10° per Yang et al. (2007).
+    trapping_scale_deg: float = 8.0
 
 
 WAVE_SPECS = [
@@ -185,6 +206,13 @@ WAVE_SPECS = [
         vmin=-15.0, vmax=15.0,
         render_style="contour",
         contour_levels=[-12, -9, -6, -3, 3, 6, 9, 12],
+        # MJO OLR projects predominantly onto the D₀ (Kelvin-like)
+        # meridional eigenstructure (Kiladis 2009 §3.2), but with a wider
+        # trapping scale than the Kelvin band itself. L=10° matches the
+        # observed MJO convective envelope and is consistent with the
+        # PCF-projected MJO frameworks (e.g. Yang et al. 2007).
+        merid_pcf_n=0,
+        trapping_scale_deg=10.0,
     ),
     WaveSpec(
         name="kelvin",
@@ -206,6 +234,7 @@ WAVE_SPECS = [
         vmin=-10.0, vmax=10.0,
         render_style="contour",
         contour_levels=[-8, -6, -4, -2, 2, 4, 6, 8],
+        merid_pcf_n=0,  # Kelvin: D₀ (symmetric, equator-peaked)
     ),
     WaveSpec(
         name="er",
@@ -223,6 +252,7 @@ WAVE_SPECS = [
         vmin=-10.0, vmax=10.0,
         render_style="contour",
         contour_levels=[-8, -6, -4, -2, 2, 4, 6, 8],
+        merid_pcf_n=0,  # ER n=1 OLR: D₀-dominant (Kiladis 2009 Table 2)
     ),
     WaveSpec(
         name="mrg",
@@ -238,6 +268,7 @@ WAVE_SPECS = [
         vmin=-6.0, vmax=6.0,
         render_style="contour",
         contour_levels=[-6, -4, -2, 2, 4, 6],
+        merid_pcf_n=1,  # MRG: D₁ (antisymmetric, peaks at y=L≈6°)
     ),
     WaveSpec(
         name="td_type",
@@ -253,6 +284,7 @@ WAVE_SPECS = [
         vmin=-5.0, vmax=5.0,
         render_style="contour",
         contour_levels=[-4, -3, -2, -1, 1, 2, 3, 4],
+        merid_pcf_n=1,  # TD-type: D₁ (antisymmetric, monsoon-trough belt)
     ),
 ]
 
@@ -527,6 +559,64 @@ def wk_filter(field, spec: WaveSpec):
     # shape. The real-data portion is now amplitude-preserved end-to-end
     # because the taper only attenuated the reflected synthetic samples.
     out = out_padded[n_taper:-n_taper]
+    return field.copy(data=out)
+
+
+# --------------------------------------------------------------------------
+# Meridional PCF projection
+# --------------------------------------------------------------------------
+
+def _pcf_weight(lat_deg: np.ndarray, n: int, L_deg: float) -> np.ndarray:
+    """Unnormalized parabolic cylinder function D_n(y/L) evaluated on a
+    latitude grid (degrees). Hermite-weighted Gaussian; n=0 is the Kelvin
+    eigenstructure (equator-peaked), n=1 is the MRG eigenstructure
+    (antisymmetric, peaks off-equator at |y|=L), n=2 is the next symmetric
+    mode (sign change near the equator)."""
+    xi = lat_deg / float(L_deg)
+    gauss = np.exp(-0.5 * xi * xi)
+    if n == 0:
+        return gauss
+    if n == 1:
+        return xi * gauss
+    if n == 2:
+        return (xi * xi - 1.0) * gauss
+    raise ValueError(f"PCF order n={n} not supported (need 0, 1, or 2)")
+
+
+def apply_pcf_projection(field, spec: WaveSpec):
+    """Project the WK-filtered field onto its theoretical equatorial-wave
+    meridional eigenstructure (Yang, Hoskins & Slingo 2003).
+
+    Pure (k, ω) WK filtering leaves the band-passed amplitude defined at
+    every latitude — equatorially-trapped wave modes thus get spurious
+    extratropical contours. Projecting onto the n-th parabolic cylinder
+    function with a fixed 6° trapping scale confines the signal to its
+    physical envelope (effectively ±25° for n=0, n=1).
+
+    Implementation is a least-squares projection onto a single mode:
+
+        coef(t, x) = Σ_y field(t, y, x) · w_n(y) / Σ_y w_n(y)²
+        out(t, y, x) = coef(t, x) · w_n(y)
+
+    Self-normalizing (the trapping-scale and dy factors cancel out), so
+    output units match input. Cost is O(nt · ny · nx) — negligible next
+    to the upstream FFT.
+    """
+    if spec.merid_pcf_n is None:
+        return field
+    lat = field.lat.values.astype(np.float64)
+    w = _pcf_weight(lat, spec.merid_pcf_n, spec.trapping_scale_deg)
+    w_norm = float(np.sum(w * w))
+    if w_norm <= 0:
+        log.warning("PCF projection skipped for %s: zero weight norm",
+                    spec.name)
+        return field
+    arr = field.values  # (nt, ny, nx)
+    # Inner product along lat axis → projection coefficient at each (t, x).
+    coef = np.einsum("tyx,y->tx", arr, w) / w_norm
+    out = coef[:, None, :] * w[None, :, None]
+    log.info("  PCF n=%d projection applied to %s (L=%.1f°, norm=%.3g)",
+             spec.merid_pcf_n, spec.name, spec.trapping_scale_deg, w_norm)
     return field.copy(data=out)
 
 
@@ -1430,6 +1520,11 @@ def main():
             filtered = src
         else:
             filtered = wk_filter(src, spec)
+            # Confine each band to its theoretical meridional eigenstructure
+            # (parabolic cylinder function). Suppresses the spurious
+            # extratropical contour bullseyes that pure (k, ω) WK filtering
+            # leaves behind for equatorially-trapped modes.
+            filtered = apply_pcf_projection(filtered, spec)
 
         latest = filtered.isel(time=-1).values
         png = render_png(latest, lats, lons, spec)

@@ -463,19 +463,22 @@
     /* ── Hovmöller stack ──────────────────────────────────────── */
     function _stackContainer() { return document.getElementById('sub-hov-stack'); }
 
-    /* Wraps longitude values from 0..360 onto -180..180 if the slab
-       arrived in 0..360 convention (NOAA OLR does). Returns reordered
-       (lons, values) so the chart reads naturally west-to-east with
-       Greenwich roughly in the middle of the right half. */
+    /* Normalize longitudes to the 0..360° convention so the Hovmöller is
+       Indo-Pacific-centered (date line at the visual middle). NOAA OLR
+       already arrives in 0..360, so usually this is a sort-only pass; if
+       a slab ever shows up in −180..180 form we roll it forward. Pacific
+       centering is what Schreck (NCICS), CPC, BoM, and Wheeler–Hendon all
+       use — the MJO/Kelvin life cycle reads as one continuous east-bound
+       sweep through the middle instead of being split across the seam. */
     function _normalizeLons(lons, valuesByTime) {
         var rolled = lons.slice();
-        // If max > 180 we're on 0..360. Roll so values >180 become -ish.
-        var maxLon = Math.max.apply(null, rolled);
-        if (maxLon <= 180.1) return { lons: rolled, values: valuesByTime };
-        for (var i = 0; i < rolled.length; i++) {
-            if (rolled[i] > 180) rolled[i] -= 360;
+        var minLon = Math.min.apply(null, rolled);
+        // If min < 0 the slab is on −180..180 — shift to 0..360.
+        if (minLon < 0) {
+            for (var i = 0; i < rolled.length; i++) {
+                if (rolled[i] < 0) rolled[i] += 360;
+            }
         }
-        // Sort lon ascending and reorder columns to match
         var idx = rolled.map(function (_, i) { return i; });
         idx.sort(function (a, b) { return rolled[a] - rolled[b]; });
         var sortedLons = idx.map(function (i) { return rolled[i]; });
@@ -629,9 +632,9 @@
                 plot_bgcolor:  bg,
                 font: { color: fg, size: 10, family: 'DM Sans, system-ui, sans-serif' },
                 xaxis: {
-                    range: [-180, 180],
-                    tickvals: [-180, -120, -60, 0, 60, 120, 180],
-                    ticktext: ['180°', '120°W', '60°W', '0°', '60°E', '120°E', '180°'],
+                    range: [0, 360],
+                    tickvals: [0, 60, 120, 180, 240, 300, 360],
+                    ticktext: ['0°', '60°E', '120°E', '180°', '120°W', '60°W', '0°'],
                     showgrid: true, gridcolor: axisGrid, zeroline: false,
                     tickfont: { size: 9 },
                 },
@@ -841,9 +844,9 @@
             paper_bgcolor: bg, plot_bgcolor: bg,
             font: { color: fg, size: 10, family: 'DM Sans, system-ui, sans-serif' },
             xaxis: {
-                range: [-180, 180],
-                tickvals: [-180, -120, -60, 0, 60, 120, 180],
-                ticktext: ['180°', '120°W', '60°W', '0°', '60°E', '120°E', '180°'],
+                range: [0, 360],
+                tickvals: [0, 60, 120, 180, 240, 300, 360],
+                ticktext: ['0°', '60°E', '120°E', '180°', '120°W', '60°W', '0°'],
                 showgrid: true, gridcolor: axisGrid, zeroline: false,
                 tickfont: { size: 10 },
             },
@@ -914,11 +917,11 @@
         container.appendChild(div);
 
         var basins = [
-            { name: 'E Pacific',  x0: -180, x1: -100 },
-            { name: 'N Atlantic', x0: -100, x1:    0 },
-            { name: 'Africa',     x0:    0, x1:   50 },
-            { name: 'N Indian',   x0:   50, x1:  100 },
-            { name: 'W Pacific',  x0:  100, x1:  180 },
+            { name: 'Africa',     x0:   0, x1:  50 },
+            { name: 'N Indian',   x0:  50, x1: 100 },
+            { name: 'W Pacific',  x0: 100, x1: 180 },
+            { name: 'E Pacific',  x0: 180, x1: 260 },
+            { name: 'N Atlantic', x0: 260, x1: 360 },
         ];
         var annotations = basins.map(function (b) {
             return {
@@ -937,14 +940,14 @@
         var images = [{
             source: 'data/tropical_basemap.png',
             xref: 'x', yref: 'paper',
-            x: -180, y: 1,
+            x: 0, y: 1,
             sizex: 360, sizey: 1,
             xanchor: 'left', yanchor: 'top',
             sizing: 'stretch', layer: 'below',
             opacity: 1,
         }];
         Plotly.newPlot(div, [{
-            type: 'scatter', x: [-180, 180], y: [0.5, 0.5],
+            type: 'scatter', x: [0, 360], y: [0.5, 0.5],
             mode: 'markers', marker: { opacity: 0 }, hoverinfo: 'skip',
         }], {
             // Right margin matches Hovmöller panels' colorbar reservation
@@ -952,7 +955,7 @@
             margin: { l: 60, r: 55, t: 0, b: 0 },
             paper_bgcolor: bg, plot_bgcolor: bg,
             xaxis: {
-                range: [-180, 180],
+                range: [0, 360],
                 showticklabels: false, showgrid: false, zeroline: false,
                 fixedrange: true,
             },
@@ -983,7 +986,10 @@
             // Skip fixes outside the slab's time range
             if (dayKey < slabStartDay || dayKey > slabEndDay) continue;
             var lonNorm = t.lon;
-            if (lonNorm > 180) lonNorm -= 360;
+            // Hovmöller x-axis runs 0..360° (Indo-Pacific-centered);
+            // shift western-hemisphere storms (NHC convention reports
+            // lon as negative) forward by 360°.
+            if (lonNorm < 0) lonNorm += 360;
             xs.push(lonNorm);
             ys.push(dayKey);
             vmaxs.push(t.vmax_kt);
