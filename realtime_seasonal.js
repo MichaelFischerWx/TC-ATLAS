@@ -921,46 +921,124 @@
         ].filter(Boolean);
     }
 
-    // Pick a non-overlapping inset corner for Panel B based on where the
-    // current region/variable's climatological peak lives in the calendar.
-    // Variables whose peak falls in late summer-autumn (SST, MPI, RH, TCWV,
-    // ζ850) keep the original upper-LEFT placement so the inset sits over
-    // the sparser Jan-Feb portion of the chart. Variables whose peak falls
-    // in winter (shear, u200, u850) swap to upper-RIGHT so the inset sits
-    // over the (low-data) summer trough months instead.
+    // Pick a non-overlapping inset corner for Panel B.
+    //
+    // V2 algorithm: score all FOUR corners (TL/TR/BL/BR) by how close
+    // the actual data passes through them, pick the most-empty one.
+    // V1 only checked the climo line's peak month and chose between
+    // upper-LEFT and upper-RIGHT — that broke for variables where the
+    // ENTIRE chart sits high in the y range (e.g., χ_m for atl_mdr
+    // stays 0.6-1.1 with all years near the top of the [0.55, 1.20]
+    // y-scale, so both upper corners overlap data).
+    //
+    // The inset has also been shrunk from 22%×26% → 16%×20% to lower
+    // the collision probability across the board.
     function _pickInsetDomain() {
-        var DEFAULT_LEFT  = { x: [0.005, 0.22],  y: [0.78, 1.005] };
-        var DEFAULT_RIGHT = { x: [0.78,  0.995], y: [0.78, 1.005] };
+        // Four candidate corners. Shrunk from the V1 22% × 26% boxes.
+        // Margins keep the inset off the axis ticks/labels.
+        var CORNERS = {
+            TL: { x: [0.010, 0.165], y: [0.795, 0.995] },
+            TR: { x: [0.835, 0.990], y: [0.795, 0.995] },
+            BL: { x: [0.010, 0.165], y: [0.025, 0.225] },
+            BR: { x: [0.835, 0.990], y: [0.025, 0.225] },
+        };
+        var FALLBACK = CORNERS.TL;
+
         var region = state.ts.region;
         var variable = state.ts.variable;
-        // Resolve which monthly climatology series to inspect. ERA5 vars
-        // live in state.era5; SST vars in state.indices.
-        var clim = null;
+        // Resolve climo + per-year series. ERA5 vars live in state.era5;
+        // SST vars in state.indices.
+        var clim = null, byYear = null;
         if (_isEra5Var(variable) && state.era5) {
             var src = state.era5;
             clim = (src.values || {})[region + '_' + variable];
+            byYear = src.by_year;
         } else if (state.indices && state.indices.values) {
-            // Maps frontend `sst_rel` → server `anom_rel`; same for `anom`.
-            var key = (variable === 'anom')     ? '_anom'
-                    : (variable === 'sst_rel')  ? '_anom_rel'
-                    : (variable === 'sst_dt')   ? '_anom'   // detrended uses anom climo
-                    :                              '_sst';
-            clim = state.indices.values[region + key];
+            var sstKey = (variable === 'anom')     ? '_anom'
+                       : (variable === 'sst_rel')  ? '_anom_rel'
+                       : (variable === 'sst_dt')   ? '_anom'
+                       :                              '_sst';
+            clim = state.indices.values[region + sstKey];
         }
-        if (!Array.isArray(clim)) return DEFAULT_LEFT;
-        // Find the month (1..12) with the highest |value| — what would
-        // collide with an upper-corner inset.
-        var peakMo = 1, peakAbs = -1;
+        if (!Array.isArray(clim)) return FALLBACK;
+
+        // Build a single sweep of (month, value) samples from the climo
+        // line + the last ~5 years of per-year data. Skipping the full
+        // spaghetti keeps the scoring robust to ancient outlier years
+        // we mostly don't care about visually.
+        var samples = [];
         for (var i = 0; i < 12; i++) {
-            var v = clim[i];
-            if (v == null) continue;
-            var a = Math.abs(v);
-            if (a > peakAbs) { peakAbs = a; peakMo = i + 1; }
+            if (clim[i] != null) samples.push([i + 1, clim[i]]);
         }
-        // Peak Jan-Jun → place inset on the RIGHT (chart's right side is
-        // the safer Jul-Dec for these variables). Peak Jul-Dec → keep
-        // LEFT (safer Jan-Jun side).
-        return (peakMo <= 6) ? DEFAULT_RIGHT : DEFAULT_LEFT;
+        if (byYear) {
+            var thisYear = (new Date()).getUTCFullYear();
+            var seriesKey = region + '_' + variable;
+            for (var y = thisYear - 5; y <= thisYear; y++) {
+                var row = (byYear[String(y)] || {})[seriesKey];
+                if (!row) continue;
+                for (var m = 0; m < 12; m++) {
+                    if (row[m] != null) samples.push([m + 1, row[m]]);
+                }
+            }
+        }
+        if (!samples.length) return FALLBACK;
+
+        // Compute the chart's y-range with the same logic Plotly's
+        // auto-scaler uses: span of (min, max) + small padding.
+        var yMin = Infinity, yMax = -Infinity;
+        samples.forEach(function (s) {
+            if (s[1] < yMin) yMin = s[1];
+            if (s[1] > yMax) yMax = s[1];
+        });
+        // Include the climo ±σ envelope (matches what the user actually
+        // sees) — for ERA5 vars we have std arrays; for SST vars too.
+        var sigSrc = null;
+        if (_isEra5Var(variable) && state.era5 && state.era5.std) {
+            sigSrc = state.era5.std[region + '_' + variable];
+        }
+        if (Array.isArray(sigSrc)) {
+            for (var k = 0; k < 12; k++) {
+                if (clim[k] == null || sigSrc[k] == null) continue;
+                if (clim[k] + sigSrc[k] > yMax) yMax = clim[k] + sigSrc[k];
+                if (clim[k] - sigSrc[k] < yMin) yMin = clim[k] - sigSrc[k];
+            }
+        }
+        if (!isFinite(yMin) || !isFinite(yMax) || yMax === yMin) {
+            return FALLBACK;
+        }
+        // Plotly's default auto-range adds ~6% padding on each side.
+        var pad = 0.06 * (yMax - yMin);
+        var axisMin = yMin - pad, axisMax = yMax + pad, axisSpan = axisMax - axisMin;
+
+        // For each corner, score: max(0, 1 - distance_to_nearest_sample)
+        // in normalized [0,1]^2 plot coords. Lower score = farther from
+        // data = safer. Sum scores across all samples; pick the corner
+        // with the LOWEST total score (= least data nearby).
+        var totals = { TL: 0, TR: 0, BL: 0, BR: 0 };
+        samples.forEach(function (s) {
+            var mo = s[0], val = s[1];
+            var xN = (mo - 1) / 11;                       // [0..1] over Jan..Dec
+            var yN = (val - axisMin) / axisSpan;          // [0..1] over plot
+            yN = Math.max(0, Math.min(1, yN));
+            Object.keys(CORNERS).forEach(function (k) {
+                var d = CORNERS[k];
+                // "Center" of the corner box in normalized coords.
+                var cx = 0.5 * (d.x[0] + d.x[1]);
+                var cy = 0.5 * (d.y[0] + d.y[1]);
+                // Score that decays with distance — sample inside the
+                // box scores ~1, far away scores ~0. Cap of 0.5 on the
+                // per-sample contribution avoids one outlier dominating.
+                var dx = xN - cx, dy = yN - cy;
+                var d2 = dx * dx + dy * dy;
+                totals[k] += Math.max(0, 1.0 - d2 * 25);  // 5-unit half-radius
+            });
+        });
+
+        var bestKey = 'TL', bestScore = Infinity;
+        ['TL', 'TR', 'BL', 'BR'].forEach(function (k) {
+            if (totals[k] < bestScore) { bestScore = totals[k]; bestKey = k; }
+        });
+        return CORNERS[bestKey];
     }
 
     function _insetGeoLayout(domain) {
@@ -1450,8 +1528,19 @@
         // climbs into, and matches the Daily-mode placement at line ~1747
         // for consistency across resolutions.
         layout.geo2 = _insetGeoLayout(_pickInsetDomain());
-        Plotly.react(el, allTraces, layout,
-                     { responsive: true, displaylogo: false });
+        // Variable changes mutate margin/legend/inset-domain enough that
+        // Plotly.react leaves the chart in a partial state (data updated
+        // but SVG not repainted). Empirically observed when going
+        // SST → χ_m or shear → χ_m. Force a clean redraw by purging
+        // first; the flash is minimal (the prior trace was about to be
+        // replaced anyway). Same defensive pattern used in
+        // _drawDailyShearChart for the same class of bug.
+        if (typeof Plotly !== 'undefined'
+                && el.classList.contains('js-plotly-plot')) {
+            Plotly.purge(el);
+        }
+        Plotly.newPlot(el, allTraces, layout,
+                       { responsive: true, displaylogo: false });
     }
 
     // -------------------------------------------------------------------
