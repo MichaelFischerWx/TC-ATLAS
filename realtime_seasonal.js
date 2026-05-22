@@ -5297,28 +5297,54 @@
     // for SST or TCWV (land = NaN z but finite u/v above the land
     // surface), particles now skip land cells instead of drifting
     // through transparent regions.
+    // Stratified spawn — partition the viewport into a coarse grid of
+    // bins and route each particle's respawn into its assigned home
+    // bin. Pure rejection-sampling against the viewport gave hugely
+    // uneven coverage when one half of the basin (e.g., western
+    // Atlantic w/ Bermuda High + jet) had much stronger flow than the
+    // other (eastern Atlantic trades + Saharan low) — the rejection
+    // budget was burned by spawn attempts in the strong-wind region
+    // and the weak-wind half visibly emptied out.
+    //
+    // The bin grid is sized roughly to the viewport aspect so cells
+    // are ~square in lon/lat (target ~32 bins for 450 particles ≈ 14
+    // particles per bin → dense but not crowded).
+    var _EVO_PCL_BIN_TARGET = 32;
+    function _evoParticleBinFor(i, viewport) {
+        var lonW = viewport.x[1] - viewport.x[0];
+        var latH = viewport.y[1] - viewport.y[0];
+        var ratio = Math.max(0.2, lonW / Math.max(1, latH));
+        // nx · ny ≈ _EVO_PCL_BIN_TARGET, with nx / ny ≈ ratio.
+        var ny = Math.max(2, Math.round(Math.sqrt(_EVO_PCL_BIN_TARGET / ratio)));
+        var nx = Math.max(2, Math.round(_EVO_PCL_BIN_TARGET / ny));
+        var binIdx = i % (nx * ny);
+        var bx = binIdx % nx;
+        var by = Math.floor(binIdx / nx);
+        var x0 = viewport.x[0] + (bx / nx) * lonW;
+        var x1 = viewport.x[0] + ((bx + 1) / nx) * lonW;
+        var y0 = viewport.y[0] + (by / ny) * latH;
+        var y1 = viewport.y[0] + ((by + 1) / ny) * latH;
+        return { x0: x0, x1: x1, y0: y0, y1: y1 };
+    }
+
     function _evoParticleSpawn(i, viewport) {
         var p = _evoParticles;
-        var xMin = viewport.x[0], xMax = viewport.x[1];
-        var yMin = viewport.y[0], yMax = viewport.y[1];
-        // Two-phase spawn so the spatial distribution stays uniform
-        // across the viewport even when large sub-regions have light
-        // monthly-mean winds (eastern Atlantic in DJF, Sahara thermal
-        // low, etc.):
-        //   Phase 1 (preferred): up to 24 random tries for a spot that
-        //   is both data-valid (z finite) AND non-calm — produces a
-        //   visible trail.
-        //   Phase 2 (fallback): if all 24 tries land in calm air, take
-        //   the first data-valid calm spot we saw rather than parking
-        //   the particle (which would leave a gap on the canvas). The
-        //   particle will barely move there but remains visible and
-        //   resumes advecting once the wind field updates.
-        // Previously the spawn budget was 8 tries with no fallback, so
-        // entire calm sub-regions of the viewport rendered empty.
+        var bin = _evoParticleBinFor(i, viewport);
+        // Three-phase spawn within the particle's home bin so spatial
+        // coverage stays uniform regardless of where the wind happens
+        // to be strong:
+        //   Phase 1 — random points inside the bin until we find one
+        //   that is data-valid AND non-calm (preferred: visible trail).
+        //   Phase 2 — if all tries hit calm air, accept the first
+        //   data-valid calm point we saw. The particle barely moves
+        //   but is visible.
+        //   Phase 3 — if even the bin is fully invalid (e.g., land-
+        //   only for SST), random across the FULL viewport once before
+        //   parking; pure-land bins shouldn't waste a particle.
         var fbLat = NaN, fbLon = NaN;
-        for (var attempts = 0; attempts < 24; attempts++) {
-            var lat = yMin + Math.random() * (yMax - yMin);
-            var lon = xMin + Math.random() * (xMax - xMin);
+        for (var attempts = 0; attempts < 16; attempts++) {
+            var lat = bin.y0 + Math.random() * (bin.y1 - bin.y0);
+            var lon = bin.x0 + Math.random() * (bin.x1 - bin.x0);
             var uv = _evoParticleUvAt(lon, lat);
             if (!uv || !_evoParticleZFinite(lon, lat)) continue;
             if (uv.spdKt >= _EVO_PCL_MIN_KT) {
@@ -5331,10 +5357,19 @@
             _evoParticlePlace(i, fbLat, fbLon);
             return true;
         }
-        // No valid spot found at all — park the particle and try
-        // again next frame.
+        // Phase 3 — fallback across the full viewport so a land-locked
+        // bin (SST) doesn't permanently lose its particle.
+        for (var k = 0; k < 8; k++) {
+            var lat2 = viewport.y[0] + Math.random() * (viewport.y[1] - viewport.y[0]);
+            var lon2 = viewport.x[0] + Math.random() * (viewport.x[1] - viewport.x[0]);
+            var uv2 = _evoParticleUvAt(lon2, lat2);
+            if (uv2 && _evoParticleZFinite(lon2, lat2)) {
+                _evoParticlePlace(i, lat2, lon2);
+                return true;
+            }
+        }
         p.lat[i] = NaN; p.lon[i] = NaN;
-        p.age[i] = _EVO_PCL_MAX_AGE + 1;   // will respawn on next tick
+        p.age[i] = _EVO_PCL_MAX_AGE + 1;
         return false;
     }
 
