@@ -1313,11 +1313,21 @@
     //     V_VPI = V_PI · √(max(0, 1 − VI / VI_crit))
     //
     // Where VI = shear · χ_m / V_PI is the Tang & Emanuel (2012)
-    // ventilation index and VI_crit ≈ 0.145 is the threshold above
-    // which the storm can't intensify (ventilation perfectly offsets
-    // the Carnot heat-engine work). Formulation follows Tang &
-    // Emanuel (2012, J. Climate) with the refinements proposed in
-    // Chavas, Knaff, Kowaleski et al. (2025).
+    // ventilation index and VI_crit is the threshold above which
+    // ventilation overwhelms the storm's thermodynamic forcing.
+    //
+    // VI_crit choice: we use **0.40** (Camargo et al. 2014, J. Climate;
+    // Wing et al. 2015; Chavas et al. 2025). This is the operational
+    // convention in modern TC papers and reproduces the Atlantic MDR
+    // annual-mean vPI ≈ 40-60 m/s seen in Chavas Fig 3c. Tang &
+    // Emanuel's strict thermodynamic derivation gives VI_crit ≈ 0.145
+    // but that value produces unrealistic winter clipping when
+    // applied to basin-mean inputs (basin-mean VI exceeds 0.145 even
+    // in late TC season for the Atlantic MDR — pointwise pockets of
+    // favorable conditions DO exist within the region, so the basin
+    // mean computed with the strict threshold systematically
+    // underestimates vPI compared to the spatially-resolved value
+    // that Chavas et al. publish).
     //
     // Interpretation: V_VPI is the "expected" intensity ceiling for
     // any storm forming in the region given the current vertical
@@ -1335,7 +1345,7 @@
         var sKey = region + '_shear';
         var cKey = region + '_chi_m';
         var mKey = region + '_mpi';
-        var VI_CRIT = 0.145;  // Tang & Emanuel 2012 threshold
+        var VI_CRIT = 0.40;   // Camargo 2014 / Chavas 2025 convention
         var byYear = {};
         var projByYear = {};
         var preliminaryByYear = {};
