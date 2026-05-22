@@ -1075,6 +1075,18 @@
     function _buildEra5TimeSeriesData() {
         if (!state.era5) return null;
         var e = state.era5;
+        // Ventilation Index is a CLIENT-SIDE derived variable:
+        //   VI = shear × χ_m / V_PI    [Tang & Emanuel 2012, J. Climate]
+        // We have shear, chi_m, mpi already on state.era5 as regional
+        // monthly means — combine them per (year, month) and recompute
+        // climo mean + std from the resulting per-year series. The
+        // "ratio-of-regional-means" approach differs from the formally-
+        // correct pointwise-then-averaged VI by a few percent (Jensen's
+        // inequality) but tracks the same seasonal cycle + inter-annual
+        // signal that matters for a Panel B time-series view.
+        if (state.ts.variable === 'vi') {
+            return _buildVentilationIndexData();
+        }
         var key = state.ts.region + '_' + state.ts.variable;
 
         var byYear = {};
@@ -1095,6 +1107,89 @@
         var climStd  = (e.std && e.std[key])
             ? e.std[key].slice()    : [null,null,null,null,null,null,null,null,null,null,null,null];
 
+        return {
+            byYear: byYear,
+            projByYear: projByYear,
+            preliminaryByYear: preliminaryByYear,
+            years: years.filter(function (y) { return byYear[y]; }),
+            climMean: climMean,
+            climStd: climStd,
+        };
+    }
+
+    // Compute Ventilation Index per (year, month) from the three
+    // existing monthly time series:  VI = shear · χ_m / V_PI.
+    // Climo (1991-2020) mean + std are derived from the per-year VI
+    // series, NOT from a ratio of climo ingredients (which would be a
+    // different quantity).
+    function _buildVentilationIndexData() {
+        if (!state.era5) return null;
+        var e = state.era5;
+        var region = state.ts.region;
+        var shearArr  = e.by_year || {};
+        var sKey = region + '_shear';
+        var cKey = region + '_chi_m';
+        var mKey = region + '_mpi';
+        var byYear = {};
+        var projByYear = {};
+        var preliminaryByYear = {};
+        var years = Object.keys(e.by_year || {})
+            .map(Number).sort(function (a, b) { return a - b; });
+        years.forEach(function (y) {
+            var blk = e.by_year[String(y)];
+            if (!blk) return;
+            var sh = blk[sKey];
+            var ch = blk[cKey];
+            var mp = blk[mKey];
+            if (!sh || !ch || !mp) return;
+            var row = new Array(12);
+            var anyValid = false;
+            for (var m = 0; m < 12; m++) {
+                if (sh[m] != null && ch[m] != null
+                        && mp[m] != null && mp[m] > 1.0) {
+                    row[m] = sh[m] * ch[m] / mp[m];
+                    anyValid = true;
+                } else {
+                    row[m] = null;
+                }
+            }
+            if (anyValid) {
+                byYear[y] = row;
+                projByYear[y] = [null,null,null,null,null,null,
+                                 null,null,null,null,null,null];
+                preliminaryByYear[y] = [false,false,false,false,false,false,
+                                        false,false,false,false,false,false];
+            }
+        });
+        // Climo from 1991-2020 — mean + sample std of VI per month
+        var climStart = 1991, climEnd = 2020;
+        var climMean = new Array(12);
+        var climStd  = new Array(12);
+        for (var m2 = 0; m2 < 12; m2++) {
+            var samples = [];
+            for (var y2 = climStart; y2 <= climEnd; y2++) {
+                if (byYear[y2] && byYear[y2][m2] != null) {
+                    samples.push(byYear[y2][m2]);
+                }
+            }
+            if (samples.length > 1) {
+                var mean = 0;
+                for (var i = 0; i < samples.length; i++) mean += samples[i];
+                mean /= samples.length;
+                var v = 0;
+                for (var j = 0; j < samples.length; j++) {
+                    v += (samples[j] - mean) * (samples[j] - mean);
+                }
+                climMean[m2] = mean;
+                climStd[m2] = Math.sqrt(v / (samples.length - 1));
+            } else if (samples.length === 1) {
+                climMean[m2] = samples[0];
+                climStd[m2] = 0;
+            } else {
+                climMean[m2] = null;
+                climStd[m2] = null;
+            }
+        }
         return {
             byYear: byYear,
             projByYear: projByYear,
@@ -1445,6 +1540,7 @@
             chi_m:  'Sat. entropy deficit χ_m',          // dimensionless
             s_b:    's_b at 1000 hPa (J kg⁻¹ K⁻¹)',
             s_m:    's_m at 700 hPa  (J kg⁻¹ K⁻¹)',
+            vi:     'Ventilation Index VI = shear·χ_m/V_PI',  // dimensionless
         };
         var varLabel, yLabel;
         if (era5Meta) {
@@ -2999,7 +3095,7 @@
     // different file. Merged into a single in-memory `state.era5` so the
     // downstream byYear / climMean / climStd code is variable-agnostic.
     var ERA5_VAR_KEYS = ['shear', 'mpi', 'rh700', 'chi200', 'vo850', 'tcwv',
-                         'u200', 'u850', 'chi_m', 's_b', 's_m'];
+                         'u200', 'u850', 'chi_m', 's_b', 's_m', 'vi'];
     function _isEra5Var(v) { return ERA5_VAR_KEYS.indexOf(v) !== -1; }
     var _era5Promise = null;
     // Single-attempt guard: if the lazy ERA5 fetch fails (404 because
@@ -3045,6 +3141,16 @@
                 merged.fields.shear = {
                     units: 'm s⁻¹',
                     long_name: 'Deep-layer shear (|V₂₀₀ − V₈₅₀|, daily-derived)',
+                };
+            }
+            // Ventilation Index is computed client-side from shear ·
+            // χ_m / V_PI, so it has no JSON file of its own. Inject the
+            // metadata so the y-axis label code finds it and the
+            // existing era5Meta-driven layout path works for VI too.
+            if (merged && !merged.fields.vi) {
+                merged.fields.vi = {
+                    units: '1',
+                    long_name: 'Ventilation Index (Tang & Emanuel 2012)',
                 };
             }
             state.era5 = merged;
@@ -4000,12 +4106,30 @@
         tcwv: {
             group: 'single_levels', name: 'tcwv', level: null,
             label: 'TCWV', units: 'kg m⁻²',
-            zmin: 0, zmax: 75, divergent: false,
+            // Range bumped 75 → 90 mm to capture deep-tropical moisture
+            // peaks that saturate the prior cap.
+            zmin: 0, zmax: 90, divergent: false,
             anomZmax: 10,
+            // Tropical-Tidbits-style TPW palette:
+            // brown (dry / 3-20 mm) → tan / cream (subtropical, 25-35)
+            // → green (humid tropical, 40-55) → teal (very humid, 55-65)
+            // → blue (saturated, 65-80) → purple/maroon (extreme, 80-90).
+            // Maps the dry-vs-moist contrast in tropical synoptics far
+            // more clearly than the prior pale-yellow→blue ramp.
             colorscale: [
-                [0.0, '#fff7bc'], [0.30, '#fec44f'],
-                [0.55, '#74c476'], [0.80, '#2171b5'],
-                [1.0, '#08306b'],
+                [0.000, '#5a3520'],   //   0 mm  dark brown
+                [0.110, '#8b6534'],   //  10     brown
+                [0.220, '#b89870'],   //  20     tan
+                [0.330, '#e8d8a8'],   //  30     cream
+                [0.420, '#cfe5a5'],   //  38     pale green
+                [0.500, '#9ccb6c'],   //  45     light green
+                [0.580, '#5fb255'],   //  52     medium green
+                [0.660, '#2d9978'],   //  59     teal
+                [0.730, '#3a8db8'],   //  66     turquoise blue
+                [0.800, '#3c69b5'],   //  72     blue
+                [0.870, '#4a3da5'],   //  78     deep blue
+                [0.940, '#6e2a8c'],   //  85     purple
+                [1.000, '#8f1f4f'],   //  90 mm  maroon
             ],
         },
         u200_m: {
