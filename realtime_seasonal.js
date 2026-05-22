@@ -3519,14 +3519,18 @@
     // day vs the full ~692640 — a 7× shrink, vital for staying under
     // the mobile-Safari ~2 GB ceiling).
     function _evoCropForBasin(srcCfg, basin, hd) {
-        if (!hd || basin === 'ALL') {
+        if (basin === 'ALL') {
             return { rowStart: 0, rowEnd: srcCfg.ny,
                      colStart: 0, colEnd: srcCfg.nx };
         }
         var view = _evoViewForBasin(basin);
-        // Pad the crop by 2° so barb glyphs near the viewport edge
-        // (shaft length ~3.4°) still have data underneath.
-        var padDeg = 2.0;
+        // Pad the crop generously so the user has room to pan within
+        // the basin without falling off the data. HD already shrinks
+        // the viewport, so 2° is plenty. In 1° mode the user might pan
+        // anywhere inside the basin's default window so we widen the
+        // pad to 8° — still cuts ~70% of a 360° global tile while
+        // keeping pans inside the basin smooth.
+        var padDeg = hd ? 2.0 : 8.0;
         var latHi = Math.min(srcCfg.latMax, view.y[1] + padDeg);
         var latLo = Math.max(srcCfg.latMin, view.y[0] - padDeg);
         var lonLo = view.x[0] - padDeg;
@@ -6125,16 +6129,16 @@
                 + loadLabel
                 + (hd ? ' (HD 0.25°)' : '')
                 + ' archive…</div>';
-            // Progressive HD loading: when in HD mode (where the per-
-            // month decode is ~2-3× heavier than 1°), paint the user's
-            // currently-viewed month BEFORE the remaining months finish
-            // loading. This trims the perceived wait from ~12 months'
-            // worth of decode to ~1 month's worth. We scope to HD only
-            // because (a) it's where the wait is long enough to matter,
-            // and (b) HD already skips climo subtraction so the partial
-            // draw doesn't need a parallel climo fetch.
+            // Progressive loading: paint the user's currently-viewed
+            // month BEFORE the remaining months finish loading. Trims
+            // perceived wait from "~12 months of decode" to "~1 month".
+            // Originally HD-only because the wait was longest there,
+            // but 1° also benefits (a global tile takes ~150 ms decode;
+            // 12 of them in parallel is ~1-2 s of dead time before any
+            // data shows). Skip only the GC-ATLAS monthly-only path
+            // because that one fetches via a different code path.
             var fetchOpts = {};
-            if (hd && !_evoIsMonthlyOnly(variable)) {
+            if (!_evoIsMonthlyOnly(variable)) {
                 var priorityMonth = null;
                 // 1) Pending frame epoch — set by resolution-flip /
                 //    auto-HD-promote handlers when the user was already
