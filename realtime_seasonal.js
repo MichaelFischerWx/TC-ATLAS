@@ -7812,7 +7812,6 @@
                     // retune the wrap's aspect ratio so the new basin's
                     // viewport fills the box without huge whitespace
                     // bands above/below.
-                    var view = _evoViewForBasin(_evoState.basin);
                     _evoApplyWrapAspect(_evoState.basin);
                     // ALL basin must disable HD (no viewport crop → mem
                     // ceiling crash).
@@ -7820,24 +7819,18 @@
                         _evoState.hd = false;
                     }
                     _evoUpdateHdButton();
-                    // In HD mode the crop region depends on the basin
-                    // viewport, so we need a full _evoRender to re-crop
-                    // and re-fetch tiles. In 1° mode the basin change
-                    // is just a viewport relayout — much cheaper.
-                    if (_evoState.hd) {
-                        _evoState.frames = null;
-                        _evoRender();
-                    } else {
-                        var mapEl = document.getElementById('seasonal-evo-map');
-                        if (mapEl && mapEl.classList.contains('js-plotly-plot')) {
-                            Plotly.relayout(mapEl, {
-                                'xaxis.range': view.x.slice(),
-                                'yaxis.range': view.y.slice(),
-                            }).then(function () { _evoRerenderTracksOnly(); });
-                        } else {
-                            _evoRerenderTracksOnly();
-                        }
-                    }
+                    // Both HD and 1° modes crop the decoded grid to the
+                    // basin viewport (HD: 2° pad, 1°: 8° pad — see
+                    // _evoCropForBasin). So basin change always needs a
+                    // full _evoRender to re-crop and re-decode tiles
+                    // against the new basin's source slice — a relayout-
+                    // only path would leave the heatmap data cropped to
+                    // the OLD basin and show blank in the new viewport.
+                    // The frames cache keys on basin, so flipping back
+                    // to a previously-viewed basin is a hit, not a
+                    // refetch — basin toggling stays cheap in practice.
+                    _evoState.frames = null;
+                    _evoRender();
                 } else if (key === 'trackDepth') {
                     _evoRerenderTracksOnly();
                 }
