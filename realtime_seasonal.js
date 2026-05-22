@@ -6151,7 +6151,22 @@
             } else {
                 clim = climo && climo[f.month];
             }
-            if (!clim) return f.z;   // fallback to raw if climo missing
+            if (!clim) {
+                // Climo missing for this month — return a NaN grid so
+                // the cell paints transparent in anomaly mode. The old
+                // fallback returned the raw f.z which made absolute SST
+                // values (e.g., 28 °C) render as "anomalies" of +28
+                // against the diverging colormap centered at zero — a
+                // catastrophic mis-read. Better to show "no data" than
+                // a false signal.
+                var nanRows = new Array(f.z.length);
+                for (var iN = 0; iN < f.z.length; iN++) {
+                    var rN = new Float32Array(f.z[iN].length);
+                    rN.fill(NaN);
+                    nanRows[iN] = rN;
+                }
+                return nanRows;
+            }
             var ny = f.z.length, nx = f.z[0].length;
             var out = new Array(ny);
             for (var i = 0; i < ny; i++) {
