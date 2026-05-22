@@ -3979,7 +3979,10 @@
         climoManifestPromise: null,
         year: null,
         variable: 'shear',
-        mode: 'anomaly',         // 'anomaly' | 'raw'
+        mode: 'raw',             // 'anomaly' | 'raw' — default to raw so
+                                 // the user sees the absolute field on
+                                 // first load (matches the dropdown's
+                                 // default "Raw values" selection).
         basin: 'NA',
         trackDepth: 'cumulative',
         resolution: 'monthly',   // 'monthly' (12 frames) | 'daily' (365)
