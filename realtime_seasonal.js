@@ -1191,6 +1191,9 @@
         if (state.ts.variable === 'vi') {
             return _buildVentilationIndexData();
         }
+        if (state.ts.variable === 'vpi') {
+            return _buildVentilatedPIData();
+        }
         var key = state.ts.region + '_' + state.ts.variable;
 
         var byYear = {};
@@ -1266,6 +1269,107 @@
             }
         });
         // Climo from 1991-2020 — mean + sample std of VI per month
+        var climStart = 1991, climEnd = 2020;
+        var climMean = new Array(12);
+        var climStd  = new Array(12);
+        for (var m2 = 0; m2 < 12; m2++) {
+            var samples = [];
+            for (var y2 = climStart; y2 <= climEnd; y2++) {
+                if (byYear[y2] && byYear[y2][m2] != null) {
+                    samples.push(byYear[y2][m2]);
+                }
+            }
+            if (samples.length > 1) {
+                var mean = 0;
+                for (var i = 0; i < samples.length; i++) mean += samples[i];
+                mean /= samples.length;
+                var v = 0;
+                for (var j = 0; j < samples.length; j++) {
+                    v += (samples[j] - mean) * (samples[j] - mean);
+                }
+                climMean[m2] = mean;
+                climStd[m2] = Math.sqrt(v / (samples.length - 1));
+            } else if (samples.length === 1) {
+                climMean[m2] = samples[0];
+                climStd[m2] = 0;
+            } else {
+                climMean[m2] = null;
+                climStd[m2] = null;
+            }
+        }
+        return {
+            byYear: byYear,
+            projByYear: projByYear,
+            preliminaryByYear: preliminaryByYear,
+            years: years.filter(function (y) { return byYear[y]; }),
+            climMean: climMean,
+            climStd: climStd,
+        };
+    }
+
+    // Ventilated Potential Intensity (V_VPI) — the achievable peak
+    // intensity once environmental ventilation is accounted for.
+    //
+    //     V_VPI = V_PI · √(max(0, 1 − VI / VI_crit))
+    //
+    // Where VI = shear · χ_m / V_PI is the Tang & Emanuel (2012)
+    // ventilation index and VI_crit ≈ 0.145 is the threshold above
+    // which the storm can't intensify (ventilation perfectly offsets
+    // the Carnot heat-engine work). Formulation follows Tang &
+    // Emanuel (2012, J. Climate) with the refinements proposed in
+    // Chavas, Knaff, Kowaleski et al. (2025).
+    //
+    // Interpretation: V_VPI is the "expected" intensity ceiling for
+    // any storm forming in the region given the current vertical
+    // shear + mid-trop dryness — typically 30-60% below V_PI in TC
+    // peak season, hitting zero in winter when shear+dry-air make
+    // the basin uninhabitable for TCs.
+    //
+    // Units: m/s (same as V_PI). Computed client-side from the three
+    // existing monthly region-mean series so no rebuild needed when
+    // any of {shear, χ_m, mpi} update.
+    function _buildVentilatedPIData() {
+        if (!state.era5) return null;
+        var e = state.era5;
+        var region = state.ts.region;
+        var sKey = region + '_shear';
+        var cKey = region + '_chi_m';
+        var mKey = region + '_mpi';
+        var VI_CRIT = 0.145;  // Tang & Emanuel 2012 threshold
+        var byYear = {};
+        var projByYear = {};
+        var preliminaryByYear = {};
+        var years = Object.keys(e.by_year || {})
+            .map(Number).sort(function (a, b) { return a - b; });
+        years.forEach(function (y) {
+            var blk = e.by_year[String(y)];
+            if (!blk) return;
+            var sh = blk[sKey];
+            var ch = blk[cKey];
+            var mp = blk[mKey];
+            if (!sh || !ch || !mp) return;
+            var row = new Array(12);
+            var anyValid = false;
+            for (var m = 0; m < 12; m++) {
+                if (sh[m] != null && ch[m] != null
+                        && mp[m] != null && mp[m] > 1.0) {
+                    var vi = sh[m] * ch[m] / mp[m];
+                    var ratio = 1.0 - vi / VI_CRIT;
+                    row[m] = ratio > 0 ? mp[m] * Math.sqrt(ratio) : 0.0;
+                    anyValid = true;
+                } else {
+                    row[m] = null;
+                }
+            }
+            if (anyValid) {
+                byYear[y] = row;
+                projByYear[y] = [null,null,null,null,null,null,
+                                 null,null,null,null,null,null];
+                preliminaryByYear[y] = [false,false,false,false,false,false,
+                                        false,false,false,false,false,false];
+            }
+        });
+        // Climo from 1991-2020 — mean + sample std of V_VPI per month
         var climStart = 1991, climEnd = 2020;
         var climMean = new Array(12);
         var climStd  = new Array(12);
@@ -1645,6 +1749,7 @@
             s_b:    's_b at 1000 hPa (J kg⁻¹ K⁻¹)',
             s_m:    's_m at 700 hPa  (J kg⁻¹ K⁻¹)',
             vi:     'Ventilation Index VI = shear·χ_m/V_PI',  // dimensionless
+            vpi:    'Ventilated PI V_VPI (m s⁻¹)',
         };
         var varLabel, yLabel;
         if (era5Meta) {
@@ -3199,7 +3304,7 @@
     // different file. Merged into a single in-memory `state.era5` so the
     // downstream byYear / climMean / climStd code is variable-agnostic.
     var ERA5_VAR_KEYS = ['shear', 'mpi', 'rh700', 'chi200', 'vo850', 'tcwv',
-                         'u200', 'u850', 'chi_m', 's_b', 's_m', 'vi'];
+                         'u200', 'u850', 'chi_m', 's_b', 's_m', 'vi', 'vpi'];
     function _isEra5Var(v) { return ERA5_VAR_KEYS.indexOf(v) !== -1; }
     var _era5Promise = null;
     // Single-attempt guard: if the lazy ERA5 fetch fails (404 because
@@ -3255,6 +3360,16 @@
                 merged.fields.vi = {
                     units: '1',
                     long_name: 'Ventilation Index (Tang & Emanuel 2012)',
+                };
+            }
+            // Ventilated Potential Intensity — client-side V_PI ·
+            // √(max(0, 1 - VI/VI_crit)). Same metadata-injection
+            // pattern as the other derived variables.
+            if (merged && !merged.fields.vpi) {
+                merged.fields.vpi = {
+                    units: 'm s⁻¹',
+                    long_name: 'Ventilated potential intensity '
+                             + '(Chavas et al. 2025; Tang & Emanuel 2012)',
                 };
             }
             state.era5 = merged;
