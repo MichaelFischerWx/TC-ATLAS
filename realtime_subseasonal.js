@@ -1103,7 +1103,12 @@
                 height: Math.round(rect.height * 2),
             });
         }
-        var EXPORT_FONT_SCALE = 1.8;  // see _withScaledExportText.
+        // Match the 2× toImage raster exactly so in-figure text (axis
+        // ticks, legend, colorbar) renders at the same proportional size
+        // as on-screen. 1.8 used to leave Plotly text 10% small relative
+        // to the canvas-drawn title bar / footer (which are hardcoded at
+        // 2× sizes), producing visibly tiny axis labels in the saved PNG.
+        var EXPORT_FONT_SCALE = 2.0;
         return _withScaledExportText(panel, EXPORT_FONT_SCALE, function () {
             // The watermark annotation is added *after* the font scale-up,
             // so it gets its own already-large size (set in
