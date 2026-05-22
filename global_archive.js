@@ -7210,8 +7210,19 @@ window.saveCurrentFramePng = function () {
     if (!irMeta || !selectedStorm) { showToast('No storm loaded'); return; }
     var fIdx = irFrameIdx;
     var frameData = irFrames[fIdx];
-    if (!frameData || !frameData.tb_data) {
+    // Only require frameData.tb_data when the IR layer is actually
+    // visible — a radar-only export shouldn't wait on the IR fetch.
+    // (irOverlayVisible defined further down before use; check it
+    // inline here.)
+    var _irOn = (typeof irOverlayVisible !== 'undefined') && irOverlayVisible;
+    if (_irOn && (!frameData || !frameData.tb_data)) {
         showToast('Current frame not loaded yet — wait for the IR overlay');
+        return;
+    }
+    if (!frameData) {
+        // Frame metadata still missing — even radar-only needs the
+        // frame index to know what time / bounds to draw.
+        showToast('No frame data available yet');
         return;
     }
 
@@ -7225,7 +7236,15 @@ window.saveCurrentFramePng = function () {
     var showIntensity   = isCk('gif-show-intensity', true);
     var showCoastlines  = isCk('gif-show-coastlines', true);
     var showModels      = isCk('gif-show-models', false);
+    // Per-layer visibility — the PNG must reflect what's ACTUALLY on
+    // the map, not just "everything that exists." Previously the IR
+    // layer was drawn unconditionally even when the user had toggled
+    // "Hide IR", so a ground-radar-only view exported a bizarre PNG
+    // that still showed IR underneath the radar.
+    var includeIR       = !!(irOverlayVisible && frameData && frameData.tb_data);
     var includeRadar    = !!(_gaNexradVisible && _gaNexradMapOverlay && _gaNexradBounds);
+    var includeMW       = !!(typeof _gaMwVisible !== 'undefined' && _gaMwVisible);
+    var includeTrack    = (typeof irTrackVisible === 'undefined') ? true : !!irTrackVisible;
 
     var irCols = frameData.tb_cols || 200;
     var irRows = frameData.tb_rows || 200;
@@ -7316,31 +7335,43 @@ window.saveCurrentFramePng = function () {
     // IR base — render LUT'd Tb to its own canvas at native resolution,
     // then draw it onto the composite with geo-aligned destination rect
     // (driven by frameBounds), so zoom-in users get the right sub-region.
-    var tbArr = decodeTbData(frameData.tb_data);
-    var irCanvas = document.createElement('canvas');
-    irCanvas.width = irCols; irCanvas.height = irRows;
-    var irCtx = irCanvas.getContext('2d');
-    var imgData = irCtx.createImageData(irCols, irRows);
-    var dpx = imgData.data;
-    for (var pi = 0; pi < tbArr.length; pi++) {
-        var v = tbArr[pi]; var li2 = v * 4; var pp = pi * 4;
-        dpx[pp] = lut[li2]; dpx[pp+1] = lut[li2+1]; dpx[pp+2] = lut[li2+2]; dpx[pp+3] = lut[li2+3];
-    }
-    irCtx.putImageData(imgData, 0, 0);
+    // Gated on includeIR so the user's "Hide IR" toggle is honored —
+    // otherwise we'd export a phantom IR layer underneath their
+    // radar-only or microwave-only view.
+    if (includeIR) {
+        var tbArr = decodeTbData(frameData.tb_data);
+        var irCanvas = document.createElement('canvas');
+        irCanvas.width = irCols; irCanvas.height = irRows;
+        var irCtx = irCanvas.getContext('2d');
+        var imgData = irCtx.createImageData(irCols, irRows);
+        var dpx = imgData.data;
+        for (var pi = 0; pi < tbArr.length; pi++) {
+            var v = tbArr[pi]; var li2 = v * 4; var pp = pi * 4;
+            dpx[pp] = lut[li2]; dpx[pp+1] = lut[li2+1]; dpx[pp+2] = lut[li2+2]; dpx[pp+3] = lut[li2+3];
+        }
+        // Apply the live IR opacity slider so a 40% IR over a 100%
+        // radar reads the same in the PNG as on the screen.
+        if (typeof irOpacity === 'number' && irOpacity < 1.0) {
+            for (var pia = 3; pia < dpx.length; pia += 4) {
+                dpx[pia] = Math.round(dpx[pia] * irOpacity);
+            }
+        }
+        irCtx.putImageData(imgData, 0, 0);
 
-    var irBoundsForDraw = irCurrentBounds || L.latLngBounds(
-        L.latLng(frameBounds.south, frameBounds.west),
-        L.latLng(frameBounds.north, frameBounds.east)
-    );
-    var irNW = geoToPx(irBoundsForDraw.getNorth(), irBoundsForDraw.getWest());
-    var irSE = geoToPx(irBoundsForDraw.getSouth(), irBoundsForDraw.getEast());
-    compCtx.save();
-    compCtx.beginPath();
-    compCtx.rect(0, H_HEADER, outW, irImageH);
-    compCtx.clip();
-    compCtx.imageSmoothingEnabled = false;
-    compCtx.drawImage(irCanvas, irNW.x, irNW.y, irSE.x - irNW.x, irSE.y - irNW.y);
-    compCtx.restore();
+        var irBoundsForDraw = irCurrentBounds || L.latLngBounds(
+            L.latLng(frameBounds.south, frameBounds.west),
+            L.latLng(frameBounds.north, frameBounds.east)
+        );
+        var irNW = geoToPx(irBoundsForDraw.getNorth(), irBoundsForDraw.getWest());
+        var irSE = geoToPx(irBoundsForDraw.getSouth(), irBoundsForDraw.getEast());
+        compCtx.save();
+        compCtx.beginPath();
+        compCtx.rect(0, H_HEADER, outW, irImageH);
+        compCtx.clip();
+        compCtx.imageSmoothingEnabled = false;
+        compCtx.drawImage(irCanvas, irNW.x, irNW.y, irSE.x - irNW.x, irSE.y - irNW.y);
+        compCtx.restore();
+    }
 
     var MAP_BOTTOM = H_HEADER + irImageH;
 
@@ -7405,8 +7436,9 @@ window.saveCurrentFramePng = function () {
         compCtx.restore();
     }
 
-    // Best-track marker
-    if (frameMeta && frameMeta.lat != null) {
+    // Best-track marker — gated on irTrackVisible so the "Hide track"
+    // toggle is honored.
+    if (includeTrack && frameMeta && frameMeta.lat != null) {
         var sp = geoToPx(frameMeta.lat, frameMeta.lon);
         if (sp.y >= H_HEADER && sp.y <= MAP_BOTTOM && sp.x >= 0 && sp.x <= outW) {
             compCtx.beginPath();
@@ -7469,30 +7501,35 @@ window.saveCurrentFramePng = function () {
         compCtx.fillText('Wind (kt)', chartX + 2 * EXPORT_SCALE, chartY + 1 * EXPORT_SCALE);
     }
 
-    // IR colorbar in footer
-    var cbarLut = lut;
-    var cbarCanvas = document.createElement('canvas');
-    cbarCanvas.width = 255; cbarCanvas.height = 1;
-    var cbarCtx = cbarCanvas.getContext('2d');
-    var cbarImg = cbarCtx.createImageData(255, 1);
-    for (var cx = 0; cx < 255; cx++) {
-        var cval = 255 - cx; var cli = cval * 4; var cpi = cx * 4;
-        cbarImg.data[cpi] = cbarLut[cli]; cbarImg.data[cpi+1] = cbarLut[cli+1];
-        cbarImg.data[cpi+2] = cbarLut[cli+2]; cbarImg.data[cpi+3] = 255;
+    // IR colorbar in footer — only show when the IR layer is actually
+    // visible. Without this, a radar-only export would still carry the
+    // IR colorbar at the bottom, confusing the viewer about what
+    // they're looking at.
+    if (includeIR) {
+        var cbarLut = lut;
+        var cbarCanvas = document.createElement('canvas');
+        cbarCanvas.width = 255; cbarCanvas.height = 1;
+        var cbarCtx = cbarCanvas.getContext('2d');
+        var cbarImg = cbarCtx.createImageData(255, 1);
+        for (var cx = 0; cx < 255; cx++) {
+            var cval = 255 - cx; var cli = cval * 4; var cpi = cx * 4;
+            cbarImg.data[cpi] = cbarLut[cli]; cbarImg.data[cpi+1] = cbarLut[cli+1];
+            cbarImg.data[cpi+2] = cbarLut[cli+2]; cbarImg.data[cpi+3] = 255;
+        }
+        cbarCtx.putImageData(cbarImg, 0, 0);
+        var footerY = MAP_BOTTOM + intensityH;
+        var cbarY = footerY + 2 * EXPORT_SCALE;
+        var cbarX2 = 30 * EXPORT_SCALE;
+        var cbarW = outW - 60 * EXPORT_SCALE;
+        compCtx.drawImage(cbarCanvas, cbarX2, cbarY, cbarW, 8 * EXPORT_SCALE);
+        compCtx.font = Math.round(9 * EXPORT_SCALE) + 'px sans-serif';
+        compCtx.fillStyle = '#6b7d8e';
+        compCtx.textBaseline = 'top';
+        compCtx.fillText('310 K', cbarX2, cbarY + 10 * EXPORT_SCALE);
+        var midW2 = compCtx.measureText('240').width;
+        compCtx.fillText('240', cbarX2 + cbarW / 2 - midW2 / 2, cbarY + 10 * EXPORT_SCALE);
+        compCtx.fillText('170 K', cbarX2 + cbarW - compCtx.measureText('170 K').width, cbarY + 10 * EXPORT_SCALE);
     }
-    cbarCtx.putImageData(cbarImg, 0, 0);
-    var footerY = MAP_BOTTOM + intensityH;
-    var cbarY = footerY + 2 * EXPORT_SCALE;
-    var cbarX2 = 30 * EXPORT_SCALE;
-    var cbarW = outW - 60 * EXPORT_SCALE;
-    compCtx.drawImage(cbarCanvas, cbarX2, cbarY, cbarW, 8 * EXPORT_SCALE);
-    compCtx.font = Math.round(9 * EXPORT_SCALE) + 'px sans-serif';
-    compCtx.fillStyle = '#6b7d8e';
-    compCtx.textBaseline = 'top';
-    compCtx.fillText('310 K', cbarX2, cbarY + 10 * EXPORT_SCALE);
-    var midW2 = compCtx.measureText('240').width;
-    compCtx.fillText('240', cbarX2 + cbarW / 2 - midW2 / 2, cbarY + 10 * EXPORT_SCALE);
-    compCtx.fillText('170 K', cbarX2 + cbarW - compCtx.measureText('170 K').width, cbarY + 10 * EXPORT_SCALE);
 
     function _finishAndDownload() {
         // Prominent watermark pill bottom-right of IR area
