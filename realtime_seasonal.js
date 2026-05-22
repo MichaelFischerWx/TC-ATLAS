@@ -2645,11 +2645,20 @@
                 font: { color: BRAND.hoverText, size: 12 },
             },
         };
+        // Region inset map — matches the SST Daily / Monthly paths so
+        // the user always knows which region the shear time series is
+        // averaged over. Same `geo2` subplot + scattergeo trace shape;
+        // we just pass it through _pickInsetDomain so the inset lands
+        // in the corner of the chart that least overlaps the data
+        // lines for shear specifically (typically bottom-left, since
+        // winter shear maxes out the top band).
+        var insetTraces = _timeSeriesInsetBuildTraces();
+        layout.geo2 = _insetGeoLayout(_pickInsetDomain());
         // After the purge above, el is a clean div — newPlot is the
         // right primitive (react on a purged div technically works but
         // emits a "Plotly.react: missing layout" defensive warning on
         // some plotly.js versions).
-        Plotly.newPlot(el, traces, layout,
+        Plotly.newPlot(el, traces.concat(insetTraces), layout,
                        { responsive: true, displaylogo: false });
     }
 
