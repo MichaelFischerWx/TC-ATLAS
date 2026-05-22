@@ -2883,7 +2883,8 @@
     // monthly-derived indices_monthly_era5.json — same loader interface,
     // different file. Merged into a single in-memory `state.era5` so the
     // downstream byYear / climMean / climStd code is variable-agnostic.
-    var ERA5_VAR_KEYS = ['shear', 'mpi', 'rh700', 'chi200', 'vo850', 'tcwv', 'u200', 'u850'];
+    var ERA5_VAR_KEYS = ['shear', 'mpi', 'rh700', 'chi200', 'vo850', 'tcwv',
+                         'u200', 'u850', 'chi_m', 's_b', 's_m'];
     function _isEra5Var(v) { return ERA5_VAR_KEYS.indexOf(v) !== -1; }
     var _era5Promise = null;
     // Single-attempt guard: if the lazy ERA5 fetch fails (404 because
@@ -2914,6 +2915,12 @@
         _era5Promise = Promise.all([
             _fetchData('indices_monthly_era5.json').catch(function () { return null; }),
             _fetchData('indices_monthly_era5_shear.json').catch(function () { return null; }),
+            // χ_m (saturation entropy deficit) + s_b + s_m — built by
+            // build_era5_chi_m_indices.py from GC-ATLAS T+q+SST. Ships
+            // 3 new ERA5 variables (chi_m, s_b, s_m) merged into the
+            // same state.era5 dict so the Panel B time-series code is
+            // variable-agnostic.
+            _fetchData('indices_monthly_era5_chi_m.json').catch(function () { return null; }),
         ]).then(function (results) {
             var merged = null;
             results.forEach(function (r) { merged = _mergeEra5Payload(merged, r); });
