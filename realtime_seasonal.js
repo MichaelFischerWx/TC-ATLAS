@@ -4661,19 +4661,36 @@
     // so it lines up with the EVO grid + frame[].z conventions.
     function _evoDecodeGcAtlasTile(arrayBuffer, vmin, vmax, transform) {
         var u16 = new Uint16Array(arrayBuffer);
-        var srcNy = 181, nx = EVO_GRID_NX;   // 360
+        // GC-ATLAS 1° global tile: 181 rows (90°N..-90°N) × 360 cols
+        // (-180..179). srcCfg covers 60°N..-60°N (121 rows) so we skip
+        // the first 30 rows of the tile to reach our latMax = 60°N row.
+        var SRC_TILE_NX = 360;
+        var TILE_ROW_OFFSET = 30;
         var range = (vmax - vmin) / 65534.0;
-        // EVO grid covers lat 60..-60 → rows 30..150 in the 181-row tile.
+        // crop is in srcCfg (121×360) coords. Apply it so basin-cropped
+        // monthly tiles read the right (lat, lon) slice. Before this fix
+        // the decoder used EVO_GRID_NX (cropped width) as the row stride
+        // and ignored crop.colStart, producing a sheared diagonal walk
+        // across the global buffer — values came from unrelated source
+        // cells and land-NaN regions (Andes/Antarctic high terrain at
+        // 850 mb) leaked into the displayed grid, manifesting as missing
+        // particles in the eastern NA basin for the wind side-fetch and
+        // as wrong colormap values for the variable itself.
+        var crop = _evoState.crop || { rowStart: 0, colStart: 0 };
+        var rowStart = (crop.rowStart || 0) + TILE_ROW_OFFSET;
+        var colStart = crop.colStart || 0;
         // Returns Array<Float32Array> with NaN for missing cells —
         // matches the era5_daily decoder's typed-array convention so
         // _evoMag / _evoSub / frameZ etc. can operate on the same
         // shape without nested-Array fallbacks.
-        var out = new Array(EVO_GRID_NY);
-        for (var i = 0; i < EVO_GRID_NY; i++) {
-            var srcRow = i + 30;
+        var ny = EVO_GRID_NY, nx = EVO_GRID_NX;
+        var out = new Array(ny);
+        for (var i = 0; i < ny; i++) {
+            var srcRow = rowStart + i;
+            var rowBase = srcRow * SRC_TILE_NX + colStart;
             var row = new Float32Array(nx);
             for (var j = 0; j < nx; j++) {
-                var v = u16[srcRow * nx + j];
+                var v = u16[rowBase + j];
                 if (v === 0xFFFF) {
                     row[j] = NaN;
                 } else {
@@ -6744,22 +6761,19 @@
         _evoState.effectiveHd = hd;
         _evoState.hd = hd;
         _evoState.srcCfg = _evoSrcConfig(hd);
-        // Basin cropping is only safe for the daily-archive path —
-        // _evoDecodeTile is crop-aware (uses srcShape + crop args).
-        // The GC-ATLAS monthly decoder (_evoDecodeGcAtlasTile) reads
-        // from a hardcoded row offset (i + 30, the full ±60° band)
-        // and DOESN'T consult _evoState.crop, so cropping a monthly
-        // variable shrinks the output grid shape but the decoded
-        // values come from the wrong rows of the source — visible as
-        // misaligned colors / "wrong" SST and TCWV magnitudes on
-        // non-ALL basins. Force full grid for monthly-only vars so
-        // the decode/display row indexing stays consistent.
-        var _isMonthlyOnly = _evoIsMonthlyOnly(_evoState.variable);
-        _evoState.crop = _isMonthlyOnly
-            ? { rowStart: 0, rowEnd: _evoState.srcCfg.ny,
-                colStart: 0, colEnd: _evoState.srcCfg.nx }
-            : _evoCropForBasin(_evoState.srcCfg,
-                               _evoState.basin, hd);
+        // Both decoders (era5_daily _evoDecodeTile and GC-ATLAS monthly
+        // _evoDecodeGcAtlasTile) are crop-aware: they consume
+        // _evoState.crop to read the right (rowStart, colStart) slice
+        // out of the source buffer. Earlier versions hardcoded the
+        // GC-ATLAS decoder's row offset and stride, which forced us to
+        // disable basin cropping for monthly-only variables to avoid
+        // wrong-cell reads (TCWV/SST values pulled from random source
+        // locations, and the 850-mb particle wind field leaking land-
+        // NaN bands into the NA basin). With the decoder fixed we can
+        // crop uniformly across all variables — 4-7× less decode work
+        // for non-ALL basins.
+        _evoState.crop = _evoCropForBasin(_evoState.srcCfg,
+                                          _evoState.basin, hd);
         _evoApplyGridShape(_evoState.srcCfg, _evoState.crop);
         _evoUpdateHdButton();
         _evoUpdateResolutionChip();
