@@ -4094,6 +4094,122 @@ def get_seasonal_daily_shear(
     )
 
 
+# ------------------------------------------------------------------
+# /seasonal/daily/winds — daily region-mean zonal winds (u200, u850).
+# Built by build_era5_daily_winds_indices.py from the same era5_daily_1deg
+# archive that powers shear. One parquet with all (region × wind-field)
+# columns so a single endpoint serves both u200 and u850.
+# ------------------------------------------------------------------
+_SEASONAL_DAILY_WINDS_LOCK = threading.Lock()
+_SEASONAL_DAILY_WINDS_CACHE: dict = {
+    "df": None,
+    "loaded_at": 0.0,
+}
+_SEASONAL_DAILY_WINDS_TTL_S = 24 * 3600
+_SEASONAL_DAILY_WINDS_VARS = frozenset({"u200", "u850"})
+
+
+def _load_seasonal_daily_winds_df():
+    import time as _time
+    import pandas as pd
+    now = _time.time()
+    with _SEASONAL_DAILY_WINDS_LOCK:
+        df = _SEASONAL_DAILY_WINDS_CACHE.get("df")
+        loaded_at = _SEASONAL_DAILY_WINDS_CACHE.get("loaded_at", 0.0)
+        if df is not None and (now - loaded_at) < _SEASONAL_DAILY_WINDS_TTL_S:
+            return df
+        bucket = _get_rt_gcs_bucket()
+        if bucket is None:
+            return None
+        try:
+            blob = bucket.blob("seasonal/indices_daily_winds.parquet")
+            if not blob.exists():
+                logger.warning("seasonal/indices_daily_winds.parquet not found")
+                return None
+            data = blob.download_as_bytes()
+            df = pd.read_parquet(io.BytesIO(data))
+        except Exception as e:
+            logger.warning(f"failed to load indices_daily_winds.parquet: {e}")
+            return None
+        _SEASONAL_DAILY_WINDS_CACHE["df"] = df
+        _SEASONAL_DAILY_WINDS_CACHE["loaded_at"] = now
+        logger.info(
+            f"loaded indices_daily_winds.parquet: {len(df)} rows, "
+            f"{len(df.columns)} cols"
+        )
+        return df
+
+
+@router.get("/seasonal/daily/winds")
+def get_seasonal_daily_winds(
+    region: str = Query(..., description="Region key, e.g. atl_mdr"),
+    variable: str = Query("u850", description="Wind variable: u200 or u850"),
+    year: str = Query("all", description="4-digit year, or 'all'"),
+):
+    """Slice of `indices_daily_winds.parquet` for one (region, variable).
+
+    Returns daily-resolution cos(lat)-weighted region-mean zonal wind
+    (m/s) at the requested pressure level. Powers the Panel B Daily-mode
+    view for u200 and u850 — reuses the same spaghetti / climatology /
+    highlight-year framework as the SST and shear daily panels.
+
+    Source: ERA5 daily archive (era5_daily_1deg/, 00Z snapshot, 1° from
+    0.25° native), aggregated by build_era5_daily_winds_indices.
+    """
+    if region not in _SEASONAL_DAILY_REGIONS:
+        return JSONResponse(
+            content={"error": f"unknown region '{region}'"},
+            status_code=400,
+        )
+    if variable not in _SEASONAL_DAILY_WINDS_VARS:
+        return JSONResponse(
+            content={"error": f"unknown variable '{variable}'"},
+            status_code=400,
+        )
+    df = _load_seasonal_daily_winds_df()
+    if df is None:
+        return JSONResponse(
+            content={"error": "daily winds indices unavailable"},
+            status_code=503,
+        )
+    col = f"{region}_{variable}"
+    if col not in df.columns:
+        return JSONResponse(
+            content={"error": f"column not in parquet: {col}"},
+            status_code=500,
+        )
+    sub = df[["date", col]]
+    if year != "all":
+        if not (year.isdigit() and len(year) == 4):
+            return JSONResponse(
+                content={"error": f"bad year '{year}'"},
+                status_code=400,
+            )
+        sub = sub[sub["date"].str.startswith(year + "-")]
+    sub = sub.reset_index(drop=True)
+
+    def _col(name):
+        import numpy as _np
+        arr = sub[name].to_numpy()
+        return [None if (isinstance(v, float) and _np.isnan(v)) else
+                (float(v) if isinstance(v, (int, float)) else v)
+                for v in arr]
+
+    payload = {
+        "region": region,
+        "variable": variable,
+        "year": year,
+        "units": "m s-1",
+        "n_rows": len(sub),
+        "dates": sub["date"].tolist(),
+        "values": _col(col),
+    }
+    return JSONResponse(
+        content=payload,
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
 @router.get("/env/layers")
 def get_env_layers():
     """List available global environmental overlays.

@@ -1535,7 +1535,7 @@
     // ERA5 variables that have a daily-resolution backend (built from the
     // era5_daily_1deg archive). Shear is Phase-1; wind200/wind850/RH700/etc.
     // can be added incrementally as their daily builders ship.
-    var ERA5_DAILY_CAPABLE = ['shear'];
+    var ERA5_DAILY_CAPABLE = ['shear', 'u200', 'u850'];
     function _isEra5DailyCapable(v) {
         return ERA5_DAILY_CAPABLE.indexOf(v) !== -1;
     }
@@ -2482,25 +2482,48 @@
         return { mean: means, std: stds };
     }
 
+    // Renders the Panel B Daily view for any ERA5_DAILY_CAPABLE variable.
+    // Dispatches to the right endpoint by variable:
+    //   shear → /seasonal/daily/shear            (single-column parquet,
+    //                                              payload.shear[] key)
+    //   u200, u850 → /seasonal/daily/winds       (multi-variable parquet,
+    //                                              payload.values[] key)
+    // After fetch, normalizes both into the same { dates[], values[] }
+    // shape and feeds the shared spaghetti/climo renderer.
     function _renderTimeSeriesDailyShear() {
         var el = document.getElementById('seasonal-ts-plot');
         if (!el || typeof Plotly === 'undefined') return;
         var region = state.ts.region;
         var variable = state.ts.variable;
+        var loadLabel = variable === 'shear' ? 'daily shear'
+                      : variable === 'u200'  ? 'daily 200-hPa zonal wind'
+                      : variable === 'u850'  ? 'daily 850-hPa zonal wind'
+                      :                        'daily ERA5';
+        var builderHint = variable === 'shear'
+            ? 'build_era5_daily_shear_indices.py'
+            : 'build_era5_daily_winds_indices.py';
         if (!dailyShearStubShown(el)) {
             el.innerHTML =
-                '<div class="seasonal-panel-stub">Loading daily shear…</div>';
+                '<div class="seasonal-panel-stub">Loading ' + loadLabel + '…</div>';
         }
-        _fetchSeasonalDailyShearRegionAll(region).then(function (payload) {
+        var fetchP = (variable === 'shear')
+            ? _fetchSeasonalDailyShearRegionAll(region)
+            : _fetchSeasonalDailyWindsRegionAll(region, variable);
+        fetchP.then(function (payload) {
             // Bail if the user switched away while the fetch was in flight.
             if (state.ts.region !== region
                     || state.ts.variable !== variable
                     || state.ts.resolution !== 'daily') {
                 return;
             }
-            var regionAll = _groupShearRegionAllByYear(payload);
-            var climo = _computeShearClimo(regionAll);
-            _drawDailyShearChart(el, region, regionAll, climo);
+            // Normalize: shear payload uses .shear[]; winds uses .values[].
+            // Convert to a uniform { dates, values } shape downstream.
+            var values = (variable === 'shear')
+                ? payload.shear
+                : payload.values;
+            var regionAll = _groupDailyValuesByYear(payload.dates, values);
+            var climo = _computeDailyValuesClimo(regionAll);
+            _drawDailyShearChart(el, region, regionAll, climo, variable);
         }).catch(function (e) {
             if (state.ts.resolution !== 'daily'
                     || state.ts.region !== region
@@ -2509,11 +2532,106 @@
             }
             el.innerHTML =
                 '<div class="seasonal-panel-stub seasonal-status-error">'
-                + 'Failed to load daily shear: ' + e.message + '. '
+                + 'Failed to load ' + loadLabel + ': ' + e.message + '. '
                 + 'If you just deployed, the parquet may still be uploading — '
-                + 'run <code>python build_era5_daily_shear_indices.py</code>.'
+                + 'run <code>python ' + builderHint + '</code>.'
                 + '</div>';
         });
+    }
+
+    // Per-(region, variable) cache for the winds parquet. Mirror of
+    // _dailyShearCache but keyed by variable too since one parquet
+    // serves both u200 and u850.
+    var _dailyWindsCache = {
+        regionAll: {},          // key = region + ':' + variable
+        regionAllInFlight: {},
+    };
+    function _fetchSeasonalDailyWindsRegionAll(region, variable) {
+        var key = region + ':' + variable;
+        if (_dailyWindsCache.regionAll[key]) {
+            return Promise.resolve(_dailyWindsCache.regionAll[key]);
+        }
+        if (_dailyWindsCache.regionAllInFlight[key]) {
+            return _dailyWindsCache.regionAllInFlight[key];
+        }
+        var url = API_BASE + '/ir-monitor/seasonal/daily/winds?region='
+                  + encodeURIComponent(region)
+                  + '&variable=' + encodeURIComponent(variable)
+                  + '&year=all';
+        var p = fetch(url, { cache: 'no-store' }).then(function (r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + url);
+            return r.json();
+        }).then(function (j) {
+            _dailyWindsCache.regionAll[key] = j;
+            delete _dailyWindsCache.regionAllInFlight[key];
+            return j;
+        }).catch(function (e) {
+            delete _dailyWindsCache.regionAllInFlight[key];
+            throw e;
+        });
+        _dailyWindsCache.regionAllInFlight[key] = p;
+        return p;
+    }
+
+    // Variable-agnostic grouper. Replaces _groupShearRegionAllByYear so
+    // the daily wind renderer can use the same machinery.
+    function _groupDailyValuesByYear(dates, values) {
+        var byYear = {};
+        var leap = {};
+        for (var i = 0; i < dates.length; i++) {
+            var s = dates[i];
+            var y = parseInt(s.substring(0, 4), 10);
+            if (!byYear[y]) byYear[y] = { dates: [], values: [] };
+            byYear[y].dates.push(s);
+            byYear[y].values.push(values[i] == null ? null : values[i]);
+        }
+        Object.keys(byYear).forEach(function (yk) {
+            var y = parseInt(yk, 10);
+            leap[y] = {
+                shear: _yearSeriesToLeapAxis(byYear[y].dates,
+                                              byYear[y].values),
+                // Keep `shear` key for backward compatibility with
+                // _drawDailyShearChart which reads ya.shear; the field
+                // here is whichever variable the caller fetched.
+            };
+        });
+        return { byYear: byYear, leap: leap };
+    }
+    function _computeDailyValuesClimo(regionAll) {
+        // Same 1991-2020 climo math as the shear path — just operates
+        // on the value-agnostic `leap[y].shear` field. Across-years
+        // std + mean per leap-DOY.
+        var doysSeen = new Set();
+        Object.values(regionAll.leap).forEach(function (ya) {
+            for (var d = 0; d < ya.shear.length; d++) {
+                if (ya.shear[d] != null && isFinite(ya.shear[d])) {
+                    doysSeen.add(d);
+                }
+            }
+        });
+        var mean = new Array(366).fill(null);
+        var std  = new Array(366).fill(null);
+        var climStart = 1991, climEnd = 2020;
+        for (var d = 0; d < 366; d++) {
+            var samples = [];
+            for (var y = climStart; y <= climEnd; y++) {
+                var ya = regionAll.leap[y];
+                if (!ya) continue;
+                var v = ya.shear[d];
+                if (v != null && isFinite(v)) samples.push(v);
+            }
+            if (samples.length < 2) continue;
+            var m = 0;
+            for (var i = 0; i < samples.length; i++) m += samples[i];
+            m /= samples.length;
+            var s = 0;
+            for (var j = 0; j < samples.length; j++) {
+                s += (samples[j] - m) * (samples[j] - m);
+            }
+            mean[d] = m;
+            std[d]  = Math.sqrt(s / (samples.length - 1));
+        }
+        return { mean: mean, std: std };
     }
 
     // Tiny helper: avoid re-painting the loading stub if the panel
@@ -2523,8 +2641,27 @@
         return el.classList.contains('js-plotly-plot');
     }
 
-    function _drawDailyShearChart(el, region, regionAll, climo) {
+    function _drawDailyShearChart(el, region, regionAll, climo, variable) {
         _clearStub(el);
+        // Variable-specific labels — the same renderer handles shear,
+        // u200, u850, and could be extended to other ERA5 daily-capable
+        // fields. Title + y-axis derived from the variable arg.
+        variable = variable || 'shear';
+        var varYLabel, varTitle, varHoverFmt;
+        if (variable === 'u200') {
+            varYLabel = '200-hPa u (m s⁻¹)';
+            varTitle  = 'Daily 200-hPa zonal wind';
+            varHoverFmt = '%{y:.1f} m/s';
+        } else if (variable === 'u850') {
+            varYLabel = '850-hPa u (m s⁻¹)';
+            varTitle  = 'Daily 850-hPa zonal wind';
+            varHoverFmt = '%{y:.1f} m/s';
+        } else {
+            // shear default — keeps the existing wording.
+            varYLabel = '200-850 hPa shear (m s⁻¹)';
+            varTitle  = 'Daily deep-layer shear';
+            varHoverFmt = '%{y:.1f} m/s';
+        }
         // Purge any prior Plotly state before drawing. Without this, when
         // the user is in Daily mode on SST and switches Variable → shear,
         // the previous _drawDailyChart left behind layout.geo2 (the inset
@@ -2665,8 +2802,7 @@
                 gridcolor: BRAND.grid,
             },
             yaxis: {
-                title: { text: '200-850 hPa shear (m s⁻¹)',
-                         font: { color: BRAND.text } },
+                title: { text: varYLabel, font: { color: BRAND.text } },
                 tickfont: { color: BRAND.text },
                 gridcolor: BRAND.grid,
                 zerolinecolor: BRAND.gridZero,
