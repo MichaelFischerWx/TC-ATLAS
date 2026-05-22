@@ -581,6 +581,54 @@
         }];
     }
 
+    // Build the layout override applied just before Plotly.downloadImage
+    // so saved PNGs use larger, publication-grade fonts. The on-screen
+    // sizes (11-15 px) read fine in the live UI but become small relative
+    // to the 1400+ px-wide saved canvas — even smaller when the source
+    // is a mobile viewport (Plotly.downloadImage expands width but keeps
+    // absolute font px the same). The bottom margin is also widened so
+    // 6-item horizontal legends never get clipped or wrap into the
+    // x-axis title (a real risk on Panel B's daily SST view, which
+    // packs envelope/historical/highlight/mean/current/preliminary all
+    // into one row).
+    //
+    // Uses Plotly's flat-path relayout syntax — both shallow keys
+    // (`legend.font.size`) and indexed annotation keys
+    // (`annotations[0].font.size`) work and merge into the existing
+    // nested layout. Charts that don't have a watermark annotation
+    // (rare here — _watermarkAnnotations() is attached to most figures)
+    // simply ignore the annotations[*] keys.
+    function _saveFontOverride() {
+        return {
+            'title.font.size': 22,
+            'xaxis.title.font.size': 18,
+            'xaxis.tickfont.size': 16,
+            'yaxis.title.font.size': 18,
+            'yaxis.tickfont.size': 16,
+            'xaxis2.title.font.size': 18,
+            'xaxis2.tickfont.size': 16,
+            'yaxis2.title.font.size': 18,
+            'yaxis2.tickfont.size': 16,
+            'legend.font.size': 17,
+            'legend.tracegroupgap': 6,
+            'font.size': 16,
+            // Bottom margin holds: tick labels + axis title + wrapped
+            // horizontal legend (up to 2 rows at the larger font size).
+            // Top margin makes room for the bumped title. Values sized
+            // empirically: at 1600×900 output, ~25 px axis title + 22 px
+            // gap + 50 px 2-row legend + 23 px tick row = 120 px bottom.
+            'margin.b': 120,
+            'margin.t': 70,
+            'margin.l': 88,
+            'margin.r': 36,
+            // Watermark annotations live at index 0 (top-right brand)
+            // and 1 (bottom-right URL). Bump them so they stay
+            // proportional to the title text.
+            'annotations[0].font.size': 14,
+            'annotations[1].font.size': 12,
+        };
+    }
+
     // Attach a small monochrome ⤓ button to a panel that triggers
     // Plotly's downloadImage on the named plot.
     function _addPlotSaveBtn(panelId, plotId, filenameBase) {
@@ -606,20 +654,24 @@
             // PNG isn't transparent (otherwise it'd composite onto
             // whatever app's background the user pastes into).
             var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-            var saveOverride = isDark
+            var bgOverride = isDark
                 ? { paper_bgcolor: '#0d1117', plot_bgcolor: '#0d1117' }
                 : { paper_bgcolor: '#ffffff', plot_bgcolor: '#ffffff' };
+            // Merge the font-bump override with the bg override into one
+            // relayout call so the resize + repaint happens once.
+            var saveOverride = Object.assign({}, bgOverride, _saveFontOverride());
             window.Plotly.relayout(plot, saveOverride).then(function () {
                 // scale: 2 gives ~2× the on-screen pixel density — usable
                 // for both web sharing and 6-inch print at 200+ DPI.
-                // Min width 1400 / height 800 ensures we never ship a
-                // sub-publication-quality snapshot even from a small
-                // viewport.
+                // Min width 1600 / height 900 ensures the larger save-
+                // mode fonts have room to breathe and the wrapped
+                // legend doesn't collide with the x-axis title even
+                // from a mobile source viewport.
                 window.Plotly.downloadImage(plot, {
                     format: 'png',
                     filename: 'TC-ATLAS_' + filenameBase + '_' + stamp,
-                    width: Math.max(plot.clientWidth, 1400),
-                    height: Math.max(plot.clientHeight, 800),
+                    width: Math.max(plot.clientWidth, 1600),
+                    height: Math.max(plot.clientHeight, 900),
                     scale: 2,
                 }).then(function () {
                     // Restore the live theme — _refreshTheme + re-render
