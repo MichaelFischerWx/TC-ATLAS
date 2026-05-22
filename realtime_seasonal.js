@@ -1192,7 +1192,19 @@
             return _buildVentilationIndexData();
         }
         if (state.ts.variable === 'vpi') {
-            return _buildVentilatedPIData();
+            // If the server-side pointwise vPI JSON is loaded,
+            // state.era5.values.{region}_vpi will be present —
+            // fall through to the generic path which reads it
+            // directly. Otherwise approximate client-side from
+            // region-mean inputs (Jensen-biased; mostly zeros).
+            var serverVpiKey = state.ts.region + '_vpi';
+            var hasServerVpi = state.era5
+                && state.era5.values
+                && Array.isArray(state.era5.values[serverVpiKey]);
+            if (!hasServerVpi) {
+                return _buildVentilatedPIData();
+            }
+            // else fall through to the generic by_year reader below
         }
         var key = state.ts.region + '_' + state.ts.variable;
 
@@ -3374,6 +3386,12 @@
             // same state.era5 dict so the Panel B time-series code is
             // variable-agnostic.
             _fetchData('indices_monthly_era5_chi_m.json').catch(function () { return null; }),
+            // vPI (Chavas et al. 2025) — pointwise then region-meaned by
+            // build_era5_vpi_indices.py. Falls back to the client-side
+            // cubic from region-mean inputs if this JSON is missing —
+            // that gives the correct functional form but biased low due
+            // to Jensen's inequality near VI_max.
+            _fetchData('indices_monthly_era5_vpi.json').catch(function () { return null; }),
         ]).then(function (results) {
             var merged = null;
             results.forEach(function (r) { merged = _mergeEra5Payload(merged, r); });
@@ -4362,9 +4380,15 @@
         tcwv: {
             group: 'single_levels', name: 'tcwv', level: null,
             label: 'TCWV', units: 'kg m⁻²',
-            // Range bumped 75 → 90 mm to capture deep-tropical moisture
-            // peaks that saturate the prior cap.
-            zmin: 0, zmax: 90, divergent: false,
+            // 0..70 mm so typical Atlantic-basin TCWV (35-55 kg/m²)
+            // maps to the green/teal saturation colors instead of the
+            // cream/tan low-end of the palette. zmax was bumped to 90
+            // earlier to capture deep-monsoon peaks but that pushed
+            // the entire Atlantic display into the dry-looking brown
+            // band. Atlantic basin max is ~60 kg/m², so 70 captures
+            // it with a small headroom and keeps the dynamic range
+            // tuned to TC environments.
+            zmin: 0, zmax: 70, divergent: false,
             anomZmax: 10,
             // Tropical-Tidbits-style TPW palette:
             // brown (dry / 3-20 mm) → tan / cream (subtropical, 25-35)
@@ -4527,17 +4551,38 @@
         if (!spec) {
             return Promise.reject(new Error('no GC-ATLAS spec for ' + variable));
         }
+        // Also fetch 850-mb wind components per month so the particle
+        // overlay has something to advect. Scalar monthly variables
+        // (TCWV / MPI / RH700 / χ200 / ζ850 / SST) carry no intrinsic
+        // wind field — without these tiles the particle canvas would
+        // draw stale motion from whichever variable was loaded last,
+        // or freeze entirely. 850 mb wind matches the BL/boundary-
+        // -layer flow relevant to TC steering + moisture advection,
+        // so it's the sensible default. u200_m / u850_m are scalar
+        // single-level winds (no v) and already render barbs from the
+        // matching v tile internally — we still seed the particle
+        // canvas with the same level for visual consistency.
+        var WIND_U_SPEC = { group: 'pressure_levels', name: 'u', level: 850 };
+        var WIND_V_SPEC = { group: 'pressure_levels', name: 'v', level: 850 };
         var monthPromises = [];
         for (var month = 1; month <= 12; month++) {
             (function (mo) {
+                var fieldP = _evoFetchGcAtlasYearTile(spec, year, mo);
+                var uP = _evoFetchGcAtlasYearTile(WIND_U_SPEC, year, mo)
+                    .catch(function () { return null; });
+                var vP = _evoFetchGcAtlasYearTile(WIND_V_SPEC, year, mo)
+                    .catch(function () { return null; });
                 monthPromises.push(
-                    _evoFetchGcAtlasYearTile(spec, year, mo)
-                        .then(function (grid) {
+                    Promise.all([fieldP, uP, vP])
+                        .then(function (results) {
+                            var grid = results[0];
+                            var uGrid = results[1];
+                            var vGrid = results[2];
                             return {
                                 month: mo, day: null,
                                 epochDay: Date.UTC(year, mo, 0) / 86400000,
                                 label: _EVO_MONTH_NAMES[mo - 1],
-                                z: grid, u: null, v: null,
+                                z: grid, u: uGrid, v: vGrid,
                             };
                         })
                         .catch(function (e) {
@@ -5012,7 +5057,12 @@
     }
 
     // Spawn / respawn one particle at a random valid location inside
-    // the viewport (and where the flow field is finite + non-calm).
+    // the viewport (and where the flow field is finite + non-calm AND
+    // the colormap z-field is also finite). The z-field check makes
+    // the particle field follow the DATA mask, not just the wind mask:
+    // for SST or TCWV (land = NaN z but finite u/v above the land
+    // surface), particles now skip land cells instead of drifting
+    // through transparent regions.
     function _evoParticleSpawn(i, viewport) {
         var p = _evoParticles;
         var xMin = viewport.x[0], xMax = viewport.x[1];
@@ -5021,7 +5071,8 @@
             var lat = yMin + Math.random() * (yMax - yMin);
             var lon = xMin + Math.random() * (xMax - xMin);
             var uv = _evoParticleUvAt(lon, lat);
-            if (uv && uv.spdKt >= _EVO_PCL_MIN_KT) {
+            if (uv && uv.spdKt >= _EVO_PCL_MIN_KT
+                    && _evoParticleZFinite(lon, lat)) {
                 p.lat[i] = lat; p.lon[i] = lon; p.age[i] = 0;
                 p.life[i] = _EVO_PCL_MAX_AGE
                     * (1 + (Math.random() - 0.5) * 2 * _EVO_PCL_AGE_JIT);
@@ -5078,6 +5129,29 @@
         var v = (1-fi)*(1-fj)*v00 + (1-fi)*fj*v01 + fi*(1-fj)*v10 + fi*fj*v11;
         var mag_ms = Math.sqrt(u*u + v*v);
         return { u: u, v: v, mag_ms: mag_ms, spdKt: mag_ms * _EVO_MS_TO_KT };
+    }
+
+    // Returns true iff the cached z-field (colormap base) is finite at
+    // the nearest grid cell to (lon, lat). Used by spawn to skip land
+    // or other no-data regions. Falls back to "true" if no z-grid is
+    // attached (daily-archive variables haven't been wired to set it
+    // yet) so behavior is identical to V1 there.
+    function _evoParticleZFinite(lon, lat) {
+        var p = _evoParticles;
+        var z = p.zGrid;
+        if (!z) return true;
+        var g = p.gridCfg;
+        if (!g) return true;
+        if (lat > g.latMax || lat < g.latMin) return false;
+        if (!g.lonWraps && (lon < g.lonMin || lon > g.lonMax)) return false;
+        var iF = (g.latMax - lat) / g.cell;
+        var jRaw = g.lonWraps
+            ? ((lon - g.lonMin) % 360 + 360) % 360 / g.cell
+            : (lon - g.lonMin) / g.cell;
+        var i0 = Math.max(0, Math.min(g.ny - 1, Math.round(iF)));
+        var j0 = Math.max(0, Math.min(g.nx - 1, Math.round(jRaw)));
+        var row = z[i0];
+        return row != null && Number.isFinite(row[j0]);
     }
 
     // Capture the active grid descriptor (covers HD / 1° / monthly all
@@ -5140,6 +5214,12 @@
         var uv = _evoFrameBarbUV(f, _evoState.overlayCtx);
         p.uGrid = uv.u;
         p.vGrid = uv.v;
+        // Stash the colormap z-field too so particle spawn can skip
+        // cells with no data (NaN), e.g., land cells for SST or TCWV.
+        // Without this, particles drift freely over land/missing-data
+        // regions where the wind field is finite but the displayed
+        // shading is transparent — visual mismatch.
+        p.zGrid = f && f.z ? f.z : null;
         p.gridCfg = _evoParticleCaptureGridCfg();
         p.viewport = _evoComputeViewport(document.getElementById('seasonal-evo-map'));
     }
@@ -5261,6 +5341,16 @@
             var newLon = lon + dLon;
             if (newLat > viewport.y[1] + 4 || newLat < viewport.y[0] - 4
                 || newLon > viewport.x[1] + 4 || newLon < viewport.x[0] - 4) {
+                _evoParticleSpawn(i, viewport);
+                continue;
+            }
+            // If the particle drifted into a no-data cell (land for
+            // SST / TCWV / vPI), respawn it in an open data region
+            // rather than continuing to advect through a transparent
+            // gap in the colormap. No-op for variables without a
+            // zGrid attached (daily shear / winds — water + land both
+            // have data there).
+            if (!_evoParticleZFinite(newLon, newLat)) {
                 _evoParticleSpawn(i, viewport);
                 continue;
             }
