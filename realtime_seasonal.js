@@ -1307,27 +1307,34 @@
         };
     }
 
-    // Ventilated Potential Intensity (V_VPI) — the achievable peak
-    // intensity once environmental ventilation is accounted for.
+    // Ventilated Potential Intensity (vPI) — Chavas, Camargo, Tippett
+    // (2025, J. Climate; "GPI using a ventilated potential intensity").
     //
-    //     V_VPI = V_PI · √(max(0, 1 − VI / VI_crit))
+    // The paper's cubic equilibrium (their Eq. 4):
+    //     (vPI/PI)³ - (vPI/PI) + (2/3√3) · (VI/VI_max) = 0
+    // has the closed-form trig solution (depressed-cubic form):
+    //     vPI = PI · (2/√3) · cos((1/3) · arccos(-VI/VI_max))
+    //                                                for VI ≤ VI_max
+    //     vPI = 0                                    for VI > VI_max
     //
-    // Where VI = shear · χ_m / V_PI is the Tang & Emanuel (2012)
-    // ventilation index and VI_crit is the threshold above which
-    // ventilation overwhelms the storm's thermodynamic forcing.
+    // VI_max = 0.145 per Hoogewind et al. (2019), used directly by
+    // Chavas (their Fig. 1 caption + Section 2a).
     //
-    // VI_crit choice: we use **0.40** (Camargo et al. 2014, J. Climate;
-    // Wing et al. 2015; Chavas et al. 2025). This is the operational
-    // convention in modern TC papers and reproduces the Atlantic MDR
-    // annual-mean vPI ≈ 40-60 m/s seen in Chavas Fig 3c. Tang &
-    // Emanuel's strict thermodynamic derivation gives VI_crit ≈ 0.145
-    // but that value produces unrealistic winter clipping when
-    // applied to basin-mean inputs (basin-mean VI exceeds 0.145 even
-    // in late TC season for the Atlantic MDR — pointwise pockets of
-    // favorable conditions DO exist within the region, so the basin
-    // mean computed with the strict threshold systematically
-    // underestimates vPI compared to the spatially-resolved value
-    // that Chavas et al. publish).
+    // Shape (Chavas Fig. 1): vPI stays near 100% of PI all the way out
+    // to VI ≈ 0.10, drops to (1/√3) ≈ 57.7% of PI at VI = VI_max, then
+    // discontinuously to zero above. NOT a sqrt — earlier sqrt
+    // formulation underestimated vPI everywhere below VI_max.
+    //
+    // CAVEAT — Jensen's inequality: Chavas computes vPI POINTWISE at
+    // each grid cell then maps the result. Our client-side version
+    // applies the formula to REGION-MEAN inputs, which under-estimates
+    // vPI whenever pointwise vPI is concave (i.e., almost always).
+    // For Atlantic MDR in peak season the basin-mean VI sits right at
+    // VI_max so the basin-mean vPI computed here can drop to zero
+    // while Chavas's pointwise-then-averaged version is well into the
+    // 40-60 m/s range. A server-side pointwise builder is the proper
+    // fix; this client-side formula is the right shape but the wrong
+    // magnitude when conditions are near-marginal.
     //
     // Interpretation: V_VPI is the "expected" intensity ceiling for
     // any storm forming in the region given the current vertical
@@ -1345,7 +1352,8 @@
         var sKey = region + '_shear';
         var cKey = region + '_chi_m';
         var mKey = region + '_mpi';
-        var VI_CRIT = 0.40;   // Camargo 2014 / Chavas 2025 convention
+        var VI_MAX = 0.145;   // Chavas et al. 2025 eq. 4 (Hoogewind 2019)
+        var TWO_OVER_SQRT3 = 2.0 / Math.sqrt(3.0);
         var byYear = {};
         var projByYear = {};
         var preliminaryByYear = {};
@@ -1364,8 +1372,14 @@
                 if (sh[m] != null && ch[m] != null
                         && mp[m] != null && mp[m] > 1.0) {
                     var vi = sh[m] * ch[m] / mp[m];
-                    var ratio = 1.0 - vi / VI_CRIT;
-                    row[m] = ratio > 0 ? mp[m] * Math.sqrt(ratio) : 0.0;
+                    if (vi >= VI_MAX) {
+                        row[m] = 0.0;
+                    } else {
+                        // vPI = PI · (2/√3) · cos((1/3) · acos(-VI/VI_max))
+                        // — closed-form solution of Chavas eq. 4 cubic.
+                        var phi = Math.acos(-vi / VI_MAX) / 3.0;
+                        row[m] = mp[m] * TWO_OVER_SQRT3 * Math.cos(phi);
+                    }
                     anyValid = true;
                 } else {
                     row[m] = null;
