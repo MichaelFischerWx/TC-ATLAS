@@ -126,7 +126,7 @@ REGIONS = {
     # Atlantic basin-scale + sub-regions
     "atl_basin":   (5.0,  30.0,  280.0, 350.0),   # whole tropical Atlantic
     "atl_mdr":     (10.0, 20.0,  275.0, 340.0),   # Main Development Region 10-20°N, 20-85°W
-    "atl_mdr_east": (10.0, 20.0, 320.0, 340.0),   # Eastern MDR 10-20°N, 20-40°W
+    "atl_mdr_east": (10.0, 20.0, 300.0, 340.0),   # Eastern MDR 10-20°N, 20-60°W
     "atl_amo":     (10.0, 50.0,  330.0, 340.0),   # AMO box 10-50°N, 20-30°W (Goldenberg-style)
     "caribbean":   (10.0, 22.0,  275.0, 300.0),   # 10-22°N, 85-60°W
     "gulf":        (20.0, 30.0,  262.0, 282.0),   # 20-30°N, 98-78°W
