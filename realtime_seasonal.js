@@ -4435,12 +4435,31 @@
             // ERA5 SST tiles are in Kelvin. Convert to °C in display.
             transform: function (v) { return v == null ? null : v - 273.15; },
             label: 'SST', units: '°C',
-            zmin: 14, zmax: 32, divergent: false,
+            // Range 12..32 °C centered to emphasize the TC-genesis
+            // 26 °C isotherm AND the high-end ≥30 °C regions where
+            // rapid intensification becomes likely. Palette below
+            // uses distinct color bands at each threshold (cool blues
+            // → cyan → green at 22 °C → yellow at 26 °C → orange →
+            // red ≥30 °C → magenta peak) so forecasters can read TC
+            // favorability at a glance without consulting the colorbar.
+            zmin: 12, zmax: 32, divergent: false,
             anomZmax: 3,
             colorscale: [
-                [0.0,  '#053061'], [0.20, '#2166ac'],
-                [0.45, '#92c5de'], [0.60, '#fddbc7'],
-                [0.80, '#f4a582'], [1.0,  '#67001f'],
+                [0.00,  '#08306b'],  // 12 °C — deep navy
+                [0.10,  '#2171b5'],  // 14    — mid blue
+                [0.25,  '#6baed6'],  // 17    — sky blue
+                [0.40,  '#a1d99b'],  // 20    — pale green
+                [0.55,  '#fed976'],  // 23    — yellow (TC marginal)
+                // 0.70 = 26 °C — TC genesis threshold (Palmen 1948).
+                // Sharp transition here so favorable basins read in
+                // warm tones, cooler ocean stays cool.
+                [0.70,  '#fd8d3c'],  // 26    — bright orange (TC favorable)
+                [0.85,  '#e31a1c'],  // 29    — red (very warm)
+                // ≥ 30 °C: deep magenta. Atlantic MDR rarely hits this
+                // outside extreme marine heatwaves; this is the "RI
+                // alley" signature.
+                [0.90,  '#bd0026'],  // 30    — dark red
+                [1.00,  '#67001f'],  // 32    — maroon/magenta
             ],
         },
     };
@@ -6443,8 +6462,22 @@
         _evoState.effectiveHd = hd;
         _evoState.hd = hd;
         _evoState.srcCfg = _evoSrcConfig(hd);
-        _evoState.crop = _evoCropForBasin(_evoState.srcCfg,
-                                          _evoState.basin, hd);
+        // Basin cropping is only safe for the daily-archive path —
+        // _evoDecodeTile is crop-aware (uses srcShape + crop args).
+        // The GC-ATLAS monthly decoder (_evoDecodeGcAtlasTile) reads
+        // from a hardcoded row offset (i + 30, the full ±60° band)
+        // and DOESN'T consult _evoState.crop, so cropping a monthly
+        // variable shrinks the output grid shape but the decoded
+        // values come from the wrong rows of the source — visible as
+        // misaligned colors / "wrong" SST and TCWV magnitudes on
+        // non-ALL basins. Force full grid for monthly-only vars so
+        // the decode/display row indexing stays consistent.
+        var _isMonthlyOnly = _evoIsMonthlyOnly(_evoState.variable);
+        _evoState.crop = _isMonthlyOnly
+            ? { rowStart: 0, rowEnd: _evoState.srcCfg.ny,
+                colStart: 0, colEnd: _evoState.srcCfg.nx }
+            : _evoCropForBasin(_evoState.srcCfg,
+                               _evoState.basin, hd);
         _evoApplyGridShape(_evoState.srcCfg, _evoState.crop);
         _evoUpdateHdButton();
         _evoUpdateResolutionChip();
