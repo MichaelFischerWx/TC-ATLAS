@@ -740,12 +740,19 @@
                 [0.50,  isDark ? '#1e293b' : '#f5f5f5'],
                 [0.55,  '#dfc27d'], [0.75, '#8c510a'], [1, '#543005'],
             ],
-            zmin: -40, zmax: 40,
+            // Bumped from ±40 → ±60 W/m² so the brown/green saturation
+            // at the extremes leaves visual headroom for the wave-band
+            // contour lines to read against the base shading. Most
+            // tropical OLR anomalies fall in ±30 W/m², so the ±60 scale
+            // keeps the dynamic range comfortable without losing
+            // contrast on the dominant signal.
+            zmin: -60, zmax: 60,
             showscale: true,
             colorbar: {
                 x: 1.005, xanchor: 'left', y: 0.5, yanchor: 'middle',
                 len: 0.92, thickness: 8, outlinewidth: 0,
-                tickvals: [-40, 0, 40], ticktext: ['−40', '0', '+40'],
+                tickvals: [-60, -30, 0, 30, 60],
+                ticktext: ['−60', '−30', '0', '+30', '+60'],
                 tickfont: { size: 9, color: fg, family: 'DM Sans, system-ui, sans-serif' },
                 title: { text: 'OLR anom<br>(W/m²)', side: 'top',
                          font: { size: 8, color: fg } },
@@ -805,8 +812,13 @@
                             showlabels: false,
                         },
                         line: {
+                            // Thicker than the original (1.6 + 0.8·idx)
+                            // so the wave-band contour lines read clearly
+                            // against the OLR base shading. Inner level
+                            // 2.6 px, outer 3.6 px — visible without
+                            // dominating the figure.
                             color: ov.color,
-                            width: 1.6 + 0.8 * levIdx,
+                            width: 2.6 + 1.0 * levIdx,
                             dash: signedLev < 0 ? 'solid' : 'dot',
                             smoothing: 1.0,
                         },
