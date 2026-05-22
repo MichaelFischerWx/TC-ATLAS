@@ -5191,7 +5191,14 @@
     var _EVO_PCL_MAX_AGE   = 140;     // frames until respawn (~4.5 s @ 30 fps)
     var _EVO_PCL_AGE_JIT   = 0.35;    // ±jitter on lifetime so deaths desync
     var _EVO_PCL_SPEED_DEG = 0.05;    // deg/frame per (m/s); tuned for 30 fps
-    var _EVO_PCL_MIN_KT    = 1.5;     // calm cut-off — respawn under this
+    var _EVO_PCL_MIN_KT    = 0.3;     // calm cut-off — respawn under this.
+                                      // Set low so monthly-mean regions with weak
+                                      // 850 mb flow (e.g., eastern Atlantic in DJF,
+                                      // Saharan thermal low) still get seeded; with
+                                      // the rejection-sampling spawn, a too-high
+                                      // threshold concentrates particles in windy
+                                      // sub-regions of the viewport and leaves the
+                                      // rest visually empty.
     var _EVO_PCL_FADE_IN   = 10;      // head opacity ramp from 0 on birth
     var _EVO_PCL_FADE_OUT  = 14;      // tail-end fade before death
     var _EVO_PCL_SPEED_NORM_MS = 22;  // m/s that saturates head opacity
@@ -5294,32 +5301,57 @@
         var p = _evoParticles;
         var xMin = viewport.x[0], xMax = viewport.x[1];
         var yMin = viewport.y[0], yMax = viewport.y[1];
-        for (var attempts = 0; attempts < 8; attempts++) {
+        // Two-phase spawn so the spatial distribution stays uniform
+        // across the viewport even when large sub-regions have light
+        // monthly-mean winds (eastern Atlantic in DJF, Sahara thermal
+        // low, etc.):
+        //   Phase 1 (preferred): up to 24 random tries for a spot that
+        //   is both data-valid (z finite) AND non-calm — produces a
+        //   visible trail.
+        //   Phase 2 (fallback): if all 24 tries land in calm air, take
+        //   the first data-valid calm spot we saw rather than parking
+        //   the particle (which would leave a gap on the canvas). The
+        //   particle will barely move there but remains visible and
+        //   resumes advecting once the wind field updates.
+        // Previously the spawn budget was 8 tries with no fallback, so
+        // entire calm sub-regions of the viewport rendered empty.
+        var fbLat = NaN, fbLon = NaN;
+        for (var attempts = 0; attempts < 24; attempts++) {
             var lat = yMin + Math.random() * (yMax - yMin);
             var lon = xMin + Math.random() * (xMax - xMin);
             var uv = _evoParticleUvAt(lon, lat);
-            if (uv && uv.spdKt >= _EVO_PCL_MIN_KT
-                    && _evoParticleZFinite(lon, lat)) {
-                p.lat[i] = lat; p.lon[i] = lon; p.age[i] = 0;
-                p.life[i] = _EVO_PCL_MAX_AGE
-                    * (1 + (Math.random() - 0.5) * 2 * _EVO_PCL_AGE_JIT);
-                // Pre-fill the trail with the spawn point — drawing
-                // skips trail edges until age > 1 so the new particle
-                // doesn't flash a zero-length segment.
-                var base = i * _EVO_PCL_TRAIL;
-                for (var k = 0; k < _EVO_PCL_TRAIL; k++) {
-                    p.trailLat[base + k] = lat;
-                    p.trailLon[base + k] = lon;
-                }
-                p.trailHead[i] = 0;
+            if (!uv || !_evoParticleZFinite(lon, lat)) continue;
+            if (uv.spdKt >= _EVO_PCL_MIN_KT) {
+                _evoParticlePlace(i, lat, lon);
                 return true;
             }
+            if (!isFinite(fbLat)) { fbLat = lat; fbLon = lon; }
         }
-        // No valid spot found after 8 tries — park the particle and
-        // try again next frame.
+        if (isFinite(fbLat)) {
+            _evoParticlePlace(i, fbLat, fbLon);
+            return true;
+        }
+        // No valid spot found at all — park the particle and try
+        // again next frame.
         p.lat[i] = NaN; p.lon[i] = NaN;
         p.age[i] = _EVO_PCL_MAX_AGE + 1;   // will respawn on next tick
         return false;
+    }
+
+    // Common placement bookkeeping for both spawn paths above —
+    // initialize age/life and pre-fill the trail with the spawn point
+    // so the first draw doesn't flash a zero-length segment.
+    function _evoParticlePlace(i, lat, lon) {
+        var p = _evoParticles;
+        p.lat[i] = lat; p.lon[i] = lon; p.age[i] = 0;
+        p.life[i] = _EVO_PCL_MAX_AGE
+            * (1 + (Math.random() - 0.5) * 2 * _EVO_PCL_AGE_JIT);
+        var base = i * _EVO_PCL_TRAIL;
+        for (var k = 0; k < _EVO_PCL_TRAIL; k++) {
+            p.trailLat[base + k] = lat;
+            p.trailLon[base + k] = lon;
+        }
+        p.trailHead[i] = 0;
     }
 
     // Bilinear (u, v) interpolation on the active grid — matches the
