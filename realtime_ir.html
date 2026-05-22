@@ -1052,7 +1052,8 @@
                             </optgroup>
                             <optgroup label="Monthly ERA5 (GC-ATLAS, no barbs)">
                                 <option value="sst" title="ERA5 monthly-mean SST in °C (the IFS-blended analysis SST). Daily-resolution NOAA OISST gridded animation requires a separate archive — planned, not yet built.">Sea surface temperature (SST)</option>
-                                <option value="mpi">Max potential intensity (MPI)</option>
+                                <option value="mpi" title="Bister-Emanuel maximum potential intensity (m/s). The thermodynamic upper bound for TC peak winds in the current SST + atmospheric profile. vPI (next option) reduces this by environmental ventilation.">Max potential intensity (MPI)</option>
+                                <option value="vpi" title="Ventilated Potential Intensity vPI (Chavas, Camargo & Tippett 2025). The realistic ceiling on TC peak winds given current shear + mid-trop dryness — typically 30-60% below MPI in TC season, zero in winter. Computed POINTWISE on the 1° grid (Bryan 2008 entropy → χ_m → VI → Chavas Eq. 4 cubic with VI_max = 0.145), then displayed as the spatial field.">Ventilated PI (vPI, Chavas 2025)</option>
                                 <option value="rh700">Mid-level RH (700 hPa)</option>
                                 <option value="chi200">Velocity potential (χ200)</option>
                                 <option value="vo850">Low-level vorticity (ζ850)</option>

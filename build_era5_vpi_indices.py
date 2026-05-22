@@ -1,10 +1,21 @@
 """Ventilated Potential Intensity (vPI) — pointwise, à la Chavas et al. (2025).
 
-The companion script to `build_era5_chi_m_indices.py`. Computes vPI on
-the GC-ATLAS 1° grid POINTWISE (per cell) following the equilibrium
-relation of Chavas, Camargo & Tippett (2025, J. Climate; "Tropical
-cyclone genesis potential using a ventilated potential intensity"),
-their Eq. 4:
+Computes vPI on the GC-ATLAS 1° grid POINTWISE and emits two products:
+
+(a) data/indices_monthly_era5_vpi.json — region-mean vPI per
+    (year, month, region) for Panel B time series (already shipped).
+
+(b) gs://${GCS_IR_CACHE_BUCKET}/era5_monthly_vpi/* — gridded vPI
+    tiles in the same f16-gz format as GC-ATLAS, so Panel C can
+    fetch them like any other monthly variable and render the
+    spatial field directly. Layout:
+        tiles_per_year/{YYYY}_{MM}.bin.gz       per-year monthly
+        tiles/{MM}.bin.gz                       1991-2020 climo
+        manifest.json                            tile metadata
+
+Both outputs follow the equilibrium relation of Chavas, Camargo &
+Tippett (2025, J. Climate; "Tropical cyclone genesis potential using
+a ventilated potential intensity"), their Eq. 4:
 
     (vPI/PI)³ - (vPI/PI) + (2 / 3√3) · (VI / VI_max) = 0
 
@@ -149,22 +160,75 @@ def grids_for(manifest: dict, month: int, *,
     return out
 
 
-def compute_region_means(manifest: dict, month: int, *,
-                         period: str = "default", year: int | None = None
-                         ) -> dict[str, float] | None:
-    """Pointwise vPI → cos(lat)-weighted regional mean.
-    Returns {region: vpi_mean}. None on missing tile.
-
-    Critically: averages the POINTWISE vPI field, not vPI of the
-    region-mean inputs. This is the difference that recovers Chavas
-    Fig. 3c values for the Atlantic MDR (which the basin-mean
-    approach drives to zero in some months due to Jensen's
-    inequality near VI_max)."""
+def compute_vpi_for(manifest: dict, month: int, *,
+                    period: str = "default", year: int | None = None
+                    ) -> np.ndarray | None:
+    """Pointwise vPI field on the GC-ATLAS 1° grid. Returns None on
+    missing inputs. Centralizes the multi-tile fetch + entropy +
+    cubic-vPI computation so callers can use the field for both
+    region means (Panel B) and gridded tile encoding (Panel C)."""
     grids = grids_for(manifest, month, period=period, year=year)
     if grids is None:
         return None
     vpi, _, _ = compute_vpi_field(**grids)
+    return vpi
+
+
+def region_means_from_field(vpi: np.ndarray) -> dict[str, float]:
+    """cos(lat)-weighted regional means from a pre-computed vPI field.
+    Pointwise then averaged — recovers Chavas Fig. 3c values for the
+    Atlantic MDR that the basin-mean approach drove to zero (Jensen's
+    inequality near VI_max)."""
     return {r: region_mean(vpi, box) for r, box in REGIONS.items()}
+
+
+# ── Gridded vPI tile encoding (GC-ATLAS-compatible f16-gz format) ────
+#
+# Same encoding as the GC-ATLAS tile catalog: uint16 quantized to
+# vmin..vmax range with 0xFFFF as the NaN sentinel, then gzip-deflated.
+# The frontend's _evoDecodeGcAtlasTile already handles this format —
+# we just need to host the tiles under a custom prefix and provide a
+# manifest that matches the GC-ATLAS manifest schema.
+
+GRIDDED_PREFIX = "era5_monthly_vpi"   # GCS path prefix under tc-atlas-ir-cache
+
+def encode_vpi_tile(vpi_field: np.ndarray) -> tuple[bytes, float, float]:
+    """Quantize the (181, 360) vPI field to uint16 + gzip. Returns
+    (gzipped bytes, vmin, vmax). NaNs map to the 0xFFFF sentinel.
+    Range is clipped to 0..120 m/s — vPI is bounded below by 0 (by
+    construction in the cubic solution) and 120 m/s is a generous cap
+    that captures all observed values (Chavas Fig. 3a PI peaks at
+    ~95 m/s; vPI ≤ PI everywhere)."""
+    import gzip as _gz
+    vmin = 0.0
+    vmax = 120.0
+    arr = np.asarray(vpi_field, dtype=np.float32)
+    # Quantize. NaN → sentinel 0xFFFF; finite values clip to [vmin,vmax].
+    finite = np.isfinite(arr)
+    clipped = np.clip(arr, vmin, vmax)
+    scaled = ((clipped - vmin) / (vmax - vmin) * 65534.0).round()
+    u16 = np.where(finite, scaled.astype(np.uint16), np.uint16(0xFFFF))
+    raw = u16.tobytes()
+    return _gz.compress(raw, compresslevel=6), vmin, vmax
+
+
+def upload_gridded_tile(blob_path: str, gz_bytes: bytes,
+                       content_type: str = "application/octet-stream") -> None:
+    """Upload a single gz-compressed tile to GCS at era5_monthly_vpi/{path}.
+    Requires GCS_IR_CACHE_BUCKET env var (defaults to tc-atlas-ir-cache).
+    Skipped silently if google-cloud-storage isn't installed (local-only mode).
+    """
+    bucket_name = os.environ.get("GCS_IR_CACHE_BUCKET", "tc-atlas-ir-cache")
+    try:
+        from google.cloud import storage   # type: ignore
+    except ImportError:
+        return
+    client = storage.Client()
+    bucket = client.bucket(bucket_name)
+    blob = bucket.blob(f"{GRIDDED_PREFIX}/{blob_path}")
+    blob.cache_control = "public, max-age=86400"
+    blob.upload_from_string(gz_bytes, content_type=content_type,
+                            predefined_acl="publicRead")
 
 
 def main() -> None:
@@ -202,11 +266,62 @@ def main() -> None:
         "by_year": {},
     }
 
+    # Manifest accumulator for gridded tile output (mimics GC-ATLAS
+    # tile manifest schema so the frontend decoder works unchanged).
+    gridded_manifest = {
+        "groups": {
+            "vpi": {                # single pseudo-group for our derived var
+                "vpi": {
+                    "var": "vpi",
+                    "group": "vpi",
+                    "long_name": "Ventilated potential intensity",
+                    "units": "m s⁻¹",
+                    "shape": [181, 360],
+                    "lat_descending": True,
+                    "lat_first": 90.0, "lat_last": -90.0,
+                    "tiles": {},        # populated below
+                },
+            },
+        },
+    }
+    # Wrap the (181, 360) field with NaN rows for the polar bands —
+    # the GC-ATLAS tiles are always 181 rows even though we only
+    # compute over the ±60° band. Without this padding, the frontend
+    # decoder's hardcoded `srcRow = i + 30` offset (which assumes the
+    # source is the full 181-row tile) would read wrong rows. NaN
+    # pads above row 30 (lats 60.5..90) and below row 150 (lats -60.5
+    # ..−90). compute_vpi_field outputs 181×360 already (since input
+    # SST/MPI tiles are 181×360), so we can use the field as-is.
+
+    def _process_month(month: int, *,
+                      period: str, year: int | None,
+                      tile_path: str) -> dict[str, float] | None:
+        """Compute vPI for one (period, year, month), upload gridded
+        tile, return region means (or None on missing input)."""
+        vpi = compute_vpi_for(manifest, month, period=period, year=year)
+        if vpi is None:
+            return None
+        # Emit gridded tile + manifest entry.
+        gz, vmin, vmax = encode_vpi_tile(vpi)
+        if not args.no_upload:
+            upload_gridded_tile(tile_path, gz)
+        # Manifest entry — tile key matches the GC-ATLAS convention:
+        # climo: "{MM}"; per-year: "{YYYY}_{MM}".
+        if period == "default":
+            tile_key = f"{month:02d}"
+        else:
+            tile_key = f"{year}_{month:02d}"
+        gridded_manifest["groups"]["vpi"]["vpi"]["tiles"][tile_key] = {
+            "vmin": float(vmin), "vmax": float(vmax),
+        }
+        return region_means_from_field(vpi)
+
     # ── Climatology mean (12 months) ─────────────────────────────────
     log.info("=== Climatology mean (%s) ===", CLIM_PERIOD)
     for month in range(1, 13):
         log.info("  month %d climo", month)
-        means = compute_region_means(manifest, month, period="default")
+        means = _process_month(month, period="default", year=None,
+                                tile_path=f"tiles/{month:02d}.bin.gz")
         if means is None:
             log.warning("    skipped (missing tile)")
             continue
@@ -222,8 +337,9 @@ def main() -> None:
         log.info("  %d", year)
         block = out["by_year"].setdefault(str(year), {})
         for month in range(1, 13):
-            means = compute_region_means(manifest, month,
-                                          period="per_year", year=year)
+            tp = f"tiles_per_year/{year}_{month:02d}.bin.gz"
+            means = _process_month(month, period="per_year", year=year,
+                                    tile_path=tp)
             if means is None:
                 continue
             for region, v in means.items():
@@ -231,6 +347,24 @@ def main() -> None:
                 block.setdefault(key, [None] * 12)[month - 1] = (
                     None if not np.isfinite(v) else round(float(v), 4)
                 )
+
+    # Upload the gridded manifest after all tiles are in.
+    if not args.no_upload:
+        try:
+            from google.cloud import storage   # type: ignore
+            bucket_name = os.environ.get("GCS_IR_CACHE_BUCKET",
+                                          "tc-atlas-ir-cache")
+            client = storage.Client()
+            bucket = client.bucket(bucket_name)
+            blob = bucket.blob(f"{GRIDDED_PREFIX}/manifest.json")
+            blob.cache_control = "public, max-age=300"
+            blob.upload_from_string(json.dumps(gridded_manifest),
+                                    content_type="application/json",
+                                    predefined_acl="publicRead")
+            log.info("Uploaded gridded manifest → gs://%s/%s/manifest.json",
+                     bucket_name, GRIDDED_PREFIX)
+        except Exception as e:
+            log.warning("gridded manifest upload skipped: %s", e)
 
     # ── Climatology across-years std (1991-2020) ─────────────────────
     log.info("=== Climatology across-years std (1991-2020) ===")

@@ -4426,6 +4426,38 @@
             anomZmax: 8,
             colorscale: 'RdBu_r',
         },
+        vpi: {
+            // Ventilated Potential Intensity (Chavas, Camargo, Tippett
+            // 2025, J. Climate). Computed POINTWISE on the GC-ATLAS
+            // 1° grid by build_era5_vpi_indices.py (Bryan moist entropy
+            // → χ_m → VI → cubic-vPI per their Eq. 4 with VI_max = 0.145)
+            // and uploaded to gs://tc-atlas-ir-cache/era5_monthly_vpi/
+            // in GC-ATLAS-compatible f16-gz tile format.
+            customBase: 'https://storage.googleapis.com/tc-atlas-ir-cache/era5_monthly_vpi',
+            group: 'vpi', name: 'vpi', level: null,
+            label: 'Ventilated PI', units: 'm s⁻¹',
+            // vPI ≤ PI by construction. Atlantic MDR climo peaks
+            // ~60 m/s in Sep; basin-wide max ~95 m/s in WPac. 100 m/s
+            // captures all realistic values without wasting colormap
+            // dynamic range.
+            zmin: 0, zmax: 100, divergent: false,
+            anomZmax: 12,
+            // Same TC-favorability palette as SST but with thresholds
+            // tuned to intensity (kt): cool blues for weak/zero (where
+            // ventilation has shut down genesis), through yellow at
+            // tropical-storm strength, orange at Cat 1-2 (33 m/s ≈
+            // 64 kt), red ≥ Cat 4 (58 m/s ≈ 113 kt), deep red ≥ Cat 5.
+            colorscale: [
+                [0.00, '#08306b'],   //   0 m/s — vPI shut down
+                [0.15, '#3182bd'],   //  15    — TD strength
+                [0.30, '#9ecae1'],   //  30    — TS (high-end)
+                [0.40, '#fed976'],   //  40    — TS/Cat 1 boundary
+                [0.50, '#fd8d3c'],   //  50    — Cat 2
+                [0.60, '#e31a1c'],   //  60    — Cat 4 lower bound
+                [0.75, '#bd0026'],   //  75    — Cat 5 lower bound
+                [1.00, '#67001f'],   // 100    — extreme PI ceiling
+            ],
+        },
         sst: {
             // ERA5 SST (monthly mean). NOT NOAA OISST — the daily
             // satellite-blended OISST product needs its own gridded
@@ -4518,20 +4550,38 @@
         return out;
     }
 
-    // Per-year monthly mean tile.
+    // Per-year monthly mean tile. Specs may set `customBase` to host
+    // a derived variable's tiles off our own GCS bucket (e.g., vPI in
+    // tc-atlas-ir-cache/era5_monthly_vpi/) instead of the GC-ATLAS
+    // catalog. Same tile FORMAT (f16-gz, 181×360, NaN sentinel = 0xFFFF)
+    // so the decoder works unchanged.
     function _evoFetchGcAtlasYearTile(spec, year, month) {
         var monthStr = (month < 10 ? '0' : '') + month;
         var levPref = spec.level == null ? '' : (spec.level + '_');
-        var path = '/tiles_per_year/' + spec.group + '/' + spec.name + '/'
-                 + levPref + year + '_' + monthStr + '.bin.gz';
-        var tileKey = levPref + year + '_' + monthStr;
-        return _evoLoadGcAtlasPerYearManifest().then(function (m) {
-            var meta = m.groups && m.groups[spec.group]
-                    && m.groups[spec.group][spec.name]
-                    && m.groups[spec.group][spec.name].tiles
-                    && m.groups[spec.group][spec.name].tiles[tileKey];
-            if (!meta) throw new Error('GC-ATLAS per-year missing ' + path);
-            return fetch(EVO_GC_ATLAS_BASE + path).then(function (r) {
+        var isCustom = !!spec.customBase;
+        // Custom-base tiles don't carry the group/var/level path
+        // segments — we host them flat at tiles_per_year/{YYYY}_{MM}.bin.gz
+        // (matches the era5_monthly_vpi build's layout).
+        var path = isCustom
+            ? '/tiles_per_year/' + year + '_' + monthStr + '.bin.gz'
+            : '/tiles_per_year/' + spec.group + '/' + spec.name + '/'
+              + levPref + year + '_' + monthStr + '.bin.gz';
+        var tileKey = isCustom
+            ? year + '_' + monthStr
+            : levPref + year + '_' + monthStr;
+        var manifestP = isCustom
+            ? _evoLoadCustomManifest(spec.customBase)
+            : _evoLoadGcAtlasPerYearManifest();
+        var baseUrl = isCustom ? spec.customBase : EVO_GC_ATLAS_BASE;
+        var groupKey = isCustom ? 'vpi' : spec.group;
+        var nameKey  = isCustom ? 'vpi' : spec.name;
+        return manifestP.then(function (m) {
+            var meta = m.groups && m.groups[groupKey]
+                    && m.groups[groupKey][nameKey]
+                    && m.groups[groupKey][nameKey].tiles
+                    && m.groups[groupKey][nameKey].tiles[tileKey];
+            if (!meta) throw new Error('tile manifest missing ' + path);
+            return fetch(baseUrl + path).then(function (r) {
                 if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + path);
                 var decompressed = r.body.pipeThrough(new DecompressionStream('gzip'));
                 return new Response(decompressed).arrayBuffer();
@@ -4544,16 +4594,25 @@
     function _evoFetchGcAtlasClimoTile(spec, month) {
         var monthStr = (month < 10 ? '0' : '') + month;
         var levPref = spec.level == null ? '' : (spec.level + '_');
-        var path = '/tiles/' + spec.group + '/' + spec.name + '/'
-                 + levPref + monthStr + '.bin.gz';
-        var tileKey = levPref + monthStr;
-        return _evoLoadGcAtlasManifest().then(function (m) {
-            var meta = m.groups && m.groups[spec.group]
-                    && m.groups[spec.group][spec.name]
-                    && m.groups[spec.group][spec.name].tiles
-                    && m.groups[spec.group][spec.name].tiles[tileKey];
-            if (!meta) throw new Error('GC-ATLAS climo missing ' + path);
-            return fetch(EVO_GC_ATLAS_BASE + path).then(function (r) {
+        var isCustom = !!spec.customBase;
+        var path = isCustom
+            ? '/tiles/' + monthStr + '.bin.gz'
+            : '/tiles/' + spec.group + '/' + spec.name + '/'
+              + levPref + monthStr + '.bin.gz';
+        var tileKey = isCustom ? monthStr : (levPref + monthStr);
+        var manifestP = isCustom
+            ? _evoLoadCustomManifest(spec.customBase)
+            : _evoLoadGcAtlasManifest();
+        var baseUrl = isCustom ? spec.customBase : EVO_GC_ATLAS_BASE;
+        var groupKey = isCustom ? 'vpi' : spec.group;
+        var nameKey  = isCustom ? 'vpi' : spec.name;
+        return manifestP.then(function (m) {
+            var meta = m.groups && m.groups[groupKey]
+                    && m.groups[groupKey][nameKey]
+                    && m.groups[groupKey][nameKey].tiles
+                    && m.groups[groupKey][nameKey].tiles[tileKey];
+            if (!meta) throw new Error('tile manifest missing ' + path);
+            return fetch(baseUrl + path).then(function (r) {
                 if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + path);
                 var decompressed = r.body.pipeThrough(new DecompressionStream('gzip'));
                 return new Response(decompressed).arrayBuffer();
@@ -4561,6 +4620,19 @@
                 return _evoDecodeGcAtlasTile(buf, meta.vmin, meta.vmax, spec.transform);
             });
         });
+    }
+    // Cache of per-customBase manifest promises so multiple tile
+    // fetches share one network round-trip for the manifest.
+    var _evoCustomManifests = {};
+    function _evoLoadCustomManifest(baseUrl) {
+        if (_evoCustomManifests[baseUrl]) return _evoCustomManifests[baseUrl];
+        _evoCustomManifests[baseUrl] = fetch(baseUrl + '/manifest.json',
+                                              { cache: 'no-cache' })
+            .then(function (r) {
+                if (!r.ok) throw new Error('custom manifest HTTP ' + r.status);
+                return r.json();
+            });
+        return _evoCustomManifests[baseUrl];
     }
 
     // Build 12 monthly frames for a GC-ATLAS-backed variable.
