@@ -2163,14 +2163,16 @@
             });
         }
 
-        // ----- Current year (bold blue) -----
+        // ----- Current year (orange — matches the SST Daily panel's
+        //       "so far" trace color so the two views read the same way
+        //       at a glance) -----
         if (regionAll.leap[currentYear]
                 && regionAll.leap[currentYear].shear) {
             traces.push({
                 type: 'scatter', mode: 'lines', x: doys,
                 y: regionAll.leap[currentYear].shear,
-                line: { color: BRAND.blueDeep, width: 2.6 },
-                name: String(currentYear) + ' (live ERA5)',
+                line: { color: BRAND.orange_line, width: 2.6 },
+                name: String(currentYear) + ' (so far)',
                 hovertemplate: currentYear
                     + ' · DOY %{x}: %{y:.1f} m/s<extra></extra>',
                 connectgaps: true,
