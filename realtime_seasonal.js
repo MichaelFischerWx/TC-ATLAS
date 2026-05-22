@@ -6292,6 +6292,42 @@
                 + hoverField + ' %{z:.2f} ' + varUnits
                 + '<extra></extra>',
         };
+        // SST 26 °C isotherm overlay — Palmen (1948) TC genesis
+        // threshold. Drawn as a contour trace alongside the heatmap so
+        // forecasters can see the warm-pool boundary at a glance
+        // (north-of-line = capable of supporting a TC thermodynamically,
+        // south-of-line = too cool). Only meaningful when the active
+        // variable is SST in raw mode — for anomaly mode the threshold
+        // would be at 26-climo °C which varies by month, not a single
+        // useful line; we skip it. The trace is ALWAYS in the array
+        // (with visible: false when not applicable) so per-frame data
+        // updates can index it consistently.
+        var sstContourLevel = 26.0;
+        var showSstContour = (variable === 'sst' && !modeIsAnom);
+        var sstContourTrace = {
+            type: 'contour',
+            x: EVO_LONS, y: EVO_LATS,
+            z: showSstContour ? frameZ(frames[0]) : [[0]],
+            contours: {
+                start: sstContourLevel, end: sstContourLevel,
+                size: 0.5,
+                coloring: 'lines', showlabels: false,
+            },
+            line: { color: 'rgba(255,255,255,0.95)', width: 2.2,
+                    smoothing: 1.0, dash: 'solid' },
+            // Single-color "colorscale" so the contour line stays
+            // white at the (already filtered) 26 °C level. Plotly
+            // requires a colorscale on type:'contour' even with
+            // coloring:'lines'.
+            colorscale: [[0, 'rgba(255,255,255,0.95)'],
+                         [1, 'rgba(255,255,255,0.95)']],
+            autocolorscale: false,
+            showscale: false,
+            hoverinfo: 'skip',
+            visible: showSstContour,
+            name: '26 °C isotherm',
+            showlegend: false,
+        };
 
         // Build a minimal context so the live overlay-update path
         // (_evoUpdateOverlays) can derive barb/stream u/v from a frame
@@ -6322,9 +6358,20 @@
             // user scrubs to and the visible overlay.
             return {
                 name: name,
-                traces: [0, 2, 3, 4],
+                // Per-frame index update — coastlines (index 1) are
+                // static and skipped. Indices shifted by 1 after the
+                // SST 26 °C contour was inserted at index 2:
+                //   0=heatmap, 2=sstContour, 3=unnamed, 4=named, 5=marker.
+                traces: [0, 2, 3, 4, 5],
                 data: [
-                    { z: frameZ(f) },
+                    { z: frameZ(f) },     // heatmap
+                    // For non-SST variables the contour z stays [[0]]
+                    // (visible:false from the trace template) — passing
+                    // the same shape via z avoids Plotly recomputing the
+                    // contour every frame for variables that don't use it.
+                    showSstContour
+                        ? { z: frameZ(f) }
+                        : { z: [[0]] },
                     { x: tracks.unnamedLineX, y: tracks.unnamedLineY },
                     { x: tracks.namedLineX,   y: tracks.namedLineY },
                     { x: tracks.markersX, y: tracks.markersY,
@@ -6513,7 +6560,19 @@
         markerTrace.visible      = _evoState.showTracks;
 
         return {
-            traces: [baseTrace, coastlineTrace,
+            // Trace order — must match the per-frame `traces` index
+            // array in _evoBuildFrameData. Adding/removing traces here
+            // requires updating that array too.
+            //   0  heatmap                  (updated per frame: z)
+            //   1  coastlines              (static)
+            //   2  SST 26 °C contour        (updated per frame: z)
+            //   3  unnamed-line tracks      (updated per frame)
+            //   4  named-line tracks        (updated per frame)
+            //   5  marker tracks            (updated per frame)
+            //   6-9  wind barbs            (static — re-laid out on
+            //                               viewport change, not frame)
+            //   10-11 streamlines           (legacy — unused at runtime)
+            traces: [baseTrace, coastlineTrace, sstContourTrace,
                      unnamedLineTrace, namedLineTrace, markerTrace,
                      barbHalo, barbInk, pennantHalo, pennantInk,
                      streamHalo, streamInk],
