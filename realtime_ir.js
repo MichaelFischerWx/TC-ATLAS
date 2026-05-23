@@ -537,14 +537,13 @@
     var _GENESIS_TRAJ_OFFSET_MAX_H    = 120;  // mean |Δt| ceiling
     var _GENESIS_TRAJ_OFFSET_STD_MAX  = 18;   // stdev(Δt) ceiling
     // Matched-span fraction. Two members are merged only when their
-    // close-point matches span at least this fraction of the IDEAL
-    // overlap window (T_horizon − |Δt|). Catches the case where two
-    // distinct storms transit the same area at the same time — they
-    // match briefly with Δt ≈ 0 (passing the offset checks above) but
-    // the matched span is a tiny fraction of either's full trajectory.
-    // A genuine same-wave pair has matches spanning most of the
-    // available overlap.
-    var _GENESIS_TRAJ_HORIZON_H       = 168;  // FNV3 LARGE_ENSEMBLE = 15d × 6h
+    // close-point matches span at least this fraction of the realistic
+    // overlap window for the pair — derived per-pair as
+    // min(durationA, durationB) − |Δt|, NOT against a global horizon
+    // (which over-rejected members with short forecast tracks). A
+    // genuine same-wave pair has matches spanning most of that
+    // available overlap; a brief coincidental crossing has a tiny
+    // matched span vs the same ideal.
     var _GENESIS_TRAJ_SPAN_FRAC_MIN   = 0.5;
     var _GENESIS_MEMBER_COLOR = 'rgba(249, 115, 22, 0.12)';  // very soft so heatmap dominates
     var _GENESIS_MEAN_COLOR = '#f97316';                      // bold orange
@@ -5632,6 +5631,24 @@
         var n = trajs.length;
         if (n === 0) return [];
 
+        // Per-trajectory duration (tau range). Used as the denominator
+        // for the SPAN_FRAC check below — the previous version used
+        // _GENESIS_TRAJ_HORIZON_H (168 h) globally, but that rejected
+        // legitimate same-track matches whenever either trajectory's
+        // own tau span was shorter than 0.5 × 168 = 84 h.
+        var trajDuration = new Array(n);
+        for (var td = 0; td < n; td++) {
+            var dPts = trajs[td].points;
+            var tauLo = Infinity, tauHi = -Infinity;
+            for (var dp = 0; dp < dPts.length; dp++) {
+                var dtau = dPts[dp].tau;
+                if (dtau == null) continue;
+                if (dtau < tauLo) tauLo = dtau;
+                if (dtau > tauHi) tauHi = dtau;
+            }
+            trajDuration[td] = Math.max(0, tauHi - tauLo);
+        }
+
         // Step 2: build a 5°×5° spatial grid index. Each cell stores
         // every (trajectory, point) tuple whose lat/lon falls in it.
         // We also stash tau so the matching step can compute Δt for
@@ -5668,7 +5685,6 @@
         var MIN_MATCH   = _GENESIS_TRAJ_MIN_MATCHES;
         var OFFSET_MAX  = _GENESIS_TRAJ_OFFSET_MAX_H;
         var STD_MAX     = _GENESIS_TRAJ_OFFSET_STD_MAX;
-        var HORIZON_H   = _GENESIS_TRAJ_HORIZON_H;
         var SPAN_FRAC   = _GENESIS_TRAJ_SPAN_FRAC_MIN;
         var PROX_KM_SQ  = PROX_KM * PROX_KM;
         var KM_PER_DEG  = 111.0;
@@ -5754,16 +5770,18 @@
             if (stdDt > STD_MAX) return;
             // Matched-span check: the time range over which the two
             // tracks were close must be a meaningful fraction of the
-            // ideal-overlap window. For two tracks offset by k hours
-            // in a T-hour forecast, the most they CAN overlap is
-            // (T − |k|) hours. We require ≥ SPAN_FRAC of that.
-            // Brief coincidental crossings (small matched span) fail.
-            var matchedSpan = rec.maxTauA - rec.minTauA;
-            var idealSpan = Math.max(1, HORIZON_H - absDt);
-            if (matchedSpan / idealSpan < SPAN_FRAC) return;
+            // available overlap window. ideal_span derived from the
+            // SHORTER of the two trajectories' actual durations (not
+            // the global forecast horizon) so members whose forecast
+            // tracks are partially clipped (late genesis, early lysis)
+            // can still cluster with each other.
             var pk = +pkStr;
             var lo = Math.floor(pk / 10000);
             var hi = pk % 10000;
+            var minDuration = Math.min(trajDuration[lo], trajDuration[hi]);
+            var idealSpan = Math.max(1, minDuration - absDt);
+            var matchedSpan = rec.maxTauA - rec.minTauA;
+            if (matchedSpan / idealSpan < SPAN_FRAC) return;
             union(lo, hi);
         });
 
