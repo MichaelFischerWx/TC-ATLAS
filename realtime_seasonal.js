@@ -5588,8 +5588,26 @@
             var dLat = uv.v * stepDeg;
             var newLat = lat + dLat;
             var newLon = lon + dLon;
-            if (newLat > viewport.y[1] + 4 || newLat < viewport.y[0] - 4
-                || newLon > viewport.x[1] + 4 || newLon < viewport.x[0] - 4) {
+            // Tight viewport bound — respawn the moment a particle
+            // crosses the visible axis edge instead of letting it
+            // drift up to 4° past. The +0.25° slack is just so a
+            // particle that lands exactly on the edge from float
+            // round-off doesn't ping-pong between live and respawn.
+            if (newLat > viewport.y[1] + 0.25 || newLat < viewport.y[0] - 0.25
+                || newLon > viewport.x[1] + 0.25 || newLon < viewport.x[0] - 0.25) {
+                _evoParticleSpawn(i, viewport);
+                continue;
+            }
+            // Defense in depth: also reject the new position if it
+            // falls outside the grid's data extent OR onto a non-
+            // finite u/v cell. The next-tick uvAt-on-old-position
+            // check eventually catches both, but a one-tick lag means
+            // a trail segment to the past-data position already drew.
+            // Calling uvAt on the NEW position here makes the cutoff
+            // immediate — no orphan segments past the basin crop edge
+            // or over land cells with NaN u/v.
+            var newUv = _evoParticleUvAt(newLon, newLat);
+            if (!newUv) {
                 _evoParticleSpawn(i, viewport);
                 continue;
             }
@@ -5627,10 +5645,18 @@
             var headPt = _evoParticleProject(newLat, newLon);
             if (!headPt) continue;
             var prevX = headPt.x, prevY = headPt.y;
+            // Track which trail segments crossed into no-data so the
+            // drawn polyline doesn't bridge across the edge of the
+            // shaded domain. If any historical trail point is outside
+            // the data extent, stop walking back from there — the
+            // remaining segments would draw across the no-data gap.
             for (var k = 1; k < _EVO_PCL_TRAIL; k++) {
                 var idx = (head - k + _EVO_PCL_TRAIL) % _EVO_PCL_TRAIL;
-                var pt = _evoParticleProject(p.trailLat[tBase + idx],
-                                              p.trailLon[tBase + idx]);
+                var tLat = p.trailLat[tBase + idx];
+                var tLon = p.trailLon[tBase + idx];
+                if (!_evoParticleUvAt(tLon, tLat)
+                    || !_evoParticleZFinite(tLon, tLat)) break;
+                var pt = _evoParticleProject(tLat, tLon);
                 if (!pt) break;
                 ctx.moveTo(prevX, prevY);
                 ctx.lineTo(pt.x, pt.y);
