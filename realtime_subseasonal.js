@@ -67,16 +67,23 @@
         } catch (e) {}
     }
 
+    // When loaded inside an iframe with the URL hash flag `subOnly=1`,
+    // the climo page wants the page reduced to just our combined
+    // Hovmöller. Force combined view + hide TC overlay so the embed
+    // is a clean wave/convection figure, irrespective of whatever the
+    // user's persisted localStorage view preference was.
+    var SUB_ONLY = document.documentElement.classList.contains('sub-only-mode');
+
     var state = {
         initialized: false,
         indices: null,
         slabs: {},                  // { bandKey: payload }
         activeStorms: [],
         latBand: 'trop10',
-        showTCOverlay: true,
+        showTCOverlay: !SUB_ONLY,
         expandedBands: {},          // { bandKey: bool } — sticky per-tab session
         tcLoading: false,           // true while phase-2 recent-storms is in flight
-        viewMode: _loadStoredViewMode(),
+        viewMode: SUB_ONLY ? 'combined' : _loadStoredViewMode(),
         combinedSmoothDays: 5,      // OLR base smoothing in combined view: 1 (raw), 3, or 5 days
     };
 
@@ -369,12 +376,13 @@
     }
 
     // Format a per-basin enhancement value as a colored span.
-    // > 1.15 = enhanced (green), < 0.85 = suppressed (red), else neutral.
+    // ≥ 1.0 = enhanced (red, "warm/active"); < 1.0 = suppressed (blue,
+    // "cool/inactive"). Simple threshold at 1.0 (the uniform-phase
+    // expectation) so every value falls cleanly on one side instead of
+    // requiring a "neutral" gray band that hides borderline modulation.
     function _formatGenesisBasin(basin, val) {
         if (val == null) return '';
-        var klass = (val >= 1.15) ? 'sub-gen-up'
-                  : (val <= 0.85) ? 'sub-gen-down'
-                  : 'sub-gen-neutral';
+        var klass = (val >= 1.0) ? 'sub-gen-up' : 'sub-gen-down';
         return '<span class="sub-gen-basin"><span class="' + klass
              + '">' + basin + ' ' + val.toFixed(2) + '×</span></span>';
     }
@@ -443,6 +451,22 @@
                     statusEl: card.querySelector('[data-val="status"]'),
                 },
             });
+            // Save button — idempotent (only inject once per card).
+            // Tap on mobile, click on desktop; stopPropagation so it
+            // doesn't bubble to the card's "open evolution modal" handler.
+            if (!card.querySelector('.sub-clock-save-btn')) {
+                var sBtn = document.createElement('button');
+                sBtn.type = 'button';
+                sBtn.className = 'sub-clock-save-btn';
+                sBtn.title = 'Save this phase diagram as PNG';
+                sBtn.setAttribute('aria-label', 'Save phase diagram');
+                sBtn.innerHTML = '⤓';
+                sBtn.addEventListener('click', function (e) {
+                    e.stopPropagation();
+                    _saveClockAsPNG(card, mode);
+                });
+                card.appendChild(sBtn);
+            }
         });
 
         // Clicking any clock opens the full phase-evolution modal in
@@ -458,6 +482,128 @@
                 _openEvolutionInIframe(mode);
             };
         });
+    }
+
+    /* ── Per-clock PNG save ───────────────────────────────────────
+       Composite: title bar (mode label + today's date) + rasterized
+       SVG (the phase clock with trail) + readout (date / phase /
+       amp / status / per-basin genesis modulation) + TC-ATLAS footer.
+       For year-over-year overlays the user clicks through to the
+       full evolution modal, where the PC chart's own save button
+       captures the historical overlay. */
+    function _saveClockAsPNG(card, mode) {
+        if (!card) return;
+        var svg = card.querySelector('.sub-clock-svg');
+        if (!svg) return;
+        _ga('rt_sub_save_png_clock', { mode: mode });
+
+        var modeLabel = (card.querySelector('.sub-clock-mode') || {}).textContent || mode;
+        var dateText   = (card.querySelector('[data-val="date"]')   || {}).textContent || '';
+        var phaseText  = (card.querySelector('[data-val="phase"]')  || {}).textContent || '';
+        var ampText    = (card.querySelector('[data-val="amp"]')    || {}).textContent || '';
+        var statusText = (card.querySelector('[data-val="status"]') || {}).textContent || '';
+        var genesisEl  = card.querySelector('[data-val="genesis"]');
+        var genesisText = genesisEl ? (genesisEl.textContent || '').trim() : '';
+
+        // Rasterize the SVG to a same-size canvas.  Inline the computed
+        // background color of the card so the rendered PNG matches the
+        // theme the user is viewing (dark vs light).
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var pageBg = isDark ? '#0f172a' : '#ffffff';
+        var cardBg = isDark ? '#161b24' : '#ffffff';
+        var textColor = isDark ? '#e2e8f0' : '#0f172a';
+        var dimColor  = isDark ? '#94a3b8' : '#64748b';
+
+        var SVG_PX = 140;                  // matches CSS .sub-clock-svg
+        var SCALE  = 2;                    // 2× for crisp PNG
+        var clone = svg.cloneNode(true);
+        clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+        clone.setAttribute('width',  String(SVG_PX));
+        clone.setAttribute('height', String(SVG_PX));
+        var serialized = new XMLSerializer().serializeToString(clone);
+        var svgBlob = new Blob([serialized], { type: 'image/svg+xml;charset=utf-8' });
+        var svgUrl  = URL.createObjectURL(svgBlob);
+
+        var img = new Image();
+        img.onload = function () {
+            // Layout (all values in CSS px, multiplied by SCALE on draw).
+            var W = 360;
+            var titleH = 44, padX = 18, padY = 14;
+            var clockY = titleH + 6;
+            var clockSize = SVG_PX;
+            var clockX = (W - clockSize) / 2;
+            var readoutY = clockY + clockSize + 10;
+            var lineH = 18;
+            // Always: mode title, date line, phase + amp, status.
+            var lines = [
+                'Date:  ' + dateText,
+                'Phase: ' + phaseText + '   ·   Amp: ' + ampText,
+                statusText || '',
+            ];
+            // Genesis modulation (3 basins) wraps fine on the wider card.
+            if (genesisText) lines.push(genesisText);
+            var bodyH = lines.length * lineH;
+            var footerH = 32;
+            var H = readoutY + bodyH + 14 + footerH;
+
+            var canvas = document.createElement('canvas');
+            canvas.width  = W * SCALE;
+            canvas.height = H * SCALE;
+            var ctx = canvas.getContext('2d');
+            ctx.scale(SCALE, SCALE);
+
+            // Background
+            ctx.fillStyle = pageBg;
+            ctx.fillRect(0, 0, W, H);
+            // Card surface
+            ctx.fillStyle = cardBg;
+            ctx.fillRect(8, 8, W - 16, H - 16);
+
+            // Title bar
+            ctx.fillStyle = textColor;
+            ctx.font = 'bold 15px "DM Sans", system-ui, sans-serif';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(modeLabel + ' · Phase Clock', padX, titleH / 2 + 6);
+
+            // Clock
+            ctx.drawImage(img, clockX, clockY, clockSize, clockSize);
+
+            // Readout
+            ctx.font = '12px "DM Sans", system-ui, sans-serif';
+            ctx.textBaseline = 'top';
+            lines.forEach(function (txt, i) {
+                if (!txt) return;
+                ctx.fillStyle = (i === 2 || i === 3) ? dimColor : textColor;
+                ctx.fillText(txt, padX, readoutY + i * lineH);
+            });
+
+            // Footer
+            ctx.fillStyle = dimColor;
+            ctx.font = '11px "DM Sans", system-ui, sans-serif';
+            ctx.textBaseline = 'middle';
+            var todayISO = new Date().toISOString().slice(0, 10);
+            ctx.fillText('TC-ATLAS · ' + todayISO + ' · michaelfischerwx.github.io/TC-ATLAS',
+                         padX, H - footerH / 2 - 4);
+
+            canvas.toBlob(function (blob) {
+                var u = URL.createObjectURL(blob);
+                var a = document.createElement('a');
+                a.href = u;
+                a.download = 'tc-atlas-phaseclock-' + mode + '-' + todayISO + '.png';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                setTimeout(function () {
+                    URL.revokeObjectURL(u);
+                    URL.revokeObjectURL(svgUrl);
+                }, 1000);
+            }, 'image/png');
+        };
+        img.onerror = function () {
+            URL.revokeObjectURL(svgUrl);
+            console.error('[subseasonal-rt] clock SVG rasterization failed');
+        };
+        img.src = svgUrl;
     }
 
     /* ── Hovmöller stack ──────────────────────────────────────── */
@@ -639,15 +785,17 @@
                     tickfont: { size: 9 },
                 },
                 yaxis: {
-                    // Newest at top (operational convention — matches CPC,
-                    // Schreck, ECMWF daily products). User glances at the
-                    // page and sees today's wave state first. Original
-                    // Hovmöller (1949) used time-downward; modern
-                    // operational TC monitoring overwhelmingly inverts.
-                    // Side effect: eastward waves (Kelvin, MJO) now tilt
-                    // UP-AND-RIGHT instead of down-and-right; westward
-                    // (ER) tilt UP-AND-LEFT.
-                    autorange: true,
+                    // Newest at BOTTOM — original Hovmöller (1949)
+                    // convention, and puts "today" right next to the
+                    // basin-reference map strip rendered below the
+                    // stack. Eastward waves (Kelvin, MJO) tilt
+                    // DOWN-AND-RIGHT (slope matches the visual sweep of
+                    // a wave propagating eastward as time advances);
+                    // westward (ER) tilt DOWN-AND-LEFT. Trades the
+                    // CPC/Schreck "today at top" glance-first habit
+                    // for tighter visual coupling between the most
+                    // recent state and the geographic reference below.
+                    autorange: 'reversed',
                     showgrid: false, zeroline: false,
                     tickfont: { size: 9 },
                     nticks: 7,
@@ -838,7 +986,7 @@
             // Left margin needs room for the y-axis date labels at the
             // 1.8× scaled fonts used during PNG export. "Mar 22 2026"
             // wraps to two lines so the column needs to accommodate the
-            // longer of those plus the "↑ Time" annotation that sits in
+            // longer of those plus the "↓ Time" annotation that sits in
             // the same margin band.
             margin: { l: 90, r: 90, t: 38, b: 36 },
             paper_bgcolor: bg, plot_bgcolor: bg,
@@ -851,23 +999,23 @@
                 tickfont: { size: 10 },
             },
             yaxis: {
-                autorange: true,
+                // Newest at BOTTOM — same convention as the stacked
+                // view, putting "today" next to the basin reference
+                // strip drawn underneath.
+                autorange: 'reversed',
                 showgrid: false, zeroline: false,
                 tickfont: { size: 10 },
                 nticks: 14,
             },
             shapes: [],
-            // "↑ Time" indicator just above the y-axis date column —
-            // tells the reader the temporal axis runs upward (most
-            // recent at top), which isn't otherwise obvious to someone
-            // who hasn't looked at many Hovmöllers. Replaces the prior
-            // red "today" rule, which was visually noisy and redundant
-            // with the topmost date tick.
+            // "↓ Time" indicator anchored above the y-axis date column,
+            // telling the reader the temporal axis advances downward
+            // (most recent at the bottom, adjacent to the basin map).
             annotations: [{
                 xref: 'paper', yref: 'paper',
                 x: 0, y: 1.005,
                 xanchor: 'right', yanchor: 'bottom',
-                text: '↑ Time',
+                text: '↓ Time',
                 showarrow: false,
                 font: { size: 10, color: fg,
                         family: 'DM Sans, system-ui, sans-serif' },

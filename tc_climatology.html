@@ -28,7 +28,7 @@
     <link rel="icon" type="image/png" sizes="192x192" href="tc-atlas-favicon-192.png">
     <link rel="apple-touch-icon" sizes="192x192" href="tc-atlas-favicon-192.png">
     <title>TC Climatology — TC-ATLAS</title>
-    <script src="theme.js?v=20260516a"></script>
+    <script src="theme.js?v=20260523b"></script>
 
     <!-- Leaflet — needed by the ACE modal's per-year season map -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -45,9 +45,9 @@
          layout in tc_climatology_styles.css. global_archive_styles.css is
          loaded too because the chart-panel + modal classes (.clim-grid,
          .clim-panel, .ace-modal-*) live there and are reused as-is. -->
-    <link rel="stylesheet" href="tc_radar_styles.css?v=20260516a">
-    <link rel="stylesheet" href="global_archive_styles.css?v=20260516a">
-    <link rel="stylesheet" href="tc_climatology_styles.css?v=20260516a">
+    <link rel="stylesheet" href="tc_radar_styles.css?v=20260523b">
+    <link rel="stylesheet" href="global_archive_styles.css?v=20260523b">
+    <link rel="stylesheet" href="tc_climatology_styles.css?v=20260523b">
 </head>
 <body>
     <a href="#tc-clim-main" class="skip-link" aria-label="Skip to main content">Skip to main content</a>
@@ -323,69 +323,121 @@
                     <span><strong>Phase index</strong> — <span id="sub-phase-source-inline">…</span></span>
                 </div>
 
-                <!-- Current state widget: phase-clock for the active mode + a
-                     small CPC OLR Hovmöller thumbnail showing recent tropical
-                     convection propagation. Phase 1 of PLAN_realtime_subseasonal_overlay.md
-                     — gives users an at-a-glance "where is the subseasonal
-                     forcing right now" anchor alongside the historical
-                     compositing below. The Hovmöller image is fetched
-                     directly from CPC; refresh on every page load picks up
-                     their daily update. -->
+                <!-- Current state widget: four phase clocks (one per
+                     subseasonal mode) + the in-house WK-filtered OLR
+                     Hovmöller embedded from the RT Monitor's
+                     Subseasonal tab. Each clock card renders the same
+                     14-day PC1/PC2 trail with per-basin genesis
+                     modulation, and clicking opens the full phase
+                     evolution modal for THAT mode. Save buttons let
+                     the user export a clock snapshot directly. -->
                 <div id="sub-now-widget"
-                     style="display:grid; grid-template-columns: 260px 1fr;
-                            gap:12px; align-items:start;
+                     style="display:grid; grid-template-columns: minmax(280px, 360px) 1fr;
+                            gap:14px; align-items:start;
                             padding:10px 12px; margin:0 0 14px;
                             border:1px solid var(--border, rgba(0,0,0,0.08));
                             border-radius:8px;
                             background: var(--surface, rgba(46,125,255,0.03));">
+                    <!-- Left column: 4 clocks in a 2×2 grid -->
                     <div>
                         <div style="font-size:0.66rem; opacity:0.75; text-transform:uppercase; letter-spacing:0.04em; margin-bottom:4px;">
-                            Current state · <span id="sub-now-mode">MJO (RMM)</span>
+                            Current state · click any dial for 30-day evolution
                         </div>
-                        <!-- Clickable card: the SVG renders an inline mini-version
-                             of the detailed phase diagram (sector regions + 14-day
-                             trajectory). Outer wrapper is a button-like card with
-                             hover affordance so the click intent is obvious. -->
-                        <button type="button" id="sub-now-trigger"
-                                aria-label="Open detailed phase evolution"
-                                style="display:flex; gap:10px; align-items:center;
-                                       width:100%; padding:6px;
-                                       background: transparent;
-                                       border:1px solid transparent;
-                                       border-radius:8px; cursor:pointer;
-                                       text-align:left; color:inherit;
-                                       transition: background 0.15s, border-color 0.15s;"
-                                onmouseover="this.style.background='rgba(46,125,255,0.06)'; this.style.borderColor='rgba(46,125,255,0.25)';"
-                                onmouseout="this.style.background='transparent'; this.style.borderColor='transparent';">
-                            <svg id="sub-now-clock" width="120" height="120" viewBox="0 0 120 120"
-                                 style="flex-shrink:0;" aria-label="Phase clock"></svg>
-                            <div style="font-size:0.74rem; line-height:1.45; flex:1;">
-                                <div><strong id="sub-now-date">—</strong></div>
-                                <div>Phase <strong id="sub-now-phase">—</strong></div>
-                                <div>Amp <strong id="sub-now-amp">—</strong></div>
-                                <div id="sub-now-status" style="margin-top:4px; opacity:0.75; font-size:0.7rem;"></div>
-                                <div style="margin-top:6px; font-size:0.66rem; color: var(--blue, #2e7dff); font-weight:600;">
-                                    View 30-day evolution &rarr;
+                        <div class="sub-clock-grid" id="sub-now-clock-grid">
+                            <div class="sub-clock-card" data-mode="mjo">
+                                <div class="sub-clock-mode">MJO (RMM)</div>
+                                <svg class="sub-clock-svg" data-clock="mjo"
+                                     viewBox="0 0 120 120"></svg>
+                                <div class="sub-clock-readout">
+                                    <div><span class="sub-clock-key">Date</span>
+                                         <span class="sub-clock-val" data-val="date">—</span></div>
+                                    <div><span class="sub-clock-key">Phase</span>
+                                         <span class="sub-clock-val" data-val="phase">—</span></div>
+                                    <div><span class="sub-clock-key">Amp</span>
+                                         <span class="sub-clock-val" data-val="amp">—</span></div>
                                 </div>
+                                <div class="sub-clock-status" data-val="status"></div>
                             </div>
-                        </button>
+                            <div class="sub-clock-card" data-mode="mjo_omi">
+                                <div class="sub-clock-mode">MJO (ROMI)</div>
+                                <svg class="sub-clock-svg" data-clock="mjo_omi"
+                                     viewBox="0 0 120 120"></svg>
+                                <div class="sub-clock-readout">
+                                    <div><span class="sub-clock-key">Date</span>
+                                         <span class="sub-clock-val" data-val="date">—</span></div>
+                                    <div><span class="sub-clock-key">Phase</span>
+                                         <span class="sub-clock-val" data-val="phase">—</span></div>
+                                    <div><span class="sub-clock-key">Amp</span>
+                                         <span class="sub-clock-val" data-val="amp">—</span></div>
+                                </div>
+                                <div class="sub-clock-status" data-val="status"></div>
+                            </div>
+                            <div class="sub-clock-card" data-mode="bsiso1">
+                                <div class="sub-clock-mode">BSISO1</div>
+                                <svg class="sub-clock-svg" data-clock="bsiso1"
+                                     viewBox="0 0 120 120"></svg>
+                                <div class="sub-clock-readout">
+                                    <div><span class="sub-clock-key">Date</span>
+                                         <span class="sub-clock-val" data-val="date">—</span></div>
+                                    <div><span class="sub-clock-key">Phase</span>
+                                         <span class="sub-clock-val" data-val="phase">—</span></div>
+                                    <div><span class="sub-clock-key">Amp</span>
+                                         <span class="sub-clock-val" data-val="amp">—</span></div>
+                                </div>
+                                <div class="sub-clock-status" data-val="status"></div>
+                            </div>
+                            <div class="sub-clock-card" data-mode="bsiso2">
+                                <div class="sub-clock-mode">BSISO2</div>
+                                <svg class="sub-clock-svg" data-clock="bsiso2"
+                                     viewBox="0 0 120 120"></svg>
+                                <div class="sub-clock-readout">
+                                    <div><span class="sub-clock-key">Date</span>
+                                         <span class="sub-clock-val" data-val="date">—</span></div>
+                                    <div><span class="sub-clock-key">Phase</span>
+                                         <span class="sub-clock-val" data-val="phase">—</span></div>
+                                    <div><span class="sub-clock-key">Amp</span>
+                                         <span class="sub-clock-val" data-val="amp">—</span></div>
+                                </div>
+                                <div class="sub-clock-status" data-val="status"></div>
+                            </div>
+                        </div>
                     </div>
+                    <!-- Right column: in-house combined OLR + WK-filtered
+                         Hovmöller, embedded from the RT Monitor's
+                         Subseasonal tab via subOnly=1 chrome-strip mode.
+                         Same data + colormap the RT page uses. -->
                     <div>
-                        <div style="font-size:0.66rem; opacity:0.75; text-transform:uppercase; letter-spacing:0.04em; margin-bottom:4px;">
-                            Tropical convection · last 180 days · <a href="https://www.cpc.ncep.noaa.gov/products/intraseasonal/olra_tloneq.shtml"
-                                                                       target="_blank" rel="noopener" style="color:inherit; text-decoration:underline;">CPC OLR Hovmöller ↗</a>
+                        <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:4px;">
+                            <span style="font-size:0.66rem; opacity:0.75; text-transform:uppercase; letter-spacing:0.04em;">
+                                Tropical convection · last 60 days · combined view
+                            </span>
+                            <a href="realtime_ir.html#tab=subseasonal" target="_blank" rel="noopener"
+                               style="font-size:0.66rem; color: var(--blue, #2e7dff); text-decoration:none;"
+                               title="Open the full Subseasonal page on the RT Monitor in a new tab">
+                                Open full Hovmöller ↗
+                            </a>
                         </div>
-                        <img id="sub-now-hovmoller"
-                             src="https://www.cpc.ncep.noaa.gov/products/intraseasonal/olra_tloneq.gif"
-                             alt="CPC OLR Hovmöller — last 180 days"
-                             loading="lazy"
-                             style="max-width:100%; height:auto; max-height:200px;
-                                    object-fit:contain; border-radius:4px; display:block;"
-                             onerror="this.style.display='none'; var n=document.getElementById('sub-now-hovmoller-err'); if(n) n.style.display='block';">
-                        <div id="sub-now-hovmoller-err" style="display:none; padding:8px; opacity:0.6; font-size:0.7rem;">
-                            CPC Hovmöller image unavailable. <a href="https://www.cpc.ncep.noaa.gov/products/intraseasonal/olra_tloneq.shtml"
-                                                                  target="_blank" rel="noopener">Open CPC page →</a>
-                        </div>
+                        <iframe id="sub-now-hovmoller-frame"
+                                title="TC-ATLAS combined WK-filtered OLR Hovmöller"
+                                loading="lazy"
+                                style="width:100%; height:660px; border:0; border-radius:6px;
+                                       background: var(--surface-raised, #ffffff);"></iframe>
+                        <script>
+                            // Set the iframe src after the page loads so we can append
+                            // the same daily cache-buster the RT Monitor page uses for
+                            // its own scripts/styles. Avoids the climo page loading a
+                            // stale realtime_ir.html that's missing the subOnly init
+                            // script (HTML files don't get cache-busted via window.__v
+                            // since that runs at <script> tag execution, not in src
+                            // attributes). A query param works in HTML even though the
+                            // page never reads it — it just changes the cache key.
+                            (function () {
+                                var f = document.getElementById('sub-now-hovmoller-frame');
+                                if (!f) return;
+                                var v = '?v=' + new Date().toISOString().slice(0, 13).replace(/[-T]/g, '');
+                                f.src = 'realtime_ir.html' + v + '#tab=subseasonal&subOnly=1';
+                            })();
+                        </script>
                     </div>
                 </div>
 
@@ -939,15 +991,28 @@
                     </button>
                 </div>
 
-                <div class="ace-chart-wrap" style="margin-top:8px;">
+                <div class="ace-chart-wrap" style="margin-top:8px; position:relative;">
                     <h3 class="ace-section-title">Phase diagram (PC1, PC2)
                         <span class="ace-hint" style="opacity:0.7;">Wheeler-Hendon convention · dashed circle = amp 1 threshold</span>
                     </h3>
+                    <!-- Save the PC trajectory as PNG; any active historical
+                         overlay is captured automatically since the export
+                         just rasterizes the current Plotly state. -->
+                    <button type="button" id="sub-evo-pc-save-btn"
+                            class="sub-evo-save-btn"
+                            title="Save phase diagram as PNG (includes any active historical overlay)"
+                            aria-label="Save phase diagram">⤓ Save PNG</button>
                     <div id="sub-evolution-pc-chart" class="chart-container" style="min-height: 480px;"></div>
                 </div>
 
-                <div class="ace-chart-wrap" style="margin-top:10px;">
+                <div class="ace-chart-wrap" style="margin-top:10px; position:relative;">
                     <h3 class="ace-section-title">Amplitude time series</h3>
+                    <!-- Save the amplitude time series; matches the PC chart's
+                         historical-overlay state when one is active. -->
+                    <button type="button" id="sub-evo-amp-save-btn"
+                            class="sub-evo-save-btn"
+                            title="Save amplitude time series as PNG (includes any active historical overlay)"
+                            aria-label="Save amplitude time series">⤓ Save PNG</button>
                     <div id="sub-evolution-amp-chart" class="chart-container" style="min-height: 220px;"></div>
                 </div>
             </div>
@@ -960,7 +1025,7 @@
     <!-- Scripts -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
-    <script src="subseasonal_clock.js?v=20260517b"></script>
-    <script src="tc_climatology.js?v=20260517b"></script>
+    <script src="subseasonal_clock.js?v=20260523b"></script>
+    <script src="tc_climatology.js?v=20260523b"></script>
 </body>
 </html>

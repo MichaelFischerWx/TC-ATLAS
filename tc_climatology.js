@@ -2918,27 +2918,161 @@ function _updateMapPanelText() {
 }
 
 // ── "Current state" phase-clock widget ─────────────────────────
-// Delegates to the shared SubseasonalClock module so the RT Monitor's
-// Subseasonal tab can render the same dial without code duplication.
-// The 14-day trail length is the climo-page default (RT uses 15d for
-// operational context).
+// Four phase clocks (MJO RMM / ROMI / BSISO1 / BSISO2) rendered side
+// by side using the shared SubseasonalClock module — same layout the
+// RT Monitor's Subseasonal tab uses. Each card has a save button
+// (snapshot PNG) and a click handler that opens the full phase
+// evolution modal for THAT mode.
 function _renderSubseasonalNowWidget() {
-    var svg = document.getElementById('sub-now-clock');
-    if (!svg || !_subPhases || !_subPhases.indices[_subState.mode]) return;
-    window.SubseasonalClock.render({
-        svg: svg,
-        modeRec: _subPhases.indices[_subState.mode],
-        mode: _subState.mode,
-        trailDays: 14,
-        size: 120,
-        labels: {
-            modeEl:   document.getElementById('sub-now-mode'),
-            dateEl:   document.getElementById('sub-now-date'),
-            phaseEl:  document.getElementById('sub-now-phase'),
-            ampEl:    document.getElementById('sub-now-amp'),
-            statusEl: document.getElementById('sub-now-status'),
-        },
+    if (!_subPhases || !_subPhases.indices || !window.SubseasonalClock) return;
+    var modes = ['mjo', 'mjo_omi', 'bsiso1', 'bsiso2'];
+    modes.forEach(function (mode) {
+        var card = document.querySelector(
+            '#sub-now-clock-grid .sub-clock-card[data-mode="' + mode + '"]');
+        if (!card) return;
+        var svg = card.querySelector('.sub-clock-svg');
+        var modeRec = _subPhases.indices[mode];
+        if (!svg || !modeRec) return;
+        window.SubseasonalClock.render({
+            svg: svg,
+            modeRec: modeRec,
+            mode: mode,
+            trailDays: 14,
+            size: 110,
+            labels: {
+                dateEl:   card.querySelector('[data-val="date"]'),
+                phaseEl:  card.querySelector('[data-val="phase"]'),
+                ampEl:    card.querySelector('[data-val="amp"]'),
+                statusEl: card.querySelector('[data-val="status"]'),
+            },
+        });
+        // Inject save button once. stopPropagation so the click
+        // doesn't bubble to the card-level "open evolution modal"
+        // handler.
+        if (!card.querySelector('.sub-clock-save-btn')) {
+            var sBtn = document.createElement('button');
+            sBtn.type = 'button';
+            sBtn.className = 'sub-clock-save-btn';
+            sBtn.title = 'Save this phase diagram as PNG';
+            sBtn.setAttribute('aria-label', 'Save phase diagram');
+            sBtn.innerHTML = '⤓';
+            sBtn.addEventListener('click', function (e) {
+                e.stopPropagation();
+                _saveClimoClockAsPNG(card, mode);
+            });
+            card.appendChild(sBtn);
+        }
+        // Card click opens the evolution modal for THIS mode.
+        card.onclick = function () {
+            _subState.mode = mode;
+            _openSubEvolution();
+            try { if (typeof gtag === 'function') {
+                gtag('event', 'tc_clim_sub_clock_click', { mode: mode });
+            } } catch (e) {}
+        };
     });
+}
+
+/* ── Per-clock PNG save on the climo page ─────────────────────
+   Mirrors realtime_subseasonal.js:_saveClockAsPNG. Self-contained
+   so the climo page doesn't need to reach into RT Monitor JS. */
+function _saveClimoClockAsPNG(card, mode) {
+    if (!card) return;
+    var svg = card.querySelector('.sub-clock-svg');
+    if (!svg) return;
+    try { if (typeof gtag === 'function') {
+        gtag('event', 'tc_clim_sub_save_png_clock', { mode: mode });
+    } } catch (e) {}
+
+    var modeLabel = (card.querySelector('.sub-clock-mode') || {}).textContent || mode;
+    var dateText   = (card.querySelector('[data-val="date"]')   || {}).textContent || '';
+    var phaseText  = (card.querySelector('[data-val="phase"]')  || {}).textContent || '';
+    var ampText    = (card.querySelector('[data-val="amp"]')    || {}).textContent || '';
+    var statusText = (card.querySelector('[data-val="status"]') || {}).textContent || '';
+
+    var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    var pageBg = isDark ? '#0f172a' : '#ffffff';
+    var cardBg = isDark ? '#161b24' : '#ffffff';
+    var textColor = isDark ? '#e2e8f0' : '#0f172a';
+    var dimColor  = isDark ? '#94a3b8' : '#64748b';
+
+    var SVG_PX = 110, SCALE = 2;
+    var clone = svg.cloneNode(true);
+    clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+    clone.setAttribute('width',  String(SVG_PX));
+    clone.setAttribute('height', String(SVG_PX));
+    var serialized = new XMLSerializer().serializeToString(clone);
+    var svgBlob = new Blob([serialized], { type: 'image/svg+xml;charset=utf-8' });
+    var svgUrl  = URL.createObjectURL(svgBlob);
+
+    var img = new Image();
+    img.onload = function () {
+        var W = 340, titleH = 42, padX = 18;
+        var clockY = titleH + 6, clockSize = SVG_PX;
+        var clockX = (W - clockSize) / 2;
+        var readoutY = clockY + clockSize + 10;
+        var lineH = 18;
+        var lines = [
+            'Date:  ' + dateText,
+            'Phase: ' + phaseText + '   ·   Amp: ' + ampText,
+            statusText || '',
+        ];
+        var bodyH = lines.length * lineH;
+        var footerH = 32;
+        var H = readoutY + bodyH + 14 + footerH;
+
+        var canvas = document.createElement('canvas');
+        canvas.width  = W * SCALE;
+        canvas.height = H * SCALE;
+        var ctx = canvas.getContext('2d');
+        ctx.scale(SCALE, SCALE);
+
+        ctx.fillStyle = pageBg;
+        ctx.fillRect(0, 0, W, H);
+        ctx.fillStyle = cardBg;
+        ctx.fillRect(8, 8, W - 16, H - 16);
+
+        ctx.fillStyle = textColor;
+        ctx.font = 'bold 15px "DM Sans", system-ui, sans-serif';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(modeLabel + ' · Phase Clock', padX, titleH / 2 + 6);
+
+        ctx.drawImage(img, clockX, clockY, clockSize, clockSize);
+
+        ctx.font = '12px "DM Sans", system-ui, sans-serif';
+        ctx.textBaseline = 'top';
+        lines.forEach(function (txt, i) {
+            if (!txt) return;
+            ctx.fillStyle = (i === 2) ? dimColor : textColor;
+            ctx.fillText(txt, padX, readoutY + i * lineH);
+        });
+
+        ctx.fillStyle = dimColor;
+        ctx.font = '11px "DM Sans", system-ui, sans-serif';
+        ctx.textBaseline = 'middle';
+        var todayISO = new Date().toISOString().slice(0, 10);
+        ctx.fillText('TC-ATLAS · ' + todayISO + ' · michaelfischerwx.github.io/TC-ATLAS',
+                     padX, H - footerH / 2 - 4);
+
+        canvas.toBlob(function (blob) {
+            var u = URL.createObjectURL(blob);
+            var a = document.createElement('a');
+            a.href = u;
+            a.download = 'tc-atlas-phaseclock-' + mode + '-' + todayISO + '.png';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(function () {
+                URL.revokeObjectURL(u);
+                URL.revokeObjectURL(svgUrl);
+            }, 1000);
+        }, 'image/png');
+    };
+    img.onerror = function () {
+        URL.revokeObjectURL(svgUrl);
+        console.error('[tc-clim-sub] clock SVG rasterization failed');
+    };
+    img.src = svgUrl;
 }
 
 // ── Phase Evolution modal ───────────────────────────────────────
@@ -3003,6 +3137,7 @@ function _openSubEvolution() {
     }
     m.style.display = 'flex';
     _renderSubEvolution();
+    _wireSubEvoSaveButtons();
     _ga('tc_clim_sub_evolution_open', { mode: _subState.mode, window: _subEvoWindow });
 }
 
@@ -3365,6 +3500,138 @@ function _renderSubEvolution() {
         });
     }
     Plotly.newPlot('sub-evolution-amp-chart', ampTraces, ampLayout, PLOTLY_CONFIG);
+}
+
+/* ── Phase-evolution PNG saves ─────────────────────────────────
+   The PC and amplitude charts in the Phase Evolution modal each
+   get a Save PNG button. We rasterize the live Plotly state — so
+   if the user has applied a historical year overlay, the saved
+   PNG includes both the recent trace and the analog trace exactly
+   as displayed. Output is composited with a title bar (mode +
+   window + overlay note) and a TC-ATLAS footer for attribution. */
+function _slugSubPhase(s) {
+    return (s || 'panel').toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+}
+
+function _subEvoSubtitleText() {
+    // Recover the same descriptive line shown above the chart so
+    // the saved PNG carries the same date range / overlay context
+    // without having to recompute it.
+    var subEl = document.getElementById('sub-evolution-sub');
+    if (!subEl) return '';
+    // innerHTML uses a <br> for the overlay line; collapse to " — ".
+    var html = subEl.innerHTML || '';
+    var tmp = document.createElement('div');
+    tmp.innerHTML = html.replace(/<br\s*\/?>/gi, ' — ');
+    return (tmp.textContent || '').replace(/\s+/g, ' ').trim();
+}
+
+function _saveSubEvoChart(chartId, chartLabel, btnId) {
+    var chart = document.getElementById(chartId);
+    if (!chart || typeof Plotly === 'undefined') return;
+    var btn = btnId ? document.getElementById(btnId) : null;
+    if (btn) { btn.disabled = true; btn.textContent = 'Rendering…'; }
+
+    try { if (typeof gtag === 'function') {
+        gtag('event', 'tc_clim_sub_evo_save_png',
+             { chart: chartId, mode: _subState && _subState.mode });
+    } } catch (e) {}
+
+    var rec = (_subPhases && _subPhases.indices[_subState.mode]) || {};
+    var modeLabel = rec.label || (_subState && _subState.mode) || 'Subseasonal';
+    var subtitle  = _subEvoSubtitleText();
+
+    var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    var pageBg = isDark ? '#0f172a' : '#ffffff';
+    var textColor = isDark ? '#e2e8f0' : '#0f172a';
+    var dimColor  = isDark ? '#94a3b8' : '#475569';
+
+    var rect = chart.getBoundingClientRect();
+    var SCALE = 2;
+    var pngWidth  = Math.max(800, Math.round(rect.width * SCALE));
+    var pngHeight = Math.max(360, Math.round(rect.height * SCALE));
+
+    Plotly.toImage(chart, {
+        format: 'png',
+        width:  pngWidth,
+        height: pngHeight,
+    }).then(function (url) {
+        return new Promise(function (resolve, reject) {
+            var img = new Image();
+            img.onload = function () { resolve(img); };
+            img.onerror = reject;
+            img.src = url;
+        });
+    }).then(function (img) {
+        var titleH = 64, subH = subtitle ? 36 : 0, footerH = 40;
+        var canvas = document.createElement('canvas');
+        canvas.width  = img.width;
+        canvas.height = titleH + subH + img.height + footerH;
+        var ctx = canvas.getContext('2d');
+
+        ctx.fillStyle = pageBg;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Title bar — 2× sizes for parity with the 2× Plotly raster.
+        ctx.fillStyle = textColor;
+        ctx.font = 'bold 26px "DM Sans", system-ui, sans-serif';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(modeLabel + ' · ' + chartLabel, 32, titleH / 2);
+
+        if (subtitle) {
+            ctx.fillStyle = dimColor;
+            ctx.font = '18px "DM Sans", system-ui, sans-serif';
+            ctx.fillText(subtitle, 32, titleH + subH / 2);
+        }
+
+        ctx.drawImage(img, 0, titleH + subH);
+
+        ctx.fillStyle = dimColor;
+        ctx.font = '18px "DM Sans", system-ui, sans-serif';
+        ctx.textBaseline = 'middle';
+        var todayISO = new Date().toISOString().slice(0, 10);
+        ctx.fillText('TC-ATLAS · ' + todayISO
+                     + ' · michaelfischerwx.github.io/TC-ATLAS',
+                     32, canvas.height - footerH / 2);
+
+        canvas.toBlob(function (blob) {
+            var u = URL.createObjectURL(blob);
+            var a = document.createElement('a');
+            a.href = u;
+            a.download = 'tc-atlas-' + _slugSubPhase(modeLabel) + '-'
+                + _slugSubPhase(chartLabel) + '-' + todayISO + '.png';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(function () { URL.revokeObjectURL(u); }, 1000);
+        }, 'image/png');
+    }).catch(function (err) {
+        console.error('[sub-evo] save PNG failed:', err);
+    }).finally(function () {
+        if (btn) { btn.disabled = false; btn.innerHTML = '⤓ Save PNG'; }
+    });
+}
+
+function _wireSubEvoSaveButtons() {
+    var pcBtn  = document.getElementById('sub-evo-pc-save-btn');
+    var ampBtn = document.getElementById('sub-evo-amp-save-btn');
+    if (pcBtn && !pcBtn._wired) {
+        pcBtn._wired = true;
+        pcBtn.addEventListener('click', function () {
+            _saveSubEvoChart('sub-evolution-pc-chart',
+                             'Phase diagram (PC1, PC2)',
+                             'sub-evo-pc-save-btn');
+        });
+    }
+    if (ampBtn && !ampBtn._wired) {
+        ampBtn._wired = true;
+        ampBtn.addEventListener('click', function () {
+            _saveSubEvoChart('sub-evolution-amp-chart',
+                             'Amplitude time series',
+                             'sub-evo-amp-save-btn');
+        });
+    }
 }
 
 function _renderSubseasonalSource() {
@@ -3780,13 +4047,9 @@ function _initSubseasonalOnce() {
         _renderSubseasonal();
     });
 
-    // Phase-clock widget → click opens the evolution detail modal.
-    // The whole card (SVG + readout) is wrapped in a button so any click
-    // target opens the detail view.
-    var nowTrigger = document.getElementById('sub-now-trigger');
-    if (nowTrigger) {
-        nowTrigger.addEventListener('click', _openSubEvolution);
-    }
+    // Each phase-clock card's click handler is wired inside
+    // _renderSubseasonalNowWidget (it needs the per-card mode to
+    // know which mode to open the evolution modal for).
     // Lookback-window toggle in the evolution modal
     document.querySelectorAll('#sub-evolution-window-toggle button').forEach(function (b) {
         b.addEventListener('click', function () {
