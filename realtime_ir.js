@@ -5982,26 +5982,10 @@
         var stats = _computeGenesisStats(memberKeys, members);
         _renderGenesisStatsStrip(stats, memberKeys.length);
 
-        // Source banner — tells the user whether members came from
-        // DeepMind's per-track-id grouping or our TC-ATLAS clustering,
-        // and whether we're showing the full member set or the thinned
-        // 100-per-track set that came down with the global Genesis
-        // fetch (used as a fallback when the per-track endpoint isn't
-        // deployed yet, or always for TC-ATLAS clusters).
-        var sourceBadge = '';
-        if (json._source === 'tcatlas') {
-            sourceBadge = ' · <span style="opacity:0.85;color:#f97316;">'
-                + 'clustering: TC-ATLAS (members within '
-                + _GENESIS_CLUSTER_EPS_KM + ' km)</span>';
-        } else if (json._fromCache) {
-            sourceBadge = ' · <span style="opacity:0.85;color:#f97316;">'
-                + 'thinned member set (full 1000 requires API deploy)</span>';
-        }
         subEl.innerHTML =
             '<strong>Init:</strong> ' + initLabel
             + ' · <strong>' + memberKeys.length + '</strong> ensemble members'
-            + ' · <span style="opacity:0.8;">FNV3 LARGE_ENSEMBLE</span>'
-            + sourceBadge;
+            + ' · <span style="opacity:0.8;">FNV3 LARGE_ENSEMBLE</span>';
 
         _renderGenesisMap(memberKeys, members, mean, stats);
         _renderGenesisIntensity(memberKeys, members, mean, stats);
@@ -7464,11 +7448,6 @@
             + '<button type="button" class="ir-global-method-chip" data-method="tcatlas"'
             + ' style="background:' + tcaChipBg + '; color:' + tcaChipColor + ';">'
             + 'TC-ATLAS</button>'
-            + '<span style="font-size:0.66rem; opacity:0.6; margin-left:8px;">'
-            + (dmActive
-                ? 'trusting DeepMind\'s track_id grouping'
-                : 'clustering members within ' + _GENESIS_CLUSTER_EPS_KM + ' km')
-            + '</span>'
             + '</div>';
         // Opt-in sub-toggle for the raw member spaghetti. Off by
         // default — the disturbance markers above are the canonical
