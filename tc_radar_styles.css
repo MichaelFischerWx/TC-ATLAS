@@ -2453,3 +2453,33 @@ footer a:hover { text-decoration: underline; }
 .cs-btn.is-tinted.active[data-accent="vp"]      { background: rgba(202,138,4,0.12);   border-color: rgba(202,138,4,0.50);   color: #8a5a04; }
 .cs-btn.is-tinted.active[data-accent="cfad"]    { background: rgba(124,58,237,0.10);  border-color: rgba(124,58,237,0.50);  color: #6d28d9; }
 .cs-btn.is-tinted.active[data-accent="cyan"]    { background: var(--um-orange-tint);   border-color: var(--um-orange);       color: var(--um-orange-deep); }
+
+/* === Shared touch + a11y ergonomics (applies to every page that
+   loads tc_radar_styles.css; index.html carries an inline copy). === */
+
+/* iOS Safari zooms the viewport when a focused form control is
+   <16px. pointer:coarse scopes the rule to touch devices so dense
+   desktop sidebars keep their compact metrics. */
+@media (pointer: coarse) {
+    input,
+    select,
+    textarea {
+        font-size: 16px;
+    }
+    .basin-chip,
+    .segmented button,
+    .ir-popup-btn,
+    .rt-model-toggle-btn {
+        min-height: 40px;
+    }
+}
+
+:focus-visible {
+    outline: 2px solid var(--cyan, #F47321);
+    outline-offset: 2px;
+}
+.leaflet-container :focus-visible,
+.modebar :focus-visible,
+.plotly :focus-visible {
+    outline: none;
+}

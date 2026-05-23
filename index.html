@@ -595,6 +595,24 @@
         .cite-bibtex-landing { display: inline-flex; align-items: center; gap: 6px; padding: 8px 20px; font-size: 0.875rem; font-weight: 700; font-family: 'DM Sans', sans-serif; background: var(--um-green); border: 1px solid var(--um-green); border-radius: 6px; color: #ffffff; cursor: pointer; transition: all 0.2s; }
         .cite-bibtex-landing:hover { background: var(--um-green-deep); border-color: var(--um-green-deep); }
         .cite-bibtex-landing.copied { background: rgba(34,150,100,0.12); border-color: rgba(34,150,100,0.4); color: #1e7a4e; }
+
+        /* iOS Safari zooms the viewport when a focused form control is
+           <16px. pointer:coarse scopes the rule to touch devices so
+           desktop layouts stay dense. */
+        @media (pointer: coarse) {
+            input, select, textarea { font-size: 16px; }
+            .basin-chip,
+            .segmented button,
+            .ir-popup-btn,
+            .rt-model-toggle-btn { min-height: 40px; }
+        }
+        :focus-visible {
+            outline: 2px solid var(--cyan, #F47321);
+            outline-offset: 2px;
+        }
+        .leaflet-container :focus-visible,
+        .modebar :focus-visible,
+        .plotly :focus-visible { outline: none; }
     </style>
 </head>
 <body>
