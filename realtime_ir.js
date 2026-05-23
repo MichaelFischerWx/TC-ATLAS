@@ -536,6 +536,16 @@
     var _GENESIS_TRAJ_MIN_MATCHES     = 3;
     var _GENESIS_TRAJ_OFFSET_MAX_H    = 120;  // mean |Δt| ceiling
     var _GENESIS_TRAJ_OFFSET_STD_MAX  = 18;   // stdev(Δt) ceiling
+    // Matched-span fraction. Two members are merged only when their
+    // close-point matches span at least this fraction of the IDEAL
+    // overlap window (T_horizon − |Δt|). Catches the case where two
+    // distinct storms transit the same area at the same time — they
+    // match briefly with Δt ≈ 0 (passing the offset checks above) but
+    // the matched span is a tiny fraction of either's full trajectory.
+    // A genuine same-wave pair has matches spanning most of the
+    // available overlap.
+    var _GENESIS_TRAJ_HORIZON_H       = 168;  // FNV3 LARGE_ENSEMBLE = 15d × 6h
+    var _GENESIS_TRAJ_SPAN_FRAC_MIN   = 0.5;
     var _GENESIS_MEMBER_COLOR = 'rgba(249, 115, 22, 0.12)';  // very soft so heatmap dominates
     var _GENESIS_MEAN_COLOR = '#f97316';                      // bold orange
     // Layer the genesis spaghetti pairs with by default — gives users
@@ -5653,13 +5663,15 @@
         // Per-A-point dedup so a slow-moving A track with multiple
         // consecutive points near one B point doesn't inflate the
         // count for that pair.
-        var matchStats = {};      // pairKey → { n, dtSum, dtSqSum }
-        var PROX_KM    = _GENESIS_TRAJ_PROX_KM;
-        var MIN_MATCH  = _GENESIS_TRAJ_MIN_MATCHES;
-        var OFFSET_MAX = _GENESIS_TRAJ_OFFSET_MAX_H;
-        var STD_MAX    = _GENESIS_TRAJ_OFFSET_STD_MAX;
-        var PROX_KM_SQ = PROX_KM * PROX_KM;
-        var KM_PER_DEG = 111.0;
+        var matchStats = {};      // pairKey → { n, dtSum, dtSqSum, minTauA, maxTauA }
+        var PROX_KM     = _GENESIS_TRAJ_PROX_KM;
+        var MIN_MATCH   = _GENESIS_TRAJ_MIN_MATCHES;
+        var OFFSET_MAX  = _GENESIS_TRAJ_OFFSET_MAX_H;
+        var STD_MAX     = _GENESIS_TRAJ_OFFSET_STD_MAX;
+        var HORIZON_H   = _GENESIS_TRAJ_HORIZON_H;
+        var SPAN_FRAC   = _GENESIS_TRAJ_SPAN_FRAC_MIN;
+        var PROX_KM_SQ  = PROX_KM * PROX_KM;
+        var KM_PER_DEG  = 111.0;
         function pairKey(a, b) {
             // a, b ordered: a < b (we only consider that direction
             // in the matching loop, so this stays consistent).
@@ -5696,12 +5708,15 @@
                                 var dt = other.tau - ap.tau;
                                 var rec = matchStats[pk];
                                 if (!rec) {
-                                    rec = { n: 0, dtSum: 0, dtSqSum: 0 };
+                                    rec = { n: 0, dtSum: 0, dtSqSum: 0,
+                                            minTauA: ap.tau, maxTauA: ap.tau };
                                     matchStats[pk] = rec;
                                 }
                                 rec.n++;
                                 rec.dtSum   += dt;
                                 rec.dtSqSum += dt * dt;
+                                if (ap.tau < rec.minTauA) rec.minTauA = ap.tau;
+                                if (ap.tau > rec.maxTauA) rec.maxTauA = ap.tau;
                             }
                         }
                     }
@@ -5732,10 +5747,20 @@
             var rec = matchStats[pkStr];
             if (rec.n < MIN_MATCH) return;
             var meanDt = rec.dtSum / rec.n;
-            if (Math.abs(meanDt) > OFFSET_MAX) return;
+            var absDt = Math.abs(meanDt);
+            if (absDt > OFFSET_MAX) return;
             var variance = (rec.dtSqSum / rec.n) - meanDt * meanDt;
             var stdDt = Math.sqrt(Math.max(0, variance));
             if (stdDt > STD_MAX) return;
+            // Matched-span check: the time range over which the two
+            // tracks were close must be a meaningful fraction of the
+            // ideal-overlap window. For two tracks offset by k hours
+            // in a T-hour forecast, the most they CAN overlap is
+            // (T − |k|) hours. We require ≥ SPAN_FRAC of that.
+            // Brief coincidental crossings (small matched span) fail.
+            var matchedSpan = rec.maxTauA - rec.minTauA;
+            var idealSpan = Math.max(1, HORIZON_H - absDt);
+            if (matchedSpan / idealSpan < SPAN_FRAC) return;
             var pk = +pkStr;
             var lo = Math.floor(pk / 10000);
             var hi = pk % 10000;

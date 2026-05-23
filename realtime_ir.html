@@ -44,8 +44,11 @@
     <link rel="preconnect" href="https://cdn.plot.ly">
     <link rel="preconnect" href="https://tc-atlas-api-361010099051.us-east1.run.app">
 
-    <!-- Cache-busting: daily timestamp appended to local CSS/JS URLs -->
-    <script>window.__v='?v='+new Date().toISOString().slice(0,13).replace(/[-T]/g,'');</script>
+    <!-- Cache-busting: minute-resolution timestamp on local CSS/JS URLs.
+         Bumped from hour to minute so fast iteration on the genesis
+         clustering (or any other path) doesn't get masked by browser
+         caches when multiple commits land in the same hour. -->
+    <script>window.__v='?v='+new Date().toISOString().slice(0,16).replace(/[-T:]/g,'');</script>
 
     <!-- Iframe-embed mode: when the URL hash contains `subOnly=1` the
          page is being embedded by a parent (the climo page's
