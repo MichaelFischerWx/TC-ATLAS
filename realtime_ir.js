@@ -5429,8 +5429,20 @@
                         opacity: 1.0,
                         // Solid (no dashArray) so the mean reads as a
                         // bold spine on top of the probability heatmap.
-                        interactive: false
+                        // Clickable so the user can drill the full
+                        // 1000-member detail modal from any point on
+                        // the mean track (not just the genesis marker).
+                        interactive: true,
+                        bubblingMouseEvents: false
                     }).addTo(map);
+                    (function (id) {
+                        meanLine.on('click', function (e) {
+                            if (L.DomEvent && L.DomEvent.stopPropagation) {
+                                L.DomEvent.stopPropagation(e);
+                            }
+                            openGenesisDetail(id);
+                        });
+                    })(trackId);
                     _rtGenesisLayers.push(meanLine);
                 }
 
@@ -5449,6 +5461,7 @@
                     label += '<br>Ensemble-mean peak: +' + lmiPt.tau + 'h · '
                         + lmiWind.toFixed(0) + ' kt · ' + windToCategory(lmiWind);
                 }
+                label += '<br><span style="opacity:0.75;">Click for full 1000-member detail →</span>';
                 var marker = L.circleMarker([p0.lat, p0.lon], {
                     radius: 5,
                     color: '#fff',
@@ -5459,9 +5472,468 @@
                     interactive: true
                 }).addTo(map);
                 marker.bindTooltip(label, { direction: 'top', offset: [0, -7] });
+                (function (id) {
+                    marker.on('click', function (e) {
+                        if (L.DomEvent && L.DomEvent.stopPropagation) {
+                            L.DomEvent.stopPropagation(e);
+                        }
+                        openGenesisDetail(id);
+                    });
+                })(trackId);
                 _rtGenesisLayers.push(marker);
             }
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  GENESIS-TRACK DETAIL MODAL (full 1000-member view)
+    // ═══════════════════════════════════════════════════════════
+    //  Click any genesis spaghetti track → fetches /weatherlab-genesis/
+    //  {track_id} for the FULL member set and renders two Plotly
+    //  figures matching the colleague's matplotlib reference:
+    //    1. Basin scattergeo: mean track (intensity-colored markers)
+    //       on top of a 1000-member point cloud also colored by intensity
+    //    2. Time series: per-member Vmax(t) scatter + mean line +
+    //       ±0.5σ / ±1σ / ±2.5σ ribbons
+    //
+    //  The modal scaffolding mirrors rt-evo-modal — a single absolute-
+    //  positioned overlay built lazily on first open.
+
+    var _genesisDetailCache = {};   // track_id → JSON
+    var _GENESIS_MODAL_ID = 'rt-genesis-detail-modal';
+
+    function _ensureGenesisDetailModal() {
+        var m = document.getElementById(_GENESIS_MODAL_ID);
+        if (m) return m;
+        m = document.createElement('div');
+        m.id = _GENESIS_MODAL_ID;
+        m.className = 'rt-genesis-modal';
+        m.style.display = 'none';
+        m.innerHTML =
+            '<div class="rt-genesis-modal-content">' +
+              '<div class="rt-genesis-modal-header">' +
+                '<div>' +
+                  '<h2 id="rt-genesis-modal-title">DeepMind genesis ensemble</h2>' +
+                  '<p id="rt-genesis-modal-sub"></p>' +
+                '</div>' +
+                '<button type="button" class="rt-genesis-modal-close" aria-label="Close" title="Close (Esc)">×</button>' +
+              '</div>' +
+              '<div class="rt-genesis-modal-body">' +
+                '<div class="rt-genesis-modal-chart-wrap" style="position:relative;">' +
+                  '<button type="button" id="rt-genesis-map-save" class="rt-genesis-modal-save" title="Save track map as PNG">⤓ PNG</button>' +
+                  '<div id="rt-genesis-modal-map" style="width:100%; height:520px;"></div>' +
+                '</div>' +
+                '<div class="rt-genesis-modal-chart-wrap" style="position:relative; margin-top:14px;">' +
+                  '<button type="button" id="rt-genesis-int-save" class="rt-genesis-modal-save" title="Save intensity time series as PNG">⤓ PNG</button>' +
+                  '<div id="rt-genesis-modal-int" style="width:100%; height:360px;"></div>' +
+                '</div>' +
+              '</div>' +
+            '</div>';
+        document.body.appendChild(m);
+        m.addEventListener('click', function (e) {
+            if (e.target === m) closeGenesisDetail();
+        });
+        m.querySelector('.rt-genesis-modal-close')
+            .addEventListener('click', closeGenesisDetail);
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape' && m.style.display !== 'none') {
+                closeGenesisDetail();
+            }
+        });
+        m.querySelector('#rt-genesis-map-save').addEventListener('click', function () {
+            _genesisSavePNG('rt-genesis-modal-map', 'tracks');
+        });
+        m.querySelector('#rt-genesis-int-save').addEventListener('click', function () {
+            _genesisSavePNG('rt-genesis-modal-int', 'intensity');
+        });
+        return m;
+    }
+
+    function closeGenesisDetail() {
+        var m = document.getElementById(_GENESIS_MODAL_ID);
+        if (!m) return;
+        m.style.display = 'none';
+        document.body.style.overflow = '';
+        _ga('rt_genesis_detail_close');
+    }
+    window.closeGenesisDetail = closeGenesisDetail;
+
+    function openGenesisDetail(trackId) {
+        var m = _ensureGenesisDetailModal();
+        var titleEl = m.querySelector('#rt-genesis-modal-title');
+        var subEl   = m.querySelector('#rt-genesis-modal-sub');
+        titleEl.textContent = 'Genesis track ' + trackId
+                            + ' · FNV3 1000-member ensemble';
+        subEl.innerHTML = 'Loading 1000 ensemble members…';
+        m.style.display = 'flex';
+        document.body.style.overflow = 'hidden';
+        _ga('rt_genesis_detail_open', { track_id: trackId });
+
+        var cached = _genesisDetailCache[trackId];
+        var prom = cached
+            ? Promise.resolve(cached)
+            : fetch(API_BASE + '/ir-monitor/weatherlab-genesis/'
+                    + encodeURIComponent(trackId),
+                    { cache: 'no-store' })
+                .then(function (r) {
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    return r.json();
+                })
+                .then(function (json) {
+                    _genesisDetailCache[trackId] = json;
+                    return json;
+                });
+
+        prom.then(function (json) {
+            _renderGenesisDetail(json);
+        }).catch(function (err) {
+            subEl.innerHTML = '<span style="color:#ef4444;">'
+                + 'Could not load detail: ' + (err.message || err) + '</span>';
+        });
+    }
+    window.openGenesisDetail = openGenesisDetail;
+
+    function _renderGenesisDetail(json) {
+        var m = document.getElementById(_GENESIS_MODAL_ID);
+        if (!m) return;
+        var subEl = m.querySelector('#rt-genesis-modal-sub');
+        var members = json.members || {};
+        var memberKeys = Object.keys(members);
+        var mean = json.ensemble_mean || { points: [] };
+        var init = json.init_time || '';
+        var initLabel = init
+            ? init.slice(0, 4) + '-' + init.slice(4, 6) + '-' + init.slice(6, 8)
+              + ' ' + init.slice(8, 10) + 'Z'
+            : '(unknown init)';
+        // Peak ensemble-mean Vmax for the header line.
+        var peakWind = -1, peakTau = null;
+        for (var i = 0; i < mean.points.length; i++) {
+            if (mean.points[i].wind != null && mean.points[i].wind > peakWind) {
+                peakWind = mean.points[i].wind;
+                peakTau = mean.points[i].tau;
+            }
+        }
+        var peakLine = peakWind >= 0
+            ? 'Peak ensemble-mean Vmax: ' + peakWind.toFixed(0) + ' kt ('
+              + windToCategory(peakWind) + ') at +' + peakTau + 'h.'
+            : '';
+        subEl.innerHTML =
+            '<strong>Init:</strong> ' + initLabel
+            + ' · <strong>' + memberKeys.length + '</strong> members · '
+            + peakLine;
+
+        _renderGenesisMap(memberKeys, members, mean);
+        _renderGenesisIntensity(memberKeys, members, mean);
+    }
+
+    // Build the basin map: 1000 member points + mean track overlay,
+    // both colored by Vmax via the SS scale.
+    function _renderGenesisMap(memberKeys, members, mean) {
+        var el = document.getElementById('rt-genesis-modal-map');
+        if (!el || typeof Plotly === 'undefined') return;
+        var lons = [], lats = [], winds = [];
+        for (var i = 0; i < memberKeys.length; i++) {
+            var pts = members[memberKeys[i]].points || [];
+            for (var j = 0; j < pts.length; j++) {
+                var p = pts[j];
+                if (p.lat == null || p.lon == null) continue;
+                lons.push(p.lon);
+                lats.push(p.lat);
+                winds.push(p.wind != null ? p.wind : 0);
+            }
+        }
+        var meanLons = [], meanLats = [], meanWinds = [];
+        for (var k = 0; k < mean.points.length; k++) {
+            var mp = mean.points[k];
+            meanLons.push(mp.lon);
+            meanLats.push(mp.lat);
+            meanWinds.push(mp.wind != null ? mp.wind : 0);
+        }
+        // SS-style intensity scale ramp (TD→C5) mapped onto 0..200 kt.
+        var ssScale = [
+            [0,           '#60a5fa'],   // TD
+            [34/200,      '#34d399'],   // TS
+            [64/200,      '#fbbf24'],   // C1
+            [83/200,      '#fb923c'],   // C2
+            [96/200,      '#ef4444'],   // C3
+            [113/200,     '#c430a0'],   // C4
+            [137/200,     '#8b5cf6'],   // C5
+            [1,           '#8b5cf6'],
+        ];
+        var bounds = _genesisBoundsFromMean(meanLats, meanLons);
+        var cloud = {
+            type: 'scattergeo', mode: 'markers',
+            lon: lons, lat: lats,
+            marker: {
+                size: 3,
+                color: winds,
+                colorscale: ssScale,
+                cmin: 0, cmax: 200,
+                opacity: 0.45,
+                showscale: false,
+                line: { width: 0 },
+            },
+            name: '1000 ensemble members',
+            hoverinfo: 'skip',
+        };
+        var meanLine = {
+            type: 'scattergeo', mode: 'lines',
+            lon: meanLons, lat: meanLats,
+            line: { color: '#0f172a', width: 2.5 },
+            name: 'Ensemble mean',
+            hoverinfo: 'skip',
+        };
+        var meanMarkers = {
+            type: 'scattergeo', mode: 'markers',
+            lon: meanLons, lat: meanLats,
+            marker: {
+                size: 11,
+                color: meanWinds,
+                colorscale: ssScale,
+                cmin: 0, cmax: 200,
+                line: { color: '#0f172a', width: 1.2 },
+                colorbar: {
+                    title: { text: 'Vmax (kt)', side: 'right',
+                             font: { size: 11 } },
+                    thickness: 12, len: 0.85,
+                    tickvals: [0, 25, 50, 75, 100, 125, 150, 175, 200],
+                    tickfont: { size: 10 },
+                },
+                showscale: true,
+            },
+            text: meanWinds.map(function (w, idx) {
+                return '+' + mean.points[idx].tau + 'h<br>' + w.toFixed(0) + ' kt ('
+                    + windToCategory(w) + ')';
+            }),
+            hovertemplate: '%{text}<br>%{lat:.1f}°N, %{lon:.1f}°E<extra></extra>',
+            name: 'Ensemble mean',
+        };
+        var layout = {
+            margin: { l: 0, r: 0, t: 6, b: 0 },
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            geo: {
+                projection: { type: 'mercator' },
+                lonaxis: { range: bounds.lon, showgrid: true,
+                           gridcolor: 'rgba(120,120,120,0.25)', dtick: 5 },
+                lataxis: { range: bounds.lat, showgrid: true,
+                           gridcolor: 'rgba(120,120,120,0.25)', dtick: 5 },
+                showland: true, landcolor: '#d9d0b8',
+                showocean: true, oceancolor: '#bcd9d6',
+                showcountries: true, countrycolor: 'rgba(0,0,0,0.35)',
+                coastlinecolor: 'rgba(0,0,0,0.55)', coastlinewidth: 0.7,
+                showcoastlines: true,
+                bgcolor: 'rgba(0,0,0,0)',
+            },
+            showlegend: false,
+        };
+        Plotly.react(el, [cloud, meanLine, meanMarkers], layout,
+                     { responsive: true, displayModeBar: false });
+    }
+
+    // Build the intensity time series: per-member dots + ensemble mean
+    // line (intensity-colored markers) + ±0.5σ / ±1σ / ±2.5σ ribbons.
+    function _renderGenesisIntensity(memberKeys, members, mean) {
+        var el = document.getElementById('rt-genesis-modal-int');
+        if (!el || typeof Plotly === 'undefined') return;
+        // Bucket member Vmax by tau for ribbon stats + dot scatter.
+        var byTau = {};
+        for (var i = 0; i < memberKeys.length; i++) {
+            var pts = members[memberKeys[i]].points || [];
+            for (var j = 0; j < pts.length; j++) {
+                if (pts[j].wind == null) continue;
+                var t = pts[j].tau;
+                if (!byTau[t]) byTau[t] = [];
+                byTau[t].push(pts[j].wind);
+            }
+        }
+        var taus = Object.keys(byTau).map(Number).sort(function (a, b) {
+            return a - b;
+        });
+        var meanArr = [], stdArr = [];
+        for (var ti = 0; ti < taus.length; ti++) {
+            var arr = byTau[taus[ti]];
+            var sum = 0;
+            for (var s = 0; s < arr.length; s++) sum += arr[s];
+            var mu = sum / arr.length;
+            var ss = 0;
+            for (var s2 = 0; s2 < arr.length; s2++) {
+                var d = arr[s2] - mu;
+                ss += d * d;
+            }
+            meanArr.push(mu);
+            stdArr.push(Math.sqrt(ss / arr.length));
+        }
+        // Map taus to ISO datetime if we have the init time embedded
+        // in the ensemble-mean points; fall back to "+Xh" labels.
+        var meanByTau = {};
+        for (var mi = 0; mi < mean.points.length; mi++) {
+            meanByTau[mean.points[mi].tau] = mean.points[mi];
+        }
+        // Build x-axis values: use ISO date if we can derive it from
+        // init_time; otherwise just use tau hours. The init lives on
+        // the parent json; recover it via the closure-shared meanArr's
+        // first point — quick read from the DOM modal subtitle isn't
+        // available here so we just use tau labels for safety.
+        // (Init-time labeling is cosmetic; the analyst reads either.)
+        var xVals = taus.map(function (t) { return '+' + t + 'h'; });
+        // Member scatter — flat list of (x, y).
+        var scatX = [], scatY = [], scatColors = [];
+        var ssColor = function (w) {
+            if (w < 34)  return 'rgba(96,165,250,0.20)';   // TD
+            if (w < 64)  return 'rgba(52,211,153,0.22)';   // TS
+            if (w < 83)  return 'rgba(251,191,36,0.30)';   // C1
+            if (w < 96)  return 'rgba(251,146,60,0.35)';   // C2
+            if (w < 113) return 'rgba(239,68,68,0.40)';    // C3
+            if (w < 137) return 'rgba(196,48,160,0.45)';   // C4
+            return            'rgba(139,92,246,0.50)';     // C5
+        };
+        for (var ti2 = 0; ti2 < taus.length; ti2++) {
+            var arr2 = byTau[taus[ti2]];
+            for (var k2 = 0; k2 < arr2.length; k2++) {
+                scatX.push(xVals[ti2]);
+                scatY.push(arr2[k2]);
+                scatColors.push(ssColor(arr2[k2]));
+            }
+        }
+        // Ribbons: paired (low, high) traces with fill: 'tonexty'.
+        function ribbon(mult, fillColor) {
+            var hi = [], lo = [];
+            for (var i = 0; i < taus.length; i++) {
+                hi.push(meanArr[i] + mult * stdArr[i]);
+                lo.push(Math.max(0, meanArr[i] - mult * stdArr[i]));
+            }
+            return [
+                { type: 'scatter', mode: 'lines',
+                  x: xVals, y: lo,
+                  line: { color: 'rgba(0,0,0,0)' },
+                  showlegend: false, hoverinfo: 'skip' },
+                { type: 'scatter', mode: 'lines',
+                  x: xVals, y: hi,
+                  line: { color: 'rgba(0,0,0,0)' },
+                  fill: 'tonexty', fillcolor: fillColor,
+                  name: '±' + mult + 'σ', hoverinfo: 'skip',
+                  showlegend: true },
+            ];
+        }
+        var ssScale = [
+            [0,           '#60a5fa'],
+            [34/200,      '#34d399'],
+            [64/200,      '#fbbf24'],
+            [83/200,      '#fb923c'],
+            [96/200,      '#ef4444'],
+            [113/200,     '#c430a0'],
+            [137/200,     '#8b5cf6'],
+            [1,           '#8b5cf6'],
+        ];
+        // Ribbons stack widest → narrowest so the narrower ones paint
+        // on top of the wider envelope.
+        var traces = [].concat(
+            ribbon(2.5, 'rgba(34,197,94,0.08)'),
+            ribbon(1.0, 'rgba(34,197,94,0.16)'),
+            ribbon(0.5, 'rgba(34,197,94,0.28)')
+        );
+        traces.push({
+            type: 'scatter', mode: 'markers',
+            x: scatX, y: scatY,
+            marker: {
+                size: 3.2,
+                color: scatColors,
+                line: { width: 0 },
+            },
+            showlegend: true,
+            name: 'Members',
+            hoverinfo: 'skip',
+        });
+        traces.push({
+            type: 'scatter', mode: 'lines+markers',
+            x: xVals, y: meanArr,
+            line: { color: '#0f172a', width: 2 },
+            marker: {
+                size: 9,
+                color: meanArr,
+                colorscale: ssScale,
+                cmin: 0, cmax: 200,
+                line: { color: '#0f172a', width: 1 },
+                showscale: false,
+            },
+            name: 'Ensemble mean',
+            hovertemplate: '%{x}<br>%{y:.1f} kt<extra></extra>',
+        });
+        var layout = {
+            margin: { l: 55, r: 16, t: 6, b: 80 },
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: 'rgba(255,255,255,0.4)',
+            xaxis: { title: { text: 'Lead time', font: { size: 11 } },
+                     tickfont: { size: 10 },
+                     gridcolor: 'rgba(0,0,0,0.06)' },
+            yaxis: { title: { text: 'Vmax (kt)', font: { size: 11 } },
+                     range: [0, Math.max(160, Math.max.apply(null, scatY) + 10)],
+                     gridcolor: 'rgba(0,0,0,0.06)' },
+            // SS threshold lines.
+            shapes: [
+                { type: 'line', xref: 'paper', x0: 0, x1: 1,
+                  yref: 'y', y0: 34, y1: 34,
+                  line: { color: 'rgba(0,0,0,0.18)', dash: 'dot', width: 1 } },
+                { type: 'line', xref: 'paper', x0: 0, x1: 1,
+                  yref: 'y', y0: 64, y1: 64,
+                  line: { color: 'rgba(0,0,0,0.18)', dash: 'dot', width: 1 } },
+                { type: 'line', xref: 'paper', x0: 0, x1: 1,
+                  yref: 'y', y0: 96, y1: 96,
+                  line: { color: 'rgba(0,0,0,0.18)', dash: 'dot', width: 1 } },
+                { type: 'line', xref: 'paper', x0: 0, x1: 1,
+                  yref: 'y', y0: 113, y1: 113,
+                  line: { color: 'rgba(0,0,0,0.18)', dash: 'dot', width: 1 } },
+            ],
+            legend: {
+                orientation: 'h', yanchor: 'top', y: -0.18,
+                xanchor: 'left',  x: 0,
+                font: { size: 10 },
+            },
+            font: { family: 'DM Sans, system-ui, sans-serif',
+                    color: '#0f172a', size: 11 },
+        };
+        Plotly.react(el, traces, layout,
+                     { responsive: true, displayModeBar: false });
+    }
+
+    // Compute a basin window centred on the mean track + padding so the
+    // map domain matches the colleague's reference (~25° lon × 35° lat).
+    function _genesisBoundsFromMean(meanLats, meanLons) {
+        if (!meanLats.length) {
+            return { lat: [-10, 50], lon: [100, 180] };
+        }
+        var latMin = Math.min.apply(null, meanLats);
+        var latMax = Math.max.apply(null, meanLats);
+        var lonMin = Math.min.apply(null, meanLons);
+        var lonMax = Math.max.apply(null, meanLons);
+        // Pad ±6° for the ensemble cloud, with floor minima so a stationary
+        // mean track still gets a usable window.
+        var lpad = Math.max(6, 0.25 * (latMax - latMin));
+        var npad = Math.max(8, 0.30 * (lonMax - lonMin));
+        return {
+            lat: [Math.max(-80, latMin - lpad), Math.min(80, latMax + lpad)],
+            lon: [lonMin - npad, lonMax + npad],
+        };
+    }
+
+    function _genesisSavePNG(elId, slug) {
+        var el = document.getElementById(elId);
+        if (!el || typeof Plotly === 'undefined') return;
+        var rect = el.getBoundingClientRect();
+        var dateISO = new Date().toISOString().slice(0, 10);
+        Plotly.toImage(el, {
+            format: 'png',
+            width: Math.round(rect.width * 2),
+            height: Math.round(rect.height * 2),
+        }).then(function (url) {
+            var a = document.createElement('a');
+            a.href = url;
+            a.download = 'tc-atlas-genesis-' + slug + '-' + dateISO + '.png';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }).catch(function () { /* silent */ });
+        _ga('rt_genesis_save_png', { chart: slug });
     }
 
     function _loadGenesis() {

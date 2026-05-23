@@ -4565,6 +4565,63 @@ def get_weatherlab_genesis(max_members: int = 100):
     )
 
 
+@router.get("/weatherlab-genesis/{track_id}")
+def get_weatherlab_genesis_track(track_id: str):
+    """Per-track detail for a single FNV3 LARGE_ENSEMBLE cyclogenesis
+    feature. Returns ALL ensemble members for the track (vs the global
+    endpoint which thins to 100 to keep the spaghetti layer from
+    tanking Leaflet). Drives the click-through detail modal that
+    renders the colleague's point-cloud + intensity-spread figures
+    for pre-genesis disturbances.
+
+    Reuses _fetch_weatherlab_genesis_csv's per-init cache so even a
+    cold per-track lookup is one filter on the already-parsed dict.
+    """
+    track_id = track_id.strip()
+    if not track_id:
+        raise HTTPException(status_code=400, detail="track_id is required")
+
+    now = _dt.now(timezone.utc)
+    candidates = []
+    for day_offset in (0, 1):
+        dt = now - timedelta(days=day_offset)
+        date_str = dt.strftime("%Y-%m-%d")
+        for hour in ("18", "12", "06", "00"):
+            candidates.append((date_str, hour))
+
+    data = None
+    used_date = None
+    used_hour = None
+    for date_str, hour_str in candidates:
+        d = _fetch_weatherlab_genesis_csv(date_str, hour_str)
+        if d and track_id in d:
+            data = d
+            used_date = date_str
+            used_hour = hour_str
+            break
+
+    if data is None or track_id not in data:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Genesis track {track_id} not found in any recent init",
+        )
+
+    storm = data[track_id]
+    init_time = used_date.replace("-", "") + used_hour
+    members = storm["members"]
+    return JSONResponse(
+        content={
+            "model": "DeepMind FNV3 LARGE_ENSEMBLE",
+            "init_time": init_time,
+            "track_id": track_id,
+            "n_members": len(members),
+            "members": members,
+            "ensemble_mean": storm["ensemble_mean"],
+        },
+        headers={"Cache-Control": "public, max-age=900"},
+    )
+
+
 # ---------------------------------------------------------------------------
 # DeepMind 1000-Member Large Ensemble (Intensity Distributions)
 # ---------------------------------------------------------------------------

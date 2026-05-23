@@ -2390,6 +2390,107 @@ html:not([data-view="map"]) #ir-global-env-cbars {
 }
 
 /* ════════════════════════════════════════════════════════════════
+   FNV3 LARGE_ENSEMBLE genesis detail modal.
+   Opens when a user clicks any genesis spaghetti track on the
+   Global Map. Two Plotly figures: a basin scattergeo + an
+   intensity-vs-lead-time chart with ±σ ribbons. Layout mirrors
+   the rt-evo-modal scaffolding so the visual language stays
+   consistent across the page's modal family.
+   ════════════════════════════════════════════════════════════════ */
+.rt-genesis-modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    z-index: 1600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+}
+.rt-genesis-modal-content {
+    position: relative;
+    width: min(1200px, 100%);
+    max-height: 92vh;
+    background: var(--surface, #ffffff);
+    border-radius: 8px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+    overflow: auto;
+    padding: 18px 22px 22px;
+}
+.rt-genesis-modal-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+.rt-genesis-modal-header h2 {
+    margin: 0 0 4px 0;
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--text, #0f172a);
+}
+.rt-genesis-modal-header p {
+    margin: 0;
+    font-size: 0.78rem;
+    color: var(--text-dim, #64748b);
+    line-height: 1.4;
+}
+.rt-genesis-modal-close {
+    flex-shrink: 0;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    border: 1px solid rgba(0, 0, 0, 0.18);
+    background: rgba(255, 255, 255, 0.92);
+    color: #0f172a;
+    font-size: 1.5rem;
+    line-height: 1;
+    cursor: pointer;
+    transition: background 0.15s, transform 0.15s;
+}
+.rt-genesis-modal-close:hover {
+    background: #fff;
+    transform: scale(1.05);
+}
+.rt-genesis-modal-save {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    z-index: 3;
+    padding: 4px 10px;
+    font-family: inherit;
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--text, #0f172a);
+    background: rgba(46, 125, 255, 0.12);
+    border: 1px solid var(--border, rgba(0, 0, 0, 0.12));
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+.rt-genesis-modal-save:hover {
+    background: rgba(46, 125, 255, 0.28);
+    border-color: rgba(46, 125, 255, 0.55);
+}
+[data-theme="dark"] .rt-genesis-modal-content {
+    background: #0f172a;
+    color: #e2e8f0;
+}
+[data-theme="dark"] .rt-genesis-modal-header h2 { color: #e2e8f0; }
+[data-theme="dark"] .rt-genesis-modal-header p  { color: #94a3b8; }
+[data-theme="dark"] .rt-genesis-modal-close {
+    background: rgba(15, 23, 42, 0.92);
+    color: #e2e8f0;
+    border-color: rgba(255, 255, 255, 0.18);
+}
+[data-theme="dark"] .rt-genesis-modal-save {
+    background: rgba(46, 125, 255, 0.22);
+    color: #e2e8f0;
+    border-color: rgba(148, 163, 184, 0.3);
+}
+
+/* ════════════════════════════════════════════════════════════════
    subOnly=1 iframe-embed mode. Strips all chrome and reduces the
    Subseasonal tab to just the combined Hovmöller, so the climo
    page can embed this page inline and get our own WK-filtered
