@@ -5509,8 +5509,27 @@
         // regions where the wind field is finite but the displayed
         // shading is transparent — visual mismatch.
         p.zGrid = f && f.z ? f.z : null;
-        p.gridCfg = _evoParticleCaptureGridCfg();
+        var newCfg = _evoParticleCaptureGridCfg();
+        var oldCfg = p.gridCfg;
+        // Detect a grid swap (basin change, HD promotion). When it
+        // fires, the particles' lat/lon — sampled from the OLD viewport
+        // — are usually outside the NEW grid's data extent, which makes
+        // uvAt return null and clusters survivors into the small lon
+        // window that happens to overlap both grids. Marking every
+        // particle as past its lifetime forces a clean respawn into
+        // the new viewport on the next tick, restoring uniform
+        // distribution after a basin switch.
+        var gridChanged = !oldCfg ||
+            oldCfg.lonMin !== newCfg.lonMin || oldCfg.lonMax !== newCfg.lonMax ||
+            oldCfg.latMin !== newCfg.latMin || oldCfg.latMax !== newCfg.latMax ||
+            oldCfg.cell   !== newCfg.cell;
+        p.gridCfg = newCfg;
         p.viewport = _evoComputeViewport(document.getElementById('seasonal-evo-map'));
+        if (gridChanged && p.lat) {
+            for (var i = 0; i < p.lat.length; i++) {
+                p.age[i] = _EVO_PCL_MAX_AGE + 1;   // queue respawn
+            }
+        }
     }
 
     function _evoParticleStart() {
@@ -5530,6 +5549,7 @@
         cancelAnimationFrame(p.rafId);
         p.rafId = requestAnimationFrame(_evoParticleTick);
     }
+
 
     function _evoParticleStop() {
         var p = _evoParticles;
@@ -5628,13 +5648,16 @@
             var dLat = uv.v * stepDeg;
             var newLat = lat + dLat;
             var newLon = lon + dLon;
-            // Tight viewport bound — respawn the moment a particle
-            // crosses the visible axis edge instead of letting it
-            // drift up to 4° past. The +0.25° slack is just so a
-            // particle that lands exactly on the edge from float
-            // round-off doesn't ping-pong between live and respawn.
-            if (newLat > viewport.y[1] + 0.25 || newLat < viewport.y[0] - 0.25
-                || newLon > viewport.x[1] + 0.25 || newLon < viewport.x[0] - 0.25) {
+            // Moderate viewport bound. +0.25° was too tight — at HD
+            // resolution a single step in fast winds (40 m/s × 0.05 /
+            // cos(30°) ≈ 2.3°) cleared the bound, so edge particles
+            // ping-ponged into the spawn loop and rarely accumulated
+            // visible trail. +2° keeps the past-data clip honest (the
+            // uvAt + zFinite checks below still kill anything past the
+            // data extent) while letting fast-wind particles draw a
+            // few segments past the axis edge before respawning.
+            if (newLat > viewport.y[1] + 2 || newLat < viewport.y[0] - 2
+                || newLon > viewport.x[1] + 2 || newLon < viewport.x[0] - 2) {
                 _evoParticleSpawn(i, viewport);
                 continue;
             }
@@ -6298,6 +6321,17 @@
             // projection function picks up the new zoom/pan without
             // doing per-particle _fullLayout dives.
             _evoParticleCacheProjection();
+        } else if (_evoState.showStreamlines && !_evoParticles.running
+                   && uv && uv.u) {
+            // Recovery path: the toggle is ON but the animation isn't
+            // running. This happens when the user toggled particles on
+            // BEFORE the tile fetches finished (e.g. just after a basin
+            // change re-loaded data). _evoParticleStart silently early-
+            // returned because syncField couldn't get a uGrid; now the
+            // data is here, so re-start. Without this, particles can
+            // appear permanently dead for the current basin even though
+            // the toggle reads as active.
+            _evoParticleStart();
         }
         // Update the sampling pill (lives next to the date readout).
         var pill = document.getElementById('seasonal-evo-sampling');
