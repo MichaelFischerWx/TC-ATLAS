@@ -517,34 +517,34 @@
     var _genesisClusterMethod = 'deepmind';
     var _GENESIS_CLUSTER_MIN_MEMBERS = 50; // = 5% of 1000 — matches the
                                             // _GENESIS_MIN_FRACTION cutoff
-    // Trajectory-overlap clustering tunables. Two member tracks are
-    // considered the same physical feature when:
-    //   (a) ≥ _MIN_MATCHES of their points come within _PROX_KM of
-    //       each other, AND
-    //   (b) the time offsets Δt = (t_B - t_A) of those matches are
-    //       CONSISTENT — mean |Δt| ≤ _OFFSET_MAX_H and stdev ≤
-    //       _OFFSET_STD_MAX_H. A consistent offset is the signature
-    //       of "B is just A's track shifted by ~k hours" (same wave,
-    //       different stage). Scattered offsets indicate "the two
-    //       tracks happened to cross paths" (unrelated storms).
+    // Density-based clustering tunables.
     //
-    // Without the consistency check we over-merged: a WPac storm
-    // passing through the Philippines at +24 h would lump with a
-    // separate Philippines disturbance sitting at the same lat/lon
-    // at +120 h, because the loose any-offset match fired.
-    var _GENESIS_TRAJ_PROX_KM         = 250;
-    var _GENESIS_TRAJ_MIN_MATCHES     = 3;
-    var _GENESIS_TRAJ_OFFSET_MAX_H    = 120;  // mean |Δt| ceiling
-    var _GENESIS_TRAJ_OFFSET_STD_MAX  = 18;   // stdev(Δt) ceiling
-    // Matched-span fraction. Two members are merged only when their
-    // close-point matches span at least this fraction of the realistic
-    // overlap window for the pair — derived per-pair as
-    // min(durationA, durationB) − |Δt|, NOT against a global horizon
-    // (which over-rejected members with short forecast tracks). A
-    // genuine same-wave pair has matches spanning most of that
-    // available overlap; a brief coincidental crossing has a tiny
-    // matched span vs the same ideal.
-    var _GENESIS_TRAJ_SPAN_FRAC_MIN   = 0.5;
+    // Algorithm (replaces the previous trajectory-overlap union-find,
+    // which suffered from transitive merges where a single chain-link
+    // pair lumped two physically distinct systems together):
+    //
+    //   1. For every member trajectory that reaches 34 kt, record its
+    //      first-genesis (lat, lon).
+    //   2. Bin those points into a 2D grid (cell = GRID_DEG degrees).
+    //   3. A cell is a "density peak" iff its count ≥ PEAK_MIN_MEMBERS
+    //      AND ≥ every neighboring cell in the 3×3 window. Adjacent
+    //      cells of equal count are de-duplicated by keeping the
+    //      higher-density (or earlier-in-sweep) cell as the peak.
+    //   4. Assign each member to the NEAREST peak within
+    //      ASSIGN_RADIUS_KM. Members beyond that radius from any peak
+    //      are dropped from the clustered view.
+    //   5. Final clusters keep only those with ≥ MIN_CLUSTER_MEMBERS.
+    //
+    // Why no transitivity: each member is independently assigned to
+    // its nearest peak. Two distinct density peaks remain separate
+    // regardless of how many members drift between them. Nearby
+    // systems with their own density concentrations get their own
+    // markers; transit members get pulled to whichever peak they're
+    // closer to.
+    var _GENESIS_GRID_DEG           = 3;     // density bin size (degrees)
+    var _GENESIS_PEAK_MIN_MEMBERS   = 8;     // cell count to qualify as peak
+    var _GENESIS_ASSIGN_RADIUS_KM   = 500;   // max distance member ↔ peak
+    // _GENESIS_CLUSTER_MIN_MEMBERS already defined above (50).
     var _GENESIS_MEMBER_COLOR = 'rgba(249, 115, 22, 0.12)';  // very soft so heatmap dominates
     var _GENESIS_MEAN_COLOR = '#f97316';                      // bold orange
     // Layer the genesis spaghetti pairs with by default — gives users
@@ -5578,28 +5578,16 @@
         });
     }
 
-    // TC-ATLAS clustering — TRAJECTORY-OVERLAP method.
+    // TC-ATLAS clustering — DENSITY-PEAK method.
     //
-    // Two member trajectories are considered the same physical feature
-    // when they have at least _GENESIS_TRAJ_MIN_MATCHES distinct points
-    // within _GENESIS_TRAJ_PROX_KM of each other — REGARDLESS of time
-    // offset. This handles cases where members forecast genesis at
-    // different times (e.g., an easterly wave where some members spin
-    // it up near Africa at +24 h and others don't develop it until
-    // +120 h in the Caribbean — the tracks describe the SAME WAVE,
-    // just offset in time).
-    //
-    // Algorithm:
-    //   1. Pool every member trajectory that reaches 34 kt at any point
-    //   2. Build a 5°×5° spatial grid index of every (track, point) tuple
-    //   3. For each trajectory's points, look up nearby grid cells and
-    //      count distinct trajectory-pairs that have close point-pairs
-    //   4. Pairs with ≥ MIN_MATCHES matches → union them
-    //   5. Group by cluster root → disturbances
-    //
-    // Cost: ~30k points × 9-cell neighborhood × ~5 candidates each ≈
-    // 1.3M distance checks. Easily < 200 ms in V8.
-    function _genesisTCAtlasDisturbances(rawTracks) {
+    // For each ensemble member that reaches TC strength, record its
+    // FIRST-genesis lat/lon (where it first crosses 34 kt). Bin those
+    // points into a 2D density grid and find local maxima. Each peak
+    // is one Disturbance; each member is independently assigned to its
+    // nearest peak within ASSIGN_RADIUS_KM. No union-find, no chain
+    // links — nearby distinct systems get their own peaks and stay
+    // separated regardless of any in-between transit members.
+    function _genesisTCAtlasDisturbances_TrajOverlap_LEGACY(rawTracks) {
         if (!rawTracks || !rawTracks.length) return [];
 
         // Step 1: pool trajectories that reach TC strength. Each
@@ -5823,6 +5811,156 @@
                 mean: { points: meanPts },
             });
         });
+        disturbances.sort(function (a, b) { return b.fraction - a.fraction; });
+        disturbances.forEach(function (d, idx) {
+            d.displayLabel = 'Disturbance ' + (idx + 1);
+            d.displayShort = 'D' + (idx + 1);
+        });
+        return disturbances;
+    }
+
+    /* TC-ATLAS clustering — DENSITY-PEAK method.
+       For each member trajectory that reaches 34 kt, record its first-
+       genesis (lat, lon). Bin into a 2D density grid; find local maxima
+       (cells whose count ≥ PEAK_MIN_MEMBERS and dominate the 3×3
+       neighborhood). Each peak is one Disturbance center; each member
+       is then INDEPENDENTLY assigned to its nearest peak within
+       ASSIGN_RADIUS_KM. No union-find, no chain-link merges — two
+       distinct density peaks remain separate regardless of transit
+       members between them. */
+    function _genesisTCAtlasDisturbances(rawTracks) {
+        if (!rawTracks || !rawTracks.length) return [];
+
+        // Step 1: pool member trajectories with first-genesis points.
+        var entries = [];
+        for (var t = 0; t < rawTracks.length; t++) {
+            var trk = rawTracks[t];
+            var members = trk.members || {};
+            var keys = Object.keys(members);
+            for (var k = 0; k < keys.length; k++) {
+                var pts = members[keys[k]].points;
+                if (!pts || pts.length < 2) continue;
+                var first = null;
+                for (var p = 0; p < pts.length; p++) {
+                    if (pts[p].wind != null && pts[p].wind >= 34
+                            && pts[p].lat != null && pts[p].lon != null) {
+                        first = pts[p];
+                        break;
+                    }
+                }
+                if (!first) continue;
+                entries.push({
+                    fromTrackId: trk.track_id,
+                    sampleKey: keys[k],
+                    points: pts,
+                    firstLat: first.lat,
+                    firstLon: first.lon,
+                });
+            }
+        }
+        if (entries.length === 0) return [];
+
+        // Step 2: bin first-genesis points into a 2D density grid.
+        var GRID = _GENESIS_GRID_DEG;
+        var density = {};   // "ix,iy" → count
+        var cellCenter = {};
+        for (var i = 0; i < entries.length; i++) {
+            var ix = Math.floor((entries[i].firstLon + 180) / GRID);
+            var iy = Math.floor((entries[i].firstLat + 90) / GRID);
+            var key = ix + ',' + iy;
+            density[key] = (density[key] || 0) + 1;
+            if (!cellCenter[key]) {
+                cellCenter[key] = {
+                    ix: ix, iy: iy,
+                    lat: (iy + 0.5) * GRID - 90,
+                    lon: (ix + 0.5) * GRID - 180,
+                };
+            }
+        }
+
+        // Step 3: find density peaks — cells with count ≥ threshold
+        // that dominate their 3×3 neighborhood. Equal-count adjacencies
+        // are resolved by keeping the lexicographically-first key so we
+        // don't double-count plateau ridges.
+        var peakMin = _GENESIS_PEAK_MIN_MEMBERS;
+        var peaks = [];
+        Object.keys(density).forEach(function (key) {
+            var c = density[key];
+            if (c < peakMin) return;
+            var cc = cellCenter[key];
+            var isPeak = true;
+            for (var dx = -1; dx <= 1 && isPeak; dx++) {
+                for (var dy = -1; dy <= 1 && isPeak; dy++) {
+                    if (dx === 0 && dy === 0) continue;
+                    var nk = (cc.ix + dx) + ',' + (cc.iy + dy);
+                    var nc = density[nk] || 0;
+                    if (nc > c) { isPeak = false; break; }
+                    // Plateau tie-break: only keep the cell whose key
+                    // sorts first, so a flat ridge yields exactly one peak.
+                    if (nc === c && nk < key) { isPeak = false; break; }
+                }
+            }
+            if (isPeak) {
+                peaks.push({ lat: cc.lat, lon: cc.lon, count: c });
+            }
+        });
+        if (peaks.length === 0) return [];
+
+        // Step 4: assign each member to the NEAREST peak within
+        // ASSIGN_RADIUS_KM. Members beyond that radius from every peak
+        // are dropped (they're noise — single-member detections far from
+        // any density concentration).
+        var assignR = _GENESIS_ASSIGN_RADIUS_KM;
+        var assignR2 = assignR * assignR;
+        var clusters = peaks.map(function () { return []; });
+        for (var ei = 0; ei < entries.length; ei++) {
+            var e = entries[ei];
+            var bestIdx = -1, bestD2 = Infinity;
+            var eCosLat = Math.cos(e.firstLat * Math.PI / 180);
+            for (var pi = 0; pi < peaks.length; pi++) {
+                var pk = peaks[pi];
+                var dLat = (e.firstLat - pk.lat) * 111;
+                var dLon = (e.firstLon - pk.lon) * 111 * eCosLat;
+                var d2 = dLat * dLat + dLon * dLon;
+                if (d2 < bestD2) { bestD2 = d2; bestIdx = pi; }
+            }
+            if (bestIdx >= 0 && bestD2 <= assignR2) {
+                clusters[bestIdx].push(e);
+            }
+        }
+
+        // Step 5: build disturbance bundle, filter by min cluster size.
+        var disturbances = [];
+        for (var ci = 0; ci < clusters.length; ci++) {
+            var cluster = clusters[ci];
+            if (cluster.length < _GENESIS_CLUSTER_MIN_MEMBERS) continue;
+            var members = {};
+            for (var mi = 0; mi < cluster.length; mi++) {
+                members[String(mi)] = { points: cluster[mi].points };
+            }
+            var meanPts = _genesisMeanTrack(
+                cluster.map(function (c) { return c.points; }));
+            var peakWind = 0, peakTau = null;
+            for (var mp = 0; mp < meanPts.length; mp++) {
+                if (meanPts[mp].wind != null && meanPts[mp].wind > peakWind) {
+                    peakWind = meanPts[mp].wind;
+                    peakTau = meanPts[mp].tau;
+                }
+            }
+            disturbances.push({
+                raw: {
+                    track_id: 'tca-' + ci,
+                    members: members,
+                    ensemble_mean: { points: meanPts },
+                    n_members_total: cluster.length,
+                },
+                total: cluster.length,
+                fraction: cluster.length / _GENESIS_ENSEMBLE_SIZE,
+                peakWind: peakWind,
+                peakTau: peakTau,
+                mean: { points: meanPts },
+            });
+        }
         disturbances.sort(function (a, b) { return b.fraction - a.fraction; });
         disturbances.forEach(function (d, idx) {
             d.displayLabel = 'Disturbance ' + (idx + 1);
@@ -7720,41 +7858,41 @@
             + 'TC-ATLAS</button>'
             + '</div>';
 
-        // Live tuner — visible only when TC-ATLAS is the active
-        // clustering method. Sliders mutate the four tunables and
-        // re-cluster against the already-loaded data on every input.
-        // Lets the user dial in a setting that matches their
+        // Live tuner — visible only when TC-ATLAS (density-peak) is
+        // the active clustering method. Sliders mutate the tunables
+        // and re-cluster against the already-loaded data on every
+        // input. Lets the user dial in a setting that matches their
         // meteorological intuition without push/reload cycles.
         if (!dmActive && _rtGenesisVisible) {
             var statusN = document.querySelectorAll('.rt-gen-marker').length;
             html += '<div class="ir-global-tuner">'
-                + '<div class="ir-tuner-row" data-key="prox">'
-                +   '<label>Proximity'
-                +     '<span class="ir-tuner-val">' + _GENESIS_TRAJ_PROX_KM + ' km</span>'
+                + '<div class="ir-tuner-row" data-key="grid">'
+                +   '<label>Grid size'
+                +     '<span class="ir-tuner-val">' + _GENESIS_GRID_DEG + '°</span>'
                 +   '</label>'
-                +   '<input type="range" min="50" max="800" step="25" '
-                +     'value="' + _GENESIS_TRAJ_PROX_KM + '">'
+                +   '<input type="range" min="1" max="6" step="0.5" '
+                +     'value="' + _GENESIS_GRID_DEG + '">'
                 + '</div>'
-                + '<div class="ir-tuner-row" data-key="min">'
-                +   '<label>Min matches'
-                +     '<span class="ir-tuner-val">' + _GENESIS_TRAJ_MIN_MATCHES + '</span>'
+                + '<div class="ir-tuner-row" data-key="peakmin">'
+                +   '<label>Peak threshold'
+                +     '<span class="ir-tuner-val">' + _GENESIS_PEAK_MIN_MEMBERS + ' members</span>'
                 +   '</label>'
-                +   '<input type="range" min="1" max="20" step="1" '
-                +     'value="' + _GENESIS_TRAJ_MIN_MATCHES + '">'
+                +   '<input type="range" min="2" max="40" step="1" '
+                +     'value="' + _GENESIS_PEAK_MIN_MEMBERS + '">'
                 + '</div>'
-                + '<div class="ir-tuner-row" data-key="std">'
-                +   '<label>Δt stdev max'
-                +     '<span class="ir-tuner-val">' + _GENESIS_TRAJ_OFFSET_STD_MAX + ' h</span>'
+                + '<div class="ir-tuner-row" data-key="assignr">'
+                +   '<label>Assign radius'
+                +     '<span class="ir-tuner-val">' + _GENESIS_ASSIGN_RADIUS_KM + ' km</span>'
                 +   '</label>'
-                +   '<input type="range" min="3" max="72" step="3" '
-                +     'value="' + _GENESIS_TRAJ_OFFSET_STD_MAX + '">'
+                +   '<input type="range" min="100" max="1500" step="50" '
+                +     'value="' + _GENESIS_ASSIGN_RADIUS_KM + '">'
                 + '</div>'
-                + '<div class="ir-tuner-row" data-key="span">'
-                +   '<label>Span fraction'
-                +     '<span class="ir-tuner-val">' + _GENESIS_TRAJ_SPAN_FRAC_MIN.toFixed(2) + '</span>'
+                + '<div class="ir-tuner-row" data-key="minmembers">'
+                +   '<label>Min cluster size'
+                +     '<span class="ir-tuner-val">' + _GENESIS_CLUSTER_MIN_MEMBERS + ' members</span>'
                 +   '</label>'
-                +   '<input type="range" min="0.10" max="1.00" step="0.05" '
-                +     'value="' + _GENESIS_TRAJ_SPAN_FRAC_MIN + '">'
+                +   '<input type="range" min="10" max="200" step="5" '
+                +     'value="' + _GENESIS_CLUSTER_MIN_MEMBERS + '">'
                 + '</div>'
                 + '<div class="ir-tuner-footer">'
                 +   '<span class="ir-tuner-status">'
@@ -7946,18 +8084,18 @@
                 if (!input || !valEl) return;
                 input.addEventListener('input', function () {
                     var v = parseFloat(input.value);
-                    if (key === 'prox') {
-                        _GENESIS_TRAJ_PROX_KM = v;
+                    if (key === 'grid') {
+                        _GENESIS_GRID_DEG = v;
+                        valEl.textContent = v + '°';
+                    } else if (key === 'peakmin') {
+                        _GENESIS_PEAK_MIN_MEMBERS = parseInt(v, 10);
+                        valEl.textContent = parseInt(v, 10) + ' members';
+                    } else if (key === 'assignr') {
+                        _GENESIS_ASSIGN_RADIUS_KM = v;
                         valEl.textContent = v + ' km';
-                    } else if (key === 'min') {
-                        _GENESIS_TRAJ_MIN_MATCHES = parseInt(v, 10);
-                        valEl.textContent = parseInt(v, 10);
-                    } else if (key === 'std') {
-                        _GENESIS_TRAJ_OFFSET_STD_MAX = v;
-                        valEl.textContent = v + ' h';
-                    } else if (key === 'span') {
-                        _GENESIS_TRAJ_SPAN_FRAC_MIN = v;
-                        valEl.textContent = v.toFixed(2);
+                    } else if (key === 'minmembers') {
+                        _GENESIS_CLUSTER_MIN_MEMBERS = parseInt(v, 10);
+                        valEl.textContent = parseInt(v, 10) + ' members';
                     }
                     _genesisReRender();
                 });
@@ -7968,13 +8106,11 @@
             resetBtn.addEventListener('click', function (ev) {
                 ev.preventDefault();
                 ev.stopPropagation();
-                _GENESIS_TRAJ_PROX_KM         = 250;
-                _GENESIS_TRAJ_MIN_MATCHES     = 3;
-                _GENESIS_TRAJ_OFFSET_STD_MAX  = 18;
-                _GENESIS_TRAJ_SPAN_FRAC_MIN   = 0.5;
+                _GENESIS_GRID_DEG            = 3;
+                _GENESIS_PEAK_MIN_MEMBERS    = 8;
+                _GENESIS_ASSIGN_RADIUS_KM    = 500;
+                _GENESIS_CLUSTER_MIN_MEMBERS = 50;
                 _genesisReRender();
-                // Re-render the panel to push the slider thumbs back
-                // to the default positions without a full menu close.
                 if (typeof toggleLayersPanel === 'function') {
                     toggleLayersPanel(); toggleLayersPanel();
                 }
