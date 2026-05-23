@@ -5693,7 +5693,13 @@
             var style = _genesisCatStyle(d.peakWind);
             var pctText = (d.fraction * 100).toFixed(0) + '%';
 
-            // Stash for the modal.
+            // Stash for the modal. We include the raw member dict and
+            // ensemble mean so the detail modal can render straight
+            // from this cache without a backend round-trip. Required
+            // for the TC-ATLAS clustering path (whose synthetic tca-N
+            // IDs don't exist in DeepMind's CSV) and useful as a
+            // fallback for the DeepMind path if the per-track endpoint
+            // isn't deployed yet.
             _genesisDisturbanceMeta[trackId] = {
                 label: d.displayLabel,
                 short: d.displayShort,
@@ -5704,6 +5710,10 @@
                 peakCat: style.cat,
                 peakColor: style.bold,
                 totalMembers: d.total,
+                members: d.raw && d.raw.members,
+                ensembleMean: d.raw && d.raw.ensemble_mean,
+                source: _genesisClusterMethod,   // 'deepmind' or 'tcatlas'
+                initTime: (_rtGenesisData && _rtGenesisData.init_time) || null,
             };
 
             // ONE marker per disturbance instead of N member polylines.
@@ -5886,10 +5896,44 @@
         document.body.style.overflow = 'hidden';
         _ga('rt_genesis_detail_open', { track_id: trackId });
 
-        var cached = _genesisDetailCache[trackId];
-        var prom = cached
-            ? Promise.resolve(cached)
-            : fetch(API_BASE + '/ir-monitor/weatherlab-genesis/'
+        // Source-aware loader:
+        //   • TC-ATLAS clusters (tca-N) — use the cached member set
+        //     directly. There's no backend route for our synthetic IDs.
+        //   • DeepMind track_ids — try the full 1000-member backend
+        //     endpoint first; if it's not deployed (404/network error),
+        //     fall back to the thinned member set already loaded for
+        //     the Global Map render. Thinned ≠ full, but better than
+        //     "Loading…" forever.
+        var meta = _genesisDisturbanceMeta[trackId];
+        var cachedFull = _genesisDetailCache[trackId];
+
+        function _fromCache() {
+            // Build a backend-shaped response from the cluster cache.
+            return {
+                model: 'DeepMind FNV3 LARGE_ENSEMBLE',
+                init_time: meta && meta.initTime,
+                track_id: trackId,
+                n_members: meta ? Object.keys(meta.members || {}).length : 0,
+                members: (meta && meta.members) || {},
+                ensemble_mean: (meta && meta.ensembleMean) || { points: [] },
+                _source: meta ? meta.source : null,
+                _fromCache: true,
+            };
+        }
+
+        var prom;
+        if (cachedFull) {
+            prom = Promise.resolve(cachedFull);
+        } else if (trackId && trackId.indexOf('tca-') === 0) {
+            // TC-ATLAS path — no backend route, use cluster cache only.
+            if (!meta || !meta.members) {
+                prom = Promise.reject(new Error('cluster cache missing'));
+            } else {
+                prom = Promise.resolve(_fromCache());
+            }
+        } else {
+            // DeepMind path — try backend, fall back to cluster cache.
+            prom = fetch(API_BASE + '/ir-monitor/weatherlab-genesis/'
                     + encodeURIComponent(trackId),
                     { cache: 'no-store' })
                 .then(function (r) {
@@ -5899,7 +5943,16 @@
                 .then(function (json) {
                     _genesisDetailCache[trackId] = json;
                     return json;
+                })
+                .catch(function (err) {
+                    if (meta && meta.members) {
+                        console.warn('[Genesis] detail endpoint failed, '
+                            + 'using cached thinned members:', err.message);
+                        return _fromCache();
+                    }
+                    throw err;
                 });
+        }
 
         prom.then(function (json) {
             _renderGenesisDetail(json);
@@ -5929,10 +5982,26 @@
         var stats = _computeGenesisStats(memberKeys, members);
         _renderGenesisStatsStrip(stats, memberKeys.length);
 
+        // Source banner — tells the user whether members came from
+        // DeepMind's per-track-id grouping or our TC-ATLAS clustering,
+        // and whether we're showing the full member set or the thinned
+        // 100-per-track set that came down with the global Genesis
+        // fetch (used as a fallback when the per-track endpoint isn't
+        // deployed yet, or always for TC-ATLAS clusters).
+        var sourceBadge = '';
+        if (json._source === 'tcatlas') {
+            sourceBadge = ' · <span style="opacity:0.85;color:#f97316;">'
+                + 'clustering: TC-ATLAS (members within '
+                + _GENESIS_CLUSTER_EPS_KM + ' km)</span>';
+        } else if (json._fromCache) {
+            sourceBadge = ' · <span style="opacity:0.85;color:#f97316;">'
+                + 'thinned member set (full 1000 requires API deploy)</span>';
+        }
         subEl.innerHTML =
             '<strong>Init:</strong> ' + initLabel
             + ' · <strong>' + memberKeys.length + '</strong> ensemble members'
-            + ' · <span style="opacity:0.8;">FNV3 LARGE_ENSEMBLE</span>';
+            + ' · <span style="opacity:0.8;">FNV3 LARGE_ENSEMBLE</span>'
+            + sourceBadge;
 
         _renderGenesisMap(memberKeys, members, mean, stats);
         _renderGenesisIntensity(memberKeys, members, mean, stats);
