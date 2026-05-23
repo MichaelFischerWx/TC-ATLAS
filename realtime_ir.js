@@ -5831,28 +5831,19 @@
         return disturbances;
     }
 
-    /* TC-ATLAS clustering — DENSITY-PEAK method (track-aware).
-       For each ensemble member that reaches 34 kt, contribute EVERY
-       TC-strength point along their track to the density grid (not
-       just first-genesis). This counts members the same way the
-       formation-probability heatmap does — any track passing through
-       a cell votes for it — and gives temporal wiggle room: a member
-       that forms east of the peak but transits through it later
-       still contributes.
-
-       Peak finding: cells with count ≥ PEAK_MIN_MEMBERS that
-       dominate their 3×3 neighborhood.
-
-       Assignment: each member is independently assigned to the peak
-       its track gets CLOSEST to during its TC-strength phase. The
-       ASSIGN_RADIUS_KM applies to that closest-approach distance.
-       No union-find = no chain-link merges. */
+    /* TC-ATLAS clustering — DENSITY-PEAK method.
+       For each member trajectory that reaches 34 kt, record its first-
+       genesis (lat, lon). Bin into a 2D density grid; find local maxima
+       (cells whose count ≥ PEAK_MIN_MEMBERS and dominate the 3×3
+       neighborhood). Each peak is one Disturbance center; each member
+       is then INDEPENDENTLY assigned to its nearest peak within
+       ASSIGN_RADIUS_KM. No union-find, no chain-link merges — two
+       distinct density peaks remain separate regardless of transit
+       members between them. */
     function _genesisTCAtlasDisturbances(rawTracks) {
         if (!rawTracks || !rawTracks.length) return [];
 
-        // Step 1: pool member trajectories with their TC-strength
-        // sub-track (the sequence of points where wind ≥ 34 kt).
-        // A member needs at least one such point to be eligible.
+        // Step 1: pool member trajectories with first-genesis points.
         var entries = [];
         for (var t = 0; t < rawTracks.length; t++) {
             var trk = rawTracks[t];
@@ -5861,54 +5852,41 @@
             for (var k = 0; k < keys.length; k++) {
                 var pts = members[keys[k]].points;
                 if (!pts || pts.length < 2) continue;
-                var tcPts = [];
+                var first = null;
                 for (var p = 0; p < pts.length; p++) {
                     if (pts[p].wind != null && pts[p].wind >= 34
                             && pts[p].lat != null && pts[p].lon != null) {
-                        tcPts.push(pts[p]);
+                        first = pts[p];
+                        break;
                     }
                 }
-                if (tcPts.length === 0) continue;
+                if (!first) continue;
                 entries.push({
                     fromTrackId: trk.track_id,
                     sampleKey: keys[k],
                     points: pts,
-                    tcPts: tcPts,   // all ≥34kt points for density + assign
+                    firstLat: first.lat,
+                    firstLon: first.lon,
                 });
             }
         }
         if (entries.length === 0) return [];
 
-        // Step 2: bin EVERY TC-strength point into the density grid.
-        // Each member contributes one vote per ≥34kt position it
-        // occupies — so members that transit through a region count
-        // for that region (matching the heatmap's logic), while still
-        // weighting more heavily where they linger.
+        // Step 2: bin first-genesis points into a 2D density grid.
         var GRID = _GENESIS_GRID_DEG;
         var density = {};   // "ix,iy" → count
         var cellCenter = {};
         for (var i = 0; i < entries.length; i++) {
-            // Per-cell-per-member dedup so a slow-moving track with 10
-            // consecutive points in one cell doesn't outvote a fast
-            // track with 1 point there. We count distinct (member, cell)
-            // not raw points.
-            var seenCells = {};
-            var ipts = entries[i].tcPts;
-            for (var jj = 0; jj < ipts.length; jj++) {
-                var pp = ipts[jj];
-                var ix = Math.floor((pp.lon + 180) / GRID);
-                var iy = Math.floor((pp.lat + 90) / GRID);
-                var key = ix + ',' + iy;
-                if (seenCells[key]) continue;
-                seenCells[key] = true;
-                density[key] = (density[key] || 0) + 1;
-                if (!cellCenter[key]) {
-                    cellCenter[key] = {
-                        ix: ix, iy: iy,
-                        lat: (iy + 0.5) * GRID - 90,
-                        lon: (ix + 0.5) * GRID - 180,
-                    };
-                }
+            var ix = Math.floor((entries[i].firstLon + 180) / GRID);
+            var iy = Math.floor((entries[i].firstLat + 90) / GRID);
+            var key = ix + ',' + iy;
+            density[key] = (density[key] || 0) + 1;
+            if (!cellCenter[key]) {
+                cellCenter[key] = {
+                    ix: ix, iy: iy,
+                    lat: (iy + 0.5) * GRID - 90,
+                    lon: (ix + 0.5) * GRID - 180,
+                };
             }
         }
 
@@ -5940,32 +5918,23 @@
         });
         if (peaks.length === 0) return [];
 
-        // Step 4: assign each member to the peak its TRACK gets
-        // closest to during its TC-strength phase. A member that
-        // forms east of the peak but transits through it gets
-        // assigned there (matching how the heatmap reasons about
-        // genesis regions). ASSIGN_RADIUS_KM applies to the
-        // closest-approach distance — anything beyond that for
-        // every peak is dropped as noise.
+        // Step 4: assign each member to the NEAREST peak within
+        // ASSIGN_RADIUS_KM. Members beyond that radius from every peak
+        // are dropped (they're noise — single-member detections far from
+        // any density concentration).
         var assignR = _GENESIS_ASSIGN_RADIUS_KM;
         var assignR2 = assignR * assignR;
         var clusters = peaks.map(function () { return []; });
         for (var ei = 0; ei < entries.length; ei++) {
             var e = entries[ei];
             var bestIdx = -1, bestD2 = Infinity;
-            // Scan every TC-strength point against every peak; track
-            // the global minimum distance. Cost is bounded: ~1000
-            // members × ~20 tc-points × ~6 peaks = 120k ops, trivial.
-            for (var ti = 0; ti < e.tcPts.length; ti++) {
-                var ep = e.tcPts[ti];
-                var epCosLat = Math.cos(ep.lat * Math.PI / 180);
-                for (var pi = 0; pi < peaks.length; pi++) {
-                    var pk = peaks[pi];
-                    var dLat = (ep.lat - pk.lat) * 111;
-                    var dLon = (ep.lon - pk.lon) * 111 * epCosLat;
-                    var d2 = dLat * dLat + dLon * dLon;
-                    if (d2 < bestD2) { bestD2 = d2; bestIdx = pi; }
-                }
+            var eCosLat = Math.cos(e.firstLat * Math.PI / 180);
+            for (var pi = 0; pi < peaks.length; pi++) {
+                var pk = peaks[pi];
+                var dLat = (e.firstLat - pk.lat) * 111;
+                var dLon = (e.firstLon - pk.lon) * 111 * eCosLat;
+                var d2 = dLat * dLat + dLon * dLon;
+                if (d2 < bestD2) { bestD2 = d2; bestIdx = pi; }
             }
             if (bestIdx >= 0 && bestD2 <= assignR2) {
                 clusters[bestIdx].push(e);
