@@ -1212,6 +1212,15 @@ html, body { margin: 0; padding: 0; }
         border-right: none;
         border-bottom: 1px solid var(--border);
         border-radius: 0 0 12px 12px;
+        /* Fade-mask the bottom edge so users see that the season-data
+           list scrolls inside the 60vh cap (otherwise the truncation
+           looks like a missing list). The mask only renders when
+           inner content actually overflows. */
+        -webkit-mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 24px), transparent 100%);
+                mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 24px), transparent 100%);
+    }
+    .basin-sidebar-content {
+        scroll-padding-bottom: 28px;
     }
     .ir-map.sidebar-open {
         left: 0 !important;
@@ -1802,10 +1811,10 @@ html, body { margin: 0; padding: 0; }
         font-size: 0.88rem;
     }
     .ir-layers-panel .ir-global-menu-row .units {
-        font-size: 0.7rem;
+        font-size: 0.78rem;
     }
     .ir-layers-panel .ir-global-menu-section {
-        font-size: 0.7rem;
+        font-size: 0.82rem;
         padding-left: 14px;
         padding-right: 14px;
         padding-top: 10px;
@@ -2105,6 +2114,7 @@ html:not([data-view="map"]) #ir-global-env-cbars {
     gap: 10px;
 }
 .sub-clock-card {
+    position: relative;
     background: var(--surface-raised, #ffffff);
     border: 1px solid var(--border);
     border-radius: 6px;
@@ -2115,6 +2125,35 @@ html:not([data-view="map"]) #ir-global-env-cbars {
     cursor: pointer;
     transition: border-color 0.15s, box-shadow 0.15s;
 }
+/* Per-clock save button: tap target sits over the card's top-right
+   corner. Always visible (no hover-only) so it's reachable on touch
+   devices. Click handler stops propagation so it doesn't open the
+   evolution modal. */
+.sub-clock-save-btn {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    z-index: 3;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    line-height: 1;
+    font-size: 0.85rem;
+    color: var(--text-dim, #64748b);
+    background: rgba(255,255,255,0.78);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.sub-clock-save-btn:hover,
+.sub-clock-save-btn:focus-visible {
+    background: rgba(46,125,255,0.18);
+    color: var(--text);
+    border-color: rgba(46,125,255,0.55);
+    outline: none;
+}
+[data-theme="dark"] .sub-clock-save-btn { background: rgba(22,27,36,0.78); }
 .sub-clock-card:hover {
     border-color: rgba(46, 125, 255, 0.55);
     box-shadow: 0 1px 4px rgba(46, 125, 255, 0.12);
@@ -2171,11 +2210,13 @@ html:not([data-view="map"]) #ir-global-env-cbars {
     white-space: nowrap;
     margin: 0 2px;
 }
-.sub-clock-genesis .sub-gen-up   { color: #16a34a; font-weight: 600; }
-.sub-clock-genesis .sub-gen-down { color: #dc2626; font-weight: 600; }
-.sub-clock-genesis .sub-gen-neutral { color: var(--text-dim, #64748b); }
-[data-theme="dark"] .sub-clock-genesis .sub-gen-up   { color: #4ade80; }
-[data-theme="dark"] .sub-clock-genesis .sub-gen-down { color: #f87171; }
+/* Active modulation ≥ 1.0 → red (warm/enhanced); < 1.0 → blue
+   (cool/suppressed). Threshold is the uniform-phase expectation
+   so every basin reads cleanly as enhanced or suppressed. */
+.sub-clock-genesis .sub-gen-up   { color: #dc2626; font-weight: 600; }
+.sub-clock-genesis .sub-gen-down { color: #2563eb; font-weight: 600; }
+[data-theme="dark"] .sub-clock-genesis .sub-gen-up   { color: #f87171; }
+[data-theme="dark"] .sub-clock-genesis .sub-gen-down { color: #60a5fa; }
 .sub-clock-footnote {
     margin: 6px 4px 0;
     font-size: 0.65rem;
@@ -2345,3 +2386,51 @@ html:not([data-view="map"]) #ir-global-env-cbars {
     background: #fff;
     transform: scale(1.05);
 }
+
+/* ════════════════════════════════════════════════════════════════
+   subOnly=1 iframe-embed mode. Strips all chrome and reduces the
+   Subseasonal tab to just the combined Hovmöller, so the climo
+   page can embed this page inline and get our own WK-filtered
+   convection figure (no CPC GIF dependency). The clocks aside is
+   hidden because the climo page already shows them above.
+   ════════════════════════════════════════════════════════════════ */
+html.sub-only-mode { background: transparent !important; }
+html.sub-only-mode body {
+    margin: 0; padding: 0; background: transparent !important;
+}
+/* Hide every page-chrome element. */
+html.sub-only-mode .topbar,
+html.sub-only-mode .ir-secondary-bar,
+html.sub-only-mode .basin-sidebar,
+html.sub-only-mode .basin-sidebar-toggle,
+html.sub-only-mode #ir-main,
+html.sub-only-mode #satellite-main,
+html.sub-only-mode #seasonal-main,
+html.sub-only-mode .ir-feed-banner,
+html.sub-only-mode .skip-link,
+html.sub-only-mode .footer,
+html.sub-only-mode footer {
+    display: none !important;
+}
+/* Strip the Subseasonal tab down to the Hovmöller stack: hide the
+   header (title + lat-band + view-toggle + save-png), hide the
+   clocks aside, and let the right column fill the frame. */
+html.sub-only-mode #sub-main {
+    display: flex !important;        /* force visible (overrides JS-set display:none) */
+    margin: 0 !important;
+    padding: 0 !important;
+}
+html.sub-only-mode .sub-header { display: none !important; }
+html.sub-only-mode .sub-clocks { display: none !important; }
+html.sub-only-mode .sub-body {
+    grid-template-columns: 1fr !important;
+    gap: 0 !important;
+    padding: 4px !important;
+}
+html.sub-only-mode .sub-hovs > .sub-section-heading { display: none !important; }
+html.sub-only-mode .sub-hov-stack {
+    border: none !important;
+    padding: 4px !important;
+    background: transparent !important;
+}
+html.sub-only-mode .sub-active-tc-list { display: none !important; }

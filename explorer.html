@@ -47,7 +47,7 @@
     <link rel="preconnect" href="https://unpkg.com">
     <link rel="preconnect" href="https://cdn.plot.ly">
     <link rel="preconnect" href="https://tc-atlas-api-361010099051.us-east1.run.app">
-    <link rel="stylesheet" href="tc_radar_styles.css?v=20260508e">
+    <link rel="stylesheet" href="tc_radar_styles.css?v=20260523c">
     <link rel="stylesheet" href="realtime_tdr_styles.css">
 </head>
 <body>
@@ -254,12 +254,12 @@
                             <div class="action-section">
                                 <span class="action-section-label">Analysis</span>
                                 <div class="display-actions">
-                                <button class="cs-btn" id="rt-cs-btn" onclick="rtToggleCrossSection()" disabled>✂ Cross Section</button>
-                                <button class="cs-btn" id="rt-az-btn" onclick="rtFetchAzimuthalMean()" disabled>↻ Azim. Mean</button>
-                                <button class="cs-btn is-tinted" data-accent="mw" id="rt-quad-btn" onclick="rtFetchQuadrants()" disabled>⊙ Shear Quads</button>
-                                <button class="cs-btn" id="rt-vol-btn" onclick="rtFetch3DVolume()" disabled><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/></svg>3D Volume</button>
-                                <button class="cs-btn is-tinted" data-accent="anomaly" id="rt-anomaly-btn" onclick="rtFetchAnomaly()" disabled>Z* Anomaly</button>
-                                <button class="cs-btn is-tinted" data-accent="vp" id="rt-vp-btn" onclick="rtFetchVPScatter()" disabled>⬤ VP Scatter</button>
+                                <button class="cs-btn" id="rt-cs-btn" onclick="rtToggleCrossSection()" disabled>✂ <span class="cs-btn-full">Cross Section</span><span class="cs-btn-short">X-Sect</span></button>
+                                <button class="cs-btn" id="rt-az-btn" onclick="rtFetchAzimuthalMean()" disabled>↻ <span class="cs-btn-full">Azim. Mean</span><span class="cs-btn-short">Azim</span></button>
+                                <button class="cs-btn is-tinted" data-accent="mw" id="rt-quad-btn" onclick="rtFetchQuadrants()" disabled>⊙ <span class="cs-btn-full">Shear Quads</span><span class="cs-btn-short">Quads</span></button>
+                                <button class="cs-btn" id="rt-vol-btn" onclick="rtFetch3DVolume()" disabled><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/></svg><span class="cs-btn-full">3D Volume</span><span class="cs-btn-short">3D Vol</span></button>
+                                <button class="cs-btn is-tinted" data-accent="anomaly" id="rt-anomaly-btn" onclick="rtFetchAnomaly()" disabled><span class="cs-btn-full">Z* Anomaly</span><span class="cs-btn-short">Z* Anom</span></button>
+                                <button class="cs-btn is-tinted" data-accent="vp" id="rt-vp-btn" onclick="rtFetchVPScatter()" disabled>⬤ <span class="cs-btn-full">VP Scatter</span><span class="cs-btn-short">VP</span></button>
                                 <button class="cs-btn is-tinted" data-accent="cfad" id="rt-cfad-btn" onclick="rtToggleCFADConfig()" disabled>▓ CFAD</button>
                                 </div>
                             </div>
@@ -309,7 +309,7 @@
                                     <button onclick="rtSavePlotPNG('rt-sonde-skewt','SkewT')" class="rt-save-png-btn" style="margin-left:6px;" title="Save as PNG"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg></button>
                                     <button onclick="rtCloseSkewT()" style="margin-left:8px; background:none; border:none; color:#888; cursor:pointer; font-size:18px; line-height:1;" title="Close Skew-T">&times;</button>
                                 </div>
-                                <div style="display:flex; gap:0;">
+                                <div class="rt-skewt-row" style="display:flex; gap:0;">
                                     <div id="rt-sonde-skewt" style="flex:1; height:450px;"></div>
                                     <div id="rt-sonde-skewt-info" style="width:260px; height:450px; overflow-y:auto; font-size:11px; color:var(--text); padding:8px;"></div>
                                 </div>

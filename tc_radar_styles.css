@@ -2135,18 +2135,22 @@ footer a:hover { text-decoration: underline; }
 /* These rules only apply on mobile — no effect on desktop.     */
 
 @media (max-width: 768px) {
-    /* 1. Larger touch targets for analysis buttons (44px min) */
+    /* 1. Larger touch targets for analysis buttons (44px min).
+       min-width keeps each cs-btn from squeezing to ~50 px and
+       wrapping its label to 2-3 lines; with flex-wrap on the parent
+       they now break to 2-3 per row at full width. */
     .display-actions .cs-btn {
-        padding: 10px 4px;
+        padding: 10px 8px;
         font-size: 12px;
         min-height: 44px;
+        min-width: 90px;
     }
 
     /* Larger touch targets for overlay pills */
     .overlay-pill {
         padding: 6px 10px;
         font-size: 11px;
-        min-height: 36px;
+        min-height: 40px;
     }
 
     /* 2. Hide Plotly toolbar on mobile (buttons too small for touch) */
@@ -2482,4 +2486,61 @@ footer a:hover { text-decoration: underline; }
 .modebar :focus-visible,
 .plotly :focus-visible {
     outline: none;
+}
+
+/* Extend pointer:coarse min-height to TC-RADAR Explorer's
+   analysis + overlay pills (the prior block covered chips only). */
+@media (pointer: coarse) {
+    .cs-btn,
+    .overlay-pill {
+        min-height: 40px;
+    }
+}
+
+/* Analysis-button label swap (TC-RADAR Explorer). Long labels
+   ("Cross Section", "Shear Quads", "Z* Anomaly", ...) cause 2-3
+   line wrap when the .display-actions strip stacks to phone width.
+   Swap to abbreviated forms at ≤480 px so each button stays one
+   line at the now-larger min-width. */
+.cs-btn-short { display: none; }
+@media (max-width: 480px) {
+    .cs-btn-full  { display: none; }
+    .cs-btn-short { display: inline; }
+}
+
+/* Filter drawer (Explorer). Existing rules drop the grid to 1-col
+   ≤768 px but keep max-height: 600 px on the open drawer with
+   overflow: hidden — on phones with 6 stacked filter groups the
+   bottom row gets clipped. Cap to 60vh with internal scroll so
+   the full set is reachable. */
+@media (max-width: 480px) {
+    .filter-drawer.open {
+        max-height: 60vh;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+}
+
+/* Skew-T row (RT TDR dropsonde panel). Sidebar info column sits
+   at width: 260px next to a flex: 1 chart with height 450px on
+   desktop. Stack to column on ≤768 px so the chart claims full
+   viewport width and the info panel reflows below it. Plotly
+   resizes to the container on window-resize events as long as
+   the trace was rendered with responsive: true.
+   !important needed because the heights/widths are inline on the
+   children. */
+@media (max-width: 768px) {
+    .rt-skewt-row {
+        flex-direction: column !important;
+    }
+    .rt-skewt-row > #rt-sonde-skewt {
+        width: 100% !important;
+        height: 380px !important;
+    }
+    .rt-skewt-row > #rt-sonde-skewt-info {
+        width: 100% !important;
+        height: auto !important;
+        max-height: 220px !important;
+        font-size: 12px !important;
+    }
 }

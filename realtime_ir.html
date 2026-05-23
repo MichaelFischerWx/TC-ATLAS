@@ -47,8 +47,24 @@
     <!-- Cache-busting: daily timestamp appended to local CSS/JS URLs -->
     <script>window.__v='?v='+new Date().toISOString().slice(0,13).replace(/[-T]/g,'');</script>
 
+    <!-- Iframe-embed mode: when the URL hash contains `subOnly=1` the
+         page is being embedded by a parent (the climo page's
+         subseasonal subview) and we want JUST the combined Hovmöller —
+         no topbar, no tab strip, no clocks aside, no header. Setting
+         the class here (head, before paint) lets the CSS in
+         realtime_ir_styles.css hide chrome before the first frame so
+         the iframe never flashes the full layout. -->
+    <script>
+        (function () {
+            var h = window.location.hash || '';
+            if (/(?:^#|&)subOnly=1\b/.test(h)) {
+                document.documentElement.classList.add('sub-only-mode');
+            }
+        })();
+    </script>
+
     <!-- Styles -->
-    <link rel="stylesheet" href="tc_radar_styles.css?v=20260509c">
+    <link rel="stylesheet" href="tc_radar_styles.css?v=20260523c">
     <script>document.write('<link rel="stylesheet" href="realtime_ir_styles.css'+window.__v+'">');</script>
     <script>document.write('<link rel="stylesheet" href="satellite_styles.css'+window.__v+'">');</script>
 </head>
@@ -88,8 +104,8 @@
     <!-- ── Secondary Bar (view tabs + storm counts) ───────────── -->
     <div class="ir-secondary-bar">
         <div class="ir-view-tabs">
-            <button class="ir-view-tab active" data-view="map" onclick="window.switchIRView('map')">Global Map</button>
-            <button class="ir-view-tab" data-view="satellite" onclick="window.switchIRView('satellite')">Storm Satellite</button>
+            <button class="ir-view-tab active" data-view="map" onclick="window.switchIRView('map')"><span class="tab-full">Global Map</span><span class="tab-short">Map</span></button>
+            <button class="ir-view-tab" data-view="satellite" onclick="window.switchIRView('satellite')"><span class="tab-full">Storm Satellite</span><span class="tab-short">Storm Sat</span></button>
             <button class="ir-view-tab" data-view="subseasonal" onclick="window.switchIRView('subseasonal')">Subseasonal</button>
             <button class="ir-view-tab" data-view="seasonal" onclick="window.switchIRView('seasonal')">Seasonal</button>
         </div>
@@ -1562,25 +1578,36 @@
             }
         };
 
-        /* Auto-switch via URL hash. Supports both:
+        /* Auto-switch via URL hash. Supports:
            - short form: #seasonal, #subseasonal, #satellite, #map
            - legacy:     #view=seasonal, etc.
+           - param form: #tab=subseasonal&subOnly=1 (iframe embeds)
            - panel deep-links: #seasonal-panel-anom-map → seasonal tab */
         function _viewFromHash() {
             var h = (window.location.hash || '').replace(/^#/, '');
             if (!h) return null;
+            // param-style: pick out tab=X
+            var tabMatch = h.match(/(?:^|&)tab=([a-z]+)/);
+            if (tabMatch && VALID_VIEWS[tabMatch[1]]) return tabMatch[1];
             // legacy "view=X" form
             var m = h.match(/^view=([a-z]+)/);
             if (m && VALID_VIEWS[m[1]]) return m[1];
-            // bare short form
-            if (VALID_VIEWS[h]) return h;
+            // bare short form (strip any &-suffix)
+            var bare = h.split('&')[0];
+            if (VALID_VIEWS[bare]) return bare;
             // panel deep-link: seasonal-panel-..., subseasonal-..., etc.
             for (var v in VALID_VIEWS) {
-                if (h === v || h.indexOf(v + '-') === 0) return v;
+                if (bare === v || bare.indexOf(v + '-') === 0) return v;
             }
             return null;
         }
         var initialView = _viewFromHash();
+        // subOnly=1 iframe embeds force the subseasonal view even if the
+        // hash didn't explicitly name it, so the parent climo page gets
+        // the combined Hovmöller it asked for.
+        if (document.documentElement.classList.contains('sub-only-mode')) {
+            initialView = 'subseasonal';
+        }
         if (initialView && initialView !== 'map') window.switchIRView(initialView);
 
         /* Respond to back/forward navigation too */

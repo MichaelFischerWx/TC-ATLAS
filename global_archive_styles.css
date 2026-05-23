@@ -490,6 +490,16 @@ input[type="range"].ga-range::-moz-range-thumb {
     color: var(--text-dim);
     letter-spacing: 0;
 }
+/* Intensity scale ticks (TD/TS/C1–C5) overlap below ~480 px because
+   they're absolutely positioned at fixed percentages on a narrow
+   container. Drop the "TD" label (rest stay legible at 0.78rem) and
+   bump the others so they read on phone screens. */
+@media (max-width: 480px) {
+    .scale-tick { font-size: 0.78rem; }
+    /* Hide TD (the second tick at 18%); it sits too close to TS (35%)
+       to remain legible at the larger font on phone widths. */
+    .intensity-scale .scale-tick:nth-child(2) { display: none; }
+}
 .range-value-row {
     display: flex;
     justify-content: space-between;
@@ -1025,6 +1035,9 @@ input[type="range"].ga-range::-moz-range-thumb {
     padding: 16px 20px;
     width: 340px;
     max-width: 90vw;
+}
+@media (max-width: 480px) {
+    .gif-settings-panel { padding: 12px 14px; }
 }
 .gif-settings-title {
     font-size: 0.88rem;
@@ -2287,6 +2300,10 @@ input[type="range"].ga-range::-moz-range-thumb {
     .compare-ir-controls .ga-btn-sm {
         min-height: 32px;
     }
+}
+@media (max-width: 480px) {
+    .compare-ir-map { height: 200px; }
+    .compare-ir-label { font-size: 0.78rem; }
 }
 
 /* ── Compare Mode Toggle ─────────────────────────────────── */

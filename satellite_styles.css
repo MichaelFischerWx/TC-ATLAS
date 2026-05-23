@@ -105,6 +105,16 @@
     }
 }
 
+/* Tab label swap — long labels wrap to 2 lines on narrow viewports
+   ("Global / Map", "Storm / Satellite"). Shorter forms kick in at
+   ≤640px while still leaving room on small tablets. */
+.ir-view-tab .tab-short { display: none; }
+@media (max-width: 640px) {
+    .ir-view-tab .tab-full  { display: none; }
+    .ir-view-tab .tab-short { display: inline; }
+    .ir-view-tab { padding: 7px 10px; }
+}
+
 .ir-storm-counts {
     display: flex;
     gap: 14px;
@@ -973,13 +983,19 @@ input[type="range"].sat-slider {
 }
 
 @media (max-width: 480px) {
+    /* Two-row animation bar: slider on its own row (full width) so it
+       stays draggable; transport buttons + speed + counter wrap below.
+       Single-row layout cramps everything past ~80 px of slider on
+       375 px screens. */
     .sat-anim-controls {
         flex-wrap: wrap;
         gap: 4px 6px;
     }
-
-    .sat-slider {
-        max-width: 120px;
+    input[type="range"].sat-slider {
+        order: -1;
+        flex: 1 1 100%;
+        min-width: 0;
+        max-width: none;
     }
 
     .sat-anim-info {
@@ -988,17 +1004,18 @@ input[type="range"].sat-slider {
     }
 
     .sat-anim-btn {
-        padding: 4px 7px;
+        padding: 6px 10px;
         font-size: 12px;
+        min-height: 36px;
     }
 
     .sat-zoom-btn {
-        padding: 3px 6px;
-        font-size: 10px;
+        padding: 4px 8px;
+        font-size: 11px;
     }
 
     .sat-frame-counter {
-        font-size: 10px;
-        min-width: 36px;
+        font-size: 11px;
+        min-width: 40px;
     }
 }
