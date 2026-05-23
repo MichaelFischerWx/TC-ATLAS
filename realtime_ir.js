@@ -5379,61 +5379,192 @@
         _rtGenesisLayers = [];
     }
 
+    // Predicted-peak Saffir-Simpson palette for the Global Map genesis
+    // layer. Picked from SS_COLORS but slightly desaturated for the
+    // faint spaghetti so the bold mean stays the eye-catcher. Drives
+    // the spaghetti color, the mean polyline color, and the marker
+    // fill so a forecaster scanning the basin instantly sees which
+    // genesis cluster is forecast to spin up vs which stays a TD.
+    function _genesisCatStyle(peakWind) {
+        var cat = windToCategory(peakWind);
+        var bold = SS_COLORS[cat] || '#94a3b8';
+        // Convert bold to faint translucent for the spaghetti pass —
+        // 12% alpha keeps the layer readable on top of IR/visible base.
+        function rgba(hex, a) {
+            var r = parseInt(hex.slice(1, 3), 16);
+            var g = parseInt(hex.slice(3, 5), 16);
+            var b = parseInt(hex.slice(5, 7), 16);
+            return 'rgba(' + r + ',' + g + ',' + b + ',' + a + ')';
+        }
+        return {
+            cat: cat,
+            bold: bold,
+            faint: rgba(bold, 0.18),
+            // Marker scales with intensity — a forecast C5 deserves a
+            // bigger dot than a system that stays TD.
+            radius: cat === 'C5' ? 9
+                  : cat === 'C4' ? 8
+                  : cat === 'C3' ? 7
+                  : cat === 'C2' ? 6
+                  : cat === 'C1' ? 6
+                  : cat === 'TS' ? 5
+                  :                4,
+        };
+    }
+
+    // Total ensemble size for FNV3 LARGE_ENSEMBLE. Formation probability
+    // is computed per-track as n_members_total / this value, so a track
+    // with 50 members is a 5% formation feature.
+    var _GENESIS_ENSEMBLE_SIZE = 1000;
+    // Minimum member fraction to call something a "Disturbance" on the
+    // map. Below this it's likely noise — a few stray member detections
+    // that didn't agree spatially. 5% (50/1000) matches NHC's "Low" /
+    // "Medium" disturbance threshold conceptually.
+    var _GENESIS_MIN_FRACTION = 0.05;
+
+    // Track → "Disturbance N" naming. Ordered by formation probability
+    // descending so D1 is always the most-likely-to-form, regardless of
+    // what synthetic track_id DeepMind assigned. Stored on the track
+    // object so the detail modal can look up the same display label.
+    function _genesisQualifyingDisturbances(rawTracks) {
+        var qualifying = [];
+        for (var i = 0; i < rawTracks.length; i++) {
+            var t = rawTracks[i];
+            var total = t.n_members_total ||
+                       (t.members ? Object.keys(t.members).length : 0);
+            var frac = total / _GENESIS_ENSEMBLE_SIZE;
+            if (frac < _GENESIS_MIN_FRACTION) continue;
+            // Compute predicted peak Vmax + median genesis position
+            // from the ensemble mean. The marker sits at the median
+            // current/early position (mean.points[0]), not at the LMI
+            // — what the forecaster wants to see is "where the
+            // disturbance IS right now", not "where it will peak".
+            var mean = t.ensemble_mean || { points: [] };
+            var peakWind = 0, peakTau = null;
+            for (var p = 0; p < mean.points.length; p++) {
+                if (mean.points[p].wind != null
+                        && mean.points[p].wind > peakWind) {
+                    peakWind = mean.points[p].wind;
+                    peakTau = mean.points[p].tau;
+                }
+            }
+            qualifying.push({
+                raw: t, total: total, fraction: frac,
+                peakWind: peakWind, peakTau: peakTau,
+                mean: mean,
+            });
+        }
+        // Highest formation probability first → D1 is the most-confident
+        // potential genesis.
+        qualifying.sort(function (a, b) { return b.fraction - a.fraction; });
+        for (var k = 0; k < qualifying.length; k++) {
+            qualifying[k].displayLabel = 'Disturbance ' + (k + 1);
+            qualifying[k].displayShort = 'D' + (k + 1);
+        }
+        return qualifying;
+    }
+
+    // Cache disturbance metadata keyed by track_id so the detail modal
+    // can show the same "Disturbance N · 42% formation · peaks C2"
+    // header without re-running the qualification scan.
+    var _genesisDisturbanceMeta = {};
+
     function _renderGenesis() {
         _clearGenesis();
+        _genesisDisturbanceMeta = {};
         if (!_rtGenesisData || !map) return;
         var tracks = _rtGenesisData.tracks || [];
         if (tracks.length === 0) return;
 
-        for (var ti = 0; ti < tracks.length; ti++) {
-            var trk = tracks[ti];
-            var trackId = trk.track_id || '';
-            var members = trk.members || {};
-            var memberKeys = Object.keys(members);
-            var totalMembers = trk.n_members_total || memberKeys.length;
+        var disturbances = _genesisQualifyingDisturbances(tracks);
+        if (disturbances.length === 0) return;
 
-            // Thinned-ensemble spaghetti (backend caps at 100 by default
-            // so polyline counts stay manageable even with 30+ tracks).
-            for (var mi = 0; mi < memberKeys.length; mi++) {
-                var pts = members[memberKeys[mi]].points;
-                if (!pts || pts.length < 2) continue;
-                var latlngs = [];
-                for (var pi = 0; pi < pts.length; pi++) {
-                    latlngs.push([pts[pi].lat, pts[pi].lon]);
-                }
-                var segs = splitAtAntimeridian(latlngs);
-                for (var si = 0; si < segs.length; si++) {
-                    if (segs[si].length < 2) continue;
-                    var line = L.polyline(segs[si], {
-                        color: _GENESIS_MEMBER_COLOR,
-                        weight: 0.6,
-                        opacity: 0.35,  // faint so heatmap dominates
-                        interactive: false
-                    }).addTo(map);
-                    _rtGenesisLayers.push(line);
-                }
-            }
+        for (var di = 0; di < disturbances.length; di++) {
+            var d = disturbances[di];
+            var trackId = d.raw.track_id || '';
+            var mean = d.mean;
+            if (!mean.points || mean.points.length === 0) continue;
 
-            var mean = trk.ensemble_mean;
-            if (mean && mean.points && mean.points.length >= 2) {
+            var style = _genesisCatStyle(d.peakWind);
+            var pctText = (d.fraction * 100).toFixed(0) + '%';
+
+            // Stash for the modal.
+            _genesisDisturbanceMeta[trackId] = {
+                label: d.displayLabel,
+                short: d.displayShort,
+                fraction: d.fraction,
+                fractionText: pctText,
+                peakWind: d.peakWind,
+                peakTau: d.peakTau,
+                peakCat: style.cat,
+                peakColor: style.bold,
+                totalMembers: d.total,
+            };
+
+            // ONE marker per disturbance instead of N member polylines.
+            // Placed at the ensemble-mean genesis (or current) position.
+            // Sized by formation probability (more confident → bigger);
+            // colored by predicted peak Vmax. Label "D1" / "D2" baked
+            // into a divIcon so the user can scan the basin and see
+            // "WPac has a strong D1 (C2 peak), Atlantic has a weak D3
+            // (TD only)" without clicking.
+            var p0 = mean.points[0];
+            // Confidence scales 50 → 1000 members onto 14 → 28 px.
+            var baseSize = 14 + Math.min(14, Math.round((d.fraction - 0.05) * 18));
+            var html =
+                '<div class="rt-gen-marker" style="background:' + style.bold + ';'
+                + 'width:' + baseSize + 'px;height:' + baseSize + 'px;line-height:'
+                + baseSize + 'px;font-size:' + Math.max(9, Math.round(baseSize * 0.5))
+                + 'px;">' + d.displayShort + '</div>';
+            var icon = L.divIcon({
+                html: html, className: 'rt-gen-divicon',
+                iconSize: [baseSize, baseSize],
+                iconAnchor: [baseSize / 2, baseSize / 2],
+            });
+            var marker = L.marker([p0.lat, p0.lon], {
+                icon: icon, interactive: true, bubblingMouseEvents: false,
+                riseOnHover: true, riseOffset: 800,
+            }).addTo(map);
+
+            var tip = '<div style="min-width:180px;">'
+                + '<b>' + d.displayLabel + '</b>'
+                + '<br>Formation probability: <strong>' + pctText + '</strong>'
+                + ' <span style="opacity:0.7;">(' + d.total + ' of '
+                + _GENESIS_ENSEMBLE_SIZE + ' members)</span>'
+                + '<br>Predicted peak Vmax: <strong style="color:' + style.bold
+                + ';">' + d.peakWind.toFixed(0) + ' kt · ' + style.cat
+                + '</strong>'
+                + (d.peakTau != null ? ' at +' + d.peakTau + 'h' : '')
+                + '<br><span style="opacity:0.75; font-size:0.85em;">'
+                + 'Click for full 1000-member detail →</span>'
+                + '</div>';
+            marker.bindTooltip(tip, { direction: 'top', offset: [0, -8] });
+            (function (id) {
+                marker.on('click', function (e) {
+                    if (L.DomEvent && L.DomEvent.stopPropagation) {
+                        L.DomEvent.stopPropagation(e);
+                    }
+                    openGenesisDetail(id);
+                });
+            })(trackId);
+            _rtGenesisLayers.push(marker);
+
+            // Thin ensemble-mean line so the forecaster can see the
+            // predicted track at a glance without opening the detail
+            // modal. No per-member spaghetti — that's what made the
+            // layer chaotic; details live in the modal.
+            if (mean.points.length >= 2) {
                 var meanLatLngs = [];
-                for (var pj = 0; pj < mean.points.length; pj++) {
-                    meanLatLngs.push([mean.points[pj].lat, mean.points[pj].lon]);
+                for (var mj = 0; mj < mean.points.length; mj++) {
+                    meanLatLngs.push([mean.points[mj].lat, mean.points[mj].lon]);
                 }
                 var meanSegs = splitAtAntimeridian(meanLatLngs);
-                for (var msi = 0; msi < meanSegs.length; msi++) {
-                    if (meanSegs[msi].length < 2) continue;
-                    var meanLine = L.polyline(meanSegs[msi], {
-                        color: _GENESIS_MEAN_COLOR,
-                        weight: 3.0,
-                        opacity: 1.0,
-                        // Solid (no dashArray) so the mean reads as a
-                        // bold spine on top of the probability heatmap.
-                        // Clickable so the user can drill the full
-                        // 1000-member detail modal from any point on
-                        // the mean track (not just the genesis marker).
-                        interactive: true,
-                        bubblingMouseEvents: false
+                for (var ms = 0; ms < meanSegs.length; ms++) {
+                    if (meanSegs[ms].length < 2) continue;
+                    var meanLine = L.polyline(meanSegs[ms], {
+                        color: style.bold, weight: 1.8, opacity: 0.85,
+                        dashArray: '4,3',
+                        interactive: true, bubblingMouseEvents: false,
                     }).addTo(map);
                     (function (id) {
                         meanLine.on('click', function (e) {
@@ -5445,42 +5576,6 @@
                     })(trackId);
                     _rtGenesisLayers.push(meanLine);
                 }
-
-                var p0 = mean.points[0];
-                var lmiPt = null, lmiWind = -1;
-                for (var lj = 0; lj < mean.points.length; lj++) {
-                    if (mean.points[lj].wind != null && mean.points[lj].wind > lmiWind) {
-                        lmiWind = mean.points[lj].wind;
-                        lmiPt = mean.points[lj];
-                    }
-                }
-                var label = '<b>Genesis track ' + trackId + '</b>'
-                    + '<br>FNV3 LARGE_ENSEMBLE · '
-                    + memberKeys.length + ' of ' + totalMembers + ' members shown';
-                if (lmiPt && lmiWind >= 34) {
-                    label += '<br>Ensemble-mean peak: +' + lmiPt.tau + 'h · '
-                        + lmiWind.toFixed(0) + ' kt · ' + windToCategory(lmiWind);
-                }
-                label += '<br><span style="opacity:0.75;">Click for full 1000-member detail →</span>';
-                var marker = L.circleMarker([p0.lat, p0.lon], {
-                    radius: 5,
-                    color: '#fff',
-                    fillColor: _GENESIS_MEAN_COLOR,
-                    fillOpacity: 1,
-                    weight: 1.5,
-                    opacity: 1,
-                    interactive: true
-                }).addTo(map);
-                marker.bindTooltip(label, { direction: 'top', offset: [0, -7] });
-                (function (id) {
-                    marker.on('click', function (e) {
-                        if (L.DomEvent && L.DomEvent.stopPropagation) {
-                            L.DomEvent.stopPropagation(e);
-                        }
-                        openGenesisDetail(id);
-                    });
-                })(trackId);
-                _rtGenesisLayers.push(marker);
             }
         }
     }
@@ -5576,8 +5671,11 @@
         var m = _ensureGenesisDetailModal();
         var titleEl = m.querySelector('#rt-genesis-modal-title');
         var subEl   = m.querySelector('#rt-genesis-modal-sub');
-        titleEl.textContent = 'Genesis track ' + trackId
-                            + ' · FNV3 1000-member ensemble';
+        // Use the "Disturbance N" name from the Global Map render so
+        // the modal header matches the marker the user clicked.
+        var meta = _genesisDisturbanceMeta[trackId];
+        var titleName = meta ? meta.label : ('Genesis track ' + trackId);
+        titleEl.textContent = titleName + ' · FNV3 1000-member ensemble';
         subEl.innerHTML = 'Loading 1000 ensemble members…';
         m.style.display = 'flex';
         document.body.style.overflow = 'hidden';
@@ -5850,6 +5948,16 @@
             name: 'Ensemble mean',
             showlegend: false,
         };
+        // Read the live --surface tokens from CSS so the map ocean
+        // matches the modal background exactly — no more "panel inside
+        // a panel" two-tone look. Falls back to safe defaults if the
+        // tokens aren't set on the page.
+        var rootStyle = getComputedStyle(document.documentElement);
+        var pageSurface = rootStyle.getPropertyValue('--surface-raised').trim()
+                       || (isDark ? '#161b24' : '#ffffff');
+        var pageLand    = rootStyle.getPropertyValue('--surface').trim()
+                       || (isDark ? '#11161f' : '#f7f8fa');
+
         var layout = {
             margin: { l: 0, r: 0, t: 6, b: 0 },
             paper_bgcolor: 'rgba(0,0,0,0)',
@@ -5865,9 +5973,9 @@
                                              : 'rgba(15,22,35,0.10)',
                            dtick: 5 },
                 showland: true,
-                landcolor: isDark ? '#1f2937' : '#e5e7eb',
+                landcolor: pageLand,
                 showocean: true,
-                oceancolor: isDark ? '#0b1320' : '#dbeafe',
+                oceancolor: pageSurface,
                 showcountries: true,
                 countrycolor: isDark ? 'rgba(255,255,255,0.20)' : 'rgba(15,22,35,0.30)',
                 coastlinecolor: isDark ? 'rgba(255,255,255,0.45)'

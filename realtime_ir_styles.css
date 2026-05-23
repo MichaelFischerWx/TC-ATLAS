@@ -2390,6 +2390,34 @@ html:not([data-view="map"]) #ir-global-env-cbars {
 }
 
 /* ════════════════════════════════════════════════════════════════
+   FNV3 LARGE_ENSEMBLE disturbance markers on the Global Map.
+   One per qualifying ensemble cluster (≥5% formation probability),
+   labeled "D1", "D2", etc. — ordered by formation confidence so D1
+   is the most-likely-to-form. Color = predicted peak Vmax category;
+   size scales with formation probability so a high-confidence
+   disturbance is bigger and more obvious than a borderline one.
+   ════════════════════════════════════════════════════════════════ */
+.rt-gen-divicon { background: transparent; border: none; }
+.rt-gen-marker {
+    display: inline-block;
+    border-radius: 50%;
+    border: 2px solid #ffffff;
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.35), 0 1px 4px rgba(0,0,0,0.55);
+    color: #ffffff;
+    font-family: 'DM Sans', system-ui, sans-serif;
+    font-weight: 700;
+    text-align: center;
+    letter-spacing: -0.02em;
+    cursor: pointer;
+    transition: transform 0.12s ease;
+}
+.rt-gen-marker:hover { transform: scale(1.12); }
+[data-theme="dark"] .rt-gen-marker {
+    border-color: rgba(255,255,255,0.85);
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.65), 0 1px 6px rgba(0,0,0,0.7);
+}
+
+/* ════════════════════════════════════════════════════════════════
    FNV3 LARGE_ENSEMBLE genesis detail modal.
    Opens when a user clicks any genesis spaghetti track on the
    Global Map. Two Plotly figures: a basin scattergeo + an
@@ -2473,20 +2501,28 @@ html:not([data-view="map"]) #ir-global-env-cbars {
     background: rgba(46, 125, 255, 0.28);
     border-color: rgba(46, 125, 255, 0.55);
 }
-[data-theme="dark"] .rt-genesis-modal-content {
-    background: #0f172a;
-    color: #e2e8f0;
+/* Use the site's --surface tokens so the modal matches whatever the
+   page is showing instead of a separate hardcoded navy. The map
+   figure's ocean/land are painted to the same tokens via JS so the
+   whole modal reads as one surface, not a panel-on-a-panel. */
+.rt-genesis-modal-content {
+    background: var(--surface-raised, #ffffff);
+    color: var(--text, #0f172a);
 }
-[data-theme="dark"] .rt-genesis-modal-header h2 { color: #e2e8f0; }
-[data-theme="dark"] .rt-genesis-modal-header p  { color: #94a3b8; }
+[data-theme="dark"] .rt-genesis-modal-content {
+    background: var(--surface-raised, #161b24);
+    color: var(--text, #e2e8f0);
+}
+[data-theme="dark"] .rt-genesis-modal-header h2 { color: var(--text); }
+[data-theme="dark"] .rt-genesis-modal-header p  { color: var(--text-dim, #94a3b8); }
 [data-theme="dark"] .rt-genesis-modal-close {
-    background: rgba(15, 23, 42, 0.92);
-    color: #e2e8f0;
+    background: var(--surface, #11161f);
+    color: var(--text, #e2e8f0);
     border-color: rgba(255, 255, 255, 0.18);
 }
 [data-theme="dark"] .rt-genesis-modal-save {
     background: rgba(46, 125, 255, 0.22);
-    color: #e2e8f0;
+    color: var(--text, #e2e8f0);
     border-color: rgba(148, 163, 184, 0.3);
 }
 
