@@ -555,7 +555,7 @@
     // closer to.
     var _GENESIS_GRID_DEG           = 3;     // density bin size (degrees)
     var _GENESIS_PEAK_MIN_MEMBERS   = 8;     // cell count to qualify as peak
-    var _GENESIS_ASSIGN_RADIUS_KM   = 500;   // max distance member ↔ peak
+    var _GENESIS_ASSIGN_RADIUS_KM   = 750;   // max distance member ↔ peak
     // _GENESIS_CLUSTER_MIN_MEMBERS already defined above (50).
     var _GENESIS_MEMBER_COLOR = 'rgba(249, 115, 22, 0.12)';  // very soft so heatmap dominates
     var _GENESIS_MEAN_COLOR = '#f97316';                      // bold orange
@@ -8135,7 +8135,7 @@
                 ev.stopPropagation();
                 _GENESIS_GRID_DEG            = 3;
                 _GENESIS_PEAK_MIN_MEMBERS    = 8;
-                _GENESIS_ASSIGN_RADIUS_KM    = 500;
+                _GENESIS_ASSIGN_RADIUS_KM    = 750;
                 _GENESIS_CLUSTER_MIN_MEMBERS = 25;
                 _genesisReRender();
                 if (typeof toggleLayersPanel === 'function') {
