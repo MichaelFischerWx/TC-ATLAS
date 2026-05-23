@@ -556,7 +556,14 @@
     var _GENESIS_GRID_DEG           = 3;     // density bin size (degrees)
     var _GENESIS_PEAK_MIN_MEMBERS   = 8;     // cell count to qualify as peak
     var _GENESIS_ASSIGN_RADIUS_KM   = 750;   // max distance member ↔ peak
-    // _GENESIS_CLUSTER_MIN_MEMBERS already defined above (50).
+    // Time-window for member-to-peak assignment. A member's first-
+    // genesis tau must be within ±_GENESIS_TIME_WINDOW_H of the peak's
+    // mean first-genesis tau (computed from members whose first-genesis
+    // lat/lon falls inside the peak cell). Prevents merging two storms
+    // that happen to form at the same location but at very different
+    // times.
+    var _GENESIS_TIME_WINDOW_H      = 48;
+    // _GENESIS_CLUSTER_MIN_MEMBERS already defined above.
     var _GENESIS_MEMBER_COLOR = 'rgba(249, 115, 22, 0.12)';  // very soft so heatmap dominates
     var _GENESIS_MEAN_COLOR = '#f97316';                      // bold orange
     // Layer the genesis spaghetti pairs with by default — gives users
@@ -5867,6 +5874,7 @@
                     points: pts,
                     firstLat: first.lat,
                     firstLon: first.lon,
+                    firstTau: first.tau,
                 });
             }
         }
@@ -5913,31 +5921,66 @@
                 }
             }
             if (isPeak) {
-                peaks.push({ lat: cc.lat, lon: cc.lon, count: c });
+                peaks.push({
+                    lat: cc.lat, lon: cc.lon, count: c,
+                    ix: cc.ix, iy: cc.iy,
+                    meanTau: null,   // filled in below
+                });
             }
         });
         if (peaks.length === 0) return [];
 
-        // Step 4: assign each member to the NEAREST peak within
-        // ASSIGN_RADIUS_KM. Members beyond that radius from every peak
-        // are dropped (they're noise — single-member detections far from
-        // any density concentration).
+        // Step 4: compute each peak's mean first-genesis tau from
+        // members whose first-genesis falls IN the peak cell. This
+        // gives a robust per-peak time anchor without bootstrapping
+        // from a circular cluster definition.
+        var GRID_HALF = 0;   // already integral cells, no half offset
+        for (var pi = 0; pi < peaks.length; pi++) {
+            var pk = peaks[pi];
+            var tSum = 0, tN = 0;
+            for (var ei = 0; ei < entries.length; ei++) {
+                var e = entries[ei];
+                var eix = Math.floor((e.firstLon + 180) / GRID);
+                var eiy = Math.floor((e.firstLat + 90) / GRID);
+                if (eix === pk.ix && eiy === pk.iy
+                        && e.firstTau != null) {
+                    tSum += e.firstTau;
+                    tN++;
+                }
+            }
+            pk.meanTau = tN > 0 ? tSum / tN : null;
+        }
+
+        // Step 5: assign each member to the NEAREST peak that
+        // satisfies BOTH the spatial gate (≤ ASSIGN_RADIUS_KM) AND
+        // the temporal gate (|firstTau − peak.meanTau| ≤
+        // TIME_WINDOW_H). Members failing both gates for every peak
+        // are dropped.
         var assignR = _GENESIS_ASSIGN_RADIUS_KM;
         var assignR2 = assignR * assignR;
+        var timeWin = _GENESIS_TIME_WINDOW_H;
         var clusters = peaks.map(function () { return []; });
-        for (var ei = 0; ei < entries.length; ei++) {
-            var e = entries[ei];
+        for (var ei2 = 0; ei2 < entries.length; ei2++) {
+            var e2 = entries[ei2];
             var bestIdx = -1, bestD2 = Infinity;
-            var eCosLat = Math.cos(e.firstLat * Math.PI / 180);
-            for (var pi = 0; pi < peaks.length; pi++) {
-                var pk = peaks[pi];
-                var dLat = (e.firstLat - pk.lat) * 111;
-                var dLon = (e.firstLon - pk.lon) * 111 * eCosLat;
+            var eCosLat = Math.cos(e2.firstLat * Math.PI / 180);
+            for (var pi2 = 0; pi2 < peaks.length; pi2++) {
+                var pk2 = peaks[pi2];
+                var dLat = (e2.firstLat - pk2.lat) * 111;
+                var dLon = (e2.firstLon - pk2.lon) * 111 * eCosLat;
                 var d2 = dLat * dLat + dLon * dLon;
-                if (d2 < bestD2) { bestD2 = d2; bestIdx = pi; }
+                if (d2 > assignR2) continue;
+                // Temporal gate — skip when meanTau or firstTau missing
+                // (treat as pass so we don't drop members for missing
+                // metadata rather than physical incompatibility).
+                if (pk2.meanTau != null && e2.firstTau != null) {
+                    var dt = Math.abs(e2.firstTau - pk2.meanTau);
+                    if (dt > timeWin) continue;
+                }
+                if (d2 < bestD2) { bestD2 = d2; bestIdx = pi2; }
             }
-            if (bestIdx >= 0 && bestD2 <= assignR2) {
-                clusters[bestIdx].push(e);
+            if (bestIdx >= 0) {
+                clusters[bestIdx].push(e2);
             }
         }
 
@@ -7907,6 +7950,13 @@
                 +   '<input type="range" min="100" max="1500" step="50" '
                 +     'value="' + _GENESIS_ASSIGN_RADIUS_KM + '">'
                 + '</div>'
+                + '<div class="ir-tuner-row" data-key="timewin">'
+                +   '<label>Time window'
+                +     '<span class="ir-tuner-val">±' + _GENESIS_TIME_WINDOW_H + ' h</span>'
+                +   '</label>'
+                +   '<input type="range" min="6" max="168" step="6" '
+                +     'value="' + _GENESIS_TIME_WINDOW_H + '">'
+                + '</div>'
                 + '<div class="ir-tuner-row" data-key="minmembers">'
                 +   '<label>Min cluster size'
                 +     '<span class="ir-tuner-val">' + _GENESIS_CLUSTER_MIN_MEMBERS + ' members</span>'
@@ -8120,6 +8170,9 @@
                     } else if (key === 'assignr') {
                         _GENESIS_ASSIGN_RADIUS_KM = v;
                         valEl.textContent = v + ' km';
+                    } else if (key === 'timewin') {
+                        _GENESIS_TIME_WINDOW_H = v;
+                        valEl.textContent = '±' + v + ' h';
                     } else if (key === 'minmembers') {
                         _GENESIS_CLUSTER_MIN_MEMBERS = parseInt(v, 10);
                         valEl.textContent = parseInt(v, 10) + ' members';
@@ -8136,6 +8189,7 @@
                 _GENESIS_GRID_DEG            = 3;
                 _GENESIS_PEAK_MIN_MEMBERS    = 8;
                 _GENESIS_ASSIGN_RADIUS_KM    = 750;
+                _GENESIS_TIME_WINDOW_H       = 48;
                 _GENESIS_CLUSTER_MIN_MEMBERS = 25;
                 _genesisReRender();
                 if (typeof toggleLayersPanel === 'function') {
