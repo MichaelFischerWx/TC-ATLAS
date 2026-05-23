@@ -5985,7 +5985,17 @@
         return {
             n: memberKeys.length,
             formationCount: formationCount,
-            formationProb: formationCount / Math.max(1, memberKeys.length),
+            // Divide by the TOTAL ensemble size (1000), not the
+            // cluster's own member count. The cluster member count is
+            // already the subset DeepMind (or our DBSCAN path) grouped
+            // into this feature, so dividing by it always reads ~100%
+            // and answers a meaningless question. The right question
+            // is "what fraction of the 1000-member ensemble detected
+            // this feature reaching TC strength?" — which matches the
+            // disturbance-marker formation probability on the Global
+            // Map, so the modal and the marker now agree.
+            formationProb: formationCount / _GENESIS_ENSEMBLE_SIZE,
+            ensembleSize: _GENESIS_ENSEMBLE_SIZE,
             genesisTimes: genesisTimes,
             genLats: genLats,
             genLons: genLons,
@@ -6017,13 +6027,14 @@
         el.innerHTML =
             tile('Formation probability',
                  formPct,
-                 stats.formationCount + ' / ' + nMembers + ' reach 34 kt') +
+                 stats.formationCount + ' / ' + stats.ensembleSize
+                 + ' ensemble members detect this feature reaching 34 kt') +
             tile('Median genesis time',
                  medGen,
-                 'first time any member crosses 34 kt') +
+                 'first time any cluster member crosses 34 kt') +
             tile('Peak Vmax · P10 / P50 / P90',
                  p10 + ' · ' + p50 + ' · ' + p90,
-                 'across member lifetime-max intensities');
+                 'across cluster member lifetime-max intensities');
     }
 
     /* Theme palette + SS palette helpers ─────────────────────────
