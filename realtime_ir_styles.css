@@ -2396,14 +2396,55 @@ html:not([data-view="map"]) #ir-global-env-cbars {
    orange border to signal "this only affects the TC-ATLAS path". */
 .ir-global-tuner {
     margin: 4px 12px 8px 36px;
-    padding: 10px 12px 8px;
     border: 1px dashed rgba(249, 115, 22, 0.45);
     border-radius: 6px;
     background: rgba(249, 115, 22, 0.05);
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
 }
+.ir-global-tuner[open] {
+    padding: 0 12px 8px;
+}
+.ir-tuner-summary {
+    list-style: none;
+    cursor: pointer;
+    padding: 7px 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    user-select: none;
+}
+.ir-tuner-summary::-webkit-details-marker { display: none; }
+.ir-tuner-summary::before {
+    content: "▸";
+    font-size: 0.7rem;
+    color: #f97316;
+    margin-right: 6px;
+    display: inline-block;
+    transition: transform 0.12s;
+}
+.ir-global-tuner[open] .ir-tuner-summary::before {
+    transform: rotate(90deg);
+}
+.ir-tuner-summary-label {
+    flex: 1;
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--text, #0f172a);
+    text-transform: none;
+    letter-spacing: 0;
+}
+.ir-tuner-summary .ir-tuner-status {
+    /* Status badge tucks into the summary row when collapsed so the
+       analyst still sees the cluster count without expanding. */
+    font-variant-numeric: tabular-nums;
+}
+.ir-global-tuner[open] > :not(summary) {
+    margin-top: 6px;
+}
+.ir-global-tuner[open] .ir-tuner-row + .ir-tuner-row {
+    margin-top: 8px;
+}
+[data-theme="dark"] .ir-tuner-summary-label { color: #e2e8f0; }
 .ir-tuner-row {
     display: flex;
     flex-direction: column;

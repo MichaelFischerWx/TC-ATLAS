@@ -520,6 +520,10 @@
     // of basin. DeepMind chip is still one click away if a forecaster
     // wants the raw source-side groupings.
     var _genesisClusterMethod = 'tcatlas';
+    // Tuner disclosure state — collapsed by default. The user can
+    // expand it via the disclosure summary; their preference persists
+    // across menu re-renders within the page session.
+    var _genesisTunerOpen = false;
     // 25 members = 2.5% of the 1000-member FNV3 ensemble. Lowered from
     // the original 5% (50) after live tuning showed that the density-
     // peak algorithm cleanly separates real disturbances at this
@@ -7873,7 +7877,15 @@
         // meteorological intuition without push/reload cycles.
         if (!dmActive && _rtGenesisVisible) {
             var statusN = document.querySelectorAll('.rt-gen-marker').length;
-            html += '<div class="ir-global-tuner">'
+            html += '<details class="ir-global-tuner"'
+                + (_genesisTunerOpen ? ' open' : '') + '>'
+                + '<summary class="ir-tuner-summary">'
+                +   '<span class="ir-tuner-summary-label">Advanced clustering controls</span>'
+                +   '<span class="ir-tuner-status">'
+                +     '<strong>' + statusN + '</strong> disturbance'
+                +     (statusN === 1 ? '' : 's')
+                +   '</span>'
+                + '</summary>'
                 + '<div class="ir-tuner-row" data-key="grid">'
                 +   '<label>Grid size'
                 +     '<span class="ir-tuner-val">' + _GENESIS_GRID_DEG + '°</span>'
@@ -7903,14 +7915,10 @@
                 +     'value="' + _GENESIS_CLUSTER_MIN_MEMBERS + '">'
                 + '</div>'
                 + '<div class="ir-tuner-footer">'
-                +   '<span class="ir-tuner-status">'
-                +     '<strong>' + statusN + '</strong> disturbance'
-                +     (statusN === 1 ? '' : 's') + ' from this setting'
-                +   '</span>'
                 +   '<button type="button" class="ir-tuner-reset" '
                 +     'title="Restore default values">Reset</button>'
                 + '</div>'
-                + '</div>';
+                + '</details>';
         }
         // Opt-in sub-toggle for the raw member spaghetti. Off by
         // default — the disturbance markers above are the canonical
@@ -8080,9 +8088,20 @@
                 var n = document.querySelectorAll('.rt-gen-marker').length;
                 status.innerHTML =
                     '<strong>' + n + '</strong> disturbance'
-                    + (n === 1 ? '' : 's') + ' from this setting';
+                    + (n === 1 ? '' : 's');
             }
         }
+        // Persist the disclosure's open/closed state across menu
+        // re-renders so a slider drag (which can trigger a re-render
+        // via _genesisReRender's status update) doesn't snap the
+        // panel closed.
+        var tunerDetails = content.querySelector('details.ir-global-tuner');
+        if (tunerDetails) {
+            tunerDetails.addEventListener('toggle', function () {
+                _genesisTunerOpen = tunerDetails.open;
+            });
+        }
+
         var tunerRows = content.querySelectorAll('.ir-tuner-row');
         for (var tr = 0; tr < tunerRows.length; tr++) {
             (function (rowEl) {
