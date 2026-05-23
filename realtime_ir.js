@@ -5518,14 +5518,25 @@
                 '</div>' +
                 '<button type="button" class="rt-genesis-modal-close" aria-label="Close" title="Close (Esc)">×</button>' +
               '</div>' +
+              // Headline stats — pre-genesis-specific metrics the named-
+              // storm panel never has to compute (formation probability,
+              // P10/P50/P90 peak Vmax, most-likely genesis time).
+              '<div id="rt-genesis-modal-stats" class="rt-genesis-stat-row"></div>' +
               '<div class="rt-genesis-modal-body">' +
                 '<div class="rt-genesis-modal-chart-wrap" style="position:relative;">' +
                   '<button type="button" id="rt-genesis-map-save" class="rt-genesis-modal-save" title="Save track map as PNG">⤓ PNG</button>' +
-                  '<div id="rt-genesis-modal-map" style="width:100%; height:520px;"></div>' +
+                  '<div id="rt-genesis-modal-map" style="width:100%; height:480px;"></div>' +
                 '</div>' +
                 '<div class="rt-genesis-modal-chart-wrap" style="position:relative; margin-top:14px;">' +
                   '<button type="button" id="rt-genesis-int-save" class="rt-genesis-modal-save" title="Save intensity time series as PNG">⤓ PNG</button>' +
-                  '<div id="rt-genesis-modal-int" style="width:100%; height:360px;"></div>' +
+                  '<div id="rt-genesis-modal-int" style="width:100%; height:300px;"></div>' +
+                '</div>' +
+                // Unique-to-pre-genesis: histogram of when each member
+                // first reaches 34 kt. Useful for the "when does it
+                // form?" question a named-storm view never has to ask.
+                '<div class="rt-genesis-modal-chart-wrap" style="position:relative; margin-top:14px;">' +
+                  '<button type="button" id="rt-genesis-gtime-save" class="rt-genesis-modal-save" title="Save genesis-time histogram as PNG">⤓ PNG</button>' +
+                  '<div id="rt-genesis-modal-gtime" style="width:100%; height:180px;"></div>' +
                 '</div>' +
               '</div>' +
             '</div>';
@@ -5545,6 +5556,9 @@
         });
         m.querySelector('#rt-genesis-int-save').addEventListener('click', function () {
             _genesisSavePNG('rt-genesis-modal-int', 'intensity');
+        });
+        m.querySelector('#rt-genesis-gtime-save').addEventListener('click', function () {
+            _genesisSavePNG('rt-genesis-modal-gtime', 'genesis-time');
         });
         return m;
     }
@@ -5605,137 +5619,287 @@
             ? init.slice(0, 4) + '-' + init.slice(4, 6) + '-' + init.slice(6, 8)
               + ' ' + init.slice(8, 10) + 'Z'
             : '(unknown init)';
-        // Peak ensemble-mean Vmax for the header line.
-        var peakWind = -1, peakTau = null;
-        for (var i = 0; i < mean.points.length; i++) {
-            if (mean.points[i].wind != null && mean.points[i].wind > peakWind) {
-                peakWind = mean.points[i].wind;
-                peakTau = mean.points[i].tau;
-            }
-        }
-        var peakLine = peakWind >= 0
-            ? 'Peak ensemble-mean Vmax: ' + peakWind.toFixed(0) + ' kt ('
-              + windToCategory(peakWind) + ') at +' + peakTau + 'h.'
-            : '';
+
+        // Pre-genesis-specific stats — computed once and threaded through
+        // every figure so they all share the same definitions of
+        // "formation" (first time a member reaches 34 kt) and "peak Vmax".
+        var stats = _computeGenesisStats(memberKeys, members);
+        _renderGenesisStatsStrip(stats, memberKeys.length);
+
         subEl.innerHTML =
             '<strong>Init:</strong> ' + initLabel
-            + ' · <strong>' + memberKeys.length + '</strong> members · '
-            + peakLine;
+            + ' · <strong>' + memberKeys.length + '</strong> ensemble members'
+            + ' · <span style="opacity:0.8;">FNV3 LARGE_ENSEMBLE</span>';
 
-        _renderGenesisMap(memberKeys, members, mean);
-        _renderGenesisIntensity(memberKeys, members, mean);
+        _renderGenesisMap(memberKeys, members, mean, stats);
+        _renderGenesisIntensity(memberKeys, members, mean, stats);
+        _renderGenesisTimeHistogram(stats);
     }
 
-    // Build the basin map: 1000 member points + mean track overlay,
-    // both colored by Vmax via the SS scale.
-    function _renderGenesisMap(memberKeys, members, mean) {
+    /* Compute the pre-genesis stat bundle once per modal open.
+       - formationCount / formationProb: members that ever reach 34 kt
+       - genesisTimes[]: per-member first-cross tau (null if never forms)
+       - genesisLat/Lon[]: per-member first-cross position
+       - peakWinds[]: per-member LMI
+       - meanPeak, meanPeakTau: peak of the ensemble-mean line */
+    function _computeGenesisStats(memberKeys, members) {
+        var formationCount = 0;
+        var genesisTimes = [];
+        var genLats = [];
+        var genLons = [];
+        var peakWinds = [];
+        for (var i = 0; i < memberKeys.length; i++) {
+            var pts = members[memberKeys[i]].points || [];
+            var firstTau = null, firstLat = null, firstLon = null;
+            var peak = 0;
+            for (var j = 0; j < pts.length; j++) {
+                var w = pts[j].wind;
+                if (w == null) continue;
+                if (firstTau == null && w >= 34) {
+                    firstTau = pts[j].tau;
+                    firstLat = pts[j].lat;
+                    firstLon = pts[j].lon;
+                }
+                if (w > peak) peak = w;
+            }
+            if (firstTau != null) {
+                formationCount++;
+                genesisTimes.push(firstTau);
+                genLats.push(firstLat);
+                genLons.push(firstLon);
+            }
+            peakWinds.push(peak);
+        }
+        // Percentile helper — needs caller-sorted array.
+        function pct(sorted, q) {
+            if (!sorted.length) return null;
+            var idx = Math.min(sorted.length - 1,
+                               Math.floor(q * (sorted.length - 1)));
+            return sorted[idx];
+        }
+        var sortedPeaks = peakWinds.slice().sort(function (a, b) { return a - b; });
+        var sortedTimes = genesisTimes.slice().sort(function (a, b) { return a - b; });
+        return {
+            n: memberKeys.length,
+            formationCount: formationCount,
+            formationProb: formationCount / Math.max(1, memberKeys.length),
+            genesisTimes: genesisTimes,
+            genLats: genLats,
+            genLons: genLons,
+            peakWinds: peakWinds,
+            peakP10: pct(sortedPeaks, 0.10),
+            peakP50: pct(sortedPeaks, 0.50),
+            peakP90: pct(sortedPeaks, 0.90),
+            genesisMedianTau: pct(sortedTimes, 0.50),
+        };
+    }
+
+    function _renderGenesisStatsStrip(stats, nMembers) {
+        var el = document.getElementById('rt-genesis-modal-stats');
+        if (!el) return;
+        var formPct = (stats.formationProb * 100).toFixed(0) + '%';
+        var medGen = (stats.genesisMedianTau != null)
+            ? '+' + stats.genesisMedianTau + ' h'
+            : '—';
+        var p10 = stats.peakP10 != null ? stats.peakP10.toFixed(0) + ' kt' : '—';
+        var p50 = stats.peakP50 != null ? stats.peakP50.toFixed(0) + ' kt' : '—';
+        var p90 = stats.peakP90 != null ? stats.peakP90.toFixed(0) + ' kt' : '—';
+        function tile(label, value, hint) {
+            return '<div class="rt-genesis-stat">'
+                +    '<div class="rt-genesis-stat-label">' + label + '</div>'
+                +    '<div class="rt-genesis-stat-value">' + value + '</div>'
+                +    (hint ? '<div class="rt-genesis-stat-hint">' + hint + '</div>' : '')
+                + '</div>';
+        }
+        el.innerHTML =
+            tile('Formation probability',
+                 formPct,
+                 stats.formationCount + ' / ' + nMembers + ' reach 34 kt') +
+            tile('Median genesis time',
+                 medGen,
+                 'first time any member crosses 34 kt') +
+            tile('Peak Vmax · P10 / P50 / P90',
+                 p10 + ' · ' + p50 + ' · ' + p90,
+                 'across member lifetime-max intensities');
+    }
+
+    /* Theme palette + SS palette helpers ─────────────────────────
+       Reads TCATheme.plotly() when available so the modal inherits
+       the rest of the site's dark/light switching for free. The SS
+       ramp matches realtime_ir.js's SS_COLORS used on the global map
+       so colored markers read the same as track icons. */
+    function _genesisTheme() {
+        if (window.TCATheme && typeof window.TCATheme.plotly === 'function') {
+            return window.TCATheme.plotly();
+        }
+        return {
+            paper_bgcolor: '#ffffff', plot_bgcolor: '#ffffff',
+            font: { family: 'DM Sans, system-ui, sans-serif',
+                    color: '#0f1623', size: 11 },
+            hoverlabel: { bgcolor: '#ffffff',
+                          bordercolor: 'rgba(15,22,35,0.15)',
+                          font: { color: '#0f1623', size: 11 } },
+        };
+    }
+    var _GENESIS_SS_SCALE = [
+        [0,        '#60a5fa'],   // TD
+        [34/200,   '#34d399'],   // TS
+        [64/200,   '#fbbf24'],   // C1
+        [83/200,   '#fb923c'],   // C2
+        [96/200,   '#ef4444'],   // C3
+        [113/200,  '#c430a0'],   // C4
+        [137/200,  '#8b5cf6'],   // C5
+        [1,        '#8b5cf6'],
+    ];
+
+    /* Track map (figure 1).
+       The TC-ATLAS visual: thin orange spaghetti polylines (matching
+       the Global Map's genesis layer color #f97316) + a bold ensemble-
+       mean track with SS-colored markers. Unique-to-pre-genesis
+       additions:
+         - "first-genesis" dots = the lat/lon where each member first
+           reaches 34 kt. The cloud of these dots shows where genesis
+           is forecast to occur (vs the colleague's all-position cloud
+           which mostly shows where the storm sits, not where it forms). */
+    function _renderGenesisMap(memberKeys, members, mean, stats) {
         var el = document.getElementById('rt-genesis-modal-map');
         if (!el || typeof Plotly === 'undefined') return;
-        var lons = [], lats = [], winds = [];
+        var theme = _genesisTheme();
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+
+        // Per-member polylines collapsed into one trace via null separators
+        // (cheap render: 1 trace × N members × M points vs N traces).
+        var spagX = [], spagY = [];
         for (var i = 0; i < memberKeys.length; i++) {
             var pts = members[memberKeys[i]].points || [];
             for (var j = 0; j < pts.length; j++) {
-                var p = pts[j];
-                if (p.lat == null || p.lon == null) continue;
-                lons.push(p.lon);
-                lats.push(p.lat);
-                winds.push(p.wind != null ? p.wind : 0);
+                if (pts[j].lat == null || pts[j].lon == null) continue;
+                spagX.push(pts[j].lon);
+                spagY.push(pts[j].lat);
             }
+            spagX.push(null); spagY.push(null);
         }
-        var meanLons = [], meanLats = [], meanWinds = [];
+        // Mean track arrays
+        var meanLons = [], meanLats = [], meanWinds = [], meanTaus = [];
         for (var k = 0; k < mean.points.length; k++) {
             var mp = mean.points[k];
             meanLons.push(mp.lon);
             meanLats.push(mp.lat);
             meanWinds.push(mp.wind != null ? mp.wind : 0);
+            meanTaus.push(mp.tau);
         }
-        // SS-style intensity scale ramp (TD→C5) mapped onto 0..200 kt.
-        var ssScale = [
-            [0,           '#60a5fa'],   // TD
-            [34/200,      '#34d399'],   // TS
-            [64/200,      '#fbbf24'],   // C1
-            [83/200,      '#fb923c'],   // C2
-            [96/200,      '#ef4444'],   // C3
-            [113/200,     '#c430a0'],   // C4
-            [137/200,     '#8b5cf6'],   // C5
-            [1,           '#8b5cf6'],
-        ];
-        var bounds = _genesisBoundsFromMean(meanLats, meanLons);
-        var cloud = {
-            type: 'scattergeo', mode: 'markers',
-            lon: lons, lat: lats,
-            marker: {
-                size: 3,
-                color: winds,
-                colorscale: ssScale,
-                cmin: 0, cmax: 200,
-                opacity: 0.45,
-                showscale: false,
-                line: { width: 0 },
-            },
-            name: '1000 ensemble members',
+
+        var bounds = _genesisBoundsFromMean(meanLats, meanLons,
+                                             stats.genLats, stats.genLons);
+
+        var spaghetti = {
+            type: 'scattergeo', mode: 'lines',
+            lon: spagX, lat: spagY,
+            line: { color: 'rgba(249,115,22,0.18)', width: 0.9 },
+            name: 'Members',
             hoverinfo: 'skip',
+            showlegend: false,
+            connectgaps: false,
+        };
+        // First-genesis dots — a pre-genesis feature only this view has.
+        var firstGenesis = {
+            type: 'scattergeo', mode: 'markers',
+            lon: stats.genLons, lat: stats.genLats,
+            marker: {
+                size: 5,
+                color: 'rgba(249,115,22,0.55)',
+                line: { color: 'rgba(124,45,18,0.65)', width: 0.4 },
+            },
+            name: 'First-genesis (≥ 34 kt)',
+            hovertemplate: 'Member first reaches 34 kt<br>%{lat:.1f}°N, %{lon:.1f}°E<extra></extra>',
+            showlegend: false,
         };
         var meanLine = {
             type: 'scattergeo', mode: 'lines',
             lon: meanLons, lat: meanLats,
-            line: { color: '#0f172a', width: 2.5 },
+            line: { color: '#f97316', width: 2.5 },
             name: 'Ensemble mean',
             hoverinfo: 'skip',
+            showlegend: false,
         };
         var meanMarkers = {
             type: 'scattergeo', mode: 'markers',
             lon: meanLons, lat: meanLats,
             marker: {
-                size: 11,
+                size: 10,
                 color: meanWinds,
-                colorscale: ssScale,
+                colorscale: _GENESIS_SS_SCALE,
                 cmin: 0, cmax: 200,
-                line: { color: '#0f172a', width: 1.2 },
+                line: { color: isDark ? '#0f172a' : '#1f2937', width: 1 },
                 colorbar: {
                     title: { text: 'Vmax (kt)', side: 'right',
-                             font: { size: 11 } },
-                    thickness: 12, len: 0.85,
-                    tickvals: [0, 25, 50, 75, 100, 125, 150, 175, 200],
-                    tickfont: { size: 10 },
+                             font: { size: 10 } },
+                    thickness: 10, len: 0.78,
+                    tickvals: [0, 34, 64, 83, 96, 113, 137],
+                    ticktext: ['0', '34<br>TS', '64<br>C1', '83<br>C2',
+                               '96<br>C3', '113<br>C4', '137<br>C5'],
+                    tickfont: { size: 9 },
                 },
                 showscale: true,
             },
             text: meanWinds.map(function (w, idx) {
-                return '+' + mean.points[idx].tau + 'h<br>' + w.toFixed(0) + ' kt ('
-                    + windToCategory(w) + ')';
+                return '+' + meanTaus[idx] + ' h<br>' + w.toFixed(0)
+                    + ' kt (' + windToCategory(w) + ')';
             }),
             hovertemplate: '%{text}<br>%{lat:.1f}°N, %{lon:.1f}°E<extra></extra>',
             name: 'Ensemble mean',
+            showlegend: false,
         };
         var layout = {
             margin: { l: 0, r: 0, t: 6, b: 0 },
             paper_bgcolor: 'rgba(0,0,0,0)',
+            font: theme.font,
             geo: {
                 projection: { type: 'mercator' },
                 lonaxis: { range: bounds.lon, showgrid: true,
-                           gridcolor: 'rgba(120,120,120,0.25)', dtick: 5 },
+                           gridcolor: isDark ? 'rgba(255,255,255,0.10)'
+                                             : 'rgba(15,22,35,0.10)',
+                           dtick: 5 },
                 lataxis: { range: bounds.lat, showgrid: true,
-                           gridcolor: 'rgba(120,120,120,0.25)', dtick: 5 },
-                showland: true, landcolor: '#d9d0b8',
-                showocean: true, oceancolor: '#bcd9d6',
-                showcountries: true, countrycolor: 'rgba(0,0,0,0.35)',
-                coastlinecolor: 'rgba(0,0,0,0.55)', coastlinewidth: 0.7,
+                           gridcolor: isDark ? 'rgba(255,255,255,0.10)'
+                                             : 'rgba(15,22,35,0.10)',
+                           dtick: 5 },
+                showland: true,
+                landcolor: isDark ? '#1f2937' : '#e5e7eb',
+                showocean: true,
+                oceancolor: isDark ? '#0b1320' : '#dbeafe',
+                showcountries: true,
+                countrycolor: isDark ? 'rgba(255,255,255,0.20)' : 'rgba(15,22,35,0.30)',
+                coastlinecolor: isDark ? 'rgba(255,255,255,0.45)'
+                                       : 'rgba(15,22,35,0.55)',
+                coastlinewidth: 0.8,
                 showcoastlines: true,
                 bgcolor: 'rgba(0,0,0,0)',
             },
             showlegend: false,
         };
-        Plotly.react(el, [cloud, meanLine, meanMarkers], layout,
+        Plotly.react(el,
+                     [spaghetti, firstGenesis, meanLine, meanMarkers],
+                     layout,
                      { responsive: true, displayModeBar: false });
     }
 
-    // Build the intensity time series: per-member dots + ensemble mean
-    // line (intensity-colored markers) + ±0.5σ / ±1σ / ±2.5σ ribbons.
-    function _renderGenesisIntensity(memberKeys, members, mean) {
+    /* Intensity time series (figure 2).
+       TC-ATLAS style: matches realtime_ir.js's storm-detail intensity
+       panel — soft orange min/max envelope + bold mean line with SS-
+       colored markers. Categorical reference bands across the y axis
+       give the analyst the SS context without busy dashed lines.
+       (No ±σ ribbons or per-member dots — the user asked for the
+       simpler "track and intensity forecasts" view, not the colleague's
+       statistical layout.) */
+    function _renderGenesisIntensity(memberKeys, members, mean, stats) {
         var el = document.getElementById('rt-genesis-modal-int');
         if (!el || typeof Plotly === 'undefined') return;
-        // Bucket member Vmax by tau for ribbon stats + dot scatter.
+        var theme = _genesisTheme();
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+
+        // Bucket every member's Vmax by tau so we can compute a per-tau
+        // envelope without re-walking members per-point.
         var byTau = {};
         for (var i = 0; i < memberKeys.length; i++) {
             var pts = members[memberKeys[i]].points || [];
@@ -5749,165 +5913,219 @@
         var taus = Object.keys(byTau).map(Number).sort(function (a, b) {
             return a - b;
         });
-        var meanArr = [], stdArr = [];
+        var minArr = [], maxArr = [];
         for (var ti = 0; ti < taus.length; ti++) {
             var arr = byTau[taus[ti]];
-            var sum = 0;
-            for (var s = 0; s < arr.length; s++) sum += arr[s];
-            var mu = sum / arr.length;
-            var ss = 0;
-            for (var s2 = 0; s2 < arr.length; s2++) {
-                var d = arr[s2] - mu;
-                ss += d * d;
-            }
-            meanArr.push(mu);
-            stdArr.push(Math.sqrt(ss / arr.length));
+            minArr.push(Math.min.apply(null, arr));
+            maxArr.push(Math.max.apply(null, arr));
         }
-        // Map taus to ISO datetime if we have the init time embedded
-        // in the ensemble-mean points; fall back to "+Xh" labels.
+        var xVals = taus.map(function (t) { return '+' + t + 'h'; });
         var meanByTau = {};
         for (var mi = 0; mi < mean.points.length; mi++) {
-            meanByTau[mean.points[mi].tau] = mean.points[mi];
-        }
-        // Build x-axis values: use ISO date if we can derive it from
-        // init_time; otherwise just use tau hours. The init lives on
-        // the parent json; recover it via the closure-shared meanArr's
-        // first point — quick read from the DOM modal subtitle isn't
-        // available here so we just use tau labels for safety.
-        // (Init-time labeling is cosmetic; the analyst reads either.)
-        var xVals = taus.map(function (t) { return '+' + t + 'h'; });
-        // Member scatter — flat list of (x, y).
-        var scatX = [], scatY = [], scatColors = [];
-        var ssColor = function (w) {
-            if (w < 34)  return 'rgba(96,165,250,0.20)';   // TD
-            if (w < 64)  return 'rgba(52,211,153,0.22)';   // TS
-            if (w < 83)  return 'rgba(251,191,36,0.30)';   // C1
-            if (w < 96)  return 'rgba(251,146,60,0.35)';   // C2
-            if (w < 113) return 'rgba(239,68,68,0.40)';    // C3
-            if (w < 137) return 'rgba(196,48,160,0.45)';   // C4
-            return            'rgba(139,92,246,0.50)';     // C5
-        };
-        for (var ti2 = 0; ti2 < taus.length; ti2++) {
-            var arr2 = byTau[taus[ti2]];
-            for (var k2 = 0; k2 < arr2.length; k2++) {
-                scatX.push(xVals[ti2]);
-                scatY.push(arr2[k2]);
-                scatColors.push(ssColor(arr2[k2]));
+            if (mean.points[mi].wind != null) {
+                meanByTau[mean.points[mi].tau] = mean.points[mi].wind;
             }
         }
-        // Ribbons: paired (low, high) traces with fill: 'tonexty'.
-        function ribbon(mult, fillColor) {
-            var hi = [], lo = [];
-            for (var i = 0; i < taus.length; i++) {
-                hi.push(meanArr[i] + mult * stdArr[i]);
-                lo.push(Math.max(0, meanArr[i] - mult * stdArr[i]));
-            }
-            return [
-                { type: 'scatter', mode: 'lines',
-                  x: xVals, y: lo,
-                  line: { color: 'rgba(0,0,0,0)' },
-                  showlegend: false, hoverinfo: 'skip' },
-                { type: 'scatter', mode: 'lines',
-                  x: xVals, y: hi,
-                  line: { color: 'rgba(0,0,0,0)' },
-                  fill: 'tonexty', fillcolor: fillColor,
-                  name: '±' + mult + 'σ', hoverinfo: 'skip',
-                  showlegend: true },
-            ];
+        var meanArr = taus.map(function (t) { return meanByTau[t]; });
+
+        // SS reference bands — translucent horizontal stripes spanning
+        // the whole plot. Cleaner than dashed threshold lines and the
+        // user can identify the category at a glance.
+        function bandShape(y0, y1, color) {
+            return {
+                type: 'rect', xref: 'paper', yref: 'y',
+                x0: 0, x1: 1, y0: y0, y1: y1,
+                fillcolor: color, line: { width: 0 }, layer: 'below',
+            };
         }
-        var ssScale = [
-            [0,           '#60a5fa'],
-            [34/200,      '#34d399'],
-            [64/200,      '#fbbf24'],
-            [83/200,      '#fb923c'],
-            [96/200,      '#ef4444'],
-            [113/200,     '#c430a0'],
-            [137/200,     '#8b5cf6'],
-            [1,           '#8b5cf6'],
+        var bandAlpha = isDark ? 0.10 : 0.06;
+        var shapes = [
+            bandShape(0,   34,  'rgba(96,165,250,'  + bandAlpha + ')'),  // TD
+            bandShape(34,  64,  'rgba(52,211,153,'  + bandAlpha + ')'),  // TS
+            bandShape(64,  83,  'rgba(251,191,36,'  + bandAlpha + ')'),  // C1
+            bandShape(83,  96,  'rgba(251,146,60,'  + bandAlpha + ')'),  // C2
+            bandShape(96,  113, 'rgba(239,68,68,'   + bandAlpha + ')'),  // C3
+            bandShape(113, 137, 'rgba(196,48,160,'  + bandAlpha + ')'),  // C4
+            bandShape(137, 200, 'rgba(139,92,246,'  + bandAlpha + ')'),  // C5
         ];
-        // Ribbons stack widest → narrowest so the narrower ones paint
-        // on top of the wider envelope.
-        var traces = [].concat(
-            ribbon(2.5, 'rgba(34,197,94,0.08)'),
-            ribbon(1.0, 'rgba(34,197,94,0.16)'),
-            ribbon(0.5, 'rgba(34,197,94,0.28)')
-        );
+
+        // Min/max envelope: low trace invisible, high trace filled to
+        // the previous trace — same pattern as the existing storm-
+        // detail intensity panel.
+        var traces = [];
         traces.push({
-            type: 'scatter', mode: 'markers',
-            x: scatX, y: scatY,
-            marker: {
-                size: 3.2,
-                color: scatColors,
-                line: { width: 0 },
-            },
-            showlegend: true,
-            name: 'Members',
-            hoverinfo: 'skip',
+            type: 'scatter', mode: 'lines',
+            x: xVals, y: minArr,
+            line: { color: 'rgba(0,0,0,0)' },
+            showlegend: false, hoverinfo: 'skip',
+        });
+        traces.push({
+            type: 'scatter', mode: 'lines',
+            x: xVals, y: maxArr,
+            line: { color: 'rgba(0,0,0,0)' },
+            fill: 'tonexty',
+            fillcolor: isDark ? 'rgba(249,115,22,0.22)'
+                              : 'rgba(249,115,22,0.18)',
+            name: 'Member spread', hoverinfo: 'skip',
+            showlegend: false,
         });
         traces.push({
             type: 'scatter', mode: 'lines+markers',
             x: xVals, y: meanArr,
-            line: { color: '#0f172a', width: 2 },
+            line: { color: '#f97316', width: 2.5 },
             marker: {
                 size: 9,
                 color: meanArr,
-                colorscale: ssScale,
+                colorscale: _GENESIS_SS_SCALE,
                 cmin: 0, cmax: 200,
-                line: { color: '#0f172a', width: 1 },
+                line: { color: isDark ? '#0f172a' : '#1f2937', width: 1 },
                 showscale: false,
             },
             name: 'Ensemble mean',
             hovertemplate: '%{x}<br>%{y:.1f} kt<extra></extra>',
+            showlegend: false,
         });
-        var layout = {
-            margin: { l: 55, r: 16, t: 6, b: 80 },
+
+        // Genesis median line — marks the median +X h at which a
+        // member first reaches 34 kt. A small contextual cue the named-
+        // storm view doesn't need.
+        if (stats.genesisMedianTau != null) {
+            shapes.push({
+                type: 'line', xref: 'x', yref: 'paper',
+                x0: '+' + stats.genesisMedianTau + 'h',
+                x1: '+' + stats.genesisMedianTau + 'h',
+                y0: 0, y1: 1,
+                line: { color: '#f97316', width: 1.5, dash: 'dash' },
+            });
+        }
+
+        var maxY = Math.max(160, Math.max.apply(null, maxArr) + 10);
+        var layout = Object.assign({}, theme, {
+            margin: { l: 55, r: 12, t: 26, b: 42 },
             paper_bgcolor: 'rgba(0,0,0,0)',
-            plot_bgcolor: 'rgba(255,255,255,0.4)',
+            plot_bgcolor: 'rgba(0,0,0,0)',
             xaxis: { title: { text: 'Lead time', font: { size: 11 } },
                      tickfont: { size: 10 },
-                     gridcolor: 'rgba(0,0,0,0.06)' },
+                     gridcolor: isDark ? 'rgba(255,255,255,0.06)'
+                                       : 'rgba(15,22,35,0.06)' },
             yaxis: { title: { text: 'Vmax (kt)', font: { size: 11 } },
-                     range: [0, Math.max(160, Math.max.apply(null, scatY) + 10)],
-                     gridcolor: 'rgba(0,0,0,0.06)' },
-            // SS threshold lines.
-            shapes: [
-                { type: 'line', xref: 'paper', x0: 0, x1: 1,
-                  yref: 'y', y0: 34, y1: 34,
-                  line: { color: 'rgba(0,0,0,0.18)', dash: 'dot', width: 1 } },
-                { type: 'line', xref: 'paper', x0: 0, x1: 1,
-                  yref: 'y', y0: 64, y1: 64,
-                  line: { color: 'rgba(0,0,0,0.18)', dash: 'dot', width: 1 } },
-                { type: 'line', xref: 'paper', x0: 0, x1: 1,
-                  yref: 'y', y0: 96, y1: 96,
-                  line: { color: 'rgba(0,0,0,0.18)', dash: 'dot', width: 1 } },
-                { type: 'line', xref: 'paper', x0: 0, x1: 1,
-                  yref: 'y', y0: 113, y1: 113,
-                  line: { color: 'rgba(0,0,0,0.18)', dash: 'dot', width: 1 } },
-            ],
-            legend: {
-                orientation: 'h', yanchor: 'top', y: -0.18,
-                xanchor: 'left',  x: 0,
-                font: { size: 10 },
-            },
-            font: { family: 'DM Sans, system-ui, sans-serif',
-                    color: '#0f172a', size: 11 },
-        };
+                     range: [0, maxY],
+                     gridcolor: isDark ? 'rgba(255,255,255,0.06)'
+                                       : 'rgba(15,22,35,0.06)' },
+            shapes: shapes,
+            annotations: stats.genesisMedianTau != null ? [{
+                x: '+' + stats.genesisMedianTau + 'h',
+                y: maxY * 0.97, xref: 'x', yref: 'y',
+                text: 'median genesis',
+                showarrow: false,
+                font: { size: 9, color: '#f97316' },
+                xanchor: 'left', xshift: 4,
+            }] : [],
+            showlegend: false,
+        });
         Plotly.react(el, traces, layout,
                      { responsive: true, displayModeBar: false });
     }
 
-    // Compute a basin window centred on the mean track + padding so the
-    // map domain matches the colleague's reference (~25° lon × 35° lat).
-    function _genesisBoundsFromMean(meanLats, meanLons) {
-        if (!meanLats.length) {
+    /* Genesis-time histogram (figure 3).
+       This is the chart only a pre-genesis ensemble needs: when does
+       each member first reach 34 kt? Bins are 12 h so a slot lines
+       up to a synoptic forecast cycle. Empty bins are kept so the
+       reader sees where genesis is NOT predicted (e.g. "no members
+       form before +24 h, then a cluster at +72-96 h"). */
+    function _renderGenesisTimeHistogram(stats) {
+        var el = document.getElementById('rt-genesis-modal-gtime');
+        if (!el || typeof Plotly === 'undefined') return;
+        var theme = _genesisTheme();
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var times = stats.genesisTimes || [];
+        if (!times.length) {
+            Plotly.react(el, [], Object.assign({}, theme, {
+                margin: { l: 55, r: 12, t: 26, b: 42 },
+                annotations: [{
+                    xref: 'paper', yref: 'paper', x: 0.5, y: 0.5,
+                    text: 'No member reaches 34 kt in the 15-day window.',
+                    showarrow: false,
+                    font: { size: 12, color: theme.font.color },
+                }],
+                xaxis: { visible: false }, yaxis: { visible: false },
+            }), { responsive: true, displayModeBar: false });
+            return;
+        }
+        // Build 12-h bins from min to max genesis tau, anchored to 0.
+        var minT = 0;
+        var maxT = Math.max.apply(null, times);
+        var binW = 12;
+        var nBins = Math.ceil((maxT - minT) / binW) + 1;
+        var bins = new Array(nBins).fill(0);
+        for (var i = 0; i < times.length; i++) {
+            var b = Math.floor((times[i] - minT) / binW);
+            if (b < 0) b = 0;
+            if (b >= nBins) b = nBins - 1;
+            bins[b]++;
+        }
+        var binCenters = [], binLabels = [];
+        for (var k = 0; k < nBins; k++) {
+            var lo = minT + k * binW;
+            binCenters.push(lo + binW / 2);
+            binLabels.push('+' + lo + '–' + (lo + binW) + 'h');
+        }
+        var maxCount = Math.max.apply(null, bins);
+        var trace = {
+            type: 'bar',
+            x: binCenters, y: bins,
+            width: binW * 0.85,
+            marker: {
+                color: 'rgba(249,115,22,0.78)',
+                line: { color: '#f97316', width: 0.8 },
+            },
+            text: bins.map(function (c) { return c > 0 ? c : ''; }),
+            textposition: 'outside',
+            textfont: { size: 10, color: isDark ? '#e2e8f0' : '#0f172a' },
+            customdata: binLabels,
+            hovertemplate: '%{customdata}<br>%{y} members<extra></extra>',
+            showlegend: false,
+        };
+        var layout = Object.assign({}, theme, {
+            margin: { l: 55, r: 12, t: 26, b: 42 },
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: 'rgba(0,0,0,0)',
+            title: {
+                text: 'When does each member first reach 34 kt?',
+                x: 0, xanchor: 'left',
+                font: { size: 11, color: theme.font.color },
+            },
+            xaxis: { title: { text: 'Lead time (h)', font: { size: 10 } },
+                     tickfont: { size: 10 },
+                     gridcolor: isDark ? 'rgba(255,255,255,0.06)'
+                                       : 'rgba(15,22,35,0.06)',
+                     dtick: 24 },
+            yaxis: { title: { text: 'Members', font: { size: 10 } },
+                     tickfont: { size: 10 },
+                     gridcolor: isDark ? 'rgba(255,255,255,0.06)'
+                                       : 'rgba(15,22,35,0.06)',
+                     range: [0, Math.max(5, maxCount * 1.2)] },
+            showlegend: false,
+        });
+        Plotly.react(el, [trace], layout,
+                     { responsive: true, displayModeBar: false });
+    }
+
+    // Compute a basin window large enough to contain the mean track AND
+    // the first-genesis cloud (if non-empty). Padded so the spaghetti
+    // around the cloud edges doesn't get clipped at the axis margin.
+    function _genesisBoundsFromMean(meanLats, meanLons, extraLats, extraLons) {
+        var lats = meanLats.slice();
+        var lons = meanLons.slice();
+        if (extraLats && extraLats.length) lats = lats.concat(extraLats);
+        if (extraLons && extraLons.length) lons = lons.concat(extraLons);
+        if (!lats.length) {
             return { lat: [-10, 50], lon: [100, 180] };
         }
-        var latMin = Math.min.apply(null, meanLats);
-        var latMax = Math.max.apply(null, meanLats);
-        var lonMin = Math.min.apply(null, meanLons);
-        var lonMax = Math.max.apply(null, meanLons);
-        // Pad ±6° for the ensemble cloud, with floor minima so a stationary
-        // mean track still gets a usable window.
+        var latMin = Math.min.apply(null, lats);
+        var latMax = Math.max.apply(null, lats);
+        var lonMin = Math.min.apply(null, lons);
+        var lonMax = Math.max.apply(null, lons);
         var lpad = Math.max(6, 0.25 * (latMax - latMin));
         var npad = Math.max(8, 0.30 * (lonMax - lonMin));
         return {

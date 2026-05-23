@@ -2490,6 +2490,55 @@ html:not([data-view="map"]) #ir-global-env-cbars {
     border-color: rgba(148, 163, 184, 0.3);
 }
 
+/* Pre-genesis-specific stats strip. Three quick-look tiles between
+   the header and the figures. Same density / typography as the storm-
+   detail attribute pills so it reads as part of the same site. */
+.rt-genesis-stat-row {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+    padding: 8px 10px;
+    margin-bottom: 12px;
+    background: rgba(249, 115, 22, 0.06);
+    border: 1px solid rgba(249, 115, 22, 0.18);
+    border-left: 3px solid #f97316;
+    border-radius: 6px;
+}
+.rt-genesis-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 4px 6px;
+}
+.rt-genesis-stat-label {
+    font-size: 0.62rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-dim, #64748b);
+}
+.rt-genesis-stat-value {
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--text, #0f172a);
+    font-variant-numeric: tabular-nums;
+}
+.rt-genesis-stat-hint {
+    font-size: 0.66rem;
+    color: var(--text-dim, #64748b);
+    line-height: 1.3;
+}
+[data-theme="dark"] .rt-genesis-stat-row {
+    background: rgba(249, 115, 22, 0.10);
+    border-color: rgba(249, 115, 22, 0.32);
+}
+[data-theme="dark"] .rt-genesis-stat-value { color: #e2e8f0; }
+[data-theme="dark"] .rt-genesis-stat-label,
+[data-theme="dark"] .rt-genesis-stat-hint  { color: #94a3b8; }
+@media (max-width: 720px) {
+    .rt-genesis-stat-row { grid-template-columns: 1fr; }
+}
+
 /* ════════════════════════════════════════════════════════════════
    subOnly=1 iframe-embed mode. Strips all chrome and reduces the
    Subseasonal tab to just the combined Hovmöller, so the climo
