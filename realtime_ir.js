@@ -509,9 +509,17 @@
     // Available as an A/B toggle in the Layers menu so a forecaster
     // can see whether the two methods agree on the current basin.
     var _genesisClusterMethod = 'deepmind';
-    var _GENESIS_CLUSTER_EPS_KM = 500;     // spatial neighborhood radius
     var _GENESIS_CLUSTER_MIN_MEMBERS = 50; // = 5% of 1000 — matches the
                                             // _GENESIS_MIN_FRACTION cutoff
+    // Trajectory-overlap clustering tunables. Two member tracks are
+    // considered the same physical feature when ≥ _MIN_MATCHES of
+    // their points come within _PROX_KM of each other — at ANY time
+    // offset. This handles cases like an easterly wave where some
+    // members forecast genesis at +24 h near Africa while others
+    // don't develop it until +120 h in the Caribbean: the tracks
+    // pass through the same locations, just at different times.
+    var _GENESIS_TRAJ_PROX_KM     = 250;
+    var _GENESIS_TRAJ_MIN_MATCHES = 3;
     var _GENESIS_MEMBER_COLOR = 'rgba(249, 115, 22, 0.12)';  // very soft so heatmap dominates
     var _GENESIS_MEAN_COLOR = '#f97316';                      // bold orange
     // Layer the genesis spaghetti pairs with by default — gives users
@@ -5545,23 +5553,33 @@
         });
     }
 
-    // TC-ATLAS-side clustering: pool every member trajectory from
-    // every DeepMind track, find each one's first-cross-of-34kt
-    // position, and cluster those points by spatial proximity
-    // (union-find on adjacency, eps = _GENESIS_CLUSTER_EPS_KM). A
-    // cluster qualifies as a "Disturbance" when it contains at least
-    // _GENESIS_CLUSTER_MIN_MEMBERS trajectories. Returns the same
-    // shape as _genesisQualifyingDisturbances so the render path is
-    // method-agnostic.
+    // TC-ATLAS clustering — TRAJECTORY-OVERLAP method.
     //
-    // This is the user-requested alternative to DeepMind's track_id
-    // grouping — it ignores DeepMind's clustering and groups based
-    // ONLY on where members forecast genesis. Useful for catching
-    // cases where DeepMind splits a single broad disturbance into
-    // multiple track_ids or merges two distinct features.
+    // Two member trajectories are considered the same physical feature
+    // when they have at least _GENESIS_TRAJ_MIN_MATCHES distinct points
+    // within _GENESIS_TRAJ_PROX_KM of each other — REGARDLESS of time
+    // offset. This handles cases where members forecast genesis at
+    // different times (e.g., an easterly wave where some members spin
+    // it up near Africa at +24 h and others don't develop it until
+    // +120 h in the Caribbean — the tracks describe the SAME WAVE,
+    // just offset in time).
+    //
+    // Algorithm:
+    //   1. Pool every member trajectory that reaches 34 kt at any point
+    //   2. Build a 5°×5° spatial grid index of every (track, point) tuple
+    //   3. For each trajectory's points, look up nearby grid cells and
+    //      count distinct trajectory-pairs that have close point-pairs
+    //   4. Pairs with ≥ MIN_MATCHES matches → union them
+    //   5. Group by cluster root → disturbances
+    //
+    // Cost: ~30k points × 9-cell neighborhood × ~5 candidates each ≈
+    // 1.3M distance checks. Easily < 200 ms in V8.
     function _genesisTCAtlasDisturbances(rawTracks) {
         if (!rawTracks || !rawTracks.length) return [];
-        // Pool trajectories that reach TC strength.
+
+        // Step 1: pool trajectories that reach TC strength. Each
+        // trajectory keeps its full point sequence — we'll match
+        // trajectories on whole-track overlap, not just genesis points.
         var trajs = [];
         for (var t = 0; t < rawTracks.length; t++) {
             var trk = rawTracks[t];
@@ -5569,33 +5587,100 @@
             var keys = Object.keys(members);
             for (var k = 0; k < keys.length; k++) {
                 var pts = members[keys[k]].points;
-                if (!pts) continue;
-                var firstGen = null;
+                if (!pts || pts.length < 2) continue;
+                var reachesTC = false;
                 for (var p = 0; p < pts.length; p++) {
                     if (pts[p].wind != null && pts[p].wind >= 34) {
-                        firstGen = pts[p];
+                        reachesTC = true;
                         break;
                     }
                 }
-                if (firstGen) {
-                    trajs.push({
-                        fromTrackId: trk.track_id,
-                        sampleKey: keys[k],
-                        firstLat: firstGen.lat,
-                        firstLon: firstGen.lon,
-                        points: pts,
-                    });
-                }
+                if (!reachesTC) continue;
+                trajs.push({
+                    fromTrackId: trk.track_id,
+                    sampleKey: keys[k],
+                    points: pts,
+                });
             }
         }
         var n = trajs.length;
         if (n === 0) return [];
 
-        // Union-find on first-genesis adjacency. O(n²) worst case
-        // (~1M ops for 1000 members) — trivial for an interactive
-        // pass that fires on toggle clicks, not per frame.
+        // Step 2: build a 5°×5° spatial grid index. Each cell stores
+        // every (trajectory, point) tuple whose lat/lon falls in it.
+        // Looking up nearby points becomes O(1) per query instead of
+        // O(N×T) over all trajectories.
+        var CELL = 5;   // degrees
+        var grid = {};
+        for (var i = 0; i < n; i++) {
+            var ipts = trajs[i].points;
+            for (var jj = 0; jj < ipts.length; jj++) {
+                var pp = ipts[jj];
+                if (pp.lat == null || pp.lon == null) continue;
+                var ix = Math.floor((pp.lon + 180) / CELL);
+                var iy = Math.floor((pp.lat + 90) / CELL);
+                var ck = ix + ',' + iy;
+                if (!grid[ck]) grid[ck] = [];
+                grid[ck].push({ trajIdx: i, lat: pp.lat, lon: pp.lon });
+            }
+        }
+
+        // Step 3: for each trajectory, scan its points and count
+        // distinct close-point matches against OTHER trajectories.
+        // Per-A-point dedup: a slow-moving A track that has multiple
+        // consecutive points near a single B point shouldn't inflate
+        // the count; we add at most one match per (A-point, other-traj)
+        // pair. matchCount[pair] = number of distinct A-points that
+        // found ANY close B-point — interpretable as "encounter steps"
+        // between the two members.
+        var matchCount = {};
+        var PROX_KM    = _GENESIS_TRAJ_PROX_KM;
+        var MIN_MATCH  = _GENESIS_TRAJ_MIN_MATCHES;
+        function pairKey(a, b) {
+            return (a < b ? a : b) * 10000 + (a < b ? b : a);
+        }
+        // Flat-earth distance² threshold — at TC scales (250 km, mid-
+        // latitudes) the spherical correction is < 0.1% so this swap
+        // costs us nothing in accuracy and ~5× in speed vs haversine.
+        // Working in degrees-squared via per-latitude cos lookup.
+        var PROX_KM_SQ = PROX_KM * PROX_KM;
+        var KM_PER_DEG = 111.0;     // good enough at this scale
+        for (var ia = 0; ia < n; ia++) {
+            var aPts = trajs[ia].points;
+            for (var ja = 0; ja < aPts.length; ja++) {
+                var ap = aPts[ja];
+                if (ap.lat == null || ap.lon == null) continue;
+                var aix = Math.floor((ap.lon + 180) / CELL);
+                var aiy = Math.floor((ap.lat + 90) / CELL);
+                var seenForThisPoint = {};   // dedup per-A-point
+                var apCosLat = Math.cos(ap.lat * Math.PI / 180);
+                for (var dx = -1; dx <= 1; dx++) {
+                    for (var dy = -1; dy <= 1; dy++) {
+                        var bucket = grid[(aix + dx) + ',' + (aiy + dy)];
+                        if (!bucket) continue;
+                        for (var bi = 0; bi < bucket.length; bi++) {
+                            var other = bucket[bi];
+                            if (other.trajIdx === ia) continue;
+                            if (seenForThisPoint[other.trajIdx]) continue;
+                            var dLat = ap.lat - other.lat;
+                            var dLon = ap.lon - other.lon;
+                            var kmLat = dLat * KM_PER_DEG;
+                            var kmLon = dLon * KM_PER_DEG * apCosLat;
+                            var d2 = kmLat * kmLat + kmLon * kmLon;
+                            if (d2 <= PROX_KM_SQ) {
+                                seenForThisPoint[other.trajIdx] = true;
+                                var pk = pairKey(ia, other.trajIdx);
+                                matchCount[pk] = (matchCount[pk] || 0) + 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Step 4: union-find on pairs that cleared MIN_MATCH.
         var parent = new Array(n);
-        for (var i = 0; i < n; i++) parent[i] = i;
+        for (var u = 0; u < n; u++) parent[u] = u;
         function find(x) {
             while (parent[x] !== x) {
                 parent[x] = parent[parent[x]];
@@ -5607,29 +5692,29 @@
             var ra = find(a), rb = find(b);
             if (ra !== rb) parent[ra] = rb;
         }
-        var eps = _GENESIS_CLUSTER_EPS_KM;
-        for (var i2 = 0; i2 < n; i2++) {
-            for (var j2 = i2 + 1; j2 < n; j2++) {
-                var d = _genesisHaversineKm(
-                    trajs[i2].firstLat, trajs[i2].firstLon,
-                    trajs[j2].firstLat, trajs[j2].firstLon);
-                if (d <= eps) union(i2, j2);
-            }
-        }
-        // Group by cluster root.
+        // Each matchCount[pair] was counted TWICE (once when A-point
+        // found B, once when B-point found A) because we don't dedup
+        // pair-order here. So the real threshold is 2 × MIN_MATCH.
+        var doubleThresh = 2 * MIN_MATCH;
+        Object.keys(matchCount).forEach(function (pkStr) {
+            if (matchCount[pkStr] < doubleThresh) return;
+            var pk = +pkStr;
+            var lo = Math.floor(pk / 10000);
+            var hi = pk % 10000;
+            union(lo, hi);
+        });
+
+        // Step 5: group by cluster root + build disturbance bundle.
         var clusters = {};
-        for (var k2 = 0; k2 < n; k2++) {
-            var r = find(k2);
+        for (var ii = 0; ii < n; ii++) {
+            var r = find(ii);
             if (!clusters[r]) clusters[r] = [];
-            clusters[r].push(trajs[k2]);
+            clusters[r].push(trajs[ii]);
         }
         var disturbances = [];
         Object.keys(clusters).forEach(function (rootKey) {
             var cluster = clusters[rootKey];
             if (cluster.length < _GENESIS_CLUSTER_MIN_MEMBERS) return;
-            // Synthesize a track object compatible with the render
-            // path. Members keyed by 0..N so the detail-modal fetch
-            // doesn't collide with DeepMind's sample IDs.
             var members = {};
             for (var ci = 0; ci < cluster.length; ci++) {
                 members[String(ci)] = { points: cluster[ci].points };
