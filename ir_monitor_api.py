@@ -3561,6 +3561,11 @@ _WEATHERLAB_BASE = (
 _weatherlab_cache: dict = {}   # (date_str, hour_str) -> {"data": {...}, "ts": float}
 _WEATHERLAB_CACHE_TTL = 7200   # 2 hours (CSV only changes every 6h)
 _WEATHERLAB_CACHE_MAX = 4
+# Same publish-lag profile as the LARGE_ENSEMBLE CSV — paired ensemble
+# lands ~3–5 h after init. Mirror the negative cache so probes for an
+# unpublished cycle don't cost 30 s each on every request.
+_WEATHERLAB_MISS_TTL = 600
+_WEATHERLAB_MISS = "__MISSING__"
 
 
 def _parse_lead_time(lead_str: str) -> float:
@@ -3637,8 +3642,12 @@ def _fetch_weatherlab_csv(date_str: str, hour_str: str) -> dict | None:
     """
     cache_key = (date_str, hour_str)
     cached = _weatherlab_cache.get(cache_key)
-    if cached and time.time() - cached["ts"] < _WEATHERLAB_CACHE_TTL:
-        return cached["data"]
+    if cached:
+        if cached["data"] == _WEATHERLAB_MISS:
+            if time.time() - cached["ts"] < _WEATHERLAB_MISS_TTL:
+                return None
+        elif time.time() - cached["ts"] < _WEATHERLAB_CACHE_TTL:
+            return cached["data"]
 
     import requests as req
 
@@ -3656,10 +3665,14 @@ def _fetch_weatherlab_csv(date_str: str, hour_str: str) -> dict | None:
     try:
         ens_resp = req.get(ens_url, timeout=30)
         if ens_resp.status_code != 200:
+            # Cache the miss — same publish-lag rationale as the genesis
+            # CSV cache; avoids 30-s timeouts on repeated requests.
+            _weatherlab_cache[cache_key] = {"data": _WEATHERLAB_MISS, "ts": time.time()}
             return None
         ens_text = ens_resp.text
     except Exception as e:
         print(f"[WeatherLab] Ensemble fetch failed: {e}")
+        _weatherlab_cache[cache_key] = {"data": _WEATHERLAB_MISS, "ts": time.time()}
         return None
 
     # Parse ensemble CSV
@@ -3746,10 +3759,14 @@ def _fetch_weatherlab_csv(date_str: str, hour_str: str) -> dict | None:
     except Exception:
         pass
 
-    # Cache
+    # Cache. Exclude miss-sentinel entries from the eviction cap so a
+    # flurry of 404s on not-yet-published cycles can't push a real
+    # parsed cycle out of the cache.
     _weatherlab_cache[cache_key] = {"data": result, "ts": time.time()}
-    if len(_weatherlab_cache) > _WEATHERLAB_CACHE_MAX:
-        oldest = min(_weatherlab_cache, key=lambda k: _weatherlab_cache[k]["ts"])
+    parsed_keys = [k for k, v in _weatherlab_cache.items()
+                   if v["data"] != _WEATHERLAB_MISS]
+    if len(parsed_keys) > _WEATHERLAB_CACHE_MAX:
+        oldest = min(parsed_keys, key=lambda k: _weatherlab_cache[k]["ts"])
         del _weatherlab_cache[oldest]
 
     print(f"[WeatherLab] Parsed {len(result)} storms from {date_str} {hour_str}z")
@@ -3765,19 +3782,15 @@ def get_storm_weatherlab(atcf_id: str):
     """
     atcf_id = atcf_id.upper().strip()
 
-    # Try latest available init times: today 06z, 00z, then yesterday
+    # Walk maturity-gated candidates newest-first. Cycles too young to
+    # plausibly be on the CDN are skipped, and 404s are cached short-TTL,
+    # so each frontend request is at worst one network probe.
     now = _dt.now(timezone.utc)
-    candidates = []
-    for day_offset in (0, 1):
-        dt = now - timedelta(days=day_offset)
-        date_str = dt.strftime("%Y-%m-%d")
-        for hour in ("18", "12", "06", "00"):
-            candidates.append((date_str, hour))
 
     data = None
     used_date = None
     used_hour = None
-    for date_str, hour_str in candidates:
+    for date_str, hour_str in _genesis_candidates(now=now):
         data = _fetch_weatherlab_csv(date_str, hour_str)
         if data and atcf_id in data:
             used_date = date_str
@@ -4281,17 +4294,10 @@ def get_weatherlab_global():
     surface disturbances that haven't yet received an invest number.
     """
     now = _dt.now(timezone.utc)
-    candidates = []
-    for day_offset in (0, 1):
-        dt = now - timedelta(days=day_offset)
-        date_str = dt.strftime("%Y-%m-%d")
-        for hour in ("18", "12", "06", "00"):
-            candidates.append((date_str, hour))
-
     data = None
     used_date = None
     used_hour = None
-    for date_str, hour_str in candidates:
+    for date_str, hour_str in _genesis_candidates(now=now):
         d = _fetch_weatherlab_csv(date_str, hour_str)
         if d:
             data = d
@@ -4307,7 +4313,7 @@ def get_weatherlab_global():
                 "tracks": [],
                 "n_tracks": 0,
             },
-            headers={"Cache-Control": "public, max-age=300"},
+            headers={"Cache-Control": "public, max-age=120"},
         )
 
     init_time = used_date.replace("-", "") + used_hour
@@ -4342,6 +4348,105 @@ def get_weatherlab_global():
 
 _weatherlab_genesis_cache: dict = {}  # (date, hour) -> {"data": ..., "ts": float}
 _WEATHERLAB_GENESIS_CACHE_TTL = 7200  # 2 hours (CSV only changes every 6h)
+# Shorter TTL for cached MISSES — DeepMind publishes ~3–5 h after the
+# cycle init time, so a cycle that 404'd 5 min ago might land soon. 10 min
+# is a good balance between avoiding hammer-loops and picking up fresh
+# cycles promptly. The sentinel below is stored as the "data" payload so
+# we don't have to add a separate dict.
+_WEATHERLAB_GENESIS_MISS_TTL = 600     # 10 min for negative cache
+_WEATHERLAB_GENESIS_MISS = "__MISSING__"
+
+# DeepMind typically publishes a cycle ~3–5 hours after its init time
+# (FNV3 inference + post-processing). Probing cycles younger than this
+# almost always 404s, wasting a 60-s timeout on every backend request
+# during the publish-lag window. The candidate enumerator skips any
+# cycle whose age is below this threshold.
+_WEATHERLAB_GENESIS_MIN_MATURITY_H = 3.0
+# Cadence between DeepMind cycles (00, 06, 12, 18 UTC).
+_WEATHERLAB_GENESIS_CADENCE_H = 6.0
+
+
+def _genesis_cycle_dt(date_str: str, hour_str: str):
+    """Parse a `(date_str, hour_str)` candidate into a UTC datetime."""
+    return _dt(
+        int(date_str[:4]), int(date_str[5:7]), int(date_str[8:10]),
+        int(hour_str), tzinfo=timezone.utc,
+    )
+
+
+def _genesis_candidates(now=None, days_back: int = 2, min_maturity_h: float = None) -> list:
+    """Ordered list of `(date_str, hour_str)` cycles to probe, freshest
+    first. Skips cycles too young to plausibly be published (saves a 60-s
+    timeout per request during the publish-lag window). Default look-back
+    is 2 days × 4 cycles = 8 candidates, more than enough to find data
+    even after a multi-cycle outage.
+    """
+    if now is None:
+        now = _dt.now(timezone.utc)
+    if min_maturity_h is None:
+        min_maturity_h = _WEATHERLAB_GENESIS_MIN_MATURITY_H
+    candidates = []
+    for day_offset in range(days_back):
+        dt = now - timedelta(days=day_offset)
+        date_str = dt.strftime("%Y-%m-%d")
+        for hour in ("18", "12", "06", "00"):
+            cyc_dt = _genesis_cycle_dt(date_str, hour)
+            age_h = (now - cyc_dt).total_seconds() / 3600.0
+            if age_h < min_maturity_h:
+                continue   # not yet published, skip
+            candidates.append((date_str, hour))
+    return candidates
+
+
+def _genesis_next_cycle_eta_h(now=None, init_time: str = None) -> float | None:
+    """Hours until the NEXT cycle past `init_time` is expected to land on
+    DeepMind, given the 6-hourly cadence + min-maturity lag. Used to set
+    a tight HTTP Cache-Control when we're close to a publish boundary, so
+    the frontend stops serving a now-stale cycle.
+    """
+    if now is None:
+        now = _dt.now(timezone.utc)
+    if not init_time or len(init_time) < 10:
+        return None
+    try:
+        cur_cyc = _dt(
+            int(init_time[:4]), int(init_time[4:6]), int(init_time[6:8]),
+            int(init_time[8:10]), tzinfo=timezone.utc,
+        )
+    except (ValueError, TypeError):
+        return None
+    next_cyc = cur_cyc + timedelta(hours=_WEATHERLAB_GENESIS_CADENCE_H)
+    next_published = next_cyc + timedelta(hours=_WEATHERLAB_GENESIS_MIN_MATURITY_H)
+    return max(0.0, (next_published - now).total_seconds() / 3600.0)
+
+
+def _resolve_latest_genesis_cycle(require_data: bool = True
+                                  ) -> tuple[str | None, str | None, dict | None]:
+    """Walk the candidate list newest-first and return the first cycle
+    that fetches successfully. Centralizes the loop that the global
+    endpoint, the per-track endpoint, and the warmer all need so the
+    "what's the latest?" logic lives in one place.
+
+    `require_data`: if True (default), keep walking past cycles that
+    fetch successfully but contain zero tracks. Set False to accept the
+    first non-None result (useful when probing whether the cycle exists
+    at all, regardless of whether any genesis is forecast).
+    """
+    candidates = _genesis_candidates()
+    fallback = None
+    for date_str, hour_str in candidates:
+        d = _fetch_weatherlab_genesis_csv(date_str, hour_str)
+        if d is None:
+            continue
+        if not require_data or len(d) > 0:
+            return date_str, hour_str, d
+        # Stash the first empty-but-published cycle as a fallback —
+        # better to return "0 tracks" from a real cycle than nothing.
+        if fallback is None:
+            fallback = (date_str, hour_str, d)
+    if fallback is not None:
+        return fallback
+    return None, None, None
 
 
 def _fetch_weatherlab_genesis_csv(date_str: str, hour_str: str
@@ -4364,20 +4469,36 @@ def _fetch_weatherlab_genesis_csv(date_str: str, hour_str: str
     """
     cache_key = (date_str, hour_str)
     cached = _weatherlab_genesis_cache.get(cache_key)
-    if cached and time.time() - cached["ts"] < _WEATHERLAB_GENESIS_CACHE_TTL:
-        return cached["data"]
+    if cached:
+        # Negative cache: use the shorter TTL so we re-check soon when a
+        # cycle that wasn't published 10 min ago might be published now.
+        if cached["data"] == _WEATHERLAB_GENESIS_MISS:
+            if time.time() - cached["ts"] < _WEATHERLAB_GENESIS_MISS_TTL:
+                return None
+        elif time.time() - cached["ts"] < _WEATHERLAB_GENESIS_CACHE_TTL:
+            return cached["data"]
 
     import requests as req
     date_fmt = date_str.replace("-", "_")
     url = (f"{_WEATHERLAB_LARGE_BASE}/ensemble/cyclogenesis/csv/"
            f"FNV3_LARGE_ENSEMBLE_{date_fmt}T{hour_str}_00_cyclogenesis.csv")
     try:
-        r = req.get(url, timeout=60)
+        # Tight HEAD-style timeout would be ideal but requests doesn't
+        # cleanly support a separate connect/read budget; 30 s read is
+        # enough for the multi-MB CSV on a warm CDN edge, and the negative
+        # cache absorbs the cost when the cycle isn't there yet.
+        r = req.get(url, timeout=30)
         if r.status_code != 200:
+            # Cache the miss so the next request doesn't pay another
+            # 30-s timeout for the same not-yet-published cycle.
+            _weatherlab_genesis_cache[cache_key] = {
+                "data": _WEATHERLAB_GENESIS_MISS, "ts": time.time()}
             return None
         text = r.text
     except Exception as e:
         print(f"[WeatherLab Genesis] fetch failed: {e}")
+        _weatherlab_genesis_cache[cache_key] = {
+            "data": _WEATHERLAB_GENESIS_MISS, "ts": time.time()}
         return None
 
     result: dict = {}
@@ -4484,9 +4605,14 @@ def _fetch_weatherlab_genesis_csv(date_str: str, hour_str: str
         storm["ensemble_mean"] = {"points": mean_pts}
 
     _weatherlab_genesis_cache[cache_key] = {"data": result, "ts": time.time()}
-    if len(_weatherlab_genesis_cache) > 4:
-        oldest = min(_weatherlab_genesis_cache,
-                     key=lambda k: _weatherlab_genesis_cache[k]["ts"])
+    # Cap the cache at 4 PARSED cycles. Miss-sentinel entries are tiny
+    # strings, so we exclude them from the cap — otherwise a flurry of
+    # not-yet-published probes could evict a fresh ~10 MB parse and
+    # force a re-fetch on the next request.
+    parsed_keys = [k for k, v in _weatherlab_genesis_cache.items()
+                   if v["data"] != _WEATHERLAB_GENESIS_MISS]
+    if len(parsed_keys) > 4:
+        oldest = min(parsed_keys, key=lambda k: _weatherlab_genesis_cache[k]["ts"])
         del _weatherlab_genesis_cache[oldest]
     print(f"[WeatherLab Genesis] Parsed {len(result)} tracks from "
           f"{date_str} {hour_str}z")
@@ -4504,24 +4630,7 @@ def get_weatherlab_genesis(max_members: int = 100):
     mean is always returned in full.
     """
     now = _dt.now(timezone.utc)
-    candidates = []
-    for day_offset in (0, 1):
-        dt = now - timedelta(days=day_offset)
-        date_str = dt.strftime("%Y-%m-%d")
-        for hour in ("18", "12", "06", "00"):
-            candidates.append((date_str, hour))
-
-    data = None
-    used_date = None
-    used_hour = None
-    for date_str, hour_str in candidates:
-        d = _fetch_weatherlab_genesis_csv(date_str, hour_str)
-        if d is not None and len(d) >= 0:
-            data = d
-            used_date = date_str
-            used_hour = hour_str
-            if len(d) > 0:
-                break
+    used_date, used_hour, data = _resolve_latest_genesis_cycle(require_data=True)
 
     if data is None:
         return JSONResponse(
@@ -4530,11 +4639,18 @@ def get_weatherlab_genesis(max_members: int = 100):
                 "init_time": None,
                 "tracks": [],
                 "n_tracks": 0,
+                "cycle_age_hours": None,
+                "next_cycle_eta_hours": None,
             },
-            headers={"Cache-Control": "public, max-age=300"},
+            # Short cache when we have nothing — the next cycle might be
+            # 5 min away from publication.
+            headers={"Cache-Control": "public, max-age=120"},
         )
 
     init_time = used_date.replace("-", "") + used_hour
+    cycle_dt = _genesis_cycle_dt(used_date, used_hour)
+    cycle_age_h = (now - cycle_dt).total_seconds() / 3600.0
+    next_eta_h = _genesis_next_cycle_eta_h(now=now, init_time=init_time)
     tracks = []
     cap = max(1, int(max_members)) if max_members else None
     for track_id, storm in data.items():
@@ -4553,6 +4669,16 @@ def get_weatherlab_genesis(max_members: int = 100):
             "n_members_total": total,
         })
 
+    # Adaptive HTTP cache: if the next cycle is expected within ~30 min,
+    # shrink max-age so the frontend doesn't sit on the previous cycle
+    # past its useful life. Otherwise the default 15 min is plenty.
+    if next_eta_h is not None and next_eta_h < 0.5:
+        cache_max_age = 60        # next cycle imminent — re-check often
+    elif next_eta_h is not None and next_eta_h < 1.5:
+        cache_max_age = 300       # within an hour-ish
+    else:
+        cache_max_age = 900       # comfortable lull mid-cycle
+
     return JSONResponse(
         content={
             "model": "DeepMind FNV3 LARGE_ENSEMBLE",
@@ -4560,8 +4686,11 @@ def get_weatherlab_genesis(max_members: int = 100):
             "tracks": tracks,
             "n_tracks": len(tracks),
             "thinned_to": cap,
+            "cycle_age_hours": round(cycle_age_h, 2),
+            "next_cycle_eta_hours": round(next_eta_h, 2) if next_eta_h is not None else None,
+            "fetched_at": now.isoformat(),
         },
-        headers={"Cache-Control": "public, max-age=900"},
+        headers={"Cache-Control": f"public, max-age={cache_max_age}"},
     )
 
 
@@ -4582,17 +4711,13 @@ def get_weatherlab_genesis_track(track_id: str):
         raise HTTPException(status_code=400, detail="track_id is required")
 
     now = _dt.now(timezone.utc)
-    candidates = []
-    for day_offset in (0, 1):
-        dt = now - timedelta(days=day_offset)
-        date_str = dt.strftime("%Y-%m-%d")
-        for hour in ("18", "12", "06", "00"):
-            candidates.append((date_str, hour))
-
+    # Walk the maturity-gated candidate list and stop at the first cycle
+    # that contains the requested track_id. Cycles too young to be
+    # published are skipped automatically.
     data = None
     used_date = None
     used_hour = None
-    for date_str, hour_str in candidates:
+    for date_str, hour_str in _genesis_candidates(now=now):
         d = _fetch_weatherlab_genesis_csv(date_str, hour_str)
         if d and track_id in d:
             data = d
@@ -4608,6 +4733,9 @@ def get_weatherlab_genesis_track(track_id: str):
 
     storm = data[track_id]
     init_time = used_date.replace("-", "") + used_hour
+    cycle_dt = _genesis_cycle_dt(used_date, used_hour)
+    cycle_age_h = (now - cycle_dt).total_seconds() / 3600.0
+    next_eta_h = _genesis_next_cycle_eta_h(now=now, init_time=init_time)
     members = storm["members"]
     return JSONResponse(
         content={
@@ -4617,6 +4745,8 @@ def get_weatherlab_genesis_track(track_id: str):
             "n_members": len(members),
             "members": members,
             "ensemble_mean": storm["ensemble_mean"],
+            "cycle_age_hours": round(cycle_age_h, 2),
+            "next_cycle_eta_hours": round(next_eta_h, 2) if next_eta_h is not None else None,
         },
         headers={"Cache-Control": "public, max-age=900"},
     )
@@ -4632,6 +4762,8 @@ _WEATHERLAB_LARGE_BASE = (
 )
 _weatherlab_large_cache: dict = {}  # (date, hour) -> {"data": ..., "ts": float}
 _WEATHERLAB_LARGE_CACHE_TTL = 7200  # 2 hours (CSV only changes every 6h)
+_WEATHERLAB_LARGE_MISS_TTL = 600
+_WEATHERLAB_LARGE_MISS = "__MISSING__"
 
 
 def _fetch_weatherlab_large_csv(date_str: str, hour_str: str,
@@ -4643,8 +4775,12 @@ def _fetch_weatherlab_large_csv(date_str: str, hour_str: str,
     """
     cache_key = (date_str, hour_str, target_track or "ALL")
     cached = _weatherlab_large_cache.get(cache_key)
-    if cached and time.time() - cached["ts"] < _WEATHERLAB_LARGE_CACHE_TTL:
-        return cached["data"]
+    if cached:
+        if cached["data"] == _WEATHERLAB_LARGE_MISS:
+            if time.time() - cached["ts"] < _WEATHERLAB_LARGE_MISS_TTL:
+                return None
+        elif time.time() - cached["ts"] < _WEATHERLAB_LARGE_CACHE_TTL:
+            return cached["data"]
 
     import requests as req
 
@@ -4658,9 +4794,13 @@ def _fetch_weatherlab_large_csv(date_str: str, hour_str: str,
         print(f"[WeatherLab 1K] Fetching {date_str} {hour_str}z ...")
         resp = req.get(url, timeout=60, stream=True)
         if resp.status_code != 200:
+            _weatherlab_large_cache[cache_key] = {
+                "data": _WEATHERLAB_LARGE_MISS, "ts": time.time()}
             return None
     except Exception as e:
         print(f"[WeatherLab 1K] Fetch failed: {e}")
+        _weatherlab_large_cache[cache_key] = {
+            "data": _WEATHERLAB_LARGE_MISS, "ts": time.time()}
         return None
 
     # Parse: collect per-(track, member) → list of {tau, wind, pres}
@@ -4761,12 +4901,13 @@ def _fetch_weatherlab_large_csv(date_str: str, hour_str: str,
             "intensity_change_24h": change_24h,
         }
 
-    # Cache
+    # Cache. Exclude miss-sentinel entries from the cap so 404 probes
+    # can't evict a freshly-parsed multi-MB cycle.
     _weatherlab_large_cache[cache_key] = {"data": result, "ts": time.time()}
-    # Evict oldest if too many
-    if len(_weatherlab_large_cache) > 4:
-        oldest = min(_weatherlab_large_cache,
-                     key=lambda k: _weatherlab_large_cache[k]["ts"])
+    parsed_keys = [k for k, v in _weatherlab_large_cache.items()
+                   if v["data"] != _WEATHERLAB_LARGE_MISS]
+    if len(parsed_keys) > 4:
+        oldest = min(parsed_keys, key=lambda k: _weatherlab_large_cache[k]["ts"])
         del _weatherlab_large_cache[oldest]
 
     print(f"[WeatherLab 1K] Parsed {len(result)} storms, "
@@ -4785,17 +4926,10 @@ def get_storm_weatherlab_ensemble(atcf_id: str):
     atcf_id = atcf_id.upper().strip()
 
     now = _dt.now(timezone.utc)
-    candidates = []
-    for day_offset in (0, 1):
-        dt = now - timedelta(days=day_offset)
-        date_str = dt.strftime("%Y-%m-%d")
-        for hour in ("18", "12", "06", "00"):
-            candidates.append((date_str, hour))
-
     data = None
     used_date = None
     used_hour = None
-    for date_str, hour_str in candidates:
+    for date_str, hour_str in _genesis_candidates(now=now):
         # Fetch ALL storms (no filter) so the full CSV is cached for all
         # subsequent per-storm requests within the TTL window.
         data = _fetch_weatherlab_large_csv(date_str, hour_str,

@@ -6890,37 +6890,96 @@
         _ga('rt_genesis_save_png', { chart: slug });
     }
 
-    function _loadGenesis() {
+    // Auto-repoll: re-check the genesis endpoint at most this often (ms).
+    // 30 min lines up with the publish-lag window — DeepMind cycles drop
+    // ~3–5 h after init, so a half-hour heartbeat picks up new cycles
+    // within ~30 min of publication without hammering the backend.
+    var _GENESIS_REPOLL_MS = 30 * 60 * 1000;
+    var _genesisRepollTimer = null;
+    var _genesisLastInit = null;
+
+    function _formatGenesisAge(ageH) {
+        if (ageH == null || !isFinite(ageH)) return '';
+        if (ageH < 1) return Math.round(ageH * 60) + ' min old';
+        if (ageH < 24) return ageH.toFixed(1) + ' h old';
+        return Math.round(ageH / 24) + ' d old';
+    }
+
+    function _loadGenesis(isAutoRefresh) {
         if (_rtGenesisLoading) return;
         _rtGenesisLoading = true;
         var statusEl = document.getElementById('ir-genesis-status');
-        if (statusEl) statusEl.textContent = 'Loading 1000-member ensemble…';
+        // Only show the "Loading…" placeholder on the first load — a
+        // background re-poll shouldn't make the panel flicker.
+        if (statusEl && !isAutoRefresh) {
+            statusEl.textContent = 'Loading 1000-member ensemble…';
+        }
 
         fetch(API_BASE + '/ir-monitor/weatherlab-genesis', { cache: 'no-store' })
             .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
             .then(function (data) {
-                _rtGenesisData = data;
-                if (_rtGenesisVisible) _renderGenesis();
-                if (_rtGenesisSpaghettiVisible) _renderGenesisSpaghetti();
-                if (_rtGenesisRawVisible) _renderGenesisRaw();
+                var newInit = data && data.init_time;
+                var prevInit = _genesisLastInit;
+                _genesisLastInit = newInit;
+
+                // If a background re-poll returned the same cycle we
+                // already have, skip the re-render to avoid touching
+                // active layers / popups for no benefit.
+                if (isAutoRefresh && newInit && prevInit && newInit === prevInit) {
+                    _ga('rt_genesis_repoll_nochange', { init: newInit });
+                } else {
+                    _rtGenesisData = data;
+                    if (_rtGenesisVisible) _renderGenesis();
+                    if (_rtGenesisSpaghettiVisible) _renderGenesisSpaghetti();
+                    if (_rtGenesisRawVisible) _renderGenesisRaw();
+                    if (isAutoRefresh && prevInit && newInit && newInit !== prevInit) {
+                        _ga('rt_genesis_newer_cycle', { from: prevInit, to: newInit });
+                    }
+                }
+
                 if (statusEl) {
                     var n = data && data.n_tracks ? data.n_tracks : 0;
+                    var ageBit = data && data.cycle_age_hours != null
+                        ? ' · ' + _formatGenesisAge(data.cycle_age_hours)
+                        : '';
                     if (n === 0) {
-                        statusEl.textContent = 'No genesis predicted in next 15 days';
+                        statusEl.textContent = 'No genesis predicted in next 15 days'
+                            + (newInit
+                                ? ' · init ' + newInit.slice(0, 8) + ' ' + newInit.slice(8) + 'Z' + ageBit
+                                : '');
                     } else {
                         statusEl.textContent = n + ' genesis track'
                             + (n === 1 ? '' : 's')
                             + (data.thinned_to ? ' · thinned to ' + data.thinned_to + '/track' : '')
-                            + (data.init_time ? ' · init ' + data.init_time.slice(0,8) + ' ' + data.init_time.slice(8) + 'Z' : '');
+                            + (newInit ? ' · init ' + newInit.slice(0,8) + ' ' + newInit.slice(8) + 'Z' : '')
+                            + ageBit;
                     }
                 }
-                _ga('rt_genesis_loaded', { n_tracks: data && data.n_tracks });
+                _ga('rt_genesis_loaded', { n_tracks: data && data.n_tracks,
+                                            init: newInit,
+                                            age_h: data && data.cycle_age_hours,
+                                            auto: !!isAutoRefresh });
             })
             .catch(function (err) {
                 console.warn('[Genesis] fetch failed', err);
-                if (statusEl) statusEl.textContent = 'Unavailable';
+                if (statusEl && !isAutoRefresh) statusEl.textContent = 'Unavailable';
             })
             .finally(function () { _rtGenesisLoading = false; });
+
+        // (Re-)arm the background re-poll. setInterval would keep firing
+        // even when the tab is hidden, so we use a setTimeout chain that
+        // also gates on document.visibilityState — no point hitting the
+        // backend on a backgrounded tab.
+        if (_genesisRepollTimer) clearTimeout(_genesisRepollTimer);
+        _genesisRepollTimer = setTimeout(function tick() {
+            if (document.visibilityState === 'visible') {
+                _loadGenesis(true);
+            } else {
+                // Tab hidden — reschedule a shorter retry so we catch
+                // back up promptly when the user returns.
+                _genesisRepollTimer = setTimeout(tick, 60 * 1000);
+            }
+        }, _GENESIS_REPOLL_MS);
     }
 
     /** Toggle just the spaghetti tracks layer (called from the menu). */
