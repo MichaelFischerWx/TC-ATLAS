@@ -518,14 +518,24 @@
     var _GENESIS_CLUSTER_MIN_MEMBERS = 50; // = 5% of 1000 — matches the
                                             // _GENESIS_MIN_FRACTION cutoff
     // Trajectory-overlap clustering tunables. Two member tracks are
-    // considered the same physical feature when ≥ _MIN_MATCHES of
-    // their points come within _PROX_KM of each other — at ANY time
-    // offset. This handles cases like an easterly wave where some
-    // members forecast genesis at +24 h near Africa while others
-    // don't develop it until +120 h in the Caribbean: the tracks
-    // pass through the same locations, just at different times.
-    var _GENESIS_TRAJ_PROX_KM     = 250;
-    var _GENESIS_TRAJ_MIN_MATCHES = 3;
+    // considered the same physical feature when:
+    //   (a) ≥ _MIN_MATCHES of their points come within _PROX_KM of
+    //       each other, AND
+    //   (b) the time offsets Δt = (t_B - t_A) of those matches are
+    //       CONSISTENT — mean |Δt| ≤ _OFFSET_MAX_H and stdev ≤
+    //       _OFFSET_STD_MAX_H. A consistent offset is the signature
+    //       of "B is just A's track shifted by ~k hours" (same wave,
+    //       different stage). Scattered offsets indicate "the two
+    //       tracks happened to cross paths" (unrelated storms).
+    //
+    // Without the consistency check we over-merged: a WPac storm
+    // passing through the Philippines at +24 h would lump with a
+    // separate Philippines disturbance sitting at the same lat/lon
+    // at +120 h, because the loose any-offset match fired.
+    var _GENESIS_TRAJ_PROX_KM         = 250;
+    var _GENESIS_TRAJ_MIN_MATCHES     = 3;
+    var _GENESIS_TRAJ_OFFSET_MAX_H    = 120;  // mean |Δt| ceiling
+    var _GENESIS_TRAJ_OFFSET_STD_MAX  = 18;   // stdev(Δt) ceiling
     var _GENESIS_MEMBER_COLOR = 'rgba(249, 115, 22, 0.12)';  // very soft so heatmap dominates
     var _GENESIS_MEAN_COLOR = '#f97316';                      // bold orange
     // Layer the genesis spaghetti pairs with by default — gives users
@@ -5614,8 +5624,8 @@
 
         // Step 2: build a 5°×5° spatial grid index. Each cell stores
         // every (trajectory, point) tuple whose lat/lon falls in it.
-        // Looking up nearby points becomes O(1) per query instead of
-        // O(N×T) over all trajectories.
+        // We also stash tau so the matching step can compute Δt for
+        // the time-offset consistency check.
         var CELL = 5;   // degrees
         var grid = {};
         for (var i = 0; i < n; i++) {
@@ -5627,30 +5637,34 @@
                 var iy = Math.floor((pp.lat + 90) / CELL);
                 var ck = ix + ',' + iy;
                 if (!grid[ck]) grid[ck] = [];
-                grid[ck].push({ trajIdx: i, lat: pp.lat, lon: pp.lon });
+                grid[ck].push({
+                    trajIdx: i,
+                    lat: pp.lat, lon: pp.lon, tau: pp.tau,
+                });
             }
         }
 
-        // Step 3: for each trajectory, scan its points and count
-        // distinct close-point matches against OTHER trajectories.
-        // Per-A-point dedup: a slow-moving A track that has multiple
-        // consecutive points near a single B point shouldn't inflate
-        // the count; we add at most one match per (A-point, other-traj)
-        // pair. matchCount[pair] = number of distinct A-points that
-        // found ANY close B-point — interpretable as "encounter steps"
-        // between the two members.
-        var matchCount = {};
+        // Step 3: for each A-point, look up nearby grid cells, find
+        // close B-points from HIGHER-indexed trajectories (each pair
+        // processed once). For each match, accumulate (count, Δt sum,
+        // Δt² sum) so we can later derive mean and stdev of the time
+        // offset between the two trajectories.
+        //
+        // Per-A-point dedup so a slow-moving A track with multiple
+        // consecutive points near one B point doesn't inflate the
+        // count for that pair.
+        var matchStats = {};      // pairKey → { n, dtSum, dtSqSum }
         var PROX_KM    = _GENESIS_TRAJ_PROX_KM;
         var MIN_MATCH  = _GENESIS_TRAJ_MIN_MATCHES;
-        function pairKey(a, b) {
-            return (a < b ? a : b) * 10000 + (a < b ? b : a);
-        }
-        // Flat-earth distance² threshold — at TC scales (250 km, mid-
-        // latitudes) the spherical correction is < 0.1% so this swap
-        // costs us nothing in accuracy and ~5× in speed vs haversine.
-        // Working in degrees-squared via per-latitude cos lookup.
+        var OFFSET_MAX = _GENESIS_TRAJ_OFFSET_MAX_H;
+        var STD_MAX    = _GENESIS_TRAJ_OFFSET_STD_MAX;
         var PROX_KM_SQ = PROX_KM * PROX_KM;
-        var KM_PER_DEG = 111.0;     // good enough at this scale
+        var KM_PER_DEG = 111.0;
+        function pairKey(a, b) {
+            // a, b ordered: a < b (we only consider that direction
+            // in the matching loop, so this stays consistent).
+            return a * 10000 + b;
+        }
         for (var ia = 0; ia < n; ia++) {
             var aPts = trajs[ia].points;
             for (var ja = 0; ja < aPts.length; ja++) {
@@ -5658,7 +5672,7 @@
                 if (ap.lat == null || ap.lon == null) continue;
                 var aix = Math.floor((ap.lon + 180) / CELL);
                 var aiy = Math.floor((ap.lat + 90) / CELL);
-                var seenForThisPoint = {};   // dedup per-A-point
+                var seenForThisPoint = {};
                 var apCosLat = Math.cos(ap.lat * Math.PI / 180);
                 for (var dx = -1; dx <= 1; dx++) {
                     for (var dy = -1; dy <= 1; dy++) {
@@ -5666,7 +5680,10 @@
                         if (!bucket) continue;
                         for (var bi = 0; bi < bucket.length; bi++) {
                             var other = bucket[bi];
-                            if (other.trajIdx === ia) continue;
+                            // Only A < B direction so each pair is
+                            // processed once and Δt stats aren't double-
+                            // counted with opposing signs.
+                            if (other.trajIdx <= ia) continue;
                             if (seenForThisPoint[other.trajIdx]) continue;
                             var dLat = ap.lat - other.lat;
                             var dLon = ap.lon - other.lon;
@@ -5676,7 +5693,15 @@
                             if (d2 <= PROX_KM_SQ) {
                                 seenForThisPoint[other.trajIdx] = true;
                                 var pk = pairKey(ia, other.trajIdx);
-                                matchCount[pk] = (matchCount[pk] || 0) + 1;
+                                var dt = other.tau - ap.tau;
+                                var rec = matchStats[pk];
+                                if (!rec) {
+                                    rec = { n: 0, dtSum: 0, dtSqSum: 0 };
+                                    matchStats[pk] = rec;
+                                }
+                                rec.n++;
+                                rec.dtSum   += dt;
+                                rec.dtSqSum += dt * dt;
                             }
                         }
                     }
@@ -5684,7 +5709,12 @@
             }
         }
 
-        // Step 4: union-find on pairs that cleared MIN_MATCH.
+        // Step 4: union-find — merge pairs that pass BOTH the match-
+        // count threshold AND the Δt-consistency filter. The latter is
+        // what stops two physically distinct storms crossing paths from
+        // being lumped together: same-wave members have all matches
+        // near one offset (low stdev), unrelated storms have scattered
+        // matches (high stdev).
         var parent = new Array(n);
         for (var u = 0; u < n; u++) parent[u] = u;
         function find(x) {
@@ -5698,12 +5728,14 @@
             var ra = find(a), rb = find(b);
             if (ra !== rb) parent[ra] = rb;
         }
-        // Each matchCount[pair] was counted TWICE (once when A-point
-        // found B, once when B-point found A) because we don't dedup
-        // pair-order here. So the real threshold is 2 × MIN_MATCH.
-        var doubleThresh = 2 * MIN_MATCH;
-        Object.keys(matchCount).forEach(function (pkStr) {
-            if (matchCount[pkStr] < doubleThresh) return;
+        Object.keys(matchStats).forEach(function (pkStr) {
+            var rec = matchStats[pkStr];
+            if (rec.n < MIN_MATCH) return;
+            var meanDt = rec.dtSum / rec.n;
+            if (Math.abs(meanDt) > OFFSET_MAX) return;
+            var variance = (rec.dtSqSum / rec.n) - meanDt * meanDt;
+            var stdDt = Math.sqrt(Math.max(0, variance));
+            if (stdDt > STD_MAX) return;
             var pk = +pkStr;
             var lo = Math.floor(pk / 10000);
             var hi = pk % 10000;
