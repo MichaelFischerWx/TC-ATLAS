@@ -2791,7 +2791,13 @@
                           'Jul','Aug','Sep','Oct','Nov','Dec'];
 
         var layout = {
-            margin: { l: 60, r: 30, t: 30, b: 50 },
+            // Bottom margin needs to clear: xaxis tick labels + "Day of
+            // year" axis title + the 2-row wrapped horizontal legend
+            // (5 entries: envelope, mean, highlight, current year so far,
+            // historical years — too many for one line on most widths).
+            // 50 px stacked the legend's second row on top of the
+            // "Day of year" title; 105 matches the SST path's spacing.
+            margin: { l: 60, r: 30, t: 30, b: 105 },
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: BRAND.plotBg,
             xaxis: {
@@ -2807,7 +2813,11 @@
                 gridcolor: BRAND.grid,
                 zerolinecolor: BRAND.gridZero,
             },
-            legend: { orientation: 'h', x: 0, y: -0.18,
+            // y=-0.28 (was -0.18) pushes the legend below the xaxis title
+            // with breathing room above the second wrap row. Pairs with
+            // margin.b above.
+            legend: { orientation: 'h', x: 0, y: -0.28,
+                      yanchor: 'top', xanchor: 'left',
                       font: { color: BRAND.text } },
             font: { family: 'DM Sans, system-ui, sans-serif',
                     color: BRAND.text },
