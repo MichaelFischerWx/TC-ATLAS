@@ -802,6 +802,25 @@ html, body { margin: 0; padding: 0; }
     color: var(--text) !important;
 }
 
+/* Per-member genesis inspect popup — theme-aware override of the
+   default Leaflet popup chrome so it matches dark mode and reads
+   correctly over both light and dark basemaps. */
+.leaflet-popup.rt-gen-member-leaflet-popup .leaflet-popup-content-wrapper {
+    background: var(--surface-raised) !important;
+    color: var(--text) !important;
+    border: 1px solid rgba(148, 163, 184, 0.25) !important;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.25) !important;
+}
+.leaflet-popup.rt-gen-member-leaflet-popup .leaflet-popup-tip {
+    background: var(--surface-raised) !important;
+}
+.leaflet-popup.rt-gen-member-leaflet-popup .leaflet-popup-content {
+    color: var(--text) !important;
+}
+.rt-gen-member-popup {
+    color: var(--text);
+}
+
 /* ── Mobile touch-target and layout fixes ──────────────────── */
 @media (max-width: 768px) {
     .ir-product-toggle button {

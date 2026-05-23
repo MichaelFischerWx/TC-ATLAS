@@ -6973,6 +6973,16 @@
                     latlngs.push([pts[pi].lat, pts[pi].lon]);
                 }
                 var segs = splitAtAntimeridian(latlngs);
+                // Per-member peak Vmax for the popup color (each member
+                // gets its own SS shade, not just the cluster's).
+                var memberPeak = 0;
+                for (var pp = 0; pp < pts.length; pp++) {
+                    if (pts[pp].wind != null && pts[pp].wind > memberPeak) memberPeak = pts[pp].wind;
+                }
+                var memberKeyLocal = memberKeys[mi];
+                var ptsLocal = pts;
+                var initIso = (_rtGenesisData && _rtGenesisData.init_time) || null;
+                var trackLabel = d.displayLabel || null;
                 for (var si = 0; si < segs.length; si++) {
                     if (segs[si].length < 2) continue;
                     var line = L.polyline(segs[si], {
@@ -6982,6 +6992,15 @@
                         interactive: false,
                     }).addTo(map);
                     _rtGenesisSpaghettiLayers.push(line);
+
+                    // Invisible hit-target so the user can actually click
+                    // an individual member out of the spaghetti tangle.
+                    (function (segLatLngs, mk, pp_, pw, init, label) {
+                        var hit = _addGenesisMemberHitLayer(map, segLatLngs, function (e) {
+                            _openGenesisMemberPopup(e.latlng, mk, pp_, init, pw, label);
+                        });
+                        _rtGenesisSpaghettiLayers.push(hit);
+                    })(segs[si], memberKeyLocal, ptsLocal, memberPeak, initIso, trackLabel);
                 }
             }
         }
@@ -7007,6 +7026,186 @@
             if (map) map.removeLayer(_rtGenesisRawLayers[i]);
         }
         _rtGenesisRawLayers = [];
+    }
+
+    /** Open a small Leaflet popup at `latlng` showing this one member's
+     *  forecast intensity time series. Built lazily so we only pay the
+     *  Plotly draw cost when the user actually clicks something. Layout
+     *  is theme-aware via the standard surface/text CSS vars so it
+     *  matches whatever mode the user is in.
+     *
+     *  Args:
+     *    latlng    — Leaflet LatLng where the click landed
+     *    memberKey — string ID of the member (used in the popup header)
+     *    pts       — array of { tau, lat, lon, wind } for this member
+     *    initIso   — init time string like "20260523120000" (may be falsy)
+     *    peakWind  — pre-computed peak Vmax (kt); drives the cat color
+     *    trackLabel— optional context line ("D1 · 78% form prob", etc.)
+     */
+    function _openGenesisMemberPopup(latlng, memberKey, pts, initIso, peakWind, trackLabel) {
+        if (!map || !pts || pts.length < 2) return;
+        var style = _genesisCatStyle(peakWind);
+        var cat = style.cat;
+
+        // First-genesis time (first point at ≥34 kt).
+        var firstGenTau = null;
+        for (var i = 0; i < pts.length; i++) {
+            if (pts[i].wind != null && pts[i].wind >= 34) {
+                firstGenTau = pts[i].tau;
+                break;
+            }
+        }
+
+        // Init Date for x-axis labels. Parse "YYYYMMDDHH" or "YYYYMMDDHHMMSS".
+        var initDate = null;
+        if (initIso && initIso.length >= 10) {
+            initDate = new Date(Date.UTC(
+                +initIso.slice(0, 4), +initIso.slice(4, 6) - 1, +initIso.slice(6, 8),
+                +initIso.slice(8, 10),
+                initIso.length >= 12 ? +initIso.slice(10, 12) : 0));
+        }
+
+        var plotDivId = 'rt-gen-member-plot-' + Date.now();
+        var headerBits = ['<b>Member ' + memberKey + '</b>'];
+        if (trackLabel) headerBits.push('<span style="opacity:0.75;">' + trackLabel + '</span>');
+        var peakLine = 'Peak: <b style="color:' + style.bold + ';">'
+            + Math.round(peakWind) + ' kt</b> · ' + cat;
+        var genLine = firstGenTau != null
+            ? 'First 34 kt at +' + firstGenTau + 'h'
+            : 'Never reaches TC strength';
+
+        var html =
+            '<div class="rt-gen-member-popup" style="width:300px;font-size:11px;">' +
+              '<div style="display:flex;justify-content:space-between;align-items:center;'
+                + 'margin-bottom:4px;gap:8px;">' +
+                '<div>' + headerBits.join(' &middot; ') + '</div>' +
+              '</div>' +
+              '<div style="opacity:0.85;margin-bottom:6px;">' + peakLine + ' &middot; '
+                + genLine + '</div>' +
+              '<div id="' + plotDivId + '" style="width:300px;height:170px;"></div>' +
+            '</div>';
+
+        var popup = L.popup({
+            maxWidth: 320,
+            minWidth: 300,
+            autoPanPadding: [40, 40],
+            className: 'rt-gen-member-leaflet-popup',
+            closeButton: true,
+        })
+            .setLatLng(latlng)
+            .setContent(html)
+            .openOn(map);
+
+        // Plotly needs the div in the DOM before plotting. openOn already
+        // injected the popup, but defer to next tick so layout is final.
+        setTimeout(function () {
+            var el = document.getElementById(plotDivId);
+            if (!el || typeof Plotly === 'undefined') return;
+
+            // Build x (forecast hour or absolute time) + y (wind) arrays.
+            var xs = [], ys = [];
+            for (var k = 0; k < pts.length; k++) {
+                if (pts[k].wind == null || pts[k].tau == null) continue;
+                if (initDate) {
+                    xs.push(new Date(initDate.getTime() + pts[k].tau * 3600000));
+                } else {
+                    xs.push(pts[k].tau);
+                }
+                ys.push(pts[k].wind);
+            }
+            if (xs.length < 2) {
+                el.innerHTML = '<div style="text-align:center;opacity:0.6;padding:30px;'
+                    + 'font-size:11px;">No wind data</div>';
+                return;
+            }
+
+            var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+            var paper = 'rgba(0,0,0,0)';
+            var grid  = isDark ? 'rgba(148,163,184,0.25)' : 'rgba(100,116,139,0.25)';
+            var axis  = isDark ? '#e2e8f0' : '#1e293b';
+
+            // Shaded SS bands behind the line — gives the eye an instant
+            // "what cat is this" without reading the y-axis.
+            var bands = [
+                { y0: 34,  y1: 64,  c: 'rgba(56,189,248,0.10)' },   // TS
+                { y0: 64,  y1: 83,  c: 'rgba(250,204,21,0.12)' },   // C1
+                { y0: 83,  y1: 96,  c: 'rgba(249,115,22,0.12)' },   // C2
+                { y0: 96,  y1: 113, c: 'rgba(239,68,68,0.12)' },    // C3
+                { y0: 113, y1: 137, c: 'rgba(217,70,239,0.12)' },   // C4
+                { y0: 137, y1: 200, c: 'rgba(168,85,247,0.14)' },   // C5
+            ];
+            var shapes = bands.map(function (b) {
+                return { type: 'rect', xref: 'paper', yref: 'y',
+                    x0: 0, x1: 1, y0: b.y0, y1: b.y1, fillcolor: b.c,
+                    line: { width: 0 }, layer: 'below' };
+            });
+            // 34-kt genesis threshold
+            shapes.push({
+                type: 'line', xref: 'paper', yref: 'y',
+                x0: 0, x1: 1, y0: 34, y1: 34,
+                line: { color: axis, width: 0.7, dash: 'dot' },
+                opacity: 0.5, layer: 'below',
+            });
+
+            var yMax = Math.max(80, Math.ceil(Math.max.apply(null, ys) / 10) * 10 + 10);
+
+            Plotly.newPlot(el, [{
+                x: xs, y: ys,
+                type: 'scatter', mode: 'lines+markers',
+                line: { color: style.bold, width: 2 },
+                marker: { color: style.bold, size: 4 },
+                hovertemplate: (initDate
+                    ? '%{x|%b %d %HZ}'
+                    : '+%{x}h'
+                    ) + ' · <b>%{y:.0f} kt</b><extra></extra>',
+                name: 'Member ' + memberKey,
+            }], {
+                paper_bgcolor: paper,
+                plot_bgcolor: paper,
+                margin: { l: 36, r: 8, t: 6, b: 28 },
+                xaxis: {
+                    color: axis, gridcolor: grid, zeroline: false,
+                    tickfont: { size: 9 },
+                    type: initDate ? 'date' : 'linear',
+                },
+                yaxis: {
+                    title: { text: 'Vmax (kt)', font: { size: 10, color: axis } },
+                    color: axis, gridcolor: grid, zeroline: false,
+                    range: [0, yMax],
+                    tickfont: { size: 9 },
+                },
+                shapes: shapes,
+                showlegend: false,
+                hovermode: 'x',
+            }, { displayModeBar: false, responsive: false });
+        }, 20);
+
+        _ga('rt_genesis_member_inspect', { member: memberKey, peak_kt: Math.round(peakWind) });
+    }
+
+    /** Add a wider invisible hit-target polyline behind a thin visible
+     *  one so clicking the 0.7-px stroke is actually possible. Returns
+     *  the hit layer so it can be pushed into the cleanup array. The
+     *  click handler fires `onClick(e)` with the Leaflet click event. */
+    function _addGenesisMemberHitLayer(map_, segLatLngs, onClick) {
+        var hit = L.polyline(segLatLngs, {
+            color: '#000',
+            weight: 10,
+            opacity: 0,        // fully transparent — SVG still captures clicks
+            interactive: true,
+            bubblingMouseEvents: false,
+        }).addTo(map_);
+        hit.on('click', function (e) {
+            try { onClick(e); }
+            catch (err) { console.warn('[Genesis] member click handler failed:', err); }
+            L.DomEvent.stopPropagation(e);
+        });
+        // Pointer cursor on hover so it's obvious lines are interactive.
+        hit.on('mouseover', function () {
+            var el = hit.getElement && hit.getElement();
+            if (el) el.style.cursor = 'pointer';
+        });
+        return hit;
     }
 
     /** Render every ensemble member as: a small circle at its first-
@@ -7056,6 +7255,17 @@
                 }
                 if (latlngs.length < 2) continue;
                 var segs = splitAtAntimeridian(latlngs);
+                // Capture loop locals for the closure (avoids the var-
+                // hoisting trap that would have every popup show the
+                // last member's data).
+                var memberKeyLocal = keys[ki];
+                var ptsLocal = pts;
+                var peakWindLocal = peakWind;
+                var initIso = (_rtGenesisData && _rtGenesisData.init_time) || null;
+                var trackLabel = null;
+                if (trk.track_id && _genesisDisturbanceMeta[trk.track_id]) {
+                    trackLabel = _genesisDisturbanceMeta[trk.track_id].label;
+                }
                 for (var si = 0; si < segs.length; si++) {
                     if (segs[si].length < 2) continue;
                     var line = L.polyline(segs[si], {
@@ -7065,6 +7275,16 @@
                         interactive: false,
                     }).addTo(map);
                     _rtGenesisRawLayers.push(line);
+
+                    // Wider invisible hit-target so the thin visible
+                    // line is actually clickable. Click → popup with
+                    // this member's intensity time series.
+                    (function (segLatLngs, mk, pp, pw, init, label) {
+                        var hit = _addGenesisMemberHitLayer(map, segLatLngs, function (e) {
+                            _openGenesisMemberPopup(e.latlng, mk, pp, init, pw, label);
+                        });
+                        _rtGenesisRawLayers.push(hit);
+                    })(segs[si], memberKeyLocal, ptsLocal, peakWindLocal, initIso, trackLabel);
                 }
 
                 // Genesis dot — only if this member actually reaches
