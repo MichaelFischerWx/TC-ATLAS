@@ -7719,6 +7719,53 @@
             + ' style="background:' + tcaChipBg + '; color:' + tcaChipColor + ';">'
             + 'TC-ATLAS</button>'
             + '</div>';
+
+        // Live tuner — visible only when TC-ATLAS is the active
+        // clustering method. Sliders mutate the four tunables and
+        // re-cluster against the already-loaded data on every input.
+        // Lets the user dial in a setting that matches their
+        // meteorological intuition without push/reload cycles.
+        if (!dmActive && _rtGenesisVisible) {
+            var statusN = document.querySelectorAll('.rt-gen-marker').length;
+            html += '<div class="ir-global-tuner">'
+                + '<div class="ir-tuner-row" data-key="prox">'
+                +   '<label>Proximity'
+                +     '<span class="ir-tuner-val">' + _GENESIS_TRAJ_PROX_KM + ' km</span>'
+                +   '</label>'
+                +   '<input type="range" min="50" max="800" step="25" '
+                +     'value="' + _GENESIS_TRAJ_PROX_KM + '">'
+                + '</div>'
+                + '<div class="ir-tuner-row" data-key="min">'
+                +   '<label>Min matches'
+                +     '<span class="ir-tuner-val">' + _GENESIS_TRAJ_MIN_MATCHES + '</span>'
+                +   '</label>'
+                +   '<input type="range" min="1" max="20" step="1" '
+                +     'value="' + _GENESIS_TRAJ_MIN_MATCHES + '">'
+                + '</div>'
+                + '<div class="ir-tuner-row" data-key="std">'
+                +   '<label>Δt stdev max'
+                +     '<span class="ir-tuner-val">' + _GENESIS_TRAJ_OFFSET_STD_MAX + ' h</span>'
+                +   '</label>'
+                +   '<input type="range" min="3" max="72" step="3" '
+                +     'value="' + _GENESIS_TRAJ_OFFSET_STD_MAX + '">'
+                + '</div>'
+                + '<div class="ir-tuner-row" data-key="span">'
+                +   '<label>Span fraction'
+                +     '<span class="ir-tuner-val">' + _GENESIS_TRAJ_SPAN_FRAC_MIN.toFixed(2) + '</span>'
+                +   '</label>'
+                +   '<input type="range" min="0.10" max="1.00" step="0.05" '
+                +     'value="' + _GENESIS_TRAJ_SPAN_FRAC_MIN + '">'
+                + '</div>'
+                + '<div class="ir-tuner-footer">'
+                +   '<span class="ir-tuner-status">'
+                +     '<strong>' + statusN + '</strong> disturbance'
+                +     (statusN === 1 ? '' : 's') + ' from this setting'
+                +   '</span>'
+                +   '<button type="button" class="ir-tuner-reset" '
+                +     'title="Restore default values">Reset</button>'
+                + '</div>'
+                + '</div>';
+        }
         // Opt-in sub-toggle for the raw member spaghetti. Off by
         // default — the disturbance markers above are the canonical
         // view. Spaghetti is for users who want to see the spread
@@ -7871,6 +7918,67 @@
                     }
                 });
             })(chips[c]);
+        }
+
+        // TC-ATLAS tuner sliders — live re-clustering on every input.
+        // Mutates the module-scope tunables, re-renders the disturbance
+        // markers + dependent layers, and updates the in-panel count
+        // status so the user sees the effect in real time.
+        function _genesisReRender() {
+            if (!_rtGenesisData) return;
+            _renderGenesis();
+            if (_rtGenesisSpaghettiVisible) _renderGenesisSpaghetti();
+            if (_rtGenesisRawVisible)       _renderGenesisRaw();
+            var status = document.querySelector('.ir-tuner-status');
+            if (status) {
+                var n = document.querySelectorAll('.rt-gen-marker').length;
+                status.innerHTML =
+                    '<strong>' + n + '</strong> disturbance'
+                    + (n === 1 ? '' : 's') + ' from this setting';
+            }
+        }
+        var tunerRows = content.querySelectorAll('.ir-tuner-row');
+        for (var tr = 0; tr < tunerRows.length; tr++) {
+            (function (rowEl) {
+                var key = rowEl.getAttribute('data-key');
+                var input = rowEl.querySelector('input[type=range]');
+                var valEl = rowEl.querySelector('.ir-tuner-val');
+                if (!input || !valEl) return;
+                input.addEventListener('input', function () {
+                    var v = parseFloat(input.value);
+                    if (key === 'prox') {
+                        _GENESIS_TRAJ_PROX_KM = v;
+                        valEl.textContent = v + ' km';
+                    } else if (key === 'min') {
+                        _GENESIS_TRAJ_MIN_MATCHES = parseInt(v, 10);
+                        valEl.textContent = parseInt(v, 10);
+                    } else if (key === 'std') {
+                        _GENESIS_TRAJ_OFFSET_STD_MAX = v;
+                        valEl.textContent = v + ' h';
+                    } else if (key === 'span') {
+                        _GENESIS_TRAJ_SPAN_FRAC_MIN = v;
+                        valEl.textContent = v.toFixed(2);
+                    }
+                    _genesisReRender();
+                });
+            })(tunerRows[tr]);
+        }
+        var resetBtn = content.querySelector('.ir-tuner-reset');
+        if (resetBtn) {
+            resetBtn.addEventListener('click', function (ev) {
+                ev.preventDefault();
+                ev.stopPropagation();
+                _GENESIS_TRAJ_PROX_KM         = 250;
+                _GENESIS_TRAJ_MIN_MATCHES     = 3;
+                _GENESIS_TRAJ_OFFSET_STD_MAX  = 18;
+                _GENESIS_TRAJ_SPAN_FRAC_MIN   = 0.5;
+                _genesisReRender();
+                // Re-render the panel to push the slider thumbs back
+                // to the default positions without a full menu close.
+                if (typeof toggleLayersPanel === 'function') {
+                    toggleLayersPanel(); toggleLayersPanel();
+                }
+            });
         }
 
         var opacityEl = document.getElementById('ir-layers-opacity');

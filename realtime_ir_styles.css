@@ -2389,6 +2389,86 @@ html:not([data-view="map"]) #ir-global-env-cbars {
     transform: scale(1.05);
 }
 
+/* Live TC-ATLAS clustering tuner — appears under the method picker
+   when TC-ATLAS is the active method. Four sliders that mutate the
+   tunables in real time and re-render the disturbance markers on
+   every input event. Stays out of the way visually with a faint
+   orange border to signal "this only affects the TC-ATLAS path". */
+.ir-global-tuner {
+    margin: 4px 12px 8px 36px;
+    padding: 10px 12px 8px;
+    border: 1px dashed rgba(249, 115, 22, 0.45);
+    border-radius: 6px;
+    background: rgba(249, 115, 22, 0.05);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.ir-tuner-row {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.ir-tuner-row label {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: 0.7rem;
+    color: var(--text, #0f172a);
+    font-weight: 600;
+}
+.ir-tuner-val {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: #f97316;
+}
+.ir-tuner-row input[type=range] {
+    width: 100%;
+    height: 4px;
+    margin: 2px 0;
+    accent-color: #f97316;
+    cursor: pointer;
+}
+.ir-tuner-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 4px;
+    padding-top: 6px;
+    border-top: 1px dashed rgba(249, 115, 22, 0.25);
+}
+.ir-tuner-status {
+    font-size: 0.72rem;
+    color: var(--text-dim, #64748b);
+}
+.ir-tuner-status strong {
+    color: var(--text, #0f172a);
+    font-variant-numeric: tabular-nums;
+}
+.ir-tuner-reset {
+    font-family: inherit;
+    font-size: 0.66rem;
+    padding: 3px 9px;
+    border: 1px solid rgba(249, 115, 22, 0.45);
+    background: transparent;
+    color: var(--text, #0f172a);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+.ir-tuner-reset:hover {
+    background: rgba(249, 115, 22, 0.18);
+    border-color: #f97316;
+}
+[data-theme="dark"] .ir-global-tuner {
+    background: rgba(249, 115, 22, 0.08);
+}
+[data-theme="dark"] .ir-tuner-row label { color: #e2e8f0; }
+[data-theme="dark"] .ir-tuner-status strong { color: #e2e8f0; }
+[data-theme="dark"] .ir-tuner-reset { color: #e2e8f0; }
+
 /* Inline cyclogenesis clustering-method picker.
    Two radio-style chips that switch between DeepMind's track_id
    grouping and our DBSCAN-style spatial clustering. Active chip
