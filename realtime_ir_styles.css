@@ -2389,6 +2389,32 @@ html:not([data-view="map"]) #ir-global-env-cbars {
     transform: scale(1.05);
 }
 
+/* Inline cyclogenesis clustering-method picker.
+   Two radio-style chips that switch between DeepMind's track_id
+   grouping and our DBSCAN-style spatial clustering. Active chip
+   takes the orange brand fill; inactive is clickable to switch. */
+.ir-global-method-row {
+    display: flex;
+    align-items: center;
+    padding: 2px 12px 8px 36px;   /* indent matches sub-toggle row */
+    gap: 4px;
+    cursor: default;
+}
+.ir-global-method-chip {
+    font-family: inherit;
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 3px 10px;
+    border: 1px solid rgba(249, 115, 22, 0.45);
+    border-radius: 11px;
+    cursor: pointer;
+    line-height: 1.2;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.ir-global-method-chip:hover {
+    border-color: #f97316;
+}
+
 /* ════════════════════════════════════════════════════════════════
    FNV3 LARGE_ENSEMBLE disturbance markers on the Global Map.
    One per qualifying ensemble cluster (≥5% formation probability),

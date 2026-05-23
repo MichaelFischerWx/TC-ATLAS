@@ -499,6 +499,19 @@
     // to see the per-member spread visually.
     var _rtGenesisSpaghettiVisible = false;
     var _rtGenesisSpaghettiLayers = [];
+    // Disturbance clustering method.
+    //   'deepmind' — trust DeepMind's CSV track_id grouping (each
+    //                row's track_id field is the cluster boundary)
+    //   'tcatlas'  — DBSCAN-style cluster on per-member first-genesis
+    //                points (we ignore DeepMind's track_id and group
+    //                trajectories whose first-cross-of-34kt positions
+    //                lie within _GENESIS_CLUSTER_EPS_KM of each other)
+    // Available as an A/B toggle in the Layers menu so a forecaster
+    // can see whether the two methods agree on the current basin.
+    var _genesisClusterMethod = 'deepmind';
+    var _GENESIS_CLUSTER_EPS_KM = 500;     // spatial neighborhood radius
+    var _GENESIS_CLUSTER_MIN_MEMBERS = 50; // = 5% of 1000 — matches the
+                                            // _GENESIS_MIN_FRACTION cutoff
     var _GENESIS_MEMBER_COLOR = 'rgba(249, 115, 22, 0.12)';  // very soft so heatmap dominates
     var _GENESIS_MEAN_COLOR = '#f97316';                      // bold orange
     // Layer the genesis spaghetti pairs with by default — gives users
@@ -5475,6 +5488,192 @@
     // header without re-running the qualification scan.
     var _genesisDisturbanceMeta = {};
 
+    // Great-circle distance in km. Used by the TC-ATLAS clustering
+    // path to test member-genesis spatial proximity. Identical math
+    // to the haversine helpers in satellite.js / global_archive.js;
+    // duplicated here to keep this module's genesis logic self-
+    // contained (no cross-file dependency just for one cluster
+    // routine).
+    function _genesisHaversineKm(lat1, lon1, lat2, lon2) {
+        var R = 6371;
+        var rad = Math.PI / 180;
+        var dLat = (lat2 - lat1) * rad;
+        var dLon = (lon2 - lon1) * rad;
+        var s1 = Math.sin(dLat / 2), s2 = Math.sin(dLon / 2);
+        var a = s1 * s1 +
+                Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * s2 * s2;
+        return 2 * R * Math.asin(Math.sqrt(a));
+    }
+
+    // Build an ensemble-mean trajectory from a set of member point
+    // arrays: bucket by tau, then average lat/lon/wind per tau across
+    // every contributing member. Used by the TC-ATLAS clustering path
+    // since DeepMind's pre-computed ensemble_mean is per-track-id and
+    // doesn't apply to our re-grouping.
+    function _genesisMeanTrack(memberPointArrays) {
+        var byTau = {};
+        for (var i = 0; i < memberPointArrays.length; i++) {
+            var pts = memberPointArrays[i];
+            if (!pts) continue;
+            for (var j = 0; j < pts.length; j++) {
+                var p = pts[j];
+                if (p.lat == null || p.lon == null) continue;
+                if (!byTau[p.tau]) {
+                    byTau[p.tau] = { latSum: 0, lonSum: 0,
+                                     windSum: 0, windN: 0, n: 0 };
+                }
+                byTau[p.tau].latSum += p.lat;
+                byTau[p.tau].lonSum += p.lon;
+                byTau[p.tau].n++;
+                if (p.wind != null && isFinite(p.wind)) {
+                    byTau[p.tau].windSum += p.wind;
+                    byTau[p.tau].windN++;
+                }
+            }
+        }
+        var taus = Object.keys(byTau).map(Number).sort(function (a, b) {
+            return a - b;
+        });
+        return taus.map(function (tau) {
+            var b = byTau[tau];
+            return {
+                tau: tau,
+                lat: b.latSum / b.n,
+                lon: b.lonSum / b.n,
+                wind: b.windN > 0 ? b.windSum / b.windN : null,
+            };
+        });
+    }
+
+    // TC-ATLAS-side clustering: pool every member trajectory from
+    // every DeepMind track, find each one's first-cross-of-34kt
+    // position, and cluster those points by spatial proximity
+    // (union-find on adjacency, eps = _GENESIS_CLUSTER_EPS_KM). A
+    // cluster qualifies as a "Disturbance" when it contains at least
+    // _GENESIS_CLUSTER_MIN_MEMBERS trajectories. Returns the same
+    // shape as _genesisQualifyingDisturbances so the render path is
+    // method-agnostic.
+    //
+    // This is the user-requested alternative to DeepMind's track_id
+    // grouping — it ignores DeepMind's clustering and groups based
+    // ONLY on where members forecast genesis. Useful for catching
+    // cases where DeepMind splits a single broad disturbance into
+    // multiple track_ids or merges two distinct features.
+    function _genesisTCAtlasDisturbances(rawTracks) {
+        if (!rawTracks || !rawTracks.length) return [];
+        // Pool trajectories that reach TC strength.
+        var trajs = [];
+        for (var t = 0; t < rawTracks.length; t++) {
+            var trk = rawTracks[t];
+            var members = trk.members || {};
+            var keys = Object.keys(members);
+            for (var k = 0; k < keys.length; k++) {
+                var pts = members[keys[k]].points;
+                if (!pts) continue;
+                var firstGen = null;
+                for (var p = 0; p < pts.length; p++) {
+                    if (pts[p].wind != null && pts[p].wind >= 34) {
+                        firstGen = pts[p];
+                        break;
+                    }
+                }
+                if (firstGen) {
+                    trajs.push({
+                        fromTrackId: trk.track_id,
+                        sampleKey: keys[k],
+                        firstLat: firstGen.lat,
+                        firstLon: firstGen.lon,
+                        points: pts,
+                    });
+                }
+            }
+        }
+        var n = trajs.length;
+        if (n === 0) return [];
+
+        // Union-find on first-genesis adjacency. O(n²) worst case
+        // (~1M ops for 1000 members) — trivial for an interactive
+        // pass that fires on toggle clicks, not per frame.
+        var parent = new Array(n);
+        for (var i = 0; i < n; i++) parent[i] = i;
+        function find(x) {
+            while (parent[x] !== x) {
+                parent[x] = parent[parent[x]];
+                x = parent[x];
+            }
+            return x;
+        }
+        function union(a, b) {
+            var ra = find(a), rb = find(b);
+            if (ra !== rb) parent[ra] = rb;
+        }
+        var eps = _GENESIS_CLUSTER_EPS_KM;
+        for (var i2 = 0; i2 < n; i2++) {
+            for (var j2 = i2 + 1; j2 < n; j2++) {
+                var d = _genesisHaversineKm(
+                    trajs[i2].firstLat, trajs[i2].firstLon,
+                    trajs[j2].firstLat, trajs[j2].firstLon);
+                if (d <= eps) union(i2, j2);
+            }
+        }
+        // Group by cluster root.
+        var clusters = {};
+        for (var k2 = 0; k2 < n; k2++) {
+            var r = find(k2);
+            if (!clusters[r]) clusters[r] = [];
+            clusters[r].push(trajs[k2]);
+        }
+        var disturbances = [];
+        Object.keys(clusters).forEach(function (rootKey) {
+            var cluster = clusters[rootKey];
+            if (cluster.length < _GENESIS_CLUSTER_MIN_MEMBERS) return;
+            // Synthesize a track object compatible with the render
+            // path. Members keyed by 0..N so the detail-modal fetch
+            // doesn't collide with DeepMind's sample IDs.
+            var members = {};
+            for (var ci = 0; ci < cluster.length; ci++) {
+                members[String(ci)] = { points: cluster[ci].points };
+            }
+            var meanPts = _genesisMeanTrack(
+                cluster.map(function (c) { return c.points; }));
+            var peakWind = 0, peakTau = null;
+            for (var mi = 0; mi < meanPts.length; mi++) {
+                if (meanPts[mi].wind != null && meanPts[mi].wind > peakWind) {
+                    peakWind = meanPts[mi].wind;
+                    peakTau = meanPts[mi].tau;
+                }
+            }
+            disturbances.push({
+                raw: {
+                    track_id: 'tca-' + rootKey,
+                    members: members,
+                    ensemble_mean: { points: meanPts },
+                    n_members_total: cluster.length,
+                },
+                total: cluster.length,
+                fraction: cluster.length / _GENESIS_ENSEMBLE_SIZE,
+                peakWind: peakWind,
+                peakTau: peakTau,
+                mean: { points: meanPts },
+            });
+        });
+        disturbances.sort(function (a, b) { return b.fraction - a.fraction; });
+        disturbances.forEach(function (d, idx) {
+            d.displayLabel = 'Disturbance ' + (idx + 1);
+            d.displayShort = 'D' + (idx + 1);
+        });
+        return disturbances;
+    }
+
+    // Method dispatcher — single entry point so the render functions
+    // don't have to branch on cluster method themselves.
+    function _genesisDisturbances(rawTracks) {
+        if (_genesisClusterMethod === 'tcatlas') {
+            return _genesisTCAtlasDisturbances(rawTracks);
+        }
+        return _genesisQualifyingDisturbances(rawTracks);
+    }
+
     function _renderGenesis() {
         _clearGenesis();
         _genesisDisturbanceMeta = {};
@@ -5482,7 +5681,7 @@
         var tracks = _rtGenesisData.tracks || [];
         if (tracks.length === 0) return;
 
-        var disturbances = _genesisQualifyingDisturbances(tracks);
+        var disturbances = _genesisDisturbances(tracks);
         if (disturbances.length === 0) return;
 
         for (var di = 0; di < disturbances.length; di++) {
@@ -6336,7 +6535,7 @@
         if (!_rtGenesisData || !map) return;
         var rawTracks = _rtGenesisData.tracks || [];
         if (!rawTracks.length) return;
-        var disturbances = _genesisQualifyingDisturbances(rawTracks);
+        var disturbances = _genesisDisturbances(rawTracks);
         for (var di = 0; di < disturbances.length; di++) {
             var d = disturbances[di];
             var style = _genesisCatStyle(d.peakWind);
@@ -7167,6 +7366,30 @@
             substatus: 'FNV3 LARGE_ENSEMBLE · ≥5% formation prob' + (genStatus ? ' — ' + genStatus : ''),
             checked: !!_rtGenesisVisible
         });
+        // Clustering-method picker — two radio-style chips inline so
+        // a forecaster can A/B DeepMind's own track_id grouping vs
+        // our DBSCAN-style spatial clustering on member first-genesis
+        // points. Active method is highlighted; inactive is clickable.
+        var dmActive = _genesisClusterMethod === 'deepmind';
+        var dmChipBg    = dmActive   ? 'rgba(249,115,22,0.32)' : 'transparent';
+        var tcaChipBg   = !dmActive  ? 'rgba(249,115,22,0.32)' : 'transparent';
+        var dmChipColor = dmActive   ? '#f97316' : 'inherit';
+        var tcaChipColor = !dmActive ? '#f97316' : 'inherit';
+        html += '<div class="ir-global-menu-row ir-global-method-row" style="opacity:'
+            + (_rtGenesisVisible ? 1 : 0.45) + ';">'
+            + '<span style="font-size:0.72rem; opacity:0.75; margin-right:8px;">Method:</span>'
+            + '<button type="button" class="ir-global-method-chip" data-method="deepmind"'
+            + ' style="background:' + dmChipBg + '; color:' + dmChipColor + ';">'
+            + 'DeepMind</button>'
+            + '<button type="button" class="ir-global-method-chip" data-method="tcatlas"'
+            + ' style="background:' + tcaChipBg + '; color:' + tcaChipColor + ';">'
+            + 'TC-ATLAS</button>'
+            + '<span style="font-size:0.66rem; opacity:0.6; margin-left:8px;">'
+            + (dmActive
+                ? 'trusting DeepMind\'s track_id grouping'
+                : 'clustering members within ' + _GENESIS_CLUSTER_EPS_KM + ' km')
+            + '</span>'
+            + '</div>';
         // Opt-in sub-toggle for the raw member spaghetti. Off by
         // default — the disturbance markers above are the canonical
         // view. Spaghetti is for users who want to see the spread
@@ -7278,6 +7501,34 @@
                     _dispatchRow(rowEl, cb);
                 });
             })(rows[r]);
+        }
+
+        // Cyclogenesis-method picker chips. Click the inactive one
+        // to switch methods + re-render the disturbance layer in place.
+        var chips = content.querySelectorAll('.ir-global-method-chip');
+        for (var c = 0; c < chips.length; c++) {
+            (function (chipEl) {
+                chipEl.addEventListener('click', function (ev) {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    var m = chipEl.getAttribute('data-method');
+                    if (!m || m === _genesisClusterMethod) return;
+                    _genesisClusterMethod = m;
+                    _ga('rt_genesis_cluster_method', { method: m });
+                    if (_rtGenesisVisible) {
+                        _renderGenesis();
+                        if (_rtGenesisSpaghettiVisible) {
+                            _renderGenesisSpaghetti();
+                        }
+                    }
+                    // Re-open the menu so the chip-active style updates
+                    // without the user having to close + reopen.
+                    if (typeof toggleLayersPanel === 'function') {
+                        toggleLayersPanel();  // close
+                        toggleLayersPanel();  // reopen with refreshed HTML
+                    }
+                });
+            })(chips[c]);
         }
 
         var opacityEl = document.getElementById('ir-layers-opacity');
