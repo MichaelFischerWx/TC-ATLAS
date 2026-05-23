@@ -5241,11 +5241,23 @@
     var _EVO_PCL_MAX_AGE   = 140;     // frames until respawn (~4.5 s @ 30 fps)
     var _EVO_PCL_AGE_JIT   = 0.35;    // ±jitter on lifetime so deaths desync
     var _EVO_PCL_SPEED_DEG = 0.05;    // deg/frame per (m/s); tuned for 30 fps
-    var _EVO_PCL_MIN_KT    = 1.5;     // calm cut-off — respawn under this
+    // Calm cut-off: 0.5 kt (~0.26 m/s) is the noise floor of ERA5 850 hPa
+    // wind. The old 1.5 kt threshold blanked out large patches of the
+    // tropical Pacific where genuine trade-wind drift is 1-3 kt — visually
+    // the basin looked half-empty even though the heatmap clearly had
+    // shading there. 0.5 kt still avoids true-calm subtropical-high cores.
+    var _EVO_PCL_MIN_KT    = 0.5;
     var _EVO_PCL_FADE_IN   = 10;      // head opacity ramp from 0 on birth
     var _EVO_PCL_FADE_OUT  = 14;      // tail-end fade before death
     var _EVO_PCL_SPEED_NORM_MS = 22;  // m/s that saturates head opacity
     var _EVO_PCL_ERASE_ALPHA = 0.28;  // per-frame trail decay (higher → shorter persistence)
+    // Spawn attempts before parking the particle for the frame. 8 was too
+    // few when the basin has large patches under MIN_KT — most spawns
+    // failed, particles parked, and the live population accumulated in
+    // the high-wind corner of the viewport instead of spreading. 24 is
+    // still cheap (~10 ns/attempt × 450 particles × 30 fps = 3 ms/sec
+    // worst case) and gives weak-wind basins a real chance to populate.
+    var _EVO_PCL_SPAWN_ATTEMPTS = 24;
     var _evoParticles = {
         canvas: null, ctx: null, dpr: 1,
         // Flat per-particle arrays so we avoid the GC churn of object
@@ -5344,7 +5356,7 @@
         var p = _evoParticles;
         var xMin = viewport.x[0], xMax = viewport.x[1];
         var yMin = viewport.y[0], yMax = viewport.y[1];
-        for (var attempts = 0; attempts < 8; attempts++) {
+        for (var attempts = 0; attempts < _EVO_PCL_SPAWN_ATTEMPTS; attempts++) {
             var lat = yMin + Math.random() * (yMax - yMin);
             var lon = xMin + Math.random() * (xMax - xMin);
             var uv = _evoParticleUvAt(lon, lat);
