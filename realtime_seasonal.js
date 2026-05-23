@@ -981,29 +981,47 @@
     function _regionBoxTrace(boxArr, color, label, geoAxis) {
         if (!boxArr) return null;
         var ls = boxArr[0], ln = boxArr[1], lw = boxArr[2], le = boxArr[3];
-        var conv = function (lo) { return lo > 180 ? lo - 360 : lo; };
-        var lonW = conv(lw), lonE = conv(le);
-        // Densify latitude edges so the parallels don't bow under
-        // great-circle interpolation. Meridian edges are 2-point.
+        // Boxes are stored in 0..360 lon. Interpolate the parallel edges
+        // in 0..360 space (always eastward, lw → le), then map each
+        // point into the scattergeo's -180..180 frame. Any time a
+        // consecutive pair would wrap across the antimeridian (delta
+        // > 180°) we inject a (null, null) break so Plotly draws two
+        // line segments instead of one stretched line spanning the
+        // globe — fixes the Niño 4 inset box (160°E → 210°/-150°W)
+        // and any other dateline-straddling region.
         var STEPS = 24;
-        var lons = [], lats = [];
-        for (var i = 0; i <= STEPS; i++) {
-            lons.push(lonW + (i / STEPS) * (lonE - lonW));
-            lats.push(ls);
+        var to180 = function (lo) {
+            lo = ((lo % 360) + 360) % 360;
+            return lo > 180 ? lo - 360 : lo;
+        };
+        function pushParallel(out, latVal, lonStart, lonEnd) {
+            var prev = null;
+            for (var k = 0; k <= STEPS; k++) {
+                var t = k / STEPS;
+                var raw = lonStart + t * (lonEnd - lonStart);  // 0..360 frame
+                var lo = to180(raw);
+                if (prev !== null && Math.abs(lo - prev) > 180) {
+                    out.lon.push(null); out.lat.push(null);    // dateline break
+                }
+                out.lon.push(lo); out.lat.push(latVal);
+                prev = lo;
+            }
         }
-        lons.push(lonE); lats.push(ln);
-        for (var j = 1; j <= STEPS; j++) {
-            lons.push(lonE - (j / STEPS) * (lonE - lonW));
-            lats.push(ln);
-        }
-        lons.push(lonW); lats.push(ls);
+        var out = { lon: [], lat: [] };
+        pushParallel(out, ls, lw, le);                          // south edge
+        // East meridian — a single 2-pt segment, never crosses the
+        // dateline because both ends are at the same longitude.
+        out.lon.push(to180(le)); out.lat.push(ln);
+        pushParallel(out, ln, le, lw);                          // north edge
+        out.lon.push(to180(lw)); out.lat.push(ls);              // close
         return {
             type: 'scattergeo', mode: 'lines',
             geo: geoAxis || 'geo2',
-            lon: lons, lat: lats,
+            lon: out.lon, lat: out.lat,
             line: { color: color, width: 2.5 },
             name: label, hoverinfo: 'skip',
             showlegend: false,
+            connectgaps: false,
         };
     }
 
