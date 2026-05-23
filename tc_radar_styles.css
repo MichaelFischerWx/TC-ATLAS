@@ -847,7 +847,10 @@ a.case-meta-link:hover { color: #1d4ed8; border-bottom-color: #1d4ed8; }
 
 /* Loading spinner for env overlay */
 .env-loading-spinner {
-    width: 48px; height: 48px; border: 3px solid rgba(34,211,238,0.15);
+    width: 48px; height: 48px;
+    /* Neutral slate track at 40% alpha reads on both themes; the
+       previous cyan-on-cyan-alpha disappeared on dark navy. */
+    border: 3px solid rgba(148, 163, 184, 0.4);
     border-top-color: var(--cyan); border-radius: 50%;
     animation: envSpin 0.8s linear infinite; margin-bottom: 16px;
 }
@@ -906,7 +909,7 @@ a.case-meta-link:hover { color: #1d4ed8; border-bottom-color: #1d4ed8; }
 
 /* ── Loading ─────────────────────────────────────── */
 #loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); background: var(--surface-raised); padding: 30px 40px; border-radius: var(--radius-lg); box-shadow: 0 4px 20px rgba(0,0,0,0.12); z-index: 1000; text-align: center; color: var(--text); border: 1px solid var(--border); }
-.spinner { border: 3px solid var(--navy); border-top: 3px solid var(--cyan); border-radius: 50%; width: 36px; height: 36px; animation: spin 1s linear infinite; margin: 0 auto 12px; }
+.spinner { border: 3px solid rgba(148, 163, 184, 0.4); border-top: 3px solid var(--cyan); border-radius: 50%; width: 36px; height: 36px; animation: spin 1s linear infinite; margin: 0 auto 12px; }
 @keyframes spin { 0%{transform:rotate(0deg)} 100%{transform:rotate(360deg)} }
 
 /* ── Below-fold sections ─────────────────────────── */

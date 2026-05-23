@@ -77,7 +77,9 @@
 .ga-spinner {
     width: 24px;
     height: 24px;
-    border: 3px solid var(--border);
+    /* slate-400 @ 40 % alpha — visible on both light and dark surfaces.
+       Theme-aware var(--border) was too low-contrast on dark navy. */
+    border: 3px solid rgba(148, 163, 184, 0.4);
     border-top-color: var(--cyan);
     border-radius: 50%;
     animation: ga-spin 0.8s linear infinite;
