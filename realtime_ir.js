@@ -514,9 +514,17 @@
     //                lie within _GENESIS_CLUSTER_EPS_KM of each other)
     // Available as an A/B toggle in the Layers menu so a forecaster
     // can see whether the two methods agree on the current basin.
-    var _genesisClusterMethod = 'deepmind';
-    var _GENESIS_CLUSTER_MIN_MEMBERS = 50; // = 5% of 1000 — matches the
-                                            // _GENESIS_MIN_FRACTION cutoff
+    // Default to the TC-ATLAS density-peak method — it splits nearby
+    // distinct systems (e.g., WPac storm vs Philippines disturbance)
+    // far better than DeepMind's track_id grouping does for this kind
+    // of basin. DeepMind chip is still one click away if a forecaster
+    // wants the raw source-side groupings.
+    var _genesisClusterMethod = 'tcatlas';
+    // 25 members = 2.5% of the 1000-member FNV3 ensemble. Lowered from
+    // the original 5% (50) after live tuning showed that the density-
+    // peak algorithm cleanly separates real disturbances at this
+    // threshold without admitting noise clusters.
+    var _GENESIS_CLUSTER_MIN_MEMBERS = 25;
     // Density-based clustering tunables.
     //
     // Algorithm (replaces the previous trajectory-overlap union-find,
@@ -8109,7 +8117,7 @@
                 _GENESIS_GRID_DEG            = 3;
                 _GENESIS_PEAK_MIN_MEMBERS    = 8;
                 _GENESIS_ASSIGN_RADIUS_KM    = 500;
-                _GENESIS_CLUSTER_MIN_MEMBERS = 50;
+                _GENESIS_CLUSTER_MIN_MEMBERS = 25;
                 _genesisReRender();
                 if (typeof toggleLayersPanel === 'function') {
                     toggleLayersPanel(); toggleLayersPanel();
