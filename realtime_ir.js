@@ -9182,6 +9182,18 @@
             if (seasonSummaryTimer) { clearInterval(seasonSummaryTimer); seasonSummaryTimer = null; }
         });
 
+        // Default the Cyclogenesis disturbance layer to ON at page
+        // load. The whole point of the layer is to surface potential
+        // developing systems even in quiet periods — making the user
+        // dig into the Layers menu to find it hides the value. They
+        // can still toggle it off via the menu if they want a clean
+        // satellite-only view. Auto-disable the legacy WeatherLab
+        // 50-member spaghetti pair if the user hasn't expressed a
+        // preference (kept opt-in to avoid two competing layers).
+        _rtGenesisVisible = true;
+        _loadGenesis();
+        if (typeof _refreshLayersCount === 'function') _refreshLayersCount();
+
         _ga('ir_page_load');
         console.log('[RT Monitor] Initialized — polling every', POLL_INTERVAL_MS / 1000, 'seconds');
     }
