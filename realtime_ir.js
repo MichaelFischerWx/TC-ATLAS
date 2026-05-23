@@ -493,6 +493,12 @@
     var _rtGenesisVisible = false;
     var _rtGenesisLoading = false;
     var _rtGenesisLayers = [];
+    // Optional per-member spaghetti layer — opt-in via the Layers menu
+    // sub-toggle. Off by default because the disturbance markers above
+    // are the canonical glance-view; spaghetti is for users who want
+    // to see the per-member spread visually.
+    var _rtGenesisSpaghettiVisible = false;
+    var _rtGenesisSpaghettiLayers = [];
     var _GENESIS_MEMBER_COLOR = 'rgba(249, 115, 22, 0.12)';  // very soft so heatmap dominates
     var _GENESIS_MEAN_COLOR = '#f97316';                      // bold orange
     // Layer the genesis spaghetti pairs with by default — gives users
@@ -6273,6 +6279,7 @@
             .then(function (data) {
                 _rtGenesisData = data;
                 if (_rtGenesisVisible) _renderGenesis();
+                if (_rtGenesisSpaghettiVisible) _renderGenesisSpaghetti();
                 if (statusEl) {
                     var n = data && data.n_tracks ? data.n_tracks : 0;
                     if (n === 0) {
@@ -6298,12 +6305,79 @@
         _rtGenesisVisible = !_rtGenesisVisible;
         if (_rtGenesisVisible) {
             if (!_rtGenesisData) _loadGenesis(); else _renderGenesis();
+            // Re-paint the spaghetti too if it was already toggled on
+            // (e.g., user turned cyclogenesis off and back on).
+            if (_rtGenesisSpaghettiVisible && _rtGenesisData) {
+                _renderGenesisSpaghetti();
+            }
         } else {
             _clearGenesis();
+            _clearGenesisSpaghetti();   // dependent layer goes too
         }
         if (typeof _refreshLayersCount === 'function') _refreshLayersCount();
     }
     window.toggleGenesis = toggleGenesis;
+
+    function _clearGenesisSpaghetti() {
+        for (var i = 0; i < _rtGenesisSpaghettiLayers.length; i++) {
+            if (map) map.removeLayer(_rtGenesisSpaghettiLayers[i]);
+        }
+        _rtGenesisSpaghettiLayers = [];
+    }
+
+    /** Draw per-member polylines for every qualifying disturbance,
+     *  colored by that disturbance's predicted peak intensity. Each
+     *  member is one faint line; the bunching pattern shows where
+     *  the ensemble agrees vs diverges. Same color logic as the
+     *  detail modal's track figure so the visual language stays
+     *  consistent across surfaces. */
+    function _renderGenesisSpaghetti() {
+        _clearGenesisSpaghetti();
+        if (!_rtGenesisData || !map) return;
+        var rawTracks = _rtGenesisData.tracks || [];
+        if (!rawTracks.length) return;
+        var disturbances = _genesisQualifyingDisturbances(rawTracks);
+        for (var di = 0; di < disturbances.length; di++) {
+            var d = disturbances[di];
+            var style = _genesisCatStyle(d.peakWind);
+            var members = d.raw.members || {};
+            var memberKeys = Object.keys(members);
+            for (var mi = 0; mi < memberKeys.length; mi++) {
+                var pts = members[memberKeys[mi]].points;
+                if (!pts || pts.length < 2) continue;
+                var latlngs = [];
+                for (var pi = 0; pi < pts.length; pi++) {
+                    latlngs.push([pts[pi].lat, pts[pi].lon]);
+                }
+                var segs = splitAtAntimeridian(latlngs);
+                for (var si = 0; si < segs.length; si++) {
+                    if (segs[si].length < 2) continue;
+                    var line = L.polyline(segs[si], {
+                        color: style.faint,
+                        weight: 0.7,
+                        opacity: 1.0,      // alpha lives in style.faint
+                        interactive: false,
+                    }).addTo(map);
+                    _rtGenesisSpaghettiLayers.push(line);
+                }
+            }
+        }
+    }
+
+    function toggleGenesisSpaghetti() {
+        _rtGenesisSpaghettiVisible = !_rtGenesisSpaghettiVisible;
+        if (_rtGenesisSpaghettiVisible) {
+            // Auto-enable the parent cyclogenesis layer if it's off —
+            // the spaghetti only makes sense when the disturbance
+            // markers are also visible.
+            if (!_rtGenesisVisible) toggleGenesis();
+            if (_rtGenesisData) _renderGenesisSpaghetti();
+        } else {
+            _clearGenesisSpaghetti();
+        }
+        if (typeof _refreshLayersCount === 'function') _refreshLayersCount();
+    }
+    window.toggleGenesisSpaghetti = toggleGenesisSpaghetti;
 
     /** Activate a formation-probability env layer by name. Layers are
      *  categorized "genesis" but rendered exactly like env layers, so
@@ -7089,9 +7163,21 @@
         }
         html += row({
             action: 'genesis',
-            label: '<b>Genesis spaghetti (1000)</b>',
-            substatus: 'FNV3 LARGE_ENSEMBLE cyclogenesis' + (genStatus ? ' — ' + genStatus : ''),
+            label: '<b>Cyclogenesis disturbances</b>',
+            substatus: 'FNV3 LARGE_ENSEMBLE · ≥5% formation prob' + (genStatus ? ' — ' + genStatus : ''),
             checked: !!_rtGenesisVisible
+        });
+        // Opt-in sub-toggle for the raw member spaghetti. Off by
+        // default — the disturbance markers above are the canonical
+        // view. Spaghetti is for users who want to see the spread
+        // visually (matches the detail modal's track-figure style).
+        // Disabled until the cyclogenesis layer itself is on.
+        html += row({
+            action: 'genesis-spaghetti',
+            label: 'Member spaghetti',
+            substatus: 'Per-member track polylines, colored by predicted peak intensity',
+            checked: !!_rtGenesisSpaghettiVisible,
+            disabled: !_rtGenesisVisible
         });
         for (var gi = 0; gi < genesisProbLayers.length; gi++) {
             var GL = genesisProbLayers[gi];
@@ -7213,6 +7299,8 @@
             if (on !== _rtGlobalWLVisible) toggleGlobalWeatherlab();
         } else if (action === 'genesis') {
             if (on !== _rtGenesisVisible) toggleGenesis();
+        } else if (action === 'genesis-spaghetti') {
+            if (on !== _rtGenesisSpaghettiVisible) toggleGenesisSpaghetti();
         } else if (action === 'genesis-prob') {
             if (on) _activateGenesisProbLayer(name);
             else _deactivateEnvLayer(name);
