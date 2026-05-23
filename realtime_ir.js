@@ -499,6 +499,12 @@
     // to see the per-member spread visually.
     var _rtGenesisSpaghettiVisible = false;
     var _rtGenesisSpaghettiLayers = [];
+    // Raw ensemble layer — every member's first-genesis dot + its
+    // track polyline, independent of any clustering. Sister toggle to
+    // Cyclogenesis disturbances (not a sub-toggle). Chaotic but gives
+    // the analyst the full ensemble distribution as context.
+    var _rtGenesisRawVisible = false;
+    var _rtGenesisRawLayers = [];
     // Disturbance clustering method.
     //   'deepmind' — trust DeepMind's CSV track_id grouping (each
     //                row's track_id field is the cluster boundary)
@@ -6628,6 +6634,7 @@
                 _rtGenesisData = data;
                 if (_rtGenesisVisible) _renderGenesis();
                 if (_rtGenesisSpaghettiVisible) _renderGenesisSpaghetti();
+                if (_rtGenesisRawVisible) _renderGenesisRaw();
                 if (statusEl) {
                     var n = data && data.n_tracks ? data.n_tracks : 0;
                     if (n === 0) {
@@ -6726,6 +6733,108 @@
         if (typeof _refreshLayersCount === 'function') _refreshLayersCount();
     }
     window.toggleGenesisSpaghetti = toggleGenesisSpaghetti;
+
+    function _clearGenesisRaw() {
+        for (var i = 0; i < _rtGenesisRawLayers.length; i++) {
+            if (map) map.removeLayer(_rtGenesisRawLayers[i]);
+        }
+        _rtGenesisRawLayers = [];
+    }
+
+    /** Render every ensemble member as: a small circle at its first-
+     *  34kt point + its forecast track polyline. Independent of any
+     *  clustering — gives the analyst the full ensemble distribution
+     *  as context. Each member is colored by ITS OWN predicted peak
+     *  Vmax (member-level SS color), not the cluster's, so high-end
+     *  members stand out even within an otherwise weak cluster. */
+    function _renderGenesisRaw() {
+        _clearGenesisRaw();
+        if (!_rtGenesisData || !map) return;
+        var rawTracks = _rtGenesisData.tracks || [];
+        if (!rawTracks.length) return;
+
+        // Member-color helper — mirrors SS_COLORS via _genesisCatStyle
+        // but returns rgba strings so we can directly stamp opacity.
+        function rgba(hex, a) {
+            var r = parseInt(hex.slice(1, 3), 16);
+            var g = parseInt(hex.slice(3, 5), 16);
+            var b = parseInt(hex.slice(5, 7), 16);
+            return 'rgba(' + r + ',' + g + ',' + b + ',' + a + ')';
+        }
+
+        for (var ti = 0; ti < rawTracks.length; ti++) {
+            var trk = rawTracks[ti];
+            var members = trk.members || {};
+            var keys = Object.keys(members);
+            for (var ki = 0; ki < keys.length; ki++) {
+                var pts = members[keys[ki]].points;
+                if (!pts || pts.length < 2) continue;
+
+                // Find this member's peak Vmax + first-34kt point
+                var firstGenPt = null, peakWind = 0;
+                for (var pi = 0; pi < pts.length; pi++) {
+                    var w = pts[pi].wind;
+                    if (w == null) continue;
+                    if (firstGenPt == null && w >= 34) firstGenPt = pts[pi];
+                    if (w > peakWind) peakWind = w;
+                }
+                var style = _genesisCatStyle(peakWind);
+
+                // Track polyline — faint, member's own peak color.
+                var latlngs = [];
+                for (var pj = 0; pj < pts.length; pj++) {
+                    if (pts[pj].lat == null || pts[pj].lon == null) continue;
+                    latlngs.push([pts[pj].lat, pts[pj].lon]);
+                }
+                if (latlngs.length < 2) continue;
+                var segs = splitAtAntimeridian(latlngs);
+                for (var si = 0; si < segs.length; si++) {
+                    if (segs[si].length < 2) continue;
+                    var line = L.polyline(segs[si], {
+                        color: rgba(style.bold, 0.18),
+                        weight: 0.7,
+                        opacity: 1.0,
+                        interactive: false,
+                    }).addTo(map);
+                    _rtGenesisRawLayers.push(line);
+                }
+
+                // Genesis dot — only if this member actually reaches
+                // TC strength. Tiny circle at the first-34kt position.
+                if (firstGenPt) {
+                    var dot = L.circleMarker(
+                        [firstGenPt.lat, firstGenPt.lon], {
+                            radius: 2.2,
+                            color: rgba(style.bold, 0.85),
+                            fillColor: rgba(style.bold, 0.55),
+                            fillOpacity: 1,
+                            weight: 1,
+                            opacity: 1,
+                            interactive: false,
+                        }).addTo(map);
+                    _rtGenesisRawLayers.push(dot);
+                }
+            }
+        }
+    }
+
+    function toggleGenesisRaw() {
+        _rtGenesisRawVisible = !_rtGenesisRawVisible;
+        if (_rtGenesisRawVisible) {
+            // Auto-load the data if it isn't there yet. This layer
+            // can run independently of the Cyclogenesis disturbance
+            // layer — no auto-toggle of the parent here.
+            if (!_rtGenesisData) {
+                _loadGenesis();
+            } else {
+                _renderGenesisRaw();
+            }
+        } else {
+            _clearGenesisRaw();
+        }
+        if (typeof _refreshLayersCount === 'function') _refreshLayersCount();
+    }
+    window.toggleGenesisRaw = toggleGenesisRaw;
 
     /** Activate a formation-probability env layer by name. Layers are
      *  categorized "genesis" but rendered exactly like env layers, so
@@ -7411,6 +7520,7 @@
         var n = 0;
         if (_rtGlobalWLVisible) n++;
         if (_rtGenesisVisible) n++;
+        if (_rtGenesisRawVisible) n++;
         n += Object.keys(_rtEnvActive || {}).length;
         var el = document.getElementById('ir-layers-count');
         if (el) {
@@ -7542,9 +7652,22 @@
         html += row({
             action: 'genesis-spaghetti',
             label: 'Member spaghetti',
-            substatus: 'Per-member track polylines, colored by predicted peak intensity',
+            substatus: 'Per-member track polylines, colored by parent disturbance',
             checked: !!_rtGenesisSpaghettiVisible,
             disabled: !_rtGenesisVisible
+        });
+        // Independent toggle for the raw ensemble view. NOT a sub-
+        // toggle of Cyclogenesis — runs on the same /weatherlab-
+        // genesis data but shows EVERY member as its own genesis dot
+        // + track, colored by that member's own predicted peak Vmax.
+        // Chaotic by design — gives the analyst the full ensemble
+        // spread when the clustered disturbance markers feel too
+        // abstracted.
+        html += row({
+            action: 'genesis-raw',
+            label: '<b>Raw ensemble members</b>',
+            substatus: 'Every member: genesis dot + forecast track (no clustering)',
+            checked: !!_rtGenesisRawVisible,
         });
         for (var gi = 0; gi < genesisProbLayers.length; gi++) {
             var GL = genesisProbLayers[gi];
@@ -7696,6 +7819,8 @@
             if (on !== _rtGenesisVisible) toggleGenesis();
         } else if (action === 'genesis-spaghetti') {
             if (on !== _rtGenesisSpaghettiVisible) toggleGenesisSpaghetti();
+        } else if (action === 'genesis-raw') {
+            if (on !== _rtGenesisRawVisible) toggleGenesisRaw();
         } else if (action === 'genesis-prob') {
             if (on) _activateGenesisProbLayer(name);
             else _deactivateEnvLayer(name);
