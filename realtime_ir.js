@@ -490,6 +490,14 @@
     // required), so it surfaces forecast cyclogenesis days before NHC
     // numbers an invest.
     var _rtGenesisData = null;
+    // Uncapped per-DM-track member set, background-fetched after the
+    // capped /weatherlab-genesis feed lands. Used ONLY by the TC-ATLAS
+    // clustering path so the on-map tooltip can show the true unique-
+    // member count instead of the basin-wide projection (which under-
+    // counts heavily-overlapping clusters by 2-3×). Spaghetti and the
+    // DeepMind clustering path keep using the capped feed for perf.
+    var _rtGenesisDataUncapped = null;
+    var _rtGenesisUncappedLoading = false;
     var _rtGenesisVisible = false;
     var _rtGenesisLoading = false;
     var _rtGenesisLayers = [];
@@ -5883,8 +5891,15 @@
             for (var kk = 0; kk < ks.length; kk++) uniqueGlobalCapped[ks[kk]] = true;
         }
         var nUniqueGlobal = Object.keys(uniqueGlobalCapped).length;
-        var projectionRatio = nUniqueGlobal > 0
-            ? _GENESIS_ENSEMBLE_SIZE / nUniqueGlobal : 1;
+        // If we've fed the uncapped data in (background prefetch lands
+        // ≥95% of the true ensemble), skip the projection and report
+        // the raw unique-sample count directly. Otherwise scale by the
+        // basin-wide ratio so the capped-feed tooltip is at least
+        // first-order correct.
+        var isUncapped = nUniqueGlobal >= _GENESIS_ENSEMBLE_SIZE * 0.95;
+        var projectionRatio = isUncapped ? 1
+            : (nUniqueGlobal > 0
+                ? _GENESIS_ENSEMBLE_SIZE / nUniqueGlobal : 1);
 
         // Step 1: pool member trajectories with first-genesis points.
         var entries = [];
@@ -6095,10 +6110,16 @@
     }
 
     // Method dispatcher — single entry point so the render functions
-    // don't have to branch on cluster method themselves.
+    // don't have to branch on cluster method themselves. TC-ATLAS
+    // prefers uncapped tracks (loaded in the background) when they're
+    // available for this cycle — accurate hover counts. Falls back to
+    // the capped feed if uncapped hasn't finished loading yet.
     function _genesisDisturbances(rawTracks) {
         if (_genesisClusterMethod === 'tcatlas') {
-            return _genesisTCAtlasDisturbances(rawTracks);
+            var uncapped = _rtGenesisDataUncapped;
+            var initOk = uncapped && _rtGenesisData
+                && uncapped.init_time === _rtGenesisData.init_time;
+            return _genesisTCAtlasDisturbances(initOk ? uncapped.tracks : rawTracks);
         }
         return _genesisQualifyingDisturbances(rawTracks);
     }
@@ -7568,6 +7589,62 @@
         return Math.round(ageH / 24) + ' d old';
     }
 
+    // Background fetch every contributing DM track in parallel, store
+    // the uncapped result, and re-render TCA if we're on that method.
+    // Per-track responses go through _fetchDmTrack's existing cache,
+    // so re-toggling methods or re-opening modals is free after the
+    // first prefetch. Failures fall back to the capped feed silently.
+    function _loadGenesisUncapped() {
+        if (!_rtGenesisData || _rtGenesisUncappedLoading) return;
+        // Skip if we already have uncapped data for this cycle.
+        if (_rtGenesisDataUncapped
+                && _rtGenesisDataUncapped.init_time === _rtGenesisData.init_time) {
+            return;
+        }
+        var tracks = _rtGenesisData.tracks || [];
+        if (tracks.length === 0) return;
+        _rtGenesisUncappedLoading = true;
+        var ids = tracks.map(function (t) { return t.track_id; });
+        var fetches = ids.map(function (id) {
+            return _fetchDmTrack(id).catch(function () { return null; });
+        });
+        Promise.all(fetches).then(function (responses) {
+            var newTracks = [];
+            for (var i = 0; i < responses.length; i++) {
+                var r = responses[i];
+                if (r && r.members && Object.keys(r.members).length > 0) {
+                    newTracks.push({
+                        track_id: ids[i],
+                        members: r.members,
+                        ensemble_mean: r.ensemble_mean,
+                        n_members_total: r.n_members_total
+                            || Object.keys(r.members).length,
+                    });
+                } else {
+                    // Fallback to the capped version for this track.
+                    newTracks.push(tracks[i]);
+                }
+            }
+            _rtGenesisDataUncapped = {
+                init_time: _rtGenesisData.init_time,
+                tracks: newTracks,
+            };
+            // If TCA is the active method and the layer is visible,
+            // re-render the markers with the corrected counts.
+            if (_rtGenesisVisible && _genesisClusterMethod === 'tcatlas') {
+                _renderGenesis();
+            }
+            _ga('rt_genesis_uncapped_loaded', {
+                n_tracks: ids.length,
+                init: _rtGenesisData.init_time,
+            });
+        }).catch(function (err) {
+            console.warn('[Genesis] uncapped prefetch failed', err);
+        }).finally(function () {
+            _rtGenesisUncappedLoading = false;
+        });
+    }
+
     function _loadGenesis(isAutoRefresh) {
         if (_rtGenesisLoading) return;
         _rtGenesisLoading = true;
@@ -7598,6 +7675,10 @@
                     if (isAutoRefresh && prevInit && newInit && newInit !== prevInit) {
                         _ga('rt_genesis_newer_cycle', { from: prevInit, to: newInit });
                     }
+                    // Kick off the uncapped background prefetch so TCA
+                    // hover counts can switch from the projection to
+                    // the true unique-member count once available.
+                    _loadGenesisUncapped();
                 }
 
                 if (statusEl) {
