@@ -4993,6 +4993,68 @@ def _tca_compute_clusters(raw_data: dict,
     return out
 
 
+def _tca_get_or_compute_clusters(grid_deg, peak_min_members,
+                                  assign_radius_km, time_window_h,
+                                  cluster_min_members):
+    """Return cached (full, with members) clusters for the current
+    cycle + params, computing on miss. Used by both the index endpoint
+    (which strips members for the response) and the per-cluster detail
+    endpoint (which serves them in full)."""
+    now = _dt.now(timezone.utc)
+    used_date, used_hour, data = _resolve_latest_genesis_cycle(require_data=True)
+    if data is None:
+        return None, None, None, None
+    init_time = used_date.replace("-", "") + used_hour
+    params = (round(grid_deg, 3), int(peak_min_members),
+              round(assign_radius_km, 2), round(time_window_h, 2),
+              int(cluster_min_members))
+    cache_key = (init_time, params)
+    cached = _TCA_CLUSTER_CACHE.get(cache_key)
+    if cached and (time.time() - cached["ts"]) < _TCA_CLUSTER_TTL:
+        return init_time, params, cached["clusters"], (used_date, used_hour)
+    clusters = _tca_compute_clusters(
+        data,
+        grid_deg=grid_deg,
+        peak_min_members=peak_min_members,
+        assign_radius_km=assign_radius_km,
+        time_window_h=time_window_h,
+        cluster_min_members=cluster_min_members,
+    )
+    _TCA_CLUSTER_CACHE[cache_key] = {"clusters": clusters, "ts": time.time()}
+    if len(_TCA_CLUSTER_CACHE) > _TCA_CLUSTER_CACHE_MAX:
+        oldest = sorted(_TCA_CLUSTER_CACHE.items(),
+                        key=lambda kv: kv[1]["ts"])[0][0]
+        _TCA_CLUSTER_CACHE.pop(oldest, None)
+    return init_time, params, clusters, (used_date, used_hour)
+
+
+def _tca_cluster_index_view(c):
+    """Strip the heavy per-member trajectories from a cluster for the
+    index response. Keeps sample-key list so the frontend has unique-
+    member counts, ensemble_mean (small), and all cluster metadata."""
+    return {
+        "track_id": c["track_id"],
+        "display_label": c["display_label"],
+        "display_short": c["display_short"],
+        "n_members": c["n_members"],
+        "n_members_total": c["n_members_total"],
+        "fraction": c["fraction"],
+        "peak_wind": c["peak_wind"],
+        "peak_tau": c["peak_tau"],
+        "peak_lat": c["peak_lat"],
+        "peak_lon": c["peak_lon"],
+        "peak_mean_tau": c["peak_mean_tau"],
+        "gate_radius_km": c["gate_radius_km"],
+        "gate_time_h": c["gate_time_h"],
+        "contrib_track_ids": c["contrib_track_ids"],
+        "capped_total": c["capped_total"],
+        "ensemble_mean": c["ensemble_mean"],
+        # Sample keys only — lets the frontend show unique counts and
+        # display "X members" without the multi-MB trajectory blob.
+        "sample_keys": list((c.get("members") or {}).keys()),
+    }
+
+
 @router.get("/weatherlab-genesis-clusters")
 def get_weatherlab_genesis_clusters(
     grid_deg: float = 3.0,
@@ -5001,17 +5063,18 @@ def get_weatherlab_genesis_clusters(
     time_window_h: float = 48.0,
     cluster_min_members: int = 25,
 ):
-    """Precomputed TC-ATLAS density-peak clusters, ranked by formation
-    probability. Same algorithm as the frontend's client-side path but
-    runs once per (cycle, tuner-params) here so every client gets
-    instant results instead of fetching ~8 MB of per-track data and
-    recomputing locally.
+    """Precomputed TC-ATLAS density-peak cluster INDEX — lightweight
+    cluster metadata + ensemble_mean polylines, no per-member trajectories.
+    Per-member data is served by /weatherlab-genesis-cluster/{tca_id}
+    when the user clicks a disturbance.
 
     Query params mirror the on-page Advanced clustering controls so the
     sliders still drive recomputation server-side."""
     now = _dt.now(timezone.utc)
-    used_date, used_hour, data = _resolve_latest_genesis_cycle(require_data=True)
-    if data is None:
+    init_time, params, clusters, dh = _tca_get_or_compute_clusters(
+        grid_deg, peak_min_members, assign_radius_km,
+        time_window_h, cluster_min_members)
+    if clusters is None:
         next_eta_h = _genesis_next_cycle_eta_h(now=now, init_time=None)
         return JSONResponse(
             content={
@@ -5026,35 +5089,10 @@ def get_weatherlab_genesis_clusters(
             headers={"Cache-Control": "public, max-age=120"},
         )
 
-    init_time = used_date.replace("-", "") + used_hour
-    params = (round(grid_deg, 3), int(peak_min_members),
-              round(assign_radius_km, 2), round(time_window_h, 2),
-              int(cluster_min_members))
-    cache_key = (init_time, params)
-    cached = _TCA_CLUSTER_CACHE.get(cache_key)
-    if cached and (time.time() - cached["ts"]) < _TCA_CLUSTER_TTL:
-        clusters = cached["clusters"]
-    else:
-        clusters = _tca_compute_clusters(
-            data,
-            grid_deg=grid_deg,
-            peak_min_members=peak_min_members,
-            assign_radius_km=assign_radius_km,
-            time_window_h=time_window_h,
-            cluster_min_members=cluster_min_members,
-        )
-        _TCA_CLUSTER_CACHE[cache_key] = {
-            "clusters": clusters, "ts": time.time()}
-        # LRU-ish: drop oldest entries past the cap.
-        if len(_TCA_CLUSTER_CACHE) > _TCA_CLUSTER_CACHE_MAX:
-            oldest = sorted(_TCA_CLUSTER_CACHE.items(),
-                            key=lambda kv: kv[1]["ts"])[0][0]
-            _TCA_CLUSTER_CACHE.pop(oldest, None)
-
+    used_date, used_hour = dh
     cycle_dt = _genesis_cycle_dt(used_date, used_hour)
     cycle_age_h = (now - cycle_dt).total_seconds() / 3600.0
     next_eta_h = _genesis_next_cycle_eta_h(now=now, init_time=init_time)
-
     return JSONResponse(
         content={
             "model": "DeepMind FNV3 LARGE_ENSEMBLE",
@@ -5067,12 +5105,59 @@ def get_weatherlab_genesis_clusters(
                 "time_window_h": params[3],
                 "cluster_min_members": params[4],
             },
-            "clusters": clusters,
+            "clusters": [_tca_cluster_index_view(c) for c in clusters],
             "n_clusters": len(clusters),
             "cycle_age_hours": round(cycle_age_h, 2),
             "next_cycle_eta_hours": round(next_eta_h, 2)
                                     if next_eta_h is not None else None,
             "fetched_at": now.isoformat(),
+        },
+        headers={"Cache-Control": "public, max-age=900"},
+    )
+
+
+@router.get("/weatherlab-genesis-cluster/{tca_id}")
+def get_weatherlab_genesis_cluster(
+    tca_id: str,
+    grid_deg: float = 3.0,
+    peak_min_members: int = 8,
+    assign_radius_km: float = 750.0,
+    time_window_h: float = 48.0,
+    cluster_min_members: int = 25,
+):
+    """Full per-member trajectories for one TC-ATLAS cluster (tca-N).
+    Lazy-loaded by the detail modal when the user clicks a disturbance.
+    Reuses the cached cluster computation — server work is one dict
+    lookup if the index endpoint has already been hit this cycle."""
+    init_time, params, clusters, dh = _tca_get_or_compute_clusters(
+        grid_deg, peak_min_members, assign_radius_km,
+        time_window_h, cluster_min_members)
+    if clusters is None:
+        raise HTTPException(status_code=404, detail="No cycle data available")
+    match = next((c for c in clusters if c["track_id"] == tca_id), None)
+    if match is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Cluster {tca_id} not found in current cycle ({init_time})")
+    return JSONResponse(
+        content={
+            "model": "DeepMind FNV3 LARGE_ENSEMBLE",
+            "method": "tcatlas",
+            "init_time": init_time,
+            "track_id": tca_id,
+            "display_label": match["display_label"],
+            "display_short": match["display_short"],
+            "n_members": match["n_members"],
+            "n_members_total": match["n_members_total"],
+            "fraction": match["fraction"],
+            "peak_wind": match["peak_wind"],
+            "peak_tau": match["peak_tau"],
+            "peak_lat": match["peak_lat"],
+            "peak_lon": match["peak_lon"],
+            "peak_mean_tau": match["peak_mean_tau"],
+            "contrib_track_ids": match["contrib_track_ids"],
+            "members": match["members"],
+            "ensemble_mean": match["ensemble_mean"],
         },
         headers={"Cache-Control": "public, max-age=900"},
     )

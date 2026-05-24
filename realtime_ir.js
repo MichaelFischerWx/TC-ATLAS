@@ -6639,30 +6639,39 @@
         if (cachedFull) {
             prom = Promise.resolve(cachedFull);
         } else if (trackId && trackId.indexOf('tca-') === 0) {
-            // TC-ATLAS path — fetch uncapped data for every contributing
-            // DM track and re-apply the cluster gate so the modal shows
-            // the TRUE membership (the Global-Map cluster was built from
-            // the capped global feed). Fall back to the thinned cache if
-            // we somehow don't have peak geometry stashed.
-            if (meta && meta.contribTrackIds && meta.peakLat != null) {
-                prom = _fetchAndReclusterTCA(trackId, meta)
-                    .then(function (json) {
-                        _genesisDetailCache[trackId] = json;
-                        return json;
-                    })
-                    .catch(function (err) {
-                        if (meta && meta.members) {
-                            console.warn('[Genesis] TCA uncapped fetch failed, '
-                                + 'using capped cluster cache:', err.message);
-                            return _fromCache();
-                        }
-                        throw err;
-                    });
-            } else if (meta && meta.members) {
-                prom = Promise.resolve(_fromCache());
-            } else {
-                prom = Promise.reject(new Error('cluster cache missing'));
-            }
+            // TC-ATLAS path — hit the per-cluster server endpoint which
+            // returns the precomputed dedup'd member trajectories from
+            // the same cached cluster the index endpoint built. One
+            // request, no client clustering. Fall back to the legacy
+            // per-track re-cluster path if the new endpoint 404s
+            // (e.g. cycle rolled mid-session and cache invalidated).
+            var clusterParams = _genesisCurrentClusterParams();
+            var qsParts = Object.keys(clusterParams).map(function (k) {
+                return k + '=' + encodeURIComponent(clusterParams[k]);
+            });
+            prom = fetch(API_BASE + '/ir-monitor/weatherlab-genesis-cluster/'
+                    + encodeURIComponent(trackId) + '?' + qsParts.join('&'),
+                    { cache: 'no-store' })
+                .then(function (r) {
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    return r.json();
+                })
+                .then(function (json) {
+                    json._source = 'tcatlas';
+                    json._uncapped = true;
+                    _genesisDetailCache[trackId] = json;
+                    return json;
+                })
+                .catch(function (err) {
+                    if (meta && meta.contribTrackIds && meta.peakLat != null) {
+                        console.warn('[Genesis] TCA cluster endpoint failed, '
+                            + 'falling back to per-track re-cluster:',
+                            err.message);
+                        return _fetchAndReclusterTCA(trackId, meta);
+                    }
+                    if (meta && meta.members) return _fromCache();
+                    throw err;
+                });
         } else {
             // DeepMind path — fetch full member set, then drop cross-
             // basin outliers (DM track_ids aren't spatially coherent
