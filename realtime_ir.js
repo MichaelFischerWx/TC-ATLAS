@@ -6742,8 +6742,17 @@
             meanTaus.push(mp.tau);
         }
 
+        // Measure the container's actual aspect ratio and use that as
+        // the bounds target — otherwise the natural Mercator projection
+        // aspect of the data leaves big vertical strips of whitespace
+        // on either side of the map. Subtract ~70 px for the colorbar
+        // so we don't over-zoom and crowd the legend.
+        var rect = el.getBoundingClientRect();
+        var containerAspect = rect.height > 0
+            ? Math.max(0.8, (rect.width - 70) / rect.height) : 2.2;
         var bounds = _genesisBoundsFromMean(meanLats, meanLons,
-                                             stats.genLats, stats.genLons);
+                                             stats.genLats, stats.genLons,
+                                             containerAspect);
 
         var spaghetti = {
             type: 'scattergeo', mode: 'lines',
@@ -6786,12 +6795,16 @@
                 line: { color: isDark ? '#0f172a' : '#1f2937', width: 1 },
                 colorbar: {
                     title: { text: 'Vmax (kt)', side: 'right',
-                             font: { size: 10 } },
-                    thickness: 10, len: 0.78,
+                             font: { size: 11 } },
+                    thickness: 14, len: 0.92,
+                    // Tick at every category boundary; "34 TS" reads as a
+                    // single line so the bar doesn't need two-row spacing.
                     tickvals: [0, 34, 64, 83, 96, 113, 137],
-                    ticktext: ['0', '34<br>TS', '64<br>C1', '83<br>C2',
-                               '96<br>C3', '113<br>C4', '137<br>C5'],
-                    tickfont: { size: 9 },
+                    ticktext: ['0', '34 TS', '64 C1', '83 C2',
+                               '96 C3', '113 C4', '137 C5'],
+                    tickfont: { size: 11 },
+                    ticklen: 4,
+                    outlinewidth: 0,
                 },
                 showscale: true,
             },
@@ -6801,6 +6814,54 @@
             }),
             hovertemplate: '%{text}<br>%{lat:.1f}°N, %{lon:.1f}°E<extra></extra>',
             name: 'Ensemble mean',
+            showlegend: false,
+        };
+        // Axis labels — scattergeo has no built-in tick labels, so we
+        // place them as a text trace inset slightly inside the W/S
+        // edges (placing at the very edge causes Plotly to clip them).
+        // Grid step matches geo.lonaxis/lataxis dtick.
+        var labelStep = _genesisAxisDtick(bounds);
+        var lonInset = (bounds.lat[1] - bounds.lat[0]) * 0.04;
+        var latInset = (bounds.lon[1] - bounds.lon[0]) * 0.04;
+        var lonLabelLats = [], lonLabelLons = [], lonLabelText = [];
+        var lonStart = Math.ceil(bounds.lon[0] / labelStep) * labelStep;
+        for (var lo = lonStart; lo <= bounds.lon[1]; lo += labelStep) {
+            // Skip labels too close to the bounding edge (would clip).
+            if (lo - bounds.lon[0] < labelStep * 0.4) continue;
+            if (bounds.lon[1] - lo < labelStep * 0.4) continue;
+            lonLabelLats.push(bounds.lat[0] + lonInset);
+            lonLabelLons.push(lo);
+            lonLabelText.push(_genesisFormatLon(lo));
+        }
+        var latLabelLats = [], latLabelLons = [], latLabelText = [];
+        var latStart = Math.ceil(bounds.lat[0] / labelStep) * labelStep;
+        for (var la = latStart; la <= bounds.lat[1]; la += labelStep) {
+            if (la - bounds.lat[0] < labelStep * 0.4) continue;
+            if (bounds.lat[1] - la < labelStep * 0.4) continue;
+            latLabelLats.push(la);
+            latLabelLons.push(bounds.lon[0] + latInset);
+            latLabelText.push(_genesisFormatLat(la));
+        }
+        // Bold bigger text reads clearly against both ocean and land
+        // without needing a background pill (which scattergeo's SVG
+        // text doesn't really support anyway).
+        var labelFg = isDark ? '#f1f5f9' : '#0f172a';
+        var lonLabels = {
+            type: 'scattergeo', mode: 'text',
+            lon: lonLabelLons, lat: lonLabelLats,
+            text: lonLabelText,
+            textfont: { size: 12, color: labelFg, family: 'Inter, sans-serif' },
+            textposition: 'top center',
+            hoverinfo: 'skip',
+            showlegend: false,
+        };
+        var latLabels = {
+            type: 'scattergeo', mode: 'text',
+            lon: latLabelLons, lat: latLabelLats,
+            text: latLabelText,
+            textfont: { size: 12, color: labelFg, family: 'Inter, sans-serif' },
+            textposition: 'middle right',
+            hoverinfo: 'skip',
             showlegend: false,
         };
         // Read the live --surface tokens from CSS so the map ocean
@@ -6814,19 +6875,20 @@
                        || (isDark ? '#11161f' : '#f7f8fa');
 
         var layout = {
-            margin: { l: 0, r: 0, t: 6, b: 0 },
+            margin: { l: 4, r: 4, t: 8, b: 4 },
             paper_bgcolor: 'rgba(0,0,0,0)',
             font: theme.font,
             geo: {
                 projection: { type: 'mercator' },
+                domain: { x: [0, 1], y: [0, 1] },
                 lonaxis: { range: bounds.lon, showgrid: true,
                            gridcolor: isDark ? 'rgba(255,255,255,0.10)'
                                              : 'rgba(15,22,35,0.10)',
-                           dtick: 5 },
+                           dtick: labelStep },
                 lataxis: { range: bounds.lat, showgrid: true,
                            gridcolor: isDark ? 'rgba(255,255,255,0.10)'
                                              : 'rgba(15,22,35,0.10)',
-                           dtick: 5 },
+                           dtick: labelStep },
                 showland: true,
                 landcolor: pageLand,
                 showocean: true,
@@ -6842,9 +6904,35 @@
             showlegend: false,
         };
         Plotly.react(el,
-                     [spaghetti, firstGenesis, meanLine, meanMarkers],
+                     [spaghetti, firstGenesis, meanLine, meanMarkers,
+                      lonLabels, latLabels],
                      layout,
                      { responsive: true, displayModeBar: false });
+    }
+
+    // Axis label step that scales with the bounds — keeps the map from
+    // either being label-spammed at continental scale or label-starved
+    // when zoomed into a 6° box.
+    function _genesisAxisDtick(bounds) {
+        var span = Math.max(bounds.lat[1] - bounds.lat[0],
+                            (bounds.lon[1] - bounds.lon[0]) * 0.75);
+        if (span <= 8)  return 2;
+        if (span <= 18) return 5;
+        if (span <= 40) return 10;
+        return 20;
+    }
+
+    function _genesisFormatLat(lat) {
+        if (lat === 0) return '0°';
+        return Math.abs(lat).toFixed(0) + '°' + (lat >= 0 ? 'N' : 'S');
+    }
+    function _genesisFormatLon(lon) {
+        // Normalize for display: -120° → 120°W, 240° → 120°W, 135° → 135°E.
+        var x = lon;
+        while (x > 180) x -= 360;
+        while (x < -180) x += 360;
+        if (x === 0 || x === 180) return Math.abs(x).toFixed(0) + '°';
+        return Math.abs(x).toFixed(0) + '°' + (x >= 0 ? 'E' : 'W');
     }
 
     /* Intensity time series (figure 2).
@@ -7077,7 +7165,8 @@
     // Compute a basin window large enough to contain the mean track AND
     // the first-genesis cloud (if non-empty). Padded so the spaghetti
     // around the cloud edges doesn't get clipped at the axis margin.
-    function _genesisBoundsFromMean(meanLats, meanLons, extraLats, extraLons) {
+    function _genesisBoundsFromMean(meanLats, meanLons, extraLats, extraLons,
+                                     targetAspect) {
         var lats = meanLats.slice();
         var lons = meanLons.slice();
         if (extraLats && extraLats.length) lats = lats.concat(extraLats);
@@ -7091,10 +7180,24 @@
         var lonMax = Math.max.apply(null, lons);
         var lpad = Math.max(6, 0.25 * (latMax - latMin));
         var npad = Math.max(8, 0.30 * (lonMax - lonMin));
-        return {
-            lat: [Math.max(-80, latMin - lpad), Math.min(80, latMax + lpad)],
-            lon: [lonMin - npad, lonMax + npad],
-        };
+        var bLat = [Math.max(-80, latMin - lpad), Math.min(80, latMax + lpad)];
+        var bLon = [lonMin - npad, lonMax + npad];
+        // Pad lon to hit the modal's target aspect ratio so we use the
+        // horizontal whitespace instead of squeezing into a square. The
+        // Mercator scale factor at the bounds' centerline maps geographic
+        // degrees to roughly equal pixels in either direction.
+        if (targetAspect && targetAspect > 0) {
+            var centerLat = (bLat[0] + bLat[1]) / 2;
+            var cosLat = Math.max(0.2, Math.cos(centerLat * Math.PI / 180));
+            var latSpan = bLat[1] - bLat[0];
+            var lonSpan = bLon[1] - bLon[0];
+            var desiredLonSpan = latSpan * targetAspect / cosLat;
+            if (desiredLonSpan > lonSpan) {
+                var extra = (desiredLonSpan - lonSpan) / 2;
+                bLon = [bLon[0] - extra, bLon[1] + extra];
+            }
+        }
+        return { lat: bLat, lon: bLon };
     }
 
     function _genesisSavePNG(elId, slug) {
