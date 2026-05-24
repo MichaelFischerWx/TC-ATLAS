@@ -6739,6 +6739,7 @@
             taus: taus, byTau: byTau, idx: initialIdx,
             animTimer: null, playing: false,
             initialIdx: initialIdx,
+            medianGenesisTau: stats.genesisMedianTau,
         };
 
         function paint() {
@@ -6761,12 +6762,14 @@
             _genesisTauState.playing = true;
             playBtn.classList.add('playing');
             playBtn.innerHTML = '&#10074;&#10074;';   // pause glyph
+            // 750 ms/step keeps the eye on each tau long enough to read
+            // the intensity cursor + map snapshot before the next frame.
             _genesisTauState.animTimer = setInterval(function () {
                 var n = _genesisTauState.taus.length;
                 _genesisTauState.idx = (_genesisTauState.idx + 1) % n;
                 slider.value = String(_genesisTauState.idx);
                 paint();
-            }, 400);
+            }, 750);
         }
         function stop() {
             _genesisTauState.playing = false;
@@ -6826,24 +6829,69 @@
     }
 
     // Draw / move a vertical cursor on the intensity time series.
+    // The intensity chart's x-axis is CATEGORICAL ('+204h' strings,
+    // not numeric tau), so we must match that format — passing a raw
+    // numeric tau makes Plotly extend the axis past the data and
+    // visually squeeze every datapoint into the left portion of the
+    // chart. We also re-emit the SS reference bands + median-genesis
+    // line that the initial render set, since Plotly.relayout's
+    // shapes/annotations arrays REPLACE the existing arrays (don't
+    // merge).
     function _genesisPaintIntensityCursor(tau) {
         var el = document.getElementById('rt-genesis-modal-int');
         if (!el || typeof Plotly === 'undefined' || !el.layout) return;
         var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
         var color = isDark ? 'rgba(255,255,255,0.55)' : 'rgba(15,22,35,0.55)';
-        Plotly.relayout(el, {
-            shapes: [{
+        var bandAlpha = isDark ? 0.10 : 0.06;
+        function band(y0, y1, fill) {
+            return { type: 'rect', xref: 'paper', yref: 'y',
+                     x0: 0, x1: 1, y0: y0, y1: y1,
+                     fillcolor: fill, line: { width: 0 }, layer: 'below' };
+        }
+        var shapes = [
+            band(0,   34,  'rgba(96,165,250,'  + bandAlpha + ')'),
+            band(34,  64,  'rgba(52,211,153,'  + bandAlpha + ')'),
+            band(64,  83,  'rgba(251,191,36,'  + bandAlpha + ')'),
+            band(83,  96,  'rgba(251,146,60,'  + bandAlpha + ')'),
+            band(96,  113, 'rgba(239,68,68,'   + bandAlpha + ')'),
+            band(113, 137, 'rgba(196,48,160,'  + bandAlpha + ')'),
+            band(137, 200, 'rgba(139,92,246,'  + bandAlpha + ')'),
+        ];
+        var medTau = _genesisTauState && _genesisTauState.medianGenesisTau;
+        if (medTau != null) {
+            shapes.push({
                 type: 'line', xref: 'x', yref: 'paper',
-                x0: tau, x1: tau, y0: 0, y1: 1,
-                line: { color: color, width: 1.5, dash: 'dot' },
-            }],
-            annotations: [{
-                xref: 'x', yref: 'paper', x: tau, y: 1.02,
-                text: '+' + tau + ' h', showarrow: false,
-                font: { size: 11, color: color },
-                xanchor: 'center', yanchor: 'bottom',
-            }],
+                x0: '+' + medTau + 'h', x1: '+' + medTau + 'h',
+                y0: 0, y1: 1,
+                line: { color: '#f97316', width: 1.5, dash: 'dash' },
+            });
+        }
+        // Cursor — categorical x value matches the chart's tau strings.
+        var tauStr = '+' + tau + 'h';
+        shapes.push({
+            type: 'line', xref: 'x', yref: 'paper',
+            x0: tauStr, x1: tauStr, y0: 0, y1: 1,
+            line: { color: color, width: 1.6, dash: 'dot' },
         });
+        var annotations = [];
+        if (medTau != null) {
+            var maxY = (el.layout.yaxis && el.layout.yaxis.range)
+                       ? el.layout.yaxis.range[1] : 160;
+            annotations.push({
+                x: '+' + medTau + 'h', y: maxY * 0.97,
+                xref: 'x', yref: 'y',
+                text: 'median genesis', showarrow: false,
+                font: { size: 9, color: '#f97316' },
+                xanchor: 'left', xshift: 4,
+            });
+        }
+        annotations.push({
+            xref: 'x', yref: 'paper', x: tauStr, y: 1.03,
+            text: tauStr, showarrow: false,
+            font: { size: 11, color: color },
+            xanchor: 'center', yanchor: 'bottom',
+        });
+        Plotly.relayout(el, { shapes: shapes, annotations: annotations });
     }
 
     /* Compute the pre-genesis stat bundle once per modal open.
