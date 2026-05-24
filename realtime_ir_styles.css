@@ -2741,6 +2741,34 @@ html:not([data-view="map"]) #ir-global-env-cbars {
     .rt-genesis-stat-row { grid-template-columns: 1fr; }
 }
 
+/* Forecast-hour scrubber buttons in the genesis detail modal. Match
+   the .rt-anim-btn look from the Global Map IR scrubber so the
+   control reads as the same pattern. */
+.rt-genesis-tau-btn {
+    background: rgba(15,22,35,0.04);
+    color: var(--text);
+    border: 1px solid rgba(15,22,35,0.18);
+    border-radius: 4px;
+    font-size: 13px;
+    padding: 4px 9px;
+    cursor: pointer;
+    transition: background 0.12s ease, border-color 0.12s ease;
+    min-width: 30px;
+}
+.rt-genesis-tau-btn:hover { background: rgba(15,22,35,0.10); }
+[data-theme="dark"] .rt-genesis-tau-btn {
+    background: rgba(255,255,255,0.04);
+    color: #e2e8f0;
+    border-color: rgba(255,255,255,0.18);
+}
+[data-theme="dark"] .rt-genesis-tau-btn:hover {
+    background: rgba(255,255,255,0.10);
+}
+.rt-genesis-tau-btn.playing {
+    background: rgba(249,115,22,0.20);
+    border-color: rgba(249,115,22,0.50);
+}
+
 /* ════════════════════════════════════════════════════════════════
    subOnly=1 iframe-embed mode. Strips all chrome and reduces the
    Subseasonal tab to just the combined Hovmöller, so the climo

@@ -5505,12 +5505,22 @@
                        (t.members ? Object.keys(t.members).length : 0);
             var frac = total / _GENESIS_ENSEMBLE_SIZE;
             if (frac < _GENESIS_MIN_FRACTION) continue;
+            // Apply the same cross-basin outlier filter the modal uses,
+            // BEFORE computing the displayed mean track. Otherwise a
+            // single orphan member (e.g. the Gulf-of-Mexico sample
+            // DeepMind's per-cycle tracker mis-labeled as WPac track 1)
+            // drags the dashed mean line halfway across the globe even
+            // though the cluster itself is regional. _filterDmOutliers
+            // returns the original track unchanged when nothing crosses
+            // the 1500 km gate, so this is a no-op for clean clusters.
+            var filt = _filterDmOutliers(t);
+            var displayTrack = filt.json;
+            var mean = displayTrack.ensemble_mean || { points: [] };
             // Compute predicted peak Vmax + median genesis position
-            // from the ensemble mean. The marker sits at the median
-            // current/early position (mean.points[0]), not at the LMI
-            // — what the forecaster wants to see is "where the
+            // from the (filtered) ensemble mean. The marker sits at the
+            // median current/early position (mean.points[0]), not at
+            // the LMI — what the forecaster wants to see is "where the
             // disturbance IS right now", not "where it will peak".
-            var mean = t.ensemble_mean || { points: [] };
             var peakWind = 0, peakTau = null;
             for (var p = 0; p < mean.points.length; p++) {
                 if (mean.points[p].wind != null
@@ -5520,9 +5530,10 @@
                 }
             }
             qualifying.push({
-                raw: t, total: total, fraction: frac,
+                raw: displayTrack, total: total, fraction: frac,
                 peakWind: peakWind, peakTau: peakTau,
                 mean: mean,
+                excludedOutliers: filt.excluded,
             });
         }
         // Highest formation probability first → D1 is the most-confident
@@ -6380,6 +6391,19 @@
               // P10/P50/P90 peak Vmax, most-likely genesis time).
               '<div id="rt-genesis-modal-stats" class="rt-genesis-stat-row"></div>' +
               '<div class="rt-genesis-modal-body">' +
+                // Forecast-hour scrubber — drives the map's "members at
+                // tau=t" overlay and the intensity time-series cursor.
+                // Same control pattern as the Global Map's IR scrubber
+                // (◀ play ▶ ■ + range + monospace tau label).
+                '<div class="rt-genesis-tau-bar" style="display:flex; align-items:center; gap:10px; padding:8px 4px; margin-bottom:6px;">' +
+                  '<button type="button" id="rt-genesis-tau-prev" class="rt-genesis-tau-btn" title="Previous step (6 h)">&#9664;</button>' +
+                  '<button type="button" id="rt-genesis-tau-play" class="rt-genesis-tau-btn" title="Play / pause">&#9654;</button>' +
+                  '<button type="button" id="rt-genesis-tau-next" class="rt-genesis-tau-btn" title="Next step (6 h)">&#9654;</button>' +
+                  '<button type="button" id="rt-genesis-tau-stop" class="rt-genesis-tau-btn" title="Reset to median genesis time">&#9632;</button>' +
+                  '<input type="range" id="rt-genesis-tau-slider" min="0" max="0" value="0" step="1" ' +
+                  'style="flex:1; min-width:160px;" title="Forecast hour — drag to see member positions and intensity at this tau">' +
+                  '<span id="rt-genesis-tau-label" style="font-family:monospace; min-width:90px; text-align:right; opacity:0.85;">+0 h</span>' +
+                '</div>' +
                 '<div class="rt-genesis-modal-chart-wrap" style="position:relative;">' +
                   '<button type="button" id="rt-genesis-map-save" class="rt-genesis-modal-save" title="Save track map as PNG">⤓ PNG</button>' +
                   '<div id="rt-genesis-modal-map" style="width:100%; height:480px;"></div>' +
@@ -6425,6 +6449,11 @@
         if (!m) return;
         m.style.display = 'none';
         document.body.style.overflow = '';
+        if (_genesisTauState && _genesisTauState.animTimer) {
+            clearInterval(_genesisTauState.animTimer);
+            _genesisTauState.animTimer = null;
+            _genesisTauState.playing = false;
+        }
         _ga('rt_genesis_detail_close');
     }
     window.closeGenesisDetail = closeGenesisDetail;
@@ -6576,6 +6605,194 @@
         _renderGenesisMap(memberKeys, members, mean, stats);
         _renderGenesisIntensity(memberKeys, members, mean, stats);
         _renderGenesisTimeHistogram(stats);
+        _setupGenesisTauScrubber(memberKeys, members, mean, stats);
+    }
+
+    // Shared scrubber state — one modal at a time, so module-scope is fine.
+    var _genesisTauState = null;
+
+    function _setupGenesisTauScrubber(memberKeys, members, mean, stats) {
+        var slider = document.getElementById('rt-genesis-tau-slider');
+        var label  = document.getElementById('rt-genesis-tau-label');
+        var playBtn = document.getElementById('rt-genesis-tau-play');
+        var prevBtn = document.getElementById('rt-genesis-tau-prev');
+        var nextBtn = document.getElementById('rt-genesis-tau-next');
+        var stopBtn = document.getElementById('rt-genesis-tau-stop');
+        if (!slider || !label) return;
+
+        // Bucket every member point by tau. The members and mean line
+        // share the same tau grid in WeatherLab CSVs, so we use the
+        // mean's tau axis to drive the slider.
+        var taus = [];
+        var seenTau = {};
+        for (var i = 0; i < mean.points.length; i++) {
+            var t = mean.points[i].tau;
+            if (t == null || seenTau[t]) continue;
+            seenTau[t] = true; taus.push(t);
+        }
+        if (taus.length === 0) {
+            // Fall back to member taus if mean is empty
+            for (var mi = 0; mi < memberKeys.length; mi++) {
+                var pts = members[memberKeys[mi]].points || [];
+                for (var pj = 0; pj < pts.length; pj++) {
+                    var tt = pts[pj].tau;
+                    if (tt == null || seenTau[tt]) continue;
+                    seenTau[tt] = true; taus.push(tt);
+                }
+            }
+        }
+        taus.sort(function (a, b) { return a - b; });
+        if (taus.length === 0) {
+            slider.disabled = true;
+            label.textContent = '—';
+            return;
+        }
+
+        // Index member positions: byTau[tau] = [{lat,lon,wind,key}, ...].
+        var byTau = {};
+        for (var k = 0; k < memberKeys.length; k++) {
+            var key = memberKeys[k];
+            var mpts = members[key].points || [];
+            for (var pi = 0; pi < mpts.length; pi++) {
+                var p = mpts[pi];
+                if (p.tau == null || p.lat == null || p.lon == null) continue;
+                if (!byTau[p.tau]) byTau[p.tau] = [];
+                byTau[p.tau].push({
+                    lat: p.lat, lon: p.lon,
+                    wind: p.wind != null ? p.wind : null, key: key,
+                });
+            }
+        }
+
+        // Start cursor at median genesis time if we have one, else at
+        // the middle of the tau range — these are usually the most
+        // informative time slices to land on.
+        var initialTau = stats.genesisMedianTau != null
+            ? stats.genesisMedianTau : taus[Math.floor(taus.length / 2)];
+        var initialIdx = 0;
+        var bestD = Infinity;
+        for (var ti = 0; ti < taus.length; ti++) {
+            var d = Math.abs(taus[ti] - initialTau);
+            if (d < bestD) { bestD = d; initialIdx = ti; }
+        }
+
+        slider.min = '0';
+        slider.max = String(taus.length - 1);
+        slider.value = String(initialIdx);
+        slider.disabled = false;
+
+        if (_genesisTauState && _genesisTauState.animTimer) {
+            clearInterval(_genesisTauState.animTimer);
+        }
+        _genesisTauState = {
+            taus: taus, byTau: byTau, idx: initialIdx,
+            animTimer: null, playing: false,
+            initialIdx: initialIdx,
+        };
+
+        function paint() {
+            var tau = _genesisTauState.taus[_genesisTauState.idx];
+            label.textContent = '+' + tau + ' h';
+            _genesisPaintTauCursor(tau, _genesisTauState.byTau[tau] || []);
+            _genesisPaintIntensityCursor(tau);
+        }
+        function step(delta) {
+            var n = _genesisTauState.taus.length;
+            var i = _genesisTauState.idx + delta;
+            if (i < 0) i = 0;
+            if (i > n - 1) i = n - 1;
+            _genesisTauState.idx = i;
+            slider.value = String(i);
+            paint();
+        }
+        function play() {
+            if (_genesisTauState.playing) return stop();
+            _genesisTauState.playing = true;
+            playBtn.classList.add('playing');
+            playBtn.innerHTML = '&#10074;&#10074;';   // pause glyph
+            _genesisTauState.animTimer = setInterval(function () {
+                var n = _genesisTauState.taus.length;
+                _genesisTauState.idx = (_genesisTauState.idx + 1) % n;
+                slider.value = String(_genesisTauState.idx);
+                paint();
+            }, 400);
+        }
+        function stop() {
+            _genesisTauState.playing = false;
+            playBtn.classList.remove('playing');
+            playBtn.innerHTML = '&#9654;';
+            if (_genesisTauState.animTimer) {
+                clearInterval(_genesisTauState.animTimer);
+                _genesisTauState.animTimer = null;
+            }
+        }
+        function resetToMedian() {
+            stop();
+            _genesisTauState.idx = _genesisTauState.initialIdx;
+            slider.value = String(_genesisTauState.idx);
+            paint();
+        }
+
+        // Bind — replace existing handlers via cloneNode trick so we
+        // don't stack listeners across modal re-opens.
+        function rebind(el, evt, handler) {
+            var clone = el.cloneNode(true);
+            el.parentNode.replaceChild(clone, el);
+            clone.addEventListener(evt, handler);
+            return clone;
+        }
+        slider  = rebind(slider, 'input', function () {
+            stop();
+            _genesisTauState.idx = parseInt(slider.value, 10) || 0;
+            paint();
+        });
+        prevBtn = rebind(prevBtn, 'click', function () { stop(); step(-1); });
+        nextBtn = rebind(nextBtn, 'click', function () { stop(); step(1); });
+        stopBtn = rebind(stopBtn, 'click', resetToMedian);
+        playBtn = rebind(playBtn, 'click', play);
+
+        paint();
+    }
+
+    // Paint member positions at tau=t onto the map. Implemented as
+    // Plotly.restyle on a placeholder trace appended at render time
+    // (index 6), so it doesn't reflow the whole map on every drag tick.
+    function _genesisPaintTauCursor(tau, positions) {
+        var el = document.getElementById('rt-genesis-modal-map');
+        if (!el || typeof Plotly === 'undefined' || !el.data) return;
+        var lons = positions.map(function (p) { return p.lon; });
+        var lats = positions.map(function (p) { return p.lat; });
+        var winds = positions.map(function (p) { return p.wind != null ? p.wind : 0; });
+        // Trace index 6 is the tau-cursor (appended in _renderGenesisMap).
+        Plotly.restyle(el, {
+            lon: [lons], lat: [lats],
+            'marker.color': [winds],
+            text: [positions.map(function (p) {
+                return 'Member ' + p.key + '<br>+' + tau + ' h<br>'
+                    + (p.wind != null ? p.wind.toFixed(0) + ' kt' : '— kt');
+            })],
+        }, [6]);
+    }
+
+    // Draw / move a vertical cursor on the intensity time series.
+    function _genesisPaintIntensityCursor(tau) {
+        var el = document.getElementById('rt-genesis-modal-int');
+        if (!el || typeof Plotly === 'undefined' || !el.layout) return;
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var color = isDark ? 'rgba(255,255,255,0.55)' : 'rgba(15,22,35,0.55)';
+        Plotly.relayout(el, {
+            shapes: [{
+                type: 'line', xref: 'x', yref: 'paper',
+                x0: tau, x1: tau, y0: 0, y1: 1,
+                line: { color: color, width: 1.5, dash: 'dot' },
+            }],
+            annotations: [{
+                xref: 'x', yref: 'paper', x: tau, y: 1.02,
+                text: '+' + tau + ' h', showarrow: false,
+                font: { size: 11, color: color },
+                xanchor: 'center', yanchor: 'bottom',
+            }],
+        });
     }
 
     /* Compute the pre-genesis stat bundle once per modal open.
@@ -6903,9 +7120,26 @@
             },
             showlegend: false,
         };
+        // Tau-cursor placeholder — starts empty, gets populated by
+        // _genesisPaintTauCursor when the user drags the scrubber. Has
+        // its own SS-colored markers so the moving snapshot reads as
+        // "where each member is right now" against the static spaghetti.
+        var tauCursor = {
+            type: 'scattergeo', mode: 'markers',
+            lon: [], lat: [], text: [],
+            marker: {
+                size: 7,
+                color: [], colorscale: _GENESIS_SS_SCALE,
+                cmin: 0, cmax: 200,
+                line: { color: isDark ? '#0f172a' : '#1f2937', width: 0.6 },
+                opacity: 0.95,
+            },
+            hovertemplate: '%{text}<br>%{lat:.1f}°N, %{lon:.1f}°E<extra></extra>',
+            showlegend: false,
+        };
         Plotly.react(el,
                      [spaghetti, firstGenesis, meanLine, meanMarkers,
-                      lonLabels, latLabels],
+                      lonLabels, latLabels, tauCursor],
                      layout,
                      { responsive: true, displayModeBar: false });
     }
