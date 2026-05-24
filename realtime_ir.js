@@ -7091,6 +7091,20 @@
                 xanchor: 'left', xshift: 4,
             });
         }
+        // Re-emit the ribbon-legend annotation; relayout replaces the
+        // entire annotations array, not merges, so we'd lose it otherwise.
+        annotations.push({
+            xref: 'paper', yref: 'paper', x: 0.99, y: 0.985,
+            text: '<span style="opacity:0.45;">min–max</span> · '
+                + '<span style="opacity:0.65;">P10–P90</span> · '
+                + '<span style="opacity:0.85;">P25–P75</span>'
+                + ' · <span style="opacity:0.85; color:'
+                + (isDark ? '#fed7aa' : '#b45309') + ';">median</span> · '
+                + '<span style="color:#f97316; font-weight:600;">mean</span>',
+            showarrow: false,
+            font: { size: 9, color: isDark ? '#e2e8f0' : '#475569' },
+            xanchor: 'right', yanchor: 'top',
+        });
         annotations.push({
             xref: 'x', yref: 'paper', x: tauStr, y: 1.03,
             text: tauStr, showarrow: false,
@@ -7503,11 +7517,26 @@
         var taus = Object.keys(byTau).map(Number).sort(function (a, b) {
             return a - b;
         });
+        // Per-tau distribution: min/max envelope plus P10/P25/P50/P75/P90
+        // ribbons so the modal shows the SHAPE of the distribution (where
+        // the bulk of members sit) and not just the extremes.
+        function pct(sorted, q) {
+            if (!sorted.length) return null;
+            var idx = Math.min(sorted.length - 1,
+                               Math.max(0, Math.floor(q * (sorted.length - 1))));
+            return sorted[idx];
+        }
         var minArr = [], maxArr = [];
+        var p10Arr = [], p25Arr = [], p50Arr = [], p75Arr = [], p90Arr = [];
         for (var ti = 0; ti < taus.length; ti++) {
-            var arr = byTau[taus[ti]];
-            minArr.push(Math.min.apply(null, arr));
-            maxArr.push(Math.max.apply(null, arr));
+            var sorted = byTau[taus[ti]].slice().sort(function (a, b) { return a - b; });
+            minArr.push(sorted[0]);
+            maxArr.push(sorted[sorted.length - 1]);
+            p10Arr.push(pct(sorted, 0.10));
+            p25Arr.push(pct(sorted, 0.25));
+            p50Arr.push(pct(sorted, 0.50));
+            p75Arr.push(pct(sorted, 0.75));
+            p90Arr.push(pct(sorted, 0.90));
         }
         var xVals = taus.map(function (t) { return '+' + t + 'h'; });
         var meanByTau = {};
@@ -7539,26 +7568,50 @@
             bandShape(137, 200, 'rgba(139,92,246,'  + bandAlpha + ')'),  // C5
         ];
 
-        // Min/max envelope: low trace invisible, high trace filled to
-        // the previous trace — same pattern as the existing storm-
-        // detail intensity panel.
+        // Nested percentile ribbons — outermost min/max (lightest),
+        // P10/P90, then P25/P75 (darkest fill). Reads as a fan-chart:
+        // the user sees both the distribution's extremes AND where the
+        // bulk of members sit (50% inside the P25/P75 band) at a glance.
         var traces = [];
+        // Each ribbon = invisible low trace + filled high trace.
+        function pushRibbon(low, high, fill, name) {
+            traces.push({
+                type: 'scatter', mode: 'lines',
+                x: xVals, y: low,
+                line: { color: 'rgba(0,0,0,0)' },
+                showlegend: false, hoverinfo: 'skip',
+            });
+            traces.push({
+                type: 'scatter', mode: 'lines',
+                x: xVals, y: high,
+                line: { color: 'rgba(0,0,0,0)' },
+                fill: 'tonexty', fillcolor: fill,
+                name: name, hoverinfo: 'skip', showlegend: false,
+            });
+        }
+        // Layered light → dark so the inner bands stack cleanly on top
+        // of the outer ones. Plotly composites in trace order.
+        pushRibbon(minArr, maxArr,
+            isDark ? 'rgba(249,115,22,0.10)' : 'rgba(249,115,22,0.08)',
+            'min/max');
+        pushRibbon(p10Arr, p90Arr,
+            isDark ? 'rgba(249,115,22,0.16)' : 'rgba(249,115,22,0.14)',
+            'P10–P90');
+        pushRibbon(p25Arr, p75Arr,
+            isDark ? 'rgba(249,115,22,0.22)' : 'rgba(249,115,22,0.20)',
+            'P25–P75 (IQR)');
+        // Median (P50) — thin dashed reference for the typical member.
         traces.push({
             type: 'scatter', mode: 'lines',
-            x: xVals, y: minArr,
-            line: { color: 'rgba(0,0,0,0)' },
-            showlegend: false, hoverinfo: 'skip',
-        });
-        traces.push({
-            type: 'scatter', mode: 'lines',
-            x: xVals, y: maxArr,
-            line: { color: 'rgba(0,0,0,0)' },
-            fill: 'tonexty',
-            fillcolor: isDark ? 'rgba(249,115,22,0.22)'
-                              : 'rgba(249,115,22,0.18)',
-            name: 'Member spread', hoverinfo: 'skip',
+            x: xVals, y: p50Arr,
+            line: { color: isDark ? 'rgba(254,215,170,0.85)'
+                                  : 'rgba(180,83,9,0.75)',
+                    width: 1.2, dash: 'dot' },
+            name: 'Median',
+            hovertemplate: '%{x}<br>median: %{y:.1f} kt<extra></extra>',
             showlegend: false,
         });
+        // Ensemble mean — solid bold line with SS-colored markers.
         traces.push({
             type: 'scatter', mode: 'lines+markers',
             x: xVals, y: meanArr,
@@ -7603,14 +7656,34 @@
                      gridcolor: isDark ? 'rgba(255,255,255,0.06)'
                                        : 'rgba(15,22,35,0.06)' },
             shapes: shapes,
-            annotations: stats.genesisMedianTau != null ? [{
-                x: '+' + stats.genesisMedianTau + 'h',
-                y: maxY * 0.97, xref: 'x', yref: 'y',
-                text: 'median genesis',
-                showarrow: false,
-                font: { size: 9, color: '#f97316' },
-                xanchor: 'left', xshift: 4,
-            }] : [],
+            annotations: (function () {
+                var ann = [];
+                if (stats.genesisMedianTau != null) {
+                    ann.push({
+                        x: '+' + stats.genesisMedianTau + 'h',
+                        y: maxY * 0.97, xref: 'x', yref: 'y',
+                        text: 'median genesis', showarrow: false,
+                        font: { size: 9, color: '#f97316' },
+                        xanchor: 'left', xshift: 4,
+                    });
+                }
+                // Tiny ribbon legend in the top-right so the reader can
+                // decode the nested orange bands at a glance.
+                ann.push({
+                    xref: 'paper', yref: 'paper', x: 0.99, y: 0.985,
+                    text: '<span style="opacity:0.45;">min–max</span> · '
+                        + '<span style="opacity:0.65;">P10–P90</span> · '
+                        + '<span style="opacity:0.85;">P25–P75</span>'
+                        + ' · <span style="opacity:0.85; color:'
+                        + (isDark ? '#fed7aa' : '#b45309')
+                        + ';">median</span> · '
+                        + '<span style="color:#f97316; font-weight:600;">mean</span>',
+                    showarrow: false,
+                    font: { size: 9, color: isDark ? '#e2e8f0' : '#475569' },
+                    xanchor: 'right', yanchor: 'top',
+                });
+                return ann;
+            })(),
             showlegend: false,
         });
         Plotly.react(el, traces, layout,
