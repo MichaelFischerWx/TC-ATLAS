@@ -2769,6 +2769,66 @@ html:not([data-view="map"]) #ir-global-env-cbars {
     border-color: rgba(249,115,22,0.50);
 }
 
+/* Density / Members segmented toggle. */
+.rt-genesis-mode-toggle {
+    display: inline-flex;
+    border: 1px solid rgba(15,22,35,0.18);
+    border-radius: 4px;
+    overflow: hidden;
+}
+[data-theme="dark"] .rt-genesis-mode-toggle {
+    border-color: rgba(255,255,255,0.18);
+}
+.rt-genesis-mode-btn {
+    background: rgba(15,22,35,0.04);
+    color: var(--text);
+    border: none;
+    font-size: 12px;
+    padding: 5px 10px;
+    cursor: pointer;
+}
+.rt-genesis-mode-btn + .rt-genesis-mode-btn {
+    border-left: 1px solid rgba(15,22,35,0.18);
+}
+.rt-genesis-mode-btn:hover { background: rgba(15,22,35,0.10); }
+.rt-genesis-mode-btn.active {
+    background: rgba(249,115,22,0.22);
+    color: #f97316;
+    font-weight: 600;
+}
+[data-theme="dark"] .rt-genesis-mode-btn {
+    background: rgba(255,255,255,0.04);
+    color: #e2e8f0;
+}
+[data-theme="dark"] .rt-genesis-mode-btn + .rt-genesis-mode-btn {
+    border-left-color: rgba(255,255,255,0.18);
+}
+[data-theme="dark"] .rt-genesis-mode-btn:hover { background: rgba(255,255,255,0.10); }
+[data-theme="dark"] .rt-genesis-mode-btn.active {
+    background: rgba(249,115,22,0.28);
+    color: #fdba74;
+}
+
+/* Summary PNG button in the modal header. */
+.rt-genesis-modal-summary-save {
+    background: rgba(0, 229, 255, 0.10);
+    color: #00b3cc;
+    border: 1px solid rgba(0, 229, 255, 0.35);
+    border-radius: 5px;
+    font-size: 13px;
+    padding: 5px 10px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: background 0.12s ease;
+}
+.rt-genesis-modal-summary-save:hover {
+    background: rgba(0, 229, 255, 0.20);
+}
+[data-theme="dark"] .rt-genesis-modal-summary-save {
+    color: #67e8f9;
+    border-color: rgba(0, 229, 255, 0.40);
+}
+
 /* ════════════════════════════════════════════════════════════════
    subOnly=1 iframe-embed mode. Strips all chrome and reduces the
    Subseasonal tab to just the combined Hovmöller, so the climo

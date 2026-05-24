@@ -6456,7 +6456,10 @@
                   '<h2 id="rt-genesis-modal-title">DeepMind genesis ensemble</h2>' +
                   '<p id="rt-genesis-modal-sub"></p>' +
                 '</div>' +
-                '<button type="button" class="rt-genesis-modal-close" aria-label="Close" title="Close (Esc)">×</button>' +
+                '<div style="display:flex; align-items:center; gap:8px;">' +
+                  '<button type="button" id="rt-genesis-summary-save" class="rt-genesis-modal-summary-save" title="Save 3-panel summary PNG (map + intensity + genesis time)">⤓ Summary PNG</button>' +
+                  '<button type="button" class="rt-genesis-modal-close" aria-label="Close" title="Close (Esc)">×</button>' +
+                '</div>' +
               '</div>' +
               // Headline stats — pre-genesis-specific metrics the named-
               // storm panel never has to compute (formation probability,
@@ -6475,6 +6478,10 @@
                   '<input type="range" id="rt-genesis-tau-slider" min="0" max="0" value="0" step="1" ' +
                   'style="flex:1; min-width:160px;" title="Forecast hour — drag to see member positions and intensity at this tau">' +
                   '<span id="rt-genesis-tau-label" style="font-family:monospace; min-width:90px; text-align:right; opacity:0.85;">+0 h</span>' +
+                  '<div class="rt-genesis-mode-toggle" role="group" title="Render member positions as a density field or as individual markers">' +
+                    '<button type="button" id="rt-genesis-mode-density" class="rt-genesis-mode-btn active">Density</button>' +
+                    '<button type="button" id="rt-genesis-mode-members" class="rt-genesis-mode-btn">Members</button>' +
+                  '</div>' +
                 '</div>' +
                 '<div class="rt-genesis-modal-chart-wrap" style="position:relative;">' +
                   '<button type="button" id="rt-genesis-map-save" class="rt-genesis-modal-save" title="Save track map as PNG">⤓ PNG</button>' +
@@ -6512,6 +6519,9 @@
         });
         m.querySelector('#rt-genesis-gtime-save').addEventListener('click', function () {
             _genesisSavePNG('rt-genesis-modal-gtime', 'genesis-time');
+        });
+        m.querySelector('#rt-genesis-summary-save').addEventListener('click', function () {
+            _genesisSaveSummaryPNG();
         });
         return m;
     }
@@ -6756,12 +6766,23 @@
         if (_genesisTauState && _genesisTauState.animTimer) {
             clearInterval(_genesisTauState.animTimer);
         }
+        // Default to density when there are enough members for overplot
+        // to be a problem; raw-marker mode is fine for small clusters
+        // (you can see each member's color cleanly).
+        var defaultMode = (memberKeys.length >= 80) ? 'density' : 'members';
         _genesisTauState = {
             taus: taus, byTau: byTau, idx: initialIdx,
             animTimer: null, playing: false,
             initialIdx: initialIdx,
             medianGenesisTau: stats.genesisMedianTau,
+            mode: defaultMode,
         };
+        var modeDensityBtn = document.getElementById('rt-genesis-mode-density');
+        var modeMembersBtn = document.getElementById('rt-genesis-mode-members');
+        if (modeDensityBtn && modeMembersBtn) {
+            modeDensityBtn.classList.toggle('active', defaultMode === 'density');
+            modeMembersBtn.classList.toggle('active', defaultMode === 'members');
+        }
 
         function paint() {
             var tau = _genesisTauState.taus[_genesisTauState.idx];
@@ -6825,6 +6846,20 @@
         nextBtn = rebind(nextBtn, 'click', function () { stop(); step(1); });
         stopBtn = rebind(stopBtn, 'click', resetToMedian);
         playBtn = rebind(playBtn, 'click', play);
+        if (modeDensityBtn && modeMembersBtn) {
+            modeDensityBtn = rebind(modeDensityBtn, 'click', function () {
+                _genesisTauState.mode = 'density';
+                modeDensityBtn.classList.add('active');
+                modeMembersBtn.classList.remove('active');
+                paint();
+            });
+            modeMembersBtn = rebind(modeMembersBtn, 'click', function () {
+                _genesisTauState.mode = 'members';
+                modeMembersBtn.classList.add('active');
+                modeDensityBtn.classList.remove('active');
+                paint();
+            });
+        }
 
         paint();
     }
@@ -6832,21 +6867,106 @@
     // Paint member positions at tau=t onto the map. Implemented as
     // Plotly.restyle on a placeholder trace appended at render time
     // (index 6), so it doesn't reflow the whole map on every drag tick.
+    //
+    // Two render modes:
+    //   • 'members' — one SS-colored dot per member (cleanest at small N)
+    //   • 'density' — coarse-grid binned scatter sized + colored by
+    //                 count (cleanest at large N where dots overplot)
     function _genesisPaintTauCursor(tau, positions) {
         var el = document.getElementById('rt-genesis-modal-map');
         if (!el || typeof Plotly === 'undefined' || !el.data) return;
-        var lons = positions.map(function (p) { return p.lon; });
-        var lats = positions.map(function (p) { return p.lat; });
-        var winds = positions.map(function (p) { return p.wind != null ? p.wind : 0; });
-        // Trace index 6 is the tau-cursor (appended in _renderGenesisMap).
+        var mode = (_genesisTauState && _genesisTauState.mode) || 'members';
+        if (mode === 'density' && positions.length >= 10) {
+            var binned = _genesisBinDensity(positions, 0.6);
+            var maxCount = 1;
+            for (var bi = 0; bi < binned.length; bi++) {
+                if (binned[bi].count > maxCount) maxCount = binned[bi].count;
+            }
+            var lons = binned.map(function (b) { return b.lon; });
+            var lats = binned.map(function (b) { return b.lat; });
+            // Square-root sizing so a 4× count bin reads as ~2× the area
+            // — perceptually right per Cleveland & McGill.
+            var sizes = binned.map(function (b) {
+                return 7 + 26 * Math.sqrt(b.count / maxCount);
+            });
+            var counts = binned.map(function (b) { return b.count; });
+            var text = binned.map(function (b) {
+                return '<b>' + b.count + ' member'
+                    + (b.count === 1 ? '' : 's') + '</b><br>+' + tau + ' h'
+                    + '<br>mean Vmax: ' + b.wind.toFixed(0) + ' kt';
+            });
+            // Sequential warm scale on count so density reads like a
+            // heatmap rather than competing with the SS colorscale.
+            Plotly.restyle(el, {
+                lon: [lons], lat: [lats],
+                'marker.size': [sizes],
+                'marker.color': [counts],
+                'marker.colorscale': [[
+                    [0.0, 'rgba(254,243,199,0.40)'],
+                    [0.25, 'rgba(252,211,77,0.65)'],
+                    [0.55, 'rgba(249,115,22,0.85)'],
+                    [0.85, 'rgba(220,38,38,0.95)'],
+                    [1.0, 'rgba(127,29,29,1.0)'],
+                ]],
+                'marker.cmin': [0],
+                'marker.cmax': [maxCount],
+                'marker.line.width': [0.4],
+                'marker.opacity': [0.88],
+                text: [text],
+            }, [6]);
+            return;
+        }
+        // Raw-member rendering (default for small clusters).
+        var lons2 = positions.map(function (p) { return p.lon; });
+        var lats2 = positions.map(function (p) { return p.lat; });
+        var winds2 = positions.map(function (p) { return p.wind != null ? p.wind : 0; });
         Plotly.restyle(el, {
-            lon: [lons], lat: [lats],
-            'marker.color': [winds],
+            lon: [lons2], lat: [lats2],
+            'marker.size': 7,
+            'marker.color': [winds2],
+            'marker.colorscale': [_GENESIS_SS_SCALE],
+            'marker.cmin': [0],
+            'marker.cmax': [200],
+            'marker.line.width': [0.6],
+            'marker.opacity': [0.95],
             text: [positions.map(function (p) {
                 return 'Member ' + p.key + '<br>+' + tau + ' h<br>'
                     + (p.wind != null ? p.wind.toFixed(0) + ' kt' : '— kt');
             })],
         }, [6]);
+    }
+
+    // Bin member positions into a coarse lat/lon grid (degrees) for the
+    // density view. Each bin returns the centroid lat/lon, member count,
+    // and mean Vmax across the binned members.
+    function _genesisBinDensity(positions, binDeg) {
+        binDeg = binDeg || 0.6;
+        var bins = {};
+        for (var i = 0; i < positions.length; i++) {
+            var p = positions[i];
+            var bx = Math.floor(p.lon / binDeg);
+            var by = Math.floor(p.lat / binDeg);
+            var key = bx + ',' + by;
+            if (!bins[key]) {
+                bins[key] = { latSum: 0, lonSum: 0, count: 0,
+                              windSum: 0, windN: 0 };
+            }
+            var b = bins[key];
+            b.latSum += p.lat; b.lonSum += p.lon; b.count++;
+            if (p.wind != null) { b.windSum += p.wind; b.windN++; }
+        }
+        var out = [];
+        var keys = Object.keys(bins);
+        for (var k = 0; k < keys.length; k++) {
+            var bb = bins[keys[k]];
+            out.push({
+                lat: bb.latSum / bb.count,
+                lon: bb.lonSum / bb.count,
+                count: bb.count,
+                wind: bb.windN > 0 ? bb.windSum / bb.windN : 0,
+            });
+        }
+        return out;
     }
 
     // Draw / move a vertical cursor on the intensity time series.
@@ -7552,6 +7672,121 @@
             }
         }
         return { lat: bLat, lon: bLon };
+    }
+
+    // Export a 3-panel composite (map + intensity + genesis-time
+    // histogram) as a single PNG. Uses Plotly.toImage for each subplot
+    // then stitches them on a canvas with a header strip showing the
+    // disturbance label, init time, formation %, and peak Vmax —
+    // saves the user from having to assemble the three single-panel
+    // PNGs in PowerPoint / Keynote.
+    function _genesisSaveSummaryPNG() {
+        if (typeof Plotly === 'undefined') return;
+        var mapEl   = document.getElementById('rt-genesis-modal-map');
+        var intEl   = document.getElementById('rt-genesis-modal-int');
+        var gtimeEl = document.getElementById('rt-genesis-modal-gtime');
+        if (!mapEl || !intEl) return;
+        var btn = document.getElementById('rt-genesis-summary-save');
+        var origText = btn ? btn.textContent : null;
+        if (btn) { btn.textContent = 'Rendering…'; btn.disabled = true; }
+
+        var W = 1800;
+        var HEAD = 130;
+        var H_MAP = 900;
+        var H_INT = 540;
+        var H_GTIME = gtimeEl ? 320 : 0;
+        var GAP = 14;
+        var FOOT = 40;
+        var totalH = HEAD + H_MAP + GAP + H_INT + (H_GTIME ? GAP + H_GTIME : 0) + FOOT;
+
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var bg = isDark ? '#0f172a' : '#ffffff';
+        var ink = isDark ? '#f1f5f9' : '#0f172a';
+        var dim = isDark ? '#94a3b8' : '#475569';
+
+        // Pull the header info out of the modal so the export reads
+        // self-contained (init time, label, formation %, peak Vmax).
+        var titleEl = document.getElementById('rt-genesis-modal-title');
+        var subEl   = document.getElementById('rt-genesis-modal-sub');
+        var statsEl = document.getElementById('rt-genesis-modal-stats');
+        var title = titleEl ? titleEl.textContent : 'FNV3 cyclogenesis ensemble';
+        var sub = subEl ? subEl.textContent.replace(/\s+/g, ' ').trim() : '';
+
+        // Render each subplot to a PNG dataURL at the target width
+        // (Plotly handles the scale internally; pass scale:1).
+        var tasks = [
+            Plotly.toImage(mapEl, { format: 'png', width: W, height: H_MAP }),
+            Plotly.toImage(intEl, { format: 'png', width: W, height: H_INT }),
+        ];
+        if (gtimeEl) {
+            tasks.push(Plotly.toImage(gtimeEl, { format: 'png',
+                                                 width: W, height: H_GTIME }));
+        }
+
+        Promise.all(tasks).then(function (urls) {
+            var imgs = urls.map(function (u) {
+                var im = new Image();
+                im.src = u;
+                return im;
+            });
+            return Promise.all(imgs.map(function (im) {
+                return new Promise(function (res, rej) {
+                    if (im.complete) res(im);
+                    else { im.onload = function () { res(im); }; im.onerror = rej; }
+                });
+            }));
+        }).then(function (imgs) {
+            var canvas = document.createElement('canvas');
+            canvas.width = W;
+            canvas.height = totalH;
+            var ctx = canvas.getContext('2d');
+            ctx.fillStyle = bg;
+            ctx.fillRect(0, 0, W, totalH);
+
+            // Header
+            ctx.fillStyle = ink;
+            ctx.font = '600 38px Inter, "Helvetica Neue", sans-serif';
+            ctx.textBaseline = 'top';
+            ctx.fillText(title, 32, 24);
+            ctx.fillStyle = dim;
+            ctx.font = '20px Inter, "Helvetica Neue", sans-serif';
+            ctx.fillText(sub, 32, 76);
+
+            var y = HEAD;
+            ctx.drawImage(imgs[0], 0, y);  y += H_MAP + GAP;
+            ctx.drawImage(imgs[1], 0, y);  y += H_INT + GAP;
+            if (imgs[2]) {
+                ctx.drawImage(imgs[2], 0, y);
+                y += H_GTIME;
+            }
+
+            // Footer attribution
+            ctx.fillStyle = dim;
+            ctx.font = '14px Inter, "Helvetica Neue", sans-serif';
+            var saved = new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
+            ctx.fillText('TC-ATLAS · DeepMind FNV3 LARGE_ENSEMBLE · saved ' + saved,
+                         32, totalH - 28);
+
+            canvas.toBlob(function (blob) {
+                if (!blob) throw new Error('toBlob returned null');
+                var dateISO = new Date().toISOString().slice(0, 10);
+                var slug = title.replace(/[^a-z0-9]+/gi, '-')
+                                .replace(/^-+|-+$/g, '').toLowerCase()
+                                .slice(0, 40) || 'summary';
+                var a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = 'tc-atlas-genesis-' + slug + '-' + dateISO + '.png';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                setTimeout(function () { URL.revokeObjectURL(a.href); }, 1500);
+                if (btn) { btn.textContent = origText; btn.disabled = false; }
+                _ga('rt_genesis_save_summary_png');
+            }, 'image/png');
+        }).catch(function (err) {
+            console.warn('[Genesis] summary PNG export failed', err);
+            if (btn) { btn.textContent = origText; btn.disabled = false; }
+        });
     }
 
     function _genesisSavePNG(elId, slug) {
