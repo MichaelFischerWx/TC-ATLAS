@@ -5861,6 +5861,31 @@
     function _genesisTCAtlasDisturbances(rawTracks) {
         if (!rawTracks || !rawTracks.length) return [];
 
+        // Build a basin-wide projection ratio so cluster tooltips can
+        // report uncapped formation probabilities instead of the
+        // misleading capped count. The global /weatherlab-genesis feed
+        // thins each track to 100 members for spaghetti perf — a TCA
+        // cluster built on that feed would show "291 of 1000" even
+        // when the modal's uncapped re-cluster proves the cluster
+        // really has ~700 unique members.
+        //
+        // We can't simply sum kept × (uncapped / capped) per
+        // contributor: DeepMind double-counts samples (one forecast
+        // member's trajectory can spawn 2-3 distinct DM track_ids), so
+        // that over-counts. The right metric is UNIQUE samples per
+        // cluster, projected by the ratio of (true_ensemble_size /
+        // unique_samples_in_capped_feed). One basin-wide ratio handles
+        // both the thinning AND the across-track dedup.
+        var uniqueGlobalCapped = {};
+        for (var ti = 0; ti < rawTracks.length; ti++) {
+            var mk = rawTracks[ti].members || {};
+            var ks = Object.keys(mk);
+            for (var kk = 0; kk < ks.length; kk++) uniqueGlobalCapped[ks[kk]] = true;
+        }
+        var nUniqueGlobal = Object.keys(uniqueGlobalCapped).length;
+        var projectionRatio = nUniqueGlobal > 0
+            ? _GENESIS_ENSEMBLE_SIZE / nUniqueGlobal : 1;
+
         // Step 1: pool member trajectories with first-genesis points.
         var entries = [];
         for (var t = 0; t < rawTracks.length; t++) {
@@ -6025,15 +6050,28 @@
                 }
             }
             var pk = peaks[ci];
+            // Count UNIQUE forecast members in the cluster (dedup across
+            // DeepMind track_ids — a single forecast member often spawns
+            // multiple DM track_ids), then project up by the basin-wide
+            // cap ratio. Clamp at the ensemble size as a safety rail.
+            var uniqueInCluster = {};
+            for (var ui = 0; ui < cluster.length; ui++) {
+                uniqueInCluster[cluster[ui].sampleKey] = true;
+            }
+            var nUniqueInCluster = Object.keys(uniqueInCluster).length;
+            var projectedTotal = Math.min(
+                _GENESIS_ENSEMBLE_SIZE,
+                Math.round(nUniqueInCluster * projectionRatio)
+            );
             disturbances.push({
                 raw: {
                     track_id: 'tca-' + ci,
                     members: members,
                     ensemble_mean: { points: meanPts },
-                    n_members_total: cluster.length,
+                    n_members_total: projectedTotal,
                 },
-                total: cluster.length,
-                fraction: cluster.length / _GENESIS_ENSEMBLE_SIZE,
+                total: projectedTotal,
+                fraction: projectedTotal / _GENESIS_ENSEMBLE_SIZE,
                 peakWind: peakWind,
                 peakTau: peakTau,
                 mean: { points: meanPts },
@@ -6045,6 +6083,7 @@
                 gateRadiusKm: _GENESIS_ASSIGN_RADIUS_KM,
                 gateTimeH: _GENESIS_TIME_WINDOW_H,
                 contribTrackIds: contribTrackIds,
+                cappedTotal: cluster.length,   // for debugging/telemetry
             });
         }
         disturbances.sort(function (a, b) { return b.fraction - a.fraction; });
@@ -6256,8 +6295,15 @@
         }
         var fetches = contribIds.map(function (id) { return _fetchDmTrack(id); });
         return Promise.all(fetches).then(function (responses) {
-            var members = {};
-            var keepIdx = 0;
+            // Dedupe across contributing DM tracks BY SAMPLE ID. DeepMind
+            // can label the same forecast member's trajectory under
+            // multiple track_ids (the tracker treats it as multiple
+            // storms), so the same sample can pass the gate from several
+            // contributors. We want one entry per unique forecast member
+            // — keep the candidate whose first-genesis is closest to the
+            // cluster peak (that's the genesis event most clearly
+            // belonging to this disturbance).
+            var best = {};   // sampleId → { dist2, points }
             var peakLat = meta.peakLat;
             var peakLon = meta.peakLon;
             var peakMeanTau = meta.peakMeanTau;
@@ -6271,7 +6317,8 @@
                 var srcMembers = resp.members || {};
                 var keys = Object.keys(srcMembers);
                 for (var ki = 0; ki < keys.length; ki++) {
-                    var pts = srcMembers[keys[ki]].points;
+                    var sampleId = keys[ki];
+                    var pts = srcMembers[sampleId].points;
                     if (!pts || pts.length < 2) continue;
                     var first = null;
                     for (var pi = 0; pi < pts.length; pi++) {
@@ -6281,26 +6328,30 @@
                         }
                     }
                     if (!first) continue;
-                    // Cheap planar gate (matches the Global Map clustering
-                    // step — fast, fine at the 750 km scale).
                     var cosLat = Math.cos(first.lat * Math.PI / 180);
                     var dLat = (first.lat - peakLat) * 111;
                     var dLon = (first.lon - peakLon) * 111 * cosLat;
-                    if (dLat * dLat + dLon * dLon > radius2) continue;
+                    var d2 = dLat * dLat + dLon * dLon;
+                    if (d2 > radius2) continue;
                     if (peakMeanTau != null && first.tau != null) {
                         if (Math.abs(first.tau - peakMeanTau) > timeWin) continue;
                     }
-                    members[String(keepIdx++)] = { points: pts };
+                    if (!best[sampleId] || d2 < best[sampleId].dist2) {
+                        best[sampleId] = { dist2: d2, points: pts };
+                    }
                 }
             }
-            var memArrays = Object.keys(members).map(function (k) {
-                return members[k].points;
-            });
+            var members = {};
+            var sampleKeys = Object.keys(best);
+            for (var sk = 0; sk < sampleKeys.length; sk++) {
+                members[sampleKeys[sk]] = { points: best[sampleKeys[sk]].points };
+            }
+            var memArrays = sampleKeys.map(function (k) { return best[k].points; });
             return {
                 model: 'DeepMind FNV3 LARGE_ENSEMBLE',
                 init_time: initTime || meta.initTime,
                 track_id: trackId,
-                n_members: keepIdx,
+                n_members: sampleKeys.length,
                 members: members,
                 ensemble_mean: { points: _genesisMeanTrack(memArrays) },
                 _source: 'tcatlas',
