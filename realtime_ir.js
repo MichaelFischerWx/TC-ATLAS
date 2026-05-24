@@ -490,14 +490,13 @@
     // required), so it surfaces forecast cyclogenesis days before NHC
     // numbers an invest.
     var _rtGenesisData = null;
-    // Uncapped per-DM-track member set, background-fetched after the
-    // capped /weatherlab-genesis feed lands. Used ONLY by the TC-ATLAS
-    // clustering path so the on-map tooltip can show the true unique-
-    // member count instead of the basin-wide projection (which under-
-    // counts heavily-overlapping clusters by 2-3×). Spaghetti and the
-    // DeepMind clustering path keep using the capped feed for perf.
-    var _rtGenesisDataUncapped = null;
-    var _rtGenesisUncappedLoading = false;
+    // Precomputed TC-ATLAS clusters from the backend. Loaded after the
+    // capped /weatherlab-genesis feed and used directly by the TCA
+    // dispatcher — eliminates the per-user ~8 MB prefetch and the
+    // transition window where the hover showed projection-based numbers.
+    // Keyed by (init_time, params) so tuner-slider changes invalidate.
+    var _rtGenesisClusters = null;        // { init_time, params, clusters }
+    var _rtGenesisClustersLoading = false;
     var _rtGenesisVisible = false;
     var _rtGenesisLoading = false;
     var _rtGenesisLayers = [];
@@ -6111,17 +6110,74 @@
 
     // Method dispatcher — single entry point so the render functions
     // don't have to branch on cluster method themselves. TC-ATLAS
-    // prefers uncapped tracks (loaded in the background) when they're
-    // available for this cycle — accurate hover counts. Falls back to
-    // the capped feed if uncapped hasn't finished loading yet.
+    // prefers the server-precomputed clusters (instant, accurate).
+    // Falls back to client-side clustering on capped data if the
+    // precomputed endpoint hasn't returned yet (initial flicker on
+    // first page load is the only time this fallback runs).
     function _genesisDisturbances(rawTracks) {
         if (_genesisClusterMethod === 'tcatlas') {
-            var uncapped = _rtGenesisDataUncapped;
-            var initOk = uncapped && _rtGenesisData
-                && uncapped.init_time === _rtGenesisData.init_time;
-            return _genesisTCAtlasDisturbances(initOk ? uncapped.tracks : rawTracks);
+            var pc = _rtGenesisClusters;
+            var initOk = pc && _rtGenesisData
+                && pc.init_time === _rtGenesisData.init_time
+                && _genesisClusterParamsMatch(pc.params);
+            if (initOk) {
+                return pc.clusters.map(_genesisServerClusterToDisturbance);
+            }
+            return _genesisTCAtlasDisturbances(rawTracks);
         }
         return _genesisQualifyingDisturbances(rawTracks);
+    }
+
+    // Current tuner params used by the active TCA computation. Sent to
+    // the backend so user adjustments trigger a server recompute. The
+    // defaults match the _GENESIS_* constants so the steady-state
+    // request is always the same string → backend cache hit ~100% of
+    // the time for the default-param result.
+    function _genesisCurrentClusterParams() {
+        return {
+            grid_deg: _GENESIS_GRID_DEG,
+            peak_min_members: _GENESIS_PEAK_MIN_MEMBERS,
+            assign_radius_km: _GENESIS_ASSIGN_RADIUS_KM,
+            time_window_h: _GENESIS_TIME_WINDOW_H,
+            cluster_min_members: _GENESIS_CLUSTER_MIN_MEMBERS,
+        };
+    }
+
+    function _genesisClusterParamsMatch(pcParams) {
+        if (!pcParams) return false;
+        var cur = _genesisCurrentClusterParams();
+        return pcParams.grid_deg === cur.grid_deg
+            && pcParams.peak_min_members === cur.peak_min_members
+            && pcParams.assign_radius_km === cur.assign_radius_km
+            && pcParams.time_window_h === cur.time_window_h
+            && pcParams.cluster_min_members === cur.cluster_min_members;
+    }
+
+    // Convert one server-side cluster object into the disturbance shape
+    // the rest of the modal/Global-Map code expects.
+    function _genesisServerClusterToDisturbance(c) {
+        return {
+            raw: {
+                track_id: c.track_id,
+                members: c.members,
+                ensemble_mean: c.ensemble_mean,
+                n_members_total: c.n_members_total,
+            },
+            total: c.n_members_total,
+            fraction: c.fraction,
+            peakWind: c.peak_wind,
+            peakTau: c.peak_tau,
+            mean: c.ensemble_mean,
+            peakLat: c.peak_lat,
+            peakLon: c.peak_lon,
+            peakMeanTau: c.peak_mean_tau,
+            gateRadiusKm: c.gate_radius_km,
+            gateTimeH: c.gate_time_h,
+            contribTrackIds: c.contrib_track_ids,
+            displayLabel: c.display_label,
+            displayShort: c.display_short,
+            cappedTotal: c.capped_total,
+        };
     }
 
     function _renderGenesis() {
@@ -7824,60 +7880,50 @@
         return Math.round(ageH / 24) + ' d old';
     }
 
-    // Background fetch every contributing DM track in parallel, store
-    // the uncapped result, and re-render TCA if we're on that method.
-    // Per-track responses go through _fetchDmTrack's existing cache,
-    // so re-toggling methods or re-opening modals is free after the
-    // first prefetch. Failures fall back to the capped feed silently.
-    function _loadGenesisUncapped() {
-        if (!_rtGenesisData || _rtGenesisUncappedLoading) return;
-        // Skip if we already have uncapped data for this cycle.
-        if (_rtGenesisDataUncapped
-                && _rtGenesisDataUncapped.init_time === _rtGenesisData.init_time) {
-            return;
+    // Fetch the server's precomputed TC-ATLAS clusters for the current
+    // cycle + current tuner params. Replaces the old per-track prefetch
+    // approach: one ~50 KB request, instant render, no per-user ~8 MB
+    // download, no client-side clustering CPU. Server caches by
+    // (init_time, params) so the default-param result is served from
+    // RAM after the first hit each cycle.
+    function _loadGenesisClusters() {
+        if (!_rtGenesisData || _rtGenesisClustersLoading) return;
+        var curParams = _genesisCurrentClusterParams();
+        if (_rtGenesisClusters
+                && _rtGenesisClusters.init_time === _rtGenesisData.init_time
+                && _genesisClusterParamsMatch(_rtGenesisClusters.params)) {
+            return;   // already have it
         }
-        var tracks = _rtGenesisData.tracks || [];
-        if (tracks.length === 0) return;
-        _rtGenesisUncappedLoading = true;
-        var ids = tracks.map(function (t) { return t.track_id; });
-        var fetches = ids.map(function (id) {
-            return _fetchDmTrack(id).catch(function () { return null; });
-        });
-        Promise.all(fetches).then(function (responses) {
-            var newTracks = [];
-            for (var i = 0; i < responses.length; i++) {
-                var r = responses[i];
-                if (r && r.members && Object.keys(r.members).length > 0) {
-                    newTracks.push({
-                        track_id: ids[i],
-                        members: r.members,
-                        ensemble_mean: r.ensemble_mean,
-                        n_members_total: r.n_members_total
-                            || Object.keys(r.members).length,
-                    });
-                } else {
-                    // Fallback to the capped version for this track.
-                    newTracks.push(tracks[i]);
+        _rtGenesisClustersLoading = true;
+        var qs = '?' + Object.keys(curParams).map(function (k) {
+            return k + '=' + encodeURIComponent(curParams[k]);
+        }).join('&');
+        fetch(API_BASE + '/ir-monitor/weatherlab-genesis-clusters' + qs,
+              { cache: 'no-store' })
+            .then(function (r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            })
+            .then(function (json) {
+                _rtGenesisClusters = {
+                    init_time: json.init_time,
+                    params: json.params,
+                    clusters: json.clusters || [],
+                };
+                if (_rtGenesisVisible && _genesisClusterMethod === 'tcatlas') {
+                    _renderGenesis();
                 }
-            }
-            _rtGenesisDataUncapped = {
-                init_time: _rtGenesisData.init_time,
-                tracks: newTracks,
-            };
-            // If TCA is the active method and the layer is visible,
-            // re-render the markers with the corrected counts.
-            if (_rtGenesisVisible && _genesisClusterMethod === 'tcatlas') {
-                _renderGenesis();
-            }
-            _ga('rt_genesis_uncapped_loaded', {
-                n_tracks: ids.length,
-                init: _rtGenesisData.init_time,
+                _ga('rt_genesis_clusters_loaded', {
+                    n_clusters: (json.clusters || []).length,
+                    init: json.init_time,
+                });
+            })
+            .catch(function (err) {
+                console.warn('[Genesis] cluster fetch failed', err);
+            })
+            .finally(function () {
+                _rtGenesisClustersLoading = false;
             });
-        }).catch(function (err) {
-            console.warn('[Genesis] uncapped prefetch failed', err);
-        }).finally(function () {
-            _rtGenesisUncappedLoading = false;
-        });
     }
 
     function _loadGenesis(isAutoRefresh) {
@@ -7910,10 +7956,10 @@
                     if (isAutoRefresh && prevInit && newInit && newInit !== prevInit) {
                         _ga('rt_genesis_newer_cycle', { from: prevInit, to: newInit });
                     }
-                    // Kick off the uncapped background prefetch so TCA
-                    // hover counts can switch from the projection to
-                    // the true unique-member count once available.
-                    _loadGenesisUncapped();
+                    // Fetch the server's precomputed TCA clusters so
+                    // the on-map markers show accurate uncapped counts
+                    // without any client-side clustering work.
+                    _loadGenesisClusters();
                 }
 
                 if (statusEl) {
@@ -9435,6 +9481,12 @@
                         _GENESIS_CLUSTER_MIN_MEMBERS = parseInt(v, 10);
                         valEl.textContent = parseInt(v, 10) + ' members';
                     }
+                    // Params changed → invalidate cache and re-fetch
+                    // server-side clusters; render falls back to the
+                    // client-side path until the new fetch lands so the
+                    // user gets immediate feedback.
+                    _rtGenesisClusters = null;
+                    _loadGenesisClusters();
                     _genesisReRender();
                 });
             })(tunerRows[tr]);
@@ -9449,6 +9501,8 @@
                 _GENESIS_ASSIGN_RADIUS_KM    = 750;
                 _GENESIS_TIME_WINDOW_H       = 48;
                 _GENESIS_CLUSTER_MIN_MEMBERS = 25;
+                _rtGenesisClusters = null;
+                _loadGenesisClusters();
                 _genesisReRender();
                 if (typeof toggleLayersPanel === 'function') {
                     toggleLayersPanel(); toggleLayersPanel();

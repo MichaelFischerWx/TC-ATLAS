@@ -4753,6 +4753,332 @@ def get_weatherlab_genesis_track(track_id: str):
 
 
 # ---------------------------------------------------------------------------
+# TC-ATLAS Density-Peak Clustering (server-side, full uncapped data)
+# ---------------------------------------------------------------------------
+#
+# Re-clusters the LARGE_ENSEMBLE cyclogenesis CSV using TC-ATLAS's density-
+# peak algorithm — same logic as realtime_ir.js's _genesisTCAtlasDisturbances,
+# but running on the ALREADY-CACHED full uncapped parse rather than forcing
+# every client to download 8+ MB of per-track endpoints and recompute. One
+# CPU pass per cycle benefits every user that lands on the page after.
+#
+# Cache strategy: keep ≤_TCA_CLUSTER_CACHE_MAX results, keyed by
+# (init_time, tuner_params). The default-param result is what 99% of users
+# hit, so a single entry per init_time covers steady state. The tuner
+# sliders push other param combos through the same path with on-demand
+# compute (small extra CPU per slider drag, no extra memory per user).
+
+_TCA_CLUSTER_CACHE: dict = {}        # (init_time, params_tuple) -> (result, ts)
+_TCA_CLUSTER_CACHE_MAX = 6           # cap memory ~ 6 cycles × ~6 MB = ~36 MB
+_TCA_CLUSTER_TTL = 7200              # same TTL as the underlying CSV
+
+
+def _tca_haversine_km(la1, lo1, la2, lo2):
+    R = 6371.0
+    rad = math.pi / 180.0
+    dl = (la2 - la1) * rad
+    do = (lo2 - lo1) * rad
+    a = (math.sin(dl / 2) ** 2
+         + math.cos(la1 * rad) * math.cos(la2 * rad) * math.sin(do / 2) ** 2)
+    return 2 * R * math.asin(math.sqrt(a))
+
+
+def _tca_mean_track(member_point_arrays):
+    """Pool member trajectories and compute the ensemble-mean lat/lon/
+    wind/pres per tau bucket. Mirrors _genesisMeanTrack in the JS."""
+    by_tau: dict = {}
+    for pts in member_point_arrays:
+        if not pts:
+            continue
+        for p in pts:
+            if p.get("lat") is None or p.get("lon") is None:
+                continue
+            t = p.get("tau")
+            if t is None:
+                continue
+            bucket = by_tau.setdefault(t, {
+                "lat_sum": 0.0, "lon_sum": 0.0, "n": 0,
+                "wind_sum": 0.0, "wind_n": 0,
+                "pres_sum": 0.0, "pres_n": 0,
+            })
+            bucket["lat_sum"] += p["lat"]
+            bucket["lon_sum"] += p["lon"]
+            bucket["n"] += 1
+            w = p.get("wind")
+            if w is not None:
+                bucket["wind_sum"] += w
+                bucket["wind_n"] += 1
+            pr = p.get("pres")
+            if pr is not None:
+                bucket["pres_sum"] += pr
+                bucket["pres_n"] += 1
+    return [
+        {
+            "tau": t,
+            "lat": round(by_tau[t]["lat_sum"] / by_tau[t]["n"], 2),
+            "lon": round(by_tau[t]["lon_sum"] / by_tau[t]["n"], 2),
+            "wind": round(by_tau[t]["wind_sum"] / by_tau[t]["wind_n"], 1)
+                    if by_tau[t]["wind_n"] else None,
+            "pres": round(by_tau[t]["pres_sum"] / by_tau[t]["pres_n"], 1)
+                    if by_tau[t]["pres_n"] else None,
+        }
+        for t in sorted(by_tau.keys())
+    ]
+
+
+def _tca_compute_clusters(raw_data: dict,
+                          grid_deg: float = 3.0,
+                          peak_min_members: int = 8,
+                          assign_radius_km: float = 750.0,
+                          time_window_h: float = 48.0,
+                          cluster_min_members: int = 25,
+                          ensemble_size: int = 1000) -> list:
+    """Run the TC-ATLAS density-peak algorithm on the full uncapped
+    CSV parse (dict keyed by DM track_id). Returns a list of cluster
+    dicts ranked by size (largest first → 'Disturbance 1')."""
+    if not raw_data:
+        return []
+
+    # Step 1: pool (track_id, sample) entries with first-genesis points.
+    entries = []
+    track_ids = list(raw_data.keys())
+    for tid in track_ids:
+        members = raw_data[tid].get("members", {})
+        for sample_key, mem in members.items():
+            pts = mem.get("points", [])
+            if not pts or len(pts) < 2:
+                continue
+            first = None
+            for p in pts:
+                if (p.get("wind") is not None and p["wind"] >= 34
+                        and p.get("lat") is not None and p.get("lon") is not None):
+                    first = p
+                    break
+            if not first:
+                continue
+            entries.append({
+                "from_track_id": tid,
+                "sample_key": sample_key,
+                "points": pts,
+                "first_lat": first["lat"],
+                "first_lon": first["lon"],
+                "first_tau": first.get("tau"),
+            })
+    if not entries:
+        return []
+
+    # Step 2: bin first-genesis points into a 2D density grid.
+    density: dict = {}
+    for e in entries:
+        ix = int(math.floor((e["first_lon"] + 180) / grid_deg))
+        iy = int(math.floor((e["first_lat"] + 90) / grid_deg))
+        density[(ix, iy)] = density.get((ix, iy), 0) + 1
+
+    # Step 3: find density peaks (cells dominating their 3x3 nbrhd,
+    # plateau ties broken by lexical-first key).
+    peaks = []
+    for key, count in density.items():
+        if count < peak_min_members:
+            continue
+        ix, iy = key
+        is_peak = True
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                if dx == 0 and dy == 0:
+                    continue
+                nk = (ix + dx, iy + dy)
+                nc = density.get(nk, 0)
+                if nc > count:
+                    is_peak = False
+                    break
+                if nc == count and nk < key:
+                    is_peak = False
+                    break
+            if not is_peak:
+                break
+        if is_peak:
+            peaks.append({
+                "ix": ix, "iy": iy,
+                "lat": (iy + 0.5) * grid_deg - 90,
+                "lon": (ix + 0.5) * grid_deg - 180,
+                "count": count,
+                "mean_tau": None,
+            })
+
+    if not peaks:
+        return []
+
+    # Step 4: per-peak mean genesis tau from members whose first-genesis
+    # falls IN the peak cell.
+    for pk in peaks:
+        tsum, tn = 0.0, 0
+        for e in entries:
+            eix = int(math.floor((e["first_lon"] + 180) / grid_deg))
+            eiy = int(math.floor((e["first_lat"] + 90) / grid_deg))
+            if eix == pk["ix"] and eiy == pk["iy"] and e["first_tau"] is not None:
+                tsum += e["first_tau"]
+                tn += 1
+        pk["mean_tau"] = (tsum / tn) if tn else None
+
+    # Step 5: assign each entry to nearest peak passing both gates.
+    cluster_entries = [[] for _ in peaks]
+    for e in entries:
+        best_i, best_d = -1, float("inf")
+        for i, pk in enumerate(peaks):
+            d = _tca_haversine_km(e["first_lat"], e["first_lon"],
+                                  pk["lat"], pk["lon"])
+            if d > assign_radius_km:
+                continue
+            if pk["mean_tau"] is not None and e["first_tau"] is not None:
+                if abs(e["first_tau"] - pk["mean_tau"]) > time_window_h:
+                    continue
+            if d < best_d:
+                best_d = d
+                best_i = i
+        if best_i >= 0:
+            cluster_entries[best_i].append(e)
+
+    # Step 6: build cluster bundles. Dedupe by sample within a cluster
+    # (keep the closest-to-peak entry per sample), filter by min size.
+    out = []
+    for ci, cluster in enumerate(cluster_entries):
+        if len(cluster) < cluster_min_members:
+            continue
+        pk = peaks[ci]
+        # Per-sample best entry.
+        best_per_sample: dict = {}
+        contrib_track_ids: dict = {}
+        for e in cluster:
+            d = _tca_haversine_km(e["first_lat"], e["first_lon"],
+                                  pk["lat"], pk["lon"])
+            sk = e["sample_key"]
+            if sk not in best_per_sample or d < best_per_sample[sk][0]:
+                best_per_sample[sk] = (d, e)
+            contrib_track_ids[e["from_track_id"]] = (
+                contrib_track_ids.get(e["from_track_id"], 0) + 1)
+        members = {}
+        member_arrays = []
+        for sk, (_d, e) in best_per_sample.items():
+            members[sk] = {"points": e["points"]}
+            member_arrays.append(e["points"])
+        unique_total = len(best_per_sample)
+        mean_pts = _tca_mean_track(member_arrays)
+        peak_wind, peak_tau = 0.0, None
+        for mp in mean_pts:
+            if mp.get("wind") is not None and mp["wind"] > peak_wind:
+                peak_wind = mp["wind"]
+                peak_tau = mp["tau"]
+        out.append({
+            "track_id": f"tca-{ci}",
+            "members": members,
+            "ensemble_mean": {"points": mean_pts},
+            "n_members": unique_total,
+            "n_members_total": unique_total,
+            "fraction": round(unique_total / max(1, ensemble_size), 4),
+            "peak_wind": round(peak_wind, 1),
+            "peak_tau": peak_tau,
+            "peak_lat": pk["lat"],
+            "peak_lon": pk["lon"],
+            "peak_mean_tau": pk["mean_tau"],
+            "gate_radius_km": assign_radius_km,
+            "gate_time_h": time_window_h,
+            "contrib_track_ids": contrib_track_ids,
+            "capped_total": len(cluster),
+        })
+    # Sort by formation prob desc → D1 is largest. Re-label after sort.
+    out.sort(key=lambda c: -c["n_members_total"])
+    for idx, c in enumerate(out):
+        c["display_label"] = f"Disturbance {idx + 1}"
+        c["display_short"] = f"D{idx + 1}"
+    return out
+
+
+@router.get("/weatherlab-genesis-clusters")
+def get_weatherlab_genesis_clusters(
+    grid_deg: float = 3.0,
+    peak_min_members: int = 8,
+    assign_radius_km: float = 750.0,
+    time_window_h: float = 48.0,
+    cluster_min_members: int = 25,
+):
+    """Precomputed TC-ATLAS density-peak clusters, ranked by formation
+    probability. Same algorithm as the frontend's client-side path but
+    runs once per (cycle, tuner-params) here so every client gets
+    instant results instead of fetching ~8 MB of per-track data and
+    recomputing locally.
+
+    Query params mirror the on-page Advanced clustering controls so the
+    sliders still drive recomputation server-side."""
+    now = _dt.now(timezone.utc)
+    used_date, used_hour, data = _resolve_latest_genesis_cycle(require_data=True)
+    if data is None:
+        next_eta_h = _genesis_next_cycle_eta_h(now=now, init_time=None)
+        return JSONResponse(
+            content={
+                "model": "DeepMind FNV3 LARGE_ENSEMBLE",
+                "method": "tcatlas",
+                "init_time": None,
+                "clusters": [],
+                "n_clusters": 0,
+                "next_cycle_eta_hours": round(next_eta_h, 2)
+                                        if next_eta_h is not None else None,
+            },
+            headers={"Cache-Control": "public, max-age=120"},
+        )
+
+    init_time = used_date.replace("-", "") + used_hour
+    params = (round(grid_deg, 3), int(peak_min_members),
+              round(assign_radius_km, 2), round(time_window_h, 2),
+              int(cluster_min_members))
+    cache_key = (init_time, params)
+    cached = _TCA_CLUSTER_CACHE.get(cache_key)
+    if cached and (time.time() - cached["ts"]) < _TCA_CLUSTER_TTL:
+        clusters = cached["clusters"]
+    else:
+        clusters = _tca_compute_clusters(
+            data,
+            grid_deg=grid_deg,
+            peak_min_members=peak_min_members,
+            assign_radius_km=assign_radius_km,
+            time_window_h=time_window_h,
+            cluster_min_members=cluster_min_members,
+        )
+        _TCA_CLUSTER_CACHE[cache_key] = {
+            "clusters": clusters, "ts": time.time()}
+        # LRU-ish: drop oldest entries past the cap.
+        if len(_TCA_CLUSTER_CACHE) > _TCA_CLUSTER_CACHE_MAX:
+            oldest = sorted(_TCA_CLUSTER_CACHE.items(),
+                            key=lambda kv: kv[1]["ts"])[0][0]
+            _TCA_CLUSTER_CACHE.pop(oldest, None)
+
+    cycle_dt = _genesis_cycle_dt(used_date, used_hour)
+    cycle_age_h = (now - cycle_dt).total_seconds() / 3600.0
+    next_eta_h = _genesis_next_cycle_eta_h(now=now, init_time=init_time)
+
+    return JSONResponse(
+        content={
+            "model": "DeepMind FNV3 LARGE_ENSEMBLE",
+            "method": "tcatlas",
+            "init_time": init_time,
+            "params": {
+                "grid_deg": params[0],
+                "peak_min_members": params[1],
+                "assign_radius_km": params[2],
+                "time_window_h": params[3],
+                "cluster_min_members": params[4],
+            },
+            "clusters": clusters,
+            "n_clusters": len(clusters),
+            "cycle_age_hours": round(cycle_age_h, 2),
+            "next_cycle_eta_hours": round(next_eta_h, 2)
+                                    if next_eta_h is not None else None,
+            "fetched_at": now.isoformat(),
+        },
+        headers={"Cache-Control": "public, max-age=900"},
+    )
+
+
+# ---------------------------------------------------------------------------
 # DeepMind 1000-Member Large Ensemble (Intensity Distributions)
 # ---------------------------------------------------------------------------
 
