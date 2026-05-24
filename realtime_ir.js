@@ -5990,8 +5990,19 @@
             var cluster = clusters[ci];
             if (cluster.length < _GENESIS_CLUSTER_MIN_MEMBERS) continue;
             var members = {};
+            // Track which DeepMind track_ids contributed members to this
+            // cluster — the modal needs this to fetch uncapped per-track
+            // data from the backend (the global /weatherlab-genesis feed
+            // caps each track to 100 members for spaghetti perf, so the
+            // capped cluster size we display here is a fraction of the
+            // true membership we could show in the detail view).
+            var contribTrackIds = {};
             for (var mi = 0; mi < cluster.length; mi++) {
                 members[String(mi)] = { points: cluster[mi].points };
+                var src = cluster[mi].fromTrackId;
+                if (src != null) {
+                    contribTrackIds[src] = (contribTrackIds[src] || 0) + 1;
+                }
             }
             var meanPts = _genesisMeanTrack(
                 cluster.map(function (c) { return c.points; }));
@@ -6002,6 +6013,7 @@
                     peakTau = meanPts[mp].tau;
                 }
             }
+            var pk = peaks[ci];
             disturbances.push({
                 raw: {
                     track_id: 'tca-' + ci,
@@ -6014,6 +6026,14 @@
                 peakWind: peakWind,
                 peakTau: peakTau,
                 mean: { points: meanPts },
+                // Cluster geometry — replayed in the modal to re-apply the
+                // identical spatial+temporal gate against uncapped data.
+                peakLat: pk.lat,
+                peakLon: pk.lon,
+                peakMeanTau: pk.meanTau,
+                gateRadiusKm: _GENESIS_ASSIGN_RADIUS_KM,
+                gateTimeH: _GENESIS_TIME_WINDOW_H,
+                contribTrackIds: contribTrackIds,
             });
         }
         disturbances.sort(function (a, b) { return b.fraction - a.fraction; });
@@ -6073,6 +6093,15 @@
                 ensembleMean: d.raw && d.raw.ensemble_mean,
                 source: _genesisClusterMethod,   // 'deepmind' or 'tcatlas'
                 initTime: (_rtGenesisData && _rtGenesisData.init_time) || null,
+                // TCA-only fields — let the detail modal fetch uncapped
+                // data from each contributing DM track endpoint and
+                // re-apply the identical density-peak gate.
+                peakLat: d.peakLat,
+                peakLon: d.peakLon,
+                peakMeanTau: d.peakMeanTau,
+                gateRadiusKm: d.gateRadiusKm,
+                gateTimeH: d.gateTimeH,
+                contribTrackIds: d.contribTrackIds,
             };
 
             // ONE marker per disturbance instead of N member polylines.
@@ -6168,8 +6197,167 @@
     //  The modal scaffolding mirrors rt-evo-modal — a single absolute-
     //  positioned overlay built lazily on first open.
 
-    var _genesisDetailCache = {};   // track_id → JSON
+    var _genesisDetailCache = {};   // track_id → JSON (TCA-synthesized or DM-fetched)
+    // Per-DM-track full (uncapped) responses, keyed by DM track_id.
+    // Shared by the TCA re-cluster path (which needs every contributing
+    // track) and the DM detail path (which fetches one). One round-trip
+    // per DM track even if multiple TCA clusters draw from it.
+    var _genesisDmTrackCache = {};   // DM track_id → Promise<JSON>
     var _GENESIS_MODAL_ID = 'rt-genesis-detail-modal';
+    // How far from the median first-genesis position we consider a member
+    // to be a "cross-basin outlier" for the DeepMind detail modal. DM's
+    // per-cycle tracker reuses numeric track_ids across ensemble members,
+    // so the same track_id can collect a few members whose physical storm
+    // is in a completely different basin (verified empirically: WPac
+    // track 1 contains 8 EPac members + 1 Gulf-of-Mexico member out of
+    // 410). 1500 km is wider than any single storm's first-genesis spread
+    // we've seen, narrow enough to drop genuine cross-basin orphans.
+    var _GENESIS_DM_OUTLIER_KM = 1500;
+
+    // Fetch one DeepMind track's full uncapped member set. Cached so
+    // re-opening clusters that share a contributor doesn't re-hit the
+    // backend.
+    function _fetchDmTrack(dmTrackId) {
+        var key = String(dmTrackId);
+        if (_genesisDmTrackCache[key]) return _genesisDmTrackCache[key];
+        var p = fetch(API_BASE + '/ir-monitor/weatherlab-genesis/'
+                + encodeURIComponent(key), { cache: 'no-store' })
+            .then(function (r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            });
+        _genesisDmTrackCache[key] = p;
+        return p;
+    }
+
+    // Re-cluster a TCA disturbance against the FULL uncapped member set
+    // by fetching each contributing DM track and replaying the same
+    // spatial+temporal gate that the Global Map's clustering used. The
+    // capped global feed limits each DM track to 100 members for
+    // spaghetti perf, which artificially deflates cluster sizes in the
+    // detail view (a Yap cluster that absorbs 998 unique members on full
+    // data only shows 291 when each contributor is stride-thinned). Two
+    // round-trips per TCA cluster open in the common case.
+    function _fetchAndReclusterTCA(trackId, meta) {
+        var contribIds = Object.keys(meta.contribTrackIds || {});
+        if (contribIds.length === 0) {
+            return Promise.reject(new Error('no contributing DM tracks'));
+        }
+        var fetches = contribIds.map(function (id) { return _fetchDmTrack(id); });
+        return Promise.all(fetches).then(function (responses) {
+            var members = {};
+            var keepIdx = 0;
+            var peakLat = meta.peakLat;
+            var peakLon = meta.peakLon;
+            var peakMeanTau = meta.peakMeanTau;
+            var radius = meta.gateRadiusKm;
+            var radius2 = radius * radius;
+            var timeWin = meta.gateTimeH;
+            var initTime = null;
+            for (var ri = 0; ri < responses.length; ri++) {
+                var resp = responses[ri];
+                if (!initTime) initTime = resp.init_time || null;
+                var srcMembers = resp.members || {};
+                var keys = Object.keys(srcMembers);
+                for (var ki = 0; ki < keys.length; ki++) {
+                    var pts = srcMembers[keys[ki]].points;
+                    if (!pts || pts.length < 2) continue;
+                    var first = null;
+                    for (var pi = 0; pi < pts.length; pi++) {
+                        if (pts[pi].wind != null && pts[pi].wind >= 34
+                                && pts[pi].lat != null && pts[pi].lon != null) {
+                            first = pts[pi]; break;
+                        }
+                    }
+                    if (!first) continue;
+                    // Cheap planar gate (matches the Global Map clustering
+                    // step — fast, fine at the 750 km scale).
+                    var cosLat = Math.cos(first.lat * Math.PI / 180);
+                    var dLat = (first.lat - peakLat) * 111;
+                    var dLon = (first.lon - peakLon) * 111 * cosLat;
+                    if (dLat * dLat + dLon * dLon > radius2) continue;
+                    if (peakMeanTau != null && first.tau != null) {
+                        if (Math.abs(first.tau - peakMeanTau) > timeWin) continue;
+                    }
+                    members[String(keepIdx++)] = { points: pts };
+                }
+            }
+            var memArrays = Object.keys(members).map(function (k) {
+                return members[k].points;
+            });
+            return {
+                model: 'DeepMind FNV3 LARGE_ENSEMBLE',
+                init_time: initTime || meta.initTime,
+                track_id: trackId,
+                n_members: keepIdx,
+                members: members,
+                ensemble_mean: { points: _genesisMeanTrack(memArrays) },
+                _source: 'tcatlas',
+                _uncapped: true,
+            };
+        });
+    }
+
+    // Drop members whose first-genesis position lies > _GENESIS_DM_OUTLIER_KM
+    // from the median first-genesis lat/lon. Only used for the DeepMind
+    // detail path — TCA clusters are already gated tightly during build.
+    // Returns { json, excluded } where json is a shallow-clone with a
+    // filtered members dict (or the original if nothing was excluded).
+    function _filterDmOutliers(json) {
+        var members = json.members || {};
+        var keys = Object.keys(members);
+        var firsts = [];
+        for (var i = 0; i < keys.length; i++) {
+            var pts = members[keys[i]].points || [];
+            for (var j = 0; j < pts.length; j++) {
+                if (pts[j].wind != null && pts[j].wind >= 34
+                        && pts[j].lat != null && pts[j].lon != null) {
+                    firsts.push({ key: keys[i], lat: pts[j].lat, lon: pts[j].lon });
+                    break;
+                }
+            }
+        }
+        if (firsts.length < 5) return { json: json, excluded: 0 };
+        var lats = firsts.map(function (f) { return f.lat; }).sort(function (a, b) { return a - b; });
+        var lons = firsts.map(function (f) { return f.lon; }).sort(function (a, b) { return a - b; });
+        var medLat = lats[Math.floor(lats.length / 2)];
+        var medLon = lons[Math.floor(lons.length / 2)];
+        var keep = {};
+        var excluded = 0;
+        var keptKeysWithFirst = {};
+        for (var k = 0; k < firsts.length; k++) {
+            var f = firsts[k];
+            var d = _genesisHaversineKm(f.lat, f.lon, medLat, medLon);
+            if (d <= _GENESIS_DM_OUTLIER_KM) {
+                keep[f.key] = members[f.key];
+                keptKeysWithFirst[f.key] = true;
+            } else {
+                excluded++;
+            }
+        }
+        // Members that never reach 34 kt have no first-genesis — keep
+        // them (they're already invisible to the genesis map/histogram).
+        for (var kk = 0; kk < keys.length; kk++) {
+            if (!keptKeysWithFirst[keys[kk]]
+                    && !firsts.some(function (f) { return f.key === keys[kk]; })) {
+                keep[keys[kk]] = members[keys[kk]];
+            }
+        }
+        if (excluded === 0) return { json: json, excluded: 0 };
+        // Rebuild ensemble mean from kept members so the modal's mean
+        // line doesn't get pulled toward the discarded outliers.
+        var keptArrays = Object.keys(keep).map(function (k) {
+            return keep[k].points;
+        });
+        var clone = {};
+        for (var key in json) {
+            if (Object.prototype.hasOwnProperty.call(json, key)) clone[key] = json[key];
+        }
+        clone.members = keep;
+        clone.n_members = Object.keys(keep).length;
+        clone.ensemble_mean = { points: _genesisMeanTrack(keptArrays) };
+        return { json: clone, excluded: excluded };
+    }
 
     function _ensureGenesisDetailModal() {
         var m = document.getElementById(_GENESIS_MODAL_ID);
@@ -6284,14 +6472,35 @@
         if (cachedFull) {
             prom = Promise.resolve(cachedFull);
         } else if (trackId && trackId.indexOf('tca-') === 0) {
-            // TC-ATLAS path — no backend route, use cluster cache only.
-            if (!meta || !meta.members) {
-                prom = Promise.reject(new Error('cluster cache missing'));
-            } else {
+            // TC-ATLAS path — fetch uncapped data for every contributing
+            // DM track and re-apply the cluster gate so the modal shows
+            // the TRUE membership (the Global-Map cluster was built from
+            // the capped global feed). Fall back to the thinned cache if
+            // we somehow don't have peak geometry stashed.
+            if (meta && meta.contribTrackIds && meta.peakLat != null) {
+                prom = _fetchAndReclusterTCA(trackId, meta)
+                    .then(function (json) {
+                        _genesisDetailCache[trackId] = json;
+                        return json;
+                    })
+                    .catch(function (err) {
+                        if (meta && meta.members) {
+                            console.warn('[Genesis] TCA uncapped fetch failed, '
+                                + 'using capped cluster cache:', err.message);
+                            return _fromCache();
+                        }
+                        throw err;
+                    });
+            } else if (meta && meta.members) {
                 prom = Promise.resolve(_fromCache());
+            } else {
+                prom = Promise.reject(new Error('cluster cache missing'));
             }
         } else {
-            // DeepMind path — try backend, fall back to cluster cache.
+            // DeepMind path — fetch full member set, then drop cross-
+            // basin outliers (DM track_ids aren't spatially coherent
+            // across ensemble members; the same numeric ID gets reused
+            // on unrelated storms).
             prom = fetch(API_BASE + '/ir-monitor/weatherlab-genesis/'
                     + encodeURIComponent(trackId),
                     { cache: 'no-store' })
@@ -6300,8 +6509,10 @@
                     return r.json();
                 })
                 .then(function (json) {
-                    _genesisDetailCache[trackId] = json;
-                    return json;
+                    var filtered = _filterDmOutliers(json);
+                    filtered.json._dmExcluded = filtered.excluded;
+                    _genesisDetailCache[trackId] = filtered.json;
+                    return filtered.json;
                 })
                 .catch(function (err) {
                     if (meta && meta.members) {
@@ -6341,10 +6552,26 @@
         var stats = _computeGenesisStats(memberKeys, members);
         _renderGenesisStatsStrip(stats, memberKeys.length);
 
-        subEl.innerHTML =
-            '<strong>Init:</strong> ' + initLabel
-            + ' · <strong>' + memberKeys.length + '</strong> ensemble members'
-            + ' · <span style="opacity:0.8;">FNV3 LARGE_ENSEMBLE</span>';
+        var subParts = [
+            '<strong>Init:</strong> ' + initLabel,
+            '<strong>' + memberKeys.length + '</strong> ensemble members',
+            '<span style="opacity:0.8;">FNV3 LARGE_ENSEMBLE</span>',
+        ];
+        if (json._uncapped) {
+            subParts.push('<span style="opacity:0.8; color:#00e5ff;">'
+                + 'uncapped re-cluster</span>');
+        }
+        if (json._dmExcluded) {
+            subParts.push('<span style="opacity:0.8; color:#f97316;" '
+                + 'title="DeepMind\'s per-cycle tracker reuses numeric track_ids '
+                + 'across ensemble members, so the same ID can collect a few '
+                + 'members from unrelated storms in distant basins. Members '
+                + '> ' + _GENESIS_DM_OUTLIER_KM + ' km from the median first-genesis '
+                + 'position have been excluded.">' + json._dmExcluded
+                + ' cross-basin outlier' + (json._dmExcluded === 1 ? '' : 's')
+                + ' excluded</span>');
+        }
+        subEl.innerHTML = subParts.join(' · ');
 
         _renderGenesisMap(memberKeys, members, mean, stats);
         _renderGenesisIntensity(memberKeys, members, mean, stats);
