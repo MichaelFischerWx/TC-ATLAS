@@ -4785,7 +4785,12 @@ def _tca_haversine_km(la1, lo1, la2, lo2):
 
 def _tca_mean_track(member_point_arrays):
     """Pool member trajectories and compute the ensemble-mean lat/lon/
-    wind/pres per tau bucket. Mirrors _genesisMeanTrack in the JS."""
+    wind/pres per tau bucket. Uses circular mean for longitude (so a
+    cluster straddling the antimeridian doesn't average to the wrong
+    side of the globe) and drops tau buckets supported by too few
+    members — otherwise a 1-member mean at +312 h can jump thousands
+    of km and create great-circle arcs across the map. Mirrors
+    _genesisMeanTrack in the JS, with these two improvements."""
     by_tau: dict = {}
     for pts in member_point_arrays:
         if not pts:
@@ -4797,12 +4802,20 @@ def _tca_mean_track(member_point_arrays):
             if t is None:
                 continue
             bucket = by_tau.setdefault(t, {
-                "lat_sum": 0.0, "lon_sum": 0.0, "n": 0,
+                "lat_sum": 0.0,
+                "lon_sin_sum": 0.0, "lon_cos_sum": 0.0,
+                "n": 0,
                 "wind_sum": 0.0, "wind_n": 0,
                 "pres_sum": 0.0, "pres_n": 0,
             })
             bucket["lat_sum"] += p["lat"]
-            bucket["lon_sum"] += p["lon"]
+            # Circular mean accumulator for longitude — sin/cos of the
+            # angle, averaged, then atan2 back to a degree. Robust to
+            # the antimeridian (members at +179° and -179° average to
+            # 180° instead of the wrong-side 0°).
+            lon_rad = p["lon"] * math.pi / 180.0
+            bucket["lon_sin_sum"] += math.sin(lon_rad)
+            bucket["lon_cos_sum"] += math.cos(lon_rad)
             bucket["n"] += 1
             w = p.get("wind")
             if w is not None:
@@ -4812,18 +4825,34 @@ def _tca_mean_track(member_point_arrays):
             if pr is not None:
                 bucket["pres_sum"] += pr
                 bucket["pres_n"] += 1
-    return [
-        {
+    if not by_tau:
+        return []
+    # Member-count gate: at very late taus only a handful of members
+    # are still being tracked, and the resulting "mean" position can
+    # leap thousands of km between consecutive taus. Threshold = 10%
+    # of the peak member count (so a 996-member cluster requires
+    # ~100 members per tau), with a floor of 5 for small clusters.
+    peak_n = max(b["n"] for b in by_tau.values())
+    min_n = max(5, int(round(peak_n * 0.10)))
+    out = []
+    for t in sorted(by_tau.keys()):
+        b = by_tau[t]
+        if b["n"] < min_n:
+            continue
+        lon_mean_rad = math.atan2(b["lon_sin_sum"] / b["n"],
+                                   b["lon_cos_sum"] / b["n"])
+        lon_mean = lon_mean_rad * 180.0 / math.pi
+        out.append({
             "tau": t,
-            "lat": round(by_tau[t]["lat_sum"] / by_tau[t]["n"], 2),
-            "lon": round(by_tau[t]["lon_sum"] / by_tau[t]["n"], 2),
-            "wind": round(by_tau[t]["wind_sum"] / by_tau[t]["wind_n"], 1)
-                    if by_tau[t]["wind_n"] else None,
-            "pres": round(by_tau[t]["pres_sum"] / by_tau[t]["pres_n"], 1)
-                    if by_tau[t]["pres_n"] else None,
-        }
-        for t in sorted(by_tau.keys())
-    ]
+            "lat": round(b["lat_sum"] / b["n"], 2),
+            "lon": round(lon_mean, 2),
+            "wind": round(b["wind_sum"] / b["wind_n"], 1)
+                    if b["wind_n"] else None,
+            "pres": round(b["pres_sum"] / b["pres_n"], 1)
+                    if b["pres_n"] else None,
+            "n_members": b["n"],
+        })
+    return out
 
 
 def _tca_compute_clusters(raw_data: dict,

@@ -7309,24 +7309,43 @@
 
         // Per-member polylines collapsed into one trace via null separators
         // (cheap render: 1 trace × N members × M points vs N traces).
+        // Insert a null between consecutive points whose longitudes
+        // differ by >180° so Plotly doesn't draw a line wrapping the
+        // entire globe when a member crosses the antimeridian.
         var spagX = [], spagY = [];
         for (var i = 0; i < memberKeys.length; i++) {
             var pts = members[memberKeys[i]].points || [];
+            var lastLon = null;
             for (var j = 0; j < pts.length; j++) {
                 if (pts[j].lat == null || pts[j].lon == null) continue;
+                if (lastLon !== null && Math.abs(pts[j].lon - lastLon) > 180) {
+                    spagX.push(null); spagY.push(null);
+                }
                 spagX.push(pts[j].lon);
                 spagY.push(pts[j].lat);
+                lastLon = pts[j].lon;
             }
             spagX.push(null); spagY.push(null);
         }
-        // Mean track arrays
+        // Mean track arrays — antimeridian split so the orange mean
+        // line doesn't wrap the globe if the cluster recurves across
+        // 180°. Markers (separate trace) don't need this — they're
+        // independent points, no inter-point lines.
         var meanLons = [], meanLats = [], meanWinds = [], meanTaus = [];
+        var meanLineLons = [], meanLineLats = [];
+        var prevMeanLon = null;
         for (var k = 0; k < mean.points.length; k++) {
             var mp = mean.points[k];
             meanLons.push(mp.lon);
             meanLats.push(mp.lat);
             meanWinds.push(mp.wind != null ? mp.wind : 0);
             meanTaus.push(mp.tau);
+            if (prevMeanLon !== null && Math.abs(mp.lon - prevMeanLon) > 180) {
+                meanLineLons.push(null); meanLineLats.push(null);
+            }
+            meanLineLons.push(mp.lon);
+            meanLineLats.push(mp.lat);
+            prevMeanLon = mp.lon;
         }
 
         // Measure the container's actual aspect ratio and use that as
@@ -7365,11 +7384,12 @@
         };
         var meanLine = {
             type: 'scattergeo', mode: 'lines',
-            lon: meanLons, lat: meanLats,
+            lon: meanLineLons, lat: meanLineLats,
             line: { color: '#f97316', width: 2.5 },
             name: 'Ensemble mean',
             hoverinfo: 'skip',
             showlegend: false,
+            connectgaps: false,
         };
         var meanMarkers = {
             type: 'scattergeo', mode: 'markers',
