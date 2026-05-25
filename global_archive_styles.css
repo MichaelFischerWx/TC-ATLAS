@@ -2719,6 +2719,21 @@ input[type="range"].ga-range::-moz-range-thumb {
     accent-color: #2e7dff;
     cursor: pointer;
 }
+.tc-mw-sensor-row {
+    flex-wrap: wrap;
+    gap: 10px;
+}
+.tc-mw-sensor-opt {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+    color: #0f1623;
+}
+.tc-mw-sensor-opt input[type="checkbox"] {
+    accent-color: #2e7dff;
+    cursor: pointer;
+}
 .tc-mw-hours-row { gap: 6px; }
 .tc-mw-hours-label {
     display: inline-flex;

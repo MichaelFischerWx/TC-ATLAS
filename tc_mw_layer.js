@@ -134,6 +134,13 @@
         };
     }
 
+    // Sensors the layer knows how to render. Order = display order in UI.
+    var KNOWN_SENSORS = [
+        { key: 'GMI',   label: 'GMI'   },
+        { key: 'SSMIS', label: 'SSMI/S' },
+        { key: 'AMSR2', label: 'AMSR2' }
+    ];
+
     function MWLayer(map, opts) {
         opts = opts || {};
         this._map           = map;
@@ -145,6 +152,14 @@
         this._manifestUrl   = opts.manifestUrl || MANIFEST_URL;
         this._onAttribution = opts.onAttribution || null;
         this._compact       = !!opts.compact;
+
+        // Enabled sensors — Set keyed by sensor string. Default: all on.
+        // Pass opts.sensors as array (e.g. ['GMI']) to override.
+        this._sensors = {};
+        var initialSensors = opts.sensors || KNOWN_SENSORS.map(function (s) { return s.key; });
+        for (var si = 0; si < initialSensors.length; si++) {
+            this._sensors[initialSensors[si]] = true;
+        }
 
         this._enabled       = false;
         this._manifest      = null;      // normalized
@@ -217,6 +232,14 @@
         if (this._enabled) this._renderAll();
     };
 
+    MWLayer.prototype.setSensor = function (sensor, enabled) {
+        this._sensors[sensor] = !!enabled;
+        if (this._ui && this._ui.sensorChecks && this._ui.sensorChecks[sensor]) {
+            this._ui.sensorChecks[sensor].checked = !!enabled;
+        }
+        if (this._enabled) this._renderAll();
+    };
+
     MWLayer.prototype.refresh = function () {
         var self = this;
         return this._fetchManifest().then(function () {
@@ -281,6 +304,7 @@
             var orb = orbits[i];
             var ageMin = (now - orb.scan_start_ms) / 60000;
             if (ageMin < 0 || ageMin > windowMin) continue;
+            if (orb.sensor && this._sensors[orb.sensor] === false) continue;
             var entry = orb.products[this._product];
             if (!entry) continue;       // no PNG for the active product
             this._addOrbit(orb, entry, ageMin, windowMin);
@@ -290,7 +314,13 @@
         if (this._lastFetchErr && nVisible === 0) {
             this._updateStatus('Manifest unreachable — last good data shown if any.');
         } else if (nVisible === 0) {
-            this._updateStatus('No microwave passes in the last ' + this._hours + ' hr');
+            var anyOn = false;
+            for (var sk in this._sensors) { if (this._sensors[sk]) { anyOn = true; break; } }
+            if (!anyOn) {
+                this._updateStatus('All sensors off — toggle one on to see passes');
+            } else {
+                this._updateStatus('No microwave passes in the last ' + this._hours + ' hr');
+            }
         } else {
             this._updateStatus(nVisible + ' pass' + (nVisible === 1 ? '' : 'es') + ' · last ' + this._hours + ' hr');
         }
@@ -383,6 +413,15 @@
             +       '<span>89 GHz PCT</span>'
             +     '</label>'
             +   '</div>'
+            +   '<div class="tc-mw-control-row tc-mw-sensor-row">'
+            +     KNOWN_SENSORS.map(function (s) {
+                      return '<label class="tc-mw-sensor-opt">'
+                          +    '<input type="checkbox" data-tc-mw-sensor="' + s.key + '"'
+                          +      (this._sensors[s.key] ? ' checked' : '') + '>'
+                          +    '<span>' + s.label + '</span>'
+                          +  '</label>';
+                  }.bind(this)).join('')
+            +   '</div>'
             +   '<div class="tc-mw-control-row tc-mw-hours-row">'
             +     '<label class="tc-mw-hours-label">Window'
             +       '<span class="tc-mw-hours-val">' + this._defaultHours + ' hr</span>'
@@ -406,9 +445,17 @@
         if (this._product === '89pct') {
             // (radio sync above)
         }
+        // Collect sensor checkbox refs by sensor key, wire change events.
+        var sensorChecks = {};
+        var sensorBoxes = wrap.querySelectorAll('input[data-tc-mw-sensor]');
+        for (var sj = 0; sj < sensorBoxes.length; sj++) {
+            sensorChecks[sensorBoxes[sj].getAttribute('data-tc-mw-sensor')] = sensorBoxes[sj];
+        }
+
         this._ui = {
             container: wrap, btn: btn, slider: slider,
-            hoursLabel: hoursLbl, status: status
+            hoursLabel: hoursLbl, status: status,
+            sensorChecks: sensorChecks
         };
 
         var self = this;
@@ -421,6 +468,11 @@
                 });
             })(radios[i]);
         }
+        Object.keys(sensorChecks).forEach(function (key) {
+            sensorChecks[key].addEventListener('change', function () {
+                self.setSensor(key, sensorChecks[key].checked);
+            });
+        });
     };
 
     MWLayer.prototype._updateStatus = function (msg) {
