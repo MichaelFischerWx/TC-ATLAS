@@ -1,0 +1,58 @@
+# --------------------------------------------------------------------------
+# TC-ATLAS microwave NRT ingestion — Cloud Run Job container
+# --------------------------------------------------------------------------
+# Polls NASA PPS NRT for new passive-microwave granules (GMI first;
+# SSMIS / AMSR2 follow), renders 37-color RGB + 89H PCT as Web Mercator
+# PNG overlays, computes valid-pixel footprint GeoJSON, and uploads
+# everything (plus a rolling 48-hour manifest) to GCS.
+#
+# Operational mode resumes from the manifest's latest scan_start, so
+# every 20-min trigger picks up exactly the new granules and nothing else.
+#
+# Build:   gcloud builds submit --tag gcr.io/$PROJECT/tc-atlas-mw-job -f Dockerfile.mw .
+# Deploy:  ./deploy_mw_job.sh
+# --------------------------------------------------------------------------
+
+FROM python:3.11-slim
+
+# libhdf5 for h5netcdf (PPS .HDF5 + TC-PRIMED .nc); libgeos for shapely;
+# libjpeg/freetype for Pillow/matplotlib glyph + PNG encoding.
+# DEBIAN_FRONTEND silences debconf TTY probing under Cloud Build.
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libhdf5-dev \
+        libjpeg62-turbo-dev \
+        libfreetype6-dev \
+        libgeos-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Lean dependency set — no eccodes/cfgrib (PPS data is HDF5, not GRIB).
+# fastapi is a transitive requirement: mw_ingest imports rendering helpers
+# from microwave_api.py, whose top-level imports include APIRouter. We pull
+# it in here rather than refactor the shared helpers into a third module.
+RUN pip install --no-cache-dir \
+        numpy \
+        scipy \
+        matplotlib \
+        Pillow \
+        xarray \
+        h5netcdf \
+        h5py \
+        requests \
+        google-cloud-storage \
+        scikit-image \
+        shapely \
+        fastapi
+
+# mw_ingest reuses _compute_37color_swath / _compute_89pct_swath /
+# _nrl_89ghz_cmap from microwave_api so the math stays 1:1 with the
+# TC-PRIMED archive renderer. Both files must ship together.
+COPY mw_ingest.py .
+COPY microwave_api.py .
+
+# Cloud Run Jobs invoke the container; --operational picks up where the
+# last run left off via the GCS manifest's max scan_start, falling back
+# to --since-hours 1 on first run (empty manifest).
+ENTRYPOINT ["python", "mw_ingest.py", "--operational"]
