@@ -813,8 +813,8 @@ def _cli(argv=None):
     ap.add_argument("--sensors", default="GMI,SSMIS,AMSR2",
                     help="Operational/poll mode: comma-separated list of "
                          "PPS sensors to ingest (default GMI,SSMIS,AMSR2)")
-    ap.add_argument("--products", default="37color,89pct",
-                    help="Comma-separated product list")
+    ap.add_argument("--products", default="37color,89pct,37v,37h,89v,89h",
+                    help="Comma-separated product list (default = all six)")
     ap.add_argument("--since-hours", type=float, default=None,
                     help="Live PPS poll mode: ingest all granules from "
                          "now − N hours per sensor (requires PPS_USER/PPS_PASS)")
