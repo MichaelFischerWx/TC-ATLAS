@@ -323,6 +323,16 @@
 
     MWLayer.prototype.disable = function () {
         if (!this._enabled) return;
+        // Trace the disable so we can correlate the user-reported
+        // "MW disappears after zoom" symptom with whatever called it.
+        // Logged via console.info so it stays visible without users
+        // having to flip a debug flag.
+        try {
+            console.info('[MW] disable() called', {
+                zoom: this._map && this._map.getZoom ? this._map.getZoom() : null,
+                stack: new Error().stack
+            });
+        } catch (e) {}
         this._enabled = false;
         this.pause();  // stop animation if running
         if (this._ui && this._ui.btn) this._ui.btn.classList.remove('active');
@@ -519,6 +529,19 @@
     // ── Rendering ─────────────────────────────────────────────
     MWLayer.prototype._clearAll = function () {
         var map = this._map;
+        var n = Object.keys(this._renderedOrbits).length;
+        // Quiet trace — only when there were overlays to clear (otherwise
+        // every _renderAll prefix would spam). Helps correlate the
+        // "MW disappears after zoom" report with whatever fired the clear.
+        if (n > 0) {
+            try {
+                console.debug('[MW] _clearAll', {
+                    cleared: n,
+                    enabled: this._enabled,
+                    zoom: map && map.getZoom ? map.getZoom() : null
+                });
+            } catch (e) {}
+        }
         Object.keys(this._renderedOrbits).forEach(function (k) {
             var parts = this._renderedOrbits[k];
             for (var i = 0; i < parts.length; i++) {

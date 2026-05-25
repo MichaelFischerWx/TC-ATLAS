@@ -2085,6 +2085,25 @@
         });
         map.addControl(new LayersControl());
 
+        // Eager-mount the MW helper if prefs say the user had it on
+        // previously. Without this, anything that triggers a full page
+        // reload (tab crash + Chrome auto-restore is the leading
+        // candidate for the observed zoom-reload symptom) would leave
+        // MW dormant until the user manually re-opened the Layers
+        // panel. The helper's constructor reads its own prefs and
+        // auto-enables, so a quiet pre-mount is sufficient.
+        try {
+            var _mwPrefRaw = window.localStorage && window.localStorage.getItem('tc-atlas-mw-prefs');
+            if (_mwPrefRaw) {
+                var _mwPref = JSON.parse(_mwPrefRaw);
+                if (_mwPref && _mwPref.enabled === true) {
+                    // Defer one tick so the layers panel control fully
+                    // initializes before we ask for its slot.
+                    setTimeout(_rtEnsureMwLayer, 0);
+                }
+            }
+        } catch (e) { /* prefs unavailable — fine, lazy path still works */ }
+
         // Env colorbar — fixed-position bottom-LEFT, above the
         // Brightness Temp colorbar + animation panel. Previously lived
         // bottom-right, but the unified Layers panel claims that edge
