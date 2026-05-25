@@ -662,14 +662,131 @@ def _pps_session():
 # ---------------------------------------------------------------------------
 @dataclass
 class RenderedProduct:
-    product: str        # "37color" | "89pct"
+    product: str        # "37color" | "89pct" | "37v" | "37h" | "89v" | "89h"
     png_bytes: bytes
     bounds: list        # [[s, w], [n, e]]
     footprint: dict     # GeoJSON geometry
+    pass_suffix: str = ""  # per-pass tag like "-p0" when granule was split
+
+
+# Sensors whose NRT granules bundle multiple orbital passes and must
+# be split per-pass to keep each rendered PNG to a single-orbit bbox.
+# GMI and ATMS NRT granules are already ~5-min single-pass chunks.
+_MULTI_PASS_SENSORS = {"SSMIS", "AMSR2"}
+
+
+def _split_into_passes(ds_bt, ds_geo) -> list[tuple]:
+    """Split a granule into contiguous single-arc orbital passes.
+
+    Walks the center-pixel (lat, lon) scan-by-scan and breaks the
+    granule at three kinds of boundaries:
+
+      (1) Latitude-direction reversal — the ascending/descending node
+          at the equator that separates two halves of an orbit.
+      (2) Large scan-to-scan longitude jump (>30°) — happens at polar
+          crossings where lon-convergence makes the ground track snap
+          to a different longitude.
+      (3) NaN gaps (from polar clipping) — when a scan is invalid and
+          the next valid scan is in a very different geographic
+          location, treat as a new arc.
+
+    Returns a list of (sub_bt, sub_geo, suffix) tuples, one per arc,
+    each with a coherent narrow bounding box. Falls back to a single-
+    element list (whole granule, no suffix) for single-arc granules
+    like GMI or ATMS so the caller's code path stays uniform."""
+    if "latitude" not in ds_geo.data_vars or "longitude" not in ds_geo.data_vars:
+        return [(ds_bt, ds_geo, "")]
+    lats_all = ds_geo["latitude"].values
+    lons_all = ds_geo["longitude"].values
+    if lats_all.ndim != 2 or lats_all.shape[0] < 60:
+        return [(ds_bt, ds_geo, "")]
+    center_col = lats_all.shape[1] // 2
+    lat = lats_all[:, center_col].astype(np.float64)
+    lon = lons_all[:, center_col].astype(np.float64)
+    nscan = len(lat)
+
+    arcs: list[tuple[int, int]] = []
+    arc_start: Optional[int] = None
+    prev_lon = prev_lat = None
+    prev_dlat_sign = 0  # +1 ascending, -1 descending, 0 unknown
+    JUMP_DEG = 30.0     # >30° lon jump between consecutive scans → polar/dateline gap
+    NOISE_DEG = 0.05    # |dlat| under this is ignored for direction
+    for i in range(nscan):
+        if np.isnan(lat[i]) or np.isnan(lon[i]):
+            if arc_start is not None and (i - arc_start) >= 30:
+                arcs.append((arc_start, i))
+            arc_start = None
+            prev_lon = prev_lat = None
+            prev_dlat_sign = 0
+            continue
+        if arc_start is None:
+            arc_start = i
+            prev_lon, prev_lat = lon[i], lat[i]
+            prev_dlat_sign = 0
+            continue
+        dlon = lon[i] - prev_lon
+        if dlon > 180:
+            dlon -= 360
+        elif dlon < -180:
+            dlon += 360
+        dlat = lat[i] - prev_lat
+        boundary = False
+        if abs(dlon) > JUMP_DEG:
+            # Polar / dateline discontinuity — arc broken.
+            boundary = True
+        elif abs(dlat) > NOISE_DEG:
+            sign_now = 1 if dlat > 0 else -1
+            if prev_dlat_sign != 0 and sign_now != prev_dlat_sign:
+                # Ascending ↔ descending — start of next pass.
+                boundary = True
+            prev_dlat_sign = sign_now
+        if boundary:
+            if (i - arc_start) >= 30:
+                arcs.append((arc_start, i))
+            arc_start = i
+            prev_dlat_sign = 0
+        prev_lon, prev_lat = lon[i], lat[i]
+
+    if arc_start is not None and (nscan - arc_start) >= 30:
+        arcs.append((arc_start, nscan))
+
+    if len(arcs) <= 1:
+        return [(ds_bt, ds_geo, "")]
+    out = []
+    for idx, (i0, i1) in enumerate(arcs):
+        sub_bt  = ds_bt.isel(scan=slice(i0, i1))
+        sub_geo = sub_bt if ds_bt is ds_geo else ds_geo.isel(scan=slice(i0, i1))
+        out.append((sub_bt, sub_geo, f"-p{idx}"))
+    logger.info("split granule into %d orbital arcs", len(out))
+    return out
 
 
 def render_product(ds_bt, ds_geo, sensor: str, product: str
-                   ) -> RenderedProduct:
+                   ) -> list[RenderedProduct]:
+    """Render one product from one swath. For multi-pass sensors (SSMI/S,
+    AMSR2 — their NRT granules bundle ~1h45m of orbit, containing 1+
+    orbital revolutions), splits into single-pass chunks first and
+    renders each independently so per-pass bboxes stay narrow.
+    Returns a list of RenderedProducts (one per pass); single-pass
+    sensors yield a one-element list with no `pass_suffix`."""
+    if sensor in _MULTI_PASS_SENSORS:
+        passes = _split_into_passes(ds_bt, ds_geo)
+    else:
+        passes = [(ds_bt, ds_geo, "")]
+    out: list[RenderedProduct] = []
+    for sub_bt, sub_geo, suffix in passes:
+        try:
+            r = _render_single_product(sub_bt, sub_geo, sensor, product)
+        except ValueError as exc:
+            logger.debug("pass%s skipped: %s", suffix or "", exc)
+            continue
+        r.pass_suffix = suffix
+        out.append(r)
+    return out
+
+
+def _render_single_product(ds_bt, ds_geo, sensor: str, product: str
+                           ) -> RenderedProduct:
     """Render one product from one swath. Each product may need a
     different (ds_bt, ds_geo) — caller is responsible for opening the
     right group(s) per product (see read_tcprimed_for_product).
@@ -715,22 +832,19 @@ def render_product(ds_bt, ds_geo, sensor: str, product: str
     else:
         raise ValueError(f"Unknown product {product}")
 
-    # Reject granules whose bounding box is too wide to be a single
-    # orbital pass. SSMI/S and AMSR2 NRT files sometimes bundle 1+ full
-    # orbits (~1h45m) into a single granule — the resulting bbox spans
-    # most of the globe and the PNG paints huge diagonal stripes that
-    # are visually unusable. A single orbital pass at TC-relevant
-    # latitudes covers <90° of longitude; anything wider is multi-pass
-    # and would need pass-splitting (TODO). Until then, skip.
+    # Safety net: even after per-pass splitting, drop anything that
+    # still has an absurd bbox (lon-span > 150°). This catches edge
+    # cases where the pass detector failed to find boundaries (e.g.,
+    # all-NaN center column) and should be rare. Most legitimate
+    # passes have lon-span well under 100° after the polar clip.
     bounds = gridded["bounds"]
     lat_min, lat_max = bounds[0][0], bounds[1][0]
     lon_min, lon_max = bounds[0][1], bounds[1][1]
-    lon_span = lon_max - lon_min  # already sorted by _regrid_swath
-    if lon_span > 90.0:
+    lon_span = lon_max - lon_min
+    if lon_span > 150.0:
         raise ValueError(
-            f"granule bbox too wide (lon span {lon_span:.0f}°) — likely "
-            f"contains multiple orbital passes; skipping until splitter "
-            f"is implemented")
+            f"bbox too wide after split (lon span {lon_span:.0f}°) — "
+            f"pass splitter likely missed a boundary")
 
     # `_regrid_swath` returns arrays with row 0 = lat_min (south-up, since
     # grid_lat = np.linspace(lat_min, lat_max)). PIL / L.imageOverlay
@@ -776,11 +890,17 @@ def upload_granule(meta: GranuleMeta, products: list[RenderedProduct],
                    dry_run: bool = False, dry_run_dir: Optional[str] = None,
                    ) -> list[dict]:
     """Upload PNG + GeoJSON for each product. Returns manifest entries.
-    In dry-run mode, writes locally under dry_run_dir instead of GCS."""
+    Each product carries its own `pass_suffix` (e.g., "-p0") for
+    multi-pass sensors that were split. The suffix is appended to
+    meta.orbit_id so each pass becomes a distinct manifest entry."""
     entries = []
     t = meta.scan_start_utc
-    base = f"{meta.sensor}/{t:%Y}/{t:%m}/{t:%d}/{meta.orbit_id}_{t:%H%M%S}"
     for p in products:
+        # Per-pass orbit_id (with suffix when split). Single-pass
+        # sensors (GMI, ATMS) leave pass_suffix empty so the path and
+        # manifest key are bit-for-bit unchanged.
+        orbit_id = meta.orbit_id + (p.pass_suffix or "")
+        base = f"{meta.sensor}/{t:%Y}/{t:%m}/{t:%d}/{orbit_id}_{t:%H%M%S}"
         png_key = f"{base}_{p.product}.png"
         geo_key = f"{base}_{p.product}.geojson"
         geo_payload = json.dumps(
@@ -801,7 +921,7 @@ def upload_granule(meta: GranuleMeta, products: list[RenderedProduct],
         entries.append({
             "sensor": meta.sensor,
             "platform": meta.platform,
-            "orbit_id": meta.orbit_id,
+            "orbit_id": orbit_id,
             "scan_start": t.isoformat(),
             "product": p.product,
             "png_url": f"https://storage.googleapis.com/{MW_BUCKET}/{png_key}",
@@ -888,7 +1008,9 @@ def process_one(reader_path: str, sensor: str,
             meta = meta_i
         eff_sensor = sensor or meta.sensor
         try:
-            rendered.append(render_product(ds_bt, ds_geo, eff_sensor, product))
+            # render_product returns a list — one entry per orbital
+            # pass for multi-pass sensors, one-element list otherwise.
+            rendered.extend(render_product(ds_bt, ds_geo, eff_sensor, product))
         except Exception as exc:
             logger.error("render failed for product=%s: %s", product, exc)
         finally:

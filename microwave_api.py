@@ -1711,6 +1711,13 @@ def _regrid_swath(data: np.ndarray, lats: np.ndarray, lons: np.ndarray,
     if len(flat_data) < 10:
         raise ValueError("Insufficient valid data points for regridding")
 
+    # Dateline-crossing swath: see _regrid_swath_multi for the rationale.
+    # Shift the western half by +360° to make the longitude axis
+    # continuous; bounds will have lon_max > 180 which Leaflet handles
+    # natively via worldCopyJump.
+    if np.any(flat_lon > 150) and np.any(flat_lon < -150):
+        flat_lon = np.where(flat_lon < 0, flat_lon + 360.0, flat_lon)
+
     # Define regular grid
     lat_min, lat_max = float(flat_lat.min()), float(flat_lat.max())
     lon_min, lon_max = float(flat_lon.min()), float(flat_lon.max())
@@ -1822,6 +1829,19 @@ def _regrid_swath_multi(
 
     if len(flat_lat) < 10:
         raise ValueError("Insufficient valid data points for multi-channel regridding")
+
+    # Dateline-crossing swath detection. When an orbital pass crosses
+    # the antimeridian, the raw lon array has values clustered near
+    # +180° AND near -180°, with a 360° gap in between. Naive min/max
+    # would give a near-global bbox even though the pass is only a
+    # narrow curved strip. Shift the western half by +360° to make
+    # the longitude axis continuous (170, 175, 180, 185, 190 instead
+    # of 170, 175, -180, -175, -170). The returned bounds will then
+    # have lon_max > 180; Leaflet's L.imageOverlay handles that
+    # natively (the map's worldCopyJump option draws the image
+    # seamlessly across the dateline).
+    if np.any(flat_lon > 150) and np.any(flat_lon < -150):
+        flat_lon = np.where(flat_lon < 0, flat_lon + 360.0, flat_lon)
 
     # Define regular grid
     lat_min, lat_max = float(flat_lat.min()), float(flat_lat.max())
