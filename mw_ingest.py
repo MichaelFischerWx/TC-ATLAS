@@ -1175,7 +1175,47 @@ def run_predict_passes(upload: bool = True) -> dict:
             "application/json",
             cache_seconds=300,
         )
+    _check_for_wsf_m_on_pps()
     return payload
+
+
+# Sensors we'd like to add to TC-ATLAS once NASA adds them to the GPM
+# XCAL constellation on PPS. Right now (~2026) WSF-M's MWI isn't in
+# /text/1C/ — it's distributed via FNMOC + NRL Monterey to authorized
+# users only. Each --predict-passes run probes for it so the day NASA
+# finally publishes it we see a clear log line and can extend
+# _PPS_SENSORS with one new entry.
+_PPS_SENSOR_WATCHLIST = [
+    ("WSF",     "WSF-M (MWI) — Space Force microwave imager"),
+    ("MWI",     "WSF-M (MWI) — alternate path"),
+    ("WSF-M",   "WSF-M (MWI) — full-name path"),
+]
+
+
+def _check_for_wsf_m_on_pps() -> None:
+    """Lightweight HEAD probe: is WSF-M / MWI available on PPS yet?
+    Runs alongside the prediction job (every 30 min in production).
+    Just logs — does not gate any other behavior."""
+    import requests
+    try:
+        sess = requests.Session()
+        if PPS_USER and PPS_PASS:
+            sess.auth = (PPS_USER, PPS_PASS)
+        for path, label in _PPS_SENSOR_WATCHLIST:
+            url = f"{PPS_BASE}/text/1C/{path}/"
+            try:
+                r = sess.head(url, timeout=20, allow_redirects=True)
+                if r.status_code == 200:
+                    logger.warning(
+                        "[WATCHLIST] %s now available on PPS at %s — "
+                        "extend _PPS_SENSORS to ingest it!", label, url)
+                else:
+                    logger.debug("[WATCHLIST] %s: not yet on PPS (HTTP %d)",
+                                 label, r.status_code)
+            except Exception as exc:
+                logger.debug("[WATCHLIST] %s: probe error: %s", label, exc)
+    except Exception as exc:
+        logger.warning("watchlist probe failed: %s", exc)
 
 
 # ---------------------------------------------------------------------------
