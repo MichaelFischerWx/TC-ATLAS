@@ -1900,6 +1900,37 @@ def _cli(argv=None):
             ap.error(f"Unknown sensor(s): {unknown}. "
                      f"Supported: {list(_PPS_SENSORS)}")
 
+        # Tier 2 cost gate: in --operational mode (i.e., cron-triggered),
+        # skip the ingest entirely when there are zero active TCs AND
+        # zero genesis disturbances. The MW layer's primary value is
+        # storm-monitoring; during quiet periods we save ~95% of compute
+        # per skipped run. Manifest entries naturally age out over 48 h
+        # so the layer quietens too — when a storm appears, the next
+        # cron tick bypasses this gate and resumes normal ingest.
+        # Manual --since-hours invocations skip the gate (researcher
+        # explicitly wants data regardless of storm state).
+        if args.operational and not args.since_hours:
+            storms_ok = disturb_ok = True
+            try:
+                gate_storms = _fetch_active_storms()
+            except Exception as exc:
+                logger.warning("[gate] active-storms fetch failed (%s) — "
+                               "ingest anyway to be safe", exc)
+                storms_ok = False
+                gate_storms = []
+            try:
+                gate_disturb = _fetch_genesis_disturbances()
+            except Exception as exc:
+                logger.warning("[gate] genesis fetch failed (%s) — "
+                               "ingest anyway to be safe", exc)
+                disturb_ok = False
+                gate_disturb = []
+            if storms_ok and disturb_ok and not gate_storms and not gate_disturb:
+                logger.info("[gate] no active TCs (0) and no disturbances (0) — "
+                            "skipping ingest. Manifest will age out naturally.")
+                print(json.dumps({"processed": 0, "reason": "quiet-gate"}))
+                return
+
         sess = _pps_session()
         # Larger first-run fallback than 1 h — SSMI/S and AMSR2 NRT lag ~3-4 h
         # behind real time, so a tight window leaves them empty on the first

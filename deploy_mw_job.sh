@@ -47,7 +47,8 @@ fi
 JOB_NAME="tc-atlas-mw-job"
 REGION="us-east1"                 # match the API service so cross-region traffic stays cheap
 SCHEDULER_NAME="tc-atlas-mw-schedule"
-SCHEDULE="*/20 * * * *"           # every 20 min — must finish before the next trigger
+SCHEDULE="*/30 * * * *"           # every 30 min (was 20). Trade-off: GMI passes show
+                                  # ~10 min later on average, but 33% lower Cloud Run cost
 TIMEZONE="UTC"
 BUCKET="${GCS_MW_BUCKET:-tc-atlas-microwave-nrt}"
 
@@ -59,7 +60,8 @@ BUCKET="${GCS_MW_BUCKET:-tc-atlas-microwave-nrt}"
 # Cloud Run Jobs accept a `containerOverrides.args` field in the
 # :run API body, which Cloud Scheduler can set via --message-body.
 PREDICT_SCHEDULER_NAME="tc-atlas-mw-predict-schedule"
-PREDICT_SCHEDULE="*/30 * * * *"   # every 30 min — refresh predictions
+PREDICT_SCHEDULE="0 */2 * * *"    # every 2 hours on the hour (was every 30 min).
+                                  # TLEs only update daily so 30 min was overkill
 
 IMAGE="gcr.io/${PROJECT}/${JOB_NAME}:latest"
 
