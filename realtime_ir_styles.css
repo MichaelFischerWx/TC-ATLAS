@@ -3021,45 +3021,6 @@ html.sub-only-mode .sub-hov-stack {
 }
 html.sub-only-mode .sub-active-tc-list { display: none !important; }
 
-/* Discoverable build chip — bottom-right of the page, faint so it
-   doesn't compete with the map. Hover for instructions. Lets a user
-   verify which version of the JS they're seeing without opening
-   DevTools, and the timestamp lines up with GitHub commit times so
-   "did my last push deploy?" is a quick visual check. */
-#tc-build-chip {
-    position: fixed;
-    bottom: 6px;
-    right: 8px;
-    z-index: 1100;
-    padding: 2px 7px;
-    border-radius: 4px;
-    font-family: 'JetBrains Mono', ui-monospace, monospace;
-    font-size: 0.62rem;
-    color: rgba(100, 116, 139, 0.65);
-    background: rgba(255, 255, 255, 0.55);
-    border: 1px solid rgba(100, 116, 139, 0.18);
-    pointer-events: auto;
-    user-select: text;
-    backdrop-filter: blur(4px);
-    -webkit-backdrop-filter: blur(4px);
-    transition: opacity 0.2s, color 0.2s;
-    opacity: 0.55;
-}
-#tc-build-chip:hover {
-    opacity: 1;
-    color: var(--text, #0f172a);
-}
-[data-theme="dark"] #tc-build-chip {
-    color: rgba(148, 163, 184, 0.55);
-    background: rgba(15, 22, 35, 0.55);
-    border-color: rgba(148, 163, 184, 0.18);
-}
-[data-theme="dark"] #tc-build-chip:hover { color: #e2e8f0; }
-
-/* Hide the build chip in the chrome-stripped subOnly iframe — the
-   parent page (climo) has its own build-info indicator. */
-html.sub-only-mode #tc-build-chip { display: none !important; }
-
 /* ════════════════════════════════════════════════════════════════
    MICROWAVE PASSES (last N hrs) overlay UI — shared with the
    Global Archive's storm-browser map (same .tc-mw-* class block
