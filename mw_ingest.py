@@ -585,6 +585,50 @@ def read_pps_for_product(path: str, sensor: str, product: str) -> tuple:
     return ds, ds, meta
 
 
+def read_pps_group(path: str, sensor: str, group_name: str,
+                   channels: dict) -> tuple:
+    """Load a single HDF5 group from a PPS granule with all the
+    specified channels in one shot. `channels` is a mapping from
+    var_name (TC-PRIMED-style "TB_36.64V") to the channel index k
+    inside the group's Tc[scan, pixel, chan] array.
+
+    Used by the new group-grouped process_one flow: when a sensor's
+    multiple products live in the same HDF5 group (e.g., SSMI/S has
+    37-color + 37V + 37H all sourced from S2), the file is opened
+    and the channels extracted once, then shared across products via
+    the regrid cache. Returns (ds, ds, meta) — both ds_bt and ds_geo
+    are the same Dataset since PPS L1C colocates lat/lon and Tc."""
+    import xarray as xr
+
+    fname = Path(path).name
+    meta = _pps_granule_meta(sensor, fname)
+    s = xr.open_dataset(path, engine="h5netcdf", group=group_name).load()
+    tc = s["Tc"]
+    chan_dim = tc.dims[-1]
+
+    # Polar clip (see read_pps_for_product for rationale).
+    lat_arr = s["Latitude"].values.astype(np.float32)
+    lon_arr = s["Longitude"].values.astype(np.float32)
+    polar = np.abs(lat_arr) > MAX_RENDER_LAT
+    if polar.any():
+        lat_arr = np.where(polar, np.nan, lat_arr)
+        lon_arr = np.where(polar, np.nan, lon_arr)
+
+    data_vars = {}
+    for var_name, k in channels.items():
+        slab = tc.isel({chan_dim: k}).astype(np.float32)
+        slab = slab.where(slab > _PPS_FILL + 0.1)
+        vals = slab.values
+        if polar.any():
+            vals = np.where(polar, np.nan, vals)
+        data_vars[var_name] = (("scan", "pixel"), vals)
+    data_vars["latitude"]  = (("scan", "pixel"), lat_arr)
+    data_vars["longitude"] = (("scan", "pixel"), lon_arr)
+    ds = xr.Dataset(data_vars=data_vars)
+    s.close()
+    return ds, ds, meta
+
+
 # Backwards-compat alias for the GMI-only entry point used during Phase 1
 # scaffolding. Operational mode and process_one now go through
 # read_pps_for_product.
@@ -673,6 +717,24 @@ class RenderedProduct:
 # be split per-pass to keep each rendered PNG to a single-orbit bbox.
 # GMI and ATMS NRT granules are already ~5-min single-pass chunks.
 _MULTI_PASS_SENSORS = {"SSMIS", "AMSR2"}
+
+
+# Per-band grid resolution. 37 GHz has coarser native footprint (~15-37 km
+# depending on sensor) so a 0.05° grid is appropriate; 89 GHz is sharper
+# (~5-15 km) so we go finer at 0.02°. Bands use *different* grids by
+# design, which is why the regrid cache is keyed per-band, not per-group.
+_BAND_GRID_RES = {37: 0.05, 89: 0.02}
+
+
+def _band_of_product(product: str) -> int:
+    """Map a product string ('37color', '89v', etc.) to its center
+    frequency band (37 or 89). Single source of truth for the
+    band-grouping that the regrid cache is keyed on."""
+    if product.startswith("37"):
+        return 37
+    if product.startswith("89"):
+        return 89
+    raise ValueError(f"Unknown frequency band for product {product!r}")
 
 
 def _split_into_passes(ds_bt, ds_geo) -> list[tuple]:
@@ -886,6 +948,131 @@ def _render_single_product(ds_bt, ds_geo, sensor: str, product: str
                            bounds=bounds, footprint=footprint)
 
 
+# ---------------------------------------------------------------------------
+# Regrid-cached rendering: regrid each channel once per (group, pass, band)
+# and derive every product of that band from the cached arrays. Cuts the
+# regrid work roughly in half for multi-pol-product sensors.
+# ---------------------------------------------------------------------------
+from microwave_api import _get_swath_geolocation, _regrid_swath_multi
+
+
+def _regrid_band_channels(ds_bt, ds_geo, channel_names: list,
+                          sensor: str, grid_res_deg: float) -> dict:
+    """Regrid every TB channel in `channel_names` onto a single shared
+    grid at `grid_res_deg`. Returns dict matching _regrid_swath_multi's
+    output shape (channels + bounds + nx/ny/dx_km). Bypass: if no
+    channels actually appear in the dataset, raise ValueError so the
+    caller can skip the (pass, band) cleanly."""
+    arrays = []
+    used_names = []
+    for name in channel_names:
+        if name in ds_bt.data_vars:
+            arrays.append(ds_bt[name].values.astype(np.float32))
+            used_names.append(name)
+    if not arrays:
+        raise ValueError(
+            f"None of channels {channel_names} present in dataset for {sensor}")
+    lats, lons = _get_swath_geolocation(ds_geo)
+    return _regrid_swath_multi(
+        arrays, lats, lons,
+        channel_names=used_names, grid_res_deg=grid_res_deg,
+    )
+
+
+def _finalize_from_grid(data, valid, bounds, product: str,
+                        is_rgb: bool) -> RenderedProduct:
+    """Common tail of the render pipeline shared by the per-product path
+    and the cached-regrid path: bbox safety check, vertical flip,
+    Mercator warp, PNG encode, footprint."""
+    lat_min, lat_max = bounds[0][0], bounds[1][0]
+    lon_min, lon_max = bounds[0][1], bounds[1][1]
+    if (lon_max - lon_min) > 150.0:
+        raise ValueError(
+            f"bbox too wide ({lon_max - lon_min:.0f}°) — pass splitter likely missed a boundary")
+
+    data  = data[::-1, ...]
+    valid = valid[::-1, ...]
+
+    if is_rgb:
+        warped_rgb = _warp_eq_to_mercator_bbox(data, lat_min, lat_max)
+        warped_valid = _warp_eq_to_mercator_bbox(
+            valid.astype(np.uint8), lat_min, lat_max).astype(bool)
+        png = _encode_rgb_png(warped_rgb, warped_valid)
+    else:
+        warped = _warp_eq_to_mercator_bbox(data, lat_min, lat_max)
+        if product == "89pct":
+            cmap = _nrl_89ghz_cmap()
+            vmin, vmax = 180, 290
+        else:
+            # 37v / 37h / 89v / 89h
+            vmin, vmax = _SINGLE_POL_RANGE[product]
+            cmap = _nrl_37ghz_cmap() if product.startswith("37") else _nrl_89ghz_cmap()
+        png = _encode_scalar_png(warped, cmap, vmin=vmin, vmax=vmax)
+        warped_valid = np.isfinite(warped)
+    footprint = _footprint_geojson(warped_valid, bounds)
+    return RenderedProduct(
+        product=product, png_bytes=png, bounds=bounds, footprint=footprint,
+    )
+
+
+# Per-product (vmin, vmax) for the single-pol scalar products.
+# Same numbers used by _render_single_product, hoisted here so both
+# render paths share the source of truth.
+_SINGLE_POL_RANGE = {
+    "37v": (180, 290),
+    "37h": (150, 290),
+    "89v": (180, 290),
+    "89h": (150, 290),
+}
+
+
+def _render_from_cached(cached: dict, sensor: str,
+                        product: str) -> RenderedProduct:
+    """Derive a single product from the band's pre-regridded channel
+    arrays. Replaces the regrid-per-product flow inside
+    _render_single_product. The cached dict comes from
+    _regrid_band_channels: { 'channels': {name: 2D array}, 'bounds': ... }."""
+    spec = _PPS_SENSORS[sensor]["products"].get(product)
+    if spec is None:
+        raise ValueError(f"{sensor} has no product {product}")
+    channels_needed = list(spec["channels"].keys())
+    chs = cached["channels"]
+
+    if product == "37color":
+        if len(channels_needed) != 2:
+            raise ValueError("37color expects 2 channels (V+H)")
+        v = chs.get(channels_needed[0])
+        h = chs.get(channels_needed[1])
+        if v is None or h is None:
+            raise ValueError("37color: missing V or H from cache")
+        from microwave_api import _nrl_37color_rgb
+        data = _nrl_37color_rgb(v, h)
+        valid = ~np.all(data == 0, axis=-1)
+        return _finalize_from_grid(data, valid, cached["bounds"], product, is_rgb=True)
+
+    if product == "89pct":
+        if len(channels_needed) != 2:
+            raise ValueError("89pct expects 2 channels (V+H)")
+        v = chs.get(channels_needed[0])
+        h = chs.get(channels_needed[1])
+        if v is None or h is None:
+            raise ValueError("89pct: missing V or H from cache")
+        # PCT = 1.818 * V - 0.818 * H (same formula as _compute_89pct_swath).
+        data = (1.818 * v - 0.818 * h).astype(np.float32)
+        valid = np.isfinite(data)
+        return _finalize_from_grid(data, valid, cached["bounds"], product, is_rgb=False)
+
+    # Single-pol products (37v / 37h / 89v / 89h)
+    if len(channels_needed) != 1:
+        raise ValueError(f"single-pol product {product} expects 1 channel")
+    chan = chs.get(channels_needed[0])
+    if chan is None:
+        raise ValueError(f"{product}: channel {channels_needed[0]} not in cache")
+    data = chan.astype(np.float32)
+    valid = np.isfinite(data)
+    return _finalize_from_grid(data, valid, cached["bounds"], product, is_rgb=False)
+
+
 def upload_granule(meta: GranuleMeta, products: list[RenderedProduct],
                    dry_run: bool = False, dry_run_dir: Optional[str] = None,
                    ) -> list[dict]:
@@ -986,30 +1173,147 @@ def process_one(reader_path: str, sensor: str,
                 products: Iterable[str],
                 dry_run: bool = False,
                 dry_run_dir: Optional[str] = None) -> list[dict]:
-    """Read → render → upload one file. Returns manifest entries."""
+    """Read → render → upload one file. Returns manifest entries.
+
+    PPS path uses the regrid-cached flow: open each HDF5 group once,
+    pass-split once, regrid each band's channels once, derive every
+    product of that band from the cached arrays. Roughly half the
+    regrid work of the per-product flow.
+
+    TC-PRIMED path keeps the simpler per-product flow since its
+    sub-swath geometries differ per band/group and there's much less
+    sharing to capture."""
     is_tcprimed = reader_path.lower().endswith(".nc")
+    if is_tcprimed:
+        return _process_one_tcprimed(
+            reader_path, sensor, products,
+            dry_run=dry_run, dry_run_dir=dry_run_dir)
+    return _process_one_pps(
+        reader_path, sensor, products,
+        dry_run=dry_run, dry_run_dir=dry_run_dir)
+
+
+def _process_one_pps(reader_path: str, sensor: str,
+                     products: Iterable[str],
+                     dry_run: bool = False,
+                     dry_run_dir: Optional[str] = None) -> list[dict]:
+    """PPS-specific process_one: group products by HDF5 group, open
+    each group once, split passes once per group, regrid each band's
+    channels once per pass, derive products from the cache."""
+    from collections import defaultdict
+    products = list(products)
+    cfg = _PPS_SENSORS.get(sensor) or {}
+    sensor_products = cfg.get("products", {})
+
+    # Group products by (group_name, band). Within a group, multiple
+    # bands can coexist (e.g., GMI S1 has both 37 and 89). The cache
+    # key is the band because grid resolution differs per band.
+    by_group_band: dict = defaultdict(list)
+    for p in products:
+        spec = sensor_products.get(p)
+        if spec is None:
+            continue
+        try:
+            band = _band_of_product(p)
+        except ValueError:
+            continue
+        by_group_band[(spec["group"], band)].append(p)
+
+    if not by_group_band:
+        return []
+
+    # For each HDF5 group, union the channels needed across ALL its bands
+    # — that's what we'll request from read_pps_group.
+    channels_per_group: dict = defaultdict(dict)
+    for (group_name, _band), prods in by_group_band.items():
+        for p in prods:
+            for var_name, k in sensor_products[p]["channels"].items():
+                channels_per_group[group_name][var_name] = k
+
     rendered: list[RenderedProduct] = []
     meta: Optional[GranuleMeta] = None
 
+    # Iterate groups (file opens), then within each group iterate bands
+    # (regrid caches), then within each band iterate passes + products.
+    for group_name, all_channels in channels_per_group.items():
+        try:
+            ds_bt, ds_geo, meta_i = read_pps_group(
+                reader_path, sensor, group_name, all_channels)
+        except Exception as exc:
+            logger.error("open failed for group=%s sensor=%s: %s",
+                         group_name, sensor, exc)
+            continue
+        if meta is None:
+            meta = meta_i
+
+        # Pass-split once per group (lat/lon is shared across bands).
+        if sensor in _MULTI_PASS_SENSORS:
+            passes = _split_into_passes(ds_bt, ds_geo)
+        else:
+            passes = [(ds_bt, ds_geo, "")]
+
+        # For every band that lives in this group, regrid once per pass
+        # and derive every product of that band.
+        for sub_bt, sub_geo, suffix in passes:
+            for (g_name, band), prods in by_group_band.items():
+                if g_name != group_name:
+                    continue
+                band_channels = sorted({
+                    var_name
+                    for p in prods
+                    for var_name in sensor_products[p]["channels"]
+                })
+                try:
+                    cached = _regrid_band_channels(
+                        sub_bt, sub_geo, band_channels, sensor,
+                        _BAND_GRID_RES.get(band, 0.05))
+                except ValueError as exc:
+                    logger.debug("pass%s band=%d regrid failed: %s",
+                                 suffix, band, exc)
+                    continue
+                for p in prods:
+                    try:
+                        r = _render_from_cached(cached, sensor, p)
+                        r.pass_suffix = suffix
+                        rendered.append(r)
+                    except ValueError as exc:
+                        logger.debug("pass%s product=%s skipped: %s",
+                                     suffix, p, exc)
+
+        ds_bt.close()
+
+    if not rendered:
+        return []
+    if sensor and meta and sensor != meta.sensor:
+        meta = GranuleMeta(**{**meta.__dict__, "sensor": sensor})
+    logger.info("processing %s/%s orbit=%s start=%s — %d products rendered",
+                meta.sensor, meta.platform, meta.orbit_id,
+                meta.scan_start_utc, len(rendered))
+    return upload_granule(meta, rendered, dry_run=dry_run,
+                          dry_run_dir=dry_run_dir)
+
+
+def _process_one_tcprimed(reader_path: str, sensor: str,
+                          products: Iterable[str],
+                          dry_run: bool = False,
+                          dry_run_dir: Optional[str] = None) -> list[dict]:
+    """TC-PRIMED path — keeps the per-product flow since each
+    TC-PRIMED sub-swath has its own geometry and there's no shared
+    regrid to capture."""
+    rendered: list[RenderedProduct] = []
+    meta: Optional[GranuleMeta] = None
     for product in products:
         try:
-            if is_tcprimed:
-                ds_bt, ds_geo, meta_i = read_tcprimed_for_product(
-                    reader_path, product)
-            else:
-                ds_bt, ds_geo, meta_i = read_pps_for_product(
-                    reader_path, sensor, product)
+            ds_bt, ds_geo, meta_i = read_tcprimed_for_product(
+                reader_path, product)
         except Exception as exc:
             logger.error("open failed for product=%s sensor=%s: %s",
                          product, sensor, exc)
             continue
-
         if meta is None:
             meta = meta_i
         eff_sensor = sensor or meta.sensor
         try:
-            # render_product returns a list — one entry per orbital
-            # pass for multi-pass sensors, one-element list otherwise.
             rendered.extend(render_product(ds_bt, ds_geo, eff_sensor, product))
         except Exception as exc:
             logger.error("render failed for product=%s: %s", product, exc)
@@ -1017,12 +1321,11 @@ def process_one(reader_path: str, sensor: str,
             ds_bt.close()
             if ds_geo is not ds_bt:
                 ds_geo.close()
-
     if not rendered:
         return []
     if sensor and meta and sensor != meta.sensor:
         meta = GranuleMeta(**{**meta.__dict__, "sensor": sensor})
-    logger.info("processing %s/%s orbit=%s start=%s — %d products rendered",
+    logger.info("processing %s/%s orbit=%s start=%s — %d products rendered (TC-PRIMED)",
                 meta.sensor, meta.platform, meta.orbit_id,
                 meta.scan_start_utc, len(rendered))
     return upload_granule(meta, rendered, dry_run=dry_run,
