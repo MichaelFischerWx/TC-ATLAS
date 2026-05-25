@@ -3059,6 +3059,65 @@ html.sub-only-mode #tc-build-chip { display: none !important; }
 .tc-mw-sensor-label {
     font-variant-numeric: tabular-nums;
 }
+.tc-mw-time-row {
+    gap: 6px;
+    align-items: center;
+}
+.tc-mw-cursor-slider {
+    flex: 1;
+    accent-color: #4a9b6e;
+    cursor: pointer;
+    min-width: 60px;
+}
+.tc-mw-play-btn, .tc-mw-live-btn {
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.12);
+    color: #cbd5e1;
+    font-size: 0.6rem;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 3px;
+    cursor: pointer;
+    letter-spacing: 0.04em;
+    transition: background 0.12s, color 0.12s;
+}
+.tc-mw-play-btn { padding: 2px 5px; }
+.tc-mw-play-btn:hover, .tc-mw-live-btn:hover {
+    background: rgba(74,155,110,0.18);
+    color: #e2e8f0;
+}
+.tc-mw-play-btn.playing {
+    background: rgba(74,155,110,0.32);
+    color: #fefefe;
+}
+.tc-mw-live-btn.active {
+    background: rgba(74,155,110,0.28);
+    color: #e2e8f0;
+    border-color: rgba(74,155,110,0.5);
+}
+.tc-mw-play-icon {
+    display: inline-block;
+    width: 0; height: 0;
+    border-left: 7px solid currentColor;
+    border-top: 4px solid transparent;
+    border-bottom: 4px solid transparent;
+    vertical-align: middle;
+}
+.tc-mw-play-btn.playing .tc-mw-play-icon {
+    border: 0;
+    width: 7px; height: 8px;
+    border-left: 2.5px solid currentColor;
+    border-right: 2.5px solid currentColor;
+    box-sizing: border-box;
+}
+.tc-mw-cursor-readout {
+    min-width: 38px;
+    text-align: right;
+    color: #e2e8f0;
+    font-variant-numeric: tabular-nums;
+    font-weight: 700;
+    font-size: 0.62rem;
+}
 .tc-mw-legend {
     display: flex;
     flex-direction: column;

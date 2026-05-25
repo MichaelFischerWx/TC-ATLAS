@@ -117,6 +117,15 @@
         return (h / 24).toFixed(1) + ' d ago';
     }
 
+    /** Cursor readout — terser than _fmtAge ("-32m" / "-3.2h" / "-1.5d")
+     *  so it fits comfortably in the small UI strip. */
+    function _fmtCursorBack(ageMin) {
+        if (ageMin < 60) return '-' + Math.round(ageMin) + 'm';
+        var h = ageMin / 60;
+        if (h < 24) return '-' + h.toFixed(1) + 'h';
+        return '-' + (h / 24).toFixed(1) + 'd';
+    }
+
     function _esc(s) {
         return String(s == null ? '' : s)
             .replace(/&/g, '&amp;').replace(/</g, '&lt;')
@@ -222,6 +231,22 @@
         // Suppress prefs writes while the constructor is restoring state.
         this._prefsReady    = false;
 
+        // Time-scrubber state. _cursorAgeMin = how far back (in minutes
+        // from "now") the playback head is parked. 0 = "live" (show
+        // everything in window). When > 0, only orbits older than the
+        // cursor are visible — i.e. the view shows what coverage looked
+        // like _cursorAgeMin minutes ago. Ephemeral by design (Live is
+        // the right default on every page load), so not persisted.
+        this._cursorAgeMin  = 0;
+        this._playing       = false;
+        this._playTimer     = null;
+        // Animation cadence: ~50 ticks/window at ~80 ms each → a 6 h
+        // window plays back in ~4 s, a 24 h window in ~4 s as well
+        // (steps scale with window). Pause briefly at "live" before
+        // looping so the user catches up visually.
+        this._playStepsPerLoop = 50;
+        this._playTickMs       = 80;
+
         // { orbit_id: [ { overlay (L.imageOverlay), hit (L.rectangle) } ] }
         // — array because dateline-wrapping orbits create two halves.
         this._renderedOrbits = {};
@@ -266,6 +291,7 @@
     MWLayer.prototype.disable = function () {
         if (!this._enabled) return;
         this._enabled = false;
+        this.pause();  // stop animation if running
         if (this._ui && this._ui.btn) this._ui.btn.classList.remove('active');
         if (this._refreshTimer) {
             clearInterval(this._refreshTimer);
@@ -284,11 +310,91 @@
     MWLayer.prototype.setHours = function (n) {
         n = Math.max(1, Math.min(this._maxHours, parseInt(n, 10) || this._defaultHours));
         this._hours = n;
+        // Cap cursor to new window — sliding the window shorter shouldn't
+        // leave the cursor parked beyond its right edge.
+        var windowMin = this._hours * 60;
+        if (this._cursorAgeMin > windowMin) this._cursorAgeMin = windowMin;
         if (this._ui && this._ui.hoursLabel) {
             this._ui.hoursLabel.textContent = n + ' hr';
         }
+        this._syncCursorUI();
         if (this._enabled) this._renderAll();
         this._savePrefs();
+    };
+
+    MWLayer.prototype.setCursorAgeMin = function (m) {
+        var windowMin = this._hours * 60;
+        m = Math.max(0, Math.min(windowMin, Number(m) || 0));
+        this._cursorAgeMin = m;
+        this._syncCursorUI();
+        if (this._enabled) this._renderAll();
+    };
+
+    MWLayer.prototype.goLive = function () {
+        this.pause();
+        this.setCursorAgeMin(0);
+    };
+
+    MWLayer.prototype.play = function () {
+        if (this._playing) return;
+        var windowMin = this._hours * 60;
+        // Always rewind to the start of the window when (re)playing —
+        // animation reads as "watch coverage build up from window-edge
+        // toward now."
+        this._cursorAgeMin = windowMin;
+        this._playing = true;
+        if (this._ui && this._ui.playBtn) this._ui.playBtn.classList.add('playing');
+        this._syncCursorUI();
+        if (this._enabled) this._renderAll();
+        var self = this;
+        var step = windowMin / this._playStepsPerLoop;
+        this._playTimer = setInterval(function () {
+            // Advance toward live (cursor age decreases → more orbits revealed).
+            self._cursorAgeMin = Math.max(0, self._cursorAgeMin - step);
+            self._syncCursorUI();
+            if (self._enabled) self._renderAll();
+            if (self._cursorAgeMin <= 0) {
+                self.pause();
+                // Brief hold at "live" before looping, so the user sees the
+                // final state before the rewind.
+                setTimeout(function () {
+                    if (!self._playing && self._enabled) self.play();
+                }, 1500);
+            }
+        }, this._playTickMs);
+    };
+
+    MWLayer.prototype.pause = function () {
+        this._playing = false;
+        if (this._playTimer) {
+            clearInterval(this._playTimer);
+            this._playTimer = null;
+        }
+        if (this._ui && this._ui.playBtn) this._ui.playBtn.classList.remove('playing');
+    };
+
+    MWLayer.prototype.togglePlay = function () {
+        if (this._playing) this.pause(); else this.play();
+    };
+
+    // Keep slider + readout in sync with _cursorAgeMin.
+    MWLayer.prototype._syncCursorUI = function () {
+        if (!this._ui || !this._ui.cursorSlider) return;
+        var windowMin = this._hours * 60;
+        // Slider max tracks the current window so the handle uses the
+        // full track regardless of window size. Right = live.
+        this._ui.cursorSlider.max = String(windowMin);
+        // Slider value = windowMin − cursorAgeMin so RIGHT is "live"
+        // and LEFT is "window ago."
+        this._ui.cursorSlider.value = String(windowMin - this._cursorAgeMin);
+        if (this._ui.cursorReadout) {
+            this._ui.cursorReadout.textContent = (this._cursorAgeMin <= 0)
+                ? 'LIVE'
+                : _fmtCursorBack(this._cursorAgeMin);
+        }
+        if (this._ui.liveBtn) {
+            this._ui.liveBtn.classList.toggle('active', this._cursorAgeMin <= 0);
+        }
     };
 
     MWLayer.prototype.setProduct = function (p) {
@@ -379,6 +485,7 @@
         for (var ks = 0; ks < KNOWN_SENSORS.length; ks++) {
             perSensorCounts[KNOWN_SENSORS[ks].key] = 0;
         }
+        var cursorAgeMin = this._cursorAgeMin || 0;
         for (var i = 0; i < orbits.length; i++) {
             var orb = orbits[i];
             var ageMin = (now - orb.scan_start_ms) / 60000;
@@ -388,6 +495,10 @@
                 perSensorCounts[orb.sensor]++;
             }
             if (orb.sensor && this._sensors[orb.sensor] === false) continue;
+            // Cursor filter: when the playback head is parked at age T > 0,
+            // hide orbits younger than T so the view shows what coverage
+            // looked like T minutes ago.
+            if (ageMin < cursorAgeMin) continue;
             var entry = orb.products[this._product];
             if (!entry) continue;       // no PNG for the active product
             this._addOrbit(orb, entry, ageMin, windowMin);
@@ -395,6 +506,9 @@
         }
         this._updateSensorCounts(perSensorCounts);
         // Status line — either count or empty-state message
+        var cursorSuffix = (cursorAgeMin > 0)
+            ? ' · cursor ' + _fmtCursorBack(cursorAgeMin)
+            : '';
         if (this._lastFetchErr && nVisible === 0) {
             this._updateStatus('Manifest unreachable — last good data shown if any.');
         } else if (nVisible === 0) {
@@ -403,10 +517,10 @@
             if (!anyOn) {
                 this._updateStatus('All sensors off — toggle one on to see passes');
             } else {
-                this._updateStatus('No microwave passes in the last ' + this._hours + ' hr');
+                this._updateStatus('No microwave passes in the last ' + this._hours + ' hr' + cursorSuffix);
             }
         } else {
-            this._updateStatus(nVisible + ' pass' + (nVisible === 1 ? '' : 'es') + ' · last ' + this._hours + ' hr');
+            this._updateStatus(nVisible + ' pass' + (nVisible === 1 ? '' : 'es') + ' · last ' + this._hours + ' hr' + cursorSuffix);
         }
     };
 
@@ -512,6 +626,14 @@
                   }.bind(this)).join('')
             +   '</div>'
             +   '<div class="tc-mw-legend" data-tc-mw-legend></div>'
+            +   '<div class="tc-mw-control-row tc-mw-time-row">'
+            +     '<button type="button" class="tc-mw-play-btn" title="Play coverage build-up">'
+            +       '<span class="tc-mw-play-icon" aria-hidden="true"></span>'
+            +     '</button>'
+            +     '<input type="range" class="tc-mw-cursor-slider" min="0" max="' + (this._hours * 60) + '" step="1" value="' + (this._hours * 60) + '" title="Scrub through history (drag) or click LIVE">'
+            +     '<button type="button" class="tc-mw-live-btn active" title="Snap to live (show all in window)">LIVE</button>'
+            +     '<span class="tc-mw-cursor-readout">LIVE</span>'
+            +   '</div>'
             +   '<div class="tc-mw-control-row tc-mw-hours-row">'
             +     '<label class="tc-mw-hours-label">Window'
             +       '<span class="tc-mw-hours-val">' + this._hours + ' hr</span>'
@@ -548,15 +670,24 @@
             sensorLabels[labelEls[lj].getAttribute('data-tc-mw-sensor-label')] = labelEls[lj];
         }
         var legend = wrap.querySelector('[data-tc-mw-legend]');
+        var cursorSlider  = wrap.querySelector('.tc-mw-cursor-slider');
+        var cursorReadout = wrap.querySelector('.tc-mw-cursor-readout');
+        var playBtn       = wrap.querySelector('.tc-mw-play-btn');
+        var liveBtn       = wrap.querySelector('.tc-mw-live-btn');
 
         this._ui = {
             container: wrap, btn: btn, slider: slider,
             hoursLabel: hoursLbl, status: status,
             sensorChecks: sensorChecks,
             sensorLabels: sensorLabels,
-            legend: legend
+            legend: legend,
+            cursorSlider: cursorSlider,
+            cursorReadout: cursorReadout,
+            playBtn: playBtn,
+            liveBtn: liveBtn
         };
         this._updateLegend();
+        this._syncCursorUI();
 
         var self = this;
         btn.addEventListener('click', function () { self.toggle(); });
@@ -573,6 +704,17 @@
                 self.setSensor(key, sensorChecks[key].checked);
             });
         });
+        // Manual scrub pauses any in-flight playback so the user is in control.
+        cursorSlider.addEventListener('input', function () {
+            if (self._playing) self.pause();
+            var windowMin = self._hours * 60;
+            // Slider value = windowMin − cursorAgeMin (right = live)
+            var v = parseInt(cursorSlider.value, 10);
+            if (isNaN(v)) v = windowMin;
+            self.setCursorAgeMin(windowMin - v);
+        });
+        playBtn.addEventListener('click', function () { self.togglePlay(); });
+        liveBtn.addEventListener('click', function () { self.goLive(); });
     };
 
     MWLayer.prototype._updateStatus = function (msg) {
