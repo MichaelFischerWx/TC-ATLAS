@@ -92,6 +92,14 @@ PPS_PASS = os.environ.get("PPS_PASS", "")
 PPS_BASE = "https://jsimpsonhttps.pps.eosdis.nasa.gov"
 MANIFEST_KEY = "manifest_latest_48h.json"
 MANIFEST_RETENTION_HOURS = 48
+# Periodic manifest checkpoint during long backfills. The end-of-run
+# manifest update means the frontend sees nothing-then-everything;
+# writing intermediate checkpoints every CHECKPOINT_INTERVAL_SEC lets
+# users watch coverage grow incrementally. update_manifest is
+# idempotent (dedupes by orbit_id + product) so re-writing partial
+# state is safe. Atomic GCS writes mean the frontend never sees a
+# half-built manifest.
+CHECKPOINT_INTERVAL_SEC = 120
 
 WEB_MERC_LAT_MAX = 85.05112877980659  # arctan(sinh(pi)) * 180/pi
 
@@ -1932,6 +1940,30 @@ def _cli(argv=None):
                 return
 
         sess = _pps_session()
+        # Manifest-checkpoint timer. Long backfills used to keep the
+        # frontend dark until end-of-run; now we write the manifest every
+        # CHECKPOINT_INTERVAL_SEC of wall-clock time during the loop, so
+        # users watch coverage build up incrementally. The final
+        # end-of-run update_manifest still fires (idempotent) so any
+        # post-last-checkpoint entries also land.
+        last_checkpoint = time.monotonic()
+        def _maybe_checkpoint():
+            nonlocal last_checkpoint
+            if args.no_manifest or args.dry_run:
+                return
+            if not all_entries:
+                return
+            now_t = time.monotonic()
+            if (now_t - last_checkpoint) < CHECKPOINT_INTERVAL_SEC:
+                return
+            try:
+                update_manifest(all_entries)
+                logger.info("[checkpoint] manifest updated with %d entries so far",
+                            len(all_entries))
+            except Exception as exc:
+                logger.warning("[checkpoint] manifest update failed: %s", exc)
+            last_checkpoint = now_t
+
         # Larger first-run fallback than 1 h — SSMI/S and AMSR2 NRT lag ~3-4 h
         # behind real time, so a tight window leaves them empty on the first
         # operational pass. 6 h captures everything available; subsequent
@@ -1979,6 +2011,9 @@ def _cli(argv=None):
                     except Exception as exc:
                         logger.error("[%s] granule %s failed: %s",
                                      sensor, fname, exc)
+                # Maybe write a manifest checkpoint so the frontend sees
+                # progress instead of nothing-then-everything.
+                _maybe_checkpoint()
     else:
         ap.error("Specify one of --tcprimed-file / --pps-file / "
                  "--since-hours / --operational")
