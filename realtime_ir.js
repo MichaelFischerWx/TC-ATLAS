@@ -652,6 +652,11 @@
             defaultHours: 6,
             maxHours: 48,
             compact: false,
+            // Storm-highlight fallback: if the layer never receives a
+            // setActiveStorms() push (shouldn't happen on this page,
+            // but harmless safety net), it'll fetch the same endpoint
+            // the page uses for the D1/D2 markers.
+            activeStormsApiUrl: API_BASE + '/ir-monitor/active-storms',
             onAttribution: function (txt, on) {
                 // RT map has no global attribution control; use the Leaflet default if present.
                 if (map && map.attributionControl) {
@@ -666,7 +671,23 @@
             origToggle();
             if (typeof _refreshLayersCount === 'function') _refreshLayersCount();
         };
+        // If a storm list was already cached when the layer mounted (we
+        // construct lazily on first Layers-panel open), seed it now so
+        // storm-highlighting works on the first paint.
+        if (stormData && stormData.length) {
+            _rtMwLayer.setActiveStorms(stormData);
+        }
         return _rtMwLayer;
+    }
+
+    // Hand the latest active-storms array to the MW layer (if mounted)
+    // so it can highlight the most recent pass over each storm. No-op
+    // when the layer hasn't been created yet — the lazy constructor
+    // above seeds itself from stormData on first mount.
+    function _rtPushStormsToMwLayer() {
+        if (_rtMwLayer && typeof _rtMwLayer.setActiveStorms === 'function') {
+            _rtMwLayer.setActiveStorms(stormData || []);
+        }
     }
 
     // ── ASCAT Wind Barb Overlay State ───────────────────────
@@ -2485,6 +2506,7 @@
                         if (loaderEl) loaderEl.style.display = 'none';
                         updateStats(parsed);
                         renderStormMarkers(stormData);
+                        _rtPushStormsToMwLayer();
                         handleDeepLink();
                         console.log('[RT Monitor] Showing ' + stormData.length + ' cached storms while fetching fresh data');
                     }
@@ -2521,6 +2543,7 @@
                 updateStats(data);
                 renderStormMarkers(stormData);
                 fetchAllTracks(stormData);
+                _rtPushStormsToMwLayer();
 
                 // Handle deep link on first load
                 handleDeepLink();

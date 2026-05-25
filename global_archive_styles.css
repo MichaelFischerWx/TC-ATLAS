@@ -2906,6 +2906,23 @@ input[type="range"].ga-range::-moz-range-thumb {
     font-size: 0.72rem;
     line-height: 1.4;
 }
+.tc-mw-popup-storms {
+    margin-top: 6px;
+    padding-top: 4px;
+    border-top: 1px dashed rgba(15,22,35,0.18);
+}
+.tc-mw-popup-storms-title {
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #b45309;
+    font-weight: 700;
+    margin-bottom: 2px;
+}
+.tc-mw-popup-storm {
+    font-size: 0.72rem;
+    color: #78350f;
+}
 .tc-mw-ui-compact {
     background: rgba(255,255,255,0.96);
     border: 1px solid rgba(15,22,35,0.15);

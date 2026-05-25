@@ -3220,6 +3220,23 @@ html.sub-only-mode #tc-build-chip { display: none !important; }
     font-size: 0.72rem;
     line-height: 1.4;
 }
+.tc-mw-popup-storms {
+    margin-top: 6px;
+    padding-top: 4px;
+    border-top: 1px dashed rgba(255,255,255,0.18);
+}
+.tc-mw-popup-storms-title {
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #fde047;
+    font-weight: 700;
+    margin-bottom: 2px;
+}
+.tc-mw-popup-storm {
+    font-size: 0.72rem;
+    color: #fef9c3;
+}
 
 /* Compact variant — used in Leaflet-control placements where
    horizontal space is tight (Global Archive map corner). */

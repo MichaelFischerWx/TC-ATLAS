@@ -55,6 +55,26 @@
         AMSR2: '#fb923c'    // orange
     };
 
+    // Storm-highlighted swath styling — stronger weight + a hot accent
+    // color that wins against the sensor stroke. Used for the most
+    // recent pass that covered each active ATCF storm/invest.
+    var HIGHLIGHT_COLOR  = '#fde047';   // amber / yellow
+    var HIGHLIGHT_WEIGHT = 3.5;
+
+    /** Does an L.imageOverlay bounds rectangle [[s,w],[n,e]] contain the
+     *  given lat/lon point? Handles dateline-wrapping bounds (west > east)
+     *  by accepting longitudes on either side of the seam. */
+    function _boundsContains(bounds, lat, lon) {
+        var south = bounds[0][0], west = bounds[0][1];
+        var north = bounds[1][0], east = bounds[1][1];
+        if (lat < south || lat > north) return false;
+        if (west <= east) {
+            return lon >= west && lon <= east;
+        }
+        // Wrapped: covers (west..180) ∪ (-180..east)
+        return lon >= west || lon <= east;
+    }
+
     function _loadPrefs() {
         try {
             var raw = window.localStorage && window.localStorage.getItem(PREFS_KEY);
@@ -240,6 +260,16 @@
         this._cursorAgeMin  = 0;
         this._playing       = false;
         this._playTimer     = null;
+
+        // Active ATCF storms / invests for highlighting passes that
+        // covered them. The host page is the source of truth (it already
+        // polls /ir-monitor/active-storms for the D1/D2 markers) and
+        // pushes updates via setActiveStorms(); we fall back to a one-shot
+        // fetch on first enable if the host never pushed (standalone use).
+        // Each entry: { atcf_id, name, lat, lon, vmax_kt, ... }
+        this._activeStorms       = opts.activeStorms || [];
+        this._activeStormsApiUrl = opts.activeStormsApiUrl || null;
+        this._stormsFetchAttempted = false;
         // Animation cadence: ~50 ticks/window at ~80 ms each → a 6 h
         // window plays back in ~4 s, a 24 h window in ~4 s as well
         // (steps scale with window). Pause briefly at "live" before
@@ -277,6 +307,9 @@
         if (this._ui && this._ui.btn) this._ui.btn.classList.add('active');
         this._addAttribution();
         var self = this;
+        // Kick off the fallback storm fetch in parallel with the manifest —
+        // a no-op when the host already pushed storms via setActiveStorms.
+        this._tryFetchActiveStorms();
         this._fetchManifest().then(function () {
             self._renderAll();
         });
@@ -418,6 +451,31 @@
         this._savePrefs();
     };
 
+    MWLayer.prototype.setActiveStorms = function (storms) {
+        // Accept either the raw API payload `{storms: [...]}` or the
+        // inner array — host pages have varying conventions.
+        if (storms && Array.isArray(storms.storms)) storms = storms.storms;
+        this._activeStorms = Array.isArray(storms) ? storms.filter(function (s) {
+            return s && isFinite(s.lat) && isFinite(s.lon);
+        }) : [];
+        if (this._enabled) this._renderAll();
+    };
+
+    /** Fallback when the host page didn't push storms: one-shot fetch
+     *  from the active-storms API endpoint (configurable so the layer
+     *  works on dev / staging / prod without baked URLs). */
+    MWLayer.prototype._tryFetchActiveStorms = function () {
+        if (this._stormsFetchAttempted) return Promise.resolve();
+        this._stormsFetchAttempted = true;
+        if (!this._activeStormsApiUrl) return Promise.resolve();
+        if (this._activeStorms && this._activeStorms.length) return Promise.resolve();
+        var self = this;
+        return fetch(this._activeStormsApiUrl, { cache: 'no-store' })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (json) { if (json) self.setActiveStorms(json); })
+            .catch(function (err) { console.warn('[MW] active-storms fetch failed', err); });
+    };
+
     MWLayer.prototype.refresh = function () {
         var self = this;
         return this._fetchManifest().then(function () {
@@ -486,6 +544,34 @@
             perSensorCounts[KNOWN_SENSORS[ks].key] = 0;
         }
         var cursorAgeMin = this._cursorAgeMin || 0;
+
+        // Pass 1: figure out which orbit each storm's "most recent
+        // covering pass" is, walking orbits newest-first. The map
+        // `latestForStorm[atcf_id] = orbit_id` lets pass 2 (rendering)
+        // decide which swaths get the storm-highlight upgrade.
+        var storms = this._activeStorms || [];
+        var latestForStorm = {};
+        var stormsByOrbit = {};
+        if (storms.length) {
+            for (var oi = 0; oi < orbits.length; oi++) {
+                var o = orbits[oi];
+                var oAge = (now - o.scan_start_ms) / 60000;
+                if (oAge < 0 || oAge > windowMin) continue;
+                if (o.sensor && this._sensors[o.sensor] === false) continue;
+                if (oAge < cursorAgeMin) continue;
+                if (!o.products[this._product]) continue;
+                for (var sti = 0; sti < storms.length; sti++) {
+                    var s = storms[sti];
+                    var key = s.atcf_id || (s.lat + ',' + s.lon);
+                    if (latestForStorm[key]) continue;  // already assigned a newer orbit
+                    if (_boundsContains(o.bounds, s.lat, s.lon)) {
+                        latestForStorm[key] = o.orbit_id;
+                        (stormsByOrbit[o.orbit_id] = stormsByOrbit[o.orbit_id] || []).push(s);
+                    }
+                }
+            }
+        }
+
         for (var i = 0; i < orbits.length; i++) {
             var orb = orbits[i];
             var ageMin = (now - orb.scan_start_ms) / 60000;
@@ -501,7 +587,7 @@
             if (ageMin < cursorAgeMin) continue;
             var entry = orb.products[this._product];
             if (!entry) continue;       // no PNG for the active product
-            this._addOrbit(orb, entry, ageMin, windowMin);
+            this._addOrbit(orb, entry, ageMin, windowMin, stormsByOrbit[orb.orbit_id]);
             nVisible++;
         }
         this._updateSensorCounts(perSensorCounts);
@@ -524,13 +610,15 @@
         }
     };
 
-    MWLayer.prototype._addOrbit = function (orb, entry, ageMin, windowMin) {
+    MWLayer.prototype._addOrbit = function (orb, entry, ageMin, windowMin, highlightStorms) {
         var map = this._map;
         var opacity = _ageOpacity(ageMin, windowMin);
         var boundsList = _wrapsDateline(entry.bounds) ? _splitAtDateline(entry.bounds) : [entry.bounds];
         var parts = [];
-        var popupHtml = this._popupHtml(orb, ageMin);
-        var borderColor = SENSOR_COLORS[orb.sensor] || '#cbd5e1';
+        var popupHtml = this._popupHtml(orb, ageMin, highlightStorms);
+        var isHighlighted = !!(highlightStorms && highlightStorms.length);
+        var borderColor = isHighlighted ? HIGHLIGHT_COLOR : (SENSOR_COLORS[orb.sensor] || '#cbd5e1');
+        var borderWeight = isHighlighted ? HIGHLIGHT_WEIGHT : 1.5;
 
         for (var i = 0; i < boundsList.length; i++) {
             var b = boundsList[i];
@@ -545,29 +633,43 @@
             // Click-hit rectangle doubles as the sensor-color border so
             // users can distinguish GMI / SSMI/S / AMSR2 at a glance.
             // Stroke opacity tracks the image's age-decay opacity.
+            // If this orbit is the most recent pass over any active storm,
+            // the border swaps to a hot accent color and thickens.
             var hit = L.rectangle(b, {
                 color: borderColor,
-                weight: 1.5,
-                opacity: opacity,
+                weight: borderWeight,
+                opacity: Math.max(opacity, isHighlighted ? 0.85 : opacity),
                 fillColor: '#ffffff',
                 fillOpacity: 0,
                 interactive: true,
                 pane: 'overlayPane'
             }).addTo(map);
-            hit.bindPopup(popupHtml, { maxWidth: 280 });
+            hit.bindPopup(popupHtml, { maxWidth: 320 });
             parts.push({ overlay: img, hit: hit });
         }
         this._renderedOrbits[orb.orbit_id] = parts;
     };
 
-    MWLayer.prototype._popupHtml = function (orb, ageMin) {
+    MWLayer.prototype._popupHtml = function (orb, ageMin, highlightStorms) {
         var d = new Date(orb.scan_start_ms);
+        var storms = (highlightStorms || []).map(function (s) {
+            var label = s.name ? (s.name + ' (' + (s.atcf_id || '?') + ')') : (s.atcf_id || '?');
+            var vmax = isFinite(s.vmax_kt) ? ' · ' + Math.round(s.vmax_kt) + ' kt' : '';
+            return _esc(label + vmax);
+        });
+        var stormsHtml = storms.length
+            ? '<div class="tc-mw-popup-storms">'
+                + '<div class="tc-mw-popup-storms-title">Latest pass over:</div>'
+                + storms.map(function (s) { return '<div class="tc-mw-popup-storm">★ ' + s + '</div>'; }).join('')
+            + '</div>'
+            : '';
         return '<div class="tc-mw-popup">'
             + '<div class="tc-mw-popup-title">' + _esc(orb.sensor) + ' &middot; ' + _esc(orb.platform) + '</div>'
             + '<div class="tc-mw-popup-row"><b>Scan:</b> ' + _esc(_fmtUTC(d)) + '</div>'
             + '<div class="tc-mw-popup-row"><b>Age:</b> ' + _esc(_fmtAge(ageMin)) + '</div>'
             + '<div class="tc-mw-popup-row"><b>Source:</b> ' + _esc(orb.source || 'PPS_NRT') + '</div>'
             + '<div class="tc-mw-popup-row" style="opacity:0.7;font-size:0.62rem;">Orbit ' + _esc(orb.orbit_id) + '</div>'
+            + stormsHtml
             + '</div>';
     };
 
