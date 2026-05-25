@@ -45,6 +45,35 @@
     var ATTRIBUTION  = 'GMI/GPM (NASA/GPM/PPS NRT)';
     var MIN_OPACITY  = 0.4;             // oldest visible swath
     var MAX_OPACITY  = 1.0;             // newest swath
+    var PREFS_KEY    = 'tc-atlas-mw-prefs';
+
+    // Per-sensor border colors so users can distinguish sensors at a
+    // glance without clicking each swath.
+    var SENSOR_COLORS = {
+        GMI:   '#4ade80',   // green
+        SSMIS: '#60a5fa',   // blue
+        AMSR2: '#fb923c'    // orange
+    };
+
+    function _loadPrefs() {
+        try {
+            var raw = window.localStorage && window.localStorage.getItem(PREFS_KEY);
+            if (!raw) return null;
+            var obj = JSON.parse(raw);
+            return (obj && typeof obj === 'object') ? obj : null;
+        } catch (e) {
+            return null;
+        }
+    }
+    function _writePrefs(obj) {
+        try {
+            if (window.localStorage) {
+                window.localStorage.setItem(PREFS_KEY, JSON.stringify(obj));
+            }
+        } catch (e) {
+            // private browsing / quota — silently degrade to in-memory state
+        }
+    }
 
     /** Bounds wrap the antimeridian iff west > east. */
     function _wrapsDateline(bounds) {
@@ -161,12 +190,37 @@
             this._sensors[initialSensors[si]] = true;
         }
 
+        // Layer prefs persist across reloads via localStorage. Pull them
+        // before mounting the UI so the initial render reflects the user's
+        // last session.
+        var prefs = _loadPrefs();
+        var shouldAutoEnable = false;
+        if (prefs) {
+            if (prefs.sensors && typeof prefs.sensors === 'object') {
+                // Only honor keys we know about.
+                for (var ks = 0; ks < KNOWN_SENSORS.length; ks++) {
+                    var sk = KNOWN_SENSORS[ks].key;
+                    if (prefs.sensors[sk] === false) this._sensors[sk] = false;
+                    else if (prefs.sensors[sk] === true) this._sensors[sk] = true;
+                }
+            }
+            if (prefs.product === '37color' || prefs.product === '89pct') {
+                this._product = prefs.product;
+            }
+            if (typeof prefs.hours === 'number' && prefs.hours >= 1 && prefs.hours <= this._maxHours) {
+                this._hours = Math.round(prefs.hours);
+            }
+            if (prefs.enabled === true) shouldAutoEnable = true;
+        }
+
         this._enabled       = false;
         this._manifest      = null;      // normalized
         this._loading       = false;
         this._lastFetchErr  = null;
         this._refreshTimer  = null;
         this._attrAdded     = false;
+        // Suppress prefs writes while the constructor is restoring state.
+        this._prefsReady    = false;
 
         // { orbit_id: [ { overlay (L.imageOverlay), hit (L.rectangle) } ] }
         // — array because dateline-wrapping orbits create two halves.
@@ -176,7 +230,19 @@
         this._ui = null;
 
         if (this._container) this._mountUI();
+        this._prefsReady = true;
+        if (shouldAutoEnable) this.enable();
     }
+
+    MWLayer.prototype._savePrefs = function () {
+        if (!this._prefsReady) return;
+        _writePrefs({
+            sensors: this._sensors,
+            product: this._product,
+            hours:   this._hours,
+            enabled: this._enabled
+        });
+    };
 
     MWLayer.prototype.isEnabled = function () { return this._enabled; };
 
@@ -194,6 +260,7 @@
                 if (self._enabled) self._renderAll();
             });
         }, REFRESH_MS);
+        this._savePrefs();
     };
 
     MWLayer.prototype.disable = function () {
@@ -207,6 +274,7 @@
         this._clearAll();
         this._removeAttribution();
         this._updateStatus('');
+        this._savePrefs();
     };
 
     MWLayer.prototype.toggle = function () {
@@ -220,6 +288,7 @@
             this._ui.hoursLabel.textContent = n + ' hr';
         }
         if (this._enabled) this._renderAll();
+        this._savePrefs();
     };
 
     MWLayer.prototype.setProduct = function (p) {
@@ -229,7 +298,9 @@
             var radios = this._ui.container.querySelectorAll('input[name="tc-mw-product-' + this._uid + '"]');
             for (var i = 0; i < radios.length; i++) radios[i].checked = (radios[i].value === p);
         }
+        this._updateLegend();
         if (this._enabled) this._renderAll();
+        this._savePrefs();
     };
 
     MWLayer.prototype.setSensor = function (sensor, enabled) {
@@ -238,6 +309,7 @@
             this._ui.sensorChecks[sensor].checked = !!enabled;
         }
         if (this._enabled) this._renderAll();
+        this._savePrefs();
     };
 
     MWLayer.prototype.refresh = function () {
@@ -300,16 +372,28 @@
         var now = Date.now();
         var windowMin = this._hours * 60;
         var nVisible = 0;
+        // Counts of orbits within the time window per sensor (regardless
+        // of toggle state). Drives the "(N)" suffix on the checkbox row
+        // so users see how much data each sensor contributes.
+        var perSensorCounts = {};
+        for (var ks = 0; ks < KNOWN_SENSORS.length; ks++) {
+            perSensorCounts[KNOWN_SENSORS[ks].key] = 0;
+        }
         for (var i = 0; i < orbits.length; i++) {
             var orb = orbits[i];
             var ageMin = (now - orb.scan_start_ms) / 60000;
             if (ageMin < 0 || ageMin > windowMin) continue;
+            // Count regardless of sensor toggle state.
+            if (orb.sensor && perSensorCounts.hasOwnProperty(orb.sensor)) {
+                perSensorCounts[orb.sensor]++;
+            }
             if (orb.sensor && this._sensors[orb.sensor] === false) continue;
             var entry = orb.products[this._product];
             if (!entry) continue;       // no PNG for the active product
             this._addOrbit(orb, entry, ageMin, windowMin);
             nVisible++;
         }
+        this._updateSensorCounts(perSensorCounts);
         // Status line — either count or empty-state message
         if (this._lastFetchErr && nVisible === 0) {
             this._updateStatus('Manifest unreachable — last good data shown if any.');
@@ -332,6 +416,7 @@
         var boundsList = _wrapsDateline(entry.bounds) ? _splitAtDateline(entry.bounds) : [entry.bounds];
         var parts = [];
         var popupHtml = this._popupHtml(orb, ageMin);
+        var borderColor = SENSOR_COLORS[orb.sensor] || '#cbd5e1';
 
         for (var i = 0; i < boundsList.length; i++) {
             var b = boundsList[i];
@@ -343,11 +428,13 @@
                 attribution: ATTRIBUTION
             }).addTo(map);
 
-            // Transparent rectangle on top for click capture — L.imageOverlay
-            // doesn't reliably emit click on transparent pixels.
+            // Click-hit rectangle doubles as the sensor-color border so
+            // users can distinguish GMI / SSMI/S / AMSR2 at a glance.
+            // Stroke opacity tracks the image's age-decay opacity.
             var hit = L.rectangle(b, {
-                color: 'transparent',
-                weight: 0,
+                color: borderColor,
+                weight: 1.5,
+                opacity: opacity,
                 fillColor: '#ffffff',
                 fillOpacity: 0,
                 interactive: true,
@@ -415,18 +502,21 @@
             +   '</div>'
             +   '<div class="tc-mw-control-row tc-mw-sensor-row">'
             +     KNOWN_SENSORS.map(function (s) {
+                      var swatch = SENSOR_COLORS[s.key] || '#cbd5e1';
                       return '<label class="tc-mw-sensor-opt">'
                           +    '<input type="checkbox" data-tc-mw-sensor="' + s.key + '"'
                           +      (this._sensors[s.key] ? ' checked' : '') + '>'
-                          +    '<span>' + s.label + '</span>'
+                          +    '<span class="tc-mw-sensor-swatch" style="background:' + swatch + ';"></span>'
+                          +    '<span class="tc-mw-sensor-label" data-tc-mw-sensor-label="' + s.key + '">' + s.label + '</span>'
                           +  '</label>';
                   }.bind(this)).join('')
             +   '</div>'
+            +   '<div class="tc-mw-legend" data-tc-mw-legend></div>'
             +   '<div class="tc-mw-control-row tc-mw-hours-row">'
             +     '<label class="tc-mw-hours-label">Window'
-            +       '<span class="tc-mw-hours-val">' + this._defaultHours + ' hr</span>'
+            +       '<span class="tc-mw-hours-val">' + this._hours + ' hr</span>'
             +     '</label>'
-            +     '<input type="range" class="tc-mw-hours-slider" min="1" max="' + this._maxHours + '" step="1" value="' + this._defaultHours + '">'
+            +     '<input type="range" class="tc-mw-hours-slider" min="1" max="' + this._maxHours + '" step="1" value="' + this._hours + '">'
             +   '</div>'
             +   '<div class="tc-mw-status"></div>'
             +   '<div class="tc-mw-attribution">' + _esc(ATTRIBUTION) + '</div>'
@@ -451,12 +541,22 @@
         for (var sj = 0; sj < sensorBoxes.length; sj++) {
             sensorChecks[sensorBoxes[sj].getAttribute('data-tc-mw-sensor')] = sensorBoxes[sj];
         }
+        // Sensor name <span>s so _renderAll can append "(N)" counts.
+        var sensorLabels = {};
+        var labelEls = wrap.querySelectorAll('[data-tc-mw-sensor-label]');
+        for (var lj = 0; lj < labelEls.length; lj++) {
+            sensorLabels[labelEls[lj].getAttribute('data-tc-mw-sensor-label')] = labelEls[lj];
+        }
+        var legend = wrap.querySelector('[data-tc-mw-legend]');
 
         this._ui = {
             container: wrap, btn: btn, slider: slider,
             hoursLabel: hoursLbl, status: status,
-            sensorChecks: sensorChecks
+            sensorChecks: sensorChecks,
+            sensorLabels: sensorLabels,
+            legend: legend
         };
+        this._updateLegend();
 
         var self = this;
         btn.addEventListener('click', function () { self.toggle(); });
@@ -477,6 +577,47 @@
 
     MWLayer.prototype._updateStatus = function (msg) {
         if (this._ui && this._ui.status) this._ui.status.textContent = msg;
+    };
+
+    // Tiny inline guide that flips with the product picker. Helps
+    // non-experts read the active color scheme without leaving the map.
+    MWLayer.prototype._updateLegend = function () {
+        if (!this._ui || !this._ui.legend) return;
+        var html;
+        if (this._product === '89pct') {
+            html =
+                  '<div class="tc-mw-legend-title">89 GHz PCT (K)</div>'
+                + '<div class="tc-mw-legend-bar tc-mw-legend-bar-89"></div>'
+                + '<div class="tc-mw-legend-ticks">'
+                +   '<span>180</span><span>220</span><span>260</span><span>290</span>'
+                + '</div>';
+        } else {
+            html =
+                  '<div class="tc-mw-legend-title">37 GHz color</div>'
+                + '<div class="tc-mw-legend-chunks">'
+                +   '<span class="tc-mw-legend-chunk" style="background:#0b5d3b;" title="Clear ocean"></span>'
+                +   '<span class="tc-mw-legend-chunk" style="background:#22d3ee;" title="Land / shallow rain"></span>'
+                +   '<span class="tc-mw-legend-chunk" style="background:#d946ef;" title="Deep convection"></span>'
+                +   '<span class="tc-mw-legend-chunk" style="background:#dc2626;" title="Ice scattering"></span>'
+                + '</div>'
+                + '<div class="tc-mw-legend-labels">'
+                +   '<span>Ocean</span><span>Land/rain</span><span>Convect</span><span>Ice</span>'
+                + '</div>';
+        }
+        this._ui.legend.innerHTML = html;
+    };
+
+    MWLayer.prototype._updateSensorCounts = function (counts) {
+        if (!this._ui || !this._ui.sensorLabels) return;
+        for (var i = 0; i < KNOWN_SENSORS.length; i++) {
+            var s = KNOWN_SENSORS[i];
+            var el = this._ui.sensorLabels[s.key];
+            if (!el) continue;
+            var n = counts[s.key] || 0;
+            // Always show "(N)" — including (0) — for consistency so the
+            // row width doesn't jitter as the window slider moves.
+            el.textContent = s.label + ' (' + n + ')';
+        }
     };
 
     // ── Public namespace ──────────────────────────────────────

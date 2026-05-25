@@ -3047,6 +3047,72 @@ html.sub-only-mode #tc-build-chip { display: none !important; }
     accent-color: #4a9b6e;
     cursor: pointer;
 }
+.tc-mw-sensor-swatch {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: 2px;
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.35);
+    flex-shrink: 0;
+}
+.tc-mw-sensor-label {
+    font-variant-numeric: tabular-nums;
+}
+.tc-mw-legend {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 4px 2px 2px;
+    border-top: 1px dashed rgba(255,255,255,0.08);
+    border-bottom: 1px dashed rgba(255,255,255,0.08);
+}
+.tc-mw-legend-title {
+    font-size: 0.55rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #94a3b8;
+    font-weight: 600;
+}
+.tc-mw-legend-bar {
+    height: 10px;
+    width: 100%;
+    max-width: 160px;
+    border-radius: 2px;
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.12) inset;
+}
+.tc-mw-legend-bar-89 {
+    background: linear-gradient(to right,
+        #0b1d4f 0%, #1d4ed8 20%, #06b6d4 40%,
+        #16a34a 55%, #facc15 75%, #dc2626 100%);
+}
+.tc-mw-legend-chunks {
+    display: flex;
+    width: 100%;
+    max-width: 160px;
+    gap: 0;
+}
+.tc-mw-legend-chunk {
+    flex: 1;
+    height: 10px;
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.10) inset;
+}
+.tc-mw-legend-chunks .tc-mw-legend-chunk:first-child { border-radius: 2px 0 0 2px; }
+.tc-mw-legend-chunks .tc-mw-legend-chunk:last-child  { border-radius: 0 2px 2px 0; }
+.tc-mw-legend-ticks,
+.tc-mw-legend-labels {
+    display: flex;
+    justify-content: space-between;
+    width: 100%;
+    max-width: 160px;
+    font-size: 0.5rem;
+    color: #94a3b8;
+    font-variant-numeric: tabular-nums;
+}
+.tc-mw-legend-labels span {
+    flex: 1;
+    text-align: center;
+}
 .tc-mw-hours-row {
     gap: 6px;
 }
