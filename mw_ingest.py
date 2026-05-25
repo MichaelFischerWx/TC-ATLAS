@@ -95,6 +95,15 @@ MANIFEST_RETENTION_HOURS = 48
 
 WEB_MERC_LAT_MAX = 85.05112877980659  # arctan(sinh(pi)) * 180/pi
 
+# Crop incoming swath pixels to within ±MAX_RENDER_LAT before regridding.
+# Polar-orbit sensors with long orbital arcs (SSMIS ~17 min, AMSR2 ~17 min)
+# cross the poles where the swath inherently spans many longitudes due to
+# cos(lat) → 0 at the poles. That blows up the per-granule bounding box to
+# essentially the whole world. Clipping to ±60° drops polar wraparound
+# entirely, gives every granule a tractable bbox, and loses zero data
+# value for TC research (TCs live in the tropics + subtropics).
+MAX_RENDER_LAT = 60.0
+
 # ---------------------------------------------------------------------------
 # Pass-prediction config (TLE-based SGP4 propagation)
 # ---------------------------------------------------------------------------
@@ -550,13 +559,27 @@ def read_pps_for_product(path: str, sensor: str, product: str) -> tuple:
     # — last dim by position to stay sensor-agnostic.
     chan_dim = tc.dims[-1]
 
+    # Polar-pixel mask (True where |lat| > MAX_RENDER_LAT). NaN-ing
+    # the data + geolocation here lets the regridder's existing
+    # finite-only filter drop these pixels, so the bbox shrinks to
+    # actual TC-relevant latitudes only.
+    lat_arr = s["Latitude"].values.astype(np.float32)
+    lon_arr = s["Longitude"].values.astype(np.float32)
+    polar = np.abs(lat_arr) > MAX_RENDER_LAT
+    if polar.any():
+        lat_arr = np.where(polar, np.nan, lat_arr)
+        lon_arr = np.where(polar, np.nan, lon_arr)
+
     data_vars = {}
     for var_name, k in spec["channels"].items():
         slab = tc.isel({chan_dim: k}).astype(np.float32)
         slab = slab.where(slab > _PPS_FILL + 0.1)
-        data_vars[var_name] = (("scan", "pixel"), slab.values)
-    data_vars["latitude"] = (("scan", "pixel"), s["Latitude"].values)
-    data_vars["longitude"] = (("scan", "pixel"), s["Longitude"].values)
+        vals = slab.values
+        if polar.any():
+            vals = np.where(polar, np.nan, vals)
+        data_vars[var_name] = (("scan", "pixel"), vals)
+    data_vars["latitude"]  = (("scan", "pixel"), lat_arr)
+    data_vars["longitude"] = (("scan", "pixel"), lon_arr)
     ds = xr.Dataset(data_vars=data_vars)
     s.close()
     return ds, ds, meta
@@ -692,6 +715,23 @@ def render_product(ds_bt, ds_geo, sensor: str, product: str
     else:
         raise ValueError(f"Unknown product {product}")
 
+    # Reject granules whose bounding box is too wide to be a single
+    # orbital pass. SSMI/S and AMSR2 NRT files sometimes bundle 1+ full
+    # orbits (~1h45m) into a single granule — the resulting bbox spans
+    # most of the globe and the PNG paints huge diagonal stripes that
+    # are visually unusable. A single orbital pass at TC-relevant
+    # latitudes covers <90° of longitude; anything wider is multi-pass
+    # and would need pass-splitting (TODO). Until then, skip.
+    bounds = gridded["bounds"]
+    lat_min, lat_max = bounds[0][0], bounds[1][0]
+    lon_min, lon_max = bounds[0][1], bounds[1][1]
+    lon_span = lon_max - lon_min  # already sorted by _regrid_swath
+    if lon_span > 90.0:
+        raise ValueError(
+            f"granule bbox too wide (lon span {lon_span:.0f}°) — likely "
+            f"contains multiple orbital passes; skipping until splitter "
+            f"is implemented")
+
     # `_regrid_swath` returns arrays with row 0 = lat_min (south-up, since
     # grid_lat = np.linspace(lat_min, lat_max)). PIL / L.imageOverlay
     # expect row 0 = top = lat_max (north-down). Flip vertically so the
@@ -700,9 +740,6 @@ def render_product(ds_bt, ds_geo, sensor: str, product: str
     # center (e.g. land/ocean transitions miss the basemap coastline).
     data = data[::-1, ...]
     valid = valid[::-1, ...]
-
-    bounds = gridded["bounds"]
-    lat_min, lat_max = bounds[0][0], bounds[1][0]
 
     if product == "37color":
         warped_rgb = _warp_eq_to_mercator_bbox(data, lat_min, lat_max)
