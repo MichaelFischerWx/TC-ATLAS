@@ -6941,52 +6941,56 @@
         var el = document.getElementById('rt-genesis-modal-map');
         if (!el || typeof Plotly === 'undefined' || !el.data) return;
         var mode = (_genesisTauState && _genesisTauState.mode) || 'members';
+        // Iso-density band fractions (10/25/50/75 % of peak density).
+        // Stacked + composited via translucent fills so the inner
+        // bands read darker — operational ensemble-product convention.
+        var BAND_FRACTIONS = [0.10, 0.25, 0.50, 0.75];
+
         if (mode === 'density' && positions.length >= 10) {
-            var binned = _genesisBinDensity(positions, 0.6);
-            var maxCount = 1;
-            for (var bi = 0; bi < binned.length; bi++) {
-                if (binned[bi].count > maxCount) maxCount = binned[bi].count;
-            }
-            var lons = binned.map(function (b) { return b.lon; });
-            var lats = binned.map(function (b) { return b.lat; });
-            // Square-root sizing so a 4× count bin reads as ~2× the area
-            // — perceptually right per Cleveland & McGill.
-            var sizes = binned.map(function (b) {
-                return 7 + 26 * Math.sqrt(b.count / maxCount);
-            });
-            var counts = binned.map(function (b) { return b.count; });
-            var text = binned.map(function (b) {
-                return '<b>' + b.count + ' member'
-                    + (b.count === 1 ? '' : 's') + '</b><br>+' + tau + ' h'
-                    + '<br>mean Vmax: ' + b.wind.toFixed(0) + ' kt';
-            });
-            // Sequential warm scale on count so density reads like a
-            // heatmap rather than competing with the SS colorscale.
+            // Adaptive bin size: tight clusters get a finer grid so
+            // we don't get a 1-cell blob; sprawling clusters get
+            // wider cells to keep the marker count reasonable.
+            var lats = positions.map(function (p) { return p.lat; });
+            var lons = positions.map(function (p) { return p.lon; });
+            var spread = Math.max(
+                Math.max.apply(null, lats) - Math.min.apply(null, lats),
+                Math.max.apply(null, lons) - Math.min.apply(null, lons));
+            var binDeg = Math.max(0.25, Math.min(0.6, spread / 30));
+            var grid = _genesisDensityGrid(positions, binDeg, 1.2);
+            var paths = _genesisDensityBandPaths(grid, BAND_FRACTIONS);
+            // Match marker size to the cell size at the modal's view
+            // scale so cells tile without gaps. ~26 px per degree at
+            // the modal's typical width, scaled by binDeg + a small
+            // overlap factor to hide cell-edge seams. Plotly markers
+            // are sized in pixels (not data units) so this isn't
+            // perfect at all zoom states but the modal view is fixed.
+            var markerPx = Math.max(8, Math.round(binDeg * 26 * 1.25));
+            // Empty the members trace + populate the 4 band traces in
+            // a single restyle call (avoids inter-frame flicker).
             Plotly.restyle(el, {
-                lon: [lons], lat: [lats],
-                'marker.size': [sizes],
-                'marker.color': [counts],
-                'marker.colorscale': [[
-                    [0.0, 'rgba(254,243,199,0.40)'],
-                    [0.25, 'rgba(252,211,77,0.65)'],
-                    [0.55, 'rgba(249,115,22,0.85)'],
-                    [0.85, 'rgba(220,38,38,0.95)'],
-                    [1.0, 'rgba(127,29,29,1.0)'],
-                ]],
-                'marker.cmin': [0],
-                'marker.cmax': [maxCount],
-                'marker.line.width': [0.4],
-                'marker.opacity': [0.88],
-                text: [text],
-            }, [6]);
+                lon: [[], paths[0].lons, paths[1].lons,
+                      paths[2].lons, paths[3].lons],
+                lat: [[], paths[0].lats, paths[1].lats,
+                      paths[2].lats, paths[3].lats],
+                'marker.size': [7, markerPx, markerPx, markerPx, markerPx],
+            }, [6, 7, 8, 9, 10]);
+            // Dim the spaghetti trace (index 0) so the heatmap reads
+            // clearly against it — the spaghetti is also orange, so at
+            // its default 0.18 alpha the iso-bands get washed out.
+            Plotly.restyle(el, {
+                'line.color': 'rgba(249,115,22,0.06)',
+            }, [0]);
             return;
         }
-        // Raw-member rendering (default for small clusters).
+
+        // Members mode (raw SS-colored dots) — clear the band traces
+        // and populate the members trace. Restore spaghetti opacity.
         var lons2 = positions.map(function (p) { return p.lon; });
         var lats2 = positions.map(function (p) { return p.lat; });
         var winds2 = positions.map(function (p) { return p.wind != null ? p.wind : 0; });
         Plotly.restyle(el, {
-            lon: [lons2], lat: [lats2],
+            lon: [lons2, [], [], [], []],
+            lat: [lats2, [], [], [], []],
             'marker.size': 7,
             'marker.color': [winds2],
             'marker.colorscale': [_GENESIS_SS_SCALE],
@@ -6998,7 +7002,10 @@
                 return 'Member ' + p.key + '<br>+' + tau + ' h<br>'
                     + (p.wind != null ? p.wind.toFixed(0) + ' kt' : '— kt');
             })],
-        }, [6]);
+        }, [6, 7, 8, 9, 10]);
+        Plotly.restyle(el, {
+            'line.color': 'rgba(249,115,22,0.18)',
+        }, [0]);
     }
 
     // Bin member positions into a coarse lat/lon grid (degrees) for the
@@ -7442,11 +7449,149 @@
             hovertemplate: '%{text}<br>%{lat:.1f}°N, %{lon:.1f}°E<extra></extra>',
             showlegend: false,
         };
+        // Density-mode placeholder traces — 4 stacked square-marker
+        // bands at 10/25/50/75% of peak density. We use markers
+        // (symbol: 'square') instead of fill:'toself' because Plotly's
+        // scattergeo doesn't handle null-separated multi-polygon fills
+        // correctly (treats the entire null-joined path as one polygon
+        // → red wash across the whole map). Square markers per cell
+        // give the same visual result without the bug.
+        function densityBand(rgb, alpha) {
+            return {
+                type: 'scattergeo', mode: 'markers',
+                lon: [], lat: [],
+                marker: {
+                    symbol: 'square',
+                    size: 12,
+                    color: 'rgba(' + rgb + ',' + alpha + ')',
+                    line: { color: 'rgba(0,0,0,0)', width: 0 },
+                    opacity: 1,
+                },
+                hoverinfo: 'skip',
+                showlegend: false,
+            };
+        }
+        // Warm sequential ramp — outermost (10%) pale yellow, innermost
+        // (75%) deep crimson. Alphas chosen so the 4-band overlap at
+        // the peak composites to a saturated red against the orange
+        // spaghetti background. Yellow→red ramp reads more clearly as
+        // a probability heatmap than orange→red.
+        var tauDensity0 = densityBand('254, 240, 138', 0.55);  // ≥10% peak (pale yellow)
+        var tauDensity1 = densityBand('251, 191,  36', 0.55);  // ≥25% (amber)
+        var tauDensity2 = densityBand('234,  88,  12', 0.60);  // ≥50% (orange-red)
+        var tauDensity3 = densityBand('159,  18,  57', 0.65);  // ≥75% (deep crimson)
         Plotly.react(el,
                      [spaghetti, firstGenesis, meanLine, meanMarkers,
-                      lonLabels, latLabels, tauCursor],
+                      lonLabels, latLabels, tauCursor,
+                      tauDensity0, tauDensity1, tauDensity2, tauDensity3],
                      layout,
                      { responsive: true, displayModeBar: false });
+    }
+
+    // Build a 2D density grid from member positions: raw histogram
+    // followed by a separable Gaussian smooth so the resulting iso-
+    // contour bands have smooth boundaries instead of stepped corners
+    // from the binning. binDeg controls cell size; sigmaCells is the
+    // Gaussian sigma in cell units (1.0 → ~one-cell smoothing radius).
+    function _genesisDensityGrid(positions, binDeg, sigmaCells) {
+        if (!positions || !positions.length) return null;
+        var lats = positions.map(function (p) { return p.lat; });
+        var lons = positions.map(function (p) { return p.lon; });
+        var latMin = Math.min.apply(null, lats);
+        var latMax = Math.max.apply(null, lats);
+        var lonMin = Math.min.apply(null, lons);
+        var lonMax = Math.max.apply(null, lons);
+        // Pad bounds by a few cells so the Gaussian tails fade
+        // smoothly to zero past the data instead of being clipped.
+        var pad = 4 * binDeg;
+        latMin -= pad; latMax += pad;
+        lonMin -= pad; lonMax += pad;
+        var ny = Math.max(1, Math.ceil((latMax - latMin) / binDeg) + 1);
+        var nx = Math.max(1, Math.ceil((lonMax - lonMin) / binDeg) + 1);
+        // Pre-size grids (faster than Array.fill for typed-array-like
+        // workloads at the ~100x100 sizes we use here).
+        var values = new Array(ny);
+        for (var y0 = 0; y0 < ny; y0++) {
+            values[y0] = new Array(nx);
+            for (var x0 = 0; x0 < nx; x0++) values[y0][x0] = 0;
+        }
+        // 1. Raw histogram
+        for (var i = 0; i < positions.length; i++) {
+            var ix = Math.floor((positions[i].lon - lonMin) / binDeg);
+            var iy = Math.floor((positions[i].lat - latMin) / binDeg);
+            if (ix >= 0 && ix < nx && iy >= 0 && iy < ny) {
+                values[iy][ix] += 1;
+            }
+        }
+        // 2. Separable Gaussian smooth (H then V).
+        var sigma = sigmaCells || 1.0;
+        var kr = Math.max(1, Math.ceil(sigma * 3));
+        var kernel = new Array(2 * kr + 1);
+        var ksum = 0;
+        for (var k = -kr; k <= kr; k++) {
+            var w = Math.exp(-(k * k) / (2 * sigma * sigma));
+            kernel[k + kr] = w; ksum += w;
+        }
+        for (var ki = 0; ki < kernel.length; ki++) kernel[ki] /= ksum;
+        var tmp = new Array(ny);
+        for (var y1 = 0; y1 < ny; y1++) {
+            tmp[y1] = new Array(nx);
+            for (var x1 = 0; x1 < nx; x1++) {
+                var sumH = 0;
+                for (var kh = -kr; kh <= kr; kh++) {
+                    var sx = x1 + kh;
+                    if (sx < 0) sx = 0;
+                    else if (sx >= nx) sx = nx - 1;
+                    sumH += values[y1][sx] * kernel[kh + kr];
+                }
+                tmp[y1][x1] = sumH;
+            }
+        }
+        var out = new Array(ny);
+        var maxV = 0;
+        for (var y2 = 0; y2 < ny; y2++) {
+            out[y2] = new Array(nx);
+            for (var x2 = 0; x2 < nx; x2++) {
+                var sumV = 0;
+                for (var kv = -kr; kv <= kr; kv++) {
+                    var sy = y2 + kv;
+                    if (sy < 0) sy = 0;
+                    else if (sy >= ny) sy = ny - 1;
+                    sumV += tmp[sy][x2] * kernel[kv + kr];
+                }
+                out[y2][x2] = sumV;
+                if (sumV > maxV) maxV = sumV;
+            }
+        }
+        return { values: out, ny: ny, nx: nx,
+                 latMin: latMin, lonMin: lonMin,
+                 binDeg: binDeg, maxValue: maxV };
+    }
+
+    // For each iso-threshold (as a fraction of peak density), collect
+    // the centers of all grid cells at or above the threshold. The
+    // density-band traces render these as fixed-size square markers,
+    // sized to tile the grid without gaps at the modal's typical
+    // view extent. Inner bands (high threshold) are SUBSETS of outer
+    // bands — trace stacking + alpha compositing gives the heatmap.
+    function _genesisDensityBandPaths(grid, fractions) {
+        if (!grid || !grid.maxValue) {
+            return fractions.map(function () { return { lons: [], lats: [] }; });
+        }
+        var b = grid.binDeg;
+        return fractions.map(function (frac) {
+            var thr = frac * grid.maxValue;
+            var lons = [], lats = [];
+            for (var iy = 0; iy < grid.ny; iy++) {
+                var cellLat = grid.latMin + (iy + 0.5) * b;
+                for (var ix = 0; ix < grid.nx; ix++) {
+                    if (grid.values[iy][ix] < thr) continue;
+                    lons.push(grid.lonMin + (ix + 0.5) * b);
+                    lats.push(cellLat);
+                }
+            }
+            return { lons: lons, lats: lats };
+        });
     }
 
     // Axis label step that scales with the bounds — keeps the map from
