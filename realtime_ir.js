@@ -6539,6 +6539,11 @@
                     '<button type="button" id="rt-genesis-mode-members" class="rt-genesis-mode-btn">Members</button>' +
                   '</div>' +
                 '</div>' +
+                // Density-mode key — sits BETWEEN the scrubber row and
+                // the map so it doesn\'t compete with the in-map lat
+                // axis labels for the top-left corner. Hidden in
+                // Members mode (display: none).
+                '<div id="rt-genesis-density-key" class="rt-genesis-density-key" style="display:none;"></div>' +
                 '<div class="rt-genesis-modal-chart-wrap" style="position:relative;">' +
                   '<button type="button" id="rt-genesis-map-save" class="rt-genesis-modal-save" title="Save track map as PNG">⤓ PNG</button>' +
                   '<div id="rt-genesis-modal-map" style="width:100%; height:480px;"></div>' +
@@ -7013,57 +7018,35 @@
         _genesisClearDensityLegend(el);
     }
 
-    // Inset legend for density mode: color swatches + bin size + peak
-    // count so the user can read the absolute scale, not just the
-    // relative bands. Plotly annotations with HTML <span style="color">
-    // render properly in SVG (we use them elsewhere in this modal).
+    // Density-mode key shown as an HTML strip ABOVE the map (between
+    // the scrubber row and the chart). Lives outside the Plotly
+    // element so it doesn't fight the in-map lat axis labels or the
+    // Vmax colorbar for the corners.
     function _genesisSetDensityLegend(el, binDeg, peakDensity, nPositions, tau) {
-        if (!el || !el.layout) return;
-        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-        // Peak density is the smoothed value at the densest cell —
-        // round to integer for display ("≈ N members"). Approximate
-        // because Gaussian smoothing spreads the raw count over
-        // neighboring cells.
+        var key = document.getElementById('rt-genesis-density-key');
+        if (!key) return;
         var peakInt = Math.max(1, Math.round(peakDensity));
-        var binText = binDeg.toFixed(2) + '°';
-        var text = '<b>Member density at +' + tau + ' h</b><br>'
-            + '<span style="color:#9F1239;">■</span> ≥ 75% of peak<br>'
-            + '<span style="color:#EA580C;">■</span> ≥ 50%<br>'
-            + '<span style="color:#FBBF24;">■</span> ≥ 25%<br>'
-            + '<span style="color:#FEDC8A;">■</span> ≥ 10%<br>'
-            + '<span style="opacity:0.7; font-size:9px;">'
-            + binText + ' bins · peak ≈ ' + peakInt + ' members/cell<br>'
-            + nPositions + ' members at this τ</span>';
-        var ann = {
-            name: '__density_legend__',
-            xref: 'paper', yref: 'paper', x: 0.012, y: 0.985,
-            xanchor: 'left', yanchor: 'top',
-            showarrow: false, align: 'left',
-            text: text,
-            font: { size: 10, color: isDark ? '#f1f5f9' : '#1f2937',
-                    family: 'Inter, sans-serif' },
-            bgcolor: isDark ? 'rgba(15,22,35,0.82)'
-                            : 'rgba(255,255,255,0.92)',
-            bordercolor: isDark ? 'rgba(255,255,255,0.18)'
-                                : 'rgba(15,22,35,0.18)',
-            borderwidth: 1,
-            borderpad: 6,
-        };
-        var existing = (el.layout.annotations || []).filter(function (a) {
-            return a.name !== '__density_legend__';
-        });
-        existing.push(ann);
-        Plotly.relayout(el, { annotations: existing });
+        key.style.display = 'flex';
+        key.innerHTML =
+            '<span class="rt-genesis-density-key-label">'
+              + 'Member density at <strong>+' + tau + ' h</strong>'
+              + '</span>'
+            + '<span class="rt-genesis-density-key-swatches">'
+              + '<span><i style="background:#FEDC8A"></i>≥ 10%</span>'
+              + '<span><i style="background:#FBBF24"></i>≥ 25%</span>'
+              + '<span><i style="background:#EA580C"></i>≥ 50%</span>'
+              + '<span><i style="background:#9F1239"></i>≥ 75% of peak</span>'
+            + '</span>'
+            + '<span class="rt-genesis-density-key-meta">'
+              + binDeg.toFixed(2) + '° bins · '
+              + 'peak ≈ <strong>' + peakInt + '</strong> members/cell · '
+              + nPositions + ' members at this τ'
+            + '</span>';
     }
 
-    function _genesisClearDensityLegend(el) {
-        if (!el || !el.layout) return;
-        var existing = (el.layout.annotations || []).filter(function (a) {
-            return a.name !== '__density_legend__';
-        });
-        if (existing.length !== (el.layout.annotations || []).length) {
-            Plotly.relayout(el, { annotations: existing });
-        }
+    function _genesisClearDensityLegend(_el) {
+        var key = document.getElementById('rt-genesis-density-key');
+        if (key) key.style.display = 'none';
     }
 
     // Bin member positions into a coarse lat/lon grid (degrees) for the

@@ -2809,6 +2809,46 @@ html:not([data-view="map"]) #ir-global-env-cbars {
     color: #fdba74;
 }
 
+/* Density-mode key strip — sits between the scrubber row and the
+   map, visible only when Density mode is active. Color swatches +
+   bin size + peak count. */
+.rt-genesis-density-key {
+    display: none;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 14px;
+    padding: 6px 10px;
+    margin: 4px 4px 8px 4px;
+    border: 1px solid rgba(15,22,35,0.12);
+    border-radius: 5px;
+    background: rgba(15,22,35,0.03);
+    font-size: 11px;
+    color: var(--text);
+    line-height: 1.4;
+}
+[data-theme="dark"] .rt-genesis-density-key {
+    border-color: rgba(255,255,255,0.10);
+    background: rgba(255,255,255,0.03);
+    color: #e2e8f0;
+}
+.rt-genesis-density-key-label { font-weight: 500; opacity: 0.85; }
+.rt-genesis-density-key-swatches {
+    display: inline-flex; align-items: center; gap: 12px;
+}
+.rt-genesis-density-key-swatches > span {
+    display: inline-flex; align-items: center; gap: 5px;
+}
+.rt-genesis-density-key-swatches i {
+    display: inline-block;
+    width: 14px; height: 12px;
+    border-radius: 2px;
+    border: 1px solid rgba(15,22,35,0.15);
+}
+[data-theme="dark"] .rt-genesis-density-key-swatches i {
+    border-color: rgba(255,255,255,0.15);
+}
+.rt-genesis-density-key-meta { opacity: 0.7; font-size: 10px; }
+
 /* Summary PNG button in the modal header. */
 .rt-genesis-modal-summary-save {
     background: rgba(0, 229, 255, 0.10);
