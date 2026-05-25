@@ -180,6 +180,20 @@ EOF
 echo "Setting CORS on gs://${BUCKET}..."
 gsutil cors set "${CORS_JSON}" "gs://${BUCKET}" || echo "  (warning: CORS set failed; frontend canvas reads may be blocked)"
 
+# ── Bucket lifecycle — auto-delete sensor PNG/GeoJSON files older than
+# 7 days. Caps storage growth at ~2.5 GB regardless of how long this
+# pipeline runs. Frontend only reads the last 48 hours, so 7-day
+# retention gives ample buffer + room for ad-hoc retrospective work.
+# Manifest and predictions files have no sensor prefix so they're
+# left alone (they update in place and are tiny).
+LIFECYCLE_JSON="$(mktemp -t tc-atlas-mw-lifecycle.XXXXXX.json)"
+trap 'rm -f "${BUILD_CFG}" "${CORS_JSON}" "${PREDICT_BODY}" "${LIFECYCLE_JSON}"' EXIT
+cat > "${LIFECYCLE_JSON}" <<EOF
+{"lifecycle":{"rule":[{"action":{"type":"Delete"},"condition":{"age":7,"matchesPrefix":["GMI/","SSMIS/","AMSR2/","ATMS/"]}}]}}
+EOF
+echo "Setting 7-day lifecycle rule on gs://${BUCKET}..."
+gsutil lifecycle set "${LIFECYCLE_JSON}" "gs://${BUCKET}" || echo "  (warning: lifecycle set failed)"
+
 echo "Creating/updating Cloud Scheduler ${SCHEDULER_NAME}..."
 if gcloud scheduler jobs describe "${SCHEDULER_NAME}" --location "${REGION}" >/dev/null 2>&1; then
     gcloud scheduler jobs update http "${SCHEDULER_NAME}" \
