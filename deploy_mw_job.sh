@@ -95,12 +95,22 @@ done
 # Write the build config to a temp file. We can't use process substitution
 # (<(cat <<EOF)) here because gcloud rejects `--tag` and `--config` together —
 # the custom Dockerfile (-f Dockerfile.mw) only works via --config.
+# Pull the previous image (if any) so Docker can reuse its layers as
+# a cache. Without --cache-from, every Cloud Build run rebuilds from
+# scratch and the heavy pip-install step (scipy/matplotlib/h5netcdf/
+# scikit-image/etc.) takes 5-10 min on its own — combined with a
+# Dockerfile change it can balloon past 20 min. With layer caching,
+# subsequent builds finish in ~1-2 min when only mw_ingest.py changes.
+# The `|| true` swallows the no-previous-image case (first deploy).
 BUILD_CFG="$(mktemp -t tc-atlas-mw-cloudbuild.XXXXXX.yaml)"
 trap 'rm -f "${BUILD_CFG}"' EXIT
 cat > "${BUILD_CFG}" <<EOF
 steps:
 - name: 'gcr.io/cloud-builders/docker'
-  args: ['build', '-f', 'Dockerfile.mw', '-t', '${IMAGE}', '.']
+  entrypoint: 'bash'
+  args: ['-c', 'docker pull ${IMAGE} || true']
+- name: 'gcr.io/cloud-builders/docker'
+  args: ['build', '-f', 'Dockerfile.mw', '-t', '${IMAGE}', '--cache-from', '${IMAGE}', '.']
 - name: 'gcr.io/cloud-builders/docker'
   args: ['push', '${IMAGE}']
 images: ['${IMAGE}']
