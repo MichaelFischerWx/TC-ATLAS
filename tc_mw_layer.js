@@ -43,8 +43,14 @@
     var MANIFEST_URL = 'https://storage.googleapis.com/tc-atlas-microwave-nrt/manifest_latest_48h.json';
     var REFRESH_MS   = 5 * 60 * 1000;   // 5 minutes
     var ATTRIBUTION  = 'GMI/GPM (NASA/GPM/PPS NRT)';
-    var MIN_OPACITY  = 0.4;             // oldest visible swath
-    var MAX_OPACITY  = 1.0;             // newest swath
+    // Default age-decay floor — newest swath always renders at 1.0,
+    // oldest visible swath drops to MIN_OPACITY. 0.7 keeps the data
+    // readable end-to-end while still leaving a perceptible age cue
+    // (~30-point opacity difference between newest and oldest), which
+    // is reinforced by the time-scrubber readout. Users who want the
+    // IR to show through older passes can lower the Opacity slider.
+    var MIN_OPACITY  = 0.7;
+    var MAX_OPACITY  = 1.0;
     var PREFS_KEY    = 'tc-atlas-mw-prefs';
 
     // Per-sensor border colors so users can distinguish sensors at a
