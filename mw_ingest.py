@@ -589,7 +589,13 @@ def render_product(ds_bt, ds_geo, sensor: str, product: str
         png = _encode_rgb_png(warped_rgb, warped_valid)
     else:
         warped = _warp_eq_to_mercator_bbox(data, lat_min, lat_max)
-        png = _encode_scalar_png(warped, _nrl_89ghz_cmap(), vmin=150, vmax=290)
+        # vmin=180 (was 150) better reveals convective detail at tropical
+        # latitudes where most pixels are warm ocean — values below ~200 K
+        # are rare and meaningful (deep ice scattering), so a tighter floor
+        # keeps the colormap's dynamic range over the band that actually
+        # carries signal. Keep the frontend legend's 150-290 K axis in
+        # rough sync (~180-290 K shows correctly with a labeled tick at 200).
+        png = _encode_scalar_png(warped, _nrl_89ghz_cmap(), vmin=180, vmax=290)
         warped_valid = np.isfinite(warped)
 
     footprint = _footprint_geojson(warped_valid, bounds)
