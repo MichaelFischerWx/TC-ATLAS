@@ -190,19 +190,16 @@ else
 fi
 
 # ── Pass-prediction scheduler (same Job, overridden args) ────────────
-# The Run Jobs :run API accepts a JSON body of the form:
-#   {"overrides":{"containerOverrides":[{"args":["--predict-passes"]}]}}
-# Cloud Scheduler sends this body verbatim; the Job runs the same image
-# but with these args, overriding the Dockerfile ENTRYPOINT's
-# --operational. Python (the actual command) is inherited from the
-# entrypoint's first token because containerOverrides.args only
-# replaces CMD/args, not the command. Since our ENTRYPOINT puts
-# everything on one line, we pass the full arg list including
-# "python", "mw_ingest.py", "--predict-passes" to be safe.
+# Dockerfile.mw splits ENTRYPOINT=["python","mw_ingest.py"] and
+# CMD=["--operational"]. The Cloud Run Jobs :run API's
+# containerOverrides.args field replaces CMD only, so we just need
+# to swap the single flag — the entrypoint (python script) is
+# inherited automatically. Same pattern works for manual testing:
+#   gcloud run jobs execute ... --args=--predict-passes
 PREDICT_BODY="$(mktemp -t tc-atlas-mw-predict-body.XXXXXX.json)"
 trap 'rm -f "${BUILD_CFG}" "${CORS_JSON}" "${PREDICT_BODY}"' EXIT
 cat > "${PREDICT_BODY}" <<'EOF'
-{"overrides":{"containerOverrides":[{"args":["python","mw_ingest.py","--predict-passes"]}]}}
+{"overrides":{"containerOverrides":[{"args":["--predict-passes"]}]}}
 EOF
 
 echo "Creating/updating Cloud Scheduler ${PREDICT_SCHEDULER_NAME}..."
@@ -244,5 +241,4 @@ echo "  gsutil cat gs://${BUCKET}/manifest_latest_48h.json | head -c 2000"
 echo "  gsutil cat gs://${BUCKET}/passes_predicted.json | head -c 2000"
 echo ""
 echo "Smoke-test the prediction path:"
-echo "  gcloud run jobs execute ${JOB_NAME} --region ${REGION} --wait \\"
-echo "    --args=python,mw_ingest.py,--predict-passes"
+echo "  gcloud run jobs execute ${JOB_NAME} --region ${REGION} --wait --args=--predict-passes"

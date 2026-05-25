@@ -1222,8 +1222,14 @@ _PPS_SENSOR_WATCHLIST = [
 
 def _check_for_wsf_m_on_pps() -> None:
     """Lightweight HEAD probe: is WSF-M / MWI available on PPS yet?
-    Runs alongside the prediction job (every 30 min in production).
-    Just logs — does not gate any other behavior."""
+    Gated to UTC midnight (00:00-00:29) so it fires at most once per
+    day even though the parent prediction job runs every 30 min —
+    PPS integration of a new sensor isn't imminent and there's no
+    benefit to polling more often than daily. Missed days are fine
+    (it's a passive watchlist, not a critical alert)."""
+    now = _dt.now(timezone.utc)
+    if now.hour != 0 or now.minute >= 30:
+        return
     import requests
     try:
         sess = requests.Session()

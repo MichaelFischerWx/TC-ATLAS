@@ -53,7 +53,10 @@ RUN pip install --no-cache-dir \
 COPY mw_ingest.py .
 COPY microwave_api.py .
 
-# Cloud Run Jobs invoke the container; --operational picks up where the
-# last run left off via the GCS manifest's max scan_start, falling back
-# to --since-hours 1 on first run (empty manifest).
-ENTRYPOINT ["python", "mw_ingest.py", "--operational"]
+# Split ENTRYPOINT/CMD so Cloud Scheduler overrides + manual
+# `gcloud run jobs execute --args=...` can replace the script flag
+# without re-specifying "python mw_ingest.py" each time. Default args
+# (--operational) runs the ingestion path; override to --predict-passes
+# for the prediction scheduler.
+ENTRYPOINT ["python", "mw_ingest.py"]
+CMD        ["--operational"]
