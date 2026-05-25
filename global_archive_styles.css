@@ -2887,6 +2887,27 @@ input[type="range"].ga-range::-moz-range-thumb {
     text-align: center;
 }
 .tc-mw-hours-row { gap: 6px; }
+.tc-mw-opacity-row { gap: 6px; }
+.tc-mw-opacity-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: #5b6573;
+    text-transform: uppercase;
+    font-size: 0.58rem;
+    letter-spacing: 0.04em;
+    font-weight: 600;
+}
+.tc-mw-opacity-label .tc-mw-opacity-val {
+    color: #0f1623;
+    font-variant-numeric: tabular-nums;
+    font-weight: 700;
+}
+.tc-mw-opacity-slider {
+    flex: 1;
+    accent-color: #2e7dff;
+    cursor: pointer;
+}
 .tc-mw-hours-label {
     display: inline-flex;
     align-items: center;

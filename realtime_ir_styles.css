@@ -3284,6 +3284,29 @@ html.sub-only-mode #tc-build-chip { display: none !important; }
 .tc-mw-hours-row {
     gap: 6px;
 }
+.tc-mw-opacity-row {
+    gap: 6px;
+}
+.tc-mw-opacity-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: #94a3b8;
+    text-transform: uppercase;
+    font-size: 0.58rem;
+    letter-spacing: 0.04em;
+    font-weight: 600;
+}
+.tc-mw-opacity-label .tc-mw-opacity-val {
+    color: #e2e8f0;
+    font-variant-numeric: tabular-nums;
+    font-weight: 700;
+}
+.tc-mw-opacity-slider {
+    flex: 1;
+    accent-color: #4a9b6e;
+    cursor: pointer;
+}
 .tc-mw-hours-label {
     display: inline-flex;
     align-items: center;

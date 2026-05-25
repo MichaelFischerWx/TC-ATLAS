@@ -117,11 +117,14 @@
         ];
     }
 
-    /** linear interp newest→1.0, oldest→0.4 across the visible window */
-    function _ageOpacity(ageMin, windowMin) {
+    /** linear interp newest→1.0, oldest→`minFloor` across the visible
+     *  window. minFloor is configurable per-instance so users can raise
+     *  the curve and completely cover the basemap with older swaths. */
+    function _ageOpacity(ageMin, windowMin, minFloor) {
+        if (typeof minFloor !== 'number') minFloor = MIN_OPACITY;
         if (windowMin <= 0) return MAX_OPACITY;
         var t = Math.min(1, Math.max(0, ageMin / windowMin));
-        return MAX_OPACITY + (MIN_OPACITY - MAX_OPACITY) * t;
+        return MAX_OPACITY + (minFloor - MAX_OPACITY) * t;
     }
 
     function _fmtUTC(d) {
@@ -253,6 +256,10 @@
             if (typeof prefs.hours === 'number' && prefs.hours >= 1 && prefs.hours <= this._maxHours) {
                 this._hours = Math.round(prefs.hours);
             }
+            if (typeof prefs.minOpacity === 'number' &&
+                prefs.minOpacity >= 0 && prefs.minOpacity <= 1) {
+                this._minOpacity = prefs.minOpacity;
+            }
             if (prefs.enabled === true) shouldAutoEnable = true;
         }
 
@@ -264,6 +271,13 @@
         this._attrAdded     = false;
         // Suppress prefs writes while the constructor is restoring state.
         this._prefsReady    = false;
+
+        // Age-decay opacity floor. Newest swaths always render at 1.0;
+        // this controls how transparent the oldest visible swath gets.
+        // Default 0.4 preserves the original age-fade; setting to 1.0
+        // disables the fade so all swaths fully cover the basemap.
+        // Restored from prefs below if the user adjusted it last time.
+        this._minOpacity    = MIN_OPACITY;
 
         // Time-scrubber state. _cursorAgeMin = how far back (in minutes
         // from "now") the playback head is parked. 0 = "live" (show
@@ -306,10 +320,11 @@
     MWLayer.prototype._savePrefs = function () {
         if (!this._prefsReady) return;
         _writePrefs({
-            sensors: this._sensors,
-            product: this._product,
-            hours:   this._hours,
-            enabled: this._enabled
+            sensors:    this._sensors,
+            product:    this._product,
+            hours:      this._hours,
+            minOpacity: this._minOpacity,
+            enabled:    this._enabled
         });
     };
 
@@ -461,6 +476,17 @@
             this._ui.productSelect.value = p;
         }
         this._updateLegend();
+        if (this._enabled) this._renderAll();
+        this._savePrefs();
+    };
+
+    MWLayer.prototype.setMinOpacity = function (v) {
+        v = Math.max(0, Math.min(1, Number(v)));
+        if (isNaN(v)) v = MIN_OPACITY;
+        this._minOpacity = v;
+        if (this._ui && this._ui.opacityLabel) {
+            this._ui.opacityLabel.textContent = Math.round(v * 100) + '%';
+        }
         if (this._enabled) this._renderAll();
         this._savePrefs();
     };
@@ -692,7 +718,7 @@
 
     MWLayer.prototype._addOrbit = function (orb, entry, ageMin, windowMin, highlightStorms) {
         var map = this._map;
-        var opacity = _ageOpacity(ageMin, windowMin);
+        var opacity = _ageOpacity(ageMin, windowMin, this._minOpacity);
         var boundsList = _wrapsDateline(entry.bounds) ? _splitAtDateline(entry.bounds) : [entry.bounds];
         var parts = [];
         var popupHtml = this._popupHtml(orb, ageMin, highlightStorms);
@@ -840,6 +866,12 @@
             +     '</label>'
             +     '<input type="range" class="tc-mw-hours-slider" min="1" max="' + this._maxHours + '" step="1" value="' + this._hours + '">'
             +   '</div>'
+            +   '<div class="tc-mw-control-row tc-mw-opacity-row" title="Raises the age-fade floor — at 100% even the oldest visible swaths fully cover the basemap; at 40% (default) older swaths fade so the IR shows through.">'
+            +     '<label class="tc-mw-opacity-label">Opacity'
+            +       '<span class="tc-mw-opacity-val">' + Math.round(this._minOpacity * 100) + '%</span>'
+            +     '</label>'
+            +     '<input type="range" class="tc-mw-opacity-slider" min="0" max="100" step="1" value="' + Math.round(this._minOpacity * 100) + '">'
+            +   '</div>'
             +   '<div class="tc-mw-status"></div>'
             +   '<div class="tc-mw-attribution">' + _esc(ATTRIBUTION) + '</div>'
             + '</div>';
@@ -870,6 +902,8 @@
         var cursorReadout = wrap.querySelector('.tc-mw-cursor-readout');
         var playBtn       = wrap.querySelector('.tc-mw-play-btn');
         var liveBtn       = wrap.querySelector('.tc-mw-live-btn');
+        var opacitySlider = wrap.querySelector('.tc-mw-opacity-slider');
+        var opacityLabel  = wrap.querySelector('.tc-mw-opacity-val');
 
         this._ui = {
             container: wrap, btn: btn, slider: slider,
@@ -881,7 +915,9 @@
             cursorSlider: cursorSlider,
             cursorReadout: cursorReadout,
             playBtn: playBtn,
-            liveBtn: liveBtn
+            liveBtn: liveBtn,
+            opacitySlider: opacitySlider,
+            opacityLabel: opacityLabel
         };
         this._updateLegend();
         this._syncCursorUI();
@@ -910,6 +946,11 @@
         });
         playBtn.addEventListener('click', function () { self.togglePlay(); });
         liveBtn.addEventListener('click', function () { self.goLive(); });
+        if (opacitySlider) {
+            opacitySlider.addEventListener('input', function () {
+                self.setMinOpacity(parseInt(opacitySlider.value, 10) / 100);
+            });
+        }
     };
 
     MWLayer.prototype._updateStatus = function (msg) {
