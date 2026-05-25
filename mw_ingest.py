@@ -118,9 +118,10 @@ PREDICT_STEP_SECONDS = 60      # 1-min propagation step
 # nrt_latency_min is the empirical lag between scan_start and when the
 # corresponding granule lands in TC-ATLAS GCS (measured from current
 # ingestion timing — easy to tune as PPS/JAXA pipelines change).
-GMI_NRT_LATENCY_MIN = 45
+GMI_NRT_LATENCY_MIN   = 45
 SSMIS_NRT_LATENCY_MIN = 180
 AMSR2_NRT_LATENCY_MIN = 200
+ATMS_NRT_LATENCY_MIN  = 60   # NPP/NOAA-20/NOAA-21 via PPS; empirical
 
 PREDICT_SATELLITES = [
     {"platform": "GPM",     "sensor": "GMI",   "catnr": 39574,
@@ -133,6 +134,14 @@ PREDICT_SATELLITES = [
      "swath_half_km": 875.0, "nrt_latency_min": SSMIS_NRT_LATENCY_MIN},
     {"platform": "GCOM-W1", "sensor": "AMSR2", "catnr": 38337,
      "swath_half_km": 725.0, "nrt_latency_min": AMSR2_NRT_LATENCY_MIN},
+    # ATMS — cross-track sounder, ~2300 km swath (half-width 1150 km).
+    # Three satellites: Suomi NPP, NOAA-20 (JPSS-1), NOAA-21 (JPSS-2).
+    {"platform": "NPP",     "sensor": "ATMS",  "catnr": 37849,
+     "swath_half_km": 1150.0, "nrt_latency_min": ATMS_NRT_LATENCY_MIN},
+    {"platform": "NOAA20",  "sensor": "ATMS",  "catnr": 43013,
+     "swath_half_km": 1150.0, "nrt_latency_min": ATMS_NRT_LATENCY_MIN},
+    {"platform": "NOAA21",  "sensor": "ATMS",  "catnr": 54234,
+     "swath_half_km": 1150.0, "nrt_latency_min": ATMS_NRT_LATENCY_MIN},
 ]
 
 EARTH_RADIUS_KM = 6371.0
@@ -466,6 +475,25 @@ _PPS_SENSORS = {
             "37h":     {"group": "S4", "channels": {"TB_36.5H": 1}},
             "89v":     {"group": "S5", "channels": {"TB_89.0V": 0}},
             "89h":     {"group": "S5", "channels": {"TB_89.0H": 1}},
+        },
+    },
+    "ATMS": {
+        "list_path":  "1C/ATMS/",
+        "data_path":  "1C/ATMS/",
+        # 1C.{NPP|NOAA20|NOAA21}.ATMS.XCAL2019-V.YYYYMMDD-SHHMMSS-EHHMMSS.V08A.RT-NC
+        "fname_re":   r"1C\.(NPP|NOAA20|NOAA21)\.ATMS\.[\w\-]+\.(\d{8})-S(\d{6})-"
+                      r"E(\d{6})\.V\w+\.RT-NC$",
+        "platform_fn": None,  # captured from fname_re group 1 (NPP/NOAA20/NOAA21)
+        # ATMS is a cross-track *sounder*, not a dual-pol imager — each
+        # channel carries only one polarization. We expose ATMS as a
+        # single-product sensor (89v only) using S3's 88.2 GHz QV-pol
+        # channel as a proxy for the 89 V-pol slot. The colormap renders
+        # brightness temperature regardless of polarization, so QV vs V
+        # is visually equivalent for convective-signal interpretation.
+        # 37-color, 89 PCT, 37V/H/89H are simply not available for ATMS;
+        # orbits without a PNG for those products are skipped on render.
+        "products": {
+            "89v": {"group": "S3", "channels": {"TB_88.2V": 0}},
         },
     },
 }

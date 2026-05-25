@@ -59,7 +59,8 @@
     var SENSOR_COLORS = {
         GMI:   '#4ade80',   // green
         SSMIS: '#60a5fa',   // blue
-        AMSR2: '#fb923c'    // orange
+        AMSR2: '#fb923c',   // orange
+        ATMS:  '#c084fc'    // purple — cross-track sounder, 89v-only
     };
 
     // Storm-highlighted swath styling — stronger weight + a hot accent
@@ -203,10 +204,14 @@
     }
 
     // Sensors the layer knows how to render. Order = display order in UI.
+    // ATMS is a sounder (single-pol, 88.2 GHz only) and contributes to
+    // the 89v product slot only — the dropdown will simply not render
+    // its swaths when other products are selected.
     var KNOWN_SENSORS = [
         { key: 'GMI',   label: 'GMI'   },
         { key: 'SSMIS', label: 'SSMI/S' },
-        { key: 'AMSR2', label: 'AMSR2' }
+        { key: 'AMSR2', label: 'AMSR2' },
+        { key: 'ATMS',  label: 'ATMS'  }
     ];
 
     // Products in the order they appear in the picker dropdown.
@@ -1076,7 +1081,7 @@
             var s = storms[si];
             // Latest per sensor from manifest — first newest-first orbit
             // whose bounds cover the storm position.
-            var latest = { GMI: null, SSMIS: null, AMSR2: null };
+            var latest = { GMI: null, SSMIS: null, AMSR2: null, ATMS: null };
             for (var oi = 0; oi < manifest.length; oi++) {
                 var o = manifest[oi];
                 if (!o.sensor || latest[o.sensor]) continue;
@@ -1085,7 +1090,7 @@
                 }
             }
             // Upcoming per sensor from predictions — first future entry.
-            var upcoming = { GMI: null, SSMIS: null, AMSR2: null };
+            var upcoming = { GMI: null, SSMIS: null, AMSR2: null, ATMS: null };
             var predStorm = predByAtcf[s.atcf_id];
             if (predStorm && Array.isArray(predStorm.passes)) {
                 for (var ppi = 0; ppi < predStorm.passes.length; ppi++) {
