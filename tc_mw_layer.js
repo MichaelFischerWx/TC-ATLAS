@@ -43,7 +43,16 @@
     var MANIFEST_URL = 'https://storage.googleapis.com/tc-atlas-microwave-nrt/manifest_latest_48h.json';
     var PREDICTIONS_URL = 'https://storage.googleapis.com/tc-atlas-microwave-nrt/passes_predicted.json';
     var REFRESH_MS   = 5 * 60 * 1000;   // 5 minutes
-    var ATTRIBUTION  = 'GMI/GPM (NASA/GPM/PPS NRT)';
+    // Map-attribution string: concise enough for the Leaflet
+    // attribution bar at the bottom of the map. The full acknowledgement
+    // (per-sensor providers + TLE source) lives in POPOVER_ACK below
+    // and is shown in the MW options popover where there's room.
+    var ATTRIBUTION  = 'Microwave: NASA GPM/PPS NRT';
+    var POPOVER_ACK  = 'Brightness temperatures: GMI (NASA/GPM), '
+                     + 'SSMI/S (DMSP F16/F17/F18), AMSR2 (JAXA/GCOM-W1), '
+                     + 'ATMS (NPP/NOAA-20/NOAA-21). NRT data via NASA GPM '
+                     + 'Precipitation Processing System. Orbital predictions '
+                     + 'via CelesTrak TLEs.';
     // Default age-decay floor — newest swath always renders at 1.0,
     // oldest visible swath drops to MIN_OPACITY. 0.7 keeps the data
     // readable end-to-end while still leaving a perceptible age cue
@@ -914,7 +923,7 @@
             +   '</div>'
             +   '<div class="tc-mw-status"></div>'
             +   '<div class="tc-mw-schedule" data-tc-mw-schedule></div>'
-            +   '<div class="tc-mw-attribution">' + _esc(ATTRIBUTION) + '</div>'
+            +   '<div class="tc-mw-attribution">' + _esc(POPOVER_ACK) + '</div>'
             + '</div>';
         c.appendChild(wrap);
 
