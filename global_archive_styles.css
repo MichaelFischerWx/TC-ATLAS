@@ -2939,6 +2939,25 @@ input[type="range"].ga-range::-moz-range-thumb {
     color: #0f1623;
     font-weight: 600;
 }
+.tc-mw-schedule-storm.is-disturbance .tc-mw-schedule-storm-name {
+    color: #475569;
+    font-style: italic;
+    font-weight: 500;
+}
+.tc-mw-schedule-forecast-tag {
+    display: inline-block;
+    background: rgba(168, 85, 247, 0.15);
+    color: #7c3aed;
+    font-style: normal;
+    font-size: 0.52rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 1px 5px;
+    border-radius: 3px;
+    margin-left: 4px;
+    vertical-align: middle;
+}
 .tc-mw-schedule-row {
     display: grid;
     grid-template-columns: 60px 1fr 1fr;

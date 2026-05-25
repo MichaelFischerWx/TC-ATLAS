@@ -884,6 +884,72 @@ def _fetch_active_storms() -> list[dict]:
     return payload.get("storms", []) or []
 
 
+def _fetch_genesis_disturbances() -> list[dict]:
+    """Pull current FNV3 LARGE_ENSEMBLE cyclogenesis disturbances (D1, D2,
+    ...) from the TC-ATLAS API and convert each into a virtual "storm"
+    record compatible with predict_passes(). Each disturbance is a
+    time-evolving forecast track; we pick the ensemble_mean point at
+    forecast hour closest to the middle of our prediction horizon as
+    the best-estimate position. Disturbances flagged with
+    `is_disturbance: True` so the frontend can label them distinctly."""
+    import requests
+    url = f"{TC_ATLAS_API_BASE}/ir-monitor/weatherlab-genesis-clusters"
+    try:
+        r = requests.get(url, timeout=30)
+        r.raise_for_status()
+        payload = r.json()
+    except Exception as exc:
+        logger.warning("genesis-clusters fetch failed: %s", exc)
+        return []
+
+    init_iso = payload.get("init_time")
+    if not init_iso:
+        return []
+    try:
+        init_time = _dt.fromisoformat(init_iso.replace("Z", "+00:00"))
+    except Exception:
+        return []
+    now = _dt.now(timezone.utc)
+    elapsed_h = (now - init_time).total_seconds() / 3600.0
+    # Target tau = elapsed + half the prediction horizon. This places
+    # the chosen point in the middle of the window we'll predict over,
+    # so a disturbance's modeled motion is approximately right for the
+    # representative pass-prediction match.
+    target_tau = elapsed_h + PREDICT_HORIZON_HOURS / 2.0
+
+    out = []
+    for cluster in payload.get("clusters", []) or []:
+        em = cluster.get("ensemble_mean") or {}
+        points = em.get("points") or []
+        if not points:
+            continue
+        # Pick the point with tau closest to target_tau.
+        best = min(points, key=lambda p: abs(float(p.get("tau", 0.0)) - target_tau))
+        lat = best.get("lat")
+        lon = best.get("lon")
+        if lat is None or lon is None:
+            continue
+        short = cluster.get("display_short") or cluster.get("track_id") or "D?"
+        label = cluster.get("display_label") or short
+        # Virtual ATCF-style ID so the frontend can index the same way.
+        virtual_id = "DIST-" + short
+        out.append({
+            "atcf_id": virtual_id,
+            "name": label,
+            "lat": float(lat),
+            "lon": float(lon),
+            "vmax_kt": best.get("wind"),
+            "mslp_hpa": best.get("pres"),
+            "is_disturbance": True,
+            "forecast_tau_h": float(best.get("tau", 0.0)),
+            "frac": cluster.get("fraction"),
+        })
+    logger.info("loaded %d cyclogenesis disturbances from %s "
+                "(init=%s, target_tau≈%.1f h)",
+                len(out), url, init_iso, target_tau)
+    return out
+
+
 def _fetch_tle_celestrak(catnr: int) -> str:
     """Fetch a single satellite's current TLE from CelesTrak. Returns the
     raw 3-line block ("NAME\\nLINE1\\nLINE2\\n")."""
@@ -1121,13 +1187,22 @@ def predict_passes(storms: Optional[list[dict]] = None,
                    tles: Optional[dict[int, tuple[str, str, str]]] = None,
                    t0: Optional[_dt] = None,
                    horizon_hours: float = PREDICT_HORIZON_HOURS,
+                   include_disturbances: bool = True,
                    ) -> dict:
     """Build the passes_predicted.json payload. Inputs are optional so
-    callers (tests) can inject fixtures; defaults pull live data."""
+    callers (tests) can inject fixtures; defaults pull live data.
+
+    When `include_disturbances` is True (default), FNV3 cyclogenesis
+    disturbances (D1, D2, ...) are also predicted alongside ATCF storms.
+    Each disturbance is treated as a virtual storm at its best-estimate
+    forecast position. Useful in off-season when no formal TCs exist
+    but model-flagged developing systems do."""
     if t0 is None:
         t0 = _dt.now(timezone.utc).replace(microsecond=0)
     if storms is None:
         storms = _fetch_active_storms()
+        if include_disturbances:
+            storms = list(storms) + _fetch_genesis_disturbances()
     if tles is None:
         tles = _get_tles()
 
@@ -1174,13 +1249,22 @@ def predict_passes(storms: Optional[list[dict]] = None,
                     "eta_on_tcatlas": (scan_start + latency).isoformat(),
                 })
         passes_out.sort(key=lambda p: p["predicted_scan_start"])
-        storm_out.append({
+        rec = {
             "atcf_id": atcf_id,
             "name": name,
             "lat": float(lat),
             "lon": float(lon),
             "passes": passes_out,
-        })
+        }
+        # Surface the disturbance flag so the frontend can render
+        # forecast-only rows distinctly from active TCs.
+        if st.get("is_disturbance"):
+            rec["is_disturbance"] = True
+            if st.get("forecast_tau_h") is not None:
+                rec["forecast_tau_h"] = st["forecast_tau_h"]
+            if st.get("frac") is not None:
+                rec["frac"] = st["frac"]
+        storm_out.append(rec)
 
     return {
         "updated": t0.isoformat(),

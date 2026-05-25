@@ -1071,11 +1071,11 @@
     MWLayer.prototype._updateScheduleSection = function () {
         if (!this._ui || !this._ui.schedule) return;
         var box = this._ui.schedule;
-        var storms = this._activeStorms || [];
-        if (!storms.length) {
-            box.innerHTML = '<div class="tc-mw-schedule-empty">No active ATCF storms</div>';
-            return;
-        }
+        // Display list = active TCs from the API + cyclogenesis
+        // disturbances from the predictions payload (which the backend
+        // tags with is_disturbance:true). Disturbances are rendered with
+        // italic names and a "(forecast)" tag so users can tell them
+        // apart from formal ATCF-tracked systems.
         var manifest = (this._manifest && this._manifest.orbits) || [];
         var pred = this._predictions && Array.isArray(this._predictions.storms)
             ? this._predictions.storms : [];
@@ -1083,11 +1083,36 @@
         for (var pi = 0; pi < pred.length; pi++) {
             predByAtcf[pred[pi].atcf_id] = pred[pi];
         }
+        var displayList = (this._activeStorms || []).map(function (s) {
+            return {
+                atcf_id: s.atcf_id, name: s.name, lat: s.lat, lon: s.lon,
+                vmax_kt: s.vmax_kt, is_disturbance: false
+            };
+        });
+        var seen = {};
+        for (var di = 0; di < displayList.length; di++) {
+            seen[displayList[di].atcf_id] = true;
+        }
+        for (var pj = 0; pj < pred.length; pj++) {
+            var pp = pred[pj];
+            if (!pp.is_disturbance) continue;
+            if (seen[pp.atcf_id]) continue;
+            displayList.push({
+                atcf_id: pp.atcf_id, name: pp.name,
+                lat: pp.lat, lon: pp.lon,
+                vmax_kt: pp.vmax_kt, is_disturbance: true,
+                forecast_tau_h: pp.forecast_tau_h, frac: pp.frac
+            });
+        }
+        if (!displayList.length) {
+            box.innerHTML = '<div class="tc-mw-schedule-empty">No active TCs or developing disturbances</div>';
+            return;
+        }
         var now = Date.now();
 
         var rows = ['<div class="tc-mw-schedule-title">Pass schedule</div>'];
-        for (var si = 0; si < storms.length; si++) {
-            var s = storms[si];
+        for (var si = 0; si < displayList.length; si++) {
+            var s = displayList[si];
             // Latest per sensor from manifest — first newest-first orbit
             // whose bounds cover the storm position.
             var latest = { GMI: null, SSMIS: null, AMSR2: null, ATMS: null };
@@ -1111,14 +1136,24 @@
                 }
             }
 
-            var stormHtml = ['<div class="tc-mw-schedule-storm">'];
-            stormHtml.push(
-                '<div class="tc-mw-schedule-storm-name">'
-                + _esc(s.name || s.atcf_id) + ' &middot; '
-                + _esc(s.atcf_id || '')
-                + (isFinite(s.vmax_kt) ? ' &middot; ' + Math.round(s.vmax_kt) + ' kt' : '')
-                + '</div>'
-            );
+            var stormHtml = ['<div class="tc-mw-schedule-storm'
+                + (s.is_disturbance ? ' is-disturbance' : '') + '">'];
+            var nameHtml = '<div class="tc-mw-schedule-storm-name">'
+                + _esc(s.name || s.atcf_id);
+            if (s.is_disturbance) {
+                // Forecast badge + member-fraction. The atcf_id is the
+                // synthetic "DIST-D1" so it's not super informative —
+                // skip the dot separator + show forecast metadata instead.
+                var pct = isFinite(s.frac) ? Math.round(s.frac * 100) + '%' : null;
+                nameHtml += ' <span class="tc-mw-schedule-forecast-tag">forecast'
+                          + (pct ? ' &middot; ' + pct : '')
+                          + '</span>';
+            } else {
+                nameHtml += ' &middot; ' + _esc(s.atcf_id || '')
+                          + (isFinite(s.vmax_kt) ? ' &middot; ' + Math.round(s.vmax_kt) + ' kt' : '');
+            }
+            nameHtml += '</div>';
+            stormHtml.push(nameHtml);
             for (var sj = 0; sj < KNOWN_SENSORS.length; sj++) {
                 var sk = KNOWN_SENSORS[sj].key;
                 var sLabel = KNOWN_SENSORS[sj].label;
