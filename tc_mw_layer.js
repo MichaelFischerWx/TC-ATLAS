@@ -199,6 +199,20 @@
         { key: 'AMSR2', label: 'AMSR2' }
     ];
 
+    // Products in the order they appear in the picker dropdown.
+    // `composite: true` items are RGB / derived products (37-color, PCT)
+    // and get the categorical chunk legend; the rest are single-pol Tb
+    // fields that get a continuous colorbar.
+    var KNOWN_PRODUCTS = [
+        { key: '37color', label: '37 GHz color',     composite: true  },
+        { key: '89pct',   label: '89 GHz PCT',       composite: false },
+        { key: '37v',     label: '37 GHz V-pol',     composite: false },
+        { key: '37h',     label: '37 GHz H-pol',     composite: false },
+        { key: '89v',     label: '89 GHz V-pol',     composite: false },
+        { key: '89h',     label: '89 GHz H-pol',     composite: false }
+    ];
+    var _knownProductKeys = KNOWN_PRODUCTS.map(function (p) { return p.key; });
+
     function MWLayer(map, opts) {
         opts = opts || {};
         this._map           = map;
@@ -233,7 +247,7 @@
                     else if (prefs.sensors[sk] === true) this._sensors[sk] = true;
                 }
             }
-            if (prefs.product === '37color' || prefs.product === '89pct') {
+            if (prefs.product && _knownProductKeys.indexOf(prefs.product) >= 0) {
                 this._product = prefs.product;
             }
             if (typeof prefs.hours === 'number' && prefs.hours >= 1 && prefs.hours <= this._maxHours) {
@@ -441,11 +455,10 @@
     };
 
     MWLayer.prototype.setProduct = function (p) {
-        if (p !== '37color' && p !== '89pct') return;
+        if (_knownProductKeys.indexOf(p) < 0) return;
         this._product = p;
-        if (this._ui) {
-            var radios = this._ui.container.querySelectorAll('input[name="tc-mw-product-' + this._uid + '"]');
-            for (var i = 0; i < radios.length; i++) radios[i].checked = (radios[i].value === p);
+        if (this._ui && this._ui.productSelect) {
+            this._ui.productSelect.value = p;
         }
         this._updateLegend();
         if (this._enabled) this._renderAll();
@@ -774,13 +787,14 @@
             + '</button>'
             + '<div class="tc-mw-controls">'
             +   '<div class="tc-mw-control-row tc-mw-product-row">'
-            +     '<label class="tc-mw-product-opt">'
-            +       '<input type="radio" name="tc-mw-product-' + this._uid + '" value="37color" checked>'
-            +       '<span>37 GHz color</span>'
-            +     '</label>'
-            +     '<label class="tc-mw-product-opt">'
-            +       '<input type="radio" name="tc-mw-product-' + this._uid + '" value="89pct">'
-            +       '<span>89 GHz PCT</span>'
+            +     '<label class="tc-mw-product-label">Product'
+            +       '<select class="tc-mw-product-select">'
+            +         KNOWN_PRODUCTS.map(function (p) {
+                          return '<option value="' + p.key + '"'
+                              + (p.key === this._product ? ' selected' : '')
+                              + '>' + _esc(p.label) + '</option>';
+                      }.bind(this)).join('')
+            +       '</select>'
             +     '</label>'
             +   '</div>'
             +   '<div class="tc-mw-control-row tc-mw-sensor-row">'
@@ -814,18 +828,14 @@
             + '</div>';
         c.appendChild(wrap);
 
-        var btn      = wrap.querySelector('.tc-mw-toggle');
-        var slider   = wrap.querySelector('.tc-mw-hours-slider');
-        var hoursLbl = wrap.querySelector('.tc-mw-hours-val');
-        var status   = wrap.querySelector('.tc-mw-status');
-        var radios   = wrap.querySelectorAll('input[name="tc-mw-product-' + this._uid + '"]');
-        // Sync the initial product selection if caller overrode the default.
-        for (var ri = 0; ri < radios.length; ri++) {
-            radios[ri].checked = (radios[ri].value === this._product);
-        }
-        if (this._product === '89pct') {
-            // (radio sync above)
-        }
+        var btn            = wrap.querySelector('.tc-mw-toggle');
+        var slider         = wrap.querySelector('.tc-mw-hours-slider');
+        var hoursLbl       = wrap.querySelector('.tc-mw-hours-val');
+        var status         = wrap.querySelector('.tc-mw-status');
+        var productSelect  = wrap.querySelector('.tc-mw-product-select');
+        // Sync the dropdown value with the constructor-resolved product
+        // (covers both opts.product overrides and prefs-restored values).
+        if (productSelect) productSelect.value = this._product;
         // Collect sensor checkbox refs by sensor key, wire change events.
         var sensorChecks = {};
         var sensorBoxes = wrap.querySelectorAll('input[data-tc-mw-sensor]');
@@ -847,6 +857,7 @@
         this._ui = {
             container: wrap, btn: btn, slider: slider,
             hoursLabel: hoursLbl, status: status,
+            productSelect: productSelect,
             sensorChecks: sensorChecks,
             sensorLabels: sensorLabels,
             legend: legend,
@@ -861,12 +872,10 @@
         var self = this;
         btn.addEventListener('click', function () { self.toggle(); });
         slider.addEventListener('input', function () { self.setHours(slider.value); });
-        for (var i = 0; i < radios.length; i++) {
-            (function (r) {
-                r.addEventListener('change', function () {
-                    if (r.checked) self.setProduct(r.value);
-                });
-            })(radios[i]);
+        if (productSelect) {
+            productSelect.addEventListener('change', function () {
+                self.setProduct(productSelect.value);
+            });
         }
         Object.keys(sensorChecks).forEach(function (key) {
             sensorChecks[key].addEventListener('change', function () {
@@ -892,9 +901,19 @@
 
     // Tiny inline guide that flips with the product picker. Helps
     // non-experts read the active color scheme without leaving the map.
+    // Single-pol products share the 89-PCT or 37-color colormap with
+    // per-product Tb ranges — the legend just relabels the bar.
     MWLayer.prototype._updateLegend = function () {
         if (!this._ui || !this._ui.legend) return;
         var html;
+        // (vmin, vmax, title, cmap-class) per single-pol product —
+        // matches the backend SINGLE_POL_RANGE table in mw_ingest.py.
+        var SINGLE_POL_LEGEND = {
+            '37v': { vmin: 180, vmax: 290, title: '37 GHz V-pol TB (K)', bar: 'tc-mw-legend-bar-37' },
+            '37h': { vmin: 130, vmax: 290, title: '37 GHz H-pol TB (K)', bar: 'tc-mw-legend-bar-37' },
+            '89v': { vmin: 180, vmax: 290, title: '89 GHz V-pol TB (K)', bar: 'tc-mw-legend-bar-89' },
+            '89h': { vmin: 130, vmax: 290, title: '89 GHz H-pol TB (K)', bar: 'tc-mw-legend-bar-89' }
+        };
         if (this._product === '89pct') {
             html =
                   '<div class="tc-mw-legend-title">89 GHz PCT (K)</div>'
@@ -902,7 +921,21 @@
                 + '<div class="tc-mw-legend-ticks">'
                 +   '<span>180</span><span>220</span><span>260</span><span>290</span>'
                 + '</div>';
+        } else if (SINGLE_POL_LEGEND[this._product]) {
+            var L = SINGLE_POL_LEGEND[this._product];
+            var midA = Math.round(L.vmin + (L.vmax - L.vmin) / 3);
+            var midB = Math.round(L.vmin + 2 * (L.vmax - L.vmin) / 3);
+            html =
+                  '<div class="tc-mw-legend-title">' + _esc(L.title) + '</div>'
+                + '<div class="tc-mw-legend-bar ' + L.bar + '"></div>'
+                + '<div class="tc-mw-legend-ticks">'
+                +   '<span>' + L.vmin + '</span>'
+                +   '<span>' + midA + '</span>'
+                +   '<span>' + midB + '</span>'
+                +   '<span>' + L.vmax + '</span>'
+                + '</div>';
         } else {
+            // 37color (default)
             html =
                   '<div class="tc-mw-legend-title">37 GHz color</div>'
                 + '<div class="tc-mw-legend-chunks">'

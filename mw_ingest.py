@@ -73,6 +73,11 @@ import numpy as np
 from microwave_api import (
     _compute_37color_swath,
     _compute_89pct_swath,
+    _compute_37v_swath,
+    _compute_37h_swath,
+    _compute_89v_swath,
+    _compute_89h_swath,
+    _nrl_37ghz_cmap,
     _nrl_89ghz_cmap,
 )
 
@@ -360,7 +365,10 @@ _PPS_SENSORS = {
         "fname_re":   r"1C-R\.GPM\.GMI\.[\w\-]+\.(\d{8})-S(\d{6})-E(\d{6})\."
                       r"V\w+\.RT-NC$",
         "platform_fn": lambda f: "GPM",
-        # GMI puts everything in /S1, so both products share one group.
+        # GMI puts the 37 and 89 GHz channels both in /S1 (channels
+        # 5-8), so each product picks just the channels it needs.
+        # Single-pol products read one channel; composite products
+        # read both for the polarization math.
         "products": {
             "37color": {"group": "S1", "channels": {
                 "TB_36.64V": 5, "TB_36.64H": 6,
@@ -368,6 +376,10 @@ _PPS_SENSORS = {
             "89pct":   {"group": "S1", "channels": {
                 "TB_89.0V": 7, "TB_89.0H": 8,
             }},
+            "37v":     {"group": "S1", "channels": {"TB_36.64V": 5}},
+            "37h":     {"group": "S1", "channels": {"TB_36.64H": 6}},
+            "89v":     {"group": "S1", "channels": {"TB_89.0V":  7}},
+            "89h":     {"group": "S1", "channels": {"TB_89.0H":  8}},
         },
     },
     "SSMIS": {
@@ -386,6 +398,10 @@ _PPS_SENSORS = {
             "89pct":   {"group": "S4", "channels": {
                 "TB_91.665V": 0, "TB_91.665H": 1,
             }},
+            "37v":     {"group": "S2", "channels": {"TB_37.0V":    0}},
+            "37h":     {"group": "S2", "channels": {"TB_37.0H":    1}},
+            "89v":     {"group": "S4", "channels": {"TB_91.665V":  0}},
+            "89h":     {"group": "S4", "channels": {"TB_91.665H":  1}},
         },
     },
     "AMSR2": {
@@ -402,6 +418,10 @@ _PPS_SENSORS = {
             "89pct":   {"group": "S5", "channels": {
                 "TB_89.0V": 0, "TB_89.0H": 1,
             }},
+            "37v":     {"group": "S4", "channels": {"TB_36.5V": 0}},
+            "37h":     {"group": "S4", "channels": {"TB_36.5H": 1}},
+            "89v":     {"group": "S5", "channels": {"TB_89.0V": 0}},
+            "89h":     {"group": "S5", "channels": {"TB_89.0H": 1}},
         },
     },
 }
@@ -557,13 +577,44 @@ def render_product(ds_bt, ds_geo, sensor: str, product: str
                    ) -> RenderedProduct:
     """Render one product from one swath. Each product may need a
     different (ds_bt, ds_geo) — caller is responsible for opening the
-    right group(s) per product (see read_tcprimed_for_product)."""
+    right group(s) per product (see read_tcprimed_for_product).
+
+    Products:
+      37color — NRL 37 GHz RGB composite (V+H polarization recipe)
+      89pct   — 89 GHz polarization-corrected temperature (V+H formula)
+      37v     — raw 37 GHz V-pol brightness temperature
+      37h     — raw 37 GHz H-pol brightness temperature
+      89v     — raw 89 GHz V-pol brightness temperature
+      89h     — raw 89 GHz H-pol brightness temperature
+    Single-pol products give researchers access to the underlying TB
+    fields so they can do their own physics (e.g. compute their own
+    polarization indices, sample emissivity contrasts, etc.).
+    """
+    # vmin/vmax ranges per single-pol product. V-pol ocean values are
+    # higher than H-pol because ocean emissivity is V-dominated at these
+    # frequencies; bumping V-pol's vmin pulls dynamic range over the
+    # convective signal band rather than wasting it on warm ocean.
+    SINGLE_POL_RANGE = {
+        "37v": (180, 290),  # V-pol ocean ~200K, land/rain ~270-290K
+        "37h": (130, 290),  # H-pol ocean ~140K, land ~270K (huge dynamic range)
+        "89v": (180, 290),  # V-pol 89 GHz: ocean ~250K, ice scattering down to 180K
+        "89h": (130, 290),  # H-pol 89 GHz: ocean ~210K, ice down to 130K
+    }
+
     if product == "37color":
         gridded = _compute_37color_swath(ds_bt, ds_geo, sensor)
         data = gridded["data"]               # (H, W, 3) uint8
         valid = ~np.all(data == 0, axis=-1)  # transparent where all-zero
     elif product == "89pct":
         gridded = _compute_89pct_swath(ds_bt, ds_geo, sensor)
+        data = gridded["data"].astype(np.float32)
+        valid = np.isfinite(data)
+    elif product in SINGLE_POL_RANGE:
+        compute_fn = {
+            "37v": _compute_37v_swath, "37h": _compute_37h_swath,
+            "89v": _compute_89v_swath, "89h": _compute_89h_swath,
+        }[product]
+        gridded = compute_fn(ds_bt, ds_geo, sensor)
         data = gridded["data"].astype(np.float32)
         valid = np.isfinite(data)
     else:
@@ -587,15 +638,24 @@ def render_product(ds_bt, ds_geo, sensor: str, product: str
             valid.astype(np.uint8), lat_min, lat_max,
         ).astype(bool)
         png = _encode_rgb_png(warped_rgb, warped_valid)
-    else:
+    elif product == "89pct":
         warped = _warp_eq_to_mercator_bbox(data, lat_min, lat_max)
         # vmin=180 (was 150) better reveals convective detail at tropical
         # latitudes where most pixels are warm ocean — values below ~200 K
         # are rare and meaningful (deep ice scattering), so a tighter floor
         # keeps the colormap's dynamic range over the band that actually
-        # carries signal. Keep the frontend legend's 150-290 K axis in
-        # rough sync (~180-290 K shows correctly with a labeled tick at 200).
+        # carries signal. Keep the frontend legend's 180-290 K ticks in sync.
         png = _encode_scalar_png(warped, _nrl_89ghz_cmap(), vmin=180, vmax=290)
+        warped_valid = np.isfinite(warped)
+    else:
+        # Single-pol products (37v / 37h / 89v / 89h). Use the matching
+        # NRL colormap per frequency (37 GHz colormap is calibrated to
+        # rain-rate signal at that frequency; 89 GHz colormap targets
+        # ice scattering) and the per-product vmin/vmax from above.
+        warped = _warp_eq_to_mercator_bbox(data, lat_min, lat_max)
+        vmin, vmax = SINGLE_POL_RANGE[product]
+        cmap = _nrl_37ghz_cmap() if product.startswith("37") else _nrl_89ghz_cmap()
+        png = _encode_scalar_png(warped, cmap, vmin=vmin, vmax=vmax)
         warped_valid = np.isfinite(warped)
 
     footprint = _footprint_geojson(warped_valid, bounds)

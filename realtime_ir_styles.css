@@ -3188,6 +3188,35 @@ html.sub-only-mode #tc-build-chip { display: none !important; }
         #0b1d4f 0%, #1d4ed8 20%, #06b6d4 40%,
         #16a34a 55%, #facc15 75%, #dc2626 100%);
 }
+.tc-mw-legend-bar-37 {
+    /* 37 GHz NRL ramp — similar but slightly shifted gradient since
+       37 GHz convective signal lives in a different Tb range. Close
+       approximation of _nrl_37ghz_cmap() in microwave_api.py. */
+    background: linear-gradient(to right,
+        #1e1b4b 0%, #4f46e5 20%, #06b6d4 40%,
+        #22c55e 55%, #facc15 75%, #ef4444 100%);
+}
+.tc-mw-product-select {
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 3px;
+    color: #e2e8f0;
+    font-size: 0.68rem;
+    padding: 2px 4px;
+    cursor: pointer;
+    font-family: inherit;
+    margin-left: 4px;
+}
+.tc-mw-product-select:focus { outline: 1px solid #4ade80; }
+.tc-mw-product-label {
+    display: inline-flex;
+    align-items: center;
+    color: #94a3b8;
+    text-transform: uppercase;
+    font-size: 0.58rem;
+    letter-spacing: 0.04em;
+    font-weight: 600;
+}
 .tc-mw-legend-chunks {
     display: flex;
     width: 100%;
