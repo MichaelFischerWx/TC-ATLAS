@@ -675,11 +675,18 @@
         };
         // Sync on construction in case prefs auto-enabled the layer.
         setTimeout(_rtUpdateMwTopBtn, 0);
-        // If a storm list was already cached when the layer mounted (we
-        // construct lazily on first Layers-panel open), seed it now so
-        // storm-highlighting works on the first paint.
+        // If a storm list was already cached when the layer mounted,
+        // seed it now so storm-highlighting works on the first paint.
         if (stormData && stormData.length) {
             _rtMwLayer.setActiveStorms(stormData);
+        }
+        // Park the UI host inside the popover (its canonical home).
+        // The popover is hidden until the chevron is clicked, but the
+        // host needs to be in a styled parent so geometry layout works
+        // before the first reveal.
+        var pop = document.getElementById('ir-mw-popover');
+        if (pop && _rtMwHost && _rtMwHost.parentNode !== pop) {
+            pop.appendChild(_rtMwHost);
         }
         return _rtMwLayer;
     }
@@ -2080,28 +2087,49 @@
                 var mwExpandBtn = L.DomUtil.create('button', 'ir-mw-expand-btn', mwGroup);
                 mwExpandBtn.id = 'ir-mw-expand-btn';
                 mwExpandBtn.type = 'button';
-                mwExpandBtn.title = 'Microwave options (product, sensors, time, legend)';
+                mwExpandBtn.title = 'Microwave options (product, sensors, time, legend, opacity)';
                 mwExpandBtn.innerHTML = '<span aria-hidden="true">▾</span>';
-                mwExpandBtn.addEventListener('click', function () {
-                    // Open the Layers panel if it's not already, then
-                    // scroll the MW section into view and briefly pulse
-                    // it so users see where the options live. The
-                    // toggleLayersPanel function is hoisted by the time
-                    // this click fires, but guard anyway.
-                    if (typeof toggleLayersPanel !== 'function') return;
-                    if (typeof _rtLayersPanelOpen !== 'undefined' && !_rtLayersPanelOpen) {
-                        toggleLayersPanel();
+
+                // Popover that holds the MW controls. Sibling of the
+                // pill group so absolute positioning anchors to wrap.
+                // Hidden by default — the chevron toggles visibility
+                // and the helper's UI host lives inside permanently.
+                var mwPopover = L.DomUtil.create('div', 'ir-mw-popover', wrap);
+                mwPopover.id = 'ir-mw-popover';
+                mwPopover.style.display = 'none';
+                // Stop wheel + click from reaching the map.
+                L.DomEvent.disableClickPropagation(mwPopover);
+                L.DomEvent.disableScrollPropagation(mwPopover);
+
+                mwExpandBtn.addEventListener('click', function (e) {
+                    e.stopPropagation();
+                    // Lazily construct the helper so the controls UI
+                    // (and its host) exists. _rtEnsureMwLayer hands
+                    // _rtMwHost; we then re-parent it into the popover.
+                    var inst = _rtEnsureMwLayer();
+                    if (inst && _rtMwHost && _rtMwHost.parentNode !== mwPopover) {
+                        mwPopover.appendChild(_rtMwHost);
                     }
-                    setTimeout(function () {
-                        var section = document.getElementById('ir-mw-section');
-                        if (section) {
-                            section.scrollIntoView({ block: 'center', behavior: 'smooth' });
-                            section.classList.add('ir-mw-pulse');
-                            setTimeout(function () {
-                                section.classList.remove('ir-mw-pulse');
-                            }, 1500);
-                        }
-                    }, 60);
+                    var visible = mwPopover.style.display !== 'none';
+                    mwPopover.style.display = visible ? 'none' : 'block';
+                    mwExpandBtn.classList.toggle('open', !visible);
+                });
+
+                // Close on click outside (anywhere not inside the popover
+                // or its trigger). Bound once at construction.
+                document.addEventListener('mousedown', function (e) {
+                    if (mwPopover.style.display === 'none') return;
+                    if (mwPopover.contains(e.target)) return;
+                    if (mwExpandBtn.contains(e.target)) return;
+                    mwPopover.style.display = 'none';
+                    mwExpandBtn.classList.remove('open');
+                });
+                // Close on Escape for keyboard users.
+                document.addEventListener('keydown', function (e) {
+                    if (e.key === 'Escape' && mwPopover.style.display !== 'none') {
+                        mwPopover.style.display = 'none';
+                        mwExpandBtn.classList.remove('open');
+                    }
                 });
 
                 // ── DeepMind WeatherLab status pill ──────────────────
@@ -9812,13 +9840,11 @@
             }
         }
 
-        // ── MICROWAVE (recent GMI/GPM passes) ──────────────────────
-        // Placeholder slot — the actual UI (toggle + product radio +
-        // hours slider + status line) lives in a persistent DOM host
-        // managed by tc_mw_layer.js; we re-parent it into this slot on
-        // every panel render so the helper's listeners survive intact.
-        html += '<div class="ir-global-menu-section with-divider">Microwave</div>';
-        html += '<div id="ir-mw-section" class="ir-mw-section-slot"></div>';
+        // ── Microwave is NOT listed here ──────────────────────────
+        // The MW controls live in their own popover anchored to the
+        // top-level "Microwave" pill (sibling of IR/GeoColor). One
+        // canonical home avoids the user having to learn two places
+        // for the same controls.
 
         // ── Shared opacity slider (drives every env-style overlay) ──
         html += '<div class="ir-global-menu-opacity-wrap">'
@@ -9834,20 +9860,6 @@
         }
 
         content.innerHTML = html;
-
-        // ── Microwave overlay UI mount ──────────────────────────────
-        // Lazily build the layer + its host on first render, then move
-        // the host into the section slot. Re-parenting is cheap and
-        // preserves the helper's internal listeners + state.
-        var mwSlot = content.querySelector('#ir-mw-section');
-        if (mwSlot) {
-            var inst = _rtEnsureMwLayer();
-            if (inst && _rtMwHost) {
-                mwSlot.appendChild(_rtMwHost);
-            } else {
-                mwSlot.innerHTML = '<div class="ir-global-menu-empty">Microwave helper not loaded.</div>';
-            }
-        }
 
         // ── Wire up change handlers ─────────────────────────────────
         // The whole row is a <label> wrapping the checkbox, so any click

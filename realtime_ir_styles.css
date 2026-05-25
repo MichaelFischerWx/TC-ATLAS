@@ -1806,22 +1806,46 @@ html, body { margin: 0; padding: 0; }
     font-size: 0.65rem;
     color: #94a3b8;
     cursor: pointer;
-    transition: background 0.15s, color 0.15s;
+    transition: background 0.15s, color 0.15s, transform 0.15s;
 }
 .ir-mw-expand-btn:hover {
     background: rgba(74, 155, 110, 0.18);
     color: #ffffff;
 }
-/* Pulse animation when the user clicks the chevron — draws the eye
-   to the just-revealed Microwave section inside the Layers panel. */
-@keyframes ir-mw-pulse {
-    0%   { box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.55); }
-    50%  { box-shadow: 0 0 0 6px rgba(74, 222, 128, 0.30); }
-    100% { box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.0); }
+.ir-mw-expand-btn.open {
+    background: rgba(74, 155, 110, 0.24);
+    color: #ffffff;
 }
-.ir-mw-pulse {
-    animation: ir-mw-pulse 1.4s ease-out 1;
-    border-radius: 6px;
+.ir-mw-expand-btn.open span {
+    display: inline-block;
+    transform: rotate(180deg);
+}
+
+/* MW options popover — anchored to the wrap (Leaflet control) so it
+   floats out under the pill group without colliding with the Layers
+   panel. Width sized for the controls (product + sensors + sliders +
+   legend + scrubber + opacity). Right-aligned because the pill is in
+   the top-right of the map. */
+.ir-mw-popover {
+    position: absolute;
+    right: 0;
+    top: 100%;
+    margin-top: 6px;
+    min-width: 280px;
+    max-width: 320px;
+    background: rgba(15, 22, 36, 0.96);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 8px;
+    padding: 10px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+    z-index: 1000;
+}
+/* Popover hosts the same .tc-mw-ui block as the (former) Layers
+   panel slot used to. Tighten the wrap so it fits the popover. */
+.ir-mw-popover .tc-mw-ui {
+    width: 100%;
 }
 
 /* Labels toggle position — sits in the top-left stack underneath the
