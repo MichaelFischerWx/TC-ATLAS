@@ -132,7 +132,7 @@ if gcloud run jobs describe "${JOB_NAME}" --region "${REGION}" >/dev/null 2>&1; 
         --memory 2Gi \
         --cpu 2 \
         --max-retries 1 \
-        --task-timeout 1200 \
+        --task-timeout 3600 \
         --set-env-vars "GCS_MW_BUCKET=${BUCKET}" \
         --set-secrets "PPS_USER=pps-user:latest,PPS_PASS=pps-pass:latest"
 else
@@ -142,7 +142,7 @@ else
         --memory 2Gi \
         --cpu 2 \
         --max-retries 1 \
-        --task-timeout 1200 \
+        --task-timeout 3600 \
         --set-env-vars "GCS_MW_BUCKET=${BUCKET}" \
         --set-secrets "PPS_USER=pps-user:latest,PPS_PASS=pps-pass:latest"
 fi
