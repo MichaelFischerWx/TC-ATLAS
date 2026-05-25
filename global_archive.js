@@ -896,87 +896,10 @@ function initBrowserMap() {
     };
     legend.addTo(stormMap);
 
-    // ── Microwave passes (last N hrs) overlay ────────────────
-    // Mounted as a top-right Leaflet control using the same split-pill
-    // pattern as RT Monitor: a "Microwave" pill toggles the layer on/off,
-    // and a ▾ chevron next to it opens a popover with the full controls
-    // (product picker, sensor toggles, time scrubber, opacity slider,
-    // legend, schedule). Without this split, the helper's full UI took
-    // over the whole storm-browser map (the popover host has lots of
-    // vertical content).
-    if (window.TCMicrowave) {
-        var mwControl = L.control({ position: 'topright' });
-        mwControl.onAdd = function () {
-            var wrap = L.DomUtil.create('div', 'ga-mw-wrap');
-            L.DomEvent.disableClickPropagation(wrap);
-            L.DomEvent.disableScrollPropagation(wrap);
-
-            // Pill group: main toggle + chevron
-            var group = L.DomUtil.create('div', 'ga-mw-toggle-group', wrap);
-            var pill = L.DomUtil.create('button', 'ga-mw-toggle-btn', group);
-            pill.type = 'button';
-            pill.title = 'Toggle real-time microwave swaths';
-            pill.innerHTML = '<span class="ga-mw-toggle-dot"></span>'
-                          + '<span>Microwave</span>';
-            var chev = L.DomUtil.create('button', 'ga-mw-expand-btn', group);
-            chev.type = 'button';
-            chev.title = 'Microwave options (product, sensors, time, legend, opacity)';
-            chev.innerHTML = '<span aria-hidden="true">▾</span>';
-
-            // Popover sibling — hidden by default, holds the helper's UI host
-            var popover = L.DomUtil.create('div', 'ga-mw-popover', wrap);
-            popover.style.display = 'none';
-
-            var inst = window.TCMicrowave.create(stormMap, {
-                container: popover,
-                defaultHours: 6,
-                maxHours: 48,
-                compact: false
-            });
-
-            // The helper renders its own "Microwave passes" toggle inside
-            // the popover. Our pill takes over that role, so hide it.
-            var helperToggle = popover.querySelector('.tc-mw-toggle');
-            if (helperToggle) helperToggle.style.display = 'none';
-
-            // Sync our pill's visual state with the helper's enabled state.
-            function syncPill() {
-                pill.classList.toggle('active', inst.isEnabled());
-            }
-            pill.addEventListener('click', function (e) {
-                e.stopPropagation();
-                inst.toggle();
-                syncPill();
-            });
-
-            chev.addEventListener('click', function (e) {
-                e.stopPropagation();
-                var visible = popover.style.display !== 'none';
-                popover.style.display = visible ? 'none' : 'block';
-                chev.classList.toggle('open', !visible);
-            });
-
-            // Click outside / Escape closes the popover (mirrors RT Monitor).
-            document.addEventListener('mousedown', function (e) {
-                if (popover.style.display === 'none') return;
-                if (popover.contains(e.target)) return;
-                if (chev.contains(e.target)) return;
-                popover.style.display = 'none';
-                chev.classList.remove('open');
-            });
-            document.addEventListener('keydown', function (e) {
-                if (e.key === 'Escape' && popover.style.display !== 'none') {
-                    popover.style.display = 'none';
-                    chev.classList.remove('open');
-                }
-            });
-
-            // Reflect any prefs-restored enabled state on the first paint.
-            syncPill();
-            return wrap;
-        };
-        mwControl.addTo(stormMap);
-    }
+    // (Microwave passes overlay deliberately NOT mounted on Global Archive
+    // — that layer is a real-time feature with a rolling 48-hour window,
+    // not relevant to a historical archive of TCs going back to 1842.
+    // The MW control still lives on the Real-Time Monitor page.)
 }
 
 function renderMarkers(storms) {
