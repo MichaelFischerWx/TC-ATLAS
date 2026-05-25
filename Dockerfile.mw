@@ -44,7 +44,8 @@ RUN pip install --no-cache-dir \
         google-cloud-storage \
         scikit-image \
         shapely \
-        fastapi
+        fastapi \
+        sgp4
 
 # mw_ingest reuses _compute_37color_swath / _compute_89pct_swath /
 # _nrl_89ghz_cmap from microwave_api so the math stays 1:1 with the

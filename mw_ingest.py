@@ -95,6 +95,50 @@ MANIFEST_RETENTION_HOURS = 48
 
 WEB_MERC_LAT_MAX = 85.05112877980659  # arctan(sinh(pi)) * 180/pi
 
+# ---------------------------------------------------------------------------
+# Pass-prediction config (TLE-based SGP4 propagation)
+# ---------------------------------------------------------------------------
+# Active-storm API (defaults to the prod TC-ATLAS API) — public endpoint,
+# no auth needed. Override with TC_ATLAS_API_BASE for staging.
+TC_ATLAS_API_BASE = os.environ.get(
+    "TC_ATLAS_API_BASE",
+    "https://tc-atlas-api-361010099051.us-east1.run.app",
+)
+CELESTRAK_TLE_URL = (
+    "https://celestrak.org/NORAD/elements/gp.php?CATNR={catnr}&FORMAT=TLE"
+)
+TLES_CACHE_KEY = "tles_latest.txt"
+TLES_CACHE_MAX_AGE_HOURS = 6   # refresh from CelesTrak at most every 6 h
+PASSES_KEY = "passes_predicted.json"
+PREDICT_HORIZON_HOURS = 24
+PREDICT_STEP_SECONDS = 60      # 1-min propagation step
+
+# Satellites we ingest from. catnr = NORAD ID; swath_half_km is the
+# sensor's swath half-width (km) used as the pass-detection radius.
+# nrt_latency_min is the empirical lag between scan_start and when the
+# corresponding granule lands in TC-ATLAS GCS (measured from current
+# ingestion timing — easy to tune as PPS/JAXA pipelines change).
+GMI_NRT_LATENCY_MIN = 45
+SSMIS_NRT_LATENCY_MIN = 180
+AMSR2_NRT_LATENCY_MIN = 200
+
+PREDICT_SATELLITES = [
+    {"platform": "GPM",     "sensor": "GMI",   "catnr": 39574,
+     "swath_half_km": 445.0, "nrt_latency_min": GMI_NRT_LATENCY_MIN},
+    {"platform": "F16",     "sensor": "SSMIS", "catnr": 33591,
+     "swath_half_km": 875.0, "nrt_latency_min": SSMIS_NRT_LATENCY_MIN},
+    {"platform": "F17",     "sensor": "SSMIS", "catnr": 34938,
+     "swath_half_km": 875.0, "nrt_latency_min": SSMIS_NRT_LATENCY_MIN},
+    {"platform": "F18",     "sensor": "SSMIS", "catnr": 35951,
+     "swath_half_km": 875.0, "nrt_latency_min": SSMIS_NRT_LATENCY_MIN},
+    {"platform": "GCOM-W1", "sensor": "AMSR2", "catnr": 38337,
+     "swath_half_km": 725.0, "nrt_latency_min": AMSR2_NRT_LATENCY_MIN},
+]
+
+EARTH_RADIUS_KM = 6371.0
+WGS84_A_KM = 6378.137           # semi-major axis (equatorial)
+WGS84_F = 1.0 / 298.257223563   # flattening
+
 
 # ---------------------------------------------------------------------------
 # GCS helpers
@@ -799,6 +843,342 @@ def process_one(reader_path: str, sensor: str,
 
 
 # ---------------------------------------------------------------------------
+# Pass prediction — TLE fetch, SGP4 propagation, storm-relative geometry
+# ---------------------------------------------------------------------------
+def _fetch_active_storms() -> list[dict]:
+    """Pull current ATCF active storms from the TC-ATLAS API. Returns a
+    list of {atcf_id, name, lat, lon, ...}. No auth required."""
+    import requests
+    url = f"{TC_ATLAS_API_BASE}/ir-monitor/active-storms"
+    r = requests.get(url, timeout=30)
+    r.raise_for_status()
+    payload = r.json()
+    return payload.get("storms", []) or []
+
+
+def _fetch_tle_celestrak(catnr: int) -> str:
+    """Fetch a single satellite's current TLE from CelesTrak. Returns the
+    raw 3-line block ("NAME\\nLINE1\\nLINE2\\n")."""
+    import requests
+    url = CELESTRAK_TLE_URL.format(catnr=catnr)
+    r = requests.get(url, timeout=30)
+    r.raise_for_status()
+    text = r.text.strip()
+    if not text or "No GP data found" in text:
+        raise RuntimeError(f"CelesTrak returned no TLE for CATNR={catnr}")
+    return text + "\n"
+
+
+def _load_cached_tles() -> Optional[dict[int, tuple[str, str, str]]]:
+    """Return {catnr: (name, line1, line2)} from gs://.../tles_latest.txt
+    if the cache exists and is fresh; otherwise None. Cache file is a
+    plain concatenation of 3-line TLE blocks with a leading "# updated:"
+    timestamp comment.
+    """
+    txt = _download_text(TLES_CACHE_KEY)
+    if not txt:
+        return None
+    lines = txt.splitlines()
+    if not lines or not lines[0].startswith("# updated:"):
+        return None
+    try:
+        updated = _dt.fromisoformat(lines[0].split("# updated:", 1)[1].strip())
+    except Exception:
+        return None
+    age = _dt.now(timezone.utc) - updated
+    if age > timedelta(hours=TLES_CACHE_MAX_AGE_HOURS):
+        return None
+    # Parse 3-line groups (name, line1, line2) skipping comment lines.
+    blocks: dict[int, tuple[str, str, str]] = {}
+    buf: list[str] = []
+    for raw in lines[1:]:
+        if not raw.strip() or raw.startswith("#"):
+            continue
+        buf.append(raw.rstrip())
+        if len(buf) == 3:
+            name, l1, l2 = buf
+            try:
+                catnr = int(l1[2:7])
+                blocks[catnr] = (name.strip(), l1, l2)
+            except Exception:
+                pass
+            buf = []
+    return blocks or None
+
+
+def _save_tle_cache(tles: dict[int, tuple[str, str, str]]) -> None:
+    """Write the cache file with a timestamp header."""
+    now = _dt.now(timezone.utc).isoformat()
+    lines = [f"# updated: {now}"]
+    for catnr, (name, l1, l2) in tles.items():
+        lines.extend([name, l1, l2])
+    payload = "\n".join(lines) + "\n"
+    _upload_bytes(
+        TLES_CACHE_KEY,
+        payload.encode("utf-8"),
+        "text/plain",
+        cache_seconds=60,
+    )
+
+
+def _get_tles() -> dict[int, tuple[str, str, str]]:
+    """Return {catnr: (name, line1, line2)} for every PREDICT_SATELLITES
+    entry. Uses the GCS cache when fresh; otherwise re-fetches from
+    CelesTrak and refreshes the cache."""
+    cached = _load_cached_tles()
+    needed = {s["catnr"] for s in PREDICT_SATELLITES}
+    if cached and needed.issubset(cached.keys()):
+        logger.info("using cached TLEs from gs://%s/%s",
+                    MW_BUCKET, TLES_CACHE_KEY)
+        return cached
+
+    logger.info("fetching fresh TLEs from CelesTrak (cache miss or stale)")
+    out: dict[int, tuple[str, str, str]] = {}
+    for spec in PREDICT_SATELLITES:
+        catnr = spec["catnr"]
+        try:
+            block = _fetch_tle_celestrak(catnr)
+            parts = [ln for ln in block.splitlines() if ln.strip()]
+            if len(parts) < 3:
+                raise RuntimeError(f"malformed TLE for {catnr}: {block!r}")
+            name, l1, l2 = parts[0].strip(), parts[1], parts[2]
+            out[catnr] = (name, l1, l2)
+        except Exception as exc:
+            logger.error("TLE fetch failed for CATNR=%d (%s): %s",
+                         catnr, spec["platform"], exc)
+    if out:
+        try:
+            _save_tle_cache(out)
+        except Exception as exc:
+            logger.warning("TLE cache upload failed: %s", exc)
+    return out
+
+
+def _eci_to_geodetic_subpoint(r_eci_km: tuple[float, float, float],
+                              when_utc: _dt) -> tuple[float, float]:
+    """Convert ECI (TEME) position to (lat_deg, lon_deg) sub-point.
+
+    Uses Greenwich Mean Sidereal Time (IAU 1982 approximation, good to
+    arcseconds — far better than needed for swath-overlap detection) to
+    rotate ECI → ECEF, then WGS84 closed-form ECEF → geodetic.
+    """
+    x, y, z = r_eci_km
+
+    # Julian date (UT1 ≈ UTC for this purpose; sub-arcsecond error)
+    yr = when_utc.year
+    mo = when_utc.month
+    day = when_utc.day
+    hr = when_utc.hour
+    mn = when_utc.minute
+    sc = when_utc.second + when_utc.microsecond * 1e-6
+    if mo <= 2:
+        yr -= 1
+        mo += 12
+    A = yr // 100
+    B = 2 - A + A // 4
+    jd0 = int(365.25 * (yr + 4716)) + int(30.6001 * (mo + 1)) \
+          + day + B - 1524.5
+    ut = (hr + mn / 60.0 + sc / 3600.0) / 24.0
+    jd = jd0 + ut
+
+    # GMST (IAU 1982 polynomial), in radians.
+    T = (jd - 2451545.0) / 36525.0
+    gmst_sec = (67310.54841
+                + (876600.0 * 3600.0 + 8640184.812866) * T
+                + 0.093104 * T * T
+                - 6.2e-6 * T * T * T)
+    gmst_rad = (gmst_sec % 86400.0) / 240.0  # 86400 s / 360 deg → 240 s/deg
+    gmst_rad = np.radians(gmst_rad)
+
+    cos_g = np.cos(gmst_rad)
+    sin_g = np.sin(gmst_rad)
+    x_ecef = cos_g * x + sin_g * y
+    y_ecef = -sin_g * x + cos_g * y
+    z_ecef = z
+
+    # WGS84 ECEF → geodetic (Bowring closed-form). For swath-radius checks
+    # the sub-degree differences between geodetic and geocentric latitude
+    # matter at high latitudes but are still well within sensor swath
+    # widths (hundreds of km).
+    a = WGS84_A_KM
+    f = WGS84_F
+    e2 = 2.0 * f - f * f
+    b = a * (1.0 - f)
+    ep2 = (a * a - b * b) / (b * b)
+    p = np.sqrt(x_ecef * x_ecef + y_ecef * y_ecef)
+    theta = np.arctan2(z_ecef * a, p * b)
+    lat = np.arctan2(z_ecef + ep2 * b * np.sin(theta) ** 3,
+                     p - e2 * a * np.cos(theta) ** 3)
+    lon = np.arctan2(y_ecef, x_ecef)
+    lat_deg = float(np.degrees(lat))
+    lon_deg = float(np.degrees(lon))
+    # Wrap lon to [-180, 180].
+    if lon_deg > 180.0:
+        lon_deg -= 360.0
+    elif lon_deg < -180.0:
+        lon_deg += 360.0
+    return lat_deg, lon_deg
+
+
+def _great_circle_km(lat1: float, lon1: float,
+                     lat2: float, lon2: float) -> float:
+    """Spherical great-circle distance in km (Haversine)."""
+    phi1 = np.radians(lat1)
+    phi2 = np.radians(lat2)
+    dphi = np.radians(lat2 - lat1)
+    dlam = np.radians(lon2 - lon1)
+    a = (np.sin(dphi / 2) ** 2
+         + np.cos(phi1) * np.cos(phi2) * np.sin(dlam / 2) ** 2)
+    return float(2 * EARTH_RADIUS_KM * np.arcsin(np.sqrt(min(1.0, a))))
+
+
+def _propagate_subpoints(line1: str, line2: str,
+                         t0: _dt, horizon: timedelta,
+                         step_seconds: int = PREDICT_STEP_SECONDS
+                         ) -> list[tuple[_dt, float, float]]:
+    """Run SGP4 from t0 → t0+horizon at `step_seconds` cadence; return
+    [(when_utc, sublat_deg, sublon_deg), ...]. Skips steps where SGP4
+    errors (rare for healthy TLEs over a 24-h window)."""
+    from sgp4.api import Satrec, jday
+    sat = Satrec.twoline2rv(line1, line2)
+    n_steps = int(horizon.total_seconds() // step_seconds) + 1
+    out: list[tuple[_dt, float, float]] = []
+    for i in range(n_steps):
+        when = t0 + timedelta(seconds=i * step_seconds)
+        sc = when.second + when.microsecond * 1e-6
+        jd, fr = jday(when.year, when.month, when.day,
+                      when.hour, when.minute, sc)
+        e, r, _v = sat.sgp4(jd, fr)
+        if e != 0:
+            continue
+        lat, lon = _eci_to_geodetic_subpoint(r, when)
+        out.append((when, lat, lon))
+    return out
+
+
+def _find_passes_for_storm(subpoints: list[tuple[_dt, float, float]],
+                           storm_lat: float, storm_lon: float,
+                           swath_half_km: float
+                           ) -> list[tuple[_dt, float]]:
+    """Return [(scan_start_utc, min_distance_km), ...] for every local
+    minimum of distance(sat-subpoint, storm) below `swath_half_km`.
+
+    A "pass" is a contiguous run of steps under the threshold; we report
+    the timestamp of the minimum-distance step inside each run."""
+    if not subpoints:
+        return []
+    passes: list[tuple[_dt, float]] = []
+    in_pass = False
+    best_t: Optional[_dt] = None
+    best_d = float("inf")
+    for when, sublat, sublon in subpoints:
+        d = _great_circle_km(sublat, sublon, storm_lat, storm_lon)
+        if d <= swath_half_km:
+            if not in_pass:
+                in_pass = True
+                best_t, best_d = when, d
+            elif d < best_d:
+                best_t, best_d = when, d
+        else:
+            if in_pass and best_t is not None:
+                passes.append((best_t, best_d))
+                in_pass = False
+                best_t, best_d = None, float("inf")
+    if in_pass and best_t is not None:
+        passes.append((best_t, best_d))
+    return passes
+
+
+def predict_passes(storms: Optional[list[dict]] = None,
+                   tles: Optional[dict[int, tuple[str, str, str]]] = None,
+                   t0: Optional[_dt] = None,
+                   horizon_hours: float = PREDICT_HORIZON_HOURS,
+                   ) -> dict:
+    """Build the passes_predicted.json payload. Inputs are optional so
+    callers (tests) can inject fixtures; defaults pull live data."""
+    if t0 is None:
+        t0 = _dt.now(timezone.utc).replace(microsecond=0)
+    if storms is None:
+        storms = _fetch_active_storms()
+    if tles is None:
+        tles = _get_tles()
+
+    horizon = timedelta(hours=horizon_hours)
+    # Pre-propagate each satellite once; reuse the subpoint stream
+    # across all storms.
+    propagated: dict[int, list[tuple[_dt, float, float]]] = {}
+    for spec in PREDICT_SATELLITES:
+        catnr = spec["catnr"]
+        if catnr not in tles:
+            logger.warning("no TLE for CATNR=%d (%s) — skipping",
+                           catnr, spec["platform"])
+            continue
+        _name, l1, l2 = tles[catnr]
+        try:
+            propagated[catnr] = _propagate_subpoints(l1, l2, t0, horizon)
+        except Exception as exc:
+            logger.error("SGP4 propagation failed for %s (%d): %s",
+                         spec["platform"], catnr, exc)
+
+    storm_out: list[dict] = []
+    for st in storms:
+        atcf_id = st.get("atcf_id") or st.get("storm_id") or ""
+        name = st.get("name") or ""
+        lat = st.get("lat")
+        lon = st.get("lon")
+        if lat is None or lon is None:
+            logger.warning("storm %s missing lat/lon — skipping", atcf_id)
+            continue
+        passes_out: list[dict] = []
+        for spec in PREDICT_SATELLITES:
+            sub = propagated.get(spec["catnr"])
+            if not sub:
+                continue
+            hits = _find_passes_for_storm(
+                sub, float(lat), float(lon), spec["swath_half_km"])
+            latency = timedelta(minutes=spec["nrt_latency_min"])
+            for scan_start, min_d in hits:
+                passes_out.append({
+                    "sensor": spec["sensor"],
+                    "platform": spec["platform"],
+                    "predicted_scan_start": scan_start.isoformat(),
+                    "min_distance_km": round(min_d, 1),
+                    "eta_on_tcatlas": (scan_start + latency).isoformat(),
+                })
+        passes_out.sort(key=lambda p: p["predicted_scan_start"])
+        storm_out.append({
+            "atcf_id": atcf_id,
+            "name": name,
+            "lat": float(lat),
+            "lon": float(lon),
+            "passes": passes_out,
+        })
+
+    return {
+        "updated": t0.isoformat(),
+        "horizon_hours": horizon_hours,
+        "storms": storm_out,
+    }
+
+
+def run_predict_passes(upload: bool = True) -> dict:
+    """Top-level entry: fetch storms+TLEs, compute, optionally upload to
+    gs://{MW_BUCKET}/passes_predicted.json. Returns the payload."""
+    payload = predict_passes()
+    n_passes = sum(len(s["passes"]) for s in payload["storms"])
+    logger.info("predicted %d passes across %d storms (horizon %s h)",
+                n_passes, len(payload["storms"]), payload["horizon_hours"])
+    if upload:
+        _upload_bytes(
+            PASSES_KEY,
+            json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+            "application/json",
+            cache_seconds=300,
+        )
+    return payload
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 def _cli(argv=None):
@@ -823,6 +1203,11 @@ def _cli(argv=None):
                          "scan_start per sensor (or --since-hours N on first "
                          "run). Idempotent — already-uploaded granules are "
                          "deduped by orbit_id in the manifest.")
+    ap.add_argument("--predict-passes", action="store_true",
+                    help="Fetch TLEs + active storms and write the next "
+                         "24 h of predicted microwave passes to "
+                         "gs://{bucket}/passes_predicted.json. Does NOT "
+                         "require PPS creds.")
     ap.add_argument("--no-manifest", action="store_true",
                     help="Skip manifest update (useful for one-off testing)")
     ap.add_argument("--dry-run", action="store_true",
@@ -839,6 +1224,33 @@ def _cli(argv=None):
 
     products = [p.strip() for p in args.products.split(",") if p.strip()]
     all_entries: list[dict] = []
+
+    # --predict-passes is its own short-circuit path: it never touches
+    # PPS auth or granule listing, so it must run BEFORE the operational
+    # branch (which calls _pps_session() and would raise without creds).
+    if args.predict_passes:
+        # Mutual-exclusion guard against the granule-ingest modes.
+        conflict = [name for name, v in [
+            ("--tcprimed-file", args.tcprimed_file),
+            ("--pps-file", args.pps_file),
+            ("--operational", args.operational),
+            ("--since-hours", args.since_hours),
+        ] if v]
+        if conflict:
+            ap.error(f"--predict-passes cannot be combined with: {conflict}")
+        payload = run_predict_passes(upload=not args.dry_run)
+        if args.dry_run:
+            out_root = Path(args.dry_run_dir)
+            out_root.mkdir(parents=True, exist_ok=True)
+            (out_root / PASSES_KEY).write_text(
+                json.dumps(payload, indent=2))
+            logger.info("[dry-run] wrote %s", out_root / PASSES_KEY)
+        print(json.dumps({
+            "storms": len(payload["storms"]),
+            "passes": sum(len(s["passes"]) for s in payload["storms"]),
+            "horizon_hours": payload["horizon_hours"],
+        }, indent=2))
+        return
 
     if args.tcprimed_file:
         all_entries.extend(process_one(

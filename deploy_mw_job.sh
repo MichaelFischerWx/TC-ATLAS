@@ -51,6 +51,16 @@ SCHEDULE="*/20 * * * *"           # every 20 min — must finish before the next
 TIMEZONE="UTC"
 BUCKET="${GCS_MW_BUCKET:-tc-atlas-microwave-nrt}"
 
+# Pass-prediction scheduler: re-uses the SAME Cloud Run Job, but
+# Scheduler overrides the container args to run --predict-passes
+# instead of --operational (the Dockerfile ENTRYPOINT default).
+# Why a 2nd Scheduler entry (not a 2nd Job)? Same container image,
+# same env/secrets wiring, half the surface area to keep aligned —
+# Cloud Run Jobs accept a `containerOverrides.args` field in the
+# :run API body, which Cloud Scheduler can set via --message-body.
+PREDICT_SCHEDULER_NAME="tc-atlas-mw-predict-schedule"
+PREDICT_SCHEDULE="*/30 * * * *"   # every 30 min — refresh predictions
+
 IMAGE="gcr.io/${PROJECT}/${JOB_NAME}:latest"
 
 # ── Bucket guard — do not auto-create; the user creates it explicitly ─
@@ -179,6 +189,45 @@ else
         --oauth-service-account-email "${SA_EMAIL}"
 fi
 
+# ── Pass-prediction scheduler (same Job, overridden args) ────────────
+# The Run Jobs :run API accepts a JSON body of the form:
+#   {"overrides":{"containerOverrides":[{"args":["--predict-passes"]}]}}
+# Cloud Scheduler sends this body verbatim; the Job runs the same image
+# but with these args, overriding the Dockerfile ENTRYPOINT's
+# --operational. Python (the actual command) is inherited from the
+# entrypoint's first token because containerOverrides.args only
+# replaces CMD/args, not the command. Since our ENTRYPOINT puts
+# everything on one line, we pass the full arg list including
+# "python", "mw_ingest.py", "--predict-passes" to be safe.
+PREDICT_BODY="$(mktemp -t tc-atlas-mw-predict-body.XXXXXX.json)"
+trap 'rm -f "${BUILD_CFG}" "${CORS_JSON}" "${PREDICT_BODY}"' EXIT
+cat > "${PREDICT_BODY}" <<'EOF'
+{"overrides":{"containerOverrides":[{"args":["python","mw_ingest.py","--predict-passes"]}]}}
+EOF
+
+echo "Creating/updating Cloud Scheduler ${PREDICT_SCHEDULER_NAME}..."
+if gcloud scheduler jobs describe "${PREDICT_SCHEDULER_NAME}" --location "${REGION}" >/dev/null 2>&1; then
+    gcloud scheduler jobs update http "${PREDICT_SCHEDULER_NAME}" \
+        --location "${REGION}" \
+        --schedule "${PREDICT_SCHEDULE}" \
+        --time-zone "${TIMEZONE}" \
+        --uri "${JOB_URI}" \
+        --http-method POST \
+        --headers "Content-Type=application/json" \
+        --message-body-from-file "${PREDICT_BODY}" \
+        --oauth-service-account-email "${SA_EMAIL}"
+else
+    gcloud scheduler jobs create http "${PREDICT_SCHEDULER_NAME}" \
+        --location "${REGION}" \
+        --schedule "${PREDICT_SCHEDULE}" \
+        --time-zone "${TIMEZONE}" \
+        --uri "${JOB_URI}" \
+        --http-method POST \
+        --headers "Content-Type=application/json" \
+        --message-body-from-file "${PREDICT_BODY}" \
+        --oauth-service-account-email "${SA_EMAIL}"
+fi
+
 echo ""
 echo "Done."
 echo ""
@@ -192,3 +241,8 @@ echo ""
 echo "Output bucket:"
 echo "  gsutil ls gs://${BUCKET}/"
 echo "  gsutil cat gs://${BUCKET}/manifest_latest_48h.json | head -c 2000"
+echo "  gsutil cat gs://${BUCKET}/passes_predicted.json | head -c 2000"
+echo ""
+echo "Smoke-test the prediction path:"
+echo "  gcloud run jobs execute ${JOB_NAME} --region ${REGION} --wait \\"
+echo "    --args=python,mw_ingest.py,--predict-passes"
