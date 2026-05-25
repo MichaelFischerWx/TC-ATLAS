@@ -6980,6 +6980,10 @@
             Plotly.restyle(el, {
                 'line.color': 'rgba(249,115,22,0.06)',
             }, [0]);
+            // Inset legend so the user knows what the heatmap means.
+            // Peak density is reported as "N members per <bin>° cell"
+            // so the absolute scale is interpretable, not just relative.
+            _genesisSetDensityLegend(el, binDeg, grid.maxValue, positions.length, tau);
             return;
         }
 
@@ -7006,6 +7010,60 @@
         Plotly.restyle(el, {
             'line.color': 'rgba(249,115,22,0.18)',
         }, [0]);
+        _genesisClearDensityLegend(el);
+    }
+
+    // Inset legend for density mode: color swatches + bin size + peak
+    // count so the user can read the absolute scale, not just the
+    // relative bands. Plotly annotations with HTML <span style="color">
+    // render properly in SVG (we use them elsewhere in this modal).
+    function _genesisSetDensityLegend(el, binDeg, peakDensity, nPositions, tau) {
+        if (!el || !el.layout) return;
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        // Peak density is the smoothed value at the densest cell —
+        // round to integer for display ("≈ N members"). Approximate
+        // because Gaussian smoothing spreads the raw count over
+        // neighboring cells.
+        var peakInt = Math.max(1, Math.round(peakDensity));
+        var binText = binDeg.toFixed(2) + '°';
+        var text = '<b>Member density at +' + tau + ' h</b><br>'
+            + '<span style="color:#9F1239;">■</span> ≥ 75% of peak<br>'
+            + '<span style="color:#EA580C;">■</span> ≥ 50%<br>'
+            + '<span style="color:#FBBF24;">■</span> ≥ 25%<br>'
+            + '<span style="color:#FEDC8A;">■</span> ≥ 10%<br>'
+            + '<span style="opacity:0.7; font-size:9px;">'
+            + binText + ' bins · peak ≈ ' + peakInt + ' members/cell<br>'
+            + nPositions + ' members at this τ</span>';
+        var ann = {
+            name: '__density_legend__',
+            xref: 'paper', yref: 'paper', x: 0.012, y: 0.985,
+            xanchor: 'left', yanchor: 'top',
+            showarrow: false, align: 'left',
+            text: text,
+            font: { size: 10, color: isDark ? '#f1f5f9' : '#1f2937',
+                    family: 'Inter, sans-serif' },
+            bgcolor: isDark ? 'rgba(15,22,35,0.82)'
+                            : 'rgba(255,255,255,0.92)',
+            bordercolor: isDark ? 'rgba(255,255,255,0.18)'
+                                : 'rgba(15,22,35,0.18)',
+            borderwidth: 1,
+            borderpad: 6,
+        };
+        var existing = (el.layout.annotations || []).filter(function (a) {
+            return a.name !== '__density_legend__';
+        });
+        existing.push(ann);
+        Plotly.relayout(el, { annotations: existing });
+    }
+
+    function _genesisClearDensityLegend(el) {
+        if (!el || !el.layout) return;
+        var existing = (el.layout.annotations || []).filter(function (a) {
+            return a.name !== '__density_legend__';
+        });
+        if (existing.length !== (el.layout.annotations || []).length) {
+            Plotly.relayout(el, { annotations: existing });
+        }
     }
 
     // Bin member positions into a coarse lat/lon grid (degrees) for the
@@ -7965,6 +8023,27 @@
         var origText = btn ? btn.textContent : null;
         if (btn) { btn.textContent = 'Rendering…'; btn.disabled = true; }
 
+        // Density-mode square markers are sized in absolute pixels and
+        // don't scale correctly when Plotly.toImage resizes the chart
+        // for the export — at 1800 px width the markers grow to fill
+        // the whole map. Temporarily repaint in Members mode for the
+        // export, then restore the user's selected mode after.
+        var origMode = _genesisTauState && _genesisTauState.mode;
+        var origIdx = _genesisTauState && _genesisTauState.idx;
+        var modeWasDensity = (origMode === 'density');
+        if (modeWasDensity && _genesisTauState && _genesisTauState.taus) {
+            _genesisTauState.mode = 'members';
+            var tau = _genesisTauState.taus[origIdx];
+            _genesisPaintTauCursor(tau, _genesisTauState.byTau[tau] || []);
+        }
+        function restoreMode() {
+            if (modeWasDensity && _genesisTauState) {
+                _genesisTauState.mode = 'density';
+                var t = _genesisTauState.taus[_genesisTauState.idx];
+                _genesisPaintTauCursor(t, _genesisTauState.byTau[t] || []);
+            }
+        }
+
         var W = 1800;
         var HEAD = 130;
         var H_MAP = 900;
@@ -8056,11 +8135,13 @@
                 document.body.removeChild(a);
                 setTimeout(function () { URL.revokeObjectURL(a.href); }, 1500);
                 if (btn) { btn.textContent = origText; btn.disabled = false; }
+                restoreMode();
                 _ga('rt_genesis_save_summary_png');
             }, 'image/png');
         }).catch(function (err) {
             console.warn('[Genesis] summary PNG export failed', err);
             if (btn) { btn.textContent = origText; btn.disabled = false; }
+            restoreMode();
         });
     }
 
