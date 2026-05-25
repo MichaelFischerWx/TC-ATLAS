@@ -2908,6 +2908,67 @@ input[type="range"].ga-range::-moz-range-thumb {
     accent-color: #2e7dff;
     cursor: pointer;
 }
+/* ── Pass schedule per active ATCF storm ──────────────────────── */
+.tc-mw-schedule {
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px dashed rgba(15,22,35,0.12);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.tc-mw-schedule-empty {
+    font-size: 0.6rem;
+    color: #5b6573;
+    font-style: italic;
+}
+.tc-mw-schedule-title {
+    font-size: 0.55rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #5b6573;
+    font-weight: 700;
+}
+.tc-mw-schedule-storm {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.tc-mw-schedule-storm-name {
+    font-size: 0.65rem;
+    color: #0f1623;
+    font-weight: 600;
+}
+.tc-mw-schedule-row {
+    display: grid;
+    grid-template-columns: 60px 1fr 1fr;
+    gap: 6px;
+    font-size: 0.62rem;
+    color: #334155;
+    align-items: center;
+}
+.tc-mw-schedule-sensor {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: #64748b;
+}
+.tc-mw-schedule-cell {
+    font-variant-numeric: tabular-nums;
+}
+.tc-mw-schedule-cell.dim {
+    color: #94a3b8;
+}
+.tc-mw-schedule-eta {
+    color: #15803d;
+    margin-left: 2px;
+    font-size: 0.95em;
+}
+.tc-mw-schedule-foot {
+    font-size: 0.55rem;
+    color: #5b6573;
+    margin-top: 2px;
+}
 .tc-mw-hours-label {
     display: inline-flex;
     align-items: center;

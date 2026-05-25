@@ -41,6 +41,7 @@
     'use strict';
 
     var MANIFEST_URL = 'https://storage.googleapis.com/tc-atlas-microwave-nrt/manifest_latest_48h.json';
+    var PREDICTIONS_URL = 'https://storage.googleapis.com/tc-atlas-microwave-nrt/passes_predicted.json';
     var REFRESH_MS   = 5 * 60 * 1000;   // 5 minutes
     var ATTRIBUTION  = 'GMI/GPM (NASA/GPM/PPS NRT)';
     // Default age-decay floor — newest swath always renders at 1.0,
@@ -278,6 +279,13 @@
         // Suppress prefs writes while the constructor is restoring state.
         this._prefsReady    = false;
 
+        // Pass-schedule state. Predictions live alongside manifest in
+        // GCS (passes_predicted.json), refreshed every ~30 min by a
+        // separate Cloud Scheduler entry. We pull them on enable and
+        // alongside each manifest refresh so the per-storm dashboard
+        // stays current.
+        this._predictions   = null;
+
         // Age-decay opacity floor. Newest swaths always render at 1.0;
         // this controls how transparent the oldest visible swath gets.
         // Default 0.4 preserves the original age-fade; setting to 1.0
@@ -345,10 +353,12 @@
         // Kick off the fallback storm fetch in parallel with the manifest —
         // a no-op when the host already pushed storms via setActiveStorms.
         this._tryFetchActiveStorms();
+        this._fetchPredictions();
         this._fetchManifest().then(function () {
             self._renderAll();
         });
         this._refreshTimer = setInterval(function () {
+            self._fetchPredictions();
             self._fetchManifest().then(function () {
                 if (self._enabled) self._renderAll();
             });
@@ -531,6 +541,24 @@
             .catch(function (err) { console.warn('[MW] active-storms fetch failed', err); });
     };
 
+    /** Fetch the predicted-pass schedule (passes_predicted.json) — built
+     *  by mw_ingest.py --predict-passes via the Cloud Scheduler entry
+     *  that fires every 30 min. Refreshes alongside the manifest so the
+     *  per-storm dashboard reflects the latest TLEs. */
+    MWLayer.prototype._fetchPredictions = function () {
+        var self = this;
+        return fetch(PREDICTIONS_URL, { cache: 'no-store' })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (json) {
+                self._predictions = json;
+                self._updateScheduleSection();
+            })
+            .catch(function (err) {
+                console.warn('[MW] predictions fetch failed', err);
+                self._updateScheduleSection();
+            });
+    };
+
     MWLayer.prototype.refresh = function () {
         var self = this;
         return this._fetchManifest().then(function () {
@@ -659,6 +687,7 @@
             nVisible++;
         }
         this._updateSensorCounts(perSensorCounts);
+        this._updateScheduleSection();
         // Status line — either count or empty-state message
         var cursorSuffix = (cursorAgeMin > 0)
             ? ' · cursor ' + _fmtCursorBack(cursorAgeMin)
@@ -879,6 +908,7 @@
             +     '<input type="range" class="tc-mw-opacity-slider" min="0" max="100" step="1" value="' + Math.round(this._minOpacity * 100) + '">'
             +   '</div>'
             +   '<div class="tc-mw-status"></div>'
+            +   '<div class="tc-mw-schedule" data-tc-mw-schedule></div>'
             +   '<div class="tc-mw-attribution">' + _esc(ATTRIBUTION) + '</div>'
             + '</div>';
         c.appendChild(wrap);
@@ -910,6 +940,7 @@
         var liveBtn       = wrap.querySelector('.tc-mw-live-btn');
         var opacitySlider = wrap.querySelector('.tc-mw-opacity-slider');
         var opacityLabel  = wrap.querySelector('.tc-mw-opacity-val');
+        var schedule      = wrap.querySelector('[data-tc-mw-schedule]');
 
         this._ui = {
             container: wrap, btn: btn, slider: slider,
@@ -923,7 +954,8 @@
             playBtn: playBtn,
             liveBtn: liveBtn,
             opacitySlider: opacitySlider,
-            opacityLabel: opacityLabel
+            opacityLabel: opacityLabel,
+            schedule: schedule
         };
         this._updateLegend();
         this._syncCursorUI();
@@ -1014,6 +1046,128 @@
         }
         this._ui.legend.innerHTML = html;
     };
+
+    /** Per-storm pass-schedule dashboard. For each active ATCF storm,
+     *  shows the most recent pass per sensor (from the current
+     *  manifest, intersected with the storm's position) + the next
+     *  upcoming pass per sensor (from passes_predicted.json), with an
+     *  "ETA on TC-ATLAS" annotation that adds the sensor-specific PPS
+     *  NRT latency to the predicted scan time so users know when each
+     *  upcoming pass will actually appear on this page. */
+    MWLayer.prototype._updateScheduleSection = function () {
+        if (!this._ui || !this._ui.schedule) return;
+        var box = this._ui.schedule;
+        var storms = this._activeStorms || [];
+        if (!storms.length) {
+            box.innerHTML = '<div class="tc-mw-schedule-empty">No active ATCF storms</div>';
+            return;
+        }
+        var manifest = (this._manifest && this._manifest.orbits) || [];
+        var pred = this._predictions && Array.isArray(this._predictions.storms)
+            ? this._predictions.storms : [];
+        var predByAtcf = {};
+        for (var pi = 0; pi < pred.length; pi++) {
+            predByAtcf[pred[pi].atcf_id] = pred[pi];
+        }
+        var now = Date.now();
+
+        var rows = ['<div class="tc-mw-schedule-title">Pass schedule</div>'];
+        for (var si = 0; si < storms.length; si++) {
+            var s = storms[si];
+            // Latest per sensor from manifest — first newest-first orbit
+            // whose bounds cover the storm position.
+            var latest = { GMI: null, SSMIS: null, AMSR2: null };
+            for (var oi = 0; oi < manifest.length; oi++) {
+                var o = manifest[oi];
+                if (!o.sensor || latest[o.sensor]) continue;
+                if (_boundsContains(o.bounds, s.lat, s.lon)) {
+                    latest[o.sensor] = o;
+                }
+            }
+            // Upcoming per sensor from predictions — first future entry.
+            var upcoming = { GMI: null, SSMIS: null, AMSR2: null };
+            var predStorm = predByAtcf[s.atcf_id];
+            if (predStorm && Array.isArray(predStorm.passes)) {
+                for (var ppi = 0; ppi < predStorm.passes.length; ppi++) {
+                    var p = predStorm.passes[ppi];
+                    if (!p.sensor || upcoming[p.sensor]) continue;
+                    if (Date.parse(p.predicted_scan_start) > now) {
+                        upcoming[p.sensor] = p;
+                    }
+                }
+            }
+
+            var stormHtml = ['<div class="tc-mw-schedule-storm">'];
+            stormHtml.push(
+                '<div class="tc-mw-schedule-storm-name">'
+                + _esc(s.name || s.atcf_id) + ' &middot; '
+                + _esc(s.atcf_id || '')
+                + (isFinite(s.vmax_kt) ? ' &middot; ' + Math.round(s.vmax_kt) + ' kt' : '')
+                + '</div>'
+            );
+            for (var sj = 0; sj < KNOWN_SENSORS.length; sj++) {
+                var sk = KNOWN_SENSORS[sj].key;
+                var sLabel = KNOWN_SENSORS[sj].label;
+                var swatch = SENSOR_COLORS[sk] || '#cbd5e1';
+                var latestCell = '<span class="tc-mw-schedule-cell dim">—</span>';
+                if (latest[sk]) {
+                    var ageMin = (now - latest[sk].scan_start_ms) / 60000;
+                    latestCell = '<span class="tc-mw-schedule-cell">'
+                        + _esc(_fmtCompactAgo(ageMin))
+                        + '</span>';
+                }
+                var upcomingCell = '<span class="tc-mw-schedule-cell dim">—</span>';
+                if (upcoming[sk]) {
+                    var deltaMin = (Date.parse(upcoming[sk].predicted_scan_start) - now) / 60000;
+                    var etaMs = Date.parse(upcoming[sk].eta_on_tcatlas);
+                    var etaMin = (etaMs - now) / 60000;
+                    upcomingCell = '<span class="tc-mw-schedule-cell" title="ETA on TC-ATLAS: '
+                        + _esc(_fmtCompactIn(etaMin))
+                        + ' (' + Math.round(upcoming[sk].min_distance_km) + ' km offset)">'
+                        + _esc(_fmtCompactIn(deltaMin))
+                        + ' <span class="tc-mw-schedule-eta">&rarr;'
+                        + _esc(_fmtCompactIn(etaMin)) + '</span>'
+                        + '</span>';
+                }
+                stormHtml.push(
+                    '<div class="tc-mw-schedule-row">'
+                    + '<span class="tc-mw-schedule-sensor">'
+                    +   '<span class="tc-mw-sensor-swatch" style="background:' + swatch + '"></span>'
+                    +   _esc(sLabel)
+                    + '</span>'
+                    + latestCell
+                    + upcomingCell
+                    + '</div>'
+                );
+            }
+            stormHtml.push('</div>');
+            rows.push(stormHtml.join(''));
+        }
+        // Source note + freshness
+        var predUpdated = this._predictions && this._predictions.updated;
+        if (predUpdated) {
+            var predAgeMin = (now - Date.parse(predUpdated)) / 60000;
+            rows.push('<div class="tc-mw-schedule-foot">Predictions ' + _esc(_fmtCompactAgo(predAgeMin)) + ' &middot; TLEs via CelesTrak</div>');
+        } else if (this._predictions === null) {
+            rows.push('<div class="tc-mw-schedule-foot dim">Predictions not loaded</div>');
+        }
+        box.innerHTML = rows.join('');
+    };
+
+    function _fmtCompactAgo(ageMin) {
+        if (ageMin < 1)  return 'just now';
+        if (ageMin < 60) return Math.round(ageMin) + 'm ago';
+        var h = ageMin / 60;
+        if (h < 24) return h.toFixed(1) + 'h ago';
+        return (h / 24).toFixed(1) + 'd ago';
+    }
+    function _fmtCompactIn(min) {
+        if (min < 1)  return '< 1m';
+        if (min < 60) return 'in ' + Math.round(min) + 'm';
+        var h = min / 60;
+        if (h < 24) return 'in ' + h.toFixed(1) + 'h';
+        return 'in ' + (h / 24).toFixed(1) + 'd';
+    }
 
     MWLayer.prototype._updateSensorCounts = function (counts) {
         if (!this._ui || !this._ui.sensorLabels) return;
