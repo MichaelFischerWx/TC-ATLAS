@@ -3805,6 +3805,9 @@ def get_storm_weatherlab(atcf_id: str):
 
     storm = data[atcf_id]
     init_time = used_date.replace("-", "") + used_hour
+    cycle_dt = _genesis_cycle_dt(used_date, used_hour)
+    cycle_age_h = (now - cycle_dt).total_seconds() / 3600.0
+    next_eta_h = _genesis_next_cycle_eta_h(now=now, init_time=init_time)
 
     # Build lead_times list from member 0
     lead_times = []
@@ -3820,6 +3823,10 @@ def get_storm_weatherlab(atcf_id: str):
             "ensemble_mean": storm["ensemble_mean"],
             "n_members": len(storm["members"]),
             "lead_times_h": lead_times,
+            "cycle_age_hours": round(cycle_age_h, 2),
+            "next_cycle_eta_hours": round(next_eta_h, 2)
+                                    if next_eta_h is not None else None,
+            "fetched_at": now.isoformat(),
         },
         headers={"Cache-Control": "public, max-age=900"},
     )
@@ -4317,6 +4324,9 @@ def get_weatherlab_global():
         )
 
     init_time = used_date.replace("-", "") + used_hour
+    cycle_dt = _genesis_cycle_dt(used_date, used_hour)
+    cycle_age_h = (now - cycle_dt).total_seconds() / 3600.0
+    next_eta_h = _genesis_next_cycle_eta_h(now=now, init_time=init_time)
     tracks = []
     for track_id, storm in data.items():
         tracks.append({
@@ -4332,6 +4342,10 @@ def get_weatherlab_global():
             "init_time": init_time,
             "tracks": tracks,
             "n_tracks": len(tracks),
+            "cycle_age_hours": round(cycle_age_h, 2),
+            "next_cycle_eta_hours": round(next_eta_h, 2)
+                                    if next_eta_h is not None else None,
+            "fetched_at": now.isoformat(),
         },
         headers={"Cache-Control": "public, max-age=900"},
     )
@@ -5168,6 +5182,12 @@ def get_weatherlab_genesis_cluster(
         raise HTTPException(
             status_code=404,
             detail=f"Cluster {tca_id} not found in current cycle ({init_time})")
+    now = _dt.now(timezone.utc)
+    next_eta_h = _genesis_next_cycle_eta_h(now=now, init_time=init_time)
+    cycle_age_h = None
+    if dh is not None:
+        used_date, used_hour = dh
+        cycle_age_h = (now - _genesis_cycle_dt(used_date, used_hour)).total_seconds() / 3600.0
     return JSONResponse(
         content={
             "model": "DeepMind FNV3 LARGE_ENSEMBLE",
@@ -5187,6 +5207,11 @@ def get_weatherlab_genesis_cluster(
             "contrib_track_ids": match["contrib_track_ids"],
             "members": match["members"],
             "ensemble_mean": match["ensemble_mean"],
+            "cycle_age_hours": round(cycle_age_h, 2)
+                                if cycle_age_h is not None else None,
+            "next_cycle_eta_hours": round(next_eta_h, 2)
+                                    if next_eta_h is not None else None,
+            "fetched_at": now.isoformat(),
         },
         headers={"Cache-Control": "public, max-age=900"},
     )

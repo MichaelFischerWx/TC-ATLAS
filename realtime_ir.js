@@ -6491,6 +6491,13 @@
     //  positioned overlay built lazily on first open.
 
     var _genesisDetailCache = {};   // track_id → JSON (TCA-synthesized or DM-fetched)
+    // Countdown chip state for the disturbance detail modal. The chip
+    // shows "next cycle in ~Xh Ym" derived from the backend's
+    // `next_cycle_eta_hours` (estimated DeepMind publish time = cycle
+    // init + 6h cadence + ~3h publish lag) and re-renders every 30 s
+    // until the modal closes.
+    var _genesisCycleEtaTimer = null;
+    var _genesisCycleEtaTargetMs = null;
     // Per-DM-track full (uncapped) responses, keyed by DM track_id.
     // Shared by the TCA re-cluster path (which needs every contributing
     // track) and the DM detail path (which fetches one). One round-trip
@@ -6763,6 +6770,11 @@
             _genesisTauState.animTimer = null;
             _genesisTauState.playing = false;
         }
+        if (_genesisCycleEtaTimer) {
+            clearInterval(_genesisCycleEtaTimer);
+            _genesisCycleEtaTimer = null;
+        }
+        _genesisCycleEtaTargetMs = null;
         _ga('rt_genesis_detail_close');
     }
     window.closeGenesisDetail = closeGenesisDetail;
@@ -6880,6 +6892,59 @@
     }
     window.openGenesisDetail = openGenesisDetail;
 
+    // Format a remaining-ms duration as "~Xh Ym" / "~Mm" / "<1m".
+    function _formatEtaShort(ms) {
+        if (ms == null || !isFinite(ms)) return '';
+        if (ms <= 0) return 'imminent';
+        var totalMin = Math.round(ms / 60000);
+        if (totalMin < 1) return '<1m';
+        if (totalMin < 60) return '~' + totalMin + 'm';
+        var h = Math.floor(totalMin / 60);
+        var mn = totalMin % 60;
+        return mn === 0 ? '~' + h + 'h' : '~' + h + 'h ' + mn + 'm';
+    }
+
+    // Re-render the countdown chip from _genesisCycleEtaTargetMs. Called
+    // once on modal open and every 30 s thereafter until close.
+    function _tickGenesisCycleEta() {
+        var el = document.getElementById('rt-genesis-cycle-eta');
+        if (!el || _genesisCycleEtaTargetMs == null) return;
+        var remain = _genesisCycleEtaTargetMs - Date.now();
+        if (remain > 0) {
+            el.innerHTML = '<span style="opacity:0.8;">Next cycle '
+                + _formatEtaShort(remain) + '</span>';
+            el.title = 'DeepMind FNV3 publishes ~3 h after each 6-hourly '
+                + 'init (00/06/12/18 UTC). Estimated, not guaranteed.';
+        } else {
+            el.innerHTML = '<span style="color:#00e5ff;">'
+                + 'Next cycle due — checking…</span>';
+            el.title = 'Past expected publish time. The backend probes '
+                + 'every request; reopen this disturbance to pick it up.';
+        }
+    }
+
+    // Schedule the countdown ticker for the disturbance detail modal.
+    // Computes the publish target (server's fetched_at + eta) so clock
+    // drift between user and server doesn't matter once the page is open.
+    function _startGenesisCycleEta(nextEtaH, fetchedAtIso) {
+        if (_genesisCycleEtaTimer) {
+            clearInterval(_genesisCycleEtaTimer);
+            _genesisCycleEtaTimer = null;
+        }
+        _genesisCycleEtaTargetMs = null;
+        if (nextEtaH == null || !isFinite(nextEtaH)) return;
+        var baseMs;
+        if (fetchedAtIso) {
+            var t = Date.parse(fetchedAtIso);
+            baseMs = isNaN(t) ? Date.now() : t;
+        } else {
+            baseMs = Date.now();
+        }
+        _genesisCycleEtaTargetMs = baseMs + nextEtaH * 3600 * 1000;
+        _tickGenesisCycleEta();
+        _genesisCycleEtaTimer = setInterval(_tickGenesisCycleEta, 30000);
+    }
+
     function _renderGenesisDetail(json) {
         var m = document.getElementById(_GENESIS_MODAL_ID);
         if (!m) return;
@@ -6901,6 +6966,7 @@
 
         var subParts = [
             '<strong>Init:</strong> ' + initLabel,
+            '<span id="rt-genesis-cycle-eta"></span>',
             '<strong>' + memberKeys.length + '</strong> ensemble members',
             '<span style="opacity:0.8;">FNV3 LARGE_ENSEMBLE</span>',
         ];
@@ -6919,6 +6985,7 @@
                 + ' excluded</span>');
         }
         subEl.innerHTML = subParts.join(' · ');
+        _startGenesisCycleEta(json.next_cycle_eta_hours, json.fetched_at);
 
         _renderGenesisMap(memberKeys, members, mean, stats);
         _renderGenesisIntensity(memberKeys, members, mean, stats);
