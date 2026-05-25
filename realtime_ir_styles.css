@@ -1748,24 +1748,36 @@ html, body { margin: 0; padding: 0; }
    MW is an additive overlay (not a basemap replacement), so it gets
    its own pill with a dot indicator rather than living inside the
    IR/GeoColor radio segment. Active state matches the segment's
-   green-tint so the controls feel like a single group visually. */
+   green-tint so the controls feel like a single group visually.
+   Split-button: main pill toggles, chevron opens Layers panel. */
+.ir-mw-toggle-group {
+    display: inline-flex;
+    align-items: stretch;
+    margin-top: 4px;
+    border-radius: 5px;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(22, 27, 36, 0.92);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    transition: border-color 0.15s;
+}
+.ir-mw-toggle-group:has(.ir-mw-toggle-btn.active) {
+    border-color: rgba(74, 155, 110, 0.55);
+}
 .ir-mw-toggle-btn {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    background: rgba(22, 27, 36, 0.92);
-    backdrop-filter: blur(4px);
-    -webkit-backdrop-filter: blur(4px);
-    border: 1px solid rgba(255, 255, 255, 0.14);
-    border-radius: 5px;
+    background: transparent;
+    border: none;
     padding: 4px 10px;
-    margin-top: 4px;
     font-family: 'DM Sans', sans-serif;
     font-size: 0.7rem;
     font-weight: 500;
     color: #cbd5e1;
     cursor: pointer;
-    transition: background 0.15s, color 0.15s, border-color 0.15s;
+    transition: background 0.15s, color 0.15s;
 }
 .ir-mw-toggle-btn:hover {
     background: rgba(74, 155, 110, 0.18);
@@ -1773,7 +1785,6 @@ html, body { margin: 0; padding: 0; }
 }
 .ir-mw-toggle-btn.active {
     background: rgba(74, 155, 110, 0.32);
-    border-color: rgba(74, 155, 110, 0.55);
     color: #ffffff;
 }
 .ir-mw-toggle-dot {
@@ -1785,6 +1796,32 @@ html, body { margin: 0; padding: 0; }
 .ir-mw-toggle-btn.active .ir-mw-toggle-dot {
     background: #4ade80;
     box-shadow: 0 0 6px rgba(74, 222, 128, 0.7);
+}
+.ir-mw-expand-btn {
+    background: transparent;
+    border: none;
+    border-left: 1px solid rgba(255, 255, 255, 0.10);
+    padding: 4px 7px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.65rem;
+    color: #94a3b8;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+.ir-mw-expand-btn:hover {
+    background: rgba(74, 155, 110, 0.18);
+    color: #ffffff;
+}
+/* Pulse animation when the user clicks the chevron — draws the eye
+   to the just-revealed Microwave section inside the Layers panel. */
+@keyframes ir-mw-pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.55); }
+    50%  { box-shadow: 0 0 0 6px rgba(74, 222, 128, 0.30); }
+    100% { box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.0); }
+}
+.ir-mw-pulse {
+    animation: ir-mw-pulse 1.4s ease-out 1;
+    border-radius: 6px;
 }
 
 /* Labels toggle position — sits in the top-left stack underneath the

@@ -698,7 +698,18 @@
         var popupHtml = this._popupHtml(orb, ageMin, highlightStorms);
         var isHighlighted = !!(highlightStorms && highlightStorms.length);
         var borderColor = isHighlighted ? HIGHLIGHT_COLOR : (SENSOR_COLORS[orb.sensor] || '#cbd5e1');
-        var borderWeight = isHighlighted ? HIGHLIGHT_WEIGHT : 1.5;
+
+        // Default border styling — very subtle so dense GMI coverage
+        // (~117 granules in 10 hr) doesn't look like a grid lattice.
+        // The image overlay itself carries the swath shape via
+        // NaN→transparent edges; the rectangle is mostly a click target.
+        // Hover bumps the stroke to a readable weight, so users can
+        // probe individual granules without permanent visual clutter.
+        // Storm-highlighted swaths get the bold treatment regardless.
+        var idleWeight  = isHighlighted ? HIGHLIGHT_WEIGHT : 0.5;
+        var idleOpacity = isHighlighted ? 0.85 : Math.min(opacity, 0.25);
+        var hoverWeight  = isHighlighted ? HIGHLIGHT_WEIGHT : 1.5;
+        var hoverOpacity = isHighlighted ? 0.95 : Math.max(opacity, 0.85);
 
         for (var i = 0; i < boundsList.length; i++) {
             var b = boundsList[i];
@@ -710,21 +721,27 @@
                 attribution: ATTRIBUTION
             }).addTo(map);
 
-            // Click-hit rectangle doubles as the sensor-color border so
-            // users can distinguish GMI / SSMI/S / AMSR2 at a glance.
-            // Stroke opacity tracks the image's age-decay opacity.
-            // If this orbit is the most recent pass over any active storm,
-            // the border swaps to a hot accent color and thickens.
             var hit = L.rectangle(b, {
                 color: borderColor,
-                weight: borderWeight,
-                opacity: Math.max(opacity, isHighlighted ? 0.85 : opacity),
+                weight: idleWeight,
+                opacity: idleOpacity,
                 fillColor: '#ffffff',
                 fillOpacity: 0,
                 interactive: true,
                 pane: 'overlayPane'
             }).addTo(map);
             hit.bindPopup(popupHtml, { maxWidth: 320 });
+            // Hover-to-emphasize. Closures capture per-rectangle styling
+            // so multiple hits on the page mouseover independently.
+            (function (rect, idleW, idleO, hoverW, hoverO) {
+                rect.on('mouseover', function () {
+                    rect.setStyle({ weight: hoverW, opacity: hoverO });
+                    rect.bringToFront();
+                });
+                rect.on('mouseout', function () {
+                    rect.setStyle({ weight: idleW, opacity: idleO });
+                });
+            })(hit, idleWeight, idleOpacity, hoverWeight, hoverOpacity);
             parts.push({ overlay: img, hit: hit });
         }
         this._renderedOrbits[orb.orbit_id] = parts;

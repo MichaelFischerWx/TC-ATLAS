@@ -2053,30 +2053,55 @@
                     });
                 }
 
-                // ── Microwave one-click toggle ──────────────────────
+                // ── Microwave one-click toggle + options chevron ────
                 // Sibling of the IR/GeoColor pills so users don't have
                 // to dig through the Layers panel to enable the MW
-                // overlay. MW is an *additive* overlay (not a basemap
-                // replacement), so visually we render this as a single
-                // pill with its own active state — distinct from the
-                // radio-style IR/GeoColor segment above. Detailed
-                // controls (sensor toggles, product picker, time
-                // scrubber, legend) remain in the Layers panel; this
-                // is just the primary on/off.
-                var mwTopBtn = L.DomUtil.create('button', 'ir-mw-toggle-btn', wrap);
+                // overlay. Split-button pattern:
+                //   - Main pill (left): click toggles MW on/off
+                //   - Chevron (right): opens the Layers panel and
+                //     scrolls to the Microwave section so users can
+                //     discover product picker / sensor toggles / time
+                //     scrubber / legend without already knowing where
+                //     to find them.
+                var mwGroup = L.DomUtil.create('div', 'ir-mw-toggle-group', wrap);
+                mwGroup.id = 'ir-mw-toggle-group';
+
+                var mwTopBtn = L.DomUtil.create('button', 'ir-mw-toggle-btn', mwGroup);
                 mwTopBtn.id = 'ir-mw-toggle-btn';
                 mwTopBtn.type = 'button';
                 mwTopBtn.title = 'Toggle real-time microwave swaths (GMI / SSMI/S / AMSR2)';
                 mwTopBtn.innerHTML = '<span class="ir-mw-toggle-dot"></span>'
                                    + '<span class="ir-mw-toggle-text">Microwave</span>';
                 mwTopBtn.addEventListener('click', function () {
-                    // Ensure the helper exists, then flip its state. The
-                    // toggle override on _rtMwLayer.toggle (see
-                    // _rtEnsureMwLayer) re-runs _refreshLayersCount which
-                    // also calls _rtUpdateMwTopBtn, so we don't need to
-                    // manually sync the button class here.
                     var inst = _rtEnsureMwLayer();
                     if (inst) inst.toggle();
+                });
+
+                var mwExpandBtn = L.DomUtil.create('button', 'ir-mw-expand-btn', mwGroup);
+                mwExpandBtn.id = 'ir-mw-expand-btn';
+                mwExpandBtn.type = 'button';
+                mwExpandBtn.title = 'Microwave options (product, sensors, time, legend)';
+                mwExpandBtn.innerHTML = '<span aria-hidden="true">▾</span>';
+                mwExpandBtn.addEventListener('click', function () {
+                    // Open the Layers panel if it's not already, then
+                    // scroll the MW section into view and briefly pulse
+                    // it so users see where the options live. The
+                    // toggleLayersPanel function is hoisted by the time
+                    // this click fires, but guard anyway.
+                    if (typeof toggleLayersPanel !== 'function') return;
+                    if (typeof _rtLayersPanelOpen !== 'undefined' && !_rtLayersPanelOpen) {
+                        toggleLayersPanel();
+                    }
+                    setTimeout(function () {
+                        var section = document.getElementById('ir-mw-section');
+                        if (section) {
+                            section.scrollIntoView({ block: 'center', behavior: 'smooth' });
+                            section.classList.add('ir-mw-pulse');
+                            setTimeout(function () {
+                                section.classList.remove('ir-mw-pulse');
+                            }, 1500);
+                        }
+                    }, 60);
                 });
 
                 // ── DeepMind WeatherLab status pill ──────────────────
