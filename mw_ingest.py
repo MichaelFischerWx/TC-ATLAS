@@ -1368,8 +1368,15 @@ def _fetch_genesis_disturbances() -> list[dict]:
     if not init_iso:
         return []
     try:
-        init_time = _dt.fromisoformat(init_iso.replace("Z", "+00:00"))
-    except Exception:
+        # genesis-clusters API returns init_time in compact YYYYMMDDHH
+        # format (e.g., "2026052506"), not ISO 8601. Accept both shapes.
+        if isinstance(init_iso, str) and len(init_iso) == 10 and init_iso.isdigit():
+            init_time = _dt.strptime(init_iso, "%Y%m%d%H").replace(tzinfo=timezone.utc)
+        else:
+            init_time = _dt.fromisoformat(str(init_iso).replace("Z", "+00:00"))
+    except Exception as exc:
+        logger.warning("genesis-clusters init_time parse failed (%r): %s",
+                       init_iso, exc)
         return []
     now = _dt.now(timezone.utc)
     elapsed_h = (now - init_time).total_seconds() / 3600.0
