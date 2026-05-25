@@ -204,13 +204,15 @@ EOF
 
 echo "Creating/updating Cloud Scheduler ${PREDICT_SCHEDULER_NAME}..."
 if gcloud scheduler jobs describe "${PREDICT_SCHEDULER_NAME}" --location "${REGION}" >/dev/null 2>&1; then
+    # `gcloud scheduler jobs update http` rejects --headers — it uses
+    # --update-headers (the create branch below still uses --headers).
     gcloud scheduler jobs update http "${PREDICT_SCHEDULER_NAME}" \
         --location "${REGION}" \
         --schedule "${PREDICT_SCHEDULE}" \
         --time-zone "${TIMEZONE}" \
         --uri "${JOB_URI}" \
         --http-method POST \
-        --headers "Content-Type=application/json" \
+        --update-headers "Content-Type=application/json" \
         --message-body-from-file "${PREDICT_BODY}" \
         --oauth-service-account-email "${SA_EMAIL}"
 else
