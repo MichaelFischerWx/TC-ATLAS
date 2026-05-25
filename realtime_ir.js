@@ -637,6 +637,38 @@
     var _rtDmChangeTauIdx = 4;         // current slider index for change histogram
     var _rtDmChangeInt = 24;           // 12 or 24 hour change interval
 
+    // ── Microwave passes (last N hrs) overlay ───────────────
+    // Shared helper lives in tc_mw_layer.js (window.TCMicrowave).
+    // Lazily constructed on first Layers-panel render so we don't
+    // touch the helper before the map exists.
+    var _rtMwLayer = null;             // window.TCMicrowave instance
+    var _rtMwHost  = null;             // persistent DOM host for the helper's UI
+    function _rtEnsureMwLayer() {
+        if (_rtMwLayer || !window.TCMicrowave || !map) return _rtMwLayer;
+        _rtMwHost = document.createElement('div');
+        _rtMwHost.id = 'rt-mw-host';
+        _rtMwLayer = window.TCMicrowave.create(map, {
+            container: _rtMwHost,
+            defaultHours: 6,
+            maxHours: 48,
+            compact: false,
+            onAttribution: function (txt, on) {
+                // RT map has no global attribution control; use the Leaflet default if present.
+                if (map && map.attributionControl) {
+                    if (on) map.attributionControl.addAttribution(txt);
+                    else    map.attributionControl.removeAttribution(txt);
+                }
+            }
+        });
+        // Re-render the layer count badge when the user toggles MW on/off.
+        var origToggle = _rtMwLayer.toggle.bind(_rtMwLayer);
+        _rtMwLayer.toggle = function () {
+            origToggle();
+            if (typeof _refreshLayersCount === 'function') _refreshLayersCount();
+        };
+        return _rtMwLayer;
+    }
+
     // ── ASCAT Wind Barb Overlay State ───────────────────────
     var _rtAscatPasses = null;         // API response: list of passes
     var _rtAscatVisible = false;       // overlay toggle state
@@ -9397,6 +9429,7 @@
         if (_rtGenesisVisible) n++;
         if (_rtGenesisRawVisible) n++;
         n += Object.keys(_rtEnvActive || {}).length;
+        if (_rtMwLayer && _rtMwLayer.isEnabled()) n++;
         var el = document.getElementById('ir-layers-count');
         if (el) {
             el.textContent = n > 0 ? n : '';
@@ -9673,6 +9706,14 @@
             }
         }
 
+        // ── MICROWAVE (recent GMI/GPM passes) ──────────────────────
+        // Placeholder slot — the actual UI (toggle + product radio +
+        // hours slider + status line) lives in a persistent DOM host
+        // managed by tc_mw_layer.js; we re-parent it into this slot on
+        // every panel render so the helper's listeners survive intact.
+        html += '<div class="ir-global-menu-section with-divider">Microwave</div>';
+        html += '<div id="ir-mw-section" class="ir-mw-section-slot"></div>';
+
         // ── Shared opacity slider (drives every env-style overlay) ──
         html += '<div class="ir-global-menu-opacity-wrap">'
               + '<label class="ir-global-menu-opacity">Opacity '
@@ -9687,6 +9728,20 @@
         }
 
         content.innerHTML = html;
+
+        // ── Microwave overlay UI mount ──────────────────────────────
+        // Lazily build the layer + its host on first render, then move
+        // the host into the section slot. Re-parenting is cheap and
+        // preserves the helper's internal listeners + state.
+        var mwSlot = content.querySelector('#ir-mw-section');
+        if (mwSlot) {
+            var inst = _rtEnsureMwLayer();
+            if (inst && _rtMwHost) {
+                mwSlot.appendChild(_rtMwHost);
+            } else {
+                mwSlot.innerHTML = '<div class="ir-global-menu-empty">Microwave helper not loaded.</div>';
+            }
+        }
 
         // ── Wire up change handlers ─────────────────────────────────
         // The whole row is a <label> wrapping the checkbox, so any click

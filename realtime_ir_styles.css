@@ -2955,3 +2955,140 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
 /* Hide the build chip in the chrome-stripped subOnly iframe — the
    parent page (climo) has its own build-info indicator. */
 html.sub-only-mode #tc-build-chip { display: none !important; }
+
+/* ════════════════════════════════════════════════════════════════
+   MICROWAVE PASSES (last N hrs) overlay UI — shared with the
+   Global Archive's storm-browser map (same .tc-mw-* class block
+   is duplicated in global_archive_styles.css so each page ships
+   what it needs). RT version lives inside the unified Layers
+   panel; Global Archive uses the compact variant in a top-right
+   Leaflet control. Both consume tc_mw_layer.js.
+   ════════════════════════════════════════════════════════════════ */
+.ir-mw-section-slot {
+    padding: 4px 10px 8px;
+}
+.tc-mw-ui {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-family: inherit;
+    color: #e2e8f0;
+}
+.tc-mw-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.12);
+    color: #e2e8f0;
+    padding: 5px 10px;
+    border-radius: 5px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.12s, border-color 0.12s;
+}
+.tc-mw-toggle:hover {
+    background: rgba(74, 155, 110, 0.10);
+    border-color: rgba(74, 155, 110, 0.45);
+}
+.tc-mw-toggle .tc-mw-toggle-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: rgba(255,255,255,0.18);
+    transition: background 0.12s, box-shadow 0.12s;
+}
+.tc-mw-toggle.active {
+    background: rgba(74, 155, 110, 0.18);
+    border-color: #4a9b6e;
+    color: #ffffff;
+}
+.tc-mw-toggle.active .tc-mw-toggle-dot {
+    background: #4a9b6e;
+    box-shadow: 0 0 6px #4a9b6e;
+}
+.tc-mw-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-left: 4px;
+}
+.tc-mw-control-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.66rem;
+    color: #cbd5e1;
+}
+.tc-mw-product-row {
+    flex-wrap: wrap;
+}
+.tc-mw-product-opt {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+}
+.tc-mw-product-opt input[type="radio"] {
+    accent-color: #4a9b6e;
+    cursor: pointer;
+}
+.tc-mw-hours-row {
+    gap: 6px;
+}
+.tc-mw-hours-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: #94a3b8;
+    text-transform: uppercase;
+    font-size: 0.58rem;
+    letter-spacing: 0.04em;
+    font-weight: 600;
+}
+.tc-mw-hours-label .tc-mw-hours-val {
+    color: #e2e8f0;
+    font-variant-numeric: tabular-nums;
+    font-weight: 700;
+}
+.tc-mw-hours-slider {
+    flex: 1;
+    accent-color: #4a9b6e;
+    height: 14px;
+    min-width: 80px;
+}
+.tc-mw-status {
+    font-size: 0.62rem;
+    color: #94a3b8;
+    min-height: 0.9em;
+}
+.tc-mw-attribution {
+    font-size: 0.55rem;
+    color: #64748b;
+    opacity: 0.85;
+}
+.tc-mw-popup {
+    font-family: inherit;
+    color: #0f1623;
+    min-width: 180px;
+}
+.tc-mw-popup-title {
+    font-weight: 700;
+    font-size: 0.82rem;
+    margin-bottom: 4px;
+}
+.tc-mw-popup-row {
+    font-size: 0.72rem;
+    line-height: 1.4;
+}
+
+/* Compact variant — used in Leaflet-control placements where
+   horizontal space is tight (Global Archive map corner). */
+.tc-mw-ui-compact {
+    background: rgba(22,27,36,0.93);
+    border: 1px solid rgba(255,255,255,0.14);
+    border-radius: 6px;
+    padding: 6px 8px;
+    backdrop-filter: blur(6px);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+    min-width: 200px;
+}

@@ -2643,3 +2643,133 @@ input[type="range"].ga-range::-moz-range-thumb {
 .ships-var-btn.active {
     font-weight: 600;
 }
+
+/* ════════════════════════════════════════════════════════════════
+   MICROWAVE PASSES (last N hrs) overlay UI — Global Archive uses
+   the compact variant in a top-right Leaflet control. Class names
+   match the realtime_ir_styles.css block so tc_mw_layer.js produces
+   identical UI on both pages.
+   ════════════════════════════════════════════════════════════════ */
+.ga-mw-control {
+    /* Leaflet wraps controls in .leaflet-control; we only need the
+       inner block to size itself — the helper handles the chrome. */
+    margin-right: 10px;
+}
+.tc-mw-ui {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-family: 'Inter', sans-serif;
+    color: #e2e8f0;
+}
+.tc-mw-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(15,22,35,0.04);
+    border: 1px solid rgba(15,22,35,0.15);
+    color: #0f1623;
+    padding: 5px 10px;
+    border-radius: 5px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.12s, border-color 0.12s;
+}
+.tc-mw-toggle:hover {
+    background: rgba(46,125,255,0.08);
+    border-color: rgba(46,125,255,0.45);
+}
+.tc-mw-toggle .tc-mw-toggle-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: rgba(15,22,35,0.25);
+    transition: background 0.12s, box-shadow 0.12s;
+}
+.tc-mw-toggle.active {
+    background: rgba(46,125,255,0.14);
+    border-color: #2e7dff;
+    color: #0f1623;
+}
+.tc-mw-toggle.active .tc-mw-toggle-dot {
+    background: #2e7dff;
+    box-shadow: 0 0 6px #2e7dff;
+}
+.tc-mw-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-left: 4px;
+}
+.tc-mw-control-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.66rem;
+    color: #5b6573;
+}
+.tc-mw-product-row { flex-wrap: wrap; }
+.tc-mw-product-opt {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+    color: #0f1623;
+}
+.tc-mw-product-opt input[type="radio"] {
+    accent-color: #2e7dff;
+    cursor: pointer;
+}
+.tc-mw-hours-row { gap: 6px; }
+.tc-mw-hours-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: #5b6573;
+    text-transform: uppercase;
+    font-size: 0.58rem;
+    letter-spacing: 0.04em;
+    font-weight: 600;
+}
+.tc-mw-hours-label .tc-mw-hours-val {
+    color: #0f1623;
+    font-variant-numeric: tabular-nums;
+    font-weight: 700;
+}
+.tc-mw-hours-slider {
+    flex: 1;
+    accent-color: #2e7dff;
+    height: 14px;
+    min-width: 90px;
+}
+.tc-mw-status {
+    font-size: 0.62rem;
+    color: #5b6573;
+    min-height: 0.9em;
+}
+.tc-mw-attribution {
+    font-size: 0.55rem;
+    color: #8b9ec2;
+    opacity: 0.85;
+}
+.tc-mw-popup {
+    font-family: 'Inter', sans-serif;
+    color: #0f1623;
+    min-width: 180px;
+}
+.tc-mw-popup-title {
+    font-weight: 700;
+    font-size: 0.82rem;
+    margin-bottom: 4px;
+}
+.tc-mw-popup-row {
+    font-size: 0.72rem;
+    line-height: 1.4;
+}
+.tc-mw-ui-compact {
+    background: rgba(255,255,255,0.96);
+    border: 1px solid rgba(15,22,35,0.15);
+    border-radius: 6px;
+    padding: 6px 8px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.18);
+    min-width: 200px;
+}

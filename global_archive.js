@@ -895,6 +895,29 @@ function initBrowserMap() {
         return div;
     };
     legend.addTo(stormMap);
+
+    // ── Microwave passes (last N hrs) overlay ────────────────
+    // Shared helper from tc_mw_layer.js. Mounted in a small top-right
+    // Leaflet control so it sits next to the zoom button and doesn't
+    // collide with the legend (bottom-right) or the cluster/track
+    // toggle (top-left). Off by default — the bucket is fed by a
+    // 20-min Cloud Run job and the layer would otherwise show empty.
+    if (window.TCMicrowave) {
+        var mwControl = L.control({ position: 'topright' });
+        mwControl.onAdd = function () {
+            var div = L.DomUtil.create('div', 'ga-mw-control');
+            L.DomEvent.disableClickPropagation(div);
+            L.DomEvent.disableScrollPropagation(div);
+            window.TCMicrowave.create(stormMap, {
+                container: div,
+                defaultHours: 6,
+                maxHours: 48,
+                compact: true
+            });
+            return div;
+        };
+        mwControl.addTo(stormMap);
+    }
 }
 
 function renderMarkers(storms) {
