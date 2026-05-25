@@ -665,12 +665,16 @@
                 }
             }
         });
-        // Re-render the layer count badge when the user toggles MW on/off.
+        // Re-render the layer count badge AND the top-level MW pill
+        // when MW toggles. The pill mirrors _rtMwLayer._enabled.
         var origToggle = _rtMwLayer.toggle.bind(_rtMwLayer);
         _rtMwLayer.toggle = function () {
             origToggle();
             if (typeof _refreshLayersCount === 'function') _refreshLayersCount();
+            _rtUpdateMwTopBtn();
         };
+        // Sync on construction in case prefs auto-enabled the layer.
+        setTimeout(_rtUpdateMwTopBtn, 0);
         // If a storm list was already cached when the layer mounted (we
         // construct lazily on first Layers-panel open), seed it now so
         // storm-highlighting works on the first paint.
@@ -688,6 +692,15 @@
         if (_rtMwLayer && typeof _rtMwLayer.setActiveStorms === 'function') {
             _rtMwLayer.setActiveStorms(stormData || []);
         }
+    }
+
+    // Reflect _rtMwLayer's enabled state onto the top-level pill.
+    // Called from the toggle override (above) and once on construction.
+    function _rtUpdateMwTopBtn() {
+        var btn = document.getElementById('ir-mw-toggle-btn');
+        if (!btn) return;
+        var on = !!(_rtMwLayer && _rtMwLayer.isEnabled && _rtMwLayer.isEnabled());
+        btn.classList.toggle('active', on);
     }
 
     // ── ASCAT Wind Barb Overlay State ───────────────────────
@@ -2039,6 +2052,32 @@
                         setGlobalProduct(e.target.getAttribute('data-mode'));
                     });
                 }
+
+                // ── Microwave one-click toggle ──────────────────────
+                // Sibling of the IR/GeoColor pills so users don't have
+                // to dig through the Layers panel to enable the MW
+                // overlay. MW is an *additive* overlay (not a basemap
+                // replacement), so visually we render this as a single
+                // pill with its own active state — distinct from the
+                // radio-style IR/GeoColor segment above. Detailed
+                // controls (sensor toggles, product picker, time
+                // scrubber, legend) remain in the Layers panel; this
+                // is just the primary on/off.
+                var mwTopBtn = L.DomUtil.create('button', 'ir-mw-toggle-btn', wrap);
+                mwTopBtn.id = 'ir-mw-toggle-btn';
+                mwTopBtn.type = 'button';
+                mwTopBtn.title = 'Toggle real-time microwave swaths (GMI / SSMI/S / AMSR2)';
+                mwTopBtn.innerHTML = '<span class="ir-mw-toggle-dot"></span>'
+                                   + '<span class="ir-mw-toggle-text">Microwave</span>';
+                mwTopBtn.addEventListener('click', function () {
+                    // Ensure the helper exists, then flip its state. The
+                    // toggle override on _rtMwLayer.toggle (see
+                    // _rtEnsureMwLayer) re-runs _refreshLayersCount which
+                    // also calls _rtUpdateMwTopBtn, so we don't need to
+                    // manually sync the button class here.
+                    var inst = _rtEnsureMwLayer();
+                    if (inst) inst.toggle();
+                });
 
                 // ── DeepMind WeatherLab status pill ──────────────────
                 // (Previously sat under its own dedicated button.) Now

@@ -629,8 +629,52 @@
                 this._updateStatus('No microwave passes in the last ' + this._hours + ' hr' + cursorSuffix);
             }
         } else {
-            this._updateStatus(nVisible + ' pass' + (nVisible === 1 ? '' : 'es') + ' · last ' + this._hours + ' hr' + cursorSuffix);
+            // "14 passes (3 orbits) · last 11 hr" — orbital count is each
+            // contiguous run of same-sensor granules with <10 min gaps,
+            // since GMI emits 5-min slices and SSMI/S+AMSR2 emit ~17 min
+            // strips. So "14 passes" might be 1 long GMI track + a handful
+            // of SSMI/S granules; users see the orbital decomposition.
+            var nTracks = this._countOrbitalTracks(orbits, now, windowMin, cursorAgeMin);
+            var orbitSuffix = (nTracks > 0 && nTracks !== nVisible)
+                ? ' (' + nTracks + ' orbital track' + (nTracks === 1 ? '' : 's') + ')'
+                : '';
+            this._updateStatus(nVisible + ' pass' + (nVisible === 1 ? '' : 'es') + orbitSuffix + ' · last ' + this._hours + ' hr' + cursorSuffix);
         }
+    };
+
+    /** Count contiguous same-sensor granule runs in the visible window.
+     *  GMI emits 5-min granules during a pass, SSMI/S and AMSR2 emit
+     *  ~17 min granules. A single orbital pass typically lasts ~98 min
+     *  with ~90 min of gap before the same satellite returns. A 20-min
+     *  threshold sits comfortably above all per-sensor cadences and
+     *  well below the inter-orbit gap, so it cleanly partitions
+     *  granules into orbital tracks across all three sensors.
+     *  Mirrors _renderAll's filters so the count reflects what's
+     *  actually painted on the map. */
+    MWLayer.prototype._countOrbitalTracks = function (orbits, now, windowMin, cursorAgeMin) {
+        // Group visible orbits by sensor with scan_start_ms.
+        var bySensor = {};
+        for (var i = 0; i < orbits.length; i++) {
+            var orb = orbits[i];
+            var ageMin = (now - orb.scan_start_ms) / 60000;
+            if (ageMin < 0 || ageMin > windowMin) continue;
+            if (orb.sensor && this._sensors[orb.sensor] === false) continue;
+            if (ageMin < (cursorAgeMin || 0)) continue;
+            if (!orb.products[this._product]) continue;
+            var s = orb.sensor || '?';
+            (bySensor[s] = bySensor[s] || []).push(orb.scan_start_ms);
+        }
+        var TRACK_GAP_MS = 20 * 60 * 1000;
+        var tracks = 0;
+        Object.keys(bySensor).forEach(function (s) {
+            var arr = bySensor[s].slice().sort(function (a, b) { return a - b; });
+            if (!arr.length) return;
+            tracks++;
+            for (var k = 1; k < arr.length; k++) {
+                if (arr[k] - arr[k - 1] > TRACK_GAP_MS) tracks++;
+            }
+        });
+        return tracks;
     };
 
     MWLayer.prototype._addOrbit = function (orb, entry, ageMin, windowMin, highlightStorms) {

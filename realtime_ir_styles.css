@@ -1744,6 +1744,49 @@ html, body { margin: 0; padding: 0; }
     color: #ffffff;
 }
 
+/* Microwave one-click pill — sits below the IR/GeoColor segment.
+   MW is an additive overlay (not a basemap replacement), so it gets
+   its own pill with a dot indicator rather than living inside the
+   IR/GeoColor radio segment. Active state matches the segment's
+   green-tint so the controls feel like a single group visually. */
+.ir-mw-toggle-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(22, 27, 36, 0.92);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 5px;
+    padding: 4px 10px;
+    margin-top: 4px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.7rem;
+    font-weight: 500;
+    color: #cbd5e1;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.ir-mw-toggle-btn:hover {
+    background: rgba(74, 155, 110, 0.18);
+    color: #ffffff;
+}
+.ir-mw-toggle-btn.active {
+    background: rgba(74, 155, 110, 0.32);
+    border-color: rgba(74, 155, 110, 0.55);
+    color: #ffffff;
+}
+.ir-mw-toggle-dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.25);
+    transition: background 0.15s;
+}
+.ir-mw-toggle-btn.active .ir-mw-toggle-dot {
+    background: #4ade80;
+    box-shadow: 0 0 6px rgba(74, 222, 128, 0.7);
+}
+
 /* Labels toggle position — sits in the top-left stack underneath the
    Legend toggle (Basins 170px → Legend 208px → Labels 246px). Reuses
    the .ir-legend-toggle pill styling for visual consistency across
