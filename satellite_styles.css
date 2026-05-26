@@ -485,7 +485,8 @@
 #sat-panel-right[data-mode="compare-wv"],
 #sat-panel-right[data-mode="compare-vis"],
 #sat-panel-right[data-mode="track-map"],
-#sat-panel-right[data-mode="asymmetry"] {
+#sat-panel-right[data-mode="asymmetry"],
+#sat-panel-right[data-mode="microwave"] {
     flex: 3;
 }
 
