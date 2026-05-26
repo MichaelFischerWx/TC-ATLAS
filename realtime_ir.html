@@ -181,9 +181,33 @@
                 <span id="ir-detail-name" class="ir-detail-name"></span>
                 <span id="ir-detail-id" class="ir-detail-id"></span>
                 <span id="ir-detail-cat" class="ir-detail-cat"></span>
-                <button class="ir-kml-btn" onclick="downloadActiveStormKML()" title="Download track as KML for Google Earth">&#127758; KML</button>
-                <button class="ir-kml-btn ir-sat-viewer-btn" onclick="window.openSatelliteViewerForStorm()" title="Deep IR analysis in Satellite Viewer">&#128752; Satellite</button>
-                <button class="ir-kml-btn ir-mw-jump-btn" onclick="window._rtJumpToMwSection()" title="Jump to Microwave Passes (24h) — click any pass for side-by-side IR vs MW comparison">&#128225; Microwave</button>
+                <button class="ir-kml-btn" onclick="downloadActiveStormKML()" title="Download track as KML for Google Earth">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <circle cx="12" cy="12" r="10"/>
+                        <line x1="2" y1="12" x2="22" y2="12"/>
+                        <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+                    </svg>
+                    <span>KML</span>
+                </button>
+                <button class="ir-kml-btn ir-sat-viewer-btn" onclick="window.openSatelliteViewerForStorm()" title="Deep IR analysis in Satellite Viewer">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M4 10a7.3 7.3 0 0 0 10 10"/>
+                        <path d="m9 15 3-3"/>
+                        <path d="M17 13a6 6 0 0 0-6-6"/>
+                        <path d="M21 13A10 10 0 0 0 11 3"/>
+                    </svg>
+                    <span>Satellite</span>
+                </button>
+                <button class="ir-kml-btn ir-mw-jump-btn" onclick="window._rtJumpToMwSection()" title="Jump to Microwave Passes (24h) — click any pass for side-by-side IR vs MW comparison">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <circle cx="12" cy="12" r="2"/>
+                        <path d="M16.24 7.76a6 6 0 0 1 0 8.49"/>
+                        <path d="M7.76 16.24a6 6 0 0 1 0-8.49"/>
+                        <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+                        <path d="M4.93 19.07a10 10 0 0 1 0-14.14"/>
+                    </svg>
+                    <span>Microwave</span>
+                </button>
             </div>
         </div>
         <div class="ir-detail-body">
@@ -609,11 +633,11 @@
             <div class="sat-sidebar-section">
                 <label>Right Panel</label>
                 <div class="sat-mode-toggle">
-                    <button class="sat-mode-btn active" id="sat-mode-diag" data-mode="diagnostics">Diagnostics</button>
-                    <button class="sat-mode-btn" id="sat-mode-track" data-mode="track-map">Track</button>
-                    <button class="sat-mode-btn" id="sat-mode-asym" data-mode="asymmetry">Asymmetry</button>
-                    <button class="sat-mode-btn" id="sat-mode-wv" data-mode="compare-wv">WV</button>
-                    <button class="sat-mode-btn" id="sat-mode-vis" data-mode="compare-vis">Vis</button>
+                    <button class="sat-mode-btn active" id="sat-mode-diag" data-mode="diagnostics" title="Inner-core diagnostics — requires a detected eye (storms ≥ 65 kt)">Diag</button>
+                    <button class="sat-mode-btn" id="sat-mode-track" data-mode="track-map" title="Center-fix track map">Track</button>
+                    <button class="sat-mode-btn" id="sat-mode-asym" data-mode="asymmetry" title="IR asymmetry (wavenumber-1 decomposition)">Asym</button>
+                    <button class="sat-mode-btn" id="sat-mode-wv" data-mode="compare-wv" title="Water-vapor band side-by-side with IR">WV</button>
+                    <button class="sat-mode-btn" id="sat-mode-vis" data-mode="compare-vis" title="Visible band side-by-side with IR (daytime only)">Vis</button>
                     <button class="sat-mode-btn" id="sat-mode-mw" data-mode="microwave" title="Microwave passes (24h) — click any pass to compare with IR side-by-side">MW</button>
                 </div>
             </div>

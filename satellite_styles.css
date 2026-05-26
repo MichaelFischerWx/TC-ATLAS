@@ -328,7 +328,8 @@
 /* ── Mode Toggle (Diagnostics / WV / Vis) ──────────────────── */
 
 .sat-mode-toggle {
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
     gap: 2px;
     background: #0a0c12;
     border-radius: 5px;
@@ -337,13 +338,12 @@
 }
 
 .sat-mode-btn {
-    flex: 1;
     background: transparent;
     color: #8b8fa4;
     border: none;
     border-radius: 3px;
-    padding: 5px 3px;
-    font-size: 9px;
+    padding: 6px 4px;
+    font-size: 10px;
     font-family: inherit;
     cursor: pointer;
     transition: background 0.15s, color 0.15s;
@@ -929,6 +929,11 @@ input[type="range"].sat-slider {
     overflow: hidden;
     border: 1px solid #2a2d38;
 }
+
+/* Hide the canvas-era 10°/5°/2° zoom presets when Leaflet IR is the
+   active display — Leaflet's native scroll-wheel + pinch zoom
+   subsumes them. Toggled from satellite.js via body.sat-leaflet-active. */
+body.sat-leaflet-active .sat-zoom-group { display: none; }
 
 .sat-zoom-btn {
     background: #12141c;

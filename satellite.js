@@ -2664,6 +2664,8 @@
         if (leafletDiv) leafletDiv.style.display = '';
         if (axesY) axesY.style.display = 'none';
         if (axesX) axesX.style.display = 'none';
+        // MW mode also uses Leaflet — hide the canvas-era zoom presets.
+        document.body.classList.add('sat-leaflet-active');
         _satMwInitMaps();
         if (!currentStorm || currentStorm.lat == null || currentStorm.lon == null) {
             _satMwSetStatus('no active storm');
@@ -3063,13 +3065,17 @@
             // graticule, so hide the canvas-era axes elements that
             // would otherwise sit awkwardly outside the map.
             if (axesY) axesY.style.display = 'none';
-            if (axesX) axesX.style.display = 'none';
+            if (axesX) axesX.style.display = '';
         } else {
             if (canvasWrap) canvasWrap.style.display = '';
             if (leafletDiv) leafletDiv.style.display = 'none';
             if (axesY) axesY.style.display = '';
             if (axesX) axesX.style.display = '';
         }
+        // Tag <body> so CSS can hide the 10°/5°/2° zoom buttons when
+        // Leaflet's native pan/zoom is active. They're a leftover from
+        // the canvas-era preset-zoom UX and just clutter the slider.
+        document.body.classList.toggle('sat-leaflet-active', useLeaflet);
         _satIrLeafletActive = useLeaflet;
     }
 
@@ -3332,31 +3338,27 @@
         renderStormList();
         updateHash(atcfId);
 
-        // Reset to diagnostics mode on storm change
-        if (viewMode !== 'diagnostics') {
-            // Microwave mode is the exception — it's storm-bound but
-            // not coupled to the IR frame state, so we can just refresh
-            // the panel against the new storm without bouncing back to
-            // diagnostics.
-            if (viewMode === 'microwave') {
-                _satMwActivate();
-            } else {
-                viewMode = 'diagnostics';
-                var rightPanel = document.getElementById('sat-panel-right');
-                var diagPanel = document.getElementById('sat-diag-panel');
-                var comparePanel = document.getElementById('sat-compare-panel');
-                var compareOptions = document.getElementById('sat-compare-options');
-                var mwPanel = document.getElementById('sat-mw-section');
-                if (rightPanel) rightPanel.setAttribute('data-mode', 'diagnostics');
-                if (diagPanel) diagPanel.style.display = '';
-                if (comparePanel) comparePanel.style.display = 'none';
-                if (compareOptions) compareOptions.style.display = 'none';
-                if (mwPanel) mwPanel.style.display = 'none';
-                var modeBtns = document.querySelectorAll('.sat-mode-btn');
-                for (var mi = 0; mi < modeBtns.length; mi++) {
-                    modeBtns[mi].classList.toggle('active', modeBtns[mi].getAttribute('data-mode') === 'diagnostics');
-                }
-            }
+        // Smart default mode on storm change.
+        //   • Storm ≥ 65 kt → Diagnostics (eye-detected inner-core
+        //     analysis is informative for hurricanes and stronger).
+        //   • Storm < 65 kt → WV compare (Diagnostics would just
+        //     show "requires detected eye" with empty charts — a
+        //     poor first impression for the user).
+        //   • Microwave mode is preserved across storm changes
+        //     (storm-bound but IR-frame-independent — just refresh
+        //     the panel against the new storm).
+        var smartMode = (currentStorm
+                         && isFinite(currentStorm.vmax_kt)
+                         && currentStorm.vmax_kt >= 65)
+            ? 'diagnostics' : 'compare-wv';
+        if (viewMode === 'microwave') {
+            _satMwActivate();
+        } else if (viewMode !== smartMode) {
+            // setViewMode early-returns when newMode equals viewMode,
+            // so nuke the cache first to ensure the full mode setup
+            // (panel show/hide + button active state + frame fetch).
+            viewMode = '__pre_smart_default';
+            setViewMode(smartMode);
         }
 
         if (currentStorm) {
