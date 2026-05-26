@@ -486,13 +486,16 @@ html, body { margin: 0; padding: 0; }
     align-items: center;
     font-variant-numeric: tabular-nums;
     font-size: 0.82rem;
-    color: var(--text);
-    background: rgba(0, 0, 0, 0.18);
+    color: #f1f5f9;
+    background: rgba(10, 14, 22, 0.62);
+    border: 1px solid rgba(255, 255, 255, 0.12);
     padding: 6px 14px;
     border-radius: 6px;
     z-index: 500;
     pointer-events: none;
-    text-shadow: 0 1px 3px rgba(0,0,0,0.18);
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
     transition: opacity 0.2s;
 }
 .ir-overlay-info .ir-frame-time-label {
@@ -501,7 +504,7 @@ html, body { margin: 0; padding: 0; }
 }
 .ir-overlay-info .ir-sat-label {
     font-size: 0.72rem;
-    color: rgba(15, 22, 35, 0.65);
+    color: rgba(241, 245, 249, 0.78);
 }
 
 /* ── Product toggle (IR / GeoColor) ────────────────────────── */
@@ -546,12 +549,16 @@ html, body { margin: 0; padding: 0; }
     bottom: 10px;
     left: 10px;
     z-index: 500;
-    background: rgba(0, 0, 0, 0.18);
+    background: rgba(10, 14, 22, 0.62);
+    border: 1px solid rgba(255, 255, 255, 0.12);
     padding: 6px 10px;
     border-radius: 4px;
     font-variant-numeric: tabular-nums;
     font-size: 0.65rem;
-    color: rgba(15, 22, 35, 0.7);
+    color: #e2e8f0;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
 }
 .ir-tb-legend-bar {
     width: 160px;
