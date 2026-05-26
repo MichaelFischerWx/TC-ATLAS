@@ -3379,10 +3379,36 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
 .tc-mw-schedule {
     margin-top: 6px;
     padding-top: 6px;
+    padding-right: 4px;  /* breathing room next to the scrollbar */
     border-top: 1px dashed rgba(255,255,255,0.10);
     display: flex;
     flex-direction: column;
     gap: 6px;
+    /* Cap height so a busy basin (multiple TCs + disturbances) doesn't
+       push the popover off the bottom of the viewport. The controls
+       above (product / sensors / sliders) stay pinned; only this
+       schedule list scrolls. ~360 px ≈ 4-5 storm rows on a typical
+       laptop, sized small enough that the popover still fits within
+       the IR-Monitor map even on shorter screens. */
+    max-height: 360px;
+    overflow-y: auto;
+    /* Custom scrollbar so it reads as part of the dark popover rather
+       than a default OS chrome strip. */
+    scrollbar-width: thin;
+    scrollbar-color: rgba(148, 163, 184, 0.4) transparent;
+}
+.tc-mw-schedule::-webkit-scrollbar {
+    width: 6px;
+}
+.tc-mw-schedule::-webkit-scrollbar-track {
+    background: transparent;
+}
+.tc-mw-schedule::-webkit-scrollbar-thumb {
+    background-color: rgba(148, 163, 184, 0.4);
+    border-radius: 3px;
+}
+.tc-mw-schedule::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(148, 163, 184, 0.65);
 }
 .tc-mw-schedule-empty {
     font-size: 0.6rem;
