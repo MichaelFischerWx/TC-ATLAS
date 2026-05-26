@@ -2127,6 +2127,12 @@ html, body { margin: 0; padding: 0; }
    the data-view attribute set by switchIRView. */
 html:not([data-view="map"]) #ir-legend-toggle,
 html:not([data-view="map"]) #ir-labels-toggle,
+/* The "▦ Grid" pill toggles the GLOBAL MAP's graticule. Without
+   this gate it floats at top:284px over every other RT tab — most
+   visibly inside the Storm Satellite sidebar — and clicking it
+   silently toggles a graticule on the hidden global map. Treat it
+   the same as Legend / Labels / Basins. */
+html:not([data-view="map"]) #ir-grid-toggle,
 html:not([data-view="map"]) #ir-legend,
 html:not([data-view="map"]) #basin-sidebar-toggle,
 html:not([data-view="map"]) #basin-sidebar,
