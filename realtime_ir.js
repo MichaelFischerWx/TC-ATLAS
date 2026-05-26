@@ -12069,6 +12069,49 @@
     // basically nothing.
     var _RT_MW_MIN_COVERAGE = 0.02;   // ≥2% colored pixels = "covered"
 
+    // Paint the interpolated/extrapolated best-track position on a
+    // storm-centered canvas. Reads _rtMwCompareState.interp, projects
+    // its (lat, lon) onto the canvas using the centerLat/centerLon ±
+    // halfDeg extent, and draws a small filled ring with a directional
+    // hairline back to the canvas center. No-op when the interp state
+    // is empty (initial paint before fetch resolves, side-panel thumbs,
+    // etc).
+    function _rtDrawInterpMarker(ctx, w, h, centerLat, centerLon, halfDeg) {
+        var interp = _rtMwCompareState && _rtMwCompareState.interp;
+        if (!interp || interp.lat == null || interp.lon == null) return;
+        var dLon = interp.lon - centerLon;
+        // Wrap longitudes onto the [-180, 180] range relative to center
+        // so a center at 178°E with interp at -179°E (177°W) reads as
+        // a +3° offset instead of -357°.
+        while (dLon > 180)  dLon -= 360;
+        while (dLon < -180) dLon += 360;
+        var dLat = interp.lat - centerLat;
+        if (Math.abs(dLat) > halfDeg || Math.abs(dLon) > halfDeg) return;
+        var x = w / 2 + (dLon / (2 * halfDeg)) * w;
+        var y = h / 2 - (dLat / (2 * halfDeg)) * h;   // y inverted
+        ctx.save();
+        // Hairline from storm-center cross to the interp position so the
+        // user reads the motion vector at a glance.
+        ctx.strokeStyle = 'rgba(251, 146, 60, 0.65)';
+        ctx.lineWidth = 1.2;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.moveTo(w / 2, h / 2);
+        ctx.lineTo(x, y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        // Filled ring at the interpolated position. Orange to contrast
+        // with the yellow center cross.
+        ctx.fillStyle = 'rgba(251, 146, 60, 0.9)';
+        ctx.strokeStyle = 'rgba(15, 22, 36, 0.95)';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(x, y, 6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+    }
+
     // Format a lat/lon as JTWC/NHC-style label (12°N / 138°E / 180°).
     function _rtFmtLat(v) {
         if (Math.abs(v) < 0.05) return '0°';
@@ -12227,6 +12270,12 @@
             if (withGrid) {
                 _rtDrawLatLonGrid(ctx, canvas.width, canvas.height,
                                   lat, lon, _RT_MW_HALF_DEG, 2);
+                // Compare-modal extra: ring at the interpolated/extrapolated
+                // best-track position for the MW pass time. Lives in
+                // _rtMwCompareState.interp because both compare canvases
+                // share the same storm-centered extent.
+                _rtDrawInterpMarker(ctx, canvas.width, canvas.height,
+                                    lat, lon, _RT_MW_HALF_DEG);
             }
             if (onCoverage) onCoverage(frac);
         };
@@ -12290,6 +12339,25 @@
     // modal is already body-level, so it works from any view.
     window._rtLoadStormMwPasses = _rtLoadStormMwPasses;
 
+    // Scroll the storm-detail body to the Microwave Passes section.
+    // Wired to the new "Microwave" pill in the detail-header next to
+    // KML / Satellite so users discover the section without having
+    // to scroll the side rail. Falls back to scrolling the section
+    // into the document if no scrollable ancestor matches.
+    window._rtJumpToMwSection = function () {
+        var section = document.getElementById('rt-mw-storm-section');
+        if (!section) return;
+        // Ensure the section is visible (it starts hidden until the
+        // loader fires on storm-detail open).
+        if (section.style.display === 'none') section.style.display = '';
+        section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        // Brief highlight pulse so the user's eye lands on the panel.
+        section.classList.add('ir-info-section-pulse');
+        setTimeout(function () {
+            section.classList.remove('ir-info-section-pulse');
+        }, 1600);
+    };
+
     // ════════════════════════════════════════════════════════════════
     //  IR ↔ MW side-by-side compare modal
     //  Opens when a user clicks a MW pass thumbnail. Left panel shows
@@ -12303,6 +12371,9 @@
         product: '89pct',
         irMeta: null,        // cached /ir-frames-meta response
         irMetaAtcf: null,    // atcf_id the irMeta was fetched for
+        track: null,         // cached intensity_history (with lat/lon/time)
+        trackAtcf: null,     // atcf_id the track was fetched for
+        interp: null,        // {lat, lon, mode, sourceTimeStr} at MW pass time
     };
     var _RT_MW_COMPARE_LOOKBACK_H = 24;  // matches MW window
     var _RT_MW_COMPARE_RADIUS = 10;      // IR JPG returns ±radius_deg box
@@ -12311,6 +12382,103 @@
     // alignment is the whole point of this view.
     var _RT_MW_COMPARE_HALF_DEG = _RT_MW_HALF_DEG;
     var _RT_MW_COMPARE_PX = 600;         // canvas display size
+
+    // Linear interpolation / extrapolation of (lat, lon) at a target
+    // time using two or more best-track fixes from intensity_history.
+    // Returns {lat, lon, mode, neighborTimes} or null if not computable.
+    //   mode = 'interp' (target between two fixes),
+    //          'extrap-fwd' (target after last fix; linear from last 2),
+    //          'extrap-bwd' (target before first fix; linear from first 2),
+    //          'snap'   (only one fix available; just return it).
+    function _rtInterpTrack(history, targetMs) {
+        if (!history || !history.length) return null;
+        var pts = history
+            .map(function (h) {
+                return {
+                    t: Date.parse(h.time),
+                    lat: h.lat, lon: h.lon,
+                };
+            })
+            .filter(function (p) {
+                return isFinite(p.t) && p.lat != null && p.lon != null;
+            })
+            .sort(function (a, b) { return a.t - b.t; });
+        if (!pts.length) return null;
+        if (pts.length === 1) {
+            return { lat: pts[0].lat, lon: pts[0].lon, mode: 'snap',
+                     neighborTimes: [pts[0].t] };
+        }
+        // Interpolation: find bracketing pair.
+        for (var i = 1; i < pts.length; i++) {
+            if (pts[i].t >= targetMs && pts[i - 1].t <= targetMs) {
+                var a = pts[i - 1], b = pts[i];
+                var dt = b.t - a.t;
+                var f = dt > 0 ? (targetMs - a.t) / dt : 0;
+                return {
+                    lat: a.lat + f * (b.lat - a.lat),
+                    lon: a.lon + f * (b.lon - a.lon),
+                    mode: 'interp',
+                    neighborTimes: [a.t, b.t],
+                };
+            }
+        }
+        // Extrapolation forward: target after last fix.
+        if (targetMs > pts[pts.length - 1].t) {
+            var n = pts.length;
+            var p1 = pts[n - 2], p2 = pts[n - 1];
+            var dt2 = p2.t - p1.t;
+            if (dt2 <= 0) {
+                return { lat: p2.lat, lon: p2.lon, mode: 'snap',
+                         neighborTimes: [p2.t] };
+            }
+            var f2 = (targetMs - p2.t) / dt2;
+            return {
+                lat: p2.lat + f2 * (p2.lat - p1.lat),
+                lon: p2.lon + f2 * (p2.lon - p1.lon),
+                mode: 'extrap-fwd',
+                neighborTimes: [p1.t, p2.t],
+            };
+        }
+        // Extrapolation backward: target before first fix.
+        var q1 = pts[0], q2 = pts[1];
+        var dt3 = q2.t - q1.t;
+        if (dt3 <= 0) {
+            return { lat: q1.lat, lon: q1.lon, mode: 'snap',
+                     neighborTimes: [q1.t] };
+        }
+        var f3 = (q1.t - targetMs) / dt3;
+        return {
+            lat: q1.lat - f3 * (q2.lat - q1.lat),
+            lon: q1.lon - f3 * (q2.lon - q1.lon),
+            mode: 'extrap-bwd',
+            neighborTimes: [q1.t, q2.t],
+        };
+    }
+
+    // Fetch + cache the storm's intensity_history (which carries
+    // best-track positions at standard 00/06/12/18Z synoptic times).
+    // Used by the compare modal to interpolate the storm's actual
+    // position at the exact MW pass time.
+    function _rtFetchStormTrack(storm) {
+        if (_rtMwCompareState.trackAtcf === storm.atcf_id
+                && _rtMwCompareState.track) {
+            return Promise.resolve(_rtMwCompareState.track);
+        }
+        var url = API_BASE
+            + '/ir-monitor/storm/' + encodeURIComponent(storm.atcf_id)
+            + '/metadata';
+        return fetch(url, { cache: 'no-store' })
+            .then(function (r) {
+                if (!r.ok) throw new Error('metadata HTTP ' + r.status);
+                return r.json();
+            })
+            .then(function (m) {
+                var hist = (m && m.intensity_history) || [];
+                _rtMwCompareState.track = hist;
+                _rtMwCompareState.trackAtcf = storm.atcf_id;
+                return hist;
+            });
+    }
 
     // Open the compare modal from a click on a MW pass card. The orbit
     // carries scan_start + products + bounds; storm carries lat/lon.
@@ -12344,7 +12512,57 @@
 
         modal.style.display = 'flex';
         document.body.style.overflow = 'hidden';
-        _rtRenderMwCompare();
+
+        // Seed legend with latest fix (we already know it from `storm`).
+        var fixLegend = document.getElementById('rt-mw-compare-legend-fix');
+        if (fixLegend && storm.last_fix_utc) {
+            var fixTime = storm.last_fix_utc.replace('T', ' ').slice(0, 16) + 'Z';
+            fixLegend.textContent = fixTime + ' · '
+                + storm.lat.toFixed(1) + '°' + (storm.lat >= 0 ? 'N' : 'S')
+                + ' / ' + storm.lon.toFixed(1) + '°' + (storm.lon >= 0 ? 'E' : 'W');
+        }
+        var interpLegend = document.getElementById('rt-mw-compare-legend-interp');
+        var interpLabel = document.getElementById('rt-mw-compare-legend-interp-label');
+        if (interpLegend) interpLegend.textContent = 'computing…';
+        if (interpLabel) interpLabel.textContent = 'Interpolated position';
+
+        // Reset interp state — async fetch below will populate it.
+        _rtMwCompareState.interp = null;
+        _rtRenderMwCompare();   // initial paint without interp marker
+
+        _rtFetchStormTrack(storm)
+            .then(function (history) {
+                if (_rtMwCompareState.orbit !== orbit) return;  // user closed/changed
+                var mwMs = orbit.scan_start_ms;
+                var interp = _rtInterpTrack(history, mwMs);
+                _rtMwCompareState.interp = interp;
+                if (interpLegend && interpLabel) {
+                    if (!interp) {
+                        interpLabel.textContent = 'Interpolated position';
+                        interpLegend.textContent = 'no track data';
+                    } else {
+                        // Friendlier label based on which side of the
+                        // fix window the MW pass landed.
+                        var modeLabel = {
+                            'interp':      'Interpolated position at MW pass',
+                            'extrap-fwd':  'Extrapolated position at MW pass',
+                            'extrap-bwd':  'Extrapolated position at MW pass',
+                            'snap':        'Position (single track point)',
+                        }[interp.mode] || 'Interpolated position';
+                        interpLabel.textContent = modeLabel;
+                        var passUtc = orbit.scan_start.replace('T', ' ').slice(0, 16) + 'Z';
+                        interpLegend.textContent = passUtc + ' · '
+                            + interp.lat.toFixed(1) + '°' + (interp.lat >= 0 ? 'N' : 'S')
+                            + ' / ' + interp.lon.toFixed(1) + '°' + (interp.lon >= 0 ? 'E' : 'W');
+                    }
+                }
+                _rtRenderMwCompare();   // repaint with the interp marker
+            })
+            .catch(function (err) {
+                console.warn('[RT MW Compare] track fetch failed', err);
+                if (interpLegend) interpLegend.textContent = 'unavailable';
+            });
+
         _ga('rt_mw_compare_open', {
             sensor: orbit.sensor, product: _rtMwCompareState.product
         });
@@ -12514,6 +12732,11 @@
             _rtDrawLatLonGrid(ctx, canvas.width, canvas.height,
                               storm.lat, storm.lon,
                               _RT_MW_COMPARE_HALF_DEG, 2);
+            // Interpolated best-track marker at the MW pass time, if
+            // the metadata fetch resolved with usable points.
+            _rtDrawInterpMarker(ctx, canvas.width, canvas.height,
+                                storm.lat, storm.lon,
+                                _RT_MW_COMPARE_HALF_DEG);
             if (done) done(null);
         };
         img.onerror = function () { if (done) done(new Error('IR jpg load failed')); };

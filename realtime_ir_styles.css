@@ -3410,6 +3410,106 @@ html:not([data-view="map"]) #ir-global-env-cbars {
     .rt-mw-compare-content { padding: 14px 16px; }
 }
 
+/* Legend strip — explains the on-canvas position markers (latest
+   best-track fix vs interpolated/extrapolated position at MW pass).
+   Sits between the product chips and the canvas panels. */
+.rt-mw-compare-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 18px;
+    margin: 4px 0 12px 0;
+    padding: 8px 10px;
+    background: rgba(15, 22, 36, 0.04);
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    border-radius: 6px;
+    font-size: 0.72rem;
+    color: var(--text, #0f172a);
+}
+.rt-mw-compare-legend-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.rt-mw-compare-marker {
+    flex-shrink: 0;
+    width: 20px;
+    height: 20px;
+    position: relative;
+}
+/* Yellow cross marker — matches the canvas-drawn storm-center cross. */
+.rt-mw-compare-marker-cross::before,
+.rt-mw-compare-marker-cross::after {
+    content: '';
+    position: absolute;
+    background: #fde047;
+    left: 50%; top: 50%;
+}
+.rt-mw-compare-marker-cross::before {
+    width: 16px; height: 2px;
+    transform: translate(-50%, -50%);
+}
+.rt-mw-compare-marker-cross::after {
+    width: 2px; height: 16px;
+    transform: translate(-50%, -50%);
+}
+/* Orange filled ring marker — matches the canvas-drawn interp marker. */
+.rt-mw-compare-marker-ring {
+    width: 14px;
+    height: 14px;
+    margin: 3px;
+    border-radius: 50%;
+    background: rgba(251, 146, 60, 0.9);
+    border: 1.5px solid rgba(15, 22, 36, 0.95);
+    box-shadow: 0 0 0 1px rgba(251, 146, 60, 0.4);
+}
+.rt-mw-compare-marker-label strong {
+    display: block;
+    font-weight: 700;
+    line-height: 1.2;
+}
+.rt-mw-compare-marker-time {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.66rem;
+    color: var(--text-dim, #64748b);
+}
+[data-theme="dark"] .rt-mw-compare-legend {
+    background: rgba(255, 255, 255, 0.03);
+    border-color: rgba(255, 255, 255, 0.08);
+    color: var(--text, #e2e8f0);
+}
+[data-theme="dark"] .rt-mw-compare-marker-cross::before,
+[data-theme="dark"] .rt-mw-compare-marker-cross::after {
+    background: #fde047;
+}
+
+/* Microwave jump-button in the storm-detail header — matches KML /
+   Satellite styling but tinted blue to read as a navigation pill. */
+.ir-mw-jump-btn {
+    background: rgba(46, 125, 255, 0.12);
+    border-color: rgba(46, 125, 255, 0.45);
+    color: #2e7dff;
+}
+.ir-mw-jump-btn:hover {
+    background: rgba(46, 125, 255, 0.22);
+    border-color: rgba(46, 125, 255, 0.6);
+}
+[data-theme="dark"] .ir-mw-jump-btn {
+    color: #93c5fd;
+    border-color: rgba(46, 125, 255, 0.55);
+}
+
+/* Pulse animation — applied briefly to the Microwave section when the
+   user clicks the header pill, so their eye lands on the right panel. */
+@keyframes ir-info-section-pulse-kf {
+    0%   { box-shadow: 0 0 0 0  rgba(46, 125, 255, 0.55); }
+    60%  { box-shadow: 0 0 0 6px rgba(46, 125, 255, 0.10); }
+    100% { box-shadow: 0 0 0 0  rgba(46, 125, 255, 0.00); }
+}
+.ir-info-section-pulse {
+    animation: ir-info-section-pulse-kf 1.5s ease-out;
+    border-radius: 6px;
+}
+
 /* ════════════════════════════════════════════════════════════════
    subOnly=1 iframe-embed mode. Strips all chrome and reduces the
    Subseasonal tab to just the combined Hovmöller, so the climo

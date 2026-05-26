@@ -183,6 +183,7 @@
                 <span id="ir-detail-cat" class="ir-detail-cat"></span>
                 <button class="ir-kml-btn" onclick="downloadActiveStormKML()" title="Download track as KML for Google Earth">&#127758; KML</button>
                 <button class="ir-kml-btn ir-sat-viewer-btn" onclick="window.openSatelliteViewerForStorm()" title="Deep IR analysis in Satellite Viewer">&#128752; Satellite</button>
+                <button class="ir-kml-btn ir-mw-jump-btn" onclick="window._rtJumpToMwSection()" title="Jump to Microwave Passes (24h) — click any pass for side-by-side IR vs MW comparison">&#128225; Microwave</button>
             </div>
         </div>
         <div class="ir-detail-body">
@@ -405,6 +406,31 @@
                     <div id="ir-intensity-chart" class="ir-intensity-chart"></div>
                 </div>
 
+                <!-- Microwave Passes (storm-sectored last-24h list) —
+                     placed above ASCAT because microwave is the primary
+                     diagnostic for inner-core structure on developing
+                     systems where ASCAT may not have a recent overpass. -->
+                <div class="ir-info-section" id="rt-mw-storm-section" style="display:none;">
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                        <h3 class="ir-info-heading" style="margin-bottom:0;padding-bottom:0;border-bottom:none;">Microwave Passes (24h)</h3>
+                        <span id="rt-mw-storm-status" style="font-size:0.68rem;color:#64748b;"></span>
+                    </div>
+                    <!-- Product chips — re-render the existing list with a different
+                         product slug. 89pct is the default since it's the sharpest
+                         convective-structure proxy in our six-product set. -->
+                    <div id="rt-mw-storm-products" class="rt-mw-storm-products">
+                        <button type="button" class="rt-mw-storm-chip active" data-product="89pct" title="89 GHz polarization-corrected temperature (PCT) — sharpest convective structure">89 PCT</button>
+                        <button type="button" class="rt-mw-storm-chip" data-product="37color" title="37 GHz NRL false-color RGB — best for warm-core / eye structure">37 color</button>
+                        <button type="button" class="rt-mw-storm-chip" data-product="89v" title="89 GHz vertical-polarization brightness temperature">89V</button>
+                        <button type="button" class="rt-mw-storm-chip" data-product="89h" title="89 GHz horizontal-polarization brightness temperature">89H</button>
+                        <button type="button" class="rt-mw-storm-chip" data-product="37v" title="37 GHz vertical-polarization brightness temperature">37V</button>
+                        <button type="button" class="rt-mw-storm-chip" data-product="37h" title="37 GHz horizontal-polarization brightness temperature">37H</button>
+                    </div>
+                    <div id="rt-mw-storm-list" class="rt-mw-storm-list">
+                        <!-- populated by _rtRenderStormMwPasses with chronological thumbnails -->
+                    </div>
+                </div>
+
                 <!-- ASCAT Scatterometer Winds -->
                 <div class="ir-info-section" id="rt-ascat-section" style="display:none;">
                     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
@@ -433,28 +459,6 @@
                                 <span style="font-size:8px;color:#c026d3;background:rgba(192,38,211,0.15);padding:1px 4px;border-radius:2px;">64+</span>
                             </div>
                         </div>
-                    </div>
-                </div>
-
-                <!-- Microwave Passes (storm-sectored last-24h list) -->
-                <div class="ir-info-section" id="rt-mw-storm-section" style="display:none;">
-                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-                        <h3 class="ir-info-heading" style="margin-bottom:0;padding-bottom:0;border-bottom:none;">Microwave Passes (24h)</h3>
-                        <span id="rt-mw-storm-status" style="font-size:0.68rem;color:#64748b;"></span>
-                    </div>
-                    <!-- Product chips — re-render the existing list with a different
-                         product slug. 89pct is the default since it's the sharpest
-                         convective-structure proxy in our six-product set. -->
-                    <div id="rt-mw-storm-products" class="rt-mw-storm-products">
-                        <button type="button" class="rt-mw-storm-chip active" data-product="89pct" title="89 GHz polarization-corrected temperature (PCT) — sharpest convective structure">89 PCT</button>
-                        <button type="button" class="rt-mw-storm-chip" data-product="37color" title="37 GHz NRL false-color RGB — best for warm-core / eye structure">37 color</button>
-                        <button type="button" class="rt-mw-storm-chip" data-product="89v" title="89 GHz vertical-polarization brightness temperature">89V</button>
-                        <button type="button" class="rt-mw-storm-chip" data-product="89h" title="89 GHz horizontal-polarization brightness temperature">89H</button>
-                        <button type="button" class="rt-mw-storm-chip" data-product="37v" title="37 GHz vertical-polarization brightness temperature">37V</button>
-                        <button type="button" class="rt-mw-storm-chip" data-product="37h" title="37 GHz horizontal-polarization brightness temperature">37H</button>
-                    </div>
-                    <div id="rt-mw-storm-list" class="rt-mw-storm-list">
-                        <!-- populated by _rtRenderStormMwPasses with chronological thumbnails -->
                     </div>
                 </div>
 
@@ -1688,6 +1692,26 @@
                 <button type="button" class="rt-mw-storm-chip" data-product="89h" title="89 GHz horizontal polarization">89H</button>
                 <button type="button" class="rt-mw-storm-chip" data-product="37v" title="37 GHz vertical polarization">37V</button>
                 <button type="button" class="rt-mw-storm-chip" data-product="37h" title="37 GHz horizontal polarization">37H</button>
+            </div>
+            <!-- Legend bar: explains the on-canvas position markers
+                 (latest best-track fix + interpolated/extrapolated
+                 position at the MW pass time). Populated from the
+                 fetched intensity_history each time the modal opens. -->
+            <div id="rt-mw-compare-legend" class="rt-mw-compare-legend">
+                <div class="rt-mw-compare-legend-item">
+                    <span class="rt-mw-compare-marker rt-mw-compare-marker-cross"></span>
+                    <span class="rt-mw-compare-marker-label">
+                        <strong>Latest best-track fix</strong>
+                        <span id="rt-mw-compare-legend-fix" class="rt-mw-compare-marker-time">—</span>
+                    </span>
+                </div>
+                <div class="rt-mw-compare-legend-item" id="rt-mw-compare-legend-interp-wrap">
+                    <span class="rt-mw-compare-marker rt-mw-compare-marker-ring"></span>
+                    <span class="rt-mw-compare-marker-label">
+                        <strong id="rt-mw-compare-legend-interp-label">Interpolated position</strong>
+                        <span id="rt-mw-compare-legend-interp" class="rt-mw-compare-marker-time">—</span>
+                    </span>
+                </div>
             </div>
             <div class="rt-mw-compare-panels">
                 <div class="rt-mw-compare-panel">
