@@ -2648,12 +2648,18 @@
             .addTo(_satMwLeafletMw);
     }
 
+    // Global toggle: when true, pan/zoom on any Leaflet pane mirrors
+    // to the others. When false, each pane navigates independently.
+    // User can flip via the chain-link control button on the map.
+    var _satMapSyncEnabled = true;
+
     function _satMwInitMaps() {
         _satEnsureIrMap();
         _satEnsureMwMap();
         if (_satIrSyncWired || !_satMwLeafletIr || !_satMwLeafletMw) return;
         function _wireSync(src, dst) {
             src.on('moveend zoomend', function () {
+                if (!_satMapSyncEnabled) return;
                 if (_satMwSyncing) return;
                 _satMwSyncing = true;
                 dst.setView(src.getCenter(), src.getZoom(), { animate: false });
@@ -2663,6 +2669,75 @@
         _wireSync(_satMwLeafletIr, _satMwLeafletMw);
         _wireSync(_satMwLeafletMw, _satMwLeafletIr);
         _satIrSyncWired = true;
+        _satAddMapControls(_satMwLeafletIr);
+        _satAddMapControls(_satMwLeafletMw);
+    }
+
+    // Recenter every active Leaflet map on the current storm, zoom 6.
+    // Temporarily disables sync so each setView completes without
+    // pingpong.
+    function _satRecenterAllOnStorm() {
+        if (!currentStorm) return;
+        var c = [currentStorm.lat, currentStorm.lon];
+        var z = 6;
+        var prev = _satMapSyncEnabled;
+        _satMapSyncEnabled = false;
+        try {
+            if (_satMwLeafletIr) {
+                _satMwLeafletIr.invalidateSize(false);
+                _satMwLeafletIr.setView(c, z, { animate: false });
+            }
+            if (_satMwLeafletMw) {
+                _satMwLeafletMw.invalidateSize(false);
+                _satMwLeafletMw.setView(c, z, { animate: false });
+            }
+            if (_satRightLeafletMap) {
+                _satRightLeafletMap.invalidateSize(false);
+                _satRightLeafletMap.setView(c, z, { animate: false });
+            }
+        } finally {
+            _satMapSyncEnabled = prev;
+        }
+    }
+
+    // Add a small floating control with two buttons to a Leaflet map:
+    //   ⌖ Recenter on storm
+    //   🔗 Toggle pane sync (active = linked)
+    // Buttons sit just below Leaflet's built-in zoom control.
+    function _satAddMapControls(map) {
+        if (!map || map._satControlsAdded) return;
+        var Ctrl = L.Control.extend({
+            options: { position: 'topleft' },
+            onAdd: function () {
+                var bar = L.DomUtil.create('div', 'leaflet-bar sat-map-controls');
+                var recenter = L.DomUtil.create('a', 'sat-map-ctrl-btn', bar);
+                recenter.href = '#';
+                recenter.title = 'Recenter every pane on the storm';
+                recenter.innerHTML = '⌖';
+                L.DomEvent.on(recenter, 'click', function (e) {
+                    L.DomEvent.preventDefault(e); L.DomEvent.stop(e);
+                    _satRecenterAllOnStorm();
+                });
+                var link = L.DomUtil.create('a', 'sat-map-ctrl-btn', bar);
+                link.href = '#';
+                link.title = 'Toggle pane sync — when off, each map pans independently';
+                link.innerHTML = '🔗';
+                if (_satMapSyncEnabled) link.classList.add('active');
+                L.DomEvent.on(link, 'click', function (e) {
+                    L.DomEvent.preventDefault(e); L.DomEvent.stop(e);
+                    _satMapSyncEnabled = !_satMapSyncEnabled;
+                    document.querySelectorAll('.sat-map-ctrl-btn').forEach(function (b) {
+                        if (b.title.indexOf('sync') >= 0) {
+                            b.classList.toggle('active', _satMapSyncEnabled);
+                        }
+                    });
+                });
+                L.DomEvent.disableClickPropagation(bar);
+                return bar;
+            }
+        });
+        new Ctrl().addTo(map);
+        map._satControlsAdded = true;
     }
 
     function _satMwActivate() {
@@ -3410,9 +3485,12 @@
         L.tileLayer(_SAT_LEAFLET_BASE_URL, { maxZoom: 12, opacity: 0.55 })
             .addTo(_satRightLeafletMap);
         // Sync with the left IR map (Phase 1/2 init). Uses the shared
-        // _satMwSyncing guard from MW mode so we don't get feedback loops.
+        // _satMwSyncing guard so we don't get feedback loops, AND
+        // honors the _satMapSyncEnabled global toggle so the user
+        // can pan/zoom each pane independently if desired.
         if (_satMwLeafletIr) {
             _satRightLeafletMap.on('moveend zoomend', function () {
+                if (!_satMapSyncEnabled) return;
                 if (_satMwSyncing) return;
                 _satMwSyncing = true;
                 _satMwLeafletIr.setView(_satRightLeafletMap.getCenter(),
@@ -3421,6 +3499,7 @@
                 _satMwSyncing = false;
             });
             _satMwLeafletIr.on('moveend zoomend', function () {
+                if (!_satMapSyncEnabled) return;
                 if (_satMwSyncing) return;
                 _satMwSyncing = true;
                 _satRightLeafletMap.setView(_satMwLeafletIr.getCenter(),
@@ -3429,6 +3508,7 @@
                 _satMwSyncing = false;
             });
         }
+        _satAddMapControls(_satRightLeafletMap);
     }
 
     function _satRightApplyLeafletVisibility() {
@@ -3436,17 +3516,23 @@
         var leafletDiv = document.getElementById('sat-leaflet-right');
         var axesY = document.getElementById('sat-axes-y-right');
         var axesX = document.getElementById('sat-axes-x-right');
+        var colorbar = document.getElementById('sat-cb-right');
         var useLeaflet = _satRightShouldUseLeaflet();
         if (useLeaflet) {
             if (canvasWrap) canvasWrap.style.display = 'none';
             if (leafletDiv) leafletDiv.style.display = '';
             if (axesY) axesY.style.display = 'none';
             if (axesX) axesX.style.display = 'none';
+            // Colorbar hidden so the right Leaflet pane matches the
+            // left pane's height (without this, the colorbar steals
+            // ~60 px from the map area and the panes look mismatched).
+            if (colorbar) colorbar.style.display = 'none';
         } else {
             if (canvasWrap) canvasWrap.style.display = '';
             if (leafletDiv) leafletDiv.style.display = 'none';
             if (axesY) axesY.style.display = '';
             if (axesX) axesX.style.display = '';
+            if (colorbar) colorbar.style.display = '';
         }
     }
 

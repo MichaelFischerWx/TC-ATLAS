@@ -3519,6 +3519,30 @@ html:not([data-view="map"]) #ir-global-env-cbars {
     box-shadow: 0 0 0 1px rgba(251, 146, 60, 0.45);
 }
 
+/* Floating Leaflet control bar — ⌖ Recenter, 🔗 Sync toggle. Sits
+   beneath Leaflet's built-in zoom control on each Storm Satellite
+   tab Leaflet map. The active class lights up the sync button when
+   panes are linked. */
+.sat-map-controls { margin-top: 6px !important; }
+.sat-map-ctrl-btn {
+    display: block;
+    width: 26px;
+    height: 26px;
+    line-height: 26px;
+    text-align: center;
+    background: #fff;
+    color: #333;
+    font-size: 14px;
+    text-decoration: none;
+    border-bottom: 1px solid #ddd;
+}
+.sat-map-ctrl-btn:last-child { border-bottom: none; }
+.sat-map-ctrl-btn:hover { background: #f4f4f4; }
+.sat-map-ctrl-btn.active {
+    background: #d4e7ff;
+    color: #1d4ed8;
+}
+
 /* Phase 2: Leaflet IR animation center-fix marker. Shown when the
    active frame carries a server-detected eye (storms ≥ ~65 kt).
    Cyan circle+cross matches the existing canvas crosshair legend
