@@ -3290,12 +3290,31 @@ html:not([data-view="map"]) #ir-global-env-cbars {
     min-height: 320px;
     background: rgba(15, 22, 36, 0.55);
     border-radius: 4px;
+    position: relative;   /* Leaflet's tile + control children are
+                             absolutely positioned — need a positioned
+                             ancestor to anchor them. */
 }
-/* The MW pane sits inside a flex column with chip row + pass strip,
-   so it needs its own flex sizing distinct from the IR pane. */
+/* IR (left) pane sits inside .sat-panel which uses justify-content:
+   center / align-items: center to lay out the canvas-wrap. Those
+   alignment rules make a flex child shrink to its content unless
+   we override — so the Leaflet div would render as a narrow strip
+   instead of filling the pane. Absolute positioning sidesteps the
+   flex weirdness entirely; #sat-panel-ir is already position:relative
+   so inset:0 fills it cleanly. */
+#sat-leaflet-ir {
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+    min-height: 0;
+    flex: none;
+    border-radius: 0;
+}
+/* The MW (right) pane lives inside .sat-mw-leaflet-panel — its own
+   flex column with chip row + pass strip, so it behaves normally as
+   a flex child. */
 .sat-leaflet-pane-mw {
     flex: 1;
-    min-height: 0;
+    min-height: 240px;
 }
 
 .sat-mw-leaflet-panel {
