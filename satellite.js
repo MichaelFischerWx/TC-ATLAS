@@ -488,6 +488,12 @@
         if (typeof _satIrSyncLeaflet === 'function') {
             _satIrSyncLeaflet();
         }
+        // Phase 3: same dispatch for the right-pane WV/Vis Leaflet
+        // display (only active when in compare-wv / compare-vis mode
+        // with the band's default colormap).
+        if (typeof _satRightSyncLeaflet === 'function') {
+            _satRightSyncLeaflet();
+        }
 
         if (viewMode === 'diagnostics') {
             // Debounced diagnostics update during fast animation
@@ -3227,6 +3233,167 @@
     // Expose so other functions can re-sync without poking globals.
     window._satIrSyncLeaflet = _satIrSyncLeaflet;
 
+    // ════════════════════════════════════════════════════════════════
+    //  Phase 3: WV/Vis right pane on Leaflet
+    //  Replaces the canvas WV/Vis display when:
+    //    1. View mode is "compare-wv" or "compare-vis" (other modes
+    //       use the right pane for diagnostics/track/asym/MW),
+    //    2. AND the user has the band's default colormap selected
+    //       (`wv` for WV band, `vis` for Vis band — custom colormaps
+    //       stay on the canvas LUT painter).
+    //  Per-frame L.imageOverlay layers pre-loaded at opacity 0;
+    //  showFrame just toggles opacity. Pan/zoom synced with the IR
+    //  Leaflet map on the left.
+    // ════════════════════════════════════════════════════════════════
+    var _satRightLeafletMap = null;
+    var _satRightFrameLayers = [];
+    var _satRightFrameStormId = null;
+    var _satRightFrameBand = null;
+    var _SAT_RIGHT_BAND_TO_DEFAULT_CMAP = { 8: 'wv', 2: 'vis' };
+
+    function _satRightShouldUseLeaflet() {
+        if (viewMode !== 'compare-wv' && viewMode !== 'compare-vis') return false;
+        var defaultCmap = _SAT_RIGHT_BAND_TO_DEFAULT_CMAP[rightBand];
+        return defaultCmap && rightColormapName === defaultCmap;
+    }
+
+    function _satRightEnsureMap() {
+        if (_satRightLeafletMap) return;
+        var div = document.getElementById('sat-leaflet-right');
+        if (!div) return;
+        _satRightLeafletMap = L.map(div, _SAT_LEAFLET_OPTS).setView([0, 0], 5);
+        L.tileLayer(_SAT_LEAFLET_BASE_URL, { maxZoom: 12, opacity: 0.55 })
+            .addTo(_satRightLeafletMap);
+        // Sync with the left IR map (Phase 1/2 init). Uses the shared
+        // _satMwSyncing guard from MW mode so we don't get feedback loops.
+        if (_satMwLeafletIr) {
+            _satRightLeafletMap.on('moveend zoomend', function () {
+                if (_satMwSyncing) return;
+                _satMwSyncing = true;
+                _satMwLeafletIr.setView(_satRightLeafletMap.getCenter(),
+                                        _satRightLeafletMap.getZoom(),
+                                        { animate: false });
+                _satMwSyncing = false;
+            });
+            _satMwLeafletIr.on('moveend zoomend', function () {
+                if (_satMwSyncing) return;
+                _satMwSyncing = true;
+                _satRightLeafletMap.setView(_satMwLeafletIr.getCenter(),
+                                            _satMwLeafletIr.getZoom(),
+                                            { animate: false });
+                _satMwSyncing = false;
+            });
+        }
+    }
+
+    function _satRightApplyLeafletVisibility() {
+        var canvasWrap = document.getElementById('sat-panel-right-canvas-wrap');
+        var leafletDiv = document.getElementById('sat-leaflet-right');
+        var axesY = document.getElementById('sat-axes-y-right');
+        var axesX = document.getElementById('sat-axes-x-right');
+        var useLeaflet = _satRightShouldUseLeaflet();
+        if (useLeaflet) {
+            if (canvasWrap) canvasWrap.style.display = 'none';
+            if (leafletDiv) leafletDiv.style.display = '';
+            if (axesY) axesY.style.display = 'none';
+            if (axesX) axesX.style.display = 'none';
+        } else {
+            if (canvasWrap) canvasWrap.style.display = '';
+            if (leafletDiv) leafletDiv.style.display = 'none';
+            if (axesY) axesY.style.display = '';
+            if (axesX) axesX.style.display = '';
+        }
+    }
+
+    function _satRightRebuildFrameLayers() {
+        if (!_satRightLeafletMap) return;
+        for (var i = 0; i < _satRightFrameLayers.length; i++) {
+            _satRightLeafletMap.removeLayer(_satRightFrameLayers[i]);
+        }
+        _satRightFrameLayers = [];
+        var storm = currentStorm;
+        if (!storm || storm.lat == null || storm.lon == null) return;
+        if (!rightFrames || !rightFrames.length) return;
+        var bounds = [
+            [storm.lat - _SAT_IR_RADIUS_DEG, storm.lon - _SAT_IR_RADIUS_DEG],
+            [storm.lat + _SAT_IR_RADIUS_DEG, storm.lon + _SAT_IR_RADIUS_DEG]
+        ];
+        for (var k = 0; k < rightFrames.length; k++) {
+            var url = API_BASE
+                + '/ir-monitor/storm/' + encodeURIComponent(storm.atcf_id)
+                + '/band-frame.jpg?band=' + rightBand
+                + '&frame_index=' + k
+                + '&lookback_hours=' + DEFAULT_LOOKBACK_HOURS
+                + '&radius_deg=' + _SAT_IR_RADIUS_DEG
+                + '&interval_min=' + FRAME_INTERVAL_MIN;
+            var layer = L.imageOverlay(url, bounds, {
+                opacity: 0, interactive: false, crossOrigin: 'anonymous',
+            }).addTo(_satRightLeafletMap);
+            _satRightFrameLayers.push(layer);
+        }
+        _satRightFrameStormId = storm.atcf_id;
+        _satRightFrameBand = rightBand;
+    }
+
+    function _satRightAppendNewFrameLayers() {
+        var storm = currentStorm;
+        if (!storm || !_satRightLeafletMap) return;
+        var bounds = [
+            [storm.lat - _SAT_IR_RADIUS_DEG, storm.lon - _SAT_IR_RADIUS_DEG],
+            [storm.lat + _SAT_IR_RADIUS_DEG, storm.lon + _SAT_IR_RADIUS_DEG]
+        ];
+        for (var k = _satRightFrameLayers.length; k < rightFrames.length; k++) {
+            var url = API_BASE
+                + '/ir-monitor/storm/' + encodeURIComponent(storm.atcf_id)
+                + '/band-frame.jpg?band=' + rightBand
+                + '&frame_index=' + k
+                + '&lookback_hours=' + DEFAULT_LOOKBACK_HOURS
+                + '&radius_deg=' + _SAT_IR_RADIUS_DEG
+                + '&interval_min=' + FRAME_INTERVAL_MIN;
+            var layer = L.imageOverlay(url, bounds, {
+                opacity: 0, interactive: false, crossOrigin: 'anonymous',
+            }).addTo(_satRightLeafletMap);
+            _satRightFrameLayers.push(layer);
+        }
+    }
+
+    function _satRightRenderLeafletFrame() {
+        if (!_satRightLeafletMap || !_satRightFrameLayers.length) return;
+        var idx = animIndex;
+        if (idx < 0 || idx >= _satRightFrameLayers.length) return;
+        for (var i = 0; i < _satRightFrameLayers.length; i++) {
+            _satRightFrameLayers[i].setOpacity(i === idx ? 0.92 : 0);
+        }
+    }
+
+    function _satRightSyncLeaflet(opts) {
+        if (viewMode === 'microwave') return;     // MW owns the right pane
+        opts = opts || {};
+        _satRightApplyLeafletVisibility();
+        if (!_satRightShouldUseLeaflet()) return;
+        _satRightEnsureMap();
+        var stormId = currentStorm && currentStorm.atcf_id;
+        var stormChanged = (_satRightFrameStormId !== stormId);
+        var bandChanged = (_satRightFrameBand !== rightBand);
+        var bufferReset = (_satRightFrameLayers.length > rightFrames.length);
+        if (opts.stormChanged || stormChanged || bandChanged || bufferReset) {
+            _satRightRebuildFrameLayers();
+            if (_satRightLeafletMap && currentStorm) {
+                _satRightLeafletMap.invalidateSize(false);
+                var halfDeg = (typeof zoomDeg === 'number') ? zoomDeg : 10;
+                var b = L.latLngBounds(
+                    [currentStorm.lat - halfDeg, currentStorm.lon - halfDeg],
+                    [currentStorm.lat + halfDeg, currentStorm.lon + halfDeg]
+                );
+                _satRightLeafletMap.fitBounds(b, { animate: false });
+            }
+        } else if (_satRightFrameLayers.length < rightFrames.length) {
+            _satRightAppendNewFrameLayers();
+        }
+        _satRightRenderLeafletFrame();
+    }
+    window._satRightSyncLeaflet = _satRightSyncLeaflet;
+
     // ── Window resize handler ───────────────────────────────────
     // When the browser window resizes (or the dev tools open / the
     // user drags the window edge), the flex panes re-size but
@@ -3238,9 +3405,10 @@
     window.addEventListener('resize', function () {
         if (_satResizeTimer) clearTimeout(_satResizeTimer);
         _satResizeTimer = setTimeout(function () {
-            // Leaflet maps (both panes).
+            // Leaflet maps (all three: IR left, MW right, WV/Vis right).
             if (_satMwLeafletIr) _satMwLeafletIr.invalidateSize(false);
             if (_satMwLeafletMw) _satMwLeafletMw.invalidateSize(false);
+            if (_satRightLeafletMap) _satRightLeafletMap.invalidateSize(false);
             // Plotly diagnostic charts — only if they're initialized
             // (data attribute present) and visible.
             if (typeof Plotly !== 'undefined') {

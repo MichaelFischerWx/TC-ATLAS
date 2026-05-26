@@ -714,10 +714,15 @@
                         <!-- WV/VIS canvas (compare mode, hidden by default) -->
                         <div id="sat-compare-panel" class="sat-compare-panel" style="display:none;">
                             <div class="sat-panel-label" id="sat-right-label">Water Vapor</div>
-                            <div class="sat-panel-canvas-wrap">
+                            <div class="sat-panel-canvas-wrap" id="sat-panel-right-canvas-wrap">
                                 <canvas id="sat-canvas-right"></canvas>
                                 <canvas id="sat-overlay-right" class="sat-overlay-canvas"></canvas>
                             </div>
+                            <!-- Phase 3: Leaflet alternative used for WV/Vis
+                                 compare when the right-pane colormap is the
+                                 band's default. Custom colormaps stay on
+                                 the canvas above (LUT-painted from raw Tb). -->
+                            <div id="sat-leaflet-right" class="sat-leaflet-pane" style="display:none;"></div>
                             <div class="sat-colorbar-horiz" id="sat-cb-right">
                                 <span id="sat-cb-right-top" class="sat-cb-label-left"></span>
                                 <canvas id="sat-cb-right-canvas" width="200" height="10"></canvas>
