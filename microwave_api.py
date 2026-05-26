@@ -513,6 +513,129 @@ def start_index_build(metadata_path: str = None, ibtracs_path: str = None):
 # Endpoints
 # ---------------------------------------------------------------------------
 
+# ──────────────────────────────────────────────────────────────────────
+# Per-storm NRT manifest filter
+# Server-side filter for the public manifest_latest_48h.json. The frontend
+# used to fetch the full ~1 MB global manifest on every storm-open and
+# filter client-side; this endpoint returns just the orbits whose bounds
+# contain the storm position, typically 5-30 entries / ~30-80 KB.
+# ──────────────────────────────────────────────────────────────────────
+
+import urllib.request as _urllib_request
+import json as _json
+import time as _time
+
+_NRT_MANIFEST_URL = "https://storage.googleapis.com/tc-atlas-microwave-nrt/manifest_latest_48h.json"
+_NRT_MANIFEST_CACHE = {"data": None, "fetched_at": 0.0, "lock": threading.Lock()}
+_NRT_MANIFEST_TTL_SEC = 300  # 5 min — matches the file's own freshness
+
+
+def _load_nrt_manifest_cached() -> dict | None:
+    """Fetch the NRT manifest from GCS with a per-process 5-min cache.
+    Returns the parsed dict or None on failure. Concurrent callers share
+    a single in-flight fetch via the per-cache lock."""
+    now = _time.time()
+    if _NRT_MANIFEST_CACHE["data"] is not None \
+            and (now - _NRT_MANIFEST_CACHE["fetched_at"]) < _NRT_MANIFEST_TTL_SEC:
+        return _NRT_MANIFEST_CACHE["data"]
+    with _NRT_MANIFEST_CACHE["lock"]:
+        # Re-check under the lock — another thread may have fetched.
+        now = _time.time()
+        if _NRT_MANIFEST_CACHE["data"] is not None \
+                and (now - _NRT_MANIFEST_CACHE["fetched_at"]) < _NRT_MANIFEST_TTL_SEC:
+            return _NRT_MANIFEST_CACHE["data"]
+        try:
+            req = _urllib_request.Request(
+                _NRT_MANIFEST_URL,
+                headers={"User-Agent": "tc-atlas-api/per-storm-passes"},
+            )
+            with _urllib_request.urlopen(req, timeout=10) as resp:
+                m = _json.load(resp)
+            _NRT_MANIFEST_CACHE["data"] = m
+            _NRT_MANIFEST_CACHE["fetched_at"] = _time.time()
+            return m
+        except Exception:
+            return None
+
+
+def _bounds_contains(bounds, lat: float, lon: float) -> bool:
+    """Replicates the frontend's _rtMwBoundsContains so server-side
+    filtering matches client expectations exactly. bounds is
+    [[south, west], [north, east]] (Leaflet convention)."""
+    try:
+        south, west = bounds[0][0], bounds[0][1]
+        north, east = bounds[1][0], bounds[1][1]
+    except (IndexError, TypeError):
+        return False
+    if lat < south or lat > north:
+        return False
+    if west <= east:
+        return west <= lon <= east
+    # Dateline-wrapping bounds: pass covers (west..180) ∪ (-180..east)
+    return lon >= west or lon <= east
+
+
+@router.get("/nrt-storm-passes")
+def get_nrt_storm_passes(
+    lat: float = Query(..., description="Storm latitude (degrees north)"),
+    lon: float = Query(..., description="Storm longitude (degrees east, -180..180)"),
+    hours: float = Query(24.0, ge=1.0, le=48.0,
+                         description="Time window backward from now (max 48h)"),
+):
+    """Return the subset of the NRT manifest whose orbits cover the
+    storm position. Replaces the frontend's prior pattern of fetching
+    the full ~1 MB manifest and filtering client-side — typical
+    response is 30-80 KB (5-30 orbits).
+
+    Cached in-process for 5 min (matches the source manifest's
+    update cadence). Caller passes the storm's lat/lon directly to
+    avoid cross-module coupling with the active-storms cache in
+    ir_monitor_api.py.
+    """
+    manifest = _load_nrt_manifest_cached()
+    if manifest is None:
+        # Cold cache + network blip — return empty rather than 500 so
+        # the frontend's "no passes" empty-state kicks in cleanly.
+        return JSONResponse(
+            content={"entries": [], "updated": None,
+                     "manifest_unavailable": True},
+            headers={"Cache-Control": "public, max-age=60"},
+        )
+
+    cutoff_ms = int((_dt.now(timezone.utc).timestamp()
+                     - hours * 3600) * 1000)
+    out_entries = []
+    for e in manifest.get("entries", []):
+        try:
+            t_ms = int(_dt.fromisoformat(
+                e["scan_start"].replace("Z", "+00:00")
+            ).timestamp() * 1000)
+        except Exception:
+            continue
+        if t_ms < cutoff_ms:
+            continue
+        if not _bounds_contains(e.get("bounds"), lat, lon):
+            continue
+        out_entries.append(e)
+
+    out_entries.sort(key=lambda x: x["scan_start"], reverse=True)
+    return JSONResponse(
+        content={
+            "entries": out_entries,
+            "updated": manifest.get("updated"),
+            "storm_lat": lat,
+            "storm_lon": lon,
+            "window_hours": hours,
+            "source_total_entries": len(manifest.get("entries", [])),
+        },
+        headers={
+            # 60 s edge cache; manifest itself updates every 30 min so
+            # this is a generous-enough freshness window.
+            "Cache-Control": "public, max-age=60",
+        },
+    )
+
+
 @router.get("/status")
 def microwave_status():
     """Check whether the overpass index has finished building."""
