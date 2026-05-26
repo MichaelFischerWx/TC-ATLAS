@@ -1929,9 +1929,15 @@ def _cli(argv=None):
     ap.add_argument("--sensor", default="GMI",
                     help="Single-sensor mode (--tcprimed-file / --pps-file): "
                          "sensor name; defaults to GMI")
-    ap.add_argument("--sensors", default="GMI,SSMIS,AMSR2",
+    # AMSR2 is ordered ahead of SSMIS so a runtime-starved worker (e.g.,
+    # a heavy GMI backlog hogging the budget) drops SSMIS first, not the
+    # higher-resolution AMSR2. AMSR2 native 89 GHz footprint is ~5 km
+    # vs SSMIS ~13 km, so an AMSR2 pass carries more diagnostic value
+    # per granule for TC inner-core analysis.
+    ap.add_argument("--sensors", default="GMI,AMSR2,SSMIS",
                     help="Operational/poll mode: comma-separated list of "
-                         "PPS sensors to ingest (default GMI,SSMIS,AMSR2)")
+                         "PPS sensors to ingest (default GMI,AMSR2,SSMIS; "
+                         "AMSR2 prioritized over SSMIS by resolution)")
     ap.add_argument("--products", default="37color,89pct,37v,37h,89v,89h",
                     help="Comma-separated product list (default = all six)")
     ap.add_argument("--since-hours", type=float, default=None,
