@@ -1617,6 +1617,75 @@
     }
     window.toggleLabels = toggleLabels;
 
+    // ── Lat/lon graticule (RT Global Map) ─────────────────────────
+    // L.layerGroup holding all polylines + label divIcons. Rebuilt on
+    // moveend/zoomend with adaptive spacing so meso zooms get a fine
+    // 1° grid while world view gets a sparse 10° grid.
+    var _rtGraticule = null;
+    function _rtGraticuleStep(z) {
+        if (z >= 7) return 1;
+        if (z >= 5) return 2;
+        if (z >= 3) return 5;
+        return 10;
+    }
+    function _rtRebuildGraticule() {
+        if (!_rtGraticule || !map) return;
+        _rtGraticule.clearLayers();
+        var step = _rtGraticuleStep(map.getZoom());
+        var b = map.getBounds();
+        var sLat = Math.max(-85, Math.floor(b.getSouth() / step) * step);
+        var nLat = Math.min( 85, Math.ceil(b.getNorth() / step) * step);
+        var wLon = Math.floor(b.getWest() / step) * step;
+        var eLon = Math.ceil(b.getEast() / step) * step;
+        var lineOpts = {
+            color: '#f1f5f9', weight: 0.5, opacity: 0.5,
+            dashArray: '3 5', interactive: false
+        };
+        for (var lat = sLat; lat <= nLat; lat += step) {
+            L.polyline([[lat, wLon], [lat, eLon]], lineOpts)
+                .addTo(_rtGraticule);
+            // Latitude label — pinned to the left edge of the viewport,
+            // not the line endpoint, so users don't have to scan across
+            // the map for the label.
+            var labelLng = b.getWest() + (b.getEast() - b.getWest()) * 0.015;
+            L.marker([lat, labelLng], {
+                icon: L.divIcon({
+                    className: 'rt-graticule-label',
+                    html: _rtFmtLat(lat),
+                    iconSize: [40, 14], iconAnchor: [0, 7]
+                }),
+                interactive: false, keyboard: false
+            }).addTo(_rtGraticule);
+        }
+        for (var lon = wLon; lon <= eLon; lon += step) {
+            L.polyline([[sLat, lon], [nLat, lon]], lineOpts)
+                .addTo(_rtGraticule);
+            var labelLat = b.getSouth() + (b.getNorth() - b.getSouth()) * 0.015;
+            L.marker([labelLat, lon], {
+                icon: L.divIcon({
+                    className: 'rt-graticule-label',
+                    html: _rtFmtLon(lon),
+                    iconSize: [50, 14], iconAnchor: [25, 14]
+                }),
+                interactive: false, keyboard: false
+            }).addTo(_rtGraticule);
+        }
+    }
+    function _rtToggleGraticule() {
+        if (!map) return;
+        if (_rtGraticule) {
+            map.removeLayer(_rtGraticule);
+            map.off('moveend zoomend', _rtRebuildGraticule);
+            _rtGraticule = null;
+            _ga('rt_graticule_toggle', { on: false });
+            return;
+        }
+        _rtGraticule = L.layerGroup().addTo(map);
+        _rtRebuildGraticule();
+        map.on('moveend zoomend', _rtRebuildGraticule);
+        _ga('rt_graticule_toggle', { on: true });
+    }
+
     function setGlobalProduct(mode) {
         if (mode === globalProduct) return;
         globalProduct = mode;
@@ -2254,6 +2323,24 @@
             if (_labelsVisible) labtog.classList.add('active');
             labtog.addEventListener('click', function () { toggleLabels(); });
             document.body.appendChild(labtog);
+        }
+
+        // Lat/lon graticule toggle — sits below Labels in the same
+        // top-left stack (Basins → Legend → Labels → Grid). Adaptive
+        // spacing: 10° at world zoom, 5° at sub-basin, 2° at storm
+        // zoom, 1° at meso. Labels at integer grid intersections.
+        if (!document.getElementById('ir-grid-toggle')) {
+            var gtog = document.createElement('button');
+            gtog.id = 'ir-grid-toggle';
+            gtog.className = 'ir-legend-toggle ir-grid-toggle-pos';
+            gtog.type = 'button';
+            gtog.title = 'Show / hide lat/lon graticule (scales with zoom)';
+            gtog.innerHTML = '▦ Grid';
+            gtog.addEventListener('click', function () {
+                _rtToggleGraticule();
+                gtog.classList.toggle('active', !!_rtGraticule);
+            });
+            document.body.appendChild(gtog);
         }
 
         // Add IR Tb colorbar to global map (bottom-left, above animation panel)
@@ -11862,6 +11949,15 @@
             return;
         }
         listEl.innerHTML = '';
+        var statusEl2 = document.getElementById('rt-mw-storm-status');
+        var coveredCount = 0;
+        var resolvedCount = 0;
+        if (statusEl2) statusEl2.textContent = 'filtering…';
+        function _bumpStatus() {
+            if (!statusEl2) return;
+            statusEl2.textContent = coveredCount + ' pass'
+                + (coveredCount === 1 ? '' : 'es');
+        }
         var nowMs = Date.now();
         for (var i = 0; i < orbits.length; i++) {
             var o = orbits[i];
@@ -11883,7 +11979,30 @@
                         + product + ' — ' + utcStr
                         + '\nClick to compare with IR at matched time';
                 thumbWrap.appendChild(c);
-                _rtDrawStormMwThumbnail(c, o, lat, lon, pr.png_url);
+                (function (cardEl) {
+                    _rtDrawStormMwThumbnail(c, o, lat, lon, pr.png_url,
+                        function (frac) {
+                            resolvedCount++;
+                            if (frac < _RT_MW_MIN_COVERAGE) {
+                                // Swath bbox covered the storm but the
+                                // data path didn't. Hide the card so the
+                                // user only sees passes that actually
+                                // saw the system.
+                                cardEl.style.display = 'none';
+                            } else {
+                                coveredCount++;
+                                _bumpStatus();
+                            }
+                            // Final status when all images have resolved.
+                            if (resolvedCount === orbits.length && statusEl2) {
+                                if (coveredCount === 0) {
+                                    statusEl2.textContent = 'no passes covered storm';
+                                } else {
+                                    _bumpStatus();
+                                }
+                            }
+                        });
+                })(card);
                 (function (orbit) {
                     c.addEventListener('click', function () {
                         _rtOpenMwCompare(orbit, _rtMwStormState.storm);
@@ -11917,10 +12036,83 @@
     // box in geographic coords, map it to pixel space via linear scaling,
     // and drawImage the crop into the thumbnail canvas. Off-bounds
     // regions stay transparent on the canvas (handled by drawImage).
-    function _rtDrawStormMwThumbnail(canvas, orbit, lat, lon, pngUrl) {
+    // Coverage threshold for filtering. The pass-arc's rectangular
+    // bbox contains the storm position, but the actual swath data may
+    // not — many swaths have NaN→transparent margins, and the storm
+    // can fall in a polar-clipped gap or to one side of the swath.
+    // After drawing the storm-crop, we measure colored-pixel fraction
+    // and signal "no coverage" to the caller for cards that drew
+    // basically nothing.
+    var _RT_MW_MIN_COVERAGE = 0.02;   // ≥2% colored pixels = "covered"
+
+    // Format a lat/lon as JTWC/NHC-style label (12°N / 138°E / 180°).
+    function _rtFmtLat(v) {
+        if (Math.abs(v) < 0.05) return '0°';
+        return Math.abs(v).toFixed(0) + '°' + (v >= 0 ? 'N' : 'S');
+    }
+    function _rtFmtLon(v) {
+        var x = v;
+        while (x > 180) x -= 360;
+        while (x < -180) x += 360;
+        if (Math.abs(x) < 0.05) return '0°';
+        if (Math.abs(Math.abs(x) - 180) < 0.05) return '180°';
+        return Math.abs(x).toFixed(0) + '°' + (x >= 0 ? 'E' : 'W');
+    }
+
+    // Overlay a lat/lon graticule on a storm-centered canvas. The
+    // canvas covers ±halfDeg around (centerLat, centerLon). `step`
+    // is the gridline spacing in degrees. Dashed light strokes + edge
+    // labels so the user can read off a position without clicking
+    // through to a full Leaflet map.
+    function _rtDrawLatLonGrid(ctx, w, h, centerLat, centerLon, halfDeg, step) {
+        if (!step) step = 2;
+        var latMin = centerLat - halfDeg, latMax = centerLat + halfDeg;
+        var lonMin = centerLon - halfDeg, lonMax = centerLon + halfDeg;
+        // Snap first gridline to nearest multiple of `step` inside extent.
+        var firstLat = Math.ceil(latMin / step) * step;
+        var firstLon = Math.ceil(lonMin / step) * step;
+        ctx.save();
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = 'rgba(241, 245, 249, 0.45)';
+        ctx.setLineDash([3, 4]);
+        ctx.font = '10px ui-monospace, "SF Mono", Menlo, monospace';
+        ctx.fillStyle = 'rgba(241, 245, 249, 0.85)';
+        ctx.textBaseline = 'top';
+        ctx.shadowColor = 'rgba(15, 22, 36, 0.85)';
+        ctx.shadowBlur = 3;
+        // Parallels (lat).
+        for (var lat = firstLat; lat <= latMax; lat += step) {
+            var y = ((latMax - lat) / (2 * halfDeg)) * h;
+            ctx.beginPath();
+            ctx.moveTo(0, y); ctx.lineTo(w, y);
+            ctx.stroke();
+            ctx.textAlign = 'left';
+            ctx.fillText(_rtFmtLat(lat), 4, y + 2);
+        }
+        // Meridians (lon).
+        for (var lon = firstLon; lon <= lonMax; lon += step) {
+            var x = ((lon - lonMin) / (2 * halfDeg)) * w;
+            ctx.beginPath();
+            ctx.moveTo(x, 0); ctx.lineTo(x, h);
+            ctx.stroke();
+            ctx.textAlign = 'center';
+            ctx.fillText(_rtFmtLon(lon), x, h - 14);
+        }
+        ctx.restore();
+    }
+
+    // Optional `onCoverage(frac)` callback fires once after the image
+    // loads + cropping completes. Callers use it to hide cards whose
+    // swath geometry happens not to touch the storm position.
+    // `withGrid` (default false) draws a lat/lon graticule on top of
+    // the swath — used by the compare-modal panels but not the small
+    // 80-px side-panel thumbnails where a grid would just clutter.
+    function _rtDrawStormMwThumbnail(canvas, orbit, lat, lon, pngUrl, onCoverage, withGrid) {
         var ctx = canvas.getContext('2d');
-        ctx.fillStyle = 'rgba(15,22,36,0.55)';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        // Start with a transparent canvas — we'll add the dim navy bg
+        // BEHIND the image via globalCompositeOperation so the alpha
+        // sampling below sees only the actual swath pixels.
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
         var img = new Image();
         img.crossOrigin = 'anonymous';
         img.onload = function () {
@@ -11934,7 +12126,10 @@
             }
             var spanLat = north - south;
             var spanLon = eWrapped - wWrapped;
-            if (spanLat <= 0 || spanLon <= 0) return;
+            if (spanLat <= 0 || spanLon <= 0) {
+                if (onCoverage) onCoverage(0);
+                return;
+            }
             // Pixel coords: top-left = (north, west). y increases southward.
             var stormBox = {
                 latMax: lat + _RT_MW_HALF_DEG,
@@ -11946,30 +12141,65 @@
             var sy = (north - stormBox.latMax) / spanLat * img.height;
             var sw = (2 * _RT_MW_HALF_DEG) / spanLon * img.width;
             var sh = (2 * _RT_MW_HALF_DEG) / spanLat * img.height;
-            // Clamp source rect to image bounds; off-image area stays the
-            // dim background from the fillRect above.
+            // Clamp source rect to image bounds.
             var sxC = Math.max(0, sx);
             var syC = Math.max(0, sy);
             var sxE = Math.min(img.width, sx + sw);
             var syE = Math.min(img.height, sy + sh);
             var swC = sxE - sxC;
             var shC = syE - syC;
-            if (swC <= 0 || shC <= 0) return;
+            if (swC <= 0 || shC <= 0) {
+                if (onCoverage) onCoverage(0);
+                return;
+            }
             var dx = (sxC - sx) / sw * canvas.width;
             var dy = (syC - sy) / sh * canvas.height;
             var dw = swC / sw * canvas.width;
             var dh = shC / sh * canvas.height;
             ctx.drawImage(img, sxC, syC, swC, shC, dx, dy, dw, dh);
-            // Draw a small storm-center cross so the user knows where
-            // the storm sits inside the cropped tile.
-            var cx = canvas.width / 2;
-            var cy = canvas.height / 2;
-            ctx.strokeStyle = 'rgba(253, 224, 71, 0.95)';
-            ctx.lineWidth = 1.5;
-            ctx.beginPath();
-            ctx.moveTo(cx - 6, cy); ctx.lineTo(cx + 6, cy);
-            ctx.moveTo(cx, cy - 6); ctx.lineTo(cx, cy + 6);
-            ctx.stroke();
+
+            // Measure swath coverage in the crop. CrossOrigin=anonymous
+            // + the bucket's CORS config keep the canvas un-tainted so
+            // getImageData succeeds. Empty swath margins leave alpha=0
+            // pixels; any drawn pixel has alpha>0.
+            var frac = 0;
+            try {
+                var data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+                var nonEmpty = 0;
+                for (var p = 3; p < data.length; p += 4) {
+                    if (data[p] > 10) nonEmpty++;
+                }
+                frac = nonEmpty / (canvas.width * canvas.height);
+            } catch (e) {
+                // Tainted canvas (rare — implies CORS hiccup). Treat as
+                // covered so we don't accidentally hide everything.
+                frac = 1;
+            }
+
+            // Paint the dim navy bg BEHIND the swath so blank margins
+            // read as "no data" instead of see-through to the modal bg.
+            ctx.globalCompositeOperation = 'destination-over';
+            ctx.fillStyle = 'rgba(15,22,36,0.55)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.globalCompositeOperation = 'source-over';
+
+            // Storm-center cross only if there's actual coverage to mark.
+            if (frac >= _RT_MW_MIN_COVERAGE) {
+                var cx = canvas.width / 2;
+                var cy = canvas.height / 2;
+                ctx.strokeStyle = 'rgba(253, 224, 71, 0.95)';
+                ctx.lineWidth = withGrid ? 2 : 1.5;
+                var armLen = withGrid ? 10 : 6;
+                ctx.beginPath();
+                ctx.moveTo(cx - armLen, cy); ctx.lineTo(cx + armLen, cy);
+                ctx.moveTo(cx, cy - armLen); ctx.lineTo(cx, cy + armLen);
+                ctx.stroke();
+            }
+            if (withGrid) {
+                _rtDrawLatLonGrid(ctx, canvas.width, canvas.height,
+                                  lat, lon, _RT_MW_HALF_DEG, 2);
+            }
+            if (onCoverage) onCoverage(frac);
         };
         img.onerror = function () {
             ctx.fillStyle = 'rgba(239,68,68,0.4)';
@@ -11978,6 +12208,7 @@
             ctx.font = '11px Inter, sans-serif';
             ctx.textAlign = 'center';
             ctx.fillText('load failed', canvas.width / 2, canvas.height / 2);
+            if (onCoverage) onCoverage(0);
         };
         img.src = pngUrl;
     }
@@ -12112,7 +12343,13 @@
         if (mwCanvas && pr && pr.png_url) {
             if (mwStatus) mwStatus.textContent = '';
             _rtDrawStormMwThumbnail(mwCanvas, orbit, storm.lat, storm.lon,
-                                    pr.png_url);
+                                    pr.png_url, function (frac) {
+                if (mwStatus) {
+                    mwStatus.textContent = frac < _RT_MW_MIN_COVERAGE
+                        ? 'storm sits outside the actual swath data'
+                        : '';
+                }
+            }, true /* withGrid */);
         } else if (mwCanvas) {
             var ctx = mwCanvas.getContext('2d');
             ctx.fillStyle = 'rgba(15,22,36,0.55)';
@@ -12231,6 +12468,12 @@
             ctx.moveTo(cx - 10, cy); ctx.lineTo(cx + 10, cy);
             ctx.moveTo(cx, cy - 10); ctx.lineTo(cx, cy + 10);
             ctx.stroke();
+            // Same lat/lon graticule as the MW panel so the two panels
+            // share an explicit positional reference, not just a center
+            // marker. Storm center is canvas center; ±_RT_MW_COMPARE_HALF_DEG.
+            _rtDrawLatLonGrid(ctx, canvas.width, canvas.height,
+                              storm.lat, storm.lon,
+                              _RT_MW_COMPARE_HALF_DEG, 2);
             if (done) done(null);
         };
         img.onerror = function () { if (done) done(new Error('IR jpg load failed')); };

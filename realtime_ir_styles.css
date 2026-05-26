@@ -1855,6 +1855,28 @@ html, body { margin: 0; padding: 0; }
 .ir-labels-toggle-pos {
     top: 246px !important;
 }
+/* Grid toggle — fourth in the stack, beneath Labels. */
+.ir-grid-toggle-pos {
+    top: 284px !important;
+}
+/* Graticule labels — divIcon markers placed at gridline crossings on
+   the RT global map. Mono font, light text with a dark halo so they
+   read on both bright land and dark ocean basemap tiles. */
+.rt-graticule-label {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 10px;
+    font-weight: 600;
+    color: #f1f5f9;
+    text-shadow:
+        0 0 4px rgba(15, 22, 36, 0.95),
+        0 0 2px rgba(15, 22, 36, 0.95),
+        0 0 1px rgba(15, 22, 36, 0.95);
+    pointer-events: none;
+    white-space: nowrap;
+    line-height: 14px;
+    background: transparent;
+    border: none;
+}
 
 /* ═══════════════════════════════════════════════════════════════
    MOBILE: Layers panel as a bottom sheet
