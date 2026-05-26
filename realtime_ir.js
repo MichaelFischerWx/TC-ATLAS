@@ -12124,6 +12124,11 @@
     // 80-px side-panel thumbnails where a grid would just clutter.
     function _rtDrawStormMwThumbnail(canvas, orbit, lat, lon, pngUrl, onCoverage, withGrid) {
         var ctx = canvas.getContext('2d');
+        // High-quality interpolation — bicubic on most modern engines.
+        // Helps when the storm crop pulls only a small slice of the
+        // source PNG and has to upscale to the display canvas.
+        ctx.imageSmoothingEnabled = true;
+        if ('imageSmoothingQuality' in ctx) ctx.imageSmoothingQuality = 'high';
         // Start with a transparent canvas — we'll add the dim navy bg
         // BEHIND the image via globalCompositeOperation so the alpha
         // sampling below sees only the actual swath pixels.
@@ -12464,6 +12469,8 @@
         img.crossOrigin = 'anonymous';
         img.onload = function () {
             var ctx = canvas.getContext('2d');
+            ctx.imageSmoothingEnabled = true;
+            if ('imageSmoothingQuality' in ctx) ctx.imageSmoothingQuality = 'high';
             ctx.fillStyle = 'rgba(15,22,36,0.55)';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             var crop = _RT_MW_COMPARE_HALF_DEG / _RT_MW_COMPARE_RADIUS;

@@ -3368,7 +3368,12 @@ html:not([data-view="map"]) #ir-global-env-cbars {
     aspect-ratio: 1 / 1;
     background: rgba(15, 22, 36, 0.65);
     border-radius: 6px;
-    image-rendering: -webkit-optimize-contrast;
+    /* `auto` (default) lets the browser pick smooth interpolation when
+       the canvas's intrinsic 600×600 is rendered at a different display
+       size. `-webkit-optimize-contrast` on some browsers maps to
+       nearest-neighbor, which exposes per-pixel blockiness when the
+       source PNG had to upscale into the storm crop. */
+    image-rendering: auto;
 }
 .rt-mw-compare-status {
     min-height: 14px;

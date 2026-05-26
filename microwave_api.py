@@ -1722,8 +1722,13 @@ def _regrid_swath(data: np.ndarray, lats: np.ndarray, lons: np.ndarray,
     lat_min, lat_max = float(flat_lat.min()), float(flat_lat.max())
     lon_min, lon_max = float(flat_lon.min()), float(flat_lon.max())
 
-    # Limit grid size to prevent memory issues
-    max_grid_dim = 500
+    # Limit grid size to prevent memory issues. 2500 lets the 0.02° (~2 km)
+    # base resolution be honored on most single-arc passes (typical 10-30°
+    # lat span → 500-1500 cells); wide multi-orbit arcs (60°+) still cap
+    # at ~2.5 km/pixel, close to AMSR2 89 GHz native footprint. The old
+    # 500-pixel cap silently downsampled to ~13 km/pixel on wider passes
+    # and made AMSR2's high-res detail look blockier than SSMI/S.
+    max_grid_dim = 2500
     n_lat = min(int((lat_max - lat_min) / grid_res_deg) + 1, max_grid_dim)
     n_lon = min(int((lon_max - lon_min) / grid_res_deg) + 1, max_grid_dim)
 
@@ -1847,7 +1852,10 @@ def _regrid_swath_multi(
     lat_min, lat_max = float(flat_lat.min()), float(flat_lat.max())
     lon_min, lon_max = float(flat_lon.min()), float(flat_lon.max())
 
-    max_grid_dim = 500
+    # Multi-channel cap matches _regrid_swath's so RGB composites
+    # (37color, derived from V37 + H37) preserve high-res detail
+    # end-to-end. See _regrid_swath above for the rationale on 2500.
+    max_grid_dim = 2500
     n_lat = min(int((lat_max - lat_min) / grid_res_deg) + 1, max_grid_dim)
     n_lon = min(int((lon_max - lon_min) / grid_res_deg) + 1, max_grid_dim)
 
