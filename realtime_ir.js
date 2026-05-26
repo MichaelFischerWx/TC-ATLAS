@@ -12482,9 +12482,23 @@
 
     // Bind modal-level events: close button, Esc key, click-on-backdrop,
     // and product-chip clicks (re-render MW side without touching IR).
+    // Idempotent (`_rtMwCompareBound` guard) since the deferred-readiness
+    // path below may call this multiple times.
+    var _rtMwCompareBound = false;
     function _rtBindMwCompareModal() {
+        if (_rtMwCompareBound) return;
         var modal = document.getElementById('rt-mw-compare-modal');
-        if (!modal) return;
+        // realtime_ir.js loads before the modal HTML at the end of body
+        // is parsed. If the element isn't there yet, retry on DOM ready.
+        if (!modal) {
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded',
+                                          _rtBindMwCompareModal,
+                                          { once: true });
+            }
+            return;
+        }
+        _rtMwCompareBound = true;
         var closeBtn = modal.querySelector('.rt-mw-compare-close');
         if (closeBtn) closeBtn.addEventListener('click', _rtCloseMwCompare);
         modal.addEventListener('click', function (ev) {
