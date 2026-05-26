@@ -55,6 +55,7 @@ import io
 import json
 import logging
 import os
+import signal
 import sys
 import tempfile
 import time
@@ -100,6 +101,24 @@ MANIFEST_RETENTION_HOURS = 48
 # state is safe. Atomic GCS writes mean the frontend never sees a
 # half-built manifest.
 CHECKPOINT_INTERVAL_SEC = 120
+
+# Self-imposed runtime budget for operational ingest. The Cloud Run task
+# timeout (1 h) is the hard backstop, but we want to exit cleanly well
+# before it so partial progress lands in the manifest and Cloud Run
+# doesn't mark the execution failed and retry. 25 min leaves 5 min of
+# headroom before the next */30 cron firing and 35 min before the hard
+# kill. See 2026-05-26 incident: a regrid-cap regression in
+# microwave_api made per-pass compute 5-25x heavier, every cron-fired
+# ingest hit the 1 h SIGKILL, in-flight work was lost, and overlapping
+# workers piled up racing on PPS NRT polls and GCS writes.
+_MAX_RUNTIME_SECONDS = 25 * 60
+
+# GCS-based concurrency lock. Cloud Run Jobs has no native exclusion,
+# so we use a conditional-create on a GCS object. TTL covers the
+# runtime budget plus a small cushion so a crashed worker's stale lock
+# self-expires before the next */30 cron fires.
+_INGEST_LOCK_KEY = ".ingest.lock"
+_INGEST_LOCK_TTL_SEC = _MAX_RUNTIME_SECONDS + 5 * 60
 
 WEB_MERC_LAT_MAX = 85.05112877980659  # arctan(sinh(pi)) * 180/pi
 
@@ -196,6 +215,91 @@ def _download_text(key: str) -> Optional[str]:
     if not blob.exists():
         return None
     return blob.download_as_text()
+
+
+# ---------------------------------------------------------------------------
+# GCS concurrency lock for the operational ingest job.
+#
+# Cloud Run Jobs has no built-in mutual exclusion, so we serialize via a
+# conditional-create on a small GCS object. Why this exists: see the
+# 2026-05-26 incident notes near _MAX_RUNTIME_SECONDS — overlapping
+# workers raced on PPS NRT polls and GCS writes after the cron interval
+# fell behind the wall-clock runtime, compounding the slowdown.
+# ---------------------------------------------------------------------------
+def _acquire_ingest_lock(execution_name: str) -> bool:
+    """Claim the ingest lock atomically. Returns True on success.
+
+    Uses if_generation_match=0 (create-only) so two racing workers can
+    never both succeed. If the existing lock has passed its expires_at,
+    delete it (with generation match for safety) and retry once.
+    """
+    from google.api_core.exceptions import PreconditionFailed
+    now = _dt.now(timezone.utc)
+    expires = now + timedelta(seconds=_INGEST_LOCK_TTL_SEC)
+    payload = json.dumps({
+        "execution_name": execution_name,
+        "started_at": now.isoformat(),
+        "expires_at": expires.isoformat(),
+    }).encode("utf-8")
+    blob = _get_bucket().blob(_INGEST_LOCK_KEY)
+    for _ in range(2):
+        try:
+            blob.upload_from_string(
+                payload, content_type="application/json",
+                if_generation_match=0,
+            )
+            logger.info("[lock] acquired by %s (expires %s)",
+                        execution_name, expires.isoformat())
+            return True
+        except PreconditionFailed:
+            try:
+                blob.reload()
+                existing = json.loads(blob.download_as_text())
+            except Exception:
+                existing = {}
+            exp_str = existing.get("expires_at", "")
+            try:
+                exp_dt = _dt.fromisoformat(exp_str)
+            except Exception:
+                exp_dt = None
+            if exp_dt is not None and exp_dt > now:
+                logger.info("[lock] another execution (%s) is running, "
+                            "expires at %s — exiting clean",
+                            existing.get("execution_name", "?"), exp_str)
+                return False
+            logger.warning("[lock] stale lock from %s (expired %s) — "
+                           "reclaiming",
+                           existing.get("execution_name", "?"), exp_str)
+            try:
+                blob.delete(if_generation_match=blob.generation)
+            except Exception as exc:
+                logger.warning("[lock] stale-lock delete failed (%s) — "
+                               "next attempt will reassess", exc)
+    logger.warning("[lock] could not acquire after stale-lock reclaim — "
+                   "exiting clean")
+    return False
+
+
+def _release_ingest_lock(execution_name: str) -> None:
+    """Release the lock iff WE hold it. Never delete another worker's lock."""
+    blob = _get_bucket().blob(_INGEST_LOCK_KEY)
+    try:
+        if not blob.exists():
+            return
+        blob.reload()
+        try:
+            existing = json.loads(blob.download_as_text())
+        except Exception:
+            existing = {}
+        if existing.get("execution_name") != execution_name:
+            logger.warning("[lock] not releasing — held by %s, not us (%s)",
+                           existing.get("execution_name", "?"),
+                           execution_name)
+            return
+        blob.delete(if_generation_match=blob.generation)
+        logger.info("[lock] released by %s", execution_name)
+    except Exception as exc:
+        logger.warning("[lock] release failed: %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -1857,6 +1961,24 @@ def _cli(argv=None):
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
 
+    # Wall-clock start for the operational runtime budget. See
+    # _MAX_RUNTIME_SECONDS for why we exit voluntarily before the Cloud
+    # Run hard timeout. Recording it unconditionally is harmless for
+    # the non-operational paths.
+    start_time = time.time()
+    execution_name = (
+        os.environ.get("CLOUD_RUN_EXECUTION")
+        or os.environ.get("HOSTNAME")
+        or f"local-{os.getpid()}"
+    )
+
+    # Convert SIGTERM into a normal SystemExit so try/finally blocks run
+    # when the job is cancelled via `gcloud run jobs executions cancel`.
+    # Lock release + manifest checkpoint can then complete instead of
+    # leaving a stale lock behind. TTL is the safety net if the signal
+    # arrives mid-syscall and the finally never runs.
+    signal.signal(signal.SIGTERM, lambda *_a: sys.exit(0))
+
     products = [p.strip() for p in args.products.split(",") if p.strip()]
     all_entries: list[dict] = []
 
@@ -1898,136 +2020,173 @@ def _cli(argv=None):
             dry_run=args.dry_run, dry_run_dir=args.dry_run_dir,
         ))
     elif args.since_hours is not None or args.operational:
-        # Operational mode: pick up where the manifest left off PER SENSOR,
-        # so a newly-added sensor with no entries yet doesn't get pinned
-        # to another sensor's cursor. Fall back to args.since_hours
-        # (or 1 h default) on the very first run for that sensor.
-        sensors = [s.strip() for s in args.sensors.split(",") if s.strip()]
-        unknown = [s for s in sensors if s not in _PPS_SENSORS]
-        if unknown:
-            ap.error(f"Unknown sensor(s): {unknown}. "
-                     f"Supported: {list(_PPS_SENSORS)}")
+        # Operational-mode concurrency lock + runtime budget guard.
+        # See _acquire_ingest_lock and _MAX_RUNTIME_SECONDS for context
+        # on the 2026-05-26 incident this prevents. Manual --since-hours
+        # invocations bypass the lock so an operator firing a backfill
+        # isn't blocked by an in-flight cron run.
+        lock_held = False
+        if args.operational:
+            if not _acquire_ingest_lock(execution_name):
+                print(json.dumps({"processed": 0, "reason": "lock-held"}))
+                return
+            lock_held = True
+        try:
+            # Operational mode: pick up where the manifest left off PER SENSOR,
+            # so a newly-added sensor with no entries yet doesn't get pinned
+            # to another sensor's cursor. Fall back to args.since_hours
+            # (or 1 h default) on the very first run for that sensor.
+            sensors = [s.strip() for s in args.sensors.split(",") if s.strip()]
+            unknown = [s for s in sensors if s not in _PPS_SENSORS]
+            if unknown:
+                ap.error(f"Unknown sensor(s): {unknown}. "
+                         f"Supported: {list(_PPS_SENSORS)}")
 
-        # Tier 2 cost gate: in --operational mode (i.e., cron-triggered),
-        # narrow the sensor list to a quiet-mode subset (GMI + AMSR2) when
-        # there are zero active TCs AND zero genesis disturbances. Rationale:
-        # ATCF invests (90-99) and FNV3 disturbances both count as "active"
-        # here, so the gate only fires on truly quiet days (~30-50/year).
-        # On those days we still want opportunistic global coverage from the
-        # highest-quality sensors (GMI 37 GHz, AMSR2 89 GHz) — useful for
-        # pre-genesis AEW/monsoon monitoring, polar lows, and sub-tropical
-        # systems — but skip the heavier SSMI/S (3 sats × multi-orbit) and
-        # ATMS (3 sats × 5-min cadence, sounder-blurred 89v only). Cuts
-        # quiet-day compute to ~40% of full-mode while keeping the frontend
-        # populated. Manual --since-hours invocations skip the gate.
-        # Fail-safe: if either gate API call fails, keep the full sensor
-        # list (better to over-ingest than to drop coverage silently).
-        QUIET_MODE_SENSORS = {"GMI", "AMSR2"}
-        if args.operational and not args.since_hours:
-            storms_ok = disturb_ok = True
-            try:
-                gate_storms = _fetch_active_storms()
-            except Exception as exc:
-                logger.warning("[gate] active-storms fetch failed (%s) — "
-                               "full sensor list to be safe", exc)
-                storms_ok = False
-                gate_storms = []
-            try:
-                gate_disturb = _fetch_genesis_disturbances()
-            except Exception as exc:
-                logger.warning("[gate] genesis fetch failed (%s) — "
-                               "full sensor list to be safe", exc)
-                disturb_ok = False
-                gate_disturb = []
-            if storms_ok and disturb_ok and not gate_storms and not gate_disturb:
-                quiet_sensors = [s for s in sensors if s in QUIET_MODE_SENSORS]
-                if not quiet_sensors:
-                    logger.info("[gate] quiet (0 storms, 0 disturbances) and "
-                                "configured sensors %s have no quiet-mode "
-                                "overlap with %s — skipping ingest entirely",
-                                sensors, sorted(QUIET_MODE_SENSORS))
-                    print(json.dumps({"processed": 0, "reason": "quiet-gate-skip"}))
+            # Tier 2 cost gate: in --operational mode (i.e., cron-triggered),
+            # narrow the sensor list to a quiet-mode subset (GMI + AMSR2) when
+            # there are zero active TCs AND zero genesis disturbances. Rationale:
+            # ATCF invests (90-99) and FNV3 disturbances both count as "active"
+            # here, so the gate only fires on truly quiet days (~30-50/year).
+            # On those days we still want opportunistic global coverage from the
+            # highest-quality sensors (GMI 37 GHz, AMSR2 89 GHz) — useful for
+            # pre-genesis AEW/monsoon monitoring, polar lows, and sub-tropical
+            # systems — but skip the heavier SSMI/S (3 sats × multi-orbit) and
+            # ATMS (3 sats × 5-min cadence, sounder-blurred 89v only). Cuts
+            # quiet-day compute to ~40% of full-mode while keeping the frontend
+            # populated. Manual --since-hours invocations skip the gate.
+            # Fail-safe: if either gate API call fails, keep the full sensor
+            # list (better to over-ingest than to drop coverage silently).
+            QUIET_MODE_SENSORS = {"GMI", "AMSR2"}
+            if args.operational and not args.since_hours:
+                storms_ok = disturb_ok = True
+                try:
+                    gate_storms = _fetch_active_storms()
+                except Exception as exc:
+                    logger.warning("[gate] active-storms fetch failed (%s) — "
+                                   "full sensor list to be safe", exc)
+                    storms_ok = False
+                    gate_storms = []
+                try:
+                    gate_disturb = _fetch_genesis_disturbances()
+                except Exception as exc:
+                    logger.warning("[gate] genesis fetch failed (%s) — "
+                                   "full sensor list to be safe", exc)
+                    disturb_ok = False
+                    gate_disturb = []
+                if storms_ok and disturb_ok and not gate_storms and not gate_disturb:
+                    quiet_sensors = [s for s in sensors if s in QUIET_MODE_SENSORS]
+                    if not quiet_sensors:
+                        logger.info("[gate] quiet (0 storms, 0 disturbances) and "
+                                    "configured sensors %s have no quiet-mode "
+                                    "overlap with %s — skipping ingest entirely",
+                                    sensors, sorted(QUIET_MODE_SENSORS))
+                        print(json.dumps({"processed": 0, "reason": "quiet-gate-skip"}))
+                        return
+                    logger.info("[gate] quiet (0 storms, 0 disturbances) — "
+                                "narrowing sensors %s → %s for opportunistic "
+                                "global coverage", sensors, quiet_sensors)
+                    sensors = quiet_sensors
+
+            sess = _pps_session()
+            # Manifest-checkpoint timer. Long backfills used to keep the
+            # frontend dark until end-of-run; now we write the manifest every
+            # CHECKPOINT_INTERVAL_SEC of wall-clock time during the loop, so
+            # users watch coverage build up incrementally. The final
+            # end-of-run update_manifest still fires (idempotent) so any
+            # post-last-checkpoint entries also land.
+            last_checkpoint = time.monotonic()
+            def _maybe_checkpoint():
+                nonlocal last_checkpoint
+                if args.no_manifest or args.dry_run:
                     return
-                logger.info("[gate] quiet (0 storms, 0 disturbances) — "
-                            "narrowing sensors %s → %s for opportunistic "
-                            "global coverage", sensors, quiet_sensors)
-                sensors = quiet_sensors
+                if not all_entries:
+                    return
+                now_t = time.monotonic()
+                if (now_t - last_checkpoint) < CHECKPOINT_INTERVAL_SEC:
+                    return
+                try:
+                    update_manifest(all_entries)
+                    logger.info("[checkpoint] manifest updated with %d entries so far",
+                                len(all_entries))
+                except Exception as exc:
+                    logger.warning("[checkpoint] manifest update failed: %s", exc)
+                last_checkpoint = now_t
 
-        sess = _pps_session()
-        # Manifest-checkpoint timer. Long backfills used to keep the
-        # frontend dark until end-of-run; now we write the manifest every
-        # CHECKPOINT_INTERVAL_SEC of wall-clock time during the loop, so
-        # users watch coverage build up incrementally. The final
-        # end-of-run update_manifest still fires (idempotent) so any
-        # post-last-checkpoint entries also land.
-        last_checkpoint = time.monotonic()
-        def _maybe_checkpoint():
-            nonlocal last_checkpoint
-            if args.no_manifest or args.dry_run:
-                return
-            if not all_entries:
-                return
-            now_t = time.monotonic()
-            if (now_t - last_checkpoint) < CHECKPOINT_INTERVAL_SEC:
-                return
-            try:
-                update_manifest(all_entries)
-                logger.info("[checkpoint] manifest updated with %d entries so far",
-                            len(all_entries))
-            except Exception as exc:
-                logger.warning("[checkpoint] manifest update failed: %s", exc)
-            last_checkpoint = now_t
+            # Larger first-run fallback than 1 h — SSMI/S and AMSR2 NRT lag ~3-4 h
+            # behind real time, so a tight window leaves them empty on the first
+            # operational pass. 6 h captures everything available; subsequent
+            # runs resume from the per-sensor manifest cursor with 20-min steps.
+            fallback_hours = args.since_hours if args.since_hours is not None else 6
 
-        # Larger first-run fallback than 1 h — SSMI/S and AMSR2 NRT lag ~3-4 h
-        # behind real time, so a tight window leaves them empty on the first
-        # operational pass. 6 h captures everything available; subsequent
-        # runs resume from the per-sensor manifest cursor with 20-min steps.
-        fallback_hours = args.since_hours if args.since_hours is not None else 6
-
-        for sensor in sensors:
-            if args.operational:
-                last = _last_processed_start_utc(sensor=sensor)
-                if last is None:
-                    since = _dt.now(timezone.utc) - timedelta(hours=fallback_hours)
-                    logger.info("[%s] no prior manifest entries — falling back "
-                                "to last %.1f h", sensor, fallback_hours)
+            # Runtime-budget flag — set when _MAX_RUNTIME_SECONDS is hit in
+            # the inner loop; checked by the outer loop so we break out of
+            # both. Manual --since-hours backfills also honor this so they
+            # don't pile up if an operator forgot one running.
+            budget_exceeded = False
+            for sensor in sensors:
+                if time.time() - start_time > _MAX_RUNTIME_SECONDS:
+                    logger.warning("[budget] runtime budget exceeded (%.0fs) "
+                                   "before starting sensor %s — exiting "
+                                   "cleanly; next cron picks up",
+                                   time.time() - start_time, sensor)
+                    budget_exceeded = True
+                    break
+                if args.operational:
+                    last = _last_processed_start_utc(sensor=sensor)
+                    if last is None:
+                        since = _dt.now(timezone.utc) - timedelta(hours=fallback_hours)
+                        logger.info("[%s] no prior manifest entries — falling back "
+                                    "to last %.1f h", sensor, fallback_hours)
+                    else:
+                        # +1s so we don't reprocess the boundary granule.
+                        since = last + timedelta(seconds=1)
                 else:
-                    # +1s so we don't reprocess the boundary granule.
-                    since = last + timedelta(seconds=1)
-            else:
-                since = _dt.now(timezone.utc) - timedelta(hours=args.since_hours)
-            logger.info("[%s] polling PPS for granules since %s",
-                        sensor, since.isoformat())
-            try:
-                granules = list_pps_granules(sensor, since)
-            except Exception as exc:
-                logger.error("[%s] listing failed: %s — skipping", sensor, exc)
-                continue
-            logger.info("[%s] found %d new granules to process",
-                        sensor, len(granules))
+                    since = _dt.now(timezone.utc) - timedelta(hours=args.since_hours)
+                logger.info("[%s] polling PPS for granules since %s",
+                            sensor, since.isoformat())
+                try:
+                    granules = list_pps_granules(sensor, since)
+                except Exception as exc:
+                    logger.error("[%s] listing failed: %s — skipping", sensor, exc)
+                    continue
+                logger.info("[%s] found %d new granules to process",
+                            sensor, len(granules))
 
-            for url, scan_start in granules:
-                fname = url.rsplit("/", 1)[-1]
-                # Download into a temp DIR using the original PPS filename so
-                # read_pps_for_product's regex (anchored on the granule name
-                # pattern) sees the unmodified granule name.
-                # NamedTemporaryFile prepends tmpXXX_ which broke that parse.
-                with tempfile.TemporaryDirectory() as td:
-                    fpath = Path(td) / fname
-                    try:
-                        r = sess.get(url, stream=True, timeout=180)
-                        r.raise_for_status()
-                        with open(fpath, "wb") as f:
-                            for chunk in r.iter_content(chunk_size=1 << 20):
-                                f.write(chunk)
-                        all_entries.extend(process_one(
-                            str(fpath), sensor, products))
-                    except Exception as exc:
-                        logger.error("[%s] granule %s failed: %s",
-                                     sensor, fname, exc)
-                # Maybe write a manifest checkpoint so the frontend sees
-                # progress instead of nothing-then-everything.
-                _maybe_checkpoint()
+                for idx, (url, scan_start) in enumerate(granules):
+                    if time.time() - start_time > _MAX_RUNTIME_SECONDS:
+                        logger.warning(
+                            "[%s] runtime budget exceeded (%.0fs) — exiting "
+                            "cleanly with %d granules remaining; next cron "
+                            "picks up", sensor,
+                            time.time() - start_time, len(granules) - idx)
+                        budget_exceeded = True
+                        break
+                    fname = url.rsplit("/", 1)[-1]
+                    # Download into a temp DIR using the original PPS filename so
+                    # read_pps_for_product's regex (anchored on the granule name
+                    # pattern) sees the unmodified granule name.
+                    # NamedTemporaryFile prepends tmpXXX_ which broke that parse.
+                    with tempfile.TemporaryDirectory() as td:
+                        fpath = Path(td) / fname
+                        try:
+                            r = sess.get(url, stream=True, timeout=180)
+                            r.raise_for_status()
+                            with open(fpath, "wb") as f:
+                                for chunk in r.iter_content(chunk_size=1 << 20):
+                                    f.write(chunk)
+                            all_entries.extend(process_one(
+                                str(fpath), sensor, products))
+                        except Exception as exc:
+                            logger.error("[%s] granule %s failed: %s",
+                                         sensor, fname, exc)
+                    # Maybe write a manifest checkpoint so the frontend sees
+                    # progress instead of nothing-then-everything.
+                    _maybe_checkpoint()
+                if budget_exceeded:
+                    break
+        finally:
+            if lock_held:
+                _release_ingest_lock(execution_name)
     else:
         ap.error("Specify one of --tcprimed-file / --pps-file / "
                  "--since-hours / --operational")
