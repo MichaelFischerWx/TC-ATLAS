@@ -773,19 +773,24 @@
                                 </div>
                                 <span id="sat-mw-status" class="sat-mw-leaflet-status"></span>
                             </div>
-                            <div id="sat-mw-products" class="rt-mw-storm-products">
-                                <button type="button" class="rt-mw-storm-chip active" data-product="89pct">89 PCT</button>
-                                <button type="button" class="rt-mw-storm-chip" data-product="37color">37 color</button>
-                                <button type="button" class="rt-mw-storm-chip" data-product="89v">89V</button>
-                                <button type="button" class="rt-mw-storm-chip" data-product="89h">89H</button>
-                                <button type="button" class="rt-mw-storm-chip" data-product="37v">37V</button>
-                                <button type="button" class="rt-mw-storm-chip" data-product="37h">37H</button>
+                            <div class="sat-mw-controls-row">
+                                <div id="sat-mw-products" class="rt-mw-storm-products">
+                                    <button type="button" class="rt-mw-storm-chip active" data-product="89pct">89 PCT</button>
+                                    <button type="button" class="rt-mw-storm-chip" data-product="37color">37 color</button>
+                                    <button type="button" class="rt-mw-storm-chip" data-product="89v">89V</button>
+                                    <button type="button" class="rt-mw-storm-chip" data-product="89h">89H</button>
+                                    <button type="button" class="rt-mw-storm-chip" data-product="37v">37V</button>
+                                    <button type="button" class="rt-mw-storm-chip" data-product="37h">37H</button>
+                                </div>
+                                <!-- Pass dropdown — replaces the prior
+                                     horizontal pass-strip so the MW
+                                     pane has the same vertical extent
+                                     as the IR pane on the left. -->
+                                <select id="sat-mw-pass-select" class="sat-mw-pass-select" title="Pick a microwave pass from the last 24 hours">
+                                    <option value="">— no passes —</option>
+                                </select>
                             </div>
                             <div id="sat-leaflet-mw" class="sat-leaflet-pane sat-leaflet-pane-mw"></div>
-                            <div class="sat-mw-strip-wrap">
-                                <div class="sat-mw-strip-label">Recent passes &middot; click to select</div>
-                                <div id="sat-mw-strip" class="sat-mw-strip"></div>
-                            </div>
                         </div>
                     </div>
                 </div>

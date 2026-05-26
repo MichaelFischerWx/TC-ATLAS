@@ -2764,8 +2764,13 @@
                 }
             }
             tooltip.style.display = 'block';
-            tooltip.style.left = (e.originalEvent.pageX + 12) + 'px';
-            tooltip.style.top  = (e.originalEvent.pageY + 12) + 'px';
+            // Fixed-position the tooltip so client (viewport) coords
+            // line up with it directly. Default sat-tooltip CSS is
+            // position:absolute, which would offset relative to the
+            // parent positioned ancestor — pageX/Y doesn't match that.
+            tooltip.style.position = 'fixed';
+            tooltip.style.left = (e.originalEvent.clientX + 14) + 'px';
+            tooltip.style.top  = (e.originalEvent.clientY + 14) + 'px';
             tooltip.innerHTML = (valueText
                 ? '<strong>' + label + ':</strong> ' + valueText
                   + '<br><span style="opacity:0.7;">' + posText + '</span>'
@@ -2959,43 +2964,59 @@
     }
 
     function _satMwRenderStrip() {
-        var strip = document.getElementById('sat-mw-strip');
-        if (!strip) return;
-        strip.innerHTML = '';
+        // Renamed-but-kept-as-stub: now populates the pass-dropdown
+        // selector. The horizontal strip was removed because it stole
+        // ~80 px of vertical space from the MW pane, making the right
+        // map visibly shorter than the left IR map.
+        var sel = document.getElementById('sat-mw-pass-select');
+        if (!sel) return;
+        sel.innerHTML = '';
         if (!_satMwOrbits.length) {
-            strip.innerHTML = '<div class="sat-mw-strip-empty">No microwave passes have covered this storm in the last 24 hours.</div>';
+            var opt = document.createElement('option');
+            opt.value = '';
+            opt.textContent = '— no passes covered storm —';
+            sel.appendChild(opt);
+            sel.disabled = true;
             return;
         }
+        sel.disabled = false;
         var nowMs = Date.now();
         for (var i = 0; i < _satMwOrbits.length; i++) {
             var o = _satMwOrbits[i];
             var pr = o.products[_satMwProduct];
             if (!pr) continue;
-            var btn = document.createElement('button');
-            btn.type = 'button';
-            btn.className = 'sat-mw-strip-card';
-            var swatch = (typeof window._rtMwSensorColor === 'function')
-                ? window._rtMwSensorColor(o.sensor) : '#cbd5e1';
             var ageMin = (nowMs - o.scan_start_ms) / 60000;
             var ageStr = _satMwFmtAgo(ageMin);
             var utc = o.scan_start.replace('T', ' ').slice(0, 16) + 'Z';
-            btn.innerHTML =
-                '<div class="sat-mw-strip-card-row">'
-                + '<span class="sat-mw-strip-swatch" style="background:' + swatch + '"></span>'
-                + '<strong>' + o.sensor + '</strong> '
-                + '<span class="sat-mw-strip-platform">' + (o.platform || '') + '</span>'
-                + '</div>'
-                + '<div class="sat-mw-strip-card-time">' + ageStr + '</div>'
-                + '<div class="sat-mw-strip-card-utc">' + utc + '</div>';
+            var opt2 = document.createElement('option');
+            opt2.value = o.orbit_id;
+            opt2.textContent = o.sensor + ' · ' + (o.platform || '?')
+                             + ' — ' + utc + ' (' + ageStr + ')';
             if (_satMwSelectedOrbit && _satMwSelectedOrbit.orbit_id === o.orbit_id) {
-                btn.classList.add('selected');
+                opt2.selected = true;
             }
-            (function (orbit) {
-                btn.addEventListener('click', function () { _satMwSelectPass(orbit); });
-            })(o);
-            strip.appendChild(btn);
+            sel.appendChild(opt2);
         }
     }
+    // Wire the dropdown's change handler once at module init.
+    (function _satBindMwPassSelect() {
+        var attach = function () {
+            var sel = document.getElementById('sat-mw-pass-select');
+            if (!sel || sel._satBound) return;
+            sel._satBound = true;
+            sel.addEventListener('change', function () {
+                var oid = sel.value;
+                if (!oid) return;
+                var match = _satMwOrbits.find(function (o) {
+                    return o.orbit_id === oid;
+                });
+                if (match) _satMwSelectPass(match);
+            });
+        };
+        // Attach now if the element already exists, else on DOM ready.
+        if (document.getElementById('sat-mw-pass-select')) attach();
+        else document.addEventListener('DOMContentLoaded', attach, { once: true });
+    })();
 
     function _satMwFmtAgo(min) {
         if (min < 1)  return 'just now';
@@ -3010,14 +3031,9 @@
         _satMwSelectedOrbit = orbit;
         var storm = currentStorm;
         _satMwSetPassTime(orbit.scan_start.replace('T', ' ').slice(0, 16) + 'Z');
-        // Update strip selection highlight.
-        var strip = document.getElementById('sat-mw-strip');
-        if (strip) {
-            var cards = strip.querySelectorAll('.sat-mw-strip-card');
-            for (var i = 0; i < cards.length; i++) cards[i].classList.remove('selected');
-            var idx = _satMwOrbits.findIndex(function (o) { return o.orbit_id === orbit.orbit_id; });
-            if (idx >= 0 && cards[idx]) cards[idx].classList.add('selected');
-        }
+        // Reflect the selection back into the dropdown.
+        var sel = document.getElementById('sat-mw-pass-select');
+        if (sel) sel.value = orbit.orbit_id;
         _satMwRenderMwOverlay();
         _satMwRenderIrAtMatchedTime(orbit.scan_start_ms, storm);
         _satMwUpdateMarkersForOrbit(orbit, storm);

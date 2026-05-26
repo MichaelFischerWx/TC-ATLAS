@@ -3399,6 +3399,30 @@ html:not([data-view="map"]) #ir-global-env-cbars {
     font-weight: 500;
 }
 
+/* MW controls row — product chips + pass dropdown on one line. */
+.sat-mw-controls-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+.sat-mw-pass-select {
+    flex: 1;
+    min-width: 200px;
+    background: rgba(15, 22, 36, 0.85);
+    color: var(--text, #e2e8f0);
+    border: 1px solid rgba(148, 163, 184, 0.4);
+    border-radius: 5px;
+    padding: 4px 8px;
+    font-family: inherit;
+    font-size: 0.78rem;
+    cursor: pointer;
+}
+.sat-mw-pass-select:disabled {
+    opacity: 0.55;
+    cursor: default;
+}
+
 .sat-mw-strip-wrap {
     flex-shrink: 0;
     display: flex;
