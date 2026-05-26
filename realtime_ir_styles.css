@@ -2795,6 +2795,89 @@ html:not([data-view="map"]) #ir-global-env-cbars {
     color: var(--text, #e2e8f0);
     border-color: rgba(148, 163, 184, 0.3);
 }
+/* Sticky jump-nav: keeps panel discovery visible while the user scrolls
+   through the modal. position:sticky inside the modal-content scroller
+   means it pins to the top of the scroll viewport, not the page. */
+.rt-genesis-jump-nav {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 0;
+    margin: 0 0 8px 0;
+    background: var(--surface-raised, #ffffff);
+    border-bottom: 1px solid var(--border, rgba(0, 0, 0, 0.08));
+}
+.rt-genesis-jump-label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-dim, #64748b);
+    margin-right: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.rt-genesis-jump-btn {
+    padding: 5px 12px;
+    font-family: inherit;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--text, #0f172a);
+    background: transparent;
+    border: 1px solid var(--border, rgba(0, 0, 0, 0.12));
+    border-radius: 999px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.rt-genesis-jump-btn:hover {
+    background: rgba(46, 125, 255, 0.08);
+    border-color: rgba(46, 125, 255, 0.45);
+}
+.rt-genesis-jump-btn.active {
+    background: rgba(46, 125, 255, 0.18);
+    border-color: rgba(46, 125, 255, 0.65);
+    color: #2e7dff;
+}
+[data-theme="dark"] .rt-genesis-jump-nav {
+    background: var(--surface-raised, #161b24);
+    border-bottom-color: rgba(255, 255, 255, 0.08);
+}
+[data-theme="dark"] .rt-genesis-jump-btn {
+    color: var(--text, #e2e8f0);
+    border-color: rgba(148, 163, 184, 0.3);
+}
+[data-theme="dark"] .rt-genesis-jump-btn:hover {
+    background: rgba(46, 125, 255, 0.16);
+    border-color: rgba(46, 125, 255, 0.55);
+}
+[data-theme="dark"] .rt-genesis-jump-btn.active {
+    background: rgba(46, 125, 255, 0.28);
+    border-color: rgba(46, 125, 255, 0.7);
+    color: #7eb8ff;
+}
+/* ATCF-match pill in the disturbance modal subtitle — signals that
+   the FNV3 ensemble is locked to an officially-tracked TC/invest, so
+   the user reads our diagnostics knowing it's a known system. Hover
+   reveals the storm's name/category and the match distance. */
+.rt-genesis-atcf-pill {
+    display: inline-block;
+    padding: 2px 8px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    color: #0f172a;
+    background: rgba(46, 125, 255, 0.18);
+    border: 1px solid rgba(46, 125, 255, 0.55);
+    border-radius: 999px;
+    cursor: help;
+}
+[data-theme="dark"] .rt-genesis-atcf-pill {
+    color: #cbd5e1;
+    background: rgba(46, 125, 255, 0.28);
+    border-color: rgba(46, 125, 255, 0.7);
+}
 
 /* Pre-genesis-specific stats strip. Three quick-look tiles between
    the header and the figures. Same density / typography as the storm-

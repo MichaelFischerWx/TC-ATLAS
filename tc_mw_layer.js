@@ -1093,10 +1093,41 @@
         for (var di = 0; di < displayList.length; di++) {
             seen[displayList[di].atcf_id] = true;
         }
+        // Spatial dedup: when an FNV3 cyclogenesis disturbance ("DIST-D1")
+        // is within 600 km of an already-tracked ATCF storm, they're the
+        // same system — suppress the disturbance row. The atcf_id check
+        // alone misses this because disturbance IDs are synthetic
+        // ("DIST-D1") and never collide with real ATCF IDs ("WP992026").
+        function _distKm(lat1, lon1, lat2, lon2) {
+            var R = 6371;
+            var rad = Math.PI / 180;
+            var dLat = (lat2 - lat1) * rad;
+            var dLon = (lon2 - lon1) * rad;
+            var s1 = Math.sin(dLat / 2), s2 = Math.sin(dLon / 2);
+            var a = s1 * s1 +
+                    Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * s2 * s2;
+            return 2 * R * Math.asin(Math.sqrt(a));
+        }
+        var DEDUP_RADIUS_KM = 600;
         for (var pj = 0; pj < pred.length; pj++) {
             var pp = pred[pj];
             if (!pp.is_disturbance) continue;
             if (seen[pp.atcf_id]) continue;
+            // Skip if any already-listed active TC is within DEDUP_RADIUS_KM.
+            var dup = false;
+            if (pp.lat != null && pp.lon != null) {
+                for (var dpi = 0; dpi < displayList.length; dpi++) {
+                    var ds = displayList[dpi];
+                    if (ds.is_disturbance) continue;
+                    if (ds.lat == null || ds.lon == null) continue;
+                    if (_distKm(pp.lat, pp.lon, ds.lat, ds.lon)
+                            <= DEDUP_RADIUS_KM) {
+                        dup = true;
+                        break;
+                    }
+                }
+            }
+            if (dup) continue;
             displayList.push({
                 atcf_id: pp.atcf_id, name: pp.name,
                 lat: pp.lat, lon: pp.lon,

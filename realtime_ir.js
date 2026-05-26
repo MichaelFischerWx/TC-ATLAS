@@ -2656,6 +2656,14 @@
                 fetchAllTracks(stormData);
                 _rtPushStormsToMwLayer();
 
+                // If genesis data is already loaded, re-render so any
+                // newly-arrived ATCF storm gets paired with its matching
+                // FNV3 disturbance ("Disturbance 1" → "TD 01W"). Cheap
+                // because the disturbance list is already cached.
+                if (_rtGenesisData && typeof _renderGenesis === 'function') {
+                    try { _renderGenesis(); } catch (e) { /* non-fatal */ }
+                }
+
                 // Handle deep link on first load
                 handleDeepLink();
 
@@ -5724,6 +5732,107 @@
     // header without re-running the qualification scan.
     var _genesisDisturbanceMeta = {};
 
+    // Map an active-storm ATCF basin code to its single-letter suffix
+    // used in JTWC/NHC nomenclature (e.g., "WP012026" → "01W").
+    var _ATCF_BASIN_LETTER = {
+        AL: 'L', EP: 'E', CP: 'C',
+        WP: 'W', IO: 'A', SH: 'S',
+    };
+
+    // Format an active-storm record using JTWC/NHC nomenclature so a
+    // matched FNV3 disturbance can carry the user-recognizable name
+    // instead of our internal "Disturbance N" label. Returns:
+    //   { full, short, atcfId }
+    //   - invest (atcf number 90-99) → "Invest 90W" / "90W"
+    //   - sub-TS unnamed (number-word names like "ONE")  → "TD 01W" / "01W"
+    //   - named system (TS+)         → title-cased name  / first-word short
+    function _genesisFormatStormLabel(storm) {
+        if (!storm || !storm.atcf_id) return null;
+        var id = String(storm.atcf_id);
+        var basinCode = id.slice(0, 2).toUpperCase();
+        var num = id.slice(2, 4);
+        var n = parseInt(num, 10);
+        var letter = _ATCF_BASIN_LETTER[basinCode] || '';
+        var nnb = num + letter;  // e.g., "01W"
+        if (isNaN(n)) return null;
+        if (n >= 90 && n <= 99) {
+            return { full: 'Invest ' + nnb, short: nnb, atcfId: id.toUpperCase() };
+        }
+        var cat = String(storm.category || '').toUpperCase();
+        var name = String(storm.name || '').trim();
+        // Number-word names = NHC's pre-name "Tropical Depression ONE/TWO"
+        // convention. Treat as TD nomenclature so the user sees the more
+        // familiar "TD 01W" instead of "ONE".
+        var isNumberWord = /^(ONE|TWO|THREE|FOUR|FIVE|SIX|SEVEN|EIGHT|NINE|TEN|ELEVEN|TWELVE|THIRTEEN|FOURTEEN|FIFTEEN|SIXTEEN|SEVENTEEN|EIGHTEEN|NINETEEN|TWENTY|TWENTY-?ONE|TWENTY-?TWO|TWENTY-?THREE|TWENTY-?FOUR|TWENTY-?FIVE|TWENTY-?SIX|TWENTY-?SEVEN|TWENTY-?EIGHT|TWENTY-?NINE|THIRTY)$/.test(name);
+        var looksLikeAtcfId = /^[A-Z]{2}\d{2}\d{4}$/.test(name);
+        var hasRealName = name && !isNumberWord && !looksLikeAtcfId;
+        if (cat === 'TD' || cat === '' || cat === 'XX' || !hasRealName) {
+            return { full: 'TD ' + nnb, short: nnb, atcfId: id.toUpperCase() };
+        }
+        var titled = name.toLowerCase().split(/\s+/).map(function (w) {
+            return w.charAt(0).toUpperCase() + w.slice(1);
+        }).join(' ');
+        return {
+            full: titled,
+            short: titled.split(/\s+/)[0],
+            atcfId: id.toUpperCase(),
+        };
+    }
+
+    // Find the active-storm record closest to a disturbance's current
+    // ensemble-mean position, within 600 km. Returns null if no storm
+    // qualifies. Used to re-label a disturbance that's already an
+    // officially-tracked TC/invest by JTWC or NHC. Greedy: caller is
+    // expected to remove the matched storm from the pool so two
+    // disturbances can't claim the same system.
+    function _genesisMatchStormToDisturbance(disturbance, stormsAvail) {
+        if (!disturbance || !disturbance.mean
+                || !disturbance.mean.points
+                || !disturbance.mean.points.length) return null;
+        if (!stormsAvail || !stormsAvail.length) return null;
+        var p0 = disturbance.mean.points[0];
+        if (p0.lat == null || p0.lon == null) return null;
+        var best = null, bestDist = 600;  // km threshold
+        for (var i = 0; i < stormsAvail.length; i++) {
+            var s = stormsAvail[i];
+            if (!s || s.lat == null || s.lon == null) continue;
+            var d = _genesisHaversineKm(p0.lat, p0.lon, s.lat, s.lon);
+            if (d < bestDist) { bestDist = d; best = s; }
+        }
+        if (!best) return null;
+        return { storm: best, distKm: bestDist };
+    }
+
+    // Apply ATCF storm matches to a sorted disturbance list in place.
+    // When a match is found, the disturbance's display label flips from
+    // "Disturbance N / DN" to the storm's official name ("TD 01W" /
+    // "01W" or "Bonnie" / "Bonnie"), and `atcfMatch` is stashed for
+    // downstream UI (modal subtitle pill, tooltip).
+    function _genesisApplyActiveStormMatches(disturbances, stormsArr) {
+        if (!disturbances || !disturbances.length) return;
+        var pool = (stormsArr || []).slice();
+        for (var i = 0; i < disturbances.length; i++) {
+            var d = disturbances[i];
+            var match = _genesisMatchStormToDisturbance(d, pool);
+            if (!match) continue;
+            var label = _genesisFormatStormLabel(match.storm);
+            if (!label) continue;
+            d.atcfMatch = {
+                atcfId: label.atcfId,
+                name: match.storm.name,
+                category: match.storm.category,
+                vmaxKt: match.storm.vmax_kt,
+                distKm: match.distKm,
+            };
+            d.atcfLabel = label;
+            d.displayLabel = label.full;
+            d.displayShort = label.short;
+            // Remove from pool so a second disturbance can't claim it.
+            var idx = pool.indexOf(match.storm);
+            if (idx >= 0) pool.splice(idx, 1);
+        }
+    }
+
     // Great-circle distance in km. Used by the TC-ATLAS clustering
     // path to test member-genesis spatial proximity. Identical math
     // to the haversine helpers in satellite.js / global_archive.js;
@@ -6356,6 +6465,12 @@
         var disturbances = _genesisDisturbances(tracks);
         if (disturbances.length === 0) return;
 
+        // Re-label disturbances that overlap an officially-tracked
+        // ATCF storm. After this call, d.displayLabel may be "TD 01W"
+        // / "Invest 90W" / "Bonnie" instead of "Disturbance N", with
+        // the matched storm cached on d.atcfMatch for the modal.
+        _genesisApplyActiveStormMatches(disturbances, stormData);
+
         for (var di = 0; di < disturbances.length; di++) {
             var d = disturbances[di];
             var trackId = d.raw.track_id || '';
@@ -6375,6 +6490,8 @@
             _genesisDisturbanceMeta[trackId] = {
                 label: d.displayLabel,
                 short: d.displayShort,
+                atcfMatch: d.atcfMatch || null,
+                atcfLabel: d.atcfLabel || null,
                 fraction: d.fraction,
                 fractionText: pctText,
                 peakWind: d.peakWind,
@@ -6694,6 +6811,16 @@
               // storm panel never has to compute (formation probability,
               // P10/P50/P90 peak Vmax, most-likely genesis time).
               '<div id="rt-genesis-modal-stats" class="rt-genesis-stat-row"></div>' +
+              // Sticky jump-nav — makes the existence of the intensity
+              // envelope and genesis-time histogram discoverable without
+              // relying on the scrollbar (the panels live below the
+              // fold for most viewport sizes).
+              '<div id="rt-genesis-jump-nav" class="rt-genesis-jump-nav" role="tablist">' +
+                '<span class="rt-genesis-jump-label">Jump to:</span>' +
+                '<button type="button" class="rt-genesis-jump-btn active" data-target="rt-genesis-jump-tracks">Tracks</button>' +
+                '<button type="button" class="rt-genesis-jump-btn" data-target="rt-genesis-jump-intensity">Intensity envelope</button>' +
+                '<button type="button" class="rt-genesis-jump-btn" data-target="rt-genesis-jump-gtime">Genesis-time histogram</button>' +
+              '</div>' +
               '<div class="rt-genesis-modal-body">' +
                 // Forecast-hour scrubber — drives the map's "members at
                 // tau=t" overlay and the intensity time-series cursor.
@@ -6717,18 +6844,18 @@
                 // axis labels for the top-left corner. Hidden in
                 // Members mode (display: none).
                 '<div id="rt-genesis-density-key" class="rt-genesis-density-key" style="display:none;"></div>' +
-                '<div class="rt-genesis-modal-chart-wrap" style="position:relative;">' +
+                '<div id="rt-genesis-jump-tracks" class="rt-genesis-modal-chart-wrap" style="position:relative;">' +
                   '<button type="button" id="rt-genesis-map-save" class="rt-genesis-modal-save" title="Save track map as PNG">⤓ PNG</button>' +
                   '<div id="rt-genesis-modal-map" style="width:100%; height:480px;"></div>' +
                 '</div>' +
-                '<div class="rt-genesis-modal-chart-wrap" style="position:relative; margin-top:14px;">' +
+                '<div id="rt-genesis-jump-intensity" class="rt-genesis-modal-chart-wrap" style="position:relative; margin-top:14px;">' +
                   '<button type="button" id="rt-genesis-int-save" class="rt-genesis-modal-save" title="Save intensity time series as PNG">⤓ PNG</button>' +
                   '<div id="rt-genesis-modal-int" style="width:100%; height:300px;"></div>' +
                 '</div>' +
                 // Unique-to-pre-genesis: histogram of when each member
                 // first reaches 34 kt. Useful for the "when does it
                 // form?" question a named-storm view never has to ask.
-                '<div class="rt-genesis-modal-chart-wrap" style="position:relative; margin-top:14px;">' +
+                '<div id="rt-genesis-jump-gtime" class="rt-genesis-modal-chart-wrap" style="position:relative; margin-top:14px;">' +
                   '<button type="button" id="rt-genesis-gtime-save" class="rt-genesis-modal-save" title="Save genesis-time histogram as PNG">⤓ PNG</button>' +
                   '<div id="rt-genesis-modal-gtime" style="width:100%; height:180px;"></div>' +
                 '</div>' +
@@ -6757,6 +6884,56 @@
         m.querySelector('#rt-genesis-summary-save').addEventListener('click', function () {
             _genesisSaveSummaryPNG();
         });
+
+        // Jump-nav: smooth-scroll the modal's scroll container to the
+        // requested chart-wrap, and keep the active button highlighted
+        // as the user scrolls through panels. The scroll container is
+        // .rt-genesis-modal-content (the element with overflow:auto),
+        // not the modal backdrop itself.
+        var scroller = m.querySelector('.rt-genesis-modal-content');
+        var jumpBtns = m.querySelectorAll('.rt-genesis-jump-btn');
+        jumpBtns.forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                var targetId = btn.getAttribute('data-target');
+                var target = m.querySelector('#' + targetId);
+                if (!target || !scroller) return;
+                // getBoundingClientRect deltas survive the modal's
+                // own absolute positioning. Pull the target's top into
+                // the scroller, then subtract sticky-nav height so the
+                // panel doesn't slide under the bar.
+                var nav = m.querySelector('#rt-genesis-jump-nav');
+                var navH = nav ? nav.offsetHeight : 0;
+                var srect = scroller.getBoundingClientRect();
+                var trect = target.getBoundingClientRect();
+                var delta = (trect.top - srect.top) + scroller.scrollTop - navH - 8;
+                scroller.scrollTo({ top: delta, behavior: 'smooth' });
+            });
+        });
+        if ('IntersectionObserver' in window && scroller) {
+            var setActive = function (id) {
+                jumpBtns.forEach(function (b) {
+                    b.classList.toggle('active',
+                                       b.getAttribute('data-target') === id);
+                });
+            };
+            var io = new IntersectionObserver(function (entries) {
+                // Pick the highest-visibility entry currently in view.
+                var best = null;
+                entries.forEach(function (e) {
+                    if (!best || e.intersectionRatio > best.intersectionRatio) {
+                        best = e;
+                    }
+                });
+                if (best && best.isIntersecting) {
+                    setActive(best.target.id);
+                }
+            }, { root: scroller, threshold: [0.25, 0.5, 0.75] });
+            ['rt-genesis-jump-tracks', 'rt-genesis-jump-intensity',
+             'rt-genesis-jump-gtime'].forEach(function (id) {
+                var el = m.querySelector('#' + id);
+                if (el) io.observe(el);
+            });
+        }
         return m;
     }
 
@@ -6970,10 +7147,31 @@
             '<strong>' + memberKeys.length + '</strong> ensemble members',
             '<span style="opacity:0.8;">FNV3 LARGE_ENSEMBLE</span>',
         ];
-        if (json._uncapped) {
-            subParts.push('<span style="opacity:0.8; color:#00e5ff;">'
-                + 'uncapped re-cluster</span>');
+        // If this disturbance was paired with an officially-tracked ATCF
+        // storm (named TC, TD, or invest within 600 km of the cluster's
+        // current ensemble-mean position), surface the ATCF id so the
+        // user knows the FNV3 ensemble is forecasting a real already-
+        // classified system, not a model-only disturbance.
+        var _metaForSub = _genesisDisturbanceMeta[json.track_id];
+        if (_metaForSub && _metaForSub.atcfMatch) {
+            var _am = _metaForSub.atcfMatch;
+            var _matchTip = 'Disturbance cluster center within '
+                + Math.round(_am.distKm) + ' km of ' + _am.atcfId
+                + ' (' + (_am.name || '?')
+                + (_am.category ? ', ' + _am.category : '')
+                + (_am.vmaxKt != null ? ', ' + _am.vmaxKt.toFixed(0) + ' kt' : '')
+                + ') — labeled with the official ATCF name; the FNV3 '
+                + '1000-member diagnostics below are TC-ATLAS\'s '
+                + 'ensemble view of that same system.';
+            subParts.push('<span class="rt-genesis-atcf-pill" title="'
+                + _matchTip.replace(/"/g, '&quot;') + '">ATCF: '
+                + _am.atcfId + '</span>');
         }
+        // Internal "uncapped re-cluster" provenance flag intentionally
+        // suppressed from the user-facing subtitle — it's an implementation
+        // detail of the FNV3 backend (cluster member cap on/off) that
+        // researchers don't need to read. Still tracked on json._uncapped
+        // for downstream logic.
         if (json._dmExcluded) {
             subParts.push('<span style="opacity:0.8; color:#f97316;" '
                 + 'title="DeepMind\'s per-cycle tracker reuses numeric track_ids '
@@ -7972,9 +8170,13 @@
         }
         var meanArr = taus.map(function (t) { return meanByTau[t]; });
 
-        // SS reference bands — translucent horizontal stripes spanning
-        // the whole plot. Cleaner than dashed threshold lines and the
-        // user can identify the category at a glance.
+        // SS reference bands — cool monochrome ramp (light blue → deep
+        // violet) so the background gives an "intensity increases upward"
+        // cue without competing with the orange percentile ribbons. The
+        // old SS rainbow had yellow (C1) and orange (C2) sitting right
+        // where the data peaks, which made the ribbons disappear into
+        // the background. The single-hue cool ramp leaves the warm
+        // ribbon palette as the only warm thing on the plot.
         function bandShape(y0, y1, color) {
             return {
                 type: 'rect', xref: 'paper', yref: 'y',
@@ -7982,15 +8184,22 @@
                 fillcolor: color, line: { width: 0 }, layer: 'below',
             };
         }
-        var bandAlpha = isDark ? 0.10 : 0.06;
+        // Same hue family; alpha grows with category so darker = stronger.
+        // Light theme uses the rgba(99,102,241,…) indigo ramp; dark theme
+        // gets a touch more alpha since the navy surface eats some
+        // contrast.
+        var coolAlphas = isDark
+            ? [0.06, 0.10, 0.14, 0.18, 0.22, 0.28, 0.34]
+            : [0.04, 0.07, 0.10, 0.13, 0.17, 0.22, 0.27];
+        function ind(a) { return 'rgba(99,102,241,' + a + ')'; }
         var shapes = [
-            bandShape(0,   34,  'rgba(96,165,250,'  + bandAlpha + ')'),  // TD
-            bandShape(34,  64,  'rgba(52,211,153,'  + bandAlpha + ')'),  // TS
-            bandShape(64,  83,  'rgba(251,191,36,'  + bandAlpha + ')'),  // C1
-            bandShape(83,  96,  'rgba(251,146,60,'  + bandAlpha + ')'),  // C2
-            bandShape(96,  113, 'rgba(239,68,68,'   + bandAlpha + ')'),  // C3
-            bandShape(113, 137, 'rgba(196,48,160,'  + bandAlpha + ')'),  // C4
-            bandShape(137, 200, 'rgba(139,92,246,'  + bandAlpha + ')'),  // C5
+            bandShape(0,   34,  ind(coolAlphas[0])),  // TD
+            bandShape(34,  64,  ind(coolAlphas[1])),  // TS
+            bandShape(64,  83,  ind(coolAlphas[2])),  // C1
+            bandShape(83,  96,  ind(coolAlphas[3])),  // C2
+            bandShape(96,  113, ind(coolAlphas[4])),  // C3
+            bandShape(113, 137, ind(coolAlphas[5])),  // C4
+            bandShape(137, 200, ind(coolAlphas[6])),  // C5
         ];
 
         // Nested percentile ribbons — outermost min/max (lightest),
@@ -8243,6 +8452,160 @@
         return { lat: bLat, lon: bLon };
     }
 
+    // Deep-clone an object via JSON round-trip. Adequate for Plotly
+    // layout/data (plain JSON-safe values; no functions, no DOM refs).
+    function _jsonClone(obj) {
+        try { return JSON.parse(JSON.stringify(obj)); }
+        catch (_) { return obj; }
+    }
+
+    // Walk an object tree and scale every `size` field that lives inside
+    // a `font` or `tickfont` container (Plotly's font-size convention).
+    // Used at export time so all axis labels, tick labels, legends,
+    // titles, annotations, and colorbar fonts grow proportionally with
+    // the high-res output canvas instead of looking tiny.
+    function _scaleFontSizes(node, scale, parentKey) {
+        if (!node || typeof node !== 'object') return;
+        // `textfont` covers Plotly bar/scatter `text=` annotations (the
+        // numerical labels on top of histogram bars — easily missed
+        // until they look like dust at 1800-px export width).
+        var fontish = (parentKey === 'font' || parentKey === 'tickfont' ||
+                       parentKey === 'titlefont' || parentKey === 'hoverlabel' ||
+                       parentKey === 'textfont' || parentKey === 'outsidetextfont' ||
+                       parentKey === 'insidetextfont');
+        if (fontish && typeof node.size === 'number') {
+            node.size = Math.round(node.size * scale);
+        }
+        if (Array.isArray(node)) {
+            for (var i = 0; i < node.length; i++) {
+                _scaleFontSizes(node[i], scale, parentKey);
+            }
+            return;
+        }
+        for (var k in node) {
+            if (!Object.prototype.hasOwnProperty.call(node, k)) continue;
+            _scaleFontSizes(node[k], scale, k);
+        }
+    }
+
+    // Build a Plotly figure spec `{data, layout}` from a live chart div
+    // with all font sizes scaled by `scale`. Use this with Plotly.toImage
+    // instead of passing the bare DOM element — the live chart keeps its
+    // on-screen font sizes while the export gets readable proportions.
+    // Also fills in default sizes for fields Plotly leaves implicit
+    // (so the scale actually takes effect everywhere).
+    function _figForExport(el, scale) {
+        if (!el || !el.data || !el.layout) return el;
+        var layout = _jsonClone(el.layout);
+        var data = _jsonClone(el.data);
+        // Seed defaults so the recursive scaler has something to multiply.
+        // Plotly's stock default body-font size is 12 px.
+        layout.font = layout.font || {};
+        if (typeof layout.font.size !== 'number') layout.font.size = 12;
+        // Force-scale the explicit font containers we care most about,
+        // even if absent.
+        ['xaxis', 'yaxis', 'xaxis2', 'yaxis2', 'xaxis3', 'yaxis3'].forEach(
+            function (axKey) {
+                var ax = layout[axKey];
+                if (!ax) return;
+                ax.tickfont = ax.tickfont || { size: 12 };
+                if (typeof ax.tickfont.size !== 'number') ax.tickfont.size = 12;
+                if (ax.title && typeof ax.title === 'object') {
+                    ax.title.font = ax.title.font || { size: 14 };
+                    if (typeof ax.title.font.size !== 'number') {
+                        ax.title.font.size = 14;
+                    }
+                }
+            });
+        if (layout.legend) {
+            layout.legend.font = layout.legend.font || { size: 12 };
+            if (typeof layout.legend.font.size !== 'number') {
+                layout.legend.font.size = 12;
+            }
+        }
+        // Colorbars live on the data traces, not the layout. Two
+        // export-specific tweaks:
+        //   1. Seed default font sizes so the recursive scaler has
+        //      something to multiply.
+        //   2. Move the colorbar title above the bar (`side:'top'`) and
+        //      add `xpad` for breathing room — at on-screen sizes a
+        //      side-rotated "Vmax (kt)" sits cleanly next to short
+        //      ticks like "30", but at 2.8× scale with wide ticks like
+        //      "113 C4" the rotated title collides into the labels.
+        for (var i = 0; i < data.length; i++) {
+            var d = data[i];
+            function _bumpColorbar(cb) {
+                cb.tickfont = cb.tickfont || { size: 12 };
+                if (typeof cb.tickfont.size !== 'number') {
+                    cb.tickfont.size = 12;
+                }
+                if (cb.title && typeof cb.title === 'object') {
+                    cb.title.font = cb.title.font || { size: 14 };
+                    if (typeof cb.title.font.size !== 'number') {
+                        cb.title.font.size = 14;
+                    }
+                    cb.title.side = 'top';
+                } else if (typeof cb.title === 'string') {
+                    cb.title = { text: cb.title,
+                                 font: { size: 14 },
+                                 side: 'top' };
+                }
+                // Extra padding so the (still-scaled) ticks don't crowd
+                // the colorbar border. Defaults: xpad=10, ypad=10.
+                cb.xpad = Math.max(cb.xpad || 10, 20);
+                cb.ypad = Math.max(cb.ypad || 10, 20);
+            }
+            if (d && d.marker && d.marker.colorbar) _bumpColorbar(d.marker.colorbar);
+            if (d && d.colorbar)                    _bumpColorbar(d.colorbar);
+        }
+        _scaleFontSizes(layout, scale);
+        _scaleFontSizes(data, scale);
+        // Scale per-trace marker sizes + line widths. Plotly markers
+        // don't follow `font.size` — they're an independent dimension
+        // measured in absolute pixels — so on a 1800-px export at
+        // on-screen sizes they look like dots. Use full `scale` for
+        // markers, sqrt(scale) for line widths so lines thicken
+        // proportionally less than markers (keeps spaghetti tracks
+        // from turning into bars).
+        var lineScale = Math.sqrt(scale);
+        for (var ti = 0; ti < data.length; ti++) {
+            var dt = data[ti];
+            if (!dt) continue;
+            if (dt.marker && dt.marker.size != null) {
+                if (Array.isArray(dt.marker.size)) {
+                    dt.marker.size = dt.marker.size.map(function (s) {
+                        return typeof s === 'number'
+                            ? Math.round(s * scale) : s;
+                    });
+                } else if (typeof dt.marker.size === 'number') {
+                    dt.marker.size = Math.round(dt.marker.size * scale);
+                }
+            }
+            if (dt.marker && dt.marker.line
+                && typeof dt.marker.line.width === 'number') {
+                dt.marker.line.width = +(dt.marker.line.width
+                                         * lineScale).toFixed(2);
+            }
+            if (dt.line && typeof dt.line.width === 'number') {
+                dt.line.width = +(dt.line.width * lineScale).toFixed(2);
+            }
+        }
+        // Scale margins too — bigger axis titles and tick labels need
+        // proportionally more room or they get clipped at panel edges.
+        // Use the existing margin as the baseline (fall back to Plotly
+        // defaults: l/r=80, t=100, b=80) so we don't shrink margins
+        // when the source chart already configured generous ones.
+        var m = layout.margin || {};
+        layout.margin = {
+            l: Math.round(Math.max(m.l != null ? m.l : 80, 40) * scale),
+            r: Math.round(Math.max(m.r != null ? m.r : 80, 40) * scale),
+            t: Math.round(Math.max(m.t != null ? m.t : 50, 30) * scale),
+            b: Math.round(Math.max(m.b != null ? m.b : 80, 50) * scale),
+            pad: m.pad,
+        };
+        return { data: data, layout: layout };
+    }
+
     // Export a 3-panel composite (map + intensity + genesis-time
     // histogram) as a single PNG. Uses Plotly.toImage for each subplot
     // then stitches them on a canvas with a header strip showing the
@@ -8281,13 +8644,21 @@
         }
 
         var W = 1800;
-        var HEAD = 130;
-        var H_MAP = 900;
-        var H_INT = 540;
-        var H_GTIME = gtimeEl ? 320 : 0;
-        var GAP = 14;
-        var FOOT = 40;
+        var HEAD = 180;
+        var H_MAP = 1000;
+        var H_INT = 760;
+        var H_GTIME = gtimeEl ? 540 : 0;
+        var GAP = 18;
+        var FOOT = 64;
         var totalH = HEAD + H_MAP + GAP + H_INT + (H_GTIME ? GAP + H_GTIME : 0) + FOOT;
+        // Scale Plotly fonts ~2.8× so axis labels, ticks, legends, and
+        // colorbar labels look proportional at 1800-px export width
+        // instead of carrying their on-screen ~12-px sizes. Markers
+        // and line widths also scale (see _figForExport) so spaghetti
+        // tracks and intensity dots read at the same visual weight as
+        // the labels. Panel heights above grew correspondingly so the
+        // scaled margins don't squeeze the plot area.
+        var FONT_SCALE = 2.8;
 
         var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
         var bg = isDark ? '#0f172a' : '#ffffff';
@@ -8301,16 +8672,26 @@
         var statsEl = document.getElementById('rt-genesis-modal-stats');
         var title = titleEl ? titleEl.textContent : 'FNV3 cyclogenesis ensemble';
         var sub = subEl ? subEl.textContent.replace(/\s+/g, ' ').trim() : '';
+        // Strip the "Next cycle ~Nm" ETA from the saved PNG — it's a
+        // live countdown that's meaningless once the image is offline
+        // (and dates the export the moment a new cycle drops). The
+        // live modal still shows it; this only edits the export copy.
+        sub = sub.replace(/\s*·\s*Next cycle[^·]*/i, '').trim();
 
-        // Render each subplot to a PNG dataURL at the target width
-        // (Plotly handles the scale internally; pass scale:1).
+        // Render each subplot to a PNG dataURL at the target width.
+        // Pass a font-scaled figure spec instead of the live DOM element
+        // so axis/tick/legend/colorbar fonts grow to readable proportions
+        // at 1800-px export width without affecting the on-screen chart.
         var tasks = [
-            Plotly.toImage(mapEl, { format: 'png', width: W, height: H_MAP }),
-            Plotly.toImage(intEl, { format: 'png', width: W, height: H_INT }),
+            Plotly.toImage(_figForExport(mapEl, FONT_SCALE),
+                           { format: 'png', width: W, height: H_MAP }),
+            Plotly.toImage(_figForExport(intEl, FONT_SCALE),
+                           { format: 'png', width: W, height: H_INT }),
         ];
         if (gtimeEl) {
-            tasks.push(Plotly.toImage(gtimeEl, { format: 'png',
-                                                 width: W, height: H_GTIME }));
+            tasks.push(Plotly.toImage(_figForExport(gtimeEl, FONT_SCALE),
+                                      { format: 'png',
+                                        width: W, height: H_GTIME }));
         }
 
         Promise.all(tasks).then(function (urls) {
@@ -8333,14 +8714,17 @@
             ctx.fillStyle = bg;
             ctx.fillRect(0, 0, W, totalH);
 
-            // Header
+            // Header — sizes chosen for 1800-px export width. Subtitle
+            // bumped 28 → 34 px so the init-time + members line is
+            // legible alongside the bigger Plotly fonts inside the
+            // panels below.
             ctx.fillStyle = ink;
-            ctx.font = '600 38px Inter, "Helvetica Neue", sans-serif';
+            ctx.font = '600 56px Inter, "Helvetica Neue", sans-serif';
             ctx.textBaseline = 'top';
-            ctx.fillText(title, 32, 24);
+            ctx.fillText(title, 40, 32);
             ctx.fillStyle = dim;
-            ctx.font = '20px Inter, "Helvetica Neue", sans-serif';
-            ctx.fillText(sub, 32, 76);
+            ctx.font = '34px Inter, "Helvetica Neue", sans-serif';
+            ctx.fillText(sub, 40, 108);
 
             var y = HEAD;
             ctx.drawImage(imgs[0], 0, y);  y += H_MAP + GAP;
@@ -8352,10 +8736,10 @@
 
             // Footer attribution
             ctx.fillStyle = dim;
-            ctx.font = '14px Inter, "Helvetica Neue", sans-serif';
+            ctx.font = '24px Inter, "Helvetica Neue", sans-serif';
             var saved = new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
             ctx.fillText('TC-ATLAS · DeepMind FNV3 LARGE_ENSEMBLE · saved ' + saved,
-                         32, totalH - 28);
+                         40, totalH - 44);
 
             canvas.toBlob(function (blob) {
                 if (!blob) throw new Error('toBlob returned null');
