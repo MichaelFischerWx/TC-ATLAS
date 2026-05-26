@@ -2685,7 +2685,7 @@
             [currentStorm.lat - halfDeg, currentStorm.lon - halfDeg],
             [currentStorm.lat + halfDeg, currentStorm.lon + halfDeg]
         );
-        requestAnimationFrame(function () {
+        function _doFit() {
             if (_satMwLeafletIr) {
                 _satMwLeafletIr.invalidateSize(false);
                 _satMwLeafletIr.fitBounds(b, { animate: false });
@@ -2694,8 +2694,17 @@
                 _satMwLeafletMw.invalidateSize(false);
                 _satMwLeafletMw.fitBounds(b, { animate: false });
             }
+        }
+        // First pass: rAF lets the just-shown containers measure.
+        // Second pass at 200ms: belt-and-suspenders for slow layout
+        // engines / nested flex containers where rAF can fire before
+        // the final dimensions settle. Without it, fitBounds can
+        // measure a 0×N container and zoom to "show the world."
+        requestAnimationFrame(function () {
+            _doFit();
             _satMwUpdateMarkers();
             _satMwLoadPasses();
+            setTimeout(_doFit, 200);
         });
     }
 
@@ -3211,6 +3220,40 @@
 
     // Expose so other functions can re-sync without poking globals.
     window._satIrSyncLeaflet = _satIrSyncLeaflet;
+
+    // ── Window resize handler ───────────────────────────────────
+    // When the browser window resizes (or the dev tools open / the
+    // user drags the window edge), the flex panes re-size but
+    // Leaflet maps and Plotly charts don't auto-detect that — they
+    // keep painting at their old dimensions, leaving partial gray
+    // backgrounds and clipped legends. Hook a debounced resize
+    // listener that pokes both rendering layers.
+    var _satResizeTimer = null;
+    window.addEventListener('resize', function () {
+        if (_satResizeTimer) clearTimeout(_satResizeTimer);
+        _satResizeTimer = setTimeout(function () {
+            // Leaflet maps (both panes).
+            if (_satMwLeafletIr) _satMwLeafletIr.invalidateSize(false);
+            if (_satMwLeafletMw) _satMwLeafletMw.invalidateSize(false);
+            // Plotly diagnostic charts — only if they're initialized
+            // (data attribute present) and visible.
+            if (typeof Plotly !== 'undefined') {
+                ['sat-diag-radial', 'sat-diag-timeseries',
+                 'sat-diag-histogram', 'sat-diag-hovmoller-chart']
+                .forEach(function (id) {
+                    var el = document.getElementById(id);
+                    if (el && el.data) {
+                        try { Plotly.Plots.resize(el); } catch (e) {}
+                    }
+                });
+            }
+            // Canvas panes — repaint at the new container size.
+            if (typeof renderBothPanels === 'function'
+                && irFrames && irFrames.length > 0) {
+                renderBothPanels();
+            }
+        }, 120);
+    });
 
     // ── Storm List ──────────────────────────────────────────────
 
