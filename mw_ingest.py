@@ -2014,10 +2014,14 @@ def _cli(argv=None):
     # higher-resolution AMSR2. AMSR2 native 89 GHz footprint is ~5 km
     # vs SSMIS ~13 km, so an AMSR2 pass carries more diagnostic value
     # per granule for TC inner-core analysis.
-    ap.add_argument("--sensors", default="GMI,AMSR2,SSMIS",
+    ap.add_argument("--sensors", default="GMI,AMSR2,SSMIS,ATMS",
                     help="Operational/poll mode: comma-separated list of "
-                         "PPS sensors to ingest (default GMI,AMSR2,SSMIS; "
-                         "AMSR2 prioritized over SSMIS by resolution)")
+                         "PPS sensors to ingest (default GMI,AMSR2,SSMIS,"
+                         "ATMS; AMSR2 prioritized over SSMIS by resolution). "
+                         "Quiet-mode gate narrows this to GMI+AMSR2 when "
+                         "there are 0 active storms AND 0 disturbances, so "
+                         "ATMS only ingests when something's actually worth "
+                         "watching.")
     ap.add_argument("--products", default="37color,89pct,37v,37h,89v,89h",
                     help="Comma-separated product list (default = all six)")
     ap.add_argument("--since-hours", type=float, default=None,
