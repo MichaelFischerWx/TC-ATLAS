@@ -11747,6 +11747,7 @@
     var _rtMwManifestFetchedAt = 0;
     var _rtMwStormState = {
         atcfId: null, lat: null, lon: null, product: '89pct',
+        storm: null, // full storm record (for the compare modal header)
         orbits: []   // grouped & sorted entries for the current storm
     };
 
@@ -11796,6 +11797,7 @@
         _rtMwStormState.atcfId = storm.atcf_id;
         _rtMwStormState.lat = storm.lat;
         _rtMwStormState.lon = storm.lon;
+        _rtMwStormState.storm = storm;
 
         _rtMwFetchManifest()
             .then(function (m) {
@@ -11879,14 +11881,14 @@
                 c.className = 'rt-mw-storm-thumb';
                 c.title = o.sensor + ' (' + o.platform + ') — '
                         + product + ' — ' + utcStr
-                        + '\nClick to open full pass';
+                        + '\nClick to compare with IR at matched time';
                 thumbWrap.appendChild(c);
                 _rtDrawStormMwThumbnail(c, o, lat, lon, pr.png_url);
-                (function (url) {
+                (function (orbit) {
                     c.addEventListener('click', function () {
-                        window.open(url, '_blank', 'noopener');
+                        _rtOpenMwCompare(orbit, _rtMwStormState.storm);
                     });
-                })(pr.png_url);
+                })(o);
             } else {
                 var miss = document.createElement('div');
                 miss.className = 'rt-mw-storm-thumb-missing';
@@ -12018,6 +12020,267 @@
         });
     }
     _rtBindStormMwProductChips();
+
+    // ════════════════════════════════════════════════════════════════
+    //  IR ↔ MW side-by-side compare modal
+    //  Opens when a user clicks a MW pass thumbnail. Left panel shows
+    //  the storm-cropped IR frame closest in time to the MW pass; right
+    //  panel shows the same storm sector for the selected MW product.
+    //  Product chips swap the MW side; IR stays pegged to the MW time.
+    // ════════════════════════════════════════════════════════════════
+    var _rtMwCompareState = {
+        orbit: null,         // the clicked orbit row
+        storm: null,         // current storm {atcf_id, name, lat, lon, ...}
+        product: '89pct',
+        irMeta: null,        // cached /ir-frames-meta response
+        irMetaAtcf: null,    // atcf_id the irMeta was fetched for
+    };
+    var _RT_MW_COMPARE_LOOKBACK_H = 24;  // matches MW window
+    var _RT_MW_COMPARE_RADIUS = 10;      // IR JPG returns ±radius_deg box
+    // Compare-canvas half-width matches the thumbnail crop so the two
+    // panels show the exact same geographic extent — direct visual
+    // alignment is the whole point of this view.
+    var _RT_MW_COMPARE_HALF_DEG = _RT_MW_HALF_DEG;
+    var _RT_MW_COMPARE_PX = 600;         // canvas display size
+
+    // Open the compare modal from a click on a MW pass card. The orbit
+    // carries scan_start + products + bounds; storm carries lat/lon.
+    function _rtOpenMwCompare(orbit, storm) {
+        var modal = document.getElementById('rt-mw-compare-modal');
+        if (!modal || !orbit || !storm) return;
+        _rtMwCompareState.orbit = orbit;
+        _rtMwCompareState.storm = storm;
+        _rtMwCompareState.product = _rtMwStormState.product || '89pct';
+
+        // Sync the modal's product chips to the current product so the
+        // user sees the same selection they had in the side panel.
+        var chips = modal.querySelectorAll('.rt-mw-storm-chip');
+        for (var i = 0; i < chips.length; i++) {
+            chips[i].classList.toggle('active',
+                chips[i].getAttribute('data-product') === _rtMwCompareState.product);
+        }
+
+        // Title + subtitle
+        var ttl = document.getElementById('rt-mw-compare-title');
+        var sub = document.getElementById('rt-mw-compare-sub');
+        if (ttl) {
+            var nm = (storm.name || storm.atcf_id || 'Storm');
+            ttl.textContent = nm + ' · IR ↔ Microwave';
+        }
+        if (sub) {
+            var utcStr = orbit.scan_start.replace('T', ' ').slice(0, 16) + 'Z';
+            sub.textContent = orbit.sensor + ' (' + (orbit.platform || '?') + ') · '
+                            + utcStr;
+        }
+
+        modal.style.display = 'flex';
+        document.body.style.overflow = 'hidden';
+        _rtRenderMwCompare();
+        _ga('rt_mw_compare_open', {
+            sensor: orbit.sensor, product: _rtMwCompareState.product
+        });
+    }
+
+    function _rtCloseMwCompare() {
+        var modal = document.getElementById('rt-mw-compare-modal');
+        if (!modal) return;
+        modal.style.display = 'none';
+        document.body.style.overflow = '';
+        _rtMwCompareState.orbit = null;
+    }
+    window._rtCloseMwCompare = _rtCloseMwCompare;
+
+    // Render both compare panels. MW panel always renders from the
+    // currently-selected product's PNG; IR panel fetches the frames
+    // meta (cached per storm) to pick the closest frame, then fetches
+    // that frame's JPG and crops to the storm sector.
+    function _rtRenderMwCompare() {
+        var orbit = _rtMwCompareState.orbit;
+        var storm = _rtMwCompareState.storm;
+        if (!orbit || !storm) return;
+        var product = _rtMwCompareState.product;
+
+        // ── MW panel ──────────────────────────────────────────────
+        var mwCanvas = document.getElementById('rt-mw-compare-mw');
+        var mwStatus = document.getElementById('rt-mw-compare-mw-status');
+        var mwTimeEl = document.getElementById('rt-mw-compare-mw-time');
+        if (mwTimeEl) {
+            mwTimeEl.textContent =
+                orbit.scan_start.replace('T', ' ').slice(0, 16) + 'Z';
+        }
+        var pr = orbit.products[product];
+        if (mwCanvas && pr && pr.png_url) {
+            if (mwStatus) mwStatus.textContent = '';
+            _rtDrawStormMwThumbnail(mwCanvas, orbit, storm.lat, storm.lon,
+                                    pr.png_url);
+        } else if (mwCanvas) {
+            var ctx = mwCanvas.getContext('2d');
+            ctx.fillStyle = 'rgba(15,22,36,0.55)';
+            ctx.fillRect(0, 0, mwCanvas.width, mwCanvas.height);
+            if (mwStatus) mwStatus.textContent = product + ' not available for this pass';
+        }
+
+        // ── IR panel ──────────────────────────────────────────────
+        var irCanvas = document.getElementById('rt-mw-compare-ir');
+        var irStatus = document.getElementById('rt-mw-compare-ir-status');
+        var irTimeEl = document.getElementById('rt-mw-compare-ir-time');
+        if (!irCanvas) return;
+        if (irStatus) irStatus.textContent = 'finding closest IR…';
+        if (irTimeEl) irTimeEl.textContent = '—';
+        var ctx2 = irCanvas.getContext('2d');
+        ctx2.fillStyle = 'rgba(15,22,36,0.55)';
+        ctx2.fillRect(0, 0, irCanvas.width, irCanvas.height);
+
+        var mwMs = orbit.scan_start_ms;
+        _rtFetchIrFramesMeta(storm)
+            .then(function (meta) {
+                if (!meta || !meta.frames || !meta.frames.length) {
+                    if (irStatus) irStatus.textContent = 'no IR frames available';
+                    return;
+                }
+                // Closest frame by datetime_utc.
+                var best = null, bestDist = Infinity;
+                for (var i = 0; i < meta.frames.length; i++) {
+                    var t = Date.parse(meta.frames[i].datetime_utc);
+                    if (!isFinite(t)) continue;
+                    var d = Math.abs(t - mwMs);
+                    if (d < bestDist) { bestDist = d; best = meta.frames[i]; }
+                }
+                if (!best) {
+                    if (irStatus) irStatus.textContent = 'no matchable IR frame';
+                    return;
+                }
+                var deltaMin = (Date.parse(best.datetime_utc) - mwMs) / 60000;
+                if (irTimeEl) {
+                    irTimeEl.textContent = best.datetime_utc.replace('T', ' ').slice(0, 16) + 'Z'
+                        + ' (' + (deltaMin >= 0 ? '+' : '') + Math.round(deltaMin)
+                        + ' min vs MW)';
+                }
+                if (irStatus) irStatus.textContent = 'loading IR frame…';
+                // Fetch the JPG, then draw the ±_RT_MW_COMPARE_HALF_DEG
+                // sub-rect (storm-centered crop) onto the compare canvas.
+                _rtDrawIrCompareFrame(irCanvas, storm, best.index, function (err) {
+                    if (irStatus) {
+                        irStatus.textContent = err
+                            ? 'IR frame load failed'
+                            : '';
+                    }
+                });
+            })
+            .catch(function (err) {
+                console.warn('[RT MW Compare] frames-meta failed', err);
+                if (irStatus) irStatus.textContent = 'IR meta unavailable';
+            });
+    }
+
+    // Cache /ir-frames-meta per storm so swapping products doesn't
+    // re-hit the API. Same shape as panelCache, smaller scope.
+    function _rtFetchIrFramesMeta(storm) {
+        if (_rtMwCompareState.irMetaAtcf === storm.atcf_id
+                && _rtMwCompareState.irMeta) {
+            return Promise.resolve(_rtMwCompareState.irMeta);
+        }
+        var url = API_BASE
+            + '/ir-monitor/storm/' + encodeURIComponent(storm.atcf_id)
+            + '/ir-frames-meta?lookback_hours=' + _RT_MW_COMPARE_LOOKBACK_H
+            + '&radius_deg=' + _RT_MW_COMPARE_RADIUS
+            + '&interval_min=30';
+        return fetch(url, { cache: 'no-store' })
+            .then(function (r) {
+                if (!r.ok) throw new Error('frames-meta HTTP ' + r.status);
+                return r.json();
+            })
+            .then(function (m) {
+                _rtMwCompareState.irMeta = m;
+                _rtMwCompareState.irMetaAtcf = storm.atcf_id;
+                return m;
+            });
+    }
+
+    // Draw the storm-centered ±_RT_MW_COMPARE_HALF_DEG crop of the IR
+    // JPG into the supplied canvas. The IR JPG covers a 20° × 20° box
+    // (radius_deg = 10) centered on the storm, so the storm sits at
+    // image center and the ±6° crop is the central 60% of the image.
+    function _rtDrawIrCompareFrame(canvas, storm, frameIndex, done) {
+        var url = API_BASE
+            + '/ir-monitor/storm/' + encodeURIComponent(storm.atcf_id)
+            + '/ir-frame.jpg?frame_index=' + frameIndex
+            + '&lookback_hours=' + _RT_MW_COMPARE_LOOKBACK_H
+            + '&radius_deg=' + _RT_MW_COMPARE_RADIUS
+            + '&interval_min=30';
+        var img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = function () {
+            var ctx = canvas.getContext('2d');
+            ctx.fillStyle = 'rgba(15,22,36,0.55)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            var crop = _RT_MW_COMPARE_HALF_DEG / _RT_MW_COMPARE_RADIUS;
+            var sx = img.width  * (1 - crop) / 2;
+            var sy = img.height * (1 - crop) / 2;
+            var sw = img.width  * crop;
+            var sh = img.height * crop;
+            ctx.drawImage(img, sx, sy, sw, sh,
+                          0, 0, canvas.width, canvas.height);
+            // Storm-center crosshair so the two panels feel like a true
+            // side-by-side (both have the same yellow marker at center).
+            var cx = canvas.width / 2;
+            var cy = canvas.height / 2;
+            ctx.strokeStyle = 'rgba(253, 224, 71, 0.95)';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(cx - 10, cy); ctx.lineTo(cx + 10, cy);
+            ctx.moveTo(cx, cy - 10); ctx.lineTo(cx, cy + 10);
+            ctx.stroke();
+            if (done) done(null);
+        };
+        img.onerror = function () { if (done) done(new Error('IR jpg load failed')); };
+        img.src = url;
+    }
+
+    // Bind modal-level events: close button, Esc key, click-on-backdrop,
+    // and product-chip clicks (re-render MW side without touching IR).
+    function _rtBindMwCompareModal() {
+        var modal = document.getElementById('rt-mw-compare-modal');
+        if (!modal) return;
+        var closeBtn = modal.querySelector('.rt-mw-compare-close');
+        if (closeBtn) closeBtn.addEventListener('click', _rtCloseMwCompare);
+        modal.addEventListener('click', function (ev) {
+            if (ev.target === modal) _rtCloseMwCompare();
+        });
+        document.addEventListener('keydown', function (ev) {
+            if (ev.key === 'Escape' && modal.style.display !== 'none') {
+                _rtCloseMwCompare();
+            }
+        });
+        var bar = document.getElementById('rt-mw-compare-products');
+        if (!bar) return;
+        bar.addEventListener('click', function (ev) {
+            var btn = ev.target.closest && ev.target.closest('.rt-mw-storm-chip');
+            if (!btn) return;
+            var product = btn.getAttribute('data-product');
+            if (!product || product === _rtMwCompareState.product) return;
+            _rtMwCompareState.product = product;
+            var chips = bar.querySelectorAll('.rt-mw-storm-chip');
+            for (var i = 0; i < chips.length; i++) {
+                chips[i].classList.toggle('active',
+                    chips[i].getAttribute('data-product') === product);
+            }
+            // Also reflect the change back into the side-panel chips so
+            // the user's selection is consistent across both surfaces.
+            _rtMwStormState.product = product;
+            var sideBar = document.getElementById('rt-mw-storm-products');
+            if (sideBar) {
+                var sideChips = sideBar.querySelectorAll('.rt-mw-storm-chip');
+                for (var j = 0; j < sideChips.length; j++) {
+                    sideChips[j].classList.toggle('active',
+                        sideChips[j].getAttribute('data-product') === product);
+                }
+                _rtRenderStormMwPasses();
+            }
+            _rtRenderMwCompare();
+        });
+    }
+    _rtBindMwCompareModal();
 
     /**
      * Select and render a specific ASCAT pass.

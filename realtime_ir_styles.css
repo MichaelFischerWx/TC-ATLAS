@@ -3228,6 +3228,134 @@ html:not([data-view="map"]) #ir-global-env-cbars {
 [data-theme="dark"] .rt-mw-storm-time { color: var(--text, #e2e8f0); }
 
 /* ════════════════════════════════════════════════════════════════
+   IR ↔ Microwave side-by-side compare modal. Click a MW pass
+   thumbnail in the storm-detail panel to open. Mirrors the genesis
+   modal's chrome (header + close + max-height) but with a 2-column
+   panel grid that holds large square canvases — IR on the left, MW
+   on the right, both showing the same storm-centered geographic
+   crop so direct visual comparison is just an eye-flick away.
+   ════════════════════════════════════════════════════════════════ */
+.rt-mw-compare-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 4500;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(8, 12, 22, 0.72);
+    padding: 16px;
+}
+.rt-mw-compare-content {
+    position: relative;
+    width: min(1320px, 100%);
+    max-height: 92vh;
+    background: var(--surface-raised, #ffffff);
+    color: var(--text, #0f172a);
+    border-radius: 8px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+    overflow: auto;
+    padding: 18px 22px 22px;
+}
+[data-theme="dark"] .rt-mw-compare-content {
+    background: var(--surface-raised, #161b24);
+    color: var(--text, #e2e8f0);
+}
+.rt-mw-compare-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+.rt-mw-compare-title {
+    margin: 0 0 4px 0;
+    font-size: 1.05rem;
+    font-weight: 700;
+}
+.rt-mw-compare-sub {
+    margin: 0;
+    font-size: 0.78rem;
+    color: var(--text-dim, #64748b);
+    line-height: 1.4;
+}
+.rt-mw-compare-close {
+    flex-shrink: 0;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    border: 1px solid rgba(0, 0, 0, 0.18);
+    background: rgba(255, 255, 255, 0.92);
+    color: #0f172a;
+    font-size: 1.5rem;
+    line-height: 1;
+    cursor: pointer;
+    transition: background 0.15s, transform 0.15s;
+}
+.rt-mw-compare-close:hover {
+    background: #fff;
+    transform: scale(1.05);
+}
+[data-theme="dark"] .rt-mw-compare-close {
+    background: var(--surface, #11161f);
+    color: var(--text, #e2e8f0);
+    border-color: rgba(255, 255, 255, 0.18);
+}
+
+.rt-mw-compare-products {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 12px;
+}
+.rt-mw-compare-panels {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+}
+.rt-mw-compare-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.rt-mw-compare-panel-label {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--text, #0f172a);
+}
+.rt-mw-compare-time {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.72rem;
+    font-weight: 500;
+    color: var(--text-dim, #64748b);
+}
+.rt-mw-compare-canvas {
+    width: 100%;
+    height: auto;
+    aspect-ratio: 1 / 1;
+    background: rgba(15, 22, 36, 0.65);
+    border-radius: 6px;
+    image-rendering: -webkit-optimize-contrast;
+}
+.rt-mw-compare-status {
+    min-height: 14px;
+    font-size: 0.72rem;
+    color: var(--text-dim, #64748b);
+    font-style: italic;
+}
+[data-theme="dark"] .rt-mw-compare-panel-label { color: var(--text, #e2e8f0); }
+
+/* On narrow screens, stack the two panels vertically rather than
+   shrinking them past usefulness. */
+@media (max-width: 800px) {
+    .rt-mw-compare-panels { grid-template-columns: 1fr; }
+    .rt-mw-compare-content { padding: 14px 16px; }
+}
+
+/* ════════════════════════════════════════════════════════════════
    subOnly=1 iframe-embed mode. Strips all chrome and reduces the
    Subseasonal tab to just the combined Hovmöller, so the climo
    page can embed this page inline and get our own WK-filtered
@@ -3700,19 +3828,36 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
 .tc-mw-popup-storms {
     margin-top: 6px;
     padding-top: 4px;
-    border-top: 1px dashed rgba(255,255,255,0.18);
+    border-top: 1px dashed rgba(0, 0, 0, 0.18);
 }
+/* Default (light theme): dark amber title + near-black body so the
+   matched-storm callout reads cleanly on Leaflet's white popup. The
+   old #fde047 yellow was theme-mismatched (chosen against the dark
+   in-app surface) and basically invisible on a light popup. */
 .tc-mw-popup-storms-title {
     font-size: 0.6rem;
     text-transform: uppercase;
     letter-spacing: 0.04em;
-    color: #fde047;
+    color: #b45309;       /* dark amber, readable on white */
     font-weight: 700;
     margin-bottom: 2px;
 }
 .tc-mw-popup-storm {
     font-size: 0.72rem;
+    color: #1f2937;       /* dark slate, near-black */
+    font-weight: 600;
+}
+/* Dark theme: restore the warmer amber-on-navy palette since the
+   popup background flips to the app's dark surface. */
+[data-theme="dark"] .tc-mw-popup-storms {
+    border-top-color: rgba(255, 255, 255, 0.18);
+}
+[data-theme="dark"] .tc-mw-popup-storms-title {
+    color: #fde047;
+}
+[data-theme="dark"] .tc-mw-popup-storm {
     color: #fef9c3;
+    font-weight: 500;
 }
 
 /* Compact variant — used in Leaflet-control placements where

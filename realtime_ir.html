@@ -1646,5 +1646,47 @@
         });
     })();
     </script>
+
+    <!-- IR ↔ Microwave side-by-side compare modal. Opens when the user
+         clicks a thumbnail in the storm-detail MW passes list. Shows
+         the storm-cropped IR frame closest in time to the MW pass (left)
+         alongside the MW pass at the selected product (right). -->
+    <div id="rt-mw-compare-modal" class="rt-mw-compare-modal" style="display:none;">
+        <div class="rt-mw-compare-content">
+            <div class="rt-mw-compare-header">
+                <div>
+                    <h3 id="rt-mw-compare-title" class="rt-mw-compare-title">IR &harr; Microwave</h3>
+                    <div id="rt-mw-compare-sub" class="rt-mw-compare-sub"></div>
+                </div>
+                <button type="button" class="rt-mw-compare-close" aria-label="Close" title="Close (Esc)">&times;</button>
+            </div>
+            <div id="rt-mw-compare-products" class="rt-mw-compare-products">
+                <button type="button" class="rt-mw-storm-chip active" data-product="89pct" title="89 GHz polarization-corrected temperature">89 PCT</button>
+                <button type="button" class="rt-mw-storm-chip" data-product="37color" title="37 GHz NRL false-color RGB">37 color</button>
+                <button type="button" class="rt-mw-storm-chip" data-product="89v" title="89 GHz vertical polarization">89V</button>
+                <button type="button" class="rt-mw-storm-chip" data-product="89h" title="89 GHz horizontal polarization">89H</button>
+                <button type="button" class="rt-mw-storm-chip" data-product="37v" title="37 GHz vertical polarization">37V</button>
+                <button type="button" class="rt-mw-storm-chip" data-product="37h" title="37 GHz horizontal polarization">37H</button>
+            </div>
+            <div class="rt-mw-compare-panels">
+                <div class="rt-mw-compare-panel">
+                    <div class="rt-mw-compare-panel-label">
+                        <span>IR</span>
+                        <span id="rt-mw-compare-ir-time" class="rt-mw-compare-time">&mdash;</span>
+                    </div>
+                    <canvas id="rt-mw-compare-ir" width="600" height="600" class="rt-mw-compare-canvas"></canvas>
+                    <div id="rt-mw-compare-ir-status" class="rt-mw-compare-status"></div>
+                </div>
+                <div class="rt-mw-compare-panel">
+                    <div class="rt-mw-compare-panel-label">
+                        <span>Microwave</span>
+                        <span id="rt-mw-compare-mw-time" class="rt-mw-compare-time">&mdash;</span>
+                    </div>
+                    <canvas id="rt-mw-compare-mw" width="600" height="600" class="rt-mw-compare-canvas"></canvas>
+                    <div id="rt-mw-compare-mw-status" class="rt-mw-compare-status"></div>
+                </div>
+            </div>
+        </div>
+    </div>
 </body>
 </html>
