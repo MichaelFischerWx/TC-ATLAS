@@ -1845,13 +1845,19 @@ def _regrid_swath(data: np.ndarray, lats: np.ndarray, lons: np.ndarray,
     lat_min, lat_max = float(flat_lat.min()), float(flat_lat.max())
     lon_min, lon_max = float(flat_lon.min()), float(flat_lon.max())
 
-    # Limit grid size to prevent memory issues. 2500 lets the 0.02° (~2 km)
-    # base resolution be honored on most single-arc passes (typical 10-30°
-    # lat span → 500-1500 cells); wide multi-orbit arcs (60°+) still cap
-    # at ~2.5 km/pixel, close to AMSR2 89 GHz native footprint. The old
-    # 500-pixel cap silently downsampled to ~13 km/pixel on wider passes
-    # and made AMSR2's high-res detail look blockier than SSMI/S.
-    max_grid_dim = 2500
+    # Limit grid size to prevent memory issues. 1500 is the post-2026-05-26
+    # value: the original 500 silently downsampled wide passes to ~13 km/pixel
+    # and made AMSR2 look blockier than SSMI/S; a brief experiment with 2500
+    # let *narrow* single-arc passes hit ~2 km but quadrupled wall-clock and
+    # memory on wide multi-orbit arcs to the point that the ingest job
+    # (which imports _regrid_swath_multi from this module) ran past the 30-min
+    # cron interval and hit the 1-h task-timeout repeatedly. 1500 keeps a
+    # ~3× resolution gain over the old 500 (typical 30° single-arc lands at
+    # full 0.02°) while capping the worst-case 60-120° multi-orbit arc at
+    # ~3 km/pixel — still well above the visible-pixelation threshold and
+    # ~1.7× less work than 2500. See project_microwave_nrt notes for the
+    # 2026-05-26 incident timeline.
+    max_grid_dim = 1500
     n_lat = min(int((lat_max - lat_min) / grid_res_deg) + 1, max_grid_dim)
     n_lon = min(int((lon_max - lon_min) / grid_res_deg) + 1, max_grid_dim)
 
@@ -1977,8 +1983,9 @@ def _regrid_swath_multi(
 
     # Multi-channel cap matches _regrid_swath's so RGB composites
     # (37color, derived from V37 + H37) preserve high-res detail
-    # end-to-end. See _regrid_swath above for the rationale on 2500.
-    max_grid_dim = 2500
+    # end-to-end. See _regrid_swath above for the rationale on 1500
+    # and the 2026-05-26 ingest-timeout postmortem.
+    max_grid_dim = 1500
     n_lat = min(int((lat_max - lat_min) / grid_res_deg) + 1, max_grid_dim)
     n_lon = min(int((lon_max - lon_min) / grid_res_deg) + 1, max_grid_dim)
 
