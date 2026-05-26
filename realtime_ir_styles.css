@@ -3409,14 +3409,23 @@ html:not([data-view="map"]) #ir-global-env-cbars {
 .sat-mw-pass-select {
     flex: 1;
     min-width: 200px;
-    background: rgba(15, 22, 36, 0.85);
-    color: var(--text, #e2e8f0);
-    border: 1px solid rgba(148, 163, 184, 0.4);
+    /* Explicit hex (not CSS-var fallback) because the Storm Satellite
+       tab doesn't inherit the page-wide --text / --surface tokens that
+       the rest of the dark-theme code relies on. Without these, the
+       dropdown text was the var's fallback navy #0f172a on a near-
+       black background — effectively invisible. */
+    background-color: #1e293b;
+    color: #e2e8f0;
+    border: 1px solid rgba(148, 163, 184, 0.5);
     border-radius: 5px;
     padding: 4px 8px;
     font-family: inherit;
     font-size: 0.78rem;
     cursor: pointer;
+}
+.sat-mw-pass-select option {
+    background-color: #1e293b;
+    color: #e2e8f0;
 }
 .sat-mw-pass-select:disabled {
     opacity: 0.55;
@@ -3541,6 +3550,25 @@ html:not([data-view="map"]) #ir-global-env-cbars {
     background: rgba(251, 146, 60, 0.92);
     border: 1.5px solid rgba(15, 22, 36, 0.95);
     box-shadow: 0 0 0 1px rgba(251, 146, 60, 0.45);
+}
+
+/* Storm Satellite graticule labels — small white text with a dark
+   text-shadow halo so they read on both bright land and dark ocean
+   basemap tiles. Same convention as the Global Map's RT graticule. */
+.sat-graticule-label {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 10px;
+    font-weight: 600;
+    color: #f1f5f9;
+    text-shadow:
+        0 0 4px rgba(15, 22, 36, 0.95),
+        0 0 2px rgba(15, 22, 36, 0.95),
+        0 0 1px rgba(15, 22, 36, 0.95);
+    pointer-events: none;
+    white-space: nowrap;
+    line-height: 14px;
+    background: transparent;
+    border: none;
 }
 
 /* Floating Leaflet control bar — ⌖ Recenter, 🔗 Sync toggle. Sits

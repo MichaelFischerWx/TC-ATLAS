@@ -2666,6 +2666,10 @@
             .addTo(_satMwLeafletIr);
         // Phase 6: per-pixel Tb hover tooltip.
         _satAttachLeafletHover(_satMwLeafletIr, function () { return irFrames; }, 'IR');
+        // Lat/lon graticule on by default — useful for storm-scale
+        // positioning context (eye position vs nearest land, RMW
+        // relative to specific latitudes, etc).
+        _satAddGraticule(_satMwLeafletIr);
     }
 
     // Lazy-init for the RIGHT (MW) Leaflet map. Only used in MW mode.
@@ -2681,6 +2685,7 @@
         // lat/lon readout on hover — still useful for locating
         // structure relative to the storm center.
         _satAttachLeafletHover(_satMwLeafletMw, function () { return null; }, 'MW');
+        _satAddGraticule(_satMwLeafletMw);
     }
 
     // Global toggle: when true, pan/zoom on any Leaflet pane mirrors
@@ -2733,6 +2738,84 @@
         } finally {
             _satMapSyncEnabled = prev;
         }
+    }
+
+    // Adaptive lat/lon graticule overlay for a Leaflet map. Lines +
+    // edge labels rebuild on moveend/zoomend with spacing that scales
+    // to zoom level so the grid is always readable without crowding.
+    // On by default for every Storm Satellite Leaflet map — the user
+    // can pan/zoom freely now (Leaflet UX), so positional reference
+    // lines are useful for tying storm structure to coordinates.
+    function _satGraticuleStep(z) {
+        if (z >= 9) return 0.5;
+        if (z >= 7) return 1;
+        if (z >= 5) return 2;
+        if (z >= 3) return 5;
+        return 10;
+    }
+    function _satFmtLat(v) {
+        if (Math.abs(v) < 0.05) return '0°';
+        return Math.abs(v).toFixed(v >= 1 ? 0 : 1)
+               + (v >= 0 ? '°N' : '°S');
+    }
+    function _satFmtLon(v) {
+        var x = v;
+        while (x > 180)  x -= 360;
+        while (x < -180) x += 360;
+        if (Math.abs(x) < 0.05) return '0°';
+        if (Math.abs(Math.abs(x) - 180) < 0.05) return '180°';
+        return Math.abs(x).toFixed(Math.abs(x) >= 1 ? 0 : 1)
+               + (x >= 0 ? '°E' : '°W');
+    }
+    function _satAddGraticule(map) {
+        if (!map || map._satGraticule) return;
+        var layer = L.layerGroup().addTo(map);
+        map._satGraticule = layer;
+        function rebuild() {
+            layer.clearLayers();
+            var step = _satGraticuleStep(map.getZoom());
+            var b = map.getBounds();
+            var sLat = Math.max(-85, Math.floor(b.getSouth() / step) * step);
+            var nLat = Math.min( 85, Math.ceil(b.getNorth() / step) * step);
+            var wLon = Math.floor(b.getWest() / step) * step;
+            var eLon = Math.ceil(b.getEast() / step) * step;
+            var lineOpts = {
+                color: '#ffffff', weight: 0.5, opacity: 0.45,
+                dashArray: '3 5', interactive: false
+            };
+            // Parallels.
+            for (var lat = sLat; lat <= nLat + 1e-6; lat += step) {
+                L.polyline([[lat, wLon], [lat, eLon]], lineOpts)
+                    .addTo(layer);
+                var labelLng = b.getWest()
+                    + (b.getEast() - b.getWest()) * 0.02;
+                L.marker([lat, labelLng], {
+                    icon: L.divIcon({
+                        className: 'sat-graticule-label',
+                        html: _satFmtLat(lat),
+                        iconSize: [40, 14], iconAnchor: [0, 7]
+                    }),
+                    interactive: false, keyboard: false
+                }).addTo(layer);
+            }
+            // Meridians.
+            for (var lon = wLon; lon <= eLon + 1e-6; lon += step) {
+                L.polyline([[sLat, lon], [nLat, lon]], lineOpts)
+                    .addTo(layer);
+                var labelLat = b.getSouth()
+                    + (b.getNorth() - b.getSouth()) * 0.02;
+                L.marker([labelLat, lon], {
+                    icon: L.divIcon({
+                        className: 'sat-graticule-label',
+                        html: _satFmtLon(lon),
+                        iconSize: [50, 14], iconAnchor: [25, 14]
+                    }),
+                    interactive: false, keyboard: false
+                }).addTo(layer);
+            }
+        }
+        rebuild();
+        map.on('moveend zoomend', rebuild);
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -3643,6 +3726,7 @@
         _satAddMapControls(_satRightLeafletMap);
         // Phase 6: per-pixel Tb hover for the WV/Vis pane.
         _satAttachLeafletHover(_satRightLeafletMap, function () { return rightFrames; }, 'WV/Vis');
+        _satAddGraticule(_satRightLeafletMap);
     }
 
     function _satRightApplyLeafletVisibility() {
