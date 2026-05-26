@@ -58,6 +58,30 @@
     var _previewDone = 0;        // count of preview JPGs loaded
     var _rawTbStarted = false;   // guard: only start raw Tb backfill once
 
+    // Lazy raw-Tb trigger. Raw Tb is needed for:
+    //   • Custom colormap rendering (Phase 4 offscreen bake)
+    //   • Per-pixel hover Tb tooltip (Phase 6)
+    //   • Asymmetry mode (WN-1 decomposition)
+    // The pre-audit code auto-fired _startRawTbBackfill right after
+    // the JPG previews finished, wasting ~2-4 MB of bandwidth per
+    // storm-open for users who never trigger any of those features.
+    // Now: callers trigger this when raw Tb is actually needed.
+    window._satEnsureRawTbLoaded = function () {
+        if (_rawTbStarted || !currentStormId) return;
+        if (typeof _startRawTbBackfill === 'function') {
+            // _startRawTbBackfill is a closure inside loadFrames — we
+            // can't call it directly from outside. Instead, the
+            // closure registers itself on this state hook.
+        }
+        _rawTbStarted = true;
+        if (_satPendingRawTbTrigger) {
+            try { _satPendingRawTbTrigger(); } catch (e) {}
+        }
+    };
+    // Stashed by loadFrames so the closure-scoped _startRawTbBackfill
+    // can be invoked from outside via window._satEnsureRawTbLoaded.
+    var _satPendingRawTbTrigger = null;
+
     // ── 88D NEXRAD Radar Overlay State ───────────────────────
     var showRadar = false;           // overlay toggle
     var _satRadarImg = null;         // loaded Image element for current scan
@@ -2534,6 +2558,10 @@
             if (irFrames && irFrames.length > 0) renderBothPanels();
         } else if (newMode === 'asymmetry') {
             if (asymPanel) asymPanel.style.display = '';
+            // Asymmetry needs raw Tb for the WN-1 decomposition.
+            if (typeof window._satEnsureRawTbLoaded === 'function') {
+                window._satEnsureRawTbLoaded();
+            }
             var frame = irFrames[animIndex];
             if (frame) computeAndRenderAsymmetry(frame);
         } else {
@@ -2721,6 +2749,12 @@
         var tooltip = document.getElementById('sat-tooltip');
         if (!tooltip) return;
         map.on('mousemove', function (e) {
+            // First mousemove triggers lazy raw-Tb load if we don't
+            // have it yet. Without this, the tooltip shows lat/lon
+            // only until the user notices and explicitly waits.
+            if (typeof window._satEnsureRawTbLoaded === 'function') {
+                window._satEnsureRawTbLoaded();
+            }
             var lat = e.latlng.lat, lng = e.latlng.lng;
             // Normalize lng to [-180, 180] for the tooltip readout.
             var lngNorm = lng;
@@ -4446,12 +4480,18 @@
                                     : '';
                             }
 
-                            // All previews done — start raw Tb backfill
-                            if (_previewDone >= previewTotal && !_rawTbStarted) {
-                                _rawTbStarted = true;
+                            // All previews done. Raw Tb backfill is NO
+                            // LONGER fired automatically — it's now lazy,
+                            // triggered by user actions that actually
+                            // need raw Tb (colormap change, hover, or
+                            // Asymmetry mode entry). See
+                            // _satEnsureRawTbLoaded(). Saves 2-4 MB per
+                            // storm-open in the common case where the
+                            // user never switches off the default
+                            // colormap.
+                            if (_previewDone >= previewTotal && _previewPhase) {
                                 _previewPhase = false;
-                                console.log('[Satellite] All previews loaded, starting raw Tb backfill');
-                                _startRawTbBackfill();
+                                console.log('[Satellite] All previews loaded — raw Tb deferred until needed');
                             }
                         };
                         img.src = URL.createObjectURL(result.blob);
@@ -4462,10 +4502,8 @@
                         if (!irFrames[idx]) fetchIRFrame(idx);
                         // Hide loader even on failure — raw Tb fallback will render
                         if (!loader.classList.contains('hidden')) hideLoader();
-                        if (_previewDone >= previewTotal && !_rawTbStarted) {
-                            _rawTbStarted = true;
+                        if (_previewDone >= previewTotal && _previewPhase) {
                             _previewPhase = false;
-                            _startRawTbBackfill();
                         }
                     })
                     .finally(function () {
@@ -4480,7 +4518,10 @@
         }
 
         /**
-         * Start raw Tb backfill for all frames (after previews loaded).
+         * Start raw Tb backfill for all frames. No longer fired
+         * automatically by the preview-finish handler — invoked
+         * on-demand from window._satEnsureRawTbLoaded (colormap
+         * change, hover, asymmetry-enter).
          */
         function _startRawTbBackfill() {
             if (loadStatusEl) loadStatusEl.textContent = 'Loading Tb data...';
@@ -4547,6 +4588,13 @@
         }
 
         // Start: try RT cache first, fall back to preview + raw Tb
+        // Stash the closure-scoped raw-Tb starter on the outer hook so
+        // window._satEnsureRawTbLoaded can fire it on demand (colormap
+        // change, hover, asymmetry mode entry). Previously the backfill
+        // ran automatically after previews; now it's gated by user
+        // actions that actually need raw Tb.
+        _satPendingRawTbTrigger = _startRawTbBackfill;
+
         _tryRtCache();
     }
 
@@ -4765,6 +4813,13 @@
 
         document.getElementById('sat-colormap-select').addEventListener('change', function () {
             selectedColormap = this.value;
+            // Custom colormaps need raw Tb to bake the per-frame
+            // blob overlays. Trigger lazy backfill now (no-op if
+            // already running or already done).
+            if (selectedColormap !== 'claude-ir'
+                    && typeof window._satEnsureRawTbLoaded === 'function') {
+                window._satEnsureRawTbLoaded();
+            }
             renderBothPanels();
             _ga('sat_colormap', { colormap: selectedColormap });
         });
