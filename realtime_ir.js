@@ -7220,8 +7220,11 @@
         if (remain > 0) {
             el.innerHTML = '<span style="opacity:0.8;">Next cycle '
                 + _formatEtaShort(remain) + '</span>';
-            el.title = 'DeepMind FNV3 publishes ~3 h after each 6-hourly '
-                + 'init (00/06/12/18 UTC). Estimated, not guaranteed.';
+            el.title = 'DeepMind FNV3 cycles run every 6 h (00/06/12/18 '
+                + 'UTC). ETA is anchored on when the previous cycle was '
+                + 'first observed available, plus 6 h. Estimated, not '
+                + 'guaranteed — staging delays can push individual '
+                + 'cycles later.';
         } else {
             el.innerHTML = '<span style="color:#00e5ff;">'
                 + 'Next cycle due — checking…</span>';

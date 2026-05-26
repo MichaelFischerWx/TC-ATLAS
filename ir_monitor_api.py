@@ -4378,6 +4378,24 @@ _WEATHERLAB_GENESIS_MISS = "__MISSING__"
 _WEATHERLAB_GENESIS_MIN_MATURITY_H = 3.0
 # Cadence between DeepMind cycles (00, 06, 12, 18 UTC).
 _WEATHERLAB_GENESIS_CADENCE_H = 6.0
+# Expected publish lag used for the user-visible "next cycle in Xh" chip.
+# Separate from MIN_MATURITY_H, which is the EARLIEST plausible publish
+# (used to gate backend probing). The typical lag we observe in
+# production is the upper end of the 3-5 h range, so anchoring the ETA
+# on the floor (3 h) systematically reads as "data should be here by
+# now" before it actually drops. Used only as a fallback when we don't
+# have a first-seen timestamp for the previous cycle yet.
+_WEATHERLAB_GENESIS_TYPICAL_PUBLISH_LAG_H = 5.0
+
+# Wall-clock time (unix seconds) at which each (date_str, hour_str)
+# cycle was FIRST observed successfully on DeepMind. Populated by
+# _fetch_weatherlab_genesis_csv on its first successful parse for a
+# given cycle and never cleared (a few hundred bytes per cycle even
+# across a long-running process). Used by _genesis_next_cycle_eta_h
+# to anchor the "next cycle in Xh" chip on the actual previous publish
+# — "next publish ≈ first_seen + 6 h" — instead of an assumed-lag
+# model that consistently runs ~2 h optimistic in practice.
+_genesis_cycle_first_seen: dict = {}
 
 
 def _genesis_cycle_dt(date_str: str, hour_str: str):
@@ -4414,9 +4432,19 @@ def _genesis_candidates(now=None, days_back: int = 2, min_maturity_h: float = No
 
 def _genesis_next_cycle_eta_h(now=None, init_time: str = None) -> float | None:
     """Hours until the NEXT cycle past `init_time` is expected to land on
-    DeepMind, given the 6-hourly cadence + min-maturity lag. Used to set
-    a tight HTTP Cache-Control when we're close to a publish boundary, so
-    the frontend stops serving a now-stale cycle.
+    DeepMind. Used both for the user-visible "next cycle in Xh" chip and
+    for setting a tight HTTP Cache-Control near a publish boundary.
+
+    Prefers an OBSERVED anchor: if we recorded a first-seen timestamp
+    for the current cycle (we almost always have one — the only way to
+    know `init_time` is to have just fetched it), the next publish is
+    estimated as `first_seen + 6 h`. This tracks reality much better
+    than the older assumed-lag model, which was anchored on the floor
+    of the 3-5 h observed range and consistently ran ~2 h optimistic.
+
+    Falls back to `next_init + typical_lag` (5 h) when no anchor is
+    available — e.g., immediately after a server restart, before any
+    successful fetch has populated `_genesis_cycle_first_seen`.
     """
     if now is None:
         now = _dt.now(timezone.utc)
@@ -4429,8 +4457,32 @@ def _genesis_next_cycle_eta_h(now=None, init_time: str = None) -> float | None:
         )
     except (ValueError, TypeError):
         return None
+
+    # Observed anchor: look up first-seen for the current cycle. The
+    # init_time string here is the compact YYYYMMDDHH form; the
+    # first-seen map is keyed by (YYYY-MM-DD, HH), so reformat.
+    cache_key = (
+        f"{init_time[:4]}-{init_time[4:6]}-{init_time[6:8]}",
+        init_time[8:10],
+    )
+    first_seen_ts = _genesis_cycle_first_seen.get(cache_key)
+    if first_seen_ts is not None:
+        first_seen_dt = _dt.fromtimestamp(first_seen_ts, tz=timezone.utc)
+        # Sanity check: first_seen must come AFTER the cycle's init
+        # time. If it doesn't (clock skew, corrupted timestamp, or the
+        # cycle was somehow recorded before it could physically exist),
+        # fall through to the assumed-lag estimate.
+        if first_seen_dt >= cur_cyc:
+            next_published = first_seen_dt + timedelta(
+                hours=_WEATHERLAB_GENESIS_CADENCE_H)
+            return max(0.0, (next_published - now).total_seconds() / 3600.0)
+
+    # Fallback: assumed-lag model, but anchored on the TYPICAL (not
+    # minimum) publish lag so the user-visible ETA doesn't expire while
+    # the data is still being staged.
     next_cyc = cur_cyc + timedelta(hours=_WEATHERLAB_GENESIS_CADENCE_H)
-    next_published = next_cyc + timedelta(hours=_WEATHERLAB_GENESIS_MIN_MATURITY_H)
+    next_published = next_cyc + timedelta(
+        hours=_WEATHERLAB_GENESIS_TYPICAL_PUBLISH_LAG_H)
     return max(0.0, (next_published - now).total_seconds() / 3600.0)
 
 
@@ -4619,6 +4671,13 @@ def _fetch_weatherlab_genesis_csv(date_str: str, hour_str: str
         storm["ensemble_mean"] = {"points": mean_pts}
 
     _weatherlab_genesis_cache[cache_key] = {"data": result, "ts": time.time()}
+    # Record the FIRST time we observed this cycle as published — this
+    # anchors the next-cycle ETA on observed reality ("publish + 6 h")
+    # rather than an assumed lag. We use setdefault so re-fetches after
+    # cache eviction don't reset the anchor to a later wall-clock time
+    # (which would push the predicted next-publish further into the
+    # future every time).
+    _genesis_cycle_first_seen.setdefault(cache_key, time.time())
     # Cap the cache at 4 PARSED cycles. Miss-sentinel entries are tiny
     # strings, so we exclude them from the cap — otherwise a flurry of
     # not-yet-published probes could evict a fresh ~10 MB parse and
