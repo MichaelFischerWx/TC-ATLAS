@@ -638,11 +638,17 @@
                 <div class="sat-split-panels">
                     <!-- Left: IR panel -->
                     <div class="sat-panel" id="sat-panel-ir">
-                        <div class="sat-panel-label">Enhanced IR</div>
-                        <div class="sat-panel-canvas-wrap">
+                        <div class="sat-panel-label" id="sat-panel-ir-label">Enhanced IR</div>
+                        <div class="sat-panel-canvas-wrap" id="sat-panel-ir-canvas-wrap">
                             <canvas id="sat-canvas-ir"></canvas>
                             <canvas id="sat-overlay-ir" class="sat-overlay-canvas"></canvas>
                         </div>
+                        <!-- Phase 1: Leaflet alternative used only in MW mode.
+                             Shares the panel with the canvas; the view-mode
+                             toggle swaps which one is visible. Other modes
+                             (Diagnostics / Track / Asym / WV / Vis) keep
+                             using the canvas above. -->
+                        <div id="sat-leaflet-ir" class="sat-leaflet-pane" style="display:none;"></div>
                         <div class="sat-colorbar-horiz" id="sat-cb-ir">
                             <span id="sat-cb-ir-top" class="sat-cb-label-left"></span>
                             <canvas id="sat-cb-ir-canvas" width="200" height="10"></canvas>
@@ -718,17 +724,23 @@
                             <div class="sat-axes-y sat-axes-y-left" id="sat-axes-y-asym"></div>
                             <div class="sat-axes-x" id="sat-axes-x-asym"></div>
                         </div>
-                        <!-- Microwave passes panel (mirrors the Global-Map
-                             storm-detail "Microwave Passes (24h)" section).
-                             Shares the same renderer + compare modal —
-                             prefix `sat-mw-` keeps state segregated from
-                             the rt-mw- copy when both panels exist. -->
-                        <div id="sat-mw-section" class="sat-mw-panel" style="display:none;">
-                            <div class="sat-panel-label" style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
-                                <span>Microwave Passes (24h)</span>
-                                <span id="sat-mw-status" style="font-size:0.7rem;color:#94a3b8;font-weight:500;"></span>
+                        <!-- Microwave compare panel (Phase 1 of full
+                             Leaflet migration). Replaces the prior vertical
+                             card list with a Leaflet pane mirroring the IR
+                             pane on the left — pan/zoom synced, storm and
+                             interp markers rendered as Leaflet primitives,
+                             pass selection driven by the strip at the
+                             bottom. Product chip row above re-renders the
+                             MW imageOverlay without touching the IR side. -->
+                        <div id="sat-mw-section" class="sat-mw-leaflet-panel" style="display:none;">
+                            <div class="sat-mw-leaflet-header">
+                                <div class="sat-panel-label" style="display:flex;align-items:center;gap:8px;">
+                                    <span id="sat-mw-product-label">Microwave</span>
+                                    <span id="sat-mw-pass-time" class="sat-mw-pass-time">—</span>
+                                </div>
+                                <span id="sat-mw-status" class="sat-mw-leaflet-status"></span>
                             </div>
-                            <div id="sat-mw-products" class="rt-mw-storm-products" style="padding:8px 4px 4px;">
+                            <div id="sat-mw-products" class="rt-mw-storm-products">
                                 <button type="button" class="rt-mw-storm-chip active" data-product="89pct">89 PCT</button>
                                 <button type="button" class="rt-mw-storm-chip" data-product="37color">37 color</button>
                                 <button type="button" class="rt-mw-storm-chip" data-product="89v">89V</button>
@@ -736,7 +748,11 @@
                                 <button type="button" class="rt-mw-storm-chip" data-product="37v">37V</button>
                                 <button type="button" class="rt-mw-storm-chip" data-product="37h">37H</button>
                             </div>
-                            <div id="sat-mw-list" class="rt-mw-storm-list" style="max-height:none;flex:1;padding:0 4px 8px;"></div>
+                            <div id="sat-leaflet-mw" class="sat-leaflet-pane sat-leaflet-pane-mw"></div>
+                            <div class="sat-mw-strip-wrap">
+                                <div class="sat-mw-strip-label">Recent passes &middot; click to select</div>
+                                <div id="sat-mw-strip" class="sat-mw-strip"></div>
+                            </div>
                         </div>
                     </div>
                 </div>

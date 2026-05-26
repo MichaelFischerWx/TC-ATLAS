@@ -2478,14 +2478,25 @@
         if (asymPanel) asymPanel.style.display = 'none';
         if (mwPanel) mwPanel.style.display = 'none';
 
+        // Phase 1 of canvas→Leaflet migration: when MW mode is active,
+        // swap the LEFT pane's canvas for a Leaflet IR map alongside
+        // the RIGHT pane's Leaflet MW map. Other modes restore the
+        // canvas. Lazy-init of the maps on first MW entry.
+        var irCanvasWrap = document.getElementById('sat-panel-ir-canvas-wrap');
+        var irLeafletDiv = document.getElementById('sat-leaflet-ir');
         if (newMode === 'microwave') {
-            // Reuse realtime_ir.js's MW passes loader against the
-            // sat-mw-* DOM IDs. Compare modal is body-level so it
-            // works from any view without further plumbing.
+            if (irCanvasWrap) irCanvasWrap.style.display = 'none';
+            if (irLeafletDiv) irLeafletDiv.style.display = '';
             if (mwPanel) mwPanel.style.display = '';
-            if (currentStorm && typeof window._rtLoadStormMwPasses === 'function') {
-                window._rtLoadStormMwPasses(currentStorm, 'sat-mw');
-            }
+            _satMwActivate();
+        } else {
+            if (irCanvasWrap) irCanvasWrap.style.display = '';
+            if (irLeafletDiv) irLeafletDiv.style.display = 'none';
+            _satMwDeactivate();
+        }
+
+        if (newMode === 'microwave') {
+            // (handled above)
         } else if (newMode === 'diagnostics') {
             if (diagPanel) diagPanel.style.display = '';
             setTimeout(function () {
@@ -2552,6 +2563,403 @@
 
         _ga('sat_view_mode', { mode: newMode });
     }
+
+    // ════════════════════════════════════════════════════════════════
+    //  Phase 1: MW mode on Leaflet (dual-pane)
+    //  Two synced L.map instances replace the canvas pair when MW is
+    //  active. Left = IR (storm-cropped /ir-frame.jpg). Right = MW
+    //  (selected pass PNG from manifest). Pan/zoom synchronized.
+    //  Storm-center cross + interp ring on both maps. Pass-strip
+    //  along the bottom; click to select. Product chips swap MW
+    //  variable. Markers and overlays use Leaflet primitives — no
+    //  custom canvas drawing.
+    // ════════════════════════════════════════════════════════════════
+    var _satMwLeafletIr = null;       // L.map (left)
+    var _satMwLeafletMw = null;       // L.map (right)
+    var _satMwIrOverlay = null;       // current IR L.imageOverlay
+    var _satMwMwOverlay = null;       // current MW L.imageOverlay
+    var _satMwIrMarkers = { fix: null, interp: null };
+    var _satMwMwMarkers = { fix: null, interp: null };
+    var _satMwSelectedOrbit = null;
+    var _satMwOrbits = [];
+    var _satMwProduct = '89pct';
+    var _satMwIrMetaCache = { atcfId: null, meta: null };
+    var _satMwSyncing = false;
+    var _RT_MW_HALF_DEG_FALLBACK = 6;
+    var _RT_MW_LOOKBACK_H = 24;
+    var _RT_MW_IR_RADIUS = 10;
+
+    function _satMwHalfDeg() {
+        return (typeof window._rtMwHalfDeg === 'function')
+            ? window._rtMwHalfDeg() : _RT_MW_HALF_DEG_FALLBACK;
+    }
+
+    function _satMwInitMaps() {
+        if (_satMwLeafletIr && _satMwLeafletMw) return;
+        var commonOpts = {
+            zoomControl: true,
+            attributionControl: false,
+            preferCanvas: false,
+            worldCopyJump: true,
+            zoomSnap: 0.25,
+            zoomDelta: 0.5,
+        };
+        var irDiv = document.getElementById('sat-leaflet-ir');
+        var mwDiv = document.getElementById('sat-leaflet-mw');
+        if (!irDiv || !mwDiv) return;
+        _satMwLeafletIr = L.map(irDiv, commonOpts).setView([0, 0], 5);
+        _satMwLeafletMw = L.map(mwDiv, commonOpts).setView([0, 0], 5);
+        // Carto Voyager — neutral land/ocean base that lets storm
+        // structure pop. Matches the visual style of the genesis-modal
+        // basemap on the IR Storm Card.
+        var baseUrl = 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}{r}.png';
+        L.tileLayer(baseUrl, { maxZoom: 12, opacity: 0.55 }).addTo(_satMwLeafletIr);
+        L.tileLayer(baseUrl, { maxZoom: 12, opacity: 0.55 }).addTo(_satMwLeafletMw);
+        // Sync pan + zoom both directions. The _satMwSyncing guard
+        // breaks the feedback loop — setView fires moveend on the
+        // peer, which would otherwise loop back here.
+        function _wireSync(src, dst) {
+            src.on('moveend zoomend', function () {
+                if (_satMwSyncing) return;
+                _satMwSyncing = true;
+                dst.setView(src.getCenter(), src.getZoom(), { animate: false });
+                _satMwSyncing = false;
+            });
+        }
+        _wireSync(_satMwLeafletIr, _satMwLeafletMw);
+        _wireSync(_satMwLeafletMw, _satMwLeafletIr);
+    }
+
+    function _satMwActivate() {
+        _satMwInitMaps();
+        if (!currentStorm || currentStorm.lat == null || currentStorm.lon == null) {
+            _satMwSetStatus('no active storm');
+            return;
+        }
+        // Frame the storm at ±halfDeg by setting both maps' view.
+        var halfDeg = _satMwHalfDeg();
+        var b = L.latLngBounds(
+            [currentStorm.lat - halfDeg, currentStorm.lon - halfDeg],
+            [currentStorm.lat + halfDeg, currentStorm.lon + halfDeg]
+        );
+        if (_satMwLeafletIr) {
+            _satMwLeafletIr.invalidateSize();
+            _satMwLeafletIr.fitBounds(b, { animate: false });
+        }
+        if (_satMwLeafletMw) {
+            _satMwLeafletMw.invalidateSize();
+            _satMwLeafletMw.fitBounds(b, { animate: false });
+        }
+        _satMwUpdateMarkers();
+        _satMwLoadPasses();
+    }
+
+    function _satMwDeactivate() {
+        // No teardown — we keep the maps + overlays alive so re-entering
+        // MW mode is instant. invalidateSize on re-show ensures the map
+        // re-paints if its container size changed while hidden.
+    }
+
+    function _satMwSetStatus(text) {
+        var el = document.getElementById('sat-mw-status');
+        if (el) el.textContent = text || '';
+    }
+    function _satMwSetPassTime(text) {
+        var el = document.getElementById('sat-mw-pass-time');
+        if (el) el.textContent = text || '—';
+    }
+    function _satMwSetProductLabel(text) {
+        var el = document.getElementById('sat-mw-product-label');
+        if (el) el.textContent = text || 'Microwave';
+    }
+
+    // Fetch the manifest, filter to last-24h passes covering the
+    // current storm, group by orbit_id (preserving all products per
+    // orbit), sort newest-first, then render the bottom strip.
+    function _satMwLoadPasses() {
+        var storm = currentStorm;
+        if (!storm || typeof window._rtMwFetchManifest !== 'function') return;
+        _satMwSetStatus('loading…');
+        window._rtMwFetchManifest()
+            .then(function (m) {
+                if (!currentStorm || currentStorm.atcf_id !== storm.atcf_id) return;
+                var entries = (m && m.entries) || [];
+                var nowMs = Date.now();
+                var winMs = (typeof window._rtMwWindowMs === 'function')
+                    ? window._rtMwWindowMs() : 24 * 60 * 60 * 1000;
+                var orbitMap = {};
+                for (var i = 0; i < entries.length; i++) {
+                    var e = entries[i];
+                    var t = Date.parse(e.scan_start);
+                    if (!isFinite(t) || (nowMs - t) > winMs) continue;
+                    if (!window._rtMwBoundsContains(e.bounds, storm.lat, storm.lon)) continue;
+                    var oid = e.orbit_id;
+                    if (!orbitMap[oid]) {
+                        orbitMap[oid] = {
+                            orbit_id: oid, sensor: e.sensor, platform: e.platform,
+                            scan_start: e.scan_start, scan_start_ms: t,
+                            bounds: e.bounds, products: {}
+                        };
+                    }
+                    orbitMap[oid].products[e.product] = {
+                        png_url: e.png_url, geojson_url: e.geojson_url
+                    };
+                }
+                var orbits = Object.keys(orbitMap).map(function (k) { return orbitMap[k]; });
+                orbits.sort(function (a, b) { return b.scan_start_ms - a.scan_start_ms; });
+                _satMwOrbits = orbits;
+                _satMwRenderStrip();
+                if (orbits.length) {
+                    _satMwSelectPass(orbits[0]);   // auto-select latest
+                    _satMwSetStatus(orbits.length + ' pass'
+                        + (orbits.length === 1 ? '' : 'es'));
+                } else {
+                    _satMwSetStatus('no passes covered storm');
+                    if (_satMwMwOverlay) {
+                        _satMwLeafletMw.removeLayer(_satMwMwOverlay);
+                        _satMwMwOverlay = null;
+                    }
+                }
+            })
+            .catch(function (err) {
+                console.warn('[Sat MW] manifest fetch failed', err);
+                _satMwSetStatus('unavailable');
+            });
+    }
+
+    function _satMwRenderStrip() {
+        var strip = document.getElementById('sat-mw-strip');
+        if (!strip) return;
+        strip.innerHTML = '';
+        if (!_satMwOrbits.length) {
+            strip.innerHTML = '<div class="sat-mw-strip-empty">No microwave passes have covered this storm in the last 24 hours.</div>';
+            return;
+        }
+        var nowMs = Date.now();
+        for (var i = 0; i < _satMwOrbits.length; i++) {
+            var o = _satMwOrbits[i];
+            var pr = o.products[_satMwProduct];
+            if (!pr) continue;
+            var btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'sat-mw-strip-card';
+            var swatch = (typeof window._rtMwSensorColor === 'function')
+                ? window._rtMwSensorColor(o.sensor) : '#cbd5e1';
+            var ageMin = (nowMs - o.scan_start_ms) / 60000;
+            var ageStr = _satMwFmtAgo(ageMin);
+            var utc = o.scan_start.replace('T', ' ').slice(0, 16) + 'Z';
+            btn.innerHTML =
+                '<div class="sat-mw-strip-card-row">'
+                + '<span class="sat-mw-strip-swatch" style="background:' + swatch + '"></span>'
+                + '<strong>' + o.sensor + '</strong> '
+                + '<span class="sat-mw-strip-platform">' + (o.platform || '') + '</span>'
+                + '</div>'
+                + '<div class="sat-mw-strip-card-time">' + ageStr + '</div>'
+                + '<div class="sat-mw-strip-card-utc">' + utc + '</div>';
+            if (_satMwSelectedOrbit && _satMwSelectedOrbit.orbit_id === o.orbit_id) {
+                btn.classList.add('selected');
+            }
+            (function (orbit) {
+                btn.addEventListener('click', function () { _satMwSelectPass(orbit); });
+            })(o);
+            strip.appendChild(btn);
+        }
+    }
+
+    function _satMwFmtAgo(min) {
+        if (min < 1)  return 'just now';
+        if (min < 60) return Math.round(min) + ' min ago';
+        var h = min / 60;
+        if (h < 24) return h.toFixed(1) + ' h ago';
+        return (h / 24).toFixed(1) + ' d ago';
+    }
+
+    function _satMwSelectPass(orbit) {
+        if (!orbit) return;
+        _satMwSelectedOrbit = orbit;
+        var storm = currentStorm;
+        _satMwSetPassTime(orbit.scan_start.replace('T', ' ').slice(0, 16) + 'Z');
+        // Update strip selection highlight.
+        var strip = document.getElementById('sat-mw-strip');
+        if (strip) {
+            var cards = strip.querySelectorAll('.sat-mw-strip-card');
+            for (var i = 0; i < cards.length; i++) cards[i].classList.remove('selected');
+            var idx = _satMwOrbits.findIndex(function (o) { return o.orbit_id === orbit.orbit_id; });
+            if (idx >= 0 && cards[idx]) cards[idx].classList.add('selected');
+        }
+        _satMwRenderMwOverlay();
+        _satMwRenderIrAtMatchedTime(orbit.scan_start_ms, storm);
+        _satMwUpdateMarkersForOrbit(orbit, storm);
+    }
+
+    function _satMwRenderMwOverlay() {
+        var orbit = _satMwSelectedOrbit;
+        if (!orbit || !_satMwLeafletMw) return;
+        var pr = orbit.products[_satMwProduct];
+        _satMwSetProductLabel(orbit.sensor + ' · ' + (orbit.platform || '?') + ' · '
+                              + _satMwProductLabel(_satMwProduct));
+        if (_satMwMwOverlay) {
+            _satMwLeafletMw.removeLayer(_satMwMwOverlay);
+            _satMwMwOverlay = null;
+        }
+        if (!pr || !pr.png_url) return;
+        // bounds = [[south, west], [north, east]] — Leaflet-native.
+        _satMwMwOverlay = L.imageOverlay(pr.png_url, orbit.bounds, {
+            opacity: 0.92,
+            interactive: false,
+            crossOrigin: 'anonymous',
+        }).addTo(_satMwLeafletMw);
+    }
+
+    function _satMwProductLabel(p) {
+        return ({ '89pct': '89 PCT', '37color': '37 color',
+                  '89v': '89V', '89h': '89H',
+                  '37v': '37V', '37h': '37H' })[p] || p;
+    }
+
+    // Fetch /ir-frames-meta (cached per storm), pick the frame index
+    // closest to the MW scan_start, then drop /ir-frame.jpg as an
+    // L.imageOverlay on the IR map. radius_deg=10 → 20° box centered
+    // on storm; bounds derived from storm + radius_deg.
+    function _satMwRenderIrAtMatchedTime(mwMs, storm) {
+        if (!storm || !_satMwLeafletIr) return;
+        var url = API_BASE
+            + '/ir-monitor/storm/' + encodeURIComponent(storm.atcf_id)
+            + '/ir-frames-meta?lookback_hours=' + _RT_MW_LOOKBACK_H
+            + '&radius_deg=' + _RT_MW_IR_RADIUS
+            + '&interval_min=30';
+        var pickFrame = function (meta) {
+            if (!meta || !meta.frames || !meta.frames.length) return null;
+            var best = null, bestD = Infinity;
+            for (var i = 0; i < meta.frames.length; i++) {
+                var t = Date.parse(meta.frames[i].datetime_utc);
+                if (!isFinite(t)) continue;
+                var d = Math.abs(t - mwMs);
+                if (d < bestD) { bestD = d; best = meta.frames[i]; }
+            }
+            return best;
+        };
+        var apply = function (meta) {
+            var best = pickFrame(meta);
+            if (!best) return;
+            // Bounds = storm-centered 20° box. /ir-frame.jpg uses the
+            // storm's CURRENT position as center (latest fix) — we
+            // mirror that here so the overlay aligns with the JPG.
+            var bounds = [
+                [storm.lat - _RT_MW_IR_RADIUS, storm.lon - _RT_MW_IR_RADIUS],
+                [storm.lat + _RT_MW_IR_RADIUS, storm.lon + _RT_MW_IR_RADIUS]
+            ];
+            var jpgUrl = API_BASE
+                + '/ir-monitor/storm/' + encodeURIComponent(storm.atcf_id)
+                + '/ir-frame.jpg?frame_index=' + best.index
+                + '&lookback_hours=' + _RT_MW_LOOKBACK_H
+                + '&radius_deg=' + _RT_MW_IR_RADIUS
+                + '&interval_min=30';
+            if (_satMwIrOverlay) {
+                _satMwLeafletIr.removeLayer(_satMwIrOverlay);
+                _satMwIrOverlay = null;
+            }
+            _satMwIrOverlay = L.imageOverlay(jpgUrl, bounds, {
+                opacity: 0.92,
+                interactive: false,
+                crossOrigin: 'anonymous',
+            }).addTo(_satMwLeafletIr);
+            // Update the IR pane label so the user sees the matched
+            // IR frame time alongside the MW pass time.
+            var lbl = document.getElementById('sat-panel-ir-label');
+            if (lbl) {
+                var deltaMin = Math.round((Date.parse(best.datetime_utc) - mwMs) / 60000);
+                var sign = deltaMin >= 0 ? '+' : '';
+                lbl.textContent = 'IR · ' + best.datetime_utc.replace('T', ' ').slice(0, 16)
+                                  + 'Z (' + sign + deltaMin + ' min vs MW)';
+            }
+        };
+        if (_satMwIrMetaCache.atcfId === storm.atcf_id && _satMwIrMetaCache.meta) {
+            apply(_satMwIrMetaCache.meta);
+            return;
+        }
+        fetch(url, { cache: 'no-store' })
+            .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+            .then(function (m) {
+                _satMwIrMetaCache = { atcfId: storm.atcf_id, meta: m };
+                apply(m);
+            })
+            .catch(function (err) { console.warn('[Sat MW] IR meta fetch failed', err); });
+    }
+
+    // Markers: yellow cross at latest best-track fix; orange ring at
+    // interpolated position for the MW pass time. Both placed on
+    // both maps so panning the synced pair never loses the markers.
+    function _satMwUpdateMarkers() {
+        var storm = currentStorm;
+        if (!storm) return;
+        if (!_satMwLeafletIr || !_satMwLeafletMw) return;
+        var fixIcon = L.divIcon({
+            className: 'sat-mw-marker sat-mw-marker-cross',
+            html: '<span class="sat-mw-cross"></span>',
+            iconSize: [22, 22], iconAnchor: [11, 11]
+        });
+        function _placeFix(map, holder) {
+            if (holder.fix) map.removeLayer(holder.fix);
+            holder.fix = L.marker([storm.lat, storm.lon], {
+                icon: fixIcon, interactive: false, keyboard: false
+            }).addTo(map);
+        }
+        _placeFix(_satMwLeafletIr, _satMwIrMarkers);
+        _placeFix(_satMwLeafletMw, _satMwMwMarkers);
+    }
+    function _satMwUpdateMarkersForOrbit(orbit, storm) {
+        if (!orbit || !storm || !_satMwLeafletIr || !_satMwLeafletMw) return;
+        if (typeof window._rtFetchStormTrack !== 'function') return;
+        window._rtFetchStormTrack(storm)
+            .then(function (history) {
+                if (!_satMwSelectedOrbit || _satMwSelectedOrbit.orbit_id !== orbit.orbit_id) return;
+                var interp = (typeof window._rtInterpTrack === 'function')
+                    ? window._rtInterpTrack(history, orbit.scan_start_ms) : null;
+                if (!interp) return;
+                var ringIcon = L.divIcon({
+                    className: 'sat-mw-marker sat-mw-marker-ring',
+                    html: '<span class="sat-mw-ring"></span>',
+                    iconSize: [18, 18], iconAnchor: [9, 9]
+                });
+                function _placeInterp(map, holder) {
+                    if (holder.interp) map.removeLayer(holder.interp);
+                    holder.interp = L.marker([interp.lat, interp.lon], {
+                        icon: ringIcon, interactive: false, keyboard: false
+                    }).addTo(map);
+                }
+                _placeInterp(_satMwLeafletIr, _satMwIrMarkers);
+                _placeInterp(_satMwLeafletMw, _satMwMwMarkers);
+            })
+            .catch(function () { /* ignore — interp marker optional */ });
+    }
+
+    // Product chip binding for the sat-mw-products bar lives in
+    // realtime_ir.js (document-level delegation). It calls
+    // _rtRenderStormMwPasses on change, which is a no-op for the
+    // Leaflet view since the panel IDs differ. We add a local
+    // listener that intercepts clicks inside the sat-mw bar and
+    // re-renders the Leaflet MW overlay instead.
+    document.addEventListener('click', function (ev) {
+        var bar = document.getElementById('sat-mw-products');
+        if (!bar || !bar.contains(ev.target)) return;
+        var btn = ev.target.closest('.rt-mw-storm-chip');
+        if (!btn) return;
+        var product = btn.getAttribute('data-product');
+        if (!product || product === _satMwProduct) return;
+        _satMwProduct = product;
+        // Sync chip active states (the global document handler will
+        // also fire but only updates chips, so this stays safe).
+        var chips = bar.querySelectorAll('.rt-mw-storm-chip');
+        for (var i = 0; i < chips.length; i++) {
+            chips[i].classList.toggle('active',
+                chips[i].getAttribute('data-product') === product);
+        }
+        if (viewMode === 'microwave') {
+            _satMwRenderMwOverlay();
+            _satMwRenderStrip();   // strip product labels stay current
+        }
+    });
 
     // ── Storm List ──────────────────────────────────────────────
 
@@ -2637,9 +3045,7 @@
             // the panel against the new storm without bouncing back to
             // diagnostics.
             if (viewMode === 'microwave') {
-                if (currentStorm && typeof window._rtLoadStormMwPasses === 'function') {
-                    window._rtLoadStormMwPasses(currentStorm, 'sat-mw');
-                }
+                _satMwActivate();
             } else {
                 viewMode = 'diagnostics';
                 var rightPanel = document.getElementById('sat-panel-right');

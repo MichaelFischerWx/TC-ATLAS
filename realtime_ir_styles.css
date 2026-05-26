@@ -3278,6 +3278,173 @@ html:not([data-view="map"]) #ir-global-env-cbars {
 }
 
 /* ════════════════════════════════════════════════════════════════
+   Phase 1: Storm Satellite tab — Leaflet panes for MW mode.
+   Replaces the canvas dual-pane only when "MW" mode is active.
+   Left pane = IR (sat-leaflet-ir, hosted inside sat-panel-ir).
+   Right pane = MW (sat-leaflet-mw, hosted inside sat-mw-section).
+   Pass strip along the bottom of the right pane.
+   ════════════════════════════════════════════════════════════════ */
+.sat-leaflet-pane {
+    width: 100%;
+    flex: 1;
+    min-height: 320px;
+    background: rgba(15, 22, 36, 0.55);
+    border-radius: 4px;
+}
+/* The MW pane sits inside a flex column with chip row + pass strip,
+   so it needs its own flex sizing distinct from the IR pane. */
+.sat-leaflet-pane-mw {
+    flex: 1;
+    min-height: 0;
+}
+
+.sat-mw-leaflet-panel {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+    padding: 6px;
+    gap: 6px;
+}
+.sat-mw-leaflet-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+.sat-mw-leaflet-status {
+    font-size: 0.7rem;
+    color: #94a3b8;
+    font-weight: 500;
+}
+.sat-mw-pass-time {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.72rem;
+    color: #94a3b8;
+    font-weight: 500;
+}
+
+.sat-mw-strip-wrap {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.sat-mw-strip-label {
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #94a3b8;
+    font-weight: 700;
+}
+.sat-mw-strip {
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 2px 2px 6px;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(148, 163, 184, 0.4) transparent;
+}
+.sat-mw-strip::-webkit-scrollbar { height: 6px; }
+.sat-mw-strip::-webkit-scrollbar-thumb {
+    background-color: rgba(148, 163, 184, 0.4);
+    border-radius: 3px;
+}
+.sat-mw-strip-empty {
+    font-size: 0.72rem;
+    color: #64748b;
+    font-style: italic;
+    padding: 6px 4px;
+}
+.sat-mw-strip-card {
+    flex-shrink: 0;
+    min-width: 140px;
+    padding: 6px 10px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 5px;
+    color: var(--text, #e2e8f0);
+    text-align: left;
+    cursor: pointer;
+    font-family: inherit;
+    transition: background 0.12s, border-color 0.12s, transform 0.12s;
+}
+.sat-mw-strip-card:hover {
+    background: rgba(46, 125, 255, 0.10);
+    border-color: rgba(46, 125, 255, 0.45);
+}
+.sat-mw-strip-card.selected {
+    background: rgba(253, 224, 71, 0.16);
+    border-color: rgba(253, 224, 71, 0.75);
+    box-shadow: 0 0 0 1px rgba(253, 224, 71, 0.30);
+}
+.sat-mw-strip-card-row {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.72rem;
+    margin-bottom: 2px;
+}
+.sat-mw-strip-swatch {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.sat-mw-strip-platform {
+    color: #94a3b8;
+    font-size: 0.65rem;
+}
+.sat-mw-strip-card-time {
+    font-size: 0.72rem;
+    font-weight: 600;
+}
+.sat-mw-strip-card-utc {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.62rem;
+    color: #94a3b8;
+}
+
+/* Marker icons placed on both Leaflet maps — yellow cross at the
+   latest best-track fix, orange filled ring at the interpolated
+   position for the MW pass time. The wrapper carries the iconSize/
+   iconAnchor; the inner span carries the visual. */
+.sat-mw-marker { pointer-events: none; }
+.sat-mw-marker-cross .sat-mw-cross {
+    position: relative;
+    display: block;
+    width: 22px;
+    height: 22px;
+}
+.sat-mw-marker-cross .sat-mw-cross::before,
+.sat-mw-marker-cross .sat-mw-cross::after {
+    content: '';
+    position: absolute;
+    background: #fde047;
+    box-shadow: 0 0 4px rgba(15, 22, 36, 0.85);
+}
+.sat-mw-marker-cross .sat-mw-cross::before {
+    left: 1px; top: 10px;
+    width: 20px; height: 2px;
+}
+.sat-mw-marker-cross .sat-mw-cross::after {
+    left: 10px; top: 1px;
+    width: 2px; height: 20px;
+}
+.sat-mw-marker-ring .sat-mw-ring {
+    display: block;
+    width: 14px;
+    height: 14px;
+    margin: 2px;
+    border-radius: 50%;
+    background: rgba(251, 146, 60, 0.92);
+    border: 1.5px solid rgba(15, 22, 36, 0.95);
+    box-shadow: 0 0 0 1px rgba(251, 146, 60, 0.45);
+}
+
+/* ════════════════════════════════════════════════════════════════
    IR ↔ Microwave side-by-side compare modal. Click a MW pass
    thumbnail in the storm-detail panel to open. Mirrors the genesis
    modal's chrome (header + close + max-height) but with a 2-column

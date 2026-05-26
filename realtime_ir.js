@@ -12338,6 +12338,17 @@
     // mount the same panel by passing prefix='sat-mw'. The compare
     // modal is already body-level, so it works from any view.
     window._rtLoadStormMwPasses = _rtLoadStormMwPasses;
+    // Low-level helpers also exposed so satellite.js's Leaflet-based
+    // MW mode (Phase 1 of canvas→Leaflet migration) can do its own
+    // rendering against the same manifest + interp pipeline without
+    // duplicating the fetch/cache/dedup logic.
+    window._rtMwFetchManifest = _rtMwFetchManifest;
+    window._rtMwBoundsContains = _rtMwBoundsContains;
+    window._rtMwHalfDeg = function () { return _RT_MW_HALF_DEG; };
+    window._rtMwWindowMs = function () { return _RT_MW_WINDOW_MS; };
+    window._rtMwSensorColor = function (s) { return _RT_MW_SENSOR_COLOR[s] || '#cbd5e1'; };
+    window._rtInterpTrack = _rtInterpTrack;
+    window._rtFetchStormTrack = _rtFetchStormTrack;
 
     // Scroll the storm-detail body to the Microwave Passes section.
     // Wired to the new "Microwave" pill in the detail-header next to
