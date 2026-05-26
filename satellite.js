@@ -2652,7 +2652,29 @@
         zoomDelta: 0.5,
     };
     var _SAT_LEAFLET_BASE_URL = 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}{r}.png';
+    // Coastlines + admin borders + place labels rendered ABOVE the
+    // imagery overlay so the user can locate storm structure relative
+    // to coastlines. Carto's `voyager_only_labels` is a transparent
+    // tile set with just those lines — drop it into a custom pane
+    // with z-index 450 (between overlayPane=400 and markerPane=600)
+    // so it sits over the IR/WV/MW imageOverlays but under the
+    // storm-center markers.
+    var _SAT_LEAFLET_COAST_URL = 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}{r}.png';
     var _satIrSyncWired = false;
+
+    function _satAddCoastlines(map) {
+        if (!map || map._satCoastlinesAdded) return;
+        var pane = map.createPane('sat-coastlines');
+        pane.style.zIndex = 450;
+        pane.style.pointerEvents = 'none';
+        L.tileLayer(_SAT_LEAFLET_COAST_URL, {
+            maxZoom: 12,
+            pane: 'sat-coastlines',
+            opacity: 0.85,
+            attribution: '© CARTO © OpenStreetMap contributors',
+        }).addTo(map);
+        map._satCoastlinesAdded = true;
+    }
 
     // Lazy-init for the LEFT (IR) Leaflet map. Shared between MW mode
     // (Phase 1) and the default Diagnostics IR animation (Phase 2)
@@ -2670,6 +2692,8 @@
         // positioning context (eye position vs nearest land, RMW
         // relative to specific latitudes, etc).
         _satAddGraticule(_satMwLeafletIr);
+        // Coastlines + admin lines + place labels above the imagery.
+        _satAddCoastlines(_satMwLeafletIr);
     }
 
     // Lazy-init for the RIGHT (MW) Leaflet map. Only used in MW mode.
@@ -2686,6 +2710,7 @@
         // structure relative to the storm center.
         _satAttachLeafletHover(_satMwLeafletMw, function () { return null; }, 'MW');
         _satAddGraticule(_satMwLeafletMw);
+        _satAddCoastlines(_satMwLeafletMw);
     }
 
     // Global toggle: when true, pan/zoom on any Leaflet pane mirrors
@@ -3796,6 +3821,7 @@
         // Phase 6: per-pixel Tb hover for the WV/Vis pane.
         _satAttachLeafletHover(_satRightLeafletMap, function () { return rightFrames; }, 'WV/Vis');
         _satAddGraticule(_satRightLeafletMap);
+        _satAddCoastlines(_satRightLeafletMap);
     }
 
     function _satRightApplyLeafletVisibility() {
