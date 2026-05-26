@@ -3330,6 +3330,18 @@ html:not([data-view="map"]) #ir-global-env-cbars {
     align-items: center;
     justify-content: space-between;
     gap: 8px;
+    padding: 6px 8px;
+    background: rgba(15, 22, 36, 0.65);
+    border-radius: 4px;
+    color: var(--text, #e2e8f0);
+}
+.sat-mw-leaflet-title {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--text, #e2e8f0);
 }
 .sat-mw-leaflet-status {
     font-size: 0.7rem;

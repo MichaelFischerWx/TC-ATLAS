@@ -733,8 +733,12 @@
                              bottom. Product chip row above re-renders the
                              MW imageOverlay without touching the IR side. -->
                         <div id="sat-mw-section" class="sat-mw-leaflet-panel" style="display:none;">
+                            <!-- In-flow header: do NOT use .sat-panel-label
+                                 which is position:absolute and steals the
+                                 header's height, leaving the chip row
+                                 covered by it. -->
                             <div class="sat-mw-leaflet-header">
-                                <div class="sat-panel-label" style="display:flex;align-items:center;gap:8px;">
+                                <div class="sat-mw-leaflet-title">
                                     <span id="sat-mw-product-label">Microwave</span>
                                     <span id="sat-mw-pass-time" class="sat-mw-pass-time">—</span>
                                 </div>
