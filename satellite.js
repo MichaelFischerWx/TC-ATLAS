@@ -470,13 +470,23 @@
         var irFrame = irFrames[animIndex];
         var irCmap = selectedColormap;
 
-        // Always render IR panel
+        // Always render IR panel — both canvas and Leaflet paths are
+        // kept up to date. Visibility toggling happens inside
+        // _satIrSyncLeaflet based on the current mode + colormap.
+        // The canvas render is cheap when its container is hidden
+        // (DOM still computes the image but no pixels reach screen).
         renderFrame(canvasIR, ctxIR, irFrame, irCmap);
         drawOverlay(overlayIR, overlayCtxIR, irFrame);
         renderColorbar(cbIRCanvas, irCmap, cbIRTop, cbIRBot, 160, 330, 'K');
         if (irFrame) {
             var vb = getViewBounds(irFrame);
             renderAxes(axesYIR, axesXIR, vb);
+        }
+        // Mirror the IR panel onto the Leaflet map when its mode/cmap
+        // combination calls for it. Cheap when canvas is the active
+        // path (just a visibility check + early return).
+        if (typeof _satIrSyncLeaflet === 'function') {
+            _satIrSyncLeaflet();
         }
 
         if (viewMode === 'diagnostics') {
@@ -2594,30 +2604,45 @@
             ? window._rtMwHalfDeg() : _RT_MW_HALF_DEG_FALLBACK;
     }
 
-    function _satMwInitMaps() {
-        if (_satMwLeafletIr && _satMwLeafletMw) return;
-        var commonOpts = {
-            zoomControl: true,
-            attributionControl: false,
-            preferCanvas: false,
-            worldCopyJump: true,
-            zoomSnap: 0.25,
-            zoomDelta: 0.5,
-        };
+    // Common Leaflet map options shared by both panes — flat, neutral
+    // basemap (Carto Voyager) so storm structure is the visual focus.
+    var _SAT_LEAFLET_OPTS = {
+        zoomControl: true,
+        attributionControl: false,
+        preferCanvas: false,
+        worldCopyJump: true,
+        zoomSnap: 0.25,
+        zoomDelta: 0.5,
+    };
+    var _SAT_LEAFLET_BASE_URL = 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}{r}.png';
+    var _satIrSyncWired = false;
+
+    // Lazy-init for the LEFT (IR) Leaflet map. Shared between MW mode
+    // (Phase 1) and the default Diagnostics IR animation (Phase 2)
+    // because both display the same data on the same container.
+    function _satEnsureIrMap() {
+        if (_satMwLeafletIr) return;
         var irDiv = document.getElementById('sat-leaflet-ir');
+        if (!irDiv) return;
+        _satMwLeafletIr = L.map(irDiv, _SAT_LEAFLET_OPTS).setView([0, 0], 5);
+        L.tileLayer(_SAT_LEAFLET_BASE_URL, { maxZoom: 12, opacity: 0.55 })
+            .addTo(_satMwLeafletIr);
+    }
+
+    // Lazy-init for the RIGHT (MW) Leaflet map. Only used in MW mode.
+    function _satEnsureMwMap() {
+        if (_satMwLeafletMw) return;
         var mwDiv = document.getElementById('sat-leaflet-mw');
-        if (!irDiv || !mwDiv) return;
-        _satMwLeafletIr = L.map(irDiv, commonOpts).setView([0, 0], 5);
-        _satMwLeafletMw = L.map(mwDiv, commonOpts).setView([0, 0], 5);
-        // Carto Voyager — neutral land/ocean base that lets storm
-        // structure pop. Matches the visual style of the genesis-modal
-        // basemap on the IR Storm Card.
-        var baseUrl = 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}{r}.png';
-        L.tileLayer(baseUrl, { maxZoom: 12, opacity: 0.55 }).addTo(_satMwLeafletIr);
-        L.tileLayer(baseUrl, { maxZoom: 12, opacity: 0.55 }).addTo(_satMwLeafletMw);
-        // Sync pan + zoom both directions. The _satMwSyncing guard
-        // breaks the feedback loop — setView fires moveend on the
-        // peer, which would otherwise loop back here.
+        if (!mwDiv) return;
+        _satMwLeafletMw = L.map(mwDiv, _SAT_LEAFLET_OPTS).setView([0, 0], 5);
+        L.tileLayer(_SAT_LEAFLET_BASE_URL, { maxZoom: 12, opacity: 0.55 })
+            .addTo(_satMwLeafletMw);
+    }
+
+    function _satMwInitMaps() {
+        _satEnsureIrMap();
+        _satEnsureMwMap();
+        if (_satIrSyncWired || !_satMwLeafletIr || !_satMwLeafletMw) return;
         function _wireSync(src, dst) {
             src.on('moveend zoomend', function () {
                 if (_satMwSyncing) return;
@@ -2628,6 +2653,7 @@
         }
         _wireSync(_satMwLeafletIr, _satMwLeafletMw);
         _wireSync(_satMwLeafletMw, _satMwLeafletIr);
+        _satIrSyncWired = true;
     }
 
     function _satMwActivate() {
@@ -2960,6 +2986,196 @@
             _satMwRenderStrip();   // strip product labels stay current
         }
     });
+
+    // ════════════════════════════════════════════════════════════════
+    //  Phase 2: Leaflet IR animation (default mode + default colormap)
+    //  Replaces the canvas IR animation when:
+    //    1. View mode is "diagnostics" (other modes still on canvas
+    //       because they need canvas-based asymmetry / WV-Vis / track),
+    //    2. AND the user has the default 'claude-ir' colormap selected
+    //       (custom colormaps require the LUT path and stay on canvas).
+    //  Frames are pre-loaded as L.imageOverlay layers with opacity 0;
+    //  showFrame just toggles opacity. Storm-center crosshair + active
+    //  best-track marker render as L.marker. Zoom buttons (10°/5°/2°)
+    //  setView the map.
+    // ════════════════════════════════════════════════════════════════
+    var _satIrLeafletActive = false;           // mirrors current dispatch
+    var _satIrFrameLayers = [];                // per-frame L.imageOverlay
+    var _satIrFrameStormId = null;             // storm the layers were built for
+    var _satIrCenterFixMarker = null;          // L.marker for center fix
+    var _SAT_IR_RADIUS_DEG = 10;               // ir-frame.jpg radius_deg
+
+    // Whether to use the Leaflet IR display right now. Conservative —
+    // only fires for the default colormap in Diagnostics mode. All
+    // other combinations stay on canvas (Phase 3-5 broaden this).
+    function _satIrShouldUseLeaflet() {
+        return viewMode === 'diagnostics'
+               && selectedColormap === 'claude-ir';
+    }
+
+    // Toggle canvas vs Leaflet visibility for the left IR pane.
+    function _satIrApplyLeafletVisibility() {
+        var canvasWrap = document.getElementById('sat-panel-ir-canvas-wrap');
+        var leafletDiv = document.getElementById('sat-leaflet-ir');
+        var axesY = document.getElementById('sat-axes-y-ir');
+        var axesX = document.getElementById('sat-axes-x-ir');
+        var useLeaflet = _satIrShouldUseLeaflet();
+        if (useLeaflet) {
+            if (canvasWrap) canvasWrap.style.display = 'none';
+            if (leafletDiv) leafletDiv.style.display = '';
+            // Lat/lon labels come from Leaflet's basemap + an optional
+            // graticule, so hide the canvas-era axes elements that
+            // would otherwise sit awkwardly outside the map.
+            if (axesY) axesY.style.display = 'none';
+            if (axesX) axesX.style.display = 'none';
+        } else {
+            if (canvasWrap) canvasWrap.style.display = '';
+            if (leafletDiv) leafletDiv.style.display = 'none';
+            if (axesY) axesY.style.display = '';
+            if (axesX) axesX.style.display = '';
+        }
+        _satIrLeafletActive = useLeaflet;
+    }
+
+    // Build (or rebuild) the per-frame L.imageOverlay layers for the
+    // current storm. Each frame uses the /ir-frame.jpg endpoint with
+    // frame_index = its position in animFrameTimes-equivalent order
+    // (which matches the irFrames array index). The JPG itself is
+    // storm-centered with radius_deg=10, so all overlays share the
+    // same bounds — just storm.lat/lon ±10°.
+    function _satIrRebuildFrameLayers() {
+        if (!_satMwLeafletIr) return;
+        // Tear down old layers (e.g., on storm change).
+        for (var i = 0; i < _satIrFrameLayers.length; i++) {
+            _satMwLeafletIr.removeLayer(_satIrFrameLayers[i]);
+        }
+        _satIrFrameLayers = [];
+        var storm = currentStorm;
+        if (!storm || storm.lat == null || storm.lon == null) return;
+        if (!irFrames || !irFrames.length) return;
+        var bounds = [
+            [storm.lat - _SAT_IR_RADIUS_DEG, storm.lon - _SAT_IR_RADIUS_DEG],
+            [storm.lat + _SAT_IR_RADIUS_DEG, storm.lon + _SAT_IR_RADIUS_DEG]
+        ];
+        for (var k = 0; k < irFrames.length; k++) {
+            var url = API_BASE
+                + '/ir-monitor/storm/' + encodeURIComponent(storm.atcf_id)
+                + '/ir-frame.jpg?frame_index=' + k
+                + '&lookback_hours=' + DEFAULT_LOOKBACK_HOURS
+                + '&radius_deg=' + _SAT_IR_RADIUS_DEG
+                + '&interval_min=' + FRAME_INTERVAL_MIN;
+            var layer = L.imageOverlay(url, bounds, {
+                opacity: 0,
+                interactive: false,
+                crossOrigin: 'anonymous',
+            }).addTo(_satMwLeafletIr);
+            _satIrFrameLayers.push(layer);
+        }
+        _satIrFrameStormId = storm.atcf_id;
+    }
+
+    // Render the current frame on the Leaflet map by toggling opacity.
+    // Also updates the center-fix marker if the frame carries one.
+    function _satIrRenderLeafletFrame() {
+        if (!_satMwLeafletIr || !_satIrFrameLayers.length) return;
+        var idx = animIndex;
+        if (idx < 0 || idx >= _satIrFrameLayers.length) return;
+        for (var i = 0; i < _satIrFrameLayers.length; i++) {
+            _satIrFrameLayers[i].setOpacity(i === idx ? 0.92 : 0);
+        }
+        // Center-fix marker — only shown when the active frame has a
+        // detected fix (eye-strength storms only, gated server-side).
+        var frame = irFrames[idx];
+        var cf = frame && frame.center_fix;
+        if (cf && cf.lat != null && cf.lon != null) {
+            var icon = L.divIcon({
+                className: 'sat-leaflet-centerfix',
+                html: '<span class="sat-leaflet-centerfix-inner"></span>',
+                iconSize: [22, 22], iconAnchor: [11, 11]
+            });
+            if (!_satIrCenterFixMarker) {
+                _satIrCenterFixMarker = L.marker([cf.lat, cf.lon], {
+                    icon: icon, interactive: false, keyboard: false,
+                });
+                _satIrCenterFixMarker.addTo(_satMwLeafletIr);
+            } else {
+                _satIrCenterFixMarker.setLatLng([cf.lat, cf.lon]);
+                _satIrCenterFixMarker.setIcon(icon);
+                if (!_satMwLeafletIr.hasLayer(_satIrCenterFixMarker)) {
+                    _satIrCenterFixMarker.addTo(_satMwLeafletIr);
+                }
+            }
+        } else if (_satIrCenterFixMarker && _satMwLeafletIr.hasLayer(_satIrCenterFixMarker)) {
+            _satMwLeafletIr.removeLayer(_satIrCenterFixMarker);
+        }
+    }
+
+    // Frame the storm at the current zoomDeg (matches the zoom-button
+    // expectation from the canvas era). Idempotent — caller decides
+    // when to call (mode/colormap switch, storm select, zoom button).
+    function _satIrCenterOnStorm() {
+        if (!_satMwLeafletIr || !currentStorm) return;
+        var halfDeg = (typeof zoomDeg === 'number') ? zoomDeg : 10;
+        var b = L.latLngBounds(
+            [currentStorm.lat - halfDeg, currentStorm.lon - halfDeg],
+            [currentStorm.lat + halfDeg, currentStorm.lon + halfDeg]
+        );
+        _satMwLeafletIr.invalidateSize();
+        _satMwLeafletIr.fitBounds(b, { animate: false });
+    }
+
+    // Append-only layer builder used when new frames arrive into an
+    // already-set-up storm (incremental loadFrames path). Skips the
+    // teardown that _satIrRebuildFrameLayers performs.
+    function _satIrAppendNewFrameLayers() {
+        var storm = currentStorm;
+        if (!storm || !_satMwLeafletIr) return;
+        var bounds = [
+            [storm.lat - _SAT_IR_RADIUS_DEG, storm.lon - _SAT_IR_RADIUS_DEG],
+            [storm.lat + _SAT_IR_RADIUS_DEG, storm.lon + _SAT_IR_RADIUS_DEG]
+        ];
+        for (var k = _satIrFrameLayers.length; k < irFrames.length; k++) {
+            var url = API_BASE
+                + '/ir-monitor/storm/' + encodeURIComponent(storm.atcf_id)
+                + '/ir-frame.jpg?frame_index=' + k
+                + '&lookback_hours=' + DEFAULT_LOOKBACK_HOURS
+                + '&radius_deg=' + _SAT_IR_RADIUS_DEG
+                + '&interval_min=' + FRAME_INTERVAL_MIN;
+            var layer = L.imageOverlay(url, bounds, {
+                opacity: 0, interactive: false, crossOrigin: 'anonymous',
+            }).addTo(_satMwLeafletIr);
+            _satIrFrameLayers.push(layer);
+        }
+    }
+
+    // High-level entry: caller has changed mode, colormap, storm, or
+    // frame data. We decide whether Leaflet is active, swap visibility,
+    // (re-)build per-frame overlays if the storm changed or the frame
+    // buffer reset, append new layers if frames trickled in, and
+    // render the active frame.
+    function _satIrSyncLeaflet(opts) {
+        opts = opts || {};
+        _satIrApplyLeafletVisibility();
+        if (!_satIrLeafletActive) return;
+        _satEnsureIrMap();
+        var stormId = currentStorm && currentStorm.atcf_id;
+        var stormChanged = (_satIrFrameStormId !== stormId);
+        // Detect frame-buffer reset (selectStorm clears irFrames=[]
+        // before refetching) — same fix as a storm change but without
+        // a stormId flip.
+        var bufferReset = (_satIrFrameLayers.length > irFrames.length);
+        if (opts.stormChanged || stormChanged || bufferReset) {
+            _satIrRebuildFrameLayers();
+            _satIrCenterOnStorm();
+        } else if (_satIrFrameLayers.length < irFrames.length) {
+            _satIrAppendNewFrameLayers();
+        }
+        if (opts.recenter) _satIrCenterOnStorm();
+        _satIrRenderLeafletFrame();
+    }
+
+    // Expose so other functions can re-sync without poking globals.
+    window._satIrSyncLeaflet = _satIrSyncLeaflet;
 
     // ── Storm List ──────────────────────────────────────────────
 
@@ -4068,6 +4284,13 @@
                 zoomDeg = parseInt(this.getAttribute('data-deg'), 10);
                 for (var zj = 0; zj < zoomBtns.length; zj++) {
                     zoomBtns[zj].classList.toggle('active', zoomBtns[zj] === this);
+                }
+                // Recenter the Leaflet IR map (and the MW pair when
+                // MW mode is active) on the new zoomDeg extent before
+                // letting renderBothPanels paint. fitBounds handles
+                // the user-initiated jump cleanly without animation.
+                if (typeof _satIrSyncLeaflet === 'function') {
+                    _satIrSyncLeaflet({ recenter: true });
                 }
                 renderBothPanels();
             });

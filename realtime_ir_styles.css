@@ -3444,6 +3444,34 @@ html:not([data-view="map"]) #ir-global-env-cbars {
     box-shadow: 0 0 0 1px rgba(251, 146, 60, 0.45);
 }
 
+/* Phase 2: Leaflet IR animation center-fix marker. Shown when the
+   active frame carries a server-detected eye (storms ≥ ~65 kt).
+   Cyan circle+cross matches the existing canvas crosshair legend
+   in the sidebar (sat-crosshair-legend) so users recognize it. */
+.sat-leaflet-centerfix { pointer-events: none; }
+.sat-leaflet-centerfix-inner {
+    position: relative;
+    display: block;
+    width: 22px;
+    height: 22px;
+    border: 1.5px solid #00e5ff;
+    border-radius: 50%;
+}
+.sat-leaflet-centerfix-inner::before,
+.sat-leaflet-centerfix-inner::after {
+    content: '';
+    position: absolute;
+    background: #00e5ff;
+}
+.sat-leaflet-centerfix-inner::before {
+    left: -1px; top: 9px;
+    width: 22px; height: 2px;
+}
+.sat-leaflet-centerfix-inner::after {
+    left: 9px; top: -1px;
+    width: 2px; height: 22px;
+}
+
 /* ════════════════════════════════════════════════════════════════
    IR ↔ Microwave side-by-side compare modal. Click a MW pass
    thumbnail in the storm-detail panel to open. Mirrors the genesis
@@ -3494,6 +3522,51 @@ html:not([data-view="map"]) #ir-global-env-cbars {
     font-size: 0.78rem;
     color: var(--text-dim, #64748b);
     line-height: 1.4;
+}
+.rt-mw-compare-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+.rt-mw-compare-save {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 32px;
+    padding: 0 10px;
+    border-radius: 16px;
+    border: 1px solid rgba(0, 0, 0, 0.18);
+    background: rgba(255, 255, 255, 0.92);
+    color: #334155;
+    font-size: 0.78rem;
+    font-weight: 600;
+    line-height: 1;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s, transform 0.15s;
+}
+.rt-mw-compare-save:hover {
+    background: #fff;
+    color: #0f172a;
+    border-color: rgba(0, 0, 0, 0.32);
+    transform: translateY(-1px);
+}
+.rt-mw-compare-save:active {
+    transform: translateY(0);
+}
+.rt-mw-compare-save:disabled {
+    opacity: 0.55;
+    cursor: progress;
+    transform: none;
+}
+[data-theme="dark"] .rt-mw-compare-save {
+    background: var(--surface, #11161f);
+    color: var(--text-dim, #94a3b8);
+    border-color: rgba(255, 255, 255, 0.18);
+}
+[data-theme="dark"] .rt-mw-compare-save:hover {
+    color: var(--text, #e2e8f0);
+    border-color: rgba(255, 255, 255, 0.32);
 }
 .rt-mw-compare-close {
     flex-shrink: 0;
