@@ -436,6 +436,28 @@
                     </div>
                 </div>
 
+                <!-- Microwave Passes (storm-sectored last-24h list) -->
+                <div class="ir-info-section" id="rt-mw-storm-section" style="display:none;">
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                        <h3 class="ir-info-heading" style="margin-bottom:0;padding-bottom:0;border-bottom:none;">Microwave Passes (24h)</h3>
+                        <span id="rt-mw-storm-status" style="font-size:0.68rem;color:#64748b;"></span>
+                    </div>
+                    <!-- Product chips — re-render the existing list with a different
+                         product slug. 89pct is the default since it's the sharpest
+                         convective-structure proxy in our six-product set. -->
+                    <div id="rt-mw-storm-products" class="rt-mw-storm-products">
+                        <button type="button" class="rt-mw-storm-chip active" data-product="89pct" title="89 GHz polarization-corrected temperature (PCT) — sharpest convective structure">89 PCT</button>
+                        <button type="button" class="rt-mw-storm-chip" data-product="37color" title="37 GHz NRL false-color RGB — best for warm-core / eye structure">37 color</button>
+                        <button type="button" class="rt-mw-storm-chip" data-product="89v" title="89 GHz vertical-polarization brightness temperature">89V</button>
+                        <button type="button" class="rt-mw-storm-chip" data-product="89h" title="89 GHz horizontal-polarization brightness temperature">89H</button>
+                        <button type="button" class="rt-mw-storm-chip" data-product="37v" title="37 GHz vertical-polarization brightness temperature">37V</button>
+                        <button type="button" class="rt-mw-storm-chip" data-product="37h" title="37 GHz horizontal-polarization brightness temperature">37H</button>
+                    </div>
+                    <div id="rt-mw-storm-list" class="rt-mw-storm-list">
+                        <!-- populated by _rtRenderStormMwPasses with chronological thumbnails -->
+                    </div>
+                </div>
+
                 <!-- WSR-88D NEXRAD Radar Overlay -->
                 <div class="ir-info-section" id="rt-radar-section" style="display:none;">
                     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">

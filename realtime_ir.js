@@ -2820,6 +2820,7 @@
         _rtLoadWeatherlab(storm);
         _rtLoadDmEnsemble(storm);
         _rtLoadAscatPasses(storm);
+        _rtLoadStormMwPasses(storm);
         _rtLoadRadarSites(storm);
 
         // Intensity chart: check cache first
@@ -11724,6 +11725,299 @@
             window._rtSelectAscatPass(sel.value);
         }
     };
+
+    // ════════════════════════════════════════════════════════════════
+    //  Storm-sector microwave passes (last 24h, chronological)
+    //  Reads the same manifest_latest_48h.json that the Global Map's
+    //  microwave layer consumes, filters to passes whose bounds
+    //  contain the storm position, groups by orbit_id (one entry per
+    //  product per orbit), and renders a chronological card list
+    //  with storm-cropped canvas thumbnails. Default product = 89pct.
+    // ════════════════════════════════════════════════════════════════
+    var _RT_MW_MANIFEST_URL = 'https://storage.googleapis.com/tc-atlas-microwave-nrt/manifest_latest_48h.json';
+    var _RT_MW_MANIFEST_TTL_MS = 5 * 60 * 1000;       // 5 min
+    var _RT_MW_WINDOW_MS = 24 * 60 * 60 * 1000;       // 24 h list
+    var _RT_MW_HALF_DEG = 6;                          // ±6° storm box
+    var _RT_MW_THUMB_PX = 160;                        // canvas size
+    var _RT_MW_SENSOR_COLOR = {
+        GMI:   '#4ade80', SSMIS: '#60a5fa',
+        AMSR2: '#fb923c', ATMS:  '#c084fc'
+    };
+    var _rtMwManifest = null;
+    var _rtMwManifestFetchedAt = 0;
+    var _rtMwStormState = {
+        atcfId: null, lat: null, lon: null, product: '89pct',
+        orbits: []   // grouped & sorted entries for the current storm
+    };
+
+    function _rtMwBoundsContains(bounds, lat, lon) {
+        if (!bounds || !bounds[0] || !bounds[1]) return false;
+        var south = bounds[0][0], west = bounds[0][1];
+        var north = bounds[1][0], east = bounds[1][1];
+        if (lat < south || lat > north) return false;
+        if (west <= east) return lon >= west && lon <= east;
+        return lon >= west || lon <= east;   // dateline wrap
+    }
+
+    // Fetch + cache the public 48h manifest. ~5-min cache lines up
+    // with the file's Cache-Control header from the ingest writer.
+    function _rtMwFetchManifest() {
+        var age = Date.now() - _rtMwManifestFetchedAt;
+        if (_rtMwManifest && age < _RT_MW_MANIFEST_TTL_MS) {
+            return Promise.resolve(_rtMwManifest);
+        }
+        return fetch(_RT_MW_MANIFEST_URL, { cache: 'no-store' })
+            .then(function (r) {
+                if (!r.ok) throw new Error('manifest HTTP ' + r.status);
+                return r.json();
+            })
+            .then(function (m) {
+                _rtMwManifest = m;
+                _rtMwManifestFetchedAt = Date.now();
+                return m;
+            });
+    }
+
+    // Entry point — called from the deferred-loads block once a storm
+    // is selected. Fetches the manifest, filters to last-24h passes
+    // covering the storm, groups by orbit, and renders.
+    function _rtLoadStormMwPasses(storm) {
+        var section  = document.getElementById('rt-mw-storm-section');
+        var statusEl = document.getElementById('rt-mw-storm-status');
+        var listEl   = document.getElementById('rt-mw-storm-list');
+        if (!section || !storm || storm.lat == null || storm.lon == null) {
+            if (section) section.style.display = 'none';
+            return;
+        }
+        section.style.display = '';
+        if (statusEl) statusEl.textContent = 'loading…';
+        if (listEl) listEl.innerHTML = '';
+
+        _rtMwStormState.atcfId = storm.atcf_id;
+        _rtMwStormState.lat = storm.lat;
+        _rtMwStormState.lon = storm.lon;
+
+        _rtMwFetchManifest()
+            .then(function (m) {
+                if (_rtMwStormState.atcfId !== storm.atcf_id) return;  // moved on
+                var entries = (m && m.entries) || [];
+                var nowMs = Date.now();
+                var orbitMap = {};
+                for (var i = 0; i < entries.length; i++) {
+                    var e = entries[i];
+                    var t = Date.parse(e.scan_start);
+                    if (!isFinite(t) || (nowMs - t) > _RT_MW_WINDOW_MS) continue;
+                    if (!_rtMwBoundsContains(e.bounds, storm.lat, storm.lon)) continue;
+                    var oid = e.orbit_id;
+                    if (!orbitMap[oid]) {
+                        orbitMap[oid] = {
+                            orbit_id: oid,
+                            sensor: e.sensor,
+                            platform: e.platform,
+                            scan_start: e.scan_start,
+                            scan_start_ms: t,
+                            bounds: e.bounds,
+                            products: {}    // product -> { png_url, geojson_url }
+                        };
+                    }
+                    orbitMap[oid].products[e.product] = {
+                        png_url: e.png_url,
+                        geojson_url: e.geojson_url
+                    };
+                }
+                // Newest first — analyst typically wants "what's the latest
+                // pass" at a glance; older context follows down the list.
+                var orbits = Object.keys(orbitMap).map(function (k) { return orbitMap[k]; });
+                orbits.sort(function (a, b) { return b.scan_start_ms - a.scan_start_ms; });
+                _rtMwStormState.orbits = orbits;
+                if (statusEl) {
+                    statusEl.textContent = orbits.length
+                        ? (orbits.length + ' pass' + (orbits.length === 1 ? '' : 'es'))
+                        : 'no passes';
+                }
+                _rtRenderStormMwPasses();
+            })
+            .catch(function (err) {
+                console.warn('[RT MW Storm] manifest fetch failed:', err);
+                if (statusEl) statusEl.textContent = 'unavailable';
+                if (listEl) listEl.innerHTML = '';
+            });
+    }
+
+    // Render the chronological pass list using the currently-selected
+    // product (default 89pct). Each card shows: storm-cropped thumbnail,
+    // sensor + platform, time-ago, full UTC timestamp. Click opens the
+    // full pass PNG (full swath, not cropped) in a new tab.
+    function _rtRenderStormMwPasses() {
+        var listEl = document.getElementById('rt-mw-storm-list');
+        if (!listEl) return;
+        var orbits = _rtMwStormState.orbits || [];
+        var product = _rtMwStormState.product || '89pct';
+        var lat = _rtMwStormState.lat;
+        var lon = _rtMwStormState.lon;
+        if (!orbits.length) {
+            listEl.innerHTML = '<div class="rt-mw-storm-empty">No microwave passes have covered this storm in the last 24 hours.</div>';
+            return;
+        }
+        listEl.innerHTML = '';
+        var nowMs = Date.now();
+        for (var i = 0; i < orbits.length; i++) {
+            var o = orbits[i];
+            var pr = o.products[product];
+            var card = document.createElement('div');
+            card.className = 'rt-mw-storm-card';
+            var swatch = _RT_MW_SENSOR_COLOR[o.sensor] || '#cbd5e1';
+            var ageMin = (nowMs - o.scan_start_ms) / 60000;
+            var ageStr = _rtMwFmtAgo(ageMin);
+            var utcStr = o.scan_start.replace('T', ' ').slice(0, 16) + 'Z';
+            var thumbWrap = document.createElement('div');
+            thumbWrap.className = 'rt-mw-storm-thumb-wrap';
+            if (pr && pr.png_url) {
+                var c = document.createElement('canvas');
+                c.width = _RT_MW_THUMB_PX;
+                c.height = _RT_MW_THUMB_PX;
+                c.className = 'rt-mw-storm-thumb';
+                c.title = o.sensor + ' (' + o.platform + ') — '
+                        + product + ' — ' + utcStr
+                        + '\nClick to open full pass';
+                thumbWrap.appendChild(c);
+                _rtDrawStormMwThumbnail(c, o, lat, lon, pr.png_url);
+                (function (url) {
+                    c.addEventListener('click', function () {
+                        window.open(url, '_blank', 'noopener');
+                    });
+                })(pr.png_url);
+            } else {
+                var miss = document.createElement('div');
+                miss.className = 'rt-mw-storm-thumb-missing';
+                miss.textContent = product + ' n/a';
+                thumbWrap.appendChild(miss);
+            }
+            var meta = document.createElement('div');
+            meta.className = 'rt-mw-storm-meta';
+            meta.innerHTML =
+                '<div class="rt-mw-storm-sensor">'
+                + '<span class="rt-mw-storm-swatch" style="background:' + swatch + '"></span>'
+                + '<strong>' + _esc(o.sensor) + '</strong> '
+                + '<span class="rt-mw-storm-platform">' + _esc(o.platform || '') + '</span>'
+                + '</div>'
+                + '<div class="rt-mw-storm-time">' + _esc(ageStr) + '</div>'
+                + '<div class="rt-mw-storm-utc">' + _esc(utcStr) + '</div>';
+            card.appendChild(thumbWrap);
+            card.appendChild(meta);
+            listEl.appendChild(card);
+        }
+    }
+
+    // Crop a storm-centered sub-rectangle out of the pass PNG. The
+    // PNG is equirectangular over `entry.bounds` (Leaflet-style
+    // [[south,west],[north,east]]); we compute the storm's ±_RT_MW_HALF_DEG
+    // box in geographic coords, map it to pixel space via linear scaling,
+    // and drawImage the crop into the thumbnail canvas. Off-bounds
+    // regions stay transparent on the canvas (handled by drawImage).
+    function _rtDrawStormMwThumbnail(canvas, orbit, lat, lon, pngUrl) {
+        var ctx = canvas.getContext('2d');
+        ctx.fillStyle = 'rgba(15,22,36,0.55)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        var img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = function () {
+            var south = orbit.bounds[0][0], west = orbit.bounds[0][1];
+            var north = orbit.bounds[1][0], east = orbit.bounds[1][1];
+            // Handle dateline wrap: shift east-side bounds so west < east.
+            var wWrapped = west, eWrapped = east, lonShift = lon;
+            if (west > east) {
+                eWrapped = east + 360;
+                if (lonShift < west) lonShift += 360;
+            }
+            var spanLat = north - south;
+            var spanLon = eWrapped - wWrapped;
+            if (spanLat <= 0 || spanLon <= 0) return;
+            // Pixel coords: top-left = (north, west). y increases southward.
+            var stormBox = {
+                latMax: lat + _RT_MW_HALF_DEG,
+                latMin: lat - _RT_MW_HALF_DEG,
+                lonMin: lonShift - _RT_MW_HALF_DEG,
+                lonMax: lonShift + _RT_MW_HALF_DEG
+            };
+            var sx = (stormBox.lonMin - wWrapped) / spanLon * img.width;
+            var sy = (north - stormBox.latMax) / spanLat * img.height;
+            var sw = (2 * _RT_MW_HALF_DEG) / spanLon * img.width;
+            var sh = (2 * _RT_MW_HALF_DEG) / spanLat * img.height;
+            // Clamp source rect to image bounds; off-image area stays the
+            // dim background from the fillRect above.
+            var sxC = Math.max(0, sx);
+            var syC = Math.max(0, sy);
+            var sxE = Math.min(img.width, sx + sw);
+            var syE = Math.min(img.height, sy + sh);
+            var swC = sxE - sxC;
+            var shC = syE - syC;
+            if (swC <= 0 || shC <= 0) return;
+            var dx = (sxC - sx) / sw * canvas.width;
+            var dy = (syC - sy) / sh * canvas.height;
+            var dw = swC / sw * canvas.width;
+            var dh = shC / sh * canvas.height;
+            ctx.drawImage(img, sxC, syC, swC, shC, dx, dy, dw, dh);
+            // Draw a small storm-center cross so the user knows where
+            // the storm sits inside the cropped tile.
+            var cx = canvas.width / 2;
+            var cy = canvas.height / 2;
+            ctx.strokeStyle = 'rgba(253, 224, 71, 0.95)';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.moveTo(cx - 6, cy); ctx.lineTo(cx + 6, cy);
+            ctx.moveTo(cx, cy - 6); ctx.lineTo(cx, cy + 6);
+            ctx.stroke();
+        };
+        img.onerror = function () {
+            ctx.fillStyle = 'rgba(239,68,68,0.4)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = '#fca5a5';
+            ctx.font = '11px Inter, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('load failed', canvas.width / 2, canvas.height / 2);
+        };
+        img.src = pngUrl;
+    }
+
+    function _rtMwFmtAgo(ageMin) {
+        if (ageMin < 1)  return 'just now';
+        if (ageMin < 60) return Math.round(ageMin) + ' min ago';
+        var h = ageMin / 60;
+        if (h < 24) return h.toFixed(1) + ' h ago';
+        return (h / 24).toFixed(1) + ' d ago';
+    }
+
+    // HTML-escape user-or-server strings before innerHTML. Same shape
+    // as the helper in tc_mw_layer.js so the UI's defensive posture
+    // stays consistent across both places this kind of label gets
+    // built.
+    function _esc(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    // Product chip click — switch the active product and re-render.
+    // Bound once at module init below.
+    function _rtBindStormMwProductChips() {
+        var bar = document.getElementById('rt-mw-storm-products');
+        if (!bar) return;
+        bar.addEventListener('click', function (ev) {
+            var btn = ev.target.closest && ev.target.closest('.rt-mw-storm-chip');
+            if (!btn) return;
+            var product = btn.getAttribute('data-product');
+            if (!product || product === _rtMwStormState.product) return;
+            _rtMwStormState.product = product;
+            var chips = bar.querySelectorAll('.rt-mw-storm-chip');
+            for (var i = 0; i < chips.length; i++) {
+                chips[i].classList.toggle('active',
+                    chips[i].getAttribute('data-product') === product);
+            }
+            _rtRenderStormMwPasses();
+        });
+    }
+    _rtBindStormMwProductChips();
 
     /**
      * Select and render a specific ASCAT pass.
