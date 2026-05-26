@@ -3052,12 +3052,22 @@
     var _satIrCenterFixMarker = null;          // L.marker for center fix
     var _SAT_IR_RADIUS_DEG = 10;               // ir-frame.jpg radius_deg
 
-    // Whether to use the Leaflet IR display right now. Conservative —
-    // only fires for the default colormap in Diagnostics mode. All
-    // other combinations stay on canvas (Phase 3-5 broaden this).
+    // Whether to use the Leaflet IR display right now. Now covers
+    // every non-Asymmetry mode on the default colormap — the canvas
+    // path stays only for Asymmetry (needs raw Tb client-side) and
+    // for custom colormaps (Phase 4 will fold them in via off-screen
+    // canvas → blob URL → L.imageOverlay).
+    //
+    // Why this matters for WV/Vis mode specifically: the LEFT pane
+    // shows IR while the RIGHT pane shows WV. Both should use the
+    // fast JPG-overlay path so the user doesn't see a fully-loaded
+    // WV right pane next to a still-loading canvas IR left pane.
     function _satIrShouldUseLeaflet() {
-        return viewMode === 'diagnostics'
-               && selectedColormap === 'claude-ir';
+        if (selectedColormap !== 'claude-ir') return false;
+        return (viewMode === 'diagnostics'
+                || viewMode === 'compare-wv'
+                || viewMode === 'compare-vis'
+                || viewMode === 'track-map');
     }
 
     // Toggle canvas vs Leaflet visibility for the left IR pane.
