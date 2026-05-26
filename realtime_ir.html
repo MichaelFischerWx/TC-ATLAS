@@ -610,6 +610,7 @@
                     <button class="sat-mode-btn" id="sat-mode-asym" data-mode="asymmetry">Asymmetry</button>
                     <button class="sat-mode-btn" id="sat-mode-wv" data-mode="compare-wv">WV</button>
                     <button class="sat-mode-btn" id="sat-mode-vis" data-mode="compare-vis">Vis</button>
+                    <button class="sat-mode-btn" id="sat-mode-mw" data-mode="microwave" title="Microwave passes (24h) — click any pass to compare with IR side-by-side">MW</button>
                 </div>
             </div>
             <div class="sat-sidebar-section" id="sat-compare-options" style="display:none;">
@@ -712,6 +713,26 @@
                             </div>
                             <div class="sat-axes-y sat-axes-y-left" id="sat-axes-y-asym"></div>
                             <div class="sat-axes-x" id="sat-axes-x-asym"></div>
+                        </div>
+                        <!-- Microwave passes panel (mirrors the Global-Map
+                             storm-detail "Microwave Passes (24h)" section).
+                             Shares the same renderer + compare modal —
+                             prefix `sat-mw-` keeps state segregated from
+                             the rt-mw- copy when both panels exist. -->
+                        <div id="sat-mw-section" class="sat-mw-panel" style="display:none;">
+                            <div class="sat-panel-label" style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+                                <span>Microwave Passes (24h)</span>
+                                <span id="sat-mw-status" style="font-size:0.7rem;color:#94a3b8;font-weight:500;"></span>
+                            </div>
+                            <div id="sat-mw-products" class="rt-mw-storm-products" style="padding:8px 4px 4px;">
+                                <button type="button" class="rt-mw-storm-chip active" data-product="89pct">89 PCT</button>
+                                <button type="button" class="rt-mw-storm-chip" data-product="37color">37 color</button>
+                                <button type="button" class="rt-mw-storm-chip" data-product="89v">89V</button>
+                                <button type="button" class="rt-mw-storm-chip" data-product="89h">89H</button>
+                                <button type="button" class="rt-mw-storm-chip" data-product="37v">37V</button>
+                                <button type="button" class="rt-mw-storm-chip" data-product="37h">37H</button>
+                            </div>
+                            <div id="sat-mw-list" class="rt-mw-storm-list" style="max-height:none;flex:1;padding:0 4px 8px;"></div>
                         </div>
                     </div>
                 </div>

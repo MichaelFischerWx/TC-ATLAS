@@ -3257,6 +3257,26 @@ html:not([data-view="map"]) #ir-global-env-cbars {
 }
 [data-theme="dark"] .rt-mw-storm-time { color: var(--text, #e2e8f0); }
 
+/* Storm-Satellite-tab MW panel — wraps the chip bar + scrollable
+   card list to fill the right-panel column. The list itself uses
+   the shared .rt-mw-storm-list class; the wrapper just controls
+   the column layout and lets the list grow with the available
+   vertical space (instead of the 460-px cap used in the Global
+   Map's storm-detail right rail). */
+.sat-mw-panel {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+    padding: 8px 4px 8px 8px;
+    overflow: hidden;
+}
+.sat-mw-panel .rt-mw-storm-list {
+    max-height: none;
+    flex: 1;
+    overflow-y: auto;
+}
+
 /* ════════════════════════════════════════════════════════════════
    IR ↔ Microwave side-by-side compare modal. Click a MW pass
    thumbnail in the storm-detail panel to open. Mirrors the genesis

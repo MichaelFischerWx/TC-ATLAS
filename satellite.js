@@ -2458,6 +2458,7 @@
         var compareOptions = document.getElementById('sat-compare-options');
         var trackPanel = document.getElementById('sat-track-panel');
         var asymPanel = document.getElementById('sat-asym-panel');
+        var mwPanel = document.getElementById('sat-mw-section');
 
         if (rightPanel) rightPanel.setAttribute('data-mode', newMode);
 
@@ -2467,8 +2468,17 @@
         if (compareOptions) compareOptions.style.display = 'none';
         if (trackPanel) trackPanel.style.display = 'none';
         if (asymPanel) asymPanel.style.display = 'none';
+        if (mwPanel) mwPanel.style.display = 'none';
 
-        if (newMode === 'diagnostics') {
+        if (newMode === 'microwave') {
+            // Reuse realtime_ir.js's MW passes loader against the
+            // sat-mw-* DOM IDs. Compare modal is body-level so it
+            // works from any view without further plumbing.
+            if (mwPanel) mwPanel.style.display = '';
+            if (currentStorm && typeof window._rtLoadStormMwPasses === 'function') {
+                window._rtLoadStormMwPasses(currentStorm, 'sat-mw');
+            }
+        } else if (newMode === 'diagnostics') {
             if (diagPanel) diagPanel.style.display = '';
             setTimeout(function () {
                 var r = document.getElementById('sat-diag-radial');
@@ -2614,18 +2624,30 @@
 
         // Reset to diagnostics mode on storm change
         if (viewMode !== 'diagnostics') {
-            viewMode = 'diagnostics';
-            var rightPanel = document.getElementById('sat-panel-right');
-            var diagPanel = document.getElementById('sat-diag-panel');
-            var comparePanel = document.getElementById('sat-compare-panel');
-            var compareOptions = document.getElementById('sat-compare-options');
-            if (rightPanel) rightPanel.setAttribute('data-mode', 'diagnostics');
-            if (diagPanel) diagPanel.style.display = '';
-            if (comparePanel) comparePanel.style.display = 'none';
-            if (compareOptions) compareOptions.style.display = 'none';
-            var modeBtns = document.querySelectorAll('.sat-mode-btn');
-            for (var mi = 0; mi < modeBtns.length; mi++) {
-                modeBtns[mi].classList.toggle('active', modeBtns[mi].getAttribute('data-mode') === 'diagnostics');
+            // Microwave mode is the exception — it's storm-bound but
+            // not coupled to the IR frame state, so we can just refresh
+            // the panel against the new storm without bouncing back to
+            // diagnostics.
+            if (viewMode === 'microwave') {
+                if (currentStorm && typeof window._rtLoadStormMwPasses === 'function') {
+                    window._rtLoadStormMwPasses(currentStorm, 'sat-mw');
+                }
+            } else {
+                viewMode = 'diagnostics';
+                var rightPanel = document.getElementById('sat-panel-right');
+                var diagPanel = document.getElementById('sat-diag-panel');
+                var comparePanel = document.getElementById('sat-compare-panel');
+                var compareOptions = document.getElementById('sat-compare-options');
+                var mwPanel = document.getElementById('sat-mw-section');
+                if (rightPanel) rightPanel.setAttribute('data-mode', 'diagnostics');
+                if (diagPanel) diagPanel.style.display = '';
+                if (comparePanel) comparePanel.style.display = 'none';
+                if (compareOptions) compareOptions.style.display = 'none';
+                if (mwPanel) mwPanel.style.display = 'none';
+                var modeBtns = document.querySelectorAll('.sat-mode-btn');
+                for (var mi = 0; mi < modeBtns.length; mi++) {
+                    modeBtns[mi].classList.toggle('active', modeBtns[mi].getAttribute('data-mode') === 'diagnostics');
+                }
             }
         }
 

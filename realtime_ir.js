@@ -11835,7 +11835,13 @@
     var _rtMwStormState = {
         atcfId: null, lat: null, lon: null, product: '89pct',
         storm: null, // full storm record (for the compare modal header)
-        orbits: []   // grouped & sorted entries for the current storm
+        orbits: [],   // grouped & sorted entries for the current storm
+        // DOM id prefix for the current panel. Both the Global Map's
+        // storm-detail right-rail (`rt-mw-storm-*`) and the Storm
+        // Satellite tab's right-panel (`sat-mw-*`) hook the same loader
+        // + renderer via this prefix — last-set-wins, only one panel
+        // is ever visible at a time.
+        prefix: 'rt-mw-storm'
     };
 
     function _rtMwBoundsContains(bounds, lat, lon) {
@@ -11869,10 +11875,12 @@
     // Entry point — called from the deferred-loads block once a storm
     // is selected. Fetches the manifest, filters to last-24h passes
     // covering the storm, groups by orbit, and renders.
-    function _rtLoadStormMwPasses(storm) {
-        var section  = document.getElementById('rt-mw-storm-section');
-        var statusEl = document.getElementById('rt-mw-storm-status');
-        var listEl   = document.getElementById('rt-mw-storm-list');
+    function _rtLoadStormMwPasses(storm, prefix) {
+        if (prefix) _rtMwStormState.prefix = prefix;
+        var px = _rtMwStormState.prefix;
+        var section  = document.getElementById(px + '-section');
+        var statusEl = document.getElementById(px + '-status');
+        var listEl   = document.getElementById(px + '-list');
         if (!section || !storm || storm.lat == null || storm.lon == null) {
             if (section) section.style.display = 'none';
             return;
@@ -11938,7 +11946,8 @@
     // sensor + platform, time-ago, full UTC timestamp. Click opens the
     // full pass PNG (full swath, not cropped) in a new tab.
     function _rtRenderStormMwPasses() {
-        var listEl = document.getElementById('rt-mw-storm-list');
+        var px = _rtMwStormState.prefix || 'rt-mw-storm';
+        var listEl = document.getElementById(px + '-list');
         if (!listEl) return;
         var orbits = _rtMwStormState.orbits || [];
         var product = _rtMwStormState.product || '89pct';
@@ -11949,7 +11958,7 @@
             return;
         }
         listEl.innerHTML = '';
-        var statusEl2 = document.getElementById('rt-mw-storm-status');
+        var statusEl2 = document.getElementById(px + '-status');
         var coveredCount = 0;
         var resolvedCount = 0;
         if (statusEl2) statusEl2.textContent = 'filtering…';
@@ -12251,26 +12260,35 @@
             .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
 
-    // Product chip click — switch the active product and re-render.
-    // Bound once at module init below.
-    function _rtBindStormMwProductChips() {
-        var bar = document.getElementById('rt-mw-storm-products');
+    // Product chip click — bound on document so both the Global Map's
+    // storm-detail panel (#rt-mw-storm-products) and the Storm
+    // Satellite tab's panel (#sat-mw-products) work through the same
+    // listener. The chip bars use shared markup (.rt-mw-storm-chip)
+    // for visual consistency; delegation keeps the JS lean.
+    document.addEventListener('click', function (ev) {
+        var btn = ev.target.closest && ev.target.closest('.rt-mw-storm-chip');
+        if (!btn) return;
+        // Ignore chips inside the compare modal — that bar has its own
+        // handler that syncs both ways.
+        if (btn.closest('#rt-mw-compare-modal')) return;
+        var bar = btn.parentElement;
         if (!bar) return;
-        bar.addEventListener('click', function (ev) {
-            var btn = ev.target.closest && ev.target.closest('.rt-mw-storm-chip');
-            if (!btn) return;
-            var product = btn.getAttribute('data-product');
-            if (!product || product === _rtMwStormState.product) return;
-            _rtMwStormState.product = product;
-            var chips = bar.querySelectorAll('.rt-mw-storm-chip');
-            for (var i = 0; i < chips.length; i++) {
-                chips[i].classList.toggle('active',
-                    chips[i].getAttribute('data-product') === product);
-            }
-            _rtRenderStormMwPasses();
+        var product = btn.getAttribute('data-product');
+        if (!product || product === _rtMwStormState.product) return;
+        _rtMwStormState.product = product;
+        // Sync ALL chip bars on the page so panels switching out stay
+        // visually consistent with the current selection.
+        document.querySelectorAll('.rt-mw-storm-chip').forEach(function (b) {
+            b.classList.toggle('active',
+                b.getAttribute('data-product') === product);
         });
-    }
-    _rtBindStormMwProductChips();
+        _rtRenderStormMwPasses();
+    });
+
+    // Expose the loader so satellite.js (Storm Satellite tab) can
+    // mount the same panel by passing prefix='sat-mw'. The compare
+    // modal is already body-level, so it works from any view.
+    window._rtLoadStormMwPasses = _rtLoadStormMwPasses;
 
     // ════════════════════════════════════════════════════════════════
     //  IR ↔ MW side-by-side compare modal
