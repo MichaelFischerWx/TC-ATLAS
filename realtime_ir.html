@@ -791,6 +791,16 @@
                                 </select>
                             </div>
                             <div id="sat-leaflet-mw" class="sat-leaflet-pane sat-leaflet-pane-mw"></div>
+                            <!-- MW colorbar — rendered as a floating
+                                 overlay so the Leaflet pane stays
+                                 full-height. JS swaps the gradient +
+                                 label range when the product chip
+                                 changes (89 PCT vs 37V vs etc). -->
+                            <div class="sat-colorbar-horiz sat-mw-colorbar" id="sat-mw-cb">
+                                <span id="sat-mw-cb-min" class="sat-cb-label-left">180</span>
+                                <canvas id="sat-mw-cb-canvas" width="200" height="10"></canvas>
+                                <span id="sat-mw-cb-max" class="sat-cb-label-right">290 K</span>
+                            </div>
                         </div>
                     </div>
                 </div>

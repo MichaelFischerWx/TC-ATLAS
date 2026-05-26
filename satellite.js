@@ -2995,6 +2995,13 @@
             _doFit();
             _satMwUpdateMarkers();
             _satMwLoadPasses();
+            // Render the colorbar immediately so the user sees the
+            // temperature scale on MW mode entry, before any pass
+            // selection. Re-fires inside _satMwRenderMwOverlay when
+            // product changes.
+            if (typeof _satMwRenderColorbar === 'function') {
+                _satMwRenderColorbar();
+            }
             setTimeout(_doFit, 200);
         });
     }
@@ -3168,6 +3175,7 @@
         var pr = orbit.products[_satMwProduct];
         _satMwSetProductLabel(orbit.sensor + ' · ' + (orbit.platform || '?') + ' · '
                               + _satMwProductLabel(_satMwProduct));
+        _satMwRenderColorbar();
         if (_satMwMwOverlay) {
             _satMwLeafletMw.removeLayer(_satMwMwOverlay);
             _satMwMwOverlay = null;
@@ -3185,6 +3193,66 @@
         return ({ '89pct': '89 PCT', '37color': '37 color',
                   '89v': '89V', '89h': '89H',
                   '37v': '37V', '37h': '37H' })[p] || p;
+    }
+
+    // Approximate colormaps for each MW product. Server-side rendering
+    // bakes these into the PNGs; we replicate the lookup table here
+    // (loosely) just to populate the floating colorbar.
+    var _SAT_MW_COLORBARS = {
+        '89pct': {
+            min: 180, max: 290, unit: 'K',
+            stops: [
+                [180, 'rgb(20, 0, 80)'],
+                [220, 'rgb(0, 120, 200)'],
+                [240, 'rgb(200, 200, 200)'],
+                [260, 'rgb(255, 200, 50)'],
+                [275, 'rgb(220, 50, 30)'],
+                [290, 'rgb(50, 0, 30)'],
+            ],
+        },
+        '37color': {
+            min: null, max: null, unit: '',
+            label: '37 color (R=PCT37, G=V37, B=H37)',
+            stops: null,
+        },
+        '89v':  { min: 180, max: 300, unit: 'K (V)', stops: _satMwGrayStops() },
+        '89h':  { min: 180, max: 300, unit: 'K (H)', stops: _satMwGrayStops() },
+        '37v':  { min: 180, max: 300, unit: 'K (V)', stops: _satMwGrayStops() },
+        '37h':  { min: 180, max: 300, unit: 'K (H)', stops: _satMwGrayStops() },
+    };
+    function _satMwGrayStops() {
+        return [
+            [180, 'rgb(10, 10, 30)'],
+            [220, 'rgb(80, 80, 100)'],
+            [260, 'rgb(180, 180, 200)'],
+            [300, 'rgb(255, 255, 255)'],
+        ];
+    }
+
+    function _satMwRenderColorbar() {
+        var cb = _SAT_MW_COLORBARS[_satMwProduct];
+        var canvas = document.getElementById('sat-mw-cb-canvas');
+        var minEl = document.getElementById('sat-mw-cb-min');
+        var maxEl = document.getElementById('sat-mw-cb-max');
+        if (!canvas || !minEl || !maxEl) return;
+        var ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if (!cb || !cb.stops) {
+            // 37color is RGB — no traditional colorbar makes sense.
+            minEl.textContent = '';
+            maxEl.textContent = (cb && cb.label) || '';
+            return;
+        }
+        // Build a linear-gradient with the product's color stops.
+        var grad = ctx.createLinearGradient(0, 0, canvas.width, 0);
+        var range = cb.max - cb.min;
+        cb.stops.forEach(function (s) {
+            grad.addColorStop((s[0] - cb.min) / range, s[1]);
+        });
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        minEl.textContent = cb.min + '';
+        maxEl.textContent = cb.max + ' ' + cb.unit;
     }
 
     // Fetch /ir-frames-meta (cached per storm), pick the frame index
@@ -3373,14 +3441,15 @@
         if (useLeaflet) {
             if (canvasWrap) canvasWrap.style.display = 'none';
             if (leafletDiv) leafletDiv.style.display = '';
-            // Lat/lon labels come from Leaflet's basemap + an optional
-            // graticule, so hide the canvas-era axes elements that
-            // would otherwise sit awkwardly outside the map. The
-            // colorbar also goes away — without a canvas to anchor it
-            // it ends up floating in the middle of the Leaflet pane.
+            // Lat/lon labels come from Leaflet's basemap + the new
+            // graticule overlay, so hide the canvas-era DOM axes.
             if (axesY) axesY.style.display = 'none';
             if (axesX) axesX.style.display = 'none';
-            if (colorbar) colorbar.style.display = 'none';
+            // Keep the colorbar visible — CSS pins it as a floating
+            // overlay at the bottom of the panel when body has the
+            // sat-leaflet-active class, so the Leaflet pane retains
+            // full height and the user gets brightness-temp context.
+            if (colorbar) colorbar.style.display = '';
         } else {
             if (canvasWrap) canvasWrap.style.display = '';
             if (leafletDiv) leafletDiv.style.display = 'none';
@@ -3741,10 +3810,12 @@
             if (leafletDiv) leafletDiv.style.display = '';
             if (axesY) axesY.style.display = 'none';
             if (axesX) axesX.style.display = 'none';
-            // Colorbar hidden so the right Leaflet pane matches the
-            // left pane's height (without this, the colorbar steals
-            // ~60 px from the map area and the panes look mismatched).
-            if (colorbar) colorbar.style.display = 'none';
+            // Keep the WV/Vis colorbar visible — pinned as a floating
+            // overlay at the bottom of the panel via the
+            // body.sat-leaflet-active CSS rule. Panes stay equal-
+            // height because the colorbar floats over the map rather
+            // than taking flex space.
+            if (colorbar) colorbar.style.display = '';
         } else {
             if (canvasWrap) canvasWrap.style.display = '';
             if (leafletDiv) leafletDiv.style.display = 'none';
