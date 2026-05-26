@@ -3820,18 +3820,24 @@
         //   • Microwave mode is preserved across storm changes
         //     (storm-bound but IR-frame-independent — just refresh
         //     the panel against the new storm).
+        // ── Smart-default mode switch (deferred below) ────────────
         var smartMode = (currentStorm
                          && isFinite(currentStorm.vmax_kt)
                          && currentStorm.vmax_kt >= 65)
             ? 'diagnostics' : 'compare-wv';
-        if (viewMode === 'microwave') {
-            _satMwActivate();
-        } else if (viewMode !== smartMode) {
-            // setViewMode early-returns when newMode equals viewMode,
-            // so nuke the cache first to ensure the full mode setup
-            // (panel show/hide + button active state + frame fetch).
-            viewMode = '__pre_smart_default';
-            setViewMode(smartMode);
+        // Local helper — actually runs the mode switch. We hold off
+        // calling this until AFTER loadFrames so IR fetches grab
+        // the browser's connection slots first; otherwise the
+        // setViewMode → _refetchRightFrames pipeline starts WV/Vis
+        // fetches before IR and the user sees WV finish loading
+        // first, which feels backwards.
+        function _applySmartDefault() {
+            if (viewMode === 'microwave') {
+                _satMwActivate();
+            } else if (viewMode !== smartMode) {
+                viewMode = '__pre_smart_default';
+                setViewMode(smartMode);
+            }
         }
 
         if (currentStorm) {
@@ -3863,6 +3869,14 @@
             showLoader('Loading satellite data\u2026');
             loadFrames(atcfId);
         }
+
+        // Now that IR loading is in flight, fire the smart-default
+        // mode switch. setViewMode kicks off the WV/Vis band fetches,
+        // which queue behind the already-pending IR fetches in the
+        // browser's connection pool \u2014 so the LEFT pane (IR) lands
+        // first, not the RIGHT pane (WV).
+        _applySmartDefault();
+
         _ga('sat_select_storm', { storm: atcfId });
     }
 
