@@ -2740,6 +2740,8 @@
         _satIrSyncWired = true;
         _satAddMapControls(_satMwLeafletIr);
         _satAddMapControls(_satMwLeafletMw);
+        _satAddMapLegend(_satMwLeafletIr);
+        _satAddMapLegend(_satMwLeafletMw);
     }
 
     // Recenter every active Leaflet map on the current storm, zoom 6.
@@ -2855,8 +2857,29 @@
     //  the existing #sat-tooltip div so the tooltip styling matches
     //  the canvas-mode hover from the pre-Leaflet era.
     // ════════════════════════════════════════════════════════════════
+    // Touch-device detection — used to short-circuit hover-driven
+    // work on phones/tablets, where:
+    //   • mousemove rarely fires (touch only emits it on tap),
+    //   • iOS Safari's ~250-384 MB tab limit makes the lazy raw-Tb
+    //     backfill (~2-4 MB JSON per storm) a real factor in OOM
+    //     crashes during heavy IR+WV animation.
+    // `pointer:coarse` + `hover:none` reliably identify touch-only UAs
+    // without relying on userAgent string sniffing.
+    function _satIsTouchDevice() {
+        if (typeof window.matchMedia !== 'function') return false;
+        return window.matchMedia('(pointer: coarse)').matches
+            && window.matchMedia('(hover: none)').matches;
+    }
+
     function _satAttachLeafletHover(map, framesProvider, label) {
         if (!map || map._satHoverAttached) return;
+        // Skip hover entirely on touch devices — mousemove is a
+        // non-event on touch, and attaching the handler still wires
+        // up the lazy raw-Tb trigger that wastes memory on mobile.
+        if (_satIsTouchDevice()) {
+            map._satHoverAttached = true;   // mark so we don't retry
+            return;
+        }
         map._satHoverAttached = true;
         var tooltip = document.getElementById('sat-tooltip');
         if (!tooltip) return;
@@ -2965,6 +2988,53 @@
         });
         new Ctrl().addTo(map);
         map._satControlsAdded = true;
+    }
+
+    // Bottom-left floating legend explaining the on-map markers.
+    // Rows are toggled visible/hidden as markers are added/removed so
+    // the legend only advertises what's actually drawn. The legend
+    // hides itself entirely when none of its rows are visible.
+    function _satAddMapLegend(map) {
+        if (!map || map._satLegendAdded) return;
+        var Ctrl = L.Control.extend({
+            options: { position: 'bottomleft' },
+            onAdd: function () {
+                var box = L.DomUtil.create('div', 'sat-map-legend');
+                box.innerHTML = ''
+                    + '<div class="sat-legend-row" data-key="best-track" style="display:none;">'
+                    +   '<span class="sat-legend-swatch sat-legend-cross"></span>'
+                    +   '<span class="sat-legend-label">Best-track (latest fix)</span>'
+                    + '</div>'
+                    + '<div class="sat-legend-row" data-key="interp" style="display:none;">'
+                    +   '<span class="sat-legend-swatch sat-legend-ring"></span>'
+                    +   '<span class="sat-legend-label">Position at MW pass time (interp.)</span>'
+                    + '</div>'
+                    + '<div class="sat-legend-row" data-key="centerfix" style="display:none;">'
+                    +   '<span class="sat-legend-swatch sat-legend-cyancross"></span>'
+                    +   '<span class="sat-legend-label">IR center fix</span>'
+                    + '</div>';
+                box.style.display = 'none';
+                L.DomEvent.disableClickPropagation(box);
+                map._satLegendEl = box;
+                return box;
+            }
+        });
+        new Ctrl().addTo(map);
+        map._satLegendAdded = true;
+    }
+    function _satLegendSetRow(map, key, visible) {
+        if (!map || !map._satLegendEl) return;
+        var row = map._satLegendEl.querySelector('[data-key="' + key + '"]');
+        if (!row) return;
+        row.style.display = visible ? '' : 'none';
+        // Hide the whole legend if no rows are visible — keeps the
+        // overlay out of the way when there's nothing to label.
+        var anyVisible = false;
+        var rows = map._satLegendEl.querySelectorAll('.sat-legend-row');
+        for (var i = 0; i < rows.length; i++) {
+            if (rows[i].style.display !== 'none') { anyVisible = true; break; }
+        }
+        map._satLegendEl.style.display = anyVisible ? '' : 'none';
     }
 
     function _satMwActivate() {
@@ -3288,8 +3358,70 @@
     // closest to the MW scan_start, then drop /ir-frame.jpg as an
     // L.imageOverlay on the IR map. radius_deg=10 → 20° box centered
     // on storm; bounds derived from storm + radius_deg.
+    //
+    // FAST PATH: when the IR animation already loaded per-frame layers
+    // (`_satIrFrameLayers` parallel to `irFrames`), and the closest in-
+    // memory frame is within a small tolerance of the MW pass time,
+    // reuse THAT layer's already-decoded image instead of fetching a
+    // fresh /ir-frame.jpg with different query params. Saves a network
+    // round-trip + image decode every time the user clicks MW after
+    // viewing IR. Falls through to the legacy fetch path when no close
+    // match exists (e.g., MW pass older than DEFAULT_LOOKBACK_HOURS).
     function _satMwRenderIrAtMatchedTime(mwMs, storm) {
         if (!storm || !_satMwLeafletIr) return;
+
+        // ── Fast path: reuse an already-loaded per-frame layer ────────
+        if (irFrames && irFrames.length
+            && _satIrFrameLayers.length === irFrames.length
+            && _satIrFrameStormId === storm.atcf_id) {
+            var bestIdx = -1, bestD = Infinity, bestMs = null;
+            for (var i = 0; i < irFrames.length; i++) {
+                var f = irFrames[i];
+                if (!f || !f.datetime_utc) continue;
+                var t = Date.parse(f.datetime_utc);
+                if (!isFinite(t)) continue;
+                var d = Math.abs(t - mwMs);
+                if (d < bestD) { bestD = d; bestIdx = i; bestMs = t; }
+            }
+            // 30 minutes = one frame at the default interval. Anything
+            // closer is "the right frame". Beyond that we'd be showing
+            // imagery that doesn't actually match the pass time, so
+            // defer to the network path which can reach further back.
+            var TOL_MS = 30 * 60 * 1000;
+            if (bestIdx >= 0 && bestD <= TOL_MS) {
+                // Tear down any legacy single-overlay from a previous
+                // entry to MW mode — we're going to use the per-frame
+                // stack instead, so two overlays on the same map
+                // would stack opacity.
+                if (_satMwIrOverlay) {
+                    _satMwLeafletIr.removeLayer(_satMwIrOverlay);
+                    _satMwIrOverlay = null;
+                }
+                // Phase 4: honor the active colormap. If the user has
+                // picked a non-default cmap, the layer URL may need a
+                // bake — _satIrSyncFrameUrl is a no-op if already at
+                // the target cmap, so this is cheap.
+                if (typeof selectedColormap === 'string') {
+                    _satIrSyncFrameUrl(bestIdx, selectedColormap);
+                }
+                for (var j = 0; j < _satIrFrameLayers.length; j++) {
+                    _satIrFrameLayers[j].setOpacity(j === bestIdx ? 0.92 : 0);
+                }
+                // Update the IR pane label so the user sees the matched
+                // IR frame time alongside the MW pass time.
+                var lblFast = document.getElementById('sat-panel-ir-label');
+                if (lblFast) {
+                    var deltaMinFast = Math.round((bestMs - mwMs) / 60000);
+                    var signFast = deltaMinFast >= 0 ? '+' : '';
+                    lblFast.textContent = 'IR · '
+                        + irFrames[bestIdx].datetime_utc.replace('T', ' ').slice(0, 16)
+                        + 'Z (' + signFast + deltaMinFast + ' min vs MW)';
+                }
+                return;
+            }
+        }
+
+        // ── Legacy path: pass is outside the in-memory IR window ──────
         var url = API_BASE
             + '/ir-monitor/storm/' + encodeURIComponent(storm.atcf_id)
             + '/ir-frames-meta?lookback_hours=' + _RT_MW_LOOKBACK_H
@@ -3374,6 +3506,9 @@
         }
         _placeFix(_satMwLeafletIr, _satMwIrMarkers);
         _placeFix(_satMwLeafletMw, _satMwMwMarkers);
+        // Surface the legend row that explains this marker on each pane.
+        _satLegendSetRow(_satMwLeafletIr, 'best-track', true);
+        _satLegendSetRow(_satMwLeafletMw, 'best-track', true);
     }
     function _satMwUpdateMarkersForOrbit(orbit, storm) {
         if (!orbit || !storm || !_satMwLeafletIr || !_satMwLeafletMw) return;
@@ -3397,6 +3532,8 @@
                 }
                 _placeInterp(_satMwLeafletIr, _satMwIrMarkers);
                 _placeInterp(_satMwLeafletMw, _satMwMwMarkers);
+                _satLegendSetRow(_satMwLeafletIr, 'interp', true);
+                _satLegendSetRow(_satMwLeafletMw, 'interp', true);
             })
             .catch(function () { /* ignore — interp marker optional */ });
     }
@@ -3682,6 +3819,10 @@
         } else if (_satIrCenterFixMarker && _satMwLeafletIr.hasLayer(_satIrCenterFixMarker)) {
             _satMwLeafletIr.removeLayer(_satIrCenterFixMarker);
         }
+        // Reflect centerfix presence in the on-map legend so users know
+        // what the cyan crosshair means (only shown when a fix exists).
+        _satLegendSetRow(_satMwLeafletIr, 'centerfix',
+                         !!(cf && cf.lat != null && cf.lon != null));
     }
 
     // Frame the storm at the current zoomDeg (matches the zoom-button

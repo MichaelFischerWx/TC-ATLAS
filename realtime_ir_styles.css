@@ -3583,6 +3583,85 @@ html:not([data-view="map"]) #ir-global-env-cbars {
     box-shadow: 0 0 0 1px rgba(251, 146, 60, 0.45);
 }
 
+/* Bottom-left floating legend on each Storm-Satellite Leaflet pane.
+   Explains the on-map markers (yellow cross = latest best-track,
+   orange ring = position at MW pass time, cyan ⊕ = IR center fix).
+   Rows are toggled per-marker so the legend only advertises what's
+   actually drawn — see _satLegendSetRow in satellite.js. */
+.sat-map-legend {
+    background: rgba(15, 22, 36, 0.85);
+    color: #e2e8f0;
+    border-radius: 4px;
+    padding: 5px 8px 5px 6px;
+    font-size: 11px;
+    line-height: 1.35;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+    pointer-events: none;
+    user-select: none;
+    max-width: 240px;
+}
+.sat-map-legend .sat-legend-row {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    white-space: nowrap;
+}
+.sat-map-legend .sat-legend-row + .sat-legend-row { margin-top: 3px; }
+.sat-map-legend .sat-legend-swatch {
+    position: relative;
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+}
+/* Yellow cross — matches sat-mw-cross marker. */
+.sat-map-legend .sat-legend-cross::before,
+.sat-map-legend .sat-legend-cross::after {
+    content: '';
+    position: absolute;
+    background: #fde047;
+    box-shadow: 0 0 2px rgba(15, 22, 36, 0.9);
+}
+.sat-map-legend .sat-legend-cross::before {
+    left: 1px; top: 7px; width: 14px; height: 2px;
+}
+.sat-map-legend .sat-legend-cross::after {
+    left: 7px; top: 1px; width: 2px; height: 14px;
+}
+/* Orange ring — matches sat-mw-ring marker. */
+.sat-map-legend .sat-legend-ring {
+    width: 12px;
+    height: 12px;
+    margin: 2px;
+    border-radius: 50%;
+    background: rgba(251, 146, 60, 0.92);
+    border: 1.5px solid rgba(15, 22, 36, 0.95);
+}
+/* Cyan circle + crosshair — matches sat-leaflet-centerfix marker. */
+.sat-map-legend .sat-legend-cyancross {
+    width: 14px;
+    height: 14px;
+    margin: 1px;
+    border: 1.5px solid #00e5ff;
+    border-radius: 50%;
+}
+.sat-map-legend .sat-legend-cyancross::before,
+.sat-map-legend .sat-legend-cyancross::after {
+    content: '';
+    position: absolute;
+    background: #00e5ff;
+}
+.sat-map-legend .sat-legend-cyancross::before {
+    left: 0; top: 6px; width: 14px; height: 1.5px;
+}
+.sat-map-legend .sat-legend-cyancross::after {
+    left: 6px; top: 0; width: 1.5px; height: 14px;
+}
+.sat-map-legend .sat-legend-label {
+    color: #e2e8f0;
+    font-family: inherit;
+}
+
 /* Anchor sat-compare-panel as a positioning context so the WV/Vis
    colorbar (absolute-positioned below) can dock to its bottom edge
    without being clipped by sat-compare-panel's overflow:hidden. */
