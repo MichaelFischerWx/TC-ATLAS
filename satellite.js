@@ -2948,9 +2948,15 @@
     // orbit), sort newest-first, then render the bottom strip.
     function _satMwLoadPasses() {
         var storm = currentStorm;
-        if (!storm || typeof window._rtMwFetchManifest !== 'function') return;
+        if (!storm) return;
         _satMwSetStatus('loading…');
-        window._rtMwFetchManifest()
+        // Prefer the per-storm endpoint (server-side filtered, ~30-80
+        // KB) but fall back to the global manifest if it's unavailable.
+        var fetcher = (typeof window._rtMwFetchStormPasses === 'function')
+            ? function () { return window._rtMwFetchStormPasses(storm); }
+            : window._rtMwFetchManifest;
+        if (!fetcher) return;
+        fetcher()
             .then(function (m) {
                 if (!currentStorm || currentStorm.atcf_id !== storm.atcf_id) return;
                 var entries = (m && m.entries) || [];

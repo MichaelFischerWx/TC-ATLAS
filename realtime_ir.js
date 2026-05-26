@@ -11875,6 +11875,32 @@
             });
     }
 
+    // Per-storm passes via the new server-side filter endpoint.
+    // Returns a Promise of a manifest-shaped object (with `entries`
+    // filtered to passes covering the storm position). Typical
+    // response is 30-80 KB vs the 1 MB global manifest. Falls back
+    // to the full-manifest path on any error so the UI keeps working
+    // during gradual backend rollout.
+    function _rtMwFetchStormPasses(storm) {
+        if (!storm || storm.lat == null || storm.lon == null) {
+            return _rtMwFetchManifest();
+        }
+        var url = API_BASE + '/microwave/nrt-storm-passes'
+            + '?lat=' + encodeURIComponent(storm.lat)
+            + '&lon=' + encodeURIComponent(storm.lon)
+            + '&hours=24';
+        return fetch(url, { cache: 'no-store' })
+            .then(function (r) {
+                if (!r.ok) throw new Error('per-storm passes HTTP ' + r.status);
+                return r.json();
+            })
+            .catch(function (err) {
+                console.warn('[RT MW] per-storm endpoint failed, '
+                    + 'falling back to global manifest:', err);
+                return _rtMwFetchManifest();
+            });
+    }
+
     // Entry point — called from the deferred-loads block once a storm
     // is selected. Fetches the manifest, filters to last-24h passes
     // covering the storm, groups by orbit, and renders.
@@ -11897,7 +11923,7 @@
         _rtMwStormState.lon = storm.lon;
         _rtMwStormState.storm = storm;
 
-        _rtMwFetchManifest()
+        _rtMwFetchStormPasses(storm)
             .then(function (m) {
                 if (_rtMwStormState.atcfId !== storm.atcf_id) return;  // moved on
                 var entries = (m && m.entries) || [];
@@ -12346,6 +12372,7 @@
     // rendering against the same manifest + interp pipeline without
     // duplicating the fetch/cache/dedup logic.
     window._rtMwFetchManifest = _rtMwFetchManifest;
+    window._rtMwFetchStormPasses = _rtMwFetchStormPasses;
     window._rtMwBoundsContains = _rtMwBoundsContains;
     window._rtMwHalfDeg = function () { return _RT_MW_HALF_DEG; };
     window._rtMwWindowMs = function () { return _RT_MW_WINDOW_MS; };
