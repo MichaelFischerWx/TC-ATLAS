@@ -2177,6 +2177,29 @@ def _cli(argv=None):
                                 "global coverage", sensors, quiet_sensors)
                     sensors = quiet_sensors
 
+            # Sort sensors stalest-first so each cron tick attacks the
+            # biggest freshness deficit before the runtime budget runs
+            # out. Without this, the original config order is "GMI,
+            # AMSR2, SSMIS, ATMS" — and GMI's 5-min granule cadence can
+            # consume the full ~26 min budget on its own when there's
+            # any backlog, leaving ATMS perpetually stuck on day-old
+            # data (observed 2026-05-26: ATMS at 31 h while GMI was
+            # current). Stalest-first guarantees the worst-off sensor
+            # gets the first slice of every run's budget; freshness
+            # converges across sensors over a handful of ticks.
+            if args.operational:
+                def _staleness_h(sensor: str) -> float:
+                    last = _last_processed_start_utc(sensor=sensor)
+                    if last is None:
+                        # No prior entries — treat as maximally stale so
+                        # a newly-added sensor (e.g., ATMS just being
+                        # re-enabled) gets attention immediately.
+                        return float("inf")
+                    return (_dt.now(timezone.utc) - last).total_seconds() / 3600.0
+                sensors = sorted(sensors, key=_staleness_h, reverse=True)
+                logger.info("[order] sensors sorted stalest-first: %s",
+                            [(s, round(_staleness_h(s), 1)) for s in sensors])
+
             sess = _pps_session()
             # Manifest-checkpoint timer. Long backfills used to keep the
             # frontend dark until end-of-run; now we write the manifest every
