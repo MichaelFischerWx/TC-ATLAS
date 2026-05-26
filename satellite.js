@@ -3059,18 +3059,13 @@
     var _satIrCenterFixMarker = null;          // L.marker for center fix
     var _SAT_IR_RADIUS_DEG = 10;               // ir-frame.jpg radius_deg
 
-    // Whether to use the Leaflet IR display right now. Now covers
-    // every non-Asymmetry mode on the default colormap — the canvas
-    // path stays only for Asymmetry (needs raw Tb client-side) and
-    // for custom colormaps (Phase 4 will fold them in via off-screen
-    // canvas → blob URL → L.imageOverlay).
-    //
-    // Why this matters for WV/Vis mode specifically: the LEFT pane
-    // shows IR while the RIGHT pane shows WV. Both should use the
-    // fast JPG-overlay path so the user doesn't see a fully-loaded
-    // WV right pane next to a still-loading canvas IR left pane.
+    // Whether to use the Leaflet IR display right now. Phase 4 lifted
+    // the default-colormap restriction — custom colormaps now bake
+    // raw Tb → offscreen canvas → blob URL → L.imageOverlay.setUrl,
+    // so the Leaflet pane works for every colormap. Asymmetry is the
+    // only mode that still uses the canvas painter (it needs the raw
+    // Tb arrays to compute the WN-1 decomposition before rendering).
     function _satIrShouldUseLeaflet() {
-        if (selectedColormap !== 'claude-ir') return false;
         return (viewMode === 'diagnostics'
                 || viewMode === 'compare-wv'
                 || viewMode === 'compare-vis'
@@ -3118,6 +3113,10 @@
     // same bounds — just storm.lat/lon ±10°.
     function _satIrRebuildFrameLayers() {
         if (!_satMwLeafletIr) return;
+        // Release any blob URLs held by the old layers before they
+        // become unreachable — createObjectURL leaks bytes until
+        // revokeObjectURL is called.
+        _satIrRevokeFrameBlobUrls();
         // Tear down old layers (e.g., on storm change).
         for (var i = 0; i < _satIrFrameLayers.length; i++) {
             _satMwLeafletIr.removeLayer(_satIrFrameLayers[i]);
@@ -3142,9 +3141,116 @@
                 interactive: false,
                 crossOrigin: 'anonymous',
             }).addTo(_satMwLeafletIr);
+            // Phase 4: tag the layer with its initial colormap so the
+            // sync-URL helper can detect cmap changes and re-bake the
+            // overlay when needed. Initial URL is /ir-frame.jpg, so
+            // we start at 'claude-ir'.
+            layer._currentCmap = 'claude-ir';
+            layer._blobUrl = null;
             _satIrFrameLayers.push(layer);
         }
         _satIrFrameStormId = storm.atcf_id;
+    }
+
+    // Phase 4: bake a raw-Tb frame through the requested colormap's
+    // LUT to a blob URL suitable for L.imageOverlay.setUrl. Async
+    // because canvas.toBlob is async; resolves to null on failure.
+    // Pure data plumbing — does NOT update any layers itself.
+    function _satIrBakeFrameToBlobUrl(frame, cmapName) {
+        return new Promise(function (resolve) {
+            var lut32 = getLut32(cmapName) || getLut32('enhanced');
+            if (!lut32 || !frame || !frame.tb_data) {
+                resolve(null); return;
+            }
+            var off = document.createElement('canvas');
+            off.width = frame.cols;
+            off.height = frame.rows;
+            var ctx = off.getContext('2d');
+            var imgData = ctx.createImageData(frame.cols, frame.rows);
+            // Transparent background — only paint where tb_data is
+            // non-zero (matches the canvas painter's behavior). The
+            // Leaflet basemap shows through transparent regions.
+            var buf32 = new Uint32Array(imgData.data.buffer);
+            buf32.fill(0);
+            var tb = frame.tb_data;
+            for (var i = 0; i < tb.length; i++) {
+                if (tb[i] !== 0) buf32[i] = lut32[tb[i]];
+            }
+            ctx.putImageData(imgData, 0, 0);
+            off.toBlob(function (blob) {
+                if (!blob) { resolve(null); return; }
+                resolve(URL.createObjectURL(blob));
+            }, 'image/png');
+        });
+    }
+
+    // For a given frame index + colormap, ensure the corresponding
+    // L.imageOverlay layer's URL points at the right image source:
+    //   - 'claude-ir' (default) → /ir-frame.jpg (cheap; server-baked)
+    //   - any other colormap     → blob URL baked from raw Tb (Phase 4)
+    // Async-safe: if the user switches colormaps mid-bake, the
+    // stale resolution gets discarded and the blob URL revoked.
+    function _satIrSyncFrameUrl(idx, cmapName) {
+        var layer = _satIrFrameLayers[idx];
+        if (!layer) return;
+        // Guard: if this layer is already at the target cmap, no-op.
+        if (layer._currentCmap === cmapName) return;
+
+        if (cmapName === 'claude-ir') {
+            var storm = currentStorm;
+            if (!storm) return;
+            var url = API_BASE
+                + '/ir-monitor/storm/' + encodeURIComponent(storm.atcf_id)
+                + '/ir-frame.jpg?frame_index=' + idx
+                + '&lookback_hours=' + DEFAULT_LOOKBACK_HOURS
+                + '&radius_deg=' + _SAT_IR_RADIUS_DEG
+                + '&interval_min=' + FRAME_INTERVAL_MIN;
+            layer.setUrl(url);
+            layer._currentCmap = cmapName;
+            // Revoke the previous blob URL if any — server-JPG path
+            // doesn't use blob URLs, so any cached one is now stale.
+            if (layer._blobUrl) {
+                URL.revokeObjectURL(layer._blobUrl);
+                layer._blobUrl = null;
+            }
+            return;
+        }
+
+        // Custom colormap path — need raw Tb to bake. If the raw Tb
+        // hasn't loaded yet for this frame, just leave the layer at
+        // its previous URL; once raw Tb lands, the next render tick
+        // will re-fire this and bake the blob.
+        var frame = irFrames[idx];
+        if (!frame || !frame.tb_data) return;
+
+        _satIrBakeFrameToBlobUrl(frame, cmapName).then(function (url) {
+            if (!url) return;
+            // The user may have flipped to a different colormap while
+            // we were baking. Discard if so — and revoke the now-
+            // orphaned blob URL so it doesn't leak.
+            if (selectedColormap !== cmapName) {
+                URL.revokeObjectURL(url);
+                return;
+            }
+            if (layer._blobUrl) URL.revokeObjectURL(layer._blobUrl);
+            layer._blobUrl = url;
+            layer.setUrl(url);
+            layer._currentCmap = cmapName;
+        });
+    }
+
+    // Release all blob URLs held by per-frame layers. Called when
+    // the storm changes or the layer set is rebuilt to avoid memory
+    // leaks (createObjectURL holds a reference to the blob's bytes
+    // until revokeObjectURL fires).
+    function _satIrRevokeFrameBlobUrls() {
+        for (var i = 0; i < _satIrFrameLayers.length; i++) {
+            var L = _satIrFrameLayers[i];
+            if (L && L._blobUrl) {
+                URL.revokeObjectURL(L._blobUrl);
+                L._blobUrl = null;
+            }
+        }
     }
 
     // Render the current frame on the Leaflet map by toggling opacity.
@@ -3153,6 +3259,13 @@
         if (!_satMwLeafletIr || !_satIrFrameLayers.length) return;
         var idx = animIndex;
         if (idx < 0 || idx >= _satIrFrameLayers.length) return;
+        // Phase 4: make sure each layer's URL points at the right
+        // colormap source. _satIrSyncFrameUrl no-ops when already at
+        // the target cmap, so this loop is cheap when nothing's
+        // changed.
+        for (var k = 0; k < _satIrFrameLayers.length; k++) {
+            _satIrSyncFrameUrl(k, selectedColormap);
+        }
         for (var i = 0; i < _satIrFrameLayers.length; i++) {
             _satIrFrameLayers[i].setOpacity(i === idx ? 0.92 : 0);
         }
