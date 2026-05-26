@@ -2636,6 +2636,8 @@
         _satMwLeafletIr = L.map(irDiv, _SAT_LEAFLET_OPTS).setView([0, 0], 5);
         L.tileLayer(_SAT_LEAFLET_BASE_URL, { maxZoom: 12, opacity: 0.55 })
             .addTo(_satMwLeafletIr);
+        // Phase 6: per-pixel Tb hover tooltip.
+        _satAttachLeafletHover(_satMwLeafletIr, function () { return irFrames; }, 'IR');
     }
 
     // Lazy-init for the RIGHT (MW) Leaflet map. Only used in MW mode.
@@ -2646,6 +2648,11 @@
         _satMwLeafletMw = L.map(mwDiv, _SAT_LEAFLET_OPTS).setView([0, 0], 5);
         L.tileLayer(_SAT_LEAFLET_BASE_URL, { maxZoom: 12, opacity: 0.55 })
             .addTo(_satMwLeafletMw);
+        // MW pane doesn't have client-side Tb arrays (the brightness
+        // values live in the server-rendered PNG), so we just show a
+        // lat/lon readout on hover — still useful for locating
+        // structure relative to the storm center.
+        _satAttachLeafletHover(_satMwLeafletMw, function () { return null; }, 'MW');
     }
 
     // Global toggle: when true, pan/zoom on any Leaflet pane mirrors
@@ -2698,6 +2705,75 @@
         } finally {
             _satMapSyncEnabled = prev;
         }
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  Phase 6: per-pixel Tb hover tooltip on Leaflet panes
+    //  Looks up the active frame's raw Tb array at the cursor's
+    //  lat/lon and reports the brightness temperature (or just the
+    //  lat/lon when no Tb data is available — e.g., MW pane). Reuses
+    //  the existing #sat-tooltip div so the tooltip styling matches
+    //  the canvas-mode hover from the pre-Leaflet era.
+    // ════════════════════════════════════════════════════════════════
+    function _satAttachLeafletHover(map, framesProvider, label) {
+        if (!map || map._satHoverAttached) return;
+        map._satHoverAttached = true;
+        var tooltip = document.getElementById('sat-tooltip');
+        if (!tooltip) return;
+        map.on('mousemove', function (e) {
+            var lat = e.latlng.lat, lng = e.latlng.lng;
+            // Normalize lng to [-180, 180] for the tooltip readout.
+            var lngNorm = lng;
+            while (lngNorm > 180)  lngNorm -= 360;
+            while (lngNorm < -180) lngNorm += 360;
+            var posText = lat.toFixed(2) + (lat >= 0 ? '°N' : '°S').replace('-', '')
+                + '  ' + Math.abs(lngNorm).toFixed(2)
+                + (lngNorm >= 0 ? '°E' : '°W');
+
+            var frames = typeof framesProvider === 'function' ? framesProvider() : null;
+            var frame = frames && frames[animIndex];
+            var valueText = '';
+            if (frame && frame.tb_data && frame.bounds) {
+                var b = frame.bounds;
+                var south = b[0][0], west = b[0][1];
+                var north = b[1][0], east = b[1][1];
+                // Handle dateline-wrapping bounds (west > east).
+                var w = west, e2 = east, lngForLookup = lng;
+                if (west > east) {
+                    e2 = east + 360;
+                    if (lngForLookup < west) lngForLookup += 360;
+                }
+                if (lat >= south && lat <= north
+                        && lngForLookup >= w && lngForLookup <= e2) {
+                    var r = Math.floor((north - lat) / (north - south)
+                                       * (frame.rows - 1));
+                    var c = Math.floor((lngForLookup - w) / (e2 - w)
+                                       * (frame.cols - 1));
+                    if (r >= 0 && r < frame.rows
+                            && c >= 0 && c < frame.cols) {
+                        var rawVal = frame.tb_data[r * frame.cols + c];
+                        if (rawVal !== 0) {
+                            var vmin = frame.tb_vmin || 160;
+                            var vmax = frame.tb_vmax || 330;
+                            var tb = decodeTbValue(rawVal, vmin, vmax);
+                            var unit = (frame.data_type === 'reflectance')
+                                ? '%' : ' K';
+                            valueText = tb.toFixed(1) + unit;
+                        }
+                    }
+                }
+            }
+            tooltip.style.display = 'block';
+            tooltip.style.left = (e.originalEvent.pageX + 12) + 'px';
+            tooltip.style.top  = (e.originalEvent.pageY + 12) + 'px';
+            tooltip.innerHTML = (valueText
+                ? '<strong>' + label + ':</strong> ' + valueText
+                  + '<br><span style="opacity:0.7;">' + posText + '</span>'
+                : '<span style="opacity:0.85;">' + posText + '</span>');
+        });
+        map.on('mouseout', function () {
+            tooltip.style.display = 'none';
+        });
     }
 
     // Add a small floating control with two buttons to a Leaflet map:
@@ -3509,6 +3585,8 @@
             });
         }
         _satAddMapControls(_satRightLeafletMap);
+        // Phase 6: per-pixel Tb hover for the WV/Vis pane.
+        _satAttachLeafletHover(_satRightLeafletMap, function () { return rightFrames; }, 'WV/Vis');
     }
 
     function _satRightApplyLeafletVisibility() {
