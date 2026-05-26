@@ -1909,35 +1909,49 @@ def _cli(argv=None):
                      f"Supported: {list(_PPS_SENSORS)}")
 
         # Tier 2 cost gate: in --operational mode (i.e., cron-triggered),
-        # skip the ingest entirely when there are zero active TCs AND
-        # zero genesis disturbances. The MW layer's primary value is
-        # storm-monitoring; during quiet periods we save ~95% of compute
-        # per skipped run. Manifest entries naturally age out over 48 h
-        # so the layer quietens too — when a storm appears, the next
-        # cron tick bypasses this gate and resumes normal ingest.
-        # Manual --since-hours invocations skip the gate (researcher
-        # explicitly wants data regardless of storm state).
+        # narrow the sensor list to a quiet-mode subset (GMI + AMSR2) when
+        # there are zero active TCs AND zero genesis disturbances. Rationale:
+        # ATCF invests (90-99) and FNV3 disturbances both count as "active"
+        # here, so the gate only fires on truly quiet days (~30-50/year).
+        # On those days we still want opportunistic global coverage from the
+        # highest-quality sensors (GMI 37 GHz, AMSR2 89 GHz) — useful for
+        # pre-genesis AEW/monsoon monitoring, polar lows, and sub-tropical
+        # systems — but skip the heavier SSMI/S (3 sats × multi-orbit) and
+        # ATMS (3 sats × 5-min cadence, sounder-blurred 89v only). Cuts
+        # quiet-day compute to ~40% of full-mode while keeping the frontend
+        # populated. Manual --since-hours invocations skip the gate.
+        # Fail-safe: if either gate API call fails, keep the full sensor
+        # list (better to over-ingest than to drop coverage silently).
+        QUIET_MODE_SENSORS = {"GMI", "AMSR2"}
         if args.operational and not args.since_hours:
             storms_ok = disturb_ok = True
             try:
                 gate_storms = _fetch_active_storms()
             except Exception as exc:
                 logger.warning("[gate] active-storms fetch failed (%s) — "
-                               "ingest anyway to be safe", exc)
+                               "full sensor list to be safe", exc)
                 storms_ok = False
                 gate_storms = []
             try:
                 gate_disturb = _fetch_genesis_disturbances()
             except Exception as exc:
                 logger.warning("[gate] genesis fetch failed (%s) — "
-                               "ingest anyway to be safe", exc)
+                               "full sensor list to be safe", exc)
                 disturb_ok = False
                 gate_disturb = []
             if storms_ok and disturb_ok and not gate_storms and not gate_disturb:
-                logger.info("[gate] no active TCs (0) and no disturbances (0) — "
-                            "skipping ingest. Manifest will age out naturally.")
-                print(json.dumps({"processed": 0, "reason": "quiet-gate"}))
-                return
+                quiet_sensors = [s for s in sensors if s in QUIET_MODE_SENSORS]
+                if not quiet_sensors:
+                    logger.info("[gate] quiet (0 storms, 0 disturbances) and "
+                                "configured sensors %s have no quiet-mode "
+                                "overlap with %s — skipping ingest entirely",
+                                sensors, sorted(QUIET_MODE_SENSORS))
+                    print(json.dumps({"processed": 0, "reason": "quiet-gate-skip"}))
+                    return
+                logger.info("[gate] quiet (0 storms, 0 disturbances) — "
+                            "narrowing sensors %s → %s for opportunistic "
+                            "global coverage", sensors, quiet_sensors)
+                sensors = quiet_sensors
 
         sess = _pps_session()
         # Manifest-checkpoint timer. Long backfills used to keep the
