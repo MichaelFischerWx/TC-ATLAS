@@ -149,11 +149,23 @@ PASSES_KEY = "passes_predicted.json"
 PREDICT_HORIZON_HOURS = 24
 PREDICT_STEP_SECONDS = 60      # 1-min propagation step
 
+# Per-sensor horizon overrides. Single-satellite sensors (GMI on GPM,
+# AMSR2 on GCOM-W1) have sparse tropical coverage and can miss the
+# 24h default at unlucky longitudes — see passes_predicted.json for
+# WP992026 (8.7°N, 137.2°E) showing "GMI: none in 24h" while the
+# sun-sync SSMIS/ATMS constellations comfortably hit 4 passes each.
+# 3-satellite constellations (SSMIS F16/17/18, ATMS NPP/NOAA20/NOAA21)
+# stay at 24h — they don't gain anything from a longer window.
+GMI_PREDICT_HORIZON_H   = 72   # GPM 65°-incl, 1 sat, daily-ish coverage
+AMSR2_PREDICT_HORIZON_H = 48   # GCOM-W1 sun-sync, 1 sat, smaller swath
+
 # Satellites we ingest from. catnr = NORAD ID; swath_half_km is the
 # sensor's swath half-width (km) used as the pass-detection radius.
 # nrt_latency_min is the empirical lag between scan_start and when the
 # corresponding granule lands in TC-ATLAS GCS (measured from current
 # ingestion timing — easy to tune as PPS/JAXA pipelines change).
+# predict_horizon_h overrides PREDICT_HORIZON_HOURS for that sensor;
+# omit (or set None) to inherit the default 24 h.
 GMI_NRT_LATENCY_MIN   = 45
 SSMIS_NRT_LATENCY_MIN = 180
 AMSR2_NRT_LATENCY_MIN = 200
@@ -161,7 +173,8 @@ ATMS_NRT_LATENCY_MIN  = 60   # NPP/NOAA-20/NOAA-21 via PPS; empirical
 
 PREDICT_SATELLITES = [
     {"platform": "GPM",     "sensor": "GMI",   "catnr": 39574,
-     "swath_half_km": 445.0, "nrt_latency_min": GMI_NRT_LATENCY_MIN},
+     "swath_half_km": 445.0, "nrt_latency_min": GMI_NRT_LATENCY_MIN,
+     "predict_horizon_h": GMI_PREDICT_HORIZON_H},
     {"platform": "F16",     "sensor": "SSMIS", "catnr": 33591,
      "swath_half_km": 875.0, "nrt_latency_min": SSMIS_NRT_LATENCY_MIN},
     {"platform": "F17",     "sensor": "SSMIS", "catnr": 34938,
@@ -169,7 +182,8 @@ PREDICT_SATELLITES = [
     {"platform": "F18",     "sensor": "SSMIS", "catnr": 35951,
      "swath_half_km": 875.0, "nrt_latency_min": SSMIS_NRT_LATENCY_MIN},
     {"platform": "GCOM-W1", "sensor": "AMSR2", "catnr": 38337,
-     "swath_half_km": 725.0, "nrt_latency_min": AMSR2_NRT_LATENCY_MIN},
+     "swath_half_km": 725.0, "nrt_latency_min": AMSR2_NRT_LATENCY_MIN,
+     "predict_horizon_h": AMSR2_PREDICT_HORIZON_H},
     # ATMS — cross-track sounder, ~2300 km swath (half-width 1150 km).
     # Three satellites: Suomi NPP, NOAA-20 (JPSS-1), NOAA-21 (JPSS-2).
     {"platform": "NPP",     "sensor": "ATMS",  "catnr": 37849,
@@ -1835,9 +1849,11 @@ def predict_passes(storms: Optional[list[dict]] = None,
     if tles is None:
         tles = _get_tles()
 
-    horizon = timedelta(hours=horizon_hours)
     # Pre-propagate each satellite once; reuse the subpoint stream
-    # across all storms.
+    # across all storms. Per-spec `predict_horizon_h` overrides the
+    # default `horizon_hours` so single-satellite sensors (GMI / AMSR2)
+    # can extend their window without doubling the cost of the dense
+    # multi-platform constellations (SSMIS / ATMS) that don't need it.
     propagated: dict[int, list[tuple[_dt, float, float]]] = {}
     for spec in PREDICT_SATELLITES:
         catnr = spec["catnr"]
@@ -1846,8 +1862,11 @@ def predict_passes(storms: Optional[list[dict]] = None,
                            catnr, spec["platform"])
             continue
         _name, l1, l2 = tles[catnr]
+        per_sat_horizon_h = spec.get("predict_horizon_h") or horizon_hours
+        per_sat_horizon = timedelta(hours=per_sat_horizon_h)
         try:
-            propagated[catnr] = _propagate_subpoints(l1, l2, t0, horizon)
+            propagated[catnr] = _propagate_subpoints(
+                l1, l2, t0, per_sat_horizon)
         except Exception as exc:
             logger.error("SGP4 propagation failed for %s (%d): %s",
                          spec["platform"], catnr, exc)
@@ -1895,9 +1914,22 @@ def predict_passes(storms: Optional[list[dict]] = None,
                 rec["frac"] = st["frac"]
         storm_out.append(rec)
 
+    # Publish the per-sensor effective horizon so the frontend can
+    # render entries beyond the baseline (24 h) with a "dim / far-out"
+    # style. Without this the UI would have to guess.
+    horizon_by_sensor: dict[str, float] = {}
+    for spec in PREDICT_SATELLITES:
+        h = float(spec.get("predict_horizon_h") or horizon_hours)
+        # Multiple satellites can share a sensor (SSMIS, ATMS); take
+        # the max so the published horizon reflects the longest one
+        # actually propagated.
+        cur = horizon_by_sensor.get(spec["sensor"])
+        if cur is None or h > cur:
+            horizon_by_sensor[spec["sensor"]] = h
     return {
         "updated": t0.isoformat(),
         "horizon_hours": horizon_hours,
+        "horizon_by_sensor": horizon_by_sensor,
         "storms": storm_out,
     }
 

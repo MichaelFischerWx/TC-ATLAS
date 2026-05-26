@@ -4538,6 +4538,17 @@ html.sub-only-mode .sub-active-tc-list { display: none !important; }
 .tc-mw-schedule-cell.dim {
     color: #64748b;
 }
+/* Predicted pass beyond the 24 h baseline — visually distinguish so
+   the user can tell "soon" (≤24 h) from "far" (>24 h, only published
+   for single-satellite sensors GMI / AMSR2). Faded text + italic;
+   the ETA arrow inside is muted to match. */
+.tc-mw-schedule-cell.far {
+    color: #94a3b8;
+    font-style: italic;
+}
+.tc-mw-schedule-cell.far .tc-mw-schedule-eta {
+    color: #6b8a76;   /* desaturated green so it still reads as ETA */
+}
 .tc-mw-schedule-eta {
     color: #4ade80;
     margin-left: 2px;

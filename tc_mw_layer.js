@@ -1201,9 +1201,22 @@
                     var deltaMin = (Date.parse(upcoming[sk].predicted_scan_start) - now) / 60000;
                     var etaMs = Date.parse(upcoming[sk].eta_on_tcatlas);
                     var etaMin = (etaMs - now) / 60000;
-                    upcomingCell = '<span class="tc-mw-schedule-cell" title="ETA on TC-ATLAS: '
+                    // Predicted-pass entries beyond the baseline 24 h
+                    // horizon get a "far" style — these only show up
+                    // for single-satellite sensors (GMI 72 h, AMSR2
+                    // 48 h) whose tropical coverage routinely misses
+                    // the 24 h window. The sun-sync constellations
+                    // (SSMIS, ATMS) stay capped at 24 h so they never
+                    // hit this branch.
+                    var isFar = deltaMin > 24 * 60;
+                    var farClass = isFar ? ' far' : '';
+                    var farTitle = isFar
+                        ? ' (outside 24h window — sparse single-sat coverage)'
+                        : '';
+                    upcomingCell = '<span class="tc-mw-schedule-cell' + farClass + '" title="ETA on TC-ATLAS: '
                         + _esc(_fmtCompactIn(etaMin))
-                        + ' (' + Math.round(upcoming[sk].min_distance_km) + ' km offset)">'
+                        + ' (' + Math.round(upcoming[sk].min_distance_km) + ' km offset)'
+                        + farTitle + '">'
                         + _esc(_fmtCompactIn(deltaMin))
                         + ' <span class="tc-mw-schedule-eta">&rarr;'
                         + _esc(_fmtCompactIn(etaMin)) + '</span>'
