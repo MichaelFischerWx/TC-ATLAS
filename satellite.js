@@ -2488,20 +2488,16 @@
         if (asymPanel) asymPanel.style.display = 'none';
         if (mwPanel) mwPanel.style.display = 'none';
 
-        // Phase 1 of canvas→Leaflet migration: when MW mode is active,
-        // swap the LEFT pane's canvas for a Leaflet IR map alongside
-        // the RIGHT pane's Leaflet MW map. Other modes restore the
-        // canvas. Lazy-init of the maps on first MW entry.
-        var irCanvasWrap = document.getElementById('sat-panel-ir-canvas-wrap');
-        var irLeafletDiv = document.getElementById('sat-leaflet-ir');
+        // MW mode: show the dedicated MW dual-pane panel + ensure the
+        // left IR pane is on Leaflet. _satMwActivate handles the
+        // canvas/leaflet visibility swap so Phase 2 doesn't fight us.
+        // Non-MW modes: leave the IR-pane visibility to Phase 2's
+        // _satIrSyncLeaflet (called inside renderBothPanels), which
+        // picks canvas vs leaflet based on mode + colormap.
         if (newMode === 'microwave') {
-            if (irCanvasWrap) irCanvasWrap.style.display = 'none';
-            if (irLeafletDiv) irLeafletDiv.style.display = '';
             if (mwPanel) mwPanel.style.display = '';
             _satMwActivate();
         } else {
-            if (irCanvasWrap) irCanvasWrap.style.display = '';
-            if (irLeafletDiv) irLeafletDiv.style.display = 'none';
             _satMwDeactivate();
         }
 
@@ -2657,33 +2653,64 @@
     }
 
     function _satMwActivate() {
+        // Force the LEFT pane to Leaflet mode for the MW comparison
+        // view. Without this, Phase 2's renderBothPanels → visibility
+        // toggle could leave the canvas showing instead.
+        var canvasWrap = document.getElementById('sat-panel-ir-canvas-wrap');
+        var leafletDiv = document.getElementById('sat-leaflet-ir');
+        var axesY = document.getElementById('sat-axes-y-ir');
+        var axesX = document.getElementById('sat-axes-x-ir');
+        if (canvasWrap) canvasWrap.style.display = 'none';
+        if (leafletDiv) leafletDiv.style.display = '';
+        if (axesY) axesY.style.display = 'none';
+        if (axesX) axesX.style.display = 'none';
         _satMwInitMaps();
         if (!currentStorm || currentStorm.lat == null || currentStorm.lon == null) {
             _satMwSetStatus('no active storm');
             return;
         }
-        // Frame the storm at ±halfDeg by setting both maps' view.
+        // Hide any Phase 2 per-frame IR overlays — in MW mode the
+        // IR map is owned by Phase 1's single matched-time overlay.
+        // Two stacks of L.imageOverlay on the same map would compete.
+        for (var i = 0; i < _satIrFrameLayers.length; i++) {
+            if (_satIrFrameLayers[i].setOpacity) _satIrFrameLayers[i].setOpacity(0);
+        }
+        // Defer the fitBounds + tile redraw until after the browser
+        // has laid out the newly-shown containers. invalidateSize on
+        // a 0-px container makes L.map measure ZERO and fitBounds
+        // collapses to "show world." rAF gives one frame for the
+        // flex layout to settle, then we measure and fit cleanly.
         var halfDeg = _satMwHalfDeg();
         var b = L.latLngBounds(
             [currentStorm.lat - halfDeg, currentStorm.lon - halfDeg],
             [currentStorm.lat + halfDeg, currentStorm.lon + halfDeg]
         );
-        if (_satMwLeafletIr) {
-            _satMwLeafletIr.invalidateSize();
-            _satMwLeafletIr.fitBounds(b, { animate: false });
-        }
-        if (_satMwLeafletMw) {
-            _satMwLeafletMw.invalidateSize();
-            _satMwLeafletMw.fitBounds(b, { animate: false });
-        }
-        _satMwUpdateMarkers();
-        _satMwLoadPasses();
+        requestAnimationFrame(function () {
+            if (_satMwLeafletIr) {
+                _satMwLeafletIr.invalidateSize(false);
+                _satMwLeafletIr.fitBounds(b, { animate: false });
+            }
+            if (_satMwLeafletMw) {
+                _satMwLeafletMw.invalidateSize(false);
+                _satMwLeafletMw.fitBounds(b, { animate: false });
+            }
+            _satMwUpdateMarkers();
+            _satMwLoadPasses();
+        });
     }
 
     function _satMwDeactivate() {
-        // No teardown — we keep the maps + overlays alive so re-entering
-        // MW mode is instant. invalidateSize on re-show ensures the map
-        // re-paints if its container size changed while hidden.
+        // The next renderBothPanels (called by the diagnostics /
+        // track / asym branch in setViewMode) will trigger Phase 2's
+        // _satIrSyncLeaflet which picks canvas vs Leaflet based on
+        // the new mode + colormap. So we DON'T preemptively show the
+        // canvas here — that decision belongs to Phase 2. We just
+        // ensure any single MW IR overlay is removed so it doesn't
+        // sit underneath Phase 2's per-frame layers.
+        if (_satMwIrOverlay && _satMwLeafletIr) {
+            _satMwLeafletIr.removeLayer(_satMwIrOverlay);
+            _satMwIrOverlay = null;
+        }
     }
 
     function _satMwSetStatus(text) {
@@ -3154,6 +3181,14 @@
     // buffer reset, append new layers if frames trickled in, and
     // render the active frame.
     function _satIrSyncLeaflet(opts) {
+        // MW mode owns the IR map directly (Phase 1) — let it manage
+        // visibility, overlays, and the matched-time IR JPG without
+        // interference from the Phase 2 animation pipeline. Without
+        // this guard, _satIrApplyLeafletVisibility would hide the
+        // Leaflet container the moment renderBothPanels runs in MW
+        // mode, and the per-frame overlays would fight the single
+        // matched-time overlay Phase 1 added.
+        if (viewMode === 'microwave') return;
         opts = opts || {};
         _satIrApplyLeafletVisibility();
         if (!_satIrLeafletActive) return;
