@@ -2525,6 +2525,13 @@
             if (currentStormId) {
                 loadTrackMetadata(currentStormId, function () { renderTrackMap(); });
             }
+            // Trigger renderBothPanels so the IR Leaflet dispatcher
+            // (Phase 2 of the canvas→Leaflet migration) runs and
+            // builds per-frame overlays for the now-visible IR pane.
+            // Track mode used to be canvas-only — Phase 2 + my
+            // recent IR-fast-path-on-WV/Vis/Track extension means it
+            // needs the same Leaflet plumbing as Diagnostics.
+            if (irFrames && irFrames.length > 0) renderBothPanels();
         } else if (newMode === 'asymmetry') {
             if (asymPanel) asymPanel.style.display = '';
             var frame = irFrames[animIndex];
@@ -3076,20 +3083,25 @@
         var leafletDiv = document.getElementById('sat-leaflet-ir');
         var axesY = document.getElementById('sat-axes-y-ir');
         var axesX = document.getElementById('sat-axes-x-ir');
+        var colorbar = document.getElementById('sat-cb-ir');
         var useLeaflet = _satIrShouldUseLeaflet();
         if (useLeaflet) {
             if (canvasWrap) canvasWrap.style.display = 'none';
             if (leafletDiv) leafletDiv.style.display = '';
             // Lat/lon labels come from Leaflet's basemap + an optional
             // graticule, so hide the canvas-era axes elements that
-            // would otherwise sit awkwardly outside the map.
+            // would otherwise sit awkwardly outside the map. The
+            // colorbar also goes away — without a canvas to anchor it
+            // it ends up floating in the middle of the Leaflet pane.
             if (axesY) axesY.style.display = 'none';
-            if (axesX) axesX.style.display = '';
+            if (axesX) axesX.style.display = 'none';
+            if (colorbar) colorbar.style.display = 'none';
         } else {
             if (canvasWrap) canvasWrap.style.display = '';
             if (leafletDiv) leafletDiv.style.display = 'none';
             if (axesY) axesY.style.display = '';
             if (axesX) axesX.style.display = '';
+            if (colorbar) colorbar.style.display = '';
         }
         // Tag <body> so CSS can hide the 10°/5°/2° zoom buttons when
         // Leaflet's native pan/zoom is active. They're a leftover from
