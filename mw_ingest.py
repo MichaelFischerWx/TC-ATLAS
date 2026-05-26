@@ -1279,6 +1279,54 @@ def update_manifest(new_entries: list[dict]) -> None:
     )
     logger.info("manifest: %d entries after merge (%d new)",
                 len(pruned), len(new_entries))
+    _log_sensor_freshness(pruned)
+
+
+# Wall-clock staleness threshold above which a sensor's latest manifest
+# cursor triggers a WARNING-severity log. Set conservatively at 6 h: GMI
+# normally lags <10 min, SSMIS+AMSR2 <2-3 h, so 6 h is comfortably outside
+# the normal envelope for every sensor we ingest. The threshold is the
+# trigger for any external alerting wired up against Cloud Logging
+# (Pub/Sub → email/Slack on `severity>=WARNING` + `textPayload:freshness`).
+_SENSOR_FRESHNESS_WARN_H = 6.0
+
+
+def _log_sensor_freshness(entries: list[dict]) -> None:
+    """Emit per-sensor freshness summary at the end of each manifest
+    update. INFO for sensors within the warn threshold, WARNING for
+    those past it. This is the hook for alerting on upstream stalls
+    (NASA PPS / JAXA GCOM-W1) and for our own backlogs after recovery
+    from a job-timeout incident.
+
+    Logs use a fixed `freshness=` token so log-based metrics + alert
+    filters can match a stable signature.
+    """
+    if not entries:
+        logger.info("freshness=no-entries (nothing to summarize)")
+        return
+    now = _dt.now(timezone.utc)
+    by_sensor: dict = {}
+    for e in entries:
+        s = e.get("sensor")
+        t = e.get("scan_start")
+        if not s or not t:
+            continue
+        try:
+            ts = _dt.fromisoformat(t.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if s not in by_sensor or ts > by_sensor[s]:
+            by_sensor[s] = ts
+    for sensor in sorted(by_sensor):
+        latest = by_sensor[sensor]
+        age_h = (now - latest).total_seconds() / 3600.0
+        msg = (f"freshness sensor={sensor} latest={latest.isoformat()} "
+               f"age_h={age_h:.2f}")
+        if age_h > _SENSOR_FRESHNESS_WARN_H:
+            logger.warning("%s STALE (threshold=%.1f h)",
+                           msg, _SENSOR_FRESHNESS_WARN_H)
+        else:
+            logger.info(msg)
 
 
 def process_one(reader_path: str, sensor: str,
