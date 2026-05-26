@@ -3393,7 +3393,9 @@ html:not([data-view="map"]) #ir-global-env-cbars {
     font-weight: 500;
 }
 .sat-mw-pass-time {
-    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    /* Inherit Inter / DM Sans from the rest of the page instead of
+       the monospaced fallback the canvas-era code used. */
+    font-family: inherit;
     font-size: 0.72rem;
     color: #94a3b8;
     font-weight: 500;
@@ -3406,25 +3408,34 @@ html:not([data-view="map"]) #ir-global-env-cbars {
     align-items: center;
     gap: 8px;
 }
-/* Scope-pin the chip colors for the Storm Satellite tab — the
-   page-wide --text token isn't always resolved here, so the chip
-   class's color: var(--text, #0f172a) fallback was rendering dark
-   text on dark backgrounds (invisible). Explicit hex avoids the
-   var dependency. */
+/* MW product chips in the Storm Satellite tab. Pinned with explicit
+   colors (the page-wide --text token isn't always resolved on this
+   tab — it was falling back to dark navy on a dark background and
+   becoming invisible). Stronger pill backgrounds + a tiny cursor:
+   pointer override emphasize that these are clickable. */
 .sat-mw-controls-row .rt-mw-storm-chip {
+    cursor: pointer;
     color: #cbd5e1;
-    background: transparent;
-    border: 1px solid rgba(148, 163, 184, 0.3);
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(148, 163, 184, 0.4);
+    font-weight: 600;
 }
 .sat-mw-controls-row .rt-mw-storm-chip:hover {
-    background: rgba(46, 125, 255, 0.16);
-    border-color: rgba(46, 125, 255, 0.55);
-    color: #e2e8f0;
+    background: rgba(46, 125, 255, 0.22);
+    border-color: rgba(46, 125, 255, 0.65);
+    color: #ffffff;
 }
 .sat-mw-controls-row .rt-mw-storm-chip.active {
-    background: rgba(46, 125, 255, 0.28);
-    border-color: rgba(46, 125, 255, 0.7);
-    color: #93c5fd;
+    background: rgba(46, 125, 255, 0.45);
+    border-color: rgba(46, 125, 255, 0.9);
+    color: #ffffff;
+    box-shadow: 0 0 0 1px rgba(46, 125, 255, 0.35);
+}
+.sat-mw-pass-select-label {
+    font-size: 0.72rem;
+    color: #94a3b8;
+    font-weight: 500;
+    white-space: nowrap;
 }
 .sat-mw-pass-select {
     flex: 1;
@@ -3584,7 +3595,9 @@ body.sat-leaflet-active #sat-panel-ir {
 /* Storm Satellite Leaflet colorbars — float over the bottom of
    each pane so the maps stay equal-height (no flex space taken).
    Applied only when body has sat-leaflet-active so canvas modes
-   keep the old in-flow layout. */
+   keep the old in-flow layout. z-index:1000 keeps the colorbar
+   above Leaflet's internal pane stack (controlPane ~800) so the
+   bar doesn't disappear behind the map's own DOM children. */
 body.sat-leaflet-active #sat-cb-ir,
 body.sat-leaflet-active #sat-cb-right,
 .sat-mw-colorbar {
@@ -3592,7 +3605,7 @@ body.sat-leaflet-active #sat-cb-right,
     bottom: 6px;
     left: 12px;
     right: 12px;
-    z-index: 10;
+    z-index: 1000;
     background: rgba(15, 22, 36, 0.85);
     border-radius: 4px;
     padding: 4px 8px;
@@ -3611,6 +3624,10 @@ body.sat-leaflet-active #sat-cb-right .sat-cb-label-right,
 .sat-mw-colorbar .sat-cb-label-right {
     color: #e2e8f0;
     font-weight: 600;
+    /* Inherit Inter / DM Sans — the canvas-era CSS used a monospace
+       fallback that looked inconsistent next to the rest of the
+       tab's typography. */
+    font-family: inherit;
 }
 
 /* Storm Satellite graticule labels — small white text with a dark

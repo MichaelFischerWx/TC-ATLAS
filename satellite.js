@@ -2652,14 +2652,18 @@
         zoomDelta: 0.5,
     };
     var _SAT_LEAFLET_BASE_URL = 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}{r}.png';
-    // Coastlines + admin borders + place labels rendered ABOVE the
-    // imagery overlay so the user can locate storm structure relative
-    // to coastlines. Carto's `voyager_only_labels` is a transparent
-    // tile set with just those lines — drop it into a custom pane
-    // with z-index 450 (between overlayPane=400 and markerPane=600)
-    // so it sits over the IR/WV/MW imageOverlays but under the
-    // storm-center markers.
-    var _SAT_LEAFLET_COAST_URL = 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}{r}.png';
+    // Coastlines + admin borders rendered ABOVE the imagery overlay
+    // so the user can locate storm structure relative to land.
+    //   Carto voyager_only_labels: thin lines + labels, but the
+    //   lines were too subtle to read through bright IR imagery.
+    //   Esri Reference/World_Boundaries_and_Places: solid white
+    //   coastlines + country borders, much more visible. The labels
+    //   are a side-effect; for a TC viewer the coastline visibility
+    //   is the priority.
+    // Dropped into a custom pane at z-index 450 so it sits above the
+    // IR/WV/MW imageOverlays (overlayPane=400) but below storm
+    // markers + graticule labels (markerPane=600).
+    var _SAT_LEAFLET_COAST_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}';
     var _satIrSyncWired = false;
 
     function _satAddCoastlines(map) {
@@ -2670,8 +2674,8 @@
         L.tileLayer(_SAT_LEAFLET_COAST_URL, {
             maxZoom: 12,
             pane: 'sat-coastlines',
-            opacity: 0.85,
-            attribution: '© CARTO © OpenStreetMap contributors',
+            opacity: 1.0,
+            attribution: 'Boundaries © Esri',
         }).addTo(map);
         map._satCoastlinesAdded = true;
     }
