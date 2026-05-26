@@ -374,8 +374,16 @@
     function renderFrame(canvas, ctx, frame, colormapName) {
         if (!frame || !ctx) return;
 
-        // Fast preview: draw pre-rendered JPG if raw Tb not yet available
-        if (!frame.tb_data && frame.previewImg) {
+        // Fast path: when on the default ('claude-ir') colormap, prefer
+        // the server-rendered JPG (drawImage is ~10× faster than the
+        // LUT decode + putImageData on a 600×600 canvas). Only fall
+        // through to the LUT painter when the user actively switches
+        // to a custom colormap — at that point the JPG can't represent
+        // the requested palette so the raw Tb path is justified.
+        // (Old behavior: JPG only used when tb_data was absent — meant
+        // arriving raw Tb instantly demoted the panel to the slow path.)
+        var preferJpg = (colormapName === 'claude-ir') && frame.previewImg;
+        if (preferJpg || (!frame.tb_data && frame.previewImg)) {
             var iw = frame.previewImg.naturalWidth;
             var ih = frame.previewImg.naturalHeight;
             var vb = getViewBounds(frame);
@@ -3087,7 +3095,12 @@
             for (var ri = 0; ri < rtFrames.length; ri++) {
                 var rf = rtFrames[ri];
                 if (!rf) continue;
+                // Preserve any previewImg that arrived earlier — without
+                // this, the fast-default JPG path can't kick in once raw
+                // Tb lands from the RT callback.
+                var prevImg = (irFrames[ri] && irFrames[ri].previewImg) || null;
                 irFrames[ri] = {
+                    previewImg: prevImg,
                     tb_data: (rf.tb_data instanceof Uint8Array) ? rf.tb_data : decodeTbData(rf.tb_data),
                     rows: rf.rows || rf.tb_rows, cols: rf.cols || rf.tb_cols,
                     bounds: rf.bounds, datetime_utc: rf.datetime_utc,
@@ -3117,6 +3130,12 @@
                 var rtFrames = window.getRtRawTbFrames(stormId);
                 if (rtFrames && rtFrames.length > 0) {
                     _applyRtFrames(rtFrames);
+                    // Kick off JPG previews in parallel so the default
+                    // colormap can use the fast drawImage path instead
+                    // of LUT-painting raw Tb. Cheap (~60 KB each, fully
+                    // cached server-side) and decouples the default
+                    // view from the slow LUT path entirely.
+                    _fetchPreviewFrames();
                     return;
                 }
             }
