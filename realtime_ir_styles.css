@@ -3572,6 +3572,15 @@ html:not([data-view="map"]) #ir-global-env-cbars {
     box-shadow: 0 0 0 1px rgba(251, 146, 60, 0.45);
 }
 
+/* Anchor sat-compare-panel as a positioning context so the WV/Vis
+   colorbar (absolute-positioned below) can dock to its bottom edge
+   without being clipped by sat-compare-panel's overflow:hidden. */
+body.sat-leaflet-active #sat-compare-panel,
+body.sat-leaflet-active #sat-mw-section,
+body.sat-leaflet-active #sat-panel-ir {
+    position: relative;
+}
+
 /* Storm Satellite Leaflet colorbars — float over the bottom of
    each pane so the maps stay equal-height (no flex space taken).
    Applied only when body has sat-leaflet-active so canvas modes
