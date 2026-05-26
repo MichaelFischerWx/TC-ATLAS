@@ -12579,6 +12579,106 @@
         });
     }
 
+    // Build a composite PNG of the IR + MW canvases with header (storm
+    // name, sensor/platform, product), per-panel timestamps, and a
+    // TC-ATLAS watermark with URL. Triggered by the modal's Save PNG
+    // button. Colors of the panels are preserved — only the button itself
+    // is monochrome in the UI.
+    function _rtSaveMwCompare() {
+        var orbit = _rtMwCompareState.orbit;
+        var storm = _rtMwCompareState.storm;
+        if (!orbit || !storm) return;
+        var irCanvas = document.getElementById('rt-mw-compare-ir');
+        var mwCanvas = document.getElementById('rt-mw-compare-mw');
+        if (!irCanvas || !mwCanvas) return;
+
+        var name = storm.name || storm.atcf_id || 'Storm';
+        var sensorLabel = orbit.sensor
+            + (orbit.platform ? ' (' + orbit.platform + ')' : '');
+        var mwUtc = (orbit.scan_start || '').replace('T', ' ').slice(0, 16) + 'Z';
+        var irTimeEl = document.getElementById('rt-mw-compare-mw-time');  // not used
+        var irTime = (document.getElementById('rt-mw-compare-ir-time') || {}).textContent || '';
+        var mwTime = (document.getElementById('rt-mw-compare-mw-time') || {}).textContent || mwUtc;
+
+        // Map product slug → human label from the active chip text.
+        var prodLabel = _rtMwCompareState.product;
+        var chip = document.querySelector(
+            '#rt-mw-compare-products .rt-mw-storm-chip[data-product="'
+            + _rtMwCompareState.product + '"]');
+        if (chip && chip.textContent) prodLabel = chip.textContent.trim();
+
+        var pw = irCanvas.width, ph = irCanvas.height;
+        var gap = 6;
+        var headerH = 64;
+        var labelH = 24;
+        var footerH = 22;
+        var totalW = pw * 2 + gap;
+        var totalH = headerH + labelH + ph + footerH;
+
+        var comp = document.createElement('canvas');
+        comp.width = totalW;
+        comp.height = totalH;
+        var ctx = comp.getContext('2d');
+
+        ctx.fillStyle = '#0a0c12';
+        ctx.fillRect(0, 0, totalW, totalH);
+
+        // Header — title and metadata.
+        ctx.fillStyle = '#f1f5f9';
+        ctx.font = '700 18px sans-serif';
+        ctx.textBaseline = 'alphabetic';
+        ctx.textAlign = 'left';
+        ctx.fillText(name + ' — IR ↔ Microwave', 12, 24);
+
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = '13px sans-serif';
+        ctx.fillText(sensorLabel + ' · ' + prodLabel + ' · ' + mwUtc, 12, 46);
+
+        // Per-panel labels with timestamps.
+        var labelY = headerH + 16;
+        ctx.fillStyle = '#e2e8f0';
+        ctx.font = '700 13px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText('IR', 12, labelY);
+        ctx.fillText('Microwave', pw + gap + 12, labelY);
+
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = '11px ui-monospace, "SF Mono", Menlo, monospace';
+        ctx.textAlign = 'right';
+        if (irTime) ctx.fillText(irTime, pw - 12, labelY);
+        if (mwTime) ctx.fillText(mwTime, pw * 2 + gap - 12, labelY);
+
+        // Panels.
+        var panelY = headerH + labelH;
+        ctx.drawImage(irCanvas, 0, panelY, pw, ph);
+        ctx.drawImage(mwCanvas, pw + gap, panelY, pw, ph);
+
+        // Footer watermark + URL.
+        ctx.fillStyle = 'rgba(255,255,255,0.55)';
+        ctx.font = '11px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText('TC-ATLAS', 12, totalH - 7);
+        ctx.textAlign = 'right';
+        ctx.fillText('michaelfischerwx.github.io/TC-ATLAS',
+                     totalW - 12, totalH - 7);
+
+        // Download.
+        var stamp = (orbit.scan_start || '')
+            .replace(/[:\-T]/g, '').replace('Z', '').slice(0, 12);
+        var sensorSafe = (orbit.sensor || 'mw').toLowerCase().replace(/[^a-z0-9]+/g, '');
+        var nameSafe = (storm.name || storm.atcf_id || 'storm')
+            .toLowerCase().replace(/[^a-z0-9]+/g, '');
+        var link = document.createElement('a');
+        link.download = nameSafe + '_ir_vs_' + sensorSafe + '_'
+            + _rtMwCompareState.product + '_' + stamp + '.png';
+        link.href = comp.toDataURL('image/png');
+        link.click();
+
+        _ga('rt_mw_compare_save', {
+            sensor: orbit.sensor, product: _rtMwCompareState.product
+        });
+    }
+
     function _rtCloseMwCompare() {
         var modal = document.getElementById('rt-mw-compare-modal');
         if (!modal) return;
@@ -12775,6 +12875,12 @@
         _rtMwCompareBound = true;
         var closeBtn = modal.querySelector('.rt-mw-compare-close');
         if (closeBtn) closeBtn.addEventListener('click', _rtCloseMwCompare);
+        var saveBtn = document.getElementById('rt-mw-compare-save');
+        if (saveBtn) saveBtn.addEventListener('click', function () {
+            saveBtn.disabled = true;
+            try { _rtSaveMwCompare(); }
+            finally { setTimeout(function () { saveBtn.disabled = false; }, 400); }
+        });
         modal.addEventListener('click', function (ev) {
             if (ev.target === modal) _rtCloseMwCompare();
         });
