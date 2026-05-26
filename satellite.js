@@ -2497,6 +2497,15 @@
     // ── View Mode Toggle ───────────────────────────────────────
 
     function setViewMode(newMode) {
+        // Mobile guard — WV/Vis comparison modes are hidden on mobile
+        // because side-by-side dual-pane is unreadable at phone widths
+        // and doubled the image memory footprint. If a stale hash or
+        // programmatic call still tries to enter them, redirect to
+        // diagnostics so the user lands somewhere usable.
+        if (_satIsMobileLayout()
+            && (newMode === 'compare-wv' || newMode === 'compare-vis')) {
+            newMode = 'diagnostics';
+        }
         if (newMode === viewMode) return;
         viewMode = newMode;
 
@@ -2871,6 +2880,17 @@
             && window.matchMedia('(hover: none)').matches;
     }
 
+    // Narrow-viewport detection. Aligned with the CSS breakpoint at
+    // 768 px so JS branches stay in sync with the mobile layout
+    // rules (single-pane default, MW-only stacked pane, hidden
+    // WV/Vis modes). We re-evaluate on each call rather than
+    // caching — covers orientation changes and resizable windows
+    // without needing a resize listener.
+    function _satIsMobileLayout() {
+        return typeof window.matchMedia === 'function'
+            && window.matchMedia('(max-width: 768px)').matches;
+    }
+
     function _satAttachLeafletHover(map, framesProvider, label) {
         if (!map || map._satHoverAttached) return;
         // Skip hover entirely on touch devices — mousemove is a
@@ -3037,7 +3057,72 @@
         map._satLegendEl.style.display = anyVisible ? '' : 'none';
     }
 
+    // Mobile MW path: reuse the storm-card's thumbnail-grid pattern
+    // instead of the desktop dual-pane Leaflet experience. Tapping a
+    // thumbnail opens the existing IR↔MW compare modal (body-level,
+    // already mobile-friendly). This gives us:
+    //   • single-pane mobile UX (no cramped dual maps),
+    //   • zero per-frame layer stacking (modal is canvas-based),
+    //   • code reuse — _rtLoadStormMwPasses just needs a different
+    //     DOM prefix to render into the sat-mw-mobile-* containers.
+    function _satMwActivateMobile() {
+        var storm = currentStorm;
+        // Hide every desktop-MW DOM child so only the mobile section
+        // shows. We restore them in _satMwDeactivate so the desktop
+        // entry next time the user resizes / reloads stays correct.
+        var hideList = [
+            document.querySelector('#sat-mw-section .sat-mw-leaflet-header'),
+            document.querySelector('#sat-mw-section .sat-mw-controls-row'),
+            document.getElementById('sat-leaflet-mw'),
+            document.getElementById('sat-mw-cb')
+        ];
+        for (var i = 0; i < hideList.length; i++) {
+            if (hideList[i]) hideList[i].style.display = 'none';
+        }
+        // Hide the IR pane too — the modal will show IR side-by-side
+        // when a pass is tapped, so showing the IR animation here is
+        // redundant and competes for screen height.
+        var irPane = document.getElementById('sat-panel-ir');
+        if (irPane) irPane.style.display = 'none';
+        var mobileSec = document.getElementById('sat-mw-mobile-section');
+        if (mobileSec) mobileSec.style.display = '';
+        if (!storm) return;
+        // Trigger the same loader the storm-card uses — different
+        // prefix routes the thumbnails into our mobile container.
+        if (typeof window._rtLoadStormMwPasses === 'function') {
+            window._rtLoadStormMwPasses(storm, 'sat-mw-mobile');
+        }
+    }
+    // Restore the desktop MW DOM children we hid on mobile entry,
+    // and re-show the IR pane. Safe to call on any platform — it's a
+    // no-op when none of the elements were hidden.
+    function _satMwRestoreDesktopMwDom() {
+        var showList = [
+            document.querySelector('#sat-mw-section .sat-mw-leaflet-header'),
+            document.querySelector('#sat-mw-section .sat-mw-controls-row'),
+            document.getElementById('sat-leaflet-mw'),
+            document.getElementById('sat-mw-cb')
+        ];
+        for (var i = 0; i < showList.length; i++) {
+            if (showList[i]) showList[i].style.display = '';
+        }
+        var irPane = document.getElementById('sat-panel-ir');
+        if (irPane) irPane.style.display = '';
+        var mobileSec = document.getElementById('sat-mw-mobile-section');
+        if (mobileSec) mobileSec.style.display = 'none';
+    }
+
     function _satMwActivate() {
+        // Mobile fast-path: skip the heavy Leaflet init entirely.
+        // Tapping a thumbnail opens the existing compare modal, which
+        // is canvas-based and already phone-friendly. This avoids:
+        //   • OOM from two synced Leaflet maps + tile caches,
+        //   • the cramped sub-180px-wide dual-pane on phones,
+        //   • the broken mode-toggle navigation the user reported.
+        if (_satIsMobileLayout()) {
+            _satMwActivateMobile();
+            return;
+        }
         // Force the LEFT pane to Leaflet mode for the MW comparison
         // view. Without this, Phase 2's renderBothPanels → visibility
         // toggle could leave the canvas showing instead.
@@ -3117,6 +3202,10 @@
             _satMwLeafletIr.removeLayer(_satMwIrOverlay);
             _satMwIrOverlay = null;
         }
+        // Mobile cleanup: restore the desktop MW DOM children we
+        // hid in _satMwActivateMobile, and re-show the IR pane.
+        // Safe to call on desktop — no-op when nothing was hidden.
+        _satMwRestoreDesktopMwDom();
     }
 
     function _satMwSetStatus(text) {
@@ -5233,11 +5322,32 @@
             });
         }
 
-        // View mode toggle (Diagnostics / WV / Vis)
+        // View mode toggle (Diagnostics / WV / Vis / MW / Track / Asym)
         var modeBtns = document.querySelectorAll('.sat-mode-btn');
         for (var mi = 0; mi < modeBtns.length; mi++) {
             modeBtns[mi].addEventListener('click', function () {
                 setViewMode(this.getAttribute('data-mode'));
+                // On mobile, the mode-toggle lives inside the off-
+                // canvas sidebar drawer. Without auto-close the user
+                // taps a mode and still sees the sidebar covering the
+                // view they just selected — they have to remember to
+                // close it manually, which feels broken. Close it for
+                // them as soon as the mode lands.
+                if (_satIsMobileLayout() && sidebar) {
+                    sidebar.classList.remove('open');
+                }
+                // After a mobile layout shift (e.g. entering MW mode
+                // switches from 1-pane to 2-pane stack), Leaflet
+                // doesn't know its containers resized. Invalidate
+                // every map's size on the next paint so storms stay
+                // centered and tiles fill cleanly.
+                if (_satIsMobileLayout()) {
+                    setTimeout(function () {
+                        if (_satMwLeafletIr) _satMwLeafletIr.invalidateSize(false);
+                        if (_satMwLeafletMw) _satMwLeafletMw.invalidateSize(false);
+                        if (_satRightLeafletMap) _satRightLeafletMap.invalidateSize(false);
+                    }, 250);
+                }
             });
         }
 
@@ -5290,6 +5400,16 @@
 
         if (sidebarToggle) sidebarToggle.addEventListener('click', function () { sidebar.classList.add('open'); });
         if (sidebarClose) sidebarClose.addEventListener('click', function () { sidebar.classList.remove('open'); });
+        // Click the dimmed backdrop to dismiss the sidebar — matches
+        // the "tap outside" convention every mobile drawer uses. Without
+        // this the sidebar can feel sticky when the user changes their
+        // mind mid-tap.
+        var sidebarBackdrop = document.getElementById('sat-sidebar-backdrop');
+        if (sidebarBackdrop) {
+            sidebarBackdrop.addEventListener('click', function () {
+                if (sidebar) sidebar.classList.remove('open');
+            });
+        }
 
         window.addEventListener('hashchange', function () {
             var hashStorm = getHashStorm();

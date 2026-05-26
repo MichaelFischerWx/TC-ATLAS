@@ -959,6 +959,16 @@ body.sat-leaflet-active .sat-zoom-group { display: none; }
 /* ── Responsive ─────────────────────────────────────────────── */
 
 @media (max-width: 768px) {
+    /* ═══════════════════════════════════════════════════════════
+       Mobile layout overhaul (single-pane by default, MW stacks).
+
+       Rationale: side-by-side dual-pane is unreadable at <360 px
+       per pane on phones, and pre-loading 13 IR + 13 WV frames
+       routinely OOM'd iOS Safari. We collapse to a single IR pane
+       and reserve the second pane exclusively for MW (where the
+       comparison is two static frames — light + valuable).
+       ═══════════════════════════════════════════════════════════ */
+
     /* .sat-main top is already correct via var(--topbar-h) +
        var(--secondary-bar-h) — no override needed. */
 
@@ -971,22 +981,128 @@ body.sat-leaflet-active .sat-zoom-group { display: none; }
         transform: translateX(-100%);
         transition: transform 0.25s ease;
         overflow-y: auto;
+        /* Slightly wider drawer + bigger interior padding so the
+           mode-toggle buttons stop getting fat-finger'd. */
+        width: 260px;
+        min-width: 260px;
     }
 
     .sat-sidebar.open {
         transform: translateX(0);
+        box-shadow: 4px 0 14px rgba(0,0,0,0.45);
     }
 
     .sat-sidebar-close {
         display: block;
+        font-size: 22px;
+        padding: 4px 8px;
+        min-width: 36px;
+        min-height: 36px;
     }
 
     .sat-sidebar-toggle {
         display: block;
+        /* Larger tap target — the previous 8×14 padding gave a
+           ~32 px hit area, below Apple's 44 px guideline. */
+        padding: 10px 16px;
+        font-size: 14px;
+        min-height: 44px;
     }
 
+    /* Backdrop dim while drawer is open — clicking the dimmed area
+       closes the sidebar (wired in JS). Without this, the mode
+       buttons sometimes register as "outside the sidebar" taps and
+       do nothing while the drawer is up. */
+    .sat-sidebar-backdrop {
+        display: none;
+        position: absolute;
+        inset: 0;
+        background: rgba(0,0,0,0.4);
+        z-index: 35;
+    }
+    .sat-sidebar.open ~ .sat-sidebar-backdrop {
+        display: block;
+    }
+
+    /* Stack panels vertically when both are visible (MW mode). */
     .sat-split-panels {
         flex-direction: column;
+    }
+
+    /* Right pane stacks below IR. We split available panel height
+       55/45 (IR/right) via flex ratios — this auto-adjusts to the
+       actual usable height after the topbar/secondary-bar/anim-bar
+       are subtracted, unlike a fixed `vh` slice which can over- or
+       under-allocate.
+
+       Heavy comparison modes (WV / Vis) get force-hidden because
+       they pre-load a second 13-frame image stack and tip iOS
+       Safari into its tab-kill memory zone. Their mode buttons
+       are hidden too (rule below) and JS redirects them to
+       Diagnostics defensively. MW is fine because it's a single
+       static frame plus a re-used IR layer — light. */
+    #sat-panel-ir {
+        flex: 55 1 0;
+        min-height: 0;
+    }
+    #sat-panel-right {
+        flex: 45 1 0;
+        min-height: 0;
+    }
+    #sat-panel-right[data-mode="compare-wv"],
+    #sat-panel-right[data-mode="compare-vis"] {
+        display: none;
+    }
+    /* When the right pane is hidden (WV/Vis on mobile), IR claims
+       the full viewport height — its flex weight stays the only
+       contributor to the parent's main-axis distribution. */
+
+    /* Hide WV / Vis mode buttons on mobile — those modes are
+       designed around side-by-side comparison and offer no value
+       in single-pane. Keeps the mode row uncluttered too. */
+    #sat-mode-wv,
+    #sat-mode-vis {
+        display: none;
+    }
+
+    /* The remaining 4 buttons (Diag, Track, Asym, MW) get a wider
+       2-row grid: 2 cols × 2 rows instead of 3×2. Bigger tap
+       targets, less crammed text. */
+    .sat-mode-toggle {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 4px;
+    }
+    .sat-mode-btn {
+        padding: 12px 6px;
+        font-size: 13px;
+        min-height: 44px;
+    }
+
+    /* Pin the floating sat-sidebar-toggle so it doesn't get
+       buried under the secondary bar / animation controls on
+       very tall pages. */
+    .sat-sidebar-toggle {
+        position: fixed;
+        top: calc(var(--topbar-h) + var(--secondary-bar-h) + 8px);
+        left: 8px;
+    }
+
+    /* MW controls row reflow: chips wrap, dropdown gets full width
+       on its own row so it's tappable. */
+    .sat-mw-controls-row {
+        flex-wrap: wrap;
+        gap: 6px 4px;
+    }
+    .sat-mw-pass-select {
+        flex: 1 1 100%;
+        min-width: 0;
+    }
+
+    /* Hide the canvas-era preset zoom buttons on mobile. Leaflet
+       pinch-zoom is the natural gesture; the buttons crowd the
+       transport bar. */
+    .sat-zoom-group {
+        display: none !important;
     }
 }
 

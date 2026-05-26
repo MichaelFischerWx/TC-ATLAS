@@ -655,6 +655,9 @@
                 <span class="sat-sidebar-hint">Arrow keys: frames &middot; Space: play</span>
             </div>
         </aside>
+        <!-- Mobile-only backdrop: click to dismiss the sidebar drawer.
+             Visible via CSS sibling-combinator when .sat-sidebar.open. -->
+        <div id="sat-sidebar-backdrop" class="sat-sidebar-backdrop"></div>
         <button id="sat-sidebar-toggle" class="sat-sidebar-toggle" title="Show options">&#9776; Options</button>
         <div id="sat-canvas-wrap" class="sat-canvas-wrap">
             <div class="sat-canvas-area">
@@ -801,6 +804,31 @@
                                 <span id="sat-mw-cb-min" class="sat-cb-label-left">180</span>
                                 <canvas id="sat-mw-cb-canvas" width="200" height="10"></canvas>
                                 <span id="sat-mw-cb-max" class="sat-cb-label-right">290 K</span>
+                            </div>
+                            <!-- Mobile-only thumbnail flow. Replaces the
+                                 inline dual-pane Leaflet comparison on
+                                 phones — too cramped + memory-heavy
+                                 there. Reuses _rtLoadStormMwPasses with
+                                 a different DOM prefix; clicks open the
+                                 existing IR↔MW compare modal full-screen,
+                                 which IS phone-friendly. -->
+                            <div id="sat-mw-mobile-section" class="sat-mw-mobile-section" style="display:none;">
+                                <div class="sat-mw-mobile-header">
+                                    <h3 class="sat-mw-mobile-title">Microwave passes &mdash; last 24h</h3>
+                                    <span id="sat-mw-mobile-status" class="sat-mw-mobile-status"></span>
+                                </div>
+                                <div id="sat-mw-mobile-products" class="rt-mw-storm-products sat-mw-mobile-products">
+                                    <button type="button" class="rt-mw-storm-chip active" data-product="89pct">89 PCT</button>
+                                    <button type="button" class="rt-mw-storm-chip" data-product="37color">37 color</button>
+                                    <button type="button" class="rt-mw-storm-chip" data-product="89v">89V</button>
+                                    <button type="button" class="rt-mw-storm-chip" data-product="89h">89H</button>
+                                    <button type="button" class="rt-mw-storm-chip" data-product="37v">37V</button>
+                                    <button type="button" class="rt-mw-storm-chip" data-product="37h">37H</button>
+                                </div>
+                                <div id="sat-mw-mobile-list" class="rt-mw-storm-list sat-mw-mobile-list">
+                                    <!-- populated by _rtRenderStormMwPasses with thumbnails -->
+                                </div>
+                                <div class="sat-mw-mobile-hint">Tap any pass to open the IR &harr; Microwave comparison.</div>
                             </div>
                         </div>
                     </div>

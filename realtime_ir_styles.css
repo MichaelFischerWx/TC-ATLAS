@@ -3583,6 +3583,64 @@ html:not([data-view="map"]) #ir-global-env-cbars {
     box-shadow: 0 0 0 1px rgba(251, 146, 60, 0.45);
 }
 
+/* ────────────────────────────────────────────────────────────────
+   Storm Satellite mobile MW section — reuses the storm-card's
+   thumbnail-grid renderer (_rtLoadStormMwPasses with prefix
+   'sat-mw-mobile'). Hidden on desktop; revealed by JS only when
+   _satIsMobileLayout() && MW mode active. Tap a thumbnail to
+   open the existing body-level IR↔MW compare modal full-screen.
+   ──────────────────────────────────────────────────────────────── */
+.sat-mw-mobile-section {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+    padding: 8px 10px 6px;
+    overflow-y: auto;
+    background: #0a0c12;
+    color: #e2e8f0;
+    -webkit-overflow-scrolling: touch;
+}
+.sat-mw-mobile-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+}
+.sat-mw-mobile-title {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: #e2e8f0;
+    letter-spacing: 0.02em;
+}
+.sat-mw-mobile-status {
+    font-size: 11px;
+    color: #94a3b8;
+}
+.sat-mw-mobile-products {
+    /* Chips wrap into 2 rows on narrow phones — overrides the
+       desktop flex-row gap with a tighter mobile spacing. */
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 8px;
+}
+.sat-mw-mobile-list {
+    /* Reuses .rt-mw-storm-list base styles for thumbnail grid; this
+       override just makes the cards comfortably tap-sized on phones. */
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+}
+.sat-mw-mobile-hint {
+    font-size: 11px;
+    color: #64748b;
+    text-align: center;
+    padding: 8px 0 12px;
+    border-top: 1px solid #1e2130;
+    margin-top: 8px;
+}
+
 /* Bottom-left floating legend on each Storm-Satellite Leaflet pane.
    Explains the on-map markers (yellow cross = latest best-track,
    orange ring = position at MW pass time, cyan ⊕ = IR center fix).
