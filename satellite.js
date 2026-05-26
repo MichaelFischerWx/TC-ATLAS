@@ -2683,31 +2683,34 @@
         for (var i = 0; i < _satIrFrameLayers.length; i++) {
             if (_satIrFrameLayers[i].setOpacity) _satIrFrameLayers[i].setOpacity(0);
         }
-        // Defer the fitBounds + tile redraw until after the browser
-        // has laid out the newly-shown containers. invalidateSize on
-        // a 0-px container makes L.map measure ZERO and fitBounds
-        // collapses to "show world." rAF gives one frame for the
-        // flex layout to settle, then we measure and fit cleanly.
-        var halfDeg = _satMwHalfDeg();
-        var b = L.latLngBounds(
-            [currentStorm.lat - halfDeg, currentStorm.lon - halfDeg],
-            [currentStorm.lat + halfDeg, currentStorm.lon + halfDeg]
-        );
+        // Use setView(center, zoom) instead of fitBounds — fitBounds
+        // depends on the container being correctly measured at the
+        // call moment, which is fragile across the display:none →
+        // display:'' transition + flex layout settling. setView is
+        // deterministic: storm always at geographic center, fixed
+        // zoom regardless of container width (more of the surrounding
+        // area visible in wider panes, less in narrower).
+        //
+        // Zoom 6 ≈ 14° visible at the equator in a 640-px-wide
+        // container — close to the ±6° MW storm-crop convention,
+        // but allows the IR overlay (±10°) to extend just past the
+        // visible edges for nice framing.
+        var _SAT_MW_ZOOM = 6;
         function _doFit() {
             if (_satMwLeafletIr) {
                 _satMwLeafletIr.invalidateSize(false);
-                _satMwLeafletIr.fitBounds(b, { animate: false });
+                _satMwLeafletIr.setView([currentStorm.lat, currentStorm.lon],
+                                        _SAT_MW_ZOOM, { animate: false });
             }
             if (_satMwLeafletMw) {
                 _satMwLeafletMw.invalidateSize(false);
-                _satMwLeafletMw.fitBounds(b, { animate: false });
+                _satMwLeafletMw.setView([currentStorm.lat, currentStorm.lon],
+                                        _SAT_MW_ZOOM, { animate: false });
             }
         }
         // First pass: rAF lets the just-shown containers measure.
-        // Second pass at 200ms: belt-and-suspenders for slow layout
-        // engines / nested flex containers where rAF can fire before
-        // the final dimensions settle. Without it, fitBounds can
-        // measure a 0×N container and zoom to "show the world."
+        // Second pass at 200ms: belt-and-suspenders in case the layout
+        // settles after the first paint (some browsers).
         requestAnimationFrame(function () {
             _doFit();
             _satMwUpdateMarkers();
@@ -3163,13 +3166,20 @@
     // when to call (mode/colormap switch, storm select, zoom button).
     function _satIrCenterOnStorm() {
         if (!_satMwLeafletIr || !currentStorm) return;
-        var halfDeg = (typeof zoomDeg === 'number') ? zoomDeg : 10;
-        var b = L.latLngBounds(
-            [currentStorm.lat - halfDeg, currentStorm.lon - halfDeg],
-            [currentStorm.lat + halfDeg, currentStorm.lon + halfDeg]
-        );
+        // setView is deterministic — storm always at geographic center.
+        // fitBounds was sensitive to container measurement timing
+        // (display:none → display:'' transitions), producing off-center
+        // views when the size hadn't fully settled. Zoom 6 ≈ ±7° visible
+        // in a 640-px pane, matching the canvas-era ±5°-±10° conventions.
+        var z = 6;
+        if (typeof zoomDeg === 'number') {
+            // Map the canvas-era preset (10°/5°/2°) to a rough Leaflet
+            // zoom level. Wider extent → smaller zoom number.
+            z = zoomDeg <= 2 ? 8 : zoomDeg <= 5 ? 7 : 6;
+        }
         _satMwLeafletIr.invalidateSize();
-        _satMwLeafletIr.fitBounds(b, { animate: false });
+        _satMwLeafletIr.setView([currentStorm.lat, currentStorm.lon], z,
+                                { animate: false });
     }
 
     // Append-only layer builder used when new frames arrive into an
@@ -3380,12 +3390,8 @@
             _satRightRebuildFrameLayers();
             if (_satRightLeafletMap && currentStorm) {
                 _satRightLeafletMap.invalidateSize(false);
-                var halfDeg = (typeof zoomDeg === 'number') ? zoomDeg : 10;
-                var b = L.latLngBounds(
-                    [currentStorm.lat - halfDeg, currentStorm.lon - halfDeg],
-                    [currentStorm.lat + halfDeg, currentStorm.lon + halfDeg]
-                );
-                _satRightLeafletMap.fitBounds(b, { animate: false });
+                _satRightLeafletMap.setView([currentStorm.lat, currentStorm.lon],
+                                            6, { animate: false });
             }
         } else if (_satRightFrameLayers.length < rightFrames.length) {
             _satRightAppendNewFrameLayers();
