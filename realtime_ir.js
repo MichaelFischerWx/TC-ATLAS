@@ -11976,8 +11976,7 @@
                 c.height = _RT_MW_THUMB_PX;
                 c.className = 'rt-mw-storm-thumb';
                 c.title = o.sensor + ' (' + o.platform + ') — '
-                        + product + ' — ' + utcStr
-                        + '\nClick to compare with IR at matched time';
+                        + product + ' — ' + utcStr;
                 thumbWrap.appendChild(c);
                 (function (cardEl) {
                     _rtDrawStormMwThumbnail(c, o, lat, lon, pr.png_url,
@@ -12003,9 +12002,25 @@
                             }
                         });
                 })(card);
+                // Click handler lives on the whole card (not just the
+                // thumbnail) so users can hit the meta column too — the
+                // thumbnail-only target wasn't intuitive.
+                card.classList.add('rt-mw-storm-card-clickable');
+                card.setAttribute('role', 'button');
+                card.setAttribute('tabindex', '0');
+                card.setAttribute('title',
+                    'Open side-by-side IR / Microwave compare for this pass');
                 (function (orbit) {
-                    c.addEventListener('click', function () {
+                    card.addEventListener('click', function () {
                         _rtOpenMwCompare(orbit, _rtMwStormState.storm);
+                    });
+                    // Keyboard parity — Enter / Space activate the card
+                    // when focused via tab navigation.
+                    card.addEventListener('keydown', function (ev) {
+                        if (ev.key === 'Enter' || ev.key === ' ') {
+                            ev.preventDefault();
+                            _rtOpenMwCompare(orbit, _rtMwStormState.storm);
+                        }
                     });
                 })(o);
             } else {

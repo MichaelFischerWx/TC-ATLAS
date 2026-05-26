@@ -3176,6 +3176,14 @@ html:not([data-view="map"]) #ir-global-env-cbars {
     border-radius: 6px;
     transition: background 0.12s, border-color 0.12s;
 }
+.rt-mw-storm-card-clickable {
+    cursor: pointer;
+    outline: none;
+}
+.rt-mw-storm-card-clickable:focus-visible {
+    box-shadow: 0 0 0 2px rgba(46, 125, 255, 0.55);
+    border-color: rgba(46, 125, 255, 0.55);
+}
 .rt-mw-storm-card:hover {
     background: rgba(46, 125, 255, 0.08);
     border-color: rgba(46, 125, 255, 0.30);
