@@ -3055,6 +3055,28 @@ html:not([data-view="map"]) #ir-global-env-cbars {
     color: #67e8f9;
     border-color: rgba(0, 229, 255, 0.40);
 }
+/* "→ IR Detail" button — only visible when the disturbance is matched
+   to an active ATCF storm. Sits beside Summary PNG in the modal
+   header. Uses the site's primary blue accent so it reads as a
+   navigation action rather than another download/save button. */
+.rt-genesis-modal-open-storm {
+    background: rgba(46, 125, 255, 0.12);
+    color: #2e7dff;
+    border: 1px solid rgba(46, 125, 255, 0.45);
+    border-radius: 5px;
+    font-size: 13px;
+    padding: 5px 10px;
+    cursor: pointer;
+    font-weight: 600;
+    transition: background 0.12s ease;
+}
+.rt-genesis-modal-open-storm:hover {
+    background: rgba(46, 125, 255, 0.22);
+}
+[data-theme="dark"] .rt-genesis-modal-open-storm {
+    color: #93c5fd;
+    border-color: rgba(46, 125, 255, 0.55);
+}
 
 /* ════════════════════════════════════════════════════════════════
    subOnly=1 iframe-embed mode. Strips all chrome and reduces the

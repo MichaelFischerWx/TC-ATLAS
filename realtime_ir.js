@@ -2437,6 +2437,15 @@
 
         for (var i = 0; i < storms.length; i++) {
             var s = storms[i];
+            // Suppress storms already represented by an FNV3 disturbance
+            // pin (matched within 600 km). The disturbance marker shows
+            // the official ATCF name and its modal has a "View IR
+            // Detail" button to reach the satellite page, so two pins
+            // for the same system are pure clutter.
+            if (s.atcf_id
+                    && _genesisMatchedAtcfIds[String(s.atcf_id).toUpperCase()]) {
+                continue;
+            }
             var cat = s.category || windToCategory(s.vmax_kt);
             var color = SS_COLORS[cat] || SS_COLORS.TD;
 
@@ -5732,6 +5741,14 @@
     // header without re-running the qualification scan.
     var _genesisDisturbanceMeta = {};
 
+    // ATCF IDs (uppercase) currently represented by an FNV3 disturbance
+    // pin. renderStormMarkers consults this set to suppress the redundant
+    // active-storm marker — the disturbance pin already shows the
+    // official storm name and the modal carries a "View IR Detail"
+    // button to reach the satellite page. Rebuilt by every
+    // _genesisApplyActiveStormMatches run.
+    var _genesisMatchedAtcfIds = {};
+
     // Map an active-storm ATCF basin code to its single-letter suffix
     // used in JTWC/NHC nomenclature (e.g., "WP012026" → "01W").
     var _ATCF_BASIN_LETTER = {
@@ -5809,6 +5826,9 @@
     // "01W" or "Bonnie" / "Bonnie"), and `atcfMatch` is stashed for
     // downstream UI (modal subtitle pill, tooltip).
     function _genesisApplyActiveStormMatches(disturbances, stormsArr) {
+        // Always rebuild from scratch — stale matches from a prior run
+        // would suppress storm markers that no longer have a partner.
+        _genesisMatchedAtcfIds = {};
         if (!disturbances || !disturbances.length) return;
         var pool = (stormsArr || []).slice();
         for (var i = 0; i < disturbances.length; i++) {
@@ -5827,6 +5847,7 @@
             d.atcfLabel = label;
             d.displayLabel = label.full;
             d.displayShort = label.short;
+            _genesisMatchedAtcfIds[label.atcfId.toUpperCase()] = true;
             // Remove from pool so a second disturbance can't claim it.
             var idx = pool.indexOf(match.storm);
             if (idx >= 0) pool.splice(idx, 1);
@@ -6470,6 +6491,13 @@
         // / "Invest 90W" / "Bonnie" instead of "Disturbance N", with
         // the matched storm cached on d.atcfMatch for the modal.
         _genesisApplyActiveStormMatches(disturbances, stormData);
+        // Re-render active-storm markers so matched ATCF systems get
+        // their (now redundant) pin suppressed. If renderStormMarkers
+        // was already called by pollActiveStorms moments ago, this is
+        // a quick re-pass with the updated _genesisMatchedAtcfIds set.
+        if (typeof renderStormMarkers === 'function' && stormData) {
+            try { renderStormMarkers(stormData); } catch (e) { /* non-fatal */ }
+        }
 
         for (var di = 0; di < disturbances.length; di++) {
             var d = disturbances[di];
@@ -6803,6 +6831,11 @@
                   '<p id="rt-genesis-modal-sub"></p>' +
                 '</div>' +
                 '<div style="display:flex; align-items:center; gap:8px;">' +
+                  // Shown only when the disturbance is paired with an
+                  // active ATCF storm — opens that storm's IR satellite
+                  // detail page so the user can see real-time imagery
+                  // alongside the FNV3 ensemble diagnostics.
+                  '<button type="button" id="rt-genesis-open-storm" class="rt-genesis-modal-open-storm" style="display:none;" title="View this storm\'s IR / GeoColor satellite detail page">→ IR Detail</button>' +
                   '<button type="button" id="rt-genesis-summary-save" class="rt-genesis-modal-summary-save" title="Save 3-panel summary PNG (map + intensity + genesis time)">⤓ Summary PNG</button>' +
                   '<button type="button" class="rt-genesis-modal-close" aria-label="Close" title="Close (Esc)">×</button>' +
                 '</div>' +
@@ -6883,6 +6916,15 @@
         });
         m.querySelector('#rt-genesis-summary-save').addEventListener('click', function () {
             _genesisSaveSummaryPNG();
+        });
+        // "→ IR Detail" — jumps to the matched ATCF storm's satellite
+        // page. atcfId is stored on the button by _renderGenesisDetail
+        // every time the modal opens with new data.
+        m.querySelector('#rt-genesis-open-storm').addEventListener('click', function () {
+            var atcfId = this.getAttribute('data-atcf-id');
+            if (!atcfId || typeof window._irOpenStorm !== 'function') return;
+            closeGenesisDetail();
+            window._irOpenStorm(atcfId);
         });
 
         // Jump-nav: smooth-scroll the modal's scroll container to the
@@ -7153,6 +7195,20 @@
         // user knows the FNV3 ensemble is forecasting a real already-
         // classified system, not a model-only disturbance.
         var _metaForSub = _genesisDisturbanceMeta[json.track_id];
+        // Show / hide the "→ IR Detail" button depending on whether
+        // the disturbance has a matched ATCF storm. Stash the atcf_id
+        // on the button so its click handler knows where to navigate.
+        var _openStormBtn = m.querySelector('#rt-genesis-open-storm');
+        if (_openStormBtn) {
+            if (_metaForSub && _metaForSub.atcfMatch && _metaForSub.atcfMatch.atcfId) {
+                _openStormBtn.setAttribute('data-atcf-id',
+                                           _metaForSub.atcfMatch.atcfId);
+                _openStormBtn.style.display = '';
+            } else {
+                _openStormBtn.removeAttribute('data-atcf-id');
+                _openStormBtn.style.display = 'none';
+            }
+        }
         if (_metaForSub && _metaForSub.atcfMatch) {
             var _am = _metaForSub.atcfMatch;
             var _matchTip = 'Disturbance cluster center within '
