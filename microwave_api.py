@@ -1813,6 +1813,40 @@ def _build_storm_relative_rgb_grid(
     return base64.b64encode(buf.read()).decode("ascii")
 
 
+def _adaptive_grid_cap(lat_span_deg: float, lon_span_deg: float) -> int:
+    """Pick a max_grid_dim that scales the per-pass compute / memory
+    cost to the pass's actual extent.
+
+    Narrow single-arc passes (≤30° span — the typical inner-core
+    TC pass that users actually zoom into) get the full 1500-cell
+    cap, honoring the regrid's 0.02°/~2 km base resolution. Wide
+    multi-orbit arcs (>30° span — the AMSR2/SSMI/S granules that the
+    pass-splitter sometimes can't fully break apart) get a lower
+    800-cell cap, capping wall-clock + memory but still landing at
+    ~3-6 km/pixel — well above the visible-pixelation threshold and
+    ~1.5× sharper than the pre-2026-05-26 flat 500 cap.
+
+    A continuous fade between 30° and 60° avoids a hard quality cliff
+    at exactly 30° (so a 31° pass doesn't suddenly look much worse
+    than a 29° one). Outside that range the cap saturates at 1500
+    (narrow) or 800 (wide).
+
+    Returns: int cell-count cap to pass as max_grid_dim.
+
+    See project_microwave_nrt notes — 2026-05-26 incident postmortem.
+    """
+    extent = max(lat_span_deg, lon_span_deg)
+    HI_CAP, LO_CAP = 1500, 800
+    NARROW_DEG, WIDE_DEG = 30.0, 60.0
+    if extent <= NARROW_DEG:
+        return HI_CAP
+    if extent >= WIDE_DEG:
+        return LO_CAP
+    # Linear interp between the two thresholds.
+    frac = (extent - NARROW_DEG) / (WIDE_DEG - NARROW_DEG)
+    return int(HI_CAP - frac * (HI_CAP - LO_CAP))
+
+
 def _regrid_swath(data: np.ndarray, lats: np.ndarray, lons: np.ndarray,
                   grid_res_deg: float = 0.02) -> dict:
     """
@@ -1845,19 +1879,13 @@ def _regrid_swath(data: np.ndarray, lats: np.ndarray, lons: np.ndarray,
     lat_min, lat_max = float(flat_lat.min()), float(flat_lat.max())
     lon_min, lon_max = float(flat_lon.min()), float(flat_lon.max())
 
-    # Limit grid size to prevent memory issues. 1500 is the post-2026-05-26
-    # value: the original 500 silently downsampled wide passes to ~13 km/pixel
-    # and made AMSR2 look blockier than SSMI/S; a brief experiment with 2500
-    # let *narrow* single-arc passes hit ~2 km but quadrupled wall-clock and
-    # memory on wide multi-orbit arcs to the point that the ingest job
-    # (which imports _regrid_swath_multi from this module) ran past the 30-min
-    # cron interval and hit the 1-h task-timeout repeatedly. 1500 keeps a
-    # ~3× resolution gain over the old 500 (typical 30° single-arc lands at
-    # full 0.02°) while capping the worst-case 60-120° multi-orbit arc at
-    # ~3 km/pixel — still well above the visible-pixelation threshold and
-    # ~1.7× less work than 2500. See project_microwave_nrt notes for the
-    # 2026-05-26 incident timeline.
-    max_grid_dim = 1500
+    # Adaptive cap: full 1500 cells for narrow single-arc passes
+    # (≤30° span — the typical inner-core TC pass that users zoom into),
+    # tapering down to 800 cells for wide ≥60° multi-orbit arcs.
+    # Keeps the AMSR2 sharpness fix on the passes that benefit, claws
+    # back ~3× per-pass compute + memory on the wide arcs that triggered
+    # the 2026-05-26 ingest timeout. See _adaptive_grid_cap docstring.
+    max_grid_dim = _adaptive_grid_cap(lat_max - lat_min, lon_max - lon_min)
     n_lat = min(int((lat_max - lat_min) / grid_res_deg) + 1, max_grid_dim)
     n_lon = min(int((lon_max - lon_min) / grid_res_deg) + 1, max_grid_dim)
 
@@ -1981,11 +2009,11 @@ def _regrid_swath_multi(
     lat_min, lat_max = float(flat_lat.min()), float(flat_lat.max())
     lon_min, lon_max = float(flat_lon.min()), float(flat_lon.max())
 
-    # Multi-channel cap matches _regrid_swath's so RGB composites
-    # (37color, derived from V37 + H37) preserve high-res detail
-    # end-to-end. See _regrid_swath above for the rationale on 1500
-    # and the 2026-05-26 ingest-timeout postmortem.
-    max_grid_dim = 1500
+    # Multi-channel cap mirrors _regrid_swath's adaptive policy so RGB
+    # composites (37color, derived from V37 + H37) preserve detail
+    # end-to-end on narrow passes without paying the wide-pass cost.
+    # See _adaptive_grid_cap and the 2026-05-26 postmortem.
+    max_grid_dim = _adaptive_grid_cap(lat_max - lat_min, lon_max - lon_min)
     n_lat = min(int((lat_max - lat_min) / grid_res_deg) + 1, max_grid_dim)
     n_lon = min(int((lon_max - lon_min) / grid_res_deg) + 1, max_grid_dim)
 
