@@ -633,6 +633,7 @@
             <div class="sat-sidebar-section">
                 <label>Right Panel</label>
                 <div class="sat-mode-toggle">
+                    <button class="sat-mode-btn" id="sat-mode-env" data-mode="environment" title="Storm environment: intensity history, shear, model spread, motion — useful for any storm, no detected eye required">Env</button>
                     <button class="sat-mode-btn active" id="sat-mode-diag" data-mode="diagnostics" title="Inner-core diagnostics — requires a detected eye (storms ≥ 65 kt)">Diag</button>
                     <button class="sat-mode-btn" id="sat-mode-track" data-mode="track-map" title="Center-fix track map">Track</button>
                     <button class="sat-mode-btn" id="sat-mode-asym" data-mode="asymmetry" title="IR asymmetry (wavenumber-1 decomposition)">Asym</button>
@@ -739,6 +740,50 @@
                             <div class="sat-panel-label">Center Fix Track</div>
                             <div class="sat-panel-canvas-wrap">
                                 <canvas id="sat-canvas-track"></canvas>
+                            </div>
+                        </div>
+                        <!-- Environment panel — intensity history, shear,
+                             model spread, motion. Useful for any storm
+                             regardless of vmax (no detected-eye requirement
+                             like diagnostics has). Default right-pane view
+                             for sub-hurricane systems. -->
+                        <div id="sat-env-panel" class="sat-env-panel" style="display:none;">
+                            <div class="sat-panel-label">Storm Environment</div>
+                            <div class="sat-env-body">
+                                <section class="sat-env-section" id="sat-env-status">
+                                    <div class="sat-env-row sat-env-headline">
+                                        <span class="sat-env-cat-chip" id="sat-env-cat">—</span>
+                                        <span class="sat-env-name" id="sat-env-name">—</span>
+                                    </div>
+                                    <div class="sat-env-row sat-env-vitals">
+                                        <span><b id="sat-env-vmax">—</b> kt</span>
+                                        <span><b id="sat-env-mslp">—</b> hPa</span>
+                                        <span id="sat-env-pos">—</span>
+                                    </div>
+                                    <div class="sat-env-row sat-env-motion">
+                                        <span id="sat-env-motion">Motion: —</span>
+                                    </div>
+                                </section>
+                                <section class="sat-env-section">
+                                    <div class="sat-env-label">Intensity History (6 h)</div>
+                                    <div id="sat-env-intensity-chart" class="sat-env-chart"></div>
+                                </section>
+                                <section class="sat-env-section">
+                                    <div class="sat-env-label">Vertical Wind Shear</div>
+                                    <div class="sat-env-row sat-env-shear">
+                                        <span id="sat-env-shear-val">—</span>
+                                        <span id="sat-env-shear-dir" class="sat-env-shear-dir"></span>
+                                    </div>
+                                </section>
+                                <section class="sat-env-section">
+                                    <div class="sat-env-label">DeepMind WeatherLab Forecast</div>
+                                    <div id="sat-env-wlab-chart" class="sat-env-chart"></div>
+                                    <div id="sat-env-wlab-meta" class="sat-env-meta">—</div>
+                                </section>
+                                <section class="sat-env-section" id="sat-env-recon-section">
+                                    <div class="sat-env-label">Reconnaissance</div>
+                                    <div id="sat-env-recon" class="sat-env-recon">—</div>
+                                </section>
                             </div>
                         </div>
                         <!-- Asymmetry panel -->

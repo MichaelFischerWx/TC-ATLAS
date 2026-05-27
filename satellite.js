@@ -2161,6 +2161,225 @@
             });
     }
 
+    // ── Environment Panel ────────────────────────────────────────
+    // Default right-pane view for sub-hurricane systems (was compare-wv).
+    // Fetches the same /metadata, /shear, /weatherlab endpoints the RT
+    // Monitor's storm-detail card uses — no new backend work needed.
+    // Pulls from caches where possible: track metadata already loaded
+    // for the Track Map mode; storm position from currentStorm.
+    var _satEnvLastStormId = null;
+    function _satLoadEnvironment(stormId) {
+        if (!stormId) return;
+        // Re-render headline immediately from currentStorm (always fresh
+        // from the active-storms poll) so the panel is never empty.
+        _satRenderEnvHeadline();
+        if (_satEnvLastStormId === stormId) return;  // already loaded
+        _satEnvLastStormId = stormId;
+
+        // Track metadata (intensity history + recon flag)
+        loadTrackMetadata(stormId, function () {
+            if (stormId !== currentStormId) return;
+            _satRenderEnvHeadline();
+            _satRenderEnvIntensity();
+            _satRenderEnvRecon();
+        });
+
+        // Shear (12-month avg or current GFS — endpoint serves whichever)
+        fetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(stormId) + '/shear',
+              { cache: 'no-store' })
+            .then(function (r) { if (!r.ok) throw new Error('shear HTTP ' + r.status); return r.json(); })
+            .then(function (data) {
+                if (stormId !== currentStormId) return;
+                _satRenderEnvShear(data);
+            })
+            .catch(function () { _satRenderEnvShear(null); });
+
+        // WeatherLab 50-member spread
+        fetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(stormId) + '/weatherlab',
+              { cache: 'no-store' })
+            .then(function (r) { if (!r.ok) throw new Error('weatherlab HTTP ' + r.status); return r.json(); })
+            .then(function (data) {
+                if (stormId !== currentStormId) return;
+                _satRenderEnvWlab(data);
+            })
+            .catch(function () { _satRenderEnvWlab(null); });
+    }
+
+    function _satRenderEnvHeadline() {
+        if (!currentStorm) return;
+        var catEl = document.getElementById('sat-env-cat');
+        var nameEl = document.getElementById('sat-env-name');
+        var vmaxEl = document.getElementById('sat-env-vmax');
+        var mslpEl = document.getElementById('sat-env-mslp');
+        var posEl = document.getElementById('sat-env-pos');
+        var motEl = document.getElementById('sat-env-motion');
+        var cat = currentStorm.category || categoryShort(currentStorm.category);
+        var catShort = categoryShort(cat);
+        if (catEl) {
+            catEl.textContent = catShort;
+            catEl.style.background = (SS_COLORS[cat] || SS_COLORS.TD);
+        }
+        if (nameEl) nameEl.textContent = currentStorm.name || currentStormId || '—';
+        if (vmaxEl) vmaxEl.textContent = (currentStorm.vmax_kt != null) ? currentStorm.vmax_kt : '—';
+        if (mslpEl) mslpEl.textContent = (currentStorm.mslp_hpa != null) ? currentStorm.mslp_hpa : '—';
+        if (posEl && currentStorm.lat != null) {
+            var lat = currentStorm.lat;
+            var lon = currentStorm.lon;
+            posEl.textContent = Math.abs(lat).toFixed(1) + '°' + (lat >= 0 ? 'N' : 'S') + '  '
+                + Math.abs(lon).toFixed(1) + '°' + (lon >= 0 ? 'E' : 'W');
+        }
+        if (motEl) {
+            var mv = currentStorm.motion_kt;
+            var md = currentStorm.motion_deg;
+            if (mv != null && md != null) {
+                motEl.textContent = 'Motion: ' + Math.round(mv) + ' kt @ ' + Math.round(md) + '°';
+            } else {
+                motEl.textContent = 'Motion: —';
+            }
+        }
+    }
+
+    function _satRenderEnvIntensity() {
+        var el = document.getElementById('sat-env-intensity-chart');
+        if (!el || typeof Plotly === 'undefined') return;
+        if (!trackMetadata || !trackMetadata.track) {
+            el.innerHTML = '<div style="color:#94a3b8;font-size:12px;padding:8px 0;">No intensity history available.</div>';
+            return;
+        }
+        var pts = trackMetadata.track || [];
+        if (pts.length === 0) {
+            el.innerHTML = '<div style="color:#94a3b8;font-size:12px;padding:8px 0;">No track points.</div>';
+            return;
+        }
+        var times = [], vmax = [], mslp = [];
+        for (var i = 0; i < pts.length; i++) {
+            var p = pts[i];
+            if (!p.time) continue;
+            times.push(p.time);
+            vmax.push(p.vmax_kt != null ? p.vmax_kt : null);
+            mslp.push(p.mslp_hpa != null ? p.mslp_hpa : null);
+        }
+        var traces = [
+            { x: times, y: vmax, name: 'Wind (kt)', mode: 'lines+markers',
+              line: { color: '#fbbf24', width: 2 },
+              marker: { size: 4 },
+              yaxis: 'y' },
+            { x: times, y: mslp, name: 'MSLP (hPa)', mode: 'lines+markers',
+              line: { color: '#60a5fa', width: 2 },
+              marker: { size: 4 },
+              yaxis: 'y2' }
+        ];
+        var layout = {
+            margin: { t: 4, r: 38, b: 28, l: 38 },
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: 'rgba(0,0,0,0)',
+            font: { color: '#cbd5e1', size: 10, family: '"DM Sans",sans-serif' },
+            showlegend: false,
+            xaxis: { gridcolor: 'rgba(255,255,255,0.08)', tickformat: '%H:%M' },
+            yaxis: { title: { text: 'kt', font: { size: 10 } },
+                     gridcolor: 'rgba(255,255,255,0.08)',
+                     side: 'left', color: '#fbbf24' },
+            yaxis2: { title: { text: 'hPa', font: { size: 10 } },
+                      overlaying: 'y', side: 'right', color: '#60a5fa',
+                      showgrid: false }
+        };
+        Plotly.react(el, traces, layout,
+                     { displayModeBar: false, responsive: true, staticPlot: _IS_TOUCH_INIT });
+    }
+
+    function _satRenderEnvShear(data) {
+        var valEl = document.getElementById('sat-env-shear-val');
+        var dirEl = document.getElementById('sat-env-shear-dir');
+        if (!valEl) return;
+        if (!data || data.shear_kt == null) {
+            valEl.textContent = '—';
+            if (dirEl) dirEl.textContent = '';
+            return;
+        }
+        valEl.textContent = Math.round(data.shear_kt) + ' kt';
+        if (dirEl) {
+            var dirStr = '';
+            if (data.shear_dir_deg != null) {
+                dirStr = ' @ ' + Math.round(data.shear_dir_deg) + '°';
+            }
+            if (data.source) dirStr += '  (' + data.source + ')';
+            dirEl.textContent = dirStr;
+        }
+    }
+
+    function _satRenderEnvWlab(data) {
+        var el = document.getElementById('sat-env-wlab-chart');
+        var metaEl = document.getElementById('sat-env-wlab-meta');
+        if (!el || typeof Plotly === 'undefined') return;
+        if (!data || !data.members || data.members.length === 0) {
+            el.innerHTML = '<div style="color:#94a3b8;font-size:12px;padding:8px 0;">No WeatherLab forecast available.</div>';
+            if (metaEl) metaEl.textContent = '';
+            return;
+        }
+        // Build envelope (10th/50th/90th percentile of vmax per forecast hour)
+        var members = data.members;
+        var fhours = data.fhours || (members[0] && members[0].fhours) || [];
+        if (fhours.length === 0) {
+            if (metaEl) metaEl.textContent = 'No forecast hours in WeatherLab response.';
+            return;
+        }
+        var p10 = [], p50 = [], p90 = [];
+        for (var fh = 0; fh < fhours.length; fh++) {
+            var vals = [];
+            for (var mi = 0; mi < members.length; mi++) {
+                var m = members[mi];
+                var v = m && m.vmax_kt && m.vmax_kt[fh];
+                if (v != null && isFinite(v)) vals.push(v);
+            }
+            if (vals.length === 0) { p10.push(null); p50.push(null); p90.push(null); continue; }
+            vals.sort(function (a, b) { return a - b; });
+            p10.push(vals[Math.floor(vals.length * 0.10)]);
+            p50.push(vals[Math.floor(vals.length * 0.50)]);
+            p90.push(vals[Math.floor(vals.length * 0.90)]);
+        }
+        var traces = [
+            { x: fhours, y: p90, name: '90th pct', mode: 'lines',
+              line: { color: 'rgba(0,229,255,0.0)' },
+              showlegend: false, hoverinfo: 'skip' },
+            { x: fhours, y: p10, name: '10-90 spread', mode: 'lines',
+              line: { color: 'rgba(0,229,255,0.0)' },
+              fill: 'tonexty', fillcolor: 'rgba(0,229,255,0.18)',
+              showlegend: false, hoverinfo: 'skip' },
+            { x: fhours, y: p50, name: 'Median', mode: 'lines',
+              line: { color: '#00e5ff', width: 2.5 },
+              showlegend: false }
+        ];
+        var layout = {
+            margin: { t: 4, r: 8, b: 28, l: 38 },
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: 'rgba(0,0,0,0)',
+            font: { color: '#cbd5e1', size: 10, family: '"DM Sans",sans-serif' },
+            xaxis: { title: { text: 'Forecast hour', font: { size: 10 } },
+                     gridcolor: 'rgba(255,255,255,0.08)' },
+            yaxis: { title: { text: 'kt', font: { size: 10 } },
+                     gridcolor: 'rgba(255,255,255,0.08)' }
+        };
+        Plotly.react(el, traces, layout,
+                     { displayModeBar: false, responsive: true, staticPlot: _IS_TOUCH_INIT });
+        if (metaEl) {
+            metaEl.textContent = (data.n_members || members.length) + ' members'
+                + (data.init_time ? ' · init ' + data.init_time : '');
+        }
+    }
+
+    function _satRenderEnvRecon() {
+        var el = document.getElementById('sat-env-recon');
+        if (!el) return;
+        if (trackMetadata && trackMetadata.has_recon) {
+            el.classList.add('active');
+            el.innerHTML = '● Active reconnaissance &nbsp; '
+                + '<a href="explorer.html?tab=realtime" style="color:#60a5fa;">→ Open in Real-Time TDR</a>';
+        } else {
+            el.classList.remove('active');
+            el.textContent = 'None active.';
+        }
+    }
+
     function renderTrackMap() {
         if (!canvasTrack) {
             canvasTrack = document.getElementById('sat-canvas-track');
@@ -2579,6 +2798,7 @@
         var compareOptions = document.getElementById('sat-compare-options');
         var trackPanel = document.getElementById('sat-track-panel');
         var asymPanel = document.getElementById('sat-asym-panel');
+        var envPanel = document.getElementById('sat-env-panel');
         var mwPanel = document.getElementById('sat-mw-section');
 
         if (rightPanel) rightPanel.setAttribute('data-mode', newMode);
@@ -2589,6 +2809,7 @@
         if (compareOptions) compareOptions.style.display = 'none';
         if (trackPanel) trackPanel.style.display = 'none';
         if (asymPanel) asymPanel.style.display = 'none';
+        if (envPanel) envPanel.style.display = 'none';
         if (mwPanel) mwPanel.style.display = 'none';
 
         // MW mode: show the dedicated MW dual-pane panel + ensure the
@@ -2637,6 +2858,14 @@
             }
             var frame = irFrames[animIndex];
             if (frame) computeAndRenderAsymmetry(frame);
+        } else if (newMode === 'environment') {
+            // Environment panel — intensity history + shear + model
+            // spread + motion. No IR-frame dependency, so it works on
+            // any storm regardless of vmax. Default for sub-hurricane
+            // systems (was: compare-wv, which auto-fetched a WV bundle
+            // most users didn't need at open time).
+            if (envPanel) envPanel.style.display = '';
+            if (currentStormId) _satLoadEnvironment(currentStormId);
         } else {
             // compare-wv or compare-vis
             if (comparePanel) comparePanel.style.display = '';
@@ -4364,10 +4593,18 @@
         //     (storm-bound but IR-frame-independent — just refresh
         //     the panel against the new storm).
         // ── Smart-default mode switch (deferred below) ────────────
+        //   • Hurricane (≥ 65 kt) → diagnostics (IR-based inner-core
+        //     charts: Hovmöller, radial profile, asymmetry).
+        //   • Anything weaker → environment (intensity history, shear,
+        //     model spread, motion). Previously defaulted to compare-wv
+        //     which auto-fetched a WV bundle on every storm open even
+        //     when the user just wanted the IR — wasteful, especially
+        //     on mobile. The Env panel is useful for any storm without
+        //     requiring a detected eye.
         var smartMode = (currentStorm
                          && isFinite(currentStorm.vmax_kt)
                          && currentStorm.vmax_kt >= 65)
-            ? 'diagnostics' : 'compare-wv';
+            ? 'diagnostics' : 'environment';
         // Local helper — actually runs the mode switch. We hold off
         // calling this until AFTER loadFrames so IR fetches grab
         // the browser's connection slots first; otherwise the

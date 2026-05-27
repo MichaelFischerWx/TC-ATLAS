@@ -503,6 +503,105 @@
     overflow: hidden;
 }
 
+/* ── Environment Panel ─────────────────────────────────────── */
+/* Default right-pane view for sub-hurricane systems. Intensity
+   history, shear, model spread, motion — useful for any storm
+   without requiring a detected eye. */
+
+.sat-env-panel {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+    overflow: hidden;
+}
+.sat-env-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 12px 12px;
+    font-family: "DM Sans", "Helvetica Neue", sans-serif;
+    color: #e2e8f0;
+    font-size: 13px;
+    line-height: 1.4;
+}
+.sat-env-section {
+    margin-bottom: 14px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.sat-env-section:last-child {
+    border-bottom: none;
+}
+.sat-env-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #94a3b8;
+    margin-bottom: 6px;
+}
+.sat-env-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: baseline;
+    margin-bottom: 4px;
+}
+.sat-env-headline {
+    margin-bottom: 8px;
+}
+.sat-env-cat-chip {
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: #2e7dff;
+    color: #fff;
+    font-size: 12px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+.sat-env-name {
+    font-size: 17px;
+    font-weight: 600;
+    color: #f1f5f9;
+}
+.sat-env-vitals {
+    font-variant-numeric: tabular-nums;
+    color: #cbd5e1;
+}
+.sat-env-vitals b {
+    color: #f1f5f9;
+    font-weight: 600;
+}
+.sat-env-motion {
+    color: #94a3b8;
+    font-size: 12px;
+}
+.sat-env-shear {
+    font-variant-numeric: tabular-nums;
+    color: #f1f5f9;
+    font-size: 15px;
+}
+.sat-env-shear-dir {
+    color: #94a3b8;
+    font-size: 12px;
+}
+.sat-env-chart {
+    width: 100%;
+    height: 140px;
+}
+.sat-env-meta {
+    color: #94a3b8;
+    font-size: 11px;
+    margin-top: 4px;
+}
+.sat-env-recon {
+    color: #cbd5e1;
+}
+.sat-env-recon.active {
+    color: #34d399;
+    font-weight: 500;
+}
+
 /* ── Asymmetry Panel ───────────────────────────────────────── */
 
 .sat-asym-panel {
