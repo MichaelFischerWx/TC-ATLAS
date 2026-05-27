@@ -547,6 +547,42 @@
         <div class="ir-legend-row"><span class="ir-legend-dot" style="background:#dc2626;"></span> Cat 5 (137+ kt)</div>
     </div>
 
+    <!-- ── Storm Satellite: Quick View (default) ─────────────────
+         Pre-rendered animated WebP + minimal context. Loads in
+         ~200-400 ms from GCS direct. Matches the simplicity of
+         Tropical Tidbits / cyclonicwx. The full interactive
+         viewer (sat-main, below) is opt-in via "Detailed Analysis". -->
+    <section id="sat-quick-view" class="sat-quick-view" style="display:none;" aria-label="Storm Satellite Quick View">
+        <div class="qv-storm-bar">
+            <div class="qv-storm-picker-wrap">
+                <select id="qv-storm-select" class="qv-storm-select" aria-label="Pick a storm">
+                    <option value="">No active storms</option>
+                </select>
+            </div>
+            <div class="qv-storm-info">
+                <span class="qv-cat-chip" id="qv-cat">—</span>
+                <span class="qv-name" id="qv-name">—</span>
+                <span class="qv-vitals" id="qv-vitals">—</span>
+            </div>
+            <button id="qv-to-detailed" class="qv-detailed-btn" title="Open the full interactive viewer (compare, diagnostics, asymmetry, etc.)">Detailed Analysis &rarr;</button>
+        </div>
+        <div class="qv-stage">
+            <img id="qv-animation" class="qv-animation" alt="Storm IR animation" />
+            <div id="qv-loader" class="qv-loader">Loading animation&hellip;</div>
+            <div id="qv-empty" class="qv-empty" style="display:none;">
+                <div style="font-size:18px;margin-bottom:8px;">No active storms.</div>
+                <div style="color:#94a3b8;">Storm animations appear here when systems are active in any basin.</div>
+            </div>
+            <div id="qv-error" class="qv-error" style="display:none;"></div>
+        </div>
+        <div class="qv-meta-bar">
+            <div class="qv-meta-item"><span class="qv-meta-label">Position</span><b id="qv-position">—</b></div>
+            <div class="qv-meta-item"><span class="qv-meta-label">Motion</span><b id="qv-motion">—</b></div>
+            <div class="qv-meta-item"><span class="qv-meta-label">Shear</span><b id="qv-shear">—</b></div>
+            <div class="qv-meta-item"><span class="qv-meta-label">Satellite</span><b id="qv-sat">—</b></div>
+        </div>
+    </section>
+
     <!-- ── Satellite Viewer (tab) ─────────────────────────────── -->
     <section id="sat-main" class="sat-main" style="display:none;" aria-label="Satellite Viewer">
         <aside id="sat-sidebar" class="sat-sidebar">
@@ -1692,6 +1728,9 @@
     <script>document.write('<script src="tc_mw_layer.js'+window.__v+'"><\/script>');</script>
     <script>document.write('<script src="realtime_ir.js'+window.__v+'"><\/script>');</script>
     <script>document.write('<script src="satellite.js'+window.__v+'"><\/script>');</script>
+    <!-- Storm Satellite Quick View (default casual viewer). Light IIFE,
+         independent of satellite.js — loads animated WebP from GCS direct. -->
+    <script>document.write('<script src="sat_quick.js'+window.__v+'"><\/script>');</script>
     <script>document.write('<script src="realtime_subseasonal.js'+window.__v+'"><\/script>');</script>
     <script>document.write('<script src="realtime_seasonal.js'+window.__v+'"><\/script>');</script>
     <script>document.write('<link rel="stylesheet" href="realtime_seasonal_styles.css'+window.__v+'">');</script>
@@ -1732,6 +1771,7 @@
 
             var irMain = document.getElementById('ir-main');
             var satMain = document.getElementById('sat-main');
+            var satQuick = document.getElementById('sat-quick-view');
             var subMain = document.getElementById('sub-main');
             var seaMain = document.getElementById('seasonal-main');
             var legend = document.getElementById('ir-legend');
@@ -1754,13 +1794,24 @@
                logic linear regardless of how many views we add. */
             irMain.style.display = 'none';
             satMain.style.display = 'none';
+            if (satQuick) satQuick.style.display = 'none';
             if (subMain) subMain.style.display = 'none';
             if (seaMain) seaMain.style.display = 'none';
             if (legend) legend.style.display = 'none';
 
             if (view === 'satellite') {
-                satMain.style.display = 'flex';
-                if (window.activateSatelliteView) window.activateSatelliteView();
+                /* Storm Satellite default = Quick View (lightweight
+                   animated WebP from GCS). Detailed interactive viewer
+                   is opt-in via the "Detailed Analysis" button or via
+                   ?detailed=1 in the hash. */
+                var goDetailed = /[#&]detailed=1/.test(window.location.hash || '');
+                if (goDetailed) {
+                    satMain.style.display = 'flex';
+                    if (window.activateSatelliteView) window.activateSatelliteView();
+                } else {
+                    if (satQuick) satQuick.style.display = 'flex';
+                    if (window.activateQuickView) window.activateQuickView();
+                }
             } else if (view === 'subseasonal') {
                 if (subMain) subMain.style.display = 'flex';
                 if (window.activateSubseasonalView) window.activateSubseasonalView();

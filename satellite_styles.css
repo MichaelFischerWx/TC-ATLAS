@@ -791,6 +791,166 @@
     text-shadow: 0 0 4px #0a0c12, 0 0 8px #0a0c12, 0 0 12px #0a0c12;
 }
 
+/* ── Storm Satellite Quick View ────────────────────────────────
+   The default "casual viewer" layout: a pre-rendered animated WebP
+   + minimal context. Loads in ~200-400 ms from GCS direct, matching
+   the simplicity of cyclonicwx / Tropical Tidbits. The full
+   interactive viewer (sat-main) is one button-click away. */
+
+.sat-quick-view {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    background: #0a0c12;
+    color: #e2e8f0;
+    font-family: "DM Sans", "Helvetica Neue", sans-serif;
+}
+
+.qv-storm-bar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 12px 18px;
+    border-bottom: 1px solid #1d2030;
+    background: #11141d;
+    flex-wrap: wrap;
+}
+.qv-storm-picker-wrap {
+    flex: 0 0 auto;
+}
+.qv-storm-select {
+    background: #1a1e2a;
+    color: #e2e8f0;
+    border: 1px solid #2a2d38;
+    border-radius: 4px;
+    padding: 6px 10px;
+    font-size: 13px;
+    font-family: inherit;
+    min-width: 180px;
+}
+.qv-storm-info {
+    flex: 1 1 auto;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+.qv-cat-chip {
+    padding: 3px 10px;
+    border-radius: 4px;
+    background: #2e7dff;
+    color: #fff;
+    font-size: 13px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+.qv-name {
+    font-size: 20px;
+    font-weight: 600;
+    color: #f1f5f9;
+}
+.qv-vitals {
+    color: #cbd5e1;
+    font-variant-numeric: tabular-nums;
+    font-size: 14px;
+}
+.qv-detailed-btn {
+    background: #2e7dff;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    padding: 8px 14px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    font-family: inherit;
+}
+.qv-detailed-btn:hover { background: #1e6fff; }
+.qv-detailed-btn:active { background: #1858d8; }
+
+.qv-stage {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    background: #0a0c12;
+    padding: 16px;
+    overflow: hidden;
+}
+.qv-animation {
+    max-width: 100%;
+    max-height: 100%;
+    display: none;            /* shown once loaded */
+    object-fit: contain;
+    border-radius: 4px;
+    /* Crisp at native size; smooth fallback when scaled */
+    image-rendering: -webkit-optimize-contrast;
+}
+.qv-animation.loaded {
+    display: block;
+}
+.qv-loader {
+    color: #94a3b8;
+    font-size: 14px;
+    padding: 12px 18px;
+    background: rgba(15, 22, 36, 0.7);
+    border-radius: 6px;
+    backdrop-filter: blur(6px);
+}
+.qv-empty {
+    text-align: center;
+    color: #e2e8f0;
+    max-width: 420px;
+    padding: 32px 24px;
+}
+.qv-error {
+    color: #f87171;
+    text-align: center;
+    padding: 18px;
+    max-width: 480px;
+    line-height: 1.5;
+}
+
+.qv-meta-bar {
+    display: flex;
+    gap: 24px;
+    padding: 12px 18px;
+    border-top: 1px solid #1d2030;
+    background: #11141d;
+    flex-wrap: wrap;
+    font-size: 13px;
+}
+.qv-meta-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.qv-meta-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #94a3b8;
+}
+.qv-meta-item b {
+    color: #f1f5f9;
+    font-variant-numeric: tabular-nums;
+    font-weight: 500;
+}
+
+@media (max-width: 640px) {
+    /* Mobile: stack bar items, shrink chip sizes. The animation
+       still gets the central space.  */
+    .qv-storm-bar { padding: 10px 12px; gap: 10px; }
+    .qv-name { font-size: 17px; }
+    .qv-vitals { font-size: 12px; }
+    .qv-detailed-btn { padding: 7px 11px; font-size: 12px; }
+    .qv-meta-bar { gap: 12px; padding: 10px 12px; font-size: 12px; }
+    .qv-meta-label { font-size: 9px; }
+}
+
 /* ── Hover Tooltip ──────────────────────────────────────────── */
 
 .sat-tooltip {
