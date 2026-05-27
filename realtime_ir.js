@@ -1748,6 +1748,240 @@
         }
     };
 
+    // ── Surface obs overlay (NDBC buoys; Synoptic Data is planned) ───
+    // Toggled by the "Obs" button in the card header. Renders each
+    // station as a conventional met station plot: wind barb at the
+    // station marker, temperature upper-left, dewpoint lower-left,
+    // pressure upper-right (last 3 digits, tenths of mb), filled
+    // circle indicating sky cover (NDBC doesn't report sky so we
+    // skip that for now). Hover tooltip shows the full obs.
+    var _surfaceObsLayer = null;
+    var _surfaceObsAbortController = null;
+
+    function _kt(v) { return (v == null) ? null : Math.round(v); }
+    function _cToF(c) { return (c == null) ? null : Math.round(c * 9/5 + 32); }
+
+    /** Draw a meteorological wind barb as SVG. `dir` is the direction
+     *  FROM which wind is blowing (compass degrees, 0=N). `speed` is in
+     *  knots. Returns an SVG <g> element positioned at the origin (caller
+     *  translates to the station location). */
+    function _drawWindBarb(speed, dir) {
+        var ns = 'http://www.w3.org/2000/svg';
+        var g = document.createElementNS(ns, 'g');
+        if (speed == null || dir == null) return g;
+        var spd = Math.round(speed);
+        if (spd < 2) {
+            // Calm: small open circle at station center.
+            var c = document.createElementNS(ns, 'circle');
+            c.setAttribute('cx', 0); c.setAttribute('cy', 0);
+            c.setAttribute('r', 3); c.setAttribute('fill', 'none');
+            c.setAttribute('stroke', '#0f172a'); c.setAttribute('stroke-width', 1.2);
+            g.appendChild(c);
+            return g;
+        }
+        // Barb extends in the FROM direction (windward), 24 px long.
+        var L = 24;
+        var rad = (dir - 90) * Math.PI / 180;  // SVG y-axis flipped, 0°=N is up
+        var bx = L * Math.cos(rad);
+        var by = L * Math.sin(rad);
+        var shaft = document.createElementNS(ns, 'line');
+        shaft.setAttribute('x1', 0); shaft.setAttribute('y1', 0);
+        shaft.setAttribute('x2', bx); shaft.setAttribute('y2', by);
+        shaft.setAttribute('stroke', '#0f172a');
+        shaft.setAttribute('stroke-width', 1.5);
+        g.appendChild(shaft);
+
+        // Place barbs perpendicular to the shaft on the upwind side.
+        // Standard: 50 kt = filled triangle (pennant), 10 kt = full barb,
+        // 5 kt = half barb. Place from the windward end inward.
+        var remaining = spd;
+        var pos = 1.0;          // fraction along shaft, starting at windward end
+        var step = 5 / L;       // 5 px between feathers
+        var perp = Math.PI / 2; // perpendicular to shaft
+        var barbDir = -perp;    // upwind side (looks correct visually)
+        var barbLen = 9;
+
+        function addBarb(kind) {
+            var px = bx * pos;
+            var py = by * pos;
+            var perpRad = rad + barbDir;
+            var dxF = barbLen * Math.cos(perpRad);
+            var dyF = barbLen * Math.sin(perpRad);
+            if (kind === 'pennant') {
+                // Filled triangle from (px,py) to (px+dxF,py+dyF) to next-step point
+                var nextX = bx * (pos - step * 2.4);
+                var nextY = by * (pos - step * 2.4);
+                var poly = document.createElementNS(ns, 'polygon');
+                poly.setAttribute('points',
+                    px + ',' + py + ' ' +
+                    (px + dxF) + ',' + (py + dyF) + ' ' +
+                    nextX + ',' + nextY);
+                poly.setAttribute('fill', '#0f172a');
+                poly.setAttribute('stroke', '#0f172a');
+                g.appendChild(poly);
+            } else {
+                var len = (kind === 'full') ? barbLen : barbLen * 0.55;
+                var dxL = len * Math.cos(perpRad);
+                var dyL = len * Math.sin(perpRad);
+                var ln = document.createElementNS(ns, 'line');
+                ln.setAttribute('x1', px); ln.setAttribute('y1', py);
+                ln.setAttribute('x2', px + dxL); ln.setAttribute('y2', py + dyL);
+                ln.setAttribute('stroke', '#0f172a');
+                ln.setAttribute('stroke-width', 1.5);
+                g.appendChild(ln);
+            }
+        }
+        while (remaining >= 50) { addBarb('pennant'); remaining -= 50; pos -= step * 3; }
+        while (remaining >= 10) { addBarb('full');    remaining -= 10; pos -= step * 1.6; }
+        if (remaining >= 5) { addBarb('half'); }
+        return g;
+    }
+
+    /** Build a station-plot DOM element for one observation. Centered
+     *  at (0,0); the caller places it via L.divIcon. */
+    function _renderStationPlot(ob) {
+        var ns = 'http://www.w3.org/2000/svg';
+        var svg = document.createElementNS(ns, 'svg');
+        svg.setAttribute('width', 72); svg.setAttribute('height', 56);
+        svg.setAttribute('viewBox', '-36 -28 72 56');
+        svg.setAttribute('class', 'ir-stn-plot');
+        // Station center dot.
+        var dot = document.createElementNS(ns, 'circle');
+        dot.setAttribute('cx', 0); dot.setAttribute('cy', 0);
+        dot.setAttribute('r', 1.5); dot.setAttribute('fill', '#0f172a');
+        svg.appendChild(dot);
+        // Wind barb (built once, transformed if needed by the barb fn).
+        svg.appendChild(_drawWindBarb(ob.wind_speed_kt, ob.wind_dir_deg));
+
+        function label(x, y, text, anchor) {
+            if (text == null || text === '') return;
+            var t = document.createElementNS(ns, 'text');
+            t.setAttribute('x', x); t.setAttribute('y', y);
+            t.setAttribute('text-anchor', anchor || 'middle');
+            t.setAttribute('font-family', "'DM Sans', sans-serif");
+            t.setAttribute('font-size', '9');
+            t.setAttribute('font-weight', '600');
+            t.setAttribute('fill', '#0f172a');
+            t.setAttribute('paint-order', 'stroke');
+            t.setAttribute('stroke', 'rgba(255,255,255,0.85)');
+            t.setAttribute('stroke-width', '2');
+            t.textContent = text;
+            svg.appendChild(t);
+        }
+        // Temperature (°C) upper-left.
+        if (ob.air_temp_c != null) label(-9, -7, Math.round(ob.air_temp_c) + '', 'end');
+        // Dewpoint (°C) lower-left.
+        if (ob.dewpoint_c != null) label(-9, 12, Math.round(ob.dewpoint_c) + '', 'end');
+        // MSLP: last 3 digits of tenths (e.g. 1003.4 → "034"; 996.5 → "965").
+        if (ob.pressure_hpa != null) {
+            var p10 = Math.round(ob.pressure_hpa * 10);
+            var p3 = ('000' + (p10 % 1000)).slice(-3);
+            label(9, -7, p3, 'start');
+        }
+        return svg;
+    }
+
+    /** Toggle the surface-obs overlay on the card. Fetches from the
+     *  backend's /surface-obs endpoint, parses, plots each station. */
+    window._irToggleSurfaceObs = function () {
+        var btn = document.getElementById('ir-detail-obs-toggle');
+        if (!detailMap || !currentStormId) return;
+        if (_surfaceObsLayer) {
+            // Toggle off.
+            detailMap.removeLayer(_surfaceObsLayer);
+            _surfaceObsLayer = null;
+            if (btn) btn.classList.remove('active');
+            if (_surfaceObsAbortController) {
+                try { _surfaceObsAbortController.abort(); } catch (e) {}
+                _surfaceObsAbortController = null;
+            }
+            _ga('ir_surface_obs_toggle', { on: false });
+            return;
+        }
+        if (btn) btn.classList.add('active');
+        _ga('ir_surface_obs_toggle', { on: true });
+
+        var atcfId = currentStormId;
+        _surfaceObsAbortController = new AbortController();
+        var sig = _surfaceObsAbortController.signal;
+        fetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) +
+              '/surface-obs?radius_deg=10', { signal: sig })
+            .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+            .then(function (data) {
+                if (currentStormId !== atcfId) return;
+                var obs = (data && data.observations) || [];
+                var lg = L.layerGroup();
+                for (var i = 0; i < obs.length; i++) {
+                    var ob = obs[i];
+                    var svgEl = _renderStationPlot(ob);
+                    var html = svgEl.outerHTML;
+                    // Tooltip text — full obs detail on hover.
+                    var lines = [];
+                    lines.push('<b>' + ob.id + '</b> · ' + ob.source);
+                    if (ob.wind_speed_kt != null && ob.wind_dir_deg != null) {
+                        lines.push('Wind: ' + Math.round(ob.wind_dir_deg) + '° @ ' +
+                                   Math.round(ob.wind_speed_kt) + ' kt' +
+                                   (ob.wind_gust_kt != null ?
+                                    ' (gusts ' + Math.round(ob.wind_gust_kt) + ')' : ''));
+                    }
+                    if (ob.air_temp_c != null) {
+                        lines.push('T: ' + ob.air_temp_c.toFixed(1) + '°C / ' +
+                                   _cToF(ob.air_temp_c) + '°F');
+                    }
+                    if (ob.dewpoint_c != null) {
+                        lines.push('Td: ' + ob.dewpoint_c.toFixed(1) + '°C');
+                    }
+                    if (ob.sst_c != null) {
+                        lines.push('SST: ' + ob.sst_c.toFixed(1) + '°C');
+                    }
+                    if (ob.pressure_hpa != null) {
+                        lines.push('MSLP: ' + ob.pressure_hpa.toFixed(1) + ' hPa');
+                    }
+                    if (ob.wave_height_m != null) {
+                        lines.push('Waves: ' + ob.wave_height_m.toFixed(1) + ' m');
+                    }
+                    if (ob.time_utc) lines.push('<i>' + ob.time_utc + '</i>');
+                    var marker = L.marker([ob.lat, ob.lon], {
+                        icon: L.divIcon({
+                            className: 'ir-stn-plot-icon',
+                            html: html,
+                            iconSize: [72, 56],
+                            iconAnchor: [36, 28],
+                        }),
+                        interactive: true, keyboard: false,
+                    });
+                    marker.bindTooltip(lines.join('<br>'), {
+                        sticky: true, direction: 'top', offset: [0, -10],
+                        className: 'ir-stn-plot-tooltip',
+                    });
+                    lg.addLayer(marker);
+                }
+                _surfaceObsLayer = lg.addTo(detailMap);
+                console.log('[RT Monitor] Surface obs: ' + obs.length +
+                            ' stations within ' +
+                            (data.bbox ? '10°' : 'bbox'));
+            })
+            .catch(function (err) {
+                if (err && err.name === 'AbortError') return;
+                console.warn('[RT Monitor] surface obs fetch failed:', err && err.message);
+                if (btn) btn.classList.remove('active');
+            });
+    };
+
+    /** Clean up on storm switch / card close. */
+    function _clearSurfaceObs() {
+        if (_surfaceObsLayer && detailMap) {
+            try { detailMap.removeLayer(_surfaceObsLayer); } catch (e) {}
+        }
+        _surfaceObsLayer = null;
+        if (_surfaceObsAbortController) {
+            try { _surfaceObsAbortController.abort(); } catch (e) {}
+            _surfaceObsAbortController = null;
+        }
+        var btn = document.getElementById('ir-detail-obs-toggle');
+        if (btn) btn.classList.remove('active');
+    }
+
     function _rtToggleGraticule() {
         if (!map) return;
         if (_rtGraticule) {
@@ -3861,6 +4095,7 @@
         cleanupGeocolorFrameLayers();
         cleanupVisFrameLayers();
         cleanupWvFrameLayers();
+        _clearSurfaceObs();
         // Intensity Forecast is a model artifact — keep it hidden until the
         // user explicitly clicks Models. Otherwise switching storms would
         // expose a stale (or empty) forecast panel.

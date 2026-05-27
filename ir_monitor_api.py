@@ -57,6 +57,7 @@ from satellite_ir import (
     BAND_RANGES,
     VIS_BAND,
     WV_BAND,
+    SWIR_BAND,
 )
 
 from tc_center_fix import find_ir_center, apply_center_gates
@@ -759,6 +760,115 @@ _BASIN_MAP = {
     "SH": "SHEM",
 }
 
+# JTWC-owned basins — used to know when to fetch the wp/io/sh web.txt
+# advisory for the official "MOVEMENT PAST SIX HOURS" line.
+_JTWC_BASINS = {"WP", "IO", "SH"}
+
+
+# Motion cache: per-storm advisory-text-derived (dir, speed). Keyed by
+# uppercase ATCF id. TTL matches the 6-hourly JTWC advisory cycle —
+# refreshing more often than that hits the Navy server pointlessly.
+_motion_cache: dict[str, dict] = {}
+_motion_cache_lock = threading.Lock()
+_MOTION_CACHE_TTL_S = 6 * 60 * 60
+
+
+def _fetch_jtwc_motion(atcf_id: str) -> tuple[float | None, float | None]:
+    """Fetch the latest JTWC web.txt advisory and parse the
+    MOVEMENT PAST SIX HOURS line to recover (motion_deg, motion_kt).
+    Returns (None, None) if the advisory is unreachable or the line
+    isn't present. Cached for 6 h to be respectful to the Navy server."""
+    aid = atcf_id.upper()
+    with _motion_cache_lock:
+        hit = _motion_cache.get(aid)
+        if hit and (time.time() - hit["t"]) < _MOTION_CACHE_TTL_S:
+            return hit["deg"], hit["kt"]
+
+    # JTWC URL: wp0626 → wp{NN}{YY}web.txt where NN=storm number, YY=2-digit year
+    # ATCF id is like "WP062026" → wp0626web.txt
+    basin = aid[:2].lower()
+    if basin not in {"wp", "io", "sh"}:
+        return None, None
+    # Year on the wire is 2-digit. ATCF id has 4-digit year at the end.
+    storm_num = aid[2:4]  # 06
+    year_2 = aid[-2:]     # 26
+    url = (
+        f"https://www.metoc.navy.mil/jtwc/products/"
+        f"{basin}{storm_num}{year_2}web.txt"
+    )
+    try:
+        import urllib.request
+        req = urllib.request.Request(url, headers={"User-Agent": "tc-atlas/1.0"})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            text = resp.read().decode("utf-8", errors="ignore")
+    except Exception:
+        with _motion_cache_lock:
+            _motion_cache[aid] = {"t": time.time(), "deg": None, "kt": None}
+        return None, None
+
+    # Format: "MOVEMENT PAST SIX HOURS - 335 DEGREES AT 07 KTS"
+    m = re.search(
+        r"MOVEMENT\s+PAST\s+SIX\s+HOURS\s*-\s*(\d{1,3})\s*DEGREES?\s+AT\s+(\d{1,3})\s*KTS?",
+        text, re.IGNORECASE,
+    )
+    if not m:
+        with _motion_cache_lock:
+            _motion_cache[aid] = {"t": time.time(), "deg": None, "kt": None}
+        return None, None
+    try:
+        deg = float(m.group(1))
+        kt = float(m.group(2))
+    except ValueError:
+        return None, None
+    with _motion_cache_lock:
+        _motion_cache[aid] = {"t": time.time(), "deg": deg, "kt": kt}
+    return deg, kt
+
+
+def _compute_motion_from_records(records: list) -> tuple[float | None, float | None]:
+    """Records-based fallback for storms without a JTWC web.txt advisory
+    (Atlantic, EPac, CPac NHC storms). Use the most recent two tau=0
+    fixes ≥ 3 h apart and compute great-circle bearing + speed in kt.
+    Returns (None, None) if there aren't enough fixes."""
+    t0 = [r for r in records if r.get("tau") == 0]
+    if len(t0) < 2:
+        return None, None
+    # Prefer fixes from the BEST/JTWC/CARQ track only (skip forecasts).
+    track = [r for r in t0 if r.get("tech") in ("BEST", "JTWC", "CARQ", "OFCL")]
+    if len(track) < 2:
+        track = t0
+    track = sorted(track, key=lambda r: r["datetime"])
+    latest = track[-1]
+    # Walk backwards looking for the most recent fix at least 3 h earlier.
+    prior = None
+    for r in reversed(track[:-1]):
+        dt_h = (latest["datetime"] - r["datetime"]).total_seconds() / 3600.0
+        if dt_h >= 3.0:
+            prior = r
+            break
+    if not prior:
+        return None, None
+
+    # Haversine bearing + distance.
+    lat1 = math.radians(prior["lat"])
+    lat2 = math.radians(latest["lat"])
+    dlon = math.radians(latest["lon"] - prior["lon"])
+    # Bearing from prior → latest (compass heading, 0=N, 90=E).
+    y = math.sin(dlon) * math.cos(lat2)
+    x = (math.cos(lat1) * math.sin(lat2) -
+         math.sin(lat1) * math.cos(lat2) * math.cos(dlon))
+    bearing_rad = math.atan2(y, x)
+    bearing_deg = (math.degrees(bearing_rad) + 360.0) % 360.0
+    # Great-circle distance (nm).
+    a = (math.sin((lat2 - lat1) / 2) ** 2 +
+         math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2)
+    dist_nm = 2 * 3440.065 * math.asin(min(1.0, math.sqrt(a)))
+    dt_h = (latest["datetime"] - prior["datetime"]).total_seconds() / 3600.0
+    if dt_h <= 0:
+        return None, None
+    speed_kt = dist_nm / dt_h
+    return round(bearing_deg), round(speed_kt)
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -1272,6 +1382,22 @@ def _build_storm_entry(atcf_id: str, records: list,
     # Use provided name, or fall back to ATCF ID
     display_name = name if name else atcf_id.upper()
 
+    # Motion: prefer the JTWC advisory's official "MOVEMENT PAST SIX
+    # HOURS" line for WP/IO/SH storms (it's what shows on the warning
+    # graphic). Fall back to a haversine bearing+speed computed from
+    # the two most recent tau=0 fixes for NHC storms (AL/EP/CP) and
+    # for any case where the JTWC web.txt is unreachable.
+    motion_deg: Optional[float] = None
+    motion_kt: Optional[float] = None
+    if basin_code in _JTWC_BASINS:
+        motion_deg, motion_kt = _fetch_jtwc_motion(atcf_id)
+    if motion_deg is None or motion_kt is None:
+        rd, rk = _compute_motion_from_records(records)
+        if motion_deg is None:
+            motion_deg = rd
+        if motion_kt is None:
+            motion_kt = rk
+
     return {
         "atcf_id": atcf_id.upper(),
         "name": display_name,
@@ -1281,8 +1407,8 @@ def _build_storm_entry(atcf_id: str, records: list,
         "vmax_kt": vmax,
         "mslp_hpa": latest["mslp_hpa"],
         "category": cat,
-        "motion_deg": None,   # TODO: compute from successive fixes
-        "motion_kt": None,
+        "motion_deg": motion_deg,
+        "motion_kt": motion_kt,
         "last_fix_utc": latest["datetime"].strftime("%Y-%m-%dT%H:%M:%SZ"),
         "satellite": satellite_name_from_bucket(
             select_goes_sat(latest["lon"], latest["datetime"])[0]
@@ -1841,6 +1967,16 @@ def _prefetch_ir_frames(storms: list):
                 max_band_frames = len(frame_times)
                 max_workers = 2 if right_band == VIS_BAND else 4
 
+                # At night also prewarm Band 7 (SWIR) alongside WV.
+                # Visible button auto-switches to SWIR when the storm is
+                # dark, so without this nighttime users wait 30-60s on
+                # cold S3 the first time they click Visible. SWIR data
+                # is the same volume as IR (smaller than Vis), so adding
+                # it doesn't blow up cycle time.
+                extra_bands: list[int] = []
+                if right_band == WV_BAND:  # night cycle
+                    extra_bands.append(SWIR_BAND)
+
                 with ThreadPoolExecutor(max_workers=max_workers) as pool:
                     futures = []
                     for i, target_dt in enumerate(reversed(frame_times)):
@@ -1848,6 +1984,8 @@ def _prefetch_ir_frames(storms: list):
                         futures.append(pool.submit(_fetch_and_cache_ir, target_dt, dt_str))
                         if i < max_band_frames:
                             futures.append(pool.submit(_fetch_and_cache_band, target_dt, dt_str, right_band))
+                            for eb in extra_bands:
+                                futures.append(pool.submit(_fetch_and_cache_band, target_dt, dt_str, eb))
 
                     # Wait for all to complete
                     for fut in as_completed(futures):
@@ -1859,8 +1997,12 @@ def _prefetch_ir_frames(storms: list):
                 gc.collect()
                 c = _prefetch_counts
                 if c["ir"] or c["band"] or c["jpg"]:
+                    extra_summary = (
+                        f" + Band {extra_bands[0]}" if extra_bands else ""
+                    )
                     print(f"[IR Pre-fetch] {atcf_id}: GCS cached {c['ir']} IR + "
-                          f"{c['band']} Band {right_band} + {c['jpg']} JPG frames (parallel)")
+                          f"{c['band']} Band {right_band}{extra_summary} + "
+                          f"{c['jpg']} JPG frames (parallel)")
                 total_gcs_fetched += c["ir"] + c["band"]
 
                 # ── Pre-build bundle artifacts ─────────────────────
@@ -1891,6 +2033,23 @@ def _prefetch_ir_frames(storms: list):
                     # populated above, so the API endpoints can assemble
                     # on demand. Just log and move on.
                     print(f"[IR Pre-fetch] {atcf_id}: bundle build failed: {ex}")
+
+                # Night-only: also build the SWIR bundle so the
+                # Visible button's nighttime fallback is instant.
+                # Cheaper than WV (no LUT lookup) but the bundle build
+                # still pays the per-frame WebP encode, so run it after
+                # the primary bundle and let it fail-silently if needed.
+                for eb in extra_bands:
+                    try:
+                        _build_and_upload_bundles(
+                            atcf_id, center_lat, center_lon, frame_times,
+                            radius_deg=_PREFETCH_RADIUS_DEG,
+                            lookback_hours=_PREFETCH_LOOKBACK_HOURS,
+                            interval_min=_PREFETCH_INTERVAL_MIN,
+                            band=eb,
+                        )
+                    except Exception as ex:
+                        print(f"[IR Pre-fetch] {atcf_id}: band {eb} bundle build failed: {ex}")
 
         # ── NEXRAD radar pre-fetch for storms near 88D sites ────────
         _prefetch_nexrad_for_storms(storms, frame_times_map={
@@ -3018,7 +3177,7 @@ def get_storm_ir_raw_bundle(
     # Cap workers at 4 — beyond that S3 throughput plateaus and the
     # NOAA-Open-Data anonymous endpoint starts returning sporadic 429s.
     indexed = list(enumerate(frame_times))
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    with ThreadPoolExecutor(max_workers=8) as pool:
         results = list(pool.map(_worker, indexed))
     results.sort(key=lambda r: r[0])
 
@@ -3943,7 +4102,10 @@ def get_storm_band_frames_bundle(
             return (i, None, "", None, str(ex))
 
     indexed = list(enumerate(frame_times))
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    # 8 workers: doubles the previous 4. Per-frame work is mostly S3
+    # latency (~3-5 s/frame for Vis L1b), so more workers shorten the
+    # cold-bundle wall clock close to one slowest-frame latency.
+    with ThreadPoolExecutor(max_workers=8) as pool:
         results = list(pool.map(_worker, indexed))
     results.sort(key=lambda r: r[0])
 
@@ -4215,7 +4377,7 @@ def get_storm_geocolor_frames_bundle(
             return (i, None, "", None, False, str(ex))
 
     indexed = list(enumerate(frame_times))
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    with ThreadPoolExecutor(max_workers=8) as pool:
         results = list(pool.map(_worker, indexed))
     results.sort(key=lambda r: r[0])
 
@@ -4614,7 +4776,7 @@ def get_storm_ir_frames_bundle(
             return (i, None, "", None, None, str(ex))
 
     indexed = list(enumerate(frame_times))
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    with ThreadPoolExecutor(max_workers=8) as pool:
         results = list(pool.map(_worker, indexed))
     results.sort(key=lambda r: r[0])
 
@@ -7751,4 +7913,156 @@ def get_storm_shear(
     return JSONResponse(
         content=payload,
         headers={"Cache-Control": "public, max-age=1800"},
+    )
+
+
+# ─────────────────────────────────────────────────────────────────
+# Surface observations overlay (NDBC buoys for now; Synoptic Data
+# land obs is a planned follow-up once a free-tier token is wired).
+# Pulls the one-shot latest_obs.txt from NDBC (no auth, ~1 hr old)
+# and filters by a bbox around the storm's current position.
+# ─────────────────────────────────────────────────────────────────
+
+_NDBC_LATEST_URL = "https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt"
+_NDBC_STATIONS_URL = "https://www.ndbc.noaa.gov/activestations.xml"
+_NDBC_CACHE: dict = {"text": None, "stations": None, "fetched_at": 0.0}
+_NDBC_CACHE_LOCK = threading.Lock()
+_NDBC_CACHE_TTL_S = 10 * 60   # 10 min — matches buoy report cadence
+
+
+def _fetch_ndbc_latest_text() -> str | None:
+    """Cached one-shot pull of NDBC's latest_obs.txt. ~150 KB. Refreshes
+    every 10 min — buoys report on 10-min cycles so refreshing faster
+    just costs bandwidth without new data."""
+    with _NDBC_CACHE_LOCK:
+        if (_NDBC_CACHE["text"] is not None and
+                (time.time() - _NDBC_CACHE["fetched_at"]) < _NDBC_CACHE_TTL_S):
+            return _NDBC_CACHE["text"]
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            _NDBC_LATEST_URL, headers={"User-Agent": "tc-atlas/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            text = resp.read().decode("utf-8", errors="ignore")
+    except Exception as ex:
+        print(f"[Surface Obs] NDBC fetch failed: {ex}")
+        return None
+    with _NDBC_CACHE_LOCK:
+        _NDBC_CACHE["text"] = text
+        _NDBC_CACHE["fetched_at"] = time.time()
+    return text
+
+
+def _parse_ndbc_latest(text: str) -> list[dict]:
+    """Parse the latest_obs.txt fixed-width feed. Columns are documented
+    in NDBC's data file header (commented out with #) and have stayed
+    stable for years. Returns a list of dicts with normalized SI units."""
+    # Header line is the second line; first row is column names.
+    # Example header:  STN LAT LON YYYY MM DD hh mm WDIR WSPD GST WVHT DPD APD MWD PRES PTDY ATMP WTMP DEWP VIS TIDE
+    lines = [ln for ln in text.splitlines() if ln and not ln.startswith("#")]
+    if len(lines) < 2:
+        return []
+    rows = []
+
+    def _f(v: str) -> float | None:
+        try:
+            x = float(v)
+            return None if x in (99.0, 999.0, 9999.0, 99.0, 99.00) else x
+        except (ValueError, TypeError):
+            return None
+
+    for line in lines[1:]:  # skip the unit row
+        parts = line.split()
+        if len(parts) < 7:
+            continue
+        try:
+            stn = parts[0]
+            lat = float(parts[1])
+            lon = float(parts[2])
+        except (ValueError, IndexError):
+            continue
+        # NDBC pad with "MM" for missing values; pad to 21 fields.
+        while len(parts) < 21:
+            parts.append("MM")
+        rows.append({
+            "id": stn,
+            "lat": lat,
+            "lon": lon,
+            "time_utc": (f"{parts[3]}-{parts[4]}-{parts[5]}T"
+                         f"{parts[6]}:{parts[7]}:00Z"),
+            "wind_dir_deg": _f(parts[8]),
+            "wind_speed_kt": _f(parts[9]),
+            "wind_gust_kt": _f(parts[10]),
+            "wave_height_m": _f(parts[11]),
+            "wave_period_s": _f(parts[12]),
+            "pressure_hpa": _f(parts[15]),
+            "pressure_tend_hpa": _f(parts[16]),
+            "air_temp_c": _f(parts[17]),
+            "sst_c": _f(parts[18]),
+            "dewpoint_c": _f(parts[19]),
+            "source": "NDBC",
+        })
+    return rows
+
+
+@router.get("/storm/{atcf_id}/surface-obs")
+def get_storm_surface_obs(
+    atcf_id: str,
+    radius_deg: float = Query(10.0, ge=1.0, le=20.0,
+                              description="Half-width of the bbox around the storm center"),
+):
+    """Return surface observations within the storm's bbox. Currently
+    just NDBC buoys (~1000 stations globally, ~1 h latency). Future
+    sources to layer in: Synoptic Data API (needs a free-tier token)
+    for land + marine, IEM for METARs. Frontend renders these in
+    conventional station-plot format (wind barbs, T/Td, MSLP, sky).
+
+    Bbox is ±radius_deg around the storm's current advisory position.
+    For a typical 10° radius and a Western Pacific TC, expect 0–5
+    stations (sparse buoy coverage out there). Atlantic / GoM storms
+    get the most stations — dozens of buoys + C-MAN.
+    """
+    _ensure_fresh_cache()
+    storm = None
+    with _active_storms_lock:
+        for s in _active_storms_cache["storms"]:
+            if s["atcf_id"].upper() == atcf_id.upper():
+                storm = dict(s)
+                break
+    if not storm:
+        raise HTTPException(status_code=404, detail=f"Storm {atcf_id} not found")
+
+    center_lat = storm["lat"]
+    center_lon = storm["lon"]
+    half = radius_deg
+
+    text = _fetch_ndbc_latest_text()
+    obs_in_bbox: list[dict] = []
+    if text:
+        all_obs = _parse_ndbc_latest(text)
+        # Bbox filter. Lon-wrap not an issue at TC latitudes (storms
+        # don't straddle the dateline often, and when they do the
+        # 10° half-width keeps them on one side).
+        n = center_lat + half
+        s_ = center_lat - half
+        e = center_lon + half
+        w = center_lon - half
+        for ob in all_obs:
+            if s_ <= ob["lat"] <= n and w <= ob["lon"] <= e:
+                obs_in_bbox.append(ob)
+
+    return JSONResponse(
+        content={
+            "atcf_id": atcf_id.upper(),
+            "storm_center": {"lat": center_lat, "lon": center_lon},
+            "bbox": {
+                "north": center_lat + half, "south": center_lat - half,
+                "east": center_lon + half,  "west": center_lon - half,
+            },
+            "fetched_at": _dt.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "n_obs": len(obs_in_bbox),
+            "sources": ["NDBC"],
+            "observations": obs_in_bbox,
+        },
+        headers={"Cache-Control": "public, max-age=600"},
     )

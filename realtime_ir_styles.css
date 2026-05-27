@@ -445,14 +445,33 @@ html, body { margin: 0; padding: 0; }
     background: rgba(74, 155, 110, 0.26);
     border-color: rgba(74, 155, 110, 0.65);
 }
-/* Grid toggle dims when inactive so users can see at a glance whether
-   the lat/lon overlay is on. Active state inherits the green tint. */
-.ir-detail-grid-toggle-btn:not(.active) {
+/* Grid + Obs toggles dim when inactive so users can see at a glance
+   whether the overlay is on. Active state inherits the green tint. */
+.ir-detail-grid-toggle-btn:not(.active),
+.ir-detail-obs-toggle-btn:not(.active) {
     opacity: 0.55;
 }
-.ir-detail-grid-toggle-btn:not(.active):hover {
+.ir-detail-grid-toggle-btn:not(.active):hover,
+.ir-detail-obs-toggle-btn:not(.active):hover {
     opacity: 0.85;
 }
+
+/* Surface-obs station plots — SVG injected into a divIcon. */
+.ir-stn-plot-icon {
+    background: transparent;
+    border: none;
+    pointer-events: auto;
+}
+.ir-stn-plot-tooltip {
+    font: 600 11px/1.35 'DM Sans', sans-serif;
+    background: rgba(15, 22, 35, 0.92);
+    color: #e2e8f0;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 4px;
+    padding: 6px 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+.ir-stn-plot-tooltip::before { display: none; }
 
 /* Download dropdown — wraps the .ir-kml-btn-styled button and a
    floating menu of three options (PNG/GIF/KML). */
