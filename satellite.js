@@ -4488,6 +4488,151 @@
         // Set label immediately so user sees correct band name while loading
         if (rightLabelEl) rightLabelEl.textContent = bandName + '  (loading\u2026)';
 
+        // Bundle-first path: one /band-frames-bundle request returns all
+        // 25 WebPs (at 15-min cadence) packed as [u32 len][JSON][concat].
+        // Replaces the per-frame waterfall that hit 21 cold-cache S3
+        // fetches for Vis (prewarm only stores most-recent frames since
+        // L1b is 16\u00d7 the IR data). Falls through to the per-frame
+        // preview path on any failure.
+        _satTryBandBundleThen(stormId, band, function (ok, parsed) {
+            if (!ok) {
+                console.log('[Satellite] Band bundle unavailable; using per-frame waterfall');
+                _refetchRightFramesLegacy(stormId);
+                return;
+            }
+            // parsed = { frames: [{previewImg, bounds, datetime_utc, satellite, ...}], total }
+            if (stormId !== currentStormId || band !== rightBand) return;
+            for (var i = 0; i < parsed.frames.length; i++) {
+                rightFrames[parsed.frames[i].index] = parsed.frames[i].entry;
+            }
+            totalFrames = parsed.total;
+            if (loadStatusEl) loadStatusEl.textContent = '';
+            if (rightLabelEl) rightLabelEl.textContent = bandName;
+            renderBothPanels();
+            updateAnimUI();
+            if (!frameCache[stormId]) frameCache[stormId] = { ts: Date.now() };
+            frameCache[stormId].right = rightFrames.slice();
+            frameCache[stormId].band = band;
+            frameCache[stormId].ts = Date.now();
+            console.log('[Satellite] Band bundle: ' + parsed.frames.length + '/' +
+                        parsed.total + ' ' + bandLabel + ' frames loaded');
+        });
+        return;
+    }
+
+    /** Band bundle parser \u2014 fetches /band-frames-bundle (with direct-GCS
+     *  try first), decodes the packed binary, returns an array of
+     *  {index, entry} pairs where `entry` is shaped like rightFrames[i].
+     *  Calls done(false) on any failure so caller can fall back. */
+    var _GCS_BAND_BUNDLE_BASE = 'https://storage.googleapis.com/tc-atlas-ir-cache/rt-v10/bundles/band';
+    function _satTryBandBundleThen(sid, band, done) {
+        var apiUrl = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(sid)
+            + '/band-frames-bundle?band=' + band
+            + '&lookback_hours=' + DEFAULT_LOOKBACK_HOURS
+            + '&radius_deg=' + DEFAULT_RADIUS_DEG
+            + '&interval_min=' + FRAME_INTERVAL_MIN;
+        var gcsUrl = _GCS_BAND_BUNDLE_BASE + '/' + band + '/'
+            + encodeURIComponent(sid.toUpperCase()) + '.bin';
+        // Try GCS direct first (prewarmed, no Cloud Run hop). Cold storm
+        // or unwritten bundle \u2192 fall to API endpoint.
+        fetch(gcsUrl)
+            .then(function (r) {
+                if (!r.ok) throw new Error('gcs band bundle HTTP ' + r.status);
+                return r.arrayBuffer();
+            })
+            .catch(function () {
+                return fetch(apiUrl).then(function (r) {
+                    if (!r.ok) throw new Error('api band bundle HTTP ' + r.status);
+                    return r.arrayBuffer();
+                });
+            })
+            .then(function (buf) {
+                try {
+                    var dv = new DataView(buf);
+                    if (buf.byteLength < 4) throw new Error('bundle too small');
+                    var hl = dv.getUint32(0, true);
+                    if (4 + hl > buf.byteLength) throw new Error('bundle header overrun');
+                    var header = JSON.parse(new TextDecoder('utf-8')
+                        .decode(new Uint8Array(buf, 4, hl)));
+                    var bin = 4 + hl;
+                    var mediaType = header.media_type || 'image/webp';
+                    var hdrFrames = header.frames || [];
+                    var bandVmin = header.vmin || 170;
+                    var bandVmax = header.vmax || 260;
+                    var dataType = header.data_type || 'tb';
+
+                    // Decode all frames. Frames with byte_length=0 are
+                    // skipped (Vis nighttime / missing data).
+                    var pending = 0;
+                    var out = [];
+                    var settled = false;
+                    function maybeFinish() {
+                        if (settled) return;
+                        if (pending === 0) {
+                            settled = true;
+                            done(true, { frames: out, total: header.total_frames });
+                        }
+                    }
+                    for (var i = 0; i < hdrFrames.length; i++) {
+                        var f = hdrFrames[i];
+                        if (!f.byte_length || f.error) continue;
+                        var slice = new Uint8Array(buf, bin + f.byte_offset, f.byte_length);
+                        var blob = new Blob([slice], { type: mediaType });
+                        var url = URL.createObjectURL(blob);
+                        pending++;
+                        (function (fHdr) {
+                            var img = new Image();
+                            img.onload = function () {
+                                out.push({
+                                    index: fHdr.index,
+                                    entry: {
+                                        previewImg: img,
+                                        tb_data: null,
+                                        rows: img.naturalHeight,
+                                        cols: img.naturalWidth,
+                                        bounds: fHdr.bounds,
+                                        datetime_utc: fHdr.datetime_utc || '',
+                                        satellite: fHdr.satellite || '',
+                                        tb_vmin: bandVmin,
+                                        tb_vmax: bandVmax,
+                                        data_type: dataType
+                                    }
+                                });
+                                pending--;
+                                maybeFinish();
+                            };
+                            img.onerror = function () {
+                                pending--;
+                                maybeFinish();
+                            };
+                            img.src = url;
+                        })(f);
+                    }
+                    if (pending === 0) {
+                        // No valid frames (all nighttime / missing)
+                        done(false, null);
+                    }
+                } catch (e) {
+                    console.warn('[Satellite] Band bundle parse failed:', e.message);
+                    done(false, null);
+                }
+            })
+            .catch(function (err) {
+                console.warn('[Satellite] Band bundle fetch failed:',
+                             err && err.message);
+                done(false, null);
+            });
+    }
+
+    /** Legacy per-frame band waterfall (fallback when bundle unavailable) */
+    function _refetchRightFramesLegacy(stormId) {
+        var totalFrames = 13;
+        var bandLabel = rightBand === 2 ? 'Vis' : 'WV';
+        var bandName = rightBand === 2 ? 'Visible' : 'Water Vapor';
+        var band = rightBand;
+
+        if (rightLabelEl) rightLabelEl.textContent = bandName + '  (loading\u2026)';
+
         // Phase 1: fast JPG preview for right panel
         var previewDone = 0;
         var rawStarted = false;

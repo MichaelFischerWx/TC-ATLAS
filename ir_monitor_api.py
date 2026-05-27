@@ -350,6 +350,7 @@ def _upload_public_bundle(key: str, body: bytes, content_type: str = "applicatio
 def _build_and_upload_bundles(
     atcf_id: str, fallback_lat: float, fallback_lon: float,
     frame_times, radius_deg: float, lookback_hours: float, interval_min: int,
+    band: int | None = None,
 ):
     """Assemble the display-WebP + raw-Tb bundles for one storm and
     write them to public-read GCS paths. Mirrors the wire format
@@ -462,15 +463,80 @@ def _build_and_upload_bundles(
     }
     raw_body = _pack_bundle(raw_header, payloads_raw)
 
-    # Upload both. Pathing matches the frontend's
+    # Upload IR display + raw bundles. Pathing matches the frontend's
     # _gcsFramesBundleUrl / _gcsRawBundleUrl helpers in realtime_ir.js.
     frames_key = f"{_GCS_RT_VERSION}/bundles/frames/{atcf_upper}.bin"
     raw_key = f"{_GCS_RT_VERSION}/bundles/raw/{atcf_upper}.bin"
     _upload_public_bundle(frames_key, frames_body)
     _upload_public_bundle(raw_key, raw_body)
+
+    # ── Band bundle (WV or Vis) ─────────────────────────────────
+    # Only build if the prewarm fetched this band's frames in this
+    # cycle. The band-specific cache lives under `band{N}-webp` keys.
+    band_summary = ""
+    if band is not None:
+        band_hdrs = []
+        payloads_band: list[bytes] = []
+        boffset = 0
+        b_summary_sat = ""
+        for i, ft in enumerate(times_oldest_first):
+            dt_str = ft.strftime("%Y%m%d%H%M")
+            iso_dt = ft.strftime("%Y-%m-%dT%H:%M:%SZ")
+            ilat, ilon = _interp_pos_at(atcf_id, ft, fallback_lat, fallback_lon)
+            fb = [[ilat - half, ilon - half], [ilat + half, ilon + half]]
+
+            # Vis is daytime-only — mark night frames as expected-missing
+            if band == VIS_BAND and _solar_elevation(ilat, ilon, ft) < -6:
+                band_hdrs.append({
+                    "index": i, "datetime_utc": iso_dt, "satellite": "",
+                    "bounds": fb, "byte_offset": boffset, "byte_length": 0,
+                    "error": "nighttime",
+                })
+                continue
+
+            bjpg = _gcs_jpg_get(atcf_upper, dt_str, band=band)
+            if not bjpg:
+                band_hdrs.append({
+                    "index": i, "datetime_utc": iso_dt, "satellite": "",
+                    "bounds": fb, "byte_offset": boffset, "byte_length": 0,
+                    "error": "no_cached_jpg",
+                })
+                continue
+            bucket_name, _ = select_goes_sat(ilon, ft)
+            sat_name = satellite_name_from_bucket(bucket_name)
+            band_hdrs.append({
+                "index": i, "datetime_utc": iso_dt, "satellite": sat_name,
+                "bounds": fb, "byte_offset": boffset, "byte_length": len(bjpg),
+            })
+            payloads_band.append(bjpg)
+            boffset += len(bjpg)
+            b_summary_sat = sat_name or b_summary_sat
+
+        binfo = BAND_RANGES.get(band, BAND_RANGES[13])
+        band_header = {
+            "total_frames": len(times_oldest_first),
+            "bounds": [[s_ilat - half, s_ilon - half],
+                       [s_ilat + half, s_ilon + half]],
+            "satellite": b_summary_sat,
+            "band": band,
+            "data_type": binfo["data_type"],
+            "vmin": binfo["vmin"],
+            "vmax": binfo["vmax"],
+            "lookback_hours": lookback_hours,
+            "interval_min": interval_min,
+            "radius_deg": radius_deg,
+            "media_type": "image/webp",
+            "frames": band_hdrs,
+        }
+        band_body = _pack_bundle(band_header, payloads_band)
+        band_key = f"{_GCS_RT_VERSION}/bundles/band/{band}/{atcf_upper}.bin"
+        _upload_public_bundle(band_key, band_body)
+        band_summary = (f", band{band}={len(payloads_band)} "
+                       f"({len(band_body)//1024} KB)")
+
     print(f"[Bundle Pre-build] {atcf_upper}: frames={len(payloads_jpg)} "
           f"({len(frames_body)//1024} KB), raw={len(payloads_raw)} "
-          f"({len(raw_body)//1024} KB)")
+          f"({len(raw_body)//1024} KB){band_summary}")
 
 
 def _solar_elevation(lat: float, lon: float, dt: _dt) -> float:
@@ -1730,10 +1796,15 @@ def _prefetch_ir_frames(storms: list):
                         pass
                     del data, arr, mask, scaled, encoded
 
-                # Visible bands have 16x larger segments — limit prefetch to
-                # the 4 most recent frames and cap workers at 4 to stay
-                # within memory.  WV uses all frames with 8 workers.
-                max_band_frames = 4 if right_band == VIS_BAND else len(frame_times)
+                # Vis L1b segments are 16× the IR data per frame, but the
+                # _fetch_and_cache_band worker already skips frames whose
+                # solar elevation is < -6° (no usable imagery at night).
+                # That filter cuts the effective Vis frame count in half
+                # for most storm latitudes, so prewarming all frames is
+                # affordable and gives the WV/Vis compare view a warm
+                # cache for the full 6h lookback. Workers stay capped at
+                # 2 for Vis to bound peak memory.
+                max_band_frames = len(frame_times)
                 max_workers = 2 if right_band == VIS_BAND else 4
 
                 with ThreadPoolExecutor(max_workers=max_workers) as pool:
@@ -1779,6 +1850,7 @@ def _prefetch_ir_frames(storms: list):
                         radius_deg=_PREFETCH_RADIUS_DEG,
                         lookback_hours=_PREFETCH_LOOKBACK_HOURS,
                         interval_min=_PREFETCH_INTERVAL_MIN,
+                        band=right_band,   # WV or Vis depending on solar elevation
                     )
                 except Exception as ex:
                     # Bundle build is best-effort — per-frame cache still
@@ -3674,6 +3746,217 @@ def get_band_frame_jpg(
     _gcs_jpg_put(atcf_id.upper(), dt_str, jpg_bytes, band=band)
     del raw
     return Response(content=jpg_bytes, media_type="image/webp", headers=meta_headers)
+
+
+# ---------------------------------------------------------------------------
+# Band Frames Bundle — WV/Vis WebPs in one binary response
+# ---------------------------------------------------------------------------
+
+def _get_or_render_band_jpg(
+    atcf_upper: str, interp_lat: float, interp_lon: float,
+    target_dt: _dt, radius_deg: float, band: int,
+) -> tuple[bytes | None, str]:
+    """Bundle helper for WV/Vis bands — mirrors _get_or_render_ir_jpg.
+
+    GCS-JPG → cached-raw → fresh-S3 fallback chain. For Vis (band 2)
+    the chain may legitimately return (None, sat_name) at night when
+    solar elevation drops too low for usable imagery — caller marks the
+    frame as missing in the bundle header and the client skips it.
+    """
+    box_deg = radius_deg * 2.0
+    dt_str = target_dt.strftime("%Y%m%d%H%M")
+    bucket, _ = select_goes_sat(interp_lon, target_dt)
+    sat_name = satellite_name_from_bucket(bucket)
+
+    # Vis is daytime-only — skip cleanly when sun is too low
+    if band == VIS_BAND:
+        se = _solar_elevation(interp_lat, interp_lon, target_dt)
+        if se < -6:
+            return None, sat_name
+
+    # Warmest: pre-rendered WebP in GCS (band-specific cache prefix)
+    cached_jpg = _gcs_jpg_get(atcf_upper, dt_str, band=band)
+    if cached_jpg:
+        return cached_jpg, sat_name
+
+    # Next: render from cached raw uint8 (skips S3)
+    cached_raw = _gcs_band_get(band, atcf_upper, dt_str,
+                              lat=interp_lat, lon=interp_lon)
+    if cached_raw is not None and cached_raw.get("tb_data"):
+        try:
+            binfo = BAND_RANGES.get(band, BAND_RANGES[13])
+            encoded = np.frombuffer(
+                base64.b64decode(cached_raw["tb_data"]), dtype=np.uint8
+            ).reshape((cached_raw["tb_rows"], cached_raw["tb_cols"]))
+            bvmin, bvmax = binfo["vmin"], binfo["vmax"]
+            decoded = ((encoded.astype(np.float32) - 1) / (254.0 / (bvmax - bvmin))) + bvmin
+            decoded[encoded == 0] = np.nan
+            jpg_bytes = _render_band_jpg(decoded, band, bvmin, bvmax)
+            if jpg_bytes:
+                _gcs_jpg_put(atcf_upper, dt_str, jpg_bytes, band=band)
+                return jpg_bytes, sat_name
+        except Exception:
+            pass
+
+    # Coldest: fetch from S3 + render. Vis L1b segments are 16× the IR
+    # data per frame, so cold loads here are noticeably slower than IR
+    # cold loads. The bundle's parallel fan-out still completes in
+    # max-frame-time wall clock instead of N × per-frame-time.
+    try:
+        raw = fetch_band_raw(interp_lat, interp_lon, target_dt, box_deg, band=band)
+    except Exception:
+        return None, sat_name
+    if not raw or raw.get("data") is None:
+        return None, sat_name
+    binfo = BAND_RANGES.get(band, BAND_RANGES[13])
+    jpg_bytes = _render_band_jpg(raw["data"], band, binfo["vmin"], binfo["vmax"])
+    if jpg_bytes:
+        _gcs_jpg_put(atcf_upper, dt_str, jpg_bytes, band=band)
+        return jpg_bytes, raw.get("satellite", sat_name)
+    return None, sat_name
+
+
+@router.get("/storm/{atcf_id}/band-frames-bundle")
+def get_storm_band_frames_bundle(
+    atcf_id: str,
+    band: int = Query(8, description="Band: 8=WV (6.2 µm), 2=Vis (0.64 µm)"),
+    lookback_hours: float = Query(6.0, ge=1, le=24),
+    radius_deg: float = Query(10.0, ge=1.0, le=12.0),
+    interval_min: int = Query(15, ge=10, le=60),
+):
+    """Return all WV or Vis band frames for a storm in one packed binary
+    response. Same wire format as /ir-frames-bundle:
+        [uint32 LE header_length][JSON header][concat WebP bytes]
+
+    Why this matters for the Storm Satellite WV/Vis compare view:
+    previously each band frame was fetched via /band-frame.jpg in a
+    per-frame waterfall. With Vis prewarm capped at the 4 most-recent
+    frames (Vis L1b is 16× the IR data per segment), most older frames
+    were cold-cache → 25 × ~5-10 s of serialized S3 work. The bundle
+    fans out across frames with ThreadPoolExecutor(max_workers=4) so
+    total wall time ≈ slowest-frame fetch.
+
+    Vis frames that fall outside daylight (solar elevation < -6°) are
+    marked byte_length=0 with an "error":"nighttime" entry so the
+    client can skip them without showing black overlays.
+    """
+    import struct
+    from concurrent.futures import ThreadPoolExecutor
+
+    _ensure_fresh_cache()
+    storm = None
+    with _active_storms_lock:
+        for s in _active_storms_cache["storms"]:
+            if s["atcf_id"].upper() == atcf_id.upper():
+                storm = dict(s)
+                break
+
+    if not storm:
+        raise HTTPException(status_code=404, detail=f"Storm {atcf_id} not found")
+
+    atcf_upper = atcf_id.upper()
+    center_lat = storm["lat"]
+    center_lon = storm["lon"]
+    half = radius_deg
+
+    center_dt = _dt.now(timezone.utc)
+    frame_times = build_frame_times(center_dt, lookback_hours, interval_min)
+    frame_times = list(reversed(frame_times))
+
+    latest_dt = frame_times[-1] if frame_times else center_dt
+    s_ilat, s_ilon = _interp_pos_at(atcf_id, latest_dt, center_lat, center_lon)
+    bounds = [
+        [s_ilat - half, s_ilon - half],
+        [s_ilat + half, s_ilon + half],
+    ]
+
+    def _worker(item):
+        i, target_dt = item
+        try:
+            ilat, ilon = _interp_pos_at(
+                atcf_id, target_dt, center_lat, center_lon)
+            jpg, sat = _get_or_render_band_jpg(
+                atcf_upper, ilat, ilon, target_dt, radius_deg, band,
+            )
+            frame_bounds = [
+                [ilat - half, ilon - half],
+                [ilat + half, ilon + half],
+            ]
+            return (i, jpg, sat, frame_bounds, None)
+        except Exception as ex:
+            return (i, None, "", None, str(ex))
+
+    indexed = list(enumerate(frame_times))
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(_worker, indexed))
+    results.sort(key=lambda r: r[0])
+
+    frame_headers = []
+    payloads: list[bytes] = []
+    offset = 0
+    summary_sat = ""
+
+    for i, jpg, sat, fbounds, err in results:
+        target_dt = frame_times[i]
+        iso_dt = target_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        if not jpg or err is not None:
+            # Distinguish "nighttime" (expected for Vis) from real errors
+            err_msg = err
+            if band == VIS_BAND and not err:
+                err_msg = "nighttime"
+            elif not err:
+                err_msg = "no_data"
+            frame_headers.append({
+                "index": i,
+                "datetime_utc": iso_dt,
+                "satellite": sat or "",
+                "bounds": fbounds,
+                "byte_offset": offset,
+                "byte_length": 0,
+                "error": err_msg,
+            })
+            continue
+        frame_headers.append({
+            "index": i,
+            "datetime_utc": iso_dt,
+            "satellite": sat or "",
+            "bounds": fbounds,
+            "byte_offset": offset,
+            "byte_length": len(jpg),
+        })
+        payloads.append(jpg)
+        offset += len(jpg)
+        summary_sat = sat or summary_sat
+
+    binfo = BAND_RANGES.get(band, BAND_RANGES[13])
+    header = {
+        "total_frames": len(frame_times),
+        "bounds": bounds,
+        "satellite": summary_sat,
+        "band": band,
+        "data_type": binfo["data_type"],
+        "vmin": binfo["vmin"],
+        "vmax": binfo["vmax"],
+        "lookback_hours": lookback_hours,
+        "interval_min": interval_min,
+        "radius_deg": radius_deg,
+        "media_type": "image/webp",
+        "frames": frame_headers,
+    }
+    header_json = json.dumps(header, separators=(",", ":")).encode("utf-8")
+    body = struct.pack("<I", len(header_json)) + header_json + b"".join(payloads)
+
+    return Response(
+        content=body,
+        media_type="application/octet-stream",
+        headers={
+            "Cache-Control": "public, max-age=300",
+            "X-Bundle-Frames": str(len(frame_times)),
+            "X-Bundle-Band": str(band),
+            "X-Bundle-Header-Length": str(len(header_json)),
+            "Access-Control-Expose-Headers": "X-Bundle-Frames, X-Bundle-Band, X-Bundle-Header-Length",
+        },
+    )
 
 
 @router.get("/storm/{atcf_id}/ir-frames-meta")
