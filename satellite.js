@@ -2255,13 +2255,28 @@
     function _satRenderEnvIntensity() {
         var el = document.getElementById('sat-env-intensity-chart');
         if (!el || typeof Plotly === 'undefined') return;
-        if (!trackMetadata || !trackMetadata.track) {
+        // /metadata returns `intensity_history` (array of B-deck points),
+        // not `.track`. New storms may have only 1 point — show a
+        // current-value chip in that case rather than a 1-point chart.
+        var pts = (trackMetadata && trackMetadata.intensity_history) || [];
+        if (pts.length === 0) {
             el.innerHTML = '<div style="color:#94a3b8;font-size:12px;padding:8px 0;">No intensity history available.</div>';
             return;
         }
-        var pts = trackMetadata.track || [];
-        if (pts.length === 0) {
-            el.innerHTML = '<div style="color:#94a3b8;font-size:12px;padding:8px 0;">No track points.</div>';
+        if (pts.length < 2) {
+            // Single point — chart would be meaningless. Show the value
+            // as text so the user sees something useful rather than a
+            // blank chart area.
+            var p0 = pts[0];
+            el.innerHTML =
+                '<div style="color:#cbd5e1;font-size:12px;padding:8px 0;line-height:1.5;">'
+                + '<div style="font-size:11px;color:#94a3b8;">Only current advisory available — history builds with successive cycles.</div>'
+                + '<div style="margin-top:6px;"><b style="color:#fbbf24;">'
+                + (p0.vmax_kt != null ? p0.vmax_kt : '—') + '</b> kt &nbsp; '
+                + '<b style="color:#60a5fa;">' + (p0.mslp_hpa != null ? p0.mslp_hpa : '—') + '</b> hPa'
+                + ' &nbsp; <span style="font-size:11px;color:#94a3b8;">@ '
+                + (p0.time ? p0.time.replace('T', ' ').replace('Z', ' UTC') : '—') + '</span></div>'
+                + '</div>';
             return;
         }
         var times = [], vmax = [], mslp = [];
@@ -2304,18 +2319,26 @@
         var valEl = document.getElementById('sat-env-shear-val');
         var dirEl = document.getElementById('sat-env-shear-dir');
         if (!valEl) return;
-        if (!data || data.shear_kt == null) {
+        // /shear returns `magnitude_kt` + `heading_deg` (NOT shear_kt/
+        // shear_dir_deg). The shear heading is the direction the shear
+        // VECTOR POINTS TOWARD (where 200-mb wind dominates over 850).
+        if (!data || data.magnitude_kt == null) {
             valEl.textContent = '—';
             if (dirEl) dirEl.textContent = '';
             return;
         }
-        valEl.textContent = Math.round(data.shear_kt) + ' kt';
+        valEl.textContent = Math.round(data.magnitude_kt) + ' kt';
         if (dirEl) {
             var dirStr = '';
-            if (data.shear_dir_deg != null) {
-                dirStr = ' @ ' + Math.round(data.shear_dir_deg) + '°';
+            if (data.heading_deg != null) {
+                dirStr = ' toward ' + Math.round(data.heading_deg) + '°';
             }
-            if (data.source) dirStr += '  (' + data.source + ')';
+            // source is verbose ("GFS 0.25° analysis (NOMADS...)") — trim
+            // to just the model name in parens.
+            if (data.source) {
+                var src = (data.source.match(/^[A-Z0-9]+/i) || [''])[0] || data.source;
+                dirStr += '  (' + src + ')';
+            }
             dirEl.textContent = dirStr;
         }
     }
@@ -2324,25 +2347,47 @@
         var el = document.getElementById('sat-env-wlab-chart');
         var metaEl = document.getElementById('sat-env-wlab-meta');
         if (!el || typeof Plotly === 'undefined') return;
-        if (!data || !data.members || data.members.length === 0) {
+        if (!data || !data.members) {
             el.innerHTML = '<div style="color:#94a3b8;font-size:12px;padding:8px 0;">No WeatherLab forecast available.</div>';
             if (metaEl) metaEl.textContent = '';
             return;
         }
-        // Build envelope (10th/50th/90th percentile of vmax per forecast hour)
-        var members = data.members;
-        var fhours = data.fhours || (members[0] && members[0].fhours) || [];
-        if (fhours.length === 0) {
-            if (metaEl) metaEl.textContent = 'No forecast hours in WeatherLab response.';
+        // members is a DICT keyed by string indices ("0", "1", ...).
+        // Each member has `points` (array of {tau, wind, lat, lon, ...}).
+        // lead_times_h is at the top level (not `fhours`).
+        var membersDict = data.members;
+        var memberArr = [];
+        for (var k in membersDict) {
+            if (Object.prototype.hasOwnProperty.call(membersDict, k)) {
+                memberArr.push(membersDict[k]);
+            }
+        }
+        var leads = data.lead_times_h || [];
+        if (memberArr.length === 0 || leads.length === 0) {
+            el.innerHTML = '<div style="color:#94a3b8;font-size:12px;padding:8px 0;">No WeatherLab forecast available.</div>';
+            if (metaEl) metaEl.textContent = '';
             return;
         }
+        // For each lead time, gather wind values from each member's points.
+        // Match by tau (forecast hour) to be robust against members whose
+        // points array is a different length than lead_times_h.
+        var fhours = leads;
         var p10 = [], p50 = [], p90 = [];
         for (var fh = 0; fh < fhours.length; fh++) {
+            var tau = fhours[fh];
             var vals = [];
-            for (var mi = 0; mi < members.length; mi++) {
-                var m = members[mi];
-                var v = m && m.vmax_kt && m.vmax_kt[fh];
-                if (v != null && isFinite(v)) vals.push(v);
+            for (var mi = 0; mi < memberArr.length; mi++) {
+                var m = memberArr[mi];
+                var pts = m && m.points;
+                if (!pts) continue;
+                // Find the point matching this tau (linear scan is fine — 35 pts).
+                for (var pi = 0; pi < pts.length; pi++) {
+                    if (pts[pi].tau === tau) {
+                        var w = pts[pi].wind;
+                        if (w != null && isFinite(w)) vals.push(w);
+                        break;
+                    }
+                }
             }
             if (vals.length === 0) { p10.push(null); p50.push(null); p90.push(null); continue; }
             vals.sort(function (a, b) { return a - b; });
@@ -2375,7 +2420,7 @@
         Plotly.react(el, traces, layout,
                      { displayModeBar: false, responsive: true, staticPlot: _IS_TOUCH_INIT });
         if (metaEl) {
-            metaEl.textContent = (data.n_members || members.length) + ' members'
+            metaEl.textContent = (data.n_members || memberArr.length) + ' members'
                 + (data.init_time ? ' · init ' + data.init_time : '');
         }
     }
