@@ -111,7 +111,12 @@ _TB_SCALE = 254.0 / (_TB_VMAX - _TB_VMIN)
 _GCS_IR_CACHE_BUCKET = os.environ.get("GCS_IR_CACHE_BUCKET", "")
 _gcs_rt_client = None
 _gcs_rt_bucket = None
-_GCS_RT_VERSION = "rt-v9"
+# rt-v10: cache keys now use the storm's INTERPOLATED track position at
+# each frame's time (not the static advisory position), plus radius_deg.
+# Together these fix two pre-existing cache misses:
+#   - storm motion ≥ 0.5° causes round(lat/lon) to flip → all frames miss
+#   - different radius_deg requests collided on the same key → wrong cutout
+_GCS_RT_VERSION = "rt-v10"
 
 def _get_rt_gcs_bucket():
     global _gcs_rt_client, _gcs_rt_bucket
@@ -127,17 +132,61 @@ def _get_rt_gcs_bucket():
     except Exception:
         return None
 
-def _pos_key(lat: float, lon: float) -> str:
-    """Round lat/lon to nearest degree for position-aware cache keys."""
-    return f"{round(lat)}_{round(lon)}"
+def _pos_key(lat: float, lon: float, radius_deg: float = 10.0) -> str:
+    """Cache-key fragment encoding (lat, lon, radius) for raw Tb frames.
+
+    Callers MUST pass the storm's INTERPOLATED track position at the
+    frame's time (not the current advisory position). Doing so keeps
+    historical frames stable across cache reads — a frame from 6h ago
+    is keyed by where the storm was 6h ago, so subsequent lookups
+    re-interpolate to the same position and hit. The prior advisory-
+    based scheme thrashed for any storm moving > 0.5° between cache
+    write and read (which is most recurving Atlantic systems).
+
+    Lat/lon rounded to 0.1° so very small numerical jitter in
+    interpolation doesn't fragment cache entries. 0.1° ≈ 11 km is much
+    smaller than any meaningful track adjustment, so distinct cached
+    positions reflect real motion.
+
+    Radius is included so requests with different cutout sizes (e.g.
+    ±4° storm-relative vs ±10° wide-view) don't collide on the same key.
+    """
+    lat_r = round(lat * 10) / 10
+    lon_r = round(lon * 10) / 10
+    rad_r = round(radius_deg, 1)
+    return f"{lat_r}_{lon_r}_r{rad_r}"
 
 
-def _gcs_rt_get(atcf_id: str, dt_str: str, lat: float = 0, lon: float = 0) -> dict | None:
-    """Try to read a cached raw Tb frame from GCS."""
+def _interp_pos_at(atcf_id: str, target_dt, fallback_lat: float,
+                   fallback_lon: float) -> tuple[float, float]:
+    """Return (lat, lon) for the storm at target_dt, interpolated from
+    b-deck records when available. Falls back to (fallback_lat,
+    fallback_lon) — typically the current advisory position — when no
+    track data exists yet (newly-formed storms).
+
+    Used to derive cache keys + cutout centers so historical frames
+    persist under the storm's true historical position rather than
+    its current position. _get_track_for_interp is 10-min TTL cached,
+    so per-frame calls are cheap.
+    """
+    records = _get_track_for_interp(atcf_id)
+    if records:
+        pos = _interpolate_track_position(records, target_dt)
+        if pos:
+            return pos[0], pos[1]
+    return fallback_lat, fallback_lon
+
+
+def _gcs_rt_get(atcf_id: str, dt_str: str, lat: float = 0, lon: float = 0,
+                radius_deg: float = 10.0) -> dict | None:
+    """Try to read a cached raw Tb frame from GCS.
+
+    lat/lon should be the INTERPOLATED storm position at the frame's
+    time (see _pos_key)."""
     bucket = _get_rt_gcs_bucket()
     if bucket is None:
         return None
-    pk = _pos_key(lat, lon)
+    pk = _pos_key(lat, lon, radius_deg)
     key = f"{_GCS_RT_VERSION}/ir-raw/{atcf_id}/{pk}/{dt_str}.json"
     try:
         blob = bucket.blob(key)
@@ -146,12 +195,16 @@ def _gcs_rt_get(atcf_id: str, dt_str: str, lat: float = 0, lon: float = 0) -> di
     except Exception:
         return None
 
-def _gcs_rt_put(atcf_id: str, dt_str: str, frame: dict, lat: float = 0, lon: float = 0):
-    """Write a raw Tb frame to GCS (fire-and-forget background thread)."""
+def _gcs_rt_put(atcf_id: str, dt_str: str, frame: dict, lat: float = 0,
+                lon: float = 0, radius_deg: float = 10.0):
+    """Write a raw Tb frame to GCS (fire-and-forget background thread).
+
+    lat/lon should be the INTERPOLATED storm position at the frame's
+    time (see _pos_key)."""
     bucket = _get_rt_gcs_bucket()
     if bucket is None:
         return
-    pk = _pos_key(lat, lon)
+    pk = _pos_key(lat, lon, radius_deg)
     def _upload():
         key = f"{_GCS_RT_VERSION}/ir-raw/{atcf_id}/{pk}/{dt_str}.json"
         try:
@@ -263,6 +316,161 @@ def _gcs_band_put(band: int, atcf_id: str, dt_str: str, frame: dict, lat: float 
         except Exception:
             pass
     threading.Thread(target=_upload, daemon=True).start()
+
+
+# ── Pre-built bundle artifacts (Item 6) ────────────────────────────
+# Same wire format as the API bundle endpoints. Written by the prewarm
+# loop to a public-read GCS path so the frontend can fetch directly
+# from storage.googleapis.com — Cloud Run never sees the request on a
+# cache hit, saving the TLS+routing round-trip (~200-400 ms).
+
+def _pack_bundle(header: dict, payloads: list) -> bytes:
+    """[uint32 LE header_length][header JSON][concat payloads]."""
+    import struct
+    header_json = json.dumps(header, separators=(",", ":")).encode("utf-8")
+    return struct.pack("<I", len(header_json)) + header_json + b"".join(payloads)
+
+
+def _upload_public_bundle(key: str, body: bytes, content_type: str = "application/octet-stream"):
+    """Upload bundle bytes to GCS with publicRead ACL + 5-min max-age."""
+    bucket = _get_rt_gcs_bucket()
+    if bucket is None:
+        return
+    try:
+        blob = bucket.blob(key)
+        blob.cache_control = "public, max-age=300"
+        blob.upload_from_string(
+            body, content_type=content_type,
+            predefined_acl="publicRead", timeout=30,
+        )
+    except Exception as ex:
+        print(f"[Bundle Pre-build] upload {key} failed: {ex}")
+
+
+def _build_and_upload_bundles(
+    atcf_id: str, fallback_lat: float, fallback_lon: float,
+    frame_times, radius_deg: float, lookback_hours: float, interval_min: int,
+):
+    """Assemble the display-WebP + raw-Tb bundles for one storm and
+    write them to public-read GCS paths. Mirrors the wire format
+    produced by /ir-frames-bundle and /ir-raw-bundle so the frontend
+    can consume either source interchangeably.
+
+    Reads exclusively from already-warmed GCS caches (no S3 fetches
+    here) — the per-frame loop that just ran took care of that. If a
+    frame is missing from cache for any reason it's marked as
+    byte_length=0 with an error field; the frontend skips it.
+    """
+    atcf_upper = atcf_id.upper()
+    # frame_times comes in newest-first; bundles use oldest-first
+    times_oldest_first = list(reversed(list(frame_times)))
+    half = radius_deg
+
+    # Display-WebP bundle
+    frame_hdrs = []
+    payloads_jpg = []
+    offset = 0
+    summary_sat = ""
+    for i, ft in enumerate(times_oldest_first):
+        dt_str = ft.strftime("%Y%m%d%H%M")
+        iso_dt = ft.strftime("%Y-%m-%dT%H:%M:%SZ")
+        ilat, ilon = _interp_pos_at(atcf_id, ft, fallback_lat, fallback_lon)
+        fb = [[ilat - half, ilon - half], [ilat + half, ilon + half]]
+        jpg = _gcs_jpg_get(atcf_upper, dt_str)
+        if not jpg:
+            frame_hdrs.append({
+                "index": i, "datetime_utc": iso_dt, "satellite": "",
+                "bounds": fb, "byte_offset": offset, "byte_length": 0,
+                "error": "no_cached_jpg",
+            })
+            continue
+        bucket_name, _ = select_goes_sat(ilon, ft)
+        sat_name = satellite_name_from_bucket(bucket_name)
+        frame_hdrs.append({
+            "index": i, "datetime_utc": iso_dt, "satellite": sat_name,
+            "bounds": fb, "byte_offset": offset, "byte_length": len(jpg),
+        })
+        payloads_jpg.append(jpg)
+        offset += len(jpg)
+        summary_sat = sat_name or summary_sat
+
+    # Summary bounds: latest frame's interpolated position
+    latest_ft = times_oldest_first[-1] if times_oldest_first else _dt.now(timezone.utc)
+    s_ilat, s_ilon = _interp_pos_at(atcf_id, latest_ft, fallback_lat, fallback_lon)
+    frames_header = {
+        "total_frames": len(times_oldest_first),
+        "bounds": [[s_ilat - half, s_ilon - half], [s_ilat + half, s_ilon + half]],
+        "satellite": summary_sat,
+        "lookback_hours": lookback_hours,
+        "interval_min": interval_min,
+        "radius_deg": radius_deg,
+        "media_type": "image/webp",
+        "frames": frame_hdrs,
+    }
+    frames_body = _pack_bundle(frames_header, payloads_jpg)
+
+    # Raw-Tb bundle
+    raw_hdrs = []
+    payloads_raw = []
+    offset = 0
+    for i, ft in enumerate(times_oldest_first):
+        dt_str = ft.strftime("%Y%m%d%H%M")
+        iso_dt = ft.strftime("%Y-%m-%dT%H:%M:%SZ")
+        ilat, ilon = _interp_pos_at(atcf_id, ft, fallback_lat, fallback_lon)
+        cached = _gcs_rt_get(atcf_upper, dt_str,
+                            lat=ilat, lon=ilon, radius_deg=radius_deg)
+        if not cached or not cached.get("tb_data"):
+            raw_hdrs.append({
+                "index": i, "datetime_utc": iso_dt,
+                "tb_rows": 0, "tb_cols": 0,
+                "byte_offset": offset, "byte_length": 0,
+                "error": "no_cached_tb",
+            })
+            continue
+        try:
+            tb_bytes = base64.b64decode(cached["tb_data"])
+        except Exception as ex:
+            raw_hdrs.append({
+                "index": i, "datetime_utc": iso_dt,
+                "tb_rows": 0, "tb_cols": 0,
+                "byte_offset": offset, "byte_length": 0,
+                "error": f"decode: {ex}",
+            })
+            continue
+        rows = int(cached["tb_rows"])
+        cols = int(cached["tb_cols"])
+        raw_hdrs.append({
+            "index": i,
+            "datetime_utc": cached.get("datetime_utc", iso_dt),
+            "satellite": cached.get("satellite", ""),
+            "tb_rows": rows, "tb_cols": cols,
+            "byte_offset": offset, "byte_length": rows * cols,
+            "bounds": cached.get("bounds"),
+            "center_fix": cached.get("center_fix"),
+        })
+        payloads_raw.append(tb_bytes)
+        offset += rows * cols
+
+    raw_header = {
+        "total_frames": len(times_oldest_first),
+        "tb_vmin": _TB_VMIN,
+        "tb_vmax": _TB_VMAX,
+        "lookback_hours": lookback_hours,
+        "interval_min": interval_min,
+        "radius_deg": radius_deg,
+        "frames": raw_hdrs,
+    }
+    raw_body = _pack_bundle(raw_header, payloads_raw)
+
+    # Upload both. Pathing matches the frontend's
+    # _gcsFramesBundleUrl / _gcsRawBundleUrl helpers in realtime_ir.js.
+    frames_key = f"{_GCS_RT_VERSION}/bundles/frames/{atcf_upper}.bin"
+    raw_key = f"{_GCS_RT_VERSION}/bundles/raw/{atcf_upper}.bin"
+    _upload_public_bundle(frames_key, frames_body)
+    _upload_public_bundle(raw_key, raw_body)
+    print(f"[Bundle Pre-build] {atcf_upper}: frames={len(payloads_jpg)} "
+          f"({len(frames_body)//1024} KB), raw={len(payloads_raw)} "
+          f"({len(raw_body)//1024} KB)")
 
 
 def _solar_elevation(lat: float, lon: float, dt: _dt) -> float:
@@ -1349,7 +1557,13 @@ def _poll_active_storms():
 
 # Default pre-fetch settings (match the endpoint defaults)
 _PREFETCH_LOOKBACK_HOURS = 6.0
-_PREFETCH_INTERVAL_MIN = 30
+# 15-min prewarm cadence (was 30) — produces ~25 frames per 6h lookback
+# instead of 13, doubling animation smoothness. Doubles per-cycle prewarm
+# work but the per-frame work is already fast (~50-100 ms per GCS read
+# on warm cache; ~1-3 s per S3 fetch on cold). Net GCS cost increase
+# is minor (~$1-2/month). 30-min consumers still hit because 30-min
+# timestamps are a strict subset of 15-min timestamps.
+_PREFETCH_INTERVAL_MIN = 15
 _PREFETCH_RADIUS_DEG = 10.0
 _prefetch_lock = threading.Lock()
 
@@ -1422,11 +1636,20 @@ def _prefetch_ir_frames(storms: list):
                 _prefetch_counts = {"ir": 0, "band": 0, "jpg": 0}
 
                 def _fetch_and_cache_ir(tdt, dstr):
-                    """Worker: fetch IR frame and cache to GCS."""
-                    if _gcs_rt_get(atcf_id.upper(), dstr, lat=center_lat, lon=center_lon) is not None:
+                    """Worker: fetch IR frame and cache to GCS.
+
+                    Per-frame cutout is centered on the storm's
+                    INTERPOLATED position at tdt (not the current
+                    advisory) so historical frames stay aligned with
+                    storm motion and cache keys remain stable across
+                    later lookups."""
+                    ilat, ilon = _interp_pos_at(atcf_id, tdt, center_lat, center_lon)
+                    if _gcs_rt_get(atcf_id.upper(), dstr,
+                                   lat=ilat, lon=ilon,
+                                   radius_deg=_PREFETCH_RADIUS_DEG) is not None:
                         return
                     try:
-                        raw = fetch_ir_tb_raw(center_lat, center_lon, tdt, box_deg)
+                        raw = fetch_ir_tb_raw(ilat, ilon, tdt, box_deg)
                     except Exception:
                         return
                     if not raw or raw.get("tb") is None:
@@ -1435,7 +1658,7 @@ def _prefetch_ir_frames(storms: list):
                     # displayed as L.imageOverlay on the Mercator detail map.
                     jpg_bytes = _render_ir_jpg(
                         raw["tb"],
-                        lat_bounds=(center_lat - half, center_lat + half),
+                        lat_bounds=(ilat - half, ilat + half),
                     )
                     if jpg_bytes:
                         _gcs_jpg_put(atcf_id.upper(), dstr, jpg_bytes)
@@ -1453,10 +1676,10 @@ def _prefetch_ir_frames(storms: list):
                         "datetime_utc": raw["datetime_utc"],
                         "satellite": raw.get("satellite", ""),
                         "bounds": raw.get("bounds", [
-                            [center_lat - half, center_lon - half],
-                            [center_lat + half, center_lon + half],
+                            [ilat - half, ilon - half],
+                            [ilat + half, ilon + half],
                         ]),
-                    }, lat=center_lat, lon=center_lon)
+                    }, lat=ilat, lon=ilon, radius_deg=_PREFETCH_RADIUS_DEG)
                     _prefetch_counts["ir"] += 1
                     del tb, arr, mask, scaled, encoded
 
@@ -1534,6 +1757,34 @@ def _prefetch_ir_frames(storms: list):
                     print(f"[IR Pre-fetch] {atcf_id}: GCS cached {c['ir']} IR + "
                           f"{c['band']} Band {right_band} + {c['jpg']} JPG frames (parallel)")
                 total_gcs_fetched += c["ir"] + c["band"]
+
+                # ── Pre-build bundle artifacts ─────────────────────
+                # Assemble both the display-WebP and raw-Tb bundles
+                # for this storm and write them to a public-read GCS
+                # path. The frontend's _fetchRawTbBundle and
+                # _initDetailMapJPG try these direct-GCS URLs FIRST,
+                # bypassing Cloud Run entirely on the read path. Net
+                # win: ~400-700 ms → ~150-300 ms warm-bundle load.
+                #
+                # Brief wait so the fire-and-forget _gcs_rt_put /
+                # _gcs_jpg_put threads spawned by the per-frame workers
+                # have time to flush their uploads before we read them
+                # back. ~3s is empirically enough for a 25-frame batch;
+                # any straggler just shows up as a missing frame in
+                # this cycle's bundle and is captured on the next.
+                time.sleep(3)
+                try:
+                    _build_and_upload_bundles(
+                        atcf_id, center_lat, center_lon, frame_times,
+                        radius_deg=_PREFETCH_RADIUS_DEG,
+                        lookback_hours=_PREFETCH_LOOKBACK_HOURS,
+                        interval_min=_PREFETCH_INTERVAL_MIN,
+                    )
+                except Exception as ex:
+                    # Bundle build is best-effort — per-frame cache still
+                    # populated above, so the API endpoints can assemble
+                    # on demand. Just log and move on.
+                    print(f"[IR Pre-fetch] {atcf_id}: bundle build failed: {ex}")
 
         # ── NEXRAD radar pre-fetch for storms near 88D sites ────────
         _prefetch_nexrad_for_storms(storms, frame_times_map={
@@ -2166,14 +2417,16 @@ def get_storm_ir_raw(
     half = box_deg / 2.0
     for target_dt in reversed(frame_times):
         dt_str = target_dt.strftime("%Y%m%d%H%M")
+        ilat, ilon = _interp_pos_at(atcf_id, target_dt, center_lat, center_lon)
 
-        # Check GCS cache first
-        cached = _gcs_rt_get(atcf_id.upper(), dt_str, lat=center_lat, lon=center_lon)
+        # Check GCS cache first (interpolated-position key — see _pos_key docs)
+        cached = _gcs_rt_get(atcf_id.upper(), dt_str,
+                            lat=ilat, lon=ilon, radius_deg=radius_deg)
         if cached is not None:
             frames.append(cached)
             continue
 
-        raw = fetch_ir_tb_raw(center_lat, center_lon, target_dt, box_deg)
+        raw = fetch_ir_tb_raw(ilat, ilon, target_dt, box_deg)
         if raw and raw.get("tb") is not None:
             tb = raw["tb"]
             # Encode as uint8: 0 = invalid, 1-255 = Tb range
@@ -2192,14 +2445,15 @@ def get_storm_ir_raw(
                 "datetime_utc": raw["datetime_utc"],
                 "satellite": raw.get("satellite", ""),
                 "bounds": raw.get("bounds", [
-                    [center_lat - half, center_lon - half],
-                    [center_lat + half, center_lon + half],
+                    [ilat - half, ilon - half],
+                    [ilat + half, ilon + half],
                 ]),
             }
             frames.append(frame_result)
 
             # Cache to GCS (fire-and-forget)
-            _gcs_rt_put(atcf_id.upper(), dt_str, frame_result, lat=center_lat, lon=center_lon)
+            _gcs_rt_put(atcf_id.upper(), dt_str, frame_result,
+                        lat=ilat, lon=ilon, radius_deg=radius_deg)
 
             del tb, arr, mask, scaled, encoded
 
@@ -2264,8 +2518,12 @@ def get_storm_ir_raw_frame(
         if _ipos:
             interp_lat, interp_lon = _ipos
 
-    # Check GCS cache first (using advisory position for cache key)
-    cached = _gcs_rt_get(atcf_id.upper(), dt_str, lat=center_lat, lon=center_lon)
+    # Check GCS cache first (keyed by INTERPOLATED position at this frame's
+    # time so historical frames remain stable across recurring lookups —
+    # see _pos_key docstring for why advisory-position keying thrashed).
+    cached = _gcs_rt_get(atcf_id.upper(), dt_str,
+                        lat=interp_lat, lon=interp_lon,
+                        radius_deg=radius_deg)
     if cached is not None:
         cached["frame_index"] = frame_index
         cached["total_frames"] = len(frame_times)
@@ -2311,7 +2569,11 @@ def get_storm_ir_raw_frame(
                     if bf_adj < 0 or bf_adj >= len(frame_times):
                         continue
                     bf_dt = frame_times[bf_adj].strftime("%Y%m%d%H%M")
-                    bf_cached = _gcs_rt_get(atcf_id.upper(), bf_dt, lat=center_lat, lon=center_lon)
+                    bf_ilat, bf_ilon = _interp_pos_at(
+                        atcf_id, frame_times[bf_adj], center_lat, center_lon)
+                    bf_cached = _gcs_rt_get(atcf_id.upper(), bf_dt,
+                                           lat=bf_ilat, lon=bf_ilon,
+                                           radius_deg=radius_deg)
                     bf_fix = bf_cached.get("center_fix") if bf_cached else None
                     if isinstance(bf_fix, dict) and bf_fix.get("lat") is not None:
                         bf_guess_lat = bf_fix["lat"]
@@ -2344,7 +2606,9 @@ def get_storm_ir_raw_frame(
                         cached["center_fix"]["guess_lon"] = cfix["guess_lon"]
                         cached["center_fix"]["dist_deg"] = cfix.get("dist_deg", 0)
                 # Re-cache with center_fix included
-                _gcs_rt_put(atcf_id.upper(), dt_str, cached, lat=center_lat, lon=center_lon)
+                _gcs_rt_put(atcf_id.upper(), dt_str, cached,
+                            lat=interp_lat, lon=interp_lon,
+                            radius_deg=radius_deg)
                 # Log the result
                 _log_center_fix(
                     atcf_id.upper(), storm.get("name", ""),
@@ -2359,7 +2623,10 @@ def get_storm_ir_raw_frame(
             headers={"Cache-Control": "public, max-age=300"},
         )
 
-    raw = fetch_ir_tb_raw(center_lat, center_lon, target_dt, box_deg)
+    # Cutout centered on the storm's INTERPOLATED position at this
+    # frame's time (not the static advisory) — keeps historical frames
+    # framed correctly when the storm has moved.
+    raw = fetch_ir_tb_raw(interp_lat, interp_lon, target_dt, box_deg)
     if not raw or raw.get("tb") is None:
         raise HTTPException(status_code=502, detail=f"No IR data for frame {frame_index}")
 
@@ -2376,8 +2643,8 @@ def get_storm_ir_raw_frame(
     vmax_kt = storm.get("vmax_kt")
     if vmax_kt is not None and vmax_kt >= 65:
         frame_bounds = raw.get("bounds", [
-            [center_lat - half, center_lon - half],
-            [center_lat + half, center_lon + half],
+            [interp_lat - half, interp_lon - half],
+            [interp_lat + half, interp_lon + half],
         ])
 
         # Use the nearest successful center_fix from an adjacent frame as
@@ -2389,7 +2656,11 @@ def get_storm_ir_raw_frame(
             if adj_idx < 0 or adj_idx >= len(frame_times):
                 continue
             adj_dt = frame_times[adj_idx].strftime("%Y%m%d%H%M")
-            adj_cached = _gcs_rt_get(atcf_id.upper(), adj_dt, lat=center_lat, lon=center_lon)
+            adj_ilat, adj_ilon = _interp_pos_at(
+                atcf_id, frame_times[adj_idx], center_lat, center_lon)
+            adj_cached = _gcs_rt_get(atcf_id.upper(), adj_dt,
+                                    lat=adj_ilat, lon=adj_ilon,
+                                    radius_deg=radius_deg)
             adj_fix = adj_cached.get("center_fix") if adj_cached else None
             if isinstance(adj_fix, dict) and adj_fix.get("lat") is not None:
                 guess_lat = adj_fix["lat"]
@@ -2440,16 +2711,17 @@ def get_storm_ir_raw_frame(
         "datetime_utc": raw["datetime_utc"],
         "satellite": raw.get("satellite", ""),
         "bounds": raw.get("bounds", [
-            [center_lat - half, center_lon - half],
-            [center_lat + half, center_lon + half],
+            [interp_lat - half, interp_lon - half],
+            [interp_lat + half, interp_lon + half],
         ]),
         "frame_index": frame_index,
         "total_frames": len(frame_times),
         "center_fix": center_fix,
     }
 
-    # Cache to GCS
-    _gcs_rt_put(atcf_id.upper(), dt_str, frame_result, lat=center_lat, lon=center_lon)
+    # Cache to GCS (keyed by interpolated position — see _pos_key docs)
+    _gcs_rt_put(atcf_id.upper(), dt_str, frame_result,
+                lat=interp_lat, lon=interp_lon, radius_deg=radius_deg)
 
     del tb, arr, mask, scaled, encoded
 
@@ -2479,20 +2751,22 @@ def _fetch_one_raw_tb_for_bundle(
     guess quality is acceptable for first-load speed; users can still
     refetch a single frame via /ir-raw-frame to pick up the chained guess.
     """
-    center_lat = storm["lat"]
-    center_lon = storm["lon"]
     box_deg = radius_deg * 2.0
     half = radius_deg
     dt_str = target_dt.strftime("%Y%m%d%H%M")
     vmax_kt = storm.get("vmax_kt")
 
-    # GCS cache first — typical hit on prewarmed storms
-    cached = _gcs_rt_get(atcf_upper, dt_str, lat=center_lat, lon=center_lon)
+    # GCS cache first — keyed by INTERPOLATED position at this frame's time
+    # so historical frames stay stable across recurring lookups.
+    cached = _gcs_rt_get(atcf_upper, dt_str,
+                        lat=interp_lat, lon=interp_lon,
+                        radius_deg=radius_deg)
     if cached is not None:
         return cached
 
-    # Cache miss: pull from S3 + render
-    raw = fetch_ir_tb_raw(center_lat, center_lon, target_dt, box_deg)
+    # Cache miss: pull from S3 + render. Cutout centered on the
+    # interpolated position so the cached frame's bounds match the key.
+    raw = fetch_ir_tb_raw(interp_lat, interp_lon, target_dt, box_deg)
     if not raw or raw.get("tb") is None:
         return None
 
@@ -2507,8 +2781,8 @@ def _fetch_one_raw_tb_for_bundle(
     center_fix = None
     if vmax_kt is not None and vmax_kt >= 65:
         frame_bounds = raw.get("bounds", [
-            [center_lat - half, center_lon - half],
-            [center_lat + half, center_lon + half],
+            [interp_lat - half, interp_lon - half],
+            [interp_lat + half, interp_lon + half],
         ])
         try:
             gated = apply_center_gates(
@@ -2545,13 +2819,14 @@ def _fetch_one_raw_tb_for_bundle(
         "datetime_utc": raw["datetime_utc"],
         "satellite": raw.get("satellite", ""),
         "bounds": raw.get("bounds", [
-            [center_lat - half, center_lon - half],
-            [center_lat + half, center_lon + half],
+            [interp_lat - half, interp_lon - half],
+            [interp_lat + half, interp_lon + half],
         ]),
         "center_fix": center_fix,
     }
     # Cache fire-and-forget so subsequent per-frame requests benefit
-    _gcs_rt_put(atcf_upper, dt_str, frame_result, lat=center_lat, lon=center_lon)
+    _gcs_rt_put(atcf_upper, dt_str, frame_result,
+                lat=interp_lat, lon=interp_lon, radius_deg=radius_deg)
 
     del tb, arr, mask, scaled, encoded
     return frame_result
@@ -2755,11 +3030,13 @@ def get_storm_hovmoller(
     frames = []  # list of (target_dt, cached_dict_or_None)
     for ft in frame_times:
         dt_str = ft.strftime("%Y%m%d%H%M")
-        cached = _gcs_rt_get(atcf_id.upper(), dt_str, lat=center_lat, lon=center_lon)
+        ilat, ilon = _interp_pos_at(atcf_id, ft, center_lat, center_lon)
+        cached = _gcs_rt_get(atcf_id.upper(), dt_str,
+                            lat=ilat, lon=ilon, radius_deg=radius_deg)
         if cached is None:
             # Not in cache — fetch raw Tb from satellite and cache it
             try:
-                raw = fetch_ir_tb_raw(center_lat, center_lon, ft, box_deg)
+                raw = fetch_ir_tb_raw(ilat, ilon, ft, box_deg)
                 if raw and raw.get("tb") is not None:
                     arr = np.asarray(raw["tb"], dtype=np.float32)
                     mask = ~np.isfinite(arr) | (arr <= 0)
@@ -2773,12 +3050,13 @@ def get_storm_hovmoller(
                         "datetime_utc": raw.get("datetime_utc", ft.strftime("%Y-%m-%dT%H:%M:%SZ")),
                         "satellite": raw.get("satellite", ""),
                         "bounds": raw.get("bounds", [
-                            [center_lat - half, center_lon - half],
-                            [center_lat + half, center_lon + half],
+                            [ilat - half, ilon - half],
+                            [ilat + half, ilon + half],
                         ]),
                         "center_fix": None,
                     }
-                    _gcs_rt_put(atcf_id.upper(), dt_str, cached, lat=center_lat, lon=center_lon)
+                    _gcs_rt_put(atcf_id.upper(), dt_str, cached,
+                                lat=ilat, lon=ilon, radius_deg=radius_deg)
             except Exception:
                 cached = None
         frames.append((ft, cached))
@@ -3450,9 +3728,15 @@ def get_ir_frame_jpg(
     if cached_jpg:
         return Response(content=cached_jpg, media_type="image/webp", headers=meta_headers)
 
+    # Interpolated storm position at this frame's time — used for both
+    # the Tb cache key and the cutout center so the cached frame's
+    # bounds line up with its key.
+    ilat, ilon = _interp_pos_at(atcf_id, target_dt, center_lat, center_lon)
+
     # Fallback: check if raw Tb uint8 is cached in GCS (populated by pre-fetch)
     # and render JPG from it — avoids the S3 round-trip entirely.
-    cached_raw = _gcs_rt_get(atcf_id.upper(), dt_str, lat=center_lat, lon=center_lon)
+    cached_raw = _gcs_rt_get(atcf_id.upper(), dt_str,
+                            lat=ilat, lon=ilon, radius_deg=radius_deg)
     if cached_raw is not None and cached_raw.get("tb_data"):
         try:
             encoded = np.frombuffer(
@@ -3462,7 +3746,7 @@ def get_ir_frame_jpg(
             decoded_tb[encoded == 0] = np.nan
             jpg_bytes = _render_ir_jpg(
                 decoded_tb,
-                lat_bounds=(center_lat - half, center_lat + half),
+                lat_bounds=(ilat - half, ilat + half),
             )
             if jpg_bytes:
                 _gcs_jpg_put(atcf_id.upper(), dt_str, jpg_bytes)
@@ -3470,14 +3754,14 @@ def get_ir_frame_jpg(
         except Exception:
             pass  # Fall through to S3 fetch
 
-    # Render fresh from S3 satellite data
-    raw = fetch_ir_tb_raw(center_lat, center_lon, target_dt, box_deg)
+    # Render fresh from S3 satellite data (cutout centered on interpolated pos)
+    raw = fetch_ir_tb_raw(ilat, ilon, target_dt, box_deg)
     if not raw or raw.get("tb") is None:
         raise HTTPException(status_code=502, detail=f"No IR data for frame {frame_index}")
 
     jpg_bytes = _render_ir_jpg(
         raw["tb"],
-        lat_bounds=(center_lat - half, center_lat + half),
+        lat_bounds=(ilat - half, ilat + half),
     )
     if not jpg_bytes:
         raise HTTPException(status_code=502, detail="IR rendering failed")
@@ -3495,19 +3779,23 @@ def get_ir_frame_jpg(
 # ---------------------------------------------------------------------------
 
 def _get_or_render_ir_jpg(
-    atcf_upper: str, center_lat: float, center_lon: float,
+    atcf_upper: str, interp_lat: float, interp_lon: float,
     target_dt: _dt, radius_deg: float,
 ) -> tuple[bytes | None, str]:
     """Bundle-endpoint helper: return one frame's WebP bytes + satellite name.
 
+    interp_lat/lon should be the storm's INTERPOLATED track position at
+    target_dt (the bundle endpoint computes this before fan-out). It's
+    used for both the Tb-cache key and the cutout center so the cached
+    frame's bounds line up with its key.
+
     Mirrors the GCS-JPG → cached-raw-Tb → S3-fresh fallback chain in
-    get_ir_frame_jpg. Returns (None, sat_name) when no data is available
-    for the requested time.
+    get_ir_frame_jpg. Returns (None, sat_name) when no data is available.
     """
     box_deg = radius_deg * 2.0
     half = radius_deg
     dt_str = target_dt.strftime("%Y%m%d%H%M")
-    bucket, _ = select_goes_sat(center_lon, target_dt)
+    bucket, _ = select_goes_sat(interp_lon, target_dt)
     sat_name = satellite_name_from_bucket(bucket)
 
     # Warmest path: pre-rendered Mercator-warped WebP in GCS
@@ -3516,7 +3804,9 @@ def _get_or_render_ir_jpg(
         return cached_jpg, sat_name
 
     # Next: render from cached raw Tb (skips S3 round-trip)
-    cached_raw = _gcs_rt_get(atcf_upper, dt_str, lat=center_lat, lon=center_lon)
+    cached_raw = _gcs_rt_get(atcf_upper, dt_str,
+                            lat=interp_lat, lon=interp_lon,
+                            radius_deg=radius_deg)
     if cached_raw is not None and cached_raw.get("tb_data"):
         try:
             encoded = np.frombuffer(
@@ -3526,7 +3816,7 @@ def _get_or_render_ir_jpg(
             decoded_tb[encoded == 0] = np.nan
             jpg_bytes = _render_ir_jpg(
                 decoded_tb,
-                lat_bounds=(center_lat - half, center_lat + half),
+                lat_bounds=(interp_lat - half, interp_lat + half),
             )
             if jpg_bytes:
                 _gcs_jpg_put(atcf_upper, dt_str, jpg_bytes)
@@ -3536,14 +3826,14 @@ def _get_or_render_ir_jpg(
 
     # Coldest: fetch Tb from S3 + render
     try:
-        raw = fetch_ir_tb_raw(center_lat, center_lon, target_dt, box_deg)
+        raw = fetch_ir_tb_raw(interp_lat, interp_lon, target_dt, box_deg)
     except Exception:
         return None, sat_name
     if not raw or raw.get("tb") is None:
         return None, sat_name
     jpg_bytes = _render_ir_jpg(
         raw["tb"],
-        lat_bounds=(center_lat - half, center_lat + half),
+        lat_bounds=(interp_lat - half, interp_lat + half),
     )
     if jpg_bytes:
         _gcs_jpg_put(atcf_upper, dt_str, jpg_bytes)
@@ -3611,20 +3901,35 @@ def get_storm_ir_frames_bundle(
     # Match /ir-frame.jpg ordering: index 0 = oldest, index N-1 = most recent
     frame_times = list(reversed(frame_times))
 
+    # Bundle-level "bounds" reflects the *latest* frame's interpolated
+    # position. Each frame in the JSON header also carries its own bounds
+    # (computed per-frame inside the worker) so storms that move through
+    # the lookback window are placed correctly per-frame on the map.
+    latest_dt = frame_times[-1] if frame_times else center_dt
+    summary_ilat, summary_ilon = _interp_pos_at(
+        atcf_id, latest_dt, center_lat, center_lon)
     bounds = [
-        [center_lat - half, center_lon - half],
-        [center_lat + half, center_lon + half],
+        [summary_ilat - half, summary_ilon - half],
+        [summary_ilat + half, summary_ilon + half],
     ]
 
     def _worker(item):
         i, target_dt = item
         try:
+            ilat, ilon = _interp_pos_at(
+                atcf_id, target_dt, center_lat, center_lon)
             jpg, sat = _get_or_render_ir_jpg(
-                atcf_upper, center_lat, center_lon, target_dt, radius_deg,
+                atcf_upper, ilat, ilon, target_dt, radius_deg,
             )
-            return (i, jpg, sat, None)
+            # Carry per-frame bounds so the JSON header can describe
+            # exactly where this frame's cutout lives.
+            frame_bounds = [
+                [ilat - half, ilon - half],
+                [ilat + half, ilon + half],
+            ]
+            return (i, jpg, sat, frame_bounds, None)
         except Exception as ex:
-            return (i, None, "", str(ex))
+            return (i, None, "", None, str(ex))
 
     indexed = list(enumerate(frame_times))
     with ThreadPoolExecutor(max_workers=4) as pool:
@@ -3639,7 +3944,7 @@ def get_storm_ir_frames_bundle(
     # GOES-East / GOES-West / Himawari boundaries within the window.
     summary_sat = ""
 
-    for i, jpg, sat, err in results:
+    for i, jpg, sat, fbounds, err in results:
         target_dt = frame_times[i]
         iso_dt = target_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
         if not jpg or err is not None:
@@ -3647,6 +3952,7 @@ def get_storm_ir_frames_bundle(
                 "index": i,
                 "datetime_utc": iso_dt,
                 "satellite": sat or "",
+                "bounds": fbounds,
                 "byte_offset": offset,
                 "byte_length": 0,
                 "error": err or "no_data",
@@ -3656,6 +3962,7 @@ def get_storm_ir_frames_bundle(
             "index": i,
             "datetime_utc": iso_dt,
             "satellite": sat or "",
+            "bounds": fbounds,
             "byte_offset": offset,
             "byte_length": len(jpg),
         })

@@ -2007,7 +2007,10 @@
             end = new Date(end.getTime() - 15 * 60 * 1000);
         }
         var start = new Date(end.getTime() - lookbackHours * 3600 * 1000);
-        var step = 30 * 60 * 1000; // 30-min steps for animation (not every 10 min — too many frames)
+        // 15-min steps — matches JPG_PRIMARY_INTERVAL_MIN / RAW_TB_INTERVAL_MIN
+        // / _PREFETCH_INTERVAL_MIN. Bundle architecture handles the higher
+        // frame count without smoothness/perf regression.
+        var step = 15 * 60 * 1000;
         for (var t = start.getTime(); t <= end.getTime(); t += step) {
             var d = roundToGIBSInterval(new Date(t));
             times.push(toGIBSTime(d));
@@ -2966,7 +2969,15 @@
     var JPG_FALLBACK_ERROR_THRESHOLD = 0.5;  // >50% frame errors → swap to GIBS
     var JPG_PRIMARY_RADIUS_DEG = 10.0;
     var JPG_PRIMARY_LOOKBACK_H = DEFAULT_LOOKBACK_HOURS;
-    var JPG_PRIMARY_INTERVAL_MIN = 30;
+    // 15-min cadence (was 30) — produces 25 frames in a 6h lookback for
+    // ~2× smoother animation. Bundle architecture makes this essentially
+    // free (one request goes from ~780 KB → ~1.5 MB). Captures sub-hourly
+    // structural evolution (eyewall replacements, RI bursts) that 30-min
+    // sampling smeared into a slideshow.
+    var JPG_PRIMARY_INTERVAL_MIN = 15;
+    // Same cadence used for the raw-Tb fetch so hover-Tb + colormap-switch
+    // reuse the prewarmed 15-min frame set.
+    var RAW_TB_INTERVAL_MIN = 15;
     var _jpgPathFellBack = false;
 
     // Track blob URLs we create from bundle bytes so we can revoke them
@@ -2996,10 +3007,31 @@
             + '&radius_deg=' + JPG_PRIMARY_RADIUS_DEG
             + '&interval_min=' + JPG_PRIMARY_INTERVAL_MIN;
 
-        fetch(bundleUrl, { cache: 'no-store' })
+        // Two-tier fetch chain:
+        //   1) Try the pre-built bundle in GCS (served direct from
+        //      storage.googleapis.com, Cloud Run never sees the request).
+        //      Built by the 5-min prewarm loop, so it's reliably warm for
+        //      any active storm that's been alive for at least one cycle.
+        //   2) Fall through to the API endpoint (assembles the bundle on
+        //      demand from cached frames or fresh S3 pulls). Used for
+        //      brand-new storms or when GCS misses for any reason.
+        // No `cache: 'no-store'` — both responses carry Cache-Control:
+        // public,max-age=300 so the browser can serve repeat opens
+        // instantly without re-downloading.
+        var gcsBundleUrl = _gcsFramesBundleUrl(atcfId);
+        fetch(gcsBundleUrl)
             .then(function (r) {
-                if (!r.ok) throw new Error('bundle HTTP ' + r.status);
+                if (!r.ok) throw new Error('gcs bundle HTTP ' + r.status);
                 return r.arrayBuffer();
+            })
+            .catch(function () {
+                // GCS miss — typical for brand-new storms before first prewarm.
+                // Fall through to the API endpoint.
+                return fetch(bundleUrl)
+                    .then(function (r) {
+                        if (!r.ok) throw new Error('api bundle HTTP ' + r.status);
+                        return r.arrayBuffer();
+                    });
             })
             .then(function (buf) {
                 if (currentStormId !== atcfId || !detailMap) return;
@@ -3010,6 +3042,19 @@
                              (err && err.message) + '); falling through to per-frame JPG path');
                 _initDetailMapJPGPerFrame(storm, satLayerName);
             });
+    }
+
+    // ── GCS direct-bundle URL helpers ────────────────────────────
+    // The prewarm loop writes a fresh bundle blob every 5 min to
+    // gs://tc-atlas-ir-cache/rt-v10/bundles/{kind}/{atcf_id}.bin with
+    // publicRead ACL, so the browser can fetch it directly from
+    // Google's storage edge instead of going through Cloud Run.
+    var _GCS_BUNDLE_BASE = 'https://storage.googleapis.com/tc-atlas-ir-cache/rt-v10/bundles';
+    function _gcsFramesBundleUrl(atcfId) {
+        return _GCS_BUNDLE_BASE + '/frames/' + encodeURIComponent(atcfId.toUpperCase()) + '.bin';
+    }
+    function _gcsRawBundleUrl(atcfId) {
+        return _GCS_BUNDLE_BASE + '/raw/' + encodeURIComponent(atcfId.toUpperCase()) + '.bin';
     }
 
     /** Parse the bundle ArrayBuffer and create N L.imageOverlays from blob
@@ -3047,7 +3092,11 @@
         animIndex = animFrameTimes.length - 1;
         if (header.satellite) detailSatName = header.satellite;
 
-        var leafletBounds = L.latLngBounds(
+        // Summary bounds (latest frame) — used as a fallback when a
+        // frame's own bounds are missing. Most frames carry their own
+        // `bounds` since the bundle endpoint computes them per-frame
+        // from the storm's interpolated position at that frame's time.
+        var summaryBounds = L.latLngBounds(
             L.latLng(bounds[0][0], bounds[0][1]),
             L.latLng(bounds[1][0], bounds[1][1])
         );
@@ -3070,7 +3119,17 @@
             var blob = new Blob([slice], { type: mediaType });
             var blobUrl = URL.createObjectURL(blob);
             _activeFrameBlobUrls.push(blobUrl);
-            var overlay = L.imageOverlay(blobUrl, leafletBounds, {
+            // Each frame has its own bounds — the cutout follows the
+            // storm's interpolated position over the lookback window, so
+            // a recurving Atlantic system displays each frame at the
+            // right geographic spot instead of being smeared across the
+            // (latest-position) summary bounds.
+            var fb = fh.bounds || bounds;
+            var frameBounds = L.latLngBounds(
+                L.latLng(fb[0][0], fb[0][1]),
+                L.latLng(fb[1][0], fb[1][1])
+            );
+            var overlay = L.imageOverlay(blobUrl, frameBounds, {
                 opacity: 0,
                 interactive: false,
                 pane: 'tilePane'
@@ -4329,14 +4388,24 @@
      *  produced by the incremental path, or rejects on any failure so
      *  the caller can fall back to incremental fetching. */
     function _fetchRawTbBundle(stormId, signal) {
-        var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(stormId) + '/ir-raw-bundle'
+        var apiUrl = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(stormId) + '/ir-raw-bundle'
             + '?lookback_hours=' + DEFAULT_LOOKBACK_HOURS
             + '&radius_deg=' + DEFAULT_RADIUS_DEG
             + '&interval_min=30';
-        return fetch(url, { signal: signal })
+        // Try direct-from-GCS (prewarmed, no Cloud Run hop) first.
+        // Fall through to the API endpoint on miss / fresh storms.
+        var gcsUrl = _gcsRawBundleUrl(stormId);
+        return fetch(gcsUrl, { signal: signal })
             .then(function (r) {
-                if (!r.ok) throw new Error('bundle HTTP ' + r.status);
+                if (!r.ok) throw new Error('gcs raw bundle HTTP ' + r.status);
                 return r.arrayBuffer();
+            })
+            .catch(function (err) {
+                if (err && err.name === 'AbortError') throw err;
+                return fetch(apiUrl, { signal: signal }).then(function (r) {
+                    if (!r.ok) throw new Error('api raw bundle HTTP ' + r.status);
+                    return r.arrayBuffer();
+                });
             })
             .then(function (buf) {
                 if (signal && signal.aborted) throw new DOMException('aborted', 'AbortError');
@@ -4439,7 +4508,7 @@
                 + '?frame_index=' + idx
                 + '&lookback_hours=' + DEFAULT_LOOKBACK_HOURS
                 + '&radius_deg=' + DEFAULT_RADIUS_DEG
-                + '&interval_min=30';
+                + '&interval_min=' + RAW_TB_INTERVAL_MIN;
 
             fetch(url, { signal: controller.signal })
                 .then(function (r) {
@@ -4545,7 +4614,7 @@
                 + '&frame_index=' + idx
                 + '&lookback_hours=' + DEFAULT_LOOKBACK_HOURS
                 + '&radius_deg=' + DEFAULT_RADIUS_DEG
-                + '&interval_min=30';
+                + '&interval_min=' + RAW_TB_INTERVAL_MIN;
 
             fetch(url)
                 .then(function (r) {
