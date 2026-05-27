@@ -5014,6 +5014,133 @@
             var previewTotal = totalFrames;
             console.log('[Satellite] Fetching ' + previewTotal + ' preview JPGs for ' + stormId);
 
+            // Bundle-first: same pattern as the band path. One request
+            // returns all 25 WebPs packed; fall through to per-frame
+            // waterfall on bundle failure.
+            _satTryIrFramesBundleThen(stormId, function (ok, parsed) {
+                if (!ok) {
+                    console.log('[Satellite] IR frames bundle unavailable; per-frame fallback');
+                    _fetchPreviewFramesLegacy(previewTotal, _firstPreviewShown);
+                    return;
+                }
+                if (stormId !== currentStormId) return;
+                for (var i = 0; i < parsed.frames.length; i++) {
+                    var p = parsed.frames[i];
+                    if (!irFrames[p.index] || !irFrames[p.index].tb_data) {
+                        irFrames[p.index] = {
+                            previewImg: p.img,
+                            tb_data: null,
+                            rows: p.img.naturalHeight,
+                            cols: p.img.naturalWidth,
+                            bounds: p.bounds,
+                            datetime_utc: p.datetime_utc,
+                            satellite: p.satellite,
+                            tb_vmin: 160.0, tb_vmax: 330.0,
+                            center_fix: null
+                        };
+                    } else {
+                        irFrames[p.index].previewImg = p.img;
+                    }
+                }
+                _previewDone = parsed.frames.length;
+                if (parsed.total) previewTotal = parsed.total;
+                buildValidIndices();
+                updateSliderMax();
+                if (validFrameIndices.length > 0) {
+                    animIndex = validFrameIndices[0];
+                }
+                hideLoader();
+                _satLoadRadarSites();
+                renderBothPanels();
+                updateAnimUI();
+                if (loadStatusEl) loadStatusEl.textContent = '';
+                console.log('[Satellite] IR frames bundle: ' + parsed.frames.length +
+                            '/' + parsed.total + ' previews loaded');
+            });
+            return;
+        }
+
+        /** IR display bundle parser — mirrors _satTryBandBundleThen but
+         *  fetches /ir-frames-bundle (no band param). Returns to caller
+         *  via done(true, { frames: [{index, img, bounds, ...}], total }). */
+        function _satTryIrFramesBundleThen(sid, done) {
+            var apiUrl = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(sid)
+                + '/ir-frames-bundle?lookback_hours=' + DEFAULT_LOOKBACK_HOURS
+                + '&radius_deg=' + DEFAULT_RADIUS_DEG
+                + '&interval_min=' + FRAME_INTERVAL_MIN;
+            var gcsUrl = 'https://storage.googleapis.com/tc-atlas-ir-cache/rt-v10/bundles/frames/'
+                + encodeURIComponent(sid.toUpperCase()) + '.bin';
+            fetch(gcsUrl)
+                .then(function (r) {
+                    if (!r.ok) throw new Error('gcs ir bundle HTTP ' + r.status);
+                    return r.arrayBuffer();
+                })
+                .catch(function () {
+                    return fetch(apiUrl).then(function (r) {
+                        if (!r.ok) throw new Error('api ir bundle HTTP ' + r.status);
+                        return r.arrayBuffer();
+                    });
+                })
+                .then(function (buf) {
+                    try {
+                        var dv = new DataView(buf);
+                        if (buf.byteLength < 4) throw new Error('bundle too small');
+                        var hl = dv.getUint32(0, true);
+                        if (4 + hl > buf.byteLength) throw new Error('bundle header overrun');
+                        var header = JSON.parse(new TextDecoder('utf-8')
+                            .decode(new Uint8Array(buf, 4, hl)));
+                        var bin = 4 + hl;
+                        var mediaType = header.media_type || 'image/webp';
+                        var hdrFrames = header.frames || [];
+                        var pending = 0, out = [], settled = false;
+                        function maybeFinish() {
+                            if (settled) return;
+                            if (pending === 0) {
+                                settled = true;
+                                done(true, { frames: out, total: header.total_frames });
+                            }
+                        }
+                        for (var i = 0; i < hdrFrames.length; i++) {
+                            var f = hdrFrames[i];
+                            if (!f.byte_length || f.error) continue;
+                            var slice = new Uint8Array(buf, bin + f.byte_offset, f.byte_length);
+                            var blob = new Blob([slice], { type: mediaType });
+                            var url = URL.createObjectURL(blob);
+                            pending++;
+                            (function (fHdr) {
+                                var img = new Image();
+                                img.onload = function () {
+                                    out.push({
+                                        index: fHdr.index,
+                                        img: img,
+                                        bounds: fHdr.bounds,
+                                        datetime_utc: fHdr.datetime_utc || '',
+                                        satellite: fHdr.satellite || ''
+                                    });
+                                    pending--;
+                                    maybeFinish();
+                                };
+                                img.onerror = function () {
+                                    pending--;
+                                    maybeFinish();
+                                };
+                                img.src = url;
+                            })(f);
+                        }
+                        if (pending === 0) done(false, null);
+                    } catch (e) {
+                        console.warn('[Satellite] IR bundle parse failed:', e.message);
+                        done(false, null);
+                    }
+                })
+                .catch(function (err) {
+                    console.warn('[Satellite] IR bundle fetch failed:', err && err.message);
+                    done(false, null);
+                });
+        }
+
+        /** Per-frame IR preview waterfall — kept as bundle-failure fallback */
+        function _fetchPreviewFramesLegacy(previewTotal, _firstPreviewShown) {
             function fetchPreview(idx) {
                 if (idx >= previewTotal || stormId !== currentStormId) return;
                 var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(stormId) + '/ir-frame.jpg'
