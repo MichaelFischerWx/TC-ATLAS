@@ -1575,8 +1575,23 @@
     }
 
     /** Update the GIBS-feed staleness banner. Show when one or more
-     *  satellites are stale; hide when all are fresh. The banner names
-     *  the affected satellites and links to NASA's outages page. */
+     *  satellites are stale; hide when all are fresh.
+     *
+     *  Once dismissed, store the affected sat set + dismiss time in
+     *  localStorage. Re-show only if (a) different sats become stale,
+     *  or (b) the dismissal is older than the 24-hour TTL. That way a
+     *  returning user who already saw the warning isn't pestered
+     *  every visit, but a NEW outage still surfaces it. */
+    var _BANNER_DISMISS_KEY = 'tc-atlas:ir-feed-banner-dismiss';
+    var _BANNER_DISMISS_TTL_MS = 24 * 60 * 60 * 1000;  // 24 h
+
+    function _bannerDismissalRecord() {
+        try {
+            var raw = localStorage.getItem(_BANNER_DISMISS_KEY);
+            return raw ? JSON.parse(raw) : null;
+        } catch (e) { return null; }
+    }
+
     function _updateFeedStalenessBanner(staleSats) {
         var el = document.getElementById('ir-feed-banner');
         var txt = document.getElementById('ir-feed-banner-text');
@@ -1585,10 +1600,31 @@
             el.style.display = 'none';
             return;
         }
+        // Honor a recent dismissal — but only when the affected sats
+        // match what the user already saw. A new sat going stale or a
+        // change in the set re-shows the banner.
+        var key = staleSats.slice().sort().join('|');
+        var rec = _bannerDismissalRecord();
+        if (rec && rec.key === key &&
+            (Date.now() - rec.t) < _BANNER_DISMISS_TTL_MS) {
+            el.style.display = 'none';
+            return;
+        }
         var label = staleSats.join(' & ');
         var msg = label + ' feed delayed (NASA GIBS) — that region is being backfilled from the nearest available satellite (expect higher parallax) until the upstream ingest catches up.';
         txt.textContent = msg;
         el.style.display = 'flex';
+        // Wire the close button to also persist the dismissal.
+        var closer = el.querySelector('.ir-feed-banner-close');
+        if (closer && !closer._dismissBound) {
+            closer.addEventListener('click', function () {
+                try {
+                    localStorage.setItem(_BANNER_DISMISS_KEY,
+                        JSON.stringify({ key: key, t: Date.now() }));
+                } catch (e) {}
+            });
+            closer._dismissBound = true;
+        }
     }
 
     /** Legacy wrapper — returns the oldest satellite time (for animation compatibility) */
@@ -4027,7 +4063,12 @@
         // Allow up to zoom 7 (GeoColor supports Level7); IR tiles still capped at Level6
         detailMap = L.map(mapDiv, {
             center: [storm.lat, storm.lon],
-            zoom: 5,
+            // zoom 6 fills the storm-relative crop tightly to the viewport
+            // (the IR cutout is ±10° around the storm, ~2200 km wide;
+            // zoom 5 left visible basemap margins around the cropped
+            // imagery). zoom 6 keeps the storm centered without leaving
+            // empty background showing.
+            zoom: 6,
             minZoom: 3,
             maxZoom: GIBS_VIS_MAX_ZOOM,
             zoomControl: true,
@@ -4775,7 +4816,7 @@
      *  — a standard "pause at present" cue (Tropical Tidbits, MIMIC, etc).
      *  Multiplier scales with the player speed so 4× still gets a longer
      *  pause than every other frame, but is also shorter in wall-clock. */
-    var ANIM_LAST_FRAME_PAUSE_MULT = 3;  // last frame held 3× the normal interval
+    var ANIM_LAST_FRAME_PAUSE_MULT = 6;  // last frame held 6× normal interval (longer dwell so viewers can orient on the present)
     function _animTick(ts) {
         if (!animPlaying) return;
         var state = activeFrameState();
@@ -14030,10 +14071,43 @@
             statusEl2.textContent = coveredCount + ' pass'
                 + (coveredCount === 1 ? '' : 'es');
         }
+        // Some sensors only publish a subset of the standard MW products.
+        // ATMS (NPP/JPSS cross-track scanner) only has 89v — no 89pct
+        // (needs both V and H polarisations) and no 37 GHz at all.
+        // When the user-selected product isn't available for this
+        // orbit's sensor, fall back to the closest equivalent so the
+        // thumbnail renders instead of showing a blank "n/a" tile.
+        function _resolvedProduct(orbit, want) {
+            if (orbit.products[want]) return want;
+            // Fallback chain by physical-channel proximity:
+            //   89pct → 89v (drop the polarisation correction)
+            //   89h   → 89v
+            //   37*   → 89v   (ATMS has nothing at 37 GHz)
+            //   89v   → first available
+            var chain = {
+                '89pct':   ['89v'],
+                '89h':     ['89v', '89pct'],
+                '89v':     ['89pct', '89h'],
+                '37color': ['37v',  '37h',   '89pct', '89v'],
+                '37v':     ['37h',  '37color', '89v'],
+                '37h':     ['37v',  '37color', '89v'],
+            };
+            var alt = chain[want] || [];
+            for (var k = 0; k < alt.length; k++) {
+                if (orbit.products[alt[k]]) return alt[k];
+            }
+            var keys = Object.keys(orbit.products);
+            for (var j = 0; j < keys.length; j++) {
+                if (keys[j] !== '_timed-out-skip') return keys[j];
+            }
+            return null;
+        }
+
         var nowMs = Date.now();
         for (var i = 0; i < orbits.length; i++) {
             var o = orbits[i];
-            var pr = o.products[product];
+            var resolvedProd = _resolvedProduct(o, product);
+            var pr = resolvedProd ? o.products[resolvedProd] : null;
             var card = document.createElement('div');
             card.className = 'rt-mw-storm-card';
             var swatch = _RT_MW_SENSOR_COLOR[o.sensor] || '#cbd5e1';
@@ -14048,7 +14122,9 @@
                 c.height = _RT_MW_THUMB_PX;
                 c.className = 'rt-mw-storm-thumb';
                 c.title = o.sensor + ' (' + o.platform + ') — '
-                        + product + ' — ' + utcStr;
+                        + resolvedProd +
+                        (resolvedProd !== product ? ' (substituted)' : '')
+                        + ' — ' + utcStr;
                 thumbWrap.appendChild(c);
                 (function (cardEl) {
                     _rtDrawStormMwThumbnail(c, o, lat, lon, pr.png_url,
@@ -14098,7 +14174,10 @@
             } else {
                 var miss = document.createElement('div');
                 miss.className = 'rt-mw-storm-thumb-missing';
+                // Honest "n/a" only after the fallback chain failed.
                 miss.textContent = product + ' n/a';
+                miss.title = 'No ' + product + ' product available for ' +
+                             o.sensor + ' (' + (o.platform || '?') + ')';
                 thumbWrap.appendChild(miss);
             }
             var meta = document.createElement('div');

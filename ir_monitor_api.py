@@ -6285,14 +6285,17 @@ def _fetch_weatherlab_genesis_csv(date_str: str, hour_str: str
     with the same per-point shape as `_fetch_weatherlab_csv` so the
     frontend can reuse its rendering logic.
 
-    Cyclogenesis CSV column layout (0-indexed):
+    Cyclogenesis CSV column layout as of late May 2026 (DeepMind
+    dropped the `lead_time_hours` column some time after our original
+    integration, shifting everything 1 index left):
       0: init_time         1: track_id       2: sample
-      3: valid_time        4: lead_time      5: lead_time_hours
-      6: lat               7: lon            8: MSLP (hPa)
-      9: max_wind (kt)    10: RMW (km)      11-14: R34 NE/SE/SW/NW
-     15-18: R50 NE/SE/SW/NW    19-22: R64 NE/SE/SW/NW
+      3: valid_time        4: lead_time      5: lat
+      6: lon               7: MSLP (hPa)     8: max_wind (kt)
+      9: RMW (km)         10-13: R34 NE/SE/SW/NW
+     14-17: R50 NE/SE/SW/NW    18-21: R64 NE/SE/SW/NW
 
-    (Note: paired CSV has no `lead_time_hours`, so all indices shift -1.)
+    (When lead_time_hours reappears we detect it and fall back to the
+    legacy layout.)
     """
     cache_key = (date_str, hour_str)
     cached = _weatherlab_genesis_cache.get(cache_key)
@@ -6348,34 +6351,65 @@ def _fetch_weatherlab_genesis_csv(date_str: str, hour_str: str
         except (ValueError, TypeError):
             continue
 
-        # Prefer the explicit lead_time_hours integer when present —
-        # avoids the "N days HH:MM:SS" parsing the paired CSV needs.
+        # Detect whether the CSV includes the legacy `lead_time_hours`
+        # column at index 5. We can tell from the value's magnitude: a
+        # lead-time-hours value is an integer (or near-integer) ≥ 0 with
+        # NO geographic constraint, but a LATITUDE value is in [-90, +90]
+        # AND is almost always a float-with-decimal. The cleanest signal
+        # is the value at index 6: if it parses to something in lat-range
+        # AND col-5 doesn't, we're on the legacy layout. If col-7 looks
+        # like MSLP (~1000), we're on the new layout. Default to new
+        # layout (current as of May 2026) and probe for legacy on each
+        # row so we transition cleanly if DeepMind re-adds the column.
+        legacy_layout = False
         try:
-            tau = float(cols[5])
+            v6 = float(cols[6])
+            v7 = float(cols[7])
+            # New layout: cols[5]=lat ∈ [-90,90], cols[7]=mslp ~ [800,1100]
+            # Legacy:     cols[5]=lead_h, cols[6]=lat, cols[8]=mslp
+            if -90 <= float(cols[5]) <= 90 and 800 <= v7 <= 1100:
+                legacy_layout = False   # new layout matches
+            elif -90 <= v6 <= 90:
+                legacy_layout = True    # legacy layout matches
         except (ValueError, IndexError):
+            pass
+
+        if legacy_layout:
+            lat_idx, lon_idx, mslp_idx, wind_idx, rmw_idx = 6, 7, 8, 9, 10
+            r34_base, r50_base, r64_base = 11, 15, 19
+            try:
+                tau = float(cols[5])
+            except (ValueError, IndexError):
+                tau = _parse_lead_time(cols[4])
+        else:
+            lat_idx, lon_idx, mslp_idx, wind_idx, rmw_idx = 5, 6, 7, 8, 9
+            r34_base, r50_base, r64_base = 10, 14, 18
+            # No lead_time_hours — derive tau from the "N days HH:MM:SS"
+            # field in col 4.
             tau = _parse_lead_time(cols[4])
 
         try:
-            lat = round(float(cols[6]), 2)
-            lon = round(float(cols[7]), 2)
-            pres = round(float(cols[8]), 1) if cols[8].strip() else None
-            wind = round(float(cols[9]), 1) if cols[9].strip() else None
+            lat = round(float(cols[lat_idx]), 2)
+            lon = round(float(cols[lon_idx]), 2)
+            pres = (round(float(cols[mslp_idx]), 1)
+                    if cols[mslp_idx].strip() else None)
+            wind = (round(float(cols[wind_idx]), 1)
+                    if cols[wind_idx].strip() else None)
         except (ValueError, IndexError):
             continue
 
         point = {"tau": tau, "lat": lat, "lon": lon,
                  "wind": wind, "pres": pres}
-        # Storm size columns sit one index further right than the paired
-        # CSV (because of the extra lead_time_hours column).
         size = {}
-        if len(cols) > 10:
+        if len(cols) > rmw_idx:
             try:
-                rmw = float(cols[10]) if cols[10].strip() else None
+                rmw = (float(cols[rmw_idx])
+                       if cols[rmw_idx].strip() else None)
                 if rmw is not None and rmw == rmw:  # not NaN
                     size["rmw_km"] = round(rmw, 1)
             except (ValueError, TypeError):
                 pass
-        for thresh, base in [(34, 11), (50, 15), (64, 19)]:
+        for thresh, base in [(34, r34_base), (50, r50_base), (64, r64_base)]:
             quads = ["ne", "se", "sw", "nw"]
             vals = []
             for i, q in enumerate(quads):
