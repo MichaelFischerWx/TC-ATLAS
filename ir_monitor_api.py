@@ -408,7 +408,12 @@ def _build_and_upload_bundles(
         center_fix = cached.get("center_fix") if cached else None
 
         # ── Display bundle entry ────────────────────────
-        jpg = _gcs_jpg_get(atcf_upper, dt_str)
+        # Pass interp position so the cache key invalidates when best-
+        # track shifts the storm's interpolated position for this frame.
+        # Without that, stale WebPs cropped at the old position get
+        # served alongside newer ones cropped at the updated position
+        # — which is what causes the "jump" at the update boundary.
+        jpg = _gcs_jpg_get(atcf_upper, dt_str, lat=ilat, lon=ilon)
         if not jpg:
             frame_hdrs.append({
                 "index": i, "datetime_utc": iso_dt, "satellite": "",
@@ -528,7 +533,7 @@ def _build_and_upload_bundles(
                 })
                 continue
 
-            bjpg = _gcs_jpg_get(atcf_upper, dt_str, band=band)
+            bjpg = _gcs_jpg_get(atcf_upper, dt_str, band=band, lat=ilat, lon=ilon)
             if not bjpg:
                 band_hdrs.append({
                     "index": i, "datetime_utc": iso_dt, "satellite": "",
@@ -1887,7 +1892,8 @@ def _prefetch_ir_frames(storms: list):
                         lat_bounds=(ilat - half, ilat + half),
                     )
                     if jpg_bytes:
-                        _gcs_jpg_put(atcf_id.upper(), dstr, jpg_bytes)
+                        _gcs_jpg_put(atcf_id.upper(), dstr, jpg_bytes,
+                                     lat=ilat, lon=ilon)
                         _prefetch_counts["jpg"] += 1
                     tb = raw["tb"]
                     arr = np.asarray(tb, dtype=np.float32)
@@ -1951,7 +1957,8 @@ def _prefetch_ir_frames(storms: list):
                             np.asarray(data, dtype=np.float32), band, bvmin, bvmax
                         )
                         if jpg_bytes:
-                            _gcs_jpg_put(atcf_id.upper(), dstr, jpg_bytes, band=band)
+                            _gcs_jpg_put(atcf_id.upper(), dstr, jpg_bytes,
+                                         band=band, lat=center_lat, lon=center_lon)
                     except Exception:
                         pass
                     del data, arr, mask, scaled, encoded
@@ -3586,7 +3593,22 @@ def get_storm_band_raw_frame(
 # Pre-Rendered IR Frame JPG Endpoint (fast image-overlay animation)
 # ---------------------------------------------------------------------------
 
-def _gcs_jpg_get(atcf_id: str, dt_str: str, band: int = 0) -> bytes | None:
+def _jpg_pos_key(lat: float | None, lon: float | None) -> str:
+    """Position fragment for WebP cache keys. Rounded to 0.1° (~11 km)
+    so the cache invalidates when the best-track interpolation shifts
+    by more than ~one pixel at the storm-card zoom, but doesn't
+    thrash on tiny sub-pixel re-interpolations. Returns empty string
+    when position is None — caller falls back to the legacy unkeyed
+    file path. Tied to the same precision the raw-Tb cache uses via
+    `_pos_key` so the two stores stay in sync."""
+    if lat is None or lon is None:
+        return ""
+    return f"_p{int(round(lat * 10))}_{int(round(lon * 10))}"
+
+
+def _gcs_jpg_get(atcf_id: str, dt_str: str, band: int = 0,
+                 lat: float | None = None,
+                 lon: float | None = None) -> bytes | None:
     """Try to read a cached pre-rendered frame from GCS. Despite the
     legacy `_jpg_` name, frames are now WebP-encoded (smaller files at
     same perceptual quality — about 25-30% reduction on typical
@@ -3599,30 +3621,53 @@ def _gcs_jpg_get(atcf_id: str, dt_str: str, band: int = 0) -> bytes | None:
     by Leaflet; they age out through the bucket lifecycle. Band frames
     (WV/Vis) still use the old `band{N}-webp` prefix because they're
     drawn to a flat <canvas> in the microwave-compare modal where no
-    map projection applies."""
+    map projection applies.
+
+    When `lat` / `lon` are supplied, the storm's interpolated position
+    is baked into the cache key so a best-track update — which shifts
+    the interpolation for historical frames — invalidates the stale
+    WebPs (which were cropped at the OLD interpolation). Without that,
+    older frames in the animation jump relative to newer ones until the
+    bucket lifecycle ages them out. Callers that don't have a position
+    (back-compat path) fall through to the unkeyed name."""
     bucket = _get_rt_gcs_bucket()
     if bucket is None:
         return None
     prefix = "ir-webp-merc" if band == 0 else f"band{band}-webp"
-    key = f"{_GCS_RT_VERSION}/{prefix}/{atcf_id}/{dt_str}.webp"
+    pos = _jpg_pos_key(lat, lon)
+    key = f"{_GCS_RT_VERSION}/{prefix}/{atcf_id}/{dt_str}{pos}.webp"
     try:
         blob = bucket.blob(key)
         return blob.download_as_bytes(timeout=5)
     except Exception:
+        # Position-keyed miss: fall back to the legacy unkeyed name so
+        # the rollout doesn't blow away the warm cache instantaneously.
+        # Old entries gradually age out via bucket lifecycle as new
+        # position-keyed ones replace them on next prewarm.
+        if pos:
+            try:
+                legacy = f"{_GCS_RT_VERSION}/{prefix}/{atcf_id}/{dt_str}.webp"
+                return bucket.blob(legacy).download_as_bytes(timeout=5)
+            except Exception:
+                return None
         return None
 
 
-def _gcs_jpg_put(atcf_id: str, dt_str: str, jpg_bytes: bytes, band: int = 0):
+def _gcs_jpg_put(atcf_id: str, dt_str: str, jpg_bytes: bytes, band: int = 0,
+                 lat: float | None = None,
+                 lon: float | None = None):
     """Write a pre-rendered WebP frame to GCS (fire-and-forget). Name
     kept for back-compat with existing call sites — the bytes are now
     WebP (encoded that way by _render_ir_jpg / _render_band_jpg).
-    See _gcs_jpg_get for the `ir-webp-merc` prefix rationale."""
+    See _gcs_jpg_get for the `ir-webp-merc` prefix rationale and the
+    position-keyed name for best-track invalidation."""
     bucket = _get_rt_gcs_bucket()
     if bucket is None:
         return
     def _upload():
         prefix = "ir-webp-merc" if band == 0 else f"band{band}-webp"
-        key = f"{_GCS_RT_VERSION}/{prefix}/{atcf_id}/{dt_str}.webp"
+        pos = _jpg_pos_key(lat, lon)
+        key = f"{_GCS_RT_VERSION}/{prefix}/{atcf_id}/{dt_str}{pos}.webp"
         try:
             blob = bucket.blob(key)
             blob.upload_from_string(jpg_bytes, content_type="image/webp", timeout=15)
@@ -3922,7 +3967,8 @@ def get_band_frame_jpg(
     }
 
     # Check GCS JPG cache
-    cached_jpg = _gcs_jpg_get(atcf_id.upper(), dt_str, band=band)
+    cached_jpg = _gcs_jpg_get(atcf_id.upper(), dt_str, band=band,
+                              lat=center_lat, lon=center_lon)
     if cached_jpg:
         return Response(content=cached_jpg, media_type="image/webp", headers=meta_headers)
 
@@ -3939,7 +3985,8 @@ def get_band_frame_jpg(
             decoded[encoded == 0] = np.nan
             jpg_bytes = _render_band_jpg(decoded, band, bvmin, bvmax)
             if jpg_bytes:
-                _gcs_jpg_put(atcf_id.upper(), dt_str, jpg_bytes, band=band)
+                _gcs_jpg_put(atcf_id.upper(), dt_str, jpg_bytes, band=band,
+                             lat=center_lat, lon=center_lon)
                 return Response(content=jpg_bytes, media_type="image/webp", headers=meta_headers)
         except Exception:
             pass
@@ -3958,7 +4005,8 @@ def get_band_frame_jpg(
     if not jpg_bytes:
         raise HTTPException(status_code=502, detail="Band rendering failed")
 
-    _gcs_jpg_put(atcf_id.upper(), dt_str, jpg_bytes, band=band)
+    _gcs_jpg_put(atcf_id.upper(), dt_str, jpg_bytes, band=band,
+                 lat=center_lat, lon=center_lon)
     del raw
     return Response(content=jpg_bytes, media_type="image/webp", headers=meta_headers)
 
@@ -3990,7 +4038,8 @@ def _get_or_render_band_jpg(
             return None, sat_name
 
     # Warmest: pre-rendered WebP in GCS (band-specific cache prefix)
-    cached_jpg = _gcs_jpg_get(atcf_upper, dt_str, band=band)
+    cached_jpg = _gcs_jpg_get(atcf_upper, dt_str, band=band,
+                              lat=interp_lat, lon=interp_lon)
     if cached_jpg:
         return cached_jpg, sat_name
 
@@ -4008,7 +4057,8 @@ def _get_or_render_band_jpg(
             decoded[encoded == 0] = np.nan
             jpg_bytes = _render_band_jpg(decoded, band, bvmin, bvmax)
             if jpg_bytes:
-                _gcs_jpg_put(atcf_upper, dt_str, jpg_bytes, band=band)
+                _gcs_jpg_put(atcf_upper, dt_str, jpg_bytes, band=band,
+                             lat=interp_lat, lon=interp_lon)
                 return jpg_bytes, sat_name
         except Exception:
             pass
@@ -4026,7 +4076,8 @@ def _get_or_render_band_jpg(
     binfo = BAND_RANGES.get(band, BAND_RANGES[13])
     jpg_bytes = _render_band_jpg(raw["data"], band, binfo["vmin"], binfo["vmax"])
     if jpg_bytes:
-        _gcs_jpg_put(atcf_upper, dt_str, jpg_bytes, band=band)
+        _gcs_jpg_put(atcf_upper, dt_str, jpg_bytes, band=band,
+                     lat=interp_lat, lon=interp_lon)
         return jpg_bytes, raw.get("satellite", sat_name)
     return None, sat_name
 
@@ -4265,7 +4316,8 @@ def _get_or_render_geocolor_jpg(
     # band-2 cache entries are interchangeable. Band 13 inverted is
     # NOT the same as the Claude IR colormap, so we can't reuse those.
     if is_day:
-        cached_band_jpg = _gcs_jpg_get(atcf_upper, dt_str, band=VIS_BAND)
+        cached_band_jpg = _gcs_jpg_get(atcf_upper, dt_str, band=VIS_BAND,
+                                       lat=interp_lat, lon=interp_lon)
         if cached_band_jpg:
             # Cache the same bytes under the GeoColor prefix for next time.
             if bkt is not None:
@@ -4559,15 +4611,16 @@ def get_ir_frame_jpg(
         "Access-Control-Expose-Headers": "X-Frame-Index, X-Total-Frames, X-Datetime, X-Satellite, X-Bounds",
     }
 
-    # Check GCS JPG cache
-    cached_jpg = _gcs_jpg_get(atcf_id.upper(), dt_str)
+    # Interpolated storm position at this frame's time — used for the
+    # Tb cache key, the cutout center, AND the WebP cache key so the
+    # cached frame's bounds line up with its key. Computed FIRST so
+    # the JPG-cache lookup below sees the interp position.
+    ilat, ilon = _interp_pos_at(atcf_id, target_dt, center_lat, center_lon)
+
+    # Check GCS JPG cache (position-keyed)
+    cached_jpg = _gcs_jpg_get(atcf_id.upper(), dt_str, lat=ilat, lon=ilon)
     if cached_jpg:
         return Response(content=cached_jpg, media_type="image/webp", headers=meta_headers)
-
-    # Interpolated storm position at this frame's time — used for both
-    # the Tb cache key and the cutout center so the cached frame's
-    # bounds line up with its key.
-    ilat, ilon = _interp_pos_at(atcf_id, target_dt, center_lat, center_lon)
 
     # Fallback: check if raw Tb uint8 is cached in GCS (populated by pre-fetch)
     # and render JPG from it — avoids the S3 round-trip entirely.
@@ -4585,7 +4638,8 @@ def get_ir_frame_jpg(
                 lat_bounds=(ilat - half, ilat + half),
             )
             if jpg_bytes:
-                _gcs_jpg_put(atcf_id.upper(), dt_str, jpg_bytes)
+                _gcs_jpg_put(atcf_id.upper(), dt_str, jpg_bytes,
+                             lat=ilat, lon=ilon)
                 return Response(content=jpg_bytes, media_type="image/webp", headers=meta_headers)
         except Exception:
             pass  # Fall through to S3 fetch
@@ -4603,7 +4657,7 @@ def get_ir_frame_jpg(
         raise HTTPException(status_code=502, detail="IR rendering failed")
 
     # Cache to GCS
-    _gcs_jpg_put(atcf_id.upper(), dt_str, jpg_bytes)
+    _gcs_jpg_put(atcf_id.upper(), dt_str, jpg_bytes, lat=ilat, lon=ilon)
 
     del raw
 
@@ -4634,8 +4688,10 @@ def _get_or_render_ir_jpg(
     bucket, _ = select_goes_sat(interp_lon, target_dt)
     sat_name = satellite_name_from_bucket(bucket)
 
-    # Warmest path: pre-rendered Mercator-warped WebP in GCS
-    cached_jpg = _gcs_jpg_get(atcf_upper, dt_str)
+    # Warmest path: pre-rendered Mercator-warped WebP in GCS (position-
+    # keyed so a best-track update invalidates the stale entry).
+    cached_jpg = _gcs_jpg_get(atcf_upper, dt_str,
+                              lat=interp_lat, lon=interp_lon)
     if cached_jpg:
         return cached_jpg, sat_name
 
@@ -4655,7 +4711,8 @@ def _get_or_render_ir_jpg(
                 lat_bounds=(interp_lat - half, interp_lat + half),
             )
             if jpg_bytes:
-                _gcs_jpg_put(atcf_upper, dt_str, jpg_bytes)
+                _gcs_jpg_put(atcf_upper, dt_str, jpg_bytes,
+                             lat=interp_lat, lon=interp_lon)
                 return jpg_bytes, sat_name
         except Exception:
             pass
@@ -4672,7 +4729,8 @@ def _get_or_render_ir_jpg(
         lat_bounds=(interp_lat - half, interp_lat + half),
     )
     if jpg_bytes:
-        _gcs_jpg_put(atcf_upper, dt_str, jpg_bytes)
+        _gcs_jpg_put(atcf_upper, dt_str, jpg_bytes,
+                     lat=interp_lat, lon=interp_lon)
         return jpg_bytes, raw.get("satellite", sat_name)
     return None, sat_name
 
