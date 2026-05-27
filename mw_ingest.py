@@ -129,6 +129,22 @@ _GRANULE_TIMEOUT_SECONDS = 10 * 60
 # (89pct/89v/89h/37color/37v/37h) excludes this, so it never renders.
 _TIMEOUT_SENTINEL_PRODUCT = "_timed-out-skip"
 
+# Frontfill phase: process the N freshest granules per sensor BEFORE
+# the cursor-based catch-up loop. Prevents the "manifest has data but
+# the 6h page window is empty" failure mode when the catch-up has to
+# grind through a multi-hour poison-granule cluster oldest-first.
+#
+# Frontfill entries carry _source="frontfill" and are EXCLUDED from
+# _last_processed_start_utc so the backfill cursor stays anchored on
+# the contiguous-from-old end of processed data. The backfill catches
+# up to and overwrites the frontfilled entries naturally; the slight
+# reprocessing cost is bounded (N entries × 4 sensors per tick) and
+# pays for itself in user-visible freshness.
+_FRONTFILL_PER_SENSOR        = 2
+_FRONTFILL_LOOKBACK_HOURS    = 1.0    # only frontfill last hour of PPS
+_FRONTFILL_BUDGET_SECONDS    = 8 * 60  # cap so backfill keeps ~17 min
+_FRONTFILL_SOURCE_TAG        = "frontfill"
+
 # GCS-based concurrency lock. Cloud Run Jobs has no native exclusion,
 # so we use a conditional-create on a GCS object. TTL covers the
 # runtime budget plus a small cushion so a crashed worker's stale lock
@@ -1266,7 +1282,14 @@ def _last_processed_start_utc(sensor: Optional[str] = None) -> Optional[_dt]:
     --operational mode to resume polling without reprocessing. When
     `sensor` is given, only entries for that sensor are considered (so
     a new sensor's first run doesn't get pinned to another sensor's
-    cursor)."""
+    cursor).
+
+    Frontfill entries (carry _source="frontfill") are EXCLUDED from
+    this lookup — they represent fresh granules processed out of
+    sequence to populate the page, and letting them advance the
+    backfill cursor would create permanent gaps where the cursor
+    skipped from old data straight to fresh data. The contiguous
+    catch-up backfill still proceeds oldest-first off this cursor."""
     try:
         txt = _download_text(MANIFEST_KEY)
     except Exception as exc:
@@ -1280,6 +1303,10 @@ def _last_processed_start_utc(sensor: Optional[str] = None) -> Optional[_dt]:
         return None
     if sensor:
         entries = [e for e in entries if e.get("sensor") == sensor]
+    # Exclude frontfill entries — they're out-of-order fresh data and
+    # shouldn't anchor the contiguous backfill cursor.
+    entries = [e for e in entries
+               if e.get("_source") != _FRONTFILL_SOURCE_TAG]
     if not entries:
         return None
     return max(_dt.fromisoformat(e["scan_start"]) for e in entries)
@@ -2247,6 +2274,137 @@ def _cli(argv=None):
             # runs resume from the per-sensor manifest cursor with 20-min steps.
             fallback_hours = args.since_hours if args.since_hours is not None else 6
 
+            # Per-granule processor — used by BOTH the frontfill pass
+            # (newest-first, freshest N per sensor) and the catch-up
+            # backfill (oldest-first off the per-sensor cursor). Adding
+            # this once avoids drift between the two phases on watchdog
+            # / error handling.
+            #
+            # `source_tag` (None or "frontfill") is stamped on each
+            # output manifest entry as _source. _last_processed_start_utc
+            # filters out _source=="frontfill" so frontfilled granules
+            # show on the page WITHOUT advancing the backfill cursor —
+            # the contiguous catch-up still proceeds oldest-first from
+            # where it left off.
+            #
+            # Returns True if the granule was processed (success OR
+            # watchdog timeout — both advance state); False on a
+            # transient error that should be retried on the next tick.
+            def _process_one_granule(url, scan_start, sensor,
+                                     source_tag=None):
+                fname = url.rsplit("/", 1)[-1]
+                granule_timed_out = False
+                def _granule_alarm_handler(_signum, _frame):
+                    raise TimeoutError(
+                        f"granule watchdog ({_GRANULE_TIMEOUT_SECONDS}s)")
+                prev_handler = signal.signal(
+                    signal.SIGALRM, _granule_alarm_handler)
+                signal.alarm(_GRANULE_TIMEOUT_SECONDS)
+                # Download into a temp DIR using the original PPS
+                # filename so read_pps_for_product's regex (anchored
+                # on the granule name pattern) sees the unmodified
+                # granule name. NamedTemporaryFile prepends tmpXXX_
+                # which broke that parse.
+                produced = []
+                try:
+                    with tempfile.TemporaryDirectory() as td:
+                        fpath = Path(td) / fname
+                        try:
+                            r = sess.get(url, stream=True, timeout=180)
+                            r.raise_for_status()
+                            with open(fpath, "wb") as f:
+                                for chunk in r.iter_content(chunk_size=1 << 20):
+                                    f.write(chunk)
+                            produced = process_one(
+                                str(fpath), sensor, products)
+                        except TimeoutError as exc:
+                            granule_timed_out = True
+                            logger.error(
+                                "[%s] granule %s WATCHDOG TIMEOUT "
+                                "(%s) — skipping; cursor will advance "
+                                "via sentinel entry to prevent retry "
+                                "loop", sensor, fname, exc)
+                        except Exception as exc:
+                            logger.error("[%s] granule %s failed: %s",
+                                         sensor, fname, exc)
+                finally:
+                    signal.alarm(0)
+                    signal.signal(signal.SIGALRM, prev_handler)
+
+                if source_tag:
+                    for e in produced:
+                        e["_source"] = source_tag
+                all_entries.extend(produced)
+
+                if granule_timed_out:
+                    all_entries.append({
+                        "sensor": sensor,
+                        "platform": "_skip",
+                        "scan_start": scan_start.isoformat(),
+                        "scan_end": scan_start.isoformat(),
+                        "orbit_id": f"TIMEOUT-SKIP-{fname}",
+                        "product": _TIMEOUT_SENTINEL_PRODUCT,
+                        "png_url": "",
+                        "geojson_url": "",
+                        "bounds": [[0.0, 0.0], [0.0, 0.0]],
+                        "_skip_reason": "granule-watchdog-timeout",
+                        **({"_source": source_tag} if source_tag else {}),
+                    })
+                _maybe_checkpoint()
+                return True
+
+            # ── Frontfill phase ─────────────────────────────────────
+            # Process the N freshest granules per sensor up-front so
+            # the page reflects current activity even when there's a
+            # multi-hour catch-up backlog behind the cursor. Each
+            # frontfilled entry is tagged _source=frontfill so the
+            # backfill cursor doesn't jump forward to it.
+            #
+            # Skipped entirely on manual --since-hours backfills (no
+            # cursor in play; the caller wants the explicit window
+            # processed in order). Also skipped when no operational
+            # cursor exists (first-ever run) — let the normal first-
+            # run path populate from fallback_hours instead.
+            if args.operational:
+                frontfill_start = time.time()
+                frontfill_since = (_dt.now(timezone.utc)
+                                   - timedelta(hours=_FRONTFILL_LOOKBACK_HOURS))
+                logger.info(
+                    "[frontfill] pulling freshest %d granules/sensor "
+                    "since %s (budget %.0fs)",
+                    _FRONTFILL_PER_SENSOR, frontfill_since.isoformat(),
+                    _FRONTFILL_BUDGET_SECONDS)
+                for sensor in sensors:
+                    if (time.time() - frontfill_start
+                            > _FRONTFILL_BUDGET_SECONDS):
+                        logger.info("[frontfill] budget exhausted — "
+                                    "switching to backfill phase")
+                        break
+                    try:
+                        recent = list_pps_granules(sensor, frontfill_since)
+                    except Exception as exc:
+                        logger.warning(
+                            "[frontfill][%s] listing failed: %s", sensor, exc)
+                        continue
+                    # PPS listing is ascending by scan_start; take the
+                    # TAIL N (newest) and process newest-first.
+                    freshest = list(reversed(recent[-_FRONTFILL_PER_SENSOR:]))
+                    logger.info(
+                        "[frontfill][%s] %d candidates in last %.1fh; "
+                        "frontfilling %d newest",
+                        sensor, len(recent), _FRONTFILL_LOOKBACK_HOURS,
+                        len(freshest))
+                    for url, scan_start in freshest:
+                        if (time.time() - frontfill_start
+                                > _FRONTFILL_BUDGET_SECONDS):
+                            break
+                        _process_one_granule(
+                            url, scan_start, sensor,
+                            source_tag=_FRONTFILL_SOURCE_TAG)
+                logger.info("[frontfill] phase complete in %.0fs",
+                            time.time() - frontfill_start)
+
+            # ── Backfill phase (cursor-based catch-up, oldest-first) ──
             # Runtime-budget flag — set when _MAX_RUNTIME_SECONDS is hit in
             # the inner loop; checked by the outer loop so we break out of
             # both. Manual --since-hours backfills also honor this so they
@@ -2290,86 +2448,8 @@ def _cli(argv=None):
                             time.time() - start_time, len(granules) - idx)
                         budget_exceeded = True
                         break
-                    fname = url.rsplit("/", 1)[-1]
-                    # Per-granule watchdog: SIGALRM aborts download + render
-                    # + upload if any single granule blocks for longer than
-                    # _GRANULE_TIMEOUT_SECONDS. Without this, one bad HDF5
-                    # can silently eat the entire runtime budget — see
-                    # the 2026-05-27 incident notes on the timeout constant.
-                    # Signals only deliver to the main thread, which is
-                    # where we are (Cloud Run Job runs single-process).
-                    granule_timed_out = False
-                    def _granule_alarm_handler(_signum, _frame):
-                        raise TimeoutError(
-                            f"granule watchdog ({_GRANULE_TIMEOUT_SECONDS}s)")
-                    prev_handler = signal.signal(
-                        signal.SIGALRM, _granule_alarm_handler)
-                    signal.alarm(_GRANULE_TIMEOUT_SECONDS)
-                    # Download into a temp DIR using the original PPS filename so
-                    # read_pps_for_product's regex (anchored on the granule name
-                    # pattern) sees the unmodified granule name.
-                    # NamedTemporaryFile prepends tmpXXX_ which broke that parse.
-                    try:
-                        with tempfile.TemporaryDirectory() as td:
-                            fpath = Path(td) / fname
-                            try:
-                                r = sess.get(url, stream=True, timeout=180)
-                                r.raise_for_status()
-                                with open(fpath, "wb") as f:
-                                    for chunk in r.iter_content(chunk_size=1 << 20):
-                                        f.write(chunk)
-                                all_entries.extend(process_one(
-                                    str(fpath), sensor, products))
-                            except TimeoutError as exc:
-                                # Watchdog fired — most likely a poison
-                                # granule. Surface it loudly and let the
-                                # outer logic emit a sentinel entry so
-                                # the per-sensor cursor advances past it.
-                                granule_timed_out = True
-                                logger.error(
-                                    "[%s] granule %s WATCHDOG TIMEOUT "
-                                    "(%s) — skipping; cursor will advance "
-                                    "via sentinel entry to prevent retry "
-                                    "loop", sensor, fname, exc)
-                            except Exception as exc:
-                                logger.error("[%s] granule %s failed: %s",
-                                             sensor, fname, exc)
-                    finally:
-                        # Always restore the alarm state before moving on,
-                        # even if the granule raised. Leaving SIGALRM
-                        # armed past the granule scope would risk killing
-                        # an unrelated subsequent operation.
-                        signal.alarm(0)
-                        signal.signal(signal.SIGALRM, prev_handler)
-                    if granule_timed_out:
-                        # Emit a sentinel manifest entry so the per-sensor
-                        # cursor lookup (max scan_start) advances PAST
-                        # this granule. The frontend filters it out at
-                        # multiple layers (empty png_url drops it from
-                        # _normalizeManifest; degenerate nested bounds
-                        # fail _bounds_contains in the per-storm API),
-                        # so it never renders as a real pass — pure
-                        # cursor-advance bookkeeping.
-                        all_entries.append({
-                            "sensor": sensor,
-                            "platform": "_skip",
-                            "scan_start": scan_start.isoformat(),
-                            "scan_end": scan_start.isoformat(),
-                            "orbit_id": f"TIMEOUT-SKIP-{fname}",
-                            "product": _TIMEOUT_SENTINEL_PRODUCT,
-                            "png_url": "",
-                            "geojson_url": "",
-                            # Nested [[south,west],[north,east]] like the
-                            # real manifest format. Zeros mean a zero-
-                            # area bbox; _bounds_contains(0,0)-of-storm-
-                            # lat-lon is false for any non-equatorial
-                            # storm and we never render this entry anyway.
-                            "bounds": [[0.0, 0.0], [0.0, 0.0]],
-                            "_skip_reason": "granule-watchdog-timeout",
-                        })
-                    # Maybe write a manifest checkpoint so the frontend sees
-                    # progress instead of nothing-then-everything.
-                    _maybe_checkpoint()
+                    _process_one_granule(url, scan_start, sensor,
+                                         source_tag=None)
                 if budget_exceeded:
                     break
         finally:
