@@ -383,33 +383,82 @@ def _build_and_upload_bundles(
     times_oldest_first = list(reversed(list(frame_times)))
     half = radius_deg
 
-    # Display-WebP bundle
+    # Single pass: read both jpg + raw caches per frame. The raw cache
+    # carries center_fix (IR-derived eye position), which we now ALSO
+    # embed in the display bundle header so the satellite viewer's
+    # follow-storm toggle can recenter accurately from the moment the
+    # display bundle lands — without waiting for the raw Tb bundle.
     frame_hdrs = []
+    raw_hdrs = []
     payloads_jpg = []
-    offset = 0
+    payloads_raw = []
+    jpg_offset = 0
+    raw_offset = 0
     summary_sat = ""
     for i, ft in enumerate(times_oldest_first):
         dt_str = ft.strftime("%Y%m%d%H%M")
         iso_dt = ft.strftime("%Y-%m-%dT%H:%M:%SZ")
         ilat, ilon = _interp_pos_at(atcf_id, ft, fallback_lat, fallback_lon)
         fb = [[ilat - half, ilon - half], [ilat + half, ilon + half]]
+
+        # Raw cache read first (carries center_fix we want for display too)
+        cached = _gcs_rt_get(atcf_upper, dt_str,
+                            lat=ilat, lon=ilon, radius_deg=radius_deg)
+        center_fix = cached.get("center_fix") if cached else None
+
+        # ── Display bundle entry ────────────────────────
         jpg = _gcs_jpg_get(atcf_upper, dt_str)
         if not jpg:
             frame_hdrs.append({
                 "index": i, "datetime_utc": iso_dt, "satellite": "",
-                "bounds": fb, "byte_offset": offset, "byte_length": 0,
+                "bounds": fb, "byte_offset": jpg_offset, "byte_length": 0,
+                "center_fix": center_fix,
                 "error": "no_cached_jpg",
             })
+        else:
+            bucket_name, _ = select_goes_sat(ilon, ft)
+            sat_name = satellite_name_from_bucket(bucket_name)
+            frame_hdrs.append({
+                "index": i, "datetime_utc": iso_dt, "satellite": sat_name,
+                "bounds": fb, "byte_offset": jpg_offset, "byte_length": len(jpg),
+                "center_fix": center_fix,
+            })
+            payloads_jpg.append(jpg)
+            jpg_offset += len(jpg)
+            summary_sat = sat_name or summary_sat
+
+        # ── Raw Tb bundle entry ────────────────────────
+        if not cached or not cached.get("tb_data"):
+            raw_hdrs.append({
+                "index": i, "datetime_utc": iso_dt,
+                "tb_rows": 0, "tb_cols": 0,
+                "byte_offset": raw_offset, "byte_length": 0,
+                "error": "no_cached_tb",
+            })
             continue
-        bucket_name, _ = select_goes_sat(ilon, ft)
-        sat_name = satellite_name_from_bucket(bucket_name)
-        frame_hdrs.append({
-            "index": i, "datetime_utc": iso_dt, "satellite": sat_name,
-            "bounds": fb, "byte_offset": offset, "byte_length": len(jpg),
+        try:
+            tb_bytes = base64.b64decode(cached["tb_data"])
+        except Exception as ex:
+            raw_hdrs.append({
+                "index": i, "datetime_utc": iso_dt,
+                "tb_rows": 0, "tb_cols": 0,
+                "byte_offset": raw_offset, "byte_length": 0,
+                "error": f"decode: {ex}",
+            })
+            continue
+        rows = int(cached["tb_rows"])
+        cols = int(cached["tb_cols"])
+        raw_hdrs.append({
+            "index": i,
+            "datetime_utc": cached.get("datetime_utc", iso_dt),
+            "satellite": cached.get("satellite", ""),
+            "tb_rows": rows, "tb_cols": cols,
+            "byte_offset": raw_offset, "byte_length": rows * cols,
+            "bounds": cached.get("bounds"),
+            "center_fix": center_fix,
         })
-        payloads_jpg.append(jpg)
-        offset += len(jpg)
-        summary_sat = sat_name or summary_sat
+        payloads_raw.append(tb_bytes)
+        raw_offset += rows * cols
 
     # Summary bounds: latest frame's interpolated position
     latest_ft = times_oldest_first[-1] if times_oldest_first else _dt.now(timezone.utc)
@@ -425,48 +474,6 @@ def _build_and_upload_bundles(
         "frames": frame_hdrs,
     }
     frames_body = _pack_bundle(frames_header, payloads_jpg)
-
-    # Raw-Tb bundle
-    raw_hdrs = []
-    payloads_raw = []
-    offset = 0
-    for i, ft in enumerate(times_oldest_first):
-        dt_str = ft.strftime("%Y%m%d%H%M")
-        iso_dt = ft.strftime("%Y-%m-%dT%H:%M:%SZ")
-        ilat, ilon = _interp_pos_at(atcf_id, ft, fallback_lat, fallback_lon)
-        cached = _gcs_rt_get(atcf_upper, dt_str,
-                            lat=ilat, lon=ilon, radius_deg=radius_deg)
-        if not cached or not cached.get("tb_data"):
-            raw_hdrs.append({
-                "index": i, "datetime_utc": iso_dt,
-                "tb_rows": 0, "tb_cols": 0,
-                "byte_offset": offset, "byte_length": 0,
-                "error": "no_cached_tb",
-            })
-            continue
-        try:
-            tb_bytes = base64.b64decode(cached["tb_data"])
-        except Exception as ex:
-            raw_hdrs.append({
-                "index": i, "datetime_utc": iso_dt,
-                "tb_rows": 0, "tb_cols": 0,
-                "byte_offset": offset, "byte_length": 0,
-                "error": f"decode: {ex}",
-            })
-            continue
-        rows = int(cached["tb_rows"])
-        cols = int(cached["tb_cols"])
-        raw_hdrs.append({
-            "index": i,
-            "datetime_utc": cached.get("datetime_utc", iso_dt),
-            "satellite": cached.get("satellite", ""),
-            "tb_rows": rows, "tb_cols": cols,
-            "byte_offset": offset, "byte_length": rows * cols,
-            "bounds": cached.get("bounds"),
-            "center_fix": cached.get("center_fix"),
-        })
-        payloads_raw.append(tb_bytes)
-        offset += rows * cols
 
     raw_header = {
         "total_frames": len(times_oldest_first),
@@ -4308,15 +4315,23 @@ def get_storm_ir_frames_bundle(
             jpg, sat = _get_or_render_ir_jpg(
                 atcf_upper, ilat, ilon, target_dt, radius_deg,
             )
+            # Also pull center_fix from the raw Tb cache so the bundle
+            # header carries it — lets the satellite viewer's follow-storm
+            # toggle recenter accurately from the moment the display bundle
+            # lands, without waiting for the separate raw Tb bundle.
+            dt_str = target_dt.strftime("%Y%m%d%H%M")
+            cached_raw = _gcs_rt_get(atcf_upper, dt_str,
+                                    lat=ilat, lon=ilon, radius_deg=radius_deg)
+            cfix = cached_raw.get("center_fix") if cached_raw else None
             # Carry per-frame bounds so the JSON header can describe
             # exactly where this frame's cutout lives.
             frame_bounds = [
                 [ilat - half, ilon - half],
                 [ilat + half, ilon + half],
             ]
-            return (i, jpg, sat, frame_bounds, None)
+            return (i, jpg, sat, frame_bounds, cfix, None)
         except Exception as ex:
-            return (i, None, "", None, str(ex))
+            return (i, None, "", None, None, str(ex))
 
     indexed = list(enumerate(frame_times))
     with ThreadPoolExecutor(max_workers=4) as pool:
@@ -4331,7 +4346,7 @@ def get_storm_ir_frames_bundle(
     # GOES-East / GOES-West / Himawari boundaries within the window.
     summary_sat = ""
 
-    for i, jpg, sat, fbounds, err in results:
+    for i, jpg, sat, fbounds, cfix, err in results:
         target_dt = frame_times[i]
         iso_dt = target_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
         if not jpg or err is not None:
@@ -4340,6 +4355,7 @@ def get_storm_ir_frames_bundle(
                 "datetime_utc": iso_dt,
                 "satellite": sat or "",
                 "bounds": fbounds,
+                "center_fix": cfix,
                 "byte_offset": offset,
                 "byte_length": 0,
                 "error": err or "no_data",
@@ -4350,6 +4366,7 @@ def get_storm_ir_frames_bundle(
             "datetime_utc": iso_dt,
             "satellite": sat or "",
             "bounds": fbounds,
+            "center_fix": cfix,
             "byte_offset": offset,
             "byte_length": len(jpg),
         })

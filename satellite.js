@@ -4397,8 +4397,40 @@
      * Interpolate/extrapolate center positions for frames missing center_fix.
      * Same algorithm as buildHovmollerData uses, but stores the result on
      * each frame as _interpCenter = { lat, lon } for use by getViewBounds.
+     *
+     * Fallback chain (best → worst):
+     *   1. IR center_fix on the frame (objective eye position)
+     *   2. Interpolation between adjacent IR fixes (≥2 fixes exist)
+     *   3. Per-frame bounds-center = interpolated/extrapolated best-track
+     *      position the server used when it built each frame's cutout
+     *      (always available since the bundle embeds it in `bounds`)
+     *   4. Static currentStorm advisory position (last resort, no track)
+     *
+     * The bounds-center fallback means follow-storm now ACTUALLY follows
+     * the storm even when no eye is detectable — it tracks the best-track
+     * motion across the 6h window instead of pinning every frame to the
+     * latest advisory position (which made follow look static for weak
+     * or shear-disrupted storms).
      */
     function _interpolateCenters(frames) {
+        // Helper: bounds-center = (interp_lat, interp_lon) at frame's time.
+        // Embedded server-side when each frame's cutout was built.
+        function _boundsCenter(f) {
+            if (!f || !f.bounds) return null;
+            return {
+                lat: (f.bounds[0][0] + f.bounds[1][0]) / 2,
+                lon: (f.bounds[0][1] + f.bounds[1][1]) / 2
+            };
+        }
+        function _trackOrAdvisory(f) {
+            var bc = _boundsCenter(f);
+            if (bc) return bc;
+            if (currentStorm && currentStorm.lat) {
+                return { lat: currentStorm.lat, lon: currentStorm.lon };
+            }
+            return null;
+        }
+
         var knownIndices = [];
         var fixLat = [], fixLon = [];
         for (var i = 0; i < frames.length; i++) {
@@ -4410,36 +4442,33 @@
             if (frames[i]) frames[i]._interpCenter = null;
         }
         if (knownIndices.length === 0) {
-            // No IR center fixes — use advisory position for all frames if available
-            if (currentStorm && currentStorm.lat) {
-                for (var ai = 0; ai < frames.length; ai++) {
-                    if (frames[ai]) frames[ai]._interpCenter = { lat: currentStorm.lat, lon: currentStorm.lon };
-                }
+            // No IR center fixes — use the per-frame interpolated best-track
+            // position embedded in each frame's bounds. This is the key
+            // upgrade: previously we used the static advisory for every
+            // frame (so follow looked frozen); now follow tracks actual
+            // best-track motion through the lookback window.
+            for (var ai = 0; ai < frames.length; ai++) {
+                if (!frames[ai]) continue;
+                frames[ai]._interpCenter = _trackOrAdvisory(frames[ai]);
             }
             return;
         }
 
         if (knownIndices.length === 1) {
-            // Only one fix — use advisory position as second anchor if available,
-            // otherwise fall back to the single fix for all frames
+            // Only one IR fix — anchor that frame to its eye, fall back
+            // to per-frame bounds-center for all others. Better than the
+            // old behavior (pin every frame to a single eye position).
             var only = knownIndices[0];
-            var newestIdx = frames.length - 1;
-            if (currentStorm && currentStorm.lat && newestIdx !== only &&
-                (Math.abs(currentStorm.lat - fixLat[only]) > 0.01 ||
-                 Math.abs(currentStorm.lon - fixLon[only]) > 0.01)) {
-                // Advisory position differs — use it as anchor for the newest frame.
-                // Frame ordering: index 0 = oldest, index length-1 = newest (most recent).
-                fixLat[newestIdx] = currentStorm.lat;
-                fixLon[newestIdx] = currentStorm.lon;
-                knownIndices.push(newestIdx);
-                knownIndices.sort(function (a, b) { return a - b; });
-                // Fall through to the ≥2 fixes interpolation below
-            } else {
-                for (var si = 0; si < frames.length; si++) {
-                    if (frames[si]) frames[si]._interpCenter = { lat: fixLat[only], lon: fixLon[only] };
+            for (var si = 0; si < frames.length; si++) {
+                if (!frames[si]) continue;
+                if (si === only) {
+                    frames[si]._interpCenter = { lat: fixLat[only], lon: fixLon[only] };
+                } else {
+                    frames[si]._interpCenter = _trackOrAdvisory(frames[si])
+                        || { lat: fixLat[only], lon: fixLon[only] };
                 }
-                return;
             }
+            return;
         }
 
         for (var ii = 0; ii < frames.length; ii++) {
@@ -5036,10 +5065,17 @@
                             datetime_utc: p.datetime_utc,
                             satellite: p.satellite,
                             tb_vmin: 160.0, tb_vmax: 330.0,
-                            center_fix: null
+                            // center_fix from display-bundle header so
+                            // follow-storm works from frame 1 — no longer
+                            // needs to wait for raw Tb to arrive.
+                            center_fix: p.center_fix || null
                         };
                     } else {
                         irFrames[p.index].previewImg = p.img;
+                        // Backfill center_fix if raw arrived first w/o it
+                        if (!irFrames[p.index].center_fix && p.center_fix) {
+                            irFrames[p.index].center_fix = p.center_fix;
+                        }
                     }
                 }
                 _previewDone = parsed.frames.length;
@@ -5114,6 +5150,12 @@
                                         index: fHdr.index,
                                         img: img,
                                         bounds: fHdr.bounds,
+                                        // center_fix lets follow-storm
+                                        // recenter on the IR-derived eye
+                                        // from the moment the display
+                                        // bundle lands (server reads it
+                                        // from the raw Tb cache).
+                                        center_fix: fHdr.center_fix || null,
                                         datetime_utc: fHdr.datetime_utc || '',
                                         satellite: fHdr.satellite || ''
                                     });
