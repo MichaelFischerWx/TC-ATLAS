@@ -1,37 +1,62 @@
 /*
  * sat_quick.js — Storm Satellite Quick View
  *
- * The default Storm Satellite layout: a pre-rendered animated WebP
- * (built by the prewarm in ir_monitor_api.py:_build_animation_webp)
- * + a minimal context bar above and meta bar below. Loads from GCS
- * direct in ~200-400 ms — matching the simplicity and speed of
- * cyclonicwx / Tropical Tidbits.
+ * Default Storm Satellite layout: pre-rendered IR animation +
+ * minimal context bar. Matches the simplicity of cyclonicwx /
+ * Tropical Tidbits — one fast-loading view, no toolbar of analytical
+ * modes. The full interactive viewer (satellite.js) is opt-in via
+ * "Detailed Analysis →".
  *
- * The full interactive viewer (satellite.js) remains available via
- * the "Detailed Analysis" button. We deliberately keep this IIFE
- * tiny and independent — no heavy dependencies, no init waterfall,
- * no canvas / Leaflet setup. Just <img>, fetch, render.
+ * Architecture: we consume the SAME per-frame WebP bundle the
+ * detailed viewer uses (gs://tc-atlas-ir-cache/rt-v10/bundles/frames/
+ * {atcf}.bin), slice it into 25 blob URLs, and animate by swapping
+ * <img>.src on a timer. No duplicate artifact storage, no Cloud Run
+ * hop on the bundle fetch (GCS direct), and the bundle is already
+ * cached by the prewarm.
+ *
+ * Why JS frame-swap rather than animated WebP: Pillow's animated-WebP
+ * encoding produces files roughly the same size as the bundle (it
+ * doesn't apply useful inter-frame compression), and the bundle is
+ * already maintained for the detailed viewer. One artifact pipeline,
+ * not two.
  */
 (function () {
     'use strict';
 
     var API_BASE = 'https://tc-atlas-api-361010099051.us-east1.run.app';
-    var GCS_ANIM_BASE = 'https://storage.googleapis.com/tc-atlas-ir-cache/rt-v10/animations';
+    var GCS_BUNDLE_BASE = 'https://storage.googleapis.com/tc-atlas-ir-cache/rt-v10/bundles/frames';
 
     var SS_COLORS = {
         TD: '#60a5fa', TS: '#34d399', C1: '#fbbf24',
         C2: '#fb923c', C3: '#f87171', C4: '#ef4444', C5: '#dc2626'
     };
 
-    var _activeStorms = [];          // list from /ir-monitor/active-storms
-    var _currentStormId = null;
-    var _lastShearByStorm = {};      // per-storm cache (small, ~1 hour relevance)
-    var _activated = false;          // first activation triggers fetch
-    var _pollTimer = null;
-    var POLL_INTERVAL_MS = 5 * 60 * 1000;  // align with active-storms TTL
+    // ── Animation timing ─────────────────────────────────────
+    // Each mid-loop frame holds `MID_FRAME_MS`; the most-recent
+    // frame holds `LAST_FRAME_MS` (orientation pause before loop).
+    var MID_FRAME_MS  = 300;     // ≈ 2× the previous default play speed
+    var LAST_FRAME_MS = 1800;    // 1.8 s hold on most-recent frame
 
-    function _gcsAnimUrl(atcfId) {
-        return GCS_ANIM_BASE + '/' + encodeURIComponent(atcfId.toUpperCase()) + '.webp';
+    var _activeStorms = [];
+    var _currentStormId = null;
+    var _lastShearByStorm = {};
+    var _activated = false;
+    var _pollTimer = null;
+    var POLL_INTERVAL_MS = 5 * 60 * 1000;
+
+    // ── Animation state ──────────────────────────────────────
+    var _frameUrls = [];         // blob URLs in frame order
+    var _frameIdx = 0;
+    var _animTimer = null;
+    var _animActive = false;
+    var _bundleArrayBuffer = null; // keep alive while blobs are in use
+
+    function _gcsBundleUrl(atcfId) {
+        return GCS_BUNDLE_BASE + '/' + encodeURIComponent(atcfId.toUpperCase()) + '.bin';
+    }
+    function _apiBundleUrl(atcfId) {
+        return API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId)
+            + '/ir-frames-bundle?lookback_hours=6&radius_deg=10&interval_min=15';
     }
 
     // ── DOM refs (lazy) ──────────────────────────────────────
@@ -58,8 +83,12 @@
         return true;
     }
 
-    function _showLoader() {
-        if (elLoader) elLoader.style.display = '';
+    // ── UI state helpers ─────────────────────────────────────
+    function _showLoader(msg) {
+        if (elLoader) {
+            elLoader.style.display = '';
+            if (msg) elLoader.textContent = msg;
+        }
         if (elError) elError.style.display = 'none';
         if (elAnim) elAnim.classList.remove('loaded');
     }
@@ -86,12 +115,8 @@
         if (elEmpty) elEmpty.style.display = 'none';
     }
 
-    // ── Render helpers ─────────────────────────────────────────
-    function _categoryShort(c) {
-        if (!c) return '—';
-        if (c === 'TS' || c === 'TD' || /^C[0-5]$/.test(c)) return c;
-        return c;
-    }
+    // ── Format helpers ───────────────────────────────────────
+    function _catShort(c) { return c || '—'; }
     function _fmtLatLon(lat, lon) {
         if (lat == null || lon == null) return '—';
         return Math.abs(lat).toFixed(1) + '°' + (lat >= 0 ? 'N' : 'S') + '  '
@@ -107,7 +132,7 @@
             elSat.textContent = '—';
             return;
         }
-        var cat = _categoryShort(storm.category);
+        var cat = _catShort(storm.category);
         elCatChip.textContent = cat;
         elCatChip.style.background = SS_COLORS[cat] || SS_COLORS.TD;
         elName.textContent = storm.name || storm.atcf_id || '—';
@@ -115,7 +140,6 @@
         var mslp = storm.mslp_hpa != null ? (storm.mslp_hpa + ' hPa') : '—';
         var src = storm.source ? (' · ' + storm.source) : '';
         elVitals.textContent = vmax + ' · ' + mslp + src;
-
         elPosition.textContent = _fmtLatLon(storm.lat, storm.lon);
         if (storm.motion_kt != null && storm.motion_deg != null) {
             elMotion.textContent = Math.round(storm.motion_kt) + ' kt @ ' + Math.round(storm.motion_deg) + '°';
@@ -125,32 +149,127 @@
         elSat.textContent = storm.satellite || '—';
     }
 
-    // ── Animation load ─────────────────────────────────────────
-    // Sets <img>.src to the GCS direct URL. Browser fetches the
-    // animated WebP and starts looping automatically (no JS loop
-    // needed — the format handles its own timing). On 404 / decode
-    // failure we show an error message; prewarm probably hasn't
-    // run yet (new storm) or the bucket is having a moment.
-    function _loadAnimation(stormId) {
-        if (!stormId || !elAnim) return;
-        _hideEmpty();
-        _showLoader();
-        // Use a bust param so polled refreshes pick up newer animation
-        // builds after prewarm. The blob itself sets Cache-Control:
-        // max-age=300; the bust just makes the URL unique per cycle.
-        var bust = Math.floor(Date.now() / (5 * 60 * 1000));  // changes every 5 min
-        var url = _gcsAnimUrl(stormId) + '?v=' + bust;
-        elAnim.onload = function () { _showAnim(); };
-        elAnim.onerror = function () {
-            _showError('Animation not yet available for this storm. The prewarm cycle builds new artifacts every ~5 minutes.');
-        };
-        elAnim.src = url;
+    // ── Animation lifecycle ──────────────────────────────────
+    function _stopAnimation() {
+        _animActive = false;
+        if (_animTimer) {
+            clearTimeout(_animTimer);
+            _animTimer = null;
+        }
+    }
+    function _disposeFrames() {
+        _stopAnimation();
+        for (var i = 0; i < _frameUrls.length; i++) {
+            try { URL.revokeObjectURL(_frameUrls[i]); } catch (e) {}
+        }
+        _frameUrls = [];
+        _frameIdx = 0;
+        _bundleArrayBuffer = null;
+    }
+    function _scheduleNextFrame() {
+        if (!_animActive || _frameUrls.length === 0) return;
+        // Hold the last frame longer so the user can orient themselves
+        // before the loop restarts. Same convention as the detailed
+        // viewer's last-frame pause + NHC/RAMMB animations.
+        var dwell = (_frameIdx === _frameUrls.length - 1) ? LAST_FRAME_MS : MID_FRAME_MS;
+        _animTimer = setTimeout(function () {
+            if (!_animActive) return;
+            _frameIdx = (_frameIdx + 1) % _frameUrls.length;
+            if (elAnim) elAnim.src = _frameUrls[_frameIdx];
+            _scheduleNextFrame();
+        }, dwell);
+    }
+    function _startAnimation() {
+        if (_animActive || _frameUrls.length === 0) return;
+        _animActive = true;
+        // Begin on the OLDEST frame so the loop reads chronologically;
+        // user sees motion forward in time. Last-frame pause is the
+        // natural anchor.
+        _frameIdx = 0;
+        if (elAnim) elAnim.src = _frameUrls[_frameIdx];
+        _scheduleNextFrame();
     }
 
+    // ── Bundle → frames ──────────────────────────────────────
+    // Parses the [u32 LE header_length][JSON header][concat WebPs]
+    // wire format produced by ir_monitor_api.py:get_storm_ir_frames_bundle
+    // and pre-built by _build_and_upload_bundles in the prewarm loop.
+    function _parseBundle(arrayBuffer) {
+        var dv = new DataView(arrayBuffer);
+        if (arrayBuffer.byteLength < 4) throw new Error('bundle too small');
+        var headerLen = dv.getUint32(0, true);
+        if (4 + headerLen > arrayBuffer.byteLength) throw new Error('header overrun');
+        var headerJson = new TextDecoder('utf-8').decode(
+            new Uint8Array(arrayBuffer, 4, headerLen));
+        var header = JSON.parse(headerJson);
+        var binBase = 4 + headerLen;
+        var mediaType = header.media_type || 'image/webp';
+        var urls = [];
+        var frames = header.frames || [];
+        for (var i = 0; i < frames.length; i++) {
+            var f = frames[i];
+            if (!f.byte_length || f.error) continue;
+            // Zero-copy view into the ArrayBuffer
+            var slice = new Uint8Array(arrayBuffer, binBase + f.byte_offset, f.byte_length);
+            var blob = new Blob([slice], { type: mediaType });
+            urls.push(URL.createObjectURL(blob));
+        }
+        return urls;
+    }
+
+    function _loadBundleAndAnimate(stormId) {
+        if (!stormId) return;
+        _hideEmpty();
+        _showLoader('Loading animation…');
+        _disposeFrames();
+
+        // Try GCS direct first (prewarmed), fall back to API endpoint
+        // (the latter is the live path for brand-new storms not yet in
+        // the prewarm cycle).
+        var gcs = _gcsBundleUrl(stormId);
+        var api = _apiBundleUrl(stormId);
+
+        fetch(gcs)
+            .then(function (r) {
+                if (!r.ok) throw new Error('gcs ' + r.status);
+                return r.arrayBuffer();
+            })
+            .catch(function () {
+                return fetch(api).then(function (r) {
+                    if (!r.ok) throw new Error('api ' + r.status);
+                    return r.arrayBuffer();
+                });
+            })
+            .then(function (buf) {
+                if (stormId !== _currentStormId) return;  // user switched storms
+                _bundleArrayBuffer = buf;  // hold reference; blobs are views
+                _frameUrls = _parseBundle(buf);
+                if (_frameUrls.length === 0) {
+                    _showError('No frames available for this storm yet.');
+                    return;
+                }
+                // Show the most-recent frame immediately so the user sees
+                // current imagery while we wait for the animation cycle
+                // to start at frame 0.
+                if (elAnim) elAnim.src = _frameUrls[_frameUrls.length - 1];
+                elAnim.onload = function () {
+                    _showAnim();
+                    _startAnimation();
+                };
+                elAnim.onerror = function () {
+                    _showError('Animation failed to decode.');
+                };
+            })
+            .catch(function (err) {
+                if (stormId !== _currentStormId) return;
+                console.warn('[QuickView] bundle fetch failed:', err && err.message);
+                _showError('Animation not yet available for this storm. The prewarm cycle builds new artifacts every ~5 minutes.');
+            });
+    }
+
+    // ── Shear (small extra fetch for the meta bar) ──────────
     function _loadShear(stormId) {
         if (!stormId) return;
-        // Tiny per-session cache so flipping back and forth doesn't
-        // re-fetch. /shear is ~1-hour-relevant data.
         if (_lastShearByStorm[stormId]) {
             _renderShear(_lastShearByStorm[stormId]);
             return;
@@ -176,7 +295,7 @@
             + (data.heading_deg != null ? ' @ ' + Math.round(data.heading_deg) + '°' : '');
     }
 
-    // ── Active-storms list ─────────────────────────────────────
+    // ── Active-storms list ───────────────────────────────────
     function _populateStormSelect() {
         if (!elSelect) return;
         elSelect.innerHTML = '';
@@ -193,7 +312,7 @@
             var s = _activeStorms[i];
             var o = document.createElement('option');
             o.value = s.atcf_id;
-            var cat = _categoryShort(s.category);
+            var cat = _catShort(s.category);
             o.textContent = (s.name || s.atcf_id) + '  ·  ' + cat
                 + (s.vmax_kt != null ? '  ·  ' + s.vmax_kt + ' kt' : '')
                 + '  ·  ' + (s.basin || '?');
@@ -215,24 +334,24 @@
         if (elSelect) elSelect.value = stormId;
         var storm = _findStorm(stormId);
         _renderHeader(storm);
-        _loadAnimation(stormId);
+        _loadBundleAndAnimate(stormId);
         _loadShear(stormId);
         _syncHash(stormId);
     }
 
     function _syncHash(stormId) {
-        // Preserve "satellite" view + add storm= param. Existing
-        // realtime_ir.html hash parser respects storm=XX&view=satellite.
         try {
             var h = '#storm=' + encodeURIComponent(stormId) + '&view=satellite';
             history.replaceState(null, '', h);
         } catch (e) {}
     }
-
     function _readStormFromHash() {
         var h = (window.location.hash || '').replace(/^#/, '');
         var m = h.match(/(?:^|&)storm=([A-Za-z0-9]+)/);
         return m ? m[1].toUpperCase() : null;
+    }
+    function _hashRequestsDetailed() {
+        return /[#&]detailed=1/.test(window.location.hash || '');
     }
 
     function _fetchActiveStorms(cb) {
@@ -250,27 +369,20 @@
     }
 
     function _refreshActiveData() {
-        // Polled refresh — re-pull active storms (positions may have
-        // updated). Reload current storm's header + shear; the
-        // animation auto-refreshes via the bust param on _loadAnimation,
-        // so we re-call that too.
         _fetchActiveStorms(function (err) {
             if (err) return;
             if (_currentStormId) {
                 var storm = _findStorm(_currentStormId);
                 if (storm) {
                     _renderHeader(storm);
-                    _loadAnimation(_currentStormId);
-                    // Re-pull shear in case it changed
+                    // Re-fetch bundle in case prewarm produced a newer one
+                    _loadBundleAndAnimate(_currentStormId);
                     delete _lastShearByStorm[_currentStormId];
                     _loadShear(_currentStormId);
+                } else if (_activeStorms.length > 0) {
+                    _selectStorm(_activeStorms[0].atcf_id);
                 } else {
-                    // Storm dropped from active list — pick first available
-                    if (_activeStorms.length > 0) {
-                        _selectStorm(_activeStorms[0].atcf_id);
-                    } else {
-                        _showEmpty();
-                    }
+                    _showEmpty();
                 }
             } else if (_activeStorms.length > 0) {
                 _selectStorm(_activeStorms[0].atcf_id);
@@ -282,47 +394,41 @@
 
     // ── Detailed Analysis switch ─────────────────────────────
     function _gotoDetailed() {
+        _stopAnimation();   // pause our timer; detailed viewer takes over
         var sat = document.getElementById('sat-quick-view');
         var main = document.getElementById('sat-main');
         if (sat) sat.style.display = 'none';
         if (main) {
             main.style.display = 'flex';
             if (window.activateSatelliteView) {
-                // Pass the current storm so the detailed viewer
-                // picks up where the quick view left off (it has
-                // its own storm picker but defaults to first).
                 try { window.activateSatelliteView(_currentStormId); }
                 catch (e) { window.activateSatelliteView(); }
             }
         }
-        // Update URL so the user can refresh into detailed mode.
         try {
             var base = '#storm=' + (_currentStormId || '') + '&view=satellite&detailed=1';
             history.replaceState(null, '', base);
         } catch (e) {}
     }
 
-    function _hashRequestsDetailed() {
-        return /[#&]detailed=1/.test(window.location.hash || '');
-    }
-
-    // ── Public activate ─────────────────────────────────────
+    // ── Public activate ──────────────────────────────────────
     function activateQuickView() {
         if (!_captureDom()) return;
-        // If the hash explicitly requests detailed mode, fall through
-        // immediately — the user bookmarked the deep view.
         if (_hashRequestsDetailed()) {
             _gotoDetailed();
             return;
         }
-        // Hide detailed in case it was previously shown
         var main = document.getElementById('sat-main');
         if (main) main.style.display = 'none';
         elRoot.style.display = 'flex';
 
+        // Resume animation if we already loaded frames previously
+        if (_frameUrls.length > 0 && !_animActive) {
+            _startAnimation();
+        }
+
         if (!_activated) {
             _activated = true;
-            // Wire up controls (idempotent — only runs on first activate)
             if (elSelect) {
                 elSelect.addEventListener('change', function () {
                     if (this.value) _selectStorm(this.value);
@@ -336,8 +442,6 @@
                     _showEmpty();
                     return;
                 }
-                // Honor #storm= in URL if it matches an active storm,
-                // otherwise pick the strongest active.
                 var hashStorm = _readStormFromHash();
                 var pick = null;
                 if (hashStorm) pick = _findStorm(hashStorm);
@@ -349,10 +453,9 @@
                 }
                 if (pick) _selectStorm(pick.atcf_id);
             });
-            // Polled refresh — keep header + animation fresh.
             _pollTimer = setInterval(_refreshActiveData, POLL_INTERVAL_MS);
         } else {
-            // Already loaded — pick up any hash-storm change
+            // Already initialized — pick up any hash-storm change
             var hashStorm2 = _readStormFromHash();
             if (hashStorm2 && hashStorm2 !== _currentStormId) {
                 _selectStorm(hashStorm2);
@@ -360,10 +463,13 @@
         }
     }
 
-    // Expose for realtime_ir.html's switchIRView dispatcher
-    window.activateQuickView = activateQuickView;
+    function _deactivate() {
+        // Pause when leaving the tab to free up CPU/network
+        _stopAnimation();
+    }
 
-    // From the detailed viewer's back-to-quick handler (added in Stage 2.2)
+    window.activateQuickView = activateQuickView;
+    window.deactivateQuickView = _deactivate;
     window.deactivateDetailedView = function () {
         var main = document.getElementById('sat-main');
         if (main) main.style.display = 'none';
@@ -373,5 +479,4 @@
             activateQuickView();
         }
     };
-
 })();
