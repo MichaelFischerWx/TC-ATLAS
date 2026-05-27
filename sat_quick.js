@@ -1,24 +1,25 @@
 /*
  * sat_quick.js — Storm Satellite Quick View
  *
- * Default Storm Satellite layout: pre-rendered IR animation +
- * minimal context bar. Matches the simplicity of cyclonicwx /
- * Tropical Tidbits — one fast-loading view, no toolbar of analytical
- * modes. The full interactive viewer (satellite.js) is opt-in via
+ * Default Storm Satellite layout: pre-rendered IR animation on a
+ * Leaflet map (basemap → coastlines → graticule → IR frames →
+ * storm marker), plus a compact storm-info bar above and meta bar
+ * below. Matches the simplicity of cyclonicwx / Tropical Tidbits
+ * for the casual case while keeping geographic context (coastlines,
+ * lat/lon grid) the user expects from a research-grade viewer.
+ *
+ * Architecture:
+ *   - Consumes the same per-frame WebP bundle the detailed viewer
+ *     uses (rt-v10/bundles/frames/{atcf}.bin in GCS) — no duplicate
+ *     artifact storage.
+ *   - Each frame becomes an L.imageOverlay at its TRUE geographic
+ *     bounds; we cycle opacity 0→1 to animate. Storm appears to
+ *     move across the map (correct); coastlines + graticule stay
+ *     stationary (correct).
+ *   - Native scroll-zoom + pan via Leaflet.
+ *
+ * The full interactive viewer (satellite.js) is opt-in via
  * "Detailed Analysis →".
- *
- * Architecture: we consume the SAME per-frame WebP bundle the
- * detailed viewer uses (gs://tc-atlas-ir-cache/rt-v10/bundles/frames/
- * {atcf}.bin), slice it into 25 blob URLs, and animate by swapping
- * <img>.src on a timer. No duplicate artifact storage, no Cloud Run
- * hop on the bundle fetch (GCS direct), and the bundle is already
- * cached by the prewarm.
- *
- * Why JS frame-swap rather than animated WebP: Pillow's animated-WebP
- * encoding produces files roughly the same size as the bundle (it
- * doesn't apply useful inter-frame compression), and the bundle is
- * already maintained for the detailed viewer. One artifact pipeline,
- * not two.
  */
 (function () {
     'use strict';
@@ -31,12 +32,10 @@
         C2: '#fb923c', C3: '#f87171', C4: '#ef4444', C5: '#dc2626'
     };
 
-    // ── Animation timing ─────────────────────────────────────
-    // Each mid-loop frame holds `MID_FRAME_MS`; the most-recent
-    // frame holds `LAST_FRAME_MS` (orientation pause before loop).
-    var MID_FRAME_MS  = 300;     // ≈ 2× the previous default play speed
-    var LAST_FRAME_MS = 1800;    // 1.8 s hold on most-recent frame
+    var MID_FRAME_MS  = 300;
+    var LAST_FRAME_MS = 1800;
 
+    // ── App state ────────────────────────────────────────────
     var _activeStorms = [];
     var _currentStormId = null;
     var _lastShearByStorm = {};
@@ -44,13 +43,15 @@
     var _pollTimer = null;
     var POLL_INTERVAL_MS = 5 * 60 * 1000;
 
-    // ── Animation state ──────────────────────────────────────
-    var _frameUrls = [];         // blob URLs in frame order
-    var _frameOffsets = [];      // CSS transform offsets per frame (%, %)
+    // ── Leaflet state ────────────────────────────────────────
+    var _map = null;
+    var _frameLayers = [];          // L.imageOverlay per frame
     var _frameIdx = 0;
     var _animTimer = null;
     var _animActive = false;
-    var _bundleArrayBuffer = null; // keep alive while blobs are in use
+    var _stormMarker = null;
+    var _coastlineLayer = null;
+    var _graticuleLayer = null;
 
     function _gcsBundleUrl(atcfId) {
         return GCS_BUNDLE_BASE + '/' + encodeURIComponent(atcfId.toUpperCase()) + '.bin';
@@ -60,8 +61,8 @@
             + '/ir-frames-bundle?lookback_hours=6&radius_deg=10&interval_min=15';
     }
 
-    // ── DOM refs (lazy) ──────────────────────────────────────
-    var elRoot, elSelect, elCatChip, elName, elVitals, elAnim, elLoader,
+    // ── DOM refs ─────────────────────────────────────────────
+    var elRoot, elSelect, elCatChip, elName, elVitals, elMapDiv, elLoader,
         elEmpty, elError, elPosition, elMotion, elShear, elSat,
         elDetailedBtn;
     function _captureDom() {
@@ -72,7 +73,7 @@
         elCatChip = document.getElementById('qv-cat');
         elName = document.getElementById('qv-name');
         elVitals = document.getElementById('qv-vitals');
-        elAnim = document.getElementById('qv-animation');
+        elMapDiv = document.getElementById('qv-leaflet-map');
         elLoader = document.getElementById('qv-loader');
         elEmpty = document.getElementById('qv-empty');
         elError = document.getElementById('qv-error');
@@ -91,30 +92,21 @@
             if (msg) elLoader.textContent = msg;
         }
         if (elError) elError.style.display = 'none';
-        if (elAnim) elAnim.classList.remove('loaded');
     }
-    function _showAnim() {
-        if (elLoader) elLoader.style.display = 'none';
-        if (elError) elError.style.display = 'none';
-        if (elAnim) elAnim.classList.add('loaded');
-    }
+    function _hideLoader() { if (elLoader) elLoader.style.display = 'none'; }
     function _showError(msg) {
         if (elLoader) elLoader.style.display = 'none';
         if (elError) {
             elError.textContent = msg || 'Animation unavailable.';
             elError.style.display = '';
         }
-        if (elAnim) elAnim.classList.remove('loaded');
     }
     function _showEmpty() {
         if (elEmpty) elEmpty.style.display = '';
-        if (elLoader) elLoader.style.display = 'none';
+        _hideLoader();
         if (elError) elError.style.display = 'none';
-        if (elAnim) elAnim.classList.remove('loaded');
     }
-    function _hideEmpty() {
-        if (elEmpty) elEmpty.style.display = 'none';
-    }
+    function _hideEmpty() { if (elEmpty) elEmpty.style.display = 'none'; }
 
     // ── Format helpers ───────────────────────────────────────
     function _catShort(c) { return c || '—'; }
@@ -125,12 +117,9 @@
     }
     function _renderHeader(storm) {
         if (!storm) {
-            elCatChip.textContent = '—';
-            elName.textContent = '—';
-            elVitals.textContent = '—';
-            elPosition.textContent = '—';
-            elMotion.textContent = '—';
-            elSat.textContent = '—';
+            elCatChip.textContent = '—'; elName.textContent = '—';
+            elVitals.textContent = '—'; elPosition.textContent = '—';
+            elMotion.textContent = '—'; elSat.textContent = '—';
             return;
         }
         var cat = _catShort(storm.category);
@@ -150,200 +139,222 @@
         elSat.textContent = storm.satellite || '—';
     }
 
+    // ── Leaflet map setup ────────────────────────────────────
+    function _ensureMap() {
+        if (_map) return _map;
+        if (!elMapDiv || typeof L === 'undefined') return null;
+        _map = L.map(elMapDiv, {
+            zoomControl: true,
+            attributionControl: false,
+            worldCopyJump: true,
+            zoomSnap: 0.5,
+            zoomDelta: 0.5,
+            preferCanvas: true,
+        }).setView([0, 0], 5);
+
+        // Basemap: CartoDB Voyager NO labels — clean coastlines without
+        // overpowering text. Same basemap the detailed viewer uses for
+        // consistency.
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}{r}.png',
+                    { maxZoom: 18, subdomains: 'abcd' }).addTo(_map);
+
+        // Coastlines + admin lines layer drawn ABOVE the IR overlay so
+        // the storm's geographic context stays visible through bright
+        // cloud tops. Same pattern as the detailed viewer.
+        L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
+                    { maxZoom: 18, pane: 'overlayPane', opacity: 0.85 }).addTo(_map);
+
+        // Lat/lon graticule: thin gridlines + edge labels. Spacing
+        // scales with zoom so the grid is always readable.
+        _addGraticule();
+        return _map;
+    }
+
+    function _addGraticule() {
+        if (!_map) return;
+        // Simple graticule layer redrawn on moveend/zoomend.
+        var gratGroup = L.layerGroup().addTo(_map);
+        function _step(z) {
+            if (z >= 8) return 1;
+            if (z >= 6) return 2;
+            if (z >= 4) return 5;
+            return 10;
+        }
+        function _redraw() {
+            gratGroup.clearLayers();
+            var b = _map.getBounds();
+            var z = _map.getZoom();
+            var step = _step(z);
+            var south = Math.floor(b.getSouth() / step) * step;
+            var north = Math.ceil(b.getNorth() / step) * step;
+            var west = Math.floor(b.getWest() / step) * step;
+            var east = Math.ceil(b.getEast() / step) * step;
+            var lineStyle = {
+                color: '#94a3b8', weight: 0.5, opacity: 0.45,
+                interactive: false, dashArray: '2,4',
+            };
+            for (var lat = south; lat <= north; lat += step) {
+                L.polyline([[lat, west - 5], [lat, east + 5]], lineStyle).addTo(gratGroup);
+            }
+            for (var lon = west; lon <= east; lon += step) {
+                L.polyline([[south - 5, lon], [north + 5, lon]], lineStyle).addTo(gratGroup);
+            }
+        }
+        _map.on('moveend zoomend', _redraw);
+        _redraw();
+        _graticuleLayer = gratGroup;
+    }
+
+    function _placeStormMarker(storm) {
+        if (!_map || !storm) return;
+        if (_stormMarker) {
+            _map.removeLayer(_stormMarker);
+            _stormMarker = null;
+        }
+        var cat = _catShort(storm.category);
+        var color = SS_COLORS[cat] || SS_COLORS.TD;
+        var icon = L.divIcon({
+            className: '',
+            html: '<div style="width:14px;height:14px;border-radius:50%;'
+                + 'background:' + color + ';border:2px solid #fff;'
+                + 'box-shadow:0 0 0 1px ' + color + ', 0 0 10px rgba(0,0,0,0.6);"></div>',
+            iconSize: [14, 14],
+            iconAnchor: [7, 7],
+        });
+        _stormMarker = L.marker([storm.lat, storm.lon], { icon: icon, interactive: false }).addTo(_map);
+    }
+
     // ── Animation lifecycle ──────────────────────────────────
     function _stopAnimation() {
         _animActive = false;
-        if (_animTimer) {
-            clearTimeout(_animTimer);
-            _animTimer = null;
-        }
+        if (_animTimer) { clearTimeout(_animTimer); _animTimer = null; }
     }
     function _disposeFrames() {
         _stopAnimation();
-        for (var i = 0; i < _frameUrls.length; i++) {
-            try { URL.revokeObjectURL(_frameUrls[i]); } catch (e) {}
+        if (_map) {
+            for (var i = 0; i < _frameLayers.length; i++) {
+                if (_frameLayers[i]) {
+                    try { _map.removeLayer(_frameLayers[i]); } catch (e) {}
+                    if (_frameLayers[i]._blobUrl) {
+                        try { URL.revokeObjectURL(_frameLayers[i]._blobUrl); } catch (e) {}
+                    }
+                }
+            }
         }
-        _frameUrls = [];
-        _frameOffsets = [];
+        _frameLayers = [];
         _frameIdx = 0;
-        _bundleArrayBuffer = null;
-        if (elAnim) elAnim.style.transform = '';
+    }
+    function _showFrameOnly(idx) {
+        for (var i = 0; i < _frameLayers.length; i++) {
+            if (!_frameLayers[i]) continue;
+            _frameLayers[i].setOpacity(i === idx ? 0.92 : 0);
+        }
     }
     function _scheduleNextFrame() {
-        if (!_animActive || _frameUrls.length === 0) return;
-        // Hold the last frame longer so the user can orient themselves
-        // before the loop restarts. Same convention as the detailed
-        // viewer's last-frame pause + NHC/RAMMB animations.
-        var dwell = (_frameIdx === _frameUrls.length - 1) ? LAST_FRAME_MS : MID_FRAME_MS;
+        if (!_animActive || _frameLayers.length === 0) return;
+        var dwell = (_frameIdx === _frameLayers.length - 1) ? LAST_FRAME_MS : MID_FRAME_MS;
         _animTimer = setTimeout(function () {
             if (!_animActive) return;
-            _frameIdx = (_frameIdx + 1) % _frameUrls.length;
-            if (elAnim) {
-                elAnim.src = _frameUrls[_frameIdx];
-                _applyFrameTransform(_frameIdx);
-            }
+            _frameIdx = (_frameIdx + 1) % _frameLayers.length;
+            _showFrameOnly(_frameIdx);
             _scheduleNextFrame();
         }, dwell);
     }
     function _startAnimation() {
-        if (_animActive || _frameUrls.length === 0) return;
+        if (_animActive || _frameLayers.length === 0) return;
         _animActive = true;
-        // Begin on the OLDEST frame so the loop reads chronologically;
-        // user sees motion forward in time. Last-frame pause is the
-        // natural anchor.
         _frameIdx = 0;
-        if (elAnim) {
-            elAnim.src = _frameUrls[_frameIdx];
-            _applyFrameTransform(_frameIdx);
-        }
+        _showFrameOnly(_frameIdx);
         _scheduleNextFrame();
     }
 
-    // ── Bundle → frames ──────────────────────────────────────
-    // Parses the [u32 LE header_length][JSON header][concat WebPs]
-    // wire format produced by ir_monitor_api.py:get_storm_ir_frames_bundle
-    // and pre-built by _build_and_upload_bundles in the prewarm loop.
-    function _parseBundle(arrayBuffer) {
-        var dv = new DataView(arrayBuffer);
-        if (arrayBuffer.byteLength < 4) throw new Error('bundle too small');
-        var headerLen = dv.getUint32(0, true);
-        if (4 + headerLen > arrayBuffer.byteLength) throw new Error('header overrun');
-        var headerJson = new TextDecoder('utf-8').decode(
-            new Uint8Array(arrayBuffer, 4, headerLen));
-        var header = JSON.parse(headerJson);
-        var binBase = 4 + headerLen;
-        var mediaType = header.media_type || 'image/webp';
-        var urls = [];
-        var validFrames = [];  // {frame_header, url} pairs in order
-        var frames = header.frames || [];
-        for (var i = 0; i < frames.length; i++) {
-            var f = frames[i];
-            if (!f.byte_length || f.error) continue;
-            // Zero-copy view into the ArrayBuffer
-            var slice = new Uint8Array(arrayBuffer, binBase + f.byte_offset, f.byte_length);
-            var blob = new Blob([slice], { type: mediaType });
-            var url = URL.createObjectURL(blob);
-            urls.push(url);
-            validFrames.push(f);
-        }
-
-        // ── Compute per-frame CSS-translate offsets ─────────────
-        // Each frame's cutout is centered on the storm's INTERPOLATED
-        // position at that frame's time, so consecutive frames have
-        // slightly different bounds (~0.4° over 6h for a typical storm).
-        // A plain <img>.src swap would show the storm "stationary" at
-        // image center and the LAND visibly bouncing frame-to-frame.
-        // Fix: shift each frame's <img> with `transform: translate(...)`
-        // so the LATEST frame's geographic center sits at the same screen
-        // position across all frames. Net visual effect: storm appears
-        // to move (correct, since it does move), land stays put
-        // (correct, since it doesn't).
-        _frameOffsets = [];
-        if (validFrames.length > 0) {
-            var ref = validFrames[validFrames.length - 1];
-            var refB = ref.bounds;
-            if (refB && Array.isArray(refB) && refB.length >= 2) {
-                var refCLat = (refB[0][0] + refB[1][0]) / 2;
-                var refCLon = (refB[0][1] + refB[1][1]) / 2;
-                var refSpanLat = refB[1][0] - refB[0][0];
-                var refSpanLon = refB[1][1] - refB[0][1];
-                for (var j = 0; j < validFrames.length; j++) {
-                    var b = validFrames[j].bounds;
-                    if (!b || b.length < 2) {
-                        _frameOffsets.push({ tx: 0, ty: 0 });
-                        continue;
-                    }
-                    var cLat = (b[0][0] + b[1][0]) / 2;
-                    var cLon = (b[0][1] + b[1][1]) / 2;
-                    // Translate as a % of the image's own dimensions.
-                    // (refCLon - cLon) > 0 when ref is EAST of frame's
-                    // center → ref pixel is RIGHT of image center →
-                    // shift image LEFT (negative tx) so that pixel
-                    // lands at container center.
-                    var tx = -((refCLon - cLon) / refSpanLon) * 100;
-                    // Latitude is opposite to screen y: positive
-                    // (refCLat - cLat) means ref is NORTH of frame
-                    // center → ref pixel is ABOVE image center →
-                    // shift image DOWN (positive ty in CSS) so that
-                    // pixel lands at container center.
-                    var ty = ((refCLat - cLat) / refSpanLat) * 100;
-                    _frameOffsets.push({ tx: tx, ty: ty });
-                }
-            } else {
-                // No usable bounds — no compensation possible
-                for (var k = 0; k < validFrames.length; k++) {
-                    _frameOffsets.push({ tx: 0, ty: 0 });
-                }
-            }
-        }
-        return urls;
-    }
-
-    function _applyFrameTransform(idx) {
-        if (!elAnim) return;
-        var off = _frameOffsets[idx];
-        if (!off || (off.tx === 0 && off.ty === 0)) {
-            elAnim.style.transform = '';
-        } else {
-            elAnim.style.transform = 'translate(' + off.tx.toFixed(3) + '%, ' + off.ty.toFixed(3) + '%)';
-        }
-    }
-
+    // ── Bundle parsing + map population ──────────────────────
     function _loadBundleAndAnimate(stormId) {
         if (!stormId) return;
         _hideEmpty();
         _showLoader('Loading animation…');
         _disposeFrames();
+        _ensureMap();
 
-        // Try GCS direct first (prewarmed), fall back to API endpoint
-        // (the latter is the live path for brand-new storms not yet in
-        // the prewarm cycle).
         var gcs = _gcsBundleUrl(stormId);
         var api = _apiBundleUrl(stormId);
 
-        fetch(gcs)
-            .then(function (r) {
-                if (!r.ok) throw new Error('gcs ' + r.status);
+        fetch(gcs).then(function (r) {
+            if (!r.ok) throw new Error('gcs ' + r.status);
+            return r.arrayBuffer();
+        }).catch(function () {
+            return fetch(api).then(function (r) {
+                if (!r.ok) throw new Error('api ' + r.status);
                 return r.arrayBuffer();
-            })
-            .catch(function () {
-                return fetch(api).then(function (r) {
-                    if (!r.ok) throw new Error('api ' + r.status);
-                    return r.arrayBuffer();
-                });
-            })
-            .then(function (buf) {
-                if (stormId !== _currentStormId) return;  // user switched storms
-                _bundleArrayBuffer = buf;  // hold reference; blobs are views
-                _frameUrls = _parseBundle(buf);
-                if (_frameUrls.length === 0) {
-                    _showError('No frames available for this storm yet.');
-                    return;
-                }
-                // Show the most-recent frame immediately so the user sees
-                // current imagery while we wait for the animation cycle
-                // to start at frame 0.
-                if (elAnim) {
-                    var lastIdx = _frameUrls.length - 1;
-                    elAnim.src = _frameUrls[lastIdx];
-                    _applyFrameTransform(lastIdx);
-                }
-                elAnim.onload = function () {
-                    _showAnim();
-                    _startAnimation();
-                };
-                elAnim.onerror = function () {
-                    _showError('Animation failed to decode.');
-                };
-            })
-            .catch(function (err) {
-                if (stormId !== _currentStormId) return;
-                console.warn('[QuickView] bundle fetch failed:', err && err.message);
-                _showError('Animation not yet available for this storm. The prewarm cycle builds new artifacts every ~5 minutes.');
             });
+        }).then(function (buf) {
+            if (stormId !== _currentStormId) return;
+            _populateMapFromBundle(buf, stormId);
+        }).catch(function (err) {
+            if (stormId !== _currentStormId) return;
+            console.warn('[QuickView] bundle fetch failed:', err && err.message);
+            _showError('Animation not yet available for this storm. The prewarm cycle builds new artifacts every ~5 minutes.');
+        });
     }
 
-    // ── Shear (small extra fetch for the meta bar) ──────────
+    function _populateMapFromBundle(arrayBuffer, stormId) {
+        if (!_map) return;
+        try {
+            var dv = new DataView(arrayBuffer);
+            if (arrayBuffer.byteLength < 4) throw new Error('bundle too small');
+            var headerLen = dv.getUint32(0, true);
+            if (4 + headerLen > arrayBuffer.byteLength) throw new Error('header overrun');
+            var header = JSON.parse(new TextDecoder('utf-8')
+                .decode(new Uint8Array(arrayBuffer, 4, headerLen)));
+            var binBase = 4 + headerLen;
+            var mediaType = header.media_type || 'image/webp';
+            var hdrFrames = header.frames || [];
+
+            var goodFrames = [];
+            for (var i = 0; i < hdrFrames.length; i++) {
+                var f = hdrFrames[i];
+                if (!f.byte_length || f.error) continue;
+                if (!f.bounds) continue;
+                var slice = new Uint8Array(arrayBuffer, binBase + f.byte_offset, f.byte_length);
+                var blob = new Blob([slice], { type: mediaType });
+                var url = URL.createObjectURL(blob);
+                var lb = L.latLngBounds(
+                    L.latLng(f.bounds[0][0], f.bounds[0][1]),
+                    L.latLng(f.bounds[1][0], f.bounds[1][1]));
+                var overlay = L.imageOverlay(url, lb, {
+                    opacity: 0,
+                    interactive: false,
+                    pane: 'tilePane',  // below the labels overlay
+                });
+                overlay._blobUrl = url;
+                overlay.addTo(_map);
+                _frameLayers.push(overlay);
+                goodFrames.push({ overlay: overlay, bounds: lb });
+            }
+
+            if (_frameLayers.length === 0) {
+                _showError('No frames available for this storm yet.');
+                return;
+            }
+
+            // Initial view: latest frame's bounds (with a touch of padding
+            // so the storm isn't pressed against the edges).
+            var latest = goodFrames[goodFrames.length - 1];
+            _map.fitBounds(latest.bounds, { padding: [20, 20], animate: false });
+
+            // Place storm marker at current advisory position
+            var storm = _findStorm(stormId);
+            _placeStormMarker(storm);
+
+            _hideLoader();
+            _startAnimation();
+        } catch (e) {
+            console.warn('[QuickView] bundle parse failed:', e.message);
+            _showError('Could not parse animation data.');
+        }
+    }
+
+    // ── Shear ────────────────────────────────────────────────
     function _loadShear(stormId) {
         if (!stormId) return;
         if (_lastShearByStorm[stormId]) {
@@ -371,14 +382,13 @@
             + (data.heading_deg != null ? ' @ ' + Math.round(data.heading_deg) + '°' : '');
     }
 
-    // ── Active-storms list ───────────────────────────────────
+    // ── Active storms ────────────────────────────────────────
     function _populateStormSelect() {
         if (!elSelect) return;
         elSelect.innerHTML = '';
         if (!_activeStorms.length) {
             var opt = document.createElement('option');
-            opt.value = '';
-            opt.textContent = 'No active storms';
+            opt.value = ''; opt.textContent = 'No active storms';
             elSelect.appendChild(opt);
             elSelect.disabled = true;
             return;
@@ -396,14 +406,12 @@
         }
         if (_currentStormId) elSelect.value = _currentStormId;
     }
-
     function _findStorm(stormId) {
         for (var i = 0; i < _activeStorms.length; i++) {
             if (_activeStorms[i].atcf_id === stormId) return _activeStorms[i];
         }
         return null;
     }
-
     function _selectStorm(stormId) {
         if (!stormId || stormId === _currentStormId) return;
         _currentStormId = stormId;
@@ -414,7 +422,6 @@
         _loadShear(stormId);
         _syncHash(stormId);
     }
-
     function _syncHash(stormId) {
         try {
             var h = '#storm=' + encodeURIComponent(stormId) + '&view=satellite';
@@ -429,7 +436,6 @@
     function _hashRequestsDetailed() {
         return /[#&]detailed=1/.test(window.location.hash || '');
     }
-
     function _fetchActiveStorms(cb) {
         fetch(API_BASE + '/ir-monitor/active-storms', { cache: 'no-store' })
             .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
@@ -443,7 +449,6 @@
                 cb && cb(err);
             });
     }
-
     function _refreshActiveData() {
         _fetchActiveStorms(function (err) {
             if (err) return;
@@ -451,7 +456,6 @@
                 var storm = _findStorm(_currentStormId);
                 if (storm) {
                     _renderHeader(storm);
-                    // Re-fetch bundle in case prewarm produced a newer one
                     _loadBundleAndAnimate(_currentStormId);
                     delete _lastShearByStorm[_currentStormId];
                     _loadShear(_currentStormId);
@@ -470,7 +474,7 @@
 
     // ── Detailed Analysis switch ─────────────────────────────
     function _gotoDetailed() {
-        _stopAnimation();   // pause our timer; detailed viewer takes over
+        _stopAnimation();
         var sat = document.getElementById('sat-quick-view');
         var main = document.getElementById('sat-main');
         if (sat) sat.style.display = 'none';
@@ -490,18 +494,21 @@
     // ── Public activate ──────────────────────────────────────
     function activateQuickView() {
         if (!_captureDom()) return;
-        if (_hashRequestsDetailed()) {
-            _gotoDetailed();
-            return;
-        }
+        if (_hashRequestsDetailed()) { _gotoDetailed(); return; }
         var main = document.getElementById('sat-main');
         if (main) main.style.display = 'none';
         elRoot.style.display = 'flex';
 
-        // Resume animation if we already loaded frames previously
-        if (_frameUrls.length > 0 && !_animActive) {
-            _startAnimation();
-        }
+        // Lazy-init map after the container is visible (Leaflet needs
+        // a positive-size container to compute its tile grid).
+        setTimeout(function () {
+            if (_map) {
+                _map.invalidateSize(false);
+                if (_frameLayers.length > 0 && !_animActive) _startAnimation();
+            } else {
+                _ensureMap();
+            }
+        }, 50);
 
         if (!_activated) {
             _activated = true;
@@ -531,7 +538,6 @@
             });
             _pollTimer = setInterval(_refreshActiveData, POLL_INTERVAL_MS);
         } else {
-            // Already initialized — pick up any hash-storm change
             var hashStorm2 = _readStormFromHash();
             if (hashStorm2 && hashStorm2 !== _currentStormId) {
                 _selectStorm(hashStorm2);
@@ -539,10 +545,7 @@
         }
     }
 
-    function _deactivate() {
-        // Pause when leaving the tab to free up CPU/network
-        _stopAnimation();
-    }
+    function _deactivate() { _stopAnimation(); }
 
     window.activateQuickView = activateQuickView;
     window.deactivateQuickView = _deactivate;

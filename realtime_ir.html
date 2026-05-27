@@ -567,7 +567,11 @@
             <button id="qv-to-detailed" class="qv-detailed-btn" title="Open the full interactive viewer (compare, diagnostics, asymmetry, etc.)">Detailed Analysis &rarr;</button>
         </div>
         <div class="qv-stage">
-            <img id="qv-animation" class="qv-animation" alt="Storm IR animation" />
+            <!-- Leaflet map: per-frame L.imageOverlay at its true bounds
+                 over a basemap with coastlines + a graticule layer.
+                 Native geographic correctness — storm moves across the
+                 view, land stays put, lat/lon lines are real. -->
+            <div id="qv-leaflet-map" class="qv-leaflet-map"></div>
             <div id="qv-loader" class="qv-loader">Loading animation&hellip;</div>
             <div id="qv-empty" class="qv-empty" style="display:none;">
                 <div style="font-size:18px;margin-bottom:8px;">No active storms.</div>

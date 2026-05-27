@@ -798,13 +798,21 @@
    interactive viewer (sat-main) is one button-click away. */
 
 .sat-quick-view {
-    flex: 1;
+    /* Same positioning approach as .sat-main: fixed below the topbar
+       + secondary-bar so the storm picker isn't covered by the nav,
+       and the meta bar at the bottom always reaches the viewport edge. */
+    position: fixed;
+    top: calc(var(--topbar-h) + var(--secondary-bar-h));
+    left: 0;
+    right: 0;
+    bottom: 0;
     display: flex;
     flex-direction: column;
     min-height: 0;
     background: #0a0c12;
     color: #e2e8f0;
     font-family: "DM Sans", "Helvetica Neue", sans-serif;
+    z-index: 1;
 }
 
 .qv-storm-bar {
@@ -872,39 +880,48 @@
 .qv-stage {
     flex: 1;
     min-height: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
     position: relative;
     background: #0a0c12;
-    padding: 16px;
     overflow: hidden;
 }
-.qv-animation {
-    max-width: 100%;
-    max-height: 100%;
-    display: none;            /* shown once loaded */
-    object-fit: contain;
-    border-radius: 4px;
-    /* Crisp at native size; smooth fallback when scaled */
-    image-rendering: -webkit-optimize-contrast;
+/* Leaflet map container — fills the stage. Each storm frame is an
+   L.imageOverlay placed at its TRUE geographic bounds, so the storm
+   moves across the displayed area while coastlines + lat/lon grid
+   from the basemap layer stay stable.  */
+.qv-leaflet-map {
+    width: 100%;
+    height: 100%;
+    background: #0a0c12;
 }
-.qv-animation.loaded {
-    display: block;
+/* Hide the default Leaflet attribution that appears bottom-right —
+   we attribute in the sidebar of the detailed viewer; quick view
+   should be clean. */
+.qv-leaflet-map .leaflet-control-attribution { display: none; }
+/* Overlay states — centered on top of the Leaflet map */
+.qv-loader, .qv-empty, .qv-error {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 500;
+    pointer-events: none;
 }
 .qv-loader {
-    color: #94a3b8;
+    color: #e2e8f0;
     font-size: 14px;
     padding: 12px 18px;
-    background: rgba(15, 22, 36, 0.7);
+    background: rgba(15, 22, 36, 0.85);
     border-radius: 6px;
     backdrop-filter: blur(6px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
 }
 .qv-empty {
     text-align: center;
     color: #e2e8f0;
     max-width: 420px;
     padding: 32px 24px;
+    background: rgba(15, 22, 36, 0.92);
+    border-radius: 8px;
 }
 .qv-error {
     color: #f87171;
@@ -912,6 +929,9 @@
     padding: 18px;
     max-width: 480px;
     line-height: 1.5;
+    background: rgba(15, 22, 36, 0.92);
+    border-radius: 8px;
+    border: 1px solid rgba(248, 113, 113, 0.25);
 }
 
 .qv-meta-bar {
