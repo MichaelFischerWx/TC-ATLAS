@@ -3155,13 +3155,36 @@
         animIndex = animFrameTimes.length - 1;
         if (header.satellite) detailSatName = header.satellite;
 
-        // Summary bounds (latest frame) — used as a fallback when a
-        // frame's own bounds are missing. Most frames carry their own
-        // `bounds` since the bundle endpoint computes them per-frame
-        // from the storm's interpolated position at that frame's time.
-        var summaryBounds = L.latLngBounds(
-            L.latLng(bounds[0][0], bounds[0][1]),
-            L.latLng(bounds[1][0], bounds[1][1])
+        // Storm-relative framing: place ALL frames at the SAME bounds
+        // (the latest frame's). Each frame's cutout was centered on the
+        // storm at its own time, so the storm visually sits at the
+        // center of the displayed region across all frames. Cloud
+        // features around it FLOW with time (the real signal); frame
+        // edges stay fixed (no bouncing). Coastlines / lat/lon grid
+        // stay anchored via the basemap. This is the "co-moving" /
+        // storm-relative TC research convention.
+        //
+        // Previously each frame was placed at its own interpolated
+        // bounds, which is geographically "correct" but caused visible
+        // edge-jitter as the cutout center shifted ~0.4°/6h for typical
+        // storm motion. The Storm Satellite Detailed view doesn't need
+        // that geographic motion — Track Map mode shows it explicitly
+        // when wanted.
+        //
+        // Compute unified bounds = the LATEST frame's bounds (since
+        // that's the one centered on the storm's current position).
+        var latestFh = null;
+        for (var li = frames.length - 1; li >= 0; li--) {
+            if (frames[li].byte_length && !frames[li].error
+                    && frames[li].bounds) {
+                latestFh = frames[li];
+                break;
+            }
+        }
+        var ub = (latestFh && latestFh.bounds) || bounds;
+        var unifiedBounds = L.latLngBounds(
+            L.latLng(ub[0][0], ub[0][1]),
+            L.latLng(ub[1][0], ub[1][1])
         );
 
         var mediaType = header.media_type || 'image/webp';
@@ -3182,17 +3205,9 @@
             var blob = new Blob([slice], { type: mediaType });
             var blobUrl = URL.createObjectURL(blob);
             _activeFrameBlobUrls.push(blobUrl);
-            // Each frame has its own bounds — the cutout follows the
-            // storm's interpolated position over the lookback window, so
-            // a recurving Atlantic system displays each frame at the
-            // right geographic spot instead of being smeared across the
-            // (latest-position) summary bounds.
-            var fb = fh.bounds || bounds;
-            var frameBounds = L.latLngBounds(
-                L.latLng(fb[0][0], fb[0][1]),
-                L.latLng(fb[1][0], fb[1][1])
-            );
-            var overlay = L.imageOverlay(blobUrl, frameBounds, {
+            // Place at the UNIFIED (latest-frame) bounds, not the frame's
+            // own interpolated bounds. See comment above for rationale.
+            var overlay = L.imageOverlay(blobUrl, unifiedBounds, {
                 opacity: 0,
                 interactive: false,
                 pane: 'tilePane'
