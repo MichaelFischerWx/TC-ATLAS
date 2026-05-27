@@ -12,7 +12,12 @@
     var POLL_INTERVAL_MS = 10 * 60 * 1000;
     var DEFAULT_LOOKBACK_HOURS = 6;
     var DEFAULT_RADIUS_DEG = 10.0;
-    var FRAME_INTERVAL_MIN = 30;
+    // 15-min cadence (was 30) — matches the system-wide prewarm
+    // cadence (_PREFETCH_INTERVAL_MIN in ir_monitor_api.py) and the
+    // RT Monitor detail view's JPG_PRIMARY_INTERVAL_MIN. Bundle
+    // architecture handles the doubled frame count (25 vs 13 per 6h
+    // lookback) without a smoothness/perf regression.
+    var FRAME_INTERVAL_MIN = 15;
     var FETCH_CONCURRENCY = 5;
     var COASTLINE_URL = 'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_coastline.geojson';
 
@@ -3539,7 +3544,7 @@
             + '/ir-monitor/storm/' + encodeURIComponent(storm.atcf_id)
             + '/ir-frames-meta?lookback_hours=' + _RT_MW_LOOKBACK_H
             + '&radius_deg=' + _RT_MW_IR_RADIUS
-            + '&interval_min=30';
+            + '&interval_min=' + FRAME_INTERVAL_MIN;
         var pickFrame = function (meta) {
             if (!meta || !meta.frames || !meta.frames.length) return null;
             var best = null, bestD = Infinity;
@@ -3566,7 +3571,7 @@
                 + '/ir-frame.jpg?frame_index=' + best.index
                 + '&lookback_hours=' + _RT_MW_LOOKBACK_H
                 + '&radius_deg=' + _RT_MW_IR_RADIUS
-                + '&interval_min=30';
+                + '&interval_min=' + FRAME_INTERVAL_MIN;
             if (_satMwIrOverlay) {
                 _satMwLeafletIr.removeLayer(_satMwIrOverlay);
                 _satMwIrOverlay = null;

@@ -4391,7 +4391,7 @@
         var apiUrl = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(stormId) + '/ir-raw-bundle'
             + '?lookback_hours=' + DEFAULT_LOOKBACK_HOURS
             + '&radius_deg=' + DEFAULT_RADIUS_DEG
-            + '&interval_min=30';
+            + '&interval_min=' + RAW_TB_INTERVAL_MIN;
         // Try direct-from-GCS (prewarmed, no Cloud Run hop) first.
         // Fall through to the API endpoint on miss / fresh storms.
         var gcsUrl = _gcsRawBundleUrl(stormId);
@@ -13308,7 +13308,7 @@
             + '/ir-monitor/storm/' + encodeURIComponent(storm.atcf_id)
             + '/ir-frames-meta?lookback_hours=' + _RT_MW_COMPARE_LOOKBACK_H
             + '&radius_deg=' + _RT_MW_COMPARE_RADIUS
-            + '&interval_min=30';
+            + '&interval_min=' + JPG_PRIMARY_INTERVAL_MIN;
         return fetch(url, { cache: 'no-store' })
             .then(function (r) {
                 if (!r.ok) throw new Error('frames-meta HTTP ' + r.status);
@@ -13331,7 +13331,7 @@
             + '/ir-frame.jpg?frame_index=' + frameIndex
             + '&lookback_hours=' + _RT_MW_COMPARE_LOOKBACK_H
             + '&radius_deg=' + _RT_MW_COMPARE_RADIUS
-            + '&interval_min=30';
+            + '&interval_min=' + JPG_PRIMARY_INTERVAL_MIN;
         var img = new Image();
         img.crossOrigin = 'anonymous';
         img.onload = function () {
