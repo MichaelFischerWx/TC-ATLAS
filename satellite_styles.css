@@ -696,7 +696,14 @@
 
 .sat-tooltip {
     position: absolute;
-    z-index: 15;
+    /* z-index 1500: must clear the in-page UI that lives over the map
+       (anim bar at 20, badges/labels at 25, loader at 30, mobile
+       sidebar at 40, topbar at 100) plus Leaflet's controls (~1000).
+       JS overrides position to `fixed` at runtime so the tooltip
+       tracks viewport coords directly. Without this bump, the cursor
+       readout was rendering BEHIND the anim bar / badges, looking
+       like the hover was broken on the microwave pane. */
+    z-index: 1500;
     pointer-events: none;
     background: #181b24ee;
     color: #e2e4ea;
