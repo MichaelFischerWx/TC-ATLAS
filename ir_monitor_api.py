@@ -1431,7 +1431,12 @@ def _prefetch_ir_frames(storms: list):
                         return
                     if not raw or raw.get("tb") is None:
                         return
-                    jpg_bytes = _render_ir_jpg(raw["tb"])
+                    # Mercator-warp so the cached WebP is correct when
+                    # displayed as L.imageOverlay on the Mercator detail map.
+                    jpg_bytes = _render_ir_jpg(
+                        raw["tb"],
+                        lat_bounds=(center_lat - half, center_lat + half),
+                    )
                     if jpg_bytes:
                         _gcs_jpg_put(atcf_id.upper(), dstr, jpg_bytes)
                         _prefetch_counts["jpg"] += 1
@@ -2771,13 +2776,20 @@ def _gcs_jpg_get(atcf_id: str, dt_str: str, band: int = 0) -> bytes | None:
     """Try to read a cached pre-rendered frame from GCS. Despite the
     legacy `_jpg_` name, frames are now WebP-encoded (smaller files at
     same perceptual quality — about 25-30% reduction on typical
-    storm-cropped frames). Old JPG cache keys are NOT read; they age
-    out naturally through the bucket lifecycle. New writes go to the
-    `*-webp` prefix."""
+    storm-cropped frames).
+
+    Cache key prefix is `ir-webp-merc` (Mercator-warped) for the main IR
+    band — needed because the frontend now uses these directly as
+    L.imageOverlay on a Mercator basemap. Prior `ir-webp` entries are
+    equirectangular and would land geographically displaced when stretched
+    by Leaflet; they age out through the bucket lifecycle. Band frames
+    (WV/Vis) still use the old `band{N}-webp` prefix because they're
+    drawn to a flat <canvas> in the microwave-compare modal where no
+    map projection applies."""
     bucket = _get_rt_gcs_bucket()
     if bucket is None:
         return None
-    prefix = "ir-webp" if band == 0 else f"band{band}-webp"
+    prefix = "ir-webp-merc" if band == 0 else f"band{band}-webp"
     key = f"{_GCS_RT_VERSION}/{prefix}/{atcf_id}/{dt_str}.webp"
     try:
         blob = bucket.blob(key)
@@ -2789,12 +2801,13 @@ def _gcs_jpg_get(atcf_id: str, dt_str: str, band: int = 0) -> bytes | None:
 def _gcs_jpg_put(atcf_id: str, dt_str: str, jpg_bytes: bytes, band: int = 0):
     """Write a pre-rendered WebP frame to GCS (fire-and-forget). Name
     kept for back-compat with existing call sites — the bytes are now
-    WebP (encoded that way by _render_ir_jpg / _render_band_jpg)."""
+    WebP (encoded that way by _render_ir_jpg / _render_band_jpg).
+    See _gcs_jpg_get for the `ir-webp-merc` prefix rationale."""
     bucket = _get_rt_gcs_bucket()
     if bucket is None:
         return
     def _upload():
-        prefix = "ir-webp" if band == 0 else f"band{band}-webp"
+        prefix = "ir-webp-merc" if band == 0 else f"band{band}-webp"
         key = f"{_GCS_RT_VERSION}/{prefix}/{atcf_id}/{dt_str}.webp"
         try:
             blob = bucket.blob(key)
@@ -2847,13 +2860,66 @@ def _build_claude_ir_jpg_lut() -> np.ndarray:
 _CLAUDE_IR_JPG_LUT = _build_claude_ir_jpg_lut()
 
 
-def _render_ir_jpg(tb_array: np.ndarray, quality: int = 75) -> bytes | None:
-    """Render a raw Tb array to JPEG bytes using the Claude IR colormap."""
+def _warp_eq_to_mercator_local(field: np.ndarray, lat_min: float,
+                               lat_max: float) -> np.ndarray:
+    """Re-sample a small equirectangular cutout (rows uniform in latitude,
+    top row = lat_max, bottom row = lat_min) onto a Mercator-y pixel grid
+    spanning the SAME geographic lat range.
+
+    Why: Leaflet's L.imageOverlay places an image between two corner
+    lat/lons by linearly CSS-stretching it in *projected* (Web Mercator)
+    screen space. An equirectangular source pixel labeled "lat L" therefore
+    lands at the screen y-position that Mercator assigns to a different,
+    higher latitude. For a ±10° storm cutout at 14°N the displacement is
+    ~0.5-0.8° (≈80 km) — perceptible at eye scale. Pre-warping the source
+    so rows are uniform in Mercator y makes the linear CSS-stretch produce
+    a geographically correct image at the original lat bounds.
+
+    This is the localized analogue of build_env_overlays._warp_eq_to_mercator;
+    it operates on a small lat window rather than the global [+90, -90] range.
+
+    Cap at ±WEB_MERC_LAT_MAX (85.05°) for numerical safety even though
+    storm cutouts never approach the pole.
+    """
+    WEB_MERC_LAT_MAX = 85.05112877980659
+    ny_in, nx_in = field.shape
+    lat_max_c = max(min(lat_max,  WEB_MERC_LAT_MAX), -WEB_MERC_LAT_MAX)
+    lat_min_c = max(min(lat_min,  WEB_MERC_LAT_MAX), -WEB_MERC_LAT_MAX)
+    if lat_max_c <= lat_min_c:
+        return field  # degenerate; skip warp
+    # Mercator y at top/bottom of the cutout
+    my_top = math.log(math.tan(math.pi / 4 + math.radians(lat_max_c) / 2))
+    my_bot = math.log(math.tan(math.pi / 4 + math.radians(lat_min_c) / 2))
+    # For each output row, find the lat whose Mercator-y matches that
+    # row's linear-screen position between (my_top, my_bot).
+    rows_out = np.arange(ny_in, dtype=np.float64)
+    merc_y = my_top - (rows_out + 0.5) / ny_in * (my_top - my_bot)
+    lats_out = np.degrees(np.arctan(np.sinh(merc_y)))
+    # Equirectangular source row for each target lat. Nearest neighbor so
+    # masked/NaN pixels don't blur across cloud edges.
+    src_rows = np.clip(
+        np.round((lat_max - lats_out) / (lat_max - lat_min) * ny_in).astype(int),
+        0, ny_in - 1,
+    )
+    return field[src_rows, :].copy()
+
+
+def _render_ir_jpg(tb_array: np.ndarray, quality: int = 75,
+                   lat_bounds: tuple[float, float] | None = None) -> bytes | None:
+    """Render a raw Tb array to WebP bytes using the Claude IR colormap.
+
+    If `lat_bounds=(lat_min, lat_max)` is supplied, the array is Mercator-warped
+    before colormap LUT lookup so the resulting image displays correctly when
+    placed on a Web Mercator basemap via L.imageOverlay (linear CSS-stretch
+    between projected corner positions). See _warp_eq_to_mercator_local."""
     from PIL import Image
 
     arr = np.asarray(tb_array, dtype=np.float32)
     if not np.any(np.isfinite(arr)):
         return None
+
+    if lat_bounds is not None:
+        arr = _warp_eq_to_mercator_local(arr, lat_bounds[0], lat_bounds[1])
 
     frac = 1.0 - (arr - _TB_VMIN) / (_TB_VMAX - _TB_VMIN)
     frac = np.clip(frac, 0.0, 1.0)
@@ -3137,7 +3203,10 @@ def get_ir_frame_jpg(
             ).reshape((cached_raw["tb_rows"], cached_raw["tb_cols"]))
             decoded_tb = ((encoded.astype(np.float32) - 1) / _TB_SCALE) + _TB_VMIN
             decoded_tb[encoded == 0] = np.nan
-            jpg_bytes = _render_ir_jpg(decoded_tb)
+            jpg_bytes = _render_ir_jpg(
+                decoded_tb,
+                lat_bounds=(center_lat - half, center_lat + half),
+            )
             if jpg_bytes:
                 _gcs_jpg_put(atcf_id.upper(), dt_str, jpg_bytes)
                 return Response(content=jpg_bytes, media_type="image/webp", headers=meta_headers)
@@ -3149,7 +3218,10 @@ def get_ir_frame_jpg(
     if not raw or raw.get("tb") is None:
         raise HTTPException(status_code=502, detail=f"No IR data for frame {frame_index}")
 
-    jpg_bytes = _render_ir_jpg(raw["tb"])
+    jpg_bytes = _render_ir_jpg(
+        raw["tb"],
+        lat_bounds=(center_lat - half, center_lat + half),
+    )
     if not jpg_bytes:
         raise HTTPException(status_code=502, detail="IR rendering failed")
 

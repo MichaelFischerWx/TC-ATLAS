@@ -2940,6 +2940,181 @@
         // start since they fire on the first tile, not the last.
     }
 
+    // ── JPG primary path config ──────────────────────────────
+    // The Storm Satellite animation now defaults to single-image WebP
+    // frames served by the API's /ir-frame.jpg endpoint, with GIBS
+    // tiles as the auto-fallback.  Why this is better:
+    //
+    //   * One ~60 KB image per frame replaces ~16 GIBS tile requests.
+    //     For a 13-frame, 6-h × 30-min animation that's 13 requests
+    //     instead of ~208 — fewer round-trips, fewer TLS handshakes,
+    //     and no GIBS-side per-tile retry pipeline.
+    //   * The backend already pre-renders these every 5 min into GCS
+    //     (see _prefetch_ir_frames in ir_monitor_api.py), so the typical
+    //     fetch is a warm-cache hit served by Cloud Run from GCS rather
+    //     than a chain of NASA-CDN lookups.
+    //   * The WebPs are Mercator-warped server-side (see
+    //     _warp_eq_to_mercator_local) so L.imageOverlay's linear stretch
+    //     on a Web-Mercator basemap is geographically correct.
+    //
+    // If the /ir-frames-meta probe fails or too many image overlays
+    // error out, we fall through to _initDetailMapGIBS for that storm.
+    var JPG_FALLBACK_ERROR_THRESHOLD = 0.5;  // >50% frame errors → swap to GIBS
+    var JPG_PRIMARY_RADIUS_DEG = 10.0;
+    var JPG_PRIMARY_LOOKBACK_H = DEFAULT_LOOKBACK_HOURS;
+    var JPG_PRIMARY_INTERVAL_MIN = 30;
+    var _jpgPathFellBack = false;
+
+    /** Primary animation path: pre-rendered WebP frames as L.imageOverlay.
+     *  Falls back to _initDetailMapGIBS on /ir-frames-meta failure or
+     *  excessive per-frame image errors. */
+    function _initDetailMapJPG(storm, satLayerName) {
+        if (!detailMap) return;
+
+        var atcfId = storm.atcf_id;
+        var metaUrl = API_BASE
+            + '/ir-monitor/storm/' + encodeURIComponent(atcfId)
+            + '/ir-frames-meta'
+            + '?lookback_hours=' + JPG_PRIMARY_LOOKBACK_H
+            + '&radius_deg=' + JPG_PRIMARY_RADIUS_DEG
+            + '&interval_min=' + JPG_PRIMARY_INTERVAL_MIN;
+
+        fetch(metaUrl, { cache: 'no-store' })
+            .then(function (r) {
+                if (!r.ok) throw new Error('frames-meta HTTP ' + r.status);
+                return r.json();
+            })
+            .then(function (meta) {
+                // Guard against storm switch during the meta fetch
+                if (currentStormId !== atcfId || !detailMap) return;
+                _initDetailMapJPGWithMeta(storm, satLayerName, meta);
+            })
+            .catch(function (err) {
+                console.warn('[RT Monitor] JPG primary path unavailable, falling back to GIBS:',
+                             err && err.message);
+                _jpgPathFellBack = true;
+                _initDetailMapGIBS(storm, satLayerName);
+            });
+    }
+
+    function _initDetailMapJPGWithMeta(storm, satLayerName, meta) {
+        var atcfId = storm.atcf_id;
+        var frames = (meta && meta.frames) || [];
+        var bounds = meta && meta.bounds;
+        if (!frames.length || !bounds) {
+            console.warn('[RT Monitor] JPG meta returned no frames; falling back to GIBS');
+            _jpgPathFellBack = true;
+            _initDetailMapGIBS(storm, satLayerName);
+            return;
+        }
+
+        // /ir-frames-meta returns frames oldest-first (index 0 = oldest,
+        // index N-1 = most recent). Match the existing animFrame ordering.
+        animFrameTimes = frames.map(function (f) { return f.datetime_utc; });
+        animIndex = animFrameTimes.length - 1;
+
+        if (meta.satellite) detailSatName = meta.satellite;
+
+        var leafletBounds = L.latLngBounds(
+            L.latLng(bounds[0][0], bounds[0][1]),
+            L.latLng(bounds[1][0], bounds[1][1])
+        );
+
+        // Create one L.imageOverlay per frame (opacity 0 until activated)
+        for (var i = 0; i < frames.length; i++) {
+            var url = API_BASE
+                + '/ir-monitor/storm/' + encodeURIComponent(atcfId)
+                + '/ir-frame.jpg'
+                + '?frame_index=' + i
+                + '&lookback_hours=' + JPG_PRIMARY_LOOKBACK_H
+                + '&radius_deg=' + JPG_PRIMARY_RADIUS_DEG
+                + '&interval_min=' + JPG_PRIMARY_INTERVAL_MIN;
+            var overlay = L.imageOverlay(url, leafletBounds, {
+                opacity: 0,
+                interactive: false,
+                crossOrigin: true,
+                // L.imageOverlay defaults to overlayPane (z-index 400) which
+                // would render ON TOP of the label tile layer added to the
+                // same pane later in initDetailMap. Force tilePane so the IR
+                // frames sit above the basemap but BELOW labels/coastlines —
+                // matching the stacking the GIBS L.tileLayer path produces.
+                pane: 'tilePane'
+            });
+            frameHasError.push(false);
+            animFrameLayers.push(overlay);
+        }
+
+        // Batched newest-first load (mirrors _initDetailMapGIBS so the
+        // user sees the latest frame ASAP while older ones backfill).
+        var FRAME_BATCH_SIZE = 3;
+        var totalFrames = animFrameTimes.length;
+        var loadOrder = [];
+        for (var k = totalFrames - 1; k >= 0; k--) loadOrder.push(k);
+        var _batchAdded = {};
+        var _batchNextIdx = 0;
+        var _errorCount = 0;
+        var _swappedToGibs = false;
+
+        function _maybeSwapToGibs() {
+            if (_swappedToGibs) return;
+            // Only consider swapping while early in the load — once most
+            // frames are up, the user already sees imagery and a swap
+            // would be visually disruptive.
+            var seen = framesLoaded + _errorCount;
+            if (seen < Math.min(3, totalFrames)) return;
+            var errFrac = _errorCount / Math.max(1, seen);
+            if (errFrac > JPG_FALLBACK_ERROR_THRESHOLD) {
+                _swappedToGibs = true;
+                _jpgPathFellBack = true;
+                console.warn('[RT Monitor] JPG path: ' + _errorCount + '/' +
+                             seen + ' frame errors — swapping to GIBS');
+                cleanupFrameLayers();
+                // cleanupFrameLayers leaves frameHasError/validFrames/_firstFrameShown
+                // intact (they're not cleared on storm switch, only on init).
+                // Reset them here so _initDetailMapGIBS starts from a clean slate.
+                validFrames = [];
+                frameHasError = [];
+                _firstFrameShown = false;
+                _initDetailMapGIBS(storm, satLayerName);
+            }
+        }
+
+        function _addNextBatch() {
+            if (_swappedToGibs) return;
+            var added = 0;
+            while (_batchNextIdx < loadOrder.length && added < FRAME_BATCH_SIZE) {
+                var fi = loadOrder[_batchNextIdx];
+                _batchNextIdx++;
+                if (_batchAdded[fi]) continue;
+                _batchAdded[fi] = true;
+                animFrameLayers[fi].addTo(detailMap);
+                (function (idx) {
+                    animFrameLayers[idx].once('error', function () {
+                        frameHasError[idx] = true;
+                        _errorCount++;
+                        onFrameLayerLoaded(idx);
+                        _maybeSwapToGibs();
+                        _addNextBatch();
+                    });
+                    animFrameLayers[idx].once('load', function () {
+                        onFrameLayerLoaded(idx);
+                        _addNextBatch();
+                    });
+                })(fi);
+                added++;
+            }
+        }
+        _addNextBatch();
+
+        var slider = document.getElementById('ir-anim-slider');
+        if (slider) { slider.max = animFrameTimes.length - 1; slider.value = animIndex; }
+        updateAnimCounter();
+        updateFrameOverlay();
+
+        console.log('[RT Monitor] JPG primary: ' + totalFrames + ' WebP frame overlays (' +
+                    detailSatName + ')');
+    }
+
     /** Fallback: load GIBS tile layers for animation (used when image overlay fails) */
     function _initDetailMapGIBS(storm, satLayerName) {
         if (!detailMap) return;
@@ -3068,10 +3243,13 @@
         // Show loading progress
         showLoadingProgress(true, 0);
 
-        // ── GIBS tiles (immediate) ───────────────────────────
-        // Load GIBS tiles from NASA's CDN — fast, reliable, no
-        // backend dependency. User sees imagery within 3-5 seconds.
-        _initDetailMapGIBS(storm, satLayerName);
+        // ── Pre-rendered WebPs (primary) ──────────────────────
+        // Single ~60 KB WebP per frame from /ir-frame.jpg (Mercator-warped
+        // server-side, prewarmed every 5 min into GCS). One request per
+        // frame instead of ~16 GIBS tiles. Auto-falls-back to GIBS on
+        // /ir-frames-meta failure or excessive image-load errors.
+        _jpgPathFellBack = false;
+        _initDetailMapJPG(storm, satLayerName);
 
         // Raw Tb pre-fetch starts inside _triggerDeferredLoads() with a
         // 3-second delay, giving panel requests (models, WeatherLab, etc.)
