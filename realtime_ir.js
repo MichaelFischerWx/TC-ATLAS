@@ -1761,124 +1761,87 @@
     function _kt(v) { return (v == null) ? null : Math.round(v); }
     function _cToF(c) { return (c == null) ? null : Math.round(c * 9/5 + 32); }
 
-    /** Draw a meteorological wind barb as SVG. `dir` is the direction
-     *  FROM which wind is blowing (compass degrees, 0=N). `speed` is in
-     *  knots. Returns an SVG <g> element positioned at the origin (caller
-     *  translates to the station location). */
-    function _drawWindBarb(speed, dir) {
-        var ns = 'http://www.w3.org/2000/svg';
-        var g = document.createElementNS(ns, 'g');
-        if (speed == null || dir == null) return g;
+    /** Build wind-barb SVG fragments as a string. `dir` is the FROM
+     *  direction (0°=N). `speed` in knots. Returns the inner SVG markup
+     *  for the barb (shaft + feathers). Caller wraps in an <svg>. */
+    function _windBarbSvgString(speed, dir) {
+        if (speed == null || dir == null) return '';
         var spd = Math.round(speed);
         if (spd < 2) {
-            // Calm: small open circle at station center.
-            var c = document.createElementNS(ns, 'circle');
-            c.setAttribute('cx', 0); c.setAttribute('cy', 0);
-            c.setAttribute('r', 3); c.setAttribute('fill', 'none');
-            c.setAttribute('stroke', '#0f172a'); c.setAttribute('stroke-width', 1.2);
-            g.appendChild(c);
-            return g;
+            // Calm: small open ring at station center.
+            return '<circle cx="0" cy="0" r="3" fill="none" stroke="#0f172a" stroke-width="1.2"/>';
         }
-        // Barb extends in the FROM direction (windward), 24 px long.
         var L = 24;
-        var rad = (dir - 90) * Math.PI / 180;  // SVG y-axis flipped, 0°=N is up
+        var rad = (dir - 90) * Math.PI / 180;
         var bx = L * Math.cos(rad);
         var by = L * Math.sin(rad);
-        var shaft = document.createElementNS(ns, 'line');
-        shaft.setAttribute('x1', 0); shaft.setAttribute('y1', 0);
-        shaft.setAttribute('x2', bx); shaft.setAttribute('y2', by);
-        shaft.setAttribute('stroke', '#0f172a');
-        shaft.setAttribute('stroke-width', 1.5);
-        g.appendChild(shaft);
+        var parts = [];
+        parts.push('<line x1="0" y1="0" x2="' + bx.toFixed(2) + '" y2="' + by.toFixed(2) +
+                   '" stroke="#0f172a" stroke-width="1.5"/>');
 
-        // Place barbs perpendicular to the shaft on the upwind side.
-        // Standard: 50 kt = filled triangle (pennant), 10 kt = full barb,
-        // 5 kt = half barb. Place from the windward end inward.
         var remaining = spd;
-        var pos = 1.0;          // fraction along shaft, starting at windward end
-        var step = 5 / L;       // 5 px between feathers
-        var perp = Math.PI / 2; // perpendicular to shaft
-        var barbDir = -perp;    // upwind side (looks correct visually)
+        var pos = 1.0;
+        var step = 5 / L;
+        var perpRad = rad - Math.PI / 2;
         var barbLen = 9;
+        var dxFull = barbLen * Math.cos(perpRad);
+        var dyFull = barbLen * Math.sin(perpRad);
+        var dxHalf = barbLen * 0.55 * Math.cos(perpRad);
+        var dyHalf = barbLen * 0.55 * Math.sin(perpRad);
 
-        function addBarb(kind) {
-            var px = bx * pos;
-            var py = by * pos;
-            var perpRad = rad + barbDir;
-            var dxF = barbLen * Math.cos(perpRad);
-            var dyF = barbLen * Math.sin(perpRad);
-            if (kind === 'pennant') {
-                // Filled triangle from (px,py) to (px+dxF,py+dyF) to next-step point
-                var nextX = bx * (pos - step * 2.4);
-                var nextY = by * (pos - step * 2.4);
-                var poly = document.createElementNS(ns, 'polygon');
-                poly.setAttribute('points',
-                    px + ',' + py + ' ' +
-                    (px + dxF) + ',' + (py + dyF) + ' ' +
-                    nextX + ',' + nextY);
-                poly.setAttribute('fill', '#0f172a');
-                poly.setAttribute('stroke', '#0f172a');
-                g.appendChild(poly);
-            } else {
-                var len = (kind === 'full') ? barbLen : barbLen * 0.55;
-                var dxL = len * Math.cos(perpRad);
-                var dyL = len * Math.sin(perpRad);
-                var ln = document.createElementNS(ns, 'line');
-                ln.setAttribute('x1', px); ln.setAttribute('y1', py);
-                ln.setAttribute('x2', px + dxL); ln.setAttribute('y2', py + dyL);
-                ln.setAttribute('stroke', '#0f172a');
-                ln.setAttribute('stroke-width', 1.5);
-                g.appendChild(ln);
-            }
+        while (remaining >= 50) {
+            var px = bx * pos, py = by * pos;
+            var nx = bx * (pos - step * 2.4), ny = by * (pos - step * 2.4);
+            parts.push('<polygon points="' +
+                px.toFixed(2) + ',' + py.toFixed(2) + ' ' +
+                (px + dxFull).toFixed(2) + ',' + (py + dyFull).toFixed(2) + ' ' +
+                nx.toFixed(2) + ',' + ny.toFixed(2) +
+                '" fill="#0f172a" stroke="#0f172a"/>');
+            remaining -= 50; pos -= step * 3;
         }
-        while (remaining >= 50) { addBarb('pennant'); remaining -= 50; pos -= step * 3; }
-        while (remaining >= 10) { addBarb('full');    remaining -= 10; pos -= step * 1.6; }
-        if (remaining >= 5) { addBarb('half'); }
-        return g;
+        while (remaining >= 10) {
+            var fx = bx * pos, fy = by * pos;
+            parts.push('<line x1="' + fx.toFixed(2) + '" y1="' + fy.toFixed(2) +
+                       '" x2="' + (fx + dxFull).toFixed(2) + '" y2="' + (fy + dyFull).toFixed(2) +
+                       '" stroke="#0f172a" stroke-width="1.5"/>');
+            remaining -= 10; pos -= step * 1.6;
+        }
+        if (remaining >= 5) {
+            var hx = bx * pos, hy = by * pos;
+            parts.push('<line x1="' + hx.toFixed(2) + '" y1="' + hy.toFixed(2) +
+                       '" x2="' + (hx + dxHalf).toFixed(2) + '" y2="' + (hy + dyHalf).toFixed(2) +
+                       '" stroke="#0f172a" stroke-width="1.5"/>');
+        }
+        return parts.join('');
     }
 
-    /** Build a station-plot DOM element for one observation. Centered
-     *  at (0,0); the caller places it via L.divIcon. */
+    /** Build a station-plot SVG markup string for one observation.
+     *  L.divIcon expects a string, so we synthesize the SVG directly
+     *  instead of going through createElementNS / outerHTML (which
+     *  was triggering an L.divIcon serialization issue). */
     function _renderStationPlot(ob) {
-        var ns = 'http://www.w3.org/2000/svg';
-        var svg = document.createElementNS(ns, 'svg');
-        svg.setAttribute('width', 72); svg.setAttribute('height', 56);
-        svg.setAttribute('viewBox', '-36 -28 72 56');
-        svg.setAttribute('class', 'ir-stn-plot');
-        // Station center dot.
-        var dot = document.createElementNS(ns, 'circle');
-        dot.setAttribute('cx', 0); dot.setAttribute('cy', 0);
-        dot.setAttribute('r', 1.5); dot.setAttribute('fill', '#0f172a');
-        svg.appendChild(dot);
-        // Wind barb (built once, transformed if needed by the barb fn).
-        svg.appendChild(_drawWindBarb(ob.wind_speed_kt, ob.wind_dir_deg));
-
+        var labels = '';
         function label(x, y, text, anchor) {
             if (text == null || text === '') return;
-            var t = document.createElementNS(ns, 'text');
-            t.setAttribute('x', x); t.setAttribute('y', y);
-            t.setAttribute('text-anchor', anchor || 'middle');
-            t.setAttribute('font-family', "'DM Sans', sans-serif");
-            t.setAttribute('font-size', '9');
-            t.setAttribute('font-weight', '600');
-            t.setAttribute('fill', '#0f172a');
-            t.setAttribute('paint-order', 'stroke');
-            t.setAttribute('stroke', 'rgba(255,255,255,0.85)');
-            t.setAttribute('stroke-width', '2');
-            t.textContent = text;
-            svg.appendChild(t);
+            labels += '<text x="' + x + '" y="' + y +
+                      '" text-anchor="' + (anchor || 'middle') + '"' +
+                      ' font-family="\'DM Sans\',sans-serif" font-size="9"' +
+                      ' font-weight="600" fill="#0f172a" paint-order="stroke"' +
+                      ' stroke="rgba(255,255,255,0.85)" stroke-width="2">' +
+                      text + '</text>';
         }
-        // Temperature (°C) upper-left.
-        if (ob.air_temp_c != null) label(-9, -7, Math.round(ob.air_temp_c) + '', 'end');
-        // Dewpoint (°C) lower-left.
-        if (ob.dewpoint_c != null) label(-9, 12, Math.round(ob.dewpoint_c) + '', 'end');
-        // MSLP: last 3 digits of tenths (e.g. 1003.4 → "034"; 996.5 → "965").
+        if (ob.air_temp_c != null) label(-9, -7, Math.round(ob.air_temp_c), 'end');
+        if (ob.dewpoint_c != null) label(-9, 12, Math.round(ob.dewpoint_c), 'end');
         if (ob.pressure_hpa != null) {
             var p10 = Math.round(ob.pressure_hpa * 10);
             var p3 = ('000' + (p10 % 1000)).slice(-3);
             label(9, -7, p3, 'start');
         }
-        return svg;
+        return '<svg xmlns="http://www.w3.org/2000/svg" width="72" height="56"' +
+               ' viewBox="-36 -28 72 56" class="ir-stn-plot">' +
+               '<circle cx="0" cy="0" r="1.5" fill="#0f172a"/>' +
+               _windBarbSvgString(ob.wind_speed_kt, ob.wind_dir_deg) +
+               labels + '</svg>';
     }
 
     /** Toggle the surface-obs overlay on the card. Fetches from the
@@ -1913,8 +1876,7 @@
                 var lg = L.layerGroup();
                 for (var i = 0; i < obs.length; i++) {
                     var ob = obs[i];
-                    var svgEl = _renderStationPlot(ob);
-                    var html = svgEl.outerHTML;
+                    var html = _renderStationPlot(ob);
                     // Tooltip text — full obs detail on hover.
                     var lines = [];
                     lines.push('<b>' + ob.id + '</b> · ' + ob.source);
@@ -3407,12 +3369,38 @@
      *  "I want to see what's new" expectation in a Real-Time Monitor).
      *  Bandwidth-cheap because GCS bundle responses carry
      *  Cache-Control: public,max-age=300 and the browser issues a
-     *  conditional request — returns 304 unchanged most of the time. */
+     *  conditional request — returns 304 unchanged most of the time.
+     *
+     *  Refresh strategy:
+     *  - When the user is on IR, refresh the IR bundle (the typical case).
+     *  - When the user is on a non-IR product (GeoColor / Vis / WV),
+     *    refresh THAT product so they see new frames there too. The IR
+     *    bundle is small (~10 MB) and the satellite source publishes
+     *    every 10 min, so a single per-poll fetch keeps the active view
+     *    current without thrashing the IR pipeline. */
     function _refreshFramesIfNewer(atcfId) {
         if (!detailMap || currentStormId !== atcfId) return;
-        if (productMode !== 'eir') return;  // only refresh the IR pipeline for now
-        if (animFrameTimes.length === 0) return;
+        // Dispatch by active product. Each helper checks its own state
+        // and only swaps frames if the new bundle has a newer latest.
+        if (productMode === 'eir') {
+            _refreshIrFramesIfNewer(atcfId);
+        } else if (productMode === 'geocolor') {
+            _refreshGeocolorFramesIfNewer(atcfId);
+        } else if (productMode === 'vis' || productMode === 'wv') {
+            _refreshBandFramesIfNewer(atcfId, productMode);
+        }
+        // Also opportunistically refresh IR in the background even when
+        // the user is on a non-IR product so coming back to IR shows
+        // fresh data. Skipped if IR was never loaded (e.g. card opened
+        // straight to GeoColor) — that's fine since clicking IR will
+        // load fresh on first activation.
+        if (productMode !== 'eir' && animFrameTimes.length > 0) {
+            _refreshIrFramesIfNewer(atcfId);
+        }
+    }
 
+    function _refreshIrFramesIfNewer(atcfId) {
+        if (animFrameTimes.length === 0) return;
         var currentLatest = animFrameTimes[animFrameTimes.length - 1];
         var gcsUrl = _gcsFramesBundleUrl(atcfId);
         var apiUrl = API_BASE
@@ -3478,6 +3466,122 @@
             })
             .catch(function (err) {
                 console.warn('[RT Monitor] frame refresh fetch failed:', err && err.message);
+            });
+    }
+
+    /** Cheap "is there anything new?" probe for a generic bundle URL.
+     *  Fetches with `cache: no-cache` (so GCS revalidates), peeks the
+     *  JSON header, and resolves true iff the bundle's latest frame
+     *  datetime is newer than `currentLatest`. Used by the non-IR
+     *  refresh helpers so they don't tear down and rebuild layers on
+     *  every poll when nothing has changed. */
+    function _bundleHasNewerLatest(bundleUrl, fallbackUrl, currentLatest) {
+        return fetch(bundleUrl, { cache: 'no-cache' })
+            .then(function (r) {
+                if (!r.ok) throw new Error('GCS ' + r.status);
+                return r.arrayBuffer();
+            })
+            .catch(function () {
+                return fetch(fallbackUrl).then(function (r) {
+                    if (!r.ok) throw new Error('API ' + r.status);
+                    return r.arrayBuffer();
+                });
+            })
+            .then(function (buf) {
+                var dv = new DataView(buf);
+                if (buf.byteLength < 4) return { newer: false, buf: buf };
+                var headerLen = dv.getUint32(0, true);
+                if (4 + headerLen > buf.byteLength) return { newer: false, buf: buf };
+                var header = JSON.parse(new TextDecoder('utf-8').decode(
+                    new Uint8Array(buf, 4, headerLen)));
+                var frames = (header && header.frames) || [];
+                if (!frames.length) return { newer: false, buf: buf };
+                var newLatest = frames[frames.length - 1].datetime_utc;
+                if (!newLatest || newLatest <= currentLatest) {
+                    return { newer: false, buf: buf };
+                }
+                return { newer: true, buf: buf };
+            });
+    }
+
+    /** GeoColor bundle refresh — same approach as IR but uses the
+     *  GeoColor endpoint. If newer frames are available, fully reload
+     *  via loadGeocolorFrames after clearing the existing layers. */
+    function _refreshGeocolorFramesIfNewer(atcfId) {
+        if (geocolorFrameTimes.length === 0) return;
+        var currentLatest = geocolorFrameTimes[geocolorFrameTimes.length - 1];
+        var gcsUrl = _GCS_GEOCOLOR_BUNDLE_BASE + '/' +
+                     encodeURIComponent(atcfId.toUpperCase()) + '.bin';
+        var apiUrl = API_BASE
+            + '/ir-monitor/storm/' + encodeURIComponent(atcfId)
+            + '/geocolor-frames-bundle?lookback_hours=' + JPG_PRIMARY_LOOKBACK_H
+            + '&radius_deg=' + JPG_PRIMARY_RADIUS_DEG
+            + '&interval_min=' + JPG_PRIMARY_INTERVAL_MIN;
+        _bundleHasNewerLatest(gcsUrl, apiUrl, currentLatest)
+            .then(function (probe) {
+                if (currentStormId !== atcfId || productMode !== 'geocolor') return;
+                if (!probe.newer) return;
+                var wasPlaying = animPlaying;
+                if (wasPlaying) stopAnimation();
+                cleanupGeocolorFrameLayers();
+                // Re-trigger the bundle ingest with the already-fetched buf
+                // to avoid a second round trip.
+                _ingestGeocolorBundle(probe.buf);
+                console.log('[RT Monitor] GeoColor frames refreshed');
+                if (wasPlaying) {
+                    setTimeout(function () {
+                        if (geocolorFramesReady && currentStormId === atcfId) startAnimation();
+                    }, 250);
+                }
+            })
+            .catch(function (err) {
+                console.warn('[RT Monitor] GeoColor refresh failed:', err && err.message);
+            });
+    }
+
+    /** Vis / WV bundle refresh. `productKey` is 'vis' or 'wv'. */
+    function _refreshBandFramesIfNewer(atcfId, productKey) {
+        var times = (productKey === 'vis') ? visFrameTimes : wvFrameTimes;
+        if (times.length === 0) return;
+        var currentLatest = times[times.length - 1];
+        // Pick the band that matches the current view. For 'vis' we honor
+        // the same day/night SWIR-fallback rule as loadVisFrames.
+        var band;
+        if (productKey === 'wv') {
+            band = 8;
+        } else {
+            var sunEl = -90;
+            if (detailStormLat != null && detailStormLon != null) {
+                try { sunEl = solarElevation(detailStormLat, detailStormLon, new Date()); }
+                catch (e) {}
+            }
+            band = (sunEl <= -6) ? 7 : 2;
+        }
+        var gcsUrl = _gcsBandBundleUrl(atcfId, band);
+        var apiUrl = API_BASE
+            + '/ir-monitor/storm/' + encodeURIComponent(atcfId)
+            + '/band-frames-bundle?band=' + band;
+        _bundleHasNewerLatest(gcsUrl, apiUrl, currentLatest)
+            .then(function (probe) {
+                if (currentStormId !== atcfId || productMode !== productKey) return;
+                if (!probe.newer) return;
+                var wasPlaying = animPlaying;
+                if (wasPlaying) stopAnimation();
+                if (productKey === 'vis') cleanupVisFrameLayers();
+                else cleanupWvFrameLayers();
+                _ingestBandBundle(probe.buf, band, productKey);
+                console.log('[RT Monitor] ' +
+                    (productKey === 'vis' ? 'Visible' : 'WV') + ' frames refreshed');
+                if (wasPlaying) {
+                    setTimeout(function () {
+                        var ready = (productKey === 'vis') ? visFramesReady : wvFramesReady;
+                        if (ready && currentStormId === atcfId) startAnimation();
+                    }, 250);
+                }
+            })
+            .catch(function (err) {
+                console.warn('[RT Monitor] ' + productKey + ' refresh failed:',
+                             err && err.message);
             });
     }
 
