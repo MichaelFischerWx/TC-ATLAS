@@ -12,12 +12,22 @@
     var POLL_INTERVAL_MS = 10 * 60 * 1000;
     var DEFAULT_LOOKBACK_HOURS = 6;
     var DEFAULT_RADIUS_DEG = 10.0;
-    // 15-min cadence (was 30) — matches the system-wide prewarm
-    // cadence (_PREFETCH_INTERVAL_MIN in ir_monitor_api.py) and the
-    // RT Monitor detail view's JPG_PRIMARY_INTERVAL_MIN. Bundle
-    // architecture handles the doubled frame count (25 vs 13 per 6h
-    // lookback) without a smoothness/perf regression.
-    var FRAME_INTERVAL_MIN = 15;
+    // Cadence: desktop = 15-min (25 frames per 6h, smooth animation).
+    // Mobile/touch = 30-min (13 frames) — halves decoded image memory
+    // (~50 MB → ~25 MB at 1000×1000 WebPs) to stay well inside iOS
+    // Safari's per-tab budget and prevent the OOM-triggered tab
+    // reloads that look like a "crash" to users. Cached frames are
+    // identical at both cadences (30-min ⊂ 15-min in time grid), so
+    // mobile still hits the prewarmed cache for every frame it asks
+    // for — no slowdown beyond fewer frames being shown.
+    function _detectTouchCoarse() {
+        if (typeof window.matchMedia !== 'function') return false;
+        try {
+            return window.matchMedia('(pointer: coarse)').matches
+                && window.matchMedia('(hover: none)').matches;
+        } catch (e) { return false; }
+    }
+    var FRAME_INTERVAL_MIN = _detectTouchCoarse() ? 30 : 15;
     var FETCH_CONCURRENCY = 5;
     var COASTLINE_URL = 'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_coastline.geojson';
 
@@ -4390,7 +4400,16 @@
         for (var i = 0; i < irFrames.length; i++) {
             if (irFrames[i]) validFrameIndices.push(i);
         }
-        _interpolateCenters(irFrames);
+        // _interpolateCenters is best-effort — only affects follow-storm
+        // accuracy. If it throws for any reason (malformed bounds from a
+        // stale bundle, unexpected frame shape, etc.), follow simply falls
+        // back to the frame's own bounds-center via getViewBounds — the
+        // viewer keeps animating.
+        try {
+            _interpolateCenters(irFrames);
+        } catch (e) {
+            console.warn('[Satellite] _interpolateCenters failed:', e && e.message);
+        }
     }
 
     /**
@@ -4414,18 +4433,25 @@
      */
     function _interpolateCenters(frames) {
         // Helper: bounds-center = (interp_lat, interp_lon) at frame's time.
-        // Embedded server-side when each frame's cutout was built.
+        // Defensively guard every level — malformed bounds from a stale
+        // bundle or in-flight cache write must NOT throw and tear down
+        // the viewer (especially on memory-constrained mobile browsers
+        // where an uncaught exception in a render loop can compound into
+        // a full reload).
         function _boundsCenter(f) {
             if (!f || !f.bounds) return null;
-            return {
-                lat: (f.bounds[0][0] + f.bounds[1][0]) / 2,
-                lon: (f.bounds[0][1] + f.bounds[1][1]) / 2
-            };
+            var b = f.bounds;
+            if (!Array.isArray(b) || b.length < 2) return null;
+            if (!Array.isArray(b[0]) || b[0].length < 2) return null;
+            if (!Array.isArray(b[1]) || b[1].length < 2) return null;
+            var s = +b[0][0], w = +b[0][1], n = +b[1][0], e = +b[1][1];
+            if (!isFinite(s) || !isFinite(w) || !isFinite(n) || !isFinite(e)) return null;
+            return { lat: (s + n) / 2, lon: (w + e) / 2 };
         }
         function _trackOrAdvisory(f) {
             var bc = _boundsCenter(f);
             if (bc) return bc;
-            if (currentStorm && currentStorm.lat) {
+            if (currentStorm && currentStorm.lat != null && isFinite(currentStorm.lat)) {
                 return { lat: currentStorm.lat, lon: currentStorm.lon };
             }
             return null;
