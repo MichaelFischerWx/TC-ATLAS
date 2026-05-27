@@ -6215,6 +6215,53 @@
             canvasRight.addEventListener('mouseout', handleMouseOut);
         }
 
+        // Mouse-wheel zoom on the IR + right canvases. Steps through the
+        // same zoomDeg levels (10° / 5° / 2°) the toolbar buttons use;
+        // wheel up = zoom in, wheel down = zoom out. passive:false so
+        // we can preventDefault and stop the page from scrolling under
+        // the cursor while the user is zooming the imagery.
+        var ZOOM_LEVELS = [10, 5, 2];
+        function _onWheelZoom(e) {
+            e.preventDefault();
+            if (e.deltaY === 0) return;
+            var idx = ZOOM_LEVELS.indexOf(zoomDeg);
+            if (idx < 0) {
+                // Current zoomDeg is not in the level list — pick the
+                // nearest level so step direction is well-defined.
+                idx = 0;
+                var best = Infinity;
+                for (var li = 0; li < ZOOM_LEVELS.length; li++) {
+                    var d = Math.abs(ZOOM_LEVELS[li] - zoomDeg);
+                    if (d < best) { best = d; idx = li; }
+                }
+            }
+            // wheel up (negative deltaY) → zoom IN → smaller zoomDeg → higher idx
+            var dir = (e.deltaY < 0) ? +1 : -1;
+            var newIdx = idx + dir;
+            if (newIdx < 0) newIdx = 0;
+            if (newIdx >= ZOOM_LEVELS.length) newIdx = ZOOM_LEVELS.length - 1;
+            if (ZOOM_LEVELS[newIdx] === zoomDeg) return;  // already at bound
+            zoomDeg = ZOOM_LEVELS[newIdx];
+            // Sync the toolbar buttons' active state
+            var zbs = document.querySelectorAll('.sat-zoom-btn');
+            for (var zb = 0; zb < zbs.length; zb++) {
+                zbs[zb].classList.toggle('active',
+                    parseInt(zbs[zb].getAttribute('data-deg'), 10) === zoomDeg);
+            }
+            // Recenter the Leaflet IR map (and MW pair if MW mode) before
+            // letting renderBothPanels paint — same path the buttons use.
+            if (typeof _satIrSyncLeaflet === 'function') {
+                _satIrSyncLeaflet({ recenter: true });
+            }
+            renderBothPanels();
+        }
+        if (canvasIR) {
+            canvasIR.addEventListener('wheel', _onWheelZoom, { passive: false });
+        }
+        if (canvasRight) {
+            canvasRight.addEventListener('wheel', _onWheelZoom, { passive: false });
+        }
+
         document.addEventListener('keydown', function (e) {
             if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
             switch (e.key) {
