@@ -10,7 +10,14 @@
     // ── Config ──────────────────────────────────────────────────
     var API_BASE = 'https://tc-atlas-api-361010099051.us-east1.run.app';
     var POLL_INTERVAL_MS = 10 * 60 * 1000;
-    var DEFAULT_LOOKBACK_HOURS = 6;
+    // Lookback: desktop = 6h (25 frames at 15-min, 13 at 30-min).
+    // Mobile/touch = 4h — combined with the touch-only 30-min cadence
+    // (FRAME_INTERVAL_MIN below) that's 9 frames, ~36 MB of decoded
+    // image memory for the IR pane. Well inside iOS Safari's per-tab
+    // budget so the play loop doesn't OOM-crash the page. The 2 h of
+    // additional history desktop gets is mostly useful for tracking
+    // CDO orbits / mesovortex evolution — not critical on a phone.
+    var DEFAULT_LOOKBACK_HOURS = 6;  // overridden for touch below
     var DEFAULT_RADIUS_DEG = 10.0;
     // Cadence: desktop = 15-min (25 frames per 6h, smooth animation).
     // Mobile/touch = 30-min (13 frames) — halves decoded image memory
@@ -27,7 +34,11 @@
                 && window.matchMedia('(hover: none)').matches;
         } catch (e) { return false; }
     }
-    var FRAME_INTERVAL_MIN = _detectTouchCoarse() ? 30 : 15;
+    var _IS_TOUCH_INIT = _detectTouchCoarse();
+    var FRAME_INTERVAL_MIN = _IS_TOUCH_INIT ? 30 : 15;
+    // Override lookback on touch for the same OOM reason — see comment
+    // above on DEFAULT_LOOKBACK_HOURS.
+    if (_IS_TOUCH_INIT) DEFAULT_LOOKBACK_HOURS = 4;
     var FETCH_CONCURRENCY = 5;
     var COASTLINE_URL = 'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_coastline.geojson';
 
@@ -125,6 +136,21 @@
         { label: '2x',   ms: 300 },
         { label: '4x',   ms: 150 }
     ];
+    // Mobile/touch: cap top play speed at 2x. 4x (150 ms per frame)
+    // triggers rapid WebP decode → bitmap-cache churn that pushes
+    // iOS Safari over its tab memory budget and causes the tab to
+    // be abandoned mid-animation (Safari "backs out" to the
+    // previously-visible page, which on TC-ATLAS is the global map).
+    // Desktop keeps the full 0.5x-4x range.
+    var MOBILE_MAX_SPEED_IDX = 2;  // index into ANIM_SPEEDS — 2 = '2x'
+
+    // Pause on the most-recent frame so the user can orient themselves
+    // before the loop restarts. Common convention in weather animations
+    // (NHC, RAMMB, etc.). Tunable per-device — desktop gets a shorter
+    // pause since the loop is more glanceable, mobile gets longer to
+    // counter the touch-driven "what just happened?" reorientation cost.
+    var LAST_FRAME_PAUSE_MS_DESKTOP = 1200;
+    var LAST_FRAME_PAUSE_MS_MOBILE  = 1800;
 
     var SS_COLORS = {
         TD: '#60a5fa', TS: '#34d399', C1: '#fbbf24',
@@ -5510,15 +5536,35 @@
         showFrame(validFrameIndices[prev]);
     }
 
+    function _isLastFrame() {
+        if (validFrameIndices.length === 0) return false;
+        return animIndex === validFrameIndices[validFrameIndices.length - 1];
+    }
+    function _frameDwellMs() {
+        // Hold the most-recent frame longer than mid-loop frames so
+        // users can orient themselves before the loop restarts.
+        var base = ANIM_SPEEDS[animSpeedIdx].ms;
+        if (_isLastFrame()) {
+            return _IS_TOUCH_INIT ? LAST_FRAME_PAUSE_MS_MOBILE : LAST_FRAME_PAUSE_MS_DESKTOP;
+        }
+        return base;
+    }
     function animTick(ts) {
         if (!animPlaying) return;
-        if (ts - animLastTick >= ANIM_SPEEDS[animSpeedIdx].ms) { animLastTick = ts; nextFrame(); }
+        if (ts - animLastTick >= _frameDwellMs()) { animLastTick = ts; nextFrame(); }
         animTimer = requestAnimationFrame(animTick);
     }
     function startAnimation() { if (validFrameIndices.length < 2) return; animPlaying = true; _ga('sat_animation_play'); animLastTick = 0; animTimer = requestAnimationFrame(animTick); updatePlayBtn(); }
     function stopAnimation() { animPlaying = false; if (animTimer) cancelAnimationFrame(animTimer); animTimer = null; updatePlayBtn(); }
     function toggleAnimation() { if (animPlaying) stopAnimation(); else startAnimation(); }
-    function cycleSpeed() { animSpeedIdx = (animSpeedIdx + 1) % ANIM_SPEEDS.length; if (speedBtn) speedBtn.textContent = ANIM_SPEEDS[animSpeedIdx].label; }
+    function cycleSpeed() {
+        // Mobile/touch caps at 2x (idx 2) — 4x crashes iOS Safari mid-loop.
+        var maxIdx = _IS_TOUCH_INIT ? MOBILE_MAX_SPEED_IDX : (ANIM_SPEEDS.length - 1);
+        var next = animSpeedIdx + 1;
+        if (next > maxIdx) next = 0;
+        animSpeedIdx = next;
+        if (speedBtn) speedBtn.textContent = ANIM_SPEEDS[animSpeedIdx].label;
+    }
 
     // ── UI Updates ──────────────────────────────────────────────
 
