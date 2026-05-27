@@ -371,6 +371,19 @@ html, body { margin: 0; padding: 0; }
     align-items: center;
     gap: 10px;
 }
+.ir-detail-storm-select {
+    background: var(--surface-raised);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 5px 10px;
+    font-size: 0.78rem;
+    font-family: 'DM Sans', sans-serif;
+    font-variant-numeric: tabular-nums;
+    max-width: 280px;
+    cursor: pointer;
+}
+.ir-detail-storm-select:hover { border-color: rgba(255, 255, 255, 0.2); }
 .ir-detail-name {
     font-size: 1.1rem;
     font-weight: 700;
@@ -388,6 +401,7 @@ html, body { margin: 0; padding: 0; }
     padding: 2px 10px;
     border-radius: 4px;
     color: var(--text);
+    white-space: nowrap;
 }
 
 /* Storm-detail header pills — KML / Satellite / Microwave.
@@ -430,6 +444,72 @@ html, body { margin: 0; padding: 0; }
 [data-theme="dark"] .ir-kml-btn:hover {
     background: rgba(74, 155, 110, 0.26);
     border-color: rgba(74, 155, 110, 0.65);
+}
+/* Grid toggle dims when inactive so users can see at a glance whether
+   the lat/lon overlay is on. Active state inherits the green tint. */
+.ir-detail-grid-toggle-btn:not(.active) {
+    opacity: 0.55;
+}
+.ir-detail-grid-toggle-btn:not(.active):hover {
+    opacity: 0.85;
+}
+
+/* Download dropdown — wraps the .ir-kml-btn-styled button and a
+   floating menu of three options (PNG/GIF/KML). */
+.ir-download-wrap {
+    position: relative;
+    display: inline-block;
+}
+.ir-download-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    z-index: 1100;
+    background: var(--surface-raised);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    min-width: 180px;
+    box-shadow: 0 6px 24px rgba(15, 22, 36, 0.18);
+    padding: 4px;
+    font-family: 'DM Sans', sans-serif;
+}
+[data-theme="dark"] .ir-download-menu {
+    background: rgba(20, 26, 38, 0.98);
+    border-color: rgba(255, 255, 255, 0.12);
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+}
+.ir-download-item {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    padding: 7px 10px;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    text-align: left;
+    cursor: pointer;
+    color: var(--text);
+    transition: background 0.12s;
+}
+.ir-download-item:hover {
+    background: rgba(74, 155, 110, 0.12);
+}
+[data-theme="dark"] .ir-download-item:hover {
+    background: rgba(74, 155, 110, 0.20);
+}
+.ir-download-item-title {
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--um-green);
+    line-height: 1.2;
+}
+.ir-download-item-desc {
+    font-size: 0.68rem;
+    color: #64748b;
+    margin-top: 2px;
+}
+[data-theme="dark"] .ir-download-item-desc {
+    color: #94a3b8;
 }
 .ir-sat-viewer-btn {
     color: var(--um-orange);
@@ -589,16 +669,44 @@ html, body { margin: 0; padding: 0; }
     height: 10px;
     border-radius: 2px;
     margin: 4px 0 2px;
-    /* Warm (310K) → Cold (190K): dark grey → light grey → blue → green → yellow → red → magenta → white */
+    /* Claude IR LUT (matches satellite_ir.py _IR_STOPS, server-side
+       pre-rendered into the WebP bundles): left = warm (+57°C / 330K),
+       right = cold (-113°C / 160K). Sequence: near-black grey →
+       grey-blue → light grey → pale blue → teal → green → gold →
+       orange → crimson → magenta → violet → indigo. */
     background: linear-gradient(to right,
-        rgb(8, 8, 8),
-        rgb(90, 90, 90),
-        rgb(200, 200, 200),
-        rgb(0, 100, 255),
-        rgb(0, 255, 0),
-        rgb(255, 180, 0),
-        rgb(255, 0, 0),
-        rgb(180, 0, 180),
+        rgb(12, 12, 22)     0.0%,
+        rgb(70, 70, 82)    14.2%,
+        rgb(120, 120, 132) 22.5%,
+        rgb(180, 180, 192) 30.8%,
+        rgb(216, 218, 228) 39.2%,
+        rgb(140, 210, 220) 47.5%,
+        rgb(68, 180, 196)  51.7%,
+        rgb(32, 148, 166)  55.8%,
+        rgb(40, 178, 116)  60.0%,
+        rgb(96, 208, 68)   64.2%,
+        rgb(192, 220, 40)  68.3%,
+        rgb(238, 196, 48)  72.5%,
+        rgb(228, 132, 48)  76.7%,
+        rgb(214, 78, 56)   80.8%,
+        rgb(180, 36, 68)   85.0%,
+        rgb(196, 48, 156)  89.2%,
+        rgb(168, 64, 200)  93.3%,
+        rgb(120, 48, 180)  97.5%,
+        rgb(64, 24, 140)  100.0%
+    );
+}
+/* GIBS Band-8 WV is rendered with NASA's stock WV colormap: dry/warm
+   pixels are sepia/brown, moist/cold pixels run through gray into
+   blue → green → white. Mirror that ordering so 270 K → 200 K reads
+   left → right. */
+.ir-wv-legend-bar {
+    background: linear-gradient(to right,
+        rgb(102, 60, 30),
+        rgb(170, 130, 90),
+        rgb(220, 220, 220),
+        rgb(80, 140, 200),
+        rgb(40, 200, 180),
         rgb(255, 255, 255)
     );
 }
@@ -642,12 +750,37 @@ html, body { margin: 0; padding: 0; }
 }
 .ir-anim-slider {
     flex: 1;
+    min-width: 80px;
     height: 4px;
     -webkit-appearance: none;
     appearance: none;
     background: rgba(15, 22, 35, 0.1);
     border-radius: 2px;
     outline: none;
+}
+.ir-anim-speed {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex: 0 0 auto;
+}
+.ir-anim-speed-btn {
+    width: 24px;
+    height: 24px;
+    font-weight: 700;
+    line-height: 1;
+}
+.ir-anim-speed-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+}
+.ir-anim-speed-label {
+    font-variant-numeric: tabular-nums;
+    font-size: 0.72rem;
+    color: #64748b;
+    min-width: 32px;
+    text-align: center;
+    user-select: none;
 }
 .ir-anim-slider::-webkit-slider-thumb {
     -webkit-appearance: none;
@@ -1415,7 +1548,7 @@ html, body { margin: 0; padding: 0; }
     width: 12px;
     height: 12px;
     border-radius: 50%;
-    background: #00e5ff;
+    background: var(--um-orange, #F47321);
     border: 2px solid #0f172a;
     cursor: pointer;
     margin-top: -4px;  /* center on 4px track */
@@ -1424,7 +1557,7 @@ html, body { margin: 0; padding: 0; }
     width: 12px;
     height: 12px;
     border-radius: 50%;
-    background: #00e5ff;
+    background: var(--um-orange, #F47321);
     border: 2px solid #0f172a;
     cursor: pointer;
 }

@@ -3683,6 +3683,14 @@ def _render_band_jpg(data_array: np.ndarray, band: int,
         indices = (frac * 255).astype(np.uint8)
         rgba = _CLAUDE_WV_JPG_LUT[indices]
         rgb = rgba[..., :3]
+    elif band == 7:
+        # SWIR (Band 7, 3.9 µm) — nighttime fallback for Visible.
+        # Invert so cold Tb (clouds) → bright, warm Tb (surface) → dark.
+        # Visually mimics nighttime visible imagery (cf. Tropical Tidbits
+        # "vis_swir"). Slight gamma stretch to brighten mid-tones.
+        frac = np.clip(1.0 - (arr - vmin) / (vmax - vmin), 0.0, 1.0)
+        gray = (np.power(frac, 0.7) * 245 + 10).astype(np.uint8)
+        rgb = np.stack([gray, gray, gray], axis=-1)
     else:
         # Vis: no inversion — high reflectance = bright (white clouds)
         frac = np.clip((arr - vmin) / (vmax - vmin), 0.0, 1.0)
@@ -3867,7 +3875,7 @@ def _get_or_render_band_jpg(
 @router.get("/storm/{atcf_id}/band-frames-bundle")
 def get_storm_band_frames_bundle(
     atcf_id: str,
-    band: int = Query(8, description="Band: 8=WV (6.2 µm), 2=Vis (0.64 µm)"),
+    band: int = Query(8, description="Band: 8=WV (6.2 µm), 2=Vis (0.64 µm), 7=SWIR (3.9 µm, night fallback for Vis)"),
     lookback_hours: float = Query(6.0, ge=1, le=24),
     radius_deg: float = Query(10.0, ge=1.0, le=12.0),
     interval_min: int = Query(15, ge=10, le=60),

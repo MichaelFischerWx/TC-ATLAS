@@ -289,6 +289,27 @@
     var GIBS_VIS_TILEMATRIX = 'GoogleMapsCompatible_Level7';
     var GIBS_VIS_MAX_ZOOM = 7;
 
+    // GIBS mid-level Water Vapor (Band 8, ~6.2 µm) — same TileMatrix/zoom
+    // family as IR (Level6) since GIBS publishes WV at the same 2-km resolution.
+    var GIBS_WV_LAYERS = {
+        'GOES-East':  'GOES-East_ABI_Band8_Upper-Level_Water_Vapor',
+        'GOES-West':  'GOES-West_ABI_Band8_Upper-Level_Water_Vapor',
+        'Himawari':   'Himawari_AHI_Band8_Upper-Level_Water_Vapor'
+    };
+
+    /** detailSatName comes from two sources: bestSatelliteForLon() returns
+     *  'Himawari'/'GOES-East'/'GOES-West', but bundle headers may stamp the
+     *  specific spacecraft ('Himawari-9', 'GOES-19', etc). Collapse to the
+     *  GIBS-family key so layer lookups stay consistent. */
+    function normalizeSatFamily(name) {
+        if (!name) return '';
+        if (/^Himawari/i.test(name))  return 'Himawari';
+        if (/^GOES-East/i.test(name)) return 'GOES-East';
+        if (/^GOES-West/i.test(name)) return 'GOES-West';
+        if (/^GOES-1[678]|^GOES-19/i.test(name)) return 'GOES-East';   // GOES-16/17 = East legacy
+        return name;
+    }
+
     // Satellite coverage zones for seamless compositing.
     // Each satellite has a "core" range (full opacity) and a narrow cross-fade
     // at the boundary to the adjacent satellite.  Core zones are set so that
@@ -784,7 +805,7 @@
         if (!_elAnimPlay) _elAnimPlay = document.getElementById('ir-anim-play');
     }
 
-    // Product mode: 'eir' (IR) or 'geocolor'
+    // Product mode: 'eir' (IR), 'geocolor', 'vis', 'wv'
     var productMode = 'eir';
 
     // GeoColor overlay state
@@ -794,6 +815,23 @@
     var geocolorFramesReady = false;
     var geocolorValidFrames = [];
     var geocolorFrameHasError = [];
+
+    // Visible (Red Band 2/3) overlay state — daytime only; nighttime
+    // frames are skipped (filtered by solar elevation at load time).
+    var visFrameLayers = [];
+    var visFrameTimes = [];
+    var visFramesLoaded = 0;
+    var visFramesReady = false;
+    var visValidFrames = [];
+    var visFrameHasError = [];
+
+    // Water Vapor (Band 8) overlay state
+    var wvFrameLayers = [];
+    var wvFrameTimes = [];
+    var wvFramesLoaded = 0;
+    var wvFramesReady = false;
+    var wvValidFrames = [];
+    var wvFrameHasError = [];
 
     // ── Helpers ─────────────────────────────────────────────────
 
@@ -1617,22 +1655,27 @@
     }
     window.toggleLabels = toggleLabels;
 
-    // ── Lat/lon graticule (RT Global Map) ─────────────────────────
+    // ── Lat/lon graticule (RT Global Map + Storm Card) ────────────
     // L.layerGroup holding all polylines + label divIcons. Rebuilt on
     // moveend/zoomend with adaptive spacing so meso zooms get a fine
-    // 1° grid while world view gets a sparse 10° grid.
+    // 1° grid while world view gets a sparse 10° grid. Two instances —
+    // one for the global map (_rtGraticule) and one for the storm card
+    // detail map (_detailGraticule) — sharing the same builder.
     var _rtGraticule = null;
+    var _detailGraticule = null;
     function _rtGraticuleStep(z) {
         if (z >= 7) return 1;
         if (z >= 5) return 2;
         if (z >= 3) return 5;
         return 10;
     }
-    function _rtRebuildGraticule() {
-        if (!_rtGraticule || !map) return;
-        _rtGraticule.clearLayers();
-        var step = _rtGraticuleStep(map.getZoom());
-        var b = map.getBounds();
+    /** Build polylines + labels for the active graticule on `targetMap`.
+     *  Stops drawing if the graticule has been cleaned up. */
+    function _buildGraticuleFor(layerGroup, targetMap) {
+        if (!layerGroup || !targetMap) return;
+        layerGroup.clearLayers();
+        var step = _rtGraticuleStep(targetMap.getZoom());
+        var b = targetMap.getBounds();
         var sLat = Math.max(-85, Math.floor(b.getSouth() / step) * step);
         var nLat = Math.min( 85, Math.ceil(b.getNorth() / step) * step);
         var wLon = Math.floor(b.getWest() / step) * step;
@@ -1643,7 +1686,7 @@
         };
         for (var lat = sLat; lat <= nLat; lat += step) {
             L.polyline([[lat, wLon], [lat, eLon]], lineOpts)
-                .addTo(_rtGraticule);
+                .addTo(layerGroup);
             // Latitude label — pinned to the left edge of the viewport,
             // not the line endpoint, so users don't have to scan across
             // the map for the label.
@@ -1655,11 +1698,11 @@
                     iconSize: [40, 14], iconAnchor: [0, 7]
                 }),
                 interactive: false, keyboard: false
-            }).addTo(_rtGraticule);
+            }).addTo(layerGroup);
         }
         for (var lon = wLon; lon <= eLon; lon += step) {
             L.polyline([[sLat, lon], [nLat, lon]], lineOpts)
-                .addTo(_rtGraticule);
+                .addTo(layerGroup);
             var labelLat = b.getSouth() + (b.getNorth() - b.getSouth()) * 0.015;
             L.marker([labelLat, lon], {
                 icon: L.divIcon({
@@ -1668,9 +1711,43 @@
                     iconSize: [50, 14], iconAnchor: [25, 14]
                 }),
                 interactive: false, keyboard: false
-            }).addTo(_rtGraticule);
+            }).addTo(layerGroup);
         }
     }
+    function _rtRebuildGraticule() { _buildGraticuleFor(_rtGraticule, map); }
+    function _detailRebuildGraticule() { _buildGraticuleFor(_detailGraticule, detailMap); }
+
+    /** Add the lat/lon graticule to the storm card's detail map. Called
+     *  from openStormDetail after detailMap exists; cleaned up by
+     *  closeStormDetail along with the rest of detailMap. */
+    function _detailEnableGraticule() {
+        if (!detailMap || _detailGraticule) return;
+        _detailGraticule = L.layerGroup().addTo(detailMap);
+        _detailRebuildGraticule();
+        detailMap.on('moveend zoomend', _detailRebuildGraticule);
+    }
+    function _detailDisableGraticule() {
+        if (!detailMap) return;
+        if (_detailGraticule) {
+            detailMap.removeLayer(_detailGraticule);
+            detailMap.off('moveend zoomend', _detailRebuildGraticule);
+            _detailGraticule = null;
+        }
+    }
+    window._irToggleDetailGrid = function () {
+        if (!detailMap) return;
+        var btn = document.getElementById('ir-detail-grid-toggle');
+        if (_detailGraticule) {
+            _detailDisableGraticule();
+            if (btn) btn.classList.remove('active');
+            _ga('rt_detail_graticule_toggle', { on: false });
+        } else {
+            _detailEnableGraticule();
+            if (btn) btn.classList.add('active');
+            _ga('rt_detail_graticule_toggle', { on: true });
+        }
+    };
+
     function _rtToggleGraticule() {
         if (!map) return;
         if (_rtGraticule) {
@@ -2353,19 +2430,23 @@
             onAdd: function () {
                 var container = L.DomUtil.create('div', 'ir-global-colorbar');
                 container.id = 'ir-global-colorbar';
-                container.style.cssText = 'background:rgba(0,0,0,0.65);padding:6px 10px;border-radius:4px;font-family:JetBrains Mono,monospace;font-size:0.65rem;color:rgba(255,255,255,0.7);pointer-events:none;margin-bottom:4px;';
+                container.style.cssText = 'background:rgba(0,0,0,0.65);padding:6px 10px;border-radius:4px;font-family:\'DM Sans\',sans-serif;font-variant-numeric:tabular-nums;font-size:0.65rem;color:rgba(255,255,255,0.7);pointer-events:none;margin-bottom:4px;';
                 L.DomEvent.disableClickPropagation(container);
 
                 var label = L.DomUtil.create('div', '', container);
-                label.textContent = 'Brightness Temp (K)';
+                label.textContent = 'Brightness Temp (°C)';
                 label.style.cssText = 'margin-bottom:2px;';
 
                 var bar = L.DomUtil.create('div', '', container);
+                // GIBS Band 13 Clean Infrared default colormap — matches
+                // NASA's rendering of the tiles served on the global map
+                // (NOT Claude IR; the storm-card bundles use Claude IR
+                // because they go through satellite_ir.py first).
                 bar.style.cssText = 'width:160px;height:10px;border-radius:2px;margin:4px 0 2px;background:linear-gradient(to right,rgb(8,8,8),rgb(90,90,90),rgb(200,200,200),rgb(0,100,255),rgb(0,255,0),rgb(255,180,0),rgb(255,0,0),rgb(180,0,180),rgb(255,255,255));';
 
                 var labels = L.DomUtil.create('div', '', container);
                 labels.style.cssText = 'display:flex;justify-content:space-between;font-size:0.6rem;';
-                labels.innerHTML = '<span>310</span><span>250</span><span>190</span>';
+                labels.innerHTML = '<span>+35</span><span>-25</span><span>-85</span>';
 
                 return container;
             }
@@ -2781,6 +2862,7 @@
                         updateStats(parsed);
                         renderStormMarkers(stormData);
                         _rtPushStormsToMwLayer();
+                        try { window.dispatchEvent(new CustomEvent('ir-storms-loaded')); } catch (e) {}
                         handleDeepLink();
                         console.log('[RT Monitor] Showing ' + stormData.length + ' cached storms while fetching fresh data');
                     }
@@ -2806,6 +2888,12 @@
             .then(function (data) {
                 if (data === null) return;  // 304 — nothing changed
                 stormData = data.storms || [];
+
+                // Notify listeners (e.g. Storm Satellite tab) that a fresh
+                // active-storms list is available so they can pick a default.
+                if (stormData.length > 0) {
+                    try { window.dispatchEvent(new CustomEvent('ir-storms-loaded')); } catch (e) {}
+                }
 
                 // Cache to localStorage for instant display on next visit
                 try { localStorage.setItem(_LS_STORMS_KEY, JSON.stringify(data)); } catch (e) { }
@@ -2874,8 +2962,10 @@
         // ArrayBuffer can be GC'd. No-op when the GIBS or per-frame path
         // is active (those don't populate _activeFrameBlobUrls).
         _revokeActiveFrameBlobUrls();
-        // Also clean up GeoColor frames
+        // Also clean up GeoColor / Visible / WV frames
         cleanupGeocolorFrameLayers();
+        cleanupVisFrameLayers();
+        cleanupWvFrameLayers();
     }
 
     /** Show/hide the loading progress overlay on the detail map */
@@ -3123,6 +3213,12 @@
     var _GCS_BUNDLE_BASE = 'https://storage.googleapis.com/tc-atlas-ir-cache/rt-v10/bundles';
     function _gcsFramesBundleUrl(atcfId) {
         return _GCS_BUNDLE_BASE + '/frames/' + encodeURIComponent(atcfId.toUpperCase()) + '.bin';
+    }
+    /** GCS URL for the per-band pre-rendered WebP bundle (band 2 = Vis,
+     *  band 8 = WV). Same on-disk format as the IR frames bundle. */
+    function _gcsBandBundleUrl(atcfId, band) {
+        return _GCS_BUNDLE_BASE + '/band/' + band + '/' +
+               encodeURIComponent(atcfId.toUpperCase()) + '.bin';
     }
     function _gcsRawBundleUrl(atcfId) {
         return _GCS_BUNDLE_BASE + '/raw/' + encodeURIComponent(atcfId.toUpperCase()) + '.bin';
@@ -3515,6 +3611,13 @@
             subdomains: 'abcd', maxZoom: 19
         }).addTo(detailMap);
 
+        // Lat/lon graticule — default ON for the storm card. Storm-relative
+        // framing makes a reference grid genuinely useful (the imagery
+        // moves with the storm; the grid stays anchored to real lat/lon).
+        _detailEnableGraticule();
+        var _gridBtn = document.getElementById('ir-detail-grid-toggle');
+        if (_gridBtn) _gridBtn.classList.add('active');
+
         // Store storm position for solar elevation calculations (GeoColor day/night)
         detailStormLat = storm.lat;
         detailStormLon = storm.lon;
@@ -3666,10 +3769,21 @@
         // Reset product state for new storm
         productMode = 'eir';
         cleanupGeocolorFrameLayers();
+        cleanupVisFrameLayers();
+        cleanupWvFrameLayers();
+        // Intensity Forecast is a model artifact — keep it hidden until the
+        // user explicitly clicks Models. Otherwise switching storms would
+        // expose a stale (or empty) forecast panel.
+        var _intResetSec = document.getElementById('ir-intensity-section');
+        if (_intResetSec) _intResetSec.style.display = 'none';
         var eirBtn = document.getElementById('ir-product-eir');
         var geoBtn = document.getElementById('ir-product-geocolor');
+        var visBtnNew = document.getElementById('ir-product-vis');
+        var wvBtnNew = document.getElementById('ir-product-wv');
         if (eirBtn) eirBtn.classList.add('ir-product-active');
         if (geoBtn) geoBtn.classList.remove('ir-product-active');
+        if (visBtnNew) visBtnNew.classList.remove('ir-product-active');
+        if (wvBtnNew) wvBtnNew.classList.remove('ir-product-active');
 
         // Find storm in current data
         var storm = null;
@@ -3685,9 +3799,15 @@
             return;
         }
 
-        // Update URL hash for deep linking
+        // Update URL hash for deep linking. Preserve the satellite-tab
+        // marker when the card is the Sat tab's landing view, so reload
+        // / share keeps the user on the tab they were on.
         if (window.history && window.history.replaceState) {
-            window.history.replaceState(null, '', 'realtime_ir.html#' + atcfId);
+            var _view = document.documentElement.getAttribute('data-view');
+            var _newHash = (_view === 'satellite')
+                ? '#satellite&storm=' + atcfId
+                : '#' + atcfId;
+            window.history.replaceState(null, '', 'realtime_ir.html' + _newHash);
         }
 
         // Hide map view, show detail
@@ -3695,6 +3815,10 @@
         document.getElementById('ir-legend').style.display = 'none';
         var detailEl = document.getElementById('ir-detail');
         detailEl.style.display = 'block';
+
+        // Populate the in-tab storm picker (so users can switch storms
+        // without leaving the card).
+        _populateDetailStormPicker(atcfId);
 
         // Populate header
         var cat = storm.category || windToCategory(storm.vmax_kt);
@@ -3955,7 +4079,8 @@
     }
 
     /** Close the detail view and return to the map */
-    function closeStormDetail() {
+    function closeStormDetail(opts) {
+        var skipTabRoute = !!(opts && opts.skipTabRoute);
         currentStormId = null;
         stopAnimation();
 
@@ -3966,34 +4091,61 @@
 
         // Reset product state
         cleanupGeocolorFrameLayers();
+        cleanupVisFrameLayers();
+        cleanupWvFrameLayers();
         rawTbFrames = [];
         productMode = 'eir';
 
         var eirBtn = document.getElementById('ir-product-eir');
         var geoBtn = document.getElementById('ir-product-geocolor');
+        var visBtnReset = document.getElementById('ir-product-vis');
+        var wvBtnReset = document.getElementById('ir-product-wv');
         if (eirBtn) eirBtn.classList.add('ir-product-active');
         if (geoBtn) geoBtn.classList.remove('ir-product-active');
+        if (visBtnReset) visBtnReset.classList.remove('ir-product-active');
+        if (wvBtnReset) wvBtnReset.classList.remove('ir-product-active');
         var tbLegend = document.getElementById('ir-tb-legend');
         if (tbLegend) tbLegend.style.display = 'none';
+        var wvLegend = document.getElementById('ir-wv-legend');
+        if (wvLegend) wvLegend.style.display = 'none';
 
         // Clean up pre-loaded frame layers
         cleanupFrameLayers();
 
         // Clean up detail mini-map
         if (detailMap) {
+            // Detach graticule listeners before tearing the map down so
+            // moveend/zoomend callbacks don't fire against a dead map.
+            _detailDisableGraticule();
             detailMap.remove();
             detailMap = null;
         }
+        _detailGraticule = null;
         var detailMapDiv = document.getElementById('ir-detail-map');
         if (detailMapDiv) detailMapDiv.style.display = 'none';
 
-        // Update URL
-        if (window.history && window.history.replaceState) {
+        // If the user is on the Storm Satellite tab when the back button
+        // fires, route through the tab system so we land on the Map tab
+        // properly (resets data-view, tab indicators, hash). Otherwise
+        // the legacy in-place close (Map tab → hide card, show map).
+        // Callers can pass {skipTabRoute:true} to do the cleanup without
+        // changing tabs (used by "Loop Only" which manages the view itself).
+        var _activeView = document.documentElement.getAttribute('data-view');
+        document.getElementById('ir-detail').style.display = 'none';
+        if (!skipTabRoute && _activeView === 'satellite' && typeof window.switchIRView === 'function') {
+            window.switchIRView('map');
+            _ga('ir_close_detail');
+            return;
+        }
+
+        // Update URL — but only when this is a real close (going back
+        // to the map). Loop Only / soft-close callers manage the hash
+        // themselves and we'd just stomp on the Sat-tab marker.
+        if (!skipTabRoute && window.history && window.history.replaceState) {
             window.history.replaceState(null, '', 'realtime_ir.html');
         }
 
         // Hide detail, show map
-        document.getElementById('ir-detail').style.display = 'none';
         document.getElementById('ir-main').style.display = 'block';
         // Restore legend visibility to whatever the toggle button reflects
         // (off by default; on only if the user explicitly opted in via the
@@ -4064,6 +4216,24 @@
                 showFn: showGeocolorFrame
             };
         }
+        if (productMode === 'vis') {
+            return {
+                valid: visValidFrames,
+                layers: visFrameLayers,
+                times: visFrameTimes,
+                ready: visFramesReady,
+                showFn: showVisFrame
+            };
+        }
+        if (productMode === 'wv') {
+            return {
+                valid: wvValidFrames,
+                layers: wvFrameLayers,
+                times: wvFrameTimes,
+                ready: wvFramesReady,
+                showFn: showWvFrame
+            };
+        }
         return {
             valid: validFrames,
             layers: animFrameLayers,
@@ -4121,6 +4291,33 @@
         updateAnimCounter();
     }
 
+    /** Playback speed multipliers, ordered slow → fast. 1× = default
+     *  500 ms / frame (the legacy cadence). Stepping with the −/+ buttons
+     *  cycles through this list; the chosen multiplier scales animIntervalMs. */
+    var ANIM_SPEED_STEPS = [0.25, 0.5, 1, 2, 4, 8];
+    var ANIM_BASE_INTERVAL_MS = 500;
+    var animSpeedIdx = 2;  // index into ANIM_SPEED_STEPS — starts at 1×
+
+    function _applyAnimSpeed() {
+        var mult = ANIM_SPEED_STEPS[animSpeedIdx] || 1;
+        animIntervalMs = Math.round(ANIM_BASE_INTERVAL_MS / mult);
+        var lbl = document.getElementById('ir-anim-speed-label');
+        if (lbl) {
+            // Use × for integer multipliers, drop trailing zeros for fractions
+            lbl.textContent = (mult >= 1 ? mult : mult.toString()) + '×';
+        }
+        var dn = document.getElementById('ir-anim-speed-down');
+        var up = document.getElementById('ir-anim-speed-up');
+        if (dn) dn.disabled = (animSpeedIdx <= 0);
+        if (up) up.disabled = (animSpeedIdx >= ANIM_SPEED_STEPS.length - 1);
+    }
+
+    function bumpAnimSpeed(dir) {
+        animSpeedIdx = Math.max(0, Math.min(ANIM_SPEED_STEPS.length - 1, animSpeedIdx + dir));
+        _applyAnimSpeed();
+        _ga('ir_anim_speed', { mult: ANIM_SPEED_STEPS[animSpeedIdx] });
+    }
+
     /** Toggle play/pause */
     function togglePlay() {
         if (animPlaying) {
@@ -4130,10 +4327,21 @@
         }
     }
 
-    /** rAF tick for detail animation */
+    /** rAF tick for detail animation. Holds the LAST valid frame for an
+     *  extra dwell time so the viewer can orient before the loop restarts
+     *  — a standard "pause at present" cue (Tropical Tidbits, MIMIC, etc).
+     *  Multiplier scales with the player speed so 4× still gets a longer
+     *  pause than every other frame, but is also shorter in wall-clock. */
+    var ANIM_LAST_FRAME_PAUSE_MULT = 3;  // last frame held 3× the normal interval
     function _animTick(ts) {
         if (!animPlaying) return;
-        if (ts - animLastTick >= animIntervalMs) {
+        var state = activeFrameState();
+        var atLast = state && state.valid && state.valid.length > 0 &&
+                     state.valid[state.valid.length - 1] === animIndex;
+        var interval = atLast
+            ? animIntervalMs * ANIM_LAST_FRAME_PAUSE_MULT
+            : animIntervalMs;
+        if (ts - animLastTick >= interval) {
             animLastTick = ts;
             nextFrame();
         }
@@ -4177,6 +4385,14 @@
     function renderIntensityChart(meta) {
         var chartEl = document.getElementById('ir-intensity-chart');
         if (!chartEl || typeof Plotly === 'undefined') return;
+        // If the DeepMind ensemble forecast is already rendered (the
+        // richer per-tau percentile-bands view), don't stomp it with the
+        // simpler best-track history line. Best-track is a fallback for
+        // storms without WeatherLab coverage.
+        if (_rtWeatherlabData) return;
+        // We're rendering history (no forecast). Reflect that in the heading.
+        var heading = document.getElementById('ir-intensity-heading');
+        if (heading) heading.textContent = 'Intensity History';
         chartEl.className = 'ir-intensity-chart';  // remove skeleton
 
         var history = meta.intensity_history || [];
@@ -4212,13 +4428,13 @@
             plot_bgcolor: 'rgba(0,0,0,0)',
             xaxis: {
                 gridcolor: 'rgba(255,255,255,0.04)',
-                tickfont: { size: 9, color: '#5b6573', family: 'JetBrains Mono' },
+                tickfont: { size: 9, color: '#5b6573', family: 'DM Sans, sans-serif' },
                 tickformat: '%m/%d %Hz'
             },
             yaxis: {
-                title: { text: 'Vmax (kt)', font: { size: 10, color: '#5b6573' } },
+                title: { text: 'Vmax (kt)', font: { size: 10, color: '#5b6573', family: 'DM Sans, sans-serif' } },
                 gridcolor: 'rgba(255,255,255,0.04)',
-                tickfont: { size: 9, color: '#5b6573', family: 'JetBrains Mono' }
+                tickfont: { size: 9, color: '#5b6573', family: 'DM Sans, sans-serif' }
             },
             // SS category shading bands
             shapes: [
@@ -4250,23 +4466,29 @@
         productMode = mode;
 
         // Update toggle button active states
-        var eirBtn = document.getElementById('ir-product-eir');
-        var geoBtn = document.getElementById('ir-product-geocolor');
-        if (eirBtn) eirBtn.classList.toggle('ir-product-active', mode === 'eir');
-        if (geoBtn) geoBtn.classList.toggle('ir-product-active', mode === 'geocolor');
+        var btnMap = {
+            eir:      document.getElementById('ir-product-eir'),
+            geocolor: document.getElementById('ir-product-geocolor'),
+            vis:      document.getElementById('ir-product-vis'),
+            wv:       document.getElementById('ir-product-wv')
+        };
+        for (var k in btnMap) {
+            if (btnMap[k]) btnMap[k].classList.toggle('ir-product-active', mode === k);
+        }
 
-        // Show/hide legends
+        // Show/hide legends — IR Tb gradient for 'eir', WV gradient for 'wv',
+        // none for visible/GeoColor (those carry pre-rendered NASA colorbars).
         var tbLeg = document.getElementById('ir-tb-legend');
         if (tbLeg) tbLeg.style.display = (mode === 'eir') ? 'block' : 'none';
+        var wvLeg = document.getElementById('ir-wv-legend');
+        if (wvLeg) wvLeg.style.display = (mode === 'wv') ? 'block' : 'none';
 
         // --- Deactivate previous mode ---
-        if (prevMode === 'eir') {
-            hideAllAnimFrames();
-            stopAnimation();
-        } else if (prevMode === 'geocolor') {
-            hideAllGeocolorFrames();
-            stopAnimation();
-        }
+        stopAnimation();
+        if (prevMode === 'eir')           hideAllAnimFrames();
+        else if (prevMode === 'geocolor') hideAllGeocolorFrames();
+        else if (prevMode === 'vis')      hideAllVisFrames();
+        else if (prevMode === 'wv')       hideAllWvFrames();
 
         // --- Activate new mode ---
         if (mode === 'eir') {
@@ -4290,6 +4512,10 @@
             updateAnimCounter();
         } else if (mode === 'geocolor') {
             loadGeocolorFrames();
+        } else if (mode === 'vis') {
+            loadVisFrames();
+        } else if (mode === 'wv') {
+            loadWvFrames();
         }
     }
 
@@ -4959,6 +5185,329 @@
     }
 
     // ═══════════════════════════════════════════════════════════
+    //  VISIBLE + WATER VAPOR PRODUCT PIPELINES
+    //  GIBS tile-layer based, parallel to GeoColor. Frame times mirror
+    //  the IR frame times so the slider/scrubber are interchangeable
+    //  across product modes.
+    // ═══════════════════════════════════════════════════════════
+
+    function hideAllVisFrames() {
+        for (var i = 0; i < visFrameLayers.length; i++) {
+            if (visFrameLayers[i]) visFrameLayers[i].setOpacity(0);
+        }
+    }
+    function hideAllWvFrames() {
+        for (var i = 0; i < wvFrameLayers.length; i++) {
+            if (wvFrameLayers[i]) wvFrameLayers[i].setOpacity(0);
+        }
+    }
+    function cleanupVisFrameLayers() {
+        for (var i = 0; i < visFrameLayers.length; i++) {
+            if (detailMap && visFrameLayers[i]) detailMap.removeLayer(visFrameLayers[i]);
+        }
+        for (var b = 0; b < _activeVisBlobUrls.length; b++) {
+            try { URL.revokeObjectURL(_activeVisBlobUrls[b]); } catch (e) {}
+        }
+        _activeVisBlobUrls = [];
+        visFrameLayers = []; visFrameTimes = []; visValidFrames = [];
+        visFrameHasError = []; visFramesLoaded = 0; visFramesReady = false;
+    }
+    function cleanupWvFrameLayers() {
+        for (var i = 0; i < wvFrameLayers.length; i++) {
+            if (detailMap && wvFrameLayers[i]) detailMap.removeLayer(wvFrameLayers[i]);
+        }
+        for (var b = 0; b < _activeWvBlobUrls.length; b++) {
+            try { URL.revokeObjectURL(_activeWvBlobUrls[b]); } catch (e) {}
+        }
+        _activeWvBlobUrls = [];
+        wvFrameLayers = []; wvFrameTimes = []; wvValidFrames = [];
+        wvFrameHasError = []; wvFramesLoaded = 0; wvFramesReady = false;
+    }
+
+    /** Track blob URLs we create from band bundles so we can revoke them on
+     *  cleanup (avoid leaking gigabytes of WebP data across storm switches). */
+    var _activeVisBlobUrls = [];
+    var _activeWvBlobUrls = [];
+
+    /** Shared loader for the per-band WebP bundles. `band` is 2 (Visible) or
+     *  8 (Water Vapor). Mirrors the IR frames-bundle path: fetch the .bin
+     *  from GCS, parse header + payload offsets, slice the buffer into
+     *  Blob → L.imageOverlay layers, animate them via the standard
+     *  scrubber by toggling opacity. */
+    function _loadBandFramesBundle(band, productKey) {
+        if (!detailMap || !currentStormId) return;
+
+        // Both Band 2 (Vis) and Band 7 (SWIR) share the 'vis' product
+        // bucket on the frontend — SWIR is the nighttime fallback for
+        // the Visible button. WV is its own bucket.
+        var isVis = (productKey === 'vis');  // 'isVis' = vis-product bucket
+        var stateLayers = isVis ? visFrameLayers : wvFrameLayers;
+        var stateTimes  = isVis ? visFrameTimes  : wvFrameTimes;
+        var stateValid  = isVis ? visValidFrames : wvValidFrames;
+        var blobBucket  = isVis ? _activeVisBlobUrls : _activeWvBlobUrls;
+        var btnId       = isVis ? 'ir-product-vis' : 'ir-product-wv';
+        var label       = isVis ? 'Visible' : 'WV';
+        var fullLabel;
+        if (band === 8)      fullLabel = 'Water Vapor';
+        else if (band === 7) fullLabel = 'Visible (SWIR night)';
+        else                 fullLabel = 'Visible';
+
+        // Already loaded → just restore slider and show latest frame.
+        var readyFlag = isVis ? visFramesReady : wvFramesReady;
+        if (readyFlag && stateLayers.length > 0) {
+            var slider = document.getElementById('ir-anim-slider');
+            if (slider && stateValid.length > 0) {
+                slider.max = stateValid.length - 1;
+                slider.value = stateValid.length - 1;
+            }
+            var playBtn = document.getElementById('ir-anim-play');
+            if (playBtn) playBtn.disabled = false;
+            var showFn = isVis ? showVisFrame : showWvFrame;
+            showFn(stateValid.length > 0 ? stateValid[stateValid.length - 1] : stateLayers.length - 1);
+            updateAnimCounter();
+            return;
+        }
+        // Already loading → bail
+        if (stateLayers.length > 0 && !readyFlag) return;
+
+        // Reset state
+        if (isVis) {
+            visFrameTimes = []; visFramesLoaded = 0; visFramesReady = false;
+            visValidFrames = []; visFrameHasError = [];
+        } else {
+            wvFrameTimes = []; wvFramesLoaded = 0; wvFramesReady = false;
+            wvValidFrames = []; wvFrameHasError = [];
+        }
+
+        var btn = document.getElementById(btnId);
+        if (btn) { btn.classList.add('ir-loading'); btn.textContent = 'Loading…'; }
+        showLoadingProgress(true, 0);
+
+        var satLabel = document.getElementById('ir-satellite-label');
+        if (satLabel) satLabel.textContent = fullLabel + ' — ' + detailSatName;
+
+        var gcsUrl = _gcsBandBundleUrl(currentStormId, band);
+        // API fallback when the prewarmed GCS bundle is missing (typical
+        // when this band isn't the one currently prewarmed for the storm —
+        // e.g. Vis at night, WV during daytime).
+        var apiUrl = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(currentStormId)
+                   + '/band-frames-bundle?band=' + band;
+        var stormIdAtFetch = currentStormId;
+
+        fetch(gcsUrl)
+            .then(function (r) {
+                if (!r.ok) throw new Error('GCS bundle HTTP ' + r.status);
+                return r.arrayBuffer();
+            })
+            .catch(function () {
+                // GCS miss — assemble fresh via the API.
+                return fetch(apiUrl)
+                    .then(function (r) {
+                        if (!r.ok) throw new Error('API bundle HTTP ' + r.status);
+                        return r.arrayBuffer();
+                    });
+            })
+            .then(function (buf) {
+                // Storm switched while we were fetching — drop the result.
+                if (stormIdAtFetch !== currentStormId || productMode !== productKey) return;
+                _ingestBandBundle(buf, band, productKey);
+            })
+            .catch(function (err) {
+                console.warn('[RT Monitor] Band ' + band + ' bundle unavailable:', err.message);
+                if (btn) { btn.classList.remove('ir-loading'); btn.textContent = label; }
+                showLoadingProgress(false);
+                if (productMode === productKey) setProductMode('eir');
+            });
+    }
+
+    function _ingestBandBundle(buf, band, productKey) {
+        var isVis = (productKey === 'vis');  // covers band 2 and band 7
+        var blobBucket = isVis ? _activeVisBlobUrls : _activeWvBlobUrls;
+        var label      = isVis ? 'Visible' : 'WV';
+        var btnId      = isVis ? 'ir-product-vis' : 'ir-product-wv';
+        var fullLabel;
+        if (band === 8)      fullLabel = 'Water Vapor';
+        else if (band === 7) fullLabel = 'Visible (SWIR night)';
+        else                 fullLabel = 'Visible';
+
+        var dv = new DataView(buf);
+        var header;
+        var binBase;
+        try {
+            if (buf.byteLength < 4) throw new Error('bundle too small');
+            var headerLen = dv.getUint32(0, true);
+            if (4 + headerLen > buf.byteLength) throw new Error('header overruns body');
+            var headerBytes = new Uint8Array(buf, 4, headerLen);
+            header = JSON.parse(new TextDecoder('utf-8').decode(headerBytes));
+            binBase = 4 + headerLen;
+        } catch (e) {
+            console.warn('[RT Monitor] Band ' + band + ' bundle parse failed:', e.message);
+            if (productMode === productKey) setProductMode('eir');
+            return;
+        }
+
+        var frames = (header && header.frames) || [];
+        if (!frames.length) {
+            console.warn('[RT Monitor] Band ' + band + ' bundle had no frames');
+            if (productMode === productKey) setProductMode('eir');
+            return;
+        }
+
+        // Storm-relative framing: place every frame at the LATEST valid frame's
+        // bounds. Matches the IR card behavior so cloud motion reads cleanly
+        // without edge jitter. Find the most recent non-error frame.
+        var latestFh = null;
+        for (var li = frames.length - 1; li >= 0; li--) {
+            if (frames[li].byte_length && !frames[li].error && frames[li].bounds) {
+                latestFh = frames[li]; break;
+            }
+        }
+        var ub = (latestFh && latestFh.bounds) || header.bounds;
+        if (!ub) {
+            console.warn('[RT Monitor] Band ' + band + ' bundle missing bounds');
+            if (productMode === productKey) setProductMode('eir');
+            return;
+        }
+        var unifiedBounds = L.latLngBounds(L.latLng(ub[0][0], ub[0][1]), L.latLng(ub[1][0], ub[1][1]));
+
+        var mediaType = header.media_type || 'image/webp';
+        var times = [];
+        var hasErr = [];
+        var layers = [];
+        var validIdx = [];
+        var loaded = 0;
+        var goodCount = 0;
+
+        var btn = document.getElementById(btnId);
+
+        function finalize() {
+            if (isVis) {
+                visFrameTimes = times; visFrameLayers = layers; visFrameHasError = hasErr;
+                visValidFrames = validIdx; visFramesReady = true; visFramesLoaded = frames.length;
+            } else {
+                wvFrameTimes = times; wvFrameLayers = layers; wvFrameHasError = hasErr;
+                wvValidFrames = validIdx; wvFramesReady = true; wvFramesLoaded = frames.length;
+            }
+            showLoadingProgress(false);
+            if (btn) { btn.classList.remove('ir-loading'); btn.textContent = label; }
+            var playBtn = document.getElementById('ir-anim-play');
+            if (playBtn) playBtn.disabled = (validIdx.length === 0);
+            var slider = document.getElementById('ir-anim-slider');
+            if (slider && validIdx.length > 0) {
+                slider.max = validIdx.length - 1;
+                slider.value = validIdx.length - 1;
+                var showFn = isVis ? showVisFrame : showWvFrame;
+                showFn(validIdx[validIdx.length - 1]);
+            }
+            updateAnimCounter();
+            // If nothing came back (all nighttime for Vis, or upstream gap
+            // for WV), tell the user instead of leaving them on a blank pane.
+            if (validIdx.length === 0) {
+                var satLbl = document.getElementById('ir-satellite-label');
+                var msg = isVis
+                    ? 'No daytime frames available — Visible is daylight-only. Try Water Vapor or IR.'
+                    : 'No Water Vapor frames available right now — try IR or GeoColor.';
+                if (satLbl) satLbl.textContent = msg;
+                console.warn('[RT Monitor] Band ' + band + ' bundle had 0 valid frames');
+            } else {
+                console.log('[RT Monitor] Band ' + band + ' bundle: ' + goodCount + '/' + frames.length +
+                            ' WebPs loaded (' + (buf.byteLength / 1024 | 0) + ' KB)');
+            }
+        }
+
+        for (var i = 0; i < frames.length; i++) {
+            var fh = frames[i];
+            times.push(fh.datetime_utc);
+            if (!fh.byte_length || fh.error) {
+                layers.push(null);
+                hasErr.push(true);
+                loaded++;
+                continue;
+            }
+            var slice = new Uint8Array(buf, binBase + fh.byte_offset, fh.byte_length);
+            var blob = new Blob([slice], { type: mediaType });
+            var blobUrl = URL.createObjectURL(blob);
+            blobBucket.push(blobUrl);
+            var overlay = L.imageOverlay(blobUrl, unifiedBounds, {
+                opacity: 0, interactive: false, pane: 'tilePane'
+            });
+            hasErr.push(false);
+            (function (lyr, idx) {
+                lyr.once('error', function () {
+                    hasErr[idx] = true; loaded++;
+                    if (loaded >= frames.length) finalize();
+                });
+                lyr.once('load', function () {
+                    if (!hasErr[idx]) {
+                        validIdx.push(idx);
+                        validIdx.sort(function (a, b) { return a - b; });
+                        goodCount++;
+                    }
+                    loaded++;
+                    var pct = Math.round((loaded / frames.length) * 100);
+                    showLoadingProgress(true, pct);
+                    if (loaded >= frames.length) finalize();
+                });
+            })(overlay, i);
+            layers.push(overlay);
+            overlay.addTo(detailMap);
+        }
+
+        // If every frame was an error-stub (e.g. all nighttime for Vis), finalize now.
+        if (loaded >= frames.length) finalize();
+    }
+
+    /** Load Visible frames. Picks Band 2 during daylight at the storm
+     *  center and Band 7 (3.9 µm shortwave IR) at night — the SWIR
+     *  product mimics nighttime visible imagery (clouds bright, surface
+     *  dark) so the user gets a coherent "visible-like" view 24 h/day,
+     *  similar to Tropical Tidbits' vis_swir loop. */
+    function loadVisFrames() {
+        // Solar elevation at the storm center, current time.
+        var sunEl = -90;
+        if (detailStormLat != null && detailStormLon != null) {
+            try { sunEl = solarElevation(detailStormLat, detailStormLon, new Date()); } catch (e) {}
+        }
+        var useSwir = (sunEl <= -6);  // civil twilight cutoff
+        var band = useSwir ? 7 : 2;
+        _loadBandFramesBundle(band, 'vis');
+    }
+
+    function showVisFrame(idx) {
+        if (idx < 0 || idx >= visFrameLayers.length || !detailMap) return;
+        for (var i = 0; i < visFrameLayers.length; i++) {
+            if (visFrameLayers[i]) visFrameLayers[i].setOpacity(0);
+        }
+        animIndex = idx;
+        if (visFrameLayers[idx]) visFrameLayers[idx].setOpacity(0.92);
+        if (visFrameTimes[idx]) {
+            document.getElementById('ir-frame-time').textContent = fmtUTC(visFrameTimes[idx]);
+        }
+        document.getElementById('ir-satellite-label').textContent = 'Visible — ' + detailSatName;
+        if (_rtModelVisible && _rtModelAutoSync && _rtModelData) _rtSyncModelCycleToIR();
+    }
+
+    /** Load Water Vapor (Band 8) frames from the pre-rendered band bundle
+     *  in GCS. Available 24/7 — every frame should be present in the bundle. */
+    function loadWvFrames() {
+        _loadBandFramesBundle(8, 'wv');
+    }
+
+    function showWvFrame(idx) {
+        if (idx < 0 || idx >= wvFrameLayers.length || !detailMap) return;
+        for (var i = 0; i < wvFrameLayers.length; i++) {
+            if (wvFrameLayers[i]) wvFrameLayers[i].setOpacity(0);
+        }
+        animIndex = idx;
+        if (wvFrameLayers[idx]) wvFrameLayers[idx].setOpacity(0.92);
+        if (wvFrameTimes[idx]) {
+            document.getElementById('ir-frame-time').textContent = fmtUTC(wvFrameTimes[idx]);
+        }
+        document.getElementById('ir-satellite-label').textContent = 'Water Vapor — ' + detailSatName;
+        if (_rtModelVisible && _rtModelAutoSync && _rtModelData) _rtSyncModelCycleToIR();
+    }
+
+    // ═══════════════════════════════════════════════════════════
     //  DEEP LINKING
     // ═══════════════════════════════════════════════════════════
 
@@ -5011,8 +5560,13 @@
             }
             updateAnimCounter();
         });
+        var _spdDn = document.getElementById('ir-anim-speed-down');
+        var _spdUp = document.getElementById('ir-anim-speed-up');
+        if (_spdDn) _spdDn.addEventListener('click', function () { bumpAnimSpeed(-1); });
+        if (_spdUp) _spdUp.addEventListener('click', function () { bumpAnimSpeed(+1); });
+        _applyAnimSpeed();  // seed label + disabled states
 
-        // Product toggle buttons (Enhanced IR / GeoColor / IR Vigor)
+        // Product toggle buttons (IR / GeoColor / Visible / Water Vapor)
         document.getElementById('ir-product-eir').addEventListener('click', function () {
             if (productMode === 'eir') return;
             setProductMode('eir');
@@ -5020,6 +5574,16 @@
         document.getElementById('ir-product-geocolor').addEventListener('click', function () {
             if (productMode === 'geocolor') return;
             setProductMode('geocolor');
+        });
+        var visBtn = document.getElementById('ir-product-vis');
+        if (visBtn) visBtn.addEventListener('click', function () {
+            if (productMode === 'vis') return;
+            setProductMode('vis');
+        });
+        var wvBtn = document.getElementById('ir-product-wv');
+        if (wvBtn) wvBtn.addEventListener('click', function () {
+            if (productMode === 'wv') return;
+            setProductMode('wv');
         });
         // Browser back/forward
         window.addEventListener('popstate', function () {
@@ -5048,6 +5612,73 @@
     /** Global entry point called from popup buttons */
     window._irOpenStorm = function (atcfId) {
         openStormDetail(atcfId);
+    };
+
+    /** Render the in-card storm picker. Hidden when only one storm is
+     *  active (no choice to offer) — otherwise lists every active storm
+     *  sorted by intensity, with the current one selected. */
+    function _populateDetailStormPicker(currentId) {
+        var sel = document.getElementById('ir-detail-storm-select');
+        if (!sel) return;
+        if (!stormData || stormData.length < 2) {
+            sel.style.display = 'none';
+            return;
+        }
+        var sorted = stormData.slice().sort(function (a, b) {
+            return (b.vmax_kt || 0) - (a.vmax_kt || 0);
+        });
+        var opts = [];
+        for (var i = 0; i < sorted.length; i++) {
+            var s = sorted[i];
+            var c = s.category || windToCategory(s.vmax_kt);
+            var label = (s.atcf_id || '') + ' · ' + (s.name || 'UNNAMED') +
+                        ' (' + categoryShort(c) +
+                        (s.vmax_kt != null ? ' ' + s.vmax_kt + ' kt' : '') + ')';
+            var sel_attr = (s.atcf_id === currentId) ? ' selected' : '';
+            opts.push('<option value="' + s.atcf_id + '"' + sel_attr + '>' +
+                      label.replace(/</g, '&lt;') + '</option>');
+        }
+        sel.innerHTML = opts.join('');
+        sel.style.display = '';
+    }
+
+    /** "Loop only" escape hatch on the storm card → switch to the bare
+     *  Quick View animation. Preserves the active storm so the loop
+     *  matches what the user was looking at. Soft-closes the card to
+     *  release frame layers, then shows + activates Quick View directly
+     *  (bypasses switchIRView early-return when already on the Sat tab). */
+    window.openLoopOnlyView = function () {
+        var sid = currentStormId;
+        var parts = ['satellite', 'loop=1'];
+        if (sid) parts.push('storm=' + sid);
+        try {
+            history.replaceState(null, '', 'realtime_ir.html#' + parts.join('&'));
+        } catch (e) {}
+        closeStormDetail({ skipTabRoute: true });
+        var satMain = document.getElementById('sat-main');
+        var satQuick = document.getElementById('sat-quick-view');
+        if (satMain) satMain.style.display = 'none';
+        if (satQuick) satQuick.style.display = 'flex';
+        if (window.activateQuickView) window.activateQuickView();
+        _ga('ir_loop_only');
+    };
+
+    /** Snapshot of active storms (used by the Storm Satellite tab to pick
+     *  a sensible default when the user lands without a specific storm). */
+    window._irGetActiveStorms = function () {
+        return stormData.slice();
+    };
+
+    /** Fire a one-shot callback as soon as stormData is non-empty. If the
+     *  list is already populated, the callback runs synchronously. */
+    window._irOnceStormsLoaded = function (cb) {
+        if (typeof cb !== 'function') return;
+        if (stormData && stormData.length > 0) { cb(stormData.slice()); return; }
+        var handler = function () {
+            window.removeEventListener('ir-storms-loaded', handler);
+            cb(stormData.slice());
+        };
+        window.addEventListener('ir-storms-loaded', handler);
     };
 
     // ═══════════════════════════════════════════════════════════
@@ -5282,12 +5913,26 @@
             if (controls) controls.style.display = 'none';
             _rtClearModelLayers();
             _rtClearModelIntensityTraces();
+            // Also tear down DeepMind ensemble — it was auto-enabled when
+            // Models turned on, so pair the teardown. Without this, the
+            // DeepMind spaghetti + mean line stay on the map after the
+            // user thinks they've turned models off.
+            if (_rtWeatherlabVisible && typeof window._rtToggleWeatherlab === 'function') {
+                window._rtToggleWeatherlab();
+            }
+            // Hide the forecast intensity panel — it's a model artifact too.
+            var _intSec = document.getElementById('ir-intensity-section');
+            if (_intSec) _intSec.style.display = 'none';
             return;
         }
 
         _rtModelVisible = true;
         if (btn) btn.textContent = 'Hide Models';
         if (controls) controls.style.display = '';
+        // Reveal the forecast intensity panel. Renderer fires from the
+        // WeatherLab .then(), so the chart populates once the data arrives.
+        var _intSecShow = document.getElementById('ir-intensity-section');
+        if (_intSecShow) _intSecShow.style.display = '';
 
         // Update intensity button to reflect current state
         var intBtn = document.getElementById('rt-model-intensity-btn');
@@ -5698,10 +6343,41 @@
                 var btn = document.getElementById('rt-weatherlab-btn');
                 if (btn) btn.title = json.n_members + ' members, init ' + json.init_time;
                 console.log('[WeatherLab] Loaded ' + json.n_members + ' members for ' + atcfId);
+                // Render the percentile-bands forecast chart into the card's
+                // intensity chart container, replacing the simple history
+                // line with the ensemble fan-chart used in the genesis modal.
+                try { _rtRenderCardForecastIntensity(json); }
+                catch (e) { console.warn('[RT Monitor] card forecast chart render failed:', e); }
             })
             .catch(function () {
                 // Silent — WeatherLab may not have data for this storm
             });
+    }
+
+    /** Render the ensemble percentile-bands forecast plot into the storm
+     *  card's intensity chart container (`ir-intensity-chart`), mirroring
+     *  the genesis-modal view but for an active named storm. Reuses
+     *  _renderGenesisIntensity by passing the card's element id. */
+    function _rtRenderCardForecastIntensity(json) {
+        if (!json || !json.members) return;
+        var el = document.getElementById('ir-intensity-chart');
+        if (!el) return;
+        el.className = 'ir-intensity-chart';  // remove skeleton
+
+        var memberKeys = Object.keys(json.members);
+        if (memberKeys.length === 0) return;
+
+        // Named-storm view: no genesis dashed line (the storm already exists).
+        // Pass stats with genesisMedianTau=null to skip that annotation.
+        var stats = { genesisMedianTau: null };
+        var mean = json.ensemble_mean;
+        if (!mean || !mean.points) return;
+
+        var heading = document.getElementById('ir-intensity-heading');
+        if (heading) heading.textContent = 'Intensity Forecast';
+
+        _renderGenesisIntensity(memberKeys, json.members, mean, stats,
+                                'ir-intensity-chart');
     }
 
     /**
@@ -8842,8 +9518,8 @@
        (No ±σ ribbons or per-member dots — the user asked for the
        simpler "track and intensity forecasts" view, not the colleague's
        statistical layout.) */
-    function _renderGenesisIntensity(memberKeys, members, mean, stats) {
-        var el = document.getElementById('rt-genesis-modal-int');
+    function _renderGenesisIntensity(memberKeys, members, mean, stats, elId) {
+        var el = document.getElementById(elId || 'rt-genesis-modal-int');
         if (!el || typeof Plotly === 'undefined') return;
         var theme = _genesisTheme();
         var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
@@ -11523,6 +12199,7 @@
         _rtRenderIntensityHist();
         _rtRenderChangeHist();
         _rtRenderLmiHist();
+        _rtRenderLmiVsTau();
     }
 
     window._rtDmHistSlide = function (idx) {
@@ -11640,7 +12317,7 @@
             margin: { t: 25, r: 10, b: 30, l: 40 },
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: 'rgba(0,0,0,0)',
-            font: { family: 'JetBrains Mono, monospace', size: 9, color: '#5b6573' },
+            font: { family: 'DM Sans, sans-serif', size: 9, color: '#5b6573' },
             xaxis: {
                 title: { text: 'Vmax (kt)', font: { size: 9 } },
                 range: [0, 175],
@@ -11761,7 +12438,7 @@
             margin: { t: 20, r: 10, b: 30, l: 35 },
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: 'rgba(0,0,0,0)',
-            font: { family: 'JetBrains Mono, monospace', size: 9, color: '#5b6573' },
+            font: { family: 'DM Sans, sans-serif', size: 9, color: '#5b6573' },
             xaxis: {
                 title: { text: '\u0394V (kt/' + _rtDmChangeInt + 'h)', font: { size: 9 } },
                 gridcolor: 'rgba(255,255,255,0.05)',
@@ -11889,7 +12566,7 @@
             margin: { t: 30, r: 10, b: 30, l: 40 },
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: 'rgba(0,0,0,0)',
-            font: { family: 'JetBrains Mono, monospace', size: 9, color: '#5b6573' },
+            font: { family: 'DM Sans, sans-serif', size: 9, color: '#5b6573' },
             xaxis: {
                 title: { text: 'LMI Vmax (kt)', font: { size: 9 } },
                 range: [0, 185],
@@ -11908,6 +12585,106 @@
         };
 
         Plotly.newPlot(chartEl, [trace], layout, {
+            displayModeBar: false, responsive: false, staticPlot: true
+        });
+    }
+
+    /** 2D density: for each ensemble member, find (lead time of peak,
+     *  peak Vmax). Plot as a histogram2d heatmap so the user sees both
+     *  WHEN the bulk of members peak and HOW STRONG those peaks are at
+     *  a single glance. Complements the 1D LMI histogram above. */
+    function _rtRenderLmiVsTau() {
+        if (!_rtDmEnsData || typeof Plotly === 'undefined') return;
+        var chartEl = document.getElementById('rt-dm-lmi-tau-chart');
+        if (!chartEl) return;
+
+        var intensity = _rtDmEnsData.intensity || {};
+        var taus = (_rtDmEnsData.lead_times_h || []).slice();
+        var nMembers = _rtDmEnsData.n_members || 0;
+        if (taus.length === 0 || nMembers === 0) return;
+
+        // Per-member argmax across taus → (peak-tau, peak-vmax) pairs.
+        var xPeakTau = [];
+        var yPeakVmax = [];
+        for (var mi = 0; mi < nMembers; mi++) {
+            var maxW = -Infinity;
+            var argmaxTau = null;
+            for (var ti = 0; ti < taus.length; ti++) {
+                var tauKey = String(Math.round(taus[ti]));
+                var data = intensity[tauKey];
+                if (data && data.winds && data.winds[mi] != null) {
+                    if (data.winds[mi] > maxW) {
+                        maxW = data.winds[mi];
+                        argmaxTau = taus[ti];
+                    }
+                }
+            }
+            if (argmaxTau != null && maxW > -Infinity) {
+                xPeakTau.push(argmaxTau);
+                yPeakVmax.push(maxW);
+            }
+        }
+        if (xPeakTau.length === 0) return;
+
+        var tauMax = Math.max.apply(null, taus);
+        var vmaxMax = Math.max(160, Math.max.apply(null, yPeakVmax) + 10);
+
+        var heatmap = {
+            x: xPeakTau, y: yPeakVmax,
+            type: 'histogram2d',
+            // 12-hour x bins match the GDMI lead-time stride; 10-kt y bins
+            // align with SS half-category resolution.
+            xbins: { start: 0, end: tauMax, size: 12 },
+            ybins: { start: 0, end: vmaxMax, size: 10 },
+            colorscale: [
+                [0, 'rgba(15,22,35,0)'],
+                [0.05, 'rgba(74,155,110,0.25)'],
+                [0.3, 'rgba(244,115,33,0.55)'],
+                [0.7, 'rgba(244,67,54,0.80)'],
+                [1, 'rgba(180,36,68,0.95)']
+            ],
+            zsmooth: 'best',
+            hovertemplate: 'lead time %{x:.0f} h<br>LMI %{y:.0f} kt<br>%{z} members<extra></extra>',
+            showscale: true,
+            colorbar: {
+                title: { text: 'members', font: { size: 9, family: 'DM Sans, sans-serif' } },
+                thickness: 8, len: 0.9,
+                tickfont: { size: 8, family: 'DM Sans, sans-serif' }
+            }
+        };
+
+        // SS category gridlines as faint horizontal references.
+        var ssLines = [34, 64, 83, 96, 113, 137].map(function (v) {
+            return {
+                type: 'line', x0: 0, x1: tauMax, y0: v, y1: v,
+                line: { color: 'rgba(148,163,184,0.18)', width: 1, dash: 'dot' }
+            };
+        });
+
+        var layout = {
+            height: 200,
+            margin: { t: 12, r: 50, b: 32, l: 40 },
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: 'rgba(0,0,0,0)',
+            font: { family: 'DM Sans, sans-serif', size: 9, color: '#5b6573' },
+            xaxis: {
+                title: { text: 'Lead time of peak (h)', font: { size: 9 } },
+                range: [0, tauMax],
+                dtick: 24,
+                gridcolor: 'rgba(255,255,255,0.05)',
+                zeroline: false
+            },
+            yaxis: {
+                title: { text: 'LMI Vmax (kt)', font: { size: 9 } },
+                range: [0, vmaxMax],
+                dtick: 30,
+                gridcolor: 'rgba(255,255,255,0.05)',
+                zeroline: false
+            },
+            shapes: ssLines
+        };
+
+        Plotly.newPlot(chartEl, [heatmap], layout, {
             displayModeBar: false, responsive: false, staticPlot: true
         });
     }
@@ -11988,12 +12765,14 @@
         if (chartType === 'intensity') _rtRenderIntensityHist();
         else if (chartType === 'change') _rtRenderChangeHist();
         else if (chartType === 'lmi') _rtRenderLmiHist();
+        else if (chartType === 'lmi-tau') _rtRenderLmiVsTau();
 
         // Map chart type to element ID and metadata
         var chartMap = {
             'intensity': { el: 'rt-dm-hist-chart', label: 'Intensity Distribution' },
             'change':    { el: 'rt-dm-change-chart', label: 'Intensity Change' },
-            'lmi':       { el: 'rt-dm-lmi-chart', label: 'Lifetime Max Intensity' }
+            'lmi':       { el: 'rt-dm-lmi-chart', label: 'Lifetime Max Intensity' },
+            'lmi-tau':   { el: 'rt-dm-lmi-tau-chart', label: 'LMI vs Forecast Hour' }
         };
         var info = chartMap[chartType];
         if (!info) return;
@@ -12037,12 +12816,12 @@
         // Apply publication overrides (8" × 6" at 2x scale = 1536 × 1152)
         layout.title = {
             text: title,
-            font: { size: 16, color: textColor, family: 'JetBrains Mono, monospace' },
+            font: { size: 16, color: textColor, family: 'DM Sans, sans-serif' },
             x: 0.5, xanchor: 'center', y: 0.98
         };
         layout.paper_bgcolor = bgColor;
         layout.plot_bgcolor = bgColor;
-        layout.font = { family: 'JetBrains Mono, monospace', size: 14, color: axisColor };
+        layout.font = { family: 'DM Sans, sans-serif', size: 14, color: axisColor };
         layout.margin = { t: 75, r: 25, b: 60, l: 60 };
         layout.height = 576;
         layout.width = 768;
@@ -14230,6 +15009,161 @@
     function _escXml(s) {
         return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
+
+    // ─── Download dropdown (PNG / GIF / KML) ─────────────────────
+    window._irToggleDownloadMenu = function () {
+        var menu = document.getElementById('ir-download-menu');
+        var btn = document.querySelector('#ir-download-wrap .ir-download-btn');
+        if (!menu) return;
+        var open = menu.style.display !== 'none';
+        menu.style.display = open ? 'none' : 'block';
+        if (btn) btn.setAttribute('aria-expanded', open ? 'false' : 'true');
+        if (!open) {
+            // Bind a one-shot outside-click closer so the menu dismisses cleanly.
+            setTimeout(function () {
+                document.addEventListener('click', _irOutsideDownloadClick, { capture: true, once: true });
+            }, 0);
+        }
+    };
+    window._irCloseDownloadMenu = function () {
+        var menu = document.getElementById('ir-download-menu');
+        var btn = document.querySelector('#ir-download-wrap .ir-download-btn');
+        if (menu) menu.style.display = 'none';
+        if (btn) btn.setAttribute('aria-expanded', 'false');
+    };
+    function _irOutsideDownloadClick(e) {
+        var wrap = document.getElementById('ir-download-wrap');
+        if (wrap && wrap.contains(e.target)) {
+            // Click landed inside the menu — re-arm the outside-click listener.
+            setTimeout(function () {
+                document.addEventListener('click', _irOutsideDownloadClick, { capture: true, once: true });
+            }, 0);
+            return;
+        }
+        window._irCloseDownloadMenu();
+    }
+
+    /** Snapshot the visible imagery panel as a PNG, including the
+     *  current frame timestamp / satellite label and the Tb colorbar.
+     *  Uses html2canvas (already used elsewhere on the site). */
+    window._irDownloadCurrentFrame = function () {
+        if (!currentStormId) return;
+        _ga('ir_export_png', { storm: currentStormId });
+        window._irCloseDownloadMenu();
+        var node = document.getElementById('ir-image-container');
+        if (!node) return;
+        _ensureHtml2canvas().then(function () {
+            return window.html2canvas(node, {
+                useCORS: true, allowTaint: false, backgroundColor: '#0a0c12',
+                logging: false, scale: window.devicePixelRatio || 1
+            });
+        }).then(function (canvas) {
+            canvas.toBlob(function (blob) {
+                if (!blob) return;
+                var ts = (animFrameTimes[animIndex] || '').replace(/[:\-T]/g, '').replace('Z', '');
+                var url = URL.createObjectURL(blob);
+                var a = document.createElement('a');
+                a.href = url;
+                a.download = currentStormId + '_' + (ts || 'frame') + '.png';
+                a.click();
+                requestAnimationFrame(function () { URL.revokeObjectURL(url); });
+            }, 'image/png');
+        }).catch(function (err) {
+            console.warn('[RT Monitor] PNG export failed:', err);
+        });
+    };
+
+    /** Animated GIF of all valid frames. Steps the visible animation
+     *  frame-by-frame, html2canvas-captures the imagery panel, and feeds
+     *  each into gif.js. Same pattern as satellite.js's export but
+     *  scoped to the card's simpler DOM. */
+    window._irDownloadAnimGif = function () {
+        if (!currentStormId) return;
+        if (typeof window.GIF === 'undefined') {
+            console.warn('[RT Monitor] gif.js not loaded');
+            return;
+        }
+        _ga('ir_export_gif', { storm: currentStormId });
+        window._irCloseDownloadMenu();
+
+        var state = activeFrameState();
+        if (!state || !state.valid || state.valid.length === 0) {
+            console.warn('[RT Monitor] no valid frames to export');
+            return;
+        }
+
+        var node = document.getElementById('ir-image-container');
+        if (!node) return;
+
+        // Pause animation so frame stepping is deterministic.
+        var wasPlaying = animPlaying;
+        if (wasPlaying) stopAnimation();
+        var savedIndex = animIndex;
+
+        // Bottom-corner toast for progress.
+        var toast = document.createElement('div');
+        toast.style.cssText = 'position:absolute;bottom:8px;right:8px;background:rgba(15,22,35,0.85);color:#e2e8f0;font:600 11px/1.2 \'DM Sans\',sans-serif;padding:6px 10px;border-radius:4px;z-index:1000;pointer-events:none;';
+        toast.textContent = 'GIF · capturing 0/' + state.valid.length;
+        node.appendChild(toast);
+
+        _ensureHtml2canvas().then(function () {
+            var w = node.offsetWidth;
+            var h = node.offsetHeight;
+            // gif.js worker is served from CDN (matches what satellite.js does).
+            var gif = new window.GIF({
+                workers: 2, quality: 10, width: w, height: h,
+                workerScript: 'https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js',
+                background: '#0a0c12'
+            });
+            gif.on('progress', function (pct) {
+                toast.textContent = 'GIF · encoding ' + Math.round(pct * 100) + '%';
+            });
+            gif.on('finished', function (blob) {
+                var url = URL.createObjectURL(blob);
+                var a = document.createElement('a');
+                a.href = url;
+                a.download = currentStormId + '_animation.gif';
+                a.click();
+                requestAnimationFrame(function () { URL.revokeObjectURL(url); });
+                // Restore animation state and remove toast.
+                state.showFn(savedIndex);
+                if (wasPlaying) startAnimation();
+                if (toast.parentElement) toast.parentElement.removeChild(toast);
+            });
+
+            // Step through frames sequentially. html2canvas is async per frame.
+            var i = 0;
+            function captureNext() {
+                if (i >= state.valid.length) {
+                    toast.textContent = 'GIF · encoding…';
+                    gif.render();
+                    return;
+                }
+                state.showFn(state.valid[i]);
+                toast.textContent = 'GIF · capturing ' + (i + 1) + '/' + state.valid.length;
+                // Wait one frame so Leaflet/Plotly settle before capture.
+                requestAnimationFrame(function () {
+                    window.html2canvas(node, {
+                        useCORS: true, allowTaint: false, backgroundColor: '#0a0c12',
+                        logging: false, scale: 1
+                    }).then(function (cv) {
+                        // delay per frame mirrors the player's animIntervalMs.
+                        gif.addFrame(cv, { delay: animIntervalMs, copy: true });
+                        i++;
+                        captureNext();
+                    }).catch(function (err) {
+                        console.warn('[RT Monitor] frame capture failed:', err);
+                        i++;
+                        captureNext();
+                    });
+                });
+            }
+            captureNext();
+        }).catch(function (err) {
+            console.warn('[RT Monitor] GIF export setup failed:', err);
+            if (toast.parentElement) toast.parentElement.removeChild(toast);
+        });
+    };
 
     window.downloadActiveStormKML = function () {
         if (!currentStormId) return;

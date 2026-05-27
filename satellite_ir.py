@@ -170,9 +170,18 @@ HIMAWARI_WV_BAND = 8            # Himawari 6.2 µm WV
 BAND_RANGES = {
     2:  {"vmin": 0.0,   "vmax": 1.0,   "data_type": "reflectance"},
     3:  {"vmin": 0.0,   "vmax": 1.0,   "data_type": "reflectance"},
+    # Band 7 (3.9 µm shortwave IR) — used as a nighttime fallback for the
+    # Visible product. Range chosen so cold cloud tops (~210 K) and warm
+    # surface/oceans (~310 K) both render with usable contrast after
+    # inversion in _render_band_jpg.
+    7:  {"vmin": 200.0, "vmax": 330.0, "data_type": "tb"},
     8:  {"vmin": 170.0, "vmax": 260.0, "data_type": "tb"},
     13: {"vmin": 160.0, "vmax": 330.0, "data_type": "tb"},
 }
+
+# Band 7 has the same band-number on Himawari (AHI Band 7, 3.9 µm SWIR)
+# so no Himawari remap is needed — fetch_band_raw passes band through.
+SWIR_BAND = 7
 
 # Claude IR colormap LUT — matches the client-side Claude IR colormap.
 # frac = 1 - (Tb - IR_VMIN) / (IR_VMAX - IR_VMIN), so frac 0 = warm, 1 = cold.

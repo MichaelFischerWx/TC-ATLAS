@@ -111,7 +111,7 @@
     <div class="ir-secondary-bar">
         <div class="ir-view-tabs">
             <button class="ir-view-tab active" data-view="map" onclick="window.switchIRView('map')"><span class="tab-full">Global Map</span><span class="tab-short">Map</span></button>
-            <button class="ir-view-tab" data-view="satellite" onclick="window.switchIRView('satellite')"><span class="tab-full">Storm Satellite</span><span class="tab-short">Storm Sat</span></button>
+            <button class="ir-view-tab" data-view="satellite" onclick="window._switchToSatTab()"><span class="tab-full">Storm Satellite</span><span class="tab-short">Storm Sat</span></button>
             <button class="ir-view-tab" data-view="subseasonal" onclick="window.switchIRView('subseasonal')">Subseasonal</button>
             <button class="ir-view-tab" data-view="seasonal" onclick="window.switchIRView('seasonal')">Seasonal</button>
         </div>
@@ -177,26 +177,64 @@
     <section id="ir-detail" class="ir-detail" style="display:none;" aria-label="Storm detail">
         <div class="ir-detail-header">
             <button id="ir-back-btn" class="ir-back-btn" aria-label="Back to all storms">&larr; All Storms</button>
+            <!-- In-tab storm switcher — shown when ≥2 active storms so users
+                 can switch between them without going back to the global map. -->
+            <select id="ir-detail-storm-select"
+                    class="ir-detail-storm-select"
+                    aria-label="Switch active storm"
+                    style="display:none;"
+                    onchange="if(this.value)window._irOpenStorm(this.value)"></select>
             <div class="ir-detail-title">
                 <span id="ir-detail-name" class="ir-detail-name"></span>
                 <span id="ir-detail-id" class="ir-detail-id"></span>
                 <span id="ir-detail-cat" class="ir-detail-cat"></span>
-                <button class="ir-kml-btn" onclick="downloadActiveStormKML()" title="Download track as KML for Google Earth">
+                <div class="ir-download-wrap" id="ir-download-wrap">
+                    <button class="ir-kml-btn ir-download-btn" type="button"
+                            onclick="window._irToggleDownloadMenu()"
+                            aria-haspopup="true" aria-expanded="false"
+                            title="Download current view or animation">
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M12 3v12"/>
+                            <path d="m7 10 5 5 5-5"/>
+                            <path d="M5 21h14"/>
+                        </svg>
+                        <span>Download</span>
+                    </button>
+                    <div class="ir-download-menu" id="ir-download-menu" role="menu" style="display:none;">
+                        <button class="ir-download-item" role="menuitem" onclick="window._irDownloadCurrentFrame()">
+                            <span class="ir-download-item-title">PNG</span>
+                            <span class="ir-download-item-desc">Current frame as image</span>
+                        </button>
+                        <button class="ir-download-item" role="menuitem" onclick="window._irDownloadAnimGif()">
+                            <span class="ir-download-item-title">GIF</span>
+                            <span class="ir-download-item-desc">Animated loop of all frames</span>
+                        </button>
+                        <button class="ir-download-item" role="menuitem" onclick="downloadActiveStormKML();window._irCloseDownloadMenu();">
+                            <span class="ir-download-item-title">KML</span>
+                            <span class="ir-download-item-desc">Track for Google Earth</span>
+                        </button>
+                    </div>
+                </div>
+                <button id="ir-detail-grid-toggle" class="ir-kml-btn ir-detail-grid-toggle-btn active" onclick="window._irToggleDetailGrid()" title="Toggle lat/lon grid overlay">
                     <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <circle cx="12" cy="12" r="10"/>
-                        <line x1="2" y1="12" x2="22" y2="12"/>
-                        <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+                        <path d="M3 9h18M3 15h18M9 3v18M15 3v18"/>
                     </svg>
-                    <span>KML</span>
+                    <span>Grid</span>
                 </button>
-                <button class="ir-kml-btn ir-sat-viewer-btn" onclick="window.openSatelliteViewerForStorm()" title="Deep IR analysis in Satellite Viewer">
+                <button class="ir-kml-btn ir-loop-only-btn" onclick="window.openLoopOnlyView()" title="Bare animation loop (Tropical Tidbits style)">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <polygon points="6,4 20,12 6,20"/>
+                    </svg>
+                    <span>Loop Only</span>
+                </button>
+                <button class="ir-kml-btn ir-sat-viewer-btn" onclick="window.openSatelliteViewerForStorm()" title="Expert satellite diagnostics — colormaps, crosshair, follow, 88D radar, ASCAT">
                     <svg viewBox="0 0 24 24" aria-hidden="true">
                         <path d="M4 10a7.3 7.3 0 0 0 10 10"/>
                         <path d="m9 15 3-3"/>
                         <path d="M17 13a6 6 0 0 0-6-6"/>
                         <path d="M21 13A10 10 0 0 0 11 3"/>
                     </svg>
-                    <span>Satellite</span>
+                    <span>Diagnostics</span>
                 </button>
                 <button class="ir-kml-btn ir-mw-jump-btn" onclick="window._rtJumpToMwSection()" title="Jump to Microwave Passes (24h) — click any pass for side-by-side IR vs MW comparison">
                     <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -223,19 +261,36 @@
                         <span id="ir-frame-time" class="ir-frame-time-label"></span>
                         <span id="ir-satellite-label" class="ir-sat-label"></span>
                     </div>
-                    <!-- Product toggle (IR / GeoColor) -->
+                    <!-- Product toggle (IR / GeoColor / Visible / Water Vapor) -->
                     <div id="ir-product-toggle" class="ir-product-toggle">
-                        <button id="ir-product-eir" class="ir-product-btn ir-product-active" title="Infrared">IR</button>
+                        <button id="ir-product-eir" class="ir-product-btn ir-product-active" title="Clean infrared (Band 13, ~10.3 µm)">IR</button>
                         <button id="ir-product-geocolor" class="ir-product-btn" title="GeoColor visible (day) / blended IR (night)">GeoColor</button>
+                        <button id="ir-product-vis" class="ir-product-btn" title="Red visible (Band 2 / Band 3 — daytime only)">Visible</button>
+                        <button id="ir-product-wv" class="ir-product-btn" title="Mid-level water vapor (Band 8, ~6.2 µm)">WV</button>
                     </div>
-                    <!-- IR Tb colorbar legend -->
+                    <!-- IR Tb colorbar legend (Claude IR; °C labels).
+                         Range chosen to span realistic cloud-top temps:
+                         +35 °C warm surface → -85 °C overshooting tops.
+                         (The underlying LUT spans -113 to +57 °C, but
+                         labels stop at -85 since cloud tops below that
+                         are vanishingly rare and showing -110 misleads.) -->
                     <div id="ir-tb-legend" class="ir-tb-legend">
-                        <span>Brightness Temp (K)</span>
+                        <span>Brightness Temp (°C)</span>
                         <div class="ir-tb-legend-bar" id="ir-tb-legend-bar-gradient"></div>
                         <div class="ir-tb-legend-labels">
-                            <span>330</span>
-                            <span>245</span>
-                            <span>160</span>
+                            <span>+35</span>
+                            <span>-30</span>
+                            <span>-85</span>
+                        </div>
+                    </div>
+                    <!-- WV brightness-temp legend (shown only when WV product active) -->
+                    <div id="ir-wv-legend" class="ir-tb-legend ir-wv-legend" style="display:none;">
+                        <span>WV Brightness Temp (°C)</span>
+                        <div class="ir-tb-legend-bar ir-wv-legend-bar"></div>
+                        <div class="ir-tb-legend-labels">
+                            <span>0</span>
+                            <span>-30</span>
+                            <span>-75</span>
                         </div>
                     </div>
                 </div>
@@ -245,6 +300,11 @@
                     <button id="ir-anim-play" class="ir-anim-btn ir-anim-play" title="Play/Pause">&#9654;</button>
                     <button id="ir-anim-next" class="ir-anim-btn" title="Next frame">&#9654;</button>
                     <input id="ir-anim-slider" type="range" min="0" max="0" value="0" class="ir-anim-slider">
+                    <div class="ir-anim-speed" role="group" aria-label="Animation speed">
+                        <button id="ir-anim-speed-down" class="ir-anim-btn ir-anim-speed-btn" title="Slower">&minus;</button>
+                        <span id="ir-anim-speed-label" class="ir-anim-speed-label" title="Playback speed">1&times;</span>
+                        <button id="ir-anim-speed-up" class="ir-anim-btn ir-anim-speed-btn" title="Faster">+</button>
+                    </div>
                     <span id="ir-anim-counter" class="ir-anim-counter">0 / 0</span>
                 </div>
             </div>
@@ -419,14 +479,29 @@
                         </div>
                     </div>
                     <div id="rt-dm-lmi-chart"></div>
+                    <!-- 2D density: when does each member peak vs how strong it gets. -->
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin:10px 0 4px;">
+                        <h3 class="ir-info-heading" style="margin-bottom:0;padding-bottom:0;border-bottom:none;font-size:0.72rem;color:#94a3b8;">
+                            LMI vs Forecast Hour
+                        </h3>
+                        <button class="rt-dm-export-btn" onclick="window._rtShowExportMenu('lmi-tau', this)" title="Save as PNG">&#8681;</button>
+                    </div>
+                    <div id="rt-dm-lmi-tau-chart"></div>
                 </div>
 
                 <!-- Observations divider -->
                 <div class="ir-section-divider">Observations</div>
 
-                <!-- Intensity timeline -->
-                <div class="ir-info-section">
-                    <h3 class="ir-info-heading">Intensity History</h3>
+                <!-- Intensity forecast (DeepMind 1K ensemble percentile bands).
+                     Hidden until the user turns Models on; falls back to
+                     best-track history if WeatherLab has no coverage. -->
+                <div class="ir-info-section" id="ir-intensity-section" style="display:none;">
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+                        <h3 class="ir-info-heading" id="ir-intensity-heading"
+                            style="margin-bottom:0;padding-bottom:0;border-bottom:none;">Intensity Forecast</h3>
+                        <span id="ir-intensity-source"
+                              style="font-size:0.65rem;color:#00e5ff;">DeepMind 1K</span>
+                    </div>
                     <div id="ir-intensity-chart" class="ir-intensity-chart"></div>
                 </div>
 
@@ -564,7 +639,7 @@
                 <span class="qv-name" id="qv-name">—</span>
                 <span class="qv-vitals" id="qv-vitals">—</span>
             </div>
-            <button id="qv-to-detailed" class="qv-detailed-btn" title="Open the full interactive viewer (compare, diagnostics, asymmetry, etc.)">Detailed Analysis &rarr;</button>
+            <button id="qv-to-detailed" class="qv-detailed-btn" title="Expert satellite diagnostics — colormaps, crosshair, follow, 88D radar, ASCAT">Diagnostics &rarr;</button>
         </div>
         <div class="qv-stage">
             <!-- Leaflet map: per-frame L.imageOverlay at its true bounds
@@ -1767,8 +1842,31 @@
             } catch (e) { /* old browsers — silently skip */ }
         }
 
+        /* Tab-click handler for Storm Satellite. Clears the loop=1 /
+           detailed=1 sub-mode hints so the user always lands on the
+           default (card) when they explicitly click the tab. Direct
+           navigation via switchIRView (e.g. hashchange, deep-link) is
+           unaffected and honors sub-mode params. */
+        window._switchToSatTab = function () {
+            try {
+                var h = (window.location.hash || '').replace(/^#/, '');
+                if (h) {
+                    var parts = h.split('&').filter(function (p) {
+                        return p !== 'loop=1' && p !== 'detailed=1';
+                    });
+                    var newHash = parts.length ? '#' + parts.join('&') : '#satellite';
+                    history.replaceState(null, '',
+                        window.location.pathname + window.location.search + newHash);
+                }
+            } catch (e) {}
+            window.switchIRView('satellite');
+        };
+
         window.switchIRView = function (view) {
-            if (view === currentView) { _syncHash(view); return; }
+            /* Satellite tab has multiple sub-modes (card / loop-only /
+               diagnostics) selected from hash params, so we always
+               re-evaluate it. Other tabs can short-circuit. */
+            if (view === currentView && view !== 'satellite') { _syncHash(view); return; }
             currentView = view;
             _syncHash(view);
             if (typeof gtag === 'function') try { gtag('event', 'ir_view_switch', { view: view }); } catch(e) {}
@@ -1796,25 +1894,92 @@
 
             /* Hide all then show the active one. Keeps the switching
                logic linear regardless of how many views we add. */
+            var irDetail = document.getElementById('ir-detail');
             irMain.style.display = 'none';
             satMain.style.display = 'none';
             if (satQuick) satQuick.style.display = 'none';
             if (subMain) subMain.style.display = 'none';
             if (seaMain) seaMain.style.display = 'none';
             if (legend) legend.style.display = 'none';
+            if (view !== 'satellite' && view !== 'map' && irDetail) {
+                irDetail.style.display = 'none';
+            }
 
             if (view === 'satellite') {
-                /* Storm Satellite default = Quick View (lightweight
-                   animated WebP from GCS). Detailed interactive viewer
-                   is opt-in via the "Detailed Analysis" button or via
-                   ?detailed=1 in the hash. */
-                var goDetailed = /[#&]detailed=1/.test(window.location.hash || '');
+                /* Storm Satellite default = the rich storm card. It's
+                   anchored to the satellite animation but adds intensity
+                   chart, shear, microwave passes, models — info-dense
+                   without losing the satellite as the focal point.
+                   - ?detailed=1 → expert Diagnostics view (sat-main)
+                   - ?loop=1     → bare Quick View (animation only)
+                   - no storms   → Quick View empty state
+                   - default     → card with strongest active storm */
+                var hashStr = window.location.hash || '';
+                var goDetailed = /[#&]detailed=1/.test(hashStr);
+                var goLoopOnly = /[#&]loop=1/.test(hashStr);
                 if (goDetailed) {
+                    if (irDetail) irDetail.style.display = 'none';
                     satMain.style.display = 'flex';
                     if (window.activateSatelliteView) window.activateSatelliteView();
-                } else {
+                } else if (goLoopOnly) {
+                    if (irDetail) irDetail.style.display = 'none';
                     if (satQuick) satQuick.style.display = 'flex';
                     if (window.activateQuickView) window.activateQuickView();
+                } else {
+                    /* Card path. If a card is already open for some storm,
+                       keep it. Otherwise pick the strongest active storm.
+                       If the storms list hasn't loaded yet, queue the pick. */
+                    var alreadyOpen = irDetail && irDetail.style.display !== 'none' &&
+                                      irDetail.style.display !== '';
+                    if (alreadyOpen) {
+                        // ensure card stays visible (switchIRView clears displays earlier)
+                        irDetail.style.display = 'block';
+                    } else {
+                        var hashStormMatch = hashStr.match(/storm=([A-Za-z]{2}\d{6})/);
+                        var preferredId = hashStormMatch ? hashStormMatch[1].toUpperCase() : null;
+                        var openCardForStrongest = function () {
+                            var storms = (window._irGetActiveStorms && window._irGetActiveStorms()) || [];
+                            if (storms.length === 0) {
+                                if (satQuick) satQuick.style.display = 'flex';
+                                if (window.activateQuickView) window.activateQuickView();
+                                return;
+                            }
+                            var pickId = null;
+                            if (preferredId) {
+                                for (var i = 0; i < storms.length; i++) {
+                                    if (storms[i].atcf_id === preferredId) { pickId = preferredId; break; }
+                                }
+                            }
+                            if (!pickId) {
+                                var sorted = storms.slice().sort(function (a, b) {
+                                    return (b.vmax_kt || 0) - (a.vmax_kt || 0);
+                                });
+                                pickId = sorted[0].atcf_id;
+                            }
+                            if (window._irOpenStorm) window._irOpenStorm(pickId);
+                        };
+                        if (window._irGetActiveStorms && window._irGetActiveStorms().length > 0) {
+                            openCardForStrongest();
+                        } else if (window._irOnceStormsLoaded) {
+                            // Show a placeholder while we wait for the fetch.
+                            if (satQuick) {
+                                satQuick.style.display = 'flex';
+                                if (window.activateQuickView) window.activateQuickView();
+                            }
+                            window._irOnceStormsLoaded(function () {
+                                // Only swap if the user is still on the Sat tab and
+                                // hasn't manually requested loop-only.
+                                if (currentView !== 'satellite') return;
+                                if (/[#&]loop=1/.test(window.location.hash || '')) return;
+                                if (satQuick) satQuick.style.display = 'none';
+                                openCardForStrongest();
+                            });
+                        } else {
+                            // Fallback: no helpers available, use Quick View.
+                            if (satQuick) satQuick.style.display = 'flex';
+                            if (window.activateQuickView) window.activateQuickView();
+                        }
+                    }
                 }
             } else if (view === 'subseasonal') {
                 if (subMain) subMain.style.display = 'flex';
