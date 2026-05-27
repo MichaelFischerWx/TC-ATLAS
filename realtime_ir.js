@@ -2570,15 +2570,78 @@
             marker.bindPopup(popupHtml, { maxWidth: 260 });
 
             // Also open detail on double-click
+            // + predictive prefetch on hover/popup: warm the browser cache
+            // with this storm's display-WebP bundle so the eventual click
+            // → openStormDetail feels instant (~400ms saved).
             (function (atcfId) {
                 marker.on('dblclick', function () {
                     window._irOpenStorm(atcfId);
                 });
+                _bindPrefetchOnMarker(marker, atcfId);
             })(s.atcf_id);
 
             marker.addTo(map);
             stormMarkers.push(marker);
         }
+    }
+
+    // ── Predictive prefetch on hover (Tier-1 UX win) ─────────────
+    // Warms the browser cache with this storm's display-WebP bundle
+    // 200 ms after sustained hover, or instantly when the popup opens.
+    // Guardrails:
+    //   • Skip on touch (no hover, mobile bandwidth matters more)
+    //   • Debounce 200 ms so casual mouse-pan over markers doesn't trigger
+    //   • Only prefetch display bundle (~1.5 MB), not raw Tb (~2-5 MB) —
+    //     the click will fetch raw Tb itself; this just removes the
+    //     bigger latency component
+    //   • Track prefetched storms per session so we don't re-fetch
+    //   • Use default browser cache (NOT 'no-store') so the data lands
+    //     in HTTP cache for the real fetch to consume
+    var _prefetchedStorms = {};
+    var _PREFETCH_HOVER_MS = 200;
+    function _isPrefetchTouchDevice() {
+        if (typeof window.matchMedia !== 'function') return false;
+        return window.matchMedia('(pointer: coarse)').matches
+            && window.matchMedia('(hover: none)').matches;
+    }
+    function _prefetchStormFramesBundle(atcfId) {
+        if (!atcfId || _prefetchedStorms[atcfId]) return;
+        _prefetchedStorms[atcfId] = true;
+        var gcsUrl = _gcsFramesBundleUrl(atcfId);
+        var apiUrl = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId)
+            + '/ir-frames-bundle?lookback_hours=' + JPG_PRIMARY_LOOKBACK_H
+            + '&radius_deg=' + JPG_PRIMARY_RADIUS_DEG
+            + '&interval_min=' + JPG_PRIMARY_INTERVAL_MIN;
+        // Try GCS direct → silently fall through to API. We deliberately
+        // don't use AbortController here — once started, let it finish
+        // populating cache even if user mouses away.
+        fetch(gcsUrl).then(function (r) {
+            if (r.ok) return r;
+            return fetch(apiUrl);
+        }).catch(function () {
+            // Prefetch is best-effort; failure just means the real click
+            // will pay the full latency. Reset the flag so a retry can
+            // happen if the user actually clicks.
+            delete _prefetchedStorms[atcfId];
+        });
+    }
+    function _bindPrefetchOnMarker(marker, atcfId) {
+        if (_isPrefetchTouchDevice()) return;
+        var timer = null;
+        marker.on('mouseover', function () {
+            if (_prefetchedStorms[atcfId]) return;
+            timer = setTimeout(function () {
+                _prefetchStormFramesBundle(atcfId);
+            }, _PREFETCH_HOVER_MS);
+        });
+        marker.on('mouseout', function () {
+            if (timer) { clearTimeout(timer); timer = null; }
+        });
+        // Popup open = strong intent → prefetch instantly, no debounce
+        marker.on('popupopen', function () {
+            if (timer) { clearTimeout(timer); timer = null; }
+            _prefetchStormFramesBundle(atcfId);
+        });
     }
 
     /** Clear past track layers from the map */

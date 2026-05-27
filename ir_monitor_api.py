@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
-from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
 
 # Shared satellite IR module
@@ -331,14 +331,30 @@ def _pack_bundle(header: dict, payloads: list) -> bytes:
     return struct.pack("<I", len(header_json)) + header_json + b"".join(payloads)
 
 
-def _upload_public_bundle(key: str, body: bytes, content_type: str = "application/octet-stream"):
-    """Upload bundle bytes to GCS with publicRead ACL + 5-min max-age."""
+def _upload_public_bundle(key: str, body: bytes, content_type: str = "application/octet-stream",
+                          gzip_content: bool = False):
+    """Upload bundle bytes to GCS with publicRead ACL + 5-min max-age.
+
+    If `gzip_content=True`, the body is gzipped before upload and the
+    GCS blob is tagged with Content-Encoding: gzip. Modern browsers
+    transparently decompress, so the frontend's r.arrayBuffer() yields
+    the decompressed bytes — no client-side decode needed.
+
+    Only worth setting for high-entropy payloads (raw Tb uint8 arrays):
+    WebP/JPEG/PNG are already entropy-coded and gzipping them wastes
+    CPU for ~2-5% gain.
+    """
     bucket = _get_rt_gcs_bucket()
     if bucket is None:
         return
     try:
+        if gzip_content:
+            import gzip as _gz
+            body = _gz.compress(body, compresslevel=6)
         blob = bucket.blob(key)
         blob.cache_control = "public, max-age=300"
+        if gzip_content:
+            blob.content_encoding = "gzip"
         blob.upload_from_string(
             body, content_type=content_type,
             predefined_acl="publicRead", timeout=30,
@@ -465,10 +481,15 @@ def _build_and_upload_bundles(
 
     # Upload IR display + raw bundles. Pathing matches the frontend's
     # _gcsFramesBundleUrl / _gcsRawBundleUrl helpers in realtime_ir.js.
+    # Display WebPs are already codec-compressed (gzip would gain ~2%
+    # for 5-50ms of CPU — not worth it). Raw Tb uint8 arrays have
+    # strong spatial correlation (smooth cloud features → repeated/
+    # similar bytes) — gzip shrinks them ~30-50%, saving ~2 MB per
+    # raw-Tb load with imperceptible browser decode cost.
     frames_key = f"{_GCS_RT_VERSION}/bundles/frames/{atcf_upper}.bin"
     raw_key = f"{_GCS_RT_VERSION}/bundles/raw/{atcf_upper}.bin"
     _upload_public_bundle(frames_key, frames_body)
-    _upload_public_bundle(raw_key, raw_body)
+    _upload_public_bundle(raw_key, raw_body, gzip_content=True)
 
     # ── Band bundle (WV or Vis) ─────────────────────────────────
     # Only build if the prewarm fetched this band's frames in this
@@ -2906,6 +2927,7 @@ def _fetch_one_raw_tb_for_bundle(
 
 @router.get("/storm/{atcf_id}/ir-raw-bundle")
 def get_storm_ir_raw_bundle(
+    request: Request,
     atcf_id: str,
     lookback_hours: float = Query(6.0, ge=1, le=24),
     radius_deg: float = Query(10.0, ge=1.0, le=12.0),
@@ -3051,15 +3073,28 @@ def get_storm_ir_raw_bundle(
     header_json = json.dumps(header, separators=(",", ":")).encode("utf-8")
     body = struct.pack("<I", len(header_json)) + header_json + b"".join(payloads)
 
+    # Gzip the raw-Tb body for clients that accept it (all modern browsers
+    # do). uint8 brightness-temp arrays have strong spatial correlation
+    # and compress 30-50%. Browser decompresses transparently before
+    # r.arrayBuffer() resolves — no client-side decode needed. Display
+    # WebP bundles are NOT gzipped (already entropy-coded by codec).
+    resp_headers = {
+        "Cache-Control": "public, max-age=300",
+        "X-Bundle-Frames": str(len(frame_times)),
+        "X-Bundle-Header-Length": str(len(header_json)),
+        "Vary": "Accept-Encoding",
+        "Access-Control-Expose-Headers": "X-Bundle-Frames, X-Bundle-Header-Length",
+    }
+    accept_enc = request.headers.get("accept-encoding", "")
+    if "gzip" in accept_enc.lower():
+        import gzip as _gz
+        body = _gz.compress(body, compresslevel=6)
+        resp_headers["Content-Encoding"] = "gzip"
+
     return Response(
         content=body,
         media_type="application/octet-stream",
-        headers={
-            "Cache-Control": "public, max-age=300",
-            "X-Bundle-Frames": str(len(frame_times)),
-            "X-Bundle-Header-Length": str(len(header_json)),
-            "Access-Control-Expose-Headers": "X-Bundle-Frames, X-Bundle-Header-Length",
-        },
+        headers=resp_headers,
     )
 
 
