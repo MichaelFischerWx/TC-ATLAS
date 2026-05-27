@@ -4015,6 +4015,272 @@ def get_storm_band_frames_bundle(
     )
 
 
+# ─────────────────────────────────────────────────────────────────
+# GeoColor bundle — per-frame solar-elevation-aware composite:
+#   sun > -6° → Band 2 visible (white clouds, dark ocean)
+#   sun ≤ -6° → Band 13 IR, inverted grayscale (cold tops = bright)
+# Mirrors the band-frames-bundle wire format so the frontend reuses
+# the existing parser; only the URL and per-frame band selection differ.
+# ─────────────────────────────────────────────────────────────────
+
+def _render_geocolor_jpg(
+    data_array: np.ndarray, *, is_day: bool,
+    vmin: float, vmax: float,
+    lat_bounds: tuple[float, float] | None = None,
+) -> bytes | None:
+    """Render a Band-2 (day) or Band-13 (night) frame in the GeoColor
+    style: day frames get the bright-clouds-on-dark-surface visible
+    treatment (gamma-corrected grayscale, same as Vis); night frames
+    get inverted-grayscale IR (cold cloud tops = bright). Returns the
+    frame as WebP bytes ready to drop into a bundle payload."""
+    from PIL import Image
+
+    arr = np.asarray(data_array, dtype=np.float32)
+    if not np.any(np.isfinite(arr)):
+        return None
+
+    if lat_bounds is not None:
+        arr = _warp_eq_to_mercator_local(arr, lat_bounds[0], lat_bounds[1])
+
+    mask = ~np.isfinite(arr)
+
+    if is_day:
+        # Band 2 reflectance: higher = brighter cloud. No inversion.
+        # Gamma 0.8 brightens mid-tones (dawn/dusk) without blowing out
+        # cloud highlights.
+        frac = np.clip((arr - vmin) / (vmax - vmin), 0.0, 1.0)
+        gray = (np.power(frac, 0.8) * 245 + 10).astype(np.uint8)
+    else:
+        # Band 13 brightness temperature: cold clouds (low Tb) should be
+        # bright. Invert and apply a gentle gamma so deep convection
+        # reads as brilliant white against a near-black ocean surface.
+        frac = np.clip(1.0 - (arr - vmin) / (vmax - vmin), 0.0, 1.0)
+        gray = (np.power(frac, 0.85) * 245 + 10).astype(np.uint8)
+
+    rgb = np.stack([gray, gray, gray], axis=-1).copy()
+    rgb[mask] = [0, 0, 0]
+
+    img = Image.fromarray(rgb, "RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="WEBP", quality=75, method=4)
+    return buf.getvalue()
+
+
+def _get_or_render_geocolor_jpg(
+    atcf_upper: str, interp_lat: float, interp_lon: float,
+    target_dt: _dt, radius_deg: float,
+) -> tuple[bytes | None, str, bool]:
+    """Bundle helper for the GeoColor product. Returns (jpg_bytes,
+    satellite_name, is_day). Solar elevation at the storm center at
+    `target_dt` picks the band: Band 2 for daytime, Band 13 for night.
+
+    Cache strategy mirrors _get_or_render_band_jpg: GCS pre-rendered →
+    cached raw → fresh S3 fallback. Cache prefix is `geocolor-webp` so
+    these don't collide with the per-band caches."""
+    box_deg = radius_deg * 2.0
+    dt_str = target_dt.strftime("%Y%m%d%H%M")
+    bucket, _ = select_goes_sat(interp_lon, target_dt)
+    sat_name = satellite_name_from_bucket(bucket)
+    is_day = _solar_elevation(interp_lat, interp_lon, target_dt) > -6
+    band = VIS_BAND if is_day else 13
+
+    # GCS pre-rendered GeoColor frame (own cache prefix so we don't
+    # blow away the per-band caches when the GeoColor recipe evolves).
+    geocolor_prefix = f"geocolor-webp/{atcf_upper}/{dt_str}.webp"
+    bkt = _get_rt_gcs_bucket()
+    if bkt is not None:
+        try:
+            blob = bkt.blob(f"{_GCS_RT_VERSION}/{geocolor_prefix}")
+            cached = blob.download_as_bytes(timeout=5)
+            if cached:
+                return cached, sat_name, is_day
+        except Exception:
+            pass  # not cached yet — render below
+
+    # Fall back to the per-band JPG cache (we may already have a vis or
+    # IR rendering of this frame from another product). The GeoColor
+    # vis-day path produces an identical grayscale to the Vis button, so
+    # band-2 cache entries are interchangeable. Band 13 inverted is
+    # NOT the same as the Claude IR colormap, so we can't reuse those.
+    if is_day:
+        cached_band_jpg = _gcs_jpg_get(atcf_upper, dt_str, band=VIS_BAND)
+        if cached_band_jpg:
+            # Cache the same bytes under the GeoColor prefix for next time.
+            if bkt is not None:
+                try:
+                    bkt.blob(f"{_GCS_RT_VERSION}/{geocolor_prefix}").upload_from_string(
+                        cached_band_jpg, content_type="image/webp", timeout=10)
+                except Exception:
+                    pass
+            return cached_band_jpg, sat_name, is_day
+
+    # Render from raw band data: try cached raw first, then fresh S3.
+    binfo = BAND_RANGES.get(band, BAND_RANGES[13])
+    bvmin, bvmax = binfo["vmin"], binfo["vmax"]
+
+    cached_raw = _gcs_band_get(band, atcf_upper, dt_str,
+                              lat=interp_lat, lon=interp_lon)
+    if cached_raw is not None and cached_raw.get("tb_data"):
+        try:
+            encoded = np.frombuffer(
+                base64.b64decode(cached_raw["tb_data"]), dtype=np.uint8
+            ).reshape((cached_raw["tb_rows"], cached_raw["tb_cols"]))
+            decoded = ((encoded.astype(np.float32) - 1) / (254.0 / (bvmax - bvmin))) + bvmin
+            decoded[encoded == 0] = np.nan
+            jpg_bytes = _render_geocolor_jpg(
+                decoded, is_day=is_day, vmin=bvmin, vmax=bvmax)
+            if jpg_bytes and bkt is not None:
+                try:
+                    bkt.blob(f"{_GCS_RT_VERSION}/{geocolor_prefix}").upload_from_string(
+                        jpg_bytes, content_type="image/webp", timeout=10)
+                except Exception:
+                    pass
+            return jpg_bytes, sat_name, is_day
+        except Exception:
+            pass
+
+    try:
+        raw = fetch_band_raw(interp_lat, interp_lon, target_dt, box_deg, band=band)
+    except Exception:
+        return None, sat_name, is_day
+    if not raw or raw.get("data") is None:
+        return None, sat_name, is_day
+    jpg_bytes = _render_geocolor_jpg(
+        raw["data"], is_day=is_day, vmin=bvmin, vmax=bvmax)
+    if jpg_bytes and bkt is not None:
+        try:
+            bkt.blob(f"{_GCS_RT_VERSION}/{geocolor_prefix}").upload_from_string(
+                jpg_bytes, content_type="image/webp", timeout=10)
+        except Exception:
+            pass
+    return jpg_bytes, raw.get("satellite", sat_name), is_day
+
+
+@router.get("/storm/{atcf_id}/geocolor-frames-bundle")
+def get_storm_geocolor_frames_bundle(
+    atcf_id: str,
+    lookback_hours: float = Query(6.0, ge=1, le=24),
+    radius_deg: float = Query(10.0, ge=1.0, le=12.0),
+    interval_min: int = Query(15, ge=10, le=60),
+):
+    """GeoColor bundle: per-frame solar-elevation switch between Band 2
+    visible (day) and Band 13 IR (night, inverted grayscale). Same packed
+    binary wire format as the IR/band bundles:
+        [uint32 LE header_length][JSON header][concat WebP bytes]
+    """
+    import struct
+    from concurrent.futures import ThreadPoolExecutor
+
+    _ensure_fresh_cache()
+    storm = None
+    with _active_storms_lock:
+        for s in _active_storms_cache["storms"]:
+            if s["atcf_id"].upper() == atcf_id.upper():
+                storm = dict(s)
+                break
+
+    if not storm:
+        raise HTTPException(status_code=404, detail=f"Storm {atcf_id} not found")
+
+    atcf_upper = atcf_id.upper()
+    center_lat = storm["lat"]
+    center_lon = storm["lon"]
+    half = radius_deg
+
+    center_dt = _dt.now(timezone.utc)
+    frame_times = build_frame_times(center_dt, lookback_hours, interval_min)
+    frame_times = list(reversed(frame_times))
+
+    latest_dt = frame_times[-1] if frame_times else center_dt
+    s_ilat, s_ilon = _interp_pos_at(atcf_id, latest_dt, center_lat, center_lon)
+    bounds = [
+        [s_ilat - half, s_ilon - half],
+        [s_ilat + half, s_ilon + half],
+    ]
+
+    def _worker(item):
+        i, target_dt = item
+        try:
+            ilat, ilon = _interp_pos_at(
+                atcf_id, target_dt, center_lat, center_lon)
+            jpg, sat, is_day = _get_or_render_geocolor_jpg(
+                atcf_upper, ilat, ilon, target_dt, radius_deg,
+            )
+            frame_bounds = [
+                [ilat - half, ilon - half],
+                [ilat + half, ilon + half],
+            ]
+            return (i, jpg, sat, frame_bounds, is_day, None)
+        except Exception as ex:
+            return (i, None, "", None, False, str(ex))
+
+    indexed = list(enumerate(frame_times))
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(_worker, indexed))
+    results.sort(key=lambda r: r[0])
+
+    frame_headers = []
+    payloads: list[bytes] = []
+    offset = 0
+    summary_sat = ""
+    n_day = 0
+    n_night = 0
+
+    for i, jpg, sat, fbounds, is_day, err in results:
+        target_dt = frame_times[i]
+        iso_dt = target_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        if not jpg:
+            err_msg = err or "no_data"
+            frame_headers.append({
+                "index": i, "datetime_utc": iso_dt, "satellite": sat or "",
+                "bounds": fbounds, "byte_offset": offset, "byte_length": 0,
+                "is_day": is_day, "error": err_msg,
+            })
+            continue
+        frame_headers.append({
+            "index": i, "datetime_utc": iso_dt, "satellite": sat or "",
+            "bounds": fbounds, "byte_offset": offset, "byte_length": len(jpg),
+            "is_day": is_day,
+        })
+        payloads.append(jpg)
+        offset += len(jpg)
+        summary_sat = sat or summary_sat
+        if is_day:
+            n_day += 1
+        else:
+            n_night += 1
+
+    header = {
+        "total_frames": len(frame_times),
+        "bounds": bounds,
+        "satellite": summary_sat,
+        "product": "geocolor",
+        "n_day_frames": n_day,
+        "n_night_frames": n_night,
+        "lookback_hours": lookback_hours,
+        "interval_min": interval_min,
+        "radius_deg": radius_deg,
+        "media_type": "image/webp",
+        "frames": frame_headers,
+    }
+    header_json = json.dumps(header, separators=(",", ":")).encode("utf-8")
+    body = struct.pack("<I", len(header_json)) + header_json + b"".join(payloads)
+
+    return Response(
+        content=body,
+        media_type="application/octet-stream",
+        headers={
+            "Cache-Control": "public, max-age=300",
+            "X-Bundle-Frames": str(len(frame_times)),
+            "X-Bundle-Product": "geocolor",
+            "X-Bundle-Day-Frames": str(n_day),
+            "X-Bundle-Night-Frames": str(n_night),
+            "X-Bundle-Header-Length": str(len(header_json)),
+            "Access-Control-Expose-Headers": "X-Bundle-Frames, X-Bundle-Product, X-Bundle-Day-Frames, X-Bundle-Night-Frames, X-Bundle-Header-Length",
+        },
+    )
+
+
 @router.get("/storm/{atcf_id}/ir-frames-meta")
 def get_ir_frames_meta(
     atcf_id: str,

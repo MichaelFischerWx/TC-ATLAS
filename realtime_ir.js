@@ -5085,6 +5085,10 @@
         }
     }
 
+    /** Track blob URLs minted from the GeoColor bundle so we can revoke
+     *  them on storm-switch / cleanup. */
+    var _activeGeocolorBlobUrls = [];
+
     /** Clean up GeoColor frame layers from the map */
     function cleanupGeocolorFrameLayers() {
         for (var i = 0; i < geocolorFrameLayers.length; i++) {
@@ -5092,6 +5096,10 @@
                 detailMap.removeLayer(geocolorFrameLayers[i]);
             }
         }
+        for (var b = 0; b < _activeGeocolorBlobUrls.length; b++) {
+            try { URL.revokeObjectURL(_activeGeocolorBlobUrls[b]); } catch (e) {}
+        }
+        _activeGeocolorBlobUrls = [];
         geocolorFrameLayers = [];
         geocolorFrameTimes = [];
         geocolorValidFrames = [];
@@ -5100,9 +5108,201 @@
         geocolorFramesReady = false;
     }
 
-    /** Load GeoColor animation frames lazily (only when user switches to GeoColor mode).
-     *  Uses same frame times as IR but with GeoColor/visible GIBS layers. */
+    /** Load GeoColor animation frames from the backend bundle.
+     *
+     *  Replaces the legacy GIBS-tile path that did its own day/night
+     *  Himawari switching in JS. The backend now produces a single
+     *  per-frame bundle that handles the solar-elevation switch
+     *  (Band 2 visible by day, Band 13 IR inverted-grayscale at night)
+     *  and emits storm-relative-cropped WebPs ready for L.imageOverlay.
+     *  Wire format mirrors the IR / band bundles so the parser is the
+     *  same. GCS direct (publicRead) is tried first; the API endpoint
+     *  is the fallback for storms whose bundle hasn't been prewarmed
+     *  (currently always — GeoColor prewarm is deferred). */
+    var _GCS_GEOCOLOR_BUNDLE_BASE =
+        'https://storage.googleapis.com/tc-atlas-ir-cache/rt-v10/bundles/geocolor';
+
     function loadGeocolorFrames() {
+        if (!detailMap || !currentStormId) return;
+
+        // Already loaded → restore slider and show the latest frame.
+        if (geocolorFramesReady && geocolorFrameLayers.length > 0) {
+            var sliderR = document.getElementById('ir-anim-slider');
+            if (sliderR && geocolorValidFrames.length > 0) {
+                sliderR.max = geocolorValidFrames.length - 1;
+                sliderR.value = geocolorValidFrames.length - 1;
+            }
+            var playBtnR = document.getElementById('ir-anim-play');
+            if (playBtnR) playBtnR.disabled = false;
+            showGeocolorFrame(geocolorValidFrames.length > 0
+                ? geocolorValidFrames[geocolorValidFrames.length - 1]
+                : geocolorFrameLayers.length - 1);
+            updateAnimCounter();
+            return;
+        }
+        // Bundle still in flight → bail.
+        if (geocolorFrameLayers.length > 0 && !geocolorFramesReady) return;
+
+        geocolorFrameTimes = [];
+        geocolorFramesLoaded = 0;
+        geocolorFramesReady = false;
+        geocolorValidFrames = [];
+        geocolorFrameHasError = [];
+
+        var geoBtn = document.getElementById('ir-product-geocolor');
+        if (geoBtn) { geoBtn.classList.add('ir-loading'); geoBtn.textContent = 'Loading…'; }
+        showLoadingProgress(true, 0);
+
+        var satLbl = document.getElementById('ir-satellite-label');
+        if (satLbl) satLbl.textContent = 'GeoColor — ' + detailSatName;
+
+        var atcfId = currentStormId;
+        var gcsUrl = _GCS_GEOCOLOR_BUNDLE_BASE + '/' +
+                     encodeURIComponent(atcfId.toUpperCase()) + '.bin';
+        var apiUrl = API_BASE
+            + '/ir-monitor/storm/' + encodeURIComponent(atcfId)
+            + '/geocolor-frames-bundle?lookback_hours=' + JPG_PRIMARY_LOOKBACK_H
+            + '&radius_deg=' + JPG_PRIMARY_RADIUS_DEG
+            + '&interval_min=' + JPG_PRIMARY_INTERVAL_MIN;
+
+        fetch(gcsUrl)
+            .then(function (r) {
+                if (!r.ok) throw new Error('GCS ' + r.status);
+                return r.arrayBuffer();
+            })
+            .catch(function () {
+                // GCS miss is the expected path right now (no prewarm).
+                return fetch(apiUrl).then(function (r) {
+                    if (!r.ok) throw new Error('API ' + r.status);
+                    return r.arrayBuffer();
+                });
+            })
+            .then(function (buf) {
+                if (currentStormId !== atcfId || productMode !== 'geocolor') return;
+                _ingestGeocolorBundle(buf);
+            })
+            .catch(function (err) {
+                console.warn('[RT Monitor] GeoColor bundle unavailable:', err && err.message);
+                if (geoBtn) { geoBtn.classList.remove('ir-loading'); geoBtn.textContent = 'GeoColor'; }
+                showLoadingProgress(false);
+                if (productMode === 'geocolor') setProductMode('eir');
+            });
+    }
+
+    /** Parse the GeoColor bundle and create L.imageOverlay frame layers. */
+    function _ingestGeocolorBundle(buf) {
+        var dv;
+        var header;
+        var binBase;
+        try {
+            dv = new DataView(buf);
+            if (buf.byteLength < 4) throw new Error('bundle too small');
+            var headerLen = dv.getUint32(0, true);
+            if (4 + headerLen > buf.byteLength) throw new Error('header overruns body');
+            var headerBytes = new Uint8Array(buf, 4, headerLen);
+            header = JSON.parse(new TextDecoder('utf-8').decode(headerBytes));
+            binBase = 4 + headerLen;
+        } catch (e) {
+            console.warn('[RT Monitor] GeoColor bundle parse failed:', e.message);
+            if (productMode === 'geocolor') setProductMode('eir');
+            return;
+        }
+
+        var frames = (header && header.frames) || [];
+        if (!frames.length) {
+            console.warn('[RT Monitor] GeoColor bundle had no frames');
+            if (productMode === 'geocolor') setProductMode('eir');
+            return;
+        }
+
+        // Storm-relative framing: place every frame at the latest valid
+        // frame's bounds, mirroring the IR / band bundle behavior.
+        var latestFh = null;
+        for (var li = frames.length - 1; li >= 0; li--) {
+            if (frames[li].byte_length && !frames[li].error && frames[li].bounds) {
+                latestFh = frames[li]; break;
+            }
+        }
+        var ub = (latestFh && latestFh.bounds) || header.bounds;
+        if (!ub) {
+            console.warn('[RT Monitor] GeoColor bundle missing bounds');
+            if (productMode === 'geocolor') setProductMode('eir');
+            return;
+        }
+        var unifiedBounds = L.latLngBounds(
+            L.latLng(ub[0][0], ub[0][1]), L.latLng(ub[1][0], ub[1][1]));
+
+        var mediaType = header.media_type || 'image/webp';
+        var loaded = 0;
+        var goodCount = 0;
+        var geoBtn = document.getElementById('ir-product-geocolor');
+
+        function finalize() {
+            geocolorFramesReady = true;
+            geocolorFramesLoaded = frames.length;
+            showLoadingProgress(false);
+            if (geoBtn) { geoBtn.classList.remove('ir-loading'); geoBtn.textContent = 'GeoColor'; }
+            var playBtnF = document.getElementById('ir-anim-play');
+            if (playBtnF) playBtnF.disabled = (geocolorValidFrames.length === 0);
+            var sliderF = document.getElementById('ir-anim-slider');
+            if (sliderF && geocolorValidFrames.length > 0) {
+                sliderF.max = geocolorValidFrames.length - 1;
+                sliderF.value = geocolorValidFrames.length - 1;
+                if (productMode === 'geocolor') {
+                    showGeocolorFrame(geocolorValidFrames[geocolorValidFrames.length - 1]);
+                }
+            }
+            updateAnimCounter();
+            console.log('[RT Monitor] GeoColor bundle: ' + goodCount + '/' + frames.length +
+                        ' WebPs loaded (' + (buf.byteLength / 1024 | 0) + ' KB, ' +
+                        (header.n_day_frames || 0) + ' day, ' +
+                        (header.n_night_frames || 0) + ' night)');
+        }
+
+        for (var i = 0; i < frames.length; i++) {
+            var fh = frames[i];
+            geocolorFrameTimes.push(fh.datetime_utc);
+            if (!fh.byte_length || fh.error) {
+                geocolorFrameLayers.push(null);
+                geocolorFrameHasError.push(true);
+                loaded++;
+                continue;
+            }
+            var slice = new Uint8Array(buf, binBase + fh.byte_offset, fh.byte_length);
+            var blob = new Blob([slice], { type: mediaType });
+            var blobUrl = URL.createObjectURL(blob);
+            _activeGeocolorBlobUrls.push(blobUrl);
+            var overlay = L.imageOverlay(blobUrl, unifiedBounds, {
+                opacity: 0, interactive: false, pane: 'tilePane'
+            });
+            geocolorFrameHasError.push(false);
+            (function (lyr, idx) {
+                lyr.once('error', function () {
+                    geocolorFrameHasError[idx] = true; loaded++;
+                    if (loaded >= frames.length) finalize();
+                });
+                lyr.once('load', function () {
+                    if (!geocolorFrameHasError[idx]) {
+                        geocolorValidFrames.push(idx);
+                        geocolorValidFrames.sort(function (a, b) { return a - b; });
+                        goodCount++;
+                    }
+                    loaded++;
+                    var pct = Math.round((loaded / frames.length) * 100);
+                    showLoadingProgress(true, pct);
+                    if (loaded >= frames.length) finalize();
+                });
+            })(overlay, i);
+            geocolorFrameLayers.push(overlay);
+            overlay.addTo(detailMap);
+        }
+        if (loaded >= frames.length) finalize();
+    }
+
+    // (kept for reference — the GIBS-tile path; superseded by the bundle
+    //  loader above but left present for now in case a future fallback
+    //  wants to revive it.)
+    function loadGeocolorFrames_LEGACY_GIBS_UNUSED() {
         if (!detailMap || !currentStormId) return;
 
         // If already loaded, just restore slider and show the current frame
