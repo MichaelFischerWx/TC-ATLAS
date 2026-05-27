@@ -46,6 +46,7 @@
 
     // ── Animation state ──────────────────────────────────────
     var _frameUrls = [];         // blob URLs in frame order
+    var _frameOffsets = [];      // CSS transform offsets per frame (%, %)
     var _frameIdx = 0;
     var _animTimer = null;
     var _animActive = false;
@@ -163,8 +164,10 @@
             try { URL.revokeObjectURL(_frameUrls[i]); } catch (e) {}
         }
         _frameUrls = [];
+        _frameOffsets = [];
         _frameIdx = 0;
         _bundleArrayBuffer = null;
+        if (elAnim) elAnim.style.transform = '';
     }
     function _scheduleNextFrame() {
         if (!_animActive || _frameUrls.length === 0) return;
@@ -175,7 +178,10 @@
         _animTimer = setTimeout(function () {
             if (!_animActive) return;
             _frameIdx = (_frameIdx + 1) % _frameUrls.length;
-            if (elAnim) elAnim.src = _frameUrls[_frameIdx];
+            if (elAnim) {
+                elAnim.src = _frameUrls[_frameIdx];
+                _applyFrameTransform(_frameIdx);
+            }
             _scheduleNextFrame();
         }, dwell);
     }
@@ -186,7 +192,10 @@
         // user sees motion forward in time. Last-frame pause is the
         // natural anchor.
         _frameIdx = 0;
-        if (elAnim) elAnim.src = _frameUrls[_frameIdx];
+        if (elAnim) {
+            elAnim.src = _frameUrls[_frameIdx];
+            _applyFrameTransform(_frameIdx);
+        }
         _scheduleNextFrame();
     }
 
@@ -205,6 +214,7 @@
         var binBase = 4 + headerLen;
         var mediaType = header.media_type || 'image/webp';
         var urls = [];
+        var validFrames = [];  // {frame_header, url} pairs in order
         var frames = header.frames || [];
         for (var i = 0; i < frames.length; i++) {
             var f = frames[i];
@@ -212,9 +222,71 @@
             // Zero-copy view into the ArrayBuffer
             var slice = new Uint8Array(arrayBuffer, binBase + f.byte_offset, f.byte_length);
             var blob = new Blob([slice], { type: mediaType });
-            urls.push(URL.createObjectURL(blob));
+            var url = URL.createObjectURL(blob);
+            urls.push(url);
+            validFrames.push(f);
+        }
+
+        // ── Compute per-frame CSS-translate offsets ─────────────
+        // Each frame's cutout is centered on the storm's INTERPOLATED
+        // position at that frame's time, so consecutive frames have
+        // slightly different bounds (~0.4° over 6h for a typical storm).
+        // A plain <img>.src swap would show the storm "stationary" at
+        // image center and the LAND visibly bouncing frame-to-frame.
+        // Fix: shift each frame's <img> with `transform: translate(...)`
+        // so the LATEST frame's geographic center sits at the same screen
+        // position across all frames. Net visual effect: storm appears
+        // to move (correct, since it does move), land stays put
+        // (correct, since it doesn't).
+        _frameOffsets = [];
+        if (validFrames.length > 0) {
+            var ref = validFrames[validFrames.length - 1];
+            var refB = ref.bounds;
+            if (refB && Array.isArray(refB) && refB.length >= 2) {
+                var refCLat = (refB[0][0] + refB[1][0]) / 2;
+                var refCLon = (refB[0][1] + refB[1][1]) / 2;
+                var refSpanLat = refB[1][0] - refB[0][0];
+                var refSpanLon = refB[1][1] - refB[0][1];
+                for (var j = 0; j < validFrames.length; j++) {
+                    var b = validFrames[j].bounds;
+                    if (!b || b.length < 2) {
+                        _frameOffsets.push({ tx: 0, ty: 0 });
+                        continue;
+                    }
+                    var cLat = (b[0][0] + b[1][0]) / 2;
+                    var cLon = (b[0][1] + b[1][1]) / 2;
+                    // Translate as a % of the image's own dimensions.
+                    // (refCLon - cLon) > 0 when ref is EAST of frame's
+                    // center → ref pixel is RIGHT of image center →
+                    // shift image LEFT (negative tx) so that pixel
+                    // lands at container center.
+                    var tx = -((refCLon - cLon) / refSpanLon) * 100;
+                    // Latitude is opposite to screen y: positive
+                    // (refCLat - cLat) means ref is NORTH of frame
+                    // center → ref pixel is ABOVE image center →
+                    // shift image DOWN (positive ty in CSS) so that
+                    // pixel lands at container center.
+                    var ty = ((refCLat - cLat) / refSpanLat) * 100;
+                    _frameOffsets.push({ tx: tx, ty: ty });
+                }
+            } else {
+                // No usable bounds — no compensation possible
+                for (var k = 0; k < validFrames.length; k++) {
+                    _frameOffsets.push({ tx: 0, ty: 0 });
+                }
+            }
         }
         return urls;
+    }
+
+    function _applyFrameTransform(idx) {
+        if (!elAnim) return;
+        var off = _frameOffsets[idx];
+        if (!off || (off.tx === 0 && off.ty === 0)) {
+            elAnim.style.transform = '';
+        } else {
+            elAnim.style.transform = 'translate(' + off.tx.toFixed(3) + '%, ' + off.ty.toFixed(3) + '%)';
+        }
     }
 
     function _loadBundleAndAnimate(stormId) {
@@ -251,7 +323,11 @@
                 // Show the most-recent frame immediately so the user sees
                 // current imagery while we wait for the animation cycle
                 // to start at frame 0.
-                if (elAnim) elAnim.src = _frameUrls[_frameUrls.length - 1];
+                if (elAnim) {
+                    var lastIdx = _frameUrls.length - 1;
+                    elAnim.src = _frameUrls[lastIdx];
+                    _applyFrameTransform(lastIdx);
+                }
                 elAnim.onload = function () {
                     _showAnim();
                     _startAnimation();
