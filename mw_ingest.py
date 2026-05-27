@@ -113,6 +113,22 @@ CHECKPOINT_INTERVAL_SEC = 120
 # workers piled up racing on PPS NRT polls and GCS writes.
 _MAX_RUNTIME_SECONDS = 25 * 60
 
+# Per-granule watchdog timeout. A single granule that hangs in render
+# or upload must NOT be allowed to consume the whole _MAX_RUNTIME_SECONDS
+# budget — that's exactly the failure mode the 2026-05-27 incident
+# exposed (a poison SSMIS HDF5 hung the regridder silently for 25 min
+# every tick, starving GMI/ATMS/AMSR2 of any compute slice). 10 min
+# is comfortable headroom above the ~5 min nominal SSMIS+AMSR2 granule
+# processing time, while still letting a single tick cycle through
+# multiple sensors when one hangs.
+_GRANULE_TIMEOUT_SECONDS = 10 * 60
+
+# Sentinel product slug emitted to the manifest when a granule times
+# out. Lets the per-sensor cursor advance past the offender so the
+# next cron tick doesn't re-hit it. The frontend product whitelist
+# (89pct/89v/89h/37color/37v/37h) excludes this, so it never renders.
+_TIMEOUT_SENTINEL_PRODUCT = "_timed-out-skip"
+
 # GCS-based concurrency lock. Cloud Run Jobs has no native exclusion,
 # so we use a conditional-create on a GCS object. TTL covers the
 # runtime budget plus a small cushion so a crashed worker's stale lock
@@ -2275,23 +2291,82 @@ def _cli(argv=None):
                         budget_exceeded = True
                         break
                     fname = url.rsplit("/", 1)[-1]
+                    # Per-granule watchdog: SIGALRM aborts download + render
+                    # + upload if any single granule blocks for longer than
+                    # _GRANULE_TIMEOUT_SECONDS. Without this, one bad HDF5
+                    # can silently eat the entire runtime budget — see
+                    # the 2026-05-27 incident notes on the timeout constant.
+                    # Signals only deliver to the main thread, which is
+                    # where we are (Cloud Run Job runs single-process).
+                    granule_timed_out = False
+                    def _granule_alarm_handler(_signum, _frame):
+                        raise TimeoutError(
+                            f"granule watchdog ({_GRANULE_TIMEOUT_SECONDS}s)")
+                    prev_handler = signal.signal(
+                        signal.SIGALRM, _granule_alarm_handler)
+                    signal.alarm(_GRANULE_TIMEOUT_SECONDS)
                     # Download into a temp DIR using the original PPS filename so
                     # read_pps_for_product's regex (anchored on the granule name
                     # pattern) sees the unmodified granule name.
                     # NamedTemporaryFile prepends tmpXXX_ which broke that parse.
-                    with tempfile.TemporaryDirectory() as td:
-                        fpath = Path(td) / fname
-                        try:
-                            r = sess.get(url, stream=True, timeout=180)
-                            r.raise_for_status()
-                            with open(fpath, "wb") as f:
-                                for chunk in r.iter_content(chunk_size=1 << 20):
-                                    f.write(chunk)
-                            all_entries.extend(process_one(
-                                str(fpath), sensor, products))
-                        except Exception as exc:
-                            logger.error("[%s] granule %s failed: %s",
-                                         sensor, fname, exc)
+                    try:
+                        with tempfile.TemporaryDirectory() as td:
+                            fpath = Path(td) / fname
+                            try:
+                                r = sess.get(url, stream=True, timeout=180)
+                                r.raise_for_status()
+                                with open(fpath, "wb") as f:
+                                    for chunk in r.iter_content(chunk_size=1 << 20):
+                                        f.write(chunk)
+                                all_entries.extend(process_one(
+                                    str(fpath), sensor, products))
+                            except TimeoutError as exc:
+                                # Watchdog fired — most likely a poison
+                                # granule. Surface it loudly and let the
+                                # outer logic emit a sentinel entry so
+                                # the per-sensor cursor advances past it.
+                                granule_timed_out = True
+                                logger.error(
+                                    "[%s] granule %s WATCHDOG TIMEOUT "
+                                    "(%s) — skipping; cursor will advance "
+                                    "via sentinel entry to prevent retry "
+                                    "loop", sensor, fname, exc)
+                            except Exception as exc:
+                                logger.error("[%s] granule %s failed: %s",
+                                             sensor, fname, exc)
+                    finally:
+                        # Always restore the alarm state before moving on,
+                        # even if the granule raised. Leaving SIGALRM
+                        # armed past the granule scope would risk killing
+                        # an unrelated subsequent operation.
+                        signal.alarm(0)
+                        signal.signal(signal.SIGALRM, prev_handler)
+                    if granule_timed_out:
+                        # Emit a sentinel manifest entry so the per-sensor
+                        # cursor lookup (max scan_start) advances PAST
+                        # this granule. The frontend filters it out at
+                        # multiple layers (empty png_url drops it from
+                        # _normalizeManifest; degenerate nested bounds
+                        # fail _bounds_contains in the per-storm API),
+                        # so it never renders as a real pass — pure
+                        # cursor-advance bookkeeping.
+                        all_entries.append({
+                            "sensor": sensor,
+                            "platform": "_skip",
+                            "scan_start": scan_start.isoformat(),
+                            "scan_end": scan_start.isoformat(),
+                            "orbit_id": f"TIMEOUT-SKIP-{fname}",
+                            "product": _TIMEOUT_SENTINEL_PRODUCT,
+                            "png_url": "",
+                            "geojson_url": "",
+                            # Nested [[south,west],[north,east]] like the
+                            # real manifest format. Zeros mean a zero-
+                            # area bbox; _bounds_contains(0,0)-of-storm-
+                            # lat-lon is false for any non-equatorial
+                            # storm and we never render this entry anyway.
+                            "bounds": [[0.0, 0.0], [0.0, 0.0]],
+                            "_skip_reason": "granule-watchdog-timeout",
+                        })
                     # Maybe write a manifest checkpoint so the frontend sees
                     # progress instead of nothing-then-everything.
                     _maybe_checkpoint()
