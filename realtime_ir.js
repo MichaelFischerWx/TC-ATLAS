@@ -2803,6 +2803,10 @@
         framesLoaded = 0;
         _frameLoadedOnce = {};
         framesReady = false;
+        // Revoke any blob URLs created by the bundle path so the backing
+        // ArrayBuffer can be GC'd. No-op when the GIBS or per-frame path
+        // is active (those don't populate _activeFrameBlobUrls).
+        _revokeActiveFrameBlobUrls();
         // Also clean up GeoColor frames
         cleanupGeocolorFrameLayers();
     }
@@ -2965,12 +2969,162 @@
     var JPG_PRIMARY_INTERVAL_MIN = 30;
     var _jpgPathFellBack = false;
 
-    /** Primary animation path: pre-rendered WebP frames as L.imageOverlay.
-     *  Falls back to _initDetailMapGIBS on /ir-frames-meta failure or
-     *  excessive per-frame image errors. */
+    // Track blob URLs we create from bundle bytes so we can revoke them
+    // on storm-switch and avoid leaking the underlying ArrayBuffer slices.
+    var _activeFrameBlobUrls = [];
+
+    function _revokeActiveFrameBlobUrls() {
+        for (var i = 0; i < _activeFrameBlobUrls.length; i++) {
+            try { URL.revokeObjectURL(_activeFrameBlobUrls[i]); } catch (e) {}
+        }
+        _activeFrameBlobUrls = [];
+    }
+
+    /** Primary animation path: ONE binary request → all 13 WebPs at once.
+     *  This is what makes the animation feel "all frames are here, play
+     *  smoothly" instead of "frames pop in randomly." On bundle failure
+     *  (404, parse error, network), falls through to the per-frame path
+     *  which itself falls through to GIBS if /ir-frames-meta is down. */
     function _initDetailMapJPG(storm, satLayerName) {
         if (!detailMap) return;
+        var atcfId = storm.atcf_id;
 
+        var bundleUrl = API_BASE
+            + '/ir-monitor/storm/' + encodeURIComponent(atcfId)
+            + '/ir-frames-bundle'
+            + '?lookback_hours=' + JPG_PRIMARY_LOOKBACK_H
+            + '&radius_deg=' + JPG_PRIMARY_RADIUS_DEG
+            + '&interval_min=' + JPG_PRIMARY_INTERVAL_MIN;
+
+        fetch(bundleUrl, { cache: 'no-store' })
+            .then(function (r) {
+                if (!r.ok) throw new Error('bundle HTTP ' + r.status);
+                return r.arrayBuffer();
+            })
+            .then(function (buf) {
+                if (currentStormId !== atcfId || !detailMap) return;
+                _initDetailMapJPGWithBundle(storm, satLayerName, buf);
+            })
+            .catch(function (err) {
+                console.warn('[RT Monitor] Frames bundle unavailable (' +
+                             (err && err.message) + '); falling through to per-frame JPG path');
+                _initDetailMapJPGPerFrame(storm, satLayerName);
+            });
+    }
+
+    /** Parse the bundle ArrayBuffer and create N L.imageOverlays from blob
+     *  URLs. All 13 frames arrive in one shot, so we add them to the map
+     *  simultaneously (no batching needed — they're local memory). */
+    function _initDetailMapJPGWithBundle(storm, satLayerName, buf) {
+        if (!detailMap) return;
+        var dv;
+        var header;
+        var binBase;
+        try {
+            dv = new DataView(buf);
+            if (buf.byteLength < 4) throw new Error('bundle too small');
+            var headerLen = dv.getUint32(0, true);
+            if (4 + headerLen > buf.byteLength) throw new Error('bundle header overruns body');
+            var headerBytes = new Uint8Array(buf, 4, headerLen);
+            header = JSON.parse(new TextDecoder('utf-8').decode(headerBytes));
+            binBase = 4 + headerLen;
+        } catch (e) {
+            console.warn('[RT Monitor] Bundle parse failed (' + e.message + '); per-frame fallback');
+            _initDetailMapJPGPerFrame(storm, satLayerName);
+            return;
+        }
+
+        var frames = (header && header.frames) || [];
+        var bounds = header && header.bounds;
+        if (!frames.length || !bounds) {
+            console.warn('[RT Monitor] Bundle had no frames; per-frame fallback');
+            _initDetailMapJPGPerFrame(storm, satLayerName);
+            return;
+        }
+
+        // Match the existing animFrame ordering (oldest first)
+        animFrameTimes = frames.map(function (f) { return f.datetime_utc; });
+        animIndex = animFrameTimes.length - 1;
+        if (header.satellite) detailSatName = header.satellite;
+
+        var leafletBounds = L.latLngBounds(
+            L.latLng(bounds[0][0], bounds[0][1]),
+            L.latLng(bounds[1][0], bounds[1][1])
+        );
+
+        var mediaType = header.media_type || 'image/webp';
+        var goodCount = 0;
+        _revokeActiveFrameBlobUrls();
+
+        for (var i = 0; i < frames.length; i++) {
+            var fh = frames[i];
+            frameHasError.push(false);
+            if (!fh.byte_length || fh.error) {
+                // Failed frame: still push a null-ish placeholder so indices align
+                animFrameLayers.push(null);
+                frameHasError[frameHasError.length - 1] = true;
+                continue;
+            }
+            // Zero-copy view into the bundle buffer, wrapped in a Blob
+            var slice = new Uint8Array(buf, binBase + fh.byte_offset, fh.byte_length);
+            var blob = new Blob([slice], { type: mediaType });
+            var blobUrl = URL.createObjectURL(blob);
+            _activeFrameBlobUrls.push(blobUrl);
+            var overlay = L.imageOverlay(blobUrl, leafletBounds, {
+                opacity: 0,
+                interactive: false,
+                pane: 'tilePane'
+            });
+            animFrameLayers.push(overlay);
+            goodCount++;
+        }
+
+        if (goodCount === 0) {
+            console.warn('[RT Monitor] Bundle had 0 valid frames; per-frame fallback');
+            // Clean up null placeholders before fallback
+            animFrameLayers = [];
+            frameHasError = [];
+            _revokeActiveFrameBlobUrls();
+            _initDetailMapJPGPerFrame(storm, satLayerName);
+            return;
+        }
+
+        // Add every valid overlay to the map at once. Blob URLs are
+        // in-memory references — Leaflet's 'load' event fires almost
+        // immediately for each, no batching needed.
+        for (var j = 0; j < animFrameLayers.length; j++) {
+            if (!animFrameLayers[j]) {
+                // Placeholder for a failed frame — count it as loaded with error
+                onFrameLayerLoaded(j);
+                continue;
+            }
+            (function (idx) {
+                animFrameLayers[idx].once('error', function () {
+                    frameHasError[idx] = true;
+                    onFrameLayerLoaded(idx);
+                });
+                animFrameLayers[idx].once('load', function () {
+                    onFrameLayerLoaded(idx);
+                });
+            })(j);
+            animFrameLayers[j].addTo(detailMap);
+        }
+
+        var slider = document.getElementById('ir-anim-slider');
+        if (slider) { slider.max = animFrameTimes.length - 1; slider.value = animIndex; }
+        updateAnimCounter();
+        updateFrameOverlay();
+
+        console.log('[RT Monitor] Frames bundle: ' + goodCount + '/' + frames.length +
+                    ' WebPs loaded as blob overlays (' + detailSatName + ', ' +
+                    Math.round(buf.byteLength / 1024) + ' KB)');
+    }
+
+    /** Per-frame fallback: original behavior (one L.imageOverlay per frame
+     *  pointed at /ir-frame.jpg, batched newest-first). Used when the
+     *  bundle endpoint fails. */
+    function _initDetailMapJPGPerFrame(storm, satLayerName) {
+        if (!detailMap) return;
         var atcfId = storm.atcf_id;
         var metaUrl = API_BASE
             + '/ir-monitor/storm/' + encodeURIComponent(atcfId)
@@ -2990,7 +3144,7 @@
                 _initDetailMapJPGWithMeta(storm, satLayerName, meta);
             })
             .catch(function (err) {
-                console.warn('[RT Monitor] JPG primary path unavailable, falling back to GIBS:',
+                console.warn('[RT Monitor] JPG per-frame path unavailable, falling back to GIBS:',
                              err && err.message);
                 _jpgPathFellBack = true;
                 _initDetailMapGIBS(storm, satLayerName);
@@ -3729,9 +3883,13 @@
     /** Show a specific frame by toggling opacity (instant — no tile fetching) */
     function showFrame(idx) {
         if (idx < 0 || idx >= animFrameLayers.length || !detailMap) return;
+        // Bundle path may leave null placeholders for frames that failed
+        // server-side; skip them rather than throwing on .setOpacity().
+        if (!animFrameLayers[idx]) return;
 
         // Hide the current frame
-        if (animIndex >= 0 && animIndex < animFrameLayers.length) {
+        if (animIndex >= 0 && animIndex < animFrameLayers.length
+                && animFrameLayers[animIndex]) {
             animFrameLayers[animIndex].setOpacity(0);
         }
 
@@ -3993,6 +4151,7 @@
     /** Hide all IR animation frame layers */
     function hideAllAnimFrames() {
         for (var i = 0; i < animFrameLayers.length; i++) {
+            if (!animFrameLayers[i]) continue;  // null bundle-fail placeholder
             animFrameLayers[i].setOpacity(0);
         }
     }

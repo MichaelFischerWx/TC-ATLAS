@@ -3490,6 +3490,204 @@ def get_ir_frame_jpg(
     return Response(content=jpg_bytes, media_type="image/webp", headers=meta_headers)
 
 
+# ---------------------------------------------------------------------------
+# Display Frames Bundle — all WebPs in one binary response
+# ---------------------------------------------------------------------------
+
+def _get_or_render_ir_jpg(
+    atcf_upper: str, center_lat: float, center_lon: float,
+    target_dt: _dt, radius_deg: float,
+) -> tuple[bytes | None, str]:
+    """Bundle-endpoint helper: return one frame's WebP bytes + satellite name.
+
+    Mirrors the GCS-JPG → cached-raw-Tb → S3-fresh fallback chain in
+    get_ir_frame_jpg. Returns (None, sat_name) when no data is available
+    for the requested time.
+    """
+    box_deg = radius_deg * 2.0
+    half = radius_deg
+    dt_str = target_dt.strftime("%Y%m%d%H%M")
+    bucket, _ = select_goes_sat(center_lon, target_dt)
+    sat_name = satellite_name_from_bucket(bucket)
+
+    # Warmest path: pre-rendered Mercator-warped WebP in GCS
+    cached_jpg = _gcs_jpg_get(atcf_upper, dt_str)
+    if cached_jpg:
+        return cached_jpg, sat_name
+
+    # Next: render from cached raw Tb (skips S3 round-trip)
+    cached_raw = _gcs_rt_get(atcf_upper, dt_str, lat=center_lat, lon=center_lon)
+    if cached_raw is not None and cached_raw.get("tb_data"):
+        try:
+            encoded = np.frombuffer(
+                base64.b64decode(cached_raw["tb_data"]), dtype=np.uint8
+            ).reshape((cached_raw["tb_rows"], cached_raw["tb_cols"]))
+            decoded_tb = ((encoded.astype(np.float32) - 1) / _TB_SCALE) + _TB_VMIN
+            decoded_tb[encoded == 0] = np.nan
+            jpg_bytes = _render_ir_jpg(
+                decoded_tb,
+                lat_bounds=(center_lat - half, center_lat + half),
+            )
+            if jpg_bytes:
+                _gcs_jpg_put(atcf_upper, dt_str, jpg_bytes)
+                return jpg_bytes, sat_name
+        except Exception:
+            pass
+
+    # Coldest: fetch Tb from S3 + render
+    try:
+        raw = fetch_ir_tb_raw(center_lat, center_lon, target_dt, box_deg)
+    except Exception:
+        return None, sat_name
+    if not raw or raw.get("tb") is None:
+        return None, sat_name
+    jpg_bytes = _render_ir_jpg(
+        raw["tb"],
+        lat_bounds=(center_lat - half, center_lat + half),
+    )
+    if jpg_bytes:
+        _gcs_jpg_put(atcf_upper, dt_str, jpg_bytes)
+        return jpg_bytes, raw.get("satellite", sat_name)
+    return None, sat_name
+
+
+@router.get("/storm/{atcf_id}/ir-frames-bundle")
+def get_storm_ir_frames_bundle(
+    atcf_id: str,
+    lookback_hours: float = Query(6.0, ge=1, le=24),
+    radius_deg: float = Query(10.0, ge=1.0, le=12.0),
+    interval_min: int = Query(30, ge=10, le=60),
+):
+    """Return all display WebP frames for a storm in one packed binary response.
+
+    Wire format (same convention as /ir-raw-bundle):
+        bytes [0..4):           uint32 little-endian: header JSON length L
+        bytes [4..4+L):           UTF-8 JSON header
+        bytes [4+L..end):         concatenated WebP frame bytes, frame order
+
+    JSON header shape:
+        {
+          "total_frames": N,
+          "bounds": [[s,w],[n,e]],
+          "satellite": "GOES-16",
+          "lookback_hours": 6.0, "interval_min": 30, "radius_deg": 10.0,
+          "frames": [
+            {"index": i, "datetime_utc": "...", "satellite": "...",
+             "byte_offset": O, "byte_length": L},
+            ...
+          ]
+        }
+
+    Failed frames keep their index entry with byte_length=0 and an "error"
+    field, so the client can show partial UI.
+
+    Replaces the per-frame /ir-frame.jpg waterfall used by _initDetailMapJPG
+    in realtime_ir.js. Server fans out to GCS (or S3 on cold cache) with a
+    small thread pool so wall time ≈ slowest-frame fetch, and all 13 frames
+    arrive together — the animation goes from "frames pop in randomly" to
+    "appears fully populated, plays smoothly."
+    """
+    import struct
+    from concurrent.futures import ThreadPoolExecutor
+
+    _ensure_fresh_cache()
+    storm = None
+    with _active_storms_lock:
+        for s in _active_storms_cache["storms"]:
+            if s["atcf_id"].upper() == atcf_id.upper():
+                storm = dict(s)
+                break
+
+    if not storm:
+        raise HTTPException(status_code=404, detail=f"Storm {atcf_id} not found")
+
+    atcf_upper = atcf_id.upper()
+    center_lat = storm["lat"]
+    center_lon = storm["lon"]
+    half = radius_deg
+
+    center_dt = _dt.now(timezone.utc)
+    frame_times = build_frame_times(center_dt, lookback_hours, interval_min)
+    # Match /ir-frame.jpg ordering: index 0 = oldest, index N-1 = most recent
+    frame_times = list(reversed(frame_times))
+
+    bounds = [
+        [center_lat - half, center_lon - half],
+        [center_lat + half, center_lon + half],
+    ]
+
+    def _worker(item):
+        i, target_dt = item
+        try:
+            jpg, sat = _get_or_render_ir_jpg(
+                atcf_upper, center_lat, center_lon, target_dt, radius_deg,
+            )
+            return (i, jpg, sat, None)
+        except Exception as ex:
+            return (i, None, "", str(ex))
+
+    indexed = list(enumerate(frame_times))
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(_worker, indexed))
+    results.sort(key=lambda r: r[0])
+
+    frame_headers = []
+    payloads: list[bytes] = []
+    offset = 0
+    # Most-recent frame's satellite goes in the top-level summary;
+    # per-frame satellite stays available for storms crossing
+    # GOES-East / GOES-West / Himawari boundaries within the window.
+    summary_sat = ""
+
+    for i, jpg, sat, err in results:
+        target_dt = frame_times[i]
+        iso_dt = target_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        if not jpg or err is not None:
+            frame_headers.append({
+                "index": i,
+                "datetime_utc": iso_dt,
+                "satellite": sat or "",
+                "byte_offset": offset,
+                "byte_length": 0,
+                "error": err or "no_data",
+            })
+            continue
+        frame_headers.append({
+            "index": i,
+            "datetime_utc": iso_dt,
+            "satellite": sat or "",
+            "byte_offset": offset,
+            "byte_length": len(jpg),
+        })
+        payloads.append(jpg)
+        offset += len(jpg)
+        summary_sat = sat or summary_sat
+
+    header = {
+        "total_frames": len(frame_times),
+        "bounds": bounds,
+        "satellite": summary_sat,
+        "lookback_hours": lookback_hours,
+        "interval_min": interval_min,
+        "radius_deg": radius_deg,
+        "media_type": "image/webp",
+        "frames": frame_headers,
+    }
+    header_json = json.dumps(header, separators=(",", ":")).encode("utf-8")
+    body = struct.pack("<I", len(header_json)) + header_json + b"".join(payloads)
+
+    return Response(
+        content=body,
+        media_type="application/octet-stream",
+        headers={
+            "Cache-Control": "public, max-age=300",
+            "X-Bundle-Frames": str(len(frame_times)),
+            "X-Bundle-Header-Length": str(len(header_json)),
+            "Access-Control-Expose-Headers": "X-Bundle-Frames, X-Bundle-Header-Length",
+        },
+    )
+
+
 def _write_geotiff_bytes(tb_array: np.ndarray, bounds: list) -> bytes:
     """
     Write a float32 brightness temperature array as a minimal GeoTIFF (WGS84).
