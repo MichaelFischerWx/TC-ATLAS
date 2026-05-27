@@ -1656,13 +1656,14 @@ def _poll_active_storms():
 
 # Default pre-fetch settings (match the endpoint defaults)
 _PREFETCH_LOOKBACK_HOURS = 6.0
-# 15-min prewarm cadence (was 30) — produces ~25 frames per 6h lookback
-# instead of 13, doubling animation smoothness. Doubles per-cycle prewarm
-# work but the per-frame work is already fast (~50-100 ms per GCS read
-# on warm cache; ~1-3 s per S3 fetch on cold). Net GCS cost increase
-# is minor (~$1-2/month). 30-min consumers still hit because 30-min
-# timestamps are a strict subset of 15-min timestamps.
-_PREFETCH_INTERVAL_MIN = 15
+# 10-min prewarm cadence — aligns with the underlying satellite scan
+# grid (Himawari + GOES Full Disk both scan every 10 min on
+# 0/10/20/30/40/50). Previously at 15-min, half the requested frames
+# mis-aligned with scans by 5 min, causing storm position alternation
+# in the rendered cutouts (the "NW-SE bouncing" the user observed).
+# 30-min consumers still hit because 30-min boundaries are a strict
+# subset of 10-min boundaries.
+_PREFETCH_INTERVAL_MIN = 10
 _PREFETCH_RADIUS_DEG = 10.0
 _prefetch_lock = threading.Lock()
 

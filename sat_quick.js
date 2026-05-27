@@ -56,9 +56,18 @@
     function _gcsBundleUrl(atcfId) {
         return GCS_BUNDLE_BASE + '/' + encodeURIComponent(atcfId.toUpperCase()) + '.bin';
     }
+    // 10-min cadence aligns with the underlying satellite scan grid
+    // (Himawari + GOES Full Disk scan every 10 min). 15-min cadence
+    // mis-aligned every other frame by 5 min, causing visible storm
+    // position alternation (the "NW-SE bouncing" bug). See
+    // JPG_PRIMARY_INTERVAL_MIN comment in realtime_ir.js for full
+    // explanation. Mobile uses 30-min for OOM headroom — 30 ⊂ 10.
+    var QV_INTERVAL_MIN = (typeof window.matchMedia === 'function'
+        && window.matchMedia('(pointer: coarse)').matches
+        && window.matchMedia('(hover: none)').matches) ? 30 : 10;
     function _apiBundleUrl(atcfId) {
         return API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId)
-            + '/ir-frames-bundle?lookback_hours=6&radius_deg=10&interval_min=15';
+            + '/ir-frames-bundle?lookback_hours=6&radius_deg=10&interval_min=' + QV_INTERVAL_MIN;
     }
 
     // ── DOM refs ─────────────────────────────────────────────

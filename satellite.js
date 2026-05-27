@@ -35,7 +35,13 @@
         } catch (e) { return false; }
     }
     var _IS_TOUCH_INIT = _detectTouchCoarse();
-    var FRAME_INTERVAL_MIN = _IS_TOUCH_INIT ? 30 : 15;
+    // 10-min cadence on desktop, 30-min on mobile. Both align with
+    // the underlying satellite scan grid (Himawari + GOES Full Disk
+    // both scan every 10 min). At 15-min cadence half the frames
+    // missed scan alignment by 5 min, causing the storm to alternate
+    // ~0.04° between consecutive frames (apparent NW-SE bouncing).
+    // Mobile stays at 30-min (every 3rd scan) to bound decoded RAM.
+    var FRAME_INTERVAL_MIN = _IS_TOUCH_INIT ? 30 : 10;
     // Override lookback on touch for the same OOM reason — see comment
     // above on DEFAULT_LOOKBACK_HOURS.
     if (_IS_TOUCH_INIT) DEFAULT_LOOKBACK_HOURS = 4;

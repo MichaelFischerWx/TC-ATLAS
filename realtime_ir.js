@@ -2007,10 +2007,11 @@
             end = new Date(end.getTime() - 15 * 60 * 1000);
         }
         var start = new Date(end.getTime() - lookbackHours * 3600 * 1000);
-        // 15-min steps — matches JPG_PRIMARY_INTERVAL_MIN / RAW_TB_INTERVAL_MIN
-        // / _PREFETCH_INTERVAL_MIN. Bundle architecture handles the higher
-        // frame count without smoothness/perf regression.
-        var step = 15 * 60 * 1000;
+        // 10-min steps — aligns with the underlying satellite scan grid
+        // (Himawari + GOES Full Disk both scan every 10 min). 15-min
+        // cadence was off-by-5-min on half the frames, causing storm
+        // position alternation between consecutive frames.
+        var step = 10 * 60 * 1000;
         for (var t = start.getTime(); t <= end.getTime(); t += step) {
             var d = roundToGIBSInterval(new Date(t));
             times.push(toGIBSTime(d));
@@ -3032,15 +3033,22 @@
     var JPG_FALLBACK_ERROR_THRESHOLD = 0.5;  // >50% frame errors → swap to GIBS
     var JPG_PRIMARY_RADIUS_DEG = 10.0;
     var JPG_PRIMARY_LOOKBACK_H = DEFAULT_LOOKBACK_HOURS;
-    // 15-min cadence (was 30) — produces 25 frames in a 6h lookback for
-    // ~2× smoother animation. Bundle architecture makes this essentially
-    // free (one request goes from ~780 KB → ~1.5 MB). Captures sub-hourly
-    // structural evolution (eyewall replacements, RI bursts) that 30-min
-    // sampling smeared into a slideshow.
-    var JPG_PRIMARY_INTERVAL_MIN = 15;
+    // 10-min cadence — produces 37 frames in a 6h lookback. CHANGED from
+    // 15-min because the satellite scan grid (Himawari + GOES Full Disk)
+    // is every 10 min on 0/10/20/30/40/50, and a 15-min cadence is
+    // off-by-5-min on half the frames: requested 00:15 → server picks
+    // the 00:10 scan (5 min earlier than request) → cutout center is
+    // at interp(00:15) but image data is from 00:10 → storm in image
+    // appears OFFSET from cutout center by 5min*motion ≈ 0.04° for
+    // typical TC speed. Adjacent frames at 00:00/00:30 use exact scans
+    // → storm at image center. Result: visible alternation between two
+    // storm positions every frame ("NW then SE then NW...") that users
+    // see as bouncing. 10-min cadence aligns every frame with the
+    // scan grid, eliminating the offset.
+    var JPG_PRIMARY_INTERVAL_MIN = 10;
     // Same cadence used for the raw-Tb fetch so hover-Tb + colormap-switch
-    // reuse the prewarmed 15-min frame set.
-    var RAW_TB_INTERVAL_MIN = 15;
+    // reuse the same prewarmed frame set.
+    var RAW_TB_INTERVAL_MIN = 10;
     var _jpgPathFellBack = false;
 
     // Track blob URLs we create from bundle bytes so we can revoke them
