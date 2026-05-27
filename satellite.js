@@ -4593,18 +4593,14 @@
         //     (storm-bound but IR-frame-independent — just refresh
         //     the panel against the new storm).
         // ── Smart-default mode switch (deferred below) ────────────
-        //   • Hurricane (≥ 65 kt) → diagnostics (IR-based inner-core
-        //     charts: Hovmöller, radial profile, asymmetry).
-        //   • Anything weaker → environment (intensity history, shear,
-        //     model spread, motion). Previously defaulted to compare-wv
-        //     which auto-fetched a WV bundle on every storm open even
-        //     when the user just wanted the IR — wasteful, especially
-        //     on mobile. The Env panel is useful for any storm without
-        //     requiring a detected eye.
-        var smartMode = (currentStorm
-                         && isFinite(currentStorm.vmax_kt)
-                         && currentStorm.vmax_kt >= 65)
-            ? 'diagnostics' : 'environment';
+        // Environment is the default for ALL storms — "where is it,
+        // how strong, what's the shear, what's the forecast" is the
+        // universal first-look question regardless of intensity.
+        // Diagnostics (Hovmöller, radial profile, asymmetry) are
+        // power-user research views — useful, but not the right
+        // default. Users open Diag intentionally when they want
+        // inner-core analysis. Same for Track / Asym / WV / Vis / MW.
+        var smartMode = 'environment';
         // Local helper — actually runs the mode switch. We hold off
         // calling this until AFTER loadFrames so IR fetches grab
         // the browser's connection slots first; otherwise the
