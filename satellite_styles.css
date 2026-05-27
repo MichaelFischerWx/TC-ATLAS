@@ -941,6 +941,36 @@
     text-align: center;
 }
 
+/* Adjust-Speed control: [−] [label] [+] — replaces the old single
+   "cycle through fixed speeds" button. Step buttons reuse .sat-anim-btn
+   styling so they sit naturally with play/next/save. */
+.sat-speed-control {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    margin: 0 4px;
+}
+.sat-speed-step-btn {
+    min-width: 22px;
+    padding: 2px 6px;
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1;
+}
+.sat-speed-step-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+}
+.sat-speed-label {
+    display: inline-block;
+    min-width: 32px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+    font-size: 11px;
+    color: #cbd5e1;
+    user-select: none;
+}
+
 input[type="range"].sat-slider {
     flex: 1;
     min-width: 80px;

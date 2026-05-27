@@ -52,11 +52,11 @@
     var animPlaying = false;
     var animTimer = null;
     var animLastTick = 0;
-    // Default speed: desktop = 2x (snappier, matches NHC/RAMMB convention).
-    // Mobile = 1x (conservative — fits ~9 frames in a 7s loop, plenty of
-    // time to absorb per-frame structure on a smaller screen). Both are
-    // ANIM_SPEEDS indices: 0=0.5x, 1=1x, 2=2x, 3=4x (desktop only).
-    var animSpeedIdx = _IS_TOUCH_INIT ? 1 : 2;
+    // Default speed: desktop = 2x (idx 4), mobile = 1x (idx 2).
+    // See ANIM_SPEEDS table below for full step list. Defaults set
+    // BEFORE the table is declared because the table only needs to
+    // be defined before any read; the variable just holds an index.
+    var animSpeedIdx = _IS_TOUCH_INIT ? 2 : 4;
     var hoverThrottled = false;
     var pollTimer = null;
     var selectedColormap = 'claude-ir';
@@ -134,19 +134,29 @@
     var _satRadarPrefetching = false;
     var _satRadarSyncTimer = null;   // throttle timer for frame-sync
 
+    // Animation speed table. Steps roughly geometric so each − / + tap
+    // makes a perceptible difference. Indices ordered slow → fast so
+    // "+" means smaller `ms`. 1x = 600 ms/frame is the baseline. Top
+    // step is 10x (60 ms = ~17 fps) which is about as fast as the
+    // WebP-decode pipeline can sustain.
     var ANIM_SPEEDS = [
-        { label: '0.5x', ms: 1200 },
-        { label: '1x',   ms: 600 },
-        { label: '2x',   ms: 300 },
-        { label: '4x',   ms: 150 }
+        { label: '0.25x', ms: 2400 },   // 0
+        { label: '0.5x',  ms: 1200 },   // 1
+        { label: '1x',    ms: 600 },    // 2
+        { label: '1.5x',  ms: 400 },    // 3
+        { label: '2x',    ms: 300 },    // 4
+        { label: '3x',    ms: 200 },    // 5
+        { label: '4x',    ms: 150 },    // 6
+        { label: '6x',    ms: 100 },    // 7
+        { label: '8x',    ms: 75 },     // 8
+        { label: '10x',   ms: 60 }      // 9
     ];
-    // Mobile/touch: cap top play speed at 2x. 4x (150 ms per frame)
-    // triggers rapid WebP decode → bitmap-cache churn that pushes
-    // iOS Safari over its tab memory budget and causes the tab to
-    // be abandoned mid-animation (Safari "backs out" to the
-    // previously-visible page, which on TC-ATLAS is the global map).
-    // Desktop keeps the full 0.5x-4x range.
-    var MOBILE_MAX_SPEED_IDX = 2;  // index into ANIM_SPEEDS — 2 = '2x'
+    // Mobile/touch: cap at 2x (idx 4). Higher speeds churn the WebP
+    // decode pipeline fast enough to push iOS Safari over its tab
+    // memory budget — page reloads mid-animation. Desktop has the
+    // full range.
+    var MOBILE_MAX_SPEED_IDX = 4;  // 2x
+    var FAST_PLAY_MS_THRESHOLD = 300;  // ≤ this = "fast" for diag debounce
 
     // Pause on the most-recent frame so the user can orient themselves
     // before the loop restarts. Common convention in weather animations
@@ -372,10 +382,11 @@
         satelliteEl = document.getElementById('sat-satellite');
         stormLabelEl = document.getElementById('sat-storm-label');
         playBtn = document.getElementById('sat-play');
-        speedBtn = document.getElementById('sat-speed');
-        // Sync the speed button label with the actual default speed
-        // (HTML ships "1x" as a fallback; desktop default is 2x).
-        if (speedBtn) speedBtn.textContent = ANIM_SPEEDS[animSpeedIdx].label;
+        speedBtn = document.getElementById('sat-speed');  // now the <span> label
+        // Sync label + ± button enabled state with the actual default.
+        // _updateSpeedUI is hoisted (function declaration) so calling
+        // it here works even though its body is defined later.
+        if (typeof _updateSpeedUI === 'function') _updateSpeedUI();
         stormListEl = document.getElementById('sat-storm-list');
         rightLabelEl = document.getElementById('sat-right-label');
         sidebar = document.getElementById('sat-sidebar');
@@ -586,7 +597,9 @@
         if (viewMode === 'diagnostics') {
             // Debounced diagnostics update during fast animation
             if (diagUpdateDebounceTimer) clearTimeout(diagUpdateDebounceTimer);
-            if (animPlaying && animSpeedIdx >= 2) {
+            // "Fast play" = frame interval ≤ 300 ms (2x+). Debounce
+            // diagnostics rendering to avoid choking the main thread.
+            if (animPlaying && ANIM_SPEEDS[animSpeedIdx].ms <= FAST_PLAY_MS_THRESHOLD) {
                 diagUpdateDebounceTimer = setTimeout(renderDiagnostics, DIAG_DEBOUNCE_MS);
             } else {
                 renderDiagnostics();
@@ -5797,13 +5810,26 @@
     function startAnimation() { if (validFrameIndices.length < 2) return; animPlaying = true; _ga('sat_animation_play'); animLastTick = 0; animTimer = requestAnimationFrame(animTick); updatePlayBtn(); }
     function stopAnimation() { animPlaying = false; if (animTimer) cancelAnimationFrame(animTimer); animTimer = null; updatePlayBtn(); }
     function toggleAnimation() { if (animPlaying) stopAnimation(); else startAnimation(); }
-    function cycleSpeed() {
-        // Mobile/touch caps at 2x (idx 2) — 4x crashes iOS Safari mid-loop.
-        var maxIdx = _IS_TOUCH_INIT ? MOBILE_MAX_SPEED_IDX : (ANIM_SPEEDS.length - 1);
-        var next = animSpeedIdx + 1;
-        if (next > maxIdx) next = 0;
-        animSpeedIdx = next;
+    function _speedMaxIdx() {
+        // Mobile cap to prevent iOS Safari OOM (see ANIM_SPEEDS comment).
+        return _IS_TOUCH_INIT ? MOBILE_MAX_SPEED_IDX : (ANIM_SPEEDS.length - 1);
+    }
+    function _updateSpeedUI() {
         if (speedBtn) speedBtn.textContent = ANIM_SPEEDS[animSpeedIdx].label;
+        var dn = document.getElementById('sat-speed-down');
+        var up = document.getElementById('sat-speed-up');
+        if (dn) dn.disabled = (animSpeedIdx === 0);
+        if (up) up.disabled = (animSpeedIdx >= _speedMaxIdx());
+    }
+    function stepSpeed(delta) {
+        // delta = +1 (faster) or -1 (slower). Clamps to [0, max].
+        var next = animSpeedIdx + delta;
+        var maxIdx = _speedMaxIdx();
+        if (next < 0) next = 0;
+        if (next > maxIdx) next = maxIdx;
+        if (next === animSpeedIdx) return;  // already at bound
+        animSpeedIdx = next;
+        _updateSpeedUI();
     }
 
     // ── UI Updates ──────────────────────────────────────────────
@@ -5980,7 +6006,10 @@
         document.getElementById('sat-prev').addEventListener('click', function () { stopAnimation(); prevFrame(); });
         document.getElementById('sat-next').addEventListener('click', function () { stopAnimation(); nextFrame(); });
         playBtn.addEventListener('click', toggleAnimation);
-        speedBtn.addEventListener('click', cycleSpeed);
+        var sdn = document.getElementById('sat-speed-down');
+        var sup = document.getElementById('sat-speed-up');
+        if (sdn) sdn.addEventListener('click', function () { stepSpeed(-1); });
+        if (sup) sup.addEventListener('click', function () { stepSpeed(+1); });
         sliderEl.addEventListener('input', function () {
             stopAnimation();
             var pos = parseInt(this.value, 10);
