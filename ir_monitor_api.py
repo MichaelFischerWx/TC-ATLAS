@@ -2460,6 +2460,263 @@ def get_storm_ir_raw_frame(
 
 
 # ---------------------------------------------------------------------------
+# Raw Tb Bundle Endpoint — all frames in one packed binary response
+# ---------------------------------------------------------------------------
+
+def _fetch_one_raw_tb_for_bundle(
+    atcf_upper: str, storm: dict, target_dt: _dt,
+    radius_deg: float, interp_lat: float, interp_lon: float,
+) -> dict | None:
+    """Bundle-endpoint worker: faithful clone of /ir-raw-frame's GCS-then-S3
+    fetch path, minus the adjacent-frame center_fix chaining.
+
+    Why no chaining: the bundle runs all frames in parallel from a clean
+    cache-state read, so cross-frame center_fix lookups would either race
+    (workers' frames not yet written) or do redundant GCS reads. Instead
+    the initial guess is the interpolated best-track position at this
+    frame's time, which is what the per-frame endpoint falls back to when
+    no adjacent fix exists anyway. The (typically minor) loss in initial-
+    guess quality is acceptable for first-load speed; users can still
+    refetch a single frame via /ir-raw-frame to pick up the chained guess.
+    """
+    center_lat = storm["lat"]
+    center_lon = storm["lon"]
+    box_deg = radius_deg * 2.0
+    half = radius_deg
+    dt_str = target_dt.strftime("%Y%m%d%H%M")
+    vmax_kt = storm.get("vmax_kt")
+
+    # GCS cache first — typical hit on prewarmed storms
+    cached = _gcs_rt_get(atcf_upper, dt_str, lat=center_lat, lon=center_lon)
+    if cached is not None:
+        return cached
+
+    # Cache miss: pull from S3 + render
+    raw = fetch_ir_tb_raw(center_lat, center_lon, target_dt, box_deg)
+    if not raw or raw.get("tb") is None:
+        return None
+
+    tb = raw["tb"]
+    arr = np.asarray(tb, dtype=np.float32)
+    mask = ~np.isfinite(arr) | (arr <= 0)
+    scaled = np.clip((arr - _TB_VMIN) * _TB_SCALE + 1, 1, 255)
+    scaled[mask] = 0
+    encoded = scaled.astype(np.uint8)
+
+    # Center fix for hurricanes (≥65 kt), seeded by interpolated track pos
+    center_fix = None
+    if vmax_kt is not None and vmax_kt >= 65:
+        frame_bounds = raw.get("bounds", [
+            [center_lat - half, center_lon - half],
+            [center_lat + half, center_lon + half],
+        ])
+        try:
+            gated = apply_center_gates(
+                arr, frame_bounds, interp_lat, interp_lon,
+                ref_lat=interp_lat, ref_lon=interp_lon,
+            )
+            if gated["passed"]:
+                center_fix = gated["center_fix"]
+            else:
+                cfix = gated["cfix_raw"]
+                center_fix = {
+                    "success": False,
+                    "reason": gated["gate_info"].get("reason", "unknown"),
+                    "gates": gated["gate_info"],
+                    "best_score": cfix.get("eye_score", cfix.get("best_score", 0)),
+                    "best_ir_rad_dif": cfix.get("ir_rad_dif", cfix.get("best_ir_rad_dif", 0)),
+                    "n_candidates": cfix.get("n_candidates", 0),
+                }
+                if cfix.get("found_lat") is not None:
+                    center_fix["found_lat"] = cfix["found_lat"]
+                    center_fix["found_lon"] = cfix["found_lon"]
+                    center_fix["guess_lat"] = cfix["guess_lat"]
+                    center_fix["guess_lon"] = cfix["guess_lon"]
+                    center_fix["dist_deg"] = cfix.get("dist_deg", 0)
+        except Exception:
+            pass
+
+    frame_result = {
+        "tb_data": base64.b64encode(encoded.tobytes()).decode("ascii"),
+        "tb_rows": encoded.shape[0],
+        "tb_cols": encoded.shape[1],
+        "tb_vmin": _TB_VMIN,
+        "tb_vmax": _TB_VMAX,
+        "datetime_utc": raw["datetime_utc"],
+        "satellite": raw.get("satellite", ""),
+        "bounds": raw.get("bounds", [
+            [center_lat - half, center_lon - half],
+            [center_lat + half, center_lon + half],
+        ]),
+        "center_fix": center_fix,
+    }
+    # Cache fire-and-forget so subsequent per-frame requests benefit
+    _gcs_rt_put(atcf_upper, dt_str, frame_result, lat=center_lat, lon=center_lon)
+
+    del tb, arr, mask, scaled, encoded
+    return frame_result
+
+
+@router.get("/storm/{atcf_id}/ir-raw-bundle")
+def get_storm_ir_raw_bundle(
+    atcf_id: str,
+    lookback_hours: float = Query(6.0, ge=1, le=24),
+    radius_deg: float = Query(10.0, ge=1.0, le=12.0),
+    interval_min: int = Query(30, ge=10, le=60),
+):
+    """Return all raw Tb frames for a storm in one packed binary response.
+
+    Wire format:
+        bytes [0..4):            uint32 little-endian: header JSON length L
+        bytes [4..4+L):           UTF-8 JSON header (per-frame metadata)
+        bytes [4+L..end):         concatenated uint8 Tb arrays, frame order
+
+    JSON header shape:
+        {
+          "total_frames": N,
+          "tb_vmin": 160.0, "tb_vmax": 330.0,
+          "lookback_hours": 6.0, "interval_min": 30, "radius_deg": 10.0,
+          "frames": [
+            {"index": i, "datetime_utc": "...", "satellite": "...",
+             "tb_rows": R, "tb_cols": C,
+             "byte_offset": O, "byte_length": R*C,
+             "bounds": [[s,w],[n,e]], "center_fix": {...} | null},
+            ...
+          ]
+        }
+
+    Frames that fail to fetch keep their index entry with byte_length=0
+    and an "error" field — clients can show partial UI and optionally
+    refetch the missing frame via /ir-raw-frame.
+
+    Replaces the 13× /ir-raw-frame waterfall used by _fetchRawTbIncremental
+    in realtime_ir.js. Server fans out across frames with a small thread
+    pool so wall time ≈ max-frame fetch, and the wire payload drops from
+    ~9 MB of base64 JSON to ~2.5 MB of binary in a single TLS round-trip.
+    """
+    import struct
+    from concurrent.futures import ThreadPoolExecutor
+
+    _ensure_fresh_cache()
+    storm = None
+    with _active_storms_lock:
+        for s in _active_storms_cache["storms"]:
+            if s["atcf_id"].upper() == atcf_id.upper():
+                storm = dict(s)
+                break
+
+    if not storm:
+        raise HTTPException(status_code=404, detail=f"Storm {atcf_id} not found")
+
+    atcf_upper = atcf_id.upper()
+    center_lat = storm["lat"]
+    center_lon = storm["lon"]
+
+    center_dt = _dt.now(timezone.utc)
+    frame_times = build_frame_times(center_dt, lookback_hours, interval_min)
+    # Match /ir-raw-frame ordering: index 0 = oldest, index N-1 = most recent
+    frame_times = list(reversed(frame_times))
+
+    track_records = _get_track_for_interp(atcf_id)
+
+    def _worker(item):
+        i, target_dt = item
+        interp_lat, interp_lon = center_lat, center_lon
+        if track_records:
+            ipos = _interpolate_track_position(track_records, target_dt)
+            if ipos:
+                interp_lat, interp_lon = ipos
+        try:
+            return (i, _fetch_one_raw_tb_for_bundle(
+                atcf_upper, storm, target_dt, radius_deg, interp_lat, interp_lon,
+            ))
+        except Exception as ex:
+            return (i, {"_error": str(ex)})
+
+    # Cap workers at 4 — beyond that S3 throughput plateaus and the
+    # NOAA-Open-Data anonymous endpoint starts returning sporadic 429s.
+    indexed = list(enumerate(frame_times))
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(_worker, indexed))
+    results.sort(key=lambda r: r[0])
+
+    frame_headers = []
+    payloads: list[bytes] = []
+    offset = 0
+
+    for i, frame in results:
+        target_dt = frame_times[i]
+        iso_dt = target_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        if frame is None or (isinstance(frame, dict) and "_error" in frame):
+            frame_headers.append({
+                "index": i,
+                "datetime_utc": iso_dt,
+                "tb_rows": 0,
+                "tb_cols": 0,
+                "byte_offset": offset,
+                "byte_length": 0,
+                "error": (frame or {}).get("_error", "no_data") if frame else "no_data",
+            })
+            continue
+        try:
+            tb_bytes = base64.b64decode(frame["tb_data"])
+        except Exception as ex:
+            frame_headers.append({
+                "index": i, "datetime_utc": iso_dt,
+                "tb_rows": 0, "tb_cols": 0,
+                "byte_offset": offset, "byte_length": 0,
+                "error": f"decode: {ex}",
+            })
+            continue
+        rows = int(frame["tb_rows"])
+        cols = int(frame["tb_cols"])
+        if len(tb_bytes) != rows * cols:
+            frame_headers.append({
+                "index": i, "datetime_utc": iso_dt,
+                "tb_rows": 0, "tb_cols": 0,
+                "byte_offset": offset, "byte_length": 0,
+                "error": "size_mismatch",
+            })
+            continue
+        frame_headers.append({
+            "index": i,
+            "datetime_utc": frame.get("datetime_utc", iso_dt),
+            "satellite": frame.get("satellite", ""),
+            "tb_rows": rows,
+            "tb_cols": cols,
+            "byte_offset": offset,
+            "byte_length": rows * cols,
+            "bounds": frame.get("bounds"),
+            "center_fix": frame.get("center_fix"),
+        })
+        payloads.append(tb_bytes)
+        offset += rows * cols
+
+    header = {
+        "total_frames": len(frame_times),
+        "tb_vmin": _TB_VMIN,
+        "tb_vmax": _TB_VMAX,
+        "lookback_hours": lookback_hours,
+        "interval_min": interval_min,
+        "radius_deg": radius_deg,
+        "frames": frame_headers,
+    }
+    header_json = json.dumps(header, separators=(",", ":")).encode("utf-8")
+    body = struct.pack("<I", len(header_json)) + header_json + b"".join(payloads)
+
+    return Response(
+        content=body,
+        media_type="application/octet-stream",
+        headers={
+            "Cache-Control": "public, max-age=300",
+            "X-Bundle-Frames": str(len(frame_times)),
+            "X-Bundle-Header-Length": str(len(header_json)),
+            "Access-Control-Expose-Headers": "X-Bundle-Frames, X-Bundle-Header-Length",
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
 # Hovmoller Batch Endpoint — server-side radial profile computation
 # ---------------------------------------------------------------------------
 

@@ -4162,6 +4162,59 @@
     // aborted when the user switches storms to cancel in-flight requests.
     var _rawTbAbortController = null;
 
+    /** Single-shot binary bundle path: one /ir-raw-bundle request returns
+     *  all frames packed as [u32 header_len][JSON header][concat uint8 Tb].
+     *  ~3-4× faster than the 13-request waterfall on warm cache, single
+     *  TLS round-trip, no per-frame Cloud Run overhead. Returns a Promise
+     *  that resolves to an array of frame objects matching the shape
+     *  produced by the incremental path, or rejects on any failure so
+     *  the caller can fall back to incremental fetching. */
+    function _fetchRawTbBundle(stormId, signal) {
+        var url = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(stormId) + '/ir-raw-bundle'
+            + '?lookback_hours=' + DEFAULT_LOOKBACK_HOURS
+            + '&radius_deg=' + DEFAULT_RADIUS_DEG
+            + '&interval_min=30';
+        return fetch(url, { signal: signal })
+            .then(function (r) {
+                if (!r.ok) throw new Error('bundle HTTP ' + r.status);
+                return r.arrayBuffer();
+            })
+            .then(function (buf) {
+                if (signal && signal.aborted) throw new DOMException('aborted', 'AbortError');
+                var dv = new DataView(buf);
+                if (buf.byteLength < 4) throw new Error('bundle too small');
+                var headerLen = dv.getUint32(0, true);  // little-endian
+                if (4 + headerLen > buf.byteLength) throw new Error('bundle header overruns body');
+                var headerBytes = new Uint8Array(buf, 4, headerLen);
+                var headerJson = new TextDecoder('utf-8').decode(headerBytes);
+                var header = JSON.parse(headerJson);
+                var binBase = 4 + headerLen;
+                var frames = [];
+                var failed = 0;
+                for (var i = 0; i < header.frames.length; i++) {
+                    var fh = header.frames[i];
+                    if (!fh.byte_length || fh.error) {
+                        failed++;
+                        continue;
+                    }
+                    // Slice into the buffer with NO copy — Uint8Array is a view
+                    var tb = new Uint8Array(buf, binBase + fh.byte_offset, fh.byte_length);
+                    frames.push({
+                        tb_data: tb,
+                        rows: fh.tb_rows,
+                        cols: fh.tb_cols,
+                        bounds: fh.bounds,
+                        datetime_utc: fh.datetime_utc || '',
+                        satellite: fh.satellite || '',
+                        tb_vmin: header.tb_vmin || 160.0,
+                        tb_vmax: header.tb_vmax || 330.0,
+                        center_fix: fh.center_fix || null
+                    });
+                }
+                return { frames: frames, total: header.total_frames, failed: failed };
+            });
+    }
+
     function _fetchRawTbIncremental(stormId, silent, onComplete) {
         if (!stormId) return;
 
@@ -4182,6 +4235,37 @@
         var controller = new AbortController();
         if (!silent) _rawTbAbortController = controller;
 
+        // ── Primary path: single binary bundle ────────────────
+        // Try the packed bundle endpoint first; on any failure (404 if
+        // backend not yet redeployed, parse error, network) fall through
+        // to the legacy per-frame incremental waterfall below.
+        if (!silent) showLoadingProgress(true, 5);
+        _fetchRawTbBundle(stormId, controller.signal)
+            .then(function (result) {
+                if (controller.signal.aborted) return;
+                var pos = _stormPositionForId(stormId);
+                _rawTbCache[stormId] = {
+                    rawTbFrames: result.frames, cachedAt: Date.now(),
+                    lat: pos ? pos.lat : null, lon: pos ? pos.lon : null
+                };
+                if (stormId === currentStormId) rawTbFrames = result.frames;
+                console.log('[RT Monitor] Raw Tb bundle loaded for ' + stormId +
+                    ': ' + result.frames.length + ' OK, ' + result.failed + ' failed');
+                if (!silent) showLoadingProgress(false);
+                _fireRtReadyCallbacks(stormId);
+                if (_rawTbAbortController === controller) _rawTbAbortController = null;
+                if (onComplete) onComplete();
+            })
+            .catch(function (err) {
+                if (err && err.name === 'AbortError') return;
+                console.warn('[RT Monitor] Raw Tb bundle failed (' +
+                    (err && err.message) + ') — falling back to incremental');
+                _fetchRawTbIncrementalLegacy(stormId, silent, controller, onComplete);
+            });
+    }
+
+    /** Legacy per-frame waterfall (kept as bundle-failure fallback). */
+    function _fetchRawTbIncrementalLegacy(stormId, silent, controller, onComplete) {
         var totalFrames = 13;  // will be updated from first response
         var loadedFrames = [];
         var completed = 0;
