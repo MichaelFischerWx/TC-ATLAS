@@ -2898,15 +2898,21 @@
             && window.matchMedia('(hover: none)').matches;
     }
 
-    // Narrow-viewport detection. Aligned with the CSS breakpoint at
-    // 768 px so JS branches stay in sync with the mobile layout
-    // rules (single-pane default, MW-only stacked pane, hidden
-    // WV/Vis modes). We re-evaluate on each call rather than
-    // caching — covers orientation changes and resizable windows
-    // without needing a resize listener.
+    // Narrow-viewport detection. 640 px breakpoint (was 768) — keeps
+    // phones (≤640) in single-pane mode while letting tablets
+    // (iPad portrait = 768 px, larger Androids) get the full
+    // dual-pane WV/Vis compare UX. Bundle architecture made the
+    // doubled-image memory cost minor (one ~1.5 MB binary instead
+    // of ~13 separate small requests) so the original memory argument
+    // for hiding compare modes no longer applies on tablets; only
+    // readability (~5-6" phone screens are genuinely too cramped for
+    // side-by-side) drives the gate now.
+    //
+    // Re-evaluated on each call rather than cached — covers
+    // orientation changes without a resize listener.
     function _satIsMobileLayout() {
         return typeof window.matchMedia === 'function'
-            && window.matchMedia('(max-width: 768px)').matches;
+            && window.matchMedia('(max-width: 640px)').matches;
     }
 
     function _satAttachLeafletHover(map, framesProvider, label) {
@@ -4956,14 +4962,114 @@
             for (var i = 0; i < c; i++) fetchPreview(i);
         }
 
+        // ── Bundle path (Option A — mobile colormap unlock) ────────
+        // Tries the binary /ir-raw-bundle endpoint, with direct-GCS try
+        // first (prewarmed) then API fallback. One request instead of
+        // N — big win on cellular where each /ir-raw-frame call costs
+        // 100-300 ms of TLS+routing.
+        var _GCS_RAW_BUNDLE_BASE = 'https://storage.googleapis.com/tc-atlas-ir-cache/rt-v10/bundles/raw';
+        function _satTryRawTbBundleThen(sid, done) {
+            var apiUrl = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(sid)
+                + '/ir-raw-bundle?lookback_hours=' + DEFAULT_LOOKBACK_HOURS
+                + '&radius_deg=' + DEFAULT_RADIUS_DEG
+                + '&interval_min=' + FRAME_INTERVAL_MIN;
+            var gcsUrl = _GCS_RAW_BUNDLE_BASE + '/' + encodeURIComponent(sid.toUpperCase()) + '.bin';
+            fetch(gcsUrl)
+                .then(function (r) {
+                    if (!r.ok) throw new Error('gcs raw bundle HTTP ' + r.status);
+                    return r.arrayBuffer();
+                })
+                .catch(function () {
+                    return fetch(apiUrl).then(function (r) {
+                        if (!r.ok) throw new Error('api raw bundle HTTP ' + r.status);
+                        return r.arrayBuffer();
+                    });
+                })
+                .then(function (buf) {
+                    if (sid !== currentStormId) { done(false); return; }
+                    try {
+                        var dv = new DataView(buf);
+                        if (buf.byteLength < 4) throw new Error('bundle too small');
+                        var hl = dv.getUint32(0, true);
+                        if (4 + hl > buf.byteLength) throw new Error('bundle header overrun');
+                        var header = JSON.parse(new TextDecoder('utf-8')
+                            .decode(new Uint8Array(buf, 4, hl)));
+                        var bin = 4 + hl;
+                        var ok = 0;
+                        var hdrFrames = header.frames || [];
+                        if (header.total_frames) totalFrames = header.total_frames;
+                        for (var i = 0; i < hdrFrames.length; i++) {
+                            var f = hdrFrames[i];
+                            if (!f.byte_length || f.error) continue;
+                            var tb = new Uint8Array(buf, bin + f.byte_offset, f.byte_length);
+                            var existing = irFrames[f.index] || {};
+                            irFrames[f.index] = {
+                                previewImg: existing.previewImg || null,
+                                tb_data: tb,
+                                rows: f.tb_rows,
+                                cols: f.tb_cols,
+                                bounds: f.bounds,
+                                datetime_utc: f.datetime_utc || '',
+                                satellite: f.satellite || '',
+                                tb_vmin: header.tb_vmin || 160.0,
+                                tb_vmax: header.tb_vmax || 330.0,
+                                center_fix: f.center_fix || null
+                            };
+                            ok++;
+                        }
+                        irDone = ok;
+                        buildValidIndices();
+                        updateSliderMax();
+                        if (validFrameIndices.length > 0) {
+                            animIndex = validFrameIndices[0];
+                        }
+                        renderBothPanels();
+                        updateAnimUI();
+                        if (loadStatusEl) loadStatusEl.textContent = '';
+                        if (!frameCache[sid]) frameCache[sid] = { ts: Date.now() };
+                        frameCache[sid].ir = irFrames.slice();
+                        frameCache[sid].ts = Date.now();
+                        console.log('[Satellite] Raw Tb bundle: ' + ok + '/' +
+                                    hdrFrames.length + ' frames loaded');
+                        done(true);
+                    } catch (e) {
+                        console.warn('[Satellite] Bundle parse failed:', e.message);
+                        done(false);
+                    }
+                })
+                .catch(function (err) {
+                    console.warn('[Satellite] Raw Tb bundle fetch failed:', err && err.message);
+                    done(false);
+                });
+        }
+
         /**
          * Start raw Tb backfill for all frames. No longer fired
          * automatically by the preview-finish handler — invoked
          * on-demand from window._satEnsureRawTbLoaded (colormap
          * change, hover, asymmetry-enter).
+         *
+         * Tries the binary /ir-raw-bundle endpoint first (one request,
+         * ~5 MB packed binary, ~1-2 s on cellular). On any failure falls
+         * back to the per-frame waterfall below. The bundle path is a
+         * major win on mobile where each /ir-raw-frame JSON costs
+         * 100-300 ms of TLS+routing overhead — 13 of those over LTE
+         * totals 1.3-4 s of overhead alone. Bundle collapses that to
+         * one round-trip.
          */
         function _startRawTbBackfill() {
             if (loadStatusEl) loadStatusEl.textContent = 'Loading Tb data...';
+            // Bundle attempt first; only fall through to the per-frame
+            // waterfall on failure (404 if backend not yet redeployed,
+            // parse error, network).
+            _satTryRawTbBundleThen(stormId, function (ok) {
+                if (ok) return;
+                console.log('[Satellite] Bundle path unavailable; using per-frame waterfall');
+                _startRawTbBackfillLegacy();
+            });
+        }
+
+        function _startRawTbBackfillLegacy() {
             var tbDone = 0;
             for (var i = 0; i < Math.min(FETCH_CONCURRENCY, totalFrames); i++) {
                 _fetchRawTb(i);

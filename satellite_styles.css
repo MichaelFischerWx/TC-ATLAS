@@ -965,15 +965,21 @@ body.sat-leaflet-active .sat-zoom-group { display: none; }
 
 /* ── Responsive ─────────────────────────────────────────────── */
 
-@media (max-width: 768px) {
+@media (max-width: 640px) {
     /* ═══════════════════════════════════════════════════════════
-       Mobile layout overhaul (single-pane by default, MW stacks).
+       Phone-only layout overhaul (single-pane by default, MW stacks).
+       Breakpoint = 640px (was 768px) — keeps phones in single-pane
+       but lets tablets (iPad portrait = 768px) get the full
+       dual-pane WV/Vis compare UX. The original OOM concern is
+       moot post-bundle: WV adds only ~1.5 MB now, not 13 separate
+       fetches. Phones (≤5-6") still get single-pane purely for
+       readability — side-by-side at <320 px per pane is unusable.
 
-       Rationale: side-by-side dual-pane is unreadable at <360 px
-       per pane on phones, and pre-loading 13 IR + 13 WV frames
-       routinely OOM'd iOS Safari. We collapse to a single IR pane
-       and reserve the second pane exclusively for MW (where the
-       comparison is two static frames — light + valuable).
+       Rationale (original): side-by-side dual-pane is unreadable at
+       <360 px per pane on phones, and pre-loading 13 IR + 13 WV
+       frames routinely OOM'd iOS Safari. We collapse to a single IR
+       pane and reserve the second pane exclusively for MW (where
+       the comparison is two static frames — light + valuable).
        ═══════════════════════════════════════════════════════════ */
 
     /* .sat-main top is already correct via var(--topbar-h) +
