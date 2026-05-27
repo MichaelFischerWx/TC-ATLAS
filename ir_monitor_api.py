@@ -1972,7 +1972,12 @@ def _prefetch_ir_frames(storms: list):
                 # cache for the full 6h lookback. Workers stay capped at
                 # 2 for Vis to bound peak memory.
                 max_band_frames = len(frame_times)
-                max_workers = 2 if right_band == VIS_BAND else 4
+                # Worker count tuned for Cloud Run's 2 vCPU + 4 Gi memory.
+                # Frame work is mostly I/O-bound (S3 fetch + bz2
+                # decompress), so we can run well above core count.
+                # Vis L1b is much larger per segment so we cap lower to
+                # bound peak memory; IR/WV/SWIR are 16× smaller.
+                max_workers = 3 if right_band == VIS_BAND else 8
 
                 # At night also prewarm Band 7 (SWIR) alongside WV.
                 # Visible button auto-switches to SWIR when the storm is
@@ -1984,9 +1989,17 @@ def _prefetch_ir_frames(storms: list):
                 if right_band == WV_BAND:  # night cycle
                     extra_bands.append(SWIR_BAND)
 
+                # Iterate newest → oldest so the most-recent frames land
+                # in the per-frame cache first. The bundle rebuild only
+                # happens after the full cycle finishes, but if the
+                # cycle is interrupted (instance recycle, crash mid-
+                # cycle), the cached frames closest to "now" are
+                # already on disk and ready for the next bundle.
+                # frame_times is in newest→oldest order from
+                # build_frame_times — no reverse needed.
                 with ThreadPoolExecutor(max_workers=max_workers) as pool:
                     futures = []
-                    for i, target_dt in enumerate(reversed(frame_times)):
+                    for i, target_dt in enumerate(frame_times):
                         dt_str = target_dt.strftime("%Y%m%d%H%M")
                         futures.append(pool.submit(_fetch_and_cache_ir, target_dt, dt_str))
                         if i < max_band_frames:
