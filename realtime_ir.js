@@ -2932,6 +2932,16 @@
                 // ready instantly when a user clicks into the detail view.
                 _prefetchAllStormsRawTb(stormData);
 
+                // Real-Time Monitor: if a storm card is open, see if the
+                // frames bundle has fresher frames and swap them in. The
+                // satellite source publishes every 10 min and the backend
+                // prewarm rebuilds the bundle every 5 min, so a 10-min
+                // poll naturally aligns with one new frame per cycle.
+                if (currentStormId && detailMap) {
+                    try { _refreshFramesIfNewer(currentStormId); }
+                    catch (e) { console.warn('[RT Monitor] frame refresh failed:', e); }
+                }
+
                 _ga('ir_poll_success', { storm_count: stormData.length });
             })
             .catch(function (err) {
@@ -3157,6 +3167,86 @@
      *  smoothly" instead of "frames pop in randomly." On bundle failure
      *  (404, parse error, network), falls through to the per-frame path
      *  which itself falls through to GIBS if /ir-frames-meta is down. */
+    /** Re-fetch the frames bundle and, if the latest frame is newer than
+     *  the current latest, swap in the new bundle. Preserves the user's
+     *  current playback by jumping to the latest frame (the typical
+     *  "I want to see what's new" expectation in a Real-Time Monitor).
+     *  Bandwidth-cheap because GCS bundle responses carry
+     *  Cache-Control: public,max-age=300 and the browser issues a
+     *  conditional request — returns 304 unchanged most of the time. */
+    function _refreshFramesIfNewer(atcfId) {
+        if (!detailMap || currentStormId !== atcfId) return;
+        if (productMode !== 'eir') return;  // only refresh the IR pipeline for now
+        if (animFrameTimes.length === 0) return;
+
+        var currentLatest = animFrameTimes[animFrameTimes.length - 1];
+        var gcsUrl = _gcsFramesBundleUrl(atcfId);
+        var apiUrl = API_BASE
+            + '/ir-monitor/storm/' + encodeURIComponent(atcfId)
+            + '/ir-frames-bundle'
+            + '?lookback_hours=' + JPG_PRIMARY_LOOKBACK_H
+            + '&radius_deg=' + JPG_PRIMARY_RADIUS_DEG
+            + '&interval_min=' + JPG_PRIMARY_INTERVAL_MIN;
+
+        // Conditional revalidation against GCS so the browser typically
+        // gets a 304 when the prewarm hasn't run since the last poll.
+        fetch(gcsUrl, { cache: 'no-cache' })
+            .then(function (r) {
+                if (!r.ok) throw new Error('gcs ' + r.status);
+                return r.arrayBuffer();
+            })
+            .catch(function () {
+                return fetch(apiUrl).then(function (r) {
+                    if (!r.ok) throw new Error('api ' + r.status);
+                    return r.arrayBuffer();
+                });
+            })
+            .then(function (buf) {
+                if (currentStormId !== atcfId) return;  // user switched storms
+                // Peek the bundle header to see if there's a newer frame.
+                var dv = new DataView(buf);
+                if (buf.byteLength < 4) return;
+                var headerLen = dv.getUint32(0, true);
+                if (4 + headerLen > buf.byteLength) return;
+                var header = JSON.parse(new TextDecoder('utf-8').decode(
+                    new Uint8Array(buf, 4, headerLen)));
+                var newFrames = (header && header.frames) || [];
+                if (!newFrames.length) return;
+                var newLatest = newFrames[newFrames.length - 1].datetime_utc;
+                if (!newLatest || newLatest <= currentLatest) return;
+
+                // Newer data — rebuild the animation in place. Pause first
+                // so the swap doesn't race the tick loop, then jump the
+                // slider to the latest frame after rebuild (the user wants
+                // to see what's new). _initDetailMapJPGWithBundle resets
+                // animFrameLayers / Times etc. and re-adds overlays.
+                var wasPlaying = animPlaying;
+                if (wasPlaying) stopAnimation();
+                // Find the storm record so the rebuild can reuse the same
+                // satellite layer name selection.
+                var storm = null;
+                for (var i = 0; i < stormData.length; i++) {
+                    if (stormData[i].atcf_id === atcfId) { storm = stormData[i]; break; }
+                }
+                if (!storm) return;
+                var satLayerName = GIBS_IR_LAYERS[detailSatName] || null;
+                // Tear down existing IR layers first (the rebuild adds new ones).
+                cleanupFrameLayers();
+                _initDetailMapJPGWithBundle(storm, satLayerName, buf);
+
+                console.log('[RT Monitor] frames refreshed — latest ' + newLatest);
+                if (wasPlaying) {
+                    // Restart play once the new bundle has booted up.
+                    setTimeout(function () {
+                        if (framesReady && currentStormId === atcfId) startAnimation();
+                    }, 250);
+                }
+            })
+            .catch(function (err) {
+                console.warn('[RT Monitor] frame refresh fetch failed:', err && err.message);
+            });
+    }
+
     function _initDetailMapJPG(storm, satLayerName) {
         if (!detailMap) return;
         var atcfId = storm.atcf_id;
@@ -4184,15 +4274,20 @@
         // server-side; skip them rather than throwing on .setOpacity().
         if (!animFrameLayers[idx]) return;
 
-        // Hide the current frame
-        if (animIndex >= 0 && animIndex < animFrameLayers.length
-                && animFrameLayers[animIndex]) {
-            animFrameLayers[animIndex].setOpacity(0);
-        }
-
-        // Show the new frame
+        // Show the NEW frame first so the basemap never peeks through
+        // during the swap. Doing setOpacity(0) on the old frame first
+        // causes a single-frame "white flash" on mobile (the browser
+        // commits the opacity-0 paint before the opacity-0.85 paint).
+        var prevIdx = animIndex;
         animIndex = idx;
         animFrameLayers[idx].setOpacity(0.85);
+
+        // Now hide the previously-shown frame.
+        if (prevIdx >= 0 && prevIdx !== idx && prevIdx < animFrameLayers.length
+                && animFrameLayers[prevIdx]) {
+            animFrameLayers[prevIdx].setOpacity(0);
+        }
+
         updateFrameOverlay();
 
         // Sync model overlay to new frame time
@@ -5162,14 +5257,16 @@
     function showGeocolorFrame(idx) {
         if (idx < 0 || idx >= geocolorFrameLayers.length || !detailMap) return;
 
-        // Hide all GeoColor frames
-        for (var i = 0; i < geocolorFrameLayers.length; i++) {
-            geocolorFrameLayers[i].setOpacity(0);
-        }
-
-        // Show the requested frame
+        // Show new BEFORE hiding old to avoid the mobile white-flash.
+        var prevIdx = animIndex;
         animIndex = idx;
-        geocolorFrameLayers[idx].setOpacity(0.92);
+        if (geocolorFrameLayers[idx]) geocolorFrameLayers[idx].setOpacity(0.92);
+
+        for (var i = 0; i < geocolorFrameLayers.length; i++) {
+            if (i !== idx && geocolorFrameLayers[i]) {
+                geocolorFrameLayers[i].setOpacity(0);
+            }
+        }
 
         // Update overlay info
         if (geocolorFrameTimes[idx]) {
@@ -5475,11 +5572,12 @@
 
     function showVisFrame(idx) {
         if (idx < 0 || idx >= visFrameLayers.length || !detailMap) return;
-        for (var i = 0; i < visFrameLayers.length; i++) {
-            if (visFrameLayers[i]) visFrameLayers[i].setOpacity(0);
-        }
+        // Show new BEFORE hiding old to avoid the mobile white-flash.
         animIndex = idx;
         if (visFrameLayers[idx]) visFrameLayers[idx].setOpacity(0.92);
+        for (var i = 0; i < visFrameLayers.length; i++) {
+            if (i !== idx && visFrameLayers[i]) visFrameLayers[i].setOpacity(0);
+        }
         if (visFrameTimes[idx]) {
             document.getElementById('ir-frame-time').textContent = fmtUTC(visFrameTimes[idx]);
         }
@@ -5495,11 +5593,12 @@
 
     function showWvFrame(idx) {
         if (idx < 0 || idx >= wvFrameLayers.length || !detailMap) return;
-        for (var i = 0; i < wvFrameLayers.length; i++) {
-            if (wvFrameLayers[i]) wvFrameLayers[i].setOpacity(0);
-        }
+        // Show new BEFORE hiding old to avoid the mobile white-flash.
         animIndex = idx;
         if (wvFrameLayers[idx]) wvFrameLayers[idx].setOpacity(0.92);
+        for (var i = 0; i < wvFrameLayers.length; i++) {
+            if (i !== idx && wvFrameLayers[i]) wvFrameLayers[i].setOpacity(0);
+        }
         if (wvFrameTimes[idx]) {
             document.getElementById('ir-frame-time').textContent = fmtUTC(wvFrameTimes[idx]);
         }
@@ -6213,12 +6312,6 @@
         if (!chartEl || !chartEl.data) return;
 
         var cycle = _rtModelData.cycles[initTime];
-        var initDate = new Date(
-            parseInt(initTime.substring(0,4)),
-            parseInt(initTime.substring(4,6)) - 1,
-            parseInt(initTime.substring(6,8)),
-            parseInt(initTime.substring(8,10))
-        );
 
         var newTraces = [];
         var techKeys = Object.keys(cycle).sort();
@@ -6232,13 +6325,18 @@
             var points = forecast.points;
             if (!points || points.length < 2) continue;
 
+            // Use the WeatherLab categorical x-axis (+Xh tau labels) so
+            // the model lines align with the percentile bands. Mixing
+            // categorical and date-typed x values lets Plotly silently
+            // append the dates as fresh categories, pushing the model
+            // lines off the right edge of the plot — that was the visible
+            // "deeply bugged" artifact past +216h.
             var times = [];
             var winds = [];
             var hasWind = false;
             for (var pi = 0; pi < points.length; pi++) {
                 if (points[pi].wind != null) {
-                    var fDate = new Date(initDate.getTime() + points[pi].tau * 3600000);
-                    times.push(fDate.toISOString());
+                    times.push('+' + Math.round(points[pi].tau) + 'h');
                     winds.push(points[pi].wind);
                     hasWind = true;
                 }
@@ -6686,6 +6784,19 @@
 
         var chartEl = document.getElementById('ir-intensity-chart');
         if (!chartEl || !chartEl.data) return;
+
+        // If the percentile-bands forecast is the active card chart
+        // (rendered by _rtRenderCardForecastIntensity), the 50-member
+        // spread + mean overlay is redundant — it's the same data
+        // visualised once already as the orange bands + mean line. It
+        // also uses absolute-date x values which Plotly silently appends
+        // to the categorical +Xh axis, producing the cyan curve that
+        // ran off the right edge of the chart. Skip the overlay in that
+        // case.
+        for (var ci = 0; ci < chartEl.data.length; ci++) {
+            var nm = (chartEl.data[ci] && chartEl.data[ci].name) || '';
+            if (nm === 'P25 – P75 (IQR)' || nm === 'ensemble mean') return;
+        }
 
         var initTime = _rtWeatherlabData.init_time;
         var initDate = new Date(
@@ -12636,20 +12747,35 @@
             // align with SS half-category resolution.
             xbins: { start: 0, end: tauMax, size: 12 },
             ybins: { start: 0, end: vmaxMax, size: 10 },
+            // Crisp single-hue oranges ramp matching the percentile-bands
+            // chart's palette. No zsmooth → individual bins read clean,
+            // not the painterly blur the smoothed heatmap produced.
             colorscale: [
-                [0, 'rgba(15,22,35,0)'],
-                [0.05, 'rgba(74,155,110,0.25)'],
-                [0.3, 'rgba(244,115,33,0.55)'],
-                [0.7, 'rgba(244,67,54,0.80)'],
-                [1, 'rgba(180,36,68,0.95)']
+                [0.00, 'rgba(255,247,237,0)'],   // transparent (zero members)
+                [0.05, 'rgba(255,237,213,0.85)'],
+                [0.20, 'rgba(254,215,170,1.0)'],
+                [0.40, 'rgba(253,186,116,1.0)'],
+                [0.60, 'rgba(251,146, 60,1.0)'],
+                [0.80, 'rgba(249,115, 22,1.0)'],
+                [1.00, 'rgba(194, 65, 12,1.0)']
             ],
-            zsmooth: 'best',
-            hovertemplate: 'lead time %{x:.0f} h<br>LMI %{y:.0f} kt<br>%{z} members<extra></extra>',
+            // Per-bin hover. Plotly's histogram2d auto-supplies the bin
+            // midpoint as x/y; show that plus the member count for the cell.
+            hovertemplate:
+                'Lead time of peak: <b>%{x:.0f} h</b><br>' +
+                'LMI Vmax: <b>%{y:.0f} kt</b><br>' +
+                'Members: <b>%{z:.0f}</b><extra></extra>',
             showscale: true,
             colorbar: {
-                title: { text: 'members', font: { size: 9, family: 'DM Sans, sans-serif' } },
-                thickness: 8, len: 0.9,
-                tickfont: { size: 8, family: 'DM Sans, sans-serif' }
+                // Match the compact "DeepMind 1K" label style used elsewhere:
+                // small DM-Sans title, slim bar, integer tick spacing.
+                title: { text: 'Members', font: { size: 9, family: 'DM Sans, sans-serif', color: '#5b6573' }, side: 'right' },
+                thickness: 6,
+                len: 0.85,
+                outlinewidth: 0,
+                tickfont: { size: 8, family: 'DM Sans, sans-serif', color: '#5b6573' },
+                xpad: 4,
+                ypad: 0
             }
         };
 
@@ -12663,7 +12789,7 @@
 
         var layout = {
             height: 200,
-            margin: { t: 12, r: 50, b: 32, l: 40 },
+            margin: { t: 12, r: 60, b: 32, l: 40 },
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: 'rgba(0,0,0,0)',
             font: { family: 'DM Sans, sans-serif', size: 9, color: '#5b6573' },
@@ -12681,11 +12807,16 @@
                 gridcolor: 'rgba(255,255,255,0.05)',
                 zeroline: false
             },
-            shapes: ssLines
+            shapes: ssLines,
+            // Hovermode: 'closest' so the tooltip snaps to the cell under
+            // the cursor instead of the column-of-cells default.
+            hovermode: 'closest'
         };
 
+        // Drop staticPlot:true so users can hover over cells to read out
+        // (lead time, LMI Vmax, member count). Keep the mode bar off.
         Plotly.newPlot(chartEl, [heatmap], layout, {
-            displayModeBar: false, responsive: false, staticPlot: true
+            displayModeBar: false, responsive: false
         });
     }
 
