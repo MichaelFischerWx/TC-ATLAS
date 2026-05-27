@@ -331,6 +331,69 @@ def _pack_bundle(header: dict, payloads: list) -> bytes:
     return struct.pack("<I", len(header_json)) + header_json + b"".join(payloads)
 
 
+def _build_animation_webp(frame_webp_bytes: list[bytes],
+                          mid_duration_ms: int = 300,
+                          last_hold_ms: int = 1800,
+                          quality: int = 70) -> bytes | None:
+    """Stitch per-frame WebPs into a single animated WebP.
+
+    The animated-WebP format supports per-frame durations and infinite
+    looping natively — no custom JS animation loop needed. Browsers
+    render it like a video; pausing requires only setting the <img>'s
+    src to a static frame (handled by the casual viewer JS).
+
+    Frame timing:
+      - Each non-final frame: `mid_duration_ms` (default 300 ms ≈ 2x
+        play speed).
+      - Final (most-recent) frame: `last_hold_ms` (default 1800 ms)
+        so users can orient themselves before the loop restarts.
+
+    Returns None if Pillow doesn't support animated WebP encoding
+    (older versions) or if the input list is empty.
+    """
+    if not frame_webp_bytes:
+        return None
+    from PIL import Image
+    images = []
+    for buf in frame_webp_bytes:
+        try:
+            im = Image.open(io.BytesIO(buf))
+            im.load()
+            images.append(im.convert("RGB"))
+        except Exception:
+            continue
+    if not images:
+        return None
+    # Per-frame duration list — last frame holds longer
+    durations = [mid_duration_ms] * (len(images) - 1) + [last_hold_ms]
+    out = io.BytesIO()
+    try:
+        images[0].save(
+            out, format="WEBP",
+            save_all=True,
+            append_images=images[1:],
+            duration=durations,
+            loop=0,           # 0 = loop forever
+            quality=quality,
+            method=4,         # encode quality/speed tradeoff
+            minimize_size=True,
+        )
+    except (TypeError, OSError):
+        # Older Pillow may not support all kwargs — fall back to basics
+        try:
+            images[0].save(
+                out, format="WEBP",
+                save_all=True,
+                append_images=images[1:],
+                duration=durations,
+                loop=0,
+                quality=quality,
+            )
+        except Exception:
+            return None
+    return out.getvalue()
+
+
 def _upload_public_bundle(key: str, body: bytes, content_type: str = "application/octet-stream",
                           gzip_content: bool = False):
     """Upload bundle bytes to GCS with publicRead ACL + 5-min max-age.
@@ -498,6 +561,33 @@ def _build_and_upload_bundles(
     _upload_public_bundle(frames_key, frames_body)
     _upload_public_bundle(raw_key, raw_body, gzip_content=True)
 
+    # ── Pre-rendered animation (the "casual viewer" artifact) ────────
+    # Stitches the same per-frame WebPs into a single animated WebP so
+    # the default Storm Satellite view can embed it as one <img> /
+    # <video>-like element. Matches what cyclonicwx / Tropical Tidbits
+    # ship: one file, ~400-800 KB, smooth on any device. Temporal
+    # compression (webp animation = inter-frame deltas) yields ~5-9×
+    # smaller payload than the 25 individual frames in `frames_body`.
+    #
+    # Frame timing: most frames at ~300 ms (≈ 2x play speed, matches
+    # the desktop default), with the most-recent frame held at 1.8 s
+    # so the user can orient themselves before the loop restarts.
+    anim_summary = ""
+    try:
+        # payloads_jpg is the same per-frame WebP bytes in frame order.
+        # Decode them back to PIL Images, stitch as animated WebP.
+        if payloads_jpg:
+            anim_bytes = _build_animation_webp(payloads_jpg)
+            if anim_bytes:
+                anim_key = f"{_GCS_RT_VERSION}/animations/{atcf_upper}.webp"
+                _upload_public_bundle(anim_key, anim_bytes,
+                                     content_type="image/webp")
+                anim_summary = f", anim={len(anim_bytes)//1024} KB"
+    except Exception as ex:
+        # Animation build is best-effort — per-frame WebPs in the
+        # bundle still work for the interactive viewer.
+        print(f"[Bundle Pre-build] {atcf_upper}: animation failed: {ex}")
+
     # ── Band bundle (WV or Vis) ─────────────────────────────────
     # Only build if the prewarm fetched this band's frames in this
     # cycle. The band-specific cache lives under `band{N}-webp` keys.
@@ -564,7 +654,7 @@ def _build_and_upload_bundles(
 
     print(f"[Bundle Pre-build] {atcf_upper}: frames={len(payloads_jpg)} "
           f"({len(frames_body)//1024} KB), raw={len(payloads_raw)} "
-          f"({len(raw_body)//1024} KB){band_summary}")
+          f"({len(raw_body)//1024} KB){band_summary}{anim_summary}")
 
 
 def _solar_elevation(lat: float, lon: float, dt: _dt) -> float:
