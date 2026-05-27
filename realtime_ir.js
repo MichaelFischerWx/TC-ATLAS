@@ -4386,12 +4386,21 @@
         updateAnimCounter();
     }
 
-    /** Playback speed multipliers, ordered slow → fast. 1× = default
-     *  500 ms / frame (the legacy cadence). Stepping with the −/+ buttons
-     *  cycles through this list; the chosen multiplier scales animIntervalMs. */
+    /** Playback speed multipliers, ordered slow → fast. 1× = legacy
+     *  500 ms / frame. Stepping with the −/+ buttons cycles through this
+     *  list; the chosen multiplier scales animIntervalMs.
+     *
+     *  Default depends on viewport: desktop starts at 4× because at 1×
+     *  the loop feels sluggish on a fast machine and most users
+     *  immediately bump it up. Mobile starts at 2× — the per-frame
+     *  paint cost is higher there and 4× can stutter on weaker GPUs.
+     *  The −/+ controls let users tune from 0.25× to 8× either way. */
     var ANIM_SPEED_STEPS = [0.25, 0.5, 1, 2, 4, 8];
     var ANIM_BASE_INTERVAL_MS = 500;
-    var animSpeedIdx = 2;  // index into ANIM_SPEED_STEPS — starts at 1×
+    var _IS_MOBILE_VIEWPORT = (typeof window !== 'undefined') &&
+                              (window.innerWidth || 9999) < 768;
+    // ANIM_SPEED_STEPS indices: 0=0.25×, 1=0.5×, 2=1×, 3=2×, 4=4×, 5=8×
+    var animSpeedIdx = _IS_MOBILE_VIEWPORT ? 3 : 4;
 
     function _applyAnimSpeed() {
         var mult = ANIM_SPEED_STEPS[animSpeedIdx] || 1;
