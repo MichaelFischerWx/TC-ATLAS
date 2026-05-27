@@ -52,7 +52,11 @@
     var animPlaying = false;
     var animTimer = null;
     var animLastTick = 0;
-    var animSpeedIdx = 1;
+    // Default speed: desktop = 2x (snappier, matches NHC/RAMMB convention).
+    // Mobile = 1x (conservative — fits ~9 frames in a 7s loop, plenty of
+    // time to absorb per-frame structure on a smaller screen). Both are
+    // ANIM_SPEEDS indices: 0=0.5x, 1=1x, 2=2x, 3=4x (desktop only).
+    var animSpeedIdx = _IS_TOUCH_INIT ? 1 : 2;
     var hoverThrottled = false;
     var pollTimer = null;
     var selectedColormap = 'claude-ir';
@@ -369,6 +373,9 @@
         stormLabelEl = document.getElementById('sat-storm-label');
         playBtn = document.getElementById('sat-play');
         speedBtn = document.getElementById('sat-speed');
+        // Sync the speed button label with the actual default speed
+        // (HTML ships "1x" as a fallback; desktop default is 2x).
+        if (speedBtn) speedBtn.textContent = ANIM_SPEEDS[animSpeedIdx].label;
         stormListEl = document.getElementById('sat-storm-list');
         rightLabelEl = document.getElementById('sat-right-label');
         sidebar = document.getElementById('sat-sidebar');
