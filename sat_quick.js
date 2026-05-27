@@ -310,18 +310,45 @@
             var mediaType = header.media_type || 'image/webp';
             var hdrFrames = header.frames || [];
 
-            var goodFrames = [];
+            // ── Storm-relative view: place ALL frames at the LATEST
+            // frame's bounds. The detailed viewer places each frame at
+            // its own interpolated bounds (storm moves geographically
+            // across map) — but for the Quick View, where the user
+            // expects fixed frame edges, that creates visible "bouncing"
+            // as cutout edges shift frame-to-frame.
+            //
+            // With unified bounds, the storm visually stays at the center
+            // of the displayed region (it WAS at center of each cutout
+            // when rendered). Cloud features around it FLOW as time
+            // progresses (different cloud patterns at different
+            // timestamps). Coastlines + lat/lon grid stay anchored to
+            // their real geographic positions via the basemap.
+            //
+            // This is the "co-moving" or "storm-relative" framing — a
+            // standard TC research visualization. Users who want true
+            // geographic motion click "Detailed Analysis →".
+            var validFrameHdrs = [];
             for (var i = 0; i < hdrFrames.length; i++) {
-                var f = hdrFrames[i];
-                if (!f.byte_length || f.error) continue;
-                if (!f.bounds) continue;
+                if (hdrFrames[i].byte_length && !hdrFrames[i].error
+                        && hdrFrames[i].bounds) {
+                    validFrameHdrs.push(hdrFrames[i]);
+                }
+            }
+            if (validFrameHdrs.length === 0) {
+                _showError('No frames available for this storm yet.');
+                return;
+            }
+            var latestHdr = validFrameHdrs[validFrameHdrs.length - 1];
+            var unifiedBounds = L.latLngBounds(
+                L.latLng(latestHdr.bounds[0][0], latestHdr.bounds[0][1]),
+                L.latLng(latestHdr.bounds[1][0], latestHdr.bounds[1][1]));
+
+            for (var j = 0; j < validFrameHdrs.length; j++) {
+                var f = validFrameHdrs[j];
                 var slice = new Uint8Array(arrayBuffer, binBase + f.byte_offset, f.byte_length);
                 var blob = new Blob([slice], { type: mediaType });
                 var url = URL.createObjectURL(blob);
-                var lb = L.latLngBounds(
-                    L.latLng(f.bounds[0][0], f.bounds[0][1]),
-                    L.latLng(f.bounds[1][0], f.bounds[1][1]));
-                var overlay = L.imageOverlay(url, lb, {
+                var overlay = L.imageOverlay(url, unifiedBounds, {
                     opacity: 0,
                     interactive: false,
                     pane: 'tilePane',  // below the labels overlay
@@ -329,18 +356,11 @@
                 overlay._blobUrl = url;
                 overlay.addTo(_map);
                 _frameLayers.push(overlay);
-                goodFrames.push({ overlay: overlay, bounds: lb });
-            }
-
-            if (_frameLayers.length === 0) {
-                _showError('No frames available for this storm yet.');
-                return;
             }
 
             // Initial view: latest frame's bounds (with a touch of padding
             // so the storm isn't pressed against the edges).
-            var latest = goodFrames[goodFrames.length - 1];
-            _map.fitBounds(latest.bounds, { padding: [20, 20], animate: false });
+            _map.fitBounds(unifiedBounds, { padding: [20, 20], animate: false });
 
             // Place storm marker at current advisory position
             var storm = _findStorm(stormId);
