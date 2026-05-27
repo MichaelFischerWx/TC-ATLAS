@@ -232,18 +232,34 @@
             {tb:183,r:64,g:24,b:140},{tb:173,r:28,g:12,b:96}
         ]);
 
-        // Water Vapor colormap (Band 8: 170-260 K range)
+        // Claude Water Vapor colormap (Band 8: 170-260 K range).
+        // Designed to highlight dry-air signatures (CIMSS/CIRA convention):
+        //   warm Tb → terra cotta / amber  (dry intrusions stand out)
+        //   mid Tb  → cream → pale blue    (mid-trop moisture transition)
+        //   cold Tb → cobalt → green       (deep convection / overshooting tops)
+        // Mirrors the server-side _CLAUDE_WV_FRAC_STOPS in ir_monitor_api.py
+        // so client-side colormap switching produces identical visuals to
+        // the pre-rendered WebPs.
         IR_COLORMAPS['wv'] = (function () {
             var vmin = 170.0, vmax = 260.0, lut = new Uint8Array(256 * 4);
             lut[0]=0;lut[1]=0;lut[2]=0;lut[3]=0;
             var stops = [
-                {f:0.00,r:10,g:10,b:30},    // warm/dry: near-black
-                {f:0.20,r:30,g:30,b:80},    // dark blue
-                {f:0.35,r:60,g:80,b:160},   // medium blue
-                {f:0.50,r:100,g:140,b:200}, // light blue
-                {f:0.65,r:160,g:200,b:230}, // pale blue
-                {f:0.80,r:220,g:230,b:240}, // near-white
-                {f:1.00,r:255,g:255,b:255}  // cold/moist: white
+                {f:0.000,r:235,g:110,b: 45},  // warm: terra cotta (dry)
+                {f:0.080,r:215,g: 90,b: 50},  // rust red
+                {f:0.160,r:195,g:105,b: 55},  // terracotta
+                {f:0.240,r:220,g:150,b: 90},  // amber
+                {f:0.310,r:235,g:200,b:165},  // warm cream
+                {f:0.380,r:248,g:235,b:218},  // ivory
+                {f:0.450,r:242,g:246,b:248},  // off-white
+                {f:0.510,r:218,g:235,b:246},  // pale ice blue
+                {f:0.580,r:160,g:210,b:240},  // light cyan
+                {f:0.660,r: 95,g:175,b:225},  // sky blue
+                {f:0.740,r: 45,g:130,b:200},  // cobalt
+                {f:0.800,r: 20,g: 90,b:170},  // navy
+                {f:0.860,r: 30,g:130,b:135},  // teal-green
+                {f:0.910,r: 55,g:180,b: 95},  // forest green
+                {f:0.960,r:140,g:230,b:145},  // emerald
+                {f:1.000,r:230,g:250,b:220}   // pale mint (overshooting)
             ];
             for (var i=1;i<=255;i++) {
                 var frac = 1.0 - (i-1) / 254.0;
@@ -885,7 +901,7 @@
         }
         _drawPanelLabel('Enhanced IR', 4, headerH + 16);
         if (viewMode === 'compare-wv' || viewMode === 'compare-vis') {
-            var rightLabel = rightBand === 2 ? 'Visible (Band 2)' : 'Water Vapor (Band 8)';
+            var rightLabel = rightBand === 2 ? 'Visible 0.64 µm (Band 2)' : 'Water Vapor 6.2 µm (Band 8, Upper-Trop)';
             _drawPanelLabel(rightLabel, pw + gap + 4, headerH + 16);
         } else if (viewMode === 'asymmetry') {
             _drawPanelLabel('IR Asymmetry (WN-1)', pw + gap + 4, headerH + 16);
@@ -2600,7 +2616,9 @@
             var bandChanged = newBand !== rightBand;
             rightBand = newBand;
             rightDataType = newBand <= 6 ? 'reflectance' : 'tb';
-            if (rightLabelEl) rightLabelEl.textContent = newBand === 2 ? 'Visible' : 'Water Vapor';
+            if (rightLabelEl) rightLabelEl.textContent = newBand === 2
+                ? 'Visible 0.64 µm'
+                : 'Water Vapor 6.2 µm (Upper-Trop)';
             rightColormapName = newBand === 2 ? 'vis' : 'wv';
             var rcEl = document.getElementById('sat-right-cmap-select');
             if (rcEl) rcEl.value = rightColormapName;

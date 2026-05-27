@@ -3475,38 +3475,107 @@ def _render_ir_jpg(tb_array: np.ndarray, quality: int = 75,
     return buf.getvalue()
 
 
+# ── Claude WV colormap LUT ─────────────────────────────────────
+# Designed to highlight dry-air signatures (CIMSS/CIRA convention):
+#   warm Tb → terra-cotta/orange: dry intrusions, lower-trop holes
+#   mid Tb  → cream / ivory:       transition (mid-trop moisture)
+#   cool Tb → cyan/cobalt blues:   moist mid-trop
+#   cold Tb → vivid greens:        deep convection / overshooting tops
+#
+# Mapping `frac = 1 - (Tb - vmin) / (vmax - vmin)`, so frac=0 at the
+# warmest end of the WV band's encoding range (~260 K for 6.2 µm) and
+# frac=1 at the coldest (~170 K). The warm end uses saturated burnt
+# colors so a dry slot reads instantly; the cold end peaks in green
+# to call out convective bursts. Built once at import time as a 256-row
+# uint8 LUT — same fast lookup pattern as _CLAUDE_IR_JPG_LUT.
+_CLAUDE_WV_FRAC_STOPS = [
+    # frac   R    G    B
+    (0.000, 235, 110,  45),   # warm: saturated terra cotta (dry intrusion)
+    (0.080, 215,  90,  50),   # rust red
+    (0.160, 195, 105,  55),   # terracotta
+    (0.240, 220, 150,  90),   # amber
+    (0.310, 235, 200, 165),   # warm cream
+    (0.380, 248, 235, 218),   # ivory
+    (0.450, 242, 246, 248),   # off-white (mid-trop moisture)
+    (0.510, 218, 235, 246),   # pale ice blue
+    (0.580, 160, 210, 240),   # light cyan
+    (0.660,  95, 175, 225),   # sky blue
+    (0.740,  45, 130, 200),   # cobalt
+    (0.800,  20,  90, 170),   # navy
+    (0.860,  30, 130, 135),   # teal-green
+    (0.910,  55, 180,  95),   # forest green (deep convection)
+    (0.960, 140, 230, 145),   # emerald
+    (1.000, 230, 250, 220),   # pale mint (overshooting tops)
+]
+
+def _build_claude_wv_lut() -> np.ndarray:
+    """Build a 256-row RGBA uint8 LUT from the fraction stops."""
+    stops = sorted(_CLAUDE_WV_FRAC_STOPS, key=lambda s: s[0])
+    lut = np.zeros((256, 4), dtype=np.uint8)
+    for i in range(256):
+        f = i / 255.0
+        lo, hi = stops[0], stops[-1]
+        for s in range(len(stops) - 1):
+            if stops[s][0] <= f <= stops[s + 1][0]:
+                lo, hi = stops[s], stops[s + 1]
+                break
+        t = 0.0 if hi[0] == lo[0] else (f - lo[0]) / (hi[0] - lo[0])
+        t = max(0.0, min(1.0, t))
+        lut[i, 0] = int(lo[1] + t * (hi[1] - lo[1]) + 0.5)
+        lut[i, 1] = int(lo[2] + t * (hi[2] - lo[2]) + 0.5)
+        lut[i, 2] = int(lo[3] + t * (hi[3] - lo[3]) + 0.5)
+        lut[i, 3] = 255
+    return lut
+
+_CLAUDE_WV_JPG_LUT = _build_claude_wv_lut()
+
+
 def _render_band_jpg(data_array: np.ndarray, band: int,
-                     vmin: float, vmax: float, quality: int = 75) -> bytes | None:
-    """Render a WV or Vis band array to JPEG bytes.
-    WV: dark blue→white gradient.  Vis: grayscale (dark=low reflectance).
-    """
+                     vmin: float, vmax: float, quality: int = 75,
+                     lat_bounds: tuple[float, float] | None = None) -> bytes | None:
+    """Render a WV or Vis band array to WebP bytes.
+
+    WV: Claude-inspired CIMSS-style palette via LUT lookup — dry air
+        in terra-cotta/orange, mid moisture in cream→cyan, deep
+        convection in vivid green.
+    Vis: grayscale (dark=low reflectance, white=clouds).
+
+    If `lat_bounds=(lat_min, lat_max)` is supplied, the array is
+    Mercator-warped before colormap lookup so the WebP displays
+    correctly when placed on a Web Mercator basemap via L.imageOverlay.
+    Today the band path renders into a flat <canvas> (microwave-compare
+    modal) so the warp is opt-in; pass None to skip it."""
     from PIL import Image
 
     arr = np.asarray(data_array, dtype=np.float32)
     if not np.any(np.isfinite(arr)):
         return None
 
+    if lat_bounds is not None:
+        arr = _warp_eq_to_mercator_local(arr, lat_bounds[0], lat_bounds[1])
+
     mask = ~np.isfinite(arr)
 
     if band == WV_BAND:
-        # WV: invert so cold (low Tb) = bright, warm (high Tb) = dark
+        # Invert so warm Tb (dry) → frac 0, cold Tb (convection) → frac 1.
+        # The LUT then maps frac to the Claude WV palette in one shot.
         frac = np.clip(1.0 - (arr - vmin) / (vmax - vmin), 0.0, 1.0)
-        # Blue→white gradient
-        r = (frac * 245 + 10).astype(np.uint8)
-        g = (frac * 245 + 10).astype(np.uint8)
-        b = (np.clip(frac * 0.6 + 0.4, 0, 1) * 245 + 10).astype(np.uint8)
+        indices = (frac * 255).astype(np.uint8)
+        rgba = _CLAUDE_WV_JPG_LUT[indices]
+        rgb = rgba[..., :3]
     else:
         # Vis: no inversion — high reflectance = bright (white clouds)
         frac = np.clip((arr - vmin) / (vmax - vmin), 0.0, 1.0)
         gray = (frac * 245 + 10).astype(np.uint8)
-        r = g = b = gray
+        rgb = np.stack([gray, gray, gray], axis=-1)
 
-    rgb = np.stack([r, g, b], axis=-1)
+    rgb = rgb.copy()  # writable for the mask blackout below
     rgb[mask] = [0, 0, 0]
 
     img = Image.fromarray(rgb, "RGB")
     buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=quality)
+    # WebP — same encoding as the IR path (smaller than JPEG at equal quality)
+    img.save(buf, format="WEBP", quality=quality, method=4)
     return buf.getvalue()
 
 

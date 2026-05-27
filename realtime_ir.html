@@ -636,7 +636,7 @@
                     <button class="sat-mode-btn active" id="sat-mode-diag" data-mode="diagnostics" title="Inner-core diagnostics — requires a detected eye (storms ≥ 65 kt)">Diag</button>
                     <button class="sat-mode-btn" id="sat-mode-track" data-mode="track-map" title="Center-fix track map">Track</button>
                     <button class="sat-mode-btn" id="sat-mode-asym" data-mode="asymmetry" title="IR asymmetry (wavenumber-1 decomposition)">Asym</button>
-                    <button class="sat-mode-btn" id="sat-mode-wv" data-mode="compare-wv" title="Water-vapor band side-by-side with IR">WV</button>
+                    <button class="sat-mode-btn" id="sat-mode-wv" data-mode="compare-wv" title="Upper-tropospheric water vapor (6.2 µm, Band 8) side-by-side with IR — highlights dry-air intrusions and convective bursts">WV 6.2µm</button>
                     <button class="sat-mode-btn" id="sat-mode-vis" data-mode="compare-vis" title="Visible band side-by-side with IR (daytime only)">Vis</button>
                     <button class="sat-mode-btn" id="sat-mode-mw" data-mode="microwave" title="Microwave passes (24h) — click any pass to compare with IR side-by-side">MW</button>
                 </div>
@@ -716,7 +716,7 @@
                         </div>
                         <!-- WV/VIS canvas (compare mode, hidden by default) -->
                         <div id="sat-compare-panel" class="sat-compare-panel" style="display:none;">
-                            <div class="sat-panel-label" id="sat-right-label">Water Vapor</div>
+                            <div class="sat-panel-label" id="sat-right-label">Water Vapor 6.2 µm (Upper-Trop)</div>
                             <div class="sat-panel-canvas-wrap" id="sat-panel-right-canvas-wrap">
                                 <canvas id="sat-canvas-right"></canvas>
                                 <canvas id="sat-overlay-right" class="sat-overlay-canvas"></canvas>
