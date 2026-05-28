@@ -4688,8 +4688,25 @@
             .catch(function () { /* leave the container empty on failure */ });
     }
 
+    // Fixed 0–40 kt shear scale so the heatmap reads the same across every
+    // storm (cross-storm context). Banded blue → yellow → orange → dark-red
+    // at the 10/20/30 kt thresholds, with the top band fading to dark red
+    // toward 40 kt+. Duplicated stops create crisp class boundaries; the
+    // top band is a gradient per "transition to dark red at 40."
+    var _SHEAR_PROFILE_ZMAX = 40;
+    var _SHEAR_PROFILE_COLORSCALE = [
+        [0.00, '#3b82f6'],   // 0 kt   — blue
+        [0.25, '#3b82f6'],   // 10 kt  — end of blue band
+        [0.25, '#fde047'],   // 10 kt  — yellow
+        [0.50, '#fde047'],   // 20 kt  — end of yellow band
+        [0.50, '#f97316'],   // 20 kt  — orange
+        [0.75, '#f97316'],   // 30 kt  — end of orange band
+        [0.75, '#ef4444'],   // 30 kt  — red
+        [1.00, '#7f1d1d'],   // 40 kt+ — dark red
+    ];
+
     /** Plotly heatmap: x = layer bottom (hPa), y = layer top (hPa),
-     *  color = Helmholtz 0–400 km env-shear magnitude (kt). */
+     *  color = Helmholtz 0–400 km env-shear magnitude (kt), fixed 0–40 kt. */
     function _rtRenderShearProfile(prof) {
         var el = document.getElementById('rt-env-shear-grid');
         if (!el || !prof || !prof.magnitude_kt || typeof Plotly === 'undefined') return;
@@ -4701,11 +4718,16 @@
             z: prof.magnitude_kt,
             x: prof.bottoms_hpa.map(String),
             y: prof.tops_hpa.map(String),
-            colorscale: 'YlOrRd',
+            colorscale: _SHEAR_PROFILE_COLORSCALE,
+            zmin: 0, zmax: _SHEAR_PROFILE_ZMAX,  // fixed scale for cross-storm comparison
+            zsmooth: false,
             hoverongaps: false,
             colorbar: {
                 title: { text: 'kt', font: { size: 9, color: axisCol } },
-                tickfont: { size: 8, color: axisCol }, thickness: 10,
+                tickfont: { size: 8, color: axisCol }, thickness: 12,
+                tickmode: 'array',
+                tickvals: [0, 10, 20, 30, 40],
+                ticktext: ['0', '10', '20', '30', '40+'],
             },
             hovertemplate: 'bottom %{x} hPa → top %{y} hPa<br>' +
                            '%{z:.1f} kt<extra></extra>',
