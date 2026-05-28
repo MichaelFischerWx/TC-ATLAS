@@ -1865,18 +1865,28 @@ def _prefetch_ir_frames(storms: list):
                 )
                 # WV (Band 8) is useful 24/7 and small (same volume as IR
                 # — 16× smaller than Vis L1b), so we prewarm it every
-                # cycle. The "extra" band is daylight-dependent: Vis
-                # while sunlit, SWIR (Band 7) as the nighttime visible-
-                # like fallback. Previously the prewarm chose *one*
-                # band — Vis OR WV — which left the WV bundle stale for
-                # ~12h whenever a storm sat in daylight, so users hit
-                # cold S3 (~6h-old frames) when clicking WV.
+                # cycle.
+                #
+                # Visible-like extras:
+                #   - SWIR (Band 7) every cycle (small, same vol as IR).
+                #     This covers the SUNRISE transition: when the loop
+                #     window still straddles dark + light, Vis Band 2
+                #     returns mostly nighttime stubs, the frontend auto-
+                #     falls-back to SWIR, and we want that SWIR bundle
+                #     to be fresh — not whatever last night's cycle left.
+                #   - Vis (Band 2) only during daylight at the storm
+                #     (Vis L1b is big; skipping it at night saves the
+                #     bulk of the S3 + memory cost since Vis returns no
+                #     usable data when the sun is down anyway).
+                #
+                # Previously the prewarm chose *one* band — Vis OR WV —
+                # which left the WV bundle stale for ~12 h whenever a
+                # storm sat in daylight, AND left SWIR stale all day so
+                # the sunrise auto-fallback returned hours-old frames.
                 primary_band = WV_BAND
-                extra_bands: list[int] = []
+                extra_bands: list[int] = [SWIR_BAND]
                 if sun_el_now > -6:
                     extra_bands.append(VIS_BAND)
-                else:
-                    extra_bands.append(SWIR_BAND)
                 _prefetch_counts = {"ir": 0, "band": 0, "jpg": 0}
 
                 def _fetch_and_cache_ir(tdt, dstr):
