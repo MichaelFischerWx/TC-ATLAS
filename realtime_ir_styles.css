@@ -583,6 +583,31 @@ html, body { margin: 0; padding: 0; }
     stroke-linejoin: round;
     transform-origin: 50% 50%;
 }
+/* Small circled-"i" info affordance next to a label; native title tooltip. */
+.ir-info-help {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 13px;
+    height: 13px;
+    margin-left: 5px;
+    padding: 0;
+    border: 1px solid currentColor;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--text-dim, #64748b);
+    font: italic 700 9px/1 Georgia, "Times New Roman", serif;
+    cursor: help;
+    opacity: 0.65;
+    vertical-align: middle;
+    transition: opacity 0.12s, color 0.12s;
+}
+.ir-info-help:hover,
+.ir-info-help:focus-visible {
+    opacity: 1;
+    color: var(--um-green, #4a9b6e);
+    outline: none;
+}
 .ir-sat-viewer-btn {
     color: var(--um-orange);
     border-color: rgba(244, 115, 33, 0.45);

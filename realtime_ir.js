@@ -4675,7 +4675,10 @@
             _rtRenderShearProfile(_rtShearProfileCache[atcfId]);
             return;
         }
-        fetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) + '/shear-profile')
+        // eval_km=400 / mask_km=500 match the Core shear headline, so the
+        // profile's 850→200 cell equals the displayed 0–400 km core value.
+        fetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) +
+              '/shear-profile?eval_km=400&mask_km=500')
             .then(function (r) { return r.ok ? r.json() : null; })
             .then(function (j) {
                 if (!j || currentStormId !== atcfId) return;
@@ -6799,21 +6802,37 @@
 
     var deepLinkHandled = false;
 
-    /** Check URL hash for a deep-linked storm */
+    /** Extract the deep-linked storm id from the URL hash. Handles both the
+     *  compound form written by openStormDetail ("satellite&storm=WP062026",
+     *  optionally with loop=1/detailed=1) and the legacy bare-id form
+     *  ("WP062026"). Returns the ATCF id (upper-case) or null. */
+    function _stormIdFromHash() {
+        var hash = window.location.hash.replace(/^#/, '').trim();
+        if (!hash) return null;
+        var m = hash.match(/storm=([A-Za-z]{2}\d{6})/);
+        if (m) return m[1].toUpperCase();
+        // Legacy: the whole hash is just an ATCF id.
+        if (/^[A-Za-z]{2}\d{6}$/.test(hash)) return hash.toUpperCase();
+        return null;
+    }
+
+    /** Check URL hash for a deep-linked storm and open it (once active
+     *  storm data is available). Retries on later calls until matched. */
     function handleDeepLink() {
         if (deepLinkHandled) return;
-        var hash = window.location.hash.replace('#', '').trim();
-        if (!hash) return;
+        var stormId = _stormIdFromHash();
+        if (!stormId) return;
 
         // Check if storm exists in current data
         for (var i = 0; i < stormData.length; i++) {
-            if (stormData[i].atcf_id === hash) {
+            if ((stormData[i].atcf_id || '').toUpperCase() === stormId) {
                 deepLinkHandled = true;
-                openStormDetail(hash);
+                openStormDetail(stormData[i].atcf_id);
                 return;
             }
         }
-        // Storm not in active list — could be expired; just stay on map
+        // Storm not in active list yet (still loading) or expired — a later
+        // poll re-calls handleDeepLink, so we retry until it appears.
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -6873,10 +6892,10 @@
         });
         // Browser back/forward
         window.addEventListener('popstate', function () {
-            var hash = window.location.hash.replace('#', '').trim();
-            if (hash && currentStormId !== hash) {
-                openStormDetail(hash);
-            } else if (!hash && currentStormId) {
+            var stormId = _stormIdFromHash();
+            if (stormId && (currentStormId || '').toUpperCase() !== stormId) {
+                openStormDetail(stormId);
+            } else if (!stormId && currentStormId) {
                 closeStormDetail();
             }
         });
