@@ -14535,6 +14535,152 @@
         img.src = pngUrl;
     }
 
+    // ── Colorbars for the IR ↔ MW compare panels ──────────────────
+    // Palettes + value ranges mirror the server-side renderers:
+    //  - 89 GHz family  → microwave_api.py NRL_89GHZ_PLOTLY_COLORSCALE
+    //  - 37 GHz V/H      → microwave_api.py NRL_37GHZ_PLOTLY_COLORSCALE
+    //  - IR              → satellite_ir.py Claude IR LUT (matches the
+    //                      storm-card .ir-tb-legend-bar CSS gradient)
+    // Gradient stop 0 = vmin (cold/scattering), stop 1 = vmax (warm).
+    var _MW_CBAR_89 = [
+        [0.000, '#303030'], [0.100, '#606060'], [0.225, '#800000'],
+        [0.375, '#FF0000'], [0.500, '#FF8C00'], [0.535, '#FFD700'],
+        [0.615, '#ADFF2F'], [0.700, '#00CC44'], [0.745, '#00DDCC'],
+        [0.825, '#0066FF'], [0.875, '#0000CC'], [1.000, '#8888FF'],
+    ];
+    var _MW_CBAR_37 = [
+        [0.000, '#CC00CC'], [0.086, '#9900CC'], [0.143, '#3333FF'],
+        [0.229, '#0099FF'], [0.286, '#00CCCC'], [0.371, '#00CC66'],
+        [0.429, '#33CC33'], [0.514, '#99CC00'], [0.543, '#CCCC00'],
+        [0.600, '#FFD700'], [0.657, '#FFAA00'], [0.714, '#FF8800'],
+        [0.743, '#FF6600'], [0.829, '#CC3300'], [0.886, '#993300'],
+        [1.000, '#663300'],
+    ];
+    var _MW_CBAR_PRODUCT = {
+        '89pct': { scale: _MW_CBAR_89, vmin: 105, vmax: 305, title: '89 PCT (K)' },
+        '89v':   { scale: _MW_CBAR_89, vmin: 150, vmax: 300, title: '89V (K)' },
+        '89h':   { scale: _MW_CBAR_89, vmin: 100, vmax: 290, title: '89H (K)' },
+        '37v':   { scale: _MW_CBAR_37, vmin: 125, vmax: 300, title: '37V (K)' },
+        '37h':   { scale: _MW_CBAR_37, vmin: 125, vmax: 300, title: '37H (K)' },
+        // 37color is an RGB composite — no 1D scale; handled separately.
+    };
+    // Claude IR LUT (warm → cold, left → right). Same stops as the
+    // .ir-tb-legend-bar CSS gradient.
+    var _IR_CBAR = [
+        [0.000, 'rgb(12,12,22)'],    [0.142, 'rgb(70,70,82)'],
+        [0.225, 'rgb(120,120,132)'], [0.308, 'rgb(180,180,192)'],
+        [0.392, 'rgb(216,218,228)'], [0.475, 'rgb(140,210,220)'],
+        [0.517, 'rgb(68,180,196)'],  [0.558, 'rgb(32,148,166)'],
+        [0.600, 'rgb(40,178,116)'],  [0.642, 'rgb(96,208,68)'],
+        [0.683, 'rgb(192,220,40)'],  [0.725, 'rgb(238,196,48)'],
+        [0.767, 'rgb(228,132,48)'],  [0.808, 'rgb(214,78,56)'],
+        [0.850, 'rgb(180,36,68)'],   [0.892, 'rgb(196,48,156)'],
+        [0.933, 'rgb(168,64,200)'],  [0.975, 'rgb(120,48,180)'],
+        [1.000, 'rgb(64,24,140)'],
+    ];
+
+    function _rtRoundRectPath(ctx, x, y, w, h, r) {
+        ctx.beginPath();
+        ctx.moveTo(x + r, y);
+        ctx.arcTo(x + w, y, x + w, y + h, r);
+        ctx.arcTo(x + w, y + h, x, y + h, r);
+        ctx.arcTo(x, y + h, x, y, r);
+        ctx.arcTo(x, y, x + w, y, r);
+        ctx.closePath();
+    }
+
+    /** Draw a compact horizontal colorbar in the bottom-left of a
+     *  compare canvas. `labels` is an array of strings distributed
+     *  left→right under the bar (first left-anchored, last
+     *  right-anchored, any middle ones centered). Drawn onto the
+     *  canvas so it's captured by Save PNG. */
+    function _rtDrawCompareColorbar(ctx, w, h, stops, labels, title) {
+        var barW = Math.min(168, w * 0.42);
+        var barH = 9;
+        var padL = 12, padB = 12;
+        var x0 = padL;
+        var yBar = h - padB - barH;
+        // Panel behind the bar + labels + title.
+        var panelX = x0 - 7;
+        var panelY = yBar - 17;
+        var panelW = barW + 14;
+        var panelH = barH + 17 + 14;
+        ctx.save();
+        ctx.fillStyle = 'rgba(10,14,22,0.70)';
+        _rtRoundRectPath(ctx, panelX, panelY, panelW, panelH, 4);
+        ctx.fill();
+        // Gradient bar.
+        var g = ctx.createLinearGradient(x0, 0, x0 + barW, 0);
+        for (var i = 0; i < stops.length; i++) g.addColorStop(stops[i][0], stops[i][1]);
+        ctx.fillStyle = g;
+        ctx.fillRect(x0, yBar, barW, barH);
+        ctx.strokeStyle = 'rgba(255,255,255,0.28)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x0 + 0.5, yBar + 0.5, barW - 1, barH - 1);
+        // Title.
+        ctx.fillStyle = '#e2e8f0';
+        ctx.font = '600 10px "DM Sans", sans-serif';
+        ctx.textBaseline = 'alphabetic';
+        ctx.textAlign = 'left';
+        ctx.fillText(title, x0, yBar - 5);
+        // Tick labels.
+        ctx.font = '9px "DM Sans", sans-serif';
+        ctx.fillStyle = 'rgba(226,232,240,0.92)';
+        var ly = yBar + barH + 10;
+        for (var k = 0; k < labels.length; k++) {
+            var frac = labels.length === 1 ? 0 : k / (labels.length - 1);
+            var lx = x0 + frac * barW;
+            ctx.textAlign = (k === 0) ? 'left'
+                          : (k === labels.length - 1) ? 'right' : 'center';
+            ctx.fillText(labels[k], lx, ly);
+        }
+        ctx.restore();
+    }
+
+    /** RGB-composite legend for the 37color product (no 1D scale). */
+    function _rtDraw37ColorLegend(ctx, w, h) {
+        var items = [
+            ['#00e0e0', 'ocean'],
+            ['#ff5ae0', 'rain'],
+            ['#39d353', 'ice / land'],
+        ];
+        var padL = 12, padB = 12;
+        var rowH = 13;
+        var sw = 11;
+        var panelW = 92;
+        var panelH = items.length * rowH + 18;
+        var panelX = padL - 7;
+        var panelY = h - padB - panelH + 4;
+        ctx.save();
+        ctx.fillStyle = 'rgba(10,14,22,0.70)';
+        _rtRoundRectPath(ctx, panelX, panelY, panelW, panelH, 4);
+        ctx.fill();
+        ctx.fillStyle = '#e2e8f0';
+        ctx.font = '600 10px "DM Sans", sans-serif';
+        ctx.textBaseline = 'alphabetic';
+        ctx.textAlign = 'left';
+        ctx.fillText('37 color', padL, panelY + 13);
+        ctx.font = '9px "DM Sans", sans-serif';
+        for (var i = 0; i < items.length; i++) {
+            var ry = panelY + 22 + i * rowH;
+            ctx.fillStyle = items[i][0];
+            ctx.fillRect(padL, ry, sw, sw);
+            ctx.fillStyle = 'rgba(226,232,240,0.92)';
+            ctx.fillText(items[i][1], padL + sw + 5, ry + sw - 1);
+        }
+        ctx.restore();
+    }
+
+    /** Draw the appropriate MW colorbar/legend for the active product. */
+    function _rtDrawMwCompareColorbar(ctx, w, h, product) {
+        if (product === '37color') { _rtDraw37ColorLegend(ctx, w, h); return; }
+        var cfg = _MW_CBAR_PRODUCT[product];
+        if (!cfg) return;
+        var mid = Math.round((cfg.vmin + cfg.vmax) / 2);
+        _rtDrawCompareColorbar(ctx, w, h, cfg.scale,
+            [String(cfg.vmin), String(mid), String(cfg.vmax)], cfg.title);
+    }
+
     function _rtMwFmtAgo(ageMin) {
         if (ageMin < 1)  return 'just now';
         if (ageMin < 60) return Math.round(ageMin) + ' min ago';
@@ -14961,6 +15107,10 @@
                         ? 'storm sits outside the actual swath data'
                         : '';
                 }
+                // Colorbar/legend for the active product, drawn after
+                // the swath image so it sits on top.
+                _rtDrawMwCompareColorbar(mwCanvas.getContext('2d'),
+                    mwCanvas.width, mwCanvas.height, product);
             }, true /* withGrid */);
         } else if (mwCanvas) {
             var ctx = mwCanvas.getContext('2d');
@@ -15093,6 +15243,10 @@
             _rtDrawInterpMarker(ctx, canvas.width, canvas.height,
                                 storm.lat, storm.lon,
                                 _RT_MW_COMPARE_HALF_DEG);
+            // IR brightness-temperature colorbar (Claude LUT). Labels
+            // match the storm-card legend (+35 / -30 / -85 °C).
+            _rtDrawCompareColorbar(ctx, canvas.width, canvas.height,
+                _IR_CBAR, ['+35', '-30', '-85'], 'IR Tb (°C)');
             if (done) done(null);
         };
         img.onerror = function () { if (done) done(new Error('IR jpg load failed')); };
