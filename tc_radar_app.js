@@ -91,6 +91,18 @@ function _handleDeepLink() {
             switchDataType(dlDtype);
         }
 
+        // The base dataset + dropdown cascade below can take several
+        // seconds to resolve. Without a signal the page just looks idle
+        // after a shared link opens, so surface a dismissible toast while
+        // we wait, and clear it on success/failure.
+        var _dlResolved = false;
+        var _dlToast = (typeof showToast === 'function')
+            ? showToast('Loading shared storm…', 'info', 16000) : null;
+        function _dismissDlToast() {
+            if (_dlToast && _dlToast.parentNode) { _dlToast.remove(); }
+            _dlToast = null;
+        }
+
         // Wait for data to load, then open the case
         var _checkInterval = setInterval(function() {
             var d = _getActiveData();
@@ -98,6 +110,7 @@ function _handleDeepLink() {
             clearInterval(_checkInterval);
             var caseData = d.cases.find(function(c) { return c.case_index === targetIdx; });
             if (caseData) {
+                _dlResolved = true;
                 // Set dropdowns to match
                 var yearSel = document.getElementById('year-select');
                 if (yearSel) { yearSel.value = String(caseData.year); yearSel.dispatchEvent(new Event('change')); }
@@ -108,6 +121,10 @@ function _handleDeepLink() {
                         var caseSel = document.getElementById('case-select');
                         if (caseSel) { caseSel.value = String(targetIdx); }
                         exploreCaseGo();
+                        _dismissDlToast();
+                        if (typeof showToast === 'function') {
+                            showToast('Loaded ' + (caseData.storm_name || 'shared storm'), 'info', 2500);
+                        }
                         // After case loads, set variable and level from deep link
                         if (dlVar || dlLevel) {
                             setTimeout(function() {
@@ -120,10 +137,24 @@ function _handleDeepLink() {
                         }
                     }, 200);
                 }, 200);
+            } else {
+                // Data arrived but the case index isn't in it.
+                _dismissDlToast();
+                if (typeof showToast === 'function') {
+                    showToast('That shared storm wasn’t found in this dataset. Try the menus below.', 'warn', 7000);
+                }
             }
         }, 300);
         // Safety: clear after 15s
-        setTimeout(function() { clearInterval(_checkInterval); }, 15000);
+        setTimeout(function() {
+            clearInterval(_checkInterval);
+            if (!_dlResolved) {
+                _dismissDlToast();
+                if (typeof showToast === 'function') {
+                    showToast('Could not load the shared storm — it may be unavailable. Try selecting it from the menus.', 'warn', 7000);
+                }
+            }
+        }, 15000);
     }
 }
 
@@ -157,6 +188,7 @@ function showToast(message, type, duration) {
         toast.style.opacity = '0'; toast.style.transform = 'translateX(30px)';
         setTimeout(function() { toast.remove(); }, 300);
     }, duration);
+    return toast;
 }
 
 // ── Save plot as PNG ─────────────────────────────────────────

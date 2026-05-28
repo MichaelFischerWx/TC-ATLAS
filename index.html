@@ -996,7 +996,21 @@
                     }
                 }
             })
-            .catch(function () { /* keep stale placeholders; no console spam */ });
+            .catch(function () {
+                // API unreachable. The strip otherwise sits on a perpetual
+                // "—" with a gray dot, which reads as "still loading" forever.
+                // Swap in a clear, low-key "unavailable" state instead.
+                var activeEl = document.getElementById('activity-active');
+                if (activeEl) {
+                    activeEl.innerHTML = '<span class="dot"></span>Live activity unavailable';
+                    activeEl.title = 'Could not reach the real-time monitor right now. Open the Real-Time Monitor to retry.';
+                }
+                var refreshEl = document.getElementById('activity-refresh');
+                if (refreshEl) {
+                    var rval = refreshEl.querySelector('.activity-stat-val');
+                    if (rval) rval.textContent = 'offline';
+                }
+            });
     })();
     </script>
 </body>
