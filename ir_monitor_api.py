@@ -377,6 +377,16 @@ def _upload_public_bundle(key: str, body: bytes, content_type: str = "applicatio
 _ANOM_RATIO = 2.5       # flag if both neighbor diffs exceed RATIO × the neighbor-pair diff
 _ANOM_ABS_FLOOR = 20.0  # …and exceed this absolute MAD (avoids flagging quiet periods)
 
+# Reflectance-band (Visible) dim-out screen. The MAD screen above is blind to
+# a bad/low-gain Visible scan near sunrise/sunset: twilight frames are all
+# near-black, so even a real dropout sits under _ANOM_ABS_FLOOR (tuned for
+# high-contrast IR). But the sun only ramps illumination one way through a
+# pass, so a daytime reflectance frame should never be DARKER than both its
+# temporal neighbors. We flag a clear brightness local-minimum instead.
+_VIS_DROPOUT_FRAC = 0.80      # flag if frame mean < FRAC × the dimmer neighbor's mean
+_VIS_DROPOUT_MIN_BRIGHT = 12.0  # …and both neighbors are this bright (i.e. it's daylight,
+                                # not the near-black twilight floor where the ratio is noise)
+
 # Per-storm set of frame slot keys ("YYYYMMDDHHMM") flagged anomalous in the
 # last bundle build. The prewarm pops this at the start of each cycle and
 # FORCE-refetches those frames (bypassing the cache short-circuit) so a
@@ -388,10 +398,16 @@ _anomalous_heal_times: dict = {}
 _anomalous_heal_lock = threading.Lock()
 
 
-def _flag_anomalous_frames(jpgs: list) -> set:
+def _flag_anomalous_frames(jpgs: list, band: int | None = None) -> set:
     """Return the set of frame indices whose imagery is a strong outlier vs
     BOTH immediate temporal neighbors (likely a bad scan substitution).
     `jpgs` is a list of encoded image bytes or None (missing frame).
+
+    For the Visible band a second, brightness-based test also flags dim-out
+    scans the MAD screen misses near the day/night terminator (see
+    _VIS_DROPOUT_FRAC). `band` selects that test; leave None (IR) or pass an
+    emissive band (WV/SWIR) to run the MAD screen only.
+
     Fail-open: returns an empty set on any decode/dependency error so a
     detection hiccup never blocks bundling."""
     try:
@@ -437,11 +453,33 @@ def _flag_anomalous_frames(jpgs: list) -> set:
         thr = max(_ANOM_ABS_FLOOR, _ANOM_RATIO * d_skip)
         if d_prev > thr and d_next > thr:
             flagged.add(i)
+
+    # Visible-only dim-out screen: a daytime reflectance frame should never be
+    # a brightness local-minimum (the sun ramps illumination monotonically
+    # through a pass). Catches low-gain/partial Vis scans near sunrise/sunset
+    # whose near-black MADs fall under _ANOM_ABS_FLOOR. Skipped for emissive
+    # bands (WV/SWIR) and IR/Vis composites, where brightness ≠ illumination.
+    if band is not None and band == VIS_BAND:
+        means = [float(t.mean()) if t is not None else None for t in thumbs]
+        for i in range(n):
+            mi = means[i]
+            if mi is None or i in flagged:
+                continue
+            mp = next((means[j] for j in range(i - 1, -1, -1) if means[j] is not None), None)
+            mq = next((means[j] for j in range(i + 1, n) if means[j] is not None), None)
+            if mp is None or mq is None:
+                continue
+            dimmer = min(mp, mq)
+            # Only meaningful once both neighbors are daylight-bright — below
+            # that floor the ratio is just twilight noise.
+            if dimmer >= _VIS_DROPOUT_MIN_BRIGHT and mi < dimmer * _VIS_DROPOUT_FRAC:
+                flagged.add(i)
     return flagged
 
 
 def _screen_and_queue_anomalies(atcf_upper: str, times_oldest_first: list,
-                                jpgs: list, label: str = "") -> set:
+                                jpgs: list, label: str = "",
+                                band: int | None = None) -> set:
     """Flag anomalous frames in `jpgs` (encoded image bytes or None,
     oldest-first, aligned with `times_oldest_first`), queue their slot keys
     for force-refetch on the next prewarm cycle (self-heal), and return the
@@ -451,8 +489,9 @@ def _screen_and_queue_anomalies(atcf_upper: str, times_oldest_first: list,
     bundle so every product we ship (IR/WV/SWIR/Vis) gets the same "pops out
     and comes back" screen. The prewarm pops `_anomalous_heal_times` and
     force-refetches ALL bands for each queued slot, so a frame flagged on any
-    one product heals across products. `label` tags the log line."""
-    anomalous_idx = _flag_anomalous_frames(jpgs)
+    one product heals across products. `label` tags the log line. `band` is
+    forwarded to enable the Visible-only dim-out screen."""
+    anomalous_idx = _flag_anomalous_frames(jpgs, band=band)
     if anomalous_idx:
         bad_keys = {times_oldest_first[i].strftime("%Y%m%d%H%M")
                     for i in anomalous_idx}
@@ -646,7 +685,8 @@ def _build_and_upload_bundles(
             for i, ft in enumerate(times_oldest_first)
         ]
         band_anom_idx = _screen_and_queue_anomalies(
-            atcf_upper, times_oldest_first, bjpgs_pre, label=f"band{band}")
+            atcf_upper, times_oldest_first, bjpgs_pre, label=f"band{band}",
+            band=band)
 
         band_hdrs = []
         payloads_band: list[bytes] = []
@@ -4439,7 +4479,8 @@ def get_storm_band_frames_bundle(
         if jpg and err is None:
             jpgs_by_idx[i] = jpg
     band_anom_idx = _screen_and_queue_anomalies(
-        atcf_upper, frame_times, jpgs_by_idx, label=f"band{band} (on-demand)")
+        atcf_upper, frame_times, jpgs_by_idx, label=f"band{band} (on-demand)",
+        band=band)
 
     frame_headers = []
     payloads: list[bytes] = []
