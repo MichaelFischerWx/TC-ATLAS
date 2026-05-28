@@ -13,6 +13,51 @@
     var DEFAULT_LOOKBACK_HOURS = 6;
     var DEFAULT_RADIUS_DEG = 10.0;
 
+    // ── Shared async-state helpers ──────────────────────────────
+    // A bare fetch() never rejects on a stalled connection until the
+    // browser's (very long) socket timeout, so a hung request leaves a
+    // panel spinning forever. Wrap fetch with an AbortController timeout
+    // so stalls surface as a normal rejection the caller can show as a
+    // retry-able error. Default 20 s — generous for a Cloud Run cold
+    // start, short enough that a truly dead request doesn't hang the UI.
+    function _rtFetchJSON(url, opts, timeoutMs) {
+        opts = opts || {};
+        if (!('cache' in opts)) opts.cache = 'no-store';
+        var ms = timeoutMs || 20000;
+        var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+        if (ctrl && !opts.signal) opts.signal = ctrl.signal;
+        var timer = ctrl ? setTimeout(function () {
+            try { ctrl.abort(); } catch (e) {}
+        }, ms) : null;
+        return fetch(url, opts)
+            .then(function (r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            })
+            .finally(function () { if (timer) clearTimeout(timer); });
+    }
+
+    // Render a compact, retry-able error into a panel status element.
+    // Keeps the wording + affordance consistent across every panel so a
+    // failed load is always distinguishable from an empty result, and is
+    // always one click from a retry instead of a full page reload.
+    function _rtStatusError(el, retryFn, label) {
+        if (!el) return;
+        el.innerHTML = '';
+        var span = document.createElement('span');
+        span.className = 'rt-status-error';
+        span.textContent = (label || 'Couldn’t load') + ' · ';
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'rt-retry-link';
+        btn.textContent = 'Retry';
+        if (typeof retryFn === 'function') {
+            btn.addEventListener('click', function () { retryFn(); });
+        }
+        span.appendChild(btn);
+        el.appendChild(span);
+    }
+
     // ── IR Colormap LUTs (for client-side raw Tb rendering) ────
     var IR_COLORMAPS = {};
     var irSelectedColormap = 'claude-ir';
@@ -521,6 +566,13 @@
     var _rtGenesisVisible = false;
     var _rtGenesisLoading = false;
     var _rtGenesisLayers = [];
+    // init_time of the cycle whose markers we last played the pop-in
+    // entrance animation for. Keyed by init so the *first* render that
+    // draws markers for a new cycle animates them (catching the user's
+    // eye when they populate a few seconds — cold cache — or up to 30
+    // min — new cycle on a long-open tab — after the page first loaded),
+    // while routine re-renders (cluster swap, tuner tweaks) stay still.
+    var _genesisAnimatedInit = null;
     // Optional per-member spaghetti layer — opt-in via the Layers menu
     // sub-toggle. Off by default because the disturbance markers above
     // are the canonical glance-view; spaghetti is for users who want
@@ -925,6 +977,24 @@
             return mo + '/' + day + ' ' + hh + ':' + mm + ' UTC';
         } catch (e) { return isoStr; }
     }
+
+    /** Human "x ago" for a UTC ISO string, used to flag stale fixes. */
+    function _fmtAgo(isoStr) {
+        if (!isoStr) return '';
+        var t = Date.parse(isoStr);
+        if (!isFinite(t)) return '';
+        var mins = Math.round((Date.now() - t) / 60000);
+        if (mins < 0) return '';            // future / clock skew — say nothing
+        if (mins < 1) return 'just now';
+        if (mins < 60) return mins + ' min ago';
+        var hrs = mins / 60;
+        if (hrs < 24) return (hrs < 10 ? hrs.toFixed(1) : Math.round(hrs)) + ' h ago';
+        return Math.round(hrs / 24) + ' d ago';
+    }
+    // A fix older than this is visually flagged so a forecaster doesn't
+    // read a hours-old position as current. 6 h ≈ two missed synoptic
+    // fixes for a weak/sparsely-tracked system.
+    var _LASTFIX_STALE_MIN = 6 * 60;
 
     /** Pick the best satellite for a given longitude (angular distance to sub-satellite point) */
     function bestSatelliteForLon(lon) {
@@ -1577,19 +1647,32 @@
     /** Update the GIBS-feed staleness banner. Show when one or more
      *  satellites are stale; hide when all are fresh.
      *
-     *  Once dismissed, store the affected sat set + dismiss time in
-     *  localStorage. Re-show only if (a) different sats become stale,
-     *  or (b) the dismissal is older than the 24-hour TTL. That way a
-     *  returning user who already saw the warning isn't pestered
-     *  every visit, but a NEW outage still surfaces it. */
-    var _BANNER_DISMISS_KEY = 'tc-atlas:ir-feed-banner-dismiss';
-    var _BANNER_DISMISS_TTL_MS = 24 * 60 * 60 * 1000;  // 24 h
+     *  Show the banner only the FIRST time a user encounters a given
+     *  stale-sat set, then never auto-pop it again. We persist a "seen"
+     *  record the moment it's displayed (not just on explicit dismiss),
+     *  so a returning user — or one who simply ignores the notice — isn't
+     *  pestered on every visit. GOES-West in particular goes stale often
+     *  for the East Pac, and one parallax heads-up is enough. A genuinely
+     *  NEW outage (a different sat, or a different combination) is a new
+     *  key, so it still surfaces once. */
+    var _BANNER_SEEN_KEY = 'tc-atlas:ir-feed-banner-seen';
 
-    function _bannerDismissalRecord() {
+    function _bannerSeenKeys() {
         try {
-            var raw = localStorage.getItem(_BANNER_DISMISS_KEY);
-            return raw ? JSON.parse(raw) : null;
-        } catch (e) { return null; }
+            var raw = localStorage.getItem(_BANNER_SEEN_KEY);
+            var obj = raw ? JSON.parse(raw) : null;
+            return (obj && typeof obj === 'object') ? obj : {};
+        } catch (e) { return {}; }
+    }
+
+    function _markBannerSeen(key) {
+        try {
+            var seen = _bannerSeenKeys();
+            if (!seen[key]) {
+                seen[key] = Date.now();
+                localStorage.setItem(_BANNER_SEEN_KEY, JSON.stringify(seen));
+            }
+        } catch (e) {}
     }
 
     function _updateFeedStalenessBanner(staleSats) {
@@ -1600,13 +1683,10 @@
             el.style.display = 'none';
             return;
         }
-        // Honor a recent dismissal — but only when the affected sats
-        // match what the user already saw. A new sat going stale or a
-        // change in the set re-shows the banner.
+        // Suppress if the user has already seen the banner for this exact
+        // stale-sat set. First-time-only, by design.
         var key = staleSats.slice().sort().join('|');
-        var rec = _bannerDismissalRecord();
-        if (rec && rec.key === key &&
-            (Date.now() - rec.t) < _BANNER_DISMISS_TTL_MS) {
+        if (_bannerSeenKeys()[key]) {
             el.style.display = 'none';
             return;
         }
@@ -1614,17 +1694,9 @@
         var msg = label + ' feed delayed (NASA GIBS) — that region is being backfilled from the nearest available satellite (expect higher parallax) until the upstream ingest catches up.';
         txt.textContent = msg;
         el.style.display = 'flex';
-        // Wire the close button to also persist the dismissal.
-        var closer = el.querySelector('.ir-feed-banner-close');
-        if (closer && !closer._dismissBound) {
-            closer.addEventListener('click', function () {
-                try {
-                    localStorage.setItem(_BANNER_DISMISS_KEY,
-                        JSON.stringify({ key: key, t: Date.now() }));
-                } catch (e) {}
-            });
-            closer._dismissBound = true;
-        }
+        // Record the view immediately so it won't auto-pop again for this
+        // set, whether or not the user clicks the close button.
+        _markBannerSeen(key);
     }
 
     /** Legacy wrapper — returns the oldest satellite time (for animation compatibility) */
@@ -3417,13 +3489,24 @@
         if (cached && cached.meta && (Date.now() - cached.cachedAt) < PANEL_CACHE_TTL_MS) {
             _handleMeta(cached.meta);
         } else {
-            fetchStormMetadata(atcfId, function (err, meta) {
-                if (!err && meta) {
-                    if (!_panelCache[atcfId]) _panelCache[atcfId] = { cachedAt: Date.now() };
-                    _panelCache[atcfId].meta = meta;
-                    _handleMeta(meta);
-                }
-            });
+            (function _loadMeta() {
+                fetchStormMetadata(atcfId, function (err, meta) {
+                    if (!err && meta) {
+                        if (!_panelCache[atcfId]) _panelCache[atcfId] = { cachedAt: Date.now() };
+                        _panelCache[atcfId].meta = meta;
+                        _handleMeta(meta);
+                    } else {
+                        // Stop the skeleton from pulsing forever and give the
+                        // user a one-click retry instead of a dead panel.
+                        var chartEl = document.getElementById('ir-intensity-chart');
+                        if (chartEl) {
+                            chartEl.className = 'ir-intensity-chart';
+                            chartEl.innerHTML = '';
+                            _rtStatusError(chartEl, _loadMeta, 'Couldn’t load intensity history');
+                        }
+                    }
+                });
+            })();
         }
         // Raw Tb pre-fetch starts when ALL GIBS tiles finish loading
         // (see onFrameLayerLoaded). Panel requests get a natural head
@@ -4512,6 +4595,8 @@
         var catEl = document.getElementById('ir-detail-cat');
         catEl.textContent = categoryShort(cat) + (storm.vmax_kt != null ? ' \u00B7 ' + storm.vmax_kt + ' kt' : '');
         catEl.style.background = color;
+        catEl.title = 'Saffir-Simpson category from 1-min sustained wind (kt). '
+            + 'TD <34 \u00B7 TS 34\u201363 \u00B7 Cat1 64\u201382 \u00B7 Cat2 83\u201395 \u00B7 Cat3 96\u2013112 \u00B7 Cat4 113\u2013136 \u00B7 Cat5 137+';
 
         // Populate info grid
         document.getElementById('ir-info-basin').textContent = storm.basin || '\u2014';
@@ -4522,7 +4607,22 @@
             storm.mslp_hpa != null ? storm.mslp_hpa + ' hPa' : '\u2014';
         document.getElementById('ir-info-vmax').textContent =
             storm.vmax_kt != null ? storm.vmax_kt + ' kt (' + categoryShort(cat) + ')' : '\u2014';
-        document.getElementById('ir-info-lastfix').textContent = fmtUTC(storm.last_fix_utc);
+        var lastfixEl = document.getElementById('ir-info-lastfix');
+        if (lastfixEl) {
+            var ago = _fmtAgo(storm.last_fix_utc);
+            var tMs = Date.parse(storm.last_fix_utc);
+            var staleMin = isFinite(tMs) ? (Date.now() - tMs) / 60000 : 0;
+            lastfixEl.textContent = fmtUTC(storm.last_fix_utc);
+            if (ago) {
+                var agoSpan = document.createElement('span');
+                agoSpan.className = 'ir-lastfix-ago' + (staleMin > _LASTFIX_STALE_MIN ? ' stale' : '');
+                agoSpan.textContent = ' · ' + ago;
+                if (staleMin > _LASTFIX_STALE_MIN) {
+                    agoSpan.title = 'This fix is several hours old — the plotted position may no longer be current.';
+                }
+                lastfixEl.appendChild(agoSpan);
+            }
+        }
 
         // Shear from GFS analysis (lazy: fires after the IR mini-map loads)
         var shearEl = document.getElementById('ir-info-shear');
@@ -7139,19 +7239,19 @@
     };
 
     function fetchSeasonSummary() {
-        fetch(API_BASE + '/ir-monitor/season-summary', { cache: 'no-store' })
-            .then(function (r) {
-                if (!r.ok) throw new Error('HTTP ' + r.status);
-                return r.json();
-            })
+        _rtFetchJSON(API_BASE + '/ir-monitor/season-summary')
             .then(function (data) {
                 seasonSummaryData = data;
                 renderBasinSidebar();
             })
             .catch(function (err) {
                 console.warn('[RT Monitor] Season summary fetch failed:', err.message || '');
+                // Keep any already-rendered data on screen; only replace the
+                // placeholder on a first-load failure so a transient repoll
+                // error doesn't blow away a good sidebar.
+                if (seasonSummaryData) return;
                 var content = document.getElementById('basin-sidebar-content');
-                if (content) content.innerHTML = '<div class="basin-sidebar-loading">Unable to load season data</div>';
+                _rtStatusError(content, fetchSeasonSummary, 'Couldn’t load season data');
             });
     }
 
@@ -7261,9 +7361,8 @@
         if (cached && cached.models && (Date.now() - cached.cachedAt) < PANEL_CACHE_TTL_MS) {
             dataPromise = Promise.resolve(cached.models);
         } else {
-            if (statusEl) statusEl.textContent = 'Loading...';
-            dataPromise = fetch(API_BASE + '/global/adeck?atcf_id=' + encodeURIComponent(atcfId), { cache: 'no-store' })
-                .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+            if (statusEl) statusEl.textContent = 'Loading…';
+            dataPromise = _rtFetchJSON(API_BASE + '/global/adeck?atcf_id=' + encodeURIComponent(atcfId))
                 .then(function (json) {
                     if (!_panelCache[atcfId]) _panelCache[atcfId] = { cachedAt: Date.now() };
                     _panelCache[atcfId].models = json;
@@ -7326,7 +7425,11 @@
                 }
             })
             .catch(function (e) {
-                if (statusEl) statusEl.textContent = 'Unavailable';
+                // Force a refetch next time by clearing the last-storm
+                // memo so the Retry actually re-hits the network.
+                _rtModelLastAtcf = null;
+                _rtStatusError(statusEl, function () { _rtLoadModelForecasts(storm); },
+                               'Models unavailable');
                 console.warn('[RT Models] A-deck load failed', e);
             });
     }
@@ -9269,6 +9372,13 @@
         var disturbances = _genesisDisturbances(tracks);
         if (disturbances.length === 0) return;
 
+        // Play the pop-in entrance once per cycle, on whichever render
+        // first draws markers for this init (deepmind pass or the later
+        // tcatlas cluster swap — whichever wins). Subsequent re-renders
+        // for the same cycle skip it so the map doesn't twitch.
+        var initNow = (_rtGenesisData && _rtGenesisData.init_time) || null;
+        var animateEntry = !!initNow && initNow !== _genesisAnimatedInit;
+
         // Re-label disturbances that overlap an officially-tracked
         // ATCF storm. After this call, d.displayLabel may be "TD 01W"
         // / "Invest 90W" / "Bonnie" instead of "Disturbance N", with
@@ -9336,7 +9446,7 @@
             // Confidence scales 50 → 1000 members onto 14 → 28 px.
             var baseSize = 14 + Math.min(14, Math.round((d.fraction - 0.05) * 18));
             var html =
-                '<div class="rt-gen-marker" style="background:' + style.bold + ';'
+                '<div class="rt-gen-marker' + (animateEntry ? ' rt-gen-marker--enter' : '') + '" style="background:' + style.bold + ';'
                 + 'width:' + baseSize + 'px;height:' + baseSize + 'px;line-height:'
                 + baseSize + 'px;font-size:' + Math.max(9, Math.round(baseSize * 0.5))
                 + 'px;">' + d.displayShort + '</div>';
@@ -9402,6 +9512,10 @@
                 }
             }
         }
+
+        // This cycle has now had its entrance played; later re-renders
+        // (cluster swap, tuner changes) for the same init won't re-pop.
+        if (animateEntry) _genesisAnimatedInit = initNow;
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -11712,6 +11826,61 @@
             });
     }
 
+    // Transient on-map toast announcing that cyclogenesis disturbances
+    // just populated. The markers themselves can land a few seconds
+    // (cold backend cache) or up to 30 min (a new cycle on a long-open
+    // tab) after the user first looked at the map — without this, they
+    // silently appear and a user who already glanced away misses them.
+    var _genesisToastTimer = null;
+    function _genesisAnnounceArrival(nTracks, isAutoRefresh) {
+        if (!map || typeof map.getContainer !== 'function') return;
+        var container = map.getContainer();
+        if (!container) return;
+        // Replace any toast still on screen so we never stack them.
+        var prev = container.querySelector('.rt-gen-toast');
+        if (prev && prev.parentNode) prev.parentNode.removeChild(prev);
+        if (_genesisToastTimer) { clearTimeout(_genesisToastTimer); _genesisToastTimer = null; }
+
+        var plural = nTracks === 1 ? '' : 's';
+        var lead = isAutoRefresh ? 'Updated forecast · ' : '';
+        var toast = document.createElement('div');
+        toast.className = 'rt-gen-toast';
+        toast.setAttribute('role', 'status');
+        toast.setAttribute('aria-live', 'polite');
+        toast.innerHTML =
+            '<span class="rt-gen-toast-dot"></span>'
+            + '<span class="rt-gen-toast-body">'
+            + '<b>' + lead + nTracks + ' cyclogenesis disturbance' + plural + '</b>'
+            + '<span class="rt-gen-toast-sub">Google DeepMind ensemble · tap a marker for the 1000-member detail</span>'
+            + '</span>'
+            + '<span class="rt-gen-toast-close" aria-label="Dismiss">×</span>';
+
+        function dismiss() {
+            if (_genesisToastTimer) { clearTimeout(_genesisToastTimer); _genesisToastTimer = null; }
+            toast.classList.add('rt-gen-toast--out');
+            setTimeout(function () {
+                if (toast.parentNode) toast.parentNode.removeChild(toast);
+            }, 320);
+        }
+        toast.addEventListener('click', dismiss);
+        container.appendChild(toast);
+        // Drop below the GIBS feed-staleness banner when it's showing so
+        // the two top-center notices don't stack on top of each other.
+        var banner = document.getElementById('ir-feed-banner');
+        if (banner && getComputedStyle(banner).display !== 'none') {
+            var bRect = banner.getBoundingClientRect();
+            var cRect = container.getBoundingClientRect();
+            var topPx = Math.max(14, Math.round(bRect.bottom - cRect.top) + 16);
+            toast.style.top = topPx + 'px';
+        }
+        // Auto-dismiss after long enough to read, short enough to stay
+        // unobtrusive. Tab-hidden re-polls don't reach here (the repoll
+        // is gated on visibilityState), so the timer always counts down
+        // while the user is actually looking.
+        _genesisToastTimer = setTimeout(dismiss, 8000);
+        _ga('rt_genesis_toast', { n_tracks: nTracks, auto: !!isAutoRefresh });
+    }
+
     function _loadGenesis(isAutoRefresh) {
         if (_rtGenesisLoading) return;
         _rtGenesisLoading = true;
@@ -11741,6 +11910,14 @@
                     if (_rtGenesisRawVisible) _renderGenesisRaw();
                     if (isAutoRefresh && prevInit && newInit && newInit !== prevInit) {
                         _ga('rt_genesis_newer_cycle', { from: prevInit, to: newInit });
+                    }
+                    // Announce a fresh cycle's disturbances so they don't
+                    // populate unnoticed. Fires on first load (prevInit
+                    // null) and whenever a newer cycle arrives — but only
+                    // when there's something to see and the layer is on.
+                    var nNow = (data && data.n_tracks) ? data.n_tracks : 0;
+                    if (newInit && newInit !== prevInit && nNow > 0 && _rtGenesisVisible) {
+                        _genesisAnnounceArrival(nNow, isAutoRefresh);
                     }
                     // Fetch the server's precomputed TCA clusters so
                     // the on-map markers show accurate uncapped counts
@@ -14670,7 +14847,7 @@
             if (section) section.style.display = '';
             var json = cached.ascat;
             if (!json.passes || json.passes.length === 0) {
-                if (statusEl) statusEl.textContent = 'No passes found';
+                if (statusEl) statusEl.textContent = 'No scatterometer passes over this storm in the last 12 h';
             } else {
                 if (statusEl) statusEl.textContent = json.passes.length + ' pass' + (json.passes.length > 1 ? 'es' : '');
                 var sel = document.getElementById('rt-ascat-pass-select');
@@ -14712,7 +14889,7 @@
                     _panelCache[atcfId].ascat = json;
 
                     if (!json.passes || json.passes.length === 0) {
-                        if (statusEl) statusEl.textContent = 'No passes found';
+                        if (statusEl) statusEl.textContent = 'No scatterometer passes over this storm in the last 12 h';
                         return;
                     }
 
@@ -14733,8 +14910,13 @@
                 })
                 .catch(function (err) {
                     console.warn('[RT ASCAT] Failed to load passes:', err);
-                    if (statusEl) statusEl.textContent = '';
-                    if (section) section.style.display = 'none';
+                    // Keep the section visible with a retry rather than
+                    // silently vanishing — a disappearing panel reads as a
+                    // bug, not as "the fetch failed, try again".
+                    if (section) section.style.display = '';
+                    _rtAscatLastAtcf = null;
+                    _rtStatusError(statusEl, function () { _rtLoadAscatPasses(storm); },
+                                   'Scatterometer data unavailable');
                 });
         }
         _doFetch();
@@ -14804,6 +14986,97 @@
         if (lat < south || lat > north) return false;
         if (west <= east) return lon >= west && lon <= east;
         return lon >= west || lon <= east;   // dateline wrap
+    }
+
+    // Sensor swath half-widths (km), mirroring mw_ingest.py. Used with the
+    // ingest-time center_track polyline as a cheap pre-filter: arcs whose
+    // track passes farther than this from the storm never imaged it, so we
+    // skip downloading their PNGs. The per-card PNG-crop check (frac <
+    // _RT_MW_MIN_COVERAGE) remains the final authority — this gate only
+    // matches the schedule dashboard's coverage definition in tc_mw_layer.js.
+    var _RT_MW_SWATH_HALF_KM = { GMI: 445, SSMIS: 875, AMSR2: 725, ATMS: 1150 };
+    var _RT_MW_SWATH_HALF_KM_DEFAULT = 900;
+    var _RT_MW_SWATH_COVER_MARGIN = 1.15;
+
+    function _rtMwMinDistKmToTrack(track, lat, lon) {
+        if (!track || !track.length) return Infinity;
+        var KM_PER_DEG = 111.195;
+        var cosLat = Math.cos(lat * Math.PI / 180);
+        function proj(p) {
+            var dLon = p[1] - lon;
+            if (dLon > 180) dLon -= 360;
+            else if (dLon < -180) dLon += 360;
+            return [dLon * cosLat * KM_PER_DEG, (p[0] - lat) * KM_PER_DEG];
+        }
+        if (track.length === 1) {
+            var q = proj(track[0]);
+            return Math.sqrt(q[0] * q[0] + q[1] * q[1]);
+        }
+        var best = Infinity;
+        for (var i = 0; i < track.length - 1; i++) {
+            var a = proj(track[i]), b = proj(track[i + 1]);
+            var vx = b[0] - a[0], vy = b[1] - a[1];
+            var len2 = vx * vx + vy * vy;
+            var t = len2 > 0 ? -(a[0] * vx + a[1] * vy) / len2 : 0;
+            if (t < 0) t = 0; else if (t > 1) t = 1;
+            var cx = a[0] + t * vx, cy = a[1] + t * vy;
+            var d = Math.sqrt(cx * cx + cy * cy);
+            if (d < best) best = d;
+        }
+        return best;
+    }
+
+    // Pick the storm-centered hi-res crop (if any) covering (lat, lon).
+    // The ingest renders these at native ~2-5 km resolution over a small
+    // window, vs the whole-arc PNG that _adaptive_grid_cap downsamples to
+    // ~8-17 km/px over a wide arc. We prefer the crop whose bounds contain
+    // the storm; ties (overlapping windows for nearby systems) break to
+    // the nearest crop center. Returns {png_url, bounds} or null.
+    function _rtMwPickCrop(entry, lat, lon) {
+        var crops = entry && entry.crops;
+        if (!crops || !crops.length || lat == null || lon == null) return null;
+        // Storm-window crops near the dateline are stored in a continuous
+        // longitude frame where east can exceed 180 (e.g. west=174,
+        // east=188). The storm's reported lon may be on either side
+        // (-179 ≡ 181), so test the storm lon shifted by 0/±360.
+        function cropContains(b, la, lo) {
+            var s = b[0][0], w = b[0][1], n = b[1][0], e = b[1][1];
+            if (la < s || la > n) return false;
+            return (lo >= w && lo <= e) ||
+                   (lo + 360 >= w && lo + 360 <= e) ||
+                   (lo - 360 >= w && lo - 360 <= e);
+        }
+        var best = null, bestD = Infinity;
+        for (var i = 0; i < crops.length; i++) {
+            var c = crops[i];
+            if (!c || !c.png_url || !cropContains(c.bounds, lat, lon)) {
+                continue;
+            }
+            var cLat = (c.bounds[0][0] + c.bounds[1][0]) / 2;
+            var w = c.bounds[0][1], e = c.bounds[1][1];
+            if (e < w) e += 360;                 // dateline-wrapped window
+            var cLon = (w + e) / 2;
+            var dLon = cLon - lon;
+            while (dLon > 180) dLon -= 360;
+            while (dLon < -180) dLon += 360;
+            var d = (cLat - lat) * (cLat - lat) + dLon * dLon;
+            if (d < bestD) { bestD = d; best = c; }
+        }
+        return best;
+    }
+
+    // Cheap geometric coverage gate. Prefers the center-track distance
+    // test; falls back to bbox containment for entries predating the
+    // center_track field (48 h rolling-window backfill).
+    function _rtMwPassCoversStorm(entry, lat, lon) {
+        if (!entry || lat == null || lon == null) return false;
+        if (entry.center_track && entry.center_track.length) {
+            var half = (_RT_MW_SWATH_HALF_KM[entry.sensor]
+                        || _RT_MW_SWATH_HALF_KM_DEFAULT)
+                     * _RT_MW_SWATH_COVER_MARGIN;
+            return _rtMwMinDistKmToTrack(entry.center_track, lat, lon) <= half;
+        }
+        return _rtMwBoundsContains(entry.bounds, lat, lon);
     }
 
     // Fetch + cache the public 48h manifest. ~5-min cache lines up
@@ -14883,7 +15156,7 @@
                     var e = entries[i];
                     var t = Date.parse(e.scan_start);
                     if (!isFinite(t) || (nowMs - t) > _RT_MW_WINDOW_MS) continue;
-                    if (!_rtMwBoundsContains(e.bounds, storm.lat, storm.lon)) continue;
+                    if (!_rtMwPassCoversStorm(e, storm.lat, storm.lon)) continue;
                     var oid = e.orbit_id;
                     if (!orbitMap[oid]) {
                         orbitMap[oid] = {
@@ -14901,10 +15174,20 @@
                     // the orbit's first product. Store per-product bounds —
                     // the crop must un-warp using the bounds the PNG was
                     // warped with, else features land at the wrong latitude.
+                    //
+                    // Prefer the storm-centered hi-res crop when the ingest
+                    // produced one for this storm: it's regridded at native
+                    // resolution over a ±7° window instead of the
+                    // _adaptive_grid_cap-downsampled whole-arc grid, so the
+                    // thumbnail + compare modal render crisp (esp. AMSR2/
+                    // SSMIS wide arcs). Falls back to the whole-arc PNG when
+                    // no crop covers the storm (older entries, GMI, etc.).
+                    var hiRes = _rtMwPickCrop(e, storm.lat, storm.lon);
                     orbitMap[oid].products[e.product] = {
-                        png_url: e.png_url,
+                        png_url: hiRes ? hiRes.png_url : e.png_url,
                         geojson_url: e.geojson_url,
-                        bounds: e.bounds
+                        bounds: hiRes ? hiRes.bounds : e.bounds,
+                        hi_res: !!hiRes
                     };
                 }
                 // Newest first — analyst typically wants "what's the latest
@@ -14921,8 +15204,10 @@
             })
             .catch(function (err) {
                 console.warn('[RT MW Storm] manifest fetch failed:', err);
-                if (statusEl) statusEl.textContent = 'unavailable';
+                if (_rtMwStormState.atcfId !== storm.atcf_id) return;  // moved on
                 if (listEl) listEl.innerHTML = '';
+                _rtStatusError(statusEl, function () { _rtLoadStormMwPasses(storm); },
+                               'Microwave passes unavailable');
             });
     }
 
@@ -16910,13 +17195,21 @@
             setTimeout(function () {
                 document.addEventListener('click', _irOutsideDownloadClick, { capture: true, once: true });
             }, 0);
+            // Esc also dismisses — the menu reads as modal-ish, so users
+            // reach for Escape; without this it can feel stuck (esp. if
+            // opened by accident on touch).
+            document.addEventListener('keydown', _irDownloadEscClose);
         }
     };
+    function _irDownloadEscClose(e) {
+        if (e.key === 'Escape' || e.keyCode === 27) window._irCloseDownloadMenu();
+    }
     window._irCloseDownloadMenu = function () {
         var menu = document.getElementById('ir-download-menu');
         var btn = document.querySelector('#ir-download-wrap .ir-download-btn');
         if (menu) menu.style.display = 'none';
         if (btn) btn.setAttribute('aria-expanded', 'false');
+        document.removeEventListener('keydown', _irDownloadEscClose);
     };
     function _irOutsideDownloadClick(e) {
         var wrap = document.getElementById('ir-download-wrap');

@@ -411,16 +411,21 @@
                                 <span style="font-size:9px;color:#64748b;">Show:</span>
                                 <button class="rt-model-filter-btn active" data-mtype="official"
                                     onclick="window._rtToggleModelTypeFilter('official')"
+                                    title="Official forecasts: the NHC (OFCL) / JTWC (JTWC) advisory track issued by the responsible warning agency."
                                     style="color:#ff4757;border-color:rgba(255,71,87,0.4);background:rgba(255,71,87,0.15);">Official</button>
                                 <button class="rt-model-filter-btn active" data-mtype="dynamical"
+                                    title="Dynamical models: full-physics NWP guidance (e.g. GFS, ECMWF, HWRF, HAFS, UKMET)."
                                     onclick="window._rtToggleModelTypeFilter('dynamical')">Dynamical</button>
                                 <button class="rt-model-filter-btn active" data-mtype="consensus"
+                                    title="Consensus aids: multi-model averages (e.g. TVCN, HCCA, IVCN) — usually the most skillful track guidance."
                                     onclick="window._rtToggleModelTypeFilter('consensus')">Consensus</button>
                                 <button class="rt-model-filter-btn active" data-mtype="ai"
                                     onclick="window._rtToggleModelTypeFilter('ai')"
+                                    title="AI/ML models: machine-learning guidance (e.g. Google DeepMind, GraphCast, FourCastNet, AIFS)."
                                     style="color:#00ff87;border-color:rgba(0,255,135,0.4);background:rgba(0,255,135,0.15);">AI</button>
                                 <button class="rt-model-filter-btn" data-mtype="statistical"
                                     onclick="window._rtToggleModelTypeFilter('statistical')"
+                                    title="Statistical models: climatology-and-persistence guidance (e.g. CLP5, SHIPS, DSHP, LGEM)."
                                     style="color:#64748b;">Statistical</button>
                                 <button id="rt-weatherlab-btn" class="rt-model-filter-btn"
                                     onclick="window._rtToggleWeatherlab()"

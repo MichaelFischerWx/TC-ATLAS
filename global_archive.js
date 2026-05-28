@@ -611,6 +611,10 @@ function getIntensityColor(vmax) {
     return '#dc2626';
 }
 
+// Saffir-Simpson scale description reused for category-badge tooltips.
+var SAFFIR_SIMPSON_TIP = 'Peak Saffir-Simpson category (1-min sustained wind, kt): ' +
+    'TD <34 · TS 34-63 · Cat 1 64-82 · Cat 2 83-95 · Cat 3 96-112 · Cat 4 113-136 · Cat 5 137+';
+
 function getIntensityCategory(vmax) {
     if (!vmax) return 'Unknown';
     if (vmax < 34) return 'TD';
@@ -1095,8 +1099,10 @@ function selectStorm(storm) {
     var cat = getIntensityCategory(storm.peak_wind_kt);
 
     document.getElementById('card-name').textContent = storm.name || 'UNNAMED';
-    document.getElementById('card-cat-badge').textContent = cat;
-    document.getElementById('card-cat-badge').style.background = color;
+    var catBadge = document.getElementById('card-cat-badge');
+    catBadge.textContent = cat;
+    catBadge.style.background = color;
+    catBadge.title = SAFFIR_SIMPSON_TIP;
     document.getElementById('card-year').textContent = storm.year;
     document.getElementById('card-basin').textContent = BASIN_NAMES[storm.basin] || storm.basin;
     document.getElementById('card-wind').textContent = storm.peak_wind_kt ? storm.peak_wind_kt + ' kt' : 'N/A';
@@ -1188,6 +1194,7 @@ function _showMapStormCard(storm, color, cat) {
     var badge = document.getElementById('map-card-badge');
     badge.textContent = cat;
     badge.style.background = color;
+    badge.title = SAFFIR_SIMPSON_TIP;
     document.getElementById('map-card-wind').textContent = storm.peak_wind_kt ? storm.peak_wind_kt + ' kt' : 'N/A';
     document.getElementById('map-card-pres').textContent = storm.min_pres_hpa ? storm.min_pres_hpa + ' hPa' : 'N/A';
     document.getElementById('map-card-year').textContent = storm.year;

@@ -2094,6 +2094,117 @@ def _regrid_swath_multi(
     }
 
 
+def _regrid_swath_window(
+    data_channels: list, lats: np.ndarray, lons: np.ndarray,
+    center_lat: float, center_lon: float, half_deg: float,
+    channel_names: list = None, grid_res_deg: float = 0.02,
+    max_grid_dim: int = 1600,
+) -> dict:
+    """Regrid co-located swath channels onto a regular grid covering ONLY
+    a [center ± half_deg] window, at native ``grid_res_deg`` with NO
+    adaptive downsampling cap.
+
+    This is the storm-centered hi-res crop path. The whole-arc render goes
+    through ``_regrid_swath_multi`` + ``_adaptive_grid_cap``, which caps a
+    wide half-orbit AMSR2/SSMI/S arc at ~800 cells over a 120°-tall extent
+    (~8×17 km/pixel over the storm) — throwing away the sensor's intrinsic
+    ~2-5 km resolution. Restricting the grid to a small storm window
+    (e.g. 14°/0.02° ≈ 700 cells) keeps the natural cell count well under
+    ``max_grid_dim`` so no cap is needed, preserving full resolution where
+    the analyst actually looks.
+
+    Source swath points are pre-filtered to the window + a small margin so
+    the griddata / KD-tree cost is a fraction of a whole-arc regrid.
+
+    Returns the same dict shape as ``_regrid_swath_multi`` plus
+    ``valid_frac`` (fraction of window cells with a nearby swath sample).
+    Raises ValueError if fewer than 10 swath points fall in the window
+    (storm off-swath — caller skips the crop).
+    """
+    from scipy.interpolate import griddata
+    from scipy.spatial import cKDTree
+
+    lons = lons.copy()
+    lons[lons > 180] -= 360
+
+    # Common validity mask across all channels (same convention as
+    # _regrid_swath_multi so RGB composites stay co-registered).
+    mask = np.isfinite(lats.ravel()) & np.isfinite(lons.ravel())
+    for ch in data_channels:
+        mask &= np.isfinite(ch.ravel())
+    flat_lat = lats.ravel()[mask]
+    flat_lon = lons.ravel()[mask]
+    if len(flat_lat) < 10:
+        raise ValueError("Insufficient valid swath points for window regrid")
+
+    # Dateline handling — shift the western half +360 so longitude is
+    # continuous, and pull center_lon into the same frame.
+    clon = float(center_lon)
+    if np.any(flat_lon > 150) and np.any(flat_lon < -150):
+        flat_lon = np.where(flat_lon < 0, flat_lon + 360.0, flat_lon)
+        if clon < 0:
+            clon += 360.0
+
+    lat_min = center_lat - half_deg
+    lat_max = center_lat + half_deg
+    lon_min = clon - half_deg
+    lon_max = clon + half_deg
+
+    # Pre-filter source points to the window + margin (this is what makes
+    # the per-storm crop cheap — only the local swath neighborhood feeds
+    # the griddata/KD-tree, not the whole 120°-tall arc).
+    margin = grid_res_deg * 4.0 + 0.1
+    sel = ((flat_lat >= lat_min - margin) & (flat_lat <= lat_max + margin) &
+           (flat_lon >= lon_min - margin) & (flat_lon <= lon_max + margin))
+    if int(sel.sum()) < 10:
+        raise ValueError("storm window contains too few swath points")
+    flat_lat = flat_lat[sel]
+    flat_lon = flat_lon[sel]
+
+    n_lat = min(int((lat_max - lat_min) / grid_res_deg) + 1, max_grid_dim)
+    n_lon = min(int((lon_max - lon_min) / grid_res_deg) + 1, max_grid_dim)
+    grid_lat = np.linspace(lat_min, lat_max, n_lat)
+    grid_lon = np.linspace(lon_min, lon_max, n_lon)
+    glon, glat = np.meshgrid(grid_lon, grid_lat)
+
+    if channel_names is None:
+        channel_names = [f"ch{i}" for i in range(len(data_channels))]
+
+    channels = {}
+    for name, ch_data in zip(channel_names, data_channels):
+        flat_ch = ch_data.ravel()[mask][sel]
+        channels[name] = griddata(
+            (flat_lon, flat_lat), flat_ch,
+            (glon, glat), method="nearest",
+        )
+
+    # Mask grid cells with no nearby swath sample (off-swath / polar gap).
+    tree = cKDTree(np.column_stack([flat_lon, flat_lat]))
+    dists, _ = tree.query(np.column_stack([glon.ravel(), glat.ravel()]))
+    max_dist_deg = grid_res_deg * 3.0
+    far_mask = dists.reshape(glon.shape) > max_dist_deg
+    for name in channels:
+        channels[name][far_mask] = np.nan
+        channels[name] = _fill_speckle_holes(channels[name])
+
+    valid_frac = float(np.mean(~far_mask))
+
+    # Pixel centers → pixel edges (half-cell expansion).
+    half_lat = (lat_max - lat_min) / max(n_lat - 1, 1) / 2.0
+    half_lon = (lon_max - lon_min) / max(n_lon - 1, 1) / 2.0
+    return {
+        "channels": channels,
+        "center_lat": center_lat,
+        "center_lon": center_lon,
+        "bounds": [[lat_min - half_lat, lon_min - half_lon],
+                   [lat_max + half_lat, lon_max + half_lon]],
+        "nx": n_lon,
+        "ny": n_lat,
+        "dx_km": grid_res_deg * 111.0,
+        "valid_frac": valid_frac,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Image rendering
 # ---------------------------------------------------------------------------

@@ -2499,6 +2499,17 @@ input[type="range"].ga-range::-moz-range-thumb {
 /* ── Forecast Scorecard ─────────────────────────────────── */
 .scorecard-panel {
     grid-column: 1 / -1;
+    /* Scorecard + Environment panels are toggled via display:none→''.
+       A CSS animation replays each time the element re-enters the flow,
+       so the panel slides/fades in instead of snapping open abruptly. */
+    animation: ga-panel-in 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes ga-panel-in {
+    from { opacity: 0; transform: translateY(-8px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .scorecard-panel { animation: none; }
 }
 .scorecard-content {
     padding: 8px 0;

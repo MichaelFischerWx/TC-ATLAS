@@ -92,6 +92,64 @@
         return lon >= west || lon <= east;
     }
 
+    // Sensor swath half-widths (km), mirroring PREDICT_SATELLITES'
+    // swath_half_km in mw_ingest.py. A storm is "covered" by a pass when
+    // its min distance to the pass's center-track polyline is within this
+    // half-width — the same definition predict_passes() uses for upcoming
+    // passes, so ingested and predicted coverage agree.
+    var _SWATH_HALF_KM = { GMI: 445, SSMIS: 875, AMSR2: 725, ATMS: 1150 };
+    var _SWATH_HALF_KM_DEFAULT = 900;
+    // Small margin so the cheap geometric proxy errs toward inclusion; the
+    // satellite page's PNG-crop check trims any remaining false positives.
+    var _SWATH_COVER_MARGIN = 1.15;
+
+    // Min great-circle distance (km) from (lat,lon) to the center-track
+    // polyline, via a local equirectangular projection about the point
+    // (<1% error at swath scales). Tests segment interiors, not just
+    // vertices, so a storm sitting between two sparse track points isn't
+    // missed.
+    function _minDistKmToTrack(track, lat, lon) {
+        if (!track || !track.length) return Infinity;
+        var KM_PER_DEG = 111.195;
+        var cosLat = Math.cos(lat * Math.PI / 180);
+        function proj(p) {
+            var dLon = p[1] - lon;
+            if (dLon > 180) dLon -= 360;
+            else if (dLon < -180) dLon += 360;
+            return [dLon * cosLat * KM_PER_DEG, (p[0] - lat) * KM_PER_DEG];
+        }
+        if (track.length === 1) {
+            var q = proj(track[0]);
+            return Math.sqrt(q[0] * q[0] + q[1] * q[1]);
+        }
+        var best = Infinity;
+        for (var i = 0; i < track.length - 1; i++) {
+            var a = proj(track[i]), b = proj(track[i + 1]);
+            var vx = b[0] - a[0], vy = b[1] - a[1];
+            var len2 = vx * vx + vy * vy;
+            var t = len2 > 0 ? -(a[0] * vx + a[1] * vy) / len2 : 0;
+            if (t < 0) t = 0; else if (t > 1) t = 1;
+            var cx = a[0] + t * vx, cy = a[1] + t * vy;
+            var d = Math.sqrt(cx * cx + cy * cy);
+            if (d < best) best = d;
+        }
+        return best;
+    }
+
+    // Coverage gate shared by the schedule dashboard and the map's
+    // storm-highlight pass. Prefers the honest center-track distance test;
+    // falls back to bbox containment only for entries predating the
+    // center_track field (during the 48 h rolling-window backfill).
+    function _passCoversStorm(o, lat, lon) {
+        if (!o || lat == null || lon == null) return false;
+        if (o.center_track && o.center_track.length) {
+            var half = (_SWATH_HALF_KM[o.sensor] || _SWATH_HALF_KM_DEFAULT)
+                     * _SWATH_COVER_MARGIN;
+            return _minDistKmToTrack(o.center_track, lat, lon) <= half;
+        }
+        return _boundsContains(o.bounds, lat, lon);
+    }
+
     function _loadPrefs() {
         try {
             var raw = window.localStorage && window.localStorage.getItem(PREFS_KEY);
@@ -196,6 +254,7 @@
                     scan_start_ms: ms,
                     source: e.source,
                     bounds: e.bounds,
+                    center_track: e.center_track || null,
                     products: {}
                 };
             }
@@ -674,7 +733,7 @@
                     var s = storms[sti];
                     var key = s.atcf_id || (s.lat + ',' + s.lon);
                     if (latestForStorm[key]) continue;  // already assigned a newer orbit
-                    if (_boundsContains(o.bounds, s.lat, s.lon)) {
+                    if (_passCoversStorm(o, s.lat, s.lon)) {
                         latestForStorm[key] = o.orbit_id;
                         (stormsByOrbit[o.orbit_id] = stormsByOrbit[o.orbit_id] || []).push(s);
                     }
@@ -1150,7 +1209,7 @@
             for (var oi = 0; oi < manifest.length; oi++) {
                 var o = manifest[oi];
                 if (!o.sensor || latest[o.sensor]) continue;
-                if (_boundsContains(o.bounds, s.lat, s.lon)) {
+                if (_passCoversStorm(o, s.lat, s.lon)) {
                     latest[o.sensor] = o;
                 }
             }
