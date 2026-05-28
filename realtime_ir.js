@@ -3758,6 +3758,10 @@
     // the "pause at present" anchor and latest imagery are preserved.
     var _MOBILE_MAX_FRAMES = 16;
     function _decimateFramesForMobile(frames) {
+        // Windowed-decode mode bounds memory by capping how many frames
+        // are *decoded* at once, so it wants the full-cadence frame list —
+        // skip decimation entirely when it's active.
+        if (_WINDOWED_DECODE) return frames;
         if (!_IS_MOBILE_VIEWPORT) return frames;
         if (!frames || frames.length <= _MOBILE_MAX_FRAMES) return frames;
         var n = frames.length;
@@ -3768,6 +3772,64 @@
         for (var i = n - 1; i >= 0; i -= stride) keep.push(frames[i]);
         keep.reverse(); // restore oldest-first ordering
         return keep;
+    }
+
+    // ── Windowed decode (opt-in, off by default) ──────────────────
+    // The shipped mobile fix decimates the loop to cap decoded-bitmap
+    // memory, which costs temporal cadence. Windowed decode instead keeps
+    // EVERY frame in the loop but bounds how many carry a decoded bitmap
+    // at once: a sliding window around the playhead holds the real WebP
+    // src (each ~7 MB decoded); frames outside the window get a 1×1
+    // transparent src so the browser frees their bitmap (the encoded blob
+    // stays referenced, so re-entering the window just re-decodes). Peak
+    // decoded memory ≈ (BACK+AHEAD+1) frames regardless of loop length,
+    // so mobile can run the full-cadence loop without an OOM tab kill.
+    //
+    // Enabled per-session via ?decodewin=1 anywhere in the URL (query or
+    // hash) so it can be validated on a real phone against a live storm
+    // before becoming the default. When on, it supersedes decimation.
+    var _WINDOWED_DECODE = (typeof location !== 'undefined') &&
+                           (location.href || '').indexOf('decodewin=1') !== -1;
+    var _DECODE_BACK = 3;    // frames kept decoded behind the playhead
+    var _DECODE_AHEAD = 8;   // frames pre-decoded ahead (playback runs forward)
+    var _TRANSPARENT_1PX =
+        'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+
+    function _frameInDecodeWindow(i, idx, n) {
+        for (var d = -_DECODE_BACK; d <= _DECODE_AHEAD; d++) {
+            if (((idx + d) % n + n) % n === i) return true;
+        }
+        return false;
+    }
+
+    /** Promote frames inside the window (restore WebP src + force decode
+     *  so they're warm before they're shown) and evict those outside it
+     *  (swap to a 1×1 transparent src, freeing the decoded bitmap).
+     *  `layers` is the active product's overlay array; `idx` is the
+     *  raw layer index currently shown. No-op unless windowed mode is on
+     *  and the loop is longer than the window. */
+    function _applyDecodeWindow(layers, idx) {
+        if (!_WINDOWED_DECODE || !layers) return;
+        var n = layers.length;
+        if (n <= _DECODE_BACK + _DECODE_AHEAD + 1) return; // whole loop fits — keep all decoded
+        for (var i = 0; i < n; i++) {
+            var ly = layers[i];
+            if (!ly || !ly._frameBlobUrl) continue; // null/non-bundle layers untouched
+            if (_frameInDecodeWindow(i, idx, n)) {
+                if (ly._decodeEvicted) {
+                    ly.setUrl(ly._frameBlobUrl);
+                    ly._decodeEvicted = false;
+                    // Force-decode now (even at opacity 0) so the frame is
+                    // painted instantly when the playhead reaches it.
+                    if (ly._image && ly._image.decode) {
+                        try { ly._image.decode().catch(function () {}); } catch (e) {}
+                    }
+                }
+            } else if (!ly._decodeEvicted) {
+                ly.setUrl(_TRANSPARENT_1PX);
+                ly._decodeEvicted = true;
+            }
+        }
     }
 
     /** Parse the bundle ArrayBuffer and create N L.imageOverlays from blob
@@ -3852,6 +3914,7 @@
                 interactive: false,
                 pane: 'tilePane'
             });
+            overlay._frameBlobUrl = blobUrl; // for windowed decode promote/evict
             animFrameLayers.push(overlay);
             goodCount++;
         }
@@ -4755,6 +4818,9 @@
         // Bundle path may leave null placeholders for frames that failed
         // server-side; skip them rather than throwing on .setOpacity().
         if (!animFrameLayers[idx]) return;
+
+        // Ensure this frame + the lookahead are decoded, evict the rest.
+        _applyDecodeWindow(animFrameLayers, idx);
 
         // Show the NEW frame first so the basemap never peeks through
         // during the swap. Doing setOpacity(0) on the old frame first
@@ -5780,6 +5846,7 @@
             var overlay = L.imageOverlay(blobUrl, fBounds, {
                 opacity: 0, interactive: false, pane: 'tilePane'
             });
+            overlay._frameBlobUrl = blobUrl; // for windowed decode promote/evict
             geocolorFrameHasError.push(false);
             (function (lyr, idx) {
                 lyr.once('error', function () {
@@ -5961,6 +6028,8 @@
     /** Show a specific GeoColor frame by toggling opacity */
     function showGeocolorFrame(idx) {
         if (idx < 0 || idx >= geocolorFrameLayers.length || !detailMap) return;
+
+        _applyDecodeWindow(geocolorFrameLayers, idx);
 
         // Show new BEFORE hiding old to avoid the mobile white-flash.
         var prevIdx = animIndex;
@@ -6253,6 +6322,7 @@
             var overlay = L.imageOverlay(blobUrl, fBounds, {
                 opacity: 0, interactive: false, pane: 'tilePane'
             });
+            overlay._frameBlobUrl = blobUrl; // for windowed decode promote/evict
             hasErr.push(false);
             (function (lyr, idx) {
                 lyr.once('error', function () {
@@ -6297,6 +6367,7 @@
 
     function showVisFrame(idx) {
         if (idx < 0 || idx >= visFrameLayers.length || !detailMap) return;
+        _applyDecodeWindow(visFrameLayers, idx);
         // Show new BEFORE hiding old to avoid the mobile white-flash.
         animIndex = idx;
         if (visFrameLayers[idx]) visFrameLayers[idx].setOpacity(0.92);
@@ -6319,6 +6390,7 @@
 
     function showWvFrame(idx) {
         if (idx < 0 || idx >= wvFrameLayers.length || !detailMap) return;
+        _applyDecodeWindow(wvFrameLayers, idx);
         // Show new BEFORE hiding old to avoid the mobile white-flash.
         animIndex = idx;
         if (wvFrameLayers[idx]) wvFrameLayers[idx].setOpacity(0.92);
