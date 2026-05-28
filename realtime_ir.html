@@ -336,7 +336,7 @@
                             <span class="ir-info-label">Env shear<button type="button" class="ir-info-help" tabindex="0" aria-label="About environmental shear" title="Environmental deep-layer wind shear — the change in horizontal wind between 850 and 200 hPa, averaged over a 200–800 km ring around the storm (SHIPS-style; the ring excludes the storm's own circulation). This is the broad-scale environment the storm sits in; higher values generally hinder intensification. The arrow points the way the shear blows (e.g. 270° = westerly shear blowing toward the east). Source: latest GFS 0.25° analysis.">i</button></span><span class="ir-info-value" id="ir-info-shear">&mdash;</span>
                         </div>
                         <div class="ir-info-row">
-                            <span class="ir-info-label">Core shear<button type="button" class="ir-info-help" tabindex="0" aria-label="About core shear" title="Core deep-layer shear — the same 850–200 hPa shear, but evaluated over the 0–400 km storm core with the vortex mathematically removed via Helmholtz decomposition (Davis &amp; Ahijevych 2008; disturbance mask 500 km). This is the shear the inner core actually 'feels,' which can differ from the wider environmental value. The arrow points the way the shear blows. Source: latest GFS 0.25° analysis.">i</button></span><span class="ir-info-value" id="ir-info-shear-core">&mdash;</span>
+                            <span class="ir-info-label">Core shear<button type="button" class="ir-info-help" tabindex="0" aria-label="About core shear" title="Core deep-layer shear — the same 850–200 hPa shear over the storm's inner core. The vortex is mathematically removed via Helmholtz decomposition within a 500 km disturbance mask, then the remaining environmental shear is averaged over the 0–400 km core (Davis &amp; Ahijevych 2008). This is the shear the inner core actually 'feels,' which can differ from the wider environmental value. The arrow points the way the shear blows. Source: latest GFS 0.25° analysis.">i</button></span><span class="ir-info-value" id="ir-info-shear-core">&mdash;</span>
                         </div>
                         <div class="ir-info-row"><span class="ir-info-label">MSLP</span><span class="ir-info-value" id="ir-info-mslp">&mdash;</span></div>
                         <div class="ir-info-row"><span class="ir-info-label">Vmax</span><span class="ir-info-value" id="ir-info-vmax">&mdash;</span></div>
@@ -378,7 +378,7 @@
                         </div>
                         <div id="rt-env-shear-grid" style="width:100%;height:360px;margin-top:4px;"></div>
                         <div id="rt-env-shear-grid-status" style="font-size:0.65rem;color:var(--text-dim);margin-top:2px;line-height:1.45;">
-                            Helmholtz deep-layer shear (0&ndash;400 km core, vortex removed) for every layer choice &mdash; x: layer bottom, y: layer top. Fixed 0&ndash;40 kt scale (blue&rarr;red) so colors mean the same shear on every storm.
+                            Helmholtz deep-layer shear for every layer choice &mdash; x: layer bottom, y: layer top. Vortex removed within 500 km; shear averaged over the 0&ndash;400 km core. Fixed 0&ndash;40 kt scale (blue&rarr;red) so colors mean the same shear on every storm.
                         </div>
                     </div>
                 </div>

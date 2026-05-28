@@ -4650,8 +4650,8 @@
                     _rtCoreShearCache[atcfId] = j;
                     elCore.innerHTML = _shearValueHtml(j);
                     elCore.title = 'GFS 0.25° analysis ' + (j.gfs_cycle_utc || '') + '\n' +
-                        '850–200 hPa shear, Helmholtz vortex-removed\n' +
-                        '0–400 km storm-core average (disturbance mask 500 km)\n' +
+                        '850–200 hPa shear, Helmholtz decomposition\n' +
+                        'vortex removed within 500 km; shear averaged over 0–400 km core\n' +
                         'heading ' + Math.round(j.heading_deg) + '° (toward)\n' +
                         (j.magnitude_center_kt != null
                             ? 'center cell: ' + j.magnitude_center_kt + ' kt' : '');
@@ -4789,8 +4789,8 @@
 
         var title = 'Deep-layer Shear by Layer — ' + (stormName && stormId
             ? stormName + ' (' + stormId + ')' : (stormName || stormId || 'Storm'));
-        var subtitle = 'Helmholtz vortex-removed environmental shear · 0–' + evalKm +
-                       ' km core · disturbance mask ' + maskKm + ' km';
+        var subtitle = 'Helmholtz environmental shear · vortex removed within ' + maskKm +
+                       ' km · averaged over 0–' + evalKm + ' km core';
         var srcLine = (prof.source || 'GFS 0.25° analysis') +
                       (cycleFmt ? ' · analysis ' + cycleFmt : '') +
                       (fixFmt ? '   ·   storm fix ' + fixFmt : '');
