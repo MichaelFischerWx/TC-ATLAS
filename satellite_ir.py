@@ -170,11 +170,14 @@ HIMAWARI_WV_BAND = 8            # Himawari 6.2 µm WV
 BAND_RANGES = {
     2:  {"vmin": 0.0,   "vmax": 1.0,   "data_type": "reflectance"},
     3:  {"vmin": 0.0,   "vmax": 1.0,   "data_type": "reflectance"},
-    # Band 7 (3.9 µm shortwave IR) — used as a nighttime fallback for the
-    # Visible product. Range chosen so cold cloud tops (~210 K) and warm
-    # surface/oceans (~310 K) both render with usable contrast after
-    # inversion in _render_band_jpg.
-    7:  {"vmin": 200.0, "vmax": 330.0, "data_type": "tb"},
+    # Band 7 (3.9 µm shortwave IR) — nighttime "visible-like" fallback for
+    # the Visible product. Narrowed to 240–320 K (was 200–330) to
+    # concentrate the dynamic range on the warm cloud/surface regime,
+    # ~doubling contrast for low-level clouds (stratocumulus/fog, ~280–300 K)
+    # that were washed out over the old 130 K span. Cold tops (<240 K)
+    # saturate bright — fine for a visible-like product (cold-top detail is
+    # the IR panel's job). Rendered inverted in _render_band_jpg. Tunable.
+    7:  {"vmin": 240.0, "vmax": 320.0, "data_type": "tb"},
     8:  {"vmin": 170.0, "vmax": 260.0, "data_type": "tb"},
     13: {"vmin": 160.0, "vmax": 330.0, "data_type": "tb"},
 }
