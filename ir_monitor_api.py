@@ -377,6 +377,16 @@ def _upload_public_bundle(key: str, body: bytes, content_type: str = "applicatio
 _ANOM_RATIO = 2.5       # flag if both neighbor diffs exceed RATIO × the neighbor-pair diff
 _ANOM_ABS_FLOOR = 20.0  # …and exceed this absolute MAD (avoids flagging quiet periods)
 
+# Per-storm set of frame slot keys ("YYYYMMDDHHMM") flagged anomalous in the
+# last bundle build. The prewarm pops this at the start of each cycle and
+# FORCE-refetches those frames (bypassing the cache short-circuit) so a
+# poisoned frame anywhere in the window — not just the newest few — gets a
+# fresh scan and self-heals. Bundle builds re-populate it for the next
+# cycle; a frame that re-fetches clean drops out, one that's still bad keeps
+# retrying until its real scan lands or it ages out of the window.
+_anomalous_heal_times: dict = {}
+_anomalous_heal_lock = threading.Lock()
+
 
 def _flag_anomalous_frames(jpgs: list) -> set:
     """Return the set of frame indices whose imagery is a strong outlier vs
@@ -455,9 +465,14 @@ def _build_and_upload_bundles(
     ]
     anomalous_idx = _flag_anomalous_frames(jpgs_pre)
     if anomalous_idx:
+        bad_keys = {times_oldest_first[i].strftime("%Y%m%d%H%M") for i in anomalous_idx}
+        # Queue these slots so the next prewarm cycle force-refetches them
+        # (self-heal), not just the newest few.
+        with _anomalous_heal_lock:
+            _anomalous_heal_times.setdefault(atcf_upper, set()).update(bad_keys)
         _bad = [times_oldest_first[i].strftime("%H%M") for i in sorted(anomalous_idx)]
         print(f"[Bundle Pre-build] {atcf_upper}: dropping {len(anomalous_idx)} "
-              f"anomalous scan frame(s) {_bad}")
+              f"anomalous scan frame(s) {_bad} (queued for self-heal)")
 
     # Single pass: read both jpg + raw caches per frame. The raw cache
     # carries center_fix (IR-derived eye position), which we now ALSO
@@ -2117,13 +2132,24 @@ def _prefetch_ir_frames(storms: list):
                 # already on disk and ready for the next bundle.
                 # frame_times is in newest→oldest order from
                 # build_frame_times — no reverse needed.
+                # Slots flagged anomalous by the previous cycle's bundle
+                # screen — force-refetch them (anywhere in the window) so a
+                # poisoned frame heals, not just the newest few. Pop so it's
+                # re-derived fresh from this cycle's screen.
+                with _anomalous_heal_lock:
+                    heal_times = _anomalous_heal_times.pop(atcf_id.upper(), set())
+                if heal_times:
+                    print(f"[IR Pre-fetch] {atcf_id}: self-healing {len(heal_times)} "
+                          f"flagged frame(s): {sorted(heal_times)}")
+
                 with ThreadPoolExecutor(max_workers=max_workers) as pool:
                     futures = []
                     for i, target_dt in enumerate(frame_times):
                         dt_str = target_dt.strftime("%Y%m%d%H%M")
-                        # frame_times is newest→oldest, so the first
-                        # _SELF_HEAL_FRAMES are the leading edge.
-                        force = i < _SELF_HEAL_FRAMES
+                        # Force-refetch the leading edge (their real scan may
+                        # not have disseminated when first cached) AND any
+                        # slot flagged anomalous last cycle (self-heal).
+                        force = (i < _SELF_HEAL_FRAMES) or (dt_str in heal_times)
                         futures.append(pool.submit(_fetch_and_cache_ir, target_dt, dt_str, force))
                         if i < max_band_frames:
                             futures.append(pool.submit(_fetch_and_cache_band, target_dt, dt_str, primary_band, force))
