@@ -2836,6 +2836,53 @@
     }
 
     /** Place storm markers on the map */
+    /** Advance a storm's pin position forward in time from its last
+     *  advisory fix using its reported motion vector. The IR cutout
+     *  already does this on the backend (it crops each frame around
+     *  the INTERPOLATED storm position), so without this the pin can
+     *  drift visually behind the actual convection — especially when
+     *  an advisory cycle is overdue (e.g. JTWC skipping the 00Z
+     *  warning for a weak system, leaving the 18Z fix 7+ hours old).
+     *  Conservative gate: only extrapolate when the fix is between
+     *  30 min and 9 h old AND motion is reported. Outside that range
+     *  the advisory's own position is the safer pin. */
+    function _extrapolateStormPin(s) {
+        if (!s || s.motion_kt == null || s.motion_deg == null
+                || !s.last_fix_utc) {
+            return { lat: s.lat, lon: s.lon, extrapolated: false, ageH: null };
+        }
+        var fixMs = Date.parse(s.last_fix_utc);
+        if (!isFinite(fixMs)) {
+            return { lat: s.lat, lon: s.lon, extrapolated: false, ageH: null };
+        }
+        var ageH = (Date.now() - fixMs) / 3600000;
+        if (ageH < 0.5 || ageH > 9) {
+            return { lat: s.lat, lon: s.lon, extrapolated: false, ageH: ageH };
+        }
+        // Great-circle forward azimuth. Small-distance approx is fine for
+        // typical TC speeds (≤ 40 kt × 9 h ≈ 670 km).
+        var distKm = s.motion_kt * ageH * 1.852;
+        var bearing = s.motion_deg * Math.PI / 180;
+        var R = 6371.0;
+        var lat1 = s.lat * Math.PI / 180;
+        var lon1 = s.lon * Math.PI / 180;
+        var d = distKm / R;
+        var lat2 = Math.asin(
+            Math.sin(lat1) * Math.cos(d) +
+            Math.cos(lat1) * Math.sin(d) * Math.cos(bearing)
+        );
+        var lon2 = lon1 + Math.atan2(
+            Math.sin(bearing) * Math.sin(d) * Math.cos(lat1),
+            Math.cos(d) - Math.sin(lat1) * Math.sin(lat2)
+        );
+        return {
+            lat: lat2 * 180 / Math.PI,
+            lon: lon2 * 180 / Math.PI,
+            extrapolated: true,
+            ageH: ageH,
+        };
+    }
+
     function renderStormMarkers(storms) {
         clearMarkers();
 
@@ -2864,18 +2911,30 @@
                 popupAnchor: [0, -12]
             });
 
-            var marker = L.marker([s.lat, s.lon], { icon: icon });
+            // Extrapolate the pin forward from the last fix so it
+            // tracks the convection in the IR loop instead of lagging
+            // behind by an advisory cycle.
+            var pin = _extrapolateStormPin(s);
+            var marker = L.marker([pin.lat, pin.lon], { icon: icon });
 
             // Popup content
             var vmaxStr = s.vmax_kt != null ? s.vmax_kt + ' kt' : '\u2014';
             var mslpStr = s.mslp_hpa != null ? s.mslp_hpa + ' hPa' : '\u2014';
+            // When extrapolated, show both positions so users can tell
+            // the pin reflects motion-based dead-reckoning, not the
+            // last advisory's stated coordinates.
+            var posLine = pin.extrapolated
+                ? (fmtLatLon(pin.lat, pin.lon) + ' <span style="color:#94a3b8;font-size:0.7em;">' +
+                   '(extrapolated +' + pin.ageH.toFixed(1) + 'h from ' +
+                   fmtLatLon(s.lat, s.lon) + ')</span>')
+                : fmtLatLon(s.lat, s.lon);
             var popupHtml =
                 '<div class="ir-popup">' +
                   '<div class="ir-popup-name">' + (s.name || 'UNNAMED') + '</div>' +
                   '<div class="ir-popup-meta">' +
                     '<strong>' + categoryShort(cat) + '</strong> &middot; ' + vmaxStr + '<br>' +
                     'MSLP: ' + mslpStr + '<br>' +
-                    fmtLatLon(s.lat, s.lon) + '<br>' +
+                    posLine + '<br>' +
                     '<span style="color:#64748b;">' + (s.atcf_id || '') + '</span>' +
                   '</div>' +
                   '<button class="ir-popup-btn" onclick="window._irOpenStorm(\'' + s.atcf_id + '\')">View IR Detail</button>' +
@@ -4150,7 +4209,10 @@
         // Storm center marker
         var cat = storm.category || windToCategory(storm.vmax_kt);
         var color = SS_COLORS[cat] || SS_COLORS.TD;
-        L.circleMarker([storm.lat, storm.lon], {
+        // Extrapolated pin so it tracks the convection in the loop —
+        // same dead-reckoning the backend uses to crop the IR cutout.
+        var pinPos = _extrapolateStormPin(storm);
+        L.circleMarker([pinPos.lat, pinPos.lon], {
             radius: 8, color: color, fillColor: color,
             fillOpacity: 0.7, weight: 2
         }).addTo(detailMap);
