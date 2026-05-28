@@ -1647,19 +1647,32 @@
     /** Update the GIBS-feed staleness banner. Show when one or more
      *  satellites are stale; hide when all are fresh.
      *
-     *  Once dismissed, store the affected sat set + dismiss time in
-     *  localStorage. Re-show only if (a) different sats become stale,
-     *  or (b) the dismissal is older than the 24-hour TTL. That way a
-     *  returning user who already saw the warning isn't pestered
-     *  every visit, but a NEW outage still surfaces it. */
-    var _BANNER_DISMISS_KEY = 'tc-atlas:ir-feed-banner-dismiss';
-    var _BANNER_DISMISS_TTL_MS = 24 * 60 * 60 * 1000;  // 24 h
+     *  Show the banner only the FIRST time a user encounters a given
+     *  stale-sat set, then never auto-pop it again. We persist a "seen"
+     *  record the moment it's displayed (not just on explicit dismiss),
+     *  so a returning user — or one who simply ignores the notice — isn't
+     *  pestered on every visit. GOES-West in particular goes stale often
+     *  for the East Pac, and one parallax heads-up is enough. A genuinely
+     *  NEW outage (a different sat, or a different combination) is a new
+     *  key, so it still surfaces once. */
+    var _BANNER_SEEN_KEY = 'tc-atlas:ir-feed-banner-seen';
 
-    function _bannerDismissalRecord() {
+    function _bannerSeenKeys() {
         try {
-            var raw = localStorage.getItem(_BANNER_DISMISS_KEY);
-            return raw ? JSON.parse(raw) : null;
-        } catch (e) { return null; }
+            var raw = localStorage.getItem(_BANNER_SEEN_KEY);
+            var obj = raw ? JSON.parse(raw) : null;
+            return (obj && typeof obj === 'object') ? obj : {};
+        } catch (e) { return {}; }
+    }
+
+    function _markBannerSeen(key) {
+        try {
+            var seen = _bannerSeenKeys();
+            if (!seen[key]) {
+                seen[key] = Date.now();
+                localStorage.setItem(_BANNER_SEEN_KEY, JSON.stringify(seen));
+            }
+        } catch (e) {}
     }
 
     function _updateFeedStalenessBanner(staleSats) {
@@ -1670,13 +1683,10 @@
             el.style.display = 'none';
             return;
         }
-        // Honor a recent dismissal — but only when the affected sats
-        // match what the user already saw. A new sat going stale or a
-        // change in the set re-shows the banner.
+        // Suppress if the user has already seen the banner for this exact
+        // stale-sat set. First-time-only, by design.
         var key = staleSats.slice().sort().join('|');
-        var rec = _bannerDismissalRecord();
-        if (rec && rec.key === key &&
-            (Date.now() - rec.t) < _BANNER_DISMISS_TTL_MS) {
+        if (_bannerSeenKeys()[key]) {
             el.style.display = 'none';
             return;
         }
@@ -1684,17 +1694,9 @@
         var msg = label + ' feed delayed (NASA GIBS) — that region is being backfilled from the nearest available satellite (expect higher parallax) until the upstream ingest catches up.';
         txt.textContent = msg;
         el.style.display = 'flex';
-        // Wire the close button to also persist the dismissal.
-        var closer = el.querySelector('.ir-feed-banner-close');
-        if (closer && !closer._dismissBound) {
-            closer.addEventListener('click', function () {
-                try {
-                    localStorage.setItem(_BANNER_DISMISS_KEY,
-                        JSON.stringify({ key: key, t: Date.now() }));
-                } catch (e) {}
-            });
-            closer._dismissBound = true;
-        }
+        // Record the view immediately so it won't auto-pop again for this
+        // set, whether or not the user clicks the close button.
+        _markBannerSeen(key);
     }
 
     /** Legacy wrapper — returns the oldest satellite time (for animation compatibility) */
@@ -15024,6 +15026,45 @@
         return best;
     }
 
+    // Pick the storm-centered hi-res crop (if any) covering (lat, lon).
+    // The ingest renders these at native ~2-5 km resolution over a small
+    // window, vs the whole-arc PNG that _adaptive_grid_cap downsamples to
+    // ~8-17 km/px over a wide arc. We prefer the crop whose bounds contain
+    // the storm; ties (overlapping windows for nearby systems) break to
+    // the nearest crop center. Returns {png_url, bounds} or null.
+    function _rtMwPickCrop(entry, lat, lon) {
+        var crops = entry && entry.crops;
+        if (!crops || !crops.length || lat == null || lon == null) return null;
+        // Storm-window crops near the dateline are stored in a continuous
+        // longitude frame where east can exceed 180 (e.g. west=174,
+        // east=188). The storm's reported lon may be on either side
+        // (-179 ≡ 181), so test the storm lon shifted by 0/±360.
+        function cropContains(b, la, lo) {
+            var s = b[0][0], w = b[0][1], n = b[1][0], e = b[1][1];
+            if (la < s || la > n) return false;
+            return (lo >= w && lo <= e) ||
+                   (lo + 360 >= w && lo + 360 <= e) ||
+                   (lo - 360 >= w && lo - 360 <= e);
+        }
+        var best = null, bestD = Infinity;
+        for (var i = 0; i < crops.length; i++) {
+            var c = crops[i];
+            if (!c || !c.png_url || !cropContains(c.bounds, lat, lon)) {
+                continue;
+            }
+            var cLat = (c.bounds[0][0] + c.bounds[1][0]) / 2;
+            var w = c.bounds[0][1], e = c.bounds[1][1];
+            if (e < w) e += 360;                 // dateline-wrapped window
+            var cLon = (w + e) / 2;
+            var dLon = cLon - lon;
+            while (dLon > 180) dLon -= 360;
+            while (dLon < -180) dLon += 360;
+            var d = (cLat - lat) * (cLat - lat) + dLon * dLon;
+            if (d < bestD) { bestD = d; best = c; }
+        }
+        return best;
+    }
+
     // Cheap geometric coverage gate. Prefers the center-track distance
     // test; falls back to bbox containment for entries predating the
     // center_track field (48 h rolling-window backfill).
@@ -15133,10 +15174,20 @@
                     // the orbit's first product. Store per-product bounds —
                     // the crop must un-warp using the bounds the PNG was
                     // warped with, else features land at the wrong latitude.
+                    //
+                    // Prefer the storm-centered hi-res crop when the ingest
+                    // produced one for this storm: it's regridded at native
+                    // resolution over a ±7° window instead of the
+                    // _adaptive_grid_cap-downsampled whole-arc grid, so the
+                    // thumbnail + compare modal render crisp (esp. AMSR2/
+                    // SSMIS wide arcs). Falls back to the whole-arc PNG when
+                    // no crop covers the storm (older entries, GMI, etc.).
+                    var hiRes = _rtMwPickCrop(e, storm.lat, storm.lon);
                     orbitMap[oid].products[e.product] = {
-                        png_url: e.png_url,
+                        png_url: hiRes ? hiRes.png_url : e.png_url,
                         geojson_url: e.geojson_url,
-                        bounds: e.bounds
+                        bounds: hiRes ? hiRes.bounds : e.bounds,
+                        hi_res: !!hiRes
                     };
                 }
                 // Newest first — analyst typically wants "what's the latest

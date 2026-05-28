@@ -979,6 +979,13 @@ class RenderedProduct:
     footprint: dict     # GeoJSON geometry
     pass_suffix: str = ""  # per-pass tag like "-p0" when granule was split
     center_track: list = field(default_factory=list)  # [[lat,lon],...] arc center; [] if unknown
+    # Storm-centered hi-res crops for this product, one per active storm
+    # this arc covers. Each: {"storm_id", "png_bytes", "bounds"}. The
+    # whole-arc PNG is downsampled by _adaptive_grid_cap; these crops are
+    # regridded at native resolution over a small storm window so the
+    # per-storm card + IR/MW compare modal show crisp imagery. Empty when
+    # no active storm fell on this arc. See _storm_crops_for_band.
+    crops: list = field(default_factory=list)
 
 
 # Sensors whose NRT granules bundle multiple orbital passes and must
@@ -991,7 +998,98 @@ _MULTI_PASS_SENSORS = {"SSMIS", "AMSR2"}
 # depending on sensor) so a 0.05° grid is appropriate; 89 GHz is sharper
 # (~5-15 km) so we go finer at 0.02°. Bands use *different* grids by
 # design, which is why the regrid cache is keyed per-band, not per-group.
+# Used by the WHOLE-ARC render (overview / Global Map), where the
+# _adaptive_grid_cap is the binding constraint on wide arcs anyway.
 _BAND_GRID_RES = {37: 0.05, 89: 0.02}
+
+
+# Native ground footprint (effective IFOV, km) per sensor+band — the finer
+# of along/cross-track, post-89A/89B horn-merge for AMSR2. Sources: GPM GMI
+# & AMSR2 instrument specs, SSMIS imaging-channel footprints, ATMS 88.2 GHz
+# nadir IFOV (cross-track, grows toward swath edge). The storm crop grids
+# at ≈ half each footprint (below) so a sharp imager isn't under-sampled and
+# a coarse sounder isn't gratuitously over-gridded into a falsely smooth
+# image. Reference only — _CROP_GRID_RES is the value actually used.
+_SENSOR_NATIVE_KM = {
+    "GMI":   {37: 9.2,  89: 4.4},
+    "AMSR2": {37: 7.3,  89: 3.5},
+    "SSMIS": {37: 28.0, 89: 13.2},
+    "ATMS":  {89: 16.0},
+}
+
+# Storm-crop grid resolution (deg) per sensor+band, ≈ half the native
+# footprint above (km/pixel in comments, ×111 km/deg). This is what makes
+# every sensor's per-storm / IR-compare crop preserve its OWN native
+# resolution: AMSR2 & GMI stay crisp (2-2.2 km), while SSMIS & ATMS grid at
+# ~native instead of the blanket 0.02° that over-sampled them 6-7×. Unknown
+# sensors fall back to _BAND_GRID_RES via _crop_grid_res_for().
+_CROP_GRID_RES = {
+    "GMI":   {37: 0.040, 89: 0.020},   # 4.4 / 2.2 km
+    "AMSR2": {37: 0.033, 89: 0.018},   # 3.7 / 2.0 km
+    "SSMIS": {37: 0.090, 89: 0.050},   # 10.0 / 5.5 km
+    "ATMS":  {89: 0.060},              # 6.7 km
+}
+
+
+def _crop_grid_res_for(sensor: str, band: int) -> float:
+    """Grid resolution (deg) for a sensor+band storm crop, set finer than
+    that sensor's native footprint so the native-resolution regrid never
+    under-samples (degrades) the data. Falls back to the band default for
+    sensors not in _CROP_GRID_RES."""
+    per_band = _CROP_GRID_RES.get(sensor)
+    if per_band and band in per_band:
+        return per_band[band]
+    return _BAND_GRID_RES.get(band, 0.05)
+
+
+# Storm-centered hi-res crop parameters. The frontend per-storm card and
+# IR/MW compare modal draw a ±_RT_MW_HALF_DEG (6°) box, so the crop window
+# is a bit wider (7°) to leave a margin and keep the storm box fully inside
+# the native-resolution data. A crop is only emitted when ≥ _CROP_MIN_VALID
+# of the window has swath data, so storms that merely fall inside a wide
+# arc's bbox (but off the actual swath) don't get an empty crop.
+_CROP_HALF_DEG = 7.0
+_CROP_MIN_VALID = 0.03
+
+
+# Active-storm + disturbance target cache for the hi-res crop. Refreshed at
+# most once per _STORM_TARGETS_TTL_SEC so a multi-granule backfill doesn't
+# hammer the active-storms API once per granule.
+_STORM_TARGETS_TTL_SEC = 600
+_storm_targets_cache: tuple = (0.0, None)  # (monotonic_ts, list | None)
+
+
+def _active_storm_targets() -> list[dict]:
+    """Return [{"id", "name", "lat", "lon"}, ...] for active TCs + genesis
+    disturbances, cached for _STORM_TARGETS_TTL_SEC. Used to decide which
+    rendered arcs warrant a storm-centered native-resolution crop. Failures
+    degrade to [] (no crops) — the whole-arc PNG still ships."""
+    global _storm_targets_cache
+    now = time.monotonic()
+    ts, cached = _storm_targets_cache
+    if cached is not None and (now - ts) < _STORM_TARGETS_TTL_SEC:
+        return cached
+    targets: list[dict] = []
+    for fetch, kind in ((_fetch_active_storms, "storm"),
+                        (_fetch_genesis_disturbances, "disturbance")):
+        try:
+            for s in fetch() or []:
+                lat, lon = s.get("lat"), s.get("lon")
+                if lat is None or lon is None:
+                    continue
+                targets.append({
+                    "id": s.get("atcf_id") or s.get("name") or kind,
+                    "name": s.get("name"),
+                    "lat": float(lat),
+                    "lon": float(lon),
+                })
+        except Exception as exc:
+            logger.warning("[crop] %s target fetch failed: %s", kind, exc)
+    _storm_targets_cache = (now, targets)
+    if targets:
+        logger.info("[crop] %d active storm/disturbance target(s): %s",
+                    len(targets), [t["id"] for t in targets])
+    return targets
 
 
 def _band_of_product(product: str) -> int:
@@ -1222,7 +1320,9 @@ def _render_single_product(ds_bt, ds_geo, sensor: str, product: str
 # and derive every product of that band from the cached arrays. Cuts the
 # regrid work roughly in half for multi-pol-product sensors.
 # ---------------------------------------------------------------------------
-from microwave_api import _get_swath_geolocation, _regrid_swath_multi
+from microwave_api import (
+    _get_swath_geolocation, _regrid_swath_multi, _regrid_swath_window,
+)
 
 
 def _regrid_band_channels(ds_bt, ds_geo, channel_names: list,
@@ -1246,6 +1346,43 @@ def _regrid_band_channels(ds_bt, ds_geo, channel_names: list,
         arrays, lats, lons,
         channel_names=used_names, grid_res_deg=grid_res_deg,
     )
+
+
+def _storm_crops_for_band(sub_bt, sub_geo, band_channels: list, sensor: str,
+                          band: int, targets: list[dict]) -> dict:
+    """Pre-compute one storm-window regrid cache per covering target for
+    this (pass, band). The band's channel arrays + geolocation are
+    extracted ONCE and reused across targets (a wide arc's channel array
+    is large — re-copying per storm would be wasteful). The crop is gridded
+    at _crop_grid_res_for(sensor, band) — finer than the sensor's native
+    footprint so its resolution is preserved, not degraded. Returns
+    {storm_id: cache_dict} for targets the arc actually imaged at
+    >= _CROP_MIN_VALID coverage; others omitted. Empty dict when there are
+    no targets or none fall on the swath — render proceeds with whole-arc
+    PNGs only."""
+    if not targets:
+        return {}
+    arrays = []
+    used_names = []
+    for name in band_channels:
+        if name in sub_bt.data_vars:
+            arrays.append(sub_bt[name].values.astype(np.float32))
+            used_names.append(name)
+    if not arrays:
+        return {}
+    grid_res_deg = _crop_grid_res_for(sensor, band)
+    lats, lons = _get_swath_geolocation(sub_geo)
+    out: dict = {}
+    for t in targets:
+        try:
+            cache = _regrid_swath_window(
+                arrays, lats, lons, t["lat"], t["lon"], _CROP_HALF_DEG,
+                channel_names=used_names, grid_res_deg=grid_res_deg)
+        except ValueError:
+            continue  # storm off this swath
+        if cache.get("valid_frac", 0.0) >= _CROP_MIN_VALID:
+            out[t["id"]] = cache
+    return out
 
 
 def _finalize_from_grid(data, valid, bounds, product: str,
@@ -1349,6 +1486,7 @@ def upload_granule(meta: GranuleMeta, products: list[RenderedProduct],
     Each product carries its own `pass_suffix` (e.g., "-p0") for
     multi-pass sensors that were split. The suffix is appended to
     meta.orbit_id so each pass becomes a distinct manifest entry."""
+    import re
     entries = []
     t = meta.scan_start_utc
     for p in products:
@@ -1374,7 +1512,29 @@ def upload_granule(meta: GranuleMeta, products: list[RenderedProduct],
         else:
             _upload_bytes(png_key, p.png_bytes, "image/png")
             _upload_bytes(geo_key, geo_payload, "application/geo+json")
-        entries.append({
+        # Storm-centered hi-res crops (native resolution over a small
+        # window) — uploaded alongside the whole-arc PNG. The frontend
+        # per-storm card + IR/MW compare prefer the crop whose bounds cover
+        # the storm; everything else (Global Map overlay, schedule) keeps
+        # using the whole-arc png_url. Absent when no active storm fell on
+        # this arc, so the manifest is unchanged on quiet days.
+        crops_meta = []
+        for crop in (p.crops or []):
+            safe_id = re.sub(r"[^A-Za-z0-9]+", "", str(crop["storm_id"])) or "x"
+            crop_key = f"{base}_{p.product}_crop-{safe_id}.png"
+            if dry_run:
+                out_root = Path(dry_run_dir or "./mw_out")
+                (out_root / Path(crop_key).parent).mkdir(
+                    parents=True, exist_ok=True)
+                (out_root / crop_key).write_bytes(crop["png_bytes"])
+            else:
+                _upload_bytes(crop_key, crop["png_bytes"], "image/png")
+            crops_meta.append({
+                "storm_id": crop["storm_id"],
+                "png_url": f"https://storage.googleapis.com/{MW_BUCKET}/{crop_key}",
+                "bounds": crop["bounds"],
+            })
+        entry = {
             "sensor": meta.sensor,
             "platform": meta.platform,
             "orbit_id": orbit_id,
@@ -1389,7 +1549,13 @@ def upload_granule(meta: GranuleMeta, products: list[RenderedProduct],
             # bbox over-reports for wide dateline/polar arcs.
             "center_track": p.center_track,
             "source": meta.source,
-        })
+        }
+        if crops_meta:
+            # Storm-centered native-res crops; frontend prefers the one
+            # whose bounds cover the storm. Only present when an active
+            # storm was on this arc.
+            entry["crops"] = crops_meta
+        entries.append(entry)
     return entries
 
 
@@ -1566,6 +1732,11 @@ def _process_one_pps(reader_path: str, sensor: str,
     rendered: list[RenderedProduct] = []
     meta: Optional[GranuleMeta] = None
 
+    # Active storm/disturbance targets for the storm-centered hi-res crop.
+    # Fetched once per granule (TTL-cached across granules). Empty list ⇒
+    # no crops; render proceeds with whole-arc PNGs exactly as before.
+    crop_targets = _active_storm_targets()
+
     # Iterate groups (file opens), then within each group iterate bands
     # (regrid caches), then within each band iterate passes + products.
     for group_name, all_channels in channels_per_group.items():
@@ -1599,19 +1770,36 @@ def _process_one_pps(reader_path: str, sensor: str,
                     for p in prods
                     for var_name in sensor_products[p]["channels"]
                 })
+                grid_res = _BAND_GRID_RES.get(band, 0.05)
                 try:
                     cached = _regrid_band_channels(
-                        sub_bt, sub_geo, band_channels, sensor,
-                        _BAND_GRID_RES.get(band, 0.05))
+                        sub_bt, sub_geo, band_channels, sensor, grid_res)
                 except ValueError as exc:
                     logger.debug("pass%s band=%d regrid failed: %s",
                                  suffix, band, exc)
                     continue
+                # Storm-window native-res regrids for this (pass, band) —
+                # one per active storm the arc actually imaged. Derived
+                # products below crop from these instead of the
+                # _adaptive_grid_cap-downsampled whole-arc grid.
+                band_crops = _storm_crops_for_band(
+                    sub_bt, sub_geo, band_channels, sensor, band,
+                    crop_targets)
                 for p in prods:
                     try:
                         r = _render_from_cached(cached, sensor, p)
                         r.pass_suffix = suffix
                         r.center_track = arc_track
+                        for storm_id, wcache in band_crops.items():
+                            try:
+                                cr = _render_from_cached(wcache, sensor, p)
+                            except ValueError:
+                                continue  # product can't derive from window
+                            r.crops.append({
+                                "storm_id": storm_id,
+                                "png_bytes": cr.png_bytes,
+                                "bounds": cr.bounds,
+                            })
                         rendered.append(r)
                     except ValueError as exc:
                         logger.debug("pass%s product=%s skipped: %s",
