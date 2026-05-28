@@ -1102,6 +1102,21 @@ html, body { margin: 0; padding: 0; }
 
 /* ── Mobile touch-target and layout fixes ──────────────────── */
 @media (max-width: 768px) {
+    /* The GIBS feed banner is a centered shrink-to-fit flex row on
+       desktop. On a narrow phone that intrinsic width collapses to a
+       ~210px column, turning a one-line notice into a ~450px-tall wall
+       of text covering half the map. Pin it full-width so the text
+       flows into a couple of short lines instead. */
+    .ir-feed-banner {
+        left: 8px;
+        right: 8px;
+        transform: none;
+        max-width: none;
+        width: auto;
+        top: 84px;
+        font-size: 0.72rem;
+        padding: 7px 10px;
+    }
     /* Storm-card header: the action pills (Download / Obs / Grid /
        Loop Only / Diagnostics / Microwave) used to run off the right
        edge with no wrap and no scroll, so the last few were
