@@ -1796,6 +1796,19 @@ _PREFETCH_LOOKBACK_HOURS = 6.0
 # subset of 10-min boundaries.
 _PREFETCH_INTERVAL_MIN = 10
 _PREFETCH_RADIUS_DEG = 10.0
+# Animation frames sit on exact 10-min scan slots, so a scan that the
+# finder substitutes from a neighbouring slot (±10/±20 min) is always
+# wrong — it gets reprojected at this frame's motion-advanced center and
+# the storm appears to jump. Reject anything further than this from the
+# slot; a not-yet-available leading-edge frame is left absent (frontend
+# skips it) and refilled next cycle once its real scan lands on S3.
+_ANIM_MAX_SUBSTITUTION_MIN = 7.0
+# Re-fetch the newest N frames every cycle instead of trusting the cache.
+# These sit at the data-arrival edge: when first cached their real scan
+# may not have disseminated yet (so they were skipped), and they're the
+# only frames that could still carry pre-fix poison from before this
+# guard existed. Forcing a re-fetch heals them as soon as S3 has the scan.
+_SELF_HEAL_FRAMES = 4
 _prefetch_lock = threading.Lock()
 
 def _prefetch_ir_frames(storms: list):
@@ -1889,21 +1902,27 @@ def _prefetch_ir_frames(storms: list):
                     extra_bands.append(VIS_BAND)
                 _prefetch_counts = {"ir": 0, "band": 0, "jpg": 0}
 
-                def _fetch_and_cache_ir(tdt, dstr):
+                def _fetch_and_cache_ir(tdt, dstr, force=False):
                     """Worker: fetch IR frame and cache to GCS.
 
                     Per-frame cutout is centered on the storm's
                     INTERPOLATED position at tdt (not the current
                     advisory) so historical frames stay aligned with
                     storm motion and cache keys remain stable across
-                    later lookups."""
+                    later lookups.
+
+                    force=True (newest few frames) bypasses the cache
+                    short-circuit so a leading-edge frame that was skipped
+                    or stale-cached on an earlier cycle is re-fetched and
+                    overwritten once its real scan reaches S3."""
                     ilat, ilon = _interp_pos_at(atcf_id, tdt, center_lat, center_lon)
-                    if _gcs_rt_get(atcf_id.upper(), dstr,
+                    if not force and _gcs_rt_get(atcf_id.upper(), dstr,
                                    lat=ilat, lon=ilon,
                                    radius_deg=_PREFETCH_RADIUS_DEG) is not None:
                         return
                     try:
-                        raw = fetch_ir_tb_raw(ilat, ilon, tdt, box_deg)
+                        raw = fetch_ir_tb_raw(ilat, ilon, tdt, box_deg,
+                                              max_substitution_min=_ANIM_MAX_SUBSTITUTION_MIN)
                     except Exception:
                         return
                     if not raw or raw.get("tb") is None:
@@ -1929,6 +1948,7 @@ def _prefetch_ir_frames(storms: list):
                         "tb_rows": encoded.shape[0], "tb_cols": encoded.shape[1],
                         "tb_vmin": _TB_VMIN, "tb_vmax": _TB_VMAX,
                         "datetime_utc": raw["datetime_utc"],
+                        "scan_dt": raw.get("scan_dt"),
                         "satellite": raw.get("satellite", ""),
                         "bounds": raw.get("bounds", [
                             [ilat - half, ilon - half],
@@ -1938,7 +1958,7 @@ def _prefetch_ir_frames(storms: list):
                     _prefetch_counts["ir"] += 1
                     del tb, arr, mask, scaled, encoded
 
-                def _fetch_and_cache_band(tdt, dstr, band):
+                def _fetch_and_cache_band(tdt, dstr, band, force=False):
                     """Worker: fetch WV/Vis frame and cache to GCS.
 
                     Cache keys use the storm's INTERPOLATED position at
@@ -1949,9 +1969,12 @@ def _prefetch_ir_frames(storms: list):
                     frame except the most-recent ~few miss (the storm
                     moves > the 0.1° key precision within ~30 min), which
                     left the Vis/WV/SWIR loops stuck at only a handful of
-                    frames for any moving storm."""
+                    frames for any moving storm.
+
+                    force=True re-fetches the newest few frames each cycle
+                    (see _fetch_and_cache_ir) to heal leading-edge frames."""
                     ilat, ilon = _interp_pos_at(atcf_id, tdt, center_lat, center_lon)
-                    if _gcs_band_get(band, atcf_id.upper(), dstr, lat=ilat, lon=ilon) is not None:
+                    if not force and _gcs_band_get(band, atcf_id.upper(), dstr, lat=ilat, lon=ilon) is not None:
                         return
                     if band == VIS_BAND:
                         se = _solar_elevation(ilat, ilon, tdt)
@@ -1961,7 +1984,8 @@ def _prefetch_ir_frames(storms: list):
                     bvmin, bvmax = binfo["vmin"], binfo["vmax"]
                     bscale = 254.0 / (bvmax - bvmin)
                     try:
-                        raw = fetch_band_raw(ilat, ilon, tdt, box_deg, band=band)
+                        raw = fetch_band_raw(ilat, ilon, tdt, box_deg, band=band,
+                                             max_substitution_min=_ANIM_MAX_SUBSTITUTION_MIN)
                     except Exception:
                         return
                     if not raw or raw.get("data") is None:
@@ -1978,6 +2002,7 @@ def _prefetch_ir_frames(storms: list):
                         "tb_vmin": bvmin, "tb_vmax": bvmax,
                         "band": band, "data_type": binfo["data_type"],
                         "datetime_utc": raw["datetime_utc"],
+                        "scan_dt": raw.get("scan_dt"),
                         "satellite": raw.get("satellite", ""),
                         "bounds": raw.get("bounds", [
                             [ilat - half, ilon - half],
@@ -2024,11 +2049,14 @@ def _prefetch_ir_frames(storms: list):
                     futures = []
                     for i, target_dt in enumerate(frame_times):
                         dt_str = target_dt.strftime("%Y%m%d%H%M")
-                        futures.append(pool.submit(_fetch_and_cache_ir, target_dt, dt_str))
+                        # frame_times is newest→oldest, so the first
+                        # _SELF_HEAL_FRAMES are the leading edge.
+                        force = i < _SELF_HEAL_FRAMES
+                        futures.append(pool.submit(_fetch_and_cache_ir, target_dt, dt_str, force))
                         if i < max_band_frames:
-                            futures.append(pool.submit(_fetch_and_cache_band, target_dt, dt_str, primary_band))
+                            futures.append(pool.submit(_fetch_and_cache_band, target_dt, dt_str, primary_band, force))
                             for eb in extra_bands:
-                                futures.append(pool.submit(_fetch_and_cache_band, target_dt, dt_str, eb))
+                                futures.append(pool.submit(_fetch_and_cache_band, target_dt, dt_str, eb, force))
 
                     # Wait for all to complete
                     for fut in as_completed(futures):
@@ -2733,7 +2761,8 @@ def get_storm_ir_raw(
             frames.append(cached)
             continue
 
-        raw = fetch_ir_tb_raw(ilat, ilon, target_dt, box_deg)
+        raw = fetch_ir_tb_raw(ilat, ilon, target_dt, box_deg,
+                              max_substitution_min=_ANIM_MAX_SUBSTITUTION_MIN)
         if raw and raw.get("tb") is not None:
             tb = raw["tb"]
             # Encode as uint8: 0 = invalid, 1-255 = Tb range
@@ -2933,7 +2962,8 @@ def get_storm_ir_raw_frame(
     # Cutout centered on the storm's INTERPOLATED position at this
     # frame's time (not the static advisory) — keeps historical frames
     # framed correctly when the storm has moved.
-    raw = fetch_ir_tb_raw(interp_lat, interp_lon, target_dt, box_deg)
+    raw = fetch_ir_tb_raw(interp_lat, interp_lon, target_dt, box_deg,
+                          max_substitution_min=_ANIM_MAX_SUBSTITUTION_MIN)
     if not raw or raw.get("tb") is None:
         raise HTTPException(status_code=502, detail=f"No IR data for frame {frame_index}")
 
@@ -3073,7 +3103,8 @@ def _fetch_one_raw_tb_for_bundle(
 
     # Cache miss: pull from S3 + render. Cutout centered on the
     # interpolated position so the cached frame's bounds match the key.
-    raw = fetch_ir_tb_raw(interp_lat, interp_lon, target_dt, box_deg)
+    raw = fetch_ir_tb_raw(interp_lat, interp_lon, target_dt, box_deg,
+                          max_substitution_min=_ANIM_MAX_SUBSTITUTION_MIN)
     if not raw or raw.get("tb") is None:
         return None
 
@@ -3357,7 +3388,8 @@ def get_storm_hovmoller(
         if cached is None:
             # Not in cache — fetch raw Tb from satellite and cache it
             try:
-                raw = fetch_ir_tb_raw(ilat, ilon, ft, box_deg)
+                raw = fetch_ir_tb_raw(ilat, ilon, ft, box_deg,
+                                      max_substitution_min=_ANIM_MAX_SUBSTITUTION_MIN)
                 if raw and raw.get("tb") is not None:
                     arr = np.asarray(raw["tb"], dtype=np.float32)
                     mask = ~np.isfinite(arr) | (arr <= 0)
@@ -3579,7 +3611,8 @@ def get_storm_band_raw_frame(
         )
 
     # Fetch from satellite
-    raw = fetch_band_raw(center_lat, center_lon, target_dt, box_deg, band=band)
+    raw = fetch_band_raw(center_lat, center_lon, target_dt, box_deg, band=band,
+                         max_substitution_min=_ANIM_MAX_SUBSTITUTION_MIN)
     if not raw or raw.get("data") is None:
         raise HTTPException(status_code=502, detail=f"No Band {band} data for frame {frame_index}")
 
@@ -4028,7 +4061,8 @@ def get_band_frame_jpg(
 
     # Render fresh from S3
     try:
-        raw = fetch_band_raw(center_lat, center_lon, target_dt, box_deg, band=band)
+        raw = fetch_band_raw(center_lat, center_lon, target_dt, box_deg, band=band,
+                         max_substitution_min=_ANIM_MAX_SUBSTITUTION_MIN)
     except Exception:
         raise HTTPException(status_code=502, detail=f"No band {band} data")
 
@@ -4103,7 +4137,8 @@ def _get_or_render_band_jpg(
     # cold loads. The bundle's parallel fan-out still completes in
     # max-frame-time wall clock instead of N × per-frame-time.
     try:
-        raw = fetch_band_raw(interp_lat, interp_lon, target_dt, box_deg, band=band)
+        raw = fetch_band_raw(interp_lat, interp_lon, target_dt, box_deg, band=band,
+                             max_substitution_min=_ANIM_MAX_SUBSTITUTION_MIN)
     except Exception:
         return None, sat_name
     if not raw or raw.get("data") is None:
@@ -4389,7 +4424,8 @@ def _get_or_render_geocolor_jpg(
             pass
 
     try:
-        raw = fetch_band_raw(interp_lat, interp_lon, target_dt, box_deg, band=band)
+        raw = fetch_band_raw(interp_lat, interp_lon, target_dt, box_deg, band=band,
+                             max_substitution_min=_ANIM_MAX_SUBSTITUTION_MIN)
     except Exception:
         return None, sat_name, is_day
     if not raw or raw.get("data") is None:
@@ -4680,7 +4716,8 @@ def get_ir_frame_jpg(
             pass  # Fall through to S3 fetch
 
     # Render fresh from S3 satellite data (cutout centered on interpolated pos)
-    raw = fetch_ir_tb_raw(ilat, ilon, target_dt, box_deg)
+    raw = fetch_ir_tb_raw(ilat, ilon, target_dt, box_deg,
+                          max_substitution_min=_ANIM_MAX_SUBSTITUTION_MIN)
     if not raw or raw.get("tb") is None:
         raise HTTPException(status_code=502, detail=f"No IR data for frame {frame_index}")
 
@@ -4754,7 +4791,8 @@ def _get_or_render_ir_jpg(
 
     # Coldest: fetch Tb from S3 + render
     try:
-        raw = fetch_ir_tb_raw(interp_lat, interp_lon, target_dt, box_deg)
+        raw = fetch_ir_tb_raw(interp_lat, interp_lon, target_dt, box_deg,
+                          max_substitution_min=_ANIM_MAX_SUBSTITUTION_MIN)
     except Exception:
         return None, sat_name
     if not raw or raw.get("tb") is None:
@@ -5041,7 +5079,8 @@ def get_storm_geotiff(
 
     target_dt = frame_times[frame_index]
 
-    raw = fetch_ir_tb_raw(center_lat, center_lon, target_dt, box_deg)
+    raw = fetch_ir_tb_raw(center_lat, center_lon, target_dt, box_deg,
+                          max_substitution_min=_ANIM_MAX_SUBSTITUTION_MIN)
     if not raw or raw.get("tb") is None:
         raise HTTPException(status_code=502, detail="Could not fetch IR data for this frame")
 
@@ -5249,7 +5288,8 @@ def _compute_vigor_inner(
     fetch_errors = 0
     for target_dt in reversed(frame_times):
         try:
-            result = fetch_ir_tb_raw(center_lat, center_lon, target_dt, box_deg)
+            result = fetch_ir_tb_raw(center_lat, center_lon, target_dt, box_deg,
+                                     max_substitution_min=_ANIM_MAX_SUBSTITUTION_MIN)
             if result:
                 raw_frames.append(result)
                 print(f"[ir-vigor]   frame {target_dt.strftime('%H:%MZ')}: OK "

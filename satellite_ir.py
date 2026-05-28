@@ -278,14 +278,19 @@ def satellite_name_from_bucket(bucket: str) -> str:
 
 
 def find_goes_file(bucket: str, target_dt: _dt,
-                   tolerance_min: int = 15, band: int = IR_BAND) -> Optional[str]:
+                   tolerance_min: int = 15, band: int = IR_BAND,
+                   return_dt: bool = False):
     """
     Find the GOES ABI full-disk file closest to target_dt for a given band.
     Returns the full S3 key or None.
+
+    If return_dt=True, returns (s3_key, matched_scan_dt) so callers can
+    detect a substituted scan time (see fetch_ir_tb_raw's
+    max_substitution_min). (None, None) when nothing matches.
     """
     fs = get_goes_fs()
     if fs is None:
-        return None
+        return (None, None) if return_dt else None
 
     jday = target_dt.timetuple().tm_yday
     prefix = f"{bucket}/{IR_PRODUCT}/{target_dt.year}/{jday:03d}/{target_dt.hour:02d}/"
@@ -293,14 +298,15 @@ def find_goes_file(bucket: str, target_dt: _dt,
     try:
         files = _cached_fs_ls(fs, prefix)
     except Exception:
-        return None
+        return (None, None) if return_dt else None
 
     band_tag = f"C{band:02d}"
     candidates = [f for f in files if band_tag in f.split("/")[-1]]
     if not candidates:
-        return None
+        return (None, None) if return_dt else None
 
     best_file = None
+    best_dt = None
     best_delta = timedelta(minutes=tolerance_min + 1)
     ts_re = re.compile(r"[-_]s(\d{4})(\d{3})(\d{2})(\d{2})(\d{2})")
 
@@ -320,12 +326,13 @@ def find_goes_file(bucket: str, target_dt: _dt,
             if delta < best_delta:
                 best_delta = delta
                 best_file = fpath
+                best_dt = file_dt
         except Exception:
             continue
 
     if best_delta > timedelta(minutes=tolerance_min):
-        return None
-    return best_file
+        return (None, None) if return_dt else None
+    return (best_file, best_dt) if return_dt else best_file
 
 
 def latlon_to_goes_xy(lat: float, lon: float, sat_key: str) -> tuple:
@@ -393,7 +400,7 @@ def open_goes_subset(s3_key: str, center_lat: float, center_lon: float,
 
 
 def find_himawari_file(target_dt: _dt, tolerance_min: int = 20,
-                       band: int = HIMAWARI_BAND) -> Optional[str]:
+                       band: int = HIMAWARI_BAND, return_dt: bool = False):
     """
     Find the S3 prefix for a Himawari-9 AHI full-disk scan
     closest to target_dt for a given band.
@@ -404,10 +411,17 @@ def find_himawari_file(target_dt: _dt, tolerance_min: int = 20,
 
     Returns the S3 *directory prefix* (not a single file) containing the
     segment files, or None if nothing is found within tolerance.
+
+    If return_dt=True, returns (prefix, matched_scan_dt) so callers can
+    tell whether a *different* scan time was substituted for the request
+    (None matches → (None, None)). The substitution window can be up to
+    ±tolerance_min, which is fine for an isolated snapshot but wrong for
+    an animation frame whose neighbours are exact 10-min slots — see
+    fetch_ir_tb_raw's max_substitution_min.
     """
     fs = get_goes_fs()
     if fs is None:
-        return None
+        return (None, None) if return_dt else None
 
     utc_dt = target_dt.replace(tzinfo=timezone.utc) if target_dt.tzinfo is None else target_dt
 
@@ -445,10 +459,10 @@ def find_himawari_file(target_dt: _dt, tolerance_min: int = 20,
         if delta <= timedelta(minutes=tolerance_min):
             print(f"[satellite_ir] Himawari L1b dir found: {prefix.split('/')[-2]} "
                   f"({len(band_files)} {band_tag} segments)")
-            return prefix  # return the directory prefix
+            return (prefix, cdt) if return_dt else prefix
 
     print(f"[satellite_ir] No Himawari {band_tag} data found for {target_dt.isoformat()}")
-    return None
+    return (None, None) if return_dt else None
 
 
 def _himawari_seg_for_lat(center_lat: float, box_deg: float,
@@ -1010,8 +1024,28 @@ def _reproject_geos_to_latlon(
     return tb_out
 
 
+def _scan_substitution_too_stale(scan_dt, target_dt: _dt,
+                                 max_substitution_min: Optional[float]) -> bool:
+    """True when the matched scan is further from the requested slot than
+    the caller tolerates. The scan finders accept a scan up to ±tolerance
+    (20 min Himawari / 15 min GOES) and silently relabel it as the request.
+    That is fine for an isolated snapshot but wrong for an animation frame:
+    at the leading edge the requested scan hasn't disseminated to S3 yet, so
+    an *older* scan gets substituted, frozen into the per-frame cache, and
+    rendered at the frame's (newer, motion-advanced) center — the storm then
+    appears to jump. Animation callers pass a tight window so a not-yet-
+    available frame is skipped (and refilled next cycle once it lands) rather
+    than poisoned with a stale neighbour."""
+    if max_substitution_min is None or scan_dt is None:
+        return False
+    tgt = target_dt.replace(tzinfo=timezone.utc) if target_dt.tzinfo is None else target_dt
+    sdt = scan_dt.replace(tzinfo=timezone.utc) if scan_dt.tzinfo is None else scan_dt
+    return abs((sdt - tgt).total_seconds()) > max_substitution_min * 60.0
+
+
 def fetch_ir_tb_raw(center_lat: float, center_lon: float,
-                    target_dt: _dt, box_deg: float = 8.0) -> Optional[dict]:
+                    target_dt: _dt, box_deg: float = 8.0,
+                    max_substitution_min: Optional[float] = None) -> Optional[dict]:
     """
     Fetch a single IR frame and return the RAW brightness temperature array.
     Same routing as fetch_ir_frame but returns numpy Tb instead of rendered PNG.
@@ -1020,15 +1054,22 @@ def fetch_ir_tb_raw(center_lat: float, center_lon: float,
     (currently 0.013° → 1500×1500 for a 20° box). Bumped from 0.02° to give
     sharper rendering at the 2° zoom level. See that function for the math.
 
-    Returns dict with 'tb' (np.ndarray), 'datetime_utc', 'satellite', 'bounds'
-    or None on failure.
+    max_substitution_min: if set, return None when the nearest available scan
+    is further than this many minutes from target_dt (see
+    _scan_substitution_too_stale). Leave None for snapshot callers that want
+    the nearest scan regardless of age.
+
+    Returns dict with 'tb' (np.ndarray), 'datetime_utc', 'scan_dt',
+    'satellite', 'bounds' or None on failure.
     """
     bucket, sat_key = select_goes_sat(center_lon, target_dt)
 
     try:
         if sat_key == "himawari":
-            s3_key = find_himawari_file(target_dt)
+            s3_key, scan_dt = find_himawari_file(target_dt, return_dt=True)
             if not s3_key:
+                return None
+            if _scan_substitution_too_stale(scan_dt, target_dt, max_substitution_min):
                 return None
             tb_geo = open_himawari_subset(s3_key, center_lat, center_lon, box_deg)
             # Reproject from geostationary fixed-grid to regular lat/lon grid
@@ -1039,8 +1080,10 @@ def fetch_ir_tb_raw(center_lat: float, center_lon: float,
             )
             del tb_geo
         else:
-            s3_key = find_goes_file(bucket, target_dt)
+            s3_key, scan_dt = find_goes_file(bucket, target_dt, return_dt=True)
             if not s3_key:
+                return None
+            if _scan_substitution_too_stale(scan_dt, target_dt, max_substitution_min):
                 return None
             # GOES path doesn't use _reproject_geos_to_latlon — its
             # open_goes_subset already returns a lat/lon-aligned array at
@@ -1056,6 +1099,7 @@ def fetch_ir_tb_raw(center_lat: float, center_lon: float,
         return {
             "tb": tb,
             "datetime_utc": target_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "scan_dt": scan_dt.strftime("%Y-%m-%dT%H:%M:%SZ") if scan_dt else None,
             "satellite": satellite_name_from_bucket(bucket),
             "bounds": [
                 [center_lat - half, center_lon - half],
@@ -1071,14 +1115,19 @@ def fetch_ir_tb_raw(center_lat: float, center_lon: float,
 
 def fetch_band_raw(center_lat: float, center_lon: float,
                    target_dt: _dt, box_deg: float = 8.0,
-                   band: int = 13) -> Optional[dict]:
+                   band: int = 13,
+                   max_substitution_min: Optional[float] = None) -> Optional[dict]:
     """
     Fetch any satellite band and return the raw 2D data array.
     For IR/WV bands (7-16): returns brightness temperature (K).
     For visible bands (1-6): returns reflectance factor (0-1).
 
-    Returns dict with 'data', 'data_type', 'datetime_utc', 'satellite', 'bounds'
-    or None on failure.
+    max_substitution_min: see fetch_ir_tb_raw — reject (return None) when the
+    nearest available scan is further than this from target_dt, so animation
+    frames are never poisoned with a stale neighbouring scan.
+
+    Returns dict with 'data', 'data_type', 'datetime_utc', 'scan_dt',
+    'satellite', 'bounds' or None on failure.
     """
     bucket, sat_key = select_goes_sat(center_lon, target_dt)
 
@@ -1095,8 +1144,10 @@ def fetch_band_raw(center_lat: float, center_lon: float,
 
     try:
         if sat_key == "himawari":
-            s3_key = find_himawari_file(target_dt, band=him_band)
+            s3_key, scan_dt = find_himawari_file(target_dt, band=him_band, return_dt=True)
             if not s3_key:
+                return None
+            if _scan_substitution_too_stale(scan_dt, target_dt, max_substitution_min):
                 return None
             data_geo = open_himawari_subset(
                 s3_key, center_lat, center_lon, box_deg, band=him_band
@@ -1107,8 +1158,10 @@ def fetch_band_raw(center_lat: float, center_lon: float,
             )
             del data_geo
         else:
-            s3_key = find_goes_file(bucket, target_dt, band=band)
+            s3_key, scan_dt = find_goes_file(bucket, target_dt, band=band, return_dt=True)
             if not s3_key:
+                return None
+            if _scan_substitution_too_stale(scan_dt, target_dt, max_substitution_min):
                 return None
             data = open_goes_subset(
                 s3_key, center_lat, center_lon, sat_key, box_deg, band=band
@@ -1123,6 +1176,7 @@ def fetch_band_raw(center_lat: float, center_lon: float,
             "data_type": data_type,
             "band": band,
             "datetime_utc": target_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "scan_dt": scan_dt.strftime("%Y-%m-%dT%H:%M:%SZ") if scan_dt else None,
             "satellite": satellite_name_from_bucket(bucket),
             "bounds": [
                 [center_lat - half, center_lon - half],
