@@ -16687,14 +16687,20 @@
         });
         var host = clonedDoc.getElementById('ir-image-container');
         if (host) {
+            // Top-right (freed by hiding the product toggle). The graticule
+            // labels sit on the left edge (lat) and bottom edge (lon), so
+            // the top-right corner is clear of the grid. Subtle chip keeps
+            // it legible over bright imagery and mirrors the timestamp chip
+            // at top-left.
             var wm = clonedDoc.createElement('div');
-            wm.style.cssText = 'position:absolute;right:10px;bottom:8px;z-index:2000;' +
+            wm.style.cssText = 'position:absolute;right:10px;top:8px;z-index:2000;' +
                 'pointer-events:none;text-align:right;font-family:"DM Sans",sans-serif;' +
-                'line-height:1.15;text-shadow:0 1px 3px rgba(0,0,0,0.9);';
+                'line-height:1.2;padding:4px 8px;border-radius:5px;' +
+                'background:rgba(15,22,35,0.55);text-shadow:0 1px 2px rgba(0,0,0,0.7);';
             wm.innerHTML =
-                '<div style="font-weight:700;font-size:13px;letter-spacing:0.3px;' +
-                'color:rgba(255,255,255,0.92);">TC-ATLAS</div>' +
-                '<div style="font-weight:500;font-size:10px;color:rgba(255,255,255,0.72);">' +
+                '<div style="font-weight:700;font-size:12px;letter-spacing:0.3px;' +
+                'color:rgba(255,255,255,0.95);">TC-ATLAS</div>' +
+                '<div style="font-weight:500;font-size:9px;color:rgba(255,255,255,0.78);">' +
                 'michaelfischerwx.github.io/TC-ATLAS</div>';
             host.appendChild(wm);
         }
