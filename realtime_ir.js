@@ -4699,6 +4699,27 @@
     }
 
     /** Show a specific frame by toggling opacity (instant — no tile fetching) */
+    /** Pan the detail map so the active frame's storm stays at viewport
+     *  center (co-moving view). With geographic framing each frame is
+     *  placed at its own true bounds, so without this the storm drifts
+     *  across the viewport as the loop plays (its true position moves
+     *  ~1°+ over a 6 h loop). Recentering on the shown frame keeps the
+     *  storm centered AND keeps the best-track dots locked to it (both
+     *  imagery and dots are in true geographic coordinates).
+     *
+     *  Only fires on frame changes, so a paused user can pan/zoom freely
+     *  — their view persists until they scrub or resume the loop. */
+    function _recenterDetailToFrame(layer) {
+        if (!detailMap || !layer || typeof layer.getBounds !== 'function') return;
+        try {
+            var c = layer.getBounds().getCenter();
+            var cur = detailMap.getCenter();
+            // Skip a no-op setView (avoids needless tile churn).
+            if (Math.abs(cur.lat - c.lat) < 1e-4 && Math.abs(cur.lng - c.lng) < 1e-4) return;
+            detailMap.setView(c, detailMap.getZoom(), { animate: false });
+        } catch (e) {}
+    }
+
     function showFrame(idx) {
         if (idx < 0 || idx >= animFrameLayers.length || !detailMap) return;
         // Bundle path may leave null placeholders for frames that failed
@@ -4725,6 +4746,9 @@
                 && animFrameLayers[prevIdx]) {
             animFrameLayers[prevIdx].setOpacity(0);
         }
+
+        // Keep the storm centered as the frame's true position moves.
+        _recenterDetailToFrame(animFrameLayers[idx]);
 
         updateFrameOverlay();
 
@@ -5918,6 +5942,8 @@
             }
         }
 
+        _recenterDetailToFrame(geocolorFrameLayers[idx]);
+
         // Update overlay info
         if (geocolorFrameTimes[idx]) {
             document.getElementById('ir-frame-time').textContent = fmtUTC(geocolorFrameTimes[idx]);
@@ -6245,6 +6271,7 @@
         for (var i = 0; i < visFrameLayers.length; i++) {
             if (i !== idx && visFrameLayers[i]) visFrameLayers[i].setOpacity(0);
         }
+        _recenterDetailToFrame(visFrameLayers[idx]);
         if (visFrameTimes[idx]) {
             document.getElementById('ir-frame-time').textContent = fmtUTC(visFrameTimes[idx]);
         }
@@ -6266,6 +6293,7 @@
         for (var i = 0; i < wvFrameLayers.length; i++) {
             if (i !== idx && wvFrameLayers[i]) wvFrameLayers[i].setOpacity(0);
         }
+        _recenterDetailToFrame(wvFrameLayers[idx]);
         if (wvFrameTimes[idx]) {
             document.getElementById('ir-frame-time').textContent = fmtUTC(wvFrameTimes[idx]);
         }
