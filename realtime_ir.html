@@ -513,8 +513,19 @@
                     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
                         <h3 class="ir-info-heading" id="ir-intensity-heading"
                             style="margin-bottom:0;padding-bottom:0;border-bottom:none;">Intensity Forecast</h3>
-                        <span id="ir-intensity-source"
-                              style="font-size:0.65rem;color:#00e5ff;">DeepMind 1K</span>
+                        <div style="display:flex;align-items:center;gap:8px;">
+                            <span id="ir-intensity-source"
+                                  style="font-size:0.65rem;color:#00e5ff;">DeepMind 1K</span>
+                            <button id="ir-intensity-save" type="button" class="ir-chart-save-btn"
+                                    title="Save figure as PNG" aria-label="Save intensity forecast figure"
+                                    onclick="window._irSaveIntensityChart()">
+                                <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+                                    <path d="M12 3v12"/>
+                                    <path d="m7 10 5 5 5-5"/>
+                                    <path d="M5 21h14"/>
+                                </svg>
+                            </button>
+                        </div>
                     </div>
                     <div id="ir-intensity-chart" class="ir-intensity-chart"></div>
                 </div>

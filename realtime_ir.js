@@ -14134,6 +14134,113 @@
         });
     }
 
+    /** Save the Intensity Forecast chart (DeepMind 1K ensemble bands, or
+     *  best-track fallback) as a publication PNG. Renders in the CURRENT
+     *  theme (matches the on-screen view) with a descriptive title and a
+     *  TC-ATLAS + URL watermark. Clones the live Plotly figure so the
+     *  on-screen chart is untouched. */
+    window._irSaveIntensityChart = function () {
+        var chartEl = document.getElementById('ir-intensity-chart');
+        if (!chartEl || !chartEl.data || !chartEl.data.length || typeof Plotly === 'undefined') {
+            console.warn('[RT Monitor] No intensity chart to export');
+            return;
+        }
+        _ga('ir_export_intensity', { storm: currentStormId });
+
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var bgColor   = isDark ? '#0f172a' : '#ffffff';
+        var textColor = isDark ? '#e2e8f0' : '#1e293b';
+        var gridColor = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)';
+        var axisColor = isDark ? '#94a3b8' : '#475569';
+        var wmColor   = isDark ? '#64748b' : '#94a3b8';
+
+        // Descriptive title from the storm + source + model init.
+        var stormName = (document.getElementById('ir-detail-name') || {}).textContent || '';
+        var stormId   = currentStormId || '';
+        var source    = (document.getElementById('ir-intensity-source') || {}).textContent || '';
+        var heading   = (document.getElementById('ir-intensity-heading') || {}).textContent || 'Intensity Forecast';
+        var initTime  = (_rtDmEnsData && _rtDmEnsData.init_time) || '';
+        var initFmt   = '';
+        if (initTime.length >= 10) {
+            initFmt = initTime.substring(4, 6) + '/' + initTime.substring(6, 8) +
+                      ' ' + initTime.substring(8, 10) + 'Z';
+        }
+        var title = heading + ' — ' + (stormName && stormId
+                        ? stormName + ' (' + stormId + ')'
+                        : (stormName || stormId));
+        if (source)  title += '  ·  ' + source;
+        if (initFmt) title += ' — Init ' + initFmt;
+
+        // Clone the live figure so the on-screen chart is untouched.
+        var data = JSON.parse(JSON.stringify(chartEl.data));
+        var layout = JSON.parse(JSON.stringify(chartEl.layout));
+
+        layout.title = {
+            text: title,
+            font: { size: 14, color: textColor, family: 'DM Sans, sans-serif' },
+            x: 0.5, xanchor: 'center', y: 0.97
+        };
+        layout.paper_bgcolor = bgColor;
+        layout.plot_bgcolor = bgColor;
+        layout.font = { family: 'DM Sans, sans-serif', size: 13, color: axisColor };
+        layout.margin = { t: 60, r: 28, b: 92, l: 60 };
+        layout.width = 820;
+        layout.height = 470;
+        layout.showlegend = true;
+        if (layout.xaxis) {
+            layout.xaxis.gridcolor = gridColor;
+            layout.xaxis.tickfont = { size: 12, color: axisColor };
+            if (layout.xaxis.title) layout.xaxis.title.font = { size: 13, color: textColor };
+        }
+        if (layout.yaxis) {
+            layout.yaxis.gridcolor = gridColor;
+            layout.yaxis.tickfont = { size: 12, color: axisColor };
+            if (layout.yaxis.title) layout.yaxis.title.font = { size: 13, color: textColor };
+        }
+        // Recolor white-ish category gridlines / annotations for light theme.
+        if (!isDark && layout.annotations) {
+            for (var ci = 0; ci < layout.annotations.length; ci++) {
+                var cann = layout.annotations[ci];
+                if (cann.font && typeof cann.font.color === 'string' &&
+                        cann.font.color.indexOf('255,255,255') >= 0) {
+                    cann.font.color = axisColor;
+                }
+            }
+        }
+        // Watermark + URL in the bottom margin.
+        layout.annotations = layout.annotations || [];
+        layout.annotations.push({
+            text: 'TC-ATLAS', xref: 'paper', yref: 'paper',
+            x: 0, y: -0.18, showarrow: false, xanchor: 'left', yanchor: 'top',
+            font: { size: 11, color: wmColor, family: 'DM Sans, sans-serif' }
+        });
+        layout.annotations.push({
+            text: 'michaelfischerwx.github.io/TC-ATLAS', xref: 'paper', yref: 'paper',
+            x: 1, y: -0.18, showarrow: false, xanchor: 'right', yanchor: 'top',
+            font: { size: 11, color: wmColor, family: 'DM Sans, sans-serif' }
+        });
+
+        var tmpDiv = document.createElement('div');
+        tmpDiv.style.cssText = 'position:absolute;left:-9999px;top:-9999px;';
+        document.body.appendChild(tmpDiv);
+        Plotly.newPlot(tmpDiv, data, layout, { displayModeBar: false }).then(function () {
+            return Plotly.toImage(tmpDiv, {
+                format: 'png', width: layout.width, height: layout.height, scale: 2
+            });
+        }).then(function (dataUrl) {
+            var a = document.createElement('a');
+            a.href = dataUrl;
+            a.download = (stormId || 'storm') + '_intensity_forecast' +
+                         (initTime ? '_init' + initTime : '') +
+                         '_' + (isDark ? 'dark' : 'light') + '.png';
+            document.body.appendChild(a); a.click(); document.body.removeChild(a);
+            Plotly.purge(tmpDiv); document.body.removeChild(tmpDiv);
+        }).catch(function (err) {
+            console.warn('[RT Monitor] Intensity chart export failed:', err);
+            if (tmpDiv.parentNode) { Plotly.purge(tmpDiv); document.body.removeChild(tmpDiv); }
+        });
+    };
+
     function _rtRemoveWeatherlab() {
         _rtClearWeatherlabLayers();
         _rtClearWeatherlabIntensity();
@@ -14635,7 +14742,7 @@
                         + ' — ' + utcStr;
                 thumbWrap.appendChild(c);
                 (function (cardEl) {
-                    _rtDrawStormMwThumbnail(c, o, lat, lon, pr.png_url,
+                    _rtDrawStormMwThumbnail(c, pr.bounds || o.bounds, lat, lon, pr.png_url,
                         function (frac) {
                             resolvedCount++;
                             if (frac < _RT_MW_MIN_COVERAGE) {
@@ -14824,7 +14931,7 @@
     // `withGrid` (default false) draws a lat/lon graticule on top of
     // the swath — used by the compare-modal panels but not the small
     // 80-px side-panel thumbnails where a grid would just clutter.
-    function _rtDrawStormMwThumbnail(canvas, orbit, lat, lon, pngUrl, onCoverage, withGrid) {
+    function _rtDrawStormMwThumbnail(canvas, bounds, lat, lon, pngUrl, onCoverage, withGrid) {
         var ctx = canvas.getContext('2d');
         // High-quality interpolation — bicubic on most modern engines.
         // Helps when the storm crop pulls only a small slice of the
@@ -14838,47 +14945,62 @@
         var img = new Image();
         img.crossOrigin = 'anonymous';
         img.onload = function () {
-            var south = orbit.bounds[0][0], west = orbit.bounds[0][1];
-            var north = orbit.bounds[1][0], east = orbit.bounds[1][1];
+            var south = bounds[0][0], west = bounds[0][1];
+            var north = bounds[1][0], east = bounds[1][1];
             // Handle dateline wrap: shift east-side bounds so west < east.
             var wWrapped = west, eWrapped = east, lonShift = lon;
             if (west > east) {
                 eWrapped = east + 360;
                 if (lonShift < west) lonShift += 360;
             }
-            var spanLat = north - south;
             var spanLon = eWrapped - wWrapped;
-            if (spanLat <= 0 || spanLon <= 0) {
+            if (north <= south || spanLon <= 0) {
                 if (onCoverage) onCoverage(0);
                 return;
             }
-            // Pixel coords: top-left = (north, west). y increases southward.
-            var stormBox = {
-                latMax: lat + _RT_MW_HALF_DEG,
-                latMin: lat - _RT_MW_HALF_DEG,
-                lonMin: lonShift - _RT_MW_HALF_DEG,
-                lonMax: lonShift + _RT_MW_HALF_DEG
+            var W = canvas.width, H = canvas.height;
+            var HALF = _RT_MW_HALF_DEG;
+            // The NRT MW PNG is Mercator-warped over [south, north] (rows
+            // uniform in Mercator-y, row 0 = north) — see
+            // mw_ingest._warp_eq_to_mercator_bbox. The canvas + lat/lon grid
+            // here are LINEAR in latitude, so we un-warp per output row,
+            // exactly like the IR panel (_rtDrawIrCompareFrame). Treating
+            // the Mercator PNG as equirectangular displaced features by
+            // ~0.3-0.8° at TC latitudes and misregistered MW vs IR.
+            // Horizontal axis is linear in lon in both projections.
+            var mercY = function (l) {
+                return Math.log(Math.tan(Math.PI / 4 + l * Math.PI / 360));
             };
-            var sx = (stormBox.lonMin - wWrapped) / spanLon * img.width;
-            var sy = (north - stormBox.latMax) / spanLat * img.height;
-            var sw = (2 * _RT_MW_HALF_DEG) / spanLon * img.width;
-            var sh = (2 * _RT_MW_HALF_DEG) / spanLat * img.height;
-            // Clamp source rect to image bounds.
-            var sxC = Math.max(0, sx);
-            var syC = Math.max(0, sy);
-            var sxE = Math.min(img.width, sx + sw);
-            var syE = Math.min(img.height, sy + sh);
-            var swC = sxE - sxC;
-            var shC = syE - syC;
-            if (swC <= 0 || shC <= 0) {
-                if (onCoverage) onCoverage(0);
-                return;
+            var myTop = mercY(north), myBot = mercY(south);
+            var srcY = function (latv) {
+                return (myTop - mercY(latv)) / (myTop - myBot) * img.height;
+            };
+            var latMaxBox = lat + HALF;
+            var lonMinBox = lonShift - HALF, lonMaxBox = lonShift + HALF;
+            // Lon overlap between the ±HALF storm box and the swath bbox.
+            var loLon = Math.max(lonMinBox, wWrapped);
+            var hiLon = Math.min(lonMaxBox, eWrapped);
+            if (hiLon > loLon) {
+                var sxA = (loLon - wWrapped) / spanLon * img.width;
+                var sxW = (hiLon - loLon) / spanLon * img.width;
+                var dxA = (loLon - lonMinBox) / (2 * HALF) * W;
+                var dxW = (hiLon - loLon) / (2 * HALF) * W;
+                for (var oy = 0; oy < H; oy++) {
+                    var latTop = latMaxBox - (oy / H) * (2 * HALF);
+                    var latBot = latMaxBox - ((oy + 1) / H) * (2 * HALF);
+                    // Skip rows whose lat band lies entirely off the swath.
+                    if (latBot >= north || latTop <= south) continue;
+                    var clTop = Math.min(latTop, north);
+                    var clBot = Math.max(latBot, south);
+                    var syA = srcY(clTop), syB = srcY(clBot);
+                    if (syB - syA < 0.5) syB = syA + 0.5;
+                    var dyA = (latMaxBox - clTop) / (2 * HALF) * H;
+                    var dyB = (latMaxBox - clBot) / (2 * HALF) * H;
+                    if (dyB - dyA < 0.5) dyB = dyA + 0.5;
+                    ctx.drawImage(img, sxA, syA, sxW, syB - syA,
+                                       dxA, dyA, dxW, dyB - dyA);
+                }
             }
-            var dx = (sxC - sx) / sw * canvas.width;
-            var dy = (syC - sy) / sh * canvas.height;
-            var dw = swC / sw * canvas.width;
-            var dh = shC / sh * canvas.height;
-            ctx.drawImage(img, sxC, syC, swC, shC, dx, dy, dw, dh);
 
             // Measure swath coverage in the crop. CrossOrigin=anonymous
             // + the bucket's CORS config keep the canvas un-tainted so
@@ -15520,7 +15642,7 @@
             var pr = orbit.products[product];
             if (mwCanvas && pr && pr.png_url) {
                 if (mwStatus) mwStatus.textContent = '';
-                _rtDrawStormMwThumbnail(mwCanvas, orbit, cLat, cLon,
+                _rtDrawStormMwThumbnail(mwCanvas, pr.bounds || orbit.bounds, cLat, cLon,
                                         pr.png_url, function (frac) {
                     if (mwStatus) {
                         mwStatus.textContent = frac < _RT_MW_MIN_COVERAGE

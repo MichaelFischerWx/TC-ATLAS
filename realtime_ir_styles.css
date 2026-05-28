@@ -548,6 +548,30 @@ html, body { margin: 0; padding: 0; }
     cursor: pointer;
     accent-color: var(--um-green);
 }
+.ir-chart-save-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 3px;
+    background: transparent;
+    border: 1px solid rgba(100, 116, 139, 0.35);
+    border-radius: 4px;
+    color: #64748b;
+    cursor: pointer;
+    transition: color 0.12s, border-color 0.12s, background 0.12s;
+}
+.ir-chart-save-btn:hover {
+    color: var(--um-green);
+    border-color: var(--um-green);
+    background: rgba(74, 155, 110, 0.10);
+}
+.ir-chart-save-btn svg {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
 .ir-sat-viewer-btn {
     color: var(--um-orange);
     border-color: rgba(244, 115, 33, 0.45);
