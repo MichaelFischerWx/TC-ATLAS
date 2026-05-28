@@ -15602,17 +15602,21 @@
     // matches the IR imagery AND the MW panel (which is cropped + gridded
     // on the identical center). See _rtRenderMwCompare.
     function _rtDrawIrCompareFrame(canvas, storm, frameIndex, gLat, gLon, done) {
-        // warp=none → native equirectangular render. The compare canvas
-        // crops linearly and overlays a linear-in-latitude grid (same as
-        // the MW panel), so a Mercator-warped IR frame would misalign with
-        // the microwave panel and its own graticule. See get_ir_frame_jpg.
+        // Use the DEFAULT (Mercator-warped) IR frame — it's pre-rendered and
+        // cached in GCS, so it loads in ~0.5 s. The equirectangular variant
+        // (warp=none) is rendered on demand and was 30–40 s. Instead of a
+        // slow server render (or storing a second pre-rendered copy), we
+        // fetch the fast cached Mercator frame and un-warp it to
+        // equirectangular HERE, per row, so the IR panel is linear-in-lat
+        // and co-registers exactly with the (equirectangular) MW panel and
+        // the graticule. The Mercator cutout's rows are uniform in
+        // Mercator-y over gLat ± _RT_MW_COMPARE_RADIUS.
         var url = API_BASE
             + '/ir-monitor/storm/' + encodeURIComponent(storm.atcf_id)
             + '/ir-frame.jpg?frame_index=' + frameIndex
             + '&lookback_hours=' + _RT_MW_COMPARE_LOOKBACK_H
             + '&radius_deg=' + _RT_MW_COMPARE_RADIUS
-            + '&interval_min=' + JPG_PRIMARY_INTERVAL_MIN
-            + '&warp=none';
+            + '&interval_min=' + JPG_PRIMARY_INTERVAL_MIN;
         var img = new Image();
         img.crossOrigin = 'anonymous';
         img.onload = function () {
@@ -15621,13 +15625,28 @@
             if ('imageSmoothingQuality' in ctx) ctx.imageSmoothingQuality = 'high';
             ctx.fillStyle = 'rgba(15,22,36,0.55)';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
-            var crop = _RT_MW_COMPARE_HALF_DEG / _RT_MW_COMPARE_RADIUS;
-            var sx = img.width  * (1 - crop) / 2;
-            var sy = img.height * (1 - crop) / 2;
-            var sw = img.width  * crop;
-            var sh = img.height * crop;
-            ctx.drawImage(img, sx, sy, sw, sh,
-                          0, 0, canvas.width, canvas.height);
+            var W = canvas.width, H = canvas.height;
+            var RAD = _RT_MW_COMPARE_RADIUS, HALF = _RT_MW_COMPARE_HALF_DEG;
+            // Horizontal crop is linear in lon: central HALF/RAD fraction.
+            var fx = HALF / RAD;
+            var sx0 = img.width * (1 - fx) / 2, sw = img.width * fx;
+            // Vertical un-warp: Mercator-y is uniform across the source rows
+            // spanning [gLat-RAD, gLat+RAD]; map each linear-lat output row
+            // back to its Mercator source slice.
+            var mercY = function (lat) {
+                return Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360));
+            };
+            var myN = mercY(gLat + RAD), myS = mercY(gLat - RAD);
+            var srcY = function (lat) {
+                return (myN - mercY(lat)) / (myN - myS) * img.height;
+            };
+            for (var oy = 0; oy < H; oy++) {
+                var latTop = (gLat + HALF) - (oy / H) * (2 * HALF);
+                var latBot = (gLat + HALF) - ((oy + 1) / H) * (2 * HALF);
+                var syA = srcY(latTop), syB = srcY(latBot);
+                if (syB - syA < 0.5) syB = syA + 0.5;   // guard thin slices
+                ctx.drawImage(img, sx0, syA, sw, syB - syA, 0, oy, W, 1);
+            }
             // Storm-center crosshair so the two panels feel like a true
             // side-by-side (both have the same yellow marker at center).
             var cx = canvas.width / 2;
