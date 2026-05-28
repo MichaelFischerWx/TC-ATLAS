@@ -630,7 +630,13 @@ _PPS_SENSORS = {
         "fname_re":   r"1C\.GCOMW1\.AMSR2\.[\w\-]+\.(\d{8})-S(\d{6})-"
                       r"E(\d{6})\.V\w+\.RT-NC$",
         "platform_fn": lambda f: "GCOMW1",
-        # AMSR2 also splits per band; use S5 (89 A-Scan) for 89pct.
+        # AMSR2 splits 89 GHz across two feedhorns: S5 = 89A-Scan,
+        # S6 = 89B-Scan. The horns sample the same scans offset by ~half
+        # a footprint, so reading only S5 halves the along-track sampling
+        # and the overlay renders blocky. `merge_groups` folds S6 into S5
+        # at read time (see read_pps_group / _interleave_horns) to recover
+        # full-density 89 GHz sampling. 37 GHz lives wholly in S4.
+        "merge_groups": {"S5": "S6"},
         "products": {
             "37color": {"group": "S4", "channels": {
                 "TB_36.5V": 0, "TB_36.5H": 1,
@@ -743,23 +749,17 @@ def read_pps_for_product(path: str, sensor: str, product: str) -> tuple:
     return ds, ds, meta
 
 
-def read_pps_group(path: str, sensor: str, group_name: str,
-                   channels: dict) -> tuple:
-    """Load a single HDF5 group from a PPS granule with all the
-    specified channels in one shot. `channels` is a mapping from
-    var_name (TC-PRIMED-style "TB_36.64V") to the channel index k
-    inside the group's Tc[scan, pixel, chan] array.
+def _read_pps_group_arrays(path: str, group_name: str,
+                           channels: dict) -> tuple:
+    """Open one PPS L1C HDF5 group and return (channel_arrays, lat, lon).
 
-    Used by the new group-grouped process_one flow: when a sensor's
-    multiple products live in the same HDF5 group (e.g., SSMI/S has
-    37-color + 37V + 37H all sourced from S2), the file is opened
-    and the channels extracted once, then shared across products via
-    the regrid cache. Returns (ds, ds, meta) — both ds_bt and ds_geo
-    are the same Dataset since PPS L1C colocates lat/lon and Tc."""
+    `channel_arrays` maps each requested var_name to its 2D (scan, pixel)
+    float32 slab with fill values and polar pixels (|lat| > MAX_RENDER_LAT)
+    set to NaN; lat/lon are the matching float32 grids. Split out from
+    read_pps_group so multiple co-located groups (e.g. AMSR2's two 89 GHz
+    feedhorns) can be read and merged before the Dataset is built."""
     import xarray as xr
 
-    fname = Path(path).name
-    meta = _pps_granule_meta(sensor, fname)
     s = xr.open_dataset(path, engine="h5netcdf", group=group_name).load()
     tc = s["Tc"]
     chan_dim = tc.dims[-1]
@@ -772,18 +772,88 @@ def read_pps_group(path: str, sensor: str, group_name: str,
         lat_arr = np.where(polar, np.nan, lat_arr)
         lon_arr = np.where(polar, np.nan, lon_arr)
 
-    data_vars = {}
+    arrays = {}
     for var_name, k in channels.items():
         slab = tc.isel({chan_dim: k}).astype(np.float32)
         slab = slab.where(slab > _PPS_FILL + 0.1)
         vals = slab.values
         if polar.any():
             vals = np.where(polar, np.nan, vals)
-        data_vars[var_name] = (("scan", "pixel"), vals)
+        arrays[var_name] = vals
+    s.close()
+    return arrays, lat_arr, lon_arr
+
+
+def _interleave_horns(a: tuple, b: tuple) -> tuple:
+    """Interleave two co-temporal AMSR2 89 GHz horn sub-swaths (89A=S5,
+    89B=S6) column-by-column into one denser (scan, 2·pixel) grid.
+
+    The two feedhorns sample the same scans offset by ~half a footprint,
+    so interleaving their columns (A,B,A,B,…) roughly doubles along-track
+    sampling. Nadir stays near the center column, so the orbital-arc
+    splitter (which walks the center pixel) keeps working unchanged, and
+    the regridder — which ravels everything to a point cloud — just sees
+    twice the samples. Each arg is (channel_arrays, lat, lon); returns a
+    merged triple. Crops to the common (scan, pixel) extent so a horn
+    shape mismatch degrades gracefully rather than raising."""
+    a_arrays, a_lat, a_lon = a
+    b_arrays, b_lat, b_lon = b
+    ns = min(a_lat.shape[0], b_lat.shape[0])
+    npix = min(a_lat.shape[1], b_lat.shape[1])
+
+    def il(x: np.ndarray, y: np.ndarray) -> np.ndarray:
+        x, y = x[:ns, :npix], y[:ns, :npix]
+        out = np.empty((ns, 2 * npix), dtype=x.dtype)
+        out[:, 0::2] = x
+        out[:, 1::2] = y
+        return out
+
+    merged = {name: il(arr, b_arrays[name])
+              for name, arr in a_arrays.items() if name in b_arrays}
+    return merged, il(a_lat, b_lat), il(a_lon, b_lon)
+
+
+def read_pps_group(path: str, sensor: str, group_name: str,
+                   channels: dict) -> tuple:
+    """Load a single HDF5 group from a PPS granule with all the
+    specified channels in one shot. `channels` is a mapping from
+    var_name (TC-PRIMED-style "TB_36.64V") to the channel index k
+    inside the group's Tc[scan, pixel, chan] array.
+
+    Used by the group-grouped process_one flow: when a sensor's
+    multiple products live in the same HDF5 group (e.g., SSMI/S has
+    37-color + 37V + 37H all sourced from S2), the file is opened
+    and the channels extracted once, then shared across products via
+    the regrid cache. Returns (ds, ds, meta) — both ds_bt and ds_geo
+    are the same Dataset since PPS L1C colocates lat/lon and Tc.
+
+    If the sensor declares a `merge_groups` entry for this group (AMSR2
+    folds its 89B-Scan horn S6 into 89A S5), the secondary group is read
+    and interleaved in so the regridder sees full-density sampling."""
+    import xarray as xr
+
+    fname = Path(path).name
+    meta = _pps_granule_meta(sensor, fname)
+
+    arrays, lat_arr, lon_arr = _read_pps_group_arrays(path, group_name, channels)
+
+    secondary = (_PPS_SENSORS.get(sensor) or {}).get(
+        "merge_groups", {}).get(group_name)
+    if secondary is not None:
+        try:
+            b = _read_pps_group_arrays(path, secondary, channels)
+            arrays, lat_arr, lon_arr = _interleave_horns(
+                (arrays, lat_arr, lon_arr), b)
+        except Exception as exc:
+            logger.warning(
+                "%s horn merge %s+%s failed (%s); rendering %s only",
+                sensor, group_name, secondary, exc, group_name)
+
+    data_vars = {name: (("scan", "pixel"), vals)
+                 for name, vals in arrays.items()}
     data_vars["latitude"]  = (("scan", "pixel"), lat_arr)
     data_vars["longitude"] = (("scan", "pixel"), lon_arr)
     ds = xr.Dataset(data_vars=data_vars)
-    s.close()
     return ds, ds, meta
 
 
