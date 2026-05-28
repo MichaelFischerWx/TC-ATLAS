@@ -1943,24 +1943,40 @@ def _fill_speckle_holes(arr: np.ndarray, max_hole_pixels: int = 6) -> np.ndarray
     the overlay (the IR/ocean background shows through `set_bad(alpha=0)`).
 
     Connected NaN components ≤ `max_hole_pixels` get filled with the
-    median of their immediate (4-connected dilated) neighbours. Larger
-    NaN regions — genuine off-swath edges, QC-flagged sectors — are
-    left untouched so they correctly disappear into the underlying
-    layer rather than being smeared across.
+    nearest valid pixel value. Larger NaN regions — genuine off-swath
+    edges, QC-flagged sectors — are left untouched so they correctly
+    disappear into the underlying layer rather than being smeared across.
+
+    Vectorized: component sizes come from a single `bincount` and the
+    fill comes from one `distance_transform_edt`, so the cost is
+    O(grid_cells) regardless of how many holes there are. The earlier
+    per-component dilation loop was O(n_holes × grid_cells) — it hung the
+    NRT ingest for >600s once the 2026-05-26 cap bump pushed dense SSMIS
+    grids to ~2.25M cells with tens of thousands of speckle holes. For
+    ≤6 px holes nearest-valid is visually identical to the prior
+    neighbour-median fill.
     """
     mask = np.isnan(arr)
-    if not mask.any():
+    if not mask.any() or mask.all():
         return arr
-    from scipy.ndimage import label, binary_dilation
+    from scipy.ndimage import label, distance_transform_edt
     labeled, n = label(mask)
+    if n == 0:
+        return arr
+    # Component sizes (label 0 is the non-NaN background — exclude it).
+    sizes = np.bincount(labeled.ravel())
+    small = sizes <= max_hole_pixels
+    small[0] = False
+    fill_mask = small[labeled]
+    if not fill_mask.any():
+        return arr
+    # For every cell, index of the nearest valid (non-NaN) cell; apply
+    # only to the small-hole cells so large NaN regions stay NaN.
+    # return_distances=False skips the unused distance array.
+    iy, ix = distance_transform_edt(
+        mask, return_indices=True, return_distances=False)
     out = arr.copy()
-    for i in range(1, n + 1):
-        region = (labeled == i)
-        if region.sum() > max_hole_pixels:
-            continue
-        ring = binary_dilation(region) & ~mask
-        if ring.any():
-            out[region] = np.nanmedian(arr[ring])
+    out[fill_mask] = arr[iy[fill_mask], ix[fill_mask]]
     return out
 
 
