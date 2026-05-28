@@ -6142,9 +6142,24 @@
             // If nothing came back (all nighttime for Vis, or upstream gap
             // for WV), tell the user instead of leaving them on a blank pane.
             if (validIdx.length === 0) {
+                // Vis Band 2 with 0 valid frames → auto-fallback to SWIR
+                // (Band 7). Covers two real cases: (a) most of the loop
+                // window is dark even though "now" is daylight at the
+                // storm, and (b) all Himawari Vis L1b cold fetches timed
+                // out so the bundle came back empty. SWIR is 24/7 and
+                // gives the user a usable visible-like view either way.
+                if (isVis && band === 2) {
+                    console.warn('[RT Monitor] Vis (Band 2) returned 0 valid frames; falling back to SWIR (Band 7)');
+                    // Tear down state so _loadBandFramesBundle doesn't
+                    // short-circuit on the "already loading" guard, and
+                    // we don't leak the (empty) vis-2 blob set.
+                    cleanupVisFrameLayers();
+                    _loadBandFramesBundle(7, 'vis');
+                    return;
+                }
                 var satLbl = document.getElementById('ir-satellite-label');
                 var msg = isVis
-                    ? 'No daytime frames available — Visible is daylight-only. Try Water Vapor or IR.'
+                    ? 'No usable visible/SWIR frames available right now — try Water Vapor or IR.'
                     : 'No Water Vapor frames available right now — try IR or GeoColor.';
                 if (satLbl) satLbl.textContent = msg;
                 console.warn('[RT Monitor] Band ' + band + ' bundle had 0 valid frames');
@@ -10325,37 +10340,43 @@
         }
         var meanArr = taus.map(function (t) { return meanByTau[t]; });
 
-        // SS reference bands — cool monochrome ramp (light blue → deep
-        // violet) so the background gives an "intensity increases upward"
-        // cue without competing with the orange percentile ribbons. The
-        // old SS rainbow had yellow (C1) and orange (C2) sitting right
-        // where the data peaks, which made the ribbons disappear into
-        // the background. The single-hue cool ramp leaves the warm
-        // ribbon palette as the only warm thing on the plot.
-        function bandShape(y0, y1, color) {
-            return {
-                type: 'rect', xref: 'paper', yref: 'y',
-                x0: 0, x1: 1, y0: y0, y1: y1,
-                fillcolor: color, line: { width: 0 }, layer: 'below',
-            };
-        }
-        // Same hue family; alpha grows with category so darker = stronger.
-        // Light theme uses the rgba(99,102,241,…) indigo ramp; dark theme
-        // gets a touch more alpha since the navy surface eats some
-        // contrast.
-        var coolAlphas = isDark
-            ? [0.06, 0.10, 0.14, 0.18, 0.22, 0.28, 0.34]
-            : [0.04, 0.07, 0.10, 0.13, 0.17, 0.22, 0.27];
-        function ind(a) { return 'rgba(99,102,241,' + a + ')'; }
-        var shapes = [
-            bandShape(0,   34,  ind(coolAlphas[0])),  // TD
-            bandShape(34,  64,  ind(coolAlphas[1])),  // TS
-            bandShape(64,  83,  ind(coolAlphas[2])),  // C1
-            bandShape(83,  96,  ind(coolAlphas[3])),  // C2
-            bandShape(96,  113, ind(coolAlphas[4])),  // C3
-            bandShape(113, 137, ind(coolAlphas[5])),  // C4
-            bandShape(137, 200, ind(coolAlphas[6])),  // C5
+        // SS reference: dashed horizontal lines at category thresholds
+        // (TS=34, C1=64, C2=83, C3=96, C4=113, C5=137 kt). Lines instead
+        // of filled bands keep the plot background clean — the previous
+        // stacked indigo ramp accumulated to ~α 0.27 on top and read as
+        // a blue blob covering half the plot. Tick labels on the right
+        // edge name each band so the user can map ribbon height to
+        // category at a glance.
+        var ssThresholds = [
+            { y: 34,  label: 'TS' },
+            { y: 64,  label: 'C1' },
+            { y: 83,  label: 'C2' },
+            { y: 96,  label: 'C3' },
+            { y: 113, label: 'C4' },
+            { y: 137, label: 'C5' },
         ];
+        var gridStroke = isDark ? 'rgba(148,163,184,0.18)'
+                                 : 'rgba(100,116,139,0.22)';
+        var gridLabelColor = isDark ? 'rgba(203,213,225,0.75)'
+                                     : 'rgba(71,85,105,0.85)';
+        var shapes = [];
+        var ssAnnotations = [];
+        for (var sti = 0; sti < ssThresholds.length; sti++) {
+            var st = ssThresholds[sti];
+            shapes.push({
+                type: 'line', xref: 'paper', yref: 'y',
+                x0: 0, x1: 1, y0: st.y, y1: st.y,
+                line: { color: gridStroke, width: 1, dash: 'dot' },
+                layer: 'below',
+            });
+            ssAnnotations.push({
+                x: 1, y: st.y, xref: 'paper', yref: 'y',
+                xanchor: 'left', yanchor: 'middle', xshift: 3,
+                text: st.label, showarrow: false,
+                font: { size: 8.5, color: gridLabelColor,
+                        family: 'DM Sans, sans-serif' },
+            });
+        }
 
         // Nested percentile ribbons — outermost min/max (lightest),
         // P10/P90, then P25/P75 (darkest fill). Reads as a fan-chart:
@@ -10412,11 +10433,16 @@
             x: xVals, y: meanArr,
             line: { color: '#f97316', width: 2.5 },
             marker: {
-                size: 9,
+                size: 7,
                 color: meanArr,
                 colorscale: _GENESIS_SS_SCALE,
                 cmin: 0, cmax: 200,
-                line: { color: isDark ? '#0f172a' : '#1f2937', width: 1 },
+                // Subtle hairline outline; the prior 1px slate outline
+                // dominated the markers and made them read as "blobby"
+                // chips of color rather than data points.
+                line: { color: isDark ? 'rgba(255,255,255,0.45)'
+                                       : 'rgba(15,22,35,0.30)',
+                        width: 0.5 },
                 showscale: false,
             },
             name: 'ensemble mean',
@@ -10442,7 +10468,9 @@
             // Extra bottom room for the rotated tick labels + the
             // "Lead time" title (was 42 px and crowded against the
             // ticks). r:96 leaves space for the inset legend.
-            margin: { l: 55, r: 96, t: 26, b: 64 },
+            // r:126 — leaves room for the SS-threshold labels (TS/C1…C5,
+            // ~22 px) AND the inset legend (~100 px) so neither clips.
+            margin: { l: 55, r: 126, t: 26, b: 64 },
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: 'rgba(0,0,0,0)',
             xaxis: { title: { text: 'Lead time', font: { size: 11 },
@@ -10460,13 +10488,13 @@
                      gridcolor: isDark ? 'rgba(255,255,255,0.06)'
                                        : 'rgba(15,22,35,0.06)' },
             shapes: shapes,
-            annotations: stats.genesisMedianTau != null ? [{
+            annotations: (stats.genesisMedianTau != null ? [{
                 x: '+' + stats.genesisMedianTau + 'h',
                 y: maxY * 0.97, xref: 'x', yref: 'y',
                 text: 'median genesis', showarrow: false,
                 font: { size: 9, color: '#f97316' },
                 xanchor: 'left', xshift: 4,
-            }] : [],
+            }] : []).concat(ssAnnotations),
             showlegend: true,
             legend: {
                 x: 1.005, y: 1, xanchor: 'left', yanchor: 'top',
