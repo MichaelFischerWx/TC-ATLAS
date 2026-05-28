@@ -258,6 +258,14 @@ EARTH_RADIUS_KM = 6371.0
 WGS84_A_KM = 6378.137           # semi-major axis (equatorial)
 WGS84_F = 1.0 / 298.257223563   # flattening
 
+# Nominal TC "core" radius used to express overpass coverage as a
+# percentage. PMW interpretation (eyewall, inner rainbands, convective
+# asymmetry) lives in roughly the inner 200 km; we report coverage of a
+# disk of this radius. It's a fixed proxy — we don't have reliable
+# real-time storm-size radii (R34/ROCI) for every system — and is echoed
+# in the payload meta so the frontend can word it honestly.
+NOMINAL_TC_CORE_RADIUS_KM = 200.0
+
 
 # ---------------------------------------------------------------------------
 # GCS helpers
@@ -2329,6 +2337,40 @@ def _propagate_subpoints(line1: str, line2: str,
     return out
 
 
+def _swath_coverage_fraction(min_distance_km: float,
+                             swath_half_km: float,
+                             core_radius_km: float = NOMINAL_TC_CORE_RADIUS_KM,
+                             ) -> float:
+    """Fraction of a storm disk of radius ``core_radius_km`` that falls
+    inside the swath, given the nadir track's closest approach to the
+    storm center (``min_distance_km``) and the swath half-width.
+
+    Geometry: model the swath locally as a straight band of half-width W
+    about the nadir line, and the storm as a disk of radius R centered at
+    perpendicular distance d (= min_distance_km) from that line. The far
+    swath edge cuts the disk at signed height h = W − d above the storm
+    center; the near edge is too far to cut for MW swaths (W ≫ R). The
+    covered area is the disk minus the circular cap beyond the far edge:
+
+        cap(h) = R²·arccos(h/R) − h·√(R² − h²),   −R ≤ h ≤ R
+
+    Returns a value in [0, 1]. For a center-in-swath pass (d ≤ W ⇒ h ≥ 0)
+    this is ≥ 0.5 by construction (the near half of the disk is always in
+    the band)."""
+    R = core_radius_km
+    if R <= 0:
+        return 1.0 if min_distance_km <= swath_half_km else 0.0
+    h = swath_half_km - min_distance_km
+    if h >= R:
+        return 1.0
+    if h <= -R:
+        return 0.0
+    cap = (R * R * float(np.arccos(h / R))
+           - h * float(np.sqrt(max(0.0, R * R - h * h))))
+    frac = 1.0 - cap / (float(np.pi) * R * R)
+    return max(0.0, min(1.0, frac))
+
+
 def _find_passes_for_storm(subpoints: list[tuple[_dt, float, float]],
                            storm_lat: float, storm_lon: float,
                            swath_half_km: float
@@ -2421,15 +2463,25 @@ def predict_passes(storms: Optional[list[dict]] = None,
             sub = propagated.get(spec["catnr"])
             if not sub:
                 continue
+            swath_half = float(spec["swath_half_km"])
             hits = _find_passes_for_storm(
-                sub, float(lat), float(lon), spec["swath_half_km"])
+                sub, float(lat), float(lon), swath_half)
             latency = timedelta(minutes=spec["nrt_latency_min"])
             for scan_start, min_d in hits:
+                # Coverage geometry: min_d is the closest approach of the
+                # nadir track (swath centerline) to the storm center; the
+                # swath fully images the storm out to (W − min_d) km, and
+                # covers `coverage_frac` of the nominal core disk.
+                cov_radius = max(0.0, swath_half - min_d)
+                cov_frac = _swath_coverage_fraction(min_d, swath_half)
                 passes_out.append({
                     "sensor": spec["sensor"],
                     "platform": spec["platform"],
                     "predicted_scan_start": scan_start.isoformat(),
                     "min_distance_km": round(min_d, 1),
+                    "swath_half_km": round(swath_half, 1),
+                    "coverage_radius_km": round(cov_radius),
+                    "coverage_frac": round(cov_frac, 2),
                     "eta_on_tcatlas": (scan_start + latency).isoformat(),
                 })
         passes_out.sort(key=lambda p: p["predicted_scan_start"])
@@ -2466,6 +2518,7 @@ def predict_passes(storms: Optional[list[dict]] = None,
         "updated": t0.isoformat(),
         "horizon_hours": horizon_hours,
         "horizon_by_sensor": horizon_by_sensor,
+        "coverage_core_radius_km": NOMINAL_TC_CORE_RADIUS_KM,
         "storms": storm_out,
     }
 

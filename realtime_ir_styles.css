@@ -3628,7 +3628,8 @@ html:not([data-view="map"]) #ir-global-env-cbars {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 8px;
+    flex-wrap: wrap;
+    gap: 4px 8px;
     font-size: 0.72rem;
     line-height: 1.3;
     cursor: default;
@@ -3659,6 +3660,28 @@ html:not([data-view="map"]) #ir-global-env-cbars {
     font-size: 0.66rem;
 }
 .rt-mw-up-none { color: var(--text-dim, #64748b); }
+/* Coverage badge — drops to its own full-width line under the sensor/ETA
+   row. Dot color encodes how much of the inner core the swath captures. */
+.rt-mw-up-cov {
+    flex: 0 0 100%;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.62rem;
+    color: var(--text-dim, #94a3b8);
+}
+.rt-mw-up-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex: 0 0 auto;
+    background: #94a3b8;
+}
+.rt-mw-up-cov.full  { color: #6ee7b7; }
+.rt-mw-up-cov.full  .rt-mw-up-dot { background: #34d399; }
+.rt-mw-up-cov.most  .rt-mw-up-dot { background: #a3e635; }
+.rt-mw-up-cov.part  .rt-mw-up-dot { background: #fbbf24; }
+.rt-mw-up-cov.graze .rt-mw-up-dot { background: #94a3b8; }
 .rt-mw-up-note {
     margin-top: 6px;
     font-size: 0.62rem;

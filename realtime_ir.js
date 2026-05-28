@@ -15579,6 +15579,28 @@
         return 'in ' + (h / 24).toFixed(1) + ' d';
     }
 
+    // Turn a predicted pass's coverage geometry into a short badge.
+    // coverage_frac is the fraction of the nominal inner-core disk
+    // (radius coreR km) that falls inside the swath; coverage_radius_km
+    // is the largest concentric radius fully imaged. Both come from the
+    // predictor (passes_predicted.json). Returns null if absent (older
+    // payloads) so callers can no-op gracefully.
+    function _rtMwCoverage(p, coreR) {
+        if (!p || !isFinite(p.coverage_frac)) return null;
+        var frac = p.coverage_frac;
+        var pct = Math.round(frac * 100);
+        var rad = isFinite(p.coverage_radius_km)
+            ? Math.round(p.coverage_radius_km) : null;
+        var cls, label;
+        if (frac >= 0.98)      { cls = 'full';  label = 'Full core'; }
+        else if (frac >= 0.80) { cls = 'most';  label = 'Most of core'; }
+        else if (frac >= 0.60) { cls = 'part';  label = 'Partial'; }
+        else                   { cls = 'graze'; label = 'Grazing edge'; }
+        var title = label + ' — ~' + pct + '% of inner ' + coreR + ' km'
+            + (rad != null ? ', fully imaged out to ~' + rad + ' km radius' : '');
+        return { cls: cls, label: label, pct: pct, radiusKm: rad, title: title };
+    }
+
     function _rtMwDistKm(lat1, lon1, lat2, lon2) {
         var R = 6371, rad = Math.PI / 180;
         var dLat = (lat2 - lat1) * rad, dLon = (lon2 - lon1) * rad;
@@ -15651,25 +15673,34 @@
                 return;
             }
             box.style.display = '';
+            var coreR = Math.round(pred.coverage_core_radius_km || 200);
             var cells = [];
             for (var s = 0; s < _RT_MW_SENSOR_ORDER.length; s++) {
                 var sk = _RT_MW_SENSOR_ORDER[s].key;
                 var sLabel = _RT_MW_SENSOR_ORDER[s].label;
                 var swatch = _RT_MW_SENSOR_COLOR[sk] || '#cbd5e1';
-                var valHtml, cellTitle, farClass = '';
+                var valHtml, cellTitle, farClass = '', covHtml = '';
                 if (next[sk]) {
-                    var deltaMin = (Date.parse(next[sk].predicted_scan_start) - now) / 60000;
-                    var etaMin = (Date.parse(next[sk].eta_on_tcatlas) - now) / 60000;
+                    var p = next[sk];
+                    var deltaMin = (Date.parse(p.predicted_scan_start) - now) / 60000;
+                    var etaMin = (Date.parse(p.eta_on_tcatlas) - now) / 60000;
                     var isFar = deltaMin > 24 * 60;
                     farClass = isFar ? ' far' : '';
-                    var off = isFinite(next[sk].min_distance_km)
-                        ? Math.round(next[sk].min_distance_km) + ' km offset' : '';
+                    var off = isFinite(p.min_distance_km)
+                        ? Math.round(p.min_distance_km) + ' km from center' : '';
+                    var cov = _rtMwCoverage(p, coreR);
                     cellTitle = 'Scan ' + _rtMwFmtIn(deltaMin)
                         + ' · imagery on TC-ATLAS ' + _rtMwFmtIn(etaMin)
-                        + (off ? ' · ' + off : '')
+                        + (off ? ' · nadir ' + off : '')
+                        + (cov ? ' · ' + cov.title : '')
                         + (isFar ? ' · beyond 24h (sparse single-sat coverage)' : '');
                     valHtml = _esc(_rtMwFmtIn(deltaMin))
                         + '<span class="rt-mw-up-eta">&rarr; ' + _esc(_rtMwFmtIn(etaMin)) + '</span>';
+                    if (cov) {
+                        covHtml = '<span class="rt-mw-up-cov ' + cov.cls + '">'
+                            + '<span class="rt-mw-up-dot"></span>'
+                            + _esc(cov.label) + '</span>';
+                    }
                 } else {
                     var hz = horizonBySensor[sk] || 24;
                     cellTitle = 'No predicted pass within ' + Math.round(hz) + ' h';
@@ -15682,6 +15713,7 @@
                     +   _esc(sLabel)
                     + '</span>'
                     + '<span class="rt-mw-up-val">' + valHtml + '</span>'
+                    + covHtml
                     + '</div>'
                 );
             }
