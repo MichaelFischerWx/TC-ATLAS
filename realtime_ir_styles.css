@@ -572,6 +572,17 @@ html, body { margin: 0; padding: 0; }
     stroke-linecap: round;
     stroke-linejoin: round;
 }
+.ir-shear-arrow {
+    display: inline-block;
+    vertical-align: -2px;
+    margin: 0 1px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2.4;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    transform-origin: 50% 50%;
+}
 .ir-sat-viewer-btn {
     color: var(--um-orange);
     border-color: rgba(244, 115, 33, 0.45);

@@ -7728,6 +7728,8 @@ def _compute_gfs_helmholtz_shear(
     hour_str: str,
     mask_km: float = _DA_DEFAULT_MASK_KM,
     eval_km: float = _DA_DEFAULT_EVAL_KM,
+    lower_hpa: int = _DA_LAYER_LOWER_HPA,
+    upper_hpa: int = _DA_LAYER_UPPER_HPA,
 ) -> Optional[dict]:
     """Davis & Ahijevych (2008) environmental shear via Helmholtz decomposition.
 
@@ -7764,7 +7766,7 @@ def _compute_gfs_helmholtz_shear(
     slat = lat
     grib_bytes = _fetch_gfs_grib2(
         slat, slon360, date_str, hour_str,
-        levels=[_DA_LAYER_LOWER_HPA, _DA_LAYER_UPPER_HPA],
+        levels=[lower_hpa, upper_hpa],
     )
     if grib_bytes is None:
         return None
@@ -7798,10 +7800,10 @@ def _compute_gfs_helmholtz_shear(
             lat_name = "latitude" if "latitude" in u_var.dims else "lat"
             lon_name = "longitude" if "longitude" in u_var.dims else "lon"
 
-            u_lo = u_var.sel({lev_name: _DA_LAYER_LOWER_HPA}, method="nearest").values
-            v_lo = v_var.sel({lev_name: _DA_LAYER_LOWER_HPA}, method="nearest").values
-            u_up = u_var.sel({lev_name: _DA_LAYER_UPPER_HPA}, method="nearest").values
-            v_up = v_var.sel({lev_name: _DA_LAYER_UPPER_HPA}, method="nearest").values
+            u_lo = u_var.sel({lev_name: lower_hpa}, method="nearest").values
+            v_lo = v_var.sel({lev_name: lower_hpa}, method="nearest").values
+            u_up = u_var.sel({lev_name: upper_hpa}, method="nearest").values
+            v_up = v_var.sel({lev_name: upper_hpa}, method="nearest").values
             lat_v = np.asarray(u_var[lat_name].values)
             lon_v = np.asarray(u_var[lon_name].values)
             lon_v360 = np.where(lon_v < 0, lon_v + 360.0, lon_v)
@@ -7926,7 +7928,7 @@ def _compute_gfs_helmholtz_shear(
                 "disturbance_magnitude_kt": round(mag_dist * 1.94384, 1),
                 # Method parameters (echoed for audit).
                 "method": "helmholtz",
-                "layer_hpa": [_DA_LAYER_LOWER_HPA, _DA_LAYER_UPPER_HPA],
+                "layer_hpa": [lower_hpa, upper_hpa],
                 "mask_km": mask_km,
                 "eval_km": eval_km,
                 "domain_km": round(box_km, 0),
@@ -7947,6 +7949,238 @@ def _compute_gfs_helmholtz_shear(
             shutil.rmtree(tmp_dir, ignore_errors=True)
         except Exception:
             pass
+
+
+# Shear-profile axes: layer BOTTOM (x) and TOP (y) candidate pressures.
+# A cell (bottom, top) is the Helmholtz env shear for that layer; only
+# valid where top < bottom (top is the lower-pressure / higher-altitude
+# end). Drawn as a 2D heatmap on the storm page.
+_SHEAR_PROFILE_BOTTOMS = [900, 850, 700, 500, 400, 300]
+_SHEAR_PROFILE_TOPS    = [850, 700, 500, 400, 300, 250, 200, 150]
+
+
+def _load_gfs_uv_levels(slat: float, slon360: float, date_str: str,
+                        hour_str: str, levels: list):
+    """Fetch GFS u/v at the given pressure levels around the storm in ONE
+    GRIB request and return oriented (ascending-lat) 2D fields plus grid
+    metadata shared across layer pairs. Returns (fields, meta) where
+    fields = {level_hpa: (u2d, v2d)} and meta carries the haversine
+    distance grid (km), grid spacing dx/dy (m), storm-center indices
+    ic/jc, and box_km. None on failure.
+    """
+    import os as _os
+    import tempfile
+    import numpy as np
+    import xarray as xr
+
+    grib_bytes = _fetch_gfs_grib2(
+        slat, slon360, date_str, hour_str,
+        levels=list(levels), vars_=["UGRD", "VGRD"],
+    )
+    if grib_bytes is None:
+        return None
+
+    tmp_dir = tempfile.mkdtemp(prefix="tcatlas_helmprof_")
+    grib_path = _os.path.join(tmp_dir, "gfs_uv.grib2")
+    try:
+        with open(grib_path, "wb") as f:
+            f.write(grib_bytes)
+        try:
+            ds = xr.open_dataset(grib_path, engine="cfgrib",
+                                 backend_kwargs={"indexpath": ""})
+        except Exception as e:
+            logger.warning(f"[helmprof] cfgrib open failed: {e}")
+            return None
+        try:
+            u_var = ds["u"] if "u" in ds else (ds["U"] if "U" in ds else None)
+            v_var = ds["v"] if "v" in ds else (ds["V"] if "V" in ds else None)
+            if u_var is None or v_var is None:
+                logger.warning(f"[helmprof] u/v missing; vars: {list(ds.data_vars)}")
+                return None
+            lev_name = "isobaricInhPa" if "isobaricInhPa" in u_var.dims else "level"
+            lat_name = "latitude" if "latitude" in u_var.dims else "lat"
+            lon_name = "longitude" if "longitude" in u_var.dims else "lon"
+            lat_v = np.asarray(u_var[lat_name].values)
+            lon_v = np.asarray(u_var[lon_name].values)
+            lon_v360 = np.where(lon_v < 0, lon_v + 360.0, lon_v)
+            flip = len(lat_v) >= 2 and lat_v[1] < lat_v[0]
+            if flip:
+                lat_v = lat_v[::-1]
+
+            fields = {}
+            for L in levels:
+                try:
+                    u2 = u_var.sel({lev_name: L}, method="nearest").values
+                    v2 = v_var.sel({lev_name: L}, method="nearest").values
+                except Exception:
+                    continue
+                while u2.ndim > 2:
+                    u2 = u2[0]
+                while v2.ndim > 2:
+                    v2 = v2[0]
+                if flip:
+                    u2 = u2[::-1, :]
+                    v2 = v2[::-1, :]
+                fields[int(L)] = (np.asarray(u2, dtype=float),
+                                  np.asarray(v2, dtype=float))
+            if not fields:
+                return None
+
+            R_m = 6371.0e3
+            cos_lat0 = float(np.cos(np.radians(slat)))
+            dy = R_m * np.radians(abs(lat_v[1] - lat_v[0]))
+            dx = R_m * cos_lat0 * np.radians(abs(lon_v360[1] - lon_v360[0]))
+            Ny, Nx = next(iter(fields.values()))[0].shape
+            box_km = max(Nx * dx, Ny * dy) / 1000.0
+            lats_g, lons_g = np.meshgrid(lat_v, lon_v360, indexing="ij")
+            dist = _haversine_km(slat, slon360, lats_g, lons_g)
+            ic = int(np.argmin(np.abs(lat_v - slat)))
+            jc = int(np.argmin(np.abs(lon_v360 - slon360)))
+            return fields, {
+                "dx": dx, "dy": dy, "dist": dist,
+                "ic": ic, "jc": jc, "box_km": box_km,
+            }
+        finally:
+            try:
+                ds.close()
+            except Exception:
+                pass
+    except Exception as e:
+        logger.warning(f"[helmprof] load failed: {e}")
+        return None
+    finally:
+        try:
+            import shutil
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+
+def _helmholtz_env_shear_pair(u_lo, v_lo, u_up, v_up, dist, dx, dy,
+                              ic, jc, mask_km, eval_km):
+    """Davis & Ahijevych (2008) environmental shear for ONE layer pair from
+    already-loaded, ascending-lat 2D u/v fields (lower + upper level). This
+    is the same decomposition as _compute_gfs_helmholtz_shear's inner math,
+    factored out so the shear-profile endpoint can reuse a single GRIB fetch
+    across ~33 layer pairs. Returns {magnitude_kt, heading_deg, ...} or None.
+    """
+    import numpy as np
+    try:
+        from scipy.fft import dstn, idstn
+    except Exception:
+        return None
+
+    du = u_up - u_lo
+    dv = v_up - v_lo
+    div = np.zeros_like(du)
+    vort = np.zeros_like(du)
+    div[:, 1:-1] = (du[:, 2:] - du[:, :-2]) / (2 * dx)
+    div[1:-1, :] += (dv[2:, :] - dv[:-2, :]) / (2 * dy)
+    vort[:, 1:-1] = (dv[:, 2:] - dv[:, :-2]) / (2 * dx)
+    vort[1:-1, :] -= (du[2:, :] - du[:-2, :]) / (2 * dy)
+
+    mask_in = dist <= mask_km
+    n_in = int(mask_in.sum())
+    if n_in < 8:
+        return None
+    div_m = np.where(mask_in, div, 0.0)
+    vort_m = np.where(mask_in, vort, 0.0)
+
+    def _poisson(rhs, dx_, dy_):
+        ny, nx = rhs.shape
+        ip = np.arange(1, ny + 1)
+        jp = np.arange(1, nx + 1)
+        ly = 2 * (1 - np.cos(np.pi * ip / (ny + 1))) / (dy_ ** 2)
+        lx = 2 * (1 - np.cos(np.pi * jp / (nx + 1))) / (dx_ ** 2)
+        Lx, Ly = np.meshgrid(lx, ly)
+        eig = -(Lx + Ly)
+        rhs_t = dstn(rhs, type=1, norm="ortho")
+        phi_t = rhs_t / eig
+        return idstn(phi_t, type=1, norm="ortho")
+
+    psi = _poisson(vort_m, dx, dy)
+    chi = _poisson(div_m, dx, dy)
+
+    u_psi = np.zeros_like(psi); v_psi = np.zeros_like(psi)
+    u_chi = np.zeros_like(chi); v_chi = np.zeros_like(chi)
+    u_psi[1:-1, :] = -(psi[2:, :] - psi[:-2, :]) / (2 * dy)
+    v_psi[:, 1:-1] =  (psi[:, 2:] - psi[:, :-2]) / (2 * dx)
+    u_chi[:, 1:-1] =  (chi[:, 2:] - chi[:, :-2]) / (2 * dx)
+    v_chi[1:-1, :] =  (chi[2:, :] - chi[:-2, :]) / (2 * dy)
+    u_env = du - (u_psi + u_chi)
+    v_env = dv - (v_psi + v_chi)
+
+    eval_mask = dist <= eval_km
+    n_eval = int(eval_mask.sum())
+    if not n_eval:
+        return None
+    u_env_avg = float(np.nanmean(u_env[eval_mask]))
+    v_env_avg = float(np.nanmean(v_env[eval_mask]))
+    mag_ms = float(np.sqrt(u_env_avg ** 2 + v_env_avg ** 2))
+    hdg = float((np.degrees(np.arctan2(u_env_avg, v_env_avg)) + 360.0) % 360.0)
+    u_env_ctr = float(u_env[ic, jc])
+    v_env_ctr = float(v_env[ic, jc])
+    return {
+        "magnitude_ms": round(mag_ms, 2),
+        "magnitude_kt": round(mag_ms * 1.94384, 1),
+        "heading_deg": round(hdg, 1),
+        "magnitude_center_kt": round(
+            float(np.sqrt(u_env_ctr ** 2 + v_env_ctr ** 2)) * 1.94384, 1),
+        "n_grid_points_mask": n_in,
+        "n_grid_points_eval": n_eval,
+    }
+
+
+def _compute_gfs_shear_profile_helmholtz(lat: float, lon: float, date_str: str,
+                                         hour_str: str,
+                                         mask_km: float = _DA_DEFAULT_MASK_KM,
+                                         eval_km: float = _DA_DEFAULT_EVAL_KM
+                                         ) -> Optional[dict]:
+    """Helmholtz env-shear magnitude for a grid of (bottom, top) layer pairs.
+
+    One GFS fetch covers every needed level; the Helmholtz decomposition is
+    run per pair (top < bottom) and reduced to the 0–eval_km env-shear
+    magnitude. Returns axes + a 2D matrix (rows=tops, cols=bottoms) of kt,
+    with None in cells where the layer is invalid or the solve failed.
+    """
+    import numpy as np
+    slon360 = lon % 360.0
+    slat = lat
+    levels = sorted(set(_SHEAR_PROFILE_BOTTOMS) | set(_SHEAR_PROFILE_TOPS),
+                    reverse=True)
+    loaded = _load_gfs_uv_levels(slat, slon360, date_str, hour_str, levels)
+    if loaded is None:
+        return None
+    fields, meta = loaded
+    bottoms = [b for b in _SHEAR_PROFILE_BOTTOMS if b in fields]
+    tops = [t for t in _SHEAR_PROFILE_TOPS if t in fields]
+    if not bottoms or not tops:
+        return None
+
+    mag = [[None] * len(bottoms) for _ in tops]
+    hdg = [[None] * len(bottoms) for _ in tops]
+    for ti, t in enumerate(tops):
+        u_up, v_up = fields[t]
+        for bi, b in enumerate(bottoms):
+            if t >= b:        # top must be lower pressure than bottom
+                continue
+            u_lo, v_lo = fields[b]
+            res = _helmholtz_env_shear_pair(
+                u_lo, v_lo, u_up, v_up, meta["dist"], meta["dx"], meta["dy"],
+                meta["ic"], meta["jc"], mask_km, eval_km)
+            if res is not None:
+                mag[ti][bi] = res["magnitude_kt"]
+                hdg[ti][bi] = res["heading_deg"]
+    return {
+        "method": "helmholtz",
+        "bottoms_hpa": bottoms,
+        "tops_hpa": tops,
+        "magnitude_kt": mag,
+        "heading_deg": hdg,
+        "mask_km": mask_km,
+        "eval_km": eval_km,
+        "domain_km": round(meta["box_km"], 0),
+    }
 
 
 def _resolve_storm_position(atcf_id: str) -> Optional[tuple[float, float, str]]:
@@ -7976,6 +8210,8 @@ def get_storm_shear(
     method: str = "ships",
     mask_km: Optional[float] = None,
     eval_km: Optional[float] = None,
+    lower_hpa: Optional[int] = None,
+    upper_hpa: Optional[int] = None,
 ):
     """Return vortex-removed deep-layer shear at the storm's current
     best-track position from the latest GFS 0.25° analysis.
@@ -8004,12 +8240,23 @@ def get_storm_shear(
     if method == "helmholtz":
         m_km = float(mask_km) if mask_km is not None else _DA_DEFAULT_MASK_KM
         e_km = float(eval_km) if eval_km is not None else _DA_DEFAULT_EVAL_KM
+        lo_hpa = int(lower_hpa) if lower_hpa is not None else _DA_LAYER_LOWER_HPA
+        up_hpa = int(upper_hpa) if upper_hpa is not None else _DA_LAYER_UPPER_HPA
         if not (50.0 <= m_km <= 2000.0):
             raise HTTPException(status_code=400, detail="mask_km must be in [50, 2000].")
         if not (50.0 <= e_km <= 1500.0):
             raise HTTPException(status_code=400, detail="eval_km must be in [50, 1500].")
+        if lo_hpa not in _GFS_PROFILE_LEVELS or up_hpa not in _GFS_PROFILE_LEVELS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"lower_hpa/upper_hpa must be in {sorted(_GFS_PROFILE_LEVELS)}.")
+        if up_hpa >= lo_hpa:
+            raise HTTPException(
+                status_code=400,
+                detail="upper_hpa must be a lower pressure (higher level) than lower_hpa.")
     else:
         m_km = e_km = None  # not used for ships
+        lo_hpa = up_hpa = None
 
     pos = _resolve_storm_position(atcf_id)
     if pos is None:
@@ -8023,7 +8270,7 @@ def get_storm_shear(
     # results — caching them under one key would silently serve the wrong
     # answer to the second caller).
     if method == "helmholtz":
-        params_key = f"helmholtz:m{int(m_km)}:e{int(e_km)}"
+        params_key = f"helmholtz:L{lo_hpa}-{up_hpa}:m{int(m_km)}:e{int(e_km)}"
     else:
         params_key = "ships"
     cache_key = (atcf_id.upper(), cycle_iso, params_key)
@@ -8053,7 +8300,8 @@ def get_storm_shear(
     # Compute fresh.
     if method == "helmholtz":
         shear = _compute_gfs_helmholtz_shear(slat, slon, date_str, hour_str,
-                                             mask_km=m_km, eval_km=e_km)
+                                             mask_km=m_km, eval_km=e_km,
+                                             lower_hpa=lo_hpa, upper_hpa=up_hpa)
     else:
         shear = _compute_gfs_shear(slat, slon, date_str, hour_str)
 
@@ -8068,7 +8316,8 @@ def get_storm_shear(
             cache_key = (atcf_id.upper(), cycle_iso, params_key)
             if method == "helmholtz":
                 shear = _compute_gfs_helmholtz_shear(slat, slon, date_str, hour_str,
-                                                     mask_km=m_km, eval_km=e_km)
+                                                     mask_km=m_km, eval_km=e_km,
+                                                     lower_hpa=lo_hpa, upper_hpa=up_hpa)
             else:
                 shear = _compute_gfs_shear(slat, slon, date_str, hour_str)
         except Exception:
@@ -8107,6 +8356,92 @@ def get_storm_shear(
         content=payload,
         headers={"Cache-Control": "public, max-age=1800"},
     )
+
+
+@router.get("/storm/{atcf_id}/shear-profile")
+def get_storm_shear_profile(
+    atcf_id: str,
+    mask_km: Optional[float] = None,
+    eval_km: Optional[float] = None,
+):
+    """Helmholtz environmental-shear magnitude across a grid of layer
+    choices: x = layer bottom (900–300 hPa), y = layer top (850–150 hPa),
+    z = 0–`eval_km` env-shear magnitude (kt) with the vortex removed inside
+    `mask_km`. Lets a forecaster see which deep-layer slab the shear is
+    concentrated in. Same GFS analysis + caching as /shear; one fetch
+    services all ~33 layer pairs.
+    """
+    m_km = float(mask_km) if mask_km is not None else _DA_DEFAULT_MASK_KM
+    e_km = float(eval_km) if eval_km is not None else _DA_DEFAULT_EVAL_KM
+    if not (50.0 <= m_km <= 2000.0):
+        raise HTTPException(status_code=400, detail="mask_km must be in [50, 2000].")
+    if not (50.0 <= e_km <= 1500.0):
+        raise HTTPException(status_code=400, detail="eval_km must be in [50, 1500].")
+
+    pos = _resolve_storm_position(atcf_id)
+    if pos is None:
+        raise HTTPException(status_code=404, detail=f"No position found for {atcf_id}")
+    slat, slon, last_fix = pos
+
+    date_str, hour_str = _latest_available_gfs_cycle()
+    cycle_iso = f"{date_str}T{hour_str}"
+    params_key = f"profile:m{int(m_km)}:e{int(e_km)}"
+    cache_key = (atcf_id.upper(), cycle_iso, params_key)
+
+    with _shear_mem_lock:
+        hit = _shear_mem_cache.get(cache_key)
+        if hit and time.time() - hit["ts"] < _SHEAR_CACHE_TTL:
+            return JSONResponse(content=hit["data"],
+                                headers={"Cache-Control": "public, max-age=1800"})
+
+    gcs_hit = _gcs_get_shear(atcf_id, cycle_iso, params_key)
+    if gcs_hit is not None:
+        with _shear_mem_lock:
+            _shear_mem_cache[cache_key] = {"data": gcs_hit, "ts": time.time()}
+            while len(_shear_mem_cache) > _SHEAR_MEM_MAX:
+                _shear_mem_cache.pop(next(iter(_shear_mem_cache)))
+        return JSONResponse(content=gcs_hit,
+                            headers={"Cache-Control": "public, max-age=1800"})
+
+    prof = _compute_gfs_shear_profile_helmholtz(slat, slon, date_str, hour_str,
+                                                mask_km=m_km, eval_km=e_km)
+    if prof is None:
+        # Fall back one GFS cycle if NOMADS hasn't published yet.
+        try:
+            cyc_dt = _dt.strptime(date_str + hour_str, "%Y%m%d%H").replace(tzinfo=timezone.utc)
+            cyc_dt -= timedelta(hours=6)
+            date_str = cyc_dt.strftime("%Y%m%d")
+            hour_str = cyc_dt.strftime("%H")
+            cycle_iso = f"{date_str}T{hour_str}"
+            cache_key = (atcf_id.upper(), cycle_iso, params_key)
+            prof = _compute_gfs_shear_profile_helmholtz(slat, slon, date_str, hour_str,
+                                                        mask_km=m_km, eval_km=e_km)
+        except Exception:
+            prof = None
+
+    if prof is None:
+        raise HTTPException(status_code=503,
+                            detail="GFS analysis unavailable; try again shortly.")
+
+    payload = {
+        "atcf_id": atcf_id.upper(),
+        "lat": slat,
+        "lon": slon,
+        "last_fix_utc": last_fix,
+        "gfs_cycle_utc": f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}T{hour_str}:00:00Z",
+        "source": "GFS 0.25° analysis (NOMADS cgi-bin filter)",
+        **prof,
+    }
+    with _shear_mem_lock:
+        _shear_mem_cache[cache_key] = {"data": payload, "ts": time.time()}
+        while len(_shear_mem_cache) > _SHEAR_MEM_MAX:
+            _shear_mem_cache.pop(next(iter(_shear_mem_cache)))
+    threading.Thread(target=_gcs_put_shear,
+                     args=(atcf_id, cycle_iso, payload, params_key),
+                     daemon=True).start()
+
+    return JSONResponse(content=payload,
+                        headers={"Cache-Control": "public, max-age=1800"})
 
 
 # ─────────────────────────────────────────────────────────────────

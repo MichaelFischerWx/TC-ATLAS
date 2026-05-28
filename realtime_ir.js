@@ -4580,31 +4580,53 @@
     // Per-storm cache of the full /shear response (includes the new
     // env-profile fields). Keyed by ATCF ID; reset on detail-view open.
     var _rtEnvCache = {};
+    var _rtCoreShearCache = {};    // Helmholtz 0–400 km core shear per storm
+    var _rtShearProfileCache = {}; // /shear-profile (Helmholtz by-layer) per storm
+
+    /** Inline arrow SVG pointing the way the shear blows. heading_deg is
+     *  "toward" (0° = north = up); rotating an up-arrow clockwise by the
+     *  heading aims it correctly. */
+    function _shearArrowSvg(headingDeg) {
+        var rot = (typeof headingDeg === 'number' && isFinite(headingDeg)) ? headingDeg : 0;
+        return '<svg class="ir-shear-arrow" viewBox="0 0 24 24" width="12" height="12" ' +
+            'style="transform:rotate(' + rot.toFixed(0) + 'deg);" aria-hidden="true">' +
+            '<path d="M12 4 L12 20 M12 4 L7.5 9 M12 4 L16.5 9"/></svg>';
+    }
+
+    /** Compact "NN kt ↗ DIR" markup for a shear value object. */
+    function _shearValueHtml(j) {
+        if (!j || j.magnitude_kt == null) return '&mdash;';
+        return j.magnitude_kt.toFixed(0) + ' kt ' + _shearArrowSvg(j.heading_deg) +
+            ' <span style="opacity:.7;">' + _compassDir(j.heading_deg) + '</span>';
+    }
 
     /**
-     * Fetch GFS-derived shear + env profile for the active storm.
-     * Paints the Storm Info "Shear" row immediately; profile data is
-     * cached for the Env Profile reveal (Skew-T + shear-vs-pressure).
-     * Quiet on failure — the row falls back to "—".
+     * Fetch GFS-derived shear for the active storm — TWO views:
+     *   • Env shear  : SHIPS 200–800 km annulus, 850–200 hPa (the wider
+     *     environment the storm sits in).
+     *   • Core shear : Helmholtz vortex-removed 0–400 km, 850–200 hPa (the
+     *     shear actually felt at the storm core).
+     * Paints both Storm Info rows with a direction arrow; the env response
+     * also carries the annular profile cached for the Env Profile reveal.
+     * Quiet on failure — rows fall back to "—".
      */
     function loadStormShear(atcfId) {
         var el = document.getElementById('ir-info-shear');
+        var elCore = document.getElementById('ir-info-shear-core');
         if (!el) return;
+
+        // Env (SHIPS annulus) — also drives the Skew-T / profile reveal.
         fetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) + '/shear')
             .then(function (r) { return r.ok ? r.json() : null; })
             .then(function (j) {
                 if (!j || currentStormId !== atcfId) return;
                 _rtEnvCache[atcfId] = j;
-                var dir = _compassDir(j.heading_deg);
-                el.textContent = j.magnitude_kt.toFixed(0) + ' kt @ ' +
-                    Math.round(j.heading_deg) + '° (' + dir + ')';
+                el.innerHTML = _shearValueHtml(j);
                 el.title = 'GFS 0.25° analysis ' + (j.gfs_cycle_utc || '') + '\n' +
-                    '850–200 hPa shear, 200–800 km annulus\n' +
+                    '850–200 hPa shear, 200–800 km annulus (environmental)\n' +
+                    'heading ' + Math.round(j.heading_deg) + '° (toward)\n' +
                     'u200/v200: ' + j.u200_ms + '/' + j.v200_ms + ' m/s\n' +
-                    'u850/v850: ' + j.u850_ms + '/' + j.v850_ms + ' m/s\n' +
-                    'n grid points: ' + j.n_grid_points;
-                // If the user already had Env Profile open from a prior
-                // storm, re-render with the new data so it stays in sync.
+                    'u850/v850: ' + j.u850_ms + '/' + j.v850_ms + ' m/s';
                 var panel = document.getElementById('rt-env-panel');
                 if (panel && panel.style.display !== 'none') {
                     _rtRenderEnvProfile(j);
@@ -4612,10 +4634,98 @@
             })
             .catch(function () {
                 if (currentStormId === atcfId) {
-                    el.textContent = '—';
+                    el.innerHTML = '&mdash;';
                     el.title = 'Shear unavailable';
                 }
             });
+
+        // Core (Helmholtz, vortex-removed, 0–400 km, same 850–200 layer).
+        if (elCore) {
+            elCore.textContent = '…';
+            fetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) +
+                  '/shear?method=helmholtz&lower_hpa=850&upper_hpa=200&eval_km=400&mask_km=500')
+                .then(function (r) { return r.ok ? r.json() : null; })
+                .then(function (j) {
+                    if (!j || currentStormId !== atcfId) return;
+                    _rtCoreShearCache[atcfId] = j;
+                    elCore.innerHTML = _shearValueHtml(j);
+                    elCore.title = 'GFS 0.25° analysis ' + (j.gfs_cycle_utc || '') + '\n' +
+                        '850–200 hPa shear, Helmholtz vortex-removed\n' +
+                        '0–400 km storm-core average (disturbance mask 500 km)\n' +
+                        'heading ' + Math.round(j.heading_deg) + '° (toward)\n' +
+                        (j.magnitude_center_kt != null
+                            ? 'center cell: ' + j.magnitude_center_kt + ' kt' : '');
+                })
+                .catch(function () {
+                    if (currentStormId === atcfId) {
+                        elCore.innerHTML = '&mdash;';
+                        elCore.title = 'Core shear unavailable';
+                    }
+                });
+        }
+    }
+
+    /** Lazy-load + render the Helmholtz shear-by-layer heatmap when the
+     *  Env Profile panel opens (heavier backend compute than the row
+     *  values, so we defer it). Cached per storm. */
+    function _rtLoadShearProfile(atcfId) {
+        var el = document.getElementById('rt-env-shear-grid');
+        if (!el || !atcfId) return;
+        if (_rtShearProfileCache[atcfId]) {
+            _rtRenderShearProfile(_rtShearProfileCache[atcfId]);
+            return;
+        }
+        fetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) + '/shear-profile')
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (j) {
+                if (!j || currentStormId !== atcfId) return;
+                _rtShearProfileCache[atcfId] = j;
+                _rtRenderShearProfile(j);
+            })
+            .catch(function () { /* leave the container empty on failure */ });
+    }
+
+    /** Plotly heatmap: x = layer bottom (hPa), y = layer top (hPa),
+     *  color = Helmholtz 0–400 km env-shear magnitude (kt). */
+    function _rtRenderShearProfile(prof) {
+        var el = document.getElementById('rt-env-shear-grid');
+        if (!el || !prof || !prof.magnitude_kt || typeof Plotly === 'undefined') return;
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var axisCol = isDark ? '#8b9ec2' : '#374151';
+        var gridCol = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(15,22,35,0.08)';
+        Plotly.newPlot(el, [{
+            type: 'heatmap',
+            z: prof.magnitude_kt,
+            x: prof.bottoms_hpa.map(String),
+            y: prof.tops_hpa.map(String),
+            colorscale: 'YlOrRd',
+            hoverongaps: false,
+            colorbar: {
+                title: { text: 'kt', font: { size: 9, color: axisCol } },
+                tickfont: { size: 8, color: axisCol }, thickness: 10,
+            },
+            hovertemplate: 'bottom %{x} hPa → top %{y} hPa<br>' +
+                           '%{z:.1f} kt<extra></extra>',
+        }], {
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: 'rgba(0,0,0,0)',
+            margin: { l: 52, r: 8, t: 24, b: 44 },
+            font: { family: 'DM Sans, sans-serif', color: axisCol, size: 9 },
+            title: {
+                text: 'Deep-layer shear by layer (0–400 km, Helmholtz)',
+                font: { size: 10, color: axisCol }, x: 0.5, y: 0.99,
+            },
+            xaxis: {
+                title: { text: 'Layer bottom (hPa)', font: { size: 9, color: axisCol } },
+                type: 'category', color: axisCol, tickfont: { size: 8 },
+                gridcolor: gridCol,
+            },
+            yaxis: {
+                title: { text: 'Layer top (hPa)', font: { size: 9, color: axisCol } },
+                type: 'category', color: axisCol, tickfont: { size: 8 },
+                gridcolor: gridCol,
+            },
+        }, { responsive: true, displayModeBar: false });
     }
 
     /**
@@ -4715,6 +4825,8 @@
         } else if (status) {
             status.textContent = 'Loading…';
         }
+        // Lazy-load the Helmholtz shear-by-layer heatmap (heavier compute).
+        _rtLoadShearProfile(currentStormId);
     };
 
     /**
