@@ -575,6 +575,33 @@ def _bounds_contains(bounds, lat: float, lon: float) -> bool:
     return lon >= west or lon <= east
 
 
+def nrt_passes_for_storm(lat: float, lon: float, hours: float = 24.0) -> list:
+    """Return NRT MW pass entries (newest-first) whose orbit bounds cover
+    the storm position within the last `hours`. Reusable by both the
+    /nrt-storm-passes endpoint and the IR prewarm (which pre-renders the
+    IR frame matched to each pass so the IR↔MW compare opens instantly).
+    Returns [] when the manifest is unavailable."""
+    manifest = _load_nrt_manifest_cached()
+    if manifest is None:
+        return []
+    cutoff_ms = int((_dt.now(timezone.utc).timestamp() - hours * 3600) * 1000)
+    out_entries = []
+    for e in manifest.get("entries", []):
+        try:
+            t_ms = int(_dt.fromisoformat(
+                e["scan_start"].replace("Z", "+00:00")
+            ).timestamp() * 1000)
+        except Exception:
+            continue
+        if t_ms < cutoff_ms:
+            continue
+        if not _bounds_contains(e.get("bounds"), lat, lon):
+            continue
+        out_entries.append(e)
+    out_entries.sort(key=lambda x: x["scan_start"], reverse=True)
+    return out_entries
+
+
 @router.get("/nrt-storm-passes")
 def get_nrt_storm_passes(
     lat: float = Query(..., description="Storm latitude (degrees north)"),
@@ -602,23 +629,7 @@ def get_nrt_storm_passes(
             headers={"Cache-Control": "public, max-age=60"},
         )
 
-    cutoff_ms = int((_dt.now(timezone.utc).timestamp()
-                     - hours * 3600) * 1000)
-    out_entries = []
-    for e in manifest.get("entries", []):
-        try:
-            t_ms = int(_dt.fromisoformat(
-                e["scan_start"].replace("Z", "+00:00")
-            ).timestamp() * 1000)
-        except Exception:
-            continue
-        if t_ms < cutoff_ms:
-            continue
-        if not _bounds_contains(e.get("bounds"), lat, lon):
-            continue
-        out_entries.append(e)
-
-    out_entries.sort(key=lambda x: x["scan_start"], reverse=True)
+    out_entries = nrt_passes_for_storm(lat, lon, hours)
     return JSONResponse(
         content={
             "entries": out_entries,

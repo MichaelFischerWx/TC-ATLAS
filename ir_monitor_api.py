@@ -1897,6 +1897,47 @@ _ANIM_MAX_SUBSTITUTION_MIN = 7.0
 # guard existed. Forcing a re-fetch heals them as soon as S3 has the scan.
 _SELF_HEAL_FRAMES = 4
 _prefetch_lock = threading.Lock()
+# Cap on how many MW-pass-matched IR frames to pre-save per storm per cycle
+# (bounds extra render work; real pass counts are well under this).
+_MW_COMPARE_PRESAVE_MAX = 16
+
+
+def _mw_compare_ir_slots(center_lat: float, center_lon: float, frame_times) -> list:
+    """10-min IR slots (datetimes) matched to each NRT MW pass in the last
+    24h that are NOT already covered by the prewarm `frame_times` window.
+    Pre-rendering these makes the IR↔MW compare a cache hit instead of a
+    slow on-demand render. Rounding to the nearest 10-min slot matches
+    build_frame_times' grid and the compare's closest-frame selection.
+    Returns [] (no-op) if the MW manifest is unavailable."""
+    try:
+        from microwave_api import nrt_passes_for_storm  # lazy: avoid import cycle
+        passes = nrt_passes_for_storm(center_lat, center_lon, 24.0)
+    except Exception:
+        return []
+    if not passes:
+        return []
+    have = {ft.strftime("%Y%m%d%H%M") for ft in frame_times}
+    slots = {}
+    for p in passes:
+        ts = p.get("scan_start")
+        if not ts:
+            continue
+        try:
+            pdt = _dt.fromisoformat(ts.replace("Z", "+00:00"))
+        except Exception:
+            continue
+        # Nearest 10-min slot, ties → earlier slot, matching the compare's
+        # closest-frame pick (its meta is oldest-first with a strict-< test,
+        # so an exactly-between pass keeps the earlier frame). round-half-
+        # down via ceil(x-0.5) rather than banker's round() for determinism.
+        slot_epoch = math.ceil(pdt.timestamp() / 600.0 - 0.5) * 600
+        slot = _dt.fromtimestamp(slot_epoch, tz=timezone.utc)
+        key = slot.strftime("%Y%m%d%H%M")
+        if key in have:
+            continue  # already prewarmed within the 6h window
+        slots[key] = slot
+    return sorted(slots.values(), reverse=True)[:_MW_COMPARE_PRESAVE_MAX]
+
 
 def _prefetch_ir_frames(storms: list):
     """
@@ -2142,6 +2183,17 @@ def _prefetch_ir_frames(storms: list):
                     print(f"[IR Pre-fetch] {atcf_id}: self-healing {len(heal_times)} "
                           f"flagged frame(s): {sorted(heal_times)}")
 
+                # IR frames matched to each NRT MW pass in the last 24h that
+                # fall OUTSIDE the 6h prewarm window. Pre-rendering them makes
+                # the IR↔MW compare a cache hit (instant) instead of a slow
+                # on-demand render — and re-rendering each cycle keeps them
+                # aligned through best-track updates (which re-key historical
+                # frames). Cheap: only the older passes, ~handful per storm.
+                compare_slots = _mw_compare_ir_slots(center_lat, center_lon, frame_times)
+                if compare_slots:
+                    print(f"[IR Pre-fetch] {atcf_id}: pre-saving {len(compare_slots)} "
+                          f"IR frame(s) at MW pass times for the compare modal")
+
                 with ThreadPoolExecutor(max_workers=max_workers) as pool:
                     futures = []
                     for i, target_dt in enumerate(frame_times):
@@ -2155,6 +2207,11 @@ def _prefetch_ir_frames(storms: list):
                             futures.append(pool.submit(_fetch_and_cache_band, target_dt, dt_str, primary_band, force))
                             for eb in extra_bands:
                                 futures.append(pool.submit(_fetch_and_cache_band, target_dt, dt_str, eb, force))
+                    # IR-only pre-save for the MW compare (no band/raw needed —
+                    # the compare panel uses /ir-frame.jpg).
+                    for slot in compare_slots:
+                        futures.append(pool.submit(
+                            _fetch_and_cache_ir, slot, slot.strftime("%Y%m%d%H%M"), False))
 
                     # Wait for all to complete
                     for fut in as_completed(futures):
