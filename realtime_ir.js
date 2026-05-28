@@ -14233,7 +14233,8 @@
         document.body.appendChild(tmpDiv);
         Plotly.newPlot(tmpDiv, data, layout, { displayModeBar: false }).then(function () {
             return Plotly.toImage(tmpDiv, {
-                format: 'png', width: layout.width, height: layout.height, scale: 2
+                // scale 3 → 2460×1410 px (~8" at 300 DPI) for print-grade output
+                format: 'png', width: layout.width, height: layout.height, scale: 3
             });
         }).then(function (dataUrl) {
             var a = document.createElement('a');
@@ -15535,10 +15536,15 @@
         if (chip && chip.textContent) prodLabel = chip.textContent.trim();
 
         var pw = irCanvas.width, ph = irCanvas.height;
-        var gap = 6;
-        var headerH = 64;
-        var labelH = 24;
-        var footerH = 22;
+        // Layout scales with the panel size (600 px = original design
+        // baseline), so the header/labels/watermark stay proportional now
+        // that the source canvases render at higher resolution.
+        var s = pw / 600;
+        var gap = Math.round(6 * s);
+        var headerH = Math.round(64 * s);
+        var labelH = Math.round(24 * s);
+        var footerH = Math.round(22 * s);
+        var pad = Math.round(12 * s);
         var totalW = pw * 2 + gap;
         var totalH = headerH + labelH + ph + footerH;
 
@@ -15552,28 +15558,28 @@
 
         // Header — title and metadata.
         ctx.fillStyle = '#f1f5f9';
-        ctx.font = '700 18px sans-serif';
+        ctx.font = '700 ' + Math.round(18 * s) + 'px sans-serif';
         ctx.textBaseline = 'alphabetic';
         ctx.textAlign = 'left';
-        ctx.fillText(name + ' — IR ↔ Microwave', 12, 24);
+        ctx.fillText(name + ' — IR ↔ Microwave', pad, Math.round(24 * s));
 
         ctx.fillStyle = '#94a3b8';
-        ctx.font = '13px sans-serif';
-        ctx.fillText(sensorLabel + ' · ' + prodLabel + ' · ' + mwUtc, 12, 46);
+        ctx.font = Math.round(13 * s) + 'px sans-serif';
+        ctx.fillText(sensorLabel + ' · ' + prodLabel + ' · ' + mwUtc, pad, Math.round(46 * s));
 
         // Per-panel labels with timestamps.
-        var labelY = headerH + 16;
+        var labelY = headerH + Math.round(16 * s);
         ctx.fillStyle = '#e2e8f0';
-        ctx.font = '700 13px sans-serif';
+        ctx.font = '700 ' + Math.round(13 * s) + 'px sans-serif';
         ctx.textAlign = 'left';
-        ctx.fillText('IR', 12, labelY);
-        ctx.fillText('Microwave', pw + gap + 12, labelY);
+        ctx.fillText('IR', pad, labelY);
+        ctx.fillText('Microwave', pw + gap + pad, labelY);
 
         ctx.fillStyle = '#94a3b8';
-        ctx.font = '11px ui-monospace, "SF Mono", Menlo, monospace';
+        ctx.font = Math.round(11 * s) + 'px ui-monospace, "SF Mono", Menlo, monospace';
         ctx.textAlign = 'right';
-        if (irTime) ctx.fillText(irTime, pw - 12, labelY);
-        if (mwTime) ctx.fillText(mwTime, pw * 2 + gap - 12, labelY);
+        if (irTime) ctx.fillText(irTime, pw - pad, labelY);
+        if (mwTime) ctx.fillText(mwTime, pw * 2 + gap - pad, labelY);
 
         // Panels.
         var panelY = headerH + labelH;
@@ -15582,12 +15588,12 @@
 
         // Footer watermark + URL.
         ctx.fillStyle = 'rgba(255,255,255,0.55)';
-        ctx.font = '11px sans-serif';
+        ctx.font = Math.round(11 * s) + 'px sans-serif';
         ctx.textAlign = 'left';
-        ctx.fillText('TC-ATLAS', 12, totalH - 7);
+        ctx.fillText('TC-ATLAS', pad, totalH - Math.round(7 * s));
         ctx.textAlign = 'right';
         ctx.fillText('michaelfischerwx.github.io/TC-ATLAS',
-                     totalW - 12, totalH - 7);
+                     totalW - pad, totalH - Math.round(7 * s));
 
         // Download.
         var stamp = (orbit.scan_start || '')
@@ -16720,7 +16726,10 @@
         _ensureHtml2canvas().then(function () {
             return window.html2canvas(node, {
                 useCORS: true, allowTaint: false, backgroundColor: '#0a0c12',
-                logging: false, scale: window.devicePixelRatio || 1,
+                // Fixed high scale → device-independent, print-grade PNG
+                // (~2600 px wide ≈ 8.5" at 300 DPI) instead of the
+                // display's pixel ratio (only ~880 px on a 1× screen).
+                logging: false, scale: Math.max(3, window.devicePixelRatio || 1),
                 onclone: _irExportOnClone
             });
         }).then(function (canvas) {
