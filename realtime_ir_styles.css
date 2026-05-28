@@ -3602,6 +3602,82 @@ html:not([data-view="map"]) #ir-global-env-cbars {
     color: #93c5fd;
 }
 
+/* Upcoming-overpass strip — per-sensor "next pass" ETA above the
+   past-pass list. Compact grid so it adds context without crowding. */
+.rt-mw-up {
+    margin: 4px 0 10px;
+    padding: 8px 10px;
+    background: rgba(46, 125, 255, 0.06);
+    border: 1px solid rgba(46, 125, 255, 0.18);
+    border-radius: 6px;
+}
+.rt-mw-up-title {
+    font-size: 0.66rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-dim, #64748b);
+    margin-bottom: 6px;
+}
+.rt-mw-up-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 4px 12px;
+}
+.rt-mw-up-cell {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 0.72rem;
+    line-height: 1.3;
+    cursor: default;
+}
+.rt-mw-up-cell.far { opacity: 0.6; }
+.rt-mw-up-sensor {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--text, #cbd5e1);
+    font-weight: 500;
+}
+.rt-mw-up-swatch {
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+    flex: 0 0 auto;
+}
+.rt-mw-up-val {
+    color: var(--text, #e2e8f0);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    white-space: nowrap;
+}
+.rt-mw-up-eta {
+    color: var(--text-dim, #64748b);
+    margin-left: 5px;
+    font-size: 0.66rem;
+}
+.rt-mw-up-none { color: var(--text-dim, #64748b); }
+.rt-mw-up-note {
+    margin-top: 6px;
+    font-size: 0.62rem;
+    color: var(--text-dim, #64748b);
+    font-style: italic;
+}
+/* In the Storm Satellite tab's tight Leaflet column, keep the strip flat
+   (no card chrome) so it doesn't steal height from the comparison pane. */
+.rt-mw-up-sat {
+    margin: 0;
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
+    border-top: none;
+    background: rgba(15, 22, 36, 0.5);
+    padding: 6px 10px;
+}
+.rt-mw-up-sat .rt-mw-up-note { display: none; }
+
 .rt-mw-storm-list {
     display: flex;
     flex-direction: column;

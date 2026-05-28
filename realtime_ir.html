@@ -575,6 +575,9 @@
                         <button type="button" class="rt-mw-storm-chip" data-product="37v" title="37 GHz vertical-polarization brightness temperature">37V</button>
                         <button type="button" class="rt-mw-storm-chip" data-product="37h" title="37 GHz horizontal-polarization brightness temperature">37H</button>
                     </div>
+                    <!-- Upcoming overpass strip — per-sensor time-to-next-pass
+                         + ETA on TC-ATLAS, from passes_predicted.json. -->
+                    <div id="rt-mw-storm-upcoming" class="rt-mw-up" style="display:none;"></div>
                     <div id="rt-mw-storm-list" class="rt-mw-storm-list">
                         <!-- populated by _rtRenderStormMwPasses with chronological thumbnails -->
                     </div>
@@ -1004,6 +1007,8 @@
                                     <option value="" disabled selected>Select an overpass…</option>
                                 </select>
                             </div>
+                            <!-- Upcoming overpass strip (per-sensor next-pass ETA). -->
+                            <div id="sat-mw-upcoming" class="rt-mw-up rt-mw-up-sat" style="display:none;"></div>
                             <div id="sat-leaflet-mw" class="sat-leaflet-pane sat-leaflet-pane-mw"></div>
                             <!-- MW colorbar — rendered as a floating
                                  overlay so the Leaflet pane stays
@@ -1035,6 +1040,7 @@
                                     <button type="button" class="rt-mw-storm-chip" data-product="37v">37V</button>
                                     <button type="button" class="rt-mw-storm-chip" data-product="37h">37H</button>
                                 </div>
+                                <div id="sat-mw-mobile-upcoming" class="rt-mw-up" style="display:none;"></div>
                                 <div id="sat-mw-mobile-list" class="rt-mw-storm-list sat-mw-mobile-list">
                                     <!-- populated by _rtRenderStormMwPasses with thumbnails -->
                                 </div>

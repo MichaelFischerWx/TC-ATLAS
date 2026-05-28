@@ -93,6 +93,19 @@ for SECRET in pps-user pps-pass; do
     fi
 done
 
+# ── Secret guard — Space-Track creds (primary TLE source) ────────────
+# CelesTrak network-blocks Cloud Run egress IPs, so pass prediction needs
+# Space-Track. Free account at https://www.space-track.org.
+for SECRET in space-track-user space-track-pass; do
+    if ! gcloud secrets describe "${SECRET}" >/dev/null 2>&1; then
+        echo "ERROR: Secret Manager secret '${SECRET}' does not exist."
+        echo "Create both secrets first (free account at https://www.space-track.org):"
+        echo "  printf '%s' 'YOUR_SPACETRACK_USERNAME' | gcloud secrets create space-track-user --data-file=-"
+        echo "  printf '%s' 'YOUR_SPACETRACK_PASSWORD' | gcloud secrets create space-track-pass --data-file=-"
+        exit 1
+    fi
+done
+
 # ── Build the container image via Cloud Build ────────────────────────
 # Write the build config to a temp file. We can't use process substitution
 # (<(cat <<EOF)) here because gcloud rejects `--tag` and `--config` together —
@@ -127,8 +140,8 @@ gcloud builds submit --config "${BUILD_CFG}" .
 PROJECT_NUMBER="$(gcloud projects describe "${PROJECT}" --format='value(projectNumber)')"
 SA_EMAIL="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
 
-echo "Granting Secret Manager access on pps-user/pps-pass to ${SA_EMAIL}..."
-for SECRET in pps-user pps-pass; do
+echo "Granting Secret Manager access on PPS + Space-Track secrets to ${SA_EMAIL}..."
+for SECRET in pps-user pps-pass space-track-user space-track-pass; do
     gcloud secrets add-iam-policy-binding "${SECRET}" \
         --member "serviceAccount:${SA_EMAIL}" \
         --role roles/secretmanager.secretAccessor \
@@ -146,7 +159,7 @@ if gcloud run jobs describe "${JOB_NAME}" --region "${REGION}" >/dev/null 2>&1; 
         --max-retries 1 \
         --task-timeout 3600 \
         --set-env-vars "GCS_MW_BUCKET=${BUCKET}" \
-        --set-secrets "PPS_USER=pps-user:latest,PPS_PASS=pps-pass:latest"
+        --set-secrets "PPS_USER=pps-user:latest,PPS_PASS=pps-pass:latest,SPACETRACK_USER=space-track-user:latest,SPACETRACK_PASS=space-track-pass:latest"
 else
     gcloud run jobs create "${JOB_NAME}" \
         --region "${REGION}" \
@@ -156,7 +169,7 @@ else
         --max-retries 1 \
         --task-timeout 3600 \
         --set-env-vars "GCS_MW_BUCKET=${BUCKET}" \
-        --set-secrets "PPS_USER=pps-user:latest,PPS_PASS=pps-pass:latest"
+        --set-secrets "PPS_USER=pps-user:latest,PPS_PASS=pps-pass:latest,SPACETRACK_USER=space-track-user:latest,SPACETRACK_PASS=space-track-pass:latest"
 fi
 
 # ── Cloud Scheduler → Cloud Run Job (HTTP POST via Run API) ──────────

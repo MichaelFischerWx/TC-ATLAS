@@ -91,6 +91,13 @@ MW_BUCKET = os.environ.get("GCS_MW_BUCKET", "tc-atlas-microwave-nrt")
 PPS_USER = os.environ.get("PPS_USER", "")
 PPS_PASS = os.environ.get("PPS_PASS", "")
 PPS_BASE = "https://jsimpsonhttps.pps.eosdis.nasa.gov"
+# Space-Track is the primary TLE source: CelesTrak network-blocks
+# datacenter egress IPs (Cloud Run connects time out — not a 403), so
+# the per-CATNR CelesTrak path silently yields zero passes from the job.
+# Space-Track answers from cloud IPs with a free account; CelesTrak is
+# kept as a last-resort fallback for local/dev runs where it's reachable.
+SPACETRACK_USER = os.environ.get("SPACETRACK_USER", "")
+SPACETRACK_PASS = os.environ.get("SPACETRACK_PASS", "")
 MANIFEST_KEY = "manifest_latest_48h.json"
 MANIFEST_RETENTION_HOURS = 48
 # Periodic manifest checkpoint during long backfills. The end-of-run
@@ -175,8 +182,29 @@ TC_ATLAS_API_BASE = os.environ.get(
 CELESTRAK_TLE_URL = (
     "https://celestrak.org/NORAD/elements/gp.php?CATNR={catnr}&FORMAT=TLE"
 )
+# Open-source, no-auth TLE mirror (MIT; tle-api by Ivan Stanojević). It
+# republishes CelesTrak data from its own infrastructure, so it does NOT
+# share CelesTrak's block on cloud-datacenter egress IPs — which is the
+# reason direct CelesTrak fetches time out from Cloud Run. Per-satellite
+# JSON: {"name", "line1", "line2", ...}. Used as the primary no-auth
+# source so the predictor works even when Space-Track creds are unset.
+TLEAPI_URL = "https://tle.ivanstanojevic.me/api/tle/{catnr}"
+# Space-Track REST: one POST to authenticate (sets a session cookie),
+# then one bulk GP query for all catalog numbers in 3LE form. The
+# {ids} placeholder is a comma-separated NORAD_CAT_ID list.
+SPACETRACK_LOGIN_URL = "https://www.space-track.org/ajaxauth/login"
+SPACETRACK_GP_URL = (
+    "https://www.space-track.org/basicspacedata/query/class/gp/"
+    "NORAD_CAT_ID/{ids}/orderby/NORAD_CAT_ID/format/3le"
+)
 TLES_CACHE_KEY = "tles_latest.txt"
-TLES_CACHE_MAX_AGE_HOURS = 6   # refresh from CelesTrak at most every 6 h
+TLES_CACHE_MAX_AGE_HOURS = 6   # prefer a fresh fetch at most every 6 h
+# Hard ceiling for the stale-cache fallback. If every live source fails
+# (Space-Track + CelesTrak both unreachable), reuse the last cached TLEs
+# up to this age rather than degrading to zero predicted passes. SGP4
+# stays well within swath-overlap tolerance for several days, so a
+# day-or-two-old element set still tells users when to expect a pass.
+TLES_CACHE_STALE_MAX_AGE_HOURS = 72
 PASSES_KEY = "passes_predicted.json"
 PREDICT_HORIZON_HOURS = 24
 PREDICT_STEP_SECONDS = 60      # 1-min propagation step
@@ -1957,11 +1985,53 @@ def _fetch_tle_celestrak(catnr: int) -> str:
     return text + "\n"
 
 
-def _load_cached_tles() -> Optional[dict[int, tuple[str, str, str]]]:
+def _fetch_tles_tleapi(
+    catnrs: set[int],
+) -> dict[int, tuple[str, str, str]]:
+    """Fetch current TLEs for ``catnrs`` from the open-source no-auth mirror
+    (tle.ivanstanojevic.me). One small JSON request per satellite; with 8
+    sats every 2 h behind a 6 h cache we stay far under any rate limit.
+    Returns {catnr: (name, line1, line2)}; satellites that fail are simply
+    omitted so the caller can fall through to the next source."""
+    import requests
+    out: dict[int, tuple[str, str, str]] = {}
+    sess = requests.Session()
+    sess.headers.update({
+        "Accept": "application/json",
+        "User-Agent": "TC-ATLAS/1.0 (+https://michaelfischerwx.github.io)",
+    })
+    try:
+        for catnr in sorted(catnrs):
+            try:
+                r = sess.get(TLEAPI_URL.format(catnr=catnr), timeout=30)
+                r.raise_for_status()
+                j = r.json()
+                l1 = (j.get("line1") or "").rstrip()
+                l2 = (j.get("line2") or "").rstrip()
+                if not l1.startswith("1 ") or not l2.startswith("2 "):
+                    raise RuntimeError(f"malformed TLE payload: {j!r}")
+                name = (j.get("name") or f"CATNR-{catnr}").strip()
+                out[catnr] = (name, l1, l2)
+            except Exception as exc:
+                logger.warning("TLE mirror fetch failed for CATNR=%d: %s",
+                               catnr, exc)
+    finally:
+        sess.close()
+    if out:
+        logger.info("TLE mirror (tle.ivanstanojevic.me) returned %d/%d TLEs",
+                    len(out), len(catnrs))
+    return out
+
+
+def _load_cached_tles(
+    max_age_hours: float = TLES_CACHE_MAX_AGE_HOURS,
+) -> Optional[dict[int, tuple[str, str, str]]]:
     """Return {catnr: (name, line1, line2)} from gs://.../tles_latest.txt
-    if the cache exists and is fresh; otherwise None. Cache file is a
-    plain concatenation of 3-line TLE blocks with a leading "# updated:"
-    timestamp comment.
+    if the cache exists and is no older than ``max_age_hours``; otherwise
+    None. Cache file is a plain concatenation of 3-line TLE blocks with a
+    leading "# updated:" timestamp comment. Pass a larger ``max_age_hours``
+    (e.g. TLES_CACHE_STALE_MAX_AGE_HOURS) for the last-resort fallback
+    when every live source is unreachable.
     """
     txt = _download_text(TLES_CACHE_KEY)
     if not txt:
@@ -1974,7 +2044,7 @@ def _load_cached_tles() -> Optional[dict[int, tuple[str, str, str]]]:
     except Exception:
         return None
     age = _dt.now(timezone.utc) - updated
-    if age > timedelta(hours=TLES_CACHE_MAX_AGE_HOURS):
+    if age > timedelta(hours=max_age_hours):
         return None
     # Parse 3-line groups (name, line1, line2) skipping comment lines.
     blocks: dict[int, tuple[str, str, str]] = {}
@@ -2009,36 +2079,151 @@ def _save_tle_cache(tles: dict[int, tuple[str, str, str]]) -> None:
     )
 
 
+def _parse_3le(text: str) -> dict[int, tuple[str, str, str]]:
+    """Parse a 3LE/TLE blob into {catnr: (name, line1, line2)}.
+
+    Accepts both Space-Track 3LE (name line prefixed with "0 ") and plain
+    CelesTrak 3-line groups. NORAD id is read from columns 3-7 of line 1,
+    so the parse is robust even if the name line is missing or odd.
+    """
+    out: dict[int, tuple[str, str, str]] = {}
+    name = ""
+    pending1: Optional[str] = None
+    for raw in text.splitlines():
+        ln = raw.rstrip()
+        if not ln.strip() or ln.startswith("#"):
+            continue
+        if ln.startswith("1 ") and len(ln) >= 7:
+            pending1 = ln
+        elif ln.startswith("2 ") and pending1 is not None:
+            try:
+                catnr = int(pending1[2:7])
+                disp = name[2:].strip() if name.startswith("0 ") else name.strip()
+                out[catnr] = (disp or f"CATNR-{catnr}", pending1, ln)
+            except Exception:
+                pass
+            pending1 = None
+            name = ""
+        else:
+            # Name line (3LE leads each block with "0 NAME").
+            name = ln
+            pending1 = None
+    return out
+
+
+def _fetch_tles_spacetrack(
+    catnrs: set[int],
+) -> dict[int, tuple[str, str, str]]:
+    """Fetch current TLEs for ``catnrs`` from Space-Track in a single bulk
+    GP query (one auth + one data request — well within Space-Track's
+    rate limits). Returns {catnr: (name, line1, line2)}; empty dict if
+    credentials are unset or the request fails."""
+    if not SPACETRACK_USER or not SPACETRACK_PASS:
+        logger.info("Space-Track creds unset — skipping (set SPACETRACK_USER/"
+                    "SPACETRACK_PASS to enable the primary TLE source)")
+        return {}
+    import requests
+    ids = ",".join(str(c) for c in sorted(catnrs))
+    sess = requests.Session()
+    try:
+        login = sess.post(
+            SPACETRACK_LOGIN_URL,
+            data={"identity": SPACETRACK_USER, "password": SPACETRACK_PASS},
+            timeout=30,
+        )
+        login.raise_for_status()
+        resp = sess.get(SPACETRACK_GP_URL.format(ids=ids), timeout=60)
+        resp.raise_for_status()
+        parsed = _parse_3le(resp.text)
+        logger.info("Space-Track returned %d/%d TLEs",
+                    len(parsed), len(catnrs))
+        return parsed
+    except Exception as exc:
+        logger.error("Space-Track TLE fetch failed: %s", exc)
+        return {}
+    finally:
+        # Best-effort logout so we don't leave sessions dangling.
+        try:
+            sess.get("https://www.space-track.org/ajaxauth/logout", timeout=10)
+        except Exception:
+            pass
+        sess.close()
+
+
 def _get_tles() -> dict[int, tuple[str, str, str]]:
     """Return {catnr: (name, line1, line2)} for every PREDICT_SATELLITES
-    entry. Uses the GCS cache when fresh; otherwise re-fetches from
-    CelesTrak and refreshes the cache."""
-    cached = _load_cached_tles()
+    entry. Resolution order, each falling through on shortfall:
+      1. Fresh GCS cache (≤ TLES_CACHE_MAX_AGE_HOURS).
+      2. Space-Track bulk query (most authoritative; needs creds — skipped
+         if SPACETRACK_USER/PASS unset).
+      3. Open-source no-auth mirror (tle.ivanstanojevic.me). Primary source
+         when creds are unset; unlike CelesTrak it isn't blocked from
+         Cloud Run egress IPs.
+      4. CelesTrak per-CATNR (last-resort; blocked from Cloud Run egress,
+         but works for local/dev runs).
+      5. Stale GCS cache (≤ TLES_CACHE_STALE_MAX_AGE_HOURS) — better a
+         day-old element set than zero predicted passes.
+    The cache is refreshed whenever a live source supplies new TLEs."""
     needed = {s["catnr"] for s in PREDICT_SATELLITES}
+
+    cached = _load_cached_tles()
     if cached and needed.issubset(cached.keys()):
-        logger.info("using cached TLEs from gs://%s/%s",
+        logger.info("using fresh cached TLEs from gs://%s/%s",
                     MW_BUCKET, TLES_CACHE_KEY)
         return cached
 
-    logger.info("fetching fresh TLEs from CelesTrak (cache miss or stale)")
-    out: dict[int, tuple[str, str, str]] = {}
-    for spec in PREDICT_SATELLITES:
-        catnr = spec["catnr"]
-        try:
-            block = _fetch_tle_celestrak(catnr)
-            parts = [ln for ln in block.splitlines() if ln.strip()]
-            if len(parts) < 3:
-                raise RuntimeError(f"malformed TLE for {catnr}: {block!r}")
-            name, l1, l2 = parts[0].strip(), parts[1], parts[2]
-            out[catnr] = (name, l1, l2)
-        except Exception as exc:
-            logger.error("TLE fetch failed for CATNR=%d (%s): %s",
-                         catnr, spec["platform"], exc)
-    if out:
+    out: dict[int, tuple[str, str, str]] = dict(cached or {})
+
+    # Most-authoritative live source: Space-Track (bulk). No-op if creds
+    # are unset, in which case the open mirror below carries the load.
+    missing = needed - out.keys()
+    if missing:
+        out.update(_fetch_tles_spacetrack(missing))
+
+    # Primary no-auth live source: open mirror (not blocked from Cloud Run).
+    missing = needed - out.keys()
+    if missing:
+        out.update(_fetch_tles_tleapi(missing))
+
+    # Last-resort live source: CelesTrak per-CATNR (works locally).
+    missing = needed - out.keys()
+    if missing:
+        logger.info("falling back to CelesTrak for %d remaining sat(s)",
+                    len(missing))
+        for spec in PREDICT_SATELLITES:
+            catnr = spec["catnr"]
+            if catnr not in missing:
+                continue
+            try:
+                block = _fetch_tle_celestrak(catnr)
+                parts = [ln for ln in block.splitlines() if ln.strip()]
+                if len(parts) < 3:
+                    raise RuntimeError(f"malformed TLE for {catnr}: {block!r}")
+                name, l1, l2 = parts[0].strip(), parts[1], parts[2]
+                out[catnr] = (name, l1, l2)
+            except Exception as exc:
+                logger.error("TLE fetch failed for CATNR=%d (%s): %s",
+                             catnr, spec["platform"], exc)
+
+    # Persist whatever live sources gave us (skip if we only have cache).
+    if out and out != (cached or {}):
         try:
             _save_tle_cache(out)
         except Exception as exc:
             logger.warning("TLE cache upload failed: %s", exc)
+
+    # Final safety net: if live sources left gaps, top up from a stale
+    # cache rather than dropping those satellites (and their passes).
+    missing = needed - out.keys()
+    if missing:
+        stale = _load_cached_tles(max_age_hours=TLES_CACHE_STALE_MAX_AGE_HOURS)
+        if stale:
+            topped = {c: stale[c] for c in missing if c in stale}
+            if topped:
+                logger.warning("topping up %d sat(s) from stale TLE cache: %s",
+                               len(topped), sorted(topped.keys()))
+                out.update(topped)
+
     return out
 
 

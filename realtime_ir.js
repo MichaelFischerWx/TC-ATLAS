@@ -15365,6 +15365,20 @@
     // ════════════════════════════════════════════════════════════════
     var _RT_MW_MANIFEST_URL = 'https://storage.googleapis.com/tc-atlas-microwave-nrt/manifest_latest_48h.json';
     var _RT_MW_MANIFEST_TTL_MS = 5 * 60 * 1000;       // 5 min
+    // Predicted MW overpasses (built by mw_ingest.py --predict-passes,
+    // refreshed every ~2 h). Used to tell the user when the NEXT pass per
+    // sensor will scan this storm — and when it should land on TC-ATLAS.
+    var _RT_MW_PREDICTIONS_URL = 'https://storage.googleapis.com/tc-atlas-microwave-nrt/passes_predicted.json';
+    var _RT_MW_PREDICTIONS_TTL_MS = 10 * 60 * 1000;   // 10 min
+    var _rtMwPredictions = null;
+    var _rtMwPredictionsFetchedAt = 0;
+    // Sensor display order + labels for the upcoming-pass strip.
+    var _RT_MW_SENSOR_ORDER = [
+        { key: 'GMI',   label: 'GMI' },
+        { key: 'AMSR2', label: 'AMSR2' },
+        { key: 'SSMIS', label: 'SSMIS' },
+        { key: 'ATMS',  label: 'ATMS' }
+    ];
     var _RT_MW_WINDOW_MS = 24 * 60 * 60 * 1000;       // 24 h list
     var _RT_MW_HALF_DEG = 6;                          // ±6° storm box
     var _RT_MW_THUMB_PX = 160;                        // canvas size
@@ -15531,6 +15545,156 @@
             });
     }
 
+    // Fetch + cache the predicted-pass schedule (passes_predicted.json).
+    // Resolves to the parsed payload, or null on failure (the upcoming
+    // strip degrades gracefully — the past-pass list still renders).
+    function _rtMwFetchPredictions() {
+        var age = Date.now() - _rtMwPredictionsFetchedAt;
+        if (_rtMwPredictions && age < _RT_MW_PREDICTIONS_TTL_MS) {
+            return Promise.resolve(_rtMwPredictions);
+        }
+        return fetch(_RT_MW_PREDICTIONS_URL, { cache: 'no-store' })
+            .then(function (r) {
+                if (!r.ok) throw new Error('predictions HTTP ' + r.status);
+                return r.json();
+            })
+            .then(function (p) {
+                _rtMwPredictions = p;
+                _rtMwPredictionsFetchedAt = Date.now();
+                return p;
+            })
+            .catch(function (err) {
+                console.warn('[RT MW] predictions fetch failed:', err);
+                return null;
+            });
+    }
+
+    // Compact "time until" formatter for upcoming passes (mirror of
+    // _rtMwFmtAgo for the future direction).
+    function _rtMwFmtIn(min) {
+        if (min <= 0)   return 'now';
+        if (min < 60)   return 'in ' + Math.round(min) + ' min';
+        var h = min / 60;
+        if (h < 24)     return 'in ' + h.toFixed(1) + ' h';
+        return 'in ' + (h / 24).toFixed(1) + ' d';
+    }
+
+    function _rtMwDistKm(lat1, lon1, lat2, lon2) {
+        var R = 6371, rad = Math.PI / 180;
+        var dLat = (lat2 - lat1) * rad, dLon = (lon2 - lon1) * rad;
+        var s1 = Math.sin(dLat / 2), s2 = Math.sin(dLon / 2);
+        var a = s1 * s1 + Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * s2 * s2;
+        return 2 * R * Math.asin(Math.sqrt(a));
+    }
+
+    // Match a storm to its prediction record: prefer the ATCF id, else
+    // the nearest predicted storm within ~300 km (handles disturbances
+    // and null/blank ATCF ids, e.g. early-season invests).
+    function _rtMwPredStormFor(predictions, storm) {
+        var list = (predictions && Array.isArray(predictions.storms))
+            ? predictions.storms : [];
+        if (!list.length || !storm) return null;
+        if (storm.atcf_id) {
+            for (var i = 0; i < list.length; i++) {
+                if (list[i].atcf_id === storm.atcf_id) return list[i];
+            }
+        }
+        if (storm.lat == null || storm.lon == null) return null;
+        var best = null, bestKm = Infinity;
+        for (var j = 0; j < list.length; j++) {
+            var ps = list[j];
+            if (ps.lat == null || ps.lon == null) continue;
+            var d = _rtMwDistKm(storm.lat, storm.lon, ps.lat, ps.lon);
+            if (d < bestKm) { bestKm = d; best = ps; }
+        }
+        return bestKm <= 300 ? best : null;
+    }
+
+    // Render the per-storm "next overpass" strip into {prefix}-upcoming.
+    // For each sensor: earliest future predicted pass, shown as time-to-scan
+    // with the ETA-on-TC-ATLAS (scan + NRT latency) so users know both when
+    // the satellite flies over AND when the imagery will appear here.
+    function _rtRenderStormUpcomingPasses(storm, prefixOverride) {
+        var px = prefixOverride || _rtMwStormState.prefix || 'rt-mw-storm';
+        var box = document.getElementById(px + '-upcoming');
+        if (!box) return;
+        var reqAtcf = storm && storm.atcf_id;
+        _rtMwFetchPredictions().then(function (pred) {
+            if (!storm) return;
+            // When driven by the shared loader (no override) the storm may
+            // have changed while we were fetching; guard against that. When
+            // called directly with an override (e.g. satellite.js), trust
+            // the caller's storm reference.
+            if (!prefixOverride && _rtMwStormState.atcfId !== reqAtcf) return;
+            if (!pred) { box.style.display = 'none'; return; }
+            var predStorm = _rtMwPredStormFor(pred, storm);
+            var passes = (predStorm && Array.isArray(predStorm.passes))
+                ? predStorm.passes : [];
+            var now = Date.now();
+            var horizonBySensor = pred.horizon_by_sensor || {};
+            // Earliest future pass per sensor.
+            var next = {};
+            for (var i = 0; i < passes.length; i++) {
+                var p = passes[i];
+                if (!p.sensor) continue;
+                var t = Date.parse(p.predicted_scan_start);
+                if (!isFinite(t) || t <= now) continue;
+                if (!next[p.sensor] || t < Date.parse(next[p.sensor].predicted_scan_start)) {
+                    next[p.sensor] = p;
+                }
+            }
+            var anyUpcoming = Object.keys(next).length > 0;
+            if (!predStorm) {
+                // No prediction record for this system (e.g. just-formed,
+                // or predictions stale) — hide rather than show an empty grid.
+                box.style.display = 'none';
+                return;
+            }
+            box.style.display = '';
+            var cells = [];
+            for (var s = 0; s < _RT_MW_SENSOR_ORDER.length; s++) {
+                var sk = _RT_MW_SENSOR_ORDER[s].key;
+                var sLabel = _RT_MW_SENSOR_ORDER[s].label;
+                var swatch = _RT_MW_SENSOR_COLOR[sk] || '#cbd5e1';
+                var valHtml, cellTitle, farClass = '';
+                if (next[sk]) {
+                    var deltaMin = (Date.parse(next[sk].predicted_scan_start) - now) / 60000;
+                    var etaMin = (Date.parse(next[sk].eta_on_tcatlas) - now) / 60000;
+                    var isFar = deltaMin > 24 * 60;
+                    farClass = isFar ? ' far' : '';
+                    var off = isFinite(next[sk].min_distance_km)
+                        ? Math.round(next[sk].min_distance_km) + ' km offset' : '';
+                    cellTitle = 'Scan ' + _rtMwFmtIn(deltaMin)
+                        + ' · imagery on TC-ATLAS ' + _rtMwFmtIn(etaMin)
+                        + (off ? ' · ' + off : '')
+                        + (isFar ? ' · beyond 24h (sparse single-sat coverage)' : '');
+                    valHtml = _esc(_rtMwFmtIn(deltaMin))
+                        + '<span class="rt-mw-up-eta">&rarr; ' + _esc(_rtMwFmtIn(etaMin)) + '</span>';
+                } else {
+                    var hz = horizonBySensor[sk] || 24;
+                    cellTitle = 'No predicted pass within ' + Math.round(hz) + ' h';
+                    valHtml = '<span class="rt-mw-up-none">&mdash;</span>';
+                }
+                cells.push(
+                    '<div class="rt-mw-up-cell' + farClass + '" title="' + _esc(cellTitle) + '">'
+                    + '<span class="rt-mw-up-sensor">'
+                    +   '<span class="rt-mw-up-swatch" style="background:' + swatch + '"></span>'
+                    +   _esc(sLabel)
+                    + '</span>'
+                    + '<span class="rt-mw-up-val">' + valHtml + '</span>'
+                    + '</div>'
+                );
+            }
+            var note = anyUpcoming
+                ? 'Time to next overpass &rarr; when imagery lands here'
+                : 'No overpasses predicted in the current window';
+            box.innerHTML =
+                '<div class="rt-mw-up-title">Next overpass</div>'
+                + '<div class="rt-mw-up-grid">' + cells.join('') + '</div>'
+                + '<div class="rt-mw-up-note">' + note + '</div>';
+        });
+    }
+
     // Entry point — called from the deferred-loads block once a storm
     // is selected. Fetches the manifest, filters to last-24h passes
     // covering the storm, groups by orbit, and renders.
@@ -15552,6 +15716,10 @@
         _rtMwStormState.lat = storm.lat;
         _rtMwStormState.lon = storm.lon;
         _rtMwStormState.storm = storm;
+
+        // Upcoming-pass strip (independent of the past-pass list — renders
+        // into {prefix}-upcoming when present; no-op otherwise).
+        _rtRenderStormUpcomingPasses(storm);
 
         _rtMwFetchStormPasses(storm)
             .then(function (m) {
@@ -16214,6 +16382,7 @@
     // mount the same panel by passing prefix='sat-mw'. The compare
     // modal is already body-level, so it works from any view.
     window._rtLoadStormMwPasses = _rtLoadStormMwPasses;
+    window._rtRenderStormUpcomingPasses = _rtRenderStormUpcomingPasses;
     // Low-level helpers also exposed so satellite.js's Leaflet-based
     // MW mode (Phase 1 of canvas→Leaflet migration) can do its own
     // rendering against the same manifest + interp pipeline without

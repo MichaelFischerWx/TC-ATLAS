@@ -3544,6 +3544,13 @@
             _doFit();
             _satMwUpdateMarkers();
             _satMwLoadPasses();
+            // Upcoming-overpass strip (rendered by realtime_ir.js into
+            // #sat-mw-upcoming). The desktop MW flow builds its own pass
+            // dropdown rather than going through _rtLoadStormMwPasses, so
+            // we invoke the shared predictor renderer directly here.
+            if (typeof window._rtRenderStormUpcomingPasses === 'function') {
+                window._rtRenderStormUpcomingPasses(currentStorm, 'sat-mw');
+            }
             // Render the colorbar immediately so the user sees the
             // temperature scale on MW mode entry, before any pass
             // selection. Re-fires inside _satMwRenderMwOverlay when
