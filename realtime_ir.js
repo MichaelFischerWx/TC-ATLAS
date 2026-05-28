@@ -3747,6 +3747,29 @@
         return _GCS_BUNDLE_BASE + '/raw/' + encodeURIComponent(atcfId.toUpperCase()) + '.bin';
     }
 
+    // Mobile decoded-bitmap cap. Each animation frame is a ~10°-radius
+    // WebP that decodes to a ~7 MB RGBA bitmap; a full 6 h / 10-min loop
+    // is ~36 frames (~250 MB decoded). That overruns a phone tab's memory
+    // budget and the browser kills the tab the moment playback forces all
+    // frames to decode. On a mobile viewport we keep the encoded bundle
+    // intact but only realize a capped, evenly-spaced subset of frames:
+    // the loop still spans the full lookback window, just at a coarser
+    // cadence. No-op on desktop. The most recent frame is always kept so
+    // the "pause at present" anchor and latest imagery are preserved.
+    var _MOBILE_MAX_FRAMES = 16;
+    function _decimateFramesForMobile(frames) {
+        if (!_IS_MOBILE_VIEWPORT) return frames;
+        if (!frames || frames.length <= _MOBILE_MAX_FRAMES) return frames;
+        var n = frames.length;
+        var stride = Math.ceil(n / _MOBILE_MAX_FRAMES);
+        var keep = [];
+        // Walk backward from the newest (last) frame so the present is
+        // always retained regardless of where the stride lands.
+        for (var i = n - 1; i >= 0; i -= stride) keep.push(frames[i]);
+        keep.reverse(); // restore oldest-first ordering
+        return keep;
+    }
+
     /** Parse the bundle ArrayBuffer and create N L.imageOverlays from blob
      *  URLs. All 13 frames arrive in one shot, so we add them to the map
      *  simultaneously (no batching needed — they're local memory). */
@@ -3770,6 +3793,7 @@
         }
 
         var frames = (header && header.frames) || [];
+        frames = _decimateFramesForMobile(frames);
         var bounds = header && header.bounds;
         if (!frames.length || !bounds) {
             console.warn('[RT Monitor] Bundle had no frames; per-frame fallback');
@@ -3907,6 +3931,7 @@
     function _initDetailMapJPGWithMeta(storm, satLayerName, meta) {
         var atcfId = storm.atcf_id;
         var frames = (meta && meta.frames) || [];
+        frames = _decimateFramesForMobile(frames);
         var bounds = meta && meta.bounds;
         if (!frames.length || !bounds) {
             console.warn('[RT Monitor] JPG meta returned no frames; falling back to GIBS');
@@ -3929,10 +3954,15 @@
 
         // Create one L.imageOverlay per frame (opacity 0 until activated)
         for (var i = 0; i < frames.length; i++) {
+            // Use the frame's intrinsic index (position in the server's
+            // oldest-first frame_times) rather than the loop counter, so
+            // the request stays correct after mobile decimation drops
+            // frames. On desktop (no decimation) index === i.
+            var serverIdx = (frames[i] && frames[i].index != null) ? frames[i].index : i;
             var url = API_BASE
                 + '/ir-monitor/storm/' + encodeURIComponent(atcfId)
                 + '/ir-frame.jpg'
-                + '?frame_index=' + i
+                + '?frame_index=' + serverIdx
                 + '&lookback_hours=' + JPG_PRIMARY_LOOKBACK_H
                 + '&radius_deg=' + JPG_PRIMARY_RADIUS_DEG
                 + '&interval_min=' + JPG_PRIMARY_INTERVAL_MIN;
@@ -5680,6 +5710,7 @@
         }
 
         var frames = (header && header.frames) || [];
+        frames = _decimateFramesForMobile(frames);
         if (!frames.length) {
             console.warn('[RT Monitor] GeoColor bundle had no frames');
             if (productMode === 'geocolor') setProductMode('eir');
@@ -6120,6 +6151,7 @@
         }
 
         var frames = (header && header.frames) || [];
+        frames = _decimateFramesForMobile(frames);
         if (!frames.length) {
             console.warn('[RT Monitor] Band ' + band + ' bundle had no frames');
             if (productMode === productKey) setProductMode('eir');
