@@ -16105,8 +16105,25 @@
                 _IR_CBAR, ['+35', '-30', '-85'], 'IR Tb (°C)');
             if (done) done(null);
         };
-        img.onerror = function () { if (done) done(new Error('IR jpg load failed')); };
-        img.src = url;
+        // Old frames (outside the 6 h prewarm window) are rendered on
+        // demand from S3 — slow (~10 s) and occasionally transient-fail
+        // (cold start / S3 hiccup). Retry with backoff before giving up;
+        // the server-side render cache usually warms between attempts. A
+        // cache-buster on retries skips any stale browser/CDN miss.
+        var _irAttempt = 0;
+        var _IR_MAX_ATTEMPTS = 3;
+        function _loadIrFrame() {
+            _irAttempt++;
+            img.src = (_irAttempt === 1) ? url : (url + '&_r=' + Date.now());
+        }
+        img.onerror = function () {
+            if (_irAttempt < _IR_MAX_ATTEMPTS) {
+                setTimeout(_loadIrFrame, _irAttempt * 2500);  // ~2.5s, ~5s
+                return;
+            }
+            if (done) done(new Error('IR jpg load failed'));
+        };
+        _loadIrFrame();
     }
 
     // Bind modal-level events: close button, Esc key, click-on-backdrop,
