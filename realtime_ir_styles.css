@@ -4260,7 +4260,7 @@ body.sat-leaflet-active #sat-cb-right .sat-cb-label-right,
     background: rgba(15, 22, 36, 0.65);
     border-radius: 6px;
     /* `auto` (default) lets the browser pick smooth interpolation when
-       the canvas's intrinsic 600×600 is rendered at a different display
+       the canvas's intrinsic 1100×1100 is rendered at a different display
        size. `-webkit-optimize-contrast` on some browsers maps to
        nearest-neighbor, which exposes per-pixel blockiness when the
        source PNG had to upscale into the storm crop. */
