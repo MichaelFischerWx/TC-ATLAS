@@ -1019,22 +1019,68 @@ html, body { margin: 0; padding: 0; }
 
 /* ── Mobile touch-target and layout fixes ──────────────────── */
 @media (max-width: 768px) {
+    /* Storm-card header: the action pills (Download / Obs / Grid /
+       Loop Only / Diagnostics / Microwave) used to run off the right
+       edge with no wrap and no scroll, so the last few were
+       unreachable on a phone. Let the header + title row wrap so
+       every control is tappable; compact the pills so the wrap stays
+       to ~2 rows. */
+    .ir-detail-header {
+        flex-wrap: wrap;
+        align-items: flex-start;   /* back button sits at top, not
+                                       vertically centered against the
+                                       taller wrapped title block */
+        gap: 8px;
+        padding: 8px 10px;
+    }
+    .ir-detail-title {
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+        row-gap: 6px;
+        flex: 1 1 100%;            /* title (name + action pills) takes
+                                       its own row(s) below the back
+                                       button so the pills wrap cleanly */
+    }
+    .ir-kml-btn {
+        margin-left: 0;
+        padding: 6px 9px;
+        font-size: 0.72rem;
+        min-height: 34px;       /* comfortable touch target */
+    }
+    .ir-back-btn {
+        padding: 6px 11px;
+    }
+    .ir-detail-storm-select {
+        max-width: 150px;
+    }
+    /* Download dropdown anchors to its button; keep it from being
+       clipped by the wrapped header. */
+    .ir-download-menu {
+        z-index: 1200;
+    }
+
     .ir-product-toggle button {
-        padding: 8px 12px;
-        font-size: 12px;
-        min-height: 40px;
+        padding: 6px 9px;
+        font-size: 11px;
+        min-height: 34px;
     }
     .modebar-container,
     .modebar {
         display: none !important;
     }
-    /* Stack the frame time and product toggle to avoid overlap */
+    /* Stack the frame time and product toggle to avoid overlap. Hide
+       the satellite name (redundant with the Storm Info panel) so the
+       time readout stays narrow and doesn't collide with the toggle. */
     .ir-overlay-info {
         left: 8px !important;
         top: 8px !important;
         font-size: 0.7rem;
         gap: 6px;
-        max-width: 55%;
+        max-width: 44%;
+    }
+    .ir-overlay-info .ir-sat-label {
+        display: none;
     }
     .ir-product-toggle {
         top: 8px !important;
@@ -1042,7 +1088,22 @@ html, body { margin: 0; padding: 0; }
     }
     .ir-product-btn {
         font-size: 0.6rem;
-        padding: 5px 8px;
+        padding: 5px 7px;
+    }
+    /* Colorbar legend: the 160px bar covered a big chunk of the
+       half-height mobile map. Shrink it to a compact strip. */
+    .ir-tb-legend {
+        bottom: 8px;
+        left: 8px;
+        padding: 4px 7px;
+        font-size: 0.56rem;
+    }
+    .ir-tb-legend-bar {
+        width: 92px;
+        height: 7px;
+    }
+    .ir-tb-legend-labels {
+        font-size: 0.5rem;
     }
     /* Fix map top offset to match compact topbar + secondary bar */
     .ir-map {
