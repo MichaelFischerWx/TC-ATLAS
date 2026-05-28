@@ -3832,6 +3832,39 @@
         }
     }
 
+    // ── Cross-product memory cap (mobile) ─────────────────────────
+    // Each product (IR / GeoColor / Vis / WV) keeps its own frame
+    // overlays resident once loaded so switching back is instant. On
+    // desktop that's free; on a phone the decoded bitmaps stack up —
+    // IR + Visible (higher-res!) alone can OOM-kill the tab. So when
+    // leaving a product on mobile we free its decoded bitmaps by swapping
+    // every frame to a 1×1 transparent src; the encoded blobs and layer
+    // objects stay (cheap), so returning re-decodes with no refetch.
+    function _productLayers(mode) {
+        if (mode === 'geocolor') return geocolorFrameLayers;
+        if (mode === 'vis')      return visFrameLayers;
+        if (mode === 'wv')       return wvFrameLayers;
+        return animFrameLayers; // 'eir'
+    }
+    function _evictProductFrames(layers) {
+        if (!layers) return;
+        for (var i = 0; i < layers.length; i++) {
+            var ly = layers[i];
+            if (!ly || !ly._frameBlobUrl || ly._decodeEvicted) continue;
+            ly.setUrl(_TRANSPARENT_1PX);
+            ly._decodeEvicted = true;
+        }
+    }
+    function _restoreProductFrames(layers) {
+        if (!layers) return;
+        for (var i = 0; i < layers.length; i++) {
+            var ly = layers[i];
+            if (!ly || !ly._frameBlobUrl || !ly._decodeEvicted) continue;
+            ly.setUrl(ly._frameBlobUrl);
+            ly._decodeEvicted = false;
+        }
+    }
+
     /** Parse the bundle ArrayBuffer and create N L.imageOverlays from blob
      *  URLs. All 13 frames arrive in one shot, so we add them to the map
      *  simultaneously (no batching needed — they're local memory). */
@@ -5151,6 +5184,17 @@
         else if (prevMode === 'geocolor') hideAllGeocolorFrames();
         else if (prevMode === 'vis')      hideAllVisFrames();
         else if (prevMode === 'wv')       hideAllWvFrames();
+
+        // Mobile only: free the leaving product's decoded bitmaps so just
+        // one product is resident at a time (prevents the IR→Vis/SWIR OOM
+        // crash). Returning to a product re-decodes from its kept blobs —
+        // no refetch. Restore the incoming product's frames here when NOT
+        // in windowed mode; in windowed mode the show call's decode-window
+        // re-decodes only what's needed.
+        if (_IS_MOBILE_VIEWPORT && prevMode !== mode) {
+            _evictProductFrames(_productLayers(prevMode));
+            if (!_WINDOWED_DECODE) _restoreProductFrames(_productLayers(mode));
+        }
 
         // --- Activate new mode ---
         if (mode === 'eir') {
