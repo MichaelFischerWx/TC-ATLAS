@@ -1939,18 +1939,29 @@ def _prefetch_ir_frames(storms: list):
                     del tb, arr, mask, scaled, encoded
 
                 def _fetch_and_cache_band(tdt, dstr, band):
-                    """Worker: fetch WV/Vis frame and cache to GCS."""
-                    if _gcs_band_get(band, atcf_id.upper(), dstr, lat=center_lat, lon=center_lon) is not None:
+                    """Worker: fetch WV/Vis frame and cache to GCS.
+
+                    Cache keys use the storm's INTERPOLATED position at
+                    `tdt` (like _fetch_and_cache_ir), NOT the current
+                    advisory position. _build_and_upload_bundles reads
+                    each frame back at its interpolated position, so
+                    keying the cache at the current position made every
+                    frame except the most-recent ~few miss (the storm
+                    moves > the 0.1° key precision within ~30 min), which
+                    left the Vis/WV/SWIR loops stuck at only a handful of
+                    frames for any moving storm."""
+                    ilat, ilon = _interp_pos_at(atcf_id, tdt, center_lat, center_lon)
+                    if _gcs_band_get(band, atcf_id.upper(), dstr, lat=ilat, lon=ilon) is not None:
                         return
                     if band == VIS_BAND:
-                        se = _solar_elevation(center_lat, center_lon, tdt)
+                        se = _solar_elevation(ilat, ilon, tdt)
                         if se < -6:
                             return
                     binfo = BAND_RANGES.get(band, BAND_RANGES[13])
                     bvmin, bvmax = binfo["vmin"], binfo["vmax"]
                     bscale = 254.0 / (bvmax - bvmin)
                     try:
-                        raw = fetch_band_raw(center_lat, center_lon, tdt, box_deg, band=band)
+                        raw = fetch_band_raw(ilat, ilon, tdt, box_deg, band=band)
                     except Exception:
                         return
                     if not raw or raw.get("data") is None:
@@ -1969,10 +1980,10 @@ def _prefetch_ir_frames(storms: list):
                         "datetime_utc": raw["datetime_utc"],
                         "satellite": raw.get("satellite", ""),
                         "bounds": raw.get("bounds", [
-                            [center_lat - half, center_lon - half],
-                            [center_lat + half, center_lon + half],
+                            [ilat - half, ilon - half],
+                            [ilat + half, ilon + half],
                         ]),
-                    }, lat=center_lat, lon=center_lon)
+                    }, lat=ilat, lon=ilon)
                     _prefetch_counts["band"] += 1
                     # Also render and cache band JPG for fast preview
                     try:
@@ -1981,7 +1992,7 @@ def _prefetch_ir_frames(storms: list):
                         )
                         if jpg_bytes:
                             _gcs_jpg_put(atcf_id.upper(), dstr, jpg_bytes,
-                                         band=band, lat=center_lat, lon=center_lon)
+                                         band=band, lat=ilat, lon=ilon)
                     except Exception:
                         pass
                     del data, arr, mask, scaled, encoded
