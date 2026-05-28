@@ -6393,20 +6393,209 @@
         if (loaded >= frames.length) finalize();
     }
 
-    /** Load Visible frames. Picks Band 2 during daylight at the storm
-     *  center and Band 7 (3.9 µm shortwave IR) at night — the SWIR
-     *  product mimics nighttime visible imagery (clouds bright, surface
-     *  dark) so the user gets a coherent "visible-like" view 24 h/day,
-     *  similar to Tropical Tidbits' vis_swir loop. */
-    function loadVisFrames() {
-        // Solar elevation at the storm center, current time.
-        var sunEl = -90;
-        if (detailStormLat != null && detailStormLon != null) {
-            try { sunEl = solarElevation(detailStormLat, detailStormLon, new Date()); } catch (e) {}
+    // ── Visible↔SWIR per-frame composite ──────────────────────────
+    // The Visible panel should show TRUE visible imagery for daytime
+    // frames and SWIR (3.9 µm, nighttime "visible-like") for dark frames,
+    // so a loop spanning sunset transitions Vis→SWIR instead of locking to
+    // whichever band it was at "now". The backend already classifies this:
+    // the Band 2 (Vis) bundle marks night frames as error-stubs (per-frame
+    // solar test in _build_and_upload_bundles), and the Band 7 (SWIR)
+    // bundle is complete 24/7. We fetch both and, per frame, keep the Vis
+    // image where it's valid (daytime) and fall back to SWIR where it
+    // isn't. Frames are matched by timestamp so a stale Vis bundle (whose
+    // frames fall outside the current window) is simply ignored.
+    function _parseBundleHeader(buf) {
+        var dv = new DataView(buf);
+        if (buf.byteLength < 4) throw new Error('bundle too small');
+        var headerLen = dv.getUint32(0, true);
+        if (4 + headerLen > buf.byteLength) throw new Error('header overruns body');
+        var headerBytes = new Uint8Array(buf, 4, headerLen);
+        return { header: JSON.parse(new TextDecoder('utf-8').decode(headerBytes)),
+                 binBase: 4 + headerLen };
+    }
+
+    function _fetchBandBundleBuf(stormId, band) {
+        var gcsUrl = _gcsBandBundleUrl(stormId, band);
+        var apiUrl = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(stormId)
+                   + '/band-frames-bundle?band=' + band;
+        return fetch(gcsUrl)
+            .then(function (r) { if (!r.ok) throw new Error('gcs ' + r.status); return r.arrayBuffer(); })
+            .catch(function () {
+                return fetch(apiUrl).then(function (r) {
+                    if (!r.ok) throw new Error('api ' + r.status); return r.arrayBuffer();
+                });
+            });
+    }
+
+    /** Load the Visible panel as a per-frame Vis(day)↔SWIR(night) blend. */
+    function _loadVisSwirComposite() {
+        if (!detailMap || !currentStormId) return;
+        // Already loaded → restore slider + show latest.
+        if (visFramesReady && visFrameLayers.length > 0) {
+            var sliderR = document.getElementById('ir-anim-slider');
+            if (sliderR && visValidFrames.length > 0) {
+                sliderR.max = visValidFrames.length - 1;
+                sliderR.value = visValidFrames.length - 1;
+            }
+            var playBtnR = document.getElementById('ir-anim-play');
+            if (playBtnR) playBtnR.disabled = (visValidFrames.length === 0);
+            showVisFrame(visValidFrames.length > 0
+                ? visValidFrames[visValidFrames.length - 1]
+                : visFrameLayers.length - 1);
+            updateAnimCounter();
+            return;
         }
-        var useSwir = (sunEl <= -6);  // civil twilight cutoff
-        var band = useSwir ? 7 : 2;
-        _loadBandFramesBundle(band, 'vis');
+        // Already loading → bail.
+        if (visFrameLayers.length > 0 && !visFramesReady) return;
+
+        visFrameTimes = []; visFramesLoaded = 0; visFramesReady = false;
+        visValidFrames = []; visFrameHasError = [];
+
+        var btn = document.getElementById('ir-product-vis');
+        if (btn) { btn.classList.add('ir-loading'); btn.textContent = 'Loading…'; }
+        showLoadingProgress(true, 0);
+        var satLabel = document.getElementById('ir-satellite-label');
+        if (satLabel) satLabel.textContent = 'Visible — ' + detailSatName;
+
+        var stormIdAtFetch = currentStormId;
+        Promise.all([
+            _fetchBandBundleBuf(currentStormId, 2).catch(function () { return null; }),
+            _fetchBandBundleBuf(currentStormId, 7).catch(function () { return null; })
+        ]).then(function (bufs) {
+            if (stormIdAtFetch !== currentStormId || productMode !== 'vis') return;
+            if (!bufs[0] && !bufs[1]) {
+                console.warn('[RT Monitor] Vis + SWIR bundles both unavailable; back to IR');
+                if (btn) { btn.classList.remove('ir-loading'); btn.textContent = 'Visible'; }
+                showLoadingProgress(false);
+                setProductMode('eir');
+                return;
+            }
+            _ingestVisSwirComposite(bufs[0], bufs[1]);
+        });
+    }
+
+    function _ingestVisSwirComposite(visBuf, swirBuf) {
+        var visP = null, swirP = null;
+        try { if (visBuf)  visP  = _parseBundleHeader(visBuf); }  catch (e) {}
+        try { if (swirBuf) swirP = _parseBundleHeader(swirBuf); } catch (e) {}
+        if (!visP && !swirP) { if (productMode === 'vis') setProductMode('eir'); return; }
+
+        // Index Vis frames by timestamp; SWIR (complete 24/7) is the
+        // canonical timeline (fall back to the Vis timeline if SWIR missing).
+        var visByDt = {};
+        if (visP) {
+            var vfList = visP.header.frames || [];
+            for (var a = 0; a < vfList.length; a++) visByDt[vfList[a].datetime_utc] = vfList[a];
+        }
+        var baseFrames = (swirP && swirP.header.frames) || (visP && visP.header.frames) || [];
+        var globalBounds = (swirP && swirP.header.bounds) || (visP && visP.header.bounds) || null;
+        var visMedia  = visP  ? (visP.header.media_type  || 'image/webp') : 'image/webp';
+        var swirMedia = swirP ? (swirP.header.media_type || 'image/webp') : 'image/webp';
+
+        // Per frame: prefer a valid Vis image (daytime), else SWIR.
+        var merged = [];
+        for (var k = 0; k < baseFrames.length; k++) {
+            var sf = baseFrames[k];
+            var dt = sf.datetime_utc;
+            var vfr = visByDt[dt];
+            if (visP && vfr && vfr.byte_length && !vfr.error) {
+                merged.push({ datetime_utc: dt, bounds: vfr.bounds || sf.bounds || globalBounds,
+                              buf: visBuf, base: visP.binBase, byte_offset: vfr.byte_offset,
+                              byte_length: vfr.byte_length, mediaType: visMedia, source: 'vis' });
+            } else if (swirP && sf.byte_length && !sf.error) {
+                merged.push({ datetime_utc: dt, bounds: sf.bounds || globalBounds,
+                              buf: swirBuf, base: swirP.binBase, byte_offset: sf.byte_offset,
+                              byte_length: sf.byte_length, mediaType: swirMedia, source: 'swir' });
+            } else {
+                merged.push({ datetime_utc: dt, bounds: sf.bounds || globalBounds,
+                              buf: null, source: 'none' });
+            }
+        }
+        merged = _decimateFramesForMobile(merged);
+        if (!merged.length) { if (productMode === 'vis') setProductMode('eir'); return; }
+
+        var times = [], hasErr = [], layers = [], validIdx = [];
+        var goodCount = 0, loaded = 0;
+
+        function finalize() {
+            visFrameTimes = times; visFrameLayers = layers; visFrameHasError = hasErr;
+            visValidFrames = validIdx; visFramesReady = true; visFramesLoaded = merged.length;
+            showLoadingProgress(false);
+            var fbtn = document.getElementById('ir-product-vis');
+            if (fbtn) { fbtn.classList.remove('ir-loading'); fbtn.textContent = 'Visible'; }
+            var playBtn = document.getElementById('ir-anim-play');
+            if (playBtn) playBtn.disabled = (validIdx.length === 0);
+            var slider = document.getElementById('ir-anim-slider');
+            if (slider && validIdx.length > 0) {
+                slider.max = validIdx.length - 1;
+                slider.value = validIdx.length - 1;
+                showVisFrame(validIdx[validIdx.length - 1]);
+            }
+            updateAnimCounter();
+            if (validIdx.length === 0) {
+                var satLbl = document.getElementById('ir-satellite-label');
+                if (satLbl) satLbl.textContent =
+                    'No usable visible/SWIR frames available right now — try Water Vapor or IR.';
+                console.warn('[RT Monitor] Vis/SWIR composite had 0 valid frames');
+            } else {
+                var nVis = 0, nSwir = 0;
+                for (var z = 0; z < merged.length; z++) {
+                    if (merged[z].source === 'vis') nVis++;
+                    else if (merged[z].source === 'swir') nSwir++;
+                }
+                console.log('[RT Monitor] Vis/SWIR composite: ' + validIdx.length + '/' +
+                            merged.length + ' frames (' + nVis + ' vis, ' + nSwir + ' swir)');
+            }
+        }
+
+        for (var i = 0; i < merged.length; i++) {
+            var m = merged[i];
+            times.push(m.datetime_utc);
+            if (!m.buf || !m.byte_length) {
+                layers.push(null); hasErr.push(true); loaded++;
+                continue;
+            }
+            var slice = new Uint8Array(m.buf, m.base + m.byte_offset, m.byte_length);
+            var blob = new Blob([slice], { type: m.mediaType });
+            var blobUrl = URL.createObjectURL(blob);
+            _activeVisBlobUrls.push(blobUrl);
+            var fb = m.bounds || globalBounds;
+            var fBounds = L.latLngBounds(L.latLng(fb[0][0], fb[0][1]), L.latLng(fb[1][0], fb[1][1]));
+            var overlay = L.imageOverlay(blobUrl, fBounds, {
+                opacity: 0, interactive: false, pane: 'tilePane'
+            });
+            overlay._frameBlobUrl = blobUrl;       // windowed-decode promote/evict
+            overlay._bandSource = m.source;        // 'vis' | 'swir' → per-frame label
+            hasErr.push(false);
+            (function (lyr, idx) {
+                lyr.once('error', function () {
+                    hasErr[idx] = true; loaded++;
+                    if (loaded >= merged.length) finalize();
+                });
+                lyr.once('load', function () {
+                    if (!hasErr[idx]) {
+                        validIdx.push(idx);
+                        validIdx.sort(function (x, y) { return x - y; });
+                        goodCount++;
+                    }
+                    loaded++;
+                    var pct = Math.round((loaded / merged.length) * 100);
+                    showLoadingProgress(true, pct);
+                    if (loaded >= merged.length) finalize();
+                });
+            })(overlay, i);
+            layers.push(overlay);
+            overlay.addTo(detailMap);
+        }
+        if (loaded >= merged.length) finalize();
+    }
+
+    /** Load the Visible panel. Blends true Visible (Band 2) for daytime
+     *  frames with SWIR (Band 7, 3.9 µm) for nighttime frames, so a loop
+     *  that straddles sunset transitions Vis→SWIR rather than showing one
+     *  band for the whole loop (Tropical Tidbits' vis_swir style). */
+    function loadVisFrames() {
+        _loadVisSwirComposite();
     }
 
     function showVisFrame(idx) {
@@ -6422,7 +6611,10 @@
         if (visFrameTimes[idx]) {
             document.getElementById('ir-frame-time').textContent = fmtUTC(visFrameTimes[idx]);
         }
-        document.getElementById('ir-satellite-label').textContent = 'Visible — ' + detailSatName;
+        // Per-frame label so the user sees the Vis→SWIR handover explicitly.
+        var lyr = visFrameLayers[idx];
+        var srcLabel = (lyr && lyr._bandSource === 'swir') ? 'Visible (SWIR night)' : 'Visible';
+        document.getElementById('ir-satellite-label').textContent = srcLabel + ' — ' + detailSatName;
         if (_rtModelVisible && _rtModelAutoSync && _rtModelData) _rtSyncModelCycleToIR();
     }
 
