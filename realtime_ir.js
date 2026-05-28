@@ -4264,6 +4264,14 @@
         // Create mini-map centered on storm
         // Allow up to zoom 7 (GeoColor supports Level7); IR tiles still capped at Level6
         detailMap = L.map(mapDiv, {
+            // Render vectors (track, graticule, storm marker) via Canvas
+            // rather than SVG. html2canvas mis-positions Leaflet's SVG
+            // overlay pane when the map has been panned (which the
+            // per-frame recenter does), shifting the track in saved PNGs
+            // even though it's correct on screen; a Canvas-rendered layer
+            // is captured at the right position. (Verified: SVG centroid
+            // offset ~100px vs canvas under an identical pan.)
+            preferCanvas: true,
             center: [storm.lat, storm.lon],
             // zoom 6 fills the storm-relative crop tightly to the viewport
             // (the IR cutout is ±10° around the storm, ~2200 km wide;
