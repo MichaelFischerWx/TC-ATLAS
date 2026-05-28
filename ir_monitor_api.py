@@ -4603,9 +4603,21 @@ def get_ir_frames_meta(
 
     frames = []
     for i, ft in enumerate(frame_times):
+        # Per-frame center = the storm's INTERPOLATED position at this
+        # frame's time — exactly what /ir-frame.jpg crops the cutout on
+        # (so the cutout's true center, not the current advisory fix
+        # which can be hours stale when JTWC skips a cycle). Consumers
+        # like the IR↔MW compare modal co-register both panels on this,
+        # not on storm["lat"]/["lon"], so the graticules line up.
+        ilat, ilon = _interp_pos_at(atcf_id, ft, center_lat, center_lon)
         frames.append({
             "index": i,
             "datetime_utc": ft.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "center": [ilat, ilon],
+            "bounds": [
+                [ilat - half, ilon - half],
+                [ilat + half, ilon + half],
+            ],
         })
 
     return JSONResponse(

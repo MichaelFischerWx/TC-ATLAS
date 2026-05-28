@@ -15221,7 +15221,6 @@
         if (!orbit || !storm) return;
         var product = _rtMwCompareState.product;
 
-        // ── MW panel ──────────────────────────────────────────────
         var mwCanvas = document.getElementById('rt-mw-compare-mw');
         var mwStatus = document.getElementById('rt-mw-compare-mw-status');
         var mwTimeEl = document.getElementById('rt-mw-compare-mw-time');
@@ -15229,44 +15228,61 @@
             mwTimeEl.textContent =
                 orbit.scan_start.replace('T', ' ').slice(0, 16) + 'Z';
         }
-        var pr = orbit.products[product];
-        if (mwCanvas && pr && pr.png_url) {
-            if (mwStatus) mwStatus.textContent = '';
-            _rtDrawStormMwThumbnail(mwCanvas, orbit, storm.lat, storm.lon,
-                                    pr.png_url, function (frac) {
-                if (mwStatus) {
-                    mwStatus.textContent = frac < _RT_MW_MIN_COVERAGE
-                        ? 'storm sits outside the actual swath data'
-                        : '';
-                }
-                // Colorbar/legend for the active product, drawn after
-                // the swath image so it sits on top.
-                _rtDrawMwCompareColorbar(mwCanvas.getContext('2d'),
-                    mwCanvas.width, mwCanvas.height, product);
-            }, true /* withGrid */);
-        } else if (mwCanvas) {
-            var ctx = mwCanvas.getContext('2d');
-            ctx.fillStyle = 'rgba(15,22,36,0.55)';
-            ctx.fillRect(0, 0, mwCanvas.width, mwCanvas.height);
-            if (mwStatus) mwStatus.textContent = product + ' not available for this pass';
+
+        // ── Common center for BOTH panels ─────────────────────────
+        // Both crops + both graticules must share one reference latitude,
+        // otherwise the panels misregister. storm.lat/lon is the last
+        // ADVISORY fix, which can be many hours stale when JTWC skips a
+        // cycle for a weak system — using it put the MW crop + grid at a
+        // different latitude than the IR cutout (which the backend centers
+        // on the storm's INTERPOLATED position at the frame time). We
+        // resolve the common center from the closest IR frame's per-frame
+        // `center` (the cutout's true center), so the IR imagery, the MW
+        // crop, and the graticules all co-register. Falls back to the
+        // advisory fix only if the IR meta is unavailable.
+        var mwMs = orbit.scan_start_ms;
+
+        function paintMw(cLat, cLon) {
+            var pr = orbit.products[product];
+            if (mwCanvas && pr && pr.png_url) {
+                if (mwStatus) mwStatus.textContent = '';
+                _rtDrawStormMwThumbnail(mwCanvas, orbit, cLat, cLon,
+                                        pr.png_url, function (frac) {
+                    if (mwStatus) {
+                        mwStatus.textContent = frac < _RT_MW_MIN_COVERAGE
+                            ? 'storm sits outside the actual swath data'
+                            : '';
+                    }
+                    // Colorbar/legend for the active product, drawn after
+                    // the swath image so it sits on top.
+                    _rtDrawMwCompareColorbar(mwCanvas.getContext('2d'),
+                        mwCanvas.width, mwCanvas.height, product);
+                }, true /* withGrid */);
+            } else if (mwCanvas) {
+                var ctx = mwCanvas.getContext('2d');
+                ctx.fillStyle = 'rgba(15,22,36,0.55)';
+                ctx.fillRect(0, 0, mwCanvas.width, mwCanvas.height);
+                if (mwStatus) mwStatus.textContent = product + ' not available for this pass';
+            }
         }
 
         // ── IR panel ──────────────────────────────────────────────
         var irCanvas = document.getElementById('rt-mw-compare-ir');
         var irStatus = document.getElementById('rt-mw-compare-ir-status');
         var irTimeEl = document.getElementById('rt-mw-compare-ir-time');
-        if (!irCanvas) return;
         if (irStatus) irStatus.textContent = 'finding closest IR…';
         if (irTimeEl) irTimeEl.textContent = '—';
-        var ctx2 = irCanvas.getContext('2d');
-        ctx2.fillStyle = 'rgba(15,22,36,0.55)';
-        ctx2.fillRect(0, 0, irCanvas.width, irCanvas.height);
+        if (irCanvas) {
+            var ctx2 = irCanvas.getContext('2d');
+            ctx2.fillStyle = 'rgba(15,22,36,0.55)';
+            ctx2.fillRect(0, 0, irCanvas.width, irCanvas.height);
+        }
 
-        var mwMs = orbit.scan_start_ms;
         _rtFetchIrFramesMeta(storm)
             .then(function (meta) {
                 if (!meta || !meta.frames || !meta.frames.length) {
                     if (irStatus) irStatus.textContent = 'no IR frames available';
+                    paintMw(storm.lat, storm.lon);  // best-effort fallback
                     return;
                 }
                 // Closest frame by datetime_utc.
@@ -15279,7 +15295,13 @@
                 }
                 if (!best) {
                     if (irStatus) irStatus.textContent = 'no matchable IR frame';
+                    paintMw(storm.lat, storm.lon);
                     return;
+                }
+                // Common center = this IR frame's true cutout center.
+                var cLat = storm.lat, cLon = storm.lon;
+                if (best.center && best.center.length === 2) {
+                    cLat = best.center[0]; cLon = best.center[1];
                 }
                 var deltaMin = (Date.parse(best.datetime_utc) - mwMs) / 60000;
                 if (irTimeEl) {
@@ -15288,19 +15310,26 @@
                         + ' min vs MW)';
                 }
                 if (irStatus) irStatus.textContent = 'loading IR frame…';
-                // Fetch the JPG, then draw the ±_RT_MW_COMPARE_HALF_DEG
-                // sub-rect (storm-centered crop) onto the compare canvas.
-                _rtDrawIrCompareFrame(irCanvas, storm, best.index, function (err) {
-                    if (irStatus) {
-                        irStatus.textContent = err
-                            ? 'IR frame load failed'
-                            : '';
-                    }
-                });
+                // Paint MW on the SAME center so the two panels' swath/
+                // imagery and graticules co-register.
+                paintMw(cLat, cLon);
+                // Draw IR centered on cLat/cLon (its cutout center), with a
+                // matching graticule.
+                if (irCanvas) {
+                    _rtDrawIrCompareFrame(irCanvas, storm, best.index,
+                                          cLat, cLon, function (err) {
+                        if (irStatus) {
+                            irStatus.textContent = err
+                                ? 'IR frame load failed'
+                                : '';
+                        }
+                    });
+                }
             })
             .catch(function (err) {
                 console.warn('[RT MW Compare] frames-meta failed', err);
                 if (irStatus) irStatus.textContent = 'IR meta unavailable';
+                paintMw(storm.lat, storm.lon);  // still show MW
             });
     }
 
@@ -15328,11 +15357,15 @@
             });
     }
 
-    // Draw the storm-centered ±_RT_MW_COMPARE_HALF_DEG crop of the IR
-    // JPG into the supplied canvas. The IR JPG covers a 20° × 20° box
-    // (radius_deg = 10) centered on the storm, so the storm sits at
-    // image center and the ±6° crop is the central 60% of the image.
-    function _rtDrawIrCompareFrame(canvas, storm, frameIndex, done) {
+    // Draw the ±_RT_MW_COMPARE_HALF_DEG crop of the IR JPG into the
+    // supplied canvas. The IR JPG covers a 20° × 20° box (radius_deg = 10)
+    // centered on the cutout's true center, so that center sits at image
+    // center and the ±6° crop is the central 60% of the image. gLat/gLon
+    // is that same center (the frame's per-frame `center` from
+    // ir-frames-meta) — used for the graticule + marker so the IR grid
+    // matches the IR imagery AND the MW panel (which is cropped + gridded
+    // on the identical center). See _rtRenderMwCompare.
+    function _rtDrawIrCompareFrame(canvas, storm, frameIndex, gLat, gLon, done) {
         // warp=none → native equirectangular render. The compare canvas
         // crops linearly and overlays a linear-in-latitude grid (same as
         // the MW panel), so a Mercator-warped IR frame would misalign with
@@ -15373,12 +15406,12 @@
             // share an explicit positional reference, not just a center
             // marker. Storm center is canvas center; ±_RT_MW_COMPARE_HALF_DEG.
             _rtDrawLatLonGrid(ctx, canvas.width, canvas.height,
-                              storm.lat, storm.lon,
+                              gLat, gLon,
                               _RT_MW_COMPARE_HALF_DEG, 2);
             // Interpolated best-track marker at the MW pass time, if
             // the metadata fetch resolved with usable points.
             _rtDrawInterpMarker(ctx, canvas.width, canvas.height,
-                                storm.lat, storm.lon,
+                                gLat, gLon,
                                 _RT_MW_COMPARE_HALF_DEG);
             // IR brightness-temperature colorbar (Claude LUT). Labels
             // match the storm-card legend (+35 / -30 / -85 °C).
