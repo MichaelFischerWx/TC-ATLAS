@@ -4629,12 +4629,22 @@ def get_ir_frame_jpg(
     lookback_hours: float = Query(6.0, ge=1, le=24),
     radius_deg: float = Query(10.0, ge=1.0, le=12.0),
     interval_min: int = Query(30, ge=10, le=60),
+    warp: str = Query("mercator", pattern="^(mercator|none)$"),
 ):
     """Return a pre-rendered IR frame as a JPEG image.
 
     Much faster than GIBS tile layers: single ~60KB image vs ~16 tiles.
     Metadata (bounds, time, satellite) is in response headers to avoid
     needing a separate metadata call.
+
+    warp="mercator" (default) pre-warps the cutout to Web Mercator so it
+    overlays correctly on the Leaflet detail map (L.imageOverlay linear
+    CSS-stretch). warp="none" returns the native equirectangular render —
+    used by the IR↔MW compare modal, whose canvas crop + lat/lon grid are
+    linear in latitude, so a Mercator image there mismatches the (also
+    equirectangular) microwave panel. The equirectangular variant is
+    rendered on the fly and NOT written to the shared jpg cache, which
+    holds only Mercator frames for the map.
     """
     _ensure_fresh_cache()
     storm = None
@@ -4688,10 +4698,17 @@ def get_ir_frame_jpg(
     # the JPG-cache lookup below sees the interp position.
     ilat, ilon = _interp_pos_at(atcf_id, target_dt, center_lat, center_lon)
 
-    # Check GCS JPG cache (position-keyed)
-    cached_jpg = _gcs_jpg_get(atcf_id.upper(), dt_str, lat=ilat, lon=ilon)
-    if cached_jpg:
-        return Response(content=cached_jpg, media_type="image/webp", headers=meta_headers)
+    # Mercator (default) vs native equirectangular (compare modal). The
+    # shared jpg cache holds only Mercator frames, so the equirectangular
+    # variant skips the cache entirely (read + write).
+    mercator = warp.lower() != "none"
+    lat_bounds = (ilat - half, ilat + half) if mercator else None
+
+    # Check GCS JPG cache (position-keyed) — Mercator frames only.
+    if mercator:
+        cached_jpg = _gcs_jpg_get(atcf_id.upper(), dt_str, lat=ilat, lon=ilon)
+        if cached_jpg:
+            return Response(content=cached_jpg, media_type="image/webp", headers=meta_headers)
 
     # Fallback: check if raw Tb uint8 is cached in GCS (populated by pre-fetch)
     # and render JPG from it — avoids the S3 round-trip entirely.
@@ -4704,13 +4721,11 @@ def get_ir_frame_jpg(
             ).reshape((cached_raw["tb_rows"], cached_raw["tb_cols"]))
             decoded_tb = ((encoded.astype(np.float32) - 1) / _TB_SCALE) + _TB_VMIN
             decoded_tb[encoded == 0] = np.nan
-            jpg_bytes = _render_ir_jpg(
-                decoded_tb,
-                lat_bounds=(ilat - half, ilat + half),
-            )
+            jpg_bytes = _render_ir_jpg(decoded_tb, lat_bounds=lat_bounds)
             if jpg_bytes:
-                _gcs_jpg_put(atcf_id.upper(), dt_str, jpg_bytes,
-                             lat=ilat, lon=ilon)
+                if mercator:
+                    _gcs_jpg_put(atcf_id.upper(), dt_str, jpg_bytes,
+                                 lat=ilat, lon=ilon)
                 return Response(content=jpg_bytes, media_type="image/webp", headers=meta_headers)
         except Exception:
             pass  # Fall through to S3 fetch
@@ -4721,15 +4736,14 @@ def get_ir_frame_jpg(
     if not raw or raw.get("tb") is None:
         raise HTTPException(status_code=502, detail=f"No IR data for frame {frame_index}")
 
-    jpg_bytes = _render_ir_jpg(
-        raw["tb"],
-        lat_bounds=(ilat - half, ilat + half),
-    )
+    jpg_bytes = _render_ir_jpg(raw["tb"], lat_bounds=lat_bounds)
     if not jpg_bytes:
         raise HTTPException(status_code=502, detail="IR rendering failed")
 
-    # Cache to GCS
-    _gcs_jpg_put(atcf_id.upper(), dt_str, jpg_bytes, lat=ilat, lon=ilon)
+    # Cache to GCS (Mercator frames only — the equirectangular compare
+    # variant is one-off and must not overwrite the map's cache entry).
+    if mercator:
+        _gcs_jpg_put(atcf_id.upper(), dt_str, jpg_bytes, lat=ilat, lon=ilon)
 
     del raw
 

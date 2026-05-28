@@ -15229,12 +15229,17 @@
     // (radius_deg = 10) centered on the storm, so the storm sits at
     // image center and the ±6° crop is the central 60% of the image.
     function _rtDrawIrCompareFrame(canvas, storm, frameIndex, done) {
+        // warp=none → native equirectangular render. The compare canvas
+        // crops linearly and overlays a linear-in-latitude grid (same as
+        // the MW panel), so a Mercator-warped IR frame would misalign with
+        // the microwave panel and its own graticule. See get_ir_frame_jpg.
         var url = API_BASE
             + '/ir-monitor/storm/' + encodeURIComponent(storm.atcf_id)
             + '/ir-frame.jpg?frame_index=' + frameIndex
             + '&lookback_hours=' + _RT_MW_COMPARE_LOOKBACK_H
             + '&radius_deg=' + _RT_MW_COMPARE_RADIUS
-            + '&interval_min=' + JPG_PRIMARY_INTERVAL_MIN;
+            + '&interval_min=' + JPG_PRIMARY_INTERVAL_MIN
+            + '&warp=none';
         var img = new Image();
         img.crossOrigin = 'anonymous';
         img.onload = function () {
