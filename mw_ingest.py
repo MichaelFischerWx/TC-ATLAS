@@ -59,7 +59,7 @@ import signal
 import sys
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime as _dt, timedelta, timezone
 from pathlib import Path
 from typing import Iterable, Optional, Tuple
@@ -472,6 +472,45 @@ def _footprint_geojson(valid_mask: np.ndarray,
         comps = sorted(union.geoms, key=lambda g: -g.area)[:5]
         union = MultiPolygon(comps)
     return mapping(union)
+
+
+def _center_track(ds_geo, max_points: int = 12) -> list:
+    """Decimated center-pixel ground track of an arc as [[lat, lon], ...].
+
+    A cheap geometry proxy the frontend uses to decide whether a storm
+    actually fell under the swath: min great-circle distance from the
+    storm to this polyline ≤ the sensor's swath half-width. This replaces
+    the far looser bounding-box containment test, which badly over-reports
+    coverage for dateline-spanning, pole-to-±60° arcs — their bbox can be
+    ~60° wide in longitude even though the swath at any given latitude is
+    only ~15-20° wide. Mirrors the subpoint-track distance test that
+    predict_passes() already uses for *upcoming* passes, so ingested and
+    predicted coverage now share one definition.
+
+    Returns [] when geolocation is unavailable so callers fall back to the
+    bbox test (keeps pre-existing manifest entries working too)."""
+    try:
+        lats, lons = _get_swath_geolocation(ds_geo)
+    except Exception:
+        return []
+    lats = np.asarray(lats)
+    lons = np.asarray(lons)
+    if lats.ndim != 2 or lats.shape[0] < 2:
+        return []
+    center_col = lats.shape[1] // 2
+    lat = lats[:, center_col].astype(np.float64)
+    lon = lons[:, center_col].astype(np.float64)
+    good = np.isfinite(lat) & np.isfinite(lon)
+    lat = lat[good]
+    lon = lon[good]
+    n = len(lat)
+    if n == 0:
+        return []
+    if n <= max_points:
+        idx = range(n)
+    else:
+        idx = np.unique(np.linspace(0, n - 1, max_points).round().astype(int))
+    return [[round(float(lat[i]), 2), round(float(lon[i]), 2)] for i in idx]
 
 
 # ---------------------------------------------------------------------------
@@ -939,6 +978,7 @@ class RenderedProduct:
     bounds: list        # [[s, w], [n, e]]
     footprint: dict     # GeoJSON geometry
     pass_suffix: str = ""  # per-pass tag like "-p0" when granule was split
+    center_track: list = field(default_factory=list)  # [[lat,lon],...] arc center; [] if unknown
 
 
 # Sensors whose NRT granules bundle multiple orbital passes and must
@@ -1071,6 +1111,7 @@ def render_product(ds_bt, ds_geo, sensor: str, product: str
             logger.debug("pass%s skipped: %s", suffix or "", exc)
             continue
         r.pass_suffix = suffix
+        r.center_track = _center_track(sub_geo)
         out.append(r)
     return out
 
@@ -1342,6 +1383,11 @@ def upload_granule(meta: GranuleMeta, products: list[RenderedProduct],
             "png_url": f"https://storage.googleapis.com/{MW_BUCKET}/{png_key}",
             "geojson_url": f"https://storage.googleapis.com/{MW_BUCKET}/{geo_key}",
             "bounds": p.bounds,  # [[s, w], [n, e]] for L.imageOverlay
+            # Decimated arc center track [[lat,lon],...]. The frontend
+            # tests min great-circle distance to this polyline against the
+            # sensor swath half-width — an honest coverage gate that the
+            # bbox over-reports for wide dateline/polar arcs.
+            "center_track": p.center_track,
             "source": meta.source,
         })
     return entries
@@ -1542,6 +1588,9 @@ def _process_one_pps(reader_path: str, sensor: str,
         # For every band that lives in this group, regrid once per pass
         # and derive every product of that band.
         for sub_bt, sub_geo, suffix in passes:
+            # One arc → one center track, shared by every band/product of
+            # this arc (geolocation is common across the group's bands).
+            arc_track = _center_track(sub_geo)
             for (g_name, band), prods in by_group_band.items():
                 if g_name != group_name:
                     continue
@@ -1562,6 +1611,7 @@ def _process_one_pps(reader_path: str, sensor: str,
                     try:
                         r = _render_from_cached(cached, sensor, p)
                         r.pass_suffix = suffix
+                        r.center_track = arc_track
                         rendered.append(r)
                     except ValueError as exc:
                         logger.debug("pass%s product=%s skipped: %s",
