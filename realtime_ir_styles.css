@@ -530,6 +530,24 @@ html, body { margin: 0; padding: 0; }
 [data-theme="dark"] .ir-download-item-desc {
     color: #94a3b8;
 }
+.ir-download-opt {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    width: 100%;
+    padding: 7px 10px;
+    margin-top: 4px;
+    border-top: 1px solid rgba(100, 116, 139, 0.18);
+    font-size: 0.74rem;
+    color: var(--text);
+    cursor: pointer;
+    user-select: none;
+}
+.ir-download-opt input {
+    margin: 0;
+    cursor: pointer;
+    accent-color: var(--um-green);
+}
 .ir-sat-viewer-btn {
     color: var(--um-orange);
     border-color: rgba(244, 115, 33, 0.45);

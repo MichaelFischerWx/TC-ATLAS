@@ -3038,8 +3038,14 @@
             .catch(function (err) { console.warn('[RT Monitor] Track fetch failed:', err.message || ''); });
     }
 
-    /** Draw a past track polyline + intensity dots on a Leaflet map */
-    function drawTrackOnMap(targetMap, history, storm, layerArr) {
+    /** Draw a past track polyline + intensity dots on a Leaflet map.
+     *  `extrapPin` (optional): the dead-reckoned "now" position used to
+     *  center the IR cutout. When given (detail map), the track is
+     *  extended from the last official fix to this pin with a dashed
+     *  segment and the name label is placed there, so the track lines up
+     *  with the convection in the loop instead of lagging behind by an
+     *  advisory cycle. */
+    function drawTrackOnMap(targetMap, history, storm, layerArr, extrapPin) {
         // Build segments colored by intensity
         for (var i = 1; i < history.length; i++) {
             var prev = history[i - 1];
@@ -3083,7 +3089,29 @@
         // Name label near the current position
         var last = history[history.length - 1];
         var cat = storm.category || windToCategory(storm.vmax_kt);
-        var label = L.marker([last.lat, last.lon], {
+
+        // Extend the track to the dead-reckoned "now" pin so the line +
+        // name label sit on the convection shown in the IR loop (the
+        // cutout is centered on this same extrapolation). Dashed to mark
+        // it as extrapolated rather than an official fix.
+        var labelPos = last;
+        if (extrapPin && extrapPin.extrapolated &&
+                isFinite(extrapPin.lat) && isFinite(extrapPin.lon)) {
+            var eDlon = extrapPin.lon - last.lon;
+            if (Math.abs(eDlon) <= 180 &&
+                    (Math.abs(extrapPin.lat - last.lat) > 0.02 || Math.abs(eDlon) > 0.02)) {
+                var extColor = SS_COLORS[cat] || SS_COLORS.TD;
+                var extSeg = L.polyline(
+                    [[last.lat, last.lon], [extrapPin.lat, extrapPin.lon]],
+                    { color: extColor, weight: 2.5, opacity: 0.7, dashArray: '4,5' }
+                );
+                extSeg.addTo(targetMap);
+                layerArr.push(extSeg);
+                labelPos = extrapPin;
+            }
+        }
+
+        var label = L.marker([labelPos.lat, labelPos.lon], {
             icon: L.divIcon({
                 className: '',
                 html: '<div style="color:#fff;font-size:11px;font-weight:600;' +
@@ -4337,7 +4365,8 @@
         var stormCopy = storm;
         fetchStormMetadata(storm.atcf_id, function (metaErr, meta) {
             if (!metaErr && meta && meta.intensity_history && meta.intensity_history.length >= 2) {
-                drawTrackOnMap(detailMap, meta.intensity_history, stormCopy, detailTrackLayers);
+                drawTrackOnMap(detailMap, meta.intensity_history, stormCopy,
+                               detailTrackLayers, _extrapolateStormPin(stormCopy));
             }
         });
 
@@ -4821,7 +4850,10 @@
         _cacheAnimEls();
         var timeStr = animFrameTimes[animIndex];
         if (_elFrameTime) _elFrameTime.textContent = fmtUTC(timeStr);
-        if (_elSatLabel) _elSatLabel.textContent = detailSatName || 'GIBS IR';
+        // Name the channel (matches the Vis/WV/GeoColor labels) so the
+        // saved image always states what's shown, even with the product
+        // toggle stripped from the export.
+        if (_elSatLabel) _elSatLabel.textContent = 'Infrared — ' + (detailSatName || 'GIBS IR');
     }
 
     /** Show a specific frame by toggling opacity (instant — no tile fetching) */
@@ -14488,12 +14520,18 @@
                             scan_start: e.scan_start,
                             scan_start_ms: t,
                             bounds: e.bounds,
-                            products: {}    // product -> { png_url, geojson_url }
+                            products: {}    // product -> { png_url, geojson_url, bounds }
                         };
                     }
+                    // Each product PNG is regridded + Mercator-warped over
+                    // its OWN finite-data bbox, so its bounds can differ from
+                    // the orbit's first product. Store per-product bounds —
+                    // the crop must un-warp using the bounds the PNG was
+                    // warped with, else features land at the wrong latitude.
                     orbitMap[oid].products[e.product] = {
                         png_url: e.png_url,
-                        geojson_url: e.geojson_url
+                        geojson_url: e.geojson_url,
+                        bounds: e.bounds
                     };
                 }
                 // Newest first — analyst typically wants "what's the latest
@@ -16482,8 +16520,59 @@
         window._irCloseDownloadMenu();
     }
 
+    /** Whether the user wants the storm track included in saved images. */
+    function _irExportShowTrack() {
+        var cb = document.getElementById('ir-download-show-track');
+        return !cb || cb.checked;   // default: show
+    }
+
+    /** Temporarily detach the track overlay (polyline / fix dots /
+     *  extrapolation segment / name label) so it's absent from a saved
+     *  image. The storm center marker is NOT part of detailTrackLayers, so
+     *  it stays. Returns the removed layers for re-attachment. */
+    function _irHideTrackForExport() {
+        var removed = [];
+        if (!detailMap) return removed;
+        for (var i = 0; i < detailTrackLayers.length; i++) {
+            var ly = detailTrackLayers[i];
+            if (ly && detailMap.hasLayer(ly)) { detailMap.removeLayer(ly); removed.push(ly); }
+        }
+        return removed;
+    }
+    function _irRestoreTrackAfterExport(removed) {
+        if (!detailMap || !removed) return;
+        for (var i = 0; i < removed.length; i++) {
+            try { removed[i].addTo(detailMap); } catch (e) {}
+        }
+    }
+
+    /** html2canvas onclone hook: strip in-map UI chrome (zoom control,
+     *  product/channel toggle) from the SNAPSHOT only and stamp the
+     *  TC-ATLAS watermark + URL into the imagery panel. The live DOM is
+     *  untouched. */
+    function _irExportOnClone(clonedDoc) {
+        ['.leaflet-control-zoom', '#ir-product-toggle', '#ir-image-loader'].forEach(function (sel) {
+            var els = clonedDoc.querySelectorAll(sel);
+            for (var i = 0; i < els.length; i++) els[i].style.display = 'none';
+        });
+        var host = clonedDoc.getElementById('ir-image-container');
+        if (host) {
+            var wm = clonedDoc.createElement('div');
+            wm.style.cssText = 'position:absolute;right:10px;bottom:8px;z-index:2000;' +
+                'pointer-events:none;text-align:right;font-family:"DM Sans",sans-serif;' +
+                'line-height:1.15;text-shadow:0 1px 3px rgba(0,0,0,0.9);';
+            wm.innerHTML =
+                '<div style="font-weight:700;font-size:13px;letter-spacing:0.3px;' +
+                'color:rgba(255,255,255,0.92);">TC-ATLAS</div>' +
+                '<div style="font-weight:500;font-size:10px;color:rgba(255,255,255,0.72);">' +
+                'michaelfischerwx.github.io/TC-ATLAS</div>';
+            host.appendChild(wm);
+        }
+    }
+
     /** Snapshot the visible imagery panel as a PNG, including the
-     *  current frame timestamp / satellite label and the Tb colorbar.
+     *  current frame timestamp / channel label and the Tb colorbar.
+     *  Strips UI chrome, stamps a watermark, and (optionally) the track.
      *  Uses html2canvas (already used elsewhere on the site). */
     window._irDownloadCurrentFrame = function () {
         if (!currentStormId) return;
@@ -16491,12 +16580,16 @@
         window._irCloseDownloadMenu();
         var node = document.getElementById('ir-image-container');
         if (!node) return;
+        var hiddenTrack = _irExportShowTrack() ? null : _irHideTrackForExport();
         _ensureHtml2canvas().then(function () {
             return window.html2canvas(node, {
                 useCORS: true, allowTaint: false, backgroundColor: '#0a0c12',
-                logging: false, scale: window.devicePixelRatio || 1
+                logging: false, scale: window.devicePixelRatio || 1,
+                onclone: _irExportOnClone
             });
         }).then(function (canvas) {
+            // Capture done — restore the live track immediately.
+            _irRestoreTrackAfterExport(hiddenTrack); hiddenTrack = null;
             canvas.toBlob(function (blob) {
                 if (!blob) return;
                 var ts = (animFrameTimes[animIndex] || '').replace(/[:\-T]/g, '').replace('Z', '');
@@ -16508,6 +16601,7 @@
                 requestAnimationFrame(function () { URL.revokeObjectURL(url); });
             }, 'image/png');
         }).catch(function (err) {
+            _irRestoreTrackAfterExport(hiddenTrack);
             console.warn('[RT Monitor] PNG export failed:', err);
         });
     };
@@ -16539,6 +16633,9 @@
         if (wasPlaying) stopAnimation();
         var savedIndex = animIndex;
 
+        // Honor the "Show storm track" toggle for the whole GIF.
+        var hiddenTrackGif = _irExportShowTrack() ? null : _irHideTrackForExport();
+
         // Bottom-corner toast for progress.
         var toast = document.createElement('div');
         toast.style.cssText = 'position:absolute;bottom:8px;right:8px;background:rgba(15,22,35,0.85);color:#e2e8f0;font:600 11px/1.2 \'DM Sans\',sans-serif;padding:6px 10px;border-radius:4px;z-index:1000;pointer-events:none;';
@@ -16564,7 +16661,8 @@
                 a.download = currentStormId + '_animation.gif';
                 a.click();
                 requestAnimationFrame(function () { URL.revokeObjectURL(url); });
-                // Restore animation state and remove toast.
+                // Restore track, animation state, and remove toast.
+                _irRestoreTrackAfterExport(hiddenTrackGif);
                 state.showFn(savedIndex);
                 if (wasPlaying) startAnimation();
                 if (toast.parentElement) toast.parentElement.removeChild(toast);
@@ -16584,7 +16682,7 @@
                 requestAnimationFrame(function () {
                     window.html2canvas(node, {
                         useCORS: true, allowTaint: false, backgroundColor: '#0a0c12',
-                        logging: false, scale: 1
+                        logging: false, scale: 1, onclone: _irExportOnClone
                     }).then(function (cv) {
                         // delay per frame mirrors the player's animIntervalMs.
                         gif.addFrame(cv, { delay: animIntervalMs, copy: true });
@@ -16600,6 +16698,7 @@
             captureNext();
         }).catch(function (err) {
             console.warn('[RT Monitor] GIF export setup failed:', err);
+            _irRestoreTrackAfterExport(hiddenTrackGif);
             if (toast.parentElement) toast.parentElement.removeChild(toast);
         });
     };
