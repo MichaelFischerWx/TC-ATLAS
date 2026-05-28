@@ -4708,10 +4708,17 @@
         // Show the NEW frame first so the basemap never peeks through
         // during the swap. Doing setOpacity(0) on the old frame first
         // causes a single-frame "white flash" on mobile (the browser
-        // commits the opacity-0 paint before the opacity-0.85 paint).
+        // commits the opacity-0 paint before the opacity-1 paint).
+        //
+        // Fully opaque: the IR overlay sits in tilePane directly on top
+        // of the plain light-gray `light_nolabels` basemap. The old
+        // 0.85 let that gray bleed through and washed the IR colors out
+        // (a milky haze). Coastlines (z450), labels + graticule
+        // (overlayPane z400) all render ABOVE the IR, so opacity 1.0
+        // loses no reference context — it just makes the IR crisp.
         var prevIdx = animIndex;
         animIndex = idx;
-        animFrameLayers[idx].setOpacity(0.85);
+        animFrameLayers[idx].setOpacity(1.0);
 
         // Now hide the previously-shown frame.
         if (prevIdx >= 0 && prevIdx !== idx && prevIdx < animFrameLayers.length
