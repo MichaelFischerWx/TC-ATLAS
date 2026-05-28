@@ -364,9 +364,21 @@
                         </div>
                         <!-- Helmholtz shear-by-layer heatmap: x = layer bottom,
                              y = layer top, color = 0–400 km env shear (kt). -->
-                        <div id="rt-env-shear-grid" style="width:100%;height:360px;margin-top:10px;"></div>
+                        <div style="display:flex;align-items:center;justify-content:space-between;margin-top:10px;">
+                            <span style="font-size:0.7rem;font-weight:600;color:var(--text-dim);">Shear by layer</span>
+                            <button id="rt-env-shear-save" type="button" class="ir-chart-save-btn"
+                                    title="Save figure as PNG" aria-label="Save shear-by-layer figure"
+                                    onclick="window._irSaveShearProfile()">
+                                <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+                                    <path d="M12 3v12"/>
+                                    <path d="m7 10 5 5 5-5"/>
+                                    <path d="M5 21h14"/>
+                                </svg>
+                            </button>
+                        </div>
+                        <div id="rt-env-shear-grid" style="width:100%;height:360px;margin-top:4px;"></div>
                         <div id="rt-env-shear-grid-status" style="font-size:0.65rem;color:var(--text-dim);margin-top:2px;line-height:1.45;">
-                            Helmholtz deep-layer shear (0&ndash;400 km core, vortex removed) for every layer choice &mdash; x: layer bottom, y: layer top. Brighter = stronger shear.
+                            Helmholtz deep-layer shear (0&ndash;400 km core, vortex removed) for every layer choice &mdash; x: layer bottom, y: layer top. Fixed 0&ndash;40 kt scale (blue&rarr;red) so colors mean the same shear on every storm.
                         </div>
                     </div>
                 </div>

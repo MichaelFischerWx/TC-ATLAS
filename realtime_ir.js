@@ -4689,19 +4689,20 @@
     }
 
     // Fixed 0–40 kt shear scale so the heatmap reads the same across every
-    // storm (cross-storm context). Banded blue → yellow → orange → dark-red
-    // at the 10/20/30 kt thresholds, with the top band fading to dark red
-    // toward 40 kt+. Duplicated stops create crisp class boundaries; the
-    // top band is a gradient per "transition to dark red at 40."
+    // storm (cross-storm context). Four hue classes at the 10/20/30 kt
+    // thresholds — blue / yellow / orange / red — but each band ramps
+    // light→dark WITHIN itself so neighboring values (e.g. 22 vs 28 kt) are
+    // still distinguishable. Duplicated stops keep the class boundaries
+    // crisp; values ≥40 kt clamp to dark red.
     var _SHEAR_PROFILE_ZMAX = 40;
     var _SHEAR_PROFILE_COLORSCALE = [
-        [0.00, '#3b82f6'],   // 0 kt   — blue
-        [0.25, '#3b82f6'],   // 10 kt  — end of blue band
-        [0.25, '#fde047'],   // 10 kt  — yellow
-        [0.50, '#fde047'],   // 20 kt  — end of yellow band
-        [0.50, '#f97316'],   // 20 kt  — orange
-        [0.75, '#f97316'],   // 30 kt  — end of orange band
-        [0.75, '#ef4444'],   // 30 kt  — red
+        [0.00, '#93c5fd'],   // 0 kt   — blue (light)
+        [0.25, '#1d4ed8'],   // 10 kt  — blue (deep)
+        [0.25, '#fef08a'],   // 10 kt  — yellow (light)
+        [0.50, '#ca8a04'],   // 20 kt  — gold (deep)
+        [0.50, '#fdba74'],   // 20 kt  — orange (light)
+        [0.75, '#c2410c'],   // 30 kt  — orange (deep)
+        [0.75, '#f87171'],   // 30 kt  — red (light)
         [1.00, '#7f1d1d'],   // 40 kt+ — dark red
     ];
 
@@ -4752,6 +4753,109 @@
             },
         }, { responsive: true, displayModeBar: false });
     }
+
+    /** Save the shear-by-layer heatmap as a publication PNG in the current
+     *  theme, with full provenance baked in (storm, GFS analysis cycle
+     *  time, method) + a TC-ATLAS watermark. Clones the live figure so the
+     *  on-screen plot is untouched. */
+    window._irSaveShearProfile = function () {
+        var chartEl = document.getElementById('rt-env-shear-grid');
+        if (!chartEl || !chartEl.data || !chartEl.data.length || typeof Plotly === 'undefined') {
+            console.warn('[RT Monitor] No shear-by-layer figure to export');
+            return;
+        }
+        _ga('ir_export_shear_profile', { storm: currentStormId });
+
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var bgColor   = isDark ? '#0f172a' : '#ffffff';
+        var textColor = isDark ? '#e2e8f0' : '#1e293b';
+        var axisColor = isDark ? '#94a3b8' : '#475569';
+        var wmColor   = isDark ? '#64748b' : '#94a3b8';
+
+        var prof = _rtShearProfileCache[currentStormId] || {};
+        var stormName = (document.getElementById('ir-detail-name') || {}).textContent || '';
+        var stormId = currentStormId || '';
+        var cycle = prof.gfs_cycle_utc || '';
+        var cycleFmt = (cycle.length >= 13)
+            ? cycle.substring(0, 4) + '-' + cycle.substring(5, 7) + '-' +
+              cycle.substring(8, 10) + ' ' + cycle.substring(11, 13) + 'Z'
+            : '';
+        var fix = prof.last_fix_utc || '';
+        var fixFmt = (fix.length >= 13)
+            ? fix.substring(5, 7) + '/' + fix.substring(8, 10) + ' ' + fix.substring(11, 13) + 'Z'
+            : '';
+        var evalKm = prof.eval_km != null ? Math.round(prof.eval_km) : 400;
+        var maskKm = prof.mask_km != null ? Math.round(prof.mask_km) : 500;
+
+        var title = 'Deep-layer Shear by Layer — ' + (stormName && stormId
+            ? stormName + ' (' + stormId + ')' : (stormName || stormId || 'Storm'));
+        var subtitle = 'Helmholtz vortex-removed environmental shear · 0–' + evalKm +
+                       ' km core · disturbance mask ' + maskKm + ' km';
+        var srcLine = (prof.source || 'GFS 0.25° analysis') +
+                      (cycleFmt ? ' · analysis ' + cycleFmt : '') +
+                      (fixFmt ? '   ·   storm fix ' + fixFmt : '');
+
+        var data = JSON.parse(JSON.stringify(chartEl.data));
+        var layout = JSON.parse(JSON.stringify(chartEl.layout));
+        layout.title = {
+            text: title,
+            font: { size: 16, color: textColor, family: 'DM Sans, sans-serif' },
+            x: 0.5, xanchor: 'center', y: 0.975,
+        };
+        layout.paper_bgcolor = bgColor;
+        layout.plot_bgcolor = bgColor;
+        layout.font = { family: 'DM Sans, sans-serif', size: 13, color: axisColor };
+        layout.margin = { l: 74, r: 30, t: 104, b: 96 };
+        layout.width = 900;
+        layout.height = 660;
+        if (layout.xaxis) {
+            layout.xaxis.tickfont = { size: 12, color: axisColor };
+            if (layout.xaxis.title) layout.xaxis.title.font = { size: 14, color: textColor };
+        }
+        if (layout.yaxis) {
+            layout.yaxis.tickfont = { size: 12, color: axisColor };
+            if (layout.yaxis.title) layout.yaxis.title.font = { size: 14, color: textColor };
+        }
+        if (data[0] && data[0].colorbar) {
+            data[0].colorbar.tickfont = { size: 12, color: axisColor };
+            data[0].colorbar.title = { text: 'kt', font: { size: 13, color: textColor } };
+            data[0].colorbar.thickness = 16;
+        }
+        layout.annotations = (layout.annotations || []).concat([
+            { text: subtitle, xref: 'paper', yref: 'paper', x: 0.5, y: 1.085,
+              showarrow: false, xanchor: 'center', yanchor: 'bottom',
+              font: { size: 12, color: axisColor, family: 'DM Sans, sans-serif' } },
+            { text: srcLine, xref: 'paper', yref: 'paper', x: 0.5, y: 1.025,
+              showarrow: false, xanchor: 'center', yanchor: 'bottom',
+              font: { size: 11, color: axisColor, family: 'DM Sans, sans-serif' } },
+            { text: 'TC-ATLAS', xref: 'paper', yref: 'paper', x: 0, y: -0.135,
+              showarrow: false, xanchor: 'left', yanchor: 'top',
+              font: { size: 11, color: wmColor, family: 'DM Sans, sans-serif' } },
+            { text: 'michaelfischerwx.github.io/TC-ATLAS', xref: 'paper', yref: 'paper',
+              x: 1, y: -0.135, showarrow: false, xanchor: 'right', yanchor: 'top',
+              font: { size: 11, color: wmColor, family: 'DM Sans, sans-serif' } },
+        ]);
+
+        var tmpDiv = document.createElement('div');
+        tmpDiv.style.cssText = 'position:absolute;left:-9999px;top:-9999px;';
+        document.body.appendChild(tmpDiv);
+        Plotly.newPlot(tmpDiv, data, layout, { displayModeBar: false }).then(function () {
+            return Plotly.toImage(tmpDiv, {
+                format: 'png', width: layout.width, height: layout.height, scale: 3
+            });
+        }).then(function (dataUrl) {
+            var a = document.createElement('a');
+            a.href = dataUrl;
+            a.download = (stormId || 'storm') + '_shear_by_layer' +
+                         (cycle ? '_' + cycle.replace(/[:\-T]/g, '').replace('Z', '').slice(0, 10) : '') +
+                         '_' + (isDark ? 'dark' : 'light') + '.png';
+            document.body.appendChild(a); a.click(); document.body.removeChild(a);
+            Plotly.purge(tmpDiv); document.body.removeChild(tmpDiv);
+        }).catch(function (err) {
+            console.warn('[RT Monitor] Shear profile export failed:', err);
+            if (tmpDiv.parentNode) { Plotly.purge(tmpDiv); document.body.removeChild(tmpDiv); }
+        });
+    };
 
     /**
      * Render the env Skew-T + shear-vs-pressure plot for the
