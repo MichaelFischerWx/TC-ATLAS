@@ -978,6 +978,24 @@
         } catch (e) { return isoStr; }
     }
 
+    /** Human "x ago" for a UTC ISO string, used to flag stale fixes. */
+    function _fmtAgo(isoStr) {
+        if (!isoStr) return '';
+        var t = Date.parse(isoStr);
+        if (!isFinite(t)) return '';
+        var mins = Math.round((Date.now() - t) / 60000);
+        if (mins < 0) return '';            // future / clock skew — say nothing
+        if (mins < 1) return 'just now';
+        if (mins < 60) return mins + ' min ago';
+        var hrs = mins / 60;
+        if (hrs < 24) return (hrs < 10 ? hrs.toFixed(1) : Math.round(hrs)) + ' h ago';
+        return Math.round(hrs / 24) + ' d ago';
+    }
+    // A fix older than this is visually flagged so a forecaster doesn't
+    // read a hours-old position as current. 6 h ≈ two missed synoptic
+    // fixes for a weak/sparsely-tracked system.
+    var _LASTFIX_STALE_MIN = 6 * 60;
+
     /** Pick the best satellite for a given longitude (angular distance to sub-satellite point) */
     function bestSatelliteForLon(lon) {
         var best = SAT_SUBLONS[0], bestDist = 999;
@@ -4575,6 +4593,8 @@
         var catEl = document.getElementById('ir-detail-cat');
         catEl.textContent = categoryShort(cat) + (storm.vmax_kt != null ? ' \u00B7 ' + storm.vmax_kt + ' kt' : '');
         catEl.style.background = color;
+        catEl.title = 'Saffir-Simpson category from 1-min sustained wind (kt). '
+            + 'TD <34 \u00B7 TS 34\u201363 \u00B7 Cat1 64\u201382 \u00B7 Cat2 83\u201395 \u00B7 Cat3 96\u2013112 \u00B7 Cat4 113\u2013136 \u00B7 Cat5 137+';
 
         // Populate info grid
         document.getElementById('ir-info-basin').textContent = storm.basin || '\u2014';
@@ -4585,7 +4605,22 @@
             storm.mslp_hpa != null ? storm.mslp_hpa + ' hPa' : '\u2014';
         document.getElementById('ir-info-vmax').textContent =
             storm.vmax_kt != null ? storm.vmax_kt + ' kt (' + categoryShort(cat) + ')' : '\u2014';
-        document.getElementById('ir-info-lastfix').textContent = fmtUTC(storm.last_fix_utc);
+        var lastfixEl = document.getElementById('ir-info-lastfix');
+        if (lastfixEl) {
+            var ago = _fmtAgo(storm.last_fix_utc);
+            var tMs = Date.parse(storm.last_fix_utc);
+            var staleMin = isFinite(tMs) ? (Date.now() - tMs) / 60000 : 0;
+            lastfixEl.textContent = fmtUTC(storm.last_fix_utc);
+            if (ago) {
+                var agoSpan = document.createElement('span');
+                agoSpan.className = 'ir-lastfix-ago' + (staleMin > _LASTFIX_STALE_MIN ? ' stale' : '');
+                agoSpan.textContent = ' · ' + ago;
+                if (staleMin > _LASTFIX_STALE_MIN) {
+                    agoSpan.title = 'This fix is several hours old — the plotted position may no longer be current.';
+                }
+                lastfixEl.appendChild(agoSpan);
+            }
+        }
 
         // Shear from GFS analysis (lazy: fires after the IR mini-map loads)
         var shearEl = document.getElementById('ir-info-shear');
@@ -17109,13 +17144,21 @@
             setTimeout(function () {
                 document.addEventListener('click', _irOutsideDownloadClick, { capture: true, once: true });
             }, 0);
+            // Esc also dismisses — the menu reads as modal-ish, so users
+            // reach for Escape; without this it can feel stuck (esp. if
+            // opened by accident on touch).
+            document.addEventListener('keydown', _irDownloadEscClose);
         }
     };
+    function _irDownloadEscClose(e) {
+        if (e.key === 'Escape' || e.keyCode === 27) window._irCloseDownloadMenu();
+    }
     window._irCloseDownloadMenu = function () {
         var menu = document.getElementById('ir-download-menu');
         var btn = document.querySelector('#ir-download-wrap .ir-download-btn');
         if (menu) menu.style.display = 'none';
         if (btn) btn.setAttribute('aria-expanded', 'false');
+        document.removeEventListener('keydown', _irDownloadEscClose);
     };
     function _irOutsideDownloadClick(e) {
         var wrap = document.getElementById('ir-download-wrap');
