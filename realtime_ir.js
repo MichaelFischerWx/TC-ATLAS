@@ -10376,8 +10376,12 @@
                 line: { color: gridStroke, width: 1, dash: 'dot' },
                 layer: 'below',
             });
+            // Label at the LEFT edge, just inside the plot. The data
+            // starts low (~30 kt at +0h), so the upper-category labels
+            // (C1–C5) sit in empty space and don't overlap the curve —
+            // and the right side is freed for the legend.
             ssAnnotations.push({
-                x: 1, y: st.y, xref: 'paper', yref: 'y',
+                x: 0, y: st.y, xref: 'paper', yref: 'y',
                 xanchor: 'left', yanchor: 'middle', xshift: 3,
                 text: st.label, showarrow: false,
                 font: { size: 8.5, color: gridLabelColor,
@@ -10475,9 +10479,11 @@
             // Extra bottom room for the rotated tick labels + the
             // "Lead time" title (was 42 px and crowded against the
             // ticks). r:96 leaves space for the inset legend.
-            // r:126 — leaves room for the SS-threshold labels (TS/C1…C5,
-            // ~22 px) AND the inset legend (~100 px) so neither clips.
-            margin: { l: 55, r: 126, t: 26, b: 64 },
+            // SS labels now sit inside the left edge and the legend is
+            // an inset (top-right, inside the plot), so the right margin
+            // no longer needs reserved space — was r:126, which still
+            // clipped the legend on the narrow storm card.
+            margin: { l: 52, r: 16, t: 24, b: 60 },
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: 'rgba(0,0,0,0)',
             xaxis: { title: { text: 'Lead time', font: { size: 11 },
@@ -10504,13 +10510,18 @@
             }] : []).concat(ssAnnotations),
             showlegend: true,
             legend: {
-                x: 1.005, y: 1, xanchor: 'left', yanchor: 'top',
-                bgcolor: isDark ? 'rgba(15,22,35,0.75)'
-                                : 'rgba(255,255,255,0.85)',
+                // Inset at the top-right INSIDE the plot. The data is
+                // low there (high lead time → weak storm), so the legend
+                // sits over empty space and — unlike the old x:1.005
+                // right-margin placement — can't be clipped by the
+                // narrow card's container edge.
+                x: 0.985, y: 0.98, xanchor: 'right', yanchor: 'top',
+                bgcolor: isDark ? 'rgba(15,22,35,0.82)'
+                                : 'rgba(255,255,255,0.88)',
                 bordercolor: isDark ? 'rgba(255,255,255,0.10)'
                                     : 'rgba(15,22,35,0.10)',
                 borderwidth: 1,
-                font: { size: 10, color: isDark ? '#e2e8f0' : '#1f2937' },
+                font: { size: 9, color: isDark ? '#e2e8f0' : '#1f2937' },
                 itemsizing: 'constant',
                 itemwidth: 30,
                 tracegroupgap: 0,

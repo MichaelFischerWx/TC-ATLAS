@@ -900,7 +900,12 @@ html, body { margin: 0; padding: 0; }
 .ir-intensity-chart {
     width: 100%;
     height: 200px;
-    background: rgba(0, 0, 0, 0.1);
+    /* Was a hardcoded rgba(0,0,0,0.1) — a gray fill that ignored the
+       theme. Use a transparent surface with a themed border so the
+       Plotly transparent paper shows the card background through and
+       the panel reads correctly in both light and dark layouts. */
+    background: transparent;
+    border: 1px solid var(--border);
     border-radius: 6px;
     overflow: hidden;
 }
