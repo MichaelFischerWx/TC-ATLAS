@@ -1863,7 +1863,20 @@ def _prefetch_ir_frames(storms: list):
                 sun_el_now = _solar_elevation(
                     center_lat, center_lon, _dt.now(timezone.utc)
                 )
-                right_band = VIS_BAND if sun_el_now > -6 else WV_BAND
+                # WV (Band 8) is useful 24/7 and small (same volume as IR
+                # — 16× smaller than Vis L1b), so we prewarm it every
+                # cycle. The "extra" band is daylight-dependent: Vis
+                # while sunlit, SWIR (Band 7) as the nighttime visible-
+                # like fallback. Previously the prewarm chose *one*
+                # band — Vis OR WV — which left the WV bundle stale for
+                # ~12h whenever a storm sat in daylight, so users hit
+                # cold S3 (~6h-old frames) when clicking WV.
+                primary_band = WV_BAND
+                extra_bands: list[int] = []
+                if sun_el_now > -6:
+                    extra_bands.append(VIS_BAND)
+                else:
+                    extra_bands.append(SWIR_BAND)
                 _prefetch_counts = {"ir": 0, "band": 0, "jpg": 0}
 
                 def _fetch_and_cache_ir(tdt, dstr):
@@ -1968,26 +1981,15 @@ def _prefetch_ir_frames(storms: list):
                 # solar elevation is < -6° (no usable imagery at night).
                 # That filter cuts the effective Vis frame count in half
                 # for most storm latitudes, so prewarming all frames is
-                # affordable and gives the WV/Vis compare view a warm
-                # cache for the full 6h lookback. Workers stay capped at
-                # 2 for Vis to bound peak memory.
+                # affordable.
                 max_band_frames = len(frame_times)
                 # Worker count tuned for Cloud Run's 2 vCPU + 4 Gi memory.
                 # Frame work is mostly I/O-bound (S3 fetch + bz2
                 # decompress), so we can run well above core count.
                 # Vis L1b is much larger per segment so we cap lower to
                 # bound peak memory; IR/WV/SWIR are 16× smaller.
-                max_workers = 3 if right_band == VIS_BAND else 8
-
-                # At night also prewarm Band 7 (SWIR) alongside WV.
-                # Visible button auto-switches to SWIR when the storm is
-                # dark, so without this nighttime users wait 30-60s on
-                # cold S3 the first time they click Visible. SWIR data
-                # is the same volume as IR (smaller than Vis), so adding
-                # it doesn't blow up cycle time.
-                extra_bands: list[int] = []
-                if right_band == WV_BAND:  # night cycle
-                    extra_bands.append(SWIR_BAND)
+                has_vis_extra = VIS_BAND in extra_bands
+                max_workers = 3 if has_vis_extra else 8
 
                 # Iterate newest → oldest so the most-recent frames land
                 # in the per-frame cache first. The bundle rebuild only
@@ -2003,7 +2005,7 @@ def _prefetch_ir_frames(storms: list):
                         dt_str = target_dt.strftime("%Y%m%d%H%M")
                         futures.append(pool.submit(_fetch_and_cache_ir, target_dt, dt_str))
                         if i < max_band_frames:
-                            futures.append(pool.submit(_fetch_and_cache_band, target_dt, dt_str, right_band))
+                            futures.append(pool.submit(_fetch_and_cache_band, target_dt, dt_str, primary_band))
                             for eb in extra_bands:
                                 futures.append(pool.submit(_fetch_and_cache_band, target_dt, dt_str, eb))
 
@@ -2021,7 +2023,7 @@ def _prefetch_ir_frames(storms: list):
                         f" + Band {extra_bands[0]}" if extra_bands else ""
                     )
                     print(f"[IR Pre-fetch] {atcf_id}: GCS cached {c['ir']} IR + "
-                          f"{c['band']} Band {right_band}{extra_summary} + "
+                          f"{c['band']} Band {primary_band}{extra_summary} + "
                           f"{c['jpg']} JPG frames (parallel)")
                 total_gcs_fetched += c["ir"] + c["band"]
 
@@ -2046,7 +2048,7 @@ def _prefetch_ir_frames(storms: list):
                         radius_deg=_PREFETCH_RADIUS_DEG,
                         lookback_hours=_PREFETCH_LOOKBACK_HOURS,
                         interval_min=_PREFETCH_INTERVAL_MIN,
-                        band=right_band,   # WV or Vis depending on solar elevation
+                        band=primary_band,   # always WV — 24/7 utility
                     )
                 except Exception as ex:
                     # Bundle build is best-effort — per-frame cache still
@@ -2054,11 +2056,10 @@ def _prefetch_ir_frames(storms: list):
                     # on demand. Just log and move on.
                     print(f"[IR Pre-fetch] {atcf_id}: bundle build failed: {ex}")
 
-                # Night-only: also build the SWIR bundle so the
-                # Visible button's nighttime fallback is instant.
-                # Cheaper than WV (no LUT lookup) but the bundle build
-                # still pays the per-frame WebP encode, so run it after
-                # the primary bundle and let it fail-silently if needed.
+                # Daylight cycle adds Vis; nighttime adds SWIR. Both are
+                # the "visible-like" pair so the Visible button is always
+                # ready (true Vis when sunlit, SWIR when dark) without
+                # waiting on cold S3.
                 for eb in extra_bands:
                     try:
                         _build_and_upload_bundles(
