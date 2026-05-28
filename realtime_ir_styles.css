@@ -3066,6 +3066,32 @@ html:not([data-view="map"]) #ir-global-env-cbars {
     .rt-gen-marker--enter { animation: none; }
 }
 
+/* Shared retry-able error state for async panels (see _rtStatusError).
+   Keeps "load failed" visually distinct from an empty result and always
+   one click from a retry. */
+.rt-status-error {
+    color: #f87171;
+    font-size: 0.85em;
+}
+.rt-retry-link {
+    background: none;
+    border: none;
+    padding: 0;
+    margin: 0;
+    font: inherit;
+    color: #60a5fa;
+    text-decoration: underline;
+    cursor: pointer;
+}
+.rt-retry-link:hover { color: #93c5fd; }
+.ir-intensity-chart .rt-status-error {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    min-height: 60px;
+}
+
 /* Transient toast that announces newly-populated cyclogenesis
    disturbances on the global map (see _genesisAnnounceArrival). */
 .rt-gen-toast {

@@ -13,6 +13,51 @@
     var DEFAULT_LOOKBACK_HOURS = 6;
     var DEFAULT_RADIUS_DEG = 10.0;
 
+    // ── Shared async-state helpers ──────────────────────────────
+    // A bare fetch() never rejects on a stalled connection until the
+    // browser's (very long) socket timeout, so a hung request leaves a
+    // panel spinning forever. Wrap fetch with an AbortController timeout
+    // so stalls surface as a normal rejection the caller can show as a
+    // retry-able error. Default 20 s — generous for a Cloud Run cold
+    // start, short enough that a truly dead request doesn't hang the UI.
+    function _rtFetchJSON(url, opts, timeoutMs) {
+        opts = opts || {};
+        if (!('cache' in opts)) opts.cache = 'no-store';
+        var ms = timeoutMs || 20000;
+        var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+        if (ctrl && !opts.signal) opts.signal = ctrl.signal;
+        var timer = ctrl ? setTimeout(function () {
+            try { ctrl.abort(); } catch (e) {}
+        }, ms) : null;
+        return fetch(url, opts)
+            .then(function (r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            })
+            .finally(function () { if (timer) clearTimeout(timer); });
+    }
+
+    // Render a compact, retry-able error into a panel status element.
+    // Keeps the wording + affordance consistent across every panel so a
+    // failed load is always distinguishable from an empty result, and is
+    // always one click from a retry instead of a full page reload.
+    function _rtStatusError(el, retryFn, label) {
+        if (!el) return;
+        el.innerHTML = '';
+        var span = document.createElement('span');
+        span.className = 'rt-status-error';
+        span.textContent = (label || 'Couldn’t load') + ' · ';
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'rt-retry-link';
+        btn.textContent = 'Retry';
+        if (typeof retryFn === 'function') {
+            btn.addEventListener('click', function () { retryFn(); });
+        }
+        span.appendChild(btn);
+        el.appendChild(span);
+    }
+
     // ── IR Colormap LUTs (for client-side raw Tb rendering) ────
     var IR_COLORMAPS = {};
     var irSelectedColormap = 'claude-ir';
@@ -3424,13 +3469,24 @@
         if (cached && cached.meta && (Date.now() - cached.cachedAt) < PANEL_CACHE_TTL_MS) {
             _handleMeta(cached.meta);
         } else {
-            fetchStormMetadata(atcfId, function (err, meta) {
-                if (!err && meta) {
-                    if (!_panelCache[atcfId]) _panelCache[atcfId] = { cachedAt: Date.now() };
-                    _panelCache[atcfId].meta = meta;
-                    _handleMeta(meta);
-                }
-            });
+            (function _loadMeta() {
+                fetchStormMetadata(atcfId, function (err, meta) {
+                    if (!err && meta) {
+                        if (!_panelCache[atcfId]) _panelCache[atcfId] = { cachedAt: Date.now() };
+                        _panelCache[atcfId].meta = meta;
+                        _handleMeta(meta);
+                    } else {
+                        // Stop the skeleton from pulsing forever and give the
+                        // user a one-click retry instead of a dead panel.
+                        var chartEl = document.getElementById('ir-intensity-chart');
+                        if (chartEl) {
+                            chartEl.className = 'ir-intensity-chart';
+                            chartEl.innerHTML = '';
+                            _rtStatusError(chartEl, _loadMeta, 'Couldn’t load intensity history');
+                        }
+                    }
+                });
+            })();
         }
         // Raw Tb pre-fetch starts when ALL GIBS tiles finish loading
         // (see onFrameLayerLoaded). Panel requests get a natural head
@@ -7146,19 +7202,19 @@
     };
 
     function fetchSeasonSummary() {
-        fetch(API_BASE + '/ir-monitor/season-summary', { cache: 'no-store' })
-            .then(function (r) {
-                if (!r.ok) throw new Error('HTTP ' + r.status);
-                return r.json();
-            })
+        _rtFetchJSON(API_BASE + '/ir-monitor/season-summary')
             .then(function (data) {
                 seasonSummaryData = data;
                 renderBasinSidebar();
             })
             .catch(function (err) {
                 console.warn('[RT Monitor] Season summary fetch failed:', err.message || '');
+                // Keep any already-rendered data on screen; only replace the
+                // placeholder on a first-load failure so a transient repoll
+                // error doesn't blow away a good sidebar.
+                if (seasonSummaryData) return;
                 var content = document.getElementById('basin-sidebar-content');
-                if (content) content.innerHTML = '<div class="basin-sidebar-loading">Unable to load season data</div>';
+                _rtStatusError(content, fetchSeasonSummary, 'Couldn’t load season data');
             });
     }
 
@@ -7268,9 +7324,8 @@
         if (cached && cached.models && (Date.now() - cached.cachedAt) < PANEL_CACHE_TTL_MS) {
             dataPromise = Promise.resolve(cached.models);
         } else {
-            if (statusEl) statusEl.textContent = 'Loading...';
-            dataPromise = fetch(API_BASE + '/global/adeck?atcf_id=' + encodeURIComponent(atcfId), { cache: 'no-store' })
-                .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+            if (statusEl) statusEl.textContent = 'Loading…';
+            dataPromise = _rtFetchJSON(API_BASE + '/global/adeck?atcf_id=' + encodeURIComponent(atcfId))
                 .then(function (json) {
                     if (!_panelCache[atcfId]) _panelCache[atcfId] = { cachedAt: Date.now() };
                     _panelCache[atcfId].models = json;
@@ -7333,7 +7388,11 @@
                 }
             })
             .catch(function (e) {
-                if (statusEl) statusEl.textContent = 'Unavailable';
+                // Force a refetch next time by clearing the last-storm
+                // memo so the Retry actually re-hits the network.
+                _rtModelLastAtcf = null;
+                _rtStatusError(statusEl, function () { _rtLoadModelForecasts(storm); },
+                               'Models unavailable');
                 console.warn('[RT Models] A-deck load failed', e);
             });
     }
@@ -14751,7 +14810,7 @@
             if (section) section.style.display = '';
             var json = cached.ascat;
             if (!json.passes || json.passes.length === 0) {
-                if (statusEl) statusEl.textContent = 'No passes found';
+                if (statusEl) statusEl.textContent = 'No scatterometer passes over this storm in the last 12 h';
             } else {
                 if (statusEl) statusEl.textContent = json.passes.length + ' pass' + (json.passes.length > 1 ? 'es' : '');
                 var sel = document.getElementById('rt-ascat-pass-select');
@@ -14793,7 +14852,7 @@
                     _panelCache[atcfId].ascat = json;
 
                     if (!json.passes || json.passes.length === 0) {
-                        if (statusEl) statusEl.textContent = 'No passes found';
+                        if (statusEl) statusEl.textContent = 'No scatterometer passes over this storm in the last 12 h';
                         return;
                     }
 
@@ -14814,8 +14873,13 @@
                 })
                 .catch(function (err) {
                     console.warn('[RT ASCAT] Failed to load passes:', err);
-                    if (statusEl) statusEl.textContent = '';
-                    if (section) section.style.display = 'none';
+                    // Keep the section visible with a retry rather than
+                    // silently vanishing — a disappearing panel reads as a
+                    // bug, not as "the fetch failed, try again".
+                    if (section) section.style.display = '';
+                    _rtAscatLastAtcf = null;
+                    _rtStatusError(statusEl, function () { _rtLoadAscatPasses(storm); },
+                                   'Scatterometer data unavailable');
                 });
         }
         _doFetch();
@@ -15054,8 +15118,10 @@
             })
             .catch(function (err) {
                 console.warn('[RT MW Storm] manifest fetch failed:', err);
-                if (statusEl) statusEl.textContent = 'unavailable';
+                if (_rtMwStormState.atcfId !== storm.atcf_id) return;  // moved on
                 if (listEl) listEl.innerHTML = '';
+                _rtStatusError(statusEl, function () { _rtLoadStormMwPasses(storm); },
+                               'Microwave passes unavailable');
             });
     }
 
