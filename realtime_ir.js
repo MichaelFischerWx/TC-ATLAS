@@ -3782,37 +3782,19 @@
         animIndex = animFrameTimes.length - 1;
         if (header.satellite) detailSatName = header.satellite;
 
-        // Storm-relative framing: place ALL frames at the SAME bounds
-        // (the latest frame's). Each frame's cutout was centered on the
-        // storm at its own time, so the storm visually sits at the
-        // center of the displayed region across all frames. Cloud
-        // features around it FLOW with time (the real signal); frame
-        // edges stay fixed (no bouncing). Coastlines / lat/lon grid
-        // stay anchored via the basemap. This is the "co-moving" /
-        // storm-relative TC research convention.
+        // Geographic framing: each frame is placed at its OWN bounds.
+        // The storm visually drifts through the viewport as it moves,
+        // and track dots / lat/lon grid align exactly with where the
+        // storm is in each frame. This makes the best-track markers
+        // anchor properly to map coordinates instead of appearing to
+        // "slide" against a fixed cutout.
         //
-        // Previously each frame was placed at its own interpolated
-        // bounds, which is geographically "correct" but caused visible
-        // edge-jitter as the cutout center shifted ~0.4°/6h for typical
-        // storm motion. The Storm Satellite Detailed view doesn't need
-        // that geographic motion — Track Map mode shows it explicitly
-        // when wanted.
-        //
-        // Compute unified bounds = the LATEST frame's bounds (since
-        // that's the one centered on the storm's current position).
-        var latestFh = null;
-        for (var li = frames.length - 1; li >= 0; li--) {
-            if (frames[li].byte_length && !frames[li].error
-                    && frames[li].bounds) {
-                latestFh = frames[li];
-                break;
-            }
-        }
-        var ub = (latestFh && latestFh.bounds) || bounds;
-        var unifiedBounds = L.latLngBounds(
-            L.latLng(ub[0][0], ub[0][1]),
-            L.latLng(ub[1][0], ub[1][1])
-        );
+        // Trade-off: frame edges shift a few pixels per 10-min step
+        // (subtle edge jitter). Previously we used the LATEST frame's
+        // bounds for every overlay ("storm-relative" / co-moving), but
+        // that caused the storm's IR signature to detach from the
+        // best-track dots when the cutout's geographic center shifted
+        // between frames. User explicitly chose geographic framing.
 
         var mediaType = header.media_type || 'image/webp';
         var goodCount = 0;
@@ -3832,9 +3814,16 @@
             var blob = new Blob([slice], { type: mediaType });
             var blobUrl = URL.createObjectURL(blob);
             _activeFrameBlobUrls.push(blobUrl);
-            // Place at the UNIFIED (latest-frame) bounds, not the frame's
-            // own interpolated bounds. See comment above for rationale.
-            var overlay = L.imageOverlay(blobUrl, unifiedBounds, {
+            // Geographic framing: each frame at its own bounds so the
+            // track dots / coastlines / lat-lon grid align with the
+            // storm in every frame. Fall back to the bundle-level
+            // bounds if a frame is missing per-frame bounds metadata.
+            var fb = fh.bounds || bounds;
+            var fBounds = L.latLngBounds(
+                L.latLng(fb[0][0], fb[0][1]),
+                L.latLng(fb[1][0], fb[1][1])
+            );
+            var overlay = L.imageOverlay(blobUrl, fBounds, {
                 opacity: 0,
                 interactive: false,
                 pane: 'tilePane'
@@ -5666,22 +5655,22 @@
             return;
         }
 
-        // Storm-relative framing: place every frame at the latest valid
-        // frame's bounds, mirroring the IR / band bundle behavior.
-        var latestFh = null;
-        for (var li = frames.length - 1; li >= 0; li--) {
-            if (frames[li].byte_length && !frames[li].error && frames[li].bounds) {
-                latestFh = frames[li]; break;
+        // Geographic framing: each frame placed at its own bounds so
+        // track dots / coastlines align to the storm in every frame.
+        // Mirrors the IR bundle behavior. Fallback: bundle-level bounds.
+        var fallbackUb = header.bounds || null;
+        // Sanity check: at least one frame (or the bundle) must carry bounds.
+        var anyBounds = !!fallbackUb;
+        if (!anyBounds) {
+            for (var li = 0; li < frames.length; li++) {
+                if (frames[li].bounds) { anyBounds = true; break; }
             }
         }
-        var ub = (latestFh && latestFh.bounds) || header.bounds;
-        if (!ub) {
+        if (!anyBounds) {
             console.warn('[RT Monitor] GeoColor bundle missing bounds');
             if (productMode === 'geocolor') setProductMode('eir');
             return;
         }
-        var unifiedBounds = L.latLngBounds(
-            L.latLng(ub[0][0], ub[0][1]), L.latLng(ub[1][0], ub[1][1]));
 
         var mediaType = header.media_type || 'image/webp';
         var loaded = 0;
@@ -5723,7 +5712,10 @@
             var blob = new Blob([slice], { type: mediaType });
             var blobUrl = URL.createObjectURL(blob);
             _activeGeocolorBlobUrls.push(blobUrl);
-            var overlay = L.imageOverlay(blobUrl, unifiedBounds, {
+            var fb = fh.bounds || fallbackUb;
+            var fBounds = L.latLngBounds(
+                L.latLng(fb[0][0], fb[0][1]), L.latLng(fb[1][0], fb[1][1]));
+            var overlay = L.imageOverlay(blobUrl, fBounds, {
                 opacity: 0, interactive: false, pane: 'tilePane'
             });
             geocolorFrameHasError.push(false);
@@ -6101,22 +6093,21 @@
             return;
         }
 
-        // Storm-relative framing: place every frame at the LATEST valid frame's
-        // bounds. Matches the IR card behavior so cloud motion reads cleanly
-        // without edge jitter. Find the most recent non-error frame.
-        var latestFh = null;
-        for (var li = frames.length - 1; li >= 0; li--) {
-            if (frames[li].byte_length && !frames[li].error && frames[li].bounds) {
-                latestFh = frames[li]; break;
+        // Geographic framing: each frame placed at its own bounds so
+        // track dots / coastlines align with the storm in every frame.
+        // Mirrors the IR + GeoColor bundle behavior.
+        var fallbackUb = header.bounds || null;
+        var anyBounds = !!fallbackUb;
+        if (!anyBounds) {
+            for (var li = 0; li < frames.length; li++) {
+                if (frames[li].bounds) { anyBounds = true; break; }
             }
         }
-        var ub = (latestFh && latestFh.bounds) || header.bounds;
-        if (!ub) {
+        if (!anyBounds) {
             console.warn('[RT Monitor] Band ' + band + ' bundle missing bounds');
             if (productMode === productKey) setProductMode('eir');
             return;
         }
-        var unifiedBounds = L.latLngBounds(L.latLng(ub[0][0], ub[0][1]), L.latLng(ub[1][0], ub[1][1]));
 
         var mediaType = header.media_type || 'image/webp';
         var times = [];
@@ -6176,7 +6167,10 @@
             var blob = new Blob([slice], { type: mediaType });
             var blobUrl = URL.createObjectURL(blob);
             blobBucket.push(blobUrl);
-            var overlay = L.imageOverlay(blobUrl, unifiedBounds, {
+            var fb = fh.bounds || fallbackUb;
+            var fBounds = L.latLngBounds(
+                L.latLng(fb[0][0], fb[0][1]), L.latLng(fb[1][0], fb[1][1]));
+            var overlay = L.imageOverlay(blobUrl, fBounds, {
                 opacity: 0, interactive: false, pane: 'tilePane'
             });
             hasErr.push(false);
