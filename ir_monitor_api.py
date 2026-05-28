@@ -416,10 +416,20 @@ def _flag_anomalous_frames(jpgs: list) -> set:
         return float(np.abs(a - b).mean())
 
     flagged = set()
-    for i in range(1, n - 1):
-        ti, tp, tq = thumbs[i], thumbs[i - 1], thumbs[i + 1]
-        # Only triangulate when the frame AND both immediate neighbors exist.
-        if ti is None or tp is None or tq is None:
+    for i in range(n):
+        ti = thumbs[i]
+        if ti is None:
+            continue
+        # Nearest PRESENT neighbor on each side — skip over missing slots so a
+        # degraded frame sitting next to a data gap is still triangulated.
+        # (The original immediate-neighbor form silently skipped exactly this
+        # case: a bad scan whose adjacent slot is itself missing — the real
+        # WV failure mode where the prior scan didn't disseminate.) The d_skip
+        # term still scales the threshold to the prev↔next span, so genuine
+        # evolution across the gap isn't mistaken for an anomaly.
+        tp = next((thumbs[j] for j in range(i - 1, -1, -1) if thumbs[j] is not None), None)
+        tq = next((thumbs[j] for j in range(i + 1, n) if thumbs[j] is not None), None)
+        if tp is None or tq is None:
             continue
         d_prev = _mad(ti, tp)
         d_next = _mad(ti, tq)
@@ -428,6 +438,32 @@ def _flag_anomalous_frames(jpgs: list) -> set:
         if d_prev > thr and d_next > thr:
             flagged.add(i)
     return flagged
+
+
+def _screen_and_queue_anomalies(atcf_upper: str, times_oldest_first: list,
+                                jpgs: list, label: str = "") -> set:
+    """Flag anomalous frames in `jpgs` (encoded image bytes or None,
+    oldest-first, aligned with `times_oldest_first`), queue their slot keys
+    for force-refetch on the next prewarm cycle (self-heal), and return the
+    flagged index set.
+
+    Shared by the IR bundle, the prebuilt WV bundle, and the on-demand band
+    bundle so every product we ship (IR/WV/SWIR/Vis) gets the same "pops out
+    and comes back" screen. The prewarm pops `_anomalous_heal_times` and
+    force-refetches ALL bands for each queued slot, so a frame flagged on any
+    one product heals across products. `label` tags the log line."""
+    anomalous_idx = _flag_anomalous_frames(jpgs)
+    if anomalous_idx:
+        bad_keys = {times_oldest_first[i].strftime("%Y%m%d%H%M")
+                    for i in anomalous_idx}
+        with _anomalous_heal_lock:
+            _anomalous_heal_times.setdefault(atcf_upper, set()).update(bad_keys)
+        _bad = [times_oldest_first[i].strftime("%H%M") for i in sorted(anomalous_idx)]
+        tag = f" {label}" if label else ""
+        print(f"[Bundle Pre-build] {atcf_upper}:{tag} dropping "
+              f"{len(anomalous_idx)} anomalous scan frame(s) {_bad} "
+              f"(queued for self-heal)")
+    return anomalous_idx
 
 
 def _build_and_upload_bundles(
@@ -463,16 +499,8 @@ def _build_and_upload_bundles(
                      lat=interp_pos[i][0], lon=interp_pos[i][1])
         for i, ft in enumerate(times_oldest_first)
     ]
-    anomalous_idx = _flag_anomalous_frames(jpgs_pre)
-    if anomalous_idx:
-        bad_keys = {times_oldest_first[i].strftime("%Y%m%d%H%M") for i in anomalous_idx}
-        # Queue these slots so the next prewarm cycle force-refetches them
-        # (self-heal), not just the newest few.
-        with _anomalous_heal_lock:
-            _anomalous_heal_times.setdefault(atcf_upper, set()).update(bad_keys)
-        _bad = [times_oldest_first[i].strftime("%H%M") for i in sorted(anomalous_idx)]
-        print(f"[Bundle Pre-build] {atcf_upper}: dropping {len(anomalous_idx)} "
-              f"anomalous scan frame(s) {_bad} (queued for self-heal)")
+    anomalous_idx = _screen_and_queue_anomalies(
+        atcf_upper, times_oldest_first, jpgs_pre, label="IR")
 
     # Single pass: read both jpg + raw caches per frame. The raw cache
     # carries center_fix (IR-derived eye position), which we now ALSO
@@ -601,18 +629,36 @@ def _build_and_upload_bundles(
     # cycle. The band-specific cache lives under `band{N}-webp` keys.
     band_summary = ""
     if band is not None:
+        # Pre-pass: positions + cached band JPGs for every frame, so we can
+        # screen for anomalous scans (same "pops out and comes back" check
+        # the IR bundle uses) BEFORE shipping. Nighttime Vis frames stay None
+        # — expected-missing, never triangulated.
+        band_pos = [_interp_pos_at(atcf_id, ft, fallback_lat, fallback_lon)
+                    for ft in times_oldest_first]
+        band_night = [
+            band == VIS_BAND and _solar_elevation(band_pos[i][0], band_pos[i][1], ft) < -6
+            for i, ft in enumerate(times_oldest_first)
+        ]
+        bjpgs_pre = [
+            None if band_night[i]
+            else _gcs_jpg_get(atcf_upper, ft.strftime("%Y%m%d%H%M"),
+                              band=band, lat=band_pos[i][0], lon=band_pos[i][1])
+            for i, ft in enumerate(times_oldest_first)
+        ]
+        band_anom_idx = _screen_and_queue_anomalies(
+            atcf_upper, times_oldest_first, bjpgs_pre, label=f"band{band}")
+
         band_hdrs = []
         payloads_band: list[bytes] = []
         boffset = 0
         b_summary_sat = ""
         for i, ft in enumerate(times_oldest_first):
-            dt_str = ft.strftime("%Y%m%d%H%M")
             iso_dt = ft.strftime("%Y-%m-%dT%H:%M:%SZ")
-            ilat, ilon = _interp_pos_at(atcf_id, ft, fallback_lat, fallback_lon)
+            ilat, ilon = band_pos[i]
             fb = [[ilat - half, ilon - half], [ilat + half, ilon + half]]
 
             # Vis is daytime-only — mark night frames as expected-missing
-            if band == VIS_BAND and _solar_elevation(ilat, ilon, ft) < -6:
+            if band_night[i]:
                 band_hdrs.append({
                     "index": i, "datetime_utc": iso_dt, "satellite": "",
                     "bounds": fb, "byte_offset": boffset, "byte_length": 0,
@@ -620,12 +666,12 @@ def _build_and_upload_bundles(
                 })
                 continue
 
-            bjpg = _gcs_jpg_get(atcf_upper, dt_str, band=band, lat=ilat, lon=ilon)
-            if not bjpg:
+            bjpg = bjpgs_pre[i]
+            if not bjpg or i in band_anom_idx:
                 band_hdrs.append({
                     "index": i, "datetime_utc": iso_dt, "satellite": "",
                     "bounds": fb, "byte_offset": boffset, "byte_length": 0,
-                    "error": "no_cached_jpg",
+                    "error": "anomalous_scan" if (bjpg and i in band_anom_idx) else "no_cached_jpg",
                 })
                 continue
             bucket_name, _ = select_goes_sat(ilon, ft)
@@ -4385,6 +4431,16 @@ def get_storm_band_frames_bundle(
         results = list(pool.map(_worker, indexed))
     results.sort(key=lambda r: r[0])
 
+    # Screen for anomalous scans (same "pops out and comes back" check the
+    # IR/prebuilt-WV bundles use) and queue any flagged slot for self-heal on
+    # the next prewarm cycle. frame_times is oldest-first, index-aligned.
+    jpgs_by_idx = [None] * len(frame_times)
+    for i, jpg, sat, fbounds, err in results:
+        if jpg and err is None:
+            jpgs_by_idx[i] = jpg
+    band_anom_idx = _screen_and_queue_anomalies(
+        atcf_upper, frame_times, jpgs_by_idx, label=f"band{band} (on-demand)")
+
     frame_headers = []
     payloads: list[bytes] = []
     offset = 0
@@ -4393,12 +4449,16 @@ def get_storm_band_frames_bundle(
     for i, jpg, sat, fbounds, err in results:
         target_dt = frame_times[i]
         iso_dt = target_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-        if not jpg or err is not None:
-            # Distinguish "nighttime" (expected for Vis) from real errors
-            err_msg = err
-            if band == VIS_BAND and not err:
+        is_anom = i in band_anom_idx
+        if not jpg or err is not None or is_anom:
+            # Distinguish anomalous scan, nighttime (expected for Vis), errors
+            if is_anom:
+                err_msg = "anomalous_scan"
+            elif err:
+                err_msg = err
+            elif band == VIS_BAND:
                 err_msg = "nighttime"
-            elif not err:
+            else:
                 err_msg = "no_data"
             frame_headers.append({
                 "index": i,
@@ -4659,6 +4719,16 @@ def get_storm_geocolor_frames_bundle(
         results = list(pool.map(_worker, indexed))
     results.sort(key=lambda r: r[0])
 
+    # Screen for anomalous scans + queue self-heal. The single day/night
+    # render switch is NOT flagged (triangulation needs BOTH neighbors to
+    # diverge; the switch only diverges from one side).
+    jpgs_by_idx = [None] * len(frame_times)
+    for i, jpg, sat, fbounds, is_day, err in results:
+        if jpg and err is None:
+            jpgs_by_idx[i] = jpg
+    geo_anom_idx = _screen_and_queue_anomalies(
+        atcf_upper, frame_times, jpgs_by_idx, label="geocolor")
+
     frame_headers = []
     payloads: list[bytes] = []
     offset = 0
@@ -4669,8 +4739,8 @@ def get_storm_geocolor_frames_bundle(
     for i, jpg, sat, fbounds, is_day, err in results:
         target_dt = frame_times[i]
         iso_dt = target_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-        if not jpg:
-            err_msg = err or "no_data"
+        if not jpg or i in geo_anom_idx:
+            err_msg = "anomalous_scan" if (jpg and i in geo_anom_idx) else (err or "no_data")
             frame_headers.append({
                 "index": i, "datetime_utc": iso_dt, "satellite": sat or "",
                 "bounds": fbounds, "byte_offset": offset, "byte_length": 0,
