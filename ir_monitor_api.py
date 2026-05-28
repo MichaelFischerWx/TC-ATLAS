@@ -364,6 +364,62 @@ def _upload_public_bundle(key: str, body: bytes, content_type: str = "applicatio
         print(f"[Bundle Pre-build] upload {key} failed: {ex}")
 
 
+# Anomalous-scan screen. Frames are uniform size/bounds, but a bad scan
+# substitution can slip an offset/wrong image into one slot — it looks
+# distorted in the loop even though geometry is fine. We catch it by
+# comparing each frame's imagery to its two temporal neighbors: a frame is
+# anomalous if it differs from BOTH neighbors far more than they differ
+# from each other (the "pops out and comes back" signature). Genuine rapid
+# evolution is monotonic (neighbors progressively differ) and is NOT
+# flagged. Tuned from observed data: normal 10-min mean-abs-diff ~7 on a
+# 0–255 grayscale; a bad substitution measured ~46 vs neighbors that
+# agreed at ~13.
+_ANOM_RATIO = 2.5       # flag if both neighbor diffs exceed RATIO × the neighbor-pair diff
+_ANOM_ABS_FLOOR = 20.0  # …and exceed this absolute MAD (avoids flagging quiet periods)
+
+
+def _flag_anomalous_frames(jpgs: list) -> set:
+    """Return the set of frame indices whose imagery is a strong outlier vs
+    BOTH immediate temporal neighbors (likely a bad scan substitution).
+    `jpgs` is a list of encoded image bytes or None (missing frame).
+    Fail-open: returns an empty set on any decode/dependency error so a
+    detection hiccup never blocks bundling."""
+    try:
+        import numpy as np
+        from PIL import Image
+        import io as _io
+    except Exception:
+        return set()
+
+    n = len(jpgs)
+    thumbs = [None] * n
+    for i, b in enumerate(jpgs):
+        if not b:
+            continue
+        try:
+            im = Image.open(_io.BytesIO(b)).convert("L").resize((64, 64))
+            thumbs[i] = np.asarray(im, dtype=np.float32)
+        except Exception:
+            thumbs[i] = None
+
+    def _mad(a, b):
+        return float(np.abs(a - b).mean())
+
+    flagged = set()
+    for i in range(1, n - 1):
+        ti, tp, tq = thumbs[i], thumbs[i - 1], thumbs[i + 1]
+        # Only triangulate when the frame AND both immediate neighbors exist.
+        if ti is None or tp is None or tq is None:
+            continue
+        d_prev = _mad(ti, tp)
+        d_next = _mad(ti, tq)
+        d_skip = _mad(tp, tq)
+        thr = max(_ANOM_ABS_FLOOR, _ANOM_RATIO * d_skip)
+        if d_prev > thr and d_next > thr:
+            flagged.add(i)
+    return flagged
+
+
 def _build_and_upload_bundles(
     atcf_id: str, fallback_lat: float, fallback_lon: float,
     frame_times, radius_deg: float, lookback_hours: float, interval_min: int,
@@ -384,6 +440,25 @@ def _build_and_upload_bundles(
     times_oldest_first = list(reversed(list(frame_times)))
     half = radius_deg
 
+    # Pre-pass: interpolated positions + display WebPs for every frame, so
+    # we can screen for anomalous scans (a bad substitution that slipped in
+    # upstream) BEFORE shipping the bundle. Flagged frames are dropped to
+    # no-data stubs so the loop cleanly skips them instead of showing a
+    # visibly distorted frame. Reuses these values in the main loop below
+    # (no extra GCS reads or position interpolations).
+    interp_pos = [_interp_pos_at(atcf_id, ft, fallback_lat, fallback_lon)
+                  for ft in times_oldest_first]
+    jpgs_pre = [
+        _gcs_jpg_get(atcf_upper, ft.strftime("%Y%m%d%H%M"),
+                     lat=interp_pos[i][0], lon=interp_pos[i][1])
+        for i, ft in enumerate(times_oldest_first)
+    ]
+    anomalous_idx = _flag_anomalous_frames(jpgs_pre)
+    if anomalous_idx:
+        _bad = [times_oldest_first[i].strftime("%H%M") for i in sorted(anomalous_idx)]
+        print(f"[Bundle Pre-build] {atcf_upper}: dropping {len(anomalous_idx)} "
+              f"anomalous scan frame(s) {_bad}")
+
     # Single pass: read both jpg + raw caches per frame. The raw cache
     # carries center_fix (IR-derived eye position), which we now ALSO
     # embed in the display bundle header so the satellite viewer's
@@ -399,7 +474,7 @@ def _build_and_upload_bundles(
     for i, ft in enumerate(times_oldest_first):
         dt_str = ft.strftime("%Y%m%d%H%M")
         iso_dt = ft.strftime("%Y-%m-%dT%H:%M:%SZ")
-        ilat, ilon = _interp_pos_at(atcf_id, ft, fallback_lat, fallback_lon)
+        ilat, ilon = interp_pos[i]
         fb = [[ilat - half, ilon - half], [ilat + half, ilon + half]]
 
         # Raw cache read first (carries center_fix we want for display too)
@@ -408,18 +483,15 @@ def _build_and_upload_bundles(
         center_fix = cached.get("center_fix") if cached else None
 
         # ── Display bundle entry ────────────────────────
-        # Pass interp position so the cache key invalidates when best-
-        # track shifts the storm's interpolated position for this frame.
-        # Without that, stale WebPs cropped at the old position get
-        # served alongside newer ones cropped at the updated position
-        # — which is what causes the "jump" at the update boundary.
-        jpg = _gcs_jpg_get(atcf_upper, dt_str, lat=ilat, lon=ilon)
-        if not jpg:
+        # Pre-fetched above. Drop frames flagged as anomalous scans so the
+        # loop skips them rather than shipping a distorted frame.
+        jpg = jpgs_pre[i]
+        if not jpg or i in anomalous_idx:
             frame_hdrs.append({
                 "index": i, "datetime_utc": iso_dt, "satellite": "",
                 "bounds": fb, "byte_offset": jpg_offset, "byte_length": 0,
                 "center_fix": center_fix,
-                "error": "no_cached_jpg",
+                "error": "anomalous_scan" if (jpg and i in anomalous_idx) else "no_cached_jpg",
             })
         else:
             bucket_name, _ = select_goes_sat(ilon, ft)
