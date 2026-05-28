@@ -521,6 +521,13 @@
     var _rtGenesisVisible = false;
     var _rtGenesisLoading = false;
     var _rtGenesisLayers = [];
+    // init_time of the cycle whose markers we last played the pop-in
+    // entrance animation for. Keyed by init so the *first* render that
+    // draws markers for a new cycle animates them (catching the user's
+    // eye when they populate a few seconds — cold cache — or up to 30
+    // min — new cycle on a long-open tab — after the page first loaded),
+    // while routine re-renders (cluster swap, tuner tweaks) stay still.
+    var _genesisAnimatedInit = null;
     // Optional per-member spaghetti layer — opt-in via the Layers menu
     // sub-toggle. Off by default because the disturbance markers above
     // are the canonical glance-view; spaghetti is for users who want
@@ -9269,6 +9276,13 @@
         var disturbances = _genesisDisturbances(tracks);
         if (disturbances.length === 0) return;
 
+        // Play the pop-in entrance once per cycle, on whichever render
+        // first draws markers for this init (deepmind pass or the later
+        // tcatlas cluster swap — whichever wins). Subsequent re-renders
+        // for the same cycle skip it so the map doesn't twitch.
+        var initNow = (_rtGenesisData && _rtGenesisData.init_time) || null;
+        var animateEntry = !!initNow && initNow !== _genesisAnimatedInit;
+
         // Re-label disturbances that overlap an officially-tracked
         // ATCF storm. After this call, d.displayLabel may be "TD 01W"
         // / "Invest 90W" / "Bonnie" instead of "Disturbance N", with
@@ -9336,7 +9350,7 @@
             // Confidence scales 50 → 1000 members onto 14 → 28 px.
             var baseSize = 14 + Math.min(14, Math.round((d.fraction - 0.05) * 18));
             var html =
-                '<div class="rt-gen-marker" style="background:' + style.bold + ';'
+                '<div class="rt-gen-marker' + (animateEntry ? ' rt-gen-marker--enter' : '') + '" style="background:' + style.bold + ';'
                 + 'width:' + baseSize + 'px;height:' + baseSize + 'px;line-height:'
                 + baseSize + 'px;font-size:' + Math.max(9, Math.round(baseSize * 0.5))
                 + 'px;">' + d.displayShort + '</div>';
@@ -9402,6 +9416,10 @@
                 }
             }
         }
+
+        // This cycle has now had its entrance played; later re-renders
+        // (cluster swap, tuner changes) for the same init won't re-pop.
+        if (animateEntry) _genesisAnimatedInit = initNow;
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -11712,6 +11730,61 @@
             });
     }
 
+    // Transient on-map toast announcing that cyclogenesis disturbances
+    // just populated. The markers themselves can land a few seconds
+    // (cold backend cache) or up to 30 min (a new cycle on a long-open
+    // tab) after the user first looked at the map — without this, they
+    // silently appear and a user who already glanced away misses them.
+    var _genesisToastTimer = null;
+    function _genesisAnnounceArrival(nTracks, isAutoRefresh) {
+        if (!map || typeof map.getContainer !== 'function') return;
+        var container = map.getContainer();
+        if (!container) return;
+        // Replace any toast still on screen so we never stack them.
+        var prev = container.querySelector('.rt-gen-toast');
+        if (prev && prev.parentNode) prev.parentNode.removeChild(prev);
+        if (_genesisToastTimer) { clearTimeout(_genesisToastTimer); _genesisToastTimer = null; }
+
+        var plural = nTracks === 1 ? '' : 's';
+        var lead = isAutoRefresh ? 'Updated forecast · ' : '';
+        var toast = document.createElement('div');
+        toast.className = 'rt-gen-toast';
+        toast.setAttribute('role', 'status');
+        toast.setAttribute('aria-live', 'polite');
+        toast.innerHTML =
+            '<span class="rt-gen-toast-dot"></span>'
+            + '<span class="rt-gen-toast-body">'
+            + '<b>' + lead + nTracks + ' cyclogenesis disturbance' + plural + '</b>'
+            + '<span class="rt-gen-toast-sub">Google DeepMind ensemble · tap a marker for the 1000-member detail</span>'
+            + '</span>'
+            + '<span class="rt-gen-toast-close" aria-label="Dismiss">×</span>';
+
+        function dismiss() {
+            if (_genesisToastTimer) { clearTimeout(_genesisToastTimer); _genesisToastTimer = null; }
+            toast.classList.add('rt-gen-toast--out');
+            setTimeout(function () {
+                if (toast.parentNode) toast.parentNode.removeChild(toast);
+            }, 320);
+        }
+        toast.addEventListener('click', dismiss);
+        container.appendChild(toast);
+        // Drop below the GIBS feed-staleness banner when it's showing so
+        // the two top-center notices don't stack on top of each other.
+        var banner = document.getElementById('ir-feed-banner');
+        if (banner && getComputedStyle(banner).display !== 'none') {
+            var bRect = banner.getBoundingClientRect();
+            var cRect = container.getBoundingClientRect();
+            var topPx = Math.max(14, Math.round(bRect.bottom - cRect.top) + 16);
+            toast.style.top = topPx + 'px';
+        }
+        // Auto-dismiss after long enough to read, short enough to stay
+        // unobtrusive. Tab-hidden re-polls don't reach here (the repoll
+        // is gated on visibilityState), so the timer always counts down
+        // while the user is actually looking.
+        _genesisToastTimer = setTimeout(dismiss, 8000);
+        _ga('rt_genesis_toast', { n_tracks: nTracks, auto: !!isAutoRefresh });
+    }
+
     function _loadGenesis(isAutoRefresh) {
         if (_rtGenesisLoading) return;
         _rtGenesisLoading = true;
@@ -11741,6 +11814,14 @@
                     if (_rtGenesisRawVisible) _renderGenesisRaw();
                     if (isAutoRefresh && prevInit && newInit && newInit !== prevInit) {
                         _ga('rt_genesis_newer_cycle', { from: prevInit, to: newInit });
+                    }
+                    // Announce a fresh cycle's disturbances so they don't
+                    // populate unnoticed. Fires on first load (prevInit
+                    // null) and whenever a newer cycle arrives — but only
+                    // when there's something to see and the layer is on.
+                    var nNow = (data && data.n_tracks) ? data.n_tracks : 0;
+                    if (newInit && newInit !== prevInit && nNow > 0 && _rtGenesisVisible) {
+                        _genesisAnnounceArrival(nNow, isAutoRefresh);
                     }
                     // Fetch the server's precomputed TCA clusters so
                     // the on-map markers show accurate uncapped counts
@@ -14806,6 +14887,58 @@
         return lon >= west || lon <= east;   // dateline wrap
     }
 
+    // Sensor swath half-widths (km), mirroring mw_ingest.py. Used with the
+    // ingest-time center_track polyline as a cheap pre-filter: arcs whose
+    // track passes farther than this from the storm never imaged it, so we
+    // skip downloading their PNGs. The per-card PNG-crop check (frac <
+    // _RT_MW_MIN_COVERAGE) remains the final authority — this gate only
+    // matches the schedule dashboard's coverage definition in tc_mw_layer.js.
+    var _RT_MW_SWATH_HALF_KM = { GMI: 445, SSMIS: 875, AMSR2: 725, ATMS: 1150 };
+    var _RT_MW_SWATH_HALF_KM_DEFAULT = 900;
+    var _RT_MW_SWATH_COVER_MARGIN = 1.15;
+
+    function _rtMwMinDistKmToTrack(track, lat, lon) {
+        if (!track || !track.length) return Infinity;
+        var KM_PER_DEG = 111.195;
+        var cosLat = Math.cos(lat * Math.PI / 180);
+        function proj(p) {
+            var dLon = p[1] - lon;
+            if (dLon > 180) dLon -= 360;
+            else if (dLon < -180) dLon += 360;
+            return [dLon * cosLat * KM_PER_DEG, (p[0] - lat) * KM_PER_DEG];
+        }
+        if (track.length === 1) {
+            var q = proj(track[0]);
+            return Math.sqrt(q[0] * q[0] + q[1] * q[1]);
+        }
+        var best = Infinity;
+        for (var i = 0; i < track.length - 1; i++) {
+            var a = proj(track[i]), b = proj(track[i + 1]);
+            var vx = b[0] - a[0], vy = b[1] - a[1];
+            var len2 = vx * vx + vy * vy;
+            var t = len2 > 0 ? -(a[0] * vx + a[1] * vy) / len2 : 0;
+            if (t < 0) t = 0; else if (t > 1) t = 1;
+            var cx = a[0] + t * vx, cy = a[1] + t * vy;
+            var d = Math.sqrt(cx * cx + cy * cy);
+            if (d < best) best = d;
+        }
+        return best;
+    }
+
+    // Cheap geometric coverage gate. Prefers the center-track distance
+    // test; falls back to bbox containment for entries predating the
+    // center_track field (48 h rolling-window backfill).
+    function _rtMwPassCoversStorm(entry, lat, lon) {
+        if (!entry || lat == null || lon == null) return false;
+        if (entry.center_track && entry.center_track.length) {
+            var half = (_RT_MW_SWATH_HALF_KM[entry.sensor]
+                        || _RT_MW_SWATH_HALF_KM_DEFAULT)
+                     * _RT_MW_SWATH_COVER_MARGIN;
+            return _rtMwMinDistKmToTrack(entry.center_track, lat, lon) <= half;
+        }
+        return _rtMwBoundsContains(entry.bounds, lat, lon);
+    }
+
     // Fetch + cache the public 48h manifest. ~5-min cache lines up
     // with the file's Cache-Control header from the ingest writer.
     function _rtMwFetchManifest() {
@@ -14883,7 +15016,7 @@
                     var e = entries[i];
                     var t = Date.parse(e.scan_start);
                     if (!isFinite(t) || (nowMs - t) > _RT_MW_WINDOW_MS) continue;
-                    if (!_rtMwBoundsContains(e.bounds, storm.lat, storm.lon)) continue;
+                    if (!_rtMwPassCoversStorm(e, storm.lat, storm.lon)) continue;
                     var oid = e.orbit_id;
                     if (!orbitMap[oid]) {
                         orbitMap[oid] = {

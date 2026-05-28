@@ -3054,6 +3054,74 @@ html:not([data-view="map"]) #ir-global-env-cbars {
     border-color: rgba(255,255,255,0.85);
     box-shadow: 0 0 0 1px rgba(0,0,0,0.65), 0 1px 6px rgba(0,0,0,0.7);
 }
+/* Entrance pop so freshly-populated disturbances catch the eye instead
+   of silently appearing. Played once per cycle (see _genesisAnimatedInit). */
+@keyframes rt-gen-pop {
+    0%   { transform: scale(0.15); opacity: 0; }
+    60%  { transform: scale(1.22); opacity: 1; }
+    100% { transform: scale(1);    opacity: 1; }
+}
+.rt-gen-marker--enter { animation: rt-gen-pop 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) both; }
+@media (prefers-reduced-motion: reduce) {
+    .rt-gen-marker--enter { animation: none; }
+}
+
+/* Transient toast that announces newly-populated cyclogenesis
+   disturbances on the global map (see _genesisAnnounceArrival). */
+.rt-gen-toast {
+    position: absolute;
+    top: 14px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 1200;
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    max-width: min(92vw, 420px);
+    padding: 10px 13px;
+    border-radius: 9px;
+    background: rgba(15, 23, 42, 0.94);
+    border: 1px solid rgba(0, 229, 255, 0.45);
+    box-shadow: 0 6px 22px rgba(0, 0, 0, 0.45);
+    color: #e2e8f0;
+    font-family: 'DM Sans', system-ui, sans-serif;
+    font-size: 12.5px;
+    line-height: 1.32;
+    cursor: pointer;
+    animation: rt-gen-toast-in 0.32s ease both;
+}
+@keyframes rt-gen-toast-in {
+    0%   { opacity: 0; transform: translate(-50%, -10px); }
+    100% { opacity: 1; transform: translate(-50%, 0); }
+}
+.rt-gen-toast--out { opacity: 0; transform: translate(-50%, -10px); transition: opacity 0.3s ease, transform 0.3s ease; }
+.rt-gen-toast-dot {
+    flex: 0 0 auto;
+    width: 9px; height: 9px;
+    margin-top: 4px;
+    border-radius: 50%;
+    background: #00e5ff;
+    box-shadow: 0 0 0 3px rgba(0, 229, 255, 0.22);
+    animation: ir-pulse 1.6s ease-in-out infinite;
+}
+.rt-gen-toast-body { display: flex; flex-direction: column; gap: 2px; }
+.rt-gen-toast-body b { font-weight: 700; color: #f1f5f9; }
+.rt-gen-toast-sub { font-size: 11px; color: #94a3b8; }
+.rt-gen-toast-close {
+    flex: 0 0 auto;
+    margin-left: 2px;
+    font-size: 16px;
+    line-height: 1;
+    color: #94a3b8;
+    opacity: 0.8;
+}
+.rt-gen-toast-close:hover { color: #e2e8f0; opacity: 1; }
+@media (max-width: 768px) {
+    .rt-gen-toast { top: 8px; font-size: 12px; padding: 9px 11px; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .rt-gen-toast, .rt-gen-toast-dot { animation: none; }
+}
 
 /* ════════════════════════════════════════════════════════════════
    FNV3 LARGE_ENSEMBLE genesis detail modal.
