@@ -9750,6 +9750,9 @@
                 '<button type="button" class="rt-genesis-jump-btn active" data-target="rt-genesis-jump-tracks">Tracks</button>' +
                 '<button type="button" class="rt-genesis-jump-btn" data-target="rt-genesis-jump-intensity">Intensity envelope</button>' +
                 '<button type="button" class="rt-genesis-jump-btn" data-target="rt-genesis-jump-gtime">Genesis-time histogram</button>' +
+                '<button type="button" class="rt-genesis-jump-btn" data-target="rt-genesis-jump-rmw">RMW evolution</button>' +
+                '<button type="button" class="rt-genesis-jump-btn" data-target="rt-genesis-jump-lmi">LMI distribution</button>' +
+                '<button type="button" class="rt-genesis-jump-btn" data-target="rt-genesis-jump-lmitau">LMI vs hour</button>' +
               '</div>' +
               '<div class="rt-genesis-modal-body">' +
                 // Forecast-hour scrubber — drives the map's "members at
@@ -9789,6 +9792,27 @@
                   '<button type="button" id="rt-genesis-gtime-save" class="rt-genesis-modal-save" title="Save genesis-time histogram as PNG">⤓ PNG</button>' +
                   '<div id="rt-genesis-modal-gtime" style="width:100%; height:180px;"></div>' +
                 '</div>' +
+                // Forecast RMW evolution — per-member radius-of-max-wind
+                // fan-chart over lead time. Only members at TC strength
+                // (≥34 kt) contribute, so the envelope tracks the storm
+                // phase rather than the noisy pre-genesis disturbance.
+                '<div id="rt-genesis-jump-rmw" class="rt-genesis-modal-chart-wrap" style="position:relative; margin-top:14px;">' +
+                  '<button type="button" id="rt-genesis-rmw-save" class="rt-genesis-modal-save" title="Save RMW evolution as PNG">⤓ PNG</button>' +
+                  '<div id="rt-genesis-modal-rmw" style="width:100%; height:300px;"></div>' +
+                '</div>' +
+                // Lifetime-max-intensity distribution — 1-D histogram of
+                // each member\'s peak Vmax across the whole forecast.
+                '<div id="rt-genesis-jump-lmi" class="rt-genesis-modal-chart-wrap" style="position:relative; margin-top:14px;">' +
+                  '<button type="button" id="rt-genesis-lmi-save" class="rt-genesis-modal-save" title="Save LMI distribution as PNG">⤓ PNG</button>' +
+                  '<div id="rt-genesis-modal-lmi" style="width:100%; height:220px;"></div>' +
+                '</div>' +
+                // LMI vs forecast hour — 2-D density of (lead time of
+                // peak, peak Vmax). Shows WHEN and HOW STRONG members
+                // peak at a glance. Mirrors the named-storm 1K heatmap.
+                '<div id="rt-genesis-jump-lmitau" class="rt-genesis-modal-chart-wrap" style="position:relative; margin-top:14px;">' +
+                  '<button type="button" id="rt-genesis-lmitau-save" class="rt-genesis-modal-save" title="Save LMI vs forecast hour as PNG">⤓ PNG</button>' +
+                  '<div id="rt-genesis-modal-lmitau" style="width:100%; height:280px;"></div>' +
+                '</div>' +
               '</div>' +
             '</div>';
         document.body.appendChild(m);
@@ -9810,6 +9834,15 @@
         });
         m.querySelector('#rt-genesis-gtime-save').addEventListener('click', function () {
             _genesisSavePNG('rt-genesis-modal-gtime', 'genesis-time');
+        });
+        m.querySelector('#rt-genesis-rmw-save').addEventListener('click', function () {
+            _genesisSavePNG('rt-genesis-modal-rmw', 'rmw-evolution');
+        });
+        m.querySelector('#rt-genesis-lmi-save').addEventListener('click', function () {
+            _genesisSavePNG('rt-genesis-modal-lmi', 'lmi-distribution');
+        });
+        m.querySelector('#rt-genesis-lmitau-save').addEventListener('click', function () {
+            _genesisSavePNG('rt-genesis-modal-lmitau', 'lmi-vs-hour');
         });
         m.querySelector('#rt-genesis-summary-save').addEventListener('click', function () {
             _genesisSaveSummaryPNG();
@@ -9868,7 +9901,8 @@
                 }
             }, { root: scroller, threshold: [0.25, 0.5, 0.75] });
             ['rt-genesis-jump-tracks', 'rt-genesis-jump-intensity',
-             'rt-genesis-jump-gtime'].forEach(function (id) {
+             'rt-genesis-jump-gtime', 'rt-genesis-jump-rmw',
+             'rt-genesis-jump-lmi', 'rt-genesis-jump-lmitau'].forEach(function (id) {
                 var el = m.querySelector('#' + id);
                 if (el) io.observe(el);
             });
@@ -10144,6 +10178,9 @@
         _renderGenesisMap(memberKeys, members, mean, stats);
         _renderGenesisIntensity(memberKeys, members, mean, stats);
         _renderGenesisTimeHistogram(stats);
+        _renderGenesisRMW(memberKeys, members, stats);
+        _renderGenesisLmiHist(stats);
+        _renderGenesisLmiVsTau(stats);
         _setupGenesisTauScrubber(memberKeys, members, mean, stats);
     }
 
@@ -10547,10 +10584,11 @@
         var genLats = [];
         var genLons = [];
         var peakWinds = [];
+        var peakTaus = [];
         for (var i = 0; i < memberKeys.length; i++) {
             var pts = members[memberKeys[i]].points || [];
             var firstTau = null, firstLat = null, firstLon = null;
-            var peak = 0;
+            var peak = 0, peakTau = null;
             for (var j = 0; j < pts.length; j++) {
                 var w = pts[j].wind;
                 if (w == null) continue;
@@ -10559,7 +10597,7 @@
                     firstLat = pts[j].lat;
                     firstLon = pts[j].lon;
                 }
-                if (w > peak) peak = w;
+                if (w > peak) { peak = w; peakTau = pts[j].tau; }
             }
             if (firstTau != null) {
                 formationCount++;
@@ -10568,6 +10606,7 @@
                 genLons.push(firstLon);
             }
             peakWinds.push(peak);
+            peakTaus.push(peakTau);
         }
         // Percentile helper — needs caller-sorted array.
         function pct(sorted, q) {
@@ -10596,6 +10635,7 @@
             genLats: genLats,
             genLons: genLons,
             peakWinds: peakWinds,
+            peakTaus: peakTaus,
             peakP10: pct(sortedPeaks, 0.10),
             peakP50: pct(sortedPeaks, 0.50),
             peakP90: pct(sortedPeaks, 0.90),
@@ -11391,6 +11431,373 @@
             showlegend: false,
         });
         Plotly.react(el, [trace], layout,
+                     { responsive: true, displayModeBar: false });
+    }
+
+    /* Forecast RMW evolution (figure 4).
+       Per-member radius-of-maximum-wind fan-chart over lead time, in
+       nautical miles. RMW is only physically meaningful once a member
+       has a closed TC-strength circulation, so we gate each contributing
+       point on wind ≥ 34 kt. Taus with fewer than 3 qualifying members
+       are dropped to avoid 1-member "envelopes" that read as noise. The
+       chart mirrors the intensity envelope's nested-ribbon fan so the
+       two read as a matched pair. */
+    function _renderGenesisRMW(memberKeys, members, stats) {
+        var el = document.getElementById('rt-genesis-modal-rmw');
+        if (!el || typeof Plotly === 'undefined') return;
+        var theme = _genesisTheme();
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var KM_TO_NM = 0.5399568;
+
+        // Bucket RMW (nm) by tau — TC-strength points only.
+        var byTau = {};
+        for (var i = 0; i < memberKeys.length; i++) {
+            var pts = members[memberKeys[i]].points || [];
+            for (var j = 0; j < pts.length; j++) {
+                var p = pts[j];
+                if (p.rmw_km == null || p.wind == null || p.wind < 34) continue;
+                var t = p.tau;
+                if (!byTau[t]) byTau[t] = [];
+                byTau[t].push(p.rmw_km * KM_TO_NM);
+            }
+        }
+        // Keep only taus with enough members for a stable distribution.
+        var taus = Object.keys(byTau).map(Number).sort(function (a, b) {
+            return a - b;
+        }).filter(function (t) { return byTau[t].length >= 3; });
+
+        if (!taus.length) {
+            Plotly.react(el, [], Object.assign({}, theme, {
+                margin: { l: 55, r: 12, t: 26, b: 42 },
+                paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+                title: { text: 'Forecast radius of maximum wind',
+                         x: 0, xanchor: 'left',
+                         font: { size: 11, color: theme.font.color } },
+                annotations: [{
+                    xref: 'paper', yref: 'paper', x: 0.5, y: 0.5,
+                    text: 'No member sustains TC strength (≥34 kt) with a '
+                        + 'reported RMW in this cycle.',
+                    showarrow: false,
+                    font: { size: 12, color: theme.font.color },
+                }],
+                xaxis: { visible: false }, yaxis: { visible: false },
+            }), { responsive: true, displayModeBar: false });
+            return;
+        }
+
+        function pct(sorted, q) {
+            if (!sorted.length) return null;
+            var idx = Math.min(sorted.length - 1,
+                               Math.max(0, Math.floor(q * (sorted.length - 1))));
+            return sorted[idx];
+        }
+        var minArr = [], maxArr = [];
+        var p10Arr = [], p25Arr = [], p50Arr = [], p75Arr = [], p90Arr = [];
+        var nArr = [];
+        for (var ti = 0; ti < taus.length; ti++) {
+            var sorted = byTau[taus[ti]].slice().sort(function (a, b) { return a - b; });
+            minArr.push(sorted[0]);
+            maxArr.push(sorted[sorted.length - 1]);
+            p10Arr.push(pct(sorted, 0.10));
+            p25Arr.push(pct(sorted, 0.25));
+            p50Arr.push(pct(sorted, 0.50));
+            p75Arr.push(pct(sorted, 0.75));
+            p90Arr.push(pct(sorted, 0.90));
+            nArr.push(sorted.length);
+        }
+        var xVals = taus.map(function (t) { return '+' + t + 'h'; });
+
+        var traces = [];
+        function pushRibbon(low, high, fill, name) {
+            traces.push({
+                type: 'scatter', mode: 'lines', x: xVals, y: low,
+                line: { color: 'rgba(0,0,0,0)' },
+                showlegend: false, hoverinfo: 'skip',
+            });
+            traces.push({
+                type: 'scatter', mode: 'lines', x: xVals, y: high,
+                line: { color: 'rgba(0,0,0,0)' },
+                fill: 'tonexty', fillcolor: fill,
+                name: name, hoverinfo: 'skip', showlegend: true,
+            });
+        }
+        // Teal/cyan ramp distinguishes the RMW fan from the orange
+        // intensity fan at a glance (different physical quantity).
+        pushRibbon(minArr, maxArr,
+            isDark ? 'rgba(34,211,238,0.08)' : 'rgba(8,145,178,0.07)',
+            'min – max');
+        pushRibbon(p10Arr, p90Arr,
+            isDark ? 'rgba(34,211,238,0.14)' : 'rgba(8,145,178,0.13)',
+            'P10 – P90');
+        pushRibbon(p25Arr, p75Arr,
+            isDark ? 'rgba(34,211,238,0.20)' : 'rgba(8,145,178,0.19)',
+            'P25 – P75 (IQR)');
+        traces.push({
+            type: 'scatter', mode: 'lines+markers', x: xVals, y: p50Arr,
+            line: { color: isDark ? '#22d3ee' : '#0891b2', width: 2.4 },
+            marker: { size: 5, color: isDark ? '#22d3ee' : '#0891b2',
+                      line: { color: isDark ? 'rgba(255,255,255,0.45)'
+                                            : 'rgba(15,22,35,0.30)', width: 0.5 } },
+            name: 'median (P50)',
+            customdata: nArr,
+            hovertemplate: '%{x}<br>median RMW: %{y:.0f} nm'
+                + '<br>%{customdata} members ≥34 kt<extra></extra>',
+            showlegend: true,
+        });
+
+        var maxY = Math.max(60, Math.max.apply(null, maxArr) + 8);
+        // Genesis-median reference, if it falls inside the qualifying window.
+        var shapes = [];
+        var annotations = [];
+        if (stats.genesisMedianTau != null
+            && taus.indexOf(stats.genesisMedianTau) !== -1) {
+            shapes.push({
+                type: 'line', xref: 'x', yref: 'paper',
+                x0: '+' + stats.genesisMedianTau + 'h',
+                x1: '+' + stats.genesisMedianTau + 'h',
+                y0: 0, y1: 1,
+                line: { color: '#f97316', width: 1.5, dash: 'dash' },
+            });
+            annotations.push({
+                x: '+' + stats.genesisMedianTau + 'h', y: maxY * 0.97,
+                xref: 'x', yref: 'y', text: 'median genesis',
+                showarrow: false, font: { size: 9, color: '#f97316' },
+                xanchor: 'left', xshift: 4,
+            });
+        }
+        var layout = Object.assign({}, theme, {
+            margin: { l: 52, r: 16, t: 26, b: 60 },
+            paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+            title: { text: 'Forecast radius of maximum wind (members ≥34 kt)',
+                     x: 0, xanchor: 'left',
+                     font: { size: 11, color: theme.font.color } },
+            xaxis: { title: { text: 'Lead time', font: { size: 11 },
+                              standoff: 14 },
+                     tickfont: { size: 10 },
+                     tickmode: 'array',
+                     tickvals: xVals.filter(function (_v, i) { return i % 4 === 0; }),
+                     gridcolor: isDark ? 'rgba(255,255,255,0.06)'
+                                       : 'rgba(15,22,35,0.06)' },
+            yaxis: { title: { text: 'RMW (nm)', font: { size: 11 } },
+                     range: [0, maxY],
+                     gridcolor: isDark ? 'rgba(255,255,255,0.06)'
+                                       : 'rgba(15,22,35,0.06)' },
+            shapes: shapes,
+            annotations: annotations,
+            showlegend: true,
+            legend: {
+                x: 0.985, y: 0.98, xanchor: 'right', yanchor: 'top',
+                bgcolor: isDark ? 'rgba(15,22,35,0.82)'
+                                : 'rgba(255,255,255,0.88)',
+                bordercolor: isDark ? 'rgba(255,255,255,0.10)'
+                                    : 'rgba(15,22,35,0.10)',
+                borderwidth: 1,
+                font: { size: 9, color: isDark ? '#e2e8f0' : '#1f2937' },
+                itemsizing: 'constant', itemwidth: 30, tracegroupgap: 0,
+            },
+        });
+        Plotly.react(el, traces, layout,
+                     { responsive: true, displayModeBar: false });
+    }
+
+    /* LMI distribution (figure 5).
+       1-D histogram of each member's lifetime-max Vmax (peak across the
+       whole forecast). Bars colored by SS category; mean + percentile
+       summary annotated. Ports the named-storm _rtRenderLmiHist to the
+       genesis modal's theme and stats object. */
+    function _renderGenesisLmiHist(stats) {
+        var el = document.getElementById('rt-genesis-modal-lmi');
+        if (!el || typeof Plotly === 'undefined') return;
+        var theme = _genesisTheme();
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+
+        var lmi = (stats.peakWinds || []).filter(function (w) {
+            return w != null && w > 0;
+        });
+        if (!lmi.length) {
+            Plotly.react(el, [], Object.assign({}, theme, {
+                margin: { l: 45, r: 12, t: 30, b: 36 },
+                paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+                title: { text: 'Lifetime max intensity distribution',
+                         x: 0, xanchor: 'left',
+                         font: { size: 11, color: theme.font.color } },
+                annotations: [{ xref: 'paper', yref: 'paper', x: 0.5, y: 0.5,
+                    text: 'No member intensity data in this cycle.',
+                    showarrow: false,
+                    font: { size: 12, color: theme.font.color } }],
+                xaxis: { visible: false }, yaxis: { visible: false },
+            }), { responsive: true, displayModeBar: false });
+            return;
+        }
+
+        var binSize = 5;
+        var binCenters = [], binCounts = [], binColors = [];
+        for (var b = 0; b < 185; b += binSize) {
+            var center = b + binSize / 2;
+            var count = 0;
+            for (var wi = 0; wi < lmi.length; wi++) {
+                if (lmi[wi] >= b && lmi[wi] < b + binSize) count++;
+            }
+            if (count > 0 || (b >= 20 && b <= 160)) {
+                binCenters.push(center);
+                binCounts.push(count);
+                binColors.push(_dmWindColor(center));
+            }
+        }
+        var sorted = lmi.slice().sort(function (a, b) { return a - b; });
+        var p = function (q) { return sorted[Math.floor(q / 100 * (sorted.length - 1))]; };
+        var mean = lmi.reduce(function (a, b) { return a + b; }, 0) / lmi.length;
+
+        var trace = {
+            x: binCenters, y: binCounts, type: 'bar', width: binSize * 0.9,
+            marker: { color: binColors,
+                      line: { color: isDark ? 'rgba(0,0,0,0.3)'
+                                            : 'rgba(15,22,35,0.18)', width: 0.5 } },
+            hovertemplate: '%{x:.0f} kt<br>%{y} members<extra></extra>',
+            showlegend: false,
+        };
+        var gridStroke = isDark ? 'rgba(148,163,184,0.18)'
+                                 : 'rgba(100,116,139,0.22)';
+        var shapes = [34, 64, 83, 96, 113, 137].map(function (v) {
+            return { type: 'line', x0: v, x1: v, y0: 0, y1: 1, yref: 'paper',
+                     line: { color: gridStroke, width: 1, dash: 'dot' } };
+        });
+        shapes.push({ type: 'line', x0: mean, x1: mean, y0: 0, y1: 1, yref: 'paper',
+                      line: { color: '#f97316', width: 1.5 } });
+
+        var cats = [['C1+', 64], ['C3+', 96], ['C5', 137]];
+        var catProbs = {};
+        for (var ci = 0; ci < cats.length; ci++) {
+            var cnt = lmi.filter(function (w) { return w >= cats[ci][1]; }).length;
+            catProbs[cats[ci][0]] = Math.round(cnt / lmi.length * 100);
+        }
+        // Percentiles + category odds combined into one block parked in
+        // the empty top-right of the plot (LMI mass sits at low kt, so the
+        // high-kt corner is free). Keeps it clear of the title (top-left)
+        // and the ⤓ PNG button (top-right, outside the plot).
+        var statText = 'P10 / P50 / P90: ' + p(10).toFixed(0) + ' / '
+            + p(50).toFixed(0) + ' / ' + p(90).toFixed(0) + ' kt<br>'
+            + 'C1+: ' + catProbs['C1+'] + '%   C3+: ' + catProbs['C3+']
+            + '%   C5: ' + catProbs['C5'] + '%';
+
+        var layout = Object.assign({}, theme, {
+            margin: { l: 45, r: 12, t: 30, b: 36 },
+            paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+            title: { text: 'Lifetime max intensity distribution',
+                     x: 0, xanchor: 'left',
+                     font: { size: 11, color: theme.font.color } },
+            xaxis: { title: { text: 'LMI Vmax (kt)', font: { size: 10 } },
+                     range: [0, 185], dtick: 20, tickfont: { size: 10 },
+                     gridcolor: isDark ? 'rgba(255,255,255,0.06)'
+                                       : 'rgba(15,22,35,0.06)', zeroline: false },
+            yaxis: { title: { text: 'Members', font: { size: 10 } },
+                     tickfont: { size: 10 },
+                     gridcolor: isDark ? 'rgba(255,255,255,0.06)'
+                                       : 'rgba(15,22,35,0.06)', zeroline: false },
+            shapes: shapes,
+            annotations: [
+                { x: 0.99, y: 0.97, xref: 'paper', yref: 'paper', text: statText,
+                  showarrow: false, align: 'right',
+                  font: { size: 9, color: theme.font.color },
+                  xanchor: 'right', yanchor: 'top' },
+            ],
+            bargap: 0.08, showlegend: false,
+        });
+        Plotly.react(el, [trace], layout,
+                     { responsive: true, displayModeBar: false });
+    }
+
+    /* LMI vs forecast hour (figure 6).
+       2-D density of (lead time of peak, peak Vmax) across members —
+       shows WHEN and HOW STRONG members peak at a single glance. Ports
+       the named-storm _rtRenderLmiVsTau heatmap to the genesis modal,
+       driven by stats.peakTaus / stats.peakWinds. */
+    function _renderGenesisLmiVsTau(stats) {
+        var el = document.getElementById('rt-genesis-modal-lmitau');
+        if (!el || typeof Plotly === 'undefined') return;
+        var theme = _genesisTheme();
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+
+        var peakTaus = stats.peakTaus || [];
+        var peakWinds = stats.peakWinds || [];
+        var xPeakTau = [], yPeakVmax = [];
+        for (var mi = 0; mi < peakWinds.length; mi++) {
+            if (peakTaus[mi] == null || peakWinds[mi] == null
+                || peakWinds[mi] <= 0) continue;
+            xPeakTau.push(peakTaus[mi]);
+            yPeakVmax.push(peakWinds[mi]);
+        }
+        if (!xPeakTau.length) {
+            Plotly.react(el, [], Object.assign({}, theme, {
+                margin: { l: 45, r: 60, t: 30, b: 36 },
+                paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+                title: { text: 'LMI vs forecast hour',
+                         x: 0, xanchor: 'left',
+                         font: { size: 11, color: theme.font.color } },
+                annotations: [{ xref: 'paper', yref: 'paper', x: 0.5, y: 0.5,
+                    text: 'No member intensity data in this cycle.',
+                    showarrow: false,
+                    font: { size: 12, color: theme.font.color } }],
+                xaxis: { visible: false }, yaxis: { visible: false },
+            }), { responsive: true, displayModeBar: false });
+            return;
+        }
+
+        var tauMax = Math.max.apply(null, xPeakTau);
+        var vmaxMax = Math.max(160, Math.max.apply(null, yPeakVmax) + 10);
+
+        var heatmap = {
+            x: xPeakTau, y: yPeakVmax, type: 'histogram2d',
+            xbins: { start: 0, end: tauMax + 12, size: 12 },
+            ybins: { start: 0, end: vmaxMax, size: 10 },
+            colorscale: [
+                [0.00, 'rgba(255,247,237,0)'],
+                [0.05, 'rgba(255,237,213,0.85)'],
+                [0.20, 'rgba(254,215,170,1.0)'],
+                [0.40, 'rgba(253,186,116,1.0)'],
+                [0.60, 'rgba(251,146, 60,1.0)'],
+                [0.80, 'rgba(249,115, 22,1.0)'],
+                [1.00, 'rgba(194, 65, 12,1.0)'],
+            ],
+            hovertemplate:
+                'Lead time of peak: <b>%{x:.0f} h</b><br>'
+                + 'LMI Vmax: <b>%{y:.0f} kt</b><br>'
+                + 'Members: <b>%{z:.0f}</b><extra></extra>',
+            showscale: true,
+            colorbar: {
+                title: { text: 'Members', font: { size: 9,
+                         family: 'DM Sans, sans-serif', color: theme.font.color },
+                         side: 'right' },
+                thickness: 6, len: 0.85, outlinewidth: 0,
+                tickfont: { size: 8, family: 'DM Sans, sans-serif',
+                            color: theme.font.color },
+                xpad: 4, ypad: 0,
+            },
+        };
+        var gridStroke = isDark ? 'rgba(148,163,184,0.18)'
+                                 : 'rgba(100,116,139,0.22)';
+        var ssLines = [34, 64, 83, 96, 113, 137].map(function (v) {
+            return { type: 'line', x0: 0, x1: tauMax + 12, y0: v, y1: v,
+                     line: { color: gridStroke, width: 1, dash: 'dot' } };
+        });
+        var layout = Object.assign({}, theme, {
+            margin: { l: 45, r: 60, t: 30, b: 40 },
+            paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+            title: { text: 'LMI vs forecast hour',
+                     x: 0, xanchor: 'left',
+                     font: { size: 11, color: theme.font.color } },
+            xaxis: { title: { text: 'Lead time of peak (h)', font: { size: 10 } },
+                     range: [0, tauMax + 12], dtick: 24, tickfont: { size: 10 },
+                     gridcolor: isDark ? 'rgba(255,255,255,0.06)'
+                                       : 'rgba(15,22,35,0.06)', zeroline: false },
+            yaxis: { title: { text: 'LMI Vmax (kt)', font: { size: 10 } },
+                     range: [0, vmaxMax], dtick: 30, tickfont: { size: 10 },
+                     gridcolor: isDark ? 'rgba(255,255,255,0.06)'
+                                       : 'rgba(15,22,35,0.06)', zeroline: false },
+            shapes: ssLines,
+            hovermode: 'closest',
+        });
+        Plotly.react(el, [heatmap], layout,
                      { responsive: true, displayModeBar: false });
     }
 
