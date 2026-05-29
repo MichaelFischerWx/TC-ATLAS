@@ -16,6 +16,39 @@
 (function () {
     'use strict';
 
+    // ── Touch-safe Plotly wrappers ──────────────────────────────
+    // On a phone/tablet a finger-drag that starts on a Plotly chart
+    // triggers the chart's drag action (zoom-box / pan) and swallows the
+    // page-scroll gesture, trapping the user. For the CARTESIAN charts
+    // (Panel B evolution lines, SST series, the geo-inset charts) we
+    // disable drag via `dragmode:false` — this releases scroll while
+    // KEEPING tap/hover tooltips — and hide the modebar. The animated
+    // lon/lat evolution MAP (Panel C) is deliberately NOT routed through
+    // these — there panning IS the feature, so it keeps Plotly.newPlot.
+    // Mirrors gaNewPlot / tcNewPlot on the other pages.
+    function _seasIsTouch() {
+        return typeof window.matchMedia === 'function'
+            && window.matchMedia('(pointer: coarse)').matches
+            && window.matchMedia('(hover: none)').matches;
+    }
+    function _seasTouchArgs(layout, config) {
+        if (_seasIsTouch()) {
+            layout = Object.assign({}, layout, { dragmode: false });
+            config = Object.assign({}, config, {
+                displayModeBar: false, scrollZoom: false
+            });
+        }
+        return [layout, config];
+    }
+    function seasNewPlot(el, traces, layout, config) {
+        var a = _seasTouchArgs(layout, config);
+        return Plotly.newPlot(el, traces, a[0], a[1]);
+    }
+    function seasReact(el, traces, layout, config) {
+        var a = _seasTouchArgs(layout, config);
+        return Plotly.react(el, traces, a[0], a[1]);
+    }
+
     var GCS_BASE = 'https://storage.googleapis.com/tc-atlas-ir-cache/seasonal';
     var LOCAL_BASE = 'data/seasonal';
     // Same hostname realtime_ir.js uses for /ir-monitor/* endpoints; we
@@ -966,7 +999,7 @@
         var insetTraces = _scatterInsetBuildTraces();
         var allTraces = traces.concat(insetTraces);
         layout.geo2 = _insetGeoLayout();
-        Plotly.react(el, allTraces, layout,
+        seasReact(el, allTraces, layout,
                      { responsive: true, displaylogo: false });
     }
 
@@ -1898,7 +1931,7 @@
                 && el.classList.contains('js-plotly-plot')) {
             Plotly.purge(el);
         }
-        Plotly.newPlot(el, allTraces, layout,
+        seasNewPlot(el, allTraces, layout,
                        { responsive: true, displaylogo: false });
     }
 
@@ -2395,7 +2428,7 @@
         // of the chart) and the anomaly variants (most years near zero
         // and concentrated below the inset's y range).
         layout.geo2 = _insetGeoLayout(_pickInsetDomain());
-        Plotly.react(el, traces.concat(insetTraces), layout,
+        seasReact(el, traces.concat(insetTraces), layout,
                      { responsive: true, displaylogo: false });
     }
 
@@ -2858,7 +2891,7 @@
         // right primitive (react on a purged div technically works but
         // emits a "Plotly.react: missing layout" defensive warning on
         // some plotly.js versions).
-        Plotly.newPlot(el, traces.concat(insetTraces), layout,
+        seasNewPlot(el, traces.concat(insetTraces), layout,
                        { responsive: true, displaylogo: false });
     }
 
@@ -3798,7 +3831,7 @@
             ],
             annotations: _watermarkAnnotations(),
         };
-        Plotly.react(el, traces, layout,
+        seasReact(el, traces, layout,
                      { responsive: true, displaylogo: false });
     }
 
