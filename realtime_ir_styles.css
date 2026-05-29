@@ -2474,6 +2474,25 @@ html:not([data-view="map"]) #ir-global-env-cbars {
     display: none !important;
 }
 
+/* …and the SAME controls bleed over the storm-detail pane. Opening a
+   storm hides #ir-main and shows #ir-detail (z-index 500) but leaves
+   data-view="map", so the rule above never fires and these pills
+   (position:fixed, z-index 600) float on top of the detail view —
+   reading as stray "leftover" buttons, most obviously on a phone. The
+   detail pane carries inline `display:block` while open, so key off
+   that to hide the global-map controls whenever a detail is showing,
+   regardless of viewport. (:has is universally supported in current
+   browsers.) */
+body:has(#ir-detail[style*="block"]) #ir-legend-toggle,
+body:has(#ir-detail[style*="block"]) #ir-labels-toggle,
+body:has(#ir-detail[style*="block"]) #ir-grid-toggle,
+body:has(#ir-detail[style*="block"]) #ir-legend,
+body:has(#ir-detail[style*="block"]) #basin-sidebar-toggle,
+body:has(#ir-detail[style*="block"]) #basin-sidebar,
+body:has(#ir-detail[style*="block"]) #ir-global-env-cbars {
+    display: none !important;
+}
+
 /* ════════════════════════════════════════════════════════════════
    Subseasonal tab — phase clocks (left) + Hovmöllers (right)
    ════════════════════════════════════════════════════════════════ */
