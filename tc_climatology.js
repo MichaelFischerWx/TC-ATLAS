@@ -132,6 +132,30 @@ var PLOTLY_CONFIG = {
     }
 };
 
+// ── Touch-safe Plotly wrapper ────────────────────────────────
+// On a phone/tablet a single-finger drag that starts on a Plotly chart
+// triggers the chart's drag action (zoom-box / pan) and swallows the
+// page-scroll gesture, trapping the user on the chart. Detect a coarse,
+// hover-less pointer and (a) disable the drag interaction via
+// `dragmode:false` — this releases scroll while KEEPING tap/hover
+// tooltips — and (b) hide the modebar (sub-tap-target, useless without
+// hover). Desktop unchanged. Route every newPlot through here. Mirrors
+// the gaNewPlot helper on the Global Archive page.
+function _tcIsTouch() {
+    return typeof window.matchMedia === 'function'
+        && window.matchMedia('(pointer: coarse)').matches
+        && window.matchMedia('(hover: none)').matches;
+}
+function tcNewPlot(el, traces, layout, config) {
+    if (_tcIsTouch()) {
+        layout = Object.assign({}, layout, { dragmode: false });
+        config = Object.assign({}, config, {
+            displayModeBar: false, scrollZoom: false
+        });
+    }
+    return Plotly.newPlot(el, traces, layout, config);
+}
+
 // ── State ───────────────────────────────────────────────────────
 var allStorms = [];
 var allTracks = {};                  // SID → track points (lazy-loaded for ACE modal)
@@ -294,7 +318,7 @@ function renderACEChart(minYear, maxYear) {
         margin: { l: 55, r: 10, t: 30, b: 45 }
     });
 
-    Plotly.newPlot('clim-ace-chart', traces, layout, PLOTLY_CONFIG);
+    tcNewPlot('clim-ace-chart', traces, layout, PLOTLY_CONFIG);
 
     // Click handler: open ACE drill-down modal
     document.getElementById('clim-ace-chart').on('plotly_click', function () {
@@ -345,7 +369,7 @@ function renderFrequencyChart(minYear, maxYear) {
         margin: { l: 50, r: 10, t: 30, b: 45 }
     });
 
-    Plotly.newPlot('clim-freq-chart', traces, layout, PLOTLY_CONFIG);
+    tcNewPlot('clim-freq-chart', traces, layout, PLOTLY_CONFIG);
 }
 
 function renderIntensityOverview() {
@@ -370,7 +394,7 @@ function renderIntensityOverview() {
         showlegend: false,
         margin: { l: 50, r: 10, t: 10, b: 30 }
     });
-    Plotly.newPlot('clim-hist-chart', traces, layout, PLOTLY_CONFIG);
+    tcNewPlot('clim-hist-chart', traces, layout, PLOTLY_CONFIG);
 }
 
 function renderIntensityChangeOverview() {
@@ -403,7 +427,7 @@ function renderIntensityChangeOverview() {
         legend: { orientation: 'h', x: 0, y: 1.12, font: { size: 9, color: '#5b6573' } },
         margin: { l: 45, r: 10, t: 30, b: 45 }
     });
-    Plotly.newPlot('clim-ri-chart', traces, layout, PLOTLY_CONFIG);
+    tcNewPlot('clim-ri-chart', traces, layout, PLOTLY_CONFIG);
 }
 
 function renderLMILatOverview() {
@@ -428,7 +452,7 @@ function renderLMILatOverview() {
         showlegend: false,
         margin: { l: 50, r: 10, t: 10, b: 30 }
     });
-    Plotly.newPlot('clim-lmi-chart', traces, layout, PLOTLY_CONFIG);
+    tcNewPlot('clim-lmi-chart', traces, layout, PLOTLY_CONFIG);
 }
 
 function renderBasinPie() {
@@ -466,7 +490,7 @@ function renderBasinPie() {
         margin: { l: 20, r: 20, t: 10, b: 10 }
     });
 
-    Plotly.newPlot('clim-basin-chart', [trace], layout, PLOTLY_CONFIG);
+    tcNewPlot('clim-basin-chart', [trace], layout, PLOTLY_CONFIG);
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -604,7 +628,7 @@ function renderACEDrillDownChart() {
         hovermode: 'x unified'
     });
 
-    Plotly.newPlot('ace-drilldown-chart', traces, layout, PLOTLY_CONFIG);
+    tcNewPlot('ace-drilldown-chart', traces, layout, PLOTLY_CONFIG);
 
     // Click handler for year drill-down
     var chartEl = document.getElementById('ace-drilldown-chart');
@@ -678,7 +702,7 @@ function renderACEYearDetail(year) {
         height: chartHeight
     });
 
-    Plotly.newPlot('ace-year-chart', [trace], layout, PLOTLY_CONFIG);
+    tcNewPlot('ace-year-chart', [trace], layout, PLOTLY_CONFIG);
 
     // Click handler to jump to storm detail
     document.getElementById('ace-year-chart').on('plotly_click', function (data) {
@@ -905,7 +929,7 @@ function renderIntensityModalCharts() {
         showlegend: true, legend: { orientation: 'h', x: 0, y: 1.15, font: { size: 10, color: '#5b6573' } },
         margin: { l: 55, r: 10, t: 35, b: 45 }, hovermode: 'closest'
     });
-    Plotly.newPlot('intensity-cdf-chart', cdfTraces, cdfLayout, PLOTLY_CONFIG);
+    tcNewPlot('intensity-cdf-chart', cdfTraces, cdfLayout, PLOTLY_CONFIG);
 
     // Box plots
     var boxTraces = [];
@@ -920,7 +944,7 @@ function renderIntensityModalCharts() {
         yaxis: { title: { text: 'Peak Wind (kt)', font: { size: 11, color: '#5b6573' } }, gridcolor: 'rgba(15, 22, 35,0.22)', tickfont: { size: 10, color: '#5b6573', family: 'JetBrains Mono' } },
         showlegend: false, margin: { l: 55, r: 10, t: 10, b: 30 }
     });
-    Plotly.newPlot('intensity-box-chart', boxTraces, boxLayout, PLOTLY_CONFIG);
+    tcNewPlot('intensity-box-chart', boxTraces, boxLayout, PLOTLY_CONFIG);
 
     // Stats table
     var html = '<table><thead><tr><th>Basin</th><th>Count</th><th>Mean</th><th>Median</th><th>P90</th><th>P99</th><th>Max</th></tr></thead><tbody>';
@@ -1108,7 +1132,7 @@ function renderRIModalCharts() {
         showlegend: true, legend: { orientation: 'h', x: 0, y: 1.08, font: { size: 10, color: '#5b6573' } },
         margin: { l: 55, r: 10, t: 35, b: 45 }
     });
-    Plotly.newPlot('ri-hist-chart', histTraces, histLayout, PLOTLY_CONFIG);
+    tcNewPlot('ri-hist-chart', histTraces, histLayout, PLOTLY_CONFIG);
 
     // ── Exceedance CDF: probability of exceeding RI threshold (per-episode) ──
     var cdfTraces = [];
@@ -1137,7 +1161,7 @@ function renderRIModalCharts() {
         legend: { orientation: 'h', x: 0, y: 1.08, font: { size: 10, color: '#5b6573' } },
         margin: { l: 55, r: 10, t: 30, b: 45 }, hovermode: 'closest'
     });
-    Plotly.newPlot('ri-cdf-chart', cdfTraces, cdfLayout, PLOTLY_CONFIG);
+    tcNewPlot('ri-cdf-chart', cdfTraces, cdfLayout, PLOTLY_CONFIG);
 
     // Stats table — episode-based statistics, filtered by period
     var range = RI_PERIODS[riModalPeriod] || RI_PERIODS['modern'];
@@ -1221,7 +1245,7 @@ function renderRIModalCharts() {
         showlegend: true, legend: { orientation: 'h', x: 0, y: 1.08, font: { size: 10, color: '#5b6573' } },
         margin: { l: 55, r: 10, t: 30, b: 45 }, hovermode: 'x unified'
     });
-    Plotly.newPlot('ri-trend-chart', trendTraces, trendLayout, PLOTLY_CONFIG);
+    tcNewPlot('ri-trend-chart', trendTraces, trendLayout, PLOTLY_CONFIG);
 
     // ── Exceedance CDF by Era: overlay curves for different periods ──
     var ERA_DEFS = [
@@ -1268,7 +1292,7 @@ function renderRIModalCharts() {
         showlegend: true, legend: { orientation: 'h', x: 0, y: 1.08, font: { size: 10, color: '#5b6573' } },
         margin: { l: 55, r: 10, t: 30, b: 45 }, hovermode: 'closest'
     });
-    Plotly.newPlot('ri-era-cdf-chart', eraCdfTraces, eraCdfLayout, PLOTLY_CONFIG);
+    tcNewPlot('ri-era-cdf-chart', eraCdfTraces, eraCdfLayout, PLOTLY_CONFIG);
 
     // ── Era comparison stats table ──
     var eraHtml = '<table><thead><tr><th>Era</th><th>Episodes</th><th>Mean \u0394V</th><th>% \u226530</th><th>% \u226535</th><th>% \u226550</th><th>% \u226565</th><th>Max RI</th></tr></thead><tbody>';
@@ -1360,7 +1384,7 @@ function renderSeasonalModalChart() {
         showlegend: true, legend: { orientation: 'h', x: 0, y: 1.15, font: { size: 10, color: '#5b6573' } },
         margin: { l: 55, r: 10, t: 35, b: 40 }, hovermode: 'x unified'
     });
-    Plotly.newPlot('seasonal-chart', traces, layout, PLOTLY_CONFIG);
+    tcNewPlot('seasonal-chart', traces, layout, PLOTLY_CONFIG);
 
     // Stats: peak month and season length per basin
     var html = '<table><thead><tr><th>Basin</th><th>Peak Month</th><th>Peak Rate</th><th>Annual Total</th><th>Active Months (>0.5/yr)</th></tr></thead><tbody>';
@@ -1491,7 +1515,7 @@ function renderLMIModalCharts() {
         showlegend: true, legend: { orientation: 'h', x: 0, y: 1.08, font: { size: 10, color: '#5b6573' } },
         margin: { l: 55, r: 10, t: 35, b: 45 }, hovermode: 'closest'
     });
-    Plotly.newPlot('lmi-scatter-chart', scatterTraces, scatterLayout, PLOTLY_CONFIG);
+    tcNewPlot('lmi-scatter-chart', scatterTraces, scatterLayout, PLOTLY_CONFIG);
 
     // Box plots of LMI latitude
     var boxTraces = [];
@@ -1506,7 +1530,7 @@ function renderLMIModalCharts() {
         yaxis: { title: { text: 'LMI Latitude (\u00B0)', font: { size: 11, color: '#5b6573' } }, gridcolor: 'rgba(15, 22, 35,0.22)', tickfont: { size: 10, color: '#5b6573', family: 'JetBrains Mono' } },
         showlegend: false, margin: { l: 55, r: 10, t: 10, b: 30 }
     });
-    Plotly.newPlot('lmi-box-chart', boxTraces, boxLayout, PLOTLY_CONFIG);
+    tcNewPlot('lmi-box-chart', boxTraces, boxLayout, PLOTLY_CONFIG);
 
     // Stats table
     var html = '<table><thead><tr><th>Basin</th><th>Count</th><th>Mean Lat</th><th>Median Lat</th><th>Min |Lat|</th><th>Max |Lat|</th></tr></thead><tbody>';
@@ -2524,7 +2548,7 @@ function _renderActivityDial() {
         margin: { l: 30, r: 30, t: 20, b: 90 },
     });
     delete layout.xaxis; delete layout.yaxis;
-    Plotly.newPlot('sub-dial-chart', traces, layout, PLOTLY_CONFIG);
+    tcNewPlot('sub-dial-chart', traces, layout, PLOTLY_CONFIG);
 
     // Dial title + help text per metric
     var titleEl = document.getElementById('sub-dial-title');
@@ -2636,7 +2660,7 @@ function _renderIntensityDial() {
         margin: { l: 30, r: 30, t: 20, b: 90 },
     });
     delete layout.xaxis; delete layout.yaxis;
-    Plotly.newPlot('sub-ri-chart', traces, layout, PLOTLY_CONFIG);
+    tcNewPlot('sub-ri-chart', traces, layout, PLOTLY_CONFIG);
 
     // Cache stats so the drill-in modal can pull from the same numbers.
     _subState._lastRIStats = stats;
@@ -2830,7 +2854,7 @@ function _renderTrackDensity() {
             showlegend: false,
         });
     }
-    Plotly.newPlot('sub-tracks-chart', traces, layout, PLOTLY_CONFIG);
+    tcNewPlot('sub-tracks-chart', traces, layout, PLOTLY_CONFIG);
 
     // Hook click → open the phase drill-in modal. Plotly's plotly_click
     // event fires per trace, not per subplot, so the trace index (one
@@ -3407,7 +3431,7 @@ function _renderSubEvolution() {
     var pcTraces = [trace_line, trace_markers];
     if (hist) pcTraces.push(trace_hist_line, trace_hist_markers, trace_hist_start);
     pcTraces.push(trace_today);
-    Plotly.newPlot('sub-evolution-pc-chart', pcTraces, layout, PLOTLY_CONFIG);
+    tcNewPlot('sub-evolution-pc-chart', pcTraces, layout, PLOTLY_CONFIG);
 
     // Click → drill the matching phase modal. The recent "Daily PCs"
     // trace is the second one (curveNumber === 1); ignore clicks on
@@ -3499,7 +3523,7 @@ function _renderSubEvolution() {
             name: 'Historical (' + hist.dates[0] + ' → ' + hist.dates[hist.dates.length - 1] + ')',
         });
     }
-    Plotly.newPlot('sub-evolution-amp-chart', ampTraces, ampLayout, PLOTLY_CONFIG);
+    tcNewPlot('sub-evolution-amp-chart', ampTraces, ampLayout, PLOTLY_CONFIG);
 }
 
 /* ── Phase-evolution PNG saves ─────────────────────────────────
@@ -3839,7 +3863,7 @@ function _renderPhaseModalMap(phase) {
         },
     });
     delete layout.xaxis; delete layout.yaxis;
-    Plotly.newPlot('phase-modal-map', [trace], layout, PLOTLY_CONFIG);
+    tcNewPlot('phase-modal-map', [trace], layout, PLOTLY_CONFIG);
 }
 
 function _renderPhaseModalStats(phase) {
@@ -3942,7 +3966,7 @@ function _renderPhaseModalHistogram(phase) {
         }],
         showlegend: false,
     });
-    Plotly.newPlot('phase-modal-hist', [trace], layout, PLOTLY_CONFIG);
+    tcNewPlot('phase-modal-hist', [trace], layout, PLOTLY_CONFIG);
 }
 
 // ── Init (called once on first switch to the subseasonal subview) ──
