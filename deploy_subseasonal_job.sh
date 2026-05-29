@@ -49,6 +49,12 @@ JOB_NAME="tc-atlas-subseasonal-job"
 REGION="us-east1"                 # match env-overlay + API region
 SCHEDULER_NAME="tc-atlas-subseasonal-schedule"
 SCHEDULE="30 13 * * *"            # daily at 13:30 UTC (after CPC OLR ~12 UTC update)
+# Second daily trigger as a safety net: if PSL's THREDDS OPeNDAP is down at
+# 13:30 (intermittent 503s), the in-code retry/backoff covers a brief blip,
+# but a multi-hour outage forfeits the day. A 17:30 UTC re-run picks up the
+# data once PSL recovers. The job is idempotent (overwrites latest in GCS),
+# so a redundant run when 13:30 already succeeded is harmless (~$0.05).
+RETRY_SCHEDULE="30 17 * * *"      # daily at 17:30 UTC (4 h after primary)
 TIMEZONE="UTC"
 BUCKET="${GCS_IR_CACHE_BUCKET:-tc-atlas-ir-cache}"
 
@@ -81,7 +87,7 @@ if gcloud run jobs describe "${JOB_NAME}" --region "${REGION}" >/dev/null 2>&1; 
         --memory 4Gi \
         --cpu 2 \
         --max-retries 1 \
-        --task-timeout 900 \
+        --task-timeout 1800 \
         --set-env-vars "GCS_IR_CACHE_BUCKET=${BUCKET},OLR_CLIMO_START=${OLR_CLIMO_START},OLR_CLIMO_END=${OLR_CLIMO_END},CR_VCPU=2,CR_MEM_GIB=4"
 else
     gcloud run jobs create "${JOB_NAME}" \
@@ -92,7 +98,7 @@ else
         --memory 4Gi \
         --cpu 2 \
         --max-retries 1 \
-        --task-timeout 900 \
+        --task-timeout 1800 \
         --set-env-vars "GCS_IR_CACHE_BUCKET=${BUCKET},OLR_CLIMO_START=${OLR_CLIMO_START},OLR_CLIMO_END=${OLR_CLIMO_END},CR_VCPU=2,CR_MEM_GIB=4"
 fi
 
@@ -108,24 +114,35 @@ gcloud run jobs add-iam-policy-binding "${JOB_NAME}" \
     --role roles/run.invoker \
     --quiet || true
 
-echo "Creating/updating Cloud Scheduler ${SCHEDULER_NAME}..."
-if gcloud scheduler jobs describe "${SCHEDULER_NAME}" --location "${REGION}" >/dev/null 2>&1; then
-    gcloud scheduler jobs update http "${SCHEDULER_NAME}" \
-        --location "${REGION}" \
-        --schedule "${SCHEDULE}" \
-        --time-zone "${TIMEZONE}" \
-        --uri "${JOB_URI}" \
-        --http-method POST \
-        --oauth-service-account-email "${SA_EMAIL}"
-else
-    gcloud scheduler jobs create http "${SCHEDULER_NAME}" \
-        --location "${REGION}" \
-        --schedule "${SCHEDULE}" \
-        --time-zone "${TIMEZONE}" \
-        --uri "${JOB_URI}" \
-        --http-method POST \
-        --oauth-service-account-email "${SA_EMAIL}"
-fi
+# Idempotent create-or-update for a scheduler trigger. Cloud Scheduler's
+# own HTTP retry only re-sends the *trigger* POST (which returns 200 as
+# soon as the job is accepted), so it can't catch a job that starts and
+# then fails on OPeNDAP. The real safety net is the second daily trigger
+# below + the in-code retry/backoff in fetch_olr_window().
+ensure_scheduler () {
+    local name="$1" sched="$2"
+    echo "Creating/updating Cloud Scheduler ${name} (${sched})..."
+    if gcloud scheduler jobs describe "${name}" --location "${REGION}" >/dev/null 2>&1; then
+        gcloud scheduler jobs update http "${name}" \
+            --location "${REGION}" \
+            --schedule "${sched}" \
+            --time-zone "${TIMEZONE}" \
+            --uri "${JOB_URI}" \
+            --http-method POST \
+            --oauth-service-account-email "${SA_EMAIL}"
+    else
+        gcloud scheduler jobs create http "${name}" \
+            --location "${REGION}" \
+            --schedule "${sched}" \
+            --time-zone "${TIMEZONE}" \
+            --uri "${JOB_URI}" \
+            --http-method POST \
+            --oauth-service-account-email "${SA_EMAIL}"
+    fi
+}
+
+ensure_scheduler "${SCHEDULER_NAME}" "${SCHEDULE}"
+ensure_scheduler "${SCHEDULER_NAME}-retry" "${RETRY_SCHEDULE}"
 
 echo ""
 echo "Done."

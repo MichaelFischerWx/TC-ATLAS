@@ -40,6 +40,7 @@ import json
 import logging
 import os
 import sys
+import tempfile
 
 import requests  # daily index refresh (BOM RMM, APCC BSISO, NOAA ROMI)
 from dataclasses import dataclass, field as dc_field
@@ -293,6 +294,35 @@ WAVE_SPECS = [
 # Data fetch
 # --------------------------------------------------------------------------
 
+def _open_opendap_with_retry(url: str, max_tries: int = 4,
+                             backoffs=(30, 60, 120)):
+    """Open a THREDDS/OPeNDAP dataset, retrying transient server errors.
+
+    PSL's THREDDS server intermittently returns HTTP 503 (maintenance /
+    capacity). A single blip at the 13:30 UTC scheduler tick otherwise
+    forfeits the whole day's Hovmöller refresh — the OLR fetch is the one
+    upstream we don't control. Retry with backoff so a short outage
+    self-heals within one job run; a longer outage is caught by the second
+    daily scheduler trigger (see deploy_subseasonal_job.sh).
+    """
+    import time as _t
+    import xarray as xr
+    last_err = None
+    for attempt in range(max_tries):
+        try:
+            return xr.open_dataset(url)
+        except Exception as e:  # OSError (DAP 503), netCDF DAP errors, etc.
+            last_err = e
+            if attempt == max_tries - 1:
+                break
+            wait = backoffs[min(attempt, len(backoffs) - 1)]
+            log.warning("OPeNDAP open failed (attempt %d/%d): %s — retrying in %ds",
+                        attempt + 1, max_tries, e, wait)
+            _t.sleep(wait)
+    raise RuntimeError(
+        f"OPeNDAP open failed after {max_tries} attempts: {url}") from last_err
+
+
 def _fetch_olr_range(ds, start: datetime, end: datetime, chunk_days: int = 60):
     """Fetch OLR over [start, end] via OPeNDAP, chunked by `chunk_days`.
 
@@ -320,7 +350,7 @@ def fetch_olr_window(today: datetime, days_back: int = WINDOW_DAYS):
     """Fetch the most recent `days_back` days of NOAA OLR via OPeNDAP."""
     import xarray as xr
     log.info("Opening OPeNDAP %s ...", OPENDAP_URL)
-    ds = xr.open_dataset(OPENDAP_URL)
+    ds = _open_opendap_with_retry(OPENDAP_URL)
     start = (today - timedelta(days=days_back)).replace(tzinfo=None)
     end = today.replace(tzinfo=None)
     log.info("Fetching OLR window %s .. %s in 60-day chunks", start.date(), end.date())
@@ -343,7 +373,7 @@ def daily_climatology(today: datetime, cache_dir: Path):
         return xr.open_dataarray(cache_path).load()
 
     log.info("Building climatology from %s .. %s ...", CLIMO_START, CLIMO_END)
-    ds = xr.open_dataset(OPENDAP_URL)
+    ds = _open_opendap_with_retry(OPENDAP_URL)
     start = datetime.fromisoformat(CLIMO_START)
     end   = datetime.fromisoformat(CLIMO_END)
     da = _fetch_olr_range(ds, start, end)
@@ -384,6 +414,151 @@ def daily_anomaly(window, climo):
                  nan_count, 100 * nan_count / anom.size)
         anom = anom.fillna(0.0)
     return anom
+
+
+# --------------------------------------------------------------------------
+# GEFS OLR forecast (Hovmöller extension)
+# --------------------------------------------------------------------------
+# The observed Hovmöller stops at the latest CPC OLR day (~2 days behind
+# real-time). Appending a short-range forecast both shows where the wave
+# envelopes are headed AND — because the WK band-pass is a global FFT —
+# replaces the reflect-pad at the present-time edge with real model data,
+# stabilizing the band amplitude over the most recent observed days.
+#
+# Source: GEFS ensemble-MEAN ULWRF (TOA upward longwave = OLR) from the
+# public AWS mirror (noaa-gefs-pds), fetched via .idx byte-range so we
+# pull one ~125 KB GRIB message per forecast hour instead of the whole
+# 0.5° file. ULWRF is archived as 6-hour averages ("0-6 hour ave fcst",
+# "6-12 hour ave fcst", …), so four consecutive steps average to a clean
+# calendar-day mean that matches the daily-mean observed product. We use
+# the 00Z cycle so each 24 h window aligns to a UTC calendar day.
+#
+# GEFS skill for the MJO/Kelvin bands is only useful to ~1-2 weeks, so we
+# cap the extension at 10 days and the frontend de-emphasizes the tail.
+GEFS_S3_HOST = "noaa-gefs-pds.s3.amazonaws.com"
+GEFS_FORECAST_DAYS = 10
+GEFS_LATENCY_HOURS = 7   # 00Z geavg is reliably published by ~06-07 UTC
+
+
+def _gefs_cycle_for(today: datetime):
+    """Pick the GEFS 00Z cycle to use. Prefers today's 00Z once it's had
+    time to publish; otherwise falls back to yesterday's 00Z. Returns
+    (YYYYMMDD, "00")."""
+    now = datetime.now(timezone.utc)
+    base = today
+    # If 'today' is the current UTC day but 00Z hasn't had GEFS_LATENCY_HOURS
+    # to publish, step back a day.
+    if (base.date() == now.date()) and (now.hour < GEFS_LATENCY_HOURS):
+        base = base - timedelta(days=1)
+    return base.strftime("%Y%m%d"), "00"
+
+
+def _fetch_gefs_ulwrf_toa(date_str: str, hour_str: str, fh: int):
+    """Fetch one GEFS ensemble-mean ULWRF-at-TOA field (W/m²) for forecast
+    hour `fh` via .idx byte-range. Returns an xarray.DataArray(lat, lon)
+    on the native 0.5° grid, or None on failure."""
+    import requests
+    import xarray as xr
+    base = (f"https://{GEFS_S3_HOST}/gefs.{date_str}/{hour_str}/atmos/"
+            f"pgrb2ap5/geavg.t{hour_str}z.pgrb2a.0p50.f{fh:03d}")
+    # Locate the ULWRF:top-of-atmosphere message in the .idx sidecar.
+    start = end = None
+    for attempt in range(3):
+        try:
+            idx = requests.get(base + ".idx", timeout=60).text
+            lines = idx.strip().split("\n")
+            for i, ln in enumerate(lines):
+                p = ln.split(":")
+                if len(p) >= 5 and p[3] == "ULWRF" and p[4] == "top of atmosphere":
+                    start = int(p[1])
+                    if i + 1 < len(lines):
+                        end = int(lines[i + 1].split(":")[1]) - 1
+                    break
+            break
+        except Exception as e:
+            log.warning("GEFS idx fetch f%03d attempt %d failed: %s",
+                        fh, attempt + 1, e)
+    if start is None:
+        log.warning("GEFS f%03d: ULWRF TOA not found in idx", fh)
+        return None
+    rng = f"bytes={start}-{end if end is not None else ''}"
+    content = None
+    for attempt in range(3):
+        try:
+            r = requests.get(base, headers={"Range": rng}, timeout=120)
+            if r.status_code in (200, 206) and r.content.startswith(b"GRIB"):
+                content = r.content
+                break
+            log.warning("GEFS f%03d range fetch HTTP %d", fh, r.status_code)
+        except Exception as e:
+            log.warning("GEFS f%03d range fetch attempt %d failed: %s",
+                        fh, attempt + 1, e)
+    if content is None:
+        return None
+    with tempfile.NamedTemporaryFile(suffix=".grib2", delete=False) as tmp:
+        tmp.write(content)
+        path = tmp.name
+    try:
+        ds = xr.open_dataset(path, engine="cfgrib",
+                             backend_kwargs={"indexpath": ""},
+                             decode_timedelta=False)
+        # Single message → single data var; avoid shortName guessing.
+        vname = list(ds.data_vars)[0]
+        da = ds[vname]
+        # cfgrib names the spatial coords latitude/longitude.
+        da = da.rename({"latitude": "lat", "longitude": "lon"})
+        # cfgrib decode is lazy; force the read into memory before the
+        # finally clause deletes the backing temp file.
+        return da.load()
+    except Exception as e:
+        log.warning("GEFS f%03d cfgrib decode failed: %s", fh, e)
+        return None
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
+def fetch_gefs_olr_forecast(today: datetime, target_lat, target_lon,
+                            days: int = GEFS_FORECAST_DAYS):
+    """Build daily-mean GEFS forecast OLR on the observed OLR grid.
+
+    Returns an xarray.DataArray(time, lat, lon) of daily-mean ULWRF (W/m²)
+    for `days` forecast calendar days, regridded (bilinear) to
+    (target_lat, target_lon), or None if the cycle is unavailable. Forecast
+    day k (1-based) is the mean of the four 6 h-average steps spanning hours
+    [24(k-1)+6 … 24k], valid on calendar date cycle_date + (k-1).
+    """
+    import xarray as xr
+    date_str, hour_str = _gefs_cycle_for(today)
+    cycle_dt = datetime.strptime(date_str, "%Y%m%d").replace(tzinfo=timezone.utc)
+    log.info("Fetching GEFS %s %sZ ULWRF forecast (%d days) ...",
+             date_str, hour_str, days)
+    daily, times = [], []
+    for k in range(1, days + 1):
+        fhs = [24 * (k - 1) + 6, 24 * (k - 1) + 12,
+               24 * (k - 1) + 18, 24 * k]
+        block = [_fetch_gefs_ulwrf_toa(date_str, hour_str, fh) for fh in fhs]
+        block = [b for b in block if b is not None]
+        if len(block) < len(fhs):
+            log.warning("GEFS day %d incomplete (%d/%d steps) — stopping forecast",
+                        k, len(block), len(fhs))
+            break
+        day_mean = sum(block) / float(len(block))
+        # Regrid native 0.5° → observed OLR grid. interp tolerates the
+        # descending-lat source coordinate.
+        reg = day_mean.interp(lat=target_lat, lon=target_lon)
+        daily.append(reg)
+        times.append(np.datetime64(cycle_dt.date(), "D") + np.timedelta64(k - 1, "D"))
+    if not daily:
+        log.warning("GEFS forecast produced no days")
+        return None
+    da = xr.concat(daily, dim="time")
+    da = da.assign_coords(time=("time", np.array(times)))
+    log.info("GEFS forecast: %d daily means %s .. %s",
+             da.sizes["time"], str(times[0]), str(times[-1]))
+    return da
 
 
 # --------------------------------------------------------------------------
@@ -913,7 +1088,8 @@ GCS_BUCKET = os.environ.get("GCS_IR_CACHE_BUCKET", "tc-atlas-ir-cache")
 GCS_PREFIX = "subseasonal"   # gs://{bucket}/{prefix}/{wave}/{latest.png|metadata.json}
 
 
-def build_hovmoller_slab(field, spec: WaveSpec, valid_time_iso: str) -> dict:
+def build_hovmoller_slab(field, spec: WaveSpec, valid_time_iso: str,
+                         n_forecast: int = 0) -> dict:
     """Slice the full (time, lat, lon) wave-band field into a Hovmöller
     payload: last HOVMOLLER_LOOKBACK_DAYS days, latitudinally averaged
     over each band in HOVMOLLER_LAT_BANDS. Output is a JSON-ready dict
@@ -934,7 +1110,7 @@ def build_hovmoller_slab(field, spec: WaveSpec, valid_time_iso: str) -> dict:
     """
     lats = field.lat.values
     lons = field.lon.values
-    last_n = min(HOVMOLLER_LOOKBACK_DAYS, field.shape[0])
+    last_n = min(HOVMOLLER_LOOKBACK_DAYS + n_forecast, field.shape[0])
     sliced = field.isel(time=slice(-last_n, None))
     times = [str(np.datetime64(t, "D")) for t in sliced.time.values]
 
@@ -954,6 +1130,14 @@ def build_hovmoller_slab(field, spec: WaveSpec, valid_time_iso: str) -> dict:
         "times": times,
         "lat_bands": {},
     }
+    if n_forecast > 0 and n_forecast <= len(times):
+        # The trailing `n_forecast` entries of `times` are GEFS forecast
+        # daily means; the frontend draws a divider at forecast_from and
+        # styles that region (dashed / de-emphasized).
+        out["n_forecast"] = n_forecast
+        out["forecast_from"] = times[-n_forecast]
+        out["analysis_valid_time"] = valid_time_iso
+        out["forecast_source"] = "GEFS ens-mean OLR"
     all_vals = []
     for band in HOVMOLLER_LAT_BANDS:
         # Build a boolean mask on the lat axis instead of relying on
@@ -990,18 +1174,20 @@ def build_hovmoller_slab(field, spec: WaveSpec, valid_time_iso: str) -> dict:
     return out
 
 
-def write_hovmoller_local(out_dir: Path, spec: WaveSpec, slab: dict) -> None:
+def write_hovmoller_local(out_dir: Path, spec: WaveSpec, slab: dict,
+                          filename: str = "hovmoller.json") -> None:
     """Mirror the GCS path layout locally for `--local-only` debugging.
-    Writes `<spec.name>.hovmoller.json` alongside the existing PNG."""
+    Writes `<spec.name>.<filename>` alongside the existing PNG."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / f"{spec.name}.hovmoller.json").write_text(
+    (out_dir / f"{spec.name}.{filename}").write_text(
         json.dumps(slab, separators=(",", ":"))
     )
 
 
-def upload_hovmoller_gcs(spec: WaveSpec, slab: dict) -> bool:
+def upload_hovmoller_gcs(spec: WaveSpec, slab: dict,
+                         filename: str = "hovmoller.json") -> bool:
     """Upload Hovmöller slab to
-    gs://{GCS_BUCKET}/{GCS_PREFIX}/{spec.name}/hovmoller.json.
+    gs://{GCS_BUCKET}/{GCS_PREFIX}/{spec.name}/{filename}.
     Cache TTL matches the wave overlays (10 min) since the pipeline
     refreshes once daily."""
     try:
@@ -1014,7 +1200,7 @@ def upload_hovmoller_gcs(spec: WaveSpec, slab: dict) -> bool:
         return False
     client = storage.Client()
     bucket = client.bucket(GCS_BUCKET)
-    blob = bucket.blob(f"{GCS_PREFIX}/{spec.name}/hovmoller.json")
+    blob = bucket.blob(f"{GCS_PREFIX}/{spec.name}/{filename}")
     blob.upload_from_string(json.dumps(slab, separators=(",", ":")),
                             content_type="application/json")
     blob.cache_control = "public, max-age=600"
@@ -1023,8 +1209,8 @@ def upload_hovmoller_gcs(spec: WaveSpec, slab: dict) -> bool:
         blob.make_public()
     except Exception as e:
         log.warning("Could not mark %s public: %s", blob.name, e)
-    log.info("  uploaded gs://%s/%s/%s/hovmoller.json",
-             GCS_BUCKET, GCS_PREFIX, spec.name)
+    log.info("  uploaded gs://%s/%s/%s/%s",
+             GCS_BUCKET, GCS_PREFIX, spec.name, filename)
     return True
 
 
@@ -1464,6 +1650,9 @@ def main():
     parser.add_argument("--indices-only", action="store_true",
                         help="ONLY refresh the indices; skip the OLR + WK "
                              "filtering pipeline (fast smoke test).")
+    parser.add_argument("--no-forecast", action="store_true",
+                        help="Skip the GEFS OLR forecast extension of the "
+                             "Hovmöller (observed-only).")
     args = parser.parse_args()
 
     # Daily index refresh runs alongside the OLR overlays so the
@@ -1497,6 +1686,29 @@ def main():
     anom = daily_anomaly(window, climo)
 
     sym, asym = symmetric_antisymmetric(anom)
+
+    # GEFS forecast extension — used ONLY for the separate forecast
+    # Hovmöller artifact (hovmoller_fcst.json). The map PNG, GeoJSON, and
+    # the observed hovmoller.json are computed from the observed-only
+    # series above and are intentionally left untouched, so the env-layer
+    # overlay and the default Hovmöller are stable regardless of forecast
+    # availability. Any failure here degrades to observed-only.
+    n_forecast = 0
+    sym_ext = asym_ext = anom_ext = None
+    if not args.no_forecast:
+        try:
+            import xarray as xr
+            fcst_olr = fetch_gefs_olr_forecast(today, window.lat, window.lon)
+            if fcst_olr is not None and fcst_olr.sizes["time"] > 0:
+                fcst_anom = daily_anomaly(fcst_olr, climo)
+                anom_ext = xr.concat([anom, fcst_anom], dim="time")
+                n_forecast = int(fcst_anom.sizes["time"])
+                sym_ext, asym_ext = symmetric_antisymmetric(anom_ext)
+                log.info("GEFS forecast appended to Hovmöller: +%d days",
+                         n_forecast)
+        except Exception as e:
+            log.exception("GEFS forecast extension failed; observed-only: %s", e)
+            n_forecast = 0
 
     lats = anom.lat.values
     lons = anom.lon.values
@@ -1547,15 +1759,41 @@ def main():
         except Exception as e:
             log.warning("Hovmöller build failed for %s: %s", spec.name, e)
 
+        # Forecast Hovmöller — same WK filter + PCF projection re-run on the
+        # observed+GEFS extended anomaly series so the wave bands (and thus
+        # their contours) extend cleanly across the forecast window. Written
+        # as a SEPARATE artifact so the observed-only hovmoller.json stays
+        # byte-identical; the frontend opts in when the GEFS toggle is on.
+        hov_fcst = None
+        if n_forecast > 0:
+            try:
+                if spec.component == "raw":
+                    filtered_ext = anom_ext
+                elif spec.component == "sym":
+                    filtered_ext = apply_pcf_projection(
+                        wk_filter(sym_ext, spec), spec)
+                else:
+                    filtered_ext = apply_pcf_projection(
+                        wk_filter(asym_ext, spec), spec)
+                hov_fcst = build_hovmoller_slab(
+                    filtered_ext, spec, valid_time_iso, n_forecast=n_forecast)
+            except Exception as e:
+                log.warning("Forecast Hovmöller build failed for %s: %s",
+                            spec.name, e)
+
         write_local(out_dir, spec, png, valid_time_iso, bounds)
         if geojson:
             (out_dir / f"{spec.name}.geojson").write_bytes(geojson)
         if hov_slab:
             write_hovmoller_local(out_dir, spec, hov_slab)
-        log.info("  wrote %s.png (%d bytes)%s%s",
+        if hov_fcst:
+            write_hovmoller_local(out_dir, spec, hov_fcst,
+                                  filename="hovmoller_fcst.json")
+        log.info("  wrote %s.png (%d bytes)%s%s%s",
                  spec.name, len(png),
                  f" + .geojson ({len(geojson)} bytes)" if geojson else "",
-                 " + .hovmoller.json" if hov_slab else "")
+                 " + .hovmoller.json" if hov_slab else "",
+                 f" + .hovmoller_fcst.json (+{n_forecast}d)" if hov_fcst else "")
         if not args.local_only:
             try:
                 upload_gcs(spec, png, valid_time_iso, bounds, geojson=geojson)
@@ -1567,6 +1805,13 @@ def main():
                 except Exception as e:
                     log.exception("Hovmöller GCS upload failed for %s: %s",
                                   spec.name, e)
+            if hov_fcst:
+                try:
+                    upload_hovmoller_gcs(spec, hov_fcst,
+                                         filename="hovmoller_fcst.json")
+                except Exception as e:
+                    log.exception("Forecast Hovmöller GCS upload failed for "
+                                  "%s: %s", spec.name, e)
 
     log.info("Done. Outputs in %s%s",
              out_dir, "" if args.local_only else f" + gs://{GCS_BUCKET}/{GCS_PREFIX}/")

@@ -77,10 +77,12 @@
     var state = {
         initialized: false,
         indices: null,
-        slabs: {},                  // { bandKey: payload }
+        slabs: {},                  // { bandKey: payload }  (observed-only)
+        fcstSlabs: {},              // { bandKey: payload }  (obs + GEFS 10-day)
         activeStorms: [],
         latBand: 'trop10',
         showTCOverlay: !SUB_ONLY,
+        showForecast: false,        // GEFS 10-day Hovmöller extension toggle
         expandedBands: {},          // { bandKey: bool } — sticky per-tab session
         tcLoading: false,           // true while phase-2 recent-storms is in flight
         viewMode: SUB_ONLY ? 'combined' : _loadStoredViewMode(),
@@ -269,16 +271,91 @@
     }
 
     function _loadSlabs() {
-        var promises = BANDS.map(function (b) {
+        var promises = [];
+        BANDS.forEach(function (b) {
             var url = GCS_BASE + '/' + b.key + '/hovmoller.json';
-            return _fetchJSON(url)
+            promises.push(_fetchJSON(url)
                 .then(function (slab) { state.slabs[b.key] = slab; })
                 .catch(function (err) {
                     console.warn('[subseasonal-rt] Hovmöller ' + b.key + ' failed:', err.message);
                     state.slabs[b.key] = null;
-                });
+                }));
+            // Forecast-extended slab (obs + GEFS 10-day). Optional — older
+            // pipeline runs won't have it yet, so a 404 just disables the
+            // toggle rather than failing the load.
+            var furl = GCS_BASE + '/' + b.key + '/hovmoller_fcst.json';
+            promises.push(_fetchJSON(furl)
+                .then(function (slab) { state.fcstSlabs[b.key] = slab; })
+                .catch(function () { state.fcstSlabs[b.key] = null; }));
         });
         return Promise.all(promises);
+    }
+
+    // True only when the user has the toggle on AND every requested band
+    // actually has a forecast slab loaded. Used to gate the toggle's
+    // enabled state and the divider/shading rendering.
+    function _forecastAvailable() {
+        return BANDS.some(function (b) { return state.fcstSlabs[b.key]; });
+    }
+
+    // Returns the slab to render for a band: the forecast-extended one when
+    // the toggle is on and it exists, otherwise the observed-only slab.
+    function _activeSlab(bandKey) {
+        if (state.showForecast) {
+            var f = state.fcstSlabs[bandKey];
+            if (f && f.lat_bands) return f;
+        }
+        return state.slabs[bandKey];
+    }
+
+    // Plotly shapes + annotation marking the observed↔forecast boundary on
+    // a (time-on-y, reversed) Hovmöller. `slab` must carry forecast
+    // metadata (n_forecast / forecast_from). Returns {shapes, annotations}
+    // to splice into the layout. The forecast region (newest rows, at the
+    // bottom since y is reversed) gets a faint tint + a dashed divider line
+    // and a "GEFS" tag so the extrapolated tail reads as distinct from
+    // analysis.
+    function _forecastDecor(slab, fg) {
+        var out = { shapes: [], annotations: [] };
+        if (!slab || !slab.n_forecast || !slab.forecast_from) return out;
+        var times = slab.times;
+        var fromIdx = times.indexOf(slab.forecast_from);
+        if (fromIdx <= 0) return out;
+        var lastTime = times[times.length - 1];
+        // Plotly auto-detects the "YYYY-MM-DD" y values as a DATE axis (not
+        // categorical), so shape/annotation coordinates must be date
+        // strings — numeric indices get read as ms-since-epoch and blow the
+        // autorange back to 1970. The analysis↔forecast boundary sits half
+        // a day before forecast_from (midway between the last observed day
+        // and the first forecast day, since the series is daily).
+        var edge = slab.forecast_from + 'T00:00:00';
+        // Shade the forecast band (forecast_from → last day). Pad the far
+        // end by ~12 h so the last daily cell is fully covered.
+        var lastEdge = lastTime + 'T23:59:59';
+        out.shapes.push({
+            type: 'rect', xref: 'x', yref: 'y',
+            x0: 0, x1: 360, y0: edge, y1: lastEdge,
+            fillcolor: 'rgba(46,125,255,0.07)',
+            line: { width: 0 }, layer: 'below',
+        });
+        // Dashed divider at the analysis/forecast boundary.
+        out.shapes.push({
+            type: 'line', xref: 'x', yref: 'y',
+            x0: 0, x1: 360, y0: edge, y1: edge,
+            line: { color: fg, width: 1.2, dash: 'dot' },
+            layer: 'above',
+        });
+        // "GEFS forecast" tag pinned at the right edge of the shaded band.
+        out.annotations.push({
+            xref: 'paper', yref: 'y',
+            x: 1, xanchor: 'right',
+            y: lastEdge, yanchor: 'bottom',
+            text: 'GEFS forecast →',
+            showarrow: false,
+            font: { size: 9, color: fg, family: 'DM Sans, system-ui, sans-serif' },
+            bgcolor: 'rgba(46,125,255,0.12)', borderpad: 2,
+        });
+        return out;
     }
 
     function _loadActiveStorms() {
@@ -706,7 +783,7 @@
 
             container.appendChild(panel);
 
-            var slab = state.slabs[band.key];
+            var slab = _activeSlab(band.key);
             var latBandKey = band.forcedLatBand || state.latBand;
             if (!slab || !slab.lat_bands || !slab.lat_bands[latBandKey]) {
                 panel.innerHTML += '<div style="padding:24px;text-align:center;color:#94a3b8;font-size:0.75rem;">'
@@ -825,6 +902,12 @@
                 });
             }
 
+            if (state.showForecast) {
+                var decor = _forecastDecor(slab, fg);
+                layout.shapes = decor.shapes;
+                layout.annotations = decor.annotations;
+            }
+
             var config = { displayModeBar: false, responsive: true };
             Plotly.newPlot(panel, [trace].concat(overlayTraces), layout, config);
         });
@@ -840,7 +923,7 @@
     // are clickable, so users can isolate any single overlay.
     // -------------------------------------------------------------------
     function _renderCombinedHovmoller(container, bg, fg, axisGrid, isDark) {
-        var anomSlab = state.slabs.anomaly;
+        var anomSlab = _activeSlab('anomaly');
         if (!anomSlab || !anomSlab.lat_bands || !anomSlab.lat_bands[state.latBand]) {
             container.innerHTML = '<div style="padding:24px;text-align:center;color:#94a3b8;font-size:0.85rem;">'
                 + 'No OLR anomaly data available for the combined view.</div>';
@@ -918,7 +1001,7 @@
         // matching the operational convention for OLR-anomaly waves.
         var overlayTraces = [];
         COMBINED_OVERLAYS.forEach(function (ov) {
-            var slab = state.slabs[ov.key];
+            var slab = _activeSlab(ov.key);
             if (!slab || !slab.lat_bands) return;
             var bandSpec = BANDS.find(function (b) { return b.key === ov.key; });
             var latBandKey = (bandSpec && bandSpec.forcedLatBand) || state.latBand;
@@ -1038,6 +1121,12 @@
                     overlayTraces.push(tt.latest);
                 }
             });
+        }
+
+        if (state.showForecast) {
+            var decor = _forecastDecor(anomSlab, fg);
+            layout.shapes = (layout.shapes || []).concat(decor.shapes);
+            layout.annotations = (layout.annotations || []).concat(decor.annotations);
         }
 
         var config = { displayModeBar: false, responsive: true };
@@ -1524,6 +1613,16 @@
                 _renderHovmollers();
             });
         }
+        var fcstToggle = document.getElementById('sub-forecast-toggle');
+        if (fcstToggle && !fcstToggle._wired) {
+            fcstToggle._wired = true;
+            fcstToggle.addEventListener('change', function () {
+                state.showForecast = fcstToggle.checked;
+                _ga('rt_sub_forecast', { on: state.showForecast });
+                _renderHovmollers();
+            });
+        }
+        _updateForecastToggleState();
         var viewToggle = document.getElementById('sub-view-toggle');
         if (viewToggle && !viewToggle._wired) {
             viewToggle._wired = true;
@@ -1573,6 +1672,31 @@
     // doesn't shuffle the rest of the controls bar to the right. In
     // stacked view we just dim + disable it via a `hidden-by-mode`
     // attribute that CSS hooks into.
+    // Disable the GEFS forecast checkbox until at least one forecast slab
+    // has loaded (older pipeline output, or a failed daily run, won't have
+    // them). When disabled we also force the toggle off so a stale checked
+    // state can't request data that isn't there.
+    function _updateForecastToggleState() {
+        var el = document.getElementById('sub-forecast-toggle');
+        var lbl = document.getElementById('sub-forecast-label');
+        if (!el) return;
+        var avail = _forecastAvailable();
+        el.disabled = !avail;
+        if (!avail) {
+            el.checked = false;
+            state.showForecast = false;
+        }
+        if (lbl) {
+            if (lbl.getAttribute('data-title-on') == null) {
+                lbl.setAttribute('data-title-on', lbl.title || '');
+            }
+            lbl.style.opacity = avail ? '' : '0.45';
+            lbl.title = avail
+                ? lbl.getAttribute('data-title-on')
+                : 'GEFS forecast extension not available yet for the latest run.';
+        }
+    }
+
     function _updateSmoothToggleVisibility() {
         var lbl = document.getElementById('sub-smooth-label');
         var tog = document.getElementById('sub-smooth-toggle');
@@ -1613,6 +1737,7 @@
         // the operationally-useful wave view.
         Promise.all([_loadIndices(), _loadSlabs(), _loadGenesisFactors()])
             .then(function () {
+                _updateForecastToggleState();
                 _renderClocks();
                 _renderGenesisIndicators();
                 _renderHovmollers();
