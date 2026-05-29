@@ -1032,18 +1032,29 @@ html, body { margin: 0; padding: 0; }
    ═══════════════════════════════════════════════════════════════ */
 
 @media (max-width: 900px) {
+    /* Stack the map over the info column and make the BODY the single
+       scroll container (the desktop layout scrolls only inside
+       .ir-detail-right, which on a phone buries everything below the
+       Intensity chart — Model Forecasts, ASCAT, Recon — in a cramped,
+       non-obvious nested scroll region the user can't find). Here the
+       map gets a fixed height and the info column flows below it at its
+       natural height, so normal page-scroll reaches every section. */
     .ir-detail-body {
         flex-direction: column;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
     }
     .ir-detail-left {
         flex: none;
-        height: 50%;
+        height: 56vh;
+        min-height: 280px;
         border-right: none;
         border-bottom: 1px solid var(--border);
     }
     .ir-detail-right {
-        flex: 1;
+        flex: none;          /* natural content height — flows below map */
         min-width: 0;
+        overflow: visible;   /* defer scrolling to .ir-detail-body */
     }
 }
 
@@ -1162,6 +1173,14 @@ html, body { margin: 0; padding: 0; }
         padding: 6px 9px;
         font-size: 11px;
         min-height: 34px;
+    }
+    /* The Models / DeepMind toggles default to a ~22px-tall pill — too
+       small to tap reliably. Bring them up to the same 34px touch target
+       as the other mobile controls. */
+    .rt-model-toggle-btn,
+    .rt-model-filter-btn {
+        min-height: 34px;
+        padding: 6px 12px;
     }
     .modebar-container,
     .modebar {
