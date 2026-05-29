@@ -1021,6 +1021,18 @@ def warmup():
         result["seb_primed"] = False
         result["seb_error"] = str(e)
 
+    # 4. Pre-warm the WeatherLab genesis cache (global cyclogenesis layer).
+    #    The per-instance daemon thread is the primary mechanism; this primes
+    #    a brand-new instance the scheduler happens to hit. Fire-and-forget so
+    #    the warmup request never blocks on the (rare) CSV download.
+    try:
+        from ir_monitor_api import refresh_genesis_cache
+        threading.Thread(target=refresh_genesis_cache, daemon=True).start()
+        result["genesis_priming"] = True
+    except Exception as e:
+        result["genesis_priming"] = False
+        result["genesis_error"] = str(e)
+
     return result
 
 
@@ -8988,9 +9000,11 @@ from ir_monitor_api import (
     router as ir_monitor_router,
     start_background_refresh as _ir_start_bg,
     refresh_active_storms_cache as _ir_refresh,
+    start_genesis_warmup as _ir_start_genesis_warm,
 )
 app.include_router(ir_monitor_router, prefix="/ir-monitor")
 _ir_start_bg()  # Start background storm cache refresh thread
+_ir_start_genesis_warm()  # Keep WeatherLab genesis cache warm (global layer)
 
 try:
     from microwave_api import router as microwave_router, start_index_build as _mw_start

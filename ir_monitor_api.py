@@ -6886,6 +6886,60 @@ def _fetch_weatherlab_genesis_csv(date_str: str, hour_str: str
     return result
 
 
+# ---------------------------------------------------------------------------
+# Background warm-up for the WeatherLab genesis cache
+#
+# Without this, /weatherlab-genesis pays a cold synchronous cost on the first
+# request after a new Cloud Run instance spins up: resolve the latest cycle,
+# download a multi-MB CSV (up to 30 s), then parse ~10 MB. On an incognito tab
+# (no localStorage / browser HTTP cache to fall back on) the global genesis
+# layer can appear to never load while that runs — and can exceed the request
+# timeout entirely. Mirror the active-storms pattern: a daemon thread keeps
+# `_weatherlab_genesis_cache` warm so the endpoint always serves from memory,
+# and /warmup primes a freshly-spun instance.
+# ---------------------------------------------------------------------------
+
+_GENESIS_WARM_INTERVAL = 900  # 15 min — catches a new 6-hourly cycle promptly
+_genesis_warm_stop = threading.Event()
+
+
+def refresh_genesis_cache() -> dict:
+    """Resolve + parse the latest genesis cycle into the in-memory cache.
+
+    Cheap when the cycle is already cached (a dict lookup in
+    `_weatherlab_genesis_cache`); only pays the CSV download+parse when a
+    newer cycle has published. Used by the background warmer and /warmup.
+    """
+    used_date, used_hour, data = _resolve_latest_genesis_cycle(require_data=True)
+    return {
+        "init_time": (used_date.replace("-", "") + used_hour) if used_date else None,
+        "n_tracks": len(data) if data else 0,
+    }
+
+
+def _background_genesis_warm():
+    """Daemon thread: keep the genesis cache warm so /weatherlab-genesis never
+    pays the cold CSV fetch on the request path."""
+    # Let startup settle (active-storms uses a 10 s delay; stagger after it).
+    _genesis_warm_stop.wait(12)
+    while not _genesis_warm_stop.is_set():
+        try:
+            info = refresh_genesis_cache()
+            print(f"[IR Monitor] Genesis warm refresh: {info}")
+        except Exception:
+            traceback.print_exc()
+        _genesis_warm_stop.wait(_GENESIS_WARM_INTERVAL)
+
+
+def start_genesis_warmup():
+    """Start the background genesis warm thread. Called once at app startup."""
+    t = threading.Thread(target=_background_genesis_warm, daemon=True,
+                         name="genesis-warm")
+    t.start()
+    print("[IR Monitor] Background genesis warm thread started "
+          f"(interval={_GENESIS_WARM_INTERVAL}s)")
+
+
 @router.get("/weatherlab-genesis")
 def get_weatherlab_genesis(max_members: int = 100):
     """FNV3 LARGE_ENSEMBLE cyclogenesis: all 1000-member TC predictions
