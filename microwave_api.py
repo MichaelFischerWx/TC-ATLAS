@@ -10,9 +10,11 @@ Products:
       Available from: GMI, SSMIS, AMSR2, SSM/I, TMI
     - 37 GHz H-pol brightness temperature:
       Available from: GMI, SSMIS, AMSR2, SSM/I, TMI
-    - 37 GHz Color Composite (NRL 37color per Lee et al. 2002 / Kieper & Jiang 2012):
-        RGB false-color: R=f(PCT37, inverted), G=f(V37), B=f(H37)
-        PCT37 = 2.18 * V37 − 1.18 * H37  (Grody 1993)
+    - 37 GHz Color Composite (NRL 37color per Lee et al. 2002 / Jiang et al. 2018):
+        RGB false-color using the authoritative NRL/GeoIPS operational constants
+        (linear guns, no gamma — see _nrl_37color_rgb):
+        R=clamp((280−PCT37)/20), G=clamp((V37−180)/120), B=clamp((H37−160)/140)
+        PCT37 = 2.181 * V37 − 1.181 * H37  (Grody 1993)
       Available from: GMI, SSMIS, AMSR2, SSM/I, TMI
 
 Data source:
@@ -1096,7 +1098,7 @@ def get_microwave_data(
                     if v37_name and h37_name:
                         v37_raw = ds_data[v37_name].values.astype(np.float32)
                         h37_raw = ds_data[h37_name].values.astype(np.float32)
-                        pct37_raw = 2.18 * v37_raw - 1.18 * h37_raw
+                        pct37_raw = 2.181 * v37_raw - 1.181 * h37_raw  # Grody (1993)
                         # Build a single grid from PCT37 for the single-channel Plotly view
                         storm_grid = _build_storm_relative_grid(
                             x_km_raw, y_km_raw, pct37_raw, grid_extent_km=250, grid_res_km=4
@@ -1485,27 +1487,33 @@ def _compute_89h_swath(ds_bt, ds_geo, sensor: str) -> dict:
 
 def _nrl_37color_rgb(v37: np.ndarray, h37: np.ndarray) -> np.ndarray:
     """
-    NRL 37 GHz false-color composite per Jiang et al. (2018, JGR) and
-    Lee et al. (2002, Earth Interactions).
+    NRL 37 GHz false-color composite per Lee et al. (2002, Earth Interactions)
+    and Jiang et al. (2018, JGR).
 
-    From Jiang (2018) p. 5511: "PCT37, V37, and H37 values are displayed
-    into RGB guns, respectively."
+    This is the authoritative NRL/GeoIPS "37color" recipe — three linear RGB
+    "guns" (no gamma) over the published stretch ranges:
 
-        PCT37 = 2.18 * V37 − 1.18 * H37   (Grody 1993)
+        PCT37 = 2.181 * V37 − 1.181 * H37   (Grody 1993)
 
-        Red   = clamp((285 − PCT37) / 100,  0, 1)
-        Green = clamp((V37 − 155) / 125,    0, 1) ** 1.6
-        Blue  = clamp((H37 − 145) / 135,    0, 1) ** 1.1
+        Red   = clamp((280 − PCT37) / 20,  0, 1)   # ice scattering (inverse 260–280 K)
+        Green = clamp((V37 − 180)  / 120,  0, 1)   # V37 warmth (180–300 K)
+        Blue  = clamp((H37 − 160)  / 140,  0, 1)   # H37 emission (160–300 K)
 
-    Differential gamma (G^1.6 > B^1.1) compresses green faster than blue
-    for low-TB scenes, so B > G in deep convection → pink/magenta tones.
-    At high TBs (rain) both approach 1.0 → cyan is preserved.
+    Colour progression (matches real NRL operational products):
 
-    Resulting colour scheme (Jiang 2018 Table 1, Fig. 1):
-        - Dark green:  clear ocean  (PCT37 ~270-300, V37 low, H37 very low)
-        - Cyan / teal: warm rain, shallow convection (high V37 & H37)
-        - Pink/magenta: deep convection with ice (low PCT37)
-        - Red:         intense ice scattering (very low PCT37)
+        - Green:        clear ocean       (warm PCT37, low H37)
+        - Cyan / teal:  warm rain / shallow convection (high H37 & V37)
+        - Pink/magenta: deep convection   (low PCT37 → high R; moderate H37 keeps
+                        blue on → R+B reads pink — the iconic NRL "pink" / the
+                        Kieper & Jiang pre-RI pink-ring signature)
+        - Red:          intense ice scattering (very low PCT37, low V37)
+
+    NOTE on the blue onset (160 K): this is what produces the characteristic
+    *pink* deep-convection signature of operational NRL imagery. Jiang (2018)
+    Fig. 1 renders that wedge more *salmon* (blue effectively higher), so a
+    least-squares fit to that figure diverges from this operational recipe; we
+    deliberately use the operational GeoIPS constants here so TC-ATLAS matches
+    the NRL product appearance. See demo_37color/ for the side-by-side analysis.
 
     Parameters
     ----------
@@ -1515,14 +1523,15 @@ def _nrl_37color_rgb(v37: np.ndarray, h37: np.ndarray) -> np.ndarray:
     -------
     rgb : uint8 array, shape (*v37.shape, 3)
     """
-    pct37 = 2.18 * v37 - 1.18 * h37
+    pct37 = 2.181 * v37 - 1.181 * h37
 
-    # R ← inverted PCT37: high red for ice scattering (low PCT37)
-    r = np.clip((285.0 - pct37) / 100.0, 0.0, 1.0)
-    # G ← V37 with gamma 1.6: compresses mid-range → less green in convection
-    g = np.clip((v37 - 155.0) / 125.0, 0.0, 1.0) ** 1.6
-    # B ← H37 with gamma 1.1: lighter compression → B > G in convection → pink
-    b = np.clip((h37 - 145.0) / 135.0, 0.0, 1.0) ** 1.1
+    # R ← inverted PCT37 over 260–280 K: ice scattering (low PCT37 → red).
+    r = np.clip((280.0 - pct37) / 20.0, 0.0, 1.0)
+    # G ← V37 warmth over 180–300 K.
+    g = np.clip((v37 - 180.0) / 120.0, 0.0, 1.0)
+    # B ← H37 emission over 160–300 K. The 160 K onset keeps blue present in
+    # the convective wedge, giving the operational NRL *pink* (not salmon).
+    b = np.clip((h37 - 160.0) / 140.0, 0.0, 1.0)
 
     # Mask invalid pixels
     invalid = ~(np.isfinite(v37) & np.isfinite(h37) & (v37 > 0) & (h37 > 0))
@@ -1553,7 +1562,7 @@ def _compute_37color_swath(ds_bt, ds_geo, sensor: str) -> dict:
 
     tb_v = ds_bt[v_name].values.astype(np.float32)
     tb_h = ds_bt[h_name].values.astype(np.float32)
-    pct37 = 2.18 * tb_v - 1.18 * tb_h
+    pct37 = 2.181 * tb_v - 1.181 * tb_h  # Grody (1993); matches _nrl_37color_rgb
 
     lats, lons = _get_swath_geolocation(ds_geo)
 
@@ -1601,7 +1610,7 @@ def _compute_37color_interpolated(ds, sensor: str) -> dict:
 
     tb_v = ds[v_name].values.astype(np.float32)
     tb_h = ds[h_name].values.astype(np.float32)
-    pct37 = 2.18 * tb_v - 1.18 * tb_h
+    pct37 = 2.181 * tb_v - 1.181 * tb_h  # Grody (1993); matches _nrl_37color_rgb
 
     # Apply NRL formulas
     rgb = _nrl_37color_rgb(tb_v, tb_h)
