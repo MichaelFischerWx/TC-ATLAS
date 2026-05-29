@@ -6884,9 +6884,27 @@
                               buf: visBuf, base: visP.binBase, byte_offset: vfr.byte_offset,
                               byte_length: vfr.byte_length, mediaType: visMedia, source: 'vis' });
             } else if (swirP && sf.byte_length && !sf.error) {
+                // SWIR fallback. It's only a true *night* frame when the sun is
+                // actually down; a daytime Band-2 gap (upstream scan miss,
+                // marked "no_data") is still daylight and should read "(SWIR)"
+                // not "(SWIR night)". Trust the server's solar-gated label when
+                // present ("nighttime"), else compute solar elevation locally so
+                // the label is correct even if the Vis bundle is absent.
+                var swirNight;
+                if (vfr && vfr.error === 'nighttime') {
+                    swirNight = true;
+                } else if (vfr && vfr.error) {
+                    swirNight = false;   // daytime gap (no_data / anomalous)
+                } else {
+                    var fb0 = sf.bounds || globalBounds;
+                    var clat = fb0 ? (fb0[0][0] + fb0[1][0]) / 2 : detailStormLat;
+                    var clon = fb0 ? (fb0[0][1] + fb0[1][1]) / 2 : detailStormLon;
+                    swirNight = solarElevation(clat, clon, new Date(dt)) < -6;
+                }
                 merged.push({ datetime_utc: dt, bounds: sf.bounds || globalBounds,
                               buf: swirBuf, base: swirP.binBase, byte_offset: sf.byte_offset,
-                              byte_length: sf.byte_length, mediaType: swirMedia, source: 'swir' });
+                              byte_length: sf.byte_length, mediaType: swirMedia,
+                              source: 'swir', swirNight: swirNight });
             } else {
                 merged.push({ datetime_utc: dt, bounds: sf.bounds || globalBounds,
                               buf: null, source: 'none' });
@@ -6947,6 +6965,7 @@
             });
             overlay._frameBlobUrl = blobUrl;       // windowed-decode promote/evict
             overlay._bandSource = m.source;        // 'vis' | 'swir' → per-frame label
+            overlay._swirNight = m.swirNight;      // true → real night, false → daytime gap
             hasErr.push(false);
             (function (lyr, idx) {
                 lyr.once('error', function () {
@@ -6994,7 +7013,12 @@
         }
         // Per-frame label so the user sees the Vis→SWIR handover explicitly.
         var lyr = visFrameLayers[idx];
-        var srcLabel = (lyr && lyr._bandSource === 'swir') ? 'Visible (SWIR night)' : 'Visible';
+        var srcLabel = 'Visible';
+        if (lyr && lyr._bandSource === 'swir') {
+            // "(SWIR night)" only when it's really night; a daytime Band-2 gap
+            // falls back to SWIR too but is still daylight → "(SWIR)".
+            srcLabel = lyr._swirNight === false ? 'Visible (SWIR)' : 'Visible (SWIR night)';
+        }
         document.getElementById('ir-satellite-label').textContent = srcLabel + ' — ' + detailSatName;
         if (_rtModelVisible && _rtModelAutoSync && _rtModelData) _rtSyncModelCycleToIR();
     }

@@ -398,15 +398,21 @@ _anomalous_heal_times: dict = {}
 _anomalous_heal_lock = threading.Lock()
 
 
-def _flag_anomalous_frames(jpgs: list, band: int | None = None) -> set:
+def _flag_anomalous_frames(jpgs: list, band: int | None = None,
+                           is_day: list | None = None) -> set:
     """Return the set of frame indices whose imagery is a strong outlier vs
     BOTH immediate temporal neighbors (likely a bad scan substitution).
     `jpgs` is a list of encoded image bytes or None (missing frame).
 
-    For the Visible band a second, brightness-based test also flags dim-out
+    A second, brightness-based test also flags daytime reflectance dim-out
     scans the MAD screen misses near the day/night terminator (see
-    _VIS_DROPOUT_FRAC). `band` selects that test; leave None (IR) or pass an
-    emissive band (WV/SWIR) to run the MAD screen only.
+    _VIS_DROPOUT_FRAC). It runs when `band == VIS_BAND` (the Visible product,
+    where every present frame is daytime reflectance), OR when `is_day` is
+    supplied (the GeoColor composite, a day-Band-2/night-Band-13 mix): there
+    only daytime-interior frames are screened and only daytime frames serve as
+    neighbors, since a night IR neighbor's brightness is unrelated to
+    illumination. Emissive bands (WV/SWIR) and IR pass `band=None`/`is_day=None`
+    and get the MAD screen only.
 
     Fail-open: returns an empty set on any decode/dependency error so a
     detection hiccup never blocks bundling."""
@@ -454,19 +460,33 @@ def _flag_anomalous_frames(jpgs: list, band: int | None = None) -> set:
         if d_prev > thr and d_next > thr:
             flagged.add(i)
 
-    # Visible-only dim-out screen: a daytime reflectance frame should never be
+    # Reflectance dim-out screen: a daytime reflectance frame should never be
     # a brightness local-minimum (the sun ramps illumination monotonically
     # through a pass). Catches low-gain/partial Vis scans near sunrise/sunset
-    # whose near-black MADs fall under _ANOM_ABS_FLOOR. Skipped for emissive
-    # bands (WV/SWIR) and IR/Vis composites, where brightness ≠ illumination.
-    if band is not None and band == VIS_BAND:
+    # whose near-black MADs fall under _ANOM_ABS_FLOOR. Runs for the Visible
+    # product (band == VIS_BAND) and, gated by `is_day`, for the GeoColor
+    # composite's daytime Band-2 frames. For GeoColor we screen only daytime
+    # frames and only treat daytime frames as neighbors, since a night Band-13
+    # neighbor's brightness ≠ illumination. Skipped entirely for emissive
+    # bands (WV/SWIR) and IR.
+    run_dimout = (band is not None and band == VIS_BAND) or (is_day is not None)
+    if run_dimout:
         means = [float(t.mean()) if t is not None else None for t in thumbs]
+
+        def _usable(j):
+            # A neighbor is usable if it has imagery and — for GeoColor — is a
+            # daytime frame (so we never compare against inverted night IR).
+            return means[j] is not None and (is_day is None or is_day[j])
+
         for i in range(n):
             mi = means[i]
             if mi is None or i in flagged:
                 continue
-            mp = next((means[j] for j in range(i - 1, -1, -1) if means[j] is not None), None)
-            mq = next((means[j] for j in range(i + 1, n) if means[j] is not None), None)
+            # GeoColor: only screen daytime-interior frames.
+            if is_day is not None and not is_day[i]:
+                continue
+            mp = next((means[j] for j in range(i - 1, -1, -1) if _usable(j)), None)
+            mq = next((means[j] for j in range(i + 1, n) if _usable(j)), None)
             if mp is None or mq is None:
                 continue
             dimmer = min(mp, mq)
@@ -479,7 +499,8 @@ def _flag_anomalous_frames(jpgs: list, band: int | None = None) -> set:
 
 def _screen_and_queue_anomalies(atcf_upper: str, times_oldest_first: list,
                                 jpgs: list, label: str = "",
-                                band: int | None = None) -> set:
+                                band: int | None = None,
+                                is_day: list | None = None) -> set:
     """Flag anomalous frames in `jpgs` (encoded image bytes or None,
     oldest-first, aligned with `times_oldest_first`), queue their slot keys
     for force-refetch on the next prewarm cycle (self-heal), and return the
@@ -489,9 +510,10 @@ def _screen_and_queue_anomalies(atcf_upper: str, times_oldest_first: list,
     bundle so every product we ship (IR/WV/SWIR/Vis) gets the same "pops out
     and comes back" screen. The prewarm pops `_anomalous_heal_times` and
     force-refetches ALL bands for each queued slot, so a frame flagged on any
-    one product heals across products. `label` tags the log line. `band` is
-    forwarded to enable the Visible-only dim-out screen."""
-    anomalous_idx = _flag_anomalous_frames(jpgs, band=band)
+    one product heals across products. `label` tags the log line. `band` and
+    `is_day` are forwarded to enable the reflectance dim-out screen (Visible
+    via `band`, GeoColor's daytime frames via `is_day`)."""
+    anomalous_idx = _flag_anomalous_frames(jpgs, band=band, is_day=is_day)
     if anomalous_idx:
         bad_keys = {times_oldest_first[i].strftime("%Y%m%d%H%M")
                     for i in anomalous_idx}
@@ -4466,9 +4488,16 @@ def get_storm_band_frames_bundle(
                 [ilat - half, ilon - half],
                 [ilat + half, ilon + half],
             ]
-            return (i, jpg, sat, frame_bounds, None)
+            # Real solar gate for the Vis "nighttime" label: a missing Vis
+            # frame is only genuinely "nighttime" when the sun is actually
+            # down. A daytime gap (upstream Band-2 latency/scan miss) must NOT
+            # be labelled night — that mislabels the SWIR fallback as a night
+            # frame on the client.
+            is_night = (band == VIS_BAND and
+                        _solar_elevation(ilat, ilon, target_dt) < -6)
+            return (i, jpg, sat, frame_bounds, is_night, None)
         except Exception as ex:
-            return (i, None, "", None, str(ex))
+            return (i, None, "", None, False, str(ex))
 
     indexed = list(enumerate(frame_times))
     # 8 workers: doubles the previous 4. Per-frame work is mostly S3
@@ -4482,7 +4511,7 @@ def get_storm_band_frames_bundle(
     # IR/prebuilt-WV bundles use) and queue any flagged slot for self-heal on
     # the next prewarm cycle. frame_times is oldest-first, index-aligned.
     jpgs_by_idx = [None] * len(frame_times)
-    for i, jpg, sat, fbounds, err in results:
+    for i, jpg, sat, fbounds, is_night, err in results:
         if jpg and err is None:
             jpgs_by_idx[i] = jpg
     band_anom_idx = _screen_and_queue_anomalies(
@@ -4494,7 +4523,7 @@ def get_storm_band_frames_bundle(
     offset = 0
     summary_sat = ""
 
-    for i, jpg, sat, fbounds, err in results:
+    for i, jpg, sat, fbounds, is_night, err in results:
         target_dt = frame_times[i]
         iso_dt = target_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
         is_anom = i in band_anom_idx
@@ -4505,7 +4534,10 @@ def get_storm_band_frames_bundle(
             elif err:
                 err_msg = err
             elif band == VIS_BAND:
-                err_msg = "nighttime"
+                # Only call it night when the sun is actually down; a daytime
+                # Band-2 gap is "no_data" so the client labels the SWIR
+                # fallback "(SWIR)" not "(SWIR night)".
+                err_msg = "nighttime" if is_night else "no_data"
             else:
                 err_msg = "no_data"
             frame_headers.append({
@@ -4771,11 +4803,17 @@ def get_storm_geocolor_frames_bundle(
     # render switch is NOT flagged (triangulation needs BOTH neighbors to
     # diverge; the switch only diverges from one side).
     jpgs_by_idx = [None] * len(frame_times)
+    geo_is_day = [False] * len(frame_times)
     for i, jpg, sat, fbounds, is_day, err in results:
+        geo_is_day[i] = bool(is_day)
         if jpg and err is None:
             jpgs_by_idx[i] = jpg
+    # Pass per-frame is_day so the dim-out screen guards GeoColor's daytime
+    # Band-2 frames (same failure mode as the Visible panel) without tripping
+    # on the day→night Band-13 render switch.
     geo_anom_idx = _screen_and_queue_anomalies(
-        atcf_upper, frame_times, jpgs_by_idx, label="geocolor")
+        atcf_upper, frame_times, jpgs_by_idx, label="geocolor",
+        is_day=geo_is_day)
 
     frame_headers = []
     payloads: list[bytes] = []
