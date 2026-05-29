@@ -3000,6 +3000,8 @@
     var _satMwMwMarkers = { fix: null, interp: null };
     var _satMwSelectedOrbit = null;
     var _satMwOrbits = [];
+    var _satMwRefreshTimer = null;            // poll for new passes while MW mode is active
+    var _SAT_MW_REFRESH_MS = 150 * 1000;      // 2.5 min — picks up freshly-ingested passes
     var _satMwProduct = '89pct';
     var _satMwIrMetaCache = { atcfId: null, meta: null };
     var _satMwSyncing = false;
@@ -3582,9 +3584,31 @@
             }
             setTimeout(_doFit, 200);
         });
+        _satMwStartRefresh();
+    }
+
+    // Poll for newly-ingested passes while MW mode is active. _satMwLoadPasses
+    // preserves the user's current selection, so the view never jumps off the
+    // pass they're looking at; the dropdown just gains any newer arrivals.
+    function _satMwStartRefresh() {
+        _satMwStopRefresh();
+        _satMwRefreshTimer = setInterval(function () {
+            if (!currentStorm) return;
+            _satMwLoadPasses();
+            if (typeof window._rtRenderStormUpcomingPasses === 'function') {
+                window._rtRenderStormUpcomingPasses(currentStorm, 'sat-mw');
+            }
+        }, _SAT_MW_REFRESH_MS);
+    }
+    function _satMwStopRefresh() {
+        if (_satMwRefreshTimer) {
+            clearInterval(_satMwRefreshTimer);
+            _satMwRefreshTimer = null;
+        }
     }
 
     function _satMwDeactivate() {
+        _satMwStopRefresh();
         // The next renderBothPanels (called by the diagnostics /
         // track / asym branch in setViewMode) will trigger Phase 2's
         // _satIrSyncLeaflet which picks canvas vs Leaflet based on
@@ -3658,7 +3682,17 @@
                 _satMwOrbits = orbits;
                 _satMwRenderStrip();
                 if (orbits.length) {
-                    _satMwSelectPass(orbits[0]);   // auto-select latest
+                    // Preserve the user's current pick across auto-refreshes —
+                    // re-point it to the refreshed object. Only auto-select the
+                    // latest on first load, or if the prior pass aged out.
+                    var keep = _satMwSelectedOrbit && orbits.filter(function (o) {
+                        return o.orbit_id === _satMwSelectedOrbit.orbit_id;
+                    })[0];
+                    if (keep) {
+                        _satMwSelectedOrbit = keep;
+                    } else {
+                        _satMwSelectPass(orbits[0]);   // auto-select latest
+                    }
                     _satMwSetStatus(orbits.length + ' pass'
                         + (orbits.length === 1 ? '' : 'es'));
                 } else {

@@ -15516,6 +15516,30 @@
         prefix: 'rt-mw-storm'
     };
 
+    var _rtMwStormRefreshTimer = null;
+    var _RT_MW_STORM_REFRESH_MS = 150 * 1000;   // 2.5 min — pick up new passes
+
+    // Poll the open Global-Map storm-detail MW panel for newly-ingested
+    // passes. Refreshes silently (no "loading…" flash, list replaced
+    // atomically). Self-cancels when the detail closes, the storm changes,
+    // or focus moves to the Satellite tab (which runs its own refresh).
+    function _rtMwStartStormRefresh() {
+        if (_rtMwStormRefreshTimer) clearInterval(_rtMwStormRefreshTimer);
+        var boundAtcf = _rtMwStormState.atcfId;
+        _rtMwStormRefreshTimer = setInterval(function () {
+            var detail = document.getElementById('ir-detail');
+            var storm = _rtMwStormState.storm;
+            if (!storm || _rtMwStormState.prefix !== 'rt-mw-storm'
+                || _rtMwStormState.atcfId !== boundAtcf
+                || !detail || detail.style.display === 'none') {
+                clearInterval(_rtMwStormRefreshTimer);
+                _rtMwStormRefreshTimer = null;
+                return;
+            }
+            _rtLoadStormMwPasses(storm, undefined, true /* silent */);
+        }, _RT_MW_STORM_REFRESH_MS);
+    }
+
     function _rtMwBoundsContains(bounds, lat, lon) {
         if (!bounds || !bounds[0] || !bounds[1]) return false;
         var south = bounds[0][0], west = bounds[0][1];
@@ -15533,7 +15557,11 @@
     // matches the schedule dashboard's coverage definition in tc_mw_layer.js.
     var _RT_MW_SWATH_HALF_KM = { GMI: 445, SSMIS: 875, AMSR2: 725, ATMS: 1150 };
     var _RT_MW_SWATH_HALF_KM_DEFAULT = 900;
-    var _RT_MW_SWATH_COVER_MARGIN = 1.15;
+    // Loose by design: this is only a cheap PNG-download skip, and the
+    // per-card crop check (frac < _RT_MW_MIN_COVERAGE) is the real authority.
+    // 1.15 dropped genuine edge passes ~5 km short (e.g. GMI nadir 517 km from
+    // a storm the swath edge actually imaged); 1.30 keeps them in the running.
+    var _RT_MW_SWATH_COVER_MARGIN = 1.30;
 
     function _rtMwMinDistKmToTrack(track, lat, lon) {
         if (!track || !track.length) return Infinity;
@@ -15851,7 +15879,7 @@
     // Entry point — called from the deferred-loads block once a storm
     // is selected. Fetches the manifest, filters to last-24h passes
     // covering the storm, groups by orbit, and renders.
-    function _rtLoadStormMwPasses(storm, prefix) {
+    function _rtLoadStormMwPasses(storm, prefix, silent) {
         if (prefix) _rtMwStormState.prefix = prefix;
         var px = _rtMwStormState.prefix;
         var section  = document.getElementById(px + '-section');
@@ -15862,8 +15890,12 @@
             return;
         }
         section.style.display = '';
-        if (statusEl) statusEl.textContent = 'loading…';
-        if (listEl) listEl.innerHTML = '';
+        // Silent (auto-refresh) re-runs keep the existing cards on screen until
+        // the new render replaces them — no "loading…" flash, no blank gap.
+        if (!silent) {
+            if (statusEl) statusEl.textContent = 'loading…';
+            if (listEl) listEl.innerHTML = '';
+        }
 
         _rtMwStormState.atcfId = storm.atcf_id;
         _rtMwStormState.lat = storm.lat;
@@ -15873,6 +15905,10 @@
         // Upcoming-pass strip (independent of the past-pass list — renders
         // into {prefix}-upcoming when present; no-op otherwise).
         _rtRenderStormUpcomingPasses(storm);
+
+        // Keep the Global-Map storm-detail panel live. The Satellite tab
+        // (sat-mw) drives its own refresh loop in satellite.js.
+        if (px === 'rt-mw-storm') _rtMwStartStormRefresh();
 
         _rtMwFetchStormPasses(storm)
             .then(function (m) {
@@ -15922,13 +15958,18 @@
                 // pass" at a glance; older context follows down the list.
                 var orbits = Object.keys(orbitMap).map(function (k) { return orbitMap[k]; });
                 orbits.sort(function (a, b) { return b.scan_start_ms - a.scan_start_ms; });
+                // Skip the (thumbnail-reloading) re-render on silent refreshes
+                // when the pass set is unchanged — avoids a flicker every cycle.
+                var sig = orbits.map(function (o) { return o.orbit_id; }).join(',');
+                var changed = sig !== _rtMwStormState._sig;
+                _rtMwStormState._sig = sig;
                 _rtMwStormState.orbits = orbits;
                 if (statusEl) {
                     statusEl.textContent = orbits.length
                         ? (orbits.length + ' pass' + (orbits.length === 1 ? '' : 'es'))
                         : 'no passes';
                 }
-                _rtRenderStormMwPasses();
+                if (!silent || changed) _rtRenderStormMwPasses();
             })
             .catch(function (err) {
                 console.warn('[RT MW Storm] manifest fetch failed:', err);
