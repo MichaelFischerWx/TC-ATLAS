@@ -469,6 +469,13 @@
     };
     var gibsIRLayers = [];     // GIBS IR tile layers on main map
     var trackLayers = [];      // past track polylines + dots on main map
+    // Active-storm name-label markers, keyed by uppercase ATCF id.
+    // Persists across clearTracks() on purpose: drawTrackOnMap removes the
+    // prior marker for a storm before adding a new one, so overlapping
+    // poll/fetch races can't leave two name labels for the same system on
+    // the map. Used by _syncStormLabelVisibility to hide the redundant
+    // text when a genesis disturbance pin already carries the same name.
+    var _stormNameLabels = {};
 
     // Global map product state
     var globalProduct = 'eir';       // 'eir' or 'geocolor'
@@ -3095,6 +3102,10 @@
             map.removeLayer(trackLayers[i]);
         }
         trackLayers = [];
+        // Intentionally NOT clearing _stormNameLabels: its markers were
+        // just removed from the map via trackLayers above, but keeping the
+        // by-id references lets the next drawTrackOnMap remove a stale
+        // duplicate that a poll/fetch race might otherwise leave behind.
     }
 
     /** Fetch metadata for a storm and draw its past track on the main map */
@@ -3196,6 +3207,34 @@
         });
         label.addTo(targetMap);
         layerArr.push(label);
+
+        // Register on the main map so genesis matching can hide the
+        // redundant name text when a disturbance pin already shows it.
+        // Remove any prior label for this storm first so a poll/fetch
+        // race can't leave two name labels for the same system.
+        if (targetMap === map && storm.atcf_id) {
+            var key = String(storm.atcf_id).toUpperCase();
+            var prev = _stormNameLabels[key];
+            if (prev && map) { try { map.removeLayer(prev); } catch (e) {} }
+            label._atcfId = key;
+            _stormNameLabels[key] = label;
+            _syncStormLabelVisibility();
+        }
+    }
+
+    // Hide an active-storm's name label when its ATCF id is currently
+    // represented by a genesis disturbance pin (which carries the same
+    // official name). The colored past-track line stays — only the
+    // duplicate text is suppressed — so the user sees one "Jangmi"
+    // instead of two. Restores all labels when genesis is off.
+    function _syncStormLabelVisibility() {
+        var ids = Object.keys(_stormNameLabels);
+        for (var i = 0; i < ids.length; i++) {
+            var lbl = _stormNameLabels[ids[i]];
+            if (!lbl) continue;
+            var hide = _rtGenesisVisible && !!_genesisMatchedAtcfIds[ids[i]];
+            if (typeof lbl.setOpacity === 'function') lbl.setOpacity(hide ? 0 : 1);
+        }
     }
 
     /** Fetch tracks for all active storms */
@@ -9426,6 +9465,9 @@
         if (typeof renderStormMarkers === 'function' && stormData) {
             try { renderStormMarkers(stormData); } catch (e) { /* non-fatal */ }
         }
+        // Hide the redundant track name labels for matched storms too —
+        // the disturbance pin already shows the official name.
+        _syncStormLabelVisibility();
 
         for (var di = 0; di < disturbances.length; di++) {
             var d = disturbances[di];
@@ -12456,6 +12498,13 @@
         } else {
             _clearGenesis();
             _clearGenesisSpaghetti();   // dependent layer goes too
+            // Drop the matched-storm set so the previously-suppressed
+            // ATCF pins + name labels come back on the satellite-only view.
+            _genesisMatchedAtcfIds = {};
+            if (typeof renderStormMarkers === 'function' && stormData) {
+                try { renderStormMarkers(stormData); } catch (e) { /* non-fatal */ }
+            }
+            _syncStormLabelVisibility();
         }
         if (typeof _refreshLayersCount === 'function') _refreshLayersCount();
     }
@@ -15436,6 +15485,7 @@
     // sensor will scan this storm — and when it should land on TC-ATLAS.
     var _RT_MW_PREDICTIONS_URL = 'https://storage.googleapis.com/tc-atlas-microwave-nrt/passes_predicted.json';
     var _RT_MW_PREDICTIONS_TTL_MS = 10 * 60 * 1000;   // 10 min
+    var _RT_MW_IMMINENT_MIN = 90;   // overpass <90 min out → flag as imminent
     var _rtMwPredictions = null;
     var _rtMwPredictionsFetchedAt = 0;
     // Sensor display order + labels for the upcoming-pass strip.
@@ -15751,7 +15801,10 @@
                     var deltaMin = (Date.parse(p.predicted_scan_start) - now) / 60000;
                     var etaMin = (Date.parse(p.eta_on_tcatlas) - now) / 60000;
                     var isFar = deltaMin > 24 * 60;
-                    farClass = isFar ? ' far' : '';
+                    // Imminent = overpass within ~90 min, so the strip visually
+                    // flags an approaching pass instead of reading as plain text.
+                    var isImminent = !isFar && deltaMin <= _RT_MW_IMMINENT_MIN;
+                    farClass = isFar ? ' far' : (isImminent ? ' imminent' : '');
                     var off = isFinite(p.min_distance_km)
                         ? Math.round(p.min_distance_km) + ' km from center' : '';
                     var cov = _rtMwCoverage(p, coreR);
@@ -15759,8 +15812,10 @@
                         + ' · imagery on TC-ATLAS ' + _rtMwFmtIn(etaMin)
                         + (off ? ' · nadir ' + off : '')
                         + (cov ? ' · ' + cov.title : '')
+                        + (isImminent ? ' · imminent — overpass soon' : '')
                         + (isFar ? ' · beyond 24h (sparse single-sat coverage)' : '');
-                    valHtml = _esc(_rtMwFmtIn(deltaMin))
+                    valHtml = (isImminent ? '<span class="rt-mw-up-soon">SOON</span> ' : '')
+                        + _esc(_rtMwFmtIn(deltaMin))
                         + '<span class="rt-mw-up-eta">&rarr; ' + _esc(_rtMwFmtIn(etaMin)) + '</span>';
                     if (cov) {
                         covHtml = '<span class="rt-mw-up-cov ' + cov.cls + '">'
@@ -16149,9 +16204,11 @@
         ctx.restore();
     }
 
-    // Optional `onCoverage(frac)` callback fires once after the image
-    // loads + cropping completes. Callers use it to hide cards whose
-    // swath geometry happens not to touch the storm position.
+    // Optional `onCoverage(frac, centerFrac)` callback fires once after the
+    // image loads + cropping completes. `frac` is overall swath coverage of
+    // the crop; `centerFrac` is coverage of a small box at the storm center.
+    // Callers use it to hide cards whose swath geometry happens not to touch
+    // the storm position, or to flag passes that clipped the storm center.
     // `withGrid` (default false) draws a lat/lon graticule on top of
     // the swath — used by the compare-modal panels but not the small
     // 80-px side-panel thumbnails where a grid would just clutter.
@@ -16179,7 +16236,7 @@
             }
             var spanLon = eWrapped - wWrapped;
             if (north <= south || spanLon <= 0) {
-                if (onCoverage) onCoverage(0);
+                if (onCoverage) onCoverage(0, 0);
                 return;
             }
             var W = canvas.width, H = canvas.height;
@@ -16229,19 +16286,37 @@
             // Measure swath coverage in the crop. CrossOrigin=anonymous
             // + the bucket's CORS config keep the canvas un-tainted so
             // getImageData succeeds. Empty swath margins leave alpha=0
-            // pixels; any drawn pixel has alpha>0.
-            var frac = 0;
+            // pixels; any drawn pixel has alpha>0. We track two fractions:
+            // overall coverage, and coverage of a small box at the panel
+            // center (the storm), so we can tell "no swath at all" apart
+            // from "swath present but it clipped the storm" — a common
+            // sun-sync edge pass where the storm falls just off the swath.
+            var frac = 0, centerFrac = 1;
             try {
-                var data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+                var W2 = canvas.width, H2 = canvas.height;
+                var data = ctx.getImageData(0, 0, W2, H2).data;
                 var nonEmpty = 0;
                 for (var p = 3; p < data.length; p += 4) {
                     if (data[p] > 10) nonEmpty++;
                 }
-                frac = nonEmpty / (canvas.width * canvas.height);
+                frac = nonEmpty / (W2 * H2);
+                // Center box: ±6% of the canvas around the storm cross.
+                var cr = Math.max(2, Math.round(W2 * 0.06));
+                var cx0 = (W2 / 2) | 0, cy0 = (H2 / 2) | 0;
+                var cHit = 0, cTot = 0;
+                for (var yy = cy0 - cr; yy <= cy0 + cr; yy++) {
+                    if (yy < 0 || yy >= H2) continue;
+                    for (var xx = cx0 - cr; xx <= cx0 + cr; xx++) {
+                        if (xx < 0 || xx >= W2) continue;
+                        cTot++;
+                        if (data[(yy * W2 + xx) * 4 + 3] > 10) cHit++;
+                    }
+                }
+                centerFrac = cTot ? cHit / cTot : 0;
             } catch (e) {
                 // Tainted canvas (rare — implies CORS hiccup). Treat as
                 // covered so we don't accidentally hide everything.
-                frac = 1;
+                frac = 1; centerFrac = 1;
             }
 
             // Optional day-Vis/night-SWIR satellite backdrop BEHIND the
@@ -16294,7 +16369,7 @@
                 _rtDrawInterpMarker(ctx, canvas.width, canvas.height,
                                     lat, lon, _RT_MW_HALF_DEG);
             }
-            if (onCoverage) onCoverage(frac);
+            if (onCoverage) onCoverage(frac, centerFrac);
         };
         img.onerror = function () {
             ctx.fillStyle = 'rgba(239,68,68,0.4)';
@@ -16303,7 +16378,7 @@
             ctx.font = '11px Inter, sans-serif';
             ctx.textAlign = 'center';
             ctx.fillText('load failed', canvas.width / 2, canvas.height / 2);
-            if (onCoverage) onCoverage(0);
+            if (onCoverage) onCoverage(0, 0);
         };
         img.src = pngUrl;
     }
@@ -16562,6 +16637,9 @@
     // the empty (non-swath) margins show surrounding cloud context instead
     // of flat navy. On by default; user-toggleable in the modal.
     var _rtMwCompareVisEnabled = true;
+    // Min solar elevation (deg) to use Visible (vs SWIR) for the backdrop.
+    // Below this, Visible Tb is near the dark floor — see _rtLoadMwCompareBackdrop.
+    var _RT_MW_BACKDROP_VIS_MIN_ELEV = 12;
 
     // Linear interpolation / extrapolation of (lat, lon) at a target
     // time using two or more best-track fixes from intensity_history.
@@ -16880,13 +16958,20 @@
             cb(null);
             return;
         }
-        // Day → Visible; night → SWIR. Same -6° solar-elevation rule as
-        // the RT Monitor Visible panel, evaluated at the MW pass time and
-        // the storm center.
-        var band = 2;
+        // Day → Visible; low sun / night → SWIR. The Vis panel uses a -6°
+        // night cutoff, but it ALSO runs a server-side brightness dim-out
+        // screen the single-frame band-frame.jpg endpoint doesn't — so a
+        // Vis backdrop at a dusk/dawn pass renders near-black (measured Tb
+        // crop mean ~9-16 below +12° sun vs SWIR's steady ~120-150). MW
+        // sensors are sun-synchronous and frequently cross near the
+        // terminator, so a -6° rule leaves the backdrop dark on common
+        // passes. SWIR (3.9 µm) carries usable cloud context day and night,
+        // so we only use Visible when the sun is solidly up (≥ +12°) and
+        // fall back to SWIR otherwise (incl. when solar geometry is unknown).
+        var band = 7;
         try {
             var sunEl = solarElevation(cLat, cLon, new Date(mwMs));
-            band = (sunEl <= -6) ? 7 : 2;
+            band = (sunEl >= _RT_MW_BACKDROP_VIS_MIN_ELEV) ? 2 : 7;
         } catch (e) {}
         var url = API_BASE
             + '/ir-monitor/storm/' + encodeURIComponent(storm.atcf_id)
@@ -16900,6 +16985,14 @@
         img.onload = function () { cb(img); };
         img.onerror = function () { cb(null); };
         img.src = url;
+    }
+
+    // Toggle the spinner overlay on a compare panel ('ir' | 'mw'). The
+    // overlay sits above the canvas so a slow PNG/JPG download reads as
+    // "loading" rather than a blank panel with missing data.
+    function _rtMwCompareLoading(which, on) {
+        var el = document.getElementById('rt-mw-compare-' + which + '-loading');
+        if (el) el.hidden = !on;
     }
 
     function _rtRenderMwCompare() {
@@ -16933,17 +17026,25 @@
             var pr = orbit.products[product];
             if (mwCanvas && pr && pr.png_url) {
                 if (mwStatus) mwStatus.textContent = '';
+                _rtMwCompareLoading('mw', true);   // spinner until the PNG paints
                 // Load the day-Vis/night-SWIR backdrop first (async), then
                 // paint the swath with it behind. Backdrop is null when the
                 // toggle is off or no IR frame matched.
                 _rtLoadMwCompareBackdrop(storm, frameIndex, cLat, cLon, mwMs,
                                          function (backdropImg) {
                     _rtDrawStormMwThumbnail(mwCanvas, pr.bounds || orbit.bounds, cLat, cLon,
-                                            pr.png_url, function (frac) {
+                                            pr.png_url, function (frac, centerFrac) {
+                        _rtMwCompareLoading('mw', false);
                         if (mwStatus) {
-                            mwStatus.textContent = frac < _RT_MW_MIN_COVERAGE
-                                ? 'storm sits outside the actual swath data'
-                                : '';
+                            if (frac < _RT_MW_MIN_COVERAGE) {
+                                mwStatus.textContent = 'storm sits outside the actual swath data';
+                            } else if (centerFrac != null && centerFrac < 0.5) {
+                                // Some swath in view, but the storm center fell
+                                // off it — this overpass only clipped the storm.
+                                mwStatus.textContent = 'this overpass clipped the storm — center fell at the swath edge';
+                            } else {
+                                mwStatus.textContent = '';
+                            }
                         }
                         // Colorbar/legend for the active product, drawn after
                         // the swath image so it sits on top.
@@ -16952,12 +17053,19 @@
                     }, true /* withGrid */, backdropImg);
                 });
             } else if (mwCanvas) {
+                _rtMwCompareLoading('mw', false);
                 var ctx = mwCanvas.getContext('2d');
                 ctx.fillStyle = 'rgba(15,22,36,0.55)';
                 ctx.fillRect(0, 0, mwCanvas.width, mwCanvas.height);
                 if (mwStatus) mwStatus.textContent = product + ' not available for this pass';
             }
         }
+
+        // Spinner up front — the MW PNG can't paint until the IR-frames
+        // meta resolves (it supplies the shared center), so show "loading"
+        // immediately instead of leaving a blank panel during that fetch.
+        _rtMwCompareLoading('mw', true);
+        _rtMwCompareLoading('ir', true);
 
         // ── IR panel ──────────────────────────────────────────────
         var irCanvas = document.getElementById('rt-mw-compare-ir');
@@ -16974,6 +17082,7 @@
         _rtFetchIrFramesMeta(storm)
             .then(function (meta) {
                 if (!meta || !meta.frames || !meta.frames.length) {
+                    _rtMwCompareLoading('ir', false);
                     if (irStatus) irStatus.textContent = 'no IR frames available';
                     paintMw(storm.lat, storm.lon);  // best-effort fallback
                     return;
@@ -16987,6 +17096,7 @@
                     if (d < bestDist) { bestDist = d; best = meta.frames[i]; }
                 }
                 if (!best) {
+                    _rtMwCompareLoading('ir', false);
                     if (irStatus) irStatus.textContent = 'no matchable IR frame';
                     paintMw(storm.lat, storm.lon);
                     return;
@@ -17012,15 +17122,19 @@
                 if (irCanvas) {
                     _rtDrawIrCompareFrame(irCanvas, storm, best.index,
                                           cLat, cLon, function (err) {
+                        _rtMwCompareLoading('ir', false);
                         if (irStatus) {
                             irStatus.textContent = err
                                 ? 'IR frame load failed'
                                 : '';
                         }
                     });
+                } else {
+                    _rtMwCompareLoading('ir', false);
                 }
             })
             .catch(function (err) {
+                _rtMwCompareLoading('ir', false);
                 console.warn('[RT MW Compare] frames-meta failed', err);
                 if (irStatus) irStatus.textContent = 'IR meta unavailable';
                 paintMw(storm.lat, storm.lon);  // still show MW

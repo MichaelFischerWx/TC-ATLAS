@@ -2177,7 +2177,13 @@
                         <span>IR</span>
                         <span id="rt-mw-compare-ir-time" class="rt-mw-compare-time">&mdash;</span>
                     </div>
-                    <canvas id="rt-mw-compare-ir" width="1100" height="1100" class="rt-mw-compare-canvas"></canvas>
+                    <div class="rt-mw-compare-canvas-wrap">
+                        <canvas id="rt-mw-compare-ir" width="1100" height="1100" class="rt-mw-compare-canvas"></canvas>
+                        <div id="rt-mw-compare-ir-loading" class="rt-mw-compare-loading" hidden>
+                            <span class="rt-mw-compare-spinner" aria-hidden="true"></span>
+                            <span class="rt-mw-compare-loading-text">Loading IR…</span>
+                        </div>
+                    </div>
                     <div id="rt-mw-compare-ir-status" class="rt-mw-compare-status"></div>
                 </div>
                 <div class="rt-mw-compare-panel">
@@ -2185,7 +2191,13 @@
                         <span>Microwave</span>
                         <span id="rt-mw-compare-mw-time" class="rt-mw-compare-time">&mdash;</span>
                     </div>
-                    <canvas id="rt-mw-compare-mw" width="1100" height="1100" class="rt-mw-compare-canvas"></canvas>
+                    <div class="rt-mw-compare-canvas-wrap">
+                        <canvas id="rt-mw-compare-mw" width="1100" height="1100" class="rt-mw-compare-canvas"></canvas>
+                        <div id="rt-mw-compare-mw-loading" class="rt-mw-compare-loading" hidden>
+                            <span class="rt-mw-compare-spinner" aria-hidden="true"></span>
+                            <span class="rt-mw-compare-loading-text">Loading microwave…</span>
+                        </div>
+                    </div>
                     <div id="rt-mw-compare-mw-status" class="rt-mw-compare-status"></div>
                 </div>
             </div>

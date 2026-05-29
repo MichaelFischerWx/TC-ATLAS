@@ -3673,6 +3673,32 @@ body:has(#ir-detail[style*="block"]) #ir-global-env-cbars {
     cursor: default;
 }
 .rt-mw-up-cell.far { opacity: 0.6; }
+/* Imminent overpass (<90 min): tint the row and pulse the "SOON" badge so an
+   approaching pass stands out at a glance instead of reading as plain text. */
+.rt-mw-up-cell.imminent {
+    background: rgba(0, 229, 255, 0.08);
+    border-radius: 4px;
+    padding: 2px 5px;
+    margin: -2px -5px;
+}
+.rt-mw-up-cell.imminent .rt-mw-up-val { color: #67e8f9; font-weight: 600; }
+.rt-mw-up-soon {
+    display: inline-block;
+    margin-right: 5px;
+    padding: 0 5px;
+    border-radius: 6px;
+    background: #06b6d4;
+    color: #042f3a;
+    font-size: 0.58rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    vertical-align: middle;
+    animation: rt-mw-soon-pulse 1.8s ease-in-out infinite;
+}
+@keyframes rt-mw-soon-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.45; }
+}
 .rt-mw-up-sensor {
     display: inline-flex;
     align-items: center;
@@ -4596,6 +4622,36 @@ body.sat-leaflet-active #sat-cb-right .sat-cb-label-right,
     font-size: 0.72rem;
     color: var(--text-dim, #64748b);
     font-style: italic;
+}
+.rt-mw-compare-canvas-wrap {
+    position: relative;
+}
+.rt-mw-compare-loading {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    border-radius: 6px;
+    background: rgba(15, 22, 36, 0.45);
+    pointer-events: none;
+}
+.rt-mw-compare-loading[hidden] { display: none; }
+.rt-mw-compare-spinner {
+    width: 28px;
+    height: 28px;
+    border: 3px solid rgba(148, 163, 184, 0.4);
+    border-top-color: #00e5ff;
+    border-radius: 50%;
+    animation: ir-spin 0.8s linear infinite;
+}
+.rt-mw-compare-loading-text {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: #e2e8f0;
+    letter-spacing: 0.02em;
 }
 [data-theme="dark"] .rt-mw-compare-panel-label { color: var(--text, #e2e8f0); }
 
