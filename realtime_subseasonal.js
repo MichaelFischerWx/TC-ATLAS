@@ -345,12 +345,17 @@
             line: { color: fg, width: 1.2, dash: 'dot' },
             layer: 'above',
         });
-        // "GEFS forecast" tag pinned at the right edge of the shaded band.
+        // "GEFS forecast" tag pinned against the left y-axis, just below the
+        // analysis/forecast divider. Data x-coords (not paper) keep it inside
+        // the Hovmöller box and away from the colorbar margin; no arrow (the
+        // dashed divider already marks the boundary).
+        var fcstLabel = slab.gefs_cycle
+            ? ('GEFS ' + slab.gefs_cycle) : 'GEFS forecast';
         out.annotations.push({
-            xref: 'paper', yref: 'y',
-            x: 1, xanchor: 'right',
-            y: lastEdge, yanchor: 'bottom',
-            text: 'GEFS forecast →',
+            xref: 'x', yref: 'y',
+            x: 0, xanchor: 'left',
+            y: edge, yanchor: 'top',
+            text: fcstLabel,
             showarrow: false,
             font: { size: 9, color: fg, family: 'DM Sans, system-ui, sans-serif' },
             bgcolor: 'rgba(46,125,255,0.12)', borderpad: 2,
