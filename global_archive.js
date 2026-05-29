@@ -677,6 +677,30 @@ var PLOTLY_CONFIG = {
     }
 };
 
+// ── Touch-safe Plotly wrapper ────────────────────────────────
+// On a phone/tablet a single-finger drag that starts on a Plotly chart
+// triggers the chart's drag action (zoom-box / pan) and swallows the
+// page-scroll gesture — the user gets stuck on the chart and can't scroll
+// past it. We detect a coarse, hover-less pointer and (a) disable the
+// chart drag interaction via `dragmode:false` — this releases the scroll
+// gesture while KEEPING tap/hover tooltips — and (b) hide the modebar,
+// whose buttons are sub-tap-target and useless without hover. Desktop is
+// untouched. Route every newPlot through here so the guard is uniform.
+function _gaIsTouch() {
+    return typeof window.matchMedia === 'function'
+        && window.matchMedia('(pointer: coarse)').matches
+        && window.matchMedia('(hover: none)').matches;
+}
+function gaNewPlot(el, traces, layout, config) {
+    if (_gaIsTouch()) {
+        layout = Object.assign({}, layout, { dragmode: false });
+        config = Object.assign({}, config, {
+            displayModeBar: false, scrollZoom: false
+        });
+    }
+    return Plotly.newPlot(el, traces, layout, config);
+}
+
 // ══════════════════════════════════════════════════════════════
 //  TAB SWITCHING
 // ══════════════════════════════════════════════════════════════
@@ -1694,7 +1718,7 @@ function renderIntensityTimeline(track, storm) {
     // Store base shapes for later (IR time marker is appended dynamically)
     window._timelineBaseShapes = shapes.slice();
 
-    Plotly.newPlot('timeline-chart', [windTrace, presTrace], layout, PLOTLY_CONFIG);
+    gaNewPlot('timeline-chart', [windTrace, presTrace], layout, PLOTLY_CONFIG);
 
     // Click handler to sync IR + Recon
     document.getElementById('timeline-chart').on('plotly_click', function (data) {
@@ -2032,7 +2056,7 @@ function renderHovmoller(data) {
             scale: 2
         }
     });
-    Plotly.newPlot(div, traces, layout, hovConfig);
+    gaNewPlot(div, traces, layout, hovConfig);
 
     // Click handler: sync IR to clicked time
     div.on('plotly_click', function (evtData) {
@@ -2840,7 +2864,7 @@ function renderCompareTimeline() {
         margin: { l: 55, r: 55, t: 10, b: 45 }
     });
 
-    Plotly.newPlot('compare-timeline', traces, layout, PLOTLY_CONFIG);
+    gaNewPlot('compare-timeline', traces, layout, PLOTLY_CONFIG);
 }
 
 function renderCompareMap() {
@@ -8280,7 +8304,7 @@ function _renderCompareHov(side, data) {
         };
     }
 
-    Plotly.newPlot(div, traces, layout, PLOTLY_CONFIG);
+    gaNewPlot(div, traces, layout, PLOTLY_CONFIG);
 }
 
 function _updateCompareHovMarker(side, dtStr) {
@@ -8463,7 +8487,7 @@ function _updateCompareRadialProfile() {
         showlegend: true
     };
 
-    Plotly.newPlot(div, traces, layout, PLOTLY_CONFIG);
+    gaNewPlot(div, traces, layout, PLOTLY_CONFIG);
 }
 
 
@@ -9778,7 +9802,7 @@ function renderSHIPSChart() {
         };
     });
 
-    Plotly.newPlot(chartEl, traces, layout, { responsive: true, displayModeBar: false });
+    gaNewPlot(chartEl, traces, layout, { responsive: true, displayModeBar: false });
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -10081,7 +10105,7 @@ function renderTCPrimedEnvChart() {
         };
     });
 
-    Plotly.newPlot(chartEl, traces, layout, { responsive: true, displayModeBar: false });
+    gaNewPlot(chartEl, traces, layout, { responsive: true, displayModeBar: false });
 }
 
 /**
@@ -12041,7 +12065,7 @@ function _renderSondeWindProfile(sonde, divId) {
         showlegend: true,
     };
 
-    Plotly.newPlot(divId, traces, layout, { responsive: true, displayModeBar: false });
+    gaNewPlot(divId, traces, layout, { responsive: true, displayModeBar: false });
 }
 
 // ── Radius-Height Cross-Section ─────────────────────────────────
@@ -12256,7 +12280,7 @@ function _renderCrossSection(divId) {
         showlegend: true,
     };
 
-    Plotly.newPlot(divId, traces, layout, { responsive: true, displayModeBar: true, displaylogo: false });
+    gaNewPlot(divId, traces, layout, { responsive: true, displayModeBar: true, displaylogo: false });
 
     var title = document.getElementById('ga-sonde-skewt-title');
     if (title) title.innerHTML = 'Radius\u2013Height Cross-Section<br><span style="font-size:9px;color:#64748b;font-weight:400;">Center: ' + _centerSourceSummary() + '</span>';
@@ -12527,7 +12551,7 @@ function _renderRadialProfile(divId) {
         showlegend: true,
     };
 
-    Plotly.newPlot(divId, traces, layout, { responsive: true, displayModeBar: true, displaylogo: false });
+    gaNewPlot(divId, traces, layout, { responsive: true, displayModeBar: true, displaylogo: false });
 
     var title = document.getElementById('ga-sonde-skewt-title');
     if (title) title.innerHTML = 'Radial Profile<br><span style="font-size:9px;color:#64748b;font-weight:400;">Center: ' + _centerSourceSummary() + '</span>';
@@ -13251,7 +13275,7 @@ function _gaFLRenderTimeSeries() {
         layout.xaxis.categoryarray = keys;
     }
 
-    Plotly.newPlot('ga-fl-ts-chart', traces, layout, { responsive: true, displayModeBar: true, displaylogo: false });
+    gaNewPlot('ga-fl-ts-chart', traces, layout, { responsive: true, displayModeBar: true, displaylogo: false });
 
     // Click-to-highlight on map
     chartDiv.on('plotly_click', function (data) {
