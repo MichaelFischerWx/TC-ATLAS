@@ -2464,8 +2464,19 @@ def predict_passes(storms: Optional[list[dict]] = None,
             if not sub:
                 continue
             swath_half = float(spec["swath_half_km"])
+            # Detection gate = swath half-width + nominal core radius. A pass
+            # images SOME of the core whenever the nadir track passes within
+            # (W + R) of the storm center — the swath edge reaches the near
+            # rim of the R-radius core disk. Gating on W alone (closest
+            # approach ≤ W) drops grazing passes whose edge still cuts the
+            # core: e.g. a GMI nadir 517 km out (W=445) covers ~28% of the
+            # 200 km core, but d > W skipped it entirely. _swath_coverage_fraction
+            # below uses the TRUE swath_half (not the widened gate) so the
+            # reported coverage_frac stays honest; the frontend can threshold
+            # on it to hide trivial grazes.
+            detect_half = swath_half + NOMINAL_TC_CORE_RADIUS_KM
             hits = _find_passes_for_storm(
-                sub, float(lat), float(lon), swath_half)
+                sub, float(lat), float(lon), detect_half)
             latency = timedelta(minutes=spec["nrt_latency_min"])
             for scan_start, min_d in hits:
                 # Coverage geometry: min_d is the closest approach of the
