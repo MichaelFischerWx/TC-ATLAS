@@ -60,8 +60,14 @@ BUCKET="${GCS_MW_BUCKET:-tc-atlas-microwave-nrt}"
 # Cloud Run Jobs accept a `containerOverrides.args` field in the
 # :run API body, which Cloud Scheduler can set via --message-body.
 PREDICT_SCHEDULER_NAME="tc-atlas-mw-predict-schedule"
-PREDICT_SCHEDULE="0 */2 * * *"    # every 2 hours on the hour (was every 30 min).
-                                  # TLEs only update daily so 30 min was overkill
+PREDICT_SCHEDULE="*/30 * * * *"   # every 30 min, matching the ingest cadence.
+                                  # TLEs only update daily, but a NEWLY-ACTIVE
+                                  # storm (or freshly-flagged FNV3 disturbance)
+                                  # gets no upcoming-pass predictions until the
+                                  # next predict run — so at 2 h it could be
+                                  # imminent-pass-blind for up to 2 h after
+                                  # genesis. 30 min caps that gap and is cheap
+                                  # (~35k SGP4 calls/run, +~$3-4/mo vs 2 h).
 
 IMAGE="gcr.io/${PROJECT}/${JOB_NAME}:latest"
 
