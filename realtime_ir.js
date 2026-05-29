@@ -9396,6 +9396,17 @@
         var disturbances = _genesisDisturbances(tracks);
         if (disturbances.length === 0) return;
 
+        // True while we're showing the phase-1 client-side estimate computed
+        // from the capped (100/1000) ensemble and still waiting on the
+        // server's uncapped cluster probabilities. We draw the markers now
+        // but hold the numeric formation probability so it fills in once
+        // rather than visibly changing when the cluster fetch lands.
+        var probsPending = (_genesisClusterMethod === 'tcatlas')
+            && !(_rtGenesisClusters
+                 && _rtGenesisData
+                 && _rtGenesisClusters.init_time === _rtGenesisData.init_time
+                 && _genesisClusterParamsMatch(_rtGenesisClusters.params));
+
         // Play the pop-in entrance once per cycle, on whichever render
         // first draws markers for this init (deepmind pass or the later
         // tcatlas cluster swap — whichever wins). Subsequent re-renders
@@ -9484,11 +9495,14 @@
                 riseOnHover: true, riseOffset: 800,
             }).addTo(map);
 
+            var probLine = probsPending
+                ? '<br><span style="opacity:0.75; font-style:italic;">Probabilities loading…</span>'
+                : '<br>Formation probability: <strong>' + pctText + '</strong>'
+                    + ' <span style="opacity:0.7;">(' + d.total + ' of '
+                    + _GENESIS_ENSEMBLE_SIZE + ' members)</span>';
             var tip = '<div style="min-width:180px;">'
                 + '<b>' + d.displayLabel + '</b>'
-                + '<br>Formation probability: <strong>' + pctText + '</strong>'
-                + ' <span style="opacity:0.7;">(' + d.total + ' of '
-                + _GENESIS_ENSEMBLE_SIZE + ' members)</span>'
+                + probLine
                 + '<br>Predicted peak Vmax: <strong style="color:' + style.bold
                 + ';">' + d.peakWind.toFixed(0) + ' kt · ' + style.cat
                 + '</strong>'
@@ -12181,7 +12195,23 @@
         if (!el || typeof Plotly === 'undefined') return;
         var rect = el.getBoundingClientRect();
         var dateISO = new Date().toISOString().slice(0, 10);
-        Plotly.toImage(el, {
+        // Bake an opaque background into the export. Plotly.toImage on the
+        // raw element produces a transparent PNG, which renders as broken
+        // (invisible light-theme text on dark viewers, or a colorless
+        // backdrop) — see the genesis "Lifetime max intensity" report.
+        // The on-screen genesis charts are already theme-aware, so we
+        // clone the live figure and only force paper/plot bg to match the
+        // current theme; all other colors carry over correctly.
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var bgColor = isDark ? '#0f172a' : '#ffffff';
+        var fig = (el.data && el.layout)
+            ? { data: _jsonClone(el.data), layout: _jsonClone(el.layout) }
+            : el;
+        if (fig.layout) {
+            fig.layout.paper_bgcolor = bgColor;
+            fig.layout.plot_bgcolor = bgColor;
+        }
+        Plotly.toImage(fig, {
             format: 'png',
             width: Math.round(rect.width * 2),
             height: Math.round(rect.height * 2),
