@@ -2993,6 +2993,9 @@
     var _satMwLeafletMw = null;       // L.map (right)
     var _satMwIrOverlay = null;       // current IR L.imageOverlay
     var _satMwMwOverlay = null;       // current MW L.imageOverlay
+    var _satMwVisOverlay = null;      // Vis/SWIR backdrop behind the MW swath
+    var _satMwVisEnabled = true;      // toggle: show Vis/SWIR backdrop (default on)
+    var _satMwVisToken = 0;           // async guard for backdrop fetches
     var _satMwIrMarkers = { fix: null, interp: null };
     var _satMwMwMarkers = { fix: null, interp: null };
     var _satMwSelectedOrbit = null;
@@ -3110,6 +3113,25 @@
         _satAddMapControls(_satMwLeafletMw);
         _satAddMapLegend(_satMwLeafletIr);
         _satAddMapLegend(_satMwLeafletMw);
+        // Vis/SWIR backdrop toggle (on by default).
+        var visToggle = document.getElementById('sat-mw-vis-toggle');
+        if (visToggle && !visToggle._satWired) {
+            visToggle._satWired = true;
+            visToggle.checked = _satMwVisEnabled;
+            visToggle.addEventListener('change', function () {
+                _satMwVisEnabled = !!visToggle.checked;
+                if (!_satMwVisEnabled) {
+                    if (_satMwVisOverlay) {
+                        _satMwLeafletMw.removeLayer(_satMwVisOverlay);
+                        _satMwVisOverlay = null;
+                    }
+                    _satMwVisToken++;   // cancel any in-flight fetch
+                } else if (_satMwSelectedOrbit && currentStorm) {
+                    _satMwRenderVisBehindMw(
+                        _satMwSelectedOrbit.scan_start_ms, currentStorm);
+                }
+            });
+        }
     }
 
     // Recenter every active Leaflet map on the current storm, zoom 6.
@@ -3645,6 +3667,11 @@
                         _satMwLeafletMw.removeLayer(_satMwMwOverlay);
                         _satMwMwOverlay = null;
                     }
+                    if (_satMwVisOverlay) {
+                        _satMwLeafletMw.removeLayer(_satMwVisOverlay);
+                        _satMwVisOverlay = null;
+                    }
+                    _satMwVisToken++;
                 }
             })
             .catch(function (err) {
@@ -3725,6 +3752,7 @@
         var sel = document.getElementById('sat-mw-pass-select');
         if (sel) sel.value = orbit.orbit_id;
         _satMwRenderMwOverlay();
+        _satMwRenderVisBehindMw(orbit.scan_start_ms, storm);
         _satMwRenderIrAtMatchedTime(orbit.scan_start_ms, storm);
         _satMwUpdateMarkersForOrbit(orbit, storm);
     }
@@ -3746,7 +3774,102 @@
             opacity: 0.92,
             interactive: false,
             crossOrigin: 'anonymous',
+            zIndex: 400,          // above the Vis/SWIR backdrop (zIndex 200)
         }).addTo(_satMwLeafletMw);
+        // The swath PNG is transparent outside the sensor footprint; the
+        // Vis/SWIR backdrop fills that empty area with satellite context.
+        if (_satMwVisOverlay) _satMwVisOverlay.bringToBack();
+    }
+
+    // Render a Vis (daytime) / SWIR (nighttime) backdrop behind the MW
+    // swath so the empty, non-swath area of the right pane shows the
+    // surrounding satellite scene for context. Band choice mirrors the
+    // RT Monitor Visible panel: Band 2 (0.64 µm) when sunlit, Band 7
+    // (3.9 µm SWIR, "night-visible") when the storm center is dark.
+    // Drawn as a bottom imageOverlay (below _satMwMwOverlay). Honors the
+    // _satMwVisEnabled toggle; cheap to skip when off.
+    function _satMwRenderVisBehindMw(mwMs, storm) {
+        if (!_satMwLeafletMw) return;
+        // Tear down any prior backdrop first.
+        if (_satMwVisOverlay) {
+            _satMwLeafletMw.removeLayer(_satMwVisOverlay);
+            _satMwVisOverlay = null;
+        }
+        if (!_satMwVisEnabled || !storm || !storm.atcf_id) return;
+
+        var sunEl = solarElevation(storm.lat, storm.lon, new Date(mwMs));
+        var band = (sunEl <= -6) ? 7 : 2;   // SWIR at night, Vis by day
+        var bandName = (band === 7) ? 'SWIR' : 'Vis';
+        var myToken = ++_satMwVisToken;
+
+        _satTryBandBundleThen(storm.atcf_id, band, function (ok, parsed) {
+            // Stale / superseded by a newer pass selection or toggle off.
+            if (myToken !== _satMwVisToken || !_satMwLeafletMw
+                || !_satMwVisEnabled) return;
+            if (!ok || !parsed || !parsed.frames || !parsed.frames.length) {
+                // Daytime Vis came back empty (e.g. just-past-terminator):
+                // fall back to SWIR, which is available 24/7.
+                if (band === 2) {
+                    var t2 = ++_satMwVisToken;
+                    _satTryBandBundleThen(storm.atcf_id, 7, function (ok2, p2) {
+                        if (t2 !== _satMwVisToken || !_satMwLeafletMw
+                            || !_satMwVisEnabled || !ok2 || !p2
+                            || !p2.frames || !p2.frames.length) return;
+                        _satMwPlaceVisBackdrop(p2.frames, mwMs);
+                    });
+                }
+                return;
+            }
+            _satMwPlaceVisBackdrop(parsed.frames, mwMs);
+        });
+
+        // Reflect the chosen band in the toggle label.
+        var lbl = document.getElementById('sat-mw-vis-toggle-label');
+        if (lbl) lbl.textContent = bandName + ' backdrop';
+    }
+
+    // Pick the band frame closest to the MW pass time and place it as the
+    // bottom imageOverlay on the MW map, keeping the swath on top.
+    //
+    // Vis/SWIR bundles only cover the recent DEFAULT_LOOKBACK_HOURS (~6 h)
+    // window, but MW passes reach back _RT_MW_LOOKBACK_H (24 h). For a pass
+    // older than the Vis window the nearest frame can be hours off — a stale,
+    // misleading backdrop. Gate on a tolerance and simply omit the backdrop
+    // when no frame is close enough in time.
+    var _SAT_MW_VIS_TOL_MS = 90 * 60 * 1000;   // 90 min
+    function _satMwPlaceVisBackdrop(frames, mwMs) {
+        var best = null, bestD = Infinity;
+        for (var i = 0; i < frames.length; i++) {
+            var e = frames[i] && frames[i].entry;
+            if (!e || !e.previewImg || !e.bounds || !e.datetime_utc) continue;
+            var t = Date.parse(e.datetime_utc);
+            if (!isFinite(t)) continue;
+            var d = Math.abs(t - mwMs);
+            if (d < bestD) { bestD = d; best = e; }
+        }
+        if (!best || bestD > _SAT_MW_VIS_TOL_MS) {
+            // No Vis/SWIR frame near the pass time (pass older than the Vis
+            // lookback window). Leave the backdrop cleared rather than show
+            // imagery from a different time.
+            if (best && bestD > _SAT_MW_VIS_TOL_MS) {
+                console.log('[Sat MW] Vis/SWIR backdrop skipped — nearest frame '
+                    + Math.round(bestD / 60000) + ' min from pass (>'
+                    + (_SAT_MW_VIS_TOL_MS / 60000) + ' min tol)');
+            }
+            return;
+        }
+        if (_satMwVisOverlay) {
+            _satMwLeafletMw.removeLayer(_satMwVisOverlay);
+            _satMwVisOverlay = null;
+        }
+        _satMwVisOverlay = L.imageOverlay(best.previewImg.src, best.bounds, {
+            opacity: 1.0,
+            interactive: false,
+            crossOrigin: 'anonymous',
+            zIndex: 200,          // below the MW swath (zIndex 400)
+        }).addTo(_satMwLeafletMw);
+        _satMwVisOverlay.bringToBack();
+        if (_satMwMwOverlay) _satMwMwOverlay.bringToFront();
     }
 
     function _satMwProductLabel(p) {

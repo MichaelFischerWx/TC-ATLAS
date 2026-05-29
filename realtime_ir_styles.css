@@ -3906,6 +3906,23 @@ html:not([data-view="map"]) #ir-global-env-cbars {
     font-size: 0.7rem;
     color: #94a3b8;
     font-weight: 500;
+    margin-left: auto;   /* push status + toggle to the right edge */
+}
+.sat-mw-vis-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.7rem;
+    font-weight: 500;
+    color: #cbd5e1;
+    cursor: pointer;
+    white-space: nowrap;
+    user-select: none;
+}
+.sat-mw-vis-toggle input {
+    accent-color: #38bdf8;
+    cursor: pointer;
+    margin: 0;
 }
 .sat-mw-pass-time {
     /* Inherit Inter / DM Sans from the rest of the page instead of
