@@ -7,6 +7,39 @@ function _ga(action, params) {
     }
 }
 
+// ── Touch-safe Plotly wrappers ───────────────────────────────
+// On touch devices (coarse pointer, no hover) an inline chart traps page
+// scroll: Plotly captures one-finger drags as pan/zoom so the page can't
+// be swiped past. We release that by disabling dragmode + the modebar +
+// scrollZoom — tap tooltips still work. Charts inside the fullscreen modal
+// (.plot-modal-overlay) are left fully interactive: there's no page to
+// scroll there and zoom/pan/rotate is the whole point. Desktop is never
+// affected. All Plotly.newPlot/react calls route through these wrappers.
+function _tcrIsTouch() {
+    return typeof window.matchMedia === 'function'
+        && window.matchMedia('(pointer: coarse)').matches
+        && window.matchMedia('(hover: none)').matches;
+}
+function _tcrInModal(el) {
+    var node = (typeof el === 'string') ? document.getElementById(el) : el;
+    return !!(node && node.closest && node.closest('.plot-modal-overlay'));
+}
+function _tcrTouchArgs(el, layout, config) {
+    if (_tcrIsTouch() && !_tcrInModal(el)) {
+        layout = Object.assign({}, layout || {}, { dragmode: false });
+        config = Object.assign({}, config || {}, { displayModeBar: false, scrollZoom: false });
+    }
+    return [layout, config];
+}
+function tcrNewPlot(el, traces, layout, config) {
+    var a = _tcrTouchArgs(el, layout, config);
+    return Plotly.newPlot(el, traces, a[0], a[1]);
+}
+function tcrReact(el, traces, layout, config) {
+    var a = _tcrTouchArgs(el, layout, config);
+    return Plotly.react(el, traces, a[0], a[1]);
+}
+
 // ── Inline-SVG icon helper (Lucide-style; stroke:currentColor). ─
 // Returns an SVG string for use in innerHTML / template strings.
 // Each icon picks up its button's accent color via stroke:currentColor.
@@ -1361,7 +1394,7 @@ function renderHodograph(profiles, divId) {
         showlegend: false,
     };
 
-    Plotly.newPlot(divId, traces, layout, { responsive: true, displayModeBar: false });
+    tcrNewPlot(divId, traces, layout, { responsive: true, displayModeBar: false });
 }
 
 // ── RH Vertical Profile ─────────────────────────────────────
@@ -1386,7 +1419,7 @@ function renderRHProfile(profiles, divId) {
         margin: { l: 45, r: 5, t: 22, b: 30 },
         title: { text: 'RH Profile', font: { size: 10, color: '#00d4ff' }, x: 0.5, y: 0.98 },
     };
-    Plotly.newPlot(divId, [trace], layout, { responsive: true, displayModeBar: false });
+    tcrNewPlot(divId, [trace], layout, { responsive: true, displayModeBar: false });
 }
 
 // ── Theta / Theta-e Vertical Profile ─────────────────────────
@@ -1443,7 +1476,7 @@ function renderThetaProfile(profiles, divId) {
         legend: { font: { color: '#5b6573', size: 9 }, x: 0.02, y: 0.02, bgcolor: 'rgba(0,0,0,0.3)' },
         showlegend: true,
     };
-    Plotly.newPlot(divId, traces, layout, { responsive: true, displayModeBar: false });
+    tcrNewPlot(divId, traces, layout, { responsive: true, displayModeBar: false });
 }
 
 // ── Wind barb helper for Skew-T ──────────────────────────────
@@ -2106,7 +2139,7 @@ function renderEnvOverlayMap(data) {
         margin: { l: 50, r: 10, t: 10, b: 45 },
         showlegend: false,
     };
-    Plotly.newPlot('env-ov-map', traces, layout, { responsive: true, displayModeBar: false });
+    tcrNewPlot('env-ov-map', traces, layout, { responsive: true, displayModeBar: false });
 }
 
 // ── Scalar diagnostic cards ──────────────────────────────────
@@ -4040,7 +4073,7 @@ function renderPlotFromJSON(json, resultDiv) {
     var centerMarkerTrace = buildTCCenterMarkerTrace(_ccLat, _ccLon);
     var centerTraces = centerMarkerTrace ? [centerMarkerTrace] : [];
 
-    Plotly.newPlot('plotly-chart', [heatmap].concat(overlayTraces).concat(maxTraces).concat(tiltTraces).concat(centerTraces), smallLayout, config);
+    tcrNewPlot('plotly-chart', [heatmap].concat(overlayTraces).concat(maxTraces).concat(tiltTraces).concat(centerTraces), smallLayout, config);
     window._lastPlotlyData = { heatmap: heatmap, overlayTraces: overlayTraces, maxTraces: maxTraces, tiltTraces: tiltTraces, centerTraces: centerTraces, baseLayout: baseLayout, title: title, config: config, barbShapes: barbShapes };
 
     // Auto-apply IR underlay if data is loaded and user hasn't opted out
@@ -4168,7 +4201,7 @@ function renderCrossSectionInto(targetId, json, fullsize) {
     if (csShearInset.annotations.length) layout.annotations = (layout.annotations || []).concat(csShearInset.annotations);
     if (csShearInset.shapes.length) layout.shapes = (layout.shapes || []).concat(csShearInset.shapes);
 
-    Plotly.newPlot(targetId, [heatmap].concat(csOverlayTraces).concat(csMaxTraces), layout, { responsive: true, displayModeBar: fullsize, displaylogo: false, modeBarButtonsToRemove: ['lasso2d','select2d','toggleSpikelines'] });
+    tcrNewPlot(targetId, [heatmap].concat(csOverlayTraces).concat(csMaxTraces), layout, { responsive: true, displayModeBar: fullsize, displaylogo: false, modeBarButtonsToRemove: ['lasso2d','select2d','toggleSpikelines'] });
 }
 
 // ── Dual-pane toggle ─────────────────────────────────────────
@@ -4278,7 +4311,7 @@ function _renderDualAzimuthalMean(json) {
     // No shear inset on azimuthal mean — it's already on the plan view
 
     container.innerHTML = '<div id="dual-az-chart" style="width:100%;height:100%;min-height:320px;"></div>';
-    Plotly.newPlot('dual-az-chart', [heatmap].concat(azOverlayTraces).concat(azMaxTraces), layout, { responsive: true, displayModeBar: true, modeBarButtonsToRemove: ['lasso2d','select2d','toggleSpikelines'], displaylogo: false });
+    tcrNewPlot('dual-az-chart', [heatmap].concat(azOverlayTraces).concat(azMaxTraces), layout, { responsive: true, displayModeBar: true, modeBarButtonsToRemove: ['lasso2d','select2d','toggleSpikelines'], displaylogo: false });
 }
 
 // ── Azimuthal Mean (dispatcher for coordinate mode selector) ──
@@ -4427,11 +4460,11 @@ function renderAzimuthalMeanInto(targetId, json, fullsize) {
         var thumbWrap = document.getElementById('thumbnail-wrap');
         if (thumbWrap) thumbWrap.style.display = 'none';
         el.innerHTML = '<div style="position:relative;"><div id="az-chart" style="width:100%;height:340px;border-radius:6px;overflow:hidden;"></div>' + _archSaveBtnHTML('az-chart', 'TDR_AzMean') + _archExportBtnHTML('exportAzMeanCSV','exportAzMeanJSON','az-exp-drop',74) + '<button onclick="openPlotModal()" title="Expand to fullscreen" style="position:absolute;top:6px;right:6px;z-index:10;background:rgba(15, 22, 35,0.08);border:none;color:#5b6573;font-size:16px;width:30px;height:30px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;" onmouseover="this.style.background=\'rgba(15, 22, 35,0.2)\'" onmouseout="this.style.background=\'rgba(15, 22, 35,0.08)\'">\u26F6</button></div><div style="font-size:11px;color:var(--slate);text-align:center;margin-top:4px;">Hover \u00b7 zoom \u00b7 pan \u00b7 \u26F6 expand</div>';
-        Plotly.newPlot('az-chart', [heatmap].concat(azOverlayTraces).concat(azMaxTraces), layout, { responsive:true,displayModeBar:false,displaylogo:false });
+        tcrNewPlot('az-chart', [heatmap].concat(azOverlayTraces).concat(azMaxTraces), layout, { responsive:true,displayModeBar:false,displaylogo:false });
         var panelInner = document.getElementById('side-panel-inner');
         if (panelInner) panelInner.scrollTop = 0;
     } else {
-        Plotly.newPlot(targetId, [heatmap].concat(azOverlayTraces).concat(azMaxTraces), layout, { responsive:true,displayModeBar:true,displaylogo:false,modeBarButtonsToRemove:['lasso2d','select2d','toggleSpikelines'] });
+        tcrNewPlot(targetId, [heatmap].concat(azOverlayTraces).concat(azMaxTraces), layout, { responsive:true,displayModeBar:true,displaylogo:false,modeBarButtonsToRemove:['lasso2d','select2d','toggleSpikelines'] });
     }
 }
 
@@ -4534,9 +4567,9 @@ function renderHybridAzimuthalMeanInto(targetId, json, fullsize) {
             '<div style="text-align:right;margin-top:3px;"><a href="https://doi.org/10.1175/MWR-D-24-0118.1" target="_blank" rel="noopener" ' +
             'style="font-size:9px;color:rgba(180,195,220,0.5);text-decoration:none;" ' +
             'title="Fischer et al. (2025, MWR)">Fischer et al. 2025</a></div>';
-        Plotly.newPlot('az-chart', [heatmap], layout, { responsive:true,displayModeBar:false });
+        tcrNewPlot('az-chart', [heatmap], layout, { responsive:true,displayModeBar:false });
     } else {
-        Plotly.newPlot(targetId, [heatmap], layout, { responsive:true,displayModeBar:true,displaylogo:false });
+        tcrNewPlot(targetId, [heatmap], layout, { responsive:true,displayModeBar:true,displaylogo:false });
     }
 }
 
@@ -4632,9 +4665,9 @@ function renderAnomalyAzimuthalMeanInto(targetId, json, fullsize) {
             '<div style="text-align:right;margin-top:3px;"><a href="https://doi.org/10.1175/MWR-D-24-0118.1" target="_blank" rel="noopener" ' +
             'style="font-size:9px;color:rgba(180,195,220,0.5);text-decoration:none;" ' +
             'title="Fischer et al. (2025, MWR)">Fischer et al. 2025</a></div>';
-        Plotly.newPlot('az-chart', [heatmap], layout, { responsive:true,displayModeBar:false });
+        tcrNewPlot('az-chart', [heatmap], layout, { responsive:true,displayModeBar:false });
     } else {
-        Plotly.newPlot(targetId, [heatmap], layout, { responsive:true,displayModeBar:true,displaylogo:false });
+        tcrNewPlot(targetId, [heatmap], layout, { responsive:true,displayModeBar:true,displaylogo:false });
     }
 }
 
@@ -4899,9 +4932,9 @@ function renderVPScatterInto(targetId, json, fullsize) {
             'title="Fischer et al. (2025, MWR)">' +
             'Fischer et al. 2025</a>' +
             '</div>';
-        Plotly.newPlot('az-chart', traces, layout, { responsive:true,displayModeBar:false });
+        tcrNewPlot('az-chart', traces, layout, { responsive:true,displayModeBar:false });
     } else {
-        Plotly.newPlot(targetId, traces, layout, { responsive:true,displayModeBar:true,displaylogo:false });
+        tcrNewPlot(targetId, traces, layout, { responsive:true,displayModeBar:true,displaylogo:false });
     }
 }
 
@@ -5039,9 +5072,9 @@ function renderSingleCFADInto(targetId, json, fullsize) {
         el.innerHTML = '<div style="position:relative;"><div id="az-chart" style="width:100%;height:360px;border-radius:6px;overflow:hidden;"></div>' +
             _archExportBtnHTML('exportCFADCSV','exportCFADJSON','cfad-exp-drop',40) +
             '<button onclick="openPlotModal()" title="Expand" style="position:absolute;top:6px;right:6px;z-index:10;background:rgba(15, 22, 35,0.08);border:none;color:#5b6573;font-size:16px;width:30px;height:30px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;">\u26F6</button></div>';
-        Plotly.newPlot('az-chart', [trace], layout, { responsive: true, displayModeBar: false });
+        tcrNewPlot('az-chart', [trace], layout, { responsive: true, displayModeBar: false });
     } else {
-        Plotly.newPlot(targetId, [trace], layout, { responsive: true, displayModeBar: true, displaylogo: false });
+        tcrNewPlot(targetId, [trace], layout, { responsive: true, displayModeBar: true, displaylogo: false });
     }
 }
 
@@ -5572,11 +5605,11 @@ function renderQuadrantMeansInto(targetId, json, fullsize) {
         var thumbWrap = document.getElementById('thumbnail-wrap');
         if (thumbWrap) thumbWrap.style.display = 'none';
         el.innerHTML = '<div style="position:relative;"><div id="sq-chart" style="width:100%;height:400px;border-radius:6px;overflow:hidden;"></div>' + _archSaveBtnHTML('sq-chart', 'TDR_Profile') + '<button onclick="openPlotModal()" title="Expand to fullscreen" style="position:absolute;top:6px;right:6px;z-index:10;background:rgba(15, 22, 35,0.08);border:none;color:#5b6573;font-size:16px;width:30px;height:30px;border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;" onmouseover="this.style.background=\'rgba(15, 22, 35,0.2)\'" onmouseout="this.style.background=\'rgba(15, 22, 35,0.08)\'">\u26F6</button></div><div style="font-size:11px;color:var(--slate);text-align:center;margin-top:4px;">Hover \u00b7 zoom \u00b7 pan \u00b7 \u26F6 expand</div>';
-        Plotly.newPlot('sq-chart', traces, layout, { responsive:true, displayModeBar:false, displaylogo:false });
+        tcrNewPlot('sq-chart', traces, layout, { responsive:true, displayModeBar:false, displaylogo:false });
         var panelInner = document.getElementById('side-panel-inner');
         if (panelInner) panelInner.scrollTop = 0;
     } else {
-        Plotly.newPlot(targetId, traces, layout, { responsive:true, displayModeBar:true, displaylogo:false, modeBarButtonsToRemove:['lasso2d','select2d','toggleSpikelines'] });
+        tcrNewPlot(targetId, traces, layout, { responsive:true, displayModeBar:true, displaylogo:false, modeBarButtonsToRemove:['lasso2d','select2d','toggleSpikelines'] });
     }
 }
 
@@ -6460,7 +6493,7 @@ function _renderArchiveIntensityTimeline(track, storm) {
         hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: 11 } }
     };
 
-    Plotly.newPlot('storm-timeline-chart', [windTrace, presTrace, tdrTrace], layout, {
+    tcrNewPlot('storm-timeline-chart', [windTrace, presTrace, tdrTrace], layout, {
         responsive: true, displayModeBar: false, displaylogo: false
     });
 
@@ -6769,7 +6802,7 @@ function _renderHovmoller(data) {
         hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: 11 } }
     };
 
-    Plotly.newPlot('hovmoller-chart', traces, layout, {
+    tcrNewPlot('hovmoller-chart', traces, layout, {
         responsive: true, displayModeBar: false, displaylogo: false
     });
 }
@@ -7237,7 +7270,7 @@ function openPlotModal(csJson) {
 
     // Build fullscreen traces: MW (below) + TDR heatmap + overlays + max + tilt + dynamic
     var allTraces = mwTraces.concat([fullHeatmap]).concat(liveTraces).concat(d.maxTraces||[]).concat(d.tiltTraces||[]);
-    Plotly.newPlot('plotly-fullscreen', allTraces, fullLayout, d.config);
+    tcrNewPlot('plotly-fullscreen', allTraces, fullLayout, d.config);
     if (hasCrossSection) renderCrossSectionInto('cs-fullscreen', csJson, true);
     if (hasAzMean) {
         if (_lastCFADJson) renderSingleCFADInto('az-fullscreen', _lastCFADJson, true);
@@ -7513,7 +7546,7 @@ function render3DIsosurface() {
     }
     if (savedCamera) layout.scene.camera = savedCamera;
 
-    Plotly.newPlot('vol-3d-chart', [trace], layout, {
+    tcrNewPlot('vol-3d-chart', [trace], layout, {
         responsive: true,
         displayModeBar: true,
         displaylogo: false,
@@ -9577,7 +9610,7 @@ function renderCompositeAzMeanInto(targetId, json, filters) {
     _lastCompJson = json; _lastCompType = 'az';
     _registerShadingTargets('shd-az', ['comp-az-chart'], varInfo.colorscale, varInfo.vmin, varInfo.vmax);
     el.innerHTML = '<div id="comp-az-chart" style="width:100%;height:560px;border-radius:8px;overflow:hidden;"></div>' + _buildShadingControlsRow('shd-az', {defaultVmin: varInfo.vmin, defaultVmax: varInfo.vmax}) + _buildCompToolbar();
-    Plotly.newPlot('comp-az-chart', [heatmap].concat(compAzOverlay), layout, { responsive:true, displayModeBar:true, displaylogo:false, modeBarButtonsToRemove:['lasso2d','select2d','toggleSpikelines'] });
+    tcrNewPlot('comp-az-chart', [heatmap].concat(compAzOverlay), layout, { responsive:true, displayModeBar:true, displaylogo:false, modeBarButtonsToRemove:['lasso2d','select2d','toggleSpikelines'] });
     // Apply user-specified range from Step 3 controls if set
     var _userVmin = _getCompVmin(null), _userVmax = _getCompVmax(null);
     if (_userVmin !== null && _userVmax !== null) {
@@ -9728,7 +9761,7 @@ function renderCompositeQuadMeanInto(targetId, json, filters) {
     _lastCompJson = json; _lastCompType = 'sq';
     _registerShadingTargets('shd-sq', ['comp-sq-chart'], varInfo.colorscale, varInfo.vmin, varInfo.vmax);
     el.innerHTML = '<div id="comp-sq-chart" style="width:100%;height:740px;border-radius:8px;overflow:hidden;"></div>' + _buildShadingControlsRow('shd-sq', {defaultVmin: varInfo.vmin, defaultVmax: varInfo.vmax}) + _buildCompToolbar() + _buildQuadLayoutToggle();
-    Plotly.newPlot('comp-sq-chart', traces.concat(compQuadOverlay), layout, { responsive:true, displayModeBar:true, displaylogo:false, modeBarButtonsToRemove:['lasso2d','select2d','toggleSpikelines'] });
+    tcrNewPlot('comp-sq-chart', traces.concat(compQuadOverlay), layout, { responsive:true, displayModeBar:true, displaylogo:false, modeBarButtonsToRemove:['lasso2d','select2d','toggleSpikelines'] });
     // Apply user-specified range from Step 3 controls if set
     var _userVmin = _getCompVmin(null), _userVmax = _getCompVmax(null);
     if (_userVmin !== null && _userVmax !== null) {
@@ -9952,7 +9985,7 @@ function renderCompositeAnomalyInto(targetId, json, filters) {
     _lastCompJson = json; _lastCompType = 'anom';
     _registerShadingTargets('shd-anom', ['comp-anom-chart'], anomColorscale, zmin, zmax);
     el.innerHTML = '<div id="comp-anom-chart" style="width:100%;height:560px;border-radius:8px;overflow:hidden;"></div>' + _buildShadingControlsRow('shd-anom', {defaultVmin: zmin, defaultVmax: zmax}) + _buildCompToolbar();
-    Plotly.newPlot('comp-anom-chart', [heatmap], layout, { responsive: true, displayModeBar: true, displaylogo: false });
+    tcrNewPlot('comp-anom-chart', [heatmap], layout, { responsive: true, displayModeBar: true, displaylogo: false });
 }
 
 function _renderDiffAnomaly(targetId, diffJson, jsonA, jsonB, filtersA, filtersB) {
@@ -10014,7 +10047,7 @@ function _renderDiffAnomaly(targetId, diffJson, jsonA, jsonB, filtersA, filtersB
             hoverlabel:{ bgcolor:'#ffffff', font:{color:'#0f1623',size:fontSize.hover} },
             showlegend:false, annotations:[_fischerCitation]
         };
-        Plotly.newPlot(chartId, [hm], layout, plotOpts);
+        tcrNewPlot(chartId, [hm], layout, plotOpts);
     }
 
     // Group A
@@ -10333,7 +10366,7 @@ function renderCompositeCFADInto(targetId, json, filters) {
     _lastCompJson = json; _lastCompType = 'cfad';
     _registerShadingTargets('shd-cfad', ['comp-cfad-chart'], cfadColorscale, plotZmin, plotZmax);
     el.innerHTML = '<div id="comp-cfad-chart" style="width:100%;height:560px;border-radius:8px;overflow:hidden;"></div>' + _buildShadingControlsRow('shd-cfad', {defaultVmin: plotZmin, defaultVmax: plotZmax}) + _buildCompToolbar();
-    Plotly.newPlot('comp-cfad-chart', [heatmap], layout, { responsive:true, displayModeBar:true, displaylogo:false, modeBarButtonsToRemove:['lasso2d','select2d','toggleSpikelines'] });
+    tcrNewPlot('comp-cfad-chart', [heatmap], layout, { responsive:true, displayModeBar:true, displaylogo:false, modeBarButtonsToRemove:['lasso2d','select2d','toggleSpikelines'] });
 }
 
 function renderCompositeCFADMultiInto(targetId, json, filters) {
@@ -10509,7 +10542,7 @@ function renderCompositeCFADMultiInto(targetId, json, filters) {
     _lastCompJson = json; _lastCompType = 'cfad_multi';
     _registerShadingTargets('shd-cfadm', ['comp-cfad-chart'], cfadColorscale, plotZmin, plotZmax);
     el.innerHTML = '<div id="comp-cfad-chart" style="width:100%;height:820px;border-radius:8px;overflow:hidden;"></div>' + _buildShadingControlsRow('shd-cfadm', {defaultVmin: plotZmin, defaultVmax: plotZmax}) + _buildCompToolbar();
-    Plotly.newPlot('comp-cfad-chart', traces, layout, { responsive:true, displayModeBar:true, displaylogo:false, modeBarButtonsToRemove:['lasso2d','select2d','toggleSpikelines'] });
+    tcrNewPlot('comp-cfad-chart', traces, layout, { responsive:true, displayModeBar:true, displaylogo:false, modeBarButtonsToRemove:['lasso2d','select2d','toggleSpikelines'] });
 }
 
 function generateCompositeQuadMean() {
@@ -10736,7 +10769,7 @@ function renderCompositePlanViewInto(targetId, json, filters, pvParams) {
     _lastCompJson = json; _lastCompType = 'pv';
     _registerShadingTargets('shd-pv', ['comp-pv-chart'], varInfo.colorscale, varInfo.vmin, varInfo.vmax);
     el.innerHTML = '<div id="comp-pv-chart" style="width:100%;height:620px;border-radius:8px;overflow:hidden;"></div>' + _buildShadingControlsRow('shd-pv', {defaultVmin: varInfo.vmin, defaultVmax: varInfo.vmax}) + _buildCompToolbar();
-    Plotly.newPlot('comp-pv-chart', [heatmap].concat(pvOverlay).concat(extraTraces), layout,
+    tcrNewPlot('comp-pv-chart', [heatmap].concat(pvOverlay).concat(extraTraces), layout,
         { responsive:true, displayModeBar:true, displaylogo:false,
           modeBarButtonsToRemove:['lasso2d','select2d','toggleSpikelines'] });
     // Apply user-specified range from Step 3 controls if set
@@ -11154,7 +11187,7 @@ function _renderIRPlanView(targetId, json, filters, pvParams) {
         margin: { l:60, r:20, t:80, b:55 }, shapes: shapes, annotations: annotations
     };
 
-    Plotly.react(el, traces, layout, { responsive: true, displayModeBar: true,
+    tcrReact(el, traces, layout, { responsive: true, displayModeBar: true,
         modeBarButtonsToRemove: ['select2d','lasso2d','autoScale2d'] });
 }
 
@@ -11225,7 +11258,7 @@ function _renderIRAzMean(targetId, json, filters) {
         showlegend: false
     };
 
-    Plotly.react(el, [trace], layout, { responsive: true, displayModeBar: true,
+    tcrReact(el, [trace], layout, { responsive: true, displayModeBar: true,
         modeBarButtonsToRemove: ['select2d','lasso2d','autoScale2d'] });
 }
 
@@ -11404,7 +11437,7 @@ function _renderDiffIRPlanView(targetId, diffJson, jsonA, jsonB, filtersA, filte
             shapes: sInset.shapes || [], annotations: sInset.annotations || [],
             showlegend:false
         };
-        Plotly.newPlot(chartId, traces, layout, plotOpts);
+        tcrNewPlot(chartId, traces, layout, plotOpts);
     }
 
     var activeColorscale = varInfoA.colorscale;
@@ -11520,7 +11553,7 @@ function _renderDiffIRAzMean(targetId, jsonA, jsonB, diffProfile, maxAbs, filter
             paper_bgcolor:plotBg, plot_bgcolor:plotBg,
             margin:{l:65,r:20,t:70,b:55}, shapes:rmwShapes, showlegend:false
         };
-        Plotly.newPlot(chartId, [trace], layout, plotOpts);
+        tcrNewPlot(chartId, [trace], layout, plotOpts);
     }
 
     function buildDiffLine(chartId, profile, titleText, maxRange) {
@@ -11539,7 +11572,7 @@ function _renderDiffIRAzMean(targetId, jsonA, jsonB, diffProfile, maxAbs, filter
             paper_bgcolor:plotBg, plot_bgcolor:plotBg,
             margin:{l:65,r:20,t:70,b:55}, shapes:rmwShapes, showlegend:false
         };
-        Plotly.newPlot(chartId, [trace], layout, plotOpts);
+        tcrNewPlot(chartId, [trace], layout, plotOpts);
     }
 
     // Group A
@@ -11815,7 +11848,7 @@ function _renderDiffAzMean(targetId, diffJson, jsonA, jsonB, filtersA, filtersB)
             hoverlabel:{ bgcolor:'#ffffff', font:{color:'#0f1623',size:fontSize.hover} },
             showlegend:false
         };
-        Plotly.newPlot(chartId, [hm].concat(ovTraces), layout, plotOpts);
+        tcrNewPlot(chartId, [hm].concat(ovTraces), layout, plotOpts);
     }
 
     var activeColorscale = varInfoA.colorscale;
@@ -11964,7 +11997,7 @@ function _renderDiffQuadMean(targetId, diffJson, jsonA, jsonB, filtersA, filters
         }, layoutAxes);
 
         var ovTraces = overlayJson ? buildCompQuadOverlayContours(overlayJson, radius, height_km, panelOrder) : [];
-        Plotly.newPlot(chartId, traces.concat(ovTraces), layout, plotOpts);
+        tcrNewPlot(chartId, traces.concat(ovTraces), layout, plotOpts);
     }
 
     var activeColorscale = varInfoA.colorscale;
@@ -12168,7 +12201,7 @@ function _renderDiffPlanView(targetId, diffJson, jsonA, jsonB, filtersA, filters
             hoverlabel:{ bgcolor:'#ffffff', font:{color:'#0f1623',size:fontSize.hover} },
             showlegend:false
         };
-        Plotly.newPlot(chartId, [hm].concat(ovTraces).concat(rmwCircleTrace()), layout, plotOpts);
+        tcrNewPlot(chartId, [hm].concat(ovTraces).concat(rmwCircleTrace()), layout, plotOpts);
     }
 
     var activeColorscale = varInfoA.colorscale;
@@ -12428,7 +12461,7 @@ function _renderDiffCFAD(targetId, jsonA, jsonB, filtersA, filtersB) {
         xaxis:{title:{text:varInfo.display_name+' ('+varInfo.units+')',font:{color: '#5b6573',size:fontSize.axis}},tickfont:{color: '#5b6573',size:fontSize.tick},gridcolor:'rgba(15, 22, 35,0.22)',zeroline:false},
         yaxis:{title:{text:'Height (km)',font:{color: '#5b6573',size:fontSize.axis}},tickfont:{color: '#5b6573',size:fontSize.tick},gridcolor:'rgba(15, 22, 35,0.22)',zeroline:false},
         margin:{l:55,r:24,t:80,b:50}, hoverlabel:{bgcolor:'#ffffff',font:{color:'#0f1623',size:fontSize.hover}}, showlegend:false };
-    Plotly.newPlot('comp-diff-cfad-a', [trA], layA, {responsive:true,displayModeBar:true,displaylogo:false,modeBarButtonsToRemove:['lasso2d','select2d','toggleSpikelines']});
+    tcrNewPlot('comp-diff-cfad-a', [trA], layA, {responsive:true,displayModeBar:true,displaylogo:false,modeBarButtonsToRemove:['lasso2d','select2d','toggleSpikelines']});
 
     // Render B
     var dataB = useLog ? _cfadApplyLog(jsonB.cfad) : jsonB.cfad;
@@ -12438,7 +12471,7 @@ function _renderDiffCFAD(targetId, jsonA, jsonB, filtersA, filtersB) {
     var titleB = '<span style="color:#f59e0b;">Group B</span> (N=' + jsonB.n_cases + ')' + binNote + radialNote + quadNote;
     var layB = JSON.parse(JSON.stringify(layA));
     layB.title.text = titleB;
-    Plotly.newPlot('comp-diff-cfad-b', [trB], layB, {responsive:true,displayModeBar:true,displaylogo:false,modeBarButtonsToRemove:['lasso2d','select2d','toggleSpikelines']});
+    tcrNewPlot('comp-diff-cfad-b', [trB], layB, {responsive:true,displayModeBar:true,displaylogo:false,modeBarButtonsToRemove:['lasso2d','select2d','toggleSpikelines']});
 
     // Render Difference — apply signed log transform if log-scale enabled
     var diffPlotData, diffZmin, diffZmax, diffCbarTitle, diffCustomData = null;
@@ -12474,7 +12507,7 @@ function _renderDiffCFAD(targetId, jsonA, jsonB, filtersA, filtersB) {
     layD.title.text = titleD;
 
     _registerShadingTargets('shd-dcfad-d', ['comp-diff-cfad-diff'], _DIFF_COLORSCALE, diffZmin, diffZmax);
-    Plotly.newPlot('comp-diff-cfad-diff', [trD], layD, {responsive:true,displayModeBar:true,displaylogo:false,modeBarButtonsToRemove:['lasso2d','select2d','toggleSpikelines']});
+    tcrNewPlot('comp-diff-cfad-diff', [trD], layD, {responsive:true,displayModeBar:true,displaylogo:false,modeBarButtonsToRemove:['lasso2d','select2d','toggleSpikelines']});
 
     // Stipple non-significant bins on the CFAD difference (two-sample z-test
     // on per-group bootstrap SEs). sigMask is null when bootstrap wasn't run
@@ -12667,7 +12700,7 @@ function _renderDiffCFADMulti(targetId, jsonA, jsonB, filtersA, filtersB) {
                 tickfont:{color: '#5b6573',size:fontSize.tick}, gridcolor:'rgba(15, 22, 35,0.22)', zeroline:false
             };
         }
-        Plotly.newPlot(chartId, traces, layout, {responsive:true, displayModeBar: isDiff, displaylogo:false, modeBarButtonsToRemove:['lasso2d','select2d','toggleSpikelines']});
+        tcrNewPlot(chartId, traces, layout, {responsive:true, displayModeBar: isDiff, displaylogo:false, modeBarButtonsToRemove:['lasso2d','select2d','toggleSpikelines']});
     }
 
     // Render A
@@ -12868,7 +12901,7 @@ function _toggleScalarBoxWhisker(card, key) {
         yaxis: { title: s.display_name + ' (' + s.units + ')', gridcolor: 'rgba(15, 22, 35,0.06)' },
         showlegend: false
     };
-    Plotly.newPlot(container, [trace], layout, { responsive: true, displayModeBar: false });
+    tcrNewPlot(container, [trace], layout, { responsive: true, displayModeBar: false });
 }
 
 // ── Plan-view composite rendering ──
@@ -12956,7 +12989,7 @@ function renderEnvCompositePlanView(data, filters) {
         annotations: (annotations || []).concat(shearAnnotations)
     };
 
-    Plotly.newPlot('comp-env-pv-plot', traces, layout, { responsive: true });
+    tcrNewPlot('comp-env-pv-plot', traces, layout, { responsive: true });
 }
 
 // ── Composite Skew-T + Hodograph rendering ──
@@ -13108,7 +13141,7 @@ function renderCompositeSkewT(profData) {
         showlegend: true
     };
 
-    Plotly.newPlot('comp-env-skewt-plot', traces, layout, { responsive: true, displayModeBar: false });
+    tcrNewPlot('comp-env-skewt-plot', traces, layout, { responsive: true, displayModeBar: false });
 }
 
 // ── Composite Hodograph with spread ellipses ──
@@ -13222,7 +13255,7 @@ function renderCompositeHodograph(profData) {
     }
     layout.annotations = annotations;
 
-    Plotly.newPlot('comp-env-hodo-plot', traces, layout, { responsive: true, displayModeBar: false });
+    tcrNewPlot('comp-env-hodo-plot', traces, layout, { responsive: true, displayModeBar: false });
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -13373,7 +13406,7 @@ function renderEnvDiffPlanView(pvA, pvB) {
     }];
 
     var title = '\u0394 ' + (cfg.display_name || pvA.field) + ' (A: N=' + pvA.n_cases + ' \u2212 B: N=' + pvB.n_cases + ')';
-    Plotly.newPlot('comp-env-pv-plot', traces, {
+    tcrNewPlot('comp-env-pv-plot', traces, {
         paper_bgcolor: '#ffffff', plot_bgcolor: '#ffffff',
         font: { color: '#0f1623', family: 'DM Sans, sans-serif', size: 11 },
         title: { text: title, font: { size: 13 } },
@@ -13430,7 +13463,7 @@ function renderDiffCompositeSkewT(profA, profB) {
     addProfile(profB.t.mean, '#f59e0b', 'T (Group B)');
     addProfile(profB.td.mean, '#fbbf24', 'Td (Group B)', 'dash');
 
-    Plotly.newPlot('comp-env-skewt-plot', traces, {
+    tcrNewPlot('comp-env-skewt-plot', traces, {
         paper_bgcolor: '#ffffff', plot_bgcolor: '#ffffff',
         font: { color: '#0f1623', family: 'DM Sans, sans-serif', size: 10 },
         title: { text: '\u0394 Skew-T (A: N=' + profA.n_cases + ', B: N=' + profB.n_cases + ')', font: { size: 12 } },
@@ -13487,7 +13520,7 @@ function renderDiffCompositeHodograph(profA, profB) {
     vA.concat(vB).forEach(function(v) { maxVal = Math.max(maxVal, Math.abs(v) + 5); });
     maxVal = Math.ceil(maxVal / 5) * 5;
 
-    Plotly.newPlot('comp-env-hodo-plot', traces, {
+    tcrNewPlot('comp-env-hodo-plot', traces, {
         paper_bgcolor: '#ffffff', plot_bgcolor: '#ffffff',
         font: { color: '#0f1623', family: 'DM Sans, sans-serif', size: 10 },
         title: { text: '\u0394 Hodograph (A vs B)', font: { size: 12 } },
@@ -14167,7 +14200,7 @@ function _archFLTSRender(flData) {
         });
     }
 
-    Plotly.newPlot('fl-ts-chart', traces, layout, { responsive: true, displayModeBar: false, scrollZoom: false });
+    tcrNewPlot('fl-ts-chart', traces, layout, { responsive: true, displayModeBar: false, scrollZoom: false });
 }
 
 // Clear FL state when case changes
@@ -15102,7 +15135,7 @@ function archiveShowSondeWind(idx) {
         xanchor: 'center', yanchor: 'top',
     });
 
-    Plotly.newPlot(chartDiv, traces, layout, { responsive: true, displayModeBar: false });
+    tcrNewPlot(chartDiv, traces, layout, { responsive: true, displayModeBar: false });
 
     // Clear the info div (info is now shown as on-plot annotation)
     var infoEl = document.getElementById('archive-wind-info');
@@ -15431,7 +15464,7 @@ function _createStandaloneMWPlanView() {
             hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: 12 } },
             showlegend: false
         };
-        Plotly.newPlot('plotly-chart', [centerTrace], layout, config);
+        tcrNewPlot('plotly-chart', [centerTrace], layout, config);
         _mwPlanViewTraceIdx = -1;
 
     } else if (_mwStormGrid && _mwStormGrid.z) {
@@ -15472,7 +15505,7 @@ function _createStandaloneMWPlanView() {
             hoverlabel: { bgcolor: '#ffffff', font: { color: '#0f1623', size: 12 } },
             showlegend: false
         };
-        Plotly.newPlot('plotly-chart', [mwTrace, centerTrace], layout2, config);
+        tcrNewPlot('plotly-chart', [mwTrace, centerTrace], layout2, config);
         _mwPlanViewTraceIdx = 0;
     }
 }
@@ -15849,7 +15882,7 @@ function renderMWTimeline(overpasses) {
     var el = document.getElementById('mw-timeline-chart');
     if (!el) return;
 
-    Plotly.newPlot(el, data, layout, {
+    tcrNewPlot(el, data, layout, {
         responsive: true,
         displayModeBar: true,
         displaylogo: false,
