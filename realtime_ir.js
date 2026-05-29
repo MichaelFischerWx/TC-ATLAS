@@ -16089,7 +16089,7 @@
     // `withGrid` (default false) draws a lat/lon graticule on top of
     // the swath — used by the compare-modal panels but not the small
     // 80-px side-panel thumbnails where a grid would just clutter.
-    function _rtDrawStormMwThumbnail(canvas, bounds, lat, lon, pngUrl, onCoverage, withGrid) {
+    function _rtDrawStormMwThumbnail(canvas, bounds, lat, lon, pngUrl, onCoverage, withGrid, backdropImg) {
         var ctx = canvas.getContext('2d');
         // High-quality interpolation — bicubic on most modern engines.
         // Helps when the storm crop pulls only a small slice of the
@@ -16178,8 +16178,29 @@
                 frac = 1;
             }
 
-            // Paint the dim navy bg BEHIND the swath so blank margins
-            // read as "no data" instead of see-through to the modal bg.
+            // Optional day-Vis/night-SWIR satellite backdrop BEHIND the
+            // swath, so the empty (non-swath) margins show surrounding
+            // cloud context. The band frame is an equirectangular cutout
+            // centered on the SAME interp center (lat/lon), spanning
+            // ±_RT_MW_COMPARE_RADIUS — so we take the central
+            // HALF/_RT_MW_COMPARE_RADIUS fraction in both axes to match
+            // this ±HALF canvas extent. destination-over keeps it behind
+            // the (already drawn) swath, filling only transparent pixels.
+            if (backdropImg) {
+                var fxB = HALF / _RT_MW_COMPARE_RADIUS;
+                var sbx = backdropImg.width * (1 - fxB) / 2;
+                var sby = backdropImg.height * (1 - fxB) / 2;
+                var sbw = backdropImg.width * fxB;
+                var sbh = backdropImg.height * fxB;
+                ctx.globalCompositeOperation = 'destination-over';
+                ctx.drawImage(backdropImg, sbx, sby, sbw, sbh,
+                                           0, 0, canvas.width, canvas.height);
+                ctx.globalCompositeOperation = 'source-over';
+            }
+
+            // Paint the dim navy bg BEHIND everything so any pixels the
+            // swath + backdrop don't cover read as "no data" instead of
+            // see-through to the modal bg.
             ctx.globalCompositeOperation = 'destination-over';
             ctx.fillStyle = 'rgba(15,22,36,0.55)';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -16471,6 +16492,10 @@
     // alignment is the whole point of this view.
     var _RT_MW_COMPARE_HALF_DEG = _RT_MW_HALF_DEG;
     var _RT_MW_COMPARE_PX = 600;         // canvas display size
+    // Day Visible / night SWIR satellite imagery behind the MW swath, so
+    // the empty (non-swath) margins show surrounding cloud context instead
+    // of flat navy. On by default; user-toggleable in the modal.
+    var _rtMwCompareVisEnabled = true;
 
     // Linear interpolation / extrapolation of (lat, lon) at a target
     // time using two or more best-track fixes from intensity_history.
@@ -16775,6 +16800,42 @@
     // currently-selected product's PNG; IR panel fetches the frames
     // meta (cached per storm) to pick the closest frame, then fetches
     // that frame's JPG and crops to the storm sector.
+    // Load the satellite-context backdrop for the MW compare panel: a
+    // day-Visible (band 2) / night-SWIR (band 7) cutout matching the IR
+    // frame's index (same lookback/radius/interval grid → same target
+    // time + interp center). Returns an Image via `cb(img)`, or cb(null)
+    // when the toggle is off, no IR frame matched, or the fetch fails
+    // (the thumbnail then falls back to the dim navy bg as before). The
+    // band-frame.jpg endpoint renders an equirectangular cutout centered
+    // on the interp position — so _rtDrawStormMwThumbnail can crop its
+    // central fraction directly (no Mercator un-warp needed).
+    function _rtLoadMwCompareBackdrop(storm, frameIndex, cLat, cLon, mwMs, cb) {
+        if (!_rtMwCompareVisEnabled || frameIndex == null || frameIndex < 0) {
+            cb(null);
+            return;
+        }
+        // Day → Visible; night → SWIR. Same -6° solar-elevation rule as
+        // the RT Monitor Visible panel, evaluated at the MW pass time and
+        // the storm center.
+        var band = 2;
+        try {
+            var sunEl = solarElevation(cLat, cLon, new Date(mwMs));
+            band = (sunEl <= -6) ? 7 : 2;
+        } catch (e) {}
+        var url = API_BASE
+            + '/ir-monitor/storm/' + encodeURIComponent(storm.atcf_id)
+            + '/band-frame.jpg?band=' + band
+            + '&frame_index=' + frameIndex
+            + '&lookback_hours=' + _RT_MW_COMPARE_LOOKBACK_H
+            + '&radius_deg=' + _RT_MW_COMPARE_RADIUS
+            + '&interval_min=' + JPG_PRIMARY_INTERVAL_MIN;
+        var img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = function () { cb(img); };
+        img.onerror = function () { cb(null); };
+        img.src = url;
+    }
+
     function _rtRenderMwCompare() {
         var orbit = _rtMwCompareState.orbit;
         var storm = _rtMwCompareState.storm;
@@ -16802,22 +16863,28 @@
         // advisory fix only if the IR meta is unavailable.
         var mwMs = orbit.scan_start_ms;
 
-        function paintMw(cLat, cLon) {
+        function paintMw(cLat, cLon, frameIndex) {
             var pr = orbit.products[product];
             if (mwCanvas && pr && pr.png_url) {
                 if (mwStatus) mwStatus.textContent = '';
-                _rtDrawStormMwThumbnail(mwCanvas, pr.bounds || orbit.bounds, cLat, cLon,
-                                        pr.png_url, function (frac) {
-                    if (mwStatus) {
-                        mwStatus.textContent = frac < _RT_MW_MIN_COVERAGE
-                            ? 'storm sits outside the actual swath data'
-                            : '';
-                    }
-                    // Colorbar/legend for the active product, drawn after
-                    // the swath image so it sits on top.
-                    _rtDrawMwCompareColorbar(mwCanvas.getContext('2d'),
-                        mwCanvas.width, mwCanvas.height, product);
-                }, true /* withGrid */);
+                // Load the day-Vis/night-SWIR backdrop first (async), then
+                // paint the swath with it behind. Backdrop is null when the
+                // toggle is off or no IR frame matched.
+                _rtLoadMwCompareBackdrop(storm, frameIndex, cLat, cLon, mwMs,
+                                         function (backdropImg) {
+                    _rtDrawStormMwThumbnail(mwCanvas, pr.bounds || orbit.bounds, cLat, cLon,
+                                            pr.png_url, function (frac) {
+                        if (mwStatus) {
+                            mwStatus.textContent = frac < _RT_MW_MIN_COVERAGE
+                                ? 'storm sits outside the actual swath data'
+                                : '';
+                        }
+                        // Colorbar/legend for the active product, drawn after
+                        // the swath image so it sits on top.
+                        _rtDrawMwCompareColorbar(mwCanvas.getContext('2d'),
+                            mwCanvas.width, mwCanvas.height, product);
+                    }, true /* withGrid */, backdropImg);
+                });
             } else if (mwCanvas) {
                 var ctx = mwCanvas.getContext('2d');
                 ctx.fillStyle = 'rgba(15,22,36,0.55)';
@@ -16871,8 +16938,9 @@
                 }
                 if (irStatus) irStatus.textContent = 'loading IR frame…';
                 // Paint MW on the SAME center so the two panels' swath/
-                // imagery and graticules co-register.
-                paintMw(cLat, cLon);
+                // imagery and graticules co-register. best.index also picks
+                // the matching Vis/SWIR backdrop frame.
+                paintMw(cLat, cLon, best.index);
                 // Draw IR centered on cLat/cLon (its cutout center), with a
                 // matching graticule.
                 if (irCanvas) {
@@ -17081,6 +17149,18 @@
             }
             _rtRenderMwCompare();
         });
+        // Satellite-backdrop toggle: re-render the MW side (with or
+        // without the Vis/SWIR cutout behind the swath). IR side is
+        // unaffected, but a full re-render is cheap + keeps both paths
+        // in one place.
+        var visToggle = document.getElementById('rt-mw-compare-vis-toggle');
+        if (visToggle) {
+            visToggle.checked = _rtMwCompareVisEnabled;
+            visToggle.addEventListener('change', function () {
+                _rtMwCompareVisEnabled = visToggle.checked;
+                _rtRenderMwCompare();
+            });
+        }
     }
     _rtBindMwCompareModal();
 

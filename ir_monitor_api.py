@@ -4257,6 +4257,13 @@ def get_band_frame_jpg(
     target_dt = frame_times[frame_index]
     dt_str = target_dt.strftime("%Y%m%d%H%M")
 
+    # Interpolated storm position at this frame's time — used for the
+    # cutout center AND cache keys so the band frame co-registers with the
+    # IR frame (which centers on the same interp position) and the MW
+    # compare panel. Mirrors get_ir_frame_jpg. Falls back to the advisory
+    # fix for newly-formed storms with no track yet.
+    center_lat, center_lon = _interp_pos_at(atcf_id, target_dt, center_lat, center_lon)
+
     bounds = [
         [center_lat - half, center_lon - half],
         [center_lat + half, center_lon + half],

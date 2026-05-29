@@ -4491,8 +4491,29 @@ body.sat-leaflet-active #sat-cb-right .sat-cb-label-right,
 .rt-mw-compare-products {
     display: flex;
     flex-wrap: wrap;
+    align-items: center;
     gap: 6px;
     margin-bottom: 12px;
+}
+.rt-mw-compare-vis-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+    padding: 4px 10px;
+    font-size: 12px;
+    color: #475569;
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+}
+.rt-mw-compare-vis-toggle input {
+    cursor: pointer;
+    margin: 0;
+    accent-color: #2e7dff;
+}
+[data-theme="dark"] .rt-mw-compare-vis-toggle {
+    color: #94a3b8;
 }
 .rt-mw-compare-panels {
     display: grid;
