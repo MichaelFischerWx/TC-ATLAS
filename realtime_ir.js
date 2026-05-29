@@ -12248,9 +12248,14 @@
     // (init_time, params) so the default-param result is served from
     // RAM after the first hit each cycle.
     function _loadGenesisClusters() {
-        if (!_rtGenesisData || _rtGenesisClustersLoading) return;
+        if (_rtGenesisClustersLoading) return;
         var curParams = _genesisCurrentClusterParams();
-        if (_rtGenesisClusters
+        // The clusters endpoint resolves the latest cycle itself, so it
+        // doesn't need _rtGenesisData — we can fetch it in parallel with the
+        // 9 MB genesis payload. The "already have it" short-circuit only
+        // applies once we have data to compare the init against.
+        if (_rtGenesisData
+                && _rtGenesisClusters
                 && _rtGenesisClusters.init_time === _rtGenesisData.init_time
                 && _genesisClusterParamsMatch(_rtGenesisClusters.params)) {
             return;   // already have it
@@ -12351,6 +12356,13 @@
         if (statusEl && !isAutoRefresh) {
             statusEl.textContent = 'Loading 1000-member ensemble…';
         }
+
+        // Fire the lightweight (~50 KB) cluster index fetch in PARALLEL with
+        // the 9 MB ensemble payload below. The clusters carry the exact
+        // uncapped probabilities; fetching them alongside (rather than after)
+        // the big download means they usually land first, so the first paint
+        // shows real probabilities instead of the capped estimate.
+        _loadGenesisClusters();
 
         fetch(API_BASE + '/ir-monitor/weatherlab-genesis', { cache: 'no-store' })
             .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })

@@ -6904,16 +6904,35 @@ _genesis_warm_stop = threading.Event()
 
 
 def refresh_genesis_cache() -> dict:
-    """Resolve + parse the latest genesis cycle into the in-memory cache.
+    """Resolve + parse the latest genesis cycle into the in-memory cache,
+    and pre-compute the default-param TC-ATLAS cluster index.
 
-    Cheap when the cycle is already cached (a dict lookup in
-    `_weatherlab_genesis_cache`); only pays the CSV download+parse when a
-    newer cycle has published. Used by the background warmer and /warmup.
+    Cheap when both are already cached (dict lookups); only pays the CSV
+    download+parse when a newer cycle has published, and the clustering
+    only when that fresh cycle hasn't been clustered yet. Used by the
+    background warmer and /warmup.
+
+    Warming the clusters matters because /weatherlab-genesis-clusters is
+    what produces the *exact* uncapped formation probabilities. With it
+    warm, the frontend's parallel cluster fetch is an instant ~50 KB hit
+    and the real probabilities paint without waiting on server compute.
+    The params here mirror the endpoint defaults (and the frontend reset
+    values) so the steady-state request is the same cache key.
     """
     used_date, used_hour, data = _resolve_latest_genesis_cycle(require_data=True)
+    init_time = (used_date.replace("-", "") + used_hour) if used_date else None
+    n_clusters = None
+    if data:
+        try:
+            _, _, clusters, _ = _tca_get_or_compute_clusters(
+                3.0, 8, 750.0, 48.0, 25)
+            n_clusters = len(clusters) if clusters else 0
+        except Exception:
+            traceback.print_exc()
     return {
-        "init_time": (used_date.replace("-", "") + used_hour) if used_date else None,
+        "init_time": init_time,
         "n_tracks": len(data) if data else 0,
+        "n_clusters": n_clusters,
     }
 
 
