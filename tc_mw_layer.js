@@ -296,6 +296,208 @@
     ];
     var _knownProductKeys = KNOWN_PRODUCTS.map(function (p) { return p.key; });
 
+    // ── Continuous mosaic canvas ───────────────────────────────
+    // Composites every visible swath PNG onto ONE screen-space canvas
+    // (modeled on Leaflet's L.Canvas renderer: padded view bounds,
+    // ctx translated into layer-point space, CSS-transform zoom anim).
+    //
+    // Why this exists: rendering each orbit as its own L.imageOverlay
+    // made antimeridian-crossing swaths render as two squished copies
+    // (the old _splitAtDateline reused the whole PNG in each half), and
+    // stacked translucent overlays read as discrete tiles rather than a
+    // continuous field. Drawing each swath ourselves lets us place it at
+    // its true projected position, span the dateline seam, and replicate
+    // into adjacent world copies — one seamless raster, no split hack.
+    //
+    // Lazily built so the module has no load-order dependency on Leaflet.
+    var _MosaicClass = null;
+    function _mosaicClass() {
+        if (_MosaicClass) return _MosaicClass;
+        _MosaicClass = L.Layer.extend({
+            options: { padding: 0.15 },
+
+            initialize: function () {
+                this._items = [];        // [{ url, bounds:[[s,w],[n,e]], opacity }]
+                this._imgCache = {};     // url -> { img, loaded, error }
+                this._cacheOrder = [];   // url insertion order for pruning
+                this._raf = null;
+            },
+
+            setItems: function (items) {
+                this._items = items || [];
+                this._ensureImages();
+                this._redraw();
+            },
+
+            onAdd: function () {
+                if (!this._canvas) this._initCanvas();
+                this._getMosaicPane().appendChild(this._canvas);
+                this._update();
+                this._redraw();
+            },
+
+            onRemove: function () {
+                if (this._raf) { cancelAnimationFrame(this._raf); this._raf = null; }
+                if (this._canvas) L.DomUtil.remove(this._canvas);
+            },
+
+            getEvents: function () {
+                var events = {
+                    viewreset: this._reset,
+                    zoom:      this._onZoom,
+                    moveend:   this._onMoveEnd,
+                    zoomend:   this._onMoveEnd,
+                    resize:    this._onMoveEnd
+                };
+                if (this._zoomAnimated) events.zoomanim = this._onAnimZoom;
+                return events;
+            },
+
+            _getMosaicPane: function () {
+                var map = this._map;
+                var pane = map.getPane('mwMosaicPane');
+                if (!pane) {
+                    pane = map.createPane('mwMosaicPane');
+                    // Above the IR/basemap tiles (200) but below the
+                    // interactive hit-rectangles in overlayPane (400).
+                    pane.style.zIndex = 350;
+                    pane.style.pointerEvents = 'none';
+                }
+                return pane;
+            },
+
+            _initCanvas: function () {
+                var c = this._canvas = L.DomUtil.create('canvas', 'leaflet-mw-mosaic leaflet-layer');
+                c.style.pointerEvents = 'none';
+                this._ctx = c.getContext('2d');
+                this._zoomAnimated = this._map._zoomAnimated;
+                if (this._zoomAnimated) L.DomUtil.addClass(c, 'leaflet-zoom-animated');
+            },
+
+            // Padded view bounds + canvas sizing, mirroring L.Canvas._update.
+            // ctx is translated by -bounds.min so draw routines can work in
+            // raw layer-point coordinates.
+            _update: function () {
+                if (this._map._animatingZoom && this._bounds) return;
+                var p = this.options.padding, map = this._map, size = map.getSize();
+                var min = map.containerPointToLayerPoint(size.multiplyBy(-p)).round();
+                this._bounds = new L.Bounds(min, min.add(size.multiplyBy(1 + p * 2)).round());
+                this._center = map.getCenter();
+                this._zoom = map.getZoom();
+                var b = this._bounds, c = this._canvas, sz = b.getSize();
+                var m = L.Browser.retina ? 2 : 1;
+                L.DomUtil.setPosition(c, b.min);
+                c.width = m * sz.x; c.height = m * sz.y;
+                c.style.width = sz.x + 'px'; c.style.height = sz.y + 'px';
+                // Setting width/height resets the context — re-apply scale+translate.
+                if (m === 2) this._ctx.scale(2, 2);
+                this._ctx.translate(-b.min.x, -b.min.y);
+            },
+
+            // CSS-transform zoom animation, copied from L.Renderer so the
+            // mosaic scales smoothly with the map during the zoom tween.
+            _updateTransform: function (center, zoom) {
+                var map = this._map;
+                var scale = map.getZoomScale(zoom, this._zoom),
+                    viewHalf = map.getSize().multiplyBy(0.5 + this.options.padding),
+                    currentCenterPoint = map.project(this._center, zoom),
+                    topLeftOffset = viewHalf.multiplyBy(-scale).add(currentCenterPoint)
+                        .subtract(map._getNewPixelOrigin(center, zoom));
+                if (L.Browser.any3d) L.DomUtil.setTransform(this._canvas, topLeftOffset, scale);
+                else L.DomUtil.setPosition(this._canvas, topLeftOffset);
+            },
+
+            _onAnimZoom: function (ev) { this._updateTransform(ev.center, ev.zoom); },
+            _onZoom: function () { this._updateTransform(this._map.getCenter(), this._map.getZoom()); },
+            _reset: function () { this._update(); this._updateTransform(this._center, this._zoom); this._redraw(); },
+            _onMoveEnd: function () { this._update(); this._redraw(); },
+
+            // Pixel width of 360° longitude at the current zoom — the
+            // stride used to replicate swaths into adjacent world copies.
+            _worldPixelWidth: function () {
+                var map = this._map, z = this._zoom;
+                var a = map.project(L.latLng(0, -180), z);
+                var b = map.project(L.latLng(0, 180), z);
+                return Math.abs(b.x - a.x);
+            },
+
+            _redraw: function () {
+                if (!this._map || !this._ctx || !this._bounds) return;
+                var ctx = this._ctx, b = this._bounds, sz = b.getSize();
+                ctx.clearRect(b.min.x, b.min.y, sz.x, sz.y);
+                var worldWidth = this._worldPixelWidth();
+                var items = this._items;
+                for (var i = 0; i < items.length; i++) {
+                    var rec = this._imgCache[items[i].url];
+                    if (!rec || !rec.loaded || !rec.img) continue;
+                    this._drawItem(ctx, items[i], rec.img, worldWidth);
+                }
+            },
+
+            _drawItem: function (ctx, it, img, worldWidth) {
+                var s = it.bounds[0][0], w = it.bounds[0][1];
+                var n = it.bounds[1][0], e = it.bounds[1][1];
+                // Normalize either dateline representation to a continuous
+                // span (east > west): backend may emit lon_max>180 (shifted)
+                // or a true west>east wrap. Both become west..(west+span).
+                if (e < w) e += 360;
+                var tl = this._map.latLngToLayerPoint(L.latLng(n, w));
+                var br = this._map.latLngToLayerPoint(L.latLng(s, e));
+                var x = tl.x, y = tl.y, dw = br.x - tl.x, dh = br.y - tl.y;
+                if (dw <= 0 || dh <= 0) return;
+                var b = this._bounds, minx = b.min.x, miny = b.min.y, maxx = b.max.x, maxy = b.max.y;
+                ctx.globalAlpha = (it.opacity != null ? it.opacity : 1);
+                // Draw the primary copy and the two neighbors so swaths
+                // show across the seam and in every visible world copy.
+                for (var k = -1; k <= 1; k++) {
+                    var xx = x + k * worldWidth;
+                    if (xx + dw < minx || xx > maxx || y + dh < miny || y > maxy) continue;
+                    ctx.drawImage(img, xx, y, dw, dh);
+                }
+                ctx.globalAlpha = 1;
+            },
+
+            _ensureImages: function () {
+                var self = this;
+                for (var i = 0; i < this._items.length; i++) {
+                    var url = this._items[i].url;
+                    if (!url || this._imgCache[url]) continue;
+                    var rec = { img: new Image(), loaded: false, error: false };
+                    // crossOrigin so the canvas isn't tainted — the GCS
+                    // bucket serves Access-Control-Allow-Origin for GET.
+                    rec.img.crossOrigin = 'anonymous';
+                    rec.img.onload = (function (r) { return function () { r.loaded = true; self._scheduleRedraw(); }; })(rec);
+                    rec.img.onerror = (function (r) { return function () { r.error = true; }; })(rec);
+                    rec.img.src = url;
+                    this._imgCache[url] = rec;
+                    this._cacheOrder.push(url);
+                }
+                this._pruneCache();
+            },
+
+            _pruneCache: function () {
+                var MAX = 600;
+                if (this._cacheOrder.length <= MAX) return;
+                var inUse = {};
+                for (var i = 0; i < this._items.length; i++) inUse[this._items[i].url] = true;
+                var kept = [];
+                for (var j = 0; j < this._cacheOrder.length; j++) {
+                    var u = this._cacheOrder[j];
+                    if (kept.length < MAX || inUse[u]) { kept.push(u); }
+                    else { delete this._imgCache[u]; }
+                }
+                this._cacheOrder = kept;
+            },
+
+            _scheduleRedraw: function () {
+                if (this._raf) return;
+                var self = this;
+                this._raf = requestAnimationFrame(function () { self._raf = null; self._redraw(); });
+            }
+        });
+        return _MosaicClass;
+    }
+
     function MWLayer(map, opts) {
         opts = opts || {};
         this._map           = map;
@@ -392,9 +594,13 @@
         this._playStepsPerLoop = 50;
         this._playTickMs       = 80;
 
-        // { orbit_id: [ { overlay (L.imageOverlay), hit (L.rectangle) } ] }
-        // — array because dateline-wrapping orbits create two halves.
+        // { orbit_id: [ { hit (L.rectangle) } ] } — array because a
+        // genuine dateline-wrapping bounds still gets two hit rectangles.
+        // Swath imagery itself is composited on the shared mosaic canvas.
         this._renderedOrbits = {};
+
+        // Single compositing canvas for all swath imagery (lazy; needs map).
+        this._mosaic = null;
 
         // DOM refs (filled by _mountUI)
         this._ui = null;
@@ -417,11 +623,22 @@
 
     MWLayer.prototype.isEnabled = function () { return this._enabled; };
 
+    // Lazily create the mosaic canvas and attach it to the map.
+    MWLayer.prototype._ensureMosaic = function () {
+        if (!this._map) return;
+        if (!this._mosaic) {
+            var Cls = _mosaicClass();
+            this._mosaic = new Cls();
+        }
+        if (!this._map.hasLayer(this._mosaic)) this._mosaic.addTo(this._map);
+    };
+
     MWLayer.prototype.enable = function () {
         if (this._enabled) return;
         this._enabled = true;
         if (this._ui && this._ui.btn) this._ui.btn.classList.add('active');
         this._addAttribution();
+        this._ensureMosaic();
         var self = this;
         // Kick off the fallback storm fetch in parallel with the manifest —
         // a no-op when the host already pushed storms via setActiveStorms.
@@ -459,6 +676,9 @@
             this._refreshTimer = null;
         }
         this._clearAll();
+        if (this._mosaic && this._map.hasLayer(this._mosaic)) {
+            this._map.removeLayer(this._mosaic);
+        }
         this._removeAttribution();
         this._updateStatus('');
         this._savePrefs();
@@ -696,11 +916,19 @@
             }
         }, this);
         this._renderedOrbits = {};
+        if (this._mosaic) this._mosaic.setItems([]);
     };
 
     MWLayer.prototype._renderAll = function () {
         if (!this._map || !this._enabled) return;
+        this._ensureMosaic();
         this._clearAll();
+        // Swath imagery accumulates here and is handed to the mosaic
+        // canvas in one batch after the loop. Items are pushed in the
+        // manifest's newest-first order and the canvas paints them in
+        // array order, so older swaths land on top — matching the paint
+        // order of the previous per-orbit imageOverlay stack.
+        var mosaicItems = [];
         var orbits = (this._manifest && this._manifest.orbits) || [];
         var now = Date.now();
         var windowMin = this._hours * 60;
@@ -756,9 +984,10 @@
             if (ageMin < cursorAgeMin) continue;
             var entry = orb.products[this._product];
             if (!entry) continue;       // no PNG for the active product
-            this._addOrbit(orb, entry, ageMin, windowMin, stormsByOrbit[orb.orbit_id]);
+            this._addOrbit(orb, entry, ageMin, windowMin, stormsByOrbit[orb.orbit_id], mosaicItems);
             nVisible++;
         }
+        if (this._mosaic) this._mosaic.setItems(mosaicItems);
         this._updateSensorCounts(perSensorCounts);
         this._updateScheduleSection();
         // Status line — either count or empty-state message
@@ -824,9 +1053,21 @@
         return tracks;
     };
 
-    MWLayer.prototype._addOrbit = function (orb, entry, ageMin, windowMin, highlightStorms) {
+    MWLayer.prototype._addOrbit = function (orb, entry, ageMin, windowMin, highlightStorms, mosaicItems) {
         var map = this._map;
         var opacity = _ageOpacity(ageMin, windowMin, this._minOpacity);
+
+        // Swath imagery → the shared mosaic canvas, which projects the raw
+        // bounds itself (spanning the antimeridian + world copies). No
+        // per-orbit imageOverlay and no _splitAtDateline — that split was
+        // what made dateline-crossing swaths render as two squished copies.
+        if (mosaicItems) {
+            mosaicItems.push({ url: entry.png_url, bounds: entry.bounds, opacity: opacity });
+        }
+
+        // Hit targets stay per-orbit so hover/popup interactivity is
+        // preserved. A genuine west>east wrapped bounds still splits into
+        // two rectangles so the click target lands on both sides of the seam.
         var boundsList = _wrapsDateline(entry.bounds) ? _splitAtDateline(entry.bounds) : [entry.bounds];
         var parts = [];
         var popupHtml = this._popupHtml(orb, ageMin, highlightStorms);
@@ -835,11 +1076,11 @@
 
         // Default border styling — very subtle so dense GMI coverage
         // (~117 granules in 10 hr) doesn't look like a grid lattice.
-        // The image overlay itself carries the swath shape via
-        // NaN→transparent edges; the rectangle is mostly a click target.
-        // Hover bumps the stroke to a readable weight, so users can
-        // probe individual granules without permanent visual clutter.
-        // Storm-highlighted swaths get the bold treatment regardless.
+        // The mosaic canvas carries the swath shape via NaN→transparent
+        // edges; the rectangle is mostly a click target. Hover bumps the
+        // stroke to a readable weight, so users can probe individual
+        // granules without permanent visual clutter. Storm-highlighted
+        // swaths get the bold treatment regardless.
         var idleWeight  = isHighlighted ? HIGHLIGHT_WEIGHT : 0.5;
         var idleOpacity = isHighlighted ? 0.85 : Math.min(opacity, 0.25);
         var hoverWeight  = isHighlighted ? HIGHLIGHT_WEIGHT : 1.5;
@@ -847,14 +1088,6 @@
 
         for (var i = 0; i < boundsList.length; i++) {
             var b = boundsList[i];
-            var img = L.imageOverlay(entry.png_url, b, {
-                opacity: opacity,
-                interactive: false,
-                // Don't request crossOrigin — we don't sample pixels and
-                // some PPS-fed buckets serve without CORS by default.
-                attribution: ATTRIBUTION
-            }).addTo(map);
-
             var hit = L.rectangle(b, {
                 color: borderColor,
                 weight: idleWeight,
@@ -876,7 +1109,7 @@
                     rect.setStyle({ weight: idleW, opacity: idleO });
                 });
             })(hit, idleWeight, idleOpacity, hoverWeight, hoverOpacity);
-            parts.push({ overlay: img, hit: hit });
+            parts.push({ hit: hit });
         }
         this._renderedOrbits[orb.orbit_id] = parts;
     };
