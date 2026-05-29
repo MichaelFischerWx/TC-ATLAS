@@ -4845,19 +4845,51 @@
         [1.00, '#7f1d1d'],   // 40 kt+ — dark red
     ];
 
+    /** Build Plotly arrow annotations (one per valid cell) showing the
+     *  shear heading ("toward") for each (bottom, top) layer, centered in
+     *  the cell. Pixel-based offsets so the angle is undistorted by the
+     *  (non-square) category axes. */
+    function _shearProfileArrows(prof, color, lenPx) {
+        var anns = [];
+        if (!prof || !prof.heading_deg) return anns;
+        var hdg = prof.heading_deg, mag = prof.magnitude_kt || [];
+        var L = lenPx || 16;
+        for (var ti = 0; ti < hdg.length; ti++) {
+            var row = hdg[ti] || [];
+            for (var bi = 0; bi < row.length; bi++) {
+                var h = row[bi];
+                var m = mag[ti] ? mag[ti][bi] : null;
+                if (h == null || m == null) continue;
+                var th = h * Math.PI / 180, s = Math.sin(th), c = Math.cos(th);
+                anns.push({
+                    x: String(prof.bottoms_hpa[bi]), y: String(prof.tops_hpa[ti]),
+                    xref: 'x', yref: 'y',
+                    ax: -L * s, ay: L * c, axref: 'pixel', ayref: 'pixel',
+                    xshift: (L / 2) * s, yshift: (L / 2) * c,
+                    showarrow: true, arrowhead: 2, arrowsize: 1,
+                    arrowwidth: 1.3, arrowcolor: color, text: '', standoff: 0,
+                });
+            }
+        }
+        return anns;
+    }
+
     /** Plotly heatmap: x = layer bottom (hPa), y = layer top (hPa),
-     *  color = Helmholtz 0–400 km env-shear magnitude (kt), fixed 0–40 kt. */
+     *  color = Helmholtz 0–400 km env-shear magnitude (kt), fixed 0–40 kt.
+     *  Arrows in each cell show the shear heading ("toward"). */
     function _rtRenderShearProfile(prof) {
         var el = document.getElementById('rt-env-shear-grid');
         if (!el || !prof || !prof.magnitude_kt || typeof Plotly === 'undefined') return;
         var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
         var axisCol = isDark ? '#8b9ec2' : '#374151';
         var gridCol = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(15,22,35,0.08)';
+        var arrowCol = isDark ? '#e5e7eb' : '#111827';
         Plotly.newPlot(el, [{
             type: 'heatmap',
             z: prof.magnitude_kt,
             x: prof.bottoms_hpa.map(String),
             y: prof.tops_hpa.map(String),
+            customdata: prof.heading_deg,
             colorscale: _SHEAR_PROFILE_COLORSCALE,
             zmin: 0, zmax: _SHEAR_PROFILE_ZMAX,  // fixed scale for cross-storm comparison
             zsmooth: false,
@@ -4870,8 +4902,9 @@
                 ticktext: ['0', '10', '20', '30', '40+'],
             },
             hovertemplate: 'bottom %{x} hPa → top %{y} hPa<br>' +
-                           '%{z:.1f} kt<extra></extra>',
+                           '%{z:.1f} kt · toward %{customdata:.0f}°<extra></extra>',
         }], {
+            annotations: _shearProfileArrows(prof, arrowCol, 16),
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: 'rgba(0,0,0,0)',
             margin: { l: 52, r: 8, t: 24, b: 44 },
@@ -4929,7 +4962,7 @@
         var title = 'Deep-layer Shear by Layer — ' + (stormName && stormId
             ? stormName + ' (' + stormId + ')' : (stormName || stormId || 'Storm'));
         var subtitle = 'Helmholtz environmental shear · vortex removed within ' + maskKm +
-                       ' km · averaged over 0–' + evalKm + ' km core';
+                       ' km · averaged over 0–' + evalKm + ' km core · arrows: shear direction (toward)';
         var srcLine = (prof.source || 'GFS 0.25° analysis') +
                       (cycleFmt ? ' · analysis ' + cycleFmt : '') +
                       (fixFmt ? '   ·   storm fix ' + fixFmt : '');
@@ -4960,6 +4993,14 @@
             data[0].colorbar.title = { text: 'kt', font: { size: 13, color: textColor } };
             data[0].colorbar.thickness = 16;
         }
+        // Scale up the per-cell shear arrows for the larger export canvas.
+        (layout.annotations || []).forEach(function (a) {
+            if (a.showarrow && a.axref === 'pixel') {
+                var k = 1.9;
+                a.ax *= k; a.ay *= k; a.xshift *= k; a.yshift *= k;
+                a.arrowwidth = (a.arrowwidth || 1.3) * 1.4;
+            }
+        });
         layout.annotations = (layout.annotations || []).concat([
             { text: subtitle, xref: 'paper', yref: 'paper', x: 0.5, y: 1.085,
               showarrow: false, xanchor: 'center', yanchor: 'bottom',
