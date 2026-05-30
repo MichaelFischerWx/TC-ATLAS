@@ -377,6 +377,19 @@ def _upload_public_bundle(key: str, body: bytes, content_type: str = "applicatio
 _ANOM_RATIO = 2.5       # flag if both neighbor diffs exceed RATIO × the neighbor-pair diff
 _ANOM_ABS_FLOOR = 20.0  # …and exceed this absolute MAD (avoids flagging quiet periods)
 
+# Low-contrast reflectance override (Visible / SWIR). The IR-tuned floor above
+# (20 on a 0–255 scale) is BLIND to a stale-scan substitution in the Visible
+# channel near sunrise/sunset: the scene then occupies only ~10–45 counts, so a
+# genuine "pops out and comes back" outlier measures MAD ~13–16 vs neighbors
+# (normal evolution ~2.7) yet sits UNDER the 20 floor and ships. Observed live on
+# Jangmi (WP062026) 22:20 UTC: an older/smoother substituted scan with
+# d_prev/d_next = 13.4/15.8 (neighbors agreed at 5.4) passed the IR floor.
+# These lower the floor and ratio for the reflectance-like products so the screen
+# catches that regime; the ratio term still scales with the prev↔next span, so
+# fast-but-monotonic illumination changes are not flagged.
+_ANOM_RATIO_VIS = 2.0
+_ANOM_ABS_FLOOR_VIS = 8.0
+
 # Reflectance-band (Visible) dim-out screen. The MAD screen above is blind to
 # a bad/low-gain Visible scan near sunrise/sunset: twilight frames are all
 # near-black, so even a real dropout sits under _ANOM_ABS_FLOOR (tuned for
@@ -437,6 +450,13 @@ def _flag_anomalous_frames(jpgs: list, band: int | None = None,
     def _mad(a, b):
         return float(np.abs(a - b).mean())
 
+    # Visible/SWIR are low-contrast reflectance-like products: use a floor/ratio
+    # scaled to their narrow working range so sunrise/sunset substitutions aren't
+    # masked by the IR-tuned floor. Emissive IR/WV keep the high-contrast tuning.
+    low_contrast = band is not None and band in (VIS_BAND, SWIR_BAND)
+    anom_ratio = _ANOM_RATIO_VIS if low_contrast else _ANOM_RATIO
+    anom_floor = _ANOM_ABS_FLOOR_VIS if low_contrast else _ANOM_ABS_FLOOR
+
     flagged = set()
     for i in range(n):
         ti = thumbs[i]
@@ -456,7 +476,7 @@ def _flag_anomalous_frames(jpgs: list, band: int | None = None,
         d_prev = _mad(ti, tp)
         d_next = _mad(ti, tq)
         d_skip = _mad(tp, tq)
-        thr = max(_ANOM_ABS_FLOOR, _ANOM_RATIO * d_skip)
+        thr = max(anom_floor, anom_ratio * d_skip)
         if d_prev > thr and d_next > thr:
             flagged.add(i)
 
