@@ -4854,33 +4854,37 @@
         [1.00, '#7f1d1d'],   // 40 kt+ — dark red
     ];
 
-    /** Build Plotly arrow annotations (one per valid cell) showing the
-     *  shear heading ("toward") for each (bottom, top) layer, centered in
-     *  the cell. Pixel-based offsets so the angle is undistorted by the
-     *  (non-square) category axes. */
-    function _shearProfileArrows(prof, color, lenPx) {
-        var anns = [];
-        if (!prof || !prof.heading_deg) return anns;
-        var hdg = prof.heading_deg, mag = prof.magnitude_kt || [];
-        var L = lenPx || 16;
-        for (var ti = 0; ti < hdg.length; ti++) {
-            var row = hdg[ti] || [];
-            for (var bi = 0; bi < row.length; bi++) {
-                var h = row[bi];
-                var m = mag[ti] ? mag[ti][bi] : null;
-                if (h == null || m == null) continue;
-                var th = h * Math.PI / 180, s = Math.sin(th), c = Math.cos(th);
-                anns.push({
-                    x: String(prof.bottoms_hpa[bi]), y: String(prof.tops_hpa[ti]),
-                    xref: 'x', yref: 'y',
-                    ax: -L * s, ay: L * c, axref: 'pixel', ayref: 'pixel',
-                    xshift: (L / 2) * s, yshift: (L / 2) * c,
-                    showarrow: true, arrowhead: 2, arrowsize: 1,
-                    arrowwidth: 1.3, arrowcolor: color, text: '', standoff: 0,
-                });
+    /** Build a scatter trace of arrow markers (one per valid cell) showing
+     *  the shear heading ("toward") for each (bottom, top) layer. Drawn as a
+     *  scatter OVERLAY rather than layout annotations: arrow annotations make
+     *  Plotly silently drop the heatmap fill. marker.angle is measured
+     *  clockwise from straight up, so it equals the compass "toward" heading
+     *  1:1 (0°=N=up, 90°=E=right). hoverinfo:'skip' lets the heatmap keep its
+     *  kt/heading tooltip. */
+    function _shearProfileArrowTrace(prof, color, lineColor, size) {
+        var xs = [], ys = [], ang = [];
+        if (prof && prof.heading_deg) {
+            var hdg = prof.heading_deg, mag = prof.magnitude_kt || [];
+            for (var ti = 0; ti < hdg.length; ti++) {
+                var row = hdg[ti] || [];
+                for (var bi = 0; bi < row.length; bi++) {
+                    var h = row[bi], m = mag[ti] ? mag[ti][bi] : null;
+                    if (h == null || m == null) continue;
+                    xs.push(String(prof.bottoms_hpa[bi]));
+                    ys.push(String(prof.tops_hpa[ti]));
+                    ang.push(h);
+                }
             }
         }
-        return anns;
+        return {
+            type: 'scatter', mode: 'markers', x: xs, y: ys,
+            marker: {
+                symbol: 'arrow', angle: ang, angleref: 'up',
+                size: size || 12, color: color,
+                line: { width: 0.6, color: lineColor },
+            },
+            hoverinfo: 'skip', showlegend: false,
+        };
     }
 
     /** Plotly heatmap: x = layer bottom (hPa), y = layer top (hPa),
@@ -4893,6 +4897,7 @@
         var axisCol = isDark ? '#8b9ec2' : '#374151';
         var gridCol = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(15,22,35,0.08)';
         var arrowCol = isDark ? '#e5e7eb' : '#111827';
+        var arrowLine = isDark ? 'rgba(15,23,42,0.7)' : 'rgba(248,250,252,0.85)';
         Plotly.newPlot(el, [{
             type: 'heatmap',
             z: prof.magnitude_kt,
@@ -4912,8 +4917,7 @@
             },
             hovertemplate: 'bottom %{x} hPa → top %{y} hPa<br>' +
                            '%{z:.1f} kt · toward %{customdata:.0f}°<extra></extra>',
-        }], {
-            annotations: _shearProfileArrows(prof, arrowCol, 16),
+        }, _shearProfileArrowTrace(prof, arrowCol, arrowLine, 12)], {
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: 'rgba(0,0,0,0)',
             margin: { l: 52, r: 8, t: 24, b: 44 },
@@ -5002,12 +5006,11 @@
             data[0].colorbar.title = { text: 'kt', font: { size: 13, color: textColor } };
             data[0].colorbar.thickness = 16;
         }
-        // Scale up the per-cell shear arrows for the larger export canvas.
-        (layout.annotations || []).forEach(function (a) {
-            if (a.showarrow && a.axref === 'pixel') {
-                var k = 1.9;
-                a.ax *= k; a.ay *= k; a.xshift *= k; a.yshift *= k;
-                a.arrowwidth = (a.arrowwidth || 1.3) * 1.4;
+        // Enlarge the per-cell shear arrows for the larger export canvas.
+        data.forEach(function (t) {
+            if (t.type === 'scatter' && t.marker && t.marker.symbol === 'arrow') {
+                t.marker.size = (t.marker.size || 12) * 1.8;
+                if (t.marker.line) t.marker.line.width = (t.marker.line.width || 0.6) * 1.6;
             }
         });
         layout.annotations = (layout.annotations || []).concat([
@@ -10854,15 +10857,15 @@
         [113/200,  '#c430a0'],   // C4
         [137/200,  '#8b5cf6'],   // C5 (137 kt) — Saffir–Simpson ends here
         // The official scale stops at C5, but FNV3 members can forecast
-        // far stronger (Patricia peaked ~185 kt). Ramp the super-C5 band
-        // violet → indigo → cyan (matching the Panel C wind scale, whose
-        // strongest jet cores saturate to the same cyan) so an
-        // "off-the-charts" 160-185+ kt member reads as unmistakably more
-        // extreme — and stays clear of the C4 magenta instead of looping
-        // back toward it.
-        [160/200,  '#4338ca'],   // beyond C5 — indigo
-        [180/200,  '#0ea5e9'],   // extreme — sky blue
-        [1,        '#5fd6ff'],   // 200 kt — bright cyan (off the charts)
+        // far stronger (Patricia peaked ~185 kt). Keep the C5 violet hue
+        // and just push the lightness up — violet → pale lavender →
+        // white-hot. On the dark navy map a lighter dot is also a
+        // higher-contrast dot, so an "off-the-charts" 160-185+ kt member
+        // is the brightest marker on screen. Staying in the violet family
+        // (not rotating toward magenta) keeps it clear of the C4 color.
+        [160/200,  '#b9a3f9'],   // beyond C5 — light violet
+        [180/200,  '#dccdfb'],   // extreme — pale lavender
+        [1,        '#f5f0ff'],   // 200 kt — white-hot (off the charts)
     ];
 
     /* Run-to-run trend sparkline.
@@ -15853,6 +15856,17 @@
     var _RT_MW_PREDICTIONS_URL = 'https://storage.googleapis.com/tc-atlas-microwave-nrt/passes_predicted.json';
     var _RT_MW_PREDICTIONS_TTL_MS = 10 * 60 * 1000;   // 10 min
     var _RT_MW_IMMINENT_MIN = 90;   // overpass <90 min out → flag as imminent
+    // "In transit" = the satellite already flew over but the NRT product is
+    // still propagating through the data pipeline (AMSR2 ~3 h, SSMIS ~3 h).
+    // Once a pass's scan time is in the past the "next overpass" countdown
+    // jumps to the FOLLOWING pass — so without this a user has no idea fresh
+    // imagery is minutes-to-hours away. We surface the most-recent past pass
+    // whose imagery hasn't landed yet, with its expected arrival time.
+    var _RT_MW_INTRANSIT_COV_MIN = 0.05;  // ignore trivial grazes (<5% core)
+    var _RT_MW_INTRANSIT_GRACE_MIN = 75;  // keep showing past the ETA estimate;
+                                          // NRT latency is approximate, so don't
+                                          // give up the instant the ETA elapses
+    var _RT_MW_LANDED_MATCH_MIN = 25;     // predicted↔manifest scan-time tolerance
     var _rtMwPredictions = null;
     var _rtMwPredictionsFetchedAt = 0;
     // Sensor display order + labels for the upcoming-pass strip.
@@ -16090,6 +16104,31 @@
         return 'in ' + (h / 24).toFixed(1) + ' d';
     }
 
+    function _rtMwFmtAgo(min) {
+        if (min < 1)    return 'just now';
+        if (min < 60)   return Math.round(min) + ' min ago';
+        var h = min / 60;
+        if (h < 24)     return h.toFixed(1) + ' h ago';
+        return (h / 24).toFixed(1) + ' d ago';
+    }
+
+    // Has this predicted pass already arrived in the manifest? Match by
+    // sensor + scan time (predicted vs ingested can differ by a few minutes
+    // since the predictor uses the orbit's closest-approach step, not the
+    // granule boundary). Used to stop announcing "incoming" once the imagery
+    // has actually landed in the pass list below.
+    function _rtMwPassLanded(sensor, scanMs) {
+        var orbits = _rtMwStormState.orbits || [];
+        var tol = _RT_MW_LANDED_MATCH_MIN * 60000;
+        for (var i = 0; i < orbits.length; i++) {
+            if (orbits[i].sensor === sensor
+                && Math.abs(orbits[i].scan_start_ms - scanMs) <= tol) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     // Turn a predicted pass's coverage geometry into a short badge.
     // coverage_frac is the fraction of the nominal inner-core disk
     // (radius coreR km) that falls inside the swath; coverage_radius_km
@@ -16167,16 +16206,34 @@
             var horizonBySensor = pred.horizon_by_sensor || {};
             // Earliest future pass per sensor.
             var next = {};
+            // In-transit: most-recent PAST scan per sensor whose imagery
+            // hasn't landed yet (still inside the NRT latency window, not yet
+            // in the manifest). Surfaced so the user knows fresh imagery is
+            // inbound even though the countdown has rolled to the next pass.
+            var incoming = {};
             for (var i = 0; i < passes.length; i++) {
                 var p = passes[i];
                 if (!p.sensor) continue;
                 var t = Date.parse(p.predicted_scan_start);
-                if (!isFinite(t) || t <= now) continue;
-                if (!next[p.sensor] || t < Date.parse(next[p.sensor].predicted_scan_start)) {
-                    next[p.sensor] = p;
+                if (!isFinite(t)) continue;
+                if (t > now) {
+                    if (!next[p.sensor] || t < Date.parse(next[p.sensor].predicted_scan_start)) {
+                        next[p.sensor] = p;
+                    }
+                    continue;
+                }
+                // Past scan — candidate for "in transit".
+                if (isFinite(p.coverage_frac) && p.coverage_frac < _RT_MW_INTRANSIT_COV_MIN) continue;
+                var eta = Date.parse(p.eta_on_tcatlas);
+                if (!isFinite(eta)) continue;
+                if (eta + _RT_MW_INTRANSIT_GRACE_MIN * 60000 < now) continue;  // long overdue — assume it won't arrive
+                if (_rtMwPassLanded(p.sensor, t)) continue;                    // already on TC-ATLAS
+                if (!incoming[p.sensor] || t > Date.parse(incoming[p.sensor].predicted_scan_start)) {
+                    incoming[p.sensor] = p;
                 }
             }
-            var anyUpcoming = Object.keys(next).length > 0;
+            var anyUpcoming = Object.keys(next).length > 0
+                || Object.keys(incoming).length > 0;
             if (!predStorm) {
                 // No prediction record for this system (e.g. just-formed,
                 // or predictions stale) — hide rather than show an empty grid.
@@ -16191,7 +16248,29 @@
                 var sLabel = _RT_MW_SENSOR_ORDER[s].label;
                 var swatch = _RT_MW_SENSOR_COLOR[sk] || '#cbd5e1';
                 var valHtml, cellTitle, farClass = '', covHtml = '';
-                if (next[sk]) {
+                if (incoming[sk]) {
+                    // Imagery in the NRT pipeline — flag it and estimate arrival.
+                    var ip = incoming[sk];
+                    var agoMin = (now - Date.parse(ip.predicted_scan_start)) / 60000;
+                    var ipEtaMin = (Date.parse(ip.eta_on_tcatlas) - now) / 60000;
+                    var ipCov = _rtMwCoverage(ip, coreR);
+                    farClass = ' incoming-data';
+                    var etaLabel = ipEtaMin > 0 ? _rtMwFmtIn(ipEtaMin) : 'any moment';
+                    var nextNote = next[sk]
+                        ? ' · next overpass ' + _rtMwFmtIn((Date.parse(next[sk].predicted_scan_start) - now) / 60000)
+                        : '';
+                    cellTitle = 'Overpass ' + _rtMwFmtAgo(agoMin)
+                        + ' · in NRT transfer · imagery expected ' + etaLabel
+                        + (ipCov ? ' · ' + ipCov.title : '')
+                        + nextNote;
+                    valHtml = '<span class="rt-mw-up-incoming">INCOMING</span>'
+                        + '<span class="rt-mw-up-eta">' + _esc(etaLabel) + '</span>';
+                    if (ipCov) {
+                        covHtml = '<span class="rt-mw-up-cov ' + ipCov.cls + '">'
+                            + '<span class="rt-mw-up-dot"></span>'
+                            + _esc(ipCov.label) + '</span>';
+                    }
+                } else if (next[sk]) {
                     var p = next[sk];
                     var deltaMin = (Date.parse(p.predicted_scan_start) - now) / 60000;
                     var etaMin = (Date.parse(p.eta_on_tcatlas) - now) / 60000;
@@ -16233,9 +16312,12 @@
                     + '</div>'
                 );
             }
-            var note = anyUpcoming
-                ? 'Time to next overpass &rarr; when imagery lands here'
-                : 'No overpasses predicted in the current window';
+            var hasIncoming = Object.keys(incoming).length > 0;
+            var note = hasIncoming
+                ? 'INCOMING = overpass done, imagery in NRT transfer (est. arrival)'
+                : (anyUpcoming
+                    ? 'Time to next overpass &rarr; when imagery lands here'
+                    : 'No overpasses predicted in the current window');
             box.innerHTML =
                 '<div class="rt-mw-up-title">Next overpass</div>'
                 + '<div class="rt-mw-up-grid">' + cells.join('') + '</div>'
