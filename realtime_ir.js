@@ -10118,6 +10118,18 @@
                 '</div>' + // close #rt-genesis-pane-trends
                 // ── This-run pane (visible by default) ───────────────
                 '<div id="rt-genesis-pane-thisrun" class="rt-genesis-pane">' +
+                // Sub-nav: the per-disturbance panels stack vertically and
+                // most live below the fold. This lighter chip row makes
+                // them discoverable and lets the user jump straight to one.
+                '<div class="rt-genesis-subnav">' +
+                  '<span class="rt-genesis-subnav-label">Jump to:</span>' +
+                  '<button type="button" class="rt-genesis-subnav-chip active" data-jump="rt-genesis-jump-tracks">Tracks</button>' +
+                  '<button type="button" class="rt-genesis-subnav-chip" data-jump="rt-genesis-jump-intensity">Intensity</button>' +
+                  '<button type="button" class="rt-genesis-subnav-chip" data-jump="rt-genesis-jump-gtime">Genesis time</button>' +
+                  '<button type="button" class="rt-genesis-subnav-chip" data-jump="rt-genesis-jump-rmw">RMW</button>' +
+                  '<button type="button" class="rt-genesis-subnav-chip" data-jump="rt-genesis-jump-lmi">LMI</button>' +
+                  '<button type="button" class="rt-genesis-subnav-chip" data-jump="rt-genesis-jump-lmitau">LMI vs hour</button>' +
+                '</div>' +
                 // Forecast-hour scrubber — drives the map's "members at
                 // tau=t" overlay and the intensity time-series cursor.
                 // Same control pattern as the Global Map's IR scrubber
@@ -10254,6 +10266,51 @@
                 _genesisShowPane(btn.getAttribute('data-pane'));
             });
         });
+
+        // ── This-run sub-nav: jump-to + scroll-spy ───────────────────
+        // The per-disturbance panels stack vertically; the chip row at the
+        // top of the pane lets the user jump to any of them and shows
+        // which one is currently in view.
+        var subChips = m.querySelectorAll('.rt-genesis-subnav-chip');
+        function _genesisScrollTo(id) {
+            var target = m.querySelector('#' + id);
+            if (!target || !scroller) return;
+            // Land the panel just below the sticky tab nav, not under it.
+            var nav = m.querySelector('#rt-genesis-jump-nav');
+            var navH = nav ? nav.offsetHeight : 0;
+            var srect = scroller.getBoundingClientRect();
+            var trect = target.getBoundingClientRect();
+            var delta = (trect.top - srect.top) + scroller.scrollTop - navH - 8;
+            scroller.scrollTo({ top: delta, behavior: 'smooth' });
+        }
+        subChips.forEach(function (chip) {
+            chip.addEventListener('click', function () {
+                _genesisScrollTo(chip.getAttribute('data-jump'));
+            });
+        });
+        if ('IntersectionObserver' in window && scroller) {
+            var setActiveChip = function (id) {
+                subChips.forEach(function (c) {
+                    c.classList.toggle('active', c.getAttribute('data-jump') === id);
+                });
+            };
+            var io = new IntersectionObserver(function (entries) {
+                var best = null;
+                entries.forEach(function (e) {
+                    if (e.isIntersecting &&
+                        (!best || e.intersectionRatio > best.intersectionRatio)) {
+                        best = e;
+                    }
+                });
+                if (best) setActiveChip(best.target.id);
+            }, { root: scroller, threshold: [0.25, 0.5, 0.75] });
+            ['rt-genesis-jump-tracks', 'rt-genesis-jump-intensity',
+             'rt-genesis-jump-gtime', 'rt-genesis-jump-rmw',
+             'rt-genesis-jump-lmi', 'rt-genesis-jump-lmitau'].forEach(function (id) {
+                var el = m.querySelector('#' + id);
+                if (el) io.observe(el);
+            });
+        }
         return m;
     }
 
