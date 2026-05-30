@@ -107,6 +107,13 @@ _IR_FRAME_CACHE_TTL = 300       # 5 minutes per frame
 # to this interval; storm-movement cycles bypass it (see _poll_active_storms).
 _PREFETCH_MIN_INTERVAL_SEC = 540   # ~9 min — one poll short of 10 min
 
+# When False (IR_INLINE_PREWARM=0) the in-process prewarm daemon and the
+# on-demand prefetch thread-spawn are both disabled, so the API can run
+# cpu-throttled (min=1) without burning always-allocated CPU. The prewarm
+# render pipeline then runs in a separate Cloud Run Job (prewarm_job.py)
+# on a Cloud Scheduler cadence. Default True keeps legacy inline behavior.
+_INLINE_PREWARM = os.environ.get("IR_INLINE_PREWARM", "1") != "0"
+
 # Tb encoding constants (shared by /ir-raw endpoint and GCS prefetch)
 _TB_VMIN = 160.0
 _TB_VMAX = 330.0
@@ -1859,10 +1866,14 @@ def _filter_genesis_invests(storms: list, radius_deg: float = 5.0,
 # Polling Logic
 # ---------------------------------------------------------------------------
 
-def _poll_active_storms():
+def _poll_active_storms(spawn_prefetch: bool = True):
     """
     Poll NHC + JTWC for all active storms worldwide and update the cache.
     This runs in the request thread (with TTL gating) or a background thread.
+
+    spawn_prefetch=False suppresses the in-process prefetch thread-spawn so the
+    caller (e.g. the prewarm Cloud Run Job) can drive the render pipeline
+    synchronously instead.
     """
     global _last_poll_time, _last_prefetch_time
     now = _dt.now(timezone.utc)
@@ -2001,13 +2012,15 @@ def _poll_active_storms():
     # (satellites only scan every 10 min, so more often is wasted render +
     # GCS work). A storm that moved bypasses the throttle — its cutout center
     # changed, so its frames must be re-fetched immediately.
-    if storms and not _prefetch_lock.locked():
+    if spawn_prefetch and _INLINE_PREWARM and storms and not _prefetch_lock.locked():
         due = (time.time() - _last_prefetch_time) >= _PREFETCH_MIN_INTERVAL_SEC
         if due or moved_storms:
             ordered = sorted(storms, key=lambda s: s["atcf_id"] not in moved_storms)
             _last_prefetch_time = time.time()
             t = threading.Thread(target=_prefetch_ir_frames, args=(list(ordered),), daemon=True)
             t.start()
+
+    return storms
 
 
 # ---------------------------------------------------------------------------
@@ -2672,7 +2685,17 @@ def _background_storm_refresh():
 
 
 def start_background_refresh():
-    """Start the background storm refresh thread.  Called once at app startup."""
+    """Start the background storm refresh thread.  Called once at app startup.
+
+    No-op when _INLINE_PREWARM is False: the API then runs cpu-throttled, where
+    daemon threads get no CPU between requests anyway. Storm-cache refresh is
+    driven by the /warmup Cloud Scheduler ping (refresh_active_storms_cache),
+    and the render pipeline runs in the standalone prewarm Cloud Run Job.
+    """
+    if not _INLINE_PREWARM:
+        print("[IR Monitor] Inline prewarm disabled (IR_INLINE_PREWARM=0) — "
+              "background refresh thread NOT started; warmup cron + prewarm job drive refresh")
+        return
     t = threading.Thread(target=_background_storm_refresh, daemon=True,
                          name="storm-refresh")
     t.start()
@@ -2699,6 +2722,33 @@ def refresh_active_storms_cache():
             "updated_utc": _active_storms_cache["updated_utc"],
             "count_by_basin": dict(_active_storms_cache["count_by_basin"]),
         }
+
+
+def run_prewarm_cycle():
+    """
+    Run one full prewarm cycle SYNCHRONOUSLY (poll storms, then render + upload
+    all IR/WV/SWIR/Vis frames, build bundles, prefetch NEXRAD, clean old GCS
+    frames). This is the entry point for the standalone prewarm Cloud Run Job
+    (prewarm_job.py), which replaces the in-process prewarm daemon so the API
+    can run cpu-throttled. Returns a summary dict.
+    """
+    global _last_prefetch_time
+    t0 = time.time()
+    storms = _poll_active_storms(spawn_prefetch=False)
+    if not storms:
+        print("[Prewarm Job] No active storms — nothing to render")
+        return {"storm_count": 0, "elapsed_sec": round(time.time() - t0, 1)}
+
+    print(f"[Prewarm Job] Rendering frames for {len(storms)} active storm(s)…")
+    _last_prefetch_time = time.time()
+    _prefetch_ir_frames(list(storms))
+    elapsed = round(time.time() - t0, 1)
+    print(f"[Prewarm Job] Cycle complete in {elapsed}s for {len(storms)} storm(s)")
+    return {
+        "storm_count": len(storms),
+        "elapsed_sec": elapsed,
+        "atcf_ids": [s["atcf_id"] for s in storms],
+    }
 
 
 # ---------------------------------------------------------------------------
