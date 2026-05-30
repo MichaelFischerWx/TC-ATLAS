@@ -11594,6 +11594,11 @@
         var bounds = _genesisBoundsFromMean(meanLats, meanLons,
                                              stats.genLats, stats.genLons,
                                              containerAspect);
+        // Center for the locator-globe inset — midpoint of the zoomed
+        // bounds, so the orthographic disc is rotated to put this
+        // disturbance dead-center under the red dot.
+        var insetLon = (bounds.lon[0] + bounds.lon[1]) / 2;
+        var insetLat = (bounds.lat[0] + bounds.lat[1]) / 2;
 
         var spaghetti = {
             type: 'scattergeo', mode: 'lines',
@@ -11658,6 +11663,20 @@
             }),
             hovertemplate: '%{text}<br>%{lat:.1f}°N, %{lon:.1f}°E<extra></extra>',
             name: 'Ensemble mean',
+            showlegend: false,
+        };
+        // Locator-globe inset — a small orthographic disc pinned in the
+        // bottom-left corner so a reader who doesn't recognize the
+        // zoomed-in stretch of open ocean can see at a glance which
+        // hemisphere/basin the disturbance is in. Red dot marks the spot.
+        var insetMarker = {
+            type: 'scattergeo', geo: 'geo2', mode: 'markers',
+            lon: [insetLon], lat: [insetLat],
+            marker: {
+                size: 8, color: '#ef4444', symbol: 'circle',
+                line: { color: '#ffffff', width: 1 },
+            },
+            hoverinfo: 'skip',
             showlegend: false,
         };
         // Axis labels — scattergeo has no built-in tick labels, so we
@@ -11745,6 +11764,37 @@
                 showcoastlines: true,
                 bgcolor: 'rgba(0,0,0,0)',
             },
+            // Locator globe — orthographic disc rotated onto the
+            // disturbance, parked in the bottom-left corner. Domain is
+            // taller than wide; Plotly fits the circle and centers it,
+            // so the leftover space just pads the disc.
+            geo2: {
+                domain: { x: [0.01, 0.17], y: [0.02, 0.36] },
+                projection: {
+                    type: 'orthographic',
+                    rotation: { lon: insetLon, lat: insetLat, roll: 0 },
+                },
+                showland: true,
+                landcolor: isDark ? '#39434f' : '#cfd6e0',
+                showocean: true,
+                oceancolor: isDark ? '#0c121b' : '#9fb0c6',
+                showcoastlines: true,
+                coastlinecolor: isDark ? 'rgba(255,255,255,0.40)'
+                                       : 'rgba(15,22,35,0.45)',
+                coastlinewidth: 0.4,
+                showcountries: false,
+                showframe: true,
+                framecolor: isDark ? 'rgba(255,255,255,0.40)'
+                                   : 'rgba(15,22,35,0.45)',
+                framewidth: 1,
+                lonaxis: { showgrid: true, dtick: 30,
+                           gridcolor: isDark ? 'rgba(255,255,255,0.12)'
+                                             : 'rgba(15,22,35,0.15)' },
+                lataxis: { showgrid: true, dtick: 30,
+                           gridcolor: isDark ? 'rgba(255,255,255,0.12)'
+                                             : 'rgba(15,22,35,0.15)' },
+                bgcolor: 'rgba(0,0,0,0)',
+            },
             showlegend: false,
         };
         // Tau-cursor placeholder — starts empty, gets populated by
@@ -11798,7 +11848,8 @@
         Plotly.react(el,
                      [spaghetti, firstGenesis, meanLine, meanMarkers,
                       lonLabels, latLabels, tauCursor,
-                      tauDensity0, tauDensity1, tauDensity2, tauDensity3],
+                      tauDensity0, tauDensity1, tauDensity2, tauDensity3,
+                      insetMarker],
                      layout,
                      { responsive: true, displayModeBar: false });
     }
