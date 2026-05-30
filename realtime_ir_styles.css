@@ -1604,7 +1604,9 @@ html, body { margin: 0; padding: 0; }
    toggle so they stay reachable and stop covering the cards. */
 body:has(.basin-sidebar.open) #ir-legend-toggle,
 body:has(.basin-sidebar.open) #ir-labels-toggle,
-body:has(.basin-sidebar.open) #ir-grid-toggle {
+body:has(.basin-sidebar.open) #ir-grid-toggle,
+body:has(.basin-sidebar.open) #ir-obs-toggle,
+body:has(.basin-sidebar.open) #ir-obs-hint {
     left: 280px;
 }
 
@@ -1638,7 +1640,9 @@ body:has(.basin-sidebar.open) #ir-grid-toggle {
        panel is open instead. */
     body:has(.basin-sidebar.open) #ir-legend-toggle,
     body:has(.basin-sidebar.open) #ir-labels-toggle,
-    body:has(.basin-sidebar.open) #ir-grid-toggle {
+    body:has(.basin-sidebar.open) #ir-grid-toggle,
+    body:has(.basin-sidebar.open) #ir-obs-toggle,
+    body:has(.basin-sidebar.open) #ir-obs-hint {
         display: none;
     }
 }
@@ -2251,6 +2255,29 @@ body:has(.basin-sidebar.open) #ir-grid-toggle {
 .ir-grid-toggle-pos {
     top: 284px !important;
 }
+/* Surface Obs toggle — fifth in the stack, beneath Grid. */
+.ir-obs-toggle-pos {
+    top: 322px !important;
+}
+/* Surface Obs status hint — sits just below the Obs toggle, shows
+   "Zoom in…" gating prompt or the station count for the viewport. */
+.ir-obs-hint-pos {
+    position: fixed;
+    top: 358px;
+    left: 10px;
+    z-index: 600;
+    max-width: 180px;
+    padding: 3px 8px;
+    border-radius: 5px;
+    background: rgba(15, 22, 35, 0.72);
+    color: rgba(226, 232, 240, 0.92);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.66rem;
+    font-weight: 500;
+    pointer-events: none;
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+}
 /* Graticule labels — divIcon markers placed at gridline crossings on
    the RT global map. Mono font, light text with a dark halo so they
    read on both bright land and dark ocean basemap tiles. */
@@ -2481,6 +2508,11 @@ html:not([data-view="map"]) #ir-labels-toggle,
    silently toggles a graticule on the hidden global map. Treat it
    the same as Legend / Labels / Basins. */
 html:not([data-view="map"]) #ir-grid-toggle,
+/* The "◎ Obs" pill toggles the GLOBAL MAP's viewport surface-obs
+   overlay — same treatment as Grid so it doesn't float over other
+   RT tabs. */
+html:not([data-view="map"]) #ir-obs-toggle,
+html:not([data-view="map"]) #ir-obs-hint,
 html:not([data-view="map"]) #ir-legend,
 html:not([data-view="map"]) #basin-sidebar-toggle,
 html:not([data-view="map"]) #basin-sidebar,
@@ -2504,6 +2536,8 @@ html:not([data-view="map"]) #ir-global-env-cbars {
 body:has(#ir-detail[style*="block"]) #ir-legend-toggle,
 body:has(#ir-detail[style*="block"]) #ir-labels-toggle,
 body:has(#ir-detail[style*="block"]) #ir-grid-toggle,
+body:has(#ir-detail[style*="block"]) #ir-obs-toggle,
+body:has(#ir-detail[style*="block"]) #ir-obs-hint,
 body:has(#ir-detail[style*="block"]) #ir-legend,
 body:has(#ir-detail[style*="block"]) #basin-sidebar-toggle,
 body:has(#ir-detail[style*="block"]) #basin-sidebar,

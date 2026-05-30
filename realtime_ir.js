@@ -1882,6 +1882,16 @@
     var _surfaceObsLayer = null;
     var _surfaceObsAbortController = null;
 
+    // Global-map (viewport) surface-obs overlay — independent of the
+    // storm-card overlay above. Live METAR (land) + NDBC (marine) plots
+    // fetched for the current map bounds, zoom-gated + pixel-thinned.
+    var _rtObsOn = false;            // toggle state
+    var _rtObsLayer = null;          // L.layerGroup of station-plot markers
+    var _rtObsAbort = null;          // in-flight fetch AbortController
+    var _rtObsDebounce = null;       // moveend debounce timer
+    var _rtObsLastKey = '';          // last fetched bbox key (skip redundant pulls)
+    var _RT_OBS_MIN_ZOOM = 5;        // below this the world is too dense to plot
+
     function _kt(v) { return (v == null) ? null : Math.round(v); }
     function _cToF(c) { return (c == null) ? null : Math.round(c * 9/5 + 32); }
 
@@ -2067,6 +2077,156 @@
         var btn = document.getElementById('ir-detail-obs-toggle');
         if (btn) btn.classList.remove('active');
     }
+
+    // ── Global-map surface-obs overlay (viewport METAR + NDBC) ──────
+    // Mirrors the storm-card overlay but is driven by the live map
+    // bounds instead of a storm center. Zoom-gated so we never try to
+    // draw the whole planet; pixel-grid declutter keeps dense regions
+    // (e.g. CONUS airports) from stacking into mush.
+
+    function _rtObsSetHint(text) {
+        var el = document.getElementById('ir-obs-hint');
+        if (!el) {
+            if (!text) return;
+            el = document.createElement('div');
+            el.id = 'ir-obs-hint';
+            el.className = 'ir-obs-hint-pos';
+            document.body.appendChild(el);
+        }
+        el.textContent = text || '';
+        el.style.display = text ? '' : 'none';
+    }
+
+    // Keep only the richest ob within each ~52px pixel cell at the
+    // current zoom so plots never overlap into illegibility.
+    function _rtObsDeclutter(obs) {
+        if (!map || obs.length < 2) return obs;
+        var CELL = 52, kept = {}, out = [];
+        function richness(o) {
+            var s = 0;
+            if (o.pressure_hpa != null) s += 4;
+            if (o.wind_speed_kt != null) s += 2;
+            if (o.air_temp_c != null) s += 1;
+            if (o.source === 'NDBC') s += 1;
+            return s;
+        }
+        for (var i = 0; i < obs.length; i++) {
+            var ob = obs[i];
+            var pt;
+            try { pt = map.latLngToContainerPoint([ob.lat, ob.lon]); }
+            catch (e) { out.push(ob); continue; }
+            var key = Math.floor(pt.x / CELL) + ':' + Math.floor(pt.y / CELL);
+            var prev = kept[key];
+            if (prev === undefined) { kept[key] = out.length; out.push(ob); }
+            else if (richness(ob) > richness(out[prev])) { out[prev] = ob; }
+        }
+        return out;
+    }
+
+    function _rtObsRefresh() {
+        if (!_rtObsOn || !map) return;
+        var z = map.getZoom();
+        if (z < _RT_OBS_MIN_ZOOM) {
+            if (_rtObsLayer) { map.removeLayer(_rtObsLayer); _rtObsLayer = null; }
+            _rtObsLastKey = '';
+            _rtObsSetHint('Zoom in to see surface obs');
+            return;
+        }
+        var b = map.getBounds();
+        var n = Math.min(90, b.getNorth()), s = Math.max(-90, b.getSouth());
+        var e = b.getEast(), w = b.getWest();
+        // Dedupe identical viewports (rounded) to avoid redundant pulls.
+        var key = [z, n.toFixed(1), s.toFixed(1), e.toFixed(1), w.toFixed(1)].join(',');
+        if (key === _rtObsLastKey) return;
+        _rtObsLastKey = key;
+        _rtObsSetHint('Loading surface obs…');
+        if (_rtObsAbort) { try { _rtObsAbort.abort(); } catch (e2) {} }
+        _rtObsAbort = new AbortController();
+        var sig = _rtObsAbort.signal;
+        var url = API_BASE + '/ir-monitor/surface-obs/viewport?north=' +
+                  n.toFixed(3) + '&south=' + s.toFixed(3) +
+                  '&east=' + e.toFixed(3) + '&west=' + w.toFixed(3) +
+                  '&max_stations=500';
+        fetch(url, { signal: sig })
+            .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+            .then(function (data) {
+                if (!_rtObsOn) return;
+                var obs = (data && data.observations) || [];
+                var total = obs.length;
+                obs = _rtObsDeclutter(obs);
+                var lg = L.layerGroup();
+                for (var i = 0; i < obs.length; i++) {
+                    var ob = obs[i];
+                    var html = _renderStationPlot(ob);
+                    var lines = [];
+                    lines.push('<b>' + ob.id + '</b> · ' + ob.source);
+                    if (ob.wind_speed_kt != null && ob.wind_dir_deg != null) {
+                        lines.push('Wind: ' + Math.round(ob.wind_dir_deg) + '° @ ' +
+                                   Math.round(ob.wind_speed_kt) + ' kt' +
+                                   (ob.wind_gust_kt != null ?
+                                    ' (gusts ' + Math.round(ob.wind_gust_kt) + ')' : ''));
+                    }
+                    if (ob.air_temp_c != null) {
+                        lines.push('T: ' + ob.air_temp_c.toFixed(1) + '°C / ' +
+                                   _cToF(ob.air_temp_c) + '°F');
+                    }
+                    if (ob.dewpoint_c != null) lines.push('Td: ' + ob.dewpoint_c.toFixed(1) + '°C');
+                    if (ob.sst_c != null) lines.push('SST: ' + ob.sst_c.toFixed(1) + '°C');
+                    if (ob.pressure_hpa != null) lines.push('MSLP: ' + ob.pressure_hpa.toFixed(1) + ' hPa');
+                    if (ob.wave_height_m != null) lines.push('Waves: ' + ob.wave_height_m.toFixed(1) + ' m');
+                    if (ob.time_utc) lines.push('<i>' + ob.time_utc + '</i>');
+                    var marker = L.marker([ob.lat, ob.lon], {
+                        icon: L.divIcon({
+                            className: 'ir-stn-plot-icon',
+                            html: html,
+                            iconSize: [72, 56],
+                            iconAnchor: [36, 28],
+                        }),
+                        interactive: true, keyboard: false,
+                    });
+                    marker.bindTooltip(lines.join('<br>'), {
+                        sticky: true, direction: 'top', offset: [0, -10],
+                        className: 'ir-stn-plot-tooltip',
+                    });
+                    lg.addLayer(marker);
+                }
+                if (_rtObsLayer) { map.removeLayer(_rtObsLayer); }
+                _rtObsLayer = lg.addTo(map);
+                var hint = obs.length + ' obs';
+                if (obs.length < total) hint += ' (' + total + ' thinned)';
+                _rtObsSetHint(hint);
+            })
+            .catch(function (err) {
+                if (err && err.name === 'AbortError') return;
+                console.warn('[RT Monitor] viewport surface obs fetch failed:', err && err.message);
+                _rtObsSetHint('Surface obs unavailable');
+            });
+    }
+
+    function _rtObsOnMove() {
+        if (_rtObsDebounce) clearTimeout(_rtObsDebounce);
+        _rtObsDebounce = setTimeout(_rtObsRefresh, 350);
+    }
+
+    window._rtToggleSurfaceObs = function () {
+        var btn = document.getElementById('ir-obs-toggle');
+        if (!map) return;
+        _rtObsOn = !_rtObsOn;
+        if (btn) btn.classList.toggle('active', _rtObsOn);
+        _ga('rt_viewport_obs_toggle', { on: _rtObsOn });
+        if (_rtObsOn) {
+            map.on('moveend', _rtObsOnMove);
+            _rtObsLastKey = '';
+            _rtObsRefresh();
+        } else {
+            map.off('moveend', _rtObsOnMove);
+            if (_rtObsDebounce) { clearTimeout(_rtObsDebounce); _rtObsDebounce = null; }
+            if (_rtObsAbort) { try { _rtObsAbort.abort(); } catch (e) {} _rtObsAbort = null; }
+            if (_rtObsLayer) { map.removeLayer(_rtObsLayer); _rtObsLayer = null; }
+            _rtObsLastKey = '';
+            _rtObsSetHint('');
+        }
+    };
 
     function _rtToggleGraticule() {
         if (!map) return;
@@ -2742,6 +2902,27 @@
                 gtog.classList.toggle('active', !!_rtGraticule);
             });
             document.body.appendChild(gtog);
+        }
+
+        // Surface Obs toggle — fifth in the top-left stack, beneath
+        // Grid. Overlays live METAR (airports/land) + NDBC (marine
+        // buoy) station plots for the current viewport. Zoom-gated
+        // (≥5) so we never draw the whole planet; pixel-thinned so
+        // dense regions stay legible. Default OFF.
+        if (!document.getElementById('ir-obs-toggle')) {
+            var otog = document.createElement('button');
+            otog.id = 'ir-obs-toggle';
+            otog.className = 'ir-legend-toggle ir-obs-toggle-pos';
+            otog.type = 'button';
+            otog.title = 'Show / hide live surface observations — METAR ' +
+                         'airports/land + NDBC marine buoys — as conventional ' +
+                         'station plots (wind barb, temperature, dewpoint, ' +
+                         'pressure). Zoom in to regional scale to see them.';
+            otog.innerHTML = '◎ Obs';
+            otog.addEventListener('click', function () {
+                window._rtToggleSurfaceObs();
+            });
+            document.body.appendChild(otog);
         }
 
         // Add IR Tb colorbar to global map (bottom-left, above animation panel)

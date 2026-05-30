@@ -571,60 +571,6 @@ input[type="range"].ga-range::-moz-range-thumb {
     color: #ffffff;
 }
 
-/* Surface-obs overlay toggle + status hint */
-.ga-obs-toggle-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-top: 8px;
-}
-.ga-obs-toggle-btn {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    padding: 5px 10px;
-    border-radius: 6px;
-    border: 1px solid var(--border);
-    background: transparent;
-    color: var(--text-dim);
-    font-family: 'DM Sans', sans-serif;
-    font-size: 0.75rem;
-    cursor: pointer;
-    transition: all 0.15s ease;
-}
-.ga-obs-toggle-btn:hover {
-    border-color: var(--blue);
-    color: var(--text);
-}
-.ga-obs-toggle-btn.active {
-    background: var(--blue);
-    border-color: var(--blue);
-    color: #ffffff;
-}
-.ga-obs-hint {
-    font-family: 'DM Sans', sans-serif;
-    font-size: 0.7rem;
-    color: var(--text-dim);
-    white-space: nowrap;
-}
-
-/* Surface-obs station plots — SVG injected into a divIcon */
-.ga-stn-plot-icon {
-    background: transparent;
-    border: none;
-    pointer-events: auto;
-}
-.ga-stn-plot-tooltip {
-    font: 600 11px/1.35 'DM Sans', sans-serif;
-    background: rgba(15, 22, 35, 0.92);
-    color: #e2e8f0;
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 4px;
-    padding: 6px 8px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-}
-.ga-stn-plot-tooltip::before { display: none; }
-
 /* Floating map storm card */
 .map-storm-card {
     position: absolute;
