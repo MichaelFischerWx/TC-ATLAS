@@ -1371,9 +1371,21 @@ def _regrid_band_channels(ds_bt, ds_geo, channel_names: list,
     arrays = []
     used_names = []
     for name in channel_names:
-        if name in ds_bt.data_vars:
-            arrays.append(ds_bt[name].values.astype(np.float32))
-            used_names.append(name)
+        if name not in ds_bt.data_vars:
+            continue
+        arr = ds_bt[name].values.astype(np.float32)
+        # Drop a channel that's entirely fill/NaN (e.g. a pass that delivered
+        # 37H but no 37V). _regrid_swath_multi's validity mask is the AND across
+        # all channels, so an all-empty channel zeros the mask and sinks the
+        # whole band — including the single-pol product that doesn't use it.
+        # Leaving it out lets 37H still render; 37color/37V fail cleanly
+        # downstream (channel absent from the cache → ValueError in render).
+        if not np.isfinite(arr).any():
+            logger.info("%s channel %s entirely empty — dropping from regrid",
+                        sensor, name)
+            continue
+        arrays.append(arr)
+        used_names.append(name)
     if not arrays:
         raise ValueError(
             f"None of channels {channel_names} present in dataset for {sensor}")
@@ -1401,9 +1413,15 @@ def _storm_crops_for_band(sub_bt, sub_geo, band_channels: list, sensor: str,
     arrays = []
     used_names = []
     for name in band_channels:
-        if name in sub_bt.data_vars:
-            arrays.append(sub_bt[name].values.astype(np.float32))
-            used_names.append(name)
+        if name not in sub_bt.data_vars:
+            continue
+        arr = sub_bt[name].values.astype(np.float32)
+        # Skip an all-empty pol so it can't poison the window's AND-mask and
+        # sink the single-pol crop — see _regrid_band_channels.
+        if not np.isfinite(arr).any():
+            continue
+        arrays.append(arr)
+        used_names.append(name)
     if not arrays:
         return {}
     grid_res_deg = _crop_grid_res_for(sensor, band)
