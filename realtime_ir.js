@@ -573,6 +573,15 @@
     var _rtGenesisVisible = false;
     var _rtGenesisLoading = false;
     var _rtGenesisLayers = [];
+    // Run-to-run cycle trend. _genesisCycleList holds the recent published
+    // DeepMind cycles (freshest first) from /weatherlab-genesis-cycles;
+    // _genesisActiveCycle is the init_time the user has stepped back to
+    // (null = follow the latest cycle, the default). The on-map stepper
+    // reads both; _loadGenesis appends ?init_time when a past cycle is
+    // pinned. Degrades gracefully: if the cycles endpoint isn't deployed
+    // yet, the list stays empty and the stepper hides.
+    var _genesisCycleList = [];
+    var _genesisActiveCycle = null;
     // init_time of the cycle whose markers we last played the pop-in
     // entrance animation for. Keyed by init so the *first* render that
     // draws markers for a new cycle animates them (catching the user's
@@ -9481,7 +9490,12 @@
         // server's uncapped cluster probabilities. We draw the markers now
         // but hold the numeric formation probability so it fills in once
         // rather than visibly changing when the cluster fetch lands.
-        var probsPending = (_genesisClusterMethod === 'tcatlas')
+        // When the user has stepped back to a past cycle, the server's
+        // uncapped cluster index (which only covers the latest run) will
+        // never match — so don't wait on it. The client-side TCA fractions
+        // computed from the pinned cycle's capped data are what we show.
+        var probsPending = !_genesisActiveCycle
+            && (_genesisClusterMethod === 'tcatlas')
             && !(_rtGenesisClusters
                  && _rtGenesisData
                  && _rtGenesisClusters.init_time === _rtGenesisData.init_time
@@ -9583,8 +9597,15 @@
                 : '<br>Formation probability: <strong>' + pctText + '</strong>'
                     + ' <span style="opacity:0.7;">(' + d.total + ' of '
                     + _GENESIS_ENSEMBLE_SIZE + ' members)</span>';
+            var gInit = (_rtGenesisData && _rtGenesisData.init_time) || '';
+            var initLine = gInit
+                ? '<br><span style="opacity:0.75; font-size:0.85em;">Init: '
+                    + gInit.slice(0, 4) + '-' + gInit.slice(4, 6) + '-'
+                    + gInit.slice(6, 8) + ' ' + gInit.slice(8, 10) + 'Z</span>'
+                : '';
             var tip = '<div style="min-width:180px;">'
                 + '<b>' + d.displayLabel + '</b>'
+                + initLine
                 + probLine
                 + '<br>Predicted peak Vmax: <strong style="color:' + style.bold
                 + ';">' + d.peakWind.toFixed(0) + ' kt · ' + style.cat
@@ -9862,6 +9883,17 @@
               // storm panel never has to compute (formation probability,
               // P10/P50/P90 peak Vmax, most-likely genesis time).
               '<div id="rt-genesis-modal-stats" class="rt-genesis-stat-row"></div>' +
+              // Run-to-run trend sparkline — how this disturbance's
+              // formation probability + predicted peak Vmax have shifted
+              // across the last few DeepMind cycles. Hidden until the
+              // /weatherlab-genesis-trend fetch returns ≥2 matched runs.
+              '<div id="rt-genesis-modal-trend" class="rt-genesis-trend-wrap" style="display:none;">' +
+                '<div class="rt-genesis-trend-head">' +
+                  '<span class="rt-genesis-trend-title">Run-to-run trend</span>' +
+                  '<span id="rt-genesis-trend-note" class="rt-genesis-trend-note"></span>' +
+                '</div>' +
+                '<div id="rt-genesis-modal-trend-chart" style="width:100%; height:140px;"></div>' +
+              '</div>' +
               // Sticky jump-nav — makes the existence of the intensity
               // envelope and genesis-time histogram discoverable without
               // relying on the scrollbar (the panels live below the
@@ -10296,6 +10328,7 @@
         subEl.innerHTML = subParts.join(' · ');
         _startGenesisCycleEta(json.next_cycle_eta_hours, json.fetched_at);
 
+        _renderGenesisTrend(json, stats);
         _renderGenesisMap(memberKeys, members, mean, stats);
         _renderGenesisIntensity(memberKeys, members, mean, stats);
         _renderGenesisTimeHistogram(stats);
@@ -10819,9 +10852,142 @@
         [83/200,   '#fb923c'],   // C2
         [96/200,   '#ef4444'],   // C3
         [113/200,  '#c430a0'],   // C4
-        [137/200,  '#8b5cf6'],   // C5
-        [1,        '#8b5cf6'],
+        [137/200,  '#8b5cf6'],   // C5 (137 kt) — Saffir–Simpson ends here
+        // The official scale stops at C5, but FNV3 members can forecast
+        // far stronger (Patricia peaked ~185 kt). Continue the ramp into
+        // magenta → near-white so an "off-the-charts" 160-185+ kt member
+        // reads as visibly more extreme than a "merely" C5 storm instead
+        // of saturating at one flat purple.
+        [160/200,  '#d946ef'],   // beyond C5 — fuchsia
+        [180/200,  '#f0abfc'],   // extreme — pale magenta
+        [1,        '#fdf4ff'],   // 200 kt — near-white (off the charts)
     ];
+
+    /* Run-to-run trend sparkline.
+       Fetches /weatherlab-genesis-trend for the clicked disturbance's
+       genesis-density anchor (peak_lat/peak_lon — the only run-to-run-
+       stable handle, since D-numbers are re-ranked each cycle) and draws
+       a compact dual-axis chart: formation probability (bars, left axis)
+       and predicted peak Vmax (line, right axis) across the last ~4
+       DeepMind cycles. Degrades silently: if the endpoint isn't deployed
+       or fewer than 2 cycles match, the panel stays hidden. */
+    function _renderGenesisTrend(json, stats) {
+        var wrap = document.getElementById('rt-genesis-modal-trend');
+        var el = document.getElementById('rt-genesis-modal-trend-chart');
+        var noteEl = document.getElementById('rt-genesis-trend-note');
+        if (!wrap || !el) return;
+        wrap.style.display = 'none';   // default hidden until data lands
+
+        // Resolve the genesis-density anchor for this disturbance.
+        var meta = _genesisDisturbanceMeta[json && json.track_id] || {};
+        var aLat = (meta.peakLat != null) ? meta.peakLat : null;
+        var aLon = (meta.peakLon != null) ? meta.peakLon : null;
+        if (aLat == null || aLon == null) {
+            // Fall back to the ensemble-mean's first 34-kt (or first) point.
+            var mpts = (json && json.ensemble_mean && json.ensemble_mean.points) || [];
+            var anchorPt = null;
+            for (var i = 0; i < mpts.length; i++) {
+                if (mpts[i].wind != null && mpts[i].wind >= 34
+                        && mpts[i].lat != null && mpts[i].lon != null) {
+                    anchorPt = mpts[i]; break;
+                }
+            }
+            if (!anchorPt && mpts.length) anchorPt = mpts[0];
+            if (anchorPt) { aLat = anchorPt.lat; aLon = anchorPt.lon; }
+        }
+        if (aLat == null || aLon == null) return;   // no anchor → skip
+
+        // Guard against a stale response landing after the user has
+        // clicked through to a different disturbance.
+        var reqTrackId = json && json.track_id;
+        wrap.dataset.trackId = reqTrackId || '';
+        var loadedInit = (json && json.init_time) || '';
+
+        fetch(API_BASE + '/ir-monitor/weatherlab-genesis-trend'
+                + '?lat=' + encodeURIComponent(aLat)
+                + '&lon=' + encodeURIComponent(aLon)
+                + '&count=4', { cache: 'no-store' })
+            .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+            .then(function (data) {
+                if (wrap.dataset.trackId !== (reqTrackId || '')) return;  // stale
+                _drawGenesisTrend(data, loadedInit);
+            })
+            .catch(function () { /* endpoint absent or failed — stay hidden */ });
+    }
+
+    function _drawGenesisTrend(data, loadedInit) {
+        var wrap = document.getElementById('rt-genesis-modal-trend');
+        var el = document.getElementById('rt-genesis-modal-trend-chart');
+        var noteEl = document.getElementById('rt-genesis-trend-note');
+        if (!wrap || !el || typeof Plotly === 'undefined') return;
+        var raw = (data && data.trend) || [];
+        // Oldest → newest, left to right (API returns freshest-first).
+        var trend = raw.slice().reverse();
+        var nMatched = trend.filter(function (t) { return t.matched; }).length;
+        if (nMatched < 2) return;   // not enough history to show a trend
+
+        var theme = _genesisTheme();
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var grid = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(15,22,35,0.06)';
+
+        var xLabels = [], formPct = [], peakV = [], barColors = [], custom = [];
+        for (var i = 0; i < trend.length; i++) {
+            var t = trend[i];
+            var it = t.init_time || '';
+            var lbl = (it.length >= 10)
+                ? it.slice(4, 6) + '/' + it.slice(6, 8) + ' ' + it.slice(8, 10) + 'Z'
+                : it;
+            var isLoaded = (it === loadedInit);
+            xLabels.push(lbl + (isLoaded ? ' ★' : ''));
+            formPct.push(t.matched ? +(t.formation_prob * 100).toFixed(0) : null);
+            peakV.push(t.matched ? t.peak_wind : null);
+            barColors.push(isLoaded ? '#00e5ff' : 'rgba(0,229,255,0.42)');
+            custom.push(t.matched ? (t.display_short || '') : '—');
+        }
+
+        var barTrace = {
+            type: 'bar', x: xLabels, y: formPct, name: 'Formation %',
+            yaxis: 'y', marker: { color: barColors },
+            customdata: custom,
+            hovertemplate: '%{x}<br>Formation: %{y}%<br>(%{customdata})<extra></extra>',
+        };
+        var lineTrace = {
+            type: 'scatter', mode: 'lines+markers', x: xLabels, y: peakV,
+            name: 'Peak Vmax', yaxis: 'y2', connectgaps: true,
+            line: { color: '#f97316', width: 2 },
+            marker: { color: '#f97316', size: 6 },
+            hovertemplate: '%{x}<br>Peak Vmax: %{y} kt<extra></extra>',
+        };
+
+        var layout = Object.assign({}, theme, {
+            margin: { l: 40, r: 44, t: 8, b: 30 },
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: 'rgba(0,0,0,0)',
+            height: 140,
+            showlegend: false,
+            bargap: 0.45,
+            xaxis: { tickfont: { size: 9.5 }, gridcolor: grid, fixedrange: true },
+            yaxis: {
+                title: { text: 'Form %', font: { size: 9.5 } },
+                tickfont: { size: 9 }, range: [0, 100], gridcolor: grid,
+                fixedrange: true,
+            },
+            yaxis2: {
+                title: { text: 'Vmax', font: { size: 9.5 } },
+                tickfont: { size: 9 }, overlaying: 'y', side: 'right',
+                rangemode: 'tozero', showgrid: false, fixedrange: true,
+            },
+        });
+
+        Plotly.react(el, [barTrace, lineTrace], layout,
+                     { responsive: true, displayModeBar: false });
+        if (noteEl) {
+            noteEl.textContent = '★ = loaded run · formation % (bars) and '
+                + 'peak Vmax (line) across the last ' + trend.length
+                + ' cycles';
+        }
+        wrap.style.display = '';
+    }
 
     /* Track map (figure 1).
        The TC-ATLAS visual: thin orange spaghetti polylines (matching
@@ -10934,12 +11100,14 @@
                 colorbar: {
                     title: { text: 'Vmax (kt)', side: 'right',
                              font: { size: 11 } },
-                    thickness: 14, len: 0.92,
+                    thickness: 14, len: 0.7,
                     // Tick at every category boundary; "34 TS" reads as a
                     // single line so the bar doesn't need two-row spacing.
-                    tickvals: [0, 34, 64, 83, 96, 113, 137],
+                    // The 170+ tick anchors the beyond-C5 extreme ramp so
+                    // the magenta→white top doesn't read as unlabeled.
+                    tickvals: [0, 34, 64, 83, 96, 113, 137, 170],
                     ticktext: ['0', '34 TS', '64 C1', '83 C2',
-                               '96 C3', '113 C4', '137 C5'],
+                               '96 C3', '113 C4', '137 C5', '170+'],
                     tickfont: { size: 11 },
                     ticklen: 4,
                     outlinewidth: 0,
@@ -12114,6 +12282,54 @@
         return { data: data, layout: layout };
     }
 
+    function _dataURLToBlob(dataURL) {
+        var parts = dataURL.split(',');
+        var mime = (parts[0].match(/:(.*?);/) || [])[1] || 'image/png';
+        var bin = atob(parts[1]);
+        var arr = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+        return new Blob([arr], { type: mime });
+    }
+
+    // Deliver a generated PNG to the user. On mobile the <a download> +
+    // click() trick is unreliable — iOS Safari ignores the download
+    // attribute and the image either navigates away or never reaches the
+    // camera roll. Prefer the Web Share API (native "Save Image" sheet)
+    // when the device can share files; fall back to a download anchor on
+    // desktop, and to opening the image in a new tab where even that is
+    // unsupported (older iOS) so the user can long-press to save.
+    function _saveImageBlob(blob, filename) {
+        var file = null;
+        try { file = new File([blob], filename, { type: 'image/png' }); }
+        catch (e) { /* File ctor unsupported — fall through to download */ }
+        if (file && navigator.canShare && typeof navigator.share === 'function'
+                && navigator.canShare({ files: [file] })) {
+            navigator.share({ files: [file] }).catch(function (err) {
+                // User dismissed the sheet — don't second-guess them.
+                if (err && (err.name === 'AbortError'
+                            || err.name === 'NotAllowedError')) return;
+                _downloadOrOpenBlob(blob, filename);
+            });
+            return;
+        }
+        _downloadOrOpenBlob(blob, filename);
+    }
+
+    function _downloadOrOpenBlob(blob, filename) {
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        if ('download' in a) {
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        } else {
+            window.open(url, '_blank');
+        }
+        setTimeout(function () { URL.revokeObjectURL(url); }, 5000);
+    }
+
     // Export a 3-panel composite (map + intensity + genesis-time
     // histogram) as a single PNG. Uses Plotly.toImage for each subplot
     // then stitches them on a canvas with a header strip showing the
@@ -12255,13 +12471,8 @@
                 var slug = title.replace(/[^a-z0-9]+/gi, '-')
                                 .replace(/^-+|-+$/g, '').toLowerCase()
                                 .slice(0, 40) || 'summary';
-                var a = document.createElement('a');
-                a.href = URL.createObjectURL(blob);
-                a.download = 'tc-atlas-genesis-' + slug + '-' + dateISO + '.png';
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                setTimeout(function () { URL.revokeObjectURL(a.href); }, 1500);
+                _saveImageBlob(blob,
+                    'tc-atlas-genesis-' + slug + '-' + dateISO + '.png');
                 if (btn) { btn.textContent = origText; btn.disabled = false; }
                 restoreMode();
                 _ga('rt_genesis_save_summary_png');
@@ -12299,12 +12510,8 @@
             width: Math.round(rect.width * 2),
             height: Math.round(rect.height * 2),
         }).then(function (url) {
-            var a = document.createElement('a');
-            a.href = url;
-            a.download = 'tc-atlas-genesis-' + slug + '-' + dateISO + '.png';
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
+            _saveImageBlob(_dataURLToBlob(url),
+                'tc-atlas-genesis-' + slug + '-' + dateISO + '.png');
         }).catch(function () { /* silent */ });
         _ga('rt_genesis_save_png', { chart: slug });
     }
@@ -12332,6 +12539,10 @@
     // RAM after the first hit each cycle.
     function _loadGenesisClusters() {
         if (_rtGenesisClustersLoading) return;
+        // The cluster index is computed server-side for the LATEST cycle
+        // only. When the user has stepped back to a past run, skip it —
+        // _renderGenesis falls back to client-side TCA on the pinned data.
+        if (_genesisActiveCycle) return;
         var curParams = _genesisCurrentClusterParams();
         // The clusters endpoint resolves the latest cycle itself, so it
         // doesn't need _rtGenesisData — we can fetch it in parallel with the
@@ -12373,6 +12584,112 @@
             .finally(function () {
                 _rtGenesisClustersLoading = false;
             });
+    }
+
+    // ── Run-to-run cycle trend: stepper across recent DeepMind runs ──
+    var _genesisCycleListLoading = false;
+
+    function _fmtGenesisInit(it) {
+        if (!it || it.length < 10) return '(unknown)';
+        return it.slice(0, 4) + '-' + it.slice(4, 6) + '-' + it.slice(6, 8)
+            + ' ' + it.slice(8, 10) + 'Z';
+    }
+
+    // Fetch the list of recent published cycles for the stepper. Degrades
+    // silently: if the endpoint isn't deployed (older backend), the list
+    // stays empty and the stepper hides — the latest-cycle path is intact.
+    function _loadGenesisCycleList() {
+        if (_genesisCycleListLoading) return;
+        _genesisCycleListLoading = true;
+        fetch(API_BASE + '/ir-monitor/weatherlab-genesis-cycles?count=4',
+              { cache: 'no-store' })
+            .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+            .then(function (json) {
+                _genesisCycleList = (json && json.cycles) || [];
+                // If the pinned cycle has aged out of the window, fall back
+                // to following the latest again so the stepper stays valid.
+                if (_genesisActiveCycle && !_genesisCycleList.some(function (c) {
+                    return c.init_time === _genesisActiveCycle;
+                })) {
+                    _genesisActiveCycle = null;
+                }
+                _updateGenesisCycleBar();
+            })
+            .catch(function () {
+                _genesisCycleList = [];
+                _updateGenesisCycleBar();
+            })
+            .finally(function () { _genesisCycleListLoading = false; });
+    }
+
+    // Step the displayed cycle. dir < 0 → older run, dir > 0 → newer run.
+    // List is freshest-first, so older = higher index. Reaching index 0
+    // unpins (resumes following the latest, with auto-repoll).
+    function _genesisStepCycle(dir) {
+        if (!_genesisCycleList.length) return;
+        var curInit = _genesisActiveCycle || _genesisCycleList[0].init_time;
+        var idx = _genesisCycleList.findIndex(function (c) {
+            return c.init_time === curInit;
+        });
+        if (idx < 0) idx = 0;
+        var next = idx + (dir < 0 ? 1 : -1);
+        next = Math.max(0, Math.min(_genesisCycleList.length - 1, next));
+        if (next === idx) return;
+        _genesisActiveCycle = (next === 0) ? null
+            : _genesisCycleList[next].init_time;
+        _updateGenesisCycleBar();
+        _loadGenesis();   // re-fetch + re-render the selected cycle
+        _ga('rt_genesis_cycle_step', {
+            dir: dir < 0 ? 'older' : 'newer',
+            init: _genesisActiveCycle || _genesisCycleList[0].init_time,
+            pinned: !!_genesisActiveCycle,
+        });
+    }
+
+    // Create (once) and update the floating cycle stepper. Shown only
+    // when the cyclogenesis layer is active and we have a cycle list.
+    function _updateGenesisCycleBar() {
+        var bar = document.getElementById('ir-genesis-cycle-bar');
+        var show = _rtGenesisVisible && _genesisCycleList.length > 1;
+        if (!bar) {
+            if (!show) return;
+            bar = document.createElement('div');
+            bar.id = 'ir-genesis-cycle-bar';
+            bar.className = 'ir-genesis-cycle-bar';
+            bar.innerHTML =
+                '<button type="button" class="ir-gen-cyc-btn" data-dir="older"'
+                + ' title="Older DeepMind run">◀</button>'
+                + '<div class="ir-gen-cyc-label">'
+                + '<span class="ir-gen-cyc-title">DeepMind run</span>'
+                + '<span class="ir-gen-cyc-init"></span></div>'
+                + '<button type="button" class="ir-gen-cyc-btn" data-dir="newer"'
+                + ' title="Newer DeepMind run">▶</button>';
+            bar.querySelector('[data-dir="older"]')
+                .addEventListener('click', function () { _genesisStepCycle(-1); });
+            bar.querySelector('[data-dir="newer"]')
+                .addEventListener('click', function () { _genesisStepCycle(1); });
+            document.body.appendChild(bar);
+        }
+        bar.style.display = show ? '' : 'none';
+        if (!show) return;
+
+        var list = _genesisCycleList;
+        var curInit = _genesisActiveCycle || list[0].init_time;
+        var idx = list.findIndex(function (c) { return c.init_time === curInit; });
+        if (idx < 0) idx = 0;
+        var isLatest = (idx === 0);
+        var cyc = list[idx] || {};
+        var initEl = bar.querySelector('.ir-gen-cyc-init');
+        initEl.textContent = _fmtGenesisInit(curInit)
+            + (isLatest ? ' · latest' : '')
+            + (cyc.n_tracks != null
+                ? ' · ' + cyc.n_tracks + ' track' + (cyc.n_tracks === 1 ? '' : 's')
+                : '');
+        var older = bar.querySelector('[data-dir="older"]');
+        var newer = bar.querySelector('[data-dir="newer"]');
+        older.disabled = (idx >= list.length - 1);
+        newer.disabled = (idx <= 0);
+        bar.classList.toggle('is-pinned', !isLatest);
     }
 
     // Transient on-map toast announcing that cyclogenesis disturbances
@@ -12447,7 +12764,13 @@
         // shows real probabilities instead of the capped estimate.
         _loadGenesisClusters();
 
-        fetch(API_BASE + '/ir-monitor/weatherlab-genesis', { cache: 'no-store' })
+        // Keep the cycle list fresh so the stepper can reach newly-published
+        // runs. Independent of the main fetch; failure just hides the stepper.
+        _loadGenesisCycleList();
+
+        var _genQs = _genesisActiveCycle
+            ? '?init_time=' + encodeURIComponent(_genesisActiveCycle) : '';
+        fetch(API_BASE + '/ir-monitor/weatherlab-genesis' + _genQs, { cache: 'no-store' })
             .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
             .then(function (data) {
                 var newInit = data && data.init_time;
@@ -12547,6 +12870,7 @@
             }
             _syncStormLabelVisibility();
         }
+        _updateGenesisCycleBar();
         if (typeof _refreshLayersCount === 'function') _refreshLayersCount();
     }
     window.toggleGenesis = toggleGenesis;

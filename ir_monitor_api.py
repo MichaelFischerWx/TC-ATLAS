@@ -6566,6 +6566,16 @@ def _genesis_cycle_dt(date_str: str, hour_str: str):
     )
 
 
+def _genesis_init_to_cycle(init_time: str):
+    """Parse a `YYYYMMDDHH` init string into `(date_str, hour_str)`.
+    Returns `(None, None)` if malformed. Used by the cycle-trend toggle
+    so the global endpoint can serve a specific past DeepMind cycle."""
+    s = (init_time or "").strip()
+    if len(s) != 10 or not s.isdigit():
+        return None, None
+    return f"{s[:4]}-{s[4:6]}-{s[6:8]}", s[8:10]
+
+
 def _genesis_candidates(now=None, days_back: int = 2, min_maturity_h: float = None) -> list:
     """Ordered list of `(date_str, hour_str)` cycles to probe, freshest
     first. Skips cycles too young to plausibly be published (saves a 60-s
@@ -6960,7 +6970,7 @@ def start_genesis_warmup():
 
 
 @router.get("/weatherlab-genesis")
-def get_weatherlab_genesis(max_members: int = 100):
+def get_weatherlab_genesis(max_members: int = 100, init_time: str = None):
     """FNV3 LARGE_ENSEMBLE cyclogenesis: all 1000-member TC predictions
     (including pre-genesis disturbances) for the latest available init.
 
@@ -6968,15 +6978,29 @@ def get_weatherlab_genesis(max_members: int = 100):
     return — full payload is ~10 MB for ~30 tracks × 1000 samples and
     rendering 30k polylines tanks Leaflet performance. The ensemble
     mean is always returned in full.
+
+    `init_time` (YYYYMMDDHH) pins the response to a specific past cycle
+    so the frontend can step through recent runs (run-to-run trend). When
+    omitted, the latest published cycle is resolved as before.
     """
     now = _dt.now(timezone.utc)
-    used_date, used_hour, data = _resolve_latest_genesis_cycle(require_data=True)
+    if init_time:
+        req_date, req_hour = _genesis_init_to_cycle(init_time)
+        if req_date is None:
+            raise HTTPException(
+                status_code=400,
+                detail="init_time must be 10 digits (YYYYMMDDHH)")
+        data = _fetch_weatherlab_genesis_csv(req_date, req_hour)
+        used_date, used_hour = req_date, req_hour
+    else:
+        used_date, used_hour, data = _resolve_latest_genesis_cycle(
+            require_data=True)
 
     if data is None:
         return JSONResponse(
             content={
                 "model": "DeepMind FNV3 LARGE_ENSEMBLE",
-                "init_time": None,
+                "init_time": init_time if init_time else None,
                 "tracks": [],
                 "n_tracks": 0,
                 "cycle_age_hours": None,
@@ -7031,6 +7055,117 @@ def get_weatherlab_genesis(max_members: int = 100):
             "fetched_at": now.isoformat(),
         },
         headers={"Cache-Control": f"public, max-age={cache_max_age}"},
+    )
+
+
+@router.get("/weatherlab-genesis-cycles")
+def get_weatherlab_genesis_cycles(count: int = 4):
+    """List the most recent published genesis cycles (freshest first) so
+    the frontend can offer a cycle picker for run-to-run trend comparison.
+
+    Each entry: `{init_time (YYYYMMDDHH), age_hours, n_tracks}`. Probes the
+    maturity-gated candidate list and reuses the per-cycle CSV cache, so
+    steady state is dict lookups; a cold instance pays the download for up
+    to `count` cycles once, after which they're warm (the parse cache also
+    caps at ~4, matching the default window).
+
+    Hyphenated path (not `/weatherlab-genesis/cycles`) so it doesn't get
+    swallowed by the `/weatherlab-genesis/{track_id}` route.
+    """
+    now = _dt.now(timezone.utc)
+    count = max(1, min(int(count or 4), 8))
+    cycles = []
+    for date_str, hour_str in _genesis_candidates(now=now):
+        d = _fetch_weatherlab_genesis_csv(date_str, hour_str)
+        if d is None:
+            continue   # not published (or fetch failed) — skip, keep looking
+        cycle_dt = _genesis_cycle_dt(date_str, hour_str)
+        cycles.append({
+            "init_time": date_str.replace("-", "") + hour_str,
+            "age_hours": round((now - cycle_dt).total_seconds() / 3600.0, 2),
+            "n_tracks": len(d),
+        })
+        if len(cycles) >= count:
+            break
+    return JSONResponse(
+        content={"cycles": cycles, "n": len(cycles)},
+        headers={"Cache-Control": "public, max-age=300"},
+    )
+
+
+@router.get("/weatherlab-genesis-trend")
+def get_weatherlab_genesis_trend(
+    lat: float,
+    lon: float,
+    count: int = 4,
+    match_radius_km: float = 800.0,
+    grid_deg: float = 3.0,
+    peak_min_members: int = 8,
+    assign_radius_km: float = 750.0,
+    time_window_h: float = 48.0,
+    cluster_min_members: int = 25,
+):
+    """Run-to-run trend for ONE disturbance: for each of the last `count`
+    published cycles, find the TC-ATLAS cluster whose density-peak genesis
+    location is nearest the anchor (lat, lon) within `match_radius_km`, and
+    return its formation probability + predicted peak Vmax. Lets the detail
+    modal draw a sparkline of how the forecast for this system has trended.
+
+    The anchor is the clicked disturbance's `peak_lat`/`peak_lon` (the
+    genesis-density cell), which is the most run-to-run-stable handle on a
+    physical system — D-numbers are re-ranked every cycle, so they can't be
+    used to follow a disturbance across runs.
+
+    Each entry (freshest first):
+      `{init_time, age_hours, matched, dist_km, formation_prob, peak_wind,
+        peak_tau, display_short}`. Unmatched cycles still appear with null
+    metrics so a gap reads as 'this run didn't forecast this system'.
+
+    Hyphenated path so it isn't swallowed by `/weatherlab-genesis/{track_id}`.
+    """
+    now = _dt.now(timezone.utc)
+    count = max(1, min(int(count or 4), 8))
+    trend = []
+    n_with_data = 0
+    for date_str, hour_str in _genesis_candidates(now=now):
+        clusters = _tca_clusters_for_cycle(
+            date_str, hour_str, grid_deg, peak_min_members,
+            assign_radius_km, time_window_h, cluster_min_members)
+        if clusters is None:
+            continue   # cycle not published — skip, keep looking
+        n_with_data += 1
+        cycle_dt = _genesis_cycle_dt(date_str, hour_str)
+        best = None
+        best_d = float("inf")
+        for c in clusters:
+            if c.get("peak_lat") is None or c.get("peak_lon") is None:
+                continue
+            d = _tca_haversine_km(lat, lon, c["peak_lat"], c["peak_lon"])
+            if d < best_d:
+                best_d = d
+                best = c
+        matched = best is not None and best_d <= match_radius_km
+        trend.append({
+            "init_time": date_str.replace("-", "") + hour_str,
+            "age_hours": round((now - cycle_dt).total_seconds() / 3600.0, 2),
+            "matched": matched,
+            "dist_km": round(best_d, 1) if best is not None else None,
+            "formation_prob": best["fraction"] if matched else None,
+            "peak_wind": best["peak_wind"] if matched else None,
+            "peak_tau": best["peak_tau"] if matched else None,
+            "display_short": best["display_short"] if matched else None,
+        })
+        if n_with_data >= count:
+            break
+    return JSONResponse(
+        content={
+            "model": "DeepMind FNV3 LARGE_ENSEMBLE",
+            "anchor": {"lat": lat, "lon": lon},
+            "match_radius_km": match_radius_km,
+            "trend": trend,
+            "n": len(trend),
+        },
+        headers={"Cache-Control": "public, max-age=300"},
     )
 
 
@@ -7395,6 +7530,42 @@ def _tca_get_or_compute_clusters(grid_deg, peak_min_members,
                         key=lambda kv: kv[1]["ts"])[0][0]
         _TCA_CLUSTER_CACHE.pop(oldest, None)
     return init_time, params, clusters, (used_date, used_hour)
+
+
+def _tca_clusters_for_cycle(date_str, hour_str, grid_deg, peak_min_members,
+                            assign_radius_km, time_window_h,
+                            cluster_min_members):
+    """Like `_tca_get_or_compute_clusters` but for a SPECIFIC (already-
+    resolved) cycle rather than 'the latest'. Shares the same
+    `_TCA_CLUSTER_CACHE` so the run-to-run trend endpoint reuses the
+    cluster set the global index already computed for the current cycle,
+    and only pays compute on the older cycles. Returns the cluster list
+    (with members) or None if the cycle has no data."""
+    data = _fetch_weatherlab_genesis_csv(date_str, hour_str)
+    if data is None:
+        return None
+    init_time = date_str.replace("-", "") + hour_str
+    params = (round(grid_deg, 3), int(peak_min_members),
+              round(assign_radius_km, 2), round(time_window_h, 2),
+              int(cluster_min_members))
+    cache_key = (init_time, params)
+    cached = _TCA_CLUSTER_CACHE.get(cache_key)
+    if cached and (time.time() - cached["ts"]) < _TCA_CLUSTER_TTL:
+        return cached["clusters"]
+    clusters = _tca_compute_clusters(
+        data,
+        grid_deg=grid_deg,
+        peak_min_members=peak_min_members,
+        assign_radius_km=assign_radius_km,
+        time_window_h=time_window_h,
+        cluster_min_members=cluster_min_members,
+    )
+    _TCA_CLUSTER_CACHE[cache_key] = {"clusters": clusters, "ts": time.time()}
+    if len(_TCA_CLUSTER_CACHE) > _TCA_CLUSTER_CACHE_MAX:
+        oldest = sorted(_TCA_CLUSTER_CACHE.items(),
+                        key=lambda kv: kv[1]["ts"])[0][0]
+        _TCA_CLUSTER_CACHE.pop(oldest, None)
+    return clusters
 
 
 def _tca_cluster_index_view(c):

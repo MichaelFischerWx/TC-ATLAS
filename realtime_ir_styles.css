@@ -1598,6 +1598,16 @@ html, body { margin: 0; padding: 0; }
     left: 280px;
 }
 
+/* The Legend/Labels/Grid pills sit at z-index 600 (above the 270-px
+   sidebar at z-index 500), so without this they render on top of the
+   basin cards when the panel opens. Shift them right alongside the
+   toggle so they stay reachable and stop covering the cards. */
+body:has(.basin-sidebar.open) #ir-legend-toggle,
+body:has(.basin-sidebar.open) #ir-labels-toggle,
+body:has(.basin-sidebar.open) #ir-grid-toggle {
+    left: 280px;
+}
+
 /* ── Mobile: hide sidebar, show as overlay ───────────────────── */
 @media (max-width: 768px) {
     .basin-sidebar {
@@ -1622,6 +1632,14 @@ html, body { margin: 0; padding: 0; }
     }
     .basin-sidebar-toggle.active {
         left: 10px;
+    }
+    /* Full-width overlay on mobile — the 280-px desktop shift would push
+       these off-screen, so hide the map-control pills while the basin
+       panel is open instead. */
+    body:has(.basin-sidebar.open) #ir-legend-toggle,
+    body:has(.basin-sidebar.open) #ir-labels-toggle,
+    body:has(.basin-sidebar.open) #ir-grid-toggle {
+        display: none;
     }
 }
 
@@ -3207,6 +3225,76 @@ body:has(#ir-detail[style*="block"]) #ir-global-env-cbars {
     .rt-gen-toast, .rt-gen-toast-dot { animation: none; }
 }
 
+/* ── Run-to-run cycle stepper for the cyclogenesis layer ──
+   Floating control letting the user page back through the last few
+   DeepMind runs to see how the disturbance forecast has trended.
+   Bottom-center keeps it clear of the arrival toast (top-center),
+   the basin sidebar (left), and the map legend (bottom-right). */
+.ir-genesis-cycle-bar {
+    position: fixed;
+    bottom: 40px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 750;
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    padding: 4px;
+    border-radius: 9px;
+    background: rgba(15, 23, 42, 0.94);
+    border: 1px solid rgba(0, 229, 255, 0.35);
+    box-shadow: 0 6px 22px rgba(0, 0, 0, 0.45);
+    color: #e2e8f0;
+    font-family: 'DM Sans', system-ui, sans-serif;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+}
+.ir-genesis-cycle-bar.is-pinned {
+    border-color: rgba(46, 125, 255, 0.7);
+    box-shadow: 0 0 0 1px rgba(46, 125, 255, 0.45), 0 6px 22px rgba(0, 0, 0, 0.5);
+}
+.ir-gen-cyc-btn {
+    flex: 0 0 auto;
+    width: 30px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: #cbd5e1;
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+.ir-gen-cyc-btn:hover:not(:disabled) { background: rgba(0, 229, 255, 0.16); color: #f1f5f9; }
+.ir-gen-cyc-btn:disabled { opacity: 0.3; cursor: default; }
+.ir-gen-cyc-label {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    min-width: 168px;
+    padding: 2px 10px;
+    text-align: center;
+}
+.ir-gen-cyc-title {
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: #00e5ff;
+}
+.ir-genesis-cycle-bar.is-pinned .ir-gen-cyc-title { color: #6ea8ff; }
+.ir-gen-cyc-init {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: #e2e8f0;
+    white-space: nowrap;
+}
+@media (max-width: 768px) {
+    .ir-genesis-cycle-bar { bottom: 64px; }
+    .ir-gen-cyc-label { min-width: 150px; }
+}
+
 /* ════════════════════════════════════════════════════════════════
    FNV3 LARGE_ENSEMBLE genesis detail modal.
    Opens when a user clicks any genesis spaghetti track on the
@@ -3447,6 +3535,43 @@ body:has(#ir-detail[style*="block"]) #ir-global-env-cbars {
 @media (max-width: 720px) {
     .rt-genesis-stat-row { grid-template-columns: 1fr; }
 }
+
+/* Run-to-run trend sparkline panel (genesis detail modal). Cyan accent
+   to read as the DeepMind-ensemble family, distinct from the orange
+   stats strip above it. */
+.rt-genesis-trend-wrap {
+    padding: 8px 10px 4px;
+    margin-bottom: 12px;
+    background: rgba(0, 229, 255, 0.05);
+    border: 1px solid rgba(0, 229, 255, 0.18);
+    border-left: 3px solid #00e5ff;
+    border-radius: 6px;
+}
+.rt-genesis-trend-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 2px;
+}
+.rt-genesis-trend-title {
+    font-size: 0.62rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-dim, #64748b);
+}
+.rt-genesis-trend-note {
+    font-size: 0.62rem;
+    color: var(--text-dim, #64748b);
+    opacity: 0.9;
+}
+[data-theme="dark"] .rt-genesis-trend-wrap {
+    background: rgba(0, 229, 255, 0.07);
+    border-color: rgba(0, 229, 255, 0.28);
+}
+[data-theme="dark"] .rt-genesis-trend-title,
+[data-theme="dark"] .rt-genesis-trend-note { color: #94a3b8; }
 
 /* Forecast-hour scrubber buttons in the genesis detail modal. Match
    the .rt-anim-btn look from the Global Map IR scrubber so the
