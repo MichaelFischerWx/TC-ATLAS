@@ -10073,24 +10073,24 @@
               // envelope and genesis-time histogram discoverable without
               // relying on the scrollbar (the panels live below the
               // fold for most viewport sizes).
+              // Two-mode tab toggle: "This run" (all per-disturbance
+              // graphics for the loaded cycle) vs "Trends" (run-to-run
+              // comparison across the last few cycles). Clicking swaps
+              // which pane is visible — no scrolling between them.
               '<div id="rt-genesis-jump-nav" class="rt-genesis-jump-nav" role="tablist">' +
-                '<span class="rt-genesis-jump-label">Jump to:</span>' +
-                '<button type="button" class="rt-genesis-jump-btn" data-target="rt-genesis-jump-trends">Trends</button>' +
-                '<button type="button" class="rt-genesis-jump-btn active" data-target="rt-genesis-jump-tracks">Tracks</button>' +
-                '<button type="button" class="rt-genesis-jump-btn" data-target="rt-genesis-jump-intensity">Intensity envelope</button>' +
-                '<button type="button" class="rt-genesis-jump-btn" data-target="rt-genesis-jump-gtime">Genesis-time histogram</button>' +
-                '<button type="button" class="rt-genesis-jump-btn" data-target="rt-genesis-jump-rmw">RMW evolution</button>' +
-                '<button type="button" class="rt-genesis-jump-btn" data-target="rt-genesis-jump-lmi">LMI distribution</button>' +
-                '<button type="button" class="rt-genesis-jump-btn" data-target="rt-genesis-jump-lmitau">LMI vs hour</button>' +
+                '<button type="button" class="rt-genesis-jump-btn active" data-pane="thisrun" role="tab">This run</button>' +
+                '<button type="button" class="rt-genesis-jump-btn" data-pane="trends" role="tab">Trends</button>' +
               '</div>' +
               '<div class="rt-genesis-modal-body">' +
-                // Trends tab — run-to-run comparison across the last few
-                // DeepMind cycles, grouped: formation %/Vmax bars, the
-                // cluster mean-track overlay, and the mean-intensity-vs-
-                // hour overlay. Each sub-panel reveals itself only when the
+                // ── Trends pane (hidden by default) ──────────────────
+                // Run-to-run comparison across the last few DeepMind
+                // cycles, grouped: formation %/Vmax bars, the cluster
+                // mean-track overlay, and the mean-intensity-vs-hour
+                // overlay. Each sub-panel reveals itself only when the
                 // /weatherlab-genesis-trend fetch returns enough history
                 // (genesis panel needs ≥2 matched cycles; the track +
                 // intensity overlays need mean_track from the backend).
+                '<div id="rt-genesis-pane-trends" class="rt-genesis-pane" style="display:none;">' +
                 '<div id="rt-genesis-jump-trends" class="rt-genesis-modal-chart-wrap" style="position:relative;">' +
                   '<div id="rt-genesis-trends-empty" class="rt-genesis-trend-note" style="padding:10px 4px;">No multi-cycle history yet for this disturbance.</div>' +
                   '<div id="rt-genesis-modal-trend" class="rt-genesis-trend-wrap" style="display:none;">' +
@@ -10115,6 +10115,9 @@
                     '<div id="rt-genesis-modal-trendint" style="width:100%; height:280px;"></div>' +
                   '</div>' +
                 '</div>' +
+                '</div>' + // close #rt-genesis-pane-trends
+                // ── This-run pane (visible by default) ───────────────
+                '<div id="rt-genesis-pane-thisrun" class="rt-genesis-pane">' +
                 // Forecast-hour scrubber — drives the map's "members at
                 // tau=t" overlay and the intensity time-series cursor.
                 // Same control pattern as the Global Map's IR scrubber
@@ -10173,6 +10176,7 @@
                   '<button type="button" id="rt-genesis-lmitau-save" class="rt-genesis-modal-save" title="Save LMI vs forecast hour as PNG">⤓ PNG</button>' +
                   '<div id="rt-genesis-modal-lmitau" style="width:100%; height:280px;"></div>' +
                 '</div>' +
+                '</div>' + // close #rt-genesis-pane-thisrun
               '</div>' +
             '</div>';
         document.body.appendChild(m);
@@ -10224,49 +10228,32 @@
         // not the modal backdrop itself.
         var scroller = m.querySelector('.rt-genesis-modal-content');
         var jumpBtns = m.querySelectorAll('.rt-genesis-jump-btn');
+        var panes = {
+            thisrun: m.querySelector('#rt-genesis-pane-thisrun'),
+            trends:  m.querySelector('#rt-genesis-pane-trends'),
+        };
+        function _genesisShowPane(name) {
+            if (!panes[name]) return;
+            Object.keys(panes).forEach(function (k) {
+                if (panes[k]) panes[k].style.display = (k === name) ? '' : 'none';
+            });
+            jumpBtns.forEach(function (b) {
+                b.classList.toggle('active', b.getAttribute('data-pane') === name);
+            });
+            if (scroller) scroller.scrollTop = 0;
+            // Plotly charts drawn while their pane was display:none render
+            // at 0 width; resize them now that the pane is laid out.
+            if (typeof Plotly !== 'undefined' && panes[name]) {
+                panes[name].querySelectorAll('.js-plotly-plot').forEach(function (gd) {
+                    try { Plotly.Plots.resize(gd); } catch (e) {}
+                });
+            }
+        }
         jumpBtns.forEach(function (btn) {
             btn.addEventListener('click', function () {
-                var targetId = btn.getAttribute('data-target');
-                var target = m.querySelector('#' + targetId);
-                if (!target || !scroller) return;
-                // getBoundingClientRect deltas survive the modal's
-                // own absolute positioning. Pull the target's top into
-                // the scroller, then subtract sticky-nav height so the
-                // panel doesn't slide under the bar.
-                var nav = m.querySelector('#rt-genesis-jump-nav');
-                var navH = nav ? nav.offsetHeight : 0;
-                var srect = scroller.getBoundingClientRect();
-                var trect = target.getBoundingClientRect();
-                var delta = (trect.top - srect.top) + scroller.scrollTop - navH - 8;
-                scroller.scrollTo({ top: delta, behavior: 'smooth' });
+                _genesisShowPane(btn.getAttribute('data-pane'));
             });
         });
-        if ('IntersectionObserver' in window && scroller) {
-            var setActive = function (id) {
-                jumpBtns.forEach(function (b) {
-                    b.classList.toggle('active',
-                                       b.getAttribute('data-target') === id);
-                });
-            };
-            var io = new IntersectionObserver(function (entries) {
-                // Pick the highest-visibility entry currently in view.
-                var best = null;
-                entries.forEach(function (e) {
-                    if (!best || e.intersectionRatio > best.intersectionRatio) {
-                        best = e;
-                    }
-                });
-                if (best && best.isIntersecting) {
-                    setActive(best.target.id);
-                }
-            }, { root: scroller, threshold: [0.25, 0.5, 0.75] });
-            ['rt-genesis-jump-tracks', 'rt-genesis-jump-intensity',
-             'rt-genesis-jump-gtime', 'rt-genesis-jump-rmw',
-             'rt-genesis-jump-lmi', 'rt-genesis-jump-lmitau'].forEach(function (id) {
-                var el = m.querySelector('#' + id);
-                if (el) io.observe(el);
-            });
-        }
         return m;
     }
 
