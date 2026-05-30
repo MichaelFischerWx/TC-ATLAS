@@ -10854,13 +10854,15 @@
         [113/200,  '#c430a0'],   // C4
         [137/200,  '#8b5cf6'],   // C5 (137 kt) — Saffir–Simpson ends here
         // The official scale stops at C5, but FNV3 members can forecast
-        // far stronger (Patricia peaked ~185 kt). Continue the ramp into
-        // magenta → near-white so an "off-the-charts" 160-185+ kt member
-        // reads as visibly more extreme than a "merely" C5 storm instead
-        // of saturating at one flat purple.
-        [160/200,  '#d946ef'],   // beyond C5 — fuchsia
-        [180/200,  '#f0abfc'],   // extreme — pale magenta
-        [1,        '#fdf4ff'],   // 200 kt — near-white (off the charts)
+        // far stronger (Patricia peaked ~185 kt). Ramp the super-C5 band
+        // violet → indigo → cyan (matching the Panel C wind scale, whose
+        // strongest jet cores saturate to the same cyan) so an
+        // "off-the-charts" 160-185+ kt member reads as unmistakably more
+        // extreme — and stays clear of the C4 magenta instead of looping
+        // back toward it.
+        [160/200,  '#4338ca'],   // beyond C5 — indigo
+        [180/200,  '#0ea5e9'],   // extreme — sky blue
+        [1,        '#5fd6ff'],   // 200 kt — bright cyan (off the charts)
     ];
 
     /* Run-to-run trend sparkline.
