@@ -75,7 +75,7 @@ COMMON_ARGS=(
     --image "${IMAGE}"
     --command python3
     --args prewarm_job.py
-    --memory 4Gi
+    --memory 3Gi
     --cpu 2
     --max-retries 1
     --task-timeout 900

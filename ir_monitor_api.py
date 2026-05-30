@@ -114,6 +114,19 @@ _PREFETCH_MIN_INTERVAL_SEC = 540   # ~9 min — one poll short of 10 min
 # on a Cloud Scheduler cadence. Default True keeps legacy inline behavior.
 _INLINE_PREWARM = os.environ.get("IR_INLINE_PREWARM", "1") != "0"
 
+# Render-once prewarm. When True (default) each immutable satellite scan-time
+# is rendered ONCE — at the interpolated storm position it first resolved —
+# and that position is recorded in a per-storm GCS manifest. Subsequent
+# cycles read each frame back at its RECORDED position (stable across
+# cycles) so the existing GCS cache short-circuit actually HITS, instead of
+# re-interpolating a position that drifts past the 0.1° cache key and forces
+# the whole 6h window to re-render every cycle. Steady state then renders
+# only the ~1-2 genuinely-new leading-edge frames per storm (plus the forced
+# self-heal window), cutting a ~290s/storm cycle to a few seconds and letting
+# 4 storms finish well inside the 900s job timeout. Set IR_RENDER_ONCE=0 to
+# restore the legacy re-interpolate-and-re-render-everything behavior.
+_RENDER_ONCE = os.environ.get("IR_RENDER_ONCE", "1") != "0"
+
 # Tb encoding constants (shared by /ir-raw endpoint and GCS prefetch)
 _TB_VMIN = 160.0
 _TB_VMAX = 330.0
@@ -330,6 +343,54 @@ def _gcs_band_put(band: int, atcf_id: str, dt_str: str, frame: dict, lat: float 
         except Exception:
             pass
     threading.Thread(target=_upload, daemon=True).start()
+
+
+# ── Per-storm frame manifest (render-once) ─────────────────────────
+# Maps each rendered scan-time slot ("YYYYMMDDHHMM") → the interpolated
+# storm position it was rendered at: {"lat", "lon", "radius_deg"}. A past
+# 10-min satellite scan is immutable, so once rendered we keep using the
+# SAME cutout center forever; this lets both the prewarm short-circuit and
+# the bundle builder read each frame at the exact key it was written —
+# instead of re-interpolating a position that drifts past the 0.1° cache
+# key between cycles and silently re-renders the whole window. See
+# _RENDER_ONCE.
+_MANIFEST_PREFIX = f"{_GCS_RT_VERSION}/frame-manifest"
+
+
+def _gcs_manifest_get(atcf_id: str) -> dict:
+    """Load the per-storm render-once frame manifest from GCS. Returns {}
+    on miss or any error (treated as 'nothing rendered yet')."""
+    bucket = _get_rt_gcs_bucket()
+    if bucket is None:
+        return {}
+    key = f"{_MANIFEST_PREFIX}/{atcf_id.upper()}.json"
+    try:
+        blob = bucket.blob(key)
+        data = blob.download_as_bytes(timeout=5)
+        m = json.loads(data)
+        return m if isinstance(m, dict) else {}
+    except Exception:
+        return {}
+
+
+def _gcs_manifest_put(atcf_id: str, manifest: dict):
+    """Write the per-storm frame manifest to GCS. SYNCHRONOUS (not fire-and-
+    forget): the Cloud Run Job process exits as soon as the prewarm cycle
+    returns, so a background upload thread could be killed before it flushes.
+    A lost manifest just means the next cycle re-renders the window once."""
+    bucket = _get_rt_gcs_bucket()
+    if bucket is None:
+        return
+    key = f"{_MANIFEST_PREFIX}/{atcf_id.upper()}.json"
+    try:
+        blob = bucket.blob(key)
+        blob.upload_from_string(
+            json.dumps(manifest, separators=(",", ":")),
+            content_type="application/json",
+            timeout=15,
+        )
+    except Exception as ex:
+        print(f"[Prewarm Manifest] {atcf_id}: write failed: {ex}")
 
 
 # ── Pre-built bundle artifacts (Item 6) ────────────────────────────
@@ -563,7 +624,7 @@ def _screen_and_queue_anomalies(atcf_upper: str, times_oldest_first: list,
 def _build_and_upload_bundles(
     atcf_id: str, fallback_lat: float, fallback_lon: float,
     frame_times, radius_deg: float, lookback_hours: float, interval_min: int,
-    band: int | None = None,
+    band: int | None = None, manifest: dict | None = None,
 ):
     """Assemble the display-WebP + raw-Tb bundles for one storm and
     write them to public-read GCS paths. Mirrors the wire format
@@ -580,14 +641,25 @@ def _build_and_upload_bundles(
     times_oldest_first = list(reversed(list(frame_times)))
     half = radius_deg
 
+    # Render-once: read each frame back at the EXACT position it was
+    # rendered (recorded in the manifest), so the GCS key matches what the
+    # prewarm wrote. Falls back to a fresh interpolation for any slot not in
+    # the manifest (legacy path, or a frame that hasn't been rendered yet) —
+    # which is also exactly the legacy behavior when _RENDER_ONCE is off.
+    def _pos_for(ft):
+        if _RENDER_ONCE and manifest:
+            ent = manifest.get(ft.strftime("%Y%m%d%H%M"))
+            if ent:
+                return ent["lat"], ent["lon"]
+        return _interp_pos_at(atcf_id, ft, fallback_lat, fallback_lon)
+
     # Pre-pass: interpolated positions + display WebPs for every frame, so
     # we can screen for anomalous scans (a bad substitution that slipped in
     # upstream) BEFORE shipping the bundle. Flagged frames are dropped to
     # no-data stubs so the loop cleanly skips them instead of showing a
     # visibly distorted frame. Reuses these values in the main loop below
     # (no extra GCS reads or position interpolations).
-    interp_pos = [_interp_pos_at(atcf_id, ft, fallback_lat, fallback_lon)
-                  for ft in times_oldest_first]
+    interp_pos = [_pos_for(ft) for ft in times_oldest_first]
     jpgs_pre = [
         _gcs_jpg_get(atcf_upper, ft.strftime("%Y%m%d%H%M"),
                      lat=interp_pos[i][0], lon=interp_pos[i][1])
@@ -677,7 +749,7 @@ def _build_and_upload_bundles(
 
     # Summary bounds: latest frame's interpolated position
     latest_ft = times_oldest_first[-1] if times_oldest_first else _dt.now(timezone.utc)
-    s_ilat, s_ilon = _interp_pos_at(atcf_id, latest_ft, fallback_lat, fallback_lon)
+    s_ilat, s_ilon = _pos_for(latest_ft)
     frames_header = {
         "total_frames": len(times_oldest_first),
         "bounds": [[s_ilat - half, s_ilon - half], [s_ilat + half, s_ilon + half]],
@@ -727,8 +799,7 @@ def _build_and_upload_bundles(
         # screen for anomalous scans (same "pops out and comes back" check
         # the IR bundle uses) BEFORE shipping. Nighttime Vis frames stay None
         # — expected-missing, never triangulated.
-        band_pos = [_interp_pos_at(atcf_id, ft, fallback_lat, fallback_lon)
-                    for ft in times_oldest_first]
+        band_pos = [_pos_for(ft) for ft in times_oldest_first]
         band_night = [
             band == VIS_BAND and _solar_elevation(band_pos[i][0], band_pos[i][1], ft) < -6
             for i, ft in enumerate(times_oldest_first)
@@ -2155,6 +2226,38 @@ def _prefetch_ir_frames(storms: list):
             if _get_rt_gcs_bucket() is not None:
                 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+                # Render-once manifest: scan-time slot → the position that
+                # slot was rendered at. Loaded once per cycle; workers read
+                # it (stable past positions → cache hits → skip render) and
+                # record any newly-rendered slot under a lock; saved back at
+                # the end of the cycle. Empty dict when _RENDER_ONCE is off,
+                # which makes the helpers below fall through to the legacy
+                # re-interpolate-every-frame path.
+                manifest = _gcs_manifest_get(atcf_id) if _RENDER_ONCE else {}
+                _manifest_lock = threading.Lock()
+
+                def _manifest_pos(tdt, dstr, force):
+                    """Cutout center for this slot. Non-force frames already
+                    in the manifest reuse their recorded (immutable) center
+                    so the cache short-circuit hits. Force frames (leading
+                    edge / self-heal) always re-interpolate so the newest
+                    estimate wins, and overwrite the manifest entry."""
+                    if _RENDER_ONCE and not force:
+                        with _manifest_lock:
+                            ent = manifest.get(dstr)
+                        if ent:
+                            return ent["lat"], ent["lon"]
+                    return _interp_pos_at(atcf_id, tdt, center_lat, center_lon)
+
+                def _manifest_record(dstr, ilat, ilon):
+                    if not _RENDER_ONCE:
+                        return
+                    with _manifest_lock:
+                        manifest[dstr] = {
+                            "lat": round(ilat, 4), "lon": round(ilon, 4),
+                            "radius_deg": _PREFETCH_RADIUS_DEG,
+                        }
+
                 half = box_deg / 2.0
                 sun_el_now = _solar_elevation(
                     center_lat, center_lon, _dt.now(timezone.utc)
@@ -2198,7 +2301,7 @@ def _prefetch_ir_frames(storms: list):
                     short-circuit so a leading-edge frame that was skipped
                     or stale-cached on an earlier cycle is re-fetched and
                     overwritten once its real scan reaches S3."""
-                    ilat, ilon = _interp_pos_at(atcf_id, tdt, center_lat, center_lon)
+                    ilat, ilon = _manifest_pos(tdt, dstr, force)
                     if not force and _gcs_rt_get(atcf_id.upper(), dstr,
                                    lat=ilat, lon=ilon,
                                    radius_deg=_PREFETCH_RADIUS_DEG) is not None:
@@ -2239,6 +2342,9 @@ def _prefetch_ir_frames(storms: list):
                         ]),
                     }, lat=ilat, lon=ilon, radius_deg=_PREFETCH_RADIUS_DEG)
                     _prefetch_counts["ir"] += 1
+                    # Freeze this slot's center so future cycles reuse it
+                    # (the bundle builder reads each frame back here).
+                    _manifest_record(dstr, ilat, ilon)
                     del tb, arr, mask, scaled, encoded
 
                 def _fetch_and_cache_band(tdt, dstr, band, force=False):
@@ -2256,7 +2362,7 @@ def _prefetch_ir_frames(storms: list):
 
                     force=True re-fetches the newest few frames each cycle
                     (see _fetch_and_cache_ir) to heal leading-edge frames."""
-                    ilat, ilon = _interp_pos_at(atcf_id, tdt, center_lat, center_lon)
+                    ilat, ilon = _manifest_pos(tdt, dstr, force)
                     if not force and _gcs_band_get(band, atcf_id.upper(), dstr, lat=ilat, lon=ilon) is not None:
                         return
                     if band == VIS_BAND:
@@ -2293,6 +2399,7 @@ def _prefetch_ir_frames(storms: list):
                         ]),
                     }, lat=ilat, lon=ilon)
                     _prefetch_counts["band"] += 1
+                    _manifest_record(dstr, ilat, ilon)
                     # Also render and cache band JPG for fast preview
                     try:
                         jpg_bytes = _render_band_jpg(
@@ -2408,6 +2515,7 @@ def _prefetch_ir_frames(storms: list):
                         lookback_hours=_PREFETCH_LOOKBACK_HOURS,
                         interval_min=_PREFETCH_INTERVAL_MIN,
                         band=primary_band,   # always WV — 24/7 utility
+                        manifest=manifest,
                     )
                 except Exception as ex:
                     # Bundle build is best-effort — per-frame cache still
@@ -2427,9 +2535,24 @@ def _prefetch_ir_frames(storms: list):
                             lookback_hours=_PREFETCH_LOOKBACK_HOURS,
                             interval_min=_PREFETCH_INTERVAL_MIN,
                             band=eb,
+                            manifest=manifest,
                         )
                     except Exception as ex:
                         print(f"[IR Pre-fetch] {atcf_id}: band {eb} bundle build failed: {ex}")
+
+                # ── Persist the render-once manifest ───────────────
+                # Prune to a 30h horizon (covers the 6h loop window + the
+                # 24h MW-compare lookback so persistent compare slots aren't
+                # re-rendered each cycle) so the manifest stays bounded, then
+                # write it back. Lexicographic compare on "YYYYMMDDHHMM" is
+                # chronological. SYNCHRONOUS so the Job flushes before exit.
+                if _RENDER_ONCE:
+                    try:
+                        cutoff = (_dt.now(timezone.utc) - timedelta(hours=30)).strftime("%Y%m%d%H%M")
+                        manifest = {k: v for k, v in manifest.items() if k >= cutoff}
+                        _gcs_manifest_put(atcf_id, manifest)
+                    except Exception as ex:
+                        print(f"[IR Pre-fetch] {atcf_id}: manifest save failed: {ex}")
 
         # ── NEXRAD radar pre-fetch for storms near 88D sites ────────
         _prefetch_nexrad_for_storms(storms, frame_times_map={
@@ -2602,10 +2725,25 @@ _GCS_CACHE_MAX_AGE_HOURS = 24
 
 def _cleanup_old_gcs_frames(active_storms: list):
     """
-    Delete GCS-cached frames older than _GCS_CACHE_MAX_AGE_HOURS.
-    Only cleans rt-v7/ prefixes (ir-raw, ir-jpg, band-raw) for
-    currently active storm IDs — stale storms' data is cleaned entirely.
-    Runs after each prefetch cycle.
+    Delete rt-v{N} real-time-monitor cached frames older than
+    _GCS_CACHE_MAX_AGE_HOURS, plus ALL cached frames for storms no longer
+    active. Scoped STRICTLY to the rt-v{N} real-time per-frame prefixes —
+    it NEVER touches the global-archive / TC-RADAR IR caches (different
+    prefixes), the bundles, the manifest, or any other bucket data.
+
+    Per-prefix path layouts differ in WHERE the ATCF id sits, so each
+    target carries the 0-based index of its atcf_id path segment:
+      {V}/ir-raw/{atcf}/{pk}/{dt}.json           → idx 2
+      {V}/band-raw/{band}/{atcf}/{pk}/{dt}.json   → idx 3
+      {V}/ir-webp-merc/{atcf}/{dt}{pos}.webp      → idx 2
+      {V}/band{N}-webp/{atcf}/{dt}{pos}.webp      → idx 2
+
+    NOTE: the previous version parsed parts[-2] as the atcf_id, but the
+    pk segment sits there now — so it deleted EVERY active-storm frame
+    every cycle, forcing a full re-render next cycle (a hidden cost
+    driver and the reason render-once frames couldn't persist). It also
+    cleaned a stale `ir-jpg/` prefix that no longer exists (the WebP
+    frames under ir-webp-merc/band{N}-webp leaked forever). Both fixed.
     """
     bucket = _get_rt_gcs_bucket()
     if bucket is None:
@@ -2616,29 +2754,39 @@ def _cleanup_old_gcs_frames(active_storms: list):
     active_ids = {s["atcf_id"].upper() for s in active_storms}
     deleted = 0
 
-    # Clean each cache prefix
-    for prefix in [
-        f"{_GCS_RT_VERSION}/ir-raw/",
-        f"{_GCS_RT_VERSION}/ir-jpg/",
-        f"{_GCS_RT_VERSION}/band-raw/",
-    ]:
+    targets = [
+        (f"{_GCS_RT_VERSION}/ir-raw/", 2),
+        (f"{_GCS_RT_VERSION}/band-raw/", 3),
+        (f"{_GCS_RT_VERSION}/ir-webp-merc/", 2),
+    ]
+    for _b in (WV_BAND, SWIR_BAND, VIS_BAND):
+        targets.append((f"{_GCS_RT_VERSION}/band{_b}-webp/", 2))
+
+    for prefix, atcf_idx in targets:
         try:
-            blobs = list(bucket.list_blobs(prefix=prefix, max_results=5000))
+            blobs = list(bucket.list_blobs(prefix=prefix, max_results=10000))
         except Exception:
             continue
 
         for blob in blobs:
             try:
-                # Parse the datetime from the blob name
-                # Patterns:
-                #   rt-v7/ir-raw/{atcf_id}/{YYYYMMDDHHMM}.json
-                #   rt-v7/band-raw/{band}/{atcf_id}/{YYYYMMDDHHMM}.json
                 parts = blob.name.split("/")
-                filename = parts[-1]  # e.g. "202604111200.json"
-                dt_part = filename.split(".")[0]  # "202604111200"
-                atcf_id = parts[-2].upper()       # storm ID
-
-                # Delete if older than cutoff OR storm is no longer active
+                if len(parts) <= atcf_idx:
+                    continue
+                filename = parts[-1]
+                # Leading 12 digits of the filename are the scan time
+                # ("YYYYMMDDHHMM"); a trailing position suffix (.json /
+                # {pos}.webp) follows. Bail on any unexpected name.
+                dt_part = filename[:12]
+                if not (len(dt_part) == 12 and dt_part.isdigit()):
+                    continue
+                atcf_id = parts[atcf_idx].upper()
+                # Safety net: a real ATCF id is alphanumeric (e.g.
+                # WP062026). A misparse landing on a pk ("20.3_128.4_r10.0")
+                # contains '.'/'_' — never delete based on that, so a path-
+                # shape change can't silently nuke the cache again.
+                if not atcf_id.isalnum():
+                    continue
                 if dt_part < cutoff_str or atcf_id not in active_ids:
                     blob.delete()
                     deleted += 1
