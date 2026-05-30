@@ -9149,3 +9149,206 @@ def get_storm_surface_obs(
         },
         headers={"Cache-Control": "public, max-age=600"},
     )
+
+
+# ─────────────────────────────────────────────────────────────────
+# Global viewport surface-obs overlay (Global Archive map). Merges
+# NDBC buoys (cached global feed) with aviationweather.gov METARs
+# fetched by bbox. METAR results are cached per integer-degree bbox so
+# slight pans / repeated viewports reuse the same upstream pull, which
+# keeps us well under any rate limit and costs ~nothing.
+# ─────────────────────────────────────────────────────────────────
+
+_METAR_BBOX_URL = "https://aviationweather.gov/api/data/metar"
+_METAR_CACHE: "OrderedDict[tuple, dict]" = OrderedDict()
+_METAR_CACHE_LOCK = threading.Lock()
+_METAR_CACHE_TTL_S = 10 * 60      # METARs refresh ~hourly; 10 min stays fresh
+_METAR_CACHE_MAX = 64             # cap distinct bbox tiles held in memory
+
+
+def _metar_num(v):
+    """aviationweather encodes missing/variable winds as null, '', or
+    strings like 'VRB'. Coerce to float or None."""
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (ValueError, TypeError):
+        return None
+
+
+def _fetch_metars_bbox(south: float, west: float,
+                       north: float, east: float) -> list[dict]:
+    """Cached METAR pull for an integer-degree bbox tile. Snaps the
+    requested bbox out to whole degrees so adjacent viewports share a
+    cache entry. Returns obs normalized to the same schema as NDBC."""
+    key = (int(math.floor(south)), int(math.floor(west)),
+           int(math.ceil(north)), int(math.ceil(east)))
+    now = time.time()
+    with _METAR_CACHE_LOCK:
+        hit = _METAR_CACHE.get(key)
+        if hit and (now - hit["fetched_at"]) < _METAR_CACHE_TTL_S:
+            _METAR_CACHE.move_to_end(key)
+            return hit["obs"]
+
+    s, w, n, e = key
+    url = f"{_METAR_BBOX_URL}?format=json&bbox={s},{w},{n},{e}"
+    try:
+        import urllib.request
+        req = urllib.request.Request(url, headers={"User-Agent": "tc-atlas/1.0"})
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            body = resp.read().decode("utf-8", errors="ignore").strip()
+        # Open-ocean bboxes with no airports come back as an empty body
+        # (not "[]"), which is a normal no-data case, not an error.
+        raw = json.loads(body) if body else []
+    except Exception as ex:
+        print(f"[Surface Obs] METAR fetch failed for {key}: {ex}")
+        return []
+
+    obs: list[dict] = []
+    for m in (raw or []):
+        lat = _metar_num(m.get("lat"))
+        lon = _metar_num(m.get("lon"))
+        if lat is None or lon is None:
+            continue
+        # Prefer reduced sea-level pressure; fall back to altimeter setting
+        # (close enough for the station-plot's last-3-digits convention).
+        mslp = _metar_num(m.get("slp"))
+        if mslp is None:
+            mslp = _metar_num(m.get("altim"))
+        time_utc = (m.get("reportTime") or "").replace(" ", "T")
+        if time_utc and not time_utc.endswith("Z"):
+            time_utc += "Z"
+        obs.append({
+            "id": m.get("icaoId") or m.get("name") or "METAR",
+            "name": m.get("name"),
+            "lat": lat,
+            "lon": lon,
+            "time_utc": time_utc,
+            "wind_dir_deg": _metar_num(m.get("wdir")),
+            "wind_speed_kt": _metar_num(m.get("wspd")),
+            "wind_gust_kt": _metar_num(m.get("wgst")),
+            "air_temp_c": _metar_num(m.get("temp")),
+            "dewpoint_c": _metar_num(m.get("dewp")),
+            "pressure_hpa": mslp,
+            "source": "METAR",
+        })
+
+    with _METAR_CACHE_LOCK:
+        _METAR_CACHE[key] = {"obs": obs, "fetched_at": now}
+        _METAR_CACHE.move_to_end(key)
+        while len(_METAR_CACHE) > _METAR_CACHE_MAX:
+            _METAR_CACHE.popitem(last=False)
+    return obs
+
+
+def _ob_richness(ob: dict) -> int:
+    """Rank an ob for grid-thinning: the most complete ob wins its cell."""
+    score = 0
+    if ob.get("pressure_hpa") is not None:
+        score += 4
+    if ob.get("wind_speed_kt") is not None:
+        score += 2
+    if ob.get("air_temp_c") is not None:
+        score += 1
+    # Slight tiebreak toward buoys — offshore they're the only ob around,
+    # while METARs are abundant on land anyway.
+    if ob.get("source") == "NDBC":
+        score += 1
+    return score
+
+
+def _grid_thin_obs(obs: list[dict], south: float, north: float,
+                   lon_boxes: list[tuple], max_stations: int) -> list[dict]:
+    """Bin obs into a lat/lon grid (~max_stations cells over the viewport)
+    and keep the richest ob per cell. Keeps dense regions legible and the
+    payload bounded. `lon_boxes` is the (possibly antimeridian-split) set
+    of [west,east] spans, walked left-to-right as one continuous axis."""
+    if len(obs) <= max_stations:
+        return obs
+    lat_span = max(north - south, 1e-6)
+    lon_span = sum((le_ - lw) for (lw, le_) in lon_boxes) or 1e-6
+    aspect = max(lon_span / lat_span, 1e-6)
+    n_lat = max(1, int(round(math.sqrt(max_stations / aspect))))
+    n_lon = max(1, int(round(max_stations / n_lat)))
+    dlat = lat_span / n_lat
+    dlon = lon_span / n_lon
+    best: dict = {}
+    for ob in obs:
+        ilat = int((ob["lat"] - south) / dlat)
+        olon = ((ob["lon"] + 180.0) % 360.0) - 180.0
+        off = 0.0
+        placed = 0.0
+        for (lw, le_) in lon_boxes:
+            if lw <= olon <= le_:
+                placed = off + (olon - lw)
+                break
+            off += (le_ - lw)
+        ilon = int(placed / dlon)
+        key = (ilat, ilon)
+        cur = best.get(key)
+        if cur is None or _ob_richness(ob) > _ob_richness(cur):
+            best[key] = ob
+    return list(best.values())
+
+
+@router.get("/surface-obs/viewport")
+def get_surface_obs_viewport(
+    north: float = Query(..., ge=-90, le=90),
+    south: float = Query(..., ge=-90, le=90),
+    east: float = Query(...),
+    west: float = Query(...),
+    max_stations: int = Query(500, ge=50, le=1500),
+):
+    """Surface observations inside a map viewport — METAR airports/land
+    (aviationweather.gov) merged with NDBC marine buoys. Backs the Global
+    Archive 'Surface Obs' overlay. Results are grid-thinned to
+    <= max_stations so dense regions stay readable and payloads small.
+
+    The frontend gates fetching by zoom; we also clamp the latitude span
+    here so a hand-crafted request can't trigger a whole-globe pull.
+    """
+    if north <= south:
+        raise HTTPException(status_code=400, detail="north must exceed south")
+    if (north - south) > 60:
+        raise HTTPException(status_code=400,
+                            detail="latitude span too large; zoom in")
+
+    def _wrap(x: float) -> float:
+        return ((x + 180.0) % 360.0) - 180.0
+
+    w = _wrap(west)
+    e = _wrap(east)
+    # Antimeridian-crossing viewport: split into two lon spans.
+    lon_boxes = [(w, e)] if w <= e else [(w, 180.0), (-180.0, e)]
+
+    metars: list[dict] = []
+    for (lw, le_) in lon_boxes:
+        metars.extend(_fetch_metars_bbox(south, lw, north, le_))
+
+    ndbc: list[dict] = []
+    text = _fetch_ndbc_latest_text()
+    if text:
+        for ob in _parse_ndbc_latest(text):
+            if not (south <= ob["lat"] <= north):
+                continue
+            olon = _wrap(ob["lon"])
+            if any(lw <= olon <= le_ for (lw, le_) in lon_boxes):
+                ndbc.append(ob)
+
+    combined = metars + ndbc
+    total_before = len(combined)
+    thinned = _grid_thin_obs(combined, south, north, lon_boxes, max_stations)
+
+    return JSONResponse(
+        content={
+            "bbox": {"north": north, "south": south,
+                     "east": east, "west": west},
+            "fetched_at": _dt.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "n_obs": len(thinned),
+            "n_before_thinning": total_before,
+            "sources": ["METAR", "NDBC"],
+            "observations": thinned,
+        },
+        headers={"Cache-Control": "public, max-age=300"},
+    )

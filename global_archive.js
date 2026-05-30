@@ -1111,6 +1111,199 @@ window.setMapView = function (mode) {
     }
 };
 
+// ── Surface observations overlay ─────────────────────────────
+// Live METAR (airports/land) + NDBC (buoys) station plots fetched by
+// the current map viewport. Gated by zoom so we never try to draw the
+// whole planet at once; client-side pixel-grid thinning keeps dense
+// regions from stacking into mush.
+
+var _obsOn = false;             // toggle state
+var _obsLayer = null;           // L.layerGroup of station-plot markers
+var _obsAbort = null;           // in-flight fetch AbortController
+var _obsDebounce = null;        // moveend debounce timer
+var _obsLastKey = '';           // last fetched bbox key (skip redundant pulls)
+var _OBS_MIN_ZOOM = 5;          // below this the world is too dense to plot
+
+function _obsWindBarbSvg(speed, dir) {
+    if (speed == null || dir == null) return '';
+    var spd = Math.round(speed);
+    if (spd < 2) {
+        return '<circle cx="0" cy="0" r="3" fill="none" stroke="#0f172a" stroke-width="1.2"/>';
+    }
+    var L0 = 24;
+    var rad = (dir - 90) * Math.PI / 180;
+    var bx = L0 * Math.cos(rad), by = L0 * Math.sin(rad);
+    var parts = ['<line x1="0" y1="0" x2="' + bx.toFixed(2) + '" y2="' + by.toFixed(2) +
+                 '" stroke="#0f172a" stroke-width="1.5"/>'];
+    var remaining = spd, pos = 1.0, step = 5 / L0;
+    var perpRad = rad - Math.PI / 2, barbLen = 9;
+    var dxFull = barbLen * Math.cos(perpRad), dyFull = barbLen * Math.sin(perpRad);
+    var dxHalf = barbLen * 0.55 * Math.cos(perpRad), dyHalf = barbLen * 0.55 * Math.sin(perpRad);
+    while (remaining >= 50) {
+        var px = bx * pos, py = by * pos;
+        var nx = bx * (pos - step * 2.4), ny = by * (pos - step * 2.4);
+        parts.push('<polygon points="' + px.toFixed(2) + ',' + py.toFixed(2) + ' ' +
+            (px + dxFull).toFixed(2) + ',' + (py + dyFull).toFixed(2) + ' ' +
+            nx.toFixed(2) + ',' + ny.toFixed(2) + '" fill="#0f172a" stroke="#0f172a"/>');
+        remaining -= 50; pos -= step * 3;
+    }
+    while (remaining >= 10) {
+        var fx = bx * pos, fy = by * pos;
+        parts.push('<line x1="' + fx.toFixed(2) + '" y1="' + fy.toFixed(2) +
+            '" x2="' + (fx + dxFull).toFixed(2) + '" y2="' + (fy + dyFull).toFixed(2) +
+            '" stroke="#0f172a" stroke-width="1.5"/>');
+        remaining -= 10; pos -= step * 1.6;
+    }
+    if (remaining >= 5) {
+        var hx = bx * pos, hy = by * pos;
+        parts.push('<line x1="' + hx.toFixed(2) + '" y1="' + hy.toFixed(2) +
+            '" x2="' + (hx + dxHalf).toFixed(2) + '" y2="' + (hy + dyHalf).toFixed(2) +
+            '" stroke="#0f172a" stroke-width="1.5"/>');
+    }
+    return parts.join('');
+}
+
+function _obsStationPlot(ob) {
+    var labels = '';
+    function label(x, y, text, anchor) {
+        if (text == null || text === '') return;
+        labels += '<text x="' + x + '" y="' + y + '" text-anchor="' + (anchor || 'middle') +
+            '" font-family="\'DM Sans\',sans-serif" font-size="9" font-weight="600"' +
+            ' fill="#0f172a" paint-order="stroke" stroke="rgba(255,255,255,0.85)"' +
+            ' stroke-width="2">' + text + '</text>';
+    }
+    if (ob.air_temp_c != null) label(-9, -7, Math.round(ob.air_temp_c), 'end');
+    if (ob.dewpoint_c != null) label(-9, 12, Math.round(ob.dewpoint_c), 'end');
+    if (ob.pressure_hpa != null) {
+        var p3 = ('000' + (Math.round(ob.pressure_hpa * 10) % 1000)).slice(-3);
+        label(9, -7, p3, 'start');
+    }
+    return '<svg xmlns="http://www.w3.org/2000/svg" width="72" height="56"' +
+        ' viewBox="-36 -28 72 56" class="ga-stn-plot">' +
+        '<circle cx="0" cy="0" r="1.5" fill="#0f172a"/>' +
+        _obsWindBarbSvg(ob.wind_speed_kt, ob.wind_dir_deg) + labels + '</svg>';
+}
+
+// Pixel-grid declutter: bin markers into ~52px cells in screen space,
+// keep the richest ob per cell so plots don't overlap at any zoom.
+function _obsDeclutter(obs) {
+    if (!stormMap) return obs;
+    var cell = 52, kept = {}, out = [];
+    function richness(o) {
+        return (o.pressure_hpa != null ? 4 : 0) + (o.wind_speed_kt != null ? 2 : 0) +
+               (o.air_temp_c != null ? 1 : 0) + (o.source === 'NDBC' ? 1 : 0);
+    }
+    for (var i = 0; i < obs.length; i++) {
+        var ob = obs[i];
+        var pt = stormMap.latLngToContainerPoint([ob.lat, ob.lon]);
+        var key = Math.floor(pt.x / cell) + ':' + Math.floor(pt.y / cell);
+        var cur = kept[key];
+        if (!cur || richness(ob) > richness(cur.ob)) kept[key] = { ob: ob };
+    }
+    for (var k in kept) if (kept.hasOwnProperty(k)) out.push(kept[k].ob);
+    return out;
+}
+
+function _obsTooltip(ob) {
+    var lines = ['<b>' + (ob.name || ob.id) + '</b> · ' + ob.source];
+    if (ob.wind_speed_kt != null && ob.wind_dir_deg != null) {
+        lines.push('Wind: ' + Math.round(ob.wind_dir_deg) + '° @ ' +
+            Math.round(ob.wind_speed_kt) + ' kt' +
+            (ob.wind_gust_kt != null ? ' (gusts ' + Math.round(ob.wind_gust_kt) + ')' : ''));
+    }
+    if (ob.air_temp_c != null) lines.push('T: ' + ob.air_temp_c.toFixed(1) + '°C / ' +
+        Math.round(ob.air_temp_c * 9 / 5 + 32) + '°F');
+    if (ob.dewpoint_c != null) lines.push('Td: ' + ob.dewpoint_c.toFixed(1) + '°C');
+    if (ob.sst_c != null) lines.push('SST: ' + ob.sst_c.toFixed(1) + '°C');
+    if (ob.pressure_hpa != null) lines.push('MSLP: ' + ob.pressure_hpa.toFixed(1) + ' hPa');
+    if (ob.wave_height_m != null) lines.push('Waves: ' + ob.wave_height_m.toFixed(1) + ' m');
+    if (ob.time_utc) lines.push('<i>' + ob.time_utc + '</i>');
+    return lines.join('<br>');
+}
+
+function _obsSetHint(msg) {
+    var el = document.getElementById('ga-obs-hint');
+    if (el) el.textContent = msg || '';
+}
+
+function _obsRefresh() {
+    if (!_obsOn || !stormMap) return;
+    var z = stormMap.getZoom();
+    if (z < _OBS_MIN_ZOOM) {
+        if (_obsLayer) _obsLayer.clearLayers();
+        _obsLastKey = '';
+        _obsSetHint('Zoom in to see surface obs');
+        return;
+    }
+    var b = stormMap.getBounds();
+    var n = b.getNorth(), s = b.getSouth(), e = b.getEast(), w = b.getWest();
+    // Clamp the latitude span to the backend guard (60°).
+    if (n - s > 60) { n = Math.min(90, s + 60); }
+    var key = [z, n.toFixed(1), s.toFixed(1), e.toFixed(1), w.toFixed(1)].join(',');
+    if (key === _obsLastKey) return;
+    _obsLastKey = key;
+    _obsSetHint('Loading…');
+
+    if (_obsAbort) { try { _obsAbort.abort(); } catch (e2) {} }
+    _obsAbort = new AbortController();
+    var url = API_BASE + '/ir-monitor/surface-obs/viewport?north=' + n.toFixed(3) +
+        '&south=' + s.toFixed(3) + '&east=' + e.toFixed(3) + '&west=' + w.toFixed(3);
+    fetch(url, { cache: 'no-store', signal: _obsAbort.signal })
+        .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+        .then(function (data) {
+            if (!_obsOn) return;
+            var obs = _obsDeclutter((data && data.observations) || []);
+            if (!_obsLayer) _obsLayer = L.layerGroup().addTo(stormMap);
+            _obsLayer.clearLayers();
+            obs.forEach(function (ob) {
+                var marker = L.marker([ob.lat, ob.lon], {
+                    icon: L.divIcon({
+                        className: 'ga-stn-plot-icon', html: _obsStationPlot(ob),
+                        iconSize: [72, 56], iconAnchor: [36, 28]
+                    }),
+                    interactive: true, keyboard: false
+                });
+                marker.bindTooltip(_obsTooltip(ob), {
+                    sticky: true, direction: 'top', offset: [0, -10],
+                    className: 'ga-stn-plot-tooltip'
+                });
+                _obsLayer.addLayer(marker);
+            });
+            _obsSetHint(obs.length + ' obs' +
+                (data.n_before_thinning > data.n_obs ? ' (thinned)' : ''));
+        })
+        .catch(function (err) {
+            if (err && err.name === 'AbortError') return;
+            console.warn('[Global Archive] surface obs fetch failed:', err && err.message);
+            _obsSetHint('Obs unavailable');
+            _obsLastKey = '';
+        });
+}
+
+function _obsOnMove() {
+    if (!_obsOn) return;
+    if (_obsDebounce) clearTimeout(_obsDebounce);
+    _obsDebounce = setTimeout(_obsRefresh, 450);
+}
+
+window.toggleSurfaceObs = function () {
+    var btn = document.getElementById('ga-obs-toggle');
+    _obsOn = !_obsOn;
+    _ga('ga_surface_obs_toggle', { on: _obsOn });
+    if (btn) btn.classList.toggle('active', _obsOn);
+    if (_obsOn) {
+        stormMap.on('moveend', _obsOnMove);
+        _obsRefresh();
+    } else {
+        stormMap.off('moveend', _obsOnMove);
+        if (_obsDebounce) { clearTimeout(_obsDebounce); _obsDebounce = null; }
+        if (_obsAbort) { try { _obsAbort.abort(); } catch (e) {} _obsAbort = null; }
+        if (_obsLayer) { stormMap.removeLayer(_obsLayer); _obsLayer = null; }
+        _obsLastKey = '';
+        _obsSetHint('');
+    }
+};
+
 // ── Storm selection ──────────────────────────────────────────
 
 function selectStorm(storm) {
