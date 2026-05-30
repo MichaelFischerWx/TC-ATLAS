@@ -14668,7 +14668,17 @@
         if (w < 96) return _DM_SS_COLORS.C2;
         if (w < 113) return _DM_SS_COLORS.C3;
         if (w < 137) return _DM_SS_COLORS.C4;
-        return _DM_SS_COLORS.C5;
+        if (w < 160) return _DM_SS_COLORS.C5;
+        // Super-C5: the SS scale ends at C5, but members forecast far
+        // stronger. Keep the C5 violet hue and step it so off-the-charts
+        // bins don't flatline at one purple (mirrors the genesis map
+        // colorbar, _GENESIS_SS_SCALE). Direction is background-dependent:
+        // on the dark theme lighten toward white-hot like the map; on the
+        // light theme deepen toward royal violet, since a near-white bar
+        // would vanish on a white plot.
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        if (w < 180) return isDark ? '#b9a3f9' : '#7c3aed';   // 160–180 kt
+        return isDark ? '#f0e9ff' : '#5b21b6';                 // ≥180 kt
     }
 
     /**
