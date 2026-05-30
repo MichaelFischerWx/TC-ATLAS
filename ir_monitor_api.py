@@ -100,6 +100,12 @@ _NHC_BASINS = {"EP", "CP", "AL"}
 _STORM_CACHE_TTL = 300          # 5 minutes (matches Cloud Scheduler ping interval)
 _IR_FRAME_CACHE_MAX = 100       # max cached IR frames (~10 MB, covers ~7 storms)
 _IR_FRAME_CACHE_TTL = 300       # 5 minutes per frame
+# Minimum spacing between expensive background prefetch cycles. The storm
+# list polls every _STORM_CACHE_TTL, but the satellites only scan every
+# 10 min (Himawari + GOES Full Disk on 0/10/20/.../50), so re-rendering
+# all bands more often than that is pure waste. Routine cycles are gated
+# to this interval; storm-movement cycles bypass it (see _poll_active_storms).
+_PREFETCH_MIN_INTERVAL_SEC = 540   # ~9 min — one poll short of 10 min
 
 # Tb encoding constants (shared by /ir-raw endpoint and GCS prefetch)
 _TB_VMIN = 160.0
@@ -824,6 +830,7 @@ _SS_THRESHOLDS = [
 _active_storms_cache: dict = {"storms": [], "updated_utc": None, "count_by_basin": {}}
 _active_storms_lock = threading.Lock()
 _last_poll_time: float = 0.0
+_last_prefetch_time: float = 0.0
 
 _ir_frame_cache: OrderedDict = OrderedDict()
 _ir_frame_cache_lock = threading.Lock()
@@ -1857,7 +1864,7 @@ def _poll_active_storms():
     Poll NHC + JTWC for all active storms worldwide and update the cache.
     This runs in the request thread (with TTL gating) or a background thread.
     """
-    global _last_poll_time
+    global _last_poll_time, _last_prefetch_time
     now = _dt.now(timezone.utc)
     storms = []
     seen_ids = set()
@@ -1989,11 +1996,18 @@ def _poll_active_storms():
 
     # Kick off background IR pre-fetch for all active storms
     # Storms that moved get priority (listed first)
-    # Guard: don't spawn a new thread if prefetch is already running
+    # Guard: don't spawn a new thread if prefetch is already running.
+    # Throttle: routine cycles run at most every _PREFETCH_MIN_INTERVAL_SEC
+    # (satellites only scan every 10 min, so more often is wasted render +
+    # GCS work). A storm that moved bypasses the throttle — its cutout center
+    # changed, so its frames must be re-fetched immediately.
     if storms and not _prefetch_lock.locked():
-        ordered = sorted(storms, key=lambda s: s["atcf_id"] not in moved_storms)
-        t = threading.Thread(target=_prefetch_ir_frames, args=(list(ordered),), daemon=True)
-        t.start()
+        due = (time.time() - _last_prefetch_time) >= _PREFETCH_MIN_INTERVAL_SEC
+        if due or moved_storms:
+            ordered = sorted(storms, key=lambda s: s["atcf_id"] not in moved_storms)
+            _last_prefetch_time = time.time()
+            t = threading.Thread(target=_prefetch_ir_frames, args=(list(ordered),), daemon=True)
+            t.start()
 
 
 # ---------------------------------------------------------------------------
