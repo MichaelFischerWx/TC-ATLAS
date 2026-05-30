@@ -2520,7 +2520,12 @@ html:not([data-view="map"]) #basin-sidebar,
    #ir-main isn't enough. Toggling on a Global Map overlay and switching
    to Subseasonal/Seasonal would otherwise leave the colorbar floating
    over the new view. */
-html:not([data-view="map"]) #ir-global-env-cbars {
+html:not([data-view="map"]) #ir-global-env-cbars,
+/* DeepMind cyclogenesis cycle stepper: position:fixed on <body>, same as
+   the controls above. The cyclogenesis layer lives on the Global Map only,
+   so the run stepper must not float over Subseasonal / Seasonal / Storm
+   Satellite tabs. */
+html:not([data-view="map"]) #ir-genesis-cycle-bar {
     display: none !important;
 }
 
@@ -2541,7 +2546,8 @@ body:has(#ir-detail[style*="block"]) #ir-obs-hint,
 body:has(#ir-detail[style*="block"]) #ir-legend,
 body:has(#ir-detail[style*="block"]) #basin-sidebar-toggle,
 body:has(#ir-detail[style*="block"]) #basin-sidebar,
-body:has(#ir-detail[style*="block"]) #ir-global-env-cbars {
+body:has(#ir-detail[style*="block"]) #ir-global-env-cbars,
+body:has(#ir-detail[style*="block"]) #ir-genesis-cycle-bar {
     display: none !important;
 }
 
@@ -3498,6 +3504,65 @@ body:has(#ir-detail[style*="block"]) #ir-global-env-cbars {
     background: rgba(46, 125, 255, 0.28);
     border-color: rgba(46, 125, 255, 0.7);
     color: #7eb8ff;
+}
+/* Sub-nav inside the "This run" pane: lighter than the tab pills above.
+   Lists the stacked panels (tracks, intensity, …) so the user knows
+   there's more below the fold and can jump straight to one. */
+.rt-genesis-subnav {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px 4px;
+    padding: 2px 2px 8px;
+    margin: 0 0 8px 0;
+    border-bottom: 1px dashed var(--border, rgba(0, 0, 0, 0.1));
+}
+.rt-genesis-subnav-label {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--text-dim, #64748b);
+    margin-right: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.rt-genesis-subnav-chip {
+    padding: 2px 4px;
+    font-family: inherit;
+    font-size: 0.72rem;
+    font-weight: 500;
+    color: var(--text-dim, #64748b);
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid transparent;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s;
+}
+.rt-genesis-subnav-chip:not(:last-of-type)::after {
+    content: "·";
+    margin-left: 6px;
+    color: var(--border, rgba(0, 0, 0, 0.25));
+    pointer-events: none;
+}
+.rt-genesis-subnav-chip:hover {
+    color: #2e7dff;
+}
+.rt-genesis-subnav-chip.active {
+    color: #2e7dff;
+    border-bottom-color: #2e7dff;
+    font-weight: 600;
+}
+[data-theme="dark"] .rt-genesis-subnav {
+    border-bottom-color: rgba(255, 255, 255, 0.1);
+}
+[data-theme="dark"] .rt-genesis-subnav-chip {
+    color: var(--text-dim, #94a3b8);
+}
+[data-theme="dark"] .rt-genesis-subnav-chip:hover,
+[data-theme="dark"] .rt-genesis-subnav-chip.active {
+    color: #7eb8ff;
+}
+[data-theme="dark"] .rt-genesis-subnav-chip.active {
+    border-bottom-color: #7eb8ff;
 }
 /* ATCF-match pill in the disturbance modal subtitle — signals that
    the FNV3 ensemble is locked to an officially-tracked TC/invest, so

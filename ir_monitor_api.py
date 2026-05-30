@@ -7138,7 +7138,9 @@ def get_weatherlab_genesis_trend(
 
     Each entry (freshest first):
       `{init_time, age_hours, matched, dist_km, formation_prob, peak_wind,
-        peak_tau, display_short}`. Unmatched cycles still appear with null
+        peak_tau, display_short, mean_track}`. `mean_track` is the matched
+    cluster's slim mean polyline ([{tau,lat,lon,wind}]) for the Trends-tab
+    track + intensity overlays. Unmatched cycles still appear with null
     metrics so a gap reads as 'this run didn't forecast this system'.
 
     Hyphenated path so it isn't swallowed by `/weatherlab-genesis/{track_id}`.
@@ -7165,6 +7167,18 @@ def get_weatherlab_genesis_trend(
                 best_d = d
                 best = c
         matched = best is not None and best_d <= match_radius_km
+        # For matched cycles, attach the cluster's mean polyline so the
+        # Trends tab can overlay run-to-run track + intensity. ensemble_mean
+        # already carries {tau, lat, lon, wind} per point — slim to those
+        # four fields so 4-8 cycles stay a small payload.
+        mean_track = None
+        if matched:
+            pts = ((best.get("ensemble_mean") or {}).get("points")) or []
+            mean_track = [
+                {"tau": p.get("tau"), "lat": p.get("lat"),
+                 "lon": p.get("lon"), "wind": p.get("wind")}
+                for p in pts
+            ]
         trend.append({
             "init_time": date_str.replace("-", "") + hour_str,
             "age_hours": round((now - cycle_dt).total_seconds() / 3600.0, 2),
@@ -7174,6 +7188,7 @@ def get_weatherlab_genesis_trend(
             "peak_wind": best["peak_wind"] if matched else None,
             "peak_tau": best["peak_tau"] if matched else None,
             "display_short": best["display_short"] if matched else None,
+            "mean_track": mean_track,
         })
         if n_with_data >= count:
             break
