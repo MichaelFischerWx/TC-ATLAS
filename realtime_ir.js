@@ -11594,11 +11594,21 @@
         var bounds = _genesisBoundsFromMean(meanLats, meanLons,
                                              stats.genLats, stats.genLons,
                                              containerAspect);
-        // Center for the locator-globe inset — midpoint of the zoomed
-        // bounds, so the orthographic disc is rotated to put this
-        // disturbance dead-center under the red dot.
-        var insetLon = (bounds.lon[0] + bounds.lon[1]) / 2;
-        var insetLat = (bounds.lat[0] + bounds.lat[1]) / 2;
+        // Center for the locator-globe inset — the median first-genesis
+        // position across members, so the red dot marks where the
+        // ensemble actually expects this system to spin up rather than
+        // the geometric center of the (track-skewed) display window.
+        // Falls back to the bounds midpoint if too few members reach 34 kt.
+        var insetLon, insetLat;
+        if (stats.genLats && stats.genLats.length >= 5) {
+            var sortedGenLats = stats.genLats.slice().sort(function (a, b) { return a - b; });
+            var sortedGenLons = stats.genLons.slice().sort(function (a, b) { return a - b; });
+            insetLat = sortedGenLats[Math.floor(sortedGenLats.length / 2)];
+            insetLon = sortedGenLons[Math.floor(sortedGenLons.length / 2)];
+        } else {
+            insetLon = (bounds.lon[0] + bounds.lon[1]) / 2;
+            insetLat = (bounds.lat[0] + bounds.lat[1]) / 2;
+        }
 
         var spaghetti = {
             type: 'scattergeo', mode: 'lines',
