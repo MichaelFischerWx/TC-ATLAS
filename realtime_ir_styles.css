@@ -2520,7 +2520,12 @@ html:not([data-view="map"]) #basin-sidebar,
    #ir-main isn't enough. Toggling on a Global Map overlay and switching
    to Subseasonal/Seasonal would otherwise leave the colorbar floating
    over the new view. */
-html:not([data-view="map"]) #ir-global-env-cbars {
+html:not([data-view="map"]) #ir-global-env-cbars,
+/* DeepMind cyclogenesis cycle stepper: position:fixed on <body>, same as
+   the controls above. The cyclogenesis layer lives on the Global Map only,
+   so the run stepper must not float over Subseasonal / Seasonal / Storm
+   Satellite tabs. */
+html:not([data-view="map"]) #ir-genesis-cycle-bar {
     display: none !important;
 }
 
@@ -2541,7 +2546,8 @@ body:has(#ir-detail[style*="block"]) #ir-obs-hint,
 body:has(#ir-detail[style*="block"]) #ir-legend,
 body:has(#ir-detail[style*="block"]) #basin-sidebar-toggle,
 body:has(#ir-detail[style*="block"]) #basin-sidebar,
-body:has(#ir-detail[style*="block"]) #ir-global-env-cbars {
+body:has(#ir-detail[style*="block"]) #ir-global-env-cbars,
+body:has(#ir-detail[style*="block"]) #ir-genesis-cycle-bar {
     display: none !important;
 }
 

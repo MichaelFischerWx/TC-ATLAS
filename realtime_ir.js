@@ -10067,23 +10067,15 @@
               // storm panel never has to compute (formation probability,
               // P10/P50/P90 peak Vmax, most-likely genesis time).
               '<div id="rt-genesis-modal-stats" class="rt-genesis-stat-row"></div>' +
-              // Run-to-run trend sparkline — how this disturbance's
-              // formation probability + predicted peak Vmax have shifted
-              // across the last few DeepMind cycles. Hidden until the
-              // /weatherlab-genesis-trend fetch returns ≥2 matched runs.
-              '<div id="rt-genesis-modal-trend" class="rt-genesis-trend-wrap" style="display:none;">' +
-                '<div class="rt-genesis-trend-head">' +
-                  '<span class="rt-genesis-trend-title">Run-to-run trend</span>' +
-                  '<span id="rt-genesis-trend-note" class="rt-genesis-trend-note"></span>' +
-                '</div>' +
-                '<div id="rt-genesis-modal-trend-chart" style="width:100%; height:140px;"></div>' +
-              '</div>' +
+              // (Run-to-run trend lives in the Trends tab below, grouped
+              // with the track + intensity run-to-run overlays.)
               // Sticky jump-nav — makes the existence of the intensity
               // envelope and genesis-time histogram discoverable without
               // relying on the scrollbar (the panels live below the
               // fold for most viewport sizes).
               '<div id="rt-genesis-jump-nav" class="rt-genesis-jump-nav" role="tablist">' +
                 '<span class="rt-genesis-jump-label">Jump to:</span>' +
+                '<button type="button" class="rt-genesis-jump-btn" data-target="rt-genesis-jump-trends">Trends</button>' +
                 '<button type="button" class="rt-genesis-jump-btn active" data-target="rt-genesis-jump-tracks">Tracks</button>' +
                 '<button type="button" class="rt-genesis-jump-btn" data-target="rt-genesis-jump-intensity">Intensity envelope</button>' +
                 '<button type="button" class="rt-genesis-jump-btn" data-target="rt-genesis-jump-gtime">Genesis-time histogram</button>' +
@@ -10092,6 +10084,37 @@
                 '<button type="button" class="rt-genesis-jump-btn" data-target="rt-genesis-jump-lmitau">LMI vs hour</button>' +
               '</div>' +
               '<div class="rt-genesis-modal-body">' +
+                // Trends tab — run-to-run comparison across the last few
+                // DeepMind cycles, grouped: formation %/Vmax bars, the
+                // cluster mean-track overlay, and the mean-intensity-vs-
+                // hour overlay. Each sub-panel reveals itself only when the
+                // /weatherlab-genesis-trend fetch returns enough history
+                // (genesis panel needs ≥2 matched cycles; the track +
+                // intensity overlays need mean_track from the backend).
+                '<div id="rt-genesis-jump-trends" class="rt-genesis-modal-chart-wrap" style="position:relative;">' +
+                  '<div id="rt-genesis-trends-empty" class="rt-genesis-trend-note" style="padding:10px 4px;">No multi-cycle history yet for this disturbance.</div>' +
+                  '<div id="rt-genesis-modal-trend" class="rt-genesis-trend-wrap" style="display:none;">' +
+                    '<div class="rt-genesis-trend-head">' +
+                      '<span class="rt-genesis-trend-title">Run-to-run trend</span>' +
+                      '<span id="rt-genesis-trend-note" class="rt-genesis-trend-note"></span>' +
+                    '</div>' +
+                    '<div id="rt-genesis-modal-trend-chart" style="width:100%; height:140px;"></div>' +
+                  '</div>' +
+                  '<div id="rt-genesis-trendmap-wrap" class="rt-genesis-trend-wrap" style="display:none; margin-top:14px;">' +
+                    '<div class="rt-genesis-trend-head">' +
+                      '<span class="rt-genesis-trend-title">Track trend</span>' +
+                      '<span id="rt-genesis-trendmap-note" class="rt-genesis-trend-note"></span>' +
+                    '</div>' +
+                    '<div id="rt-genesis-modal-trendmap" style="width:100%; height:360px;"></div>' +
+                  '</div>' +
+                  '<div id="rt-genesis-trendint-wrap" class="rt-genesis-trend-wrap" style="display:none; margin-top:14px;">' +
+                    '<div class="rt-genesis-trend-head">' +
+                      '<span class="rt-genesis-trend-title">Intensity trend</span>' +
+                      '<span id="rt-genesis-trendint-note" class="rt-genesis-trend-note"></span>' +
+                    '</div>' +
+                    '<div id="rt-genesis-modal-trendint" style="width:100%; height:280px;"></div>' +
+                  '</div>' +
+                '</div>' +
                 // Forecast-hour scrubber — drives the map's "members at
                 // tau=t" overlay and the intensity time-series cursor.
                 // Same control pattern as the Global Map's IR scrubber
@@ -11062,7 +11085,14 @@
         var el = document.getElementById('rt-genesis-modal-trend-chart');
         var noteEl = document.getElementById('rt-genesis-trend-note');
         if (!wrap || !el) return;
+        // Reset the Trends tab: hide all three figures, show the empty
+        // note. Each draw un-hides its own wrap once it has data.
+        var _tmw = document.getElementById('rt-genesis-trendmap-wrap');
+        var _tiw = document.getElementById('rt-genesis-trendint-wrap');
         wrap.style.display = 'none';   // default hidden until data lands
+        if (_tmw) _tmw.style.display = 'none';
+        if (_tiw) _tiw.style.display = 'none';
+        _genesisTrendsUpdateEmpty();
 
         // Resolve the genesis-density anchor for this disturbance.
         var meta = _genesisDisturbanceMeta[json && json.track_id] || {};
@@ -11097,6 +11127,9 @@
             .then(function (data) {
                 if (wrap.dataset.trackId !== (reqTrackId || '')) return;  // stale
                 _drawGenesisTrend(data, loadedInit);
+                _drawTrackTrend(data, loadedInit);
+                _drawIntensityTrend(data, loadedInit);
+                _genesisTrendsUpdateEmpty();
             })
             .catch(function () { /* endpoint absent or failed — stay hidden */ });
     }
@@ -11171,6 +11204,281 @@
             noteEl.textContent = '★ = loaded run · formation % (bars) and '
                 + 'peak Vmax (line) across the last ' + trend.length
                 + ' cycles';
+        }
+        wrap.style.display = '';
+    }
+
+    // Compact "MM/DD HHZ" label from a YYYYMMDDHH init string.
+    function _genesisFmtInit(it) {
+        it = it || '';
+        return (it.length >= 10)
+            ? it.slice(4, 6) + '/' + it.slice(6, 8) + ' ' + it.slice(8, 10) + 'Z'
+            : it;
+    }
+
+    // Show the "no history" note only when all three Trends figures are
+    // hidden (no matched cycles / backend not yet serving mean_track).
+    function _genesisTrendsUpdateEmpty() {
+        var empty = document.getElementById('rt-genesis-trends-empty');
+        if (!empty) return;
+        var anyVisible = ['rt-genesis-modal-trend', 'rt-genesis-trendmap-wrap',
+                          'rt-genesis-trendint-wrap'].some(function (id) {
+            var n = document.getElementById(id);
+            return n && n.style.display !== 'none';
+        });
+        empty.style.display = anyVisible ? 'none' : '';
+    }
+
+    // West/South edge tick labels for a scattergeo map (it has no built-in
+    // axis labels) — mirrors the inset-text approach in _renderGenesisMap.
+    function _genesisAxisLabelTraces(bounds, isDark) {
+        var step = _genesisAxisDtick(bounds);
+        var lonInset = (bounds.lat[1] - bounds.lat[0]) * 0.04;
+        var latInset = (bounds.lon[1] - bounds.lon[0]) * 0.04;
+        var loLat = [], loLon = [], loTxt = [];
+        var lonStart = Math.ceil(bounds.lon[0] / step) * step;
+        for (var lo = lonStart; lo <= bounds.lon[1]; lo += step) {
+            if (lo - bounds.lon[0] < step * 0.4) continue;
+            if (bounds.lon[1] - lo < step * 0.4) continue;
+            loLat.push(bounds.lat[0] + lonInset);
+            loLon.push(lo); loTxt.push(_genesisFormatLon(lo));
+        }
+        var laLat = [], laLon = [], laTxt = [];
+        var latStart = Math.ceil(bounds.lat[0] / step) * step;
+        for (var la = latStart; la <= bounds.lat[1]; la += step) {
+            if (la - bounds.lat[0] < step * 0.4) continue;
+            if (bounds.lat[1] - la < step * 0.4) continue;
+            laLat.push(la); laLon.push(bounds.lon[0] + latInset);
+            laTxt.push(_genesisFormatLat(la));
+        }
+        var fg = isDark ? '#f1f5f9' : '#0f172a';
+        return [
+            { type: 'scattergeo', mode: 'text', lon: loLon, lat: loLat,
+              text: loTxt, textposition: 'top center', hoverinfo: 'skip',
+              showlegend: false,
+              textfont: { size: 11, color: fg, family: 'Inter, sans-serif' } },
+            { type: 'scattergeo', mode: 'text', lon: laLon, lat: laLat,
+              text: laTxt, textposition: 'middle right', hoverinfo: 'skip',
+              showlegend: false,
+              textfont: { size: 11, color: fg, family: 'Inter, sans-serif' } },
+        ];
+    }
+
+    // Standard genesis scattergeo geo-layout for a given bounds box.
+    function _genesisGeoLayout(bounds, isDark, theme) {
+        var step = _genesisAxisDtick(bounds);
+        var rootStyle = getComputedStyle(document.documentElement);
+        var pageSurface = rootStyle.getPropertyValue('--surface-raised').trim()
+                       || (isDark ? '#161b24' : '#ffffff');
+        var pageLand = rootStyle.getPropertyValue('--surface').trim()
+                    || (isDark ? '#11161f' : '#f7f8fa');
+        var gridc = isDark ? 'rgba(255,255,255,0.10)' : 'rgba(15,22,35,0.10)';
+        return {
+            margin: { l: 4, r: 4, t: 8, b: 4 },
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            font: theme.font,
+            geo: {
+                projection: { type: 'mercator' },
+                domain: { x: [0, 1], y: [0, 1] },
+                lonaxis: { range: bounds.lon, showgrid: true, gridcolor: gridc,
+                           dtick: step },
+                lataxis: { range: bounds.lat, showgrid: true, gridcolor: gridc,
+                           dtick: step },
+                showland: true, landcolor: pageLand,
+                showocean: true, oceancolor: pageSurface,
+                showcountries: true,
+                countrycolor: isDark ? 'rgba(255,255,255,0.20)' : 'rgba(15,22,35,0.30)',
+                coastlinecolor: isDark ? 'rgba(255,255,255,0.45)' : 'rgba(15,22,35,0.55)',
+                coastlinewidth: 0.8, showcoastlines: true,
+                bgcolor: 'rgba(0,0,0,0)',
+            },
+            showlegend: false,
+        };
+    }
+
+    // Grey color for a prior run, faded by recency rank (oldest faintest).
+    function _genesisPriorGrey(rank, nPrior, isDark) {
+        var op = (nPrior <= 1) ? 0.55 : 0.30 + 0.45 * (rank / (nPrior - 1));
+        return isDark ? 'rgba(148,163,184,' + op.toFixed(2) + ')'
+                      : 'rgba(100,116,139,' + op.toFixed(2) + ')';
+    }
+
+    /* Track trend (Trends tab, figure 2).
+       Overlays each recent cycle's cluster-mean polyline so the user can
+       see how the forecast TRACK has shifted run-to-run. Current run is
+       bold orange with SS-colored markers; prior runs are grey, fainter
+       the older they are. Mean-only (no spaghetti) to keep it legible.
+       Needs the backend deployed with mean_track — degrades silently
+       (stays hidden) when fewer than 2 cycles carry a polyline. */
+    function _drawTrackTrend(data, loadedInit) {
+        var wrap = document.getElementById('rt-genesis-trendmap-wrap');
+        var el = document.getElementById('rt-genesis-modal-trendmap');
+        var noteEl = document.getElementById('rt-genesis-trendmap-note');
+        if (!wrap || !el || typeof Plotly === 'undefined') return;
+        wrap.style.display = 'none';
+
+        var trend = ((data && data.trend) || []).slice().reverse();  // old→new
+        var cycles = trend.filter(function (t) {
+            return t.mean_track && t.mean_track.length;
+        });
+        if (cycles.length < 2) return;   // need ≥2 runs to compare
+
+        var theme = _genesisTheme();
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+
+        var allLats = [], allLons = [];
+        cycles.forEach(function (c) {
+            c.mean_track.forEach(function (p) {
+                if (p.lat != null && p.lon != null) {
+                    allLats.push(p.lat); allLons.push(p.lon);
+                }
+            });
+        });
+        var rect = el.getBoundingClientRect();
+        var aspect = rect.height > 0
+            ? Math.max(0.8, (rect.width - 10) / rect.height) : 2.0;
+        var bounds = _genesisBoundsFromMean(allLats, allLons, [], [], aspect);
+
+        var priors = cycles.filter(function (c) { return c.init_time !== loadedInit; });
+        var nPrior = priors.length;
+        var priorRank = {};
+        priors.forEach(function (c, i) { priorRank[c.init_time] = i; });
+
+        // Draw priors first so the bold current run sits on top.
+        var traces = [];
+        cycles.slice().sort(function (a, b) {
+            var ac = a.init_time === loadedInit ? 1 : 0;
+            var bc = b.init_time === loadedInit ? 1 : 0;
+            return ac - bc;
+        }).forEach(function (c) {
+            var lons = [], lats = [], prev = null;
+            c.mean_track.forEach(function (p) {
+                if (p.lat == null || p.lon == null) return;
+                if (prev !== null && Math.abs(p.lon - prev) > 180) {
+                    lons.push(null); lats.push(null);
+                }
+                lons.push(p.lon); lats.push(p.lat); prev = p.lon;
+            });
+            var lbl = _genesisFmtInit(c.init_time);
+            if (c.init_time === loadedInit) {
+                traces.push({
+                    type: 'scattergeo', mode: 'lines', lon: lons, lat: lats,
+                    line: { color: '#f97316', width: 2.8 },
+                    connectgaps: false, hoverinfo: 'skip', showlegend: false,
+                });
+                var mLon = [], mLat = [], mW = [], mTau = [];
+                c.mean_track.forEach(function (p) {
+                    if (p.lat == null || p.lon == null) return;
+                    mLon.push(p.lon); mLat.push(p.lat);
+                    mW.push(p.wind != null ? p.wind : 0); mTau.push(p.tau);
+                });
+                traces.push({
+                    type: 'scattergeo', mode: 'markers', lon: mLon, lat: mLat,
+                    marker: {
+                        size: 8, color: mW, colorscale: _GENESIS_SS_SCALE,
+                        cmin: 0, cmax: 200, showscale: false,
+                        line: { color: isDark ? '#0f172a' : '#1f2937', width: 0.8 },
+                    },
+                    text: mW.map(function (w, i) {
+                        return lbl + ' (current)<br>+' + mTau[i] + ' h · '
+                            + w.toFixed(0) + ' kt (' + windToCategory(w) + ')';
+                    }),
+                    hovertemplate: '%{text}<br>%{lat:.1f}°N, %{lon:.1f}°E<extra></extra>',
+                    showlegend: false,
+                });
+            } else {
+                var grey = _genesisPriorGrey(priorRank[c.init_time], nPrior, isDark);
+                traces.push({
+                    type: 'scattergeo', mode: 'lines', lon: lons, lat: lats,
+                    line: { color: grey, width: 1.6 },
+                    connectgaps: false, showlegend: false,
+                    hovertemplate: lbl + '<br>%{lat:.1f}°N, %{lon:.1f}°E<extra></extra>',
+                });
+            }
+        });
+        traces = traces.concat(_genesisAxisLabelTraces(bounds, isDark));
+
+        Plotly.react(el, traces, _genesisGeoLayout(bounds, isDark, theme),
+                     { responsive: true, displayModeBar: false });
+        if (noteEl) {
+            noteEl.textContent = 'bold orange = current run · grey = prior runs '
+                + '(fainter = older) · ' + cycles.length + ' cycles';
+        }
+        wrap.style.display = '';
+    }
+
+    /* Intensity trend (Trends tab, figure 3).
+       Each recent cycle's cluster-mean Vmax vs forecast hour, so the user
+       can see run-to-run intensity drift. Same color language as the
+       track trend: current run bold orange + markers, priors grey faded
+       by age. Hidden until ≥2 cycles carry a polyline. */
+    function _drawIntensityTrend(data, loadedInit) {
+        var wrap = document.getElementById('rt-genesis-trendint-wrap');
+        var el = document.getElementById('rt-genesis-modal-trendint');
+        var noteEl = document.getElementById('rt-genesis-trendint-note');
+        if (!wrap || !el || typeof Plotly === 'undefined') return;
+        wrap.style.display = 'none';
+
+        var trend = ((data && data.trend) || []).slice().reverse();  // old→new
+        var cycles = trend.filter(function (t) {
+            return t.mean_track && t.mean_track.length;
+        });
+        if (cycles.length < 2) return;
+
+        var theme = _genesisTheme();
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var grid = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(15,22,35,0.06)';
+
+        var priors = cycles.filter(function (c) { return c.init_time !== loadedInit; });
+        var nPrior = priors.length;
+        var priorRank = {};
+        priors.forEach(function (c, i) { priorRank[c.init_time] = i; });
+
+        var traces = [];
+        cycles.slice().sort(function (a, b) {
+            var ac = a.init_time === loadedInit ? 1 : 0;
+            var bc = b.init_time === loadedInit ? 1 : 0;
+            return ac - bc;
+        }).forEach(function (c) {
+            var xs = [], ys = [];
+            c.mean_track.forEach(function (p) {
+                if (p.tau == null || p.wind == null) return;
+                xs.push(p.tau); ys.push(p.wind);
+            });
+            var lbl = _genesisFmtInit(c.init_time);
+            if (c.init_time === loadedInit) {
+                traces.push({
+                    type: 'scatter', mode: 'lines+markers', x: xs, y: ys,
+                    line: { color: '#f97316', width: 2.6 },
+                    marker: { color: '#f97316', size: 6 },
+                    hovertemplate: lbl + ' (current)<br>+%{x} h · %{y} kt<extra></extra>',
+                });
+            } else {
+                var grey = _genesisPriorGrey(priorRank[c.init_time], nPrior, isDark);
+                traces.push({
+                    type: 'scatter', mode: 'lines', x: xs, y: ys,
+                    line: { color: grey, width: 1.6 },
+                    hovertemplate: lbl + '<br>+%{x} h · %{y} kt<extra></extra>',
+                });
+            }
+        });
+
+        var layout = Object.assign({}, theme, {
+            margin: { l: 46, r: 12, t: 8, b: 34 },
+            paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+            height: 280, showlegend: false,
+            xaxis: { title: { text: 'Forecast hour', font: { size: 10 } },
+                     tickfont: { size: 9 }, gridcolor: grid, fixedrange: true,
+                     rangemode: 'tozero' },
+            yaxis: { title: { text: 'Mean Vmax (kt)', font: { size: 10 } },
+                     tickfont: { size: 9 }, gridcolor: grid, fixedrange: true,
+                     rangemode: 'tozero' },
+        });
+        Plotly.react(el, traces, layout,
+                     { responsive: true, displayModeBar: false });
+        if (noteEl) {
+            noteEl.textContent = 'bold orange = current run · grey = prior runs '
+                + '(fainter = older)';
         }
         wrap.style.display = '';
     }
