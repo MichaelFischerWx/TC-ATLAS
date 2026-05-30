@@ -357,6 +357,36 @@ def _gcs_band_put(band: int, atcf_id: str, dt_str: str, frame: dict, lat: float 
 _MANIFEST_PREFIX = f"{_GCS_RT_VERSION}/frame-manifest"
 
 
+def _gcs_rt_exists(atcf_id: str, dt_str: str, lat: float = 0, lon: float = 0,
+                   radius_deg: float = 10.0) -> bool:
+    """Cheap existence check (HEAD-equivalent, no data transfer) for a cached
+    raw Tb frame. Used by the prewarm skip path so render-once doesn't
+    download the full ~2 MB frame just to learn it's already there."""
+    bucket = _get_rt_gcs_bucket()
+    if bucket is None:
+        return False
+    pk = _pos_key(lat, lon, radius_deg)
+    key = f"{_GCS_RT_VERSION}/ir-raw/{atcf_id}/{pk}/{dt_str}.json"
+    try:
+        return bucket.blob(key).exists()
+    except Exception:
+        return False
+
+
+def _gcs_band_exists(band: int, atcf_id: str, dt_str: str,
+                     lat: float = 0, lon: float = 0) -> bool:
+    """Cheap existence check for a cached band frame (see _gcs_rt_exists)."""
+    bucket = _get_rt_gcs_bucket()
+    if bucket is None:
+        return False
+    pk = _pos_key(lat, lon)
+    key = f"{_GCS_RT_VERSION}/band-raw/{band}/{atcf_id}/{pk}/{dt_str}.json"
+    try:
+        return bucket.blob(key).exists()
+    except Exception:
+        return False
+
+
 def _gcs_manifest_get(atcf_id: str) -> dict:
     """Load the per-storm render-once frame manifest from GCS. Returns {}
     on miss or any error (treated as 'nothing rendered yet')."""
@@ -621,6 +651,19 @@ def _screen_and_queue_anomalies(atcf_upper: str, times_oldest_first: list,
     return anomalous_idx
 
 
+def _bundle_pos_for(atcf_id, ft, fallback_lat, fallback_lon, manifest):
+    """Position for a frame during bundle assembly: prefer the
+    manifest-recorded render position (so the GCS read key matches what the
+    prewarm wrote and the cache short-circuit hits), else fall back to a
+    fresh interpolation. Falling back is also exactly the legacy behavior
+    when _RENDER_ONCE is off or the slot isn't in the manifest yet."""
+    if _RENDER_ONCE and manifest:
+        ent = manifest.get(ft.strftime("%Y%m%d%H%M"))
+        if ent:
+            return ent["lat"], ent["lon"]
+    return _interp_pos_at(atcf_id, ft, fallback_lat, fallback_lon)
+
+
 def _build_and_upload_bundles(
     atcf_id: str, fallback_lat: float, fallback_lon: float,
     frame_times, radius_deg: float, lookback_hours: float, interval_min: int,
@@ -635,23 +678,21 @@ def _build_and_upload_bundles(
     here) — the per-frame loop that just ran took care of that. If a
     frame is missing from cache for any reason it's marked as
     byte_length=0 with an error field; the frontend skips it.
+
+    If `band` is given, that band's display bundle is also built (via
+    `_build_band_bundle`). The IR display/raw bundles are identical
+    regardless of which band we're warming, so a cycle that warms several
+    bands (WV + SWIR + Vis) builds the IR bundle ONCE here and calls
+    `_build_band_bundle` directly for the rest — avoiding re-reading and
+    re-uploading the ~80 MB raw-Tb bundle two extra times per cycle.
     """
     atcf_upper = atcf_id.upper()
     # frame_times comes in newest-first; bundles use oldest-first
     times_oldest_first = list(reversed(list(frame_times)))
     half = radius_deg
 
-    # Render-once: read each frame back at the EXACT position it was
-    # rendered (recorded in the manifest), so the GCS key matches what the
-    # prewarm wrote. Falls back to a fresh interpolation for any slot not in
-    # the manifest (legacy path, or a frame that hasn't been rendered yet) —
-    # which is also exactly the legacy behavior when _RENDER_ONCE is off.
     def _pos_for(ft):
-        if _RENDER_ONCE and manifest:
-            ent = manifest.get(ft.strftime("%Y%m%d%H%M"))
-            if ent:
-                return ent["lat"], ent["lon"]
-        return _interp_pos_at(atcf_id, ft, fallback_lat, fallback_lon)
+        return _bundle_pos_for(atcf_id, ft, fallback_lat, fallback_lon, manifest)
 
     # Pre-pass: interpolated positions + display WebPs for every frame, so
     # we can screen for anomalous scans (a bad substitution that slipped in
@@ -790,91 +831,115 @@ def _build_and_upload_bundles(
     # src across the 25 blob URLs sliced from `frames_body`. No need to
     # encode a second artifact at ~the same size for marginal savings.)
 
-    # ── Band bundle (WV or Vis) ─────────────────────────────────
-    # Only build if the prewarm fetched this band's frames in this
-    # cycle. The band-specific cache lives under `band{N}-webp` keys.
-    band_summary = ""
-    if band is not None:
-        # Pre-pass: positions + cached band JPGs for every frame, so we can
-        # screen for anomalous scans (same "pops out and comes back" check
-        # the IR bundle uses) BEFORE shipping. Nighttime Vis frames stay None
-        # — expected-missing, never triangulated.
-        band_pos = [_pos_for(ft) for ft in times_oldest_first]
-        band_night = [
-            band == VIS_BAND and _solar_elevation(band_pos[i][0], band_pos[i][1], ft) < -6
-            for i, ft in enumerate(times_oldest_first)
-        ]
-        bjpgs_pre = [
-            None if band_night[i]
-            else _gcs_jpg_get(atcf_upper, ft.strftime("%Y%m%d%H%M"),
-                              band=band, lat=band_pos[i][0], lon=band_pos[i][1])
-            for i, ft in enumerate(times_oldest_first)
-        ]
-        band_anom_idx = _screen_and_queue_anomalies(
-            atcf_upper, times_oldest_first, bjpgs_pre, label=f"band{band}",
-            band=band)
-
-        band_hdrs = []
-        payloads_band: list[bytes] = []
-        boffset = 0
-        b_summary_sat = ""
-        for i, ft in enumerate(times_oldest_first):
-            iso_dt = ft.strftime("%Y-%m-%dT%H:%M:%SZ")
-            ilat, ilon = band_pos[i]
-            fb = [[ilat - half, ilon - half], [ilat + half, ilon + half]]
-
-            # Vis is daytime-only — mark night frames as expected-missing
-            if band_night[i]:
-                band_hdrs.append({
-                    "index": i, "datetime_utc": iso_dt, "satellite": "",
-                    "bounds": fb, "byte_offset": boffset, "byte_length": 0,
-                    "error": "nighttime",
-                })
-                continue
-
-            bjpg = bjpgs_pre[i]
-            if not bjpg or i in band_anom_idx:
-                band_hdrs.append({
-                    "index": i, "datetime_utc": iso_dt, "satellite": "",
-                    "bounds": fb, "byte_offset": boffset, "byte_length": 0,
-                    "error": "anomalous_scan" if (bjpg and i in band_anom_idx) else "no_cached_jpg",
-                })
-                continue
-            bucket_name, _ = select_goes_sat(ilon, ft)
-            sat_name = satellite_name_from_bucket(bucket_name)
-            band_hdrs.append({
-                "index": i, "datetime_utc": iso_dt, "satellite": sat_name,
-                "bounds": fb, "byte_offset": boffset, "byte_length": len(bjpg),
-            })
-            payloads_band.append(bjpg)
-            boffset += len(bjpg)
-            b_summary_sat = sat_name or b_summary_sat
-
-        binfo = BAND_RANGES.get(band, BAND_RANGES[13])
-        band_header = {
-            "total_frames": len(times_oldest_first),
-            "bounds": [[s_ilat - half, s_ilon - half],
-                       [s_ilat + half, s_ilon + half]],
-            "satellite": b_summary_sat,
-            "band": band,
-            "data_type": binfo["data_type"],
-            "vmin": binfo["vmin"],
-            "vmax": binfo["vmax"],
-            "lookback_hours": lookback_hours,
-            "interval_min": interval_min,
-            "radius_deg": radius_deg,
-            "media_type": "image/webp",
-            "frames": band_hdrs,
-        }
-        band_body = _pack_bundle(band_header, payloads_band)
-        band_key = f"{_GCS_RT_VERSION}/bundles/band/{band}/{atcf_upper}.bin"
-        _upload_public_bundle(band_key, band_body)
-        band_summary = (f", band{band}={len(payloads_band)} "
-                       f"({len(band_body)//1024} KB)")
-
     print(f"[Bundle Pre-build] {atcf_upper}: frames={len(payloads_jpg)} "
           f"({len(frames_body)//1024} KB), raw={len(payloads_raw)} "
-          f"({len(raw_body)//1024} KB){band_summary}")
+          f"({len(raw_body)//1024} KB)")
+
+    # ── Band bundle (WV / SWIR / Vis) ───────────────────────────
+    # Built separately so extra bands in the same cycle don't rebuild the
+    # IR display/raw bundles above. s_ilat/s_ilon (latest-frame position)
+    # feed the band header's summary bounds.
+    if band is not None:
+        _build_band_bundle(
+            atcf_id, fallback_lat, fallback_lon, times_oldest_first,
+            half, s_ilat, s_ilon, band, manifest,
+            lookback_hours, interval_min, radius_deg)
+
+
+def _build_band_bundle(
+    atcf_id: str, fallback_lat: float, fallback_lon: float,
+    times_oldest_first, half: float, s_ilat: float, s_ilon: float,
+    band: int, manifest: dict | None,
+    lookback_hours: float, interval_min: int, radius_deg: float,
+):
+    """Assemble + upload ONE band's display-WebP bundle (WV / SWIR / Vis).
+
+    Split out of `_build_and_upload_bundles` so a cycle warming several
+    bands builds the shared IR display + raw-Tb bundles only ONCE, then
+    calls this per band — avoiding re-reading/re-uploading the ~80 MB
+    raw-Tb bundle two extra times per cycle. Reads exclusively from the
+    already-warmed `band{N}-webp` GCS caches (no S3 fetches here)."""
+    atcf_upper = atcf_id.upper()
+
+    def _pos_for(ft):
+        return _bundle_pos_for(atcf_id, ft, fallback_lat, fallback_lon, manifest)
+
+    # Pre-pass: positions + cached band JPGs for every frame, so we can
+    # screen for anomalous scans (same "pops out and comes back" check
+    # the IR bundle uses) BEFORE shipping. Nighttime Vis frames stay None
+    # — expected-missing, never triangulated.
+    band_pos = [_pos_for(ft) for ft in times_oldest_first]
+    band_night = [
+        band == VIS_BAND and _solar_elevation(band_pos[i][0], band_pos[i][1], ft) < -6
+        for i, ft in enumerate(times_oldest_first)
+    ]
+    bjpgs_pre = [
+        None if band_night[i]
+        else _gcs_jpg_get(atcf_upper, ft.strftime("%Y%m%d%H%M"),
+                          band=band, lat=band_pos[i][0], lon=band_pos[i][1])
+        for i, ft in enumerate(times_oldest_first)
+    ]
+    band_anom_idx = _screen_and_queue_anomalies(
+        atcf_upper, times_oldest_first, bjpgs_pre, label=f"band{band}",
+        band=band)
+
+    band_hdrs = []
+    payloads_band: list[bytes] = []
+    boffset = 0
+    b_summary_sat = ""
+    for i, ft in enumerate(times_oldest_first):
+        iso_dt = ft.strftime("%Y-%m-%dT%H:%M:%SZ")
+        ilat, ilon = band_pos[i]
+        fb = [[ilat - half, ilon - half], [ilat + half, ilon + half]]
+
+        # Vis is daytime-only — mark night frames as expected-missing
+        if band_night[i]:
+            band_hdrs.append({
+                "index": i, "datetime_utc": iso_dt, "satellite": "",
+                "bounds": fb, "byte_offset": boffset, "byte_length": 0,
+                "error": "nighttime",
+            })
+            continue
+
+        bjpg = bjpgs_pre[i]
+        if not bjpg or i in band_anom_idx:
+            band_hdrs.append({
+                "index": i, "datetime_utc": iso_dt, "satellite": "",
+                "bounds": fb, "byte_offset": boffset, "byte_length": 0,
+                "error": "anomalous_scan" if (bjpg and i in band_anom_idx) else "no_cached_jpg",
+            })
+            continue
+        bucket_name, _ = select_goes_sat(ilon, ft)
+        sat_name = satellite_name_from_bucket(bucket_name)
+        band_hdrs.append({
+            "index": i, "datetime_utc": iso_dt, "satellite": sat_name,
+            "bounds": fb, "byte_offset": boffset, "byte_length": len(bjpg),
+        })
+        payloads_band.append(bjpg)
+        boffset += len(bjpg)
+        b_summary_sat = sat_name or b_summary_sat
+
+    binfo = BAND_RANGES.get(band, BAND_RANGES[13])
+    band_header = {
+        "total_frames": len(times_oldest_first),
+        "bounds": [[s_ilat - half, s_ilon - half],
+                   [s_ilat + half, s_ilon + half]],
+        "satellite": b_summary_sat,
+        "band": band,
+        "data_type": binfo["data_type"],
+        "vmin": binfo["vmin"],
+        "vmax": binfo["vmax"],
+        "lookback_hours": lookback_hours,
+        "interval_min": interval_min,
+        "radius_deg": radius_deg,
+        "media_type": "image/webp",
+        "frames": band_hdrs,
+    }
+    band_body = _pack_bundle(band_header, payloads_band)
+    band_key = f"{_GCS_RT_VERSION}/bundles/band/{band}/{atcf_upper}.bin"
+    _upload_public_bundle(band_key, band_body)
+    print(f"[Bundle Pre-build] {atcf_upper}: band{band}={len(payloads_band)} "
+          f"({len(band_body)//1024} KB)")
 
 
 def _solar_elevation(lat: float, lon: float, dt: _dt) -> float:
@@ -2302,9 +2367,9 @@ def _prefetch_ir_frames(storms: list):
                     or stale-cached on an earlier cycle is re-fetched and
                     overwritten once its real scan reaches S3."""
                     ilat, ilon = _manifest_pos(tdt, dstr, force)
-                    if not force and _gcs_rt_get(atcf_id.upper(), dstr,
+                    if not force and _gcs_rt_exists(atcf_id.upper(), dstr,
                                    lat=ilat, lon=ilon,
-                                   radius_deg=_PREFETCH_RADIUS_DEG) is not None:
+                                   radius_deg=_PREFETCH_RADIUS_DEG):
                         return
                     try:
                         raw = fetch_ir_tb_raw(ilat, ilon, tdt, box_deg,
@@ -2363,7 +2428,7 @@ def _prefetch_ir_frames(storms: list):
                     force=True re-fetches the newest few frames each cycle
                     (see _fetch_and_cache_ir) to heal leading-edge frames."""
                     ilat, ilon = _manifest_pos(tdt, dstr, force)
-                    if not force and _gcs_band_get(band, atcf_id.upper(), dstr, lat=ilat, lon=ilon) is not None:
+                    if not force and _gcs_band_exists(band, atcf_id.upper(), dstr, lat=ilat, lon=ilon):
                         return
                     if band == VIS_BAND:
                         se = _solar_elevation(ilat, ilon, tdt)
@@ -2526,19 +2591,24 @@ def _prefetch_ir_frames(storms: list):
                 # Daylight cycle adds Vis; nighttime adds SWIR. Both are
                 # the "visible-like" pair so the Visible button is always
                 # ready (true Vis when sunlit, SWIR when dark) without
-                # waiting on cold S3.
-                for eb in extra_bands:
-                    try:
-                        _build_and_upload_bundles(
-                            atcf_id, center_lat, center_lon, frame_times,
-                            radius_deg=_PREFETCH_RADIUS_DEG,
-                            lookback_hours=_PREFETCH_LOOKBACK_HOURS,
-                            interval_min=_PREFETCH_INTERVAL_MIN,
-                            band=eb,
-                            manifest=manifest,
-                        )
-                    except Exception as ex:
-                        print(f"[IR Pre-fetch] {atcf_id}: band {eb} bundle build failed: {ex}")
+                # waiting on cold S3. Call _build_band_bundle DIRECTLY (not
+                # the full _build_and_upload_bundles) so the ~80 MB IR
+                # display+raw bundles aren't re-assembled for each band.
+                if extra_bands:
+                    _b_times_oldest = list(reversed(list(frame_times)))
+                    _b_latest = (_b_times_oldest[-1] if _b_times_oldest
+                                 else _dt.now(timezone.utc))
+                    _b_silat, _b_silon = _bundle_pos_for(
+                        atcf_id, _b_latest, center_lat, center_lon, manifest)
+                    for eb in extra_bands:
+                        try:
+                            _build_band_bundle(
+                                atcf_id, center_lat, center_lon, _b_times_oldest,
+                                _PREFETCH_RADIUS_DEG, _b_silat, _b_silon, eb,
+                                manifest, _PREFETCH_LOOKBACK_HOURS,
+                                _PREFETCH_INTERVAL_MIN, _PREFETCH_RADIUS_DEG)
+                        except Exception as ex:
+                            print(f"[IR Pre-fetch] {atcf_id}: band {eb} bundle build failed: {ex}")
 
                 # ── Persist the render-once manifest ───────────────
                 # Prune to a 30h horizon (covers the 6h loop window + the
