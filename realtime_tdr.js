@@ -143,6 +143,15 @@
             _reconEnsureMissions();
             // Leaflet needs a nudge after being shown from display:none.
             setTimeout(function () { if (_rtMap) _rtMap.invalidateSize(); }, 80);
+        } else if (name === 'fl') {
+            _reconEnsureFLMissions();
+            // Plotly needs a resize after being shown from display:none.
+            setTimeout(function () {
+                var c = document.getElementById('recon-fl-charts');
+                if (c && c.style.display !== 'none' && window.Plotly) {
+                    try { window.Plotly.Plots.resize(c); } catch (e) {}
+                }
+            }, 80);
         }
         try { if (typeof gtag === 'function') gtag('event', 'recon_sub_switch', { sub: name }); } catch (e) {}
     };
@@ -280,6 +289,148 @@
             // Mission list still loading — apply once loadMissions() finishes.
             _reconPendingMission = missionId;
         }
+    };
+
+    // ── Recon · Flight-Level (Live HDOB) sub-tab ─────────────────
+    var _MS2KT = 1.94384;
+    var _reconFLMissionsLoaded = false;
+    var _reconFLCurrentMission = null;
+
+    function _reconFLMissionLabel(id) {
+        var p = _reconParseMission(id);
+        return p.dateISO ? (p.dateISO + ' ' + p.suffix) : id;
+    }
+
+    function _reconEnsureFLMissions() {
+        var sel = document.getElementById('recon-fl-mission');
+        if (!sel || _reconFLMissionsLoaded) return;
+        _reconFLMissionsLoaded = true;
+        var populate = function (list) {
+            sel.innerHTML = '<option value="">Select a mission…</option>';
+            list.forEach(function (id) {
+                var opt = document.createElement('option');
+                opt.value = id;
+                opt.textContent = _reconFLMissionLabel(id);
+                sel.appendChild(opt);
+            });
+        };
+        if (_reconMissionsList && _reconMissionsList.length) { populate(_reconMissionsList); return; }
+        fetchWithRetry(API_BASE + RT_PREFIX + '/missions')
+            .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+            .then(function (json) { _reconMissionsList = (json && json.missions) || []; populate(_reconMissionsList); })
+            .catch(function () { sel.innerHTML = '<option value="">Error loading missions</option>'; });
+    }
+
+    function _reconFLRenderSummary(json) {
+        var el = document.getElementById('recon-fl-summary');
+        if (!el) return;
+        var s = json.summary || {};
+        function card(label, val, unit) {
+            return '<div class="recon-fl-stat"><div class="recon-fl-stat-val">' + val +
+                (unit ? '<span class="recon-fl-stat-unit">' + unit + '</span>' : '') +
+                '</div><div class="recon-fl-stat-label">' + label + '</div></div>';
+        }
+        var maxFL = s.max_fl_wspd_ms != null ? Math.round(s.max_fl_wspd_ms * _MS2KT) : null;
+        var maxSF = s.max_sfmr_wspd_ms != null ? Math.round(s.max_sfmr_wspd_ms * _MS2KT) : null;
+        var html = '';
+        html += card('Peak FL Wind', maxFL != null ? maxFL : '—', maxFL != null ? ' kt' : '');
+        html += card('Peak SFMR Sfc', maxSF != null ? maxSF : '—', maxSF != null ? ' kt' : '');
+        html += card('Min SLP', s.min_slp_hpa != null ? Math.round(s.min_slp_hpa) : '—', s.min_slp_hpa != null ? ' hPa' : '');
+        html += card('Min Flt Pres', s.min_static_pres_hpa != null ? Math.round(s.min_static_pres_hpa) : '—', s.min_static_pres_hpa != null ? ' hPa' : '');
+        html += card('Mean Alt', s.mean_alt_m != null ? (s.mean_alt_m / 1000).toFixed(1) : '—', s.mean_alt_m != null ? ' km' : '');
+        html += card('Obs', json.n_obs != null ? json.n_obs : '—', '');
+        el.innerHTML = html;
+        el.style.display = '';
+    }
+
+    function _reconFLRenderCharts(json) {
+        var el = document.getElementById('recon-fl-charts');
+        if (!el || !window.Plotly) return;
+        var obs = json.observations;
+        var t = obs.map(function (o) { return o.time; });
+        function col(key, scale) {
+            return obs.map(function (o) {
+                var v = o[key];
+                return (v === null || v === undefined) ? null : (scale ? v * scale : v);
+            });
+        }
+        var anyExtrap = obs.some(function (o) { return o.extrapolated_sfc_wspd_ms != null; });
+
+        var traces = [
+            { x: t, y: col('fl_wspd_ms', _MS2KT), name: 'FL Wind', type: 'scatter', mode: 'lines', line: { color: '#00e5ff', width: 1.5 }, yaxis: 'y' },
+            { x: t, y: col('sfmr_wspd_ms', _MS2KT), name: 'SFMR Sfc', type: 'scatter', mode: 'lines', line: { color: '#fb923c', width: 1.5 }, yaxis: 'y' }
+        ];
+        if (anyExtrap) {
+            traces.push({ x: t, y: col('extrapolated_sfc_wspd_ms', _MS2KT), name: 'Extrap Sfc', type: 'scatter', mode: 'lines', line: { color: '#fde047', width: 1, dash: 'dot' }, yaxis: 'y' });
+        }
+        traces.push({ x: t, y: col('slp_hpa'), name: 'SLP', type: 'scatter', mode: 'lines', line: { color: '#a78bfa', width: 1.5 }, yaxis: 'y2' });
+        traces.push({ x: t, y: col('static_pres_hpa'), name: 'Flt Pres', type: 'scatter', mode: 'lines', line: { color: '#60a5fa', width: 1, dash: 'dot' }, yaxis: 'y2' });
+        traces.push({ x: t, y: col('temp_c'), name: 'Temp', type: 'scatter', mode: 'lines', line: { color: '#f87171', width: 1.5 }, yaxis: 'y3' });
+        traces.push({ x: t, y: col('dewpoint_c'), name: 'Dewpt', type: 'scatter', mode: 'lines', line: { color: '#34d399', width: 1.5 }, yaxis: 'y3' });
+        traces.push({ x: t, y: col('gps_alt_m', 0.001), name: 'GPS Alt', type: 'scatter', mode: 'lines', line: { color: '#94a3b8', width: 1.5 }, yaxis: 'y4' });
+
+        var ax = { gridcolor: 'rgba(148,163,184,0.12)', zeroline: false, color: '#cbd5e1' };
+        function yax(domain, title) {
+            return { gridcolor: ax.gridcolor, zeroline: false, color: ax.color, domain: domain, title: { text: title, font: { size: 11 } } };
+        }
+        var layout = {
+            height: 660,
+            margin: { l: 62, r: 16, t: 8, b: 40 },
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: 'rgba(0,0,0,0)',
+            font: { color: '#cbd5e1', family: 'DM Sans, sans-serif', size: 11 },
+            showlegend: true,
+            legend: { orientation: 'h', x: 0, y: 1.07, font: { size: 10 } },
+            hovermode: 'x unified',
+            xaxis: { gridcolor: ax.gridcolor, zeroline: false, color: ax.color, anchor: 'y4', title: { text: 'Time (UTC)', font: { size: 11 } } },
+            yaxis: yax([0.78, 1.0], 'Wind (kt)'),
+            yaxis2: yax([0.52, 0.74], 'Pressure (hPa)'),
+            yaxis3: yax([0.26, 0.48], 'Temp (°C)'),
+            yaxis4: yax([0.0, 0.22], 'Alt (km)')
+        };
+        el.style.display = '';
+        window.Plotly.newPlot(el, traces, layout, { responsive: true, displayModeBar: false });
+    }
+
+    window.reconLoadFlightLevel = function (mission) {
+        var statusEl = document.getElementById('recon-fl-status');
+        var summaryEl = document.getElementById('recon-fl-summary');
+        var chartsEl = document.getElementById('recon-fl-charts');
+        var emptyEl = document.getElementById('recon-fl-empty');
+        if (!mission) {
+            _reconFLCurrentMission = null;
+            if (statusEl) statusEl.textContent = '';
+            if (summaryEl) summaryEl.style.display = 'none';
+            if (chartsEl) { chartsEl.style.display = 'none'; }
+            if (emptyEl) { emptyEl.style.display = ''; emptyEl.textContent = 'Select a mission above to view its flight-level data.'; }
+            return;
+        }
+        _reconFLCurrentMission = mission;
+        if (emptyEl) emptyEl.style.display = 'none';
+        if (summaryEl) summaryEl.style.display = 'none';
+        if (chartsEl) { chartsEl.style.display = 'none'; chartsEl.innerHTML = ''; }
+        if (statusEl) statusEl.textContent = 'Loading flight-level data…';
+
+        fetchWithRetry(API_BASE + RT_PREFIX + '/flightlevel_mission?mission=' + encodeURIComponent(mission))
+            .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+            .then(function (json) {
+                if (_reconFLCurrentMission !== mission) return;  // superseded by a newer selection
+                var obs = json.observations || [];
+                if (!obs.length) {
+                    if (statusEl) statusEl.textContent = '';
+                    if (emptyEl) { emptyEl.style.display = ''; emptyEl.textContent = json.message || 'No flight-level data available for this mission.'; }
+                    return;
+                }
+                if (statusEl) statusEl.textContent = json.n_obs + ' pts · ' + (json.n_obs_total || 0) + ' raw 1-Hz';
+                _reconFLRenderSummary(json);
+                _reconFLRenderCharts(json);
+                _ga('recon_fl_load', { mission: mission, n: json.n_obs });
+            })
+            .catch(function (err) {
+                if (_reconFLCurrentMission !== mission) return;
+                if (statusEl) statusEl.textContent = '';
+                if (emptyEl) { emptyEl.style.display = ''; emptyEl.textContent = 'Could not load flight-level data: ' + (err && err.message ? err.message : err); }
+            });
     };
 
     // ── Toast (reuse if available, otherwise standalone) ─────────

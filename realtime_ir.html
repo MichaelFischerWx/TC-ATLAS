@@ -2170,10 +2170,22 @@
             <!-- END moved Real-Time TDR content -->
         </div>
 
-        <div class="recon-sub-panel recon-stub" data-sub="fl" style="display:none;">
-            <div class="recon-stub-card">
-                <h3>Flight-Level / HDOB</h3>
-                <p>Real-time flight-level track on the map plus along-track time series (altitude, pressure, temperature, wind). Coming soon.</p>
+        <div class="recon-sub-panel" data-sub="fl" style="display:none;">
+            <div class="recon-fl-wrap">
+                <div class="rt-header">
+                    <h2 class="rt-header-title">Flight-Level Observations</h2>
+                    <p class="rt-header-desc">Full-sortie in-situ (IWG1) &amp; SFMR time series from the NOAA P-3 reconnaissance data stream. Select a mission to load its flight-level traces.</p>
+                </div>
+                <div class="recon-fl-toolbar">
+                    <label class="toolbar-label" for="recon-fl-mission">Mission</label>
+                    <select id="recon-fl-mission" class="toolbar-select" style="min-width:200px;" onchange="window.reconLoadFlightLevel(this.value)">
+                        <option value="">Select a mission…</option>
+                    </select>
+                    <span id="recon-fl-status" class="recon-fl-status"></span>
+                </div>
+                <div id="recon-fl-summary" class="recon-fl-summary" style="display:none;"></div>
+                <div id="recon-fl-charts" class="recon-fl-charts" style="display:none;"></div>
+                <div id="recon-fl-empty" class="recon-fl-empty">Select a mission above to view its flight-level data.</div>
             </div>
         </div>
 
