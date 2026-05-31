@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>37 GHz color recipe — NRL/GeoIPS (now live)</title>
+<style>
+  body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; background:#111; color:#eee; }
+  header { padding: 18px 24px; border-bottom:1px solid #333; }
+  h1 { font-size: 19px; margin:0 0 4px; }
+  p.sub { margin:0; color:#aaa; font-size:13px; }
+  .grid { display:grid; grid-template-columns: repeat(4, 1fr); gap:8px; max-width:1500px; margin:18px auto; padding:0 12px; }
+  .cell { background:#1a1a1a; border:1px solid #333; border-radius:8px; padding:10px; text-align:center; }
+  .cell.live { border-color:#ff6b9d; box-shadow:0 0 0 1px #ff6b9d33; }
+  .cell img { width:100%; height:auto; border-radius:4px; background:#fff; }
+  .lab { font-weight:600; margin-bottom:6px; font-size:14px; }
+  .old { color:#ff8080; } .usr { color:#9cf; } .fit { color:#ffd166; } .can { color:#ff6b9d; }
+  .legend { max-width:1100px; margin:0 auto 30px; padding:0 16px; font-size:13px; color:#bbb; line-height:1.5; }
+  .cap { font-size:11px; color:#888; margin-top:4px; }
+  code { background:#000; padding:1px 5px; border-radius:3px; color:#9cf; }
+  table { border-collapse:collapse; margin:8px 0; font-size:13px; }
+  td,th { border:1px solid #333; padding:4px 10px; text-align:left; }
+</style>
+</head>
+<body>
+<header>
+  <h1>NRL 37&nbsp;GHz color composite — recipe comparison</h1>
+  <p class="sub"><b class="can">CANON (NRL/GeoIPS ★)</b> is now live in <code>microwave_api.py</code> — the authoritative operational recipe, adopted verbatim. Synthetic scene &amp; color-space sweep (no real overpass yet).</p>
+</header>
+
+<div class="grid">
+  <div class="cell"><div class="lab old">OLD (original) — TC</div><img src="scene_old.png"></div>
+  <div class="cell"><div class="lab usr">USER (paper-pinned) — TC</div><img src="scene_user.png"></div>
+  <div class="cell"><div class="lab fit">FIT (salmon, fit to Fig.1) — TC</div><img src="scene_fit.png"></div>
+  <div class="cell live"><div class="lab can">CANON (NRL ★ live) — TC</div><img src="scene_canon.png"></div>
+  <div class="cell"><div class="lab old">OLD — color space</div><img src="space_old.png"></div>
+  <div class="cell"><div class="lab usr">USER — color space</div><img src="space_user.png"></div>
+  <div class="cell"><div class="lab fit">FIT — color space</div><img src="space_fit.png"></div>
+  <div class="cell live"><div class="lab can">CANON (★) — color space</div><img src="space_canon.png"></div>
+</div>
+
+<div class="legend">
+  <p style="font-size:15px;color:#fff;"><b>What's live:</b> the authoritative NRL/GeoIPS <code>37color</code> recipe (linear guns, no gamma):</p>
+  <p style="font-size:14px;color:#fff;">
+  R = clamp((280 − PCT37) / 20)&nbsp;&nbsp;·&nbsp;&nbsp;G = clamp((V37 − 180) / 120)&nbsp;&nbsp;·&nbsp;&nbsp;B = clamp((H37 − 160) / 140)&nbsp;&nbsp;
+  <span style="color:#aaa;">[ PCT37 = 2.181·V37 − 1.181·H37 ]</span></p>
+  <p>Color progression: <b style="color:#3cb371">green</b> ocean → <b style="color:#3ad1e0">cyan</b> warm rain →
+  <b style="color:#ff6b9d">pink/magenta</b> deep convection → <b style="color:#ff3b30">red</b> intense ice. The
+  <b>pink</b> convective signature is the iconic NRL look (Kieper &amp; Jiang pre-RI "pink ring") — produced by the
+  160&nbsp;K blue onset keeping blue present in the convective wedge (R+B = pink).</p>
+</div>
+
+<div class="legend">
+  <p style="font-size:15px;color:#fff;"><b>The key finding: pink (operational) vs salmon (paper Fig. 1)</b></p>
+  <p>We first reverse-engineered the recipe by least-squares fitting to the pixels of Jiang&nbsp;2018 Fig.&nbsp;1
+  (the <b class="fit">FIT</b> column — salmon convection, err 32.9). When the real GeoIPS source recipe surfaced, it
+  rendered convection <b class="can">pink/magenta</b> instead. Painting each recipe back onto the figure's data points
+  shows the disagreement is <i>entirely the convective wedge</i> — green and cyan agree:</p>
+  <div class="grid" style="grid-template-columns:1fr 1fr 1fr;max-width:1140px;">
+    <div class="cell"><div class="lab">REAL Fig. 1 (extracted)</div><img src="match_truth.png"><div class="cap">salmon convective wedge</div></div>
+    <div class="cell"><div class="lab fit">FIT predicted</div><img src="match_fit.png"><div class="cap">err 32.9 — matches the figure (salmon)</div></div>
+    <div class="cell live"><div class="lab can">CANON predicted</div><img src="match_canon.png"><div class="cap">err 60.2 — pink, by design</div></div>
+  </div>
+  <p>So the pixel-error metric <i>favors</i> the salmon fit — but that's misleading: <b>Fig. 1 is not the operational
+  product.</b> The original goal was to match "other sources" (real NRL imagery), which show pink. The paper even
+  calls the signature "pink" in its text. We therefore ship the operational CANON recipe, not the figure fit.</p>
+  <table>
+    <tr><th>recipe</th><th>convective hue</th><th>err vs Fig.1</th><th>note</th></tr>
+    <tr><td><b class="can">CANON ★</b></td><td>pink/magenta</td><td>60.2</td><td><b>live</b> — matches operational NRL</td></tr>
+    <tr><td class="fit">FIT</td><td>salmon</td><td>32.9</td><td>fit to Fig.1 pixels (superseded)</td></tr>
+    <tr><td class="usr">USER</td><td>pink-ish</td><td>57.8</td><td>paper-pinned; close sibling of CANON</td></tr>
+    <tr><td class="old">OLD</td><td>washed teal</td><td>105.0</td><td>original artifact</td></tr>
+  </table>
+</div>
+
+<div class="legend">
+  <p style="font-size:14px;color:#fff;"><b>Appendix — transition-band extraction fix (from the Fig. 1 fitting work)</b></p>
+  <p>While fitting to Fig. 1 we found the pixel extraction had silently dropped the pale salmon↔cyan
+  <i>transition</i> colors: a blend of near-opposite hues is low-saturation, so the <code>max−min&gt;55</code> filter
+  discarded it along with the white background. Recovering those ~4.5k pixels (<code>mn&lt;232 &amp; sat≥18</code>)
+  closed the white gap through the middle of the arrowhead. (This refined the salmon FIT; the live CANON recipe comes
+  from the GeoIPS source, not the fit.)</p>
+  <div class="grid" style="grid-template-columns:1fr 1fr 1fr;max-width:1140px;">
+    <div class="cell"><div class="lab old">BEFORE: sat&gt;55</div><img src="match_truth_oldext.png"><div class="cap">48,628 px — transition discarded</div></div>
+    <div class="cell"><div class="lab" style="color:#ffb3c1;">DROPPED pixels</div><img src="truth_dropped_transition.png"><div class="cap">~4.5k pale transition pixels</div></div>
+    <div class="cell"><div class="lab" style="color:#7CFC9B;">AFTER: inclusive</div><img src="match_truth.png"><div class="cap">53,442 px — blend restored</div></div>
+  </div>
+</div>
+</body>
+</html>

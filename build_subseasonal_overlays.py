@@ -440,28 +440,48 @@ GEFS_FORECAST_DAYS = 10
 GEFS_LATENCY_HOURS = 7   # 00Z geavg is reliably published by ~06-07 UTC
 
 
-def _gefs_cycle_for(today: datetime):
+def _gefs_cycle_for(today: datetime, not_after=None):
     """Pick the GEFS 00Z cycle to use. Prefers today's 00Z once it's had
     time to publish; otherwise falls back to yesterday's 00Z. Returns
-    (YYYYMMDD, "00")."""
+    (YYYYMMDD, "00").
+
+    `not_after` (a datetime.date) caps the chosen cycle date so it never
+    falls after the day the caller intends the forecast to start. This lets
+    the forecast anchor to `observed_latest + 1` with no gap: if observed
+    OLR lags (e.g. ends D-2), we deliberately use the slightly-older D-1 00Z
+    cycle rather than today's, because only a cycle dated ≤ observed_latest+1
+    can produce a daily mean valid on the missing day."""
     now = datetime.now(timezone.utc)
     base = today
     # If 'today' is the current UTC day but 00Z hasn't had GEFS_LATENCY_HOURS
     # to publish, step back a day.
     if (base.date() == now.date()) and (now.hour < GEFS_LATENCY_HOURS):
         base = base - timedelta(days=1)
+    if not_after is not None and base.date() > not_after:
+        base = datetime(not_after.year, not_after.month, not_after.day,
+                        tzinfo=timezone.utc)
     return base.strftime("%Y%m%d"), "00"
 
 
-def _fetch_gefs_ulwrf_toa(date_str: str, hour_str: str, fh: int):
-    """Fetch one GEFS ensemble-mean ULWRF-at-TOA field (W/m²) for forecast
-    hour `fh` via .idx byte-range. Returns an xarray.DataArray(lat, lon)
-    on the native 0.5° grid, or None on failure."""
+def _gefs_grib_base(date_str: str, hour_str: str, fh: int,
+                    member: str = "geavg") -> str:
+    """AWS URL for one GEFS pgrb2ap5 (0.5°) GRIB file. `member` is the
+    file stem: 'geavg' (ensemble mean), 'gespr' (spread), or 'gepNN'
+    (perturbation member, e.g. 'gep01'…'gep30')."""
+    return (f"https://{GEFS_S3_HOST}/gefs.{date_str}/{hour_str}/atmos/"
+            f"pgrb2ap5/{member}.t{hour_str}z.pgrb2a.0p50.f{fh:03d}")
+
+
+def _fetch_gefs_message(base: str, match, label: str):
+    """Fetch one GRIB message from a GEFS pgrb2ap5 file via .idx byte-range.
+
+    `match(parts)` receives the colon-split .idx line as a list and returns
+    True for the wanted message; `label` is a short human tag for logs.
+    Returns an xarray.DataArray(lat, lon) on the native 0.5° grid (coords
+    renamed lat/lon, read into memory), or None on failure."""
     import requests
     import xarray as xr
-    base = (f"https://{GEFS_S3_HOST}/gefs.{date_str}/{hour_str}/atmos/"
-            f"pgrb2ap5/geavg.t{hour_str}z.pgrb2a.0p50.f{fh:03d}")
-    # Locate the ULWRF:top-of-atmosphere message in the .idx sidecar.
+    # Locate the wanted message in the .idx sidecar.
     start = end = None
     for attempt in range(3):
         try:
@@ -469,17 +489,17 @@ def _fetch_gefs_ulwrf_toa(date_str: str, hour_str: str, fh: int):
             lines = idx.strip().split("\n")
             for i, ln in enumerate(lines):
                 p = ln.split(":")
-                if len(p) >= 5 and p[3] == "ULWRF" and p[4] == "top of atmosphere":
+                if match(p):
                     start = int(p[1])
                     if i + 1 < len(lines):
                         end = int(lines[i + 1].split(":")[1]) - 1
                     break
             break
         except Exception as e:
-            log.warning("GEFS idx fetch f%03d attempt %d failed: %s",
-                        fh, attempt + 1, e)
+            log.warning("GEFS idx fetch (%s) attempt %d failed: %s",
+                        label, attempt + 1, e)
     if start is None:
-        log.warning("GEFS f%03d: ULWRF TOA not found in idx", fh)
+        log.warning("GEFS: %s not found in idx (%s)", label, base.rsplit("/", 1)[-1])
         return None
     rng = f"bytes={start}-{end if end is not None else ''}"
     content = None
@@ -489,10 +509,10 @@ def _fetch_gefs_ulwrf_toa(date_str: str, hour_str: str, fh: int):
             if r.status_code in (200, 206) and r.content.startswith(b"GRIB"):
                 content = r.content
                 break
-            log.warning("GEFS f%03d range fetch HTTP %d", fh, r.status_code)
+            log.warning("GEFS %s range fetch HTTP %d", label, r.status_code)
         except Exception as e:
-            log.warning("GEFS f%03d range fetch attempt %d failed: %s",
-                        fh, attempt + 1, e)
+            log.warning("GEFS %s range fetch attempt %d failed: %s",
+                        label, attempt + 1, e)
     if content is None:
         return None
     with tempfile.NamedTemporaryFile(suffix=".grib2", delete=False) as tmp:
@@ -511,7 +531,7 @@ def _fetch_gefs_ulwrf_toa(date_str: str, hour_str: str, fh: int):
         # finally clause deletes the backing temp file.
         return da.load()
     except Exception as e:
-        log.warning("GEFS f%03d cfgrib decode failed: %s", fh, e)
+        log.warning("GEFS %s cfgrib decode failed: %s", label, e)
         return None
     finally:
         try:
@@ -520,23 +540,64 @@ def _fetch_gefs_ulwrf_toa(date_str: str, hour_str: str, fh: int):
             pass
 
 
+def _fetch_gefs_ulwrf_toa(date_str: str, hour_str: str, fh: int,
+                          member: str = "geavg"):
+    """Fetch one GEFS ULWRF-at-TOA field (W/m² = OLR) for forecast hour `fh`.
+    Returns an xarray.DataArray(lat, lon) on the native 0.5° grid, or None."""
+    base = _gefs_grib_base(date_str, hour_str, fh, member)
+    return _fetch_gefs_message(
+        base,
+        lambda p: len(p) >= 5 and p[3] == "ULWRF" and p[4] == "top of atmosphere",
+        label=f"ULWRF-TOA f{fh:03d}",
+    )
+
+
+def _fetch_gefs_uwind(date_str: str, hour_str: str, fh: int, level_mb: int,
+                      member: str = "geavg"):
+    """Fetch one GEFS zonal-wind (UGRD) field at `level_mb` hPa for forecast
+    hour `fh`. Used to build the RMM index inputs (u850, u200). Returns an
+    xarray.DataArray(lat, lon) on the native 0.5° grid, or None."""
+    base = _gefs_grib_base(date_str, hour_str, fh, member)
+    return _fetch_gefs_message(
+        base,
+        lambda p: len(p) >= 5 and p[3] == "UGRD" and p[4] == f"{level_mb} mb",
+        label=f"UGRD-{level_mb}mb f{fh:03d}",
+    )
+
+
 def fetch_gefs_olr_forecast(today: datetime, target_lat, target_lon,
-                            days: int = GEFS_FORECAST_DAYS):
+                            days: int = GEFS_FORECAST_DAYS,
+                            start_date=None):
     """Build daily-mean GEFS forecast OLR on the observed OLR grid.
 
     Returns an xarray.DataArray(time, lat, lon) of daily-mean ULWRF (W/m²)
-    for `days` forecast calendar days, regridded (bilinear) to
+    for up to `days` forecast calendar days, regridded (bilinear) to
     (target_lat, target_lon), or None if the cycle is unavailable. Forecast
     day k (1-based) is the mean of the four 6 h-average steps spanning hours
     [24(k-1)+6 … 24k], valid on calendar date cycle_date + (k-1).
+
+    `start_date` (a datetime.date) anchors the forecast so its first emitted
+    day is exactly that calendar day: the GEFS cycle is capped to start_date
+    (via `_gefs_cycle_for(not_after=...)`) and any forecast day valid before
+    start_date is skipped. With start_date = observed_latest + 1 the series
+    joins the observed window contiguously — no D-1 gap, so the Hovmöller has
+    no blank stripe and the WK FFT sees an evenly-spaced time axis.
     """
     import xarray as xr
-    date_str, hour_str = _gefs_cycle_for(today)
+    date_str, hour_str = _gefs_cycle_for(today, not_after=start_date)
     cycle_dt = datetime.strptime(date_str, "%Y%m%d").replace(tzinfo=timezone.utc)
-    log.info("Fetching GEFS %s %sZ ULWRF forecast (%d days) ...",
-             date_str, hour_str, days)
+    cycle_d0 = np.datetime64(cycle_dt.date(), "D")
+    want_start = (np.datetime64(start_date, "D")
+                  if start_date is not None else cycle_d0)
+    log.info("Fetching GEFS %s %sZ ULWRF forecast (≤%d days, start %s) ...",
+             date_str, hour_str, days, str(want_start))
     daily, times = [], []
     for k in range(1, days + 1):
+        valid = cycle_d0 + np.timedelta64(k - 1, "D")
+        if valid < want_start:
+            # GEFS day overlaps the observed window — skip so the forecast
+            # begins contiguously at observed_latest + 1.
+            continue
         fhs = [24 * (k - 1) + 6, 24 * (k - 1) + 12,
                24 * (k - 1) + 18, 24 * k]
         block = [_fetch_gefs_ulwrf_toa(date_str, hour_str, fh) for fh in fhs]
@@ -550,15 +611,170 @@ def fetch_gefs_olr_forecast(today: datetime, target_lat, target_lon,
         # descending-lat source coordinate.
         reg = day_mean.interp(lat=target_lat, lon=target_lon)
         daily.append(reg)
-        times.append(np.datetime64(cycle_dt.date(), "D") + np.timedelta64(k - 1, "D"))
+        times.append(valid)
     if not daily:
         log.warning("GEFS forecast produced no days")
         return None
     da = xr.concat(daily, dim="time")
     da = da.assign_coords(time=("time", np.array(times)))
-    log.info("GEFS forecast: %d daily means %s .. %s",
-             da.sizes["time"], str(times[0]), str(times[-1]))
+    # Record the GEFS initialization cycle so the frontend can show it.
+    da.attrs["gefs_cycle"] = f"{cycle_dt.strftime('%Y-%m-%d')} {hour_str}Z"
+    log.info("GEFS forecast: %d daily means %s .. %s (cycle %s %sZ)",
+             da.sizes["time"], str(times[0]), str(times[-1]), date_str, hour_str)
     return da
+
+
+# --------------------------------------------------------------------------
+# GEFS RMM (Wheeler-Hendon 2004) forecast inputs + projection
+# --------------------------------------------------------------------------
+# RMM1/RMM2 are the first two PCs of combined OLR + u850 + u200 anomalies
+# averaged 15°S-15°N and projected onto the W&H EOF structures. We compute
+# the forecast trajectory ourselves from GEFS rather than depending on an
+# unpublished package: the algorithm is canonical (Wheeler & Hendon 2004,
+# Mon. Wea. Rev.) and the EOF basis is the GEFSv12-reanalysis package from
+# NCEI accession 0259491 (DOI 10.25921/pqq7-3n58), which is model-consistent
+# with the operational GEFS we fetch above.
+#
+# RMM_LAT_BAND is the meridional average window. NOTE: unlike the rest of the
+# Seasonal/Subseasonal tab (which uses cos-lat weighting — see
+# feedback_cos_lat_weighting), RMM uses a PLAIN latitudinal mean to match the
+# convention the W&H/GEFSv12 EOFs were constructed with. Mixing a cos-lat
+# average here would bias the projection off the EOF basis and break the
+# t=0-vs-BoM validation.
+RMM_LAT_BAND = (-15.0, 15.0)
+
+# Vendored EOF package (one-time download from NCEI 0259491, converted to a
+# compact JSON). Absent until retrieved → RMM forecast is skipped gracefully,
+# exactly like a missing hovmoller_fcst.json. Expected schema (to be confirmed
+# against the NCEI files):
+#   {
+#     "source": "NCEI 0259491 (GEFSv12 reanalysis EOFs)",
+#     "doi": "10.25921/pqq7-3n58",
+#     "lon": [..],                      # EOF longitude grid (deg E)
+#     "eof1": {"olr": [..], "u850": [..], "u200": [..]},  # loadings vs lon
+#     "eof2": {"olr": [..], "u850": [..], "u200": [..]},
+#     "norm": {"olr": <f>, "u850": <f>, "u200": <f>},     # field norm factors
+#     "pc_std": {"rmm1": <f>, "rmm2": <f>}                # PC normalization
+#   }
+WH_EOF_PATH = Path("data/wh_eofs_gefsv12.json")
+
+
+def _gefs_daily_means(date_str: str, hour_str: str, days: int,
+                      fetch_one, label: str):
+    """Build per-forecast-day means by averaging the four sub-daily steps
+    [6,12,18,24] h of each 24 h window. `fetch_one(fh)` returns a
+    DataArray(lat, lon) or None. Returns (list[DataArray], list[np.datetime64])
+    truncated at the first incomplete day."""
+    cycle_dt = datetime.strptime(date_str, "%Y%m%d").replace(tzinfo=timezone.utc)
+    daily, times = [], []
+    for k in range(1, days + 1):
+        fhs = [24 * (k - 1) + 6, 24 * (k - 1) + 12,
+               24 * (k - 1) + 18, 24 * k]
+        block = [fetch_one(fh) for fh in fhs]
+        block = [b for b in block if b is not None]
+        if len(block) < len(fhs):
+            log.warning("GEFS %s day %d incomplete (%d/%d steps) — stopping",
+                        label, k, len(block), len(fhs))
+            break
+        daily.append(sum(block) / float(len(block)))
+        times.append(np.datetime64(cycle_dt.date(), "D") + np.timedelta64(k - 1, "D"))
+    return daily, times
+
+
+def _lat_average(da, lat_band=RMM_LAT_BAND):
+    """Plain (un-weighted) meridional mean over `lat_band`, returning a
+    DataArray(time?, lon). Handles ascending or descending lat coords."""
+    lo, hi = min(lat_band), max(lat_band)
+    sub = da.sel(lat=slice(hi, lo)) if da.lat[0] > da.lat[-1] else da.sel(lat=slice(lo, hi))
+    return sub.mean(dim="lat")
+
+
+def fetch_gefs_rmm_inputs(today: datetime, member: str = "geavg",
+                          days: int = GEFS_FORECAST_DAYS):
+    """Fetch the three GEFS forecast fields RMM needs (OLR, u850, u200),
+    build daily means, and average 15°S-15°N (plain mean — see RMM_LAT_BAND).
+
+    Returns {"times": np.ndarray, "lon": np.ndarray,
+             "olr": (T,L), "u850": (T,L), "u200": (T,L)} as numpy arrays on
+    the native GEFS 0.5° longitude grid, or None if the cycle is unavailable.
+    The projection step regrids `lon` onto the EOF longitude grid, so this
+    stays independent of which EOF basis is wired in."""
+    date_str, hour_str = _gefs_cycle_for(today)
+    log.info("Fetching GEFS %s %sZ RMM inputs (%s, %d days) ...",
+             date_str, hour_str, member, days)
+
+    fields = {}
+    times_ref = None
+    for name, fetch_one in (
+        ("olr",  lambda fh: _fetch_gefs_ulwrf_toa(date_str, hour_str, fh, member)),
+        ("u850", lambda fh: _fetch_gefs_uwind(date_str, hour_str, fh, 850, member)),
+        ("u200", lambda fh: _fetch_gefs_uwind(date_str, hour_str, fh, 200, member)),
+    ):
+        daily, times = _gefs_daily_means(date_str, hour_str, days, fetch_one, name)
+        if not daily:
+            log.warning("GEFS RMM input %s produced no days", name)
+            return None
+        # Trim all fields to the shortest complete length so they align.
+        if times_ref is None or len(times) < len(times_ref):
+            times_ref = times
+        avg = [_lat_average(d) for d in daily]
+        fields[name] = avg
+
+    n = len(times_ref)
+    lon = np.asarray(fields["olr"][0]["lon"].values, dtype=float)
+    out = {"times": np.array(times_ref[:n]), "lon": lon}
+    for name in ("olr", "u850", "u200"):
+        out[name] = np.stack([fields[name][k].values for k in range(n)], axis=0)
+    log.info("GEFS RMM inputs: %s, %d days, %d lons", member, n, lon.size)
+    return out
+
+
+def _load_wh_eofs():
+    """Load the vendored W&H/GEFSv12 EOF package, or None if not yet
+    retrieved (see WH_EOF_PATH docstring for the expected schema)."""
+    if not WH_EOF_PATH.exists():
+        return None
+    try:
+        with open(WH_EOF_PATH) as f:
+            pkg = json.load(f)
+        for key in ("lon", "eof1", "eof2", "norm"):
+            if key not in pkg:
+                log.warning("EOF package missing '%s' — ignoring", key)
+                return None
+        return pkg
+    except Exception as e:
+        log.warning("EOF package load failed: %s", e)
+        return None
+
+
+def build_rmm_forecast(today: datetime, member: str = "geavg",
+                       days: int = GEFS_FORECAST_DAYS):
+    """Orchestrate the GEFS RMM forecast: fetch inputs → project onto the
+    W&H EOFs → RMM1/RMM2 per lead day.
+
+    Returns {"times": [...iso], "rmm1": [...], "rmm2": [...],
+             "phase": [...], "amplitude": [...], "member": member,
+             "source": <eof source>} or None if the EOF package isn't
+    vendored yet OR the GEFS cycle is unavailable.
+
+    The anomaly preprocessing (annual-cycle removal + most-recent-120-day
+    mean removal) and the projection itself are wired once the NCEI EOF
+    package is in the repo, so its exact climatology/normalization
+    conventions are matched rather than guessed (which is what the
+    t=0-vs-BoM-observed-dot validation checks)."""
+    eofs = _load_wh_eofs()
+    if eofs is None:
+        log.info("RMM forecast skipped: EOF package %s not present yet",
+                 WH_EOF_PATH)
+        return None
+    inputs = fetch_gefs_rmm_inputs(today, member=member, days=days)
+    if inputs is None:
+        return None
+    # TODO(EOFs landed): anomaly + 120-day-mean removal + normalization +
+    # projection onto eofs['eof1']/['eof2']; validate t=0 vs BoM.
+    log.warning("RMM projection not yet implemented (EOF package present but "
+                "projection pending) — returning None")
+    return None
 
 
 # --------------------------------------------------------------------------
@@ -1089,7 +1305,7 @@ GCS_PREFIX = "subseasonal"   # gs://{bucket}/{prefix}/{wave}/{latest.png|metadat
 
 
 def build_hovmoller_slab(field, spec: WaveSpec, valid_time_iso: str,
-                         n_forecast: int = 0) -> dict:
+                         n_forecast: int = 0, gefs_cycle: str = None) -> dict:
     """Slice the full (time, lat, lon) wave-band field into a Hovmöller
     payload: last HOVMOLLER_LOOKBACK_DAYS days, latitudinally averaged
     over each band in HOVMOLLER_LAT_BANDS. Output is a JSON-ready dict
@@ -1138,6 +1354,8 @@ def build_hovmoller_slab(field, spec: WaveSpec, valid_time_iso: str,
         out["forecast_from"] = times[-n_forecast]
         out["analysis_valid_time"] = valid_time_iso
         out["forecast_source"] = "GEFS ens-mean OLR"
+        if gefs_cycle:
+            out["gefs_cycle"] = gefs_cycle
     all_vals = []
     for band in HOVMOLLER_LAT_BANDS:
         # Build a boolean mask on the lat axis instead of relying on
@@ -1694,18 +1912,27 @@ def main():
     # overlay and the default Hovmöller are stable regardless of forecast
     # availability. Any failure here degrades to observed-only.
     n_forecast = 0
+    gefs_cycle = None
     sym_ext = asym_ext = anom_ext = None
     if not args.no_forecast:
         try:
             import xarray as xr
-            fcst_olr = fetch_gefs_olr_forecast(today, window.lat, window.lon)
+            # Anchor the GEFS forecast to the day AFTER the last observed OLR
+            # so the extended series is contiguous (no D-1 gap → no blank
+            # Hovmöller stripe, no WK-FFT seam).
+            observed_latest = np.datetime64(last_time, "D")
+            # datetime64[D].astype(object) yields a datetime.date directly.
+            start_date = (observed_latest + np.timedelta64(1, "D")).astype(object)
+            fcst_olr = fetch_gefs_olr_forecast(
+                today, window.lat, window.lon, start_date=start_date)
             if fcst_olr is not None and fcst_olr.sizes["time"] > 0:
                 fcst_anom = daily_anomaly(fcst_olr, climo)
                 anom_ext = xr.concat([anom, fcst_anom], dim="time")
                 n_forecast = int(fcst_anom.sizes["time"])
+                gefs_cycle = fcst_olr.attrs.get("gefs_cycle")
                 sym_ext, asym_ext = symmetric_antisymmetric(anom_ext)
-                log.info("GEFS forecast appended to Hovmöller: +%d days",
-                         n_forecast)
+                log.info("GEFS forecast appended to Hovmöller: +%d days (cycle %s)",
+                         n_forecast, gefs_cycle)
         except Exception as e:
             log.exception("GEFS forecast extension failed; observed-only: %s", e)
             n_forecast = 0
@@ -1776,7 +2003,8 @@ def main():
                     filtered_ext = apply_pcf_projection(
                         wk_filter(asym_ext, spec), spec)
                 hov_fcst = build_hovmoller_slab(
-                    filtered_ext, spec, valid_time_iso, n_forecast=n_forecast)
+                    filtered_ext, spec, valid_time_iso, n_forecast=n_forecast,
+                    gefs_cycle=gefs_cycle)
             except Exception as e:
                 log.warning("Forecast Hovmöller build failed for %s: %s",
                             spec.name, e)

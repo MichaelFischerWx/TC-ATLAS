@@ -208,6 +208,13 @@ TLES_CACHE_STALE_MAX_AGE_HOURS = 72
 PASSES_KEY = "passes_predicted.json"
 PREDICT_HORIZON_HOURS = 24
 PREDICT_STEP_SECONDS = 60      # 1-min propagation step
+# Also propagate this far BEFORE t0. A pass that already scanned but is still
+# inside the NRT delivery window (AMSR2/SSMIS ~3 h) would otherwise drop out of
+# the payload the moment t0 rolls past its scan time — leaving the user with no
+# signal that imagery is inbound. Covering the worst-case latency (200 min) plus
+# buffer keeps those "in transit" passes in the file with their eta_on_tcatlas
+# so the frontend can flag them. ~240 extra 1-min SGP4 steps/sat — negligible.
+PREDICT_LOOKBACK_HOURS = 4
 
 # Per-sensor horizon overrides. Single-satellite sensors (GMI on GPM,
 # AMSR2 on GCOM-W1) have sparse tropical coverage and can miss the
@@ -2426,6 +2433,7 @@ def predict_passes(storms: Optional[list[dict]] = None,
                    tles: Optional[dict[int, tuple[str, str, str]]] = None,
                    t0: Optional[_dt] = None,
                    horizon_hours: float = PREDICT_HORIZON_HOURS,
+                   lookback_hours: float = PREDICT_LOOKBACK_HOURS,
                    include_disturbances: bool = True,
                    ) -> dict:
     """Build the passes_predicted.json payload. Inputs are optional so
@@ -2459,10 +2467,14 @@ def predict_passes(storms: Optional[list[dict]] = None,
             continue
         _name, l1, l2 = tles[catnr]
         per_sat_horizon_h = spec.get("predict_horizon_h") or horizon_hours
-        per_sat_horizon = timedelta(hours=per_sat_horizon_h)
+        # Window spans [t0 − lookback, t0 + horizon]: the look-back keeps
+        # recently-scanned passes still in NRT transit in the payload (flagged
+        # "in transit" by the frontend); the horizon is the usual forecast.
+        prop_start = t0 - timedelta(hours=lookback_hours)
+        prop_span = timedelta(hours=lookback_hours + per_sat_horizon_h)
         try:
             propagated[catnr] = _propagate_subpoints(
-                l1, l2, t0, per_sat_horizon)
+                l1, l2, prop_start, prop_span)
         except Exception as exc:
             logger.error("SGP4 propagation failed for %s (%d): %s",
                          spec["platform"], catnr, exc)
@@ -2497,6 +2509,13 @@ def predict_passes(storms: Optional[list[dict]] = None,
                 sub, float(lat), float(lon), detect_half)
             latency = timedelta(minutes=spec["nrt_latency_min"])
             for scan_start, min_d in hits:
+                eta = scan_start + latency
+                # Look-back yields past passes too. Keep a past pass only while
+                # it's still in NRT transit (eta >= t0); one that already landed
+                # by generation time is just clutter (and only gets staler as
+                # the frontend reads the file later). Future passes always kept.
+                if scan_start < t0 and eta < t0:
+                    continue
                 # Coverage geometry: min_d is the closest approach of the
                 # nadir track (swath centerline) to the storm center; the
                 # swath fully images the storm out to (W − min_d) km, and
@@ -2511,7 +2530,7 @@ def predict_passes(storms: Optional[list[dict]] = None,
                     "swath_half_km": round(swath_half, 1),
                     "coverage_radius_km": round(cov_radius),
                     "coverage_frac": round(cov_frac, 2),
-                    "eta_on_tcatlas": (scan_start + latency).isoformat(),
+                    "eta_on_tcatlas": eta.isoformat(),
                 })
         passes_out.sort(key=lambda p: p["predicted_scan_start"])
         rec = {

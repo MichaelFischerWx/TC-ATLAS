@@ -100,6 +100,66 @@ window.SubseasonalClock = (function () {
         };
     }
 
+    /* Append a GEFS forecast trajectory to the SVG `parts` array.
+     * fc schema (written by build_subseasonal_overlays.py, present only on
+     * the MJO/RMM record):
+     *   { member, source, times:[iso..], rmm1:[..], rmm2:[..],
+     *     members?: [ {rmm1:[..], rmm2:[..]}, ... ] }   // optional spread
+     * rmm1[0]/rmm2[0] is the init day (≈ today's observed dot). `pcToXY`
+     * maps (pc1,pc2)→{x,y}; `trail` supplies the today-marker as the anchor.
+     */
+    function _renderForecast(parts, fc, pcToXY, trail) {
+        if (!fc || !Array.isArray(fc.rmm1) || !Array.isArray(fc.rmm2)
+            || !fc.rmm1.length) return;
+        var FC_COLOR = '#00e5ff';   // DeepMind cyan — distinct from the blue trail
+        var anchor = (trail && trail.length) ? trail[trail.length - 1] : null;
+
+        function pathFrom(r1, r2, startAnchor) {
+            var d = '', started = false;
+            if (startAnchor) {
+                d = 'M' + startAnchor.x.toFixed(1) + ',' + startAnchor.y.toFixed(1);
+                started = true;
+            }
+            var pts = [];
+            for (var i = 0; i < r1.length; i++) {
+                if (r1[i] == null || r2[i] == null) continue;
+                var p = pcToXY(r1[i], r2[i]);
+                pts.push(p);
+                d += (started ? ' L' : 'M') + p.x.toFixed(1) + ',' + p.y.toFixed(1);
+                started = true;
+            }
+            return { d: d, pts: pts };
+        }
+
+        // Per-member spread cloud (faint), drawn first so the mean sits on top.
+        if (Array.isArray(fc.members)) {
+            fc.members.forEach(function (mb) {
+                if (!mb || !Array.isArray(mb.rmm1) || !Array.isArray(mb.rmm2)) return;
+                var mp = pathFrom(mb.rmm1, mb.rmm2, anchor);
+                if (mp.pts.length) {
+                    parts.push('<path d="' + mp.d + '" fill="none" stroke="'
+                        + FC_COLOR + '" stroke-opacity="0.16" stroke-width="0.8"/>');
+                }
+            });
+        }
+
+        // Ensemble-mean forecast path + nodes.
+        var fm = pathFrom(fc.rmm1, fc.rmm2, anchor);
+        if (!fm.pts.length) return;
+        parts.push('<path d="' + fm.d + '" fill="none" stroke="' + FC_COLOR
+            + '" stroke-width="1.5" stroke-dasharray="3,2"/>');
+        fm.pts.forEach(function (p) {
+            parts.push('<circle cx="' + p.x.toFixed(1) + '" cy="' + p.y.toFixed(1)
+                + '" r="1.6" fill="' + FC_COLOR + '" fill-opacity="0.85"/>');
+        });
+        var last = fm.pts[fm.pts.length - 1];
+        // Lead label: forecast days beyond init (index 0 ≈ today).
+        var lead = Math.max(1, fm.pts.length - 1);
+        parts.push('<text x="' + (last.x + 4).toFixed(1) + '" y="' + (last.y - 4).toFixed(1)
+            + '" font-size="8" font-weight="600" fill="' + FC_COLOR + '">+'
+            + lead + 'd</text>');
+    }
+
     function _renderSVG(svg, modeRec, mode, opts) {
         if (!svg || !modeRec) return null;
         var size = opts && opts.size ? opts.size : 120;
@@ -192,6 +252,14 @@ window.SubseasonalClock = (function () {
                     + '" r="1.8" fill="rgba(46,125,255,' + op.toFixed(2) + ')"/>');
             }
         });
+
+        // GEFS forecast trajectory (RMM/MJO only — only that record carries a
+        // `forecast` block). Drawn forward from the today-marker in DeepMind
+        // cyan, dashed, with an optional faint per-member spread cloud behind
+        // the ensemble-mean path. Anchored at the today dot so the
+        // analysis-vs-observed offset (if any) is visible as the first
+        // segment. Absent forecast → nothing drawn (graceful).
+        _renderForecast(parts, modeRec.forecast, pcToXY, trail);
 
         svg.innerHTML = parts.join('');
         return current;
