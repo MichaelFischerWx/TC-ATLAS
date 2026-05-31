@@ -135,8 +135,21 @@ gcloud run deploy "${SERVICE_NAME}" \
     --timeout "${TIMEOUT}" \
     --port 8080 \
     --allow-unauthenticated \
-    --update-env-vars "^||^TC_RADAR_S3_BUCKET=${TC_RADAR_S3_BUCKET:-}||TC_RADAR_S3_PREFIX=${TC_RADAR_S3_PREFIX:-tc-radar}||TC_RADAR_GCS_BUCKET=${TC_RADAR_GCS_BUCKET:-}||TC_RADAR_GCS_PREFIX=${TC_RADAR_GCS_PREFIX:-tc-radar}||GCS_IR_CACHE_BUCKET=${GCS_IR_CACHE_BUCKET:-tc-atlas-ir-cache}||AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}||AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}||AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-us-east-1}||EARTHDATA_USERNAME=${EARTHDATA_USERNAME:-}||EARTHDATA_PASSWORD=${EARTHDATA_PASSWORD:-}||CORS_ORIGINS=https://michaelfischerwx.github.io,http://localhost:8000" \
+    --update-env-vars "^||^TC_RADAR_S3_BUCKET=${TC_RADAR_S3_BUCKET:-}||TC_RADAR_S3_PREFIX=${TC_RADAR_S3_PREFIX:-tc-radar}||TC_RADAR_GCS_BUCKET=${TC_RADAR_GCS_BUCKET:-}||TC_RADAR_GCS_PREFIX=${TC_RADAR_GCS_PREFIX:-tc-radar}||GCS_IR_CACHE_BUCKET=${GCS_IR_CACHE_BUCKET:-tc-atlas-ir-cache}||AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-us-east-1}||EARTHDATA_USERNAME=${EARTHDATA_USERNAME:-}||CORS_ORIGINS=https://michaelfischerwx.github.io,http://localhost:8000" \
+    --update-secrets "AWS_ACCESS_KEY_ID=aws-access-key-id:latest,AWS_SECRET_ACCESS_KEY=aws-secret-access-key:latest,EARTHDATA_PASSWORD=earthdata-pass:latest" \
     ${ARGS_FORWARD[@]+"${ARGS_FORWARD[@]}"}
+
+# ── Re-point the prewarm job at the freshly built image ──────────
+# tc-atlas-prewarm-job REUSES this service's container image. The
+# keep-3 Artifact Registry cleanup prunes old digests, so the job MUST
+# be re-pinned to the new build on every deploy or it breaks ~3 deploys
+# later ("Image not found", failing silently every 10 min). The script
+# pins the :latest tag, idempotently refreshing the job + scheduler.
+if [[ -x "${SCRIPT_DIR}/deploy_prewarm_job.sh" ]]; then
+    echo ""
+    echo "Re-pointing prewarm job at the new image..."
+    "${SCRIPT_DIR}/deploy_prewarm_job.sh"
+fi
 
 echo ""
 echo "Done! Update your frontend API_BASE to the URL above."

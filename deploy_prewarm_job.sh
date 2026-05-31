@@ -47,14 +47,19 @@ TIMEZONE="UTC"
 BUCKET="${GCS_IR_CACHE_BUCKET:-tc-atlas-ir-cache}"
 
 # ── Reuse the API service's deployed image (no separate build) ────
-echo "Resolving deployed image for ${SERVICE_NAME}..."
-IMAGE="$(gcloud run services describe "${SERVICE_NAME}" --region "${REGION}" \
-    --format='value(spec.template.spec.containers[0].image)')"
-if [[ -z "${IMAGE}" ]]; then
-    echo "ERROR: could not resolve image for ${SERVICE_NAME}. Deploy the service first: ./deploy.sh"
+# Pin to the :latest TAG, NOT the running service's resolved @sha256
+# digest. Cloud Run source-deploy tags every new build :latest, and the
+# keep-3 Artifact Registry cleanup policy prunes older digests — so a
+# digest-pinned job silently breaks (every 10-min run fails with "Image
+# not found") the moment the API is redeployed a few times past it. The
+# tag always resolves to the current image; deploy.sh re-runs this script
+# after each API deploy so the job's pin is refreshed to the new build.
+IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/cloud-run-source-deploy/${SERVICE_NAME}:latest"
+echo "Using API image tag: ${IMAGE}"
+if ! gcloud artifacts docker images describe "${IMAGE}" >/dev/null 2>&1; then
+    echo "ERROR: ${IMAGE} not found. Deploy the service first: ./deploy.sh"
     exit 1
 fi
-echo "  → ${IMAGE}"
 
 # ── Job env contract ──────────────────────────────────────────────
 # Satellite IR (GOES/Himawari) and NEXRAD L2 are pulled from ANONYMOUS
@@ -62,10 +67,11 @@ echo "  → ${IMAGE}"
 # Earthdata token is needed here. The job writes rendered frames to GCS
 # via its runtime service account (same default compute SA as the
 # service, which already has object write on the bucket).
+# AWS creds come from Secret Manager (aws-access-key-id / aws-secret-access-key),
+# NOT plaintext env vars — see --set-secrets below. The runtime compute SA has
+# secretAccessor on both. Non-secret config stays as plain env vars.
 JOB_ENV="GCS_IR_CACHE_BUCKET=${BUCKET}"
 JOB_ENV="${JOB_ENV},AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-us-east-1}"
-[[ -n "${AWS_ACCESS_KEY_ID:-}" ]]     && JOB_ENV="${JOB_ENV},AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}"
-[[ -n "${AWS_SECRET_ACCESS_KEY:-}" ]] && JOB_ENV="${JOB_ENV},AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}"
 [[ -n "${TC_RADAR_S3_BUCKET:-}" ]]    && JOB_ENV="${JOB_ENV},TC_RADAR_S3_BUCKET=${TC_RADAR_S3_BUCKET}"
 
 # ── Create or update the Cloud Run Job ───────────────────────────
@@ -80,6 +86,7 @@ COMMON_ARGS=(
     --max-retries 1
     --task-timeout 900
     --set-env-vars "${JOB_ENV}"
+    --set-secrets "AWS_ACCESS_KEY_ID=aws-access-key-id:latest,AWS_SECRET_ACCESS_KEY=aws-secret-access-key:latest"
 )
 if gcloud run jobs describe "${JOB_NAME}" --region "${REGION}" >/dev/null 2>&1; then
     gcloud run jobs update "${JOB_NAME}" "${COMMON_ARGS[@]}"
