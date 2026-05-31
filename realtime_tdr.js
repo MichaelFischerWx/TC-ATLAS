@@ -137,7 +137,9 @@
         for (var j = 0; j < tabs.length; j++) {
             tabs[j].classList.toggle('active', tabs[j].getAttribute('data-sub') === name);
         }
-        if (name === 'tdr') {
+        if (name === 'missions') {
+            _reconRenderMissionsDashboard();
+        } else if (name === 'tdr') {
             _reconEnsureMissions();
             // Leaflet needs a nudge after being shown from display:none.
             setTimeout(function () { if (_rtMap) _rtMap.invalidateSize(); }, 80);
@@ -146,11 +148,138 @@
     };
 
     // Entry point fired by switchIRView('recon'): show the active sub-tab
-    // (defaults to TDR) and lazy-load missions.
+    // (defaults to Missions) and lazy-load its data.
     window.activateReconView = function () {
         var active = document.querySelector('#recon-main .recon-sub-tab.active');
-        var name = active ? active.getAttribute('data-sub') : 'tdr';
-        window.switchReconSub(name || 'tdr');
+        var name = active ? active.getAttribute('data-sub') : 'missions';
+        window.switchReconSub(name || 'missions');
+    };
+
+    // ── Recon · Missions dashboard ───────────────────────────────
+    // A browsable card grid built from the same /missions list that
+    // feeds the TDR dropdown. Clicking a card opens it in the TDR tab.
+    var _reconMissionsDashLoaded = false;
+    var _reconMissionsList = null;
+    var _reconPendingMission = null;
+    var _RECON_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                         'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+    function _reconParseMission(id) {
+        var m = id.match(/^(\d{8})(.+)$/) || id.match(/^(\d{6})(.+)$/);
+        if (!m) return { id: id, suffix: id, dateISO: null };
+        var digits = m[1], suffix = m[2], y, mo, d;
+        if (digits.length === 8) {
+            y = digits.slice(0, 4); mo = digits.slice(4, 6); d = digits.slice(6, 8);
+        } else {
+            y = '20' + digits.slice(0, 2); mo = digits.slice(2, 4); d = digits.slice(4, 6);
+        }
+        return { id: id, suffix: suffix, year: +y, month: +mo, day: +d, dateISO: y + '-' + mo + '-' + d };
+    }
+
+    function _reconRelDays(dateISO) {
+        if (!dateISO) return '';
+        var p = dateISO.split('-');
+        var then = Date.UTC(+p[0], +p[1] - 1, +p[2]);
+        var now = new Date();
+        var today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+        var diff = Math.round((today - then) / 86400000);
+        if (diff <= 0) return 'Today';
+        if (diff === 1) return 'Yesterday';
+        if (diff < 7) return diff + ' days ago';
+        if (diff < 30) return Math.floor(diff / 7) + ' wk ago';
+        return Math.floor(diff / 30) + ' mo ago';
+    }
+
+    function _reconRenderMissionsDashboard(force) {
+        var grid = document.getElementById('recon-missions-grid');
+        var countEl = document.getElementById('recon-missions-count');
+        if (!grid) return;
+        if (_reconMissionsDashLoaded && !force) return;
+        _reconMissionsDashLoaded = true;
+        grid.innerHTML = '<div class="recon-missions-loading">Loading missions…</div>';
+        if (countEl) countEl.textContent = '';
+
+        fetchWithRetry(API_BASE + RT_PREFIX + '/missions')
+            .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+            .then(function (json) {
+                _reconMissionsList = (json && json.missions) || [];
+                if (!_reconMissionsList.length) {
+                    grid.innerHTML = '<div class="recon-missions-empty">No recent reconnaissance missions in the real-time archive.</div>';
+                    return;
+                }
+                if (countEl) {
+                    countEl.textContent = _reconMissionsList.length + ' mission' +
+                        (_reconMissionsList.length === 1 ? '' : 's');
+                }
+                var html = '';
+                _reconMissionsList.forEach(function (id) {
+                    var p = _reconParseMission(id);
+                    var dateLabel = p.dateISO
+                        ? (_RECON_MONTHS[p.month - 1] + ' ' + p.day + ', ' + p.year)
+                        : id;
+                    var rel = _reconRelDays(p.dateISO);
+                    var recentCls = (rel === 'Today' || rel === 'Yesterday') ? ' is-recent' : '';
+                    var safeId = String(id).replace(/'/g, '');
+                    html += '<button class="recon-mission-card' + recentCls + '"' +
+                        ' onclick="reconOpenMissionInTDR(\'' + safeId + '\')"' +
+                        ' title="Open ' + safeId + ' in the TDR viewer">' +
+                        '<div class="recon-mission-card-top">' +
+                        '<span class="recon-mission-date">' + dateLabel + '</span>' +
+                        (rel ? '<span class="recon-mission-rel">' + rel + '</span>' : '') +
+                        '</div>' +
+                        '<div class="recon-mission-flight">Flight ' + p.suffix + '</div>' +
+                        '<div class="recon-mission-meta">' +
+                        '<span class="recon-mission-tag">NOAA P-3</span>' +
+                        '<span class="recon-mission-tag tdr">TDR</span>' +
+                        '</div>' +
+                        '<div class="recon-mission-open">Open in TDR &rarr;</div>' +
+                        '</button>';
+                });
+                grid.innerHTML = html;
+            })
+            .catch(function (err) {
+                grid.innerHTML = '<div class="recon-missions-empty">Could not load missions: ' +
+                    (err && err.message ? err.message : err) + '</div>';
+            });
+    }
+
+    window.reconReloadMissions = function () {
+        _reconMissionsDashLoaded = false;
+        _reconRenderMissionsDashboard(true);
+    };
+
+    // Select a mission in the TDR dropdown (adding the option if missing)
+    // and fire its change handler to load that mission's analysis files.
+    function _reconSelectMission(missionId) {
+        var sel = document.getElementById('rt-mission-select');
+        if (!sel) return;
+        var found = false;
+        for (var i = 0; i < sel.options.length; i++) {
+            if (sel.options[i].value === missionId) { found = true; break; }
+        }
+        if (!found) {
+            var opt = document.createElement('option');
+            opt.value = missionId;
+            var label = missionId;
+            var mm = missionId.match(/^(\d{4})(\d{2})(\d{2})(.+)$/);
+            if (mm) label = mm[1] + '-' + mm[2] + '-' + mm[3] + ' ' + mm[4];
+            opt.textContent = label;
+            sel.appendChild(opt);
+        }
+        sel.value = missionId;
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+
+    // Jump from a Missions-dashboard card into the TDR viewer.
+    window.reconOpenMissionInTDR = function (missionId) {
+        window.switchReconSub('tdr');
+        var sel = document.getElementById('rt-mission-select');
+        if (sel && !sel.disabled && sel.options.length > 1) {
+            _reconSelectMission(missionId);
+        } else {
+            // Mission list still loading — apply once loadMissions() finishes.
+            _reconPendingMission = missionId;
+        }
     };
 
     // ── Toast (reuse if available, otherwise standalone) ─────────
@@ -214,6 +343,13 @@
                     sel.appendChild(opt);
                 });
                 sel.disabled = false;
+                // A Missions-dashboard card may have requested a mission
+                // before the list finished loading — apply it now.
+                if (_reconPendingMission) {
+                    var pm = _reconPendingMission;
+                    _reconPendingMission = null;
+                    _reconSelectMission(pm);
+                }
             })
             .catch(function (err) {
                 sel.innerHTML = '<option value="">Error loading missions</option>';

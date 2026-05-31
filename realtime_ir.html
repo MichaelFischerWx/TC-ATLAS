@@ -1870,21 +1870,30 @@
     <section id="recon-main" class="recon-main" style="display:none;" role="main" aria-label="Real-Time Reconnaissance">
         <!-- Inner sub-tab strip -->
         <div class="recon-subbar">
-            <button class="recon-sub-tab" data-sub="missions" onclick="window.switchReconSub('missions')">Missions</button>
-            <button class="recon-sub-tab active" data-sub="tdr" onclick="window.switchReconSub('tdr')"><span class="tab-full">Tail Doppler Radar</span><span class="tab-short">TDR</span></button>
+            <button class="recon-sub-tab active" data-sub="missions" onclick="window.switchReconSub('missions')">Missions</button>
+            <button class="recon-sub-tab" data-sub="tdr" onclick="window.switchReconSub('tdr')"><span class="tab-full">Tail Doppler Radar</span><span class="tab-short">TDR</span></button>
             <button class="recon-sub-tab" data-sub="fl" onclick="window.switchReconSub('fl')">Flight-Level</button>
             <button class="recon-sub-tab" data-sub="vdm" onclick="window.switchReconSub('vdm')">VDM</button>
         </div>
 
-        <div class="recon-sub-panel recon-stub" data-sub="missions" style="display:none;">
-            <div class="recon-stub-card">
-                <h3>Mission Dashboard</h3>
-                <p>Live reconnaissance mission overview — which NOAA &amp; USAF aircraft are flying now, with TDR / flight-level / sonde / VDM availability. Coming soon.</p>
+        <div class="recon-sub-panel" data-sub="missions">
+            <div class="recon-missions-wrap">
+                <div class="rt-header">
+                    <h2 class="rt-header-title">Reconnaissance Missions</h2>
+                    <p class="rt-header-desc">Recent NOAA P-3 Tail Doppler Radar missions from the HRD real-time archive. Select a mission to open it in the TDR viewer.</p>
+                </div>
+                <div class="recon-missions-toolbar">
+                    <span id="recon-missions-count" class="recon-missions-count"></span>
+                    <button class="rt-sub-panel-btn" onclick="window.reconReloadMissions()" title="Reload mission list">&#x21bb; Refresh</button>
+                </div>
+                <div id="recon-missions-grid" class="recon-missions-grid">
+                    <div class="recon-missions-loading">Loading missions…</div>
+                </div>
             </div>
         </div>
 
         <!-- TDR viewer (relocated from the TC-RADAR Explorer) -->
-        <div class="recon-sub-panel" data-sub="tdr">
+        <div class="recon-sub-panel" data-sub="tdr" style="display:none;">
             <!-- BEGIN moved Real-Time TDR content -->
         <div class="rt-header">
             <h2 class="rt-header-title">Real-Time TDR Analysis</h2>

@@ -593,3 +593,114 @@
     font-size: 13px;
     line-height: 1.5;
 }
+
+/* ── Recon · Missions dashboard ──────────────────────────── */
+.recon-missions-wrap {
+    padding: 16px 18px 28px;
+    max-width: 1200px;
+    margin: 0 auto;
+}
+.recon-missions-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 6px 0 16px;
+    flex-wrap: wrap;
+}
+.recon-missions-count {
+    color: #9fb3c8;
+    font-size: 13px;
+    font-weight: 600;
+}
+.recon-missions-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+    gap: 12px;
+}
+.recon-missions-loading,
+.recon-missions-empty {
+    grid-column: 1 / -1;
+    color: #9fb3c8;
+    font-size: 14px;
+    padding: 28px 12px;
+    text-align: center;
+}
+.recon-mission-card {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    text-align: left;
+    cursor: pointer;
+    background: rgba(14, 30, 56, 0.6);
+    border: 1px solid rgba(96, 165, 250, 0.22);
+    border-radius: 10px;
+    padding: 13px 14px 11px;
+    color: #e6eefc;
+    font-family: inherit;
+    transition: border-color 0.15s ease, transform 0.12s ease, background 0.15s ease;
+}
+.recon-mission-card:hover {
+    border-color: #00e5ff;
+    background: rgba(20, 44, 78, 0.85);
+    transform: translateY(-2px);
+}
+.recon-mission-card.is-recent {
+    border-color: rgba(0, 229, 255, 0.5);
+}
+.recon-mission-card-top {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+}
+.recon-mission-date {
+    font-size: 15px;
+    font-weight: 700;
+    color: #fff;
+}
+.recon-mission-rel {
+    font-size: 11px;
+    color: #00e5ff;
+    font-weight: 600;
+    white-space: nowrap;
+}
+.recon-mission-flight {
+    font-size: 13px;
+    color: #aebfd4;
+}
+.recon-mission-meta {
+    display: flex;
+    gap: 6px;
+    margin-top: 2px;
+}
+.recon-mission-tag {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: rgba(96, 165, 250, 0.16);
+    color: #93c5fd;
+    text-transform: uppercase;
+}
+.recon-mission-tag.tdr {
+    background: rgba(0, 229, 255, 0.16);
+    color: #67e8f9;
+}
+.recon-mission-open {
+    margin-top: 4px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #00e5ff;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+}
+.recon-mission-card:hover .recon-mission-open {
+    opacity: 1;
+}
+@media (max-width: 600px) {
+    .recon-missions-grid {
+        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    }
+    .recon-mission-open { opacity: 1; }
+}
