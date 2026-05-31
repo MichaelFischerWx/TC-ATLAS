@@ -9565,17 +9565,21 @@ def get_storm_surface_obs(
     atcf_id: str,
     radius_deg: float = Query(10.0, ge=1.0, le=20.0,
                               description="Half-width of the bbox around the storm center"),
+    max_stations: int = Query(500, ge=50, le=1500),
 ):
-    """Return surface observations within the storm's bbox. Currently
-    just NDBC buoys (~1000 stations globally, ~1 h latency). Future
-    sources to layer in: Synoptic Data API (needs a free-tier token)
-    for land + marine, IEM for METARs. Frontend renders these in
-    conventional station-plot format (wind barbs, T/Td, MSLP, sky).
+    """Return surface observations within the storm's bbox — METAR
+    airports/land (aviationweather.gov) merged with NDBC marine buoys,
+    the same blend the global viewport overlay serves. Frontend renders
+    these in conventional station-plot format (wind barbs, T/Td, MSLP).
 
     Bbox is ±radius_deg around the storm's current advisory position.
-    For a typical 10° radius and a Western Pacific TC, expect 0–5
-    stations (sparse buoy coverage out there). Atlantic / GoM storms
-    get the most stations — dozens of buoys + C-MAN.
+    NDBC buoy coverage is U.S.-centric (Atlantic / GoM / E-Pac / Hawaii),
+    so a Western Pacific TC sees essentially no buoys — the METAR merge is
+    what lights up land/island stations (Japan, Philippines, Taiwan, …)
+    around those storms. Results are grid-thinned to <= max_stations.
+
+    Future source to layer in: Synoptic Data API (needs a free-tier
+    token) for additional land + marine mesonet coverage.
     """
     _ensure_fresh_cache()
     storm = None
@@ -9591,20 +9595,35 @@ def get_storm_surface_obs(
     center_lon = storm["lon"]
     half = radius_deg
 
+    def _wrap(x: float) -> float:
+        return ((x + 180.0) % 360.0) - 180.0
+
+    n = min(center_lat + half, 90.0)
+    s_ = max(center_lat - half, -90.0)
+    w = _wrap(center_lon - half)
+    e = _wrap(center_lon + half)
+    # Antimeridian-crossing bbox (common for W-Pac / dateline storms):
+    # split into two lon spans so both the METAR pull and NDBC filter
+    # walk the same continuous axis as the viewport endpoint.
+    lon_boxes = [(w, e)] if w <= e else [(w, 180.0), (-180.0, e)]
+
+    metars: list[dict] = []
+    for (lw, le_) in lon_boxes:
+        metars.extend(_fetch_metars_bbox(s_, lw, n, le_))
+
+    ndbc: list[dict] = []
     text = _fetch_ndbc_latest_text()
-    obs_in_bbox: list[dict] = []
     if text:
-        all_obs = _parse_ndbc_latest(text)
-        # Bbox filter. Lon-wrap not an issue at TC latitudes (storms
-        # don't straddle the dateline often, and when they do the
-        # 10° half-width keeps them on one side).
-        n = center_lat + half
-        s_ = center_lat - half
-        e = center_lon + half
-        w = center_lon - half
-        for ob in all_obs:
-            if s_ <= ob["lat"] <= n and w <= ob["lon"] <= e:
-                obs_in_bbox.append(ob)
+        for ob in _parse_ndbc_latest(text):
+            if not (s_ <= ob["lat"] <= n):
+                continue
+            olon = _wrap(ob["lon"])
+            if any(lw <= olon <= le_ for (lw, le_) in lon_boxes):
+                ndbc.append(ob)
+
+    combined = metars + ndbc
+    total_before = len(combined)
+    thinned = _grid_thin_obs(combined, s_, n, lon_boxes, max_stations)
 
     return JSONResponse(
         content={
@@ -9615,9 +9634,10 @@ def get_storm_surface_obs(
                 "east": center_lon + half,  "west": center_lon - half,
             },
             "fetched_at": _dt.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "n_obs": len(obs_in_bbox),
-            "sources": ["NDBC"],
-            "observations": obs_in_bbox,
+            "n_obs": len(thinned),
+            "n_before_thinning": total_before,
+            "sources": ["METAR", "NDBC"],
+            "observations": thinned,
         },
         headers={"Cache-Control": "public, max-age=600"},
     )
