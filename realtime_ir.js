@@ -3216,9 +3216,12 @@
                    '(extrapolated +' + pin.ageH.toFixed(1) + 'h from ' +
                    fmtLatLon(s.lat, s.lon) + ')</span>')
                 : fmtLatLon(s.lat, s.lon);
+            var reconBadge = s.has_recon
+                ? '<span class="ir-recon-badge" title="Aircraft reconnaissance active (recent vortex data message)">✈ RECON</span>'
+                : '';
             var popupHtml =
                 '<div class="ir-popup">' +
-                  '<div class="ir-popup-name">' + (s.name || 'UNNAMED') + '</div>' +
+                  '<div class="ir-popup-name">' + (s.name || 'UNNAMED') + reconBadge + '</div>' +
                   '<div class="ir-popup-meta">' +
                     '<strong>' + categoryShort(cat) + '</strong> &middot; ' + vmaxStr + '<br>' +
                     'MSLP: ' + mslpStr + '<br>' +
@@ -4845,6 +4848,8 @@
         var color = SS_COLORS[cat] || SS_COLORS.TD;
         document.getElementById('ir-detail-name').textContent = storm.name || 'UNNAMED';
         document.getElementById('ir-detail-id').textContent = storm.atcf_id;
+        var reconEl = document.getElementById('ir-detail-recon');
+        if (reconEl) reconEl.style.display = storm.has_recon ? '' : 'none';
         var catEl = document.getElementById('ir-detail-cat');
         catEl.textContent = categoryShort(cat) + (storm.vmax_kt != null ? ' \u00B7 ' + storm.vmax_kt + ' kt' : '');
         catEl.style.background = color;
@@ -5376,6 +5381,9 @@
 
         var nameEl = document.getElementById('ir-detail-name');
         if (nameEl) nameEl.textContent = storm.name || 'UNNAMED';
+
+        var reconEl = document.getElementById('ir-detail-recon');
+        if (reconEl) reconEl.style.display = storm.has_recon ? '' : 'none';
 
         var catEl = document.getElementById('ir-detail-cat');
         if (catEl) {

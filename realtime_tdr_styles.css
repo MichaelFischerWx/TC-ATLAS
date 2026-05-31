@@ -529,3 +529,374 @@
     background: rgba(15, 22, 35,0.2);
     color: var(--text);
 }
+
+/* ── Recon tab: inner sub-tab strip (Missions/TDR/Flight-Level/VDM) ── */
+#recon-main { display: block; }
+.recon-subbar {
+    display: flex;
+    gap: 4px;
+    align-items: flex-end;
+    padding: 6px 14px 0;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+}
+.recon-sub-tab {
+    background: transparent;
+    color: var(--slate);
+    border: none;
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
+    padding: 7px 14px;
+    font-size: 12.5px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    line-height: 1.3;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.recon-sub-tab:hover {
+    color: var(--text);
+    background: var(--border);
+}
+.recon-sub-tab.active {
+    color: var(--cyan);
+    border-bottom-color: var(--cyan);
+}
+.recon-sub-tab .tab-short { display: none; }
+@media (max-width: 768px) {
+    .recon-sub-tab { padding: 7px 10px; font-size: 12px; }
+    .recon-sub-tab .tab-full  { display: none; }
+    .recon-sub-tab .tab-short { display: inline; }
+}
+
+/* Coming-soon stub panels (Missions / Flight-Level / VDM in PR #1) */
+.recon-stub {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 320px;
+    padding: 40px 20px;
+}
+.recon-stub-card {
+    max-width: 460px;
+    text-align: center;
+    color: var(--slate);
+}
+.recon-stub-card h3 {
+    margin: 0 0 8px;
+    color: var(--text);
+    font-size: 16px;
+    font-weight: 700;
+}
+.recon-stub-card p {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+/* ── Recon · Missions dashboard ──────────────────────────── */
+.recon-missions-wrap {
+    padding: 16px 18px 28px;
+    max-width: 1200px;
+    margin: 0 auto;
+}
+.recon-missions-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 6px 0 16px;
+    flex-wrap: wrap;
+}
+.recon-missions-count {
+    color: var(--slate);
+    font-size: 13px;
+    font-weight: 600;
+}
+.recon-missions-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+    gap: 12px;
+}
+.recon-missions-loading,
+.recon-missions-empty {
+    grid-column: 1 / -1;
+    color: var(--slate);
+    font-size: 14px;
+    padding: 28px 12px;
+    text-align: center;
+}
+.recon-mission-card {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    text-align: left;
+    cursor: pointer;
+    background: var(--surface-raised);
+    border: 1px solid var(--border-light);
+    border-radius: 10px;
+    padding: 13px 14px 11px;
+    color: var(--text);
+    font-family: inherit;
+    transition: border-color 0.15s ease, transform 0.12s ease, background 0.15s ease;
+}
+.recon-mission-card:hover {
+    border-color: var(--cyan);
+    background: var(--navy-light);
+    transform: translateY(-2px);
+}
+.recon-mission-card.is-recent {
+    border-color: var(--cyan);
+}
+.recon-mission-card-top {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+}
+.recon-mission-date {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text);
+}
+.recon-mission-rel {
+    font-size: 11px;
+    color: var(--cyan);
+    font-weight: 600;
+    white-space: nowrap;
+}
+.recon-mission-flight {
+    font-size: 13px;
+    color: var(--text-dim);
+}
+.recon-mission-meta {
+    display: flex;
+    gap: 6px;
+    margin-top: 2px;
+}
+.recon-mission-tag {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: var(--border);
+    color: var(--slate);
+    text-transform: uppercase;
+}
+.recon-mission-tag.tdr {
+    background: var(--um-orange-tint);
+    color: var(--cyan);
+}
+.recon-mission-open {
+    margin-top: 4px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--cyan);
+    opacity: 0;
+    transition: opacity 0.15s ease;
+}
+.recon-mission-card:hover .recon-mission-open {
+    opacity: 1;
+}
+@media (max-width: 600px) {
+    .recon-missions-grid {
+        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    }
+    .recon-mission-open { opacity: 1; }
+}
+
+/* ── Recon · Flight-Level (Live HDOB) sub-tab ────────────── */
+.recon-fl-wrap {
+    padding: 16px 18px 28px;
+    max-width: 1200px;
+    margin: 0 auto;
+}
+.recon-fl-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 6px 0 14px;
+    flex-wrap: wrap;
+}
+.recon-fl-status {
+    color: var(--slate);
+    font-size: 12px;
+    font-weight: 600;
+}
+.recon-fl-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 10px;
+    margin-bottom: 16px;
+}
+.recon-fl-stat {
+    background: var(--surface-raised);
+    border: 1px solid var(--border-light);
+    border-radius: 9px;
+    padding: 11px 13px;
+}
+.recon-fl-stat-val {
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--text);
+    line-height: 1.1;
+}
+.recon-fl-stat-unit {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--slate);
+    margin-left: 2px;
+}
+.recon-fl-stat-label {
+    margin-top: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+}
+.recon-fl-charts {
+    background: var(--surface);
+    border: 1px solid var(--border-light);
+    border-radius: 10px;
+    padding: 8px 6px 4px;
+}
+.recon-fl-empty {
+    color: var(--slate);
+    font-size: 14px;
+    padding: 32px 12px;
+    text-align: center;
+}
+
+/* ── Recon · VDM sub-tab ─────────────────────────────────────── */
+.recon-vdm-wrap {
+    padding: 16px 18px 28px;
+    max-width: 1200px;
+    margin: 0 auto;
+}
+.recon-vdm-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 6px 0 14px;
+    flex-wrap: wrap;
+}
+.recon-vdm-status {
+    color: var(--slate);
+    font-size: 12px;
+    font-weight: 600;
+}
+.recon-vdm-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 12px;
+}
+.recon-vdm-card {
+    background: var(--surface-raised);
+    border: 1px solid var(--border-light);
+    border-radius: 11px;
+    padding: 13px 15px 14px;
+}
+.recon-vdm-card-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 11px;
+    border-bottom: 1px solid var(--border-light);
+    padding-bottom: 9px;
+}
+.recon-vdm-time {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text);
+}
+.recon-vdm-pos {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--cyan);
+    font-variant-numeric: tabular-nums;
+}
+.recon-vdm-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+    gap: 9px;
+}
+.recon-vdm-stat {
+    background: var(--surface);
+    border: 1px solid var(--border-light);
+    border-radius: 8px;
+    padding: 8px 10px;
+}
+.recon-vdm-stat.is-accent {
+    border-color: var(--cyan);
+}
+.recon-vdm-stat-val {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text);
+    line-height: 1.1;
+}
+.recon-vdm-stat-unit {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--slate);
+    margin-left: 2px;
+}
+.recon-vdm-stat-label {
+    margin-top: 3px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+}
+.recon-vdm-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 11px;
+}
+.recon-vdm-tag {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--slate);
+    background: var(--border);
+    border: 1px solid var(--border-light);
+    border-radius: 5px;
+    padding: 2px 7px;
+}
+.recon-vdm-raw {
+    margin-top: 11px;
+}
+.recon-vdm-raw summary {
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-dim);
+    user-select: none;
+}
+.recon-vdm-raw summary:hover {
+    color: var(--text);
+}
+.recon-vdm-raw pre {
+    margin: 8px 0 0;
+    padding: 9px 11px;
+    background: var(--surface);
+    border: 1px solid var(--border-light);
+    border-radius: 7px;
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--text-dim);
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-x: auto;
+}
+.recon-vdm-empty {
+    color: var(--slate);
+    font-size: 14px;
+    padding: 32px 12px;
+    text-align: center;
+}

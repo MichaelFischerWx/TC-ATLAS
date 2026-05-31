@@ -1732,6 +1732,92 @@ def _get_latest_position(records: list) -> Optional[dict]:
     return latest_records[-1]
 
 
+# ---------------------------------------------------------------------------
+# Active-recon detection
+# ---------------------------------------------------------------------------
+# A storm "has recon" if a Vortex Data Message was issued for it recently.
+# We list the NHC recon archive's REPNT2 (Atlantic) + REPPN2 (E/C Pacific)
+# directories for the current year, parse the handful of files from the last
+# few hours, and collect their ATCF IDs. The result is cached so the
+# active-storms poll (and per-storm metadata) only pays the network cost once
+# per refresh window.
+_recent_recon_atcf: set = set()
+_recent_recon_ts: float = 0.0
+_recon_lock = threading.Lock()
+_RECON_CACHE_TTL = 900       # refresh the recon set at most every 15 min
+_RECON_LOOKBACK_HOURS = 18   # a storm with a VDM this recent is "in recon"
+
+
+def _refresh_recent_recon() -> set:
+    """Return the set of ATCF IDs (upper-case) with a VDM in the last
+    _RECON_LOOKBACK_HOURS. Cached; falls back to the stale set on error."""
+    global _recent_recon_atcf, _recent_recon_ts
+    now = time.time()
+    with _recon_lock:
+        if _recent_recon_atcf and (now - _recent_recon_ts) < _RECON_CACHE_TTL:
+            return set(_recent_recon_atcf)
+        # Avoid a thundering herd: bump the timestamp before doing I/O so
+        # concurrent callers within the window reuse the (stale) set.
+        stale = set(_recent_recon_atcf)
+        if (now - _recent_recon_ts) < _RECON_CACHE_TTL:
+            return stale
+
+    found: set = set()
+    try:
+        from global_archive_api import NHC_RECON_BASE, _parse_vdm_text
+        from tc_radar_api import _hrd_fetch_text, _hrd_parse_directory
+
+        year = _dt.now(timezone.utc).year
+        cutoff = _dt.now(timezone.utc) - timedelta(hours=_RECON_LOOKBACK_HOURS)
+        for prefix in ("REPNT2", "REPPN2"):
+            url = f"{NHC_RECON_BASE}/{year}/{prefix}/"
+            try:
+                entries = _hrd_parse_directory(url)
+            except Exception:
+                continue
+            recent = []
+            for entry in entries:
+                if not entry.lower().endswith(".txt"):
+                    continue
+                dm = re.search(r"(\d{12})\.txt$", entry)
+                if not dm:
+                    continue
+                try:
+                    fdt = _dt.strptime(dm.group(1), "%Y%m%d%H%M").replace(
+                        tzinfo=timezone.utc)
+                except ValueError:
+                    continue
+                if fdt >= cutoff:
+                    recent.append(entry)
+            for fname in recent:
+                try:
+                    text = _hrd_fetch_text(url + fname, timeout=10)
+                    vdm = _parse_vdm_text(text, year)
+                    if vdm and vdm.get("atcf_id"):
+                        found.add(vdm["atcf_id"].upper())
+                except Exception:
+                    continue
+    except Exception as e:
+        logger.warning(f"recent-recon refresh failed: {e}")
+        with _recon_lock:
+            return set(_recent_recon_atcf)
+
+    with _recon_lock:
+        _recent_recon_atcf = found
+        _recent_recon_ts = time.time()
+        return set(found)
+
+
+def _has_active_recon(atcf_id: str) -> bool:
+    """True if a VDM was issued for this storm within the lookback window."""
+    if not atcf_id:
+        return False
+    try:
+        return atcf_id.upper() in _refresh_recent_recon()
+    except Exception:
+        return False
+
+
 def _build_storm_entry(atcf_id: str, records: list,
                        name: Optional[str] = None,
                        source: str = "NHC") -> Optional[dict]:
@@ -1784,7 +1870,7 @@ def _build_storm_entry(atcf_id: str, records: list,
             select_goes_sat(latest["lon"], latest["datetime"])[0]
         ),
         "source": source,
-        "has_recon": False,  # TODO: cross-ref with Real-Time TDR
+        "has_recon": _has_active_recon(atcf_id),
     }
 
 
@@ -5840,7 +5926,7 @@ def get_storm_metadata(atcf_id: str):
         "current": current,
         "intensity_history": intensity_history,
         "forecast_track": forecast_track,
-        "has_recon": False,  # TODO: cross-ref with Real-Time TDR
+        "has_recon": _has_active_recon(atcf_id),
     }
 
     return JSONResponse(

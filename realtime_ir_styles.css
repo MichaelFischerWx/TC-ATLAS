@@ -404,6 +404,29 @@ html, body { margin: 0; padding: 0; }
     white-space: nowrap;
 }
 
+/* Active-recon badge — shown on the map popup and the storm-detail
+   header when a vortex data message was issued in the last ~18h. Uses
+   the UM-orange "live / attention" accent (brand-true in both themes,
+   matching the version pill and active view-tab). */
+.ir-recon-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.66rem;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    padding: 2px 8px;
+    border-radius: 4px;
+    white-space: nowrap;
+    color: #ffffff;
+    background: var(--um-orange);
+    box-shadow: 0 0 0 1px var(--um-orange-deep, rgba(214, 95, 18, 0.6));
+    vertical-align: middle;
+}
+.ir-popup-name .ir-recon-badge {
+    margin-left: 6px;
+}
+
 /* Storm-detail header pills — KML / Satellite / Microwave.
    Tinted with the site's UM brand palette: green for primary
    data export + in-page nav (KML, Microwave), orange for the

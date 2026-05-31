@@ -2003,6 +2003,11 @@ _rt_fl_cache = OrderedDict()
 _RT_FL_CACHE_MAX = 2
 _RT_FL_CACHE_TTL = 300  # 5 minutes
 
+# Full-mission flight-level cache (Recon Flight-Level sub-tab)
+_rt_flm_cache = OrderedDict()
+_RT_FLM_CACHE_MAX = 4
+_RT_FLM_CACHE_TTL = 300  # 5 minutes
+
 
 def _parse_iwg1_timestamp(ts_str: str) -> Optional[_dt]:
     """Parse IWG1 timestamp like '20251028T101345' into datetime."""
@@ -2033,7 +2038,11 @@ def _iwg1_field(parts: list, idx: int) -> Optional[float]:
     return None
 
 
-def _parse_acdata_serial(text: str, analysis_dt: _dt, time_window_min: float) -> list[dict]:
+def _parse_acdata_serial(
+    text: str,
+    analysis_dt: Optional[_dt] = None,
+    time_window_min: Optional[float] = None,
+) -> list[dict]:
     """
     Parse a _serial.dat file containing IWG1 + MELISSA records.
 
@@ -2041,11 +2050,17 @@ def _parse_acdata_serial(text: str, analysis_dt: _dt, time_window_min: float) ->
     by a space (e.g. "...2313A MELISSA,AL132025,...").  This parser
     splits on " MELISSA," to separate them.
 
-    Returns a list of 1-Hz observation dicts within +/-time_window_min
-    of analysis_dt.
+    ``time_offset_s`` is computed relative to ``analysis_dt`` when given,
+    otherwise relative to the first valid record (mission start).  When
+    ``time_window_min`` is provided, records farther than that many
+    minutes from ``analysis_dt`` are dropped; pass ``None`` (the default)
+    to parse the entire mission.
+
+    Returns a list of 1-Hz observation dicts.
     """
     lines = text.splitlines()
     observations = []
+    ref_dt = analysis_dt  # reference for time_offset_s; set lazily if None
 
     for line in lines:
         line = line.strip()
@@ -2065,9 +2080,13 @@ def _parse_acdata_serial(text: str, analysis_dt: _dt, time_window_min: float) ->
         if ts is None:
             continue
 
-        # Time-window filter
-        delta_sec = (ts - analysis_dt).total_seconds()
-        if abs(delta_sec) > time_window_min * 60:
+        # First valid record anchors the time axis when no analysis_dt given
+        if ref_dt is None:
+            ref_dt = ts
+
+        # Time-window filter (skipped entirely when time_window_min is None)
+        delta_sec = (ts - ref_dt).total_seconds()
+        if time_window_min is not None and abs(delta_sec) > time_window_min * 60:
             continue
 
         lat = _iwg1_field(parts, _IWG1["lat"])
@@ -2400,6 +2419,105 @@ def get_flight_level(
     _rt_fl_cache[cache_key] = (result, now)
     if len(_rt_fl_cache) > _RT_FL_CACHE_MAX:
         _rt_fl_cache.popitem(last=False)
+        gc.collect()
+
+    return JSONResponse(result)
+
+
+def _fl_summary(raw_obs: list[dict], avg_interval_s: float) -> dict:
+    """Compute flight-level summary statistics from raw 1-Hz observations."""
+    fl_wspds = [o["fl_wspd_ms"] for o in raw_obs if o.get("fl_wspd_ms") is not None]
+    sfmr_wspds = [o["sfmr_wspd_ms"] for o in raw_obs if o.get("sfmr_wspd_ms") is not None]
+    static_pres = [o["static_pres_hpa"] for o in raw_obs
+                   if o.get("static_pres_hpa") is not None and 200 < o["static_pres_hpa"] < 1100]
+    slp_vals = [o["slp_hpa"] for o in raw_obs if o.get("slp_hpa") is not None]
+    temps = [o["temp_c"] for o in raw_obs if o.get("temp_c") is not None]
+    alts = [o["gps_alt_m"] for o in raw_obs if o.get("gps_alt_m") is not None]
+    return {
+        "max_fl_wspd_ms": round(max(fl_wspds), 2) if fl_wspds else None,
+        "max_sfmr_wspd_ms": round(max(sfmr_wspds), 2) if sfmr_wspds else None,
+        "min_slp_hpa": round(min(slp_vals), 2) if slp_vals else None,
+        "max_temp_c": round(max(temps), 2) if temps else None,
+        "min_temp_c": round(min(temps), 2) if temps else None,
+        "min_static_pres_hpa": round(min(static_pres), 2) if static_pres else None,
+        "total_obs_1hz": len(raw_obs),
+        "avg_interval_s": avg_interval_s,
+        "mean_alt_m": round(sum(alts) / len(alts), 0) if alts else None,
+    }
+
+
+@router.get("/flightlevel_mission")
+def get_flight_level_mission(
+    mission: str = Query(..., description="Mission id, e.g. '20251028H1'"),
+    year: Optional[int] = Query(None, description="Override year (default: from mission id)"),
+    avg_interval_s: float = Query(10.0, ge=1, le=60,
+                                  description="Averaging interval in seconds"),
+):
+    """
+    Return the FULL flight-level (in situ) time series for a recon mission's
+    IWG1/MELISSA serial stream — no TDR-analysis window.  Powers the Recon
+    tab's Flight-Level (Live HDOB) sub-tab.
+
+    Unlike /flightlevel (which is keyed to a single TDR analysis file and
+    clipped to +/-45 min around it), this parses the entire sortie and
+    returns interval-averaged observations with absolute timestamps.
+    """
+    now = time.time()
+    cache_key = f"{mission}__{year}__avg{avg_interval_s}"
+    if cache_key in _rt_flm_cache:
+        cached, ts = _rt_flm_cache[cache_key]
+        if now - ts < _RT_FLM_CACHE_TTL:
+            _rt_flm_cache.move_to_end(cache_key)
+            return JSONResponse(cached)
+
+    # Derive the year from the mission id when not supplied
+    if year is None:
+        if re.match(r"^\d{8}", mission):
+            year = int(mission[:4])
+        elif re.match(r"^\d{6}", mission):
+            year = 2000 + int(mission[:2])
+        else:
+            raise HTTPException(status_code=400,
+                                detail="Could not determine year from mission id")
+
+    serial_url = _find_acdata_serial_file(mission, year)
+    if serial_url is None:
+        result = {
+            "observations": [],
+            "mission_id": mission,
+            "year": year,
+            "n_obs": 0,
+            "n_obs_total": 0,
+            "message": f"No flight-level serial data found for mission {mission}",
+        }
+        _rt_flm_cache[cache_key] = (result, now)
+        return JSONResponse(result)
+
+    try:
+        serial_text = _fetch_text(serial_url, timeout=90)
+    except Exception as e:
+        raise HTTPException(status_code=502,
+                            detail=f"Could not fetch serial data from {serial_url}: {e}")
+
+    # Parse the entire mission (no analysis_dt, no time-window filter)
+    raw_obs = _parse_acdata_serial(serial_text)
+    averaged_obs = _average_fl_window(raw_obs, interval_s=avg_interval_s)
+
+    result = {
+        "observations": averaged_obs,
+        "mission_id": mission,
+        "year": year,
+        "serial_url": serial_url,
+        "n_obs": len(averaged_obs),
+        "n_obs_total": len(raw_obs),
+        "start_time": raw_obs[0]["time"] if raw_obs else None,
+        "end_time": raw_obs[-1]["time"] if raw_obs else None,
+        "summary": _fl_summary(raw_obs, avg_interval_s),
+    }
+
+    _rt_flm_cache[cache_key] = (result, now)
+    if len(_rt_flm_cache) > _RT_FLM_CACHE_MAX:
+        _rt_flm_cache.popitem(last=False)
         gc.collect()
 
     return JSONResponse(result)
