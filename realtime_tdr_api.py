@@ -27,6 +27,7 @@ import gzip
 import io
 import logging
 import re
+import threading
 import time
 from collections import OrderedDict
 from datetime import datetime as _dt, timedelta, timezone
@@ -188,6 +189,7 @@ _rt_ds_cache = OrderedDict()       # file_url → (xr.Dataset, timestamp)
 _rt_dir_cache = OrderedDict()      # dir_url  → (link_list, timestamp)
 _RT_DS_CACHE_MAX = 1               # ONE dataset at a time — each can be 100-300 MB
 _RT_DIR_CACHE_TTL = 300            # 5 minutes for directory listings
+_rt_dir_lock = threading.Lock()    # guards _rt_dir_cache against a thundering herd
 
 # GOES IR frame cache: (file_url, frame_index) → rendered result dict
 # Kept small because browsers cache via Cache-Control headers.
@@ -298,21 +300,51 @@ class _LinkParser(HTMLParser):
 
 
 def _parse_directory(url: str) -> list[str]:
-    """Fetch an Apache directory listing and return the link names."""
-    now = time.time()
-    if url in _rt_dir_cache:
-        links, ts = _rt_dir_cache[url]
-        if now - ts < _RT_DIR_CACHE_TTL:
-            _rt_dir_cache.move_to_end(url)
-            return links
+    """Fetch an Apache directory listing and return the link names.
 
-    html = _fetch_text(url)
+    Cached for ``_RT_DIR_CACHE_TTL``. Two guards keep us from hammering the
+    upstream SEB server:
+
+    * **Thundering-herd guard** — when a cached entry expires we bump its
+      timestamp *before* doing network I/O (under ``_rt_dir_lock``), so a
+      burst of concurrent callers reuses the slightly-stale listing instead
+      of all firing requests at SEB at once. Only one caller actually
+      refetches per TTL window. (The very first cold load still fans out,
+      same as ``_refresh_recent_recon``.)
+    * **Stale-on-error** — if the refetch fails (e.g. a transient SEB
+      outage), we serve the previous listing rather than erroring the whole
+      tab. Only the first-ever load with no prior listing propagates the
+      error.
+    """
+    now = time.time()
+    stale_links = None
+    with _rt_dir_lock:
+        cached = _rt_dir_cache.get(url)
+        if cached is not None:
+            links, ts = cached
+            if now - ts < _RT_DIR_CACHE_TTL:
+                _rt_dir_cache.move_to_end(url)
+                return links
+            # Expired: claim the refetch by bumping the timestamp now so
+            # concurrent callers in this window reuse the stale links.
+            stale_links = links
+            _rt_dir_cache[url] = (links, now)
+            _rt_dir_cache.move_to_end(url)
+
+    try:
+        html = _fetch_text(url)
+    except Exception:
+        if stale_links is not None:
+            return stale_links
+        raise
+
     parser = _LinkParser()
     parser.feed(html)
     links = parser.links
-    _rt_dir_cache[url] = (links, now)
-    if len(_rt_dir_cache) > 50:
-        _rt_dir_cache.popitem(last=False)
+    with _rt_dir_lock:
+        _rt_dir_cache[url] = (links, time.time())
+        if len(_rt_dir_cache) > 50:
+            _rt_dir_cache.popitem(last=False)
     return links
 
 
