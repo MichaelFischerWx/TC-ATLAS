@@ -40,7 +40,6 @@
     var RT_PREFIX = '/realtime';
 
     // ── State ────────────────────────────────────────────────────
-    var _rtVisible = false;
     var _currentFileUrl = null;
     var _rtDataCache = {};
     var _rtCaseMeta = null;  // case_meta for current file (keyed by _currentFileUrl)
@@ -114,37 +113,44 @@
             '<circle cx="12" cy="13" r="4"/></svg></button>';
     }
 
-    // ── Tab visibility toggle ────────────────────────────────────
-    window.toggleRealtimeTab = function () {
-        var section = document.getElementById('realtime-section');
-        var archiveSections = document.querySelectorAll('#map-section, #about, #features, #download, #contact, footer');
-        _rtVisible = !_rtVisible;
-        var rtLink = document.getElementById('rt-nav-link');
-        var archiveLink = document.getElementById('archive-nav-link');
+    // ── Recon tab integration (Real-Time Monitor) ────────────────
+    // The TDR viewer now lives as the "TDR" sub-tab of the Real-Time
+    // Monitor's Recon tab. switchIRView('recon') calls activateReconView();
+    // the inner sub-tab strip buttons call switchReconSub(name).
+    var _reconMissionsLoaded = false;
 
-        if (_rtVisible) {
-            gtag('event', 'tab_click', { tab_name: 'real_time' });
-            archiveSections.forEach(function (el) { el.style.display = 'none'; });
-            section.style.display = 'block';
-            // Transfer nav-active indicator from TC-RADAR to RT TDR
-            if (archiveLink) archiveLink.classList.remove('nav-active');
-            if (rtLink) rtLink.classList.add('nav-active');
-            // Load missions if not yet loaded
-            if (!document.getElementById('rt-mission-select').options.length ||
-                document.getElementById('rt-mission-select').options[0].value === '') {
-                loadMissions();
-            }
-        } else {
-            archiveSections.forEach(function (el) { el.style.display = ''; });
-            section.style.display = 'none';
-            if (rtLink) rtLink.classList.remove('nav-active');
-            if (archiveLink) archiveLink.classList.add('nav-active');
+    function _reconEnsureMissions() {
+        var sel = document.getElementById('rt-mission-select');
+        if (!sel) return;
+        if (_reconMissionsLoaded && sel.options.length && sel.options[0].value !== '') return;
+        _reconMissionsLoaded = true;
+        loadMissions();
+    }
+
+    // Switch the inner Recon sub-tab (missions / tdr / fl / vdm).
+    window.switchReconSub = function (name) {
+        var panels = document.querySelectorAll('#recon-main .recon-sub-panel');
+        for (var i = 0; i < panels.length; i++) {
+            panels[i].style.display = (panels[i].getAttribute('data-sub') === name) ? '' : 'none';
         }
+        var tabs = document.querySelectorAll('#recon-main .recon-sub-tab');
+        for (var j = 0; j < tabs.length; j++) {
+            tabs[j].classList.toggle('active', tabs[j].getAttribute('data-sub') === name);
+        }
+        if (name === 'tdr') {
+            _reconEnsureMissions();
+            // Leaflet needs a nudge after being shown from display:none.
+            setTimeout(function () { if (_rtMap) _rtMap.invalidateSize(); }, 80);
+        }
+        try { if (typeof gtag === 'function') gtag('event', 'recon_sub_switch', { sub: name }); } catch (e) {}
     };
 
-    window.showArchiveTab = function () {
-        gtag('event', 'tab_click', { tab_name: 'archive' });
-        if (_rtVisible) toggleRealtimeTab();
+    // Entry point fired by switchIRView('recon'): show the active sub-tab
+    // (defaults to TDR) and lazy-load missions.
+    window.activateReconView = function () {
+        var active = document.querySelector('#recon-main .recon-sub-tab.active');
+        var name = active ? active.getAttribute('data-sub') : 'tdr';
+        window.switchReconSub(name || 'tdr');
     };
 
     // ── Toast (reuse if available, otherwise standalone) ─────────
