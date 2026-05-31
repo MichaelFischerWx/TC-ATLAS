@@ -405,7 +405,9 @@ html, body { margin: 0; padding: 0; }
 }
 
 /* Active-recon badge — shown on the map popup and the storm-detail
-   header when a vortex data message was issued in the last ~18h. */
+   header when a vortex data message was issued in the last ~18h. Uses
+   the UM-orange "live / attention" accent (brand-true in both themes,
+   matching the version pill and active view-tab). */
 .ir-recon-badge {
     display: inline-flex;
     align-items: center;
@@ -416,9 +418,9 @@ html, body { margin: 0; padding: 0; }
     padding: 2px 8px;
     border-radius: 4px;
     white-space: nowrap;
-    color: #0b1220;
-    background: linear-gradient(180deg, #38e1d0, #00b8a4);
-    box-shadow: 0 0 0 1px rgba(0, 184, 164, 0.5), 0 0 10px rgba(0, 229, 209, 0.35);
+    color: #ffffff;
+    background: var(--um-orange);
+    box-shadow: 0 0 0 1px var(--um-orange-deep, rgba(214, 95, 18, 0.6));
     vertical-align: middle;
 }
 .ir-popup-name .ir-recon-badge {

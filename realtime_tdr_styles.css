@@ -537,12 +537,12 @@
     gap: 4px;
     align-items: flex-end;
     padding: 6px 14px 0;
-    border-bottom: 1px solid rgba(148, 163, 184, 0.18);
-    background: rgba(10, 16, 28, 0.35);
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
 }
 .recon-sub-tab {
     background: transparent;
-    color: #8b8fa4;
+    color: var(--slate);
     border: none;
     border-bottom: 2px solid transparent;
     border-radius: 0;
@@ -555,12 +555,12 @@
     transition: color 0.15s, border-color 0.15s, background 0.15s;
 }
 .recon-sub-tab:hover {
-    color: #e0e0e0;
-    background: rgba(255, 255, 255, 0.03);
+    color: var(--text);
+    background: var(--border);
 }
 .recon-sub-tab.active {
-    color: #00e5ff;
-    border-bottom-color: #00e5ff;
+    color: var(--cyan);
+    border-bottom-color: var(--cyan);
 }
 .recon-sub-tab .tab-short { display: none; }
 @media (max-width: 768px) {
@@ -580,11 +580,11 @@
 .recon-stub-card {
     max-width: 460px;
     text-align: center;
-    color: var(--slate, #94a3b8);
+    color: var(--slate);
 }
 .recon-stub-card h3 {
     margin: 0 0 8px;
-    color: #e2e8f0;
+    color: var(--text);
     font-size: 16px;
     font-weight: 700;
 }
@@ -608,7 +608,7 @@
     flex-wrap: wrap;
 }
 .recon-missions-count {
-    color: #9fb3c8;
+    color: var(--slate);
     font-size: 13px;
     font-weight: 600;
 }
@@ -620,7 +620,7 @@
 .recon-missions-loading,
 .recon-missions-empty {
     grid-column: 1 / -1;
-    color: #9fb3c8;
+    color: var(--slate);
     font-size: 14px;
     padding: 28px 12px;
     text-align: center;
@@ -631,21 +631,21 @@
     gap: 7px;
     text-align: left;
     cursor: pointer;
-    background: rgba(14, 30, 56, 0.6);
-    border: 1px solid rgba(96, 165, 250, 0.22);
+    background: var(--surface-raised);
+    border: 1px solid var(--border-light);
     border-radius: 10px;
     padding: 13px 14px 11px;
-    color: #e6eefc;
+    color: var(--text);
     font-family: inherit;
     transition: border-color 0.15s ease, transform 0.12s ease, background 0.15s ease;
 }
 .recon-mission-card:hover {
-    border-color: #00e5ff;
-    background: rgba(20, 44, 78, 0.85);
+    border-color: var(--cyan);
+    background: var(--navy-light);
     transform: translateY(-2px);
 }
 .recon-mission-card.is-recent {
-    border-color: rgba(0, 229, 255, 0.5);
+    border-color: var(--cyan);
 }
 .recon-mission-card-top {
     display: flex;
@@ -656,17 +656,17 @@
 .recon-mission-date {
     font-size: 15px;
     font-weight: 700;
-    color: #fff;
+    color: var(--text);
 }
 .recon-mission-rel {
     font-size: 11px;
-    color: #00e5ff;
+    color: var(--cyan);
     font-weight: 600;
     white-space: nowrap;
 }
 .recon-mission-flight {
     font-size: 13px;
-    color: #aebfd4;
+    color: var(--text-dim);
 }
 .recon-mission-meta {
     display: flex;
@@ -679,19 +679,19 @@
     letter-spacing: 0.04em;
     padding: 2px 7px;
     border-radius: 999px;
-    background: rgba(96, 165, 250, 0.16);
-    color: #93c5fd;
+    background: var(--border);
+    color: var(--slate);
     text-transform: uppercase;
 }
 .recon-mission-tag.tdr {
-    background: rgba(0, 229, 255, 0.16);
-    color: #67e8f9;
+    background: var(--um-orange-tint);
+    color: var(--cyan);
 }
 .recon-mission-open {
     margin-top: 4px;
     font-size: 12px;
     font-weight: 600;
-    color: #00e5ff;
+    color: var(--cyan);
     opacity: 0;
     transition: opacity 0.15s ease;
 }
@@ -719,7 +719,7 @@
     flex-wrap: wrap;
 }
 .recon-fl-status {
-    color: #9fb3c8;
+    color: var(--slate);
     font-size: 12px;
     font-weight: 600;
 }
@@ -730,21 +730,21 @@
     margin-bottom: 16px;
 }
 .recon-fl-stat {
-    background: rgba(14, 30, 56, 0.6);
-    border: 1px solid rgba(96, 165, 250, 0.22);
+    background: var(--surface-raised);
+    border: 1px solid var(--border-light);
     border-radius: 9px;
     padding: 11px 13px;
 }
 .recon-fl-stat-val {
     font-size: 22px;
     font-weight: 700;
-    color: #fff;
+    color: var(--text);
     line-height: 1.1;
 }
 .recon-fl-stat-unit {
     font-size: 12px;
     font-weight: 600;
-    color: #9fb3c8;
+    color: var(--slate);
     margin-left: 2px;
 }
 .recon-fl-stat-label {
@@ -753,16 +753,16 @@
     font-weight: 600;
     letter-spacing: 0.03em;
     text-transform: uppercase;
-    color: #8aa0b8;
+    color: var(--text-dim);
 }
 .recon-fl-charts {
-    background: rgba(10, 20, 38, 0.4);
-    border: 1px solid rgba(148, 163, 184, 0.14);
+    background: var(--surface);
+    border: 1px solid var(--border-light);
     border-radius: 10px;
     padding: 8px 6px 4px;
 }
 .recon-fl-empty {
-    color: #9fb3c8;
+    color: var(--slate);
     font-size: 14px;
     padding: 32px 12px;
     text-align: center;
@@ -782,7 +782,7 @@
     flex-wrap: wrap;
 }
 .recon-vdm-status {
-    color: #9fb3c8;
+    color: var(--slate);
     font-size: 12px;
     font-weight: 600;
 }
@@ -792,8 +792,8 @@
     gap: 12px;
 }
 .recon-vdm-card {
-    background: rgba(14, 30, 56, 0.6);
-    border: 1px solid rgba(96, 165, 250, 0.22);
+    background: var(--surface-raised);
+    border: 1px solid var(--border-light);
     border-radius: 11px;
     padding: 13px 15px 14px;
 }
@@ -803,18 +803,18 @@
     align-items: baseline;
     gap: 8px;
     margin-bottom: 11px;
-    border-bottom: 1px solid rgba(96, 165, 250, 0.16);
+    border-bottom: 1px solid var(--border-light);
     padding-bottom: 9px;
 }
 .recon-vdm-time {
     font-size: 15px;
     font-weight: 700;
-    color: #fff;
+    color: var(--text);
 }
 .recon-vdm-pos {
     font-size: 12px;
     font-weight: 600;
-    color: #00e5ff;
+    color: var(--cyan);
     font-variant-numeric: tabular-nums;
 }
 .recon-vdm-stats {
@@ -823,24 +823,24 @@
     gap: 9px;
 }
 .recon-vdm-stat {
-    background: rgba(10, 20, 38, 0.5);
-    border: 1px solid rgba(148, 163, 184, 0.14);
+    background: var(--surface);
+    border: 1px solid var(--border-light);
     border-radius: 8px;
     padding: 8px 10px;
 }
 .recon-vdm-stat.is-accent {
-    border-color: rgba(0, 229, 255, 0.35);
+    border-color: var(--cyan);
 }
 .recon-vdm-stat-val {
     font-size: 18px;
     font-weight: 700;
-    color: #fff;
+    color: var(--text);
     line-height: 1.1;
 }
 .recon-vdm-stat-unit {
     font-size: 11px;
     font-weight: 600;
-    color: #9fb3c8;
+    color: var(--slate);
     margin-left: 2px;
 }
 .recon-vdm-stat-label {
@@ -849,7 +849,7 @@
     font-weight: 600;
     letter-spacing: 0.03em;
     text-transform: uppercase;
-    color: #8aa0b8;
+    color: var(--text-dim);
 }
 .recon-vdm-tags {
     display: flex;
@@ -862,9 +862,9 @@
     font-weight: 700;
     letter-spacing: 0.04em;
     text-transform: uppercase;
-    color: #cbd5e1;
-    background: rgba(96, 165, 250, 0.14);
-    border: 1px solid rgba(96, 165, 250, 0.28);
+    color: var(--slate);
+    background: var(--border);
+    border: 1px solid var(--border-light);
     border-radius: 5px;
     padding: 2px 7px;
 }
@@ -875,27 +875,27 @@
     cursor: pointer;
     font-size: 11px;
     font-weight: 600;
-    color: #8aa0b8;
+    color: var(--text-dim);
     user-select: none;
 }
 .recon-vdm-raw summary:hover {
-    color: #cbd5e1;
+    color: var(--text);
 }
 .recon-vdm-raw pre {
     margin: 8px 0 0;
     padding: 9px 11px;
-    background: rgba(5, 12, 24, 0.7);
-    border: 1px solid rgba(148, 163, 184, 0.14);
+    background: var(--surface);
+    border: 1px solid var(--border-light);
     border-radius: 7px;
     font-size: 11px;
     line-height: 1.4;
-    color: #cbd5e1;
+    color: var(--text-dim);
     white-space: pre-wrap;
     word-break: break-word;
     overflow-x: auto;
 }
 .recon-vdm-empty {
-    color: #9fb3c8;
+    color: var(--slate);
     font-size: 14px;
     padding: 32px 12px;
     text-align: center;

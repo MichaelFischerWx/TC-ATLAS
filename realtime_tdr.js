@@ -359,32 +359,43 @@
         var anyExtrap = obs.some(function (o) { return o.extrapolated_sfc_wspd_ms != null; });
 
         var traces = [
-            { x: t, y: col('fl_wspd_ms', _MS2KT), name: 'FL Wind', type: 'scatter', mode: 'lines', line: { color: '#00e5ff', width: 1.5 }, yaxis: 'y' },
+            { x: t, y: col('fl_wspd_ms', _MS2KT), name: 'FL Wind', type: 'scatter', mode: 'lines', line: { color: '#0ea5e9', width: 1.5 }, yaxis: 'y' },
             { x: t, y: col('sfmr_wspd_ms', _MS2KT), name: 'SFMR Sfc', type: 'scatter', mode: 'lines', line: { color: '#fb923c', width: 1.5 }, yaxis: 'y' }
         ];
         if (anyExtrap) {
-            traces.push({ x: t, y: col('extrapolated_sfc_wspd_ms', _MS2KT), name: 'Extrap Sfc', type: 'scatter', mode: 'lines', line: { color: '#fde047', width: 1, dash: 'dot' }, yaxis: 'y' });
+            traces.push({ x: t, y: col('extrapolated_sfc_wspd_ms', _MS2KT), name: 'Extrap Sfc', type: 'scatter', mode: 'lines', line: { color: '#ca8a04', width: 1, dash: 'dot' }, yaxis: 'y' });
         }
-        traces.push({ x: t, y: col('slp_hpa'), name: 'SLP', type: 'scatter', mode: 'lines', line: { color: '#a78bfa', width: 1.5 }, yaxis: 'y2' });
-        traces.push({ x: t, y: col('static_pres_hpa'), name: 'Flt Pres', type: 'scatter', mode: 'lines', line: { color: '#60a5fa', width: 1, dash: 'dot' }, yaxis: 'y2' });
-        traces.push({ x: t, y: col('temp_c'), name: 'Temp', type: 'scatter', mode: 'lines', line: { color: '#f87171', width: 1.5 }, yaxis: 'y3' });
-        traces.push({ x: t, y: col('dewpoint_c'), name: 'Dewpt', type: 'scatter', mode: 'lines', line: { color: '#34d399', width: 1.5 }, yaxis: 'y3' });
-        traces.push({ x: t, y: col('gps_alt_m', 0.001), name: 'GPS Alt', type: 'scatter', mode: 'lines', line: { color: '#94a3b8', width: 1.5 }, yaxis: 'y4' });
+        traces.push({ x: t, y: col('slp_hpa'), name: 'SLP', type: 'scatter', mode: 'lines', line: { color: '#a855f7', width: 1.5 }, yaxis: 'y2' });
+        traces.push({ x: t, y: col('static_pres_hpa'), name: 'Flt Pres', type: 'scatter', mode: 'lines', line: { color: '#3b82f6', width: 1, dash: 'dot' }, yaxis: 'y2' });
+        traces.push({ x: t, y: col('temp_c'), name: 'Temp', type: 'scatter', mode: 'lines', line: { color: '#ef4444', width: 1.5 }, yaxis: 'y3' });
+        traces.push({ x: t, y: col('dewpoint_c'), name: 'Dewpt', type: 'scatter', mode: 'lines', line: { color: '#16a34a', width: 1.5 }, yaxis: 'y3' });
+        traces.push({ x: t, y: col('gps_alt_m', 0.001), name: 'GPS Alt', type: 'scatter', mode: 'lines', line: { color: '#64748b', width: 1.5 }, yaxis: 'y4' });
 
-        var ax = { gridcolor: 'rgba(148,163,184,0.12)', zeroline: false, color: '#cbd5e1' };
+        // Theme bridge: read the page's Plotly tokens so the chart chrome
+        // (bg / text / grid) tracks the active light/dark theme.
+        var rootStyle = getComputedStyle(document.documentElement);
+        function rv(name, fallback) { return (rootStyle.getPropertyValue(name) || '').trim() || fallback; }
+        var plotBg = rv('--plot-paper', '#ffffff');
+        var plotText = rv('--plot-text', '#0f1623');
+        var plotGrid = rv('--plot-grid', 'rgba(15,22,35,0.10)');
+        var plotAxis = rv('--plot-axis', '#5b6573');
+        var hoverBg = rv('--plot-hover-bg', '#ffffff');
+        var hoverBorder = rv('--plot-hover-border', 'rgba(15,22,35,0.15)');
+
         function yax(domain, title) {
-            return { gridcolor: ax.gridcolor, zeroline: false, color: ax.color, domain: domain, title: { text: title, font: { size: 11 } } };
+            return { gridcolor: plotGrid, zeroline: false, color: plotAxis, domain: domain, title: { text: title, font: { size: 11 } } };
         }
         var layout = {
             height: 660,
             margin: { l: 62, r: 16, t: 8, b: 40 },
-            paper_bgcolor: 'rgba(0,0,0,0)',
-            plot_bgcolor: 'rgba(0,0,0,0)',
-            font: { color: '#cbd5e1', family: 'DM Sans, sans-serif', size: 11 },
+            paper_bgcolor: plotBg,
+            plot_bgcolor: plotBg,
+            font: { color: plotText, family: 'DM Sans, sans-serif', size: 11 },
             showlegend: true,
             legend: { orientation: 'h', x: 0, y: 1.07, font: { size: 10 } },
             hovermode: 'x unified',
-            xaxis: { gridcolor: ax.gridcolor, zeroline: false, color: ax.color, anchor: 'y4', title: { text: 'Time (UTC)', font: { size: 11 } } },
+            hoverlabel: { bgcolor: hoverBg, bordercolor: hoverBorder, font: { color: plotText, size: 12 } },
+            xaxis: { gridcolor: plotGrid, zeroline: false, color: plotAxis, anchor: 'y4', title: { text: 'Time (UTC)', font: { size: 11 } } },
             yaxis: yax([0.78, 1.0], 'Wind (kt)'),
             yaxis2: yax([0.52, 0.74], 'Pressure (hPa)'),
             yaxis3: yax([0.26, 0.48], 'Temp (°C)'),
