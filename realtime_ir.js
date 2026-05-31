@@ -3732,7 +3732,7 @@
                 document.getElementById('ir-recon-section').style.display = 'block';
                 document.getElementById('ir-recon-info').innerHTML =
                     '<span style="color:#34d399;">\u25CF Active reconnaissance</span><br>' +
-                    '<a href="explorer.html?tab=realtime">\u2192 Open in Real-Time TDR</a>';
+                    '<a href="realtime_ir.html#recon">\u2192 Open in Recon</a>';
             } else {
                 document.getElementById('ir-recon-section').style.display = 'none';
             }

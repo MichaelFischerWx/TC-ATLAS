@@ -2437,7 +2437,7 @@
         if (trackMetadata && trackMetadata.has_recon) {
             el.classList.add('active');
             el.innerHTML = '● Active reconnaissance &nbsp; '
-                + '<a href="explorer.html?tab=realtime" style="color:#60a5fa;">→ Open in Real-Time TDR</a>';
+                + '<a href="realtime_ir.html#recon" style="color:#60a5fa;">→ Open in Real-Time Monitor</a>';
         } else {
             el.classList.remove('active');
             el.textContent = 'None active.';
