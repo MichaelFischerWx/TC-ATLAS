@@ -5,7 +5,7 @@ import json
 
 URL = "https://tc-atlas-api-361010099051.us-east1.run.app/metadata_all?data_type=merge"
 
-with urllib.request.urlopen(URL) as r:
+with urllib.request.urlopen(URL, timeout=30) as r:
     d = json.load(r)
 
 cases = d.get("cases", [])

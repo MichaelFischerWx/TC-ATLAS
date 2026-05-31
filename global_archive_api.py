@@ -4530,7 +4530,12 @@ def _fetch_tcprimed_env(atcf_id: str) -> dict | None:
         import boto3
         from botocore import UNSIGNED
         from botocore.config import Config as BotoConfig
-        s3 = boto3.client("s3", config=BotoConfig(signature_version=UNSIGNED))
+        # Explicit timeouts + retry cap so a degraded S3 can't pin the
+        # request to the platform timeout (botocore default is ~60s × 5).
+        s3 = boto3.client("s3", config=BotoConfig(
+            signature_version=UNSIGNED,
+            connect_timeout=5, read_timeout=20,
+            retries={"max_attempts": 2, "mode": "standard"}))
     except Exception as e:
         logger.error(f"Failed to create S3 client: {e}")
         return None

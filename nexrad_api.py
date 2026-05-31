@@ -79,7 +79,15 @@ def _get_nexrad_fs():
         s3fs = _get_s3fs()
         if s3fs is None:
             return None
-        _nexrad_fs = s3fs.S3FileSystem(anon=True)
+        # Bound a slow/hung S3 op: botocore defaults (~60s connect + 60s
+        # read × up to 5 retries) could otherwise pin a request to the
+        # platform timeout under S3 degradation. See memory:
+        # ideas_storage_timeout_hardening.
+        _nexrad_fs = s3fs.S3FileSystem(anon=True, config_kwargs={
+            "connect_timeout": 5,
+            "read_timeout": 20,
+            "retries": {"max_attempts": 2, "mode": "standard"},
+        })
     return _nexrad_fs
 
 
