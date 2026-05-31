@@ -143,7 +143,9 @@ _gcs_rt_bucket = None
 # Together these fix two pre-existing cache misses:
 #   - storm motion ≥ 0.5° causes round(lat/lon) to flip → all frames miss
 #   - different radius_deg requests collided on the same key → wrong cutout
-_GCS_RT_VERSION = "rt-v10"
+_GCS_RT_VERSION = "rt-v11"  # v11: Himawari geos→latlon reprojection wedge fix
+                            # (perimeter-sampled geos window + true geos_extent;
+                            # evicts pre-fix frames with rotated black corners)
 
 def _get_rt_gcs_bucket():
     global _gcs_rt_client, _gcs_rt_bucket
@@ -6115,6 +6117,81 @@ _WEATHERLAB_CACHE_MAX = 4
 _WEATHERLAB_MISS_TTL = 600
 _WEATHERLAB_MISS = "__MISSING__"
 
+# Short negative-cache TTL for TRANSIENT fetch errors (timeout, dropped TLS
+# handshake, connection reset) — as opposed to a definitive 404 for a
+# not-yet-published cycle. DeepMind's CDN intermittently drops the TLS
+# connection for Cloud Run's datacenter egress (SSL UNEXPECTED_EOF). A
+# transient failure must NOT be cached for the full 10-min MISS window, or
+# one flaky handshake silently demotes users to an older cycle until it
+# expires. 45 s only throttles a hammer-loop while re-probing promptly.
+_WEATHERLAB_TRANSIENT_MISS_TTL = 45
+
+# Sentinel meaning "cache absent or expired — go fetch" (distinct from a
+# live negative-cache hit, which returns None = "known-missing, don't
+# re-fetch yet").
+_WL_CACHE_MISS = object()
+
+_WEATHERLAB_HTTP_SESSION = None
+
+
+def _weatherlab_http():
+    """Shared requests.Session with connection-level retry + backoff.
+
+    The CSV files are reachable in ~1 s; the failures we see in production
+    are transient TLS EOFs on Cloud Run egress to deepmind.google.com,
+    which a couple of automatic retries absorb almost entirely. Falls back
+    to a bare session (no auto-retry) if urllib3's Retry isn't importable.
+    """
+    global _WEATHERLAB_HTTP_SESSION
+    if _WEATHERLAB_HTTP_SESSION is not None:
+        return _WEATHERLAB_HTTP_SESSION
+    import requests as req
+    s = req.Session()
+    try:
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.retry import Retry
+        retry = Retry(
+            total=3, connect=3, read=3,
+            backoff_factor=0.6,            # ~0, 0.6, 1.2, 2.4 s between tries
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=frozenset(["GET"]),
+            raise_on_status=False,
+        )
+        adapter = HTTPAdapter(max_retries=retry)
+        s.mount("https://", adapter)
+        s.mount("http://", adapter)
+    except Exception:
+        pass  # bare session still works, just without auto-retry
+    _WEATHERLAB_HTTP_SESSION = s
+    return s
+
+
+def _weatherlab_cache_lookup(cache, key, good_ttl, miss_ttl):
+    """Shared read-side cache check honouring a per-entry "ttl" override
+    (used to give TRANSIENT negative entries a much shorter life than
+    definitive 404 misses). Positive data is always a dict; negative
+    entries are the "__MISSING__" string sentinel. Returns:
+      - the cached data dict on a fresh positive hit,
+      - None on a fresh negative hit (known-missing — caller returns None),
+      - _WL_CACHE_MISS when absent/expired (caller should fetch).
+    """
+    c = cache.get(key)
+    if not c:
+        return _WL_CACHE_MISS
+    age = time.time() - c["ts"]
+    if isinstance(c["data"], dict):
+        return c["data"] if age < good_ttl else _WL_CACHE_MISS
+    eff = c.get("ttl", miss_ttl)            # transient misses carry a short ttl
+    return None if age < eff else _WL_CACHE_MISS
+
+
+def _weatherlab_cache_transient(cache, key):
+    """Record a SHORT-lived negative entry for a transient fetch error, so
+    a dropped TLS handshake doesn't poison the cache for the full MISS TTL.
+    """
+    cache[key] = {"data": "__MISSING__", "ts": time.time(),
+                  "ttl": _WEATHERLAB_TRANSIENT_MISS_TTL}
+
 
 def _parse_lead_time(lead_str: str) -> float:
     """Parse WeatherLab lead_time like '2 days 06:00:00' -> tau hours."""
@@ -6189,15 +6266,11 @@ def _fetch_weatherlab_csv(date_str: str, hour_str: str) -> dict | None:
       { "members": { "0": {"points": [...]}, ... }, "ensemble_mean": {...} }
     """
     cache_key = (date_str, hour_str)
-    cached = _weatherlab_cache.get(cache_key)
-    if cached:
-        if cached["data"] == _WEATHERLAB_MISS:
-            if time.time() - cached["ts"] < _WEATHERLAB_MISS_TTL:
-                return None
-        elif time.time() - cached["ts"] < _WEATHERLAB_CACHE_TTL:
-            return cached["data"]
-
-    import requests as req
+    hit = _weatherlab_cache_lookup(
+        _weatherlab_cache, cache_key,
+        _WEATHERLAB_CACHE_TTL, _WEATHERLAB_MISS_TTL)
+    if hit is not _WL_CACHE_MISS:
+        return hit   # fresh positive dict, or None for a known-missing cycle
 
     # Fetch ensemble members
     date_fmt = date_str.replace("-", "_")
@@ -6211,17 +6284,18 @@ def _fetch_weatherlab_csv(date_str: str, hour_str: str) -> dict | None:
     )
 
     try:
-        ens_resp = req.get(ens_url, timeout=30)
-        if ens_resp.status_code != 200:
-            # Cache the miss — same publish-lag rationale as the genesis
-            # CSV cache; avoids 30-s timeouts on repeated requests.
-            _weatherlab_cache[cache_key] = {"data": _WEATHERLAB_MISS, "ts": time.time()}
-            return None
-        ens_text = ens_resp.text
+        ens_resp = _weatherlab_http().get(ens_url, timeout=30)
     except Exception as e:
-        print(f"[WeatherLab] Ensemble fetch failed: {e}")
+        # Transient — short negative cache only (see genesis fetcher).
+        print(f"[WeatherLab] Ensemble transient fetch error "
+              f"{date_str} {hour_str}z: {e}")
+        _weatherlab_cache_transient(_weatherlab_cache, cache_key)
+        return None
+    if ens_resp.status_code != 200:
+        # Definitive 404 — cycle not published. Full MISS TTL.
         _weatherlab_cache[cache_key] = {"data": _WEATHERLAB_MISS, "ts": time.time()}
         return None
+    ens_text = ens_resp.text
 
     # Parse ensemble CSV
     result: dict = {}
@@ -6271,7 +6345,7 @@ def _fetch_weatherlab_csv(date_str: str, hour_str: str) -> dict | None:
 
     # Fetch ensemble mean
     try:
-        mean_resp = req.get(mean_url, timeout=20)
+        mean_resp = _weatherlab_http().get(mean_url, timeout=20)
         if mean_resp.status_code == 200:
             mean_header = None
             for line in mean_resp.text.splitlines():
@@ -7095,38 +7169,35 @@ def _fetch_weatherlab_genesis_csv(date_str: str, hour_str: str
     legacy layout.)
     """
     cache_key = (date_str, hour_str)
-    cached = _weatherlab_genesis_cache.get(cache_key)
-    if cached:
-        # Negative cache: use the shorter TTL so we re-check soon when a
-        # cycle that wasn't published 10 min ago might be published now.
-        if cached["data"] == _WEATHERLAB_GENESIS_MISS:
-            if time.time() - cached["ts"] < _WEATHERLAB_GENESIS_MISS_TTL:
-                return None
-        elif time.time() - cached["ts"] < _WEATHERLAB_GENESIS_CACHE_TTL:
-            return cached["data"]
+    hit = _weatherlab_cache_lookup(
+        _weatherlab_genesis_cache, cache_key,
+        _WEATHERLAB_GENESIS_CACHE_TTL, _WEATHERLAB_GENESIS_MISS_TTL)
+    if hit is not _WL_CACHE_MISS:
+        return hit   # fresh positive dict, or None for a known-missing cycle
 
-    import requests as req
     date_fmt = date_str.replace("-", "_")
     url = (f"{_WEATHERLAB_LARGE_BASE}/ensemble/cyclogenesis/csv/"
            f"FNV3_LARGE_ENSEMBLE_{date_fmt}T{hour_str}_00_cyclogenesis.csv")
     try:
-        # Tight HEAD-style timeout would be ideal but requests doesn't
-        # cleanly support a separate connect/read budget; 30 s read is
-        # enough for the multi-MB CSV on a warm CDN edge, and the negative
-        # cache absorbs the cost when the cycle isn't there yet.
-        r = req.get(url, timeout=30)
-        if r.status_code != 200:
-            # Cache the miss so the next request doesn't pay another
-            # 30-s timeout for the same not-yet-published cycle.
-            _weatherlab_genesis_cache[cache_key] = {
-                "data": _WEATHERLAB_GENESIS_MISS, "ts": time.time()}
-            return None
-        text = r.text
+        # 30 s read is enough for the multi-MB CSV on a warm CDN edge; the
+        # shared session adds a few automatic retries to absorb DeepMind's
+        # intermittent TLS EOFs on Cloud Run egress.
+        r = _weatherlab_http().get(url, timeout=30)
     except Exception as e:
-        print(f"[WeatherLab Genesis] fetch failed: {e}")
+        # Transient (timeout / dropped TLS / reset) AFTER auto-retries.
+        # Short negative cache only — a flaky handshake must NOT poison the
+        # full MISS window and demote users to an older cycle for 10 min.
+        print(f"[WeatherLab Genesis] transient fetch error "
+              f"{date_str} {hour_str}z: {e}")
+        _weatherlab_cache_transient(_weatherlab_genesis_cache, cache_key)
+        return None
+    if r.status_code != 200:
+        # Definitive: cycle not published yet. Full MISS TTL is correct so
+        # the next request doesn't pay another fetch for the same 404.
         _weatherlab_genesis_cache[cache_key] = {
             "data": _WEATHERLAB_GENESIS_MISS, "ts": time.time()}
         return None
+    text = r.text
 
     result: dict = {}
     header_seen = False
@@ -8139,15 +8210,11 @@ def _fetch_weatherlab_large_csv(date_str: str, hour_str: str,
     Returns dict keyed by track_id with per-member wind/pres arrays per tau.
     """
     cache_key = (date_str, hour_str, target_track or "ALL")
-    cached = _weatherlab_large_cache.get(cache_key)
-    if cached:
-        if cached["data"] == _WEATHERLAB_LARGE_MISS:
-            if time.time() - cached["ts"] < _WEATHERLAB_LARGE_MISS_TTL:
-                return None
-        elif time.time() - cached["ts"] < _WEATHERLAB_LARGE_CACHE_TTL:
-            return cached["data"]
-
-    import requests as req
+    hit = _weatherlab_cache_lookup(
+        _weatherlab_large_cache, cache_key,
+        _WEATHERLAB_LARGE_CACHE_TTL, _WEATHERLAB_LARGE_MISS_TTL)
+    if hit is not _WL_CACHE_MISS:
+        return hit   # fresh positive dict, or None for a known-missing cycle
 
     date_fmt = date_str.replace("-", "_")
     url = (
@@ -8157,13 +8224,15 @@ def _fetch_weatherlab_large_csv(date_str: str, hour_str: str,
 
     try:
         print(f"[WeatherLab 1K] Fetching {date_str} {hour_str}z ...")
-        resp = req.get(url, timeout=60, stream=True)
-        if resp.status_code != 200:
-            _weatherlab_large_cache[cache_key] = {
-                "data": _WEATHERLAB_LARGE_MISS, "ts": time.time()}
-            return None
+        resp = _weatherlab_http().get(url, timeout=60, stream=True)
     except Exception as e:
-        print(f"[WeatherLab 1K] Fetch failed: {e}")
+        # Transient — short negative cache only (see genesis fetcher).
+        print(f"[WeatherLab 1K] transient fetch error "
+              f"{date_str} {hour_str}z: {e}")
+        _weatherlab_cache_transient(_weatherlab_large_cache, cache_key)
+        return None
+    if resp.status_code != 200:
+        # Definitive 404 — cycle not published. Full MISS TTL.
         _weatherlab_large_cache[cache_key] = {
             "data": _WEATHERLAB_LARGE_MISS, "ts": time.time()}
         return None
