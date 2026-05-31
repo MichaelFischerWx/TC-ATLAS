@@ -25,6 +25,7 @@ import base64
 import gc
 import gzip
 import io
+import logging
 import re
 import time
 from collections import OrderedDict
@@ -47,6 +48,8 @@ try:
 except ImportError:
     import urllib.request as _urllib
     _requests = None
+
+logger = logging.getLogger("realtime_tdr_api")
 
 # Optional GOES IR dependencies — LAZY loaded to save ~80 MB RAM at startup.
 # The actual imports happen inside _get_s3fs_module() and _get_pyproj_module()
@@ -202,11 +205,39 @@ router = APIRouter(tags=["realtime"])
 
 _MAX_DOWNLOAD_MB = 150  # refuse to download files larger than this
 
+def _requests_get_cert_tolerant(url: str, **kwargs):
+    """``requests.get`` that retries with TLS verification disabled if the
+    server's certificate fails to verify (e.g. expired).
+
+    NOAA's SEB server (``seb.omao.noaa.gov``) periodically lets its TLS
+    certificate lapse — when it does, every TDR/Recon request 502s. The
+    radar data is public and the host is known, so on an SSL error we degrade
+    to an unverified fetch *for that host only* rather than break the whole
+    feature. Verification resumes automatically once SEB renews its cert.
+    We never relax verification for any other host.
+    """
+    try:
+        return _requests.get(url, **kwargs)
+    except _requests.exceptions.SSLError:
+        if "seb.omao.noaa.gov" not in url:
+            raise
+        try:
+            import urllib3
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        except Exception:
+            pass
+        logger.warning(
+            "TLS verification failed for %s; retrying unverified "
+            "(SEB upstream certificate likely expired)", url)
+        kwargs["verify"] = False
+        return _requests.get(url, **kwargs)
+
+
 def _fetch_bytes(url: str, timeout: int = 60, max_mb: float = _MAX_DOWNLOAD_MB) -> bytes:
     """Fetch raw bytes from a URL with an optional size guard."""
     if _requests:
         # Stream the response so we can check Content-Length before committing
-        resp = _requests.get(url, timeout=timeout, stream=True)
+        resp = _requests_get_cert_tolerant(url, timeout=timeout, stream=True)
         resp.raise_for_status()
         cl = resp.headers.get("Content-Length")
         if cl and int(cl) > max_mb * 1024 * 1024:
@@ -244,7 +275,7 @@ _HTTP_HEADERS = {"User-Agent": "TC-RADAR/1.0 (research; michaelfischerwx@gmail.c
 def _fetch_text(url: str, timeout: int = 30) -> str:
     """Fetch text content from a URL."""
     if _requests:
-        resp = _requests.get(url, timeout=timeout, headers=_HTTP_HEADERS)
+        resp = _requests_get_cert_tolerant(url, timeout=timeout, headers=_HTTP_HEADERS)
         resp.raise_for_status()
         return resp.text
     else:
