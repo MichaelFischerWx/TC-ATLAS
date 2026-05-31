@@ -1884,6 +1884,8 @@
                     <p class="rt-header-desc">Recent NOAA P-3 Tail Doppler Radar missions from the HRD real-time archive. Select a mission to open it in the TDR viewer.</p>
                 </div>
                 <div class="recon-missions-toolbar">
+                    <label class="toolbar-label" for="recon-missions-filter">Show</label>
+                    <select id="recon-missions-filter" class="toolbar-select" onchange="window.reconFilterMissions(this.value)"></select>
                     <span id="recon-missions-count" class="recon-missions-count"></span>
                     <button class="rt-sub-panel-btn" onclick="window.reconReloadMissions()" title="Reload mission list">&#x21bb; Refresh</button>
                 </div>

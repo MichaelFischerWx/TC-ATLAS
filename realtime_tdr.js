@@ -201,6 +201,86 @@
         return Math.floor(diff / 30) + ' mo ago';
     }
 
+    // Whole-day diff (>= 0); Infinity for unparseable dates so they only
+    // surface under the "All years" filter.
+    function _reconDaysAgo(dateISO) {
+        if (!dateISO) return Infinity;
+        var p = dateISO.split('-');
+        var then = Date.UTC(+p[0], +p[1] - 1, +p[2]);
+        var now = new Date();
+        var today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+        return Math.round((today - then) / 86400000);
+    }
+
+    var _reconMissionsParsed = null;   // _reconMissionsList mapped through _reconParseMission
+    var _reconMissionsFilter = null;   // 'recent90' | 'all' | a 4-digit year string
+
+    function _reconMissionMatchesFilter(p) {
+        var f = _reconMissionsFilter;
+        if (!f || f === 'all') return true;
+        if (f === 'recent90') return _reconDaysAgo(p.dateISO) <= 90;
+        return String(p.year) === f;   // year filter
+    }
+
+    // Build the filter dropdown from the years present in the data. Default
+    // (first load only) to the most recent year so the current season shows
+    // instead of the entire multi-year archive.
+    function _reconPopulateMissionFilter() {
+        var sel = document.getElementById('recon-missions-filter');
+        if (!sel || !_reconMissionsParsed) return;
+        var years = [];
+        _reconMissionsParsed.forEach(function (p) {
+            if (p.year && years.indexOf(p.year) === -1) years.push(p.year);
+        });
+        years.sort(function (a, b) { return b - a; });
+        var opts = '<option value="recent90">Last 90 days</option>' +
+                   '<option value="all">All years</option>';
+        years.forEach(function (y) { opts += '<option value="' + y + '">' + y + '</option>'; });
+        sel.innerHTML = opts;
+        if (_reconMissionsFilter == null) {
+            _reconMissionsFilter = years.length ? String(years[0]) : 'all';
+        }
+        sel.value = _reconMissionsFilter;
+    }
+
+    function _reconRenderMissionCards() {
+        var grid = document.getElementById('recon-missions-grid');
+        var countEl = document.getElementById('recon-missions-count');
+        if (!grid || !_reconMissionsParsed) return;
+        var shown = _reconMissionsParsed.filter(_reconMissionMatchesFilter);
+        if (countEl) {
+            countEl.textContent = shown.length + ' of ' + _reconMissionsParsed.length + ' missions';
+        }
+        if (!shown.length) {
+            grid.innerHTML = '<div class="recon-missions-empty">No missions match this filter.</div>';
+            return;
+        }
+        var html = '';
+        shown.forEach(function (p) {
+            var dateLabel = p.dateISO
+                ? (_RECON_MONTHS[p.month - 1] + ' ' + p.day + ', ' + p.year)
+                : p.id;
+            var rel = _reconRelDays(p.dateISO);
+            var recentCls = (rel === 'Today' || rel === 'Yesterday') ? ' is-recent' : '';
+            var safeId = String(p.id).replace(/'/g, '');
+            html += '<button class="recon-mission-card' + recentCls + '"' +
+                ' onclick="reconOpenMissionInTDR(\'' + safeId + '\')"' +
+                ' title="Open ' + safeId + ' in the TDR viewer">' +
+                '<div class="recon-mission-card-top">' +
+                '<span class="recon-mission-date">' + dateLabel + '</span>' +
+                (rel ? '<span class="recon-mission-rel">' + rel + '</span>' : '') +
+                '</div>' +
+                '<div class="recon-mission-flight">Flight ' + p.suffix + '</div>' +
+                '<div class="recon-mission-meta">' +
+                '<span class="recon-mission-tag">NOAA P-3</span>' +
+                '<span class="recon-mission-tag tdr">TDR</span>' +
+                '</div>' +
+                '<div class="recon-mission-open">Open in TDR &rarr;</div>' +
+                '</button>';
+        });
+        grid.innerHTML = html;
+    }
+
     function _reconRenderMissionsDashboard(force) {
         var grid = document.getElementById('recon-missions-grid');
         var countEl = document.getElementById('recon-missions-count');
@@ -218,41 +298,21 @@
                     grid.innerHTML = '<div class="recon-missions-empty">No recent reconnaissance missions in the real-time archive.</div>';
                     return;
                 }
-                if (countEl) {
-                    countEl.textContent = _reconMissionsList.length + ' mission' +
-                        (_reconMissionsList.length === 1 ? '' : 's');
-                }
-                var html = '';
-                _reconMissionsList.forEach(function (id) {
-                    var p = _reconParseMission(id);
-                    var dateLabel = p.dateISO
-                        ? (_RECON_MONTHS[p.month - 1] + ' ' + p.day + ', ' + p.year)
-                        : id;
-                    var rel = _reconRelDays(p.dateISO);
-                    var recentCls = (rel === 'Today' || rel === 'Yesterday') ? ' is-recent' : '';
-                    var safeId = String(id).replace(/'/g, '');
-                    html += '<button class="recon-mission-card' + recentCls + '"' +
-                        ' onclick="reconOpenMissionInTDR(\'' + safeId + '\')"' +
-                        ' title="Open ' + safeId + ' in the TDR viewer">' +
-                        '<div class="recon-mission-card-top">' +
-                        '<span class="recon-mission-date">' + dateLabel + '</span>' +
-                        (rel ? '<span class="recon-mission-rel">' + rel + '</span>' : '') +
-                        '</div>' +
-                        '<div class="recon-mission-flight">Flight ' + p.suffix + '</div>' +
-                        '<div class="recon-mission-meta">' +
-                        '<span class="recon-mission-tag">NOAA P-3</span>' +
-                        '<span class="recon-mission-tag tdr">TDR</span>' +
-                        '</div>' +
-                        '<div class="recon-mission-open">Open in TDR &rarr;</div>' +
-                        '</button>';
-                });
-                grid.innerHTML = html;
+                _reconMissionsParsed = _reconMissionsList.map(_reconParseMission);
+                _reconPopulateMissionFilter();
+                _reconRenderMissionCards();
             })
             .catch(function (err) {
                 grid.innerHTML = '<div class="recon-missions-empty">Could not load missions: ' +
                     (err && err.message ? err.message : err) + '</div>';
             });
     }
+
+    // Re-render the grid when the user changes the date filter (no refetch).
+    window.reconFilterMissions = function (val) {
+        _reconMissionsFilter = val;
+        _reconRenderMissionCards();
+    };
 
     window.reconReloadMissions = function () {
         _reconMissionsDashLoaded = false;
