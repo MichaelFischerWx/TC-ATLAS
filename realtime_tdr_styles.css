@@ -767,3 +767,136 @@
     padding: 32px 12px;
     text-align: center;
 }
+
+/* ── Recon · VDM sub-tab ─────────────────────────────────────── */
+.recon-vdm-wrap {
+    padding: 16px 18px 28px;
+    max-width: 1200px;
+    margin: 0 auto;
+}
+.recon-vdm-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 6px 0 14px;
+    flex-wrap: wrap;
+}
+.recon-vdm-status {
+    color: #9fb3c8;
+    font-size: 12px;
+    font-weight: 600;
+}
+.recon-vdm-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 12px;
+}
+.recon-vdm-card {
+    background: rgba(14, 30, 56, 0.6);
+    border: 1px solid rgba(96, 165, 250, 0.22);
+    border-radius: 11px;
+    padding: 13px 15px 14px;
+}
+.recon-vdm-card-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 11px;
+    border-bottom: 1px solid rgba(96, 165, 250, 0.16);
+    padding-bottom: 9px;
+}
+.recon-vdm-time {
+    font-size: 15px;
+    font-weight: 700;
+    color: #fff;
+}
+.recon-vdm-pos {
+    font-size: 12px;
+    font-weight: 600;
+    color: #00e5ff;
+    font-variant-numeric: tabular-nums;
+}
+.recon-vdm-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+    gap: 9px;
+}
+.recon-vdm-stat {
+    background: rgba(10, 20, 38, 0.5);
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    border-radius: 8px;
+    padding: 8px 10px;
+}
+.recon-vdm-stat.is-accent {
+    border-color: rgba(0, 229, 255, 0.35);
+}
+.recon-vdm-stat-val {
+    font-size: 18px;
+    font-weight: 700;
+    color: #fff;
+    line-height: 1.1;
+}
+.recon-vdm-stat-unit {
+    font-size: 11px;
+    font-weight: 600;
+    color: #9fb3c8;
+    margin-left: 2px;
+}
+.recon-vdm-stat-label {
+    margin-top: 3px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    color: #8aa0b8;
+}
+.recon-vdm-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 11px;
+}
+.recon-vdm-tag {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #cbd5e1;
+    background: rgba(96, 165, 250, 0.14);
+    border: 1px solid rgba(96, 165, 250, 0.28);
+    border-radius: 5px;
+    padding: 2px 7px;
+}
+.recon-vdm-raw {
+    margin-top: 11px;
+}
+.recon-vdm-raw summary {
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 600;
+    color: #8aa0b8;
+    user-select: none;
+}
+.recon-vdm-raw summary:hover {
+    color: #cbd5e1;
+}
+.recon-vdm-raw pre {
+    margin: 8px 0 0;
+    padding: 9px 11px;
+    background: rgba(5, 12, 24, 0.7);
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    border-radius: 7px;
+    font-size: 11px;
+    line-height: 1.4;
+    color: #cbd5e1;
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-x: auto;
+}
+.recon-vdm-empty {
+    color: #9fb3c8;
+    font-size: 14px;
+    padding: 32px 12px;
+    text-align: center;
+}

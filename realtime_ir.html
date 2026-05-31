@@ -2189,10 +2189,21 @@
             </div>
         </div>
 
-        <div class="recon-sub-panel recon-stub" data-sub="vdm" style="display:none;">
-            <div class="recon-stub-card">
-                <h3>Vortex Data Messages</h3>
-                <p>Decoded center fixes, minimum sea-level pressure, and peak flight-level / surface winds from recon VDMs. Coming soon.</p>
+        <div class="recon-sub-panel" data-sub="vdm" style="display:none;">
+            <div class="recon-vdm-wrap">
+                <div class="rt-header">
+                    <h2 class="rt-header-title">Vortex Data Messages</h2>
+                    <p class="rt-header-desc">Decoded center fixes, minimum sea-level pressure, and peak flight-level / surface winds from NHC reconnaissance VDMs (REPNT2 / REPPN2). Select an active storm to load its messages.</p>
+                </div>
+                <div class="recon-vdm-toolbar">
+                    <label class="toolbar-label" for="recon-vdm-storm">Storm</label>
+                    <select id="recon-vdm-storm" class="toolbar-select" style="min-width:200px;" onchange="window.reconLoadVdm(this.value)">
+                        <option value="">Select a storm…</option>
+                    </select>
+                    <span id="recon-vdm-status" class="recon-vdm-status"></span>
+                </div>
+                <div id="recon-vdm-list" class="recon-vdm-list" style="display:none;"></div>
+                <div id="recon-vdm-empty" class="recon-vdm-empty">Select a storm above to view its decoded vortex data messages.</div>
             </div>
         </div>
     </section>

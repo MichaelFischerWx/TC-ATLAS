@@ -152,6 +152,8 @@
                     try { window.Plotly.Plots.resize(c); } catch (e) {}
                 }
             }, 80);
+        } else if (name === 'vdm') {
+            _reconEnsureVdmStorms();
         }
         try { if (typeof gtag === 'function') gtag('event', 'recon_sub_switch', { sub: name }); } catch (e) {}
     };
@@ -430,6 +432,217 @@
                 if (_reconFLCurrentMission !== mission) return;
                 if (statusEl) statusEl.textContent = '';
                 if (emptyEl) { emptyEl.style.display = ''; emptyEl.textContent = 'Could not load flight-level data: ' + (err && err.message ? err.message : err); }
+            });
+    };
+
+    // ── Recon · Vortex Data Messages (VDM) sub-tab ──────────────
+    // Storm picker is driven by the RT Monitor's live active-storms
+    // list (window._irGetActiveStorms, defined in realtime_ir.js).
+    // VDMs only exist for Atlantic / East+Central Pacific recon, so we
+    // filter to AL/EP/CP basins. Data comes from the existing
+    // /global/vdm endpoint (storm-keyed; needs name+year+atcf+dates).
+    var _reconVdmStormsLoaded = false;
+    var _reconVdmCurrentId = null;
+    var _RECON_VDM_BASINS = { AL: 1, EP: 1, CP: 1 };
+
+    function _reconVdmEligible(s) {
+        var id = (s && s.atcf_id ? String(s.atcf_id) : '').toUpperCase();
+        return !!_RECON_VDM_BASINS[id.slice(0, 2)];
+    }
+
+    function _reconVdmStormDates(s) {
+        // Derive start/end YYYY-MM-DD from the storm's track for the
+        // /global/vdm month-context resolution; pad a little for safety.
+        var track = (s && s.track) || [];
+        var startISO = track.length ? track[0].time : s.last_fix_utc;
+        var endISO = s.last_fix_utc || (track.length ? track[track.length - 1].time : null);
+        function dpart(iso) { return iso ? String(iso).slice(0, 10) : null; }
+        return { start: dpart(startISO), end: dpart(endISO) };
+    }
+
+    function _reconVdmYear(s) {
+        var id = (s && s.atcf_id ? String(s.atcf_id) : '').toUpperCase();
+        var m = id.match(/(\d{4})$/);
+        if (m) return +m[1];
+        if (s && s.last_fix_utc) return +String(s.last_fix_utc).slice(0, 4);
+        return new Date().getUTCFullYear();
+    }
+
+    function _reconEnsureVdmStorms() {
+        var sel = document.getElementById('recon-vdm-storm');
+        if (!sel) return;
+        if (_reconVdmStormsLoaded) return;
+
+        var storms = (window._irGetActiveStorms && window._irGetActiveStorms()) || [];
+        var populate = function (list) {
+            var eligible = (list || []).filter(_reconVdmEligible);
+            // Strongest first — mirrors the Satellite tab default ordering.
+            eligible.sort(function (a, b) { return (b.vmax_kt || 0) - (a.vmax_kt || 0); });
+            sel.innerHTML = '<option value="">Select a storm…</option>';
+            eligible.forEach(function (s) {
+                var label = (s.name || 'UNNAMED') + ' (' + s.atcf_id + ')';
+                var opt = document.createElement('option');
+                opt.value = s.atcf_id;
+                opt.textContent = label;
+                sel.appendChild(opt);
+            });
+            _reconVdmStormsLoaded = true;
+            var emptyEl = document.getElementById('recon-vdm-empty');
+            if (!eligible.length && emptyEl) {
+                emptyEl.style.display = '';
+                emptyEl.textContent = 'No active Atlantic or Pacific storms with reconnaissance right now.';
+            }
+        };
+
+        if (storms.length) {
+            populate(storms);
+        } else if (window._irOnceStormsLoaded) {
+            var emptyEl = document.getElementById('recon-vdm-empty');
+            if (emptyEl) { emptyEl.style.display = ''; emptyEl.textContent = 'Waiting for active-storms list…'; }
+            window._irOnceStormsLoaded(function (list) { populate(list); });
+        } else {
+            populate([]);
+        }
+    }
+
+    function _reconVdmStormById(atcfId) {
+        var storms = (window._irGetActiveStorms && window._irGetActiveStorms()) || [];
+        for (var i = 0; i < storms.length; i++) {
+            if (String(storms[i].atcf_id).toUpperCase() === String(atcfId).toUpperCase()) {
+                return storms[i];
+            }
+        }
+        return null;
+    }
+
+    function _reconVdmFmtLatLon(lat, lon) {
+        if (lat == null || lon == null) return '—';
+        var ns = lat >= 0 ? 'N' : 'S';
+        var ew = lon >= 0 ? 'E' : 'W';
+        return Math.abs(lat).toFixed(2) + '°' + ns + ' ' + Math.abs(lon).toFixed(2) + '°' + ew;
+    }
+
+    function _reconVdmFmtTime(iso) {
+        if (!iso) return '—';
+        // iso like "2025-10-28T14:49:00" (UTC, no Z) → "Oct 28, 14:49Z"
+        var p = iso.split('T');
+        if (p.length < 2) return iso;
+        var d = p[0].split('-');
+        var t = p[1].slice(0, 5);
+        return _RECON_MONTHS[(+d[1]) - 1] + ' ' + (+d[2]) + ', ' + t + 'Z';
+    }
+
+    function _reconVdmStat(label, value, unit, accent) {
+        if (value == null || value === '') return '';
+        return '<div class="recon-vdm-stat' + (accent ? ' is-accent' : '') + '">' +
+            '<div class="recon-vdm-stat-val">' + value +
+            (unit ? '<span class="recon-vdm-stat-unit">' + unit + '</span>' : '') + '</div>' +
+            '<div class="recon-vdm-stat-label">' + label + '</div></div>';
+    }
+
+    function _reconVdmRenderList(json) {
+        var listEl = document.getElementById('recon-vdm-list');
+        var emptyEl = document.getElementById('recon-vdm-empty');
+        if (!listEl) return;
+        var vdms = (json && json.vdms) || [];
+        if (!vdms.length) {
+            listEl.style.display = 'none';
+            listEl.innerHTML = '';
+            if (emptyEl) { emptyEl.style.display = ''; emptyEl.textContent = 'No vortex data messages found for this storm.'; }
+            return;
+        }
+        if (emptyEl) emptyEl.style.display = 'none';
+
+        // Latest message first.
+        var sorted = vdms.slice().sort(function (a, b) {
+            return String(b.time || '').localeCompare(String(a.time || ''));
+        });
+
+        var html = '';
+        sorted.forEach(function (v, idx) {
+            var fixWind = null;
+            if (v.max_fl_wind_kt != null) {
+                fixWind = v.max_fl_wind_kt + '<span class="recon-vdm-stat-unit"> kt</span>';
+                if (v.max_fl_wind_bearing != null && v.max_fl_wind_range_nm != null) {
+                    fixWind += '<span class="recon-vdm-stat-unit"> @ ' + v.max_fl_wind_bearing + '°/' + v.max_fl_wind_range_nm + ' nm</span>';
+                }
+            }
+            var eye = '';
+            if (v.eye_shape || v.eye_diameter_nm != null) {
+                var parts = [];
+                if (v.eye_shape) parts.push(v.eye_shape);
+                if (v.eye_diameter_nm != null) parts.push(v.eye_diameter_nm + ' nm');
+                eye = parts.join(' · ');
+            }
+            var tags = '';
+            if (v.aircraft) tags += '<span class="recon-vdm-tag">' + v.aircraft + '</span>';
+            if (v.mission_id) tags += '<span class="recon-vdm-tag">' + v.mission_id + '</span>';
+            if (v.ob_number != null) tags += '<span class="recon-vdm-tag">OB ' + v.ob_number + '</span>';
+
+            var rawId = 'recon-vdm-raw-' + idx;
+            html += '<div class="recon-vdm-card">' +
+                '<div class="recon-vdm-card-top">' +
+                    '<div class="recon-vdm-time">' + _reconVdmFmtTime(v.time) + '</div>' +
+                    '<div class="recon-vdm-pos">' + _reconVdmFmtLatLon(v.lat, v.lon) + '</div>' +
+                '</div>' +
+                '<div class="recon-vdm-stats">' +
+                    _reconVdmStat('Min SLP', v.min_slp_hpa, ' mb', true) +
+                    _reconVdmStat('Max FL Wind', fixWind, '') +
+                    _reconVdmStat('Max Sfc (SFMR)', v.max_sfmr_kt, ' kt') +
+                    _reconVdmStat('Flight Level', v.flight_level_mb, ' mb') +
+                    _reconVdmStat('Eye', eye, '') +
+                    _reconVdmStat('Eye Temp', v.eye_temp_c, ' °C') +
+                '</div>' +
+                (tags ? '<div class="recon-vdm-tags">' + tags + '</div>' : '') +
+                (v.raw_text ? '<details class="recon-vdm-raw"><summary>Raw message</summary><pre>' +
+                    String(v.raw_text).replace(/</g, '&lt;') + '</pre></details>' : '') +
+            '</div>';
+        });
+        listEl.innerHTML = html;
+        listEl.style.display = '';
+    }
+
+    window.reconLoadVdm = function (atcfId) {
+        var statusEl = document.getElementById('recon-vdm-status');
+        var listEl = document.getElementById('recon-vdm-list');
+        var emptyEl = document.getElementById('recon-vdm-empty');
+        if (!atcfId) {
+            _reconVdmCurrentId = null;
+            if (statusEl) statusEl.textContent = '';
+            if (listEl) { listEl.style.display = 'none'; listEl.innerHTML = ''; }
+            if (emptyEl) { emptyEl.style.display = ''; emptyEl.textContent = 'Select a storm above to view its decoded vortex data messages.'; }
+            return;
+        }
+        var storm = _reconVdmStormById(atcfId);
+        if (!storm) {
+            if (statusEl) statusEl.textContent = '';
+            if (emptyEl) { emptyEl.style.display = ''; emptyEl.textContent = 'Storm not found in the active list.'; }
+            return;
+        }
+        _reconVdmCurrentId = atcfId;
+        if (listEl) { listEl.style.display = 'none'; listEl.innerHTML = ''; }
+        if (emptyEl) emptyEl.style.display = 'none';
+        if (statusEl) statusEl.textContent = 'Loading VDMs…';
+
+        var dates = _reconVdmStormDates(storm);
+        var qs = 'storm_name=' + encodeURIComponent(storm.name || '') +
+            '&year=' + _reconVdmYear(storm) +
+            '&atcf_id=' + encodeURIComponent(storm.atcf_id);
+        if (dates.start) qs += '&start_date=' + dates.start;
+        if (dates.end) qs += '&end_date=' + dates.end;
+
+        fetchWithRetry(API_BASE + '/global/vdm?' + qs)
+            .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+            .then(function (json) {
+                if (_reconVdmCurrentId !== atcfId) return;  // superseded
+                if (statusEl) statusEl.textContent = (json.n_vdms || 0) + ' message' + ((json.n_vdms === 1) ? '' : 's');
+                _reconVdmRenderList(json);
+                _ga('recon_vdm_load', { atcf: atcfId, n: json.n_vdms });
+            })
+            .catch(function (err) {
+                if (_reconVdmCurrentId !== atcfId) return;
+                if (statusEl) statusEl.textContent = '';
+                if (emptyEl) { emptyEl.style.display = ''; emptyEl.textContent = 'Could not load VDMs: ' + (err && err.message ? err.message : err); }
             });
     };
 
