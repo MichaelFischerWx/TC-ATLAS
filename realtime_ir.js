@@ -1896,57 +1896,76 @@
     function _cToF(c) { return (c == null) ? null : Math.round(c * 9/5 + 32); }
 
     /** Build wind-barb SVG fragments as a string. `dir` is the FROM
-     *  direction (0°=N). `speed` in knots. Returns the inner SVG markup
-     *  for the barb (shaft + feathers). Caller wraps in an <svg>. */
-    function _windBarbSvgString(speed, dir) {
+     *  direction (0°=N). `speed` in knots. `isSH` flips the feather side
+     *  in the Southern Hemisphere. Mirrors the GFS canvas barbs in
+     *  `_drawWindBarb`: same WMO convention (pennants→feathers→half from
+     *  the upwind tail, observer's-LEFT feathers in NH / right in SH),
+     *  same glyph proportions, and the same cream "print ink" over a dark
+     *  knockout halo so the two barb styles read identically on the map.
+     *  Returns the inner SVG markup; caller wraps in an <svg>. */
+    function _windBarbSvgString(speed, dir, isSH) {
         if (speed == null || dir == null) return '';
-        var spd = Math.round(speed);
-        if (spd < 2) {
-            // Calm: small open ring at station center.
-            return '<circle cx="0" cy="0" r="3" fill="none" stroke="#0f172a" stroke-width="1.2"/>';
-        }
-        var L = 24;
-        var rad = (dir - 90) * Math.PI / 180;
-        var bx = L * Math.cos(rad);
-        var by = L * Math.sin(rad);
-        var parts = [];
-        parts.push('<line x1="0" y1="0" x2="' + bx.toFixed(2) + '" y2="' + by.toFixed(2) +
-                   '" stroke="#0f172a" stroke-width="1.5"/>');
+        if (speed < 3) return '';  // calm — render nothing (matches GFS)
 
-        var remaining = spd;
-        var pos = 1.0;
-        var step = 5 / L;
-        var perpRad = rad - Math.PI / 2;
-        var barbLen = 9;
-        var dxFull = barbLen * Math.cos(perpRad);
-        var dyFull = barbLen * Math.sin(perpRad);
-        var dxHalf = barbLen * 0.55 * Math.cos(perpRad);
-        var dyHalf = barbLen * 0.55 * Math.sin(perpRad);
+        var STAFF = 20, FEATHER = 8, FEATHER_H = 4, SPACING = 2.4, PEN_BASE = 3.5;
 
-        while (remaining >= 50) {
-            var px = bx * pos, py = by * pos;
-            var nx = bx * (pos - step * 2.4), ny = by * (pos - step * 2.4);
-            parts.push('<polygon points="' +
-                px.toFixed(2) + ',' + py.toFixed(2) + ' ' +
-                (px + dxFull).toFixed(2) + ',' + (py + dyFull).toFixed(2) + ' ' +
-                nx.toFixed(2) + ',' + ny.toFixed(2) +
-                '" fill="#0f172a" stroke="#0f172a"/>');
-            remaining -= 50; pos -= step * 3;
+        // Shaft points UPWIND. In SVG coords (x right, y down) the FROM
+        // direction is (sin dir, -cos dir).
+        var dirRad = dir * Math.PI / 180;
+        var sx = Math.sin(dirRad), sy = -Math.cos(dirRad);   // station→tip unit
+
+        // Feathers on the observer's LEFT in NH, right in SH — matches
+        // _drawWindBarb's `side = isSH ? +1 : -1`. The GFS rotated-x screen
+        // unit works out to (-cos dir, -sin dir); scale by that side.
+        var side = isSH ? +1 : -1;
+        var fx = side * -Math.cos(dirRad), fy = side * -Math.sin(dirRad);
+
+        var kt = speed;
+        var nPen  = Math.floor(kt / 50); kt -= nPen  * 50;
+        var nFull = Math.floor(kt / 10); kt -= nFull * 10;
+        var nHalf = (kt >= 4.5) ? 1 : 0;
+
+        var segs = [];   // [x1, y1, x2, y2] line segments (shaft + feathers)
+        var pens = [];   // "x1,y1 x2,y2 x3,y3" pennant triangles
+        segs.push([0, 0, STAFF * sx, STAFF * sy]);
+
+        var pos = STAFF;  // distance from station along the shaft; walk inward
+        for (var i = 0; i < nPen; i++) {
+            var ax = pos * sx, ay = pos * sy;
+            var bx2 = (pos - PEN_BASE) * sx, by2 = (pos - PEN_BASE) * sy;
+            pens.push(ax.toFixed(2) + ',' + ay.toFixed(2) + ' ' +
+                      bx2.toFixed(2) + ',' + by2.toFixed(2) + ' ' +
+                      (ax + FEATHER * fx).toFixed(2) + ',' + (ay + FEATHER * fy).toFixed(2));
+            pos -= PEN_BASE + SPACING * 0.5;
         }
-        while (remaining >= 10) {
-            var fx = bx * pos, fy = by * pos;
-            parts.push('<line x1="' + fx.toFixed(2) + '" y1="' + fy.toFixed(2) +
-                       '" x2="' + (fx + dxFull).toFixed(2) + '" y2="' + (fy + dyFull).toFixed(2) +
-                       '" stroke="#0f172a" stroke-width="1.5"/>');
-            remaining -= 10; pos -= step * 1.6;
+        for (var f = 0; f < nFull; f++) {
+            var fxp = pos * sx, fyp = pos * sy;
+            segs.push([fxp, fyp, fxp + FEATHER * fx, fyp + FEATHER * fy]);
+            pos -= SPACING;
         }
-        if (remaining >= 5) {
-            var hx = bx * pos, hy = by * pos;
-            parts.push('<line x1="' + hx.toFixed(2) + '" y1="' + hy.toFixed(2) +
-                       '" x2="' + (hx + dxHalf).toFixed(2) + '" y2="' + (hy + dyHalf).toFixed(2) +
-                       '" stroke="#0f172a" stroke-width="1.5"/>');
+        if (nHalf) {
+            if (nPen === 0 && nFull === 0) pos -= SPACING;
+            var hxp = pos * sx, hyp = pos * sy;
+            segs.push([hxp, hyp, hxp + FEATHER_H * fx, hyp + FEATHER_H * fy]);
         }
-        return parts.join('');
+
+        function pass(color, width) {
+            var s = '';
+            for (var k = 0; k < segs.length; k++) {
+                var g = segs[k];
+                s += '<line x1="' + g[0].toFixed(2) + '" y1="' + g[1].toFixed(2) +
+                     '" x2="' + g[2].toFixed(2) + '" y2="' + g[3].toFixed(2) +
+                     '" stroke="' + color + '" stroke-width="' + width + '"/>';
+            }
+            for (var p = 0; p < pens.length; p++) {
+                s += '<polygon points="' + pens[p] + '" fill="' + color +
+                     '" stroke="' + color + '" stroke-width="' + width + '"/>';
+            }
+            return s;
+        }
+
+        // Pass 1 — dark knockout halo; pass 2 — cream ink on top.
+        return pass('rgba(0,0,0,0.55)', 3.0) + pass('rgba(244,240,224,0.95)', 1.4);
     }
 
     /** Build a station-plot SVG markup string for one observation.
@@ -1974,7 +1993,7 @@
         return '<svg xmlns="http://www.w3.org/2000/svg" width="72" height="56"' +
                ' viewBox="-36 -28 72 56" class="ir-stn-plot">' +
                '<circle cx="0" cy="0" r="1.5" fill="#0f172a"/>' +
-               _windBarbSvgString(ob.wind_speed_kt, ob.wind_dir_deg) +
+               _windBarbSvgString(ob.wind_speed_kt, ob.wind_dir_deg, ob.lat < 0) +
                labels + '</svg>';
     }
 
