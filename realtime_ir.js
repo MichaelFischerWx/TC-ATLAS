@@ -4383,11 +4383,6 @@
 
         if (meta.satellite) detailSatName = meta.satellite;
 
-        var leafletBounds = L.latLngBounds(
-            L.latLng(bounds[0][0], bounds[0][1]),
-            L.latLng(bounds[1][0], bounds[1][1])
-        );
-
         // Create one L.imageOverlay per frame (opacity 0 until activated)
         for (var i = 0; i < frames.length; i++) {
             // Use the frame's intrinsic index (position in the server's
@@ -4395,6 +4390,16 @@
             // the request stays correct after mobile decimation drops
             // frames. On desktop (no decimation) index === i.
             var serverIdx = (frames[i] && frames[i].index != null) ? frames[i].index : i;
+            // Place each frame at its OWN interpolated bounds (mirrors the
+            // bundle path at fb = fh.bounds || bounds). Falling back to the
+            // shared meta.bounds pinned every frame to the latest fix, which
+            // detached the IR signature from the track as the storm moved
+            // through the lookback window.
+            var fb = (frames[i] && frames[i].bounds) || bounds;
+            var leafletBounds = L.latLngBounds(
+                L.latLng(fb[0][0], fb[0][1]),
+                L.latLng(fb[1][0], fb[1][1])
+            );
             var url = API_BASE
                 + '/ir-monitor/storm/' + encodeURIComponent(atcfId)
                 + '/ir-frame.jpg'
