@@ -1278,18 +1278,37 @@ def _classify_wind(vmax_kt: Optional[float]) -> str:
     return "TD"
 
 
+def _maybe_gunzip(raw: bytes) -> bytes:
+    """Decompress `raw` if it is a gzip payload (magic bytes 1f 8b).
+
+    NHC serves some ATCF decks as `.dat.gz` files — a gzip *payload*, not a
+    transfer-encoding — so requests/urllib don't auto-decompress them. Detect
+    by magic bytes rather than URL suffix so it works regardless of caller.
+    """
+    if raw[:2] == b"\x1f\x8b":
+        import gzip as _gz
+        try:
+            return _gz.decompress(raw)
+        except Exception:
+            return raw
+    return raw
+
+
 def _http_get(url: str, timeout: int = 15) -> Optional[str]:
-    """Fetch a URL and return text content, or None on failure."""
+    """Fetch a URL and return text content, or None on failure.
+
+    Transparently gunzips gzip-payload responses (e.g. NHC `*.dat.gz` decks).
+    """
     try:
         if _requests:
             r = _requests.get(url, timeout=timeout)
             r.raise_for_status()
-            return r.text
+            return _maybe_gunzip(r.content).decode("utf-8", errors="replace")
         else:
             import urllib.request
             req = urllib.request.Request(url)
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return resp.read().decode("utf-8", errors="replace")
+                return _maybe_gunzip(resp.read()).decode("utf-8", errors="replace")
     except Exception:
         return None
 
@@ -1676,9 +1695,12 @@ def _fetch_adeck(atcf_id: str) -> list:
     Fetch and parse the A-deck file for a given ATCF ID.
     Returns list of parsed records sorted by datetime.
     """
-    # Try aid_public first (operational forecasts)
-    url = f"{NHC_ATCF_BASE}/a{atcf_id}.dat"
-    text = _http_get(url)
+    # Try aid_public first (operational forecasts). NHC serves some decks
+    # gzip-compressed (e.g. invests like aep90….dat.gz), so fall back to the
+    # .gz name on miss — _http_get transparently decompresses gzip payloads.
+    text = _http_get(f"{NHC_ATCF_BASE}/a{atcf_id}.dat")
+    if not text:
+        text = _http_get(f"{NHC_ATCF_BASE}/a{atcf_id}.dat.gz")
     if not text:
         return []
 
@@ -1699,9 +1721,10 @@ def _fetch_bdeck(atcf_id: str) -> list:
     For JTWC storms, also merges CARQ a-deck records for fresher fixes.
     Returns list of parsed records sorted by datetime.
     """
-    # Try NHC B-deck
-    url = f"{NHC_BDECK_BASE}/b{atcf_id}.dat"
-    text = _http_get(url)
+    # Try NHC B-deck (.dat, falling back to gzip-compressed .dat.gz)
+    text = _http_get(f"{NHC_BDECK_BASE}/b{atcf_id}.dat")
+    if not text:
+        text = _http_get(f"{NHC_BDECK_BASE}/b{atcf_id}.dat.gz")
     if text:
         records = []
         for line in text.strip().split("\n"):
