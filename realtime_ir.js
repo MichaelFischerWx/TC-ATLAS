@@ -7624,6 +7624,95 @@
         return API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId)
             + '/ir-frame.jpg?frame_index=-1&interval_min=30&lookback_hours=6';
     }
+
+    // ── Card locator maps + stats ──────────────────────────────────
+    var _galleryLocatorMaps = [];
+    var _LOC_TILES = {
+        light: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+        dark: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+    };
+    function _irFmtFixTime(iso) {
+        try {
+            var d = new Date(iso);
+            var h = d.getUTCHours(), m = d.getUTCMinutes();
+            return (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m + 'Z';
+        } catch (e) { return ''; }
+    }
+    function _irFetchShearInto(statsEl, atcfId) {
+        fetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId) + '/shear',
+              { cache: 'no-store' })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (d) {
+                if (!d || d.magnitude_kt == null || !statsEl.isConnected) return;
+                var txt = 'shear ' + Math.round(d.magnitude_kt) + ' kt';
+                statsEl.textContent = statsEl.textContent
+                    ? statsEl.textContent + '  ·  ' + txt : txt;
+            })
+            .catch(function () {});
+    }
+    function _irCleanupGalleryMaps() {
+        for (var i = 0; i < _galleryLocatorMaps.length; i++) {
+            var m = _galleryLocatorMaps[i];
+            m._qvDead = true;
+            try { m.remove(); } catch (e) {}
+        }
+        _galleryLocatorMaps = [];
+    }
+    function _irInitLocator(mapDiv, s) {
+        if (!mapDiv || typeof L === 'undefined') return;
+        var dark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var map;
+        try {
+            map = L.map(mapDiv, {
+                zoomControl: false, attributionControl: false, dragging: false,
+                scrollWheelZoom: false, doubleClickZoom: false, boxZoom: false,
+                keyboard: false, touchZoom: false, tap: false, fadeAnimation: false,
+            });
+        } catch (e) { return; }
+        var tiles = L.tileLayer(dark ? _LOC_TILES.dark : _LOC_TILES.light,
+            { subdomains: 'abcd', maxZoom: 8 }).addTo(map);
+        map._qvTiles = tiles;
+        map._qvDark = dark;
+        map.setView([s.lat, s.lon], 4);
+        _galleryLocatorMaps.push(map);
+
+        var invest = _irIsInvest(s.atcf_id);
+        var cat = s.category || windToCategory(s.vmax_kt);
+        var color = invest ? INVEST_CHIP_COLOR : (SS_COLORS[cat] || SS_COLORS.TD);
+        var cur = L.circleMarker([s.lat, s.lon],
+            { radius: 5, color: '#fff', weight: 1.5, fillColor: color, fillOpacity: 1 }).addTo(map);
+        setTimeout(function () { if (!map._qvDead) { try { map.invalidateSize(false); } catch (e) {} } }, 60);
+
+        // Recent track → polyline + fit to extent.
+        fetch(API_BASE + '/ir-monitor/storm/' + encodeURIComponent(s.atcf_id) + '/metadata',
+              { cache: 'no-store' })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (d) {
+                if (!d || map._qvDead) return;
+                var pts = (d.intensity_history || []).filter(function (p) {
+                    return p && p.lat != null && p.lon != null;
+                });
+                if (pts.length >= 2) {
+                    var ll = pts.map(function (p) { return [p.lat, p.lon]; });
+                    L.polyline(ll, { color: color, weight: 2, opacity: 0.85 }).addTo(map);
+                    cur.bringToFront();
+                    try { map.fitBounds(L.latLngBounds(ll).pad(0.45), { animate: false, maxZoom: 6 }); } catch (e) {}
+                }
+                try { map.invalidateSize(false); } catch (e) {}
+            })
+            .catch(function () {});
+    }
+    // Swap locator basemaps when the site theme toggles.
+    document.documentElement.addEventListener('theme:change', function (e) {
+        var dark = !!(e.detail && e.detail.theme === 'dark');
+        for (var i = 0; i < _galleryLocatorMaps.length; i++) {
+            var m = _galleryLocatorMaps[i];
+            if (m._qvDead || m._qvDark === dark || !m._qvTiles) continue;
+            m._qvDark = dark;
+            m._qvTiles.setUrl(dark ? _LOC_TILES.dark : _LOC_TILES.light);
+        }
+    });
+
     function _irMakeGalleryCard(s) {
         var card = document.createElement('button');
         card.className = 'qv-card';
@@ -7669,6 +7758,14 @@
         }
         card.appendChild(thumb);
 
+        // Locator: themed mini-map with the storm's recent track + current
+        // position. Initialised by _irRenderGallery once the card is in the
+        // DOM (Leaflet needs a sized container).
+        var loc = document.createElement('div');
+        loc.className = 'qv-card-locator';
+        card.appendChild(loc);
+        card._qvLocStorm = s;
+
         var body = document.createElement('div');
         body.className = 'qv-card-body';
         var row = document.createElement('div');
@@ -7692,6 +7789,16 @@
             ? '  ·  ' + Math.round(s.motion_kt) + ' kt @ ' + Math.round(s.motion_deg) + '°' : '';
         pos.textContent = fmtLatLon(s.lat, s.lon) + motion;
         body.appendChild(pos);
+        // Stats: satellite · last-fix time (free from the storm list), plus
+        // deep-layer shear fetched asynchronously.
+        var stats = document.createElement('div');
+        stats.className = 'qv-card-stats';
+        var sp = [];
+        if (s.satellite) sp.push(s.satellite);
+        if (s.last_fix_utc) sp.push('fix ' + _irFmtFixTime(s.last_fix_utc));
+        stats.textContent = sp.join('  ·  ');
+        body.appendChild(stats);
+        _irFetchShearInto(stats, s.atcf_id);
         card.appendChild(body);
 
         card.addEventListener('click', function () {
@@ -7702,6 +7809,7 @@
     window._irRenderGallery = function () {
         var grid = document.getElementById('sat-gallery-grid');
         if (!grid) return;
+        _irCleanupGalleryMaps();   // tear down prior locator maps before rebuild
         var countEl = document.getElementById('sat-gallery-count');
         var emptyEl = document.getElementById('sat-gallery-empty');
         var storms = (stormData || []).slice().sort(function (a, b) {
@@ -7718,6 +7826,12 @@
         for (var i = 0; i < storms.length; i++) frag.appendChild(_irMakeGalleryCard(storms[i]));
         grid.innerHTML = '';
         grid.appendChild(frag);
+        // Init locator maps now that the cards are sized in the DOM.
+        var cards = grid.querySelectorAll('.qv-card');
+        for (var j = 0; j < cards.length; j++) {
+            var loc = cards[j].querySelector('.qv-card-locator');
+            if (loc && cards[j]._qvLocStorm) _irInitLocator(loc, cards[j]._qvLocStorm);
+        }
     };
     /** Show the gallery landing (hides the detail card + other sat views).
      *  Renders now; re-renders once if the storm list hasn't loaded yet. */
