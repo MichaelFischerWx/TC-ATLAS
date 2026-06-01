@@ -13314,15 +13314,16 @@
                 y += panels[k].h + GAP;
             }
 
-            // Overlay the locator globe in the top-right interior of the top
-            // panel. The Saffir-Simpson category labels (TS/C1…C5) hug the
-            // LEFT edge, so the right side stays clear; the only thing up
-            // there is the thin top of the max-Vmax envelope. The disc is
-            // opaque so it reads cleanly over the gridlines behind it.
-            if (globeImg && panels.length) {
-                var gSize = Math.round(panels[0].h * 0.30);
-                var gx = W - gSize - Math.round(W * 0.02);
-                var gy = HEAD + Math.round(panels[0].h * 0.045);
+            // Locator globe — placed in the top-right of the HEADER strip,
+            // not over the plot. An intensity fan fills most of the panel, so
+            // any in-plot overlay would cover forecast data; the header's
+            // right side is empty, so the globe anchors the figure
+            // geographically while hiding nothing. Sits opposite the
+            // left-aligned title/subtitle.
+            if (globeImg) {
+                var gSize = HEAD - 30;                 // fit the ~180px header
+                var gx = W - gSize - 40;
+                var gy = Math.round((HEAD - gSize) / 2);
                 ctx.drawImage(globeImg, gx, gy, gSize, gSize);
             }
 
