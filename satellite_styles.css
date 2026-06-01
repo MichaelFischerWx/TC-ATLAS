@@ -1143,7 +1143,11 @@
     font-size: 12px;
     font-weight: 600;
     font-variant-numeric: tabular-nums;
+    text-decoration: none;        /* color set inline by 7-day risk */
+    cursor: pointer;
+    width: fit-content;
 }
+.qv-card-formation:hover { text-decoration: underline; }
 .qv-card-stats {
     margin-top: 2px;
     font-size: 11px;
