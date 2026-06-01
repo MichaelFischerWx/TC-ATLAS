@@ -5427,7 +5427,7 @@ def get_ir_frames_meta(
 @router.get("/storm/{atcf_id}/ir-frame.jpg")
 def get_ir_frame_jpg(
     atcf_id: str,
-    frame_index: int = Query(0, ge=0),
+    frame_index: int = Query(0, ge=-1),
     lookback_hours: float = Query(6.0, ge=1, le=24),
     radius_deg: float = Query(10.0, ge=1.0, le=12.0),
     interval_min: int = Query(30, ge=10, le=60),
@@ -5469,7 +5469,12 @@ def get_ir_frame_jpg(
     )
     frame_times = list(reversed(frame_times))  # oldest first (idx 0 = oldest)
 
-    if frame_index >= len(frame_times):
+    # frame_index=-1 → latest (newest) frame, so a single-call thumbnail can
+    # ask for the freshest snapshot without a prior frames-meta count lookup.
+    if frame_index < 0:
+        frame_index = len(frame_times) - 1
+
+    if frame_index < 0 or frame_index >= len(frame_times):
         raise HTTPException(status_code=400, detail=f"frame_index {frame_index} out of range")
 
     target_dt = frame_times[frame_index]

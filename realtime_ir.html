@@ -684,37 +684,56 @@
          Tropical Tidbits / cyclonicwx. The full interactive
          viewer (sat-main, below) is opt-in via "Detailed Analysis". -->
     <section id="sat-quick-view" class="sat-quick-view" style="display:none;" aria-label="Storm Satellite Quick View">
-        <div class="qv-storm-bar">
-            <div class="qv-storm-picker-wrap">
-                <select id="qv-storm-select" class="qv-storm-select" aria-label="Pick a storm">
-                    <option value="">No active storms</option>
-                </select>
+        <!-- Gallery overview: every active storm as an IR-snapshot card.
+             Default landing — click a card to open that storm's loop. -->
+        <div id="qv-gallery" class="qv-gallery" style="display:none;">
+            <div class="qv-gallery-head">
+                <h2 class="qv-gallery-title">Active Storms<span id="qv-gallery-count" class="qv-gallery-count"></span></h2>
+                <div class="qv-gallery-sub">Select a storm to view its satellite loop</div>
             </div>
-            <div class="qv-storm-info">
-                <span class="qv-cat-chip" id="qv-cat">—</span>
-                <span class="qv-name" id="qv-name">—</span>
-                <span class="qv-vitals" id="qv-vitals">—</span>
-            </div>
-            <button id="qv-to-detailed" class="qv-detailed-btn" title="Expert satellite diagnostics — colormaps, crosshair, follow, 88D radar, ASCAT">Diagnostics &rarr;</button>
-        </div>
-        <div class="qv-stage">
-            <!-- Leaflet map: per-frame L.imageOverlay at its true bounds
-                 over a basemap with coastlines + a graticule layer.
-                 Native geographic correctness — storm moves across the
-                 view, land stays put, lat/lon lines are real. -->
-            <div id="qv-leaflet-map" class="qv-leaflet-map"></div>
-            <div id="qv-loader" class="qv-loader">Loading animation&hellip;</div>
-            <div id="qv-empty" class="qv-empty" style="display:none;">
+            <div id="qv-gallery-grid" class="qv-gallery-grid" role="list"></div>
+            <div id="qv-gallery-empty" class="qv-gallery-empty" style="display:none;">
                 <div style="font-size:18px;margin-bottom:8px;">No active storms.</div>
-                <div style="color:#94a3b8;">Storm animations appear here when systems are active in any basin.</div>
+                <div style="color:#94a3b8;">Storms appear here when systems are active in any basin.</div>
             </div>
-            <div id="qv-error" class="qv-error" style="display:none;"></div>
         </div>
-        <div class="qv-meta-bar">
-            <div class="qv-meta-item"><span class="qv-meta-label">Position</span><b id="qv-position">—</b></div>
-            <div class="qv-meta-item"><span class="qv-meta-label">Motion</span><b id="qv-motion">—</b></div>
-            <div class="qv-meta-item"><span class="qv-meta-label">Shear</span><b id="qv-shear">—</b></div>
-            <div class="qv-meta-item"><span class="qv-meta-label">Satellite</span><b id="qv-sat">—</b></div>
+
+        <!-- Single-storm animation view (opened from a gallery card or the
+             dropdown). Hidden until a storm is selected. -->
+        <div id="qv-storm-view" class="qv-storm-view" style="display:none;">
+            <div class="qv-storm-bar">
+                <button id="qv-back-gallery" class="qv-back-btn" title="Back to all active storms">&larr; All storms</button>
+                <div class="qv-storm-picker-wrap">
+                    <select id="qv-storm-select" class="qv-storm-select" aria-label="Pick a storm">
+                        <option value="">No active storms</option>
+                    </select>
+                </div>
+                <div class="qv-storm-info">
+                    <span class="qv-cat-chip" id="qv-cat">—</span>
+                    <span class="qv-name" id="qv-name">—</span>
+                    <span class="qv-vitals" id="qv-vitals">—</span>
+                </div>
+                <button id="qv-to-detailed" class="qv-detailed-btn" title="Expert satellite diagnostics — colormaps, crosshair, follow, 88D radar, ASCAT">Diagnostics &rarr;</button>
+            </div>
+            <div class="qv-stage">
+                <!-- Leaflet map: per-frame L.imageOverlay at its true bounds
+                     over a basemap with coastlines + a graticule layer.
+                     Native geographic correctness — storm moves across the
+                     view, land stays put, lat/lon lines are real. -->
+                <div id="qv-leaflet-map" class="qv-leaflet-map"></div>
+                <div id="qv-loader" class="qv-loader">Loading animation&hellip;</div>
+                <div id="qv-empty" class="qv-empty" style="display:none;">
+                    <div style="font-size:18px;margin-bottom:8px;">No active storms.</div>
+                    <div style="color:#94a3b8;">Storm animations appear here when systems are active in any basin.</div>
+                </div>
+                <div id="qv-error" class="qv-error" style="display:none;"></div>
+            </div>
+            <div class="qv-meta-bar">
+                <div class="qv-meta-item"><span class="qv-meta-label">Position</span><b id="qv-position">—</b></div>
+                <div class="qv-meta-item"><span class="qv-meta-label">Motion</span><b id="qv-motion">—</b></div>
+                <div class="qv-meta-item"><span class="qv-meta-label">Shear</span><b id="qv-shear">—</b></div>
+                <div class="qv-meta-item"><span class="qv-meta-label">Satellite</span><b id="qv-sat">—</b></div>
+            </div>
         </div>
     </section>
 
