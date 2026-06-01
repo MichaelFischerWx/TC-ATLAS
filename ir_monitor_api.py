@@ -1941,7 +1941,7 @@ def _build_storm_entry(atcf_id: str, records: list,
         if motion_kt is None:
             motion_kt = rk
 
-    return {
+    entry = {
         "atcf_id": atcf_id.upper(),
         "name": display_name,
         "basin": basin,
@@ -1960,6 +1960,15 @@ def _build_storm_entry(atcf_id: str, records: list,
         "has_recon": _has_active_recon(atcf_id),
     }
 
+    # NHC invests (AL/EP/CP, number 90-99) carry a Tropical Weather Outlook
+    # formation chance — attach the nearest GTWO area's 2-/7-day odds.
+    if basin_code in _NHC_BASINS and _is_invest(atcf_id):
+        formation = _formation_for_invest(latest["lat"], latest["lon"])
+        if formation:
+            entry["formation"] = formation
+
+    return entry
+
 
 def _is_invest(atcf_id: str) -> bool:
     """True if the ATCF ID is an invest (storm number 90-99)."""
@@ -1977,6 +1986,80 @@ def _haversine_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     # Simple Euclidean in lat/lon space with cos(lat) correction
     cos_lat = math.cos(math.radians((lat1 + lat2) / 2.0))
     return math.sqrt(dlat * dlat + (dlon * cos_lat) ** 2)
+
+
+# NHC Graphical Tropical Weather Outlook — "current location" points, each a
+# disturbance area's centroid carrying 2-day / 7-day formation odds. Served as
+# GeoJSON from the NHC ArcGIS service.
+_GTWO_URL = (
+    "https://mapservices.weather.noaa.gov/tropical/rest/services/tropical/"
+    "NHC_tropical_weather_summary/MapServer/2/query"
+    "?where=1%3D1&outFields=*&f=geojson"
+)
+_GTWO_TTL = 1800  # 30 min — the TWO refreshes a few times a day
+_gtwo_cache: dict = {"t": 0.0, "points": []}
+_gtwo_lock = threading.Lock()
+
+
+def _get_gtwo_points() -> list:
+    """Fetch (cached) the GTWO disturbance-area points with formation odds.
+    Returns [{lat, lon, prob2day, prob7day, risk2day, risk7day}, ...]."""
+    now = time.time()
+    with _gtwo_lock:
+        if _gtwo_cache["points"] and (now - _gtwo_cache["t"]) < _GTWO_TTL:
+            return _gtwo_cache["points"]
+
+    text = _http_get(_GTWO_URL, timeout=12)
+    pts = []
+    if text:
+        try:
+            data = json.loads(text)
+            for feat in data.get("features", []):
+                geom = feat.get("geometry") or {}
+                coords = geom.get("coordinates") or []
+                props = feat.get("properties") or {}
+                if len(coords) >= 2:
+                    pts.append({
+                        "lat": coords[1],
+                        "lon": coords[0],
+                        "prob2day": props.get("prob2day"),
+                        "prob7day": props.get("prob7day"),
+                        "risk2day": props.get("risk2day"),
+                        "risk7day": props.get("risk7day"),
+                    })
+        except Exception:
+            pass
+
+    with _gtwo_lock:
+        if pts:
+            _gtwo_cache["points"] = pts
+            _gtwo_cache["t"] = now
+        elif _gtwo_cache["points"]:
+            # Keep last good points through a transient fetch failure.
+            pts = _gtwo_cache["points"]
+    return pts
+
+
+def _formation_for_invest(lat: float, lon: float, max_deg: float = 5.0):
+    """Formation odds of the GTWO area nearest (lat, lon) within max_deg."""
+    best = None
+    best_d = max_deg
+    for p in _get_gtwo_points():
+        try:
+            d = _haversine_deg(lat, lon, p["lat"], p["lon"])
+        except (TypeError, ValueError):
+            continue
+        if d <= best_d:
+            best_d = d
+            best = p
+    if not best:
+        return None
+    return {
+        "prob2day": best.get("prob2day"),
+        "prob7day": best.get("prob7day"),
+        "risk2day": best.get("risk2day"),
+        "risk7day": best.get("risk7day"),
+    }
 
 
 def _get_track_for_interp(atcf_id: str) -> list:

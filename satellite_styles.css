@@ -1138,6 +1138,12 @@
     color: var(--text-dim);
     font-variant-numeric: tabular-nums;
 }
+.qv-card-formation {
+    margin-top: 1px;
+    font-size: 12px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
 .qv-card-stats {
     margin-top: 2px;
     font-size: 11px;
