@@ -7791,14 +7791,22 @@
         // Invests carry an NHC formation chance (2-day / 7-day), coloured by
         // the 7-day risk level.
         if (invest && s.formation && (s.formation.prob2day || s.formation.prob7day)) {
-            var fm = document.createElement('div');
+            var b2 = String(s.atcf_id).slice(0, 2).toUpperCase();
+            var nhcBasin = b2 === 'AL' ? 'atlc' : b2 === 'CP' ? 'cpac' : 'epac';
+            var fm = document.createElement('a');
             fm.className = 'qv-card-formation';
+            fm.href = 'https://www.nhc.noaa.gov/gtwo.php?basin=' + nhcBasin;
+            fm.target = '_blank';
+            fm.rel = 'noopener noreferrer';
+            fm.title = 'Open the NHC Tropical Weather Outlook';
             fm.textContent = 'Formation ' + (s.formation.prob2day || '—') + ' 2-day · '
                 + (s.formation.prob7day || '—') + ' 7-day';
             var r7 = String(s.formation.risk7day || '').toLowerCase();
             fm.style.color = r7 === 'high' ? '#ef4444'
                 : r7 === 'medium' ? '#f59e0b'
                 : 'var(--text-dim)';
+            // Don't let the link click also open the storm card.
+            fm.addEventListener('click', function (e) { e.stopPropagation(); });
             body.appendChild(fm);
         }
         var pos = document.createElement('div');
