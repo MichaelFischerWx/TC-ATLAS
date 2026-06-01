@@ -1638,6 +1638,45 @@ def _extract_storm_name(text: str) -> Optional[str]:
     return None
 
 
+# ATCF basin code → single-letter suffix used in NHC/JTWC nomenclature
+# (e.g. EP → "E", so invest 90 in EPAC is "90E"). Mirrors the frontend
+# _ATCF_BASIN_LETTER map in realtime_ir.js.
+_ATCF_BASIN_LETTER = {
+    "AL": "L", "EP": "E", "CP": "C",
+    "WP": "W", "IO": "A", "SH": "S",
+}
+
+
+def _friendly_storm_name(atcf_id: str, raw_name: Optional[str] = None) -> str:
+    """Human-facing storm name following NHC/JTWC nomenclature.
+
+    Mirrors the frontend `_genesisFormatStormLabel` so the global map and the
+    satellite detail header read consistently:
+      - invest (number 90-99) → "Invest 90E"
+      - named system          → title-cased name ("Jangmi")
+      - otherwise (no usable name) → the ATCF id, unchanged from prior behavior
+
+    Scoped deliberately: only invests get a synthesized label. Non-invests with
+    no name keep the ATCF id rather than being forced to "TD 0NE", so a named
+    storm whose name hasn't propagated yet is never mislabeled as a depression.
+    """
+    aid = (atcf_id or "").upper()
+    basin_code = aid[:2]
+    num = aid[2:4]
+    letter = _ATCF_BASIN_LETTER.get(basin_code, "")
+    try:
+        n = int(num)
+    except ValueError:
+        return (raw_name or "").strip() or aid
+    if 90 <= n <= 99:
+        return f"Invest {num}{letter}"
+    name = (raw_name or "").strip()
+    # Ignore a name that's just the ATCF id echoed back (no real name yet).
+    if name and not re.fullmatch(r"[A-Z]{2}\d{2}\d{4}", name.upper()):
+        return name.title()
+    return aid
+
+
 def _parse_adeck_line(line: str) -> Optional[dict]:
     """
     Parse a single A-deck CSV line.
@@ -1882,8 +1921,9 @@ def _build_storm_entry(atcf_id: str, records: list,
     vmax = latest["vmax_kt"]
     cat = _classify_wind(vmax)
 
-    # Use provided name, or fall back to ATCF ID
-    display_name = name if name else atcf_id.upper()
+    # Friendly nomenclature: invests → "Invest 90E", named → title-cased,
+    # else the ATCF ID. Mirrors the frontend label logic.
+    display_name = _friendly_storm_name(atcf_id, name)
 
     # Motion: prefer the JTWC advisory's official "MOVEMENT PAST SIX
     # HOURS" line for WP/IO/SH storms (it's what shows on the warning
@@ -5387,7 +5427,7 @@ def get_ir_frames_meta(
 @router.get("/storm/{atcf_id}/ir-frame.jpg")
 def get_ir_frame_jpg(
     atcf_id: str,
-    frame_index: int = Query(0, ge=0),
+    frame_index: int = Query(0, ge=-1),
     lookback_hours: float = Query(6.0, ge=1, le=24),
     radius_deg: float = Query(10.0, ge=1.0, le=12.0),
     interval_min: int = Query(30, ge=10, le=60),
@@ -5429,7 +5469,12 @@ def get_ir_frame_jpg(
     )
     frame_times = list(reversed(frame_times))  # oldest first (idx 0 = oldest)
 
-    if frame_index >= len(frame_times):
+    # frame_index=-1 → latest (newest) frame, so a single-call thumbnail can
+    # ask for the freshest snapshot without a prior frames-meta count lookup.
+    if frame_index < 0:
+        frame_index = len(frame_times) - 1
+
+    if frame_index < 0 or frame_index >= len(frame_times):
         raise HTTPException(status_code=400, detail=f"frame_index {frame_index} out of range")
 
     target_dt = frame_times[frame_index]
@@ -5972,8 +6017,18 @@ def get_storm_metadata(atcf_id: str):
                 "vmax_kt": r["vmax_kt"],
             })
 
+    # Friendly display name — derive from the active-cache entry when present
+    # (already normalized), otherwise synthesize from the ATCF id so the detail
+    # header reads correctly even for storms not in the active list.
+    display_name = _friendly_storm_name(
+        atcf_id, current.get("name") if current else None
+    )
+    if current is not None:
+        current["name"] = display_name
+
     result = {
         "atcf_id": atcf_id.upper(),
+        "name": display_name,
         "current": current,
         "intensity_history": intensity_history,
         "forecast_track": forecast_track,

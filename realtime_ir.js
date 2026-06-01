@@ -4833,6 +4833,10 @@
     function openStormDetail(atcfId) {
         currentStormId = atcfId;
 
+        // Hide the active-storm gallery landing — opening a card replaces it.
+        var _satGallery = document.getElementById('sat-gallery');
+        if (_satGallery) _satGallery.style.display = 'none';
+
         // Clean up model overlay from previous storm
         _rtRemoveModelOverlay();
 
@@ -5513,8 +5517,10 @@
         // changing tabs (used by "Loop Only" which manages the view itself).
         var _activeView = document.documentElement.getAttribute('data-view');
         document.getElementById('ir-detail').style.display = 'none';
-        if (!skipTabRoute && _activeView === 'satellite' && typeof window.switchIRView === 'function') {
-            window.switchIRView('map');
+        // On the Storm Satellite tab, "← All Storms" returns to the gallery
+        // overview (not the global map).
+        if (!skipTabRoute && _activeView === 'satellite' && typeof window._irShowGallery === 'function') {
+            window._irShowGallery();
             _ga('ir_close_detail');
             return;
         }
@@ -7591,6 +7597,131 @@
         };
         window.addEventListener('ir-storms-loaded', handler);
     };
+
+    // ── Active-storm gallery (default Storm Satellite landing) ──────
+    // Every active storm as an IR-snapshot card. Clicking a card opens
+    // that storm's full detail card (#ir-detail) via _irOpenStorm — the
+    // gallery is just the chooser in front of the card you already use.
+    function _irThumbUrl(atcfId) {
+        // frame_index=-1 → latest frame; interval_min=30 keeps the
+        // single-snapshot server render cheap.
+        return API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId)
+            + '/ir-frame.jpg?frame_index=-1&interval_min=30&lookback_hours=6';
+    }
+    function _irMakeGalleryCard(s) {
+        var card = document.createElement('button');
+        card.className = 'qv-card';
+        card.type = 'button';
+        card.setAttribute('role', 'listitem');
+        card.setAttribute('data-atcf', s.atcf_id);
+        var cat = s.category || windToCategory(s.vmax_kt);
+        var nm = s.name || s.atcf_id;
+        card.setAttribute('aria-label', nm + ' — ' + cat
+            + (s.vmax_kt != null ? ', ' + s.vmax_kt + ' kt' : ''));
+
+        var thumb = document.createElement('div');
+        thumb.className = 'qv-card-thumb is-loading';
+        var img = document.createElement('img');
+        img.alt = ''; img.loading = 'lazy'; img.decoding = 'async';
+        img.addEventListener('load', function () { thumb.classList.remove('is-loading', 'is-error'); });
+        img.addEventListener('error', function () {
+            thumb.classList.remove('is-loading'); thumb.classList.add('is-error');
+            if (img.parentNode) img.parentNode.removeChild(img);
+        });
+        img.src = _irThumbUrl(s.atcf_id);
+        thumb.appendChild(img);
+        if (s.basin) {
+            var bchip = document.createElement('span');
+            bchip.className = 'qv-card-basin-chip'; bchip.textContent = s.basin;
+            thumb.appendChild(bchip);
+        }
+        if (s.has_recon) {
+            var rec = document.createElement('span');
+            rec.className = 'qv-card-recon'; rec.textContent = 'RECON';
+            thumb.appendChild(rec);
+        }
+        card.appendChild(thumb);
+
+        var body = document.createElement('div');
+        body.className = 'qv-card-body';
+        var row = document.createElement('div');
+        row.className = 'qv-card-row';
+        var chip = document.createElement('span');
+        chip.className = 'qv-card-chip'; chip.textContent = cat;
+        chip.style.background = SS_COLORS[cat] || SS_COLORS.TD;
+        var name = document.createElement('span');
+        name.className = 'qv-card-name'; name.textContent = nm;
+        row.appendChild(chip); row.appendChild(name);
+        body.appendChild(row);
+        var vitals = document.createElement('div');
+        vitals.className = 'qv-card-vitals';
+        var vmax = s.vmax_kt != null ? (s.vmax_kt + ' kt') : '—';
+        var mslp = s.mslp_hpa != null ? (s.mslp_hpa + ' hPa') : '—';
+        vitals.textContent = vmax + ' · ' + mslp;
+        body.appendChild(vitals);
+        var pos = document.createElement('div');
+        pos.className = 'qv-card-pos';
+        var motion = (s.motion_kt != null && s.motion_deg != null)
+            ? '  ·  ' + Math.round(s.motion_kt) + ' kt @ ' + Math.round(s.motion_deg) + '°' : '';
+        pos.textContent = fmtLatLon(s.lat, s.lon) + motion;
+        body.appendChild(pos);
+        card.appendChild(body);
+
+        card.addEventListener('click', function () {
+            if (window._irOpenStorm) window._irOpenStorm(s.atcf_id);
+        });
+        return card;
+    }
+    window._irRenderGallery = function () {
+        var grid = document.getElementById('sat-gallery-grid');
+        if (!grid) return;
+        var countEl = document.getElementById('sat-gallery-count');
+        var emptyEl = document.getElementById('sat-gallery-empty');
+        var storms = (stormData || []).slice().sort(function (a, b) {
+            return (b.vmax_kt || 0) - (a.vmax_kt || 0);
+        });
+        if (countEl) countEl.textContent = storms.length ? '· ' + storms.length + ' active' : '';
+        if (!storms.length) {
+            grid.innerHTML = '';
+            if (emptyEl) emptyEl.style.display = '';
+            return;
+        }
+        if (emptyEl) emptyEl.style.display = 'none';
+        var frag = document.createDocumentFragment();
+        for (var i = 0; i < storms.length; i++) frag.appendChild(_irMakeGalleryCard(storms[i]));
+        grid.innerHTML = '';
+        grid.appendChild(frag);
+    };
+    /** Show the gallery landing (hides the detail card + other sat views).
+     *  Renders now; re-renders once if the storm list hasn't loaded yet. */
+    window._irShowGallery = function () {
+        var gallery = document.getElementById('sat-gallery');
+        var detail = document.getElementById('ir-detail');
+        var satMain = document.getElementById('sat-main');
+        var satQuick = document.getElementById('sat-quick-view');
+        if (detail) detail.style.display = 'none';
+        if (satMain) satMain.style.display = 'none';
+        if (satQuick) satQuick.style.display = 'none';
+        if (gallery) gallery.style.display = 'block';
+        // Drop any storm= from the hash so a reload/shared link lands on the
+        // gallery, not a specific card.
+        try {
+            history.replaceState(null, '',
+                window.location.pathname + window.location.search + '#satellite');
+        } catch (e) {}
+        window._irRenderGallery();
+        if (!(stormData && stormData.length) && window._irOnceStormsLoaded) {
+            window._irOnceStormsLoaded(function () {
+                if (gallery && gallery.style.display !== 'none') window._irRenderGallery();
+            });
+        }
+    };
+    // Keep the gallery fresh as poll cycles update the storm list, but only
+    // while it's the visible view.
+    window.addEventListener('ir-storms-loaded', function () {
+        var gallery = document.getElementById('sat-gallery');
+        if (gallery && gallery.style.display !== 'none') window._irRenderGallery();
+    });
 
     // ═══════════════════════════════════════════════════════════
     //  BASIN ACTIVITY SIDEBAR

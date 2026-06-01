@@ -683,6 +683,21 @@
          ~200-400 ms from GCS direct. Matches the simplicity of
          Tropical Tidbits / cyclonicwx. The full interactive
          viewer (sat-main, below) is opt-in via "Detailed Analysis". -->
+    <!-- Active-storm gallery: the default Storm Satellite landing. Every
+         active storm as an IR-snapshot card; clicking one opens that storm's
+         full detail card (#ir-detail) via window._irOpenStorm. -->
+    <section id="sat-gallery" style="display:none;" aria-label="Active storms gallery">
+        <div class="qv-gallery-head">
+            <h2 class="qv-gallery-title">Active Storms<span id="sat-gallery-count" class="qv-gallery-count"></span></h2>
+            <div class="qv-gallery-sub">Select a storm to open its satellite detail</div>
+        </div>
+        <div id="sat-gallery-grid" class="qv-gallery-grid" role="list"></div>
+        <div id="sat-gallery-empty" class="qv-gallery-empty" style="display:none;">
+            <div style="font-size:18px;margin-bottom:8px;">No active storms.</div>
+            <div style="color:#94a3b8;">Storms appear here when systems are active in any basin.</div>
+        </div>
+    </section>
+
     <section id="sat-quick-view" class="sat-quick-view" style="display:none;" aria-label="Storm Satellite Quick View">
         <div class="qv-storm-bar">
             <div class="qv-storm-picker-wrap">
@@ -2363,9 +2378,11 @@
             /* Hide all then show the active one. Keeps the switching
                logic linear regardless of how many views we add. */
             var irDetail = document.getElementById('ir-detail');
+            var satGallery = document.getElementById('sat-gallery');
             irMain.style.display = 'none';
             satMain.style.display = 'none';
             if (satQuick) satQuick.style.display = 'none';
+            if (satGallery) satGallery.style.display = 'none';
             if (subMain) subMain.style.display = 'none';
             if (seaMain) seaMain.style.display = 'none';
             if (reconMain) reconMain.style.display = 'none';
@@ -2375,14 +2392,12 @@
             }
 
             if (view === 'satellite') {
-                /* Storm Satellite default = the rich storm card. It's
-                   anchored to the satellite animation but adds intensity
-                   chart, shear, microwave passes, models — info-dense
-                   without losing the satellite as the focal point.
+                /* Storm Satellite sub-modes:
                    - ?detailed=1 → expert Diagnostics view (sat-main)
                    - ?loop=1     → bare Quick View (animation only)
-                   - no storms   → Quick View empty state
-                   - default     → card with strongest active storm */
+                   - ?storm=ID   → that storm's rich detail card (ir-detail)
+                   - default     → active-storm gallery (sat-gallery); a card
+                                   opens the rich detail card. */
                 var hashStr = window.location.hash || '';
                 var goDetailed = /[#&]detailed=1/.test(hashStr);
                 var goLoopOnly = /[#&]loop=1/.test(hashStr);
@@ -2395,59 +2410,44 @@
                     if (satQuick) satQuick.style.display = 'flex';
                     if (window.activateQuickView) window.activateQuickView();
                 } else {
-                    /* Card path. If a card is already open for some storm,
-                       keep it. Otherwise pick the strongest active storm.
-                       If the storms list hasn't loaded yet, queue the pick. */
+                    /* Default landing = the active-storm GALLERY. Clicking a
+                       card opens that storm's rich detail card (#ir-detail).
+                       - storm= deep-link → open that card directly.
+                       - card already open (returning to tab) → keep it.
+                       - otherwise → show the gallery overview. */
                     var alreadyOpen = irDetail && irDetail.style.display !== 'none' &&
                                       irDetail.style.display !== '';
-                    if (alreadyOpen) {
-                        // ensure card stays visible (switchIRView clears displays earlier)
-                        irDetail.style.display = 'block';
-                    } else {
-                        var hashStormMatch = hashStr.match(/storm=([A-Za-z]{2}\d{6})/);
-                        var preferredId = hashStormMatch ? hashStormMatch[1].toUpperCase() : null;
-                        var openCardForStrongest = function () {
-                            var storms = (window._irGetActiveStorms && window._irGetActiveStorms()) || [];
-                            if (storms.length === 0) {
-                                if (satQuick) satQuick.style.display = 'flex';
-                                if (window.activateQuickView) window.activateQuickView();
-                                return;
-                            }
-                            var pickId = null;
-                            if (preferredId) {
-                                for (var i = 0; i < storms.length; i++) {
-                                    if (storms[i].atcf_id === preferredId) { pickId = preferredId; break; }
-                                }
-                            }
-                            if (!pickId) {
-                                var sorted = storms.slice().sort(function (a, b) {
-                                    return (b.vmax_kt || 0) - (a.vmax_kt || 0);
-                                });
-                                pickId = sorted[0].atcf_id;
-                            }
-                            if (window._irOpenStorm) window._irOpenStorm(pickId);
+                    var hashStormMatch = hashStr.match(/storm=([A-Za-z]{2}\d{6})/);
+                    var preferredId = hashStormMatch ? hashStormMatch[1].toUpperCase() : null;
+                    if (preferredId) {
+                        /* Deep-link / restored storm → open its card. If storms
+                           haven't loaded yet, show the gallery as a placeholder
+                           and open the card once the list arrives. */
+                        var openPreferred = function () {
+                            if (window._irOpenStorm) window._irOpenStorm(preferredId);
                         };
                         if (window._irGetActiveStorms && window._irGetActiveStorms().length > 0) {
-                            openCardForStrongest();
+                            openPreferred();
                         } else if (window._irOnceStormsLoaded) {
-                            // Show a placeholder while we wait for the fetch.
-                            if (satQuick) {
-                                satQuick.style.display = 'flex';
-                                if (window.activateQuickView) window.activateQuickView();
-                            }
+                            if (window._irShowGallery) window._irShowGallery();
                             window._irOnceStormsLoaded(function () {
-                                // Only swap if the user is still on the Sat tab and
-                                // hasn't manually requested loop-only.
                                 if (currentView !== 'satellite') return;
                                 if (/[#&]loop=1/.test(window.location.hash || '')) return;
-                                if (satQuick) satQuick.style.display = 'none';
-                                openCardForStrongest();
+                                openPreferred();
                             });
-                        } else {
-                            // Fallback: no helpers available, use Quick View.
-                            if (satQuick) satQuick.style.display = 'flex';
-                            if (window.activateQuickView) window.activateQuickView();
+                        } else if (window._irShowGallery) {
+                            window._irShowGallery();
                         }
+                    } else if (alreadyOpen) {
+                        // Returning to the tab with a card already open — keep it.
+                        irDetail.style.display = 'block';
+                    } else if (window._irShowGallery) {
+                        // No specific storm → land on the gallery overview.
+                        window._irShowGallery();
+                    } else if (satQuick) {
+                        // Fallback if the gallery helper isn't available.
+                        satQuick.style.display = 'flex';
+                        if (window.activateQuickView) window.activateQuickView();
                     }
                 }
             } else if (view === 'subseasonal') {
