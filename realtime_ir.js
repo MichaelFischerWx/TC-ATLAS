@@ -13583,7 +13583,7 @@
     // tab) after the user first looked at the map — without this, they
     // silently appear and a user who already glanced away misses them.
     var _genesisToastTimer = null;
-    function _genesisAnnounceArrival(nTracks, isAutoRefresh) {
+    function _genesisAnnounceArrival(nDisturbances, isAutoRefresh) {
         if (!map || typeof map.getContainer !== 'function') return;
         var container = map.getContainer();
         if (!container) return;
@@ -13592,7 +13592,7 @@
         if (prev && prev.parentNode) prev.parentNode.removeChild(prev);
         if (_genesisToastTimer) { clearTimeout(_genesisToastTimer); _genesisToastTimer = null; }
 
-        var plural = nTracks === 1 ? '' : 's';
+        var plural = nDisturbances === 1 ? '' : 's';
         var lead = isAutoRefresh ? 'Updated forecast · ' : '';
         var toast = document.createElement('div');
         toast.className = 'rt-gen-toast';
@@ -13601,7 +13601,7 @@
         toast.innerHTML =
             '<span class="rt-gen-toast-dot"></span>'
             + '<span class="rt-gen-toast-body">'
-            + '<b>' + lead + nTracks + ' cyclogenesis disturbance' + plural + '</b>'
+            + '<b>' + lead + nDisturbances + ' cyclogenesis disturbance' + plural + '</b>'
             + '<span class="rt-gen-toast-sub">Google DeepMind ensemble · tap a marker for the 1000-member detail</span>'
             + '</span>'
             + '<span class="rt-gen-toast-close" aria-label="Dismiss">×</span>';
@@ -13629,7 +13629,7 @@
         // is gated on visibilityState), so the timer always counts down
         // while the user is actually looking.
         _genesisToastTimer = setTimeout(dismiss, 8000);
-        _ga('rt_genesis_toast', { n_tracks: nTracks, auto: !!isAutoRefresh });
+        _ga('rt_genesis_toast', { n_disturbances: nDisturbances, auto: !!isAutoRefresh });
     }
 
     function _loadGenesis(isAutoRefresh) {
@@ -13681,7 +13681,18 @@
                     // when there's something to see and the layer is on.
                     var nNow = (data && data.n_tracks) ? data.n_tracks : 0;
                     if (newInit && newInit !== prevInit && nNow > 0 && _rtGenesisVisible) {
-                        _genesisAnnounceArrival(nNow, isAutoRefresh);
+                        // Announce the DISTURBANCE (cluster) count so the
+                        // toast matches the markers on the map — not n_tracks,
+                        // which reads several times higher (the "27 vs ~5"
+                        // mismatch). May be a client-side estimate if the
+                        // server cluster index hasn't landed yet; close enough
+                        // for a transient toast. Skip if nothing clusters.
+                        var nDistToast = 0;
+                        try { nDistToast = _genesisDisturbances(data.tracks || []).length; }
+                        catch (e) { nDistToast = 0; }
+                        if (nDistToast > 0) {
+                            _genesisAnnounceArrival(nDistToast, isAutoRefresh);
+                        }
                     }
                     // Fetch the server's precomputed TCA clusters so
                     // the on-map markers show accurate uncapped counts
