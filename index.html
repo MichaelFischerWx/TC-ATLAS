@@ -403,6 +403,44 @@
         .activity-stat-val { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
         .activity-stat-sep { color: var(--border-light); }
 
+        /* Active state — the strip visibly "lights up" when storms are live */
+        .activity-strip.has-active { border-color: rgba(244, 115, 33, 0.35); background: var(--um-orange-tint); }
+        .activity-strip.has-active #activity-active .activity-stat-val { color: var(--um-orange-deep); }
+        .activity-strip.has-active #activity-active .dot { animation: activityPulse 1.8s ease-out infinite; }
+        @keyframes activityPulse {
+            0%   { box-shadow: 0 0 0 0 rgba(244, 115, 33, 0.5); }
+            70%  { box-shadow: 0 0 0 6px rgba(244, 115, 33, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(244, 115, 33, 0); }
+        }
+
+        /* ── Active-storm quick-link chips ───────────────── */
+        .active-storms {
+            display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
+            gap: 8px; margin: -0.75rem auto 2rem; max-width: 700px;
+        }
+        .active-storms[hidden] { display: none; }
+        .active-storms-label {
+            font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.08em;
+            font-weight: 700; color: var(--um-orange-deep);
+        }
+        .storm-chip {
+            display: inline-flex; align-items: center; gap: 7px;
+            padding: 5px 11px 5px 9px; border-radius: 999px;
+            background: var(--um-orange-tint); border: 1px solid rgba(244, 115, 33, 0.32);
+            color: var(--text); font-size: 0.8rem; font-weight: 600;
+            text-decoration: none; transition: all 0.18s ease;
+        }
+        .storm-chip:hover { background: rgba(244, 115, 33, 0.18); border-color: var(--um-orange); transform: translateY(-1px); }
+        .storm-chip .chip-dot {
+            width: 7px; height: 7px; border-radius: 50%;
+            background: var(--um-orange); box-shadow: 0 0 0 3px var(--um-orange-tint); flex: none;
+        }
+        .storm-chip .chip-cat {
+            font-size: 0.64rem; font-weight: 700; letter-spacing: 0.03em;
+            text-transform: uppercase; color: var(--um-orange-deep);
+        }
+        .storm-chip .chip-arrow { color: var(--um-orange); font-weight: 700; margin-left: 1px; }
+
         /* ── Start Here: worked-example cards ────────────── */
         .start-here-section {
             max-width: 1200px;
@@ -661,6 +699,12 @@
             <span class="activity-stat is-stale" id="activity-refresh"><span class="dot"></span>Monitor refreshed <span class="activity-stat-val">—</span></span>
             <span class="activity-stat-sep">·</span>
             <span class="activity-stat is-stale"><span class="dot"></span><span class="activity-stat-val">1,510</span>&nbsp;TC-RADAR analyses · 1997–2024</span>
+        </div>
+
+        <!-- ── Active-storm quick-links (populated live; hidden until storms exist) ── -->
+        <div class="active-storms" id="active-storms" hidden>
+            <span class="active-storms-label">Active now</span>
+            <span class="active-storms-chips" id="active-storms-chips"></span>
         </div>
 
         <!-- ── Platform cards ────────────────────────────── -->
@@ -970,12 +1014,43 @@
             if (delta < 86400)  return Math.round(delta / 3600) + ' h ago';
             return Math.round(delta / 86400) + ' d ago';
         }
+        function escHtml(s) {
+            return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+                return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+            });
+        }
+        // Render named, clickable chips that deep-link into the Real-Time
+        // Monitor (realtime_ir.html#storm=<ATCF>), strongest storm first.
+        function renderStormChips(storms) {
+            var row = document.getElementById('active-storms');
+            var chips = document.getElementById('active-storms-chips');
+            if (!row || !chips) return;
+            if (!storms.length) { row.hidden = true; return; }
+            var sorted = storms.slice().sort(function (a, b) {
+                return (b.vmax_kt || 0) - (a.vmax_kt || 0);
+            });
+            chips.innerHTML = sorted.map(function (s) {
+                var atcf = String(s.atcf_id || '');
+                var name = s.name || 'Unnamed';
+                var cat = s.category || '';
+                var href = /^[A-Za-z]{2}\d{6}$/.test(atcf)
+                    ? 'realtime_ir.html#storm=' + encodeURIComponent(atcf)
+                    : 'realtime_ir.html';
+                return '<a class="storm-chip" href="' + href + '" title="Open ' + escHtml(name) +
+                    ' in the Real-Time Monitor"><span class="chip-dot"></span>' + escHtml(name) +
+                    (cat ? '<span class="chip-cat">' + escHtml(cat) + '</span>' : '') +
+                    '<span class="chip-arrow">→</span></a>';
+            }).join('');
+            row.hidden = false;
+        }
+
         fetch(API_BASE + '/ir-monitor/active-storms', { cache: 'no-store' })
             .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
             .then(function (data) {
                 var storms = (data && data.storms) || [];
                 var active = storms.length;
                 var activeEl = document.getElementById('activity-active');
+                var stripEl = document.getElementById('activity-strip');
                 if (activeEl) {
                     var val = activeEl.querySelector('.activity-stat-val');
                     if (val) val.textContent = active;
@@ -985,6 +1060,8 @@
                         activeEl.innerHTML = '<span class="dot"></span>No active TCs';
                     }
                 }
+                if (stripEl) stripEl.classList.toggle('has-active', active > 0);
+                renderStormChips(storms);
                 var refreshEl = document.getElementById('activity-refresh');
                 if (refreshEl) {
                     var rel = relTime(data && data.updated_utc);
