@@ -965,6 +965,15 @@
         return 'Cat ' + cat.replace('C', '');
     }
 
+    /** Invests (ATCF number 90-99) aren't classified TCs — they show an
+     *  "INVEST" chip in a neutral colour, never a Saffir-Simpson label like
+     *  "TD" (which the wind-based classifier would otherwise assign). */
+    function _irIsInvest(atcfId) {
+        var n = parseInt(String(atcfId || '').slice(2, 4), 10);
+        return n >= 90 && n <= 99;
+    }
+    var INVEST_CHIP_COLOR = '#64748b';
+
     /** Format lat/lon for display */
     function fmtLatLon(lat, lon) {
         var ns = lat >= 0 ? 'N' : 'S';
@@ -4899,14 +4908,15 @@
         _populateDetailStormPicker(atcfId);
 
         // Populate header
+        var invest = _irIsInvest(storm.atcf_id);
         var cat = storm.category || windToCategory(storm.vmax_kt);
-        var color = SS_COLORS[cat] || SS_COLORS.TD;
+        var color = invest ? INVEST_CHIP_COLOR : (SS_COLORS[cat] || SS_COLORS.TD);
         document.getElementById('ir-detail-name').textContent = storm.name || 'UNNAMED';
         document.getElementById('ir-detail-id').textContent = storm.atcf_id;
         var reconEl = document.getElementById('ir-detail-recon');
         if (reconEl) reconEl.style.display = storm.has_recon ? '' : 'none';
         var catEl = document.getElementById('ir-detail-cat');
-        catEl.textContent = categoryShort(cat) + (storm.vmax_kt != null ? ' \u00B7 ' + storm.vmax_kt + ' kt' : '');
+        catEl.textContent = (invest ? 'INVEST' : categoryShort(cat)) + (storm.vmax_kt != null ? ' \u00B7 ' + storm.vmax_kt + ' kt' : '');
         catEl.style.background = color;
         catEl.title = 'Saffir-Simpson category from 1-min sustained wind (kt). '
             + 'TD <34 \u00B7 TS 34\u201363 \u00B7 Cat1 64\u201382 \u00B7 Cat2 83\u201395 \u00B7 Cat3 96\u2013112 \u00B7 Cat4 113\u2013136 \u00B7 Cat5 137+';
@@ -5431,8 +5441,9 @@
         }
         if (!storm) return;
 
+        var invest = _irIsInvest(storm.atcf_id);
         var cat = storm.category || windToCategory(storm.vmax_kt);
-        var color = SS_COLORS[cat] || SS_COLORS.TD;
+        var color = invest ? INVEST_CHIP_COLOR : (SS_COLORS[cat] || SS_COLORS.TD);
 
         var nameEl = document.getElementById('ir-detail-name');
         if (nameEl) nameEl.textContent = storm.name || 'UNNAMED';
@@ -5442,7 +5453,7 @@
 
         var catEl = document.getElementById('ir-detail-cat');
         if (catEl) {
-            catEl.textContent = categoryShort(cat) + (storm.vmax_kt != null ? ' \u00B7 ' + storm.vmax_kt + ' kt' : '');
+            catEl.textContent = (invest ? 'INVEST' : categoryShort(cat)) + (storm.vmax_kt != null ? ' \u00B7 ' + storm.vmax_kt + ' kt' : '');
             catEl.style.background = color;
         }
 
@@ -7614,7 +7625,8 @@
         card.type = 'button';
         card.setAttribute('role', 'listitem');
         card.setAttribute('data-atcf', s.atcf_id);
-        var cat = s.category || windToCategory(s.vmax_kt);
+        var invest = _irIsInvest(s.atcf_id);
+        var cat = invest ? 'INVEST' : (s.category || windToCategory(s.vmax_kt));
         var nm = s.name || s.atcf_id;
         card.setAttribute('aria-label', nm + ' — ' + cat
             + (s.vmax_kt != null ? ', ' + s.vmax_kt + ' kt' : ''));
@@ -7648,7 +7660,7 @@
         row.className = 'qv-card-row';
         var chip = document.createElement('span');
         chip.className = 'qv-card-chip'; chip.textContent = cat;
-        chip.style.background = SS_COLORS[cat] || SS_COLORS.TD;
+        chip.style.background = invest ? INVEST_CHIP_COLOR : (SS_COLORS[cat] || SS_COLORS.TD);
         var name = document.createElement('span');
         name.className = 'qv-card-name'; name.textContent = nm;
         row.appendChild(chip); row.appendChild(name);
