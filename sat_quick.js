@@ -38,8 +38,6 @@
     // ── App state ────────────────────────────────────────────
     var _activeStorms = [];
     var _currentStormId = null;
-    var _view = 'gallery';          // 'gallery' (overview) | 'storm' (animation)
-    var _product = 'ir';            // 'ir' | 'visible' | 'geocolor'
     var _lastShearByStorm = {};
     var _activated = false;
     var _pollTimer = null;
@@ -71,41 +69,15 @@
         return API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId)
             + '/ir-frames-bundle?lookback_hours=6&radius_deg=10&interval_min=' + QV_INTERVAL_MIN;
     }
-    // Prewarmed band bundles (Visible = band 2) live here; GeoColor is
-    // rendered on demand (no prewarmed GCS artifact), so it's API-only.
-    var GCS_BAND_BUNDLE_BASE = 'https://storage.googleapis.com/tc-atlas-ir-cache/rt-v10/bundles/band';
-    function _bundleSourcesFor(product, atcfId) {
-        var common = 'lookback_hours=6&radius_deg=10&interval_min=' + QV_INTERVAL_MIN;
-        var base = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId);
-        if (product === 'visible') {
-            return {
-                gcs: GCS_BAND_BUNDLE_BASE + '/2/' + encodeURIComponent(atcfId.toUpperCase()) + '.bin',
-                api: base + '/band-frames-bundle?band=2&' + common,
-            };
-        }
-        if (product === 'geocolor') {
-            return { gcs: null, api: base + '/geocolor-frames-bundle?' + common };
-        }
-        // IR (default) — same prewarmed bundle the page has always used.
-        return { gcs: _gcsBundleUrl(atcfId), api: _apiBundleUrl(atcfId) };
-    }
 
     // ── DOM refs ─────────────────────────────────────────────
     var elRoot, elSelect, elCatChip, elName, elVitals, elMapDiv, elLoader,
         elEmpty, elError, elPosition, elMotion, elShear, elSat,
-        elDetailedBtn, elGallery, elGalleryGrid, elGalleryCount,
-        elGalleryEmpty, elStormView, elBackBtn, elProductToggle;
+        elDetailedBtn;
     function _captureDom() {
         if (elRoot) return true;
         elRoot = document.getElementById('sat-quick-view');
         if (!elRoot) return false;
-        elGallery = document.getElementById('qv-gallery');
-        elGalleryGrid = document.getElementById('qv-gallery-grid');
-        elGalleryCount = document.getElementById('qv-gallery-count');
-        elGalleryEmpty = document.getElementById('qv-gallery-empty');
-        elStormView = document.getElementById('qv-storm-view');
-        elBackBtn = document.getElementById('qv-back-gallery');
-        elProductToggle = document.getElementById('qv-product-toggle');
         elSelect = document.getElementById('qv-storm-select');
         elCatChip = document.getElementById('qv-cat');
         elName = document.getElementById('qv-name');
@@ -174,172 +146,6 @@
             elMotion.textContent = '—';
         }
         elSat.textContent = storm.satellite || '—';
-    }
-
-    // ── Gallery overview ─────────────────────────────────────
-    // Default landing: a card per active storm with a static latest-IR
-    // snapshot. Clicking a card (or the dropdown) opens the single-storm
-    // animation view. The dropdown + "All storms" back button let users
-    // move between the two without losing context.
-    function _thumbUrl(id) {
-        // frame_index=-1 → freshest frame; interval_min=30 keeps the
-        // server render cheap (we only need one snapshot per card).
-        return API_BASE + '/ir-monitor/storm/' + encodeURIComponent(id)
-            + '/ir-frame.jpg?frame_index=-1&interval_min=30&lookback_hours=6';
-    }
-    function _galleryStorms() {
-        return _activeStorms.slice().sort(function (a, b) {
-            return (b.vmax_kt || 0) - (a.vmax_kt || 0);
-        });
-    }
-    function _makeCard(s) {
-        var card = document.createElement('button');
-        card.className = 'qv-card';
-        card.type = 'button';
-        card.setAttribute('role', 'listitem');
-        card.setAttribute('data-atcf', s.atcf_id);
-        var cat = _catShort(s.category);
-        var nm = s.name || s.atcf_id;
-        card.setAttribute('aria-label', nm + ' — ' + cat
-            + (s.vmax_kt != null ? ', ' + s.vmax_kt + ' kt' : ''));
-
-        var thumb = document.createElement('div');
-        thumb.className = 'qv-card-thumb is-loading';
-        var img = document.createElement('img');
-        img.alt = '';
-        img.loading = 'lazy';
-        img.decoding = 'async';
-        img.addEventListener('load', function () {
-            thumb.classList.remove('is-loading', 'is-error');
-        });
-        img.addEventListener('error', function () {
-            thumb.classList.remove('is-loading');
-            thumb.classList.add('is-error');
-            if (img.parentNode) img.parentNode.removeChild(img);
-        });
-        img.src = _thumbUrl(s.atcf_id);
-        thumb.appendChild(img);
-        if (s.basin) {
-            var bchip = document.createElement('span');
-            bchip.className = 'qv-card-basin-chip';
-            bchip.textContent = s.basin;
-            thumb.appendChild(bchip);
-        }
-        if (s.has_recon) {
-            var rec = document.createElement('span');
-            rec.className = 'qv-card-recon';
-            rec.textContent = 'RECON';
-            thumb.appendChild(rec);
-        }
-        card.appendChild(thumb);
-
-        var body = document.createElement('div');
-        body.className = 'qv-card-body';
-        var row = document.createElement('div');
-        row.className = 'qv-card-row';
-        var chip = document.createElement('span');
-        chip.className = 'qv-card-chip';
-        chip.textContent = cat;
-        chip.style.background = SS_COLORS[cat] || SS_COLORS.TD;
-        var name = document.createElement('span');
-        name.className = 'qv-card-name';
-        name.textContent = nm;
-        row.appendChild(chip);
-        row.appendChild(name);
-        body.appendChild(row);
-        var vitals = document.createElement('div');
-        vitals.className = 'qv-card-vitals';
-        var vmax = s.vmax_kt != null ? (s.vmax_kt + ' kt') : '—';
-        var mslp = s.mslp_hpa != null ? (s.mslp_hpa + ' hPa') : '—';
-        vitals.textContent = vmax + ' · ' + mslp;
-        body.appendChild(vitals);
-        var pos = document.createElement('div');
-        pos.className = 'qv-card-pos';
-        var motion = (s.motion_kt != null && s.motion_deg != null)
-            ? '  ·  ' + Math.round(s.motion_kt) + ' kt @ ' + Math.round(s.motion_deg) + '°'
-            : '';
-        pos.textContent = _fmtLatLon(s.lat, s.lon) + motion;
-        body.appendChild(pos);
-        card.appendChild(body);
-
-        card.addEventListener('click', function () { _openStorm(s.atcf_id); });
-        return card;
-    }
-    function _renderGallery() {
-        if (!elGalleryGrid) return;
-        var storms = _galleryStorms();
-        if (elGalleryCount) {
-            elGalleryCount.textContent = storms.length ? '· ' + storms.length + ' active' : '';
-        }
-        if (!storms.length) {
-            elGalleryGrid.innerHTML = '';
-            if (elGalleryEmpty) elGalleryEmpty.style.display = '';
-            return;
-        }
-        if (elGalleryEmpty) elGalleryEmpty.style.display = 'none';
-        var frag = document.createDocumentFragment();
-        for (var i = 0; i < storms.length; i++) frag.appendChild(_makeCard(storms[i]));
-        elGalleryGrid.innerHTML = '';
-        elGalleryGrid.appendChild(frag);
-    }
-    function _showGallery() {
-        _view = 'gallery';
-        _stopAnimation();
-        if (elStormView) elStormView.style.display = 'none';
-        if (elGallery) elGallery.style.display = '';
-        _renderGallery();
-        // Drop the storm from the hash so a reload lands on the gallery.
-        try { history.replaceState(null, '', '#view=satellite'); } catch (e) {}
-    }
-    function _showStormView() {
-        _view = 'storm';
-        if (elGallery) elGallery.style.display = 'none';
-        if (elStormView) elStormView.style.display = 'flex';
-        // Leaflet needs a reflow now that its container has a positive size.
-        setTimeout(function () {
-            if (_map) {
-                _map.invalidateSize(false);
-                if (_frameLayers.length > 0 && !_animActive) _startAnimation();
-            } else {
-                _ensureMap();
-            }
-        }, 50);
-    }
-    function _openStorm(stormId) {
-        if (!stormId) return;
-        _showStormView();
-        if (stormId === _currentStormId) {
-            // Same storm re-opened from the gallery — _selectStorm would
-            // early-return, so drive the load directly.
-            var storm = _findStorm(stormId);
-            _renderHeader(storm);
-            _loadBundleAndAnimate(stormId);
-            _loadShear(stormId);
-            _syncHash(stormId);
-        } else {
-            _selectStorm(stormId);
-        }
-    }
-
-    // ── Imagery product (IR / Visible / GeoColor) ────────────
-    function _syncProductButtons() {
-        if (!elProductToggle) return;
-        var btns = elProductToggle.querySelectorAll('.qv-prod-btn');
-        for (var i = 0; i < btns.length; i++) {
-            var on = btns[i].getAttribute('data-product') === _product;
-            btns[i].classList.toggle('is-active', on);
-            btns[i].setAttribute('aria-pressed', on ? 'true' : 'false');
-        }
-    }
-    function _setProduct(product) {
-        if (!product || product === _product) return;
-        _product = product;
-        _syncProductButtons();
-        // Reload the current storm's imagery in the new product. Product
-        // choice persists across storm switches.
-        if (_view === 'storm' && _currentStormId) {
-            _loadBundleAndAnimate(_currentStormId);
-        }
     }
 
     // ── Leaflet map setup ────────────────────────────────────
@@ -474,46 +280,33 @@
     // ── Bundle parsing + map population ──────────────────────
     function _loadBundleAndAnimate(stormId) {
         if (!stormId) return;
-        var product = _product;   // pin: guard against mid-fetch switches
         _hideEmpty();
-        _showLoader(product === 'geocolor' ? 'Rendering GeoColor… (first load can take ~30 s)'
-            : product === 'visible' ? 'Loading visible…' : 'Loading animation…');
+        _showLoader('Loading animation…');
         _disposeFrames();
         _ensureMap();
 
-        var src = _bundleSourcesFor(product, stormId);
-        var fetchApi = function () {
-            return fetch(src.api).then(function (r) {
+        var gcs = _gcsBundleUrl(stormId);
+        var api = _apiBundleUrl(stormId);
+
+        fetch(gcs).then(function (r) {
+            if (!r.ok) throw new Error('gcs ' + r.status);
+            return r.arrayBuffer();
+        }).catch(function () {
+            return fetch(api).then(function (r) {
                 if (!r.ok) throw new Error('api ' + r.status);
                 return r.arrayBuffer();
             });
-        };
-        // IR/Visible have prewarmed GCS bundles (try first, no Cloud Run
-        // hop); GeoColor renders on demand so it's API-only.
-        var p = src.gcs
-            ? fetch(src.gcs).then(function (r) {
-                  if (!r.ok) throw new Error('gcs ' + r.status);
-                  return r.arrayBuffer();
-              }).catch(fetchApi)
-            : fetchApi();
-
-        p.then(function (buf) {
-            if (stormId !== _currentStormId || product !== _product) return;
-            _populateMapFromBundle(buf, stormId, product);
+        }).then(function (buf) {
+            if (stormId !== _currentStormId) return;
+            _populateMapFromBundle(buf, stormId);
         }).catch(function (err) {
-            if (stormId !== _currentStormId || product !== _product) return;
+            if (stormId !== _currentStormId) return;
             console.warn('[QuickView] bundle fetch failed:', err && err.message);
-            if (product === 'visible') {
-                _showError('Visible imagery isn’t available right now (it may be nighttime over the storm). Try GeoColor or IR.');
-            } else if (product === 'geocolor') {
-                _showError('GeoColor is still rendering for this storm — it builds on demand. Try again in a moment, or switch to IR.');
-            } else {
-                _showError('Animation not yet available for this storm. The prewarm cycle builds new artifacts every ~5 minutes.');
-            }
+            _showError('Animation not yet available for this storm. The prewarm cycle builds new artifacts every ~5 minutes.');
         });
     }
 
-    function _populateMapFromBundle(arrayBuffer, stormId, product) {
+    function _populateMapFromBundle(arrayBuffer, stormId) {
         if (!_map) return;
         try {
             var dv = new DataView(arrayBuffer);
@@ -551,11 +344,7 @@
                 }
             }
             if (validFrameHdrs.length === 0) {
-                if (product === 'visible') {
-                    _showError('No daytime visible frames — this storm is in darkness right now. Try GeoColor (auto day/night) or IR.');
-                } else {
-                    _showError('No frames available for this storm yet.');
-                }
+                _showError('No frames available for this storm yet.');
                 return;
             }
             var latestHdr = validFrameHdrs[validFrameHdrs.length - 1];
@@ -692,12 +481,6 @@
     function _refreshActiveData() {
         _fetchActiveStorms(function (err) {
             if (err) return;
-            if (_view === 'gallery') {
-                // Refresh cards in place (new storms appear, thumbnails update).
-                _renderGallery();
-                return;
-            }
-            // Single-storm view.
             if (_currentStormId) {
                 var storm = _findStorm(_currentStormId);
                 if (storm) {
@@ -705,12 +488,15 @@
                     _loadBundleAndAnimate(_currentStormId);
                     delete _lastShearByStorm[_currentStormId];
                     _loadShear(_currentStormId);
+                } else if (_activeStorms.length > 0) {
+                    _selectStorm(_activeStorms[0].atcf_id);
                 } else {
-                    // Current storm dissipated — drop back to the gallery.
-                    _showGallery();
+                    _showEmpty();
                 }
+            } else if (_activeStorms.length > 0) {
+                _selectStorm(_activeStorms[0].atcf_id);
             } else {
-                _showGallery();
+                _showEmpty();
             }
         });
     }
@@ -742,59 +528,48 @@
         if (main) main.style.display = 'none';
         elRoot.style.display = 'flex';
 
-        // Reflow the map only when the storm view is the one on screen —
-        // in gallery view its container is hidden (zero size) and a
-        // Leaflet init there would mis-size the grid.
-        if (_view === 'storm') {
-            setTimeout(function () {
-                if (_map) {
-                    _map.invalidateSize(false);
-                    if (_frameLayers.length > 0 && !_animActive) _startAnimation();
-                } else {
-                    _ensureMap();
-                }
-            }, 50);
-        }
+        // Lazy-init map after the container is visible (Leaflet needs
+        // a positive-size container to compute its tile grid).
+        setTimeout(function () {
+            if (_map) {
+                _map.invalidateSize(false);
+                if (_frameLayers.length > 0 && !_animActive) _startAnimation();
+            } else {
+                _ensureMap();
+            }
+        }, 50);
 
         if (!_activated) {
             _activated = true;
             if (elSelect) {
                 elSelect.addEventListener('change', function () {
-                    if (this.value) _openStorm(this.value);
-                });
-            }
-            if (elBackBtn) {
-                elBackBtn.addEventListener('click', function () { _showGallery(); });
-            }
-            if (elProductToggle) {
-                _syncProductButtons();
-                elProductToggle.addEventListener('click', function (e) {
-                    var btn = e.target && e.target.closest
-                        ? e.target.closest('.qv-prod-btn') : null;
-                    if (btn) _setProduct(btn.getAttribute('data-product'));
+                    if (this.value) _selectStorm(this.value);
                 });
             }
             if (elDetailedBtn) {
                 elDetailedBtn.addEventListener('click', _gotoDetailed);
             }
             _fetchActiveStorms(function (err) {
-                if (err) { _showGallery(); return; }   // gallery shows its own empty state
-                // Deep-link to a specific storm still opens it directly;
-                // otherwise always land on the gallery overview.
+                if (err || _activeStorms.length === 0) {
+                    _showEmpty();
+                    return;
+                }
                 var hashStorm = _readStormFromHash();
-                var pick = hashStorm ? _findStorm(hashStorm) : null;
-                if (pick) _openStorm(pick.atcf_id);
-                else _showGallery();
+                var pick = null;
+                if (hashStorm) pick = _findStorm(hashStorm);
+                if (!pick) {
+                    var sorted = _activeStorms.slice().sort(function (a, b) {
+                        return (b.vmax_kt || 0) - (a.vmax_kt || 0);
+                    });
+                    pick = sorted[0];
+                }
+                if (pick) _selectStorm(pick.atcf_id);
             });
             _pollTimer = setInterval(_refreshActiveData, POLL_INTERVAL_MS);
         } else {
             var hashStorm2 = _readStormFromHash();
             if (hashStorm2 && hashStorm2 !== _currentStormId) {
-                _openStorm(hashStorm2);
-            } else if (_view === 'storm' && _currentStormId) {
-                _showStormView();   // returning from detailed view — reflow map
-            } else {
-                _showGallery();
+                _selectStorm(hashStorm2);
             }
         }
     }

@@ -960,22 +960,23 @@
     font-weight: 500;
 }
 
-/* ── Storm Satellite: gallery overview ─────────────────────────
-   Default landing for the Quick View: every active storm as an IR
-   snapshot card. Lives alongside the single-storm animation view
-   (.qv-storm-view); JS toggles which one is visible. */
-.qv-storm-view {
-    display: flex;
-    flex-direction: column;
-    flex: 1;
-    min-height: 0;
-}
-.qv-gallery {
-    flex: 1;
-    min-height: 0;
+/* ── Storm Satellite: active-storm gallery ─────────────────────
+   Default landing for the Storm Satellite tab — every active storm
+   as an IR-snapshot card. Clicking a card opens that storm's full
+   detail card (#ir-detail). Standalone fixed-position sibling of
+   #ir-detail / #sat-main / #sat-quick-view. */
+#sat-gallery {
+    position: fixed;
+    top: calc(var(--topbar-h) + var(--secondary-bar-h));
+    left: 0;
+    right: 0;
+    bottom: 0;
     overflow-y: auto;
     padding: 20px 22px 28px;
     background: #0a0c12;
+    color: #e2e8f0;
+    font-family: "DM Sans", "Helvetica Neue", sans-serif;
+    z-index: 1;
 }
 .qv-gallery-head { margin-bottom: 16px; }
 .qv-gallery-title {
@@ -1127,48 +1128,6 @@
     margin: 48px auto 0;
     padding: 24px;
 }
-.qv-back-btn {
-    background: #1a1e2a;
-    color: #cbd5e1;
-    border: 1px solid #2a2d38;
-    border-radius: 4px;
-    padding: 6px 12px;
-    font-size: 13px;
-    font-family: inherit;
-    cursor: pointer;
-    flex: 0 0 auto;
-}
-.qv-back-btn:hover { background: #222736; color: #f1f5f9; }
-
-/* Imagery product segmented toggle (IR / Visible / GeoColor) */
-.qv-product-toggle {
-    display: inline-flex;
-    flex: 0 0 auto;
-    border: 1px solid #2a2d38;
-    border-radius: 5px;
-    overflow: hidden;
-    background: #1a1e2a;
-}
-.qv-prod-btn {
-    background: transparent;
-    color: #94a3b8;
-    border: none;
-    border-left: 1px solid #2a2d38;
-    padding: 6px 11px;
-    font-size: 12px;
-    font-weight: 500;
-    font-family: inherit;
-    cursor: pointer;
-    white-space: nowrap;
-}
-.qv-prod-btn:first-child { border-left: none; }
-.qv-prod-btn:hover { color: #e2e8f0; background: #222736; }
-.qv-prod-btn.is-active {
-    background: #2e7dff;
-    color: #fff;
-}
-.qv-prod-btn:disabled { opacity: 0.45; cursor: default; }
-
 @media (max-width: 640px) {
     /* Mobile: stack bar items, shrink chip sizes. The animation
        still gets the central space.  */
@@ -1180,11 +1139,10 @@
     .qv-meta-label { font-size: 9px; }
     /* Gallery: tighter padding + smaller card floor so two columns
        still fit on a phone. */
-    .qv-gallery { padding: 14px 12px 20px; }
+    #sat-gallery { padding: 14px 12px 20px; }
     .qv-gallery-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
     .qv-gallery-title { font-size: 17px; }
     .qv-card-name { font-size: 15px; }
-    .qv-prod-btn { padding: 6px 9px; font-size: 11px; }
 }
 
 /* ── Hover Tooltip ──────────────────────────────────────────── */
