@@ -7634,7 +7634,7 @@
     // Fixed zoom for every locator so all cards show the SAME geographic
     // extent (centered on each storm's current position), rather than
     // auto-fitting to each track and ending up at different scales.
-    var _LOC_ZOOM = 4;
+    var _LOC_ZOOM = 3;
     function _irFmtFixTime(iso) {
         try {
             var d = new Date(iso);
