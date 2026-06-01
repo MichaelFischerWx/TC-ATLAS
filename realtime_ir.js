@@ -2952,34 +2952,10 @@
             document.body.appendChild(otog);
         }
 
-        // Add IR Tb colorbar to global map (bottom-left, above animation panel)
-        var TbColorbar = L.Control.extend({
-            options: { position: 'bottomleft' },
-            onAdd: function () {
-                var container = L.DomUtil.create('div', 'ir-global-colorbar');
-                container.id = 'ir-global-colorbar';
-                container.style.cssText = 'background:rgba(0,0,0,0.65);padding:6px 10px;border-radius:4px;font-family:\'DM Sans\',sans-serif;font-variant-numeric:tabular-nums;font-size:0.65rem;color:rgba(255,255,255,0.7);pointer-events:none;margin-bottom:4px;';
-                L.DomEvent.disableClickPropagation(container);
-
-                var label = L.DomUtil.create('div', '', container);
-                label.textContent = 'Brightness Temp (°C)';
-                label.style.cssText = 'margin-bottom:2px;';
-
-                var bar = L.DomUtil.create('div', '', container);
-                // GIBS Band 13 Clean Infrared default colormap — matches
-                // NASA's rendering of the tiles served on the global map
-                // (NOT Claude IR; the storm-card bundles use Claude IR
-                // because they go through satellite_ir.py first).
-                bar.style.cssText = 'width:160px;height:10px;border-radius:2px;margin:4px 0 2px;background:linear-gradient(to right,rgb(8,8,8),rgb(90,90,90),rgb(200,200,200),rgb(0,100,255),rgb(0,255,0),rgb(255,180,0),rgb(255,0,0),rgb(180,0,180),rgb(255,255,255));';
-
-                var labels = L.DomUtil.create('div', '', container);
-                labels.style.cssText = 'display:flex;justify-content:space-between;font-size:0.6rem;';
-                labels.innerHTML = '<span>+35</span><span>-25</span><span>-85</span>';
-
-                return container;
-            }
-        });
-        map.addControl(new TbColorbar());
+        // The IR Tb colorbar used to be its own bottom-left control; it now
+        // lives as a compact chip inside the animation dock (built in
+        // AnimPanel below), keeping the #ir-global-colorbar id so the
+        // mode-based show/hide (hidden in GeoColor) still targets it.
 
         // Global IR animation slider — mirrors the .ir-bar pattern on
         // the Global Archive storm detail page (step buttons + play +
@@ -2992,6 +2968,26 @@
                 bar.id = 'ir-global-anim-panel';
                 L.DomEvent.disableClickPropagation(bar);
                 L.DomEvent.disableScrollPropagation(bar);
+
+                // ── Dock row 0: DeepMind cycle stepper (hidden until the
+                // cyclogenesis layer is on AND ≥2 cycles exist). Populated +
+                // shown/hidden by _updateGenesisCycleBar. Sits above the
+                // scrubber so the dock reads as one unit. ──────────────────
+                var cyc = L.DomUtil.create('div', 'rt-dock-cycle', bar);
+                cyc.id = 'ir-dock-cycle';
+                cyc.style.display = 'none';
+                var cycPrev = L.DomUtil.create('button', 'ir-gen-cyc-btn', cyc);
+                cycPrev.setAttribute('data-dir', 'older');
+                cycPrev.innerHTML = '&#9664;';
+                cycPrev.title = 'Older DeepMind run';
+                cycPrev.addEventListener('click', function () { _genesisStepCycle(-1); });
+                var cycText = L.DomUtil.create('span', 'rt-dock-cycle-text', cyc);
+                cycText.id = 'ir-dock-cycle-text';
+                var cycNext = L.DomUtil.create('button', 'ir-gen-cyc-btn', cyc);
+                cycNext.setAttribute('data-dir', 'newer');
+                cycNext.innerHTML = '&#9654;';
+                cycNext.title = 'Newer DeepMind run';
+                cycNext.addEventListener('click', function () { _genesisStepCycle(1); });
 
                 var row = L.DomUtil.create('div', 'rt-anim-row', bar);
 
@@ -3065,6 +3061,17 @@
 
                 var statusSpan = L.DomUtil.create('span', 'rt-anim-status', row);
                 statusSpan.id = 'ir-global-anim-status';
+
+                // Compact Tb colorbar chip at the right end of the scrubber
+                // row — keeps the #ir-global-colorbar id so the GeoColor
+                // hide logic still works. Full scale lives in the tooltip.
+                var cbar = L.DomUtil.create('div', 'rt-dock-cbar', row);
+                cbar.id = 'ir-global-colorbar';
+                cbar.title = 'Brightness temperature (°C) — GIBS Clean IR: '
+                    + '+35 (warm / low cloud) → −85 (cold / deep convection)';
+                L.DomUtil.create('span', 'rt-dock-cbar-grad', cbar);
+                var cbarLbl = L.DomUtil.create('span', 'rt-dock-cbar-lbl', cbar);
+                cbarLbl.textContent = '°C';
 
                 return bar;
             }
@@ -13685,29 +13692,14 @@
 
     // Create (once) and update the floating cycle stepper. Shown only
     // when the cyclogenesis layer is active and we have a cycle list.
+    // Drive the cycle-stepper row inside the animation dock (#ir-dock-cycle,
+    // built once in AnimPanel). Shows only when the cyclogenesis layer is on
+    // AND there are ≥2 published cycles to step between.
     function _updateGenesisCycleBar() {
-        var bar = document.getElementById('ir-genesis-cycle-bar');
+        var slot = document.getElementById('ir-dock-cycle');
+        if (!slot) return;   // dock not built yet
         var show = _rtGenesisVisible && _genesisCycleList.length > 1;
-        if (!bar) {
-            if (!show) return;
-            bar = document.createElement('div');
-            bar.id = 'ir-genesis-cycle-bar';
-            bar.className = 'ir-genesis-cycle-bar';
-            bar.innerHTML =
-                '<button type="button" class="ir-gen-cyc-btn" data-dir="older"'
-                + ' title="Older DeepMind run">◀</button>'
-                + '<div class="ir-gen-cyc-label">'
-                + '<span class="ir-gen-cyc-title">DeepMind run</span>'
-                + '<span class="ir-gen-cyc-init"></span></div>'
-                + '<button type="button" class="ir-gen-cyc-btn" data-dir="newer"'
-                + ' title="Newer DeepMind run">▶</button>';
-            bar.querySelector('[data-dir="older"]')
-                .addEventListener('click', function () { _genesisStepCycle(-1); });
-            bar.querySelector('[data-dir="newer"]')
-                .addEventListener('click', function () { _genesisStepCycle(1); });
-            document.body.appendChild(bar);
-        }
-        bar.style.display = show ? '' : 'none';
+        slot.style.display = show ? '' : 'none';
         if (!show) return;
 
         var list = _genesisCycleList;
@@ -13716,11 +13708,11 @@
         if (idx < 0) idx = 0;
         var isLatest = (idx === 0);
         var cyc = list[idx] || {};
-        var initEl = bar.querySelector('.ir-gen-cyc-init');
-        // Show the disturbance (cluster) count for the SELECTED cycle so the
-        // bar matches the on-map toast + menu banner. _rtGenesisData is the
-        // currently-loaded cycle; when it matches the selected init we can
-        // count disturbances, otherwise fall back to the raw track count.
+
+        // Disturbance (cluster) count for the SELECTED cycle so the dock
+        // matches the on-map toast + menu banner. _rtGenesisData is the
+        // currently-loaded cycle; when it matches we count disturbances,
+        // else fall back to the raw track count.
         var cycCountBit = '';
         var nDistCyc = (_rtGenesisData && _rtGenesisData.init_time === curInit)
             ? _genesisDisturbanceCount() : null;
@@ -13731,14 +13723,21 @@
             cycCountBit = ' · ' + cyc.n_tracks + ' track'
                 + (cyc.n_tracks === 1 ? '' : 's');
         }
-        initEl.textContent = _fmtGenesisInit(curInit)
-            + (isLatest ? ' · latest' : '')
-            + cycCountBit;
-        var older = bar.querySelector('[data-dir="older"]');
-        var newer = bar.querySelector('[data-dir="newer"]');
-        older.disabled = (idx >= list.length - 1);
-        newer.disabled = (idx <= 0);
-        bar.classList.toggle('is-pinned', !isLatest);
+        // Compact init (drop the year — the dock is tight): "06-01 06Z".
+        var compactInit = (curInit && curInit.length >= 10)
+            ? curInit.slice(4, 6) + '-' + curInit.slice(6, 8)
+                + ' ' + curInit.slice(8, 10) + 'Z'
+            : _fmtGenesisInit(curInit);
+        var textEl = document.getElementById('ir-dock-cycle-text');
+        if (textEl) {
+            textEl.textContent = 'DeepMind · ' + compactInit
+                + (isLatest ? ' · latest' : '') + cycCountBit;
+        }
+        var older = slot.querySelector('[data-dir="older"]');
+        var newer = slot.querySelector('[data-dir="newer"]');
+        if (older) older.disabled = (idx >= list.length - 1);
+        if (newer) newer.disabled = (idx <= 0);
+        slot.classList.toggle('is-pinned', !isLatest);
     }
 
     // Transient on-map toast announcing that cyclogenesis disturbances
