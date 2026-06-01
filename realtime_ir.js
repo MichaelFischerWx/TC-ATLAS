@@ -7631,6 +7631,10 @@
         light: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
         dark: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
     };
+    // Fixed zoom for every locator so all cards show the SAME geographic
+    // extent (centered on each storm's current position), rather than
+    // auto-fitting to each track and ending up at different scales.
+    var _LOC_ZOOM = 4;
     function _irFmtFixTime(iso) {
         try {
             var d = new Date(iso);
@@ -7673,7 +7677,7 @@
             { subdomains: 'abcd', maxZoom: 8 }).addTo(map);
         map._qvTiles = tiles;
         map._qvDark = dark;
-        map.setView([s.lat, s.lon], 4);
+        map.setView([s.lat, s.lon], _LOC_ZOOM);
         _galleryLocatorMaps.push(map);
 
         var invest = _irIsInvest(s.atcf_id);
@@ -7696,7 +7700,8 @@
                     var ll = pts.map(function (p) { return [p.lat, p.lon]; });
                     L.polyline(ll, { color: color, weight: 2, opacity: 0.85 }).addTo(map);
                     cur.bringToFront();
-                    try { map.fitBounds(L.latLngBounds(ll).pad(0.45), { animate: false, maxZoom: 6 }); } catch (e) {}
+                    // Keep the fixed extent (centered on current position) — the
+                    // track is drawn but we don't re-fit, so every card matches.
                 }
                 try { map.invalidateSize(false); } catch (e) {}
             })
