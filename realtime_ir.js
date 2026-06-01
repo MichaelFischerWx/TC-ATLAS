@@ -3211,8 +3211,9 @@
                     && _genesisMatchedAtcfIds[String(s.atcf_id).toUpperCase()]) {
                 continue;
             }
+            var invest = _irIsInvest(s.atcf_id);
             var cat = s.category || windToCategory(s.vmax_kt);
-            var color = SS_COLORS[cat] || SS_COLORS.TD;
+            var color = invest ? INVEST_CHIP_COLOR : (SS_COLORS[cat] || SS_COLORS.TD);
 
             var icon = L.divIcon({
                 className: '',
@@ -3249,7 +3250,7 @@
                 '<div class="ir-popup">' +
                   '<div class="ir-popup-name">' + (s.name || 'UNNAMED') + reconBadge + '</div>' +
                   '<div class="ir-popup-meta">' +
-                    '<strong>' + categoryShort(cat) + '</strong> &middot; ' + vmaxStr + '<br>' +
+                    '<strong>' + (invest ? 'INVEST' : categoryShort(cat)) + '</strong> &middot; ' + vmaxStr + '<br>' +
                     'MSLP: ' + mslpStr + '<br>' +
                     posLine + '<br>' +
                     '<span style="color:#64748b;">' + (s.atcf_id || '') + '</span>' +
@@ -3409,6 +3410,7 @@
 
         // Name label near the current position
         var last = history[history.length - 1];
+        var invest = _irIsInvest(storm.atcf_id);
         var cat = storm.category || windToCategory(storm.vmax_kt);
 
         // Extend the track to the dead-reckoned "now" pin so the line +
@@ -3421,7 +3423,7 @@
             var eDlon = extrapPin.lon - last.lon;
             if (Math.abs(eDlon) <= 180 &&
                     (Math.abs(extrapPin.lat - last.lat) > 0.02 || Math.abs(eDlon) > 0.02)) {
-                var extColor = SS_COLORS[cat] || SS_COLORS.TD;
+                var extColor = invest ? INVEST_CHIP_COLOR : (SS_COLORS[cat] || SS_COLORS.TD);
                 var extSeg = L.polyline(
                     [[last.lat, last.lon], [extrapPin.lat, extrapPin.lon]],
                     { color: extColor, weight: 2.5, opacity: 0.7, dashArray: '4,5' }
@@ -4758,7 +4760,7 @@
 
         // Storm center marker
         var cat = storm.category || windToCategory(storm.vmax_kt);
-        var color = SS_COLORS[cat] || SS_COLORS.TD;
+        var color = _irIsInvest(storm.atcf_id) ? INVEST_CHIP_COLOR : (SS_COLORS[cat] || SS_COLORS.TD);
         // Extrapolated pin so it tracks the convection in the loop —
         // same dead-reckoning the backend uses to crop the IR cutout.
         var pinPos = _extrapolateStormPin(storm);
@@ -4929,7 +4931,9 @@
         document.getElementById('ir-info-mslp').textContent =
             storm.mslp_hpa != null ? storm.mslp_hpa + ' hPa' : '\u2014';
         document.getElementById('ir-info-vmax').textContent =
-            storm.vmax_kt != null ? storm.vmax_kt + ' kt (' + categoryShort(cat) + ')' : '\u2014';
+            storm.vmax_kt != null
+                ? storm.vmax_kt + ' kt' + (invest ? '' : ' (' + categoryShort(cat) + ')')
+                : '\u2014';
         var lastfixEl = document.getElementById('ir-info-lastfix');
         if (lastfixEl) {
             var ago = _fmtAgo(storm.last_fix_utc);
@@ -5464,7 +5468,8 @@
         if (mslpEl) mslpEl.textContent = storm.mslp_hpa != null ? storm.mslp_hpa + ' hPa' : '\u2014';
 
         var vmaxEl = document.getElementById('ir-info-vmax');
-        if (vmaxEl) vmaxEl.textContent = storm.vmax_kt != null ? storm.vmax_kt + ' kt (' + categoryShort(cat) + ')' : '\u2014';
+        if (vmaxEl) vmaxEl.textContent = storm.vmax_kt != null
+            ? storm.vmax_kt + ' kt' + (invest ? '' : ' (' + categoryShort(cat) + ')') : '\u2014';
 
         var fixEl = document.getElementById('ir-info-lastfix');
         if (fixEl) fixEl.textContent = fmtUTC(storm.last_fix_utc);
@@ -7560,7 +7565,7 @@
             var s = sorted[i];
             var c = s.category || windToCategory(s.vmax_kt);
             var label = (s.atcf_id || '') + ' · ' + (s.name || 'UNNAMED') +
-                        ' (' + categoryShort(c) +
+                        ' (' + (_irIsInvest(s.atcf_id) ? 'INVEST' : categoryShort(c)) +
                         (s.vmax_kt != null ? ' ' + s.vmax_kt + ' kt' : '') + ')';
             var sel_attr = (s.atcf_id === currentId) ? ' selected' : '';
             opts.push('<option value="' + s.atcf_id + '"' + sel_attr + '>' +
