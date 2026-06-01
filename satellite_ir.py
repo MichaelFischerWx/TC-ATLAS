@@ -25,7 +25,7 @@ import threading
 import time
 from collections import OrderedDict
 from datetime import datetime as _dt, timedelta, timezone
-from typing import Optional
+from typing import Optional, Tuple
 
 import numpy as np
 
@@ -717,7 +717,8 @@ def _hsd_counts_to_reflectance(counts: np.ndarray, header: dict,
 
 def open_himawari_subset(s3_prefix: str, center_lat: float, center_lon: float,
                          box_deg: float = 8.0,
-                         band: int = HIMAWARI_BAND) -> np.ndarray:
+                         band: int = HIMAWARI_BAND,
+                         return_extent: bool = False):
     """
     Open Himawari HSD segment files from S3 and return a geographically-subsetted
     2D array (y, x).  For IR/WV bands (7-16) returns brightness temperature
@@ -725,6 +726,16 @@ def open_himawari_subset(s3_prefix: str, center_lat: float, center_lon: float,
 
     s3_prefix is the directory containing the segment .DAT.bz2 files.
     Only downloads the segment(s) needed for the latitude range.
+
+    return_extent: when True, returns (subset, geos_extent) where geos_extent
+    is (x_left, x_right, y_top, y_bottom) in geostationary metres for the
+    subset's first/last pixel centres — feed it straight to
+    _reproject_geos_to_latlon(geos_extent=...). In this mode the pixel window
+    is sized to bound the ENTIRE lat/lon box (perimeter-sampled + margin), not
+    just its NW/SE corners, so off-nadir storms don't get rotated black corner
+    wedges after reprojection. geos_extent is None if subsetting was skipped.
+    The default (return_extent=False) preserves the legacy 2-corner window and
+    a bare-array return for callers that render the geos grid directly.
     """
     import bz2
 
@@ -818,7 +829,8 @@ def open_himawari_subset(s3_prefix: str, center_lat: float, center_lon: float,
     # Now subset to the geographic bounding box
     pyproj = _get_pyproj()
     if pyproj is None:
-        return full_tb  # return full segment data if can't subset
+        # return full segment data if can't subset
+        return (full_tb, None) if return_extent else full_tb
 
     proj = pyproj.Proj(
         proj="geos", h=HIMAWARI_SAT_HEIGHT,
@@ -849,32 +861,78 @@ def open_himawari_subset(s3_prefix: str, center_lat: float, center_lon: float,
         except Exception:
             return None, None
 
-    r1, c1 = latlon_to_pixel(center_lat + half, center_lon - half)  # NW corner
-    r2, c2 = latlon_to_pixel(center_lat - half, center_lon + half)  # SE corner
-
-    if r1 is None or r2 is None:
-        return full_tb
-
     # Adjust row indices relative to the stacked array
     # (which starts from the first needed segment, not segment 1)
     min_seg = min(seg_files.keys())
     row_offset = (min_seg - 1) * HIMAWARI_NLINES_PER_SEG
 
-    r1_local = max(0, r1 - row_offset)
-    r2_local = min(full_tb.shape[0], r2 - row_offset)
-    c1_local = max(0, min(c1, c2))
-    c2_local = min(full_tb.shape[1], max(c1, c2))
+    if return_extent:
+        # Off-nadir, a lat/lon box maps to a SKEWED quadrilateral in the
+        # geos fixed grid — its bounding pixel rectangle is wider than the
+        # NW/SE corners alone suggest.  Sampling only two corners leaves the
+        # rotated box poking outside the cropped window, which shows up as
+        # black corner wedges after _reproject_geos_to_latlon resamples a
+        # region with no data.  Sample the whole PERIMETER densely (the geos
+        # projection is nonlinear, so each box edge bows outward between its
+        # endpoints — its extreme row/col sits past the corners/midpoint).
+        # 9 points per edge captures that curvature; take min/max + a margin.
+        MARGIN = 4
+        N = 9
+        ts = [i / (N - 1) for i in range(N)]  # 0..1 along each edge
+        lat0, lat1 = center_lat - half, center_lat + half
+        lon0, lon1 = center_lon - half, center_lon + half
+        perimeter = []
+        for t in ts:
+            perimeter.append((lat1, lon0 + t * (lon1 - lon0)))  # north edge
+            perimeter.append((lat0, lon0 + t * (lon1 - lon0)))  # south edge
+            perimeter.append((lat0 + t * (lat1 - lat0), lon0))  # west edge
+            perimeter.append((lat0 + t * (lat1 - lat0), lon1))  # east edge
+        rows_s, cols_s = [], []
+        for la, lo in perimeter:
+            rr, cc = latlon_to_pixel(la, lo)
+            if rr is not None and cc is not None:
+                rows_s.append(rr)
+                cols_s.append(cc)
+        if not rows_s or not cols_s:
+            return (full_tb, None)
+        r_top = min(rows_s) - MARGIN
+        r_bot = max(rows_s) + MARGIN
+        c_lft = min(cols_s) - MARGIN
+        c_rgt = max(cols_s) + MARGIN
+    else:
+        r1, c1 = latlon_to_pixel(center_lat + half, center_lon - half)  # NW corner
+        r2, c2 = latlon_to_pixel(center_lat - half, center_lon + half)  # SE corner
+        if r1 is None or r2 is None:
+            return full_tb
+        r_top, r_bot = r1, r2
+        c_lft, c_rgt = min(c1, c2), max(c1, c2)
+
+    r1_local = max(0, r_top - row_offset)
+    r2_local = min(full_tb.shape[0], r_bot - row_offset)
+    c1_local = max(0, c_lft)
+    c2_local = min(full_tb.shape[1], c_rgt)
 
     if r2_local <= r1_local or c2_local <= c1_local:
         print(f"[satellite_ir] Himawari subset empty: rows {r1_local}-{r2_local}, "
               f"cols {c1_local}-{c2_local}")
-        return full_tb
+        return (full_tb, None) if return_extent else full_tb
 
     subset = full_tb[r1_local:r2_local, c1_local:c2_local].copy()
     del full_tb
     gc.collect()
 
     print(f"[satellite_ir] Himawari subset: {subset.shape} from segments {list(seg_files.keys())}")
+
+    if return_extent:
+        # geos extent at the centres of the subset's first/last pixels, in
+        # the same metres the geos Proj() emits (x_m = (col-coff)*2000, etc).
+        # Absolute full-disk rows: r1_local maps back via +row_offset.
+        x_left   = (c1_local - coff) * 2000.0
+        x_right  = (c2_local - 1 - coff) * 2000.0
+        y_top    = (loff - (r1_local + row_offset)) * 2000.0
+        y_bottom = (loff - (r2_local - 1 + row_offset)) * 2000.0
+        return subset, (x_left, x_right, y_top, y_bottom)
+
     return subset
 
 
@@ -933,6 +991,7 @@ def _reproject_geos_to_latlon(
     tb_geo: np.ndarray, center_lat: float, center_lon: float,
     box_deg: float, sat_height: float, lon_0: float, sweep: str,
     res_deg: float = 0.013,
+    geos_extent: Optional[Tuple[float, float, float, float]] = None,
 ) -> np.ndarray:
     """
     Reproject a geostationary fixed-grid Tb array to a regular lat/lon grid.
@@ -991,9 +1050,16 @@ def _reproject_geos_to_latlon(
     # We need to know the geostationary pixel coords of the input array corners
     nrows, ncols = tb_geo.shape
 
-    # Corners of the input array in geostationary coordinates
-    x_nw, y_nw = proj(lon_min, lat_max)  # top-left
-    x_se, y_se = proj(lon_max, lat_min)  # bottom-right
+    # Geostationary coords of the input array's first/last pixel centres.
+    # When the subset was sized by open_himawari_subset's perimeter window,
+    # the true geos extent is wider than the lat/lon box's NW/SE corners
+    # (the box is skewed off-nadir) — using those corners here would stretch
+    # the source grid and leave rotated black wedges. Prefer the exact extent.
+    if geos_extent is not None:
+        x_nw, x_se, y_nw, y_se = geos_extent  # (x_left, x_right, y_top, y_bottom)
+    else:
+        x_nw, y_nw = proj(lon_min, lat_max)  # top-left
+        x_se, y_se = proj(lon_max, lat_min)  # bottom-right
 
     # Map geostationary x/y to fractional pixel indices in tb_geo
     # x increases left-to-right (west to east), y increases bottom-to-top
@@ -1074,12 +1140,15 @@ def fetch_ir_tb_raw(center_lat: float, center_lon: float,
                 return None
             if _scan_substitution_too_stale(scan_dt, target_dt, max_substitution_min):
                 return None
-            tb_geo = open_himawari_subset(s3_key, center_lat, center_lon, box_deg)
+            tb_geo, geos_extent = open_himawari_subset(
+                s3_key, center_lat, center_lon, box_deg, return_extent=True
+            )
             # Reproject from geostationary fixed-grid to regular lat/lon grid
             # (resolution default = 1500×1500, see _reproject_geos_to_latlon).
             tb = _reproject_geos_to_latlon(
                 tb_geo, center_lat, center_lon, box_deg,
                 HIMAWARI_SAT_HEIGHT, HIMAWARI_LON_0, HIMAWARI_SWEEP,
+                geos_extent=geos_extent,
             )
             del tb_geo
         else:
@@ -1152,12 +1221,14 @@ def fetch_band_raw(center_lat: float, center_lon: float,
                 return None
             if _scan_substitution_too_stale(scan_dt, target_dt, max_substitution_min):
                 return None
-            data_geo = open_himawari_subset(
-                s3_key, center_lat, center_lon, box_deg, band=him_band
+            data_geo, geos_extent = open_himawari_subset(
+                s3_key, center_lat, center_lon, box_deg, band=him_band,
+                return_extent=True
             )
             data = _reproject_geos_to_latlon(
                 data_geo, center_lat, center_lon, box_deg,
-                HIMAWARI_SAT_HEIGHT, HIMAWARI_LON_0, HIMAWARI_SWEEP
+                HIMAWARI_SAT_HEIGHT, HIMAWARI_LON_0, HIMAWARI_SWEEP,
+                geos_extent=geos_extent,
             )
             del data_geo
         else:
