@@ -659,6 +659,14 @@
     // that happen to form at the same location but at very different
     // times.
     var _GENESIS_TIME_WINDOW_H      = 60;
+    // Distance-gated cross-cluster member dedup. A member assigned to two
+    // clusters whose density-peaks sit within this distance is treated as
+    // one physical system fragmented across adjacent peaks → it's kept only
+    // in the nearest cluster (no double-count). Members in clusters farther
+    // apart than this keep every membership (genuine multi-genesis). ~700 km
+    // is just above the ~2-grid-cell minimum peak separation, so it catches
+    // fragmentation without merging genuinely distinct nearby systems.
+    var _GENESIS_SAME_SYSTEM_KM     = 700;
     // _GENESIS_CLUSTER_MIN_MEMBERS already defined above.
     var _GENESIS_MEMBER_COLOR = 'rgba(249, 115, 22, 0.12)';  // very soft so heatmap dominates
     var _GENESIS_MEAN_COLOR = '#f97316';                      // bold orange
@@ -9579,7 +9587,66 @@
             }
         }
 
-        // Step 5: build disturbance bundle, filter by min cluster size.
+        // Step 5b: distance-gated cross-cluster member dedup (mirrors the
+        // server `_tca_compute_clusters`). A member in two clusters whose
+        // peaks are within _GENESIS_SAME_SYSTEM_KM is one physical system
+        // fragmented across adjacent peaks → keep it only in the nearest
+        // cluster. Members in clusters farther apart keep every membership
+        // (genuine multi-genesis). Greedy nearest-first NMS, per member.
+        var sameSys = _GENESIS_SAME_SYSTEM_KM;
+        if (sameSys && sameSys > 0 && peaks.length > 1) {
+            var peakDistKm = function (a, b) {
+                var pa = peaks[a], pb = peaks[b];
+                var cph = Math.cos(((pa.lat + pb.lat) / 2) * Math.PI / 180);
+                var dla = (pa.lat - pb.lat) * 111;
+                var dlo = (pa.lon - pb.lon) * 111 * cph;
+                return Math.sqrt(dla * dla + dlo * dlo);
+            };
+            // sampleKey → { clusterIndex: closest distance (km) to that peak }
+            var sampleClusterDist = {};
+            for (var sci = 0; sci < clusters.length; sci++) {
+                var pkS = peaks[sci];
+                for (var sej = 0; sej < clusters[sci].length; sej++) {
+                    var eS = clusters[sci][sej];
+                    var cphi = Math.cos(eS.firstLat * Math.PI / 180);
+                    var ddLat = (eS.firstLat - pkS.lat) * 111;
+                    var ddLon = (eS.firstLon - pkS.lon) * 111 * cphi;
+                    var dKm = Math.sqrt(ddLat * ddLat + ddLon * ddLon);
+                    var cdm = sampleClusterDist[eS.sampleKey]
+                        || (sampleClusterDist[eS.sampleKey] = {});
+                    if (cdm[sci] == null || dKm < cdm[sci]) cdm[sci] = dKm;
+                }
+            }
+            var keepSet = {};   // sampleKey → { clusterIndex: true }
+            Object.keys(sampleClusterDist).forEach(function (sk) {
+                var cdm = sampleClusterDist[sk];
+                var idxs = Object.keys(cdm);
+                if (idxs.length <= 1) {
+                    keepSet[sk] = {}; keepSet[sk][idxs[0]] = true; return;
+                }
+                idxs.sort(function (a, b) { return cdm[a] - cdm[b]; });
+                var kept = [];
+                for (var ii = 0; ii < idxs.length; ii++) {
+                    var ci2 = parseInt(idxs[ii], 10);
+                    var ok = true;
+                    for (var jj = 0; jj < kept.length; jj++) {
+                        if (peakDistKm(ci2, kept[jj]) <= sameSys) { ok = false; break; }
+                    }
+                    if (ok) kept.push(ci2);
+                }
+                var ks = {};
+                kept.forEach(function (c) { ks[c] = true; });
+                keepSet[sk] = ks;
+            });
+            for (var rci = 0; rci < clusters.length; rci++) {
+                clusters[rci] = clusters[rci].filter(function (e) {
+                    var ks = keepSet[e.sampleKey];
+                    return !ks || ks[rci];
+                });
+            }
+        }
+
+        // Step 6: build disturbance bundle, filter by min cluster size.
         var disturbances = [];
         for (var ci = 0; ci < clusters.length; ci++) {
             var cluster = clusters[ci];
@@ -9685,6 +9752,7 @@
             assign_radius_km: _GENESIS_ASSIGN_RADIUS_KM,
             time_window_h: _GENESIS_TIME_WINDOW_H,
             cluster_min_members: _GENESIS_CLUSTER_MIN_MEMBERS,
+            same_system_km: _GENESIS_SAME_SYSTEM_KM,
         };
     }
 
@@ -9695,7 +9763,8 @@
             && pcParams.peak_min_members === cur.peak_min_members
             && pcParams.assign_radius_km === cur.assign_radius_km
             && pcParams.time_window_h === cur.time_window_h
-            && pcParams.cluster_min_members === cur.cluster_min_members;
+            && pcParams.cluster_min_members === cur.cluster_min_members
+            && pcParams.same_system_km === cur.same_system_km;
     }
 
     // Convert one server-side cluster object into the disturbance shape
@@ -13170,8 +13239,8 @@
                     type: 'scattergeo', geo: 'geo', mode: 'markers',
                     lon: [rot.lon != null ? rot.lon : 0],
                     lat: [rot.lat != null ? rot.lat : 0],
-                    marker: { size: 9, color: '#ef4444', symbol: 'circle',
-                              line: { color: '#ffffff', width: 1.5 } },
+                    marker: { size: 14, color: '#ef4444', symbol: 'circle',
+                              line: { color: '#ffffff', width: 2 } },
                     hoverinfo: 'skip', showlegend: false,
                 };
                 var fig = {
@@ -13441,6 +13510,18 @@
         return cb;
     }
 
+    // Disturbance (cluster) count for the currently-loaded cycle, or null if
+    // not computable. Uses the SAME _genesisDisturbances() the map markers
+    // come from, so every surface that reports it (menu banner, on-map toast,
+    // cycle stepper, layers toggle substatus) stays consistent with the
+    // markers. May be a client-side estimate until the server cluster index
+    // lands, then refines.
+    function _genesisDisturbanceCount() {
+        if (!_rtGenesisData || !_rtGenesisData.tracks) return null;
+        try { return _genesisDisturbances(_rtGenesisData.tracks).length; }
+        catch (e) { return null; }
+    }
+
     // Write the genesis menu status line. The headline count is the number
     // of DISTURBANCES (clustered density-peaks) — i.e. the markers actually
     // drawn on the map — not the raw DeepMind genesis-track count, which is
@@ -13466,9 +13547,7 @@
         }
         // Disturbance count = the markers _renderGenesis() actually draws
         // (same _genesisDisturbances() call), so banner ≡ map by construction.
-        var nDist = 0;
-        try { nDist = _genesisDisturbances(data.tracks || []).length; }
-        catch (e) { nDist = 0; }
+        var nDist = _genesisDisturbanceCount() || 0;
         var head, trackBit;
         if (nDist > 0) {
             head = nDist + ' disturbance' + (nDist === 1 ? '' : 's');
@@ -13526,10 +13605,11 @@
                 if (_rtGenesisVisible && _genesisClusterMethod === 'tcatlas') {
                     _renderGenesis();
                 }
-                // Refine the banner now that uncapped server clusters are in —
-                // the headline disturbance count may differ from the earlier
-                // client-side estimate.
+                // Refine the banner + cycle bar now that uncapped server
+                // clusters are in — the headline disturbance count may differ
+                // from the earlier client-side estimate.
                 _updateGenesisBanner();
+                _updateGenesisCycleBar();
                 _ga('rt_genesis_clusters_loaded', {
                     n_clusters: (json.clusters || []).length,
                     init: json.init_time,
@@ -13637,11 +13717,23 @@
         var isLatest = (idx === 0);
         var cyc = list[idx] || {};
         var initEl = bar.querySelector('.ir-gen-cyc-init');
+        // Show the disturbance (cluster) count for the SELECTED cycle so the
+        // bar matches the on-map toast + menu banner. _rtGenesisData is the
+        // currently-loaded cycle; when it matches the selected init we can
+        // count disturbances, otherwise fall back to the raw track count.
+        var cycCountBit = '';
+        var nDistCyc = (_rtGenesisData && _rtGenesisData.init_time === curInit)
+            ? _genesisDisturbanceCount() : null;
+        if (nDistCyc != null && nDistCyc > 0) {
+            cycCountBit = ' · ' + nDistCyc + ' disturbance'
+                + (nDistCyc === 1 ? '' : 's');
+        } else if (cyc.n_tracks != null) {
+            cycCountBit = ' · ' + cyc.n_tracks + ' track'
+                + (cyc.n_tracks === 1 ? '' : 's');
+        }
         initEl.textContent = _fmtGenesisInit(curInit)
             + (isLatest ? ' · latest' : '')
-            + (cyc.n_tracks != null
-                ? ' · ' + cyc.n_tracks + ' track' + (cyc.n_tracks === 1 ? '' : 's')
-                : '');
+            + cycCountBit;
         var older = bar.querySelector('[data-dir="older"]');
         var newer = bar.querySelector('[data-dir="newer"]');
         older.disabled = (idx >= list.length - 1);
@@ -13759,9 +13851,7 @@
                         // mismatch). May be a client-side estimate if the
                         // server cluster index hasn't landed yet; close enough
                         // for a transient toast. Skip if nothing clusters.
-                        var nDistToast = 0;
-                        try { nDistToast = _genesisDisturbances(data.tracks || []).length; }
-                        catch (e) { nDistToast = 0; }
+                        var nDistToast = _genesisDisturbanceCount() || 0;
                         if (nDistToast > 0) {
                             _genesisAnnounceArrival(nDistToast, isAutoRefresh);
                         }
@@ -13772,10 +13862,11 @@
                     _loadGenesisClusters();
                 }
 
-                // Banner reports the disturbance (cluster) count so it
-                // matches the markers on the map. May start as a client-side
-                // estimate; refined when _loadGenesisClusters() resolves.
+                // Banner + cycle bar report the disturbance (cluster) count so
+                // they match the markers on the map. May start as a client-
+                // side estimate; refined when _loadGenesisClusters() resolves.
                 _updateGenesisBanner();
+                _updateGenesisCycleBar();
                 _ga('rt_genesis_loaded', { n_tracks: data && data.n_tracks,
                                             init: newInit,
                                             age_h: data && data.cycle_age_hours,
@@ -14993,8 +15084,11 @@
         if (_rtGenesisLoading) genStatus = 'Loading 1000 members…';
         else if (_rtGenesisData) {
             var nt = _rtGenesisData.n_tracks || 0;
-            genStatus = nt === 0 ? 'no genesis predicted in 15 days'
-                                  : nt + ' track' + (nt === 1 ? '' : 's');
+            var nd = _genesisDisturbanceCount();
+            if (nt === 0) genStatus = 'no genesis predicted in 15 days';
+            else if (nd != null && nd > 0) {
+                genStatus = nd + ' disturbance' + (nd === 1 ? '' : 's');
+            } else genStatus = nt + ' track' + (nt === 1 ? '' : 's');
         }
         html += row({
             action: 'genesis',
@@ -15072,6 +15166,13 @@
                 +   '</label>'
                 +   '<input type="range" min="10" max="200" step="5" '
                 +     'value="' + _GENESIS_CLUSTER_MIN_MEMBERS + '">'
+                + '</div>'
+                + '<div class="ir-tuner-row" data-key="samesys">'
+                +   '<label>Same-system distance'
+                +     '<span class="ir-tuner-val">' + _GENESIS_SAME_SYSTEM_KM + ' km</span>'
+                +   '</label>'
+                +   '<input type="range" min="0" max="1500" step="50" '
+                +     'value="' + _GENESIS_SAME_SYSTEM_KM + '">'
                 + '</div>'
                 + '<div class="ir-tuner-footer">'
                 +   '<button type="button" class="ir-tuner-reset" '
@@ -15291,6 +15392,9 @@
                     } else if (key === 'minmembers') {
                         _GENESIS_CLUSTER_MIN_MEMBERS = parseInt(v, 10);
                         valEl.textContent = parseInt(v, 10) + ' members';
+                    } else if (key === 'samesys') {
+                        _GENESIS_SAME_SYSTEM_KM = v;
+                        valEl.textContent = v + ' km';
                     }
                     // Params changed → invalidate cache and re-fetch
                     // server-side clusters; render falls back to the
@@ -15312,6 +15416,7 @@
                 _GENESIS_ASSIGN_RADIUS_KM    = 1000;
                 _GENESIS_TIME_WINDOW_H       = 60;
                 _GENESIS_CLUSTER_MIN_MEMBERS = 25;
+                _GENESIS_SAME_SYSTEM_KM      = 700;
                 _rtGenesisClusters = null;
                 _loadGenesisClusters();
                 _genesisReRender();

@@ -7420,7 +7420,7 @@ def refresh_genesis_cache() -> dict:
     if data:
         try:
             _, _, clusters, _ = _tca_get_or_compute_clusters(
-                3.0, 8, 750.0, 48.0, 25)
+                3.0, 8, 1000.0, 60.0, 25, 700.0)
             n_clusters = len(clusters) if clusters else 0
         except Exception:
             traceback.print_exc()
@@ -7589,6 +7589,7 @@ def get_weatherlab_genesis_trend(
     assign_radius_km: float = 1000.0,
     time_window_h: float = 60.0,
     cluster_min_members: int = 25,
+    same_system_km: float = 700.0,
 ):
     """Run-to-run trend for ONE disturbance: for each of the last `count`
     published cycles, find the TC-ATLAS cluster whose density-peak genesis
@@ -7617,7 +7618,8 @@ def get_weatherlab_genesis_trend(
     for date_str, hour_str in _genesis_candidates(now=now):
         clusters = _tca_clusters_for_cycle(
             date_str, hour_str, grid_deg, peak_min_members,
-            assign_radius_km, time_window_h, cluster_min_members)
+            assign_radius_km, time_window_h, cluster_min_members,
+            same_system_km)
         if clusters is None:
             continue   # cycle not published — skip, keep looking
         n_with_data += 1
@@ -7836,6 +7838,7 @@ def _tca_compute_clusters(raw_data: dict,
                           assign_radius_km: float = 1000.0,
                           time_window_h: float = 60.0,
                           cluster_min_members: int = 25,
+                          same_system_km: float = 700.0,
                           ensemble_size: int = 1000) -> list:
     """Run the TC-ATLAS density-peak algorithm on the full uncapped
     CSV parse (dict keyed by DM track_id). Returns a list of cluster
@@ -7942,6 +7945,47 @@ def _tca_compute_clusters(raw_data: dict,
         if best_i >= 0:
             cluster_entries[best_i].append(e)
 
+    # Step 5b: distance-gated cross-cluster member dedup. A member (sample)
+    # can land in more than one cluster only via separate DeepMind tracks.
+    # When the clusters it touches sit within `same_system_km` of each other
+    # they're almost certainly ONE physical system fragmented across adjacent
+    # density peaks, so the member is double-counted — keep it only in the
+    # cluster it's closest to. Members spanning well-separated clusters keep
+    # every membership (one realization genuinely forecasting two distinct
+    # systems). Greedy nearest-first non-max suppression, per member.
+    if same_system_km and same_system_km > 0 and len(peaks) > 1:
+        # sample_key -> { cluster_index: closest distance from this member's
+        # first-genesis to that cluster's peak }
+        sample_cluster_dist: dict = {}
+        for ci, cluster in enumerate(cluster_entries):
+            pk = peaks[ci]
+            for e in cluster:
+                d = _tca_haversine_km(e["first_lat"], e["first_lon"],
+                                      pk["lat"], pk["lon"])
+                cd = sample_cluster_dist.setdefault(e["sample_key"], {})
+                if ci not in cd or d < cd[ci]:
+                    cd[ci] = d
+        # Per member, decide which clusters survive (nearest peak first;
+        # reject any whose peak is within same_system_km of a kept one).
+        keep: dict = {}   # sample_key -> set(cluster indices)
+        for sk, cd in sample_cluster_dist.items():
+            if len(cd) <= 1:
+                keep[sk] = set(cd.keys())
+                continue
+            kept: list = []
+            for ci, _d in sorted(cd.items(), key=lambda kv: kv[1]):
+                if all(_tca_haversine_km(
+                            peaks[ci]["lat"], peaks[ci]["lon"],
+                            peaks[cj]["lat"], peaks[cj]["lon"]) > same_system_km
+                       for cj in kept):
+                    kept.append(ci)
+            keep[sk] = set(kept)
+        # Rebuild membership, dropping suppressed (member, cluster) pairs.
+        cluster_entries = [
+            [e for e in cluster if ci in keep.get(e["sample_key"], {ci})]
+            for ci, cluster in enumerate(cluster_entries)
+        ]
+
     # Step 6: build cluster bundles. Dedupe by sample within a cluster
     # (keep the closest-to-peak entry per sample), filter by min size.
     out = []
@@ -7999,7 +8043,7 @@ def _tca_compute_clusters(raw_data: dict,
 
 def _tca_get_or_compute_clusters(grid_deg, peak_min_members,
                                   assign_radius_km, time_window_h,
-                                  cluster_min_members):
+                                  cluster_min_members, same_system_km=700.0):
     """Return cached (full, with members) clusters for the current
     cycle + params, computing on miss. Used by both the index endpoint
     (which strips members for the response) and the per-cluster detail
@@ -8011,7 +8055,7 @@ def _tca_get_or_compute_clusters(grid_deg, peak_min_members,
     init_time = used_date.replace("-", "") + used_hour
     params = (round(grid_deg, 3), int(peak_min_members),
               round(assign_radius_km, 2), round(time_window_h, 2),
-              int(cluster_min_members))
+              int(cluster_min_members), round(same_system_km, 2))
     cache_key = (init_time, params)
     cached = _TCA_CLUSTER_CACHE.get(cache_key)
     if cached and (time.time() - cached["ts"]) < _TCA_CLUSTER_TTL:
@@ -8023,6 +8067,7 @@ def _tca_get_or_compute_clusters(grid_deg, peak_min_members,
         assign_radius_km=assign_radius_km,
         time_window_h=time_window_h,
         cluster_min_members=cluster_min_members,
+        same_system_km=same_system_km,
     )
     _TCA_CLUSTER_CACHE[cache_key] = {"clusters": clusters, "ts": time.time()}
     if len(_TCA_CLUSTER_CACHE) > _TCA_CLUSTER_CACHE_MAX:
@@ -8034,7 +8079,7 @@ def _tca_get_or_compute_clusters(grid_deg, peak_min_members,
 
 def _tca_clusters_for_cycle(date_str, hour_str, grid_deg, peak_min_members,
                             assign_radius_km, time_window_h,
-                            cluster_min_members):
+                            cluster_min_members, same_system_km=700.0):
     """Like `_tca_get_or_compute_clusters` but for a SPECIFIC (already-
     resolved) cycle rather than 'the latest'. Shares the same
     `_TCA_CLUSTER_CACHE` so the run-to-run trend endpoint reuses the
@@ -8047,7 +8092,7 @@ def _tca_clusters_for_cycle(date_str, hour_str, grid_deg, peak_min_members,
     init_time = date_str.replace("-", "") + hour_str
     params = (round(grid_deg, 3), int(peak_min_members),
               round(assign_radius_km, 2), round(time_window_h, 2),
-              int(cluster_min_members))
+              int(cluster_min_members), round(same_system_km, 2))
     cache_key = (init_time, params)
     cached = _TCA_CLUSTER_CACHE.get(cache_key)
     if cached and (time.time() - cached["ts"]) < _TCA_CLUSTER_TTL:
@@ -8059,6 +8104,7 @@ def _tca_clusters_for_cycle(date_str, hour_str, grid_deg, peak_min_members,
         assign_radius_km=assign_radius_km,
         time_window_h=time_window_h,
         cluster_min_members=cluster_min_members,
+        same_system_km=same_system_km,
     )
     _TCA_CLUSTER_CACHE[cache_key] = {"clusters": clusters, "ts": time.time()}
     if len(_TCA_CLUSTER_CACHE) > _TCA_CLUSTER_CACHE_MAX:
@@ -8102,6 +8148,7 @@ def get_weatherlab_genesis_clusters(
     assign_radius_km: float = 1000.0,
     time_window_h: float = 60.0,
     cluster_min_members: int = 25,
+    same_system_km: float = 700.0,
 ):
     """Precomputed TC-ATLAS density-peak cluster INDEX — lightweight
     cluster metadata + ensemble_mean polylines, no per-member trajectories.
@@ -8113,7 +8160,7 @@ def get_weatherlab_genesis_clusters(
     now = _dt.now(timezone.utc)
     init_time, params, clusters, dh = _tca_get_or_compute_clusters(
         grid_deg, peak_min_members, assign_radius_km,
-        time_window_h, cluster_min_members)
+        time_window_h, cluster_min_members, same_system_km)
     if clusters is None:
         next_eta_h = _genesis_next_cycle_eta_h(now=now, init_time=None)
         return JSONResponse(
@@ -8144,6 +8191,7 @@ def get_weatherlab_genesis_clusters(
                 "assign_radius_km": params[2],
                 "time_window_h": params[3],
                 "cluster_min_members": params[4],
+                "same_system_km": params[5],
             },
             "clusters": [_tca_cluster_index_view(c) for c in clusters],
             "n_clusters": len(clusters),
@@ -8164,6 +8212,7 @@ def get_weatherlab_genesis_cluster(
     assign_radius_km: float = 1000.0,
     time_window_h: float = 60.0,
     cluster_min_members: int = 25,
+    same_system_km: float = 700.0,
 ):
     """Full per-member trajectories for one TC-ATLAS cluster (tca-N).
     Lazy-loaded by the detail modal when the user clicks a disturbance.
@@ -8171,7 +8220,7 @@ def get_weatherlab_genesis_cluster(
     lookup if the index endpoint has already been hit this cycle."""
     init_time, params, clusters, dh = _tca_get_or_compute_clusters(
         grid_deg, peak_min_members, assign_radius_km,
-        time_window_h, cluster_min_members)
+        time_window_h, cluster_min_members, same_system_km)
     if clusters is None:
         raise HTTPException(status_code=404, detail="No cycle data available")
     match = next((c for c in clusters if c["track_id"] == tca_id), None)

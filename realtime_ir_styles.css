@@ -3810,11 +3810,15 @@ body:has(#ir-detail[style*="block"]) #ir-genesis-cycle-bar {
 }
 .rt-genesis-density-key-meta { opacity: 0.7; font-size: 10px; }
 
-/* Summary PNG button in the modal header. */
+/* Summary/export buttons in the modal header — UM green to match the brand
+   palette. Theme-aware via --um-green (#005030 light, #4a9b6e dark); solid
+   rgba fallbacks first for browsers without color-mix. */
 .rt-genesis-modal-summary-save {
-    background: rgba(0, 229, 255, 0.10);
-    color: #00b3cc;
-    border: 1px solid rgba(0, 229, 255, 0.35);
+    background: rgba(0, 80, 48, 0.12);
+    background: color-mix(in srgb, var(--um-green) 13%, transparent);
+    color: var(--um-green);
+    border: 1px solid rgba(0, 80, 48, 0.40);
+    border: 1px solid color-mix(in srgb, var(--um-green) 45%, transparent);
     border-radius: 5px;
     font-size: 13px;
     padding: 5px 10px;
@@ -3823,11 +3827,8 @@ body:has(#ir-detail[style*="block"]) #ir-genesis-cycle-bar {
     transition: background 0.12s ease;
 }
 .rt-genesis-modal-summary-save:hover {
-    background: rgba(0, 229, 255, 0.20);
-}
-[data-theme="dark"] .rt-genesis-modal-summary-save {
-    color: #67e8f9;
-    border-color: rgba(0, 229, 255, 0.40);
+    background: rgba(0, 80, 48, 0.20);
+    background: color-mix(in srgb, var(--um-green) 22%, transparent);
 }
 /* Composite-summary export cluster (Overall / Intensity / Trends), each a
    download (⤓) + view-in-new-tab (⤢) pair. Wraps onto multiple rows on
@@ -3847,9 +3848,11 @@ body:has(#ir-detail[style*="block"]) #ir-genesis-cycle-bar {
 /* The ⤢ "view in new tab" button — same palette as the ⤓ download button
    but icon-only and slightly narrower so the pair reads as one control. */
 .rt-genesis-modal-summary-view {
-    background: rgba(0, 229, 255, 0.10);
-    color: #00b3cc;
-    border: 1px solid rgba(0, 229, 255, 0.35);
+    background: rgba(0, 80, 48, 0.12);
+    background: color-mix(in srgb, var(--um-green) 13%, transparent);
+    color: var(--um-green);
+    border: 1px solid rgba(0, 80, 48, 0.40);
+    border: 1px solid color-mix(in srgb, var(--um-green) 45%, transparent);
     border-radius: 5px;
     font-size: 13px;
     padding: 5px 8px;
@@ -3859,11 +3862,8 @@ body:has(#ir-detail[style*="block"]) #ir-genesis-cycle-bar {
     transition: background 0.12s ease;
 }
 .rt-genesis-modal-summary-view:hover {
-    background: rgba(0, 229, 255, 0.20);
-}
-[data-theme="dark"] .rt-genesis-modal-summary-view {
-    color: #67e8f9;
-    border-color: rgba(0, 229, 255, 0.40);
+    background: rgba(0, 80, 48, 0.20);
+    background: color-mix(in srgb, var(--um-green) 22%, transparent);
 }
 /* "→ IR Detail" button — only visible when the disturbance is matched
    to an active ATCF storm. Sits beside Summary PNG in the modal
