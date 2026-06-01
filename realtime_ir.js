@@ -7623,8 +7623,18 @@
         thumb.className = 'qv-card-thumb is-loading';
         var img = document.createElement('img');
         img.alt = ''; img.loading = 'lazy'; img.decoding = 'async';
+        var _triedFallback = false;
         img.addEventListener('load', function () { thumb.classList.remove('is-loading', 'is-error'); });
         img.addEventListener('error', function () {
+            // The latest-frame render can briefly be unavailable; fall back
+            // once to the oldest (settled, reliably cached) frame so the card
+            // still shows imagery instead of an error.
+            if (!_triedFallback) {
+                _triedFallback = true;
+                img.src = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(s.atcf_id)
+                    + '/ir-frame.jpg?frame_index=0&interval_min=30&lookback_hours=6';
+                return;
+            }
             thumb.classList.remove('is-loading'); thumb.classList.add('is-error');
             if (img.parentNode) img.parentNode.removeChild(img);
         });

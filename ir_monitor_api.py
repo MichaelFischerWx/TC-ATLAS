@@ -5469,10 +5469,30 @@ def get_ir_frame_jpg(
     )
     frame_times = list(reversed(frame_times))  # oldest first (idx 0 = oldest)
 
-    # frame_index=-1 → latest (newest) frame, so a single-call thumbnail can
-    # ask for the freshest snapshot without a prior frames-meta count lookup.
-    if frame_index < 0:
-        frame_index = len(frame_times) - 1
+    # frame_index=-1 → "latest AVAILABLE frame" (single-call thumbnail with no
+    # prior frames-meta lookup). The absolute newest slot is often too recent
+    # to have published satellite imagery, so a cold render of it 502s. To stay
+    # fast and reliable we (1) prefer the most recent frame already in the jpg
+    # cache, then (2) fall back to the newest frame old enough to have imagery
+    # (~40 min covers GOES/Himawari publish latency), and only (3) the newest
+    # slot as a last resort.
+    if frame_index < 0 and frame_times:
+        now_utc = _dt.now(timezone.utc)
+        picked = None
+        if warp.lower() != "none":
+            for _idx in range(len(frame_times) - 1, -1, -1):
+                _ft = frame_times[_idx]
+                _plat, _plon = _interp_pos_at(atcf_id, _ft, center_lat, center_lon)
+                if _gcs_jpg_get(atcf_id.upper(), _ft.strftime("%Y%m%d%H%M"),
+                                lat=_plat, lon=_plon):
+                    picked = _idx
+                    break
+        if picked is None:
+            for _idx in range(len(frame_times) - 1, -1, -1):
+                if (now_utc - frame_times[_idx]).total_seconds() >= 40 * 60:
+                    picked = _idx
+                    break
+        frame_index = picked if picked is not None else (len(frame_times) - 1)
 
     if frame_index < 0 or frame_index >= len(frame_times):
         raise HTTPException(status_code=400, detail=f"frame_index {frame_index} out of range")
