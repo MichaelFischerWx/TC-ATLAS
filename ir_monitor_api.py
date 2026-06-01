@@ -7443,7 +7443,7 @@ def refresh_genesis_cache() -> dict:
     if data:
         try:
             _, _, clusters, _ = _tca_get_or_compute_clusters(
-                3.0, 8, 1000.0, 60.0, 25, 700.0)
+                3.0, 8, 1000.0, 60.0, 25, 500.0)
             n_clusters = len(clusters) if clusters else 0
         except Exception:
             traceback.print_exc()
@@ -7612,7 +7612,7 @@ def get_weatherlab_genesis_trend(
     assign_radius_km: float = 1000.0,
     time_window_h: float = 60.0,
     cluster_min_members: int = 25,
-    same_system_km: float = 700.0,
+    same_system_km: float = 500.0,
 ):
     """Run-to-run trend for ONE disturbance: for each of the last `count`
     published cycles, find the TC-ATLAS cluster whose density-peak genesis
@@ -7861,7 +7861,7 @@ def _tca_compute_clusters(raw_data: dict,
                           assign_radius_km: float = 1000.0,
                           time_window_h: float = 60.0,
                           cluster_min_members: int = 25,
-                          same_system_km: float = 700.0,
+                          same_system_km: float = 500.0,
                           ensemble_size: int = 1000) -> list:
     """Run the TC-ATLAS density-peak algorithm on the full uncapped
     CSV parse (dict keyed by DM track_id). Returns a list of cluster
@@ -8066,7 +8066,7 @@ def _tca_compute_clusters(raw_data: dict,
 
 def _tca_get_or_compute_clusters(grid_deg, peak_min_members,
                                   assign_radius_km, time_window_h,
-                                  cluster_min_members, same_system_km=700.0):
+                                  cluster_min_members, same_system_km=500.0):
     """Return cached (full, with members) clusters for the current
     cycle + params, computing on miss. Used by both the index endpoint
     (which strips members for the response) and the per-cluster detail
@@ -8102,7 +8102,7 @@ def _tca_get_or_compute_clusters(grid_deg, peak_min_members,
 
 def _tca_clusters_for_cycle(date_str, hour_str, grid_deg, peak_min_members,
                             assign_radius_km, time_window_h,
-                            cluster_min_members, same_system_km=700.0):
+                            cluster_min_members, same_system_km=500.0):
     """Like `_tca_get_or_compute_clusters` but for a SPECIFIC (already-
     resolved) cycle rather than 'the latest'. Shares the same
     `_TCA_CLUSTER_CACHE` so the run-to-run trend endpoint reuses the
@@ -8171,7 +8171,7 @@ def get_weatherlab_genesis_clusters(
     assign_radius_km: float = 1000.0,
     time_window_h: float = 60.0,
     cluster_min_members: int = 25,
-    same_system_km: float = 700.0,
+    same_system_km: float = 500.0,
 ):
     """Precomputed TC-ATLAS density-peak cluster INDEX — lightweight
     cluster metadata + ensemble_mean polylines, no per-member trajectories.
@@ -8235,7 +8235,7 @@ def get_weatherlab_genesis_cluster(
     assign_radius_km: float = 1000.0,
     time_window_h: float = 60.0,
     cluster_min_members: int = 25,
-    same_system_km: float = 700.0,
+    same_system_km: float = 500.0,
 ):
     """Full per-member trajectories for one TC-ATLAS cluster (tca-N).
     Lazy-loaded by the detail modal when the user clicks a disturbance.

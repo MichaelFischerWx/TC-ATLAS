@@ -663,10 +663,12 @@
     // clusters whose density-peaks sit within this distance is treated as
     // one physical system fragmented across adjacent peaks → it's kept only
     // in the nearest cluster (no double-count). Members in clusters farther
-    // apart than this keep every membership (genuine multi-genesis). ~700 km
-    // is just above the ~2-grid-cell minimum peak separation, so it catches
-    // fragmentation without merging genuinely distinct nearby systems.
-    var _GENESIS_SAME_SYSTEM_KM     = 700;
+    // apart than this keep every membership (genuine multi-genesis). 500 km
+    // is a conservative default — near the ~2-grid-cell minimum peak
+    // separation — so the dedup only collapses the closest fragmented peaks
+    // and leaves genuinely distinct nearby systems separate. Raise via the
+    // tuner if split single systems still show as two disturbances.
+    var _GENESIS_SAME_SYSTEM_KM     = 500;
     // _GENESIS_CLUSTER_MIN_MEMBERS already defined above.
     var _GENESIS_MEMBER_COLOR = 'rgba(249, 115, 22, 0.12)';  // very soft so heatmap dominates
     var _GENESIS_MEAN_COLOR = '#f97316';                      // bold orange
@@ -15415,7 +15417,7 @@
                 _GENESIS_ASSIGN_RADIUS_KM    = 1000;
                 _GENESIS_TIME_WINDOW_H       = 60;
                 _GENESIS_CLUSTER_MIN_MEMBERS = 25;
-                _GENESIS_SAME_SYSTEM_KM      = 700;
+                _GENESIS_SAME_SYSTEM_KM      = 500;
                 _rtGenesisClusters = null;
                 _loadGenesisClusters();
                 _genesisReRender();
