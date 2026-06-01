@@ -3654,6 +3654,15 @@ body:has(#ir-detail[style*="block"]) #ir-genesis-cycle-bar {
 [data-theme="dark"] .rt-genesis-stat-hint  { color: #94a3b8; }
 @media (max-width: 720px) {
     .rt-genesis-stat-row { grid-template-columns: 1fr; }
+    /* Let the header's title + export cluster + close stack/wrap instead
+       of overflowing a phone-width modal. */
+    .rt-genesis-modal-header { flex-wrap: wrap; }
+    .rt-genesis-summary-actions { gap: 4px; }
+    .rt-genesis-modal-summary-save,
+    .rt-genesis-modal-summary-view {
+        font-size: 12px;
+        padding: 4px 7px;
+    }
 }
 
 /* Run-to-run trend sparkline panel (genesis detail modal). Cyan accent
@@ -3817,6 +3826,42 @@ body:has(#ir-detail[style*="block"]) #ir-genesis-cycle-bar {
     background: rgba(0, 229, 255, 0.20);
 }
 [data-theme="dark"] .rt-genesis-modal-summary-save {
+    color: #67e8f9;
+    border-color: rgba(0, 229, 255, 0.40);
+}
+/* Composite-summary export cluster (Overall / Intensity / Trends), each a
+   download (⤓) + view-in-new-tab (⤢) pair. Wraps onto multiple rows on
+   narrow viewports so the header doesn't overflow. Which group is visible
+   follows the active modal tab (toggled in JS). */
+.rt-genesis-summary-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+}
+.rt-genesis-sum-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+/* The ⤢ "view in new tab" button — same palette as the ⤓ download button
+   but icon-only and slightly narrower so the pair reads as one control. */
+.rt-genesis-modal-summary-view {
+    background: rgba(0, 229, 255, 0.10);
+    color: #00b3cc;
+    border: 1px solid rgba(0, 229, 255, 0.35);
+    border-radius: 5px;
+    font-size: 13px;
+    padding: 5px 8px;
+    cursor: pointer;
+    font-weight: 500;
+    line-height: 1;
+    transition: background 0.12s ease;
+}
+.rt-genesis-modal-summary-view:hover {
+    background: rgba(0, 229, 255, 0.20);
+}
+[data-theme="dark"] .rt-genesis-modal-summary-view {
     color: #67e8f9;
     border-color: rgba(0, 229, 255, 0.40);
 }

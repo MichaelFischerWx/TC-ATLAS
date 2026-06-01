@@ -651,14 +651,14 @@
     // closer to.
     var _GENESIS_GRID_DEG           = 3;     // density bin size (degrees)
     var _GENESIS_PEAK_MIN_MEMBERS   = 8;     // cell count to qualify as peak
-    var _GENESIS_ASSIGN_RADIUS_KM   = 750;   // max distance member ↔ peak
+    var _GENESIS_ASSIGN_RADIUS_KM   = 1000;  // max distance member ↔ peak
     // Time-window for member-to-peak assignment. A member's first-
     // genesis tau must be within ±_GENESIS_TIME_WINDOW_H of the peak's
     // mean first-genesis tau (computed from members whose first-genesis
     // lat/lon falls inside the peak cell). Prevents merging two storms
     // that happen to form at the same location but at very different
     // times.
-    var _GENESIS_TIME_WINDOW_H      = 48;
+    var _GENESIS_TIME_WINDOW_H      = 60;
     // _GENESIS_CLUSTER_MIN_MEMBERS already defined above.
     var _GENESIS_MEMBER_COLOR = 'rgba(249, 115, 22, 0.12)';  // very soft so heatmap dominates
     var _GENESIS_MEAN_COLOR = '#f97316';                      // bold orange
@@ -10125,7 +10125,23 @@
                   // detail page so the user can see real-time imagery
                   // alongside the FNV3 ensemble diagnostics.
                   '<button type="button" id="rt-genesis-open-storm" class="rt-genesis-modal-open-storm" style="display:none;" title="View this storm\'s IR / GeoColor satellite detail page">→ IR Detail</button>' +
-                  '<button type="button" id="rt-genesis-summary-save" class="rt-genesis-modal-summary-save" title="Save 3-panel summary PNG (map + intensity + genesis time)">⤓ Summary PNG</button>' +
+                  // Composite exports. Each summary pairs a download (⤓)
+                  // with a "view in new tab" (⤢) action. Which group is
+                  // visible follows the active modal tab (set in
+                  // _genesisShowPane): the "This run" tab shows Overall +
+                  // Intensity; the "Trends" tab shows the run-to-run summary.
+                  '<span id="rt-genesis-summary-actions" class="rt-genesis-summary-actions">' +
+                    '<span class="rt-genesis-sum-group" data-pane="thisrun">' +
+                      '<button type="button" id="rt-genesis-sum-overall-dl" class="rt-genesis-modal-summary-save" title="Download overall summary PNG (track map + intensity + genesis time)">⤓ Overall</button>' +
+                      '<button type="button" id="rt-genesis-sum-overall-view" class="rt-genesis-modal-summary-view" title="Open overall summary in a new tab" aria-label="View overall summary in a new tab">⤢</button>' +
+                      '<button type="button" id="rt-genesis-sum-int-dl" class="rt-genesis-modal-summary-save" title="Download intensity summary PNG (intensity spread + LMI distribution + LMI vs hour)">⤓ Intensity</button>' +
+                      '<button type="button" id="rt-genesis-sum-int-view" class="rt-genesis-modal-summary-view" title="Open intensity summary in a new tab" aria-label="View intensity summary in a new tab">⤢</button>' +
+                    '</span>' +
+                    '<span class="rt-genesis-sum-group" data-pane="trends" style="display:none;">' +
+                      '<button type="button" id="rt-genesis-sum-trends-dl" class="rt-genesis-modal-summary-save" title="Download run-to-run trends summary PNG">⤓ Trends</button>' +
+                      '<button type="button" id="rt-genesis-sum-trends-view" class="rt-genesis-modal-summary-view" title="Open trends summary in a new tab" aria-label="View trends summary in a new tab">⤢</button>' +
+                    '</span>' +
+                  '</span>' +
                   '<button type="button" class="rt-genesis-modal-close" aria-label="Close" title="Close (Esc)">×</button>' +
                 '</div>' +
               '</div>' +
@@ -10286,8 +10302,19 @@
         m.querySelector('#rt-genesis-lmitau-save').addEventListener('click', function () {
             _genesisSavePNG('rt-genesis-modal-lmitau', 'lmi-vs-hour');
         });
-        m.querySelector('#rt-genesis-summary-save').addEventListener('click', function () {
-            _genesisSaveSummaryPNG();
+        // Composite summary exports — download (⤓) + view-in-new-tab (⤢).
+        [
+            ['rt-genesis-sum-overall-dl',  'overall',   'download'],
+            ['rt-genesis-sum-overall-view','overall',   'view'],
+            ['rt-genesis-sum-int-dl',      'intensity', 'download'],
+            ['rt-genesis-sum-int-view',    'intensity', 'view'],
+            ['rt-genesis-sum-trends-dl',   'trends',    'download'],
+            ['rt-genesis-sum-trends-view', 'trends',    'view'],
+        ].forEach(function (cfg) {
+            var b = m.querySelector('#' + cfg[0]);
+            if (b) b.addEventListener('click', function () {
+                _genesisSummaryAction(cfg[1], cfg[2], b);
+            });
         });
         // "→ IR Detail" — jumps to the matched ATCF storm's satellite
         // page. atcfId is stored on the button by _renderGenesisDetail
@@ -10318,6 +10345,13 @@
             jumpBtns.forEach(function (b) {
                 b.classList.toggle('active', b.getAttribute('data-pane') === name);
             });
+            // Show only the summary-export buttons relevant to the active
+            // pane — Overall+Intensity on "This run", Trends on "Trends".
+            m.querySelectorAll('#rt-genesis-summary-actions .rt-genesis-sum-group')
+                .forEach(function (g) {
+                    g.style.display =
+                        (g.getAttribute('data-pane') === name) ? '' : 'none';
+                });
             if (scroller) scroller.scrollTop = 0;
             // Plotly charts drawn while their pane was display:none render
             // at 0 width; resize them now that the pane is laid out.
@@ -11716,21 +11750,9 @@
                 colorscale: _GENESIS_SS_SCALE,
                 cmin: 0, cmax: 200,
                 line: { color: isDark ? '#0f172a' : '#1f2937', width: 1 },
-                colorbar: {
-                    title: { text: 'Vmax (kt)', side: 'right',
-                             font: { size: 11 } },
-                    thickness: 14, len: 0.7,
-                    // Tick at every category boundary; "34 TS" reads as a
-                    // single line so the bar doesn't need two-row spacing.
-                    // The 170+ tick anchors the beyond-C5 extreme ramp so
-                    // the magenta→white top doesn't read as unlabeled.
-                    tickvals: [0, 34, 64, 83, 96, 113, 137, 170],
-                    ticktext: ['0', '34 TS', '64 C1', '83 C2',
-                               '96 C3', '113 C4', '137 C5', '170+'],
-                    tickfont: { size: 11 },
-                    ticklen: 4,
-                    outlinewidth: 0,
-                },
+                // Vertical on the right by default; horizontal under the
+                // map on phone-width viewports (see _genesisVmaxColorbar).
+                colorbar: _genesisVmaxColorbar(),
                 showscale: true,
             },
             text: meanWinds.map(function (w, idx) {
@@ -11813,13 +11835,21 @@
         var pageLand    = rootStyle.getPropertyValue('--surface').trim()
                        || (isDark ? '#11161f' : '#f7f8fa');
 
+        // On phone width the Vmax colorbar lays out horizontally beneath the
+        // map (see _genesisVmaxColorbar), so reserve a bottom band for it and
+        // lift the locator-globe inset above that band.
+        var _mapNarrow = _genesisNarrow();
+        var _mapGeoDomainY = _mapNarrow ? [0.15, 1] : [0, 1];
+        var _mapInsetDomain = _mapNarrow
+            ? { x: [0.01, 0.20], y: [0.56, 0.92] }
+            : { x: [0.01, 0.17], y: [0.02, 0.36] };
         var layout = {
             margin: { l: 4, r: 4, t: 8, b: 4 },
             paper_bgcolor: 'rgba(0,0,0,0)',
             font: theme.font,
             geo: {
                 projection: { type: 'mercator' },
-                domain: { x: [0, 1], y: [0, 1] },
+                domain: { x: [0, 1], y: _mapGeoDomainY },
                 lonaxis: { range: bounds.lon, showgrid: true,
                            gridcolor: isDark ? 'rgba(255,255,255,0.10)'
                                              : 'rgba(15,22,35,0.10)',
@@ -11845,7 +11875,7 @@
             // taller than wide; Plotly fits the circle and centers it,
             // so the leftover space just pads the disc.
             geo2: {
-                domain: { x: [0.01, 0.17], y: [0.02, 0.36] },
+                domain: _mapInsetDomain,
                 projection: {
                     type: 'orthographic',
                     rotation: { lon: insetLon, lat: insetLat, roll: 0 },
@@ -12718,7 +12748,21 @@
                 + 'LMI Vmax: <b>%{y:.0f} kt</b><br>'
                 + 'Members: <b>%{z:.0f}</b><extra></extra>',
             showscale: true,
-            colorbar: {
+            // Horizontal under the plot on phone-width viewports (matches
+            // the track-map colorbar treatment); vertical on the right
+            // otherwise. The layout bottom margin grows in tandem below so
+            // the horizontal bar isn't clipped.
+            colorbar: _genesisNarrow() ? {
+                title: { text: 'Members', side: 'top',
+                         font: { size: 9, family: 'DM Sans, sans-serif',
+                                 color: theme.font.color } },
+                orientation: 'h',
+                thickness: 8, len: 1, outlinewidth: 0,
+                x: 0.5, xanchor: 'center', y: -0.32, yanchor: 'top',
+                tickfont: { size: 8, family: 'DM Sans, sans-serif',
+                            color: theme.font.color },
+                xpad: 0, ypad: 0,
+            } : {
                 title: { text: 'Members', font: { size: 9,
                          family: 'DM Sans, sans-serif', color: theme.font.color },
                          side: 'right' },
@@ -12734,8 +12778,13 @@
             return { type: 'line', x0: 0, x1: tauMax + 12, y0: v, y1: v,
                      line: { color: gridStroke, width: 1, dash: 'dot' } };
         });
+        // Reclaim the right margin (reserved for the vertical colorbar) and
+        // give the bottom room for the horizontal bar when narrow.
+        var lmiTauMargin = _genesisNarrow()
+            ? { l: 45, r: 12, t: 30, b: 78 }
+            : { l: 45, r: 60, t: 30, b: 40 };
         var layout = Object.assign({}, theme, {
-            margin: { l: 45, r: 60, t: 30, b: 40 },
+            margin: lmiTauMargin,
             paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
             title: { text: 'LMI vs forecast hour',
                      x: 0, xanchor: 'left',
@@ -12995,33 +13044,148 @@
         setTimeout(function () { URL.revokeObjectURL(url); }, 5000);
     }
 
-    // Export a 3-panel composite (map + intensity + genesis-time
-    // histogram) as a single PNG. Uses Plotly.toImage for each subplot
-    // then stitches them on a canvas with a header strip showing the
-    // disturbance label, init time, formation %, and peak Vmax —
-    // saves the user from having to assemble the three single-panel
-    // PNGs in PowerPoint / Keynote.
-    function _genesisSaveSummaryPNG() {
-        if (typeof Plotly === 'undefined') return;
-        var mapEl   = document.getElementById('rt-genesis-modal-map');
-        var intEl   = document.getElementById('rt-genesis-modal-int');
-        var gtimeEl = document.getElementById('rt-genesis-modal-gtime');
-        if (!mapEl || !intEl) return;
-        var btn = document.getElementById('rt-genesis-summary-save');
+    // ── Composite summary exports ───────────────────────────────────────
+    // Three flavors, each a single stitched PNG built from the live Plotly
+    // panels via Plotly.toImage + a canvas:
+    //   • overall   — track map + intensity envelope + genesis-time histogram
+    //   • intensity — intensity envelope + LMI distribution + LMI-vs-hour map
+    //   • trends    — run-to-run formation bars + track trend + intensity trend
+    // One stitcher (`_genesisRenderComposite`) drives all three; the spec just
+    // lists which panels go in and how tall each renders. Delivery is either a
+    // download or opening the rendered PNG in a new tab ('view').
+    var _GENESIS_SUMMARY_SPECS = {
+        overall: {
+            subSuffix: '',
+            usesMap: true,
+            panels: [
+                { el: 'rt-genesis-modal-map',    h: 1000 },
+                { el: 'rt-genesis-modal-int',    h: 760 },
+                { el: 'rt-genesis-modal-gtime',  h: 540, optional: true },
+            ],
+        },
+        intensity: {
+            subSuffix: ' · Intensity summary',
+            usesMap: false,
+            panels: [
+                { el: 'rt-genesis-modal-int',    h: 640 },
+                { el: 'rt-genesis-modal-lmi',    h: 560, optional: true },
+                { el: 'rt-genesis-modal-lmitau', h: 640, optional: true },
+            ],
+        },
+        trends: {
+            subSuffix: ' · Run-to-run trends',
+            usesMap: false,
+            panels: [
+                { el: 'rt-genesis-modal-trend-chart', h: 380, optional: true },
+                { el: 'rt-genesis-modal-trendmap',    h: 720, optional: true },
+                { el: 'rt-genesis-modal-trendint',    h: 620, optional: true },
+            ],
+        },
+    };
+
+    // True when the composite has at least its required panels rendered
+    // right now (optional panels may legitimately be absent — no
+    // genesis-time histogram, or a trends panel with no multi-cycle
+    // history). Used to gate the buttons and to bail before opening a
+    // view tab we'd only have to close.
+    function _genesisCompositeReady(kind) {
+        var spec = _GENESIS_SUMMARY_SPECS[kind];
+        if (!spec) return false;
+        var anyReady = false;
+        for (var i = 0; i < spec.panels.length; i++) {
+            var p = spec.panels[i];
+            var el = document.getElementById(p.el);
+            var ready = !!(el && el.data && el.data.length);
+            if (!p.optional && !ready) return false;
+            if (ready) anyReady = true;
+        }
+        return anyReady;
+    }
+
+    // Click dispatcher. Renders the requested composite, then either
+    // downloads it or shows it in a new tab. For the view path the tab is
+    // opened SYNCHRONOUSLY here (in the user-gesture) so the async render
+    // doesn't get the popup blocked — mobile Safari rejects window.open
+    // called later from a Promise.
+    function _genesisSummaryAction(kind, mode, btn) {
+        if (!_genesisCompositeReady(kind)) return;
+        var viewWin = null;
+        if (mode === 'view') {
+            viewWin = window.open('', '_blank');
+            if (viewWin && viewWin.document) {
+                try {
+                    viewWin.document.write(
+                        '<title>TC-ATLAS — rendering…</title>'
+                        + '<body style="margin:0;background:#0f172a;color:#94a3b8;'
+                        + 'font:14px system-ui,sans-serif;display:flex;'
+                        + 'align-items:center;justify-content:center;height:100vh;">'
+                        + 'Rendering ' + kind + ' summary…</body>');
+                } catch (e) { /* cross-origin guard — ignore */ }
+            }
+        }
+        _genesisRenderComposite(kind, btn, function (blob, filename) {
+            if (mode === 'view') {
+                var url = URL.createObjectURL(blob);
+                if (viewWin && !viewWin.closed) {
+                    try { viewWin.location.href = url; }
+                    catch (e) { window.open(url, '_blank'); }
+                } else if (!window.open(url, '_blank')) {
+                    // Popup blocked outright — fall back to a download so
+                    // the user still ends up with the figure.
+                    _saveImageBlob(blob, filename);
+                }
+                setTimeout(function () { URL.revokeObjectURL(url); }, 60000);
+                _ga('rt_genesis_view_summary', { kind: kind });
+            } else {
+                _saveImageBlob(blob, filename);
+                _ga('rt_genesis_save_summary_png', { kind: kind });
+            }
+        }, function () {
+            // Render failed/aborted — close the placeholder tab so it
+            // doesn't hang on "Rendering…".
+            if (viewWin && !viewWin.closed) { try { viewWin.close(); } catch (e) {} }
+        });
+    }
+
+    // Generic stitcher: header strip + each available panel + footer onto
+    // one canvas, then hand the PNG blob to `onBlob(blob, filename)`.
+    // `onError` (optional) fires if anything throws/aborts so the caller
+    // can clean up (e.g. close a placeholder view tab).
+    function _genesisRenderComposite(kind, btn, onBlob, onError) {
+        function fail() { if (onError) onError(); }
+        if (typeof Plotly === 'undefined') { fail(); return; }
+        var spec = _GENESIS_SUMMARY_SPECS[kind];
+        if (!spec) { fail(); return; }
+
+        // Resolve which panels actually have a rendered Plotly figure now.
+        var panels = [];
+        for (var i = 0; i < spec.panels.length; i++) {
+            var p = spec.panels[i];
+            var el = document.getElementById(p.el);
+            var ready = !!(el && el.data && el.data.length);
+            if (!ready) {
+                if (p.optional) continue;
+                fail(); return;   // required panel missing → don't half-render
+            }
+            panels.push({ el: el, h: p.h });
+        }
+        if (!panels.length) { fail(); return; }
+
         var origText = btn ? btn.textContent : null;
         if (btn) { btn.textContent = 'Rendering…'; btn.disabled = true; }
+        function restoreBtn() {
+            if (btn) { btn.textContent = origText; btn.disabled = false; }
+        }
 
-        // Density-mode square markers are sized in absolute pixels and
-        // don't scale correctly when Plotly.toImage resizes the chart
-        // for the export — at 1800 px width the markers grow to fill
-        // the whole map. Temporarily repaint in Members mode for the
-        // export, then restore the user's selected mode after.
-        var origMode = _genesisTauState && _genesisTauState.mode;
-        var origIdx = _genesisTauState && _genesisTauState.idx;
-        var modeWasDensity = (origMode === 'density');
-        if (modeWasDensity && _genesisTauState && _genesisTauState.taus) {
+        // Density-mode square markers don't scale under Plotly.toImage, so
+        // — only when this composite includes the track map — repaint it in
+        // Members mode for the export and restore afterward.
+        var modeWasDensity = false;
+        if (spec.usesMap && _genesisTauState && _genesisTauState.mode === 'density'
+                && _genesisTauState.taus) {
+            modeWasDensity = true;
+            var tau = _genesisTauState.taus[_genesisTauState.idx];
             _genesisTauState.mode = 'members';
-            var tau = _genesisTauState.taus[origIdx];
             _genesisPaintTauCursor(tau, _genesisTauState.byTau[tau] || []);
         }
         function restoreMode() {
@@ -13032,67 +13196,41 @@
             }
         }
 
-        var W = 1800;
-        var HEAD = 180;
-        var H_MAP = 1000;
-        var H_INT = 760;
-        var H_GTIME = gtimeEl ? 540 : 0;
-        var GAP = 18;
-        var FOOT = 64;
-        var totalH = HEAD + H_MAP + GAP + H_INT + (H_GTIME ? GAP + H_GTIME : 0) + FOOT;
-        // Scale Plotly fonts ~2.8× so axis labels, ticks, legends, and
-        // colorbar labels look proportional at 1800-px export width
-        // instead of carrying their on-screen ~12-px sizes. Markers
-        // and line widths also scale (see _figForExport) so spaghetti
-        // tracks and intensity dots read at the same visual weight as
-        // the labels. Panel heights above grew correspondingly so the
-        // scaled margins don't squeeze the plot area.
+        var W = 1800, HEAD = 180, GAP = 18, FOOT = 64;
+        // Scale Plotly fonts ~2.8× so labels/ticks/legends/colorbars look
+        // proportional at 1800-px export width (markers + line widths
+        // scale inside _figForExport).
         var FONT_SCALE = 2.8;
+        var totalH = HEAD + FOOT;
+        for (var pi = 0; pi < panels.length; pi++) {
+            totalH += panels[pi].h + (pi > 0 ? GAP : 0);
+        }
 
         var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
         var bg = isDark ? '#0f172a' : '#ffffff';
         var ink = isDark ? '#f1f5f9' : '#0f172a';
         var dim = isDark ? '#94a3b8' : '#475569';
 
-        // Pull the header info out of the modal so the export reads
-        // self-contained (init time, label, formation %, peak Vmax).
         var titleEl = document.getElementById('rt-genesis-modal-title');
         var subEl   = document.getElementById('rt-genesis-modal-sub');
-        var statsEl = document.getElementById('rt-genesis-modal-stats');
         var title = titleEl ? titleEl.textContent : 'FNV3 cyclogenesis ensemble';
         var sub = subEl ? subEl.textContent.replace(/\s+/g, ' ').trim() : '';
-        // Strip the "Next cycle ~Nm" ETA from the saved PNG — it's a
-        // live countdown that's meaningless once the image is offline
-        // (and dates the export the moment a new cycle drops). The
-        // live modal still shows it; this only edits the export copy.
+        // Strip the live "Next cycle ~Nm" countdown — meaningless offline.
         sub = sub.replace(/\s*·\s*Next cycle[^·]*/i, '').trim();
+        sub = (sub + (spec.subSuffix || '')).trim();
 
-        // Render each subplot to a PNG dataURL at the target width.
-        // Pass a font-scaled figure spec instead of the live DOM element
-        // so axis/tick/legend/colorbar fonts grow to readable proportions
-        // at 1800-px export width without affecting the on-screen chart.
-        var tasks = [
-            Plotly.toImage(_figForExport(mapEl, FONT_SCALE),
-                           { format: 'png', width: W, height: H_MAP }),
-            Plotly.toImage(_figForExport(intEl, FONT_SCALE),
-                           { format: 'png', width: W, height: H_INT }),
-        ];
-        if (gtimeEl) {
-            tasks.push(Plotly.toImage(_figForExport(gtimeEl, FONT_SCALE),
-                                      { format: 'png',
-                                        width: W, height: H_GTIME }));
-        }
+        var tasks = panels.map(function (p) {
+            return Plotly.toImage(_figForExport(p.el, FONT_SCALE),
+                                  { format: 'png', width: W, height: p.h });
+        });
 
         Promise.all(tasks).then(function (urls) {
-            var imgs = urls.map(function (u) {
-                var im = new Image();
-                im.src = u;
-                return im;
-            });
-            return Promise.all(imgs.map(function (im) {
+            return Promise.all(urls.map(function (u) {
                 return new Promise(function (res, rej) {
-                    if (im.complete) res(im);
-                    else { im.onload = function () { res(im); }; im.onerror = rej; }
+                    var im = new Image();
+                    im.onload = function () { res(im); };
+                    im.onerror = rej;
+                    im.src = u;
                 });
             }));
         }).then(function (imgs) {
@@ -13103,10 +13241,6 @@
             ctx.fillStyle = bg;
             ctx.fillRect(0, 0, W, totalH);
 
-            // Header — sizes chosen for 1800-px export width. Subtitle
-            // bumped 28 → 34 px so the init-time + members line is
-            // legible alongside the bigger Plotly fonts inside the
-            // panels below.
             ctx.fillStyle = ink;
             ctx.font = '600 56px Inter, "Helvetica Neue", sans-serif';
             ctx.textBaseline = 'top';
@@ -13116,14 +13250,11 @@
             ctx.fillText(sub, 40, 108);
 
             var y = HEAD;
-            ctx.drawImage(imgs[0], 0, y);  y += H_MAP + GAP;
-            ctx.drawImage(imgs[1], 0, y);  y += H_INT + GAP;
-            if (imgs[2]) {
-                ctx.drawImage(imgs[2], 0, y);
-                y += H_GTIME;
+            for (var k = 0; k < imgs.length; k++) {
+                ctx.drawImage(imgs[k], 0, y);
+                y += panels[k].h + GAP;
             }
 
-            // Footer attribution
             ctx.fillStyle = dim;
             ctx.font = '24px Inter, "Helvetica Neue", sans-serif';
             var saved = new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
@@ -13131,21 +13262,21 @@
                          40, totalH - 44);
 
             canvas.toBlob(function (blob) {
-                if (!blob) throw new Error('toBlob returned null');
+                restoreBtn();
+                restoreMode();
+                if (!blob) { fail(); return; }
                 var dateISO = new Date().toISOString().slice(0, 10);
                 var slug = title.replace(/[^a-z0-9]+/gi, '-')
                                 .replace(/^-+|-+$/g, '').toLowerCase()
                                 .slice(0, 40) || 'summary';
-                _saveImageBlob(blob,
-                    'tc-atlas-genesis-' + slug + '-' + dateISO + '.png');
-                if (btn) { btn.textContent = origText; btn.disabled = false; }
-                restoreMode();
-                _ga('rt_genesis_save_summary_png');
+                onBlob(blob, 'tc-atlas-genesis-' + kind + '-' + slug
+                             + '-' + dateISO + '.png');
             }, 'image/png');
         }).catch(function (err) {
-            console.warn('[Genesis] summary PNG export failed', err);
-            if (btn) { btn.textContent = origText; btn.disabled = false; }
+            console.warn('[Genesis] ' + kind + ' summary export failed', err);
+            restoreBtn();
             restoreMode();
+            fail();
         });
     }
 
@@ -13196,6 +13327,91 @@
         return Math.round(ageH / 24) + ' d old';
     }
 
+    // True on phone-width viewports. Used to lay the genesis-modal
+    // colorbars out horizontally (under the panel) instead of as a tall
+    // right-side strip that's disproportionate on a narrow modal.
+    function _genesisNarrow() {
+        return typeof window !== 'undefined'
+            && typeof window.matchMedia === 'function'
+            && window.matchMedia('(max-width: 720px)').matches;
+    }
+
+    // Vmax category colorbar for the track-map ensemble-mean markers.
+    // Horizontal under the map on mobile, vertical on the right otherwise.
+    function _genesisVmaxColorbar() {
+        var cb = {
+            tickvals: [0, 34, 64, 83, 96, 113, 137, 170],
+            ticktext: ['0', '34 TS', '64 C1', '83 C2',
+                       '96 C3', '113 C4', '137 C5', '170+'],
+            tickfont: { size: 11 },
+            ticklen: 4,
+            outlinewidth: 0,
+        };
+        if (_genesisNarrow()) {
+            cb.orientation = 'h';
+            cb.title = { text: 'Vmax (kt)', side: 'top', font: { size: 10 } };
+            cb.thickness = 12;
+            cb.len = 1;
+            cb.x = 0.5; cb.xanchor = 'center';
+            // Sits in the bottom band the track-map layout reserves on
+            // narrow (geo.domain.y starts at 0.15 there).
+            cb.y = 0.02; cb.yanchor = 'bottom';
+            // Drop the category letters when horizontal — eight two-token
+            // labels crowd a phone-width bar; the boundary values still read.
+            cb.ticktext = ['0', '34', '64', '83', '96', '113', '137', '170+'];
+            cb.tickfont = { size: 9 };
+        } else {
+            cb.orientation = 'v';
+            cb.title = { text: 'Vmax (kt)', side: 'right', font: { size: 11 } };
+            cb.thickness = 14;
+            cb.len = 0.7;
+        }
+        return cb;
+    }
+
+    // Write the genesis menu status line. The headline count is the number
+    // of DISTURBANCES (clustered density-peaks) — i.e. the markers actually
+    // drawn on the map — not the raw DeepMind genesis-track count, which is
+    // typically several times larger and was the source of the "banner says
+    // 23, map shows 5" mismatch. The raw track count is kept as secondary
+    // context. Called once after the ensemble payload lands (count may be a
+    // client-side estimate at that point) and again after the server cluster
+    // index resolves, so the headline refines to the uncapped server count.
+    function _updateGenesisBanner() {
+        var statusEl = document.getElementById('ir-genesis-status');
+        if (!statusEl) return;
+        var data = _rtGenesisData;
+        var nTracks = (data && data.n_tracks) ? data.n_tracks : 0;
+        var init = data && data.init_time;
+        var initBit = init
+            ? ' · init ' + init.slice(0, 8) + ' ' + init.slice(8) + 'Z' : '';
+        var ageBit = (data && data.cycle_age_hours != null)
+            ? ' · ' + _formatGenesisAge(data.cycle_age_hours) : '';
+        if (nTracks === 0) {
+            statusEl.textContent = 'No genesis predicted in next 15 days'
+                + (init ? initBit + ageBit : '');
+            return;
+        }
+        // Disturbance count = the markers _renderGenesis() actually draws
+        // (same _genesisDisturbances() call), so banner ≡ map by construction.
+        var nDist = 0;
+        try { nDist = _genesisDisturbances(data.tracks || []).length; }
+        catch (e) { nDist = 0; }
+        var head, trackBit;
+        if (nDist > 0) {
+            head = nDist + ' disturbance' + (nDist === 1 ? '' : 's');
+            trackBit = ' · ' + nTracks + ' genesis track'
+                + (nTracks === 1 ? '' : 's');
+        } else {
+            // No cluster cleared the min-member floor — fall back to the raw
+            // track count rather than reading "0 disturbances" while tracks
+            // are present.
+            head = nTracks + ' genesis track' + (nTracks === 1 ? '' : 's');
+            trackBit = '';
+        }
+        statusEl.textContent = head + trackBit + initBit + ageBit;
+    }
+
     // Fetch the server's precomputed TC-ATLAS clusters for the current
     // cycle + current tuner params. Replaces the old per-track prefetch
     // approach: one ~50 KB request, instant render, no per-user ~8 MB
@@ -13238,6 +13454,10 @@
                 if (_rtGenesisVisible && _genesisClusterMethod === 'tcatlas') {
                     _renderGenesis();
                 }
+                // Refine the banner now that uncapped server clusters are in —
+                // the headline disturbance count may differ from the earlier
+                // client-side estimate.
+                _updateGenesisBanner();
                 _ga('rt_genesis_clusters_loaded', {
                     n_clusters: (json.clusters || []).length,
                     init: json.init_time,
@@ -13469,24 +13689,10 @@
                     _loadGenesisClusters();
                 }
 
-                if (statusEl) {
-                    var n = data && data.n_tracks ? data.n_tracks : 0;
-                    var ageBit = data && data.cycle_age_hours != null
-                        ? ' · ' + _formatGenesisAge(data.cycle_age_hours)
-                        : '';
-                    if (n === 0) {
-                        statusEl.textContent = 'No genesis predicted in next 15 days'
-                            + (newInit
-                                ? ' · init ' + newInit.slice(0, 8) + ' ' + newInit.slice(8) + 'Z' + ageBit
-                                : '');
-                    } else {
-                        statusEl.textContent = n + ' genesis track'
-                            + (n === 1 ? '' : 's')
-                            + (data.thinned_to ? ' · thinned to ' + data.thinned_to + '/track' : '')
-                            + (newInit ? ' · init ' + newInit.slice(0,8) + ' ' + newInit.slice(8) + 'Z' : '')
-                            + ageBit;
-                    }
-                }
+                // Banner reports the disturbance (cluster) count so it
+                // matches the markers on the map. May start as a client-side
+                // estimate; refined when _loadGenesisClusters() resolves.
+                _updateGenesisBanner();
                 _ga('rt_genesis_loaded', { n_tracks: data && data.n_tracks,
                                             init: newInit,
                                             age_h: data && data.cycle_age_hours,
@@ -15020,8 +15226,8 @@
                 ev.stopPropagation();
                 _GENESIS_GRID_DEG            = 3;
                 _GENESIS_PEAK_MIN_MEMBERS    = 8;
-                _GENESIS_ASSIGN_RADIUS_KM    = 750;
-                _GENESIS_TIME_WINDOW_H       = 48;
+                _GENESIS_ASSIGN_RADIUS_KM    = 1000;
+                _GENESIS_TIME_WINDOW_H       = 60;
                 _GENESIS_CLUSTER_MIN_MEMBERS = 25;
                 _rtGenesisClusters = null;
                 _loadGenesisClusters();

@@ -7586,8 +7586,8 @@ def get_weatherlab_genesis_trend(
     match_radius_km: float = 800.0,
     grid_deg: float = 3.0,
     peak_min_members: int = 8,
-    assign_radius_km: float = 750.0,
-    time_window_h: float = 48.0,
+    assign_radius_km: float = 1000.0,
+    time_window_h: float = 60.0,
     cluster_min_members: int = 25,
 ):
     """Run-to-run trend for ONE disturbance: for each of the last `count`
@@ -7833,8 +7833,8 @@ def _tca_mean_track(member_point_arrays):
 def _tca_compute_clusters(raw_data: dict,
                           grid_deg: float = 3.0,
                           peak_min_members: int = 8,
-                          assign_radius_km: float = 750.0,
-                          time_window_h: float = 48.0,
+                          assign_radius_km: float = 1000.0,
+                          time_window_h: float = 60.0,
                           cluster_min_members: int = 25,
                           ensemble_size: int = 1000) -> list:
     """Run the TC-ATLAS density-peak algorithm on the full uncapped
@@ -8099,8 +8099,8 @@ def _tca_cluster_index_view(c):
 def get_weatherlab_genesis_clusters(
     grid_deg: float = 3.0,
     peak_min_members: int = 8,
-    assign_radius_km: float = 750.0,
-    time_window_h: float = 48.0,
+    assign_radius_km: float = 1000.0,
+    time_window_h: float = 60.0,
     cluster_min_members: int = 25,
 ):
     """Precomputed TC-ATLAS density-peak cluster INDEX — lightweight
@@ -8161,8 +8161,8 @@ def get_weatherlab_genesis_cluster(
     tca_id: str,
     grid_deg: float = 3.0,
     peak_min_members: int = 8,
-    assign_radius_km: float = 750.0,
-    time_window_h: float = 48.0,
+    assign_radius_km: float = 1000.0,
+    time_window_h: float = 60.0,
     cluster_min_members: int = 25,
 ):
     """Full per-member trajectories for one TC-ATLAS cluster (tca-N).
