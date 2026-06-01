@@ -4092,10 +4092,20 @@
 
     // ── GCS direct-bundle URL helpers ────────────────────────────
     // The prewarm loop writes a fresh bundle blob every 5 min to
-    // gs://tc-atlas-ir-cache/rt-v10/bundles/{kind}/{atcf_id}.bin with
+    // gs://tc-atlas-ir-cache/{version}/bundles/{kind}/{atcf_id}.bin with
     // publicRead ACL, so the browser can fetch it directly from
     // Google's storage edge instead of going through Cloud Run.
-    var _GCS_BUNDLE_BASE = 'https://storage.googleapis.com/tc-atlas-ir-cache/rt-v10/bundles';
+    //
+    // The cache VERSION (rt-vN) is bumped server-side on render-format
+    // changes. Because the browser reads bundles straight from GCS, it
+    // can't see the server's version — so a bump used to silently freeze
+    // the loop on the old prefix (whose stale object still returns 200).
+    // We now discover the version at runtime from rt-version.json (written
+    // each prewarm cycle by the backend), falling back to this pinned
+    // default so a failed/blocked fetch still works for the current build.
+    var _GCS_BUCKET_ROOT = 'https://storage.googleapis.com/tc-atlas-ir-cache';
+    var _RT_BUNDLE_VERSION = 'rt-v11';   // fallback; _loadBundleVersion() may update
+    var _GCS_BUNDLE_BASE = _GCS_BUCKET_ROOT + '/' + _RT_BUNDLE_VERSION + '/bundles';
     function _gcsFramesBundleUrl(atcfId) {
         return _GCS_BUNDLE_BASE + '/frames/' + encodeURIComponent(atcfId.toUpperCase()) + '.bin';
     }
@@ -4107,6 +4117,30 @@
     }
     function _gcsRawBundleUrl(atcfId) {
         return _GCS_BUNDLE_BASE + '/raw/' + encodeURIComponent(atcfId.toUpperCase()) + '.bin';
+    }
+
+    /** Discover the live RT cache version from rt-version.json so a
+     *  server-side version bump doesn't strand the browser on a stale
+     *  old-prefix bundle. Best-effort: on any failure we keep the pinned
+     *  _RT_BUNDLE_VERSION fallback. The fetched value is strictly
+     *  validated (^rt-v<digits>$) before use so a corrupted/poisoned file
+     *  can't redirect bundle fetches to an arbitrary path. Host is fixed
+     *  (_GCS_BUCKET_ROOT) — only the version segment is dynamic. Returns a
+     *  promise that always resolves (never rejects) so init() can await it
+     *  without a guard. */
+    function _loadBundleVersion() {
+        var url = _GCS_BUCKET_ROOT + '/rt-version.json';
+        return fetch(url, { cache: 'no-store' })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (j) {
+                var v = j && j.version;
+                if (typeof v === 'string' && /^rt-v\d+$/.test(v)) {
+                    _RT_BUNDLE_VERSION = v;
+                    _GCS_BUNDLE_BASE = _GCS_BUCKET_ROOT + '/' + v + '/bundles';
+                    _GCS_GEOCOLOR_BUNDLE_BASE = _GCS_BUCKET_ROOT + '/' + v + '/bundles/geocolor';
+                }
+            })
+            .catch(function () { /* keep pinned fallback */ });
     }
 
     // Mobile decoded-bitmap cap. Each animation frame is a ~10°-radius
@@ -6417,7 +6451,7 @@
      *  is the fallback for storms whose bundle hasn't been prewarmed
      *  (currently always — GeoColor prewarm is deferred). */
     var _GCS_GEOCOLOR_BUNDLE_BASE =
-        'https://storage.googleapis.com/tc-atlas-ir-cache/rt-v10/bundles/geocolor';
+        _GCS_BUCKET_ROOT + '/' + _RT_BUNDLE_VERSION + '/bundles/geocolor';
 
     function loadGeocolorFrames() {
         if (!detailMap || !currentStormId) return;
@@ -19107,6 +19141,12 @@
     function init() {
         initMap();
         bindEvents();
+
+        // Discover the live RT bundle version (best-effort, non-blocking).
+        // Kicks off immediately so the correct prefix is usually set before
+        // the first storm is opened; bundle fetches use the pinned fallback
+        // if it hasn't resolved yet.
+        _loadBundleVersion();
 
         // Initial poll
         pollActiveStorms();

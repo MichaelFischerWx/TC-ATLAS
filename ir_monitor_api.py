@@ -470,6 +470,28 @@ def _upload_public_bundle(key: str, body: bytes, content_type: str = "applicatio
         print(f"[Bundle Pre-build] upload {key} failed: {ex}")
 
 
+def _gcs_rt_version_put():
+    """Publish the current RT cache version to rt-version.json at the
+    bucket root so the frontend can discover it at runtime and avoid
+    serving a frozen old-version bundle after a server-side version bump
+    (the frontend fetches bundles directly from GCS, so it can't see
+    _GCS_RT_VERSION otherwise). Cheap (~30 bytes), idempotent; called
+    once per prewarm cycle."""
+    bucket = _get_rt_gcs_bucket()
+    if bucket is None:
+        return
+    try:
+        blob = bucket.blob("rt-version.json")
+        blob.cache_control = "public, max-age=120"
+        blob.upload_from_string(
+            json.dumps({"version": _GCS_RT_VERSION}),
+            content_type="application/json",
+            predefined_acl="publicRead", timeout=15,
+        )
+    except Exception as ex:
+        print(f"[Prewarm] rt-version.json upload failed: {ex}")
+
+
 # Anomalous-scan screen. Frames are uniform size/bounds, but a bad scan
 # substitution can slip an offset/wrong image into one slot — it looks
 # distorted in the loop even though geometry is fine. We catch it by
@@ -3040,6 +3062,10 @@ def run_prewarm_cycle():
     """
     global _last_prefetch_time
     t0 = time.time()
+    # Publish the live cache version so the frontend tracks server-side
+    # bumps instead of freezing on a stale old-version bundle. Done every
+    # cycle (even with no storms) so the discovery file always exists.
+    _gcs_rt_version_put()
     storms = _poll_active_storms(spawn_prefetch=False)
     if not storms:
         print("[Prewarm Job] No active storms — nothing to render")
