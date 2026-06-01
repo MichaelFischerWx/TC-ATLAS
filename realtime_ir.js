@@ -7783,6 +7783,19 @@
         var mslp = s.mslp_hpa != null ? (s.mslp_hpa + ' hPa') : '—';
         vitals.textContent = vmax + ' · ' + mslp;
         body.appendChild(vitals);
+        // Invests carry an NHC formation chance (2-day / 7-day), coloured by
+        // the 7-day risk level.
+        if (invest && s.formation && (s.formation.prob2day || s.formation.prob7day)) {
+            var fm = document.createElement('div');
+            fm.className = 'qv-card-formation';
+            fm.textContent = 'Formation ' + (s.formation.prob2day || '—') + ' 2-day · '
+                + (s.formation.prob7day || '—') + ' 7-day';
+            var r7 = String(s.formation.risk7day || '').toLowerCase();
+            fm.style.color = r7 === 'high' ? '#ef4444'
+                : r7 === 'medium' ? '#f59e0b'
+                : 'var(--text-dim)';
+            body.appendChild(fm);
+        }
         var pos = document.createElement('div');
         pos.className = 'qv-card-pos';
         var motion = (s.motion_kt != null && s.motion_deg != null)
