@@ -39,6 +39,7 @@
     var _activeStorms = [];
     var _currentStormId = null;
     var _view = 'gallery';          // 'gallery' (overview) | 'storm' (animation)
+    var _product = 'ir';            // 'ir' | 'visible' | 'geocolor'
     var _lastShearByStorm = {};
     var _activated = false;
     var _pollTimer = null;
@@ -70,12 +71,30 @@
         return API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId)
             + '/ir-frames-bundle?lookback_hours=6&radius_deg=10&interval_min=' + QV_INTERVAL_MIN;
     }
+    // Prewarmed band bundles (Visible = band 2) live here; GeoColor is
+    // rendered on demand (no prewarmed GCS artifact), so it's API-only.
+    var GCS_BAND_BUNDLE_BASE = 'https://storage.googleapis.com/tc-atlas-ir-cache/rt-v10/bundles/band';
+    function _bundleSourcesFor(product, atcfId) {
+        var common = 'lookback_hours=6&radius_deg=10&interval_min=' + QV_INTERVAL_MIN;
+        var base = API_BASE + '/ir-monitor/storm/' + encodeURIComponent(atcfId);
+        if (product === 'visible') {
+            return {
+                gcs: GCS_BAND_BUNDLE_BASE + '/2/' + encodeURIComponent(atcfId.toUpperCase()) + '.bin',
+                api: base + '/band-frames-bundle?band=2&' + common,
+            };
+        }
+        if (product === 'geocolor') {
+            return { gcs: null, api: base + '/geocolor-frames-bundle?' + common };
+        }
+        // IR (default) — same prewarmed bundle the page has always used.
+        return { gcs: _gcsBundleUrl(atcfId), api: _apiBundleUrl(atcfId) };
+    }
 
     // ── DOM refs ─────────────────────────────────────────────
     var elRoot, elSelect, elCatChip, elName, elVitals, elMapDiv, elLoader,
         elEmpty, elError, elPosition, elMotion, elShear, elSat,
         elDetailedBtn, elGallery, elGalleryGrid, elGalleryCount,
-        elGalleryEmpty, elStormView, elBackBtn;
+        elGalleryEmpty, elStormView, elBackBtn, elProductToggle;
     function _captureDom() {
         if (elRoot) return true;
         elRoot = document.getElementById('sat-quick-view');
@@ -86,6 +105,7 @@
         elGalleryEmpty = document.getElementById('qv-gallery-empty');
         elStormView = document.getElementById('qv-storm-view');
         elBackBtn = document.getElementById('qv-back-gallery');
+        elProductToggle = document.getElementById('qv-product-toggle');
         elSelect = document.getElementById('qv-storm-select');
         elCatChip = document.getElementById('qv-cat');
         elName = document.getElementById('qv-name');
@@ -301,6 +321,27 @@
         }
     }
 
+    // ── Imagery product (IR / Visible / GeoColor) ────────────
+    function _syncProductButtons() {
+        if (!elProductToggle) return;
+        var btns = elProductToggle.querySelectorAll('.qv-prod-btn');
+        for (var i = 0; i < btns.length; i++) {
+            var on = btns[i].getAttribute('data-product') === _product;
+            btns[i].classList.toggle('is-active', on);
+            btns[i].setAttribute('aria-pressed', on ? 'true' : 'false');
+        }
+    }
+    function _setProduct(product) {
+        if (!product || product === _product) return;
+        _product = product;
+        _syncProductButtons();
+        // Reload the current storm's imagery in the new product. Product
+        // choice persists across storm switches.
+        if (_view === 'storm' && _currentStormId) {
+            _loadBundleAndAnimate(_currentStormId);
+        }
+    }
+
     // ── Leaflet map setup ────────────────────────────────────
     function _ensureMap() {
         if (_map) return _map;
@@ -433,33 +474,46 @@
     // ── Bundle parsing + map population ──────────────────────
     function _loadBundleAndAnimate(stormId) {
         if (!stormId) return;
+        var product = _product;   // pin: guard against mid-fetch switches
         _hideEmpty();
-        _showLoader('Loading animation…');
+        _showLoader(product === 'geocolor' ? 'Rendering GeoColor… (first load can take ~30 s)'
+            : product === 'visible' ? 'Loading visible…' : 'Loading animation…');
         _disposeFrames();
         _ensureMap();
 
-        var gcs = _gcsBundleUrl(stormId);
-        var api = _apiBundleUrl(stormId);
-
-        fetch(gcs).then(function (r) {
-            if (!r.ok) throw new Error('gcs ' + r.status);
-            return r.arrayBuffer();
-        }).catch(function () {
-            return fetch(api).then(function (r) {
+        var src = _bundleSourcesFor(product, stormId);
+        var fetchApi = function () {
+            return fetch(src.api).then(function (r) {
                 if (!r.ok) throw new Error('api ' + r.status);
                 return r.arrayBuffer();
             });
-        }).then(function (buf) {
-            if (stormId !== _currentStormId) return;
-            _populateMapFromBundle(buf, stormId);
+        };
+        // IR/Visible have prewarmed GCS bundles (try first, no Cloud Run
+        // hop); GeoColor renders on demand so it's API-only.
+        var p = src.gcs
+            ? fetch(src.gcs).then(function (r) {
+                  if (!r.ok) throw new Error('gcs ' + r.status);
+                  return r.arrayBuffer();
+              }).catch(fetchApi)
+            : fetchApi();
+
+        p.then(function (buf) {
+            if (stormId !== _currentStormId || product !== _product) return;
+            _populateMapFromBundle(buf, stormId, product);
         }).catch(function (err) {
-            if (stormId !== _currentStormId) return;
+            if (stormId !== _currentStormId || product !== _product) return;
             console.warn('[QuickView] bundle fetch failed:', err && err.message);
-            _showError('Animation not yet available for this storm. The prewarm cycle builds new artifacts every ~5 minutes.');
+            if (product === 'visible') {
+                _showError('Visible imagery isn’t available right now (it may be nighttime over the storm). Try GeoColor or IR.');
+            } else if (product === 'geocolor') {
+                _showError('GeoColor is still rendering for this storm — it builds on demand. Try again in a moment, or switch to IR.');
+            } else {
+                _showError('Animation not yet available for this storm. The prewarm cycle builds new artifacts every ~5 minutes.');
+            }
         });
     }
 
-    function _populateMapFromBundle(arrayBuffer, stormId) {
+    function _populateMapFromBundle(arrayBuffer, stormId, product) {
         if (!_map) return;
         try {
             var dv = new DataView(arrayBuffer);
@@ -497,7 +551,11 @@
                 }
             }
             if (validFrameHdrs.length === 0) {
-                _showError('No frames available for this storm yet.');
+                if (product === 'visible') {
+                    _showError('No daytime visible frames — this storm is in darkness right now. Try GeoColor (auto day/night) or IR.');
+                } else {
+                    _showError('No frames available for this storm yet.');
+                }
                 return;
             }
             var latestHdr = validFrameHdrs[validFrameHdrs.length - 1];
@@ -707,6 +765,14 @@
             }
             if (elBackBtn) {
                 elBackBtn.addEventListener('click', function () { _showGallery(); });
+            }
+            if (elProductToggle) {
+                _syncProductButtons();
+                elProductToggle.addEventListener('click', function (e) {
+                    var btn = e.target && e.target.closest
+                        ? e.target.closest('.qv-prod-btn') : null;
+                    if (btn) _setProduct(btn.getAttribute('data-product'));
+                });
             }
             if (elDetailedBtn) {
                 elDetailedBtn.addEventListener('click', _gotoDetailed);

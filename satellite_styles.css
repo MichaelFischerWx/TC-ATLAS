@@ -1140,6 +1140,35 @@
 }
 .qv-back-btn:hover { background: #222736; color: #f1f5f9; }
 
+/* Imagery product segmented toggle (IR / Visible / GeoColor) */
+.qv-product-toggle {
+    display: inline-flex;
+    flex: 0 0 auto;
+    border: 1px solid #2a2d38;
+    border-radius: 5px;
+    overflow: hidden;
+    background: #1a1e2a;
+}
+.qv-prod-btn {
+    background: transparent;
+    color: #94a3b8;
+    border: none;
+    border-left: 1px solid #2a2d38;
+    padding: 6px 11px;
+    font-size: 12px;
+    font-weight: 500;
+    font-family: inherit;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.qv-prod-btn:first-child { border-left: none; }
+.qv-prod-btn:hover { color: #e2e8f0; background: #222736; }
+.qv-prod-btn.is-active {
+    background: #2e7dff;
+    color: #fff;
+}
+.qv-prod-btn:disabled { opacity: 0.45; cursor: default; }
+
 @media (max-width: 640px) {
     /* Mobile: stack bar items, shrink chip sizes. The animation
        still gets the central space.  */
@@ -1155,6 +1184,7 @@
     .qv-gallery-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
     .qv-gallery-title { font-size: 17px; }
     .qv-card-name { font-size: 15px; }
+    .qv-prod-btn { padding: 6px 9px; font-size: 11px; }
 }
 
 /* ── Hover Tooltip ──────────────────────────────────────────── */
