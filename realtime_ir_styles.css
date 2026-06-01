@@ -1429,6 +1429,11 @@ html, body { margin: 0; padding: 0; }
     position: fixed;
     top: 208px;  /* below the Basins toggle (170-198) which itself sits below Leaflet zoom (95-155) */
     left: 10px;
+    /* Uniform width + left-aligned text so Basins/Legend/Labels/Grid/Obs
+       form a clean aligned column instead of ragged content-width pills. */
+    width: 104px;
+    box-sizing: border-box;
+    text-align: left;
     z-index: 600;
     background: rgba(255, 255, 255, 0.88);
     color: #8993a4;
@@ -1589,6 +1594,10 @@ html, body { margin: 0; padding: 0; }
     position: fixed;
     top: 170px;  /* sits below the Leaflet zoom controls (~95-155 px) so it doesn't cover them */
     left: 10px;
+    /* Match the Legend/Labels/Grid/Obs pills for a clean aligned column. */
+    width: 104px;
+    box-sizing: border-box;
+    text-align: left;
     z-index: 600;
     background: rgba(255, 255, 255, 0.88);
     color: #8993a4;
@@ -3352,7 +3361,13 @@ body:has(#ir-detail[style*="block"]) #ir-genesis-cycle-bar {
     white-space: nowrap;
 }
 @media (max-width: 768px) {
-    .ir-genesis-cycle-bar { bottom: 64px; }
+    /* The bottom-left stack (status bar 28px → IR scrubber → Tb colorbar)
+       reaches ~128px up and the scrubber spans ~90vw, so the centered cycle
+       bar can only clear it vertically — sit it just above the stack. */
+    .ir-genesis-cycle-bar {
+        bottom: 138px;
+        max-width: calc(100vw - 16px);
+    }
     .ir-gen-cyc-label { min-width: 150px; }
 }
 
