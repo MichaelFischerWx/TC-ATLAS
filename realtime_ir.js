@@ -13066,6 +13066,10 @@
         intensity: {
             subSuffix: ' · Intensity summary',
             usesMap: false,
+            // Composite the same orthographic locator globe the overall
+            // summary's track map carries, onto the top (intensity) panel —
+            // so the intensity figure is geographically self-contained.
+            globeInset: true,
             panels: [
                 { el: 'rt-genesis-modal-int',    h: 640 },
                 { el: 'rt-genesis-modal-lmi',    h: 560, optional: true },
@@ -13147,6 +13151,51 @@
         });
     }
 
+    // Render the orthographic locator globe as a standalone square PNG, so
+    // it can be composited onto a non-map panel (the intensity summary's top
+    // panel). Reuses the LIVE track map's geo2 config + rotation center, so
+    // the globe is byte-for-byte the same projection/center as the one in the
+    // overall summary — no recomputation, guaranteed consistency. Resolves to
+    // an HTMLImageElement, or null if the map isn't available (graceful skip).
+    function _genesisRenderGlobeInset(px) {
+        return new Promise(function (resolve) {
+            try {
+                if (typeof Plotly === 'undefined') return resolve(null);
+                var mapEl = document.getElementById('rt-genesis-modal-map');
+                if (!mapEl || !mapEl.layout || !mapEl.layout.geo2) return resolve(null);
+                var geo2 = _jsonClone(mapEl.layout.geo2);
+                geo2.domain = { x: [0, 1], y: [0, 1] };   // fill the square
+                var rot = (geo2.projection && geo2.projection.rotation) || {};
+                var marker = {
+                    type: 'scattergeo', geo: 'geo', mode: 'markers',
+                    lon: [rot.lon != null ? rot.lon : 0],
+                    lat: [rot.lat != null ? rot.lat : 0],
+                    marker: { size: 9, color: '#ef4444', symbol: 'circle',
+                              line: { color: '#ffffff', width: 1.5 } },
+                    hoverinfo: 'skip', showlegend: false,
+                };
+                var fig = {
+                    data: [marker],
+                    layout: {
+                        geo: geo2,
+                        margin: { l: 0, r: 0, t: 0, b: 0 },
+                        paper_bgcolor: 'rgba(0,0,0,0)',
+                        plot_bgcolor: 'rgba(0,0,0,0)',
+                        showlegend: false,
+                    },
+                };
+                Plotly.toImage(fig, { format: 'png', width: px, height: px })
+                    .then(function (u) {
+                        var im = new Image();
+                        im.onload = function () { resolve(im); };
+                        im.onerror = function () { resolve(null); };
+                        im.src = u;
+                    })
+                    .catch(function () { resolve(null); });
+            } catch (e) { resolve(null); }
+        });
+    }
+
     // Generic stitcher: header strip + each available panel + footer onto
     // one canvas, then hand the PNG blob to `onBlob(blob, filename)`.
     // `onError` (optional) fires if anything throws/aborts so the caller
@@ -13224,16 +13273,26 @@
                                   { format: 'png', width: W, height: p.h });
         });
 
-        Promise.all(tasks).then(function (urls) {
-            return Promise.all(urls.map(function (u) {
-                return new Promise(function (res, rej) {
-                    var im = new Image();
-                    im.onload = function () { res(im); };
-                    im.onerror = rej;
-                    im.src = u;
-                });
-            }));
-        }).then(function (imgs) {
+        // Optional locator globe (intensity summary) — rendered in parallel
+        // with the panels; resolves to null and is skipped if unavailable.
+        var globeProm = spec.globeInset
+            ? _genesisRenderGlobeInset(420) : Promise.resolve(null);
+
+        Promise.all([
+            Promise.all(tasks).then(function (urls) {
+                return Promise.all(urls.map(function (u) {
+                    return new Promise(function (res, rej) {
+                        var im = new Image();
+                        im.onload = function () { res(im); };
+                        im.onerror = rej;
+                        im.src = u;
+                    });
+                }));
+            }),
+            globeProm,
+        ]).then(function (results) {
+            var imgs = results[0];
+            var globeImg = results[1];
             var canvas = document.createElement('canvas');
             canvas.width = W;
             canvas.height = totalH;
@@ -13253,6 +13312,18 @@
             for (var k = 0; k < imgs.length; k++) {
                 ctx.drawImage(imgs[k], 0, y);
                 y += panels[k].h + GAP;
+            }
+
+            // Overlay the locator globe in the top-right interior of the top
+            // panel. The Saffir-Simpson category labels (TS/C1…C5) hug the
+            // LEFT edge, so the right side stays clear; the only thing up
+            // there is the thin top of the max-Vmax envelope. The disc is
+            // opaque so it reads cleanly over the gridlines behind it.
+            if (globeImg && panels.length) {
+                var gSize = Math.round(panels[0].h * 0.30);
+                var gx = W - gSize - Math.round(W * 0.02);
+                var gy = HEAD + Math.round(panels[0].h * 0.045);
+                ctx.drawImage(globeImg, gx, gy, gSize, gSize);
             }
 
             ctx.fillStyle = dim;
