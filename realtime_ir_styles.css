@@ -1476,7 +1476,11 @@ html, body { margin: 0; padding: 0; }
     backdrop-filter: blur(6px);
     -webkit-backdrop-filter: blur(6px);
     box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
-    margin-bottom: 36px;
+    /* Clear the 28px fixed status bar with a comfortable gap. !important
+       because Leaflet's `.leaflet-bottom .leaflet-control` margin rule has
+       higher specificity and otherwise pins the dock ~1px above the bar
+       (so it reads as covered). */
+    margin-bottom: 44px !important;
     min-width: 360px;
     max-width: min(90vw, 540px);
 }
