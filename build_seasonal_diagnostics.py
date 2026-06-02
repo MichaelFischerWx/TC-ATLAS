@@ -485,6 +485,7 @@ def refresh_monthly_preliminary(climo_mean: xr.DataArray) -> None:
     """
     import pandas as pd
     from build_oisst_history import (_fetch_current_month_preliminary,
+                                     _fetch_completed_month_from_daily,
                                      REGIONS,
                                      CLIMO_START_YEAR, CLIMO_END_YEAR)
 
@@ -497,6 +498,44 @@ def refresh_monthly_preliminary(climo_mean: xr.DataArray) -> None:
 
     today = datetime.now(timezone.utc).date()
     cur_month = f"{today.year}-{today.month:02d}"
+
+    # Backward-compat: parquets written before the daily-derived gap-fill
+    # landed don't carry this column.
+    if "daily_derived" not in df.columns:
+        df["daily_derived"] = False
+    df["daily_derived"] = df["daily_derived"].fillna(False).astype(bool)
+
+    # Fill / finalize completed-but-unpublished months from the daily
+    # archive (NOAA's monthly OISST lags ~2 weeks). Each night this covers:
+    #   * a new gap month the monthly file doesn't have yet, and
+    #   * last month's leftover preliminary row, now that the month is
+    #     complete — upgraded to a finalized-quality daily-derived row.
+    # True NOAA-finalized rows (preliminary=False, daily_derived=False) are
+    # never touched; the next full backfill replaces daily-derived rows with
+    # official ones once NOAA publishes them.
+    official = df[(~df["preliminary"]) & (~df["daily_derived"])]["date"]
+    if len(official):
+        cur_p = pd.Period(cur_month, freq="M")
+        p = pd.Period(official.max(), freq="M") + 1
+        while p < cur_p:
+            key = f"{p.year}-{p.month:02d}"
+            existing = df[df["date"] == key]
+            if existing.empty or bool(existing["preliminary"].iloc[0]):
+                filled = _fetch_completed_month_from_daily(
+                    climo_mean, p.year, p.month)
+                if filled:
+                    df = df[df["date"] != key]
+                    frow = pd.DataFrame([filled])
+                    for col in df.columns:
+                        if col not in frow.columns:
+                            frow[col] = pd.NA
+                    frow = frow[df.columns]
+                    df = pd.concat([df, frow], ignore_index=True)
+                    df = df.sort_values("date").reset_index(drop=True)
+                    log.info("  filled daily-derived month %s (n=%d days)",
+                             key, int(filled["n_days"]))
+            p += 1
+
     log.info("  fetching preliminary month-to-date for %s ...", cur_month)
     prelim = _fetch_current_month_preliminary(climo_mean)
     if prelim is None:
@@ -514,12 +553,16 @@ def refresh_monthly_preliminary(climo_mean: xr.DataArray) -> None:
     df = pd.concat([df, new_row], ignore_index=True)
     df = df.sort_values("date").reset_index(drop=True)
 
+    # The current-month prelim row was aligned with missing cols → NA above.
+    df["daily_derived"] = df["daily_derived"].fillna(False).astype(bool)
+
     df.to_parquet(local, compression="snappy", index=False)
     _upload_blob(local, name, "application/octet-stream")
 
     # JSON sidecar in the same shape build_indices writes.
     value_cols = [c for c in df.columns
-                  if c not in ("date", "preliminary", "n_days", "as_of")]
+                  if c not in ("date", "preliminary", "daily_derived",
+                               "n_days", "as_of")]
 
     def _to_jsonable(s):
         return [None if pd.isna(v) else round(float(v), 3) for v in s]
@@ -529,6 +572,7 @@ def refresh_monthly_preliminary(climo_mean: xr.DataArray) -> None:
         "dates": df["date"].tolist(),
         "values": {col: _to_jsonable(df[col]) for col in value_cols},
         "preliminary": df["preliminary"].astype(bool).tolist(),
+        "daily_derived": df["daily_derived"].astype(bool).tolist(),
         "preliminary_n_days": df["n_days"].astype(int).tolist(),
         "climatology_period": f"{CLIMO_START_YEAR}-{CLIMO_END_YEAR}",
         "generated_utc": datetime.now(timezone.utc).isoformat(),

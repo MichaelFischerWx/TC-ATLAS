@@ -699,6 +699,119 @@ def _fetch_current_month_preliminary(climo_mean: xr.DataArray) -> dict | None:
     return row
 
 
+def _open_daily_year(year: int):
+    """Open the OISST v2.1 daily file for `year`. Prefers the local cache
+    (fast — used by the backfill on the dev box); falls back to PSL daily
+    OPeNDAP (used by the Cloud Run cron, which has no local cache).
+    Returns an xr.Dataset (caller must close) or None on failure."""
+    local = OISST_LOCAL_CACHE / f"sst.day.mean.{year}.nc"
+    if local.exists():
+        try:
+            return xr.open_dataset(local)
+        except Exception as e:
+            log.warning("  daily cache open failed for %d (%s); trying OPeNDAP",
+                        year, e)
+    url = ("https://psl.noaa.gov/thredds/dodsC/Datasets/noaa.oisst.v2.highres/"
+           f"sst.day.mean.{year}.nc")
+    try:
+        return xr.open_dataset(url)
+    except Exception as e:
+        log.warning("  daily open failed for %d: %s", year, e)
+        return None
+
+
+def _fetch_completed_month_from_daily(clim_mean: xr.DataArray,
+                                      year: int, month: int) -> dict | None:
+    """Build a finalized-quality monthly index row for a COMPLETE calendar
+    month from the daily OISST archive.
+
+    NOAA's monthly OISST mean lags the daily product by ~2 weeks, so early
+    each month the just-finished month is absent from the monthly file even
+    though every one of its days exists in the daily archive. Without this,
+    a full backfill would punch a one-month hole in the monthly indices
+    (Panels D/F/G), and any month the daily cron had been maintaining as a
+    preliminary row would be lost on the next backfill.
+
+    The row is computed against the SAME monthly climatology the finalized
+    rows use, so a daily-derived month sits naturally among the
+    NOAA-finalized months (sub-0.01 °C difference vs the eventual official
+    monthly mean, which is itself a mean of these daily fields). Flagged
+    `preliminary=False, daily_derived=True`; projected/detrended columns are
+    left for the caller (NaN / trend loop). Returns None if the month is not
+    yet fully present in the daily archive."""
+    import calendar
+    ndays_expected = calendar.monthrange(year, month)[1]
+    ds = _open_daily_year(year)
+    if ds is None:
+        return None
+    try:
+        sub = ds.sel(lat=slice(LAT_MIN, LAT_MAX), lon=slice(LON_MIN, LON_MAX))
+        all_times = sub["time"].values
+        day_idx = [i for i, t in enumerate(all_times)
+                   if str(t)[:7] == f"{year}-{month:02d}"]
+        if len(day_idx) < ndays_expected:
+            log.info("  %d-%02d not yet complete in daily archive (%d/%d days);"
+                     " skipping daily-derived fill",
+                     year, month, len(day_idx), ndays_expected)
+            return None
+        lat_vals = sub["lat"].values.copy()
+        lon_vals = sub["lon"].values.copy()
+        shape = (len(lat_vals), len(lon_vals))
+        accum = np.zeros(shape, dtype=np.float64)
+        accum_n = np.zeros(shape, dtype=np.int32)
+        for k in day_idx:
+            v = np.ascontiguousarray(sub["sst"].isel(time=k).load().values)
+            v[np.abs(v) > 50.0] = np.nan
+            mask = np.isfinite(v)
+            accum[mask] += v[mask]
+            accum_n[mask] += 1
+    finally:
+        ds.close()
+
+    if accum_n.max() == 0:
+        return None
+    with np.errstate(invalid="ignore", divide="ignore"):
+        month_sst = np.where(accum_n > 0, accum / accum_n, np.nan)
+
+    month_sst_da = xr.DataArray(
+        month_sst.astype(np.float32), dims=("lat", "lon"),
+        coords={"lat": lat_vals, "lon": lon_vals}, name="sst")
+    # Anomaly against the monthly climatology — identical to the finalized
+    # path (`anom = sst - clim_mean.sel(month)`), so values are comparable.
+    anom_grid = month_sst - clim_mean.sel(month=month).values
+    anom_da = xr.DataArray(
+        anom_grid.astype(np.float32), dims=("lat", "lon"),
+        coords={"lat": lat_vals, "lon": lon_vals}, name="sst")
+    # Tropical-mean SST for the Vecchi-Soden relative framework (area-weighted
+    # 30°S-30°N mean of this month's grid) — mirrors _tropical_mean_sst.
+    tsub = month_sst_da.sel(lat=slice(TROPICAL_MEAN_LAT_MIN, TROPICAL_MEAN_LAT_MAX))
+    tw = np.cos(np.deg2rad(tsub.lat.values))[:, None]
+    tfinite = np.isfinite(tsub.values)
+    tw2 = np.where(tfinite, tw * np.ones_like(tsub.values), 0.0)
+    tden = tw2.sum()
+    trop_mean = (float((np.where(tfinite, tsub.values, 0.0) * tw2).sum() / tden)
+                 if tden > 0 else float("nan"))
+
+    today = datetime.now(timezone.utc).date()
+    row = {"date": f"{year}-{month:02d}", "preliminary": False,
+           "daily_derived": True, "n_days": int(len(day_idx)),
+           "as_of": today.isoformat()}
+    for name, box in REGIONS.items():
+        region_sst = float(_region_mean(month_sst_da, box).values)
+        region_anom = float(_region_mean(anom_da, box).values)
+        row[f"{name}_sst"]     = round(region_sst, 4)
+        row[f"{name}_anom"]    = round(region_anom, 4)
+        row[f"{name}_sst_rel"] = round(region_sst - trop_mean, 4)
+    log.info("  daily-derived monthly fill %d-%02d (%d days): "
+             "MDR sst=%.2f anom=%+.2f, AMO sst=%.2f anom=%+.2f, "
+             "Niño3.4 sst=%.2f anom=%+.2f",
+             year, month, row["n_days"],
+             row["atl_mdr_sst"], row["atl_mdr_anom"],
+             row["atl_amo_sst"], row["atl_amo_anom"],
+             row["nino34_sst"], row["nino34_anom"])
+    return row
+
+
 def build_indices(climo_path: Path, out_path: Path,
                   year_start: int = INDICES_START_YEAR,
                   year_end: int | None = None,
@@ -760,6 +873,10 @@ def build_indices(climo_path: Path, out_path: Path,
     import pandas as pd
     df = pd.DataFrame(rows).sort_values("date").reset_index(drop=True)
     df["preliminary"] = False
+    # daily_derived: a completed month synthesized from the daily archive
+    # because NOAA hasn't published its monthly mean yet (see the gap-fill
+    # block below). False for true NOAA-finalized rows.
+    df["daily_derived"] = False
     df["n_days"] = 0  # placeholder for finalized rows
     df["as_of"] = ""
     # Two-marker fields for the current-year preliminary point. Filled
@@ -770,6 +887,31 @@ def build_indices(climo_path: Path, out_path: Path,
         df[f"{name}_anom_projected"] = np.nan
     log.info("  built finalized indices table: %d rows × %d cols",
              len(df), len(df.columns))
+
+    # Fill completed-but-unpublished months from the daily archive. NOAA's
+    # monthly OISST lags the daily product by ~2 weeks, so early each month
+    # the just-finished month(s) sit in a dead zone: complete in the daily
+    # archive but absent from the monthly file. Synthesizing finalized-
+    # quality rows here keeps Panels D/F/G whole (and stops a full backfill
+    # from dropping the month the daily cron had been maintaining). Done
+    # BEFORE the preliminary append + detrend so these complete months feed
+    # the per-(region, month) trend fit like any finalized row.
+    if with_preliminary:
+        today = datetime.now(timezone.utc).date()
+        have_dates = set(df["date"])
+        last_file = pd.Period(max(df["date"]), freq="M")
+        cur_period = pd.Period(f"{today.year}-{today.month:02d}", freq="M")
+        gap = last_file + 1
+        while gap < cur_period:
+            key = f"{gap.year}-{gap.month:02d}"
+            if key not in have_dates:
+                filled = _fetch_completed_month_from_daily(
+                    clim_mean, gap.year, gap.month)
+                if filled:
+                    df = pd.concat([df, pd.DataFrame([filled])],
+                                   ignore_index=True)
+                    df = df.sort_values("date").reset_index(drop=True)
+            gap += 1
 
     # Preliminary current-month row (if not already covered by the
     # monthly file and the daily fetch succeeds). Append BEFORE
@@ -826,13 +968,16 @@ def build_indices(climo_path: Path, out_path: Path,
                     proj_vs - (slope * full_ys + intercept), 4
                 )
     df = df.drop(columns=["_year", "_month"])
+    # The preliminary row (appended without the column) lands as NaN here.
+    df["daily_derived"] = df["daily_derived"].fillna(False).astype(bool)
 
     # Frontend-friendly JSON sidecar — keeps the per-column lists plus
     # a top-level `preliminary` boolean list aligned with `dates` so the
     # scatter renderer can pick out partial-month points.
     json_path = out_path.with_suffix(".json")
     value_cols = [c for c in df.columns
-                  if c not in ("date", "preliminary", "n_days", "as_of")]
+                  if c not in ("date", "preliminary", "daily_derived",
+                               "n_days", "as_of")]
 
     def _nan_to_none(s):
         """Convert pandas series → JSON-safe list with None for NaN."""
@@ -843,6 +988,9 @@ def build_indices(climo_path: Path, out_path: Path,
         "dates": df["date"].tolist(),
         "values": {col: _nan_to_none(df[col]) for col in value_cols},
         "preliminary": df["preliminary"].astype(bool).tolist(),
+        # Completed months synthesized from daily OISST (NOAA monthly not yet
+        # published). Finalized-quality; frontend may flag them distinctly.
+        "daily_derived": df["daily_derived"].astype(bool).tolist(),
         "preliminary_n_days": df["n_days"].astype(int).tolist(),
         "climatology_period": f"{CLIMO_START_YEAR}-{CLIMO_END_YEAR}",
         "generated_utc": datetime.now(timezone.utc).isoformat(),
