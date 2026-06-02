@@ -18940,51 +18940,84 @@
                     paintMw(storm.lat, storm.lon);  // best-effort fallback
                     return;
                 }
-                // Closest frame by datetime_utc.
-                var best = null, bestDist = Infinity;
+                // Frames sorted by temporal distance to the MW pass. We walk
+                // them nearest-first so a frame with no imagery yet doesn't
+                // hard-fail the panel: ir-frame.jpg 502s "No IR data" for the
+                // newest slot (too recent to have published) and during a
+                // transient upstream GOES/Himawari gap. The meta already lists
+                // every frame in the window, so the fallback costs no extra
+                // metadata fetch — just step to the next-closest frame.
+                var candidates = [];
                 for (var i = 0; i < meta.frames.length; i++) {
                     var t = Date.parse(meta.frames[i].datetime_utc);
-                    if (!isFinite(t)) continue;
-                    var d = Math.abs(t - mwMs);
-                    if (d < bestDist) { bestDist = d; best = meta.frames[i]; }
+                    if (isFinite(t)) {
+                        candidates.push({ f: meta.frames[i],
+                                          dist: Math.abs(t - mwMs) });
+                    }
                 }
-                if (!best) {
+                candidates.sort(function (a, b) { return a.dist - b.dist; });
+                if (!candidates.length) {
                     _rtMwCompareLoading('ir', false);
                     if (irStatus) irStatus.textContent = 'no matchable IR frame';
                     paintMw(storm.lat, storm.lon);
                     return;
                 }
-                // Common center = this IR frame's true cutout center.
+
+                // Anchor the MW panel on the CLOSEST frame's center and paint
+                // it immediately, so the reliable MW side never waits on IR
+                // data availability. If IR falls back to a neighbor, the
+                // centers differ by one 10-min step (≪0.1° of storm motion) —
+                // visually identical at this zoom — so MW isn't repainted.
+                var closest = candidates[0].f;
                 var cLat = storm.lat, cLon = storm.lon;
-                if (best.center && best.center.length === 2) {
-                    cLat = best.center[0]; cLon = best.center[1];
+                if (closest.center && closest.center.length === 2) {
+                    cLat = closest.center[0]; cLon = closest.center[1];
                 }
-                var deltaMin = (Date.parse(best.datetime_utc) - mwMs) / 60000;
-                if (irTimeEl) {
-                    irTimeEl.textContent = best.datetime_utc.replace('T', ' ').slice(0, 16) + 'Z'
-                        + ' (' + (deltaMin >= 0 ? '+' : '') + Math.round(deltaMin)
-                        + ' min vs MW)';
-                }
-                if (irStatus) irStatus.textContent = 'loading IR frame…';
-                // Paint MW on the SAME center so the two panels' swath/
-                // imagery and graticules co-register. best.index also picks
-                // the matching Vis/SWIR backdrop frame.
-                paintMw(cLat, cLon, best.index);
-                // Draw IR centered on cLat/cLon (its cutout center), with a
-                // matching graticule.
-                if (irCanvas) {
-                    _rtDrawIrCompareFrame(irCanvas, storm, best.index,
-                                          cLat, cLon, function (err) {
+                paintMw(cLat, cLon, closest.index);
+
+                if (!irCanvas) { _rtMwCompareLoading('ir', false); return; }
+
+                // Walk candidates nearest-first until one renders. Cap the
+                // walk so a wide data gap can't fan out into dozens of
+                // requests; each frame keeps its own short transient retry
+                // inside _rtDrawIrCompareFrame.
+                var _IR_MAX_CANDIDATES = Math.min(candidates.length, 4);
+                function _tryIrCandidate(ci) {
+                    if (ci >= _IR_MAX_CANDIDATES) {
                         _rtMwCompareLoading('ir', false);
-                        if (irStatus) {
-                            irStatus.textContent = err
-                                ? 'IR frame unavailable for this pass — reopen to retry'
-                                : '';
-                        }
+                        if (irStatus) irStatus.textContent =
+                            'IR frame unavailable for this pass — reopen to retry';
+                        if (irTimeEl) irTimeEl.textContent = '—';
+                        return;
+                    }
+                    var cand = candidates[ci].f;
+                    var dMin = (Date.parse(cand.datetime_utc) - mwMs) / 60000;
+                    if (irTimeEl) {
+                        irTimeEl.textContent =
+                            cand.datetime_utc.replace('T', ' ').slice(0, 16) + 'Z'
+                            + ' (' + (dMin >= 0 ? '+' : '') + Math.round(dMin)
+                            + ' min vs MW)';
+                    }
+                    if (irStatus) {
+                        irStatus.textContent = (ci === 0)
+                            ? 'loading IR frame…'
+                            : 'closest IR frame had no data — trying nearby…';
+                    }
+                    // IR cutout is centered server-side on THIS frame's interp
+                    // position, so un-warp + graticule must use its own center.
+                    var ccLat = cLat, ccLon = cLon;
+                    if (cand.center && cand.center.length === 2) {
+                        ccLat = cand.center[0]; ccLon = cand.center[1];
+                    }
+                    _rtDrawIrCompareFrame(irCanvas, storm, cand.index,
+                                          ccLat, ccLon, function (err) {
+                        if (err) { _tryIrCandidate(ci + 1); return; }
+                        _rtMwCompareLoading('ir', false);
+                        if (irStatus) irStatus.textContent =
+                            (ci === 0) ? '' : 'nearest available IR frame';
                     });
-                } else {
-                    _rtMwCompareLoading('ir', false);
                 }
+                _tryIrCandidate(0);
             })
             .catch(function (err) {
                 _rtMwCompareLoading('ir', false);
@@ -19099,35 +19132,26 @@
                 _IR_CBAR, ['+35', '-30', '-85'], 'IR Tb (°C)');
             if (done) done(null);
         };
-        // Old frames (outside the 6 h prewarm window) are rendered on
-        // demand from S3 — slow (~10 s) and occasionally transient-fail
-        // (cold start / S3 hiccup / brief publish lag). A SUCCESSFUL cold
-        // render returns 200 (the <img> just loads slowly, no error), so a
-        // retry only matters when the request actually errors — typically a
-        // 502 while the granule/render isn't ready yet. Retries are
-        // SEQUENTIAL (each fires only after the prior onerror), so they
-        // never stack concurrent renders. Budget ~18 s across 4 attempts to
-        // ride out transients and give a just-published granule — or the
-        // next prewarm cycle, incl. the MW-pass-matched preslots — time to
-        // land. A cache-buster on retries skips any stale browser/CDN miss;
-        // the server still serves the now-warmed GCS cache (it keys on
-        // atcf/time/interp-position, not the _r param).
+        // A frame's ir-frame.jpg can transient-fail (cold start / S3 hiccup)
+        // even when imagery exists. A SUCCESSFUL cold render returns 200 (the
+        // <img> just loads slowly, no error), so a retry only matters on a
+        // real error. ONE quick sequential retry absorbs a transient blip; if
+        // the frame still fails the CALLER (_rtRenderMwCompare) walks to the
+        // next-nearest frame, which is what handles the common "No IR data"
+        // 502 (slot too new / upstream gap). So per-frame retries are kept
+        // deliberately short — we'd rather show a neighbor frame fast than
+        // stall on one that has no data. The cache-buster on retry skips a
+        // stale browser/CDN miss; the server still serves the warmed GCS
+        // cache (keyed on atcf/time/interp-position, not the _r param).
         var _irAttempt = 0;
-        var _IR_MAX_ATTEMPTS = 4;
-        var _IR_BACKOFFS_MS = [3000, 6000, 9000];  // gaps between attempts
-        var _irStatusEl = document.getElementById('rt-mw-compare-ir-status');
+        var _IR_MAX_ATTEMPTS = 2;
         function _loadIrFrame() {
             _irAttempt++;
-            if (_irStatusEl && _irAttempt > 1) {
-                _irStatusEl.textContent = 'rendering IR… (' + _irAttempt
-                    + '/' + _IR_MAX_ATTEMPTS + ')';
-            }
             img.src = (_irAttempt === 1) ? url : (url + '&_r=' + Date.now());
         }
         img.onerror = function () {
             if (_irAttempt < _IR_MAX_ATTEMPTS) {
-                setTimeout(_loadIrFrame,
-                           _IR_BACKOFFS_MS[_irAttempt - 1] || 9000);
+                setTimeout(_loadIrFrame, 2500);
                 return;
             }
             if (done) done(new Error('IR jpg load failed'));

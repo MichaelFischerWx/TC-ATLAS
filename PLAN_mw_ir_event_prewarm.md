@@ -23,9 +23,37 @@ absence:
   cycle**. A freshly-detected invest may not have completed *any* cycle yet.
 - A user who opens the modal inside that window hits the cold path.
 
-**Fix A (shipped)** extended the client retry budget (~18 s / 4 sequential
-attempts) so transient errors self-heal and the failure message is honest.
-Fix B closes the underlying latency so even the first viewer is fast.
+### Log finding (2026-06-02, EP902026)
+
+Cloud Run logs confirmed the failure and refined the cause. The 14:01–14:02Z
+502 burst was the compare modal (`frame_index=119&lookback_hours=24&radius_deg=10&interval_min=10`,
+with `&_r=` client retries), coinciding with an autoscaling cold start.
+Probing the live endpoint:
+
+| frame | result |
+|---|---|
+| 143 (newest slot) | **502 `No IR data for frame 143`** in **0.34 s** |
+| 130 / 113 / 100 | 200 in 0.17–0.71 s |
+
+So the dominant failure is a **genuine data-availability gap returned *fast***
+(not a slow render/timeout): either the newest slot is too recent to have
+published, or a transient upstream GOES/Himawari gap (the screenshot's frame
+returns 200 now — it backfilled). Retrying the *same* frame can't fix a
+no-data slot.
+
+### Shipped client fixes
+
+- **Per-frame transient retry** — one quick sequential retry (~2.5 s) in
+  `_rtDrawIrCompareFrame` absorbs a cold-start/S3 blip; deliberately short.
+- **Nearest-available-frame fallback** (the real win) — `_rtRenderMwCompare`
+  now walks frames nearest-first (up to 4) and shows the closest one that
+  actually has imagery, labeling its true offset (e.g. "+8 min vs MW")
+  instead of hard-failing on a no-data slot. MW anchors on the closest
+  frame's center and paints immediately (neighbor center drift is ≪0.1°).
+
+These make the modal robust to the *no-data* case. Fix B (below) still has
+value: it shrinks the cold-render latency so the **closest** frame — not a
+neighbor — is the one that's warm and instant.
 
 ## Goal
 
