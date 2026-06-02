@@ -18978,7 +18978,7 @@
                         _rtMwCompareLoading('ir', false);
                         if (irStatus) {
                             irStatus.textContent = err
-                                ? 'IR frame load failed'
+                                ? 'IR frame unavailable for this pass — reopen to retry'
                                 : '';
                         }
                     });
@@ -19101,18 +19101,33 @@
         };
         // Old frames (outside the 6 h prewarm window) are rendered on
         // demand from S3 — slow (~10 s) and occasionally transient-fail
-        // (cold start / S3 hiccup). Retry with backoff before giving up;
-        // the server-side render cache usually warms between attempts. A
-        // cache-buster on retries skips any stale browser/CDN miss.
+        // (cold start / S3 hiccup / brief publish lag). A SUCCESSFUL cold
+        // render returns 200 (the <img> just loads slowly, no error), so a
+        // retry only matters when the request actually errors — typically a
+        // 502 while the granule/render isn't ready yet. Retries are
+        // SEQUENTIAL (each fires only after the prior onerror), so they
+        // never stack concurrent renders. Budget ~18 s across 4 attempts to
+        // ride out transients and give a just-published granule — or the
+        // next prewarm cycle, incl. the MW-pass-matched preslots — time to
+        // land. A cache-buster on retries skips any stale browser/CDN miss;
+        // the server still serves the now-warmed GCS cache (it keys on
+        // atcf/time/interp-position, not the _r param).
         var _irAttempt = 0;
-        var _IR_MAX_ATTEMPTS = 3;
+        var _IR_MAX_ATTEMPTS = 4;
+        var _IR_BACKOFFS_MS = [3000, 6000, 9000];  // gaps between attempts
+        var _irStatusEl = document.getElementById('rt-mw-compare-ir-status');
         function _loadIrFrame() {
             _irAttempt++;
+            if (_irStatusEl && _irAttempt > 1) {
+                _irStatusEl.textContent = 'rendering IR… (' + _irAttempt
+                    + '/' + _IR_MAX_ATTEMPTS + ')';
+            }
             img.src = (_irAttempt === 1) ? url : (url + '&_r=' + Date.now());
         }
         img.onerror = function () {
             if (_irAttempt < _IR_MAX_ATTEMPTS) {
-                setTimeout(_loadIrFrame, _irAttempt * 2500);  // ~2.5s, ~5s
+                setTimeout(_loadIrFrame,
+                           _IR_BACKOFFS_MS[_irAttempt - 1] || 9000);
                 return;
             }
             if (done) done(new Error('IR jpg load failed'));
