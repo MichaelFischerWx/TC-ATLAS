@@ -509,6 +509,12 @@
     // Storm detail mini-map state
     var detailMap = null;
     var detailTrackLayers = [];
+    // Whether the past-track overlay (polyline / fix dots / extrapolation /
+    // name label) is shown on the detail map. Toggled by the "Track" button;
+    // reset to true each time a storm detail view opens. The storm center
+    // marker is NOT covered by this — it stays for orientation, matching the
+    // download "Show storm track" convention.
+    var _detailTrackVisible = true;
     var detailSatName = '';     // which satellite is used for this storm
     var detailStormLat = 0;    // storm latitude for solar position calc
     var detailStormLon = 0;    // storm longitude for solar position calc
@@ -525,6 +531,22 @@
     var framesReady = false;   // true once all frames loaded
     var validFrames = [];      // indices of frames that loaded actual tile data
     var frameHasError = [];    // parallel to animFrameLayers — true if frame had tile errors
+
+    // ── Frame-trim state ("Frames ▾" dropdown + scrubber range handles) ──
+    // The trim is a normalized fraction window [_trimFracStart, _trimFracEnd]
+    // over the active product's valid-frame list (0 = first frame, 1 = last).
+    // Fractions (not wall-clock times) because the per-frame timestamp array
+    // is not always 1:1 with the valid-frame list, and a fractional window
+    // also carries over sensibly when the user switches product mid-trim
+    // (same slice of each product's loop). Reset to the full range each time a
+    // storm detail view opens.
+    var _trimFracStart = 0;    // 0..1 lower edge of the kept window
+    var _trimFracEnd = 1;      // 0..1 upper edge of the kept window
+    var _trimMode = false;     // "Trim range" chosen → handles shown on scrubber
+    var _trimMenuOpen = false;
+    // True once the window actually excludes something. _trimMode can be on
+    // with the full range still selected (handles at the extremes).
+    function _trimActive() { return _trimFracStart > 0.0001 || _trimFracEnd < 0.9999; }
 
     // ── Model Forecast Overlay State ──────────────────────────────
     var _rtModelData = null;           // Full a-deck response from API
@@ -1889,6 +1911,30 @@
             if (btn) btn.classList.add('active');
             _ga('rt_detail_graticule_toggle', { on: true });
         }
+    };
+
+    /** Add or remove the past-track layers from the detail map to match
+     *  _detailTrackVisible. Idempotent — safe to call after a track redraw
+     *  to re-apply the user's current hidden/shown choice. */
+    function _irApplyDetailTrackVisibility() {
+        if (!detailMap) return;
+        for (var i = 0; i < detailTrackLayers.length; i++) {
+            var ly = detailTrackLayers[i];
+            if (!ly) continue;
+            if (_detailTrackVisible) {
+                if (!detailMap.hasLayer(ly)) { try { ly.addTo(detailMap); } catch (e) {} }
+            } else if (detailMap.hasLayer(ly)) {
+                try { detailMap.removeLayer(ly); } catch (e) {}
+            }
+        }
+    }
+    window._irToggleDetailTrack = function () {
+        if (!detailMap) return;
+        _detailTrackVisible = !_detailTrackVisible;
+        _irApplyDetailTrackVisibility();
+        var btn = document.getElementById('ir-detail-track-toggle');
+        if (btn) btn.classList.toggle('active', _detailTrackVisible);
+        _ga('rt_detail_track_toggle', { on: _detailTrackVisible });
     };
 
     // ── Surface obs overlay (NDBC buoys; Synoptic Data is planned) ───
@@ -4769,13 +4815,29 @@
             fillOpacity: 0.7, weight: 2
         }).addTo(detailMap);
 
-        // Fetch and draw past track on detail map
+        // Fetch and draw past track on detail map. Each storm opens with the
+        // track shown; reset the toggle (and its button) so a hidden choice
+        // from a prior storm doesn't carry over.
         detailTrackLayers = [];
+        _detailTrackVisible = true;
+        var _trkBtn = document.getElementById('ir-detail-track-toggle');
+        if (_trkBtn) _trkBtn.classList.add('active');
+        // Each storm opens on the full loop — clear any prior frame trim.
+        _trimMode = false;
+        _trimFracStart = 0;
+        _trimFracEnd = 1;
+        window._irCloseFramesMenu();
+        var _frBtn = document.getElementById('ir-frames-btn');
+        if (_frBtn) _frBtn.classList.remove('active');
+        _updateTrimUI();
         var stormCopy = storm;
         fetchStormMetadata(storm.atcf_id, function (metaErr, meta) {
             if (!metaErr && meta && meta.intensity_history && meta.intensity_history.length >= 2) {
                 drawTrackOnMap(detailMap, meta.intensity_history, stormCopy,
                                detailTrackLayers, _extrapolateStormPin(stormCopy));
+                // Honor the current toggle in case it was flipped off before
+                // this async metadata fetch resolved.
+                if (!_detailTrackVisible) _irApplyDetailTrackVisibility();
             }
         });
 
@@ -5688,51 +5750,236 @@
         };
     }
 
-    /** Update the frame counter text (shows position in valid frames) */
+    /** The frame indices the scrubber/loop should actually walk for the given
+     *  product state, after applying the active trim window. When no trim is
+     *  set this returns state.valid unchanged (identical reference), so every
+     *  caller behaves exactly as before unless the user has trimmed. The
+     *  window is compared against each frame's UTC timestamp, so it is
+     *  product-agnostic. Guaranteed non-empty: if a window somehow excludes
+     *  everything we fall back to the full valid set rather than a dead loop. */
+    /** Sanitized valid-frame list: only indices that exist in the current
+     *  frame set, deduped and sorted. validFrames can occasionally retain
+     *  stale or duplicate indices beyond the live set after a bundle reload;
+     *  the timestamp array is the authoritative frame count (never evicted,
+     *  unlike layers under windowed decode), so we bound on it. */
+    function _realValidFrames(state) {
+        if (!state || !state.valid) return [];
+        var cap = state.times ? state.times.length : state.valid.length;
+        var seen = {}, real = [];
+        for (var k = 0; k < state.valid.length; k++) {
+            var fi = state.valid[k];
+            if (fi == null || fi < 0 || fi >= cap || seen[fi]) continue;
+            seen[fi] = true;
+            real.push(fi);
+        }
+        real.sort(function (a, b) { return a - b; });
+        return real;
+    }
+
+    function displayedFrames(state) {
+        var real = _realValidFrames(state);
+        var n = real.length;
+        if (!_trimActive() || n === 0) return real;
+        var iStart = Math.round(_trimFracStart * (n - 1));
+        var iEnd = Math.round(_trimFracEnd * (n - 1));
+        iStart = Math.max(0, Math.min(n - 1, iStart));
+        iEnd = Math.max(iStart, Math.min(n - 1, iEnd));
+        return real.slice(iStart, iEnd + 1);
+    }
+
+    /** Update the frame counter text (shows position within the trimmed loop) */
     function updateAnimCounter() {
         _cacheAnimEls();
         if (!_elAnimCounter) return;
-        var state = activeFrameState();
-        var pos = activeValidFramePos();
-        if (state.valid.length > 0 && pos >= 0) {
-            _elAnimCounter.textContent = (pos + 1) + ' / ' + state.valid.length;
+        var disp = displayedFrames(activeFrameState());
+        if (disp.length > 0) {
+            var pos = activeValidFramePos();
+            if (pos < 0) pos = 0;   // playhead not in the (trimmed) set → show first
+            _elAnimCounter.textContent = (pos + 1) + ' / ' + disp.length;
         } else {
-            _elAnimCounter.textContent = (animIndex + 1) + ' / ' + state.times.length;
+            _elAnimCounter.textContent = '0 / 0';
         }
     }
 
-    /** Find position of animIndex within the active valid frames array */
+    /** Find position of animIndex within the active (trimmed) frame array */
     function activeValidFramePos() {
-        var state = activeFrameState();
-        for (var i = 0; i < state.valid.length; i++) {
-            if (state.valid[i] === animIndex) return i;
+        var disp = displayedFrames(activeFrameState());
+        for (var i = 0; i < disp.length; i++) {
+            if (disp[i] === animIndex) return i;
         }
         return -1;
     }
 
-    /** Step to next valid frame */
+    // ── Trim: scrubber sync + range-handle UI ────────────────────────────
+    // Re-fit the scrubber to the current product's trimmed frame set. Safe to
+    // call any time; a no-op-equivalent when no trim is active (displayed ==
+    // valid). If the playhead fell outside the window, snap it to the last
+    // in-window frame so the loop and slider stay coherent.
+    function _syncTrimScrubber() {
+        _cacheAnimEls();
+        var state = activeFrameState();
+        var real = _realValidFrames(state);   // full loop (absolute slider axis)
+        var win = displayedFrames(state);      // kept window
+        if (_elAnimSlider) _elAnimSlider.max = Math.max(0, real.length - 1);
+        // If the playhead fell outside the trim window, snap it to the last
+        // in-window frame so the loop and slider stay coherent.
+        if (win.length > 0 && state.ready && win.indexOf(animIndex) < 0 && state.showFn) {
+            state.showFn(win[win.length - 1]);   // sets animIndex
+        }
+        var ap = real.indexOf(animIndex);       // absolute position on the track
+        if (_elAnimSlider && ap >= 0) _elAnimSlider.value = ap;
+        updateAnimCounter();
+        _updateTrimUI();
+    }
+
+    /** Paint the dropdown label + handle/mask positions to match the window. */
+    function _updateTrimUI() {
+        var btnLabel = document.getElementById('ir-frames-label');
+        var overlay = document.getElementById('ir-trim-overlay');
+        var state = activeFrameState();
+        var n = _realValidFrames(state).length;
+
+        if (!_trimMode || n === 0) {
+            // No trim mode, or the current product has no frames to trim.
+            if (btnLabel) btnLabel.textContent = 'Frames';
+            if (overlay) overlay.style.display = 'none';
+            return;
+        }
+        var disp = displayedFrames(state);
+        if (btnLabel) btnLabel.textContent = 'Frames: ' + disp.length + '/' + n;
+        if (!overlay) return;
+        overlay.style.display = 'block';
+
+        var sPct = _trimFracStart * 100;
+        var ePct = _trimFracEnd * 100;
+        var hs = document.getElementById('ir-trim-handle-start');
+        var he = document.getElementById('ir-trim-handle-end');
+        var ml = document.getElementById('ir-trim-mask-left');
+        var mr = document.getElementById('ir-trim-mask-right');
+        if (hs) hs.style.left = sPct + '%';
+        if (he) he.style.left = ePct + '%';
+        if (ml) ml.style.width = sPct + '%';
+        if (mr) mr.style.width = (100 - ePct) + '%';
+    }
+
+    /** Apply a trim window given two fractions (0..1) along the active
+     *  product's valid-frame list. Keeps the handles at least one frame apart
+     *  and stores the result for displayedFrames() to slice. */
+    function _trimApplyFracs(fStart, fEnd) {
+        if (fStart > fEnd) { var tmp = fStart; fStart = fEnd; fEnd = tmp; }
+        _trimFracStart = Math.max(0, Math.min(1, fStart));
+        _trimFracEnd = Math.max(0, Math.min(1, fEnd));
+        _syncTrimScrubber();
+    }
+
+    window._irToggleFramesMenu = function () {
+        var menu = document.getElementById('ir-frames-menu');
+        var btn = document.getElementById('ir-frames-btn');
+        if (!menu) return;
+        _trimMenuOpen = !_trimMenuOpen;
+        menu.style.display = _trimMenuOpen ? 'block' : 'none';
+        if (btn) btn.setAttribute('aria-expanded', _trimMenuOpen ? 'true' : 'false');
+    };
+    window._irCloseFramesMenu = function () {
+        var menu = document.getElementById('ir-frames-menu');
+        var btn = document.getElementById('ir-frames-btn');
+        _trimMenuOpen = false;
+        if (menu) menu.style.display = 'none';
+        if (btn) btn.setAttribute('aria-expanded', 'false');
+    };
+    window._irFramesSetMode = function (mode) {
+        window._irCloseFramesMenu();
+        var btn = document.getElementById('ir-frames-btn');
+        if (mode === 'all') {
+            _trimMode = false;
+            _trimFracStart = 0;
+            _trimFracEnd = 1;
+            if (btn) btn.classList.remove('active');
+            _syncTrimScrubber();
+            _ga('rt_detail_frames_trim', { on: false });
+        } else if (mode === 'trim') {
+            // Enter trim mode: handles render at the full extent (nothing
+            // excluded yet); the user then drags inward.
+            _trimMode = true;
+            if (btn) btn.classList.add('active');
+            _updateTrimUI();
+            _ga('rt_detail_frames_trim', { on: true });
+        }
+    };
+
+    /** Wire pointer-drag on the two trim handles. Called once from bindEvents. */
+    function _bindTrimHandles() {
+        var wrap = document.getElementById('ir-anim-slider-wrap');
+        var hs = document.getElementById('ir-trim-handle-start');
+        var he = document.getElementById('ir-trim-handle-end');
+        if (!wrap || !hs || !he) return;
+
+        function fracFromEvent(e) {
+            var r = wrap.getBoundingClientRect();
+            if (r.width <= 0) return 0;
+            var f = (e.clientX - r.left) / r.width;
+            return Math.max(0, Math.min(1, f));
+        }
+        function startDrag(which) {
+            return function (e) {
+                e.preventDefault();
+                stopAnimation();
+                var move = function (ev) {
+                    var n = activeFrameState().valid.length;
+                    var f = fracFromEvent(ev);
+                    // Keep the two handles at least one frame apart.
+                    var minGap = n > 1 ? 1 / (n - 1) : 0.02;
+                    if (which === 'start') {
+                        f = Math.min(f, _trimFracEnd - minGap);
+                        _trimApplyFracs(f, _trimFracEnd);
+                    } else {
+                        f = Math.max(f, _trimFracStart + minGap);
+                        _trimApplyFracs(_trimFracStart, f);
+                    }
+                };
+                var up = function () {
+                    document.removeEventListener('pointermove', move);
+                    document.removeEventListener('pointerup', up);
+                };
+                document.addEventListener('pointermove', move);
+                document.addEventListener('pointerup', up);
+            };
+        }
+        hs.addEventListener('pointerdown', startDrag('start'));
+        he.addEventListener('pointerdown', startDrag('end'));
+    }
+
+    /** Step to next frame within the trim window, wrapping at its end. The
+     *  slider sits on the FULL-loop (absolute) axis so its thumb lines up with
+     *  the trim handles. */
     function nextFrame() {
         var state = activeFrameState();
         if (!state.ready) return;
-        if (state.valid.length === 0) return;
-        var pos = activeValidFramePos();
-        var nextPos = (pos + 1) % state.valid.length;
-        state.showFn(state.valid[nextPos]);
+        var win = displayedFrames(state);
+        if (win.length === 0) return;
+        var wp = win.indexOf(animIndex);
+        var nextWp = wp < 0 ? 0 : (wp + 1) % win.length;
+        var idx = win[nextWp];
+        state.showFn(idx);
         _cacheAnimEls();
-        if (_elAnimSlider) _elAnimSlider.value = nextPos;
+        var ap = _realValidFrames(state).indexOf(idx);
+        if (_elAnimSlider && ap >= 0) _elAnimSlider.value = ap;
         updateAnimCounter();
     }
 
-    /** Step to previous valid frame */
+    /** Step to previous frame within the trim window. */
     function prevFrame() {
         var state = activeFrameState();
         if (!state.ready) return;
-        if (state.valid.length === 0) return;
-        var pos = activeValidFramePos();
-        var prevPos = (pos - 1 + state.valid.length) % state.valid.length;
-        state.showFn(state.valid[prevPos]);
+        var win = displayedFrames(state);
+        if (win.length === 0) return;
+        var wp = win.indexOf(animIndex);
+        var prevWp = wp < 0 ? (win.length - 1) : (wp - 1 + win.length) % win.length;
+        var idx = win[prevWp];
+        state.showFn(idx);
         _cacheAnimEls();
-        if (_elAnimSlider) _elAnimSlider.value = prevPos;
+        var ap = _realValidFrames(state).indexOf(idx);
+        if (_elAnimSlider && ap >= 0) _elAnimSlider.value = ap;
         updateAnimCounter();
     }
 
@@ -5790,8 +6037,8 @@
     function _animTick(ts) {
         if (!animPlaying) return;
         var state = activeFrameState();
-        var atLast = state && state.valid && state.valid.length > 0 &&
-                     state.valid[state.valid.length - 1] === animIndex;
+        var disp = displayedFrames(state);
+        var atLast = disp.length > 0 && disp[disp.length - 1] === animIndex;
         var interval = atLast
             ? animIntervalMs * ANIM_LAST_FRAME_PAUSE_MULT
             : animIntervalMs;
@@ -5982,6 +6229,11 @@
         } else if (mode === 'wv') {
             loadWvFrames();
         }
+        // Re-fit the scrubber to this product's frames under the active trim
+        // window. For 'eir' the frames are ready now; the async products call
+        // _syncTrimScrubber again from their load-complete paths (guarded by
+        // _trimActive there so untrimmed behavior is byte-identical).
+        _syncTrimScrubber();
     }
 
     /** Hide all IR animation frame layers */
@@ -6785,6 +7037,7 @@
                     showGeocolorFrame(geocolorValidFrames[geocolorValidFrames.length - 1]);
                 }
                 updateAnimCounter();
+                if (_trimMode) _syncTrimScrubber();
             }
         }, 30000);
     }
@@ -6825,6 +7078,7 @@
                 showGeocolorFrame(geocolorValidFrames[geocolorValidFrames.length - 1]);
             }
             updateAnimCounter();
+            if (_trimMode) _syncTrimScrubber();
         }
     }
 
@@ -6941,6 +7195,7 @@
             var showFn = isVis ? showVisFrame : showWvFrame;
             showFn(stateValid.length > 0 ? stateValid[stateValid.length - 1] : stateLayers.length - 1);
             updateAnimCounter();
+            if (_trimMode) _syncTrimScrubber();
             return;
         }
         // Already loading → bail
@@ -7076,6 +7331,7 @@
                 showFn(validIdx[validIdx.length - 1]);
             }
             updateAnimCounter();
+            if (_trimMode) _syncTrimScrubber();
             // If nothing came back (all nighttime for Vis, or upstream gap
             // for WV), tell the user instead of leaving them on a blank pane.
             if (validIdx.length === 0) {
@@ -7309,6 +7565,7 @@
                 showVisFrame(validIdx[validIdx.length - 1]);
             }
             updateAnimCounter();
+            if (_trimMode) _syncTrimScrubber();
             if (validIdx.length === 0) {
                 var satLbl = document.getElementById('ir-satellite-label');
                 if (satLbl) satLbl.textContent =
@@ -7487,10 +7744,21 @@
             var state = activeFrameState();
             if (!state.ready) return;
             stopAnimation();
-            var sliderPos = parseInt(this.value, 10);
-            if (state.valid.length > 0 && sliderPos < state.valid.length) {
-                state.showFn(state.valid[sliderPos]);
+            var real = _realValidFrames(state);   // absolute slider axis
+            var win = displayedFrames(state);      // kept window
+            if (real.length === 0 || win.length === 0) return;
+            var ap = parseInt(this.value, 10);
+            ap = Math.max(0, Math.min(real.length - 1, ap));
+            var idx = real[ap];
+            // Constrain the playhead to the trim window: snap to the nearer edge.
+            if (win.indexOf(idx) < 0) {
+                var apStart = real.indexOf(win[0]);
+                var apEnd = real.indexOf(win[win.length - 1]);
+                if (ap < apStart) { ap = apStart; idx = win[0]; }
+                else { ap = apEnd; idx = win[win.length - 1]; }
+                this.value = ap;
             }
+            state.showFn(idx);
             updateAnimCounter();
         });
         var _spdDn = document.getElementById('ir-anim-speed-down');
@@ -7498,6 +7766,14 @@
         if (_spdDn) _spdDn.addEventListener('click', function () { bumpAnimSpeed(-1); });
         if (_spdUp) _spdUp.addEventListener('click', function () { bumpAnimSpeed(+1); });
         _applyAnimSpeed();  // seed label + disabled states
+
+        // Frame-trim range handles + close-the-menu-on-outside-click
+        _bindTrimHandles();
+        document.addEventListener('click', function (e) {
+            if (!_trimMenuOpen) return;
+            var wrap = document.getElementById('ir-frames-wrap');
+            if (wrap && !wrap.contains(e.target)) window._irCloseFramesMenu();
+        });
 
         // Product toggle buttons (IR / GeoColor / Visible / Water Vapor)
         document.getElementById('ir-product-eir').addEventListener('click', function () {
@@ -20102,6 +20378,10 @@
             console.warn('[RT Monitor] no valid frames to export');
             return;
         }
+        // Export exactly the frames the scrubber is showing — honor any
+        // active trim window so the GIF matches the on-screen loop.
+        var exportFrames = displayedFrames(state);
+        if (exportFrames.length === 0) exportFrames = state.valid;
 
         var node = document.getElementById('ir-image-container');
         if (!node) return;
@@ -20117,15 +20397,28 @@
         // Bottom-corner toast for progress.
         var toast = document.createElement('div');
         toast.style.cssText = 'position:absolute;bottom:8px;right:8px;background:rgba(15,22,35,0.85);color:#e2e8f0;font:600 11px/1.2 \'DM Sans\',sans-serif;padding:6px 10px;border-radius:4px;z-index:1000;pointer-events:none;';
-        toast.textContent = 'GIF · capturing 0/' + state.valid.length;
+        toast.textContent = 'GIF · capturing 0/' + exportFrames.length;
         node.appendChild(toast);
 
         _ensureHtml2canvas().then(function () {
             var w = node.offsetWidth;
             var h = node.offsetHeight;
+            // Encoding cost (NeuQuant quantize + LZW) scales with pixels ×
+            // frames, and gif.js holds every frame in memory. A GIF doesn't
+            // need the full panel resolution, so cap the long edge at ~720 px
+            // and downscale during capture — this is the dominant speed/size
+            // win and is invisible at typical GIF sizes.
+            var GIF_MAX_W = 720;
+            var scale = Math.min(1, GIF_MAX_W / Math.max(1, w));
+            var gifW = Math.max(1, Math.round(w * scale));
+            var gifH = Math.max(1, Math.round(h * scale));
+            // gif.js splits frame encoding across workers; default was 2,
+            // which barely uses a modern multi-core machine. Scale to the
+            // hardware (capped) so render() finishes in seconds, not minutes.
+            var workers = Math.max(2, Math.min(8, navigator.hardwareConcurrency || 4));
             // gif.js worker is served from CDN (matches what satellite.js does).
             var gif = new window.GIF({
-                workers: 2, quality: 10, width: w, height: h,
+                workers: workers, quality: 15, width: gifW, height: gifH,
                 workerScript: 'https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js',
                 background: '#0a0c12'
             });
@@ -20149,18 +20442,18 @@
             // Step through frames sequentially. html2canvas is async per frame.
             var i = 0;
             function captureNext() {
-                if (i >= state.valid.length) {
+                if (i >= exportFrames.length) {
                     toast.textContent = 'GIF · encoding…';
                     gif.render();
                     return;
                 }
-                state.showFn(state.valid[i]);
-                toast.textContent = 'GIF · capturing ' + (i + 1) + '/' + state.valid.length;
+                state.showFn(exportFrames[i]);
+                toast.textContent = 'GIF · capturing ' + (i + 1) + '/' + exportFrames.length;
                 // Wait one frame so Leaflet/Plotly settle before capture.
                 requestAnimationFrame(function () {
                     window.html2canvas(node, {
                         useCORS: true, allowTaint: false, backgroundColor: '#0a0c12',
-                        logging: false, scale: 1, onclone: _irExportOnClone
+                        logging: false, scale: scale, onclone: _irExportOnClone
                     }).then(function (cv) {
                         // delay per frame mirrors the player's animIntervalMs.
                         gif.addFrame(cv, { delay: animIntervalMs, copy: true });

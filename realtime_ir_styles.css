@@ -471,11 +471,13 @@ html, body { margin: 0; padding: 0; }
 /* Grid + Obs toggles dim when inactive so users can see at a glance
    whether the overlay is on. Active state inherits the green tint. */
 .ir-detail-grid-toggle-btn:not(.active),
-.ir-detail-obs-toggle-btn:not(.active) {
+.ir-detail-obs-toggle-btn:not(.active),
+.ir-detail-track-toggle-btn:not(.active) {
     opacity: 0.55;
 }
 .ir-detail-grid-toggle-btn:not(.active):hover,
-.ir-detail-obs-toggle-btn:not(.active):hover {
+.ir-detail-obs-toggle-btn:not(.active):hover,
+.ir-detail-track-toggle-btn:not(.active):hover {
     opacity: 0.85;
 }
 
@@ -932,6 +934,95 @@ html, body { margin: 0; padding: 0; }
 [data-theme="dark"] .ir-anim-slider {
     background: rgba(255, 255, 255, 0.14);
 }
+
+/* Frame-trim dropdown ("Frames ▾") — mirrors the download dropdown. */
+.ir-frames-wrap { position: relative; display: inline-block; }
+.ir-frames-btn.active {
+    background: rgba(74, 155, 110, 0.30);
+    border-color: rgba(74, 155, 110, 0.6);
+}
+.ir-frames-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    z-index: 1100;
+    background: var(--surface-raised);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    min-width: 200px;
+    box-shadow: 0 6px 24px rgba(15, 22, 36, 0.18);
+    padding: 4px;
+    font-family: 'DM Sans', sans-serif;
+}
+[data-theme="dark"] .ir-frames-menu {
+    background: rgba(20, 26, 38, 0.98);
+    border-color: rgba(255, 255, 255, 0.12);
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+}
+.ir-frames-item {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    padding: 7px 10px;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    text-align: left;
+    cursor: pointer;
+    color: var(--text);
+    transition: background 0.12s;
+}
+.ir-frames-item:hover { background: rgba(74, 155, 110, 0.12); }
+[data-theme="dark"] .ir-frames-item:hover { background: rgba(74, 155, 110, 0.20); }
+.ir-frames-item-title { font-size: 0.82rem; font-weight: 600; color: var(--um-green); line-height: 1.2; }
+.ir-frames-item-desc { font-size: 0.68rem; color: #64748b; margin-top: 2px; }
+[data-theme="dark"] .ir-frames-item-desc { color: #94a3b8; }
+
+/* Scrubber wrapper + trim-range overlay (start/end handles + dimmed masks).
+   The overlay is pointer-transparent except the handles, so the native
+   slider thumb (playhead) still drags freely between them. */
+.ir-anim-slider-wrap { position: relative; flex: 1; min-width: 80px; display: flex; align-items: center; }
+.ir-anim-slider-wrap .ir-anim-slider { flex: 1; width: 100%; }
+.ir-trim-overlay {
+    position: absolute;
+    left: 0; right: 0; top: 50%;
+    transform: translateY(-50%);
+    height: 18px;
+    pointer-events: none;
+}
+.ir-trim-mask {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    height: 4px;
+    background: repeating-linear-gradient(45deg,
+        rgba(15, 22, 35, 0.30) 0, rgba(15, 22, 35, 0.30) 3px,
+        rgba(15, 22, 35, 0.12) 3px, rgba(15, 22, 35, 0.12) 6px);
+    border-radius: 2px;
+}
+.ir-trim-mask-left { left: 0; width: 0; }
+.ir-trim-mask-right { right: 0; width: 0; }
+[data-theme="dark"] .ir-trim-mask {
+    background: repeating-linear-gradient(45deg,
+        rgba(0, 0, 0, 0.50) 0, rgba(0, 0, 0, 0.50) 3px,
+        rgba(0, 0, 0, 0.22) 3px, rgba(0, 0, 0, 0.22) 6px);
+}
+.ir-trim-handle {
+    position: absolute;
+    top: 50%;
+    width: 9px;
+    height: 18px;
+    margin-left: -4.5px;
+    transform: translateY(-50%);
+    background: var(--um-green);
+    border: 2px solid var(--border-light);
+    border-radius: 3px;
+    cursor: ew-resize;
+    pointer-events: auto;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+    touch-action: none;
+}
+.ir-trim-handle:hover { filter: brightness(1.12); }
 .ir-anim-counter {
     font-variant-numeric: tabular-nums;
     font-size: 0.72rem;
