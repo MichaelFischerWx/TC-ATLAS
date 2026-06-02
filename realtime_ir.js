@@ -531,6 +531,11 @@
     var framesReady = false;   // true once all frames loaded
     var validFrames = [];      // indices of frames that loaded actual tile data
     var frameHasError = [];    // parallel to animFrameLayers — true if frame had tile errors
+    // ISO datetime of the latest frame currently rendered into the IR loop.
+    // Guards the bundle rebuild so a slow initial load that resolves AFTER a
+    // poll-driven refresh (with fresher frames) can't clobber the newer set
+    // with older frames. Reset to null per storm in initDetailMap.
+    var _renderedLatestFrameTime = null;
 
     // ── Frame-trim state ("Frames ▾" dropdown + scrubber range handles) ──
     // The trim is a normalized fraction window [_trimFracStart, _trimFracEnd]
@@ -3684,6 +3689,17 @@
         framesLoaded = 0;
         _frameLoadedOnce = {};
         framesReady = false;
+        // Fully reset the parallel frame-state arrays too. These used to be
+        // left intact (callers reset them individually), but that meant any
+        // rebuild path that forgot — e.g. the in-place "newer frames" refresh
+        // — would APPEND onto stale validFrames/frameHasError while
+        // animFrameTimes/Layers were rebuilt, leaving validFrames holding
+        // indices beyond the live frame set (duplicates + out-of-range). The
+        // loader rebuilds all four from scratch, so clear them here so the
+        // single teardown point is authoritative.
+        validFrames = [];
+        frameHasError = [];
+        _firstFrameShown = false;
         // Revoke any blob URLs created by the bundle path so the backing
         // ArrayBuffer can be GC'd. No-op when the GIBS or per-frame path
         // is active (those don't populate _activeFrameBlobUrls).
@@ -3983,8 +3999,12 @@
                 }
                 if (!storm) return;
                 var satLayerName = GIBS_IR_LAYERS[detailSatName] || null;
-                // Tear down existing IR layers first (the rebuild adds new ones).
-                cleanupFrameLayers();
+                // _initDetailMapJPGWithBundle is an authoritative rebuild — it
+                // detaches the existing IR overlays and resets the frame-state
+                // arrays itself. We deliberately do NOT call cleanupFrameLayers
+                // here: it would also tear down GeoColor/Visible/WV frames,
+                // disrupting a non-IR product the user may be viewing during
+                // this background refresh.
                 _initDetailMapJPGWithBundle(storm, satLayerName, buf);
 
                 console.log('[RT Monitor] frames refreshed — latest ' + newLatest);
@@ -4366,6 +4386,44 @@
             return;
         }
 
+        // Monotonic guard: if a newer bundle is already rendered (a slow
+        // initial load resolving after a poll refresh swapped in fresher
+        // frames), don't replace it with this older set. Equal latest =
+        // same/decimated bundle → proceed (cheap, harmless).
+        var _newLatest = frames[frames.length - 1] && frames[frames.length - 1].datetime_utc;
+        if (_renderedLatestFrameTime && _newLatest && _newLatest < _renderedLatestFrameTime) {
+            console.log('[RT Monitor] skipping stale bundle rebuild (' + _newLatest +
+                        ' < rendered ' + _renderedLatestFrameTime + ')');
+            return;
+        }
+        if (_newLatest) _renderedLatestFrameTime = _newLatest;
+
+        // Authoritative rebuild: detach any existing IR frame overlays and
+        // reset all parallel frame-state arrays so this function fully owns
+        // the frame set. animFrameTimes is replaced below, but the layer/
+        // error/valid arrays are APPENDED to — so without this reset a second
+        // call that races the first (the initial bundle load resolving after
+        // a poll-driven _refreshFramesIfNewer rebuild, or vice-versa) would
+        // STACK overlays (animFrameLayers = 13 + 13 = 26) and leave validFrames
+        // holding indices beyond the live frame set. Resetting here makes the
+        // last writer own a clean, self-consistent set regardless of ordering.
+        // Scoped to the IR arrays only — GeoColor/Visible/WV are untouched so a
+        // background IR refresh can't disturb a non-IR product the user is
+        // viewing.
+        for (var _q = 0; _q < animFrameLayers.length; _q++) {
+            if (animFrameLayers[_q] && detailMap) {
+                try { detailMap.removeLayer(animFrameLayers[_q]); } catch (e) {}
+            }
+        }
+        _revokeActiveFrameBlobUrls();
+        animFrameLayers = [];
+        frameHasError = [];
+        validFrames = [];
+        _frameLoadedOnce = {};
+        framesLoaded = 0;
+        framesReady = false;
+        _firstFrameShown = false;
+
         // Match the existing animFrame ordering (oldest first)
         animFrameTimes = frames.map(function (f) { return f.datetime_utc; });
         animIndex = animFrameTimes.length - 1;
@@ -4576,13 +4634,7 @@
                 _jpgPathFellBack = true;
                 console.warn('[RT Monitor] JPG path: ' + _errorCount + '/' +
                              seen + ' frame errors — swapping to GIBS');
-                cleanupFrameLayers();
-                // cleanupFrameLayers leaves frameHasError/validFrames/_firstFrameShown
-                // intact (they're not cleared on storm switch, only on init).
-                // Reset them here so _initDetailMapGIBS starts from a clean slate.
-                validFrames = [];
-                frameHasError = [];
-                _firstFrameShown = false;
+                cleanupFrameLayers();  // resets all frame-state arrays
                 _initDetailMapGIBS(storm, satLayerName);
             }
         }
@@ -4763,6 +4815,7 @@
         animFrameLayers = [];
         validFrames = [];
         frameHasError = [];
+        _renderedLatestFrameTime = null;   // new storm → no rendered baseline yet
 
         // Disable play button until frames load
         var playBtn = document.getElementById('ir-anim-play');
