@@ -117,6 +117,7 @@ GOES_BUCKETS = {
 
 GOES_LON_0 = {"east": -75.2, "west": -137.2}
 GOES_SAT_HEIGHT = 35786023.0  # metres above Earth centre
+GOES_SWEEP = "x"               # GOES ABI fixed grid uses sweep='x'
 
 # GOES-19 became operational GOES-East on 2025-04-04 15:00 UTC
 GOES_TRANSITION_DT = _dt(2025, 4, 4, 15, 0, 0, tzinfo=timezone.utc)
@@ -364,11 +365,31 @@ def latlon_to_himawari_xy(lat: float, lon: float) -> tuple:
 
 def open_goes_subset(s3_key: str, center_lat: float, center_lon: float,
                      sat_key: str, box_deg: float = 8.0,
-                     band: int = IR_BAND) -> np.ndarray:
+                     band: int = IR_BAND, return_extent: bool = False):
     """
     Open a GOES CMI file from S3 and return a geographically-subsetted
-    2D array (y, x).  For IR/WV bands (7-16) returns brightness temperature
+    2D array (y, x) IN THE GEOSTATIONARY FIXED GRID (uniform in scan angle,
+    NOT lat/lon).  For IR/WV bands (7-16) returns brightness temperature
     in Kelvin; for visible bands (1-6) returns reflectance factor (0-1).
+
+    The returned array MUST be reprojected with _reproject_geos_to_latlon
+    before being displayed as an L.imageOverlay on a lat/lon box — the ABI
+    fixed grid is uniform in scan angle, so off-nadir storms are displaced
+    by tens-to-hundreds of km if the raw subset is stretched onto a lat/lon
+    rectangle (verified 2026-06-02: ~80 km NE at 11° off-nadir, ~250 km at
+    25°). Pass return_extent=True to get the geos extent the reprojection
+    needs.
+
+    return_extent=True → (data, geos_meta) where geos_meta is a dict with:
+        "extent": (x_left, x_right, y_top, y_bottom) in METRES (matching geos
+                  Proj() output, the convention open_himawari_subset uses),
+                  measured at the subset's first/last pixel centres;
+        "sat_height", "lon_0", "sweep": the file's OWN navigation, read from
+                  goes_imager_projection so the reproject uses the satellite's
+                  true sub-point. (The hardcoded GOES_LON_0 lags reality —
+                  GOES-18 sits at -137.0, not -137.2 — so trusting the file
+                  avoids a ~0.2°/~22 km residual shift, and stays correct if a
+                  satellite is ever repositioned.)
     """
     import xarray as xr
 
@@ -382,6 +403,7 @@ def open_goes_subset(s3_key: str, center_lat: float, center_lon: float,
     x_lo, x_hi = min(x_min, x_max), max(x_min, x_max)
     y_lo, y_hi = min(y_min, y_max), max(y_min, y_max)
 
+    geos_meta = None
     fobj = fs.open(f"s3://{s3_key}", "rb")
     try:
         ds = xr.open_dataset(fobj, engine="h5netcdf")
@@ -395,11 +417,31 @@ def open_goes_subset(s3_key: str, center_lat: float, center_lon: float,
                 data = ds_sub[alt_var].values.astype(np.float32)
             else:
                 raise ValueError(f"Neither {IR_VARIABLE} nor {alt_var} found in dataset")
+
+        if return_extent:
+            # ABI x/y coords are scan angles in RADIANS; geos Proj() emits
+            # metres, so scale by the perspective height. Subset is sliced
+            # x ascending (W->E) and y descending (N->S), so xs[0]=x_left,
+            # xs[-1]=x_right, ys[0]=y_top, ys[-1]=y_bottom.
+            gip = ds["goes_imager_projection"].attrs
+            sat_h = float(gip.get("perspective_point_height", GOES_SAT_HEIGHT))
+            lon0 = float(gip.get("longitude_of_projection_origin",
+                                 GOES_LON_0[sat_key]))
+            sweep = str(gip.get("sweep_angle_axis", GOES_SWEEP))
+            xs = ds_sub["x"].values
+            ys = ds_sub["y"].values
+            geos_meta = {
+                "extent": (float(xs[0]) * sat_h, float(xs[-1]) * sat_h,
+                           float(ys[0]) * sat_h, float(ys[-1]) * sat_h),
+                "sat_height": sat_h,
+                "lon_0": lon0,
+                "sweep": sweep,
+            }
     finally:
         ds.close()
         fobj.close()
         gc.collect()
-    return data
+    return (data, geos_meta) if return_extent else data
 
 
 def find_himawari_file(target_dt: _dt, tolerance_min: int = 20,
@@ -1157,12 +1199,19 @@ def fetch_ir_tb_raw(center_lat: float, center_lon: float,
                 return None
             if _scan_substitution_too_stale(scan_dt, target_dt, max_substitution_min):
                 return None
-            # GOES path doesn't use _reproject_geos_to_latlon — its
-            # open_goes_subset already returns a lat/lon-aligned array at
-            # the native NetCDF pitch (~2 km/pixel = ~1100×1100 for a 20°
-            # box). So GOES is already at "natural 1500×1500-ish" sharpness
-            # without explicit reprojection.
-            tb = open_goes_subset(s3_key, center_lat, center_lon, sat_key, box_deg)
+            # GOES ABI is on the geostationary fixed grid (uniform in scan
+            # angle, NOT lat/lon), so it MUST be reprojected before being
+            # placed on a lat/lon imageOverlay — otherwise off-nadir storms
+            # are displaced by tens-to-hundreds of km (verified 2026-06-02).
+            # Same geos→latlon path Himawari uses, with GOES sat geometry.
+            tb_geo, gm = open_goes_subset(
+                s3_key, center_lat, center_lon, sat_key, box_deg,
+                return_extent=True)
+            tb = _reproject_geos_to_latlon(
+                tb_geo, center_lat, center_lon, box_deg,
+                gm["sat_height"], gm["lon_0"], gm["sweep"],
+                geos_extent=gm["extent"])
+            del tb_geo
 
         if not np.any(np.isfinite(tb)):
             return None
@@ -1237,9 +1286,16 @@ def fetch_band_raw(center_lat: float, center_lon: float,
                 return None
             if _scan_substitution_too_stale(scan_dt, target_dt, max_substitution_min):
                 return None
-            data = open_goes_subset(
-                s3_key, center_lat, center_lon, sat_key, box_deg, band=band
+            data_geo, gm = open_goes_subset(
+                s3_key, center_lat, center_lon, sat_key, box_deg, band=band,
+                return_extent=True
             )
+            # Reproject the fixed-grid subset to lat/lon (see open_goes_subset).
+            data = _reproject_geos_to_latlon(
+                data_geo, center_lat, center_lon, box_deg,
+                gm["sat_height"], gm["lon_0"], gm["sweep"],
+                geos_extent=gm["extent"])
+            del data_geo
 
         if not np.any(np.isfinite(data)):
             return None
@@ -1511,7 +1567,16 @@ def fetch_ir_frame(center_lat: float, center_lon: float,
             s3_key = find_goes_file(bucket, target_dt)
             if not s3_key:
                 return None
-            tb = open_goes_subset(s3_key, center_lat, center_lon, sat_key, box_deg)
+            # Reproject ABI fixed grid → lat/lon (see open_goes_subset); the
+            # raw subset is uniform in scan angle, not lat/lon.
+            tb_geo, gm = open_goes_subset(
+                s3_key, center_lat, center_lon, sat_key, box_deg,
+                return_extent=True)
+            tb = _reproject_geos_to_latlon(
+                tb_geo, center_lat, center_lon, box_deg,
+                gm["sat_height"], gm["lon_0"], gm["sweep"],
+                geos_extent=gm["extent"])
+            del tb_geo
 
         png_b64 = render_ir_png(tb)
         del tb

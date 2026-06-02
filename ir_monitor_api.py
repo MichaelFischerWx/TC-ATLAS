@@ -143,7 +143,7 @@ _gcs_rt_bucket = None
 # Together these fix two pre-existing cache misses:
 #   - storm motion ≥ 0.5° causes round(lat/lon) to flip → all frames miss
 #   - different radius_deg requests collided on the same key → wrong cutout
-_GCS_RT_VERSION = "rt-v11"  # v11: Himawari geos→latlon reprojection wedge fix
+_GCS_RT_VERSION = "rt-v12"  # v12: GOES geos→latlon reprojection (E+W); raw/webp/bundle caches held fixed-grid GOES frames misregistered up to hundreds of km off-nadir
                             # (perimeter-sampled geos window + true geos_extent;
                             # evicts pre-fix frames with rotated black corners)
 
