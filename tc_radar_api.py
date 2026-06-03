@@ -371,6 +371,67 @@ app.add_middleware(RateLimitMiddleware)
 
 
 # ---------------------------------------------------------------------------
+# Per-IP in-flight concurrency cap for heavy frame-rendering endpoints
+# ---------------------------------------------------------------------------
+# The sliding-window limiter above bounds requests-per-minute, but the real
+# saturation mode is a single client holding many *concurrent* slow frame
+# requests (HURSAT tarball streaming / IR cascade, 30-90s each). A handful of
+# those pin the limited Cloud Run instance pool (maxScale x concurrency), and
+# Cloud Run then sheds *everyone else* — including the lightweight RT-monitor
+# active-storms poll — with platform 429s at the GFE edge. Capping concurrent
+# heavy requests per IP rejects an over-eager client's excess cheaply, freeing
+# slots so the pool stays available for other users.
+#
+# NOTE: per-instance, in-memory. Cloud Run spreads a client across instances,
+# so this bounds (not perfectly caps) one IP's footprint — a deliberate
+# backstop, not a hard global guarantee. The cap sits above the frontend's
+# largest single-tab prefetch batch (gridsat=14) so a normal viewer is never
+# throttled; only runaway/duplicate bursts trip it.
+_HEAVY_PREFIXES = ('/global/hursat/frame', '/global/ir/frame')
+_max_inflight_per_ip = 16
+_inflight_counts: dict[str, int] = _collections.defaultdict(int)
+_inflight_lock = threading.Lock()
+
+
+class HeavyConcurrencyMiddleware(BaseHTTPMiddleware):
+    """Cap concurrent in-flight heavy frame requests per IP."""
+
+    async def dispatch(self, request: StarletteRequest, call_next):
+        path = request.url.path
+        if not any(path.startswith(p) for p in _HEAVY_PREFIXES):
+            return await call_next(request)
+
+        forwarded = request.headers.get("x-forwarded-for", "")
+        client_ip = forwarded.split(",")[0].strip() if forwarded else (
+            request.client.host if request.client else "unknown"
+        )
+
+        with _inflight_lock:
+            if _inflight_counts[client_ip] >= _max_inflight_per_ip:
+                _rate_logger.warning(
+                    f"HEAVY_CONCURRENCY_LIMIT: IP {client_ip} exceeded "
+                    f"{_max_inflight_per_ip} concurrent heavy requests — path={path}"
+                )
+                return JSONResponse(
+                    status_code=429,
+                    content={"detail": "Too many concurrent image requests. Please slow down."},
+                    headers={"Retry-After": "2"},
+                )
+            _inflight_counts[client_ip] += 1
+
+        try:
+            return await call_next(request)
+        finally:
+            with _inflight_lock:
+                _inflight_counts[client_ip] -= 1
+                if _inflight_counts[client_ip] <= 0:
+                    _inflight_counts.pop(client_ip, None)
+
+
+app.add_middleware(HeavyConcurrencyMiddleware)
+
+
+# ---------------------------------------------------------------------------
 # HTTP cache headers — scientific data is immutable, cache aggressively
 # ---------------------------------------------------------------------------
 
