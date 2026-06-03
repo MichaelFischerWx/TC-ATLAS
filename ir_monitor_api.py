@@ -4055,6 +4055,34 @@ def _fetch_one_raw_tb_for_bundle(
     if cached is not None:
         return cached
 
+    # Cache miss: render under the global raw-fetch semaphore so a burst of
+    # concurrent bundle requests can't pile up unbounded float32 cutouts and
+    # OOM-kill the instance (root cause of the May 2026 OOM/504 spikes). The
+    # cache-hit path above stays unthrottled — only the heavy S3+render path
+    # is bounded, matching the per-frame /ir-raw-frame endpoint.
+    if not _raw_fetch_semaphore.acquire(timeout=60):
+        return None  # overloaded — skip frame; client can refetch /ir-raw-frame
+    try:
+        return _render_one_raw_tb_for_bundle(
+            atcf_upper, target_dt, radius_deg, interp_lat, interp_lon,
+            box_deg, half, dt_str, vmax_kt,
+        )
+    finally:
+        _raw_fetch_semaphore.release()
+
+
+def _render_one_raw_tb_for_bundle(
+    atcf_upper: str, target_dt: _dt, radius_deg: float,
+    interp_lat: float, interp_lon: float,
+    box_deg: float, half: float, dt_str: str, vmax_kt,
+) -> dict | None:
+    """S3-fetch + render the heavy (cache-miss) half of the bundle worker.
+
+    Split out of _fetch_one_raw_tb_for_bundle so the caller can run it under
+    _raw_fetch_semaphore — that globally bounds concurrent float32 cutouts
+    across all in-flight bundle requests and prevents the OOM-kill / 502
+    cascade documented at the semaphore definition.
+    """
     # Cache miss: pull from S3 + render. Cutout centered on the
     # interpolated position so the cached frame's bounds match the key.
     raw = fetch_ir_tb_raw(interp_lat, interp_lon, target_dt, box_deg,
@@ -4203,8 +4231,10 @@ def get_storm_ir_raw_bundle(
 
     # Cap workers at 4 — beyond that S3 throughput plateaus and the
     # NOAA-Open-Data anonymous endpoint starts returning sporadic 429s.
+    # (The global _raw_fetch_semaphore is the real OOM guard; this just
+    # avoids spawning threads that would only block on it.)
     indexed = list(enumerate(frame_times))
-    with ThreadPoolExecutor(max_workers=8) as pool:
+    with ThreadPoolExecutor(max_workers=4) as pool:
         results = list(pool.map(_worker, indexed))
     results.sort(key=lambda r: r[0])
 
