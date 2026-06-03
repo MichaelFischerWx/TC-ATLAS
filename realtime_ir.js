@@ -3567,6 +3567,35 @@
     var _LS_STORMS_KEY = 'tc-atlas-rt-storms';
     var _activeStormsETag = null;  // last ETag served by /active-storms
 
+    // Backoff state for failed active-storms polls. On a transient failure
+    // (esp. HTTP 429 when the API pool is saturated) we retry sooner than the
+    // normal 10-min interval, but with exponential growth + jitter so clients
+    // spread out rather than retry in lockstep and re-cause the congestion.
+    var _pollBackoffMs = 0;          // current backoff (0 = healthy)
+    var _pollRetryTimer = null;      // pending sooner-than-interval retry
+    var _POLL_BACKOFF_BASE_MS = 20 * 1000;   // first retry ~20s out
+    var _POLL_BACKOFF_CAP_MS = 5 * 60 * 1000; // cap at 5 min
+
+    function _resetPollBackoff() {
+        _pollBackoffMs = 0;
+        if (_pollRetryTimer) { clearTimeout(_pollRetryTimer); _pollRetryTimer = null; }
+    }
+
+    function _schedulePollRetry() {
+        // Grow the backoff (capped), then add ±30% jitter to desynchronize clients.
+        _pollBackoffMs = Math.min(
+            _pollBackoffMs ? _pollBackoffMs * 2 : _POLL_BACKOFF_BASE_MS,
+            _POLL_BACKOFF_CAP_MS
+        );
+        var jittered = _pollBackoffMs * (0.7 + Math.random() * 0.6);
+        if (_pollRetryTimer) clearTimeout(_pollRetryTimer);
+        _pollRetryTimer = setTimeout(function () {
+            _pollRetryTimer = null;
+            pollActiveStorms();
+        }, jittered);
+        return jittered;
+    }
+
     /** Poll /ir-monitor/active-storms */
     function pollActiveStorms() {
         var loaderEl = document.getElementById('ir-loader');
@@ -3598,10 +3627,16 @@
             .then(function (r) {
                 if (r.status === 304) {
                     // Server confirms our cached payload is still current — no work to do.
+                    _resetPollBackoff();
                     if (loaderEl) loaderEl.style.display = 'none';
                     return null;
                 }
-                if (!r.ok) throw new Error('HTTP ' + r.status);
+                if (!r.ok) {
+                    var httpErr = new Error('HTTP ' + r.status);
+                    httpErr.status = r.status;
+                    throw httpErr;
+                }
+                _resetPollBackoff();
                 var et = r.headers.get('ETag');
                 if (et) _activeStormsETag = et;
                 return r.json();
@@ -3670,10 +3705,25 @@
 
                 // Hide loader, show status
                 if (loaderEl) loaderEl.style.display = 'none';
-                var statusEl = document.getElementById('ir-status-text');
-                if (statusEl) statusEl.textContent = 'Unable to reach server — retrying in 10 min';
 
-                _ga('ir_poll_error', { error: err.message });
+                // Retry sooner than the 10-min interval, with exponential
+                // backoff + jitter so we recover quickly from a transient blip
+                // without hammering an already-busy server.
+                var retryMs = _schedulePollRetry();
+                var retrySec = Math.round(retryMs / 1000);
+
+                var statusEl = document.getElementById('ir-status-text');
+                if (statusEl) {
+                    // 429/503 mean the server is up but overloaded — say so
+                    // rather than the misleading "unable to reach server".
+                    if (err.status === 429 || err.status === 503) {
+                        statusEl.textContent = 'Server busy — retrying in ' + retrySec + 's';
+                    } else {
+                        statusEl.textContent = 'Connection issue — retrying in ' + retrySec + 's';
+                    }
+                }
+
+                _ga('ir_poll_error', { error: err.message, status: err.status || 0 });
             });
     }
 

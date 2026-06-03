@@ -3453,6 +3453,7 @@ function loadHURSAT(storm) {
     irFrameIdx = 0;
     irPrefetchActive = 0;
     irFailedFrames = {};
+    irInFlight = {};
     irFollowZoomSet = false;
     stopIRPlayback();
     removeIROverlay();
@@ -4191,6 +4192,7 @@ function updateIRCacheStatus() {
 
 var irPrefetchQueue = [];    // Frames queued for prefetch
 var irPrefetchActive = 0;    // Number of active prefetch requests
+var irInFlight = {};         // idx -> [callbacks] for an in-flight fetch (request coalescing)
 var IR_PREFETCH_BATCH = 8;          // Concurrent prefetch requests (HURSAT)
 var IR_PREFETCH_BATCH_GRIDSAT = 14; // Higher concurrency for GridSat (small subsets, no auth)
 var IR_PREFETCH_BATCH_MERGIR = 6;   // MergIR: server-side rate limiter handles pacing
@@ -4268,6 +4270,24 @@ function fetchIRFrameSingle(idx, callback) {
     if (irFrames[idx]) { callback(irFrames[idx]); return; }
     if (irFailedFrames[idx]) { if (callback) callback(null); return; }
 
+    // In-flight request coalescing: if this frame is already being fetched,
+    // attach to the existing request instead of firing a duplicate. Without
+    // this, multiple prefetch chains and the direct loadIRFrame path all
+    // re-pick the same uncached frame before it returns, stampeding the
+    // backend with dozens of identical requests and saturating the API pool.
+    if (irInFlight[idx]) {
+        if (callback) irInFlight[idx].push(callback);
+        return;
+    }
+    irInFlight[idx] = callback ? [callback] : [];
+    function _settleFrame(data) {
+        var cbs = irInFlight[idx] || [];
+        delete irInFlight[idx];
+        for (var k = 0; k < cbs.length; k++) {
+            try { cbs[k](data); } catch (e) { /* one callback must not block others */ }
+        }
+    }
+
     // Build URL based on source (MergIR needs lat/lon, use unified endpoint)
     var frameUrl;
     var source = irMeta.source || 'hursat';
@@ -4306,7 +4326,7 @@ function fetchIRFrameSingle(idx, callback) {
         .then(function (data) {
             irFrames[idx] = data;
             updateIRCacheStatus();
-            if (callback) callback(data);
+            _settleFrame(data);
         })
         .catch(function (err) {
             clearTimeout(timer);
@@ -4330,9 +4350,9 @@ function fetchIRFrameSingle(idx, callback) {
                         irFrames[idx] = data;
                         updateIRCacheStatus();
                     }
-                    if (callback) callback(data);
+                    _settleFrame(data);
                 })
-                .catch(function () { if (callback) callback(null); });
+                .catch(function () { _settleFrame(null); });
         });
 }
 
@@ -4358,7 +4378,7 @@ function prefetchIRFrames(currentIdx) {
     var slots = maxConcurrent - irPrefetchActive;
     for (var i = 0; i < total && toFetch.length < slots; i++) {
         var idx = (currentIdx + 1 + i) % total;
-        if (!irFrames[idx] && !irFailedFrames[idx]) {
+        if (!irFrames[idx] && !irFailedFrames[idx] && !irInFlight[idx]) {
             toFetch.push(idx);
         }
     }
@@ -4366,7 +4386,7 @@ function prefetchIRFrames(currentIdx) {
     // Also prefetch a few behind current display (for rewinding)
     for (var j = 1; j <= 3; j++) {
         var prevIdx = (currentIdx - j + total) % total;
-        if (!irFrames[prevIdx] && !irFailedFrames[prevIdx] &&
+        if (!irFrames[prevIdx] && !irFailedFrames[prevIdx] && !irInFlight[prevIdx] &&
             toFetch.indexOf(prevIdx) === -1 && toFetch.length < slots + 3) {
             toFetch.push(prevIdx);
         }
