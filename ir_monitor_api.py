@@ -186,6 +186,27 @@ def _pos_key(lat: float, lon: float, radius_deg: float = 10.0) -> str:
     return f"{lat_r}_{lon_r}_r{rad_r}"
 
 
+def _ir_raw_key(atcf_id: str, dt_str: str, lat: float, lon: float,
+                radius_deg: float = 10.0) -> str:
+    """Single source of truth for the GCS object name of a cached raw Tb
+    frame. Used by BOTH the writer (_gcs_rt_put) and the prewarm LIST
+    membership test so the two can never drift — a mismatch would silently
+    re-render every frame. Callers pass atcf_id already .upper()'d.
+    """
+    pk = _pos_key(lat, lon, radius_deg)
+    return f"{_GCS_RT_VERSION}/ir-raw/{atcf_id}/{pk}/{dt_str}.json"
+
+
+def _band_raw_key(band: int, atcf_id: str, dt_str: str, lat: float,
+                  lon: float) -> str:
+    """Single source of truth for the GCS object name of a cached band
+    frame (see _ir_raw_key). Used by BOTH the writer (_gcs_band_put) and
+    the prewarm LIST membership test. Callers pass atcf_id already .upper()'d.
+    """
+    pk = _pos_key(lat, lon)
+    return f"{_GCS_RT_VERSION}/band-raw/{band}/{atcf_id}/{pk}/{dt_str}.json"
+
+
 def _interp_pos_at(atcf_id: str, target_dt, fallback_lat: float,
                    fallback_lon: float) -> tuple[float, float]:
     """Return (lat, lon) for the storm at target_dt, interpolated from
@@ -215,8 +236,7 @@ def _gcs_rt_get(atcf_id: str, dt_str: str, lat: float = 0, lon: float = 0,
     bucket = _get_rt_gcs_bucket()
     if bucket is None:
         return None
-    pk = _pos_key(lat, lon, radius_deg)
-    key = f"{_GCS_RT_VERSION}/ir-raw/{atcf_id}/{pk}/{dt_str}.json"
+    key = _ir_raw_key(atcf_id, dt_str, lat, lon, radius_deg)
     try:
         blob = bucket.blob(key)
         data = blob.download_as_bytes(timeout=5)
@@ -233,9 +253,8 @@ def _gcs_rt_put(atcf_id: str, dt_str: str, frame: dict, lat: float = 0,
     bucket = _get_rt_gcs_bucket()
     if bucket is None:
         return
-    pk = _pos_key(lat, lon, radius_deg)
+    key = _ir_raw_key(atcf_id, dt_str, lat, lon, radius_deg)
     def _upload():
-        key = f"{_GCS_RT_VERSION}/ir-raw/{atcf_id}/{pk}/{dt_str}.json"
         try:
             blob = bucket.blob(key)
             blob.upload_from_string(
@@ -317,8 +336,7 @@ def _gcs_band_get(band: int, atcf_id: str, dt_str: str, lat: float = 0, lon: flo
     bucket = _get_rt_gcs_bucket()
     if bucket is None:
         return None
-    pk = _pos_key(lat, lon)
-    key = f"{_GCS_RT_VERSION}/band-raw/{band}/{atcf_id}/{pk}/{dt_str}.json"
+    key = _band_raw_key(band, atcf_id, dt_str, lat, lon)
     try:
         blob = bucket.blob(key)
         data = blob.download_as_bytes(timeout=5)
@@ -332,9 +350,8 @@ def _gcs_band_put(band: int, atcf_id: str, dt_str: str, frame: dict, lat: float 
     bucket = _get_rt_gcs_bucket()
     if bucket is None:
         return
-    pk = _pos_key(lat, lon)
+    key = _band_raw_key(band, atcf_id, dt_str, lat, lon)
     def _upload():
-        key = f"{_GCS_RT_VERSION}/band-raw/{band}/{atcf_id}/{pk}/{dt_str}.json"
         try:
             blob = bucket.blob(key)
             blob.upload_from_string(
@@ -367,8 +384,7 @@ def _gcs_rt_exists(atcf_id: str, dt_str: str, lat: float = 0, lon: float = 0,
     bucket = _get_rt_gcs_bucket()
     if bucket is None:
         return False
-    pk = _pos_key(lat, lon, radius_deg)
-    key = f"{_GCS_RT_VERSION}/ir-raw/{atcf_id}/{pk}/{dt_str}.json"
+    key = _ir_raw_key(atcf_id, dt_str, lat, lon, radius_deg)
     try:
         return bucket.blob(key).exists()
     except Exception:
@@ -381,12 +397,37 @@ def _gcs_band_exists(band: int, atcf_id: str, dt_str: str,
     bucket = _get_rt_gcs_bucket()
     if bucket is None:
         return False
-    pk = _pos_key(lat, lon)
-    key = f"{_GCS_RT_VERSION}/band-raw/{band}/{atcf_id}/{pk}/{dt_str}.json"
+    key = _band_raw_key(band, atcf_id, dt_str, lat, lon)
     try:
         return bucket.blob(key).exists()
     except Exception:
         return False
+
+
+def _gcs_rt_list_keys(prefix: str) -> set | None:
+    """List the full object names present under `prefix` on the realtime
+    GCS bucket, in ONE auto-paginated LIST call (no max_results cap).
+
+    Replaces N per-frame Class-B existence GETs in the prewarm path with a
+    single Class-A LIST per prefix per cycle. Returns the set of object
+    names (e.g. "rt-v12/ir-raw/AL072024/.../202409151200.json") so callers
+    do an exact-string membership test against the key the writer wrote.
+
+    Returns None — NOT an empty set — on any LIST error or when the bucket
+    is unavailable, so callers can fall back to the per-object .exists()
+    path. (An empty set means "prefix is genuinely empty"; None means "we
+    don't know", which must never be allowed to drop a frame.)
+    """
+    bucket = _get_rt_gcs_bucket()
+    if bucket is None:
+        return None
+    try:
+        present = set()
+        for blob in bucket.list_blobs(prefix=prefix, timeout=10):
+            present.add(blob.name)
+        return present
+    except Exception:
+        return None
 
 
 def _gcs_manifest_get(atcf_id: str) -> dict:
@@ -2730,6 +2771,26 @@ def _prefetch_ir_frames(storms: list):
                     extra_bands.append(VIS_BAND)
                 _prefetch_counts = {"ir": 0, "band": 0, "jpg": 0}
 
+                # ── LIST-once existence sets (Item 6) ────────────────
+                # Replace the per-frame Class-B existence GET that each
+                # worker used to do (~99-132 GETs/storm/cycle on full
+                # cache hits) with ONE Class-A LIST per prefix per cycle.
+                # Workers close over these sets (same pattern as the
+                # `manifest` local) and do an exact-string membership test
+                # against the key the writer wrote. A None set (LIST error)
+                # makes the worker fall back to the legacy .exists() path so
+                # a LIST failure can never drop a frame.
+                _atcf_upper = atcf_id.upper()
+                _ir_existing_keys = _gcs_rt_list_keys(
+                    f"{_GCS_RT_VERSION}/ir-raw/{_atcf_upper}/"
+                )
+                _band_existing_keys = {
+                    b: _gcs_rt_list_keys(
+                        f"{_GCS_RT_VERSION}/band-raw/{b}/{_atcf_upper}/"
+                    )
+                    for b in ([primary_band] + extra_bands)
+                }
+
                 def _fetch_and_cache_ir(tdt, dstr, force=False):
                     """Worker: fetch IR frame and cache to GCS.
 
@@ -2744,10 +2805,18 @@ def _prefetch_ir_frames(storms: list):
                     or stale-cached on an earlier cycle is re-fetched and
                     overwritten once its real scan reaches S3."""
                     ilat, ilon = _manifest_pos(tdt, dstr, force)
-                    if not force and _gcs_rt_exists(atcf_id.upper(), dstr,
-                                   lat=ilat, lon=ilon,
-                                   radius_deg=_PREFETCH_RADIUS_DEG):
-                        return
+                    if not force:
+                        if _ir_existing_keys is not None:
+                            # LIST-once membership: exact-string match
+                            # against the key the writer would write.
+                            if _ir_raw_key(_atcf_upper, dstr, ilat, ilon,
+                                           _PREFETCH_RADIUS_DEG) in _ir_existing_keys:
+                                return
+                        elif _gcs_rt_exists(_atcf_upper, dstr,
+                                            lat=ilat, lon=ilon,
+                                            radius_deg=_PREFETCH_RADIUS_DEG):
+                            # LIST failed → fall back to per-object exists.
+                            return
                     try:
                         raw = fetch_ir_tb_raw(ilat, ilon, tdt, box_deg,
                                               max_substitution_min=_ANIM_MAX_SUBSTITUTION_MIN)
@@ -2805,8 +2874,15 @@ def _prefetch_ir_frames(storms: list):
                     force=True re-fetches the newest few frames each cycle
                     (see _fetch_and_cache_ir) to heal leading-edge frames."""
                     ilat, ilon = _manifest_pos(tdt, dstr, force)
-                    if not force and _gcs_band_exists(band, atcf_id.upper(), dstr, lat=ilat, lon=ilon):
-                        return
+                    if not force:
+                        _bset = _band_existing_keys.get(band)
+                        if _bset is not None:
+                            if _band_raw_key(band, _atcf_upper, dstr,
+                                             ilat, ilon) in _bset:
+                                return
+                        elif _gcs_band_exists(band, _atcf_upper, dstr,
+                                              lat=ilat, lon=ilon):
+                            return
                     if band == VIS_BAND:
                         se = _solar_elevation(ilat, ilon, tdt)
                         if se < -6:
