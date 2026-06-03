@@ -552,6 +552,33 @@ def get_dataset(data_type: str, era: str) -> xr.Dataset:
 
 
 
+def _open_zarr_group_consolidated(store, label: str):
+    """
+    Open a raw zarr group, preferring consolidated metadata.
+
+    Consolidated metadata (.zmetadata) collapses a cold open from a LIST plus
+    one GET per array's .zarray/.zattrs into a single GET of .zmetadata. The
+    era5 and mergir groups historically shipped WITHOUT consolidated metadata,
+    so every cold Cloud Run instance paid a per-array metadata storm (this drove
+    the late-May ~27M-op / ~$36 spike). This helper TRIES the consolidated open
+    and silently falls back to the plain open when .zmetadata is absent, so it is
+    safe to deploy BEFORE or AFTER the bucket is consolidated:
+      * before consolidation → falls back, behaviour identical to old code
+      * after consolidation  → single-GET cold open, no per-array LISTs/GETs
+    """
+    import zarr
+    try:
+        grp = zarr.open_consolidated(store, mode='r')
+        print(f"Opened {label} with CONSOLIDATED metadata (single-GET cold open)")
+        return grp
+    except Exception as e:
+        # KeyError / FileNotFoundError when .zmetadata is missing; any other
+        # error also falls back to the proven non-consolidated path.
+        print(f"{label}: consolidated metadata unavailable ({type(e).__name__}: {e}); "
+              f"falling back to non-consolidated open")
+        return zarr.open(store, mode='r')
+
+
 @lru_cache(maxsize=1)
 def get_ir_dataset():
     """Open the MergIR Zarr store. Prefers GCS (free egress) over S3."""
@@ -562,14 +589,14 @@ def get_ir_dataset():
         store = _wrap_lru(gcsfs.GCSMap(root=IR_GCS_PATH, gcs=fs, check=False),
                           _IR_CHUNK_CACHE_BYTES)
         print(f"Opened MergIR Zarr from GCS (LRU {_IR_CHUNK_CACHE_BYTES//1024//1024} MB): {IR_GCS_PATH}")
-        return zarr.open(store, mode='r')
+        return _open_zarr_group_consolidated(store, "MergIR/GCS")
     if USE_S3 and IR_S3_PATH:
         import s3fs
         fs = s3fs.S3FileSystem(anon=False, client_kwargs={"region_name": AWS_REGION})
         store = _wrap_lru(s3fs.S3Map(root=IR_S3_PATH, s3=fs, check=False),
                           _IR_CHUNK_CACHE_BYTES)
         print(f"Opened MergIR Zarr from S3 (LRU {_IR_CHUNK_CACHE_BYTES//1024//1024} MB): {IR_S3_PATH}")
-        return zarr.open(store, mode='r')
+        return _open_zarr_group_consolidated(store, "MergIR/S3")
     return None
 
 
@@ -583,14 +610,14 @@ def get_era5_dataset():
         store = _wrap_lru(gcsfs.GCSMap(root=ERA5_GCS_PATH, gcs=fs, check=False),
                           _ERA5_CHUNK_CACHE_BYTES)
         print(f"Opened ERA5 Zarr from GCS (LRU {_ERA5_CHUNK_CACHE_BYTES//1024//1024} MB): {ERA5_GCS_PATH}")
-        return zarr.open(store, mode='r')
+        return _open_zarr_group_consolidated(store, "ERA5/GCS")
     if USE_S3 and ERA5_S3_PATH:
         import s3fs
         fs = s3fs.S3FileSystem(anon=False, client_kwargs={"region_name": AWS_REGION})
         store = _wrap_lru(s3fs.S3Map(root=ERA5_S3_PATH, s3=fs, check=False),
                           _ERA5_CHUNK_CACHE_BYTES)
         print(f"Opened ERA5 Zarr from S3 (LRU {_ERA5_CHUNK_CACHE_BYTES//1024//1024} MB): {ERA5_S3_PATH}")
-        return zarr.open(store, mode='r')
+        return _open_zarr_group_consolidated(store, "ERA5/S3")
     return None
 
 
@@ -731,6 +758,92 @@ CLIMATOLOGY_PATH = Path(os.environ.get("CLIMATOLOGY_PATH", "./climatology_hybrid
 # and closest datetime).  Built at startup from both metadata files.
 _merge_to_swath_index: dict[int, int] = {}
 
+# ---------------------------------------------------------------------------
+# Enrichment sidecar (precomputed per-case fields)
+# ---------------------------------------------------------------------------
+# Startup enrichment (SHIPS shear, max wind, extended SHIPS, vortex metrics)
+# historically ran per-case `.isel(num_cases=idx)` loops against the Zarr on
+# every cold instance — millions of tiny GCS GETs, re-run on every cold start.
+# build_tc_radar_enrichment_sidecar.py computes those fields ONCE (vectorized
+# bulk reads) and writes a small JSON to GCS / local disk. When that sidecar is
+# present we merge it into the metadata caches at startup and SKIP the live
+# per-case enrichment loops entirely. When it is absent, behaviour is identical
+# to before: the live loops run in background threads (guarded fallback).
+#
+# Sidecar JSON schema (mirrors tc_radar_metadata.json conventions):
+#   {"schema": 1,
+#    "swath": {"<case_index>": {"sddc":..., "shdc":..., "max_er_wspd_05km":...,
+#                               "max_er_wspd_20km":..., "vmpi":..., ...}, ...},
+#    "merge": {"<case_index>": { ... , "vortex_height":..., ...}, ...}}
+ENRICHMENT_SIDECAR_PATH = os.environ.get(
+    "TC_RADAR_ENRICHMENT_SIDECAR",
+    f"gs://{GCS_ZARR_BUCKET}/{GCS_ZARR_PREFIX}/enrichment_sidecar.json" if GCS_ZARR_BUCKET else "",
+)
+_enrichment_sidecar_applied = False
+
+
+def _read_sidecar_bytes(path: str) -> Optional[bytes]:
+    """Read sidecar bytes from a gs:// URL or local path; None if absent."""
+    if not path:
+        return None
+    try:
+        if path.startswith("gs://"):
+            import gcsfs
+            fs = gcsfs.GCSFileSystem()
+            if not fs.exists(path):
+                return None
+            with fs.open(path, "rb") as f:
+                return f.read()
+        p = Path(path)
+        if not p.exists():
+            return None
+        return p.read_bytes()
+    except Exception as e:
+        print(f"Enrichment sidecar: read failed for {path} ({e}); will fall back to live enrichment")
+        return None
+
+
+def _apply_enrichment_sidecar() -> bool:
+    """
+    Merge the precomputed enrichment sidecar into the metadata caches.
+
+    Returns True if the sidecar was found and applied (so the caller should
+    SKIP the live per-case enrichment loops), False otherwise (fall back).
+    Existing JSON-derived fields are NOT overwritten when the sidecar value is
+    null/missing — the sidecar only fills fields it actually computed.
+    """
+    global _enrichment_sidecar_applied
+    raw = _read_sidecar_bytes(ENRICHMENT_SIDECAR_PATH)
+    if raw is None:
+        print("Enrichment sidecar: not present — using live per-case enrichment")
+        return False
+    try:
+        payload = json.loads(raw)
+    except Exception as e:
+        print(f"Enrichment sidecar: parse failed ({e}); using live per-case enrichment")
+        return False
+
+    applied = 0
+    for data_type, cache in (("swath", _metadata_cache), ("merge", _merge_metadata_cache)):
+        section = payload.get(data_type, {})
+        for ci_str, fields in section.items():
+            try:
+                ci = int(ci_str)
+            except (TypeError, ValueError):
+                continue
+            entry = cache.get(ci)
+            if entry is None:
+                continue
+            for k, v in fields.items():
+                if v is not None:
+                    entry[k] = v
+            applied += 1
+
+    _enrichment_sidecar_applied = True
+    print(f"Enrichment sidecar: applied {applied} cases from {ENRICHMENT_SIDECAR_PATH} "
+          f"(skipping live per-case enrichment)")
+    return True
+
 
 @app.on_event("startup")
 def startup():
@@ -800,12 +913,23 @@ def startup():
     backend = f"S3 Zarr (s3://{S3_BUCKET}/{S3_PREFIX})" if USE_S3 else "AOML HTTP (fallback)"
     print(f"Data backend: {backend}")
 
-    # Pre-warm datasets in background threads
-    # Also enrich metadata with SHIPS shear values once datasets are loaded
+    # Prefer the precomputed enrichment sidecar. When present, it fully
+    # populates the metadata caches with no per-case Zarr reads, so we skip the
+    # live per-case enrichment loops below entirely. When absent, sidecar_ok is
+    # False and we fall back to the original live enrichment (behaviour
+    # identical to before the sidecar existed).
+    sidecar_ok = _apply_enrichment_sidecar()
+
+    # Pre-warm datasets in background threads.
+    # Also enrich metadata with SHIPS shear values once datasets are loaded —
+    # but only when the sidecar is absent (otherwise the caches are already
+    # enriched and we just warm the chunk cache).
     def prewarm_and_enrich(data_type, era):
         try:
             ds = get_dataset(data_type, era)
             print(f"Pre-warmed {data_type}/{era}")
+            if sidecar_ok:
+                return  # caches already enriched from sidecar; skip live loops
             _enrich_metadata_with_ships(ds, data_type, era)
             _enrich_metadata_with_max_wind(ds, data_type, era)
             _enrich_metadata_with_ships_extended(ds, data_type, era)
