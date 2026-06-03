@@ -528,6 +528,27 @@ _VIS_DROPOUT_FRAC = 0.80      # flag if frame mean < FRAC × the dimmer neighbor
 _VIS_DROPOUT_MIN_BRIGHT = 12.0  # …and both neighbors are this bright (i.e. it's daylight,
                                 # not the near-black twilight floor where the ratio is noise)
 
+# Registration (phase-correlation) screen. The MAD screen above compares whole-
+# frame brightness and is structurally BLIND to a pure spatial translation: a
+# frame rendered from a wrong/displaced scan (a brief wrong-satellite or wrong-
+# sector substitution) carries the CORRECT imagery shifted ~0.3–0.5° N/S, so its
+# MAD vs neighbors is only modestly above normal cloud evolution and slips under
+# the ratio gate. We add a sub-pixel phase-correlation test on the SAME 64×64
+# thumbs the MAD screen already decoded: a displaced outlier shows a large shift
+# TO it from the prior frame and an equal-and-OPPOSITE shift FROM it to the next
+# ("pops out and comes back"), while its two neighbors agree (small direct
+# shift). Thresholds are in 64px-thumb pixels (≈0.31°/px on the default 20° box,
+# scaling with the cutout size — a fixed fraction-of-frame displacement, the
+# right invariant). Observed on EP012026 Visible 23:10 UTC (2026-06-03): one
+# frame displaced ~0.5° N that the MAD screen missed and that self-healed on
+# refetch. Conservative on purpose — the neighbor-agreement gate means fast-but-
+# smoothly-moving storms are never flagged (no false-positive gaps in the loop).
+_REG_SHIFT_FLAG_PX = 1.3       # per-axis |shift| (px) required on BOTH sides
+_REG_NEIGHBOR_AGREE_PX = 0.9   # …and the direct prev↔next shift must stay below this
+_REG_MIN_QUALITY = 0.45        # …and all three NCC peaks must be at least this
+                               # (a coherent scene exists; real 10-min frames
+                               # correlate ≫ this — gates out decorrelated churn)
+
 # Per-storm set of frame slot keys ("YYYYMMDDHHMM") flagged anomalous in the
 # last bundle build. The prewarm pops this at the start of each cycle and
 # FORCE-refetches those frames (bypassing the cache short-circuit) so a
@@ -537,6 +558,67 @@ _VIS_DROPOUT_MIN_BRIGHT = 12.0  # …and both neighbors are this bright (i.e. it
 # retrying until its real scan lands or it ages out of the window.
 _anomalous_heal_times: dict = {}
 _anomalous_heal_lock = threading.Lock()
+
+
+# Bound concurrent heavy raw-frame fetches per instance to prevent OOM.
+# fetch_ir_tb_raw / fetch_band_raw each pull a large satellite cutout into
+# memory; with containerConcurrency=7 on a 4 GB instance, several running at
+# once blow past the memory limit and the instance is OOM-killed — which
+# 502s EVERY in-flight request on it, including the lightweight active-storms
+# poll, surfacing to users as "unable to reach server". This mirrors
+# global_archive_api._data_load_semaphore (OOM protection for MergIR/GridSat).
+# Excess requests wait briefly, then return a clean 503 instead of crashing
+# the instance for everyone.
+_RAW_FETCH_MAX_CONCURRENT = 3
+_raw_fetch_semaphore = threading.Semaphore(_RAW_FETCH_MAX_CONCURRENT)
+
+
+def _estimate_shift(a, b):
+    """Estimate the (dy, dx, quality) translation that best aligns `b` onto `a`,
+    via FFT normalized cross-correlation + parabolic sub-pixel interpolation.
+    Both inputs are equal-shape float32 thumbs.
+
+    `quality` is the peak correlation coefficient in [-1, 1]: a coherent whole-
+    field translation (a displaced scan over a frame-to-frame-correlated scene)
+    gives a strong sharp peak, while decorrelated texture or convective churn
+    gives a weak diffuse one. Callers MUST gate on `quality` so a noisy scene is
+    never trusted to yield a shift. Unlike phase correlation, NCC is NOT
+    magnitude-whitened, so the dominant cloud feature drives the peak instead of
+    high-frequency noise. Returns (0.0, 0.0, 0.0) on any error so a detection
+    hiccup never blocks bundling."""
+    try:
+        import numpy as np
+        ny, nx = a.shape
+        a0 = a - float(a.mean())
+        b0 = b - float(b.mean())
+        denom = float(np.sqrt(float((a0 * a0).sum()) * float((b0 * b0).sum())))
+        if denom == 0.0:
+            return 0.0, 0.0, 0.0
+        corr = np.fft.irfft2(
+            np.fft.rfft2(a0) * np.conj(np.fft.rfft2(b0)), s=(ny, nx)) / denom
+        py, px = np.unravel_index(int(np.argmax(corr)), corr.shape)
+        peak = float(corr[py, px])
+
+        def _parab(axis, p):
+            n = corr.shape[axis]
+            lo, hi = (p - 1) % n, (p + 1) % n
+            if axis == 0:
+                c0, c1, c2 = corr[lo, px], corr[py, px], corr[hi, px]
+            else:
+                c0, c1, c2 = corr[py, lo], corr[py, px], corr[py, hi]
+            d = c0 - 2.0 * c1 + c2
+            return 0.0 if d == 0 else 0.5 * (c0 - c2) / d
+
+        dy = py + _parab(0, py)
+        dx = px + _parab(1, px)
+        # Unwrap the circular FFT shift into a signed offset about zero.
+        if dy > ny / 2:
+            dy -= ny
+        if dx > nx / 2:
+            dx -= nx
+        return float(dy), float(dx), peak
+    except Exception:
+        return 0.0, 0.0, 0.0
 
 
 def _flag_anomalous_frames(jpgs: list, band: int | None = None,
@@ -642,6 +724,45 @@ def _flag_anomalous_frames(jpgs: list, band: int | None = None,
             # that floor the ratio is just twilight noise.
             if dimmer >= _VIS_DROPOUT_MIN_BRIGHT and mi < dimmer * _VIS_DROPOUT_FRAC:
                 flagged.add(i)
+
+    # Registration screen: catch a frame whose CORRECT imagery is spatially
+    # DISPLACED vs both neighbors — a wrong/displaced scan the brightness-based
+    # MAD test is blind to (see _REG_SHIFT_FLAG_PX). Band-agnostic; reuses the
+    # thumbs decoded above, so the only added cost is a few 64×64 FFTs/frame.
+    T, A, Q = _REG_SHIFT_FLAG_PX, _REG_NEIGHBOR_AGREE_PX, _REG_MIN_QUALITY
+    for i in range(n):
+        if i in flagged:
+            continue
+        ti = thumbs[i]
+        if ti is None:
+            continue
+        tp = next((thumbs[j] for j in range(i - 1, -1, -1) if thumbs[j] is not None), None)
+        tq = next((thumbs[j] for j in range(i + 1, n) if thumbs[j] is not None), None)
+        if tp is None or tq is None:
+            continue
+        dy_pi, dx_pi, q_pi = _estimate_shift(tp, ti)   # i onto prev
+        dy_iq, dx_iq, q_iq = _estimate_shift(ti, tq)   # next onto i
+        dy_pq, dx_pq, q_pq = _estimate_shift(tp, tq)   # direct prev↔next baseline
+        # Only trust the geometry when all three alignments are coherent;
+        # decorrelated texture yields a weak peak and an untrustworthy shift.
+        if min(q_pi, q_iq, q_pq) < Q:
+            continue
+        # A displaced outlier shows a large excursion to it and an equal-and-
+        # opposite one away from it (product < 0), while the neighbors agree
+        # (small direct shift) — distinguishes it from smooth fast motion, where
+        # both excursions point the same way and the direct shift is large.
+        vert = (abs(dy_pi) >= T and abs(dy_iq) >= T and
+                dy_pi * dy_iq < 0 and abs(dy_pq) <= A)
+        horiz = (abs(dx_pi) >= T and abs(dx_iq) >= T and
+                 dx_pi * dx_iq < 0 and abs(dx_pq) <= A)
+        if vert or horiz:
+            flagged.add(i)
+            axis = "NS" if vert else "EW"
+            amp = (max(abs(dy_pi), abs(dy_iq)) if vert
+                   else max(abs(dx_pi), abs(dx_iq)))
+            base = abs(dy_pq) if vert else abs(dx_pq)
+            print(f"[Anom reg] frame {i}: {axis} displacement ~{amp:.1f}px "
+                  f"(neighbors agree {base:.1f}px) band={band}")
     return flagged
 
 
@@ -3787,8 +3908,15 @@ def get_storm_ir_raw_frame(
     # Cutout centered on the storm's INTERPOLATED position at this
     # frame's time (not the static advisory) — keeps historical frames
     # framed correctly when the storm has moved.
-    raw = fetch_ir_tb_raw(interp_lat, interp_lon, target_dt, box_deg,
-                          max_substitution_min=_ANIM_MAX_SUBSTITUTION_MIN)
+    # Bounded to prevent OOM under concurrent load (see _raw_fetch_semaphore).
+    if not _raw_fetch_semaphore.acquire(timeout=60):
+        logger.warning("ir-raw-frame: semaphore timeout — too many concurrent loads")
+        raise HTTPException(status_code=503, detail="Server busy — please retry shortly")
+    try:
+        raw = fetch_ir_tb_raw(interp_lat, interp_lon, target_dt, box_deg,
+                              max_substitution_min=_ANIM_MAX_SUBSTITUTION_MIN)
+    finally:
+        _raw_fetch_semaphore.release()
     if not raw or raw.get("tb") is None:
         raise HTTPException(status_code=502, detail=f"No IR data for frame {frame_index}")
 
@@ -3886,6 +4014,7 @@ def get_storm_ir_raw_frame(
                 lat=interp_lat, lon=interp_lon, radius_deg=radius_deg)
 
     del tb, arr, mask, scaled, encoded
+    gc.collect()
 
     return JSONResponse(
         content=frame_result,
@@ -4435,23 +4564,34 @@ def get_storm_band_raw_frame(
             headers={"Cache-Control": "public, max-age=300"},
         )
 
-    # Fetch from satellite
-    raw = fetch_band_raw(center_lat, center_lon, target_dt, box_deg, band=band,
-                         max_substitution_min=_ANIM_MAX_SUBSTITUTION_MIN)
-    if not raw or raw.get("data") is None:
-        raise HTTPException(status_code=502, detail=f"No Band {band} data for frame {frame_index}")
+    # Fetch from satellite (bounded to prevent OOM under concurrent load —
+    # see _raw_fetch_semaphore). Hold across the array processing too, since
+    # the float32 cutout + intermediates are the memory peak; release once the
+    # data is reduced to the small uint8 payload.
+    if not _raw_fetch_semaphore.acquire(timeout=60):
+        logger.warning("band-raw-frame: semaphore timeout — too many concurrent loads")
+        raise HTTPException(status_code=503, detail="Server busy — please retry shortly")
+    try:
+        raw = fetch_band_raw(center_lat, center_lon, target_dt, box_deg, band=band,
+                             max_substitution_min=_ANIM_MAX_SUBSTITUTION_MIN)
+        if not raw or raw.get("data") is None:
+            raise HTTPException(status_code=502, detail=f"No Band {band} data for frame {frame_index}")
 
-    data = raw["data"]
-    data_type = raw["data_type"]
-    band_info = BAND_RANGES.get(band, BAND_RANGES[13])
-    vmin, vmax = band_info["vmin"], band_info["vmax"]
+        data = raw["data"]
+        data_type = raw["data_type"]
+        band_info = BAND_RANGES.get(band, BAND_RANGES[13])
+        vmin, vmax = band_info["vmin"], band_info["vmax"]
 
-    arr = np.asarray(data, dtype=np.float32)
-    mask = ~np.isfinite(arr) | (arr < vmin * 0.5 if data_type == "tb" else arr < -0.01)
-    scale = 254.0 / (vmax - vmin)
-    scaled = np.clip((arr - vmin) * scale + 1, 1, 255)
-    scaled[mask] = 0
-    encoded = scaled.astype(np.uint8)
+        arr = np.asarray(data, dtype=np.float32)
+        mask = ~np.isfinite(arr) | (arr < vmin * 0.5 if data_type == "tb" else arr < -0.01)
+        scale = 254.0 / (vmax - vmin)
+        scaled = np.clip((arr - vmin) * scale + 1, 1, 255)
+        scaled[mask] = 0
+        encoded = scaled.astype(np.uint8)
+        del data, arr, mask, scaled
+        gc.collect()
+    finally:
+        _raw_fetch_semaphore.release()
 
     frame_result = {
         "tb_data": base64.b64encode(encoded.tobytes()).decode("ascii"),
@@ -4474,7 +4614,7 @@ def get_storm_band_raw_frame(
     # Cache to GCS
     _gcs_band_put(band, atcf_id.upper(), dt_str, frame_result, lat=center_lat, lon=center_lon)
 
-    del data, arr, mask, scaled, encoded
+    del encoded
 
     return JSONResponse(
         content=frame_result,
