@@ -147,6 +147,17 @@ _GCS_RT_VERSION = "rt-v12"  # v12: GOES geos→latlon reprojection (E+W); raw/we
                             # (perimeter-sampled geos window + true geos_extent;
                             # evicts pre-fix frames with rotated black corners)
 
+# _cleanup_old_gcs_frames is gated to run at most once per hour rather than
+# every ~10-min prewarm cycle (it issues ~6 Class-A list_blobs ops/run, the
+# priciest GCS operation). The standalone prewarm runs as a Cloud Run JOB —
+# a FRESH PROCESS each cycle — so an in-memory timestamp would reset every
+# cycle and never gate. We persist the last-run time as a tiny GCS marker
+# object (mirrors the rt-version.json write pattern) so the gate survives
+# process restarts. 3600s window means frames age out up to ~1h later than
+# the 24h cutoff would otherwise allow — acceptable.
+_CLEANUP_INTERVAL_SEC = 3600
+_CLEANUP_MARKER_KEY = f"{_GCS_RT_VERSION}/cleanup-last-run.txt"
+
 def _get_rt_gcs_bucket():
     global _gcs_rt_client, _gcs_rt_bucket
     if not _GCS_IR_CACHE_BUCKET:
@@ -531,6 +542,54 @@ def _gcs_rt_version_put():
         )
     except Exception as ex:
         print(f"[Prewarm] rt-version.json upload failed: {ex}")
+
+
+def _cleanup_due() -> bool:
+    """Return True if the GCS-frame cleanup is due to run this cycle.
+
+    The standalone prewarm runs as a Cloud Run Job (fresh process each
+    cycle), so we persist the last-run timestamp in a tiny GCS marker
+    object rather than module-level state. Returns True when at least
+    _CLEANUP_INTERVAL_SEC has elapsed since the stored timestamp.
+
+    Fail-OPEN: if the marker is missing, empty, garbled, or unparseable
+    we return True (run the cleanup) — better to occasionally over-run a
+    cheap-ish maintenance op than to silently never clean up. The only
+    case that returns False is the bucket being unavailable, in which
+    case the cleanup itself can't run anyway, so we skip without crashing.
+    """
+    bucket = _get_rt_gcs_bucket()
+    if bucket is None:
+        return False
+    try:
+        blob = bucket.blob(_CLEANUP_MARKER_KEY)
+        raw = blob.download_as_text(timeout=15)
+    except Exception:
+        # Missing marker (NotFound) or transient read error → fail-open.
+        return True
+    try:
+        stored_ts = float(raw.strip())
+    except (ValueError, TypeError):
+        # Garbled / non-float contents → fail-open and let the caller
+        # rewrite a clean marker via _cleanup_mark_done().
+        return True
+    return (time.time() - stored_ts) >= _CLEANUP_INTERVAL_SEC
+
+
+def _cleanup_mark_done():
+    """Stamp the cleanup marker with the current time. Best-effort; any
+    failure is swallowed so a marker-write hiccup never breaks the
+    prewarm cycle (worst case the cleanup simply runs again next cycle)."""
+    bucket = _get_rt_gcs_bucket()
+    if bucket is None:
+        return
+    try:
+        blob = bucket.blob(_CLEANUP_MARKER_KEY)
+        blob.upload_from_string(
+            str(time.time()), content_type="text/plain", timeout=15,
+        )
+    except Exception as ex:
+        print(f"[Prewarm] cleanup marker write failed: {ex}")
 
 
 # Anomalous-scan screen. Frames are uniform size/bounds, but a bad scan
@@ -3111,8 +3170,12 @@ def _prefetch_ir_frames(storms: list):
               f"{total_cached} already cached, "
               f"{total_gcs_fetched} raw Tb frames cached to GCS")
 
-        # Clean up old cached frames from GCS
-        _cleanup_old_gcs_frames(storms)
+        # Clean up old cached frames from GCS — gated to at most once per
+        # hour (via a GCS-persisted marker) to avoid the ~6 Class-A
+        # list_blobs ops on every ~10-min prewarm cycle.
+        if _cleanup_due():
+            _cleanup_old_gcs_frames(storms)
+            _cleanup_mark_done()
 
     except Exception:
         traceback.print_exc()
