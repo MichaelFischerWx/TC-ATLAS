@@ -3145,6 +3145,26 @@ def _prefetch_ir_frames(storms: list):
                         except Exception as ex:
                             print(f"[IR Pre-fetch] {atcf_id}: band {eb} bundle build failed: {ex}")
 
+                # ── GeoColor bundle ────────────────────────────────
+                # Build + upload the per-frame day/night GeoColor bundle to
+                # the public GCS key the frontend already tries FIRST
+                # (`bundles/geocolor/{ATCF}.bin`). Without this writer every
+                # GeoColor view streamed ~2 MB through Cloud Run on the API
+                # fallback; prewarming it moves that egress to storage.
+                # googleapis.com. Reads from the warmed geocolor/band/raw
+                # GCS caches the per-frame loop just populated. Uses the
+                # same _PREFETCH_* params the frontend's GCS-first request
+                # carries, so the uploaded bytes serve that request directly.
+                try:
+                    _build_and_upload_geocolor_bundle(
+                        atcf_id, center_lat, center_lon,
+                        lookback_hours=_PREFETCH_LOOKBACK_HOURS,
+                        radius_deg=_PREFETCH_RADIUS_DEG,
+                        interval_min=_PREFETCH_INTERVAL_MIN,
+                    )
+                except Exception as ex:
+                    print(f"[IR Pre-fetch] {atcf_id}: geocolor bundle build failed: {ex}")
+
                 # ── Persist the render-once manifest ───────────────
                 # Prune to a 30h horizon (covers the 6h loop window + the
                 # 24h MW-compare lookback so persistent compare slots aren't
@@ -5488,6 +5508,11 @@ def get_storm_band_frames_bundle(
         media_type="application/octet-stream",
         headers={
             "Cache-Control": "public, max-age=300",
+            # WebP payloads are already codec-compressed; declaring an explicit
+            # Content-Encoding makes Starlette's GZipMiddleware pass the body
+            # through untouched (it skips any response that already sets one),
+            # saving ~2% bytes of pointless re-gzip CPU on every request.
+            "Content-Encoding": "identity",
             "X-Bundle-Frames": str(len(frame_times)),
             "X-Bundle-Band": str(band),
             "X-Bundle-Header-Length": str(len(header_json)),
@@ -5639,38 +5664,33 @@ def _get_or_render_geocolor_jpg(
     return jpg_bytes, raw.get("satellite", sat_name), is_day
 
 
-@router.get("/storm/{atcf_id}/geocolor-frames-bundle")
-def get_storm_geocolor_frames_bundle(
-    atcf_id: str,
-    lookback_hours: float = Query(6.0, ge=1, le=24),
-    radius_deg: float = Query(10.0, ge=1.0, le=12.0),
-    interval_min: int = Query(15, ge=10, le=60),
+def _build_geocolor_bundle_body(
+    atcf_id: str, center_lat: float, center_lon: float, *,
+    lookback_hours: float, radius_deg: float, interval_min: int,
+    center_dt: _dt | None = None,
 ):
-    """GeoColor bundle: per-frame solar-elevation switch between Band 2
-    visible (day) and Band 13 IR (night, inverted grayscale). Same packed
-    binary wire format as the IR/band bundles:
+    """Assemble the packed GeoColor bundle body for one storm.
+
+    Single source of truth for the GeoColor wire format
         [uint32 LE header_length][JSON header][concat WebP bytes]
+    shared by the on-demand API endpoint (`get_storm_geocolor_frames_bundle`)
+    and the prewarm writer (`_build_and_upload_geocolor_bundle`). Both call
+    this so the bytes the prewarm cycle uploads to GCS are byte-identical to
+    what the endpoint serves for the same frames — the GCS-first frontend
+    path then gets exactly the content it would have gotten from Cloud Run.
+
+    Returns (body, header_json_len, n_frames, n_day, n_night).
     """
-    import struct
     from concurrent.futures import ThreadPoolExecutor
 
-    _ensure_fresh_cache()
-    storm = None
-    with _active_storms_lock:
-        for s in _active_storms_cache["storms"]:
-            if s["atcf_id"].upper() == atcf_id.upper():
-                storm = dict(s)
-                break
-
-    if not storm:
-        raise HTTPException(status_code=404, detail=f"Storm {atcf_id} not found")
-
     atcf_upper = atcf_id.upper()
-    center_lat = storm["lat"]
-    center_lon = storm["lon"]
     half = radius_deg
 
-    center_dt = _dt.now(timezone.utc)
+    if center_dt is None:
+        center_dt = _dt.now(timezone.utc)
+    # build_frame_times rounds DOWN to the interval boundary, so two "now"
+    # calls in the same minute-block (endpoint vs. prewarm) snap to the same
+    # grid — a precondition for byte-identical bundles.
     frame_times = build_frame_times(center_dt, lookback_hours, interval_min)
     frame_times = list(reversed(frame_times))
 
@@ -5768,18 +5788,80 @@ def get_storm_geocolor_frames_bundle(
         "frames": frame_headers,
     }
     header_json = json.dumps(header, separators=(",", ":")).encode("utf-8")
-    body = struct.pack("<I", len(header_json)) + header_json + b"".join(payloads)
+    body = _pack_bundle(header, payloads)
+    return body, len(header_json), len(frame_times), n_day, n_night
+
+
+def _build_and_upload_geocolor_bundle(
+    atcf_id: str, center_lat: float, center_lon: float, *,
+    lookback_hours: float, radius_deg: float, interval_min: int,
+    center_dt: _dt | None = None,
+):
+    """Prewarm writer: build the GeoColor bundle for one storm and upload
+    it to the public-read GCS key the frontend's GCS-first path expects
+    (`{version}/bundles/geocolor/{ATCF}.bin`).
+
+    Mirrors `_build_band_bundle`'s upload step. The body comes from
+    `_build_geocolor_bundle_body` — the SAME function the API endpoint
+    uses — so the uploaded bytes are byte-identical to what a live
+    `/geocolor-frames-bundle` request would return for the same frames.
+    Reads exclusively from already-warmed GCS caches (no S3 fetches on the
+    fast path). WebP payloads are already codec-compressed, so we do NOT
+    gzip the GCS blob (matches the IR/band display bundles)."""
+    atcf_upper = atcf_id.upper()
+    body, _hlen, n_frames, n_day, n_night = _build_geocolor_bundle_body(
+        atcf_id, center_lat, center_lon,
+        lookback_hours=lookback_hours, radius_deg=radius_deg,
+        interval_min=interval_min, center_dt=center_dt,
+    )
+    geocolor_key = f"{_GCS_RT_VERSION}/bundles/geocolor/{atcf_upper}.bin"
+    _upload_public_bundle(geocolor_key, body)
+    print(f"[Bundle Pre-build] {atcf_upper}: geocolor={n_frames} frames "
+          f"(day={n_day}, night={n_night}, {len(body)//1024} KB)")
+
+
+@router.get("/storm/{atcf_id}/geocolor-frames-bundle")
+def get_storm_geocolor_frames_bundle(
+    atcf_id: str,
+    lookback_hours: float = Query(6.0, ge=1, le=24),
+    radius_deg: float = Query(10.0, ge=1.0, le=12.0),
+    interval_min: int = Query(15, ge=10, le=60),
+):
+    """GeoColor bundle: per-frame solar-elevation switch between Band 2
+    visible (day) and Band 13 IR (night, inverted grayscale). Same packed
+    binary wire format as the IR/band bundles:
+        [uint32 LE header_length][JSON header][concat WebP bytes]
+    """
+    _ensure_fresh_cache()
+    storm = None
+    with _active_storms_lock:
+        for s in _active_storms_cache["storms"]:
+            if s["atcf_id"].upper() == atcf_id.upper():
+                storm = dict(s)
+                break
+
+    if not storm:
+        raise HTTPException(status_code=404, detail=f"Storm {atcf_id} not found")
+
+    body, header_json_len, n_frames, n_day, n_night = _build_geocolor_bundle_body(
+        atcf_id, storm["lat"], storm["lon"],
+        lookback_hours=lookback_hours, radius_deg=radius_deg,
+        interval_min=interval_min,
+    )
 
     return Response(
         content=body,
         media_type="application/octet-stream",
         headers={
             "Cache-Control": "public, max-age=300",
-            "X-Bundle-Frames": str(len(frame_times)),
+            # WebP is already codec-compressed — opt out of GZipMiddleware
+            # re-gzip (it skips responses that declare a Content-Encoding).
+            "Content-Encoding": "identity",
+            "X-Bundle-Frames": str(n_frames),
             "X-Bundle-Product": "geocolor",
             "X-Bundle-Day-Frames": str(n_day),
             "X-Bundle-Night-Frames": str(n_night),
-            "X-Bundle-Header-Length": str(len(header_json)),
+            "X-Bundle-Header-Length": str(header_json_len),
             "Access-Control-Expose-Headers": "X-Bundle-Frames, X-Bundle-Product, X-Bundle-Day-Frames, X-Bundle-Night-Frames, X-Bundle-Header-Length",
         },
     )
@@ -6235,6 +6317,9 @@ def get_storm_ir_frames_bundle(
         media_type="application/octet-stream",
         headers={
             "Cache-Control": "public, max-age=300",
+            # WebP is already codec-compressed — opt out of GZipMiddleware
+            # re-gzip (it skips responses that declare a Content-Encoding).
+            "Content-Encoding": "identity",
             "X-Bundle-Frames": str(len(frame_times)),
             "X-Bundle-Header-Length": str(len(header_json)),
             "Access-Control-Expose-Headers": "X-Bundle-Frames, X-Bundle-Header-Length",
