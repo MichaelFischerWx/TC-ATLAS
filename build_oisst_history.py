@@ -673,9 +673,21 @@ def _fetch_current_month_preliminary(climo_mean: xr.DataArray) -> dict | None:
     w2 = np.where(finite, w * np.ones_like(sub.values), 0)
     s2 = np.where(finite, sub.values, 0)
     trop_mean_mtd = float((s2 * w2).sum() / w2.sum()) if w2.sum() > 0 else float("nan")
-    # Projected tropical-mean assumes persistence-anom: tropical-mean
-    # anom = mtd tropical-mean anom; full-month projected ≈ same value.
-    trop_mean_proj = trop_mean_mtd
+    # Projected tropical-mean (persistence-anom): the SAME extrapolation
+    # applied to the region — climo_full + mtd_anom — area-averaged over the
+    # tropics. Computed from projected_sst_da, NOT held at trop_mean_mtd:
+    # the tropics also warm over the remaining days, and in the Vecchi-Soden
+    # relative frame (region − tropics) that within-month seasonal warming
+    # must cancel. Holding the reference at MTD would over-credit the
+    # region's seasonal warming, so the projected relative SST would sit too
+    # far from the MTD value. With both extrapolated, the projected relative
+    # point differs from MTD only by the (small) change in the spatial
+    # region-minus-tropics gradient — which is the physically correct result.
+    psub = projected_sst_da.sel(lat=slice(TROPICAL_MEAN_LAT_MIN, TROPICAL_MEAN_LAT_MAX))
+    pfinite = np.isfinite(psub.values)
+    pw2 = np.where(pfinite, w * np.ones_like(psub.values), 0)
+    ps2 = np.where(pfinite, psub.values, 0)
+    trop_mean_proj = float((ps2 * pw2).sum() / pw2.sum()) if pw2.sum() > 0 else float("nan")
 
     row = {"date": f"{year}-{month:02d}", "preliminary": True,
            "n_days": int(len(day_idx)), "as_of": today.isoformat()}
@@ -941,10 +953,15 @@ def build_indices(climo_path: Path, out_path: Path,
     df["as_of"] = ""
     # Two-marker fields for the current-year preliminary point. Filled
     # with NaN on every finalized row; populated only for the preliminary
-    # current-month row by `_fetch_current_month_preliminary`.
+    # current-month row by `_fetch_current_month_preliminary`. All three
+    # detrending modes need a projected sibling so Panels D/B can draw the
+    # extrapolated full-month marker in raw, anomaly AND relative (Vecchi-
+    # Soden) views — `_sst_rel_projected` was previously omitted, so the
+    # relative view silently had no projected point.
     for name in REGIONS:
         df[f"{name}_sst_projected"] = np.nan
         df[f"{name}_anom_projected"] = np.nan
+        df[f"{name}_sst_rel_projected"] = np.nan
     log.info("  built finalized indices table: %d rows × %d cols",
              len(df), len(df.columns))
 

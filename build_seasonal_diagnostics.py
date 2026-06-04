@@ -609,6 +609,15 @@ def refresh_monthly_preliminary(climo_mean: xr.DataArray) -> None:
     df = df[df["date"] != cur_month]
     # Build the new row, aligned to the parquet schema (missing cols → NaN).
     new_row = pd.DataFrame([prelim])
+    # Extend the schema with any prelim columns the parquet doesn't have yet
+    # (e.g. a newly introduced projected sibling like `*_sst_rel_projected`).
+    # Existing rows get NaN. Without this the strict `new_row[df.columns]`
+    # reindex below would silently drop the new column every night, so a
+    # freshly-added projected field would never reach the JSON until a full
+    # backfill ran.
+    for col in new_row.columns:
+        if col not in df.columns:
+            df[col] = pd.NA
     for col in df.columns:
         if col not in new_row.columns:
             new_row[col] = pd.NA
