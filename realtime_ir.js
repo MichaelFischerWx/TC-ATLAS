@@ -5482,12 +5482,10 @@
                 format: 'png', width: layout.width, height: layout.height, scale: 3
             });
         }).then(function (dataUrl) {
-            var a = document.createElement('a');
-            a.href = dataUrl;
-            a.download = (stormId || 'storm') + '_shear_by_layer' +
-                         (cycle ? '_' + cycle.replace(/[:\-T]/g, '').replace('Z', '').slice(0, 10) : '') +
-                         '_' + (isDark ? 'dark' : 'light') + '.png';
-            document.body.appendChild(a); a.click(); document.body.removeChild(a);
+            var fn = (stormId || 'storm') + '_shear_by_layer' +
+                     (cycle ? '_' + cycle.replace(/[:\-T]/g, '').replace('Z', '').slice(0, 10) : '') +
+                     '_' + (isDark ? 'dark' : 'light') + '.png';
+            _saveImageBlob(_dataURLToBlob(dataUrl), fn);
             Plotly.purge(tmpDiv); document.body.removeChild(tmpDiv);
         }).catch(function (err) {
             console.warn('[RT Monitor] Shear profile export failed:', err);
@@ -13824,6 +13822,20 @@
         setTimeout(function () { URL.revokeObjectURL(url); }, 5000);
     }
 
+    // Plotly.toImage and canvas.toDataURL hand back a `data:` URL. Assigning
+    // one to an `<a download>` is the mobile-Safari trap: iOS ignores the
+    // download attribute for data URLs and navigates to the (huge) URL
+    // instead, so nothing saves. Convert to a real Blob first, then deliver
+    // through _saveImageBlob (Web Share sheet on mobile, anchor on desktop).
+    function _dataURLToBlob(dataUrl) {
+        var parts = dataUrl.split(',');
+        var mime = (parts[0].match(/:(.*?);/) || [])[1] || 'image/png';
+        var bin = atob(parts[1]);
+        var arr = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+        return new Blob([arr], { type: mime });
+    }
+
     // ── Composite summary exports ───────────────────────────────────────
     // Three flavors, each a single stitched PNG built from the live Plotly
     // panels via Plotly.toImage + a canvas:
@@ -17216,12 +17228,7 @@
             }
             filename += '_init' + initTime + '_' + theme + '.png';
 
-            var a = document.createElement('a');
-            a.href = dataUrl;
-            a.download = filename;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
+            _saveImageBlob(_dataURLToBlob(dataUrl), filename);
 
             // Clean up temp div
             Plotly.purge(tmpDiv);
@@ -17330,12 +17337,10 @@
                 format: 'png', width: layout.width, height: layout.height, scale: 3
             });
         }).then(function (dataUrl) {
-            var a = document.createElement('a');
-            a.href = dataUrl;
-            a.download = (stormId || 'storm') + '_intensity_forecast' +
-                         (initTime ? '_init' + initTime : '') +
-                         '_' + (isDark ? 'dark' : 'light') + '.png';
-            document.body.appendChild(a); a.click(); document.body.removeChild(a);
+            var fn = (stormId || 'storm') + '_intensity_forecast' +
+                     (initTime ? '_init' + initTime : '') +
+                     '_' + (isDark ? 'dark' : 'light') + '.png';
+            _saveImageBlob(_dataURLToBlob(dataUrl), fn);
             Plotly.purge(tmpDiv); document.body.removeChild(tmpDiv);
         }).catch(function (err) {
             console.warn('[RT Monitor] Intensity chart export failed:', err);

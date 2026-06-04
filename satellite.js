@@ -1013,16 +1013,52 @@
         return comp;
     }
 
+    // \u2500\u2500 Mobile-safe save helpers \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    // Mirror realtime_ir.js's _saveImageBlob/_downloadOrOpenBlob (this is a
+    // separate page bundle, so the helpers are duplicated here). Prefer the
+    // Web Share API (native "Save Image" sheet) on mobile; fall back to a
+    // download anchor on desktop, then to opening in a new tab on older iOS.
+    // Never assign a `data:` URL to an `<a download>` \u2014 mobile Safari ignores
+    // the download attribute for data URLs and just navigates to the URL.
+    function _saveImageBlob(blob, filename) {
+        var file = null;
+        try { file = new File([blob], filename, { type: blob.type || 'image/png' }); }
+        catch (e) { /* File ctor unsupported \u2014 fall through to download */ }
+        if (file && navigator.canShare && typeof navigator.share === 'function'
+                && navigator.canShare({ files: [file] })) {
+            navigator.share({ files: [file] }).catch(function (err) {
+                if (err && (err.name === 'AbortError'
+                            || err.name === 'NotAllowedError')) return;
+                _downloadOrOpenBlob(blob, filename);
+            });
+            return;
+        }
+        _downloadOrOpenBlob(blob, filename);
+    }
+
+    function _downloadOrOpenBlob(blob, filename) {
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        if ('download' in a) {
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        } else {
+            window.open(url, '_blank');
+        }
+        setTimeout(function () { URL.revokeObjectURL(url); }, 5000);
+    }
+
     /** Standard save: IR frame (+ right panel if in compare/asymmetry mode) */
     function _saveStandard(irFrame, name, cat, time, sat, radarInfo) {
         var headerText = name + '  \u2014  ' + time + '  ' + sat;
         var comp = _buildCompositeFrame(headerText, false, radarInfo);
         if (!comp) return;
 
-        var link = document.createElement('a');
-        link.download = (name || 'satellite') + '_' + (irFrame.datetime_utc || '').replace(/[:\-T]/g, '').replace('Z', '') + '.png';
-        link.href = comp.toDataURL('image/png');
-        link.click();
+        var fn = (name || 'satellite') + '_' + (irFrame.datetime_utc || '').replace(/[:\-T]/g, '').replace('Z', '') + '.png';
+        comp.toBlob(function (blob) { if (blob) _saveImageBlob(blob, fn); }, 'image/png');
     }
 
     /** Save with Hovmoller: IR frame on left, Hovmoller chart on right */
@@ -1093,11 +1129,9 @@
                     cctx.fillText('TC-ATLAS', totalW - 8, 14);
                     cctx.textAlign = 'left';
 
-                    var link = document.createElement('a');
-                    link.download = (name || 'satellite') + '_hovmoller_' +
+                    var fn = (name || 'satellite') + '_hovmoller_' +
                         (irFrame.datetime_utc || '').replace(/[:\-T]/g, '').replace('Z', '') + '.png';
-                    link.href = comp.toDataURL('image/png');
-                    link.click();
+                    comp.toBlob(function (blob) { if (blob) _saveImageBlob(blob, fn); }, 'image/png');
                 };
                 hovImg.src = hovDataUrl;
             })
