@@ -72,7 +72,8 @@
         ace: null,             // parsed ace_annual.json
         latest: null,          // parsed latest.json (may be null)
         activated: false,
-        scatter: { x: 'atl_mdr', y: 'atl_amo', month: 5, variable: 'sst' },
+        scatter: { x: 'atl_mdr', y: 'atl_amo', month: 5, variable: 'sst',
+                   aceBasin: 'NA' },
         // Panel D defaults to 'relative' — Vecchi-Soden framing is what
         // this panel is for (TC potential-intensity literature).
         corr: { basin: 'NA', month: 5, kind: 'relative',
@@ -480,6 +481,21 @@
         var currentPt = null;
         var currentProj = null;
 
+        // ACE color source: NA uses ace_annual.json (carries storm count);
+        // other basins use ace_basins_annual.json (ACE only). Mirrors the
+        // basin-ACE lookup in the Panel F analog builder.
+        var aceBasin = state.scatter.aceBasin || 'NA';
+        function _aceFor(year) {
+            if (aceBasin === 'NA') {
+                var r = state.ace.years[year];
+                return r ? { ace: r.ace, storms: r.named_storms_contrib }
+                         : { ace: null, storms: null };
+            }
+            var b = state.ace_basins && state.ace_basins.basins[aceBasin];
+            var v = (b && b.years) ? b.years[year] : undefined;
+            return { ace: (v === undefined ? null : v), storms: null };
+        }
+
         // Mapping from base variable to its "projected" sibling.
         var projVar =
               state.scatter.variable === 'sst'    ? '_sst_projected'
@@ -496,9 +512,9 @@
             var m = parseInt(parts[1], 10);
             if (m !== month) continue;
             if (xs[i] === null || ys[i] === null) continue;
-            var aceRec = state.ace.years[year];
-            var ace = aceRec ? aceRec.ace : null;
-            var storms = aceRec ? aceRec.named_storms_contrib : null;
+            var aceInfo = _aceFor(year);
+            var ace = aceInfo.ace;
+            var storms = aceInfo.storms;
             if (year === currentYear) {
                 currentPt = {
                     year: year, x: xs[i], y: ys[i], ace: ace, storms: storms,
@@ -523,7 +539,7 @@
             points.storms.push(storms);
         }
         return { points: points, current: currentPt, currentProj: currentProj,
-                 xKey: xKey, yKey: yKey };
+                 xKey: xKey, yKey: yKey, aceBasin: aceBasin };
     }
 
     // TC-ATLAS brand palette (mirrors the variables in tc_radar_styles.css).
@@ -842,6 +858,11 @@
     };
     var MONTH_LABEL = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
                        'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    // Short basin labels for the Panel D "Color by ACE" colorbar.
+    var ACE_BASIN_LABEL = {
+        NA: 'Atlantic', EP: 'E. Pacific', WP: 'W. Pacific',
+        NI: 'N. Indian', SI: 'S. Indian', SP: 'S. Pacific',
+    };
 
     function _axisTitle(key, region) {
         var label = REGION_LABEL[region] || region;
@@ -868,6 +889,22 @@
         // app-injected stub — clear it here before painting fresh.
         _clearStub(el);
 
+        // ACE-color basin: short label for the colorbar + an auto-fit cmax
+        // so each basin uses its own dynamic range (WP/EP peak ~350/320,
+        // NI ~75 — a fixed 250 would saturate the big basins and waste the
+        // scale on the small ones). cmax is taken from the basin's FULL
+        // series so it's stable as the user changes month/region.
+        var aceBasin = bundle.aceBasin || 'NA';
+        var aceLabel = (ACE_BASIN_LABEL[aceBasin] || aceBasin) + ' ACE';
+        var allAce = (aceBasin === 'NA')
+            ? Object.keys(state.ace.years).map(function (y) { return state.ace.years[y].ace; })
+            : ((state.ace_basins && state.ace_basins.basins[aceBasin] &&
+                state.ace_basins.basins[aceBasin].years)
+                ? Object.values(state.ace_basins.basins[aceBasin].years) : []);
+        var aceMax = allAce.filter(function (v) { return typeof v === 'number' && isFinite(v); })
+                           .reduce(function (a, b) { return Math.max(a, b); }, 1);
+        var cmax = Math.max(25, Math.ceil(aceMax / 25) * 25);
+
         var hist = {
             type: 'scatter', mode: 'markers',
             x: bundle.points.x, y: bundle.points.y,
@@ -878,9 +915,9 @@
                 size: 12,
                 color: bundle.points.ace,
                 colorscale: 'Jet',
-                cmin: 0, cmax: 250,
+                cmin: 0, cmax: cmax,
                 colorbar: {
-                    title: { text: 'Annual ACE', side: 'right' },
+                    title: { text: aceLabel, side: 'right' },
                     thickness: 14, len: 0.85,
                 },
                 line: { color: 'rgba(20,20,20,0.6)', width: 1 },
@@ -888,8 +925,9 @@
             hovertemplate:
                 '<b>%{customdata[0]}</b><br>' +
                 'X: %{x:.2f}<br>Y: %{y:.2f}<br>' +
-                'Annual ACE: %{customdata[1]}<br>' +
-                'Storms: %{customdata[2]}<extra></extra>',
+                aceLabel + ': %{customdata[1]}' +
+                (aceBasin === 'NA' ? '<br>Storms: %{customdata[2]}' : '') +
+                '<extra></extra>',
             name: 'History',
         };
         var traces = [hist];
@@ -8885,6 +8923,7 @@
         bind('seasonal-scatter-y', 'y');
         bind('seasonal-scatter-month', 'month', function (v) { return parseInt(v, 10); });
         bind('seasonal-scatter-var', 'variable');
+        bind('seasonal-scatter-ace', 'aceBasin');
     }
 
     function _activate() {

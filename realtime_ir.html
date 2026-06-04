@@ -1695,6 +1695,16 @@
                             <option value="sst_rel">SST relative (Vecchi-Soden 2007, vs 30°S-30°N mean)</option>
                         </select>
                     </label>
+                    <label>Color by ACE
+                        <select id="seasonal-scatter-ace" title="Which basin's Accumulated Cyclone Energy shades the markers. Lets you ask e.g. 'does May Atlantic SST relate to West Pacific ACE?' The colorbar scale auto-fits the selected basin.">
+                            <option value="NA" selected>North Atlantic (NA)</option>
+                            <option value="EP">East Pacific (EP)</option>
+                            <option value="WP">West Pacific (WP)</option>
+                            <option value="NI">North Indian (NI)</option>
+                            <option value="SI">South Indian (SI)</option>
+                            <option value="SP">South Pacific (SP)</option>
+                        </select>
+                    </label>
                 </div>
                 <div id="seasonal-scatter-plot" class="seasonal-scatter-plot"></div>
             </section>
