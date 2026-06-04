@@ -5395,9 +5395,23 @@ def get_storm_band_frames_bundle(
         try:
             ilat, ilon = _interp_pos_at(
                 atcf_id, target_dt, center_lat, center_lon)
-            jpg, sat = _get_or_render_band_jpg(
-                atcf_upper, ilat, ilon, target_dt, radius_deg, band,
-            )
+            # Bound the heavy GCS-miss render under the global raw-fetch
+            # semaphore so a burst of concurrent band bundles can't pile up
+            # unbounded float32 cutouts and OOM-kill the 4 GiB instance (same
+            # failure mode #41 fixed for ir-raw-bundle). _get_or_render_band_jpg
+            # is a bundle-only helper (not shared with the semaphore-holding
+            # single-frame endpoints), so acquiring here cannot double-acquire.
+            # Cache hits inside the helper return fast and release the permit
+            # almost immediately. On overload, return the frame as a graceful
+            # per-frame error so the bundle still completes (byte_length=0).
+            if not _raw_fetch_semaphore.acquire(timeout=60):
+                return (i, None, "", None, False, "overloaded")
+            try:
+                jpg, sat = _get_or_render_band_jpg(
+                    atcf_upper, ilat, ilon, target_dt, radius_deg, band,
+                )
+            finally:
+                _raw_fetch_semaphore.release()
             frame_bounds = [
                 [ilat - half, ilon - half],
                 [ilat + half, ilon + half],
@@ -5414,10 +5428,10 @@ def get_storm_band_frames_bundle(
             return (i, None, "", None, False, str(ex))
 
     indexed = list(enumerate(frame_times))
-    # 8 workers: doubles the previous 4. Per-frame work is mostly S3
-    # latency (~3-5 s/frame for Vis L1b), so more workers shorten the
-    # cold-bundle wall clock close to one slowest-frame latency.
-    with ThreadPoolExecutor(max_workers=8) as pool:
+    # 4 workers: the global _raw_fetch_semaphore (cap 3) is the real OOM cap,
+    # so spawning more threads than that just blocks on the permit. Matches
+    # ir-raw-bundle's pool size (#41).
+    with ThreadPoolExecutor(max_workers=4) as pool:
         results = list(pool.map(_worker, indexed))
     results.sort(key=lambda r: r[0])
 
@@ -5706,9 +5720,21 @@ def _build_geocolor_bundle_body(
         try:
             ilat, ilon = _interp_pos_at(
                 atcf_id, target_dt, center_lat, center_lon)
-            jpg, sat, is_day = _get_or_render_geocolor_jpg(
-                atcf_upper, ilat, ilon, target_dt, radius_deg,
-            )
+            # Bound the heavy GCS-miss render under the global raw-fetch
+            # semaphore (same OOM guard as #41). _get_or_render_geocolor_jpg is
+            # a bundle-only helper — its sole caller is this worker (and the
+            # prewarm writer, which also runs through this same body) — so it
+            # is never invoked under an already-held semaphore and cannot
+            # double-acquire/deadlock. Cache hits release the permit fast. On
+            # overload, surface a graceful per-frame error (byte_length=0).
+            if not _raw_fetch_semaphore.acquire(timeout=60):
+                return (i, None, "", None, False, "overloaded")
+            try:
+                jpg, sat, is_day = _get_or_render_geocolor_jpg(
+                    atcf_upper, ilat, ilon, target_dt, radius_deg,
+                )
+            finally:
+                _raw_fetch_semaphore.release()
             frame_bounds = [
                 [ilat - half, ilon - half],
                 [ilat + half, ilon + half],
@@ -5718,7 +5744,9 @@ def _build_geocolor_bundle_body(
             return (i, None, "", None, False, str(ex))
 
     indexed = list(enumerate(frame_times))
-    with ThreadPoolExecutor(max_workers=8) as pool:
+    # 4 workers to match ir-raw-bundle (#41); the semaphore (cap 3) is the
+    # real global concurrency cap, extra threads would only block on it.
+    with ThreadPoolExecutor(max_workers=4) as pool:
         results = list(pool.map(_worker, indexed))
     results.sort(key=lambda r: r[0])
 
@@ -6237,9 +6265,20 @@ def get_storm_ir_frames_bundle(
         try:
             ilat, ilon = _interp_pos_at(
                 atcf_id, target_dt, center_lat, center_lon)
-            jpg, sat = _get_or_render_ir_jpg(
-                atcf_upper, ilat, ilon, target_dt, radius_deg,
-            )
+            # Bound the heavy GCS-miss render under the global raw-fetch
+            # semaphore (same OOM guard as #41). _get_or_render_ir_jpg is a
+            # bundle-only helper (single-frame ir endpoints use their own
+            # paths), so acquiring here cannot double-acquire the semaphore.
+            # Cache hits release fast. On overload, surface the frame as a
+            # graceful per-frame error (byte_length=0).
+            if not _raw_fetch_semaphore.acquire(timeout=60):
+                return (i, None, "", None, None, "overloaded")
+            try:
+                jpg, sat = _get_or_render_ir_jpg(
+                    atcf_upper, ilat, ilon, target_dt, radius_deg,
+                )
+            finally:
+                _raw_fetch_semaphore.release()
             # Also pull center_fix from the raw Tb cache so the bundle
             # header carries it — lets the satellite viewer's follow-storm
             # toggle recenter accurately from the moment the display bundle
@@ -6259,7 +6298,9 @@ def get_storm_ir_frames_bundle(
             return (i, None, "", None, None, str(ex))
 
     indexed = list(enumerate(frame_times))
-    with ThreadPoolExecutor(max_workers=8) as pool:
+    # 4 workers to match ir-raw-bundle (#41); the global _raw_fetch_semaphore
+    # (cap 3) is the real OOM cap, so extra threads would only block on it.
+    with ThreadPoolExecutor(max_workers=4) as pool:
         results = list(pool.map(_worker, indexed))
     results.sort(key=lambda r: r[0])
 
