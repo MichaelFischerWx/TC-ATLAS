@@ -288,6 +288,69 @@ def compute_today_indices(sst: xr.DataArray, clim_mean: xr.DataArray) -> tuple:
     return row, anom, anom_rel
 
 
+def fetch_current_month_mtd_anomaly(clim_mean: xr.DataArray):
+    """Month-to-date mean anomaly grids for the current calendar month.
+
+    Averages the anomaly of every available day this month (each day's SST
+    minus its day-interpolated climatology, via compute_today_indices so the
+    field is identical in construction to the Panel A live anomaly) into a
+    single MTD anomaly field, plus its Vecchi-Soden relative counterpart.
+
+    This is the field the grid-weighted *preliminary* analog distances should
+    use. A single daily slab (what fetch_latest_oisst returns) is noisy; the
+    MTD mean is a far better-conditioned persistence estimate of the
+    full-month anomaly — and persistence-of-anomaly is exactly the projection
+    the analog distance assumes (projected full-month anom = current anom).
+
+    Returns (anom_mtd_da, anom_rel_mtd_da, n_days, through_date) or None if no
+    current-month days are available yet (caller falls back to single-day).
+    """
+    today = datetime.now(timezone.utc).date()
+    year, month = today.year, today.month
+    url = OISST_DAILY_OPENDAP_TMPL.format(year=year)
+    try:
+        ds = xr.open_dataset(url)
+    except Exception as e:
+        log.warning("  MTD anomaly: OPeNDAP open failed for %d: %s", year, e)
+        return None
+    anoms, rels, dates = [], [], []
+    try:
+        sub = ds.sel(lat=slice(LAT_MIN, LAT_MAX), lon=slice(LON_MIN, LON_MAX))
+        for i, t in enumerate(sub["time"].values):
+            ts = str(t)[:10]
+            if not ts.startswith(f"{year}-{month:02d}-"):
+                continue
+            slab = sub["sst"].isel(time=i).load()
+            v = np.ascontiguousarray(slab.values)
+            v[np.abs(v) > 50.0] = np.nan
+            if not np.isfinite(v).any():
+                continue
+            day_da = xr.DataArray(
+                v, dims=("lat", "lon"),
+                coords={"lat": slab["lat"].values.copy(),
+                        "lon": slab["lon"].values.copy()},
+                attrs={"time": ts})
+            _row, a, ar = compute_today_indices(day_da, clim_mean)
+            anoms.append(a)
+            rels.append(ar)
+            dates.append(ts)
+    finally:
+        ds.close()
+
+    if not anoms:
+        log.warning("  MTD anomaly: no current-month days available yet")
+        return None
+    # NaN-safe mean across days (land/ice cells that are NaN on some days
+    # still contribute their finite days rather than poisoning the cell).
+    anom_mtd = xr.concat(anoms, dim="_day").mean(dim="_day", skipna=True)
+    anom_rel_mtd = xr.concat(rels, dim="_day").mean(dim="_day", skipna=True)
+    anom_mtd.attrs = {"time": dates[-1]}
+    anom_rel_mtd.attrs = {"time": dates[-1]}
+    log.info("  MTD anomaly: averaged %d day(s) of %d-%02d (through %s)",
+             len(anoms), year, month, dates[-1])
+    return anom_mtd, anom_rel_mtd, len(anoms), dates[-1]
+
+
 def compute_preliminary_analog_distances(
         anom_raw: xr.DataArray,
         anom_rel: xr.DataArray,
@@ -546,6 +609,15 @@ def refresh_monthly_preliminary(climo_mean: xr.DataArray) -> None:
     df = df[df["date"] != cur_month]
     # Build the new row, aligned to the parquet schema (missing cols → NaN).
     new_row = pd.DataFrame([prelim])
+    # Extend the schema with any prelim columns the parquet doesn't have yet
+    # (e.g. a newly introduced projected sibling like `*_sst_rel_projected`).
+    # Existing rows get NaN. Without this the strict `new_row[df.columns]`
+    # reindex below would silently drop the new column every night, so a
+    # freshly-added projected field would never reach the JSON until a full
+    # backfill ran.
+    for col in new_row.columns:
+        if col not in df.columns:
+            df[col] = pd.NA
     for col in df.columns:
         if col not in new_row.columns:
             new_row[col] = pd.NA
@@ -659,7 +731,20 @@ def main():
 
     log.info("Computing preliminary analog distances for Panel E ...")
     try:
-        prelim_dist = compute_preliminary_analog_distances(anom, anom_rel, None)
+        # Prefer the month-to-date mean anomaly (averages all available days
+        # of the current month) over the single latest daily slab — far less
+        # noisy, especially early in a month. Falls back to the single-day
+        # field if the MTD fetch yields nothing.
+        mtd = fetch_current_month_mtd_anomaly(clim["sst_clim_mean"])
+        if mtd is not None:
+            anom_pre, anom_rel_pre, n_mtd, mtd_through = mtd
+            log.info("  analog distances use %d-day MTD mean anomaly (through %s)",
+                     n_mtd, mtd_through)
+        else:
+            anom_pre, anom_rel_pre = anom, anom_rel
+            log.warning("  MTD anomaly unavailable; using single-day field "
+                        "for analog distances")
+        prelim_dist = compute_preliminary_analog_distances(anom_pre, anom_rel_pre, None)
         out_local = WORK_DIR / "analog_preliminary_distances.json"
         out_local.write_text(json.dumps(prelim_dist, separators=(",", ":")))
         if not args.local_only:

@@ -673,9 +673,21 @@ def _fetch_current_month_preliminary(climo_mean: xr.DataArray) -> dict | None:
     w2 = np.where(finite, w * np.ones_like(sub.values), 0)
     s2 = np.where(finite, sub.values, 0)
     trop_mean_mtd = float((s2 * w2).sum() / w2.sum()) if w2.sum() > 0 else float("nan")
-    # Projected tropical-mean assumes persistence-anom: tropical-mean
-    # anom = mtd tropical-mean anom; full-month projected ≈ same value.
-    trop_mean_proj = trop_mean_mtd
+    # Projected tropical-mean (persistence-anom): the SAME extrapolation
+    # applied to the region — climo_full + mtd_anom — area-averaged over the
+    # tropics. Computed from projected_sst_da, NOT held at trop_mean_mtd:
+    # the tropics also warm over the remaining days, and in the Vecchi-Soden
+    # relative frame (region − tropics) that within-month seasonal warming
+    # must cancel. Holding the reference at MTD would over-credit the
+    # region's seasonal warming, so the projected relative SST would sit too
+    # far from the MTD value. With both extrapolated, the projected relative
+    # point differs from MTD only by the (small) change in the spatial
+    # region-minus-tropics gradient — which is the physically correct result.
+    psub = projected_sst_da.sel(lat=slice(TROPICAL_MEAN_LAT_MIN, TROPICAL_MEAN_LAT_MAX))
+    pfinite = np.isfinite(psub.values)
+    pw2 = np.where(pfinite, w * np.ones_like(psub.values), 0)
+    ps2 = np.where(pfinite, psub.values, 0)
+    trop_mean_proj = float((ps2 * pw2).sum() / pw2.sum()) if pw2.sum() > 0 else float("nan")
 
     row = {"date": f"{year}-{month:02d}", "preliminary": True,
            "n_days": int(len(day_idx)), "as_of": today.isoformat()}
@@ -812,6 +824,66 @@ def _fetch_completed_month_from_daily(clim_mean: xr.DataArray,
     return row
 
 
+def _fetch_completed_month_grid_from_daily(
+        year: int, month: int,
+        lat_ref: np.ndarray, lon_ref: np.ndarray) -> np.ndarray | None:
+    """Full gridded monthly-mean SST for a COMPLETE calendar month, built
+    from the daily OISST archive, on the SAME (lat, lon) subset grid the
+    monthly file uses.
+
+    Grid-space analogue of `_fetch_completed_month_from_daily` (which returns
+    region means): `build_correlations` needs the whole field — not region
+    reductions — to fill a slot in the SST stack so the grid-weighted analog
+    matrix can include a just-finished month before NOAA publishes its monthly
+    mean (~2-week lag). Returns a float32 (lat, lon) array, or None if the
+    month is not yet fully present in the daily archive or the daily grid does
+    not match the reference grid."""
+    import calendar
+    ndays_expected = calendar.monthrange(year, month)[1]
+    ds = _open_daily_year(year)
+    if ds is None:
+        return None
+    try:
+        sub = ds.sel(lat=slice(LAT_MIN, LAT_MAX), lon=slice(LON_MIN, LON_MAX))
+        all_times = sub["time"].values
+        day_idx = [i for i, t in enumerate(all_times)
+                   if str(t)[:7] == f"{year}-{month:02d}"]
+        if len(day_idx) < ndays_expected:
+            log.info("  %d-%02d not yet complete in daily archive (%d/%d days);"
+                     " skipping grid-weighted matrix fill",
+                     year, month, len(day_idx), ndays_expected)
+            return None
+        lat_vals = sub["lat"].values
+        lon_vals = sub["lon"].values
+        # The daily-derived field must drop into the monthly grid cell-for-cell
+        # (same 0.25° OISST v2.1 grid). Bail rather than silently misalign.
+        if (lat_vals.shape != lat_ref.shape or lon_vals.shape != lon_ref.shape
+                or not np.allclose(lat_vals, lat_ref)
+                or not np.allclose(lon_vals, lon_ref)):
+            log.warning("  %d-%02d daily grid does not match monthly grid; "
+                        "skipping grid-weighted matrix fill", year, month)
+            return None
+        shape = (len(lat_vals), len(lon_vals))
+        accum = np.zeros(shape, dtype=np.float64)
+        accum_n = np.zeros(shape, dtype=np.int32)
+        for k in day_idx:
+            v = np.ascontiguousarray(sub["sst"].isel(time=k).load().values)
+            v[np.abs(v) > 50.0] = np.nan
+            mask = np.isfinite(v)
+            accum[mask] += v[mask]
+            accum_n[mask] += 1
+    finally:
+        ds.close()
+
+    if accum_n.max() == 0:
+        return None
+    with np.errstate(invalid="ignore", divide="ignore"):
+        month_sst = np.where(accum_n > 0, accum / accum_n, np.nan)
+    log.info("  daily-derived grid fill %d-%02d (%d days) for analog matrix",
+             year, month, len(day_idx))
+    return month_sst.astype(np.float32)
+
+
 def build_indices(climo_path: Path, out_path: Path,
                   year_start: int = INDICES_START_YEAR,
                   year_end: int | None = None,
@@ -881,10 +953,15 @@ def build_indices(climo_path: Path, out_path: Path,
     df["as_of"] = ""
     # Two-marker fields for the current-year preliminary point. Filled
     # with NaN on every finalized row; populated only for the preliminary
-    # current-month row by `_fetch_current_month_preliminary`.
+    # current-month row by `_fetch_current_month_preliminary`. All three
+    # detrending modes need a projected sibling so Panels D/B can draw the
+    # extrapolated full-month marker in raw, anomaly AND relative (Vecchi-
+    # Soden) views — `_sst_rel_projected` was previously omitted, so the
+    # relative view silently had no projected point.
     for name in REGIONS:
         df[f"{name}_sst_projected"] = np.nan
         df[f"{name}_anom_projected"] = np.nan
+        df[f"{name}_sst_rel_projected"] = np.nan
     log.info("  built finalized indices table: %d rows × %d cols",
              len(df), len(df.columns))
 
@@ -1275,6 +1352,31 @@ def build_correlations(out_dir: Path,
 
     lat = sst.lat.values
     lon = sst.lon.values
+
+    # Daily-derived completed-month fill — mirror build_indices() so the
+    # grid-weighted analog matrix can include a just-finished month before
+    # NOAA publishes its monthly mean (~2-week lag). Without this, the most
+    # recent complete month sits in a one-month hole and Panel F's
+    # grid-weighted method returns "no data" for it the moment the daily
+    # preliminary distances roll over to the next calendar month. (Region
+    # methods keep working — they read the daily-derived indices_monthly row.)
+    monthly_periods = {(int(str(t)[:4]), int(str(t)[5:7]))
+                       for t in sst.time.values}
+    today = datetime.now(timezone.utc).date()
+
+    def _next_period(y, m):
+        return (y + 1, 1) if m == 12 else (y, m + 1)
+
+    gap = _next_period(*max(monthly_periods))
+    while gap < (today.year, today.month):
+        gy, gm = gap
+        if gy in year_idx and gap not in monthly_periods:
+            grid = _fetch_completed_month_grid_from_daily(gy, gm, lat, lon)
+            if grid is not None:
+                sst_stack[year_idx[gy], gm - 1] = grid
+                log.info("  filled analog-matrix slot %d-%02d from daily archive",
+                         gy, gm)
+        gap = _next_period(*gap)
 
     def _detrend(arr_yt):
         """Linear-in-year detrend along axis 0. arr_yt shape (n_years, *spatial)."""
