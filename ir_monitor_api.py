@@ -846,6 +846,13 @@ def _build_and_upload_bundles(
     # visibly distorted frame. Reuses these values in the main loop below
     # (no extra GCS reads or position interpolations).
     interp_pos = [_pos_for(ft) for ft in times_oldest_first]
+    # Smooth, single-vintage recenter target per frame, decoupled from the
+    # (possibly stale) manifest cutout center in interp_pos — see the
+    # matching note in _build_band_bundle and project_vis_loop_bounce memory.
+    ir_recenter = [
+        _interp_pos_at(atcf_id, ft, fallback_lat, fallback_lon)
+        for ft in times_oldest_first
+    ]
     jpgs_pre = [
         _gcs_jpg_get(atcf_upper, ft.strftime("%Y%m%d%H%M"),
                      lat=interp_pos[i][0], lon=interp_pos[i][1])
@@ -871,6 +878,7 @@ def _build_and_upload_bundles(
         iso_dt = ft.strftime("%Y-%m-%dT%H:%M:%SZ")
         ilat, ilon = interp_pos[i]
         fb = [[ilat - half, ilon - half], [ilat + half, ilon + half]]
+        rc = [round(ir_recenter[i][0], 4), round(ir_recenter[i][1], 4)]
 
         # Raw cache read first (carries center_fix we want for display too)
         cached = _gcs_rt_get(atcf_upper, dt_str,
@@ -884,7 +892,7 @@ def _build_and_upload_bundles(
         if not jpg or i in anomalous_idx:
             frame_hdrs.append({
                 "index": i, "datetime_utc": iso_dt, "satellite": "",
-                "bounds": fb, "byte_offset": jpg_offset, "byte_length": 0,
+                "bounds": fb, "recenter": rc, "byte_offset": jpg_offset, "byte_length": 0,
                 "center_fix": center_fix,
                 "error": "anomalous_scan" if (jpg and i in anomalous_idx) else "no_cached_jpg",
             })
@@ -893,7 +901,7 @@ def _build_and_upload_bundles(
             sat_name = satellite_name_from_bucket(bucket_name)
             frame_hdrs.append({
                 "index": i, "datetime_utc": iso_dt, "satellite": sat_name,
-                "bounds": fb, "byte_offset": jpg_offset, "byte_length": len(jpg),
+                "bounds": fb, "recenter": rc, "byte_offset": jpg_offset, "byte_length": len(jpg),
                 "center_fix": center_fix,
             })
             payloads_jpg.append(jpg)
@@ -1014,6 +1022,20 @@ def _build_band_bundle(
     # the IR bundle uses) BEFORE shipping. Nighttime Vis frames stay None
     # — expected-missing, never triangulated.
     band_pos = [_pos_for(ft) for ft in times_oldest_first]
+    # Smooth, single-vintage recenter target per frame, decoupled from the
+    # (possibly stale) manifest cutout center in band_pos. The render-once
+    # manifest freezes each slot's cutout center immutably, so a bundle
+    # stitched across best-track revisions carries mixed-vintage centers;
+    # recentering the detail map to those frozen centers made the loop
+    # "bounce" ~0.3° frame-to-frame even though each image is correctly
+    # georeferenced to its own bounds. We keep bounds = the real cutout
+    # center (preserves georeferencing + best-track-dot alignment) and emit
+    # a fresh, consistent interpolation for the camera to follow instead.
+    # See project_vis_loop_bounce memory.
+    band_recenter = [
+        _interp_pos_at(atcf_id, ft, fallback_lat, fallback_lon)
+        for ft in times_oldest_first
+    ]
     band_night = [
         band == VIS_BAND and _solar_elevation(band_pos[i][0], band_pos[i][1], ft) < -6
         for i, ft in enumerate(times_oldest_first)
@@ -1036,12 +1058,13 @@ def _build_band_bundle(
         iso_dt = ft.strftime("%Y-%m-%dT%H:%M:%SZ")
         ilat, ilon = band_pos[i]
         fb = [[ilat - half, ilon - half], [ilat + half, ilon + half]]
+        rc = [round(band_recenter[i][0], 4), round(band_recenter[i][1], 4)]
 
         # Vis is daytime-only — mark night frames as expected-missing
         if band_night[i]:
             band_hdrs.append({
                 "index": i, "datetime_utc": iso_dt, "satellite": "",
-                "bounds": fb, "byte_offset": boffset, "byte_length": 0,
+                "bounds": fb, "recenter": rc, "byte_offset": boffset, "byte_length": 0,
                 "error": "nighttime",
             })
             continue
@@ -1050,7 +1073,7 @@ def _build_band_bundle(
         if not bjpg or i in band_anom_idx:
             band_hdrs.append({
                 "index": i, "datetime_utc": iso_dt, "satellite": "",
-                "bounds": fb, "byte_offset": boffset, "byte_length": 0,
+                "bounds": fb, "recenter": rc, "byte_offset": boffset, "byte_length": 0,
                 "error": "anomalous_scan" if (bjpg and i in band_anom_idx) else "no_cached_jpg",
             })
             continue
@@ -1058,7 +1081,7 @@ def _build_band_bundle(
         sat_name = satellite_name_from_bucket(bucket_name)
         band_hdrs.append({
             "index": i, "datetime_utc": iso_dt, "satellite": sat_name,
-            "bounds": fb, "byte_offset": boffset, "byte_length": len(bjpg),
+            "bounds": fb, "recenter": rc, "byte_offset": boffset, "byte_length": len(bjpg),
         })
         payloads_band.append(bjpg)
         boffset += len(bjpg)
@@ -5228,6 +5251,13 @@ def get_storm_band_frames_bundle(
     for i, jpg, sat, fbounds, is_night, err in results:
         target_dt = frame_times[i]
         iso_dt = target_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        # On-demand bounds are already a fresh, consistent interpolation
+        # (no render-once manifest here), so the recenter target is just the
+        # bounds center — emitted so the frontend always finds a `recenter`
+        # field regardless of which build path served the bundle.
+        rc = ([round((fbounds[0][0] + fbounds[1][0]) / 2, 4),
+               round((fbounds[0][1] + fbounds[1][1]) / 2, 4)]
+              if fbounds else None)
         is_anom = i in band_anom_idx
         if not jpg or err is not None or is_anom:
             # Distinguish anomalous scan, nighttime (expected for Vis), errors
@@ -5247,6 +5277,7 @@ def get_storm_band_frames_bundle(
                 "datetime_utc": iso_dt,
                 "satellite": sat or "",
                 "bounds": fbounds,
+                "recenter": rc,
                 "byte_offset": offset,
                 "byte_length": 0,
                 "error": err_msg,
@@ -5257,6 +5288,7 @@ def get_storm_band_frames_bundle(
             "datetime_utc": iso_dt,
             "satellite": sat or "",
             "bounds": fbounds,
+            "recenter": rc,
             "byte_offset": offset,
             "byte_length": len(jpg),
         })
@@ -5527,17 +5559,22 @@ def get_storm_geocolor_frames_bundle(
     for i, jpg, sat, fbounds, is_day, err in results:
         target_dt = frame_times[i]
         iso_dt = target_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        # Bounds are a fresh, consistent interpolation here (no manifest), so
+        # recenter == bounds center; emitted for frontend uniformity.
+        rc = ([round((fbounds[0][0] + fbounds[1][0]) / 2, 4),
+               round((fbounds[0][1] + fbounds[1][1]) / 2, 4)]
+              if fbounds else None)
         if not jpg or i in geo_anom_idx:
             err_msg = "anomalous_scan" if (jpg and i in geo_anom_idx) else (err or "no_data")
             frame_headers.append({
                 "index": i, "datetime_utc": iso_dt, "satellite": sat or "",
-                "bounds": fbounds, "byte_offset": offset, "byte_length": 0,
+                "bounds": fbounds, "recenter": rc, "byte_offset": offset, "byte_length": 0,
                 "is_day": is_day, "error": err_msg,
             })
             continue
         frame_headers.append({
             "index": i, "datetime_utc": iso_dt, "satellite": sat or "",
-            "bounds": fbounds, "byte_offset": offset, "byte_length": len(jpg),
+            "bounds": fbounds, "recenter": rc, "byte_offset": offset, "byte_length": len(jpg),
             "is_day": is_day,
         })
         payloads.append(jpg)

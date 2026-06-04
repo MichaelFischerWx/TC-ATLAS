@@ -4526,6 +4526,7 @@
                 pane: 'tilePane'
             });
             overlay._frameBlobUrl = blobUrl; // for windowed decode promote/evict
+            overlay._recenterTo = fh.recenter || null; // smooth camera path (see _recenterDetailToFrame)
             animFrameLayers.push(overlay);
             goodCount++;
         }
@@ -4657,6 +4658,7 @@
                 pane: 'tilePane'
             });
             frameHasError.push(false);
+            overlay._recenterTo = (frames[i] && frames[i].recenter) || null;
             animFrameLayers.push(overlay);
         }
 
@@ -5760,9 +5762,26 @@
      *  Only fires on frame changes, so a paused user can pan/zoom freely
      *  — their view persists until they scrub or resume the loop. */
     function _recenterDetailToFrame(layer) {
-        if (!detailMap || !layer || typeof layer.getBounds !== 'function') return;
+        if (!detailMap || !layer) return;
         try {
-            var c = layer.getBounds().getCenter();
+            // Prefer the server's per-frame `recenter` target (a smooth,
+            // single-vintage best-track interpolation) over the frame's own
+            // bounds center. The render-once prewarm freezes each cached
+            // frame's cutout center, so a bundle stitched across best-track
+            // revisions has mixed-vintage bounds centers — recentering to
+            // those made the loop visibly "bounce" ~0.3° frame-to-frame even
+            // though each image is correctly georeferenced. _recenterTo
+            // decouples the camera path from the (correct but jumpy) cutout
+            // bounds. Falls back to bounds center for older bundles.
+            var c;
+            var rt = layer._recenterTo;
+            if (rt && rt.length === 2 && isFinite(rt[0]) && isFinite(rt[1])) {
+                c = L.latLng(rt[0], rt[1]);
+            } else if (typeof layer.getBounds === 'function') {
+                c = layer.getBounds().getCenter();
+            } else {
+                return;
+            }
             var cur = detailMap.getCenter();
             // Skip a no-op setView (avoids needless tile churn).
             if (Math.abs(cur.lat - c.lat) < 1e-4 && Math.abs(cur.lng - c.lng) < 1e-4) return;
@@ -7005,6 +7024,7 @@
                 opacity: 0, interactive: false, pane: 'tilePane'
             });
             overlay._frameBlobUrl = blobUrl; // for windowed decode promote/evict
+            overlay._recenterTo = fh.recenter || null; // smooth camera path
             geocolorFrameHasError.push(false);
             (function (lyr, idx) {
                 lyr.once('error', function () {
@@ -7485,6 +7505,7 @@
                 opacity: 0, interactive: false, pane: 'tilePane'
             });
             overlay._frameBlobUrl = blobUrl; // for windowed decode promote/evict
+            overlay._recenterTo = fh.recenter || null; // smooth camera path
             hasErr.push(false);
             (function (lyr, idx) {
                 lyr.once('error', function () {
@@ -7618,6 +7639,7 @@
             var vfr = visByDt[dt];
             if (visP && vfr && vfr.byte_length && !vfr.error) {
                 merged.push({ datetime_utc: dt, bounds: vfr.bounds || sf.bounds || globalBounds,
+                              recenter: vfr.recenter || sf.recenter || null,
                               buf: visBuf, base: visP.binBase, byte_offset: vfr.byte_offset,
                               byte_length: vfr.byte_length, mediaType: visMedia, source: 'vis' });
             } else if (swirP && sf.byte_length && !sf.error) {
@@ -7639,11 +7661,13 @@
                     swirNight = solarElevation(clat, clon, new Date(dt)) < -6;
                 }
                 merged.push({ datetime_utc: dt, bounds: sf.bounds || globalBounds,
+                              recenter: sf.recenter || (vfr && vfr.recenter) || null,
                               buf: swirBuf, base: swirP.binBase, byte_offset: sf.byte_offset,
                               byte_length: sf.byte_length, mediaType: swirMedia,
                               source: 'swir', swirNight: swirNight });
             } else {
                 merged.push({ datetime_utc: dt, bounds: sf.bounds || globalBounds,
+                              recenter: sf.recenter || (vfr && vfr.recenter) || null,
                               buf: null, source: 'none' });
             }
         }
@@ -7704,6 +7728,7 @@
             overlay._frameBlobUrl = blobUrl;       // windowed-decode promote/evict
             overlay._bandSource = m.source;        // 'vis' | 'swir' → per-frame label
             overlay._swirNight = m.swirNight;      // true → real night, false → daytime gap
+            overlay._recenterTo = m.recenter || null; // smooth camera path
             hasErr.push(false);
             (function (lyr, idx) {
                 lyr.once('error', function () {
