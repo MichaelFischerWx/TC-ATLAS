@@ -299,6 +299,20 @@ def _download_text(key: str) -> Optional[str]:
     return blob.download_as_text()
 
 
+def _prefix_has_objects(prefix: str) -> bool:
+    """True if at least one object exists in the bucket under `prefix`.
+
+    Used by the frontfill existence guard to detect already-rendered
+    granules without downloading. Uses max_results=1 so it costs a
+    single LIST page regardless of how many products/passes a granule
+    produced. Raises on transport/permission errors — callers MUST fall
+    through to full processing on error (never silently drop a pass)."""
+    blobs = _get_bucket().list_blobs(prefix=prefix, max_results=1)
+    for _ in blobs:
+        return True
+    return False
+
+
 # ---------------------------------------------------------------------------
 # GCS concurrency lock for the operational ingest job.
 #
@@ -1533,6 +1547,83 @@ def _render_from_cached(cached: dict, sensor: str,
     return _finalize_from_grid(data, valid, cached["bounds"], product, is_rgb=False)
 
 
+def _granule_output_prefix(meta: GranuleMeta) -> str:
+    """Deterministic GCS key prefix shared by EVERY output object of a
+    granule, across products AND pass suffixes.
+
+    `upload_granule` writes objects at
+        {sensor}/{Y}/{m}/{d}/{orbit_id}{pass_suffix}_{HHMMSS}_{product}.{ext}
+    so the longest prefix common to every one of them — regardless of
+    which products rendered or how many passes the granule split into —
+    is {sensor}/{Y}/{m}/{d}/{orbit_id}. The frontfill existence guard
+    lists this prefix to decide whether a granule has already been
+    rendered. Keeping this derivation here (and reused below) means the
+    guard's notion of granule identity can never drift from the writer's."""
+    t = meta.scan_start_utc
+    return f"{meta.sensor}/{t:%Y}/{t:%m}/{t:%d}/{meta.orbit_id}"
+
+
+def _granule_png_key(meta: GranuleMeta, product: str,
+                     pass_suffix: str = "") -> str:
+    """Deterministic PNG object key for one (granule, product, pass).
+    The single source of truth for the output-key layout — used both by
+    `upload_granule` (the writer) and, via `_granule_output_prefix`, by
+    the frontfill existence guard (the reader)."""
+    t = meta.scan_start_utc
+    orbit_id = meta.orbit_id + (pass_suffix or "")
+    base = f"{meta.sensor}/{t:%Y}/{t:%m}/{t:%d}/{orbit_id}_{t:%H%M%S}"
+    return f"{base}_{product}.png"
+
+
+def _frontfill_skip_granule(sensor: str, fname: str) -> bool:
+    """Frontfill existence guard: True iff this PPS granule's rendered
+    outputs are ALREADY in GCS, so the frontfill phase can skip the
+    download + regrid + render + upload entirely.
+
+    Microwave overpasses are sporadic but the operational frontfill phase
+    re-pulls the freshest N granules per sensor every 30-min tick, so most
+    ticks re-render granules already uploaded — the dominant Jobs cost.
+    This guard suppresses that redundant work while preserving freshness.
+
+    Identity is filename-derived (no download): `_pps_granule_meta` parses
+    the orbit_id + scan_start from the granule name, and
+    `_granule_output_prefix` turns that into the exact GCS key prefix shared
+    by every output object `upload_granule` would write for this granule
+    (all products, all pass suffixes). A single existing object under that
+    prefix ⇒ the granule was already rendered ⇒ skip.
+
+    Freshness/safety contract — this function returns False (→ DO process)
+    whenever it cannot positively confirm prior rendering:
+      * filename unparseable               → False (process)
+      * MW_FRONTFILL_FORCE truthy          → False (force re-render)
+      * existence check raises (transient) → False (never drop a new pass)
+    A genuinely new pass has NO objects under its prefix, so this returns
+    False and the granule is fully processed."""
+    if os.environ.get("MW_FRONTFILL_FORCE", "").strip().lower() in (
+            "1", "true", "yes", "on"):
+        return False
+    try:
+        meta = _pps_granule_meta(sensor, fname)
+    except Exception as exc:
+        logger.debug("[frontfill][%s] %s: meta parse failed (%s) — "
+                     "processing", sensor, fname, exc)
+        return False
+    prefix = _granule_output_prefix(meta)
+    try:
+        already = _prefix_has_objects(prefix)
+    except Exception as exc:
+        # Bucket/transient error — fall through to processing so a real
+        # new pass is never silently dropped on a flaky LIST.
+        logger.warning("[frontfill][%s] existence check for %s failed "
+                       "(%s) — processing to be safe", sensor, prefix, exc)
+        return False
+    if already:
+        logger.info("[frontfill][%s] %s already rendered (gs://%s/%s*) — "
+                    "skipping download+render", sensor, fname,
+                    MW_BUCKET, prefix)
+    return already
+
+
 def upload_granule(meta: GranuleMeta, products: list[RenderedProduct],
                    dry_run: bool = False, dry_run_dir: Optional[str] = None,
                    ) -> list[dict]:
@@ -1548,8 +1639,10 @@ def upload_granule(meta: GranuleMeta, products: list[RenderedProduct],
         # sensors (GMI, ATMS) leave pass_suffix empty so the path and
         # manifest key are bit-for-bit unchanged.
         orbit_id = meta.orbit_id + (p.pass_suffix or "")
-        base = f"{meta.sensor}/{t:%Y}/{t:%m}/{t:%d}/{orbit_id}_{t:%H%M%S}"
-        png_key = f"{base}_{p.product}.png"
+        # png_key derived via the shared helper so the frontfill
+        # existence guard and this writer can never disagree on layout.
+        png_key = _granule_png_key(meta, p.product, p.pass_suffix or "")
+        base = png_key[:-len(f"_{p.product}.png")]
         geo_key = f"{base}_{p.product}.geojson"
         geo_payload = json.dumps(
             {"type": "Feature", "geometry": p.footprint,
@@ -2973,6 +3066,15 @@ def _cli(argv=None):
                         if (time.time() - frontfill_start
                                 > _FRONTFILL_BUDGET_SECONDS):
                             break
+                        # Existence guard: a frontfill candidate whose
+                        # rendered outputs are already in GCS is skipped
+                        # BEFORE the expensive download+regrid+render —
+                        # this is the main Jobs-cost saving. A genuinely
+                        # new pass (no outputs yet) and any error/force
+                        # case fall through to full processing.
+                        fname = url.rsplit("/", 1)[-1]
+                        if _frontfill_skip_granule(sensor, fname):
+                            continue
                         _process_one_granule(
                             url, scan_start, sensor,
                             source_tag=_FRONTFILL_SOURCE_TAG)
