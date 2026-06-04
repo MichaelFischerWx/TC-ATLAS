@@ -183,6 +183,11 @@ def _run_prewarm(bucket, *, record):
         _save("_mw_compare_ir_slots", lambda *a, **k: [])
         _save("_build_and_upload_bundles", lambda *a, **k: None)
         _save("_build_band_bundle", lambda *a, **k: None)
+        # GeoColor prewarm bundle (added later, separate geocolor-webp cache) is
+        # orthogonal to the IR/band LIST-membership behavior under test here and
+        # is covered by tests/test_geocolor_bundle.py — stub it so this test
+        # stays scoped to IR/band existence checks.
+        _save("_build_and_upload_geocolor_bundle", lambda *a, **k: None)
         _save("_prefetch_nexrad_for_storms", lambda *a, **k: None)
         _save("_cleanup_old_gcs_frames", lambda *a, **k: None)
         # The in-process PNG prefetch loop also calls fetch_ir_frame; stub it.
