@@ -19171,17 +19171,31 @@
         ctx.fillText('michaelfischerwx.github.io/TC-ATLAS',
                      totalW - pad, totalH - Math.round(7 * s));
 
-        // Download.
+        // Deliver. Build the filename, then hand the composite to the shared
+        // save helper as a Blob — on mobile this routes through the Web Share
+        // API (native "Save Image" sheet) and falls back to a download anchor
+        // / open-in-new-tab on desktop and older iOS. The old toDataURL +
+        // `<a download>` path silently failed on mobile Safari, which ignores
+        // the download attribute for data URLs and tries to navigate to the
+        // (huge) data URL instead — the user saw a blank "view" tab.
         var stamp = (orbit.scan_start || '')
             .replace(/[:\-T]/g, '').replace('Z', '').slice(0, 12);
         var sensorSafe = (orbit.sensor || 'mw').toLowerCase().replace(/[^a-z0-9]+/g, '');
         var nameSafe = (storm.name || storm.atcf_id || 'storm')
             .toLowerCase().replace(/[^a-z0-9]+/g, '');
-        var link = document.createElement('a');
-        link.download = nameSafe + '_ir_vs_' + sensorSafe + '_'
+        var filename = nameSafe + '_ir_vs_' + sensorSafe + '_'
             + _rtMwCompareState.product + '_' + stamp + '.png';
-        link.href = comp.toDataURL('image/png');
-        link.click();
+        if (comp.toBlob) {
+            comp.toBlob(function (blob) {
+                if (blob) _saveImageBlob(blob, filename);
+            }, 'image/png');
+        } else {
+            // Pre-toBlob browser — keep the legacy data-URL anchor.
+            var link = document.createElement('a');
+            link.download = filename;
+            link.href = comp.toDataURL('image/png');
+            link.click();
+        }
 
         _ga('rt_mw_compare_save', {
             sensor: orbit.sensor, product: _rtMwCompareState.product
