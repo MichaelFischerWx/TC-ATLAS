@@ -161,6 +161,15 @@ IR_VARIABLE = "CMI"              # variable name in CMI file
 IR_VMIN = 190.0                  # brightness temperature colour limits (K)
 IR_VMAX = 310.0
 
+# Reprojection pitch for the raw-Tb IR path (fetch_ir_tb_raw only). Native
+# GOES/Himawari Band-13 IR is 2 km ≈ 0.018°, so the legacy 0.013° default was
+# pure oversampling (SSIM=1.0 to native truth; perceptually identical at max
+# zoom). 0.018° preserves 100% of native IR detail while cutting egress/storage
+# ~45-48% (1538px → ~1111px for a 20° box). Applies to IR Tb ONLY — the VISIBLE
+# band is 0.5 km native and is already undersampled at 0.013°, so fetch_band_raw
+# keeps the finer 0.013° default and MUST NOT use this constant.
+_IR_RAW_RES_DEG = 0.018  # native Band-13 2km; 0.013 was oversampling
+
 # Multi-band support (Visible + Water Vapor)
 VIS_BAND = 2                    # GOES 0.64 µm red visible
 WV_BAND = 8                     # 6.2 µm upper-level water vapor
@@ -1161,9 +1170,12 @@ def fetch_ir_tb_raw(center_lat: float, center_lon: float,
     Fetch a single IR frame and return the RAW brightness temperature array.
     Same routing as fetch_ir_frame but returns numpy Tb instead of rendered PNG.
 
-    Output grid pitch is controlled by _reproject_geos_to_latlon's default
-    (currently 0.013° → 1500×1500 for a 20° box). Bumped from 0.02° to give
-    sharper rendering at the 2° zoom level. See that function for the math.
+    Output grid pitch is _IR_RAW_RES_DEG (0.018° → ~1111×1111 for a 20° box),
+    passed explicitly to _reproject_geos_to_latlon below. 0.018° matches the
+    native Band-13 2km IR resolution; the earlier 0.013° was oversampling
+    (SSIM=1.0 to native, no visible detail lost). NOTE: this is intentionally
+    distinct from fetch_band_raw, which keeps the finer 0.013° default for the
+    0.5km-native visible band. See _IR_RAW_RES_DEG.
 
     max_substitution_min: if set, return None when the nearest available scan
     is further than this many minutes from target_dt (see
@@ -1186,10 +1198,12 @@ def fetch_ir_tb_raw(center_lat: float, center_lon: float,
                 s3_key, center_lat, center_lon, box_deg, return_extent=True
             )
             # Reproject from geostationary fixed-grid to regular lat/lon grid
-            # (resolution default = 1500×1500, see _reproject_geos_to_latlon).
+            # at _IR_RAW_RES_DEG (0.018° = native Band-13 2km; ~1111×1111 for a
+            # 20° box). See _IR_RAW_RES_DEG for why this is lossless vs 0.013°.
             tb = _reproject_geos_to_latlon(
                 tb_geo, center_lat, center_lon, box_deg,
                 HIMAWARI_SAT_HEIGHT, HIMAWARI_LON_0, HIMAWARI_SWEEP,
+                res_deg=_IR_RAW_RES_DEG,
                 geos_extent=geos_extent,
             )
             del tb_geo
@@ -1210,6 +1224,7 @@ def fetch_ir_tb_raw(center_lat: float, center_lon: float,
             tb = _reproject_geos_to_latlon(
                 tb_geo, center_lat, center_lon, box_deg,
                 gm["sat_height"], gm["lon_0"], gm["sweep"],
+                res_deg=_IR_RAW_RES_DEG,
                 geos_extent=gm["extent"])
             del tb_geo
 
@@ -1217,6 +1232,13 @@ def fetch_ir_tb_raw(center_lat: float, center_lon: float,
             return None
 
         half = box_deg / 2.0
+        # CACHE NOTE: raw-Tb frames are cached in GCS keyed by atcf/pos/dt
+        # (NOT resolution), so legacy 0.013° frames (1538px) and new 0.018°
+        # frames (~1111px) coexist. Each frame self-describes its grid via
+        # tb_rows/tb_cols below, so mixed-resolution bundles render correctly.
+        # We deliberately do NOT bump the global GCS cache version — that would
+        # force a full re-render (the opposite of the cost saving). Natural 24h
+        # cache rollover replaces legacy frames with the coarser pitch.
         return {
             "tb": tb,
             "datetime_utc": target_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
