@@ -136,9 +136,9 @@ export class GifExporter {
         // it fits comfortably on small exports; full attribution (incl.
         // disclaimer + Hersbach citation) lives in the site footer.
         const credit = 'Modified Copernicus C3S information · ERA5 (Hersbach et al. 2020)';
-        const brandFont  = 'bold 13px ui-monospace, "JetBrains Mono", Menlo, monospace';
-        const subFont    = '10px ui-monospace, "JetBrains Mono", Menlo, monospace';
-        const creditFont = '9px ui-monospace, "JetBrains Mono", Menlo, monospace';
+        const brandFont  = 'bold 13px JetBrains Mono, monospace';
+        const subFont    = '10px JetBrains Mono, monospace';
+        const creditFont = '9px JetBrains Mono, monospace';
 
         ctx.save();
         ctx.textAlign = 'right';
@@ -203,9 +203,9 @@ export class GifExporter {
         const lineHSub = 14;
         const lineHTicks = 14;
         const titleFont = 'bold 13px "DM Sans", -apple-system, sans-serif';
-        const unitsFont = '11px ui-monospace, "JetBrains Mono", Menlo, monospace';
-        const subFont   = '10px ui-monospace, "JetBrains Mono", Menlo, monospace';
-        const tickFont  = '11px ui-monospace, "JetBrains Mono", Menlo, monospace';
+        const unitsFont = '11px JetBrains Mono, monospace';
+        const subFont   = '10px JetBrains Mono, monospace';
+        const tickFont  = '11px JetBrains Mono, monospace';
 
         // Word-wrap a string to lines that fit `maxWidth` at the active
         // ctx.font. Splits on whitespace; preserves single-line strings
@@ -298,37 +298,50 @@ export class GifExporter {
         ctx.restore();
     }
 
-    /** Paint the caption ribbon onto the capture canvas (top-left). */
+    /** Paint the caption ribbon onto the capture canvas (top-left).
+     *  Font and ribbon geometry scale with the export width so the caption
+     *  stays legible whether the frame is a 1280-wide GIF or a supersampled
+     *  still headed for a lecture slide / poster. Reference width is
+     *  CAPTURE_MAX_WIDTH (the GIF baseline, which already reads well); we
+     *  never shrink below 1× and clamp growth at 3× so an enormous export
+     *  doesn't produce a comically large ribbon. */
     _drawCaption(ctx) {
         const { title, sub } = this._buildCaption();
-        const padX = 10, padY = 8;
-        const lineHTitle = 18;
-        const lineHSub   = 15;
-        const fontTitle  = 'bold 14px ui-monospace, "JetBrains Mono", Menlo, monospace';
-        const fontSub    = '12px ui-monospace, "JetBrains Mono", Menlo, monospace';
+        const s = Math.min(3, Math.max(1, ctx.canvas.width / CAPTURE_MAX_WIDTH));
+
+        const titlePx = Math.round(16 * s);
+        const subPx   = Math.round(14 * s);
+        const padX = Math.round(10 * s), padY = Math.round(8 * s);
+        const inset  = Math.round(12 * s);
+        const radius = Math.round(5 * s);
+        const gap    = Math.round(2 * s);
+        const lineHTitle = Math.round(titlePx * 1.3);
+        const lineHSub   = Math.round(subPx * 1.25);
+        const fontTitle  = `bold ${titlePx}px JetBrains Mono, monospace`;
+        const fontSub    = `${subPx}px JetBrains Mono, monospace`;
 
         ctx.font = fontTitle;
         const wTitle = ctx.measureText(title).width;
         ctx.font = fontSub;
         const wSub = ctx.measureText(sub).width;
         const boxW = Math.ceil(Math.max(wTitle, wSub)) + 2 * padX;
-        const boxH = padY * 2 + lineHTitle + lineHSub + 2;
+        const boxH = padY * 2 + lineHTitle + lineHSub + gap;
 
         ctx.save();
         ctx.fillStyle = 'rgba(6, 16, 14, 0.78)';
         ctx.strokeStyle = 'rgba(139, 176, 161, 0.35)';
-        ctx.lineWidth = 1;
-        this._roundRect(ctx, 12, 12, boxW, boxH, 5);
+        ctx.lineWidth = Math.max(1, Math.round(s));
+        this._roundRect(ctx, inset, inset, boxW, boxH, radius);
         ctx.fill();
         ctx.stroke();
 
         ctx.textBaseline = 'top';
         ctx.font = fontTitle;
         ctx.fillStyle = '#f0f6f2';
-        ctx.fillText(title, 12 + padX, 12 + padY);
+        ctx.fillText(title, inset + padX, inset + padY);
         ctx.font = fontSub;
         ctx.fillStyle = '#8bb0a1';
-        ctx.fillText(sub, 12 + padX, 12 + padY + lineHTitle + 2);
+        ctx.fillText(sub, inset + padX, inset + padY + lineHTitle + gap);
         ctx.restore();
     }
 
@@ -568,7 +581,7 @@ export class GifExporter {
         let y = padY;
         // Title
         ctx.fillStyle = '#f0f6f2';
-        ctx.font = 'bold 16px ui-monospace, "JetBrains Mono", Menlo, monospace';
+        ctx.font = 'bold 16px JetBrains Mono, monospace';
         ctx.textBaseline = 'top';
         ctx.fillText(titleEl?.textContent?.trim() || 'Cross-section', padX, y);
         y += titleH;
@@ -579,7 +592,7 @@ export class GifExporter {
         if (cbCanvas) {
             ctx.drawImage(cbCanvas, padX, y, xsCanvas.width, cbH);
             y += cbH + 2;
-            ctx.font = '12px ui-monospace, "JetBrains Mono", Menlo, monospace';
+            ctx.font = '12px JetBrains Mono, monospace';
             ctx.fillStyle = '#8bb0a1';
             const min = cbMinEl?.textContent?.trim() || '';
             const units = cbUnEl?.textContent?.trim() || '';
@@ -595,7 +608,7 @@ export class GifExporter {
         // is generic ("Zonal-mean cross-section").
         const { title, sub } = this._buildCaption();
         ctx.fillStyle = '#8bb0a1';
-        ctx.font = '11px ui-monospace, "JetBrains Mono", Menlo, monospace';
+        ctx.font = '11px JetBrains Mono, monospace';
         ctx.fillText(`${title}  ·  ${sub}`, padX, y + 4);
 
         // Attribution watermark (bottom-right, stays clear of the
