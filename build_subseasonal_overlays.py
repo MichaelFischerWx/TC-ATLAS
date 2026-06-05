@@ -520,45 +520,199 @@ def _fetch_gefs_ulwrf_toa(date_str: str, hour_str: str, fh: int):
             pass
 
 
-def fetch_gefs_olr_forecast(today: datetime, target_lat, target_lon,
-                            days: int = GEFS_FORECAST_DAYS):
-    """Build daily-mean GEFS forecast OLR on the observed OLR grid.
+def _gefs_daily_mean(date_str: str, hour_str: str, lead: int,
+                     target_lat, target_lon):
+    """Daily-mean ULWRF (W/m²) for forecast `lead` (1-based) from one cycle,
+    regridded to the observed grid, or None if any sub-window is missing.
 
-    Returns an xarray.DataArray(time, lat, lon) of daily-mean ULWRF (W/m²)
-    for `days` forecast calendar days, regridded (bilinear) to
-    (target_lat, target_lon), or None if the cycle is unavailable. Forecast
-    day k (1-based) is the mean of the four 6 h-average steps spanning hours
-    [24(k-1)+6 … 24k], valid on calendar date cycle_date + (k-1).
+    Day k is the mean of the four 6 h-average steps spanning hours
+    [24(k-1)+6 … 24k] (i.e. the 0-6/6-12/12-18/18-24 windows of that day).
+    """
+    fhs = [24 * (lead - 1) + 6, 24 * (lead - 1) + 12,
+           24 * (lead - 1) + 18, 24 * lead]
+    block = [_fetch_gefs_ulwrf_toa(date_str, hour_str, fh) for fh in fhs]
+    block = [b for b in block if b is not None]
+    if len(block) < len(fhs):
+        return None
+    day_mean = sum(block) / float(len(block))
+    # Regrid native 0.5° → observed OLR grid. interp tolerates the
+    # descending-lat source coordinate.
+    return day_mean.interp(lat=target_lat, lon=target_lon)
+
+
+def fetch_gefs_olr_forecast(today: datetime, target_lat, target_lon,
+                            days: int = GEFS_FORECAST_DAYS,
+                            last_obs_date=None):
+    """Build a contiguous daily-mean GEFS OLR series on the observed grid.
+
+    Returns an xarray.DataArray(time, lat, lon) of daily-mean ULWRF (W/m²),
+    regridded to (target_lat, target_lon), with a per-time integer `lead`
+    coordinate recording the forecast lead each day came from. None if no
+    data could be fetched.
+
+    GAP BRIDGING. The observed CPC OLR runs several days latent, so the
+    latest 00Z cycle's day-1 (valid = cycle date) can sit well after the last
+    observed day, leaving a multi-day hole that the Hovmöller renders as a
+    compressed jump (the "seam"). When `last_obs_date` is given, we fill each
+    missing day D in (last_obs, latest_cycle) with D's OWN 00Z cycle day-1 —
+    the freshest, shortest-range (analysis-anchored) model estimate of that
+    day — then extend with the latest cycle's full `days`-day forecast. Every
+    bridge/forecast junction is lead-1↔lead-1 or within a single cycle, so the
+    series joins smoothly and the time axis is strictly 1-day contiguous.
+
+    With `last_obs_date=None` this reduces to the old single-cycle behaviour
+    (latest cycle, leads 1..days).
     """
     import xarray as xr
     date_str, hour_str = _gefs_cycle_for(today)
-    cycle_dt = datetime.strptime(date_str, "%Y%m%d").replace(tzinfo=timezone.utc)
+    latest_dt = datetime.strptime(date_str, "%Y%m%d").replace(tzinfo=timezone.utc)
+
+    daily, times, leads = [], [], []
+
+    # --- Bridge the observational gap with per-day, day-1 short-range fields.
+    if last_obs_date is not None:
+        bridge = last_obs_date + timedelta(days=1)
+        n_gap = (latest_dt.date() - bridge).days
+        if n_gap > 0:
+            log.info("Bridging %d-day obs gap (%s .. %s) with per-day GEFS "
+                     "day-1 analyses ...", n_gap, bridge,
+                     latest_dt.date() - timedelta(days=1))
+        while bridge < latest_dt.date():
+            # Candidates all valid on `bridge`, freshest (shortest-lead) first:
+            # cycle D lead 1, then D-1 lead 2, then D-2 lead 3. The fallback
+            # keeps the day filled (no reintroduced gap) if one cycle has a
+            # transient outage, while still preferring analysis-anchored leads.
+            dm = None
+            for back in range(3):
+                cyc = bridge - timedelta(days=back)
+                dm = _gefs_daily_mean(cyc.strftime("%Y%m%d"), "00",
+                                      back + 1, target_lat, target_lon)
+                if dm is not None:
+                    if back:
+                        log.info("Bridge day %s filled from %s lead %d "
+                                 "(fallback)", bridge, cyc, back + 1)
+                    break
+            if dm is not None:
+                daily.append(dm)
+                times.append(np.datetime64(bridge, "D"))
+                leads.append(back + 1)
+            else:
+                log.warning("Bridge day %s unavailable after fallbacks — "
+                            "1-day hole remains", bridge)
+            bridge += timedelta(days=1)
+
+    # --- Latest cycle: full forecast, leads 1..days (valid cycle_date + k-1).
     log.info("Fetching GEFS %s %sZ ULWRF forecast (%d days) ...",
              date_str, hour_str, days)
-    daily, times = [], []
     for k in range(1, days + 1):
-        fhs = [24 * (k - 1) + 6, 24 * (k - 1) + 12,
-               24 * (k - 1) + 18, 24 * k]
-        block = [_fetch_gefs_ulwrf_toa(date_str, hour_str, fh) for fh in fhs]
-        block = [b for b in block if b is not None]
-        if len(block) < len(fhs):
-            log.warning("GEFS day %d incomplete (%d/%d steps) — stopping forecast",
-                        k, len(block), len(fhs))
+        dm = _gefs_daily_mean(date_str, hour_str, k, target_lat, target_lon)
+        if dm is None:
+            log.warning("GEFS day %d incomplete — stopping forecast", k)
             break
-        day_mean = sum(block) / float(len(block))
-        # Regrid native 0.5° → observed OLR grid. interp tolerates the
-        # descending-lat source coordinate.
-        reg = day_mean.interp(lat=target_lat, lon=target_lon)
-        daily.append(reg)
-        times.append(np.datetime64(cycle_dt.date(), "D") + np.timedelta64(k - 1, "D"))
+        daily.append(dm)
+        times.append(np.datetime64(latest_dt.date(), "D") + np.timedelta64(k - 1, "D"))
+        leads.append(k)
+
     if not daily:
         log.warning("GEFS forecast produced no days")
         return None
     da = xr.concat(daily, dim="time")
-    da = da.assign_coords(time=("time", np.array(times)))
-    log.info("GEFS forecast: %d daily means %s .. %s",
-             da.sizes["time"], str(times[0]), str(times[-1]))
+    da = da.assign_coords(time=("time", np.array(times)),
+                          lead=("time", np.array(leads, dtype=np.int16)))
+    log.info("GEFS series: %d daily means %s .. %s (leads %s)",
+             da.sizes["time"], str(times[0]), str(times[-1]),
+             "1.." + str(max(leads)) if leads else "-")
     return da
+
+
+# GEFS model OLR (ULWRF-at-TOA) carries a different mean state than the CPC
+# Blended OLR the observed Hovmöller is built from. Subtracting the *observed*
+# climatology from the GEFS forecast therefore leaves a systematic step at the
+# observed→forecast seam, which the global-FFT WK band-pass turns into a
+# contour kink right at the `GEFS forecast` line. The fix is to express the
+# GEFS forecast as an anomaly about GEFS's *own* per-lead, per-day-of-year
+# climatology (built once, offline, by build_gefs_olr_climatology.py). Both
+# halves of the Hovmöller are then anomalies about their own base state and
+# join cleanly. If the sidecar is unavailable we degrade to the old
+# observed-climatology path, so the pipeline never hard-fails on its absence.
+GEFS_CLIMO_NAME = "gefs_ulwrf_climo.nc"
+
+
+def gefs_daily_climatology(cache_dir: Path):
+    """Load the GEFS ULWRF (lead, doy, lat, lon) climatology sidecar.
+
+    Prefers a local cache copy; falls back to downloading from
+    gs://{GCS_BUCKET}/{GCS_PREFIX}/{GEFS_CLIMO_NAME}. Returns the DataArray or
+    None if neither is available (caller then uses the observed climatology).
+    """
+    import xarray as xr
+    cache_path = cache_dir / GEFS_CLIMO_NAME
+    if not cache_path.exists():
+        try:
+            from google.cloud import storage
+            client = storage.Client()
+            blob = client.bucket(GCS_BUCKET).blob(f"{GCS_PREFIX}/{GEFS_CLIMO_NAME}")
+            if not blob.exists():
+                log.info("No GEFS climatology sidecar in GCS; using observed "
+                         "climatology for forecast anomalies.")
+                return None
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            blob.download_to_filename(str(cache_path))
+            log.info("Downloaded GEFS climatology from gs://%s/%s/%s",
+                     GCS_BUCKET, GCS_PREFIX, GEFS_CLIMO_NAME)
+        except Exception as e:
+            log.warning("GEFS climatology fetch failed (%s); using observed "
+                        "climatology for forecast anomalies.", e)
+            return None
+    try:
+        da = xr.open_dataarray(cache_path).load()
+        log.info("Loaded GEFS ULWRF climatology %s (period %s, members %s)",
+                 dict(da.sizes), da.attrs.get("period", "?"),
+                 da.attrs.get("members", "?"))
+        return da
+    except Exception as e:
+        log.warning("GEFS climatology open failed (%s); using observed "
+                    "climatology.", e)
+        return None
+
+
+def gefs_forecast_anomaly(fcst_olr, gefs_climo, obs_climo):
+    """Forecast OLR anomaly about the GEFS model's own climatology.
+
+    `fcst_olr` is the (time, lat, lon) daily-mean GEFS series with a per-time
+    integer `lead` coordinate (from fetch_gefs_olr_forecast). For each step we
+    subtract the GEFS climatology at (lead, doy=valid-time day-of-year), using
+    the per-time lead so gap-bridge days (all lead 1) are de-biased correctly
+    rather than by their position in the array. Falls back to the positional
+    lead (i+1) if no `lead` coordinate is present, and to the observed
+    climatology entirely if `gefs_climo` is None.
+    """
+    import pandas as pd
+    if gefs_climo is None:
+        return daily_anomaly(fcst_olr, obs_climo).drop_vars("lead", errors="ignore")
+    # Align the climatology grid to the forecast grid once (they should match
+    # — both the observed OLR grid — but interp is a cheap safety net).
+    gc = gefs_climo
+    if (gc.lat.size != fcst_olr.lat.size) or (gc.lon.size != fcst_olr.lon.size):
+        gc = gc.interp(lat=fcst_olr.lat, lon=fcst_olr.lon)
+    out = fcst_olr.copy(deep=True)
+    max_lead = int(gc.lead.max())
+    has_lead = "lead" in fcst_olr.coords
+    for i in range(fcst_olr.sizes["time"]):
+        lead = int(fcst_olr["lead"].values[i]) if has_lead else i + 1
+        valid = pd.Timestamp(fcst_olr.time.values[i])
+        doy = int(valid.dayofyear)
+        if lead > max_lead:
+            # Beyond the climatology horizon — hold the last available lead.
+            lead = max_lead
+        clim = gc.sel(lead=lead).sel(doy=doy, method="nearest").values
+        out.values[i] = fcst_olr.values[i] - clim
+    nan_count = int(np.isnan(out.values).sum())
+    if nan_count:
+        out = out.fillna(0.0)
+    # Drop the helper `lead` coord so the (time, lat, lon) anomaly concatenates
+    # cleanly with the observed series, which carries no lead.
+    return out.drop_vars("lead", errors="ignore")
 
 
 # --------------------------------------------------------------------------
@@ -1685,6 +1839,10 @@ def main():
     climo = daily_climatology(today, cache_dir)
     anom = daily_anomaly(window, climo)
 
+    # GEFS-own climatology for the forecast-extension anomalies (see
+    # gefs_forecast_anomaly). None → graceful fallback to the observed climo.
+    gefs_climo = None if args.no_forecast else gefs_daily_climatology(cache_dir)
+
     sym, asym = symmetric_antisymmetric(anom)
 
     # GEFS forecast extension — used ONLY for the separate forecast
@@ -1698,9 +1856,20 @@ def main():
     if not args.no_forecast:
         try:
             import xarray as xr
-            fcst_olr = fetch_gefs_olr_forecast(today, window.lat, window.lon)
+            import pandas as pd
+            # Bridge the observational latency gap: fill the days between the
+            # last observed OLR day and the latest GEFS cycle with each day's
+            # own day-1 short-range analysis, then extend with the latest
+            # cycle's forecast — so the Hovmöller time axis is contiguous and
+            # the seam stops compressing a multi-day jump into one row.
+            last_obs_date = pd.Timestamp(last_time).date()
+            fcst_olr = fetch_gefs_olr_forecast(today, window.lat, window.lon,
+                                               last_obs_date=last_obs_date)
             if fcst_olr is not None and fcst_olr.sizes["time"] > 0:
-                fcst_anom = daily_anomaly(fcst_olr, climo)
+                # Anomaly about GEFS's own climatology (falls back to the
+                # observed climo if the sidecar is unavailable) so the
+                # observed↔forecast seam in the Hovmöller joins smoothly.
+                fcst_anom = gefs_forecast_anomaly(fcst_olr, gefs_climo, climo)
                 anom_ext = xr.concat([anom, fcst_anom], dim="time")
                 n_forecast = int(fcst_anom.sizes["time"])
                 sym_ext, asym_ext = symmetric_antisymmetric(anom_ext)
