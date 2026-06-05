@@ -992,6 +992,18 @@
         return 'Cat ' + cat.replace('C', '');
     }
 
+    /** Compact 2-char intensity class for the on-map storm dot:
+     *  TD (depression) / TS (storm) / HU (Cat 1-2) / MH (major, Cat 3+).
+     *  Saffir-Simpson based, used across all basins. Returns '' when wind
+     *  is unknown so the caller can leave the dot blank. */
+    function _irIntensityClass(vmaxKt) {
+        if (vmaxKt == null) return '';
+        if (vmaxKt < 34) return 'TD';
+        if (vmaxKt < 64) return 'TS';
+        if (vmaxKt < 96) return 'HU';   // Cat 1-2
+        return 'MH';                    // Cat 3+ (major hurricane)
+    }
+
     /** Invests (ATCF number 90-99) aren't classified TCs — they show an
      *  "INVEST" chip in a neutral colour, never a Saffir-Simpson label like
      *  "TD" (which the wind-based classifier would otherwise assign). */
@@ -10616,7 +10628,12 @@
             // never do) and render the name as a pill beside a clean dot instead
             // of cramming it in. Unnamed systems keep the in-circle code.
             var isNamed = /[a-z]/.test(d.displayShort || '');
-            var innerLabel = isNamed ? '' : d.displayShort;
+            // Named storm: fill the dot with its current intensity class
+            // (TD/TS/HU/MH) and put the name in the pill, so the circle isn't
+            // blank. Unnamed systems keep their compact code (D7/01W) inside.
+            var intenClass = (isNamed && d.atcfMatch)
+                ? _irIntensityClass(d.atcfMatch.vmaxKt) : '';
+            var innerLabel = isNamed ? intenClass : d.displayShort;
             var namePill = isNamed
                 ? '<span class="rt-gen-marker-name">' + d.displayShort + '</span>'
                 : '';
